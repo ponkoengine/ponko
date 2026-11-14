@@ -1,3 +1,4 @@
+use super::shape::{self, Footprint};
 use super::*;
 
 /// The tile grid a bake produces, computed the way the backend's tile baker
@@ -73,32 +74,307 @@ impl TileGrid {
     }
 }
 
+/// One cached heightfield layer: the walkable floor of one tile at one height
+/// band, stored with the raw codec.
+struct CachedLayer {
+    tx: i32,
+    ty: i32,
+    tlayer: i32,
+    min: Vec3,
+    max: Vec3,
+    data: Vec<u8>,
+}
+
+/// What a layer rebuild needs from the bake.
+#[derive(Clone, Copy)]
+struct LayerParams {
+    cs: f32,
+    ch: f32,
+    agent_radius: f32,
+    agent_height: f32,
+    max_climb: f32,
+    /// `max_climb` in cells.
+    climb: i32,
+    /// Contour simplification, in cells (the backend tile cache's default).
+    max_error: f32,
+    detail_sample_dist: f32,
+    detail_sample_error: f32,
+}
+
+/// Every tile's heightfield layers, kept so carving can rebuild a tile from
+/// them without rasterizing source triangles again, and the queue of layers
+/// waiting for a rebuild.
+///
+/// Rebuilding marks the carving obstacles' exact footprints on a copy of the
+/// layer, then runs the backend's layer pipeline (regions, contours,
+/// polygons) and builds the polygons' detail heights from the layer's floor
+/// heights with the same sampling as a normal bake.
+pub(super) struct LayerCache {
+    layers: Vec<CachedLayer>,
+    /// Layers waiting for a rebuild, oldest first, from `head`.
+    queue: Vec<usize>,
+    head: usize,
+    queued: Vec<bool>,
+    params: LayerParams,
+    ws: Workspace,
+    /// Scratch for the obstacles that touch the layer being rebuilt.
+    touching: Vec<Footprint>,
+}
+
+impl LayerCache {
+    /// Whether layer rebuilds are queued.
+    pub(super) fn pending(&self) -> bool {
+        self.head < self.queue.len()
+    }
+
+    /// Queues every layer whose bounds meet `[min, max]`.
+    fn queue_overlapping(&mut self, min: Vec3, max: Vec3) {
+        for (i, l) in self.layers.iter().enumerate() {
+            if !self.queued[i] && l.max.cmpge(min).all() && l.min.cmple(max).all() {
+                self.queued[i] = true;
+                self.queue.push(i);
+            }
+        }
+    }
+
+    /// The world bounds an obstacle can carve in: its footprint grown by the
+    /// agent radius and half a cell, from the agent height below it to its top.
+    fn reach(&self, f: &Footprint) -> (Vec3, Vec3) {
+        let p = &self.params;
+        let (min, max) = shape::reach_bounds(f, p.agent_radius + p.cs, p.agent_height + p.ch);
+        (min, max + Vec3::Y * p.ch)
+    }
+
+    /// Rebuilds the front queued layer into `mesh`, carving `obstacles`. On an
+    /// error the layer stays queued and the mesh keeps its old tile.
+    fn rebuild_next(&mut self, mesh: &mut detour::NavMesh, obstacles: &[NavObstacle3D]) -> Result<(), NavBakeError> {
+        let i = self.queue[self.head];
+        self.touching.clear();
+        let l = &self.layers[i];
+        for o in obstacles {
+            let f = Footprint::of(o).ok_or_else(|| error("invalid carving obstacle"))?;
+            let (min, max) = self.reach(&f);
+            if l.max.cmpge(min).all() && l.min.cmple(max).all() {
+                self.touching.push(f);
+            }
+        }
+        let data = build_tile(&mut self.ws, &self.params, &l.data, &self.touching)?;
+        replace_tile(mesh, l, data)?;
+        self.queued[i] = false;
+        self.head += 1;
+        if self.head == self.queue.len() {
+            self.queue.clear();
+            self.head = 0;
+        }
+        Ok(())
+    }
+}
+
+/// Swaps the navmesh tile of `layer` for freshly built data (none: no polygons).
+fn replace_tile(mesh: &mut detour::NavMesh, layer: &CachedLayer, data: Option<Vec<u8>>) -> Result<(), NavBakeError> {
+    if let Some(k) = mesh.tile_index_at(layer.tx, layer.ty, layer.tlayer) {
+        mesh.remove_tile(mesh.tile_ref(k)).map_err(error)?;
+    }
+    if let Some(data) = data {
+        mesh.add_tile(data).map_err(error)?;
+    }
+    Ok(())
+}
+
+/// Builds the navmesh tile of one cached layer with `carve` marked
+/// unwalkable: the backend's layer meshing, then a detail mesh sampled from
+/// the layer's floor heights. `None` when nothing walkable is left.
+fn build_tile(
+    ws: &mut Workspace,
+    p: &LayerParams,
+    data: &[u8],
+    carve: &[Footprint],
+) -> Result<Option<Vec<u8>>, NavBakeError> {
+    let mut layer = tilecache::decompress_layer(ws, &tilecache::RawCompressor, data).map_err(error)?;
+    let h = layer.header().clone();
+    if !carve.is_empty() {
+        let mut areas = layer.areas().to_vec();
+        let w = usize::from(h.width);
+        let margin = p.agent_radius + p.cs * 0.5;
+        let mut changed = false;
+        for (i, (area, &height)) in areas.iter_mut().zip(layer.heights()).enumerate() {
+            if *area == 0 {
+                continue;
+            }
+            let at = Vec2::new(
+                h.bmin[0] + ((i % w) as f32 + 0.5) * p.cs,
+                h.bmin[2] + ((i / w) as f32 + 0.5) * p.cs,
+            );
+            let y = h.bmin[1] + f32::from(height) * p.ch;
+            if carve
+                .iter()
+                .any(|f| y >= f.bottom - p.agent_height - p.ch && y <= f.top + p.ch && f.reaches(at, margin))
+            {
+                *area = 0;
+                changed = true;
+            }
+        }
+        if changed {
+            let marked = tilecache::build_layer(
+                ws,
+                &tilecache::RawCompressor,
+                &h,
+                layer.heights(),
+                &areas,
+                layer.connections(),
+            )
+            .map_err(error)?;
+            layer = tilecache::decompress_layer(ws, &tilecache::RawCompressor, &marked).map_err(error)?;
+        }
+    }
+    tilecache::build_regions(ws, &mut layer, p.climb).map_err(error)?;
+    let contours = tilecache::build_contours(ws, &layer, p.climb, p.max_error).map_err(error)?;
+    let mut polys = tilecache::build_poly_mesh(ws, &contours).map_err(error)?;
+    if polys.areas.is_empty() {
+        return Ok(None);
+    }
+    // As the backend's default mesh process: walkable area 63 is ground (0)
+    // and every polygon gets flag 1.
+    for (a, f) in polys.areas.iter_mut().zip(&mut polys.flags) {
+        if *a == 63 {
+            *a = 0;
+        }
+        *f = 1;
+    }
+    let detail = layer_detail(ws, p, &layer, &polys)?;
+    let params = detour::NavMeshCreateParams {
+        verts: &polys.verts,
+        vert_count: i32::try_from(polys.verts.len() / 3).map_err(error)?,
+        polys: &polys.polys,
+        poly_flags: &polys.flags,
+        poly_areas: &polys.areas,
+        poly_count: i32::try_from(polys.areas.len()).map_err(error)?,
+        nvp: 6,
+        detail_meshes: &detail.meshes,
+        detail_verts: &detail.verts,
+        detail_verts_count: i32::try_from(detail.verts.len() / 3).map_err(error)?,
+        detail_tris: &detail.tris,
+        detail_tri_count: i32::try_from(detail.tris.len() / 4).map_err(error)?,
+        tile_x: h.tx,
+        tile_y: h.ty,
+        tile_layer: h.tlayer,
+        bmin: h.bmin,
+        bmax: h.bmax,
+        walkable_height: p.agent_height,
+        walkable_radius: p.agent_radius,
+        walkable_climb: p.max_climb,
+        cs: p.cs,
+        ch: p.ch,
+        build_bv_tree: true,
+        ..detour::NavMeshCreateParams::default()
+    };
+    detour::create_nav_mesh_data(&params).map(Some).map_err(error)
+}
+
+/// The detail mesh of a layer's polygons: Recast's detail builder run on the
+/// layer seen as a one-span-per-cell compact heightfield.
+fn layer_detail(
+    ws: &mut Workspace,
+    p: &LayerParams,
+    layer: &tilecache::Layer,
+    polys: &tilecache::LayerPolyMesh,
+) -> Result<recast::PolyMeshDetail, NavBakeError> {
+    let h = layer.header();
+    let (w, d) = (usize::from(h.width), usize::from(h.height));
+    let heights = layer.heights();
+    let cons = layer.connections();
+    let mut cells = vec![recast::CompactCell::default(); w * d];
+    let mut spans = Vec::new();
+    let mut areas = Vec::new();
+    for (i, cell) in cells.iter_mut().enumerate() {
+        if heights[i] == 255 {
+            continue;
+        }
+        cell.index = spans.len() as u32;
+        cell.count = 1;
+        let (x, z) = (i % w, i / w);
+        let mut span = recast::CompactSpan {
+            y: u16::from(heights[i]),
+            // One region for every span: the detail builder then reads every
+            // floor height inside a polygon's bounds directly.
+            reg: 1,
+            con: 0,
+            h: 255,
+        };
+        // Low four bits of a layer connection: neighbours within the layer,
+        // in Recast's direction order (-x, +z, +x, -z).
+        for dir in 0..4 {
+            let (nx, nz) = match dir {
+                0 => (x.wrapping_sub(1), z),
+                1 => (x, z + 1),
+                2 => (x + 1, z),
+                _ => (x, z.wrapping_sub(1)),
+            };
+            let linked = cons[i] & (1 << dir) != 0 && nx < w && nz < d && heights[nx + nz * w] != 255;
+            span.set_con(dir, if linked { 0 } else { recast::NOT_CONNECTED });
+        }
+        spans.push(span);
+        areas.push(layer.areas()[i].max(1));
+    }
+    let chf = recast::CompactHeightfield {
+        width: w as i32,
+        height: d as i32,
+        span_count: spans.len() as i32,
+        walkable_height: (p.agent_height / p.ch).ceil() as i32,
+        walkable_climb: p.climb,
+        border_size: 0,
+        max_distance: 0,
+        max_regions: 2,
+        bmin: h.bmin,
+        bmax: h.bmax,
+        cs: p.cs,
+        ch: p.ch,
+        cells,
+        spans,
+        dist: Vec::new(),
+        areas,
+    };
+    let npolys = polys.areas.len();
+    let mesh = recast::PolyMesh {
+        verts: polys.verts.clone(),
+        polys: polys.polys.clone(),
+        regs: vec![1; npolys],
+        flags: polys.flags.clone(),
+        areas: polys.areas.clone(),
+        nverts: (polys.verts.len() / 3) as i32,
+        npolys: npolys as i32,
+        maxpolys: npolys as i32,
+        nvp: 6,
+        bmin: h.bmin,
+        bmax: h.bmax,
+        cs: p.cs,
+        ch: p.ch,
+        border_size: 0,
+        max_edge_error: p.max_error,
+    };
+    recast::PolyMeshDetail::build(ws, &mesh, &chf, p.detail_sample_dist, p.detail_sample_error).map_err(error)
+}
+
+/// Bakes the tiles from cached heightfield layers, keeping the layers so
+/// carving can rebuild them.
 pub(super) fn bake_layers(
     verts: &[f32],
     tris: &[i32],
     config: &bake::BakeConfig,
     layout: detour::NavMeshParams,
-) -> Result<(detour::NavMesh, tilecache::TileCache), NavBakeError> {
+) -> Result<(detour::NavMesh, LayerCache), NavBakeError> {
     let c = config.recast;
-    let mut params = tilecache::TileCacheParams::new(
-        c.tile_size as u8,
-        c.tile_size as u8,
-        c.cs,
-        c.ch,
-        layout.max_tiles as usize * 4,
-        256,
-    );
-    params.orig = layout.orig;
-    params.walkable_height = config.walkable_height;
-    params.walkable_radius = config.walkable_radius;
-    params.walkable_climb = config.walkable_climb;
-    let mut cache = tilecache::TileCache::new(
-        params,
-        tilecache::RawCompressor,
-        tilecache::DefaultMeshProcess,
-        Limits::default(),
-    )
-    .map_err(error)?;
+    let params = LayerParams {
+        cs: c.cs,
+        ch: c.ch,
+        agent_radius: config.walkable_radius,
+        agent_height: config.walkable_height,
+        max_climb: config.walkable_climb,
+        climb: c.walkable_climb,
+        max_error: 1.3,
+        detail_sample_dist: c.detail_sample_dist,
+        detail_sample_error: c.detail_sample_max_error,
+    };
     let mut mesh = detour::NavMesh::new(&detour::NavMeshParams {
         max_tiles: layout.max_tiles * 4,
         ..layout
@@ -116,6 +392,13 @@ pub(super) fn bake_layers(
     let nx = ((max.x - origin.x) / layout.tile_width).ceil() as i32;
     let nz = ((max.z - origin.z) / layout.tile_height).ceil() as i32;
     let border = c.walkable_radius + 3;
+    let mut layers = Vec::new();
+    // Layer rebuilds get the same per-tile memory and work budget as a bake.
+    let mut tile_ws = Workspace::with_limits(Limits {
+        max_bytes: config.tile_limits.max_bytes,
+        max_work: config.tile_limits.max_work,
+        ..Limits::default()
+    });
     for z in 0..nz {
         for x in 0..nx {
             let mut lo = origin + Vec3::new(x as f32 * layout.tile_width, 0.0, z as f32 * layout.tile_height);
@@ -136,8 +419,8 @@ pub(super) fn bake_layers(
             let mut chf =
                 recast::CompactHeightfield::build(&mut ws, c.walkable_height, c.walkable_climb, &hf).map_err(error)?;
             recast::erode_walkable_area(&mut ws, c.walkable_radius, &mut chf).map_err(error)?;
-            let layers = recast::HeightfieldLayerSet::build(&mut ws, &chf, border, c.walkable_height).map_err(error)?;
-            for (i, l) in layers.layers.iter().enumerate() {
+            let set = recast::HeightfieldLayerSet::build(&mut ws, &chf, border, c.walkable_height).map_err(error)?;
+            for (i, l) in set.layers.iter().enumerate() {
                 let mut h = tilecache::LayerHeader::new(l.width as u8, l.height as u8);
                 h.tx = x;
                 h.ty = z;
@@ -153,80 +436,101 @@ pub(super) fn bake_layers(
                 let data =
                     tilecache::build_layer(&mut ws, &tilecache::RawCompressor, &h, &l.heights, &l.areas, &l.cons)
                         .map_err(error)?;
-                let r = cache.add_tile(data).map_err(error)?;
-                cache.build_nav_mesh_tile(r, &mut mesh).map_err(error)?;
+                let layer = CachedLayer {
+                    tx: x,
+                    ty: z,
+                    tlayer: i as i32,
+                    min: Vec3::from_array(l.bmin),
+                    max: Vec3::from_array(l.bmax),
+                    data,
+                };
+                replace_tile(&mut mesh, &layer, build_tile(&mut tile_ws, &params, &layer.data, &[])?)?;
+                layers.push(layer);
             }
         }
     }
-    Ok((mesh, cache))
+    let count = layers.len();
+    Ok((
+        mesh,
+        LayerCache {
+            layers,
+            queue: Vec::new(),
+            head: 0,
+            queued: vec![false; count],
+            params,
+            ws: tile_ws,
+            touching: Vec::new(),
+        },
+    ))
 }
 
 impl NavState {
+    /// The carving obstacles wanted now, in order.
+    fn desired_carving(&self) -> impl Iterator<Item = &NavObstacle3D> {
+        self.obstacles.iter().filter(|o| o.carve)
+    }
+    pub(super) fn carving_pending(&self) -> bool {
+        self.cache.as_ref().is_some_and(LayerCache::pending) || self.carving_changed()
+    }
     pub(super) fn carving_changed(&self) -> bool {
         if self.cache.is_none() {
             return false;
         }
-        let mut desired = self.obstacles.iter().filter(|o| o.carve);
+        let threshold = self.settings.cell_size * 0.5;
+        let mut desired = self.desired_carving();
         for b in &self.carved {
             let Some(a) = desired.next() else {
                 return true;
             };
-            if a.half_extents != b.half_extents
-                || !a.center.is_finite()
-                || a.center.distance(b.center) >= self.settings.cell_size * 0.5
-            {
+            if shape::carve_moved(a, b, threshold) {
                 return true;
             }
         }
         desired.next().is_some()
     }
+    /// Takes every changed carving obstacle into `carved` and queues the
+    /// layers its old and new footprints touch. Ordered obstacle lists supply
+    /// identity; obstacles that moved less than half a cell keep their last
+    /// carved place. An invalid obstacle is an error and changes nothing.
     fn sync_carving(&mut self) -> Result<(), NavBakeError> {
-        if self.pending || !self.carving_changed() {
+        if !self.carving_changed() {
             return Ok(());
+        }
+        let threshold = self.settings.cell_size * 0.5;
+        let desired: Vec<NavObstacle3D> = self.desired_carving().copied().collect();
+        let mut wanted = Vec::with_capacity(desired.len());
+        for o in &desired {
+            wanted.push(Footprint::of(o).ok_or_else(|| error("invalid carving obstacle"))?);
         }
         let Some(cache) = &mut self.cache else {
             return Ok(());
         };
-        let desired: Vec<_> = self.obstacles.iter().copied().filter(|o| o.carve).collect();
-        // One edit at a time keeps the backend request queue bounded and avoids
-        // rebuilding unchanged obstacles. Ordered ECS components provide identity.
-        let changed = desired.iter().zip(&self.carved).position(|(a, b)| {
-            a.half_extents != b.half_extents
-                || !a.center.is_finite()
-                || a.center.distance(b.center) >= self.settings.cell_size * 0.5
-        });
-        let index = changed.unwrap_or(desired.len().min(self.carved.len()));
-        if changed.is_none() && desired.len() == self.carved.len() {
-            return Ok(());
-        }
-        if index < desired.len() {
-            let o = desired[index];
-            let radius = Vec3::new(
-                self.settings.agent_radius,
-                self.settings.agent_height,
-                self.settings.agent_radius,
-            );
-            let shape = tilecache::ObstacleShape::Box {
-                bmin: (o.center - o.half_extents - radius).to_array(),
-                bmax: (o.center + o.half_extents + Vec3::new(radius.x, 0.0, radius.z)).to_array(),
-            };
-            // Validate/add before removing the old obstacle: errors leave it intact.
-            let r = cache.add_obstacle(shape).map_err(error)?;
-            if index < self.carved.len() {
-                cache.remove_obstacle(self.carve_handles[index]).map_err(error)?;
-                self.carve_handles[index] = r;
-                self.carved[index] = o;
-            } else {
-                self.carve_handles.push(r);
-                self.carved.push(o);
+        let count = desired.len().max(self.carved.len());
+        for i in 0..count {
+            let old = self.carved.get(i);
+            let new = desired.get(i);
+            if let (Some(a), Some(b)) = (new, old)
+                && !shape::carve_moved(a, b, threshold)
+            {
+                continue;
             }
-        } else {
-            cache
-                .remove_obstacle(self.carve_handles.pop().unwrap())
-                .map_err(error)?;
-            self.carved.pop();
+            if let Some(f) = old.and_then(Footprint::of) {
+                let (min, max) = cache.reach(&f);
+                cache.queue_overlapping(min, max);
+            }
+            if new.is_some() {
+                let (min, max) = cache.reach(&wanted[i]);
+                cache.queue_overlapping(min, max);
+            }
         }
-        self.pending = true;
+        let mut carved = Vec::with_capacity(desired.len());
+        for (i, o) in desired.iter().enumerate() {
+            match self.carved.get(i) {
+                Some(b) if !shape::carve_moved(o, b, threshold) => carved.push(*b),
+                _ => carved.push(*o),
+            }
+        }
+        self.carved = carved;
         Ok(())
     }
     pub(super) fn update_carving(&mut self, budget: usize) -> Result<usize, NavBakeError> {
@@ -237,9 +541,12 @@ impl NavState {
         if budget > 0 {
             self.sync_carving()?;
         }
-        while self.pending && count < budget {
+        while count < budget {
             let cache = self.cache.as_mut().expect("checked above");
-            self.pending = !cache.update(0.0, &mut self.mesh).map_err(error)?;
+            if !cache.pending() {
+                break;
+            }
+            cache.rebuild_next(&mut self.mesh, &self.carved)?;
             count += 1;
         }
         let recover = self.carve_failed;
@@ -340,7 +647,7 @@ mod tests {
         o.carve = true;
         s.set_obstacles(&[o]);
         let mut total = 0;
-        while s.pending || s.carving_changed() {
+        while s.carving_pending() {
             let old = refs(&s);
             let n = s.update_carving(1).unwrap();
             let changed = old.iter().zip(refs(&s)).filter(|(a, b)| **a != *b).count();
@@ -351,5 +658,51 @@ mod tests {
         let changed = before.iter().zip(refs(&s)).filter(|(a, b)| **a != *b).count();
         assert_eq!(changed, total);
         assert!(changed < before.iter().filter(|r| r.is_some()).count());
+    }
+    /// The largest gap between the mesh and `height` over a grid of points.
+    fn ground_error(s: &NavState, height: impl Fn(f32, f32) -> f32) -> f32 {
+        let mut worst = 0.0f32;
+        for i in -8..=8 {
+            for j in -8..=8 {
+                let (x, z) = (i as f32 * 0.7, j as f32 * 0.7);
+                let Some(p) = s.sample_position(Vec3::new(x, height(x, z), z), 2.0) else {
+                    return f32::INFINITY;
+                };
+                worst = worst.max((p.y - height(p.x, p.z)).abs());
+            }
+        }
+        worst
+    }
+    #[test]
+    fn layer_tiles_follow_curved_ground_only_with_detail_heights() {
+        let height = |x: f32, z: f32| 2.0 * (-(x * x + z * z) / 24.5).exp();
+        let mut triangles = Vec::new();
+        let at = |i: i32, j: i32| {
+            let (x, z) = (i as f32 * 0.5 - 12.0, j as f32 * 0.5 - 12.0);
+            Vec3::new(x, height(x, z), z)
+        };
+        for i in 0..48 {
+            for j in 0..48 {
+                let (a, b, c, d) = (at(i, j), at(i, j + 1), at(i + 1, j), at(i + 1, j + 1));
+                triangles.extend([[a, b, c], [c, b, d]]);
+            }
+        }
+        let settings = NavBakeSettings {
+            carving: true,
+            ..Default::default()
+        };
+        let mut s = NavState::bake(&[NavSource { triangles }], settings).unwrap();
+        let with = ground_error(&s, height);
+        // Negative control: the same layers without detail samples keep only
+        // the polygons' corner heights, as carved tiles did before.
+        let cache = s.cache.as_mut().unwrap();
+        cache.params.detail_sample_dist = 0.0;
+        cache.queue_overlapping(Vec3::splat(-100.0), Vec3::splat(100.0));
+        assert!(s.update_carving(usize::MAX).unwrap() > 0);
+        let without = ground_error(&s, height);
+        assert!(
+            with < 0.3 && without > 2.0 * with,
+            "with detail {with}, without {without}"
+        );
     }
 }

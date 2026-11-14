@@ -6,9 +6,11 @@
 //! oxidized_navigation is a Bevy plugin. Recast bindings need a native toolchain.
 //! This wrapper keeps the established algorithm in one dependency.
 //!
-//! Dynamic AABBs conservatively disable overlapping polygon bounds (expanded by
-//! the baked agent clearance). Opt-in carving (`NavBakeSettings::carving`, then
-//! `NavObstacle3D::carve`) rebuilds cached heightfield layers.
+//! Dynamic obstacles (boxes turned by a yaw, cylinders, convex prisms)
+//! conservatively disable the polygons whose bounds they overlap (grown by the
+//! baked agent clearance). Opt-in carving (`NavBakeSettings::carving`, then
+//! `NavObstacle3D::carve`) rebuilds cached heightfield layers, detail heights
+//! included.
 //! Register `systems::step_navmesh3d` as a sim system, including on headless servers.
 //! Agents directly own their Transform3D: do not also attach a physics body or
 //! character controller. Crowd avoidance is opt-in. Bake for the largest
@@ -17,13 +19,16 @@
 use crate::ctx::Ctx;
 use crate::d3::Transform as Transform3D;
 use crate::render::MeshData;
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 use navmesh_rs::{Limits, Workspace, bake, crowd, detour, recast, tilecache};
 use ponko_ecs::Component;
 use ponko_ecs::{Entity, World};
+use shape::Footprint;
+pub use shape::{NavConvexPolygon, NavObstacleShape};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod carve;
+mod shape;
 
 static NEXT_REVISION: AtomicU64 = AtomicU64::new(1);
 
@@ -237,6 +242,8 @@ struct NavState {
     polygons: Vec<PolygonBounds>,
     obstacles: Vec<NavObstacle3D>,
     scratch: Vec<NavObstacle3D>,
+    /// Footprints of the blocking obstacles, kept to avoid reallocating.
+    footprints: Vec<Footprint>,
     revision: u64,
     crowd: Option<crowd::Crowd>,
     crowd_revision: u64,
@@ -244,10 +251,9 @@ struct NavState {
     crowd_owners: Vec<Option<Entity>>,
     crowd_workspace: Workspace,
     /// Present only when baked with `NavBakeSettings::carving`.
-    cache: Option<tilecache::TileCache>,
-    carve_handles: Vec<tilecache::ObstacleRef>,
+    cache: Option<carve::LayerCache>,
+    /// The carving obstacles the cached layers are rebuilt with, in order.
     carved: Vec<NavObstacle3D>,
-    pending: bool,
     carve_failed: bool,
 }
 impl NavMesh3D {
@@ -323,7 +329,7 @@ impl NavMesh3D {
     /// assert!(!nav.carving_pending());
     /// ```
     pub fn carving_pending(&self) -> bool {
-        self.state.as_ref().is_some_and(|s| s.pending || s.carving_changed())
+        self.state.as_ref().is_some_and(NavState::carving_pending)
     }
 }
 
@@ -428,6 +434,7 @@ impl NavState {
             polygons,
             obstacles: Vec::new(),
             scratch: Vec::new(),
+            footprints: Vec::new(),
             revision: NEXT_REVISION.fetch_add(1, Ordering::Relaxed),
             crowd: None,
             crowd_revision: 0,
@@ -435,9 +442,7 @@ impl NavState {
             crowd_owners: Vec::new(),
             crowd_workspace: Workspace::new(),
             cache,
-            carve_handles: Vec::new(),
             carved: Vec::new(),
-            pending: false,
             carve_failed: false,
         })
     }
@@ -537,21 +542,28 @@ impl NavState {
         self.apply_obstacles();
     }
     fn apply_obstacles(&mut self) {
-        let radius = Vec3::new(self.settings.agent_radius, 0.0, self.settings.agent_radius);
+        let radius = self.settings.agent_radius;
+        let clearance = self.settings.agent_height;
+        // Invalid blocking obstacles fail closed: every polygon is blocked.
+        let mut everything = self.carve_failed;
+        self.footprints.clear();
+        for o in &self.obstacles {
+            if o.carve && self.cache.is_some() {
+                continue;
+            }
+            match Footprint::of(o) {
+                Some(f) => self.footprints.push(f),
+                None => everything = true,
+            }
+        }
         for poly in &self.polygons {
-            let blocked = self.carve_failed
-                || self.obstacles.iter().any(|o| {
-                    !(o.carve && self.cache.is_some())
-                        && (!o.center.is_finite()
-                            || !o.half_extents.is_finite()
-                            || o.half_extents.min_element() < 0.0
-                            || {
-                                let min = o.center - o.half_extents - radius;
-                                let max = o.center + o.half_extents + radius;
-                                poly.max.cmpge(min - Vec3::Y * self.settings.agent_height).all()
-                                    && poly.min.cmple(max).all()
-                            })
-                });
+            let lo = Vec2::new(poly.min.x, poly.min.z) - radius;
+            let hi = Vec2::new(poly.max.x, poly.max.z) + radius;
+            let blocked = everything
+                || self
+                    .footprints
+                    .iter()
+                    .any(|f| poly.max.y >= f.bottom - clearance && poly.min.y <= f.top && f.overlaps_rect(lo, hi));
             self.mesh
                 .set_poly_flags(poly.reference, u16::from(!blocked))
                 .expect("cached polygon reference");
@@ -560,13 +572,16 @@ impl NavState {
     }
 }
 
-/// World-space axis-aligned blocking box component; no Transform3D is needed.
+/// World-space obstacle component; no Transform3D is needed. A box by default;
+/// [`shape`](Self::shape) makes it a cylinder or a convex prism, and
+/// [`yaw`](Self::yaw) turns it around world Y.
 /// ```
 /// use ponko::prelude::*;
 /// let obstacle = ponko::d3::NavObstacle::new(Vec3::ZERO, Vec3::ONE);
 /// assert_eq!(obstacle.center, Vec3::ZERO);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Component)]
+#[non_exhaustive]
 pub struct NavObstacle3D {
     /// Center in world space.
     /// ```
@@ -574,15 +589,31 @@ pub struct NavObstacle3D {
     /// assert_eq!(ponko::d3::NavObstacle::new(Vec3::Y, Vec3::ONE).center, Vec3::Y);
     /// ```
     pub center: Vec3,
-    /// Nonnegative half sizes along world X,Y,Z.
+    /// Nonnegative half sizes along the obstacle's own X, Y, Z (world axes
+    /// until [`yaw`](Self::yaw) turns it). See [`NavObstacleShape`] for what
+    /// each shape uses.
     /// ```
     /// # use ponko::prelude::*;
     /// assert_eq!(ponko::d3::NavObstacle::new(Vec3::ZERO, Vec3::ONE).half_extents, Vec3::ONE);
     /// ```
     pub half_extents: Vec3,
-    /// Rebuild cached heightfield layers to cut a real hole. Default false. Needs a
-    /// mesh baked with `NavBakeSettings::carving`; otherwise this blocks like any
-    /// other obstacle.
+    /// Turn around world Y in radians, as `Quat::from_rotation_y(yaw)` turns
+    /// a model: positive turns +X toward -Z. Default 0.
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let mut crate_box = ponko::d3::NavObstacle::new(Vec3::ZERO, vec3(1.0, 0.5, 0.25));
+    /// crate_box.yaw = std::f32::consts::FRAC_PI_4;
+    /// ```
+    pub yaw: f32,
+    /// The footprint: a box (the default), a cylinder or a convex polygon.
+    /// ```
+    /// # use ponko::prelude::*;
+    /// assert_eq!(ponko::d3::NavObstacle::new(Vec3::ZERO, Vec3::ONE).shape, ponko::d3::NavObstacleShape::Box);
+    /// ```
+    pub shape: NavObstacleShape,
+    /// Rebuild cached heightfield layers to cut a real hole of the exact
+    /// shape. Default false. Needs a mesh baked with `NavBakeSettings::carving`;
+    /// otherwise this blocks like any other obstacle.
     /// ```
     /// # use ponko::prelude::*;
     /// assert!(!ponko::d3::NavObstacle::new(Vec3::ZERO, Vec3::ONE).carve);
@@ -590,7 +621,7 @@ pub struct NavObstacle3D {
     pub carve: bool,
 }
 impl NavObstacle3D {
-    /// Creates an axis-aligned world box. Invalid values block the entire mesh.
+    /// Creates an unturned box. Invalid values block the entire mesh.
     /// ```
     /// # use ponko::prelude::*;
     /// let obstacle = ponko::d3::NavObstacle::new(Vec3::Y, Vec3::ONE);
@@ -601,8 +632,43 @@ impl NavObstacle3D {
         Self {
             center,
             half_extents,
+            yaw: 0.0,
+            shape: NavObstacleShape::Box,
             carve: false,
         }
+    }
+    /// Creates an upright cylinder, `center.y ± half_height` tall.
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let pillar = ponko::d3::NavObstacle::cylinder(vec3(0.0, 1.0, 0.0), 0.5, 1.0);
+    /// assert_eq!(pillar.half_extents, vec3(0.5, 1.0, 0.5));
+    /// ```
+    #[must_use]
+    pub fn cylinder(center: Vec3, radius: f32, half_height: f32) -> Self {
+        Self {
+            shape: NavObstacleShape::Cylinder,
+            ..Self::new(center, Vec3::new(radius, half_height, radius))
+        }
+    }
+    /// Creates an upright prism over a convex polygon of `(x, z)` offsets
+    /// from `center`, `center.y ± half_height` tall. `None` when the points
+    /// are not a convex polygon (see [`NavConvexPolygon::new`]).
+    /// `half_extents.x` and `.z` are set to the polygon's bounds; the
+    /// polygon alone decides the footprint.
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let ramp = [vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(0.0, 1.0)];
+    /// let wedge = ponko::d3::NavObstacle::convex(vec3(0.0, 1.0, 0.0), &ramp, 1.0).unwrap();
+    /// assert_eq!(wedge.half_extents, Vec3::ONE);
+    /// ```
+    #[must_use]
+    pub fn convex(center: Vec3, points: &[Vec2], half_height: f32) -> Option<Self> {
+        let polygon = NavConvexPolygon::new(points)?;
+        let reach = points.iter().fold(Vec2::ZERO, |m, p| m.max(p.abs()));
+        Some(Self {
+            shape: NavObstacleShape::Convex(polygon),
+            ..Self::new(center, Vec3::new(reach.x, half_height, reach.y))
+        })
     }
 }
 

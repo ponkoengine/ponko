@@ -101,6 +101,8 @@ files = [
 [dependencies]
 taffy = { version = "0.15.1", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "content_size"] }
 navmesh-rs = { version = "0.2.1", optional = true, default-features = false, features = ["std", "libm", "recast", "detour", "crowd", "tilecache", "polyref64"] }
+# Obstacle turns use the same platform-independent sin/cos as the navmesh backend.
+libm = { version = "0.2.16", optional = true }
 renet = "2.0.0"
 ponko_ecs = { path = "crates/ponko_ecs", version = "0.1.0", features = ["serde", "derive"] }
 half = { version = "2.7.1", optional = true }
@@ -252,7 +254,7 @@ web-sys = { version = "0.3.107", features = ["Window", "Document", "Element", "L
 # they change without notice in any release.
 bench-internals = []
 # Pure Rust Recast baking and Detour queries; no window, Bevy or async runtime.
-navmesh = ["3d", "dep:navmesh-rs"]
+navmesh = ["3d", "dep:navmesh-rs", "dep:libm"]
 default = ["audio", "window", "inspector", "gamepad", "image-jpeg"]
 # A window and GPU rendering (winit + wgpu). Off: `Game::run_headless` only,
 # for simulation servers and CI; drawing calls do nothing, `Game::run` panics.

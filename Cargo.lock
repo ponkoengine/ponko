@@ -3468,6 +3468,7 @@ dependencies = [
  "kira",
  "ktx2",
  "libc",
+ "libm",
  "naga",
  "navmesh-rs",
  "objc2 0.5.3",

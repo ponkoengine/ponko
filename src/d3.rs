@@ -73,7 +73,9 @@ pub use crate::audio::spatial::{
 };
 #[cfg(feature = "navmesh")]
 #[doc(inline)]
-pub use crate::nav3d::{NavAgent3D as NavAgent, NavMesh3D as NavMesh, NavObstacle3D as NavObstacle};
+pub use crate::nav3d::{
+    NavAgent3D as NavAgent, NavConvexPolygon, NavMesh3D as NavMesh, NavObstacle3D as NavObstacle, NavObstacleShape,
+};
 #[cfg(feature = "physics3d")]
 #[doc(inline)]
 pub use crate::physics3d::{
