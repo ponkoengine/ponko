@@ -5,6 +5,8 @@ The engine handles layout/input before frame systems and draws the tree above
 scene sprites. The retained tree is the game's UI: menus, HUDs, shops, dialogs.
 The immediate widgets, `ctx.ui.immediate.panel`, `label` and `button`
 ([Camera and UI](camera-ui.md#ui)), are for debug overlays and quick prototypes.
+A node can hold a string table key instead of text and follow the game's
+language ([Localization](localization.md)).
 
 In C++ the tree is `ctx.ui_retained()`, a `ponko::ui::tree`; layouts start from
 a preset (`ui::fill()`, `ui::row(40)`, `ui::fixed(220, 40)`, `ui::centered(360, 180)`)

@@ -198,7 +198,9 @@ cargo test --test coin_dash                  # the whole game, headlessly
 ```
 
 Move with the arrow keys, WASD or the left stick; Enter starts; Esc pauses; `O`
-opens the settings. A round is eight coins in twenty seconds. The best time and
+opens the settings, where the language button switches between English and
+Arabic (Arabic needs the `text-shaping` feature, which the package and the web
+build turn on; see [Localization](localization.md)). A round is eight coins in twenty seconds. The best time and
 the high score are saved (see [Your files](#your-files)).
 
 ## The package
@@ -214,9 +216,11 @@ files on every desktop:
 | File | What it is |
 |---|---|
 | `coin_dash` (`coin_dash.exe`) | The program |
-| `assets/coin_dash/coin.png` | The game's one asset, found next to the program |
+| `assets/coin_dash/coin.png` | The coin picture, found next to the program |
+| `assets/coin_dash/lang/en.json`, `ar.json` | The game's text in English and Arabic ([Localization](localization.md)) |
+| `assets/coin_dash/fonts/` | The Arabic font, a subset of Noto Sans Arabic, with its license (`OFL.txt`) |
 | `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE` | The engine's and the game's license |
-| `CONTENT-NOTICES.txt` | What the game ships: the picture's author and license, "no sound files", "no font file" |
+| `CONTENT-NOTICES.txt` | What the game ships: the picture's and the tables' author and license, the font's license, "no sound files" |
 | `THIRD-PARTY-NOTICES.txt` | Every library linked into the program, with its declared license and the license texts its source ships |
 | `README.txt` | How to run it, the controls, where it saves |
 

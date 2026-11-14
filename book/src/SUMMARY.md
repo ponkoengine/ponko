@@ -26,6 +26,7 @@
 - [Camera, text and UI](camera-ui.md)
 - [Retained game UI](ui.md)
   - [Screen reader records](ui-accessibility.md)
+  - [Localization](localization.md)
 - [Sprite sheets, animation, tilemaps](tiles.md)
 - [3D: meshes, materials and the sun](3d.md)
 - [3D physics: bodies, terrain, characters and vehicles](physics3d.md)

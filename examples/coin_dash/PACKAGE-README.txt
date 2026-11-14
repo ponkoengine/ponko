@@ -19,6 +19,11 @@ Controls (change them in Settings, press O or the gamepad's North button)
   Back to title   Q, or East
   Settings        O, or North
 
+Languages
+---------
+English and Arabic: the Language button in Settings switches between them,
+and the choice is saved with the other settings.
+
 Your files
 ----------
 The best time and the settings are saved in your data folder:
