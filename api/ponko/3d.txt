@@ -3060,6 +3060,7 @@ pub fn ponko::inventory::AssetGrowth::serialize<__S>(&self, __S) -> core::result
 pub ponko::inventory::AssetInventory::classes: alloc::vec::Vec<ponko::inventory::AssetCount>
 pub ponko::inventory::AssetInventory::dangling: alloc::vec::Vec<ponko::inventory::DanglingHandle>
 pub ponko::inventory::AssetInventory::gpu: core::option::Option<ponko::inventory::GpuResidency>
+pub ponko::inventory::AssetInventory::texture_alpha: core::option::Option<ponko::inventory::TextureAlphaMemory>
 impl ponko::inventory::AssetInventory
 pub fn ponko::inventory::AssetInventory::get(&self, ponko::inventory::AssetClass) -> ponko::inventory::AssetCount
 pub fn ponko::inventory::AssetInventory::growth_since(&self, &Self) -> alloc::vec::Vec<ponko::inventory::AssetGrowth>
@@ -3113,6 +3114,7 @@ pub fn ponko::inventory::DanglingHandle::serialize<__S>(&self, __S) -> core::res
 pub ponko::inventory::GpuResidency::gpu_buffer_bytes: u64
 pub ponko::inventory::GpuResidency::gpu_buffers: usize
 pub ponko::inventory::GpuResidency::mesh_bytes: u64
+pub ponko::inventory::GpuResidency::mesh_cpu_bytes: u64
 pub ponko::inventory::GpuResidency::meshes: usize
 pub ponko::inventory::GpuResidency::texture_bytes: u64
 pub ponko::inventory::GpuResidency::textures: usize
@@ -3129,6 +3131,24 @@ impl core::marker::Copy for ponko::inventory::GpuResidency
 impl core::marker::StructuralPartialEq for ponko::inventory::GpuResidency
 impl serde_core::ser::Serialize for ponko::inventory::GpuResidency
 pub fn ponko::inventory::GpuResidency::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+#[non_exhaustive] pub struct ponko::inventory::TextureAlphaMemory
+pub ponko::inventory::TextureAlphaMemory::bytes: u64
+pub ponko::inventory::TextureAlphaMemory::mask_bytes: u64
+pub ponko::inventory::TextureAlphaMemory::masks: usize
+pub ponko::inventory::TextureAlphaMemory::summaries: usize
+impl core::clone::Clone for ponko::inventory::TextureAlphaMemory
+pub fn ponko::inventory::TextureAlphaMemory::clone(&self) -> Self
+impl core::cmp::Eq for ponko::inventory::TextureAlphaMemory
+impl core::cmp::PartialEq for ponko::inventory::TextureAlphaMemory
+pub fn ponko::inventory::TextureAlphaMemory::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::inventory::TextureAlphaMemory
+pub fn ponko::inventory::TextureAlphaMemory::default() -> Self
+impl core::fmt::Debug for ponko::inventory::TextureAlphaMemory
+pub fn ponko::inventory::TextureAlphaMemory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::inventory::TextureAlphaMemory
+impl core::marker::StructuralPartialEq for ponko::inventory::TextureAlphaMemory
+impl serde_core::ser::Serialize for ponko::inventory::TextureAlphaMemory
+pub fn ponko::inventory::TextureAlphaMemory::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 pub mod ponko::locale
 pub enum ponko::locale::Arg
 pub ponko::locale::Arg::Int(i64)

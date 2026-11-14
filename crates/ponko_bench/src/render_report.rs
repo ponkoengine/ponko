@@ -370,6 +370,10 @@ impl RenderReport {
             ] {
                 dist(name, "memory", key, "bytes", memory[key].as_f64().and_then(one), "");
             }
+            // Absent in files recorded before it was reported: then no row.
+            if let Some(bytes) = memory["mesh_cpu_bytes"].as_f64() {
+                dist(name, "memory", "mesh_cpu_bytes", "bytes", one(bytes), "on the CPU");
+            }
             // Absent in files recorded before these were computed: then no row.
             for key in [
                 "render_target_bytes",

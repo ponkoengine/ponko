@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::collision::{BodyKind, CollisionStarted, CollisionStopped};
 use crate::d3::Transform as Transform3D;
+use crate::physics_links::LinkTable;
 use crate::{ctx::Ctx, events::Events};
 use glam::{Quat, Vec3};
 use ponko_ecs::{Component, Entity, Without, World};
@@ -522,14 +523,18 @@ impl rp::EventHandler for Collector {
 pub struct Physics3D {
     world: rp::PhysicsWorld,
     joints: Vec<joints::Link>,
-    /// By entity index.
-    links: Vec<Option<Link>>,
-    /// The indices in `links` of bodies and characters that move, so
+    /// By entity, packed: its memory follows the live bodies, not the
+    /// highest entity index ever used.
+    links: LinkTable<Link>,
+    /// Entity indices to remove, sorted (reused).
+    gone: Vec<u32>,
+    /// The slots in `links` of bodies and characters that move, in entity
+    /// index order, so
     /// stepping and drawing visit them without looking at every entity.
     /// Rebuilt when a link comes or goes (`moving_dirty`).
     moving: Vec<u32>,
     moving_dirty: bool,
-    /// The indices in `links` of fixed bodies and terrain, rebuilt with `moving`.
+    /// The slots in `links` of fixed bodies and terrain, rebuilt with `moving`.
     statics: Vec<u32>,
     /// Collider streaming: at most this many static colliders come in per step.
     streaming: Option<usize>,
@@ -608,7 +613,8 @@ impl Physics3D {
         Self {
             world: rp::PhysicsWorld::new(),
             joints: Vec::new(),
-            links: Vec::new(),
+            links: LinkTable::default(),
+            gone: Vec::new(),
             moving: Vec::new(),
             moving_dirty: false,
             statics: Vec::new(),
@@ -721,7 +727,7 @@ impl Physics3D {
     }
 
     fn link(&self, e: Entity) -> Option<&Link> {
-        self.links.get(e.index() as usize)?.as_ref().filter(|l| l.entity == e)
+        self.links.get(e)
     }
 
     /// Pushes a dynamic body once (an explosion, a kick), in kg × m/s at its
@@ -957,18 +963,14 @@ impl Physics3D {
             .build()
     }
 
-    /// The indices of links that move, rebuilt if links changed.
+    /// The slots of links that move, rebuilt if links changed.
     fn moving(&mut self) -> &[u32] {
         if self.moving_dirty {
             self.moving_dirty = false;
-            self.moving.clear();
-            self.statics.clear();
             let links = &self.links;
-            self.moving
-                .extend((0..links.len() as u32).filter(|&i| links[i as usize].is_some_and(|l| l.kind.moves())));
-            self.statics
-                .extend((0..links.len() as u32).filter(|&i| links[i as usize].is_some_and(|l| !l.kind.moves())));
-            self.dominance = links.iter().flatten().any(|l| {
+            links.sorted_slots(&mut self.moving, |l| l.kind.moves());
+            links.sorted_slots(&mut self.statics, |l| !l.kind.moves());
+            self.dominance = links.iter().any(|l| {
                 matches!(l.kind, LinkKind::Body(rigid, _) if rigid.kind == BodyKind::Dynamic && rigid.dominance != 0)
             });
         }
@@ -1019,31 +1021,49 @@ impl Physics3D {
         } else {
             self.rect_of(collider, t)
         };
-        let i = e.index() as usize;
-        if self.links.len() <= i {
-            self.links.resize(i + 1, None);
-        }
         let pose = Pose::of(t);
-        self.links[i] = Some(Link {
-            entity: e,
-            body,
-            collider,
-            active,
-            rect,
-            kind,
-            velocity,
-            written: *t,
-            prev: pose,
-            curr: pose,
-            seen: self.step,
-        });
+        // Any link with `e`'s index was taken out (its body removed) first.
+        self.links.insert(
+            e,
+            Link {
+                entity: e,
+                body,
+                collider,
+                active,
+                rect,
+                kind,
+                velocity,
+                written: *t,
+                prev: pose,
+                curr: pose,
+                seen: self.step,
+            },
+        );
     }
 
-    fn remove(&mut self, i: usize) {
+    /// Removes the link of the entity with `index`, and its body.
+    fn remove(&mut self, index: u32) {
         self.moving_dirty = true;
-        if let Some(link) = self.links[i].take() {
+        if let Some(link) = self.links.remove_index(index) {
             self.world.remove_body(link.body);
         }
+    }
+
+    /// Removes the links `pick` accepts, in entity-index order so runs
+    /// stay deterministic.
+    fn remove_where(&mut self, pick: impl FnMut(&Link) -> bool) {
+        let mut gone = std::mem::take(&mut self.gone);
+        self.links.sorted_indices(&mut gone, pick);
+        for &index in &gone {
+            self.remove(index);
+        }
+        self.gone = gone;
+    }
+
+    /// Bytes the links table holds on the heap.
+    #[cfg(test)]
+    pub(crate) fn links_heap_bytes(&self) -> usize {
+        self.links.heap_bytes()
     }
 
     /// Removes every body and character (and with them their joints),
@@ -1054,9 +1074,7 @@ impl Physics3D {
     /// then queries find nothing.
     pub(crate) fn forget_bodies(&mut self) {
         joints::forget(self);
-        for i in 0..self.links.len() {
-            self.remove(i);
-        }
+        self.remove_where(|_| true);
     }
 }
 
@@ -1273,9 +1291,7 @@ pub fn interpolate_physics3d(ctx: &mut Ctx) {
     let n = physics.moving().len();
     for k in 0..n {
         let i = physics.moving[k] as usize;
-        let Some(link) = physics.links[i].as_mut() else {
-            continue;
-        };
+        let link = physics.links.at_mut(i);
         let Some(t) = ctx.world.get_mut::<Transform3D>(link.entity) else {
             continue;
         };
@@ -1330,11 +1346,7 @@ fn sync_into(physics: &mut Physics3D, world: &mut World) {
         });
     // Despawned entities and ones that lost a physics component, in index
     // order so runs stay deterministic.
-    for i in 0..physics.links.len() {
-        if physics.links[i].is_some_and(|l| l.seen != step) {
-            physics.remove(i);
-        }
-    }
+    physics.remove_where(|l| l.seen != step);
 }
 
 fn sync_one(
@@ -1345,17 +1357,10 @@ fn sync_one(
     velocity: Option<Velocity3D>,
     step: u64,
 ) {
-    let i = e.index() as usize;
-    let Some(link) = physics
-        .links
-        .get_mut(i)
-        .and_then(Option::as_mut)
-        .filter(|l| l.entity == e)
-    else {
-        if let Some(Some(old)) = physics.links.get(i).copied() {
+    let Some(link) = physics.links.get_mut(e) else {
+        if let Some(old) = physics.links.remove_index(e.index()) {
             // A recycled index: the old entity's body goes first.
             physics.world.remove_body(old.body);
-            physics.links[i] = None;
             physics.moving_dirty = true;
         }
         physics.insert_link(e, t, kind, velocity.unwrap_or_default());
@@ -1369,8 +1374,11 @@ fn sync_one(
         let (current, was_active) = (link.velocity, link.active);
         physics.world.remove_body(link.body);
         physics.insert_link(e, t, kind, velocity.unwrap_or(current));
-        if was_active && physics.links[i].is_some_and(|l| !l.active) {
-            physics.set_active(i, true);
+        if was_active
+            && let Some(k) = physics.links.slot(e)
+            && !physics.links.at(k).active
+        {
+            physics.set_active(k, true);
         }
         return;
     }
@@ -1404,7 +1412,7 @@ fn sync_one(
     if let Some(collider) = moved_static {
         // Moved ground: where it lies, for collider streaming.
         let rect = physics.rect_of(collider, t);
-        if let Some(link) = physics.links[i].as_mut() {
+        if let Some(link) = physics.links.get_mut(e) {
             link.rect = rect;
         }
     }
@@ -1414,9 +1422,7 @@ fn write_back(physics: &mut Physics3D, world: &mut World) {
     let n = physics.moving().len();
     for k in 0..n {
         let i = physics.moving[k] as usize;
-        let Some(link) = physics.links[i].as_mut() else {
-            continue;
-        };
+        let link = physics.links.at_mut(i);
         let e = link.entity;
         let Some(body) = physics.world.bodies.get(link.body) else {
             continue;
@@ -1653,5 +1659,67 @@ mod tests {
         tick(&mut ctx);
         frame(&mut ctx, 0.5);
         assert!((ctx.world.get::<Transform3D>(ball).unwrap().position.x - 0.2).abs() < 1e-4);
+    }
+
+    /// Waves of short-lived bodies and characters among scenery that keeps
+    /// growing, so entity indices climb: the links table follows the live
+    /// physics entities, and every lookup still finds its own.
+    #[test]
+    fn links_table_stays_bounded_by_the_live_bodies_under_churn() {
+        const LIVE: usize = 100;
+        let mut ctx = Ctx::new(0.02, Vec2::ZERO);
+        start(&mut ctx, Vec3::ZERO);
+        ctx.world.spawn((
+            Transform3D::default(),
+            RigidBody3D::fixed(),
+            Collider3D::cuboid(Vec3::splat(1.0)),
+        ));
+        let (mut bodies, mut highest) = (Vec::new(), 0);
+        for wave in 0..40 {
+            for e in bodies.drain(..) {
+                ctx.world.despawn(e);
+            }
+            for i in 0..LIVE {
+                for _ in 0..20 {
+                    ctx.world.spawn((Transform3D::default(),));
+                }
+                let at = vec3(i as f32 * 3.0, 5.0 + wave as f32, 0.0);
+                let e = if i % 10 == 0 {
+                    ctx.world.spawn((Transform3D::at(at), Character3D::new(1.8, 0.3)))
+                } else {
+                    let rigid = if i % 3 == 0 {
+                        RigidBody3D::fixed()
+                    } else {
+                        RigidBody3D::dynamic()
+                    };
+                    ctx.world.spawn((Transform3D::at(at), rigid, Collider3D::sphere(0.5)))
+                };
+                highest = highest.max(e.index() as usize);
+                bodies.push(e);
+            }
+            tick(&mut ctx);
+            assert_eq!(ctx.physics3d.body_count(), LIVE + 1);
+            for &e in &bodies {
+                assert!(ctx.physics3d.link(e).is_some_and(|l| l.entity == e));
+            }
+        }
+        let bytes = ctx.physics3d.links_heap_bytes();
+        let per = size_of::<Link>() + size_of::<Entity>() + 9;
+        let bound = (LIVE + 1) * 4 * per;
+        assert!(bytes <= bound, "{bytes} bytes for {} bodies (bound {bound})", LIVE + 1);
+        // Negative control: the old table held one slot per index up to the
+        // highest one ever used.
+        let old = (highest + 1) * size_of::<Option<Link>>();
+        assert!(old > 10 * bytes, "old {old} vs {bytes} bytes");
+
+        // Everything leaves: the table gives its memory back.
+        for e in bodies.drain(..) {
+            ctx.world.despawn(e);
+        }
+        tick(&mut ctx);
+        assert_eq!(ctx.physics3d.body_count(), 1);
+        // At most the small floor the table keeps (64 slots, its map rounded up).
+        let left = ctx.physics3d.links_heap_bytes();
+        assert!(left <= 2 * 64 * per, "{left} bytes");
     }
 }

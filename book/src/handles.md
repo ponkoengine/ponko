@@ -157,7 +157,9 @@ getting older while the class grows are the ones nothing frees.
 
 Both read the engine's own handle tables, so they also work in headless
 tests; a windowed game's inventory adds `gpu`, what the renderer really
-holds, to cross-check them. Leak tests in the engine load, free, replace
+holds, to cross-check them, and `texture_alpha`, the CPU memory it keeps
+about textures' alpha for cutout shadows (a small summary per texture, and a
+full mask only for textures a cutout material reads). Leak tests in the engine load, free, replace
 and hot-reload assets in loops and expect `growth_since` to stay empty.
 
 ## The older names

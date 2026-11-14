@@ -55,8 +55,8 @@ pub(super) struct Inputs<'a> {
 
 const NO_TIMESTAMPS: &str = "the GPU adapter doesn't support timestamp queries, so GPU time can't be measured";
 const NOT_TIMED_YET: &str = "no frame's GPU timestamps have come back yet";
-const NO_GPU: &str = "headless runs open no GPU";
-const NO_GPU_YET: &str = "the renderer hasn't opened a GPU yet";
+pub(super) const NO_GPU: &str = "headless runs open no GPU";
+pub(super) const NO_GPU_YET: &str = "the renderer hasn't opened a GPU yet";
 /// Why `counts.frustum_culled_other_models` is always null.
 const FRUSTUM_OTHER: &str = "not counted: LOD groups, terrain tiles, skinned models, models with morph targets and shadow-only casters are culled anew every frame without a result kept to count from, and static instance batches are culled on the GPU (see counts.instance_batches); counts.frustum_culled_models covers plain models";
 /// Why `counts.frustum_culled_models` is null in a rush.
@@ -254,6 +254,7 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
             "counts": "per frame",
             "memory_estimate_bytes": "what the renderer's tables hold for the game: its textures (render-target textures included), mesh buffers, its GPU buffers and the instance batch pools; not the frame's own targets (scene color and depth, post-processing, ambient occlusion and temporal history), shadow maps, the light shadow atlas, skinning or per-frame instance buffers (gpu_memory_bytes counts those); an estimate, not the driver's total",
             "gpu_memory_bytes": "every GPU texture and buffer the engine holds, each counted once, by class: textures (the game's and the engine's images, render targets, texture arrays), meshes, gpu_buffers, frame_targets (scene color and depth, post-processing, ambient occlusion, reflections, temporal history, target cameras' own targets, the 2D light map), shadows (the sun's cascades), atlases (the point and spot lights' shadow atlas), skinning, probes (global illumination and image-based lighting), instance_batches (per-frame model and sprite records, static batch pools), other (uniforms, light grids, particles, occlusion culling, lookup tables, timestamp queries, stand-ins), and their total; at the sizes asked for, without the driver's padding. adapter: the platform's own figure for the device (Vulkan and DirectX 12: wgpu's allocator; Metal: the device's allocated size, which also counts wgpu's staging and the window's images), null where the platform reports none; adapter_note says which",
+            "gpu_allocations": "with perf.get's gpu_allocations param only: every texture and buffer gpu_memory_bytes counts (or the n largest), largest first. class: its gpu_memory_bytes class; label: what it is (3d color is the multisampled scene color, 3d hdr its resolve, 3d depth, 3d shadow map the sun's cascades with one layer each, 3d light shadow atlas, ...); kind: texture, buffer or other (a block counted by its size, such as the mesh arena); bytes as gpu_memory_bytes counts them; textures: size (width, height, layers), mips, samples, format; buffers: usage, the first of staging, index, vertex, indirect, storage, uniform, query and copy its flags allow. unlisted_bytes: what a count left out; buffer_bytes_by_usage: every buffer's bytes by usage, listed or not. wgpu's own staging for uploads is not in it",
             "occluded_models": "models in the camera's view that occlusion culling hid in the last frame: plain models, and each LOD renderer once (a crossfade between two hidden levels counts both); shadow-only casters are not counted",
             "frustum_culled_models": "plain Model entities (not LOD groups, terrain tiles, skinned models, models with morph targets, shadow-only casters or static instance batches) whose bounds were outside the camera's view in the last frame, counted when asked from what the renderer keeps per model; models hidden by occlusion culling are in the view and not counted here (see occluded_models)",
             "history": "one entry per drawn frame, oldest first. gpu_smoothed_ms: the smoothed GPU time as it stood after that frame. gpu_latest_ms: the newest single frame's own GPU time that had come back by then, from gpu_latest_frames_ago drawn frames earlier (timestamps come back late, so a frame's own GPU time isn't known when it is kept). Both are null when GPU time wasn't measured",
@@ -476,6 +477,7 @@ mod tests {
                 texture_bytes: 4096,
                 meshes: 2,
                 mesh_bytes: 1000,
+                mesh_cpu_bytes: 0,
                 gpu_buffers: 1,
                 gpu_buffer_bytes: 24,
             }),

@@ -421,6 +421,15 @@ fn agents_drive_several_games_through_mcp() {
         assert!(reason.contains("3d"), "{quality}");
         assert!(set.unwrap_err().contains(reason));
     }
+    // perf_report passes gpu_allocations on: a headless game says it has
+    // no GPU to list instead of "not asked for".
+    let perf = agent
+        .tool("perf_report", json!({ "instance": port_a, "gpu_allocations": true }))
+        .unwrap();
+    let why = perf["render_inspector"]["unavailable"]["gpu_allocations"]
+        .as_str()
+        .unwrap();
+    assert!(why.contains("headless"), "{why}");
     assert!(!names.iter().any(|n| n == "set_graphics_quality"));
     let err = viewer
         .tool("set_graphics_quality", json!({ "instance": port_a, "level": "low" }))

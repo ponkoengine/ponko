@@ -144,7 +144,11 @@ impl BlendOrder {
     /// Counts the far-to-near copy as instance batches (see `memory.rs`).
     pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         if let Some(buffer) = &self.buffer {
-            t.buffer(crate::render::memory::MemoryClass::InstanceBatches, buffer);
+            t.buffer(
+                crate::render::memory::MemoryClass::InstanceBatches,
+                "static batch blend order",
+                buffer,
+            );
         }
     }
 }

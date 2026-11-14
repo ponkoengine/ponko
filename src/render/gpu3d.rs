@@ -1325,8 +1325,8 @@ impl Renderer3D {
         if let Some(culling) = &self.static_culling {
             culling.tally_memory(t);
         }
-        t.buffer(C::InstanceBatches, &self.instances);
-        t.buffer(C::InstanceBatches, self.moved.buffer());
+        t.buffer(C::InstanceBatches, "model instances", &self.instances);
+        t.buffer(C::InstanceBatches, "moved instances", self.moved.buffer());
         if let Some(targets) = &self.targets {
             targets.tally_memory(t);
         }
@@ -1345,10 +1345,15 @@ impl Renderer3D {
         self.lights.tally_memory(t, C::Other);
         self.occlusion.tally_memory(t);
         self.particles.tally_memory(t);
-        t.buffer(C::Other, &self.frame_buffer);
-        t.texture(C::Other, &self.sky_texture);
-        for view in [&self.sky_view, &self.no_gi, &self.dummy_depth, &self.no_decal_view] {
-            t.view(C::Other, view);
+        t.buffer(C::Other, "frame uniforms", &self.frame_buffer);
+        t.texture(C::Other, "sky lookup", &self.sky_texture);
+        for (label, view) in [
+            ("sky view lookup", &self.sky_view),
+            ("probe stand-in", &self.no_gi),
+            ("depth stand-in", &self.dummy_depth),
+            ("decal stand-in", &self.no_decal_view),
+        ] {
+            t.view(C::Other, label, view);
         }
     }
 

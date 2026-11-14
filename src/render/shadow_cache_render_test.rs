@@ -69,7 +69,8 @@ impl Rig {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            // Read back by the texture-alpha test.
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
         });
         queue.write_texture(
@@ -886,4 +887,112 @@ fn pure_custom_functions_and_texture_channels_only_refresh_affected_shadows() {
     let (after, kept) = compare(&mut renderers, &mut ctx);
     assert_eq!(kept, 1, "opaque fragment-only shader reloads retain shadow depth");
     assert_ne!(before, after, "the fragment shader reload must change the image");
+}
+
+/// A cutout caster's base texture keeps only an alpha summary until a
+/// region upload needs a mask: it is then read back from the GPU once, and
+/// the shadows kept or redrawn from it match a full redraw every time.
+#[test]
+fn lazily_built_alpha_masks_keep_cutout_shadows_exact() {
+    use super::texture_alpha::{TextureAlphas, read_alpha};
+    let Some(rig) = Rig::new() else { return };
+    let mut ctx = Ctx::new(1.0 / 60.0, Vec2::splat(SIZE as f32));
+    ctx.scene3d.camera.position = vec3(0.0, 9.0, 9.0);
+    ctx.scene3d.camera.look_at(Vec3::ZERO);
+    ctx.scene3d.lighting.shadow_cascades = 1;
+    ctx.scene3d.lighting.shadow_resolution = 512;
+    ctx.scene3d.lighting.shadow_distance = 30.0;
+    ctx.scene3d.lighting.shadow_refresh = 1;
+    ctx.scene3d.sky.atmosphere = false;
+    let texture = crate::texture::Texture::new(0, 1, 1);
+    let floor_desc = MaterialDesc {
+        color: Color::WHITE,
+        ..Default::default()
+    };
+    let desc = MaterialDesc {
+        blend: Blend::Cutout,
+        texture: Some(texture),
+        ..floor_desc
+    };
+    let floor_material = ctx.gfx.create_material(floor_desc);
+    let material = ctx.gfx.create_material(desc);
+    let ground = MeshData::plane(20.0);
+    let cube = MeshData::cube(1.0);
+    let floor = ctx.gfx.create_mesh(&ground, floor_material);
+    let caster = ctx.gfx.create_mesh(&cube, material);
+    ctx.world.spawn((Transform3D::default(), Model::new(floor)));
+    ctx.world
+        .spawn((Transform3D::at(vec3(0.0, 1.0, 0.0)), Model::new(caster)));
+    // The texture as the renderer made it: opaque white, summary only.
+    let mut alphas = TextureAlphas::default();
+    alphas.created(0, 1, 1, &[255; 4]);
+    assert_eq!(alphas.memory().masks, 0, "a new texture keeps no mask");
+    let mut renderers = [rig.renderer(), rig.renderer()];
+    assert!(!renderers[0].alpha_tested(0), "no material reads it yet");
+    for r in &mut renderers {
+        for d in [floor_desc, desc] {
+            r.create_material(&rig.device, &GpuMaterialDesc::new(&d), &rig.textures);
+        }
+        r.create_mesh(
+            &rig.device,
+            &ground,
+            &[(0..ground.indices.len() as u32, floor_material)],
+            true,
+        );
+        r.create_mesh(&rig.device, &cube, &[(0..cube.indices.len() as u32, material)], true);
+    }
+    assert!(renderers[0].alpha_tested(0), "the cutout material reads its alpha");
+    let mut frames = [Frame3D::default(), Frame3D::default()];
+    // Draws with kept shadows and with every shadow redrawn.
+    let mut draw = |renderers: &mut [Renderer3D; 2], ctx: &mut Ctx| {
+        let [cached, reference] = renderers;
+        let [a, b] = &mut frames;
+        let image = rig.draw(cached, a, ctx);
+        reference.forget_shadows();
+        (image, rig.draw(reference, b, ctx), cached.shadow_views_kept())
+    };
+    // A region upload the way `Renderer::update_texture_region` makes one.
+    let upload = |alphas: &mut TextureAlphas, renderers: &mut [Renderer3D; 2], pixel: [u8; 4], tell: Option<bool>| {
+        let tested = renderers[0].alpha_tested(0);
+        let changed = alphas.region(0, [0, 0], [1, 1], &pixel, tested, |_, _| {
+            read_alpha(&rig.device, &rig.queue, &rig.textures[0].texture)
+        });
+        rig.queue.write_texture(
+            rig.textures[0].texture.as_image_copy(),
+            &pixel,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: None,
+            },
+            rig.textures[0].texture.size(),
+        );
+        for r in renderers.iter_mut() {
+            r.texture_alpha_changed(0, tell.unwrap_or(changed));
+        }
+        changed
+    };
+    let (solid, expected, _) = draw(&mut renderers, &mut ctx);
+    assert_eq!(solid, expected);
+    // RGB only: the mask is read back (once) and the shadows are kept.
+    assert!(!upload(&mut alphas, &mut renderers, [40, 90, 200, 255], None));
+    assert_eq!(alphas.masks_built(), 1);
+    assert_eq!(alphas.memory().mask_bytes, 1);
+    let (image, expected, kept) = draw(&mut renderers, &mut ctx);
+    assert_eq!(kept, 1, "RGB-only uploads keep cutout shadows");
+    assert_eq!(image, expected, "kept cutout shadows match a full redraw");
+    // Alpha cut out: the mask says so, the shadows are redrawn.
+    assert!(upload(&mut alphas, &mut renderers, [40, 90, 200, 0], None));
+    let (holes, expected, kept) = draw(&mut renderers, &mut ctx);
+    assert_eq!(kept, 0, "alpha changes redraw cutout shadows");
+    assert_eq!(holes, expected);
+    assert_ne!(holes, solid, "the cut-out caster drops its shadow");
+    assert_eq!(alphas.masks_built(), 1, "the mask is built exactly once");
+    // Negative control: claiming an alpha change kept nothing would keep
+    // stale shadows, which the full redraw shows.
+    assert!(upload(&mut alphas, &mut renderers, [255; 4], Some(false)));
+    let (stale, expected, kept) = draw(&mut renderers, &mut ctx);
+    assert_eq!(kept, 1);
+    assert_ne!(stale, expected, "stale cutout shadows differ from a full redraw");
+    assert_eq!(expected, solid, "back to the first image");
 }

@@ -716,14 +716,18 @@ impl Lights2D {
     pub(super) fn tally_memory(&self, t: &mut super::memory::MemoryTally) {
         use super::memory::MemoryClass as C;
         if let Some(targets) = &self.targets {
-            t.view(C::FrameTargets, &targets.light_map);
-            t.view(C::FrameTargets, &targets.stencil);
+            t.view(C::FrameTargets, "2d light map", &targets.light_map);
+            t.view(C::FrameTargets, "2d light stencil", &targets.stencil);
             if let Some((normals, _)) = &targets.normals {
-                t.view(C::FrameTargets, normals);
+                t.view(C::FrameTargets, "2d normal map", normals);
             }
         }
-        for buffer in [&self.view_buffer, &self.lights, &self.vertices] {
-            t.buffer(C::Other, buffer);
+        for (label, buffer) in [
+            ("2d light view", &self.view_buffer),
+            ("2d lights", &self.lights),
+            ("2d light vertices", &self.vertices),
+        ] {
+            t.buffer(C::Other, label, buffer);
         }
     }
 }

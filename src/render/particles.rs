@@ -472,8 +472,13 @@ impl ParticleView {
 
     fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        for synced in [&self.camera, &self.instances, &self.strip_vertices, &self.text_vertices] {
-            t.buffer(C::Other, synced.buffer());
+        for (label, synced) in [
+            ("particle camera", &self.camera),
+            ("particle instances", &self.instances),
+            ("trail vertices", &self.strip_vertices),
+            ("3d text vertices", &self.text_vertices),
+        ] {
+            t.buffer(C::Other, label, synced.buffer());
         }
     }
 }

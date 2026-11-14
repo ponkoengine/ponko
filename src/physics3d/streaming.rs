@@ -371,7 +371,7 @@ impl Physics3D {
     }
 
     pub(super) fn set_active(&mut self, i: usize, active: bool) {
-        let Some(link) = self.links[i].as_mut() else { return };
+        let link = self.links.at_mut(i);
         link.active = active;
         if let Some(c) = self.world.colliders.get_mut(link.collider) {
             c.set_enabled(active);
@@ -401,7 +401,7 @@ pub(super) fn stream(physics: &mut Physics3D, world: &mut World) {
             physics.streamed_out = false;
             for k in 0..physics.statics.len() {
                 let i = physics.statics[k] as usize;
-                if physics.links[i].is_some_and(|l| !l.active) {
+                if !physics.links.at(i).active {
                     physics.set_active(i, true);
                 }
             }
@@ -419,9 +419,7 @@ pub(super) fn stream(physics: &mut Physics3D, world: &mut World) {
     let mut holders_found = false;
     for k in 0..physics.statics.len() {
         let i = physics.statics[k];
-        let Some(link) = physics.links[i as usize] else {
-            continue;
-        };
+        let link = *physics.links.at(i as usize);
         if link.active {
             if scratch.focus.iter().any(|&(at, _, keep)| away(link.rect, at) <= keep) {
                 continue;
@@ -443,7 +441,8 @@ pub(super) fn stream(physics: &mut Physics3D, world: &mut World) {
                 .map(|(d, _)| d)
                 .reduce(f32::min);
             if let Some(d) = nearest {
-                scratch.wanted.push((d, i));
+                // By position in `statics`, which is entity-index order.
+                scratch.wanted.push((d, k as u32));
             }
         }
     }
@@ -453,8 +452,8 @@ pub(super) fn stream(physics: &mut Physics3D, world: &mut World) {
             .wanted
             .sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
     }
-    for &(_, i) in scratch.wanted.iter().take(max_new) {
-        physics.set_active(i as usize, true);
+    for &(_, k) in scratch.wanted.iter().take(max_new) {
+        physics.set_active(physics.statics[k as usize] as usize, true);
     }
     physics.stream_scratch = scratch;
 }
@@ -465,7 +464,7 @@ fn find_holders(physics: &mut Physics3D, holders: &mut Vec<Rect>) {
     let n = physics.moving().len();
     for k in 0..n {
         let i = physics.moving[k] as usize;
-        let Some(link) = physics.links[i] else { continue };
+        let link = *physics.links.at(i);
         let Some(c) = physics.world.colliders.get(link.collider) else {
             continue;
         };
