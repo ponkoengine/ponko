@@ -39,6 +39,7 @@ NOT_FEATURES = {
     'ember-hop.md': 'the second reference game is written in Rust',
     'packaging.md': 'the reference game is written in Rust',
     'render-tests.md': 'the GPU tests are written in Rust',
+    'shard-grove.md': 'the 3D reference game is written in Rust',
     'tutorial-2d.md': 'the tutorial is written in Rust',
     'tutorial-3d.md': 'the tutorial is written in Rust',
 }

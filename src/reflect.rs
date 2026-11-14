@@ -147,7 +147,7 @@ pub(crate) fn world_loads(world: &World) -> u64 {
 /// For what the game rebuilds from its own files rather than from a save:
 /// [`Ctx::spawn_level`](crate::ctx::Ctx::spawn_level) puts it on everything
 /// it spawns except the objects spawned as prefabs (see
-/// [`LevelOptions::without_saved_objects`](crate::d2::LevelOptions::without_saved_objects)).
+/// [`LevelOptions::without_saved_objects`](crate::tilemap::LevelOptions::without_saved_objects)).
 /// It isn't reflected itself, so it is never in a save, scene or prefab.
 ///
 /// ```
@@ -1535,7 +1535,7 @@ fn sprite_from_json(world: &World, value: Value) -> Result<crate::d2::Sprite, St
     let texture = world
         .get_resource::<TextureNames>()
         .and_then(|t| t.get(&name))
-        .ok_or_else(|| format!("texture \"{name}\" isn't loaded: ctx.load_texture(\"{name}\") first"))?;
+        .ok_or_else(|| format!("texture \"{name}\" isn't loaded: ctx.gfx.load_texture(\"{name}\") first"))?;
     Ok(crate::d2::Sprite {
         texture,
         color: json.color,
@@ -1700,6 +1700,23 @@ impl MaterialNames {
             table.by_id.entry(material.id).or_insert_with(|| (file.to_string(), i));
         }
         table.by_file.insert(file.to_string(), list);
+    }
+
+    /// Every material of the mesh files loaded so far: file, number in the
+    /// file, name (empty: unnamed), by file then number.
+    pub(crate) fn list(&self) -> Vec<(String, usize, String)> {
+        let table = self.table();
+        let mut out: Vec<(String, usize, String)> = table
+            .by_file
+            .iter()
+            .flat_map(|(file, list)| {
+                list.iter()
+                    .enumerate()
+                    .map(move |(i, (_, name))| (file.clone(), i, name.clone()))
+            })
+            .collect();
+        out.sort();
+        out
     }
 
     /// Forgets mesh file `file` (it was unloaded), so a scene naming its

@@ -1,5 +1,5 @@
-//! 3D: meshes with materials, drawn from entities with a [`Transform3D`] and
-//! a [`Model`], through a perspective [`Camera3D`], lit by a sun and ambient
+//! 3D: meshes with materials, drawn from entities with a [`d3::Transform`](crate::d3::Transform) and
+//! a [`Model`], through a perspective [`d3::Camera`](crate::d3::Camera), lit by a sun and ambient
 //! light ([`Lighting`]). Behind the `3d` feature.
 //!
 //! The 3D pass is drawn first, with a depth buffer; 2D sprites, text and UI
@@ -526,7 +526,7 @@ impl MaterialDesc {
     }
 }
 
-/// Draws a [`Mesh`] where the entity's [`Transform3D`] is.
+/// Draws a [`Mesh`] where the entity's [`d3::Transform`](crate::d3::Transform) is.
 ///
 /// ```no_run
 /// # use ponko::prelude::*;
@@ -779,6 +779,11 @@ impl Camera3D {
         self.viewport = viewport;
     }
 
+    /// The window size the camera projects to, in logical pixels.
+    pub(crate) fn viewport(&self) -> Vec2 {
+        self.viewport
+    }
+
     /// Turns the camera to look at `target`, keeping +Y up.
     ///
     /// ```no_run
@@ -825,7 +830,7 @@ impl Camera3D {
     /// ```no_run
     /// # use ponko::prelude::*;
     /// # fn f(ctx: &mut Ctx) {
-    /// let (from, dir) = ctx.scene3d.camera.screen_ray(ctx.mouse_pos());
+    /// let (from, dir) = ctx.scene3d.camera.screen_ray(ctx.input.mouse_pos());
     /// // Where the mouse points on the ground (y = 0):
     /// if dir.y < 0.0 {
     ///     let ground = from + dir * (-from.y / dir.y);

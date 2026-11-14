@@ -759,6 +759,20 @@ enum PonkoTextShaping
 typedef uint32_t PonkoTextShaping;
 #endif // __cplusplus
 
+enum PonkoImeEventKind
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  PONKO_IME_ENABLED = 0,
+  PONKO_IME_PREEDIT = 1,
+  PONKO_IME_COMMIT = 2,
+  PONKO_IME_DISABLED = 3,
+};
+#ifndef __cplusplus
+typedef uint32_t PonkoImeEventKind;
+#endif // __cplusplus
+
 typedef struct PonkoAccess PonkoAccess;
 
 typedef struct PonkoActionMap PonkoActionMap;
@@ -1083,6 +1097,34 @@ typedef struct PonkoLevelObject {
   uint32_t flip;
   bool visible;
 } PonkoLevelObject;
+
+typedef struct PonkoPointLight2D {
+  struct PonkoColor color;
+  float intensity;
+  float radius;
+  float falloff;
+  float height;
+  bool shadows;
+} PonkoPointLight2D;
+
+typedef struct PonkoSpotLight2D {
+  struct PonkoColor color;
+  float intensity;
+  float radius;
+  float falloff;
+  float height;
+  float angle;
+  float softness;
+  bool shadows;
+} PonkoSpotLight2D;
+
+typedef struct PonkoDirectionalLight2D {
+  struct PonkoColor color;
+  float intensity;
+  struct PonkoVec2 direction;
+  float elevation;
+  bool shadows;
+} PonkoDirectionalLight2D;
 
 typedef struct PonkoFont {
   uint32_t id;
@@ -2120,6 +2162,22 @@ typedef struct PonkoTargetEffect {
   struct PonkoMaterial material;
 } PonkoTargetEffect;
 
+typedef struct PonkoImeEvent {
+  uint32_t kind;
+  const char *text;
+  bool has_cursor;
+  size_t cursor_start;
+  size_t cursor_end;
+} PonkoImeEvent;
+
+typedef struct PonkoUiComposition {
+  const char *preedit;
+  bool has_cursor;
+  size_t cursor_start;
+  size_t cursor_end;
+  bool composing;
+} PonkoUiComposition;
+
 typedef struct PonkoSprite {
   struct PonkoTexture texture;
   struct PonkoColor color;
@@ -2143,6 +2201,12 @@ typedef struct PonkoAttached {
   struct PonkoVec2 offset;
   float rotation;
 } PonkoAttached;
+
+typedef struct PonkoAttached3D {
+  struct PonkoEntity to;
+  uint32_t reserved[2];
+  struct PonkoTransform3D offset;
+} PonkoAttached3D;
 
 typedef struct PonkoVelocity {
   struct PonkoVec2 linear;
@@ -2530,6 +2594,8 @@ enum PonkoStatus ponko_ctx_load_asset_with(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_attached_component(struct PonkoWorld *world, uint32_t *out_id);
 
 enum PonkoStatus ponko_game_follow_attachments(struct PonkoGame *game);
+
+enum PonkoStatus ponko_attached3d_component(struct PonkoWorld *world, uint32_t *out_id);
 
 struct PonkoAudioEffects ponko_audio_effects_default(void);
 
@@ -3165,6 +3231,65 @@ enum PonkoStatus ponko_tilemap_spawn_colliders(struct PonkoWorld *world,
                                                const uint16_t *solid_tiles,
                                                size_t count,
                                                size_t *out_count);
+
+struct PonkoPointLight2D ponko_point_light2d_default(void);
+
+struct PonkoSpotLight2D ponko_spot_light2d_default(void);
+
+struct PonkoDirectionalLight2D ponko_directional_light2d_default(void);
+
+enum PonkoStatus ponko_point_light2d_component(struct PonkoWorld *world, uint32_t *out_id);
+
+enum PonkoStatus ponko_spot_light2d_component(struct PonkoWorld *world, uint32_t *out_id);
+
+enum PonkoStatus ponko_directional_light2d_component(struct PonkoWorld *world, uint32_t *out_id);
+
+enum PonkoStatus ponko_ctx_set_occluder2d_rect(struct PonkoCtx *ctx,
+                                               uint64_t entity_bits,
+                                               struct PonkoVec2 size);
+
+enum PonkoStatus ponko_ctx_set_occluder2d_circle(struct PonkoCtx *ctx,
+                                                 uint64_t entity_bits,
+                                                 float radius);
+
+enum PonkoStatus ponko_ctx_set_occluder2d_polygon(struct PonkoCtx *ctx,
+                                                  uint64_t entity_bits,
+                                                  const struct PonkoVec2 *points,
+                                                  size_t count);
+
+enum PonkoStatus ponko_ctx_set_occluder2d_line(struct PonkoCtx *ctx,
+                                               uint64_t entity_bits,
+                                               struct PonkoVec2 a,
+                                               struct PonkoVec2 b);
+
+enum PonkoStatus ponko_ctx_set_tilemap_occluder(struct PonkoCtx *ctx,
+                                                uint64_t entity_bits,
+                                                const uint16_t *solid_tiles,
+                                                size_t count);
+
+enum PonkoStatus ponko_ctx_remove_occluder2d(struct PonkoCtx *ctx, uint64_t entity_bits);
+
+enum PonkoStatus ponko_ctx_occluder2d_edge_count(struct PonkoCtx *ctx,
+                                                 uint64_t entity_bits,
+                                                 size_t *out_count);
+
+enum PonkoStatus ponko_ctx_set_ambient_light2d(struct PonkoCtx *ctx,
+                                               bool on,
+                                               struct PonkoColor color);
+
+enum PonkoStatus ponko_ctx_ambient_light2d(struct PonkoCtx *ctx,
+                                           bool *out_on,
+                                           struct PonkoColor *out_color);
+
+enum PonkoStatus ponko_ctx_set_normal_map(struct PonkoCtx *ctx,
+                                          struct PonkoTexture texture,
+                                          bool has_normal_map,
+                                          struct PonkoTexture normal_map);
+
+enum PonkoStatus ponko_ctx_normal_map(struct PonkoCtx *ctx,
+                                      struct PonkoTexture texture,
+                                      bool *out_has,
+                                      struct PonkoTexture *out_normal_map);
 
 enum PonkoStatus ponko_ctx_try_load_texture(struct PonkoCtx *ctx,
                                             const char *path,
@@ -5565,7 +5690,80 @@ enum PonkoStatus ponko_ctx_set_system_font_fallback(struct PonkoCtx *ctx,
                                                     bool on,
                                                     bool *out_available);
 
+enum PonkoStatus ponko_ctx_set_gpu_buffer_motion(struct PonkoCtx *ctx,
+                                                 struct PonkoGpuBuffer buffer,
+                                                 bool keep);
+
 enum PonkoStatus ponko_ctx_reset_motion(struct PonkoCtx *ctx, uint64_t entity);
+
+enum PonkoStatus ponko_ctx_feed_ime(struct PonkoCtx *ctx, const struct PonkoImeEvent *event);
+
+enum PonkoStatus ponko_ctx_preedit(struct PonkoCtx *ctx,
+                                   char *buffer,
+                                   size_t capacity,
+                                   size_t *out_len);
+
+enum PonkoStatus ponko_ctx_typed_text(struct PonkoCtx *ctx,
+                                      char *buffer,
+                                      size_t capacity,
+                                      size_t *out_len);
+
+enum PonkoStatus ponko_ctx_preedit_cursor(struct PonkoCtx *ctx,
+                                          bool *out_has,
+                                          size_t *out_start,
+                                          size_t *out_end);
+
+enum PonkoStatus ponko_ctx_composing(struct PonkoCtx *ctx, bool *out_composing);
+
+enum PonkoStatus ponko_ctx_set_ime_allowed(struct PonkoCtx *ctx, bool allowed);
+
+enum PonkoStatus ponko_ctx_ime_allowed(struct PonkoCtx *ctx, bool *out_allowed);
+
+enum PonkoStatus ponko_ctx_set_ime_cursor_area(struct PonkoCtx *ctx, struct PonkoRect area);
+
+enum PonkoStatus ponko_ctx_ime_cursor_area(struct PonkoCtx *ctx,
+                                           bool *out_has,
+                                           struct PonkoRect *out_area);
+
+enum PonkoStatus ponko_ctx_cancel_composition(struct PonkoCtx *ctx);
+
+enum PonkoStatus ponko_ctx_ui_set_ime_allowed(struct PonkoCtx *ctx,
+                                              uint64_t target,
+                                              uint64_t id,
+                                              bool allowed);
+
+enum PonkoStatus ponko_ctx_ui_ime_allowed(struct PonkoCtx *ctx,
+                                          uint64_t target,
+                                          uint64_t id,
+                                          bool *out_allowed);
+
+enum PonkoStatus ponko_ctx_ui_wants_ime(struct PonkoCtx *ctx, uint64_t target, bool *out_wants);
+
+enum PonkoStatus ponko_ctx_ui_preedit(struct PonkoCtx *ctx,
+                                      uint64_t target,
+                                      uint64_t id,
+                                      char *buffer,
+                                      size_t capacity,
+                                      size_t *out_len);
+
+enum PonkoStatus ponko_ctx_ui_ime_area(struct PonkoCtx *ctx,
+                                       uint64_t target,
+                                       bool *out_has,
+                                       struct PonkoRect *out_area);
+
+enum PonkoStatus ponko_ctx_ui_composition_interrupted(struct PonkoCtx *ctx,
+                                                      uint64_t target,
+                                                      bool *out_interrupted);
+
+enum PonkoStatus ponko_ctx_ui_frame_ime(struct PonkoCtx *ctx,
+                                        uint64_t target,
+                                        struct PonkoVec2 viewport,
+                                        const struct PonkoUiInput *input,
+                                        const struct PonkoUiComposition *composition);
+
+enum PonkoStatus ponko_input_scenario_ime(struct PonkoInputScenario *scenario,
+                                          uint64_t tick,
+                                          const struct PonkoImeEvent *event);
 
 #ifdef __cplusplus
 }  // extern "C"
