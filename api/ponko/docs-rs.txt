@@ -1373,6 +1373,20 @@ impl serde_core::ser::Serialize for ponko::d3::JointMotion
 pub fn ponko::d3::JointMotion::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::JointMotion
 pub fn ponko::d3::JointMotion::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub enum ponko::d3::NavObstacleShape
+pub ponko::d3::NavObstacleShape::Box
+pub ponko::d3::NavObstacleShape::Convex(ponko::d3::NavConvexPolygon)
+pub ponko::d3::NavObstacleShape::Cylinder
+impl core::clone::Clone for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::default() -> Self
+impl core::fmt::Debug for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::NavObstacleShape
+impl core::marker::StructuralPartialEq for ponko::d3::NavObstacleShape
 #[non_exhaustive] pub enum ponko::d3::ParticleBlend
 pub ponko::d3::ParticleBlend::Additive
 pub ponko::d3::ParticleBlend::Alpha
@@ -1822,6 +1836,19 @@ pub fn ponko::d3::NavAgent::default() -> Self
 impl core::fmt::Debug for ponko::d3::NavAgent
 pub fn ponko::d3::NavAgent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl ponko_ecs::bundle::Component for ponko::d3::NavAgent
+pub struct ponko::d3::NavConvexPolygon
+impl ponko::d3::NavConvexPolygon
+pub const ponko::d3::NavConvexPolygon::MAX_POINTS: usize
+pub fn ponko::d3::NavConvexPolygon::new(&[glam::f32::vec2::Vec2]) -> core::option::Option<Self>
+pub fn ponko::d3::NavConvexPolygon::points(&self) -> &[glam::f32::vec2::Vec2]
+impl core::clone::Clone for ponko::d3::NavConvexPolygon
+pub fn ponko::d3::NavConvexPolygon::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::NavConvexPolygon
+pub fn ponko::d3::NavConvexPolygon::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::d3::NavConvexPolygon
+pub fn ponko::d3::NavConvexPolygon::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::NavConvexPolygon
+impl core::marker::StructuralPartialEq for ponko::d3::NavConvexPolygon
 pub struct ponko::d3::NavMesh
 impl ponko::d3::NavMesh
 pub fn ponko::d3::NavMesh::bake(&[ponko::nav::NavSource], ponko::nav::NavBakeSettings) -> core::result::Result<Self, ponko::nav::NavBakeError>
@@ -1830,11 +1857,15 @@ pub fn ponko::d3::NavMesh::find_path(&self, glam::f32::vec3::Vec3, glam::f32::ve
 pub fn ponko::d3::NavMesh::sample_position(&self, glam::f32::vec3::Vec3, f32) -> core::option::Option<glam::f32::vec3::Vec3>
 pub fn ponko::d3::NavMesh::set_obstacles(&mut self, &[ponko::d3::NavObstacle])
 pub fn ponko::d3::NavMesh::update_carving(&mut self, usize) -> core::result::Result<usize, ponko::nav::NavBakeError>
-pub struct ponko::d3::NavObstacle
+#[non_exhaustive] pub struct ponko::d3::NavObstacle
 pub ponko::d3::NavObstacle::carve: bool
 pub ponko::d3::NavObstacle::center: glam::f32::vec3::Vec3
 pub ponko::d3::NavObstacle::half_extents: glam::f32::vec3::Vec3
+pub ponko::d3::NavObstacle::shape: ponko::d3::NavObstacleShape
+pub ponko::d3::NavObstacle::yaw: f32
 impl ponko::d3::NavObstacle
+pub fn ponko::d3::NavObstacle::convex(glam::f32::vec3::Vec3, &[glam::f32::vec2::Vec2], f32) -> core::option::Option<Self>
+pub fn ponko::d3::NavObstacle::cylinder(glam::f32::vec3::Vec3, f32, f32) -> Self
 pub fn ponko::d3::NavObstacle::new(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> Self
 impl core::clone::Clone for ponko::d3::NavObstacle
 pub fn ponko::d3::NavObstacle::clone(&self) -> Self
@@ -5110,6 +5141,20 @@ impl serde_core::ser::Serialize for ponko::d3::JointMotion
 pub fn ponko::d3::JointMotion::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::JointMotion
 pub fn ponko::d3::JointMotion::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub enum ponko::prelude::d3::NavObstacleShape
+pub ponko::prelude::d3::NavObstacleShape::Box
+pub ponko::prelude::d3::NavObstacleShape::Convex(ponko::d3::NavConvexPolygon)
+pub ponko::prelude::d3::NavObstacleShape::Cylinder
+impl core::clone::Clone for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::default() -> Self
+impl core::fmt::Debug for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::NavObstacleShape
+impl core::marker::StructuralPartialEq for ponko::d3::NavObstacleShape
 #[non_exhaustive] pub enum ponko::prelude::d3::ParticleBlend
 pub ponko::prelude::d3::ParticleBlend::Additive
 pub ponko::prelude::d3::ParticleBlend::Alpha
@@ -5559,6 +5604,19 @@ pub fn ponko::d3::NavAgent::default() -> Self
 impl core::fmt::Debug for ponko::d3::NavAgent
 pub fn ponko::d3::NavAgent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl ponko_ecs::bundle::Component for ponko::d3::NavAgent
+pub struct ponko::prelude::d3::NavConvexPolygon
+impl ponko::d3::NavConvexPolygon
+pub const ponko::d3::NavConvexPolygon::MAX_POINTS: usize
+pub fn ponko::d3::NavConvexPolygon::new(&[glam::f32::vec2::Vec2]) -> core::option::Option<Self>
+pub fn ponko::d3::NavConvexPolygon::points(&self) -> &[glam::f32::vec2::Vec2]
+impl core::clone::Clone for ponko::d3::NavConvexPolygon
+pub fn ponko::d3::NavConvexPolygon::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::NavConvexPolygon
+pub fn ponko::d3::NavConvexPolygon::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::d3::NavConvexPolygon
+pub fn ponko::d3::NavConvexPolygon::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::NavConvexPolygon
+impl core::marker::StructuralPartialEq for ponko::d3::NavConvexPolygon
 pub struct ponko::prelude::d3::NavMesh
 impl ponko::d3::NavMesh
 pub fn ponko::d3::NavMesh::bake(&[ponko::nav::NavSource], ponko::nav::NavBakeSettings) -> core::result::Result<Self, ponko::nav::NavBakeError>
@@ -5567,11 +5625,15 @@ pub fn ponko::d3::NavMesh::find_path(&self, glam::f32::vec3::Vec3, glam::f32::ve
 pub fn ponko::d3::NavMesh::sample_position(&self, glam::f32::vec3::Vec3, f32) -> core::option::Option<glam::f32::vec3::Vec3>
 pub fn ponko::d3::NavMesh::set_obstacles(&mut self, &[ponko::d3::NavObstacle])
 pub fn ponko::d3::NavMesh::update_carving(&mut self, usize) -> core::result::Result<usize, ponko::nav::NavBakeError>
-pub struct ponko::prelude::d3::NavObstacle
+#[non_exhaustive] pub struct ponko::prelude::d3::NavObstacle
 pub ponko::prelude::d3::NavObstacle::carve: bool
 pub ponko::prelude::d3::NavObstacle::center: glam::f32::vec3::Vec3
 pub ponko::prelude::d3::NavObstacle::half_extents: glam::f32::vec3::Vec3
+pub ponko::prelude::d3::NavObstacle::shape: ponko::d3::NavObstacleShape
+pub ponko::prelude::d3::NavObstacle::yaw: f32
 impl ponko::d3::NavObstacle
+pub fn ponko::d3::NavObstacle::convex(glam::f32::vec3::Vec3, &[glam::f32::vec2::Vec2], f32) -> core::option::Option<Self>
+pub fn ponko::d3::NavObstacle::cylinder(glam::f32::vec3::Vec3, f32, f32) -> Self
 pub fn ponko::d3::NavObstacle::new(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> Self
 impl core::clone::Clone for ponko::d3::NavObstacle
 pub fn ponko::d3::NavObstacle::clone(&self) -> Self
