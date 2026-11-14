@@ -3615,6 +3615,7 @@ pub const ponko_ffi::PONKO_UI_SCREEN: u64
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_input(*mut ponko_ffi::PonkoCtx, u32, *mut *const core::ffi::c_void, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_is_mesh_live(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoMesh, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_is_paused(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_is_physics3d_paused(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_is_physics_paused(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_is_resident(*mut ponko_ffi::PonkoCtx, u32, *const core::ffi::primitives::c_char, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_joint_count(*mut ponko_ffi::PonkoCtx, u64, *mut usize) -> ponko_ffi::PonkoStatus
@@ -3792,6 +3793,7 @@ pub const ponko_ffi::PONKO_UI_SCREEN: u64
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_particle_emitter2d(*mut ponko_ffi::PonkoCtx, u64, *const ponko_ffi::PonkoParticleSettings2D) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_particle_emitter3d(*mut ponko_ffi::PonkoCtx, u64, *const ponko_ffi::PonkoParticleSettings3D) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_perf_hud(*mut ponko_ffi::PonkoCtx, bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_physics3d_paused(*mut ponko_ffi::PonkoCtx, bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_physics_paused(*mut ponko_ffi::PonkoCtx, bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_post(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoPost) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_profiling(*mut ponko_ffi::PonkoCtx, bool) -> ponko_ffi::PonkoStatus
