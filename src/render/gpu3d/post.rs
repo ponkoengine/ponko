@@ -679,6 +679,16 @@ impl Renderer3D {
             passes::mark("taa");
             taa.draw(encoder, images, self.history.taa_frame_read, &targets.hdr, time("taa"));
         }
+        // GPU buffers that keep their last frame copy what this frame drew,
+        // for the next frame's motion pass, before anything changes them.
+        if self.screen.velocity_on && self.resources.keeps_buffer_pasts() {
+            let timestamps = time("buffer motion copy").map(|t| wgpu::ComputePassTimestampWrites {
+                query_set: t.query_set,
+                beginning_of_pass_write_index: t.beginning_of_pass_write_index,
+                end_of_pass_write_index: t.end_of_pass_write_index,
+            });
+            self.resources.record_buffer_pasts(encoder, timestamps);
+        }
         // The game's scene compute passes: they read the settled frame
         // (in `hdr`) and its depth, and write their own targets or buffers,
         // so the effects below see this frame's results.

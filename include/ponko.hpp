@@ -100,6 +100,23 @@ using attached = PonkoAttached;
 /// transform2d. Get and set it like any component; it can't be a query column (the engine stores it in a Rust
 /// layout).
 using sprite = PonkoSprite;
+// ---- 2D lights (Rust `d2::PointLight`, `d2::SpotLight`, `d2::DirectionalLight`, `d2::Occluder`).
+/// The built-in `PointLight2D` component: light from the entity's 2D transform, fading to nothing at
+/// `radius` pixels; `shadows` makes occluders in reach cast shadows. Start from point_light2d_default().
+/// Lighting turns on with the first light or an ambient light (ctx::set_ambient_light2d).
+using point_light2d = PonkoPointLight2D;
+/// A point light with the engine's defaults (Rust `d2::PointLight::default()`).
+inline point_light2d point_light2d_default() { return ponko_point_light2d_default(); }
+/// The built-in `SpotLight2D` component: a cone of light along the entity's rotation, `angle` radians to
+/// each side, its edge softened by `softness`. Start from spot_light2d_default().
+using spot_light2d = PonkoSpotLight2D;
+/// A spot light with the engine's defaults (Rust `d2::SpotLight::default()`).
+inline spot_light2d spot_light2d_default() { return ponko_spot_light2d_default(); }
+/// The built-in `DirectionalLight2D` component: light from far away (a sun or moon) shining along
+/// `direction` over the whole view; needs no transform. Start from directional_light2d_default().
+using directional_light2d = PonkoDirectionalLight2D;
+/// A directional light with the engine's defaults (Rust `d2::DirectionalLight::default()`).
+inline directional_light2d directional_light2d_default() { return ponko_directional_light2d_default(); }
 // ---- Sprite blend modes and sprite materials (Rust `BlendMode`, `SpriteShader`, `SpriteMaterial`).
 /// How a sprite combines with what's behind it (Rust `BlendMode`). Also a component: an entity with a sprite
 /// and one blends that way. Each mode is its own batch.
@@ -156,6 +173,9 @@ using quat = PonkoQuat;
 /// The built-in `Transform3D` component (Rust `Transform3D`): position, rotation and scale. A plain value and
 /// a query column; start from transform3d_at.
 using transform3d = PonkoTransform3D;
+/// The built-in `Attached3D` component (Rust `attach::Attached3D`): keeps an entity at `offset` (a transform in the
+/// other's space) from another; see attach3d_to. Same layout as Rust, so it is a query column.
+using attached3d = PonkoAttached3D;
 /// One joint of a skeleton (Rust `Joint`): its name, the joint it hangs
 /// from (an earlier index; -1 for a root) and where it sits relative to it
 /// at rest.
@@ -672,6 +692,11 @@ inline quat quat_from_rotation_z(float angle) { return ponko_quat_from_axis_angl
 /// A 3D transform at `position`, turned by `rotation`, scaled by `scale` on every axis.
 inline transform3d transform3d_at(vec3 position, quat rotation = {0, 0, 0, 1}, float scale = 1) {
     transform3d t = ponko_transform3d_at(position); t.rotation = rotation; t.scale = {scale, scale, scale}; return t;
+}
+/// Follows `to` at `offset` (in its space: turned by its rotation, stretched
+/// by its scale, chains placed parents first). Needs game::follow_attachments().
+inline attached3d attach3d_to(entity to, transform3d offset = ponko_transform3d_at({0, 0, 0})) {
+    return {entity_of(to), {0, 0}, offset};
 }
 /// `t` turned so its -Z axis points at `target`, +Y up.
 inline transform3d looking_at(const transform3d& t, vec3 target) { return ponko_transform3d_looking_at(t, target); }
@@ -1604,6 +1629,7 @@ protected:
         else if constexpr (std::is_same<T, sprite_blend>::value) status = ponko_blend_mode_component(world, &id);
         else if constexpr (std::is_same<T, sprite_material>::value) status = ponko_sprite_material_component(world, &id);
         else if constexpr (std::is_same<T, attached>::value) status = ponko_attached_component(world, &id);
+        else if constexpr (std::is_same<T, attached3d>::value) status = ponko_attached3d_component(world, &id);
         else if constexpr (std::is_same<T, animation>::value) status = ponko_animation_component(world, &id);
         else if constexpr (std::is_same<T, rigid_body>::value) status = ponko_rigid_body_component(world, &id);
         else if constexpr (std::is_same<T, collider>::value) status = ponko_collider_component(world, &id);
@@ -1621,6 +1647,9 @@ protected:
         else if constexpr (std::is_same<T, reflection_probe3d>::value) status = ponko_reflection_probe3d_component(world, &id);
         else if constexpr (std::is_same<T, decal3d>::value) status = ponko_decal3d_component(world, &id);
         else if constexpr (std::is_same<T, receives_decals>::value) status = ponko_receives_decals_component(world, &id);
+        else if constexpr (std::is_same<T, point_light2d>::value) status = ponko_point_light2d_component(world, &id);
+        else if constexpr (std::is_same<T, spot_light2d>::value) status = ponko_spot_light2d_component(world, &id);
+        else if constexpr (std::is_same<T, directional_light2d>::value) status = ponko_directional_light2d_component(world, &id);
         else if constexpr (std::is_same<T, point_light3d>::value) status = ponko_point_light3d_component(world, &id);
         else if constexpr (std::is_same<T, spot_light3d>::value) status = ponko_spot_light3d_component(world, &id);
         else if constexpr (std::is_same<T, model>::value) status = ponko_model_component(world, &id);
@@ -3417,6 +3446,10 @@ struct event {
 using input = PonkoUiInput;
 /// Input with nothing happening: no pointer, no keys.
 inline input default_input() { return ponko_ui_input_default(); }
+/// An IME composition for `tree::frame` (Rust's `UiInput::preedit`,
+/// `preedit_cursor` and `composing`): a preedit string, its caret, and
+/// whether a composition went on this frame.
+using composition = PonkoUiComposition;
 
 /// Whether a node's changes are announced while something else has focus.
 enum class live : std::uint32_t { off = 0, polite = 1, assertive = 2 };
@@ -3652,6 +3685,25 @@ public:
     void frame(vec2 viewport, const input& in = default_input()) { detail::check(ponko_ctx_ui_frame(raw_, target_, viewport, &in)); }
     /// Typed text for the engine's next UI frame (the context's, not a panel's).
     void insert_text(const char* text) { detail::check(ponko_ctx_ui_insert_text(raw_, text)); }
+    /// Lays out and handles one frame of `in` with an IME composition `c`: the focused text input
+    /// that takes IME shows `c.preedit` at its caret.
+    void frame(vec2 viewport, const input& in, const composition& c) { detail::check(ponko_ctx_ui_frame_ime(raw_, target_, viewport, &in, &c)); }
+
+    // IME composition (Rust `set_ime_allowed`, `preedit`, `ime_area`, ...).
+    /// Lets the text input `node` take IME composition (the default), or not (digits, a key binding, a password).
+    void set_ime_allowed(id node, bool allowed) { detail::check(ponko_ctx_ui_set_ime_allowed(raw_, target_, node, allowed)); }
+    /// Whether the text input `node` takes IME composition.
+    bool ime_allowed(id node) const { bool b = false; detail::check(ponko_ctx_ui_ime_allowed(raw_, target_, node, &b)); return b; }
+    /// Whether the focus is on a text input that takes IME: a custom host allows IME for its window then.
+    bool wants_ime() const { bool b = false; detail::check(ponko_ctx_ui_wants_ime(raw_, target_, &b)); return b; }
+    /// The IME preedit `node` shows at its caret; empty when it shows none.
+    std::string preedit(id node) const {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_ui_preedit(raw_, target_, node, b, c, l); });
+    }
+    /// The focused IME text input's caret in window points, as of the last frame: where the candidate window goes.
+    std::optional<ponko::rect> ime_area() const { bool has = false; ponko::rect r{}; detail::check(ponko_ctx_ui_ime_area(raw_, target_, &has, &r)); return has ? std::optional<ponko::rect>(r) : std::nullopt; }
+    /// Whether the last frame took the focus off a text input mid-composition (then cancel the composition).
+    bool composition_interrupted() const { bool b = false; detail::check(ponko_ctx_ui_composition_interrupted(raw_, target_, &b)); return b; }
 };
 
 /// A snapshot of one UI's accessibility semantics (roles, names, values,
@@ -4358,6 +4410,23 @@ public:
     scenario_check& text(std::string expected) { text_ = std::move(expected); return *this; }
 };
 
+/// One IME composition step (Rust's `ImeEvent`), for `ctx::feed_ime` and
+/// `input_scenario::ime`: make it with `ime_preedit`, `ime_commit`,
+/// `ime_enabled` or `ime_disabled`. Its text is read only during the call.
+using ime_event = PonkoImeEvent;
+/// The composition so far is `text`, its caret at bytes `start..end` of it; an empty `text` cancels it.
+inline ime_event ime_preedit(const char* text, std::size_t start, std::size_t end) {
+    ime_event e{}; e.kind = PONKO_IME_PREEDIT; e.text = text; e.has_cursor = true; e.cursor_start = start; e.cursor_end = end; return e;
+}
+/// The composition so far is `text`, with no caret shown; `ime_preedit("")` cancels it.
+inline ime_event ime_preedit(const char* text) { ime_event e{}; e.kind = PONKO_IME_PREEDIT; e.text = text; return e; }
+/// The composition ended with `text`, which is typed.
+inline ime_event ime_commit(const char* text) { ime_event e{}; e.kind = PONKO_IME_COMMIT; e.text = text; return e; }
+/// The window system turned IME on.
+inline ime_event ime_enabled() { ime_event e{}; e.kind = PONKO_IME_ENABLED; return e; }
+/// The window system turned IME off; a composition is dropped.
+inline ime_event ime_disabled() { ime_event e{}; e.kind = PONKO_IME_DISABLED; return e; }
+
 /// Raw input and checks scheduled by simulation tick, for reproducible
 /// headless tests (Rust's `InputScenario`). Run it with
 /// `game::run_headless_scenario`, `game::input_scenario` or
@@ -4419,6 +4488,8 @@ public:
     input_scenario& type_text(std::uint64_t tick, const char* node, const char* typed) {
         return step(ponko_input_scenario_type_text(raw_, tick, node, typed));
     }
+    /// Feeds the IME step `e` on tick `tick`, after its input steps: replays a composition into the focused text input.
+    input_scenario& ime(std::uint64_t tick, const ime_event& e) { return step(ponko_input_scenario_ime(raw_, tick, &e)); }
     /// Names the scenario in its report.
     input_scenario& named(const char* id) { return step(ponko_input_scenario_named(raw_, id)); }
     /// Lasts `ticks` ticks (default: through the last step's tick).
@@ -4751,6 +4822,37 @@ public:
     void set_cursor_locked(bool locked) { detail::check(ponko_ctx_set_cursor_locked(raw_, locked)); }
     /// Whether the game asked for the cursor to be locked.
     bool cursor_locked() const { bool b = false; detail::check(ponko_ctx_cursor_locked(raw_, &b)); return b; }
+
+    // IME composition (Rust `input.feed_ime`, `preedit`, `set_ime_allowed`, ...). The retained UI's text
+    // inputs do all of this themselves; these are for a game's own text widgets, custom hosts and tests.
+    /// The text typed this frame: committed Unicode from the keyboard and from IME commits.
+    std::string typed_text() const {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_typed_text(raw_, b, c, l); });
+    }
+    /// Records an IME step as the window system would; a commit's text is typed.
+    void feed_ime(const ime_event& e) { detail::check(ponko_ctx_feed_ime(raw_, &e)); }
+    /// The text being composed, not yet committed; empty when nothing is.
+    std::string preedit() const {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_preedit(raw_, b, c, l); });
+    }
+    /// The caret in the preedit as a byte range (start == end: a plain caret), if the IME shows one.
+    std::optional<std::pair<std::size_t, std::size_t>> preedit_cursor() const {
+        bool has = false; std::size_t a = 0, b = 0;
+        detail::check(ponko_ctx_preedit_cursor(raw_, &has, &a, &b));
+        return has ? std::optional<std::pair<std::size_t, std::size_t>>({a, b}) : std::nullopt;
+    }
+    /// Whether a composition went on this frame: Enter, Escape, Backspace and the arrows belong to the IME then.
+    bool composing() const { bool b = false; detail::check(ponko_ctx_composing(raw_, &b)); return b; }
+    /// Lets the window system compose text with an IME (while your text widget has the focus), after this frame.
+    void set_ime_allowed(bool allowed) { detail::check(ponko_ctx_set_ime_allowed(raw_, allowed)); }
+    /// Whether IME is allowed.
+    bool ime_allowed() const { bool b = false; detail::check(ponko_ctx_ime_allowed(raw_, &b)); return b; }
+    /// Where your text widget's caret is, in window points, so the candidate window opens next to it.
+    void set_ime_cursor_area(ponko::rect area) { detail::check(ponko_ctx_set_ime_cursor_area(raw_, area)); }
+    /// The caret area set last, if any.
+    std::optional<ponko::rect> ime_cursor_area() const { bool has = false; ponko::rect r{}; detail::check(ponko_ctx_ime_cursor_area(raw_, &has, &r)); return has ? std::optional<ponko::rect>(r) : std::nullopt; }
+    /// Drops the composition in progress (your text widget lost the focus mid-composition).
+    void cancel_composition() { detail::check(ponko_ctx_cancel_composition(raw_)); }
     /// The connected gamepads: `for (ponko::gamepad pad : ctx.gamepads())`.
     gamepad_list gamepads() const {
         gamepad_list list;
@@ -5508,6 +5610,57 @@ public:
     }
     /// Advances `e`'s 2D emitter by `dt` seconds by hand (headless runs skip the frame phase that does it).
     void particle_update2d(entity e, float dt) { detail::check(ponko_ctx_particle_update2d(raw_, e, dt)); }
+    /// Gives `e` (which needs a 2D transform) a `size` box occluder centred on it, replacing any old one:
+    /// it casts shadows from 2D lights with shadows on. It turns and scales with the transform.
+    void set_occluder2d_rect(entity e, vec2 size) { detail::check(ponko_ctx_set_occluder2d_rect(raw_, e, size)); }
+    /// Gives `e` a round occluder (16 sides) of `radius`, replacing any old one.
+    void set_occluder2d_circle(entity e, float radius) { detail::check(ponko_ctx_set_occluder2d_circle(raw_, e, radius)); }
+    /// Gives `e` a closed polygon occluder (`points` relative to its transform, either winding),
+    /// replacing any old one.
+    void set_occluder2d_polygon(entity e, const std::vector<vec2>& points) {
+        detail::check(ponko_ctx_set_occluder2d_polygon(raw_, e, points.data(), points.size()));
+    }
+    /// Gives `e` a thin wall from `a` to `b` as its occluder (shadows on both sides), replacing any old one.
+    void set_occluder2d_line(entity e, vec2 a, vec2 b) { detail::check(ponko_ctx_set_occluder2d_line(raw_, e, a, b)); }
+    /// Gives tile map `map` an occluder outlining its cells that show one of `solid` tiles (Rust
+    /// `TileMap::occluder`), replacing any old one. Call it again after the walls change.
+    void set_tilemap_occluder(entity map, const std::vector<std::uint16_t>& solid) {
+        detail::check(ponko_ctx_set_tilemap_occluder(raw_, map, solid.data(), solid.size()));
+    }
+    /// Takes `e`'s occluder off (fine if it has none).
+    void remove_occluder2d(entity e) { detail::check(ponko_ctx_remove_occluder2d(raw_, e)); }
+    /// How many edges `e`'s occluder has (0 without one).
+    std::size_t occluder2d_edge_count(entity e) {
+        std::size_t n = 0;
+        detail::check(ponko_ctx_occluder2d_edge_count(raw_, e, &n));
+        return n;
+    }
+    /// Sets the 2D ambient light (the light everything gets with no light near), or turns it off with
+    /// std::nullopt. Setting one turns 2D lighting on: unlit places show `ambient` times their color.
+    void set_ambient_light2d(std::optional<color> ambient) {
+        detail::check(ponko_ctx_set_ambient_light2d(raw_, ambient.has_value(), ambient.value_or(color{0, 0, 0, 1})));
+    }
+    /// The 2D ambient light, if one is set.
+    std::optional<color> ambient_light2d() {
+        bool on = false;
+        color c{0, 0, 0, 1};
+        detail::check(ponko_ctx_ambient_light2d(raw_, &on, &c));
+        if (!on) return std::nullopt;
+        return c;
+    }
+    /// Gives sprites and tiles drawn from `t` the normal map `normals` (tangent space, green up, the same
+    /// size as `t`), or takes it away with std::nullopt. 2D lights then shade their bumps.
+    void set_normal_map(texture t, std::optional<texture> normals) {
+        detail::check(ponko_ctx_set_normal_map(raw_, t, normals.has_value(), normals.value_or(t)));
+    }
+    /// `t`'s normal map, if it has one.
+    std::optional<texture> normal_map(texture t) {
+        bool has = false;
+        texture n = t;
+        detail::check(ponko_ctx_normal_map(raw_, t, &has, &n));
+        if (!has) return std::nullopt;
+        return n;
+    }
     /// Removes `e`'s 2D emitter and its particles.
     void remove_particle_emitter2d(entity e) { detail::check(ponko_ctx_remove_particle_emitter2d(raw_, e)); }
     /// Gives `e` (which needs a 3D transform) a new ribbon trail, replacing any old one.
@@ -5836,6 +5989,12 @@ public:
     /// the temporal history: call it after teleporting one object, or when its
     /// animation snaps to another pose with no blend.
     void reset_motion(entity e) { detail::check(ponko_ctx_reset_motion(raw_, e)); }
+    /// Makes GPU buffer `b` keep a copy of the elements the last frame drew
+    /// (`keep`), so TAA and temporal AO see each element's own motion; it
+    /// doubles the buffer's memory. Throws ponko::error for a freed buffer.
+    void set_gpu_buffer_motion(gpu_buffer b, bool keep) {
+        detail::check(ponko_ctx_set_gpu_buffer_motion(raw_, b, keep));
+    }
     /// Saves this frame as a PNG at `path` once it is drawn. Does nothing in headless runs.
     void save_screenshot(const char* path) { detail::check(ponko_ctx_save_screenshot(raw_, path)); }
     /// texture_filter::nearest keeps pixel art square.

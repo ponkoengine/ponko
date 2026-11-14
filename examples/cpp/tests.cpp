@@ -330,6 +330,8 @@ static void three_d() {
         ctx.free_gpu_buffer(spare);
         throws([&] { ctx.free_gpu_buffer(spare); });
         throws([&] { ctx.write_gpu_buffer(spare, 0, {{1, 2, 3, 4}}); });
+        ctx.set_gpu_buffer_motion(buffer, true);
+        throws([&] { ctx.set_gpu_buffer_motion(spare, true); });
         auto reused = ctx.create_gpu_buffer(3);  // the freed slot comes back under a new id
         CHECK((reused.id & 0x000FFFFFu) == (spare.id & 0x000FFFFFu) && reused.id != spare.id);  // same 20-bit slot
         throws([&] { ctx.write_gpu_buffer(spare, 0, {{1, 2, 3, 4}}); });
@@ -1111,6 +1113,23 @@ static void attachments() {
     CHECK(seen.position == (ponko::vec2{8, 6}) && seen.rotation == 0.5f);
     CHECK(ponko::bits(ponko::entity_of(arm)) == arm);
     CHECK(!w.alive(root) && !w.alive(arm) && !w.alive(hand));
+}
+
+static void attachments3d() {
+    // A 3D chain follows its parent, turned with it.
+    ponko::entity base = 0, arm = 0;
+    ponko::transform3d seen{};
+    ponko::game("t", 1, 1)
+        .follow_attachments()
+        .sim_system([&](ponko::ctx& ctx) { seen = ctx.world().get<ponko::transform3d>(arm); })
+        .run_headless(1, [&](ponko::ctx& ctx) {
+            auto world = ctx.world();
+            base = world.spawn(ponko::transform3d_at({10, 0, 0}, ponko::quat_from_rotation_y(1.5707964f)));
+            arm = world.spawn(ponko::transform3d_at({0, 0, 0}),
+                              ponko::attach3d_to(base, ponko::transform3d_at({0, 2, -5})));
+        });
+    CHECK(std::fabs(seen.position.x - 5) < 1e-4f && std::fabs(seen.position.y - 2) < 1e-4f &&
+          std::fabs(seen.position.z) < 1e-4f);
 }
 
 static void physics() {
@@ -3348,6 +3367,71 @@ static void focus_huds_and_collision_files() {
     std::filesystem::remove(file);
 }
 
+// IME composition (#410): a Japanese composition replayed into a text
+// input, the context's IME calls, and a composition the focus leaves.
+static void ime_composition() {
+    using ponko::scenario_check;
+    ponko::input_scenario s;
+    s.click(0, "chat")
+        .ime(1, ponko::ime_enabled())
+        .ime(1, ponko::ime_preedit("にほん", 9, 9))
+        .ime(2, ponko::ime_preedit("日本", 0, 6))
+        .ime(3, ponko::ime_commit("日本"))
+        .expect(3, scenario_check::ui("chat").text("日本"))
+        .duration(4);
+    std::vector<std::string> shown;
+    auto run = ponko::game("c++ ime", 640, 480)
+                   .headless_frames(true)
+                   .system([&](ponko::ctx& ctx) {
+                       auto ui = ctx.ui_retained();
+                       shown.push_back(ui.preedit(*ui.find("chat")));
+                       CHECK(ctx.ime_allowed() && ui.wants_ime() && ui.ime_area());
+                   })
+                   .run_headless_scenario(s, [](ponko::ctx& ctx) {
+                       namespace u = ponko::ui;
+                       auto ui = ctx.ui_retained();
+                       auto root = ui.add_panel(u::none, u::fill());
+                       auto chat = ui.add_text_input(root, "", u::fixed(300, 30));
+                       ui.set_name(chat, "chat");
+                       CHECK(ui.ime_allowed(chat));
+                       ui.push_screen(root);
+                   });
+    CHECK(run.report.passed());
+    CHECK(shown.size() == 4 && shown[1] == "にほん" && shown[2] == "日本" && shown[3].empty());
+
+    ponko::game("c++ ime calls", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        ctx.set_ime_allowed(true);
+        ctx.set_ime_cursor_area(ponko::rect{{10, 20}, {11, 38}});
+        CHECK(ctx.ime_allowed() && ctx.ime_cursor_area() && ctx.ime_cursor_area()->min.x == 10);
+        ctx.feed_ime(ponko::ime_preedit("한", 3, 3));
+        CHECK(ctx.preedit() == "한" && ctx.composing());
+        CHECK(ctx.preedit_cursor() && ctx.preedit_cursor()->second == 3);
+        ctx.cancel_composition();
+        CHECK(ctx.preedit().empty() && !ctx.preedit_cursor());
+        ctx.feed_ime(ponko::ime_preedit("zhong"));
+        ctx.feed_ime(ponko::ime_disabled());
+        CHECK(ctx.preedit().empty());
+
+        namespace u = ponko::ui;
+        auto ui = ctx.ui_retained();
+        auto root = ui.add_panel(u::none, u::fill());
+        auto name = ui.add_text_input(root, "", u::fixed(300, 30));
+        auto pin = ui.add_text_input(root, "", u::fixed(300, 30));
+        ui.set_ime_allowed(pin, false);
+        CHECK(!ui.ime_allowed(pin));
+        ui.push_screen(root);
+        ui.set_focus(name);
+        u::composition c{};
+        c.preedit = "にほ";
+        c.composing = true;
+        ui.frame({800, 600}, u::default_input(), c);
+        CHECK(ui.preedit(name) == "にほ" && !ui.composition_interrupted());
+        ui.set_focus(pin);
+        ui.frame({800, 600}, u::default_input(), c);
+        CHECK(ui.composition_interrupted() && ui.preedit(name).empty() && !ui.wants_ime());
+    });
+}
+
 int main() {
     levels_and_tilemaps();
     abi_version_is_checked();
@@ -3383,6 +3467,7 @@ int main() {
     presence_filters_allocate_nothing();
     games();
     attachments();
+    attachments3d();
     physics();
     joints3d();
     vehicles();
@@ -3411,5 +3496,6 @@ int main() {
     headless_frames_ui();
     remaining_bindings();
     focus_huds_and_collision_files();
+    ime_composition();
     std::cout << "C++ wrapper tests passed\n";
 }
