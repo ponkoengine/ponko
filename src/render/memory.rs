@@ -80,6 +80,16 @@ impl MemoryTally {
         *field += bytes;
     }
 
+    /// What the counted textures and buffers take when an allocator places
+    /// each one on its own range, in whole pages of `page` bytes (test
+    /// hook, for comparing with such an allocator's figure).
+    #[cfg(test)]
+    pub fn placed_bytes(&self, page: u64) -> u64 {
+        let textures = self.textures.iter().map(super::gpu::texture_bytes);
+        let buffers = self.buffers.iter().map(wgpu::Buffer::size);
+        textures.chain(buffers).map(|b| b.next_multiple_of(page)).sum()
+    }
+
     /// The counts, with their total; the adapter's figure is left for the
     /// caller.
     pub fn finish(self) -> GpuMemory {

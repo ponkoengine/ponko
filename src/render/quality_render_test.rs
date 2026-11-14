@@ -28,6 +28,8 @@ pub(super) struct Fixture {
     /// can be kept from an earlier frame).
     frame: Frame3D,
     pub(super) timer: Option<super::timer::GpuTimer>,
+    /// The adapter's backend.
+    pub(super) backend: wgpu::Backend,
     /// The window's size.
     size: (u32, u32),
 }
@@ -45,7 +47,7 @@ impl Fixture {
                 ..Default::default()
             })
         })?;
-        let (device, queue) = (gpu.device, gpu.queue);
+        let (device, queue, backend) = (gpu.device, gpu.queue, gpu.info.backend);
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
@@ -173,6 +175,7 @@ impl Fixture {
             renderer,
             ctx,
             frame: Frame3D::default(),
+            backend,
             size: (width, height),
         })
     }
