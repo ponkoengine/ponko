@@ -361,6 +361,7 @@ binding arrives:
 | `SystemView` | [Declared system access](system-access.md) | C and C++ systems take the whole `ctx`, so they run alone; declare their access by name |
 | `Storage::write_json`, `Storage::read_json` | [Saves and settings](storage.md#save-slots) | Generic over Rust types; serialize yourself and pass the bytes to `storage_write` and `storage_read` |
 | `UiAccessAdapter::for_ns_view` | [Retained game UI](ui.md#the-screen-reader-adapter) | It needs a Rust `Ui`; the engine's own window gets the adapter, and `ponko_ui_access_*` give a snapshot for one of your own |
+| `NavObstacleShape` | [3D navigation meshes](navigation3d.md#obstacle-shapes) | Obstacles are unturned boxes: `ponko_ctx_set_nav_obstacle` and `ponko_ctx_set_nav_carve_obstacle` |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in

@@ -292,10 +292,11 @@ impl NavMesh3D {
     pub fn find_path(&self, from: Vec3, to: Vec3) -> Option<Vec<Vec3>> {
         self.state.as_ref()?.find_path(from, to)
     }
-    /// Replaces world-space blocking boxes, restoring polygons when boxes leave.
-    /// Invalid boxes fail closed by blocking every polygon. Overlap tests use
-    /// polygon AABBs, so thin boxes can close a much larger area. Carving boxes
-    /// instead queue cached-layer rebuilds; call `update_carving` to advance them.
+    /// Replaces the world-space obstacles, restoring polygons when obstacles
+    /// leave. Invalid obstacles fail closed by blocking every polygon. Overlap
+    /// tests use polygon bounds against each obstacle's footprint, so a thin
+    /// obstacle can close a much larger area. Carving obstacles instead queue
+    /// cached-layer rebuilds; call `update_carving` to advance them.
     /// The sim system owns this list when registered: it gathers obstacle components.
     /// ```
     /// use ponko::prelude::*;

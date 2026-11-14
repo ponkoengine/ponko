@@ -21,3 +21,4 @@ SystemView                       system-access.md  # C and C++ systems take the 
 Storage::write_json              storage.md        # generic over Rust types; serialize yourself and storage_write the bytes
 Storage::read_json               storage.md        # storage_read the bytes and parse them yourself
 UiAccessAdapter::for_ns_view     ui.md             # needs a Rust Ui; the engine's window gets the adapter; ponko_ui_access_* give a snapshot
+NavObstacleShape                 navigation3d.md   # C and C++ obstacles are unturned boxes; ponko_ctx_set_nav_obstacle and its carve variant

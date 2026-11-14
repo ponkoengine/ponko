@@ -219,6 +219,7 @@ fn main() {
     physics::run(&mut b);
     physics3d::run(&mut b);
     nav3d::run(&mut b);
+    nav3d::carve(&mut b);
     extraction::run(&mut b);
     net::run(&mut b);
     actions::run(&mut b);
