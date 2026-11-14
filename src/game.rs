@@ -1981,6 +1981,9 @@ impl Game {
         end_timings(ctx);
         let frame = self.systems.iter().chain(&self.late_systems).chain(&self.draw_systems);
         forget_seen_removals(ctx, self.sim_systems.iter().chain(frame));
+        // A window's frame localizes keyed UI text before drawing it; with no
+        // drawing, do it here, so the scenario's checks see the drawn text.
+        ctx.localize_ui();
         ctx.scenario_end_tick(tick);
     }
 
@@ -2150,7 +2153,8 @@ impl Game {
     /// a game that pauses behind a menu still sees the scenario input that
     /// closes it. To hold only physics (a pause screen whose sim systems keep
     /// running, in a window and headless alike), use
-    /// [`Physics::set_paused`](crate::d2::Physics::set_paused). Textures
+    /// [`Physics::set_paused`](crate::d2::Physics::set_paused) (2D) or
+    /// `ctx.physics3d.set_paused` (3D, feature `physics3d`). Textures
     /// still load (for their sizes), but nothing is uploaded to a GPU.
     ///
     /// ```

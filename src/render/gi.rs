@@ -63,6 +63,8 @@ pub(super) struct Gi {
     pub views: wgpu::TextureView,
     pub resolve: wgpu::TextureView,
     pub depth: wgpu::TextureView,
+    /// `depth`'s depth alone, as the update reads it.
+    depth_read: wgpu::TextureView,
     scratch: wgpu::Texture,
     group: wgpu::BindGroup,
     /// Each view's frame (camera and light), and its bind group (made by
@@ -84,7 +86,9 @@ pub(super) struct Gi {
 impl Gi {
     /// `samples`: the views' multisampling; `uniform_size`: a view's frame
     /// uniform's size.
-    pub fn new(device: &wgpu::Device, samples: u32, uniform_size: u64) -> Self {
+    /// `scene_depth`: the scene depth's format, which the material
+    /// pipelines drawing the views draw into.
+    pub fn new(device: &wgpu::Device, samples: u32, scene_depth: wgpu::TextureFormat, uniform_size: u64) -> Self {
         let texture = |entry: wgpu::BindingType, binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::COMPUTE,
@@ -195,7 +199,7 @@ impl Gi {
             "3d gi views depth",
             views_size,
             samples,
-            DEPTH_FORMAT,
+            scene_depth,
             attachment | sampled,
         );
         let scratch = image(
@@ -231,8 +235,12 @@ impl Gi {
         let (atlas, atlas_view) = Self::atlas(device, 1);
         let views = views.create_view(&Default::default());
         let resolve = resolve.create_view(&Default::default());
+        let depth_read = depth.create_view(&wgpu::TextureViewDescriptor {
+            aspect: wgpu::TextureAspect::DepthOnly,
+            ..Default::default()
+        });
         let depth = depth.create_view(&Default::default());
-        let group = Self::group(device, &layout, &uniform, &resolve, &depth, &atlas_view, &scratch);
+        let group = Self::group(device, &layout, &uniform, &resolve, &depth_read, &atlas_view, &scratch);
         Self {
             layout,
             sky_layout,
@@ -247,6 +255,7 @@ impl Gi {
             views,
             resolve,
             depth,
+            depth_read,
             scratch,
             group,
             face_mirrors: (0..MAX_UPDATES * 6).map(|_| Default::default()).collect(),
@@ -347,7 +356,7 @@ impl Gi {
                 &self.layout,
                 &self.uniform,
                 &self.resolve,
-                &self.depth,
+                &self.depth_read,
                 &self.atlas_view,
                 &self.scratch,
             );
@@ -442,5 +451,29 @@ impl Gi {
         for (mirror, buffer) in self.face_mirrors.iter().zip(&self.face_buffers) {
             mirror.check(device, queue, buffer, 0, "probe face frame uniform");
         }
+    }
+}
+
+impl Gi {
+    /// Counts the probe atlas, its capture views and everything the
+    /// updates draw with as probes (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        t.buffer(C::Probes, &self.uniform);
+        t.texture(C::Probes, &self.atlas);
+        for view in [
+            &self.views,
+            &self.resolve,
+            &self.depth,
+            &self.shadow_array,
+            &self.shadow,
+        ] {
+            t.view(C::Probes, view);
+        }
+        t.texture(C::Probes, &self.scratch);
+        for buffer in &self.face_buffers {
+            t.buffer(C::Probes, buffer);
+        }
+        self.lights.tally_memory(t, C::Probes);
     }
 }

@@ -1,10 +1,14 @@
 //! Coin Dash: a small, complete game built only on the public `Game`/`Ctx`
-//! API. A title screen, settings (UI scale, volume, rebindable controls),
-//! rounds (collect every coin before the clock runs out), a pause, a result
-//! screen and a saved best time. One picture (`assets/coin_dash/coin.png`) is a
-//! file; the rest is drawn and synthesized in code.
+//! API. A title screen, settings (UI scale, volume, rebindable controls,
+//! language), rounds (collect every coin before the clock runs out), a pause,
+//! a result screen and a saved best time, in English and Arabic. One picture
+//! (`assets/coin_dash/coin.png`), the string tables (`assets/coin_dash/lang`)
+//! and the Arabic font are files; the rest is drawn and synthesized in code.
 //!
-//!   `cargo run --release --example coin_dash`
+//!   `cargo run --release --example coin_dash --features text-shaping`
+//!
+//! (Without `text-shaping` the game offers only English: Arabic letters join
+//! and run right to left only when shaped.)
 //!
 //! Move: arrow keys, WASD or the left stick. Enter / Space / South: start,
 //! resume, play again. R / West: restart the round. Esc / P / Start: pause

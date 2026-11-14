@@ -55,7 +55,11 @@ pub use crate::three::ParticleShape3D as ParticleShape;
 #[doc(inline)]
 pub use crate::three::PointLight3D as PointLight;
 #[doc(inline)]
+pub use crate::three::ProbeRefresh;
+#[doc(inline)]
 pub use crate::three::ReflectionProbe3D as ReflectionProbe;
+#[doc(inline)]
+pub use crate::three::ReflectionRefresh3D as ReflectionRefresh;
 #[doc(inline)]
 pub use crate::three::SpotLight3D as SpotLight;
 #[doc(inline)]
@@ -73,7 +77,9 @@ pub use crate::audio::spatial::{
 };
 #[cfg(feature = "navmesh")]
 #[doc(inline)]
-pub use crate::nav3d::{NavAgent3D as NavAgent, NavMesh3D as NavMesh, NavObstacle3D as NavObstacle};
+pub use crate::nav3d::{
+    NavAgent3D as NavAgent, NavConvexPolygon, NavMesh3D as NavMesh, NavObstacle3D as NavObstacle, NavObstacleShape,
+};
 #[cfg(feature = "physics3d")]
 #[doc(inline)]
 pub use crate::physics3d::{

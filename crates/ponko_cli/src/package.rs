@@ -11,7 +11,7 @@ mod layout;
 mod notices;
 mod smoke;
 
-use layout::{Built, FileCopy, Format, Game, Metadata, Os, Platform, Source};
+use layout::{Built, FileCopy, Format, Game, Metadata, Os, PackMeta, Platform, Source};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -29,8 +29,10 @@ Usage:
 Run it in the game's folder. It builds the game in release, collects its
 assets, licenses and THIRD-PARTY-NOTICES.txt, lays them out for the platform,
 archives them and starts the packaged game once headless (`PONKO_SMOKE`) to
-check it runs. What goes in comes from `[package.metadata.ponko]` in the
-game's Cargo.toml (name, id, icon, assets, files); see the guide's packaging
+check it runs. The files under assets/ ship as one asset pack, assets.pack
+(as `ponko pack` makes it), which the game reads where its assets/ folder
+would be. What goes in comes from `[package.metadata.ponko]` in the game's
+Cargo.toml (name, id, icon, assets, files, pack); see the guide's packaging
 chapter.
 
 What it makes, by platform (the host's unless --target or --web):
@@ -51,6 +53,8 @@ Options:
   --profile <name>                The Cargo profile (default: release)
   --locked                        As for cargo build
   --no-build                      Package the program as already built
+  --no-pack                       Ship the assets as loose files in assets/
+                                  instead of one assets.pack
   --format <list>                 folder, zip, tar.gz, dmg (comma-separated);
                                   `folder` alone: the plain folder, no archive
                                   and no app bundle
@@ -90,6 +94,7 @@ pub struct Options {
     pub profile: Option<String>,
     pub locked: bool,
     pub no_build: bool,
+    pub no_pack: bool,
     pub formats: Option<Vec<Format>>,
     pub out: Option<PathBuf>,
     pub no_smoke: bool,
@@ -133,6 +138,7 @@ impl Options {
                 "--release" => o.profile = Some("release".into()),
                 "--locked" => o.locked = true,
                 "--no-build" => o.no_build = true,
+                "--no-pack" => o.no_pack = true,
                 "--format" => o.formats = Some(Format::parse_list(&value()?)?),
                 "--out" => o.out = Some(value()?.into()),
                 "--no-smoke" => o.no_smoke = true,
@@ -322,7 +328,7 @@ fn game(
     target: &str,
     example: bool,
     notes: &mut Vec<String>,
-) -> Result<(Game, Option<Vec<u8>>), String> {
+) -> Result<(Game, Option<Vec<u8>>, PackMeta), String> {
     let p = &project.package;
     let dir = project.manifest.parent().unwrap_or(Path::new(".")).to_path_buf();
     let meta = Metadata::from_cargo(&p["metadata"], example.then_some(target))?;
@@ -412,7 +418,46 @@ fn game(
         assets,
         files,
     };
-    Ok((game, icon.map(|i| i.1)))
+    Ok((game, icon.map(|i| i.1), meta.pack.unwrap_or_default()))
+}
+
+/// The asset pack of the game's files under `assets/`, if it has any, and
+/// a line for the report.
+fn pack_assets(game: &Game, dir: &Path, meta: &PackMeta) -> Result<Option<(Vec<u8>, String)>, String> {
+    let files: Vec<(String, PathBuf)> = game
+        .assets
+        .iter()
+        .filter_map(|a| {
+            let inside = a.to.strip_prefix("assets").ok()?;
+            let name = inside
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            Some((name, a.from.clone()))
+        })
+        .collect();
+    if files.is_empty() {
+        return Ok(None);
+    }
+    let settings = crate::pack::Settings {
+        exclude: &meta.exclude,
+        textures: meta.textures,
+        compress: true,
+    };
+    let (packed, converted) = crate::pack::pack_files(&files, &dir.join("assets"), &settings)?;
+    let mut line = format!(
+        "assets: {} files ({}) in {} ({}, {} deflated)",
+        packed.files,
+        crate::pack::size(packed.unpacked),
+        crate::pack::DEFAULT_PACK,
+        crate::pack::size(packed.bytes.len() as u64),
+        packed.deflated
+    );
+    if !converted.is_empty() {
+        line.push_str(&format!(", {} textures converted to KTX2", converted.len()));
+    }
+    Ok(Some((packed.bytes, line)))
 }
 
 /// `--features` and `--no-default-features`, for build and tree alike.
@@ -788,7 +833,13 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
         return Err("a dmg needs hdiutil, so a Mac: use --format zip".into());
     }
     let mut notes = Vec::new();
-    let (game, icon) = game(&project, &target, example, &mut notes)?;
+    let (game, icon, pack_meta) = game(&project, &target, example, &mut notes)?;
+    let pack = if pack_meta.enabled && !options.no_pack {
+        let dir = project.manifest.parent().unwrap_or(Path::new("."));
+        pack_assets(&game, dir, &pack_meta)?
+    } else {
+        None
+    };
     let out = cwd.join(
         options
             .out
@@ -813,9 +864,25 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
     let web_dir = out.join(format!(".{folder}-wasm-bindgen"));
     let plan = if platform.os == Os::Web {
         bindgen(&built, &web_dir, &project.workspace_root)?;
-        layout::plan(&game, &platform, false, Built::Web(&web_dir), &notices, icon.as_deref())
+        layout::plan(
+            &game,
+            &platform,
+            false,
+            Built::Web(&web_dir),
+            &notices,
+            icon.as_deref(),
+            pack.as_ref().map(|p| p.0.as_slice()),
+        )
     } else {
-        layout::plan(&game, &platform, app, Built::Program(&built), &notices, icon.as_deref())
+        layout::plan(
+            &game,
+            &platform,
+            app,
+            Built::Program(&built),
+            &notices,
+            icon.as_deref(),
+            pack.as_ref().map(|p| p.0.as_slice()),
+        )
     };
     let plan = plan.and_then(|plan| write_plan(&out, &plan).map(|()| plan));
     let _ = std::fs::remove_dir_all(&web_dir);
@@ -826,6 +893,11 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
         dir.display(),
         platform.triple
     )];
+    match &pack {
+        Some((_, line)) => report.push(line.clone()),
+        None if !game.assets.is_empty() => report.push("assets: loose files".into()),
+        None => {}
+    }
 
     // Signing: the hook, else an ad-hoc seal for a macOS app made on a Mac.
     let signed_path = out.join(plan.app.as_ref().unwrap_or(&plan.program));
@@ -912,13 +984,14 @@ mod tests {
             "x",
             "--no-smoke",
             "--no-build",
+            "--no-pack",
         ])
         .unwrap();
         assert_eq!(o.example.as_deref(), Some("coin_dash"));
         assert_eq!(o.profile.as_deref(), Some("dev"));
         assert_eq!(o.formats, Some(vec![Format::Folder]));
         assert_eq!(o.out, Some(PathBuf::from("x")));
-        assert!(o.no_smoke && o.no_build);
+        assert!(o.no_smoke && o.no_build && o.no_pack);
         assert_eq!(parse(&["--smoke-ticks", "0"]).unwrap().smoke_ticks, Some(1));
     }
 

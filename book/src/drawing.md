@@ -558,8 +558,9 @@ file resident, and hot reload, where a `.png` may even be replaced by its
 `.ktx2`. The asset inventory and residency budgets count their compressed
 bytes. `update_texture` on one turns it into an RGBA8 texture. Without the
 feature, loading a `.ktx2` fails with an `Unsupported` error naming it.
-Cube maps, 3D textures and Basis ETC1S files aren't read yet; nor are the
-KTX2 textures of glTF files (`KHR_texture_basisu`). The C library has the
+Cube maps, 3D textures and Basis ETC1S files aren't read yet. The KTX2
+textures of glTF files (`KHR_texture_basisu`, with `basis-universal`) are
+decoded to RGBA8 as the model loads, not kept as blocks. The C library has the
 same features (`cargo build -p ponko_ffi --features compressed-textures`);
 its released builds leave them out.
 

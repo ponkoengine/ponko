@@ -10,8 +10,9 @@ Packaging is the generic `ponko package` command (crates/ponko_cli), which any
 game uses; this script is the reference game's own entry point to it, kept for
 CI and the release workflow. `package` runs
 `ponko package --example coin_dash --format folder --no-smoke`, which lays out
-the plain folder (the program, its assets, the licenses, CONTENT-NOTICES.txt,
-README.txt and THIRD-PARTY-NOTICES.txt) as `<out>/coin-dash-<version>-<os>-<arch>/`.
+the plain folder (the program, its assets in one `assets.pack`, the licenses,
+CONTENT-NOTICES.txt, README.txt and THIRD-PARTY-NOTICES.txt) as
+`<out>/coin-dash-<version>-<os>-<arch>/`.
 Coin Dash's `[package.metadata.ponko.examples.coin_dash]` table in the root
 Cargo.toml says what goes in.
 
@@ -35,16 +36,20 @@ import argparse
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE = "coin_dash"
 EXE = EXAMPLE + (".exe" if os.name == "nt" else "")
-ASSET_DIR = Path("assets") / EXAMPLE
-COIN = ASSET_DIR / "coin.png"
+# The engine features the game is built with: see `settings::languages`.
+FEATURES = "text-shaping"
+COIN = f"{EXAMPLE}/coin.png"
+PACK = "assets.pack"
 LICENSE_FILES = ("LICENSE-MIT", "LICENSE-APACHE", "NOTICE")
 
 
@@ -67,7 +72,8 @@ def ponko(*args):
 def cmd_package(args):
     out = Path(args.out).resolve()
     command = ["package", "--example", EXAMPLE, "--profile", args.profile, "--out", str(out)]
-    command += ["--format", "folder", "--no-smoke"]
+    # Text shaping draws the game's Arabic (joined letters, right to left).
+    command += ["--features", FEATURES, "--format", "folder", "--no-smoke"]
     if args.no_build:
         command.append("--no-build")
     code = ponko(*command)
@@ -103,18 +109,40 @@ def check(condition, message):
         raise Failure(message)
 
 
+def pack_files(path):
+    """The files of an asset pack (the engine's format, src/assets/pack.rs): {name: bytes}."""
+    data = path.read_bytes()
+    check(data[:8] == b"PONKOPAK", f"{path.name} is not an asset pack")
+    version, count, index_len, data_len = struct.unpack_from("<IIQQ", data, 8)
+    check(version == 1, f"{path.name} is a version {version} pack")
+    check(len(data) == 32 + index_len + data_len, f"{path.name} is cut short")
+    files, at, start = {}, 32, 32 + index_len
+    for _ in range(count):
+        (name_len,) = struct.unpack_from("<H", data, at)
+        name = data[at + 2 : at + 2 + name_len].decode("utf-8")
+        at += 2 + name_len
+        codec, offset, stored, size, crc = struct.unpack_from("<BQQQI", data, at)
+        at += 29
+        raw = data[start + offset : start + offset + stored]
+        body = zlib.decompress(raw, -15) if codec == 1 else raw
+        check(len(body) == size and zlib.crc32(body) == crc, f"{name} in {path.name} is damaged")
+        files[name] = body
+    return files
+
+
 def check_package(package):
-    for rel in (EXE, COIN, *LICENSE_FILES, "CONTENT-NOTICES.txt", "THIRD-PARTY-NOTICES.txt", "README.txt"):
+    for rel in (EXE, PACK, *LICENSE_FILES, "CONTENT-NOTICES.txt", "THIRD-PARTY-NOTICES.txt", "README.txt"):
         check((package / rel).is_file(), f"the package has no {rel}")
+    check(not (package / "assets").exists(), "the package has loose assets/ beside its pack")
     third = (package / "THIRD-PARTY-NOTICES.txt").read_text(encoding="utf-8")
     check(len(third) > 10_000, "THIRD-PARTY-NOTICES.txt is nearly empty")
     for needed in ("ponko ", "serde ", "wgpu "):
         check(needed in third, f"THIRD-PARTY-NOTICES.txt does not mention {needed.strip()}")
     content = (package / "CONTENT-NOTICES.txt").read_text(encoding="utf-8")
-    shipped = [p.relative_to(package / "assets") for p in (package / "assets").rglob("*") if p.is_file()]
-    check(shipped, "the package ships no assets")
-    for path in shipped:
-        check(path.as_posix() in content, f"assets/{path.as_posix()} is shipped but not named in CONTENT-NOTICES.txt")
+    shipped = sorted(pack_files(package / PACK))
+    check(COIN in shipped, f"{PACK} has no {COIN}")
+    for name in shipped:
+        check(name in content, f"{name} is shipped in {PACK} but not named in CONTENT-NOTICES.txt")
 
 
 def play(exe, mode, workdir, env, report, timeout):
@@ -200,15 +228,18 @@ def smoke_missing_assets(package, work, timeout):
     """A package without its assets must fail loudly, naming the file."""
     broken = work / "no-assets"
     shutil.copytree(package, broken)
-    shutil.rmtree(broken / "assets")
+    packed = sorted(pack_files(broken / PACK))
+    (broken / PACK).unlink()
     env = clean_env()
     env["PONKO_DATA_DIR"] = str(work / "missing")
     cwd = work / "elsewhere"
     code, out, err = play(broken / EXE, "headless", cwd, env, work / "report-missing.json", timeout)
     check(code != 0, "a package without assets still ran")
-    check("coin_dash/coin.png" in err, f"the failure does not name the missing file:\n{err}")
+    # The first file the game loads (its text, then the coin picture) is the one named.
+    named = [name for name in packed if f'"{name}" not found' in err]
+    check(named, f"the failure does not name a missing file of {PACK}:\n{err}")
     check(not (work / "report-missing.json").exists(), "a report was written without the assets")
-    print("  ok: missing assets fail with a message naming coin_dash/coin.png")
+    print(f"  ok: a missing {PACK} fails with a message naming {named[0]}")
 
 
 # The engine's own messages when it cannot get a GPU or a window. Only these
@@ -299,6 +330,27 @@ def selftest(args):
 
     # The packaging's own decisions (licenses, layouts, archives) are tests of
     # `ponko package`: `cargo test -p ponko_cli`.
+
+    # The pack reader, on a pack made here the way `ponko pack` makes one.
+    with tempfile.TemporaryDirectory() as tmp:
+        files = {"a.txt": b"stored", "b/long.txt": b"deflated " * 50}
+        index, blob = b"", b""
+        for name in sorted(files):
+            body = files[name]
+            codec, raw = (1, zlib.compress(body, 9)[2:-4]) if name.endswith("long.txt") else (0, body)
+            index += struct.pack("<H", len(name)) + name.encode() + struct.pack("<BQQQI", codec, len(blob), len(raw), len(body), zlib.crc32(body))
+            blob += raw
+        pack = Path(tmp) / PACK
+        pack.write_bytes(b"PONKOPAK" + struct.pack("<IIQQ", 1, len(files), len(index), len(blob)) + index + blob)
+        check(pack_files(pack) == files, "the pack reader does not read back what was packed")
+        pack.write_bytes(pack.read_bytes()[:-1])
+        try:
+            pack_files(pack)
+        except Failure:
+            pass
+        else:
+            raise Failure("a cut-short pack was read")
+    print("  ok: asset packs read back, cut-short ones are refused")
 
     # Which window-run errors are "unsupported here" and which are failures.
     for text in NO_WINDOW:

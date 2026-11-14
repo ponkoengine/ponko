@@ -462,6 +462,14 @@ impl Text {
         })
     }
 
+    /// The ascent and line height of a line of `font` at `px` pixels, as
+    /// [`layout`](Self::layout) places it (rich text lines up the baselines
+    /// of runs in several fonts and sizes with it).
+    pub fn line_box(&mut self, font: Font, px: f32) -> (f32, f32) {
+        let font = self.resolve(font);
+        self.line_metrics(font, px)
+    }
+
     /// The line metrics of `font` at `px`: ascent and line height.
     fn line_metrics(&mut self, font: Font, px: f32) -> (f32, f32) {
         let lines = self.font(font).horizontal_line_metrics(px);

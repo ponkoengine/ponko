@@ -11,6 +11,7 @@ use std::ops::Range;
 
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 
+use super::gltf_ext::{self, ModelCamera, ModelLight, UvMapping};
 use super::{Blend, Joint, MeshData, MorphTarget, Transform3D};
 use crate::color::Color;
 
@@ -33,6 +34,13 @@ pub(crate) struct Loaded {
     /// The weights `data.morph_targets` show by default (glTF's mesh
     /// weights), one per target.
     pub morph_defaults: Vec<f32>,
+    /// Lights (`KHR_lights_punctual`) and cameras its scene places.
+    pub lights: Vec<ModelLight>,
+    pub cameras: Vec<ModelCamera>,
+    /// What loading it left out (optional extensions it doesn't read, and
+    /// the like), each already reported.
+    #[cfg_attr(not(test), expect(dead_code, reason = "reported as the file loads; tests read them"))]
+    pub warnings: Vec<String>,
 }
 
 pub(crate) struct LoadedSkin {
@@ -163,22 +171,14 @@ pub(crate) fn load(
     read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
     have: &dyn Fn(&str) -> bool,
 ) -> Result<Loaded, String> {
-    let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| format!("{name}: not a glTF file: {e}"))?;
+    let gltf_ext::Prepared {
+        document: gltf,
+        buffers,
+        json,
+        preferred_image,
+        mut warnings,
+    } = gltf_ext::prepare(name, bytes, read)?;
     let folder = folder_of(name);
-    let mut buffers = Vec::new();
-    for buffer in gltf.buffers() {
-        let data = match buffer.source() {
-            gltf::buffer::Source::Bin => gltf
-                .blob
-                .clone()
-                .ok_or_else(|| format!("{name}: missing its binary chunk"))?,
-            gltf::buffer::Source::Uri(uri) => fetch(uri, folder, read)?,
-        };
-        if data.len() < buffer.length() {
-            return Err(format!("{name}: buffer {} is shorter than it says", buffer.index()));
-        }
-        buffers.push(data);
-    }
 
     // Materials, with each image decoded once.
     let mut images = Images {
@@ -186,18 +186,26 @@ pub(crate) fn load(
         keys: Vec::new(),
         sources: Vec::new(),
         have,
-        document: &gltf.document,
+        document: &gltf,
         buffers: &buffers,
         folder,
         name,
     };
     let mut materials: Vec<LoadedMaterial> = Vec::new();
+    // How each material's textures lie on its meshes (`KHR_texture_transform`).
+    let mut mappings: Vec<UvMapping> = Vec::new();
     for material in gltf.materials() {
         let pbr = material.pbr_metallic_roughness();
         let [r, g, b, a] = pbr.base_color_factor();
-        let [er, eg, eb] = material.emissive_factor();
+        let extensions = material
+            .index()
+            .map(|i| gltf_ext::material_extensions(&json, i, name, &mut warnings));
+        let strength = extensions.as_ref().map_or(1.0, |e| e.emissive_strength);
+        let [er, eg, eb] = material.emissive_factor().map(|c| c * strength);
+        let transmission = extensions.as_ref().map_or(0.0, |e| e.transmission);
+        mappings.push(extensions.map_or(UvMapping::PLAIN, |e| e.mapping));
         let mut get = |t: Option<gltf::Texture>| match t {
-            Some(t) => images.get(t.source().index(), read).map(Some),
+            Some(t) => images.texture(&t, &preferred_image, &mut warnings, read).map(Some),
             None => Ok(None),
         };
         let image = get(pbr.base_color_texture().map(|i| i.texture()))?;
@@ -214,10 +222,18 @@ pub(crate) fn load(
             (Some(m), Some(o)) if m == o => Some(images.get(m, read)?),
             (m, o) => Some(images.orm(m, o, read)?),
         };
-        // glTF factors are linear; Color is sRGB.
+        // glTF factors are linear; Color is sRGB. Transmission
+        // (`KHR_materials_transmission`) is drawn as see-through blending:
+        // what passes through isn't covered.
+        let blend = match material.alpha_mode() {
+            _ if transmission > 0.0 => Blend::Transparent,
+            gltf::material::AlphaMode::Opaque => Blend::Opaque,
+            gltf::material::AlphaMode::Mask => Blend::Cutout,
+            gltf::material::AlphaMode::Blend => Blend::Transparent,
+        };
         materials.push(LoadedMaterial {
             name: material.name().unwrap_or("").to_string(),
-            color: Color::rgba(to_srgb(r), to_srgb(g), to_srgb(b), a),
+            color: Color::rgba(to_srgb(r), to_srgb(g), to_srgb(b), a * (1.0 - transmission)),
             roughness: pbr.roughness_factor(),
             metallic: pbr.metallic_factor(),
             emissive: Color::rgb(to_srgb(er), to_srgb(eg), to_srgb(eb)),
@@ -226,11 +242,7 @@ pub(crate) fn load(
             normal_strength,
             orm_map,
             emissive_map,
-            blend: match material.alpha_mode() {
-                gltf::material::AlphaMode::Opaque => Blend::Opaque,
-                gltf::material::AlphaMode::Mask => Blend::Cutout,
-                gltf::material::AlphaMode::Blend => Blend::Transparent,
-            },
+            blend,
             double_sided: material.double_sided(),
         });
     }
@@ -244,17 +256,21 @@ pub(crate) fn load(
         .or_else(|| gltf.scenes().next())
         .ok_or_else(|| format!("{name}: has no scene"))?;
     let mut rig = if gltf.skins().len() > 0 || gltf.animations().len() > 0 {
-        Some(Rig::new(&gltf.document, &scene, name)?)
+        Some(Rig::new(&gltf, &scene, name)?)
     } else {
         None
     };
     let mut by_material: Vec<(usize, MeshData)> = Vec::new();
     // Morph targets' default weights, by name.
     let mut defaults: Vec<(String, f32)> = Vec::new();
+    let mut lights = Vec::new();
+    let mut cameras = Vec::new();
     let mut stack: Vec<(gltf::Node, Mat4)> = scene.nodes().map(|n| (n, Mat4::IDENTITY)).collect();
     while let Some((node, parent)) = stack.pop() {
         let mut matrix = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
         let children = matrix;
+        lights.extend(gltf_ext::light_of(&json, node.index(), matrix, node.name()));
+        cameras.extend(gltf_ext::camera_of(&node, matrix));
         if let Some(mesh) = node.mesh() {
             // A skinned mesh is in the space it was bound in, whatever its
             // node; any other follows its node.
@@ -312,6 +328,7 @@ pub(crate) fn load(
                     matrix,
                     binding: &binding,
                     targets: &targets,
+                    mapping: mappings.get(material).copied().unwrap_or(UvMapping::PLAIN),
                 };
                 append(&mut by_material[at].1, &primitive, &buffers, &part, name)?;
             }
@@ -383,7 +400,7 @@ pub(crate) fn load(
         .map(|t| defaults.iter().find(|(n, _)| *n == t.name).map_or(0.0, |d| d.1))
         .collect();
     let clips = match &rig {
-        Some(rig) => read_clips(&gltf.document, &buffers, rig, &data)?,
+        Some(rig) => read_clips(&gltf, &buffers, rig, &data)?,
         None => Vec::new(),
     };
     let skin = rig.map(|rig| LoadedSkin {
@@ -393,6 +410,9 @@ pub(crate) fn load(
         slots: rig.slots.iter().map(|s| s.0).collect(),
         inverse_binds: rig.slots.iter().map(|s| s.1).collect(),
     });
+    for warning in &warnings {
+        gltf_ext::warn(warning);
+    }
     Ok(Loaded {
         data,
         parts,
@@ -402,6 +422,9 @@ pub(crate) fn load(
         skin,
         clips,
         morph_defaults,
+        lights,
+        cameras,
+        warnings,
     })
 }
 
@@ -567,8 +590,8 @@ fn read_clips(
 }
 
 /// A morph target's offsets: none, or one per corner.
-fn offsets(v: Option<gltf::accessor::Iter<'_, [f32; 3]>>, corners: usize, name: &str) -> Result<Vec<Vec3>, String> {
-    let v: Vec<Vec3> = v.map(|v| v.map(Vec3::from).collect()).unwrap_or_default();
+fn offsets(v: Vec<[f32; 3]>, corners: usize, name: &str) -> Result<Vec<Vec3>, String> {
+    let v: Vec<Vec3> = v.into_iter().map(Vec3::from).collect();
     if !v.is_empty() && v.len() != corners {
         return Err(format!(
             "{name}: a morph target has {} offsets for {corners} corners",
@@ -585,6 +608,9 @@ struct Part<'a> {
     binding: &'a Binding,
     /// Its morph targets' names.
     targets: &'a [String],
+    /// Which texture coordinates its material's textures use, and how
+    /// they're moved.
+    mapping: UvMapping,
 }
 
 /// Adds one primitive's triangles to `out`, moved by its part's matrix.
@@ -597,11 +623,25 @@ fn append(
 ) -> Result<(), String> {
     let (matrix, binding) = (part_of.matrix, part_of.binding);
     let reader = primitive.reader(|b| buffers.get(b.index()).map(Vec::as_slice));
-    let positions: Vec<Vec3> = reader
-        .read_positions()
-        .ok_or_else(|| format!("{name}: a mesh has no positions"))?
-        .map(Vec3::from)
-        .collect();
+    // Positions, normals and texture coordinates may be quantized
+    // (`KHR_mesh_quantization`): read whatever their component type.
+    let floats3 = |semantic: &gltf::Semantic| -> Result<Option<Vec<Vec3>>, String> {
+        primitive
+            .get(semantic)
+            .map(|a| gltf_ext::read_floats::<3>(&a, buffers, name).map(|v| v.into_iter().map(Vec3::from).collect()))
+            .transpose()
+    };
+    let uvs = |set: u32| -> Result<Vec<Vec2>, String> {
+        Ok(primitive
+            .get(&gltf::Semantic::TexCoords(set))
+            .map(|a| gltf_ext::read_floats::<2>(&a, buffers, name))
+            .transpose()?
+            .map(|v| v.into_iter().map(Vec2::from).collect())
+            .unwrap_or_default())
+    };
+    let positions: Vec<Vec3> =
+        floats3(&gltf::Semantic::Positions)?.ok_or_else(|| format!("{name}: a mesh has no positions"))?;
+    let mapping = part_of.mapping;
     let count = positions.len() as u32;
     let indices: Vec<u32> = match reader.read_indices() {
         Some(i) => i.into_u32().collect(),
@@ -609,14 +649,11 @@ fn append(
     };
     let part = MeshData {
         positions,
-        normals: reader
-            .read_normals()
-            .map(|n| n.map(Vec3::from).collect())
+        // Quantized normals needn't be unit length.
+        normals: floats3(&gltf::Semantic::Normals)?
+            .map(|n| n.into_iter().map(|n| n.normalize_or(Vec3::Y)).collect())
             .unwrap_or_default(),
-        uvs: reader
-            .read_tex_coords(0)
-            .map(|t| t.into_f32().map(Vec2::from).collect())
-            .unwrap_or_default(),
+        uvs: uvs(mapping.set)?.into_iter().map(|uv| mapping.apply(uv)).collect(),
         indices,
         // glTF's colors are linear; Color is sRGB.
         colors: reader
@@ -627,10 +664,7 @@ fn append(
                     .collect()
             })
             .unwrap_or_default(),
-        uvs1: reader
-            .read_tex_coords(1)
-            .map(|t| t.into_f32().map(Vec2::from).collect())
-            .unwrap_or_default(),
+        uvs1: uvs(1)?,
         ..Default::default()
     };
     match binding {
@@ -684,9 +718,16 @@ fn append(
     // Morph targets: offsets turn with the node (normals' by the normal
     // matrix, unnormalized: they're differences).
     let mut targets = Vec::new();
-    for (k, (positions, normals, _)) in reader.read_morph_targets().enumerate() {
+    for (k, target) in primitive.morph_targets().enumerate() {
         let corners = count as usize;
-        let (positions, normals) = (offsets(positions, corners, name)?, offsets(normals, corners, name)?);
+        let read = |a: Option<gltf::Accessor>| -> Result<Vec<Vec3>, String> {
+            let v = match a {
+                Some(a) => gltf_ext::read_floats::<3>(&a, buffers, name)?,
+                None => Vec::new(),
+            };
+            offsets(v, corners, name)
+        };
+        let (positions, normals) = (read(target.positions())?, read(target.normals())?);
         targets.push(MorphTarget {
             name: part_of.targets.get(k).cloned().unwrap_or_else(|| format!("{name}.{k}")),
             positions: if positions.is_empty() {
@@ -745,6 +786,25 @@ enum Key {
 type Read<'r> = &'r mut dyn FnMut(&str) -> Result<Vec<u8>, String>;
 
 impl Images<'_> {
+    /// Texture `texture`'s image, decoded: its index in `decoded`. An image
+    /// it has through an extension the build reads (KTX2, WebP) comes
+    /// first, its core image if that fails.
+    fn texture(
+        &mut self,
+        texture: &gltf::Texture,
+        preferred: &[Option<usize>],
+        warnings: &mut Vec<String>,
+        read: Read,
+    ) -> Result<usize, String> {
+        if let Some(Some(image)) = preferred.get(texture.index()) {
+            match self.get(*image, read) {
+                Ok(at) => return Ok(at),
+                Err(e) => warnings.push(format!("{e}; its fallback image loads instead")),
+            }
+        }
+        self.get(texture.source().index(), read)
+    }
+
     /// Image `index`, decoded: its index in `decoded`.
     fn get(&mut self, index: usize, read: Read) -> Result<usize, String> {
         if let Some(at) = self.keys.iter().position(|k| *k == Key::Image(index)) {
@@ -836,13 +896,20 @@ fn decode(image: &gltf::Image, buffers: &[Vec<u8>], folder: &str, read: Read, na
         }
         gltf::image::Source::Uri { uri, .. } => fetch(uri, folder, read)?,
     };
-    let decoded = image::load_from_memory(&bytes).map_err(|e| format!("{name}: an image can't be read: {e}"))?;
-    let rgba = decoded.to_rgba8();
-    Ok((rgba.width(), rgba.height(), rgba.into_raw()))
+    // Any format the build reads: KTX2 (`KHR_texture_basisu`) and WebP
+    // (`EXT_texture_webp`) too, with their features.
+    let what = format!("image {} of {name}", image.index());
+    let decoded =
+        crate::assets::decode_image(&bytes, name, &what).map_err(|e| format!("{name}: an image can't be read: {e}"))?;
+    Ok((decoded.width, decoded.height, decoded.rgba))
 }
 
 /// The bytes a URI names: inline base64 data, or a file next to the glTF.
-fn fetch(uri: &str, folder: &str, read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>) -> Result<Vec<u8>, String> {
+pub(super) fn fetch(
+    uri: &str,
+    folder: &str,
+    read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+) -> Result<Vec<u8>, String> {
     if let Some(rest) = uri.strip_prefix("data:") {
         let (_, data) = rest
             .split_once(";base64,")
@@ -856,7 +923,7 @@ fn fetch(uri: &str, folder: &str, read: &mut dyn FnMut(&str) -> Result<Vec<u8>, 
 /// The folder part of asset name `name`, with its trailing separator: what
 /// relative URIs in it are joined to. `\\` counts too, for a file loaded by an
 /// absolute Windows path.
-fn folder_of(name: &str) -> &str {
+pub(super) fn folder_of(name: &str) -> &str {
     name.rfind(['/', '\\']).map_or("", |i| &name[..=i])
 }
 
@@ -902,8 +969,11 @@ fn base64(text: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn to_srgb(linear: f32) -> f32 {
-    if linear <= 0.003_130_8 {
+pub(super) fn to_srgb(linear: f32) -> f32 {
+    // Exact for white, which the formula misses by a rounding step.
+    if linear == 1.0 {
+        1.0
+    } else if linear <= 0.003_130_8 {
         linear * 12.92
     } else {
         1.055 * linear.powf(1.0 / 2.4) - 0.055

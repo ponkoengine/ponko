@@ -87,9 +87,18 @@ fn a_fresh_project_packages_for_the_host_with_one_command() {
     } else {
         folder.clone()
     };
-    for file in ["assets/settings.json", "THIRD-PARTY-NOTICES.txt"] {
+    // The assets ship in one pack, which the smoke run read them from.
+    assert!(report.contains("in assets.pack"), "{report}");
+    for file in ["assets.pack", "THIRD-PARTY-NOTICES.txt"] {
         assert!(inner.join(file).is_file(), "{file} in {}", inner.display());
     }
+    assert!(!inner.join("assets").exists(), "no loose assets/ beside the pack");
+    let pack = std::fs::read(inner.join("assets.pack")).unwrap();
+    let names = String::from_utf8_lossy(&pack);
+    assert!(
+        pack.starts_with(b"PONKOPAK") && names.contains("settings.json"),
+        "the pack holds the template's settings.json"
+    );
     let notices = std::fs::read_to_string(inner.join("THIRD-PARTY-NOTICES.txt")).unwrap();
     assert!(
         notices.contains("  ponko 0.1.0: MIT OR Apache-2.0"),

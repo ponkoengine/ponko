@@ -19,6 +19,11 @@ use crate::render::{AntiAliasing, MaterialDesc, Model};
 /// builds check every drawn frame against them): bloom, FXAA, SMAA, upscale.
 fn links() -> [bool; 4] {
     let features = last_features().expect("the frame was checked");
+    assert_eq!(
+        features.contains(FrameFeatures::DOF),
+        DOF.with(|on| on.get()),
+        "depth of field as set"
+    );
     [
         FrameFeatures::BLOOM,
         FrameFeatures::FXAA,
@@ -26,6 +31,11 @@ fn links() -> [bool; 4] {
         FrameFeatures::UPSCALE,
     ]
     .map(|f| features.contains(f))
+}
+
+thread_local! {
+    /// Whether the test switched depth of field on (`links` checks it).
+    static DOF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Draws a frame; whether it replaced the scene's images, and its draw calls.
@@ -96,4 +106,19 @@ fn each_post_link_replaces_images_and_counts_draws_as_its_own() {
     assert_eq!(frame(&mut rig), (true, plain + 8), "back to full size");
     assert_eq!(links(), [true, true, false, false]);
     assert!(!rig.renderer.scales_output());
+
+    // Depth of field: one pass, and no image of its own (it swaps between
+    // the lit frame and the effects' scratch).
+    rig.ctx.scene3d.post.bloom = 0.0;
+    rig.ctx.scene3d.post.anti_aliasing = AntiAliasing::None;
+    assert_eq!(frame(&mut rig), (true, plain), "FXAA off again");
+    rig.ctx.scene3d.post.depth_of_field.enabled = true;
+    DOF.with(|on| on.set(true));
+    assert_eq!(frame(&mut rig), (false, plain + 1), "depth of field on");
+    assert_eq!(links(), [false; 4]);
+    assert_eq!(frame(&mut rig), (false, plain + 1), "depth of field stays on");
+    rig.ctx.scene3d.post.depth_of_field.enabled = false;
+    DOF.with(|on| on.set(false));
+    assert_eq!(frame(&mut rig), (false, plain), "depth of field off");
+    assert_eq!(links(), [false; 4]);
 }

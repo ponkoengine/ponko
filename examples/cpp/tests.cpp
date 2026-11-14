@@ -242,6 +242,12 @@ static void three_d() {
         auto e = ctx.world().spawn(ponko::transform3d_at({0, 1, 0}), mark, ponko::receives_decals{0});
         CHECK(ctx.world().get<ponko::decal3d>(e).order == 3 && ctx.world().get<ponko::decal3d>(e).size.x == 2);
         CHECK(ctx.world().get<ponko::receives_decals>(e).layers == 0);
+        // Only its shadow: no camera draws it; off again shows it.
+        CHECK(!ctx.world().shadow_only(e));
+        ctx.world().set_shadow_only(e, true);
+        CHECK(ctx.world().shadow_only(e));
+        ctx.world().set_shadow_only(e, false);
+        CHECK(!ctx.world().shadow_only(e));
         ctx.clear_decal_textures();
     });
     CHECK(decals.size() == 1);
@@ -2619,6 +2625,10 @@ static void profiling() {
     const std::string broken = run.report.check(R"({"allocs_per_frame": 0, "scopes": {"cpp_work": 0}})");
     CHECK(broken.find("allocations per frame") != std::string::npos && broken.find("cpp_work") != std::string::npos);
     CHECK(run.report.regressions(run.report).empty());
+    // GPU memory: a headless run opens no GPU, so the report has none and a
+    // memory budget breaks as "not measured", never as 0.
+    CHECK(run.report.json().find("\"gpu_memory\": null") != std::string::npos);
+    CHECK(run.report.check(R"({"gpu_memory_mb": 512})").find("GPU memory") != std::string::npos);
     throws([&] { (void)run.report.check("not json"); });
     const auto file = std::filesystem::temp_directory_path() / "ponko-cpp-report.json";
     run.report.save(file.string().c_str());
@@ -2805,6 +2815,10 @@ static void headless_wrapper_calls() {
             ctx.set_physics_paused(false);
             CHECK(!ctx.is_physics_paused());
             ctx.set_gravity3d({0, -1, 0});
+            ctx.set_physics3d_paused(true);
+            CHECK(ctx.is_physics3d_paused() && !ctx.is_physics_paused());
+            ctx.set_physics3d_paused(false);
+            CHECK(!ctx.is_physics3d_paused());
             throws([&] { ctx.set_gravity({NAN, 0}); });
             ctx.warm_render_pipelines(); // nothing to build without a renderer
         })
@@ -3432,7 +3446,40 @@ static void ime_composition() {
     });
 }
 
+static void localization() {
+    CHECK(ponko::plural("en", 1) == ponko::plural_category::one);
+    CHECK(ponko::plural("ar", 11) == ponko::plural_category::many);
+    ponko::game("c++ locale", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        bool threw = false;
+        try { ctx.load_strings("lang/none.json"); } catch (const ponko::error&) { threw = true; }
+        CHECK(threw);
+        ctx.insert_strings_json(R"({"language": "en", "name": "English", "strings": {
+            "time": "Time {seconds:1} s", "hi": "Hi {name}", "lives": {"one": "{count} life", "other": "{count} lives"}}})");
+        ctx.insert_strings_json(R"({"language": "ar", "name": "Arabic", "strings": {"time": "{seconds:1}"}})");
+        auto languages = ctx.languages();
+        CHECK(languages.size() == 2 && languages[0].code == "en" && languages[1].name == "Arabic");
+        CHECK(ctx.language() == "en" && !ctx.language_is_rtl());
+        CHECK(ctx.format("time", {ponko::arg("seconds", 2.25)}) == "Time 2.2 s");
+        CHECK(ctx.format("hi", {ponko::arg("name", "Ada")}) == "Hi Ada");
+        CHECK(ctx.format("lives", {ponko::arg("count", 1LL)}) == "1 life");
+        CHECK(!ctx.language_font());
+        namespace u = ponko::ui;
+        auto ui = ctx.ui_retained();
+        auto root = ui.add_panel(u::none, u::fill());
+        auto label = ui.add_label(root, "", u::fixed(200, 30));
+        ui.set_text_key(label, "lives", {ponko::arg("count", 3)});
+        ui.localize();
+        CHECK(ui.text(label) == "3 lives");
+        CHECK(!ctx.set_language("xx") && ctx.set_language("ar"));
+        CHECK(ctx.language_is_rtl());
+        ctx.set_language_font("ar", ponko::font{0});
+        CHECK(ctx.language_font() && ctx.language_font()->id == 0);
+        CHECK(ctx.missing_strings().find("\"hi\" is missing") != std::string::npos);
+    });
+}
+
 int main() {
+    localization();
     levels_and_tilemaps();
     abi_version_is_checked();
     declared_access();

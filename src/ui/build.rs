@@ -675,6 +675,32 @@ impl UiBuilder<'_> {
         self.ui.set_text(self.id, text);
         self
     }
+    /// Text from the string tables: the key `key`, shown in the current
+    /// language; see [`Ui::set_text_key`] (which also takes arguments).
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut ui = ponko::ui::Ui::default();
+    /// let root = ui.root().id();
+    /// let play = ui.button(root, "").text_key("menu.play").id();
+    /// assert_eq!(ui.text_key(play), Some("menu.play"));
+    /// ```
+    pub fn text_key(self, key: &str) -> Self {
+        self.ui.set_text_key(self.id, key, &[]);
+        self
+    }
+    /// Its text (or keyed text) is rich-text markup: colors, bold, fonts,
+    /// sizes, inline images and links; see [`Ui::set_rich`].
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut ui = ponko::ui::Ui::default();
+    /// let root = ui.root().id();
+    /// let line = ui.label(root, "[color=#ffcc00]Mira:[/color] Hello!").rich().wrap().id();
+    /// assert_eq!(ui.accessible_name(line), Some("Mira: Hello!"));
+    /// ```
+    pub fn rich(self) -> Self {
+        self.ui.set_rich(self.id, true);
+        self
+    }
     /// Text line height in logical units.
     /// ```
     /// use ponko::prelude::*;

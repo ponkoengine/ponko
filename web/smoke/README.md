@@ -192,3 +192,21 @@ not start on the development machine, and on CI's Linux runner it has no
 WebGL2, so Firefox has not drawn a frame anywhere yet), WebGPU on a
 GPU-less Linux runner (the CI job tries it and reports), and mobile
 browsers.
+
+## First-load cost
+
+`first-load.mjs` measures what a web build costs to start rather than
+whether it works: the requests and bytes before the first frame, the asset
+phase (first asset request to last asset byte) and the time to the first
+frame, the median of `--runs` fresh loads in headless Chromium, served with
+range requests and the cache off, on a network Chromium emulates (`--latency
+<ms>`, `--mbps <Mbit/s>`; both `0` for none). Give it several `--dir`s to
+compare, such as a package made with and without `--no-pack`:
+
+```sh
+node web/smoke/first-load.mjs --dir target/web-loose/ember-hop-0.1.0-web \
+     --dir target/web-pack/ember-hop-0.1.0-web --latency 40 --mbps 20
+```
+
+The page must publish `<html data-smoke>` (the reference games and the
+fixtures do). The guide's packaging chapter has the numbers for Ember Hop.

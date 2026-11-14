@@ -547,6 +547,39 @@ fn two_screen_effects_run_in_order_swapping_between_two_images() {
 }
 
 #[test]
+fn depth_of_field_after_an_odd_number_of_screen_effects_writes_back_into_the_lit_frame() {
+    let Some(mut rig) = Rig::new() else { return };
+    half_ground(&mut rig);
+    let red = rig
+        .renderer
+        .create_effect(
+            &rig.device,
+            "red",
+            "fn effect(p: Pixel) -> vec3<f32> { return vec3<f32>(1.0, 0.0, 0.0); }",
+        )
+        .unwrap();
+    let material = rig.gpu_material(MaterialDesc::default());
+    rig.effects.push((red, material));
+    let dof = &mut rig.ctx.scene3d.post.depth_of_field;
+    dof.enabled = true;
+    dof.blur = 0.05;
+    // The effect leaves red in the scratch; depth of field reads it there
+    // and writes the lit frame, which tone mapping then reads: still red.
+    let [r, g, b] = centre(&rig.draw());
+    assert!(r > 150 && g < 20 && b < 20, "red through depth of field: {r} {g} {b}");
+    let features = last_features().unwrap();
+    assert!(features.contains(FrameFeatures::DOF.with(FrameFeatures::EFFECTS_ODD)));
+    // With two effects it reads the lit frame and ends in the scratch.
+    rig.effects.push((red, material));
+    let [r, g, b] = centre(&rig.draw());
+    assert!(
+        r > 150 && g < 20 && b < 20,
+        "two effects, then depth of field: {r} {g} {b}"
+    );
+    assert!(!last_features().unwrap().contains(FrameFeatures::EFFECTS_ODD));
+}
+
+#[test]
 fn a_texture_compute_pass_fills_its_target_before_the_frame_reads_it() {
     let Some(mut rig) = Rig::new() else { return };
     if rig.device.limits().max_storage_textures_per_shader_stage == 0 {

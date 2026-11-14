@@ -37,8 +37,9 @@ OTHER_IMAGES="image-webp gif tiff qoi exr"
 # `accesskit` data types alone also come with the inspector's egui, so builds
 # that may have the inspector forbid only the adapters (ACCESS); builds
 # without a window or an inspector forbid the data types too (ACCESS_ALL).
-# Compressed textures are opt-in (`compressed-textures`, `basis-universal`).
-TEXTURES="ktx2 ruzstd texture2ddecoder basis-universal"
+# Compressed textures and compressed glTF geometry are opt-in
+# (`compressed-textures`, `basis-universal`, `gltf-meshopt`).
+TEXTURES="ktx2 ruzstd texture2ddecoder basis-universal meshopt"
 ACCESS="accesskit_macos accesskit_windows accesskit_unix accesskit_consumer accesskit_atspi_common atspi zbus"
 ACCESS_ALL="$ACCESS accesskit"
 # Text shaping is opt-in (`text-shaping`); the inspector's egui brings the

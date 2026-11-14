@@ -362,3 +362,23 @@ impl Ao {
             .check(device, queue, &self.uniform, 0, "ambient occlusion settings");
     }
 }
+
+impl Ao {
+    /// Counts its uniform as other memory (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        t.buffer(C::Other, &self.uniform);
+    }
+}
+
+impl AoTargets {
+    /// Counts ambient occlusion's targets and history as frame targets (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        t.view(C::FrameTargets, &self.raw);
+        t.view(C::FrameTargets, &self.output);
+        for view in &self.history {
+            t.view(C::FrameTargets, view);
+        }
+    }
+}

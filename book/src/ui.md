@@ -5,6 +5,8 @@ The engine handles layout/input before frame systems and draws the tree above
 scene sprites. The retained tree is the game's UI: menus, HUDs, shops, dialogs.
 The immediate widgets, `ctx.ui.immediate.panel`, `label` and `button`
 ([Camera and UI](camera-ui.md#ui)), are for debug overlays and quick prototypes.
+A node can hold a string table key instead of text and follow the game's
+language ([Localization](localization.md)).
 
 In C++ the tree is `ctx.ui_retained()`, a `ponko::ui::tree`; layouts start from
 a preset (`ui::fill()`, `ui::row(40)`, `ui::fixed(220, 40)`, `ui::centered(360, 180)`)
@@ -455,6 +457,78 @@ drags. `ctx.ui.wants_keyboard()` reports retained keyboard/gamepad ownership
 while any screen is open (a HUD doesn't count). These queries do not erase raw game input: game code
 uses them to suppress world actions. UI screen changes cancel pointer capture,
 so releasing a dialog button cannot activate an underlying screen.
+
+## Rich text
+
+A label with one font, size and color can't show a speaker's name in their
+color, an input glyph ("press Ⓐ") or a link without several labels laid out
+by hand. A rich node reads its text as a small markup instead
+(`ui.set_rich(id, true)`, or `.rich()` on a builder), and the runs wrap,
+align and shape together as one paragraph:
+
+| Markup | Shows |
+|---|---|
+| `[color=#ffcc00]…[/color]` | the text in a color: `#rgb`, `#rrggbb`, `#rrggbbaa`, or `white`, `black`, `gray`, `red`, `green`, `blue`, `yellow` |
+| `[b]…[/b]` | bold: the font named `bold`, else the node's font drawn heavier |
+| `[font=name]…[/font]` | a font named with `ui.set_inline_font(name, font)` |
+| `[size=24]…[/size]` | a font size in UI units; the line grows to fit it |
+| `[u]…[/u]` | underlined |
+| `[link=target]…[/link]` | a clickable range, underlined |
+| `[img=name]`, `[img=name alt="A"]` | an image named with `ui.set_inline_image(name, texture)`, as tall as the text; a screen reader reads `alt` (else the name) |
+| `[[` | a `[` |
+
+Tags nest and close with `[/name]`. Anything in brackets that isn't markup
+(`[A]`, a color it can't read) is shown as it is, and an image that has no
+texture yet shows its `alt` text until `set_inline_image` names one.
+
+```rust
+# use ponko::prelude::*;
+# use ponko::ui::{UiEvent, UiLayout};
+fn dialogue(ctx: &mut Ctx) {
+    let pad_a = ctx.gfx.load_texture("ui/pad_a.png");
+    ctx.ui.set_inline_image("pad_a", pad_a);
+    let root = ctx.ui.root().layout(UiLayout::fill().padding(16.0)).id();
+    ctx.ui
+        .label(root, "[color=#ffcc00]Mira:[/color] Press [img=pad_a alt=A] to talk. [link=help]Help[/link]")
+        .rich()
+        .wrap()
+        .layout(UiLayout::auto().width(320.0));
+    ctx.ui.push_screen(root, false);
+}
+
+fn links(ctx: &mut Ctx) {
+    while let Some(event) = ctx.ui.next_event() {
+        if let UiEvent::LinkClicked(id, index) = event {
+            println!("open {:?}", ctx.ui.link(id, index)); // "help"
+        }
+    }
+}
+```
+
+A click (press and release) on a link sends `UiEvent::LinkClicked(node,
+index)`, links counted from 0 in the order they appear, and `ui.link(node,
+index)` gives the target. A link inside a button takes the click; the rest of
+the button clicks it as before. Links answer the pointer only: put actions a
+gamepad or keyboard player needs on buttons.
+
+`ui.accessible_name(id)` (what a screen reader reads) is the text without its
+markup, each image as its `alt` text; `ui.text(id)` is still the markup.
+Text inputs stay plain.
+
+Rich text works with [localized text](localization.md): the string table
+entry holds the markup (`"talk": "[color=#ffcc00]{name}:[/color] Press
+[img=pad_a] to talk."`), and each language can place the spans where its
+grammar puts them. Text arguments are escaped before they are put in, so a
+player called `[b]Ann` is shown as typed. With the `text-shaping` feature
+each run is shaped, a right-to-left paragraph starts at the right, and the
+runs of a line are put in visual order by their bidirectional levels, so an
+Arabic line whose first word is the colored name shows it at the right. A
+word split across two spans (half of it colored) is shaped as two pieces,
+so letters that join across the split don't.
+
+Rich text is Rust-only for now: `Ui::set_rich`, `set_inline_image`,
+`set_inline_font`, `Ui::link` and `UiEvent::LinkClicked` have no C or C++
+calls yet ([C and C++](c-cpp.md#still-rust-only)).
 
 ## Scale and headless tests
 

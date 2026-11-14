@@ -39,6 +39,7 @@ impl Renderer3D {
     /// decides for the later ones.
     pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, input: &Prepare3D<'_>) {
         self.resources.mesh_arena.flush(device, queue);
+        self.prepare_stencil(device);
         let &Prepare3D {
             scene,
             lut,
@@ -57,6 +58,7 @@ impl Renderer3D {
         self.prepare_shadows_and_lights(device, queue, frame, camera);
         self.upload_uniforms(device, queue, scene, &view, previous_view_proj, gi_frame);
         self.prepare_targets(device, &view, rebuild);
+        self.stencil_read_only = self.stencil.any() && self.needs_scene();
         self.advance_history(queue, scene, &view, previous_view_proj);
         self.prepare_occlusion(device, queue, scene, &view);
     }
@@ -79,6 +81,19 @@ impl Renderer3D {
             return false;
         }
         self.shaders.set_samples(samples);
+        self.samples = samples;
+        self.rebuild_scene_depth_users(device);
+        // Keep the old targets until prepare: targets_stale observes their
+        // count and History::decide resets every temporal consumer together.
+        true
+    }
+
+    /// Rebuilds what draws into the scene depth apart from the material
+    /// shaders (the sky, particles, the depth copy), and drops what holds
+    /// attachments of the old sample count or depth format (global
+    /// illumination's views, target cameras), after either changed.
+    fn rebuild_scene_depth_users(&mut self, device: &wgpu::Device) {
+        let samples = self.samples;
         self.sky = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("3d sky"),
             layout: Some(&self.sky_layout),
@@ -90,7 +105,7 @@ impl Renderer3D {
             },
             primitive: Default::default(),
             depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
+                format: self.shaders.depth_format(),
                 depth_write_enabled: Some(false),
                 depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: Default::default(),
@@ -109,17 +124,34 @@ impl Renderer3D {
             multiview_mask: None,
             cache: None,
         });
-        self.particles = super::super::particles::Particles::new(device, &self.texture_layout, samples);
+        self.particles = super::super::particles::Particles::with_depth(
+            device,
+            &self.texture_layout,
+            samples,
+            self.shaders.depth_format(),
+        );
         if self.depth_copy.is_some() {
             self.depth_copy = Some(super::depth_copy::DepthCopy::new(device, samples));
         }
-        self.gi = None; // Its capture attachments also use the scene's count.
+        self.gi = None; // Its capture attachments also use the scene's count and format.
         self.render_targets.views.clear();
         self.shadow_cache.invalidate();
-        self.samples = samples;
-        // Keep the old targets until prepare: targets_stale observes their
-        // count and History::decide resets every temporal consumer together.
-        true
+    }
+
+    /// Gives the scene depth stencil bits once a material has a stencil
+    /// state (see `stencil.rs`), and drops stencil pipelines built from
+    /// shader sets that changed since. Without stencil materials, nothing.
+    fn prepare_stencil(&mut self, device: &wgpu::Device) {
+        if !self.stencil.wanted {
+            return;
+        }
+        if self.shaders.depth_format() != super::stencil::STENCIL_FORMAT {
+            self.shaders.set_depth_format(super::stencil::STENCIL_FORMAT);
+            self.rebuild_scene_depth_users(device);
+            // New targets of the new format, made by this prepare.
+            self.targets = None;
+        }
+        self.stencil.refresh(&self.shaders);
     }
 
     /// Presentation stopped or its surface was recreated. The next drawn
@@ -154,7 +186,7 @@ impl Renderer3D {
             self.occlusion.prepare(
                 device,
                 queue,
-                &targets.depth,
+                &targets.depth_read,
                 view.size,
                 self.samples,
                 frame.view_proj,
@@ -180,14 +212,24 @@ impl Renderer3D {
         // The scene is drawn at `size` and scaled to the window's `window`.
         let size = scaled_size(window, post.render_scale, device.limits().max_texture_dimension_2d);
         let upscaled = size != window;
+        let (near, far) = frame.camera_planes;
+        // A frame no camera set (some tests) gets a new camera's planes.
+        let planes = if near > 0.0 && far > near {
+            (near, far)
+        } else {
+            (0.1, 1000.0)
+        };
         self.post.prepare(
             queue,
             post,
             lut,
             (size, window),
+            planes,
             self.resources.white,
             self.screen.taa_supported,
         );
+        self.post
+            .prepare_depth_of_field(device, &self.scene_layout, self.samples, self.float_depth);
         self.screen.taa_on = post.anti_aliasing == crate::render::AntiAliasing::Taa && self.screen.taa_supported;
         if self.screen.taa_on && self.screen.taa.is_none() {
             self.screen.taa = Some(Taa::new(device));
@@ -251,7 +293,12 @@ impl Renderer3D {
         // atlas bound to every frame (again when it's remade).
         if let Some(g) = gi_frame {
             let gi = self.gi.get_or_insert_with(|| {
-                crate::render::gi::Gi::new(device, self.samples, size_of::<FrameUniform>() as u64)
+                crate::render::gi::Gi::new(
+                    device,
+                    self.samples,
+                    self.shaders.depth_format(),
+                    size_of::<FrameUniform>() as u64,
+                )
             });
             let mut remade = gi.prepare(device, queue, g) || gi.face_groups.is_empty();
             remade |= gi.lights.upload(device, queue, &g.capture.lights, &g.capture.decals);
@@ -519,10 +566,13 @@ impl Renderer3D {
         let mut used = 0;
         let mut offset = frame.instances.len() as u32;
         for (camera_index, view) in frame.views.iter().enumerate() {
-            let Some(target) = self
-                .render_targets
-                .view_target(device, view.target, self.samples, &self.frame_sources)
-            else {
+            let Some(target) = self.render_targets.view_target(
+                device,
+                view.target,
+                self.samples,
+                self.shaders.depth_format(),
+                &self.frame_sources,
+            ) else {
                 continue;
             };
             if used == views.len() {
@@ -898,6 +948,9 @@ impl Renderer3D {
         self.environment.bakes.clear();
         self.environment.bakes.extend_from_slice(&frame.probe_bakes);
         self.environment.prepare_bakes(device, &self.render_targets.textures);
+        self.environment.refresh.clear();
+        self.environment.refresh.extend_from_slice(&frame.probe_refresh);
+        self.environment.prepare_refresh(device, &self.render_targets.textures);
         sync_frame(queue, &self.frame_buffer, 0, &mut self.frame_mirror, &uniform);
         // Each target camera's frame: the same, seen from it.
         for view in &frame.views {
@@ -915,7 +968,7 @@ impl Renderer3D {
             }
             let mut theirs = uniform;
             // Captures use sky IBL only, preventing recursive probe feedback.
-            if frame.probe_bakes.iter().any(|(_, faces)| faces.contains(&view.target)) {
+            if self.environment.is_capture(view.target) {
                 theirs.probes.fill(Default::default());
             }
             theirs.cluster_depth = cluster_depth(&view.frame);

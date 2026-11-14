@@ -357,10 +357,15 @@ binding arrives:
 | Rust feature | Where | From C and C++ |
 |---|---|---|
 | `Assets::scene_asset_field` | [Asset sources](asset-sources.md) | C components have no text fields to name an asset in; load what a scene needs before `load_scene` |
+| `PackSource` | [Asset sources](asset-sources.md#packs) | C and C++ games read the default `assets.pack` like Rust games; a pack of their own can be read through `ponko_ctx_add_asset_source` |
 | `Query::with_lookup`, `World::get_many_mut` | [Entities, components, queries](ecs.md#borrowing-several-things-at-once) | Generic borrows; component pointers from `get` don't borrow |
 | `SystemView` | [Declared system access](system-access.md) | C and C++ systems take the whole `ctx`, so they run alone; declare their access by name |
 | `Storage::write_json`, `Storage::read_json` | [Saves and settings](storage.md#save-slots) | Generic over Rust types; serialize yourself and pass the bytes to `storage_write` and `storage_read` |
 | `UiAccessAdapter::for_ns_view` | [Retained game UI](ui.md#the-screen-reader-adapter) | It needs a Rust `Ui`; the engine's own window gets the adapter, and `ponko_ui_access_*` give a snapshot for one of your own |
+| `SplitToning`, `DepthOfField`, `Post::lerp`, `PostVolume` | [3D: split toning and depth of field](3d.md#split-toning-and-depth-of-field) | Not in `PonkoPost` yet (adding fields changes its layout); set the other post settings with `post` and `set_post` |
+| `NavObstacleShape` | [3D navigation meshes](navigation3d.md#obstacle-shapes) | Obstacles are unturned boxes: `ponko_ctx_set_nav_obstacle` and `ponko_ctx_set_nav_carve_obstacle` |
+| `Ui::set_rich`, `Ui::set_inline_image`, `Ui::set_inline_font`, `Ui::link`, `UiEvent::LinkClicked` | [Retained game UI](ui.md#rich-text) | Not bound yet: several labels side by side, each with its own paint; a button for each link |
+| `Graphics::load_lights`, `Graphics::load_cameras` | [3D](3d.md#gltf-extensions-lights-and-cameras) | Models load with the same glTF extensions; a file's lights and cameras aren't returned yet, so place them yourself |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in

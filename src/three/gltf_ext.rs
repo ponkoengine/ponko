@@ -1,0 +1,1599 @@
+//! glTF extensions: which ones the loader reads, and the parts of loading
+//! that read them.
+//!
+//! [`prepare`] turns a file's bytes into a validated document and its
+//! buffers: it fails on a required extension this build can't read, warns
+//! about optional ones it ignores, decompresses meshopt buffer views
+//! (`EXT_meshopt_compression`, feature `gltf-meshopt`) into a buffer of
+//! their own and points textures at their KTX2 or WebP images when the
+//! build reads those. The rest reads extension data while
+//! [`load`](super::gltf::load) walks the file: quantized attributes
+//! (`KHR_mesh_quantization`), texture transforms, emissive strength,
+//! transmission, lights and cameras.
+
+use glam::{Mat3, Mat4, Vec2, Vec3};
+use serde_json::Value;
+
+use super::{PointLight3D, SpotLight3D, Transform3D};
+use crate::color::Color;
+
+/// Whether this build decompresses meshopt views (the C++ decoder isn't
+/// built for the web).
+const MESHOPT: bool = cfg!(all(feature = "gltf-meshopt", not(target_arch = "wasm32")));
+
+/// What the loader does with a glTF extension (the guide's table lists the
+/// same, keep them in step).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Support {
+    /// Read in every build.
+    Always,
+    /// Read when the named cargo feature is on.
+    Feature(&'static str, bool),
+}
+
+/// The extensions the loader reads, and when.
+fn support(extension: &str) -> Option<Support> {
+    Some(match extension {
+        "KHR_lights_punctual"
+        | "KHR_texture_transform"
+        | "KHR_materials_emissive_strength"
+        | "KHR_mesh_quantization"
+        | "KHR_materials_transmission" => Support::Always,
+        "EXT_meshopt_compression" | "KHR_meshopt_compression" => Support::Feature("gltf-meshopt", MESHOPT),
+        "KHR_texture_basisu" => Support::Feature(
+            "basis-universal",
+            cfg!(all(feature = "basis-universal", not(target_arch = "wasm32"))),
+        ),
+        "EXT_texture_webp" => Support::Feature("image-webp", cfg!(feature = "image-webp")),
+        _ => return None,
+    })
+}
+
+/// Extensions the renderer has no counterpart for, and what is lost
+/// without them (for the warning).
+fn ignored_because(extension: &str) -> &'static str {
+    match extension {
+        "KHR_materials_clearcoat" => "the renderer has no clear coat layer; the base material shows",
+        "KHR_materials_ior" | "KHR_materials_volume" => {
+            "transmission is drawn as see-through blending, without refraction"
+        }
+        "KHR_materials_sheen" | "KHR_materials_specular" | "KHR_materials_iridescence" | "KHR_materials_anisotropy" => {
+            "the renderer has no such layer; the base material shows"
+        }
+        "KHR_materials_unlit" => "the material is lit like any other",
+        "KHR_draco_mesh_compression" => "Draco compressed meshes aren't read",
+        _ => "the file loads as if it weren't there",
+    }
+}
+
+/// Says `message` where a developer sees it: stderr, or the browser's
+/// console on the web (stderr goes nowhere there).
+pub(super) fn warn(message: &str) {
+    #[cfg(target_arch = "wasm32")]
+    web_sys::console::warn_1(&wasm_bindgen::JsValue::from_str(&format!("ponko: {message}")));
+    #[cfg(not(target_arch = "wasm32"))]
+    eprintln!("ponko: {message}");
+}
+
+/// A file ready to read: its document, its buffers (meshopt views
+/// decompressed into one more buffer at the end) and its JSON, for the
+/// extension data the `gltf` crate doesn't model.
+pub(super) struct Prepared {
+    pub document: gltf::Document,
+    pub buffers: Vec<Vec<u8>>,
+    pub json: Value,
+    /// For textures with both a core image and one the build reads through
+    /// an extension (KTX2, WebP): the extension's image, tried first.
+    pub preferred_image: Vec<Option<usize>>,
+    pub warnings: Vec<String>,
+}
+
+/// The extension objects of `value` (`value.extensions.<name>`).
+pub(super) fn extension<'v>(value: &'v Value, name: &str) -> Option<&'v Value> {
+    value.get("extensions")?.get(name)
+}
+
+fn strings(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+/// Reads a glTF file's JSON, checks its extensions and fetches its buffers
+/// (`fetch` reads a URI: inline data or a file next to it).
+pub(super) fn prepare(
+    name: &str,
+    bytes: &[u8],
+    fetch: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+) -> Result<Prepared, String> {
+    let (json, blob) = if bytes.starts_with(b"glTF") {
+        let glb = gltf::Glb::from_slice(bytes).map_err(|e| format!("{name}: not a glTF file: {e}"))?;
+        (glb.json.into_owned(), glb.bin.map(std::borrow::Cow::into_owned))
+    } else {
+        (bytes.to_vec(), None)
+    };
+    let mut json: Value = serde_json::from_slice(&json).map_err(|e| format!("{name}: not a glTF file: {e}"))?;
+    if !json.is_object() {
+        return Err(format!("{name}: not a glTF file: its JSON isn't an object"));
+    }
+    let mut warnings = Vec::new();
+
+    // Required extensions this build can't read fail; optional ones are
+    // dropped with a warning naming them.
+    let required = strings(&json["extensionsRequired"]);
+    for extension in &required {
+        match support(extension) {
+            Some(Support::Always | Support::Feature(_, true)) => {}
+            Some(Support::Feature(feature, false)) => {
+                return Err(format!(
+                    "{name}: needs the glTF extension {extension}, which this build of ponko doesn't read: \
+                     turn on its `{feature}` cargo feature"
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "{name}: needs the glTF extension {extension}, which ponko doesn't read ({})",
+                    ignored_because(extension)
+                ));
+            }
+        }
+    }
+    for extension in strings(&json["extensionsUsed"]) {
+        if required.contains(&extension) {
+            continue;
+        }
+        match support(&extension) {
+            Some(Support::Always | Support::Feature(_, true)) => {}
+            Some(Support::Feature(feature, false)) => warnings.push(format!(
+                "{name}: uses the glTF extension {extension} without the `{feature}` cargo feature; \
+                 its uncompressed fallback loads instead"
+            )),
+            None => warnings.push(format!(
+                "{name}: ignores the optional glTF extension {extension}: {}",
+                ignored_because(&extension)
+            )),
+        }
+    }
+
+    let folder = super::gltf::folder_of(name);
+    let mut buffers = Vec::new();
+    let mut blob = blob;
+    for (i, buffer) in json["buffers"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+    {
+        let length = buffer["byteLength"].as_u64().unwrap_or(0) as usize;
+        let fallback = meshopt(buffer).is_some_and(|m| m["fallback"].as_bool() == Some(true));
+        let data = match buffer["uri"].as_str() {
+            // A meshopt file's fallback buffer holds nothing to read when
+            // the views are decompressed (often it has no data at all).
+            _ if fallback && MESHOPT => Vec::new(),
+            Some(uri) => super::gltf::fetch(uri, folder, fetch)?,
+            None if fallback => Vec::new(),
+            None => blob.take().ok_or_else(|| format!("{name}: missing its binary chunk"))?,
+        };
+        if data.len() < length && !(fallback && data.is_empty()) {
+            return Err(format!("{name}: buffer {i} is shorter than it says"));
+        }
+        buffers.push(data);
+    }
+    decompress_views(name, &mut json, &mut buffers)?;
+    let preferred_image = texture_sources(name, &mut json)?;
+
+    // The `gltf` crate checks required extensions against its own list,
+    // which doesn't know these; they were checked above.
+    json["extensionsRequired"] = Value::Array(Vec::new());
+    let root: gltf::json::Root =
+        serde_json::from_value(json.clone()).map_err(|e| format!("{name}: not a glTF file: {e}"))?;
+    let document = gltf::Document::from_json(root).map_err(|e| format!("{name}: not a valid glTF file: {e}"))?;
+    Ok(Prepared {
+        document,
+        buffers,
+        json,
+        preferred_image,
+        warnings,
+    })
+}
+
+/// A buffer's or buffer view's meshopt extension object, by either name.
+fn meshopt(value: &Value) -> Option<&Value> {
+    extension(value, "EXT_meshopt_compression").or_else(|| extension(value, "KHR_meshopt_compression"))
+}
+
+/// Decompresses every meshopt buffer view into one new buffer at the end
+/// of `buffers`, and points the views at it. Without the `gltf-meshopt`
+/// feature, views keep their fallback data, and one without any fails.
+fn decompress_views(name: &str, json: &mut Value, buffers: &mut Vec<Vec<u8>>) -> Result<(), String> {
+    let Some(views) = json.get_mut("bufferViews").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    let mut decoded: Vec<u8> = Vec::new();
+    for (i, view) in views.iter_mut().enumerate() {
+        let Some(ext) = meshopt(view).cloned() else {
+            continue;
+        };
+        if !MESHOPT {
+            let buffer = view["buffer"].as_u64().unwrap_or(u64::MAX) as usize;
+            if buffers.get(buffer).is_none_or(Vec::is_empty) {
+                return Err(format!(
+                    "{name}: buffer view {i} is meshopt compressed with no fallback, and this build \
+                     of ponko doesn't decompress it: turn on its `gltf-meshopt` cargo feature"
+                ));
+            }
+            continue;
+        }
+        let field = |key: &str| ext[key].as_u64().map(|v| v as usize);
+        let (Some(buffer), Some(length), Some(stride), Some(count)) = (
+            field("buffer"),
+            field("byteLength"),
+            field("byteStride"),
+            field("count"),
+        ) else {
+            return Err(format!("{name}: buffer view {i} has an incomplete meshopt extension"));
+        };
+        let offset = field("byteOffset").unwrap_or(0);
+        let source = buffers
+            .get(buffer)
+            .and_then(|b| b.get(offset..offset.checked_add(length)?))
+            .ok_or_else(|| format!("{name}: buffer view {i}'s compressed data is past the end of its buffer"))?;
+        let mode = ext["mode"].as_str().unwrap_or("");
+        let filter = ext["filter"].as_str().unwrap_or("NONE");
+        let bytes =
+            decode_meshopt(source, count, stride, mode, filter).map_err(|e| format!("{name}: buffer view {i}: {e}"))?;
+        // Views start 4-byte aligned, as glTF asks.
+        decoded.resize(decoded.len().next_multiple_of(4), 0);
+        let at = decoded.len();
+        decoded.extend_from_slice(&bytes);
+        let object = view
+            .as_object_mut()
+            .expect("a buffer view with an extension is an object");
+        object.insert("buffer".into(), Value::from(buffers.len()));
+        object.insert("byteOffset".into(), Value::from(at));
+        object.insert("byteLength".into(), Value::from(bytes.len()));
+        if let Some(extensions) = object.get_mut("extensions").and_then(Value::as_object_mut) {
+            extensions.remove("EXT_meshopt_compression");
+            extensions.remove("KHR_meshopt_compression");
+        }
+    }
+    if !decoded.is_empty() {
+        let length = decoded.len();
+        buffers.push(decoded);
+        if let Some(list) = json.get_mut("buffers").and_then(Value::as_array_mut) {
+            list.push(serde_json::json!({ "byteLength": length }));
+        }
+    }
+    Ok(())
+}
+
+/// Decompresses one meshopt buffer view: `count` elements of `stride`
+/// bytes, by `mode` (ATTRIBUTES, TRIANGLES or INDICES), then `filter`.
+#[cfg(all(feature = "gltf-meshopt", not(target_arch = "wasm32")))]
+fn decode_meshopt(source: &[u8], count: usize, stride: usize, mode: &str, filter: &str) -> Result<Vec<u8>, String> {
+    use meshopt::ffi;
+    /// The most bytes one view may decompress to: a guard against a
+    /// corrupt `count` asking for gigabytes.
+    const MESHOPT_MAX_BYTES: usize = 1 << 30;
+    let bytes = count
+        .checked_mul(stride)
+        .filter(|b| *b <= MESHOPT_MAX_BYTES)
+        .ok_or_else(|| format!("{count} elements of {stride} bytes is too much to decompress"))?;
+    let stride_ok = match mode {
+        "ATTRIBUTES" => stride.is_multiple_of(4) && (4..=256).contains(&stride),
+        "TRIANGLES" => (stride == 2 || stride == 4) && count.is_multiple_of(3),
+        "INDICES" => stride == 2 || stride == 4,
+        _ => return Err(format!("unknown meshopt mode {mode:?}")),
+    };
+    if !stride_ok {
+        return Err(format!(
+            "a meshopt {mode} view can't have {count} elements of {stride} bytes"
+        ));
+    }
+    let mut out = vec![0u8; bytes];
+    // SAFETY: `out` holds `count * stride` bytes, what each decoder writes
+    // for `count` elements of `stride` bytes; the decoders read at most
+    // `source.len()` bytes of `source` and check the data (meshoptimizer
+    // decodes untrusted input safely, garbage in giving garbage out).
+    let result = unsafe {
+        let (dst, src) = (out.as_mut_ptr().cast(), source.as_ptr());
+        match mode {
+            "ATTRIBUTES" => ffi::meshopt_decodeVertexBuffer(dst, count, stride, src, source.len()),
+            "TRIANGLES" => ffi::meshopt_decodeIndexBuffer(dst, count, stride, src, source.len()),
+            _ => ffi::meshopt_decodeIndexSequence(dst, count, stride, src, source.len()),
+        }
+    };
+    if result != 0 {
+        return Err(format!("its meshopt data is corrupt (error {result})"));
+    }
+    let filter_ok = match filter {
+        "NONE" => true,
+        "OCTAHEDRAL" | "COLOR" => mode == "ATTRIBUTES" && (stride == 4 || stride == 8),
+        "QUATERNION" => mode == "ATTRIBUTES" && stride == 8,
+        "EXPONENTIAL" => mode == "ATTRIBUTES",
+        _ => return Err(format!("unknown meshopt filter {filter:?}")),
+    };
+    if !filter_ok {
+        return Err(format!(
+            "the meshopt {filter} filter doesn't apply to {mode} of {stride} bytes"
+        ));
+    }
+    // SAFETY: `out` holds `count` elements of `stride` bytes, the strides
+    // each filter accepts were checked above, and the filters only rewrite
+    // those elements in place.
+    unsafe {
+        let data = out.as_mut_ptr().cast();
+        match filter {
+            "OCTAHEDRAL" => ffi::meshopt_decodeFilterOct(data, count, stride),
+            "QUATERNION" => ffi::meshopt_decodeFilterQuat(data, count, stride),
+            "EXPONENTIAL" => ffi::meshopt_decodeFilterExp(data, count, stride),
+            "COLOR" => ffi::meshopt_decodeFilterColor(data, count, stride),
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(not(all(feature = "gltf-meshopt", not(target_arch = "wasm32"))))]
+fn decode_meshopt(_: &[u8], _: usize, _: usize, _: &str, _: &str) -> Result<Vec<u8>, String> {
+    unreachable!("meshopt views are only decompressed with the `gltf-meshopt` feature")
+}
+
+/// Texture images given by extensions (`KHR_texture_basisu`'s KTX2,
+/// `EXT_texture_webp`'s WebP) the build reads. A texture with only such an
+/// image gets it as its source (the core image is required by the `gltf`
+/// crate); one with both gets it as its preferred image, its core image
+/// staying the fallback.
+fn texture_sources(name: &str, json: &mut Value) -> Result<Vec<Option<usize>>, String> {
+    let Some(textures) = json.get_mut("textures").and_then(Value::as_array_mut) else {
+        return Ok(Vec::new());
+    };
+    let mut preferred = Vec::with_capacity(textures.len());
+    for (i, texture) in textures.iter_mut().enumerate() {
+        let readable = ["KHR_texture_basisu", "EXT_texture_webp"].into_iter().find_map(|ext| {
+            let source = extension(texture, ext)?["source"].as_u64()? as usize;
+            matches!(support(ext), Some(Support::Feature(_, true))).then_some(source)
+        });
+        let has_core = texture.get("source").is_some_and(|s| s.is_u64());
+        match (readable, has_core) {
+            (Some(source), false) => {
+                texture["source"] = Value::from(source);
+                preferred.push(None);
+            }
+            (Some(source), true) => preferred.push(Some(source)),
+            (None, true) => preferred.push(None),
+            (None, false) => {
+                let wanted = ["KHR_texture_basisu", "EXT_texture_webp"]
+                    .into_iter()
+                    .find(|ext| extension(texture, ext).is_some());
+                return Err(match wanted.and_then(|ext| Some((ext, support(ext)?))) {
+                    Some((ext, Support::Feature(feature, _))) => format!(
+                        "{name}: texture {i} has only an {ext} image, which this build of ponko doesn't \
+                         read: turn on its `{feature}` cargo feature"
+                    ),
+                    _ => format!("{name}: texture {i} has no image"),
+                });
+            }
+        }
+    }
+    Ok(preferred)
+}
+
+/// Reads accessor `accessor` as `N`-component vectors of floats, whatever
+/// its component type: floats, or integers (normalized to -1..1 or 0..1
+/// when it says so), as `KHR_mesh_quantization` allows for positions,
+/// normals, texture coordinates and morph target offsets. Sparse
+/// accessors are filled in.
+pub(super) fn read_floats<const N: usize>(
+    accessor: &gltf::Accessor,
+    buffers: &[Vec<u8>],
+    name: &str,
+) -> Result<Vec<[f32; N]>, String> {
+    use gltf::accessor::DataType;
+    let bad = |why: &str| format!("{name}: accessor {} {why}", accessor.index());
+    if accessor.dimensions().multiplicity() != N {
+        return Err(bad(&format!(
+            "has {} components, not {N}",
+            accessor.dimensions().multiplicity()
+        )));
+    }
+    let ty = accessor.data_type();
+    let size = ty.size();
+    let normalized = accessor.normalized();
+    let component = move |b: &[u8]| -> f32 {
+        let v = match ty {
+            DataType::I8 => f32::from(b[0] as i8),
+            DataType::U8 => f32::from(b[0]),
+            DataType::I16 => f32::from(i16::from_le_bytes([b[0], b[1]])),
+            DataType::U16 => f32::from(u16::from_le_bytes([b[0], b[1]])),
+            DataType::U32 => u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32,
+            DataType::F32 => return f32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+        };
+        if !normalized {
+            return v;
+        }
+        match ty {
+            DataType::I8 => (v / 127.0).max(-1.0),
+            DataType::U8 => v / 255.0,
+            DataType::I16 => (v / 32767.0).max(-1.0),
+            DataType::U16 => v / 65535.0,
+            _ => v,
+        }
+    };
+    let element = move |data: &[u8], at: usize| -> Option<[f32; N]> {
+        let bytes = data.get(at..at.checked_add(size * N)?)?;
+        Some(std::array::from_fn(|k| component(&bytes[k * size..])))
+    };
+    let count = accessor.count();
+    let mut out = vec![[0.0; N]; count];
+    if let Some(view) = accessor.view() {
+        let data = view_bytes(&view, buffers).ok_or_else(|| bad("is past the end of its buffer"))?;
+        let stride = view.stride().unwrap_or(size * N);
+        for (i, v) in out.iter_mut().enumerate() {
+            *v = element(data, accessor.offset() + i * stride).ok_or_else(|| bad("is past the end of its view"))?;
+        }
+    }
+    if let Some(sparse) = accessor.sparse() {
+        let indices = sparse.indices();
+        let index_data =
+            view_bytes(&indices.view(), buffers).ok_or_else(|| bad("has sparse indices past its buffer"))?;
+        let index_size = indices.index_type().size();
+        let values = sparse.values();
+        let value_data = view_bytes(&values.view(), buffers).ok_or_else(|| bad("has sparse values past its buffer"))?;
+        for k in 0..sparse.count() {
+            let at = indices.offset() + k * index_size;
+            let b = index_data
+                .get(at..at + index_size)
+                .ok_or_else(|| bad("has sparse indices past their view"))?;
+            let index = match index_size {
+                1 => usize::from(b[0]),
+                2 => usize::from(u16::from_le_bytes([b[0], b[1]])),
+                _ => u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize,
+            };
+            let value = element(value_data, values.offset() + k * size * N)
+                .ok_or_else(|| bad("has sparse values past their view"))?;
+            *out.get_mut(index)
+                .ok_or_else(|| bad("has a sparse index past its end"))? = value;
+        }
+    }
+    Ok(out)
+}
+
+/// The bytes of buffer view `view`.
+fn view_bytes<'b>(view: &gltf::buffer::View, buffers: &'b [Vec<u8>]) -> Option<&'b [u8]> {
+    buffers
+        .get(view.buffer().index())?
+        .get(view.offset()..view.offset().checked_add(view.length())?)
+}
+
+/// How a material's textures are laid on its meshes: which texture
+/// coordinate set, moved by `KHR_texture_transform`. The renderer samples
+/// every map of a material with one set of coordinates, so the transform
+/// is applied to the coordinates when the file loads.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct UvMapping {
+    pub set: u32,
+    pub transform: Option<Mat3>,
+}
+
+impl UvMapping {
+    pub const PLAIN: Self = Self {
+        set: 0,
+        transform: None,
+    };
+
+    pub fn apply(&self, uv: Vec2) -> Vec2 {
+        self.transform.map_or(uv, |m| m.transform_point2(uv))
+    }
+}
+
+/// The mapping of one texture reference (`textureInfo` JSON).
+fn mapping_of(info: &Value) -> UvMapping {
+    let mut set = info["texCoord"].as_u64().unwrap_or(0) as u32;
+    let transform = extension(info, "KHR_texture_transform").map(|t| {
+        let offset = vec2_of(&t["offset"]).unwrap_or(Vec2::ZERO);
+        let rotation = t["rotation"].as_f64().unwrap_or(0.0) as f32;
+        let scale = vec2_of(&t["scale"]).unwrap_or(Vec2::ONE);
+        if let Some(s) = t["texCoord"].as_u64() {
+            set = s as u32;
+        }
+        // The extension's matrix: translation * rotation * scale, with
+        // rotation counter-clockwise in UV space ([cos sin; -sin cos] by rows).
+        let (sin, cos) = rotation.sin_cos();
+        let rotate = Mat3::from_cols(Vec3::new(cos, -sin, 0.0), Vec3::new(sin, cos, 0.0), Vec3::Z);
+        Mat3::from_translation(offset) * rotate * Mat3::from_scale(scale)
+    });
+    UvMapping { set, transform }
+}
+
+fn vec2_of(v: &Value) -> Option<Vec2> {
+    Some(Vec2::new(v.get(0)?.as_f64()? as f32, v.get(1)?.as_f64()? as f32))
+}
+
+/// Extension data of material `material` (its JSON).
+pub(super) struct MaterialExtensions {
+    pub mapping: UvMapping,
+    /// `KHR_materials_emissive_strength`: multiplies the emissive color.
+    pub emissive_strength: f32,
+    /// `KHR_materials_transmission`'s factor: how much light passes through.
+    pub transmission: f32,
+}
+
+/// Reads material `index`'s extensions; warns (into `warnings`) when its
+/// textures ask for different mappings, which one set of coordinates
+/// can't give.
+pub(super) fn material_extensions(
+    json: &Value,
+    index: usize,
+    file: &str,
+    warnings: &mut Vec<String>,
+) -> MaterialExtensions {
+    let material = &json["materials"][index];
+    let pbr = &material["pbrMetallicRoughness"];
+    // The base color's mapping wins: it's what shows most.
+    let infos = [
+        &pbr["baseColorTexture"],
+        &material["emissiveTexture"],
+        &material["normalTexture"],
+        &pbr["metallicRoughnessTexture"],
+        &material["occlusionTexture"],
+    ];
+    let mappings: Vec<UvMapping> = infos.iter().filter(|i| i.is_object()).map(|i| mapping_of(i)).collect();
+    let mapping = mappings.first().copied().unwrap_or(UvMapping::PLAIN);
+    if mappings.iter().any(|m| *m != mapping) {
+        let label = material["name"]
+            .as_str()
+            .map_or_else(|| format!("material {index}"), |n| format!("material {n:?}"));
+        warnings.push(format!(
+            "{file}: {label}'s textures use different texture coordinates or transforms; \
+             all of them follow its first texture's"
+        ));
+    }
+    MaterialExtensions {
+        mapping,
+        emissive_strength: extension(material, "KHR_materials_emissive_strength")
+            .and_then(|e| e["emissiveStrength"].as_f64())
+            .map_or(1.0, |s| s as f32),
+        transmission: extension(material, "KHR_materials_transmission")
+            .and_then(|e| e["transmissionFactor"].as_f64())
+            .map_or(0.0, |t| (t as f32).clamp(0.0, 1.0)),
+    }
+}
+
+/// The light a file's punctual light gives at a distance where ponko's
+/// lights stop when the file says no range: its range is where its
+/// intensity over distance squared falls to this.
+const UNLIMITED_RANGE_CUTOFF: f32 = 0.01;
+
+/// What a glTF file's light is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ModelLightKind {
+    /// A point light (`KHR_lights_punctual`'s `point`).
+    Point(PointLight3D),
+    /// A spot light (`spot`), shining along the light's -Z.
+    Spot(SpotLight3D),
+    /// A directional light (`directional`), shining along the light's -Z:
+    /// the scene's sun, set on [`Lighting`](crate::render::Lighting).
+    Sun {
+        /// sRGB color.
+        color: Color,
+        /// Intensity in lux, which is what [`Lighting::sun_intensity`](crate::render::Lighting::sun_intensity) means.
+        intensity: f32,
+    },
+}
+
+/// A light placed in a glTF file (`KHR_lights_punctual`), from
+/// [`Graphics::load_lights`](crate::gfx::Graphics::load_lights).
+///
+/// Point and spot intensities are the file's candela divided by
+/// [`CANDELA_PER_UNIT`](Self::CANDELA_PER_UNIT), as Blender converts its
+/// watts; a light the file gives no range reaches where it has faded to
+/// almost nothing. Lights don't cast shadows unless you turn that on.
+///
+/// ```
+/// # use ponko::prelude::*;
+/// use ponko::render::{ModelLight, ModelLightKind};
+/// let lamp = ModelLight {
+///     name: "lamp".into(),
+///     transform: ponko::d3::Transform::at(vec3(0.0, 2.0, 0.0)),
+///     kind: ModelLightKind::Point(ponko::d3::PointLight::default()),
+/// };
+/// let mut world = World::new();
+/// let house = ponko::d3::Transform::at(vec3(10.0, 0.0, 0.0));
+/// let light = lamp.spawn(&mut world, &house).unwrap();
+/// let placed = world.get::<ponko::d3::Transform>(light).unwrap();
+/// assert_eq!(placed.position, vec3(10.0, 2.0, 0.0));
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelLight {
+    /// Its name in the file (its node's, or the light's), or empty.
+    pub name: String,
+    /// Where it is relative to the model; it points along its -Z.
+    pub transform: Transform3D,
+    /// What kind of light it is, with its color, intensity and reach.
+    pub kind: ModelLightKind,
+}
+
+impl ModelLight {
+    /// The luminous efficacy Blender's glTF exporter uses (683 lm/W): a
+    /// point or spot light of `I` candela in a file is `I / 683` in ponko's
+    /// units, in which the sun's intensity is the file's lux as it is.
+    pub const CANDELA_PER_UNIT: f32 = 683.0;
+
+    /// Where it is in the world, for a model at `model`.
+    #[must_use]
+    pub fn placed(&self, model: &Transform3D) -> Transform3D {
+        compose(model, &self.transform)
+    }
+
+    /// Spawns a point or spot light where it is in the world for a model at
+    /// `model`, and returns it; a sun isn't an entity (set it on
+    /// [`Lighting`](crate::render::Lighting)), so that returns `None`.
+    pub fn spawn(&self, world: &mut ponko_ecs::World, model: &Transform3D) -> Option<ponko_ecs::Entity> {
+        let at = self.placed(model);
+        match self.kind {
+            ModelLightKind::Point(light) => Some(world.spawn((at, light))),
+            ModelLightKind::Spot(light) => Some(world.spawn((at, light))),
+            ModelLightKind::Sun { .. } => None,
+        }
+    }
+}
+
+/// How a glTF camera projects.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ModelProjection {
+    /// Things farther away look smaller.
+    Perspective {
+        /// Vertical field of view, radians.
+        fov_y: f32,
+        /// Width over height, if the file gives one.
+        aspect: Option<f32>,
+        /// Nothing closer than this is drawn.
+        near: f32,
+        /// `None`: no far plane.
+        far: Option<f32>,
+    },
+    /// Things keep their size at any distance.
+    Orthographic {
+        /// Half the view's width, in world units.
+        half_width: f32,
+        /// Half the view's height, in world units.
+        half_height: f32,
+        /// Nothing closer than this is drawn.
+        near: f32,
+        /// Nothing farther than this is drawn.
+        far: f32,
+    },
+}
+
+/// A camera placed in a glTF file, from
+/// [`Graphics::load_cameras`](crate::gfx::Graphics::load_cameras).
+///
+/// ```
+/// # use ponko::prelude::*;
+/// use ponko::render::{ModelCamera, ModelProjection};
+/// let shot = ModelCamera {
+///     name: "intro".into(),
+///     transform: ponko::d3::Transform::at(vec3(0.0, 1.0, 5.0)),
+///     projection: ModelProjection::Perspective { fov_y: 0.8, aspect: None, near: 0.05, far: Some(200.0) },
+/// };
+/// Game::new("t", 1, 1).run_headless(0, |ctx| {
+///     shot.apply(&mut ctx.scene3d.camera, &ponko::d3::Transform::default());
+///     assert_eq!(ctx.scene3d.camera.fov_y, 0.8);
+///     assert_eq!(ctx.scene3d.camera.position, vec3(0.0, 1.0, 5.0));
+/// });
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelCamera {
+    /// Its name in the file (its node's, or the camera's), or empty.
+    pub name: String,
+    /// Where it is relative to the model; it looks along its -Z.
+    pub transform: Transform3D,
+    /// How it projects.
+    pub projection: ModelProjection,
+}
+
+impl ModelCamera {
+    /// Where it is in the world, for a model at `model`.
+    #[must_use]
+    pub fn placed(&self, model: &Transform3D) -> Transform3D {
+        compose(model, &self.transform)
+    }
+
+    /// Puts `camera` where this one is for a model at `model`, with its
+    /// field of view and clip planes. [`Camera3D`](crate::d3::Camera) is a
+    /// perspective camera: an orthographic one sets only its place and
+    /// clip planes. The window keeps its own aspect ratio.
+    pub fn apply(&self, camera: &mut super::Camera3D, model: &Transform3D) {
+        let at = self.placed(model);
+        camera.position = at.position;
+        camera.rotation = at.rotation;
+        match self.projection {
+            ModelProjection::Perspective { fov_y, near, far, .. } => {
+                camera.fov_y = fov_y;
+                camera.near = near;
+                if let Some(far) = far {
+                    camera.far = far;
+                }
+            }
+            ModelProjection::Orthographic { near, far, .. } => {
+                camera.near = near;
+                camera.far = far;
+            }
+        }
+    }
+}
+
+/// `child` placed in `parent`'s space.
+fn compose(parent: &Transform3D, child: &Transform3D) -> Transform3D {
+    transform_of(parent.matrix() * child.matrix())
+}
+
+fn transform_of(matrix: Mat4) -> Transform3D {
+    let (scale, rotation, position) = matrix.to_scale_rotation_translation();
+    Transform3D {
+        position,
+        rotation: rotation.normalize(),
+        scale,
+    }
+}
+
+/// The light of node `node` (its JSON index) placed by `world`, if it has
+/// one.
+pub(super) fn light_of(json: &Value, node: usize, world: Mat4, node_name: Option<&str>) -> Option<ModelLight> {
+    let index = extension(&json["nodes"][node], "KHR_lights_punctual")?["light"].as_u64()? as usize;
+    let light = extension(json, "KHR_lights_punctual")?["lights"].get(index)?;
+    let [r, g, b] = [0, 1, 2].map(|i| light["color"].get(i).and_then(Value::as_f64).map_or(1.0, |c| c as f32));
+    let color = Color::rgb(
+        super::gltf::to_srgb(r),
+        super::gltf::to_srgb(g),
+        super::gltf::to_srgb(b),
+    );
+    let intensity = light["intensity"].as_f64().map_or(1.0, |i| i as f32).max(0.0);
+    let units = intensity / ModelLight::CANDELA_PER_UNIT;
+    let range = light["range"]
+        .as_f64()
+        .map(|r| r as f32)
+        .filter(|r| *r > 0.0)
+        .unwrap_or_else(|| (units / UNLIMITED_RANGE_CUTOFF).sqrt());
+    let kind = match light["type"].as_str()? {
+        "directional" => ModelLightKind::Sun { color, intensity },
+        "point" => ModelLightKind::Point(PointLight3D {
+            color,
+            intensity: units,
+            range,
+            ..Default::default()
+        }),
+        "spot" => {
+            let spot = &light["spot"];
+            // ponko's cones stop short of a half angle of 90°.
+            let outer = spot["outerConeAngle"]
+                .as_f64()
+                .map_or(std::f32::consts::FRAC_PI_4, |a| a as f32)
+                .clamp(0.0, std::f32::consts::FRAC_PI_2 - 1e-3);
+            let inner = spot["innerConeAngle"]
+                .as_f64()
+                .map_or(0.0, |a| a as f32)
+                .clamp(0.0, outer);
+            ModelLightKind::Spot(SpotLight3D {
+                color,
+                intensity: units,
+                range,
+                inner_angle: inner,
+                outer_angle: outer,
+                ..Default::default()
+            })
+        }
+        _ => return None,
+    };
+    let name = light["name"].as_str().or(node_name).unwrap_or("").to_string();
+    Some(ModelLight {
+        name,
+        transform: transform_of(world),
+        kind,
+    })
+}
+
+/// Node `node`'s camera placed by `world`, if it has one.
+pub(super) fn camera_of(node: &gltf::Node, world: Mat4) -> Option<ModelCamera> {
+    let camera = node.camera()?;
+    let projection = match camera.projection() {
+        gltf::camera::Projection::Perspective(p) => ModelProjection::Perspective {
+            fov_y: p.yfov(),
+            aspect: p.aspect_ratio(),
+            near: p.znear(),
+            far: p.zfar(),
+        },
+        gltf::camera::Projection::Orthographic(o) => ModelProjection::Orthographic {
+            half_width: o.xmag(),
+            half_height: o.ymag(),
+            near: o.znear(),
+            far: o.zfar(),
+        },
+    };
+    let name = camera.name().or(node.name()).unwrap_or("").to_string();
+    Some(ModelCamera {
+        name,
+        transform: transform_of(world),
+        projection,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::gltf::{Loaded, load};
+    use super::*;
+    use serde_json::json;
+
+    /// Builds a glTF file's buffer, views and accessors from values.
+    #[derive(Default)]
+    struct File {
+        bin: Vec<u8>,
+        views: Vec<Value>,
+        accessors: Vec<Value>,
+    }
+
+    impl File {
+        /// Adds `bytes` as a buffer view (with `stride` for vertex data).
+        fn view(&mut self, bytes: &[u8], stride: Option<usize>) -> usize {
+            self.bin.resize(self.bin.len().next_multiple_of(4), 0);
+            let mut view = json!({ "buffer": 0, "byteOffset": self.bin.len(), "byteLength": bytes.len() });
+            if let Some(stride) = stride {
+                view["byteStride"] = json!(stride);
+            }
+            self.bin.extend_from_slice(bytes);
+            self.views.push(view);
+            self.views.len() - 1
+        }
+
+        /// Adds an accessor; `extra` is merged into it (min, max, sparse).
+        fn accessor(
+            &mut self,
+            view: Option<usize>,
+            component: u32,
+            normalized: bool,
+            count: usize,
+            ty: &str,
+            extra: Value,
+        ) -> usize {
+            let mut a = json!({ "componentType": component, "normalized": normalized, "count": count, "type": ty });
+            if let Some(view) = view {
+                a["bufferView"] = json!(view);
+            }
+            for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+                a[k] = v;
+            }
+            self.accessors.push(a);
+            self.accessors.len() - 1
+        }
+
+        /// Floats as a view and a VEC`n` accessor.
+        fn floats(&mut self, values: &[f32], n: usize) -> usize {
+            let bytes: Vec<u8> = values.iter().flat_map(|f| f.to_le_bytes()).collect();
+            let view = self.view(&bytes, None);
+            let ty = ["", "SCALAR", "VEC2", "VEC3", "VEC4"][n];
+            let extra = if n == 3 { bounds(values) } else { json!({}) };
+            self.accessor(Some(view), 5126, false, values.len() / n, ty, extra)
+        }
+
+        /// The file's JSON: `doc` with this file's buffer, views and accessors.
+        fn gltf(&self, mut doc: Value) -> String {
+            let b64 = to_base64(&self.bin);
+            doc["asset"] = json!({ "version": "2.0" });
+            doc["buffers"] =
+                json!([{ "byteLength": self.bin.len(), "uri": format!("data:application/octet-stream;base64,{b64}") }]);
+            doc["bufferViews"] = json!(self.views);
+            doc["accessors"] = json!(self.accessors);
+            doc.to_string()
+        }
+    }
+
+    /// Min and max of VEC3 floats, which glTF needs on positions.
+    fn bounds(values: &[f32]) -> Value {
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for v in values.chunks(3) {
+            for k in 0..3 {
+                lo[k] = lo[k].min(v[k]);
+                hi[k] = hi[k].max(v[k]);
+            }
+        }
+        json!({ "min": lo, "max": hi })
+    }
+
+    fn to_base64(bytes: &[u8]) -> String {
+        let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let n = chunk
+                .iter()
+                .enumerate()
+                .fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
+            for i in 0..=chunk.len() {
+                out.push(alphabet[(n >> (18 - 6 * i) & 63) as usize] as char);
+            }
+        }
+        while !out.len().is_multiple_of(4) {
+            out.push('=');
+        }
+        out
+    }
+
+    fn load_str(name: &str, text: &str) -> Result<Loaded, String> {
+        load(name, text.as_bytes(), &mut |f| Err(format!("no {f}")), &|_| false)
+    }
+
+    /// A PNG of one pixel, as a data URI.
+    fn png(pixel: [u8; 4]) -> String {
+        let image = image::RgbaImage::from_fn(1, 1, |_, _| image::Rgba(pixel));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        format!("data:image/png;base64,{}", to_base64(&bytes.into_inner()))
+    }
+
+    const TRIANGLE: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+    /// One triangle on node 0 with `material`, and whatever `extra` adds.
+    fn triangle(file: &mut File, uvs: Option<&[f32]>, extra: Value) -> String {
+        let position = file.floats(&TRIANGLE, 3);
+        let mut attributes = json!({ "POSITION": position });
+        if let Some(uvs) = uvs {
+            attributes["TEXCOORD_0"] = json!(file.floats(uvs, 2));
+            let second: Vec<f32> = uvs.iter().map(|v| v * 10.0).collect();
+            attributes["TEXCOORD_1"] = json!(file.floats(&second, 2));
+        }
+        let mut doc = json!({
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0 }],
+            "meshes": [{ "primitives": [{ "attributes": attributes, "material": 0 }] }],
+            "materials": [{}],
+        });
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            doc[k] = v;
+        }
+        file.gltf(doc)
+    }
+
+    fn close(a: Vec2, b: Vec2) -> bool {
+        (a - b).length() < 1e-5
+    }
+
+    #[test]
+    fn quantized_positions_normals_and_texture_coordinates_read_as_floats() {
+        let mut file = File::default();
+        // Positions as unsigned shorts scaled down by the node, as gltfpack
+        // writes them; a stride of 8 keeps each one 4-byte aligned.
+        let positions: Vec<u8> = [[0u16, 0, 0], [1000, 0, 0], [0, 1000, 0]]
+            .iter()
+            .flat_map(|p| p.iter().flat_map(|c| c.to_le_bytes()).chain([0, 0]))
+            .collect();
+        let view = file.view(&positions, Some(8));
+        let position = file.accessor(
+            Some(view),
+            5123,
+            false,
+            3,
+            "VEC3",
+            json!({ "min": [0, 0, 0], "max": [1000, 1000, 0] }),
+        );
+        // Normals as normalized bytes (not unit length: 127 rounds).
+        let normals: Vec<u8> = [[0i8, 0, 127, 0]; 3].iter().flatten().map(|b| *b as u8).collect();
+        let view = file.view(&normals, Some(4));
+        let normal = file.accessor(Some(view), 5120, true, 3, "VEC3", json!({}));
+        // Texture coordinates as normalized unsigned shorts.
+        let uvs: Vec<u8> = [[0u16, 0], [65535, 0], [0, 32768]]
+            .iter()
+            .flatten()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+        let view = file.view(&uvs, None);
+        let uv = file.accessor(Some(view), 5123, true, 3, "VEC2", json!({}));
+        let text = file.gltf(json!({
+            "extensionsUsed": ["KHR_mesh_quantization"],
+            "extensionsRequired": ["KHR_mesh_quantization"],
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0, "scale": [0.001, 0.001, 0.001] }],
+            "meshes": [{ "primitives": [{ "attributes": { "POSITION": position, "NORMAL": normal, "TEXCOORD_0": uv } }] }],
+        }));
+        let loaded = load_str("quantized.gltf", &text).unwrap();
+        let p = &loaded.data.positions;
+        assert!(
+            (p[1] - Vec3::X).length() < 1e-6 && (p[2] - Vec3::Y).length() < 1e-6,
+            "{p:?}"
+        );
+        assert!(loaded.data.normals.iter().all(|n| (*n - Vec3::Z).length() < 1e-6));
+        let uv = &loaded.data.uvs;
+        assert!(
+            close(uv[1], Vec2::new(1.0, 0.0)) && (uv[2].y - 32768.0 / 65535.0).abs() < 1e-6,
+            "{uv:?}"
+        );
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn quantized_sparse_morph_targets_fill_in_their_offsets() {
+        let mut file = File::default();
+        let position = file.floats(&TRIANGLE, 3);
+        // Target offsets: zero but for corner 2, moved up by a normalized
+        // short of half (sparse: one index, one value).
+        let indices = file.view(&[2u8], None);
+        let values: Vec<u8> = [0i16, 16384, 0].iter().flat_map(|c| c.to_le_bytes()).collect();
+        let values = file.view(&values, None);
+        let target = file.accessor(
+            None,
+            5122,
+            true,
+            3,
+            "VEC3",
+            json!({ "sparse": { "count": 1,
+                "indices": { "bufferView": indices, "componentType": 5121 },
+                "values": { "bufferView": values } } }),
+        );
+        let text = file.gltf(json!({
+            "extensionsUsed": ["KHR_mesh_quantization"],
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0 }],
+            "meshes": [{ "primitives": [{ "attributes": { "POSITION": position }, "targets": [{ "POSITION": target }] }],
+                         "extras": { "targetNames": ["lift"] } }],
+        }));
+        let loaded = load_str("sparse.gltf", &text).unwrap();
+        let lift = &loaded.data.morph_targets[0];
+        assert_eq!(lift.name, "lift");
+        assert_eq!(lift.positions[0], Vec3::ZERO);
+        assert!((lift.positions[2] - Vec3::new(0.0, 16384.0 / 32767.0, 0.0)).length() < 1e-6);
+    }
+
+    #[test]
+    fn texture_transforms_move_the_texture_coordinates() {
+        let mut file = File::default();
+        let uvs = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        let transform = json!({ "offset": [0.5, 0.25], "rotation": std::f32::consts::FRAC_PI_2, "scale": [2.0, 3.0] });
+        let text = triangle(
+            &mut file,
+            Some(&uvs),
+            json!({
+                "extensionsUsed": ["KHR_texture_transform"],
+                "materials": [{ "pbrMetallicRoughness": { "baseColorTexture": {
+                    "index": 0, "extensions": { "KHR_texture_transform": transform } } } }],
+                "textures": [{ "source": 0 }],
+                "images": [{ "uri": png([255, 255, 255, 255]) }],
+            }),
+        );
+        let loaded = load_str("moved.gltf", &text).unwrap();
+        // The extension's order: scale, then rotate (counter-clockwise by
+        // its matrix [cos sin; -sin cos]), then offset.
+        let expect = |u: f32, v: f32| {
+            let (s, c) = std::f32::consts::FRAC_PI_2.sin_cos();
+            let (u, v) = (u * 2.0, v * 3.0);
+            Vec2::new(c * u + s * v + 0.5, -s * u + c * v + 0.25)
+        };
+        let uv = &loaded.data.uvs;
+        assert!(
+            close(uv[0], expect(0.0, 0.0)) && close(uv[1], expect(1.0, 0.0)) && close(uv[2], expect(0.0, 1.0)),
+            "{uv:?}"
+        );
+        assert!(close(uv[1], Vec2::new(0.5, -1.75)), "{uv:?}");
+        // The second set, for shaders, is left as it is.
+        assert!(close(loaded.data.uvs1[1], Vec2::new(10.0, 0.0)));
+    }
+
+    #[test]
+    fn a_texture_transform_can_pick_the_second_coordinate_set() {
+        let mut file = File::default();
+        let uvs = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        let text = triangle(
+            &mut file,
+            Some(&uvs),
+            json!({
+                "materials": [{ "emissiveTexture": { "index": 0, "extensions": { "KHR_texture_transform": {
+                    "texCoord": 1, "scale": [0.5, 0.5] } } } }],
+                "textures": [{ "source": 0 }],
+                "images": [{ "uri": png([255, 255, 255, 255]) }],
+            }),
+        );
+        let loaded = load_str("second.gltf", &text).unwrap();
+        // TEXCOORD_1 is ten times TEXCOORD_0, halved.
+        assert!(close(loaded.data.uvs[1], Vec2::new(5.0, 0.0)), "{:?}", loaded.data.uvs);
+    }
+
+    #[test]
+    fn textures_asking_for_different_transforms_follow_the_base_color_and_warn() {
+        let mut file = File::default();
+        let uvs = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        let text = triangle(
+            &mut file,
+            Some(&uvs),
+            json!({
+                "materials": [{ "name": "brick",
+                    "pbrMetallicRoughness": { "baseColorTexture": { "index": 0,
+                        "extensions": { "KHR_texture_transform": { "scale": [4.0, 4.0] } } } },
+                    "normalTexture": { "index": 0 } }],
+                "textures": [{ "source": 0 }],
+                "images": [{ "uri": png([255, 255, 255, 255]) }],
+            }),
+        );
+        let loaded = load_str("mixed.gltf", &text).unwrap();
+        assert!(close(loaded.data.uvs[1], Vec2::new(4.0, 0.0)));
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|w| w.contains("\"brick\"") && w.contains("transforms")),
+            "{:?}",
+            loaded.warnings
+        );
+    }
+
+    #[test]
+    fn emissive_strength_multiplies_the_emissive_color() {
+        let mut file = File::default();
+        let text = triangle(
+            &mut file,
+            None,
+            json!({
+                "extensionsUsed": ["KHR_materials_emissive_strength"],
+                "materials": [{ "emissiveFactor": [1.0, 0.5, 0.0],
+                    "extensions": { "KHR_materials_emissive_strength": { "emissiveStrength": 4.0 } } }],
+            }),
+        );
+        let loaded = load_str("bright.gltf", &text).unwrap();
+        let [r, g, b, _] = super::super::linear(loaded.materials[0].emissive);
+        assert!(
+            (r - 4.0).abs() < 1e-3 && (g - 2.0).abs() < 1e-3 && b == 0.0,
+            "{r} {g} {b}"
+        );
+    }
+
+    #[test]
+    fn transmission_draws_as_see_through_blending() {
+        let mut file = File::default();
+        let text = triangle(
+            &mut file,
+            None,
+            json!({
+                "extensionsUsed": ["KHR_materials_transmission", "KHR_materials_ior"],
+                "materials": [{ "extensions": { "KHR_materials_transmission": { "transmissionFactor": 0.75 },
+                                                "KHR_materials_ior": { "ior": 1.5 } } }],
+            }),
+        );
+        let loaded = load_str("glass.gltf", &text).unwrap();
+        let m = &loaded.materials[0];
+        assert_eq!(m.blend, super::super::Blend::Transparent);
+        assert!((m.color.a - 0.25).abs() < 1e-6);
+        // Refraction isn't drawn: the warning says so and names it.
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|w| w.contains("KHR_materials_ior") && w.contains("refraction"))
+        );
+    }
+
+    #[test]
+    fn unsupported_required_extensions_are_errors_naming_them() {
+        let mut file = File::default();
+        let text = triangle(
+            &mut file,
+            None,
+            json!({ "extensionsUsed": ["KHR_draco_mesh_compression"], "extensionsRequired": ["KHR_draco_mesh_compression"] }),
+        );
+        let error = load_str("squeezed.glb", &text).err().unwrap();
+        assert!(
+            error.contains("squeezed.glb") && error.contains("KHR_draco_mesh_compression"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn unsupported_optional_extensions_load_with_a_warning_naming_them() {
+        let mut file = File::default();
+        let text = triangle(
+            &mut file,
+            None,
+            json!({ "extensionsUsed": ["KHR_materials_clearcoat", "VENDOR_something"],
+                    "materials": [{ "extensions": { "KHR_materials_clearcoat": { "clearcoatFactor": 1.0 } } }] }),
+        );
+        let loaded = load_str("coated.gltf", &text).unwrap();
+        assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
+        assert!(loaded.warnings[0].contains("KHR_materials_clearcoat") && loaded.warnings[0].contains("clear coat"));
+        assert!(loaded.warnings[1].contains("VENDOR_something"));
+    }
+
+    /// A file with a point, a spot and a directional light, the spot on a
+    /// child node, and two cameras.
+    fn lit(file: &mut File) -> String {
+        let quarter = std::f32::consts::FRAC_1_SQRT_2;
+        triangle(
+            file,
+            None,
+            json!({
+                "extensionsUsed": ["KHR_lights_punctual"],
+                "extensions": { "KHR_lights_punctual": { "lights": [
+                    { "type": "point", "name": "bulb", "color": [1.0, 0.5, 0.0], "intensity": 6830.0 },
+                    { "type": "spot", "intensity": 683.0, "range": 7.0,
+                      "spot": { "innerConeAngle": 0.2, "outerConeAngle": 1.6 } },
+                    { "type": "directional", "intensity": 3.0 },
+                ] } },
+                "scenes": [{ "nodes": [0, 1, 3, 4] }],
+                "nodes": [
+                    { "mesh": 0 },
+                    { "name": "porch", "translation": [0, 3, 0], "children": [2],
+                      "extensions": { "KHR_lights_punctual": { "light": 0 } } },
+                    { "name": "beam", "translation": [1, 0, 0], "rotation": [-quarter, 0, 0, quarter],
+                      "extensions": { "KHR_lights_punctual": { "light": 1 } } },
+                    { "name": "sun", "extensions": { "KHR_lights_punctual": { "light": 2 } } },
+                    { "name": "rig", "translation": [0, 0, 5], "children": [5, 6] },
+                    { "camera": 0, "translation": [0, 1, 0] },
+                    { "camera": 1, "name": "map" },
+                ],
+                "cameras": [
+                    { "type": "perspective", "name": "intro",
+                      "perspective": { "yfov": 0.7, "aspectRatio": 1.5, "znear": 0.05, "zfar": 300.0 } },
+                    { "type": "orthographic", "orthographic": { "xmag": 8.0, "ymag": 6.0, "znear": 0.1, "zfar": 50.0 } },
+                ],
+            }),
+        )
+    }
+
+    #[test]
+    fn lights_are_placed_by_their_nodes_in_ponko_units() {
+        let mut file = File::default();
+        let loaded = load_str("lit.gltf", &lit(&mut file)).unwrap();
+        let by_name = |n: &str| {
+            loaded
+                .lights
+                .iter()
+                .find(|l| l.name == n)
+                .unwrap_or_else(|| panic!("no {n}"))
+        };
+        let bulb = by_name("bulb");
+        assert_eq!(bulb.transform.position, Vec3::new(0.0, 3.0, 0.0));
+        let ModelLightKind::Point(point) = bulb.kind else {
+            panic!("{:?}", bulb.kind)
+        };
+        assert!((point.intensity - 10.0).abs() < 1e-4, "6830 cd is 10 units");
+        assert!(
+            (point.range - (10.0f32 / 0.01).sqrt()).abs() < 1e-3,
+            "no range: where it fades out"
+        );
+        assert!((point.color.r - 1.0).abs() < 1e-6 && (point.color.g - super::super::gltf::to_srgb(0.5)).abs() < 1e-6);
+        // The spot hangs off the porch, turned to point down, its cone
+        // narrowed to below 90 degrees.
+        let beam = by_name("beam");
+        assert!((beam.transform.position - Vec3::new(1.0, 3.0, 0.0)).length() < 1e-5);
+        assert!(
+            (beam.transform.forward() - Vec3::NEG_Y).length() < 1e-5,
+            "{}",
+            beam.transform.forward()
+        );
+        let ModelLightKind::Spot(spot) = beam.kind else {
+            panic!("{:?}", beam.kind)
+        };
+        assert_eq!((spot.intensity, spot.range, spot.inner_angle), (1.0, 7.0, 0.2));
+        assert!(spot.outer_angle < std::f32::consts::FRAC_PI_2 && spot.outer_angle > 1.56);
+        let sun = by_name("sun");
+        assert_eq!(
+            sun.kind,
+            ModelLightKind::Sun {
+                color: Color::rgb(1.0, 1.0, 1.0),
+                intensity: 3.0
+            }
+        );
+    }
+
+    #[test]
+    fn cameras_are_placed_by_their_nodes() {
+        let mut file = File::default();
+        let loaded = load_str("lit.gltf", &lit(&mut file)).unwrap();
+        assert_eq!(loaded.cameras.len(), 2);
+        let intro = loaded.cameras.iter().find(|c| c.name == "intro").unwrap();
+        assert_eq!(intro.transform.position, Vec3::new(0.0, 1.0, 5.0));
+        assert_eq!(
+            intro.projection,
+            ModelProjection::Perspective {
+                fov_y: 0.7,
+                aspect: Some(1.5),
+                near: 0.05,
+                far: Some(300.0)
+            }
+        );
+        let map = loaded.cameras.iter().find(|c| c.name == "map").unwrap();
+        assert_eq!(
+            map.projection,
+            ModelProjection::Orthographic {
+                half_width: 8.0,
+                half_height: 6.0,
+                near: 0.1,
+                far: 50.0
+            }
+        );
+        // Applied to the camera: where the model puts it, with its lens.
+        let mut camera = super::super::Camera3D::new(Vec2::ONE);
+        intro.apply(&mut camera, &Transform3D::at(Vec3::new(10.0, 0.0, 0.0)));
+        assert_eq!(
+            (camera.position, camera.fov_y, camera.near, camera.far),
+            (Vec3::new(10.0, 1.0, 5.0), 0.7, 0.05, 300.0)
+        );
+    }
+
+    /// Light and texture data as Blender's glTF exporter writes them (its
+    /// default "Standard" lighting units): a 1000 W point lamp, a 500 W
+    /// spot of 60° with a blend of 0.25, a sun of strength 3, and an image
+    /// texture through a mapping node (scale 2, moved by a quarter).
+    #[test]
+    fn a_blender_style_export_loads_lights_and_textures_as_authored() {
+        let watts_to_candela = |w: f32| w / (4.0 * std::f32::consts::PI) * 683.0;
+        let spot_size = 60f32.to_radians();
+        let mut file = File::default();
+        let uvs = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        let text = triangle(
+            &mut file,
+            Some(&uvs),
+            json!({
+                "extensionsUsed": ["KHR_lights_punctual", "KHR_texture_transform"],
+                "extensions": { "KHR_lights_punctual": { "lights": [
+                    { "name": "Point", "type": "point", "color": [1, 1, 1], "intensity": watts_to_candela(1000.0) },
+                    { "name": "Spot", "type": "spot", "color": [1, 1, 1], "intensity": watts_to_candela(500.0),
+                      "spot": { "innerConeAngle": spot_size / 2.0 * (1.0 - 0.25), "outerConeAngle": spot_size / 2.0 } },
+                    { "name": "Sun", "type": "directional", "color": [1, 1, 1], "intensity": 3.0 },
+                ] } },
+                "scenes": [{ "nodes": [0, 1, 2, 3] }],
+                "nodes": [
+                    { "mesh": 0, "name": "Cube" },
+                    { "name": "Point", "translation": [4.0, 5.9, -1.0], "extensions": { "KHR_lights_punctual": { "light": 0 } } },
+                    { "name": "Spot", "translation": [0.0, 4.0, 0.0], "rotation": [-std::f32::consts::FRAC_1_SQRT_2, 0.0, 0.0, std::f32::consts::FRAC_1_SQRT_2],
+                      "extensions": { "KHR_lights_punctual": { "light": 1 } } },
+                    { "name": "Sun", "rotation": [-0.5, 0.0, 0.0, 0.8660254], "extensions": { "KHR_lights_punctual": { "light": 2 } } },
+                ],
+                "materials": [{ "name": "Material", "pbrMetallicRoughness": { "baseColorTexture": { "index": 0,
+                    "extensions": { "KHR_texture_transform": { "offset": [0.25, -1.0], "scale": [2.0, 2.0] } } } } }],
+                "textures": [{ "source": 0 }],
+                "images": [{ "uri": png([200, 120, 40, 255]) }],
+            }),
+        );
+        let loaded = load_str("scene.glb", &text).unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        // Blender's watts, as Blender lights the scene: W / 4pi per unit of
+        // distance squared, against the sun's strength as it is.
+        let lamp = loaded.lights.iter().find(|l| l.name == "Point").unwrap();
+        let ModelLightKind::Point(point) = lamp.kind else {
+            panic!("{:?}", lamp.kind)
+        };
+        assert!(
+            (point.intensity - 1000.0 / (4.0 * std::f32::consts::PI)).abs() < 1e-3,
+            "{}",
+            point.intensity
+        );
+        assert_eq!(lamp.transform.position, Vec3::new(4.0, 5.9, -1.0));
+        let spot = loaded.lights.iter().find_map(|l| match l.kind {
+            ModelLightKind::Spot(s) => Some((l, s)),
+            _ => None,
+        });
+        let (spot_light, spot) = spot.unwrap();
+        assert!(
+            (spot.outer_angle - spot_size / 2.0).abs() < 1e-6 && (spot.inner_angle - spot_size * 0.375).abs() < 1e-6
+        );
+        assert!((spot_light.transform.forward() - Vec3::NEG_Y).length() < 1e-5);
+        let sun = loaded.lights.iter().find(|l| l.name == "Sun").unwrap();
+        assert!(matches!(sun.kind, ModelLightKind::Sun { intensity, .. } if intensity == 3.0));
+        assert!((sun.transform.forward() - Vec3::new(0.0, -0.8660254, -0.5)).length() < 1e-5);
+        // The mapping node's transform is on the coordinates.
+        assert!(close(loaded.data.uvs[1], Vec2::new(2.25, -1.0)) && close(loaded.data.uvs[2], Vec2::new(0.25, 1.0)));
+        assert!(loaded.materials[0].image.is_some());
+    }
+
+    #[test]
+    fn spawned_lights_stand_where_the_model_puts_them() {
+        let mut file = File::default();
+        let loaded = load_str("lit.gltf", &lit(&mut file)).unwrap();
+        let mut world = ponko_ecs::World::new();
+        let model = Transform3D::at(Vec3::new(0.0, 0.0, -20.0));
+        let spawned: Vec<_> = loaded
+            .lights
+            .iter()
+            .filter_map(|l| l.spawn(&mut world, &model))
+            .collect();
+        assert_eq!(spawned.len(), 2, "the sun isn't an entity");
+        let at = |e| world.get::<Transform3D>(e).unwrap().position;
+        let positions: Vec<Vec3> = spawned.iter().map(|e| at(*e)).collect();
+        assert!(positions.contains(&Vec3::new(0.0, 3.0, -20.0)) && positions.contains(&Vec3::new(1.0, 3.0, -20.0)));
+        assert_eq!(world.query::<&PointLight3D>().iter().count(), 1);
+        assert_eq!(world.query::<&SpotLight3D>().iter().count(), 1);
+    }
+
+    #[test]
+    fn extension_images_fall_back_to_the_core_image_without_their_feature() {
+        let mut file = File::default();
+        let text = triangle(
+            &mut file,
+            Some(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]),
+            json!({
+                "extensionsUsed": ["KHR_texture_basisu", "EXT_texture_webp"],
+                "materials": [{ "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 } } }],
+                "textures": [{ "source": 0, "extensions": {
+                    "KHR_texture_basisu": { "source": 1 }, "EXT_texture_webp": { "source": 1 } } }],
+                "images": [{ "uri": png([9, 8, 7, 255]) }, { "uri": "data:image/ktx2;base64,AAAA" }],
+            }),
+        );
+        let loaded = load_str("fallback.gltf", &text).unwrap();
+        let image = &loaded.images[loaded.materials[0].image.unwrap()];
+        // The PNG, either because the build doesn't read the extension's
+        // image or because that image (four zero bytes) can't be read.
+        assert_eq!(&image.2[..4], &[9, 8, 7, 255]);
+    }
+
+    #[cfg(not(feature = "basis-universal"))]
+    #[test]
+    fn a_texture_with_only_a_ktx2_image_needs_its_feature() {
+        let mut file = File::default();
+        let text = triangle(
+            &mut file,
+            None,
+            json!({
+                "extensionsUsed": ["KHR_texture_basisu"],
+                "materials": [{ "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 } } }],
+                "textures": [{ "extensions": { "KHR_texture_basisu": { "source": 0 } } }],
+                "images": [{ "uri": "data:image/ktx2;base64,AAAA" }],
+            }),
+        );
+        let error = load_str("basis.gltf", &text).err().unwrap();
+        assert!(
+            error.contains("KHR_texture_basisu") && error.contains("`basis-universal`"),
+            "{error}"
+        );
+        let required = text.replace(
+            r#""extensionsUsed":["KHR_texture_basisu"]"#,
+            r#""extensionsUsed":["KHR_texture_basisu"],"extensionsRequired":["KHR_texture_basisu"]"#,
+        );
+        assert_ne!(required, text);
+        let error = load_str("basis.gltf", &required).err().unwrap();
+        assert!(
+            error.contains("needs the glTF extension KHR_texture_basisu") && error.contains("`basis-universal`"),
+            "{error}"
+        );
+    }
+
+    /// Two triangles over the same corners, every view meshopt compressed
+    /// into buffer 1 with buffer 0 its fallback (`fallback_data`: holding
+    /// the plain data too, else nothing), as gltfpack writes them:
+    /// positions with the exponential filter, normals octahedral, one
+    /// triangle's indices as TRIANGLES and the other's as INDICES.
+    #[cfg(all(feature = "gltf-meshopt", not(target_arch = "wasm32")))]
+    fn meshopt_gltf(corrupt: bool) -> String {
+        use meshopt::{
+            EncodeExpMode, encode_filter_exp, encode_filter_oct, encode_index_buffer, encode_index_sequence,
+            encode_vertex_buffer,
+        };
+        let positions: Vec<[f32; 3]> = TRIANGLE.chunks(3).map(|c| [c[0], c[1] * 2.0, c[2]]).collect();
+        let normals = [[0.0f32, 0.0, 1.0, 0.0]; 3];
+        let streams = [
+            (
+                encode_vertex_buffer(&encode_filter_exp(&positions, 15, EncodeExpMode::Separate)).unwrap(),
+                12usize,
+                3usize,
+                "ATTRIBUTES",
+                "EXPONENTIAL",
+            ),
+            (
+                encode_vertex_buffer(&encode_filter_oct::<i8>(&normals, 8)).unwrap(),
+                4,
+                3,
+                "ATTRIBUTES",
+                "OCTAHEDRAL",
+            ),
+            (encode_index_buffer(&[0, 1, 2], 3).unwrap(), 4, 3, "TRIANGLES", "NONE"),
+            (encode_index_sequence(&[0, 2, 1], 3).unwrap(), 2, 3, "INDICES", "NONE"),
+        ];
+        let mut compressed = Vec::new();
+        let mut views = Vec::new();
+        let mut at = 0usize;
+        for (i, (bytes, stride, count, mode, filter)) in streams.iter().enumerate() {
+            compressed.resize(compressed.len().next_multiple_of(4), 0);
+            let mut bytes = bytes.clone();
+            if corrupt && i == 0 {
+                bytes.truncate(3);
+            }
+            let mut view = json!({ "buffer": 0, "byteOffset": at, "byteLength": count * stride,
+                "extensions": { "EXT_meshopt_compression": { "buffer": 1, "byteOffset": compressed.len(),
+                    "byteLength": bytes.len(), "byteStride": stride, "count": count, "mode": mode, "filter": filter } } });
+            if *mode == "ATTRIBUTES" {
+                view["byteStride"] = json!(stride);
+            }
+            at += (count * stride).next_multiple_of(4);
+            compressed.extend_from_slice(&bytes);
+            views.push(view);
+        }
+        json!({
+            "asset": { "version": "2.0" },
+            "extensionsUsed": ["EXT_meshopt_compression", "KHR_mesh_quantization"],
+            "extensionsRequired": ["EXT_meshopt_compression", "KHR_mesh_quantization"],
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0 }],
+            "meshes": [{ "primitives": [
+                { "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 2 },
+                { "attributes": { "POSITION": 0, "NORMAL": 1 }, "indices": 3 },
+            ] }],
+            "buffers": [
+                { "byteLength": at, "extensions": { "EXT_meshopt_compression": { "fallback": true } } },
+                { "byteLength": compressed.len(), "uri": format!("data:application/octet-stream;base64,{}", to_base64(&compressed)) },
+            ],
+            "bufferViews": views,
+            "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 2, 0] },
+                { "bufferView": 1, "componentType": 5120, "normalized": true, "count": 3, "type": "VEC3" },
+                { "bufferView": 2, "componentType": 5125, "count": 3, "type": "SCALAR" },
+                { "bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR" },
+            ],
+        })
+        .to_string()
+    }
+
+    #[cfg(all(feature = "gltf-meshopt", not(target_arch = "wasm32")))]
+    #[test]
+    fn meshopt_compressed_geometry_decompresses_at_load() {
+        let loaded = load_str("packed.glb", &meshopt_gltf(false)).unwrap();
+        let data = &loaded.data;
+        assert_eq!(data.indices, vec![0, 1, 2, 3, 5, 4]);
+        let p = &data.positions;
+        assert!(
+            (p[1] - Vec3::X).length() < 1e-4 && (p[2] - Vec3::new(0.0, 2.0, 0.0)).length() < 1e-4,
+            "{p:?}"
+        );
+        assert!(
+            data.normals.iter().all(|n| (*n - Vec3::Z).length() < 0.02),
+            "{:?}",
+            data.normals
+        );
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[cfg(all(feature = "gltf-meshopt", not(target_arch = "wasm32")))]
+    #[test]
+    fn corrupt_meshopt_data_is_an_error_naming_the_view() {
+        let error = load_str("broken.glb", &meshopt_gltf(true)).err().unwrap();
+        assert!(
+            error.contains("broken.glb: buffer view 0") && error.contains("corrupt"),
+            "{error}"
+        );
+    }
+
+    #[cfg(not(all(feature = "gltf-meshopt", not(target_arch = "wasm32"))))]
+    #[test]
+    fn meshopt_files_need_their_feature_unless_they_have_fallback_data() {
+        // Required, and with no fallback data: an error naming the feature.
+        let mut file = File::default();
+        let text = triangle(
+            &mut file,
+            None,
+            json!({ "extensionsUsed": ["EXT_meshopt_compression"], "extensionsRequired": ["EXT_meshopt_compression"] }),
+        );
+        let error = load_str("packed.glb", &text).err().unwrap();
+        assert!(
+            error.contains("EXT_meshopt_compression") && error.contains("`gltf-meshopt`"),
+            "{error}"
+        );
+        // Optional, with the plain data in the view's own buffer: that loads.
+        let mut file = File::default();
+        let position = file.floats(&TRIANGLE, 3);
+        file.views[0]["extensions"] = json!({ "EXT_meshopt_compression": {
+            "buffer": 0, "byteLength": 4, "byteStride": 12, "count": 3, "mode": "ATTRIBUTES" } });
+        let text = file.gltf(json!({
+            "extensionsUsed": ["EXT_meshopt_compression"],
+            "scene": 0, "scenes": [{ "nodes": [0] }], "nodes": [{ "mesh": 0 }],
+            "meshes": [{ "primitives": [{ "attributes": { "POSITION": position } }] }],
+        }));
+        let loaded = load_str("packed.glb", &text).unwrap();
+        assert_eq!(loaded.data.positions[1], Vec3::X);
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|w| w.contains("EXT_meshopt_compression") && w.contains("fallback"))
+        );
+    }
+}

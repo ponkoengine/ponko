@@ -39,6 +39,17 @@ pub(super) struct Particles {
 }
 impl Particles {
     pub fn new(device: &wgpu::Device, texture_layout: &wgpu::BindGroupLayout, samples: u32) -> Self {
+        Self::with_depth(device, texture_layout, samples, wgpu::TextureFormat::Depth32Float)
+    }
+
+    /// [`Particles::new`] over a scene depth of `depth` format (with
+    /// stencil bits once a material has a stencil).
+    pub fn with_depth(
+        device: &wgpu::Device,
+        texture_layout: &wgpu::BindGroupLayout,
+        samples: u32,
+        depth: wgpu::TextureFormat,
+    ) -> Self {
         let camera = Synced::new(
             device,
             "particle camera",
@@ -114,7 +125,7 @@ impl Particles {
                 },
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
+                    format: depth,
                     depth_write_enabled: Some(false),
                     depth_compare: Some(wgpu::CompareFunction::LessEqual),
                     stencil: Default::default(),
@@ -309,6 +320,17 @@ fn vertices<T>(device: &wgpu::Device, label: &'static str, capacity: usize) -> S
         Upload::Other,
         (size, 4, MAX_WRITES),
     )
+}
+
+impl Particles {
+    /// Counts the particle, trail and 3D text buffers as other memory (see
+    /// `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for synced in [&self.camera, &self.instances, &self.strip_vertices, &self.text_vertices] {
+            t.buffer(C::Other, synced.buffer());
+        }
+    }
 }
 
 #[cfg(test)]

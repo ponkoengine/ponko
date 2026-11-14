@@ -323,6 +323,10 @@ impl Renderer3D {
             if resource == Resource::Output {
                 declared.0 = None;
             }
+            // With stencil bits once a material has a stencil (`stencil.rs`).
+            if resource == Resource::SceneDepth {
+                declared.0 = Some(self.shaders.depth_format());
+            }
             if let Err(error) = check_texture(resource, texture.format(), texture.sample_count(), declared) {
                 panic!("invalid 3d frame: {error}");
             }

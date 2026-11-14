@@ -289,10 +289,11 @@ jobs:
             scope: -p ponko
             args: --features accessibility
           # KTX2/DDS block-compressed textures with the Basis Universal
-          # transcoder (C++), and the GPU test and benchmark of them.
-          - name: compressed textures
+          # transcoder (C++), and the GPU test and benchmark of them; glTF
+          # geometry compressed with meshopt (meshoptimizer's C++ decoder).
+          - name: compressed textures and geometry
             scope: -p ponko
-            args: --features 3d,basis-universal
+            args: --features 3d,basis-universal,gltf-meshopt
           # The offscreen rendering benchmarks (`render/scene`, `render/record`).
           - name: benchmarks with the renderer
             scope: -p ponko_bench
@@ -609,6 +610,12 @@ jobs:
           cargo test -p ponko --no-fail-fast --features 3d,basis-universal --test compressed_textures
           cargo test -p ponko --no-fail-fast --features 3d,basis-universal --lib compressed::
           cargo test -p ponko_ffi --no-fail-fast --features compressed-textures --test compressed_textures
+      # glTF files with meshopt-compressed geometry, decompressed by
+      # meshoptimizer's C++ decoder (without the feature, such a file's
+      # error names it: the workspace tests).
+      - name: Tests, glTF with compressed geometry
+        if: ${{ !cancelled() }}
+        run: cargo test -p ponko --no-fail-fast --features 3d,gltf-meshopt --lib three::gltf
       # Shaped text, fallback chains and the system font search, with the
       # offscreen reference images of shaped text where a GPU is found.
       - name: Tests, text shaping and system fonts
@@ -1010,6 +1017,9 @@ jobs:
       # Compressed textures build for the browser; Basis Universal (C++) is
       # left out there, so UASTC files are an Unsupported error on the web.
       - run: cargo clippy -p ponko --target wasm32-unknown-unknown --features 3d,basis-universal
+      # meshoptimizer (C++) is left out there too: meshopt-compressed glTF
+      # files load on the web only from their uncompressed fallback.
+      - run: cargo clippy -p ponko --target wasm32-unknown-unknown --features 3d,gltf-meshopt
       # The accessibility feature has no web adapter (AccessKit has none for
       # a canvas): it must build and do nothing.
       - run: cargo check -p ponko --target wasm32-unknown-unknown --features accessibility
@@ -1086,7 +1096,7 @@ jobs:
         run: |
           web/build.sh web_smoke
           web/build.sh --features 3d web_smoke_3d
-          web/build.sh coin_dash
+          web/build.sh --features text-shaping coin_dash
           web/build.sh --features physics ember_hop
           web/build.sh lights2d
       # Each browser step has its own deadline (a few minutes per run; a run
@@ -1218,12 +1228,13 @@ jobs:
       # pages, their loader and the check the release runs on every example.
       # Also the 3D demos that read the scene depth (a lake, screen and target
       # effects) and a texture array's mipmaps, which need the renderer's
-      # WebGL2 paths for them.
+      # WebGL2 paths for them, and stencil materials (a depth with stencil
+      # bits).
       - name: Web gallery pages (Chromium, WebGL2)
         timeout-minutes: 15
         if: ${{ !cancelled() }}
         run: |
-          node web/gallery/build.mjs --only sprites,3d,compute,terrain,shaders,target_effect
+          node web/gallery/build.mjs --only sprites,3d,compute,terrain,shaders,target_effect,stencil
           node web/smoke/gallery.mjs --browser chromium --backend webgl2
       # Every run, with what it asked for, what ran, the adapter the engine
       # reported and why anything was unsupported (also in the artifact).
@@ -1287,7 +1298,7 @@ jobs:
       # and smoke-run by the generic command any game uses.
       - name: The host's download, with ponko package's own smoke run
         if: ${{ !cancelled() }}
-        run: cargo run -p ponko_cli -- package --example coin_dash --profile dev --out target/package-host
+        run: cargo run -p ponko_cli -- package --example coin_dash --features text-shaping --profile dev --out target/package-host
       # The engine reads WGPU_BACKEND (not WGPU_ADAPTER_NAME). With only DirectX 12
       # enabled, the one adapter left on a runner without a GPU is WARP, the
       # software renderer, which the engine accepts.

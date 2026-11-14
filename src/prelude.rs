@@ -33,7 +33,7 @@ pub use crate::actions;
 pub use crate::actions::{
     Action, ActionId, ActionMap, ActionRef, Axis2Binding, AxisBinding, ButtonBinding, PressedInput,
 };
-pub use crate::assets::{AssetSource, Assets, MemorySource};
+pub use crate::assets::{AssetSource, Assets, MemorySource, PackSource};
 pub use crate::audio::{AudioBus, Playing, Sound, SoundParams};
 pub use crate::camera::Rect;
 #[cfg(any(feature = "physics", feature = "physics3d"))]

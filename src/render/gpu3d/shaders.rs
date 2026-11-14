@@ -79,6 +79,7 @@ impl Shaders {
                 float_depth,
             ),
             samples,
+            DEPTH_FORMAT,
             &cache.counters,
             Default::default(),
         );
@@ -108,14 +109,34 @@ impl Shaders {
     /// Changes between supported multisampled counts. Both use the same
     /// WGSL and layouts; every pipeline (including lazy variants) must change.
     pub(super) fn set_samples(&mut self, samples: u32) {
+        self.retarget(samples, self.cache.targets.depth);
+    }
+
+    /// The scene depth's format the pipelines draw into: plain depth, or
+    /// depth with stencil once a material has a stencil (see `stencil.rs`).
+    pub(super) fn depth_format(&self) -> wgpu::TextureFormat {
+        self.cache.targets.depth
+    }
+
+    /// Changes the scene depth's format: every pipeline drawing into it
+    /// (including lazy variants) is rebuilt, as for a new sample count.
+    pub(super) fn set_depth_format(&mut self, depth: wgpu::TextureFormat) {
+        if depth != self.cache.targets.depth {
+            self.retarget(self.samples, depth);
+        }
+    }
+
+    fn retarget(&mut self, samples: u32, depth: wgpu::TextureFormat) {
         let mut cache = MaterialCache::new(TargetKey {
             samples,
+            depth,
             ..self.cache.targets
         });
         cache.counters = self.cache.counters.clone();
         for (key, old) in self.cache.live() {
             let builder = SideBuilder {
                 samples,
+                depth,
                 ..old.builder.clone()
             };
             let new = ShaderPipelines {
@@ -244,6 +265,7 @@ impl Shaders {
             name,
             &for_samples(&source, self.samples, self.float_depth),
             self.samples,
+            self.cache.targets.depth,
             // Its own until the GPU accepts it (see `material_pipelines`).
             &Arc::default(),
             past,
@@ -854,6 +876,7 @@ pub(super) fn build_pipelines(
     name: &str,
     source: &str,
     samples: u32,
+    depth: wgpu::TextureFormat,
     counters: &Arc<pipeline_cache::Counters>,
     past: VertexPast,
 ) -> ShaderPipelines {
@@ -867,6 +890,7 @@ pub(super) fn build_pipelines(
         layout: layout.clone(),
         shadow_layout: shadow_layout.clone(),
         samples,
+        depth,
         past,
     };
     ShaderPipelines {
@@ -889,12 +913,87 @@ pub(super) struct SideBuilder {
     pub(super) layout: wgpu::PipelineLayout,
     pub(super) shadow_layout: wgpu::PipelineLayout,
     pub(super) samples: u32,
+    /// The scene depth's format (shadow maps keep plain depth).
+    pub(super) depth: wgpu::TextureFormat,
     /// What its `vertex` reads of the last frame: with anything, each set
     /// also has a still motion pipeline ([`Pipelines::velocity_still`]).
     pub(super) past: VertexPast,
 }
 
 impl SideBuilder {
+    /// The pipeline of `role` in `variant` with a material's stencil state
+    /// (see `stencil.rs`): the same as [`SideBuilder::build`]'s but for
+    /// the stencil. Only the color roles have one (`None` for the others).
+    pub(super) fn build_stencil(
+        &self,
+        variant: ShaderVariant,
+        role: PipelineRole,
+        stencil: wgpu::StencilState,
+    ) -> Option<wgpu::RenderPipeline> {
+        let (write, compare) = match role {
+            PipelineRole::Opaque | PipelineRole::OpaqueCoverage => (false, wgpu::CompareFunction::Equal),
+            PipelineRole::OpaqueSolid => (true, wgpu::CompareFunction::Less),
+            PipelineRole::Transparent => (false, wgpu::CompareFunction::Less),
+            _ => return None,
+        };
+        if role == PipelineRole::OpaqueCoverage && self.samples <= 1 {
+            return None;
+        }
+        let shared = variant.instancing.shared();
+        let buffers = [
+            Some(wgpu::VertexBufferLayout {
+                array_stride: size_of::<Vertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &VERTEX_ATTRIBUTES,
+            }),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: if shared { 0 } else { size_of::<Instance3D>() as u64 },
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &INSTANCE_ATTRIBUTES,
+            }),
+        ];
+        let blend = (role == PipelineRole::Transparent).then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+        let targets = [Some(wgpu::ColorTargetState {
+            format: HDR_FORMAT,
+            blend,
+            write_mask: wgpu::ColorWrites::ALL,
+        })];
+        Some(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("3d stencil material"),
+            layout: Some(&self.layout),
+            vertex: wgpu::VertexState {
+                module: &self.module,
+                entry_point: Some(role.vertex_entry()),
+                compilation_options: Default::default(),
+                buffers: &buffers,
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: variant.sides.cull(),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: self.depth,
+                depth_write_enabled: Some(write),
+                depth_compare: Some(compare),
+                stencil,
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: self.samples,
+                alpha_to_coverage_enabled: role == PipelineRole::OpaqueCoverage,
+                ..Default::default()
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.module,
+                entry_point: role.fragment_entry(variant.instancing),
+                compilation_options: Default::default(),
+                targets: &targets,
+            }),
+            multiview_mask: None,
+            cache: None,
+        }))
+    }
+
     /// [`SideBuilder::build`], timed into `counters`.
     pub(super) fn timed_build(&self, variant: ShaderVariant, counters: &pipeline_cache::Counters) -> Pipelines {
         let start = crate::perf::Instant::now();
@@ -931,9 +1030,10 @@ impl SideBuilder {
                 attributes: &INSTANCE_ATTRIBUTES,
             }),
         ];
+        let depth_format = self.depth;
         let depth = |write, compare, bias| {
             Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
+                format: depth_format,
                 depth_write_enabled: Some(write),
                 depth_compare: Some(compare),
                 stencil: Default::default(),
@@ -1057,7 +1157,13 @@ impl SideBuilder {
                 vs(role),
                 fs(role),
                 None,
-                depth(true, wgpu::CompareFunction::Less, shadow_bias),
+                Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: shadow_bias,
+                }),
                 wgpu::MultisampleState::default(),
                 &[],
             )

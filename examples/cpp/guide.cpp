@@ -394,6 +394,14 @@ static void controls(ponko::ctx& ctx) {
 // ponko::game("Platformer", 1280, 720).physics({0, 980}).sim_system(pause_menu);
 // ANCHOR_END: physics_pause
 
+// ANCHOR: physics3d_pause
+[[maybe_unused]] static void pause_menu3d(ponko::ctx& ctx) {
+    if (ctx.key_pressed(PONKO_KEY_ESCAPE))
+        ctx.set_physics3d_paused(!ctx.is_physics3d_paused()); // the 3D step only
+}
+// ponko::game("Explorer", 1280, 720).physics3d({0, -9.81f, 0}).sim_system(pause_menu3d);
+// ANCHOR_END: physics3d_pause
+
 // ---- Input -------------------------------------------------------------------
 // ANCHOR: gamepad
 struct Player { std::uint32_t slot; float spin; };   // one per connected pad
@@ -1478,6 +1486,34 @@ static void recolored(ponko::ctx& ctx, ponko::mesh house, ponko::material gold, 
 }
 // ANCHOR_END: model_material
 
+// ANCHOR: stencil
+/// Crossing glass strips that blend once where they overlap, and a crate
+/// with an outline only around it.
+static void stencil_effects(ponko::ctx& ctx) {
+    auto glass_desc = ponko::material_of({0.3f, 0.7f, 1.0f, 0.45f});
+    glass_desc.blend = 1; // transparent
+    auto glass = ctx.create_material(glass_desc, ponko::stencil_once(1));
+    auto strip = ctx.create_mesh(ponko::mesh_data::cube(1.0f), glass);
+    for (auto scale : {ponko::vec3{3, 0.5f, 0.05f}, ponko::vec3{0.5f, 3, 0.05f}}) {
+        auto t = ponko::transform3d_at({-3, 1, 0});
+        t.scale = scale;
+        ctx.world().spawn(t, ponko::model_of(strip));
+    }
+    // The crate marks the stencil; its larger copy draws after it (order 1),
+    // only where the crate didn't.
+    auto wood = ctx.create_material(ponko::material_of({0.69f, 0.48f, 0.27f, 1}), ponko::stencil_mark(2));
+    auto glow_desc = ponko::material_of({0, 0, 0, 1});
+    glow_desc.emissive = {1.0f, 0.82f, 0.25f, 1};
+    auto rim = ponko::stencil_outside(2);
+    rim.order = 1;
+    auto glow = ctx.create_material(glow_desc, rim);
+    auto body = ctx.create_mesh(ponko::mesh_data::cube(1.4f), wood);
+    auto outline = ctx.create_mesh(ponko::mesh_data::cube(1.55f), glow);
+    ctx.world().spawn(ponko::transform3d_at({0, 0, 0}), ponko::model_of(body));
+    ctx.world().spawn(ponko::transform3d_at({0, 0, 0}), ponko::model_of(outline));
+}
+// ANCHOR_END: stencil
+
 // ANCHOR: shadow_mesh
 /// A detailed tree with a cheap shadow, a flat sign with none, and a stand-in
 /// shadow for a row of fence pieces that cast none themselves.
@@ -2022,6 +2058,7 @@ static void the_village_has_five_spinning_houses() {
         plant_meadow(ctx, tuft);
         yard(ctx, tuft, tuft, tuft, tuft, tuft);
         recolored(ctx, tuft, ctx.create_material(ponko::material_of(ponko::colors::white)), ctx.default_material());
+        stencil_effects(ctx);
         {
             std::vector<ponko::entity> models;
             ctx.world().each([&](ponko::entity e, const ponko::model&) { models.push_back(e); });
@@ -2922,6 +2959,27 @@ static void localized_text_snippet() {
 }
 // ANCHOR_END: localized_text
 
+// ANCHOR: string_tables
+static void string_tables(ponko::ctx& ctx) {
+    // Usually ctx.load_strings("lang/en.json"); the same text here.
+    ctx.insert_strings_json(R"({"language": "en", "strings": {
+        "menu.play": "Play",
+        "hud.coins": {"one": "{count} coin", "other": "{count} coins"}}})");
+    ctx.insert_strings_json(R"({"language": "fr", "strings": {
+        "menu.play": "Jouer",
+        "hud.coins": {"one": "{count} pièce", "other": "{count} pièces"}}})");
+    namespace u = ponko::ui;
+    auto ui = ctx.ui_retained();
+    auto root = ui.add_panel(u::none, u::fill());
+    auto play = ui.add_button(root, "", u::fixed(200, 40));
+    ui.set_text_key(play, "menu.play");  // follows the language
+    ui.push_screen(root);
+    ctx.set_language("fr");
+    std::string coins = ctx.format("hud.coins", {ponko::arg("count", 0)});  // "0 pièce"
+    if (coins != "0 pièce" || !ctx.missing_strings().empty()) std::abort();
+}
+// ANCHOR_END: string_tables
+
 // ANCHOR: gpu_buffers
 static void gpu_particles(ponko::ctx& ctx) {
     auto items = ctx.create_gpu_buffer(128);
@@ -3384,6 +3442,7 @@ int main() {
     jump_once();
     menu_opens_settings();
     resource_scope_run();
+    ponko::game("string table guide", 1, 1).run_headless(0, string_tables);
     ponko::game("asset source guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         embedded_assets(ctx);
         if (skin_or_default(ctx).id != 0) std::abort();

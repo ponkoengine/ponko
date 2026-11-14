@@ -176,9 +176,32 @@ pub struct Metadata {
     pub assets: Option<Vec<String>>,
     /// (source, name in the package)
     pub files: Option<Vec<(String, String)>>,
+    /// How the files under `assets/` ship: `pack = false` loose, else in
+    /// one `assets.pack` (the default).
+    pub pack: Option<PackMeta>,
 }
 
-const KEYS: &[&str] = &["name", "id", "icon", "assets", "files", "examples"];
+/// The `pack` key: `true`, `false` or `{ exclude = [...], textures = true }`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PackMeta {
+    pub enabled: bool,
+    /// Patterns of files left out of the pack (and the package).
+    pub exclude: Vec<String>,
+    /// Convert images to KTX2 textures per `textures.json`, as `ponko pack --textures`.
+    pub textures: bool,
+}
+
+impl Default for PackMeta {
+    fn default() -> Self {
+        PackMeta {
+            enabled: true,
+            exclude: Vec::new(),
+            textures: false,
+        }
+    }
+}
+
+const KEYS: &[&str] = &["name", "id", "icon", "assets", "files", "pack", "examples"];
 
 impl Metadata {
     /// Reads the package's `metadata` value (from `cargo metadata`): the
@@ -203,7 +226,7 @@ impl Metadata {
         for key in object.keys() {
             if !KEYS.contains(&key.as_str()) || (key == "examples" && at.contains(".examples.")) {
                 return Err(format!(
-                    "{at}: unknown key `{key}` (the keys are name, id, icon, assets, files{})",
+                    "{at}: unknown key `{key}` (the keys are name, id, icon, assets, files, pack{})",
                     if at.contains(".examples.") { "" } else { " and examples" }
                 ));
             }
@@ -261,6 +284,39 @@ impl Metadata {
                 });
             }
             self.files = Some(files);
+        }
+        if let Some(v) = object.get("pack") {
+            self.pack = Some(match v {
+                Value::Bool(enabled) => PackMeta {
+                    enabled: *enabled,
+                    ..PackMeta::default()
+                },
+                Value::Object(o) => {
+                    let mut pack = PackMeta::default();
+                    for (key, value) in o {
+                        match key.as_str() {
+                            "exclude" => {
+                                pack.exclude = value
+                                    .as_array()
+                                    .and_then(|list| list.iter().map(|p| p.as_str().map(str::to_string)).collect())
+                                    .ok_or_else(|| format!("{at} pack.exclude: expected a list of patterns"))?;
+                            }
+                            "textures" => {
+                                pack.textures = value
+                                    .as_bool()
+                                    .ok_or_else(|| format!("{at} pack.textures: expected true or false"))?;
+                            }
+                            other => {
+                                return Err(format!(
+                                    "{at} pack: unknown key `{other}` (the keys are exclude and textures)"
+                                ));
+                            }
+                        }
+                    }
+                    pack
+                }
+                other => return Err(format!("{at} pack: expected true, false or a table, got {other}")),
+            });
         }
         Ok(())
     }
@@ -360,6 +416,9 @@ pub fn folder_name(game: &Game, platform: &Platform) -> String {
 
 /// Plans a package: the program, assets, files and notices, laid out for the
 /// platform (a macOS app bundle when `app`). `icon_png` is the icon's bytes.
+/// With `pack` (an asset pack of every file under `assets/`), the package
+/// holds that pack, `assets.pack`, where the `assets/` folder would be, and
+/// the asset files that aren't under `assets/` beside it.
 pub fn plan(
     game: &Game,
     platform: &Platform,
@@ -367,9 +426,32 @@ pub fn plan(
     built: Built,
     notices: &str,
     icon_png: Option<&[u8]>,
+    pack: Option<&[u8]>,
 ) -> Result<Plan, String> {
     let folder = PathBuf::from(folder_name(game, platform));
     let mut entries = Vec::new();
+    // The asset files copied as they are: all of them, or those the pack doesn't hold.
+    let loose: Vec<&FileCopy> = game
+        .assets
+        .iter()
+        .filter(|a| pack.is_none() || !a.to.starts_with("assets"))
+        .collect();
+    let assets = |entries: &mut Vec<Entry>, dir: &Path| {
+        for a in &loose {
+            entries.push(Entry {
+                path: dir.join(&a.to),
+                source: Source::Copy(a.from.clone()),
+                executable: false,
+            });
+        }
+        if let Some(bytes) = pack {
+            entries.push(Entry {
+                path: dir.join(crate::pack::DEFAULT_PACK),
+                source: Source::Bytes(bytes.to_vec()),
+                executable: false,
+            });
+        }
+    };
     let top = |name: &str| folder.join(name);
     let docs = |entries: &mut Vec<Entry>, dir: &Path| {
         for f in &game.files {
@@ -394,19 +476,18 @@ pub fn plan(
                     executable: false,
                 });
             }
+            let mut page = web_index(&game.name, icon_png.is_some());
+            if pack.is_some() {
+                page = with_web_pack(&page);
+            }
             entries.push(Entry {
                 path: top("index.html"),
-                source: Source::Text(web_index(&game.name, icon_png.is_some())),
+                source: Source::Text(page),
                 executable: false,
             });
-            for a in &game.assets {
-                entries.push(Entry {
-                    path: folder.join(&a.to),
-                    source: Source::Copy(a.from.clone()),
-                    executable: false,
-                });
-            }
-            if let Some(index) = web_asset_index(&game.assets) {
+            assets(&mut entries, &folder);
+            let loose: Vec<FileCopy> = loose.iter().map(|a| (*a).clone()).collect();
+            if let Some(index) = web_asset_index(&loose) {
                 entries.push(Entry {
                     path: top("assets/index.json"),
                     source: Source::Text(index),
@@ -430,13 +511,7 @@ pub fn plan(
                 source: Source::Copy(exe.to_path_buf()),
                 executable: true,
             });
-            for a in &game.assets {
-                entries.push(Entry {
-                    path: folder.join(&a.to),
-                    source: Source::Copy(a.from.clone()),
-                    executable: false,
-                });
-            }
+            assets(&mut entries, &folder);
             if let Some(png) = icon_png {
                 entries.push(Entry {
                     path: top("icon.png"),
@@ -457,13 +532,7 @@ pub fn plan(
                 executable: true,
             });
             let resources = contents.join("Resources");
-            for a in &game.assets {
-                entries.push(Entry {
-                    path: resources.join(&a.to),
-                    source: Source::Copy(a.from.clone()),
-                    executable: false,
-                });
-            }
+            assets(&mut entries, &resources);
             let icon = match icon_png {
                 Some(png) => {
                     entries.push(Entry {
@@ -592,6 +661,19 @@ pub fn web_index(name: &str, icon: bool) -> String {
 
 pub const WEB_INDEX: &str = include_str!("index.html");
 
+/// The page with the game's canvas naming its asset pack (`data-pack`),
+/// which the engine fetches, with HTTP range requests, before setup.
+pub fn with_web_pack(page: &str) -> String {
+    page.replacen(
+        "<canvas id=\"ponko\" tabindex=\"0\">",
+        &format!(
+            "<canvas id=\"ponko\" tabindex=\"0\" data-pack=\"{}\">",
+            crate::pack::DEFAULT_PACK
+        ),
+        1,
+    )
+}
+
 /// `assets/index.json`: the files under `assets/` the engine fetches before
 /// setup in a browser, relative to `assets/` and sorted (as `web/build.sh`).
 pub fn web_asset_index(assets: &[FileCopy]) -> Option<String> {
@@ -684,6 +766,7 @@ mod tests {
             Built::Program(Path::new("/t/coin_dash.exe")),
             "N",
             None,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -714,6 +797,7 @@ mod tests {
             Built::Program(Path::new("/t/coin_dash")),
             "N",
             Some(b"png"),
+            None,
         )
         .unwrap();
         let p = paths(&plan);
@@ -736,6 +820,7 @@ mod tests {
             true,
             Built::Program(Path::new("/t/coin_dash")),
             "N",
+            None,
             None,
         )
         .unwrap();
@@ -770,6 +855,7 @@ mod tests {
             false,
             Built::Program(Path::new("/t/coin_dash")),
             "N",
+            None,
             None,
         )
         .unwrap();
@@ -813,6 +899,7 @@ mod tests {
             Built::Web(Path::new("/bindgen")),
             "N",
             Some(b"png"),
+            None,
         )
         .unwrap();
         let p = paths(&plan);
@@ -844,6 +931,112 @@ mod tests {
     }
 
     #[test]
+    fn a_packed_package_holds_assets_pack_where_the_assets_folder_would_be() {
+        let mut g = game();
+        // An asset outside assets/ stays a loose file beside the pack.
+        g.assets.push(FileCopy {
+            from: "/src/data/extra.txt".into(),
+            to: "data/extra.txt".into(),
+        });
+        let pack = b"PONKOPAK...".as_slice();
+        let cases = [
+            ("x86_64-pc-windows-msvc", false, "coin-dash-1.2.3-windows-x86_64"),
+            ("x86_64-unknown-linux-gnu", false, "coin-dash-1.2.3-linux-x86_64"),
+            (
+                "aarch64-apple-darwin",
+                true,
+                "coin-dash-1.2.3-macos-aarch64/Coin Dash.app/Contents/Resources",
+            ),
+        ];
+        for (triple, app, dir) in cases {
+            let plan = plan(
+                &g,
+                &platform(triple),
+                app,
+                Built::Program(Path::new("/t/coin_dash")),
+                "N",
+                None,
+                Some(pack),
+            )
+            .unwrap();
+            let p = paths(&plan);
+            assert!(p.contains(&format!("{dir}/assets.pack")), "{triple}: {p:#?}");
+            assert!(p.contains(&format!("{dir}/data/extra.txt")), "{triple}: {p:#?}");
+            assert!(
+                !p.iter().any(|f| f.contains("/assets/")),
+                "{triple}: no loose assets/ {p:#?}"
+            );
+            let packed = plan.entries.iter().find(|e| e.path.ends_with("assets.pack")).unwrap();
+            assert_eq!(packed.source, Source::Bytes(pack.to_vec()));
+        }
+        let web = plan(
+            &g,
+            &platform("wasm32-unknown-unknown"),
+            false,
+            Built::Web(Path::new("/bindgen")),
+            "N",
+            None,
+            Some(pack),
+        )
+        .unwrap();
+        let p = paths(&web);
+        assert!(p.contains(&"coin-dash-1.2.3-web/assets.pack".to_string()), "{p:#?}");
+        assert!(
+            !p.iter().any(|f| f.ends_with("index.json")),
+            "no index of loose assets: {p:#?}"
+        );
+        let page = match &web
+            .entries
+            .iter()
+            .find(|e| e.path.ends_with("index.html"))
+            .unwrap()
+            .source
+        {
+            Source::Text(t) => t.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert!(
+            page.contains(r#"<canvas id="ponko" tabindex="0" data-pack="assets.pack">"#),
+            "{page}"
+        );
+    }
+
+    #[test]
+    fn the_pack_key_turns_packing_off_or_sets_it_up() {
+        let m = Metadata::from_cargo(&json!({"ponko": {"pack": false}}), None).unwrap();
+        assert!(!m.pack.unwrap().enabled);
+        let meta = json!({"ponko": {
+            "pack": {"exclude": ["**/*.psd"], "textures": true},
+            "examples": {"demo": {"pack": false}}
+        }});
+        let m = Metadata::from_cargo(&meta, None).unwrap();
+        assert_eq!(
+            m.pack.unwrap(),
+            PackMeta {
+                enabled: true,
+                exclude: vec!["**/*.psd".into()],
+                textures: true
+            }
+        );
+        assert!(!Metadata::from_cargo(&meta, Some("demo")).unwrap().pack.unwrap().enabled);
+        assert_eq!(Metadata::from_cargo(&json!(null), None).unwrap().pack, None);
+        for (bad, needle) in [
+            (
+                json!({"ponko": {"pack": "yes"}}),
+                "pack: expected true, false or a table",
+            ),
+            (json!({"ponko": {"pack": {"level": 9}}}), "pack: unknown key `level`"),
+            (
+                json!({"ponko": {"pack": {"exclude": "x"}}}),
+                "pack.exclude: expected a list",
+            ),
+        ] {
+            let err = Metadata::from_cargo(&bad, None).unwrap_err();
+            assert!(err.contains(needle), "{err} (wanted {needle})");
+        }
+    }
+
+    #[test]
     fn the_embedded_web_page_is_the_engines() {
         // The crate is published alone, so it carries a copy of web/index.html.
         let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/index.html");
@@ -868,6 +1061,7 @@ mod tests {
             false,
             Built::Program(Path::new("/t/x")),
             "",
+            None,
             None,
         )
         .unwrap_err();

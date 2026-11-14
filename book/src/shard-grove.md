@@ -98,8 +98,12 @@ the ramp. The camera follows from behind and above.
 The crawlers are `NavAgent`s. Each walks between two points of its route
 until the warden comes within 8 m, then chases (re-planning only when the
 warden has moved half a metre), and gives up beyond 12 m. A stunned crawler
-stops. The navigation step runs only while the game is played, so the
-crawlers hold still on the pause menu:
+stops. On every menu the rules hold the 3D physics step with
+`ctx.physics3d.set_paused`, so the warden stays where it is and keeps its
+velocity for when play resumes
+([Pausing only 3D physics](sim-clock.md#pausing-only-3d-physics)). The
+navigation step runs only while the game is played, so the crawlers hold
+still on the pause menu too:
 
 ```rust
 {{#include ../../examples/shard_grove/game.rs:crawlers}}
@@ -202,7 +206,7 @@ What the game found missing or awkward, and what is not covered yet:
 
 | Gap | Status |
 |---|---|
-| 3D physics has no pause like the 2D `ctx.physics.set_paused`; the game holds the warden's velocity at zero on menus instead. | Recorded on [#375](https://github.com/ponkoengine/ponko/issues/375) |
+| 3D physics had no pause like the 2D `ctx.physics.set_paused`; the game held the warden's velocity at zero on menus. | Fixed by `ctx.physics3d.set_paused` ([#452](https://github.com/ponkoengine/ponko/issues/452)) |
 | `NavAgent` has private fields, so it can't be built with `..Default::default()`; the game sets fields on a default. | Recorded on [#375](https://github.com/ponkoengine/ponko/issues/375) |
 | A frame-rate performance baseline per GPU tier (`PONKO_BENCH`) needs runs on real GPUs with a window. | Open |
 | CI doesn't package and play it on every OS yet, as it does Ember Hop; its headless tests run in the test job on Linux, macOS and Windows. | Open |

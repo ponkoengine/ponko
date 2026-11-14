@@ -430,3 +430,15 @@ fn end_scope(scope: wgpu::ErrorScopeGuard) -> Option<String> {
         Poll::Pending => pollster::block_on(future).map(|e| e.to_string()),
     }
 }
+
+impl SpritePipelines {
+    /// Counts sprite materials' parameters and the white stand-in as other
+    /// memory (see `memory.rs`); their textures are the game's.
+    pub(crate) fn tally_memory(&self, t: &mut super::memory::MemoryTally) {
+        use super::memory::MemoryClass as C;
+        t.texture(C::Other, &self.white);
+        for material in self.materials.iter().flatten() {
+            t.buffer(C::Other, &material.params);
+        }
+    }
+}

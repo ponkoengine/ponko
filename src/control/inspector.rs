@@ -42,6 +42,8 @@ pub(super) struct Inputs<'a> {
     pub pipelines: PipelineStats,
     /// What the renderer's own tables hold on the GPU; `None` without one.
     pub memory: Option<crate::inventory::GpuResidency>,
+    /// All the GPU memory the renderer holds, by class; `None` without one.
+    pub gpu_memory: Option<crate::perf::GpuMemory>,
     /// The GPU the renderer opened; `None` without one.
     pub adapter: Option<&'a crate::render::GpuCapabilities>,
     /// Recent drawn frames, oldest first: as many as the caller asked for.
@@ -85,6 +87,27 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
         }
         None => {
             gone("memory_estimate_bytes", no_gpu);
+            Value::Null
+        }
+    };
+    // Everything the renderer holds, by class, and the adapter's figure.
+    let gpu_memory = match &inputs.gpu_memory {
+        Some(m) => {
+            let mut v: Map<String, Value> = m
+                .classes()
+                .iter()
+                .map(|&(name, bytes)| (name.into(), json!(bytes)))
+                .collect();
+            v.insert("total".into(), json!(m.total));
+            v.insert("adapter".into(), json!(m.adapter_bytes));
+            v.insert("adapter_note".into(), json!(m.adapter_note));
+            if m.adapter_bytes.is_none() {
+                gone("gpu_memory_bytes.adapter", &m.adapter_note);
+            }
+            Value::Object(v)
+        }
+        None => {
+            gone("gpu_memory_bytes", no_gpu);
             Value::Null
         }
     };
@@ -229,7 +252,8 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
             "_ms": "milliseconds; CPU times are the last drawn frame's, GPU times are smoothed over recent frames",
             "_bytes": "bytes",
             "counts": "per frame",
-            "memory_estimate_bytes": "what the renderer's tables hold for the game: its textures (render-target textures included), mesh buffers, its GPU buffers and the instance batch pools; not the frame's own targets (scene color and depth, post-processing, ambient occlusion and temporal history), shadow maps, the light shadow atlas, skinning or per-frame instance buffers; an estimate, not the driver's total",
+            "memory_estimate_bytes": "what the renderer's tables hold for the game: its textures (render-target textures included), mesh buffers, its GPU buffers and the instance batch pools; not the frame's own targets (scene color and depth, post-processing, ambient occlusion and temporal history), shadow maps, the light shadow atlas, skinning or per-frame instance buffers (gpu_memory_bytes counts those); an estimate, not the driver's total",
+            "gpu_memory_bytes": "every GPU texture and buffer the engine holds, each counted once, by class: textures (the game's and the engine's images, render targets, texture arrays), meshes, gpu_buffers, frame_targets (scene color and depth, post-processing, ambient occlusion, reflections, temporal history, target cameras' own targets, the 2D light map), shadows (the sun's cascades), atlases (the point and spot lights' shadow atlas), skinning, probes (global illumination and image-based lighting), instance_batches (per-frame model and sprite records, static batch pools), other (uniforms, light grids, particles, occlusion culling, lookup tables, timestamp queries, stand-ins), and their total; at the sizes asked for, without the driver's padding. adapter: the platform's own figure for the device (Vulkan and DirectX 12: wgpu's allocator; Metal: the device's allocated size, which also counts wgpu's staging and the window's images), null where the platform reports none; adapter_note says which",
             "occluded_models": "models in the camera's view that occlusion culling hid in the last frame: plain models, and each LOD renderer once (a crossfade between two hidden levels counts both); shadow-only casters are not counted",
             "frustum_culled_models": "plain Model entities (not LOD groups, terrain tiles, skinned models, models with morph targets, shadow-only casters or static instance batches) whose bounds were outside the camera's view in the last frame, counted when asked from what the renderer keeps per model; models hidden by occlusion culling are in the view and not counted here (see occluded_models)",
             "history": "one entry per drawn frame, oldest first. gpu_smoothed_ms: the smoothed GPU time as it stood after that frame. gpu_latest_ms: the newest single frame's own GPU time that had come back by then, from gpu_latest_frames_ago drawn frames earlier (timestamps come back late, so a frame's own GPU time isn't known when it is kept). Both are null when GPU time wasn't measured",
@@ -241,6 +265,7 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
         "counts": counts,
         "upload_bytes": upload_bytes,
         "memory_estimate_bytes": memory,
+        "gpu_memory_bytes": gpu_memory,
         "history": history,
         "pipelines": pipelines,
         "quality": quality,
@@ -454,6 +479,15 @@ mod tests {
                 gpu_buffers: 1,
                 gpu_buffer_bytes: 24,
             }),
+            gpu_memory: matches!(source, Source::Drawn(_)).then(|| crate::perf::GpuMemory {
+                textures: 4096,
+                frame_targets: 8000,
+                shadows: 2000,
+                total: 14096,
+                adapter_bytes: None,
+                adapter_note: "no figure here".into(),
+                ..Default::default()
+            }),
             adapter: None,
             history: &HISTORY,
             frustum_culled: Ok(5),
@@ -488,6 +522,7 @@ mod tests {
             "counts",
             "upload_bytes",
             "memory_estimate_bytes",
+            "gpu_memory_bytes",
             "adapter",
             "history",
             "pipelines",
@@ -538,6 +573,39 @@ mod tests {
                 .unwrap()
                 .contains("estimate")
         );
+    }
+
+    #[test]
+    fn gpu_memory_lists_every_class_and_explains_a_missing_adapter_figure() {
+        let v = inspect(drawn(true, 5), Some(2.0));
+        let m = &v["gpu_memory_bytes"];
+        for class in [
+            "textures",
+            "meshes",
+            "gpu_buffers",
+            "frame_targets",
+            "shadows",
+            "atlases",
+            "skinning",
+            "probes",
+            "instance_batches",
+            "other",
+        ] {
+            assert!(m[class].is_u64(), "gpu_memory_bytes.{class}: {v}");
+        }
+        assert_eq!(
+            (m["frame_targets"].as_u64(), m["shadows"].as_u64()),
+            (Some(8000), Some(2000))
+        );
+        assert_eq!(m["total"], 14096);
+        // No adapter figure: null, with the reason, never 0.
+        assert!(m["adapter"].is_null(), "{v}");
+        assert_eq!(v["unavailable"]["gpu_memory_bytes.adapter"], "no figure here");
+        assert_nulls_explained(&v);
+        // Headless: no GPU, so no memory at all.
+        let headless = inspect(Source::Headless, None);
+        assert!(headless["gpu_memory_bytes"].is_null());
+        assert!(headless["unavailable"]["gpu_memory_bytes"].is_string(), "{headless}");
     }
 
     #[test]
@@ -593,6 +661,7 @@ mod tests {
             quality: None,
             pipelines: PipelineStats::default(),
             memory: None,
+            gpu_memory: None,
             adapter: None,
             history: &[],
             frustum_culled: Err(FRUSTUM_STALE),
@@ -612,6 +681,7 @@ mod tests {
             quality: None,
             pipelines: PipelineStats::default(),
             memory: None,
+            gpu_memory: None,
             adapter: Some(&caps),
             history: &[],
             frustum_culled: Ok(0),
@@ -706,6 +776,7 @@ mod tests {
             quality: None,
             pipelines: PipelineStats::default(),
             memory: None,
+            gpu_memory: None,
             adapter: None,
             history: &[],
             frustum_culled: Ok(0),
@@ -757,6 +828,7 @@ mod state_change_tests {
             quality: None,
             pipelines: PipelineStats::default(),
             memory: None,
+            gpu_memory: None,
             adapter: None,
             history: &[],
             frustum_culled: Ok(0),

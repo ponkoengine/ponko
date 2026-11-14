@@ -355,6 +355,21 @@ fn build(device: &wgpu::Device, samples: u32) -> (u32, wgpu::ComputePipeline, wg
     (samples, pipeline, layout)
 }
 
+impl Occlusion {
+    /// Counts the depth grid's buffers as other memory (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        t.buffer(C::Other, &self.params);
+        for buffer in self
+            .farthest
+            .iter()
+            .chain(self.slots.iter().filter_map(|s| s.buffer.as_ref()))
+        {
+            t.buffer(C::Other, buffer);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

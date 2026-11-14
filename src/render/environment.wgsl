@@ -79,8 +79,13 @@ fn ggx(xi: vec2<f32>, roughness: f32) -> vec3<f32> {
     }
     return vec4<f32>(light, 1.0);
 }
+// A slot's maps start at row 128 + 256 * slot of the atlas; params.w moves
+// them up by that many rows (a refresh's copy starts at row 0).
+fn maps_row() -> f32 {
+    return 128.0 + config.params.x * 256.0 - config.params.w;
+}
 @fragment fn prefilter(in: Out) -> @location(0) vec4<f32> {
-    let p = in.position.xy - vec2<f32>(0.0, 128.0 + config.params.x * 256.0);
+    let p = in.position.xy - vec2<f32>(0.0, maps_row());
     var size = 128.0; var y = p.y; var mip = 0.0;
     for (var k = 0u; k < 7u; k++) {
         if y < size { break; } y -= size; size *= 0.5; mip += 1.0;
@@ -144,7 +149,7 @@ const SH_PARTS: u32 = 6u * SH_BANDS;
 // weighted average of the light), from the source's spherical harmonics
 // (`image` is their texture here): smooth, with no sampling noise.
 @fragment fn diffuse(in: Out) -> @location(0) vec4<f32> {
-    let p = in.position.xy - vec2<f32>(800.0, 128.0 + config.params.x * 256.0);
+    let p = in.position.xy - vec2<f32>(800.0, maps_row());
     let n = cube_dir(u32(p.x / 16.0), vec2<f32>(p.x % 16.0, p.y) / 16.0);
     // The cosine lobe's weight per band, over pi: 1, 2/3, 1/4.
     let band = array<f32, 9>(1.0, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 0.25, 0.25, 0.25, 0.25, 0.25);
@@ -185,4 +190,10 @@ const SH_PARTS: u32 = 6u * SH_BANDS;
     // The cube layout is left-handed: the camera's right is the face's left.
     let c = textureLoad(image, vec2<i32>(127 - i32(local.x), i32(local.y)), 0);
     return vec4<f32>(c.rgb + sky * (1.0 - c.a), 1.0);
+}
+// A refresh's copy of a slot's maps (`image`, starting at row 0) over the
+// atlas's: the pipeline blends it in by the blend constant.
+@fragment fn blend(in: Out) -> @location(0) vec4<f32> {
+    let p = vec2<i32>(in.position.xy) - vec2<i32>(0, i32(128.0 + config.params.x * 256.0));
+    return vec4<f32>(textureLoad(image, p, 0).rgb, 1.0);
 }

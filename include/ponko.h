@@ -285,6 +285,35 @@ typedef enum PonkoUiEventKind {
   PONKO_UI_EVENT_SCREEN_POPPED,
 } PonkoUiEventKind;
 
+enum PonkoStringArgKind
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  PONKO_STRING_ARG_TEXT = 0,
+  PONKO_STRING_ARG_INT = 1,
+  PONKO_STRING_ARG_NUMBER = 2,
+};
+#ifndef __cplusplus
+typedef uint32_t PonkoStringArgKind;
+#endif // __cplusplus
+
+enum PonkoPluralCategory
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  PONKO_PLURAL_ZERO = 0,
+  PONKO_PLURAL_ONE = 1,
+  PONKO_PLURAL_TWO = 2,
+  PONKO_PLURAL_FEW = 3,
+  PONKO_PLURAL_MANY = 4,
+  PONKO_PLURAL_OTHER = 5,
+};
+#ifndef __cplusplus
+typedef uint32_t PonkoPluralCategory;
+#endif // __cplusplus
+
 enum PonkoTextAlign3D
 #ifdef __cplusplus
   : uint32_t
@@ -600,6 +629,28 @@ typedef enum PonkoParticleBlend3D {
   PONKO_PARTICLES_ALPHA,
   PONKO_PARTICLES_ADDITIVE,
 } PonkoParticleBlend3D;
+
+typedef enum PonkoStencilCompare {
+  PONKO_STENCIL_NEVER,
+  PONKO_STENCIL_LESS,
+  PONKO_STENCIL_EQUAL,
+  PONKO_STENCIL_LESS_EQUAL,
+  PONKO_STENCIL_GREATER,
+  PONKO_STENCIL_NOT_EQUAL,
+  PONKO_STENCIL_GREATER_EQUAL,
+  PONKO_STENCIL_ALWAYS,
+} PonkoStencilCompare;
+
+typedef enum PonkoStencilOp {
+  PONKO_STENCIL_KEEP,
+  PONKO_STENCIL_ZERO,
+  PONKO_STENCIL_REPLACE,
+  PONKO_STENCIL_INVERT,
+  PONKO_STENCIL_INCREMENT_CLAMP,
+  PONKO_STENCIL_DECREMENT_CLAMP,
+  PONKO_STENCIL_INCREMENT_WRAP,
+  PONKO_STENCIL_DECREMENT_WRAP,
+} PonkoStencilOp;
 
 typedef enum PonkoParticleSpace3D {
   PONKO_PARTICLES_WORLD,
@@ -1596,6 +1647,58 @@ typedef struct PonkoSpriteMaterialDesc {
   struct PonkoTexture textures[2];
 } PonkoSpriteMaterialDesc;
 
+typedef struct PonkoStencilFace {
+  uint32_t compare;
+  uint32_t fail;
+  uint32_t depth_fail;
+  uint32_t pass;
+} PonkoStencilFace;
+
+typedef struct PonkoStencil {
+  struct PonkoStencilFace front;
+  struct PonkoStencilFace back;
+  int32_t order;
+  uint8_t reference;
+  uint8_t read_mask;
+  uint8_t write_mask;
+} PonkoStencil;
+
+typedef struct PonkoShader {
+  uint32_t id;
+} PonkoShader;
+
+typedef struct PonkoTextureArray {
+  uint32_t id;
+  uint32_t width;
+  uint32_t height;
+  uint32_t layers;
+} PonkoTextureArray;
+
+typedef struct PonkoMaterialDesc {
+  struct PonkoColor color;
+  bool has_texture;
+  struct PonkoTexture texture;
+  float roughness;
+  float metallic;
+  struct PonkoColor emissive;
+  bool has_normal_map;
+  struct PonkoTexture normal_map;
+  float normal_strength;
+  bool has_orm_map;
+  struct PonkoTexture orm_map;
+  bool has_emissive_map;
+  struct PonkoTexture emissive_map;
+  uint32_t blend;
+  bool double_sided;
+  bool has_shader;
+  struct PonkoShader shader;
+  float custom[16];
+  bool has_custom_textures[2];
+  struct PonkoTexture custom_textures[2];
+  bool has_custom_arrays[3];
+  struct PonkoTextureArray custom_arrays[3];
+} PonkoMaterialDesc;
+
 typedef struct PonkoCell {
   int32_t x;
   int32_t z;
@@ -1647,42 +1750,6 @@ typedef struct PonkoModel {
   struct PonkoMesh mesh;
   struct PonkoColor color;
 } PonkoModel;
-
-typedef struct PonkoShader {
-  uint32_t id;
-} PonkoShader;
-
-typedef struct PonkoTextureArray {
-  uint32_t id;
-  uint32_t width;
-  uint32_t height;
-  uint32_t layers;
-} PonkoTextureArray;
-
-typedef struct PonkoMaterialDesc {
-  struct PonkoColor color;
-  bool has_texture;
-  struct PonkoTexture texture;
-  float roughness;
-  float metallic;
-  struct PonkoColor emissive;
-  bool has_normal_map;
-  struct PonkoTexture normal_map;
-  float normal_strength;
-  bool has_orm_map;
-  struct PonkoTexture orm_map;
-  bool has_emissive_map;
-  struct PonkoTexture emissive_map;
-  uint32_t blend;
-  bool double_sided;
-  bool has_shader;
-  struct PonkoShader shader;
-  float custom[16];
-  bool has_custom_textures[2];
-  struct PonkoTexture custom_textures[2];
-  bool has_custom_arrays[3];
-  struct PonkoTextureArray custom_arrays[3];
-} PonkoMaterialDesc;
 
 typedef struct PonkoTerrainMaterialDesc {
   struct PonkoTextureArray layers;
@@ -2177,6 +2244,14 @@ typedef struct PonkoUiComposition {
   size_t cursor_end;
   bool composing;
 } PonkoUiComposition;
+
+typedef struct PonkoStringArg {
+  const char *name;
+  PonkoStringArgKind kind;
+  const char *text;
+  int64_t integer;
+  double number;
+} PonkoStringArg;
 
 typedef struct PonkoSprite {
   struct PonkoTexture texture;
@@ -3890,6 +3965,10 @@ enum PonkoStatus ponko_ctx_set_physics_paused(struct PonkoCtx *ctx, bool paused)
 
 enum PonkoStatus ponko_ctx_is_physics_paused(struct PonkoCtx *ctx, bool *out_paused);
 
+enum PonkoStatus ponko_ctx_set_physics3d_paused(struct PonkoCtx *ctx, bool paused);
+
+enum PonkoStatus ponko_ctx_is_physics3d_paused(struct PonkoCtx *ctx, bool *out_paused);
+
 enum PonkoStatus ponko_ctx_load_collision_mesh(struct PonkoCtx *ctx,
                                                const char *path,
                                                struct PonkoVec3 scale,
@@ -4563,6 +4642,26 @@ enum PonkoStatus ponko_net_messages_steam_lobby_members(struct PonkoNetMessages 
                                                         size_t capacity,
                                                         size_t *needed);
 
+struct PonkoStencil ponko_stencil_default(void);
+
+struct PonkoStencil ponko_stencil_mark(uint8_t reference);
+
+struct PonkoStencil ponko_stencil_inside(uint8_t reference);
+
+struct PonkoStencil ponko_stencil_outside(uint8_t reference);
+
+struct PonkoStencil ponko_stencil_once(uint8_t reference);
+
+enum PonkoStatus ponko_ctx_create_material_with_stencil(struct PonkoCtx *ctx,
+                                                        const struct PonkoMaterialDesc *desc,
+                                                        const struct PonkoStencil *stencil,
+                                                        struct PonkoMaterial *out_material);
+
+enum PonkoStatus ponko_ctx_update_material_with_stencil(struct PonkoCtx *ctx,
+                                                        struct PonkoMaterial material,
+                                                        const struct PonkoMaterialDesc *desc,
+                                                        const struct PonkoStencil *stencil);
+
 enum PonkoStatus ponko_game_app_id(struct PonkoGame *game, const char *app_id);
 
 enum PonkoStatus ponko_game_data_dir(struct PonkoGame *game, const char *dir);
@@ -5003,6 +5102,14 @@ struct PonkoDecal3D ponko_decal3d_default(void);
 enum PonkoStatus ponko_decal3d_component(struct PonkoWorld *world, uint32_t *out_id);
 
 enum PonkoStatus ponko_receives_decals_component(struct PonkoWorld *world, uint32_t *out_id);
+
+enum PonkoStatus ponko_world_set_shadow_only(struct PonkoWorld *world,
+                                             uint64_t entity,
+                                             bool shadow_only);
+
+enum PonkoStatus ponko_world_is_shadow_only(struct PonkoWorld *world,
+                                            uint64_t entity,
+                                            bool *out_shadow_only);
 
 enum PonkoStatus ponko_ctx_set_decal_textures(struct PonkoCtx *ctx, struct PonkoTextureArray array);
 
@@ -5764,6 +5871,66 @@ enum PonkoStatus ponko_ctx_ui_frame_ime(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_input_scenario_ime(struct PonkoInputScenario *scenario,
                                           uint64_t tick,
                                           const struct PonkoImeEvent *event);
+
+enum PonkoStatus ponko_ctx_load_strings(struct PonkoCtx *ctx, const char *path);
+
+enum PonkoStatus ponko_ctx_strings_insert_json(struct PonkoCtx *ctx, const char *json);
+
+enum PonkoStatus ponko_ctx_strings_set_language(struct PonkoCtx *ctx,
+                                                const char *language,
+                                                bool *out_known);
+
+enum PonkoStatus ponko_ctx_strings_language(struct PonkoCtx *ctx,
+                                            char *buffer,
+                                            size_t capacity,
+                                            size_t *out_len);
+
+enum PonkoStatus ponko_ctx_strings_language_count(struct PonkoCtx *ctx, size_t *out_count);
+
+enum PonkoStatus ponko_ctx_strings_language_at(struct PonkoCtx *ctx,
+                                               size_t index,
+                                               char *code_buffer,
+                                               size_t code_capacity,
+                                               size_t *out_code_len,
+                                               char *name_buffer,
+                                               size_t name_capacity,
+                                               size_t *out_name_len);
+
+enum PonkoStatus ponko_ctx_strings_is_rtl(struct PonkoCtx *ctx, bool *out_rtl);
+
+enum PonkoStatus ponko_ctx_strings_set_font(struct PonkoCtx *ctx,
+                                            const char *language,
+                                            struct PonkoFont font);
+
+enum PonkoStatus ponko_ctx_strings_font(struct PonkoCtx *ctx,
+                                        bool *out_has,
+                                        struct PonkoFont *out_font);
+
+enum PonkoStatus ponko_ctx_strings_format(struct PonkoCtx *ctx,
+                                          const char *key,
+                                          const struct PonkoStringArg *args,
+                                          size_t count,
+                                          char *buffer,
+                                          size_t capacity,
+                                          size_t *out_len);
+
+enum PonkoStatus ponko_ctx_strings_missing_report(struct PonkoCtx *ctx,
+                                                  char *buffer,
+                                                  size_t capacity,
+                                                  size_t *out_len);
+
+enum PonkoStatus ponko_plural_category(const char *language,
+                                       double count,
+                                       PonkoPluralCategory *out_category);
+
+enum PonkoStatus ponko_ctx_ui_set_text_key(struct PonkoCtx *ctx,
+                                           uint64_t target,
+                                           uint64_t id,
+                                           const char *key,
+                                           const struct PonkoStringArg *args,
+                                           size_t count);
+
+enum PonkoStatus ponko_ctx_ui_localize(struct PonkoCtx *ctx, uint64_t target);
 
 #ifdef __cplusplus
 }  // extern "C"

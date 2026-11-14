@@ -218,22 +218,86 @@ fn rule(value: &serde_json::Value) -> Result<Rule, String> {
     Ok(rule)
 }
 
-/// Whether `path` matches `pattern`: `*` matches within a folder name,
-/// `**` across folders.
-fn glob(pattern: &[u8], path: &[u8]) -> bool {
-    match pattern.split_first() {
-        None => path.is_empty(),
-        Some((b'*', rest)) => {
-            let (across, rest) = match rest.split_first() {
-                Some((b'*', rest)) => (true, rest),
-                _ => (false, rest),
-            };
-            (0..=path.len())
-                .take_while(|&i| across || i == 0 || path[i - 1] != b'/')
-                .any(|i| glob(rest, &path[i..]))
+use crate::pack::glob;
+
+/// The textures `ponko pack --textures` adds to a pack of `files` (name in
+/// the pack, path on disk): for each PNG or JPEG image whose kind isn't
+/// `skip`, its `.ktx2` (name, bytes), encoded now unless the files already
+/// hold that `.ktx2`, newer than the image and its settings. The settings
+/// are the `textures.json` nearest above each image, up to `root`; its
+/// rules name paths relative to its own folder.
+pub fn convert_for_pack(files: &[(String, PathBuf)], root: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut settings_cache: std::collections::HashMap<PathBuf, Option<(Settings, Option<std::time::SystemTime>)>> =
+        std::collections::HashMap::new();
+    let mut out = Vec::new();
+    for (name, path) in files {
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if !matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
+            continue;
         }
-        Some((c, rest)) => path.first() == Some(c) && glob(rest, &path[1..]),
+        // The nearest textures.json, from the image's folder up to the root.
+        let mut found = None;
+        let mut dir = path.parent();
+        while let Some(d) = dir {
+            let entry = match settings_cache.get(d) {
+                Some(entry) => entry.clone(),
+                None => {
+                    let file = d.join("textures.json");
+                    let entry = if file.is_file() {
+                        let text = std::fs::read_to_string(&file)
+                            .map_err(|e| format!("can't read {}: {e}", file.display()))?;
+                        let settings = Settings::parse(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+                        Some((settings, modified(&file)))
+                    } else {
+                        None
+                    };
+                    settings_cache.insert(d.to_path_buf(), entry.clone());
+                    entry
+                }
+            };
+            if let Some(entry) = entry {
+                found = Some((d.to_path_buf(), entry));
+                break;
+            }
+            if d == root || !d.starts_with(root) {
+                break;
+            }
+            dir = d.parent();
+        }
+        let Some((settings_dir, (settings, settings_time))) = found else {
+            continue; // no settings: images stay as they are
+        };
+        let relative = path
+            .strip_prefix(&settings_dir)
+            .map_err(|_| format!("{} is outside {}", path.display(), settings_dir.display()))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let rule = settings.rule_for(&relative);
+        if rule.kind == Kind::Skip {
+            continue;
+        }
+        let ktx2_name = match name.rsplit_once('.') {
+            Some((stem, _)) => format!("{stem}.ktx2"),
+            None => format!("{name}.ktx2"),
+        };
+        let existing = files.iter().find(|(n, _)| *n == ktx2_name).map(|(_, p)| p);
+        let up_to_date = existing
+            .and_then(|p| modified(p))
+            .is_some_and(|made| modified(path).is_some_and(|s| s <= made) && settings_time.is_none_or(|s| s <= made));
+        if up_to_date {
+            continue;
+        }
+        let image = image::open(path)
+            .map_err(|e| format!("can't read {}: {e}", path.display()))?
+            .into_rgba8();
+        let (width, height) = image.dimensions();
+        let encoded = encode(image.as_raw(), width, height, rule).map_err(|e| format!("{name}: {e}"))?;
+        out.push((ktx2_name, encoded.file));
     }
+    Ok(out)
 }
 
 /// Runs `ponko textures` with `options`, relative to `dir`.

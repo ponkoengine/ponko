@@ -26,6 +26,8 @@ mod lights2d;
     any(test, feature = "bench-internals")
 ))]
 mod lights2d_bench;
+#[cfg(feature = "window")]
+pub(crate) mod memory;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod mips;
 #[cfg(not(feature = "window"))]
@@ -388,6 +390,8 @@ mod frame_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod gi_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod gpu_memory_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod handle_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod light_shadow_render_test;
@@ -415,8 +419,13 @@ mod regression_render_test;
 mod regression_sequence_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod regression_stage;
+
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod gltf_extensions_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 pub(crate) mod render_test_support;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod rich_text_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod shadow_cache_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -478,11 +487,13 @@ mod ray_tracing_probe_render_test;
 
 #[cfg(feature = "3d")]
 pub use crate::three::{
-    AmbientOcclusion, AntiAliasing, BatchCulling, Blend, Compute, ComputePass, Effect, GlobalIllumination, GpuBuffer,
-    GraphicsQuality, InstanceBatch, InstanceBatchOptions, InstanceLevel, Lighting, LodGroup, LodHysteresis, LodLevel,
-    LodPick, LodRenderer, LodSettings, LodShadow, Material, MaterialDesc, Mesh, MeshCost, MeshData, Model,
-    ModelMaterial, ModelMaterials, Post, ReceivesDecals, RenderPasses, SceneSettings, ScreenEffect, Shader,
-    ShadowFilter, ShadowMesh, ShadowOnly, Sky, StreamedLod, TargetCamera, TargetEffect, Tonemap,
+    AmbientOcclusion, AntiAliasing, BatchCulling, Blend, Compute, ComputePass, DepthOfField, Effect,
+    GlobalIllumination, GpuBuffer, GraphicsQuality, InstanceBatch, InstanceBatchOptions, InstanceLevel, Lighting,
+    LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow, Material, MaterialDesc, Mesh,
+    MeshCost, MeshData, Model, ModelCamera, ModelLight, ModelLightKind, ModelMaterial, ModelMaterials, ModelProjection,
+    Post, PostVolume, ReceivesDecals, RenderPasses, SceneSettings, ScreenEffect, Shader, ShadowFilter, ShadowMesh,
+    ShadowOnly, Sky, SplitToning, Stencil, StencilCompare, StencilFace, StencilOp, StreamedLod, TargetCamera,
+    TargetEffect, Tonemap,
 };
 /// Unstable extraction benchmark driver for `ponko_bench` (feature `bench-internals`).
 #[doc(hidden)]

@@ -65,6 +65,11 @@ use crate::hot_reload::Asset;
 use crate::reflect::WorldReflect;
 use crate::scene::{PREFAB_FORMAT, PREFAB_VERSION};
 
+mod pack;
+pub use pack::PackSource;
+#[cfg(all(target_arch = "wasm32", feature = "window"))]
+pub(crate) use pack::{parse_header as parse_pack_header, set_web_pack};
+
 /// A place named assets can be read from, other than the `assets/` folder:
 /// bytes embedded in the game, a pack file, a test fixture in memory.
 ///
@@ -279,9 +284,32 @@ impl Found {
 #[derive(Default)]
 pub(crate) struct Sources {
     list: Vec<Box<dyn AssetSource>>,
+    /// The packs read after the loose files, in place of the default ones
+    /// (`assets.pack` beside the asset folders): for tests.
+    #[cfg(test)]
+    packs: Option<Vec<PackSource>>,
 }
 
 impl Sources {
+    /// The packs read after the loose files: `assets.pack` beside the
+    /// asset folders (the page's pack on the web).
+    fn packs(&self) -> &[PackSource] {
+        #[cfg(test)]
+        if let Some(packs) = &self.packs {
+            return packs;
+        }
+        pack::default_packs()
+    }
+
+    /// Reads `packs` instead of the default packs (tests).
+    #[cfg(test)]
+    pub(crate) fn with_packs(packs: Vec<PackSource>) -> Sources {
+        Sources {
+            list: Vec::new(),
+            packs: Some(packs),
+        }
+    }
+
     /// Whether a source with this id was added.
     pub(crate) fn has(&self, id: &str) -> bool {
         self.list.iter().any(|s| s.id() == id)
@@ -331,6 +359,20 @@ impl Sources {
                 return Ok(Lookup::Cached(origin, value));
             }
         }
+        // A name from a pack (no loose file): cached without unpacking it again.
+        let packs = self.packs();
+        if !packs.is_empty()
+            && resolve(name).is_err()
+            && let Some(pack) = packs.iter().find(|p| p.contains(name))
+        {
+            let origin = Origin::Source {
+                source: pack.id().to_string(),
+                name: name.to_string(),
+            };
+            if let Some(value) = cached(&origin) {
+                return Ok(Lookup::Cached(origin, value));
+            }
+        }
         let found = self.find(name)?;
         Ok(match cached(&found.origin) {
             Some(value) => Lookup::Cached(found.origin, value),
@@ -358,7 +400,15 @@ impl Sources {
                 source: source.id().to_string(),
                 name: name.to_string(),
             }),
-            None => resolve(name).ok().map(Origin::File),
+            None => resolve(name).ok().map(Origin::File).or_else(|| {
+                self.packs()
+                    .iter()
+                    .find(|p| p.contains(name))
+                    .map(|pack| Origin::Source {
+                        source: pack.id().to_string(),
+                        name: name.to_string(),
+                    })
+            }),
         }
     }
 
@@ -389,18 +439,45 @@ impl Sources {
                 }
             }
         }
-        match resolve(name) {
-            Ok(path) => Ok(Found {
-                origin: Origin::File(path),
-                bytes: None,
-            }),
-            Err(e) if self.list.is_empty() => Err(crate::error::Error::not_found(name, e)),
-            Err(e) => {
-                let ids: Vec<String> = self.list.iter().map(|s| format!("\"{}\"", s.id())).collect();
-                let message = format!("{e}\nAsset sources searched first: {}", ids.join(", "));
-                Err(crate::error::Error::not_found(name, message))
+        let e = match resolve(name) {
+            Ok(path) => {
+                return Ok(Found {
+                    origin: Origin::File(path),
+                    bytes: None,
+                });
+            }
+            Err(e) => e,
+        };
+        // Loose files win over the packs, so a file can be patched (and
+        // hot reloaded) beside a pack.
+        let packs = self.packs();
+        for pack in packs {
+            if pack.contains(name) {
+                return match pack.read(name) {
+                    Ok(bytes) => Ok(Found {
+                        origin: Origin::Source {
+                            source: pack.id().to_string(),
+                            name: name.to_string(),
+                        },
+                        bytes: Some(bytes),
+                    }),
+                    Err(err) => {
+                        let message = format!("asset pack {} could not read \"{name}\": {err}", pack.id());
+                        Err(crate::error::Error::new(crate::error::ErrorKind::Io, message).with_path(name))
+                    }
+                };
             }
         }
+        let mut message = e;
+        if !packs.is_empty() {
+            let ids: Vec<&str> = packs.iter().map(|p| p.id()).collect();
+            message.push_str(&format!("\nAsset packs searched after them: {}", ids.join(", ")));
+        }
+        if !self.list.is_empty() {
+            let ids: Vec<String> = self.list.iter().map(|s| format!("\"{}\"", s.id())).collect();
+            message.push_str(&format!("\nAsset sources searched first: {}", ids.join(", ")));
+        }
+        Err(crate::error::Error::not_found(name, message))
     }
 }
 
@@ -948,6 +1025,48 @@ impl Assets {
         loaded.unwrap_or_else(|e| panic!("{e}"));
     }
 
+    /// Loads a string table file (see [`crate::locale`] for the format) into
+    /// the [`Strings`](crate::locale::Strings) resource, which it adds if the
+    /// world has none. The first table loaded is the reference language and
+    /// the current one. With [hot reload](crate::game::Game::hot_reload) on,
+    /// editing the file replaces the table while the game runs, and UI nodes
+    /// that hold a key show the new text; a file that doesn't parse keeps
+    /// the old table and prints why.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::locale::Strings;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.assets.add_source(MemorySource::new("built-in")
+    ///         .with("lang/en.json", r#"{"language": "en", "strings": {"play": "Play"}}"#)
+    ///         .with("lang/es.json", r#"{"language": "es", "strings": {"play": "Jugar"}}"#));
+    ///     ctx.assets.load_strings(&mut ctx.world, "lang/en.json").unwrap();
+    ///     ctx.assets.load_strings(&mut ctx.world, "lang/es.json").unwrap();
+    ///     let strings = ctx.world.resource_mut::<Strings>();
+    ///     strings.set_language("es");
+    ///     assert_eq!(strings.get("play"), "Jugar");
+    /// });
+    /// ```
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if no source
+    /// has the file, [`Decode`](crate::error::ErrorKind::Decode) if it isn't a
+    /// string table (see [`StringTable::from_json`](crate::locale::StringTable::from_json)).
+    pub fn load_strings(&mut self, world: &mut World, path: &str) -> Result<(), crate::error::Error> {
+        self.load_data(
+            world,
+            path,
+            Box::new(|world: &mut World, text: &str| {
+                let table = crate::locale::StringTable::from_json(text)?;
+                if world.get_resource::<crate::locale::Strings>().is_none() {
+                    world.insert_resource(crate::locale::Strings::default());
+                }
+                world.resource_mut::<crate::locale::Strings>().insert(table);
+                Ok(())
+            }),
+        )
+    }
+
     /// Loads a JSON file into the reflected component `T` of `entity` (object
     /// fields merge), reloading it when the file changes. `T` must be
     /// registered with `World::reflect`; the name the file is applied under
@@ -1292,6 +1411,51 @@ mod tests {
         // load reports the error.
         assert_eq!(sources.locate("broken"), Some(in_source("read-only", "broken")));
         assert_eq!(sources.locate("definitely-not-here.png"), None);
+    }
+
+    #[test]
+    fn loose_files_win_over_default_packs_which_fill_in_the_rest() {
+        // `crab.png` is a loose file of this crate's assets/ folder.
+        let pack = pack::write_for_test(&[("crab.png", b"packed crab", false), ("only/packed.txt", b"hi", true)]);
+        let mut sources = Sources::with_packs(vec![PackSource::from_bytes("assets.pack", pack).unwrap()]);
+        let found = sources.find("crab.png").unwrap();
+        assert!(matches!(found.origin, Origin::File(_)), "the loose file wins");
+        let found = sources.find("only/packed.txt").unwrap();
+        let in_pack = Origin::Source {
+            source: "assets.pack".into(),
+            name: "only/packed.txt".into(),
+        };
+        assert_eq!(found.origin, in_pack);
+        assert_eq!(found.into_bytes().unwrap(), b"hi");
+        assert_eq!(sources.locate("only/packed.txt"), Some(in_pack.clone()));
+        // Added sources still come first.
+        sources.add(Box::new(MemorySource::new("mem").with("only/packed.txt", *b"mem")));
+        assert_eq!(sources.find("only/packed.txt").unwrap().into_bytes().unwrap(), b"mem");
+        // A missing name says where it looked, packs included.
+        let err = sources.find("nowhere.png").err().unwrap();
+        assert_eq!(err.kind(), crate::error::ErrorKind::NotFound);
+        assert!(
+            err.message().contains("Asset packs searched after them: assets.pack"),
+            "{}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn a_name_loaded_from_a_pack_is_cached_without_unpacking_it_again() {
+        let pack = pack::write_for_test(&[("packed.txt", b"hi", false)]);
+        let mut bytes = pack.clone();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xff; // reading it would fail its checksum
+        let sources = Sources::with_packs(vec![PackSource::from_bytes("assets.pack", bytes).unwrap()]);
+        assert_eq!(
+            sources.find("packed.txt").err().unwrap().kind(),
+            crate::error::ErrorKind::Io
+        );
+        let cached = sources.lookup("packed.txt", |origin| {
+            matches!(origin, Origin::Source { source, .. } if source == "assets.pack").then_some(7)
+        });
+        assert!(matches!(cached, Ok(Lookup::Cached(_, 7))));
     }
 
     #[test]

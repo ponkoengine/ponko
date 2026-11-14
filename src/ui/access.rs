@@ -335,6 +335,9 @@ impl Ui {
             &n.access_name
         } else if n.widget == UiWidget::TextInput {
             ""
+        } else if let Some(rich) = n.rich() {
+            // Without its markup; images as their alternative text.
+            &rich.plain
         } else {
             &n.text
         })

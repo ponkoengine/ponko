@@ -708,3 +708,22 @@ fn vertex_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
         mapped_at_creation: false,
     })
 }
+
+impl Lights2D {
+    /// Counts the light map, its stencil and the normal map target as
+    /// frame targets, and the lights' buffers as other memory (see
+    /// `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut super::memory::MemoryTally) {
+        use super::memory::MemoryClass as C;
+        if let Some(targets) = &self.targets {
+            t.view(C::FrameTargets, &targets.light_map);
+            t.view(C::FrameTargets, &targets.stencil);
+            if let Some((normals, _)) = &targets.normals {
+                t.view(C::FrameTargets, normals);
+            }
+        }
+        for buffer in [&self.view_buffer, &self.lights, &self.vertices] {
+            t.buffer(C::Other, buffer);
+        }
+    }
+}

@@ -322,6 +322,80 @@ pub fn ponko::anim::AnimationParameter::clone(&self) -> Self
 impl core::fmt::Debug for ponko::anim::AnimationParameter
 pub fn ponko::anim::AnimationParameter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::anim::AnimationParameter
+#[non_exhaustive] pub enum ponko::anim::HumanBone
+pub ponko::anim::HumanBone::Chest
+pub ponko::anim::HumanBone::Head
+pub ponko::anim::HumanBone::Hips
+pub ponko::anim::HumanBone::LeftFoot
+pub ponko::anim::HumanBone::LeftHand
+pub ponko::anim::HumanBone::LeftIndexDistal
+pub ponko::anim::HumanBone::LeftIndexIntermediate
+pub ponko::anim::HumanBone::LeftIndexProximal
+pub ponko::anim::HumanBone::LeftLittleDistal
+pub ponko::anim::HumanBone::LeftLittleIntermediate
+pub ponko::anim::HumanBone::LeftLittleProximal
+pub ponko::anim::HumanBone::LeftLowerArm
+pub ponko::anim::HumanBone::LeftLowerLeg
+pub ponko::anim::HumanBone::LeftMiddleDistal
+pub ponko::anim::HumanBone::LeftMiddleIntermediate
+pub ponko::anim::HumanBone::LeftMiddleProximal
+pub ponko::anim::HumanBone::LeftRingDistal
+pub ponko::anim::HumanBone::LeftRingIntermediate
+pub ponko::anim::HumanBone::LeftRingProximal
+pub ponko::anim::HumanBone::LeftShoulder
+pub ponko::anim::HumanBone::LeftThumbDistal
+pub ponko::anim::HumanBone::LeftThumbIntermediate
+pub ponko::anim::HumanBone::LeftThumbProximal
+pub ponko::anim::HumanBone::LeftToes
+pub ponko::anim::HumanBone::LeftUpperArm
+pub ponko::anim::HumanBone::LeftUpperLeg
+pub ponko::anim::HumanBone::Neck
+pub ponko::anim::HumanBone::RightFoot
+pub ponko::anim::HumanBone::RightHand
+pub ponko::anim::HumanBone::RightIndexDistal
+pub ponko::anim::HumanBone::RightIndexIntermediate
+pub ponko::anim::HumanBone::RightIndexProximal
+pub ponko::anim::HumanBone::RightLittleDistal
+pub ponko::anim::HumanBone::RightLittleIntermediate
+pub ponko::anim::HumanBone::RightLittleProximal
+pub ponko::anim::HumanBone::RightLowerArm
+pub ponko::anim::HumanBone::RightLowerLeg
+pub ponko::anim::HumanBone::RightMiddleDistal
+pub ponko::anim::HumanBone::RightMiddleIntermediate
+pub ponko::anim::HumanBone::RightMiddleProximal
+pub ponko::anim::HumanBone::RightRingDistal
+pub ponko::anim::HumanBone::RightRingIntermediate
+pub ponko::anim::HumanBone::RightRingProximal
+pub ponko::anim::HumanBone::RightShoulder
+pub ponko::anim::HumanBone::RightThumbDistal
+pub ponko::anim::HumanBone::RightThumbIntermediate
+pub ponko::anim::HumanBone::RightThumbProximal
+pub ponko::anim::HumanBone::RightToes
+pub ponko::anim::HumanBone::RightUpperArm
+pub ponko::anim::HumanBone::RightUpperLeg
+pub ponko::anim::HumanBone::Root
+pub ponko::anim::HumanBone::Spine
+pub ponko::anim::HumanBone::UpperChest
+impl ponko::anim::HumanBone
+pub const ponko::anim::HumanBone::ALL: &'static [ponko::anim::HumanBone]
+pub fn ponko::anim::HumanBone::name(self) -> &'static str
+impl ponko::anim::HumanBone
+pub fn ponko::anim::HumanBone::is_required(self) -> bool
+impl core::clone::Clone for ponko::anim::HumanBone
+pub fn ponko::anim::HumanBone::clone(&self) -> Self
+impl core::cmp::Eq for ponko::anim::HumanBone
+impl core::cmp::Ord for ponko::anim::HumanBone
+pub fn ponko::anim::HumanBone::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for ponko::anim::HumanBone
+pub fn ponko::anim::HumanBone::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for ponko::anim::HumanBone
+pub fn ponko::anim::HumanBone::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for ponko::anim::HumanBone
+pub fn ponko::anim::HumanBone::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::anim::HumanBone
+pub fn ponko::anim::HumanBone::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::anim::HumanBone
+impl core::marker::StructuralPartialEq for ponko::anim::HumanBone
 #[non_exhaustive] pub enum ponko::anim::Interpolation
 pub ponko::anim::Interpolation::CubicSpline
 pub ponko::anim::Interpolation::Linear
@@ -360,6 +434,25 @@ impl core::clone::Clone for ponko::anim::Motion
 pub fn ponko::anim::Motion::clone(&self) -> Self
 impl core::fmt::Debug for ponko::anim::Motion
 pub fn ponko::anim::Motion::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub enum ponko::anim::RetargetError
+pub ponko::anim::RetargetError::InvalidJoint
+pub ponko::anim::RetargetError::InvalidJoint::bone: ponko::anim::HumanBone
+pub ponko::anim::RetargetError::InvalidJoint::joint: usize
+pub ponko::anim::RetargetError::InvalidJoint::source: bool
+pub ponko::anim::RetargetError::MissingBone
+pub ponko::anim::RetargetError::MissingBone::bone: ponko::anim::HumanBone
+pub ponko::anim::RetargetError::MissingBone::source: bool
+impl core::clone::Clone for ponko::anim::RetargetError
+pub fn ponko::anim::RetargetError::clone(&self) -> Self
+impl core::cmp::Eq for ponko::anim::RetargetError
+impl core::cmp::PartialEq for ponko::anim::RetargetError
+pub fn ponko::anim::RetargetError::eq(&self, &Self) -> bool
+impl core::error::Error for ponko::anim::RetargetError
+impl core::fmt::Debug for ponko::anim::RetargetError
+pub fn ponko::anim::RetargetError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::anim::RetargetError
+pub fn ponko::anim::RetargetError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::anim::RetargetError
 pub struct ponko::anim::AnimationClip(_)
 impl ponko::anim::AnimationClip
 pub fn ponko::anim::AnimationClip::duration(&self) -> f32
@@ -484,6 +577,23 @@ impl serde_core::ser::Serialize for ponko::anim::AttachToJoint
 pub fn ponko::anim::AttachToJoint::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::anim::AttachToJoint
 pub fn ponko::anim::AttachToJoint::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::anim::HumanoidMap
+impl ponko::anim::HumanoidMap
+pub fn ponko::anim::HumanoidMap::detect(&ponko::anim::Skeleton) -> Self
+pub fn ponko::anim::HumanoidMap::get(&self, ponko::anim::HumanBone) -> core::option::Option<usize>
+pub fn ponko::anim::HumanoidMap::missing(&self) -> impl core::iter::traits::iterator::Iterator<Item = ponko::anim::HumanBone> + '_
+pub fn ponko::anim::HumanoidMap::new() -> Self
+pub fn ponko::anim::HumanoidMap::set(&mut self, ponko::anim::HumanBone, core::option::Option<usize>)
+impl core::clone::Clone for ponko::anim::HumanoidMap
+pub fn ponko::anim::HumanoidMap::clone(&self) -> Self
+impl core::cmp::Eq for ponko::anim::HumanoidMap
+impl core::cmp::PartialEq for ponko::anim::HumanoidMap
+pub fn ponko::anim::HumanoidMap::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::anim::HumanoidMap
+pub fn ponko::anim::HumanoidMap::default() -> Self
+impl core::fmt::Debug for ponko::anim::HumanoidMap
+pub fn ponko::anim::HumanoidMap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::anim::HumanoidMap
 pub struct ponko::anim::Joint
 pub ponko::anim::Joint::name: alloc::string::String
 pub ponko::anim::Joint::parent: core::option::Option<usize>
@@ -599,6 +709,18 @@ impl core::hash::Hash for ponko::anim::ParamId
 pub fn ponko::anim::ParamId::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for ponko::anim::ParamId
 impl core::marker::StructuralPartialEq for ponko::anim::ParamId
+pub struct ponko::anim::Retargeter
+pub ponko::anim::Retargeter::foot_ik: bool
+pub ponko::anim::Retargeter::sample_rate: f32
+impl ponko::anim::Retargeter
+pub fn ponko::anim::Retargeter::new(&ponko::anim::Skeleton, &ponko::anim::HumanoidMap, &ponko::anim::Skeleton, &ponko::anim::HumanoidMap) -> core::result::Result<Self, ponko::anim::RetargetError>
+pub fn ponko::anim::Retargeter::retarget(&mut self, &ponko::anim::AnimationClip) -> ponko::anim::AnimationClip
+pub fn ponko::anim::Retargeter::retarget_pose(&mut self, &ponko::anim::Skeleton, &mut ponko::anim::Skeleton)
+pub fn ponko::anim::Retargeter::scale(&self) -> f32
+impl core::clone::Clone for ponko::anim::Retargeter
+pub fn ponko::anim::Retargeter::clone(&self) -> Self
+impl core::fmt::Debug for ponko::anim::Retargeter
+pub fn ponko::anim::Retargeter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::anim::RootMotion
 pub ponko::anim::RootMotion::position: glam::f32::vec3::Vec3
 pub ponko::anim::RootMotion::rotation: glam::f32::sse2::quat::Quat
@@ -665,6 +787,7 @@ pub fn ponko::assets::Assets::hot_reload(&self) -> bool
 pub fn ponko::assets::Assets::load_component_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_resource<R: core::marker::Send + core::marker::Sync + 'static + serde_core::de::DeserializeOwned>(&mut self, &mut ponko_ecs::world::World, &str)
 pub fn ponko::assets::Assets::load_resource_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::assets::Assets::load_strings(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_with<T>(&self, &str, impl core::ops::function::FnOnce(&[u8]) -> core::result::Result<T, ponko::error::Error>) -> core::result::Result<T, ponko::error::Error>
 pub fn ponko::assets::Assets::reloaded_files(&self) -> &[alloc::string::String]
 pub fn ponko::assets::Assets::reloaded_textures(&self) -> &[ponko::texture::Texture]
@@ -689,6 +812,17 @@ impl ponko::assets::AssetSource for ponko::assets::MemorySource
 pub fn ponko::assets::MemorySource::contains(&self, &str) -> bool
 pub fn ponko::assets::MemorySource::id(&self) -> &str
 pub fn ponko::assets::MemorySource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
+pub struct ponko::assets::PackSource
+impl ponko::prelude::PackSource
+pub fn ponko::prelude::PackSource::from_bytes(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::rcs::arc::Arc<[u8]>>) -> core::result::Result<ponko::prelude::PackSource, ponko::error::Error>
+pub fn ponko::prelude::PackSource::is_empty(&self) -> bool
+pub fn ponko::prelude::PackSource::len(&self) -> usize
+pub fn ponko::prelude::PackSource::names(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
+pub fn ponko::prelude::PackSource::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<ponko::prelude::PackSource, ponko::error::Error>
+impl ponko::assets::AssetSource for ponko::prelude::PackSource
+pub fn ponko::prelude::PackSource::contains(&self, &str) -> bool
+pub fn ponko::prelude::PackSource::id(&self) -> &str
+pub fn ponko::prelude::PackSource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
 pub trait ponko::assets::AssetSource: 'static
 pub fn ponko::assets::AssetSource::contains(&self, &str) -> bool
 pub fn ponko::assets::AssetSource::id(&self) -> &str
@@ -697,6 +831,10 @@ impl ponko::assets::AssetSource for ponko::assets::MemorySource
 pub fn ponko::assets::MemorySource::contains(&self, &str) -> bool
 pub fn ponko::assets::MemorySource::id(&self) -> &str
 pub fn ponko::assets::MemorySource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
+impl ponko::assets::AssetSource for ponko::prelude::PackSource
+pub fn ponko::prelude::PackSource::contains(&self, &str) -> bool
+pub fn ponko::prelude::PackSource::id(&self) -> &str
+pub fn ponko::prelude::PackSource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
 pub mod ponko::attach
 #[repr(C)] pub struct ponko::attach::Attached
 pub ponko::attach::Attached::offset: glam::f32::vec2::Vec2
@@ -1373,6 +1511,20 @@ impl serde_core::ser::Serialize for ponko::d3::JointMotion
 pub fn ponko::d3::JointMotion::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::JointMotion
 pub fn ponko::d3::JointMotion::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub enum ponko::d3::NavObstacleShape
+pub ponko::d3::NavObstacleShape::Box
+pub ponko::d3::NavObstacleShape::Convex(ponko::d3::NavConvexPolygon)
+pub ponko::d3::NavObstacleShape::Cylinder
+impl core::clone::Clone for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::default() -> Self
+impl core::fmt::Debug for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::NavObstacleShape
+impl core::marker::StructuralPartialEq for ponko::d3::NavObstacleShape
 #[non_exhaustive] pub enum ponko::d3::ParticleBlend
 pub ponko::d3::ParticleBlend::Additive
 pub ponko::d3::ParticleBlend::Alpha
@@ -1402,6 +1554,25 @@ pub fn ponko::d3::ParticleShape::default() -> Self
 impl core::fmt::Debug for ponko::d3::ParticleShape
 pub fn ponko::d3::ParticleShape::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::d3::ParticleShape
+pub enum ponko::d3::ProbeRefresh
+pub ponko::d3::ProbeRefresh::Every(f32)
+pub ponko::d3::ProbeRefresh::LightingChanged(f32)
+pub ponko::d3::ProbeRefresh::Never
+pub ponko::d3::ProbeRefresh::OnDemand
+impl core::clone::Clone for ponko::d3::ProbeRefresh
+pub fn ponko::d3::ProbeRefresh::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::ProbeRefresh
+pub fn ponko::d3::ProbeRefresh::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::d3::ProbeRefresh
+pub fn ponko::d3::ProbeRefresh::default() -> Self
+impl core::fmt::Debug for ponko::d3::ProbeRefresh
+pub fn ponko::d3::ProbeRefresh::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::ProbeRefresh
+impl core::marker::StructuralPartialEq for ponko::d3::ProbeRefresh
+impl serde_core::ser::Serialize for ponko::d3::ProbeRefresh
+pub fn ponko::d3::ProbeRefresh::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::ProbeRefresh
+pub fn ponko::d3::ProbeRefresh::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[non_exhaustive] pub enum ponko::d3::Shape
 pub ponko::d3::Shape::Capsule
 pub ponko::d3::Shape::Capsule::height: f32
@@ -1822,6 +1993,19 @@ pub fn ponko::d3::NavAgent::default() -> Self
 impl core::fmt::Debug for ponko::d3::NavAgent
 pub fn ponko::d3::NavAgent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl ponko_ecs::bundle::Component for ponko::d3::NavAgent
+pub struct ponko::d3::NavConvexPolygon
+impl ponko::d3::NavConvexPolygon
+pub const ponko::d3::NavConvexPolygon::MAX_POINTS: usize
+pub fn ponko::d3::NavConvexPolygon::new(&[glam::f32::vec2::Vec2]) -> core::option::Option<Self>
+pub fn ponko::d3::NavConvexPolygon::points(&self) -> &[glam::f32::vec2::Vec2]
+impl core::clone::Clone for ponko::d3::NavConvexPolygon
+pub fn ponko::d3::NavConvexPolygon::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::NavConvexPolygon
+pub fn ponko::d3::NavConvexPolygon::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::d3::NavConvexPolygon
+pub fn ponko::d3::NavConvexPolygon::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::NavConvexPolygon
+impl core::marker::StructuralPartialEq for ponko::d3::NavConvexPolygon
 pub struct ponko::d3::NavMesh
 impl ponko::d3::NavMesh
 pub fn ponko::d3::NavMesh::bake(&[ponko::nav::NavSource], ponko::nav::NavBakeSettings) -> core::result::Result<Self, ponko::nav::NavBakeError>
@@ -1830,11 +2014,15 @@ pub fn ponko::d3::NavMesh::find_path(&self, glam::f32::vec3::Vec3, glam::f32::ve
 pub fn ponko::d3::NavMesh::sample_position(&self, glam::f32::vec3::Vec3, f32) -> core::option::Option<glam::f32::vec3::Vec3>
 pub fn ponko::d3::NavMesh::set_obstacles(&mut self, &[ponko::d3::NavObstacle])
 pub fn ponko::d3::NavMesh::update_carving(&mut self, usize) -> core::result::Result<usize, ponko::nav::NavBakeError>
-pub struct ponko::d3::NavObstacle
+#[non_exhaustive] pub struct ponko::d3::NavObstacle
 pub ponko::d3::NavObstacle::carve: bool
 pub ponko::d3::NavObstacle::center: glam::f32::vec3::Vec3
 pub ponko::d3::NavObstacle::half_extents: glam::f32::vec3::Vec3
+pub ponko::d3::NavObstacle::shape: ponko::d3::NavObstacleShape
+pub ponko::d3::NavObstacle::yaw: f32
 impl ponko::d3::NavObstacle
+pub fn ponko::d3::NavObstacle::convex(glam::f32::vec3::Vec3, &[glam::f32::vec2::Vec2], f32) -> core::option::Option<Self>
+pub fn ponko::d3::NavObstacle::cylinder(glam::f32::vec3::Vec3, f32, f32) -> Self
 pub fn ponko::d3::NavObstacle::new(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> Self
 impl core::clone::Clone for ponko::d3::NavObstacle
 pub fn ponko::d3::NavObstacle::clone(&self) -> Self
@@ -1916,11 +2104,13 @@ pub fn ponko::d3::Physics::free(&mut self, ponko::d3::CollisionMesh)
 pub fn ponko::d3::Physics::gravity(&self) -> glam::f32::vec3::Vec3
 pub fn ponko::d3::Physics::heightfield(&mut self, &[f32], f32) -> ponko::d3::CollisionMesh
 pub fn ponko::d3::Physics::is_live(&self, ponko::d3::CollisionMesh) -> bool
+pub fn ponko::d3::Physics::is_paused(&self) -> bool
 pub fn ponko::d3::Physics::mass(&self, ponko_ecs::entity::Entity) -> core::option::Option<f32>
 pub fn ponko::d3::Physics::new(glam::f32::vec3::Vec3) -> Self
 pub fn ponko::d3::Physics::position(&self, ponko_ecs::entity::Entity) -> core::option::Option<glam::f32::vec3::Vec3>
 pub fn ponko::d3::Physics::set_contact_hook(&mut self, impl core::ops::function::Fn(&mut ponko::d3::ContactPair<'_, '_>) + core::marker::Send + core::marker::Sync + 'static)
 pub fn ponko::d3::Physics::set_gravity(&mut self, glam::f32::vec3::Vec3)
+pub fn ponko::d3::Physics::set_paused(&mut self, bool)
 pub fn ponko::d3::Physics::trimesh(&mut self, &[glam::f32::vec3::Vec3], &[[u32; 3]]) -> core::option::Option<ponko::d3::CollisionMesh>
 impl ponko::d3::Physics
 pub fn ponko::d3::Physics::add_mesh(&mut self, &ponko::d3::CollisionMeshData) -> ponko::d3::CollisionMesh
@@ -2034,6 +2224,26 @@ impl serde_core::ser::Serialize for ponko::d3::ReflectionProbe
 pub fn ponko::d3::ReflectionProbe::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::ReflectionProbe where ponko::d3::ReflectionProbe: core::default::Default
 pub fn ponko::d3::ReflectionProbe::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::d3::ReflectionRefresh
+pub ponko::d3::ReflectionRefresh::blend_seconds: f32
+pub ponko::d3::ReflectionRefresh::when: ponko::d3::ProbeRefresh
+impl ponko::d3::ReflectionRefresh
+pub const ponko::d3::ReflectionRefresh::REFRESH_STEPS: u32
+impl core::clone::Clone for ponko::d3::ReflectionRefresh
+pub fn ponko::d3::ReflectionRefresh::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::ReflectionRefresh
+pub fn ponko::d3::ReflectionRefresh::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::d3::ReflectionRefresh
+pub fn ponko::d3::ReflectionRefresh::default() -> Self
+impl core::fmt::Debug for ponko::d3::ReflectionRefresh
+pub fn ponko::d3::ReflectionRefresh::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::ReflectionRefresh
+impl core::marker::StructuralPartialEq for ponko::d3::ReflectionRefresh
+impl ponko_ecs::bundle::Component for ponko::d3::ReflectionRefresh
+impl serde_core::ser::Serialize for ponko::d3::ReflectionRefresh
+pub fn ponko::d3::ReflectionRefresh::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::ReflectionRefresh where ponko::d3::ReflectionRefresh: core::default::Default
+pub fn ponko::d3::ReflectionRefresh::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::d3::RigidBody
 pub ponko::d3::RigidBody::angular_damping: f32
 pub ponko::d3::RigidBody::ccd: bool
@@ -2801,6 +3011,7 @@ impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::asset_handles(&self, ponko::inventory::AssetClass) -> alloc::vec::Vec<ponko::inventory::AssetRecord>
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::bake_reflection_probe(&mut self, &mut ponko_ecs::world::World, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::gfx::Graphics::refresh_reflection_probe(&mut self, &mut ponko_ecs::world::World, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::clear(&mut self, ponko::color::Color)
 pub fn ponko::gfx::Graphics::create_texture(&mut self, u32, u32, &[u8]) -> ponko::texture::Texture
@@ -2860,8 +3071,10 @@ pub fn ponko::gfx::Graphics::create_plain_mesh(&mut self, &ponko::render::MeshDa
 pub fn ponko::gfx::Graphics::create_shader(&mut self, &str, &str) -> ponko::render::Shader
 pub fn ponko::gfx::Graphics::create_skinned_mesh(&mut self, &ponko::render::MeshData, ponko::render::Material, &ponko::anim::Skeleton) -> ponko::render::Mesh
 pub fn ponko::gfx::Graphics::default_material(&mut self) -> ponko::render::Material
+pub fn ponko::gfx::Graphics::load_cameras(&mut self, &str) -> alloc::vec::Vec<ponko::render::ModelCamera>
 pub fn ponko::gfx::Graphics::load_clip(&mut self, &str, &str) -> ponko::anim::AnimationClip
 pub fn ponko::gfx::Graphics::load_clips(&mut self, &str) -> alloc::vec::Vec<ponko::anim::AnimationClip>
+pub fn ponko::gfx::Graphics::load_lights(&mut self, &str) -> alloc::vec::Vec<ponko::render::ModelLight>
 pub fn ponko::gfx::Graphics::load_mesh(&mut self, &str) -> ponko::render::Mesh
 pub fn ponko::gfx::Graphics::load_mesh_data(&self, &str) -> ponko::render::MeshData
 pub fn ponko::gfx::Graphics::load_shader(&mut self, &str) -> ponko::render::Shader
@@ -2878,8 +3091,10 @@ pub fn ponko::gfx::Graphics::try_create_material(&mut self, ponko::render::Mater
 pub fn ponko::gfx::Graphics::try_create_mesh(&mut self, &ponko::render::MeshData, ponko::render::Material) -> core::result::Result<ponko::render::Mesh, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_create_plain_mesh(&mut self, &ponko::render::MeshData) -> core::result::Result<ponko::render::Mesh, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_create_shader(&mut self, &str, &str) -> core::result::Result<ponko::render::Shader, ponko::error::Error>
+pub fn ponko::gfx::Graphics::try_load_cameras(&mut self, &str) -> core::result::Result<alloc::vec::Vec<ponko::render::ModelCamera>, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_load_clip(&mut self, &str, &str) -> core::result::Result<ponko::anim::AnimationClip, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_load_clips(&mut self, &str) -> core::result::Result<alloc::vec::Vec<ponko::anim::AnimationClip>, ponko::error::Error>
+pub fn ponko::gfx::Graphics::try_load_lights(&mut self, &str) -> core::result::Result<alloc::vec::Vec<ponko::render::ModelLight>, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_load_mesh(&mut self, &str) -> core::result::Result<ponko::render::Mesh, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_load_mesh_data(&self, &str) -> core::result::Result<ponko::render::MeshData, ponko::error::Error>
 pub fn ponko::gfx::Graphics::try_load_shader(&mut self, &str) -> core::result::Result<ponko::render::Shader, ponko::error::Error>
@@ -3481,6 +3696,148 @@ impl core::marker::Copy for ponko::inventory::GpuResidency
 impl core::marker::StructuralPartialEq for ponko::inventory::GpuResidency
 impl serde_core::ser::Serialize for ponko::inventory::GpuResidency
 pub fn ponko::inventory::GpuResidency::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub mod ponko::locale
+pub enum ponko::locale::Arg
+pub ponko::locale::Arg::Int(i64)
+pub ponko::locale::Arg::Number(f64)
+pub ponko::locale::Arg::Text(alloc::string::String)
+impl core::clone::Clone for ponko::locale::Arg
+pub fn ponko::locale::Arg::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::locale::Arg
+pub fn ponko::locale::Arg::eq(&self, &Self) -> bool
+impl core::convert::From<&alloc::string::String> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(&alloc::string::String) -> Self
+impl core::convert::From<&str> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(&str) -> Self
+impl core::convert::From<alloc::string::String> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(alloc::string::String) -> Self
+impl core::convert::From<f32> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(f32) -> Self
+impl core::convert::From<f64> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(f64) -> Self
+impl core::convert::From<i16> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(i16) -> Self
+impl core::convert::From<i32> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(i32) -> Self
+impl core::convert::From<i64> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(i64) -> Self
+impl core::convert::From<i8> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(i8) -> Self
+impl core::convert::From<isize> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(isize) -> Self
+impl core::convert::From<u16> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(u16) -> Self
+impl core::convert::From<u32> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(u32) -> Self
+impl core::convert::From<u64> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(u64) -> Self
+impl core::convert::From<u8> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(u8) -> Self
+impl core::convert::From<usize> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(usize) -> Self
+impl core::fmt::Debug for ponko::locale::Arg
+pub fn ponko::locale::Arg::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::locale::Arg
+#[non_exhaustive] pub enum ponko::locale::MissingKind
+pub ponko::locale::MissingKind::Argument(alloc::string::String)
+pub ponko::locale::MissingKind::Key
+pub ponko::locale::MissingKind::PluralForm(ponko::locale::PluralCategory)
+impl core::clone::Clone for ponko::locale::MissingKind
+pub fn ponko::locale::MissingKind::clone(&self) -> Self
+impl core::cmp::Eq for ponko::locale::MissingKind
+impl core::cmp::PartialEq for ponko::locale::MissingKind
+pub fn ponko::locale::MissingKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::locale::MissingKind
+pub fn ponko::locale::MissingKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::locale::MissingKind
+pub enum ponko::locale::PluralCategory
+pub ponko::locale::PluralCategory::Few
+pub ponko::locale::PluralCategory::Many
+pub ponko::locale::PluralCategory::One
+pub ponko::locale::PluralCategory::Other
+pub ponko::locale::PluralCategory::Two
+pub ponko::locale::PluralCategory::Zero
+impl ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::from_name(&str) -> core::option::Option<Self>
+pub fn ponko::locale::PluralCategory::name(self) -> &'static str
+impl core::clone::Clone for ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::clone(&self) -> Self
+impl core::cmp::Eq for ponko::locale::PluralCategory
+impl core::cmp::Ord for ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::locale::PluralCategory
+impl core::marker::StructuralPartialEq for ponko::locale::PluralCategory
+#[non_exhaustive] pub struct ponko::locale::Missing
+pub ponko::locale::Missing::key: alloc::string::String
+pub ponko::locale::Missing::language: alloc::string::String
+pub ponko::locale::Missing::what: ponko::locale::MissingKind
+impl core::clone::Clone for ponko::locale::Missing
+pub fn ponko::locale::Missing::clone(&self) -> Self
+impl core::cmp::Eq for ponko::locale::Missing
+impl core::cmp::PartialEq for ponko::locale::Missing
+pub fn ponko::locale::Missing::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::locale::Missing
+pub fn ponko::locale::Missing::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::locale::Missing
+pub fn ponko::locale::Missing::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::locale::Missing
+pub struct ponko::locale::StringTable
+impl ponko::locale::StringTable
+pub fn ponko::locale::StringTable::contains(&self, &str) -> bool
+pub fn ponko::locale::StringTable::font_path(&self) -> core::option::Option<&str>
+pub fn ponko::locale::StringTable::from_json(&str) -> core::result::Result<Self, ponko::error::Error>
+pub fn ponko::locale::StringTable::is_empty(&self) -> bool
+pub fn ponko::locale::StringTable::is_rtl(&self) -> bool
+pub fn ponko::locale::StringTable::keys(&self) -> alloc::vec::Vec<&str>
+pub fn ponko::locale::StringTable::language(&self) -> &str
+pub fn ponko::locale::StringTable::len(&self) -> usize
+pub fn ponko::locale::StringTable::name(&self) -> &str
+pub fn ponko::locale::StringTable::new(&str) -> Self
+pub fn ponko::locale::StringTable::set(&mut self, &str, &str)
+pub fn ponko::locale::StringTable::set_plural(&mut self, &str, ponko::locale::PluralCategory, &str)
+impl core::clone::Clone for ponko::locale::StringTable
+pub fn ponko::locale::StringTable::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::locale::StringTable
+pub fn ponko::locale::StringTable::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::locale::StringTable
+pub fn ponko::locale::StringTable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::locale::StringTable
+pub struct ponko::locale::Strings
+impl ponko::locale::Strings
+pub const ponko::locale::Strings::PSEUDO: &'static str
+pub fn ponko::locale::Strings::contains(&self, &str) -> bool
+pub fn ponko::locale::Strings::font(&self) -> core::option::Option<ponko::text::Font>
+pub fn ponko::locale::Strings::format(&self, &str, &[(&str, ponko::locale::Arg)]) -> alloc::string::String
+pub fn ponko::locale::Strings::format_into(&self, &str, &[(&str, ponko::locale::Arg)], &mut alloc::string::String)
+pub fn ponko::locale::Strings::get<'a>(&'a self, &'a str) -> alloc::borrow::Cow<'a, str>
+pub fn ponko::locale::Strings::insert(&mut self, ponko::locale::StringTable)
+pub fn ponko::locale::Strings::is_rtl(&self) -> bool
+pub fn ponko::locale::Strings::language(&self) -> &str
+pub fn ponko::locale::Strings::languages(&self) -> alloc::vec::Vec<&str>
+pub fn ponko::locale::Strings::missing(&self, &str) -> alloc::vec::Vec<ponko::locale::Missing>
+pub fn ponko::locale::Strings::missing_report(&self) -> alloc::string::String
+pub fn ponko::locale::Strings::number(&self, f64, core::option::Option<usize>) -> alloc::string::String
+pub fn ponko::locale::Strings::reference(&self) -> &str
+pub fn ponko::locale::Strings::revision(&self) -> u64
+pub fn ponko::locale::Strings::set_font(&mut self, &str, ponko::text::Font)
+pub fn ponko::locale::Strings::set_language(&mut self, &str) -> bool
+pub fn ponko::locale::Strings::table(&self, &str) -> core::option::Option<&ponko::locale::StringTable>
+impl core::clone::Clone for ponko::locale::Strings
+pub fn ponko::locale::Strings::clone(&self) -> Self
+impl core::default::Default for ponko::locale::Strings
+pub fn ponko::locale::Strings::default() -> Self
+impl core::fmt::Debug for ponko::locale::Strings
+pub fn ponko::locale::Strings::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn ponko::locale::plural_categories(&str) -> &'static [ponko::locale::PluralCategory]
+pub fn ponko::locale::plural_category(&str, f64) -> ponko::locale::PluralCategory
 pub mod ponko::nav
 pub struct ponko::nav::NavBakeError(_)
 impl core::convert::From<ponko::nav::NavBakeError> for ponko::error::Error
@@ -4177,6 +4534,7 @@ pub ponko::perf::Budget::allocs_per_frame: core::option::Option<f32>
 pub ponko::perf::Budget::frame_avg_ms: core::option::Option<f32>
 pub ponko::perf::Budget::frame_max_ms: core::option::Option<f32>
 pub ponko::perf::Budget::frame_p99_ms: core::option::Option<f32>
+pub ponko::perf::Budget::gpu_memory_mb: core::option::Option<f32>
 pub ponko::perf::Budget::scopes: alloc::collections::btree::map::BTreeMap<alloc::string::String, f32>
 pub ponko::perf::Budget::systems: alloc::collections::btree::map::BTreeMap<alloc::string::String, f32>
 impl ponko::perf::Budget
@@ -4185,6 +4543,7 @@ pub fn ponko::perf::Budget::frame_avg_ms(self, f32) -> Self
 pub fn ponko::perf::Budget::frame_max_ms(self, f32) -> Self
 pub fn ponko::perf::Budget::frame_p99_ms(self, f32) -> Self
 pub fn ponko::perf::Budget::from_json(&str) -> core::result::Result<Self, ponko::error::Error>
+pub fn ponko::perf::Budget::gpu_memory_mb(self, f32) -> Self
 pub fn ponko::perf::Budget::new() -> Self
 pub fn ponko::perf::Budget::scope(self, &str, f32) -> Self
 pub fn ponko::perf::Budget::system(self, &str, f32) -> Self
@@ -4279,6 +4638,38 @@ impl serde_core::ser::Serialize for ponko::perf::FrameTimes
 pub fn ponko::perf::FrameTimes::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::perf::FrameTimes
 pub fn ponko::perf::FrameTimes::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub struct ponko::perf::GpuMemory
+pub ponko::perf::GpuMemory::adapter_bytes: core::option::Option<u64>
+pub ponko::perf::GpuMemory::adapter_note: alloc::string::String
+pub ponko::perf::GpuMemory::atlases: u64
+pub ponko::perf::GpuMemory::frame_targets: u64
+pub ponko::perf::GpuMemory::gpu_buffers: u64
+pub ponko::perf::GpuMemory::instance_batches: u64
+pub ponko::perf::GpuMemory::meshes: u64
+pub ponko::perf::GpuMemory::other: u64
+pub ponko::perf::GpuMemory::probes: u64
+pub ponko::perf::GpuMemory::shadows: u64
+pub ponko::perf::GpuMemory::skinning: u64
+pub ponko::perf::GpuMemory::textures: u64
+pub ponko::perf::GpuMemory::total: u64
+impl ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::classes(&self) -> [(&'static str, u64); 10]
+pub fn ponko::perf::GpuMemory::total_mb(&self) -> f32
+impl core::clone::Clone for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::default() -> Self
+impl core::fmt::Debug for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::perf::GpuMemory
+impl serde_core::ser::Serialize for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::perf::GpuMemory where ponko::perf::GpuMemory: core::default::Default
+pub fn ponko::perf::GpuMemory::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::perf::GpuPass
 pub ponko::perf::GpuPass::ms: f32
 pub ponko::perf::GpuPass::name: &'static str
@@ -4325,6 +4716,7 @@ pub ponko::perf::PerfReport::allocs: core::option::Option<ponko::perf::AllocRepo
 pub ponko::perf::PerfReport::entities: usize
 pub ponko::perf::PerfReport::frame_ms: ponko::perf::FrameTimes
 pub ponko::perf::PerfReport::frames: usize
+pub ponko::perf::PerfReport::gpu_memory: core::option::Option<ponko::perf::GpuMemory>
 pub ponko::perf::PerfReport::render: core::option::Option<ponko::perf::RenderReport>
 pub ponko::perf::PerfReport::scopes: alloc::vec::Vec<ponko::perf::ScopeReport>
 pub ponko::perf::PerfReport::systems: alloc::vec::Vec<ponko::perf::SystemReport>
@@ -5111,6 +5503,20 @@ impl serde_core::ser::Serialize for ponko::d3::JointMotion
 pub fn ponko::d3::JointMotion::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::JointMotion
 pub fn ponko::d3::JointMotion::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub enum ponko::prelude::d3::NavObstacleShape
+pub ponko::prelude::d3::NavObstacleShape::Box
+pub ponko::prelude::d3::NavObstacleShape::Convex(ponko::d3::NavConvexPolygon)
+pub ponko::prelude::d3::NavObstacleShape::Cylinder
+impl core::clone::Clone for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::default() -> Self
+impl core::fmt::Debug for ponko::d3::NavObstacleShape
+pub fn ponko::d3::NavObstacleShape::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::NavObstacleShape
+impl core::marker::StructuralPartialEq for ponko::d3::NavObstacleShape
 #[non_exhaustive] pub enum ponko::prelude::d3::ParticleBlend
 pub ponko::prelude::d3::ParticleBlend::Additive
 pub ponko::prelude::d3::ParticleBlend::Alpha
@@ -5140,6 +5546,25 @@ pub fn ponko::d3::ParticleShape::default() -> Self
 impl core::fmt::Debug for ponko::d3::ParticleShape
 pub fn ponko::d3::ParticleShape::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::d3::ParticleShape
+pub enum ponko::prelude::d3::ProbeRefresh
+pub ponko::prelude::d3::ProbeRefresh::Every(f32)
+pub ponko::prelude::d3::ProbeRefresh::LightingChanged(f32)
+pub ponko::prelude::d3::ProbeRefresh::Never
+pub ponko::prelude::d3::ProbeRefresh::OnDemand
+impl core::clone::Clone for ponko::d3::ProbeRefresh
+pub fn ponko::d3::ProbeRefresh::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::ProbeRefresh
+pub fn ponko::d3::ProbeRefresh::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::d3::ProbeRefresh
+pub fn ponko::d3::ProbeRefresh::default() -> Self
+impl core::fmt::Debug for ponko::d3::ProbeRefresh
+pub fn ponko::d3::ProbeRefresh::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::ProbeRefresh
+impl core::marker::StructuralPartialEq for ponko::d3::ProbeRefresh
+impl serde_core::ser::Serialize for ponko::d3::ProbeRefresh
+pub fn ponko::d3::ProbeRefresh::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::ProbeRefresh
+pub fn ponko::d3::ProbeRefresh::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[non_exhaustive] pub enum ponko::prelude::d3::Shape
 pub ponko::prelude::d3::Shape::Capsule
 pub ponko::prelude::d3::Shape::Capsule::height: f32
@@ -5560,6 +5985,19 @@ pub fn ponko::d3::NavAgent::default() -> Self
 impl core::fmt::Debug for ponko::d3::NavAgent
 pub fn ponko::d3::NavAgent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl ponko_ecs::bundle::Component for ponko::d3::NavAgent
+pub struct ponko::prelude::d3::NavConvexPolygon
+impl ponko::d3::NavConvexPolygon
+pub const ponko::d3::NavConvexPolygon::MAX_POINTS: usize
+pub fn ponko::d3::NavConvexPolygon::new(&[glam::f32::vec2::Vec2]) -> core::option::Option<Self>
+pub fn ponko::d3::NavConvexPolygon::points(&self) -> &[glam::f32::vec2::Vec2]
+impl core::clone::Clone for ponko::d3::NavConvexPolygon
+pub fn ponko::d3::NavConvexPolygon::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::NavConvexPolygon
+pub fn ponko::d3::NavConvexPolygon::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::d3::NavConvexPolygon
+pub fn ponko::d3::NavConvexPolygon::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::NavConvexPolygon
+impl core::marker::StructuralPartialEq for ponko::d3::NavConvexPolygon
 pub struct ponko::prelude::d3::NavMesh
 impl ponko::d3::NavMesh
 pub fn ponko::d3::NavMesh::bake(&[ponko::nav::NavSource], ponko::nav::NavBakeSettings) -> core::result::Result<Self, ponko::nav::NavBakeError>
@@ -5568,11 +6006,15 @@ pub fn ponko::d3::NavMesh::find_path(&self, glam::f32::vec3::Vec3, glam::f32::ve
 pub fn ponko::d3::NavMesh::sample_position(&self, glam::f32::vec3::Vec3, f32) -> core::option::Option<glam::f32::vec3::Vec3>
 pub fn ponko::d3::NavMesh::set_obstacles(&mut self, &[ponko::d3::NavObstacle])
 pub fn ponko::d3::NavMesh::update_carving(&mut self, usize) -> core::result::Result<usize, ponko::nav::NavBakeError>
-pub struct ponko::prelude::d3::NavObstacle
+#[non_exhaustive] pub struct ponko::prelude::d3::NavObstacle
 pub ponko::prelude::d3::NavObstacle::carve: bool
 pub ponko::prelude::d3::NavObstacle::center: glam::f32::vec3::Vec3
 pub ponko::prelude::d3::NavObstacle::half_extents: glam::f32::vec3::Vec3
+pub ponko::prelude::d3::NavObstacle::shape: ponko::d3::NavObstacleShape
+pub ponko::prelude::d3::NavObstacle::yaw: f32
 impl ponko::d3::NavObstacle
+pub fn ponko::d3::NavObstacle::convex(glam::f32::vec3::Vec3, &[glam::f32::vec2::Vec2], f32) -> core::option::Option<Self>
+pub fn ponko::d3::NavObstacle::cylinder(glam::f32::vec3::Vec3, f32, f32) -> Self
 pub fn ponko::d3::NavObstacle::new(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3) -> Self
 impl core::clone::Clone for ponko::d3::NavObstacle
 pub fn ponko::d3::NavObstacle::clone(&self) -> Self
@@ -5654,11 +6096,13 @@ pub fn ponko::d3::Physics::free(&mut self, ponko::d3::CollisionMesh)
 pub fn ponko::d3::Physics::gravity(&self) -> glam::f32::vec3::Vec3
 pub fn ponko::d3::Physics::heightfield(&mut self, &[f32], f32) -> ponko::d3::CollisionMesh
 pub fn ponko::d3::Physics::is_live(&self, ponko::d3::CollisionMesh) -> bool
+pub fn ponko::d3::Physics::is_paused(&self) -> bool
 pub fn ponko::d3::Physics::mass(&self, ponko_ecs::entity::Entity) -> core::option::Option<f32>
 pub fn ponko::d3::Physics::new(glam::f32::vec3::Vec3) -> Self
 pub fn ponko::d3::Physics::position(&self, ponko_ecs::entity::Entity) -> core::option::Option<glam::f32::vec3::Vec3>
 pub fn ponko::d3::Physics::set_contact_hook(&mut self, impl core::ops::function::Fn(&mut ponko::d3::ContactPair<'_, '_>) + core::marker::Send + core::marker::Sync + 'static)
 pub fn ponko::d3::Physics::set_gravity(&mut self, glam::f32::vec3::Vec3)
+pub fn ponko::d3::Physics::set_paused(&mut self, bool)
 pub fn ponko::d3::Physics::trimesh(&mut self, &[glam::f32::vec3::Vec3], &[[u32; 3]]) -> core::option::Option<ponko::d3::CollisionMesh>
 impl ponko::d3::Physics
 pub fn ponko::d3::Physics::add_mesh(&mut self, &ponko::d3::CollisionMeshData) -> ponko::d3::CollisionMesh
@@ -5772,6 +6216,26 @@ impl serde_core::ser::Serialize for ponko::d3::ReflectionProbe
 pub fn ponko::d3::ReflectionProbe::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::ReflectionProbe where ponko::d3::ReflectionProbe: core::default::Default
 pub fn ponko::d3::ReflectionProbe::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::prelude::d3::ReflectionRefresh
+pub ponko::prelude::d3::ReflectionRefresh::blend_seconds: f32
+pub ponko::prelude::d3::ReflectionRefresh::when: ponko::d3::ProbeRefresh
+impl ponko::d3::ReflectionRefresh
+pub const ponko::d3::ReflectionRefresh::REFRESH_STEPS: u32
+impl core::clone::Clone for ponko::d3::ReflectionRefresh
+pub fn ponko::d3::ReflectionRefresh::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::d3::ReflectionRefresh
+pub fn ponko::d3::ReflectionRefresh::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::d3::ReflectionRefresh
+pub fn ponko::d3::ReflectionRefresh::default() -> Self
+impl core::fmt::Debug for ponko::d3::ReflectionRefresh
+pub fn ponko::d3::ReflectionRefresh::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::d3::ReflectionRefresh
+impl core::marker::StructuralPartialEq for ponko::d3::ReflectionRefresh
+impl ponko_ecs::bundle::Component for ponko::d3::ReflectionRefresh
+impl serde_core::ser::Serialize for ponko::d3::ReflectionRefresh
+pub fn ponko::d3::ReflectionRefresh::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::d3::ReflectionRefresh where ponko::d3::ReflectionRefresh: core::default::Default
+pub fn ponko::d3::ReflectionRefresh::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::prelude::d3::RigidBody
 pub ponko::prelude::d3::RigidBody::angular_damping: f32
 pub ponko::prelude::d3::RigidBody::ccd: bool
@@ -6420,6 +6884,7 @@ pub fn ponko::assets::Assets::hot_reload(&self) -> bool
 pub fn ponko::assets::Assets::load_component_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_resource<R: core::marker::Send + core::marker::Sync + 'static + serde_core::de::DeserializeOwned>(&mut self, &mut ponko_ecs::world::World, &str)
 pub fn ponko::assets::Assets::load_resource_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::assets::Assets::load_strings(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_with<T>(&self, &str, impl core::ops::function::FnOnce(&[u8]) -> core::result::Result<T, ponko::error::Error>) -> core::result::Result<T, ponko::error::Error>
 pub fn ponko::assets::Assets::reloaded_files(&self) -> &[alloc::string::String]
 pub fn ponko::assets::Assets::reloaded_textures(&self) -> &[ponko::texture::Texture]
@@ -6744,6 +7209,17 @@ pub fn ponko::prelude::Model::fmt(&self, &mut core::fmt::Formatter<'_>) -> core:
 impl core::marker::Copy for ponko::prelude::Model
 impl core::marker::StructuralPartialEq for ponko::prelude::Model
 impl ponko_ecs::bundle::Component for ponko::prelude::Model
+pub struct ponko::prelude::PackSource
+impl ponko::prelude::PackSource
+pub fn ponko::prelude::PackSource::from_bytes(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::rcs::arc::Arc<[u8]>>) -> core::result::Result<ponko::prelude::PackSource, ponko::error::Error>
+pub fn ponko::prelude::PackSource::is_empty(&self) -> bool
+pub fn ponko::prelude::PackSource::len(&self) -> usize
+pub fn ponko::prelude::PackSource::names(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
+pub fn ponko::prelude::PackSource::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<ponko::prelude::PackSource, ponko::error::Error>
+impl ponko::assets::AssetSource for ponko::prelude::PackSource
+pub fn ponko::prelude::PackSource::contains(&self, &str) -> bool
+pub fn ponko::prelude::PackSource::id(&self) -> &str
+pub fn ponko::prelude::PackSource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
 #[repr(transparent)] pub struct ponko::prelude::Playing(_)
 impl core::clone::Clone for ponko::audio::Playing
 pub fn ponko::audio::Playing::clone(&self) -> Self
@@ -7073,6 +7549,16 @@ pub fn ponko::prelude::Ui::ime_area(&self) -> core::option::Option<ponko::camera
 pub fn ponko::prelude::Ui::preedit(&self, ponko::prelude::UiId) -> core::option::Option<&str>
 pub fn ponko::prelude::Ui::set_ime_allowed(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::wants_ime(&self) -> bool
+impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::is_rich(&self, ponko::prelude::UiId) -> bool
+pub fn ponko::prelude::Ui::link(&self, ponko::prelude::UiId, u32) -> core::option::Option<&str>
+pub fn ponko::prelude::Ui::set_inline_font(&mut self, &str, ponko::text::Font)
+pub fn ponko::prelude::Ui::set_inline_image(&mut self, &str, ponko::texture::Texture)
+pub fn ponko::prelude::Ui::set_rich(&mut self, ponko::prelude::UiId, bool)
+impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::localize(&mut self, &ponko::locale::Strings)
+pub fn ponko::prelude::Ui::set_text_key(&mut self, ponko::prelude::UiId, &str, &[(&str, ponko::locale::Arg)])
+pub fn ponko::prelude::Ui::text_key(&self, ponko::prelude::UiId) -> core::option::Option<&str>
 impl core::default::Default for ponko::prelude::Ui
 pub fn ponko::prelude::Ui::default() -> Self
 impl core::marker::Send for ponko::prelude::Ui
@@ -7104,6 +7590,10 @@ impl ponko::assets::AssetSource for ponko::assets::MemorySource
 pub fn ponko::assets::MemorySource::contains(&self, &str) -> bool
 pub fn ponko::assets::MemorySource::id(&self) -> &str
 pub fn ponko::assets::MemorySource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
+impl ponko::assets::AssetSource for ponko::prelude::PackSource
+pub fn ponko::prelude::PackSource::contains(&self, &str) -> bool
+pub fn ponko::prelude::PackSource::id(&self) -> &str
+pub fn ponko::prelude::PackSource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
 pub trait ponko::prelude::Handle: core::marker::Copy + core::cmp::Eq + core::hash::Hash + core::fmt::Debug + ponko::handle::sealed::Sealed
 pub const ponko::prelude::Handle::NONE: Self
 impl ponko::handle::Handle for ponko::audio::Sound
@@ -7619,6 +8109,39 @@ pub fn ponko::render::LodShadow::default() -> Self
 impl core::fmt::Debug for ponko::render::LodShadow
 pub fn ponko::render::LodShadow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::render::LodShadow
+pub enum ponko::render::ModelLightKind
+pub ponko::render::ModelLightKind::Point(ponko::d3::PointLight)
+pub ponko::render::ModelLightKind::Spot(ponko::d3::SpotLight)
+pub ponko::render::ModelLightKind::Sun
+pub ponko::render::ModelLightKind::Sun::color: ponko::color::Color
+pub ponko::render::ModelLightKind::Sun::intensity: f32
+impl core::clone::Clone for ponko::render::ModelLightKind
+pub fn ponko::render::ModelLightKind::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::ModelLightKind
+pub fn ponko::render::ModelLightKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::render::ModelLightKind
+pub fn ponko::render::ModelLightKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::ModelLightKind
+impl core::marker::StructuralPartialEq for ponko::render::ModelLightKind
+pub enum ponko::render::ModelProjection
+pub ponko::render::ModelProjection::Orthographic
+pub ponko::render::ModelProjection::Orthographic::far: f32
+pub ponko::render::ModelProjection::Orthographic::half_height: f32
+pub ponko::render::ModelProjection::Orthographic::half_width: f32
+pub ponko::render::ModelProjection::Orthographic::near: f32
+pub ponko::render::ModelProjection::Perspective
+pub ponko::render::ModelProjection::Perspective::aspect: core::option::Option<f32>
+pub ponko::render::ModelProjection::Perspective::far: core::option::Option<f32>
+pub ponko::render::ModelProjection::Perspective::fov_y: f32
+pub ponko::render::ModelProjection::Perspective::near: f32
+impl core::clone::Clone for ponko::render::ModelProjection
+pub fn ponko::render::ModelProjection::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::ModelProjection
+pub fn ponko::render::ModelProjection::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::render::ModelProjection
+pub fn ponko::render::ModelProjection::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::ModelProjection
+impl core::marker::StructuralPartialEq for ponko::render::ModelProjection
 #[non_exhaustive] pub enum ponko::render::QualityAutotuneReason
 pub ponko::render::QualityAutotuneReason::BoundsOrPinned
 pub ponko::render::QualityAutotuneReason::Cooldown
@@ -7686,6 +8209,50 @@ impl core::hash::Hash for ponko::render::ShadowFilter
 pub fn ponko::render::ShadowFilter::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for ponko::render::ShadowFilter
 impl core::marker::StructuralPartialEq for ponko::render::ShadowFilter
+#[repr(u32)] pub enum ponko::render::StencilCompare
+pub ponko::render::StencilCompare::Always = 7
+pub ponko::render::StencilCompare::Equal = 2
+pub ponko::render::StencilCompare::Greater = 4
+pub ponko::render::StencilCompare::GreaterEqual = 6
+pub ponko::render::StencilCompare::Less = 1
+pub ponko::render::StencilCompare::LessEqual = 3
+pub ponko::render::StencilCompare::Never = 0
+pub ponko::render::StencilCompare::NotEqual = 5
+impl core::clone::Clone for ponko::render::StencilCompare
+pub fn ponko::render::StencilCompare::clone(&self) -> Self
+impl core::cmp::Eq for ponko::render::StencilCompare
+impl core::cmp::PartialEq for ponko::render::StencilCompare
+pub fn ponko::render::StencilCompare::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::StencilCompare
+pub fn ponko::render::StencilCompare::default() -> Self
+impl core::fmt::Debug for ponko::render::StencilCompare
+pub fn ponko::render::StencilCompare::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::render::StencilCompare
+pub fn ponko::render::StencilCompare::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::render::StencilCompare
+impl core::marker::StructuralPartialEq for ponko::render::StencilCompare
+#[repr(u32)] pub enum ponko::render::StencilOp
+pub ponko::render::StencilOp::DecrementClamp = 5
+pub ponko::render::StencilOp::DecrementWrap = 7
+pub ponko::render::StencilOp::IncrementClamp = 4
+pub ponko::render::StencilOp::IncrementWrap = 6
+pub ponko::render::StencilOp::Invert = 3
+pub ponko::render::StencilOp::Keep = 0
+pub ponko::render::StencilOp::Replace = 2
+pub ponko::render::StencilOp::Zero = 1
+impl core::clone::Clone for ponko::render::StencilOp
+pub fn ponko::render::StencilOp::clone(&self) -> Self
+impl core::cmp::Eq for ponko::render::StencilOp
+impl core::cmp::PartialEq for ponko::render::StencilOp
+pub fn ponko::render::StencilOp::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::StencilOp
+pub fn ponko::render::StencilOp::default() -> Self
+impl core::fmt::Debug for ponko::render::StencilOp
+pub fn ponko::render::StencilOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::render::StencilOp
+pub fn ponko::render::StencilOp::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::render::StencilOp
+impl core::marker::StructuralPartialEq for ponko::render::StencilOp
 #[non_exhaustive] #[repr(u32)] pub enum ponko::render::Tonemap
 pub ponko::render::Tonemap::Aces = 0
 pub ponko::render::Tonemap::AgX = 1
@@ -7751,6 +8318,24 @@ impl core::fmt::Debug for ponko::render::ComputePass
 pub fn ponko::render::ComputePass::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::ComputePass
 impl core::marker::StructuralPartialEq for ponko::render::ComputePass
+pub struct ponko::render::DepthOfField
+pub ponko::render::DepthOfField::blur: f32
+pub ponko::render::DepthOfField::enabled: bool
+pub ponko::render::DepthOfField::focus_distance: f32
+pub ponko::render::DepthOfField::focus_range: f32
+impl ponko::render::DepthOfField
+pub const ponko::render::DepthOfField::MAX_BLUR: f32
+pub fn ponko::render::DepthOfField::blur_at(&self, f32) -> f32
+impl core::clone::Clone for ponko::render::DepthOfField
+pub fn ponko::render::DepthOfField::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::DepthOfField
+pub fn ponko::render::DepthOfField::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::DepthOfField
+pub fn ponko::render::DepthOfField::default() -> Self
+impl core::fmt::Debug for ponko::render::DepthOfField
+pub fn ponko::render::DepthOfField::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::DepthOfField
+impl core::marker::StructuralPartialEq for ponko::render::DepthOfField
 #[repr(C)] pub struct ponko::render::Effect
 impl core::clone::Clone for ponko::render::Effect
 pub fn ponko::render::Effect::clone(&self) -> Self
@@ -8137,6 +8722,7 @@ pub ponko::render::MaterialDesc::normal_strength: f32
 pub ponko::render::MaterialDesc::orm_map: core::option::Option<ponko::texture::Texture>
 pub ponko::render::MaterialDesc::roughness: f32
 pub ponko::render::MaterialDesc::shader: core::option::Option<ponko::render::Shader>
+pub ponko::render::MaterialDesc::stencil: core::option::Option<ponko::render::Stencil>
 pub ponko::render::MaterialDesc::texture: core::option::Option<ponko::texture::Texture>
 impl ponko::render::MaterialDesc
 pub fn ponko::render::MaterialDesc::color(ponko::color::Color) -> Self
@@ -8154,6 +8740,7 @@ pub fn ponko::render::MaterialDesc::with_normal_strength(self, f32) -> Self
 pub fn ponko::render::MaterialDesc::with_orm_map(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
 pub fn ponko::render::MaterialDesc::with_roughness(self, f32) -> Self
 pub fn ponko::render::MaterialDesc::with_shader(self, impl core::convert::Into<core::option::Option<ponko::render::Shader>>) -> Self
+pub fn ponko::render::MaterialDesc::with_stencil(self, impl core::convert::Into<core::option::Option<ponko::render::Stencil>>) -> Self
 pub fn ponko::render::MaterialDesc::with_texture(self, impl core::convert::Into<core::option::Option<ponko::texture::Texture>>) -> Self
 impl core::clone::Clone for ponko::render::MaterialDesc
 pub fn ponko::render::MaterialDesc::clone(&self) -> Self
@@ -8240,6 +8827,35 @@ pub fn ponko::prelude::Model::fmt(&self, &mut core::fmt::Formatter<'_>) -> core:
 impl core::marker::Copy for ponko::prelude::Model
 impl core::marker::StructuralPartialEq for ponko::prelude::Model
 impl ponko_ecs::bundle::Component for ponko::prelude::Model
+pub struct ponko::render::ModelCamera
+pub ponko::render::ModelCamera::name: alloc::string::String
+pub ponko::render::ModelCamera::projection: ponko::render::ModelProjection
+pub ponko::render::ModelCamera::transform: ponko::d3::Transform
+impl ponko::render::ModelCamera
+pub fn ponko::render::ModelCamera::apply(&self, &mut ponko::d3::Camera, &ponko::d3::Transform)
+pub fn ponko::render::ModelCamera::placed(&self, &ponko::d3::Transform) -> ponko::d3::Transform
+impl core::clone::Clone for ponko::render::ModelCamera
+pub fn ponko::render::ModelCamera::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::ModelCamera
+pub fn ponko::render::ModelCamera::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::render::ModelCamera
+pub fn ponko::render::ModelCamera::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::render::ModelCamera
+pub struct ponko::render::ModelLight
+pub ponko::render::ModelLight::kind: ponko::render::ModelLightKind
+pub ponko::render::ModelLight::name: alloc::string::String
+pub ponko::render::ModelLight::transform: ponko::d3::Transform
+impl ponko::render::ModelLight
+pub const ponko::render::ModelLight::CANDELA_PER_UNIT: f32
+pub fn ponko::render::ModelLight::placed(&self, &ponko::d3::Transform) -> ponko::d3::Transform
+pub fn ponko::render::ModelLight::spawn(&self, &mut ponko_ecs::world::World, &ponko::d3::Transform) -> core::option::Option<ponko_ecs::entity::Entity>
+impl core::clone::Clone for ponko::render::ModelLight
+pub fn ponko::render::ModelLight::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::ModelLight
+pub fn ponko::render::ModelLight::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::render::ModelLight
+pub fn ponko::render::ModelLight::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::render::ModelLight
 #[repr(C)] pub struct ponko::render::ModelMaterial(pub ponko::render::Material)
 impl core::clone::Clone for ponko::render::ModelMaterial
 pub fn ponko::render::ModelMaterial::clone(&self) -> Self
@@ -8307,6 +8923,7 @@ pub ponko::render::Post::bloom_threshold: f32
 pub ponko::render::Post::chromatic_aberration: f32
 pub ponko::render::Post::contact_shadows: f32
 pub ponko::render::Post::contrast: f32
+pub ponko::render::Post::depth_of_field: ponko::render::DepthOfField
 pub ponko::render::Post::exposure: f32
 pub ponko::render::Post::lens_distortion: f32
 pub ponko::render::Post::lens_scale: f32
@@ -8315,6 +8932,7 @@ pub ponko::render::Post::msaa: u32
 pub ponko::render::Post::render_scale: f32
 pub ponko::render::Post::saturation: f32
 pub ponko::render::Post::sharpen: f32
+pub ponko::render::Post::split_toning: ponko::render::SplitToning
 pub ponko::render::Post::ssr: f32
 pub ponko::render::Post::ssr_max_distance: f32
 pub ponko::render::Post::taa_sharpness: f32
@@ -8325,6 +8943,7 @@ pub ponko::render::Post::vignette: f32
 impl ponko::render::Post
 pub const ponko::render::Post::MAX_RENDER_SCALE: f32
 pub const ponko::render::Post::MIN_RENDER_SCALE: f32
+pub fn ponko::render::Post::lerp(&self, &ponko::render::Post, f32) -> ponko::render::Post
 pub fn ponko::render::Post::neutral_lut(u32) -> (u32, u32, alloc::vec::Vec<u8>)
 pub fn ponko::render::Post::render_size(&self, (u32, u32)) -> (u32, u32)
 impl core::clone::Clone for ponko::render::Post
@@ -8337,6 +8956,23 @@ impl core::fmt::Debug for ponko::render::Post
 pub fn ponko::render::Post::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::Post
 impl core::marker::StructuralPartialEq for ponko::render::Post
+pub struct ponko::render::PostVolume
+pub ponko::render::PostVolume::blend_distance: f32
+pub ponko::render::PostVolume::max: glam::f32::vec3::Vec3
+pub ponko::render::PostVolume::min: glam::f32::vec3::Vec3
+pub ponko::render::PostVolume::post: ponko::render::Post
+impl ponko::render::PostVolume
+pub fn ponko::render::PostVolume::blend(&ponko::render::Post, &[ponko::render::PostVolume], glam::f32::vec3::Vec3) -> ponko::render::Post
+pub fn ponko::render::PostVolume::new(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3, f32, ponko::render::Post) -> Self
+pub fn ponko::render::PostVolume::weight(&self, glam::f32::vec3::Vec3) -> f32
+impl core::clone::Clone for ponko::render::PostVolume
+pub fn ponko::render::PostVolume::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::PostVolume
+pub fn ponko::render::PostVolume::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::render::PostVolume
+pub fn ponko::render::PostVolume::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::PostVolume
+impl core::marker::StructuralPartialEq for ponko::render::PostVolume
 pub struct ponko::render::QualityAutotune
 pub ponko::render::QualityAutotune::max_render_scale: f32
 pub ponko::render::QualityAutotune::max_shadow_resolution: u32
@@ -8562,6 +9198,10 @@ pub fn ponko::render::ShadowOnly::fmt(&self, &mut core::fmt::Formatter<'_>) -> c
 impl core::marker::Copy for ponko::render::ShadowOnly
 impl core::marker::StructuralPartialEq for ponko::render::ShadowOnly
 impl ponko_ecs::bundle::Component for ponko::render::ShadowOnly
+impl serde_core::ser::Serialize for ponko::render::ShadowOnly
+pub fn ponko::render::ShadowOnly::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::render::ShadowOnly
+pub fn ponko::render::ShadowOnly::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[non_exhaustive] pub struct ponko::render::Sky
 pub ponko::render::Sky::atmosphere: bool
 pub ponko::render::Sky::equator_color: core::option::Option<ponko::color::Color>
@@ -8592,6 +9232,22 @@ impl core::fmt::Debug for ponko::render::Sky
 pub fn ponko::render::Sky::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::Sky
 impl core::marker::StructuralPartialEq for ponko::render::Sky
+pub struct ponko::render::SplitToning
+pub ponko::render::SplitToning::balance: f32
+pub ponko::render::SplitToning::highlights: ponko::color::Color
+pub ponko::render::SplitToning::shadows: ponko::color::Color
+impl ponko::render::SplitToning
+pub fn ponko::render::SplitToning::is_neutral(&self) -> bool
+impl core::clone::Clone for ponko::render::SplitToning
+pub fn ponko::render::SplitToning::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::SplitToning
+pub fn ponko::render::SplitToning::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::SplitToning
+pub fn ponko::render::SplitToning::default() -> Self
+impl core::fmt::Debug for ponko::render::SplitToning
+pub fn ponko::render::SplitToning::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::SplitToning
+impl core::marker::StructuralPartialEq for ponko::render::SplitToning
 #[repr(C)] pub struct ponko::render::SpriteMaterial
 impl core::clone::Clone for ponko::render::SpriteMaterial
 pub fn ponko::render::SpriteMaterial::clone(&self) -> Self
@@ -8641,6 +9297,59 @@ impl core::marker::StructuralPartialEq for ponko::render::SpriteShader
 impl ponko::handle::GfxHandle for ponko::render::SpriteShader
 impl ponko::handle::Handle for ponko::render::SpriteShader
 pub const ponko::render::SpriteShader::NONE: Self
+#[non_exhaustive] pub struct ponko::render::Stencil
+pub ponko::render::Stencil::back: ponko::render::StencilFace
+pub ponko::render::Stencil::front: ponko::render::StencilFace
+pub ponko::render::Stencil::order: i32
+pub ponko::render::Stencil::read_mask: u8
+pub ponko::render::Stencil::reference: u8
+pub ponko::render::Stencil::write_mask: u8
+impl ponko::render::Stencil
+pub const fn ponko::render::Stencil::both(ponko::render::StencilFace, u8) -> Self
+pub const fn ponko::render::Stencil::inside(u8) -> Self
+pub const fn ponko::render::Stencil::mark(u8) -> Self
+pub const fn ponko::render::Stencil::once(u8) -> Self
+pub const fn ponko::render::Stencil::outside(u8) -> Self
+pub const fn ponko::render::Stencil::with_back(self, ponko::render::StencilFace) -> Self
+pub const fn ponko::render::Stencil::with_front(self, ponko::render::StencilFace) -> Self
+pub const fn ponko::render::Stencil::with_order(self, i32) -> Self
+pub const fn ponko::render::Stencil::with_read_mask(self, u8) -> Self
+pub const fn ponko::render::Stencil::with_reference(self, u8) -> Self
+pub const fn ponko::render::Stencil::with_write_mask(self, u8) -> Self
+pub fn ponko::render::Stencil::writes(&self) -> bool
+impl core::clone::Clone for ponko::render::Stencil
+pub fn ponko::render::Stencil::clone(&self) -> Self
+impl core::cmp::Eq for ponko::render::Stencil
+impl core::cmp::PartialEq for ponko::render::Stencil
+pub fn ponko::render::Stencil::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::Stencil
+pub fn ponko::render::Stencil::default() -> Self
+impl core::fmt::Debug for ponko::render::Stencil
+pub fn ponko::render::Stencil::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::render::Stencil
+pub fn ponko::render::Stencil::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::render::Stencil
+impl core::marker::StructuralPartialEq for ponko::render::Stencil
+#[repr(C)] pub struct ponko::render::StencilFace
+pub ponko::render::StencilFace::compare: ponko::render::StencilCompare
+pub ponko::render::StencilFace::depth_fail: ponko::render::StencilOp
+pub ponko::render::StencilFace::fail: ponko::render::StencilOp
+pub ponko::render::StencilFace::pass: ponko::render::StencilOp
+impl ponko::render::StencilFace
+pub const fn ponko::render::StencilFace::test(ponko::render::StencilCompare) -> Self
+impl core::clone::Clone for ponko::render::StencilFace
+pub fn ponko::render::StencilFace::clone(&self) -> Self
+impl core::cmp::Eq for ponko::render::StencilFace
+impl core::cmp::PartialEq for ponko::render::StencilFace
+pub fn ponko::render::StencilFace::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::StencilFace
+pub fn ponko::render::StencilFace::default() -> Self
+impl core::fmt::Debug for ponko::render::StencilFace
+pub fn ponko::render::StencilFace::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::render::StencilFace
+pub fn ponko::render::StencilFace::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::render::StencilFace
+impl core::marker::StructuralPartialEq for ponko::render::StencilFace
 pub struct ponko::render::StreamedLod
 impl ponko::render::StreamedLod
 pub fn ponko::render::StreamedLod::files(&self) -> &[alloc::string::String]
@@ -9788,6 +10497,7 @@ impl core::marker::StructuralPartialEq for ponko::ui::UiAccessValue
 #[non_exhaustive] pub enum ponko::ui::UiEvent
 pub ponko::ui::UiEvent::Changed(ponko::prelude::UiId)
 pub ponko::ui::UiEvent::Clicked(ponko::prelude::UiId)
+pub ponko::ui::UiEvent::LinkClicked(ponko::prelude::UiId, u32)
 pub ponko::ui::UiEvent::ScreenPopped(ponko::prelude::UiId)
 pub ponko::ui::UiEvent::Submitted(ponko::prelude::UiId)
 impl ponko::ui::UiEvent
@@ -9949,6 +10659,16 @@ pub fn ponko::prelude::Ui::ime_area(&self) -> core::option::Option<ponko::camera
 pub fn ponko::prelude::Ui::preedit(&self, ponko::prelude::UiId) -> core::option::Option<&str>
 pub fn ponko::prelude::Ui::set_ime_allowed(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::wants_ime(&self) -> bool
+impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::is_rich(&self, ponko::prelude::UiId) -> bool
+pub fn ponko::prelude::Ui::link(&self, ponko::prelude::UiId, u32) -> core::option::Option<&str>
+pub fn ponko::prelude::Ui::set_inline_font(&mut self, &str, ponko::text::Font)
+pub fn ponko::prelude::Ui::set_inline_image(&mut self, &str, ponko::texture::Texture)
+pub fn ponko::prelude::Ui::set_rich(&mut self, ponko::prelude::UiId, bool)
+impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::localize(&mut self, &ponko::locale::Strings)
+pub fn ponko::prelude::Ui::set_text_key(&mut self, ponko::prelude::UiId, &str, &[(&str, ponko::locale::Arg)])
+pub fn ponko::prelude::Ui::text_key(&self, ponko::prelude::UiId) -> core::option::Option<&str>
 impl core::default::Default for ponko::prelude::Ui
 pub fn ponko::prelude::Ui::default() -> Self
 impl core::marker::Send for ponko::prelude::Ui
@@ -10048,8 +10768,10 @@ pub fn ponko::ui::UiBuilder<'_>::layout(self, ponko::ui::UiLayout) -> Self
 pub fn ponko::ui::UiBuilder<'_>::live_region(self, ponko::ui::UiLive) -> Self
 pub fn ponko::ui::UiBuilder<'_>::name(self, impl core::convert::AsRef<str>) -> Self
 pub fn ponko::ui::UiBuilder<'_>::paint(self, ponko::ui::UiPaint) -> Self
+pub fn ponko::ui::UiBuilder<'_>::rich(self) -> Self
 pub fn ponko::ui::UiBuilder<'_>::size(self, f32) -> Self
 pub fn ponko::ui::UiBuilder<'_>::text(self, impl core::convert::AsRef<str>) -> Self
+pub fn ponko::ui::UiBuilder<'_>::text_key(self, &str) -> Self
 pub fn ponko::ui::UiBuilder<'_>::texture(self, ponko::texture::Texture, f32) -> Self
 pub fn ponko::ui::UiBuilder<'_>::value(self, f32) -> Self
 pub fn ponko::ui::UiBuilder<'_>::wrap(self) -> Self

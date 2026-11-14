@@ -33,6 +33,7 @@ pub(super) const FEATURES: &[(&str, bool)] = &[
     ("bench-internals", cfg!(feature = "bench-internals")),
     ("compressed-textures", cfg!(feature = "compressed-textures")),
     ("basis-universal", cfg!(feature = "basis-universal")),
+    ("gltf-meshopt", cfg!(feature = "gltf-meshopt")),
     ("image-jpeg", cfg!(feature = "image-jpeg")),
     ("image-webp", cfg!(feature = "image-webp")),
     ("image-bmp", cfg!(feature = "image-bmp")),

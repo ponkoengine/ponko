@@ -15,9 +15,22 @@
 # Format: <Rust name>  <chapter>  # what C and C++ do instead
 
 Assets::scene_asset_field        asset-sources.md  # C components have no text fields to name an asset in; load it before load_scene
+PackSource                       asset-sources.md  # C and C++ games read the default assets.pack; a pack of their own goes through ponko_ctx_add_asset_source
 Query::with_lookup               ecs.md            # generic borrows; component pointers from get don't borrow
 World::get_many_mut              ecs.md            # same
 SystemView                       system-access.md  # C and C++ systems take the whole ctx and declare access by name
 Storage::write_json              storage.md        # generic over Rust types; serialize yourself and storage_write the bytes
 Storage::read_json               storage.md        # storage_read the bytes and parse them yourself
 UiAccessAdapter::for_ns_view     ui.md             # needs a Rust Ui; the engine's window gets the adapter; ponko_ui_access_* give a snapshot
+SplitToning                      3d.md             # not in PonkoPost yet: adding fields changes its layout
+DepthOfField                     3d.md             # same
+Post::lerp                       3d.md             # same; blend PonkoPost fields yourself
+PostVolume                       3d.md             # same
+NavObstacleShape                 navigation3d.md   # C and C++ obstacles are unturned boxes; ponko_ctx_set_nav_obstacle and its carve variant
+Ui::set_rich                     ui.md             # not bound yet; labels side by side with their own paint
+Ui::set_inline_image             ui.md             # same
+Ui::set_inline_font              ui.md             # same
+Ui::link                         ui.md             # same; a button for each link
+UiEvent::LinkClicked             ui.md             # same
+Graphics::load_lights            3d.md             # glTF lights and cameras: read the file's KHR_lights_punctual and cameras yourself; models load with the same extensions
+Graphics::load_cameras           3d.md             # same
