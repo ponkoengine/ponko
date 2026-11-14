@@ -93,8 +93,8 @@ save is read back whole.
 ## Save slots
 
 `ctx.storage.save_world(&ctx.world, slot)` saves the world's reflected
-components and resources ([reflection](reflection.md)) to `saves/<slot>.json`,
-and `ctx.load_world(slot)` replaces the world with it: the same load as
+components and resources ([reflection](reflection.md)) to `saves/<slot>.json`
+(or `.save`, see [large worlds](#large-worlds)), and `ctx.load_world(slot)` replaces the world with it: the same load as
 [`load_scene`](scenes.md), from the player's storage instead of the assets, so
 its table of what a load replaces and keeps applies. `world_slots()` lists the
 slots, `delete_world(slot)` removes one. C and C++: `ponko_ctx_save_world`,
@@ -108,6 +108,68 @@ but its prefab objects; after `load_world`, spawn it again with
 A save slot is one player's file, so `load_world` is refused while a
 [lockstep session](networking.md) is connecting or running: the other peers
 don't have it.
+
+## Large worlds
+
+A JSON save is easy to read and diff, but for a world of a million entities
+it is hundreds of megabytes, and writing it stops the game for seconds. Two
+settings fix that; use either or both:
+
+```rust
+# use ponko::prelude::*;
+use ponko::reflect::SaveFormat;
+# let dir = std::env::temp_dir().join(format!("ponko-book-large-saves-{}", std::process::id()));
+# Game::new("Crabs", 800, 600).data_dir(&dir).run_headless(0, |ctx| {
+ctx.storage.set_save_format(SaveFormat::Binary); // once, in setup
+
+// Later, when the player saves:
+let mut saving = ctx.storage.save_world_in_background(&ctx.world, "autosave").unwrap();
+// The game goes on. Each frame, until it's written:
+if let Some(written) = saving.take() {
+    written.expect("saved");
+}
+# ctx.storage.finish_saves();
+# });
+# let _ = std::fs::remove_dir_all(dir);
+```
+
+- **`SaveFormat::Binary`** writes slots as `saves/<slot>.save`: the same
+  save as the JSON (entities, components, resources, versions), as
+  [MessagePack](https://msgpack.org) compressed with
+  [LZ4](https://lz4.org), with a checksum that refuses a damaged file.
+  Every load reads both formats, telling them apart by the first bytes, so
+  slots saved as JSON before the switch still load, and
+  [save migrations](#save-migrations) run on both. Saving a slot removes its
+  file in the other format. `SaveFormat::encode` and `SaveFormat::decode`
+  convert a save (`World::save`) yourself, for files of your own.
+- **`save_world_in_background`** takes the world's save on the game's thread
+  (built in parallel) and returns at once; a [job](streaming.md) encodes and
+  writes it. The save holds the world as it was at the call. Storage acts as
+  if it were written at the call: background saves are written in order, and
+  a call that touches the slot (`read`, `list`, `load_world`, another save)
+  waits for it. `is_saving()` is `true` until it is written, `finish_saves()`
+  waits for all of them, and the game waits for them when it ends. On the
+  web, the save is written before the call returns.
+
+A world of 1,000,000 entities (each with a `Transform2D` and a two-field
+component, half with a third), measured with
+`cargo run --release -p ponko_bench --bin saves` on a 14-core laptop that was
+busy with other builds at the time (fastest of four runs; single runs varied
+by 2x or more):
+
+| | Before: JSON, `save_world` | After: binary, `save_world_in_background` |
+|---|---|---|
+| File | 400.6 MiB | 26.9 MiB |
+| Game thread stopped while saving | 6.1 s | 1.3 s (the snapshot) |
+| Until the file is written | 6.1 s | 2.4 s |
+| Loading the slot (read, decode, `World::load`) | 2.9 s | 2.1 s |
+
+Most of what is left is the snapshot itself (building the save) and
+`World::load`, which are the same for both formats: decoding alone takes
+1.3 s for the JSON and 0.7 s for the binary file.
+
+C and C++ games save slots as JSON on the game's thread for now: the binary
+format and background saves are Rust-only.
 
 ## Save migrations
 

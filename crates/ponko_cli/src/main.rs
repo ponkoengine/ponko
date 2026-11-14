@@ -21,7 +21,7 @@ const USAGE: &str = "\
 ponko: the command-line tool for Ponko games
 
 Usage:
-  ponko new <path> [--2d | --3d | --headless] [--path <engine> | --git <url>]
+  ponko new <path> [--2d | --3d | --headless | --server] [--path <engine> | --git <url>]
   ponko package [--bin <name> | --example <name>] [--web] [--format <list>] [...]
   ponko notices --out <file> [-p <package>] [...]
   ponko pack [<folder>] [--out <file>] [--exclude <pattern>]... [--textures]

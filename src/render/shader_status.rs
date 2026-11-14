@@ -16,6 +16,8 @@ pub enum ShaderKind {
     Compute,
     /// A sprite shader ([`Graphics::create_sprite_shader`](crate::gfx::Graphics::create_sprite_shader), [`Graphics::load_sprite_shader`](crate::gfx::Graphics::load_sprite_shader)).
     Sprite,
+    /// A sky shader ([`Graphics::create_sky_shader`](crate::gfx::Graphics::create_sky_shader), [`Graphics::load_sky_shader`](crate::gfx::Graphics::load_sky_shader)).
+    Sky,
 }
 
 /// A compiler error in one of the game's shaders, pointing at its own WGSL
@@ -28,7 +30,7 @@ pub struct ShaderDiagnostic {
     /// The shader's name: the path it was loaded from, or the name given to
     /// `create_shader`.
     pub shader: String,
-    /// Material shader, screen effect, compute pass or sprite shader.
+    /// Material shader, screen effect, compute pass, sprite or sky shader.
     pub kind: ShaderKind,
     /// The variant the engine compiled when it failed: which optional parts
     /// (decals, global illumination, instance storage) the GPU has.
@@ -110,7 +112,7 @@ pub enum ShaderOutcome {
 pub struct ShaderStatus {
     /// Its name: the path it was loaded from, or the name given to `create_*`.
     pub shader: String,
-    /// Material shader, screen effect, compute pass or sprite shader.
+    /// Material shader, screen effect, compute pass, sprite or sky shader.
     pub kind: ShaderKind,
     /// How it went.
     pub outcome: ShaderOutcome,

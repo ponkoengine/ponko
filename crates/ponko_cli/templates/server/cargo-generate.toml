@@ -1,0 +1,5 @@
+# Marks this folder as a cargo-generate template:
+#   cargo generate --git https://github.com/ponkoengine/ponko crates/ponko_cli/templates/<kind>
+# `ponko new` (crates/ponko_cli) makes the same project without cargo-generate.
+[template]
+cargo_generate_version = ">=0.18"

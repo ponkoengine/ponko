@@ -89,6 +89,7 @@ uses `include/ponko.h`, `include/ponko.hpp`, and `PONKO_*` settings. See
 | `crates/ponko_bench` | Benchmarks (`cargo run --release -p ponko_bench [-- filter]`) |
 | `examples/`, `examples/cpp/` | Rust and C++ examples |
 | `tests/`, `crates/*/tests/` | Tests, one file per area |
+| `fuzz/` | Fuzz targets for the loaders of untrusted files and packets ([fuzz/README.md](fuzz/README.md)) |
 | `book/` | The guide ([mdBook](https://rust-lang.github.io/mdBook/)) |
 
 ## Making a change
@@ -438,6 +439,24 @@ brought it in:
 
 A weekly advisory issue is handled the same way: fix, or ignore with a reason,
 in a pull request that links the issue.
+
+## Fuzzing
+
+The loaders that read data a game doesn't control (scenes, prefabs, glTF,
+the Unity importer's readers, action maps, asset packs, network packets)
+have fuzz targets in [`fuzz/`](fuzz/README.md). When you change one of
+those loaders, run its target for a few minutes (nightly Rust and
+cargo-fuzz):
+
+```sh
+fuzz/seed-corpus.sh
+fuzz/run-all.sh 300 scene   # five minutes of the scene target
+```
+
+A crash, hang or huge allocation it finds is a bug in the loader: fix it
+there and add a regression test next to the loader's tests. The workflow
+`.github/workflows/fuzz.yml` runs every target each Monday on `main` and
+opens an issue, "Fuzzing: `<target>` (`<kind>`)", for what it finds.
 
 ## Using coding agents
 

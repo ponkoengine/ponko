@@ -2497,6 +2497,38 @@ static void buses_and_effects(ponko::ctx& ctx, ponko::sound sound) {
 }
 // ANCHOR_END: audio_mixer
 
+// ANCHOR: mixer_tree
+static void mixer_tree(ponko::ctx& ctx) {
+    auto master = ctx.audio_bus("master");
+    auto music = ctx.audio_bus("music");
+    auto dialogue = ctx.audio_bus("dialogue");
+    auto world = ctx.audio_bus("world");
+    for (auto b : {music, dialogue, world}) ctx.set_audio_bus_parent(b, master);
+
+    // The world bus muffles underwater through a low-pass in its chain.
+    ctx.set_audio_bus_effects(world, {ponko::bus_effect_defaults(PONKO_BUS_EFFECT_FILTER),
+                                      ponko::bus_effect_defaults(PONKO_BUS_EFFECT_REVERB)});
+    // Music drops to a quarter while dialogue plays.
+    auto duck = ponko::ducking_defaults(dialogue);
+    duck.gain = 0.25f;
+    ctx.set_audio_bus_ducking(music, {duck});
+
+    auto muffled = ponko::bus_effect_defaults(PONKO_BUS_EFFECT_FILTER);
+    muffled.cutoff_hz = 450;
+    ctx.add_audio_snapshot("underwater", {{world, 0.7f, {{0, muffled}}}, {music, 0.5f, {}}});
+    ctx.start_audio_snapshot("underwater", 1.0f); // a one-second fade
+}
+// ANCHOR_END: mixer_tree
+
+// ANCHOR: mixer_settings
+static std::string save_mixer(ponko::ctx& ctx) {
+    return ctx.audio_mixer_state(); // JSON: write it with the other settings
+}
+static void load_mixer_settings(ponko::ctx& ctx, const std::string& saved) {
+    ctx.restore_audio_mixer_state(saved);
+}
+// ANCHOR_END: mixer_settings
+
 // ANCHOR: audio_stream
 [[maybe_unused]] static void streaming_music(ponko::ctx& ctx) {
     auto music = ctx.audio_bus("music");
@@ -3466,6 +3498,22 @@ int main() {
         sound3d(ctx);
         float silence[16] = {};
         buses_and_effects(ctx, ctx.create_sound(44100, silence, 16));
+    });
+    ponko::game("mixer guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        mixer_tree(ctx);
+        auto world = ctx.audio_bus("world");
+        auto parent = ctx.audio_bus_parent(world);
+        if (!parent || parent->index != ctx.audio_bus("master").index) std::abort();
+        if (ctx.audio_bus_effects(world).size() != 2 || ctx.audio_bus_ducking(ctx.audio_bus("music")).size() != 1) std::abort();
+        ctx.stop_audio_snapshot("underwater", 0.0f);
+        ctx.set_audio_bus_volume(world, 0.4f);
+        auto saved = save_mixer(ctx);
+        ctx.set_audio_bus_volume(world, 1.0f);
+        load_mixer_settings(ctx, saved);
+        if (ctx.audio_bus_volume(world) != 0.4f || ctx.audio_bus_gain(world) != 0.4f) std::abort();
+        if (ctx.start_audio_snapshot("missing", 0.0f) || ctx.audio_snapshot_weight("underwater") != 0.0f) std::abort();
+        ctx.apply_audio_mixer_json(R"({"buses": [{"name": "voices", "parent": "master"}]})");
+        if (ctx.audio_bus_muted(ctx.audio_bus("voices"))) std::abort();
     });
     ponko::game("shader guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         try {

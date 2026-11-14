@@ -210,6 +210,20 @@ typedef enum PonkoAudioRolloff {
   PONKO_ROLLOFF_LINEAR = 1,
 } PonkoAudioRolloff;
 
+typedef enum PonkoBusEffectKind {
+  PONKO_BUS_EFFECT_FILTER = 0,
+  PONKO_BUS_EFFECT_REVERB = 1,
+  PONKO_BUS_EFFECT_COMPRESSOR = 2,
+  PONKO_BUS_EFFECT_DELAY = 3,
+} PonkoBusEffectKind;
+
+typedef enum PonkoFilterMode {
+  PONKO_FILTER_LOW_PASS = 0,
+  PONKO_FILTER_BAND_PASS = 1,
+  PONKO_FILTER_HIGH_PASS = 2,
+  PONKO_FILTER_NOTCH = 3,
+} PonkoFilterMode;
+
 typedef enum PonkoLane {
   PONKO_LANE_RELIABLE = 0,
   PONKO_LANE_UNRELIABLE = 1,
@@ -981,6 +995,45 @@ typedef struct PonkoAudioListener3D {
   struct PonkoVec3 position;
   struct PonkoQuat rotation;
 } PonkoAudioListener3D;
+
+typedef struct PonkoBusEffect {
+  enum PonkoBusEffectKind kind;
+  enum PonkoFilterMode mode;
+  float cutoff_hz;
+  float resonance;
+  float feedback;
+  float damping;
+  float stereo_width;
+  float threshold_db;
+  float ratio;
+  float attack;
+  float release;
+  float makeup_db;
+  float delay;
+  float feedback_db;
+  float mix;
+} PonkoBusEffect;
+
+typedef struct PonkoDucking {
+  struct PonkoAudioBus key;
+  float gain;
+  float threshold;
+  float attack;
+  float release;
+} PonkoDucking;
+
+typedef struct PonkoEffectOverride {
+  size_t index;
+  struct PonkoBusEffect effect;
+} PonkoEffectOverride;
+
+typedef struct PonkoBusSnapshot {
+  struct PonkoAudioBus bus;
+  bool has_volume;
+  float volume;
+  const struct PonkoEffectOverride *effects;
+  size_t effect_count;
+} PonkoBusSnapshot;
 
 typedef struct PonkoQueryOptions {
   uint32_t writes;
@@ -2721,6 +2774,77 @@ enum PonkoStatus ponko_ctx_set_audio_listener(struct PonkoCtx *ctx,
 
 enum PonkoStatus ponko_ctx_audio_listener(struct PonkoCtx *ctx,
                                           struct PonkoAudioListener3D *out_listener);
+
+struct PonkoBusEffect ponko_bus_effect_default(enum PonkoBusEffectKind kind);
+
+struct PonkoDucking ponko_ducking_default(struct PonkoAudioBus key);
+
+enum PonkoStatus ponko_ctx_set_audio_bus_parent(struct PonkoCtx *ctx,
+                                                struct PonkoAudioBus bus,
+                                                const struct PonkoAudioBus *parent);
+
+enum PonkoStatus ponko_ctx_audio_bus_parent(struct PonkoCtx *ctx,
+                                            struct PonkoAudioBus bus,
+                                            struct PonkoAudioBus *out_parent,
+                                            bool *out_has_parent);
+
+enum PonkoStatus ponko_ctx_audio_bus_volume(struct PonkoCtx *ctx,
+                                            struct PonkoAudioBus bus,
+                                            float *out_volume);
+
+enum PonkoStatus ponko_ctx_audio_bus_gain(struct PonkoCtx *ctx,
+                                          struct PonkoAudioBus bus,
+                                          float *out_gain);
+
+enum PonkoStatus ponko_ctx_audio_bus_muted(struct PonkoCtx *ctx,
+                                           struct PonkoAudioBus bus,
+                                           bool *out_muted);
+
+enum PonkoStatus ponko_ctx_set_audio_bus_effects(struct PonkoCtx *ctx,
+                                                 struct PonkoAudioBus bus,
+                                                 const struct PonkoBusEffect *effects,
+                                                 size_t count);
+
+enum PonkoStatus ponko_ctx_audio_bus_effects(struct PonkoCtx *ctx,
+                                             struct PonkoAudioBus bus,
+                                             struct PonkoBusEffect *buffer,
+                                             size_t capacity,
+                                             size_t *out_count);
+
+enum PonkoStatus ponko_ctx_set_audio_bus_ducking(struct PonkoCtx *ctx,
+                                                 struct PonkoAudioBus bus,
+                                                 const struct PonkoDucking *ducking,
+                                                 size_t count);
+
+enum PonkoStatus ponko_ctx_audio_bus_ducking(struct PonkoCtx *ctx,
+                                             struct PonkoAudioBus bus,
+                                             struct PonkoDucking *buffer,
+                                             size_t capacity,
+                                             size_t *out_count);
+
+enum PonkoStatus ponko_ctx_add_audio_snapshot(struct PonkoCtx *ctx,
+                                              const char *name,
+                                              const struct PonkoBusSnapshot *buses,
+                                              size_t count);
+
+enum PonkoStatus ponko_ctx_start_audio_snapshot(struct PonkoCtx *ctx, const char *name, float fade);
+
+enum PonkoStatus ponko_ctx_stop_audio_snapshot(struct PonkoCtx *ctx, const char *name, float fade);
+
+enum PonkoStatus ponko_ctx_audio_snapshot_weight(struct PonkoCtx *ctx,
+                                                 const char *name,
+                                                 float *out_weight);
+
+enum PonkoStatus ponko_ctx_load_audio_mixer(struct PonkoCtx *ctx, const char *path);
+
+enum PonkoStatus ponko_ctx_apply_audio_mixer_json(struct PonkoCtx *ctx, const char *json);
+
+enum PonkoStatus ponko_ctx_audio_mixer_state(struct PonkoCtx *ctx,
+                                             char *buffer,
+                                             size_t capacity,
+                                             size_t *out_len);
+
+enum PonkoStatus ponko_ctx_restore_audio_mixer_state(struct PonkoCtx *ctx, const char *json);
 
 struct PonkoQueryOptions ponko_query_options_default(void);
 

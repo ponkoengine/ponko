@@ -189,6 +189,7 @@ pub(super) fn prepare(
     json["extensionsRequired"] = Value::Array(Vec::new());
     let root: gltf::json::Root =
         serde_json::from_value(json.clone()).map_err(|e| format!("{name}: not a glTF file: {e}"))?;
+    super::gltf::check_position_indices(&root).map_err(|e| format!("{name}: not a valid glTF file: {e}"))?;
     let document = gltf::Document::from_json(root).map_err(|e| format!("{name}: not a valid glTF file: {e}"))?;
     Ok(Prepared {
         document,

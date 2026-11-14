@@ -101,11 +101,20 @@ pub(crate) fn parse_header(bytes: &[u8]) -> Result<Option<Header>, String> {
             "it is a version {version} pack; this engine reads version {VERSION} (pack it again with this engine's `ponko pack`)"
         ));
     }
-    Ok(Some(Header {
+    let header = Header {
         count: u32::from_le_bytes(bytes[12..16].try_into().expect("4 bytes")),
         index_len: u64::from_le_bytes(bytes[16..24].try_into().expect("8 bytes")),
         data_len: u64::from_le_bytes(bytes[24..32].try_into().expect("8 bytes")),
-    }))
+    };
+    // So `data_start` and `total_len` can't overflow.
+    if (HEADER_LEN as u64)
+        .checked_add(header.index_len)
+        .and_then(|n| n.checked_add(header.data_len))
+        .is_none()
+    {
+        return Err("its header gives sizes past 2^64 bytes".into());
+    }
+    Ok(Some(header))
 }
 
 /// A cursor over the index's bytes.
@@ -175,12 +184,18 @@ fn parse_index(header: &Header, index: &[u8]) -> Result<Vec<Entry>, String> {
     Ok(entries)
 }
 
+/// The most deflate expands its input: 258 bytes from each 2-bit code.
+const MAX_DEFLATE_RATIO: u64 = 1032;
+
 /// Unpacks an entry's stored bytes and checks them.
 fn unpack(entry: &Entry, stored: Vec<u8>) -> std::io::Result<Vec<u8>> {
     let bytes = match entry.codec {
         Codec::Stored => stored,
         Codec::Deflate => {
-            let mut out = Vec::with_capacity(usize::try_from(entry.size).unwrap_or(0).min(1 << 30));
+            // Reserve what the stored bytes can inflate to at most (deflate
+            // shrinks 1032:1 at best), not what a damaged index claims.
+            let most = (stored.len() as u64).saturating_mul(MAX_DEFLATE_RATIO);
+            let mut out = Vec::with_capacity(usize::try_from(entry.size.min(most)).unwrap_or(0).min(1 << 30));
             flate2::read::DeflateDecoder::new(stored.as_slice())
                 .take(entry.size.saturating_add(1))
                 .read_to_end(&mut out)

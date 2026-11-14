@@ -217,6 +217,57 @@ fn a_v1_save_names_what_this_world_does_not_reflect() {
     assert_eq!(w.len(), 0, "a failed load changes nothing");
 }
 
+/// The binary format ([`SaveFormat::Binary`]) holds the same save: the v1
+/// fixture converts to it and back without changing a bit, and loads the
+/// same world from it.
+#[test]
+fn a_v1_save_survives_the_binary_format_unchanged() {
+    use ponko::reflect::SaveFormat;
+    let save = v1();
+    let back = SaveFormat::decode(&SaveFormat::Binary.encode(&save)).unwrap();
+    assert_eq!(back, save);
+    assert_eq!(back.to_string(), save.to_string(), "every number keeps its exact text");
+    let (mut from_json, mut from_binary) = (reflected_world(), reflected_world());
+    from_json.load(&save).unwrap();
+    from_binary.load(&back).unwrap();
+    assert_eq!(from_binary.save(), from_json.save());
+}
+
+/// The retained binary fixture, `world_v1.save`, is `world_v1.json` in the
+/// first binary layout: later revisions must keep reading those bytes.
+#[test]
+fn the_retained_binary_v1_fixture_reads_as_the_json_one() {
+    use ponko::reflect::SaveFormat;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/saves/world_v1.save");
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("can't read {}: {e}", path.display()));
+    assert_eq!(SaveFormat::detect(&bytes), SaveFormat::Binary);
+    assert_eq!(SaveFormat::decode(&bytes).unwrap(), v1());
+    let p = fixture("world_v1.save.provenance.json");
+    assert_eq!(p["fixture"], "world_v1.save");
+    assert_eq!(p["source"], "world_v1.json");
+}
+
+/// Writes `world_v1.save` from `world_v1.json`. Not a regression test: it's
+/// how the binary fixture was made, at the revision its provenance names.
+/// Never overwrite a retained fixture:
+///
+/// ```sh
+/// PONKO_SAVE_FIXTURE_OUT=/tmp/world_v1.save \
+///     cargo test -p ponko --no-default-features --test save_compat -- --ignored --exact write_v1_binary_fixture
+/// ```
+#[test]
+#[ignore = "writes a fixture file; see tests/fixtures/saves/README.md"]
+fn write_v1_binary_fixture() {
+    let out = std::env::var("PONKO_SAVE_FIXTURE_OUT").expect("set PONKO_SAVE_FIXTURE_OUT to the file to write");
+    let out = std::path::Path::new(&out);
+    assert!(
+        !out.exists(),
+        "{} exists; fixtures are never overwritten",
+        out.display()
+    );
+    std::fs::write(out, ponko::reflect::SaveFormat::Binary.encode(&v1())).unwrap();
+}
+
 /// Writes the v1 fixture. Not a regression test: it's how
 /// `tests/fixtures/saves/world_v1.json` was made. Run it only to create a
 /// fixture for a new save version (copy it, change the version and file

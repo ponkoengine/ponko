@@ -31,8 +31,10 @@ fn main() {
         .sim_system(systems::step_navmesh3d)
         .setup(move |ctx| {
             ctx.world.insert_resource(nav);
-            let mut agent = NavAgent::default();
-            agent.destination = Some(destination);
+            let agent = NavAgent {
+                destination: Some(destination),
+                ..Default::default()
+            };
             ctx.world.spawn((Transform::at(start), agent));
             // World-space AABB; move its center or despawn it to reopen polygons.
             ctx.world

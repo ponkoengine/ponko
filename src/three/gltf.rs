@@ -171,6 +171,7 @@ pub(crate) fn load(
     read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
     have: &dyn Fn(&str) -> bool,
 ) -> Result<Loaded, String> {
+    check_glb_length(name, bytes)?;
     let gltf_ext::Prepared {
         document: gltf,
         buffers,
@@ -178,6 +179,8 @@ pub(crate) fn load(
         preferred_image,
         mut warnings,
     } = gltf_ext::prepare(name, bytes, read)?;
+    check_accessors(&gltf).map_err(|e| format!("{name}: {e}"))?;
+    check_node_tree(&gltf).map_err(|e| format!("{name}: {e}"))?;
     let folder = folder_of(name);
 
     // Materials, with each image decoded once.
@@ -504,6 +507,20 @@ fn read_clips(
                 .and_then(|e| e.get("ponkoAnimatedTargets"))
                 .and_then(|v| v.as_array());
             for channel in animation.channels() {
+                // gltf-json leaves channel targets unchecked, and the gltf
+                // crate unwraps them: check the node, and skip paths of
+                // extensions this loader doesn't read (such as "pointer").
+                let target = &document.as_json().animations[animation.index()].channels[channel.index()].target;
+                if target.node.value() >= document.nodes().len() {
+                    return Err(format!(
+                        "animation {}: a channel targets node {}, which doesn't exist",
+                        animation.index(),
+                        target.node.value()
+                    ));
+                }
+                if !matches!(target.path, gltf::json::validation::Checked::Valid(_)) {
+                    continue;
+                }
                 let joint = rig.of_node[channel.target().node().index()];
                 if joint == u16::MAX {
                     continue;
@@ -944,6 +961,253 @@ fn percent_decode(s: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The most elements an accessor without data (all zeros) may have where
+/// `read_floats` reads it: 16 Mi, far more than a mesh of zeros needs.
+const MAX_ZERO_ELEMENTS: usize = 1 << 24;
+
+/// Refuses a primitive whose `POSITION` names a missing accessor, before
+/// gltf-json's validation, which looks that accessor up without checking
+/// (a panic in every build). `gltf_ext::prepare` runs it on the JSON
+/// before `Document::from_json`.
+pub(super) fn check_position_indices(json: &gltf::json::Root) -> Result<(), String> {
+    use gltf::json::validation::Checked;
+    for (m, mesh) in json.meshes.iter().enumerate() {
+        for primitive in &mesh.primitives {
+            if let Some(index) = primitive.attributes.get(&Checked::Valid(gltf::Semantic::Positions))
+                && index.value() >= json.accessors.len()
+            {
+                return Err(format!(
+                    "mesh {m}: POSITION names accessor {}, which doesn't exist",
+                    index.value()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Checks every accessor this loader reads before anything reads it:
+///
+/// - What the gltf crate's readers read (colors, joints, weights, indices,
+///   tangents, inverse binds, key times and values) has a type glTF allows
+///   for its use, at least one element, a stride of at least one element
+///   and an end a `usize` holds. The readers assume all of these: another
+///   type reaches an `unreachable!` (a panic in every build) or a debug
+///   assertion, and the others overflow their size arithmetic. (Such an
+///   accessor past the end of its view is fine: they find no data there.)
+/// - What `gltf_ext::read_floats` reads (positions, normals, texture
+///   coordinates, morph offsets, of any component type for
+///   `KHR_mesh_quantization`) fits its view, since it sets aside room for
+///   every element first; one without a view (zeros) has at most
+///   [`MAX_ZERO_ELEMENTS`].
+/// - A primitive's attributes and morph offsets all have `POSITION`'s
+///   count, as glTF requires.
+fn check_accessors(document: &gltf::Document) -> Result<(), String> {
+    use gltf::Semantic;
+    use gltf::accessor::{DataType::*, Dimensions, Dimensions::*};
+    use gltf::json::validation::Checked;
+
+    /// Integer types a normalized rotation or weight may use, and floats.
+    const NORMALIZED: &[gltf::accessor::DataType] = &[I8, U8, I16, U16, F32];
+    /// Any component type: `read_floats` reads them all.
+    const ANY: &[gltf::accessor::DataType] = &[I8, U8, I16, U16, U32, F32];
+    // Where the last element ends, as the readers compute it, if a `usize`
+    // holds it.
+    let end = |view: &gltf::buffer::View, offset: usize, count: usize, size: usize| {
+        let stride = view.stride().unwrap_or(size);
+        if stride < size || count == 0 {
+            return None;
+        }
+        stride.checked_mul(count - 1)?.checked_add(offset)?.checked_add(size)
+    };
+    // `whole`: the accessor must fit its view (`read_floats`).
+    let check =
+        |a: &gltf::Accessor, used_as: &str, dims: &[Dimensions], types: &[gltf::accessor::DataType], whole: bool| {
+            let bad = |why: String| format!("accessor {} ({used_as}) {why}", a.index());
+            if !dims.contains(&a.dimensions()) || !types.contains(&a.data_type()) {
+                return Err(bad(format!(
+                    "is {:?} {:?}, which glTF doesn't allow there",
+                    a.dimensions(),
+                    a.data_type()
+                )));
+            }
+            match a.view() {
+                Some(view) => match end(&view, a.offset(), a.count(), a.size()) {
+                    None => return Err(bad("has no elements, a stride under one, or an end past 2^64".into())),
+                    Some(end) if whole && end > view.length() => {
+                        return Err(bad("runs past the end of its buffer view".into()));
+                    }
+                    Some(_) => {}
+                },
+                None if whole && a.count() > MAX_ZERO_ELEMENTS => {
+                    return Err(bad(format!(
+                        "has {} elements and no data; at most {MAX_ZERO_ELEMENTS} may be zeros",
+                        a.count()
+                    )));
+                }
+                None => {}
+            }
+            if let Some(sparse) = a.sparse() {
+                let (indices, values) = (sparse.indices(), sparse.values());
+                if end(
+                    &indices.view(),
+                    indices.offset(),
+                    sparse.count(),
+                    indices.index_type().size(),
+                )
+                .is_none()
+                    || end(&values.view(), values.offset(), sparse.count(), a.size()).is_none()
+                {
+                    return Err(bad(
+                        "has sparse values with no elements, a stride under one, or an end past 2^64".into(),
+                    ));
+                }
+            }
+            Ok(())
+        };
+
+    for mesh in document.meshes() {
+        for primitive in mesh.primitives() {
+            let corners = primitive.get(&Semantic::Positions).map(|a| a.count());
+            let same_count = |a: &gltf::Accessor, used_as: &str| match corners {
+                Some(corners) if a.count() != corners => Err(format!(
+                    "accessor {} ({used_as}) has {} elements, but POSITION has {corners}",
+                    a.index(),
+                    a.count()
+                )),
+                _ => Ok(()),
+            };
+            for (semantic, a) in primitive.attributes() {
+                let used_as = match semantic {
+                    Semantic::Positions => "POSITION",
+                    Semantic::Normals => "NORMAL",
+                    Semantic::Tangents => "TANGENT",
+                    Semantic::Colors(_) => "COLOR",
+                    Semantic::TexCoords(_) => "TEXCOORD",
+                    Semantic::Joints(_) => "JOINTS",
+                    Semantic::Weights(_) => "WEIGHTS",
+                    _ => continue,
+                };
+                same_count(&a, used_as)?;
+                match semantic {
+                    Semantic::Positions | Semantic::Normals => check(&a, used_as, &[Vec3], ANY, true)?,
+                    Semantic::TexCoords(_) => check(&a, used_as, &[Vec2], ANY, true)?,
+                    Semantic::Tangents => check(&a, used_as, &[Vec4], &[F32], false)?,
+                    Semantic::Colors(_) => check(&a, used_as, &[Vec3, Vec4], &[U8, U16, F32], false)?,
+                    Semantic::Joints(_) => check(&a, used_as, &[Vec4], &[U8, U16], false)?,
+                    _ => check(&a, used_as, &[Vec4], &[U8, U16, F32], false)?,
+                }
+            }
+            if let Some(a) = primitive.indices() {
+                check(&a, "indices", &[Scalar], &[U8, U16, U32], false)?;
+            }
+            for target in primitive.morph_targets() {
+                for a in [target.positions(), target.normals(), target.tangents()]
+                    .into_iter()
+                    .flatten()
+                {
+                    same_count(&a, "morph target")?;
+                    check(&a, "morph target", &[Vec3], ANY, true)?;
+                }
+            }
+        }
+    }
+    for skin in document.skins() {
+        if let Some(a) = skin.inverse_bind_matrices() {
+            check(&a, "inverse bind matrices", &[Mat4], &[F32], false)?;
+        }
+    }
+    let json = document.as_json();
+    for animation in document.animations() {
+        for channel in animation.channels() {
+            let sampler = channel.sampler();
+            check(&sampler.input(), "key times", &[Scalar], &[F32], false)?;
+            let output = sampler.output();
+            match json.animations[animation.index()].channels[channel.index()].target.path {
+                Checked::Valid(gltf::animation::Property::Translation | gltf::animation::Property::Scale) => {
+                    check(&output, "key values", &[Vec3], &[F32], false)?;
+                }
+                Checked::Valid(gltf::animation::Property::Rotation) => {
+                    check(&output, "key values", &[Vec4], NORMALIZED, false)?;
+                }
+                Checked::Valid(gltf::animation::Property::MorphTargetWeights) => {
+                    check(&output, "key values", &[Scalar], NORMALIZED, false)?;
+                }
+                // Skipped by `read_clips`.
+                Checked::Invalid => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Checks that the nodes form trees, as glTF requires: each node has at
+/// most one parent and isn't its own ancestor, and a scene lists only roots,
+/// each once. Every walk of the scenes below relies on it: a cycle would
+/// never end, and a node with two parents (or a root listed twice) is
+/// walked again for each, which grows exponentially with the depth.
+fn check_node_tree(document: &gltf::Document) -> Result<(), String> {
+    let mut parent: Vec<Option<usize>> = vec![None; document.nodes().len()];
+    for node in document.nodes() {
+        for child in node.children() {
+            if let Some(other) = parent[child.index()].replace(node.index()) {
+                return Err(format!(
+                    "node {} is a child of both node {other} and node {}",
+                    child.index(),
+                    node.index()
+                ));
+            }
+        }
+    }
+    // Up from each node until a root or a node already known to reach one.
+    const UNSEEN: u8 = 0;
+    const ON_PATH: u8 = 1;
+    const REACHES_ROOT: u8 = 2;
+    let mut state = vec![UNSEEN; parent.len()];
+    let mut path = Vec::new();
+    for start in 0..parent.len() {
+        let mut at = Some(start);
+        while let Some(n) = at.filter(|&n| state[n] != REACHES_ROOT) {
+            if state[n] == ON_PATH {
+                return Err(format!("node {n} is its own ancestor"));
+            }
+            state[n] = ON_PATH;
+            path.push(n);
+            at = parent[n];
+        }
+        for n in path.drain(..) {
+            state[n] = REACHES_ROOT;
+        }
+    }
+    for scene in document.scenes() {
+        let mut listed = vec![false; parent.len()];
+        for node in scene.nodes() {
+            let n = node.index();
+            if let Some(p) = parent[n] {
+                return Err(format!("scene {} lists node {n}, a child of node {p}", scene.index()));
+            }
+            if std::mem::replace(&mut listed[n], true) {
+                return Err(format!("scene {} lists node {n} twice", scene.index()));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a binary glTF whose header gives a length shorter than the
+/// header itself: the gltf crate subtracts without checking (a panic in
+/// builds with overflow checks).
+fn check_glb_length(name: &str, bytes: &[u8]) -> Result<(), String> {
+    if let Some(length) = bytes.strip_prefix(b"glTF").and_then(|rest| rest.get(4..8))
+        && u32::from_le_bytes(length.try_into().expect("4 bytes")) < 12
+    {
+        return Err(format!(
+            "{name}: not a glTF file: its header gives a length under 12 bytes"
+        ));
+    }
+    Ok(())
 }
 
 fn base64(text: &str) -> Result<Vec<u8>, String> {

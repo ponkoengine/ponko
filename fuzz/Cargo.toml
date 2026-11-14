@@ -1,0 +1,89 @@
+# Fuzz targets for the loaders that read untrusted files and packets
+# (fuzz/README.md). Not part of the engine's workspace: run with
+# `cargo +nightly fuzz run <target>` from the repository root.
+[package]
+name = "ponko-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# No window, audio or gamepad: the loaders only. `3d` brings the glTF
+# loader, `gltf-meshopt` its decoder of compressed geometry.
+ponko = { path = "..", default-features = false, features = ["3d", "gltf-meshopt"] }
+ponko_unity = { path = "../crates/ponko_unity" }
+glam = "0.34.2"
+
+# Its own workspace, so the engine's `cargo build --workspace` leaves it out.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "scene"
+path = "fuzz_targets/scene.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "prefab"
+path = "fuzz_targets/prefab.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gltf"
+path = "fuzz_targets/gltf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "unity_yaml"
+path = "fuzz_targets/unity_yaml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "unity_binary"
+path = "fuzz_targets/unity_binary.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "action_map"
+path = "fuzz_targets/action_map.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "asset_pack"
+path = "fuzz_targets/asset_pack.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lockstep"
+path = "fuzz_targets/lockstep.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "messages"
+path = "fuzz_targets/messages.rs"
+test = false
+doc = false
+bench = false

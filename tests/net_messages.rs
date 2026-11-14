@@ -142,6 +142,126 @@ fn udp_connects_and_moves_bytes_both_ways() {
 }
 
 #[test]
+fn udp_and_web_clients_join_one_host_on_every_lane() {
+    let host = NetMessages::host("127.0.0.1:0", 2)
+        .unwrap()
+        .accept_web("127.0.0.1:0")
+        .unwrap();
+    let web_addr = host.web_addr().expect("listening for browsers");
+    assert_eq!(host.local_addr().map(|a| a.ip()), Some(web_addr.ip()));
+    let udp = NetMessages::join(host.local_addr().unwrap()).unwrap();
+    let web = NetMessages::join_web(&format!("ws://{web_addr}")).unwrap();
+    assert_eq!(web.local_addr(), None);
+    let mut nets = vec![host, udp, web];
+    let mut peers = Vec::new();
+    let mut joined = [false; 2];
+    for _ in 0..500 {
+        step_udp(&mut nets, 1);
+        peers.extend(nets[0].events().filter_map(|e| match e {
+            MessageEvent::Connected(p) => Some(p),
+            _ => None,
+        }));
+        for (client, joined) in joined.iter_mut().enumerate() {
+            *joined |= nets[client + 1]
+                .events()
+                .any(|e| e == MessageEvent::Connected(PeerId::HOST));
+        }
+        if peers.len() == 2 && joined == [true; 2] {
+            break;
+        }
+    }
+    assert_eq!(peers.len(), 2, "the host saw both clients");
+    assert_eq!(joined, [true; 2], "both clients saw the host");
+    nets[0].send_to_all(Lane::Reliable, b"to everyone").unwrap();
+    for (i, lane) in [Lane::Reliable, Lane::ReliableUnordered, Lane::Unreliable]
+        .into_iter()
+        .enumerate()
+    {
+        for (client, net) in nets.iter_mut().enumerate().skip(1) {
+            net.send(PeerId::HOST, lane, &[client as u8, i as u8]).unwrap();
+        }
+    }
+    let mut heard = Vec::new();
+    let mut everyone = [false; 2];
+    for _ in 0..500 {
+        step_udp(&mut nets, 1);
+        heard.extend(nets[0].events().filter_map(|e| match e {
+            MessageEvent::Message { bytes, lane, .. } => Some((bytes, lane)),
+            _ => None,
+        }));
+        for (client, got) in everyone.iter_mut().enumerate() {
+            *got |= nets[client + 1]
+                .events()
+                .any(|e| matches!(e, MessageEvent::Message { bytes, .. } if bytes == b"to everyone"));
+        }
+        if heard.len() == 6 && everyone == [true; 2] {
+            break;
+        }
+    }
+    let lanes = [Lane::Reliable, Lane::ReliableUnordered, Lane::Unreliable];
+    let mut got: Vec<Vec<u8>> = heard
+        .iter()
+        .map(|(bytes, lane)| {
+            assert_eq!(
+                *lane,
+                lanes[usize::from(bytes[1])],
+                "arrived on the lane it was sent on"
+            );
+            bytes.clone()
+        })
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        [[1, 0], [1, 1], [1, 2], [2, 0], [2, 1], [2, 2]].map(Vec::from),
+        "every lane from both clients"
+    );
+    assert_eq!(everyone, [true; 2], "the broadcast reached the UDP and the web client");
+}
+
+#[test]
+fn web_endpoints_check_their_role_and_url() {
+    let client = NetMessages::join("127.0.0.1:7777").unwrap();
+    assert_eq!(
+        client.accept_web("127.0.0.1:0").err().map(|e| e.kind()),
+        Some(std::io::ErrorKind::InvalidInput)
+    );
+    let host = NetMessages::host("127.0.0.1:0", 1)
+        .unwrap()
+        .accept_web("127.0.0.1:0")
+        .unwrap();
+    assert!(host.accept_web("127.0.0.1:0").is_err(), "one listener per host");
+    assert!(NetMessages::join_web("udp://127.0.0.1:1").is_err());
+}
+
+#[test]
+fn a_closed_web_host_disconnects_its_client() {
+    let host = NetMessages::host("127.0.0.1:0", 1)
+        .unwrap()
+        .accept_web("127.0.0.1:0")
+        .unwrap();
+    let web = NetMessages::join_web(&format!("ws://{}", host.web_addr().unwrap())).unwrap();
+    let mut nets = vec![host, web];
+    for _ in 0..500 {
+        step_udp(&mut nets, 1);
+        if nets[1].events().any(|e| e == MessageEvent::Connected(PeerId::HOST)) {
+            break;
+        }
+    }
+    drop(nets.remove(0));
+    let mut error = None;
+    for _ in 0..500 {
+        std::thread::sleep(Duration::from_millis(2));
+        if let Err(e) = nets[0].poll_elapsed(Duration::from_millis(20)) {
+            error = Some(e);
+            break;
+        }
+    }
+    let error = error.expect("the closed connection is reported");
+    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionAborted, "{error}");
+}
+
+#[test]
 fn oversize_and_unknown_peer_are_errors_and_serde_round_trips() {
     let mut nets = NetMessages::loopback(2);
     let peer = connected(&mut nets);

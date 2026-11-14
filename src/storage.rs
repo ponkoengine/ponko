@@ -35,10 +35,21 @@
 //! when space runs low; [`is_persistent`](Storage::is_persistent) is `false`
 //! when the page couldn't open its database (some private windows), and then
 //! files last only until the page closes.
+//!
+//! # Large worlds
+//!
+//! [`save_world_in_background`](Storage::save_world_in_background) takes the
+//! world's save on the game's thread and encodes and writes it on a
+//! [`Job`] thread, and [`set_save_format`](Storage::set_save_format) with
+//! [`SaveFormat::Binary`] writes slots in a compact binary encoding of the
+//! same save. Loading reads either format.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use crate::error::{Error, ErrorKind};
+use crate::reflect::SaveFormat;
+use crate::streaming::Job;
 
 /// The environment variable that replaces the system's data folder (the
 /// app id is still added below it).
@@ -71,9 +82,13 @@ const SLOTS: &str = "saves/";
 #[derive(Debug, Default)]
 pub struct Storage {
     backend: Backend,
+    /// The format [`save_world`](Self::save_world) writes slots in.
+    format: SaveFormat,
+    /// Background saves not written yet.
+    queue: SaveQueue,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 enum Backend {
     /// No app id and no folder: every call fails with `Unsupported`.
     #[default]
@@ -126,9 +141,7 @@ impl Storage {
         #[cfg(target_arch = "wasm32")]
         {
             web::open(app_id);
-            Self {
-                backend: Backend::Browser,
-            }
+            Self::with_backend(Backend::Browser)
         }
         #[cfg(not(target_arch = "wasm32"))]
         match base_dir(&|name| std::env::var_os(name)) {
@@ -149,8 +162,14 @@ impl Storage {
     /// # let _ = std::fs::remove_dir_all(dir);
     /// ```
     pub fn in_folder(dir: impl Into<PathBuf>) -> Self {
+        Self::with_backend(Backend::Folder(dir.into()))
+    }
+
+    fn with_backend(backend: Backend) -> Self {
         Self {
-            backend: Backend::Folder(dir.into()),
+            backend,
+            format: SaveFormat::default(),
+            queue: SaveQueue::default(),
         }
     }
 
@@ -186,13 +205,18 @@ impl Storage {
         }
     }
 
-    /// Whether writes are still on their way to the disk: on the web, while
-    /// the browser hasn't confirmed every stored change (a tab closed then
-    /// may lose the last one, never half of it). Always `false` on the
-    /// desktop, where [`write`](Self::write) returns once the file is there.
-    /// A game can show "saving..." while it is `true`.
+    /// Whether writes are still on their way to the disk: while a
+    /// [`save_world_in_background`](Self::save_world_in_background) hasn't
+    /// written its file yet, and on the web while the browser hasn't
+    /// confirmed every stored change (a tab closed then may lose the last
+    /// one, never half of it). [`write`](Self::write) itself returns once the
+    /// file is there on the desktop. A game can show "saving..." while it is
+    /// `true`.
     #[must_use]
     pub fn is_saving(&self) -> bool {
+        if self.queue.is_busy() {
+            return true;
+        }
         match self.backend {
             #[cfg(target_arch = "wasm32")]
             Backend::Browser => web::is_saving(),
@@ -215,15 +239,8 @@ impl Storage {
 
     fn write_until(&mut self, name: &str, bytes: &[u8], crash: Crash) -> Result<(), Error> {
         check_name(name)?;
-        match &self.backend {
-            Backend::Off => Err(off(name)),
-            Backend::Folder(dir) => write_file(&dir.join(name), bytes, crash).map_err(|e| io(name, &e)),
-            #[cfg(target_arch = "wasm32")]
-            Backend::Browser => {
-                let _ = crash;
-                web::write(name, bytes)
-            }
-        }
+        self.queue.wait_for(|n| n == name);
+        self.backend.write(name, bytes, crash)
     }
 
     /// The bytes of the file `name`.
@@ -235,6 +252,7 @@ impl Storage {
     /// [`ErrorKind::Unsupported`] when storage is off.
     pub fn read(&self, name: &str) -> Result<Vec<u8>, Error> {
         check_name(name)?;
+        self.queue.wait_for(|n| n == name);
         self.read_raw(name)
     }
 
@@ -248,6 +266,7 @@ impl Storage {
     /// written over.
     pub fn read_backup(&self, name: &str) -> Result<Vec<u8>, Error> {
         check_name(name)?;
+        self.queue.wait_for(|n| n == name);
         self.read_raw(&format!("{name}{BACKUP}"))
     }
 
@@ -267,6 +286,7 @@ impl Storage {
         if check_name(name).is_err() {
             return false;
         }
+        self.queue.wait_for(|n| n == name);
         match &self.backend {
             Backend::Off => false,
             Backend::Folder(dir) => dir.join(name).is_file(),
@@ -284,6 +304,7 @@ impl Storage {
     /// [`ErrorKind::Unsupported`] when storage is off. A folder that doesn't
     /// exist yet has no files.
     pub fn list(&self) -> Result<Vec<String>, Error> {
+        self.queue.wait_for(|_| true);
         let mut names = match &self.backend {
             Backend::Off => return Err(off("")),
             Backend::Folder(dir) => {
@@ -308,20 +329,8 @@ impl Storage {
     /// name, [`ErrorKind::Unsupported`] when storage is off.
     pub fn delete(&mut self, name: &str) -> Result<(), Error> {
         check_name(name)?;
-        match &self.backend {
-            Backend::Off => Err(off(name)),
-            Backend::Folder(dir) => {
-                for file in [name.to_string(), format!("{name}{BACKUP}")] {
-                    match std::fs::remove_file(dir.join(&file)) {
-                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(name, &e)),
-                        _ => {}
-                    }
-                }
-                Ok(())
-            }
-            #[cfg(target_arch = "wasm32")]
-            Backend::Browser => web::delete(name),
-        }
+        self.queue.wait_for(|n| n == name);
+        self.backend.delete(name)
     }
 
     /// Writes `value` as pretty-printed JSON, safely as [`write`](Self::write).
@@ -368,37 +377,151 @@ impl Storage {
     /// As `write`, and [`ErrorKind::Invalid`] for a slot name that isn't one
     /// part of a file name (no `/`).
     pub fn save_world(&mut self, world: &ponko_ecs::World, slot: &str) -> Result<(), Error> {
-        let name = slot_file(slot)?;
+        let (file, other) = self.slot_files(slot)?;
         let save = crate::reflect::WorldReflect::save(world);
-        self.write_json(&name, &save)
+        self.queue.wait_for(|n| n == file || n == other);
+        self.backend.write_slot(&file, &other, &self.format.encode(&save))
     }
 
-    /// The save slots [`save_world`](Self::save_world) wrote, sorted.
+    /// [`save_world`](Self::save_world), with only the world's save itself
+    /// ([`WorldReflect::save`](crate::reflect::WorldReflect::save)) taken on
+    /// this thread: encoding it and writing the file happen on a [`Job`]
+    /// thread, so a large world doesn't stop the game for the whole save. The
+    /// save holds the world as it is at the call; the game can change it
+    /// right away.
+    ///
+    /// Storage behaves as if the save were written at the call: background
+    /// saves are written in the order they were made, and a call that touches
+    /// a slot still being written ([`read`](Self::read), [`write`](Self::write),
+    /// [`Ctx::load_world`](crate::ctx::Ctx::load_world), [`list`](Self::list),
+    /// ...) waits for it first. [`is_saving`](Self::is_saving) is `true`
+    /// until the file is written, [`finish_saves`](Self::finish_saves) waits
+    /// for every one, and so does dropping the storage when the game ends.
+    /// The returned job says how the write went (keep it to find out; the
+    /// save is written either way). On the web, which has no threads here,
+    /// the save is written before this returns.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// # let dir = std::env::temp_dir().join(format!("ponko-doc-bg-save-{}", std::process::id()));
+    /// Game::new("Crabs", 800, 600).data_dir(&dir).run_headless(0, |ctx| {
+    ///     ctx.world.spawn((ponko::d2::Transform::at(vec2(1.0, 2.0)),));
+    ///     let mut job = ctx.storage.save_world_in_background(&ctx.world, "slot1").unwrap();
+    ///     // Each frame, until it's written:
+    ///     while !job.is_done() {}
+    ///     job.take().unwrap().expect("written");
+    ///     ctx.load_world("slot1").unwrap();
+    /// });
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Before anything is saved: [`ErrorKind::Invalid`] for a bad slot
+    /// name, [`ErrorKind::Unsupported`] when storage is off. The job's result
+    /// has the errors of [`write`](Self::write).
+    pub fn save_world_in_background(
+        &mut self,
+        world: &ponko_ecs::World,
+        slot: &str,
+    ) -> Result<Job<Result<(), Error>>, Error> {
+        let (file, other) = self.slot_files(slot)?;
+        if !self.is_available() {
+            return Err(off(&file));
+        }
+        let save = crate::reflect::WorldReflect::save(world);
+        let (format, backend) = (self.format, self.backend.clone());
+        let ticket = self.queue.ticket(vec![file.clone(), other.clone()]);
+        Ok(Job::spawn(move || {
+            let bytes = format.encode(&save);
+            // The save is freed here too, not on the game's thread.
+            drop(save);
+            ticket.wait_turn();
+            backend.write_slot(&file, &other, &bytes)
+        }))
+    }
+
+    /// Waits until every [`save_world_in_background`](Self::save_world_in_background)
+    /// is written: before quitting to the desktop, or in tests. Returns at
+    /// once when none is on its way.
+    pub fn finish_saves(&self) {
+        self.queue.wait_for(|_| true);
+    }
+
+    /// Writes save slots in `format` from now on: [`SaveFormat::Json`] (the
+    /// default) as `saves/<slot>.json`, [`SaveFormat::Binary`] as
+    /// `saves/<slot>.save`, much smaller and quicker for large worlds.
+    /// Saving a slot removes its file in the other format, so each slot has
+    /// one file; [`Ctx::load_world`](crate::ctx::Ctx::load_world) reads
+    /// either, so slots saved before the change still load.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::reflect::SaveFormat;
+    /// # let dir = std::env::temp_dir().join(format!("ponko-doc-save-format-{}", std::process::id()));
+    /// Game::new("Crabs", 800, 600).data_dir(&dir).run_headless(0, |ctx| {
+    ///     ctx.storage.set_save_format(SaveFormat::Binary);
+    ///     ctx.world.spawn((ponko::d2::Transform::at(vec2(1.0, 2.0)),));
+    ///     ctx.storage.save_world(&ctx.world, "slot1").unwrap();
+    ///     assert!(ctx.storage.exists("saves/slot1.save"));
+    ///     ctx.load_world("slot1").unwrap();
+    /// });
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
+    pub fn set_save_format(&mut self, format: SaveFormat) {
+        self.format = format;
+    }
+
+    /// The format save slots are written in ([`set_save_format`](Self::set_save_format)).
+    #[must_use]
+    pub fn save_format(&self) -> SaveFormat {
+        self.format
+    }
+
+    /// Slot `slot`'s file in the current format, and in the other one.
+    fn slot_files(&self, slot: &str) -> Result<(String, String), Error> {
+        let other = match self.format {
+            SaveFormat::Binary => SaveFormat::Json,
+            _ => SaveFormat::Binary,
+        };
+        Ok((slot_file(slot, self.format)?, slot_file(slot, other)?))
+    }
+
+    /// The save slots [`save_world`](Self::save_world) wrote (in either
+    /// format), sorted.
     ///
     /// # Errors
     ///
     /// As [`list`](Self::list).
     pub fn world_slots(&self) -> Result<Vec<String>, Error> {
-        Ok(self
+        let mut slots: Vec<String> = self
             .list()?
             .into_iter()
             .filter_map(|n| {
-                n.strip_prefix(SLOTS)
-                    .and_then(|n| n.strip_suffix(".json"))
+                let n = n.strip_prefix(SLOTS)?;
+                [SaveFormat::Json, SaveFormat::Binary]
+                    .into_iter()
+                    .find_map(|f| n.strip_suffix(f.extension())?.strip_suffix('.'))
                     .filter(|n| !n.contains('/'))
                     .map(str::to_string)
             })
-            .collect())
+            .collect();
+        // A slot in both formats (a save cut off between writing one and
+        // removing the other) is one slot.
+        slots.sort();
+        slots.dedup();
+        Ok(slots)
     }
 
-    /// Deletes the save slot `slot` and its backup.
+    /// Deletes the save slot `slot` (in either format) and its backup.
     ///
     /// # Errors
     ///
     /// As [`delete`](Self::delete).
     pub fn delete_world(&mut self, slot: &str) -> Result<(), Error> {
-        let name = slot_file(slot)?;
-        self.delete(&name)
+        let (file, other) = self.slot_files(slot)?;
+        self.delete(&file)?;
+        self.delete(&other)
     }
 }
 
@@ -419,8 +542,15 @@ impl crate::ctx::Ctx {
     /// [`ErrorKind::Unsupported`] when storage is off or a session runs. The
     /// world is unchanged then.
     pub fn load_world(&mut self, slot: &str) -> Result<(), Error> {
-        let name = slot_file(slot)?;
-        let save: serde_json::Value = self.storage.read_json(&name)?;
+        let (file, other) = self.storage.slot_files(slot)?;
+        // The current format's file, else one saved before a format change.
+        let name = if !self.storage.exists(&file) && self.storage.exists(&other) {
+            other
+        } else {
+            file
+        };
+        let bytes = self.storage.read(&name)?;
+        let save = SaveFormat::decode(&bytes).map_err(|e| e.context(&name).with_path(&name))?;
         self.replace_world(&save).map_err(|e| {
             if e.kind() == ErrorKind::Unsupported {
                 Error::new(
@@ -435,14 +565,145 @@ impl crate::ctx::Ctx {
     }
 }
 
-/// The name of slot `slot`'s file.
-fn slot_file(slot: &str) -> Result<String, Error> {
+/// The name of slot `slot`'s file in `format`.
+fn slot_file(slot: &str, format: SaveFormat) -> Result<String, Error> {
     if slot.contains('/') {
         return Err(Error::new(ErrorKind::Invalid, format!("save slot {slot:?} has a '/'")).with_path(slot));
     }
-    let name = format!("{SLOTS}{slot}.json");
+    let name = format!("{SLOTS}{slot}.{}", format.extension());
     check_name(&name)?;
     Ok(name)
+}
+
+impl Backend {
+    fn write(&self, name: &str, bytes: &[u8], crash: Crash) -> Result<(), Error> {
+        match self {
+            Backend::Off => Err(off(name)),
+            Backend::Folder(dir) => write_file(&dir.join(name), bytes, crash).map_err(|e| io(name, &e)),
+            #[cfg(target_arch = "wasm32")]
+            Backend::Browser => {
+                let _ = crash;
+                web::write(name, bytes)
+            }
+        }
+    }
+
+    fn delete(&self, name: &str) -> Result<(), Error> {
+        match self {
+            Backend::Off => Err(off(name)),
+            Backend::Folder(dir) => {
+                for file in [name.to_string(), format!("{name}{BACKUP}")] {
+                    match std::fs::remove_file(dir.join(&file)) {
+                        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(name, &e)),
+                        _ => {}
+                    }
+                }
+                Ok(())
+            }
+            #[cfg(target_arch = "wasm32")]
+            Backend::Browser => web::delete(name),
+        }
+    }
+
+    /// Writes a save slot's `file`, then removes the slot's file in the
+    /// other format (`other`), which is older now: each slot has one file.
+    fn write_slot(&self, file: &str, other: &str, bytes: &[u8]) -> Result<(), Error> {
+        self.write(file, bytes, Crash::Never)?;
+        self.delete(other)
+    }
+}
+
+/// The background saves of one storage that aren't written yet. Each takes
+/// a [`Ticket`] when it is made, and they are written in ticket order, so a
+/// later save of a slot never ends up under an earlier one.
+#[derive(Debug, Default)]
+struct SaveQueue(Arc<Shared>);
+
+/// The queue's state, shared with its tickets' jobs.
+type Shared = (Mutex<Queued>, Condvar);
+
+/// Waits for the background saves still being written when the storage
+/// goes (the game ends), so none is cut off.
+impl Drop for SaveQueue {
+    fn drop(&mut self) {
+        self.wait_for(|_| true);
+    }
+}
+
+#[derive(Debug, Default)]
+struct Queued {
+    /// Tickets handed out.
+    issued: u64,
+    /// Tickets finished, written or not: the next one to write.
+    finished: u64,
+    /// The files each unfinished ticket writes or removes.
+    files: Vec<(u64, Vec<String>)>,
+}
+
+fn lock(shared: &Shared) -> std::sync::MutexGuard<'_, Queued> {
+    shared.0.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl SaveQueue {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Queued> {
+        lock(&self.0)
+    }
+
+    /// A ticket for a save that writes or removes `files`.
+    fn ticket(&self, files: Vec<String>) -> Ticket {
+        let mut q = self.lock();
+        let number = q.issued;
+        q.issued += 1;
+        q.files.push((number, files));
+        Ticket {
+            shared: Arc::clone(&self.0),
+            number,
+        }
+    }
+
+    fn is_busy(&self) -> bool {
+        let q = self.lock();
+        q.finished < q.issued
+    }
+
+    /// Blocks until no unfinished save has a file that `touches`. Returns at
+    /// once when none has (always on the web, where saves finish before
+    /// they return, so this never waits there).
+    fn wait_for(&self, touches: impl Fn(&str) -> bool) {
+        let mut q = self.lock();
+        while q.files.iter().any(|(_, files)| files.iter().any(|f| touches(f))) {
+            q = self.0.1.wait(q).unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+}
+
+/// One background save's place in its [`SaveQueue`]. Dropping it (after
+/// the write, or when the work panics) finishes it, in order: it waits for
+/// the tickets before it first.
+struct Ticket {
+    shared: Arc<Shared>,
+    number: u64,
+}
+
+impl Ticket {
+    /// Blocks until every earlier ticket is finished.
+    fn wait_turn(&self) {
+        let mut q = lock(&self.shared);
+        while q.finished < self.number {
+            q = self.shared.1.wait(q).unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+}
+
+impl Drop for Ticket {
+    fn drop(&mut self) {
+        self.wait_turn();
+        let mut q = lock(&self.shared);
+        q.finished = self.number + 1;
+        q.files.retain(|(n, _)| *n != self.number);
+        drop(q);
+        self.shared.1.notify_all();
+    }
 }
 
 /// Checks a file name: relative parts with safe characters, no reserved
@@ -748,6 +1009,27 @@ mod tests {
     }
 
     #[test]
+    fn a_background_save_that_panics_still_lets_the_saves_after_it_through() {
+        let queue = SaveQueue::default();
+        let first = queue.ticket(vec!["saves/a.save".into()]);
+        let second = queue.ticket(vec!["saves/a.save".into()]);
+        assert!(queue.is_busy());
+        let later = std::thread::spawn(move || {
+            second.wait_turn();
+            drop(second);
+        });
+        let panicked = std::thread::spawn(move || {
+            let _first = first;
+            panic!("encoding failed");
+        })
+        .join();
+        assert!(panicked.is_err());
+        later.join().unwrap();
+        assert!(!queue.is_busy());
+        queue.wait_for(|_| true); // returns: nothing left
+    }
+
+    #[test]
     fn the_first_write_has_no_backup_and_each_later_one_keeps_the_previous_file() {
         let dir = temp_dir("backup");
         let mut storage = Storage::in_folder(&dir);
@@ -783,7 +1065,10 @@ mod tests {
         for name in ["a", "saves/slot 1.json", "x.tmp.json", "A-b_c.d"] {
             assert!(check_name(name).is_ok(), "{name:?}");
         }
-        assert_eq!(slot_file("a/b").unwrap_err().kind(), ErrorKind::Invalid);
+        assert_eq!(
+            slot_file("a/b", SaveFormat::Json).unwrap_err().kind(),
+            ErrorKind::Invalid
+        );
     }
 
     #[test]

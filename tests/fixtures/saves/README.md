@@ -12,6 +12,7 @@ game-facing loaders, `Ctx::load_scene` and `Ctx::spawn_prefab`.
 |---|---|---|---|---|
 | `world_v1.json` | `ponko-world` | 1 | `51323ef` (ponko 0.0.1) | `world_v1.provenance.json` |
 | `prefab_v1.json` | `ponko-prefab` | 1 | `b3799f6` (ponko 0.0.1) | `prefab_v1.provenance.json` |
+| `world_v1.save` | `ponko-world`, binary layout 1 | 1 | see provenance (ponko 0.1.0) | `world_v1.save.provenance.json` |
 
 The `format` identifiers in these files were renamed from the pre-0.1.0
 `crabby-world` / `crabby-prefab` spellings (which no release ever wrote) to the
@@ -20,6 +21,11 @@ current ones; nothing else in them changed.
 `world_v1.json` is a baseline taken from the engine's `main` branch, not from
 a published release: it shows that the current loader reads what that revision
 wrote, not that any earlier binary release is covered.
+
+`world_v1.save` is `world_v1.json` written in the binary save format
+(`SaveFormat::Binary`) by `write_v1_binary_fixture`: it holds later revisions
+to reading the first binary layout, and must decode to exactly the JSON
+fixture.
 
 ## What a fixture covers
 

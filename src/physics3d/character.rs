@@ -140,7 +140,7 @@ pub(super) struct Scratch {
 /// One character's move, worked out against the world as it stood at the
 /// start of the step.
 pub(super) struct Plan {
-    body: rp::RigidBodyHandle,
+    body: Option<rp::RigidBodyHandle>,
     controller: KinematicCharacterController,
     shape: rp::Capsule,
     filter_groups: rp::InteractionGroups,
@@ -160,20 +160,43 @@ const PARALLEL_FROM: usize = 16;
 /// Works out `c`'s move. Fills `hits` (emptied first) with the dynamic
 /// bodies it walked into, if it pushes.
 fn plan(physics: &Physics3D, e: Entity, c: &Character3D, dt: f32, hits: &mut Vec<CharacterCollision>) -> Option<Plan> {
-    hits.clear();
-    let gravity = physics.gravity;
-    let up = Vec3::Y;
-    let link = physics
-        .links
-        .get(e.index() as usize)
-        .and_then(Option::as_ref)
-        .filter(|l| l.entity == e)?;
+    let link = physics.link(e)?;
     let LinkKind::Character(capsule) = link.kind else {
         return None;
     };
     let body = link.body;
     let feet = physics.world.bodies.get(body).map(|b| from_rp(b.translation()))?;
+    hits.clear();
+    let plan = plan_from(physics, Some(body), capsule, c, feet, dt, |hit| hits.push(hit));
+    if c.push_mass > 0.0 {
+        let bodies = &physics.world.bodies;
+        let colliders = &physics.world.colliders;
+        hits.retain(|h| {
+            colliders
+                .get(h.handle)
+                .and_then(|co| co.parent())
+                .and_then(|b| bodies.get(b))
+                .is_some_and(|b| b.is_dynamic())
+        });
+    } else {
+        hits.clear();
+    }
+    Some(plan)
+}
 
+/// `c`'s move from `feet`, against the world as it stands, looking through
+/// `body` (its own) if it has one. `hit` gets every collider it walked into.
+fn plan_from(
+    physics: &Physics3D,
+    body: Option<rp::RigidBodyHandle>,
+    capsule: Capsule,
+    c: &Character3D,
+    feet: Vec3,
+    dt: f32,
+    hit: impl FnMut(CharacterCollision),
+) -> Plan {
+    let gravity = physics.gravity;
+    let up = Vec3::Y;
     let controller = KinematicCharacterController {
         up: to_rp(up),
         offset: CharacterLength::Absolute(SKIN),
@@ -204,28 +227,15 @@ fn plan(physics: &Physics3D, e: Entity, c: &Character3D, dt: f32, hits: &mut Vec
     let shape = capsule.shape();
     let center = rp::Pose::from_translation(to_rp(feet + up * capsule.center()));
     let filter_groups = capsule.groups.to_rp();
-    let filter = rp::QueryFilter::default()
-        .exclude_rigid_body(body)
-        .exclude_sensors()
-        .groups(filter_groups);
+    let mut filter = rp::QueryFilter::default().exclude_sensors().groups(filter_groups);
+    if let Some(body) = body {
+        filter = filter.exclude_rigid_body(body);
+    }
     let moved = {
         let queries = physics.world.query_pipeline_with_filter(filter);
-        controller.move_shape(dt, &queries, &shape, &center, to_rp(desired), |hit| hits.push(hit))
+        controller.move_shape(dt, &queries, &shape, &center, to_rp(desired), hit)
     };
-    if c.push_mass > 0.0 {
-        let bodies = &physics.world.bodies;
-        let colliders = &physics.world.colliders;
-        hits.retain(|h| {
-            colliders
-                .get(h.handle)
-                .and_then(|co| co.parent())
-                .and_then(|b| bodies.get(b))
-                .is_some_and(|b| b.is_dynamic())
-        });
-    } else {
-        hits.clear();
-    }
-    Some(Plan {
+    Plan {
         body,
         controller,
         shape,
@@ -234,7 +244,78 @@ fn plan(physics: &Physics3D, e: Entity, c: &Character3D, dt: f32, hits: &mut Vec
         velocity,
         desired,
         moved,
-    })
+    }
+}
+
+impl Plan {
+    /// The velocity after the move: the fall stops on landing and the rise
+    /// on hitting a ceiling.
+    fn velocity_after(&self) -> Vec3 {
+        let up = Vec3::Y;
+        let moved_by = from_rp(self.moved.translation);
+        let mut velocity = self.velocity;
+        let vertical = velocity.dot(up);
+        if self.moved.grounded && vertical < 0.0 {
+            // Landed: stop falling.
+            velocity -= up * vertical;
+        } else if vertical > 0.0 && moved_by.dot(up) < self.desired.dot(up) * 0.5 {
+            // Hit a ceiling: stop rising.
+            velocity -= up * vertical;
+        }
+        velocity
+    }
+}
+
+impl Physics3D {
+    /// One tick of a walking character, moved from `feet` the way the
+    /// physics step moves a [`Character3D`], and nothing else: for client
+    /// prediction, which runs the same step for its own character ahead of
+    /// the server, and replays it for the inputs the server hasn't confirmed
+    /// when a correction arrives (see [`net::Prediction`](crate::net::Prediction)).
+    ///
+    /// From the same feet, character and world, the result is the one the
+    /// step would give, bit for bit: it updates `character.velocity` and
+    /// `grounded` the same way and returns the new feet position. It reads
+    /// the world as of the last physics step (other bodies are where they
+    /// are now, not where they were at the replayed tick), pushes nothing
+    /// and moves no body; write the result to the entity yourself.
+    /// `entity` is the character's own, whose body (if it has one) it looks
+    /// through; its capsule comes from `character`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let world = Game::new("t", 1, 1)
+    ///     .physics3d(vec3(0.0, -9.81, 0.0))
+    ///     .sim_system(|ctx: &mut Ctx| {
+    ///         if ctx.time.sim_tick() != 2 {
+    ///             return; // the ground joins at the first step
+    ///         }
+    ///         let me = ctx.world.spawn((ponko::d3::Transform::at(Vec3::ZERO),)); // no body yet
+    ///         let mut walker = ponko::d3::Character::new(1.8, 0.3);
+    ///         walker.velocity.x = 5.0;
+    ///         let mut feet = vec3(0.0, 0.0, 0.0);
+    ///         for _ in 0..10 {
+    ///             feet = ctx.physics3d.move_character(me, &mut walker, feet, 0.02);
+    ///         }
+    ///         ctx.world.insert_resource((feet, walker.grounded));
+    ///     })
+    ///     .run_headless(3, |ctx| {
+    ///         let ground = ponko::d3::Collider::cuboid(vec3(50.0, 1.0, 50.0));
+    ///         ctx.world.spawn((ponko::d3::Transform::at(vec3(0.0, -0.5, 0.0)), ponko::d3::RigidBody::fixed(), ground));
+    ///     });
+    /// let (feet, grounded) = *world.resource::<(Vec3, bool)>();
+    /// assert!((feet.x - 1.0).abs() < 1e-3 && feet.y.abs() < 0.05 && grounded, "{feet}");
+    /// ```
+    pub fn move_character(&self, entity: Entity, character: &mut Character3D, feet: Vec3, dt: f32) -> Vec3 {
+        if dt <= 0.0 || !feet.is_finite() {
+            return feet;
+        }
+        let body = self.link(entity).map(|l| l.body);
+        let plan = plan_from(self, body, Capsule::of(character), character, feet, dt, |_| {});
+        character.velocity = plan.velocity_after();
+        character.grounded = plan.moved.grounded;
+        feet + from_rp(plan.moved.translation)
+    }
 }
 
 /// Moves every character. The shape casts only read the world (a move
@@ -245,7 +326,6 @@ pub(super) fn move_characters(physics: &mut Physics3D, world: &mut World, dt: f3
     if dt <= 0.0 {
         return;
     }
-    let up = Vec3::Y;
     let mut scratch = std::mem::take(&mut physics.character);
     scratch.characters.clear();
     world
@@ -286,14 +366,15 @@ pub(super) fn move_characters(physics: &mut Physics3D, world: &mut World, dt: f3
         .zip(scratch.plans.drain(..))
         .zip(&scratch.hits)
     {
-        let Some(plan) = plan else {
+        // A plan of the step always has the character's body.
+        let Some((plan, body)) = plan.and_then(|p| p.body.map(|body| (p, body))) else {
             continue;
         };
         // Push the dynamic bodies it walked into (rapier's impulses only
         // allocate when there are some).
         if !hits.is_empty() {
             let filter = rp::QueryFilter::default()
-                .exclude_rigid_body(plan.body)
+                .exclude_rigid_body(body)
                 .exclude_sensors()
                 .groups(plan.filter_groups);
             let w = &mut physics.world;
@@ -308,20 +389,12 @@ pub(super) fn move_characters(physics: &mut Physics3D, world: &mut World, dt: f3
         }
 
         let moved_by = from_rp(plan.moved.translation);
-        let mut velocity = plan.velocity;
-        let vertical = velocity.dot(up);
-        if plan.moved.grounded && vertical < 0.0 {
-            // Landed: stop falling.
-            velocity -= up * vertical;
-        } else if vertical > 0.0 && moved_by.dot(up) < plan.desired.dot(up) * 0.5 {
-            // Hit a ceiling: stop rising.
-            velocity -= up * vertical;
-        }
+        let velocity = plan.velocity_after();
         if let Some(character) = world.get_mut::<Character3D>(e) {
             character.velocity = velocity;
             character.grounded = plan.moved.grounded;
         }
-        if let Some(b) = physics.world.bodies.get_mut(plan.body) {
+        if let Some(b) = physics.world.bodies.get_mut(body) {
             b.set_next_kinematic_translation(to_rp(plan.feet + moved_by));
         }
     }

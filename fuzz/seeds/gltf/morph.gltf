@@ -1,0 +1,21 @@
+{
+            "asset": { "version": "2.0" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0, 1] }],
+            "nodes": [{ "mesh": 0 }, { "mesh": 1, "scale": [2, 2, 2] }],
+            "meshes": [
+                { "name": "face", "weights": [0.5, 0.0], "extras": { "targetNames": ["smile", "blink"] },
+                   "primitives": [{ "attributes": { "POSITION": 0 }, "material": 0,
+                                    "targets": [{ "POSITION": 1 }, { "POSITION": 2 }] }] },
+                { "name": "lid", "extras": { "targetNames": ["blink"] },
+                   "primitives": [{ "attributes": { "POSITION": 0 }, "material": 1,
+                                    "targets": [{ "POSITION": 2 }] }] }
+            ],
+            "materials": [{}, {}],
+            "buffers": [{ "byteLength": 108, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }],
+            "bufferViews": [{ "buffer": 0, "byteLength": 108 }],
+            "accessors": [{ "bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                      "min": [0, 0, 0], "max": [1, 1, 0] }, { "bufferView": 0, "byteOffset": 36, "componentType": 5126, "count": 3, "type": "VEC3",
+                      "min": [0, 0, 0], "max": [1, 1, 0] }, { "bufferView": 0, "byteOffset": 72, "componentType": 5126, "count": 3, "type": "VEC3",
+                      "min": [0, 0, 0], "max": [1, 1, 0] }]
+        }

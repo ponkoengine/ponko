@@ -115,7 +115,10 @@ pub enum ProbeRefresh {
     Every(f32),
     /// Again when the sun or the sky's light has changed by more than this
     /// share since the previous capture (0.02 is about one degree of sun or
-    /// two percent of a light's color).
+    /// two percent of a light's color). A sky shader counts as the sky's
+    /// light: switching [`Sky::shader`](crate::render::Sky::shader), or a
+    /// change of its [`shader_params`](crate::render::Sky::shader_params),
+    /// refreshes the probe too.
     LightingChanged(f32),
 }
 
@@ -177,7 +180,9 @@ impl ReflectionRefresh3D {
 const CAPTURE_STEPS: u8 = 6;
 
 /// The sun and sky values a [`ProbeRefresh::LightingChanged`] probe watches.
-pub(crate) type LightingKey = [f32; 21];
+/// The sun, the sky's light and colors, then a sky shader (its id plus one,
+/// 0 for none), its authored-ambient flag and its sixteen parameters.
+pub(crate) type LightingKey = [f32; 39];
 
 /// What a probe's capture depends on in `lighting` and `sky`.
 pub(crate) fn lighting_key(lighting: &super::Lighting, sky: &super::Sky) -> LightingKey {
@@ -191,7 +196,8 @@ pub(crate) fn lighting_key(lighting: &super::Lighting, sky: &super::Sky) -> Ligh
     let [gr, gg, gb] = rgb(sky.ground_color);
     let [er, eg, eb] = sky.equator_color.map_or([0.0; 3], rgb);
     let [nr, ng, nb] = rgb(sky.night_light);
-    [
+    let mut key = [0.0; 39];
+    let lit = [
         d.x,
         d.y,
         d.z,
@@ -213,7 +219,21 @@ pub(crate) fn lighting_key(lighting: &super::Lighting, sky: &super::Sky) -> Ligh
         nb,
         sky.haze,
         f32::from(sky.atmosphere),
-    ]
+    ];
+    key[..lit.len()].copy_from_slice(&lit);
+    // A sky shader's sky is what a probe captures behind its scene: a new
+    // shader, or new parameters, change it as the sun does.
+    if let Some(shader) = sky.shader {
+        key[21] = shader.id as f32 + 1.0;
+        key[22] = f32::from(sky.authored_ambient);
+        for (k, v) in key[23..]
+            .iter_mut()
+            .zip(sky.shader_params.iter().flat_map(|p| p.to_array()))
+        {
+            *k = v;
+        }
+    }
+    key
 }
 
 /// The largest change between two lighting keys, relative to the values
@@ -828,7 +848,7 @@ mod tests {
     fn a_refresh_renders_and_filters_one_face_a_frame_then_eases_in() {
         let mut state = RefreshState::default();
         let probes = [seen(1, ProbeRefresh::OnDemand, 0.5)];
-        let frames = run(&mut state, 20, 0.1, &[0.0; 21], &probes);
+        let frames = run(&mut state, 20, 0.1, &[0.0; 39], &probes);
         assert_eq!(frames[0][0], RefreshStep::Seed(1), "a new probe starts from the sky");
         for (face, frame) in frames[..6].iter().enumerate() {
             assert!(frame.contains(&RefreshStep::Capture {
@@ -866,7 +886,7 @@ mod tests {
             "on demand: nothing more until asked"
         );
         state.request(1);
-        let again = run(&mut state, 1, 0.1, &[0.0; 21], &probes);
+        let again = run(&mut state, 1, 0.1, &[0.0; 39], &probes);
         assert!(again[0].contains(&RefreshStep::Capture {
             slot: 1,
             face: 0,
@@ -879,9 +899,9 @@ mod tests {
         let mut state = RefreshState::default();
         state.slots[0].filled = true;
         let probes = [seen(1, ProbeRefresh::Never, 1.0)];
-        assert!(run(&mut state, 30, 0.1, &[0.0; 21], &probes).iter().all(Vec::is_empty));
+        assert!(run(&mut state, 30, 0.1, &[0.0; 39], &probes).iter().all(Vec::is_empty));
         state.request(1);
-        assert_eq!(work(&run(&mut state, 1, 0.1, &[0.0; 21], &probes)[0]), 1);
+        assert_eq!(work(&run(&mut state, 1, 0.1, &[0.0; 39], &probes)[0]), 1);
     }
 
     #[test]
@@ -889,7 +909,7 @@ mod tests {
         let mut state = RefreshState::default();
         state.slots[0].filled = true;
         let probes = [seen(1, ProbeRefresh::Every(3.0), 0.0)];
-        let frames = run(&mut state, 100, 0.1, &[0.0; 21], &probes);
+        let frames = run(&mut state, 100, 0.1, &[0.0; 39], &probes);
         let starts: Vec<_> = frames
             .iter()
             .enumerate()
@@ -904,7 +924,7 @@ mod tests {
     fn lighting_changed_refreshes_only_past_the_threshold() {
         let mut state = RefreshState::default();
         let probes = [seen(1, ProbeRefresh::LightingChanged(0.05), 0.0)];
-        let mut key = [0.5; 21];
+        let mut key = [0.5; 39];
         let first = run(&mut state, 15, 0.1, &key, &probes);
         assert_eq!(
             first.iter().map(|f| work(f)).sum::<usize>(),
@@ -915,7 +935,38 @@ mod tests {
         assert!(run(&mut state, 20, 0.1, &key, &probes).iter().all(Vec::is_empty));
         key[0] = 0.56;
         assert_eq!(work(&run(&mut state, 1, 0.1, &key, &probes)[0]), 1);
-        assert!(lighting_change(&[0.0; 21], &[f32::NAN; 21]).is_infinite());
+        assert!(lighting_change(&[0.0; 39], &[f32::NAN; 39]).is_infinite());
+    }
+
+    #[test]
+    fn a_sky_shader_and_its_parameters_count_as_a_lighting_change() {
+        let lighting = super::super::Lighting::default();
+        let built_in = super::super::Sky::default();
+        let shader = super::super::Sky {
+            shader: Some(super::super::SkyShader { id: 0 }),
+            ..built_in
+        };
+        let base = lighting_key(&lighting, &built_in);
+        assert!(
+            lighting_change(&base, &lighting_key(&lighting, &shader)) > 0.5,
+            "a new sky"
+        );
+        let mut dimmer = shader;
+        dimmer.shader_params[1].y = 0.5;
+        assert!(
+            lighting_change(&lighting_key(&lighting, &shader), &lighting_key(&lighting, &dimmer)) >= 0.5,
+            "a parameter changed"
+        );
+        let other = super::super::Sky {
+            shader: Some(super::super::SkyShader { id: 1 }),
+            ..shader
+        };
+        assert!(lighting_change(&lighting_key(&lighting, &shader), &lighting_key(&lighting, &other)) > 0.3);
+        // Negative control: the same sky is no change.
+        assert_eq!(
+            lighting_change(&lighting_key(&lighting, &dimmer), &lighting_key(&lighting, &dimmer)),
+            0.0
+        );
     }
 
     #[test]
@@ -925,7 +976,7 @@ mod tests {
             seen(1, ProbeRefresh::OnDemand, 0.0),
             seen(2, ProbeRefresh::OnDemand, 0.0),
         ];
-        let frames = run(&mut state, 30, 0.1, &[0.0; 21], &probes);
+        let frames = run(&mut state, 30, 0.1, &[0.0; 39], &probes);
         assert!(frames.iter().all(|f| work(f) <= 1));
         for slot in [1, 2] {
             assert!(frames.iter().flatten().any(|s| *s == RefreshStep::Finish(slot)));
@@ -942,9 +993,9 @@ mod tests {
     fn a_new_capture_filters_only_after_the_blend_it_would_overwrite() {
         let mut state = RefreshState::default();
         let probes = [seen(1, ProbeRefresh::OnDemand, 1.0)];
-        run(&mut state, 14, 0.1, &[0.0; 21], &probes);
+        run(&mut state, 14, 0.1, &[0.0; 39], &probes);
         state.request(1);
-        let frames = run(&mut state, 30, 0.1, &[0.0; 21], &probes);
+        let frames = run(&mut state, 30, 0.1, &[0.0; 39], &probes);
         let capture = frames
             .iter()
             .position(|f| f.iter().any(|s| matches!(s, RefreshStep::Capture { .. })))
@@ -966,10 +1017,10 @@ mod tests {
     fn a_bake_cancels_the_refresh_in_progress() {
         let mut state = RefreshState::default();
         let probes = [seen(1, ProbeRefresh::OnDemand, 1.0)];
-        run(&mut state, 3, 0.1, &[0.0; 21], &probes);
+        run(&mut state, 3, 0.1, &[0.0; 39], &probes);
         state.replaced(1);
         assert_eq!(state.active, None);
-        assert!(run(&mut state, 20, 0.1, &[0.0; 21], &probes).iter().all(Vec::is_empty));
+        assert!(run(&mut state, 20, 0.1, &[0.0; 39], &probes).iter().all(Vec::is_empty));
     }
 
     #[test]
@@ -980,7 +1031,7 @@ mod tests {
         let mut steps = Vec::new();
         probes.refresh.frame(
             0.1,
-            &[0.0; 21],
+            &[0.0; 39],
             &[seen(1, ProbeRefresh::OnDemand, 1.0)],
             faces,
             &mut steps,
@@ -1005,7 +1056,7 @@ mod tests {
         let first = ctx.world.spawn(refreshing());
         let mut steps = Vec::new();
         ctx.gfx
-            .schedule_probe_refresh(&mut ctx.world, 0.1, &[0.0; 21], &mut steps);
+            .schedule_probe_refresh(&mut ctx.world, 0.1, &[0.0; 39], &mut steps);
         let slot = ctx.world.get::<ReflectionProbe3D>(first).unwrap().content;
         assert_eq!(slot, 1);
         assert_eq!(steps[0], RefreshStep::Seed(1), "it starts from the sky: {steps:?}");
@@ -1018,7 +1069,7 @@ mod tests {
         for _ in 0..3 {
             steps.clear();
             ctx.gfx
-                .schedule_probe_refresh(&mut ctx.world, 0.1, &[0.0; 21], &mut steps);
+                .schedule_probe_refresh(&mut ctx.world, 0.1, &[0.0; 39], &mut steps);
         }
         assert_eq!(ctx.world.get::<ReflectionProbe3D>(fifth).unwrap().content, 0);
         assert!(steps.iter().all(|s| !matches!(s, RefreshStep::Seed(5))));

@@ -139,7 +139,12 @@ const SH_PARTS: u32 = 6u * SH_BANDS;
             let solid_angle = step * step / pow(1.0 + dot(p, p), 1.5);
             let d = cube_dir(face, uv);
             let pixel = vec2<f32>(f32(face) * 128.0, 0.0) + uv * 128.0;
-            let light = textureSampleLevel(image, linear_sampler, pixel / vec2<f32>(768.0, 128.0), 0.0).rgb;
+            var light = textureSampleLevel(image, linear_sampler, pixel / vec2<f32>(768.0, 128.0), 0.0).rgb;
+            // A sky shader's sky with authored ambient colors (sky.w 1):
+            // the diffuse light comes from those, as for the flat sky.
+            if config.sky.w > 0.5 {
+                light = gradient(d);
+            }
             sum += light * sh_basis(d, i) * solid_angle;
         }
     }

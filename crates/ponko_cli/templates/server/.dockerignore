@@ -1,0 +1,6 @@
+# Only the sources and assets go to the build; never local build output.
+target/
+.git/
+.mcp.json
+*.md
+!package/

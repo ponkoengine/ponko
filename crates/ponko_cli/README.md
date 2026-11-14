@@ -7,6 +7,7 @@ cargo install ponko_cli
 ponko new my_game            # a 2D game (the default)
 ponko new my_game --3d       # a 3D game
 ponko new my_sim --headless  # a simulation without a window, GPU or sound
+ponko new my_server --server # a dedicated server, with a bot client and a Dockerfile
 ```
 
 Each project depends on the released `ponko`, has a fast dev profile, an

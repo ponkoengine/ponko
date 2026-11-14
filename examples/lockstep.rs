@@ -1,11 +1,23 @@
-//! Lockstep multiplayer: two players each move a crab with the arrow keys,
-//! and both windows show the same game, because both run the same
+//! Lockstep multiplayer: every player moves a crab with the arrow keys,
+//! and every window shows the same game, because all run the same
 //! simulation from the same inputs. Run it twice:
 //!
 //!   `cargo run --example lockstep -- host 7777`
 //!   `cargo run --example lockstep -- join 127.0.0.1:7777`
 //!
-//! (or on two machines on one network). Space shoves the other crab away.
+//! (or on two machines on one network). Space shoves the other crabs away.
+//!
+//! In the browser: the host also takes browser players over WebSocket, and
+//! the web build joins the server its page names (`?server=ws://host:7778`;
+//! without it, port 7778 of the page's own host):
+//!
+//!   `cargo run --example lockstep -- host 7777 --players 3 --web 7778`
+//!   `web/build.sh lockstep && python3 -m http.server -d target/web/lockstep 8000`
+//!
+//! then open `http://localhost:8000` in two tabs. Desktop players can join
+//! the same game with `join` (UDP) or `join-web ws://127.0.0.1:7778`.
+//! `--headless <ticks>` plays that many ticks without a window, with a bot
+//! at the keys, and prints how it went (the browser smoke test's server).
 //!
 //! Over Steam (feature `steam`; Steam running; Valve's test app 480):
 //!
@@ -52,6 +64,26 @@ struct Crab {
     push: Vec2,
 }
 
+/// The crabs, once the game starts and everyone knows how many players
+/// there are. Plain arithmetic only: every peer, desktop or browser, must
+/// get the same bits.
+fn spawn_crabs(ctx: &mut Ctx) {
+    if ctx.time.sim_tick() > 0 {
+        return;
+    }
+    let players = ctx.net.players().max(1);
+    for player in 0..players {
+        let x = 100.0 + 600.0 * player as f32 / (players.max(2) - 1) as f32;
+        ctx.world.spawn((
+            d2::Transform::at(vec2(x, 300.0)),
+            Crab {
+                player: player as u32,
+                push: Vec2::ZERO,
+            },
+        ));
+    }
+}
+
 // ANCHOR: simulate
 /// The simulation: every peer runs it on every player's input, in the
 /// same order, so every peer ends up with the same world.
@@ -84,6 +116,11 @@ fn move_crabs(ctx: &mut Ctx) {
 }
 // ANCHOR_END: simulate
 
+/// One color per player (up to 8).
+const COLORS: [u32; 8] = [
+    0xf56565, 0x63b3ed, 0x68d391, 0xf6e05e, 0xb794f4, 0xf6ad55, 0x4fd1c5, 0xfbb6ce,
+];
+
 fn draw(ctx: &mut Ctx) {
     ctx.gfx.clear(Color::hex(0x20304a));
     let crabs: Vec<(Vec2, u32)> = ctx
@@ -93,16 +130,15 @@ fn draw(ctx: &mut Ctx) {
         .map(|(t, c)| (t.position, c.player))
         .collect();
     for (at, player) in crabs {
-        let color = [Color::hex(0xf56565), Color::hex(0x63b3ed)][player as usize % 2];
-        ctx.gfx.draw_circle(at, 30.0, color);
+        ctx.gfx.draw_circle(at, 30.0, Color::hex(COLORS[player as usize % 8]));
     }
     let net = &ctx.net;
     let status = match net.state() {
-        NetState::Connecting => "waiting for the other player...".to_string(),
+        NetState::Connecting => "waiting for the other players...".to_string(),
         NetState::Running => format!(
-            "you are player {} ({}), tick {}{}",
+            "you are player {} of {}, tick {}{}",
             net.player() + 1,
-            ["red", "blue"][net.player() % 2],
+            net.players(),
             ctx.time.sim_tick(),
             net.desync().map_or(String::new(), |d| format!("  DESYNC: {d}"))
         ),
@@ -126,45 +162,182 @@ fn draw(ctx: &mut Ctx) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     #[cfg(feature = "steam")]
     if let Some(net) = steam_session(&args) {
         return play(net);
     }
+    let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1));
+    // "7777" listens on every interface; "127.0.0.1:7777" on that one only.
+    let at = |addr: &str| {
+        if addr.contains(':') {
+            addr.to_string()
+        } else {
+            format!("0.0.0.0:{addr}")
+        }
+    };
+    let players = flag("--players").map_or(2, |n| n.parse().expect("--players takes a number"));
+    let address = args.get(1).filter(|a| !a.starts_with("--"));
     // ANCHOR: session
     let net = match args.first().map(String::as_str) {
-        Some("host") => Net::host(format!("0.0.0.0:{}", args.get(1).map_or("7777", |p| p)), 2),
-        Some("join") => Net::join(args.get(1).map_or("127.0.0.1:7777", |a| a)),
+        Some("host") => {
+            let host = Net::host(at(address.map_or("7777", |a| a)), players);
+            match flag("--web") {
+                // Browser players join over WebSocket on this TCP port.
+                Some(web) => host.and_then(|host| host.accept_web(at(web))),
+                None => host,
+            }
+        }
+        Some("join") => Net::join(address.map_or("127.0.0.1:7777", |a| a)),
+        Some("join-web") => Net::join_web(address.map_or("ws://127.0.0.1:7778", |a| a)),
         _ => {
-            eprintln!("usage: lockstep host [port] | join <host:port> | steam | steam-join");
+            eprintln!(
+                "usage: lockstep host [port] [--players n] [--web port] | join <host:port> \
+                 | join-web <ws://host:port> | steam | steam-join   (any of them: --headless <ticks>)"
+            );
             return;
         }
     }
     .expect("could not open a socket");
-    play(net);
+    // ANCHOR_END: session
+    if let Some(addr) = net.local_addr().filter(|_| args[0] == "host") {
+        let web = net
+            .web_addr()
+            .map_or(String::new(), |a| format!(", browsers on ws://{a}"));
+        println!("hosting {players} players on {addr}{web}");
+    }
+    match flag("--headless") {
+        Some(ticks) => headless(net, ticks.parse().expect("--headless takes a tick count")),
+        None => play(net),
+    }
 }
 
+/// The web build joins the server its page names: `?server=ws://host:port`,
+/// or port 7778 of the page's own host.
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    let location = web_sys::window().expect("a page").location();
+    let search = location.search().unwrap_or_default();
+    let named = search
+        .trim_start_matches('?')
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("server="))
+        .map(str::to_string);
+    let server = named.unwrap_or_else(|| format!("ws://{}:7778", location.hostname().unwrap_or_default()));
+    play(Net::join_web(&server).expect("a ws:// or wss:// server URL"));
+}
+
+// ANCHOR: play
 fn play(net: Net) {
+    game(net)
+        .system(read_keys) // frame system: input out
+        .system(draw)
+        .system(report)
+        .setup(setup)
+        .run();
+}
+
+/// What every peer runs: the session and the simulation.
+fn game(net: Net) -> Game {
     Game::new("Lockstep", 800, 600)
         .lockstep(net)
-        .system(read_keys) // frame system: input out
-        .sim_system(move_crabs) // sim system: everyone's input in
-        .system(draw)
-        .setup(|ctx| {
-            ctx.world.reflect::<Crab>(); // compared between peers
-            for player in 0..2 {
-                ctx.world.spawn((
-                    d2::Transform::at(vec2(250.0 + 300.0 * player as f32, 300.0)),
-                    Crab {
-                        player,
-                        push: Vec2::ZERO,
-                    },
-                ));
-            }
-        })
-        .run();
-    // ANCHOR_END: session
+        .sim_system(spawn_crabs) // sim systems: everyone's input in
+        .sim_system(move_crabs)
+        .sim_system(fingerprint)
+}
+
+fn setup(ctx: &mut Ctx) {
+    ctx.world.reflect::<Crab>(); // compared between peers
+    ctx.world.insert_resource(Fingerprint(None, [0; 8]));
+}
+// ANCHOR_END: play
+
+/// The tick whose crab positions every peer reports, so a test can
+/// compare peers that run at different speeds.
+const FINGERPRINT_TICK: u64 = 300;
+
+/// A hash of every crab's position and push at [`FINGERPRINT_TICK`], and
+/// how many ticks each player steered by then: what the peers must agree on.
+struct Fingerprint(Option<u64>, [u32; 8]);
+
+fn fingerprint(ctx: &mut Ctx) {
+    for player in 0..ctx.net.players() {
+        if ctx.time.sim_tick() < FINGERPRINT_TICK && ctx.net.input::<Pad>(player).is_some_and(|p| p.dir != Vec2::ZERO) {
+            ctx.world.resource_mut::<Fingerprint>().1[player] += 1;
+        }
+    }
+    if ctx.time.sim_tick() != FINGERPRINT_TICK {
+        return;
+    }
+    let mut crabs: Vec<(u32, [f32; 4])> = ctx
+        .world
+        .query::<(&d2::Transform, &Crab)>()
+        .iter()
+        .map(|(t, c)| (c.player, [t.position.x, t.position.y, c.push.x, c.push.y]))
+        .collect();
+    crabs.sort_by_key(|c| c.0);
+    // FNV-1a over the bits: equal only if every peer computed the same floats.
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for bits in crabs.iter().flat_map(|(_, v)| v.map(f32::to_bits)) {
+        hash = (hash ^ u64::from(bits)).wrapping_mul(0x100_0000_01b3);
+    }
+    ctx.world.resource_mut::<Fingerprint>().0 = Some(hash);
+}
+
+/// The state, as JSON: for the browser smoke test (`web/smoke/multiplayer.mjs`)
+/// and the headless summary.
+fn state(ctx: &Ctx) -> String {
+    let net = &ctx.net;
+    serde_json::json!({
+        "fixture": "lockstep",
+        "state": format!("{:?}", net.state()),
+        "player": net.player(),
+        "players": net.players(),
+        "ticks": ctx.time.sim_tick(),
+        "fingerprint": ctx.world.resource::<Fingerprint>().0.map(|h| format!("{h:016x}")),
+        "steered": &ctx.world.resource::<Fingerprint>().1[..net.players()],
+        "desync": net.desync().map(ToString::to_string),
+        "error": net.error(),
+    })
+    .to_string()
+}
+
+/// Publishes the state on the page (`<html data-smoke>`) for the browser
+/// smoke test; nothing on the desktop.
+fn report(ctx: &mut Ctx) {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(root) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.document_element())
+    {
+        let _ = root.set_attribute("data-smoke", &state(ctx));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = ctx;
+}
+
+/// `--headless <ticks>`: plays without a window, a bot at the keys, and
+/// prints the final state. Waits up to a minute for everyone to join.
+#[cfg(not(target_arch = "wasm32"))]
+fn headless(net: Net, ticks: u64) {
+    let summary = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+    let out = summary.clone();
+    game(net.timeout(std::time::Duration::from_secs(60)))
+        .sim_system(bot)
+        .sim_system(move |ctx: &mut Ctx| *out.borrow_mut() = state(ctx))
+        .run_headless(ticks, setup);
+    println!("{}", summary.borrow());
+}
+
+/// The headless player's keys: a different walk for every player.
+#[cfg(not(target_arch = "wasm32"))]
+fn bot(ctx: &mut Ctx) {
+    let step = (ctx.time.sim_tick() / 40 + ctx.net.player() as u64) % 4;
+    let dir = [Vec2::X, Vec2::Y, -Vec2::X, -Vec2::Y][step as usize];
+    let shove = ctx.time.sim_tick() % 120 == 60;
+    ctx.net.set_input(&Pad { dir, shove });
 }
 
 // ANCHOR: steam

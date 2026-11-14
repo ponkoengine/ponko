@@ -10,6 +10,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use ponko_ecs::{Component, ComponentId, Entity, World};
+use rayon::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -18,10 +19,12 @@ mod animation;
 mod builtin_schemas;
 mod migrate;
 mod particles;
+mod save_format;
 pub(crate) use animation::reflect_animation;
 pub(crate) use migrate::migrate as migrate_save;
 pub use migrate::{Migration, SaveMigrations};
 pub(crate) use particles::reflect_particle_emitter2d;
+pub use save_format::SaveFormat;
 
 use crate::schema::{SchemaSource, schema_json};
 
@@ -1247,7 +1250,7 @@ impl WorldReflect for World {
 
     fn save(&self) -> Value {
         let reflected = self.reflected_components();
-        let mut entities = Vec::new();
+        let mut entities: Vec<Entity> = Vec::new();
         let mut not_saved: std::collections::BTreeMap<String, usize> = Default::default();
         let left_out = self.component_id::<NotSaved>();
         for a in self
@@ -1265,18 +1268,18 @@ impl WorldReflect for World {
                     *not_saved.entry(name).or_default() += a.len();
                 }
             }
-            for &e in a.entities() {
-                if let Ok(Value::Object(components)) = self.entity_json(e)
-                    && !components.is_empty()
-                {
-                    entities.push((e.to_bits(), components));
-                }
-            }
+            entities.extend_from_slice(a.entities());
         }
-        entities.sort_unstable_by_key(|(id, _)| *id);
+        // Each entity's JSON on its own: in parallel, in id order.
+        entities.sort_unstable_by_key(|e| e.to_bits());
         let entities: Vec<Value> = entities
-            .into_iter()
-            .map(|(id, components)| serde_json::json!({ "entity": id, "components": components }))
+            .par_iter()
+            .filter_map(|&e| match self.entity_json(e) {
+                Ok(Value::Object(components)) if !components.is_empty() => {
+                    Some(serde_json::json!({ "entity": e.to_bits(), "components": components }))
+                }
+                _ => None,
+            })
             .collect();
         let mut resources = serde_json::Map::new();
         for r in registry(self).map_or(&[][..], |r| &r.resources) {

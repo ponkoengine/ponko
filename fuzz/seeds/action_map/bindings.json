@@ -1,0 +1,56 @@
+{
+  "bindings": {
+    "jump": {
+      "Button": [
+        {
+          "Key": "Space"
+        },
+        {
+          "Mouse": "Left"
+        },
+        {
+          "Gamepad": {
+            "pad": 0,
+            "button": "South"
+          }
+        }
+      ]
+    },
+    "move": {
+      "Axis2": [
+        {
+          "Keys": {
+            "left": "A",
+            "right": "D",
+            "up": "W",
+            "down": "S"
+          }
+        },
+        {
+          "Gamepad": {
+            "pad": 0,
+            "stick": "Left",
+            "deadzone": 0.2
+          }
+        }
+      ]
+    },
+    "throttle": {
+      "Axis": [
+        {
+          "Keys": {
+            "negative": "S",
+            "positive": "W"
+          }
+        },
+        {
+          "Gamepad": {
+            "pad": 0,
+            "axis": "RightTrigger",
+            "deadzone": 0.2
+          }
+        }
+      ]
+    }
+  }
+}

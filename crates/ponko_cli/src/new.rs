@@ -7,7 +7,7 @@ pub const USAGE: &str = "\
 ponko new: make a new game project from a template
 
 Usage:
-  ponko new <path> [--2d | --3d | --headless] [--path <engine> | --git <url>]
+  ponko new <path> [--2d | --3d | --headless | --server] [--path <engine> | --git <url>]
 
 The project goes in the folder <path> (it must not exist, or be empty); its
 name is the folder's name.
@@ -16,6 +16,7 @@ Templates:
   --2d        A 2D game: a window, input, drawing (the default)
   --3d        A 3D game: a mesh, a camera and a sun (the engine's `3d` feature)
   --headless  A simulation without a window, GPU or sound
+  --server    A dedicated game server: headless, a bot client, a Dockerfile
 
 The engine dependency (the released version from crates.io by default):
   --path <engine>  An engine checkout on this machine
@@ -65,6 +66,7 @@ impl Options {
                 "--2d" => Some(Kind::TwoD),
                 "--3d" => Some(Kind::ThreeD),
                 "--headless" => Some(Kind::Headless),
+                "--server" => Some(Kind::Server),
                 "--path" | "--git" => {
                     if engine != Engine::Released {
                         return Err("give --path or --git once".into());
@@ -88,7 +90,7 @@ impl Options {
             };
             if let Some(k) = picked {
                 if kind.is_some_and(|old| old != k) {
-                    return Err("pick one of --2d, --3d and --headless".into());
+                    return Err("pick one of --2d, --3d, --headless and --server".into());
                 }
                 kind = Some(k);
             }
@@ -317,16 +319,17 @@ pub fn generate(options: &Options, cwd: &Path) -> Result<String, String> {
         Kind::TwoD => "2D game",
         Kind::ThreeD => "3D game",
         Kind::Headless => "headless simulation",
+        Kind::Server => "dedicated server",
     };
     let from = match &engine {
         Engine::Released => "the released engine from crates.io".to_string(),
         Engine::Path(p) => format!("the engine at {}", p.display()),
         Engine::Git(url) => format!("the engine from {url}"),
     };
-    let run = if options.kind == Kind::Headless {
-        "cargo run"
-    } else {
-        "cargo run      # opens a window"
+    let run = match options.kind {
+        Kind::Headless => "cargo run",
+        Kind::Server => "cargo run      # the server; `cargo run --example client` joins it",
+        Kind::TwoD | Kind::ThreeD => "cargo run      # opens a window",
     };
     Ok(format!(
         "Made the {kind} `{project}` in {}, using {from}.\n\n  cd {}\n  cargo test     # headless tests\n  {run}\n\n\

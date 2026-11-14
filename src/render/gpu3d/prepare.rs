@@ -58,7 +58,7 @@ impl Renderer3D {
         self.prepare_shadows_and_lights(device, queue, frame, camera);
         self.upload_uniforms(device, queue, scene, &view, previous_view_proj, gi_frame);
         self.prepare_targets(device, &view, rebuild);
-        self.stencil_read_only = self.stencil.any() && self.needs_scene();
+        self.stencil_read_only = self.stencil.any() && self.splits_transparent();
         self.advance_history(queue, scene, &view, previous_view_proj);
         self.prepare_occlusion(device, queue, scene, &view);
     }
@@ -124,9 +124,15 @@ impl Renderer3D {
             multiview_mask: None,
             cache: None,
         });
-        self.particles = super::super::particles::Particles::with_depth(
+        self.rebuild_sky_shaders(device);
+        let float_depth = self.float_depth;
+        self.particles = super::super::particles::Particles::new(
             device,
             &self.texture_layout,
+            &super::super::particles::SceneDepth {
+                layout: &self.scene_layout,
+                adapt: &|source| super::shaders::for_samples(source, samples, float_depth).into_owned(),
+            },
             samples,
             self.shaders.depth_format(),
         );
@@ -249,7 +255,8 @@ impl Renderer3D {
             unjittered
         };
         self.lists.moved_runs.clear();
-        self.particles.prepare(device, queue, &frame.particles, view_proj);
+        self.particles
+            .prepare(device, queue, &frame.particles, view_proj, scene.camera);
         let ao_on = post.ambient_occlusion.enabled
             && post.ambient_occlusion.radius.is_finite()
             && post.ambient_occlusion.intensity.is_finite()
@@ -491,7 +498,9 @@ impl Renderer3D {
             occlusion,
             ..
         } = scene;
-        self.atmosphere = sky.atmosphere;
+        // A sky shader takes the place of the atmosphere and the flat sky.
+        self.sky_shader = sky.shader.map(|s| s.id).filter(|&id| self.has_sky_shader(id));
+        self.atmosphere = sky.atmosphere || self.sky_shader.is_some();
         self.lists.override_base = frame.override_base;
         self.lists.material_overrides.clear();
         let meshes = self.resources.meshes.len() as u32;
@@ -565,6 +574,7 @@ impl Renderer3D {
         let mut views = std::mem::take(&mut self.lists.views);
         let mut used = 0;
         let mut offset = frame.instances.len() as u32;
+        self.particles.begin_targets();
         for (camera_index, view) in frame.views.iter().enumerate() {
             let Some(target) = self.render_targets.view_target(
                 device,
@@ -575,6 +585,11 @@ impl Renderer3D {
             ) else {
                 continue;
             };
+            if view.particles {
+                let particles = &view.frame.particles;
+                self.particles
+                    .prepare_target(device, queue, view.target, particles, view.view_proj, view.camera);
+            }
             if used == views.len() {
                 views.push((0, Vec::new(), 0));
             }
@@ -593,6 +608,7 @@ impl Renderer3D {
         }
         views.truncate(used);
         self.lists.views = views;
+        self.particles.end_targets();
         self.lists.gi_runs.clear();
         self.lists.gi_face_runs.clear();
         self.lists.gi_faces.clear();
@@ -864,7 +880,7 @@ impl Renderer3D {
                 1.0 / size.1.max(1) as f32,
             ],
             atmosphere: [
-                if sky.atmosphere { 1.0 } else { 0.0 },
+                if self.atmosphere { 1.0 } else { 0.0 },
                 sky.haze.max(0.0),
                 (sky.sun_size.clamp(0.01, 20.0).to_radians() * 0.5).cos(),
                 sky.stars.max(0.0),
@@ -892,6 +908,10 @@ impl Renderer3D {
                 sky.fog_sun_focus.clamp(0.0, 0.99),
             ],
             gi: [[0.0; 4]; 3],
+            sky_params: match self.sky_shader {
+                Some(_) => sky.shader_params.map(|p| p.to_array()),
+                None => [[0.0; 4]; 4],
+            },
         };
         if let (Some(g), Some(gi)) = (gi_frame, &self.gi) {
             let (n, origin) = (g.grid.counts.as_vec3(), g.grid.origin.as_vec3());
@@ -901,9 +921,13 @@ impl Renderer3D {
                 [origin.x, origin.y, origin.z, gi.rows() as f32],
             ];
         }
-        // A three-color ambient, without an atmosphere.
+        // A three-color ambient, from the authored colors.
+        let authored_ambient = match self.sky_shader {
+            Some(_) => sky.authored_ambient,
+            None => !sky.atmosphere,
+        };
         let equator = match sky.equator_color {
-            Some(c) if !sky.atmosphere => {
+            Some(c) if authored_ambient => {
                 let [r, g, b, _] = linear(c);
                 [
                     r * lighting.ambient_intensity,
@@ -940,8 +964,21 @@ impl Renderer3D {
                 equator[2],
                 equator[3],
             ],
-            sky.atmosphere,
+            self.sky_shader.map(|id| {
+                let mut key = [0.0; 18];
+                key[0] = id as f32;
+                key[1] = f32::from(sky.authored_ambient);
+                for (k, v) in key[2..]
+                    .iter_mut()
+                    .zip(sky.shader_params.iter().flat_map(|p| p.to_array()))
+                {
+                    *k = v;
+                }
+                key
+            }),
+            self.atmosphere,
             lighting.ambient_intensity,
+            authored_ambient && self.atmosphere,
             [uniform.sky, uniform.ground, equator],
         );
         self.environment.upload(device, queue, &frame.probe_uploads);

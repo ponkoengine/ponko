@@ -146,9 +146,11 @@ fn allocations(declared: bool) -> u64 {
         ctx.world
             .insert_resource(NavMesh3D::bake(&[floor], NavBakeSettings::default()).unwrap());
         for i in 0..4 {
-            let mut agent = NavAgent3D::default();
-            agent.speed = 0.5;
-            agent.destination = Some(vec3(8.0, 0.0, i as f32 - 2.0));
+            let agent = NavAgent3D {
+                speed: 0.5,
+                destination: Some(vec3(8.0, 0.0, i as f32 - 2.0)),
+                ..Default::default()
+            };
             ctx.world
                 .spawn((d3::Transform::at(vec3(-8.0, 0.0, i as f32 - 2.0)), agent));
         }

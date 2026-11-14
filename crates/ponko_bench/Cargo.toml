@@ -25,6 +25,8 @@ hecs = "0.11.2"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 # The rendering baseline's report (the engine already depends on it).
 serde_json = "1.0.154"
+# The save benchmark's components (`--bin saves`).
+serde = { version = "1.0.229", features = ["derive"] }
 
 # The thread CPU clock of the streaming benchmark (wall time elsewhere).
 [target.'cfg(unix)'.dependencies]
@@ -44,6 +46,10 @@ required-features = ["render"]
 [[bin]]
 name = "characters"
 path = "src/bin/characters.rs"
+
+[[bin]]
+name = "saves"
+path = "src/bin/saves.rs"
 
 [[bin]]
 name = "render_compare"

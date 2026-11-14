@@ -246,6 +246,87 @@ fn peers_over_udp_stay_in_sync() {
     assert_identical(&play(vec![host, guest], 600, 100, nothing));
 }
 
+#[test]
+fn browser_and_desktop_players_share_one_session() {
+    // The host takes desktop players over UDP and browser players over
+    // WebSocket; the desktop side of `join_web` stands in for a browser.
+    let host = Net::host("127.0.0.1:0", 3)
+        .unwrap()
+        .accept_web("127.0.0.1:0")
+        .unwrap()
+        .input_delay(2)
+        .checksum_every(30);
+    let udp = Net::join(host.local_addr().unwrap()).unwrap();
+    let web = Net::join_web(&format!("ws://{}", host.web_addr().unwrap())).unwrap();
+    assert_eq!(web.local_addr(), None, "a WebSocket client listens on nothing");
+    assert_identical(&play(vec![host, udp, web], 600, 120, nothing));
+}
+
+#[test]
+fn a_web_client_waits_for_a_host_that_starts_later() {
+    // Pick a free port, then start the host on it only after the client
+    // began connecting: it keeps trying, as a UDP client resends its hello.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let web = Net::join_web(&format!("ws://127.0.0.1:{port}")).unwrap();
+    thread::sleep(Duration::from_millis(300));
+    let host = Net::host("127.0.0.1:0", 2)
+        .unwrap()
+        .accept_web(("127.0.0.1", port))
+        .unwrap()
+        .input_delay(2);
+    assert_identical(&play(vec![host, web], 300, 60, nothing));
+}
+
+#[test]
+fn only_hosts_accept_web_players_and_urls_are_checked() {
+    let guest = Net::join("127.0.0.1:7777").unwrap();
+    let err = guest.accept_web("127.0.0.1:0").unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(Net::default().accept_web("127.0.0.1:0").is_err(), "offline is no host");
+    assert!(Net::host("127.0.0.1:0", 2).unwrap().web_addr().is_none());
+    for bad in ["http://127.0.0.1:7778", "127.0.0.1:7778", "ws://"] {
+        assert_eq!(
+            Net::join_web(bad).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput,
+            "{bad}"
+        );
+    }
+    // The desktop client has no TLS; a browser does.
+    assert_eq!(
+        Net::join_web("wss://example.com").unwrap_err().kind(),
+        std::io::ErrorKind::Unsupported
+    );
+}
+
+#[test]
+fn a_web_client_whose_host_is_not_a_websocket_server_is_lost_at_once() {
+    // A plain TCP server that answers the handshake with nonsense.
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = server.local_addr().unwrap();
+    let answer = thread::spawn(move || {
+        use std::io::{Read, Write};
+        let (mut stream, _) = server.accept().unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n");
+    });
+    let start = std::time::Instant::now();
+    // No tick can run: the run ends when the session is lost.
+    Game::new("net", 1, 1)
+        .lockstep(Net::join_web(&format!("ws://{addr}/game")).unwrap())
+        .sim_system(|_: &mut Ctx| panic!("no tick runs without a host"))
+        .run_headless(10, |_| {});
+    answer.join().unwrap();
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "lost at once, not after the 10 s silence timeout"
+    );
+}
+
 /// Player 1 alone nudges one unit: a bug that only shows on one machine.
 fn diverge(ctx: &mut Ctx) {
     if ctx.net.player() == 1 && ctx.time.sim_tick() == 100 {

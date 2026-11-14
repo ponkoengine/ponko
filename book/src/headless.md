@@ -9,7 +9,8 @@ Use it for:
 
 - **tests** of game logic in plain `cargo test`, including on CI machines
   without a GPU;
-- **dedicated servers** and batch runs;
+- **dedicated servers** (paced to wall time by `run_server`, see
+  [Dedicated servers](servers.md)) and batch runs;
 - **benchmarks** of the simulation alone.
 
 <div class="lang-pair">

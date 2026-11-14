@@ -198,6 +198,52 @@ fn sunbeams(ctx: &mut Ctx) {
 }
 // ANCHOR_END: light_shafts
 
+// ANCHOR: sky_shader
+/// A painted evening sky of the game's own: a gradient whose two colours
+/// the game sets, with fog that takes them on.
+fn painted_evening(ctx: &mut Ctx) {
+    let painted = ctx.gfx.create_sky_shader(
+        "painted",
+        "fn sky(dir: vec3<f32>) -> vec3<f32> {
+            let up = sqrt(clamp(dir.y, 0.0, 1.0));
+            return mix(frame.sky_params[0].rgb, frame.sky_params[1].rgb, up);
+        }",
+    );
+    let sky = &mut ctx.scene3d.sky;
+    sky.shader = Some(painted); // the background, fog, reflections and ambient light
+    sky.shader_params[0] = vec4(1.0, 0.45, 0.2, 0.0); // the horizon
+    sky.shader_params[1] = vec4(0.2, 0.15, 0.5, 0.0); // overhead
+    sky.fog_density = 0.02; // fog in the painted colours
+    ctx.scene3d.lighting.sun_color = Color::hex(0xFFB070); // the sun as authored
+}
+// ANCHOR_END: sky_shader
+
+#[test]
+fn a_sky_shader_is_checked_and_kept_in_the_sky_settings() {
+    Game::new("t", 1, 1).run_headless(1, |ctx| {
+        assert_eq!(ctx.scene3d.sky.shader, None, "the built-in sky by default");
+        painted_evening(ctx);
+        assert!(ctx.scene3d.sky.shader.is_some());
+        assert!(
+            !ctx.scene3d.sky.authored_ambient,
+            "the sky's own ambient light by default"
+        );
+        let wrong = ctx
+            .gfx
+            .try_create_sky_shader("wrong", "fn sky(dir: vec3<f32>) -> f32 { return dir.y; }")
+            .unwrap_err();
+        assert_eq!(wrong.kind(), ErrorKind::Shader);
+        assert!(
+            wrong.to_string().contains("fn sky(dir: vec3<f32>) -> vec3<f32>"),
+            "{wrong}"
+        );
+        let other = ctx
+            .gfx
+            .create_sky_shader("plain", "fn sky(d: vec3<f32>) -> vec3<f32> { return vec3<f32>(0.5); }");
+        assert_ne!(Some(other), ctx.scene3d.sky.shader, "each shader is its own handle");
+    });
+}
+
 // ANCHOR: light_shadow_atlas
 /// A street at night: a sharp shadow for the lamp beside the player,
 /// rough ones for the street lights down the road.

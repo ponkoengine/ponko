@@ -45,6 +45,7 @@ struct Frame {
     previous_view_proj: mat4x4<f32>,
     jitter: vec4<f32>,     // xy: this frame's jitter in pixels (0 without TAA)
     gi: array<vec4<f32>, 3>, // global illumination's probe grid (see gi.wgsl)
+    sky_params: array<vec4<f32>, 4>, // a sky shader's values (`Sky::shader_params`)
 };
 
 struct MaterialData {
@@ -195,7 +196,7 @@ fn sky_dir(uv: vec2<f32>) -> vec3<f32> {
 }
 
 // The sky's light from direction `dir` (towards the sky), without the sun
-// itself. Black without an atmosphere.
+// itself: the atmosphere's or the game's sky shader's. Black for a flat sky.
 fn sky_radiance(dir: vec3<f32>) -> vec3<f32> {
     return sample_sky(sky_texture, sky_sampler, sky_uv(dir));
 }

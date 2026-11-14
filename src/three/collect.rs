@@ -349,6 +349,8 @@ pub(crate) struct ViewFrame {
     pub target: u32,
     pub size: (u32, u32),
     pub camera: Vec3,
+    /// Whether it draws particles, trails and lines.
+    pub particles: bool,
     /// What it draws with: the camera's, tilted onto the clip plane.
     pub view_proj: Mat4,
     /// Its models, without shadow casters (it uses the main view's).
@@ -383,7 +385,11 @@ impl Frame3D {
         );
         self.view_proj = camera.view_proj();
         self.camera_planes = (camera.near, camera.far);
-        self.particles.collect(world, camera);
+        if camera.particles {
+            self.particles.collect(world, camera);
+        } else {
+            self.particles.clear();
+        }
         self.shadow_size = lighting.shadow_size(self.size_limit);
         self.light_shadow_size = lighting.light_shadow_size(self.size_limit);
         self.light_atlas = lighting.light_shadow_atlas_size(self.size_limit);

@@ -65,7 +65,8 @@ pub use capabilities::{GpuAdapter, GpuBatchLimits, GpuCapabilities, GpuFeature, 
 pub(crate) use gpu::Renderer;
 #[cfg(all(feature = "window", feature = "3d"))]
 pub(crate) use gpu3d::{
-    COMPUTE_VARIANT, EFFECT_VARIANT, FULL_MATERIAL_VARIANT, compose_compute, compose_effect, compose_shader,
+    COMPUTE_VARIANT, EFFECT_VARIANT, FULL_MATERIAL_VARIANT, SKY_VARIANT, compose_compute, compose_effect,
+    compose_shader, compose_sky,
 };
 /// Unstable benchmark drivers for `ponko_bench` (feature `bench-internals`).
 #[doc(hidden)]
@@ -449,6 +450,10 @@ mod text3d_render_test;
 #[cfg(all(test, feature = "window", feature = "3d", feature = "text-shaping"))]
 mod text_shaping_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod transparency_bench;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod transparency_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod ui_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod upload_bench;
@@ -492,8 +497,8 @@ pub use crate::three::{
     LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow, Material, MaterialDesc, Mesh,
     MeshCost, MeshData, Model, ModelCamera, ModelLight, ModelLightKind, ModelMaterial, ModelMaterials, ModelProjection,
     Post, PostVolume, ReceivesDecals, RenderPasses, SceneSettings, ScreenEffect, Shader, ShadowFilter, ShadowMesh,
-    ShadowOnly, Sky, SplitToning, Stencil, StencilCompare, StencilFace, StencilOp, StreamedLod, TargetCamera,
-    TargetEffect, Tonemap,
+    ShadowOnly, Sky, SkyShader, SplitToning, Stencil, StencilCompare, StencilFace, StencilOp, StreamedLod,
+    TargetCamera, TargetEffect, Tonemap,
 };
 /// Unstable extraction benchmark driver for `ponko_bench` (feature `bench-internals`).
 #[doc(hidden)]
