@@ -89,3 +89,49 @@ fn freed_meshes_and_buffers_leave_no_gpu_memory() {
     renderer.free_gpu_buffer(0);
     assert_eq!(renderer.residency(), base);
 }
+
+/// Everything the renderer holds, by class (`perf::GpuMemory`).
+fn gpu_memory(renderer: &Renderer3D) -> crate::perf::GpuMemory {
+    let mut t = crate::render::memory::MemoryTally::default();
+    renderer.tally_memory(&mut t);
+    t.finish()
+}
+
+#[test]
+fn skinned_meshes_and_gpu_buffers_count_in_their_classes_until_freed() {
+    let Some((device, queue, mut renderer)) = renderer() else {
+        return;
+    };
+    let base = gpu_memory(&renderer);
+    let mut cube = MeshData::cube(1.0);
+    let n = cube.positions.len();
+    cube.joints = vec![[0; 4]; n];
+    cube.weights = vec![[1.0, 0.0, 0.0, 0.0]; n];
+    let parts = [(0..cube.indices.len() as u32, Material { id: 0 })];
+    let id = renderer.create_mesh(&device, &cube, &parts, true);
+    renderer.flush_meshes_for_test(&device, &queue);
+    let skinned = gpu_memory(&renderer);
+    // Each corner's four joints (u16) and weights (f32), and its own
+    // vertex and index buffers rather than the shared arena.
+    assert!(
+        skinned.skinning >= base.skinning + n as u64 * 24,
+        "influences counted as skinning: {base}\n{skinned}"
+    );
+    assert!(skinned.meshes > base.meshes, "{base}\n{skinned}");
+    assert_eq!(
+        skinned.total - base.total,
+        (skinned.skinning - base.skinning) + (skinned.meshes - base.meshes)
+    );
+    renderer.free_mesh(id);
+    assert_eq!(gpu_memory(&renderer), base, "a freed skinned mesh leaves nothing");
+
+    renderer.create_gpu_buffer(&device, 0, 64, &[]);
+    let buffered = gpu_memory(&renderer);
+    if buffered.gpu_buffers == 0 {
+        crate::render::render_test_support::skip("the buffer part: no storage buffers on this GPU");
+        return;
+    }
+    assert_eq!(buffered.gpu_buffers, 64 * 16, "{buffered}");
+    renderer.free_gpu_buffer(0);
+    assert_eq!(gpu_memory(&renderer), base);
+}

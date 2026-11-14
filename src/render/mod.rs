@@ -390,6 +390,8 @@ mod frame_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod gi_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod gpu_memory_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod handle_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod light_shadow_render_test;
