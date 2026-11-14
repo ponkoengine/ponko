@@ -221,11 +221,16 @@ about twice a second while profiling is on, never every frame.
 Where the platform reports its own figure, `adapter_bytes` has it (Vulkan
 and DirectX 12: wgpu's allocator; Metal: the device's allocated size) and
 `adapter_note` says which; elsewhere (OpenGL, the browser) it is `None`,
-never a guess. Expect the driver's figure to be a little higher: it lays
-textures out in its own tiles and wgpu keeps some memory for itself. On an
-Apple M4 Max at 720p the count was within 2-4% of Metal's figure at a render
-scale of 1, and 9% at the Low preset's two-thirds scale, whose odd sizes
-tile worst.
+never a guess. Expect the platform's figure to be higher, by how much
+depending on the backend: the driver lays textures out in its own tiles,
+and wgpu keeps some memory for itself. On an Apple M4 Max at 720p the count
+was within 2-4% of Metal's figure at a render scale of 1, and 9% at the Low
+preset's two-thirds scale, whose odd sizes tile worst. DirectX 12 adds a
+mostly fixed amount on top: it places every buffer and texture in whole
+64 KiB pages, and wgpu makes a small buffer for every bind group that holds
+samplers. On Windows' software adapter at 720p its figure was 22-28 MB above
+the count at every preset (29% at Low, 9% at High). So compare reports from
+the same backend, and read the difference between two of them as the cost.
 
 A quality preset's cost is the difference between two reports, and a budget
 keeps it in check (in mebibytes; a report without GPU memory breaks it as
