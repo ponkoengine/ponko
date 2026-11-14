@@ -203,6 +203,48 @@ what you see on your machine), or use them to catch only big regressions.
 **Allocation counts are exact**: `allocs_per_frame(0.0)` on a system that
 should never allocate is the budget to rely on.
 
+### GPU memory
+
+A windowed game's report also says how much GPU memory the engine holds:
+`report.gpu_memory` (`None` in headless runs, which open no GPU). Every
+texture and buffer the renderer keeps is counted once, at the size the
+engine asked for, in one of ten classes: `textures` (images, render targets,
+texture arrays, glyph atlases), `meshes`, `gpu_buffers`, `frame_targets`
+(scene color and depth, post-processing, ambient occlusion, reflections,
+temporal history), `shadows` (the sun's cascades), `atlases` (the point and
+spot lights' shadow atlas), `skinning`, `probes` (global illumination and
+image-based lighting), `instance_batches` and `other`, with their `total`.
+The text report prints it on one line, largest class first, and the
+overlay shows the total and the three largest classes. It is counted again
+about twice a second while profiling is on, never every frame.
+
+Where the platform reports its own figure, `adapter_bytes` has it (Vulkan
+and DirectX 12: wgpu's allocator; Metal: the device's allocated size) and
+`adapter_note` says which; elsewhere (OpenGL, the browser) it is `None`,
+never a guess. Expect the driver's figure to be a little higher: it lays
+textures out in its own tiles and wgpu keeps some memory for itself. On an
+Apple M4 Max at 720p the count was within 2-4% of Metal's figure at a render
+scale of 1, and 9% at the Low preset's two-thirds scale, whose odd sizes
+tile worst.
+
+A quality preset's cost is the difference between two reports, and a budget
+keeps it in check (in mebibytes; a report without GPU memory breaks it as
+"not measured", never as 0):
+
+```rust
+# use ponko::prelude::*;
+# let report = ponko::perf::PerfReport::default();
+if let Some(memory) = &report.gpu_memory {
+    println!("{memory}"); // 261.4 MB (adapter 269.8 MB): frame_targets 120.0, shadows 64.1, ...
+    println!("shadow maps: {} bytes", memory.shadows);
+}
+let budget = ponko::perf::Budget::new().gpu_memory_mb(512.0);
+# let _ = report.check(&budget);
+```
+
+C and C++ get the same in the report's JSON (`"gpu_memory"`) and budgets
+(`{"gpu_memory_mb": 512}`).
+
 To catch regressions without picking numbers, keep a report from a good run
 and compare against it:
 
@@ -219,7 +261,7 @@ if let Ok(before) = ponko::perf::PerfReport::load("perf-baseline.json") {
 
 (C++: `perf_report::save`, `load` and `regressions`.) A value counts when it
 grew by more than the tolerance and by a little in absolute terms, so noise in
-tiny numbers is ignored.
+tiny numbers is ignored. GPU memory is compared too when both reports have it.
 
 ## 4. Common fixes
 

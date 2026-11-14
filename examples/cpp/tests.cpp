@@ -2617,6 +2617,10 @@ static void profiling() {
     const std::string broken = run.report.check(R"({"allocs_per_frame": 0, "scopes": {"cpp_work": 0}})");
     CHECK(broken.find("allocations per frame") != std::string::npos && broken.find("cpp_work") != std::string::npos);
     CHECK(run.report.regressions(run.report).empty());
+    // GPU memory: a headless run opens no GPU, so the report has none and a
+    // memory budget breaks as "not measured", never as 0.
+    CHECK(run.report.json().find("\"gpu_memory\": null") != std::string::npos);
+    CHECK(run.report.check(R"({"gpu_memory_mb": 512})").find("GPU memory") != std::string::npos);
     throws([&] { (void)run.report.check("not json"); });
     const auto file = std::filesystem::temp_directory_path() / "ponko-cpp-report.json";
     run.report.save(file.string().c_str());

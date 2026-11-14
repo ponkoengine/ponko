@@ -2419,6 +2419,7 @@ pub ponko::perf::Budget::allocs_per_frame: core::option::Option<f32>
 pub ponko::perf::Budget::frame_avg_ms: core::option::Option<f32>
 pub ponko::perf::Budget::frame_max_ms: core::option::Option<f32>
 pub ponko::perf::Budget::frame_p99_ms: core::option::Option<f32>
+pub ponko::perf::Budget::gpu_memory_mb: core::option::Option<f32>
 pub ponko::perf::Budget::scopes: alloc::collections::btree::map::BTreeMap<alloc::string::String, f32>
 pub ponko::perf::Budget::systems: alloc::collections::btree::map::BTreeMap<alloc::string::String, f32>
 impl ponko::perf::Budget
@@ -2427,6 +2428,7 @@ pub fn ponko::perf::Budget::frame_avg_ms(self, f32) -> Self
 pub fn ponko::perf::Budget::frame_max_ms(self, f32) -> Self
 pub fn ponko::perf::Budget::frame_p99_ms(self, f32) -> Self
 pub fn ponko::perf::Budget::from_json(&str) -> core::result::Result<Self, ponko::error::Error>
+pub fn ponko::perf::Budget::gpu_memory_mb(self, f32) -> Self
 pub fn ponko::perf::Budget::new() -> Self
 pub fn ponko::perf::Budget::scope(self, &str, f32) -> Self
 pub fn ponko::perf::Budget::system(self, &str, f32) -> Self
@@ -2521,6 +2523,38 @@ impl serde_core::ser::Serialize for ponko::perf::FrameTimes
 pub fn ponko::perf::FrameTimes::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::perf::FrameTimes
 pub fn ponko::perf::FrameTimes::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub struct ponko::perf::GpuMemory
+pub ponko::perf::GpuMemory::adapter_bytes: core::option::Option<u64>
+pub ponko::perf::GpuMemory::adapter_note: alloc::string::String
+pub ponko::perf::GpuMemory::atlases: u64
+pub ponko::perf::GpuMemory::frame_targets: u64
+pub ponko::perf::GpuMemory::gpu_buffers: u64
+pub ponko::perf::GpuMemory::instance_batches: u64
+pub ponko::perf::GpuMemory::meshes: u64
+pub ponko::perf::GpuMemory::other: u64
+pub ponko::perf::GpuMemory::probes: u64
+pub ponko::perf::GpuMemory::shadows: u64
+pub ponko::perf::GpuMemory::skinning: u64
+pub ponko::perf::GpuMemory::textures: u64
+pub ponko::perf::GpuMemory::total: u64
+impl ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::classes(&self) -> [(&'static str, u64); 10]
+pub fn ponko::perf::GpuMemory::total_mb(&self) -> f32
+impl core::clone::Clone for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::default() -> Self
+impl core::fmt::Debug for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::perf::GpuMemory
+impl serde_core::ser::Serialize for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::perf::GpuMemory where ponko::perf::GpuMemory: core::default::Default
+pub fn ponko::perf::GpuMemory::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::perf::GpuPass
 pub ponko::perf::GpuPass::ms: f32
 pub ponko::perf::GpuPass::name: &'static str
@@ -2567,6 +2601,7 @@ pub ponko::perf::PerfReport::allocs: core::option::Option<ponko::perf::AllocRepo
 pub ponko::perf::PerfReport::entities: usize
 pub ponko::perf::PerfReport::frame_ms: ponko::perf::FrameTimes
 pub ponko::perf::PerfReport::frames: usize
+pub ponko::perf::PerfReport::gpu_memory: core::option::Option<ponko::perf::GpuMemory>
 pub ponko::perf::PerfReport::render: core::option::Option<ponko::perf::RenderReport>
 pub ponko::perf::PerfReport::scopes: alloc::vec::Vec<ponko::perf::ScopeReport>
 pub ponko::perf::PerfReport::systems: alloc::vec::Vec<ponko::perf::SystemReport>

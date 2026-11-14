@@ -106,6 +106,9 @@ pub struct AssetGrowth {
 /// What the renderer actually holds on the GPU, counted from its own
 /// tables rather than from handles: a handle freed while its GPU memory
 /// stays behind shows up here. `None` in headless runs, which have no GPU.
+/// The game's assets only: all the GPU memory the engine holds, frame
+/// targets, shadow maps and skinning included, is in
+/// [`PerfReport::gpu_memory`](crate::perf::PerfReport::gpu_memory).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct GpuResidency {
