@@ -30,6 +30,8 @@ pub(super) struct Fixture {
     pub(super) timer: Option<super::timer::GpuTimer>,
     /// The adapter's backend.
     pub(super) backend: wgpu::Backend,
+    /// Whether the adapter is a software one (WARP, lavapipe).
+    pub(super) software: bool,
     /// The window's size.
     size: (u32, u32),
 }
@@ -48,6 +50,7 @@ impl Fixture {
             })
         })?;
         let (device, queue, backend) = (gpu.device, gpu.queue, gpu.info.backend);
+        let software = gpu.info.device_type == wgpu::DeviceType::Cpu;
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
@@ -176,6 +179,7 @@ impl Fixture {
             ctx,
             frame: Frame3D::default(),
             backend,
+            software,
             size: (width, height),
         })
     }

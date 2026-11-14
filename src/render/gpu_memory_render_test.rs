@@ -243,13 +243,15 @@ fn placed_by_driver(device: &wgpu::Device, texture: &wgpu::Texture) -> Option<u6
 ///   allocation, so what wgpu makes for itself ([`wgpu_own`]) is taken
 ///   out, and the engine's resources are counted as the allocator places
 ///   them: whole 64 KiB pages on Direct3D 12 ([`D3D12_PAGE`]), and a
-///   texture at the size the driver gives the same texture
+///   multisampled texture at the size the driver gives the same texture
 ///   ([`placed_by_driver`]). The driver lays samples out in its own tiles:
 ///   on the Windows runner's software adapter (WARP) a 4x 720p colour
 ///   target takes 6 MiB more than its samples, and a 1x1 4x depth stand-in
 ///   7.6 MiB; together about 17-21 MiB at every preset. What is left is
-///   small and fixed, so here the two agree within [`REPORTED_SLACK`] as
-///   well as the 5% and 10%: a forgotten screen-sized target breaks it.
+///   small and fixed, so on a hardware adapter the two agree within
+///   [`REPORTED_SLACK`] as well as the 5% and 10%: a forgotten
+///   screen-sized target breaks it. A software adapter (WARP) places tiny
+///   multisampled textures erratically, so only the 5% and 10% hold there.
 ///
 /// A resource the engine forgets to count (a missing 16 MB light atlas,
 /// a frame target) still breaks either comparison.
@@ -268,8 +270,6 @@ fn adapter_figure_child() {
     } else {
         1
     };
-    let reported = f.device.generate_allocator_report().is_some();
-    let mut probed = std::collections::HashMap::new();
     let mut off = Vec::new();
     for quality in [
         GraphicsQuality::Low,
@@ -283,21 +283,8 @@ fn adapter_figure_child() {
         // What the draws dropped (the readback buffer) is freed by a poll.
         f.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let t = tally(&f);
-        // Every texture at the size the driver gives one made the same way,
-        // probed once per kind of texture.
         let placed = t.placed_bytes(page, |t| {
-            if !reported {
-                return None;
-            }
-            let key = (
-                t.size(),
-                t.mip_level_count(),
-                t.sample_count(),
-                t.dimension(),
-                t.format(),
-                t.usage(),
-            );
-            *probed.entry(key).or_insert_with(|| placed_by_driver(&f.device, t))
+            (t.sample_count() > 1).then(|| placed_by_driver(&f.device, t)).flatten()
         });
         let m = t.finish();
         let raw = adapter_bytes(&f.device).0.expect("reported above");
@@ -312,7 +299,12 @@ fn adapter_figure_child() {
                     m.total,
                     placed as f64 / 1048576.0
                 );
-                (placed, raw - own, Some(REPORTED_SLACK))
+                // A software adapter places tiny multisampled textures
+                // erratically (a 1x1 4x depth stand-in takes 7.6 MiB on
+                // WARP, which a probe made the same way doesn't always
+                // reproduce): only the 5% and 10% bounds hold there.
+                let slack = (!f.software).then_some(REPORTED_SLACK);
+                (placed, raw - own, slack)
             }
             None => (m.total, raw, None),
         };
