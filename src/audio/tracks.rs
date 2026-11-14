@@ -245,14 +245,14 @@ impl BusTracks {
             return false;
         }
         let stale: Vec<bool> = self.slots.iter().zip(&buses.entries).map(is_stale).collect();
-        for b in 0..stale.len() {
+        for (b, slot) in self.slots.iter_mut().enumerate().take(stale.len()) {
             let mut at = Some(AudioBus(b));
             for _ in 0..=stale.len() {
                 let Some(bus) = at else {
                     break;
                 };
                 if stale[bus.0] {
-                    self.slots[b].track = None;
+                    slot.track = None;
                     break;
                 }
                 at = buses.get(bus).and_then(|s| s.parent);
