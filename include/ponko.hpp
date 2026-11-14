@@ -1876,6 +1876,13 @@ public:
     void set_saved(entity e, bool saved) { valid(); detail::check(ponko_world_set_saved(raw_, e, saved)); }
     /// Whether world saves hold `e` (see set_saved). Throws if `e` is dead.
     bool saved(entity e) const { valid(); bool result = false; detail::check(ponko_world_is_saved(raw_, e, &result)); return result; }
+    /// Whether only the shadow maps draw `e`'s model (Rust `ShadowOnly`):
+    /// true hides it from every camera while its shadow still falls, false
+    /// shows it again. Saves and scene files keep it. Throws if `e` is dead.
+    void set_shadow_only(entity e, bool shadow_only) { valid(); detail::check(ponko_world_set_shadow_only(raw_, e, shadow_only)); }
+    /// Whether only the shadow maps draw `e`'s model (see set_shadow_only).
+    /// Throws if `e` is dead.
+    bool shadow_only(entity e) const { valid(); bool result = false; detail::check(ponko_world_is_shadow_only(raw_, e, &result)); return result; }
     /// How many entities are alive.
     std::size_t size() const { valid(); std::size_t result = 0; detail::check(ponko_world_len(raw_, &result)); return result; }
     /// A copy of `e`'s `T`; throws if `e` is dead or has no `T` (see try_get).

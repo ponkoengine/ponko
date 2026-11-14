@@ -35,6 +35,7 @@ use ponko::render::SceneSettings;
 use ponko::render::ScreenEffect;
 use ponko::render::Shader;
 use ponko::render::ShadowFilter;
+use ponko::render::ShadowOnly;
 use ponko::render::Sky;
 use ponko::render::TargetCamera;
 use ponko::render::Tonemap;
@@ -45,7 +46,7 @@ use ponko::terrain::TextureKind;
 
 use crate::ctx::{ctx_access, out, text};
 use crate::types::*;
-use crate::{PonkoCtx, PonkoStatus, PonkoWorld, boundary, builtin, invalid, invalid_owned};
+use crate::{PonkoCtx, PonkoStatus, PonkoWorld, access, boundary, builtin, error, invalid, invalid_owned};
 
 /// A point or direction in 3D: right-handed, +Y up.
 /// ```
@@ -3569,6 +3570,73 @@ same_layout!(PonkoReceivesDecals, ReceivesDecals);
 pub unsafe extern "C" fn ponko_receives_decals_component(world: *mut PonkoWorld, out_id: *mut u32) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     unsafe { builtin::<ReceivesDecals>(world, out_id) }
+}
+
+/// Whether only the shadow maps draw `entity`'s model (Rust `ShadowOnly`):
+/// true hides it from every camera while its shadow still falls, false
+/// shows it again. Saves and scene files keep it. `PONKO_NOT_FOUND` for a
+/// dead entity.
+/// ```
+/// use ponko_ffi::*;
+/// let w = ponko_world_new();
+/// unsafe { assert_eq!(ponko_world_set_shadow_only(w, 42, true), PonkoStatus::PONKO_NOT_FOUND); ponko_world_free(w); }
+/// ```
+/// # Safety
+/// `world` must be null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_world_set_shadow_only(
+    world: *mut PonkoWorld,
+    entity: u64,
+    shadow_only: bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        access(world, |w, _| {
+            let e = ponko_ecs::Entity::from_bits(entity);
+            if !w.is_alive(e) {
+                return Err(error(PonkoStatus::PONKO_NOT_FOUND, "entity not found"));
+            }
+            if shadow_only {
+                w.insert(e, ShadowOnly);
+            } else {
+                w.remove::<ShadowOnly>(e);
+            }
+            Ok(())
+        })
+    })
+}
+
+/// Writes whether only the shadow maps draw `entity`'s model (see
+/// `ponko_world_set_shadow_only`). `PONKO_NOT_FOUND` for a dead entity.
+/// ```
+/// use ponko_ffi::*;
+/// let w = ponko_world_new();
+/// unsafe { let mut on = false; assert_eq!(ponko_world_is_shadow_only(w, 42, &mut on), PonkoStatus::PONKO_NOT_FOUND); ponko_world_free(w); }
+/// ```
+/// # Safety
+/// `world` must be null or live; `out_shadow_only` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_world_is_shadow_only(
+    world: *mut PonkoWorld,
+    entity: u64,
+    out_shadow_only: *mut bool,
+) -> PonkoStatus {
+    boundary(|| {
+        if out_shadow_only.is_null() {
+            return Err(invalid("output is null"));
+        }
+        // SAFETY: forwarded caller contract.
+        unsafe {
+            access(world, |w, _| {
+                let e = ponko_ecs::Entity::from_bits(entity);
+                if !w.is_alive(e) {
+                    return Err(error(PonkoStatus::PONKO_NOT_FOUND, "entity not found"));
+                }
+                *out_shadow_only = w.has::<ShadowOnly>(e);
+                Ok(())
+            })
+        }
+    })
 }
 
 /// Sets the texture array decals take their images from (Rust

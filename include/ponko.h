@@ -5004,6 +5004,14 @@ enum PonkoStatus ponko_decal3d_component(struct PonkoWorld *world, uint32_t *out
 
 enum PonkoStatus ponko_receives_decals_component(struct PonkoWorld *world, uint32_t *out_id);
 
+enum PonkoStatus ponko_world_set_shadow_only(struct PonkoWorld *world,
+                                             uint64_t entity,
+                                             bool shadow_only);
+
+enum PonkoStatus ponko_world_is_shadow_only(struct PonkoWorld *world,
+                                            uint64_t entity,
+                                            bool *out_shadow_only);
+
 enum PonkoStatus ponko_ctx_set_decal_textures(struct PonkoCtx *ctx, struct PonkoTextureArray array);
 
 enum PonkoStatus ponko_ctx_clear_decal_textures(struct PonkoCtx *ctx);

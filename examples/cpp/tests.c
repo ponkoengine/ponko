@@ -2062,6 +2062,13 @@ int main(void) {
     PonkoDecal3D decal_out; PonkoReceivesDecals none_out = {1};
     CHECK(ponko_get(w, e, decal_id, &decal_out, sizeof(decal_out)) == PONKO_OK && decal_out.size.x == 2 && decal_out.order == 4);
     CHECK(ponko_get(w, e, receives_id, &none_out, sizeof(none_out)) == PONKO_OK && none_out.layers == 0);
+    bool shadow_only = true;
+    CHECK(ponko_world_is_shadow_only(w, e, &shadow_only) == PONKO_OK && !shadow_only);
+    CHECK(ponko_world_set_shadow_only(w, e, true) == PONKO_OK);
+    CHECK(ponko_world_is_shadow_only(w, e, &shadow_only) == PONKO_OK && shadow_only);
+    CHECK(ponko_world_set_shadow_only(w, e, false) == PONKO_OK);
+    CHECK(ponko_world_is_shadow_only(w, e, &shadow_only) == PONKO_OK && !shadow_only);
+    CHECK(ponko_world_set_shadow_only(w, 42, true) == PONKO_NOT_FOUND);
     uint32_t point_id, spot_id;
     CHECK(ponko_point_light3d_component(w, &point_id) == PONKO_OK);
     CHECK(ponko_spot_light3d_component(w, &spot_id) == PONKO_OK);

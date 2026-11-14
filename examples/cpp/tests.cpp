@@ -242,6 +242,12 @@ static void three_d() {
         auto e = ctx.world().spawn(ponko::transform3d_at({0, 1, 0}), mark, ponko::receives_decals{0});
         CHECK(ctx.world().get<ponko::decal3d>(e).order == 3 && ctx.world().get<ponko::decal3d>(e).size.x == 2);
         CHECK(ctx.world().get<ponko::receives_decals>(e).layers == 0);
+        // Only its shadow: no camera draws it; off again shows it.
+        CHECK(!ctx.world().shadow_only(e));
+        ctx.world().set_shadow_only(e, true);
+        CHECK(ctx.world().shadow_only(e));
+        ctx.world().set_shadow_only(e, false);
+        CHECK(!ctx.world().shadow_only(e));
         ctx.clear_decal_textures();
     });
     CHECK(decals.size() == 1);
