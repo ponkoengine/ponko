@@ -1,0 +1,74 @@
+%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Street
+  m_IsActive: 1
+--- !u!4 &2
+Transform:
+  m_GameObject: {fileID: 1}
+  m_LocalPosition: {x: 100, y: 0, z: 0}
+  m_Father: {fileID: 0}
+--- !u!1001 &500
+PrefabInstance:
+  m_Modification:
+    m_TransformParent: {fileID: 2}
+    m_Modifications:
+    - target: {fileID: 11, guid: lamp0000, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 5
+      objectReference: {fileID: 0}
+    - target: {fileID: 10, guid: lamp0000, type: 3}
+      propertyPath: m_Name
+      value: Lamp (corner)
+      objectReference: {fileID: 0}
+    m_RemovedComponents:
+    - {fileID: 12, guid: lamp0000, type: 3}
+    m_RemovedGameObjects: []
+  m_SourcePrefab: {fileID: 100100000, guid: lamp0000, type: 3}
+--- !u!4 &517 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 21, guid: lamp0000, type: 3}
+  m_PrefabInstance: {fileID: 500}
+--- !u!1 &30
+GameObject:
+  m_Name: Moth
+  m_IsActive: 0
+--- !u!4 &31
+Transform:
+  m_GameObject: {fileID: 30}
+  m_LocalPosition: {x: 0, y: 0.5, z: 0}
+  m_Father: {fileID: 517}
+--- !u!1001 &600
+PrefabInstance:
+  m_Modification:
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: -800, guid: tree0000, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 7
+      objectReference: {fileID: 0}
+    - target: {fileID: -800, guid: tree0000, type: 3}
+      propertyPath: m_LocalScale.y
+      value: 3
+      objectReference: {fileID: 0}
+    - target: {fileID: 919, guid: tree0000, type: 3}
+      propertyPath: m_Name
+      value: Oak
+      objectReference: {fileID: 0}
+    - target: {fileID: -55, guid: tree0000, type: 3}
+      propertyPath: m_Materials.Array.data[0]
+      value:
+      objectReference: {fileID: 2100000, guid: bark0000, type: 2}
+  m_SourcePrefab: {fileID: 100100000, guid: tree0000, type: 3}
+--- !u!4 &700 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: -900, guid: tree0000, type: 3}
+  m_PrefabInstance: {fileID: 600}
+--- !u!1 &40
+GameObject:
+  m_Name: Nest
+  m_IsActive: 1
+--- !u!4 &41
+Transform:
+  m_GameObject: {fileID: 40}
+  m_Father: {fileID: 700}

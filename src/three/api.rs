@@ -1593,10 +1593,11 @@ impl Ctx {
             let faces = self.gfx.assets3d.probes.captures[slot as usize - 1];
             self.gfx.frame3d.probe_bakes.push((slot, faces.map(|t| t.id)));
             for (face, target) in faces.into_iter().enumerate() {
-                capture_cameras.push(super::TargetCamera::new(
-                    face_camera(self.scene3d.camera, center, face),
-                    target,
-                ));
+                // Probes keep the scene, not what passes through it.
+                capture_cameras.push(
+                    super::TargetCamera::new(face_camera(self.scene3d.camera, center, face), target)
+                        .with_particles(false),
+                );
             }
         }
         // Automatic refreshes: at most one face a frame.
@@ -1608,10 +1609,10 @@ impl Ctx {
             if let &super::probe::RefreshStep::Capture { slot, face, .. } = step {
                 let state = &self.gfx.assets3d.probes.refresh.slots[slot as usize - 1];
                 let target = self.gfx.assets3d.probes.captures[slot as usize - 1][face as usize];
-                capture_cameras.push(super::TargetCamera::new(
-                    face_camera(self.scene3d.camera, state.center, face as usize),
-                    target,
-                ));
+                capture_cameras.push(
+                    super::TargetCamera::new(face_camera(self.scene3d.camera, state.center, face as usize), target)
+                        .with_particles(false),
+                );
             }
         }
         self.gfx.frame3d.probe_refresh = steps;
@@ -1658,6 +1659,7 @@ impl Ctx {
             view.target = camera.target.id;
             view.size = size;
             view.camera = eye.position;
+            view.particles = eye.particles;
             view.view_proj = match camera.clip_plane {
                 Some(plane) => super::target::oblique(eye.view_proj(), eye.view(), plane),
                 None => eye.view_proj(),
@@ -1877,7 +1879,7 @@ impl Ctx {
             &self.scene3d.lighting,
         );
         self.gfx.frame3d.skins = skins;
-        let light = if self.scene3d.sky.atmosphere {
+        let light = if self.scene3d.sky.atmosphere && self.scene3d.sky.shader.is_none() {
             match self.gfx.frame3d.sky_light {
                 Some((lighting, sky, light)) if lighting == self.scene3d.lighting && sky == self.scene3d.sky => light,
                 _ => {
@@ -1887,15 +1889,7 @@ impl Ctx {
                 }
             }
         } else {
-            let rgb = |c| {
-                let [r, g, b, _] = super::linear(c);
-                Vec3::new(r, g, b)
-            };
-            super::SkyLight {
-                sun: rgb(self.scene3d.lighting.sun_color) * self.scene3d.lighting.sun_intensity,
-                sky: rgb(self.scene3d.sky.sky_color),
-                ground: rgb(self.scene3d.sky.ground_color),
-            }
+            super::SkyLight::authored(&self.scene3d.lighting, &self.scene3d.sky)
         };
         let collect_ms = start.elapsed().as_secs_f32() * 1000.0;
         let scene = super::Scene3D {

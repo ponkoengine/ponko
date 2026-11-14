@@ -113,6 +113,11 @@ boxes, so while a text input (or your own widget, through
 window, and reads the composition, the committed text and the keys from it.
 See [Typing with an input method](ui.md#typing-with-an-input-method-ime).
 
+**Multiplayer over WebSocket.** A browser can't open UDP sockets, so a web
+build joins with `Net::join_web` or `NetMessages::join_web`, and the host
+takes browser players with `accept_web` next to its desktop players (see
+[In the browser](networking.md#in-the-browser)).
+
 **Not available on the web:** the [control endpoint](control.md) and
 [MCP](agents.md) tools, [hot reload](data-files.md) of files, [hot
 patching](hot-patching.md) of code, and anything that writes files

@@ -198,7 +198,8 @@ impl Ui {
         let available = n.rect.size().x / self.scale - inset.x - layout.padding.right - layout.border.right;
         let rect_min = n.rect.min;
         // Scrolled as drawn: the caret stays inside the field.
-        let caret_x = self.measure.caret_x(&shown, font, size, caret);
+        let k = self.text_pixels();
+        let caret_x = self.measure.caret_x(&shown, font, size * k, caret) / k;
         let x = caret_x - (caret_x - available + 3.0).max(0.0);
         self.ime.scratch = shown;
         let scale = self.scale;

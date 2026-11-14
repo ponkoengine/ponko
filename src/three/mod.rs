@@ -71,6 +71,7 @@ pub(crate) use lights::{MAX_LIGHT_SHADOW_RESOLUTION, MIN_LIGHT_SHADOW_RESOLUTION
 pub(crate) use material_variant::{MaterialInstancing, MaterialSides, MaterialVariantKey};
 pub(crate) mod shadow_atlas;
 pub(crate) use shadow_atlas::{MAX_LIGHT_SHADOW_ATLAS, MIN_LIGHT_SHADOW_ATLAS};
+pub(crate) mod depth_sort;
 pub(crate) mod particles;
 pub use particles::{ParticleBlend3D, ParticleEmitter3D, ParticleSettings3D, ParticleShape3D};
 mod decal;
@@ -99,6 +100,7 @@ pub(crate) use crate::render::{ShaderDiagnostic, ShaderKind};
 pub(crate) use shader_status::{COMPUTE_STAND_IN, EFFECT_STAND_IN};
 mod settings;
 mod sky;
+mod sky_shader;
 mod target;
 mod terrain;
 pub use far_terrain::FarTerrain;
@@ -136,8 +138,8 @@ pub use skin::{AttachToJoint, Joint, MorphWeights, Skeleton, SkinOf};
 pub(crate) use skin::{MeshMorph, MeshSkin, SkinFrame};
 #[cfg(all(test, feature = "window"))]
 pub(crate) use skin::{SkinDraw, normalized as normalized_weights};
-pub use sky::Sky;
 pub(crate) use sky::SkyLight;
+pub use sky::{Sky, SkyShader};
 pub use target::TargetCamera;
 pub use terrain::{Heightfield, TERRAIN_LODS, TerrainMaterialDesc, TerrainTile, TerrainTileData};
 pub use texture_array::{TextureArray, TextureKind};
@@ -773,6 +775,11 @@ pub struct Camera3D {
     /// mostly when the camera moves fast. Needs compute shaders: on WebGL2
     /// nothing is culled.
     pub occlusion_culling: bool,
+    /// Draw particles, trails and lines. Default on. Turn it off for a
+    /// [`TargetCamera`](crate::render::TargetCamera) that should show the
+    /// scene without them (a security monitor, a map view): see
+    /// [`TargetCamera::with_particles`](crate::render::TargetCamera::with_particles).
+    pub particles: bool,
     /// Window size in pixels, kept up to date by the engine.
     viewport: Vec2,
 }
@@ -786,6 +793,7 @@ impl Camera3D {
             near: 0.1,
             far: 1000.0,
             occlusion_culling: false,
+            particles: true,
             viewport,
         }
     }
@@ -1109,6 +1117,10 @@ pub(crate) struct Assets3D {
     /// grew them), by mesh id.
     pub gpu_mesh_bounds: std::collections::HashMap<u32, (Vec3, f32)>,
     pub loaded_computes: std::collections::HashMap<crate::assets::Origin, Compute>,
+    /// Sky shaders made so far.
+    pub sky_shaders: u32,
+    /// Sky shaders loaded from files, by where they were found.
+    pub loaded_sky_shaders: std::collections::HashMap<crate::assets::Origin, SkyShader>,
     /// Effects loaded from files, by where they were found (file or asset source).
     pub loaded_effects: std::collections::HashMap<crate::assets::Origin, Effect>,
     /// The built-in terrain shader, once a terrain material needs it.
@@ -1410,6 +1422,9 @@ mod c_api_mirror {
             max_particles: _,
             space: _,
             seed: _,
+            // Rust-only for now (the C struct's layout is frozen): see the
+            // "Still Rust-only" table in book/src/c-cpp.md.
+            softness: _,
         } = ParticleSettings3D::default();
         let texture = TextureArray {
             id: 0,

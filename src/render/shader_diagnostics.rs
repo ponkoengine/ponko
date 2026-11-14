@@ -33,6 +33,7 @@ pub(crate) fn diagnose(
     let contract: Contract = match kind {
         ShaderKind::Material => material_contract,
         ShaderKind::Sprite => sprite_contract,
+        ShaderKind::Sky => sky_contract,
         _ => |_: &str| None,
     };
     if let Some(game) = game_range(composed)
@@ -49,6 +50,8 @@ pub(crate) fn diagnose(
                 range,
                 if kind == ShaderKind::Sprite {
                     "sprite shader contract"
+                } else if kind == ShaderKind::Sky {
+                    "sky shader contract"
                 } else {
                     "material contract"
                 }
@@ -259,6 +262,56 @@ fn sprite_contract(user: &str) -> Option<(std::ops::Range<usize>, String)> {
     }
 }
 
+/// A sky shader defines `fn sky(dir: vec3<f32>) -> vec3<f32>` and no
+/// bindings or entry points of its own.
+fn sky_contract(user: &str) -> Option<(std::ops::Range<usize>, String)> {
+    let tokens = contract_tokens(user);
+    let mut hook = None;
+    for (i, (token, span)) in tokens.iter().enumerate() {
+        if *token == "@"
+            && tokens
+                .get(i + 1)
+                .is_some_and(|t| matches!(t.0, "vertex" | "fragment" | "compute"))
+        {
+            return Some((span.clone(), "the sky hook `sky` is an ordinary function, not a shader-stage entry point; expected `fn sky(dir: vec3<f32>) -> vec3<f32>`; remove the @vertex/@fragment/@compute attribute and let the engine provide the entry points".into()));
+        }
+        if *token == "@" && tokens.get(i + 1).is_some_and(|t| matches!(t.0, "group" | "binding")) {
+            return Some((span.clone(), "sky shaders may not declare bindings: every @group/@binding is the engine's; pass values through `Sky::shader_params` (`frame.sky_params`)".into()));
+        }
+        if *token != "fn" || tokens.get(i + 1).is_none_or(|t| t.0 != "sky") {
+            continue;
+        }
+        let signature: Vec<_> = tokens
+            .iter()
+            .skip(i + 2)
+            .take_while(|t| t.0 != "{")
+            .map(|t| t.0)
+            .collect();
+        let vec3 = ["vec3", "<", "f32", ">"];
+        let tail = [")", "->", "vec3", "<", "f32", ">"];
+        let valid = signature.len() >= 8
+            && signature[0] == "("
+            && signature[2] == ":"
+            && signature[3..7] == vec3
+            && (signature[7..] == tail || (signature.get(7) == Some(&",") && signature[8..] == tail));
+        if !valid {
+            return Some((
+                span.clone(),
+                "sky hook `sky` has the wrong signature; expected `fn sky(dir: vec3<f32>) -> vec3<f32>`".into(),
+            ));
+        }
+        hook = Some(span.clone());
+    }
+    match hook {
+        Some(_) => None,
+        None => Some((
+            0..user.len().min(1),
+            "a sky shader needs a `sky` hook: `fn sky(dir: vec3<f32>) -> vec3<f32> { return vec3<f32>(0.4, 0.6, 1.0); }`"
+                .into(),
+        )),
+    }
+}
+
 /// An unsupported material/storage combination, located in the user hook.
 /// Comments do not count as reads of the engine's `items` buffer.
 #[cfg(feature = "3d")]
@@ -332,7 +385,7 @@ fn build(
 #[cfg(all(test, feature = "3d"))]
 mod tests {
     use super::*;
-    use crate::render::{compose_compute, compose_effect, compose_shader};
+    use crate::render::{compose_compute, compose_effect, compose_shader, compose_sky};
 
     #[test]
     fn parse_errors_point_at_the_games_line_and_column() {
@@ -383,6 +436,25 @@ mod tests {
         let compute = "\nfn compute(c: Cell) -> vec4<f32> {\n    return undefined_thing;\n}";
         let d = diagnose("sim.wgsl", ShaderKind::Compute, "compute", &compose_compute(compute)).unwrap_err();
         assert_eq!((d.line, d.in_engine_code), (Some(3), false), "{d}");
+    }
+
+    #[test]
+    fn a_sky_shader_needs_its_sky_hook_with_the_right_signature() {
+        let sky = |user: &str| diagnose("sky.wgsl", ShaderKind::Sky, "sky", &compose_sky(user));
+        sky("fn sky(dir: vec3<f32>) -> vec3<f32> { return frame.sky_params[0].rgb * max(dir.y, 0.0); }").unwrap();
+        sky("fn sky(d: vec3<f32>,) -> vec3<f32> { return d; }").unwrap();
+        let missing = sky("fn sky_colour(d: vec3<f32>) -> vec3<f32> { return d; }").unwrap_err();
+        assert!(missing.message.contains("needs a `sky` hook"), "{missing}");
+        let wrong = sky("fn sky(d: vec3<f32>) -> vec4<f32> { return vec4<f32>(d, 1.0); }").unwrap_err();
+        assert!(wrong.message.contains("wrong signature"), "{wrong}");
+        assert_eq!(wrong.line, Some(1), "{wrong}");
+        let bound =
+            sky("@group(0) @binding(9) var t: texture_2d<f32>;\nfn sky(d: vec3<f32>) -> vec3<f32> { return d; }")
+                .unwrap_err();
+        assert!(bound.message.contains("bindings"), "{bound}");
+        let broken = sky("fn sky(d: vec3<f32>) -> vec3<f32> {\n    return 1.0;\n}").unwrap_err();
+        assert!(!broken.in_engine_code, "{broken}");
+        assert_eq!(broken.line, Some(2), "{broken}");
     }
 
     #[test]

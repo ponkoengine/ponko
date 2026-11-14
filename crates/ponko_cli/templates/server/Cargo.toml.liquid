@@ -1,0 +1,31 @@
+[package]
+name = "{{project-name}}"
+version = "0.1.0"
+edition = "2024"
+
+# What `ponko package` puts in the server's package: the program, its assets
+# and licenses (https://ponko.dev/guide/packaging.html). The Dockerfile runs
+# it to make the container image (https://ponko.dev/guide/servers.html).
+[package.metadata.ponko]
+name = "{{project-name}}"
+assets = ["assets"]
+
+[dependencies]
+# The engine without a window, GPU, sound or gamepads: nothing a server
+# doesn't need. Keep it that way: every default feature pulls in system
+# libraries (graphics, audio) the container image doesn't have.
+ponko = { version = "0.1", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Fast debug builds: your code with light optimization, the engine and the
+# other dependencies fully optimized.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# The server in release: smaller, and a panic still unwinds so the logs show it.
+[profile.release]
+strip = "debuginfo"

@@ -66,6 +66,8 @@ pub(super) struct FrameUniform {
     pub(super) jitter: [f32; 4],
     /// Global illumination's probe grid (see `gi.wgsl`); all zero without.
     pub(super) gi: [[f32; 4]; 3],
+    /// A sky shader's values (`Sky::shader_params`); zero without one.
+    pub(super) sky_params: [[f32; 4]; 4],
 }
 
 /// Writes a frame uniform at `at` in `buffer`, whose contents there

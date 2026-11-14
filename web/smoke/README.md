@@ -56,6 +56,35 @@ or none, `assetSource` or none, `presses`, `min`, `afterReload`, `engineGpu`,
 fixture needs `?smoke_case=panic` and `?smoke_case=stall` handled if it is to
 run the self-tests; the helper does that.
 
+## Multiplayer
+
+`multiplayer.mjs` checks [browser multiplayer](../../book/src/networking.md#in-the-browser):
+the lockstep example (`examples/lockstep.rs`) with four players. It starts a
+native host (`lockstep host 127.0.0.1:0 --players 4 --web 127.0.0.1:0
+--headless 720`, a bot at its keys) and a native client joining it over UDP,
+then opens two tabs of the web build in one headless browser, which join the
+host over WebSocket (`?server=ws://...`). Each tab holds an arrow key. The
+tabs publish the example's state in `<html data-smoke>`; the native peers
+print theirs when their ticks are done. It passes when all four:
+
+- play with 4 players, each with its own number;
+- reach tick 300 and report the same fingerprint of the world there (every
+  crab's position and push, bit for bit: wasm and native agree);
+- saw every player steer before it, the same number of ticks: each tab's and
+  each bot's input reached everyone;
+- saw no desync (the session's own checksums) and didn't lose the session.
+
+```sh
+node web/smoke/multiplayer.mjs --build          # web/build.sh lockstep + cargo build --example lockstep
+node web/smoke/multiplayer.mjs --dir target/web/lockstep --native target/debug/examples/lockstep
+```
+
+Options: `--browser`, `--ticks <n>` (the native peers' run, at least 400;
+default 720), `--out <dir>` (default `target/web-smoke/multiplayer`: its
+`report.json` has every peer's state and output) and `--run-timeout <s>`
+(default 240). The page runs on WebGL2 (WebGPU hidden): the test is about
+the network. `multiplayer.test.mjs` tests its checks without a browser.
+
 ## The web gallery
 
 `gallery.mjs` checks the [web gallery](../gallery/README.md) the same way,
@@ -179,12 +208,13 @@ table (and appends it to a GitHub job summary).
 
 | Where | Browser | WebGL2 (forced) | WebGPU |
 |---|---|---|---|
-| CI (`web-smoke` job, `main` and `full-ci`, ubuntu-latest, no GPU) | Chromium (headless shell and full browser), Firefox, WebKit from Playwright | Must pass in Chromium and WebKit, for the 2D and 3D fixtures (software GL); `coin_dash` in Chromium. Firefox is tried and reported: headless Firefox has no WebGL2 on that runner, so it reads "unsupported" | Tried; passes as "unsupported", with the reason, where the browser can't show a WebGPU canvas; where it can, the game must draw through it |
+| CI (`web-smoke` job, `main` and `full-ci`, ubuntu-latest, no GPU) | Chromium (headless shell and full browser), Firefox, WebKit from Playwright | Must pass in Chromium and WebKit, for the 2D and 3D fixtures (software GL); `coin_dash` and the multiplayer check (`multiplayer.mjs`) in Chromium. Firefox is tried and reported: headless Firefox has no WebGL2 on that runner, so it reads "unsupported" | Tried; passes as "unsupported", with the reason, where the browser can't show a WebGPU canvas; where it can, the game must draw through it |
 | CI, every pull request (`web-smoke-runner`) | none | the runner's own tests only (and the gallery's) | |
 | Release workflow (`gallery` job, ubuntu-latest, no GPU) | Chromium headless shell | Every gallery page must pass (software GL) | Not tried; the demos that need WebGPU must show their message |
 | Apple Silicon Mac, the gallery (`gallery.mjs`) | Chromium 156 | Every page passes in the headless shell; the 2 demos that need WebGPU (compute passes) show their message | Every page passes in new headless mode on the Metal adapter |
 | Apple Silicon Mac, Chromium new headless mode | Chromium 156 | Passes (ANGLE on Metal) | **Passes** on the Metal adapter: the engine reports `webgpu`, the canvas draws |
 | Apple Silicon Mac, Chromium headless shell | same | Passes (ANGLE on SwiftShader) | Unsupported: a SwiftShader fallback adapter exists, but a WebGPU canvas can't be shown |
+| Apple Silicon Mac, `multiplayer.mjs` | Chromium 156 headless shell | Passes: two tabs, a native host and a native UDP client agree on the world at tick 300 | Not tried (WebGPU is hidden) |
 | Apple Silicon Mac, WebKit (Playwright build) | WebKit 27 | Passes | Passes on its own adapter |
 
 Not covered yet: Firefox on a Mac with its Playwright build here (it would

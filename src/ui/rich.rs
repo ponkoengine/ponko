@@ -118,7 +118,8 @@ pub(crate) struct Base {
     /// Fonts the markup names are used (else every run is measured in
     /// `font`, as a UI with no graphics measures).
     pub fonts: bool,
-    /// The window's scale factor: text is measured at physical pixels.
+    /// Physical pixels per unit of `size × scale` (the window's scale
+    /// factor when drawing): text is measured at physical pixels.
     pub pixels: f32,
 }
 
@@ -918,7 +919,7 @@ impl Ui {
             size: n.paint.font_size,
             scale: self.scale,
             fonts: self.external_fonts,
-            pixels: 1.0,
+            pixels: self.pixels,
         };
         let align = Align {
             align: n.paint.align,

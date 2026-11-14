@@ -173,8 +173,8 @@ autonomous completion of arbitrary games is not an established capability.
 
 ## Multiplayer, determinism and servers
 
-Ponko includes UDP lockstep, snapshots/replication and message-oriented
-network APIs, with optional Steam integration. These are building blocks;
+Ponko includes UDP lockstep, snapshots/replication, client prediction and
+message-oriented network APIs, with optional Steam integration. These are building blocks;
 a shipped game's authority, prediction, recovery and hosting behavior still
 need game-specific validation. Headless `Game::run_headless` runs fixed
 simulation ticks without rendering. Disabling default features removes the

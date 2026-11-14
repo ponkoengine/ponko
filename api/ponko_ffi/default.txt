@@ -115,6 +115,20 @@ impl core::fmt::Debug for ponko_ffi::PonkoBodyKind
 pub fn ponko_ffi::PonkoBodyKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoBodyKind
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoBodyKind
+#[repr(C)] pub enum ponko_ffi::PonkoBusEffectKind
+pub ponko_ffi::PonkoBusEffectKind::PONKO_BUS_EFFECT_COMPRESSOR = 2
+pub ponko_ffi::PonkoBusEffectKind::PONKO_BUS_EFFECT_DELAY = 3
+pub ponko_ffi::PonkoBusEffectKind::PONKO_BUS_EFFECT_FILTER = 0
+pub ponko_ffi::PonkoBusEffectKind::PONKO_BUS_EFFECT_REVERB = 1
+impl core::clone::Clone for ponko_ffi::PonkoBusEffectKind
+pub fn ponko_ffi::PonkoBusEffectKind::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoBusEffectKind
+impl core::cmp::PartialEq for ponko_ffi::PonkoBusEffectKind
+pub fn ponko_ffi::PonkoBusEffectKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoBusEffectKind
+pub fn ponko_ffi::PonkoBusEffectKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoBusEffectKind
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoBusEffectKind
 #[repr(C)] pub enum ponko_ffi::PonkoErrorKind
 pub ponko_ffi::PonkoErrorKind::PONKO_ERROR_BAD_HANDLE = 6
 pub ponko_ffi::PonkoErrorKind::PONKO_ERROR_DECODE = 3
@@ -162,6 +176,20 @@ impl core::fmt::Debug for ponko_ffi::PonkoFieldType
 pub fn ponko_ffi::PonkoFieldType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoFieldType
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoFieldType
+#[repr(C)] pub enum ponko_ffi::PonkoFilterMode
+pub ponko_ffi::PonkoFilterMode::PONKO_FILTER_BAND_PASS = 1
+pub ponko_ffi::PonkoFilterMode::PONKO_FILTER_HIGH_PASS = 2
+pub ponko_ffi::PonkoFilterMode::PONKO_FILTER_LOW_PASS = 0
+pub ponko_ffi::PonkoFilterMode::PONKO_FILTER_NOTCH = 3
+impl core::clone::Clone for ponko_ffi::PonkoFilterMode
+pub fn ponko_ffi::PonkoFilterMode::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoFilterMode
+impl core::cmp::PartialEq for ponko_ffi::PonkoFilterMode
+pub fn ponko_ffi::PonkoFilterMode::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoFilterMode
+pub fn ponko_ffi::PonkoFilterMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoFilterMode
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoFilterMode
 #[repr(C)] pub enum ponko_ffi::PonkoGamepadAxis
 pub ponko_ffi::PonkoGamepadAxis::PONKO_GAMEPAD_LEFT_STICK_X
 pub ponko_ffi::PonkoGamepadAxis::PONKO_GAMEPAD_LEFT_STICK_Y
@@ -1164,6 +1192,41 @@ impl core::fmt::Debug for ponko_ffi::PonkoAuthority
 pub fn ponko_ffi::PonkoAuthority::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoAuthority
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoAuthority
+#[repr(C)] pub struct ponko_ffi::PonkoBusEffect
+pub ponko_ffi::PonkoBusEffect::attack: f32
+pub ponko_ffi::PonkoBusEffect::cutoff_hz: f32
+pub ponko_ffi::PonkoBusEffect::damping: f32
+pub ponko_ffi::PonkoBusEffect::delay: f32
+pub ponko_ffi::PonkoBusEffect::feedback: f32
+pub ponko_ffi::PonkoBusEffect::feedback_db: f32
+pub ponko_ffi::PonkoBusEffect::kind: ponko_ffi::PonkoBusEffectKind
+pub ponko_ffi::PonkoBusEffect::makeup_db: f32
+pub ponko_ffi::PonkoBusEffect::mix: f32
+pub ponko_ffi::PonkoBusEffect::mode: ponko_ffi::PonkoFilterMode
+pub ponko_ffi::PonkoBusEffect::ratio: f32
+pub ponko_ffi::PonkoBusEffect::release: f32
+pub ponko_ffi::PonkoBusEffect::resonance: f32
+pub ponko_ffi::PonkoBusEffect::stereo_width: f32
+pub ponko_ffi::PonkoBusEffect::threshold_db: f32
+impl core::clone::Clone for ponko_ffi::PonkoBusEffect
+pub fn ponko_ffi::PonkoBusEffect::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoBusEffect
+pub fn ponko_ffi::PonkoBusEffect::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoBusEffect
+pub fn ponko_ffi::PonkoBusEffect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoBusEffect
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoBusEffect
+#[repr(C)] pub struct ponko_ffi::PonkoBusSnapshot
+pub ponko_ffi::PonkoBusSnapshot::bus: ponko_ffi::PonkoAudioBus
+pub ponko_ffi::PonkoBusSnapshot::effect_count: usize
+pub ponko_ffi::PonkoBusSnapshot::effects: *const ponko_ffi::PonkoEffectOverride
+pub ponko_ffi::PonkoBusSnapshot::has_volume: bool
+pub ponko_ffi::PonkoBusSnapshot::volume: f32
+impl core::clone::Clone for ponko_ffi::PonkoBusSnapshot
+pub fn ponko_ffi::PonkoBusSnapshot::clone(&self) -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoBusSnapshot
+pub fn ponko_ffi::PonkoBusSnapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoBusSnapshot
 #[repr(C)] pub struct ponko_ffi::PonkoCamera
 pub ponko_ffi::PonkoCamera::position: ponko_ffi::PonkoVec2
 pub ponko_ffi::PonkoCamera::zoom: f32
@@ -1431,6 +1494,20 @@ impl core::fmt::Debug for ponko_ffi::PonkoDrawParams
 pub fn ponko_ffi::PonkoDrawParams::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoDrawParams
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoDrawParams
+#[repr(C)] pub struct ponko_ffi::PonkoDucking
+pub ponko_ffi::PonkoDucking::attack: f32
+pub ponko_ffi::PonkoDucking::gain: f32
+pub ponko_ffi::PonkoDucking::key: ponko_ffi::PonkoAudioBus
+pub ponko_ffi::PonkoDucking::release: f32
+pub ponko_ffi::PonkoDucking::threshold: f32
+impl core::clone::Clone for ponko_ffi::PonkoDucking
+pub fn ponko_ffi::PonkoDucking::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoDucking
+pub fn ponko_ffi::PonkoDucking::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoDucking
+pub fn ponko_ffi::PonkoDucking::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoDucking
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoDucking
 #[repr(C)] pub struct ponko_ffi::PonkoEffect
 pub ponko_ffi::PonkoEffect::id: u32
 impl core::clone::Clone for ponko_ffi::PonkoEffect
@@ -1444,6 +1521,17 @@ impl core::fmt::Debug for ponko_ffi::PonkoEffect
 pub fn ponko_ffi::PonkoEffect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoEffect
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoEffect
+#[repr(C)] pub struct ponko_ffi::PonkoEffectOverride
+pub ponko_ffi::PonkoEffectOverride::effect: ponko_ffi::PonkoBusEffect
+pub ponko_ffi::PonkoEffectOverride::index: usize
+impl core::clone::Clone for ponko_ffi::PonkoEffectOverride
+pub fn ponko_ffi::PonkoEffectOverride::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoEffectOverride
+pub fn ponko_ffi::PonkoEffectOverride::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoEffectOverride
+pub fn ponko_ffi::PonkoEffectOverride::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoEffectOverride
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoEffectOverride
 #[repr(C)] pub struct ponko_ffi::PonkoEntity
 pub ponko_ffi::PonkoEntity::generation: u32
 pub ponko_ffi::PonkoEntity::index: u32
@@ -3542,6 +3630,7 @@ pub const ponko_ffi::PONKO_UI_SCREEN: u64
 #[no_mangle] pub c fn ponko_ffi::ponko_authority_new(u64) -> ponko_ffi::PonkoAuthority
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_blend_mode_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_builtin_access(u32, *mut *mut ponko_ffi::PonkoAccess) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub c fn ponko_ffi::ponko_bus_effect_default(ponko_ffi::PonkoBusEffectKind) -> ponko_ffi::PonkoBusEffect
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_cells_clear(*mut ponko_ffi::PonkoCellStreamer) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_cells_free(*mut ponko_ffi::PonkoCellStreamer)
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_cells_is_loaded(*mut ponko_ffi::PonkoCellStreamer, ponko_ffi::PonkoCell, *mut bool, *mut usize) -> ponko_ffi::PonkoStatus
@@ -3605,6 +3694,7 @@ pub const ponko_ffi::PONKO_UI_SCREEN: u64
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_action_released_id(*mut ponko_ffi::PonkoCtx, u32, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_actions(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoActionMap) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_add_asset_source(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, ponko_ffi::PonkoAssetReadFn, ponko_ffi::PonkoAssetContainsFn, ponko_ffi::PonkoUserFreeFn, *mut core::ffi::c_void) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_add_audio_snapshot(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *const ponko_ffi::PonkoBusSnapshot, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_add_memory_source(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoMemorySource) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ambient_light2d(*mut ponko_ffi::PonkoCtx, *mut bool, *mut ponko_ffi::PonkoColor) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_animator_add_layer(*mut ponko_ffi::PonkoCtx, u64, *const ponko_ffi::PonkoAnimationGraph, u32, *const core::ffi::primitives::c_char, *mut usize) -> ponko_ffi::PonkoStatus
@@ -3623,6 +3713,7 @@ pub const ponko_ffi::PONKO_UI_SCREEN: u64
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_animator_set_trigger(*mut ponko_ffi::PonkoCtx, u64, usize, bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_animator_state(*mut ponko_ffi::PonkoCtx, u64, *mut usize, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_animator_update(*mut ponko_ffi::PonkoCtx, u64, f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_apply_audio_mixer_json(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_apply_impulse(*mut ponko_ffi::PonkoCtx, u64, ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_apply_impulse3d(*mut ponko_ffi::PonkoCtx, u64, ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_asset_count(*mut ponko_ffi::PonkoCtx, u32, *mut ponko_ffi::PonkoAssetCount) -> ponko_ffi::PonkoStatus
@@ -3632,7 +3723,15 @@ pub const ponko_ffi::PONKO_UI_SCREEN: u64
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_asset_state(*mut ponko_ffi::PonkoCtx, u32, *const core::ffi::primitives::c_char, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_attach_to_joint(*mut ponko_ffi::PonkoCtx, u64, u64, usize, *const ponko_ffi::PonkoTransform3D) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_bus(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut ponko_ffi::PonkoAudioBus) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_bus_ducking(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoAudioBus, *mut ponko_ffi::PonkoDucking, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_bus_effects(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoAudioBus, *mut ponko_ffi::PonkoBusEffect, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_bus_gain(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoAudioBus, *mut f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_bus_muted(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoAudioBus, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_bus_parent(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoAudioBus, *mut ponko_ffi::PonkoAudioBus, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_bus_volume(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoAudioBus, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_listener(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoAudioListener3D) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_mixer_state(*mut ponko_ffi::PonkoCtx, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_snapshot_weight(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_audio_unlocked(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_bake_navmesh(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoNavSources, *const ponko_ffi::PonkoNavBakeSettings) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_bake_reflection_probe(*mut ponko_ffi::PonkoCtx, u64) -> ponko_ffi::PonkoStatus
@@ -3740,6 +3839,7 @@ pub const ponko_ffi::PONKO_UI_SCREEN: u64
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_lighting(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoLighting) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_live_counts(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoLiveCounts) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_asset_with(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, ponko_ffi::PonkoAssetDecodeFn, *mut core::ffi::c_void) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_audio_mixer(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_clip(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char, *mut *mut ponko_ffi::PonkoClip) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_collision_mesh(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, ponko_ffi::PonkoVec3, bool, *mut ponko_ffi::PonkoCollisionMesh) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_compute(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut ponko_ffi::PonkoCompute) -> ponko_ffi::PonkoStatus
@@ -3847,6 +3947,7 @@ pub const ponko_ffi::PONKO_UI_SCREEN: u64
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_residency(*mut ponko_ffi::PonkoCtx, u32, *mut ponko_ffi::PonkoResidencyStats) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_resident_mesh(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, bool, *mut ponko_ffi::PonkoMesh) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_resident_texture(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, bool, *mut ponko_ffi::PonkoTexture) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_restore_audio_mixer_state(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_resume(*mut ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_sample_clip(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoClip, u64, f32, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_save_prefab(*mut ponko_ffi::PonkoCtx, u64, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
@@ -3860,6 +3961,9 @@ pub const ponko_ffi::PONKO_UI_SCREEN: u64
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_actions(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoActionMap) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_ambient_light2d(*mut ponko_ffi::PonkoCtx, bool, ponko_ffi::PonkoColor) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_animator(*mut ponko_ffi::PonkoCtx, u64, *const ponko_ffi::PonkoAnimationGraph) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_audio_bus_ducking(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoAudioBus, *const ponko_ffi::PonkoDucking, usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_audio_bus_effects(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoAudioBus, *const ponko_ffi::PonkoBusEffect, usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_audio_bus_parent(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoAudioBus, *const ponko_ffi::PonkoAudioBus) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_audio_bus_volume(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoAudioBus, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_audio_listener(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoAudioListener3D) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_audio_source3d(*mut ponko_ffi::PonkoCtx, u64, ponko_ffi::PonkoSound, *const ponko_ffi::PonkoAudioSettings3D) -> ponko_ffi::PonkoStatus
@@ -3957,11 +4061,13 @@ pub const ponko_ffi::PONKO_UI_SCREEN: u64
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_spawn_prefab_transform2d(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, ponko_ffi::PonkoTransform2D, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_spawn_prefab_transform3d(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, ponko_ffi::PonkoTransform3D, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_sprite_material_desc(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoSpriteMaterial, *mut ponko_ffi::PonkoSpriteMaterialDesc, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_start_audio_snapshot(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_start_ragdoll(*mut ponko_ffi::PonkoCtx, u64, *const ponko_ffi::PonkoRagdollBone, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_start_scenario(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoInputScenario) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_steam_invite(*mut ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_steam_lobby(*mut ponko_ffi::PonkoCtx, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_step(*mut ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_stop_audio_snapshot(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_stop_ragdoll(*mut ponko_ffi::PonkoCtx, u64, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_stop_sound(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoPlaying) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_storage_delete(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
@@ -4101,6 +4207,7 @@ pub const ponko_ffi::PONKO_UI_SCREEN: u64
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_directional_light2d_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_directional_light2d_default() -> ponko_ffi::PonkoDirectionalLight2D
 #[no_mangle] pub c fn ponko_ffi::ponko_draw_params_default() -> ponko_ffi::PonkoDrawParams
+#[no_mangle] pub c fn ponko_ffi::ponko_ducking_default(ponko_ffi::PonkoAudioBus) -> ponko_ffi::PonkoDucking
 #[no_mangle] pub c fn ponko_ffi::ponko_entity_bits(ponko_ffi::PonkoEntity) -> u64
 #[no_mangle] pub c fn ponko_ffi::ponko_error_kind_name(u32) -> *const core::ffi::primitives::c_char
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_far_terrain_clear(*mut ponko_ffi::PonkoFarTerrain, *mut ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoStatus

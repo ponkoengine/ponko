@@ -14,11 +14,14 @@ pub enum Kind {
     ThreeD,
     /// A simulation without window, GPU or sound (`default-features = false`).
     Headless,
+    /// A dedicated game server: headless, `run_server`, a bot client and a
+    /// container image recipe.
+    Server,
 }
 
 impl Kind {
     #[cfg(test)]
-    pub const ALL: [Kind; 3] = [Kind::TwoD, Kind::ThreeD, Kind::Headless];
+    pub const ALL: [Kind; 4] = [Kind::TwoD, Kind::ThreeD, Kind::Headless, Kind::Server];
 
     /// The template's folder under `templates/`.
     #[cfg(test)]
@@ -27,6 +30,7 @@ impl Kind {
             Kind::TwoD => "2d",
             Kind::ThreeD => "3d",
             Kind::Headless => "headless",
+            Kind::Server => "server",
         }
     }
 
@@ -36,6 +40,7 @@ impl Kind {
             Kind::TwoD => TWO_D,
             Kind::ThreeD => THREE_D,
             Kind::Headless => HEADLESS,
+            Kind::Server => SERVER,
         }
     }
 }
@@ -43,7 +48,7 @@ impl Kind {
 /// Files every template has, under the same names. The manifest is
 /// `Cargo.toml.liquid` in the folder (see the module docs).
 macro_rules! template {
-    ($dir:literal, $test:literal) => {
+    ($dir:literal, $test:literal $(, $extra:literal)*) => {
         &[
             (
                 "Cargo.toml",
@@ -70,6 +75,7 @@ macro_rules! template {
                 include_str!(concat!("../templates/", $dir, "/src/main.rs")),
             ),
             ($test, include_str!(concat!("../templates/", $dir, "/", $test))),
+            $(($extra, include_str!(concat!("../templates/", $dir, "/", $extra))),)*
         ]
     };
 }
@@ -77,6 +83,13 @@ macro_rules! template {
 const TWO_D: &[(&str, &str)] = template!("2d", "tests/game.rs");
 const THREE_D: &[(&str, &str)] = template!("3d", "tests/game.rs");
 const HEADLESS: &[(&str, &str)] = template!("headless", "tests/sim.rs");
+const SERVER: &[(&str, &str)] = template!(
+    "server",
+    "tests/server.rs",
+    "examples/client.rs",
+    "Dockerfile",
+    ".dockerignore"
+);
 
 #[cfg(test)]
 mod tests {
@@ -177,5 +190,35 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The server's dependency contract: the engine without default
+    /// features and none turned back on, so no window, GPU, audio or
+    /// gamepad library reaches the container. `scripts/feature-deps.sh`
+    /// checks the dependency graph this line gives.
+    #[test]
+    fn the_server_template_builds_the_engine_without_window_gpu_or_audio() {
+        let manifest = Kind::Server.files()[0].1;
+        let line = manifest.lines().find(|l| l.starts_with("ponko = ")).unwrap();
+        assert!(line.contains("default-features = false"), "{line}");
+        assert!(!line.contains("features = ["), "no engine features: {line}");
+        for (name, text) in Kind::Server.files() {
+            assert!(
+                !text.contains(".run()") && !text.contains(".run(|"),
+                "{name} opens no window"
+            );
+        }
+    }
+
+    #[test]
+    fn the_server_image_runs_the_package_as_a_non_root_user() {
+        let dockerfile = Kind::Server.files().iter().find(|(n, _)| *n == "Dockerfile").unwrap().1;
+        assert!(
+            dockerfile.contains("ponko package --format folder"),
+            "built with ponko package"
+        );
+        assert!(dockerfile.contains("USER nonroot"));
+        assert!(dockerfile.contains("STOPSIGNAL SIGTERM"));
+        assert!(dockerfile.contains("ENTRYPOINT [\"/app/{{project-name}}\"]"));
     }
 }

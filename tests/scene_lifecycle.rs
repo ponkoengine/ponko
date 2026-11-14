@@ -536,9 +536,10 @@ mod navigation {
     use super::*;
 
     fn crowd_agent() -> NavAgent3D {
-        let mut agent = NavAgent3D::default();
-        agent.avoidance = true;
-        agent
+        NavAgent3D {
+            avoidance: true,
+            ..Default::default()
+        }
     }
 
     /// How far the walker strayed from its straight line.

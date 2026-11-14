@@ -10,6 +10,38 @@ pub(in crate::render) fn use_unbounded_sky(renderer: &mut Renderer3D, device: &w
         "textureSampleLevel(sky_texture, sky_sampler, sky_uv(dir) * vec2<f32>(0.25, 128.0 / 1536.0), 0.0).rgb",
     );
     assert_ne!(sky, SKY, "negative control must replace the production lookup");
+    use_sky_source(renderer, device, &sky, "fs_sky");
+}
+
+/// The atmosphere's background as it was before sky shaders split it into
+/// `far_dir` and `background`, word for word.
+const ORIGINAL_FS_SKY: &str = "
+@fragment
+fn fs_sky_original(in: FullScreen) -> @location(0) vec4<f32> {
+    let far = frame.inv_view_proj * vec4<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0, 1.0, 1.0);
+    let dir = normalize(far.xyz / far.w - frame.camera.xyz);
+    var light = sky_radiance(dir) + stars(dir);
+    let sun = dot(dir, frame.sun_dir.xyz);
+    let edge = 1.0 - frame.atmosphere.z;
+    let disk = smoothstep(frame.atmosphere.z - edge * 0.2, frame.atmosphere.z + edge * 0.2, sun);
+    light += frame.sun_color.rgb * disk * 40.0 * step(-0.02, dir.y);
+    return vec4<f32>(fog_along(light, frame.camera.xyz + dir * 20000.0, false), 1.0);
+}
+";
+
+/// Draws the atmosphere's background with its original code.
+pub(in crate::render) fn use_original_sky(renderer: &mut Renderer3D, device: &wgpu::Device) {
+    use_sky_source(
+        renderer,
+        device,
+        &format!("{SKY}\n{ORIGINAL_FS_SKY}"),
+        "fs_sky_original",
+    );
+}
+
+/// Replaces the background pipeline with `entry` of `sky` (after the mesh
+/// prelude).
+fn use_sky_source(renderer: &mut Renderer3D, device: &wgpu::Device, sky: &str, entry: &str) {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("unbounded sky negative control"),
         source: wgpu::ShaderSource::Wgsl(
@@ -45,7 +77,7 @@ pub(in crate::render) fn use_unbounded_sky(renderer: &mut Renderer3D, device: &w
         },
         fragment: Some(wgpu::FragmentState {
             module: &module,
-            entry_point: Some("fs_sky"),
+            entry_point: Some(entry),
             compilation_options: Default::default(),
             targets: &[Some(HDR_FORMAT.into())],
         }),

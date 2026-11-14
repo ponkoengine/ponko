@@ -158,6 +158,30 @@ fn every_old_save_in_the_fixture_folder_migrates_to_the_same_world() {
 }
 
 #[test]
+fn old_saves_in_the_binary_format_migrate_to_the_same_world() {
+    use ponko::reflect::SaveFormat;
+    let dir = std::env::temp_dir().join(format!("ponko-binary-migrations-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for file in ["v0-before-versions", "v1", "v2"] {
+        let bytes = std::fs::read(format!("{OLD_SAVES}/{file}.json")).unwrap();
+        let save = SaveFormat::decode(&bytes).unwrap();
+        std::fs::write(dir.join(format!("{file}.save")), SaveFormat::Binary.encode(&save)).unwrap();
+    }
+    let folder = dir.clone();
+    headless(move |ctx| {
+        for file in ["v0-before-versions", "v1", "v2"] {
+            let bytes = std::fs::read(folder.join(format!("{file}.save"))).unwrap();
+            let save = SaveFormat::decode(&bytes).unwrap();
+            ctx.world.load(&save).unwrap_or_else(|e| panic!("{file}: {e}"));
+            assert_current_world(ctx);
+        }
+        assert_eq!(ctx.check_old_saves(&folder).unwrap(), 3);
+    });
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn saves_record_the_game_version_and_load_unchanged_at_that_version() {
     headless(|ctx| {
         let e = ctx.world.spawn((Health {

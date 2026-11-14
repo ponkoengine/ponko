@@ -905,11 +905,12 @@ pub fn start_run(ctx: &mut Ctx, run: Run, at: Vec3) {
         ..Default::default()
     };
     for route in CRAWLER_ROUTES {
-        // NavAgent has private fields: set the public ones on a default.
-        let mut agent = NavAgent::default();
-        agent.speed = PATROL_SPEED;
-        agent.radius = 0.4;
-        agent.destination = Some(route[1]);
+        let agent = NavAgent {
+            speed: PATROL_SPEED,
+            radius: 0.4,
+            destination: Some(route[1]),
+            ..Default::default()
+        };
         ctx.world.spawn((
             Transform::at(route[0]),
             agent,

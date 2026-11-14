@@ -1,0 +1,14 @@
+{
+  "fixture": "world_v1.save",
+  "source": "world_v1.json",
+  "format": "ponko-world",
+  "version": 1,
+  "binary_layout": 1,
+  "engine_version": "ponko 0.1.0",
+  "engine_revision": "376ea2460d849886350a74fc2cb9cf9570f62e85",
+  "toolchain": "rustc 1.99.1 (58cf8f9c3 2026-10-13), aarch64-apple-darwin",
+  "features": "--no-default-features",
+  "generated_by": "PONKO_SAVE_FIXTURE_OUT=<path> cargo test -p ponko --no-default-features --test save_compat -- --ignored --exact write_v1_binary_fixture",
+  "date": "2026-11-14",
+  "baseline": "First binary save fixture: world_v1.json in the first binary layout (MessagePack in an LZ4 frame)."
+}

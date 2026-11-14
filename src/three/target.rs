@@ -13,7 +13,10 @@ use crate::texture::Texture;
 ///
 /// The target holds the lit scene with its sky and fog, as linear HDR
 /// light, before screen effects, bloom and tone mapping. It uses the main
-/// view's shadows. Transparent models aren't drawn into it.
+/// view's shadows. Transparent models aren't drawn into it; particles,
+/// trails and lines are (sorted and facing this camera), unless its
+/// camera's [`particles`](crate::d3::Camera::particles) is off, but
+/// without [`softness`](crate::d3::ParticleSettings::softness).
 ///
 /// Target cameras have no temporal history: no jitter, TAA, temporal AO or
 /// SSR is applied. Each draw clears and replaces the target's color/depth.
@@ -63,6 +66,25 @@ impl TargetCamera {
             target,
             clip_plane: None,
         }
+    }
+
+    /// The same camera, drawing particles, trails and lines or not (its
+    /// camera's [`particles`](crate::d3::Camera::particles)). A camera
+    /// copied from the main one draws them as the main one does.
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// let target = ctx.gfx.create_render_target(256, 256);
+    /// // A security camera that shows the room but not the smoke.
+    /// let camera = ponko::render::TargetCamera::new(ctx.scene3d.camera, target).with_particles(false);
+    /// assert!(!camera.camera.particles);
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_particles(mut self, particles: bool) -> Self {
+        self.camera.particles = particles;
+        self
     }
 
     /// The camera seeing `camera`'s view mirrored in the level plane at

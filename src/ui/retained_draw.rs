@@ -43,6 +43,7 @@ impl Ctx {
         input.preedit = preedit;
         input.preedit_cursor = self.input.preedit_cursor();
         input.composing = self.input.composing();
+        self.ui.pixels = self.gfx.scale_factor;
         self.ui.frame_with_text(self.window_size(), &input, &mut self.gfx.text);
         self.ui_state.retained_input_text = input.text;
         self.ui_state.retained_preedit = input.preedit;
@@ -204,6 +205,7 @@ impl Ctx {
     /// Draws `ui`, laid out in `viewport`, into `ui_list`.
     pub(crate) fn draw_ui_tree(&mut self, ui: &mut crate::ui::Ui, viewport: Vec2) {
         // Mutations made by game systems (including screen pushes) show now.
+        ui.pixels = self.gfx.scale_factor;
         ui.layout_with_text(viewport, &mut self.gfx.text);
         let scale = ui.scale();
         for (order, &id) in ui.visible.iter().enumerate() {
@@ -419,7 +421,15 @@ impl Ctx {
             let mut rest = paragraph;
             loop {
                 let end = if wrap {
-                    wrap_end(&mut self.gfx.text, rest, params.font, params.size, width)
+                    // Measured at the drawn size, in physical pixels.
+                    let pixels = self.gfx.scale_factor;
+                    wrap_end(
+                        &mut self.gfx.text,
+                        rest,
+                        params.font,
+                        params.size * pixels,
+                        width * pixels,
+                    )
                 } else {
                     rest.len()
                 };
@@ -475,13 +485,14 @@ impl Ctx {
             let color = span.style.color.unwrap_or(paint.color);
             let at = rect.min + item.at;
             if let Some(image) = span.image {
-                // Images keep their own colors.
+                // Images keep their own colors, and their edges go on
+                // physical pixels like the text around them.
                 let size = Vec2::new(item.width, item.image_height);
                 self.retained_image(
                     image,
                     Rect {
-                        min: at,
-                        max: at + size,
+                        min: self.gfx.snap_to_pixels(at),
+                        max: self.gfx.snap_to_pixels(at + size),
                     },
                     0.0,
                     0.0,
@@ -491,6 +502,10 @@ impl Ctx {
             } else {
                 let params = TextParams { font, size, color, z };
                 let run = &rich.text[item.start as usize..item.end as usize];
+                let at = Vec2::new(
+                    at.x,
+                    self.rich_run_top(rect.min.y + item.baseline, item.baseline - item.at.y),
+                );
                 self.gfx.draw_text_ex(run, at, params);
                 if span.style.bold {
                     self.gfx
@@ -504,6 +519,17 @@ impl Ctx {
             }
         }
         self.ui_state.rich_layout = out;
+    }
+    /// The top, in window pixels, to draw a rich text run from so that its
+    /// glyphs sit on `baseline` rounded to a physical pixel. `ascent` is
+    /// the run's, in window pixels. Glyphs are placed `ascent` rounded to
+    /// whole physical pixels below their run's top, which
+    /// [`draw_text_ex`](crate::gfx::Graphics::draw_text_ex) snaps; snapping
+    /// each run's top on its own would round runs of different fonts and
+    /// sizes onto baselines a pixel apart.
+    fn rich_run_top(&self, baseline: f32, ascent: f32) -> f32 {
+        let pixels = self.gfx.scale_factor;
+        ((baseline * pixels).round() - (ascent * pixels).round()) / pixels
     }
     fn retained_image(
         &mut self,

@@ -981,6 +981,25 @@ impl Renderer {
         self.three().replace_compute(&device, id, name, source)
     }
 
+    /// Compiles a sky shader; its id, or the compiler's message.
+    #[cfg(feature = "3d")]
+    pub fn create_sky_shader(&mut self, name: &str, source: &str) -> Result<u32, Box<crate::render::ShaderDiagnostic>> {
+        let device = self.device.clone();
+        self.three().create_sky_shader(&device, name, source)
+    }
+
+    /// Recompiles sky shader `id` (hot reload).
+    #[cfg(feature = "3d")]
+    pub fn replace_sky_shader(
+        &mut self,
+        id: u32,
+        name: &str,
+        source: &str,
+    ) -> Result<(), Box<crate::render::ShaderDiagnostic>> {
+        let device = self.device.clone();
+        self.three().replace_sky_shader(&device, id, name, source)
+    }
+
     /// Compiles a screen effect; its id, or the compiler's message.
     #[cfg(feature = "3d")]
     pub fn create_effect(&mut self, name: &str, source: &str) -> Result<u32, Box<crate::render::ShaderDiagnostic>> {

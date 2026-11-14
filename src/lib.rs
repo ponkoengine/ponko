@@ -189,6 +189,13 @@ mod logs;
 #[cfg(feature = "navmesh")]
 mod nav3d;
 pub mod net;
+/// Entry points for the fuzz targets in `fuzz/` that reach internals (built
+/// with `--cfg fuzzing`, as `cargo fuzz` does). Not part of the API.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub mod __fuzz {
+    pub use crate::net::fuzz::{lockstep_packets, message_packets};
+}
 pub mod particles;
 mod particles2d;
 
@@ -211,6 +218,7 @@ mod scene;
 pub mod schedule;
 mod schema;
 mod scope;
+pub mod server;
 pub mod sheet;
 pub mod spatial;
 mod sprite_material;

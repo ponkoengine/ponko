@@ -89,3 +89,17 @@ fn a_file_that_is_not_a_pack_is_a_decode_error_naming_it() {
     assert_eq!(err.kind(), ErrorKind::Io);
     assert!(err.message().contains("no/such/file.pack"), "{err}");
 }
+
+#[test]
+fn a_pack_whose_header_sizes_overflow_is_a_decode_error() {
+    for (index_len, data_len) in [(u64::MAX, 0), (u64::MAX - 31, 0), (1, u64::MAX - 32)] {
+        let mut bytes = b"PONKOPAK".to_vec();
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(0u32.to_le_bytes());
+        bytes.extend(index_len.to_le_bytes());
+        bytes.extend(data_len.to_le_bytes());
+        let err = PackSource::from_bytes("forged", bytes).err().unwrap();
+        assert_eq!(err.kind(), ErrorKind::Decode);
+        assert!(err.message().contains("past 2^64 bytes"), "{err}");
+    }
+}

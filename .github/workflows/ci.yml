@@ -1099,6 +1099,8 @@ jobs:
           web/build.sh --features text-shaping coin_dash
           web/build.sh --features physics ember_hop
           web/build.sh lights2d
+          web/build.sh lockstep
+          cargo build --example lockstep
       # Each browser step has its own deadline (a few minutes per run; a run
       # takes seconds), on top of the runner's own (a deadline on every
       # browser call and --run-timeout per run, failing as "browser-hang"
@@ -1127,6 +1129,14 @@ jobs:
         timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: node web/smoke/smoke.mjs --fixture coin_dash --browser chromium --backend webgl2
+      # Browser multiplayer (web/smoke/multiplayer.mjs): the lockstep example
+      # with two tabs joining a native host over WebSocket and a native client
+      # over UDP; all four must reach the same world and see every player's
+      # input, without a desync.
+      - name: Chromium, multiplayer (two tabs and two native players, lockstep)
+        timeout-minutes: 8
+        if: ${{ !cancelled() }}
+        run: node web/smoke/multiplayer.mjs --browser chromium
       # WebGPU: the headless shell, then the full browser's new headless mode
       # with software Vulkan (a WebGPU canvas is presented through its
       # compositor). Each passes only if it draws or is reported unsupported.
@@ -1430,15 +1440,87 @@ jobs:
           cargo test -p ponko_cli
           cargo test -p ponko_cli --test new -- --ignored
           cargo test -p ponko_cli --test package -- --ignored
+          cargo test -p ponko_cli --test server -- --ignored
       - name: Each template's own tests
         if: steps.changed.outputs.run == 'true'
         run: |
           cargo build -p ponko_cli
           cd "$RUNNER_TEMP"
-          for kind in 2d 3d headless; do
+          for kind in 2d 3d headless server; do
             "$CARGO_TARGET_DIR/debug/ponko" new "game-$kind" "--$kind" --path "$GITHUB_WORKSPACE"
             (cd "game-$kind" && cargo test)
           done
+
+  # The dedicated-server template's container (crates/ponko_cli/templates/
+  # server): its Dockerfile linted with hadolint, the server packaged with
+  # `ponko package` against this engine, the image built from that package
+  # (`PACKAGE_FROM=prebuilt`), started, joined by the example client, and
+  # stopped with `docker stop`, which must end in a clean exit after the
+  # goodbyes. Prints the image's size and the container's memory. A pull
+  # request runs it only when it changes the CLI or the server loop; the
+  # full tier always does.
+  server-container:
+    name: Server container
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Did the CLI or the server loop change?
+        id: changed
+        run: |
+          if [ "$FULL" = "true" ] || git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -qE '^(crates/ponko_cli/|src/server\.rs|src/game/server\.rs)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Neither the CLI nor the server loop changed: skipping the container."
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.changed.outputs.run == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.changed.outputs.run == 'true'
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: server-container
+      - name: Generate the server project and lint its Dockerfile
+        if: steps.changed.outputs.run == 'true'
+        run: |
+          cargo build -p ponko_cli --no-default-features
+          echo "PONKO=$GITHUB_WORKSPACE/target/debug/ponko" >> "$GITHUB_ENV"
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/target/debug/ponko" new game-server --server --path "$GITHUB_WORKSPACE"
+          docker run --rm -i hadolint/hadolint:v2.12.0 < game-server/Dockerfile
+      - name: Package the server and build its image
+        if: steps.changed.outputs.run == 'true'
+        working-directory: ${{ runner.temp }}/game-server
+        run: |
+          "$PONKO" package --format folder --out target/server-package
+          mv target/server-package/*/ package
+          cargo build --example client
+          docker build --build-arg PACKAGE_FROM=prebuilt -t game-server .
+          docker image ls game-server --format 'image size: {{.Size}}'
+      - name: Run it, join it with the example client, stop it
+        if: steps.changed.outputs.run == 'true'
+        working-directory: ${{ runner.temp }}/game-server
+        run: |
+          docker run -d --name game-server -p 7777:7777/udp game-server
+          for _ in $(seq 50); do
+            docker logs game-server 2>&1 | grep -q '"event":"server_start"' && break
+            sleep 0.2
+          done
+          TICKS=90 target/debug/examples/client 127.0.0.1:7777
+          docker stats --no-stream --format 'container memory: {{.MemUsage}}' game-server
+          docker stop game-server
+          docker logs game-server
+          docker logs game-server | grep -q '"event":"player_joined"'
+          docker logs game-server | grep '"event":"server_stopped"' | grep -q '"reason":"terminate"'
+          code=$(docker inspect -f '{{.State.ExitCode}}' game-server)
+          echo "exit code: $code"
+          test "$code" = 0
 
   # Single check for branch protection: passes only if
   # every job above passed. Requiring one job keeps the rule valid when jobs
@@ -1448,7 +1530,7 @@ jobs:
   ci-passed:
     name: CI passed
     if: always()
-    needs: [leaks, fmt, reference-images, clippy, feature-deps, msrv, test, windows-unit-build, windows-unit, windows-gpu-tiers, windows-examples, test-features, docs, semver, api-snapshots, book, miri, native, web, web-smoke-runner, web-smoke, package-smoke, validation-bundles, templates]
+    needs: [leaks, fmt, reference-images, clippy, feature-deps, msrv, test, windows-unit-build, windows-unit, windows-gpu-tiers, windows-examples, test-features, docs, semver, api-snapshots, book, miri, native, web, web-smoke-runner, web-smoke, package-smoke, validation-bundles, templates, server-container]
     runs-on: ubuntu-latest
     steps:
       - name: Check every job

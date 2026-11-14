@@ -6,6 +6,8 @@
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    // `cargo fuzz` builds with `--cfg fuzzing` (the `fuzz/` targets).
+    println!("cargo::rustc-check-cfg=cfg(fuzzing)");
     if std::env::var_os("CARGO_FEATURE_STEAM").is_none() {
         return;
     }

@@ -8,18 +8,21 @@ tick costs the same bandwidth either way: about 50 bytes per player.
 
 Ponko's simulation is built for it already: a fixed clock, seeded
 randomness per (seed, tick, system, entity), and deterministic queries and
-physics. Lockstep adds the session: 2–8 players, plain UDP, no server to
-run.
+physics. Lockstep adds the session: 2–8 players, plain UDP (WebSocket
+for [browser players](#in-the-browser)), no server to run.
 
 ## Host and join
 
-One player hosts, the others join by address:
+One player hosts, the others join by address (`join_web` and `--web` are
+for [browser players](#in-the-browser)):
 
 <div class="lang-pair">
 <div>
 
 ```rust
 {{#include ../../examples/lockstep.rs:session}}
+
+{{#include ../../examples/lockstep.rs:play}}
 ```
 
 </div>
@@ -163,6 +166,61 @@ Try it with two Steam accounts on two machines:
 to invite, and `cargo run --example lockstep --features steam -- steam-join`
 on the other, then accept the invite.
 
+## In the browser
+
+A web build can't open UDP sockets, so browser players connect over
+**WebSocket**, which every browser has. The host keeps its UDP socket for
+desktop players and also listens for browsers with `accept_web`; a web
+build joins with `Net::join_web` and the host's URL. Desktop and browser
+players are in one session and one player count, and the lockstep itself
+is the same, so nothing else in the game changes (port 0 picks a free port;
+`web_addr()` says which):
+
+```rust
+# use ponko::net::Net;
+// The host (a desktop game, or a headless server): UDP on 7777 for
+// desktop players, WebSocket on TCP port 7778 for browser players.
+let host = Net::host("0.0.0.0:7777", 4)?.accept_web("0.0.0.0:7778")?;
+// The web build: the page's host, port 7778.
+let browser = Net::join_web("ws://127.0.0.1:7778")?;
+# let _ = (host, browser);
+# Ok::<(), std::io::Error>(())
+```
+
+The lockstep example plays this way:
+`cargo run --example lockstep -- host 7777 --players 3 --web 7778`, then
+`web/build.sh lockstep`, serve `target/web/lockstep` and open it in two
+browser windows (its page joins `?server=ws://...`, or port 7778 of the
+page's own host). A desktop game can join over WebSocket too
+(`join-web ws://127.0.0.1:7778`), for networks that only let web traffic
+through.
+
+Things to know:
+
+- **Why WebSocket.** It works in every browser and needs nothing on the
+  server but a TCP port. It is reliable and ordered, which costs nothing
+  here: a lockstep tick waits for every player's input anyway, so an
+  unreliable channel would make no tick run sooner. The packets are the
+  same as over UDP, one WebSocket message each. An unreliable browser
+  transport (WebTransport, WebRTC data channels) would help
+  [messages](#application-messages-rust) more than lockstep; it isn't
+  there yet.
+- **`https://` pages need `wss://`.** The host speaks plain `ws://`. A page
+  served over HTTPS may only open `wss://` URLs, so put a TLS proxy (Caddy,
+  nginx) in front of the WebSocket port and join `wss://your.host/...`.
+  Connections are unauthenticated, like UDP sessions.
+- **Rust only, for now.** C and C++ hosts take UDP players only (C and C++
+  games don't build for the web yet either).
+- **Hidden tabs stop.** A browser gives a tab that isn't shown (behind
+  another tab, or minimized) no animation frames, so its player stops
+  sending inputs and the session waits for it. Players in one browser
+  should use separate windows.
+
+`web/smoke/multiplayer.mjs` in the engine's repository checks it in a
+headless browser: two tabs of the web build, a native host and a native
+client over UDP play the lockstep example together, and all four must end
+up with the same world.
+
 ## Testing
 
 `Net::loopback(players)` connects sessions in memory, so a test can run a
@@ -243,6 +301,11 @@ an unreliable fragmented message is lost if any fragment is missing.
 
 Run the self-contained UDP example with
 `cargo run --example net_messages --no-default-features`.
+Browser clients join over WebSocket, as in [lockstep](#in-the-browser): the
+host adds `.accept_web("0.0.0.0:7778")?` to `NetMessages::host`, and the web
+build joins with `NetMessages::join_web("ws://host:7778")`. A WebSocket
+delivers everything in order, so `Lane::Unreliable` messages arrive too,
+only no sooner than reliable ones.
 If the engine's poll fails (a socket error, or events left unread),
 `ctx.net.message_error()` says why until a poll works again. An endpoint
 outside a game (a lobby server, a test) is polled by hand with `poll()`
@@ -557,6 +620,110 @@ entity that has just entered always has `send` set.
 - Peers that have no viewer in an `update` are forgotten, with their entities
   reported as left; call `remove_peer` when one disconnects.
 
+### Your own player at once: client prediction
+
+With the server in charge of the world, a client that sends its input and
+waits for the result feels a round trip late (150 ms is enough to feel
+sluggish). Instead the client **predicts**: it runs its own input through
+the same step the server runs, at once, and keeps the inputs the server
+hasn't confirmed. The server answers with its state and the number of the
+last input in it; the client compares that with what it predicted for that
+input, and only if they differ, starts again from the server's state and
+**replays** the newer inputs. A correction moves the player, so the drawn
+position **slides** there instead of jumping. As with the other helpers,
+the packets are yours.
+
+The step both sides run, for one input:
+
+```rust
+{{#include ../../examples/net_prediction.rs:step}}
+```
+
+A `Prediction` on the client, an `InputQueue` per client on the server, and
+a `Smoothing` for what the client draws:
+
+```rust
+{{#include ../../examples/net_prediction.rs:setup}}
+```
+
+Every fixed tick the client predicts and sends the inputs the server hasn't
+confirmed. Sending all of them (or the newest 16) every tick means a lost
+packet costs nothing: the next one repeats it.
+
+```rust
+{{#include ../../examples/net_prediction.rs:client_tick}}
+```
+
+The server pushes every input it receives (repeats and late ones are
+ignored), takes them in order with `pop`, and sends its state with `ack`:
+
+```rust
+{{#include ../../examples/net_prediction.rs:server_tick}}
+```
+
+The client reconciles each state and draws through the smoothing:
+
+```rust
+{{#include ../../examples/net_prediction.rs:reconcile}}
+```
+
+`examples/net_prediction.rs` runs this over an in-memory link with 150 ms of
+round trip and every 10th packet lost, with a wind on the server that the
+client doesn't know about: the player moves on the tick of the input, no
+input is lost, every correction is under 0.07 units and slides in no faster
+than the wind itself (0.034 units a frame), and the client ends exactly
+where the server is.
+
+- **Inputs:** `predict(input, step)` numbers each input with a wrapping
+  16-bit sequence and keeps up to 256 unconfirmed ones (`with_capacity`
+  for more); `unacked()` lists them. `previous()` and `state()` are the
+  last two ticks, to draw between them.
+- **Reconciling:** `reconcile(ack, state, step)` returns `Confirmed` when
+  the server agrees (compared with `==`: give your state a `PartialEq`
+  with a tolerance if the two sides can differ by rounding), `Corrected`
+  with the state before the correction and the number of inputs replayed,
+  or `Ignored` for a state older than one already reconciled, a duplicate,
+  or an input never predicted. `reset` sets the state outright (respawns).
+- **The server:** `InputQueue` keeps a client's inputs in order and gives
+  each out once. With **one step per input** (`while let Some(..) = pop()`)
+  the server's state after input *n* is exactly the client's prediction
+  for *n*; a late packet makes the player catch up in one tick (limit the
+  inputs per tick if a client could send too many). When the step is the
+  engine's (a body or a character stepped with everything else), take
+  **one input per tick** and repeat `last()` while none arrives; those
+  ticks belong to no input, so the client is corrected after them.
+  Inputs that never arrived in any packet are skipped (`stats().skipped`).
+- **Smoothing:** `correct(before, after)` takes the jump; `apply(value)`
+  is where to draw; `update(dt)` lets it fade. The offset halves every
+  `half_life` (0.1 s); jumps bigger than `snap` show at once. It works for
+  `f32`, `Vec2`, `Vec3`, `Quat` and `Pose` (position and rotation), and any
+  type you implement `Smooth` for. The simulation always uses the corrected
+  state: only the picture lags.
+
+**What can be predicted.** Whatever your step function computes from the
+state and the input: movement you integrate yourself (2D or 3D), a
+kinematic body you move by its transform, and the walking character, whose
+step is `ctx.physics3d.move_character` (see
+[3D physics](physics3d.md#a-walking-character)): the same move the physics
+step makes, bit for bit, so the server can step a `d3::Character` normally
+and the client predicts and replays it with that call. Limits:
+
+- Replay sees the world **as it is now**: other bodies are not moved back
+  to where they were at the replayed tick. Static levels replay exactly;
+  near moving things (other players, doors, platforms), expect small
+  corrections, which the smoothing hides.
+- **Dynamic bodies** (2D or 3D) are not rewound: the physics world can't
+  step one body back in time. Predict a body the player drives with a step
+  of your own (or as a kinematic body), let the server own the bodies it
+  pushes, and show those with snapshot interpolation. Pushes from a
+  predicted character happen on the server's step.
+- Exact agreement needs the **same step on both sides**: the same code,
+  numbers and fixed tick. Different builds or platforms may round
+  differently (feature `physics-determinism` makes the physics agree);
+  then corrections are tiny and smoothed rather than absent.
+- Prediction is Rust-only for now: the types are generic over the game's
+  own state and input, which C and C++ can't name.
+
 ### Testing it
 
 Everything above is pure data, so tests need no sockets: feed `push` with
@@ -565,4 +732,6 @@ run two `NetMessages::loopback_lossy` endpoints with extra delay and jitter,
 exchanging snapshots built with these helpers
 (`tests/net_replication.rs`), and every helper has tests for jitter,
 reordering, packet loss, the extrapolation cap, handoff races, sequence
-wrap-around and interest hysteresis.
+wrap-around and interest hysteresis. `tests/net_prediction.rs` plays a
+client and a server over a lossy loopback with 150 ms of round trip, and
+replays the character controller against the physics step.

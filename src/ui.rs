@@ -139,6 +139,8 @@ mod build;
 mod immediate;
 #[cfg(feature = "3d")]
 pub(crate) mod panel3d;
+#[cfg(test)]
+mod pixel_snap_tests;
 mod retained;
 mod retained_draw;
 mod retained_ime;

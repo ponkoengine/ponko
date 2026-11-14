@@ -521,12 +521,13 @@ impl Ctx {
 
     /// Engine side, start of a frame, after `begin_frame` (and, windowed, the
     /// gamepad poll; headless runs have none) and before any system:
-    /// reloads changed asset files and runs the streaming and residency
-    /// step. Windowed and headless loops both run it.
+    /// reloads changed asset files, runs the streaming and residency
+    /// step and moves mixer snapshot fades along. Windowed and headless loops both run it.
     pub(crate) fn frame_prepare_services(&mut self) {
         self.follow_window_size();
         self.reload_changed_assets();
         self.pump_streaming();
+        self.audio.advance_mixer(self.time.frame_dt());
     }
 
     /// The 3D frame takes the sample count in `scene3d.post.msaa`, when the
@@ -869,6 +870,12 @@ impl Ctx {
                     self.assets.report_reload(name, applied);
                     continue;
                 }
+                Asset::Mixer => {
+                    let applied = assets::read_to_string(&file)
+                        .and_then(|text| self.audio.apply_mixer_json(&text).map_err(|e| e.message().to_string()));
+                    self.assets.report_reload(name, applied);
+                    continue;
+                }
                 Asset::Level => {
                     let applied = self.reload_level(&name);
                     self.assets.report_reload(name, applied);
@@ -892,6 +899,13 @@ impl Ctx {
                 Asset::Compute(id) => {
                     let applied =
                         assets::read_to_string(&file).and_then(|text| self.gfx.reload_compute(id, &name, &text));
+                    self.assets.report_reload(name, applied);
+                    continue;
+                }
+                #[cfg(feature = "3d")]
+                Asset::SkyShader(id) => {
+                    let applied =
+                        assets::read_to_string(&file).and_then(|text| self.gfx.reload_sky_shader(id, &name, &text));
                     self.assets.report_reload(name, applied);
                     continue;
                 }

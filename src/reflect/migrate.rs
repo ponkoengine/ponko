@@ -667,7 +667,8 @@ fn entity_op(op: &Op, c: &mut Map<String, Value>) -> Result<(), String> {
 }
 
 impl crate::ctx::Ctx {
-    /// Loads every world save (`*.json`) in `folder` the way
+    /// Loads every world save (`*.json`, and binary `*.save`
+    /// ([`SaveFormat`](super::SaveFormat))) in `folder` the way
     /// [`load_world`](Self::load_world) and [`load_scene`](Self::load_scene)
     /// do, migrations included, then saves the world and loads that again:
     /// the test that a game's [`SaveMigrations`] still bring its old saves up
@@ -696,7 +697,7 @@ impl crate::ctx::Ctx {
     /// # Errors
     ///
     /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the
-    /// folder has no `.json` files (or can't be read), otherwise the first
+    /// folder has no `.json` or `.save` files (or can't be read), otherwise the first
     /// failure's kind, with every file that failed and why in the message.
     pub fn check_old_saves(&mut self, folder: impl AsRef<std::path::Path>) -> Result<usize, crate::error::Error> {
         use crate::error::{Error, ErrorKind};
@@ -706,11 +707,18 @@ impl crate::ctx::Ctx {
             .map_err(|e| Error::new(ErrorKind::NotFound, format!("can't read {shown}: {e}")).with_path(&shown))?
             .filter_map(Result::ok)
             .map(|entry| entry.path())
-            .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "json"))
+            .filter(|p| {
+                p.is_file()
+                    && p.extension().is_some_and(|x| {
+                        x == super::SaveFormat::Json.extension() || x == super::SaveFormat::Binary.extension()
+                    })
+            })
             .collect();
         files.sort();
         if files.is_empty() {
-            return Err(Error::new(ErrorKind::NotFound, format!("no .json saves in {shown}")).with_path(&shown));
+            return Err(
+                Error::new(ErrorKind::NotFound, format!("no .json or .save saves in {shown}")).with_path(&shown),
+            );
         }
         let mut failures = Vec::new();
         let mut first_kind = None;
@@ -720,7 +728,7 @@ impl crate::ctx::Ctx {
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
             let checked = std::fs::read(path)
                 .map_err(|e| Error::new(ErrorKind::Io, e.to_string()))
-                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).map_err(Error::from))
+                .and_then(|bytes| super::SaveFormat::decode(&bytes))
                 .and_then(|save| self.replace_world_now(&save))
                 .and_then(|()| {
                     let again = super::WorldReflect::save(&self.world);

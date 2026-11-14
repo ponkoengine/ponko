@@ -149,10 +149,10 @@ fn draw(outline: Color) -> Option<Vec<[f32; 4]>> {
         depth.create_view(&Default::default()),
     );
 
-    let mut particles = Particles::new(&device, &layout, 1);
+    let mut particles = Particles::for_test(&device, &layout, 1);
     // Two units across, looking down -Z at the text on z = 0.
     let view_proj = glam::camera::rh::proj::directx::orthographic(-1.0, 1.0, -1.0, 1.0, -1.0, 1.0);
-    particles.prepare(&device, &queue, &frame, view_proj);
+    particles.prepare(&device, &queue, &frame, view_proj, glam::Vec3::ZERO);
     assert!(particles.has_draws());
     let mut encoder = device.create_command_encoder(&Default::default());
     {

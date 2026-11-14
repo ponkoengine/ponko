@@ -1513,6 +1513,7 @@ pub(crate) fn shader_status_json(gfx: &crate::gfx::Graphics) -> Value {
                 ShaderKind::Material => "material",
                 ShaderKind::Effect => "effect",
                 ShaderKind::Sprite => "sprite",
+                ShaderKind::Sky => "sky",
                 _ => "compute",
             };
             let outcome = match s.outcome {

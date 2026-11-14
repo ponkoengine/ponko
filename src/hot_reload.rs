@@ -53,8 +53,13 @@ pub(crate) enum Asset {
     /// A 3D compute pass id.
     #[cfg(feature = "3d")]
     Compute(u32),
+    /// A 3D sky shader id.
+    #[cfg(feature = "3d")]
+    SkyShader(u32),
     /// A file of a level (`Ctx::spawn_level`); the watched name is the level's path.
     Level,
+    /// A mixer file (`Audio::load_mixer`), applied again whole.
+    Mixer,
 }
 
 struct Watched {

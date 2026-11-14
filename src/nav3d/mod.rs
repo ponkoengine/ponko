@@ -677,10 +677,18 @@ impl NavObstacle3D {
 /// Enable `avoidance` to use DetourCrowd instead of the original path follower.
 /// The original follower retains path storage and allocates only on replans.
 /// Crowd mode retains slots/corridors but the backend allocates query scratch.
+///
+/// Build one with struct-update syntax, like any other component. A literal
+/// always ends with `..Default::default()` (the [`state`](Self::state) field
+/// has no public constructor), so new settings can arrive without breaking it.
 /// ```
 /// use ponko::prelude::*;
-/// let mut agent = ponko::d3::NavAgent::default();
-/// agent.destination = Some(Vec3::X * 4.0);
+/// let agent = ponko::d3::NavAgent {
+///     speed: 4.0,
+///     destination: Some(Vec3::X * 4.0),
+///     ..Default::default()
+/// };
+/// assert_eq!(agent.radius, 0.3);
 /// ```
 #[derive(Clone, Debug, Component)]
 pub struct NavAgent3D {
@@ -728,14 +736,17 @@ pub struct NavAgent3D {
     /// assert_eq!(ponko::d3::NavAgent::default().neighbour_distance, 3.6);
     /// ```
     pub neighbour_distance: f32,
-    crowd_id: Option<crowd::AgentId>,
-    crowd_revision: u64,
-    path: Vec<Vec3>,
-    corner: usize,
-    revision: u64,
-    planned_destination: Option<Vec3>,
-    expected_position: Vec3,
-    velocity: f32,
+    /// Progress kept by [`step_navmesh3d`]: the current path, the crowd slot
+    /// and the speed reached. Opaque; fill it with `..Default::default()`.
+    /// Copying it along with a clone is fine: the step notices it belongs to
+    /// another entity and plans again.
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let walker = ponko::d3::NavAgent { speed: 2.0, ..Default::default() };
+    /// let runner = ponko::d3::NavAgent { speed: 6.0, ..walker.clone() };
+    /// assert_eq!(runner.radius, walker.radius);
+    /// ```
+    pub state: NavAgentState,
 }
 impl Default for NavAgent3D {
     fn default() -> Self {
@@ -747,6 +758,34 @@ impl Default for NavAgent3D {
             avoidance: false,
             avoidance_weight: 2.0,
             neighbour_distance: 3.6,
+            state: NavAgentState::new(),
+        }
+    }
+}
+
+/// The opaque progress of a [`NavAgent`](NavAgent3D), in its
+/// [`state`](NavAgent3D::state) field. It has no public constructor, so a
+/// `NavAgent` literal always ends with `..Default::default()` (or
+/// `..other_agent`).
+/// ```
+/// # use ponko::prelude::*;
+/// let agent = ponko::d3::NavAgent::default();
+/// let _progress: &ponko::d3::NavAgentState = &agent.state;
+/// ```
+#[derive(Clone, Debug)]
+pub struct NavAgentState {
+    crowd_id: Option<crowd::AgentId>,
+    crowd_revision: u64,
+    path: Vec<Vec3>,
+    corner: usize,
+    revision: u64,
+    planned_destination: Option<Vec3>,
+    expected_position: Vec3,
+    velocity: f32,
+}
+impl NavAgentState {
+    fn new() -> Self {
+        Self {
             crowd_id: None,
             crowd_revision: 0,
             path: Vec::new(),
@@ -851,7 +890,7 @@ fn step(nav: &mut NavState, world: &mut World, dt: f32) {
         if a.avoidance {
             return;
         }
-        a.crowd_id = None;
+        a.state.crowd_id = None;
         let valid = a.radius.is_finite()
             && a.radius >= 0.0
             && a.radius <= nav.settings.agent_radius
@@ -862,38 +901,41 @@ fn step(nav: &mut NavState, world: &mut World, dt: f32) {
             && a.destination.is_some_and(|p| p.is_finite())
             && t.position.is_finite();
         if !valid || a.destination.is_none() {
-            a.velocity = 0.0;
-            a.revision = 0;
+            a.state.velocity = 0.0;
+            a.state.revision = 0;
             return;
         }
-        if a.revision != nav.revision || a.destination != a.planned_destination || t.position != a.expected_position {
-            a.path.clear();
-            a.corner = 0;
-            a.velocity = 0.0;
+        if a.state.revision != nav.revision
+            || a.destination != a.state.planned_destination
+            || t.position != a.state.expected_position
+        {
+            a.state.path.clear();
+            a.state.corner = 0;
+            a.state.velocity = 0.0;
             if let Some(path) = nav.agent_route(t.position, a.destination.unwrap()) {
-                a.path.extend(path);
+                a.state.path.extend(path);
             }
-            a.revision = nav.revision;
-            a.planned_destination = a.destination;
+            a.state.revision = nav.revision;
+            a.state.planned_destination = a.destination;
         }
-        a.velocity = (a.velocity + a.acceleration * dt).min(a.speed);
-        let mut remaining = a.velocity * dt;
-        while let Some(&target) = a.path.get(a.corner) {
+        a.state.velocity = (a.state.velocity + a.acceleration * dt).min(a.speed);
+        let mut remaining = a.state.velocity * dt;
+        while let Some(&target) = a.state.path.get(a.state.corner) {
             let delta = target - t.position;
             let distance = delta.length();
             if distance <= remaining {
                 t.position = target;
                 remaining -= distance;
-                a.corner += 1;
+                a.state.corner += 1;
             } else {
                 t.position += delta / distance * remaining;
                 break;
             }
         }
-        if a.corner == a.path.len() {
-            a.velocity = 0.0;
+        if a.state.corner == a.state.path.len() {
+            a.state.velocity = 0.0;
         }
-        a.expected_position = t.position;
+        a.state.expected_position = t.position;
     });
 }
 
@@ -922,7 +964,7 @@ fn step_crowd(world: &mut World, nav: &mut NavState, dt: f32) {
         nav.crowd_owners.resize(size, None);
         nav.crowd_revision = nav.revision;
         // Also invalidate slots on capacity growth without changing mesh paths.
-        world.query::<&mut NavAgent3D>().for_each(|a| a.crowd_id = None);
+        world.query::<&mut NavAgent3D>().for_each(|a| a.state.crowd_id = None);
     }
     let Some(c) = &mut nav.crowd else {
         return;
@@ -934,15 +976,16 @@ fn step_crowd(world: &mut World, nav: &mut NavState, dt: f32) {
             if !a.avoidance {
                 return;
             }
-            a.revision = 0;
+            a.state.revision = 0;
             // Component clones and restored transforms cannot inherit another entity's slot.
-            if a.crowd_id
+            if a.state
+                .crowd_id
                 .is_some_and(|id| nav.crowd_owners.get(id.0) != Some(&Some(entity)))
             {
-                a.crowd_id = None;
+                a.state.crowd_id = None;
             }
-            if a.crowd_revision != nav.crowd_revision {
-                a.crowd_id = None;
+            if a.state.crowd_revision != nav.crowd_revision {
+                a.state.crowd_id = None;
             }
             let valid = t.position.is_finite()
                 && a.radius.is_finite()
@@ -957,11 +1000,11 @@ fn step_crowd(world: &mut World, nav: &mut NavState, dt: f32) {
                 && a.neighbour_distance.is_finite()
                 && a.neighbour_distance > 0.0;
             if !valid {
-                a.crowd_id = None;
+                a.state.crowd_id = None;
                 return;
             }
-            if t.position != a.expected_position
-                && let Some(id) = a.crowd_id.take()
+            if t.position != a.state.expected_position
+                && let Some(id) = a.state.crowd_id.take()
             {
                 let _ = c.remove_agent(id);
             }
@@ -972,19 +1015,19 @@ fn step_crowd(world: &mut World, nav: &mut NavState, dt: f32) {
             p.max_acceleration = a.acceleration;
             p.collision_query_range = a.neighbour_distance;
             p.separation_weight = a.avoidance_weight;
-            let fresh = a.crowd_id.is_none();
+            let fresh = a.state.crowd_id.is_none();
             if fresh {
-                a.crowd_id = c
+                a.state.crowd_id = c
                     .add_agent(&mut nav.crowd_workspace, &nav.mesh, t.position.to_array(), p)
                     .ok();
             }
-            let Some(id) = a.crowd_id else {
+            let Some(id) = a.state.crowd_id else {
                 return;
             };
             nav.crowd_seen[id.0] = true;
             nav.crowd_owners[id.0] = Some(entity);
             let _ = c.update_agent_parameters(id, p);
-            if fresh || a.destination != a.planned_destination {
+            if fresh || a.destination != a.state.planned_destination {
                 let _ = c.reset_move_target(id);
                 // Preserve complete-route semantics, including disconnected targets.
                 if let Some(to) = a.destination.filter(|to| nav.mesh.max_tiles() > 0 && to.is_finite()) {
@@ -1018,9 +1061,9 @@ fn step_crowd(world: &mut World, nav: &mut NavState, dt: f32) {
                         }
                     }
                 }
-                a.planned_destination = a.destination;
+                a.state.planned_destination = a.destination;
             }
-            a.crowd_revision = nav.crowd_revision;
+            a.state.crowd_revision = nav.crowd_revision;
         });
     for (i, seen) in nav.crowd_seen.iter().enumerate() {
         if !seen && c.agent(crowd::AgentId(i)).is_some() {
@@ -1042,12 +1085,13 @@ fn step_crowd(world: &mut World, nav: &mut NavState, dt: f32) {
         .for_each(|(entity, t, a)| {
             if a.avoidance
                 && let Some(agent) = a
+                    .state
                     .crowd_id
                     .filter(|id| nav.crowd_owners[id.0] == Some(entity))
                     .and_then(|id| c.agent(id))
             {
                 t.position = Vec3::from_array(agent.npos);
-                a.expected_position = t.position;
+                a.state.expected_position = t.position;
             }
         });
 }
