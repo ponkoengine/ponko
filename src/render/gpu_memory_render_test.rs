@@ -243,7 +243,7 @@ fn placed_by_driver(device: &wgpu::Device, texture: &wgpu::Texture) -> Option<u6
 ///   allocation, so what wgpu makes for itself ([`wgpu_own`]) is taken
 ///   out, and the engine's resources are counted as the allocator places
 ///   them: whole 64 KiB pages on Direct3D 12 ([`D3D12_PAGE`]), and a
-///   multisampled texture at the size the driver gives the same texture
+///   texture at the size the driver gives the same texture
 ///   ([`placed_by_driver`]). The driver lays samples out in its own tiles:
 ///   on the Windows runner's software adapter (WARP) a 4x 720p colour
 ///   target takes 6 MiB more than its samples, and a 1x1 4x depth stand-in
@@ -268,6 +268,8 @@ fn adapter_figure_child() {
     } else {
         1
     };
+    let reported = f.device.generate_allocator_report().is_some();
+    let mut probed = std::collections::HashMap::new();
     let mut off = Vec::new();
     for quality in [
         GraphicsQuality::Low,
@@ -281,8 +283,21 @@ fn adapter_figure_child() {
         // What the draws dropped (the readback buffer) is freed by a poll.
         f.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let t = tally(&f);
+        // Every texture at the size the driver gives one made the same way,
+        // probed once per kind of texture.
         let placed = t.placed_bytes(page, |t| {
-            (t.sample_count() > 1).then(|| placed_by_driver(&f.device, t)).flatten()
+            if !reported {
+                return None;
+            }
+            let key = (
+                t.size(),
+                t.mip_level_count(),
+                t.sample_count(),
+                t.dimension(),
+                t.format(),
+                t.usage(),
+            );
+            *probed.entry(key).or_insert_with(|| placed_by_driver(&f.device, t))
         });
         let m = t.finish();
         let raw = adapter_bytes(&f.device).0.expect("reported above");
@@ -318,14 +333,13 @@ fn adapter_figure_child() {
             off.push(format!(
                 "{quality:?}: counted {counted} bytes, the adapter reports {adapter} (raw {raw})"
             ));
-        }
-    }
-    if !off.is_empty() {
-        // Where the difference is: the allocator's largest allocations.
-        if let Some(mut report) = f.device.generate_allocator_report() {
-            report.allocations.sort_by_key(|a| std::cmp::Reverse(a.size));
-            for a in report.allocations.iter().take(40) {
-                println!("{:>12} {}", a.size, a.name);
+            // Where the difference is: this preset's largest allocations.
+            if let Some(mut report) = f.device.generate_allocator_report() {
+                report.allocations.sort_by_key(|a| std::cmp::Reverse(a.size));
+                println!("{quality:?}: the allocator's largest allocations:");
+                for a in report.allocations.iter().take(40) {
+                    println!("{:>12} {}", a.size, a.name);
+                }
             }
         }
     }
