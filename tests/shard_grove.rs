@@ -531,14 +531,20 @@ fn pausing_holds_the_crawlers_and_the_warden() {
                     .collect();
                 at.push(warden_at(&mut ctx.world));
                 assert_eq!(*ctx.world.resource::<Screen>(), Screen::Paused);
+                assert!(ctx.physics3d.is_paused(), "the menu holds the 3D physics step");
                 seen.borrow_mut().push(at);
             }
             // Holding a direction while paused does nothing.
             40 => intent(ctx).movement = vec2(1.0, 0.0),
+            92 => intent(ctx).menu = Some(Menu::Resume),
+            95 => {
+                assert_eq!(*ctx.world.resource::<Screen>(), Screen::Playing);
+                assert!(!ctx.physics3d.is_paused(), "resuming lets the step run again");
+            }
             _ => {}
         }
     })
-    .run_headless(91, |_| {});
+    .run_headless(96, |_| {});
     let snapshots = snapshots.borrow();
     for (a, b) in snapshots[0].iter().zip(&snapshots[1]) {
         assert!(a.distance(*b) < 1e-3, "moved while paused: {a} -> {b}");

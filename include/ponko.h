@@ -3890,6 +3890,10 @@ enum PonkoStatus ponko_ctx_set_physics_paused(struct PonkoCtx *ctx, bool paused)
 
 enum PonkoStatus ponko_ctx_is_physics_paused(struct PonkoCtx *ctx, bool *out_paused);
 
+enum PonkoStatus ponko_ctx_set_physics3d_paused(struct PonkoCtx *ctx, bool paused);
+
+enum PonkoStatus ponko_ctx_is_physics3d_paused(struct PonkoCtx *ctx, bool *out_paused);
+
 enum PonkoStatus ponko_ctx_load_collision_mesh(struct PonkoCtx *ctx,
                                                const char *path,
                                                struct PonkoVec3 scale,

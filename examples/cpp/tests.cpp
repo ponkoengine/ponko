@@ -2803,6 +2803,10 @@ static void headless_wrapper_calls() {
             ctx.set_physics_paused(false);
             CHECK(!ctx.is_physics_paused());
             ctx.set_gravity3d({0, -1, 0});
+            ctx.set_physics3d_paused(true);
+            CHECK(ctx.is_physics3d_paused() && !ctx.is_physics_paused());
+            ctx.set_physics3d_paused(false);
+            CHECK(!ctx.is_physics3d_paused());
             throws([&] { ctx.set_gravity({NAN, 0}); });
             ctx.warm_render_pipelines(); // nothing to build without a renderer
         })

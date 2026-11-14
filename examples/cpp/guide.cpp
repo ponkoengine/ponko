@@ -394,6 +394,14 @@ static void controls(ponko::ctx& ctx) {
 // ponko::game("Platformer", 1280, 720).physics({0, 980}).sim_system(pause_menu);
 // ANCHOR_END: physics_pause
 
+// ANCHOR: physics3d_pause
+[[maybe_unused]] static void pause_menu3d(ponko::ctx& ctx) {
+    if (ctx.key_pressed(PONKO_KEY_ESCAPE))
+        ctx.set_physics3d_paused(!ctx.is_physics3d_paused()); // the 3D step only
+}
+// ponko::game("Explorer", 1280, 720).physics3d({0, -9.81f, 0}).sim_system(pause_menu3d);
+// ANCHOR_END: physics3d_pause
+
 // ---- Input -------------------------------------------------------------------
 // ANCHOR: gamepad
 struct Player { std::uint32_t slot; float spin; };   // one per connected pad

@@ -745,18 +745,19 @@ pub fn rules(ctx: &mut Ctx) {
     if let Some(menu) = intent.menu {
         choose(ctx, screen, menu);
     }
-    match *ctx.world.resource::<Screen>() {
-        Screen::Playing if screen == Screen::Playing => {
-            if intent.pause {
-                set_screen(ctx, Screen::Paused);
-                hold_still(ctx);
-            } else {
-                play(ctx, &intent, dt);
-            }
+    if screen == Screen::Playing && *ctx.world.resource::<Screen>() == Screen::Playing {
+        if intent.pause {
+            set_screen(ctx, Screen::Paused);
+        } else {
+            play(ctx, &intent, dt);
         }
-        Screen::Playing => {}
-        _ => hold_still(ctx),
     }
+    // Nothing moves on a menu: the 3D physics step is held, so the warden
+    // stays where it is, keeping its velocity for when play resumes (a jump
+    // goes on), and the crawlers are not stepped (see [`step_crawlers`]).
+    // Rules run after the step, so this holds from the next tick on.
+    let playing = *ctx.world.resource::<Screen>() == Screen::Playing;
+    ctx.physics3d.set_paused(!playing);
 }
 
 /// A menu choice, on the screen it was made on.
@@ -810,15 +811,6 @@ fn notice(ctx: &mut Ctx, text: impl Into<String>) {
         text: text.into(),
         seconds: 2.5,
     };
-}
-
-/// Nothing moves on a menu: the warden stands (3D physics has no pause of
-/// its own, so its velocity is held at zero) and the crawlers are not
-/// stepped (see [`step_crawlers`]).
-fn hold_still(ctx: &mut Ctx) {
-    ctx.world
-        .query::<&mut Character>()
-        .for_each(|c| c.velocity = Vec3::ZERO);
 }
 
 /// To the title: the run's entities go, the save stays.

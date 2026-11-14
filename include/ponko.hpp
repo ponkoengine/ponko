@@ -6337,6 +6337,16 @@ public:
     // 3D physics (game::physics3d), as of the last physics step. Not inside query callbacks.
     /// Changes 3D gravity, in m/s².
     void set_gravity3d(vec3 gravity) { detail::check(ponko_ctx_set_gravity3d(raw_, gravity)); }
+    /// Holds the 3D physics step (`true`) or lets it run again; every other system keeps
+    /// running. While held, bodies and characters stay put, keeping their velocity, and no
+    /// collision events are sent. The 3D counterpart of `set_physics_paused`.
+    void set_physics3d_paused(bool paused) { detail::check(ponko_ctx_set_physics3d_paused(raw_, paused)); }
+    /// Whether `set_physics3d_paused` holds the 3D physics step.
+    bool is_physics3d_paused() {
+        bool paused = false;
+        detail::check(ponko_ctx_is_physics3d_paused(raw_, &paused));
+        return paused;
+    }
     /// A heightfield from the same n x n heights and `size` as
     /// create_terrain_tile (NaN for holes): give mesh_collider(it) to a
     /// fixed body at the tile's transform3d (its corner).

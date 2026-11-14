@@ -59,7 +59,8 @@ fn things_fall_ten_units_per_second() {
   [headless frames](#menus-and-the-ui-headless-frames).
 - Pause and sim speed are ignored, so every tick runs; `ctx.quit()` stops
   early. `ctx.physics.set_paused(true)` does hold the physics step
-  ([Pausing only physics](sim-clock.md#pausing-only-physics)).
+  ([Pausing only physics](sim-clock.md#pausing-only-physics)), and
+  `ctx.physics3d.set_paused(true)` the 3D one.
 - Textures load for their sizes but nothing is uploaded.
 
 The same game can run windowed or headless: the boids example does both
