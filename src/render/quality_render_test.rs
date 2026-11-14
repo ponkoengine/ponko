@@ -70,7 +70,7 @@ impl Fixture {
             ],
         });
         let white = device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
+            label: Some("test white"),
             size: wgpu::Extent3d {
                 width: 1,
                 height: 1,
@@ -115,7 +115,7 @@ impl Fixture {
             }),
         }];
         let output = device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
+            label: Some("test output"),
             size: wgpu::Extent3d {
                 width,
                 height,

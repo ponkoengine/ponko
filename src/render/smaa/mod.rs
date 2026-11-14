@@ -341,7 +341,11 @@ impl Targets {
         Self {
             rt_uniforms,
             color_target: device
-                .create_texture(&wgpu::TextureDescriptor { format, ..texture_desc })
+                .create_texture(&wgpu::TextureDescriptor {
+                    format,
+                    label: Some("smaa.texture.color_target"),
+                    ..texture_desc
+                })
                 .create_view(&wgpu::TextureViewDescriptor {
                     label: Some("smaa.color_target.view"),
                     ..Default::default()
