@@ -496,7 +496,8 @@ fn still_particles_and_lines_are_not_uploaded_again() {
     });
     eprintln!("moving particles and a still line: {c:?}");
     let particles = rig.ctx.world.get::<ParticleEmitter3D>(fountain).unwrap().live_count() as u64;
-    assert!(c.other > 0 && c.other <= particles * 48, "{c:?}");
+    // A particle's record is four vec4s.
+    assert!(c.other > 0 && c.other <= particles * 64, "{c:?}");
     rig.check_mirrors();
 }
 

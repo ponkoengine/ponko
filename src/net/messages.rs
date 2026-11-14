@@ -1,7 +1,8 @@
 //! Game-owned byte messages over UDP, independently of deterministic lockstep.
 //! Renet handles channels, acknowledgements, retransmission and fragmentation.
 //! UDP sessions are unauthenticated and unencrypted: use a trusted network or
-//! an application-managed secure tunnel. Feature `steam` adds Steam relays.
+//! an application-managed secure tunnel. Feature `steam` adds Steam relays;
+//! browser clients connect over WebSocket (`accept_web`, `join_web`).
 
 use std::collections::{BTreeMap, VecDeque};
 use std::hash::{BuildHasher, Hasher};
@@ -257,6 +258,11 @@ enum Wire {
     #[cfg(any(test, feature = "steam"))]
     Custom(Box<dyn PacketTransport>),
     Udp(UdpSocket),
+    /// A UDP host that also takes browser clients over WebSocket.
+    #[cfg(not(target_arch = "wasm32"))]
+    UdpWeb(UdpSocket, Box<super::websocket::WebListener>, bool),
+    /// A client's WebSocket to its host.
+    Web(Box<super::websocket::WebClient>),
     Local {
         me: usize,
         inboxes: Arc<Mutex<Vec<Inbox>>>,
@@ -270,6 +276,9 @@ impl Wire {
             #[cfg(any(test, feature = "steam"))]
             Self::Custom(_) => Err(io::Error::other("no UDP address")),
             Self::Udp(s) => s.local_addr(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::UdpWeb(s, ..) => s.local_addr(),
+            Self::Web(_) => Err(io::Error::other("no UDP address")),
             Self::Local { me, .. } => Ok(local_addr(*me)),
         }
     }
@@ -277,11 +286,16 @@ impl Wire {
         match self {
             #[cfg(any(test, feature = "steam"))]
             Self::Custom(t) => t.send(addr, bytes),
-            Self::Udp(s) => match s.send_to(bytes, addr) {
-                Ok(_) => Ok(true),
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(false),
-                Err(e) => Err(e),
-            },
+            Self::Udp(s) => udp_send(s, addr, bytes),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::UdpWeb(s, web, _) => {
+                if super::websocket::WebListener::owns(addr) {
+                    Ok(web.send(addr, bytes))
+                } else {
+                    udp_send(s, addr, bytes)
+                }
+            }
+            Self::Web(client) => Ok(client.send(bytes)),
             Self::Local {
                 me,
                 inboxes,
@@ -306,11 +320,25 @@ impl Wire {
         match self {
             #[cfg(any(test, feature = "steam"))]
             Self::Custom(t) => t.recv(buf),
-            Self::Udp(s) => match s.recv_from(buf) {
-                Ok((n, addr)) => Ok(Some((addr, n))),
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
-                Err(e) => Err(e),
-            },
+            Self::Udp(s) => udp_recv(s, buf),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::UdpWeb(s, web, web_first) => {
+                // Alternate, so neither side starves the other.
+                *web_first = !*web_first;
+                if *web_first && let Some(packet) = web.recv(buf) {
+                    return Ok(Some(packet));
+                }
+                match udp_recv(s, buf)? {
+                    Some(packet) => Ok(Some(packet)),
+                    None => Ok(web.recv(buf)),
+                }
+            }
+            Self::Web(client) => {
+                if let Some(e) = client.take_error() {
+                    return Err(io::Error::new(io::ErrorKind::ConnectionAborted, e));
+                }
+                Ok(client.recv(buf).map(|n| (super::websocket::HOST, n)))
+            }
             Self::Local { me, inboxes, .. } => {
                 // Reverse arrival intentionally exercises packet reordering.
                 Ok(inboxes.lock().expect("loopback inbox")[*me]
@@ -321,6 +349,20 @@ impl Wire {
                     }))
             }
         }
+    }
+}
+fn udp_send(s: &UdpSocket, addr: SocketAddr, bytes: &[u8]) -> io::Result<bool> {
+    match s.send_to(bytes, addr) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+fn udp_recv(s: &UdpSocket, buf: &mut [u8]) -> io::Result<Option<(SocketAddr, usize)>> {
+    match s.recv_from(buf) {
+        Ok((n, addr)) => Ok(Some((addr, n))),
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+        Err(e) => Err(e),
     }
 }
 fn local_addr(index: usize) -> SocketAddr {
@@ -487,8 +529,77 @@ impl NetMessages {
     pub fn local_addr(&self) -> Option<SocketAddr> {
         match self.wire {
             Wire::Udp(_) => self.wire.addr().ok(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Wire::UdpWeb(..) => self.wire.addr().ok(),
             _ => None,
         }
+    }
+    /// The address browser clients connect to, once
+    /// [`accept_web`](Self::accept_web) opened it.
+    /// ```
+    /// let host = ponko::net::NetMessages::host("127.0.0.1:0", 4).unwrap().accept_web("127.0.0.1:0").unwrap();
+    /// assert!(host.web_addr().unwrap().port() != 0);
+    /// ```
+    pub fn web_addr(&self) -> Option<SocketAddr> {
+        match &self.wire {
+            #[cfg(not(target_arch = "wasm32"))]
+            Wire::UdpWeb(_, web, _) => web.local_addr().ok(),
+            _ => None,
+        }
+    }
+    /// Also lets browser clients in: they join over WebSocket on `addr` (TCP,
+    /// such as `"0.0.0.0:7778"`; port 0 picks a free one, see
+    /// [`web_addr`](Self::web_addr)) with [`join_web`](Self::join_web), next
+    /// to UDP clients, within the same `max_clients`. Plain `ws://`; put a TLS
+    /// proxy in front for pages served over `https://`. Unauthenticated, like
+    /// UDP. A WebSocket delivers everything in order, so the unreliable lane
+    /// arrives too, only no sooner than the reliable one.
+    /// ```
+    /// let host = ponko::net::NetMessages::host("127.0.0.1:0", 4).unwrap().accept_web("127.0.0.1:0").unwrap();
+    /// ```
+    /// # Errors
+    /// `InvalidInput` unless this is a UDP host (or it already accepts
+    /// browser clients); `Unsupported` in a browser; the socket's error if
+    /// `addr` can't be bound.
+    pub fn accept_web(mut self, addr: impl ToSocketAddrs) -> io::Result<Self> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if !self.hosting || !matches!(self.wire, Wire::Udp(_)) {
+                return Err(invalid("only a UDP host accepts browser clients"));
+            }
+            let web = super::websocket::WebListener::bind(addr)?;
+            let Wire::Udp(socket) = self.wire else {
+                unreachable!("checked above");
+            };
+            self.wire = Wire::UdpWeb(socket, Box::new(web), false);
+            Ok(self)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (&mut self, addr);
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "a browser can't accept connections",
+            ))
+        }
+    }
+    /// Start joining a host over WebSocket at `url`, such as
+    /// `"ws://192.168.1.20:7778"` (its [`accept_web`](Self::accept_web)
+    /// address): how a web build joins, as browsers can't open UDP sockets.
+    /// Poll until `Connected` or `Disconnected`, as with [`join`](Self::join).
+    /// A page served over `https://` needs `wss://`.
+    /// ```
+    /// let client = ponko::net::NetMessages::join_web("ws://127.0.0.1:7778").unwrap();
+    /// ```
+    /// # Errors
+    /// `InvalidInput` for a URL that isn't `ws://` (or `wss://` in a browser)
+    /// with a host; `Unsupported` for `wss://` on the desktop.
+    pub fn join_web(url: &str) -> io::Result<Self> {
+        let client = super::websocket::WebClient::connect(url)?;
+        let mut net = Self::new(Wire::Web(Box::new(client)), false, 1);
+        net.links
+            .insert(PeerId::HOST, Link::new(super::websocket::HOST, nonce(), 0, net.now));
+        Ok(net)
     }
     /// Queue bytes for a connected peer. Returns `NotConnected` for unknown or
     /// joining peers, `InvalidInput` above 1 MiB and `WouldBlock` when the lane's
@@ -788,5 +899,49 @@ impl NetMessages {
     /// ```
     pub fn stats(&self) -> MessageStats {
         self.stats
+    }
+    /// How many peers are connected now: clients for a host, the host (0 or
+    /// 1) for a client.
+    /// ```
+    /// let mut nets = ponko::net::NetMessages::loopback(2);
+    /// assert_eq!(nets[0].connected_peers(), 0);
+    /// for _ in 0..40 {
+    ///     nets.iter_mut().for_each(|n| n.poll_elapsed(std::time::Duration::from_millis(20)).unwrap());
+    /// }
+    /// assert_eq!((nets[0].connected_peers(), nets[1].connected_peers()), (1, 1));
+    /// ```
+    pub fn connected_peers(&self) -> usize {
+        self.links.values().filter(|link| link.connected).count()
+    }
+}
+
+/// Hooks for the fuzzing entry points in `net/fuzz.rs`.
+#[cfg(any(test, fuzzing))]
+impl NetMessages {
+    /// The address of loopback endpoint `index`.
+    pub(super) fn loopback_addr(index: usize) -> SocketAddr {
+        local_addr(index)
+    }
+
+    /// Takes `packet` as a datagram from `from`. With `header`, `packet`
+    /// starts with a kind byte, and the magic and the nonces of the link
+    /// to `from` (made-up ones when there is none) go around it.
+    pub(super) fn fuzz_receive(&mut self, from: SocketAddr, packet: &[u8], header: bool) -> io::Result<()> {
+        if !header {
+            return self.receive(from, packet);
+        }
+        let (kind, rest) = packet.split_first().map_or((DATA, &[][..]), |(k, r)| (*k, r));
+        let (cn, sn) = self
+            .links
+            .values()
+            .find(|l| l.addr == from)
+            .map_or((1, 0), |l| (l.client_nonce, l.server_nonce));
+        let mut datagram = Vec::with_capacity(HEADER + rest.len());
+        datagram.extend_from_slice(MAGIC);
+        datagram.push(kind);
+        datagram.extend_from_slice(&cn.to_le_bytes());
+        datagram.extend_from_slice(&sn.to_le_bytes());
+        datagram.extend_from_slice(rest);
+        self.receive(from, &datagram)
     }
 }

@@ -837,8 +837,8 @@ impl PostChain {
         if let Some(smaa) = &self.smaa {
             smaa.tally_memory(t);
         }
-        t.buffer(C::Other, &self.buffer);
-        t.view(C::Other, &self.black);
+        t.buffer(C::Other, "post uniforms", &self.buffer);
+        t.view(C::Other, "post black stand-in", &self.black);
     }
 }
 
@@ -847,8 +847,14 @@ impl PostTargets {
     /// inputs as frame targets (see `memory.rs`).
     pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        for view in self.bloom_mips.iter().chain(&self.ldr).chain(&self.upscale) {
-            t.view(C::FrameTargets, view);
+        for view in &self.bloom_mips {
+            t.view(C::FrameTargets, "3d bloom", view);
+        }
+        if let Some(view) = &self.ldr {
+            t.view(C::FrameTargets, "post ldr", view);
+        }
+        if let Some(view) = &self.upscale {
+            t.view(C::FrameTargets, "3d upscale", view);
         }
     }
 }

@@ -193,6 +193,11 @@ loads the older versions. Your own components are yours to migrate: give a
 component `#[serde(default)]` and saves written before you added a field
 still load.
 
+The binary save format (`SaveFormat::Binary`) holds the same save, so the
+same promise covers it, and it starts with a layout number of its own
+(currently 1): a release reads every layout earlier 0.x releases wrote. JSON
+saves keep loading next to it.
+
 `World::load` refuses entity ids whose index is far beyond what the save
 needs (the exact bound is in its docs), so a corrupt or hostile file can't
 make the world allocate a huge entity table. Saves the engine writes stay

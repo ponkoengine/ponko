@@ -436,9 +436,9 @@ impl SpritePipelines {
     /// memory (see `memory.rs`); their textures are the game's.
     pub(crate) fn tally_memory(&self, t: &mut super::memory::MemoryTally) {
         use super::memory::MemoryClass as C;
-        t.texture(C::Other, &self.white);
+        t.texture(C::Other, "sprite white stand-in", &self.white);
         for material in self.materials.iter().flatten() {
-            t.buffer(C::Other, &material.params);
+            t.buffer(C::Other, "sprite material params", &material.params);
         }
     }
 }

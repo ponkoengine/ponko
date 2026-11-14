@@ -50,6 +50,24 @@ ACCESS_ALL="$ACCESS accesskit"
 SHAPING="unicode-bidi unicode-linebreak unicode-script fontdb"
 SHAPING_ALL="$SHAPING harfrust read-fonts"
 
+# The engine features a project template asks for, as cargo arguments, read
+# from the `ponko = { ... }` line of its manifest: a template that turns a
+# default back on, or adds a feature, changes its contract's build.
+template_features() {
+  local manifest="crates/ponko_cli/templates/$1/Cargo.toml.liquid" line
+  line=$(grep -E '^ponko = ' "$manifest") || { echo "no ponko dependency in $manifest" >&2; exit 1; }
+  template_features_from "$line"
+}
+template_features_from() {
+  local line=$1 args=""
+  if grep -q 'default-features = false' <<<"$line"; then args="--no-default-features"; fi
+  local features
+  features=$(sed -nE 's/.*[^-]features = \[([^]]*)\].*/\1/p' <<<"$line" | tr -d ' "')
+  if [ -n "$features" ]; then args="${args:+$args }--features $features"; fi
+  echo "$args"
+}
+SERVER_TEMPLATE=$(template_features server)
+
 # name | cargo package and feature arguments | forbidden crates
 CONTRACTS=(
   "headless|-p ponko --no-default-features|$RENDER $AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS_ALL $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES"
@@ -68,6 +86,11 @@ CONTRACTS=(
   # header declares them all). So its smallest build carries glTF and Recast,
   # but nothing else optional. Making them optional changes the native
   # interface and is separate work.
+  # The dedicated-server template (`ponko new --server`): what goes into its
+  # container image. No renderer, audio, input devices, models, physics,
+  # navigation, dev tools, Steam, accessibility, shaping or extra image
+  # decoders: the runtime image has no system libraries for them.
+  "server template|-p ponko $SERVER_TEMPLATE|$RENDER $AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS_ALL $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES"
   "C library, no defaults|-p ponko_ffi --no-default-features|$RENDER $AUDIO $INSPECTOR $GAMEPAD $PHYSICS $TOOLS $STEAM $ACCESS_ALL $TEXTURES"
 )
 
@@ -127,6 +150,13 @@ case "${1:-check}" in
     if check "headless + image-jpeg" "-p ponko --no-default-features --features image-jpeg" \
       "${CONTRACTS[0]##*|}" >/dev/null; then
       echo "self-test failed: the headless contract accepted the JPEG decoder" >&2
+      exit 1
+    fi
+    # The server template's features are read from its manifest: a template
+    # line that turned the defaults back on must give a build with a window.
+    if [ "$(template_features_from 'ponko = { version = "0.1", features = ["audio"] }')" != "--features audio" ] ||
+      [ "$(template_features_from 'ponko = { version = "0.1", default-features = false }')" != "--no-default-features" ]; then
+      echo "self-test failed: template features are read wrongly" >&2
       exit 1
     fi
     echo "self-test ok: an accidentally enabled subsystem fails the headless contract."

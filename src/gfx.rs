@@ -369,6 +369,11 @@ impl Graphics {
         }
         let side = Text::ATLAS_SIZE as f32;
         let color = params.color.to_rgba8();
+        // Glyphs are rasterized for whole physical pixels and placed at
+        // whole-pixel offsets from the run's origin; the origin goes on the
+        // physical pixel grid too, or the linearly filtered atlas would
+        // smear every glyph across two pixels.
+        let origin = snap_to_pixels(pos, scale) * scale;
         for p in self.text.placed() {
             let Some(at) = p.glyph.at else { continue };
             let size = Vec2::new(p.glyph.size[0] as f32, p.glyph.size[1] as f32);
@@ -377,7 +382,7 @@ impl Graphics {
                 atlas.id,
                 params.z,
                 SpriteInstance::new(
-                    (pos + p.pos / scale).into(),
+                    ((origin + p.pos) / scale).into(),
                     (size / scale).into(),
                     [0.0, 0.0],
                     0.0,
@@ -386,6 +391,11 @@ impl Graphics {
                 .with_uv(uv),
             );
         }
+    }
+
+    /// `pos`, in window pixels, moved to the nearest physical pixel.
+    pub(crate) fn snap_to_pixels(&self, pos: Vec2) -> Vec2 {
+        snap_to_pixels(pos, self.scale_factor)
     }
 
     /// The size `text` would take with [`draw_text`](Self::draw_text) at
@@ -1035,7 +1045,7 @@ impl Graphics {
     /// For offscreen test rigs that draw `ui_list` themselves, with no
     /// renderer: gives shapes and text their textures (ids 0 and 1), so
     /// drawing them works. The rig uploads `text.uploads` into the second.
-    #[cfg(all(test, feature = "3d"))]
+    #[cfg(test)]
     pub(crate) fn stand_in_textures(&mut self) {
         self.white = Some(crate::texture::Texture::new(0, 1, 1));
         self.font_atlas = Some(crate::texture::Texture::new(1, Text::ATLAS_SIZE, Text::ATLAS_SIZE));
@@ -1173,4 +1183,113 @@ fn push_sprite(
         z,
         SpriteInstance::new(pos.into(), (size * scale).into(), pivot.into(), rotation, color).with_uv(uv),
     );
+}
+
+/// `pos`, in window pixels, moved to the nearest of the physical pixels
+/// there are `scale` of per window pixel.
+fn snap_to_pixels(pos: Vec2, scale: f32) -> Vec2 {
+    (pos * scale).round() / scale
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::{Vec2, vec2};
+
+    use crate::ctx::Ctx;
+    use crate::text::TextParams;
+
+    /// Every glyph quad `draw_text_ex` makes for `text` at `pos`, as its
+    /// top-left corner in physical pixels.
+    fn glyph_origins(scale: f32, text: &str, pos: Vec2) -> Vec<Vec2> {
+        glyph_origins_shaped(scale, text, pos, crate::text::TextShaping::Auto)
+    }
+
+    fn glyph_origins_shaped(scale: f32, text: &str, pos: Vec2, shaping: crate::text::TextShaping) -> Vec<Vec2> {
+        let mut ctx = Ctx::new(1.0 / 60.0, vec2(320.0, 240.0));
+        ctx.gfx.stand_in_textures();
+        ctx.gfx.set_text_shaping(shaping);
+        ctx.set_scale_factor(scale);
+        let params = TextParams::default().with_size(16.0);
+        ctx.gfx.draw_text_ex(text, pos, params);
+        let (sprites, _) = ctx.gfx.ui_list.finish();
+        sprites.iter().map(|s| Vec2::from(s.pos) * scale).collect()
+    }
+
+    fn whole(v: Vec2) -> bool {
+        (v - v.round()).abs().max_element() < 1e-3
+    }
+
+    const FRACTIONS: [f32; 3] = [0.25, 0.5, 0.75];
+
+    #[test]
+    fn glyphs_land_on_whole_physical_pixels_at_fractional_positions() {
+        for scale in [1.0, 2.0, 1.5] {
+            for f in FRACTIONS {
+                let pos = vec2(10.0 + f, 20.0 + f);
+                let origins = glyph_origins(scale, "Hi, World!", pos);
+                assert!(origins.len() >= 8, "{} glyphs drawn", origins.len());
+                for o in origins {
+                    assert!(whole(o), "glyph at {o} physical pixels (scale {scale}, pos {pos})");
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "text-shaping")]
+    #[test]
+    fn shaped_glyphs_land_on_whole_physical_pixels_too() {
+        for scale in [1.0, 2.0] {
+            for f in FRACTIONS {
+                let pos = vec2(10.0 + f, 20.0 + f);
+                let origins = glyph_origins_shaped(scale, "Hi, World!", pos, crate::text::TextShaping::Always);
+                assert!(origins.len() >= 8, "{} glyphs drawn", origins.len());
+                for o in origins {
+                    assert!(
+                        whole(o),
+                        "shaped glyph at {o} physical pixels (scale {scale}, pos {pos})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unsnapped_origins_fall_between_physical_pixels() {
+        // The negative control: the old placement, `pos + offset / scale`
+        // with the offsets `Text::layout` gives, puts every glyph between
+        // pixels at these positions, so the test above would catch it.
+        for scale in [1.0f32, 2.0] {
+            for f in FRACTIONS {
+                if (f * scale).fract() == 0.0 {
+                    continue; // x.5 at scale 2 is a whole physical pixel.
+                }
+                let pos = vec2(10.0 + f, 20.0 + f);
+                let snapped = super::snap_to_pixels(pos, scale);
+                for o in glyph_origins(scale, "Hi, World!", pos) {
+                    let old = o + (pos - snapped) * scale;
+                    assert!(!whole(old), "old origin {old} is whole (scale {scale}, pos {pos})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_label_looks_the_same_wherever_it_sits() {
+        // Relative to its first glyph, every glyph of a run is in the same
+        // physical pixel at every fractional position.
+        for scale in [1.0, 2.0] {
+            let relative = |pos| {
+                let origins = glyph_origins(scale, "Wave 12", pos);
+                origins.iter().map(|o| *o - origins[0]).collect::<Vec<_>>()
+            };
+            let at_whole = relative(vec2(40.0, 30.0));
+            for f in FRACTIONS {
+                assert_eq!(
+                    relative(vec2(40.0 + f, 30.0 + f)),
+                    at_whole,
+                    "scale {scale}, offset {f}"
+                );
+            }
+        }
+    }
 }

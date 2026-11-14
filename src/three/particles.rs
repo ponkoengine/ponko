@@ -43,10 +43,14 @@ pub enum ParticleShape3D {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum ParticleBlend3D {
-    /// Ordinary alpha compositing (particles sorted back to front).
+    /// Ordinary alpha compositing. The particles of every alpha emitter
+    /// are sorted far to near together, so two emitters' particles mix
+    /// correctly where they overlap.
     #[default]
     Alpha,
-    /// Emitted light adds to the scene, weighted by alpha.
+    /// Emitted light adds to the scene, weighted by alpha. An additive
+    /// emitter is drawn whole, where its centre falls among the alpha
+    /// particles (light adds up the same in any order).
     Additive,
 }
 /// Settings copied into an emitter. Change settings by creating a new emitter.
@@ -102,6 +106,13 @@ pub struct ParticleSettings3D {
     pub space: ParticleSpace3D,
     /// Independent RNG seed; equal seeds and frame steps give equal simulation.
     pub seed: u64,
+    /// Soft particles: over this many world units in front of the scene
+    /// behind them, particles fade out, so smoke meets a wall or the
+    /// ground without a hard edge. 0 (the default) is off; negative and
+    /// non-finite values count as 0. It reads the scene's depth, which
+    /// costs a copy of the frame (the transparent pass). Target cameras
+    /// draw particles without it.
+    pub softness: f32,
 }
 impl Default for ParticleSettings3D {
     fn default() -> Self {
@@ -125,6 +136,7 @@ impl Default for ParticleSettings3D {
             max_particles: 1024,
             space: ParticleSpace3D::World,
             seed: 1,
+            softness: 0.0,
         }
     }
 }
@@ -158,6 +170,9 @@ impl ParticleSettings3D {
         space: ParticleSpace3D => with_space;
         /// Sets [`seed`](Self::seed).
         seed: u64 => with_seed;
+        /// Sets [`softness`](Self::softness): world units over which
+        /// particles fade in front of the scene.
+        softness: f32 => with_softness;
     }
 
     /// Sets [`lifetime`](Self::lifetime): seconds, from `min` to `max`.
@@ -339,6 +354,8 @@ pub(crate) struct ParticleInstance {
     pub position_size: [f32; 4],
     pub color: [f32; 4],
     pub rotation_sheet: [f32; 4],
+    /// x: the emitter's softness (0: none); the rest is unused.
+    pub params: [f32; 4],
 }
 #[derive(Clone, Copy)]
 pub(crate) struct ParticleRun {
@@ -346,46 +363,108 @@ pub(crate) struct ParticleRun {
     pub count: u32,
     pub texture: Option<u32>,
     pub blend: ParticleBlend3D,
-    depth: f32,
+}
+/// One emitter's particles in [`ParticleFrame::staged`] this frame.
+#[derive(Clone, Copy)]
+struct Staged {
+    first: u32,
+    count: u32,
+    texture: Option<u32>,
+    blend: ParticleBlend3D,
 }
 #[derive(Default)]
 pub(crate) struct ParticleFrame {
+    /// Every particle, far to near: what is drawn.
     pub instances: Vec<ParticleInstance>,
+    /// Stretches of `instances` of one image and blend, far to near.
     pub runs: Vec<ParticleRun>,
     pub right: [f32; 4],
     pub up: [f32; 4],
+    /// Whether a particle is soft (see `ParticleSettings3D::softness`).
+    pub soft: bool,
     /// Ribbons and lines, drawn with the particles.
     pub strips: super::strips::StripFrame,
     /// 3D text, drawn after them (collected by `Ctx::collect_text3d`).
     pub texts: super::text3d::TextFrame,
+    /// Each emitter's particles, emitter by emitter, and where they are.
+    staged: Vec<ParticleInstance>,
+    emitters: Vec<Staged>,
+    /// What is sorted: an alpha particle (its emitter and index in
+    /// `staged`) or a whole additive emitter (index `u32::MAX`).
+    items: Vec<(u32, u32)>,
+    /// One key per item: its view depth, far first, then the item.
+    keys: Vec<u64>,
+    /// The sort's second buffer (see `depth_sort`).
+    scratch: Vec<u64>,
+}
+/// `depth` as bits that order like it, farthest first (negative depths,
+/// behind the camera, last).
+fn far_first(depth: f32) -> u32 {
+    let bits = depth.to_bits();
+    let ordered = if bits >> 31 == 1 { !bits } else { bits | 1 << 31 };
+    !ordered
 }
 impl ParticleFrame {
+    /// Nothing to draw (keeping the storage).
+    pub fn clear(&mut self) {
+        self.instances.clear();
+        self.runs.clear();
+        self.soft = false;
+        self.strips.vertices.clear();
+        self.strips.runs.clear();
+    }
+
+    /// Collects every emitter's particles for `camera`, sorted far to near
+    /// by view depth: the particles of all alpha emitters together, each
+    /// additive emitter as a whole at its centre's depth. Particles of one
+    /// image and blend that end up next to each other share a draw.
     pub fn collect(&mut self, world: &mut World, camera: &Camera3D) {
         self.instances.clear();
         self.runs.clear();
+        self.staged.clear();
+        self.emitters.clear();
+        self.items.clear();
+        self.keys.clear();
+        self.soft = false;
         self.strips.collect(world, camera);
         self.right = (camera.rotation * Vec3::X).extend(0.0).to_array();
         self.up = (camera.rotation * Vec3::Y).extend(0.0).to_array();
+        let (eye, forward) = (camera.position, camera.forward());
+        let depth = |p: Vec3| (p - eye).dot(forward);
+        let (staged, emitters, items, keys) = (&mut self.staged, &mut self.emitters, &mut self.items, &mut self.keys);
+        let mut soft = false;
         world.query::<(&ParticleEmitter3D, &Transform3D)>().for_each(|(e, t)| {
             if e.particles.is_empty() {
                 return;
             }
-            let first = self.instances.len();
+            let first = staged.len();
             let s = &e.settings;
+            let softness = if s.softness.is_finite() {
+                s.softness.max(0.0)
+            } else {
+                0.0
+            };
+            soft |= softness > 0.0;
             let matrix = t.matrix();
+            let local = s.space == ParticleSpace3D::Local;
+            let scale = if local { t.scale.abs().max_element() } else { 1.0 };
+            let index = emitters.len() as u32;
+            let alpha = s.blend == ParticleBlend3D::Alpha;
             let mut center = Vec3::ZERO;
             for p in &e.particles {
                 let age = p.age / p.lifetime;
-                let local = s.space == ParticleSpace3D::Local;
                 let position = if local {
                     matrix.transform_point3(p.position)
                 } else {
                     p.position
                 };
                 center += position;
-                let size =
-                    p.size * s.size_over_life.sample(age) * if local { t.scale.abs().max_element() } else { 1.0 };
-                self.instances.push(ParticleInstance {
+                if alpha {
+                    keys.push(u64::from(far_first(depth(position))) << 32 | items.len() as u64);
+                    items.push((index, staged.len() as u32));
+                }
+                let size = p.size * s.size_over_life.sample(age) * scale;
+                staged.push(ParticleInstance {
                     position_size: position.extend(size.max(0.0)).to_array(),
                     color: linear(s.color_over_life.sample(age)),
                     rotation_sheet: [
@@ -394,27 +473,63 @@ impl ParticleFrame {
                         s.sheet.0 as f32,
                         s.sheet.1 as f32,
                     ],
+                    params: [softness, 0.0, 0.0, 0.0],
                 });
             }
-            if s.blend == ParticleBlend3D::Alpha {
-                self.instances[first..].sort_unstable_by(|a, b| {
-                    let depth = |p: &ParticleInstance| {
-                        (Vec3::new(p.position_size[0], p.position_size[1], p.position_size[2]) - camera.position)
-                            .dot(camera.forward())
-                    };
-                    depth(b).total_cmp(&depth(a))
-                });
+            if !alpha {
+                center /= e.particles.len() as f32;
+                keys.push(u64::from(far_first(depth(center))) << 32 | items.len() as u64);
+                items.push((index, u32::MAX));
             }
-            center /= e.particles.len() as f32;
-            self.runs.push(ParticleRun {
+            emitters.push(Staged {
                 first: first as u32,
                 count: e.particles.len() as u32,
                 texture: s.texture.map(|t| t.id),
                 blend: s.blend,
-                depth: (center - camera.position).dot(camera.forward()),
             });
         });
-        self.runs.sort_unstable_by(|a, b| b.depth.total_cmp(&a.depth));
+        self.soft = soft;
+        super::depth_sort::sort_keys(&mut self.keys, &mut self.scratch);
+        for &key in &self.keys {
+            let (emitter, particle) = self.items[(key & u64::from(u32::MAX)) as usize];
+            let e = self.emitters[emitter as usize];
+            let range = if particle == u32::MAX {
+                e.first as usize..(e.first + e.count) as usize
+            } else {
+                particle as usize..particle as usize + 1
+            };
+            let first = self.instances.len() as u32;
+            let count = range.len() as u32;
+            self.instances.extend_from_slice(&self.staged[range]);
+            match self.runs.last_mut() {
+                Some(run) if run.texture == e.texture && run.blend == e.blend && run.first + run.count == first => {
+                    run.count += count;
+                }
+                _ => self.runs.push(ParticleRun {
+                    first,
+                    count,
+                    texture: e.texture,
+                    blend: e.blend,
+                }),
+            }
+        }
+    }
+}
+#[cfg(test)]
+impl ParticleEmitter3D {
+    /// An emitter of `settings` whose particles stand still at `points`.
+    pub(crate) fn at_points_for_test(settings: ParticleSettings3D, points: &[Vec3]) -> Self {
+        let mut e = Self::new(ParticleSettings3D {
+            rate: 0.0,
+            burst: points.len(),
+            speed: (0.0, 0.0),
+            ..settings
+        });
+        e.update(0.0, &Transform3D::default());
+        for (p, &at) in e.particles.iter_mut().zip(points) {
+            p.position = at;
+        }
+        e
     }
 }
 #[cfg(test)]
@@ -538,9 +653,11 @@ mod tests {
         camera.position = Vec3::ZERO;
         let mut frame = ParticleFrame::default();
         frame.collect(&mut world, &camera);
-        assert_eq!(frame.runs.len(), 2);
-        let far = frame.instances[frame.runs[0].first as usize];
-        let near = frame.instances[frame.runs[1].first as usize];
+        // One image and blend: the two emitters share a draw, far first.
+        assert_eq!(frame.runs.len(), 1);
+        assert_eq!(frame.runs[0].count, 2);
+        let far = frame.instances[0];
+        let near = frame.instances[1];
         assert_eq!(far.position_size, [3.0, 0.0, -8.0, 2.0]);
         assert_eq!(&near.position_size[..3], &[0.0, 0.0, -2.0]);
     }
@@ -629,5 +746,82 @@ mod tests {
         world.spawn((Transform3D::default(), second));
         frame.collect(&mut world, &camera);
         assert_eq!(frame.instances[frame.runs[0].first as usize].position_size[2], -5.0);
+    }
+
+    #[test]
+    fn alpha_particles_of_all_emitters_sort_together_and_additive_emitters_stay_whole() {
+        let mut camera = Camera3D::new(glam::Vec2::splat(64.0));
+        camera.position = Vec3::ZERO;
+        camera.look_at(Vec3::NEG_Z);
+        let at = |z: f32| Vec3::new(0.0, 0.0, z);
+        let alpha = ParticleSettings3D::default();
+        let image = Texture::new(7, 1, 1);
+        let mut world = World::new();
+        // Red: z -2 and -8 (centre -5); green: -4 (another image, soft);
+        // glow: additive, -1 and -11 (centre -6).
+        world.spawn((
+            Transform3D::default(),
+            ParticleEmitter3D::at_points_for_test(alpha.clone(), &[at(-2.0), at(-8.0)]),
+        ));
+        world.spawn((
+            Transform3D::default(),
+            ParticleEmitter3D::at_points_for_test(
+                alpha.clone().with_texture(Some(image)).with_softness(2.0),
+                &[at(-4.0)],
+            ),
+        ));
+        world.spawn((
+            Transform3D::default(),
+            ParticleEmitter3D::at_points_for_test(
+                alpha.clone().with_blend(ParticleBlend3D::Additive),
+                &[at(-1.0), at(-11.0)],
+            ),
+        ));
+        let mut frame = ParticleFrame::default();
+        frame.collect(&mut world, &camera);
+        let zs: Vec<f32> = frame.instances.iter().map(|i| i.position_size[2]).collect();
+        assert_eq!(zs, [-8.0, -1.0, -11.0, -4.0, -2.0]);
+        let runs: Vec<(u32, u32, Option<u32>, ParticleBlend3D)> = frame
+            .runs
+            .iter()
+            .map(|r| (r.first, r.count, r.texture, r.blend))
+            .collect();
+        assert_eq!(
+            runs,
+            [
+                (0, 1, None, ParticleBlend3D::Alpha),
+                (1, 2, None, ParticleBlend3D::Additive),
+                (3, 1, Some(7), ParticleBlend3D::Alpha),
+                (4, 1, None, ParticleBlend3D::Alpha),
+            ]
+        );
+        assert!(frame.soft);
+        assert_eq!(frame.instances[3].params[0], 2.0);
+        assert_eq!(frame.instances[0].params[0], 0.0);
+        // Particles behind the camera sort after (nearer than) those in front.
+        let mut behind = World::new();
+        behind.spawn((
+            Transform3D::default(),
+            ParticleEmitter3D::at_points_for_test(alpha, &[at(3.0), at(-3.0)]),
+        ));
+        frame.collect(&mut behind, &camera);
+        assert_eq!(frame.instances[0].position_size[2], -3.0);
+        assert!(!frame.soft);
+    }
+
+    #[test]
+    fn particle_collection_reuses_its_storage() {
+        let mut camera = Camera3D::new(glam::Vec2::splat(64.0));
+        camera.position = Vec3::ZERO;
+        let mut world = World::new();
+        let points: Vec<Vec3> = (0..64).map(|i| Vec3::new(0.0, 0.0, -(i as f32))).collect();
+        world.spawn((
+            Transform3D::default(),
+            ParticleEmitter3D::at_points_for_test(ParticleSettings3D::default(), &points),
+        ));
+        let mut frame = ParticleFrame::default();
+        frame.collect(&mut world, &camera);
+        let ((), allocations) = crate::three::lights::tests::count_allocations(|| frame.collect(&mut world, &camera));
+        assert_eq!(allocations, 0, "a second frame of the same particles allocates nothing");
     }
 }

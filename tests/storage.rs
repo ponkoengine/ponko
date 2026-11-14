@@ -225,3 +225,203 @@ fn a_save_slot_keeps_an_animations_frame() {
     assert_eq!(walk.sheet.frame_size, vec2(16.0, 16.0));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// ---- Binary saves and background saves ----------------------------------------
+
+use ponko::reflect::SaveFormat;
+
+/// The healths in `world`, sorted.
+fn healths(world: &mut World) -> Vec<i32> {
+    let mut all: Vec<i32> = world.query::<&Health>().iter().map(|h| h.0).collect();
+    all.sort_unstable();
+    all
+}
+
+#[test]
+fn a_binary_slot_loads_back_like_a_json_slot() {
+    let dir = temp_dir("binary-slot");
+    Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+        assert_eq!(ctx.storage.save_format(), SaveFormat::Json, "JSON stays the default");
+        ctx.storage.set_save_format(SaveFormat::Binary);
+        ctx.world.reflect::<Health>();
+        ctx.world.spawn((Health(7),));
+        ctx.world.spawn((Health(-2),));
+        ctx.storage.save_world(&ctx.world, "slot 1").unwrap();
+        assert_eq!(ctx.storage.world_slots().unwrap(), ["slot 1"]);
+    });
+    let bytes = std::fs::read(dir.join("saves").join("slot 1.save")).unwrap();
+    assert_eq!(SaveFormat::detect(&bytes), SaveFormat::Binary);
+    assert!(!dir.join("saves").join("slot 1.json").exists());
+    // A game that writes JSON still reads it.
+    let mut world = Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+        ctx.world.reflect::<Health>();
+        ctx.load_world("slot 1").unwrap();
+    });
+    assert_eq!(healths(&mut world), [-2, 7]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn json_slots_saved_before_switching_to_binary_still_load_and_are_replaced_on_save() {
+    let dir = temp_dir("switch-format");
+    Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+        ctx.world.reflect::<Health>();
+        ctx.world.spawn((Health(1),));
+        ctx.storage.save_world(&ctx.world, "old").unwrap();
+    });
+    let mut world = Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+        ctx.storage.set_save_format(SaveFormat::Binary);
+        ctx.world.reflect::<Health>();
+        ctx.load_world("old").unwrap();
+        assert_eq!(ctx.storage.world_slots().unwrap(), ["old"]);
+        // Saving the slot again writes it in binary and drops the JSON file.
+        ctx.world.spawn((Health(2),));
+        ctx.storage.save_world(&ctx.world, "old").unwrap();
+        assert_eq!(ctx.storage.list().unwrap(), ["saves/old.save"]);
+        ctx.load_world("old").unwrap();
+        ctx.storage.delete_world("old").unwrap();
+        assert!(ctx.storage.world_slots().unwrap().is_empty());
+    });
+    assert_eq!(healths(&mut world), [1, 2]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_slot_left_in_both_formats_loads_the_one_the_game_writes() {
+    let dir = temp_dir("both-formats");
+    let mut world = World::new();
+    world.reflect::<Health>();
+    world.spawn((Health(10),));
+    let json = world.save();
+    world.spawn((Health(20),));
+    let binary = world.save();
+    // What a save cut off between writing the new file and removing the
+    // old one leaves.
+    let mut files = Storage::in_folder(&dir);
+    files.write("saves/s.json", &SaveFormat::Json.encode(&json)).unwrap();
+    files
+        .write("saves/s.save", &SaveFormat::Binary.encode(&binary))
+        .unwrap();
+    assert_eq!(files.world_slots().unwrap(), ["s"]);
+    for (format, expected) in [(SaveFormat::Binary, vec![10, 20]), (SaveFormat::Json, vec![10])] {
+        let mut world = Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+            ctx.storage.set_save_format(format);
+            ctx.world.reflect::<Health>();
+            ctx.load_world("s").unwrap();
+        });
+        assert_eq!(healths(&mut world), expected, "{format:?}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_damaged_binary_slot_is_refused_and_leaves_the_world_as_it_was() {
+    let dir = temp_dir("bad-binary");
+    let mut world = World::new();
+    world.reflect::<Health>();
+    world.spawn((Health(5),));
+    let mut bytes = SaveFormat::Binary.encode(&world.save());
+    let middle = bytes.len() / 2;
+    bytes[middle] ^= 0x55;
+    Storage::in_folder(&dir).write("saves/bad.save", &bytes).unwrap();
+    let mut world = Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+        ctx.storage.set_save_format(SaveFormat::Binary);
+        ctx.world.reflect::<Health>();
+        ctx.world.spawn((Health(3),));
+        let err = ctx.load_world("bad").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Decode, "{err}");
+        assert_eq!(err.path(), Some("saves/bad.save"));
+    });
+    assert_eq!(healths(&mut world), [3]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_background_save_holds_the_world_as_it_was_at_the_call() {
+    for format in [SaveFormat::Json, SaveFormat::Binary] {
+        let dir = temp_dir(&format!("background-{format:?}"));
+        let mut world = Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+            ctx.storage.set_save_format(format);
+            ctx.world.reflect::<Health>();
+            let e = ctx.world.spawn((Health(1),));
+            let job = ctx.storage.save_world_in_background(&ctx.world, "bg").unwrap();
+            // The game goes on at once; the save already has its world.
+            ctx.world.get_mut::<Health>(e).unwrap().0 = 99;
+            ctx.world.spawn((Health(50),));
+            job.wait().unwrap();
+            assert!(!ctx.storage.is_saving());
+            ctx.load_world("bg").unwrap();
+        });
+        assert_eq!(healths(&mut world), [1], "{format:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn background_saves_are_written_in_order_and_reads_wait_for_them() {
+    let dir = temp_dir("background-order");
+    let mut world = Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+        ctx.storage.set_save_format(SaveFormat::Binary);
+        ctx.world.reflect::<Health>();
+        // Big saves first, then small ones, so a later save would finish
+        // encoding first if nothing kept them in order.
+        for i in 0..2000 {
+            ctx.world.spawn((Health(i),));
+        }
+        let mut jobs = Vec::new();
+        for _ in 0..4 {
+            jobs.push(ctx.storage.save_world_in_background(&ctx.world, "slot").unwrap());
+        }
+        ctx.world.clear();
+        ctx.world.spawn((Health(-1),));
+        jobs.push(ctx.storage.save_world_in_background(&ctx.world, "slot").unwrap());
+        // A read of the slot waits for every save of it: it sees the last.
+        let bytes = ctx.storage.read("saves/slot.save").unwrap();
+        let save = SaveFormat::decode(&bytes).unwrap();
+        assert_eq!(save["entities"].as_array().unwrap().len(), 1);
+        assert!(!ctx.storage.is_saving());
+        for job in jobs {
+            job.wait().unwrap();
+        }
+        // The backup is the save before the last one.
+        let backup = SaveFormat::decode(&ctx.storage.read_backup("saves/slot.save").unwrap()).unwrap();
+        assert_eq!(backup["entities"].as_array().unwrap().len(), 2000);
+        ctx.load_world("slot").unwrap();
+    });
+    assert_eq!(healths(&mut world), [-1]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn background_saves_finish_before_the_game_ends() {
+    let dir = temp_dir("background-exit");
+    Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+        ctx.world.reflect::<Health>();
+        for i in 0..5000 {
+            ctx.world.spawn((Health(i),));
+        }
+        // The job is dropped: the save is written anyway.
+        drop(ctx.storage.save_world_in_background(&ctx.world, "last").unwrap());
+    });
+    let mut world = Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+        ctx.world.reflect::<Health>();
+        ctx.load_world("last").unwrap();
+    });
+    assert_eq!(healths(&mut world).len(), 5000);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_background_save_without_storage_or_with_a_bad_slot_fails_at_once() {
+    Game::new("t", 1, 1).run_headless(0, |ctx| {
+        let err = ctx.storage.save_world_in_background(&ctx.world, "a").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Unsupported);
+    });
+    let dir = temp_dir("background-bad-slot");
+    Game::new("t", 1, 1).data_dir(&dir).run_headless(0, |ctx| {
+        let err = ctx.storage.save_world_in_background(&ctx.world, "a/b").unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Invalid);
+        assert!(!ctx.storage.is_saving());
+    });
+    let _ = std::fs::remove_dir_all(dir);
+}

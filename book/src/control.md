@@ -81,6 +81,9 @@ skip it.
   closed. After that it may stay idle.
 - A release build honors `PONKO_CONTROL` only with the `control-env`
   feature (see [Turning it on](#turning-it-on)).
+- On a server reachable from the internet, keep it closed; what that means
+  in containers and with host networking is in
+  [Dedicated servers](servers.md#the-control-endpoint-on-a-public-host).
 
 ### File paths
 

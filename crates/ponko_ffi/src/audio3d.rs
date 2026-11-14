@@ -131,11 +131,11 @@ pub struct PonkoAudioListener3D {
 }
 
 const _: () = assert!(size_of::<PonkoAudioBus>() == size_of::<AudioBus>());
-fn bus_to_c(b: AudioBus) -> PonkoAudioBus {
+pub(crate) fn bus_to_c(b: AudioBus) -> PonkoAudioBus {
     // SAFETY: AudioBus is repr(transparent) over usize (size checked above).
     unsafe { std::mem::transmute(b) }
 }
-fn bus_from_c(b: PonkoAudioBus) -> AudioBus {
+pub(crate) fn bus_from_c(b: PonkoAudioBus) -> AudioBus {
     // SAFETY: as above. An unknown index plays on no bus; it is not UB.
     unsafe { std::mem::transmute(b) }
 }

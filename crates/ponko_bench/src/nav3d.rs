@@ -32,8 +32,10 @@ pub fn run(b: &mut Bench) {
                         for i in 0..n {
                             let (x, z) = ((i % side) as f32, (i / side) as f32);
                             let at = vec3(x * 0.8 - 40.0, 0.0, z * 0.8 - 40.0);
-                            let mut agent = NavAgent3D::default();
-                            agent.destination = Some(vec3(-at.x, 0.0, -at.z));
+                            let agent = NavAgent3D {
+                                destination: Some(vec3(-at.x, 0.0, -at.z)),
+                                ..Default::default()
+                            };
                             ctx.world.spawn((Transform3D::at(at), agent));
                         }
                     });

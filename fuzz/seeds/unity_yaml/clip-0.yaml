@@ -1,0 +1,11 @@
+--- !u!74 &1
+AnimationClip:
+  m_Name: Reach
+  m_SampleRate: 2
+  m_AnimationClipSettings: {m_StartTime: 1, m_StopTime: 2}
+  m_PositionCurves:
+  - path: Arm/Hand
+    curve:
+      m_Curve:
+      - {time: 1, value: {x: 0}, outSlope: {x: 4}}
+      - {time: 2, value: {x: 2}, inSlope: {x: 0}}

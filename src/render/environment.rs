@@ -55,10 +55,18 @@ pub(super) struct Environment {
     pub bakes: Vec<(u32, [u32; 6])>,
     uploads: Vec<(u32, wgpu::Texture)>,
     /// The sky lighting the image-based light was last baked from.
-    key: Option<[f32; 22]>,
+    key: Option<SkyKey>,
     /// Frames since the sky drifted from `key` by less than a visible step.
     stale: u32,
+    /// Frames since the sky was last baked: a sky shader's is baked at most
+    /// every `SkyShader::REBUILD_FRAMES`.
+    since_bake: u32,
 }
+
+/// What the sky's maps are baked from: the sun and sky light (22 values),
+/// then whether a sky shader draws the sky, and its id, authored-ambient
+/// flag and sixteen parameters.
+type SkyKey = [f32; 41];
 
 /// A refreshing probe's own textures: its cube strip, kept over the frames
 /// its faces are filtered in, and the copy of its maps that is filtered into
@@ -92,7 +100,7 @@ const VISIBLE_CHANGE: f32 = 0.01;
 /// Whether the image-based light should be baked again for sky `key`, having
 /// last been baked from `baked`, with `stale` frames of small drift so far.
 /// Returns the decision and the new drift count.
-fn rebake(baked: Option<&[f32; 22]>, key: &[f32; 22], stale: u32) -> (bool, u32) {
+fn rebake(baked: Option<&SkyKey>, key: &SkyKey, stale: u32) -> (bool, u32) {
     let Some(baked) = baked else {
         return (true, 0);
     };
@@ -110,6 +118,25 @@ fn rebake(baked: Option<&[f32; 22]>, key: &[f32; 22], stale: u32) -> (bool, u32)
         true => (false, stale + 1),
     }
 }
+/// [`rebake`], on a budget for a sky shader: its parameters may change every
+/// frame (a slider, a weather fade), so its maps are baked at most every
+/// `SkyShader::REBUILD_FRAMES` frames (`since_bake` counts this one), and a
+/// change in between waits for the next allowed frame. A new sky (another
+/// shader, or none before, or the ambient light from elsewhere) is baked at
+/// once, as the built-in skies always are.
+fn budgeted_rebake(baked: Option<&SkyKey>, key: &SkyKey, stale: u32, since_bake: u32) -> (bool, u32) {
+    let (bake, next) = rebake(baked, key, stale);
+    let shader = key[22] > 0.0;
+    // The same shader, with the same source of ambient light.
+    let same_sky = baked.is_some_and(|k| k[22..25] == key[22..25]);
+    if bake && shader && same_sky && since_bake < crate::three::SkyShader::REBUILD_FRAMES {
+        // Waits: the drift count stays as it was, so the bake comes as soon
+        // as the budget allows.
+        return (false, stale);
+    }
+    (bake, next)
+}
+
 impl Environment {
     pub fn new(device: &wgpu::Device, sky: &wgpu::TextureView) -> Self {
         let texture = |label, width, height| {
@@ -304,24 +331,44 @@ impl Environment {
             bakes: Vec::new(),
             key: None,
             stale: 0,
+            since_bake: 0,
             uploads: Vec::new(),
         }
     }
+    /// Decides whether this frame bakes the sky's maps again, and uploads
+    /// the sky's settings. `lighting` is the sun and sky light the maps
+    /// depend on; `shader`, a sky shader's id, authored-ambient flag and
+    /// parameters. `atmosphere`: the maps come from the sky texture (the
+    /// atmosphere or a sky shader), not from the flat colors; then
+    /// `authored_ambient` still takes the diffuse light from those colors.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
         queue: &wgpu::Queue,
-        key: [f32; 22],
+        lighting: [f32; 22],
+        shader: Option<[f32; 18]>,
         atmosphere: bool,
         intensity: f32,
+        authored_ambient: bool,
         // Sky, ground and equator light (w 1 to use the equator).
-        [sky, ground, equator]: [[f32; 4]; 3],
+        [mut sky, ground, equator]: [[f32; 4]; 3],
     ) {
-        let (bake, stale) = rebake(self.key.as_ref(), &key, self.stale);
+        let mut key = [0.0; 41];
+        key[..22].copy_from_slice(&lighting);
+        if let Some(shader) = shader {
+            key[22] = 1.0;
+            key[23..].copy_from_slice(&shader);
+        }
+        self.since_bake = self.since_bake.saturating_add(1);
+        let (bake, stale) = budgeted_rebake(self.key.as_ref(), &key, self.stale, self.since_bake);
         self.stale = stale;
         if bake {
             self.dirty.store(true, Ordering::Relaxed);
             self.key = Some(key);
+            self.since_bake = 0;
         }
+        // sky.w: the diffuse light from the authored colors (see `sh`).
+        sky[3] = f32::from(authored_ambient);
         let settings = [[0.0, f32::from(atmosphere), intensity, 0.0], sky, ground, equator];
         let settings = bytemuck::cast_slice(&settings);
         self.settings_mirror
@@ -415,6 +462,11 @@ impl Environment {
             Self::draw(encoder, &self.source, &self.cube, &self.sky_group, [0, 0, 768, 128]);
             self.filter(encoder, 0);
         }
+    }
+    /// Bakes the sky's maps again on the next frame drawn (a sky shader
+    /// was replaced).
+    pub fn invalidate_sky(&mut self) {
+        self.key = None;
     }
     pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, uploads: &[(u32, std::sync::Arc<Vec<u16>>)]) {
         self.uploads.clear();
@@ -753,19 +805,19 @@ impl Environment {
     /// and harmonics, and what bakes them as probes (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.texture(C::Probes, &self.atlas);
-        t.texture(C::Probes, &self.source);
-        t.texture(C::Probes, &self.sh_texture);
+        t.texture(C::Probes, "environment cubemaps", &self.atlas);
+        t.texture(C::Probes, "environment source", &self.source);
+        t.texture(C::Probes, "environment harmonics", &self.sh_texture);
         for buffer in &self.buffers {
-            t.buffer(C::Probes, buffer);
+            t.buffer(C::Probes, "environment uniforms", buffer);
         }
         for (_, texture) in &self.uploads {
-            t.texture(C::Probes, texture);
+            t.texture(C::Probes, "environment upload", texture);
         }
         for staging in self.staging.iter().flatten() {
-            t.texture(C::Probes, &staging.strip);
-            t.texture(C::Probes, &staging.maps);
-            t.buffer(C::Probes, &staging.config);
+            t.texture(C::Probes, "environment bake strip", &staging.strip);
+            t.texture(C::Probes, "environment bake maps", &staging.maps);
+            t.buffer(C::Probes, "environment bake config", &staging.config);
         }
     }
 }
@@ -776,7 +828,7 @@ mod tests {
 
     #[test]
     fn slow_sky_drift_rebakes_once_a_second_and_visible_changes_at_once() {
-        let mut key = [0.5; 22];
+        let mut key = [0.5; 41];
         assert_eq!(rebake(None, &key, 0), (true, 0));
         let baked = key;
         assert_eq!(rebake(Some(&baked), &key, 0), (false, 0));
@@ -804,5 +856,42 @@ mod tests {
         let mut nan = baked;
         nan[1] = f32::NAN;
         assert!(rebake(Some(&baked), &nan, 0).0);
+    }
+
+    #[test]
+    fn a_sky_shaders_changes_bake_on_a_budget_and_a_new_sky_at_once() {
+        let budget = crate::three::SkyShader::REBUILD_FRAMES;
+        let mut atmosphere = [0.5; 41];
+        atmosphere[22..].fill(0.0);
+        let mut shader = atmosphere;
+        shader[22] = 1.0; // a sky shader, id 0
+        // Switching to a sky shader bakes at once, however recent the last bake.
+        assert_eq!(budgeted_rebake(Some(&atmosphere), &shader, 0, 1), (true, 0));
+        // Its parameters changing every frame: one bake per budget, not per frame.
+        let mut baked = shader;
+        let mut bakes = 0;
+        let mut since = 0;
+        let mut stale = 0;
+        for frame in 1..=budget * 4 {
+            let mut key = shader;
+            key[25] = frame as f32; // a parameter sweeping fast
+            since += 1;
+            let (bake, next) = budgeted_rebake(Some(&baked), &key, stale, since);
+            stale = next;
+            if bake {
+                bakes += 1;
+                baked = key;
+                since = 0;
+            }
+        }
+        assert_eq!(bakes, 4, "one bake every {budget} frames");
+        // Another sky shader is a new sky: at once.
+        let mut other = baked;
+        other[23] = 1.0;
+        assert_eq!(budgeted_rebake(Some(&baked), &other, 0, 1), (true, 0));
+        // The built-in skies keep baking at once (negative control).
+        let mut sun = atmosphere;
+        sun[0] = 0.9;
+        assert_eq!(budgeted_rebake(Some(&atmosphere), &sun, 0, 1), (true, 0));
     }
 }

@@ -4,7 +4,7 @@
 //! with the platform's own figure where it reports one. Skips without a GPU.
 use std::process::Command;
 
-use super::memory::{MemoryClass as C, MemoryTally, adapter_bytes};
+use super::memory::{AllocationKind, BufferUsage, GpuAllocation, MemoryClass as C, MemoryTally, adapter_bytes};
 use super::quality_render_test::Fixture;
 use crate::perf::GpuMemory;
 use crate::render::GraphicsQuality;
@@ -25,9 +25,9 @@ fn tally(f: &Fixture) -> MemoryTally {
     let mut t = MemoryTally::default();
     f.renderer.tally_memory(&mut t);
     for texture in &f.textures {
-        t.texture(C::Textures, &texture.texture);
+        t.texture(C::Textures, "texture", &texture.texture);
     }
-    t.texture(C::FrameTargets, &f.output);
+    t.texture(C::FrameTargets, "window", &f.output);
     if let Some(timer) = &f.timer {
         timer.tally_memory(&mut t);
     }
@@ -330,4 +330,93 @@ fn adapter_figure_child() {
         }
     }
     assert!(off.is_empty(), "{off:#?}");
+}
+
+/// Every allocation the fixture holds, largest first, with the sums.
+fn listing(f: &Fixture) -> (GpuMemory, Vec<GpuAllocation>) {
+    let mut t = MemoryTally::listing();
+    f.renderer.tally_memory(&mut t);
+    t.texture(C::FrameTargets, "window", &f.output);
+    t.finish_listed()
+}
+
+/// The one entry named `label`.
+fn entry<'a>(list: &'a [GpuAllocation], label: &str) -> &'a GpuAllocation {
+    let mut found = list.iter().filter(|a| a.label == label);
+    let one = found.next().unwrap_or_else(|| panic!("no `{label}` in {list:#?}"));
+    assert!(found.next().is_none(), "one `{label}` only");
+    one
+}
+
+#[test]
+fn the_listing_names_the_render_targets_and_shadow_maps_the_renderer_made() {
+    let Some(mut f) = Fixture::sized(W, H) else { return };
+    let mut shadow_sizes = Vec::new();
+    for quality in [GraphicsQuality::Low, GraphicsQuality::Ultra] {
+        f.ctx.scene3d.set_quality(quality);
+        f.draw();
+        f.draw();
+        let (m, list) = listing(&f);
+        // The listing adds up to the sums, class by class.
+        assert_eq!(list.iter().map(|a| a.bytes).sum::<u64>(), m.total, "{quality:?}");
+        for (class, bytes) in m.classes() {
+            let listed: u64 = list.iter().filter(|a| a.class == class).map(|a| a.bytes).sum();
+            assert_eq!(listed, bytes, "{quality:?}: {class}");
+        }
+        assert!(list.windows(2).all(|w| w[0].bytes >= w[1].bytes), "largest first");
+
+        // The sun's shadow map: one Depth32Float layer per cascade, as made.
+        let (size, layers) = f.renderer.shadow_map();
+        let sun = entry(&list, "3d shadow map");
+        assert_eq!(sun.class, "shadows");
+        assert_eq!(sun.size, Some([size, size, layers]), "{quality:?}");
+        assert_eq!(sun.format.as_deref(), Some("Depth32Float"));
+        assert_eq!(sun.bytes, u64::from(size) * u64::from(size) * 4 * u64::from(layers));
+        shadow_sizes.push(sun.size);
+        // The lights' atlas, once made.
+        if let Some(width) = f.renderer.light_shadow_map() {
+            let atlas = entry(&list, "3d light shadow atlas");
+            assert_eq!((atlas.class, atlas.size), ("atlases", Some([width, width, 1])));
+        }
+
+        // The scene-sized targets: at the scene's size (the render scale's),
+        // HDR color multisampled as the depth is, its resolve single-sampled.
+        let (w, h) = f.renderer.scene_size().expect("drawn");
+        let color = entry(&list, "3d color");
+        let depth = entry(&list, "3d depth");
+        let hdr = entry(&list, "3d hdr");
+        for t in [color, depth, hdr, entry(&list, "3d scene copy")] {
+            assert_eq!(
+                (t.class, t.size),
+                ("frame_targets", Some([w, h, 1])),
+                "{quality:?}: {t:?}"
+            );
+        }
+        assert_eq!(color.samples, depth.samples);
+        assert_eq!(hdr.samples, Some(1));
+        assert_eq!(color.format, hdr.format);
+        assert_eq!(hdr.format.as_deref(), Some("Rgba16Float"));
+        let window = entry(&list, "window");
+        assert_eq!(window.size, Some([W, H, 1]));
+
+        // Buffers carry their usage, textures their format.
+        for a in &list {
+            match a.kind {
+                AllocationKind::Texture => assert!(a.format.is_some() && a.usage.is_none(), "{a:?}"),
+                AllocationKind::Buffer => assert!(a.usage.is_some() && a.format.is_none(), "{a:?}"),
+                AllocationKind::Other => assert!(a.size.is_none(), "{a:?}"),
+            }
+        }
+        assert_eq!(entry(&list, "frame uniforms").usage, Some(BufferUsage::Uniform));
+        assert!(
+            list.iter()
+                .any(|a| a.label == "mesh arena" && a.class == "meshes" && a.bytes > 0)
+        );
+    }
+    // The preset change shows: Ultra's sun map is bigger than Low's.
+    assert_ne!(shadow_sizes[0], shadow_sizes[1], "{shadow_sizes:?}");
+    // A default tally lists nothing.
+    let mut t = MemoryTally::default();
+    f.renderer.tally_memory(&mut t);
+    assert!(t.finish_listed().1.is_empty());
 }

@@ -556,12 +556,16 @@ impl Smaa {
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
         let targets = &self.targets;
-        for view in [&targets.color_target, &targets.edges_target, &targets.blend_target] {
-            t.view(C::FrameTargets, view);
+        for (label, view) in [
+            ("smaa input", &targets.color_target),
+            ("smaa edges", &targets.edges_target),
+            ("smaa blend weights", &targets.blend_target),
+        ] {
+            t.view(C::FrameTargets, label, view);
         }
-        t.buffer(C::Other, &targets.rt_uniforms);
-        t.texture(C::Other, &self.resources.area_texture);
-        t.texture(C::Other, &self.resources.search_texture);
+        t.buffer(C::Other, "smaa uniforms", &targets.rt_uniforms);
+        t.texture(C::Other, "smaa area lookup", &self.resources.area_texture);
+        t.texture(C::Other, "smaa search lookup", &self.resources.search_texture);
     }
     pub fn input(&self) -> &wgpu::TextureView {
         &self.targets.color_target

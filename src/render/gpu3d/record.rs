@@ -325,7 +325,7 @@ impl Renderer3D {
             return Vec::new();
         };
         let time = |name| timer.and_then(|t| t.pass(name));
-        let split = self.needs_scene();
+        let split = self.splits_transparent();
         self.shadow_cache.recorded();
         let mut parts = Vec::with_capacity(8 + self.lists.cascades + self.lists.light_views);
         parts.push(Part::Prelude);
@@ -445,7 +445,7 @@ impl Renderer3D {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                    pass.set_pipeline(&self.sky_lut);
+                    pass.set_pipeline(self.sky_pipelines().0);
                     pass.set_bind_group(0, &self.shadows.bind_group, &[0]);
                     pass.draw(0..3, 0..1);
                 }
@@ -525,7 +525,8 @@ impl Renderer3D {
                     // Probe captures start empty (alpha 0): the sky fills in behind them.
                     let capture = self.environment.is_capture(*id);
                     let clear = if capture { wgpu::Color::TRANSPARENT } else { clear };
-                    self.draw_view(encoder, target, runs, *batch_view, clear, time);
+                    let particles = self.particles.target(*id).map(|p| (p, textures));
+                    self.draw_view(encoder, target, runs, *batch_view, clear, time, particles);
                 }
                 self.environment.probes(encoder, time);
             }
@@ -673,7 +674,7 @@ impl Renderer3D {
                     pass.set_bind_group(2, opaque_scene, &[]);
                     self.draw_solid(&mut pass, Kind::Opaque);
                     if self.atmosphere {
-                        pass.set_pipeline(&self.sky);
+                        pass.set_pipeline(self.sky_pipelines().1);
                         pass.set_bind_group(0, &self.frame_bind_group, &[]);
                         pass.draw(0..3, 0..1);
                         pass.set_bind_group(2, opaque_scene, &[]);
@@ -834,6 +835,10 @@ impl Renderer3D {
 
     /// One target camera's view: depth prepass, then the lit solid models
     /// and the sky, resolved into its render target.
+    /// Draws a target camera's view into `target`: its prepass, then its
+    /// models and the sky, then `particles` (its particles, ribbons and
+    /// lines, with the textures they read), if any.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_view<'t>(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -842,6 +847,7 @@ impl Renderer3D {
         batch_view: usize,
         clear: wgpu::Color,
         time: &PassTimer<'_, 't>,
+        particles: Option<(&super::super::particles::ParticleView, &[GpuTexture])>,
     ) {
         passes::mark("prepass");
         passes::mark("color");
@@ -908,10 +914,24 @@ impl Renderer3D {
         pass.set_bind_group(2, &self.no_scene, &[]);
         self.draw_models_view(&mut pass, runs, Kind::Opaque, &self.instances, batch_view);
         if self.atmosphere {
-            pass.set_pipeline(&self.sky);
+            pass.set_pipeline(self.sky_pipelines().1);
             pass.set_bind_group(0, &target.frame_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
+        if let Some((view, textures)) = particles {
+            // No scene to read: these particles are drawn without softness.
+            pass.set_bind_group(2, &self.no_scene, &[]);
+            self.particles
+                .draw_view(view, &mut pass, textures, self.resources.white);
+        }
+    }
+
+    /// Whether see-through surfaces and particles get a pass of their own
+    /// after the opaque one, which binds the scene's color and depth: when
+    /// a transparent surface reads the scene behind it, or a soft particle
+    /// its depth.
+    pub(super) fn splits_transparent(&self) -> bool {
+        self.needs_scene() || self.particles.soft()
     }
 
     /// Whether a transparent surface this frame reads the scene behind it.

@@ -76,7 +76,10 @@ fn obstacles_block_and_removal_restores_paths() {
     nav.set_obstacles(&[]);
     assert!(nav.find_path(a, b).is_some());
 }
+// Built the pre-struct-update way on purpose: setting fields on a default
+// keeps compiling and working.
 #[test]
+#[allow(clippy::field_reassign_with_default)]
 fn agent_reaches_destination_headless() {
     let mut world = Game::new("navigation", 1, 1)
         .fixed_hz(60)
@@ -89,6 +92,86 @@ fn agent_reaches_destination_headless() {
         });
     let p = world.query::<&Transform3D>().iter().next().unwrap().position;
     assert!(p.distance(vec3(5.0, 0.1, 0.0)) < 0.25, "{p:?}");
+}
+#[test]
+fn struct_update_agent_keeps_named_settings_and_defaults_the_rest() {
+    let agent = NavAgent3D {
+        speed: 2.0,
+        radius: 0.25,
+        destination: Some(vec3(5.0, 0.0, 0.0)),
+        ..Default::default()
+    };
+    let default = NavAgent3D::default();
+    assert_eq!(agent.speed, 2.0);
+    assert_eq!(agent.radius, 0.25);
+    assert_eq!(agent.destination, Some(vec3(5.0, 0.0, 0.0)));
+    assert_eq!(agent.acceleration, default.acceleration);
+    assert_eq!(agent.avoidance, default.avoidance);
+    assert_eq!(agent.avoidance_weight, default.avoidance_weight);
+    assert_eq!(agent.neighbour_distance, default.neighbour_distance);
+
+    // The settings it was built with are the ones the step uses: one second
+    // at 2 units per second (after 0.2 s of acceleration) covers about 1.8.
+    let start = vec3(-5.0, 0.0, 0.0);
+    let mut world = Game::new("navigation", 1, 1)
+        .fixed_hz(60)
+        .sim_system(systems::step_navmesh3d)
+        .run_headless(60, |ctx| {
+            ctx.world.insert_resource(bake(&[floor()]));
+            ctx.world.spawn((Transform3D::at(start), agent));
+        });
+    let p = world.query::<&Transform3D>().iter().next().unwrap().position;
+    let travelled = (p - start).with_y(0.0).length();
+    assert!((1.6..=2.0).contains(&travelled), "{travelled}");
+}
+#[test]
+fn agent_built_from_a_walking_agent_plans_its_own_path() {
+    struct Walker {
+        entity: Entity,
+        tick: u32,
+    }
+    fn copy_at_tick_30(ctx: &mut Ctx) {
+        let w = ctx.world.resource_mut::<Walker>();
+        w.tick += 1;
+        if w.tick != 30 {
+            return;
+        }
+        let walker = w.entity;
+        let walking = ctx.world.get::<NavAgent3D>(walker).unwrap().clone();
+        // The copy carries the walker's progress; the step must replan it.
+        let copy = NavAgent3D {
+            destination: Some(vec3(5.0, 0.0, 4.0)),
+            ..walking
+        };
+        ctx.world.spawn((Transform3D::at(vec3(-5.0, 0.0, 4.0)), copy));
+    }
+    let mut world = Game::new("navigation", 1, 1)
+        .fixed_hz(60)
+        .sim_system(copy_at_tick_30)
+        .sim_system(systems::step_navmesh3d)
+        .run_headless(480, |ctx| {
+            ctx.world.insert_resource(bake(&[floor()]));
+            let agent = NavAgent3D {
+                destination: Some(vec3(5.0, 0.0, -4.0)),
+                ..Default::default()
+            };
+            let walker = ctx.world.spawn((Transform3D::at(vec3(-5.0, 0.0, -4.0)), agent));
+            ctx.world.insert_resource(Walker {
+                entity: walker,
+                tick: 0,
+            });
+        });
+    let mut arrived = 0;
+    world.query::<(&Transform3D, &NavAgent3D)>().for_each(|(t, a)| {
+        let target = a.destination.unwrap();
+        assert!(
+            t.position.with_y(0.0).distance(target) < 0.25,
+            "{:?} -> {target:?}",
+            t.position
+        );
+        arrived += 1;
+    });
+    assert_eq!(arrived, 2);
 }
 #[test]
 fn baking_and_paths_are_repeatable() {
@@ -148,8 +231,10 @@ fn agent_follows_detour_without_entering_solid_box() {
         .run_headless(600, |ctx| {
             ctx.world
                 .insert_resource(bake(&[floor(), source(MeshData::cube(4.0), vec3(0.0, 2.0, 0.0))]));
-            let mut agent = NavAgent3D::default();
-            agent.destination = Some(vec3(7.0, 0.0, 0.0));
+            let agent = NavAgent3D {
+                destination: Some(vec3(7.0, 0.0, 0.0)),
+                ..Default::default()
+            };
             ctx.world.spawn((Transform3D::at(vec3(-7.0, 0.0, 0.0)), agent));
         });
     let position = world.query::<&Transform3D>().iter().next().unwrap().position;
@@ -176,8 +261,10 @@ fn mesh_replacement_invalidates_an_existing_agent_path() {
         .run_headless(300, |ctx| {
             ctx.world.insert_resource(Tick(0));
             ctx.world.insert_resource(bake(&[floor()]));
-            let mut agent = NavAgent3D::default();
-            agent.destination = Some(vec3(7.0, 0.0, 0.0));
+            let agent = NavAgent3D {
+                destination: Some(vec3(7.0, 0.0, 0.0)),
+                ..Default::default()
+            };
             ctx.world.spawn((Transform3D::at(vec3(-7.0, 0.0, 0.0)), agent));
         });
     let x = world.query::<&Transform3D>().iter().next().unwrap().position.x;
@@ -216,8 +303,10 @@ fn obstacle_components_stop_agents_then_removal_replans_deterministically() {
                     .world
                     .spawn((NavObstacle3D::new(vec3(30.0, 1.0, 0.0), vec3(0.5, 2.0, 20.0)),));
                 ctx.world.insert_resource(State { tick: 0, obstacle });
-                let mut agent = NavAgent3D::default();
-                agent.destination = Some(vec3(7.0, 0.0, 0.0));
+                let agent = NavAgent3D {
+                    destination: Some(vec3(7.0, 0.0, 0.0)),
+                    ..Default::default()
+                };
                 ctx.world.spawn((Transform3D::at(vec3(-7.0, 0.0, 0.0)), agent));
             });
         world.query::<&Transform3D>().iter().next().unwrap().position
@@ -242,9 +331,11 @@ fn agents_follow_steps_and_keep_their_floor_in_stacked_geometry() {
                     source(MeshData::plane(20.0), vec3(0.0, if upper { 0.0 } else { 4.0 }, 0.0)),
                 ];
                 ctx.world.insert_resource(bake(&sources));
-                let mut agent = NavAgent3D::default();
-                agent.destination = Some(vec3(3.0, level + 0.2, 0.0));
-                agent.avoidance = avoidance;
+                let agent = NavAgent3D {
+                    destination: Some(vec3(3.0, level + 0.2, 0.0)),
+                    avoidance,
+                    ..Default::default()
+                };
                 ctx.world.spawn((Transform3D::at(vec3(-3.0, level, 0.0)), agent));
             });
         let position = world.query::<&Transform3D>().iter().next().unwrap().position;
@@ -253,10 +344,11 @@ fn agents_follow_steps_and_keep_their_floor_in_stacked_geometry() {
 }
 
 fn crowd_agent(goal: Option<Vec3>) -> NavAgent3D {
-    let mut a = NavAgent3D::default();
-    a.avoidance = true;
-    a.destination = goal;
-    a
+    NavAgent3D {
+        avoidance: true,
+        destination: goal,
+        ..Default::default()
+    }
 }
 fn check_crowd(ctx: &mut Ctx) {
     let agents: Vec<_> = ctx
@@ -750,8 +842,10 @@ fn agents_stay_on_a_hill_next_to_carved_shapes_and_repeat_exactly() {
                     (vec3(-6.0, 0.0, 0.5), vec3(6.0, 0.0, -0.5)),
                     (vec3(0.5, 0.0, -6.0), vec3(-0.5, 0.0, 6.0)),
                 ] {
-                    let mut agent = NavAgent3D::default();
-                    agent.destination = Some(to.with_y(hill_height(to.x, to.z)));
+                    let agent = NavAgent3D {
+                        destination: Some(to.with_y(hill_height(to.x, to.z))),
+                        ..Default::default()
+                    };
                     ctx.world
                         .spawn((Transform3D::at(from.with_y(hill_height(from.x, from.z))), agent));
                 }

@@ -105,6 +105,8 @@ mod shader_checks;
 mod shaders;
 mod shadow_cache;
 mod shadows;
+mod sky_shaders;
+pub(crate) use sky_shaders::{SKY_VARIANT, compose_sky};
 #[cfg(test)]
 pub(in crate::render) mod sky_render_test;
 mod stencil;
@@ -257,6 +259,8 @@ pub(crate) struct Renderer3D {
     sky_texture: wgpu::Texture,
     sky_lut: wgpu::RenderPipeline,
     sky: wgpu::RenderPipeline,
+    /// The game's sky shaders (see `sky_shaders.rs`).
+    sky_shaders: sky_shaders::SkyShaders,
     /// The compute passes' bind group and pipeline layouts; `None` where
     /// the GPU can't run compute shaders (WebGL2).
     compute_layouts: Option<(wgpu::BindGroupLayout, wgpu::PipelineLayout)>,
@@ -324,7 +328,10 @@ pub(crate) struct Renderer3D {
     // ---- This frame: written by `prepare`, read by `draw` ----
     /// This frame's draw lists (see `lists.rs`).
     lists: FrameLists,
+    /// Whether the sky is drawn (the atmosphere or a sky shader), not flat.
     atmosphere: bool,
+    /// This frame's sky shader, if it has one the renderer made.
+    sky_shader: Option<u32>,
     /// How many models in view the frame culled as hidden.
     pub occluded: usize,
     /// This frame has more instances than the device's largest buffer
@@ -601,6 +608,16 @@ impl Renderer3D {
             float_depth,
         );
         let post = PostChain::new(device, texture_layout, format, white);
+        let particles = super::particles::Particles::new(
+            device,
+            texture_layout,
+            &super::particles::SceneDepth {
+                layout: &scene_layout,
+                adapt: &|source| shaders::for_samples(source, samples, float_depth).into_owned(),
+            },
+            samples,
+            DEPTH_FORMAT,
+        );
         let frame_buffer = device.new_buffer(&wgpu::BufferDescriptor {
             label: Some("3d frame"),
             size: size_of::<FrameUniform>() as u64,
@@ -714,17 +731,12 @@ impl Renderer3D {
                 cache: None,
             })
         };
-        let sky_lut = sky_pipeline(
-            "3d sky texture",
-            &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("3d sky texture"),
-                bind_group_layouts: &[Some(&shadow_layout)],
-                immediate_size: 0,
-            }),
-            "fs_lut",
-            1,
-            None,
-        );
+        let sky_lut_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("3d sky texture"),
+            bind_group_layouts: &[Some(&shadow_layout)],
+            immediate_size: 0,
+        });
+        let sky_lut = sky_pipeline("3d sky texture", &sky_lut_layout, "fs_lut", 1, None);
         // Behind everything: only where the depth is still the far plane.
         let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("3d sky"),
@@ -964,7 +976,9 @@ impl Renderer3D {
             environment,
             sky_lut,
             sky,
+            sky_shaders: sky_shaders::SkyShaders::new(sky_lut_layout),
             atmosphere: false,
+            sky_shader: None,
             frame_bind_group,
             lights,
             frame_sources,
@@ -979,7 +993,7 @@ impl Renderer3D {
             buffer_computes: Vec::new(),
             compute_layouts,
             skinning: skinning::Skinning::new(device, GpuLimits::of(device).gpu_skinning()),
-            particles: super::particles::Particles::new(device, texture_layout, samples),
+            particles,
             occlusion: super::occlusion::Occlusion::new(device, compute),
             occluded: 0,
             shadows: ShadowMaps {
@@ -1315,8 +1329,8 @@ impl Renderer3D {
         if let Some(culling) = &self.static_culling {
             culling.tally_memory(t);
         }
-        t.buffer(C::InstanceBatches, &self.instances);
-        t.buffer(C::InstanceBatches, self.moved.buffer());
+        t.buffer(C::InstanceBatches, "model instances", &self.instances);
+        t.buffer(C::InstanceBatches, "moved instances", self.moved.buffer());
         if let Some(targets) = &self.targets {
             targets.tally_memory(t);
         }
@@ -1335,16 +1349,16 @@ impl Renderer3D {
         self.lights.tally_memory(t, C::Other);
         self.occlusion.tally_memory(t);
         self.particles.tally_memory(t);
-        t.buffer(C::Other, &self.frame_buffer);
-        t.texture(C::Other, &self.sky_texture);
-        for view in [
-            &self.sky_view,
-            &self.no_gi,
-            &self.no_scene_color,
-            &self.dummy_depth,
-            &self.no_decal_view,
+        t.buffer(C::Other, "frame uniforms", &self.frame_buffer);
+        t.texture(C::Other, "sky lookup", &self.sky_texture);
+        for (label, view) in [
+            ("sky view lookup", &self.sky_view),
+            ("probe stand-in", &self.no_gi),
+            ("scene color stand-in", &self.no_scene_color),
+            ("depth stand-in", &self.dummy_depth),
+            ("decal stand-in", &self.no_decal_view),
         ] {
-            t.view(C::Other, view);
+            t.view(C::Other, label, view);
         }
     }
 

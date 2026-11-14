@@ -104,6 +104,15 @@ fn webgl2_shaders() -> Vec<(&'static str, String)> {
             "sky",
             for_samples(&format!("{MESH_PRELUDE}\n{SKY}"), 1, true).into_owned(),
         ),
+        (
+            "sky shader",
+            for_samples(
+                &compose_sky("fn sky(dir: vec3<f32>) -> vec3<f32> { return frame.sky_params[0].rgb * (0.5 + 0.5 * dir.y) + stars(dir); }"),
+                1,
+                true,
+            )
+            .into_owned(),
+        ),
         ("depth copy", depth_copy::shader(1)),
         ("array mipmaps", crate::render::mips::ARRAY_SHADER.to_string()),
         ("mipmaps", crate::render::mips::SHADER.to_string()),

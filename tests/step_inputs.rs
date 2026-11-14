@@ -430,8 +430,10 @@ mod physics3d {
                     let floor = NavSource::from_mesh(&MeshData::plane(20.0), Transform3D::default());
                     ctx.world
                         .insert_resource(NavMesh3D::bake(&[floor], NavBakeSettings::default()).unwrap());
-                    let mut agent = NavAgent3D::default();
-                    agent.destination = Some(vec3(8.0, 0.0, 0.0));
+                    let agent = NavAgent3D {
+                        destination: Some(vec3(8.0, 0.0, 0.0)),
+                        ..Default::default()
+                    };
                     ctx.world.spawn((
                         Transform3D::at(vec3(-8.0, 0.0, 0.0)),
                         agent,
@@ -481,8 +483,10 @@ mod navmesh {
     }
 
     fn walker(to: Vec3) -> (Transform3D, NavAgent3D) {
-        let mut agent = NavAgent3D::default();
-        agent.destination = Some(to);
+        let agent = NavAgent3D {
+            destination: Some(to),
+            ..Default::default()
+        };
         (Transform3D::at(vec3(-5.0, 0.0, 0.0)), agent)
     }
 

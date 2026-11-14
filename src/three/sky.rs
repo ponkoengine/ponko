@@ -4,7 +4,7 @@
 //! The GPU half, which draws the sky, is `sky.wgsl`; both use the same
 //! model and constants.
 
-use glam::Vec3;
+use glam::{Vec3, Vec4};
 
 use crate::color::Color;
 use crate::render::Lighting;
@@ -30,6 +30,12 @@ use super::linear;
 ///   [`fog_color`](Self::fog_color).
 ///
 /// Those four colors are only for the flat sky; the atmosphere makes its own.
+///
+/// Or a sky of the game's own: a [`SkyShader`] in [`shader`](Self::shader)
+/// (stylized gradients, painted clouds, a night sky) takes the place of
+/// both. The engine uses it wherever it looks at the sky: the background,
+/// the fog's color, reflections and the ambient light, and what reflection
+/// probes capture.
 ///
 /// ```no_run
 /// # use ponko::prelude::*;
@@ -109,6 +115,82 @@ pub struct Sky {
     /// grainy without [`AntiAliasing::Taa`](crate::render::AntiAliasing::Taa) in
     /// `ctx.scene3d.post`, which smooths it out.
     pub light_shafts: f32,
+    /// A sky of the game's own, in place of the atmosphere and the flat
+    /// sky (see [`SkyShader`]): its light is the background, the fog's
+    /// color and the reflections, and the ambient light unless
+    /// [`authored_ambient`](Self::authored_ambient). The sun keeps
+    /// [`Lighting`]'s color and intensity as authored (the atmosphere's
+    /// reddening is off), [`sun_size`](Self::sun_size) and
+    /// [`stars`](Self::stars) still draw the sun's disk and the stars, and
+    /// all of the fog settings apply. `None` (the default): the atmosphere or
+    /// the flat sky, as [`atmosphere`](Self::atmosphere) says.
+    pub shader: Option<SkyShader>,
+    /// Four values the sky shader reads as `frame.sky_params[0]` to `[3]`
+    /// (a time of day, cloud cover, colors). The reflections, the ambient
+    /// light and the fog follow a change within a few frames: they are
+    /// rebuilt from the sky at most every
+    /// [`SkyShader::REBUILD_FRAMES`] frames, while the background shows it
+    /// at once. Default all zero.
+    pub shader_params: [Vec4; 4],
+    /// With a [`shader`](Self::shader): the ambient light comes from the
+    /// authored [`sky_color`](Self::sky_color),
+    /// [`ground_color`](Self::ground_color) and
+    /// [`equator_color`](Self::equator_color), as for the flat sky, while
+    /// the background, the fog and the reflections still show the shader's
+    /// sky. Default off: the ambient light is the sky's own light.
+    pub authored_ambient: bool,
+}
+
+/// A sky shader: the game's own sky, made with
+/// [`Graphics::create_sky_shader`](crate::gfx::Graphics::create_sky_shader) or
+/// [`Graphics::load_sky_shader`](crate::gfx::Graphics::load_sky_shader); a
+/// cheap handle. Show it by setting [`Sky::shader`].
+///
+/// The WGSL defines one function:
+///
+/// ```wgsl
+/// fn sky(dir: vec3<f32>) -> vec3<f32>
+/// ```
+///
+/// the sky's light (linear, before exposure and tone mapping) seen in unit
+/// direction `dir` (world space, away from the camera), without the sun's
+/// disk, which the engine adds. It runs for every background pixel, and for
+/// the sky texture that fog, reflections and the ambient light read. It can
+/// read `frame` (`frame.sun_dir`, `frame.sun_color`, `frame.time`,
+/// [`Sky::shader_params`] as `frame.sky_params`) and the engine's helpers
+/// (`hash2`, `noise2`, `fbm2`, `PI`); it declares no bindings of its own.
+///
+/// What the fog, reflections and ambient light show is rebuilt when the
+/// sun, [`Lighting`] or [`Sky::shader_params`] change, not as `frame.time`
+/// goes by: drive slow changes (a time of day) through the parameters, and
+/// keep time-based motion (drifting clouds) small, since only the
+/// background shows it.
+///
+/// ```no_run
+/// # use ponko::prelude::*;
+/// # fn f(ctx: &mut Ctx) {
+/// let sunset = ctx.gfx.create_sky_shader("sunset", "
+///     fn sky(dir: vec3<f32>) -> vec3<f32> {
+///         let up = clamp(dir.y, 0.0, 1.0);
+///         return mix(frame.sky_params[0].rgb, frame.sky_params[1].rgb, sqrt(up));
+///     }");
+/// ctx.scene3d.sky.shader = Some(sunset);
+/// ctx.scene3d.sky.shader_params[0] = vec4(1.0, 0.45, 0.2, 0.0); // horizon
+/// ctx.scene3d.sky.shader_params[1] = vec4(0.15, 0.2, 0.6, 0.0); // overhead
+/// ctx.scene3d.sky.fog_density = 0.01; // the fog takes the sky's colors
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SkyShader {
+    pub(crate) id: u32,
+}
+
+impl SkyShader {
+    /// The fewest frames between two rebuilds of the fog's, the reflections'
+    /// and the ambient light's sky from a sky shader: changing
+    /// [`Sky::shader_params`] every frame costs one rebuild (a few
+    /// milliseconds of GPU time) this often, not every frame.
+    pub const REBUILD_FRAMES: u32 = 6;
 }
 
 impl Default for Sky {
@@ -131,6 +213,9 @@ impl Default for Sky {
             fog_sun_glow: 0.0,
             fog_sun_focus: 0.7,
             light_shafts: 0.0,
+            shader: None,
+            shader_params: [Vec4::ZERO; 4],
+            authored_ambient: false,
         }
     }
 }
@@ -252,6 +337,21 @@ pub(crate) struct SkyLight {
 }
 
 impl SkyLight {
+    /// The light as `lighting` and `sky` give it, with no atmosphere: the
+    /// sun's own color and the sky's flat colors (the flat sky, and a sky
+    /// shader's authored sun).
+    pub fn authored(lighting: &Lighting, sky: &Sky) -> Self {
+        let rgb = |c| {
+            let [r, g, b, _] = linear(c);
+            Vec3::new(r, g, b)
+        };
+        Self {
+            sun: rgb(lighting.sun_color) * lighting.sun_intensity,
+            sky: rgb(sky.sky_color),
+            ground: rgb(sky.ground_color),
+        }
+    }
+
     /// Works it out; about 50 µs, so worth keeping while the sun and sky
     /// stay put.
     pub fn new(lighting: &Lighting, sky: &Sky) -> Self {

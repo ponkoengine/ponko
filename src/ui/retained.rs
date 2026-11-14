@@ -556,6 +556,11 @@ pub struct Ui {
     pub(super) pressed: Option<UiId>,
     drag: Option<Drag>,
     pub(super) scale: f32,
+    /// Physical pixels per window pixel where the tree is drawn (the
+    /// window's scale factor; 1 for a world panel). Text is measured at
+    /// the size it is drawn, in physical pixels, so glyph widths rounded
+    /// to whole pixels add up the same in layout and drawing.
+    pub(super) pixels: f32,
     viewport: Vec2,
     pointer: Vec2,
     pub(super) measure: crate::text::Text,
@@ -603,6 +608,7 @@ impl Default for Ui {
             pressed: None,
             drag: None,
             scale: 1.0,
+            pixels: 1.0,
             viewport: Vec2::ZERO,
             pointer: Vec2::ZERO,
             measure: crate::text::Text::new(),
@@ -1302,6 +1308,9 @@ impl Ui {
         let text = &mut self.measure;
         let scratch = &mut self.rich_layout;
         let external_fonts = self.external_fonts;
+        // Physical pixels per layout unit: text is measured at the size
+        // it is drawn.
+        let k = self.scale * self.pixels;
         let roots = self.huds.iter().chain(self.screens.iter().map(|s| &s.root));
         for root in roots {
             let layout = nodes[root.0].as_ref().unwrap().layout;
@@ -1321,19 +1330,19 @@ impl Ui {
                         |_, _| 0.0,
                         |known, available| {
                             if let Some(rich) = n.rich() {
-                                return rich_size(rich, n, external_fonts, known, available, text, scratch);
+                                return rich_size(rich, n, (external_fonts, k), known, available, text, scratch);
                             }
                             let size = text.layout(
                                 &n.text,
                                 if external_fonts { n.paint.font } else { Font::DEFAULT },
-                                n.paint.font_size,
+                                n.paint.font_size * k,
                                 false,
-                            );
+                            ) / k;
                             let font = if external_fonts { n.paint.font } else { Font::DEFAULT };
                             let width = known.width.unwrap_or_else(|| match available.width {
                                 AvailableSpace::Definite(w) if n.paint.wrap => size.x.min(w.max(0.0)),
                                 AvailableSpace::MinContent if n.paint.wrap => {
-                                    text.min_content_width(&n.text, font, n.paint.font_size)
+                                    text.min_content_width(&n.text, font, n.paint.font_size * k) / k
                                 }
                                 _ => size.x,
                             });
@@ -1342,11 +1351,11 @@ impl Ui {
                                 let mut rest = paragraph;
                                 loop {
                                     let end = if n.paint.wrap {
-                                        wrap_end(text, rest, font, n.paint.font_size, width)
+                                        wrap_end(text, rest, font, n.paint.font_size * k, width * k)
                                     } else {
                                         rest.len()
                                     };
-                                    height += text.layout(&rest[..end], font, n.paint.font_size, false).y;
+                                    height += text.layout(&rest[..end], font, n.paint.font_size * k, false).y / k;
                                     if end == rest.len() {
                                         break;
                                     }
@@ -1696,10 +1705,11 @@ impl Ui {
             Font::DEFAULT
         };
         let x = (p.x - n.rect.min.x) / self.scale - layout.padding.left - layout.border.left;
-        let caret_x = self.measure.caret_x(&n.text, font, n.paint.font_size, n.caret);
+        let k = self.text_pixels();
+        let caret_x = self.measure.caret_x(&n.text, font, n.paint.font_size * k, n.caret) / k;
         let available = n.rect.size().x / self.scale - layout.padding.left - layout.padding.right;
         let target = x + (caret_x - available + 3.0).max(0.0);
-        self.measure.hit(&n.text, font, n.paint.font_size, target)
+        self.measure.hit(&n.text, font, n.paint.font_size * k, target * k)
     }
     /// Applies this frame's editing to the focused text input. With
     /// `ime_keys`, a composition owns the keys: only committed text goes in.
@@ -1783,6 +1793,10 @@ impl Ui {
     pub(super) fn scale(&self) -> f32 {
         self.scale
     }
+    /// Physical pixels per layout unit, the size text is measured at.
+    pub(super) fn text_pixels(&self) -> f32 {
+        self.scale * self.pixels
+    }
     pub(super) fn modal_root(&self, id: UiId) -> bool {
         self.screens.iter().any(|s| s.root == id && s.modal)
     }
@@ -1800,7 +1814,7 @@ pub(super) fn intersect(a: Rect, b: Rect) -> Rect {
 fn rich_size(
     rich: &super::rich::RichText,
     n: &Node,
-    external_fonts: bool,
+    (external_fonts, pixels): (bool, f32),
     known: Size<Option<f32>>,
     available: Size<AvailableSpace>,
     text: &mut crate::text::Text,
@@ -1812,7 +1826,7 @@ fn rich_size(
         size: n.paint.font_size,
         scale: 1.0,
         fonts: external_fonts,
-        pixels: 1.0,
+        pixels,
     };
     let natural = rich.layout(base, None, Align::MEASURE, text, scratch);
     let width = known.width.unwrap_or_else(|| match available.width {

@@ -582,26 +582,26 @@ impl Resources {
     /// `memory.rs`).
     pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.bytes(C::Meshes, self.mesh_arena.bytes());
+        t.bytes(C::Meshes, "mesh arena", self.mesh_arena.bytes());
         for mesh in &self.meshes {
             if let Some((vertices, indices)) = &mesh.buffers {
-                t.buffer(C::Meshes, vertices);
-                t.buffer(C::Meshes, indices);
+                t.buffer(C::Meshes, "mesh vertices", vertices);
+                t.buffer(C::Meshes, "mesh indices", indices);
             }
             if let Some(skin) = &mesh.skin {
                 skin.tally_memory(t);
             }
         }
         for buffer in self.storage_buffers.iter().flatten() {
-            t.buffer(C::GpuBuffers, &buffer.buffer);
+            t.buffer(C::GpuBuffers, "gpu buffer", &buffer.buffer);
         }
         for view in self.arrays.iter().chain([&self.white_array]) {
-            t.view(C::Textures, view);
+            t.view(C::Textures, "texture array", view);
         }
         for material in &self.materials {
-            t.buffer(C::Other, &material.buffer);
+            t.buffer(C::Other, "material uniforms", &material.buffer);
             for texture in &material.bindings.textures {
-                t.texture(C::Textures, texture);
+                t.texture(C::Textures, "material texture", texture);
             }
         }
     }

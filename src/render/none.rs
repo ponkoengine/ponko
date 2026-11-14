@@ -50,6 +50,9 @@ impl Renderer {
     pub fn gpu_memory(&self) -> Option<crate::perf::GpuMemory> {
         match *self {}
     }
+    pub fn texture_alpha_memory(&self) -> Option<crate::inventory::TextureAlphaMemory> {
+        match *self {}
+    }
     pub fn create_texture(&mut self, _width: u32, _height: u32, _rgba: &[u8]) -> u32 {
         match *self {}
     }
@@ -178,6 +181,23 @@ impl Renderer {
     }
     #[cfg(feature = "3d")]
     pub fn replace_compute(
+        &mut self,
+        _id: u32,
+        _name: &str,
+        _source: &str,
+    ) -> Result<(), Box<crate::render::ShaderDiagnostic>> {
+        match *self {}
+    }
+    #[cfg(feature = "3d")]
+    pub fn create_sky_shader(
+        &mut self,
+        _name: &str,
+        _source: &str,
+    ) -> Result<u32, Box<crate::render::ShaderDiagnostic>> {
+        match *self {}
+    }
+    #[cfg(feature = "3d")]
+    pub fn replace_sky_shader(
         &mut self,
         _id: u32,
         _name: &str,

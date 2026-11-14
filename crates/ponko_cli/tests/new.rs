@@ -45,7 +45,12 @@ fn every_template_generates_a_project_that_builds_against_this_engine() {
         }
     };
 
-    for (flag, name) in [("--2d", "e2e-2d"), ("--3d", "e2e-3d"), ("--headless", "e2e-headless")] {
+    for (flag, name) in [
+        ("--2d", "e2e-2d"),
+        ("--3d", "e2e-3d"),
+        ("--headless", "e2e-headless"),
+        ("--server", "e2e-server"),
+    ] {
         let made = Command::new(env!("CARGO_BIN_EXE_ponko"))
             .current_dir(&projects)
             .args(["new", name, flag, "--path"])

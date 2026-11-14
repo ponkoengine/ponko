@@ -12,6 +12,7 @@ use ponko::prelude::{Game, Vec3, vec3};
 use rapier3d::prelude as rp;
 
 use crate::Bench;
+use crate::alloc::live_bytes;
 
 pub const TICKS: u64 = 250; // 5 s at 50 Hz
 
@@ -208,4 +209,98 @@ pub fn run(b: &mut Bench) {
             },
         );
     }
+
+    // Looking bodies up by entity (`mass`, `apply_impulse`, ...; the same
+    // lookup `step_physics3d` does per entity to sync it): 10 000 fixed
+    // boxes, each looked up 20 times per tick, for 50 ticks. Prints the time per
+    // lookup (the loops alone).
+    b.run(
+        "physics3d/lookups-10000",
+        5,
+        || (),
+        |_| {
+            let world = Game::new("bench", 1, 1)
+                .sim_system(|ctx: &mut ponko::prelude::Ctx| {
+                    let mut found = 0.0f32;
+                    let bodies = ctx.world.resource::<Bodies>();
+                    let t = std::time::Instant::now();
+                    for _ in 0..20 {
+                        for &e in &bodies.0 {
+                            found += ctx.physics3d.mass(e).unwrap_or(0.0);
+                        }
+                    }
+                    let ns = t.elapsed().as_nanos() as i64;
+                    LOOKUP_NS.fetch_add(ns, std::sync::atomic::Ordering::Relaxed);
+                    std::hint::black_box(found);
+                })
+                .physics3d(Vec3::ZERO)
+                .run_headless(50, |ctx| {
+                    let bodies = (0..10_000)
+                        .map(|i| {
+                            let at = vec3((i % 100) as f32 * 2.0, 0.0, (i / 100) as f32 * 2.0);
+                            ctx.world
+                                .spawn((Transform3D::at(at), RigidBody3D::fixed(), Collider3D::cuboid(Vec3::ONE)))
+                        })
+                        .collect();
+                    ctx.world.insert_resource(Bodies(bodies));
+                });
+            let ns = LOOKUP_NS.swap(0, std::sync::atomic::Ordering::Relaxed);
+            println!("    physics3d/lookups-10000: {:.1} ns per lookup", ns as f64 / 1e7);
+            std::hint::black_box(world);
+        },
+    );
+
+    // Streaming churn: each tick 200 bodies leave and 200 come, among 400
+    // new plain entities (scenery that stays), so entity indices climb while
+    // the live bodies stay at 200. Prints the live heap on the last tick
+    // (everything: the world's entities, rapier, the links table).
+    b.run(
+        "physics3d/churn-200",
+        3,
+        || (),
+        |_| {
+            let world = Game::new("bench", 1, 1)
+                .sim_system(|ctx: &mut ponko::prelude::Ctx| {
+                    let mut bodies = std::mem::take(&mut ctx.world.resource_mut::<Bodies>().0);
+                    for e in bodies.drain(..) {
+                        ctx.world.despawn(e);
+                    }
+                    let tick = ctx.time.sim_tick() as f32;
+                    for i in 0..200 {
+                        for _ in 0..2 {
+                            ctx.world.spawn((Transform3D::default(),));
+                        }
+                        let at = vec3((i % 20) as f32 * 3.0, 2.0 + tick * 1e-3, (i / 20) as f32 * 3.0);
+                        bodies.push(ctx.world.spawn((
+                            Transform3D::at(at),
+                            RigidBody3D::dynamic(),
+                            Collider3D::sphere(0.5),
+                        )));
+                    }
+                    ctx.world.resource_mut::<Bodies>().0 = bodies;
+                    // The last tick's store is the one read.
+                    LAST_LIVE.store(live_bytes(), std::sync::atomic::Ordering::Relaxed);
+                })
+                .physics3d(Vec3::ZERO)
+                .run_headless(TICKS, |ctx| {
+                    ctx.world.insert_resource(Bodies(Vec::new()));
+                });
+            let at_end = LAST_LIVE.load(std::sync::atomic::Ordering::Relaxed);
+            let after = live_bytes();
+            drop(world);
+            println!(
+                "    physics3d/churn-200: {:.1} MB live heap on the last tick ({:.1} MB once the physics was dropped)",
+                at_end as f64 / 1e6,
+                after as f64 / 1e6
+            );
+        },
+    );
 }
+
+struct Bodies(Vec<ponko::prelude::Entity>);
+
+/// Time spent in the lookups benchmark's loops.
+static LOOKUP_NS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// The process's live heap on the churn benchmark's last tick.
+static LAST_LIVE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);

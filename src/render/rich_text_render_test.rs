@@ -400,3 +400,83 @@ fn a_right_to_left_line_starts_with_its_colored_name_at_the_right() {
     let plain = rig.label(&mut ctx, line, false, UiTextAlign::Start);
     reference_rejects("rich_text_arabic", &plain, REFERENCE, "the markup as plain text");
 }
+
+/// How concentrated the ink is: the mean brightness of the ink, weighted
+/// by itself (1 when every inked pixel is fully lit). Glyphs smeared across
+/// two pixels score lower.
+fn crispness(image: &Image) -> f32 {
+    let (mut sum, mut squares) = (0.0f32, 0.0f32);
+    for y in 0..image.height {
+        for x in 0..image.width {
+            let v = image.pixel(x, y)[0] as f32 / 255.0;
+            sum += v;
+            squares += v * v;
+        }
+    }
+    squares / sum.max(1e-6)
+}
+
+/// The largest channel difference between `a` and `b` moved by `shift`
+/// pixels, over the part of `a` both cover.
+fn largest_difference(a: &Image, b: &Image, shift: (u32, u32)) -> u8 {
+    let mut largest = 0;
+    for y in 0..a.height - shift.1 {
+        for x in 0..a.width - shift.0 {
+            let (p, q) = (a.pixel(x, y), b.pixel(x + shift.0, y + shift.1));
+            for c in 0..3 {
+                largest = largest.max(p[c].abs_diff(q[c]));
+            }
+        }
+    }
+    largest
+}
+
+#[test]
+fn text_at_a_fractional_position_is_drawn_as_crisply_as_at_a_whole_one() {
+    use crate::text::TextParams;
+    let Some(rig) = Rig::new() else { return };
+    let text = "Hill 11: lit";
+    let params = TextParams::default().with_size(20.0).with_color(Color::WHITE);
+    let mut ctx = rig.ctx();
+    let mut draw = |pos| {
+        ctx.gfx.draw_text_ex(text, pos, params);
+        rig.shot(&mut ctx)
+    };
+    let whole = draw(vec2(20.0, 30.0));
+    // A quarter pixel off rounds back to the same pixels; three quarters
+    // to the next ones, the same picture a pixel further.
+    let quarter = draw(vec2(20.25, 30.25));
+    let three_quarters = draw(vec2(20.75, 30.75));
+    assert!(
+        largest_difference(&whole, &quarter, (0, 0)) <= 2,
+        "a quarter pixel off draws the same pixels"
+    );
+    assert!(
+        largest_difference(&whole, &three_quarters, (1, 1)) <= 2,
+        "three quarters off draws the same picture a pixel further"
+    );
+    // The negative control: the glyph quads where they were placed before
+    // snapping, half a pixel off, are resampled between pixels.
+    let mut ctx = rig.ctx();
+    let side = Text::ATLAS_SIZE as f32;
+    ctx.gfx.text.layout(text, params.font, params.size, true);
+    let pos = vec2(20.5, 30.5);
+    for p in ctx.gfx.text.placed() {
+        let Some(at) = p.glyph.at else { continue };
+        let size = vec2(p.glyph.size[0] as f32, p.glyph.size[1] as f32);
+        let uv = super::batch::uv_region([at[0] as f32 / side, at[1] as f32 / side], (size / side).into());
+        let quad = SpriteInstance::new((pos + p.pos).into(), size.into(), [0.0, 0.0], 0.0, [255; 4]).with_uv(uv);
+        ctx.gfx.ui_list.push(1, 0.0, quad);
+    }
+    let smeared = rig.shot(&mut ctx);
+    let (sharp, soft) = (crispness(&whole), crispness(&smeared));
+    assert!(
+        crispness(&quarter) >= sharp * 0.99 && crispness(&three_quarters) >= sharp * 0.99,
+        "snapped text is as crisp as at a whole pixel"
+    );
+    assert!(
+        soft < sharp * 0.9,
+        "half a pixel off, unsnapped, smears the glyphs: crispness {soft} vs {sharp}"
+    );
+    assert!(largest_difference(&whole, &smeared, (0, 0)) > 40, "the control differs");
+}

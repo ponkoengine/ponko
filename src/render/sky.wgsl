@@ -134,12 +134,23 @@ fn stars(dir: vec3<f32>) -> vec3<f32> {
     return tint * glow * twinkle * (h - 0.996) * 1500.0 * dark * smoothstep(0.0, 0.15, dir.y);
 }
 
+// The direction from the camera through the far plane at `uv`.
+fn far_dir(uv: vec2<f32>) -> vec3<f32> {
+    let far = frame.inv_view_proj * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.0, 1.0);
+    return normalize(far.xyz / far.w - frame.camera.xyz);
+}
+
 // The sky behind everything: where nothing was drawn.
 @fragment
 fn fs_sky(in: FullScreen) -> @location(0) vec4<f32> {
-    let far = frame.inv_view_proj * vec4<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0, 1.0, 1.0);
-    let dir = normalize(far.xyz / far.w - frame.camera.xyz);
-    var light = sky_radiance(dir) + stars(dir);
+    let dir = far_dir(in.uv);
+    return background(dir, sky_radiance(dir));
+}
+
+// The background in direction `dir`, where the sky gives `sky_light`: with the
+// stars, the sun's disk and the height fog.
+fn background(dir: vec3<f32>, sky_light: vec3<f32>) -> vec4<f32> {
+    var light = sky_light + stars(dir);
     // The sun's disk, with a soft edge; bright enough for bloom to catch.
     let sun = dot(dir, frame.sun_dir.xyz);
     let edge = 1.0 - frame.atmosphere.z;

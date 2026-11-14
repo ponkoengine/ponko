@@ -99,6 +99,14 @@ says where the step goes; `systems::step_navmesh3d_access()` is its access decla
 </div>
 </div>
 
+Build a `d3::NavAgent` like any other component, with struct-update syntax:
+name the settings you change (`speed`, `radius`, `acceleration`,
+`destination`, the avoidance settings) and end with `..Default::default()`.
+That ending is required: the agent's progress (its path, crowd slot and speed
+reached) lives in the opaque `state` field, which only `Default` fills. In
+return, new settings can arrive without breaking the literal. Setting fields
+on a `NavAgent::default()` one by one works too.
+
 The follower accelerates up to its speed and follows a surface-sampled path.
 Its transform represents its feet. It has no gravity, physical collision response,
 turning inertia. Crowd avoidance is opt-in (see below). Do not also attach a physics body or character
@@ -182,11 +190,13 @@ Do not mix opted-out followers into a crowd and expect them to collide.
 
 ```rust
 # use ponko::prelude::*;
-let mut agent = ponko::d3::NavAgent::default();
-agent.avoidance = true;
-agent.avoidance_weight = 2.0;
-agent.neighbour_distance = 3.6;
-agent.destination = Some(Vec3::X * 5.0);
+let agent = ponko::d3::NavAgent {
+    avoidance: true,
+    avoidance_weight: 2.0,
+    neighbour_distance: 3.6,
+    destination: Some(Vec3::X * 5.0),
+    ..Default::default()
+};
 ```
 
 </div>

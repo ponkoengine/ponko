@@ -137,6 +137,17 @@ impl Rig {
         mesh
     }
 
+    /// A sky shader, made in the context and in the renderer.
+    fn sky_shader(&mut self, source: &str) -> crate::render::SkyShader {
+        let shader = self.ctx.gfx.create_sky_shader("test sky", source);
+        let id = self
+            .renderer
+            .create_sky_shader(&self.device, "test sky", source)
+            .unwrap();
+        assert_eq!(id, shader.id);
+        shader
+    }
+
     /// Backs the context's probe capture handles with real targets.
     fn register_captures(&mut self) {
         let captures = self.ctx.gfx.assets3d.probes.captures.clone();
@@ -188,7 +199,7 @@ impl Rig {
             frame: &ctx.gfx.frame3d,
             lighting: &ctx.scene3d.lighting,
             sky: &ctx.scene3d.sky,
-            light: if ctx.scene3d.sky.atmosphere {
+            light: if ctx.scene3d.sky.atmosphere && ctx.scene3d.sky.shader.is_none() {
                 SkyLight::new(&ctx.scene3d.lighting, &ctx.scene3d.sky)
             } else {
                 SkyLight {
@@ -1030,4 +1041,255 @@ fn probe_refresh_cost() {
             v.len()
         );
     }
+}
+
+/// A sky of one colour all round: `frame.sky_params[0]`.
+const PARAM_SKY: &str = "fn sky(dir: vec3<f32>) -> vec3<f32> { return frame.sky_params[0].rgb; }";
+
+/// A mirror ball in front of the camera, and far behind it, to the side, a
+/// black ball deep in fog.
+fn sky_scene(rig: &mut Rig) -> (Vec3, Vec3) {
+    let ball = rig.mesh(&MeshData::sphere(1.5, 32), mirror(Color::WHITE));
+    rig.ctx.world.spawn((Transform3D::default(), Model::new(ball)));
+    let far = vec3(-14.0, 0.0, 40.0);
+    let dark = rig.mesh(&MeshData::sphere(4.0, 16), matte(Color::BLACK));
+    rig.ctx.world.spawn((Transform3D::at(far), Model::new(dark)));
+    rig.ctx.scene3d.camera.position = vec3(0.0, 0.0, -6.0);
+    rig.ctx.scene3d.camera.look_at(Vec3::ZERO);
+    rig.ctx.scene3d.sky.fog_density = 0.15;
+    rig.ctx.scene3d.sky.fog_falloff = 1000.0;
+    rig.ctx.scene3d.sky.stars = 0.0;
+    (Vec3::ZERO, far)
+}
+
+/// The background (a top corner), the mirror ball and the fogged ball, in
+/// sRGB levels.
+fn sky_seen(rig: &mut Rig, far: Vec3) -> [Vec3; 3] {
+    let pixels = rig.draw();
+    let view_proj = rig.ctx.scene3d.camera.view_proj();
+    let fogged = screen(view_proj, far);
+    [
+        rgb(&pixels, 4, 4),
+        ball_colour(rig, &pixels, Vec3::ZERO),
+        rgb(&pixels, fogged.x as u32, fogged.y as u32),
+    ]
+}
+
+fn orange(c: Vec3) -> bool {
+    c.x > c.z + 60.0 && c.x > c.y + 20.0
+}
+
+fn green(c: Vec3) -> bool {
+    c.y > c.x + 40.0 && c.y > c.z + 40.0
+}
+
+#[test]
+fn a_sky_shader_is_the_background_the_fog_and_the_reflections() {
+    let Some(mut rig) = Rig::new() else { return };
+    let (_, far) = sky_scene(&mut rig);
+    // Negative control: the flat sky's grey-blue everywhere.
+    let flat = sky_seen(&mut rig, far);
+    assert!(flat.iter().all(|c| !orange(*c)), "{flat:?}");
+
+    let shader = rig.sky_shader(PARAM_SKY);
+    rig.ctx.scene3d.sky.shader = Some(shader);
+    rig.ctx.scene3d.sky.shader_params[0] = vec4(0.9, 0.3, 0.02, 0.0);
+    let [background, mirror_ball, fogged] = sky_seen(&mut rig, far);
+    assert!(orange(background), "the background is the sky shader's: {background}");
+    assert!(orange(mirror_ball), "the mirror reflects it: {mirror_ball}");
+    assert!(orange(fogged), "the fog takes its colour: {fogged}");
+    assert!(
+        (fogged - background).abs().max_element() < 8.0,
+        "deep in fog, the far ball is the sky's colour: {fogged} vs {background}"
+    );
+
+    // A new parameter: the background at once; the reflections and fog are
+    // rebuilt (the last bake was long enough ago).
+    for _ in 0..crate::render::SkyShader::REBUILD_FRAMES {
+        rig.draw();
+    }
+    rig.ctx.scene3d.sky.shader_params[0] = vec4(0.05, 0.8, 0.05, 0.0);
+    let changed = sky_seen(&mut rig, far);
+    assert!(changed.iter().all(|c| green(*c)), "all follow at once: {changed:?}");
+    // Changed again right away: the background follows, the maps (and the
+    // fog, which reaches the sky too, so it is off here) wait for the
+    // budget, then follow.
+    rig.ctx.scene3d.sky.fog_density = 0.0;
+    rig.ctx.scene3d.sky.shader_params[0] = vec4(0.9, 0.3, 0.02, 0.0);
+    let [background, mirror_ball, _] = sky_seen(&mut rig, far);
+    assert!(orange(background), "the background at once: {background}");
+    assert!(green(mirror_ball), "the reflection within the budget: {mirror_ball}");
+    let mut seen = sky_seen(&mut rig, far);
+    for _ in 0..crate::render::SkyShader::REBUILD_FRAMES {
+        seen = sky_seen(&mut rig, far);
+    }
+    assert!(orange(seen[0]) && orange(seen[1]), "after the budget: {seen:?}");
+}
+
+#[test]
+fn a_sky_shader_can_keep_the_authored_ambient_colours() {
+    let Some(mut rig) = Rig::new() else { return };
+    let ball = rig.mesh(&MeshData::sphere(1.5, 32), matte(Color::WHITE));
+    rig.ctx.world.spawn((Transform3D::default(), Model::new(ball)));
+    rig.ctx.scene3d.camera.position = vec3(0.0, 0.0, -6.0);
+    rig.ctx.scene3d.camera.look_at(Vec3::ZERO);
+    rig.ctx.scene3d.sky.sky_color = Color::rgb(0.05, 0.1, 0.9);
+    rig.ctx.scene3d.sky.ground_color = Color::rgb(0.05, 0.1, 0.9);
+    rig.ctx.scene3d.sky.stars = 0.0;
+    let shader = rig.sky_shader(PARAM_SKY);
+    rig.ctx.scene3d.sky.shader = Some(shader);
+    rig.ctx.scene3d.sky.shader_params[0] = vec4(0.9, 0.3, 0.02, 0.0);
+    let seen = |rig: &mut Rig| {
+        let pixels = rig.draw();
+        (rgb(&pixels, 4, 4), rgb(&pixels, SIZE / 2, SIZE / 2))
+    };
+    let (background, from_sky) = seen(&mut rig);
+    assert!(
+        orange(background) && orange(from_sky),
+        "the sky's own light: {from_sky}"
+    );
+    rig.ctx.scene3d.sky.authored_ambient = true;
+    let (background, authored) = seen(&mut rig);
+    assert!(orange(background), "the background stays the sky's: {background}");
+    assert!(
+        authored.z > authored.x + 40.0,
+        "the ambient light is the authored blue: {authored}"
+    );
+}
+
+#[test]
+fn a_refreshing_probe_follows_a_sky_shaders_parameters() {
+    let Some((mut rig, _)) = refreshing_room(Some(ReflectionRefresh {
+        when: ProbeRefresh::LightingChanged(0.02),
+        blend_seconds: 0.0,
+    })) else {
+        return;
+    };
+    let shader = rig.sky_shader(PARAM_SKY);
+    rig.ctx.scene3d.sky.shader = Some(shader);
+    rig.ctx.scene3d.sky.shader_params[0] = vec4(0.9, 0.3, 0.02, 0.0);
+    let first = *ball_over(&mut rig, 40).last().unwrap();
+    assert!(orange(first), "the probe captured the shader's sky: {first}");
+    rig.ctx.scene3d.sky.shader_params[0] = vec4(0.05, 0.8, 0.05, 0.0);
+    let after = *ball_over(&mut rig, 40).last().unwrap();
+    assert!(green(after), "a new parameter refreshes the probe: {after}");
+}
+
+#[test]
+fn turning_a_sky_shader_off_brings_the_atmosphere_back_unchanged() {
+    let Some(mut rig) = Rig::new() else { return };
+    sky_scene(&mut rig);
+    rig.ctx.scene3d.sky.atmosphere = true;
+    rig.ctx.scene3d.lighting.sun_intensity = 3.0;
+    rig.ctx.scene3d.lighting.sun_direction = vec3(0.3, -0.6, 0.5);
+    let before = rig.draw();
+    let shader = rig.sky_shader(PARAM_SKY);
+    rig.ctx.scene3d.sky.shader = Some(shader);
+    rig.ctx.scene3d.sky.shader_params[0] = vec4(0.9, 0.3, 0.02, 0.0);
+    let shaded = rig.draw();
+    rig.ctx.scene3d.sky.shader = None;
+    let after = rig.draw();
+    let most = |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+    assert!(most(&before, &shaded) > 60, "the sky shader showed");
+    assert!(
+        most(&before, &after) <= 1,
+        "the atmosphere is back as it was: {}",
+        most(&before, &after)
+    );
+}
+
+#[test]
+fn the_default_sky_draws_as_it_did_before_sky_shaders() {
+    let Some(mut rig) = Rig::new() else { return };
+    sky_scene(&mut rig);
+    rig.ctx.scene3d.sky = Sky {
+        fog_density: 0.02,
+        fog_sun_glow: 0.1,
+        ..Sky::default()
+    };
+    rig.ctx.scene3d.lighting.sun_intensity = 3.0;
+    rig.ctx.scene3d.lighting.sun_direction = vec3(0.2, -0.05, 1.0);
+    rig.ctx.scene3d.camera.look_at(vec3(0.2, 0.1, 1.0));
+    let now = rig.draw();
+    super::gpu3d::sky_render_test::use_original_sky(&mut rig.renderer, &rig.device);
+    let before = rig.draw();
+    let most = |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+    let lit = (0..SIZE).any(|x| rgb(&now, x, 4).max_element() > 50.0);
+    assert!(lit, "a lit sky is in view");
+    assert_eq!(most(&now, &before), 0, "the default sky is unchanged");
+    // Negative control: a sky shader's background differs.
+    let shader = rig.sky_shader(PARAM_SKY);
+    rig.ctx.scene3d.sky.shader = Some(shader);
+    rig.ctx.scene3d.sky.shader_params[0] = vec4(0.9, 0.3, 0.02, 0.0);
+    assert!(most(&now, &rig.draw()) > 60);
+}
+
+/// The stylized_sky example's painted sky, at dusk.
+fn painted_dusk(rig: &mut Rig) {
+    let shader = rig.sky_shader(include_str!("../../assets/shaders/stylized_sky.wgsl"));
+    let sky = &mut rig.ctx.scene3d.sky;
+    sky.shader = Some(shader);
+    sky.shader_params = [
+        vec4(1.2, 0.45, 0.15, 0.0),
+        vec4(0.25, 0.12, 0.45, 0.6),
+        vec4(0.12, 0.06, 0.08, 0.0),
+        vec4(1.4, 0.6, 0.5, 0.0),
+    ];
+}
+
+#[test]
+fn the_example_skys_reflections_and_fog_match_it() {
+    let Some(mut rig) = Rig::new() else { return };
+    let (_, far) = sky_scene(&mut rig);
+    rig.ctx.scene3d.sky.fog_density = 0.0;
+    // A point on the mirror ball whose reflection rises a little above the
+    // horizon (between two of the painted bands), and the background in
+    // the same elevation, off to the side.
+    let camera = rig.ctx.scene3d.camera.position;
+    let tilt = 0.085f32;
+    let on_ball = vec3(0.0, 1.5 * tilt.sin(), -1.5 * tilt.cos());
+    let normal = on_ball.normalize();
+    let view = (on_ball - camera).normalize();
+    let reflected = view - 2.0 * view.dot(normal) * normal;
+    let elevation = reflected.y;
+    let aside = vec3(-0.4, 0.0, 1.0).normalize() * (1.0 - elevation * elevation).sqrt() + Vec3::Y * elevation;
+    let same_elevation = |rig: &mut Rig| {
+        let pixels = rig.draw();
+        let view_proj = rig.ctx.scene3d.camera.view_proj();
+        let [m, b] = [on_ball, camera + aside * 50.0].map(|p| screen(view_proj, p));
+        [
+            rgb(&pixels, m.x as u32, m.y as u32),
+            rgb(&pixels, b.x as u32, b.y as u32),
+        ]
+    };
+    // Negative control: the flat sky.
+    let [flat_mirror, _] = same_elevation(&mut rig);
+    painted_dusk(&mut rig);
+    // No clouds where the two are compared: they are not the same place.
+    rig.ctx.scene3d.sky.shader_params[1].w = 0.0;
+    let [mirror_ball, background] = same_elevation(&mut rig);
+    assert!((0.12..0.24).contains(&elevation), "{elevation}");
+    assert!(
+        background.x > background.z + 30.0,
+        "the warm painted dusk sky: {background}"
+    );
+    assert!(
+        (mirror_ball - background).abs().max_element() < 16.0,
+        "the mirror reflects the painted sky: {mirror_ball} vs {background}"
+    );
+    assert!((flat_mirror - background).abs().max_element() > 60.0, "{flat_mirror}");
+    rig.ctx.scene3d.sky.shader_params[1].w = 0.6;
+    // Thick fog: the far ball fades into the sky beside it.
+    rig.ctx.scene3d.sky.fog_density = 0.15;
+    let pixels = rig.draw();
+    let view_proj = rig.ctx.scene3d.camera.view_proj();
+    let ball = screen(view_proj, far);
+    let beside = screen(view_proj, far - vec3(7.0, 0.0, 0.0));
+    let fogged = rgb(&pixels, ball.x as u32, ball.y as u32);
+    let sky_beside = rgb(&pixels, beside.x as u32, beside.y as u32);
+    assert!(orange(fogged), "{fogged}");
+    assert!(
+        (fogged - sky_beside).abs().max_element() < 12.0,
+        "the fog is the sky's colour: {fogged} vs {sky_beside}"
+    );
 }

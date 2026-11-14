@@ -8,6 +8,7 @@ use glam::Vec2;
 use ponko_ecs::World;
 
 mod batch;
+mod server;
 mod system;
 #[cfg(feature = "window")]
 mod window;

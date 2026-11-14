@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::collision::{BodyKind, CollisionStarted, CollisionStopped};
 use crate::d2::Transform as Transform2D;
+use crate::physics_links::LinkTable;
 use crate::{ctx::Ctx, events::Events};
 use glam::Vec2;
 use ponko_ecs::{Component, Entity, With, World};
@@ -333,7 +334,6 @@ pub struct RayHit {
 /// What the world last knew of one body, to notice your changes.
 #[derive(Clone, Copy)]
 struct Link {
-    entity: Entity,
     body: rp::RigidBodyHandle,
     rigid: RigidBody,
     shape: Collider,
@@ -347,8 +347,11 @@ struct Link {
 /// [`RigidBody`], [`Collider`] and [`d2::Transform`](crate::d2::Transform) are simulated.
 pub struct Physics {
     world: rp::PhysicsWorld,
-    /// By entity index.
-    links: Vec<Option<Link>>,
+    /// By entity, packed: its memory follows the live bodies, not the
+    /// highest entity index ever used.
+    links: LinkTable<Link>,
+    /// Entity indices to remove, sorted (reused).
+    gone: Vec<u32>,
     gravity: Vec2,
     step: u64,
     /// From `set_paused`: the built-in step does nothing while set.
@@ -388,7 +391,8 @@ impl Physics {
         world.integration_parameters.length_unit = 50.0;
         Self {
             world,
-            links: Vec::new(),
+            links: LinkTable::default(),
+            gone: Vec::new(),
             gravity,
             step: 0,
             paused: false,
@@ -548,31 +552,43 @@ impl Physics {
     }
 
     fn link(&self, e: Entity) -> Option<&Link> {
-        self.links.get(e.index() as usize)?.as_ref().filter(|l| l.entity == e)
+        self.links.get(e)
     }
 
     fn insert(&mut self, e: Entity, t: &Transform2D, rigid: RigidBody, shape: Collider, velocity: Velocity) {
         let body = self.world.insert_body(body_of(t, rigid, velocity));
         self.world.insert_collider(collider_of(shape, e), Some(body));
-        let i = e.index() as usize;
-        if self.links.len() <= i {
-            self.links.resize(i + 1, None);
-        }
-        self.links[i] = Some(Link {
-            entity: e,
-            body,
-            rigid,
-            shape,
-            transform: *t,
-            velocity,
-            seen: self.step,
-        });
+        // Any link with `e`'s index was taken out (its body removed) first.
+        self.links.insert(
+            e,
+            Link {
+                body,
+                rigid,
+                shape,
+                transform: *t,
+                velocity,
+                seen: self.step,
+            },
+        );
     }
 
-    fn remove(&mut self, i: usize) {
-        if let Some(link) = self.links[i].take() {
-            self.world.remove_body(link.body);
+    /// Removes the links `pick` accepts, and their bodies, in entity-index
+    /// order so runs stay deterministic.
+    fn remove_where(&mut self, pick: impl FnMut(&Link) -> bool) {
+        let mut gone = std::mem::take(&mut self.gone);
+        self.links.sorted_indices(&mut gone, pick);
+        for &index in &gone {
+            if let Some(link) = self.links.remove_index(index) {
+                self.world.remove_body(link.body);
+            }
         }
+        self.gone = gone;
+    }
+
+    /// Bytes the links table holds on the heap.
+    #[cfg(test)]
+    pub(crate) fn links_heap_bytes(&self) -> usize {
+        self.links.heap_bytes()
     }
 
     /// Removes every body, keeping gravity and the step count: the world's
@@ -581,9 +597,7 @@ impl Physics {
     /// contacts) may carry over. The next step builds bodies afresh from
     /// the components; until then queries find nothing.
     pub(crate) fn forget_bodies(&mut self) {
-        for i in 0..self.links.len() {
-            self.remove(i);
-        }
+        self.remove_where(|_| true);
     }
 }
 
@@ -742,17 +756,10 @@ fn sync_into(physics: &mut Physics, world: &mut World) {
     world
         .query::<(Entity, &Transform2D, &RigidBody, &Collider, Option<&Velocity>)>()
         .for_each(|(e, t, rigid, shape, velocity)| {
-            let i = e.index() as usize;
-            let Some(link) = physics
-                .links
-                .get_mut(i)
-                .and_then(Option::as_mut)
-                .filter(|l| l.entity == e)
-            else {
-                if let Some(Some(old)) = physics.links.get(i).copied() {
+            let Some(link) = physics.links.get_mut(e) else {
+                if let Some(old) = physics.links.remove_index(e.index()) {
                     // A recycled index: the old entity's body goes first.
                     physics.world.remove_body(old.body);
-                    physics.links[i] = None;
                 }
                 physics.insert(e, t, *rigid, *shape, velocity.copied().unwrap_or_default());
                 return;
@@ -784,11 +791,7 @@ fn sync_into(physics: &mut Physics, world: &mut World) {
         });
     // Despawned entities and ones that lost a physics component, in index
     // order so runs stay deterministic.
-    for i in 0..physics.links.len() {
-        if physics.links[i].is_some_and(|l| l.seen != step) {
-            physics.remove(i);
-        }
-    }
+    physics.remove_where(|l| l.seen != step);
 }
 
 fn write_back(physics: &mut Physics, world: &mut World) {
@@ -797,12 +800,7 @@ fn write_back(physics: &mut Physics, world: &mut World) {
         .filter::<With<RigidBody>>()
         .filter::<With<Collider>>()
         .for_each(|(e, t, velocity)| {
-            let Some(link) = physics
-                .links
-                .get_mut(e.index() as usize)
-                .and_then(Option::as_mut)
-                .filter(|l| l.entity == e)
-            else {
+            let Some(link) = physics.links.get_mut(e) else {
                 return;
             };
             if link.rigid.kind == BodyKind::Fixed {
@@ -930,5 +928,55 @@ mod tests {
         step(&mut physics, &mut world, &mut events, DT);
         assert_eq!(physics.body_count(), 1);
         assert!(events.read::<CollisionStarted>().is_empty());
+    }
+
+    /// Waves of short-lived bodies among scenery that keeps growing, so
+    /// entity indices climb: the links table follows the live bodies.
+    #[test]
+    fn links_table_stays_bounded_by_the_live_bodies_under_churn() {
+        const LIVE: usize = 100;
+        let mut physics = Physics::new(Vec2::ZERO);
+        let mut world = World::new();
+        let mut events = Events::default();
+        let (mut bodies, mut highest) = (Vec::new(), 0);
+        for wave in 0..40 {
+            for e in bodies.drain(..) {
+                world.despawn(e);
+            }
+            for i in 0..LIVE {
+                for _ in 0..20 {
+                    world.spawn((Transform2D::default(),));
+                }
+                let at = vec2(i as f32 * 20.0, wave as f32);
+                let e = world.spawn((Transform2D::at(at), RigidBody::dynamic(), Collider::circle(5.0)));
+                highest = highest.max(e.index() as usize);
+                bodies.push(e);
+            }
+            step(&mut physics, &mut world, &mut events, DT);
+            assert_eq!(physics.body_count(), LIVE);
+            for &e in &bodies {
+                assert!(physics.mass(e).is_some());
+            }
+        }
+        let bytes = physics.links_heap_bytes();
+        let bound = (LIVE * 4) * (size_of::<Link>() + size_of::<Entity>() + 9);
+        assert!(bytes <= bound, "{bytes} bytes for {LIVE} bodies (bound {bound})");
+        // Negative control: the old table held one slot per index up to the
+        // highest one ever used.
+        let old = (highest + 1) * size_of::<Option<Link>>();
+        assert!(old > 10 * bytes, "old {old} vs {bytes} bytes");
+
+        // Everything leaves: the table gives its memory back.
+        for e in bodies.drain(..) {
+            world.despawn(e);
+        }
+        step(&mut physics, &mut world, &mut events, DT);
+        assert_eq!(physics.body_count(), 0);
+        // At most the small floor the table keeps (64 slots, its map rounded up).
+        let left = physics.links_heap_bytes();
+        assert!(
+            left <= 2 * 64 * (size_of::<Link>() + size_of::<Entity>() + 9),
+            "{left} bytes"
+        );
     }
 }

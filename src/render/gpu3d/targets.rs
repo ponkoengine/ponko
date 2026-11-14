@@ -700,16 +700,16 @@ impl RenderTargets {
     pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
         for (_, texture) in &self.textures {
-            t.texture(C::Textures, texture);
+            t.texture(C::Textures, "render target", texture);
         }
         for (_, view) in &self.views {
-            t.view(C::FrameTargets, &view.color);
-            t.view(C::FrameTargets, &view.depth);
-            t.buffer(C::Other, &view.frame_buffer);
+            t.view(C::FrameTargets, "target camera color", &view.color);
+            t.view(C::FrameTargets, "target camera depth", &view.depth);
+            t.buffer(C::Other, "target camera frame uniforms", &view.frame_buffer);
             view.lights.tally_memory(t, C::Other);
         }
         for (_, compute) in &self.computes {
-            t.texture(C::FrameTargets, &compute.scratch);
+            t.texture(C::FrameTargets, "3d compute scratch", &compute.scratch);
         }
     }
 }
@@ -719,11 +719,16 @@ impl Targets {
     /// as frame targets (see `memory.rs`).
     pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        for view in [&self.color, &self.hdr, &self.scene_view, &self.depth] {
-            t.view(C::FrameTargets, view);
+        for (label, view) in [
+            ("3d color", &self.color),
+            ("3d hdr", &self.hdr),
+            ("3d scene copy", &self.scene_view),
+            ("3d depth", &self.depth),
+        ] {
+            t.view(C::FrameTargets, label, view);
         }
         if let Some(copy) = &self.depth_copy {
-            t.view(C::FrameTargets, &copy.view);
+            t.view(C::FrameTargets, "depth copy", &copy.view);
         }
         if let Some(taa) = &self.taa {
             taa.tally_memory(t);

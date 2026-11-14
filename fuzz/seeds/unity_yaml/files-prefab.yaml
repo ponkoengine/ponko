@@ -1,0 +1,38 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &100
+GameObject:
+  m_Component:
+  - component: {fileID: 400}
+  - component: {fileID: 2300}
+  m_Layer: 8
+  m_Name: 'Lamp: brass'
+  m_IsActive: 1
+--- !u!4 &400
+Transform:
+  m_GameObject: {fileID: 100}
+  m_LocalRotation: {x: 0, y: 0.6, z: 0, w: 0.8}
+  m_LocalPosition: {x: 1.5, y: -2, z: 3e2}
+  m_Children:
+  - {fileID: 401}
+  m_Father: {fileID: 0}
+--- !u!23 &2300
+MeshRenderer:
+  m_GameObject: {fileID: 100}
+  m_Materials:
+  - {fileID: 2100000, guid: 6f2a0b9c00000000a000000000000001, type: 2}
+  m_LightmapParameters: {fileID: 0}
+--- !u!4 &401 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 9001, guid: 77, type: 3}
+  m_PrefabInstance: {fileID: 1001}
+--- !u!114 &500
+MonoBehaviour:
+  m_Script: {fileID: 11500000, guid: abc, type: 3}
+  hexish: 0000000001
+  note: "two
+    lines"
+  list:
+  - 1
+  - 2
+  empty:

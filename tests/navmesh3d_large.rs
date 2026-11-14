@@ -240,8 +240,10 @@ fn an_agent_stands_still_when_a_carving_obstacle_cuts_its_corridor() {
             };
             ctx.world
                 .insert_resource(NavMesh3D::bake(&[corridor()], settings).unwrap());
-            let mut agent = NavAgent3D::default();
-            agent.destination = Some(vec3(15.0, 0.0, 0.0));
+            let agent = NavAgent3D {
+                destination: Some(vec3(15.0, 0.0, 0.0)),
+                ..Default::default()
+            };
             ctx.world.spawn((Transform3D::at(vec3(-15.0, 0.0, 0.0)), agent));
         });
     let p = world.query::<&Transform3D>().iter().next().unwrap().position;

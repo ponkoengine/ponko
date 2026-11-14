@@ -213,6 +213,14 @@ and read `grounded`; the step adds gravity while it's in the air:
 | `gravity_scale` | 1 | 0: floats |
 | `groups` | all | what it walks on and bumps into |
 
+For client prediction in a networked game, `ctx.physics3d.move_character(entity,
+&mut character, feet, dt)` (Rust-only) runs one tick of that walk from any
+feet position without moving a body: the same result as the physics step,
+bit for bit, from the same state and world. The client predicts its own
+character with it and replays it when the server corrects it (see
+[client prediction](networking.md#your-own-player-at-once-client-prediction)).
+It reads the world as of the last step and pushes nothing.
+
 For mouse look, lock the cursor and turn the head by the raw mouse motion
 ([input](input.md#mouse-look)) in a frame system:
 

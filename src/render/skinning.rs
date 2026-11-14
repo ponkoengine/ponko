@@ -698,8 +698,8 @@ impl GpuSkin {
     /// Counts a mesh's influences and morph deltas as skinning (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.buffer(C::Skinning, &self.influences);
-        t.buffer(C::Skinning, &self.deltas);
+        t.buffer(C::Skinning, "skin influences", &self.influences);
+        t.buffer(C::Skinning, "morph deltas", &self.deltas);
     }
 }
 
@@ -708,19 +708,19 @@ impl Skinning {
     /// vertices (this frame's and the last) as skinning (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        for synced in [
-            &self.joints,
-            &self.weights,
-            &self.previous_joints,
-            &self.previous_weights,
-            &self.params,
+        for (label, synced) in [
+            ("joint matrices", &self.joints),
+            ("morph weights", &self.weights),
+            ("previous joint matrices", &self.previous_joints),
+            ("previous morph weights", &self.previous_weights),
+            ("skinning params", &self.params),
         ] {
-            t.buffer(C::Skinning, synced.buffer());
+            t.buffer(C::Skinning, label, synced.buffer());
         }
         for slot in self.slots.iter().flatten() {
             let mut slot = Some(slot);
             while let Some(s) = slot {
-                t.buffer(C::Skinning, &s.buffer);
+                t.buffer(C::Skinning, "posed vertices", &s.buffer);
                 slot = s.previous.as_deref();
             }
         }

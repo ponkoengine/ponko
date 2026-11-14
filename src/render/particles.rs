@@ -13,56 +13,77 @@ use crate::three::text3d::TextVertex;
 const SHADER: &str = include_str!("particles.wgsl");
 const STRIP_SHADER: &str = include_str!("strips.wgsl");
 const TEXT_SHADER: &str = include_str!("text3d.wgsl");
+/// What the particle shaders know of the camera they draw for. The strip
+/// and text shaders read the first three only.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Camera {
     view_proj: [[f32; 4]; 4],
     right: [f32; 4],
     up: [f32; 4],
+    /// Where the scene's depth (group 2) is in the world, for soft
+    /// particles.
+    inv_view_proj: [[f32; 4]; 4],
+    /// The eye; w: 1 when the pass can read the scene depth.
+    eye: [f32; 4],
+    forward: [f32; 4],
 }
+/// The pipelines particles, ribbons, lines and 3D text draw with, and what
+/// each view (the main one, then each target camera) draws of them.
 pub(super) struct Particles {
     alpha: wgpu::RenderPipeline,
     additive: wgpu::RenderPipeline,
+    strip_alpha: wgpu::RenderPipeline,
+    strip_additive: wgpu::RenderPipeline,
+    text: wgpu::RenderPipeline,
+    camera_layout: wgpu::BindGroupLayout,
+    /// The main view's.
+    main: ParticleView,
+    /// Each target camera's, by its render target's texture id.
+    targets: Vec<(u32, ParticleView)>,
+    /// How many of `targets` this frame draws (the rest keep their buffers
+    /// for when a camera is back).
+    target_count: usize,
+}
+/// One view's camera and buffers. GPU storage grows only at high-water
+/// marks, and each frame uploads only the parts that changed.
+pub(super) struct ParticleView {
     camera: Synced,
     group: wgpu::BindGroup,
     instances: Synced,
     pub runs: Vec<ParticleRun>,
-    strip_alpha: wgpu::RenderPipeline,
-    strip_additive: wgpu::RenderPipeline,
     strip_vertices: Synced,
     strip_runs: Vec<StripRun>,
-    text: wgpu::RenderPipeline,
     text_vertices: Synced,
     /// How many text vertices to draw this frame, and their atlas.
     text_count: u32,
     text_atlas: Option<u32>,
+    /// Whether a particle fades against the scene depth (only the main view).
+    soft: bool,
+}
+/// What the particle pipelines read of the scene behind them: the scene
+/// bind group's layout (group 2), and how its depth is declared.
+pub(super) struct SceneDepth<'a> {
+    pub layout: &'a wgpu::BindGroupLayout,
+    /// The particle shader as the scene's depth binding needs it (see
+    /// `gpu3d::shaders::for_samples`).
+    pub adapt: &'a dyn Fn(&str) -> String,
 }
 impl Particles {
-    pub fn new(device: &wgpu::Device, texture_layout: &wgpu::BindGroupLayout, samples: u32) -> Self {
-        Self::with_depth(device, texture_layout, samples, wgpu::TextureFormat::Depth32Float)
-    }
-
-    /// [`Particles::new`] over a scene depth of `depth` format (with
-    /// stencil bits once a material has a stencil).
-    pub fn with_depth(
+    /// The pipelines, over a scene depth of `depth` format (with stencil
+    /// bits once a material has a stencil) and `samples` per pixel.
+    pub fn new(
         device: &wgpu::Device,
         texture_layout: &wgpu::BindGroupLayout,
+        scene: &SceneDepth<'_>,
         samples: u32,
         depth: wgpu::TextureFormat,
     ) -> Self {
-        let camera = Synced::new(
-            device,
-            "particle camera",
-            wgpu::BufferUsages::UNIFORM,
-            size_of::<Camera>(),
-            Upload::Uniforms,
-            (16, 4, MAX_WRITES),
-        );
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("particle camera"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -71,22 +92,21 @@ impl Particles {
                 count: None,
             }],
         });
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("particle camera"),
-            layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera.buffer().as_entire_binding(),
-            }],
+        // Particles read the scene depth (group 2); ribbons, lines and
+        // text don't, so they draw where no scene is bound too.
+        let particle_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("particles"),
+            bind_group_layouts: &[Some(&camera_layout), Some(texture_layout), Some(scene.layout)],
+            immediate_size: 0,
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("particles"),
-            bind_group_layouts: &[Some(&layout), Some(texture_layout)],
+            label: Some("particle strips and text"),
+            bind_group_layouts: &[Some(&camera_layout), Some(texture_layout)],
             immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("particles"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl((scene.adapt)(SHADER).into()),
         });
         let strip_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("strips"),
@@ -106,49 +126,50 @@ impl Particles {
         let particle_layout = wgpu::VertexBufferLayout {
             array_stride: size_of::<ParticleInstance>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4],
+            attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4],
         };
         let strip_layout = wgpu::VertexBufferLayout {
             array_stride: size_of::<StripVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x4],
         };
-        let pipeline = |module: &wgpu::ShaderModule, buffer: &wgpu::VertexBufferLayout, blend| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("particles"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module,
-                    entry_point: Some("vs"),
-                    compilation_options: Default::default(),
-                    buffers: &[Some(buffer.clone())],
-                },
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: depth,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: samples,
-                    ..Default::default()
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module,
-                    entry_point: Some("fs"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: super::gpu3d::HDR_FORMAT,
-                        blend: Some(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
+        let pipeline =
+            |layout: &wgpu::PipelineLayout, module: &wgpu::ShaderModule, buffer: &wgpu::VertexBufferLayout, blend| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("particles"),
+                    layout: Some(layout),
+                    vertex: wgpu::VertexState {
+                        module,
+                        entry_point: Some("vs"),
+                        compilation_options: Default::default(),
+                        buffers: &[Some(buffer.clone())],
+                    },
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: depth,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample: wgpu::MultisampleState {
+                        count: samples,
+                        ..Default::default()
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module,
+                        entry_point: Some("fs"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: super::gpu3d::HDR_FORMAT,
+                            blend: Some(blend),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
         let add = wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,
             dst_factor: wgpu::BlendFactor::One,
@@ -159,29 +180,242 @@ impl Particles {
             alpha: wgpu::BlendComponent::OVER,
         };
         let alpha = wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING;
+        let main = ParticleView::new(device, &camera_layout);
         Self {
-            alpha: pipeline(&module, &particle_layout, alpha),
-            additive: pipeline(&module, &particle_layout, additive),
-            camera,
-            group,
-            instances: vertices::<ParticleInstance>(device, "particle instances", 1),
-            runs: Vec::new(),
-            strip_alpha: pipeline(&strip_module, &strip_layout, alpha),
-            strip_additive: pipeline(&strip_module, &strip_layout, additive),
-            strip_vertices: vertices::<StripVertex>(device, "strip vertices", 6),
-            strip_runs: Vec::new(),
-            text: pipeline(&text_module, &text_layout, alpha),
-            text_vertices: vertices::<TextVertex>(device, "3d text vertices", 6),
-            text_count: 0,
-            text_atlas: None,
+            alpha: pipeline(&particle_pipeline_layout, &module, &particle_layout, alpha),
+            additive: pipeline(&particle_pipeline_layout, &module, &particle_layout, additive),
+            strip_alpha: pipeline(&pipeline_layout, &strip_module, &strip_layout, alpha),
+            strip_additive: pipeline(&pipeline_layout, &strip_module, &strip_layout, additive),
+            text: pipeline(&pipeline_layout, &text_module, &text_layout, alpha),
+            camera_layout,
+            main,
+            targets: Vec::new(),
+            target_count: 0,
         }
     }
+
+    /// [`Particles::new`] for a test's own pass of `samples` per pixel over
+    /// a `Depth32Float` depth, with a scene layout of its own (bind
+    /// nothing at group 2 when drawing text, ribbons and lines alone).
+    #[cfg(test)]
+    pub fn for_test(device: &wgpu::Device, texture_layout: &wgpu::BindGroupLayout, samples: u32) -> Self {
+        let texture = |binding, sample_type| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type,
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: binding == 1 && samples > 1,
+            },
+            count: None,
+        };
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("particle test scene"),
+            entries: &[
+                texture(0, wgpu::TextureSampleType::Float { filterable: true }),
+                texture(1, wgpu::TextureSampleType::Depth),
+            ],
+        });
+        let scene = SceneDepth {
+            layout: &layout,
+            adapt: &|source| super::gpu3d::for_samples(source, samples, false).into_owned(),
+        };
+        Self::new(
+            device,
+            texture_layout,
+            &scene,
+            samples,
+            wgpu::TextureFormat::Depth32Float,
+        )
+    }
+
+    /// Uploads what the main view draws: `frame` with `view_proj`.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         frame: &ParticleFrame,
         view_proj: glam::Mat4,
+        eye: glam::Vec3,
+    ) {
+        self.main.prepare(device, queue, frame, view_proj, eye, true);
+    }
+
+    /// Starts this frame's target cameras: none drawn yet.
+    pub fn begin_targets(&mut self) {
+        self.target_count = 0;
+    }
+
+    /// Uploads what the target camera into render target `target` draws:
+    /// `frame` with `view_proj` from `eye`, without soft particles. Target
+    /// cameras' views are kept by target, so each keeps its own storage.
+    pub fn prepare_target(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: u32,
+        frame: &ParticleFrame,
+        view_proj: glam::Mat4,
+        eye: glam::Vec3,
+    ) {
+        let mut i = match self.targets.iter().position(|(t, _)| *t == target) {
+            Some(i) => i,
+            None => {
+                self.targets
+                    .push((target, ParticleView::new(device, &self.camera_layout)));
+                self.targets.len() - 1
+            }
+        };
+        // This frame's come first: `targets[..target_count]` are drawn.
+        if i >= self.target_count {
+            self.targets.swap(i, self.target_count);
+            i = self.target_count;
+            self.target_count += 1;
+        }
+        self.targets[i].1.prepare(device, queue, frame, view_proj, eye, false);
+    }
+
+    /// Ends this frame's target cameras: those no camera drew into stop
+    /// drawing, and their storage is freed.
+    pub fn end_targets(&mut self) {
+        self.targets.truncate(self.target_count);
+    }
+
+    /// The target camera view drawing into render target `target`, if it
+    /// has something to draw this frame.
+    pub fn target(&self, target: u32) -> Option<&ParticleView> {
+        self.targets[..self.target_count]
+            .iter()
+            .find(|(t, _)| *t == target)
+            .map(|(_, v)| v)
+            .filter(|v| v.has_draws())
+    }
+
+    /// See `Renderer3D::check_mirrors`.
+    #[cfg(test)]
+    pub fn check_mirrors(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        for view in std::iter::once(&self.main).chain(self.targets.iter().map(|(_, v)| v)) {
+            for buffer in [&view.camera, &view.instances, &view.strip_vertices, &view.text_vertices] {
+                buffer.check(device, queue);
+            }
+        }
+    }
+
+    /// Whether the main view has particles, ribbons, lines or text to draw.
+    pub fn has_draws(&self) -> bool {
+        self.main.has_draws()
+    }
+
+    /// Whether the main view has a soft particle, which reads the scene's
+    /// depth: it is then drawn in the transparent pass.
+    pub fn soft(&self) -> bool {
+        self.main.soft
+    }
+
+    /// How many draw calls `draw` makes in the main view.
+    pub fn draw_count(&self) -> usize {
+        self.main.draw_count()
+    }
+
+    /// Draws the main view's ribbons and lines, then its particles, then
+    /// its text (each set farthest first).
+    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, textures: &[GpuTexture], white: u32) {
+        self.draw_view(&self.main, pass, textures, white);
+    }
+
+    /// [`draw`](Self::draw) for `view`.
+    pub fn draw_view(&self, view: &ParticleView, pass: &mut wgpu::RenderPass<'_>, textures: &[GpuTexture], white: u32) {
+        if !view.has_draws() {
+            return;
+        }
+        let texture = |id: Option<u32>| {
+            textures
+                .get(id.unwrap_or(white) as usize)
+                .or_else(|| textures.get(white as usize))
+        };
+        pass.set_bind_group(0, &view.group, &[]);
+        if !view.strip_runs.is_empty() {
+            pass.set_vertex_buffer(0, view.strip_vertices.buffer().slice(..));
+            for run in &view.strip_runs {
+                let Some(texture) = texture(run.texture) else {
+                    continue;
+                };
+                pass.set_pipeline(if run.blend == ParticleBlend3D::Alpha {
+                    &self.strip_alpha
+                } else {
+                    &self.strip_additive
+                });
+                pass.set_bind_group(1, &texture.bind_group, &[]);
+                pass.draw(run.first..run.first + run.count, 0..1);
+            }
+        }
+        if !view.runs.is_empty() {
+            pass.set_vertex_buffer(0, view.instances.buffer().slice(..));
+            for run in &view.runs {
+                let Some(texture) = texture(run.texture) else {
+                    continue;
+                };
+                pass.set_pipeline(if run.blend == ParticleBlend3D::Alpha {
+                    &self.alpha
+                } else {
+                    &self.additive
+                });
+                pass.set_bind_group(1, &texture.bind_group, &[]);
+                pass.draw(0..6, run.first..run.first + run.count);
+            }
+        }
+        if view.text_count > 0
+            && let Some(atlas) = view.text_atlas.and_then(|id| textures.get(id as usize))
+        {
+            pass.set_pipeline(&self.text);
+            pass.set_bind_group(1, &atlas.bind_group, &[]);
+            pass.set_vertex_buffer(0, view.text_vertices.buffer().slice(..));
+            pass.draw(0..view.text_count, 0..1);
+        }
+    }
+}
+impl ParticleView {
+    fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> Self {
+        let camera = Synced::new(
+            device,
+            "particle camera",
+            wgpu::BufferUsages::UNIFORM,
+            size_of::<Camera>(),
+            Upload::Uniforms,
+            (16, 4, MAX_WRITES),
+        );
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("particle camera"),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera.buffer().as_entire_binding(),
+            }],
+        });
+        Self {
+            camera,
+            group,
+            instances: vertices::<ParticleInstance>(device, "particle instances", 1),
+            runs: Vec::new(),
+            strip_vertices: vertices::<StripVertex>(device, "strip vertices", 6),
+            strip_runs: Vec::new(),
+            text_vertices: vertices::<TextVertex>(device, "3d text vertices", 6),
+            text_count: 0,
+            text_atlas: None,
+            soft: false,
+        }
+    }
+
+    /// Uploads `frame` drawn with `view_proj` from `eye`; `depth`: whether
+    /// the pass it is drawn in can read the scene depth.
+    fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &ParticleFrame,
+        view_proj: glam::Mat4,
+        eye: glam::Vec3,
+        depth: bool,
     ) {
         self.runs.clear();
         self.runs.extend_from_slice(&frame.runs);
@@ -190,6 +424,7 @@ impl Particles {
         let texts = &frame.texts.vertices;
         self.text_count = texts.len() as u32;
         self.text_atlas = frame.texts.atlas.map(|t| t.id);
+        self.soft = depth && frame.soft && !frame.runs.is_empty();
         if !self.has_draws() {
             return;
         }
@@ -212,87 +447,38 @@ impl Particles {
         let strips = fits(&self.strip_vertices, size_of::<StripVertex>());
         clip(&mut self.strip_runs, strips, |r| (&mut r.first, &mut r.count));
         self.text_count = self.text_count.min(fits(&self.text_vertices, size_of::<TextVertex>()));
+        let right = glam::Vec4::from_array(frame.right).truncate();
+        let up = glam::Vec4::from_array(frame.up).truncate();
         let camera = Camera {
             view_proj: view_proj.to_cols_array_2d(),
             right: frame.right,
             up: frame.up,
+            inv_view_proj: view_proj.inverse().to_cols_array_2d(),
+            eye: eye.extend(f32::from(u8::from(depth))).to_array(),
+            forward: up.cross(right).extend(0.0).to_array(),
         };
         self.camera.write(queue, 0, bytemuck::bytes_of(&camera));
     }
-    /// See `Renderer3D::check_mirrors`.
-    #[cfg(test)]
-    pub fn check_mirrors(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        for buffer in [&self.camera, &self.instances, &self.strip_vertices, &self.text_vertices] {
-            buffer.check(device, queue);
-        }
-    }
 
     /// Whether there are particles, ribbons, lines or text to draw.
-    pub fn has_draws(&self) -> bool {
+    fn has_draws(&self) -> bool {
         !self.runs.is_empty() || !self.strip_runs.is_empty() || self.text_count > 0
     }
 
-    /// How many draw calls `draw` makes.
-    pub fn draw_count(&self) -> usize {
+    /// How many draw calls `draw_view` makes.
+    fn draw_count(&self) -> usize {
         self.runs.len() + self.strip_runs.len() + usize::from(self.text_count > 0)
     }
 
-    /// Draws the ribbons and lines, then the particles, then the text
-    /// (each set farthest first).
-    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, textures: &[GpuTexture], white: u32) {
-        if !self.has_draws() {
-            return;
-        }
-        let texture = |id: Option<u32>| {
-            textures
-                .get(id.unwrap_or(white) as usize)
-                .or_else(|| textures.get(white as usize))
-        };
-        pass.set_bind_group(0, &self.group, &[]);
-        if !self.strip_runs.is_empty() {
-            pass.set_vertex_buffer(0, self.strip_vertices.buffer().slice(..));
-            for run in &self.strip_runs {
-                let Some(texture) = texture(run.texture) else {
-                    continue;
-                };
-                pass.set_pipeline(if run.blend == ParticleBlend3D::Alpha {
-                    &self.strip_alpha
-                } else {
-                    &self.strip_additive
-                });
-                pass.set_bind_group(1, &texture.bind_group, &[]);
-                pass.draw(run.first..run.first + run.count, 0..1);
-            }
-        }
-        if !self.runs.is_empty() {
-            self.draw_particles(pass, textures, white);
-        }
-        if self.text_count > 0
-            && let Some(atlas) = self.text_atlas.and_then(|id| textures.get(id as usize))
-        {
-            pass.set_pipeline(&self.text);
-            pass.set_bind_group(1, &atlas.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.text_vertices.buffer().slice(..));
-            pass.draw(0..self.text_count, 0..1);
-        }
-    }
-
-    fn draw_particles(&self, pass: &mut wgpu::RenderPass<'_>, textures: &[GpuTexture], white: u32) {
-        pass.set_vertex_buffer(0, self.instances.buffer().slice(..));
-        for run in &self.runs {
-            let Some(texture) = textures
-                .get(run.texture.unwrap_or(white) as usize)
-                .or_else(|| textures.get(white as usize))
-            else {
-                continue;
-            };
-            pass.set_pipeline(if run.blend == ParticleBlend3D::Alpha {
-                &self.alpha
-            } else {
-                &self.additive
-            });
-            pass.set_bind_group(1, &texture.bind_group, &[]);
-            pass.draw(0..6, run.first..run.first + run.count);
+    fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for (label, synced) in [
+            ("particle camera", &self.camera),
+            ("particle instances", &self.instances),
+            ("trail vertices", &self.strip_vertices),
+            ("3d text vertices", &self.text_vertices),
+        ] {
+            t.buffer(C::Other, label, synced.buffer());
         }
     }
 }
@@ -323,12 +509,12 @@ fn vertices<T>(device: &wgpu::Device, label: &'static str, capacity: usize) -> S
 }
 
 impl Particles {
-    /// Counts the particle, trail and 3D text buffers as other memory (see
-    /// `memory.rs`).
+    /// Counts the particle, trail and 3D text buffers of every view as
+    /// other memory (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
-        use crate::render::memory::MemoryClass as C;
-        for synced in [&self.camera, &self.instances, &self.strip_vertices, &self.text_vertices] {
-            t.buffer(C::Other, synced.buffer());
+        self.main.tally_memory(t);
+        for (_, view) in &self.targets {
+            view.tally_memory(t);
         }
     }
 }

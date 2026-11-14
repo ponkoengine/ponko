@@ -292,7 +292,7 @@ impl Shaders {
 ///
 /// With `float_depth` (the GL backend, see [`reads_depth_as_float`]) the
 /// scene depth is declared as a float texture instead (see [`depth_as_float`]).
-pub(super) fn for_samples(source: &str, samples: u32, float_depth: bool) -> std::borrow::Cow<'_, str> {
+pub(in crate::render) fn for_samples(source: &str, samples: u32, float_depth: bool) -> std::borrow::Cow<'_, str> {
     if float_depth {
         std::borrow::Cow::Owned(depth_as_float(source, samples))
     } else if samples > 1 {

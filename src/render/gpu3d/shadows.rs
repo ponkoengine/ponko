@@ -147,13 +147,13 @@ impl ShadowMaps {
     /// the lights' atlas as atlases (see `memory.rs`).
     pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.buffer(C::Shadows, &self.frames);
+        t.buffer(C::Shadows, "shadow pass uniforms", &self.frames);
         for layer in &self.layers {
-            t.view(C::Shadows, layer);
+            t.view(C::Shadows, "3d shadow map", layer);
         }
         if let Some(atlas) = &self.light_atlas {
-            t.view(C::Atlases, atlas);
+            t.view(C::Atlases, "3d light shadow atlas", atlas);
         }
-        t.view(C::Atlases, &self.no_light_shadow);
+        t.view(C::Atlases, "light shadow stand-in", &self.no_light_shadow);
     }
 }

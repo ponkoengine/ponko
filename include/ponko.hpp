@@ -555,6 +555,24 @@ using sound_params = PonkoSoundParams;
 using audio_bus = PonkoAudioBus;
 /// A voice's low-pass filter and reverb send (Rust `AudioEffects`). Start from audio_effects_defaults().
 using audio_effects = PonkoAudioEffects;
+/// Which effect a bus_effect is (Rust `BusEffect`'s variants).
+using bus_effect_kind = PonkoBusEffectKind;
+/// Which frequencies a bus filter lets through (Rust `FilterMode`).
+using filter_mode = PonkoFilterMode;
+/// One effect in a bus's chain (Rust `BusEffect`); `kind` says which fields it reads. Start from
+/// bus_effect_defaults(kind).
+using bus_effect = PonkoBusEffect;
+/// Sidechain ducking (Rust `Ducking`): while `key` is loud, the bus drops to `gain`. Start from
+/// ducking_defaults(key).
+using ducking = PonkoDucking;
+/// New settings for effect `index` of a bus's chain, in a snapshot (Rust `EffectOverride`).
+using effect_override = PonkoEffectOverride;
+/// What a snapshot changes on one bus (Rust `BusSnapshot`), for ctx::add_audio_snapshot.
+struct bus_snapshot {
+    audio_bus bus{};                       ///< The bus.
+    std::optional<float> volume;           ///< Its volume while the snapshot is on; empty keeps its own.
+    std::vector<effect_override> effects;  ///< New settings for effects in its chain.
+};
 /// Settings of a positional sound (Rust `AudioSettings3D`): fade distances in meters, rolloff, bus. Start
 /// from audio_settings3d_defaults().
 using audio_settings3d = PonkoAudioSettings3D;
@@ -924,6 +942,10 @@ inline sound_params sound_defaults() { return ponko_sound_params_default(); }
 inline audio_effects audio_effects_defaults() { return ponko_audio_effects_default(); }
 /// Full volume within 1 unit, silent at 100, natural fade, on the `sfx` bus.
 inline audio_settings3d audio_settings3d_defaults() { return ponko_audio_settings3d_default(); }
+/// An effect of `kind` with every field at its default (a low-pass at 20 kHz, a half-wet reverb, ...).
+inline bus_effect bus_effect_defaults(bus_effect_kind kind) { return ponko_bus_effect_default(kind); }
+/// Ducking by `key`: down to 0.3 in 0.05 s, back up in 0.5 s, for anything audible.
+inline ducking ducking_defaults(audio_bus key) { return ponko_ducking_default(key); }
 /// The default widget colors and sizes.
 inline ui_style ui_style_defaults() { return ponko_ui_style_default(); }
 /// A rectangle from its top-left corner and size.
@@ -6255,6 +6277,78 @@ public:
     void set_audio_bus_volume(PonkoAudioBus b, float volume) { detail::check(ponko_ctx_set_audio_bus_volume(raw_, b, volume)); }
     /// Mutes or unmutes bus `b`, keeping its volume.
     void mute_audio_bus(PonkoAudioBus b, bool muted) { detail::check(ponko_ctx_mute_audio_bus(raw_, b, muted)); }
+    /// The volume set on bus `b`, before snapshots, parents and mutes.
+    float audio_bus_volume(PonkoAudioBus b) { float v = 1; detail::check(ponko_ctx_audio_bus_volume(raw_, b, &v)); return v; }
+    /// Whether bus `b` is muted.
+    bool audio_bus_muted(PonkoAudioBus b) { bool m = false; detail::check(ponko_ctx_audio_bus_muted(raw_, b, &m)); return m; }
+    /// The gain bus `b` is heard at now: snapshots, parents and mutes included, ducking not.
+    float audio_bus_gain(PonkoAudioBus b) { float g = 1; detail::check(ponko_ctx_audio_bus_gain(raw_, b, &g)); return g; }
+    /// Puts bus `b` under `parent` (empty: straight to the output). Throws on a loop.
+    void set_audio_bus_parent(PonkoAudioBus b, std::optional<PonkoAudioBus> parent) {
+        detail::check(ponko_ctx_set_audio_bus_parent(raw_, b, parent ? &*parent : nullptr));
+    }
+    /// The bus `b` is under, if any.
+    std::optional<PonkoAudioBus> audio_bus_parent(PonkoAudioBus b) {
+        PonkoAudioBus p{}; bool has = false;
+        detail::check(ponko_ctx_audio_bus_parent(raw_, b, &p, &has));
+        return has ? std::optional<PonkoAudioBus>(p) : std::nullopt;
+    }
+    /// Replaces bus `b`'s effect chain; an empty list clears it.
+    void set_audio_bus_effects(PonkoAudioBus b, const std::vector<bus_effect>& effects) {
+        detail::check(ponko_ctx_set_audio_bus_effects(raw_, b, effects.data(), effects.size()));
+    }
+    /// Bus `b`'s effect chain as set (clamped), before snapshots.
+    std::vector<bus_effect> audio_bus_effects(PonkoAudioBus b) {
+        std::size_t n = 0; detail::check(ponko_ctx_audio_bus_effects(raw_, b, nullptr, 0, &n));
+        std::vector<bus_effect> list(n);
+        if (n) detail::check(ponko_ctx_audio_bus_effects(raw_, b, list.data(), n, &n));
+        return list;
+    }
+    /// Replaces the buses that duck bus `b` (at most four); an empty list turns ducking off.
+    void set_audio_bus_ducking(PonkoAudioBus b, const std::vector<ducking>& keys) {
+        detail::check(ponko_ctx_set_audio_bus_ducking(raw_, b, keys.data(), keys.size()));
+    }
+    /// What ducks bus `b`, as set (clamped).
+    std::vector<ducking> audio_bus_ducking(PonkoAudioBus b) {
+        std::size_t n = 0; detail::check(ponko_ctx_audio_bus_ducking(raw_, b, nullptr, 0, &n));
+        std::vector<ducking> list(n);
+        if (n) detail::check(ponko_ctx_audio_bus_ducking(raw_, b, list.data(), n, &n));
+        return list;
+    }
+    /// Adds snapshot `name` (or replaces the one of that name).
+    void add_audio_snapshot(const char* name, const std::vector<bus_snapshot>& buses) {
+        std::vector<PonkoBusSnapshot> raw;
+        raw.reserve(buses.size());
+        for (const bus_snapshot& b : buses) {
+            raw.push_back({b.bus, b.volume.has_value(), b.volume.value_or(1.0f), b.effects.data(), b.effects.size()});
+        }
+        detail::check(ponko_ctx_add_audio_snapshot(raw_, name, raw.data(), raw.size()));
+    }
+    /// Starts blending to snapshot `name` over `fade` seconds; false for an unknown name.
+    bool start_audio_snapshot(const char* name, float fade) {
+        const PonkoStatus status = ponko_ctx_start_audio_snapshot(raw_, name, fade);
+        if (status == PONKO_NOT_FOUND) return false;
+        detail::check(status);
+        return true;
+    }
+    /// Blends snapshot `name` back out over `fade` seconds.
+    void stop_audio_snapshot(const char* name, float fade) { detail::check(ponko_ctx_stop_audio_snapshot(raw_, name, fade)); }
+    /// How much of snapshot `name` is heard, 0 to 1.
+    float audio_snapshot_weight(const char* name) {
+        float w = 0; detail::check(ponko_ctx_audio_snapshot_weight(raw_, name, &w)); return w;
+    }
+    /// Loads the mixer (buses, effects, ducking, snapshots) from a JSON file in the assets; it hot reloads.
+    void load_audio_mixer(const char* path) { detail::check(ponko_ctx_load_audio_mixer(raw_, path)); }
+    /// Applies a mixer definition held in a string, in the mixer file's format.
+    void apply_audio_mixer_json(const std::string& json) { detail::check(ponko_ctx_apply_audio_mixer_json(raw_, json.c_str())); }
+    /// The mixer state to save with the settings (bus volumes, mutes, snapshots on), as JSON.
+    std::string audio_mixer_state() {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* n) { return ponko_ctx_audio_mixer_state(raw_, b, c, n); });
+    }
+    /// Restores a state from audio_mixer_state(); load the mixer file first.
+    void restore_audio_mixer_state(const std::string& json) {
+        detail::check(ponko_ctx_restore_audio_mixer_state(raw_, json.c_str()));
+    }
     /// Plays `s` on bus `b` with `params` and `effects` (low-pass, reverb send).
     playing play_sound_on(sound s, PonkoAudioBus b, const sound_params& params = sound_defaults(),
                           const audio_effects& effects = audio_effects_defaults()) {

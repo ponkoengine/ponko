@@ -7,11 +7,22 @@
 //! | **Messages** ([`NetMessages`]) | Everything else: your own packets on reliable and unreliable lanes between a host and its clients (chat, lobbies, events, your own replication) | [`Game::messages`](crate::game::Game::messages), then `ctx.net.messages` | [`examples/net_messages.rs`](https://github.com/ponkoengine/ponko/blob/main/examples/net_messages.rs) |
 //! | **Snapshots** ([`NetSnapshots`], [`SnapshotStream`], [`Interest`], [`Authority`]) | Server-authoritative worlds on top of messages: the owner sends timestamped states, everyone else shows them a little in the past | `ctx.net.snapshots` and `ctx.net.interest` | [`examples/net_replication.rs`](https://github.com/ponkoengine/ponko/blob/main/examples/net_replication.rs) |
 //!
+//! The player's own entity in a server-authoritative game is **predicted**:
+//! [`Prediction`] applies the local input at once and replays the inputs the
+//! server hasn't confirmed when its state disagrees, [`InputQueue`] is the
+//! server's side, and [`Smoothing`] hides the corrections
+//! ([`examples/net_prediction.rs`](https://github.com/ponkoengine/ponko/blob/main/examples/net_prediction.rs)).
+//!
 //! Lockstep and messages are independent and can run side by side: lockstep
 //! for the simulation, messages for a chat that must not hold ticks back.
 //! The engine drives what is there (see the table on [`Networking`]); a
 //! single-player game has an offline lockstep session and nothing else.
 //! Feature `steam` adds Steam relays and lobbies for both transports.
+//!
+//! Browser players (a web build can't open UDP sockets) connect over
+//! WebSocket: the host adds a listener with [`Net::accept_web`] or
+//! [`NetMessages::accept_web`] and keeps taking desktop players over UDP;
+//! the browser joins with [`Net::join_web`] or [`NetMessages::join_web`].
 //!
 //! # Lockstep
 //!
@@ -27,8 +38,8 @@
 //! every reflected component and resource and report a [`Desync`] naming the
 //! components that differ.
 //!
-//! Plain UDP on std sockets, polled from the game thread: no async runtime,
-//! no extra thread.
+//! Plain UDP on std sockets (and WebSocket for browser players), polled
+//! from the game thread: no async runtime, no extra thread.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
@@ -43,6 +54,8 @@ use crate::perf::Instant;
 use crate::reflect::WorldReflect;
 use ponko_ecs::World;
 
+#[cfg(any(test, fuzzing))]
+pub(crate) mod fuzz;
 #[cfg(test)]
 mod lockstep_conformance;
 #[cfg(test)]
@@ -53,13 +66,18 @@ mod scripted;
 pub use messages::{Lane, MAX_MESSAGE_BYTES, MessageEvent, MessageStats, NetMessages, PeerId};
 
 mod interest;
+mod prediction;
 mod sequence;
 mod service;
 pub(crate) mod snapshots;
+mod websocket;
+#[cfg(target_arch = "wasm32")]
+mod websocket_browser;
 pub use interest::{
     Interest, InterestChange, InterestChangeKind, InterestConfig, InterestEntity, InterestEntry, InterestTier,
     InterestViewer, MAX_INTEREST_TIERS,
 };
+pub use prediction::{InputPush, InputQueue, InputStats, Prediction, PredictionStats, Reconciled, Smooth, Smoothing};
 pub use sequence::{Authority, AuthorityCheck, LatestWins, UpdateStamp, seq_diff, seq_newer};
 pub use service::{NetSnapshots, Networking};
 #[cfg(feature = "3d")]
@@ -112,7 +130,8 @@ const _: () = assert!(INPUTS_HEADER + BLOCK_HEADER + MAX_INPUT_BYTES <= PACKET);
 const RESEND: Duration = Duration::from_millis(20);
 const HELLO_EVERY: Duration = Duration::from_millis(100);
 /// How long a finished session keeps resending for peers that still miss
-/// inputs, at most.
+/// inputs, at most. (A browser can't wait: it says goodbye at once.)
+#[cfg(not(target_arch = "wasm32"))]
 const LINGER: Duration = Duration::from_secs(1);
 /// A peer silent this long while we linger has left too.
 const GONE: Duration = Duration::from_millis(250);
@@ -313,6 +332,62 @@ impl Net {
         Ok(Self::with(Session::new(Box::new(transport), Role::Client(host)), 0, 0))
     }
 
+    /// Also lets browser players in: they join over WebSocket on `addr`
+    /// (TCP, such as `"0.0.0.0:7778"`; port 0 picks a free one, see
+    /// [`web_addr`](Self::web_addr)) with [`join_web`](Self::join_web),
+    /// while desktop players keep joining over UDP. Both count towards the
+    /// same players. Call it on a [`host`](Self::host).
+    ///
+    /// Plain `ws://`: a page served over `https://` may only open `wss://`,
+    /// so put a TLS proxy (Caddy, nginx) in front of this port for one.
+    /// Connections are unauthenticated, like UDP sessions.
+    ///
+    /// ```
+    /// let net = ponko::net::Net::host("127.0.0.1:0", 3).unwrap().accept_web("127.0.0.1:0").unwrap();
+    /// # let _ = net;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` unless this is a UDP host; `Unsupported` in a browser
+    /// (it can't listen); the socket's error if `addr` can't be bound.
+    pub fn accept_web(mut self, addr: impl ToSocketAddrs) -> io::Result<Net> {
+        let Some(session) = self.session.as_deref_mut().filter(|s| matches!(s.role, Role::Host)) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "only a host accepts browser players",
+            ));
+        };
+        session.transport.accept_web(&mut addr.to_socket_addrs()?)?;
+        Ok(self)
+    }
+
+    /// Joins the session hosted at `url` over WebSocket, such as
+    /// `"ws://192.168.1.20:7778"`: the host's [`accept_web`](Self::accept_web)
+    /// address. This is how a web build joins (a browser can't open UDP
+    /// sockets); a desktop game may use it too, for plain `ws://`. A page
+    /// served over `https://` needs a `wss://` URL. Like [`join`](Self::join),
+    /// it keeps trying until the host answers or [`timeout`](Self::timeout)
+    /// passes.
+    ///
+    /// ```
+    /// let net = ponko::net::Net::join_web("ws://127.0.0.1:7778").unwrap();
+    /// assert_eq!(net.state(), ponko::net::NetState::Connecting);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` for a URL that isn't `ws://` (or `wss://` in a
+    /// browser) with a host; `Unsupported` for `wss://` on the desktop.
+    pub fn join_web(url: &str) -> io::Result<Net> {
+        let transport = WebClientTransport(websocket::WebClient::connect(url)?);
+        Ok(Self::with(
+            Session::new(Box::new(transport), Role::Client(websocket::HOST)),
+            0,
+            0,
+        ))
+    }
+
     /// `players` sessions connected in memory, the first one hosting: for
     /// tests, or bots in one process. Run each in its own game (and thread).
     ///
@@ -427,10 +502,27 @@ impl Net {
         self
     }
 
-    /// The address this side listens on (`None` offline).
+    /// The address this side listens on (`None` offline, and for a
+    /// [`join_web`](Self::join_web) client, which listens on nothing).
     #[must_use]
     pub fn local_addr(&self) -> Option<SocketAddr> {
-        self.session.as_ref().map(|s| s.transport.local_addr())
+        self.session
+            .as_ref()
+            .map(|s| s.transport.local_addr())
+            .filter(|a| a.port() != 0)
+    }
+
+    /// The address browser players connect to, once
+    /// [`accept_web`](Self::accept_web) opened it (`None` before, and on
+    /// joining sides).
+    ///
+    /// ```
+    /// let net = ponko::net::Net::host("127.0.0.1:0", 3).unwrap().accept_web("127.0.0.1:0").unwrap();
+    /// assert!(net.web_addr().unwrap().port() != 0);
+    /// ```
+    #[must_use]
+    pub fn web_addr(&self) -> Option<SocketAddr> {
+        self.session.as_ref().and_then(|s| s.transport.web_addr())
     }
 
     /// Which player this is: 0 is the host (and the offline player).
@@ -681,7 +773,15 @@ impl Drop for Net {
         if !self.linger || !s.started || self.state == NetState::Lost {
             return;
         }
+        // A browser can't sleep: say goodbye at once.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let now = Instant::now();
+            self.linger_step(now, now);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         let end = Instant::now() + LINGER.min(self.timeout);
+        #[cfg(not(target_arch = "wasm32"))]
         while !self.linger_step(Instant::now(), end) {
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -980,8 +1080,10 @@ impl Session {
             for t in 0..u64::from(ticks) {
                 let Some(len) = r.u16() else { return };
                 let Some(data) = r.take(len as usize) else { return };
+                // Ticks past u64::MAX: a forged packet.
+                let Some(tick) = first.checked_add(t) else { return };
                 if allowed {
-                    self.streams[stream].push(first + t, data);
+                    self.streams[stream].push(tick, data);
                 }
             }
         }
@@ -1247,28 +1349,49 @@ trait Transport: Send {
     fn steam(&self) -> Option<(&steamworks::Client, Option<steamworks::LobbyId>)> {
         None
     }
+    /// Starts taking browser players over WebSocket on `addr` (hosts).
+    fn accept_web(&mut self, addr: &mut dyn Iterator<Item = SocketAddr>) -> io::Result<()> {
+        let _ = addr;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this transport can't take browser players",
+        ))
+    }
+    /// Where browser players connect, once [`accept_web`](Self::accept_web) ran.
+    fn web_addr(&self) -> Option<SocketAddr> {
+        None
+    }
 }
 
-struct Udp(UdpSocket);
+struct Udp {
+    socket: UdpSocket,
+    /// Browser players' connections, on hosts that take them.
+    #[cfg(not(target_arch = "wasm32"))]
+    web: Option<websocket::WebListener>,
+    /// Which to read first on the next poll, so neither starves the other.
+    #[cfg(not(target_arch = "wasm32"))]
+    web_first: bool,
+}
 impl Udp {
     fn bind(addr: impl ToSocketAddrs) -> io::Result<Udp> {
         let socket = UdpSocket::bind(addr)?;
         socket.set_nonblocking(true)?;
-        Ok(Udp(socket))
+        Ok(Udp {
+            socket,
+            #[cfg(not(target_arch = "wasm32"))]
+            web: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            web_first: false,
+        })
     }
-}
-impl Transport for Udp {
-    fn send(&mut self, to: SocketAddr, data: &[u8]) {
-        // Lost packets are resent anyway; a full buffer is a lost packet.
-        let _ = self.0.send_to(data, to);
-    }
-    fn recv(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, usize)> {
+
+    fn recv_udp(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, usize)> {
         // Windows reports an earlier send to a closed port as a receive
         // error; skip those. A socket that only fails must not hold the
         // game thread, so give up for this poll after a few in a row: the
         // silence timeout then ends the session.
         for _ in 0..UDP_ERROR_SKIPS {
-            match self.0.recv_from(buf) {
+            match self.socket.recv_from(buf) {
                 Ok((n, from)) => return Some((from, n)),
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => return None,
                 Err(_) => {}
@@ -1276,8 +1399,69 @@ impl Transport for Udp {
         }
         None
     }
+}
+impl Transport for Udp {
+    fn send(&mut self, to: SocketAddr, data: &[u8]) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(web) = self.web.as_mut().filter(|_| websocket::WebListener::owns(to)) {
+            web.send(to, data);
+            return;
+        }
+        // Lost packets are resent anyway; a full buffer is a lost packet.
+        let _ = self.socket.send_to(data, to);
+    }
+    fn recv(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, usize)> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(web) = self.web.as_mut() {
+            self.web_first = !self.web_first;
+            return if self.web_first {
+                web.recv(buf).or_else(|| self.recv_udp(buf))
+            } else {
+                self.recv_udp(buf)
+                    .or_else(|| self.web.as_mut().and_then(|w| w.recv(buf)))
+            };
+        }
+        self.recv_udp(buf)
+    }
     fn local_addr(&self) -> SocketAddr {
-        self.0.local_addr().expect("bound socket")
+        self.socket.local_addr().expect("bound socket")
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn accept_web(&mut self, addr: &mut dyn Iterator<Item = SocketAddr>) -> io::Result<()> {
+        let addrs: Vec<SocketAddr> = addr.collect();
+        self.web = Some(websocket::WebListener::bind(&addrs[..])?);
+        Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn accept_web(&mut self, addr: &mut dyn Iterator<Item = SocketAddr>) -> io::Result<()> {
+        let _ = addr;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "a browser can't accept connections",
+        ))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn web_addr(&self) -> Option<SocketAddr> {
+        self.web.as_ref().and_then(|w| w.local_addr().ok())
+    }
+}
+
+/// A client's WebSocket to its host: every packet goes to the host, and
+/// everything heard comes from [`websocket::HOST`].
+struct WebClientTransport(websocket::WebClient);
+impl Transport for WebClientTransport {
+    fn send(&mut self, _to: SocketAddr, data: &[u8]) {
+        // Not connected yet or a full queue: lost, and resent like UDP.
+        self.0.send(data);
+    }
+    fn recv(&mut self, buf: &mut [u8]) -> Option<(SocketAddr, usize)> {
+        self.0.recv(buf).map(|n| (websocket::HOST, n))
+    }
+    fn local_addr(&self) -> SocketAddr {
+        SocketAddr::from(([0, 0, 0, 0], 0))
+    }
+    fn error(&mut self) -> Option<String> {
+        self.0.take_error()
     }
 }
 

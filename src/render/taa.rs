@@ -395,7 +395,7 @@ impl Taa {
     /// Counts its uniform as other memory (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.buffer(C::Other, &self.uniform);
+        t.buffer(C::Other, "taa uniforms", &self.uniform);
     }
 }
 
@@ -403,9 +403,9 @@ impl TaaTargets {
     /// Counts the lit input and both histories as frame targets (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.texture(C::FrameTargets, &self.input);
+        t.texture(C::FrameTargets, "taa input", &self.input);
         for view in &self.history {
-            t.view(C::FrameTargets, view);
+            t.view(C::FrameTargets, "taa history", view);
         }
     }
 }
@@ -414,8 +414,8 @@ impl VelocityTargets {
     /// Counts the motion vectors as frame targets (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.view(C::FrameTargets, &self.velocity_color);
-        t.view(C::FrameTargets, &self.velocity);
+        t.view(C::FrameTargets, "motion vectors (multisampled)", &self.velocity_color);
+        t.view(C::FrameTargets, "motion vectors", &self.velocity);
     }
 }
 

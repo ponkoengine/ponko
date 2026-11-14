@@ -5,9 +5,12 @@
 //! [`Audio::create`], [`Audio::load_stream`]), playing them
 //! ([`Audio::play`], [`Audio::play_ex`], [`Audio::play_on`], and
 //! [`Audio::play_at`] for a point in the 3D world), the handles of what is
-//! playing ([`Audio::stop`], [`Audio::set_effects`]), mixer buses
-//! ([`Audio::bus`], [`Audio::set_bus_volume`], [`Audio::mute_bus`]) and the
-//! 3D listener ([`Audio::set_listener`]).
+//! playing ([`Audio::stop`], [`Audio::set_effects`]), the mixer (buses
+//! with [`Audio::bus`], [`Audio::set_bus_volume`], [`Audio::mute_bus`];
+//! the bus tree, [`BusEffect`] chains and [`Ducking`];
+//! [`MixerSnapshot`]s; [`Audio::load_mixer`] for a mixer file and
+//! [`MixerState`] for the settings) and the 3D listener
+//! ([`Audio::set_listener`]).
 //!
 //! **When to call it:** load in setup and keep the [`Sound`] handles; play,
 //! stop and mix from any system. It only borrows `ctx.audio`, so a sound can
@@ -101,9 +104,20 @@ impl Default for SoundParams {
     }
 }
 
+mod bus_effects;
 mod mixer;
+mod mixer_file;
+mod snapshots;
+pub use bus_effects::{BusEffect, CompressorEffect, DelayEffect, Ducking, FilterEffect, FilterMode, ReverbEffect};
 use mixer::BusRegistry;
 pub use mixer::{AudioBus, AudioEffects};
+pub use snapshots::{BusSnapshot, EffectOverride, MixerSnapshot, MixerState, SavedBus, SavedSnapshot};
+#[cfg(feature = "audio")]
+mod dsp;
+#[cfg(all(test, feature = "audio"))]
+mod mixer_render_tests;
+#[cfg(feature = "audio")]
+mod tracks;
 // Streams decoded a packet at a time, for the web (tested natively).
 #[cfg(all(feature = "audio", any(target_arch = "wasm32", test)))]
 mod chunked;
@@ -113,6 +127,7 @@ mod unlock;
 #[cfg(feature = "audio")]
 mod backend {
     use super::mixer::{finite, volume_db};
+    use super::tracks::{BusTracks, Manager};
     use super::unlock::{Gate, Waiting};
     use super::{AudioBus, AudioEffects, BusRegistry, SoundParams};
     use kira::effect::{
@@ -133,7 +148,7 @@ mod backend {
         streaming::{StreamingSoundData, StreamingSoundHandle},
     };
     use kira::track::{SendTrackBuilder, SendTrackHandle, TrackBuilder, TrackHandle};
-    use kira::{AudioManager, AudioManagerSettings, DefaultBackend, Frame, Tween};
+    use kira::{Frame, Tween};
     use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
     enum Clip {
@@ -157,8 +172,24 @@ mod backend {
         filter: FilterHandle,
         bus: AudioBus,
         effects: AudioEffects,
+        params: SoundParams,
+        /// The last positional volume, pan and speed, kept for a restart.
+        #[cfg(feature = "3d")]
+        spatial: Option<[f32; 3]>,
+        /// The reverb send's gain as last set.
+        send_gain: f32,
     }
     impl Handle {
+        /// Seconds into the sound (from the start on the web, which can't tell).
+        fn position(&self) -> f64 {
+            match self {
+                Self::Static(h) => h.position(),
+                #[cfg(not(target_arch = "wasm32"))]
+                Self::Stream(h) => h.position(),
+                #[cfg(target_arch = "wasm32")]
+                Self::Chunked(_) => 0.0,
+            }
+        }
         fn state(&self) -> PlaybackState {
             match self {
                 Self::Static(h) => h.state(),
@@ -221,11 +252,13 @@ mod backend {
     }
     #[derive(Default)]
     pub struct Audio {
-        manager: Option<Option<AudioManager<DefaultBackend>>>,
+        manager: Option<Option<Manager>>,
         sounds: Vec<Clip>,
         playing: HashMap<u64, Voice>,
         next: u64,
         pub(super) buses: BusRegistry,
+        /// One Kira track per bus that has played something.
+        tracks: BusTracks,
         reverb: Option<SendTrackHandle>,
         /// On the web: closed until the player's first gesture, holding
         /// the looping voices asked for before it.
@@ -249,7 +282,7 @@ mod backend {
             // Opened here, inside the gesture, so the browser lets it play.
             self.manager();
             for voice in waiting {
-                self.start(voice.id, voice.sound, voice.params, voice.bus, voice.effects);
+                self.start(voice.id, voice.sound, voice.params, voice.bus, voice.effects, 0.0);
                 #[cfg(feature = "3d")]
                 if let Some([volume, pan, speed]) = voice.spatial {
                     self.spatialize(voice.id, volume, pan, speed);
@@ -264,10 +297,20 @@ mod backend {
                 Some(Some(_)) => "open",
             }
         }
-        fn manager(&mut self) -> Option<&mut AudioManager<DefaultBackend>> {
-            self.manager
-                .get_or_insert_with(|| AudioManager::new(AudioManagerSettings::default()).ok())
-                .as_mut()
+        fn manager(&mut self) -> Option<&mut Manager> {
+            self.manager.get_or_insert_with(Manager::open).as_mut()
+        }
+        /// For tests: the backend playing into a buffer the test renders.
+        #[cfg(test)]
+        pub(crate) fn with_buffer_output(sample_rate: u32) -> (Self, super::dsp::buffer::Output) {
+            let (manager, output) = Manager::buffer(sample_rate);
+            (
+                Self {
+                    manager: Some(Some(manager)),
+                    ..Default::default()
+                },
+                output,
+            )
         }
         pub fn load(&mut self, bytes: Vec<u8>) -> Result<(u32, f32), String> {
             Ok(self.add(decode(bytes)?))
@@ -383,15 +426,8 @@ mod backend {
                         .ok()?,
                 );
             }
-            if self.buses.entries[bus.0].track.is_none() {
-                let gain = self.buses.entries[bus.0].gain();
-                let track = self
-                    .manager()?
-                    .add_sub_track(TrackBuilder::new().volume(volume_db(gain)))
-                    .ok()?;
-                self.buses.entries[bus.0].track = Some(track);
-            }
-            Some(())
+            let manager = self.manager.as_mut()?.as_mut()?;
+            self.tracks.ensure(manager, &self.buses, bus)
         }
         pub fn play(&mut self, sound: u32, p: SoundParams) -> u64 {
             self.play_on(sound, p, AudioBus::default(), AudioEffects::default())
@@ -404,21 +440,21 @@ mod backend {
             if self.gate.is_locked() {
                 self.gate.hold(Waiting::new(id, sound, p, bus, effects));
             } else {
-                self.start(id, sound, p, bus, effects);
+                self.start(id, sound, p, bus, effects, 0.0);
             }
             id
         }
-        /// Starts voice `id` now.
-        fn start(&mut self, id: u64, sound: u32, p: SoundParams, bus: AudioBus, effects: AudioEffects) {
+        /// Starts voice `id` now, `from` seconds in.
+        fn start(&mut self, id: u64, sound: u32, p: SoundParams, bus: AudioBus, effects: AudioEffects, from: f64) {
             if self.prepare(bus).is_none() {
                 return;
             }
             let effects = effects.validated();
             let send = self.reverb.as_ref().unwrap().id();
-            let gain = self.buses.entries[bus.0].gain();
+            let gain = self.buses.chain_gain(bus);
             let mut builder = TrackBuilder::new().with_send(send, volume_db(effects.reverb * gain));
             let filter = builder.add_effect(FilterBuilder::new().cutoff(f64::from(effects.low_pass_hz)));
-            let Ok(mut track) = self.buses.entries[bus.0].track.as_mut().unwrap().add_sub_track(builder) else {
+            let Some(Ok(mut track)) = self.tracks.track(bus).map(|t| t.add_sub_track(builder)) else {
                 return;
             };
             let volume = volume_db(p.volume);
@@ -430,17 +466,23 @@ mod backend {
                 Clip::Freed => return,
                 Clip::Static(data) => {
                     let mut data = (**data).clone().volume(volume).playback_rate(speed);
+                    if from > 0.0 {
+                        data = data.start_position(from);
+                    }
                     if p.looping {
                         data = data.loop_region(..);
                     }
                     track.play(data).ok().map(Handle::Static)
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                Clip::Stream(from) => {
-                    let Ok(data) = from.open() else {
+                Clip::Stream(stream) => {
+                    let Ok(data) = stream.open() else {
                         return;
                     };
                     let mut data = data.volume(volume).playback_rate(speed);
+                    if from > 0.0 {
+                        data = data.start_position(from);
+                    }
                     if p.looping {
                         data = data.loop_region(..);
                     }
@@ -462,25 +504,62 @@ mod backend {
                         filter,
                         bus,
                         effects,
+                        params: p,
+                        #[cfg(feature = "3d")]
+                        spatial: None,
+                        send_gain: gain,
                     },
                 );
             }
         }
-        pub fn bus_changed(&mut self, bus: AudioBus) {
-            let Some(state) = self.buses.entries.get_mut(bus.0) else {
-                return;
-            };
-            let gain = state.gain();
-            if let Some(track) = state.track.as_mut() {
-                track.set_volume(volume_db(gain), Tween::default());
-            }
-            if let Some(send) = &self.reverb {
-                for voice in self.playing.values_mut().filter(|v| v.bus == bus) {
-                    let _ = voice
-                        .track
-                        .set_send(send.id(), volume_db(voice.effects.reverb * gain), Tween::default());
+        /// Brings the Kira tracks in line with the bus model: rebuilds
+        /// buses whose parent or chain changed (their voices carry on from
+        /// where they were), then sends volumes, effect settings, ducking
+        /// and reverb sends that changed.
+        pub fn sync_buses(&mut self) {
+            if self.tracks.drop_stale(&self.buses) {
+                let mut moved: Vec<u64> = self
+                    .playing
+                    .iter()
+                    .filter(|(_, v)| !self.tracks.has_track(v.bus))
+                    .map(|(&id, _)| id)
+                    .collect();
+                moved.sort_unstable();
+                for id in moved {
+                    let Some(mut v) = self.playing.remove(&id) else {
+                        continue;
+                    };
+                    if v.handle.state() == PlaybackState::Stopped {
+                        continue;
+                    }
+                    let from = v.handle.position();
+                    v.handle.stop();
+                    drop(v.track);
+                    self.start(id, v.sound, v.params, v.bus, v.effects, from);
+                    #[cfg(feature = "3d")]
+                    if let Some([volume, pan, speed]) = v.spatial {
+                        self.spatialize(id, volume, pan, speed);
+                    }
                 }
             }
+            self.tracks.push(&self.buses);
+            if let Some(send) = &self.reverb {
+                for voice in self.playing.values_mut() {
+                    let gain = self.buses.chain_gain(voice.bus);
+                    if gain != voice.send_gain {
+                        voice.send_gain = gain;
+                        let _ =
+                            voice
+                                .track
+                                .set_send(send.id(), volume_db(voice.effects.reverb * gain), Tween::default());
+                    }
+                }
+            }
+        }
+        /// For tests: seconds into voice `id`.
+        #[cfg(test)]
+        pub(crate) fn voice_position(&self, id: u64) -> Option<f64> {
+            self.playing.get(&id).map(|v| v.handle.position())
         }
         pub fn effects(&mut self, id: u64, effects: AudioEffects) {
             if self.gate.set_effects(id, effects) {
@@ -492,7 +571,7 @@ mod backend {
                     .filter
                     .set_cutoff(f64::from(effects.low_pass_hz), Tween::default());
                 if let Some(send) = &self.reverb {
-                    let gain = self.buses.entries[voice.bus.0].gain();
+                    let gain = self.buses.chain_gain(voice.bus);
                     let _ = voice
                         .track
                         .set_send(send.id(), volume_db(effects.reverb * gain), Tween::default());
@@ -507,6 +586,7 @@ mod backend {
             }
             if let Some(v) = self.playing.get_mut(&id) {
                 v.handle.spatialize(volume, pan, speed);
+                v.spatial = Some([volume, pan, speed]);
             }
         }
         pub fn stop(&mut self, id: u64) {
@@ -695,7 +775,7 @@ mod backend {
         pub fn play_on(&mut self, sound: u32, p: SoundParams, _bus: AudioBus, _effects: AudioEffects) -> u64 {
             self.play(sound, p)
         }
-        pub fn bus_changed(&mut self, _bus: AudioBus) {}
+        pub fn sync_buses(&mut self) {}
         pub fn effects(&mut self, _id: u64, _effects: AudioEffects) {}
         #[cfg(feature = "3d")]
         pub fn spatialize(&mut self, _id: u64, _volume: f32, _pan: f32, _speed: f32) {}

@@ -339,6 +339,16 @@ impl Renderer3D {
                     .any(|t| self.render_targets.textures.iter().any(|&(id, _)| id == *t)))
     }
 
+    /// Whether a built-in cutout material reads texture `id`'s alpha for
+    /// its shadows (as its base map), so an exact alpha comparison of its
+    /// uploads keeps those shadows (see `texture_alpha`).
+    pub fn alpha_tested(&self, id: u32) -> bool {
+        self.resources
+            .materials
+            .iter()
+            .any(|m| m.cutout && m.bindings.maps[0] == Some(id))
+    }
+
     /// A texture's pixels changed: only dependent shadow views are refreshed.
     /// Built-in cutouts read alpha; custom functions may also read RGB.
     pub fn texture_alpha_changed(&mut self, id: u32, alpha_changed: bool) {

@@ -33,6 +33,9 @@ use crate::three::instances::{Batch, Cell};
 
 use crate::render::capabilities::{GPU_BATCH_MIN, GPU_BATCH_TRIANGLES};
 
+mod blend_order;
+use blend_order::BlendOrder;
+
 /// Bytes of an instance's record in a pool (six vec4s) and of a cell's.
 const RECORD: u64 = 96;
 const CELL: u64 = 32;
@@ -467,6 +470,9 @@ pub(crate) struct StaticBatch {
     pub options: crate::render::InstanceBatchOptions,
     legacy_distance: bool,
     pub count: u32,
+    /// CPU-path batches with a see-through material: their visible
+    /// instances in the main view, far to near (see `blend_order.rs`).
+    pub(crate) blend: Option<Box<BlendOrder>>,
 }
 
 struct DistanceQuad {
@@ -829,7 +835,9 @@ impl Renderer3D {
         order.sort_unstable();
     }
 
-    /// Refresh only automatic batches using a material whose blend mode changed.
+    /// Refresh the batches using a material whose blend mode changed: the
+    /// automatic ones may take the other path, and those on the CPU path
+    /// start or stop drawing far to near (see `blend_order.rs`).
     pub fn refresh_batch_material(
         &mut self,
         device: &wgpu::Device,
@@ -839,7 +847,12 @@ impl Renderer3D {
     ) {
         for (id, batch) in batches.iter().enumerate() {
             let Some(batch) = batch else { continue };
-            if batch.options.culling == BatchCulling::Auto
+            let cpu = self
+                .static_batches
+                .get(id)
+                .and_then(Option::as_ref)
+                .is_some_and(|b| b.vertices.is_some());
+            if (batch.options.culling == BatchCulling::Auto || cpu)
                 && batch.levels.iter().any(|level| {
                     self.resources.meshes[level.mesh.slot() as usize]
                         .parts
@@ -968,6 +981,8 @@ impl Renderer3D {
             _ => said.retain(|&said| said != id),
         }
         let cpu = vertices.is_some();
+        let blend = (cpu && batch.levels.iter().any(|l| self.blends(l.mesh.slot())))
+            .then(|| Box::new(BlendOrder::new(&batch.instances)));
         let arguments = batch
             .levels
             .iter()
@@ -1025,6 +1040,7 @@ impl Renderer3D {
             options: batch.options,
             legacy_distance: batch.legacy_distance,
             count,
+            blend,
         }
     }
 
@@ -1324,17 +1340,33 @@ impl Renderer3D {
                             cull_cells(batch, &mut runs, &view, band, hides);
                             batch.visible[index] = runs;
                             batching.built = batching.built.wrapping_add(1);
+                            if slot == 0
+                                && let Some(order) = &mut batch.blend
+                            {
+                                order.invalidate();
+                            }
                         }
                         batch.seen[index] = (key, true);
                     }
                 }
             }
             // A view that draws nothing this frame has an empty list.
-            for (runs, seen) in batch.visible.iter_mut().zip(&mut batch.seen) {
+            for (index, (runs, seen)) in batch.visible.iter_mut().zip(&mut batch.seen).enumerate() {
                 if !seen.1 {
+                    if index < batch.levels.len()
+                        && !runs.is_empty()
+                        && let Some(order) = &mut batch.blend
+                    {
+                        order.invalidate();
+                    }
                     runs.clear();
                     seen.0 = None;
                 }
+            }
+            // See-through instances in the main view, far to near.
+            if let (Some(order), Some(eye)) = (&mut batch.blend, batching.slots.first().map(|s| s.eye)) {
+                let levels = batch.levels.len().min(batch.visible.len());
+                order.prepare(device, queue, &batch.visible[..levels], eye);
             }
         }
         batching.occlusion = occlusion && gpu_grid;
@@ -1566,19 +1598,35 @@ impl Renderer3D {
         let mut state = BatchDraws::default();
         if kind == Kind::Transparent {
             for (b, batch) in self.static_batches.iter().enumerate() {
+                // The main view draws a see-through batch far to near.
+                if let Some(order) = batch.as_ref().and_then(|b| b.blend.as_ref())
+                    && view == 0
+                    && order.buffer.is_some()
+                    && !order.runs.is_empty()
+                {
+                    for &(level, start, count) in &order.runs {
+                        let sorted = Some((start, count));
+                        self.draw_batch_level(pass, &mut state, kind, view, b, level as usize, sorted);
+                    }
+                    continue;
+                }
                 for level in 0..batch.as_ref().map_or(0, |b| b.levels.len()) {
-                    self.draw_batch_level(pass, &mut state, kind, view, b, level);
+                    self.draw_batch_level(pass, &mut state, kind, view, b, level, None);
                 }
             }
         } else {
             for &(_, b, level) in &self.batching.order {
-                self.draw_batch_level(pass, &mut state, kind, view, b as usize, level as usize);
+                self.draw_batch_level(pass, &mut state, kind, view, b as usize, level as usize, None);
             }
         }
         self.state_counters.add(&state.n);
         self.shaders.cache.counters.looked_up(u64::from(state.lookups));
     }
 
+    /// Draws level `level` of batch `b` in view `slot`: its visible
+    /// instances, or with `sorted` that (start, count) of its far-to-near
+    /// copy (see `blend_order.rs`).
+    #[allow(clippy::too_many_arguments)]
     fn draw_batch_level(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -1587,6 +1635,7 @@ impl Renderer3D {
         slot: usize,
         b: usize,
         level: usize,
+        sorted: Option<(u32, u32)>,
     ) {
         let Some(batch) = &self.static_batches[b] else { return };
         let run_mesh = batch.levels[level].mesh.slot();
@@ -1681,12 +1730,20 @@ impl Renderer3D {
                     gpu!(pass.draw_indexed_indirect(args, at));
                 }
                 n.draws += 1;
-            } else if let Some(instances) = &batch.vertices {
+            } else if let Some((instances, bound)) = match sorted {
+                // The far-to-near copy is told apart by the top bit.
+                Some(_) => batch
+                    .blend
+                    .as_ref()
+                    .and_then(|o| o.buffer.as_ref())
+                    .map(|v| (v, b | SORTED)),
+                None => batch.vertices.as_ref().map(|v| (v, b)),
+            } {
                 if !level_bound {
-                    if state.instances != Some(b) {
+                    if state.instances != Some(bound) {
                         gpu!(pass.set_vertex_buffer(1, instances.slice(..)));
                         n.vertex_buffers += 1;
-                        (state.marker, state.instances) = (false, Some(b));
+                        (state.marker, state.instances) = (false, Some(bound));
                     }
                     if let Some(dummy) = self.resources.storage_dummy.as_ref().filter(|_| !state.dummy) {
                         gpu!(pass.set_bind_group(3, dummy, &[]));
@@ -1694,6 +1751,11 @@ impl Renderer3D {
                         state.dummy = true;
                     }
                     level_bound = true;
+                }
+                if let Some((start, count)) = sorted {
+                    gpu!(pass.draw_indexed(range.clone(), 0, start..start + count));
+                    n.draws += 1;
+                    continue;
                 }
                 for &(start, count) in &batch.visible[slot * batch.levels.len() + level] {
                     gpu!(pass.draw_indexed(range.clone(), 0, start..start + count));
@@ -1703,6 +1765,9 @@ impl Renderer3D {
         }
     }
 }
+
+/// Marks a batch's far-to-near copy in [`BatchDraws::instances`].
+const SORTED: usize = 1 << (usize::BITS - 1);
 
 /// What the batch draws of one pass have bound, so only changes are set
 /// again: each `set_*` costs wgpu validation and a backend call.
@@ -1738,7 +1803,14 @@ impl StaticBatch {
     /// Counts the batch's instance records as instance batches (see `memory.rs`).
     pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         if let Some(vertices) = &self.vertices {
-            t.buffer(crate::render::memory::MemoryClass::InstanceBatches, vertices);
+            t.buffer(
+                crate::render::memory::MemoryClass::InstanceBatches,
+                "static batch vertices",
+                vertices,
+            );
+        }
+        if let Some(order) = &self.blend {
+            order.tally_memory(t);
         }
     }
 }
@@ -1748,13 +1820,13 @@ impl Culling {
     /// and the culling's own buffers as instance batches (see `memory.rs`).
     pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.buffer(C::InstanceBatches, &self.occlusion);
-        t.buffer(C::InstanceBatches, &self.marker);
+        t.buffer(C::InstanceBatches, "culling occlusion", &self.occlusion);
+        t.buffer(C::InstanceBatches, "culling marker", &self.marker);
         for pool in &self.pools {
-            t.buffer(C::InstanceBatches, &pool.records.buffer);
+            t.buffer(C::InstanceBatches, "static batch records", &pool.records.buffer);
             for page in &pool.pages {
-                t.buffer(C::InstanceBatches, &page.visibility.buffer);
-                t.buffer(C::InstanceBatches, &page.args.buffer);
+                t.buffer(C::InstanceBatches, "static batch visibility", &page.visibility.buffer);
+                t.buffer(C::InstanceBatches, "static batch draw arguments", &page.args.buffer);
             }
         }
     }

@@ -564,7 +564,7 @@ impl Ssr {
     /// Counts its uniform as other memory (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.buffer(C::Other, &self.uniform);
+        t.buffer(C::Other, "reflection uniforms", &self.uniform);
     }
 }
 
@@ -572,12 +572,17 @@ impl SsrTargets {
     /// Counts the reflections' targets and history as frame targets (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        for view in [&self.history, &self.screen, &self.ao, &self.output] {
-            t.view(C::FrameTargets, view);
+        for (label, view) in [
+            ("reflection history", &self.history),
+            ("reflection screen", &self.screen),
+            ("reflection ao", &self.ao),
+            ("reflection output", &self.output),
+        ] {
+            t.view(C::FrameTargets, label, view);
         }
         if let Some(blur) = &self.blur {
-            t.texture(C::FrameTargets, &blur.levels);
-            t.texture(C::FrameTargets, &blur.screen);
+            t.texture(C::FrameTargets, "reflection blur levels", &blur.levels);
+            t.texture(C::FrameTargets, "reflection blur screen", &blur.screen);
         }
     }
 }

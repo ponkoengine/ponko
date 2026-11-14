@@ -1,16 +1,19 @@
 //! A global allocator that counts heap allocations, so every benchmark can
 //! report how many it makes per timed run.
 //!
-//! It always counts (two relaxed atomic adds per allocation, one for the
-//! count and one for the bytes, on top of the system allocator) and counts
+//! It always counts (three relaxed atomic adds per allocation, for the
+//! count, the bytes and the bytes still live, and one per free, on top of
+//! the system allocator) and counts
 //! the whole process: allocations on rayon or
 //! bevy worker threads during a timed run are charged to that run.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering::Relaxed};
 
 static COUNT: AtomicU64 = AtomicU64::new(0);
 static BYTES: AtomicU64 = AtomicU64::new(0);
+/// Bytes allocated and not yet freed.
+static LIVE: AtomicI64 = AtomicI64::new(0);
 
 /// The system allocator, counting allocations and reallocations.
 pub struct Counting;
@@ -31,12 +34,14 @@ unsafe impl GlobalAlloc for Counting {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        LIVE.fetch_sub(layout.size() as i64, Relaxed);
         // SAFETY: `ptr` came from `System` with this layout.
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         note(new_size);
+        LIVE.fetch_sub(layout.size() as i64, Relaxed);
         // SAFETY: as above.
         unsafe { System.realloc(ptr, layout, new_size) }
     }
@@ -46,6 +51,12 @@ unsafe impl GlobalAlloc for Counting {
 fn note(bytes: usize) {
     COUNT.fetch_add(1, Relaxed);
     BYTES.fetch_add(bytes as u64, Relaxed);
+    LIVE.fetch_add(bytes as i64, Relaxed);
+}
+
+/// Heap bytes the whole process has allocated and not freed yet.
+pub fn live_bytes() -> i64 {
+    LIVE.load(Relaxed)
 }
 
 /// Allocations (with reallocations) and bytes requested so far, in the

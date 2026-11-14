@@ -357,14 +357,74 @@ pub fn ponko::attach::Attached::serialize<__S>(&self, __S) -> core::result::Resu
 impl<'de> serde_core::de::Deserialize<'de> for ponko::attach::Attached
 pub fn ponko::attach::Attached::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub mod ponko::audio
+#[non_exhaustive] pub enum ponko::audio::BusEffect
+pub ponko::audio::BusEffect::Compressor(ponko::audio::CompressorEffect)
+pub ponko::audio::BusEffect::Delay(ponko::audio::DelayEffect)
+pub ponko::audio::BusEffect::Filter(ponko::audio::FilterEffect)
+pub ponko::audio::BusEffect::Reverb(ponko::audio::ReverbEffect)
+impl core::clone::Clone for ponko::audio::BusEffect
+pub fn ponko::audio::BusEffect::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::audio::BusEffect
+pub fn ponko::audio::BusEffect::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::audio::BusEffect
+pub fn ponko::audio::BusEffect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::audio::BusEffect
+impl core::marker::StructuralPartialEq for ponko::audio::BusEffect
+impl serde_core::ser::Serialize for ponko::audio::BusEffect
+pub fn ponko::audio::BusEffect::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::audio::BusEffect
+pub fn ponko::audio::BusEffect::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub enum ponko::audio::FilterMode
+pub ponko::audio::FilterMode::BandPass
+pub ponko::audio::FilterMode::HighPass
+pub ponko::audio::FilterMode::LowPass
+pub ponko::audio::FilterMode::Notch
+impl core::clone::Clone for ponko::audio::FilterMode
+pub fn ponko::audio::FilterMode::clone(&self) -> Self
+impl core::cmp::Eq for ponko::audio::FilterMode
+impl core::cmp::PartialEq for ponko::audio::FilterMode
+pub fn ponko::audio::FilterMode::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::audio::FilterMode
+pub fn ponko::audio::FilterMode::default() -> Self
+impl core::fmt::Debug for ponko::audio::FilterMode
+pub fn ponko::audio::FilterMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::audio::FilterMode
+pub fn ponko::audio::FilterMode::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::audio::FilterMode
+impl core::marker::StructuralPartialEq for ponko::audio::FilterMode
+impl serde_core::ser::Serialize for ponko::audio::FilterMode
+pub fn ponko::audio::FilterMode::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::audio::FilterMode
+pub fn ponko::audio::FilterMode::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::audio::Audio
+impl ponko::audio::Audio
+pub fn ponko::audio::Audio::add_snapshot(&mut self, &str, ponko::audio::MixerSnapshot)
+pub fn ponko::audio::Audio::mixer_state(&self) -> ponko::audio::MixerState
+pub fn ponko::audio::Audio::restore_mixer_state(&mut self, &ponko::audio::MixerState)
+pub fn ponko::audio::Audio::snapshot_weight(&self, &str) -> f32
+pub fn ponko::audio::Audio::start_snapshot(&mut self, &str, f32) -> bool
+pub fn ponko::audio::Audio::stop_snapshot(&mut self, &str, f32)
+impl ponko::audio::Audio
+pub fn ponko::audio::Audio::apply_mixer_json(&mut self, &str) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::audio::Audio::load_mixer(&mut self, &str)
+pub fn ponko::audio::Audio::try_load_mixer(&mut self, &str) -> core::result::Result<(), ponko::error::Error>
 impl ponko::audio::Audio
 pub fn ponko::audio::Audio::asset_handles(&self) -> alloc::vec::Vec<ponko::inventory::AssetRecord>
 impl ponko::audio::Audio
 pub fn ponko::audio::Audio::bus(&mut self, &str) -> ponko::prelude::AudioBus
+pub fn ponko::audio::Audio::bus_ducking(&self, ponko::prelude::AudioBus) -> &[ponko::audio::Ducking]
+pub fn ponko::audio::Audio::bus_effects(&self, ponko::prelude::AudioBus) -> &[ponko::audio::BusEffect]
+pub fn ponko::audio::Audio::bus_gain(&self, ponko::prelude::AudioBus) -> f32
+pub fn ponko::audio::Audio::bus_muted(&self, ponko::prelude::AudioBus) -> bool
+pub fn ponko::audio::Audio::bus_name(&self, ponko::prelude::AudioBus) -> core::option::Option<&str>
+pub fn ponko::audio::Audio::bus_parent(&self, ponko::prelude::AudioBus) -> core::option::Option<ponko::prelude::AudioBus>
+pub fn ponko::audio::Audio::bus_volume(&self, ponko::prelude::AudioBus) -> f32
 pub fn ponko::audio::Audio::load_stream(&mut self, &str) -> ponko::audio::Sound
 pub fn ponko::audio::Audio::mute_bus(&mut self, ponko::prelude::AudioBus, bool)
 pub fn ponko::audio::Audio::play_on(&mut self, ponko::audio::Sound, ponko::audio::SoundParams, ponko::prelude::AudioBus, ponko::audio::AudioEffects) -> ponko::audio::Playing
+pub fn ponko::audio::Audio::set_bus_ducking(&mut self, ponko::prelude::AudioBus, &[ponko::audio::Ducking]) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::audio::Audio::set_bus_effects(&mut self, ponko::prelude::AudioBus, &[ponko::audio::BusEffect])
+pub fn ponko::audio::Audio::set_bus_parent(&mut self, ponko::prelude::AudioBus, core::option::Option<ponko::prelude::AudioBus>) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::audio::Audio::set_bus_volume(&mut self, ponko::prelude::AudioBus, f32)
 pub fn ponko::audio::Audio::set_effects(&mut self, ponko::audio::Playing, ponko::audio::AudioEffects)
 pub fn ponko::audio::Audio::try_load_stream(&mut self, &str) -> core::result::Result<ponko::audio::Sound, ponko::error::Error>
@@ -406,6 +466,136 @@ impl core::fmt::Debug for ponko::audio::AudioEffects
 pub fn ponko::audio::AudioEffects::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::audio::AudioEffects
 impl core::marker::StructuralPartialEq for ponko::audio::AudioEffects
+pub struct ponko::audio::BusSnapshot
+pub ponko::audio::BusSnapshot::bus: ponko::prelude::AudioBus
+pub ponko::audio::BusSnapshot::effects: alloc::vec::Vec<ponko::audio::EffectOverride>
+pub ponko::audio::BusSnapshot::volume: core::option::Option<f32>
+impl core::clone::Clone for ponko::audio::BusSnapshot
+pub fn ponko::audio::BusSnapshot::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::audio::BusSnapshot
+pub fn ponko::audio::BusSnapshot::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::audio::BusSnapshot
+pub fn ponko::audio::BusSnapshot::default() -> Self
+impl core::fmt::Debug for ponko::audio::BusSnapshot
+pub fn ponko::audio::BusSnapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::audio::BusSnapshot
+pub struct ponko::audio::CompressorEffect
+pub ponko::audio::CompressorEffect::attack: f32
+pub ponko::audio::CompressorEffect::makeup_db: f32
+pub ponko::audio::CompressorEffect::mix: f32
+pub ponko::audio::CompressorEffect::ratio: f32
+pub ponko::audio::CompressorEffect::release: f32
+pub ponko::audio::CompressorEffect::threshold_db: f32
+impl core::clone::Clone for ponko::audio::CompressorEffect
+pub fn ponko::audio::CompressorEffect::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::audio::CompressorEffect
+pub fn ponko::audio::CompressorEffect::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::audio::CompressorEffect
+pub fn ponko::audio::CompressorEffect::default() -> Self
+impl core::fmt::Debug for ponko::audio::CompressorEffect
+pub fn ponko::audio::CompressorEffect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::audio::CompressorEffect
+impl core::marker::StructuralPartialEq for ponko::audio::CompressorEffect
+impl serde_core::ser::Serialize for ponko::audio::CompressorEffect
+pub fn ponko::audio::CompressorEffect::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::audio::CompressorEffect where ponko::audio::CompressorEffect: core::default::Default
+pub fn ponko::audio::CompressorEffect::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::audio::DelayEffect
+pub ponko::audio::DelayEffect::delay: f32
+pub ponko::audio::DelayEffect::feedback_db: f32
+pub ponko::audio::DelayEffect::mix: f32
+impl core::clone::Clone for ponko::audio::DelayEffect
+pub fn ponko::audio::DelayEffect::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::audio::DelayEffect
+pub fn ponko::audio::DelayEffect::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::audio::DelayEffect
+pub fn ponko::audio::DelayEffect::default() -> Self
+impl core::fmt::Debug for ponko::audio::DelayEffect
+pub fn ponko::audio::DelayEffect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::audio::DelayEffect
+impl core::marker::StructuralPartialEq for ponko::audio::DelayEffect
+impl serde_core::ser::Serialize for ponko::audio::DelayEffect
+pub fn ponko::audio::DelayEffect::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::audio::DelayEffect where ponko::audio::DelayEffect: core::default::Default
+pub fn ponko::audio::DelayEffect::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::audio::Ducking
+pub ponko::audio::Ducking::attack: f32
+pub ponko::audio::Ducking::gain: f32
+pub ponko::audio::Ducking::key: ponko::prelude::AudioBus
+pub ponko::audio::Ducking::release: f32
+pub ponko::audio::Ducking::threshold: f32
+impl ponko::audio::Ducking
+pub const ponko::audio::Ducking::MAX_KEYS: usize
+pub fn ponko::audio::Ducking::new(ponko::prelude::AudioBus) -> Self
+impl core::clone::Clone for ponko::audio::Ducking
+pub fn ponko::audio::Ducking::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::audio::Ducking
+pub fn ponko::audio::Ducking::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::audio::Ducking
+pub fn ponko::audio::Ducking::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::audio::Ducking
+impl core::marker::StructuralPartialEq for ponko::audio::Ducking
+pub struct ponko::audio::EffectOverride
+pub ponko::audio::EffectOverride::effect: ponko::audio::BusEffect
+pub ponko::audio::EffectOverride::index: usize
+impl core::clone::Clone for ponko::audio::EffectOverride
+pub fn ponko::audio::EffectOverride::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::audio::EffectOverride
+pub fn ponko::audio::EffectOverride::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::audio::EffectOverride
+pub fn ponko::audio::EffectOverride::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::audio::EffectOverride
+impl core::marker::StructuralPartialEq for ponko::audio::EffectOverride
+impl serde_core::ser::Serialize for ponko::audio::EffectOverride
+pub fn ponko::audio::EffectOverride::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::audio::EffectOverride
+pub fn ponko::audio::EffectOverride::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::audio::FilterEffect
+pub ponko::audio::FilterEffect::cutoff_hz: f32
+pub ponko::audio::FilterEffect::mix: f32
+pub ponko::audio::FilterEffect::mode: ponko::audio::FilterMode
+pub ponko::audio::FilterEffect::resonance: f32
+impl core::clone::Clone for ponko::audio::FilterEffect
+pub fn ponko::audio::FilterEffect::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::audio::FilterEffect
+pub fn ponko::audio::FilterEffect::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::audio::FilterEffect
+pub fn ponko::audio::FilterEffect::default() -> Self
+impl core::fmt::Debug for ponko::audio::FilterEffect
+pub fn ponko::audio::FilterEffect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::audio::FilterEffect
+impl core::marker::StructuralPartialEq for ponko::audio::FilterEffect
+impl serde_core::ser::Serialize for ponko::audio::FilterEffect
+pub fn ponko::audio::FilterEffect::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::audio::FilterEffect where ponko::audio::FilterEffect: core::default::Default
+pub fn ponko::audio::FilterEffect::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::audio::MixerSnapshot
+pub ponko::audio::MixerSnapshot::buses: alloc::vec::Vec<ponko::audio::BusSnapshot>
+impl core::clone::Clone for ponko::audio::MixerSnapshot
+pub fn ponko::audio::MixerSnapshot::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::audio::MixerSnapshot
+pub fn ponko::audio::MixerSnapshot::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::audio::MixerSnapshot
+pub fn ponko::audio::MixerSnapshot::default() -> Self
+impl core::fmt::Debug for ponko::audio::MixerSnapshot
+pub fn ponko::audio::MixerSnapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::audio::MixerSnapshot
+pub struct ponko::audio::MixerState
+pub ponko::audio::MixerState::buses: alloc::vec::Vec<ponko::audio::SavedBus>
+pub ponko::audio::MixerState::snapshots: alloc::vec::Vec<ponko::audio::SavedSnapshot>
+impl core::clone::Clone for ponko::audio::MixerState
+pub fn ponko::audio::MixerState::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::audio::MixerState
+pub fn ponko::audio::MixerState::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::audio::MixerState
+pub fn ponko::audio::MixerState::default() -> Self
+impl core::fmt::Debug for ponko::audio::MixerState
+pub fn ponko::audio::MixerState::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::audio::MixerState
+impl serde_core::ser::Serialize for ponko::audio::MixerState
+pub fn ponko::audio::MixerState::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::audio::MixerState where ponko::audio::MixerState: core::default::Default
+pub fn ponko::audio::MixerState::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[repr(transparent)] pub struct ponko::audio::Playing(_)
 impl core::clone::Clone for ponko::audio::Playing
 pub fn ponko::audio::Playing::clone(&self) -> Self
@@ -418,6 +608,54 @@ impl core::hash::Hash for ponko::audio::Playing
 pub fn ponko::audio::Playing::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for ponko::audio::Playing
 impl core::marker::StructuralPartialEq for ponko::audio::Playing
+pub struct ponko::audio::ReverbEffect
+pub ponko::audio::ReverbEffect::damping: f32
+pub ponko::audio::ReverbEffect::feedback: f32
+pub ponko::audio::ReverbEffect::mix: f32
+pub ponko::audio::ReverbEffect::stereo_width: f32
+impl core::clone::Clone for ponko::audio::ReverbEffect
+pub fn ponko::audio::ReverbEffect::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::audio::ReverbEffect
+pub fn ponko::audio::ReverbEffect::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::audio::ReverbEffect
+pub fn ponko::audio::ReverbEffect::default() -> Self
+impl core::fmt::Debug for ponko::audio::ReverbEffect
+pub fn ponko::audio::ReverbEffect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::audio::ReverbEffect
+impl core::marker::StructuralPartialEq for ponko::audio::ReverbEffect
+impl serde_core::ser::Serialize for ponko::audio::ReverbEffect
+pub fn ponko::audio::ReverbEffect::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::audio::ReverbEffect where ponko::audio::ReverbEffect: core::default::Default
+pub fn ponko::audio::ReverbEffect::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::audio::SavedBus
+pub ponko::audio::SavedBus::muted: bool
+pub ponko::audio::SavedBus::name: alloc::string::String
+pub ponko::audio::SavedBus::volume: f32
+impl core::clone::Clone for ponko::audio::SavedBus
+pub fn ponko::audio::SavedBus::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::audio::SavedBus
+pub fn ponko::audio::SavedBus::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::audio::SavedBus
+pub fn ponko::audio::SavedBus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::audio::SavedBus
+impl serde_core::ser::Serialize for ponko::audio::SavedBus
+pub fn ponko::audio::SavedBus::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::audio::SavedBus
+pub fn ponko::audio::SavedBus::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::audio::SavedSnapshot
+pub ponko::audio::SavedSnapshot::name: alloc::string::String
+pub ponko::audio::SavedSnapshot::weight: f32
+impl core::clone::Clone for ponko::audio::SavedSnapshot
+pub fn ponko::audio::SavedSnapshot::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::audio::SavedSnapshot
+pub fn ponko::audio::SavedSnapshot::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::audio::SavedSnapshot
+pub fn ponko::audio::SavedSnapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::audio::SavedSnapshot
+impl serde_core::ser::Serialize for ponko::audio::SavedSnapshot
+pub fn ponko::audio::SavedSnapshot::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::audio::SavedSnapshot
+pub fn ponko::audio::SavedSnapshot::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[repr(C)] pub struct ponko::audio::Sound
 impl ponko::audio::Sound
 pub fn ponko::audio::Sound::seconds(&self) -> f32
@@ -1147,6 +1385,8 @@ pub fn ponko::game::ConfiguredGame::seed(self, u64) -> Self
 pub fn ponko::game::ConfiguredGame::setup(self, impl core::ops::function::FnOnce(&mut ponko::prelude::Ctx) + 'static) -> Self
 pub fn ponko::game::ConfiguredGame::sim_system<F: core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static>(self, F) -> Self
 pub fn ponko::game::ConfiguredGame::system<F: core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static>(self, F) -> Self
+impl ponko::game::ConfiguredGame
+pub fn ponko::game::ConfiguredGame::run_server(self, ponko::server::ServerConfig) -> ponko_ecs::world::World
 pub struct ponko::game::Game
 impl ponko::game::Game
 pub fn ponko::game::Game::access_report(&self) -> ponko::access::AccessReport
@@ -1185,6 +1425,8 @@ pub fn ponko::game::Game::spatial_grid(self, f32) -> Self
 pub fn ponko::game::Game::system<F: core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static>(self, F) -> Self
 pub fn ponko::game::Game::system_count(&self, ponko::game::SystemId) -> usize
 pub fn ponko::game::Game::vsync(self, bool) -> Self
+impl ponko::game::Game
+pub fn ponko::game::Game::run_server<S, U>(self, ponko::server::ServerConfig, S) -> ponko_ecs::world::World where S: core::ops::function::FnOnce(&mut ponko::prelude::Ctx) -> U, U: SetupResult
 pub struct ponko::game::SystemConfig
 impl ponko::prelude::IntoSystem<()> for ponko::game::SystemConfig
 pub fn ponko::game::SystemConfig::access(self, ponko::access::SystemAccess) -> ponko::game::SystemConfig
@@ -1752,6 +1994,7 @@ pub fn ponko::inventory::AssetGrowth::serialize<__S>(&self, __S) -> core::result
 pub ponko::inventory::AssetInventory::classes: alloc::vec::Vec<ponko::inventory::AssetCount>
 pub ponko::inventory::AssetInventory::dangling: alloc::vec::Vec<ponko::inventory::DanglingHandle>
 pub ponko::inventory::AssetInventory::gpu: core::option::Option<ponko::inventory::GpuResidency>
+pub ponko::inventory::AssetInventory::texture_alpha: core::option::Option<ponko::inventory::TextureAlphaMemory>
 impl ponko::inventory::AssetInventory
 pub fn ponko::inventory::AssetInventory::get(&self, ponko::inventory::AssetClass) -> ponko::inventory::AssetCount
 pub fn ponko::inventory::AssetInventory::growth_since(&self, &Self) -> alloc::vec::Vec<ponko::inventory::AssetGrowth>
@@ -1805,6 +2048,7 @@ pub fn ponko::inventory::DanglingHandle::serialize<__S>(&self, __S) -> core::res
 pub ponko::inventory::GpuResidency::gpu_buffer_bytes: u64
 pub ponko::inventory::GpuResidency::gpu_buffers: usize
 pub ponko::inventory::GpuResidency::mesh_bytes: u64
+pub ponko::inventory::GpuResidency::mesh_cpu_bytes: u64
 pub ponko::inventory::GpuResidency::meshes: usize
 pub ponko::inventory::GpuResidency::texture_bytes: u64
 pub ponko::inventory::GpuResidency::textures: usize
@@ -1821,6 +2065,24 @@ impl core::marker::Copy for ponko::inventory::GpuResidency
 impl core::marker::StructuralPartialEq for ponko::inventory::GpuResidency
 impl serde_core::ser::Serialize for ponko::inventory::GpuResidency
 pub fn ponko::inventory::GpuResidency::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+#[non_exhaustive] pub struct ponko::inventory::TextureAlphaMemory
+pub ponko::inventory::TextureAlphaMemory::bytes: u64
+pub ponko::inventory::TextureAlphaMemory::mask_bytes: u64
+pub ponko::inventory::TextureAlphaMemory::masks: usize
+pub ponko::inventory::TextureAlphaMemory::summaries: usize
+impl core::clone::Clone for ponko::inventory::TextureAlphaMemory
+pub fn ponko::inventory::TextureAlphaMemory::clone(&self) -> Self
+impl core::cmp::Eq for ponko::inventory::TextureAlphaMemory
+impl core::cmp::PartialEq for ponko::inventory::TextureAlphaMemory
+pub fn ponko::inventory::TextureAlphaMemory::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::inventory::TextureAlphaMemory
+pub fn ponko::inventory::TextureAlphaMemory::default() -> Self
+impl core::fmt::Debug for ponko::inventory::TextureAlphaMemory
+pub fn ponko::inventory::TextureAlphaMemory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::inventory::TextureAlphaMemory
+impl core::marker::StructuralPartialEq for ponko::inventory::TextureAlphaMemory
+impl serde_core::ser::Serialize for ponko::inventory::TextureAlphaMemory
+pub fn ponko::inventory::TextureAlphaMemory::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 pub mod ponko::locale
 pub enum ponko::locale::Arg
 pub ponko::locale::Arg::Int(i64)
@@ -1979,6 +2241,19 @@ impl core::fmt::Debug for ponko::net::AuthorityCheck
 pub fn ponko::net::AuthorityCheck::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::net::AuthorityCheck
 impl core::marker::StructuralPartialEq for ponko::net::AuthorityCheck
+pub enum ponko::net::InputPush
+pub ponko::net::InputPush::Added
+pub ponko::net::InputPush::Duplicate
+pub ponko::net::InputPush::Late
+impl core::clone::Clone for ponko::net::InputPush
+pub fn ponko::net::InputPush::clone(&self) -> Self
+impl core::cmp::Eq for ponko::net::InputPush
+impl core::cmp::PartialEq for ponko::net::InputPush
+pub fn ponko::net::InputPush::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::net::InputPush
+pub fn ponko::net::InputPush::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::net::InputPush
+impl core::marker::StructuralPartialEq for ponko::net::InputPush
 pub enum ponko::net::InterestChangeKind
 pub ponko::net::InterestChangeKind::Entered
 pub ponko::net::InterestChangeKind::Left
@@ -2033,6 +2308,21 @@ impl core::fmt::Debug for ponko::net::NetState
 pub fn ponko::net::NetState::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::net::NetState
 impl core::marker::StructuralPartialEq for ponko::net::NetState
+pub enum ponko::net::Reconciled<S>
+pub ponko::net::Reconciled::Confirmed
+pub ponko::net::Reconciled::Corrected
+pub ponko::net::Reconciled::Corrected::before: S
+pub ponko::net::Reconciled::Corrected::replayed: usize
+pub ponko::net::Reconciled::Ignored
+impl<S> ponko::net::Reconciled<S>
+pub fn ponko::net::Reconciled<S>::corrected(&self) -> bool
+impl<S: core::clone::Clone> core::clone::Clone for ponko::net::Reconciled<S>
+pub fn ponko::net::Reconciled<S>::clone(&self) -> Self
+impl<S: core::cmp::PartialEq> core::cmp::PartialEq for ponko::net::Reconciled<S>
+pub fn ponko::net::Reconciled<S>::eq(&self, &Self) -> bool
+impl<S: core::cmp::PartialEq> core::marker::StructuralPartialEq for ponko::net::Reconciled<S>
+impl<S: core::fmt::Debug> core::fmt::Debug for ponko::net::Reconciled<S>
+pub fn ponko::net::Reconciled<S>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum ponko::net::SnapshotPush
 pub ponko::net::SnapshotPush::Added
 pub ponko::net::SnapshotPush::Duplicate
@@ -2107,6 +2397,41 @@ pub fn ponko::net::Desync::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fm
 impl core::fmt::Display for ponko::net::Desync
 pub fn ponko::net::Desync::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::net::Desync
+pub struct ponko::net::InputQueue<I>
+impl<I: core::clone::Clone> ponko::net::InputQueue<I>
+pub fn ponko::net::InputQueue<I>::ack(&self) -> core::option::Option<u16>
+pub fn ponko::net::InputQueue<I>::clear(&mut self)
+pub fn ponko::net::InputQueue<I>::is_empty(&self) -> bool
+pub fn ponko::net::InputQueue<I>::last(&self) -> core::option::Option<&I>
+pub fn ponko::net::InputQueue<I>::len(&self) -> usize
+pub fn ponko::net::InputQueue<I>::new() -> Self
+pub fn ponko::net::InputQueue<I>::pop(&mut self) -> core::option::Option<(u16, I)>
+pub fn ponko::net::InputQueue<I>::push(&mut self, u16, I) -> ponko::net::InputPush
+pub fn ponko::net::InputQueue<I>::stats(&self) -> ponko::net::InputStats
+pub fn ponko::net::InputQueue<I>::with_capacity(usize) -> Self
+impl<I: core::clone::Clone> core::clone::Clone for ponko::net::InputQueue<I>
+pub fn ponko::net::InputQueue<I>::clone(&self) -> Self
+impl<I: core::clone::Clone> core::default::Default for ponko::net::InputQueue<I>
+pub fn ponko::net::InputQueue<I>::default() -> Self
+impl<I: core::fmt::Debug> core::fmt::Debug for ponko::net::InputQueue<I>
+pub fn ponko::net::InputQueue<I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct ponko::net::InputStats
+pub ponko::net::InputStats::applied: u64
+pub ponko::net::InputStats::duplicates: u64
+pub ponko::net::InputStats::late: u64
+pub ponko::net::InputStats::received: u64
+pub ponko::net::InputStats::skipped: u64
+impl core::clone::Clone for ponko::net::InputStats
+pub fn ponko::net::InputStats::clone(&self) -> Self
+impl core::cmp::Eq for ponko::net::InputStats
+impl core::cmp::PartialEq for ponko::net::InputStats
+pub fn ponko::net::InputStats::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::net::InputStats
+pub fn ponko::net::InputStats::default() -> Self
+impl core::fmt::Debug for ponko::net::InputStats
+pub fn ponko::net::InputStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::net::InputStats
+impl core::marker::StructuralPartialEq for ponko::net::InputStats
 pub struct ponko::net::Interest
 impl ponko::net::Interest
 pub fn ponko::net::Interest::changes(&self) -> &[ponko::net::InterestChange]
@@ -2226,6 +2551,7 @@ impl core::marker::Copy for ponko::net::MessageStats
 impl core::marker::StructuralPartialEq for ponko::net::MessageStats
 pub struct ponko::net::Net
 impl ponko::net::Net
+pub fn ponko::net::Net::accept_web(self, impl std::net::socket_addr::ToSocketAddrs) -> core::io::error::Result<ponko::net::Net>
 pub fn ponko::net::Net::checksum_every(self, u32) -> Self
 pub fn ponko::net::Net::desync(&self) -> core::option::Option<&ponko::net::Desync>
 pub fn ponko::net::Net::error(&self) -> core::option::Option<&str>
@@ -2234,6 +2560,7 @@ pub fn ponko::net::Net::input<T: serde_core::de::DeserializeOwned>(&self, usize)
 pub fn ponko::net::Net::input_bytes(&self, usize) -> &[u8]
 pub fn ponko::net::Net::input_delay(self, u32) -> Self
 pub fn ponko::net::Net::join(impl std::net::socket_addr::ToSocketAddrs) -> core::io::error::Result<ponko::net::Net>
+pub fn ponko::net::Net::join_web(&str) -> core::io::error::Result<ponko::net::Net>
 pub fn ponko::net::Net::local_addr(&self) -> core::option::Option<core::net::socket_addr::SocketAddr>
 pub fn ponko::net::Net::loopback(usize) -> alloc::vec::Vec<ponko::net::Net>
 pub fn ponko::net::Net::player(&self) -> usize
@@ -2243,6 +2570,7 @@ pub fn ponko::net::Net::set_input_bytes(&mut self, &[u8])
 pub fn ponko::net::Net::state(&self) -> ponko::net::NetState
 pub fn ponko::net::Net::stats(&self) -> ponko::net::NetStats
 pub fn ponko::net::Net::timeout(self, core::time::Duration) -> Self
+pub fn ponko::net::Net::web_addr(&self) -> core::option::Option<core::net::socket_addr::SocketAddr>
 impl core::convert::From<ponko::net::Net> for ponko::net::Networking
 pub fn ponko::net::Networking::from(ponko::net::Net) -> Self
 impl core::default::Default for ponko::net::Net
@@ -2253,10 +2581,13 @@ impl core::ops::drop::Drop for ponko::net::Net
 pub fn ponko::net::Net::drop(&mut self)
 pub struct ponko::net::NetMessages
 impl ponko::net::NetMessages
+pub fn ponko::net::NetMessages::accept_web(self, impl std::net::socket_addr::ToSocketAddrs) -> core::io::error::Result<Self>
+pub fn ponko::net::NetMessages::connected_peers(&self) -> usize
 pub fn ponko::net::NetMessages::disconnect(&mut self, ponko::net::PeerId) -> core::io::error::Result<()>
 pub fn ponko::net::NetMessages::events(&mut self) -> impl core::iter::traits::iterator::Iterator<Item = ponko::net::MessageEvent> + '_
 pub fn ponko::net::NetMessages::host(impl std::net::socket_addr::ToSocketAddrs, usize) -> core::io::error::Result<Self>
 pub fn ponko::net::NetMessages::join(impl std::net::socket_addr::ToSocketAddrs) -> core::io::error::Result<Self>
+pub fn ponko::net::NetMessages::join_web(&str) -> core::io::error::Result<Self>
 pub fn ponko::net::NetMessages::local_addr(&self) -> core::option::Option<core::net::socket_addr::SocketAddr>
 pub fn ponko::net::NetMessages::loopback(usize) -> alloc::vec::Vec<Self>
 pub fn ponko::net::NetMessages::loopback_lossy(usize, u32) -> alloc::vec::Vec<Self>
@@ -2268,6 +2599,7 @@ pub fn ponko::net::NetMessages::send_serde<T: serde_core::ser::Serialize>(&mut s
 pub fn ponko::net::NetMessages::send_to_all(&mut self, ponko::net::Lane, &[u8]) -> core::io::error::Result<()>
 pub fn ponko::net::NetMessages::stats(&self) -> ponko::net::MessageStats
 pub fn ponko::net::NetMessages::timeout(self, core::time::Duration) -> Self
+pub fn ponko::net::NetMessages::web_addr(&self) -> core::option::Option<core::net::socket_addr::SocketAddr>
 pub struct ponko::net::NetSnapshots
 impl ponko::net::NetSnapshots
 pub fn ponko::net::NetSnapshots::accept(&mut self, u64, ponko::net::UpdateStamp) -> bool
@@ -2367,6 +2699,65 @@ impl core::marker::StructuralPartialEq for ponko::net::Pose
 impl ponko::net::Interpolate for ponko::net::Pose
 pub fn ponko::net::Pose::extrapolate(&Self, &Self, f32, f32) -> Self
 pub fn ponko::net::Pose::interpolate(&Self, &Self, f32, f32) -> Self
+impl ponko::net::Smooth for ponko::net::Pose
+pub fn ponko::net::Pose::add_offset(&Self, &Self, f32) -> Self
+pub fn ponko::net::Pose::offset(&Self, &Self) -> Self
+pub fn ponko::net::Pose::offset_size(&Self) -> f32
+pub struct ponko::net::Prediction<S, I>
+impl<S: core::clone::Clone + core::cmp::PartialEq, I> ponko::net::Prediction<S, I>
+pub fn ponko::net::Prediction<S, I>::acked(&self) -> core::option::Option<u16>
+pub fn ponko::net::Prediction<S, I>::new(S) -> Self
+pub fn ponko::net::Prediction<S, I>::next_seq(&self) -> u16
+pub fn ponko::net::Prediction<S, I>::predict(&mut self, I, impl core::ops::function::FnOnce(&mut S, &I)) -> u16
+pub fn ponko::net::Prediction<S, I>::previous(&self) -> &S
+pub fn ponko::net::Prediction<S, I>::reconcile(&mut self, u16, S, impl core::ops::function::FnMut(&mut S, &I)) -> ponko::net::Reconciled<S>
+pub fn ponko::net::Prediction<S, I>::reset(&mut self, S)
+pub fn ponko::net::Prediction<S, I>::state(&self) -> &S
+pub fn ponko::net::Prediction<S, I>::stats(&self) -> ponko::net::PredictionStats
+pub fn ponko::net::Prediction<S, I>::unacked(&self) -> impl core::iter::traits::double_ended::DoubleEndedIterator<Item = (u16, &I)> + core::iter::traits::exact_size::ExactSizeIterator + '_
+pub fn ponko::net::Prediction<S, I>::with_capacity(S, usize) -> Self
+impl<S: core::clone::Clone, I: core::clone::Clone> core::clone::Clone for ponko::net::Prediction<S, I>
+pub fn ponko::net::Prediction<S, I>::clone(&self) -> Self
+impl<S: core::fmt::Debug, I: core::fmt::Debug> core::fmt::Debug for ponko::net::Prediction<S, I>
+pub fn ponko::net::Prediction<S, I>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct ponko::net::PredictionStats
+pub ponko::net::PredictionStats::confirmed: u64
+pub ponko::net::PredictionStats::corrections: u64
+pub ponko::net::PredictionStats::dropped: u64
+pub ponko::net::PredictionStats::predicted: u64
+pub ponko::net::PredictionStats::replayed: u64
+impl core::clone::Clone for ponko::net::PredictionStats
+pub fn ponko::net::PredictionStats::clone(&self) -> Self
+impl core::cmp::Eq for ponko::net::PredictionStats
+impl core::cmp::PartialEq for ponko::net::PredictionStats
+pub fn ponko::net::PredictionStats::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::net::PredictionStats
+pub fn ponko::net::PredictionStats::default() -> Self
+impl core::fmt::Debug for ponko::net::PredictionStats
+pub fn ponko::net::PredictionStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::net::PredictionStats
+impl core::marker::StructuralPartialEq for ponko::net::PredictionStats
+pub struct ponko::net::Smoothing<T: ponko::net::Smooth>
+pub ponko::net::Smoothing::half_life: f32
+pub ponko::net::Smoothing::snap: f32
+impl<T: ponko::net::Smooth> ponko::net::Smoothing<T>
+pub fn ponko::net::Smoothing<T>::apply(&self, T) -> T
+pub fn ponko::net::Smoothing<T>::clear(&mut self)
+pub fn ponko::net::Smoothing<T>::correct(&mut self, T, T)
+pub fn ponko::net::Smoothing<T>::error(&self) -> f32
+pub fn ponko::net::Smoothing<T>::is_active(&self) -> bool
+pub fn ponko::net::Smoothing<T>::new() -> Self
+pub fn ponko::net::Smoothing<T>::update(&mut self, f32)
+impl<T: core::clone::Clone + ponko::net::Smooth> core::clone::Clone for ponko::net::Smoothing<T>
+pub fn ponko::net::Smoothing<T>::clone(&self) -> Self
+impl<T: core::cmp::PartialEq + ponko::net::Smooth> core::cmp::PartialEq for ponko::net::Smoothing<T>
+pub fn ponko::net::Smoothing<T>::eq(&self, &Self) -> bool
+impl<T: core::cmp::PartialEq + ponko::net::Smooth> core::marker::StructuralPartialEq for ponko::net::Smoothing<T>
+impl<T: core::fmt::Debug + ponko::net::Smooth> core::fmt::Debug for ponko::net::Smoothing<T>
+pub fn ponko::net::Smoothing<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: core::marker::Copy + ponko::net::Smooth> core::marker::Copy for ponko::net::Smoothing<T>
+impl<T: ponko::net::Smooth> core::default::Default for ponko::net::Smoothing<T>
+pub fn ponko::net::Smoothing<T>::default() -> Self
 pub struct ponko::net::SnapshotBuffer<T: ponko::net::Interpolate>
 impl<T: ponko::net::Interpolate> ponko::net::SnapshotBuffer<T>
 pub fn ponko::net::SnapshotBuffer<T>::clear(&mut self)
@@ -2472,6 +2863,30 @@ pub fn glam::f32::vec3::Vec3::interpolate(&Self, &Self, f32, f32) -> Self
 impl ponko::net::Interpolate for ponko::net::Pose
 pub fn ponko::net::Pose::extrapolate(&Self, &Self, f32, f32) -> Self
 pub fn ponko::net::Pose::interpolate(&Self, &Self, f32, f32) -> Self
+pub trait ponko::net::Smooth: core::marker::Copy
+pub fn ponko::net::Smooth::add_offset(&Self, &Self, f32) -> Self
+pub fn ponko::net::Smooth::offset(&Self, &Self) -> Self
+pub fn ponko::net::Smooth::offset_size(&Self) -> f32
+impl ponko::net::Smooth for f32
+pub fn f32::add_offset(&Self, &Self, f32) -> Self
+pub fn f32::offset(&Self, &Self) -> Self
+pub fn f32::offset_size(&Self) -> f32
+impl ponko::net::Smooth for glam::f32::sse2::quat::Quat
+pub fn glam::f32::sse2::quat::Quat::add_offset(&Self, &Self, f32) -> Self
+pub fn glam::f32::sse2::quat::Quat::offset(&Self, &Self) -> Self
+pub fn glam::f32::sse2::quat::Quat::offset_size(&Self) -> f32
+impl ponko::net::Smooth for glam::f32::vec2::Vec2
+pub fn glam::f32::vec2::Vec2::add_offset(&Self, &Self, f32) -> Self
+pub fn glam::f32::vec2::Vec2::offset(&Self, &Self) -> Self
+pub fn glam::f32::vec2::Vec2::offset_size(&Self) -> f32
+impl ponko::net::Smooth for glam::f32::vec3::Vec3
+pub fn glam::f32::vec3::Vec3::add_offset(&Self, &Self, f32) -> Self
+pub fn glam::f32::vec3::Vec3::offset(&Self, &Self) -> Self
+pub fn glam::f32::vec3::Vec3::offset_size(&Self) -> f32
+impl ponko::net::Smooth for ponko::net::Pose
+pub fn ponko::net::Pose::add_offset(&Self, &Self, f32) -> Self
+pub fn ponko::net::Pose::offset(&Self, &Self) -> Self
+pub fn ponko::net::Pose::offset_size(&Self) -> f32
 pub const fn ponko::net::seq_diff(u16, u16) -> i16
 pub const fn ponko::net::seq_newer(u16, u16) -> bool
 pub mod ponko::particles
@@ -3798,6 +4213,8 @@ pub fn ponko::game::ConfiguredGame::seed(self, u64) -> Self
 pub fn ponko::game::ConfiguredGame::setup(self, impl core::ops::function::FnOnce(&mut ponko::prelude::Ctx) + 'static) -> Self
 pub fn ponko::game::ConfiguredGame::sim_system<F: core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static>(self, F) -> Self
 pub fn ponko::game::ConfiguredGame::system<F: core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static>(self, F) -> Self
+impl ponko::game::ConfiguredGame
+pub fn ponko::game::ConfiguredGame::run_server(self, ponko::server::ServerConfig) -> ponko_ecs::world::World
 pub struct ponko::prelude::Ctx
 pub ponko::prelude::Ctx::assets: ponko::assets::Assets
 pub ponko::prelude::Ctx::audio: ponko::audio::Audio
@@ -3981,6 +4398,8 @@ pub fn ponko::game::Game::spatial_grid(self, f32) -> Self
 pub fn ponko::game::Game::system<F: core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static>(self, F) -> Self
 pub fn ponko::game::Game::system_count(&self, ponko::game::SystemId) -> usize
 pub fn ponko::game::Game::vsync(self, bool) -> Self
+impl ponko::game::Game
+pub fn ponko::game::Game::run_server<S, U>(self, ponko::server::ServerConfig, S) -> ponko_ecs::world::World where S: core::ops::function::FnOnce(&mut ponko::prelude::Ctx) -> U, U: SetupResult
 pub struct ponko::prelude::MemorySource
 impl ponko::assets::MemorySource
 pub fn ponko::assets::MemorySource::insert(&mut self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::vec::Vec<u8>>)
@@ -4545,6 +4964,27 @@ pub fn ponko::reflect::ReflectError::fmt(&self, &mut core::fmt::Formatter<'_>) -
 impl core::fmt::Display for ponko::reflect::ReflectError
 pub fn ponko::reflect::ReflectError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::reflect::ReflectError
+#[non_exhaustive] pub enum ponko::reflect::SaveFormat
+pub ponko::reflect::SaveFormat::Binary
+pub ponko::reflect::SaveFormat::Json
+impl ponko::reflect::SaveFormat
+pub fn ponko::reflect::SaveFormat::decode(&[u8]) -> core::result::Result<serde_json::value::Value, ponko::error::Error>
+pub fn ponko::reflect::SaveFormat::detect(&[u8]) -> Self
+pub fn ponko::reflect::SaveFormat::encode(self, &serde_json::value::Value) -> alloc::vec::Vec<u8>
+pub fn ponko::reflect::SaveFormat::extension(self) -> &'static str
+impl core::clone::Clone for ponko::reflect::SaveFormat
+pub fn ponko::reflect::SaveFormat::clone(&self) -> Self
+impl core::cmp::Eq for ponko::reflect::SaveFormat
+impl core::cmp::PartialEq for ponko::reflect::SaveFormat
+pub fn ponko::reflect::SaveFormat::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::reflect::SaveFormat
+pub fn ponko::reflect::SaveFormat::default() -> Self
+impl core::fmt::Debug for ponko::reflect::SaveFormat
+pub fn ponko::reflect::SaveFormat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::reflect::SaveFormat
+pub fn ponko::reflect::SaveFormat::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::reflect::SaveFormat
+impl core::marker::StructuralPartialEq for ponko::reflect::SaveFormat
 #[non_exhaustive] pub enum ponko::reflect::ValueSchema
 pub ponko::reflect::ValueSchema::AnyOf(alloc::vec::Vec<ponko::reflect::ValueSchema>)
 pub ponko::reflect::ValueSchema::Array(alloc::boxed::Box<ponko::reflect::ValueSchema>)
@@ -4782,6 +5222,7 @@ pub fn ponko::render::GpuTier::deserialize<__D>(__D) -> core::result::Result<Sel
 pub ponko::render::ShaderKind::Compute
 pub ponko::render::ShaderKind::Effect
 pub ponko::render::ShaderKind::Material
+pub ponko::render::ShaderKind::Sky
 pub ponko::render::ShaderKind::Sprite
 impl core::clone::Clone for ponko::render::ShaderKind
 pub fn ponko::render::ShaderKind::clone(&self) -> Self
@@ -5342,6 +5783,117 @@ pub fn ponko::schedule::Stage::clone(&self) -> Self
 impl core::fmt::Debug for ponko::schedule::Stage
 pub fn ponko::schedule::Stage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const ponko::schedule::DEFAULT_PARALLEL_THRESHOLD: core::time::Duration
+pub mod ponko::server
+#[non_exhaustive] pub enum ponko::server::LogFormat
+pub ponko::server::LogFormat::Json
+pub ponko::server::LogFormat::Off
+pub ponko::server::LogFormat::Text
+impl core::clone::Clone for ponko::server::LogFormat
+pub fn ponko::server::LogFormat::clone(&self) -> Self
+impl core::cmp::Eq for ponko::server::LogFormat
+impl core::cmp::PartialEq for ponko::server::LogFormat
+pub fn ponko::server::LogFormat::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::server::LogFormat
+pub fn ponko::server::LogFormat::default() -> Self
+impl core::fmt::Debug for ponko::server::LogFormat
+pub fn ponko::server::LogFormat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::server::LogFormat
+impl core::marker::StructuralPartialEq for ponko::server::LogFormat
+#[non_exhaustive] pub enum ponko::server::LogLevel
+pub ponko::server::LogLevel::Error
+pub ponko::server::LogLevel::Info
+pub ponko::server::LogLevel::Warn
+impl core::clone::Clone for ponko::server::LogLevel
+pub fn ponko::server::LogLevel::clone(&self) -> Self
+impl core::cmp::Eq for ponko::server::LogLevel
+impl core::cmp::PartialEq for ponko::server::LogLevel
+pub fn ponko::server::LogLevel::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::server::LogLevel
+pub fn ponko::server::LogLevel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::server::LogLevel
+impl core::marker::StructuralPartialEq for ponko::server::LogLevel
+#[non_exhaustive] pub enum ponko::server::StopReason
+pub ponko::server::StopReason::Interrupt
+pub ponko::server::StopReason::MaxTicks
+pub ponko::server::StopReason::Quit
+pub ponko::server::StopReason::Requested
+pub ponko::server::StopReason::Terminate
+impl core::clone::Clone for ponko::server::StopReason
+pub fn ponko::server::StopReason::clone(&self) -> Self
+impl core::cmp::Eq for ponko::server::StopReason
+impl core::cmp::PartialEq for ponko::server::StopReason
+pub fn ponko::server::StopReason::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::server::StopReason
+pub fn ponko::server::StopReason::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::server::StopReason
+impl core::marker::StructuralPartialEq for ponko::server::StopReason
+impl serde_core::ser::Serialize for ponko::server::StopReason
+pub fn ponko::server::StopReason::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub struct ponko::server::ServerConfig
+impl ponko::server::ServerConfig
+pub fn ponko::server::ServerConfig::log_format(self, ponko::server::LogFormat) -> Self
+pub fn ponko::server::ServerConfig::max_catch_up(self, u32) -> Self
+pub fn ponko::server::ServerConfig::max_ticks(self, u64) -> Self
+pub fn ponko::server::ServerConfig::new() -> Self
+pub fn ponko::server::ServerConfig::report_every(self, core::time::Duration) -> Self
+pub fn ponko::server::ServerConfig::shutdown_grace(self, core::time::Duration) -> Self
+pub fn ponko::server::ServerConfig::signals(self, bool) -> Self
+pub fn ponko::server::ServerConfig::stop_handle(&self) -> ponko::server::StopHandle
+impl core::clone::Clone for ponko::server::ServerConfig
+pub fn ponko::server::ServerConfig::clone(&self) -> Self
+impl core::default::Default for ponko::server::ServerConfig
+pub fn ponko::server::ServerConfig::default() -> Self
+impl core::fmt::Debug for ponko::server::ServerConfig
+pub fn ponko::server::ServerConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct ponko::server::ServerStatus
+pub ponko::server::ServerStatus::report: core::option::Option<ponko::server::TickReport>
+pub ponko::server::ServerStatus::stopping: core::option::Option<ponko::server::StopReason>
+pub ponko::server::ServerStatus::target_hz: u32
+pub ponko::server::ServerStatus::tick: u64
+impl core::clone::Clone for ponko::server::ServerStatus
+pub fn ponko::server::ServerStatus::clone(&self) -> Self
+impl core::default::Default for ponko::server::ServerStatus
+pub fn ponko::server::ServerStatus::default() -> Self
+impl core::fmt::Debug for ponko::server::ServerStatus
+pub fn ponko::server::ServerStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for ponko::server::ServerStatus
+pub fn ponko::server::ServerStatus::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub struct ponko::server::StopHandle(_)
+impl ponko::server::StopHandle
+pub fn ponko::server::StopHandle::is_stopping(&self) -> bool
+pub fn ponko::server::StopHandle::stop(&self)
+impl core::clone::Clone for ponko::server::StopHandle
+pub fn ponko::server::StopHandle::clone(&self) -> Self
+impl core::default::Default for ponko::server::StopHandle
+pub fn ponko::server::StopHandle::default() -> Self
+impl core::fmt::Debug for ponko::server::StopHandle
+pub fn ponko::server::StopHandle::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct ponko::server::TickReport
+pub ponko::server::TickReport::entities: usize
+pub ponko::server::TickReport::hz: f64
+pub ponko::server::TickReport::late_ticks: u64
+pub ponko::server::TickReport::peak_rss_bytes: core::option::Option<u64>
+pub ponko::server::TickReport::peers: core::option::Option<usize>
+pub ponko::server::TickReport::rss_bytes: core::option::Option<u64>
+pub ponko::server::TickReport::skipped_ticks: u64
+pub ponko::server::TickReport::target_hz: u32
+pub ponko::server::TickReport::tick_ms_max: f64
+pub ponko::server::TickReport::tick_ms_mean: f64
+pub ponko::server::TickReport::tick_ms_p99: f64
+pub ponko::server::TickReport::ticks: u64
+pub ponko::server::TickReport::window_s: f64
+impl core::clone::Clone for ponko::server::TickReport
+pub fn ponko::server::TickReport::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::server::TickReport
+pub fn ponko::server::TickReport::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::server::TickReport
+pub fn ponko::server::TickReport::default() -> Self
+impl core::fmt::Debug for ponko::server::TickReport
+pub fn ponko::server::TickReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::server::TickReport
+impl serde_core::ser::Serialize for ponko::server::TickReport
+pub fn ponko::server::TickReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub fn ponko::server::log(ponko::server::LogLevel, &str, serde_json::value::Value)
 pub mod ponko::sheet
 #[repr(C)] pub struct ponko::sheet::Animation
 pub ponko::sheet::Animation::first: u32
@@ -5425,6 +5977,7 @@ pub fn ponko::storage::Storage::delete(&mut self, &str) -> core::result::Result<
 pub fn ponko::storage::Storage::delete_world(&mut self, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::storage::Storage::dir(&self) -> core::option::Option<&std::path::Path>
 pub fn ponko::storage::Storage::exists(&self, &str) -> bool
+pub fn ponko::storage::Storage::finish_saves(&self)
 pub fn ponko::storage::Storage::in_folder(impl core::convert::Into<std::path::PathBuf>) -> Self
 pub fn ponko::storage::Storage::is_available(&self) -> bool
 pub fn ponko::storage::Storage::is_persistent(&self) -> bool
@@ -5433,7 +5986,10 @@ pub fn ponko::storage::Storage::list(&self) -> core::result::Result<alloc::vec::
 pub fn ponko::storage::Storage::read(&self, &str) -> core::result::Result<alloc::vec::Vec<u8>, ponko::error::Error>
 pub fn ponko::storage::Storage::read_backup(&self, &str) -> core::result::Result<alloc::vec::Vec<u8>, ponko::error::Error>
 pub fn ponko::storage::Storage::read_json<T: serde_core::de::DeserializeOwned>(&self, &str) -> core::result::Result<T, ponko::error::Error>
+pub fn ponko::storage::Storage::save_format(&self) -> ponko::reflect::SaveFormat
 pub fn ponko::storage::Storage::save_world(&mut self, &ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::storage::Storage::save_world_in_background(&mut self, &ponko_ecs::world::World, &str) -> core::result::Result<ponko::streaming::Job<core::result::Result<(), ponko::error::Error>>, ponko::error::Error>
+pub fn ponko::storage::Storage::set_save_format(&mut self, ponko::reflect::SaveFormat)
 pub fn ponko::storage::Storage::world_slots(&self) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, ponko::error::Error>
 pub fn ponko::storage::Storage::write(&mut self, &str, &[u8]) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::storage::Storage::write_json<T: serde_core::ser::Serialize + ?core::marker::Sized>(&mut self, &str, &T) -> core::result::Result<(), ponko::error::Error>
