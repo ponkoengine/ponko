@@ -27,6 +27,7 @@
 //! Limitations are listed in the book's chapter on this example.
 
 use super::*;
+use ponko::locale::{Arg, Strings};
 use std::collections::HashSet;
 
 /// Layout version of the settings file; another version is recovered from.
@@ -63,19 +64,24 @@ impl Control {
         Control::Settings,
     ];
 
-    /// The name on the settings screen.
-    pub fn label(self) -> &'static str {
+    /// The string table key of its name on the settings screen.
+    pub fn key(self) -> &'static str {
         match self {
-            Control::MoveUp => "Move up",
-            Control::MoveDown => "Move down",
-            Control::MoveLeft => "Move left",
-            Control::MoveRight => "Move right",
-            Control::Confirm => "Confirm",
-            Control::Restart => "Restart round",
-            Control::Pause => "Pause / quit",
-            Control::Back => "Back to title",
-            Control::Settings => "Settings",
+            Control::MoveUp => "control.move_up",
+            Control::MoveDown => "control.move_down",
+            Control::MoveLeft => "control.move_left",
+            Control::MoveRight => "control.move_right",
+            Control::Confirm => "control.confirm",
+            Control::Restart => "control.restart",
+            Control::Pause => "control.pause",
+            Control::Back => "control.back",
+            Control::Settings => "control.settings",
         }
+    }
+
+    /// Its name on the settings screen, in the current language.
+    pub fn label(self, strings: &Strings) -> String {
+        strings.get(self.key()).into_owned()
     }
 
     /// The action this control's key and button feed: every movement key
@@ -353,6 +359,9 @@ pub struct Settings {
     /// Sound effects, `0.0..=1.0`.
     pub volume: f32,
     pub controls: Controls,
+    /// The language's code (`"en"`, `"ar"`); one the game has no table for
+    /// (or can't show, see [`languages`]) leaves it in English.
+    pub language: String,
 }
 
 impl Default for Settings {
@@ -362,6 +371,7 @@ impl Default for Settings {
             ui_scale: 1.0,
             volume: 0.8,
             controls: Controls::default(),
+            language: "en".to_string(),
         }
     }
 }
@@ -383,6 +393,7 @@ impl Settings {
             && self.volume.is_finite()
             && (0.0..=1.0).contains(&self.volume)
             && self.controls.is_valid()
+            && !self.language.is_empty()
     }
 }
 
@@ -422,6 +433,29 @@ struct Capture {
     armed: bool,
 }
 
+/// The languages the settings offer, in the order the language button
+/// cycles through them: every table the game loaded, except right-to-left
+/// ones in a build without the engine's `text-shaping` feature (their
+/// letters would not join, nor run right to left). The packaged game and the
+/// web build have it.
+pub fn languages(strings: &Strings) -> Vec<String> {
+    strings
+        .languages()
+        .into_iter()
+        .filter(|l| cfg!(feature = "text-shaping") || !strings.table(l).is_some_and(|t| t.is_rtl()))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The language after `current` in [`languages`], wrapping around.
+pub fn next_language(strings: &Strings, current: &str) -> String {
+    let all = languages(strings);
+    let at = all.iter().position(|l| l == current).map_or(0, |i| i + 1);
+    all.get(at % all.len().max(1))
+        .cloned()
+        .unwrap_or_else(|| "en".to_string())
+}
+
 struct Row {
     control: Control,
     key: UiId,
@@ -440,7 +474,10 @@ pub struct SettingsUi {
     volume: UiId,
     reset: UiId,
     back: UiId,
+    language: UiId,
     rows: Vec<Row>,
+    /// The [`Strings::revision`] the accessible names were written for.
+    revision: u64,
     /// The screen is pushed on the UI's stack.
     open: bool,
     capture: Option<Capture>,
@@ -454,17 +491,18 @@ impl SettingsUi {
             .background(Color::hex(0x14181f))
             .name("settings")
             .id();
-        ui.label(root, "Settings")
+        ui.label(root, "")
+            .text_key("settings.title")
             .layout(ponko::ui::UiLayout::row(40.0))
             .size(28.0);
 
         let strip = ui.panel(root).layout(ponko::ui::UiLayout::row(34.0).gap(8.0)).id();
-        ui.label(strip, "UI scale")
+        ui.label(strip, "")
+            .text_key("settings.scale")
             .layout(ponko::ui::UiLayout::fixed(150.0, 34.0));
         let scale_down = ui
             .button(strip, "-")
             .layout(ponko::ui::UiLayout::fixed(40.0, 34.0))
-            .accessible_name("Smaller UI")
             .id();
         let scale_label = ui
             .label(strip, "")
@@ -474,21 +512,31 @@ impl SettingsUi {
         let scale_up = ui
             .button(strip, "+")
             .layout(ponko::ui::UiLayout::fixed(40.0, 34.0))
-            .accessible_name("Larger UI")
             .name("settings.scale_up")
             .id();
 
         let strip = ui.panel(root).layout(ponko::ui::UiLayout::row(34.0).gap(8.0)).id();
-        ui.label(strip, "Volume")
+        ui.label(strip, "")
+            .text_key("settings.volume")
             .layout(ponko::ui::UiLayout::fixed(150.0, 34.0));
         let volume = ui
             .slider(strip)
             .layout(ponko::ui::UiLayout::fixed(240.0, 34.0))
             .value(settings.volume)
-            .accessible_name("Volume")
             .id();
 
-        ui.label(root, HINT)
+        let strip = ui.panel(root).layout(ponko::ui::UiLayout::row(34.0).gap(8.0)).id();
+        ui.label(strip, "")
+            .text_key("settings.language")
+            .layout(ponko::ui::UiLayout::fixed(150.0, 34.0));
+        let language = ui
+            .button(strip, "")
+            .layout(ponko::ui::UiLayout::fixed(160.0, 34.0))
+            .name("settings.language")
+            .id();
+
+        ui.label(root, "")
+            .text_key("settings.hint")
             .layout(ponko::ui::UiLayout::row(52.0))
             .size(16.0)
             .wrap();
@@ -500,14 +548,16 @@ impl SettingsUi {
         let mut rows = Vec::new();
         for control in Control::ALL {
             let strip = ui.panel(list).layout(ponko::ui::UiLayout::row(32.0).gap(8.0)).id();
-            ui.label(strip, control.label())
+            ui.label(strip, "")
+                .text_key(control.key())
                 .layout(ponko::ui::UiLayout::fixed(150.0, 32.0));
             let key = ui
                 .button(strip, "")
                 .layout(ponko::ui::UiLayout::fixed(120.0, 32.0))
                 .id();
             let pad = if control.is_movement() {
-                ui.label(strip, "left stick")
+                ui.label(strip, "")
+                    .text_key("settings.left_stick")
                     .layout(ponko::ui::UiLayout::fixed(120.0, 32.0));
                 None
             } else {
@@ -522,11 +572,13 @@ impl SettingsUi {
 
         let strip = ui.panel(root).layout(ponko::ui::UiLayout::row(36.0).gap(8.0)).id();
         let reset = ui
-            .button(strip, "Reset to defaults")
+            .button(strip, "")
+            .text_key("settings.reset")
             .layout(ponko::ui::UiLayout::fixed(190.0, 36.0))
             .id();
         let back = ui
-            .button(strip, "Back")
+            .button(strip, "")
+            .text_key("settings.back")
             .layout(ponko::ui::UiLayout::fixed(120.0, 36.0))
             .name("settings.back")
             .id();
@@ -560,7 +612,9 @@ impl SettingsUi {
             volume,
             reset,
             back,
+            language,
             rows,
+            revision: 0,
             open: false,
             capture: None,
         }
@@ -568,37 +622,57 @@ impl SettingsUi {
 
     /// Shows the current settings in the labels and buttons: the scale and
     /// volume from `settings`, the keys and buttons read back from the
-    /// installed `bindings`.
-    fn refresh(&self, ui: &mut Ui, settings: &Settings, bindings: &ActionMap) {
-        ui.set_text(self.scale_label, format!("{:.0}%", settings.ui_scale * 100.0));
+    /// installed `bindings`, and the names a screen reader says, in the
+    /// current language of `strings`. (Labels that only hold a key follow the
+    /// language by themselves.)
+    fn refresh(&mut self, ui: &mut Ui, settings: &Settings, bindings: &ActionMap, strings: &Strings) {
+        self.revision = strings.revision();
+        ui.set_text(
+            self.scale_label,
+            strings.number(f64::from(settings.ui_scale) * 100.0, Some(0)) + "%",
+        );
         ui.set_value(self.volume, settings.volume);
+        ui.set_accessible_name(self.scale_down, strings.get("settings.smaller"));
+        ui.set_accessible_name(self.scale_up, strings.get("settings.larger"));
+        ui.set_accessible_name(self.volume, strings.get("settings.volume"));
+        let language = strings
+            .table(strings.language())
+            .map_or(strings.language(), |t| t.name());
+        ui.set_text(self.language, language);
+        ui.set_accessible_name(
+            self.language,
+            format!("{}: {language}", strings.get("settings.language")),
+        );
         let bound = Controls::from_bindings(bindings);
         // A button's name is its text unless told otherwise; "Enter" alone says nothing.
         for row in &self.rows {
             let key = bound.key_name(row.control);
+            let control = row.control.label(strings);
             ui.set_text(row.key, &key);
-            ui.set_accessible_name(row.key, format!("{} key: {key}", row.control.label()));
+            let args = [("control", Arg::from(&control)), ("key", Arg::from(&key))];
+            ui.set_accessible_name(row.key, strings.format("settings.key_name", &args));
             if let (Some(id), Some(button)) = (row.pad, bound.pad(row.control)) {
-                ui.set_text(id, format!("{button:?}"));
-                ui.set_accessible_name(id, format!("{} gamepad button: {button:?}", row.control.label()));
+                let button = format!("{button:?}");
+                ui.set_text(id, &button);
+                let args = [("control", Arg::from(&control)), ("button", Arg::from(button))];
+                ui.set_accessible_name(id, strings.format("settings.pad_name", &args));
             }
         }
     }
 }
 
-/// Above the list of controls: how to rebind, and what can't be chosen.
-pub const HINT: &str = "Press a button, then the new key. Escape, Tab, East and the D-pad are reserved for the menus; Reset gives Pause its Escape back.";
-
-/// The sentence a refused key or button gets.
-pub fn refusal(refused: Refused, name: &str, controls: &Controls) -> String {
+/// The sentence a refused key or button gets: its string table key and
+/// arguments, so the prompt follows the language too.
+pub fn refusal(refused: Refused, name: &str, strings: &Strings) -> (&'static str, Vec<(&'static str, Arg)>) {
+    let key = ("key", Arg::from(name));
     match refused {
-        Refused::Reserved => format!("{name} is reserved for the menus. Press another."),
-        Refused::Fixed => format!("{name} always works for something else. Press another."),
-        Refused::InUse(other) => {
-            let _ = controls;
-            format!("{name} is already used for \"{}\". Press another.", other.label())
-        }
-        Refused::NoButton => "Movement uses the left stick.".to_string(),
+        Refused::Reserved => ("refused.reserved", vec![key]),
+        Refused::Fixed => ("refused.fixed", vec![key]),
+        Refused::InUse(other) => (
+            "refused.in_use",
+            vec![key, ("control", Arg::from(other.label(strings)))],
+        ),
+        Refused::NoButton => ("refused.no_button", Vec::new()),
     }
 }
 
@@ -646,7 +720,7 @@ fn drive(ctx: &mut Ctx, state: &mut SettingsUi, on_screen: bool) {
     }
     if !state.open {
         let settings = ctx.world.resource::<Settings>().clone();
-        state.refresh(&mut ctx.ui, &settings, ctx.input.actions());
+        state.refresh(&mut ctx.ui, &settings, ctx.input.actions(), strings(&ctx.world));
         ctx.ui.set_text(state.status, "");
         ctx.ui.push_screen(state.root, false);
         state.open = true;
@@ -672,6 +746,11 @@ fn drive(ctx: &mut Ctx, state: &mut SettingsUi, on_screen: bool) {
     if let Some(capture) = state.capture {
         capture_press(ctx, state, capture);
     }
+    // A table reloaded while the screen is up: the spoken names follow.
+    if state.revision != strings(&ctx.world).revision() {
+        let settings = ctx.world.resource::<Settings>().clone();
+        state.refresh(&mut ctx.ui, &settings, ctx.input.actions(), strings(&ctx.world));
+    }
 }
 
 fn click(ctx: &mut Ctx, state: &mut SettingsUi, id: UiId) {
@@ -682,13 +761,23 @@ fn click(ctx: &mut Ctx, state: &mut SettingsUi, id: UiId) {
         settings.ui_scale = step_scale(settings.ui_scale, if id == state.scale_up { 1 } else { -1 });
         let settings = settings.clone();
         ctx.ui.set_scale(settings.ui_scale);
-        state.refresh(&mut ctx.ui, &settings, ctx.input.actions());
+        state.refresh(&mut ctx.ui, &settings, ctx.input.actions(), strings(&ctx.world));
+    } else if id == state.language {
+        let next = next_language(strings(&ctx.world), &ctx.world.resource::<Settings>().language);
+        ctx.world.resource_mut::<Settings>().language = next;
+        let settings = ctx.world.resource::<Settings>().clone();
+        apply_language(&mut ctx.world, &settings);
+        state.refresh(&mut ctx.ui, &settings, ctx.input.actions(), strings(&ctx.world));
     } else if id == state.reset {
-        let settings = Settings::default();
+        let settings = Settings {
+            // The language is not a control: Reset keeps it.
+            language: ctx.world.resource::<Settings>().language.clone(),
+            ..Settings::default()
+        };
         apply(ctx, &settings);
-        state.refresh(&mut ctx.ui, &settings, ctx.input.actions());
+        state.refresh(&mut ctx.ui, &settings, ctx.input.actions(), strings(&ctx.world));
         ctx.world.insert_resource(settings);
-        ctx.ui.set_text(state.status, "Defaults restored");
+        ctx.ui.set_text_key(state.status, "settings.restored", &[]);
     } else if let Some((control, device)) = state.rows.iter().find_map(|row| {
         if row.key == id {
             Some((row.control, Device::Key))
@@ -698,14 +787,13 @@ fn click(ctx: &mut Ctx, state: &mut SettingsUi, id: UiId) {
             None
         }
     }) {
-        let what = match device {
-            Device::Key => "key",
-            Device::Pad => "gamepad button",
+        let prompt = match device {
+            Device::Key => "settings.prompt_key",
+            Device::Pad => "settings.prompt_pad",
         };
-        ctx.ui.set_text(
-            state.prompt_text,
-            format!("Press the new {what} for \"{}\".\nEscape cancels.", control.label()),
-        );
+        let name = control.label(strings(&ctx.world));
+        ctx.ui
+            .set_text_key(state.prompt_text, prompt, &[("control", Arg::from(name))]);
         ctx.ui.push_screen(state.prompt, true);
         state.capture = Some(Capture {
             control,
@@ -719,6 +807,18 @@ fn click(ctx: &mut Ctx, state: &mut SettingsUi, id: UiId) {
 fn apply(ctx: &mut Ctx, settings: &Settings) {
     ctx.input.set_actions(bindings_for(&settings.controls));
     ctx.ui.set_scale(settings.ui_scale);
+}
+
+/// Switches the string tables to `settings`' language, or English if the
+/// game can't show it (see [`languages`]). The labels follow on the next frame.
+pub fn apply_language(world: &mut World, settings: &Settings) {
+    let strings = world.resource_mut::<Strings>();
+    let language = if languages(strings).contains(&settings.language) {
+        settings.language.as_str()
+    } else {
+        "en"
+    };
+    strings.set_language(language);
 }
 
 /// What the player pressed while the prompt was open, if anything: the first
@@ -760,17 +860,18 @@ fn capture_press(ctx: &mut Ctx, state: &mut SettingsUi, capture: Capture) {
             let mut settings = ctx.world.resource::<Settings>().clone();
             settings.controls = Controls::from_bindings(ctx.input.actions());
             // ANCHOR_END: rebind
-            state.refresh(&mut ctx.ui, &settings, ctx.input.actions());
-            let message = format!("\"{}\" is now {name}", capture.control.label());
+            state.refresh(&mut ctx.ui, &settings, ctx.input.actions(), strings(&ctx.world));
+            let control = capture.control.label(strings(&ctx.world));
             ctx.world.insert_resource(settings);
-            ctx.ui.set_text(state.status, message);
+            let args = [("control", Arg::from(control)), ("key", Arg::from(name))];
+            ctx.ui.set_text_key(state.status, "settings.bound", &args);
             ctx.ui.pop_screen(); // the prompt
             state.capture = None;
         }
         // Stay in the prompt and say why: pressing Escape still cancels.
         Err(refused) => {
-            let message = refusal(refused, &name, &controls);
-            ctx.ui.set_text(state.prompt_text, message);
+            let (key, args) = refusal(refused, &name, strings(&ctx.world));
+            ctx.ui.set_text_key(state.prompt_text, key, &args);
         }
     }
 }

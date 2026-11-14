@@ -1981,6 +1981,9 @@ impl Game {
         end_timings(ctx);
         let frame = self.systems.iter().chain(&self.late_systems).chain(&self.draw_systems);
         forget_seen_removals(ctx, self.sim_systems.iter().chain(frame));
+        // A window's frame localizes keyed UI text before drawing it; with no
+        // drawing, do it here, so the scenario's checks see the drawn text.
+        ctx.localize_ui();
         ctx.scenario_end_tick(tick);
     }
 

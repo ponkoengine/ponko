@@ -193,7 +193,7 @@ development headers, as for any example):
 
 ```sh
 git clone https://github.com/ponkoengine/ponko && cd ponko
-cargo run --release --example coin_dash      # play it
+cargo run --release --example coin_dash --features text-shaping   # play it
 cargo test --test coin_dash                  # the whole game, headlessly
 ```
 
@@ -306,7 +306,7 @@ every one of these cases for both files.
 ## The web build
 
 ```sh
-web/build.sh coin_dash && python3 -m http.server -d target/web/coin_dash 8000
+web/build.sh --features text-shaping coin_dash && python3 -m http.server -d target/web/coin_dash 8000
 ```
 
 builds the same game for the browser: the coin picture is fetched with the

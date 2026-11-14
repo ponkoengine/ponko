@@ -285,6 +285,35 @@ typedef enum PonkoUiEventKind {
   PONKO_UI_EVENT_SCREEN_POPPED,
 } PonkoUiEventKind;
 
+enum PonkoStringArgKind
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  PONKO_STRING_ARG_TEXT = 0,
+  PONKO_STRING_ARG_INT = 1,
+  PONKO_STRING_ARG_NUMBER = 2,
+};
+#ifndef __cplusplus
+typedef uint32_t PonkoStringArgKind;
+#endif // __cplusplus
+
+enum PonkoPluralCategory
+#ifdef __cplusplus
+  : uint32_t
+#endif // __cplusplus
+ {
+  PONKO_PLURAL_ZERO = 0,
+  PONKO_PLURAL_ONE = 1,
+  PONKO_PLURAL_TWO = 2,
+  PONKO_PLURAL_FEW = 3,
+  PONKO_PLURAL_MANY = 4,
+  PONKO_PLURAL_OTHER = 5,
+};
+#ifndef __cplusplus
+typedef uint32_t PonkoPluralCategory;
+#endif // __cplusplus
+
 enum PonkoTextAlign3D
 #ifdef __cplusplus
   : uint32_t
@@ -2177,6 +2206,14 @@ typedef struct PonkoUiComposition {
   size_t cursor_end;
   bool composing;
 } PonkoUiComposition;
+
+typedef struct PonkoStringArg {
+  const char *name;
+  PonkoStringArgKind kind;
+  const char *text;
+  int64_t integer;
+  double number;
+} PonkoStringArg;
 
 typedef struct PonkoSprite {
   struct PonkoTexture texture;
@@ -5760,6 +5797,66 @@ enum PonkoStatus ponko_ctx_ui_frame_ime(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_input_scenario_ime(struct PonkoInputScenario *scenario,
                                           uint64_t tick,
                                           const struct PonkoImeEvent *event);
+
+enum PonkoStatus ponko_ctx_load_strings(struct PonkoCtx *ctx, const char *path);
+
+enum PonkoStatus ponko_ctx_strings_insert_json(struct PonkoCtx *ctx, const char *json);
+
+enum PonkoStatus ponko_ctx_strings_set_language(struct PonkoCtx *ctx,
+                                                const char *language,
+                                                bool *out_known);
+
+enum PonkoStatus ponko_ctx_strings_language(struct PonkoCtx *ctx,
+                                            char *buffer,
+                                            size_t capacity,
+                                            size_t *out_len);
+
+enum PonkoStatus ponko_ctx_strings_language_count(struct PonkoCtx *ctx, size_t *out_count);
+
+enum PonkoStatus ponko_ctx_strings_language_at(struct PonkoCtx *ctx,
+                                               size_t index,
+                                               char *code_buffer,
+                                               size_t code_capacity,
+                                               size_t *out_code_len,
+                                               char *name_buffer,
+                                               size_t name_capacity,
+                                               size_t *out_name_len);
+
+enum PonkoStatus ponko_ctx_strings_is_rtl(struct PonkoCtx *ctx, bool *out_rtl);
+
+enum PonkoStatus ponko_ctx_strings_set_font(struct PonkoCtx *ctx,
+                                            const char *language,
+                                            struct PonkoFont font);
+
+enum PonkoStatus ponko_ctx_strings_font(struct PonkoCtx *ctx,
+                                        bool *out_has,
+                                        struct PonkoFont *out_font);
+
+enum PonkoStatus ponko_ctx_strings_format(struct PonkoCtx *ctx,
+                                          const char *key,
+                                          const struct PonkoStringArg *args,
+                                          size_t count,
+                                          char *buffer,
+                                          size_t capacity,
+                                          size_t *out_len);
+
+enum PonkoStatus ponko_ctx_strings_missing_report(struct PonkoCtx *ctx,
+                                                  char *buffer,
+                                                  size_t capacity,
+                                                  size_t *out_len);
+
+enum PonkoStatus ponko_plural_category(const char *language,
+                                       double count,
+                                       PonkoPluralCategory *out_category);
+
+enum PonkoStatus ponko_ctx_ui_set_text_key(struct PonkoCtx *ctx,
+                                           uint64_t target,
+                                           uint64_t id,
+                                           const char *key,
+                                           const struct PonkoStringArg *args,
+                                           size_t count);
+
+enum PonkoStatus ponko_ctx_ui_localize(struct PonkoCtx *ctx, uint64_t target);
 
 #ifdef __cplusplus
 }  // extern "C"

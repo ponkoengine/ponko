@@ -17,8 +17,13 @@
 //! `Playing` → `Result` → `Playing` again (or back to `Title`), and
 //! `Title` ⇄ `Settings`. Only `rules` changes the screen. The best time and
 //! most coins are kept in a small [`Progress`] file, and the player's choices
-//! (UI scale, volume, rebound controls) in a [`settings::Settings`] file; both
-//! survive a missing or damaged file.
+//! (UI scale, volume, rebound controls, language) in a [`settings::Settings`]
+//! file; both survive a missing or damaged file.
+//!
+//! Every text the player reads comes from the string tables in
+//! `assets/coin_dash/lang` (English and Arabic, see [`LANGUAGES`]), through
+//! the engine's `ponko::locale`: the settings screen's labels hold keys and
+//! follow the language by themselves, and `hud` reads [`Strings`] as it draws.
 
 // The test file includes this module but needs only part of it.
 #![allow(dead_code)]
@@ -31,6 +36,7 @@ pub mod smoke;
 
 #[allow(unused_imports)]
 use ponko::d2::{Sprite, Transform};
+use ponko::locale::{Arg, Strings};
 use ponko::prelude::*;
 use ponko::storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -150,6 +156,15 @@ actions! {
 /// the same game.
 pub const SEED: u64 = 2024;
 
+/// The string tables, English (the reference) first. Arabic needs the
+/// engine's `text-shaping` feature to be shown, see `settings::languages`.
+pub const LANGUAGES: [&str; 2] = ["coin_dash/lang/en.json", "coin_dash/lang/ar.json"];
+
+/// The game's string tables, loaded by [`SettingsScreen`]'s setup.
+pub fn strings(world: &World) -> &Strings {
+    world.resource::<Strings>()
+}
+
 /// The name of the game's folder in the player's data folder, where
 /// `ctx.storage` keeps [`PROGRESS_FILE`] and the settings.
 pub const APP_ID: &str = "coin-dash";
@@ -205,9 +220,15 @@ impl Plugin for SettingsScreen {
         game.add(Phase::Frame, settings::settings_ui)
     }
     fn setup(&self, ctx: &mut Ctx) {
+        for table in LANGUAGES {
+            ctx.assets
+                .load_strings(&mut ctx.world, table)
+                .unwrap_or_else(|e| panic!("{e}"));
+        }
         let (loaded, load) = Settings::load(&mut ctx.storage);
         ctx.input.set_actions(settings::bindings_for(&loaded.controls));
         ctx.ui.set_scale(loaded.ui_scale);
+        settings::apply_language(&mut ctx.world, &loaded);
         ctx.world.insert_resource(loaded);
         ctx.world.insert_resource(settings::SettingsFile {
             load,
@@ -638,8 +659,8 @@ fn line(text: impl Into<String>, size: f32, color: Color) -> Line {
     }
 }
 
-/// The text of the current screen, top to bottom. Pure, so a test can check
-/// what the player would read without a window.
+/// The text of the current screen, top to bottom, in the current language.
+/// Pure, so a test can check what the player would read without a window.
 pub fn screen_lines(world: &World) -> Vec<Line> {
     let gold = Color::hex(0xffbe0b);
     let green = Color::hex(0x8ac926);
@@ -647,57 +668,69 @@ pub fn screen_lines(world: &World) -> Vec<Line> {
     let progress = world.resource::<Progress>();
     let save = world.resource::<SaveFile>();
     let settings = world.resource::<Settings>();
-    let key = |control| settings.controls.key_name(control);
+    let tr = strings(world);
+    let key = |control| Arg::from(settings.controls.key_name(control));
     use settings::Control as C;
     let best = if progress.rounds_played == 0 {
-        "No rounds played yet".to_string()
+        tr.get("title.no_rounds").into_owned()
     } else {
-        let time = progress.best_time.map_or("none".to_string(), |t| format!("{t:.1} s"));
-        format!(
-            "Best time {time}   Most coins {}/{COINS}   Won {} of {}",
-            progress.best_coins, progress.rounds_won, progress.rounds_played
+        let time = progress.best_time.map_or(tr.get("progress.none").into_owned(), |t| {
+            tr.format("progress.seconds", &[("seconds", Arg::from(t))])
+        });
+        tr.format(
+            "progress.best",
+            &[
+                ("time", Arg::from(time)),
+                ("coins", Arg::from(progress.best_coins)),
+                ("total", Arg::from(COINS)),
+                ("won", Arg::from(progress.rounds_won)),
+                ("played", Arg::from(progress.rounds_played)),
+            ],
         )
     };
     let mut lines = match *world.resource::<Screen>() {
         // The settings screen is the retained UI's; a round shows only the HUD.
         Screen::Playing | Screen::Settings => return Vec::new(),
         Screen::Title => {
+            let goal = [
+                ("count", Arg::from(COINS)),
+                ("seconds", Arg::from(ROUND_SECONDS as i64)),
+            ];
             let mut lines = vec![
-                line("COIN DASH", 56.0, gold),
-                line(
-                    format!("Collect {COINS} coins in {ROUND_SECONDS:.0} seconds"),
-                    20.0,
-                    Color::WHITE,
-                ),
+                line(tr.get("title.name"), 56.0, gold),
+                line(tr.format("title.goal", &goal), 20.0, Color::WHITE),
                 line(best, 20.0, Color::WHITE),
             ];
             if save.load == LoadStatus::Recovered {
-                lines.push(line("Saved progress was unreadable and was reset", 20.0, red));
+                lines.push(line(tr.get("title.progress_reset"), 20.0, red));
             }
             if world.resource::<settings::SettingsFile>().load == LoadStatus::Recovered {
-                lines.push(line("Saved settings were unreadable and were reset", 20.0, red));
+                lines.push(line(tr.get("title.settings_reset"), 20.0, red));
             }
             // A browser tab can't be closed by the game, so the web build has no quit.
-            let quit = if cfg!(target_arch = "wasm32") {
-                String::new()
+            let keys = if cfg!(target_arch = "wasm32") {
+                "title.keys"
             } else {
-                format!("    {}: quit", key(C::Pause))
+                "title.keys_quit"
             };
-            lines.push(line(
-                format!("{}: play    {}: settings{quit}", key(C::Confirm), key(C::Settings)),
-                20.0,
-                Color::WHITE,
-            ));
+            let args = [
+                ("confirm", key(C::Confirm)),
+                ("settings", key(C::Settings)),
+                ("pause", key(C::Pause)),
+            ];
+            lines.push(line(tr.format(keys, &args), 20.0, Color::WHITE));
             lines
         }
         Screen::Paused => vec![
-            line("Paused", 48.0, Color::WHITE),
+            line(tr.get("paused.title"), 48.0, Color::WHITE),
             line(
-                format!(
-                    "{}: resume    {}: restart    {}: title",
-                    key(C::Pause),
-                    key(C::Restart),
-                    key(C::Back)
+                tr.format(
+                    "paused.keys",
+                    &[
+                        ("pause", key(C::Pause)),
+                        ("restart", key(C::Restart)),
+                        ("back", key(C::Back)),
+                    ],
                 ),
                 20.0,
                 Color::WHITE,
@@ -707,24 +740,34 @@ pub fn screen_lines(world: &World) -> Vec<Line> {
             let round = world.resource::<Round>();
             let mut lines = match outcome {
                 Outcome::Won => vec![
-                    line("You win!", 48.0, green),
+                    line(tr.get("result.won"), 48.0, green),
                     line(
-                        format!("Time {:.1} s", ROUND_SECONDS - round.time_left),
+                        tr.format(
+                            "result.time",
+                            &[("seconds", Arg::from(ROUND_SECONDS - round.time_left))],
+                        ),
                         24.0,
                         Color::WHITE,
                     ),
                 ],
                 Outcome::Lost => vec![
-                    line("Time's up", 48.0, red),
-                    line(format!("Coins {}/{COINS}", round.collected), 24.0, Color::WHITE),
+                    line(tr.get("result.lost"), 48.0, red),
+                    line(
+                        tr.format(
+                            "result.coins",
+                            &[("count", Arg::from(round.collected)), ("total", Arg::from(COINS))],
+                        ),
+                        24.0,
+                        Color::WHITE,
+                    ),
                 ],
             };
             if round.new_best {
-                lines.push(line("New best!", 24.0, gold));
+                lines.push(line(tr.get("result.new_best"), 24.0, gold));
             }
             lines.push(line(best, 20.0, Color::WHITE));
             lines.push(line(
-                format!("{}: play again    {}: title", key(C::Confirm), key(C::Back)),
+                tr.format("result.keys", &[("confirm", key(C::Confirm)), ("back", key(C::Back))]),
                 20.0,
                 Color::WHITE,
             ));
@@ -732,22 +775,37 @@ pub fn screen_lines(world: &World) -> Vec<Line> {
         }
     };
     if save.save_failed {
-        lines.push(line("Progress could not be saved", 20.0, red));
+        lines.push(line(tr.get("save.failed"), 20.0, red));
     }
     lines
 }
 
-/// Frame system: the text on top of the sprites, at the player's UI scale.
+/// Frame system: the text on top of the sprites, at the player's UI scale,
+/// with the current language's font (the built-in one for English).
 pub fn hud(ctx: &mut Ctx) {
     let scale = ctx.world.resource::<Settings>().ui_scale;
+    let font = strings(&ctx.world).font().unwrap_or(Font::DEFAULT);
+    let text = |size: f32, color| TextParams::default().with_font(font).with_size(size).with_color(color);
     if matches!(*ctx.world.resource::<Screen>(), Screen::Playing | Screen::Paused) {
         let round = ctx.world.resource::<Round>().clone();
-        let status = format!(
-            "Round {}   Coins {}/{}   Time {:.1}",
-            round.number, round.collected, COINS, round.time_left
+        let status = strings(&ctx.world).format(
+            "hud.status",
+            &[
+                ("round", Arg::from(round.number)),
+                ("count", Arg::from(round.collected)),
+                ("total", Arg::from(COINS)),
+                ("seconds", Arg::from(round.time_left)),
+            ],
         );
+        // Right to left, the status line starts at the right edge.
+        let width = ctx.gfx.measure_text_ex(&status, font, 20.0 * scale).x;
+        let x = if strings(&ctx.world).is_rtl() {
+            ARENA.x - 12.0 * scale - width
+        } else {
+            12.0 * scale
+        };
         ctx.gfx
-            .draw_text(&status, vec2(12.0, 8.0) * scale, 20.0 * scale, Color::WHITE);
+            .draw_text_ex(&status, vec2(x, 8.0 * scale), text(20.0 * scale, Color::WHITE));
     }
     // The block of lines, centred on the arena.
     let lines = screen_lines(&ctx.world);
@@ -755,9 +813,9 @@ pub fn hud(ctx: &mut Ctx) {
     let mut y = (ARENA.y - height) / 2.0;
     for l in lines {
         let size = l.size * scale;
-        let width = ctx.gfx.measure_text(&l.text, size).x;
+        let width = ctx.gfx.measure_text_ex(&l.text, font, size).x;
         ctx.gfx
-            .draw_text(&l.text, vec2((ARENA.x - width) / 2.0, y), size, l.color);
+            .draw_text_ex(&l.text, vec2((ARENA.x - width) / 2.0, y), text(size, l.color));
         y += size * 1.5;
     }
 }

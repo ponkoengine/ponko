@@ -2922,6 +2922,27 @@ static void localized_text_snippet() {
 }
 // ANCHOR_END: localized_text
 
+// ANCHOR: string_tables
+static void string_tables(ponko::ctx& ctx) {
+    // Usually ctx.load_strings("lang/en.json"); the same text here.
+    ctx.insert_strings_json(R"({"language": "en", "strings": {
+        "menu.play": "Play",
+        "hud.coins": {"one": "{count} coin", "other": "{count} coins"}}})");
+    ctx.insert_strings_json(R"({"language": "fr", "strings": {
+        "menu.play": "Jouer",
+        "hud.coins": {"one": "{count} pièce", "other": "{count} pièces"}}})");
+    namespace u = ponko::ui;
+    auto ui = ctx.ui_retained();
+    auto root = ui.add_panel(u::none, u::fill());
+    auto play = ui.add_button(root, "", u::fixed(200, 40));
+    ui.set_text_key(play, "menu.play");  // follows the language
+    ui.push_screen(root);
+    ctx.set_language("fr");
+    std::string coins = ctx.format("hud.coins", {ponko::arg("count", 0)});  // "0 pièce"
+    if (coins != "0 pièce" || !ctx.missing_strings().empty()) std::abort();
+}
+// ANCHOR_END: string_tables
+
 // ANCHOR: gpu_buffers
 static void gpu_particles(ponko::ctx& ctx) {
     auto items = ctx.create_gpu_buffer(128);
@@ -3382,6 +3403,7 @@ int main() {
     jump_once();
     menu_opens_settings();
     resource_scope_run();
+    ponko::game("string table guide", 1, 1).run_headless(0, string_tables);
     ponko::game("asset source guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         embedded_assets(ctx);
         if (skin_or_default(ctx).id != 0) std::abort();

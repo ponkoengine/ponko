@@ -3430,7 +3430,40 @@ static void ime_composition() {
     });
 }
 
+static void localization() {
+    CHECK(ponko::plural("en", 1) == ponko::plural_category::one);
+    CHECK(ponko::plural("ar", 11) == ponko::plural_category::many);
+    ponko::game("c++ locale", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        bool threw = false;
+        try { ctx.load_strings("lang/none.json"); } catch (const ponko::error&) { threw = true; }
+        CHECK(threw);
+        ctx.insert_strings_json(R"({"language": "en", "name": "English", "strings": {
+            "time": "Time {seconds:1} s", "hi": "Hi {name}", "lives": {"one": "{count} life", "other": "{count} lives"}}})");
+        ctx.insert_strings_json(R"({"language": "ar", "name": "Arabic", "strings": {"time": "{seconds:1}"}})");
+        auto languages = ctx.languages();
+        CHECK(languages.size() == 2 && languages[0].code == "en" && languages[1].name == "Arabic");
+        CHECK(ctx.language() == "en" && !ctx.language_is_rtl());
+        CHECK(ctx.format("time", {ponko::arg("seconds", 2.25)}) == "Time 2.2 s");
+        CHECK(ctx.format("hi", {ponko::arg("name", "Ada")}) == "Hi Ada");
+        CHECK(ctx.format("lives", {ponko::arg("count", 1LL)}) == "1 life");
+        CHECK(!ctx.language_font());
+        namespace u = ponko::ui;
+        auto ui = ctx.ui_retained();
+        auto root = ui.add_panel(u::none, u::fill());
+        auto label = ui.add_label(root, "", u::fixed(200, 30));
+        ui.set_text_key(label, "lives", {ponko::arg("count", 3)});
+        ui.localize();
+        CHECK(ui.text(label) == "3 lives");
+        CHECK(!ctx.set_language("xx") && ctx.set_language("ar"));
+        CHECK(ctx.language_is_rtl());
+        ctx.set_language_font("ar", ponko::font{0});
+        CHECK(ctx.language_font() && ctx.language_font()->id == 0);
+        CHECK(ctx.missing_strings().find("\"hi\" is missing") != std::string::npos);
+    });
+}
+
 int main() {
+    localization();
     levels_and_tilemaps();
     abi_version_is_checked();
     declared_access();

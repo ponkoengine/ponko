@@ -43,6 +43,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE = "coin_dash"
 EXE = EXAMPLE + (".exe" if os.name == "nt" else "")
+# The engine features the game is built with: see `settings::languages`.
+FEATURES = "text-shaping"
 ASSET_DIR = Path("assets") / EXAMPLE
 COIN = ASSET_DIR / "coin.png"
 LICENSE_FILES = ("LICENSE-MIT", "LICENSE-APACHE", "NOTICE")
@@ -67,7 +69,8 @@ def ponko(*args):
 def cmd_package(args):
     out = Path(args.out).resolve()
     command = ["package", "--example", EXAMPLE, "--profile", args.profile, "--out", str(out)]
-    command += ["--format", "folder", "--no-smoke"]
+    # Text shaping draws the game's Arabic (joined letters, right to left).
+    command += ["--features", FEATURES, "--format", "folder", "--no-smoke"]
     if args.no_build:
         command.append("--no-build")
     code = ponko(*command)

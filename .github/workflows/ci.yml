@@ -1047,7 +1047,7 @@ jobs:
         run: |
           web/build.sh web_smoke
           web/build.sh --features 3d web_smoke_3d
-          web/build.sh coin_dash
+          web/build.sh --features text-shaping coin_dash
           web/build.sh --features physics ember_hop
           web/build.sh lights2d
       # Chromium, WebGL2 (WebGPU hidden, the fallback path).
@@ -1193,7 +1193,7 @@ jobs:
       # and smoke-run by the generic command any game uses.
       - name: The host's download, with ponko package's own smoke run
         if: ${{ !cancelled() }}
-        run: cargo run -p ponko_cli -- package --example coin_dash --profile dev --out target/package-host
+        run: cargo run -p ponko_cli -- package --example coin_dash --features text-shaping --profile dev --out target/package-host
       # The engine reads WGPU_BACKEND (not WGPU_ADAPTER_NAME). With only DirectX 12
       # enabled, the one adapter left on a runner without a GPU is WARP, the
       # software renderer, which the engine accepts.

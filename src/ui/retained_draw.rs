@@ -53,11 +53,14 @@ impl Ctx {
 
     /// Keyed UI text follows the string tables (`Ui::localize`): the fonts
     /// tables name are loaded first, falling back to the built-in font.
-    fn localize_ui(&mut self) {
+    pub(crate) fn localize_ui(&mut self) {
         let Some(strings) = self.world.get_resource_mut::<crate::locale::Strings>() else {
             return;
         };
+        // Nodes given a key since the last frame are filled in even when the
+        // tables didn't change (`Ui::localize` knows).
         if strings.revision() == self.ui_state.localized {
+            self.ui.localize(strings);
             return;
         }
         for (language, path) in strings.fonts_to_load() {
