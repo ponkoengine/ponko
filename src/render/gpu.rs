@@ -63,9 +63,10 @@ pub(crate) struct Renderer {
     sampler: wgpu::Sampler,
     nearest_sampler: wgpu::Sampler,
     textures: Vec<GpuTexture>,
-    /// CPU-uploaded alpha only; unknown GPU-written textures stay conservative.
+    /// CPU-uploaded alpha summaries (masks only where alpha-tested); unknown
+    /// GPU-written textures stay conservative.
     #[cfg(feature = "3d")]
-    texture_alpha: std::collections::HashMap<u32, TextureAlpha>,
+    texture_alpha: super::texture_alpha::TextureAlphas,
     /// A 1x1 white texture freed textures' slots show (made on first use).
     blank: Option<wgpu::Texture>,
     /// Ids of freed textures (their slots show `blank`).
@@ -1112,16 +1113,44 @@ impl Renderer {
         #[cfg(feature = "3d")]
         if let Some(three) = &self.three {
             (r.meshes, r.mesh_bytes, r.gpu_buffers, r.gpu_buffer_bytes) = three.residency();
+            r.mesh_cpu_bytes = three.mesh_arena_cpu_bytes();
         }
         Some(r)
+    }
+
+    /// The CPU memory kept about textures' alpha (see `texture_alpha`):
+    /// `None` without the `3d` feature, which keeps none.
+    pub fn texture_alpha_memory(&self) -> Option<crate::inventory::TextureAlphaMemory> {
+        #[cfg(feature = "3d")]
+        {
+            let m = self.texture_alpha.memory();
+            Some(crate::inventory::TextureAlphaMemory {
+                summaries: m.summaries,
+                masks: m.masks,
+                mask_bytes: m.mask_bytes,
+                bytes: m.bytes,
+            })
+        }
+        #[cfg(not(feature = "3d"))]
+        None
     }
 
     /// The GPU memory this renderer holds, by class, with the adapter's
     /// own figure where the platform reports one (see `memory.rs`). Built
     /// when asked for; never per frame.
     pub fn gpu_memory(&self) -> Option<crate::perf::GpuMemory> {
+        Some(self.gpu_memory_listed(false).0)
+    }
+
+    /// [`gpu_memory`](Self::gpu_memory), and with `list`, every texture and
+    /// buffer it counted, largest first (`perf.get`'s `gpu_allocations`).
+    pub(crate) fn gpu_memory_listed(&self, list: bool) -> (crate::perf::GpuMemory, Vec<super::memory::GpuAllocation>) {
         use super::memory::{MemoryClass as C, MemoryTally};
-        let mut t = MemoryTally::default();
+        let mut t = if list {
+            MemoryTally::listing()
+        } else {
+            MemoryTally::default()
+        };
         #[cfg(feature = "3d")]
         if let Some(three) = &self.three {
             three.tally_memory(&mut t);
@@ -1130,27 +1159,27 @@ impl Renderer {
             lights.tally_memory(&mut t);
         }
         if let Some(hidden) = &self.hidden_target {
-            t.texture(C::FrameTargets, hidden);
+            t.texture(C::FrameTargets, "offscreen frame", hidden);
         }
-        t.buffer(C::InstanceBatches, &self.instance_buffer);
+        t.buffer(C::InstanceBatches, "sprite instances", &self.instance_buffer);
         for buffer in [&self.camera_buffer, &self.ui_camera_buffer]
             .into_iter()
             .chain(self.panel_cameras.iter().map(|(b, _)| b))
         {
-            t.buffer(C::Other, buffer);
+            t.buffer(C::Other, "2d camera", buffer);
         }
         self.sprite_pipelines.tally_memory(&mut t);
         if let Some(timer) = &self.timer {
             timer.tally_memory(&mut t);
         }
         for texture in self.textures.iter().map(|t| &t.texture).chain(&self.blank) {
-            t.texture(C::Textures, texture);
+            t.texture(C::Textures, "texture", texture);
         }
-        let mut memory = t.finish();
+        let (mut memory, allocations) = t.finish_listed();
         let (bytes, note) = super::memory::adapter_bytes(&self.device);
         memory.adapter_bytes = bytes;
         memory.adapter_note = note.into();
-        Some(memory)
+        (memory, allocations)
     }
 
     pub fn max_texture_size(&self) -> u32 {
@@ -1207,7 +1236,7 @@ impl Renderer {
         });
         let id = (self.textures.len() - 1) as u32;
         #[cfg(feature = "3d")]
-        self.texture_alpha.insert(id, TextureAlpha::new(width, height, rgba));
+        self.texture_alpha.created(id, width, height, rgba);
         id
     }
 
@@ -1253,7 +1282,7 @@ impl Renderer {
         #[cfg(feature = "3d")]
         {
             // No CPU copy of its alpha to compare: count it as changed.
-            self.texture_alpha.remove(&id);
+            self.texture_alpha.forget(id);
             if let Some(three) = &mut self.three {
                 three.texture_alpha_changed(id, true);
                 three.texture_replaced(&self.device, &self.textures, id);
@@ -1293,9 +1322,7 @@ impl Renderer {
             if let Some(linear) = mips {
                 self.ensure_mips(id, linear);
             }
-            let next = TextureAlpha::new(width, height, rgba);
-            let alpha_changed = self.texture_alpha.get(&id) != Some(&next);
-            self.texture_alpha.insert(id, next);
+            let alpha_changed = self.texture_alpha.replaced(id, width, height, rgba);
             if let Some(three) = &mut self.three {
                 three.texture_alpha_changed(id, alpha_changed);
                 three.texture_replaced(&self.device, &self.textures, id);
@@ -1329,7 +1356,7 @@ impl Renderer {
         };
         self.freed_textures.insert(id);
         #[cfg(feature = "3d")]
-        self.texture_alpha.remove(&id);
+        self.texture_alpha.forget(id);
         #[cfg(feature = "3d")]
         if let Some(three) = &mut self.three {
             three.free_render_target(id);
@@ -1538,19 +1565,25 @@ impl Renderer {
             },
         );
         #[cfg(feature = "3d")]
-        self.shadow_texture_update(id, [0, 0], [width, height], rgba);
+        {
+            let changed = self.texture_alpha.replaced(id, width, height, rgba);
+            if let Some(three) = &mut self.three {
+                three.texture_alpha_changed(id, changed);
+            }
+        }
         self.refresh_mips(id);
     }
 
+    /// Whether a region upload (not written yet) changes texture `id`'s
+    /// alpha. A texture a cutout material reads as its base map has its
+    /// mask read back from the GPU the first time (see `texture_alpha`).
     #[cfg(feature = "3d")]
-    fn shadow_texture_update(&mut self, id: u32, at: [u32; 2], size: [u32; 2], rgba: &[u8]) {
-        let changed = self
-            .texture_alpha
-            .get_mut(&id)
-            .is_none_or(|alpha| alpha.update(at, size, rgba));
-        if let Some(three) = &mut self.three {
-            three.texture_alpha_changed(id, changed);
-        }
+    fn region_alpha_changed(&mut self, id: u32, at: [u32; 2], size: [u32; 2], rgba: &[u8]) -> bool {
+        let alpha_tested = self.three.as_ref().is_some_and(|three| three.alpha_tested(id));
+        let (device, queue, texture) = (&self.device, &self.queue, &self.textures[id as usize].texture);
+        self.texture_alpha.region(id, at, size, rgba, alpha_tested, |_, _| {
+            super::texture_alpha::read_alpha(device, queue, texture)
+        })
     }
 
     /// Switches texture `id` between smooth and hard-edged sampling.
@@ -1564,6 +1597,9 @@ impl Renderer {
     /// Replaces a `width` × `height` block of texture `id` at `(x, y)`.
     pub fn update_texture_region(&mut self, id: u32, at: [u32; 2], size: [u32; 2], rgba: &[u8]) {
         debug_assert_eq!(rgba.len(), (size[0] * size[1] * 4) as usize);
+        // Compared before the write: a first mask is read back as it was.
+        #[cfg(feature = "3d")]
+        let alpha_changed = self.region_alpha_changed(id, at, size, rgba);
         self.queue.uploading(Upload::Textures).write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.textures[id as usize].texture,
@@ -1588,7 +1624,9 @@ impl Renderer {
             },
         );
         #[cfg(feature = "3d")]
-        self.shadow_texture_update(id, at, size, rgba);
+        if let Some(three) = &mut self.three {
+            three.texture_alpha_changed(id, alpha_changed);
+        }
         self.refresh_mips(id);
     }
 
@@ -2265,52 +2303,6 @@ pub(super) fn texture_bytes(texture: &wgpu::Texture) -> u64 {
         .sum::<u64>()
         * layers
         * samples
-}
-
-/// Exact alpha comparison avoids invalidating built-in cutout shadows for
-/// RGB-only uploads. Dimensions participate because filtering depends on them.
-#[cfg(feature = "3d")]
-#[derive(Debug, PartialEq)]
-struct TextureAlpha {
-    width: u32,
-    height: u32,
-    pixels: Vec<u8>,
-}
-#[cfg(feature = "3d")]
-impl TextureAlpha {
-    fn new(width: u32, height: u32, rgba: &[u8]) -> Self {
-        Self {
-            width,
-            height,
-            pixels: rgba.as_chunks::<4>().0.iter().map(|p| p[3]).collect(),
-        }
-    }
-
-    fn update(&mut self, at: [u32; 2], size: [u32; 2], rgba: &[u8]) -> bool {
-        let mut changed = false;
-        for (i, pixel) in rgba.as_chunks::<4>().0.iter().enumerate() {
-            let x = at[0] as usize + i % size[0] as usize;
-            let y = at[1] as usize + i / size[0] as usize;
-            let old = &mut self.pixels[y * self.width as usize + x];
-            changed |= *old != pixel[3];
-            *old = pixel[3];
-        }
-        changed
-    }
-}
-
-#[cfg(all(test, feature = "3d"))]
-mod shadow_alpha_tests {
-    use super::TextureAlpha;
-    #[test]
-    fn alpha_updates_compare_exact_pixels_and_region_strides() {
-        let mut alpha = TextureAlpha::new(2, 2, &[255; 16]);
-        assert!(!alpha.update([0, 0], [2, 2], &[64, 80, 90, 255].repeat(4)));
-        assert!(alpha.update([1, 0], [1, 2], &[255, 255, 255, 0].repeat(2)));
-        assert!(!alpha.update([1, 0], [1, 2], &[0; 8]));
-        assert_eq!(alpha.pixels, [255, 0, 255, 0]);
-        assert_ne!(alpha, TextureAlpha::new(1, 4, &[255; 16]));
-    }
 }
 
 /// Whether the 3D frame switches from `current` MSAA samples to `wanted`:

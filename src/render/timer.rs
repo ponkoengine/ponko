@@ -328,10 +328,10 @@ impl GpuTimer {
     /// memory (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.bytes(C::Other, BYTES);
-        t.buffer(C::Other, &self.resolve);
+        t.bytes(C::Other, "timestamp queries", BYTES);
+        t.buffer(C::Other, "timestamp resolve", &self.resolve);
         for slot in &self.slots {
-            t.buffer(C::Other, &slot.buffer);
+            t.buffer(C::Other, "timestamp readback", &slot.buffer);
         }
     }
 }

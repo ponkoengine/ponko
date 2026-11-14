@@ -206,6 +206,8 @@ mod perf_report;
 mod physics;
 #[cfg(feature = "physics3d")]
 mod physics3d;
+#[cfg(any(feature = "physics", feature = "physics3d"))]
+mod physics_links;
 mod profiler;
 #[cfg(any(all(target_arch = "wasm32", feature = "window"), test))]
 mod query;

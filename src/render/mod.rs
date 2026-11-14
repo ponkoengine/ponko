@@ -52,6 +52,8 @@ mod ssr;
 pub(crate) mod surface_lifecycle;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod taa;
+#[cfg(all(feature = "window", feature = "3d"))]
+pub(crate) mod texture_alpha;
 #[cfg(feature = "window")]
 mod timer;
 #[cfg(feature = "window")]
@@ -484,6 +486,9 @@ mod residency_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod asset_lifetime_render_test;
+
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod mesh_arena_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod ray_query_prototype_render_test;

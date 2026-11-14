@@ -367,7 +367,7 @@ impl Ao {
     /// Counts its uniform as other memory (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.buffer(C::Other, &self.uniform);
+        t.buffer(C::Other, "ao uniforms", &self.uniform);
     }
 }
 
@@ -375,10 +375,10 @@ impl AoTargets {
     /// Counts ambient occlusion's targets and history as frame targets (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.view(C::FrameTargets, &self.raw);
-        t.view(C::FrameTargets, &self.output);
+        t.view(C::FrameTargets, "ao raw", &self.raw);
+        t.view(C::FrameTargets, "ao output", &self.output);
         for view in &self.history {
-            t.view(C::FrameTargets, view);
+            t.view(C::FrameTargets, "ao history", view);
         }
     }
 }

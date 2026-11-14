@@ -805,19 +805,19 @@ impl Environment {
     /// and harmonics, and what bakes them as probes (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.texture(C::Probes, &self.atlas);
-        t.texture(C::Probes, &self.source);
-        t.texture(C::Probes, &self.sh_texture);
+        t.texture(C::Probes, "environment cubemaps", &self.atlas);
+        t.texture(C::Probes, "environment source", &self.source);
+        t.texture(C::Probes, "environment harmonics", &self.sh_texture);
         for buffer in &self.buffers {
-            t.buffer(C::Probes, buffer);
+            t.buffer(C::Probes, "environment uniforms", buffer);
         }
         for (_, texture) in &self.uploads {
-            t.texture(C::Probes, texture);
+            t.texture(C::Probes, "environment upload", texture);
         }
         for staging in self.staging.iter().flatten() {
-            t.texture(C::Probes, &staging.strip);
-            t.texture(C::Probes, &staging.maps);
-            t.buffer(C::Probes, &staging.config);
+            t.texture(C::Probes, "environment bake strip", &staging.strip);
+            t.texture(C::Probes, "environment bake maps", &staging.maps);
+            t.buffer(C::Probes, "environment bake config", &staging.config);
         }
     }
 }

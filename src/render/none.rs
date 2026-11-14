@@ -50,6 +50,9 @@ impl Renderer {
     pub fn gpu_memory(&self) -> Option<crate::perf::GpuMemory> {
         match *self {}
     }
+    pub fn texture_alpha_memory(&self) -> Option<crate::inventory::TextureAlphaMemory> {
+        match *self {}
+    }
     pub fn create_texture(&mut self, _width: u32, _height: u32, _rgba: &[u8]) -> u32 {
         match *self {}
     }

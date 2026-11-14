@@ -232,6 +232,35 @@ samplers. On Windows' software adapter at 720p its figure was 22-28 MB above
 the count at every preset (29% at Low, 9% at High). So compare reports from
 the same backend, and read the difference between two of them as the cost.
 
+In a running game, `perf.get` (the [MCP server](agents.md)'s `perf_report`)
+has the same classes in `render_inspector.gpu_memory_bytes`. Its
+`assets.gpu` covers only the game's assets (textures, meshes, GPU buffers),
+so it carries `all_gpu_memory_bytes`, the engine's whole total, beside them.
+To see where a class's bytes go, ask for the listing: `gpu_allocations: true`
+(or a number, for that many of the largest) adds
+`render_inspector.gpu_allocations`, with one entry per texture and buffer,
+largest first:
+
+```json
+{ "class": "shadows", "label": "3d shadow map", "kind": "texture",
+  "bytes": 268435456, "size": [4096, 4096, 4], "mips": 1, "samples": 1,
+  "format": "Depth32Float" }
+```
+
+Textures have `size` (width, height, layers), `mips`, `samples` and
+`format`; buffers have `usage` (the first of `staging`, `index`, `vertex`,
+`indirect`, `storage`, `uniform`, `query` and `copy` their flags allow);
+blocks counted by their size (the mesh arena, timestamp queries) are
+`kind: "other"`. Labels name what each one is: `3d color` (the multisampled
+scene color), `3d hdr`, `3d scene copy`, `3d depth`, the post chain's `3d
+bloom` and `3d upscale`, `taa history`, `ao output`, `3d shadow map` (the
+sun's cascades, one layer each), `3d light shadow atlas`, and so on. Beside
+the entries are `count`, `listed`, `unlisted_bytes` (what a count left
+out) and `buffer_bytes_by_usage` (every buffer's bytes by usage). The
+listing is built only when asked for; the staging memory wgpu keeps for
+uploads is its own and not in it (the adapter's figure, where there is one,
+includes it).
+
 A quality preset's cost is the difference between two reports, and a budget
 keeps it in check (in mebibytes; a report without GPU memory breaks it as
 "not measured", never as 0):
@@ -306,7 +335,7 @@ flame graph of the systems.
 
 ## What isn't measured yet
 
-- GPU memory use and per-mesh memory.
+- Per-mesh GPU memory: meshes share one arena, listed as one entry.
 - Rust allocations on other threads are counted for the whole process, so a
   system is charged for what rayon workers allocate during it.
 - Scopes are process-wide: two games running side by side in one process

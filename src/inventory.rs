@@ -121,10 +121,34 @@ pub struct GpuResidency {
     pub meshes: usize,
     /// Those buffers' bytes (skinning buffers not counted).
     pub mesh_bytes: u64,
+    /// CPU memory the renderer holds for those meshes: geometry made since
+    /// the last frame, waiting for its upload, and on WebGL2 a copy of the
+    /// shared index buffer (which it can't copy on the GPU when it grows).
+    /// Elsewhere it drops to (nearly) zero once a frame has drawn.
+    pub mesh_cpu_bytes: u64,
     /// 3D GPU buffers.
     pub gpu_buffers: usize,
     /// Their bytes.
     pub gpu_buffer_bytes: u64,
+}
+
+/// The CPU memory the renderer keeps about textures' alpha, from
+/// [`AssetInventory::texture_alpha`]. Every texture uploaded from pixels
+/// keeps a small summary (size, fully opaque, a hash) so uploads that leave
+/// alpha alone keep cached cutout shadows; only a texture a cutout material
+/// reads as its base map also keeps a mask, one byte per texel, and only
+/// once a region upload to it needs one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct TextureAlphaMemory {
+    /// Textures with an alpha summary.
+    pub summaries: usize,
+    /// Textures that also keep a full alpha mask.
+    pub masks: usize,
+    /// The masks' bytes.
+    pub mask_bytes: u64,
+    /// Everything together: masks and summaries.
+    pub bytes: u64,
 }
 
 /// A component that still names a freed handle, from
@@ -168,6 +192,9 @@ pub struct AssetInventory {
     pub classes: Vec<AssetCount>,
     /// What the renderer holds, to cross-check the handles against.
     pub gpu: Option<GpuResidency>,
+    /// CPU memory the renderer keeps about textures' alpha; `None` in
+    /// headless runs and builds without the `3d` feature.
+    pub texture_alpha: Option<TextureAlphaMemory>,
     /// Sprites and models that still show a freed texture, mesh or
     /// material, in entity order; empty when there are none. A freed mesh's
     /// id goes to the next mesh made, so a model is listed only until then.
@@ -228,8 +255,21 @@ impl fmt::Display for AssetInventory {
         if let Some(g) = &self.gpu {
             writeln!(
                 f,
-                "on the GPU: {} textures ({} bytes), {} meshes ({} bytes), {} buffers ({} bytes)",
-                g.textures, g.texture_bytes, g.meshes, g.mesh_bytes, g.gpu_buffers, g.gpu_buffer_bytes
+                "on the GPU: {} textures ({} bytes), {} meshes ({} bytes, {} bytes on the CPU), {} buffers ({} bytes)",
+                g.textures,
+                g.texture_bytes,
+                g.meshes,
+                g.mesh_bytes,
+                g.mesh_cpu_bytes,
+                g.gpu_buffers,
+                g.gpu_buffer_bytes
+            )?;
+        }
+        if let Some(a) = &self.texture_alpha {
+            writeln!(
+                f,
+                "texture alpha on the CPU: {} summaries, {} masks ({} bytes), {} bytes in all",
+                a.summaries, a.masks, a.mask_bytes, a.bytes
             )?;
         }
         Ok(())
@@ -460,9 +500,18 @@ impl Ctx {
         } else {
             self.gfx.renderer.as_ref().and_then(crate::render::Renderer::residency)
         };
+        let texture_alpha = if self.headless {
+            None
+        } else {
+            self.gfx
+                .renderer
+                .as_ref()
+                .and_then(crate::render::Renderer::texture_alpha_memory)
+        };
         AssetInventory {
             classes,
             gpu,
+            texture_alpha,
             dangling: self.dangling_handles(),
         }
     }
@@ -547,6 +596,7 @@ mod tests {
         let before = AssetInventory {
             classes: vec![count(AssetClass::Texture, 2, 100), count(AssetClass::Sound, 1, 10)],
             gpu: None,
+            texture_alpha: None,
             dangling: Vec::new(),
         };
         let after = AssetInventory {
@@ -556,6 +606,7 @@ mod tests {
                 count(AssetClass::Mesh, 1, 900),
             ],
             gpu: None,
+            texture_alpha: None,
             dangling: Vec::new(),
         };
         let growth = after.growth_since(&before);
@@ -570,5 +621,30 @@ mod tests {
         );
         assert!(before.growth_since(&after).is_empty(), "shrinking is not growth");
         assert!(after.to_string().contains("mesh"));
+    }
+
+    #[test]
+    fn texture_alpha_cpu_bytes_are_listed_and_serialized() {
+        let mut inventory = AssetInventory {
+            classes: Vec::new(),
+            gpu: None,
+            texture_alpha: None,
+            dangling: Vec::new(),
+        };
+        assert!(!inventory.to_string().contains("texture alpha"));
+        inventory.texture_alpha = Some(TextureAlphaMemory {
+            summaries: 300,
+            masks: 2,
+            mask_bytes: 2 * 1024 * 1024,
+            bytes: 2 * 1024 * 1024 + 300 * 40,
+        });
+        assert!(
+            inventory
+                .to_string()
+                .contains("texture alpha on the CPU: 300 summaries, 2 masks (2097152 bytes), 2109152 bytes in all")
+        );
+        let json = serde_json::to_value(&inventory).unwrap();
+        assert_eq!(json["texture_alpha"]["mask_bytes"], 2 * 1024 * 1024);
+        assert_eq!(json["texture_alpha"]["masks"], 2);
     }
 }

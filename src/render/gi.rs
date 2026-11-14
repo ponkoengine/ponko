@@ -459,20 +459,20 @@ impl Gi {
     /// updates draw with as probes (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.buffer(C::Probes, &self.uniform);
-        t.texture(C::Probes, &self.atlas);
-        for view in [
-            &self.views,
-            &self.resolve,
-            &self.depth,
-            &self.shadow_array,
-            &self.shadow,
+        t.buffer(C::Probes, "probe uniforms", &self.uniform);
+        t.texture(C::Probes, "probe atlas", &self.atlas);
+        for (label, view) in [
+            ("probe capture", &self.views),
+            ("probe capture resolve", &self.resolve),
+            ("probe capture depth", &self.depth),
+            ("probe capture shadow map", &self.shadow_array),
+            ("probe capture shadow", &self.shadow),
         ] {
-            t.view(C::Probes, view);
+            t.view(C::Probes, label, view);
         }
-        t.texture(C::Probes, &self.scratch);
+        t.texture(C::Probes, "probe scratch", &self.scratch);
         for buffer in &self.face_buffers {
-            t.buffer(C::Probes, buffer);
+            t.buffer(C::Probes, "probe face uniforms", buffer);
         }
         self.lights.tally_memory(t, C::Probes);
     }

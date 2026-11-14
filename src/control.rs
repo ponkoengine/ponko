@@ -1307,7 +1307,7 @@ pub(crate) const METHODS: &[(&str, &str)] = &[
     ),
     (
         "perf.get",
-        "frame timing over the last few seconds (fps; avg, p50, p95, p99, max ms; CPU split into systems, render and waiting on the display; GPU ms), GPU ms per pass, what was drawn (draw calls; 3D models and triangles for the camera and the shadows; render CPU split into collect, record, submit), the slowest systems, live asset handles by class with estimated bytes (`assets`: textures, meshes, materials, sounds, ...; with what the GPU holds), residency budgets per asset kind (`residency`: budget, resident and pinned counts and bytes, loads, reloads, evictions, evicted bytes), streaming (`streaming`: the upload queue's budget, pending count, bytes and uploads last frame and in total, oversized steps, decode waits, uploads held by a budget, failures, last and longest step ms; and `assets`, every streamed or resident asset with kind, name, state (loading, uploading, streaming, resident, evicted, failed), id and GPU size); params: meshes? (list the n meshes drawing the most triangles, default 0), profiling? (true turns on scope timing and allocation counting, false turns it off), history? (list the last n drawn frames in render_inspector.history, at most 120, default 0). While profiling is on, the answer also has `report`: frame percentiles, every system and profile_scope with time and allocations per frame, the slowest frames and what was in them, and warnings with advice. Always has `render_inspector.quality_autotune` (null when off; otherwise active choices, pins, frozen state, reason and the last 16 decisions) and `render_inspector` (schema 1, also when headless): the last frame's CPU time split into extract, prepare, encode, submit and other ms; GPU ms per frame and per pass; draw calls, models, triangles, occluded models, plain models outside the camera's view, pipelines built, and counts.state_changes (model-pass pipeline, bind group, vertex/index buffer changes and recorded draws); upload bytes; memory_estimate_bytes (what the renderer's tables hold for the game's assets, not its own frame targets or shadow maps); gpu_memory_bytes (all the GPU memory the engine holds by class: textures, meshes, gpu_buffers, frame_targets, shadows, atlases, skinning, probes, instance_batches, other, total; and the adapter's own figure where the platform reports one); the GPU adapter and tier; with history, per frame CPU ms, smoothed GPU ms, the newest single-frame GPU ms with its age, counts and uploads; the active graphics quality preset and settings. A metric that can't be measured (no timestamp queries, headless, not counted) is null and `unavailable` gives the reason; GPU times are never guessed",
+        "frame timing over the last few seconds (fps; avg, p50, p95, p99, max ms; CPU split into systems, render and waiting on the display; GPU ms), GPU ms per pass, what was drawn (draw calls; 3D models and triangles for the camera and the shadows; render CPU split into collect, record, submit), the slowest systems, live asset handles by class with estimated bytes (`assets`: textures, meshes, materials, sounds, ...; with what the GPU holds), residency budgets per asset kind (`residency`: budget, resident and pinned counts and bytes, loads, reloads, evictions, evicted bytes), streaming (`streaming`: the upload queue's budget, pending count, bytes and uploads last frame and in total, oversized steps, decode waits, uploads held by a budget, failures, last and longest step ms; and `assets`, every streamed or resident asset with kind, name, state (loading, uploading, streaming, resident, evicted, failed), id and GPU size); params: meshes? (list the n meshes drawing the most triangles, default 0), profiling? (true turns on scope timing and allocation counting, false turns it off), history? (list the last n drawn frames in render_inspector.history, at most 120, default 0), gpu_allocations? (true lists every GPU texture and buffer the engine holds in render_inspector.gpu_allocations, a number the n largest; default none). While profiling is on, the answer also has `report`: frame percentiles, every system and profile_scope with time and allocations per frame, the slowest frames and what was in them, and warnings with advice. Always has `render_inspector.quality_autotune` (null when off; otherwise active choices, pins, frozen state, reason and the last 16 decisions) and `render_inspector` (schema 1, also when headless): the last frame's CPU time split into extract, prepare, encode, submit and other ms; GPU ms per frame and per pass; draw calls, models, triangles, occluded models, plain models outside the camera's view, pipelines built, and counts.state_changes (model-pass pipeline, bind group, vertex/index buffer changes and recorded draws); upload bytes; memory_estimate_bytes (what the renderer's tables hold for the game's assets, not its own frame targets or shadow maps); gpu_memory_bytes (all the GPU memory the engine holds by class: textures, meshes, gpu_buffers, frame_targets, shadows, atlases, skinning, probes, instance_batches, other, total; and the adapter's own figure where the platform reports one; `assets.gpu` has the same total as all_gpu_memory_bytes); with gpu_allocations, gpu_allocations (count, listed, unlisted_bytes, buffer_bytes_by_usage: uniform, storage, vertex, index, indirect, staging, query, copy; and entries, largest first: class, label such as `3d color`, `3d depth`, `3d shadow map` or `3d light shadow atlas`, kind, bytes, a texture's size, mips, samples and format, a buffer's usage); the GPU adapter and tier; with history, per frame CPU ms, smoothed GPU ms, the newest single-frame GPU ms with its age, counts and uploads; the active graphics quality preset and settings. A metric that can't be measured (no timestamp queries, headless, not counted) is null and `unavailable` gives the reason; GPU times are never guessed",
     ),
     (
         "perf.trace",
@@ -1326,7 +1326,7 @@ pub(crate) const METHODS: &[(&str, &str)] = &[
 
 /// `perf.get`'s `render_inspector`: the last frame's rendering cost in a
 /// versioned schema (see `control/inspector.rs`).
-fn render_inspector_json(ctx: &Ctx, history: usize) -> Value {
+fn render_inspector_json(ctx: &Ctx, history: usize, allocations: usize) -> Value {
     let source = match (ctx.headless, ctx.perf.last_render_detail) {
         (true, _) => inspector::Source::Headless,
         (false, None) => inspector::Source::NotDrawn,
@@ -1372,7 +1372,52 @@ fn render_inspector_json(ctx: &Ctx, history: usize) -> Value {
         report["unavailable"]["quality_autotune"] = json!(off);
     }
     report["quality_autotune"] = autotune;
+    let listing = match (allocations, ctx.headless, ctx.gfx.renderer.as_ref()) {
+        (0, ..) => Err(GPU_ALLOCATIONS_NOT_ASKED),
+        (_, true, _) => Err(inspector::NO_GPU),
+        #[cfg(feature = "window")]
+        (n, false, Some(renderer)) => Ok(crate::render::memory::allocations_json(
+            &renderer.gpu_memory_listed(true).1,
+            n,
+        )),
+        _ => Err(inspector::NO_GPU_YET),
+    };
+    report["gpu_allocations"] = listing.unwrap_or_else(|why| {
+        report["unavailable"]["gpu_allocations"] = json!(why);
+        Value::Null
+    });
     report
+}
+
+/// `perf.get`'s `assets.gpu` is the game's assets only: gives it the
+/// engine's whole GPU total (`render_inspector.gpu_memory_bytes.total`) and
+/// a note saying where the rest is.
+fn point_assets_at_gpu_total(out: &mut Value) {
+    if out["assets"]["gpu"].is_object() {
+        let total = out["render_inspector"]["gpu_memory_bytes"]["total"].clone();
+        out["assets"]["gpu"]["all_gpu_memory_bytes"] = total;
+        out["assets"]["gpu"]["note"] = json!(ASSETS_GPU_NOTE);
+    }
+}
+
+/// What `perf.get`'s `assets.gpu` covers, next to the engine's total.
+const ASSETS_GPU_NOTE: &str = "the game's assets only (textures, meshes, GPU buffers); all_gpu_memory_bytes is everything the engine holds on the GPU, frame targets, shadow maps, skinning and probes included: see render_inspector.gpu_memory_bytes by class and gpu_allocations (perf.get with gpu_allocations) for each texture and buffer";
+
+/// Why `render_inspector.gpu_allocations` is null by default.
+const GPU_ALLOCATIONS_NOT_ASKED: &str =
+    "not asked for: pass gpu_allocations (true for all, or how many of the largest to list)";
+
+/// `perf.get`'s `gpu_allocations` param: how many allocations to list
+/// (`true`: all of them; `false`, 0 or none: no listing).
+fn allocations_param(params: &Value) -> Result<usize, String> {
+    match params.get("gpu_allocations") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => Ok(0),
+        Some(Value::Bool(true)) => Ok(usize::MAX),
+        Some(v) => v
+            .as_u64()
+            .map(|n| n as usize)
+            .ok_or_else(|| "`gpu_allocations` must be true, false or a whole number".into()),
+    }
 }
 
 /// `quality.set`: switches to a graphics quality preset, fitted to what the
@@ -1440,10 +1485,10 @@ const NO_3D_MODELS: &str = "3D models need the `3d` feature";
 pub(crate) const NO_QUALITY: &str = "graphics quality settings need the `3d` feature";
 
 /// `perf.get`: the profiler's numbers as JSON.
-fn perf_json(ctx: &Ctx, meshes: usize, history: usize) -> Value {
+fn perf_json(ctx: &Ctx, meshes: usize, history: usize, allocations: usize) -> Value {
     if ctx.headless {
         let slowest = slowest_systems(ctx);
-        return json!({ "headless": true, "systems": slowest, "residency": residency_json(ctx), "streaming": streaming_json(ctx), "render_inspector": render_inspector_json(ctx, history) });
+        return json!({ "headless": true, "systems": slowest, "residency": residency_json(ctx), "streaming": streaming_json(ctx), "render_inspector": render_inspector_json(ctx, history, allocations) });
     }
     let f = ctx.perf.frame_stats();
     let r = ctx.perf.render_stats();
@@ -1475,7 +1520,7 @@ fn perf_json(ctx: &Ctx, meshes: usize, history: usize) -> Value {
         "systems": slowest_systems(ctx),
         "residency": residency_json(ctx),
         "streaming": streaming_json(ctx),
-        "render_inspector": render_inspector_json(ctx, history),
+        "render_inspector": render_inspector_json(ctx, history, allocations),
         "hint": "frame time is about max(CPU, GPU): when display_wait is large the GPU (or vsync) is the limit; gpu_passes says which pass",
     });
     #[cfg(feature = "3d")]
@@ -1999,8 +2044,10 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
                     .set_profiling(on.as_bool().ok_or("`profiling` must be true or false")?);
             }
             let history = usize_param(params, "history", 0)?.min(crate::perf::RENDER_HISTORY);
-            let mut out = perf_json(ctx, usize_param(params, "meshes", 0)?, history);
+            let allocations = allocations_param(params)?;
+            let mut out = perf_json(ctx, usize_param(params, "meshes", 0)?, history, allocations);
             out["assets"] = serde_json::to_value(ctx.asset_inventory()).unwrap_or_default();
+            point_assets_at_gpu_total(&mut out);
             if ctx.perf.profiling() {
                 let report = ctx.perf.report();
                 out["report"] = serde_json::to_value(&report).unwrap_or_default();
@@ -2473,6 +2520,59 @@ mod tests {
             let why = &r["unavailable"]["counts.frustum_culled_models"];
             assert!(why.as_str().unwrap().contains("`3d` feature"), "{r}");
         }
+    }
+
+    #[test]
+    fn perf_get_lists_gpu_allocations_only_when_asked() {
+        let mut ctx = ctx();
+        let perf = handle(&mut ctx, "perf.get", &json!({})).unwrap();
+        let r = &perf["render_inspector"];
+        assert!(r["gpu_allocations"].is_null(), "{r}");
+        assert_eq!(r["unavailable"]["gpu_allocations"], GPU_ALLOCATIONS_NOT_ASKED);
+        for off in [json!(false), json!(0)] {
+            let perf = handle(&mut ctx, "perf.get", &json!({ "gpu_allocations": off })).unwrap();
+            assert_eq!(
+                perf["render_inspector"]["unavailable"]["gpu_allocations"],
+                GPU_ALLOCATIONS_NOT_ASKED
+            );
+        }
+        // Asked for without a GPU: null, and why.
+        let perf = handle(&mut ctx, "perf.get", &json!({ "gpu_allocations": true })).unwrap();
+        assert_eq!(
+            perf["render_inspector"]["unavailable"]["gpu_allocations"],
+            inspector::NO_GPU_YET
+        );
+        ctx.set_headless(true);
+        let perf = handle(&mut ctx, "perf.get", &json!({ "gpu_allocations": 10 })).unwrap();
+        assert!(perf["render_inspector"]["gpu_allocations"].is_null());
+        assert_eq!(
+            perf["render_inspector"]["unavailable"]["gpu_allocations"],
+            inspector::NO_GPU
+        );
+        for bad in [json!("all"), json!(-1), json!(1.5)] {
+            let err = handle(&mut ctx, "perf.get", &json!({ "gpu_allocations": bad })).unwrap_err();
+            assert!(err.contains("gpu_allocations"), "{err}");
+        }
+    }
+
+    #[test]
+    fn assets_gpu_carries_the_engines_whole_gpu_total() {
+        let mut out = json!({
+            "assets": { "gpu": { "texture_bytes": 10 } },
+            "render_inspector": { "gpu_memory_bytes": { "total": 500 } },
+        });
+        point_assets_at_gpu_total(&mut out);
+        assert_eq!(out["assets"]["gpu"]["all_gpu_memory_bytes"], 500);
+        assert!(
+            out["assets"]["gpu"]["note"]
+                .as_str()
+                .unwrap()
+                .contains("gpu_memory_bytes")
+        );
+        // Headless: no `gpu` to add to.
+        let mut headless = json!({ "assets": { "gpu": null }, "render_inspector": {} });
+        point_assets_at_gpu_total(&mut headless);
+        assert!(headless["assets"]["gpu"].is_null());
     }
 
     #[test]

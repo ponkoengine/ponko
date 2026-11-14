@@ -1655,6 +1655,7 @@ impl SceneBench {
         serde_json::json!({
             "meshes": meshes,
             "mesh_bytes": mesh_bytes,
+            "mesh_cpu_bytes": self.renderer.mesh_arena_cpu_bytes(),
             "gpu_buffers": gpu_buffers,
             "gpu_buffer_bytes": gpu_buffer_bytes,
             "instance_batch_pool_bytes": batches.pool_bytes,

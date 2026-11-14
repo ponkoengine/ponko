@@ -1803,7 +1803,11 @@ impl StaticBatch {
     /// Counts the batch's instance records as instance batches (see `memory.rs`).
     pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         if let Some(vertices) = &self.vertices {
-            t.buffer(crate::render::memory::MemoryClass::InstanceBatches, vertices);
+            t.buffer(
+                crate::render::memory::MemoryClass::InstanceBatches,
+                "static batch vertices",
+                vertices,
+            );
         }
         if let Some(order) = &self.blend {
             order.tally_memory(t);
@@ -1816,13 +1820,13 @@ impl Culling {
     /// and the culling's own buffers as instance batches (see `memory.rs`).
     pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;
-        t.buffer(C::InstanceBatches, &self.occlusion);
-        t.buffer(C::InstanceBatches, &self.marker);
+        t.buffer(C::InstanceBatches, "culling occlusion", &self.occlusion);
+        t.buffer(C::InstanceBatches, "culling marker", &self.marker);
         for pool in &self.pools {
-            t.buffer(C::InstanceBatches, &pool.records.buffer);
+            t.buffer(C::InstanceBatches, "static batch records", &pool.records.buffer);
             for page in &pool.pages {
-                t.buffer(C::InstanceBatches, &page.visibility.buffer);
-                t.buffer(C::InstanceBatches, &page.args.buffer);
+                t.buffer(C::InstanceBatches, "static batch visibility", &page.visibility.buffer);
+                t.buffer(C::InstanceBatches, "static batch draw arguments", &page.args.buffer);
             }
         }
     }
