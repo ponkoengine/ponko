@@ -26,6 +26,8 @@ mod lights2d;
     any(test, feature = "bench-internals")
 ))]
 mod lights2d_bench;
+#[cfg(feature = "window")]
+pub(crate) mod memory;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod mips;
 #[cfg(not(feature = "window"))]

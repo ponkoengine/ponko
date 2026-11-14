@@ -559,3 +559,25 @@ impl Ssr {
             .check(device, queue, &self.uniform, 0, "reflection settings");
     }
 }
+
+impl Ssr {
+    /// Counts its uniform as other memory (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        t.buffer(C::Other, &self.uniform);
+    }
+}
+
+impl SsrTargets {
+    /// Counts the reflections' targets and history as frame targets (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for view in [&self.history, &self.screen, &self.ao, &self.output] {
+            t.view(C::FrameTargets, view);
+        }
+        if let Some(blur) = &self.blur {
+            t.texture(C::FrameTargets, &blur.levels);
+            t.texture(C::FrameTargets, &blur.screen);
+        }
+    }
+}

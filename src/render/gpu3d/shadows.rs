@@ -141,3 +141,19 @@ impl ShadowMaps {
         true
     }
 }
+
+impl ShadowMaps {
+    /// Counts the sun's shadow map and its passes' uniforms as shadows, and
+    /// the lights' atlas as atlases (see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        t.buffer(C::Shadows, &self.frames);
+        for layer in &self.layers {
+            t.view(C::Shadows, layer);
+        }
+        if let Some(atlas) = &self.light_atlas {
+            t.view(C::Atlases, atlas);
+        }
+        t.view(C::Atlases, &self.no_light_shadow);
+    }
+}

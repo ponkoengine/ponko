@@ -679,3 +679,51 @@ pub(in crate::render) fn scene_bind_group(
         entries: &entries,
     })
 }
+
+impl RenderTargets {
+    /// Counts the game's render targets as textures, and what target
+    /// cameras and compute passes made for them as frame targets (their
+    /// frame uniforms and light grids as other memory; see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for (_, texture) in &self.textures {
+            t.texture(C::Textures, texture);
+        }
+        for (_, view) in &self.views {
+            t.view(C::FrameTargets, &view.color);
+            t.view(C::FrameTargets, &view.depth);
+            t.buffer(C::Other, &view.frame_buffer);
+            view.lights.tally_memory(t, C::Other);
+        }
+        for (_, compute) in &self.computes {
+            t.texture(C::FrameTargets, &compute.scratch);
+        }
+    }
+}
+
+impl Targets {
+    /// Counts the scene-sized targets and those of the effects that are on
+    /// as frame targets (see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for view in [&self.color, &self.hdr, &self.scene_view, &self.depth] {
+            t.view(C::FrameTargets, view);
+        }
+        if let Some(copy) = &self.depth_copy {
+            t.view(C::FrameTargets, &copy.view);
+        }
+        if let Some(taa) = &self.taa {
+            taa.tally_memory(t);
+        }
+        if let Some(velocity) = &self.velocity {
+            velocity.tally_memory(t);
+        }
+        if let Some(ao) = &self.ao {
+            ao.tally_memory(t);
+        }
+        if let Some(ssr) = &self.ssr {
+            ssr.tally_memory(t);
+        }
+        self.post.tally_memory(t);
+    }
+}

@@ -143,6 +143,117 @@ pub struct RenderReport {
     pub gpu_passes: Vec<PassReport>,
 }
 
+/// The GPU memory the engine holds, in bytes, by what it is for: part of a
+/// windowed game's [`PerfReport`] ([`PerfReport::gpu_memory`]), its budget
+/// ([`Budget::gpu_memory_mb`]), the profiling overlay and the control
+/// endpoint's `perf.get`.
+///
+/// Counted from the textures and buffers the renderer holds, each once
+/// (a texture several passes read is counted under the first class that
+/// owns it), at the sizes the engine asked for: mipmaps, array layers and
+/// samples included, without the driver's own padding and alignment. Where
+/// the platform reports its own figure ([`adapter_bytes`](Self::adapter_bytes)),
+/// compare the two: the driver's adds what wgpu keeps for itself (staging
+/// for uploads, query sets) and its alignment.
+///
+/// Headless runs open no GPU: their report has no `GpuMemory` at all
+/// rather than zeros.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct GpuMemory {
+    /// Images: the game's textures and render targets, texture arrays,
+    /// and the engine's own images (glyph atlases, UI images, stand-ins).
+    pub textures: u64,
+    /// 3D mesh vertex and index buffers.
+    pub meshes: u64,
+    /// The game's 3D [`GpuBuffer`](crate::render::GpuBuffer)s.
+    pub gpu_buffers: u64,
+    /// What a frame is drawn into: scene color and depth (multisampled),
+    /// post-processing (bloom, antialiasing, scaling), ambient occlusion,
+    /// reflections, temporal history and motion vectors, depth copies,
+    /// target cameras' own color and depth, and the 2D light map. These
+    /// follow the window's size, the render scale and the quality settings.
+    pub frame_targets: u64,
+    /// The sun's shadow map (one layer per cascade) and its passes' uniforms.
+    pub shadows: u64,
+    /// The point and spot lights' shadow atlas.
+    pub atlases: u64,
+    /// Skinning and morph targets: per-mesh influences and deltas, joint
+    /// matrices and the posed vertices of this frame's skinned models.
+    pub skinning: u64,
+    /// Light probes: the global illumination probe atlas and its capture
+    /// views, and the image-based lighting (sky and reflection probe
+    /// cubemaps, their filtered levels and harmonics).
+    pub probes: u64,
+    /// Instances: the per-frame 3D model and 2D sprite records, and the
+    /// static instance batches' pools and culling buffers.
+    pub instance_batches: u64,
+    /// Everything else the engine owns: per-frame uniforms, light and decal
+    /// grids, particles, occlusion culling, the sky's lookup tables,
+    /// timestamp queries, screenshots and small stand-in textures.
+    pub other: u64,
+    /// All of the above.
+    pub total: u64,
+    /// The platform's own figure for the memory this device holds, where it
+    /// reports one: Vulkan and DirectX 12 (wgpu's allocator: the bytes of
+    /// its live allocations) and Metal (the device's allocated size for
+    /// this process). `None` elsewhere (OpenGL, WebGPU and WebGL in a
+    /// browser), never a guess; [`adapter_note`](Self::adapter_note) says
+    /// which.
+    pub adapter_bytes: Option<u64>,
+    /// Where [`adapter_bytes`](Self::adapter_bytes) comes from, or why
+    /// there is none.
+    pub adapter_note: String,
+}
+
+impl GpuMemory {
+    /// Each class with its name as reports print it (`"frame_targets"`),
+    /// in a fixed order; `total` is not in it.
+    pub fn classes(&self) -> [(&'static str, u64); 10] {
+        [
+            ("textures", self.textures),
+            ("meshes", self.meshes),
+            ("gpu_buffers", self.gpu_buffers),
+            ("frame_targets", self.frame_targets),
+            ("shadows", self.shadows),
+            ("atlases", self.atlases),
+            ("skinning", self.skinning),
+            ("probes", self.probes),
+            ("instance_batches", self.instance_batches),
+            ("other", self.other),
+        ]
+    }
+
+    /// The total in mebibytes (2^20 bytes), as budgets count it.
+    pub fn total_mb(&self) -> f32 {
+        (self.total as f64 / MIB) as f32
+    }
+}
+
+/// Bytes in a mebibyte.
+const MIB: f64 = 1024.0 * 1024.0;
+
+impl fmt::Display for GpuMemory {
+    /// One line: the total, the adapter's figure, then every class that
+    /// holds anything, largest first.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:.1} MB", self.total_mb())?;
+        match self.adapter_bytes {
+            Some(b) => write!(f, " (adapter {:.1} MB)", b as f64 / MIB)?,
+            None => write!(f, " (adapter n/a)")?,
+        }
+        let mut classes = self.classes();
+        classes.sort_by(|a, b| b.1.cmp(&a.1));
+        let mut sep = ":";
+        for (name, bytes) in classes.into_iter().filter(|c| c.1 > 0) {
+            write!(f, "{sep} {name} {:.1}", bytes as f64 / MIB)?;
+            sep = ",";
+        }
+        Ok(())
+    }
+}
+
 /// What a [`PerfWarning`] is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -214,6 +325,11 @@ pub struct PerfReport {
     pub worst_frames: Vec<WorstFrame>,
     /// Drawing (windowed games only).
     pub render: Option<RenderReport>,
+    /// The GPU memory the engine holds (windowed games only; refreshed
+    /// about twice a second while profiling is on). `None` in headless
+    /// runs, which open no GPU.
+    #[serde(default)]
+    pub gpu_memory: Option<GpuMemory>,
     /// Problems found, worst first.
     pub warnings: Vec<PerfWarning>,
 }
@@ -310,6 +426,15 @@ impl PerfReport {
                 )),
             }
         }
+        if let Some(max) = budget.gpu_memory_mb {
+            match &self.gpu_memory {
+                Some(m) => out.extend(over("GPU memory (MB)".into(), Some(max), m.total_mb())),
+                None => out.push(missing(
+                    "GPU memory (MB) (not measured: only a windowed game's report has it)".into(),
+                    max,
+                )),
+            }
+        }
         for (name, max) in &budget.systems {
             match self.system(name) {
                 Some(s) => out.extend(over(format!("system `{}` (ms)", s.name), Some(*max), s.avg_ms)),
@@ -352,9 +477,10 @@ impl PerfReport {
     }
 
     /// What got slower than in `baseline`, a report from an earlier run:
-    /// frame times, allocations, and each system and scope by name. A value
-    /// counts when it grew by more than `tolerance` (0.2 is 20%) and by more
-    /// than 0.05 ms (or one allocation), so noise in tiny numbers is ignored.
+    /// frame times, allocations, GPU memory (when both have it), and each
+    /// system and scope by name. A value counts when it grew by more than
+    /// `tolerance` (0.2 is 20%) and by more than 0.05 ms (or one allocation,
+    /// or one MB), so noise in tiny numbers is ignored.
     ///
     /// ```
     /// use ponko::prelude::*;
@@ -383,6 +509,9 @@ impl PerfReport {
         );
         if let (Some(b), Some(a)) = (&baseline.allocs, &self.allocs) {
             cmp("allocations per frame".into(), b.per_frame, a.per_frame, 1.0);
+        }
+        if let (Some(b), Some(a)) = (&baseline.gpu_memory, &self.gpu_memory) {
+            cmp("GPU memory (MB)".into(), b.total_mb(), a.total_mb(), 1.0);
         }
         for s in &self.systems {
             if let Some(b) = baseline.systems.iter().find(|b| b.name == s.name) {
@@ -450,6 +579,9 @@ impl fmt::Display for PerfReport {
                 r.shadow_triangles as f64 / 1e6,
                 r.occluded
             )?;
+            if let Some(m) = &self.gpu_memory {
+                writeln!(f, "gpu memory {m}")?;
+            }
             if !r.gpu_passes.is_empty() {
                 writeln!(f, "-- gpu passes (ms) --")?;
                 for p in r.gpu_passes.iter().take(10) {
@@ -531,6 +663,10 @@ pub struct Budget {
     pub frame_max_ms: Option<f32>,
     /// Most heap allocations per frame. Needs the counting allocator.
     pub allocs_per_frame: Option<f32>,
+    /// Most GPU memory the engine holds ([`GpuMemory::total`]), in
+    /// mebibytes. Only a windowed game measures it: a report without
+    /// [`PerfReport::gpu_memory`] breaks this limit as "not measured".
+    pub gpu_memory_mb: Option<f32>,
     /// Most average ms per frame for systems. Names match the full name or
     /// its last part (`movement` matches `my_game::movement`).
     pub systems: BTreeMap<String, f32>,
@@ -565,6 +701,18 @@ impl Budget {
     /// Limits heap allocations per frame (0.0: none).
     pub fn allocs_per_frame(mut self, n: f32) -> Self {
         self.allocs_per_frame = Some(n);
+        self
+    }
+
+    /// Limits the GPU memory the engine holds, in mebibytes (see
+    /// [`GpuMemory`]): what a quality preset costs, kept in check in CI.
+    ///
+    /// ```
+    /// let budget = ponko::perf::Budget::new().gpu_memory_mb(512.0);
+    /// assert_eq!(budget.gpu_memory_mb, Some(512.0));
+    /// ```
+    pub fn gpu_memory_mb(mut self, mb: f32) -> Self {
+        self.gpu_memory_mb = Some(mb);
         self
     }
 
@@ -921,6 +1069,12 @@ impl PerfState {
         self.hud_extra.is_empty() || self.frames.is_multiple_of(30)
     }
 
+    /// `true` about twice a second, or when nothing was counted yet
+    /// (`counted` is false): time to count the GPU memory again.
+    pub fn gpu_memory_due(&self, counted: bool) -> bool {
+        !counted || self.frames.is_multiple_of(30)
+    }
+
     /// Leaves out of this frame's count what was allocated since `before`.
     pub fn forgive_allocs(&mut self, before: AllocCounts) {
         let now = alloc_count::alloc_counts();
@@ -1067,6 +1221,18 @@ pub(crate) fn analyze(report: &mut PerfReport) {
 /// The overlay's extra lines: scopes, allocations and the worst warnings.
 pub(crate) fn hud_lines(out: &mut String, report: &PerfReport) {
     out.clear();
+    if let Some(m) = &report.gpu_memory {
+        let _ = write!(out, "gpu mem {:.1} MB", m.total_mb());
+        if let Some(b) = m.adapter_bytes {
+            let _ = write!(out, " (adapter {:.1})", b as f64 / MIB);
+        }
+        let mut classes = m.classes();
+        classes.sort_by(|a, b| b.1.cmp(&a.1));
+        for (name, bytes) in classes.into_iter().take(3).filter(|c| c.1 > 0) {
+            let _ = write!(out, " {name} {:.0}", bytes as f64 / MIB);
+        }
+        out.push('\n');
+    }
     if let Some(a) = &report.allocs {
         let _ = writeln!(
             out,
@@ -1269,6 +1435,67 @@ mod tests {
             ]
         );
         assert!(r.warnings[0].message.contains("shadows 0"));
+    }
+
+    fn memory(total_mb: u64, adapter: Option<u64>) -> GpuMemory {
+        let mb = 1 << 20;
+        GpuMemory {
+            textures: (total_mb - 1) * mb,
+            shadows: mb,
+            total: total_mb * mb,
+            adapter_bytes: adapter,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn gpu_memory_budgets_break_when_over_or_not_measured() {
+        let mut r = collector_with(&[(16.0, 1.0, 1.0); 4]).report();
+        let budget = Budget::new().gpu_memory_mb(100.0);
+        let missing = r.check(&budget);
+        assert_eq!(missing.len(), 1, "not measured is broken, never 0: {missing:?}");
+        assert_eq!(missing[0].actual, None);
+        assert!(missing[0].what.contains("not measured"), "{}", missing[0]);
+        r.gpu_memory = Some(memory(64, None));
+        assert!(r.check(&budget).is_empty());
+        r.gpu_memory = Some(memory(150, None));
+        let over = r.check(&budget);
+        assert_eq!(over.len(), 1);
+        assert_eq!((over[0].limit, over[0].actual), (100.0, Some(150.0)));
+        assert_eq!(Budget::from_json(r#"{"gpu_memory_mb": 100}"#).unwrap(), budget);
+    }
+
+    #[test]
+    fn gpu_memory_shows_in_the_text_the_hud_and_comparisons() {
+        let mut r = collector_with(&[(16.0, 1.0, 1.0); 4]).report();
+        r.render = Some(RenderReport::default());
+        r.gpu_memory = Some(memory(64, Some(66 << 20)));
+        let text = r.to_string();
+        assert!(
+            text.contains("gpu memory 64.0 MB (adapter 66.0 MB): textures 63.0, shadows 1.0"),
+            "{text}"
+        );
+        let mut hud = String::new();
+        hud_lines(&mut hud, &r);
+        assert!(
+            hud.starts_with("gpu mem 64.0 MB (adapter 66.0) textures 63 shadows 1\n"),
+            "{hud}"
+        );
+
+        let baseline = r.clone();
+        r.gpu_memory = Some(memory(96, None));
+        let grew = r.regressions(&baseline, 0.2);
+        assert!(
+            grew.iter().any(|g| g.what == "GPU memory (MB)" && g.after == 96.0),
+            "{grew:?}"
+        );
+        // A report saved before GPU memory was reported still loads.
+        let mut old: serde_json::Value = serde_json::from_str(&baseline.to_json()).unwrap();
+        old.as_object_mut().unwrap().remove("gpu_memory");
+        let loaded = PerfReport::from_json(&old.to_string()).unwrap();
+        assert_eq!(loaded.gpu_memory, None);
+        // And the class names reports print.
+        assert_eq!(r.gpu_memory.unwrap().classes()[3].0, "frame_targets");
     }
 
     #[test]

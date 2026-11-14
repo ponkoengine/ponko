@@ -1092,6 +1092,43 @@ impl Renderer {
         Some(r)
     }
 
+    /// The GPU memory this renderer holds, by class, with the adapter's
+    /// own figure where the platform reports one (see `memory.rs`). Built
+    /// when asked for; never per frame.
+    pub fn gpu_memory(&self) -> Option<crate::perf::GpuMemory> {
+        use super::memory::{MemoryClass as C, MemoryTally};
+        let mut t = MemoryTally::default();
+        #[cfg(feature = "3d")]
+        if let Some(three) = &self.three {
+            three.tally_memory(&mut t);
+        }
+        if let Some(lights) = &self.lights2d {
+            lights.tally_memory(&mut t);
+        }
+        if let Some(hidden) = &self.hidden_target {
+            t.texture(C::FrameTargets, hidden);
+        }
+        t.buffer(C::InstanceBatches, &self.instance_buffer);
+        for buffer in [&self.camera_buffer, &self.ui_camera_buffer]
+            .into_iter()
+            .chain(self.panel_cameras.iter().map(|(b, _)| b))
+        {
+            t.buffer(C::Other, buffer);
+        }
+        self.sprite_pipelines.tally_memory(&mut t);
+        if let Some(timer) = &self.timer {
+            timer.tally_memory(&mut t);
+        }
+        for texture in self.textures.iter().map(|t| &t.texture).chain(&self.blank) {
+            t.texture(C::Textures, texture);
+        }
+        let mut memory = t.finish();
+        let (bytes, note) = super::memory::adapter_bytes(&self.device);
+        memory.adapter_bytes = bytes;
+        memory.adapter_note = note.into();
+        Some(memory)
+    }
+
     pub fn max_texture_size(&self) -> u32 {
         self.device.limits().max_texture_dimension_2d
     }

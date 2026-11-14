@@ -1352,6 +1352,11 @@ fn render_inspector_json(ctx: &Ctx, history: usize) -> Value {
         quality,
         pipelines: ctx.gfx.pipeline_stats(),
         memory: ctx.gfx.renderer.as_ref().and_then(crate::render::Renderer::residency),
+        gpu_memory: if ctx.headless {
+            None
+        } else {
+            ctx.gfx.renderer.as_ref().and_then(crate::render::Renderer::gpu_memory)
+        },
         adapter: ctx.gfx.gpu_capabilities(),
         history: &frames,
         frustum_culled,
@@ -2475,7 +2480,7 @@ mod tests {
         ctx.set_headless(true);
         let perf = handle(&mut ctx, "perf.get", &json!({})).unwrap();
         let inspector = &perf["render_inspector"];
-        for path in ["memory_estimate_bytes", "adapter"] {
+        for path in ["memory_estimate_bytes", "gpu_memory_bytes", "adapter"] {
             assert!(inspector[path].is_null(), "{path}: {inspector}");
             assert!(inspector["unavailable"][path].is_string(), "{path}: {inspector}");
         }

@@ -694,6 +694,39 @@ fn slot_buffer(device: &wgpu::Device, corners: u32, storage: wgpu::BufferUsages)
     })
 }
 
+impl GpuSkin {
+    /// Counts a mesh's influences and morph deltas as skinning (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        t.buffer(C::Skinning, &self.influences);
+        t.buffer(C::Skinning, &self.deltas);
+    }
+}
+
+impl Skinning {
+    /// Counts the joint matrices, morph weights and every slot's posed
+    /// vertices (this frame's and the last) as skinning (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for synced in [
+            &self.joints,
+            &self.weights,
+            &self.previous_joints,
+            &self.previous_weights,
+            &self.params,
+        ] {
+            t.buffer(C::Skinning, synced.buffer());
+        }
+        for slot in self.slots.iter().flatten() {
+            let mut slot = Some(slot);
+            while let Some(s) = slot {
+                t.buffer(C::Skinning, &s.buffer);
+                slot = s.previous.as_deref();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

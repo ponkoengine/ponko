@@ -189,3 +189,11 @@ fn write(
         },
     );
 }
+
+impl LightTextures {
+    /// Counts the light and decal grids under `class` (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally, class: crate::render::memory::MemoryClass) {
+        t.texture(class, &self.records);
+        t.texture(class, &self.indices);
+    }
+}

@@ -475,6 +475,36 @@ impl Resources {
         )
     }
 
+    /// Counts meshes (the shared arena and meshes with buffers of their
+    /// own), their skinning data, the game's GPU buffers, texture arrays and
+    /// material textures, and material uniforms as other memory (see
+    /// `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        t.bytes(C::Meshes, self.mesh_arena.bytes());
+        for mesh in &self.meshes {
+            if let Some((vertices, indices)) = &mesh.buffers {
+                t.buffer(C::Meshes, vertices);
+                t.buffer(C::Meshes, indices);
+            }
+            if let Some(skin) = &mesh.skin {
+                skin.tally_memory(t);
+            }
+        }
+        for buffer in self.storage_buffers.iter().flatten() {
+            t.buffer(C::GpuBuffers, &buffer.buffer);
+        }
+        for view in self.arrays.iter().chain([&self.white_array]) {
+            t.view(C::Textures, view);
+        }
+        for material in &self.materials {
+            t.buffer(C::Other, &material.buffer);
+            for texture in &material.bindings.textures {
+                t.texture(C::Textures, texture);
+            }
+        }
+    }
+
     /// Frees mesh `id`'s GPU memory; it draws nothing from now on.
     pub(super) fn free_mesh(&mut self, id: u32) {
         if let Some(mesh) = self.meshes.get_mut(id as usize) {

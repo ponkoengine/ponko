@@ -1258,6 +1258,50 @@ impl Renderer3D {
         self.resources.residency()
     }
 
+    /// Hands everything the 3D renderer holds on the GPU to `t`, by class
+    /// (see `memory.rs`): the owners of shared textures first, so a
+    /// shadow map read by the frame's bind groups is counted as a shadow.
+    pub(crate) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        self.shadows.tally_memory(t);
+        if let Some(gi) = &self.gi {
+            gi.tally_memory(t);
+        }
+        self.environment.tally_memory(t);
+        self.skinning.tally_memory(t);
+        for batch in self.static_batches.iter().flatten() {
+            batch.tally_memory(t);
+        }
+        if let Some(culling) = &self.static_culling {
+            culling.tally_memory(t);
+        }
+        t.buffer(C::InstanceBatches, &self.instances);
+        t.buffer(C::InstanceBatches, self.moved.buffer());
+        if let Some(targets) = &self.targets {
+            targets.tally_memory(t);
+        }
+        self.render_targets.tally_memory(t);
+        self.post.tally_memory(t);
+        if let Some(taa) = &self.screen.taa {
+            taa.tally_memory(t);
+        }
+        if let Some(ao) = &self.screen.ao {
+            ao.tally_memory(t);
+        }
+        if let Some(ssr) = &self.screen.ssr {
+            ssr.tally_memory(t);
+        }
+        self.resources.tally_memory(t);
+        self.lights.tally_memory(t, C::Other);
+        self.occlusion.tally_memory(t);
+        self.particles.tally_memory(t);
+        t.buffer(C::Other, &self.frame_buffer);
+        t.texture(C::Other, &self.sky_texture);
+        for view in [&self.sky_view, &self.no_gi, &self.dummy_depth, &self.no_decal_view] {
+            t.view(C::Other, view);
+        }
+    }
+
     /// Frees mesh `id`'s GPU memory; it draws nothing from now on.
     pub fn free_mesh(&mut self, id: u32) {
         self.shadow_cache.invalidate();

@@ -702,6 +702,30 @@ impl Renderer3D {
     }
 }
 
+impl PostChain {
+    /// Counts SMAA's targets as frame targets, and the chain's uniform and
+    /// black stand-in as other memory (see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        if let Some(smaa) = &self.smaa {
+            smaa.tally_memory(t);
+        }
+        t.buffer(C::Other, &self.buffer);
+        t.view(C::Other, &self.black);
+    }
+}
+
+impl PostTargets {
+    /// Counts bloom's levels and the antialiasing and scaling passes'
+    /// inputs as frame targets (see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for view in self.bloom_mips.iter().chain(&self.ldr).chain(&self.upscale) {
+            t.view(C::FrameTargets, view);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::POST_CHAIN;

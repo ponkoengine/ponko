@@ -438,6 +438,23 @@ impl Environment {
     }
 }
 
+impl Environment {
+    /// Counts the sky and reflection probe cubemaps, their filtered levels
+    /// and harmonics, and what bakes them as probes (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        t.texture(C::Probes, &self.atlas);
+        t.texture(C::Probes, &self.source);
+        t.texture(C::Probes, &self.sh_texture);
+        for buffer in &self.buffers {
+            t.buffer(C::Probes, buffer);
+        }
+        for (_, texture) in &self.uploads {
+            t.texture(C::Probes, texture);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

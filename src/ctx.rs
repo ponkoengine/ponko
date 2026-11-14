@@ -934,6 +934,12 @@ impl Ctx {
     /// Hands one frame's timings to the profiler. `true` when a benchmark
     /// run is done and the game should quit.
     pub(crate) fn record_frame(&mut self, sample: crate::profiler::FrameSample) -> bool {
+        if self.perf.state.on && !self.headless && self.perf.state.gpu_memory_due(self.perf.gpu_memory.is_some()) {
+            let before = crate::perf::alloc_counts();
+            self.perf.gpu_memory = self.gfx.renderer.as_ref().and_then(Renderer::gpu_memory);
+            // Counting isn't the game's allocation.
+            self.perf.state.forgive_allocs(before);
+        }
         let gpu_frame = self.gfx.renderer.as_ref().and_then(Renderer::gpu_frame);
         self.perf.entities = self.world.len();
         self.perf.record_frame(sample, gpu_frame)

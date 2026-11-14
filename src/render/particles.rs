@@ -311,6 +311,17 @@ fn vertices<T>(device: &wgpu::Device, label: &'static str, capacity: usize) -> S
     )
 }
 
+impl Particles {
+    /// Counts the particle, trail and 3D text buffers as other memory (see
+    /// `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for synced in [&self.camera, &self.instances, &self.strip_vertices, &self.text_vertices] {
+            t.buffer(C::Other, synced.buffer());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::gpu::GpuTexture;

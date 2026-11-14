@@ -1732,6 +1732,32 @@ impl Default for BatchDraws {
     }
 }
 
+impl StaticBatch {
+    /// Counts the batch's instance records as instance batches (see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        if let Some(vertices) = &self.vertices {
+            t.buffer(crate::render::memory::MemoryClass::InstanceBatches, vertices);
+        }
+    }
+}
+
+impl Culling {
+    /// Counts the culling pools (records, visible lists, draw arguments)
+    /// and the culling's own buffers as instance batches (see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        t.buffer(C::InstanceBatches, &self.occlusion);
+        t.buffer(C::InstanceBatches, &self.marker);
+        for pool in &self.pools {
+            t.buffer(C::InstanceBatches, &pool.records.buffer);
+            for page in &pool.pages {
+                t.buffer(C::InstanceBatches, &page.visibility.buffer);
+                t.buffer(C::InstanceBatches, &page.args.buffer);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 impl Renderer3D {
     pub(crate) fn batch_generations(&self) -> Vec<u32> {

@@ -86,6 +86,9 @@ pub struct Perf {
     pub(crate) render_history: std::collections::VecDeque<RenderFrame>,
     /// How long the last frame waited for the display, copied after every frame.
     pub(crate) display_wait_ms: f32,
+    /// The GPU memory the renderer held when last counted (while profiling
+    /// is on, about twice a second), for the report.
+    pub(crate) gpu_memory: Option<crate::perf::GpuMemory>,
     /// No window or GPU: there are no frames to trace or draw statistics for.
     pub(crate) headless: bool,
     /// Entities alive when the last system finished, for the report.
@@ -159,6 +162,7 @@ impl Perf {
             gpu_passes: Vec::new(),
             render_history: std::collections::VecDeque::new(),
             display_wait_ms: 0.0,
+            gpu_memory: None,
             headless: false,
             entities: 0,
         }
@@ -430,6 +434,7 @@ impl Perf {
                 occluded: r.occluded,
                 gpu_passes: passes,
             });
+            report.gpu_memory.clone_from(&self.gpu_memory);
         }
         crate::perf_report::analyze(&mut report);
         report

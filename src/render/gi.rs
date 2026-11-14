@@ -444,3 +444,27 @@ impl Gi {
         }
     }
 }
+
+impl Gi {
+    /// Counts the probe atlas, its capture views and everything the
+    /// updates draw with as probes (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        t.buffer(C::Probes, &self.uniform);
+        t.texture(C::Probes, &self.atlas);
+        for view in [
+            &self.views,
+            &self.resolve,
+            &self.depth,
+            &self.shadow_array,
+            &self.shadow,
+        ] {
+            t.view(C::Probes, view);
+        }
+        t.texture(C::Probes, &self.scratch);
+        for buffer in &self.face_buffers {
+            t.buffer(C::Probes, buffer);
+        }
+        self.lights.tally_memory(t, C::Probes);
+    }
+}

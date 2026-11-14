@@ -190,6 +190,12 @@ getrandom = "0.4"
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit_macos = { version = "0.27.2", optional = true }
 
+# Apple GPUs: the Metal device's own allocated size, for the GPU memory
+# report (`GpuMemory::adapter_bytes`), which wgpu doesn't report on Metal.
+# The release wgpu's Metal backend already uses: nothing new is built.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2-metal = { version = "0.3.2", optional = true, default-features = false, features = ["std", "MTLDevice"] }
+
 # Windows: UI Automation (Narrator, NVDA, JAWS) on the window's HWND. Its
 # `windows` crate is the release wgpu already brings in.
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -256,7 +262,7 @@ navmesh = ["3d", "dep:navmesh-rs"]
 default = ["audio", "window", "inspector", "gamepad", "image-jpeg"]
 # A window and GPU rendering (winit + wgpu). Off: `Game::run_headless` only,
 # for simulation servers and CI; drawing calls do nothing, `Game::run` panics.
-window = ["dep:wgpu", "dep:winit", "dep:pollster"]
+window = ["dep:wgpu", "dep:winit", "dep:pollster", "dep:objc2-metal"]
 # Sound with kira. Off: the sound API stays and is silent (for servers).
 audio = ["dep:kira", "dep:cpal", "dep:symphonia"]
 # The runtime inspector (egui overlay, toggled with the ` key): entities and their
