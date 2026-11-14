@@ -80,6 +80,7 @@ mod skin;
 mod sprite_material;
 mod steam;
 mod steam_lobby;
+mod stencil;
 mod storage;
 mod stream;
 mod strips;
@@ -110,10 +111,13 @@ mod buffer_motion;
 mod motion;
 // IME composition (#410).
 mod ime;
+// Localization (#411).
+mod locale;
 pub use access::*;
 pub use actions::*;
 pub use animator::*;
 pub use ime::*;
+pub use locale::*;
 /// Counts the library's heap allocations while profiling is on (one atomic
 /// load per allocation otherwise), so a C or C++ game's reports show how many
 /// the engine makes. A Rust program that links this crate as a library and
@@ -177,6 +181,7 @@ pub use skin::*;
 pub use sprite_material::*;
 pub use steam::*;
 pub use steam_lobby::*;
+pub use stencil::*;
 pub use storage::*;
 pub use storage_slots::*;
 pub use stream::*;

@@ -14,22 +14,31 @@ use crate::three::{Frame3D, GpuMaterialDesc, Scene3D, SkinFrame, SkyLight};
 const W: u32 = 64;
 const H: u32 = 48;
 
-struct Fixture {
-    device: wgpu::Device,
+/// A ground, a box, a sun and a shadowed spot light, drawn into a window
+/// of its own (also used by `gpu_memory_render_test.rs`).
+pub(super) struct Fixture {
+    pub(super) device: wgpu::Device,
     queue: wgpu::Queue,
-    textures: Vec<GpuTexture>,
-    output: wgpu::Texture,
+    pub(super) textures: Vec<GpuTexture>,
+    pub(super) output: wgpu::Texture,
     target: wgpu::TextureView,
-    renderer: Renderer3D,
-    ctx: Ctx,
+    pub(super) renderer: Renderer3D,
+    pub(super) ctx: Ctx,
     /// Kept between frames, as the engine keeps it (far shadow cascades
     /// can be kept from an earlier frame).
     frame: Frame3D,
-    timer: Option<super::timer::GpuTimer>,
+    pub(super) timer: Option<super::timer::GpuTimer>,
+    /// The window's size.
+    size: (u32, u32),
 }
 
 impl Fixture {
     fn new() -> Option<Self> {
+        Self::sized(W, H)
+    }
+
+    /// The scene in a window of `width` x `height`.
+    pub(super) fn sized(width: u32, height: u32) -> Option<Self> {
         let gpu = crate::render::render_test_support::gpu_with(|adapter| {
             Ok(wgpu::DeviceDescriptor {
                 required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
@@ -106,8 +115,8 @@ impl Fixture {
         let output = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
-                width: W,
-                height: H,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -120,7 +129,7 @@ impl Fixture {
         let target = output.create_view(&Default::default());
 
         // A ground, a box on it, a sun, and a shadowed spot light above.
-        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(W as f32, H as f32));
+        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(width as f32, height as f32));
         let matte = MaterialDesc {
             color: Color::WHITE,
             roughness: 1.0,
@@ -164,13 +173,15 @@ impl Fixture {
             renderer,
             ctx,
             frame: Frame3D::default(),
+            size: (width, height),
         })
     }
 
     /// Draws one frame and reads the window back. Fails the test on a
     /// validation error.
-    fn draw(&mut self) -> Vec<u8> {
+    pub(super) fn draw(&mut self) -> Vec<u8> {
         let (device, queue, ctx) = (&self.device, &self.queue, &mut self.ctx);
+        let (w, h) = self.size;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         if let Some(timer) = &mut self.timer {
             timer.collect(device);
@@ -206,7 +217,7 @@ impl Fixture {
             &Prepare3D {
                 scene: &scene,
                 lut: None,
-                size: (W, H),
+                size: (w, h),
             },
         );
         let buffers = self.renderer.draw(
@@ -225,7 +236,7 @@ impl Fixture {
         }
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: u64::from(W * H * 4),
+            size: u64::from(w * h * 4),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -236,7 +247,7 @@ impl Fixture {
                 buffer: &readback,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(W * 4),
+                    bytes_per_row: Some(w * 4),
                     rows_per_image: None,
                 },
             },

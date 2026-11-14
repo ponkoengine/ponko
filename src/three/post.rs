@@ -1,7 +1,10 @@
 //! Post-processing of the 3D frame: exposure, bloom, color grading, tone
-//! mapping and vignette.
+//! mapping and vignette, depth of field, and volumes that blend settings by
+//! where the camera is.
 
+use crate::color::Color;
 use crate::texture::Texture;
+use glam::Vec3;
 
 /// How HDR light (which can be far brighter than white) is mapped to the
 /// screen.
@@ -95,9 +98,135 @@ impl Default for AmbientOcclusion {
     }
 }
 
+/// Split toning ([`Post::split_toning`]): the dark parts of the picture
+/// take one tint and the bright parts another, as in film grading (teal
+/// shadows and orange highlights, cold shadows under a warm sunset).
+///
+/// **Cost:** no pass of its own: about twenty instructions per pixel of the
+/// tone mapping pass, and none while both tints are [`Color::GRAY`] (the
+/// default, which changes nothing).
+/// ```
+/// use ponko::prelude::*;
+/// let mut post = ponko::render::Post::default();
+/// assert!(post.split_toning.is_neutral());
+/// post.split_toning.shadows = Color::rgb(0.35, 0.5, 0.6); // teal
+/// post.split_toning.highlights = Color::rgb(0.65, 0.5, 0.35); // orange
+/// assert!(!post.split_toning.is_neutral());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SplitToning {
+    /// The tint of the dark parts, blended in with soft light: grey (0.5)
+    /// changes nothing, a brighter or more colorful one tints more. Alpha
+    /// is ignored. Default [`Color::GRAY`].
+    pub shadows: Color,
+    /// The tint of the bright parts, the same way. Default [`Color::GRAY`].
+    pub highlights: Color,
+    /// Where the shadows end and the highlights begin, -1 to 1: above 0
+    /// more of the picture counts as highlights, below 0 as shadows.
+    /// Default 0.
+    pub balance: f32,
+}
+
+impl Default for SplitToning {
+    fn default() -> Self {
+        Self {
+            shadows: Color::GRAY,
+            highlights: Color::GRAY,
+            balance: 0.0,
+        }
+    }
+}
+
+impl SplitToning {
+    /// Whether this changes nothing: both tints grey (the pass then skips
+    /// it).
+    #[must_use]
+    pub fn is_neutral(&self) -> bool {
+        let grey = |c: Color| c.r == 0.5 && c.g == 0.5 && c.b == 0.5;
+        grey(self.shadows) && grey(self.highlights)
+    }
+}
+
+/// Depth of field ([`Post::depth_of_field`]): what is far from the focus
+/// distance blurs, as through a camera lens, with bright out-of-focus
+/// spots spread into round discs. Off by default.
+///
+/// **Cost:** one full-screen pass at the scene's resolution while it is
+/// on, before bloom: 32 color and 32 depth reads per pixel, over a disc as
+/// wide as the largest blur. About 0.8 ms at 1920x1080 on an Apple M4 Max,
+/// whatever the blur. It needs no image of its own: it swaps between the
+/// two the screen effects swap between. Off, it costs nothing. Things in front of the focus blur over what is behind
+/// them only as far as their own blur reaches, and transparent surfaces
+/// blur with what is behind them (they write no depth). The depth of a
+/// multisampled edge pixel is one of its samples', so the antialiased
+/// edge of something sharp in front of a blurred background can leave a
+/// faint fringe in it.
+/// ```
+/// use ponko::prelude::*;
+/// let mut post = ponko::render::Post::default();
+/// assert!(!post.depth_of_field.enabled);
+/// post.depth_of_field.enabled = true;
+/// post.depth_of_field.focus_distance = 4.0; // the person talking
+/// assert_eq!(post.depth_of_field.blur, 0.01);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DepthOfField {
+    /// Blur what is out of focus. Default false.
+    pub enabled: bool,
+    /// How far from the camera, in world units along its view direction,
+    /// things are sharp. Default 10.
+    pub focus_distance: f32,
+    /// How far in front of and behind the focus distance things stay
+    /// fully sharp, in world units. Default 0.
+    pub focus_range: f32,
+    /// The largest blur: the radius of a blurred spot, as a fraction of
+    /// the scene's height (0.01 is about 11 pixels at 1080p), 0 to 0.05.
+    /// Past the sharp band, blur grows as through a lens: it reaches this
+    /// at twice the focus distance and at two thirds of it. Default 0.01.
+    pub blur: f32,
+}
+
+impl Default for DepthOfField {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            focus_distance: 10.0,
+            focus_range: 0.0,
+            blur: 0.01,
+        }
+    }
+}
+
+impl DepthOfField {
+    /// Largest [`blur`](Self::blur).
+    pub const MAX_BLUR: f32 = 0.05;
+
+    /// Whether the pass runs: enabled, with a blur above zero and finite
+    /// settings.
+    pub(crate) fn is_on(&self) -> bool {
+        self.enabled
+            && self.blur.is_finite()
+            && self.blur > 0.0
+            && self.focus_distance.is_finite()
+            && self.focus_range.is_finite()
+    }
+
+    /// The blur, as a fraction of the scene's height, of something `depth`
+    /// world units in front of the camera (what the pass computes).
+    #[must_use]
+    pub fn blur_at(&self, depth: f32) -> f32 {
+        if !self.is_on() {
+            return 0.0;
+        }
+        let off = ((depth - self.focus_distance).abs() - self.focus_range.max(0.0)).max(0.0);
+        let blur = self.blur.clamp(0.0, Self::MAX_BLUR);
+        blur * (2.0 * off / depth.max(1e-3)).min(1.0)
+    }
+}
+
 /// What happens to the lit 3D frame before it reaches the screen: the
 /// resolution it is drawn at, antialiasing, ambient occlusion, reflections,
-/// exposure, bloom, color grading and tone mapping. At
+/// depth of field, exposure, bloom, color grading and tone mapping. At
 /// [`SceneSettings::post`](crate::render::SceneSettings::post)
 /// (`ctx.scene3d.post`). Sprites and UI drawn on top are not changed.
 ///
@@ -110,6 +239,9 @@ impl Default for AmbientOcclusion {
 /// ctx.scene3d.post.temperature = 0.2; // warmer
 /// # }
 /// ```
+///
+/// Two looks blend with [`Post::lerp`], and [`PostVolume`]s blend them by
+/// where the camera is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct Post {
@@ -214,6 +346,10 @@ pub struct Post {
     pub temperature: f32,
     /// White balance, -1 (green) to 1 (magenta). Default 0.
     pub tint: f32,
+    /// Tints the shadows and the highlights apart. Default neutral (off).
+    pub split_toning: SplitToning,
+    /// Blurs what is out of focus. Default off.
+    pub depth_of_field: DepthOfField,
     /// How much the corners darken, 0 to 1. Default 0.
     pub vignette: f32,
     /// Color fringes toward the edges, as a cheap lens splits red, green
@@ -263,6 +399,8 @@ impl Default for Post {
             saturation: 1.0,
             temperature: 0.0,
             tint: 0.0,
+            split_toning: SplitToning::default(),
+            depth_of_field: DepthOfField::default(),
             vignette: 0.0,
             chromatic_aberration: 0.0,
             lens_distortion: 0.0,
@@ -329,6 +467,218 @@ impl Post {
         }
         (n * n, n, pixels)
     }
+
+    /// The settings `t` of the way from `self` to `other` (clamped to 0 to
+    /// 1; a NaN counts as 0): `self` at 0, `other` at 1. For a transition
+    /// between two looks (indoors to outdoors, day to night, under water),
+    /// or through [`PostVolume`]s.
+    ///
+    /// Amounts and colors blend: exposure, bloom, grading, white balance,
+    /// split toning, vignette, lens effects, sharpening, contact shadows
+    /// and reflections. An effect on at one end and off at the other
+    /// (ambient occlusion, depth of field) runs through the blend with its
+    /// strength fading to nothing at the end where it is off, and its other
+    /// settings from the end where it is on. Choices that can't be mixed
+    /// switch halfway: the tone map, the lookup table, antialiasing,
+    /// multisampling, the render scale (blending it would make the scene's
+    /// images again every frame) and the ambient occlusion's quality.
+    /// ```
+    /// use ponko::render::Post;
+    /// let (mut day, mut night) = (Post::default(), Post::default());
+    /// night.exposure = -1.0;
+    /// night.saturation = 0.6;
+    /// day.bloom = 0.0;
+    /// let dusk = day.lerp(&night, 0.25);
+    /// assert_eq!(dusk.exposure, -0.25);
+    /// assert!((dusk.saturation - 0.9).abs() < 1e-6);
+    /// assert_eq!(day.lerp(&night, 0.0), day);
+    /// assert_eq!(day.lerp(&night, 1.0), night);
+    /// ```
+    #[must_use]
+    pub fn lerp(&self, other: &Post, t: f32) -> Post {
+        let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
+        if t == 0.0 {
+            return *self;
+        }
+        if t == 1.0 {
+            return *other;
+        }
+        let f = |a: f32, b: f32| a + (b - a) * t;
+        // Choices that can't be mixed: `self`'s until halfway, then `other`'s.
+        fn pick<T>(t: f32, a: T, b: T) -> T {
+            if t < 0.5 { a } else { b }
+        }
+        let color = |a: Color, b: Color| Color {
+            r: f(a.r, b.r),
+            g: f(a.g, b.g),
+            b: f(a.b, b.b),
+            a: f(a.a, b.a),
+        };
+        let (a, b) = (self, other);
+        let ao = {
+            let (x, y) = (&a.ambient_occlusion, &b.ambient_occlusion);
+            // An end that is off counts as no occlusion, with the other's settings.
+            let (from, to) = match (x.enabled, y.enabled) {
+                (true, false) => (x, x),
+                (false, true) => (y, y),
+                _ => (x, y),
+            };
+            let strength = |o: &AmbientOcclusion| if o.enabled { o.intensity } else { 0.0 };
+            AmbientOcclusion {
+                enabled: x.enabled || y.enabled,
+                radius: f(from.radius, to.radius),
+                intensity: f(strength(x), strength(y)),
+                slices: pick(t, from.slices, to.slices),
+                steps: pick(t, from.steps, to.steps),
+            }
+        };
+        let dof = {
+            let (x, y) = (&a.depth_of_field, &b.depth_of_field);
+            let (from, to) = match (x.enabled, y.enabled) {
+                (true, false) => (x, x),
+                (false, true) => (y, y),
+                _ => (x, y),
+            };
+            let blur = |d: &DepthOfField| if d.enabled { d.blur } else { 0.0 };
+            DepthOfField {
+                enabled: x.enabled || y.enabled,
+                focus_distance: f(from.focus_distance, to.focus_distance),
+                focus_range: f(from.focus_range, to.focus_range),
+                blur: f(blur(x), blur(y)),
+            }
+        };
+        Post {
+            render_scale: pick(t, a.render_scale, b.render_scale),
+            sharpen: f(a.sharpen, b.sharpen),
+            ambient_occlusion: ao,
+            ao_half_resolution: pick(t, a.ao_half_resolution, b.ao_half_resolution),
+            ao_temporal: pick(t, a.ao_temporal, b.ao_temporal),
+            contact_shadows: f(a.contact_shadows, b.contact_shadows),
+            ssr: f(a.ssr, b.ssr),
+            ssr_max_distance: f(a.ssr_max_distance, b.ssr_max_distance),
+            anti_aliasing: pick(t, a.anti_aliasing, b.anti_aliasing),
+            msaa: pick(t, a.msaa, b.msaa),
+            taa_sharpness: f(a.taa_sharpness, b.taa_sharpness),
+            exposure: f(a.exposure, b.exposure),
+            tonemap: pick(t, a.tonemap, b.tonemap),
+            bloom: f(a.bloom, b.bloom),
+            bloom_threshold: f(a.bloom_threshold, b.bloom_threshold),
+            contrast: f(a.contrast, b.contrast),
+            saturation: f(a.saturation, b.saturation),
+            temperature: f(a.temperature, b.temperature),
+            tint: f(a.tint, b.tint),
+            split_toning: SplitToning {
+                shadows: color(a.split_toning.shadows, b.split_toning.shadows),
+                highlights: color(a.split_toning.highlights, b.split_toning.highlights),
+                balance: f(a.split_toning.balance, b.split_toning.balance),
+            },
+            depth_of_field: dof,
+            vignette: f(a.vignette, b.vignette),
+            chromatic_aberration: f(a.chromatic_aberration, b.chromatic_aberration),
+            lens_distortion: f(a.lens_distortion, b.lens_distortion),
+            lens_scale: f(a.lens_scale, b.lens_scale),
+            lut: pick(t, a.lut, b.lut),
+        }
+    }
+}
+
+/// A box in the world with post settings of its own: the camera inside it
+/// sees them, and [`blend_distance`](Self::blend_distance) outside it they
+/// fade back into what is around it. For places that look different (a
+/// cave, a building, under water, a fog bank) without blending settings
+/// field by field in game code.
+///
+/// Volumes are plain values: keep them where suits the game (a resource,
+/// a level's data) and blend them into `ctx.scene3d.post` each frame with
+/// [`PostVolume::blend`]. A volume that doesn't touch the camera costs a
+/// distance check.
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::render::{Post, PostVolume};
+/// let outdoors = Post::default();
+/// let mut cave = Post::default();
+/// cave.exposure = 1.0;
+/// cave.saturation = 0.5;
+/// let volumes = [PostVolume::new(vec3(0.0, 2.0, -20.0), vec3(10.0, 4.0, 10.0), 4.0, cave)];
+/// // Deep inside: the cave's look. Far away: the outdoors'. Halfway
+/// // through the blend distance: halfway between.
+/// assert_eq!(PostVolume::blend(&outdoors, &volumes, vec3(0.0, 2.0, -20.0)).exposure, 1.0);
+/// assert_eq!(PostVolume::blend(&outdoors, &volumes, vec3(0.0, 2.0, 20.0)).exposure, 0.0);
+/// let edge = PostVolume::blend(&outdoors, &volumes, vec3(0.0, 2.0, -13.0));
+/// assert!((edge.exposure - 0.5).abs() < 1e-6);
+/// ```
+///
+/// In a game, every frame (after the camera moved):
+/// ```no_run
+/// # use ponko::prelude::*;
+/// # use ponko::render::{Post, PostVolume};
+/// # struct Looks { outdoors: Post, volumes: Vec<PostVolume> }
+/// # fn f(ctx: &mut Ctx, looks: &Looks) {
+/// let camera = ctx.scene3d.camera.position;
+/// ctx.scene3d.post = PostVolume::blend(&looks.outdoors, &looks.volumes, camera);
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PostVolume {
+    /// The box's corner with the smallest coordinates.
+    pub min: Vec3,
+    /// The box's corner with the largest coordinates.
+    pub max: Vec3,
+    /// How far outside the box, in world units, its settings fade out,
+    /// smoothly. 0 switches at the box's faces.
+    pub blend_distance: f32,
+    /// The settings inside the box.
+    pub post: Post,
+}
+
+impl PostVolume {
+    /// A box of `size` around `center`, fading out over `blend_distance`.
+    #[must_use]
+    pub fn new(center: Vec3, size: Vec3, blend_distance: f32, post: Post) -> Self {
+        let half = size.abs() * 0.5;
+        Self {
+            min: center - half,
+            max: center + half,
+            blend_distance,
+            post,
+        }
+    }
+
+    /// How much this volume's settings count at `at`: 1 inside the box,
+    /// falling smoothly to 0 at [`blend_distance`](Self::blend_distance)
+    /// from it.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::render::{Post, PostVolume};
+    /// let v = PostVolume::new(Vec3::ZERO, Vec3::splat(2.0), 2.0, Post::default());
+    /// assert_eq!(v.weight(vec3(0.5, 0.0, 0.0)), 1.0);
+    /// assert_eq!(v.weight(vec3(2.0, 0.0, 0.0)), 0.5);
+    /// assert_eq!(v.weight(vec3(3.0, 0.0, 0.0)), 0.0);
+    /// ```
+    #[must_use]
+    pub fn weight(&self, at: Vec3) -> f32 {
+        let outside = (self.min - at).max(at - self.max).max(Vec3::ZERO).length();
+        if outside <= 0.0 {
+            return 1.0;
+        }
+        let blend = self.blend_distance;
+        if !(blend.is_finite() && blend > 0.0) || outside >= blend {
+            return 0.0;
+        }
+        let x = 1.0 - outside / blend;
+        x * x * (3.0 - 2.0 * x)
+    }
+
+    /// `base` with `volumes` blended over it by their [`weight`](Self::weight)
+    /// at `at` (the camera's position), in order: where volumes overlap,
+    /// the later one wins, so list a room inside a building after the
+    /// building. See [`Post::lerp`] for how settings blend.
+    #[must_use]
+    pub fn blend(base: &Post, volumes: &[PostVolume], at: Vec3) -> Post {
+        volumes
+            .iter()
+            .fold(*base, |post, volume| post.lerp(&volume.post, volume.weight(at)))
+    }
 }
 
 /// `window` scaled by `scale` (clamped to the allowed range), at least 1 and
@@ -364,6 +714,15 @@ pub(crate) struct PostUniform {
     pub lens: [f32; 4],
     /// x: chromatic aberration amount (0 off).
     pub fringe: [f32; 4],
+    /// Split toning: the shadows' tint (rgb) and the balance (w).
+    pub split_shadows: [f32; 4],
+    /// Split toning: the highlights' tint (rgb), and w 1 when on (0 off).
+    pub split_highlights: [f32; 4],
+    /// Depth of field: x focus distance, y sharp range, z largest blur
+    /// (fraction of the scene's height; 0 off).
+    pub dof: [f32; 4],
+    /// The camera's near (x) and far (y) planes, to turn depth into distance.
+    pub camera: [f32; 4],
 }
 
 /// The lens distortion terms, as Unity's and other engines' "lens
@@ -395,6 +754,19 @@ impl PostUniform {
     pub fn new(post: &Post, lut_size: Option<u32>) -> Self {
         let [l, m, s] = white_balance(post.temperature, post.tint);
         let bloom = post.bloom.max(0.0);
+        let split = &post.split_toning;
+        let tint = |c: Color| {
+            let v = |x: f32| if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.5 };
+            [v(c.r), v(c.g), v(c.b)]
+        };
+        let [sr, sg, sb] = tint(split.shadows);
+        let [hr, hg, hb] = tint(split.highlights);
+        let balance = if split.balance.is_finite() {
+            split.balance.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        let dof = &post.depth_of_field;
         Self {
             grade: [
                 post.exposure.exp2(),
@@ -417,7 +789,27 @@ impl PostUniform {
                 0.0,
                 0.0,
             ],
+            split_shadows: [sr, sg, sb, balance],
+            split_highlights: [hr, hg, hb, if split.is_neutral() { 0.0 } else { 1.0 }],
+            dof: if dof.is_on() {
+                [
+                    dof.focus_distance.max(0.0),
+                    dof.focus_range.max(0.0),
+                    dof.blur.clamp(0.0, DepthOfField::MAX_BLUR),
+                    0.0,
+                ]
+            } else {
+                [0.0; 4]
+            },
+            camera: [0.1, 1000.0, 0.0, 0.0],
         }
+    }
+
+    /// The same, for a camera with these near and far planes (depth of
+    /// field reads distances from the depth buffer with them).
+    pub fn camera(mut self, near: f32, far: f32) -> Self {
+        self.camera = [near, far, 0.0, 0.0];
+        self
     }
 
     /// The same, for a scene drawn at `scene` pixels and scaled to
@@ -537,6 +929,171 @@ mod tests {
         });
         assert!((strong[0] - 160f32.to_radians()).abs() < 1e-6, "capped at 160 degrees");
         assert_eq!(size_of::<PostUniform>() % 16, 0);
+    }
+
+    #[test]
+    fn split_toning_and_depth_of_field_are_off_by_default_in_the_uniform() {
+        let u = PostUniform::new(&Post::default(), None);
+        assert_eq!(u.split_highlights[3], 0.0, "neutral tints: the pass skips split toning");
+        assert_eq!(u.dof, [0.0; 4], "no depth of field");
+        let mut post = Post::default();
+        post.split_toning.shadows = Color::rgb(0.2, 0.4, f32::NAN);
+        post.split_toning.balance = 3.0;
+        post.depth_of_field.enabled = true;
+        post.depth_of_field.blur = 1.0;
+        post.depth_of_field.focus_distance = 4.0;
+        let u = PostUniform::new(&post, None).camera(0.5, 200.0);
+        assert_eq!(
+            u.split_shadows,
+            [0.2, 0.4, 0.5, 1.0],
+            "a NaN is grey, the balance clamped"
+        );
+        assert_eq!(u.split_highlights[3], 1.0);
+        assert_eq!(u.dof, [4.0, 0.0, DepthOfField::MAX_BLUR, 0.0], "blur clamped");
+        assert_eq!(u.camera[..2], [0.5, 200.0]);
+        post.depth_of_field.blur = 0.0;
+        assert_eq!(PostUniform::new(&post, None).dof, [0.0; 4], "no blur is off");
+    }
+
+    #[test]
+    fn depth_of_field_blur_grows_away_from_the_sharp_band_like_a_lens() {
+        let dof = DepthOfField {
+            enabled: true,
+            focus_distance: 10.0,
+            focus_range: 1.0,
+            blur: 0.02,
+        };
+        for sharp in [9.0, 10.0, 11.0] {
+            assert_eq!(dof.blur_at(sharp), 0.0, "{sharp} is in the sharp band");
+        }
+        assert!(dof.blur_at(12.0) > 0.0 && dof.blur_at(12.0) < dof.blur_at(15.0));
+        assert_eq!(dof.blur_at(30.0), 0.02, "full blur well behind");
+        assert_eq!(dof.blur_at(1000.0), 0.02, "and no more at the horizon");
+        assert_eq!(dof.blur_at(2.0), 0.02, "full blur close up");
+        let off = DepthOfField { enabled: false, ..dof };
+        assert_eq!(off.blur_at(1000.0), 0.0);
+    }
+
+    fn look(exposure: f32) -> Post {
+        Post {
+            exposure,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn lerp_blends_amounts_and_switches_choices_halfway() {
+        let a = Post {
+            vignette: 0.4,
+            ..Default::default()
+        };
+        let b = Post {
+            exposure: 2.0,
+            split_toning: SplitToning {
+                shadows: Color::rgb(0.0, 0.5, 1.0),
+                ..Default::default()
+            },
+            tonemap: Tonemap::AgX,
+            render_scale: 0.5,
+            msaa: 2,
+            ..Default::default()
+        };
+        let q = a.lerp(&b, 0.25);
+        assert_eq!(q.exposure, 0.5);
+        assert!((q.vignette - 0.3).abs() < 1e-6);
+        assert_eq!(q.split_toning.shadows, Color::rgb(0.375, 0.5, 0.625));
+        assert_eq!(
+            (q.tonemap, q.render_scale, q.msaa),
+            (Tonemap::Aces, 1.0, 4),
+            "before halfway"
+        );
+        let q = a.lerp(&b, 0.5);
+        assert_eq!(
+            (q.tonemap, q.render_scale, q.msaa),
+            (Tonemap::AgX, 0.5, 2),
+            "from halfway"
+        );
+        assert_eq!(a.lerp(&b, -1.0), a, "clamped");
+        assert_eq!(a.lerp(&b, 7.0), b, "clamped");
+        assert_eq!(a.lerp(&b, f32::NAN), a, "NaN counts as 0");
+    }
+
+    #[test]
+    fn lerp_fades_an_effect_that_one_end_has_off() {
+        let off = Post::default();
+        let on = Post {
+            depth_of_field: DepthOfField {
+                enabled: true,
+                focus_distance: 4.0,
+                focus_range: 1.0,
+                blur: 0.02,
+            },
+            ambient_occlusion: AmbientOcclusion {
+                enabled: true,
+                radius: 2.0,
+                intensity: 0.8,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let q = off.lerp(&on, 0.25);
+        assert!(q.depth_of_field.enabled && q.ambient_occlusion.enabled);
+        assert_eq!(q.depth_of_field.blur, 0.005, "a quarter of the blur");
+        assert_eq!(q.depth_of_field.focus_distance, 4.0, "the focus of the end that has it");
+        assert!((q.ambient_occlusion.intensity - 0.2).abs() < 1e-6);
+        assert_eq!(q.ambient_occlusion.radius, 2.0);
+        let back = on.lerp(&off, 0.75);
+        assert_eq!(back.depth_of_field.blur, q.depth_of_field.blur, "the same either way");
+        assert_eq!(off.lerp(&on, 0.0), off, "fully off at its own end");
+    }
+
+    #[test]
+    fn walking_through_a_volume_blends_without_jumps() {
+        let base = look(0.0);
+        let volumes = [
+            PostVolume::new(Vec3::new(0.0, 0.0, 0.0), Vec3::splat(10.0), 5.0, look(2.0)),
+            // A smaller room inside it, listed after: it wins there.
+            PostVolume::new(Vec3::new(0.0, 0.0, 0.0), Vec3::splat(2.0), 1.0, look(-1.0)),
+        ];
+        let mut last = PostVolume::blend(&base, &volumes, Vec3::new(-20.0, 0.0, 0.0)).exposure;
+        assert_eq!(last, 0.0, "outside everything");
+        let step = 0.05;
+        let mut x = -20.0 + step;
+        while x <= 0.0 {
+            let now = PostVolume::blend(&base, &volumes, Vec3::new(x, 0.0, 0.0)).exposure;
+            // The blend is smooth: no step is bigger than the slope of
+            // the fastest fade allows (3/2 over its distance, per unit).
+            assert!(
+                (now - last).abs() <= 3.0 * 1.5 * step + 1e-4,
+                "a jump at {x}: {last} -> {now}"
+            );
+            last = now;
+            x += step;
+        }
+        assert_eq!(
+            PostVolume::blend(&base, &volumes, Vec3::new(-4.0, 0.0, 0.0)).exposure,
+            2.0
+        );
+        assert_eq!(PostVolume::blend(&base, &volumes, Vec3::ZERO).exposure, -1.0);
+        assert_eq!(PostVolume::blend(&base, &[], Vec3::ZERO), base);
+    }
+
+    #[test]
+    fn a_volume_without_blend_distance_switches_at_its_faces() {
+        let v = PostVolume::new(Vec3::ZERO, Vec3::splat(2.0), 0.0, look(1.0));
+        assert_eq!(v.weight(Vec3::new(1.0, 0.0, 0.0)), 1.0, "on the face counts as inside");
+        assert_eq!(v.weight(Vec3::new(1.001, 0.0, 0.0)), 0.0);
+        let nan = PostVolume {
+            blend_distance: f32::NAN,
+            ..v
+        };
+        assert_eq!(nan.weight(Vec3::new(1.5, 0.0, 0.0)), 0.0);
+        let corner = PostVolume::new(Vec3::ZERO, Vec3::splat(2.0), 2.0, look(1.0));
+        let diagonal = corner.weight(Vec3::new(2.0, 2.0, 1.0));
+        assert!(
+            diagonal < corner.weight(Vec3::new(2.0, 1.0, 1.0)),
+            "distance to the box, not per axis"
+        );
     }
 
     #[test]

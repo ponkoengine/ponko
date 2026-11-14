@@ -18,6 +18,10 @@ pub(super) struct PartRun {
     pub part: usize,
     pub key: (u32, u32, u32),
     pub distance: f32,
+    /// Where its material draws among the solid ones: 0 without a
+    /// stencil, after those by the stencil's order otherwise (see
+    /// `stencil.rs`). Sorted on before the state.
+    pub rank: u64,
 }
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -168,11 +172,15 @@ impl Renderer3D {
                     part,
                     key: (pipeline, material, buffers),
                     distance: 0.0,
+                    rank: self.stencil.rank(material),
                 });
             }
         }
         if self.group_draws {
-            parts.sort_unstable_by_key(|p| (p.key, p.run.0, p.part));
+            parts.sort_unstable_by_key(|p| (p.rank, p.key, p.run.0, p.part));
+        } else if self.stencil.any() {
+            // Stable: the rest keep their order.
+            parts.sort_by_key(|p| p.rank);
         }
     }
 
@@ -286,17 +294,23 @@ impl Renderer3D {
                     part,
                     key: (pipeline, material, buffers),
                     distance: near,
+                    rank: self.stencil.rank(material),
                 });
             }
         }
         if self.group_draws {
             draws.sort_unstable_by(|a, b| {
-                a.key
-                    .cmp(&b.key)
+                a.rank
+                    .cmp(&b.rank)
+                    .then_with(|| a.key.cmp(&b.key))
                     .then_with(|| a.distance.total_cmp(&b.distance))
                     .then_with(|| a.run.0.cmp(&b.run.0))
                     .then(a.part.cmp(&b.part))
             });
+        }
+        if !self.group_draws && self.stencil.any() {
+            // Stable: the rest keep their order.
+            draws.sort_by_key(|d| d.rank);
         }
         self.lists.solid_parts = draws;
     }

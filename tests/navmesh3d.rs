@@ -522,3 +522,245 @@ fn crowd_reroutes_when_a_hole_is_carved_across_its_path() {
     assert!(a.distance(vec3(7.0, 0.1, 0.0)) < 0.3, "{a:?}");
     assert_eq!(a, run());
 }
+
+/// A smooth hill, 2 m tall at the origin: slopes up to about 20 degrees and
+/// enough curvature that flat polygons alone miss the ground by most of a metre.
+fn hill_height(x: f32, z: f32) -> f32 {
+    2.0 * (-(x * x + z * z) / (2.0 * 3.5 * 3.5)).exp()
+}
+fn hill() -> NavSource {
+    let (step, half) = (0.5, 12.0);
+    let n = (2.0 * half / step) as i32;
+    let at = |i: i32, j: i32| {
+        let (x, z) = (i as f32 * step - half, j as f32 * step - half);
+        vec3(x, hill_height(x, z), z)
+    };
+    let mut triangles = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            let (a, b, c, d) = (at(i, j), at(i, j + 1), at(i + 1, j), at(i + 1, j + 1));
+            triangles.push([a, b, c]);
+            triangles.push([c, b, d]);
+        }
+    }
+    NavSource { triangles }
+}
+/// The largest gap between the mesh's surface and the hill at points around
+/// `center`, between `inner` and `outer` metres from it.
+fn surface_error(nav: &NavMesh3D, center: Vec3, inner: f32, outer: f32) -> f32 {
+    let mut worst = 0.0f32;
+    for i in 0..48 {
+        let a = i as f32 * std::f32::consts::TAU / 48.0;
+        for r in [inner, (inner + outer) / 2.0, outer] {
+            let (x, z) = (center.x + r * a.cos(), center.z + r * a.sin());
+            let p = nav.sample_position(vec3(x, hill_height(x, z), z), 0.6).unwrap();
+            worst = worst.max((p.y - hill_height(p.x, p.z)).abs());
+        }
+    }
+    worst
+}
+fn is_carved(nav: &NavMesh3D, p: Vec3) -> bool {
+    nav.sample_position(p, 0.2).is_none()
+}
+fn is_open(nav: &NavMesh3D, p: Vec3) -> bool {
+    nav.sample_position(p + Vec3::Y * 0.1, 0.3)
+        .is_some_and(|q| (q - p).with_y(0.0).length() < 0.05)
+}
+fn carve(mut o: NavObstacle3D) -> NavObstacle3D {
+    o.carve = true;
+    o
+}
+
+#[test]
+fn carving_a_turned_box_cuts_the_box_not_its_bounds() {
+    let mut nav = carving_bake(&[floor()]);
+    let mut o = NavObstacle3D::new(vec3(0.0, 1.0, 0.0), vec3(3.0, 1.0, 0.3));
+    o.yaw = std::f32::consts::FRAC_PI_4;
+    nav.set_obstacles(&[carve(o)]);
+    drain_carving(&mut nav, 1);
+    // Positive yaw turns +X toward -Z: the box runs from (+x, -z) to (-x, +z).
+    for t in [-2.0, -1.0, 0.0, 1.0, 2.0] {
+        assert!(is_carved(&nav, vec3(t, 0.0, -t)), "{t}");
+    }
+    // Corners of the box's world bounds stay walkable.
+    for p in [vec3(1.8, 0.0, 1.8), vec3(-1.8, 0.0, -1.8)] {
+        assert!(is_open(&nav, p), "{p}");
+    }
+    let path = nav.find_path(vec3(-7.0, 0.0, -7.0), vec3(7.0, 0.0, 7.0)).unwrap();
+    assert!(path.iter().all(|p| p.x.abs() < 7.5 && p.z.abs() < 7.5), "{path:?}");
+}
+#[test]
+fn carving_a_cylinder_cuts_a_round_hole() {
+    let mut nav = carving_bake(&[floor()]);
+    nav.set_obstacles(&[carve(NavObstacle3D::cylinder(vec3(0.0, 1.0, 0.0), 1.5, 1.0))]);
+    drain_carving(&mut nav, 1);
+    for p in [
+        Vec3::ZERO,
+        vec3(1.2, 0.0, 0.0),
+        vec3(0.0, 0.0, -1.2),
+        vec3(0.9, 0.0, 0.9),
+    ] {
+        assert!(is_carved(&nav, p), "{p}");
+    }
+    // Inside the cylinder's bounding box (grown by the agent), outside its circle.
+    assert!(is_open(&nav, vec3(1.75, 0.0, 1.75)));
+    assert!(is_open(&nav, vec3(-1.75, 0.0, -1.75)));
+}
+#[test]
+fn carving_a_convex_polygon_cuts_the_polygon() {
+    let mut nav = carving_bake(&[floor()]);
+    let wedge = [vec2(-2.0, -1.5), vec2(2.0, -1.5), vec2(0.0, 2.5)];
+    nav.set_obstacles(&[carve(NavObstacle3D::convex(vec3(0.0, 1.0, 0.0), &wedge, 1.0).unwrap())]);
+    drain_carving(&mut nav, 1);
+    for p in [Vec3::ZERO, vec3(0.0, 0.0, 2.0), vec3(-1.5, 0.0, -1.2)] {
+        assert!(is_carved(&nav, p), "{p}");
+    }
+    // Inside the wedge's bounds, beside its slanted sides.
+    assert!(is_open(&nav, vec3(1.8, 0.0, 1.8)));
+    assert!(is_open(&nav, vec3(-1.8, 0.0, 1.8)));
+    // Turning it half a circle points the tip the other way.
+    let mut turned = NavObstacle3D::convex(vec3(0.0, 1.0, 0.0), &wedge, 1.0).unwrap();
+    turned.yaw = std::f32::consts::PI;
+    nav.set_obstacles(&[carve(turned)]);
+    drain_carving(&mut nav, 1);
+    assert!(is_carved(&nav, vec3(0.0, 0.0, -2.0)));
+    assert!(is_open(&nav, vec3(0.0, 0.0, 2.6)));
+}
+#[test]
+fn blocking_shapes_close_paths_and_invalid_turns_block_everything() {
+    let mut nav = bake(&[floor()]);
+    let (from, to) = (vec3(-7.0, 0.0, 0.0), vec3(7.0, 0.0, 0.0));
+    let mut wall = NavObstacle3D::new(vec3(0.0, 1.0, 0.0), vec3(0.3, 1.0, 14.0));
+    wall.yaw = 0.3;
+    for o in [
+        wall,
+        NavObstacle3D::cylinder(vec3(0.0, 1.0, 0.0), 12.0, 1.0),
+        NavObstacle3D::convex(
+            vec3(0.0, 1.0, 0.0),
+            &[vec2(-1.0, -12.0), vec2(1.0, -12.0), vec2(0.0, 12.0)],
+            1.0,
+        )
+        .unwrap(),
+    ] {
+        nav.set_obstacles(&[o]);
+        assert!(nav.find_path(from, to).is_none(), "{o:?}");
+    }
+    let mut small = NavObstacle3D::cylinder(vec3(0.0, 1.0, 6.0), 0.5, 1.0);
+    nav.set_obstacles(&[small]);
+    assert!(nav.find_path(from, to).is_some());
+    small.yaw = f32::NAN;
+    nav.set_obstacles(&[small]);
+    assert!(nav.find_path(from, to).is_none());
+    assert!(nav.sample_position(vec3(0.0, 0.0, -6.0), 0.3).is_none());
+    nav.set_obstacles(&[]);
+    assert!(nav.find_path(from, to).is_some());
+}
+#[test]
+fn turning_a_carving_obstacle_rebuilds_only_past_half_a_cell() {
+    let mut nav = carving_bake(&[floor()]);
+    let mut o = carve(NavObstacle3D::new(vec3(0.0, 1.0, 0.0), vec3(2.0, 1.0, 0.3)));
+    nav.set_obstacles(&[o]);
+    drain_carving(&mut nav, 1);
+    // The far corner moves about 0.02 m: not worth a rebuild.
+    o.yaw = 0.01;
+    nav.set_obstacles(&[o]);
+    assert!(!nav.carving_pending());
+    o.yaw = 0.5;
+    nav.set_obstacles(&[o]);
+    assert!(nav.carving_pending());
+    assert!(drain_carving(&mut nav, 1) > 0);
+}
+#[test]
+fn carved_tiles_keep_detail_heights_on_a_hill() {
+    let center = vec3(2.5, 0.0, 0.0);
+    let mut nav = carving_bake(&[hill()]);
+    let before = surface_error(&nav, center, 1.6, 3.0);
+    let mut o = NavObstacle3D::new(center + Vec3::Y * hill_height(center.x, center.z), vec3(0.8, 1.0, 0.4));
+    o.yaw = 0.7;
+    nav.set_obstacles(&[carve(o)]);
+    assert!(drain_carving(&mut nav, 1) > 0);
+    assert!(is_carved(&nav, center + Vec3::Y * hill_height(center.x, center.z)));
+    let after = surface_error(&nav, center, 1.6, 3.0);
+    // As close to the ground as an ordinary bake's detail mesh (about 0.25 m
+    // here: the voxel floor, the sample error and 1.2 m sample spacing).
+    let plain = surface_error(&bake(&[hill()]), center, 1.6, 3.0);
+    assert!(
+        before <= plain + 0.03 && after <= plain + 0.03 && after < 0.3,
+        "ordinary {plain}, before {before}, after {after}"
+    );
+}
+#[test]
+fn agents_stay_on_a_hill_next_to_carved_shapes_and_repeat_exactly() {
+    struct Tick(u32);
+    fn edit(ctx: &mut Ctx) {
+        let t = ctx.world.resource_mut::<Tick>();
+        t.0 += 1;
+        let tick = t.0;
+        let on_hill = |x: f32, z: f32| vec3(x, hill_height(x, z) + 0.5, z);
+        if tick == 5 {
+            // Each one stands across an agent's straight line.
+            let mut post = NavObstacle3D::new(on_hill(1.0, 0.0), vec3(1.0, 1.0, 0.3));
+            post.yaw = 0.6;
+            ctx.world.spawn((carve(post),));
+            ctx.world
+                .spawn((carve(NavObstacle3D::cylinder(on_hill(-2.5, 0.2), 0.6, 1.0)),));
+            let wedge = [vec2(-0.6, -0.5), vec2(0.6, -0.5), vec2(0.0, 0.7)];
+            ctx.world
+                .spawn((carve(NavObstacle3D::convex(on_hill(0.3, -2.5), &wedge, 1.0).unwrap()),));
+        }
+        if tick == 60 {
+            ctx.world.query::<&mut NavObstacle3D>().for_each(|o| {
+                o.yaw += if o.shape == ponko::d3::NavObstacleShape::Box {
+                    0.5
+                } else {
+                    0.0
+                }
+            });
+        }
+    }
+    fn check(ctx: &mut Ctx) {
+        let shapes: Vec<NavObstacle3D> = ctx.world.query::<&NavObstacle3D>().iter().copied().collect();
+        ctx.world.query::<(&Transform3D, &NavAgent3D)>().for_each(|(t, _)| {
+            let p = t.position;
+            assert!((p.y - hill_height(p.x, p.z)).abs() < 0.2, "off the surface at {p}");
+            for o in &shapes {
+                let d = (p - o.center).with_y(0.0);
+                let (c, s) = (o.yaw.cos(), o.yaw.sin());
+                let local = vec2(d.x * c - d.z * s, d.x * s + d.z * c);
+                let inside = match o.shape {
+                    ponko::d3::NavObstacleShape::Cylinder => local.length() < o.half_extents.x,
+                    // The wedge's inscribed circle.
+                    ponko::d3::NavObstacleShape::Convex(_) => local.length() < 0.3,
+                    _ => local.x.abs() < o.half_extents.x && local.y.abs() < o.half_extents.z,
+                };
+                assert!(!inside, "inside {o:?} at {p}");
+            }
+        });
+    }
+    fn run() -> Vec<Vec3> {
+        let mut w = Game::new("carving", 1, 1)
+            .fixed_hz(60)
+            .sim_system(edit)
+            .sim_system(systems::step_navmesh3d)
+            .sim_system(check)
+            .run_headless(700, |ctx| {
+                ctx.world.insert_resource(Tick(0));
+                ctx.world.insert_resource(carving_bake(&[hill()]));
+                for (from, to) in [
+                    (vec3(-6.0, 0.0, 0.5), vec3(6.0, 0.0, -0.5)),
+                    (vec3(0.5, 0.0, -6.0), vec3(-0.5, 0.0, 6.0)),
+                ] {
+                    let mut agent = NavAgent3D::default();
+                    agent.destination = Some(to.with_y(hill_height(to.x, to.z)));
+                    ctx.world
+                        .spawn((Transform3D::at(from.with_y(hill_height(from.x, from.z))), agent));
+                }
+            });
+        w.query::<&Transform3D>().iter().map(|t| t.position).collect()
+    }
+    let a = run();
+    for p in &a {
+        assert!(p.with_y(0.0).length() > 5.0, "did not arrive: {p}");
+    }
+    assert_eq!(a, run());
+}

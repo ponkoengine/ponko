@@ -425,6 +425,9 @@ features! {
     /// GPU buffers keep the elements this frame drew, for the next
     /// frame's motion vectors.
     BUFFER_PAST = 38, "buffer motion copy";
+    /// Depth of field: it swaps the frame between the lit frame and the
+    /// effects' scratch once more, like one more screen effect.
+    DOF = 39, "depth of field";
 }
 
 impl Features {
@@ -1184,12 +1187,39 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                     u(Hdr, A::Color),
                 ],
             ),
+            // Depth of field reads the frame where the screen effects left
+            // it, and writes the other image.
+            step(
+                "depth of field",
+                When {
+                    all: F::DOF,
+                    none: F::EFFECTS_ODD,
+                },
+                &[
+                    u(Hdr, A::Sample),
+                    u(SceneDepth, A::SampleMs),
+                    u(EffectScratch, A::Color),
+                ],
+            ),
+            step(
+                "depth of field back",
+                on(F::DOF.with(F::EFFECTS_ODD)),
+                &[
+                    u(EffectScratch, A::Sample),
+                    u(SceneDepth, A::SampleMs),
+                    u(Hdr, A::Color),
+                ],
+            ),
+            // The frame is in the scratch after an odd number of swaps:
+            // screen effects and depth of field.
             step(
                 "bloom",
                 on(F::BLOOM),
                 &[
-                    u(Hdr, A::Sample).off(F::EFFECTS_ODD),
-                    u(EffectScratch, A::Sample).on(F::EFFECTS_ODD),
+                    u(Hdr, A::Sample).off(F::EFFECTS_ODD.with(F::DOF)),
+                    u(Hdr, A::Sample).on(F::EFFECTS_ODD.with(F::DOF)),
+                    u(EffectScratch, A::Sample).on(F::EFFECTS_ODD).off(F::DOF),
+                    u(EffectScratch, A::Sample).on(F::DOF).off(F::EFFECTS_ODD),
                     u(BloomMips, A::Color),
                 ],
             ),
@@ -1197,8 +1227,10 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 "tone map",
                 When::ALWAYS,
                 &[
-                    u(Hdr, A::Sample).off(F::EFFECTS_ODD),
-                    u(EffectScratch, A::Sample).on(F::EFFECTS_ODD),
+                    u(Hdr, A::Sample).off(F::EFFECTS_ODD.with(F::DOF)),
+                    u(Hdr, A::Sample).on(F::EFFECTS_ODD.with(F::DOF)),
+                    u(EffectScratch, A::Sample).on(F::EFFECTS_ODD).off(F::DOF),
+                    u(EffectScratch, A::Sample).on(F::DOF).off(F::EFFECTS_ODD),
                     u(BloomMips, A::Sample).on(F::BLOOM),
                     u(Ldr, A::Color).on(F::FXAA),
                     u(SmaaInput, A::Color).on(F::SMAA),

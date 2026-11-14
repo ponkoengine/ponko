@@ -15,7 +15,7 @@
 //!   (shadow maps, sky, decal images, probe atlas). Whoever swaps one of
 //!   them makes the frame bind groups again (`Renderer3D::rebind_frames`).
 
-use super::{DEPTH_FORMAT, FrameUniform, HDR_FORMAT, PostTargets, Renderer3D, taa};
+use super::{FrameUniform, HDR_FORMAT, PostTargets, Renderer3D, taa};
 use crate::render::lights::LightTextures;
 use crate::render::traffic::{MIRRORED, Mirror, NewBuffer};
 
@@ -53,6 +53,7 @@ impl RenderTargets {
         device: &wgpu::Device,
         id: u32,
         samples: u32,
+        depth_format: wgpu::TextureFormat,
         sources: &FrameSources,
     ) -> Option<usize> {
         if let Some(i) = self.views.iter().position(|&(t, _)| t == id) {
@@ -83,7 +84,7 @@ impl RenderTargets {
         let frame_bind_group = sources.bind_group(device, &frame_buffer, &lights);
         let view = ViewTarget {
             color: target("3d target camera color", HDR_FORMAT),
-            depth: target("3d target camera depth", DEPTH_FORMAT),
+            depth: target("3d target camera depth", depth_format),
             resolve: texture.create_view(&Default::default()),
             frame_buffer,
             frame_mirror: Mirror::default(),
@@ -199,6 +200,7 @@ impl Renderer3D {
         self.targets.as_ref().is_none_or(|t| {
             t.size != size
                 || t.samples != self.samples
+                || t.depth.texture().format() != self.shaders.depth_format()
                 || t.ao.is_some() != self.screen.ao_enabled
                 || t.ao
                     .as_ref()
@@ -253,27 +255,34 @@ impl Renderer3D {
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
         );
         let scene_view = scene_texture.create_view(&Default::default());
-        let depth = target(
+        // With stencil bits once a material has a stencil (see `stencil.rs`);
+        // everything that reads it reads its depth only.
+        let depth_texture = texture(
             "3d depth",
-            DEPTH_FORMAT,
+            self.shaders.depth_format(),
             self.samples,
-            wgpu::TextureUsages::TEXTURE_BINDING,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         );
+        let depth = depth_texture.create_view(&Default::default());
+        let depth_read = depth_texture.create_view(&wgpu::TextureViewDescriptor {
+            aspect: wgpu::TextureAspect::DepthOnly,
+            ..Default::default()
+        });
         // Where the transparent pass can't sample the depth it tests
         // against (the GL backend), it samples a copy.
-        let depth_copy = self.depth_copy.as_ref().map(|c| c.target(device, &depth, size));
+        let depth_copy = self.depth_copy.as_ref().map(|c| c.target(device, &depth_read, size));
         let scene = scene_bind_group(
             device,
             &self.scene_layout,
             &scene_view,
-            depth_copy.as_ref().map_or(&depth, |c| &c.view),
+            depth_copy.as_ref().map_or(&depth_read, |c| &c.view),
             self.scene_depth_sampler.as_ref(),
         );
         let scene_of_hdr = scene_bind_group(
             device,
             &self.scene_layout,
             &hdr,
-            &depth,
+            &depth_read,
             self.scene_depth_sampler.as_ref(),
         );
         let velocity = self
@@ -285,7 +294,7 @@ impl Renderer3D {
             .taa
             .as_ref()
             .filter(|_| self.screen.taa_on)
-            .map(|t| t.targets(device, size, velocity.as_ref().unwrap().velocity(), &depth));
+            .map(|t| t.targets(device, size, velocity.as_ref().unwrap().velocity(), &depth_read));
         let lit = match &taa {
             Some(t) => &t.input_view,
             None => &hdr,
@@ -295,13 +304,13 @@ impl Renderer3D {
             .ssr
             .as_ref()
             .filter(|_| self.screen.ssr_on)
-            .map(|s| s.targets(device, size, &depth, lit, self.screen.ao_enabled));
+            .map(|s| s.targets(device, size, &depth_read, lit, self.screen.ao_enabled));
         // With reflections, GTAO writes the first level of their image.
         let ao = self.screen.ao.as_ref().filter(|_| self.screen.ao_enabled).map(|ao| {
             ao.targets(
                 device,
                 size,
-                &depth,
+                &depth_read,
                 &self.post.black,
                 ssr.as_ref().map(|s| &s.ao),
                 velocity.as_ref().map(|v| v.velocity()).unwrap_or(&self.post.black),
@@ -328,6 +337,7 @@ impl Renderer3D {
             post: self.post.targets(device, size, upscaled, &hdr, &scene_view),
             color: target("3d color", HDR_FORMAT, self.samples, none),
             depth,
+            depth_read,
             hdr_texture,
             scene_texture,
             scene,
@@ -369,8 +379,11 @@ pub(super) struct Targets {
     pub(super) scene_view: wgpu::TextureView,
     /// The scene bind group reading `hdr` (and `depth`), for effects.
     pub(super) scene_of_hdr: wgpu::BindGroup,
-    /// Multisampled depth, written by the prepass.
+    /// Multisampled depth, written by the prepass: the attachment (with
+    /// the stencil, when the scene depth has one).
     pub(super) depth: wgpu::TextureView,
+    /// `depth`'s depth alone, as the passes that sample it read it.
+    pub(super) depth_read: wgpu::TextureView,
     pub(super) size: (u32, u32),
 }
 
@@ -678,4 +691,52 @@ pub(in crate::render) fn scene_bind_group(
         layout,
         entries: &entries,
     })
+}
+
+impl RenderTargets {
+    /// Counts the game's render targets as textures, and what target
+    /// cameras and compute passes made for them as frame targets (their
+    /// frame uniforms and light grids as other memory; see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for (_, texture) in &self.textures {
+            t.texture(C::Textures, texture);
+        }
+        for (_, view) in &self.views {
+            t.view(C::FrameTargets, &view.color);
+            t.view(C::FrameTargets, &view.depth);
+            t.buffer(C::Other, &view.frame_buffer);
+            view.lights.tally_memory(t, C::Other);
+        }
+        for (_, compute) in &self.computes {
+            t.texture(C::FrameTargets, &compute.scratch);
+        }
+    }
+}
+
+impl Targets {
+    /// Counts the scene-sized targets and those of the effects that are on
+    /// as frame targets (see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for view in [&self.color, &self.hdr, &self.scene_view, &self.depth] {
+            t.view(C::FrameTargets, view);
+        }
+        if let Some(copy) = &self.depth_copy {
+            t.view(C::FrameTargets, &copy.view);
+        }
+        if let Some(taa) = &self.taa {
+            taa.tally_memory(t);
+        }
+        if let Some(velocity) = &self.velocity {
+            velocity.tally_memory(t);
+        }
+        if let Some(ao) = &self.ao {
+            ao.tally_memory(t);
+        }
+        if let Some(ssr) = &self.ssr {
+            ssr.tally_memory(t);
+        }
+        self.post.tally_memory(t);
+    }
 }

@@ -47,8 +47,10 @@ mod extraction_bench;
 pub use extraction_bench::{ExtractionBench, ExtractionSample};
 pub(crate) mod gi;
 mod gltf;
+mod gltf_ext;
 mod ik;
 pub(crate) mod instances;
+mod retarget;
 pub use instances::{BatchCulling, InstanceBatch, InstanceBatchOptions, InstanceLevel};
 mod lod;
 pub(crate) mod occlusion;
@@ -57,8 +59,11 @@ pub use gi::GlobalIllumination;
 pub(crate) use gi::MAX_GI_PROBES_PER_FRAME;
 pub use ik::{look_at_joint, two_bone_ik};
 pub use lod::{LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow};
+pub use retarget::{HumanBone, HumanoidMap, RetargetError, Retargeter};
 pub(crate) mod lights;
 mod material_variant;
+mod stencil;
+pub use stencil::{Stencil, StencilCompare, StencilFace, StencilOp};
 mod mesh;
 pub use lights::{LIGHT_SHADOW_ATLAS_SIZE, LIGHT_SHADOW_SIZE, MAX_LIGHT_SHADOW_VIEWS, PointLight3D, SpotLight3D};
 pub(crate) use lights::{MAX_LIGHT_SHADOW_RESOLUTION, MIN_LIGHT_SHADOW_RESOLUTION};
@@ -73,7 +78,7 @@ mod post;
 pub(crate) mod projected;
 pub use projected::{Decal3D, ReceivesDecals};
 pub(crate) mod probe;
-pub use probe::ReflectionProbe3D;
+pub use probe::{ProbeRefresh, ReflectionProbe3D, ReflectionRefresh3D};
 pub(crate) mod autotune;
 #[cfg(test)]
 mod extraction_test;
@@ -117,8 +122,9 @@ pub(crate) use collect::{
 pub(crate) use collect::{Frame3D, MAX_SHADOW_RESOLUTION, MIN_SHADOW_RESOLUTION, SHADOW_MAP_SIZE};
 pub use compute::{Compute, ComputePass, GpuBuffer};
 pub use effect::{Effect, ScreenEffect, TargetEffect};
+pub use gltf_ext::{ModelCamera, ModelLight, ModelLightKind, ModelProjection};
 pub use mesh::{MeshData, MorphFrame, MorphTarget};
-pub use post::{AmbientOcclusion, AntiAliasing, Post, Tonemap};
+pub use post::{AmbientOcclusion, AntiAliasing, DepthOfField, Post, PostVolume, SplitToning, Tonemap};
 pub(crate) use post::{MAX_RENDER_SCALE, MIN_RENDER_SCALE};
 #[cfg(feature = "window")]
 pub(crate) use post::{PostUniform, scaled_size};
@@ -452,6 +458,9 @@ pub struct MaterialDesc {
     /// `custom_array2` there (`texture_2d_array<f32>`), each read as its
     /// [`TextureKind`] says.
     pub custom_arrays: [Option<TextureArray>; 3],
+    /// Stencil test and writes; `None` (the default) is none. See
+    /// [`Stencil`] for when they happen and the drawing order they keep.
+    pub stencil: Option<Stencil>,
 }
 
 impl Default for MaterialDesc {
@@ -472,6 +481,7 @@ impl Default for MaterialDesc {
             custom: [Vec4::ZERO; 4],
             custom_textures: [None; 2],
             custom_arrays: [None; 3],
+            stencil: None,
         }
     }
 }
@@ -523,6 +533,8 @@ impl MaterialDesc {
         custom_textures: [Option<Texture>; 2] => with_custom_textures;
         /// Sets [`custom_arrays`](Self::custom_arrays), the texture arrays for a custom shader.
         custom_arrays: [Option<TextureArray>; 3] => with_custom_arrays;
+        /// Sets [`stencil`](Self::stencil), the stencil test and writes.
+        stencil: Option<Stencil> => with_stencil;
     }
 }
 
@@ -584,7 +596,10 @@ pub struct ShadowMesh(pub Option<Mesh>);
 /// its head but whose shadow should still show, or for a caster that only
 /// stands in for others. Works on plain models and on skinned ones (posed by
 /// a [`Skeleton`] or [`SkinOf`]); [`LodGroup`]s, terrain and instance
-/// batches don't read it. Remove it to show the model again.
+/// batches don't read it. Remove it to show the model again. Editor picking
+/// still selects a shadow-only model, so it can be found and edited.
+///
+/// In scene files it's `"ShadowOnly": null`.
 ///
 /// ```no_run
 /// # use ponko::prelude::*;
@@ -593,7 +608,7 @@ pub struct ShadowMesh(pub Option<Mesh>);
 /// ctx.world.insert(body, ponko::render::ShadowOnly);
 /// # }
 /// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Component)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, Component)]
 pub struct ShadowOnly;
 
 /// Draws the entity's [`Model`] with this material instead of the ones its
@@ -1049,6 +1064,8 @@ pub(crate) struct Assets3D {
     pub loaded_clips: std::collections::HashMap<crate::assets::Origin, Vec<AnimationClip>>,
     /// The joints of skinned glTF files, by where they were found (file or asset source).
     pub loaded_skeletons: std::collections::HashMap<crate::assets::Origin, Skeleton>,
+    /// The lights and cameras glTF files place, by where they were found.
+    pub loaded_placed: std::collections::HashMap<crate::assets::Origin, (Vec<ModelLight>, Vec<ModelCamera>)>,
     /// Meshes set to cast no shadow (`Graphics::set_mesh_shadows`), by id;
     /// shorter than `bounds` when the last ones cast.
     pub shadowless: Vec<bool>,
@@ -1370,6 +1387,8 @@ mod c_api_mirror {
             custom: _,
             custom_textures: _,
             custom_arrays: _,
+            // C: `ponko_ctx_create_material_with_stencil` and `ponko_ctx_update_material_with_stencil`.
+            stencil: _,
         } = MaterialDesc::default();
         let ParticleSettings3D {
             rate: _,

@@ -20,6 +20,9 @@ use ponko::render::{
     MeshData, Model, ModelMaterial, Post, ScreenEffect, Sky, TargetCamera, TargetEffect, Tonemap,
 };
 #[allow(unused_imports)]
+#[cfg(feature = "3d")]
+use ponko::render::{DepthOfField, PostVolume};
+#[allow(unused_imports)]
 use ponko::render::{GpuFeature, GpuTier};
 #[allow(unused_imports)]
 #[cfg(feature = "3d")]
@@ -289,6 +292,123 @@ fn speed_lens(ctx: &mut Ctx, speed: f32) {
     ctx.scene3d.post.lens_scale = 1.0 + 0.04 * rush; // hide the pulled-in edges
 }
 // ANCHOR_END: lens
+
+// ANCHOR: split_toning
+/// Teal shadows, orange highlights: a film look.
+fn teal_and_orange(ctx: &mut Ctx) {
+    let tone = &mut ctx.scene3d.post.split_toning;
+    tone.shadows = Color::rgb(0.35, 0.55, 0.6);
+    tone.highlights = Color::rgb(0.7, 0.5, 0.35);
+    tone.balance = 0.1; // a little more of the picture counts as highlights
+}
+// ANCHOR_END: split_toning
+
+// ANCHOR: depth_of_field
+/// Focus on the person the camera talks to; the background melts away.
+fn close_up(ctx: &mut Ctx, speaker: Vec3) {
+    let dof = &mut ctx.scene3d.post.depth_of_field;
+    dof.enabled = true;
+    dof.focus_distance = ctx.scene3d.camera.position.distance(speaker);
+    dof.focus_range = 0.5; // half a meter either side stays sharp
+    dof.blur = 0.015;
+}
+// ANCHOR_END: depth_of_field
+
+// ANCHOR: post_volumes
+/// The looks of a level: outdoors everywhere, a cave and a sunset garden.
+struct Looks {
+    outdoors: Post,
+    volumes: Vec<PostVolume>,
+}
+
+fn looks() -> Looks {
+    let outdoors = Post::default();
+    let mut cave = outdoors;
+    cave.exposure = 1.0; // eyes adjusted to the dark
+    cave.saturation = 0.6;
+    cave.split_toning.shadows = Color::rgb(0.35, 0.45, 0.65);
+    let mut garden = outdoors;
+    garden.temperature = 0.4;
+    garden.bloom = 0.2;
+    garden.split_toning.highlights = Color::rgb(0.75, 0.5, 0.35);
+    Looks {
+        outdoors,
+        volumes: vec![
+            // Boxes: center, size, how far outside they fade out, the look.
+            PostVolume::new(vec3(0.0, 2.0, -20.0), vec3(8.0, 6.0, 20.0), 4.0, cave),
+            PostVolume::new(vec3(0.0, 2.0, -55.0), vec3(20.0, 10.0, 20.0), 6.0, garden),
+        ],
+    }
+}
+
+/// Every frame, after the camera moved: the look where the camera is.
+fn blend_looks(ctx: &mut Ctx) {
+    let camera = ctx.scene3d.camera.position;
+    let looks = ctx.world.resource::<Looks>();
+    ctx.scene3d.post = PostVolume::blend(&looks.outdoors, &looks.volumes, camera);
+}
+// ANCHOR_END: post_volumes
+
+#[test]
+fn split_toning_and_depth_of_field_stay_as_set() {
+    Game::new("t", 1, 1).run_headless(1, |ctx| {
+        assert!(ctx.scene3d.post.split_toning.is_neutral(), "off by default");
+        assert!(!ctx.scene3d.post.depth_of_field.enabled, "off by default");
+        teal_and_orange(ctx);
+        assert!(!ctx.scene3d.post.split_toning.is_neutral());
+        ctx.scene3d.camera.position = Vec3::ZERO;
+        close_up(ctx, vec3(0.0, 0.0, -3.0));
+        let dof = ctx.scene3d.post.depth_of_field;
+        assert_eq!(dof.focus_distance, 3.0);
+        assert_eq!(dof.blur_at(3.4), 0.0, "the speaker is sharp");
+        assert_eq!(dof.blur_at(30.0), 0.015, "the background is not");
+    });
+}
+
+/// What the camera saw on its walk, a value per tick.
+#[derive(Default)]
+struct Walk {
+    exposures: Vec<f32>,
+    temperatures: Vec<f32>,
+}
+
+#[test]
+fn walking_between_two_volumes_blends_their_looks_smoothly() {
+    let world = Game::new("t", 1, 1)
+        .sim_system(|ctx: &mut Ctx| {
+            // From outside, through the cave, to the garden, 20 cm a tick.
+            let steps = ctx.world.resource::<Walk>().exposures.len();
+            ctx.scene3d.camera.position = vec3(0.0, 1.7, 10.0 - steps as f32 * 0.2);
+            blend_looks(ctx);
+            let (exposure, temperature) = (ctx.scene3d.post.exposure, ctx.scene3d.post.temperature);
+            let walk = ctx.world.resource_mut::<Walk>();
+            walk.exposures.push(exposure);
+            walk.temperatures.push(temperature);
+        })
+        .setup(|ctx| {
+            ctx.world.insert_resource(looks());
+            ctx.world.insert_resource(Walk::default());
+        })
+        .run_headless(340);
+    let walk = world.resource::<Walk>();
+    assert_eq!(walk.exposures.len(), 340);
+    assert_eq!(walk.exposures[0], 0.0, "outdoors at the start");
+    assert!(walk.exposures.contains(&1.0), "the cave's look inside it");
+    assert_eq!(*walk.temperatures.last().unwrap(), 0.4, "the garden's look at the end");
+    for (name, values, full) in [
+        ("exposure", &walk.exposures, 1.0),
+        ("temperature", &walk.temperatures, 0.4),
+    ] {
+        for pair in values.windows(2) {
+            // No tick jumps: the fastest fade (4 m) moves at most 1.5x
+            // its average slope in one 20 cm step.
+            assert!(
+                (pair[1] - pair[0]).abs() <= full * 1.5 * 0.2 / 4.0 + 1e-4,
+                "{name} jumps: {pair:?}"
+            );
+        }
+    }
+}
 
 #[test]
 fn lens_settings_stay_as_set() {
@@ -1041,6 +1161,53 @@ fn recolored(ctx: &mut Ctx, house: Mesh, gold: Material, rust: Material) {
 }
 // ANCHOR_END: model_material
 
+// ANCHOR: stencil
+/// Crossing glass strips that blend once where they overlap, and a crate
+/// with an outline only around it.
+fn stencil_effects(ctx: &mut Ctx) {
+    use ponko::render::{Blend, Stencil};
+    let glass = ctx.gfx.create_material(
+        MaterialDesc::color(Color::rgba(0.3, 0.7, 1.0, 0.45))
+            .with_blend(Blend::Transparent)
+            .with_stencil(Stencil::once(1)),
+    );
+    let strip = ctx.gfx.create_mesh(&MeshData::cube(1.0), glass);
+    for scale in [vec3(3.0, 0.5, 0.05), vec3(0.5, 3.0, 0.05)] {
+        ctx.world.spawn((
+            Transform {
+                scale,
+                ..Transform::at(vec3(-3.0, 1.0, 0.0))
+            },
+            Model::new(strip),
+        ));
+    }
+    // The crate marks the stencil; its larger copy draws after it (order 1),
+    // only where the crate didn't.
+    let wood = ctx
+        .gfx
+        .create_material(MaterialDesc::color(Color::hex(0xB07A45)).with_stencil(Stencil::mark(2)));
+    let glow = ctx.gfx.create_material(
+        MaterialDesc::color(Color::BLACK)
+            .with_emissive(Color::hex(0xFFD040))
+            .with_stencil(Stencil::outside(2).with_order(1)),
+    );
+    let body = ctx.gfx.create_mesh(&MeshData::cube(1.4), wood);
+    let outline = ctx.gfx.create_mesh(&MeshData::cube(1.55), glow);
+    ctx.world.spawn((Transform::default(), Model::new(body)));
+    ctx.world.spawn((Transform::default(), Model::new(outline)));
+}
+// ANCHOR_END: stencil
+
+#[test]
+fn stencil_materials_are_made_headless() {
+    Game::new("t", 1, 1).run_headless(2, |ctx| {
+        let before = ctx.live_counts().materials;
+        stencil_effects(ctx);
+        assert_eq!(ctx.live_counts().materials, before + 3);
+        assert_eq!(ctx.world.query::<&Model>().iter().count(), 4);
+    });
+}
+
 #[test]
 fn one_plain_mesh_is_drawn_in_each_models_material() {
     Game::new("t", 1, 1).run_headless(2, |ctx| {
@@ -1520,6 +1687,43 @@ fn lod_hysteresis_is_a_scene_component() {
         let e = ctx.world.spawn((Transform::default(),));
         ctx.world.set_json(e, "LodHysteresis", serde_json::json!(0.1)).unwrap();
         assert_eq!(ctx.world.get::<LodHysteresis>(e), Some(&LodHysteresis(0.1)));
+    });
+}
+
+#[test]
+fn shadow_only_survives_a_saved_and_loaded_world() {
+    Game::new("t", 1, 1).run_headless(0, |ctx| {
+        let body = ctx.world.spawn((Transform::default(), ponko::render::ShadowOnly));
+        let plain = ctx.world.spawn((Transform::default(),));
+        assert_eq!(ctx.world.get_json(body, "ShadowOnly").unwrap(), serde_json::Value::Null);
+        let save = ctx.world.save();
+        ctx.world.clear();
+        ctx.world.load(&save).unwrap();
+        assert!(ctx.world.has::<ponko::render::ShadowOnly>(body));
+        assert!(!ctx.world.has::<ponko::render::ShadowOnly>(plain));
+    });
+}
+
+#[test]
+fn scene_files_with_shadow_only_spawn_it() {
+    let file = TempAsset::new("shadow-only-scene.json");
+    let scene = serde_json::json!({
+        "format": "ponko-world",
+        "version": 1,
+        "entities": [
+            { "entity": 0, "components": {
+                "Transform3D": { "position": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+                "ShadowOnly": null,
+            } },
+        ],
+        "resources": {},
+    });
+    file.write(&serde_json::to_string(&scene).unwrap());
+    let name = file.name().to_string();
+    Game::new("t", 1, 1).run_headless(0, move |ctx| {
+        ctx.load_scene(&name).unwrap();
+        let count = ctx.world.query::<&ponko::render::ShadowOnly>().iter().count();
+        assert_eq!(count, 1);
     });
 }
 

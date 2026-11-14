@@ -82,7 +82,58 @@ pause. Sim systems run after the step by default, so a pause set in one
 holds the next tick's step; put the system in `Phase::BeforePhysics` to hold
 this tick's. The flag lives on `ctx.physics`, not in the world: a save
 doesn't keep it. The [Ember Hop](ember-hop.md#physics) pause screen works
-this way. 3D physics (`ctx.physics3d`) has no such switch yet.
+this way.
+
+### Pausing only 3D physics
+
+3D physics has the same switch on its own world, `ctx.physics3d`:
+
+<div class="lang-pair">
+<div>
+
+```rust
+fn pause_menu(ctx: &mut Ctx) {
+    if ctx.input.key_pressed(Key::Escape) {
+        let held = ctx.physics3d.is_paused();
+        ctx.physics3d.set_paused(!held); // the 3D step only
+    }
+}
+
+Game::new("Explorer", 1280, 720)
+    .physics3d(vec3(0.0, -9.81, 0.0))
+    .sim_system(pause_menu);
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:physics3d_pause}}
+```
+
+</div>
+</div>
+
+It holds the same things as the 2D one, and a few more that only 3D has:
+bodies keep their pose and velocity, a
+[character](physics3d.md#a-walking-character) keeps its `velocity` but
+doesn't move (a jump goes on where it stopped), vehicles, joints and
+ragdolls hold, no collision events arrive and no
+[contact hook](physics3d.md#contact-modification) runs. In a window, bodies
+are drawn at their last pose instead of being blended between two steps.
+Headless runs honour it, and as in 2D a save taken while paused holds the
+paused poses and velocities but not the flag, and loading one doesn't clear
+it. The [Shard Grove](shard-grove.md#the-warden-and-the-crawlers) menus work
+this way.
+
+Why one call per world and not one call for both: the two physics worlds
+are separate services with their own steps (`step_physics` and
+`step_physics3d`), and a game that has both may want to hold just one of
+them (a 2D minimap game inside a 3D world, say). Each world's flag sits
+next to its gravity and its queries, so `ctx.physics3d.set_paused` reads
+like `ctx.physics.set_paused`, and C and C++ follow the same pattern
+(`ponko_ctx_set_physics3d_paused`, `ctx.set_physics3d_paused`). Holding
+both is two calls.
 
 ## What the clock guarantees
 

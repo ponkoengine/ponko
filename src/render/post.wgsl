@@ -1,7 +1,8 @@
 // Post-processing of the 3D frame: bloom (a mip chain of downsamples and
 // upsamples, as in Jimenez's "Next generation post processing in Call of
 // Duty"), then exposure, white balance, contrast, saturation, tone mapping,
-// a color lookup table, vignette, chromatic aberration and lens distortion.
+// split toning, a color lookup table, vignette, chromatic aberration and
+// lens distortion.
 
 struct Post {
     grade: vec4<f32>,   // exposure multiplier, bloom, contrast, saturation
@@ -11,6 +12,10 @@ struct Post {
     output: vec4<f32>,  // scaling: one output pixel in uv, sharpness, scene size / output size
     lens: vec4<f32>,    // distortion: theta (1/theta pinching), sigma, 1/scale, 1 barrel -1 pinch 0 off
     fringe: vec4<f32>,  // x: chromatic aberration amount (0 off)
+    split_shadows: vec4<f32>,    // split toning: shadows' tint, balance
+    split_highlights: vec4<f32>, // highlights' tint, 1 on (0 off)
+    dof: vec4<f32>,     // depth of field: focus distance, sharp range, largest blur (0 off)
+    camera: vec4<f32>,  // near and far planes
 };
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -190,6 +195,30 @@ fn to_srgb(c: vec3<f32>) -> vec3<f32> {
     return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3<f32>(0.0031308));
 }
 
+fn from_srgb(c: vec3<f32>) -> vec3<f32> {
+    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
+}
+
+// Soft light (the W3C formula): a blend of 0.5 changes nothing, above
+// brightens and tints, below darkens.
+fn soft_light(a: vec3<f32>, b: vec3<f32>) -> vec3<f32> {
+    let d = select(sqrt(a), ((16.0 * a - 12.0) * a + 4.0) * a, a <= vec3<f32>(0.25));
+    let dark = a - (1.0 - 2.0 * b) * a * (1.0 - a);
+    let light = a + (2.0 * b - 1.0) * (d - a);
+    return select(light, dark, b <= vec3<f32>(0.5));
+}
+
+// Split toning on the tone mapped color, in sRGB (as the tints are picked):
+// the shadows' tint weighs most where the picture is dark, the highlights'
+// where it is bright, the balance moving the split.
+fn split_tone(c: vec3<f32>) -> vec3<f32> {
+    var s = to_srgb(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)));
+    let light = clamp(luma(s) + post.split_shadows.w * 0.5, 0.0, 1.0);
+    s = soft_light(s, mix(vec3<f32>(0.5), post.split_shadows.rgb, 1.0 - light));
+    s = soft_light(s, mix(vec3<f32>(0.5), post.split_highlights.rgb, light));
+    return from_srgb(s);
+}
+
 // The lookup table is read with sRGB-encoded coordinates and returns
 // linear color (its texture is sRGB): a neutral table changes nothing.
 fn apply_lut(c: vec3<f32>) -> vec3<f32> {
@@ -263,6 +292,9 @@ fn fs_tonemap(in: Full) -> @location(0) vec4<f32> {
     c = 0.18 * pow(c / 0.18 + 1e-6, vec3<f32>(post.grade.z));
     c = max(mix(vec3<f32>(luma(c)), c, post.grade.w), vec3<f32>(0.0));
     c = tonemap(c);
+    if post.split_highlights.w != 0.0 {
+        c = split_tone(c);
+    }
     if post.mode.y != 0u {
         c = apply_lut(c);
     }

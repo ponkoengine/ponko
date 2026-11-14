@@ -304,6 +304,11 @@ using material = PonkoMaterial;
 /// What a material is made from (Rust `MaterialDesc`): color, roughness, metallic, emissive, textures (each
 /// used when its `has_` flag is set) and `blend` (ponko::blend). Start from material_of.
 using material_desc = PonkoMaterialDesc;
+/// A material's stencil state (Rust `Stencil`): start from stencil_once, stencil_mark, stencil_inside or
+/// stencil_outside, and pass it to ctx::create_material or ctx::update_material.
+using stencil = PonkoStencil;
+/// One side's stencil test and operations (Rust `StencilFace`): PonkoStencilCompare and PonkoStencilOp values.
+using stencil_face = PonkoStencilFace;
 /// A material shader in WGSL (ctx::load_shader, ctx::create_shader).
 using shader = PonkoShader;
 /// A compute pass shader in WGSL (ctx::load_compute, ctx::create_compute).
@@ -430,6 +435,29 @@ enum class text_align3d : uint32_t { left = 0, center = 1, right = 2 };
 /// Which strings are shaped (Rust `TextShaping`), for ctx::set_text_shaping: `automatic` shapes every
 /// non-ASCII string and keeps ASCII on the per-character fast path; `always` shapes ASCII too (ligatures).
 enum class text_shaping : uint32_t { automatic = PONKO_TEXT_SHAPING_AUTO, always = PONKO_TEXT_SHAPING_ALWAYS };
+/// The form of a word that goes with a number (Rust `PluralCategory`), by the Unicode CLDR's plural
+/// categories: English has `one` and `other`, Arabic all six. See ponko::plural.
+enum class plural_category : uint32_t {
+    zero = PONKO_PLURAL_ZERO, one = PONKO_PLURAL_ONE, two = PONKO_PLURAL_TWO,
+    few = PONKO_PLURAL_FEW, many = PONKO_PLURAL_MANY, other = PONKO_PLURAL_OTHER
+};
+/// One argument of ctx::format and ui::tree::set_text_key (Rust `(name, Arg)`): the placeholder
+/// `{name}` it fills and its value. Make one with ponko::arg; an argument named `count` picks a
+/// plural form. The strings are borrowed: keep them alive for the call.
+using string_arg = PonkoStringArg;
+/// A text argument for the placeholder `{name}`.
+inline string_arg arg(const char* name, const char* text) { return string_arg{name, PONKO_STRING_ARG_TEXT, text, 0, 0.0}; }
+/// A whole-number argument for `{name}`, written with the language's digits and separators.
+inline string_arg arg(const char* name, long long value) { return string_arg{name, PONKO_STRING_ARG_INT, nullptr, value, 0.0}; }
+/// A whole-number argument for `{name}` (an `int`).
+inline string_arg arg(const char* name, int value) { return arg(name, static_cast<long long>(value)); }
+/// A number argument for `{name}`: as many decimals as the placeholder asks for (`{time:1}`).
+inline string_arg arg(const char* name, double value) { return string_arg{name, PONKO_STRING_ARG_NUMBER, nullptr, 0, value}; }
+/// A language with a string table: its code (`"en"`) and its name for a menu (`"English"`).
+struct string_language {
+    std::string code; ///< The language's code.
+    std::string name; ///< Its name, from the table's `name`.
+};
 /// Where a system runs in the loop, in this order. `input` through `sim_last`
 /// run once per fixed tick (also headless); `frame` through `draw` once per
 /// rendered frame. sim_system uses after_physics, system frame, late_system late.
@@ -852,6 +880,16 @@ inline model model_of(mesh m, color tint = colors::white) { model x = ponko_mode
 /// A plain material of one color: roughness 0.6, not metallic. Change
 /// roughness, metallic, emissive or set a texture on the result.
 inline material_desc material_of(color c) { return ponko_material_desc(c); }
+/// A stencil that tests and writes nothing (Rust `Stencil::default`).
+inline stencil stencil_default() { return ponko_stencil_default(); }
+/// Draws everywhere and writes `reference` where it drew (Rust `Stencil::mark`).
+inline stencil stencil_mark(std::uint8_t reference) { return ponko_stencil_mark(reference); }
+/// Draws only where the stencil holds `reference` (Rust `Stencil::inside`).
+inline stencil stencil_inside(std::uint8_t reference) { return ponko_stencil_inside(reference); }
+/// Draws only where the stencil doesn't hold `reference` (Rust `Stencil::outside`).
+inline stencil stencil_outside(std::uint8_t reference) { return ponko_stencil_outside(reference); }
+/// Draws each pixel at most once, writing `reference` there (Rust `Stencil::once`).
+inline stencil stencil_once(std::uint8_t reference) { return ponko_stencil_once(reference); }
 /// Runs `e`, reading its values and textures from `m` (or from the default
 /// material when `m` is left out).
 ///@{
@@ -1245,6 +1283,11 @@ inline graphics_quality graphics_quality_for_tier(gpu_tier t) {
 /// features the fallback and the reason. Needs no GPU.
 inline std::string gpu_tier_report(gpu_tier t) {
     return detail::read_text([&](char* b, std::size_t c, std::size_t* n) { return ponko_gpu_tier_report(uint32_t(t), b, c, n); });
+}
+/// The plural form `count` takes in `language` (Rust `ponko::locale::plural_category`): "en" gives
+/// `one` for 1, "ru" gives `few` for 3, "ar" gives `many` for 11.
+inline plural_category plural(const char* language, double count) {
+    PonkoPluralCategory c{}; detail::check(ponko_plural_category(language, count, &c)); return plural_category(c);
 }
 /// Whether every GPU of tier `t` has feature `f`. Needs no GPU.
 inline bool gpu_tier_has(gpu_tier t, gpu_feature f) {
@@ -1876,6 +1919,13 @@ public:
     void set_saved(entity e, bool saved) { valid(); detail::check(ponko_world_set_saved(raw_, e, saved)); }
     /// Whether world saves hold `e` (see set_saved). Throws if `e` is dead.
     bool saved(entity e) const { valid(); bool result = false; detail::check(ponko_world_is_saved(raw_, e, &result)); return result; }
+    /// Whether only the shadow maps draw `e`'s model (Rust `ShadowOnly`):
+    /// true hides it from every camera while its shadow still falls, false
+    /// shows it again. Saves and scene files keep it. Throws if `e` is dead.
+    void set_shadow_only(entity e, bool shadow_only) { valid(); detail::check(ponko_world_set_shadow_only(raw_, e, shadow_only)); }
+    /// Whether only the shadow maps draw `e`'s model (see set_shadow_only).
+    /// Throws if `e` is dead.
+    bool shadow_only(entity e) const { valid(); bool result = false; detail::check(ponko_world_is_shadow_only(raw_, e, &result)); return result; }
     /// How many entities are alive.
     std::size_t size() const { valid(); std::size_t result = 0; detail::check(ponko_world_len(raw_, &result)); return result; }
     /// A copy of `e`'s `T`; throws if `e` is dead or has no `T` (see try_get).
@@ -3540,6 +3590,15 @@ public:
     void set_paint(id node, const paint& p) { const PonkoUiPaint c = p.raw(); detail::check(ponko_ctx_ui_set_paint(raw_, target_, node, &c)); }
     /// Sets a label's, button's or text input's text.
     void set_text(id node, const char* text) { detail::check(ponko_ctx_ui_set_text(raw_, target_, node, text)); }
+    /// Makes `node`'s text the string table key `key` with `args` (Rust `set_text_key`): it shows the
+    /// current language's text and font from the next frame on and follows when the language changes.
+    /// set_text replaces the key with plain text.
+    void set_text_key(id node, const char* key, const std::vector<string_arg>& args = {}) {
+        detail::check(ponko_ctx_ui_set_text_key(raw_, target_, node, key, args.data(), args.size()));
+    }
+    /// Gives every node that holds a key its text in the current language now (Rust `localize`): the
+    /// engine does it before each frame; call it when driving the UI by hand.
+    void localize() { detail::check(ponko_ctx_ui_localize(raw_, target_)); }
     /// A label's, button's or text input's text.
     std::string text(id node) const {
         std::size_t len = 0;
@@ -5122,6 +5181,10 @@ public:
     material create_material(const material_desc& d) { material m{}; detail::check(ponko_ctx_create_material(raw_, &d, &m)); return m; }
     /// Changes a material: every model drawn with it changes too.
     void update_material(material m, const material_desc& d) { detail::check(ponko_ctx_update_material(raw_, m, &d)); }
+    /// A material with a stencil state (see the guide's "Stencil").
+    material create_material(const material_desc& d, const stencil& s) { material m{}; detail::check(ponko_ctx_create_material_with_stencil(raw_, &d, &s, &m)); return m; }
+    /// Changes a material and its stencil state; update_material without one takes it off.
+    void update_material(material m, const material_desc& d, const stencil& s) { detail::check(ponko_ctx_update_material_with_stencil(raw_, m, &d, &s)); }
     /// The materials loaded from glTF files so far that the files call
     /// `name`, with what each was made from: to give them a shader of your
     /// own with update_material.
@@ -6073,6 +6136,47 @@ public:
     /// `set_system_font_fallback`). Returns whether this build can search them.
     bool set_system_font_fallback(bool on) { bool available = false; detail::check(ponko_ctx_set_system_font_fallback(raw_, on, &available)); return available; }
 
+    // Localization (Rust `ponko::locale`): string tables, the current language, keyed text.
+    /// Loads a string table file from the assets (Rust `assets.load_strings`); the first is the
+    /// reference language and the current one. Throws ponko::error if it can't.
+    void load_strings(const char* path) { detail::check(ponko_ctx_load_strings(raw_, path)); }
+    /// Adds a string table from its JSON text, or replaces the table of the same language.
+    void insert_strings_json(const char* json) { detail::check(ponko_ctx_strings_insert_json(raw_, json)); }
+    /// Switches to `language` (a code with a table, or "en-XA", the pseudo-locale); false for an
+    /// unknown code, which keeps the current language. Keyed UI text follows on the next frame.
+    bool set_language(const char* language) { bool known = false; detail::check(ponko_ctx_strings_set_language(raw_, language, &known)); return known; }
+    /// The current language's code.
+    std::string language() const {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_strings_language(raw_, b, c, l); });
+    }
+    /// The languages with a table, the reference language first: for a language menu.
+    std::vector<string_language> languages() const {
+        std::size_t n = 0;
+        detail::check(ponko_ctx_strings_language_count(raw_, &n));
+        std::vector<string_language> out;
+        for (std::size_t i = 0; i < n; ++i) {
+            std::size_t ignored = 0;
+            std::string code = detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_strings_language_at(raw_, i, b, c, l, nullptr, 0, &ignored); });
+            std::string name = detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_strings_language_at(raw_, i, nullptr, 0, &ignored, b, c, l); });
+            out.push_back(string_language{std::move(code), std::move(name)});
+        }
+        return out;
+    }
+    /// Whether the current language is written right to left.
+    bool language_is_rtl() const { bool b = false; detail::check(ponko_ctx_strings_is_rtl(raw_, &b)); return b; }
+    /// Sets the font `language`'s keyed UI text is drawn with (Rust `strings.set_font`).
+    void set_language_font(const char* language, font f) { detail::check(ponko_ctx_strings_set_font(raw_, language, f)); }
+    /// The current language's font, if it has one: draw its text with it.
+    std::optional<font> language_font() const { bool has = false; font f{}; detail::check(ponko_ctx_strings_font(raw_, &has, &f)); return has ? std::optional<font>(f) : std::nullopt; }
+    /// `key`'s text in the current language with `args` in its placeholders (Rust `strings.format`).
+    std::string format(const char* key, const std::vector<string_arg>& args = {}) const {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_strings_format(raw_, key, args.data(), args.size(), b, c, l); });
+    }
+    /// Every language's missing keys, plural forms and arguments, one per line; empty when complete.
+    std::string missing_strings() const {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_ctx_strings_missing_report(raw_, b, c, l); });
+    }
+
     // UI widgets (screen space), styled by ui_style().
     /// The immediate-mode UI style.
     ponko::ui_style ui_style() const { ponko::ui_style s{}; detail::check(ponko_ctx_ui_style(raw_, &s)); return s; }
@@ -6343,6 +6447,16 @@ public:
     // 3D physics (game::physics3d), as of the last physics step. Not inside query callbacks.
     /// Changes 3D gravity, in m/s².
     void set_gravity3d(vec3 gravity) { detail::check(ponko_ctx_set_gravity3d(raw_, gravity)); }
+    /// Holds the 3D physics step (`true`) or lets it run again; every other system keeps
+    /// running. While held, bodies and characters stay put, keeping their velocity, and no
+    /// collision events are sent. The 3D counterpart of `set_physics_paused`.
+    void set_physics3d_paused(bool paused) { detail::check(ponko_ctx_set_physics3d_paused(raw_, paused)); }
+    /// Whether `set_physics3d_paused` holds the 3D physics step.
+    bool is_physics3d_paused() {
+        bool paused = false;
+        detail::check(ponko_ctx_is_physics3d_paused(raw_, &paused));
+        return paused;
+    }
     /// A heightfield from the same n x n heights and `size` as
     /// create_terrain_tile (NaN for holes): give mesh_collider(it) to a
     /// fixed body at the tile's transform3d (its corner).

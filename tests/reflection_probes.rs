@@ -95,3 +95,49 @@ fn a_fifth_environment_is_refused() {
         );
     });
 }
+
+#[test]
+fn a_refresh_request_needs_a_live_probe_and_gives_it_a_slot() {
+    use ponko::d3::{ProbeRefresh, ReflectionRefresh};
+    Game::new("probe", 1, 1).run_headless(0, |ctx| {
+        let entity = ctx.world.spawn((
+            Transform3D::default(),
+            ReflectionProbe3D::default(),
+            ReflectionRefresh {
+                when: ProbeRefresh::Every(5.0),
+                blend_seconds: 0.5,
+            },
+        ));
+        ctx.gfx.refresh_reflection_probe(&mut ctx.world, entity).unwrap();
+        let content = ctx.world.get::<ReflectionProbe3D>(entity).unwrap().content;
+        assert_ne!(content, 0, "the request allocates the probe's environment");
+        ctx.gfx.refresh_reflection_probe(&mut ctx.world, entity).unwrap();
+        assert_eq!(ctx.world.get::<ReflectionProbe3D>(entity).unwrap().content, content);
+        // Baking it at once still works on a refreshing probe, in the same slot.
+        ctx.gfx.bake_reflection_probe(&mut ctx.world, entity).unwrap();
+        assert_eq!(ctx.world.get::<ReflectionProbe3D>(entity).unwrap().content, content);
+        let bare = ctx.world.spawn((Transform3D::default(),));
+        let err = ctx.gfx.refresh_reflection_probe(&mut ctx.world, bare).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NotFound);
+        let empty = ctx.world.spawn((
+            Transform3D::default(),
+            ReflectionProbe3D {
+                size: Vec3::ZERO,
+                ..Default::default()
+            },
+        ));
+        let err = ctx.gfx.refresh_reflection_probe(&mut ctx.world, empty).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Invalid);
+    });
+}
+
+#[test]
+fn refresh_settings_default_to_on_demand_with_a_one_second_blend_and_load_from_partial_json() {
+    use ponko::d3::{ProbeRefresh, ReflectionRefresh};
+    let refresh = ReflectionRefresh::default();
+    assert_eq!(refresh.when, ProbeRefresh::OnDemand);
+    assert_eq!(refresh.blend_seconds, 1.0);
+    let loaded: ReflectionRefresh = serde_json::from_str(r#"{"when":{"LightingChanged":0.05}}"#).unwrap();
+    assert_eq!(loaded.when, ProbeRefresh::LightingChanged(0.05));
+    assert_eq!(loaded.blend_seconds, 1.0);
+}

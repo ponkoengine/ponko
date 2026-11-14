@@ -45,6 +45,7 @@ pub(crate) struct GpuMaterialDesc {
     pub transparent: bool,
     pub cutout: bool,
     pub double_sided: bool,
+    pub stencil: Option<super::Stencil>,
 }
 
 impl GpuMaterialDesc {
@@ -77,6 +78,7 @@ impl GpuMaterialDesc {
             transparent: desc.blend == Blend::Transparent,
             cutout: desc.blend == Blend::Cutout,
             double_sided: desc.double_sided,
+            stencil: desc.stencil,
         }
     }
 }
@@ -764,6 +766,93 @@ impl Graphics {
         })
     }
 
+    /// The lights a glTF file places (`KHR_lights_punctual`), relative to
+    /// the model, loading the file like [`load_mesh`](Self::load_mesh) if it
+    /// isn't yet: none for a file without lights. Spawn point and spot
+    /// lights with [`ModelLight::spawn`](crate::render::ModelLight::spawn)
+    /// where the model is; a sun goes on [`Lighting`](crate::render::Lighting).
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// let at = ponko::d3::Transform::at(vec3(0.0, 0.0, -10.0));
+    /// let house = ctx.gfx.load_mesh("models/house.glb");
+    /// ctx.world.spawn((at, ponko::render::Model::new(house)));
+    /// for light in ctx.gfx.load_lights("models/house.glb") {
+    ///     light.spawn(&mut ctx.world, &at);
+    /// }
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// As [`load_mesh`](Self::load_mesh) does.
+    pub fn load_lights(&mut self, path: &str) -> Vec<crate::render::ModelLight> {
+        self.try_load_lights(path).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// [`load_lights`](Self::load_lights) with errors as values: those of
+    /// [`try_load_mesh`](Self::try_load_mesh).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let err = ctx.gfx.try_load_lights("models/missing.glb").unwrap_err();
+    ///     assert_eq!(err.kind(), ErrorKind::NotFound);
+    /// });
+    /// ```
+    pub fn try_load_lights(&mut self, path: &str) -> Result<Vec<crate::render::ModelLight>, crate::error::Error> {
+        let (_, origin) = self.load_mesh_from(path)?;
+        Ok(self
+            .assets3d
+            .loaded_placed
+            .get(&origin)
+            .map(|p| p.0.clone())
+            .unwrap_or_default())
+    }
+
+    /// The cameras a glTF file places, relative to the model, loading the
+    /// file like [`load_mesh`](Self::load_mesh) if it isn't yet: none for a
+    /// file without cameras. Look through one with
+    /// [`ModelCamera::apply`](crate::render::ModelCamera::apply).
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// let cameras = ctx.gfx.load_cameras("levels/intro.glb");
+    /// if let Some(shot) = cameras.iter().find(|c| c.name == "opening") {
+    ///     shot.apply(&mut ctx.scene3d.camera, &ponko::d3::Transform::default());
+    /// }
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// As [`load_mesh`](Self::load_mesh) does.
+    pub fn load_cameras(&mut self, path: &str) -> Vec<crate::render::ModelCamera> {
+        self.try_load_cameras(path).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// [`load_cameras`](Self::load_cameras) with errors as values: those of
+    /// [`try_load_mesh`](Self::try_load_mesh).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let err = ctx.gfx.try_load_cameras("models/missing.glb").unwrap_err();
+    ///     assert_eq!(err.kind(), ErrorKind::NotFound);
+    /// });
+    /// ```
+    pub fn try_load_cameras(&mut self, path: &str) -> Result<Vec<crate::render::ModelCamera>, crate::error::Error> {
+        let (_, origin) = self.load_mesh_from(path)?;
+        Ok(self
+            .assets3d
+            .loaded_placed
+            .get(&origin)
+            .map(|p| p.1.clone())
+            .unwrap_or_default())
+    }
+
     /// Loads a glTF model (`.glb`, or `.gltf` with its files next to it)
     /// from an [added asset source](crate::assets::Assets::add_source) or `assets/` as
     /// one [`Mesh`]: every mesh in the file's scene, where the file puts it, with its materials and their base color, normal,
@@ -886,6 +975,9 @@ impl Graphics {
             .map(|(range, m)| (range.clone(), materials[*m]))
             .collect();
         self.assets3d.loaded_clips.insert(file.clone(), loaded.clips);
+        self.assets3d
+            .loaded_placed
+            .insert(file.clone(), (loaded.lights, loaded.cameras));
         let skin = loaded.skin.map(|skin| {
             let skeleton = Skeleton::from_shared(skin.joints);
             let mesh_skin = MeshSkin::new(
@@ -1227,6 +1319,7 @@ impl Graphics {
         for file in freed {
             self.assets3d.loaded_skeletons.remove(&file);
             self.assets3d.loaded_clips.remove(&file);
+            self.assets3d.loaded_placed.remove(&file);
         }
         self.assets3d.loaded.retain(|_, m| *m != mesh);
         self.mesh_names.remove(mesh.id);
@@ -1471,35 +1564,58 @@ impl Ctx {
     /// them, the camera and the light to the renderer.
     /// What each target camera into a real render target sees.
     pub(crate) fn collect_views(&mut self, skins: &super::SkinFrame) {
-        let targets = &self.gfx.assets3d.render_targets;
         let mut capture_cameras = Vec::new();
         self.gfx.frame3d.probe_bakes.clear();
         self.gfx.frame3d.probe_uploads.clear();
+        self.gfx.frame3d.probe_refresh.clear();
         self.gfx.assets3d.probes.take_requests();
         self.gfx
             .frame3d
             .probe_uploads
             .extend(self.gfx.assets3d.probes.in_flight_uploads.iter().cloned());
+        let face_camera = |base: super::Camera3D, center: Vec3, face: usize| {
+            let (direction, up) = match face {
+                0 => (Vec3::X, Vec3::Y),
+                1 => (-Vec3::X, Vec3::Y),
+                2 => (Vec3::Y, -Vec3::Z),
+                3 => (-Vec3::Y, Vec3::Z),
+                4 => (Vec3::Z, Vec3::Y),
+                _ => (-Vec3::Z, Vec3::Y),
+            };
+            let mut camera = base;
+            camera.position = center;
+            camera.rotation = glam::Quat::from_mat3(&glam::Mat3::from_cols(direction.cross(up), up, -direction));
+            camera.fov_y = std::f32::consts::FRAC_PI_2;
+            camera.near = 0.05;
+            camera
+        };
         for &(slot, center) in &self.gfx.assets3d.probes.in_flight {
             let faces = self.gfx.assets3d.probes.captures[slot as usize - 1];
             self.gfx.frame3d.probe_bakes.push((slot, faces.map(|t| t.id)));
             for (face, target) in faces.into_iter().enumerate() {
-                let (direction, up) = match face {
-                    0 => (Vec3::X, Vec3::Y),
-                    1 => (-Vec3::X, Vec3::Y),
-                    2 => (Vec3::Y, -Vec3::Z),
-                    3 => (-Vec3::Y, Vec3::Z),
-                    4 => (Vec3::Z, Vec3::Y),
-                    _ => (-Vec3::Z, Vec3::Y),
-                };
-                let mut camera = self.scene3d.camera;
-                camera.position = center;
-                camera.rotation = glam::Quat::from_mat3(&glam::Mat3::from_cols(direction.cross(up), up, -direction));
-                camera.fov_y = std::f32::consts::FRAC_PI_2;
-                camera.near = 0.05;
-                capture_cameras.push(super::TargetCamera::new(camera, target));
+                capture_cameras.push(super::TargetCamera::new(
+                    face_camera(self.scene3d.camera, center, face),
+                    target,
+                ));
             }
         }
+        // Automatic refreshes: at most one face a frame.
+        let lighting = super::probe::lighting_key(&self.scene3d.lighting, &self.scene3d.sky);
+        let mut steps = std::mem::take(&mut self.gfx.frame3d.probe_refresh);
+        self.gfx
+            .schedule_probe_refresh(&mut self.world, self.time.frame_dt(), &lighting, &mut steps);
+        for step in &steps {
+            if let &super::probe::RefreshStep::Capture { slot, face, .. } = step {
+                let state = &self.gfx.assets3d.probes.refresh.slots[slot as usize - 1];
+                let target = self.gfx.assets3d.probes.captures[slot as usize - 1][face as usize];
+                capture_cameras.push(super::TargetCamera::new(
+                    face_camera(self.scene3d.camera, state.center, face as usize),
+                    target,
+                ));
+            }
+        }
+        self.gfx.frame3d.probe_refresh = steps;
+        let targets = &self.gfx.assets3d.render_targets;
         self.gfx.frame3d.probes.fill(Default::default());
         for (t, p) in self
             .world

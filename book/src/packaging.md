@@ -23,19 +23,19 @@ ponko package                 # for this computer: zip, app in a dmg, or tar.gz
 ponko package --web           # a folder to put on any static web host
 ```
 
-It builds the game in release, collects its assets and license files, writes
-`THIRD-PARTY-NOTICES.txt` for every library linked into it, lays the package
-out for the platform, archives it, and starts the packaged copy once to check
-it runs (the [smoke run](#the-smoke-run-of-any-package)). Everything goes to
+It builds the game in release, packs its assets into one file, collects its
+license files, writes `THIRD-PARTY-NOTICES.txt` for every library linked into
+it, lays the package out for the platform, archives it, and starts the
+packaged copy once to check it runs (the [smoke run](#the-smoke-run-of-any-package)). Everything goes to
 `target/package/` (`--out` elsewhere), named
 `<name>-<version>-<os>-<arch>`, for example `coin-dash-0.1.0-macos-aarch64`:
 
 | Platform | Layout | Archive (default) |
 |---|---|---|
-| Windows | a folder: `my_game.exe`, `assets/`, the licenses and notices | `.zip` |
-| macOS | `My Game.app` (the program in `Contents/MacOS`, assets, licenses and notices in `Contents/Resources`, the icon as `icon.icns`, an `Info.plist`), with the licenses and notices also beside the app | `.dmg` with a link to Applications (made with `hdiutil`, so on a Mac; elsewhere a `.zip`) |
+| Windows | a folder: `my_game.exe`, `assets.pack`, the licenses and notices | `.zip` |
+| macOS | `My Game.app` (the program in `Contents/MacOS`, `assets.pack`, licenses and notices in `Contents/Resources`, the icon as `icon.icns`, an `Info.plist`), with the licenses and notices also beside the app | `.dmg` with a link to Applications (made with `hdiutil`, so on a Mac; elsewhere a `.zip`) |
 | Linux | a folder, like Windows' | `.tar.gz` |
-| Web (`--web`) | a folder: `index.html`, `game.js`, `game_bg.wasm`, `assets/` with its `index.json`, the licenses and notices | none: upload the folder |
+| Web (`--web`) | a folder: `index.html`, `game.js`, `game_bg.wasm`, `assets.pack`, the licenses and notices | none: upload the folder |
 
 `--format` picks others (comma-separated `zip`, `tar.gz`, `dmg`, or `folder`:
 the plain folder without archive, and on macOS without app bundle). The zip and
@@ -44,7 +44,9 @@ needed on any OS, and they are reproducible: entries sorted, owned by root,
 with fixed dates, so packing the same files twice gives the same bytes. The
 engine finds the assets next to the program, and inside an app bundle in
 `Contents/Resources` ([below](#the-package)), so an unpacked game works from any
-folder.
+folder. The files under `assets/` ship as one asset pack, `assets.pack`
+([below](#assets-in-one-pack-ponko-pack)); `--no-pack` ships them as loose
+files in `assets/` instead.
 
 ### What goes in: `[package.metadata.ponko]`
 
@@ -57,6 +59,7 @@ name = "My Game"              # the name players see: the app, the web page's ti
 id = "com.example.my-game"    # a reverse-DNS id you own: the macOS bundle identifier
 icon = "assets/icon.png"      # a square PNG of 16 to 1024 pixels (a power of two; 512 or 1024 looks best)
 assets = ["assets"]           # folders or files, shipped at the same path next to the program
+pack = { exclude = ["**/*.psd"] }  # how files under assets/ go into assets.pack (or pack = false: loose)
 files = [                     # put at the package's top: licenses, a readme for players, notices
     "LICENSE-MIT",
     { from = "docs/PLAYER-README.txt", to = "README.txt" },
@@ -70,6 +73,7 @@ files = [                     # put at the package's top: licenses, a readme for
 | `icon` | none: macOS shows the generic app icon |
 | `assets` | `["assets"]` if that folder exists, else nothing; hidden files (`.DS_Store`) are left out |
 | `files` | the `LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*` files beside `Cargo.toml` |
+| `pack` | `true`: the files under `assets/` in one `assets.pack`; `false` ships them loose; a table sets packing up: `exclude` (patterns of files left out) and `textures = true` (images converted to KTX2 per `textures.json`, as `ponko pack --textures`) |
 
 Paths are relative to `Cargo.toml`. An unknown key, an id that isn't reverse
 DNS, a missing file and two files at one place in the package are errors that
@@ -84,6 +88,76 @@ workspace, `--manifest-path`, `--features`, `--no-default-features`,
 `--profile <name>` (default `release`), `--locked`, and `--no-build` to
 package what is already built (honouring `CARGO_BUILD_TARGET`). `ponko help
 package` lists them all.
+
+### Assets in one pack: `ponko pack`
+
+A shipped game reads its assets from one **asset pack**, `assets.pack`, where
+its `assets/` folder would be: next to the program, in a macOS app's
+`Contents/Resources`, next to the web page. `ponko package` writes it from the
+files under `assets/` (asset files elsewhere stay loose beside it), and the
+game reads it without a line of code: when a name isn't found as a loose file
+in an `assets/` folder, the engine looks in the `assets.pack` beside each of
+those folders. In development nothing changes: the loose files are found
+first, so they keep [hot reload](drawing.md#hot-reload), and a loose file
+beside a pack overrides the packed one.
+
+`ponko pack` makes a pack on its own, for a pipeline of your own or a pack of
+downloadable content that the game adds as a source
+([`PackSource`](asset-sources.md#packs)):
+
+```sh
+ponko pack                                  # assets/ -> target/assets.pack
+ponko pack art --out dist/forest.pack --exclude '**/*.psd'
+ponko pack --textures                       # with the images converted to KTX2 per assets/textures.json
+ponko pack --list target/assets.pack        # what a pack holds, checksums checked
+```
+
+A pack has an index (each file's name, size and CRC-32) followed by the
+files, each stored as it is or deflated: a file is deflated when that makes
+it at least a tenth smaller, and PNG, JPEG, Ogg and other compressed formats
+are stored. Identical files are stored once. Names are sorted and nothing
+records when or where the pack was made, so packing the same files gives the
+same bytes, and a reproducible build stays reproducible. `--textures` runs
+the conversion of [`ponko textures`](drawing.md#compressed-textures) on the way,
+into the pack instead of next to the images: each image whose
+`textures.json` kind isn't `skip` also goes in as a `.ktx2` of the same name
+(a `.ktx2` already in the folder and newer than its image and settings is
+packed as it is). The game decides which name it loads; `--exclude` leaves
+out the images it no longer needs. The format is documented in the engine's
+`src/assets/pack.rs`; the engine reads version 1 and says so when given
+another.
+
+The engine reads a pack file a file at a time (only the index is read when
+it opens), unpacks each file when it is loaded and checks its CRC-32, so a
+damaged pack fails with the name of the damaged file instead of loading
+garbage. On the web the page's pack is fetched before setup with at most two
+HTTP range requests: the first 64 KiB, which hold the index (and all of a
+small pack), then the rest; a server without range support sends the whole
+pack in answer to the first. C and C++ games get the default `assets.pack`
+the same way; `PackSource` itself has no C or C++ binding yet (a C game can
+read a pack of its own through `ponko_ctx_add_asset_source`).
+
+What a pack saves on the web, measured on Ember Hop's web package (26 asset
+files, 248 KiB loose, 170 KiB packed), five runs each in headless Chromium on
+an emulated network with `node web/smoke/first-load.mjs` (HTTP/1.1, cache
+off, on a laptop that was compiling at the same time; medians, runs within
+about 40 ms of each other):
+
+| Network | | Requests (for assets) | Asset phase | First frame |
+|---|---|---|---|---|
+| no throttling | loose | 30 (27) | 12 ms | 98 ms |
+| | packed | 5 (2) | 2 ms | 80 ms |
+| 40 ms, 20 Mbit/s | loose | 30 (27) | 292 ms | 6335 ms |
+| | packed | 5 (2) | 167 ms | 6215 ms |
+| 150 ms, 5 Mbit/s | loose | 30 (27) | 1055 ms | 24968 ms |
+| | packed | 5 (2) | 591 ms | 24502 ms |
+
+The asset phase runs from the first asset request to the last asset byte:
+it falls by more than 40% on both emulated networks, and 81 kB fewer bytes
+arrive. The first frame barely moves because the 14 MB release `.wasm`
+(built without `wasm-opt`) takes most of the time; a game with more assets
+gains more, and the request count falls from one per file to two whatever
+their number.
 
 ### The notices
 
@@ -146,9 +220,11 @@ are left unsigned. Release signing with the project's certificates is
 wasm32-unknown-unknown` and `cargo install wasm-bindgen-cli --version <the
 version in the game's Cargo.lock>` first; a different version is refused with
 the command to install the right one). The page is the engine's
-`web/index.html`, titled with the game's name and with the icon as favicon;
-`assets/index.json` lists the files under `assets/` the engine fetches before
-setup. Serve the folder from any static host (`python3 -m http.server -d
+`web/index.html`, titled with the game's name and with the icon as favicon,
+and its canvas names the pack (`<canvas id="ponko" data-pack="assets.pack">`),
+which the engine fetches before setup. With `--no-pack` the assets are loose
+and `assets/index.json` lists the files under `assets/` the engine fetches
+instead. Serve the folder from any static host (`python3 -m http.server -d
 <folder> 8000` locally). There is no smoke run for it: the browser runner in
 `web/smoke` is the engine's own test, not part of the command.
 
@@ -193,12 +269,14 @@ development headers, as for any example):
 
 ```sh
 git clone https://github.com/ponkoengine/ponko && cd ponko
-cargo run --release --example coin_dash      # play it
+cargo run --release --example coin_dash --features text-shaping   # play it
 cargo test --test coin_dash                  # the whole game, headlessly
 ```
 
 Move with the arrow keys, WASD or the left stick; Enter starts; Esc pauses; `O`
-opens the settings. A round is eight coins in twenty seconds. The best time and
+opens the settings, where the language button switches between English and
+Arabic (Arabic needs the `text-shaping` feature, which the package and the web
+build turn on; see [Localization](localization.md)). A round is eight coins in twenty seconds. The best time and
 the high score are saved (see [Your files](#your-files)).
 
 ## The package
@@ -214,9 +292,12 @@ files on every desktop:
 | File | What it is |
 |---|---|
 | `coin_dash` (`coin_dash.exe`) | The program |
-| `assets/coin_dash/coin.png` | The game's one asset, found next to the program |
+| `assets.pack` | The game's assets in one asset pack, found next to the program: |
+| `coin_dash/coin.png` in it | The coin picture |
+| `coin_dash/lang/en.json`, `ar.json` in it | The game's text in English and Arabic ([Localization](localization.md)) |
+| `coin_dash/fonts/` in it | The Arabic font, a subset of Noto Sans Arabic, with its license (`OFL.txt`) |
 | `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE` | The engine's and the game's license |
-| `CONTENT-NOTICES.txt` | What the game ships: the picture's author and license, "no sound files", "no font file" |
+| `CONTENT-NOTICES.txt` | What the game ships: the picture's and the tables' author and license, the font's license, "no sound files" |
 | `THIRD-PARTY-NOTICES.txt` | Every library linked into the program, with its declared license and the license texts its source ships |
 | `README.txt` | How to run it, the controls, where it saves |
 
@@ -229,8 +310,8 @@ that binary links, not every optional feature) and the license files in each
 crate's source, including the fonts' (`OFL.txt`, `UFL.txt`) in
 `epaint_default_fonts`. Identical texts are printed once, with the libraries
 that use them. `tests/coin_dash.rs` fails if a file under `assets/coin_dash/` is
-not named in `CONTENT-NOTICES.txt`, and the smoke test fails if it is not in the
-package's copy either. A library that declares no `license` (or `license_file`)
+not named in `CONTENT-NOTICES.txt`, and the smoke test fails if a file in the
+package's `assets.pack` isn't named there either. A library that declares no `license` (or `license_file`)
 fails the packaging by name instead of being listed as "unknown"; an example
 can link its package's dev-dependencies, so they are listed too. The script's
 `package` is [`ponko package --example coin_dash --format folder
@@ -255,7 +336,8 @@ from the environment), starts the program from a different, empty folder, and
 checks:
 
 1. the package's files, licenses and notices (including that the notices name
-   the libraries and the shipped asset);
+   the libraries and every file in `assets.pack`, which the script reads and
+   checks itself, and that no loose `assets/` folder ships beside it);
 2. a first run: the walk-through finishes, the asset was found and decoded, and
    `progress.json` and `settings.json` exist;
 3. a second run starts from them (`Loaded`) and adds a round;
@@ -264,8 +346,8 @@ checks:
 5. with no `PONKO_DATA_DIR`, files go to the operating system's data folder
    (a home folder of the test's own: `%APPDATA%`, `~/Library/Application
    Support`, `$XDG_DATA_HOME`);
-6. a copy of the package *without* `assets/` fails, and says which file it
-   could not find.
+6. a copy of the package *without* `assets.pack` fails, and names a file of
+   the pack it could not find (the first the game loads).
 
 `--mode window` repeats step 2 in a real window. Exit codes: 0 passed, 1 a
 check failed, 2 unsupported (no display or GPU, only without
@@ -306,7 +388,7 @@ every one of these cases for both files.
 ## The web build
 
 ```sh
-web/build.sh coin_dash && python3 -m http.server -d target/web/coin_dash 8000
+web/build.sh --features text-shaping coin_dash && python3 -m http.server -d target/web/coin_dash 8000
 ```
 
 builds the same game for the browser: the coin picture is fetched with the
@@ -422,7 +504,8 @@ title, pause and result screens show the current keys.
 ## C and C++
 
 This game is Rust only. A C or C++ game is packaged the same way: its
-executable, the `ponko_ffi` shared library next to it, its `assets/` folder,
+executable, the `ponko_ffi` shared library next to it, its `assets/` folder
+(or `assets.pack` from `ponko pack`),
 and the license files with `THIRD-PARTY-NOTICES.txt` from the release archive
 (see [C and C++](c-cpp.md#get-the-library)). The settings screen's calls exist
 in C++ too: `ctx.ui_retained().set_scale(scale)` and

@@ -180,6 +180,7 @@ pub mod __ffi {
 mod hot_reload;
 pub mod input;
 pub mod inventory;
+pub mod locale;
 
 #[cfg(feature = "inspector")]
 mod inspector;

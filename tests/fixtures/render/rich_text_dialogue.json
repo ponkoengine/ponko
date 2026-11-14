@@ -1,0 +1,17 @@
+{
+  "name": "rich_text_dialogue",
+  "scene": "a wrapping retained UI label 240 units wide at (8, 8), 20 unit text in the built-in font: \"Mira:\" in #ffcc00, then white text with a 32x32 button glyph (a green disc with a dark square) inline, as tall as the text; on black, 256x96, drawn with the window's sprite pipeline into an sRGB target",
+  "width": 256,
+  "height": 96,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 24,
+    "outliers": 0.004,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "bd48cea337aaf4e8",
+  "reason": "New reference for rich text in labels (#412): a dialogue line with a colored name, an inline button glyph and wrapping"
+}

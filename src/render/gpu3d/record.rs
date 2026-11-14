@@ -150,6 +150,64 @@ impl Kind {
     }
 }
 
+impl Renderer3D {
+    /// The stencil operations of a pass on the scene depth: `None` while it
+    /// has no stencil bits or for a read-only pass, else cleared to 0
+    /// (`Some(true)`) or kept (`Some(false)`), and stored.
+    pub(super) fn stencil_ops(&self, clear: Option<bool>) -> Option<wgpu::Operations<u32>> {
+        let depth = clear.map(|clear| wgpu::Operations {
+            load: if clear {
+                wgpu::LoadOp::Clear(1.0)
+            } else {
+                wgpu::LoadOp::Load
+            },
+            store: wgpu::StoreOp::Store,
+        });
+        super::stencil::ops(self.shaders.depth_format() == super::stencil::STENCIL_FORMAT, depth)
+    }
+
+    /// The role material `id` (`m`) draws with in `kind`'s pass, or `None`
+    /// when it isn't drawn there (see [`PipelineRole::for_pass`]). Solid
+    /// stencil materials skip the depth prepass and the motion vectors and
+    /// write their own depth in the opaque pass (see `stencil.rs`).
+    pub(super) fn draw_role(&self, kind: Kind, id: u32, m: &GpuMaterial) -> Option<PipelineRole> {
+        let stencil_solid = !m.cutout && !m.transparent && self.stencil.has(id);
+        if stencil_solid && matches!(kind, Kind::Velocity | Kind::VelocityStill) {
+            return None;
+        }
+        PipelineRole::for_pass(
+            kind.pass(),
+            m.cutout,
+            m.transparent,
+            self.samples > 1,
+            self.full_prepass() && !stencil_solid,
+        )
+    }
+
+    /// The pipeline material `id` draws with: its stencil pipeline in the
+    /// color passes when it has a stencil, its shader's otherwise.
+    pub(super) fn draw_pipeline<'a>(
+        &'a self,
+        shader: &'a super::shaders::ShaderPipelines,
+        id: u32,
+        variant: ShaderVariant,
+        kind: Kind,
+        role: PipelineRole,
+    ) -> Option<&'a wgpu::RenderPipeline> {
+        if matches!(kind, Kind::Opaque | Kind::Transparent)
+            && let Some(pipeline) = self.stencil.pipeline(
+                id,
+                variant.instancing,
+                role,
+                kind == Kind::Transparent && self.stencil_read_only,
+            )
+        {
+            return Some(pipeline);
+        }
+        shader.variant(variant).for_kind(kind, role)
+    }
+}
+
 /// Whether a still model drawn with `shader` moves on its own, for the
 /// motion pass: its `vertex` reads the time, or a GPU buffer that keeps its
 /// last frame (`kept`).
@@ -469,7 +527,7 @@ impl Renderer3D {
                     let clear = if capture { wgpu::Color::TRANSPARENT } else { clear };
                     self.draw_view(encoder, target, runs, *batch_view, clear, time);
                 }
-                self.environment.probes(encoder);
+                self.environment.probes(encoder, time);
             }
             Part::Gi => self.record_gi(encoder, time),
             Part::Prepass => {
@@ -483,7 +541,7 @@ impl Renderer3D {
                             load: wgpu::LoadOp::Clear(1.0),
                             store: wgpu::StoreOp::Store,
                         }),
-                        stencil_ops: None,
+                        stencil_ops: self.stencil_ops(Some(true)),
                     }),
                     timestamp_writes: time("depth prepass"),
                     occlusion_query_set: None,
@@ -579,18 +637,21 @@ impl Renderer3D {
                             depth_ops: Some(wgpu::Operations {
                                 load: wgpu::LoadOp::Load,
                                 // Later passes read it (the motion pass,
-                                // scene compute passes and screen effects
-                                // too); without a solid
+                                // scene compute passes, screen effects and
+                                // depth of field too); without a solid
                                 // prepass, it's only complete here.
                                 store: checks.store(
                                     passes::OPAQUE,
                                     "color",
                                     frame_checks::Kept::Depth,
                                     if split
+                                        // Solid stencil materials write theirs here.
+                                        || self.stencil.any()
                                         || self.screen.taa_on
                                         || !self.effects.frame.is_empty()
                                         || !self.effects.target_frame.is_empty()
                                         || !self.lists.scene_computes.is_empty()
+                                        || self.post.depth_of_field_on()
                                         || !self.full_prepass()
                                         // The occlusion grid is reduced from it below.
                                         || (!self.solid_prepass && self.occlusion.recording())
@@ -601,7 +662,7 @@ impl Renderer3D {
                                     },
                                 ),
                             }),
-                            stencil_ops: None,
+                            stencil_ops: self.stencil_ops(Some(false)),
                         }),
                         timestamp_writes: time("opaque"),
                         occlusion_query_set: None,
@@ -753,7 +814,7 @@ impl Renderer3D {
                         },
                         store: wgpu::StoreOp::Store,
                     }),
-                    stencil_ops: None,
+                    stencil_ops: self.stencil_ops(Some(first)),
                 }),
                 timestamp_writes: timestamps,
                 occlusion_query_set: None,
@@ -794,7 +855,7 @@ impl Renderer3D {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
                     }),
-                    stencil_ops: None,
+                    stencil_ops: self.stencil_ops(Some(true)),
                 }),
                 timestamp_writes: time("target cameras"),
                 occlusion_query_set: None,
@@ -837,7 +898,7 @@ impl Renderer3D {
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Discard,
                 }),
-                stencil_ops: None,
+                stencil_ops: self.stencil_ops(Some(false)),
             }),
             timestamp_writes: time("target cameras"),
             occlusion_query_set: None,
@@ -912,7 +973,7 @@ impl Renderer3D {
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 }),
-                stencil_ops: None,
+                stencil_ops: self.stencil_ops(Some(false)),
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
@@ -1020,6 +1081,8 @@ impl Renderer3D {
         let mut bound = None;
         let mut bound_material = u32::MAX;
         let mut bound_buffers = None;
+        // Unknown: an earlier call in the pass may have set any.
+        let mut bound_reference = u32::MAX;
         for ((mesh, start, models), only_part) in runs {
             let fading = mesh & FADED != 0;
             let mesh = mesh & !FADED;
@@ -1064,13 +1127,7 @@ impl Renderer3D {
                 // The role for the material's blend in this pass (see
                 // `PipelineRole::for_pass`): transparent surfaces are drawn
                 // last and cast no shadows.
-                let Some(role) = PipelineRole::for_pass(
-                    kind.pass(),
-                    m.cutout,
-                    m.transparent,
-                    self.samples > 1,
-                    self.full_prepass(),
-                ) else {
+                let Some(role) = self.draw_role(kind, *material, m) else {
                     continue;
                 };
                 let shader = &self.shaders.sets[m.shader as usize];
@@ -1082,13 +1139,19 @@ impl Renderer3D {
                 // `warm_pipelines` built them while loading).
                 let variant = ShaderVariant::new(Sides::of(m.double_sided), Instancing::of(fading, storage.is_some()));
                 lookups += 1;
-                let Some(pipeline) = shader.variant(variant).for_kind(kind, role) else {
+                let Some(pipeline) = self.draw_pipeline(shader, *material, variant, kind, role) else {
                     continue;
                 };
                 if bound != Some(pipeline as *const _) {
                     pass.set_pipeline(pipeline);
                     n.pipelines += 1;
                     bound = Some(pipeline as *const _);
+                }
+                if let Some(reference) = self.stencil.reference(*material)
+                    && bound_reference != reference
+                {
+                    pass.set_stencil_reference(reference);
+                    bound_reference = reference;
                 }
                 if !buffers_set && bound_buffers != Some((vertices, indices, previous)) {
                     pass.set_vertex_buffer(0, vertices.slice(..));

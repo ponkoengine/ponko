@@ -3,7 +3,7 @@
 use super::gpu::GpuTexture;
 use super::gpu3d::*;
 #[allow(unused_imports)]
-use crate::d3::{ReflectionProbe as ReflectionProbe3D, Transform as Transform3D};
+use crate::d3::{ProbeRefresh, ReflectionProbe as ReflectionProbe3D, ReflectionRefresh, Transform as Transform3D};
 use crate::prelude::*;
 #[allow(unused_imports)]
 use crate::render::{MaterialDesc, Mesh, MeshData, Model, Sky};
@@ -168,9 +168,11 @@ impl Rig {
     /// One frame, read back as RGBA8.
     fn draw(&mut self) -> Vec<u8> {
         self.register_captures();
-        let ctx = &mut self.ctx;
         let skins = SkinFrame::default();
-        ctx.collect_views(&skins);
+        self.ctx.collect_views(&skins);
+        // A refreshing probe gets its slot while the views are collected.
+        self.register_captures();
+        let ctx = &mut self.ctx;
         ctx.gfx.frame3d.collect(
             &mut ctx.world,
             &ctx.gfx.assets3d,
@@ -702,4 +704,330 @@ fn the_atmosphere_has_no_dark_streak_at_negative_x() {
         max_difference <= 3.0,
         "azimuth-invariant atmosphere has a dark streak at -X: {max_difference}"
     );
+}
+
+/// Sets the frame time the next frames run with (`Ctx::new` starts at 0).
+fn frame_time(rig: &mut Rig, dt: f32) {
+    rig.ctx.time.begin_frame(crate::time::FrameTiming {
+        dt,
+        fixed_steps: 0,
+        alpha: 0.0,
+    });
+}
+
+/// The mean colour of the mirror ball of radius 1.5 at `centre`, over its
+/// middle (in sRGB levels): what it reflects.
+fn ball_colour(rig: &Rig, pixels: &[u8], centre: Vec3) -> Vec3 {
+    let view_proj = rig.ctx.scene3d.camera.view_proj();
+    let middle = screen(view_proj, centre);
+    let right = rig.ctx.scene3d.camera.rotation * Vec3::X;
+    let radius = (screen(view_proj, centre + right * 1.5) - middle).length() * 0.7;
+    let (mut sum, mut count) = (Vec3::ZERO, 0.0f32);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            if (Vec2::new(x as f32 + 0.5, y as f32 + 0.5) - middle).length() <= radius {
+                sum += rgb(pixels, x, y);
+                count += 1.0;
+            }
+        }
+    }
+    sum / count.max(1.0)
+}
+
+/// A mirror ball inside a probe box, looked at; the probe refreshes as
+/// `refresh` says. The sky is one colour all round.
+fn refreshing_room(refresh: Option<ReflectionRefresh>) -> Option<(Rig, Entity)> {
+    let mut rig = Rig::new()?;
+    rig.ctx.scene3d.camera.position = vec3(0.0, 0.0, -6.0);
+    rig.ctx.scene3d.camera.look_at(Vec3::ZERO);
+    rig.ctx.scene3d.sky.sky_color = Color::rgb(0.1, 0.2, 0.9);
+    rig.ctx.scene3d.sky.ground_color = Color::rgb(0.1, 0.2, 0.9);
+    let ball = rig.mesh(&MeshData::sphere(1.5, 32), mirror(Color::WHITE));
+    rig.ctx.world.spawn((Transform3D::default(), Model::new(ball)));
+    let probe = ReflectionProbe3D {
+        size: Vec3::splat(10.0),
+        blend_distance: 0.0,
+        ..Default::default()
+    };
+    let probe = match refresh {
+        Some(refresh) => rig.ctx.world.spawn((Transform3D::default(), probe, refresh)),
+        None => rig.ctx.world.spawn((Transform3D::default(), probe)),
+    };
+    frame_time(&mut rig, 1.0 / 60.0);
+    Some((rig, probe))
+}
+
+/// The ball's colour over `frames` frames.
+fn ball_over(rig: &mut Rig, frames: usize) -> Vec<Vec3> {
+    (0..frames)
+        .map(|_| {
+            let pixels = rig.draw();
+            ball_colour(rig, &pixels, Vec3::ZERO)
+        })
+        .collect()
+}
+
+/// The largest change of the ball's colour from one frame to the next.
+fn largest_step(colours: &[Vec3]) -> f32 {
+    colours
+        .windows(2)
+        .map(|w| (w[1] - w[0]).abs().max_element())
+        .fold(0.0, f32::max)
+}
+
+#[test]
+fn a_refreshing_probe_follows_a_sky_change_and_blends_in_without_a_pop() {
+    let refresh = ReflectionRefresh {
+        when: ProbeRefresh::LightingChanged(0.02),
+        blend_seconds: 0.5,
+    };
+    let Some((mut rig, probe)) = refreshing_room(Some(refresh)) else {
+        return;
+    };
+    let blue = *ball_over(&mut rig, 50).last().unwrap();
+    assert!(
+        blue.z > blue.x + 40.0,
+        "the refreshed probe shows the blue sky by itself: {blue}"
+    );
+    // Sunset: the sky turns orange at once.
+    rig.ctx.scene3d.sky.sky_color = Color::rgb(0.9, 0.35, 0.05);
+    rig.ctx.scene3d.sky.ground_color = Color::rgb(0.9, 0.35, 0.05);
+    let after = ball_over(&mut rig, 60);
+    // A bake now, for what the ball shows with the orange sky captured.
+    rig.ctx.gfx.bake_reflection_probe(&mut rig.ctx.world, probe).unwrap();
+    let baked = *ball_over(&mut rig, 2).last().unwrap();
+    let last = *after.last().unwrap();
+    assert!(
+        baked.x > baked.z + 40.0,
+        "a bake with the orange sky reflects it: {baked}"
+    );
+    assert!(
+        (last - baked).abs().max_element() < 6.0,
+        "the refresh ends where a bake does: {last} vs {baked}"
+    );
+    // While the new capture is made, the old one is shown...
+    let capturing = largest_step(&[&[blue][..], &after[..ReflectionRefresh::REFRESH_STEPS as usize - 1]].concat());
+    assert!(capturing < 3.0, "the old capture holds while capturing: {capturing}");
+    // ...then it moves over half a second (30 frames), never in a jump.
+    let total = (last - blue).abs().max_element();
+    let step = largest_step(&after);
+    eprintln!("probe refresh: largest step {step} of {total}");
+    assert!(
+        step < total / 8.0,
+        "the change is spread over the blend: largest step {step} of {total}"
+    );
+
+    // Negative control: without a blend, the same change is one pop.
+    let Some((mut rig, _)) = refreshing_room(Some(ReflectionRefresh {
+        blend_seconds: 0.0,
+        ..refresh
+    })) else {
+        return;
+    };
+    ball_over(&mut rig, 50);
+    rig.ctx.scene3d.sky.sky_color = Color::rgb(0.9, 0.35, 0.05);
+    rig.ctx.scene3d.sky.ground_color = Color::rgb(0.9, 0.35, 0.05);
+    let popped = largest_step(&ball_over(&mut rig, 30));
+    assert!(
+        popped > total * 0.7,
+        "with no blend the change is one jump: {popped} of {total}"
+    );
+}
+
+#[test]
+fn a_probe_that_never_refreshes_keeps_the_old_sky() {
+    let Some((mut rig, probe)) = refreshing_room(Some(ReflectionRefresh {
+        when: ProbeRefresh::Never,
+        blend_seconds: 0.5,
+    })) else {
+        return;
+    };
+    rig.ctx.gfx.bake_reflection_probe(&mut rig.ctx.world, probe).unwrap();
+    ball_over(&mut rig, 2);
+    rig.ctx.scene3d.sky.sky_color = Color::rgb(0.9, 0.35, 0.05);
+    rig.ctx.scene3d.sky.ground_color = Color::rgb(0.9, 0.35, 0.05);
+    let stale = *ball_over(&mut rig, 60).last().unwrap();
+    assert!(
+        stale.z > stale.x + 40.0,
+        "a probe that never refreshes still shows the blue sky: {stale}"
+    );
+    // On demand: a request brings the new sky in.
+    rig.ctx.world.get_mut::<ReflectionRefresh>(probe).unwrap().when = ProbeRefresh::OnDemand;
+    rig.ctx.gfx.refresh_reflection_probe(&mut rig.ctx.world, probe).unwrap();
+    let fresh = *ball_over(&mut rig, 60).last().unwrap();
+    assert!(
+        fresh.x > fresh.z + 40.0,
+        "a requested refresh shows the orange sky: {fresh}"
+    );
+}
+
+#[test]
+fn a_day_night_cycle_keeps_a_refreshing_probe_matching_one_baked_every_frame() {
+    let Some(mut rig) = Rig::new() else { return };
+    // Two mirror balls, each in its own probe's box: one refreshes by
+    // itself, the other is baked again every frame (the reference).
+    rig.ctx.scene3d.camera.position = vec3(0.0, 1.0, -9.0);
+    rig.ctx.scene3d.camera.look_at(Vec3::ZERO);
+    rig.ctx.scene3d.sky.atmosphere = true;
+    rig.ctx.scene3d.sky.stars = 0.0;
+    rig.ctx.scene3d.lighting.sun_intensity = 3.0;
+    let ball = rig.mesh(&MeshData::sphere(1.5, 32), mirror(Color::WHITE));
+    let (left, right) = (vec3(2.2, 0.0, 0.0), vec3(-2.2, 0.0, 0.0));
+    let probe = ReflectionProbe3D {
+        size: Vec3::splat(4.0),
+        blend_distance: 0.0,
+        ..Default::default()
+    };
+    for at in [left, right] {
+        rig.ctx.world.spawn((Transform3D::at(at), Model::new(ball)));
+    }
+    rig.ctx.world.spawn((
+        Transform3D::at(left),
+        probe,
+        ReflectionRefresh {
+            when: ProbeRefresh::LightingChanged(0.02),
+            blend_seconds: 0.25,
+        },
+    ));
+    let baked = rig.ctx.world.spawn((Transform3D::at(right), probe));
+    frame_time(&mut rig, 1.0 / 30.0);
+    // Afternoon to dusk over 20 s at 30 frames a second: the sun from 40
+    // degrees up to 5 below (a whole day in under three minutes).
+    let sun = |t: f32| {
+        let elevation = (40.0 - 45.0 * t).to_radians();
+        -vec3(elevation.cos() * 0.8, elevation.sin(), elevation.cos() * 0.6)
+    };
+    rig.ctx.scene3d.lighting.sun_direction = sun(0.0);
+    for _ in 0..30 {
+        rig.ctx.gfx.bake_reflection_probe(&mut rig.ctx.world, baked).unwrap();
+        rig.draw();
+    }
+    let frames = 600;
+    let (mut worst, mut worst_step, mut previous) = (0.0f32, 0.0f32, None);
+    let (mut first, mut last) = (Vec3::ZERO, Vec3::ZERO);
+    for frame in 0..frames {
+        rig.ctx.scene3d.lighting.sun_direction = sun(frame as f32 / frames as f32);
+        rig.ctx.gfx.bake_reflection_probe(&mut rig.ctx.world, baked).unwrap();
+        let pixels = rig.draw();
+        let (refreshing, reference) = (ball_colour(&rig, &pixels, left), ball_colour(&rig, &pixels, right));
+        worst = worst.max((refreshing - reference).abs().max_element());
+        if let Some(previous) = previous {
+            let step: Vec3 = refreshing - previous;
+            worst_step = worst_step.max(step.abs().max_element());
+        }
+        previous = Some(refreshing);
+        if frame == 0 {
+            first = reference;
+        }
+        last = reference;
+    }
+    let change = (last - first).abs().max_element();
+    eprintln!("day-night: largest gap to the reference {worst}, largest step {worst_step}, sky change {change}");
+    assert!(
+        change > 40.0,
+        "the sky changes a lot from day to dusk: {first} to {last}"
+    );
+    // A probe baked once at the start would be off by the whole change; the
+    // refreshing one trails the reference by about a second at most (the
+    // capture's 14 frames, the blend, and a capture waiting on a blend).
+    assert!(
+        worst < change / 4.0,
+        "the refreshing probe stays close to one baked every frame: {worst} of {change}"
+    );
+    assert!(worst_step < 4.0, "and changes smoothly: largest step {worst_step}");
+}
+
+#[test]
+fn a_refreshing_probes_own_textures_count_as_probes() {
+    let Some((mut rig, _)) = refreshing_room(Some(ReflectionRefresh::default())) else {
+        return;
+    };
+    let probes = |rig: &Rig| {
+        let mut t = crate::render::memory::MemoryTally::default();
+        rig.renderer.tally_memory(&mut t);
+        t.finish().probes
+    };
+    let before = probes(&rig);
+    ball_over(&mut rig, 2);
+    let after = probes(&rig);
+    // The cube strip (768 x 128) and the maps' copy (896 x 256), 8 bytes a texel.
+    let staging = (768 * 128 + 896 * 256) * 8;
+    assert!(
+        after >= before + staging,
+        "the refresh's copy is counted: {before} then {after}"
+    );
+}
+
+/// Cost of each step of a probe refresh in a scene of 400 cubes: the wall
+/// time of a whole frame (recording, GPU work and the read back, waited
+/// for) with that step, against frames without one. Run in release
+/// (`cargo test --release --lib --features 3d -- --ignored --nocapture
+/// probe_refresh_cost`). Wall time, not GPU timestamps: some adapters
+/// report no time for many of these small passes.
+#[test]
+#[ignore = "benchmark: run in release"]
+fn probe_refresh_cost() {
+    let Some((mut rig, probe)) = refreshing_room(Some(ReflectionRefresh {
+        when: ProbeRefresh::OnDemand,
+        blend_seconds: 0.25,
+    })) else {
+        return;
+    };
+    let cube = rig.mesh(&MeshData::cube(1.0), matte(Color::rgb(0.8, 0.6, 0.4)));
+    for i in 0..20 {
+        for j in 0..20 {
+            let at = vec3(
+                i as f32 * 2.0 - 19.0,
+                -3.0 + ((i * j) % 5) as f32 * 0.3,
+                j as f32 * 2.0 - 19.0,
+            );
+            rig.ctx.world.spawn((Transform3D::at(at), Model::new(cube)));
+        }
+    }
+    use crate::three::probe::RefreshStep;
+    let kind = |steps: &[RefreshStep]| {
+        let work = steps.iter().find(|s| !matches!(s, RefreshStep::Seed(_)));
+        match work {
+            None => "none",
+            Some(RefreshStep::Capture { .. }) => "capture a face",
+            Some(RefreshStep::Filter { face: 0, .. }) => "lay out and filter face 0",
+            Some(RefreshStep::Filter { .. }) => "filter a face",
+            Some(RefreshStep::Harmonics(_)) => "harmonics",
+            Some(RefreshStep::Finish(_)) => "diffuse light",
+            Some(RefreshStep::Blend { .. }) => "blend",
+            Some(RefreshStep::Seed(_)) => unreachable!(),
+        }
+    };
+    let mut times = std::collections::BTreeMap::<&str, Vec<f64>>::new();
+    for round in 0..21 {
+        if round > 0 {
+            rig.ctx.gfx.refresh_reflection_probe(&mut rig.ctx.world, probe).unwrap();
+        }
+        for _ in 0..40 {
+            let start = std::time::Instant::now();
+            rig.draw();
+            let ms = start.elapsed().as_secs_f64() * 1000.0;
+            if round > 0 {
+                times
+                    .entry(kind(&rig.ctx.gfx.frame3d.probe_refresh))
+                    .or_default()
+                    .push(ms);
+            }
+        }
+    }
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    let none = median(times.get_mut("none").expect("frames without a step"));
+    println!("probe refresh: frame without a step: median {none:.3} ms");
+    for (kind, v) in &mut times {
+        let m = median(v);
+        let high = v[v.len() * 9 / 10];
+        println!(
+            "probe refresh: {kind}: median {m:.3} ms (+{:.3}), 90th percentile {high:.3} ms, {} frames",
+            m - none,
+            v.len()
+        );
+    }
 }

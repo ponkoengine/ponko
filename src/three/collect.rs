@@ -81,6 +81,8 @@ pub(crate) struct Frame3D {
     pub probes: [super::probe::ProbeUniform; 4],
     pub probe_uploads: Vec<(u32, std::sync::Arc<Vec<u16>>)>,
     pub probe_bakes: Vec<(u32, [u32; 6])>,
+    /// This frame's steps of automatic probe refreshes.
+    pub probe_refresh: Vec<super::probe::RefreshStep>,
     pub particles: super::particles::ParticleFrame,
     pub lights: super::lights::LightGrid,
     /// Projected decals, in the lights' grid.
@@ -93,6 +95,10 @@ pub(crate) struct Frame3D {
     /// without shadows.
     pub shadow_runs: [Vec<(u32, u32, u32)>; MAX_SHADOW_VIEWS],
     pub view_proj: Mat4,
+    /// The camera's near and far planes, for turning depth into distance
+    /// (depth of field). Zero until a camera sets them: the renderer then
+    /// uses a default camera's.
+    pub camera_planes: (f32, f32),
     /// How many cascades are drawn: 0 without shadows.
     pub cascades: usize,
     /// The sun's shadow map size, the largest light shadow view's and the
@@ -376,6 +382,7 @@ impl Frame3D {
                 .filter_map(|(i, &off)| off.then_some(i as u32)),
         );
         self.view_proj = camera.view_proj();
+        self.camera_planes = (camera.near, camera.far);
         self.particles.collect(world, camera);
         self.shadow_size = lighting.shadow_size(self.size_limit);
         self.light_shadow_size = lighting.light_shadow_size(self.size_limit);
@@ -1050,6 +1057,22 @@ impl Culler<'_> {
             sphere[3],
             (caster[3] >= 0.0).then(|| (center(caster), caster[3])),
         )
+    }
+
+    /// [`classify_spheres`](Self::classify_spheres) for something only the
+    /// shadow maps draw ([`ShadowOnly`]): just the shadow views' bits, and
+    /// never counted in `occluded`, since no camera would have drawn it.
+    pub fn classify_spheres_shadow_only(&self, sphere: [f32; 4], caster: [f32; 4]) -> u32 {
+        if sphere[3] < 0.0 {
+            return 0;
+        }
+        let center = |s: [f32; 4]| Vec3::new(s[0], s[1], s[2]);
+        let flags = self.classify_uncounted(
+            center(sphere),
+            sphere[3],
+            (caster[3] >= 0.0).then(|| (center(caster), caster[3])),
+        );
+        flags & !(1 | OCCLUDED)
     }
 
     /// Whether culling gives other answers than with the views in `key`

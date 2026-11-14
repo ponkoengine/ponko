@@ -286,6 +286,7 @@ pub fn ponko::assets::Assets::hot_reload(&self) -> bool
 pub fn ponko::assets::Assets::load_component_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_resource<R: core::marker::Send + core::marker::Sync + 'static + serde_core::de::DeserializeOwned>(&mut self, &mut ponko_ecs::world::World, &str)
 pub fn ponko::assets::Assets::load_resource_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::assets::Assets::load_strings(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_with<T>(&self, &str, impl core::ops::function::FnOnce(&[u8]) -> core::result::Result<T, ponko::error::Error>) -> core::result::Result<T, ponko::error::Error>
 pub fn ponko::assets::Assets::reloaded_files(&self) -> &[alloc::string::String]
 pub fn ponko::assets::Assets::reloaded_textures(&self) -> &[ponko::texture::Texture]
@@ -310,6 +311,17 @@ impl ponko::assets::AssetSource for ponko::assets::MemorySource
 pub fn ponko::assets::MemorySource::contains(&self, &str) -> bool
 pub fn ponko::assets::MemorySource::id(&self) -> &str
 pub fn ponko::assets::MemorySource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
+pub struct ponko::assets::PackSource
+impl ponko::prelude::PackSource
+pub fn ponko::prelude::PackSource::from_bytes(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::rcs::arc::Arc<[u8]>>) -> core::result::Result<ponko::prelude::PackSource, ponko::error::Error>
+pub fn ponko::prelude::PackSource::is_empty(&self) -> bool
+pub fn ponko::prelude::PackSource::len(&self) -> usize
+pub fn ponko::prelude::PackSource::names(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
+pub fn ponko::prelude::PackSource::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<ponko::prelude::PackSource, ponko::error::Error>
+impl ponko::assets::AssetSource for ponko::prelude::PackSource
+pub fn ponko::prelude::PackSource::contains(&self, &str) -> bool
+pub fn ponko::prelude::PackSource::id(&self) -> &str
+pub fn ponko::prelude::PackSource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
 pub trait ponko::assets::AssetSource: 'static
 pub fn ponko::assets::AssetSource::contains(&self, &str) -> bool
 pub fn ponko::assets::AssetSource::id(&self) -> &str
@@ -318,6 +330,10 @@ impl ponko::assets::AssetSource for ponko::assets::MemorySource
 pub fn ponko::assets::MemorySource::contains(&self, &str) -> bool
 pub fn ponko::assets::MemorySource::id(&self) -> &str
 pub fn ponko::assets::MemorySource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
+impl ponko::assets::AssetSource for ponko::prelude::PackSource
+pub fn ponko::prelude::PackSource::contains(&self, &str) -> bool
+pub fn ponko::prelude::PackSource::id(&self) -> &str
+pub fn ponko::prelude::PackSource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
 pub mod ponko::attach
 #[repr(C)] pub struct ponko::attach::Attached
 pub ponko::attach::Attached::offset: glam::f32::vec2::Vec2
@@ -1805,6 +1821,148 @@ impl core::marker::Copy for ponko::inventory::GpuResidency
 impl core::marker::StructuralPartialEq for ponko::inventory::GpuResidency
 impl serde_core::ser::Serialize for ponko::inventory::GpuResidency
 pub fn ponko::inventory::GpuResidency::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub mod ponko::locale
+pub enum ponko::locale::Arg
+pub ponko::locale::Arg::Int(i64)
+pub ponko::locale::Arg::Number(f64)
+pub ponko::locale::Arg::Text(alloc::string::String)
+impl core::clone::Clone for ponko::locale::Arg
+pub fn ponko::locale::Arg::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::locale::Arg
+pub fn ponko::locale::Arg::eq(&self, &Self) -> bool
+impl core::convert::From<&alloc::string::String> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(&alloc::string::String) -> Self
+impl core::convert::From<&str> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(&str) -> Self
+impl core::convert::From<alloc::string::String> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(alloc::string::String) -> Self
+impl core::convert::From<f32> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(f32) -> Self
+impl core::convert::From<f64> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(f64) -> Self
+impl core::convert::From<i16> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(i16) -> Self
+impl core::convert::From<i32> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(i32) -> Self
+impl core::convert::From<i64> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(i64) -> Self
+impl core::convert::From<i8> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(i8) -> Self
+impl core::convert::From<isize> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(isize) -> Self
+impl core::convert::From<u16> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(u16) -> Self
+impl core::convert::From<u32> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(u32) -> Self
+impl core::convert::From<u64> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(u64) -> Self
+impl core::convert::From<u8> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(u8) -> Self
+impl core::convert::From<usize> for ponko::locale::Arg
+pub fn ponko::locale::Arg::from(usize) -> Self
+impl core::fmt::Debug for ponko::locale::Arg
+pub fn ponko::locale::Arg::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::locale::Arg
+#[non_exhaustive] pub enum ponko::locale::MissingKind
+pub ponko::locale::MissingKind::Argument(alloc::string::String)
+pub ponko::locale::MissingKind::Key
+pub ponko::locale::MissingKind::PluralForm(ponko::locale::PluralCategory)
+impl core::clone::Clone for ponko::locale::MissingKind
+pub fn ponko::locale::MissingKind::clone(&self) -> Self
+impl core::cmp::Eq for ponko::locale::MissingKind
+impl core::cmp::PartialEq for ponko::locale::MissingKind
+pub fn ponko::locale::MissingKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::locale::MissingKind
+pub fn ponko::locale::MissingKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::locale::MissingKind
+pub enum ponko::locale::PluralCategory
+pub ponko::locale::PluralCategory::Few
+pub ponko::locale::PluralCategory::Many
+pub ponko::locale::PluralCategory::One
+pub ponko::locale::PluralCategory::Other
+pub ponko::locale::PluralCategory::Two
+pub ponko::locale::PluralCategory::Zero
+impl ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::from_name(&str) -> core::option::Option<Self>
+pub fn ponko::locale::PluralCategory::name(self) -> &'static str
+impl core::clone::Clone for ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::clone(&self) -> Self
+impl core::cmp::Eq for ponko::locale::PluralCategory
+impl core::cmp::Ord for ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::cmp(&self, &Self) -> core::cmp::Ordering
+impl core::cmp::PartialEq for ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::eq(&self, &Self) -> bool
+impl core::cmp::PartialOrd for ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::locale::PluralCategory
+pub fn ponko::locale::PluralCategory::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::locale::PluralCategory
+impl core::marker::StructuralPartialEq for ponko::locale::PluralCategory
+#[non_exhaustive] pub struct ponko::locale::Missing
+pub ponko::locale::Missing::key: alloc::string::String
+pub ponko::locale::Missing::language: alloc::string::String
+pub ponko::locale::Missing::what: ponko::locale::MissingKind
+impl core::clone::Clone for ponko::locale::Missing
+pub fn ponko::locale::Missing::clone(&self) -> Self
+impl core::cmp::Eq for ponko::locale::Missing
+impl core::cmp::PartialEq for ponko::locale::Missing
+pub fn ponko::locale::Missing::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::locale::Missing
+pub fn ponko::locale::Missing::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::locale::Missing
+pub fn ponko::locale::Missing::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::locale::Missing
+pub struct ponko::locale::StringTable
+impl ponko::locale::StringTable
+pub fn ponko::locale::StringTable::contains(&self, &str) -> bool
+pub fn ponko::locale::StringTable::font_path(&self) -> core::option::Option<&str>
+pub fn ponko::locale::StringTable::from_json(&str) -> core::result::Result<Self, ponko::error::Error>
+pub fn ponko::locale::StringTable::is_empty(&self) -> bool
+pub fn ponko::locale::StringTable::is_rtl(&self) -> bool
+pub fn ponko::locale::StringTable::keys(&self) -> alloc::vec::Vec<&str>
+pub fn ponko::locale::StringTable::language(&self) -> &str
+pub fn ponko::locale::StringTable::len(&self) -> usize
+pub fn ponko::locale::StringTable::name(&self) -> &str
+pub fn ponko::locale::StringTable::new(&str) -> Self
+pub fn ponko::locale::StringTable::set(&mut self, &str, &str)
+pub fn ponko::locale::StringTable::set_plural(&mut self, &str, ponko::locale::PluralCategory, &str)
+impl core::clone::Clone for ponko::locale::StringTable
+pub fn ponko::locale::StringTable::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::locale::StringTable
+pub fn ponko::locale::StringTable::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::locale::StringTable
+pub fn ponko::locale::StringTable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::locale::StringTable
+pub struct ponko::locale::Strings
+impl ponko::locale::Strings
+pub const ponko::locale::Strings::PSEUDO: &'static str
+pub fn ponko::locale::Strings::contains(&self, &str) -> bool
+pub fn ponko::locale::Strings::font(&self) -> core::option::Option<ponko::text::Font>
+pub fn ponko::locale::Strings::format(&self, &str, &[(&str, ponko::locale::Arg)]) -> alloc::string::String
+pub fn ponko::locale::Strings::format_into(&self, &str, &[(&str, ponko::locale::Arg)], &mut alloc::string::String)
+pub fn ponko::locale::Strings::get<'a>(&'a self, &'a str) -> alloc::borrow::Cow<'a, str>
+pub fn ponko::locale::Strings::insert(&mut self, ponko::locale::StringTable)
+pub fn ponko::locale::Strings::is_rtl(&self) -> bool
+pub fn ponko::locale::Strings::language(&self) -> &str
+pub fn ponko::locale::Strings::languages(&self) -> alloc::vec::Vec<&str>
+pub fn ponko::locale::Strings::missing(&self, &str) -> alloc::vec::Vec<ponko::locale::Missing>
+pub fn ponko::locale::Strings::missing_report(&self) -> alloc::string::String
+pub fn ponko::locale::Strings::number(&self, f64, core::option::Option<usize>) -> alloc::string::String
+pub fn ponko::locale::Strings::reference(&self) -> &str
+pub fn ponko::locale::Strings::revision(&self) -> u64
+pub fn ponko::locale::Strings::set_font(&mut self, &str, ponko::text::Font)
+pub fn ponko::locale::Strings::set_language(&mut self, &str) -> bool
+pub fn ponko::locale::Strings::table(&self, &str) -> core::option::Option<&ponko::locale::StringTable>
+impl core::clone::Clone for ponko::locale::Strings
+pub fn ponko::locale::Strings::clone(&self) -> Self
+impl core::default::Default for ponko::locale::Strings
+pub fn ponko::locale::Strings::default() -> Self
+impl core::fmt::Debug for ponko::locale::Strings
+pub fn ponko::locale::Strings::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn ponko::locale::plural_categories(&str) -> &'static [ponko::locale::PluralCategory]
+pub fn ponko::locale::plural_category(&str, f64) -> ponko::locale::PluralCategory
 pub mod ponko::nav
 pub mod ponko::net
 pub enum ponko::net::AuthorityCheck
@@ -2419,6 +2577,7 @@ pub ponko::perf::Budget::allocs_per_frame: core::option::Option<f32>
 pub ponko::perf::Budget::frame_avg_ms: core::option::Option<f32>
 pub ponko::perf::Budget::frame_max_ms: core::option::Option<f32>
 pub ponko::perf::Budget::frame_p99_ms: core::option::Option<f32>
+pub ponko::perf::Budget::gpu_memory_mb: core::option::Option<f32>
 pub ponko::perf::Budget::scopes: alloc::collections::btree::map::BTreeMap<alloc::string::String, f32>
 pub ponko::perf::Budget::systems: alloc::collections::btree::map::BTreeMap<alloc::string::String, f32>
 impl ponko::perf::Budget
@@ -2427,6 +2586,7 @@ pub fn ponko::perf::Budget::frame_avg_ms(self, f32) -> Self
 pub fn ponko::perf::Budget::frame_max_ms(self, f32) -> Self
 pub fn ponko::perf::Budget::frame_p99_ms(self, f32) -> Self
 pub fn ponko::perf::Budget::from_json(&str) -> core::result::Result<Self, ponko::error::Error>
+pub fn ponko::perf::Budget::gpu_memory_mb(self, f32) -> Self
 pub fn ponko::perf::Budget::new() -> Self
 pub fn ponko::perf::Budget::scope(self, &str, f32) -> Self
 pub fn ponko::perf::Budget::system(self, &str, f32) -> Self
@@ -2521,6 +2681,38 @@ impl serde_core::ser::Serialize for ponko::perf::FrameTimes
 pub fn ponko::perf::FrameTimes::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::perf::FrameTimes
 pub fn ponko::perf::FrameTimes::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+#[non_exhaustive] pub struct ponko::perf::GpuMemory
+pub ponko::perf::GpuMemory::adapter_bytes: core::option::Option<u64>
+pub ponko::perf::GpuMemory::adapter_note: alloc::string::String
+pub ponko::perf::GpuMemory::atlases: u64
+pub ponko::perf::GpuMemory::frame_targets: u64
+pub ponko::perf::GpuMemory::gpu_buffers: u64
+pub ponko::perf::GpuMemory::instance_batches: u64
+pub ponko::perf::GpuMemory::meshes: u64
+pub ponko::perf::GpuMemory::other: u64
+pub ponko::perf::GpuMemory::probes: u64
+pub ponko::perf::GpuMemory::shadows: u64
+pub ponko::perf::GpuMemory::skinning: u64
+pub ponko::perf::GpuMemory::textures: u64
+pub ponko::perf::GpuMemory::total: u64
+impl ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::classes(&self) -> [(&'static str, u64); 10]
+pub fn ponko::perf::GpuMemory::total_mb(&self) -> f32
+impl core::clone::Clone for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::default() -> Self
+impl core::fmt::Debug for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::perf::GpuMemory
+impl serde_core::ser::Serialize for ponko::perf::GpuMemory
+pub fn ponko::perf::GpuMemory::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::perf::GpuMemory where ponko::perf::GpuMemory: core::default::Default
+pub fn ponko::perf::GpuMemory::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct ponko::perf::GpuPass
 pub ponko::perf::GpuPass::ms: f32
 pub ponko::perf::GpuPass::name: &'static str
@@ -2567,6 +2759,7 @@ pub ponko::perf::PerfReport::allocs: core::option::Option<ponko::perf::AllocRepo
 pub ponko::perf::PerfReport::entities: usize
 pub ponko::perf::PerfReport::frame_ms: ponko::perf::FrameTimes
 pub ponko::perf::PerfReport::frames: usize
+pub ponko::perf::PerfReport::gpu_memory: core::option::Option<ponko::perf::GpuMemory>
 pub ponko::perf::PerfReport::render: core::option::Option<ponko::perf::RenderReport>
 pub ponko::perf::PerfReport::scopes: alloc::vec::Vec<ponko::perf::ScopeReport>
 pub ponko::perf::PerfReport::systems: alloc::vec::Vec<ponko::perf::SystemReport>
@@ -3534,6 +3727,7 @@ pub fn ponko::assets::Assets::hot_reload(&self) -> bool
 pub fn ponko::assets::Assets::load_component_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_resource<R: core::marker::Send + core::marker::Sync + 'static + serde_core::de::DeserializeOwned>(&mut self, &mut ponko_ecs::world::World, &str)
 pub fn ponko::assets::Assets::load_resource_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::assets::Assets::load_strings(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::load_with<T>(&self, &str, impl core::ops::function::FnOnce(&[u8]) -> core::result::Result<T, ponko::error::Error>) -> core::result::Result<T, ponko::error::Error>
 pub fn ponko::assets::Assets::reloaded_files(&self) -> &[alloc::string::String]
 pub fn ponko::assets::Assets::reloaded_textures(&self) -> &[ponko::texture::Texture]
@@ -3800,6 +3994,17 @@ impl ponko::assets::AssetSource for ponko::assets::MemorySource
 pub fn ponko::assets::MemorySource::contains(&self, &str) -> bool
 pub fn ponko::assets::MemorySource::id(&self) -> &str
 pub fn ponko::assets::MemorySource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
+pub struct ponko::prelude::PackSource
+impl ponko::prelude::PackSource
+pub fn ponko::prelude::PackSource::from_bytes(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::rcs::arc::Arc<[u8]>>) -> core::result::Result<ponko::prelude::PackSource, ponko::error::Error>
+pub fn ponko::prelude::PackSource::is_empty(&self) -> bool
+pub fn ponko::prelude::PackSource::len(&self) -> usize
+pub fn ponko::prelude::PackSource::names(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
+pub fn ponko::prelude::PackSource::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<ponko::prelude::PackSource, ponko::error::Error>
+impl ponko::assets::AssetSource for ponko::prelude::PackSource
+pub fn ponko::prelude::PackSource::contains(&self, &str) -> bool
+pub fn ponko::prelude::PackSource::id(&self) -> &str
+pub fn ponko::prelude::PackSource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
 #[repr(transparent)] pub struct ponko::prelude::Playing(_)
 impl core::clone::Clone for ponko::audio::Playing
 pub fn ponko::audio::Playing::clone(&self) -> Self
@@ -4128,6 +4333,16 @@ pub fn ponko::prelude::Ui::ime_area(&self) -> core::option::Option<ponko::camera
 pub fn ponko::prelude::Ui::preedit(&self, ponko::prelude::UiId) -> core::option::Option<&str>
 pub fn ponko::prelude::Ui::set_ime_allowed(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::wants_ime(&self) -> bool
+impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::is_rich(&self, ponko::prelude::UiId) -> bool
+pub fn ponko::prelude::Ui::link(&self, ponko::prelude::UiId, u32) -> core::option::Option<&str>
+pub fn ponko::prelude::Ui::set_inline_font(&mut self, &str, ponko::text::Font)
+pub fn ponko::prelude::Ui::set_inline_image(&mut self, &str, ponko::texture::Texture)
+pub fn ponko::prelude::Ui::set_rich(&mut self, ponko::prelude::UiId, bool)
+impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::localize(&mut self, &ponko::locale::Strings)
+pub fn ponko::prelude::Ui::set_text_key(&mut self, ponko::prelude::UiId, &str, &[(&str, ponko::locale::Arg)])
+pub fn ponko::prelude::Ui::text_key(&self, ponko::prelude::UiId) -> core::option::Option<&str>
 impl core::default::Default for ponko::prelude::Ui
 pub fn ponko::prelude::Ui::default() -> Self
 impl core::marker::Send for ponko::prelude::Ui
@@ -4159,6 +4374,10 @@ impl ponko::assets::AssetSource for ponko::assets::MemorySource
 pub fn ponko::assets::MemorySource::contains(&self, &str) -> bool
 pub fn ponko::assets::MemorySource::id(&self) -> &str
 pub fn ponko::assets::MemorySource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
+impl ponko::assets::AssetSource for ponko::prelude::PackSource
+pub fn ponko::prelude::PackSource::contains(&self, &str) -> bool
+pub fn ponko::prelude::PackSource::id(&self) -> &str
+pub fn ponko::prelude::PackSource::read(&self, &str) -> core::io::error::Result<alloc::vec::Vec<u8>>
 pub trait ponko::prelude::Handle: core::marker::Copy + core::cmp::Eq + core::hash::Hash + core::fmt::Debug + ponko::handle::sealed::Sealed
 pub const ponko::prelude::Handle::NONE: Self
 impl ponko::handle::Handle for ponko::audio::Sound
@@ -5844,6 +6063,7 @@ impl core::marker::StructuralPartialEq for ponko::ui::UiAccessValue
 #[non_exhaustive] pub enum ponko::ui::UiEvent
 pub ponko::ui::UiEvent::Changed(ponko::prelude::UiId)
 pub ponko::ui::UiEvent::Clicked(ponko::prelude::UiId)
+pub ponko::ui::UiEvent::LinkClicked(ponko::prelude::UiId, u32)
 pub ponko::ui::UiEvent::ScreenPopped(ponko::prelude::UiId)
 pub ponko::ui::UiEvent::Submitted(ponko::prelude::UiId)
 impl ponko::ui::UiEvent
@@ -6004,6 +6224,16 @@ pub fn ponko::prelude::Ui::ime_area(&self) -> core::option::Option<ponko::camera
 pub fn ponko::prelude::Ui::preedit(&self, ponko::prelude::UiId) -> core::option::Option<&str>
 pub fn ponko::prelude::Ui::set_ime_allowed(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::wants_ime(&self) -> bool
+impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::is_rich(&self, ponko::prelude::UiId) -> bool
+pub fn ponko::prelude::Ui::link(&self, ponko::prelude::UiId, u32) -> core::option::Option<&str>
+pub fn ponko::prelude::Ui::set_inline_font(&mut self, &str, ponko::text::Font)
+pub fn ponko::prelude::Ui::set_inline_image(&mut self, &str, ponko::texture::Texture)
+pub fn ponko::prelude::Ui::set_rich(&mut self, ponko::prelude::UiId, bool)
+impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::localize(&mut self, &ponko::locale::Strings)
+pub fn ponko::prelude::Ui::set_text_key(&mut self, ponko::prelude::UiId, &str, &[(&str, ponko::locale::Arg)])
+pub fn ponko::prelude::Ui::text_key(&self, ponko::prelude::UiId) -> core::option::Option<&str>
 impl core::default::Default for ponko::prelude::Ui
 pub fn ponko::prelude::Ui::default() -> Self
 impl core::marker::Send for ponko::prelude::Ui
@@ -6091,8 +6321,10 @@ pub fn ponko::ui::UiBuilder<'_>::layout(self, ponko::ui::UiLayout) -> Self
 pub fn ponko::ui::UiBuilder<'_>::live_region(self, ponko::ui::UiLive) -> Self
 pub fn ponko::ui::UiBuilder<'_>::name(self, impl core::convert::AsRef<str>) -> Self
 pub fn ponko::ui::UiBuilder<'_>::paint(self, ponko::ui::UiPaint) -> Self
+pub fn ponko::ui::UiBuilder<'_>::rich(self) -> Self
 pub fn ponko::ui::UiBuilder<'_>::size(self, f32) -> Self
 pub fn ponko::ui::UiBuilder<'_>::text(self, impl core::convert::AsRef<str>) -> Self
+pub fn ponko::ui::UiBuilder<'_>::text_key(self, &str) -> Self
 pub fn ponko::ui::UiBuilder<'_>::texture(self, ponko::texture::Texture, f32) -> Self
 pub fn ponko::ui::UiBuilder<'_>::value(self, f32) -> Self
 pub fn ponko::ui::UiBuilder<'_>::wrap(self) -> Self

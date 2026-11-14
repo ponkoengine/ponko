@@ -3,11 +3,13 @@
 //! One subcommand per job, each in its own module: `ponko new` makes a
 //! project from a template ([`new`]); `ponko package` builds and packages a
 //! game for players, and `ponko notices` writes a library's third-party
-//! notices ([`package`]); `ponko textures` compresses a folder's images
+//! notices ([`package`]); `ponko pack` packs a folder of assets into one
+//! asset pack ([`pack`]); `ponko textures` compresses a folder's images
 //! into KTX2 textures ([`textures`], feature `textures`). Arguments are
 //! parsed by hand.
 
 mod new;
+mod pack;
 mod package;
 mod templates;
 #[cfg(feature = "textures")]
@@ -22,6 +24,7 @@ Usage:
   ponko new <path> [--2d | --3d | --headless] [--path <engine> | --git <url>]
   ponko package [--bin <name> | --example <name>] [--web] [--format <list>] [...]
   ponko notices --out <file> [-p <package>] [...]
+  ponko pack [<folder>] [--out <file>] [--exclude <pattern>]... [--textures]
   ponko textures [<folder>] [--out <folder>] [--force] [--check]
   ponko help [<command>]
   ponko --version
@@ -30,6 +33,7 @@ Commands:
   new      Make a new game project from a template
   package  Build the game and package it for players (zip, app, dmg, tar.gz, web)
   notices  Write THIRD-PARTY-NOTICES.txt for a crate
+  pack     Pack a folder of assets into one asset pack (what games ship)
   textures Compress images into GPU textures (KTX2: BC7, BC5, BC4, UASTC)
 
 Guide: https://ponko.dev/guide/getting-started.html";
@@ -80,6 +84,14 @@ fn run(args: &[String]) -> Result<String, String> {
                 package::notices_command(&options, &dir)
             }
         }
+        "pack" => {
+            if rest.iter().any(|a| a == "-h" || a == "--help") {
+                return Ok(pack::USAGE.to_string());
+            }
+            let options = pack::Options::parse(rest)?;
+            let dir = std::env::current_dir().map_err(|e| format!("can't read the current folder: {e}"))?;
+            pack::pack_command(&options, &dir)
+        }
         "textures" => {
             #[cfg(feature = "textures")]
             {
@@ -102,6 +114,7 @@ fn run(args: &[String]) -> Result<String, String> {
             Some("new") => Ok(new::USAGE.to_string()),
             Some("package") => Ok(package::USAGE.to_string()),
             Some("notices") => Ok(package::NOTICES_USAGE.to_string()),
+            Some("pack") => Ok(pack::USAGE.to_string()),
             #[cfg(feature = "textures")]
             Some("textures") => Ok(textures::USAGE.to_string()),
             Some(other) => Err(format!("no command `{other}`\n\n{USAGE}")),
@@ -154,7 +167,10 @@ mod tests {
 
     #[test]
     fn an_unknown_command_is_an_error_with_the_usage() {
-        let err = run_str(&["pack"]).unwrap_err();
-        assert!(err.starts_with("no command `pack`") && err.contains("Usage:"), "{err}");
+        let err = run_str(&["unpack"]).unwrap_err();
+        assert!(
+            err.starts_with("no command `unpack`") && err.contains("Usage:"),
+            "{err}"
+        );
     }
 }

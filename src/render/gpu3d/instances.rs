@@ -1609,13 +1609,7 @@ impl Renderer3D {
         for (part, (range, material)) in mesh.parts.iter().enumerate() {
             let material = self.part_material(run_mesh, part, *material);
             let m = &self.resources.materials[material as usize];
-            let Some(role) = PipelineRole::for_pass(
-                kind.pass(),
-                m.cutout,
-                m.transparent,
-                self.samples > 1,
-                self.full_prepass(),
-            ) else {
+            let Some(role) = self.draw_role(kind, material, m) else {
                 continue;
             };
             let shader = &self.shaders.sets[m.shader as usize];
@@ -1628,13 +1622,17 @@ impl Renderer3D {
                 Instancing::of(false, mesh.gpu_buffer.is_some() || batch.compute),
             );
             state.lookups += 1;
-            let Some(pipeline) = shader.variant(variant).for_kind(kind, role) else {
+            let Some(pipeline) = self.draw_pipeline(shader, material, variant, kind, role) else {
                 continue;
             };
             if state.pipeline != Some(pipeline as *const _) {
                 gpu!(pass.set_pipeline(pipeline));
                 n.pipelines += 1;
                 state.pipeline = Some(pipeline as *const _);
+            }
+            if let Some(reference) = self.stencil.reference(material) {
+                // Batches draw after the models, whose last reference is unknown here.
+                gpu!(pass.set_stencil_reference(reference));
             }
             let buffer_key = if mesh.allocation.is_some() {
                 0
@@ -1732,6 +1730,32 @@ impl Default for BatchDraws {
             marker: false,
             instances: None,
             dummy: false,
+        }
+    }
+}
+
+impl StaticBatch {
+    /// Counts the batch's instance records as instance batches (see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        if let Some(vertices) = &self.vertices {
+            t.buffer(crate::render::memory::MemoryClass::InstanceBatches, vertices);
+        }
+    }
+}
+
+impl Culling {
+    /// Counts the culling pools (records, visible lists, draw arguments)
+    /// and the culling's own buffers as instance batches (see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        t.buffer(C::InstanceBatches, &self.occlusion);
+        t.buffer(C::InstanceBatches, &self.marker);
+        for pool in &self.pools {
+            t.buffer(C::InstanceBatches, &pool.records.buffer);
+            for page in &pool.pages {
+                t.buffer(C::InstanceBatches, &page.visibility.buffer);
+                t.buffer(C::InstanceBatches, &page.args.buffer);
+            }
         }
     }
 }

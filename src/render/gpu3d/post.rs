@@ -4,7 +4,7 @@
 //! The post part of a frame is a fixed chain ([`POST_CHAIN`]):
 //! temporal antialiasing settles the frame into the HDR image, the game's
 //! scene compute passes read it, its target effects and screen effects run
-//! over it, bloom blurs its bright
+//! over it, depth of field blurs what is out of focus, bloom blurs its bright
 //! parts, the post pass tone maps it (exposure, bloom, grading), FXAA or
 //! SMAA smooth it, and with a render scale a last pass scales it to the
 //! window. `Renderer3D::record_post` walks the chain; each link is recorded
@@ -18,7 +18,7 @@
 //!
 //! # Adding a post effect
 //!
-//! A new link (say, a depth of field blur before bloom) is added here,
+//! A new link (as depth of field was, before bloom) is added here,
 //! and declared in the frame's description (`passes.rs`), and nowhere else
 //! in the renderer:
 //!
@@ -55,7 +55,8 @@
 //! the lit pass instead, and declares what it reads in `passes.rs`.
 
 use super::{
-    BLOOM_MIPS, BLOOM_SCATTER, EffectPass, FrameParts, HDR_FORMAT, PassTimer, Renderer3D, SCENE_COMPUTE_STEPS, passes,
+    BLOOM_MIPS, BLOOM_SCATTER, EffectPass, FrameParts, HDR_FORMAT, PassTimer, Renderer3D, SCENE_COMPUTE_STEPS, Targets,
+    for_samples, passes,
 };
 use crate::render::AntiAliasing;
 use crate::render::gpu::GpuTexture;
@@ -67,18 +68,20 @@ use crate::three::PostUniform;
 /// one before it left.
 /// Documentation that a test holds the recording to.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(super) const POST_CHAIN: [&str; 8] = [
+pub(super) const POST_CHAIN: [&str; 9] = [
     "temporal antialiasing",
     "scene compute passes",
     "target effects",
     "screen effects",
+    "depth of field",
     "bloom",
     "tone mapping",
     "antialiasing",
     "upscale",
 ];
 
-/// The post chain's own passes: bloom, tone mapping, antialiasing and scaling.
+/// The post chain's own passes: depth of field, bloom, tone mapping,
+/// antialiasing and scaling.
 pub(super) struct PostChain {
     /// The format of the image the chain ends in (the window's).
     output_format: wgpu::TextureFormat,
@@ -90,6 +93,9 @@ pub(super) struct PostChain {
     bloom_prefilter: wgpu::RenderPipeline,
     bloom_down: wgpu::RenderPipeline,
     bloom_up: wgpu::RenderPipeline,
+    /// Depth of field: built the first time it is on (it reads the scene
+    /// depth, declared as the renderer's scene layout says).
+    depth_of_field: Option<wgpu::RenderPipeline>,
     /// The post settings as the shader reads them, and what the buffer holds.
     pub(super) buffer: wgpu::Buffer,
     pub(super) mirror: Mirror,
@@ -99,6 +105,8 @@ pub(super) struct PostChain {
     /// This frame's lookup table texture (or white), and whether bloom runs.
     lut: u32,
     bloom_on: bool,
+    /// Whether depth of field runs this frame.
+    dof_on: bool,
     /// This frame's antialiasing, and SMAA's passes while it is the mode.
     aa: AntiAliasing,
     smaa: Option<Smaa>,
@@ -171,6 +179,12 @@ impl PostChain {
         self.aa
     }
 
+    /// Whether depth of field runs this frame: it reads the scene depth,
+    /// which the opaque pass then keeps.
+    pub(super) fn depth_of_field_on(&self) -> bool {
+        self.dof_on && self.depth_of_field.is_some()
+    }
+
     /// The format of the image the chain ends in.
     pub(super) fn output_format(&self) -> wgpu::TextureFormat {
         self.output_format
@@ -183,14 +197,15 @@ impl PostChain {
         use passes::Features;
         Features::BLOOM
             .only_if(self.bloom_on)
+            .with(Features::DOF.only_if(self.depth_of_field_on()))
             .with(Features::FXAA.only_if(self.aa == AntiAliasing::Fxaa))
             .with(Features::SMAA.only_if(self.aa == AntiAliasing::Smaa))
             .with(Features::UPSCALE.only_if(images.upscale_group.is_some()))
     }
 
     /// Draw calls the chain's own links take this frame, for the frame's
-    /// statistics: the post pass, the bloom steps and the antialiasing
-    /// passes (the scaling pass isn't counted). `images`: the chain's, once
+    /// statistics: depth of field, the post pass, the bloom steps and the
+    /// antialiasing passes (the scaling pass isn't counted). `images`: the chain's, once
     /// made.
     pub(super) fn draw_calls(&self, images: Option<&PostTargets>) -> usize {
         let antialiasing = match self.aa {
@@ -203,7 +218,7 @@ impl PostChain {
         } else {
             0
         };
-        1 + antialiasing + bloom
+        1 + antialiasing + bloom + usize::from(self.depth_of_field_on())
     }
 
     pub(super) fn new(
@@ -358,39 +373,140 @@ impl PostChain {
             bloom_prefilter,
             bloom_down,
             bloom_up,
+            depth_of_field: None,
             buffer: post_buffer,
             mirror: Mirror::default(),
             linear_clamp,
             black,
             lut: white,
             bloom_on: false,
+            dof_on: false,
             aa: AntiAliasing::None,
             smaa: None,
         }
     }
 
     /// This frame's post settings: the uniform, the lookup table, whether
-    /// bloom runs, and the antialiasing (temporal antialiasing needs
-    /// compute-class devices; the others get FXAA).
+    /// bloom and depth of field run, and the antialiasing (temporal
+    /// antialiasing needs compute-class devices; the others get FXAA).
+    /// `camera`: its near and far planes.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn prepare(
         &mut self,
         queue: &wgpu::Queue,
         post: &crate::render::Post,
         lut: Option<(u32, u32)>,
         (size, window): ((u32, u32), (u32, u32)),
+        camera: (f32, f32),
         white: u32,
         taa_supported: bool,
     ) {
-        let post_uniform = PostUniform::new(post, lut.map(|(_, n)| n)).scaled(post, size, window);
+        let post_uniform = PostUniform::new(post, lut.map(|(_, n)| n))
+            .scaled(post, size, window)
+            .camera(camera.0, camera.1);
         let post_uniform = bytemuck::bytes_of(&post_uniform);
         self.mirror
             .upload(queue, Upload::Uniforms, &self.buffer, 0, post_uniform);
         self.lut = lut.map_or(white, |(id, _)| id);
         self.bloom_on = post.bloom > 0.0;
+        self.dof_on = post.depth_of_field.is_on();
         self.aa = match post.anti_aliasing {
             AntiAliasing::Taa if !taa_supported => AntiAliasing::Fxaa,
             aa => aa,
         };
+    }
+
+    /// Depth of field's pipeline, built the first time it is on. It reads
+    /// the scene depth through the renderer's scene layout (`scene_layout`,
+    /// for a scene of `samples` per pixel, read as a float texture with
+    /// `float_depth`), which a change of multisampling keeps.
+    pub(super) fn prepare_depth_of_field(
+        &mut self,
+        device: &wgpu::Device,
+        scene_layout: &wgpu::BindGroupLayout,
+        samples: u32,
+        float_depth: bool,
+    ) {
+        if !self.dof_on || self.depth_of_field.is_some() {
+            return;
+        }
+        let source = format!("{}\n{}", include_str!("../post.wgsl"), include_str!("../dof.wgsl"));
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("3d depth of field"),
+            source: wgpu::ShaderSource::Wgsl(for_samples(&source, samples, float_depth)),
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("3d depth of field layout"),
+            bind_group_layouts: &[Some(&self.layout), None, Some(scene_layout)],
+            immediate_size: 0,
+        });
+        self.depth_of_field = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("3d depth of field"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_full"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs_depth_of_field"),
+                compilation_options: Default::default(),
+                targets: &[Some(HDR_FORMAT.into())],
+            }),
+            multiview_mask: None,
+            cache: None,
+        }));
+    }
+
+    /// Records depth of field when it is on: it reads the frame from where
+    /// the screen effects left it (`in_hdr`: the HDR image, or else the
+    /// scene texture) and its depth, and writes the other one. Returns
+    /// where the frame is now, as `in_hdr` says it.
+    pub(super) fn record_depth_of_field<'t>(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        targets: &Targets,
+        in_hdr: bool,
+        time: &PassTimer<'_, 't>,
+    ) -> bool {
+        let (true, Some(pipeline)) = (self.dof_on, &self.depth_of_field) else {
+            return in_hdr;
+        };
+        // The scene group reads the depth; its color is the image read,
+        // never the one written.
+        let (post, scene, target) = if in_hdr {
+            passes::mark("depth of field");
+            (&targets.post.post, &targets.scene_of_hdr, &targets.scene_view)
+        } else {
+            passes::mark("depth of field back");
+            (&targets.post.post_of_scene, &targets.scene, &targets.hdr)
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("3d depth of field"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: time("depth of field"),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, post, &[]);
+        pass.set_bind_group(2, scene, &[]);
+        pass.draw(0..3, 0..1);
+        !in_hdr
     }
 
     /// SMAA's passes for a scene of `size`: made when it becomes the mode
@@ -708,7 +824,32 @@ impl Renderer3D {
         };
         self.effects.record_targets(encoder, &ctx);
         let in_hdr = self.effects.record_screen(encoder, &ctx);
+        let in_hdr = self.post.record_depth_of_field(encoder, targets, in_hdr, time);
         self.post.record(encoder, &targets.post, in_hdr, view, textures, time);
+    }
+}
+
+impl PostChain {
+    /// Counts SMAA's targets as frame targets, and the chain's uniform and
+    /// black stand-in as other memory (see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        if let Some(smaa) = &self.smaa {
+            smaa.tally_memory(t);
+        }
+        t.buffer(C::Other, &self.buffer);
+        t.view(C::Other, &self.black);
+    }
+}
+
+impl PostTargets {
+    /// Counts bloom's levels and the antialiasing and scaling passes'
+    /// inputs as frame targets (see `memory.rs`).
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for view in self.bloom_mips.iter().chain(&self.ldr).chain(&self.upscale) {
+            t.view(C::FrameTargets, view);
+        }
     }
 }
 
@@ -718,11 +859,12 @@ mod tests {
 
     /// What records each link of [`POST_CHAIN`]: `(link, the function it is
     /// recorded from, the text that records it)`.
-    const RECORDED: [(&str, &str, &str); 8] = [
+    const RECORDED: [(&str, &str, &str); 9] = [
         ("temporal antialiasing", "fn record_post(", "time(\"taa\")"),
         ("scene compute passes", "fn record_post(", "SCENE_COMPUTE_STEPS"),
         ("target effects", "fn record_post(", ".record_targets("),
         ("screen effects", "fn record_post(", ".record_screen("),
+        ("depth of field", "fn record_post(", ".record_depth_of_field("),
         ("bloom", "fn record<'t>(", "\"bloom\","),
         ("tone mapping", "fn record<'t>(", "time(\"post\")"),
         ("antialiasing", "fn record<'t>(", "Some(\"FXAA\")"),

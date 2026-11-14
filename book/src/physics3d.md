@@ -389,6 +389,10 @@ so queries don't allocate.
 New bodies join at the next step, so a query in the tick you spawned them
 won't see them yet.
 
+`ctx.physics3d.set_paused(true)` holds the step while the other sim systems
+run, for a pause screen
+([Pausing only 3D physics](sim-clock.md#pausing-only-3d-physics)).
+
 ## Cost
 
 Bodies cost only where they exist, and steady-state steps add no

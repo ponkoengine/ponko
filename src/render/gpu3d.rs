@@ -107,6 +107,9 @@ mod shadow_cache;
 mod shadows;
 #[cfg(test)]
 pub(in crate::render) mod sky_render_test;
+mod stencil;
+#[cfg(test)]
+mod stencil_render_test;
 mod targets;
 mod variants;
 mod vertex_motion;
@@ -230,6 +233,12 @@ pub(crate) struct Renderer3D {
     /// With `float_depth`: the copy of the scene depth that transparent
     /// surfaces read (see `depth_copy.rs`).
     depth_copy: Option<depth_copy::DepthCopy>,
+    /// The pipelines of materials with a stencil state (see `stencil.rs`).
+    stencil: stencil::StencilPipelines,
+    /// Whether this frame's transparent pass is split off (a transparent
+    /// surface reads the scene) with stencil materials: it then reads the
+    /// stencil without writing it.
+    stencil_read_only: bool,
     /// With `float_depth` and one sample: the sampler the scene depth is
     /// read through (see [`shaders::samples_scene_depth`]).
     scene_depth_sampler: Option<wgpu::Sampler>,
@@ -906,6 +915,8 @@ impl Renderer3D {
             solid_prepass,
             float_depth,
             depth_copy: float_depth.then(|| depth_copy::DepthCopy::new(device, samples)),
+            stencil: Default::default(),
+            stencil_read_only: false,
             scene_depth_sampler,
             resources: Resources {
                 meshes: Vec::new(),
@@ -1226,7 +1237,19 @@ impl Renderer3D {
     pub fn create_material(&mut self, device: &wgpu::Device, desc: &GpuMaterialDesc, textures: &[GpuTexture]) -> u32 {
         self.shadow_cache.invalidate();
         let shaders = self.shaders.sets.len() as u32;
-        self.resources.create_material(device, desc, textures, shaders)
+        let id = self.resources.create_material(device, desc, textures, shaders);
+        self.assign_stencil(id, desc);
+        id
+    }
+
+    /// Material `id` draws with `desc`'s stencil state (or none).
+    fn assign_stencil(&mut self, id: u32, desc: &GpuMaterialDesc) {
+        if desc.stencil.is_none() && !self.stencil.has(id) {
+            return;
+        }
+        let m = &self.resources.materials[id as usize];
+        self.stencil
+            .assign(&self.shaders, id, desc.stencil.as_ref(), m.shader, m.double_sided);
     }
 
     /// Changes material `id` in place: every model using it changes.
@@ -1242,8 +1265,13 @@ impl Renderer3D {
             self.shadow_cache.invalidate();
         }
         let shaders = self.shaders.sets.len() as u32;
-        self.resources
-            .update_material(device, queue, id, desc, textures, shaders)
+        let changed = self
+            .resources
+            .update_material(device, queue, id, desc, textures, shaders);
+        if (id as usize) < self.resources.materials.len() {
+            self.assign_stencil(id, desc);
+        }
+        changed
     }
 
     /// Makes mesh `id`: a freed one's slot, or the next new one.
@@ -1264,6 +1292,50 @@ impl Renderer3D {
     /// theirs (`Ctx::asset_inventory`).
     pub fn residency(&self) -> (usize, u64, usize, u64) {
         self.resources.residency()
+    }
+
+    /// Hands everything the 3D renderer holds on the GPU to `t`, by class
+    /// (see `memory.rs`): the owners of shared textures first, so a
+    /// shadow map read by the frame's bind groups is counted as a shadow.
+    pub(crate) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        self.shadows.tally_memory(t);
+        if let Some(gi) = &self.gi {
+            gi.tally_memory(t);
+        }
+        self.environment.tally_memory(t);
+        self.skinning.tally_memory(t);
+        for batch in self.static_batches.iter().flatten() {
+            batch.tally_memory(t);
+        }
+        if let Some(culling) = &self.static_culling {
+            culling.tally_memory(t);
+        }
+        t.buffer(C::InstanceBatches, &self.instances);
+        t.buffer(C::InstanceBatches, self.moved.buffer());
+        if let Some(targets) = &self.targets {
+            targets.tally_memory(t);
+        }
+        self.render_targets.tally_memory(t);
+        self.post.tally_memory(t);
+        if let Some(taa) = &self.screen.taa {
+            taa.tally_memory(t);
+        }
+        if let Some(ao) = &self.screen.ao {
+            ao.tally_memory(t);
+        }
+        if let Some(ssr) = &self.screen.ssr {
+            ssr.tally_memory(t);
+        }
+        self.resources.tally_memory(t);
+        self.lights.tally_memory(t, C::Other);
+        self.occlusion.tally_memory(t);
+        self.particles.tally_memory(t);
+        t.buffer(C::Other, &self.frame_buffer);
+        t.texture(C::Other, &self.sky_texture);
+        for view in [&self.sky_view, &self.no_gi, &self.dummy_depth, &self.no_decal_view] {
+            t.view(C::Other, view);
+        }
     }
 
     /// Frees mesh `id`'s GPU memory; it draws nothing from now on.
@@ -1851,6 +1923,11 @@ mod tests {
         // once crashed every textured material at startup).
         check_shader("mipmaps", super::super::mips::SHADER).unwrap();
         check_shader("post", include_str!("post.wgsl")).unwrap();
+        // Depth of field, in each form its scene depth is declared in.
+        let dof = format!("{}\n{}", include_str!("post.wgsl"), include_str!("dof.wgsl"));
+        for (samples, float_depth) in [(4, false), (1, false), (4, true), (1, true)] {
+            check_shader("depth of field", &for_samples(&dof, samples, float_depth)).unwrap();
+        }
         check_shader("sprite", include_str!("sprite.wgsl")).unwrap();
     }
 
@@ -1937,6 +2014,9 @@ mod webgl2_shaders_test;
 #[cfg(test)]
 #[path = "capabilities_render_test.rs"]
 mod capabilities_render_test;
+#[cfg(test)]
+#[path = "post_effects_render_test.rs"]
+mod post_effects_render_test;
 #[cfg(test)]
 #[path = "post_links_render_test.rs"]
 mod post_links_render_test;

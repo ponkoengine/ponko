@@ -288,6 +288,25 @@ pub enum UiEvent {
     /// let _ = ponko::ui::UiEvent::ScreenPopped(id);
     /// ```
     ScreenPopped(UiId),
+    /// A link in a rich node's text ([`Ui::set_rich`]) was clicked: the
+    /// node, and which of its links, counted from 0 in the order they
+    /// appear. [`Ui::link`] gives its target.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::ui::{Ui, UiEvent, UiInput, UiLayout, UiWidget};
+    /// let mut ui = Ui::default();
+    /// let root = ui.root().layout(UiLayout::fill()).id();
+    /// let line = ui.label(root, "[link=rules]Rules[/link]").rich().id();
+    /// ui.push_screen(root, false);
+    /// ui.layout(vec2(320.0, 240.0));
+    /// let at = ui.rect(line).unwrap().min + vec2(4.0, 4.0);
+    /// ui.frame(vec2(320.0, 240.0), &UiInput { pointer: at, pressed: true, held: true, ..Default::default() });
+    /// ui.frame(vec2(320.0, 240.0), &UiInput { pointer: at, released: true, ..Default::default() });
+    /// let link = ui.events().find_map(|e| match e { UiEvent::LinkClicked(id, link) => Some((id, link)), _ => None });
+    /// assert_eq!(link, Some((line, 0)));
+    /// assert_eq!(ui.link(line, 0), Some("rules"));
+    /// ```
+    LinkClicked(UiId, u32),
 }
 
 impl UiEvent {
@@ -477,6 +496,10 @@ pub(super) struct Node {
     pub preedit: String,
     /// The caret inside `preedit`, a byte range.
     pub preedit_cursor: Option<(usize, usize)>,
+    /// The string table key its text comes from ([`Ui::set_text_key`]).
+    pub key: Option<Box<super::retained_locale::TextKey>>,
+    /// Its text is markup ([`Ui::set_rich`]), parsed.
+    pub rich: Option<Box<super::rich::RichText>>,
 }
 pub(super) struct Screen {
     pub root: UiId,
@@ -526,6 +549,8 @@ pub struct Ui {
     events: std::collections::VecDeque<UiEvent>,
     /// IME composition ([`Ui::preedit`], [`Ui::ime_area`]).
     pub(super) ime: super::retained_ime::UiImeState,
+    /// Which string tables the keyed nodes show ([`Ui::localize`]).
+    pub(super) locale: super::retained_locale::UiLocaleState,
     pub(super) focus: Option<UiId>,
     pub(super) hovered: Option<UiId>,
     pub(super) pressed: Option<UiId>,
@@ -539,6 +564,10 @@ pub struct Ui {
     /// Requests from assistive technology, applied by the next [`Ui::frame`].
     pub(super) access_actions: Vec<super::UiAccessAction>,
     pub(super) theme: super::UiTheme,
+    /// The fonts and images rich text names ([`Ui::set_inline_font`]).
+    pub(super) rich_assets: super::rich::RichAssets,
+    /// Scratch space for laying out rich text.
+    pub(super) rich_layout: super::rich::RichLayout,
     /// The named nodes ([`Ui::find`]).
     pub(super) names: std::collections::HashMap<String, UiId>,
     /// The immediate widgets (a panel, a label, a button drawn the frame
@@ -568,6 +597,7 @@ impl Default for Ui {
             visible: Vec::new(),
             events: std::collections::VecDeque::new(),
             ime: Default::default(),
+            locale: Default::default(),
             focus: None,
             hovered: None,
             pressed: None,
@@ -580,6 +610,8 @@ impl Default for Ui {
             consumed: false,
             access_actions: Vec::new(),
             theme: super::UiTheme::default(),
+            rich_assets: Default::default(),
+            rich_layout: Default::default(),
             names: std::collections::HashMap::new(),
             immediate: super::UiImmediate::default(),
             overlay_has_pointer: false,
@@ -638,6 +670,8 @@ impl Ui {
             ime: true,
             preedit: String::new(),
             preedit_cursor: None,
+            key: None,
+            rich: None,
         }));
         id
     }
@@ -695,7 +729,11 @@ impl Ui {
             self.drag = None;
         }
         self.events.retain(|e| match e {
-            UiEvent::Clicked(n) | UiEvent::Changed(n) | UiEvent::Submitted(n) | UiEvent::ScreenPopped(n) => *n != id,
+            UiEvent::Clicked(n)
+            | UiEvent::Changed(n)
+            | UiEvent::Submitted(n)
+            | UiEvent::ScreenPopped(n)
+            | UiEvent::LinkClicked(n, _) => *n != id,
         });
     }
     /// Replace the node's layout (flex, grid, absolute positioning and
@@ -733,6 +771,7 @@ impl Ui {
         }
     }
     /// Set label or input text. Input control characters are discarded.
+    /// A node that held a string table key ([`Ui::set_text_key`]) lets go of it.
     /// ```
     /// use ponko::prelude::*;
     /// let mut ui = ponko::ui::Ui::default(); let id = ui.add(ponko::ui::UiWidget::Label, ponko::ui::UiLayout::auto());
@@ -740,15 +779,10 @@ impl Ui {
     /// ```
     pub fn set_text(&mut self, id: UiId, text: impl AsRef<str>) {
         if let Some(n) = self.node_mut(id) {
-            n.text.clear();
-            if n.widget == UiWidget::TextInput {
-                n.text.extend(text.as_ref().chars().filter(|c| !c.is_control()));
-            } else {
-                n.text.push_str(text.as_ref());
-            }
-            n.caret = n.text.len();
-            n.anchor = n.caret;
+            n.key = None;
+            n.put_text(text.as_ref());
         }
+        self.parse_rich_node(id);
     }
     /// Read text, or `None` for a stale ID.
     /// ```
@@ -1263,8 +1297,10 @@ impl Ui {
         for n in self.nodes.iter().flatten() {
             let _ = self.tree.mark_dirty(n.layout);
         }
+        self.parse_rich();
         let nodes = &self.nodes;
         let text = &mut self.measure;
+        let scratch = &mut self.rich_layout;
         let external_fonts = self.external_fonts;
         let roots = self.huds.iter().chain(self.screens.iter().map(|s| &s.root));
         for root in roots {
@@ -1284,6 +1320,9 @@ impl Ui {
                         style,
                         |_, _| 0.0,
                         |known, available| {
+                            if let Some(rich) = n.rich() {
+                                return rich_size(rich, n, external_fonts, known, available, text, scratch);
+                            }
                             let size = text.layout(
                                 &n.text,
                                 if external_fonts { n.paint.font } else { Font::DEFAULT },
@@ -1522,7 +1561,12 @@ impl Ui {
             }
         }
         if input.released {
-            if let Some(id) = self.pressed.take().filter(|id| Some(*id) == self.hovered)
+            let released = self.pressed.take().filter(|id| Some(*id) == self.hovered);
+            // A link in rich text takes the click (a button's too).
+            let link = released.and_then(|id| Some((id, self.link_under(id, input.pointer)?)));
+            if let Some((id, link)) = link {
+                self.events.push_back(UiEvent::LinkClicked(id, link));
+            } else if let Some(id) = released
                 && self
                     .node(id)
                     .is_some_and(|n| matches!(n.widget, UiWidget::Button | UiWidget::Toggle))
@@ -1748,6 +1792,45 @@ pub(super) fn intersect(a: Rect, b: Rect) -> Rect {
     Rect {
         min,
         max: a.max.min(b.max).max(min),
+    }
+}
+
+/// A rich node's size for Taffy, as plain text is measured: wrapped at the
+/// width it is given when it wraps.
+fn rich_size(
+    rich: &super::rich::RichText,
+    n: &Node,
+    external_fonts: bool,
+    known: Size<Option<f32>>,
+    available: Size<AvailableSpace>,
+    text: &mut crate::text::Text,
+    scratch: &mut super::rich::RichLayout,
+) -> Size<f32> {
+    use super::rich::{Align, Base};
+    let base = Base {
+        font: if external_fonts { n.paint.font } else { Font::DEFAULT },
+        size: n.paint.font_size,
+        scale: 1.0,
+        fonts: external_fonts,
+        pixels: 1.0,
+    };
+    let natural = rich.layout(base, None, Align::MEASURE, text, scratch);
+    let width = known.width.unwrap_or_else(|| match available.width {
+        AvailableSpace::Definite(w) if n.paint.wrap => natural.x.min(w.max(0.0)),
+        AvailableSpace::MinContent if n.paint.wrap => rich.min_content(base, text),
+        _ => natural.x,
+    });
+    let mut height = if n.paint.wrap {
+        rich.layout(base, Some(width), Align::MEASURE, text, scratch).y
+    } else {
+        natural.y
+    };
+    if rich.text.is_empty() && !matches!(n.widget, UiWidget::TextInput | UiWidget::Button | UiWidget::Toggle) {
+        height = 0.0;
+    }
+    Size {
+        width,
+        height: known.height.unwrap_or(height),
     }
 }
 

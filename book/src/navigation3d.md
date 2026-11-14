@@ -106,15 +106,17 @@ controller that writes the same transform. Use a separate presentation offset if
 your model origin is above its feet. Bake for the largest agent radius and height;
 components with radius larger than the bake radius stop.
 
-`d3::NavObstacle` is a world-space axis-aligned box component. The sim system gathers
-all boxes each tick. Changed, moved or removed boxes invalidate cached paths, as
+`d3::NavObstacle` is a world-space obstacle component. The sim system gathers
+all obstacles each tick. Changed, moved or removed obstacles invalidate cached paths, as
 does replacing the mesh resource, changing a destination or teleporting an agent.
 Unreachable agents wait until one of these changes. An agent trapped inside a
 newly blocked polygon stops; it is not automatically pushed out.
 
-Dynamic boxes **block entire overlapping polygon bounds**, expanded by agent radius
-and vertical clearance. This is conservative: a small obstacle may close a much
-larger region, especially with large tiles. Opt-in carving instead cuts new polygon edges from cached heightfield layers.
+Dynamic obstacles **block entire overlapping polygons**, tested against the
+obstacle's real footprint grown by the agent radius, and vertically from the
+agent height below it to its top. This is conservative: a small obstacle may
+close a much larger polygon, especially with large tiles. Opt-in carving instead
+cuts new polygon edges around the exact shape from cached heightfield layers.
 Non-carving changes scan all polygons; no spatial obstacle
 index is maintained. Use geometry in the bake for permanent walls and holes.
 For manual queries without the sim system, call `set_obstacles`; when registered,
@@ -131,6 +133,42 @@ build and keeps generation and 3D queries together. Landmass would still require
 a baker, Polyanya requires extra 3D surface handling, and oxidized_navigation is
 a Bevy plugin. The C API and C++ wrapper expose baking, queries, agents, avoidance and obstacles.
 
+
+### Obstacle shapes
+
+An obstacle is an upright prism `center.y ± half_extents.y` tall. Its
+`shape` (`d3::NavObstacleShape`) picks the footprint and `yaw` turns it
+around world Y, in radians, the way `Quat::from_rotation_y(yaw)` turns a
+model:
+
+| Shape | Constructor | Footprint |
+|---|---|---|
+| `Box` (default) | `NavObstacle::new(center, half_extents)` | `half_extents.x` by `half_extents.z`, turned by `yaw` |
+| `Cylinder` | `NavObstacle::cylinder(center, radius, half_height)` | radius `half_extents.x` along the obstacle's X and `half_extents.z` along its Z |
+| `Convex(polygon)` | `NavObstacle::convex(center, points, half_height)` | a convex polygon of 3 to 8 `(x, z)` offsets from `center` (`d3::NavConvexPolygon`), turned by `yaw` |
+
+```rust
+# use ponko::prelude::*;
+# fn add(ctx: &mut Ctx) {
+let mut crate_box = ponko::d3::NavObstacle::new(vec3(4.0, 0.5, 0.0), vec3(1.0, 0.5, 0.5));
+crate_box.yaw = 0.6;
+let pillar = ponko::d3::NavObstacle::cylinder(vec3(-3.0, 1.5, 2.0), 0.4, 1.5);
+let ramp = [vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(0.0, 1.5)];
+// None when the points are not a convex polygon.
+let wedge = ponko::d3::NavObstacle::convex(vec3(0.0, 0.5, 5.0), &ramp, 0.5).unwrap();
+ctx.world.spawn((crate_box,));
+ctx.world.spawn((pillar,));
+ctx.world.spawn((wedge,));
+# }
+```
+
+Blocking tests polygon bounds against the box or polygon itself, and against
+a 16-sided polygon drawn around a cylinder; carving cuts the cells whose centres
+are within the agent radius (plus half a cell) of the exact shape. An obstacle
+with a nonfinite center, size or `yaw`, or a negative size, fails closed: it
+blocks the whole mesh (a carving one stops navigation until it is corrected).
+Shapes and turns are Rust-only for now: the C and C++ obstacle calls make
+unturned boxes, as before.
 
 ## Crowd avoidance
 
@@ -182,8 +220,8 @@ overlaps, narrow passages and opposing bottlenecks can cause penetration or
 stalling. Stopped agents can be displaced by overlap correction. Several agents
 sharing one destination settle in a region around it: nonzero discs cannot all
 arrive at one exact point. Give agents distinct reachable targets when precise
-arrival is required. Moving boxes invalidate crowd corridors. Carving is available as described above;
-there is no predictive box velocity.
+arrival is required. Moving obstacles invalidate crowd corridors. Carving is available as described above;
+there is no predictive obstacle velocity.
 
 Slots and corridors persist across ticks. Capacity grows in powers of two up to
 16383 agents; excess agents wait. Mesh or obstacle changes rebuild the crowd,
@@ -195,12 +233,13 @@ validation on a new target, and crowd updates are synchronous and headless.
 
 ## Dynamic carving
 
-Set `carve = true` to cut real holes using DetourTileCache. The default remains
+Set `carve = true` to cut real holes of the obstacle's exact shape, rebuilt with
+the backend's tile-cache layer pipeline (regions, contours, polygons). The default remains
 conservative polygon blocking. Carving needs the heightfield layers, which cost
 bake time and memory, so bake with `NavBakeSettings::carving` set to `true`
 (`carving` in the C struct). Without it, a `carve` obstacle blocks like an
-ordinary one. A carving bake builds the mesh from the layers alone, so it costs
-about the same as a normal bake. Tile size is configured in bake settings (8–255
+ordinary one. A carving bake builds the mesh, detail heights included, from the
+layers alone, so it costs about the same as a normal bake. Tile size is configured in bake settings (8–255
 cells, default 32). Static heightfield layers are retained using the raw codec;
 updates never rasterize source triangles again.
 
@@ -232,24 +271,40 @@ advances at most that many layer rebuilds. C/C++ components are gathered by the
 simulation before extra manual updates can advance them. A zero budget only
 queries pending work. Changes arriving during rebuilds are retained. Movement
 under half a cell from the last applied position does not rebuild; size changes
-do. Ordered obstacle lists supply identity, so reordering can cause extra work.
+do, and so does a turn that moves the footprint's far edge half a cell. Ordered
+obstacle lists supply identity, so reordering can cause extra work.
 
-Each edit is submitted separately. Only layers touched by changed obstacles are
-rebuilt; moving an obstacle touches its old and new bounds. All agent paths and
+Only layers touched by changed obstacles are rebuilt; moving or turning an
+obstacle touches its old and new bounds. Every changed obstacle is taken at once
+and its layers queued in order. All agent paths and
 crowd corridors are invalidated after tile updates, conservatively including
 agents whose paths do not cross those tiles. Paths see each tile as it completes,
 so carving is eventually consistent rather than atomic across tiles.
 
-The backend accepts at most eight layers per obstacle and 256 obstacle handles;
-large boxes or deeply stacked worlds can exceed this. Manual updates return an
-error rather than silently truncating a hole. Simulation stops navigation on a
-cache error until the obstacle is corrected; a manual update reports the error. Cylinders are not exposed. Agents
-already enclosed by a hole stop rather than being ejected. Budget units count
-cache update calls (at most one layer each); edits touching no layers can still
-consume one unit. The simulation uses one unit per tick. Rebuilds allocate backend
-scratch and refresh polygon bounds across the mesh; the budget bounds tile count,
-not wall-clock duration. A carving bake keeps every tile's heightfield layers in
-memory. A carving mesh is built from those layers, so its polygons have no detail
-mesh heights; ordinary bakes keep the detail mesh. A carve obstacle that fully
+Simulation stops navigation on an invalid carving obstacle until it is
+corrected; a manual update reports the error. Agents already enclosed by a hole
+stop rather than being ejected. A budget unit is one layer rebuild; an edit that
+touches no layer costs nothing. The simulation uses one unit per tick. Rebuilds
+allocate scratch and refresh polygon bounds across the mesh; the budget bounds
+tile count, not wall-clock duration. A carving bake keeps every tile's
+heightfield layers in memory. A carve obstacle that fully
 cuts a corridor leaves the two sides unconnected: `find_path` returns `None` and
 agents wait until the hole is removed.
+
+### Detail heights and rebuild cost
+
+Every tile built from the layers, at bake time and after each carve, gets a
+detail mesh: the floor heights inside each polygon are sampled from the layer
+the way an ordinary bake samples its heightfield (every six cells, within one
+cell height), so agents follow uneven ground next to a carved hole as closely
+as on an ordinary bake instead of walking the flat plane between polygon
+corners. On a 2 m hill, an ordinary bake and a carved one both stay within
+about 0.25 m of the ground; the same polygons without detail heights miss it
+by up to 2 m.
+
+One layer rebuild (marking the carving obstacles, regions, contours, polygons
+and detail heights, swapping the tile and refreshing polygon flags) took
+about 0.1 ms per 32-cell tile on a 100 m level, flat or bumpy (median of 200;
+`cargo run --release -p ponko_bench -- nav3d/carve`, Apple M4 Max with other
+builds running, p95 up to 0.4 ms). Each rebuild runs under the bake's per-tile
+memory and work budget.

@@ -1,7 +1,8 @@
 # Asset sources: assets that don't live in `assets/`
 
 By default a named asset (`"sprites/crab.png"`, `"rules.json"`) is a file in
-the `assets/` folder (on the web, a file listed in `assets/index.json`). An
+the `assets/` folder (on the web, a file listed in `assets/index.json`), else
+in the `assets.pack` beside that folder (on the web, the page's pack). An
 **asset source** is another place to look first: bytes compiled into the
 executable, a pack file, or files made up in a test. A game adds one in
 setup; after that, the same loads by name find the asset there, and the rest of
@@ -52,11 +53,30 @@ call back into the engine. The engine owns `user` once the call succeeds and
 hands it to the optional free callback when the game ends; on a failure it is
 never freed.
 
+## Packs
+
+`PackSource` reads an asset pack, many files in one archive, as `ponko pack`
+writes it ([Assets in one pack](packaging.md#assets-in-one-pack-ponko-pack)).
+`PackSource::open(path)` reads only the index and then each file as it is
+loaded; `PackSource::from_bytes(id, bytes)` takes a pack held in memory (one
+embedded with `include_bytes!`, or downloaded):
+
+```rust
+{{#include ../../tests/asset_packs.rs:pack_source}}
+```
+
+A game needn't add its own `assets.pack`: the engine reads it after the loose
+files by itself. Add a `PackSource` for packs of your own, such as
+downloadable content. Each file's CRC-32 is checked when it is read; a
+damaged file is an I/O error naming it. C and C++ have no `PackSource` yet;
+they read the default `assets.pack` like Rust games.
+
 ## The rules
 
 - **Lookup order.** Added sources are asked in the order you added them, then
-  the `assets/` folders. The first one that has the name wins, so a source can
-  override a file in `assets/`. A source that lacks a name returns a
+  the `assets/` folders, then the `assets.pack` beside each of them. The first
+  one that has the name wins, so a source can override a file in `assets/`,
+  and a loose file overrides the default pack's copy. A source that lacks a name returns a
   `NotFound` error and the next one is asked; any other error (a disk read that
   failed, say) stops the search and is reported.
 - **Names.** Names are the same logical names the default source uses:

@@ -1,7 +1,14 @@
 //! Render-pass IBL baking using the existing sky texture binding.
 use super::gpu3d::HDR_FORMAT;
 use crate::render::traffic::{Counted, Upload};
+use crate::three::probe::RefreshStep;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// The GPU timer's name for a probe refresh's passes.
+const REFRESH: &str = "probe refresh";
+
+/// Timestamp writes for a pass of the given name (the frame's GPU timer).
+pub(super) type Timer<'a, 't> = dyn Fn(&'static str) -> Option<wgpu::RenderPassTimestampWrites<'t>> + 'a;
 
 pub(super) const SHADER: &str = concat!(
     include_str!("sky_sampling.wgsl"),
@@ -31,6 +38,16 @@ pub(super) struct Environment {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     capture_groups: Vec<(u32, Vec<wgpu::BindGroup>)>,
+    /// Moves a slot's maps toward its refresh's copy by the blend constant.
+    blend: wgpu::RenderPipeline,
+    /// Each refreshing slot's own textures (index slot - 1), made when it
+    /// first refreshes.
+    staging: Vec<Option<Staging>>,
+    /// This frame's steps of automatic refreshes (see `RefreshStep`).
+    pub refresh: Vec<RefreshStep>,
+    /// The six captured faces of this frame's refreshes that lay out their
+    /// cube (a `Filter` of face 0), bound for the capture pass.
+    refresh_captures: Vec<(u32, Vec<wgpu::BindGroup>)>,
     /// Set until the frame that records the sky bake is drawn: a frame that
     /// is prepared but then skipped (hidden window) must not lose the bake.
     brdf_pending: AtomicBool,
@@ -41,6 +58,23 @@ pub(super) struct Environment {
     key: Option<[f32; 22]>,
     /// Frames since the sky drifted from `key` by less than a visible step.
     stale: u32,
+}
+
+/// A refreshing probe's own textures: its cube strip, kept over the frames
+/// its faces are filtered in, and the copy of its maps that is filtered into
+/// and then blended over what the probe shows.
+struct Staging {
+    strip: wgpu::Texture,
+    /// The slot's maps' layout from the atlas, from row 0: 896 x 256.
+    maps: wgpu::Texture,
+    /// The strip, with the copy's config: for filtering.
+    strip_group: wgpu::BindGroup,
+    /// The spherical harmonics, with the copy's config: for the diffuse light.
+    sh_group: wgpu::BindGroup,
+    /// The copy, with its config: for blending it in.
+    maps_group: wgpu::BindGroup,
+    /// The slot's config, with its maps moved up to row 0.
+    config: wgpu::Buffer,
 }
 
 /// Bakes are full-screen filters of the whole cube (several milliseconds), so
@@ -90,9 +124,11 @@ impl Environment {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: HDR_FORMAT,
+                // Copied from: a refresh starts a new probe from the sky's maps.
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_DST,
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             })
         };
@@ -207,7 +243,44 @@ impl Environment {
                 cache: None,
             })
         };
+        let blend_add = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Constant,
+            dst_factor: wgpu::BlendFactor::OneMinusConstant,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let blend = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("blend"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vertex"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("blend"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: Some(wgpu::BlendState {
+                        color: blend_add,
+                        alpha: blend_add,
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         Self {
+            blend,
+            staging: (0..4).map(|_| None).collect(),
+            refresh: Vec::new(),
+            refresh_captures: Vec::new(),
             cube: pipeline("cube"),
             filter: pipeline("prefilter"),
             diffuse: pipeline("diffuse"),
@@ -261,6 +334,19 @@ impl Environment {
         group: &wgpu::BindGroup,
         rect: [u32; 4],
     ) {
+        Self::draw_rects(encoder, target, pipeline, [(group, rect)], 1.0, None);
+    }
+    /// Draws `pipeline` over each rectangle of `target` with its bind group,
+    /// in one pass (timed by `timestamps`), with blend constant `weight`
+    /// (for `blend`).
+    fn draw_rects<'g>(
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::Texture,
+        pipeline: &wgpu::RenderPipeline,
+        rects: impl IntoIterator<Item = (&'g wgpu::BindGroup, [u32; 4])>,
+        weight: f64,
+        timestamps: Option<wgpu::RenderPassTimestampWrites<'_>>,
+    ) {
         let view = target.create_view(&Default::default());
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("IBL bake"),
@@ -274,15 +360,25 @@ impl Environment {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: timestamps,
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_viewport(rect[0] as f32, rect[1] as f32, rect[2] as f32, rect[3] as f32, 0.0, 1.0);
-        pass.set_scissor_rect(rect[0], rect[1], rect[2], rect[3]);
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, group, &[]);
-        pass.draw(0..3, 0..1);
+        pass.set_blend_constant(wgpu::Color {
+            r: weight,
+            g: weight,
+            b: weight,
+            a: weight,
+        });
+        // The shaders work from the pixel's position in the target, so
+        // each rectangle is only a viewport and scissor of the same pass.
+        for (group, rect) in rects {
+            pass.set_viewport(rect[0] as f32, rect[1] as f32, rect[2] as f32, rect[3] as f32, 0.0, 1.0);
+            pass.set_scissor_rect(rect[0], rect[1], rect[2], rect[3]);
+            pass.set_bind_group(0, group, &[]);
+            pass.draw(0..3, 0..1);
+        }
     }
     fn filter(&self, encoder: &mut wgpu::CommandEncoder, slot: u32) {
         let y = 128 + slot * 256;
@@ -354,58 +450,269 @@ impl Environment {
     pub fn needs_sky(&self) -> bool {
         self.dirty.load(Ordering::Relaxed)
     }
+    /// Whether render target `target` is a probe's face drawn this frame
+    /// (lit by the sky alone, and cleared to nothing).
     pub fn is_capture(&self, target: u32) -> bool {
         self.bakes.iter().any(|(_, faces)| faces.contains(&target))
+            || self
+                .refresh
+                .iter()
+                .any(|s| matches!(s, RefreshStep::Capture { target: t, .. } if *t == target))
+    }
+    /// Whether a refresh step of this frame records into the maps.
+    fn refreshes_maps(&self) -> bool {
+        self.refresh.iter().any(|s| !matches!(s, RefreshStep::Capture { .. }))
     }
     pub fn has_probes(&self) -> bool {
-        !self.bakes.is_empty() || !self.uploads.is_empty()
+        !self.bakes.is_empty() || !self.uploads.is_empty() || self.refreshes_maps()
     }
     /// Whether [`probes`](Self::probes) records anything: a loaded probe,
-    /// or a bake whose six faces are all render targets (see
-    /// [`prepare_bakes`](Self::prepare_bakes)).
+    /// a bake whose six faces are all render targets (see
+    /// [`prepare_bakes`](Self::prepare_bakes)), or a refresh's step on the maps.
     pub fn records_probes(&self) -> bool {
-        !self.uploads.is_empty() || !self.capture_groups.is_empty()
+        !self.uploads.is_empty() || !self.capture_groups.is_empty() || self.refreshes_maps()
     }
     /// The maps' atlas and the cube strip they are filtered from: for
     /// checking them against what the frame's passes declare.
     pub fn images(&self) -> [&wgpu::Texture; 2] {
         [&self.atlas, &self.source]
     }
+    /// Binds face `texture` for the capture pass.
+    fn capture_group(&self, device: &wgpu::Device, texture: &wgpu::Texture) -> wgpu::BindGroup {
+        let view = texture.create_view(&Default::default());
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("IBL capture"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.buffers[0].as_entire_binding(),
+                },
+            ],
+        })
+    }
+    /// The bind groups of faces `faces` among `targets`, if all six are there.
+    fn face_groups(
+        &self,
+        device: &wgpu::Device,
+        targets: &[(u32, wgpu::Texture)],
+        faces: &[u32; 6],
+    ) -> Option<Vec<wgpu::BindGroup>> {
+        let groups: Vec<_> = faces
+            .iter()
+            .filter_map(|id| targets.iter().find(|(t, _)| t == id))
+            .map(|(_, texture)| self.capture_group(device, texture))
+            .collect();
+        (groups.len() == 6).then_some(groups)
+    }
     /// Binds each captured face of this frame's bakes, for `probes`.
     pub fn prepare_bakes(&mut self, device: &wgpu::Device, targets: &[(u32, wgpu::Texture)]) {
         self.capture_groups.clear();
-        for &(slot, faces) in &self.bakes {
-            let groups: Vec<_> = faces
-                .iter()
-                .filter_map(|id| targets.iter().find(|(t, _)| t == id))
-                .map(|(_, texture)| {
-                    let view = texture.create_view(&Default::default());
-                    device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("IBL capture"),
-                        layout: &self.layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(&self.sampler),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: self.buffers[0].as_entire_binding(),
-                            },
-                        ],
-                    })
-                })
-                .collect();
-            if groups.len() == 6 {
+        for i in 0..self.bakes.len() {
+            let (slot, faces) = self.bakes[i];
+            if let Some(groups) = self.face_groups(device, targets, &faces) {
                 self.capture_groups.push((slot, groups));
             }
         }
     }
-    pub fn probes(&self, encoder: &mut wgpu::CommandEncoder) {
+    /// Makes the textures of slots that refresh for the first time, and binds
+    /// the faces this frame's refreshes lay out, for `probes`.
+    pub fn prepare_refresh(&mut self, device: &wgpu::Device, targets: &[(u32, wgpu::Texture)]) {
+        self.refresh_captures.clear();
+        for i in 0..self.refresh.len() {
+            let slot = match self.refresh[i] {
+                RefreshStep::Capture { .. } => continue,
+                RefreshStep::Seed(slot)
+                | RefreshStep::Harmonics(slot)
+                | RefreshStep::Finish(slot)
+                | RefreshStep::Blend { slot, .. } => slot,
+                RefreshStep::Filter { slot, face, faces } => {
+                    if face == 0
+                        && let Some(groups) = self.face_groups(device, targets, &faces)
+                    {
+                        self.refresh_captures.push((slot, groups));
+                    }
+                    slot
+                }
+            };
+            let index = slot as usize - 1;
+            if index < self.staging.len() && self.staging[index].is_none() {
+                self.staging[index] = Some(self.make_staging(device, slot));
+            }
+        }
+    }
+    /// Slot `slot`'s refresh textures and their bindings.
+    fn make_staging(&self, device: &wgpu::Device, slot: u32) -> Staging {
+        let texture = |label, width, height| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: HDR_FORMAT,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        let strip = texture("probe refresh cube", 768, 128);
+        let maps = texture("probe refresh maps", 896, 256);
+        // The slot's config, with its maps moved up to row 0 (see `maps_row`).
+        let config = device
+            .uploading(Upload::Uniforms)
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("probe refresh config"),
+                contents: bytemuck::cast_slice(&[
+                    [slot as f32, 0.0, 1.0, 128.0 + slot as f32 * 256.0],
+                    [0.0; 4],
+                    [0.0; 4],
+                    [0.0; 4],
+                ]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let group = |texture: &wgpu::Texture| {
+            let view = texture.create_view(&Default::default());
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("probe refresh"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: config.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+        Staging {
+            strip_group: group(&strip),
+            sh_group: group(&self.sh_texture),
+            maps_group: group(&maps),
+            strip,
+            maps,
+            config,
+        }
+    }
+    /// The atlas rows of slot `slot`'s maps: the filtered cube and the
+    /// diffuse light.
+    fn slot_rects(slot: u32) -> [[u32; 4]; 2] {
+        let y = 128 + slot * 256;
+        [[0, y, 768, 255], [800, y, 96, 16]]
+    }
+    /// One refresh step on the maps (see `RefreshStep`), its passes timed
+    /// as "probe refresh".
+    fn refresh_step<'t>(&self, encoder: &mut wgpu::CommandEncoder, step: RefreshStep, time: &Timer<'_, 't>) {
+        let slot = match step {
+            RefreshStep::Capture { .. } => return,
+            RefreshStep::Seed(slot)
+            | RefreshStep::Harmonics(slot)
+            | RefreshStep::Finish(slot)
+            | RefreshStep::Blend { slot, .. } => slot,
+            RefreshStep::Filter { slot, .. } => slot,
+        };
+        let Some(Some(staging)) = self.staging.get(slot as usize - 1) else {
+            return;
+        };
+        super::gpu3d::mark_step("probes");
+        match step {
+            RefreshStep::Capture { .. } => {}
+            RefreshStep::Seed(slot) => {
+                // The sky's maps (slot 0) become the copy, then the content.
+                for [x, y, width, height] in Self::slot_rects(0) {
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &self.atlas,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x, y, z: 0 },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &staging.maps,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x, y: 0, z: 0 },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+                self.blend_in(encoder, staging, slot, 1.0, time);
+            }
+            RefreshStep::Filter { slot, face, .. } => {
+                if face == 0
+                    && let Some((_, groups)) = self.refresh_captures.iter().find(|(s, _)| *s == slot)
+                {
+                    let faces = groups
+                        .iter()
+                        .enumerate()
+                        .map(|(face, group)| (group, [face as u32 * 128, 0, 128, 128]));
+                    Self::draw_rects(encoder, &staging.strip, &self.capture, faces, 1.0, time(REFRESH));
+                }
+                // Every roughness level of one face (see `prefilter`): the
+                // level of size `size` starts at row 256 - 2 * size.
+                let levels = (0..8).map(|level| {
+                    let size = 128 >> level;
+                    (&staging.strip_group, [face * size, 256 - 2 * size, size, size])
+                });
+                Self::draw_rects(encoder, &staging.maps, &self.filter, levels, 1.0, time(REFRESH));
+            }
+            RefreshStep::Harmonics(slot) => {
+                let sh = [(&staging.strip_group, [0, slot, 9 * SH_PARTS, 1])];
+                Self::draw_rects(encoder, &self.sh_texture, &self.sh, sh, 1.0, time(REFRESH));
+            }
+            RefreshStep::Finish(_) => {
+                let diffuse = [(&staging.sh_group, [800, 0, 96, 16])];
+                Self::draw_rects(encoder, &staging.maps, &self.diffuse, diffuse, 1.0, time(REFRESH));
+            }
+            RefreshStep::Blend { slot, weight } => self.blend_in(encoder, staging, slot, weight, time),
+        }
+    }
+    /// Moves slot `slot`'s maps `weight` of the way to the refresh's copy.
+    fn blend_in<'t>(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        staging: &Staging,
+        slot: u32,
+        weight: f32,
+        time: &Timer<'_, 't>,
+    ) {
+        let rects = Self::slot_rects(slot).map(|rect| (&staging.maps_group, rect));
+        Self::draw_rects(
+            encoder,
+            &self.atlas,
+            &self.blend,
+            rects,
+            f64::from(weight.clamp(0.0, 1.0)),
+            time(REFRESH),
+        );
+    }
+    /// Loaded probes, bakes and this frame's refresh steps; the refresh's
+    /// passes are timed by `time`.
+    pub fn probes<'t>(&self, encoder: &mut wgpu::CommandEncoder, time: &Timer<'_, 't>) {
         for (slot, texture) in &self.uploads {
             super::gpu3d::mark_step("probes");
             encoder.copy_texture_to_texture(texture.as_image_copy(), self.source.as_image_copy(), texture.size());
@@ -426,6 +733,9 @@ impl Environment {
             }
             self.filter(encoder, *slot);
         }
+        for &step in &self.refresh {
+            self.refresh_step(encoder, step, time);
+        }
     }
 }
 
@@ -435,6 +745,28 @@ impl Environment {
     pub fn check_mirrors(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.settings_mirror
             .check(device, queue, &self.buffers[0], 0, "environment settings");
+    }
+}
+
+impl Environment {
+    /// Counts the sky and reflection probe cubemaps, their filtered levels
+    /// and harmonics, and what bakes them as probes (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        t.texture(C::Probes, &self.atlas);
+        t.texture(C::Probes, &self.source);
+        t.texture(C::Probes, &self.sh_texture);
+        for buffer in &self.buffers {
+            t.buffer(C::Probes, buffer);
+        }
+        for (_, texture) in &self.uploads {
+            t.texture(C::Probes, texture);
+        }
+        for staging in self.staging.iter().flatten() {
+            t.texture(C::Probes, &staging.strip);
+            t.texture(C::Probes, &staging.maps);
+            t.buffer(C::Probes, &staging.config);
+        }
     }
 }
 

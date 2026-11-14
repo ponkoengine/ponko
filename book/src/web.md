@@ -66,7 +66,11 @@ has the fields, and how to check every page in a headless browser.
 
 **Assets are fetched before setup.** There's no file system, so the build
 script lists your `assets/` folder in `assets/index.json`, and the engine
-downloads every file in it before running your setup. `load_texture` and
+downloads every file in it before running your setup. A web package from
+`ponko package --web` ships them in one `assets.pack` instead, named by the
+page's canvas (`data-pack="assets.pack"`), which the engine fetches with at
+most two range requests ([Assets in one
+pack](packaging.md#assets-in-one-pack-ponko-pack)). `load_texture` and
 the other loading functions then work as usual.
 
 **One thread.** Browsers can run WebAssembly on several threads only on

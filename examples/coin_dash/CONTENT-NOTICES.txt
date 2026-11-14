@@ -1,8 +1,8 @@
 Coin Dash: content notices
 ==========================
 
-Coin Dash is a reference game for the Ponko engine, built only from content
-made for it. Nothing in it is taken from another work.
+Coin Dash is a reference game for the Ponko engine, built from content made
+for it, and one font under the SIL Open Font License (see "Text and fonts").
 
 Pictures
 --------
@@ -21,10 +21,20 @@ synthesizes when it starts.
 
 Text and fonts
 --------------
-The game ships no font file. Its text is drawn with the default fonts bundled
-into the engine by the `epaint_default_fonts` crate; their licenses are
-included in THIRD-PARTY-NOTICES.txt together with every other library that is
-linked into the game.
+Latin text is drawn with the default fonts bundled into the engine by the
+`epaint_default_fonts` crate; their licenses are included in
+THIRD-PARTY-NOTICES.txt together with every other library that is linked into
+the game.
+
+assets/coin_dash/fonts/NotoSansArabic-UI.ttf
+    The Arabic text: a subset of Noto Sans Arabic.
+    Copyright 2022 The Noto Project Authors.
+    Licensed under the SIL Open Font License 1.1, copied with the subset's
+    description in assets/coin_dash/fonts/OFL.txt.
+
+assets/coin_dash/lang/en.json, assets/coin_dash/lang/ar.json
+    The game's text in English and Arabic, written for this example, under
+    the same terms as the coin picture.
 
 The engine
 ----------

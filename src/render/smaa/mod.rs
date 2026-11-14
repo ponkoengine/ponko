@@ -522,6 +522,8 @@ impl BindGroups {
 
 pub(super) struct Smaa {
     pipelines: Pipelines,
+    /// Kept for the GPU memory report: the bind groups hold its textures.
+    resources: Resources,
     targets: Targets,
     groups: BindGroups,
 }
@@ -540,9 +542,22 @@ impl Smaa {
         let groups = BindGroups::new(device, &layouts, &resources, &targets);
         Self {
             pipelines,
+            resources,
             targets,
             groups,
         }
+    }
+    /// Counts its targets as frame targets and its lookup textures as
+    /// other memory (see `memory.rs`).
+    pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        let targets = &self.targets;
+        for view in [&targets.color_target, &targets.edges_target, &targets.blend_target] {
+            t.view(C::FrameTargets, view);
+        }
+        t.buffer(C::Other, &targets.rt_uniforms);
+        t.texture(C::Other, &self.resources.area_texture);
+        t.texture(C::Other, &self.resources.search_texture);
     }
     pub fn input(&self) -> &wgpu::TextureView {
         &self.targets.color_target

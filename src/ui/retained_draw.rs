@@ -19,6 +19,7 @@ pub(crate) struct ScriptedClick {
 
 impl Ctx {
     pub(crate) fn update_retained_ui(&mut self) {
+        self.localize_ui();
         let text = std::mem::take(&mut self.ui_state.retained_input_text);
         let mut input = self.retained_input(&self.ui, text);
         if let Some(click) = self.ui_state.scripted.take() {
@@ -48,6 +49,34 @@ impl Ctx {
         self.follow_ui_ime();
         #[cfg(feature = "3d")]
         self.update_ui_panels();
+    }
+
+    /// Keyed UI text follows the string tables (`Ui::localize`): the fonts
+    /// tables name are loaded first, falling back to the built-in font.
+    pub(crate) fn localize_ui(&mut self) {
+        let Some(strings) = self.world.get_resource_mut::<crate::locale::Strings>() else {
+            return;
+        };
+        // Nodes given a key since the last frame are filled in even when the
+        // tables didn't change (`Ui::localize` knows).
+        if strings.revision() == self.ui_state.localized {
+            self.ui.localize(strings);
+            return;
+        }
+        for (language, path) in strings.fonts_to_load() {
+            strings.fonts_tried.push((language.clone(), path.clone()));
+            match self.gfx.try_load_font(&path) {
+                Ok(font) => {
+                    if self.gfx.font_fallbacks(font).is_empty() {
+                        self.gfx.set_font_fallbacks(font, &[crate::text::Font::DEFAULT]);
+                    }
+                    strings.set_font(&language, font);
+                }
+                Err(e) => eprintln!("ponko: the {language} string table's font: {e}"),
+            }
+        }
+        self.ui.localize(strings);
+        self.ui_state.localized = strings.revision();
     }
 
     /// After the UI's frame: IME is allowed while its focus is on a text
@@ -161,6 +190,8 @@ impl Ctx {
     }
 
     pub(crate) fn draw_retained_ui(&mut self) {
+        // The language may have changed in this frame's systems.
+        self.localize_ui();
         // Move the tree out while issuing draw calls; no callback borrowing the
         // game, context and node tree simultaneously is required.
         let spare = self.ui_state.retained_spare.take().unwrap_or_default();
@@ -348,14 +379,18 @@ impl Ctx {
             // and selection are measured from; labels and buttons align
             // right-to-left paragraphs from the right.
             let directional = !is_input;
-            self.retained_text(
-                text,
-                origin,
-                text_rect.size().x,
-                params,
-                (n.paint.wrap, directional),
-                n.paint.align,
-            );
+            if let Some(rich) = n.rich() {
+                self.retained_rich(rich, &n.paint, text_rect, scale, params.z);
+            } else {
+                self.retained_text(
+                    text,
+                    origin,
+                    text_rect.size().x,
+                    params,
+                    (n.paint.wrap, directional),
+                    n.paint.align,
+                );
+            }
             self.ui_state.shown_scratch = shown;
             if n.widget == crate::ui::UiWidget::Scroll && n.max_scroll.y > 0.0 {
                 let h = n.rect.size().y;
@@ -407,6 +442,68 @@ impl Ctx {
                 rest = rest[end..].trim_start();
             }
         }
+    }
+    /// Draws a rich node's text ([`crate::ui::Ui::set_rich`]) in `rect`:
+    /// each run in its font, size and color, its images, underlines.
+    fn retained_rich(
+        &mut self,
+        rich: &super::rich::RichText,
+        paint: &crate::ui::UiPaint,
+        rect: Rect,
+        scale: f32,
+        z: f32,
+    ) {
+        use super::rich::{Align, Base, bold_offset};
+        let base = Base {
+            font: paint.font,
+            size: paint.font_size,
+            scale,
+            fonts: true,
+            pixels: self.gfx.scale_factor,
+        };
+        let align = Align {
+            align: paint.align,
+            width: rect.size().x,
+            directional: true,
+        };
+        let wrap = paint.wrap.then_some(rect.size().x);
+        let mut out = std::mem::take(&mut self.ui_state.rich_layout);
+        rich.layout(base, wrap, align, &mut self.gfx.text, &mut out);
+        for item in &out.items {
+            let span = &rich.spans[item.span as usize];
+            let (font, size) = rich.font_size(span, base);
+            let color = span.style.color.unwrap_or(paint.color);
+            let at = rect.min + item.at;
+            if let Some(image) = span.image {
+                // Images keep their own colors.
+                let size = Vec2::new(item.width, item.image_height);
+                self.retained_image(
+                    image,
+                    Rect {
+                        min: at,
+                        max: at + size,
+                    },
+                    0.0,
+                    0.0,
+                    Color::WHITE,
+                    z,
+                );
+            } else {
+                let params = TextParams { font, size, color, z };
+                let run = &rich.text[item.start as usize..item.end as usize];
+                self.gfx.draw_text_ex(run, at, params);
+                if span.style.bold {
+                    self.gfx
+                        .draw_text_ex(run, at + Vec2::new(bold_offset(size), 0.0), params);
+                }
+            }
+            if span.style.underline {
+                let thick = (size / 16.0).max(1.0);
+                let y = rect.min.y + item.baseline + thick;
+                self.gfx.ui_fill(Rect::new(at.x, y, item.width, thick), color, z);
+            }
+        }
+        self.ui_state.rich_layout = out;
     }
     fn retained_image(
         &mut self,

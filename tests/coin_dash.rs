@@ -951,9 +951,11 @@ const PAD_BUTTONS: [GamepadButton; 16] = [
 ];
 
 // ANCHOR: ui_drive
-/// What the engine does with the retained UI at the start of every frame (layout,
-/// focus, events from this input), then the game's own frame system.
+/// What the engine does with the retained UI at the start of every frame (the
+/// keyed labels' text in the current language, layout, focus, events from
+/// this input), then the game's own frame system.
 fn ui_frame(ctx: &mut Ctx, input: UiInput) {
+    ctx.ui.localize(strings(&ctx.world));
     ctx.ui.frame(ARENA, &input);
     settings::settings_ui(ctx);
 }
@@ -1097,16 +1099,25 @@ fn tab_shift_tab_and_arrows_reach_every_control_in_a_sensible_order() {
             }
             order.push(now);
         }
-        // Scale, volume, then each control's key and gamepad button, then the footer.
-        assert_eq!(order[..4], ["Smaller UI", "Larger UI", "Volume", "Move up key: W"]);
+        // Scale, volume, language, then each control's key and gamepad button, then the footer.
+        assert_eq!(
+            order[..5],
+            [
+                "Smaller UI",
+                "Larger UI",
+                "Volume",
+                "Language: English",
+                "Move up key: W"
+            ]
+        );
         assert!(
             order.contains(&"Confirm gamepad button: South".to_string()),
             "{order:?}"
         );
         assert!(order.contains(&"Settings key: O".to_string()), "{order:?}");
         assert_eq!(order[order.len() - 2..], ["Reset to defaults", "Back"]);
-        // 2 scale buttons, the slider, 9 keys, 5 gamepad buttons, 2 footer buttons.
-        assert_eq!(order.len(), 2 + 1 + 9 + 5 + 2, "{order:?}");
+        // 2 scale buttons, the slider, the language, 9 keys, 5 gamepad buttons, 2 footer buttons.
+        assert_eq!(order.len(), 2 + 1 + 1 + 9 + 5 + 2, "{order:?}");
 
         // Shift-Tab goes back, and the arrows move between neighbours.
         tab_to(ctx, "Larger UI");
@@ -1210,7 +1221,7 @@ fn the_volume_slider_changes_the_saved_volume() {
 
 /// Rebinds `control`'s key through the screen: focus its button, press it, then press `key`.
 fn rebind_key_through_the_screen(ctx: &mut Ctx, control: Control, key: Key) {
-    let name = format!("{} key", control.label());
+    let name = format!("{} key", control.label(strings(&ctx.world)));
     tab_to(ctx, &name);
     press_confirm(ctx); // opens the prompt; the Enter that did it must not answer it
     idle(ctx);
@@ -1642,7 +1653,7 @@ fn the_settings_screen_says_which_keys_belong_to_the_menus() {
         let hint = tree
             .nodes()
             .iter()
-            .find(|n| n.name == settings::HINT)
+            .find(|n| n.name == strings(&ctx.world).get("settings.hint"))
             .expect("the hint is on the screen");
         assert!(
             hint.name.contains("Escape")

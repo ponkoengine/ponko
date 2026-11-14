@@ -1,0 +1,17 @@
+{
+  "name": "rich_text_arabic",
+  "scene": "a wrapping retained UI label 240 units wide at (8, 8), 20 unit text in the built-in font with Noto Sans Arabic as its fallback: a right-to-left line whose first word and colon are #ffcc00, at the right edge, the rest white to its left; on black, 256x96, drawn with the window's sprite pipeline into an sRGB target",
+  "width": 256,
+  "height": 96,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 24,
+    "outliers": 0.004,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "a9ede3de2e30c763",
+  "reason": "New reference for rich text in labels (#412): a right-to-left line with a colored first word"
+}
