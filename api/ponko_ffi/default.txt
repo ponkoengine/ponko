@@ -4315,6 +4315,7 @@ pub const ponko_ffi::PONKO_UI_SCREEN: u64
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_describe_resource(*mut ponko_ffi::PonkoWorld, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_free(*mut ponko_ffi::PonkoWorld) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_is_saved(*mut ponko_ffi::PonkoWorld, u64, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_is_shadow_only(*mut ponko_ffi::PonkoWorld, u64, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_len(*mut ponko_ffi::PonkoWorld, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_load(*mut ponko_ffi::PonkoWorld, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_migrate_save(*mut ponko_ffi::PonkoWorld, *const core::ffi::primitives::c_char, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
@@ -4329,6 +4330,7 @@ pub const ponko_ffi::PONKO_UI_SCREEN: u64
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_set_query_cache_policy(*mut ponko_ffi::PonkoWorld, *const ponko_ffi::PonkoQueryCachePolicy) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_set_save_version(*mut ponko_ffi::PonkoWorld, u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_set_saved(*mut ponko_ffi::PonkoWorld, u64, bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_set_shadow_only(*mut ponko_ffi::PonkoWorld, u64, bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_world_sort_spatial(*mut ponko_ffi::PonkoWorld, f32) -> ponko_ffi::PonkoStatus
 pub type ponko_ffi::PonkoAssetContainsFn = core::option::Option<fn(*mut core::ffi::c_void, *const core::ffi::primitives::c_char) -> bool>
 pub type ponko_ffi::PonkoAssetDecodeFn = core::option::Option<fn(*mut core::ffi::c_void, *const u8, usize) -> u32>
