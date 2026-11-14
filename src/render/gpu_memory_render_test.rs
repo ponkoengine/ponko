@@ -1,7 +1,7 @@
 //! Offscreen GPU tests of the GPU memory report ([`GpuMemory`]): the
-//! quality presets change the classes they should by what they should, and
-//! the total is within a few percent of the platform's own figure where it
-//! reports one. Skips without a GPU.
+//! quality presets change the classes they should by what they should (as
+//! far as the device's texture size limit lets them), and the total agrees
+//! with the platform's own figure where it reports one. Skips without a GPU.
 use std::process::Command;
 
 use super::memory::{MemoryClass as C, MemoryTally, adapter_bytes};
@@ -17,6 +17,11 @@ const H: u32 = 720;
 /// textures, window and timer the fixture made for it (what the engine's
 /// renderer would add).
 fn memory(f: &Fixture) -> GpuMemory {
+    tally(f).finish()
+}
+
+/// The tally behind [`memory`], before it is summed up.
+fn tally(f: &Fixture) -> MemoryTally {
     let mut t = MemoryTally::default();
     f.renderer.tally_memory(&mut t);
     for texture in &f.textures {
@@ -26,7 +31,7 @@ fn memory(f: &Fixture) -> GpuMemory {
     if let Some(timer) = &f.timer {
         timer.tally_memory(&mut t);
     }
-    t.finish()
+    t
 }
 
 /// A 1x1 depth stand-in's bytes.
@@ -49,6 +54,22 @@ fn quality_presets_change_shadows_atlases_and_frame_targets_as_they_ask() {
         f.draw();
         let m = memory(&f);
         let (size, layers) = f.renderer.shadow_map();
+        // What the preset asks for, capped at the largest texture the
+        // device makes (2048 on the WebGL 2 and baseline tiers, where High
+        // and Ultra get the same maps).
+        let limit = f.device.limits().max_texture_dimension_2d;
+        let lighting = &f.ctx.scene3d.lighting;
+        assert_eq!(
+            (size, layers),
+            (lighting.shadow_size(limit), lighting.shadow_cascades),
+            "{quality:?}: the preset's shadow map, within the device's limit of {limit}"
+        );
+        let wanted_atlas = (lighting.light_shadow_budget() > 0).then(|| lighting.light_shadow_atlas_size(limit));
+        assert_eq!(
+            f.renderer.light_shadow_map(),
+            wanted_atlas,
+            "{quality:?}: the preset's atlas"
+        );
         // Depth32Float: 4 bytes a texel, one layer per cascade; and the
         // shadow passes' uniforms, the same whatever the preset.
         let map = u64::from(size) * u64::from(size) * 4 * u64::from(layers);
@@ -79,12 +100,26 @@ fn quality_presets_change_shadows_atlases_and_frame_targets_as_they_ask() {
     let [low, medium, high, ultra, low_again] = &seen[..] else {
         unreachable!()
     };
-    // Bigger maps and atlases with each step up.
+    // Each step up makes the maps and atlases bigger where the device
+    // allows bigger ones, never smaller; and the total grows with them. On
+    // a device capped at 2048² textures, High and Ultra hold the same
+    // (asserted above against the presets' sizes).
+    let limit = f.device.limits().max_texture_dimension_2d;
     for (a, b) in [(low, medium), (medium, high), (high, ultra)] {
-        assert!(a.shadows < b.shadows, "{a}\n{b}");
-        assert!(a.total < b.total, "{a}\n{b}");
+        assert!(a.shadows <= b.shadows && a.atlases <= b.atlases, "{a}\n{b}");
+        assert!(a.total <= b.total, "{a}\n{b}");
+        if (a.shadows, a.atlases) != (b.shadows, b.atlases) {
+            assert!(a.total < b.total, "{a}\n{b}");
+        }
     }
-    assert!(low.atlases < high.atlases && high.atlases < ultra.atlases);
+    // Low has no light atlas; Medium (2048²) has one at any limit.
+    assert!(low.atlases < medium.atlases && medium.atlases <= high.atlases);
+    // More cascades from Low to Medium to High, whatever the limit.
+    assert!(low.shadows < medium.shadows && medium.shadows < high.shadows);
+    if limit >= 8192 {
+        // Ultra's 4096² cascades and 8192² atlas fit.
+        assert!(high.shadows < ultra.shadows && high.atlases < ultra.atlases);
+    }
     // Low draws at two thirds of the size without reflections or
     // antialiasing; High at full size with both.
     assert!(
@@ -132,18 +167,53 @@ fn the_total_is_within_a_few_percent_of_the_adapters_own_figure() {
     assert!(stdout.contains("1 passed"), "the child ran: {stdout}");
 }
 
+/// Direct3D 12 places every buffer and texture on its own range of whole
+/// 64 KiB pages (`D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT`; wgpu asks
+/// for no smaller alignment), so its allocator counts a 256-byte uniform
+/// buffer as 64 KiB.
+const D3D12_PAGE: u64 = 64 << 10;
+
+/// The allocations wgpu makes for itself in its allocator's report: its
+/// internal buffers (labelled `(wgpu internal) ...`: the zero buffer,
+/// indirect draw validation) and, on Direct3D 12, a small buffer of
+/// sampler indices for every bind group that holds samplers, each a whole
+/// 64 KiB page. They are not the engine's textures and buffers, so they are
+/// left out of the comparison; their bytes and count are printed.
+fn wgpu_own(report: &wgpu::AllocatorReport) -> (u64, usize) {
+    let own: Vec<u64> = report
+        .allocations
+        .iter()
+        .filter(|a| a.name.contains("(wgpu internal)") || a.name.contains("Internal Sampler Index Buffer"))
+        .map(|a| a.size)
+        .collect();
+    (own.iter().sum(), own.len())
+}
+
 /// Draws each preset and compares the counted total with the adapter's
 /// figure, where the platform has one. Does nothing unless run as the
 /// child of the test above.
 ///
 /// The engine counts the sizes it asks for; a driver lays textures out in
-/// its own tiles and keeps memory of its own. On an Apple M4 Max (Metal)
-/// a feature switched on adds 0.8% more to the device's figure than to the
-/// count for power-of-two shadow maps and 2-11% for screen-sized targets
-/// (16 KB tiles), and wgpu holds 1.1 MB before the engine makes anything.
-/// So at a render scale of 1 the two agree within 5% (Medium 3.7%, High
-/// 3.3%, Ultra 1.8% at 720p), and Low's two-thirds scale, whose odd sizes
-/// tile worst, within 10% (9.2%).
+/// its own tiles and keeps memory of its own, and each backend differs:
+///
+/// - Metal (`currentAllocatedSize`, everything the process holds): on an
+///   Apple M4 Max a feature switched on adds 0.8% more to the device's
+///   figure than to the count for power-of-two shadow maps and 2-11% for
+///   screen-sized targets (16 KB tiles), and wgpu holds 1.1 MB before the
+///   engine makes anything. So at a render scale of 1 the two agree within
+///   5% (Medium 3.7%, High 3.3%, Ultra 1.8% at 720p), and Low's two-thirds
+///   scale, whose odd sizes tile worst, within 10% (9.2%).
+/// - wgpu's allocator (Direct3D 12, Vulkan): the report names each
+///   allocation, so what wgpu makes for itself ([`wgpu_own`]) is taken
+///   out, and the engine's resources are counted as the allocator places
+///   them (whole 64 KiB pages on Direct3D 12, [`D3D12_PAGE`]). On the
+///   Windows runner's software adapter (WARP) the raw figure was a nearly
+///   constant 22-28 MB above the count at every preset (Low 29%, High 9%),
+///   the same on every GPU tier: fixed costs, not a class the engine
+///   undercounts. Within the same 5% and 10% after that.
+///
+/// A resource the engine forgets to count (a missing 16 MB light atlas,
+/// a frame target) still breaks either comparison.
 #[test]
 fn adapter_figure_child() {
     if std::env::var_os(CHILD).is_none() {
@@ -154,6 +224,11 @@ fn adapter_figure_child() {
         println!("skipped: {why}");
         return;
     }
+    let page = if f.backend == wgpu::Backend::Dx12 {
+        D3D12_PAGE
+    } else {
+        1
+    };
     let mut off = Vec::new();
     for quality in [
         GraphicsQuality::Low,
@@ -166,15 +241,31 @@ fn adapter_figure_child() {
         f.draw();
         // What the draws dropped (the readback buffer) is freed by a poll.
         f.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        let m = memory(&f);
-        let counted = m.total;
-        let adapter = adapter_bytes(&f.device).0.expect("reported above");
+        let t = tally(&f);
+        let placed = t.placed_bytes(page);
+        let m = t.finish();
+        let raw = adapter_bytes(&f.device).0.expect("reported above");
         println!("{m}");
+        // The engine's share of the figure, and what it is compared with.
+        let (counted, adapter) = match f.device.generate_allocator_report() {
+            Some(report) => {
+                let (own, n) = wgpu_own(&report);
+                println!(
+                    "{quality:?}: wgpu's own allocations: {n}, {:.2} MB; the engine's {} placed in {page}-byte pages: {:.2} MB",
+                    own as f64 / 1048576.0,
+                    m.total,
+                    placed as f64 / 1048576.0
+                );
+                (placed, raw - own)
+            }
+            None => (m.total, raw),
+        };
         let ratio = counted as f64 / adapter as f64;
         println!(
-            "{quality:?}: counted {:.2} MB, adapter {:.2} MB, ratio {ratio:.4}",
+            "{quality:?}: counted {:.2} MB, adapter {:.2} MB (raw {:.2} MB), ratio {ratio:.4}",
             counted as f64 / 1048576.0,
-            adapter as f64 / 1048576.0
+            adapter as f64 / 1048576.0,
+            raw as f64 / 1048576.0
         );
         let within = if f.ctx.scene3d.post.render_scale == 1.0 {
             0.05
@@ -183,8 +274,17 @@ fn adapter_figure_child() {
         };
         if (ratio - 1.0).abs() >= within {
             off.push(format!(
-                "{quality:?}: counted {counted} bytes, the adapter reports {adapter}"
+                "{quality:?}: counted {counted} bytes, the adapter reports {adapter} (raw {raw})"
             ));
+        }
+    }
+    if !off.is_empty() {
+        // Where the difference is: the allocator's largest allocations.
+        if let Some(mut report) = f.device.generate_allocator_report() {
+            report.allocations.sort_by_key(|a| std::cmp::Reverse(a.size));
+            for a in report.allocations.iter().take(40) {
+                println!("{:>12} {}", a.size, a.name);
+            }
         }
     }
     assert!(off.is_empty(), "{off:#?}");

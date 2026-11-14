@@ -4,10 +4,12 @@
 //! that check must not allocate in steady state, so a declared step makes
 //! exactly the allocations of the same step registered without one.
 //!
-//! A single test in its own binary: `CountingAllocator` counts every thread
-//! in the process, so nothing else may run while this one measures.
+//! Its own binary: it replaces the global allocator. Only the game thread's
+//! allocations are compared (profiling runs the steps there), so libtest's
+//! other threads can't fail it.
 #![cfg(all(feature = "physics", feature = "physics3d", feature = "navmesh"))]
 
+use std::alloc::{GlobalAlloc, Layout};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -19,8 +21,56 @@ use ponko::prelude::*;
 use ponko::render::MeshData;
 use ponko::{prelude::Systems, systems};
 
+/// The engine's counting allocator, also counting each thread's own
+/// allocations: profiling runs the systems on the calling thread, so that
+/// count is exact, while libtest's main thread (which files the running test
+/// after spawning it) can allocate at any time.
+struct ThreadCountingAllocator;
+
+thread_local! {
+    static ALLOCS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Allocations (and reallocations) made on this thread so far.
+fn thread_allocs() -> u64 {
+    ALLOCS.with(Cell::get)
+}
+
+fn note_allocation() {
+    // Const-initialized: no allocation, no destructor. A thread being torn
+    // down may still allocate after its locals are gone.
+    let _ = ALLOCS.try_with(|count| count.set(count.get() + 1));
+}
+
+// SAFETY: every method forwards unchanged to the engine's counting allocator;
+// the extra accounting only updates an allocation-free thread-local `Cell`.
+unsafe impl GlobalAlloc for ThreadCountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        note_allocation();
+        // SAFETY: the caller's contract, forwarded.
+        unsafe { CountingAllocator.alloc(layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        note_allocation();
+        // SAFETY: the caller's contract, forwarded.
+        unsafe { CountingAllocator.alloc_zeroed(layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        note_allocation();
+        // SAFETY: the caller's contract, forwarded.
+        unsafe { CountingAllocator.realloc(ptr, layout, size) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: the caller's contract, forwarded.
+        unsafe { CountingAllocator.dealloc(ptr, layout) }
+    }
+}
+
 #[global_allocator]
-static ALLOCATOR: CountingAllocator = CountingAllocator;
+static ALLOCATOR: ThreadCountingAllocator = ThreadCountingAllocator;
 
 /// Ticks before the profiler (and so the counter) is on, and ticks measured.
 const WARM_UP: u64 = 100;
@@ -57,14 +107,12 @@ fn allocations(declared: bool) -> u64 {
         if declared { 3 } else { 0 }
     );
     game.add(Phase::Input, move |ctx: &mut Ctx| {
-        // Counting starts with the profiler, after the warm-up.
+        // Measure from a few ticks after the warm-up.
         if ctx.time.sim_tick() == WARM_UP + 10 {
-            at_start.set(ponko::perf::alloc_counts().count);
+            at_start.set(thread_allocs());
         }
     })
-    .add(Phase::SimLast, move |_: &mut Ctx| {
-        at_end.set(ponko::perf::alloc_counts().count)
-    })
+    .add(Phase::SimLast, move |_: &mut Ctx| at_end.set(thread_allocs()))
     .profile_headless(WARM_UP, TICKS, |ctx| {
         use ponko::d2;
         use ponko::d3;
