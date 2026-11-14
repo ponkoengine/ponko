@@ -996,3 +996,88 @@ fn lazily_built_alpha_masks_keep_cutout_shadows_exact() {
     assert_ne!(stale, expected, "stale cutout shadows differ from a full redraw");
     assert_eq!(expected, solid, "back to the first image");
 }
+
+/// With `Lighting::shadow_sun_step`, a sun turning a little every frame
+/// leaves the sun's shadow maps bit for bit the same, and kept by the
+/// cache, until it has turned past the step; then they change once.
+/// Negative control: with no step they change every frame.
+#[test]
+fn a_slowly_turning_sun_keeps_its_shadow_maps_until_the_step() {
+    let Some(rig) = Rig::new() else {
+        crate::render::render_test_support::no_gpu("no GPU adapter or device");
+        return;
+    };
+    let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(SIZE as f32, SIZE as f32));
+    let matte = MaterialDesc {
+        color: Color::WHITE,
+        roughness: 1.0,
+        ..Default::default()
+    };
+    let material = ctx.gfx.create_material(matte);
+    let ground = MeshData::plane(20.0);
+    let cube = MeshData::cube(1.0);
+    let ground_mesh = ctx.gfx.create_mesh(&ground, material);
+    let cube_mesh = ctx.gfx.create_mesh(&cube, material);
+    ctx.world.spawn((Transform3D::default(), Model::new(ground_mesh)));
+    ctx.world
+        .spawn((Transform3D::at(vec3(0.0, 1.0, 0.0)), Model::new(cube_mesh)));
+    ctx.world
+        .spawn((Transform3D::at(vec3(3.0, 1.0, 2.0)), Model::new(cube_mesh)));
+    ctx.scene3d.camera.position = vec3(0.0, 9.0, 9.0);
+    ctx.scene3d.camera.look_at(Vec3::ZERO);
+    ctx.scene3d.lighting.shadows = true;
+    ctx.scene3d.lighting.shadow_cascades = CASCADES;
+    ctx.scene3d.lighting.shadow_resolution = 512;
+    ctx.scene3d.lighting.shadow_distance = 30.0;
+    ctx.scene3d.lighting.shadow_refresh = 1;
+    ctx.scene3d.sky.atmosphere = false;
+    // The sun turns 0.1 degrees about the vertical each frame, 50 degrees
+    // down: 0.064 degrees of turn a frame.
+    let sun = |frame: usize| {
+        let (s, c) = (frame as f32 * 0.1).to_radians().sin_cos();
+        vec3(c * 0.64, -0.77, s * 0.64)
+    };
+
+    // Each frame: whether the shadow maps changed since the frame before,
+    // and how many cascades the cache kept.
+    let run = |ctx: &mut Ctx, step: f32, frames: usize| -> Vec<(bool, u32)> {
+        ctx.scene3d.lighting.shadow_sun_step = step;
+        let mut renderer = rig.renderer();
+        renderer.create_material(&rig.device, &GpuMaterialDesc::new(&matte), &rig.textures);
+        renderer.create_mesh(
+            &rig.device,
+            &ground,
+            &[(0..ground.indices.len() as u32, material)],
+            true,
+        );
+        renderer.create_mesh(&rig.device, &cube, &[(0..cube.indices.len() as u32, material)], true);
+        let mut frame = Frame3D::default();
+        let mut last = None;
+        (0..frames)
+            .map(|i| {
+                ctx.scene3d.lighting.sun_direction = sun(i);
+                rig.draw(&mut renderer, &mut frame, ctx);
+                let map = renderer.shadow_map_bytes(&rig.device, &rig.queue);
+                let changed = last.as_ref().is_some_and(|l| *l != map);
+                last = Some(map);
+                (changed, (renderer.shadow_views_kept() & 0b11).count_ones())
+            })
+            .collect()
+    };
+
+    // A 1 degree step: the turn passes it after 16 frames (1 / 0.064).
+    let held = run(&mut ctx, 1f32.to_radians(), 40);
+    let changed: Vec<usize> = (1..held.len()).filter(|&i| held[i].0).collect();
+    assert_eq!(changed, [16, 32], "the maps change only at each step");
+    for (i, &(change, kept)) in held.iter().enumerate().skip(1) {
+        let expect = if change { 0 } else { CASCADES };
+        assert_eq!(kept, expect, "frame {i}: cascades kept between steps, drawn at a step");
+    }
+
+    // Negative control: the exact direction changes the maps every frame.
+    let exact = run(&mut ctx, 0.0, 6);
+    assert!(
+        exact[1..].iter().all(|&(change, kept)| change && kept == 0),
+        "{exact:?}"
+    );
+}

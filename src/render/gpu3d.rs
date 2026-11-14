@@ -160,6 +160,16 @@ use crate::three::{Frame3D, MaterialOverride, Scene3D};
 use crate::three::{ShaderDiagnostic, ShaderKind};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// The scene depth is reverse-Z (`three::reverse_z_perspective`): the near
+/// plane at 1, the far plane (and the sky) at 0, so it starts cleared to 0
+/// and nearer means greater. Shadow maps keep standard depth (cleared to 1,
+/// `Less`), as their samplers compare.
+const SCENE_DEPTH_CLEAR: f32 = 0.0;
+/// The scene depth's test for what writes it: nearer is greater.
+const SCENE_DEPTH_NEARER: wgpu::CompareFunction = wgpu::CompareFunction::Greater;
+/// The scene depth's test for what only reads it (the sky at the far
+/// plane, particles): as near or nearer.
+const SCENE_DEPTH_NEARER_OR_EQUAL: wgpu::CompareFunction = wgpu::CompareFunction::GreaterEqual;
 /// The usage the sun's shadow map adds in tests, so they can read it back
 /// (`Renderer3D::shadow_map_bytes`); otherwise none.
 const SHADOW_READBACK: wgpu::TextureUsages = if cfg!(test) {
@@ -748,7 +758,7 @@ impl Renderer3D {
             Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_compare: Some(SCENE_DEPTH_NEARER_OR_EQUAL),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),

@@ -489,10 +489,10 @@ fn fly(rig: &mut BatchRig, k: usize) {
 
 /// The depth grid a readback of the frame drawn from `view_proj` would
 /// give for the wall alone: the wall's depth where it covers a whole grid
-/// cell, the far plane elsewhere.
+/// cell, the far plane elsewhere (reverse-Z: 0).
 fn wall_grid(view_proj: Mat4, camera: Vec3) -> OcclusionGrid {
     let (w, h) = (32u32, 32u32);
-    let mut depth = vec![1.0f32; (w * h) as usize];
+    let mut depth = vec![0.0f32; (w * h) as usize];
     // The face towards the camera (which stays in front of the wall).
     let z = WALL.1.z;
     let corners = [
@@ -504,12 +504,13 @@ fn wall_grid(view_proj: Mat4, camera: Vec3) -> OcclusionGrid {
     .map(|c| view_proj * c.extend(1.0));
     if corners.iter().all(|c| c.w > 1e-3) {
         let ndc = corners.map(|c| c.truncate() / c.w);
-        // The rectangle inside all four edges, and the farthest depth.
+        // The rectangle inside all four edges, and the farthest depth (the
+        // smallest, reverse-Z).
         let left = ndc[0].x.max(ndc[2].x);
         let right = ndc[1].x.min(ndc[3].x);
         let bottom = ndc[0].y.max(ndc[1].y);
         let top = ndc[2].y.min(ndc[3].y);
-        let far = ndc.iter().map(|c| c.z).fold(0.0, f32::max);
+        let far = ndc.iter().map(|c| c.z).fold(1.0, f32::min);
         for y in 0..h {
             for x in 0..w {
                 let (x0, x1) = (x as f32 / w as f32 * 2.0 - 1.0, (x + 1) as f32 / w as f32 * 2.0 - 1.0);
@@ -2086,7 +2087,7 @@ fn a_depth_grid_past_the_culling_buffer_is_left_out_and_reported() {
             rig.ctx.scene3d.camera.position,
             1024,
             1024,
-            vec![0.0; 1024 * 1024],
+            vec![1.0; 1024 * 1024], // reverse-Z: the near plane
         ));
         let image = rig.image();
         assert_same("without the oversized grid", &image, &all, SAME_DEVICE, 0.05);
@@ -2099,7 +2100,7 @@ fn a_depth_grid_past_the_culling_buffer_is_left_out_and_reported() {
         rig.ctx.scene3d.camera.position,
         16,
         16,
-        vec![0.0; 256],
+        vec![1.0; 256],
     ));
     let hidden = rig.image();
     let red = |i: &support::Image| i.fraction(0..i.width, 0..i.height, |p| p[0] > 200 && p[1] < 60 && p[2] < 60);

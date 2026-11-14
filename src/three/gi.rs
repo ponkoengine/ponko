@@ -446,8 +446,8 @@ impl GiFrame {
         self.faces.clear();
         self.face_runs.clear();
         self.face_view_proj.clear();
-        let projection =
-            glam::camera::rh::proj::directx::perspective(std::f32::consts::FRAC_PI_2, 1.0, self.near, self.far);
+        // Reverse-Z, as every view drawn into the scene depth's format.
+        let projection = super::reverse_z_perspective(std::f32::consts::FRAC_PI_2, 1.0, self.near, self.far);
         let far = self.far;
         for update in &self.updates {
             let probe = update.position;

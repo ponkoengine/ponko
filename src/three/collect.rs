@@ -126,6 +126,10 @@ pub(crate) struct Frame3D {
     cascade_cache: [Option<CachedCascade>; MAX_CASCADES],
     /// Counts frames, for taking turns redrawing the far cascades.
     frame_number: u32,
+    /// The sun direction the cascades were last drawn from and the
+    /// `Lighting::shadow_sun_step` it was held with (see [`hold_sun`]);
+    /// `None` without a step or shadows.
+    held_sun: Option<(Vec3, f32)>,
     /// The screen effects to run, in order: (effect, material).
     pub effects: Vec<(u32, u32)>,
     /// The target effects to run, in order: (effect, target texture, material).
@@ -424,6 +428,18 @@ impl Frame3D {
         } else {
             0
         };
+        // The direction the cascades are drawn from: the exact one, or one
+        // held until the sun turns past `shadow_sun_step`.
+        let step = lighting.shadow_sun_step;
+        let shadow_sun = if self.cascades > 0 && step > 0.0 && step.is_finite() {
+            let held = self.held_sun.filter(|&(_, s)| s == step).map(|(d, _)| d);
+            let sun = hold_sun(held, lighting.sun_direction, step);
+            self.held_sun = Some((sun, step));
+            sun
+        } else {
+            self.held_sun = None;
+            lighting.sun_direction
+        };
         let splits = cascade_splits(camera.near, lighting.shadow_distance, self.cascades);
         // Each cascade's box is open towards the sun: casters above it
         // still shade what's inside, so its near plane isn't tested.
@@ -452,7 +468,7 @@ impl Frame3D {
                         && !batches_changed
                         && c.size == self.shadow_size
                         && c.cascades == self.cascades
-                        && c.sun == lighting.sun_direction
+                        && c.sun == shadow_sun
                         && center.distance(c.center) + radius <= c.reach
                 });
                 if let Some(c) = kept {
@@ -463,7 +479,7 @@ impl Frame3D {
                 } else {
                     let (m, texel, reach) = sun_box(
                         camera,
-                        lighting.sun_direction,
+                        shadow_sun,
                         near,
                         splits[i],
                         self.shadow_size,
@@ -474,7 +490,7 @@ impl Frame3D {
                         texel,
                         center,
                         reach,
-                        sun: lighting.sun_direction,
+                        sun: shadow_sun,
                         size: self.shadow_size,
                         cascades: self.cascades,
                     });
@@ -484,7 +500,7 @@ impl Frame3D {
                 }
             } else {
                 self.cascade_cache[i] = None;
-                let (m, texel) = sun_view_proj(camera, lighting.sun_direction, near, splits[i], self.shadow_size);
+                let (m, texel) = sun_view_proj(camera, shadow_sun, near, splits[i], self.shadow_size);
                 self.sun_view_proj[i] = m;
                 self.cascade_texel[i] = texel;
                 self.redrawn |= 1 << i;
@@ -517,7 +533,7 @@ impl Frame3D {
             planes: frustum_planes(self.view_proj),
             receivers,
             camera: camera.position,
-            sunlight: lighting.sun_direction.try_normalize().unwrap_or(Vec3::NEG_Y),
+            sunlight: shadow_sun.try_normalize().unwrap_or(Vec3::NEG_Y),
             sweep: lighting.shadow_distance * 2.0,
             sun_planes,
             cascades: self.cascades,
@@ -1212,6 +1228,24 @@ fn sun_box(camera: &Camera3D, sun_direction: Vec3, near: f32, far: f32, size: u3
     (projection * view, texel, radius - texel * 2.0)
 }
 
+/// The sun direction to draw the cascades from, given the one they were
+/// last drawn from (`held`, `None` to start over), the true `sun` and
+/// `Lighting::shadow_sun_step` (above 0): `held` while the true direction
+/// is within `step` radians of it, otherwise the true direction
+/// (normalized), which is held from then on. Holding, rather than snapping
+/// to a fixed grid of directions, gives hysteresis for free: after a jump
+/// the sun must turn a whole step again, so one wobbling across a boundary
+/// can't flip the shadows back and forth, and the steps come every `step`
+/// radians whatever axis the sun turns about (a grid's cells shrink
+/// towards its poles).
+pub(crate) fn hold_sun(held: Option<Vec3>, sun: Vec3, step: f32) -> Vec3 {
+    let sun = sun.try_normalize().unwrap_or(Vec3::NEG_Y);
+    match held {
+        Some(held) if held.dot(sun) >= step.min(std::f32::consts::PI).cos() => held,
+        _ => sun,
+    }
+}
+
 /// The first of `cascades` cascades that can be kept between frames: the
 /// far half (cascades 2 and 3 of 4, 1 of 2).
 pub(crate) fn far_cascades(cascades: usize) -> usize {
@@ -1738,6 +1772,135 @@ mod tests {
         // So does a new shadow map size.
         lighting.shadow_resolution = 1024;
         assert_eq!(redrawn(&camera, &lighting), 0b1111);
+    }
+
+    /// The sun direction `degrees` around the Y axis from the start, tilted
+    /// 50 degrees down.
+    fn turned(degrees: f32) -> Vec3 {
+        let (s, c) = degrees.to_radians().sin_cos();
+        Vec3::new(c * 0.64, -0.77, s * 0.64)
+    }
+
+    #[test]
+    fn a_held_sun_moves_only_past_the_step_and_does_not_flip_back() {
+        let step = 2f32.to_radians();
+        let start = hold_sun(None, turned(0.0), step);
+        assert!(
+            (start - turned(0.0).normalize()).length() < 1e-6,
+            "starts at the true direction"
+        );
+        // Turning less than a step (0.64 of the yaw is the angle, tilted).
+        let mut held = start;
+        for d in [0.5, 1.0, 2.0, 3.0] {
+            held = hold_sun(Some(held), turned(d), step);
+            assert_eq!(held, start, "{d} degrees of yaw is less than a 2 degree step");
+        }
+        // Past the step: it jumps to the true direction.
+        let past = hold_sun(Some(held), turned(3.4), step);
+        assert_ne!(past, start);
+        assert!(past.angle_between(turned(3.4)) < 1e-4);
+        // Hysteresis: wobbling back across the boundary keeps the new one.
+        for d in [3.2, 3.0, 3.4, 2.8, 3.6] {
+            assert_eq!(hold_sun(Some(past), turned(d), step), past, "{d}");
+        }
+        // And the old one would have flipped back on the same wobble: it is
+        // the true direction past the step, not a fixed boundary, that counts.
+        assert_eq!(hold_sun(Some(start), turned(3.0), step), start);
+        // Deterministic: the same frames give the same directions.
+        let run = |frames: usize| {
+            let mut held = None;
+            (0..frames)
+                .map(|i| {
+                    let d = hold_sun(held, turned(i as f32 * 0.05), step);
+                    held = Some(d);
+                    d
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run(400), run(400));
+        let changes = run(400).windows(2).filter(|w| w[0] != w[1]).count();
+        // 20 degrees of yaw, about 12.8 of turn: six 2-degree steps.
+        assert_eq!(changes, 6);
+    }
+
+    #[test]
+    fn a_held_sun_keeps_the_cascades_and_their_cache_until_the_step() {
+        let (mut world, assets, camera, mut lighting) = cache_scene(8);
+        lighting.shadow_sun_step = 2f32.to_radians();
+        let mut frame = Frame3D::default();
+        let mut far_draws = 0;
+        let mut changes = 0;
+        let mut last = None;
+        for i in 0..120 {
+            lighting.sun_direction = turned(i as f32 * 0.05);
+            frame.collect(&mut world, &assets, &SkinFrame::default(), &camera, &lighting);
+            far_draws += (frame.redrawn & 0b1100).count_ones();
+            if last.is_some_and(|m| m != frame.sun_view_proj) {
+                changes += 1;
+            }
+            last = Some(frame.sun_view_proj);
+        }
+        // 6 degrees of yaw is about 3.8 of turn: one step, at frame 2/0.05.
+        assert_eq!(changes, 1, "the cascades move once");
+        // Far cascades: drawn on the first frame and at the step (2 each),
+        // otherwise only when their turn comes, every 8 frames.
+        let turns = 2 * 120 / 8;
+        assert!(far_draws <= 4 + turns, "{far_draws} far draws");
+        // Without the step, the moving sun draws them every frame.
+        lighting.shadow_sun_step = 0.0;
+        let mut exact = 0;
+        for i in 0..120 {
+            lighting.sun_direction = turned(i as f32 * 0.05);
+            frame.collect(&mut world, &assets, &SkinFrame::default(), &camera, &lighting);
+            exact += (frame.redrawn & 0b1100).count_ones();
+        }
+        assert_eq!(exact, 240);
+    }
+
+    #[test]
+    fn a_changed_step_or_no_shadows_starts_the_hold_over() {
+        let (mut world, assets, camera, mut lighting) = cache_scene(1);
+        let mut frame = Frame3D::default();
+        let mut collect = |frame: &mut Frame3D, lighting: &Lighting| {
+            frame.collect(&mut world, &assets, &SkinFrame::default(), &camera, lighting);
+            frame.sun_view_proj
+        };
+        lighting.shadow_sun_step = 0.1;
+        lighting.sun_direction = turned(0.0);
+        let held = collect(&mut frame, &lighting);
+        lighting.sun_direction = turned(1.0);
+        assert_eq!(collect(&mut frame, &lighting), held, "held within the step");
+        let exact = {
+            let mut fresh = Frame3D::default();
+            collect(&mut fresh, &lighting)
+        };
+        assert_ne!(exact, held);
+        lighting.shadow_sun_step = 0.2;
+        assert_eq!(
+            collect(&mut frame, &lighting),
+            exact,
+            "a new step starts at the true direction"
+        );
+        lighting.shadows = false;
+        collect(&mut frame, &lighting);
+        lighting.shadows = true;
+        lighting.sun_direction = turned(2.0);
+        let fresh = {
+            let mut fresh = Frame3D::default();
+            collect(&mut fresh, &lighting)
+        };
+        assert_eq!(collect(&mut frame, &lighting), fresh, "shadows back on: starts over");
+        // A step of 0 is today's behaviour: the exact direction, bit for bit.
+        lighting.shadow_sun_step = 0.0;
+        let splits = cascade_splits(camera.near, lighting.shadow_distance, 4);
+        let (m, _) = sun_view_proj(
+            &camera,
+            lighting.sun_direction,
+            splits[2],
+            splits[3],
+            lighting.shadow_size(0),
+        );
+        assert_eq!(collect(&mut frame, &lighting)[3], m);
     }
 
     #[test]

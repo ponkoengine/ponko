@@ -205,7 +205,7 @@ impl DepthCopyTarget {
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &self.view,
                 depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
+                    load: wgpu::LoadOp::Clear(super::SCENE_DEPTH_CLEAR),
                     store: wgpu::StoreOp::Store,
                 }),
                 stencil_ops: None,

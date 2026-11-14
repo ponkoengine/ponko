@@ -157,7 +157,7 @@ impl Renderer3D {
     pub(super) fn stencil_ops(&self, clear: Option<bool>) -> Option<wgpu::Operations<u32>> {
         let depth = clear.map(|clear| wgpu::Operations {
             load: if clear {
-                wgpu::LoadOp::Clear(1.0)
+                wgpu::LoadOp::Clear(super::SCENE_DEPTH_CLEAR)
             } else {
                 wgpu::LoadOp::Load
             },
@@ -539,7 +539,7 @@ impl Renderer3D {
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: &targets.depth,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
+                            load: wgpu::LoadOp::Clear(super::SCENE_DEPTH_CLEAR),
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: self.stencil_ops(Some(true)),
@@ -809,7 +809,7 @@ impl Renderer3D {
                     view: &gi.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: if first {
-                            wgpu::LoadOp::Clear(1.0)
+                            wgpu::LoadOp::Clear(super::SCENE_DEPTH_CLEAR)
                         } else {
                             wgpu::LoadOp::Load
                         },
@@ -858,7 +858,7 @@ impl Renderer3D {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &target.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(super::SCENE_DEPTH_CLEAR),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: self.stencil_ops(Some(true)),

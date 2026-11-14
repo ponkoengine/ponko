@@ -7,6 +7,8 @@
 //! below, and tests a model's bounding box against the level where the box
 //! covers at most a few cells: if the box's nearest point is behind the
 //! farthest depth everywhere it covers, something drawn in that frame hid it.
+//! The depth is reverse-Z (1 near, 0 far): the farthest depth is the
+//! smallest, and behind means smaller.
 //!
 //! The test uses the view the depth was drawn from, so turning the camera
 //! changes nothing; only moving it does (things behind an occluder shift
@@ -22,7 +24,7 @@ pub(crate) struct OcclusionGrid {
     pub view_proj: Mat4,
     /// Where the camera was.
     pub camera: Vec3,
-    /// Each level's size and depths (0 near, 1 far), row by row from the top;
+    /// Each level's size and depths (reverse-Z: 1 near, 0 far), row by row from the top;
     /// level 0 is the grid the GPU made, each next one half its size.
     levels: Vec<(u32, u32, Vec<f32>)>,
 }
@@ -48,10 +50,10 @@ impl OcclusionGrid {
             let mut next = vec![0.0f32; (nw * nh) as usize];
             for y in 0..nh {
                 for x in 0..nw {
-                    let mut far = 0.0f32;
+                    let mut far = 1.0f32;
                     for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                         let (sx, sy) = ((2 * x + dx).min(w - 1), (2 * y + dy).min(h - 1));
-                        far = far.max(below[(sy * w + sx) as usize]);
+                        far = far.min(below[(sy * w + sx) as usize]);
                     }
                     next[(y * nw + x) as usize] = far;
                 }
@@ -70,7 +72,7 @@ impl OcclusionGrid {
     pub fn hides(&self, min: Vec3, max: Vec3, camera: Vec3) -> bool {
         let grow = Vec3::splat(camera.distance(self.camera));
         let (min, max) = (min - grow, max + grow);
-        let (mut lo, mut hi, mut nearest) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN), f32::MAX);
+        let (mut lo, mut hi, mut nearest) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN), f32::MIN);
         for i in 0..8 {
             let corner = Vec3::new(
                 if i & 1 == 0 { min.x } else { max.x },
@@ -85,10 +87,11 @@ impl OcclusionGrid {
             let ndc = Vec2::new(clip.x, clip.y) / clip.w;
             lo = lo.min(ndc);
             hi = hi.max(ndc);
-            nearest = nearest.min(clip.z / clip.w);
+            nearest = nearest.max(clip.z / clip.w);
         }
-        // Partly outside that frame's view: no depth there to go by.
-        if lo.x < -1.0 || lo.y < -1.0 || hi.x > 1.0 || hi.y > 1.0 || nearest < 0.0 {
+        // Partly outside that frame's view (or nearer than its near plane):
+        // no depth there to go by.
+        if lo.x < -1.0 || lo.y < -1.0 || hi.x > 1.0 || hi.y > 1.0 || nearest > 1.0 {
             return false;
         }
         let (w0, h0, _) = &self.levels[0];
@@ -106,7 +109,7 @@ impl OcclusionGrid {
         let (cy0, cy1) = (cell(y0, *h), cell(y1, *h));
         for y in cy0..=cy1 {
             for x in cx0..=cx1 {
-                if nearest <= depth[(y * w + x) as usize] {
+                if nearest >= depth[(y * w + x) as usize] {
                     return false;
                 }
             }
@@ -122,7 +125,7 @@ mod tests {
     fn camera() -> (Mat4, Vec3) {
         let eye = Vec3::new(0.0, 0.0, 10.0);
         let view = glam::camera::rh::view::look_at_mat4(eye, Vec3::ZERO, Vec3::Y);
-        let proj = glam::camera::rh::proj::directx::perspective(60f32.to_radians(), 1.0, 0.1, 100.0);
+        let proj = super::super::reverse_z_perspective(60f32.to_radians(), 1.0, 0.1, 100.0);
         (proj * view, eye)
     }
 
@@ -143,7 +146,7 @@ mod tests {
                 if (16..48).contains(&x) && (16..48).contains(&y) {
                     wall
                 } else {
-                    1.0
+                    0.0
                 }
             })
             .collect();
@@ -205,10 +208,11 @@ mod tests {
             Vec3::ZERO,
             3,
             3,
-            vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+            vec![0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
         );
+        // Reverse-Z: the farthest is the smallest.
         assert_eq!(grid.levels.len(), 3);
-        assert_eq!(grid.levels[1].2, vec![0.5, 0.6, 0.8, 0.9]);
-        assert_eq!(grid.levels[2].2, vec![0.9]);
+        assert_eq!(grid.levels[1].2, vec![0.5, 0.4, 0.2, 0.1]);
+        assert_eq!(grid.levels[2].2, vec![0.1]);
     }
 }

@@ -33,6 +33,9 @@ fn coordinate(p: vec2<i32>) -> vec2<i32> {
     return clamp(p, vec2<i32>(0), vec2<i32>(textureDimensions(depth)) - 1);
 }
 fn z_at(p: vec2<i32>) -> f32 { return textureLoad(depth, coordinate(p), 0); }
+// The depth is reverse-Z: 1 at the near plane, 0 at the far plane and the
+// sky, so farther is smaller. Next to the far plane counts as sky.
+fn is_sky(z: f32) -> bool { return z <= 0.000001; }
 fn ndc(p: vec2<i32>) -> vec2<f32> {
     let uv = (vec2<f32>(coordinate(p)) + 0.5) / vec2<f32>(textureDimensions(depth));
     return uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0);
@@ -65,7 +68,7 @@ fn edge_fade(uv: vec2<f32>) -> f32 {
 fn behind(c: vec4<f32>) -> bool {
     let q = vec2<i32>(to_uv(c) * vec2<f32>(textureDimensions(depth)));
     let z = z_at(q);
-    return z < 0.999999 && c.z / c.w > z;
+    return !is_sky(z) && c.z / c.w < z;
 }
 
 // What the pixel reflects: rgb the color, alpha how much it counts (0: the
@@ -74,7 +77,7 @@ fn behind(c: vec4<f32>) -> bool {
     // The top left of the 2x2 full-size pixels this one stands for.
     let p = vec2<i32>(in.at.xy) * 2;
     let strength = settings.params.x;
-    if strength <= 0.0 || z_at(p) >= 0.999999 { return vec4<f32>(0.0); }
+    if strength <= 0.0 || is_sky(z_at(p)) { return vec4<f32>(0.0); }
     let center = position(p);
     let view = normalize(settings.camera.xyz - center);
     // The less discontinuous neighbor on either side of each axis.
@@ -119,7 +122,7 @@ fn behind(c: vec4<f32>) -> bool {
         if !on_screen(uv) { break; }
         let q = vec2<i32>(uv * size);
         let z = z_at(q);
-        if z < 0.999999 && c.z / c.w > z {
+        if !is_sky(z) && c.z / c.w < z {
             // Behind it, by less than its assumed thickness (or the step):
             // a hit. Further behind, the ray passed behind it; go on.
             let gap = c.w - scene_w(q, z);
@@ -190,7 +193,7 @@ fn center_pixel(x: vec2<i32>, size: vec2<i32>) -> vec2<i32> {
 // The surface at the center of pixel `x` of an image of `size` (w 0: sky).
 fn center_at(x: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
     let p = center_pixel(x, size);
-    return select(vec4<f32>(position(p), 1.0), vec4<f32>(0.0), z_at(p) >= 0.999999);
+    return select(vec4<f32>(position(p), 1.0), vec4<f32>(0.0), is_sky(z_at(p)));
 }
 // The step from `c`, at pixel `x` of level 2 (`local` in this workgroup's
 // part of it, `size` in all), to its neighbor along one axis, on the side

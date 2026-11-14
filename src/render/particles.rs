@@ -148,7 +148,7 @@ impl Particles {
                     depth_stencil: Some(wgpu::DepthStencilState {
                         format: depth,
                         depth_write_enabled: Some(false),
-                        depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                        depth_compare: Some(wgpu::CompareFunction::GreaterEqual), // reverse-Z scene depth
                         stencil: Default::default(),
                         bias: Default::default(),
                     }),

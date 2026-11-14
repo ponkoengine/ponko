@@ -422,6 +422,8 @@ mod regression_render_test;
 mod regression_sequence_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod regression_stage;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod reverse_z_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod gltf_extensions_render_test;

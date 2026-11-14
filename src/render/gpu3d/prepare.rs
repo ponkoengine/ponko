@@ -107,7 +107,7 @@ impl Renderer3D {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: self.shaders.depth_format(),
                 depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_compare: Some(super::SCENE_DEPTH_NEARER_OR_EQUAL),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),

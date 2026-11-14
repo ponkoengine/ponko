@@ -7325,6 +7325,7 @@ pub ponko::render::Lighting::shadow_distance: f32
 pub ponko::render::Lighting::shadow_filter: ponko::render::ShadowFilter
 pub ponko::render::Lighting::shadow_refresh: u32
 pub ponko::render::Lighting::shadow_resolution: u32
+pub ponko::render::Lighting::shadow_sun_step: f32
 pub ponko::render::Lighting::shadows: bool
 pub ponko::render::Lighting::sun_color: ponko::color::Color
 pub ponko::render::Lighting::sun_direction: glam::f32::vec3::Vec3

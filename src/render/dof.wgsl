@@ -17,7 +17,8 @@ fn dof_distance(at: vec2<i32>) -> f32 {
     let d = textureLoad(scene_depth_texture, clamp(at, vec2<i32>(0), size - 1), 0);
     let near = post.camera.x;
     let far = post.camera.y;
-    return near * far / max(far - d * (far - near), 1e-6);
+    // Reverse-Z: 1 at the near plane, 0 at the far one.
+    return near * far / max(near + d * (far - near), 1e-6);
 }
 
 // The blur radius, in pixels, of something `distance` away: none within

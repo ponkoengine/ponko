@@ -762,8 +762,14 @@ pub struct Camera3D {
     /// How tall the view is, as an angle in radians. Default 60°.
     pub fov_y: f32,
     /// Nothing closer than this is drawn. Default 0.1.
+    ///
+    /// The scene depth is reverse-Z (the near plane at depth 1, the far
+    /// plane at 0, in a 32-bit float), so its precision hardly depends on
+    /// the near plane: a first-person camera can use 0.01 for a held item
+    /// without the distant world losing depth precision.
     pub near: f32,
-    /// Nothing farther than this is drawn. Default 1000.
+    /// Nothing farther than this is drawn (it is also where culling, light
+    /// clusters and the sky start). Default 1000.
     pub far: f32,
     /// Skip models hidden behind what was drawn a frame or two before.
     /// Default off.
@@ -833,12 +839,19 @@ impl Camera3D {
         self.rotation * Vec3::NEG_Z
     }
 
-    /// World to clip space: projection times view.
+    /// World to clip space: projection times view. The depth is
+    /// reverse-Z: see [`Camera3D::projection`].
     #[must_use]
     pub(crate) fn view_proj(&self) -> Mat4 {
+        self.projection() * self.view()
+    }
+
+    /// The camera's own space to clip space: a reverse-Z perspective, with
+    /// the near plane at depth 1 and the far plane at depth 0 (see
+    /// [`reverse_z_perspective`]).
+    pub(crate) fn projection(&self) -> Mat4 {
         let aspect = (self.viewport.x / self.viewport.y.max(1.0)).max(1e-3);
-        let projection = glam::camera::rh::proj::directx::perspective(self.fov_y, aspect, self.near, self.far);
-        projection * self.view()
+        reverse_z_perspective(self.fov_y, aspect, self.near, self.far)
     }
 
     /// World to the camera's own space.
@@ -867,9 +880,40 @@ impl Camera3D {
             1.0 - screen.y / self.viewport.y.max(1.0) * 2.0,
         );
         let inverse = self.view_proj().inverse();
-        let far = inverse * Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
-        let far = far.truncate() / far.w;
-        (self.position, (far - self.position).normalize_or(self.forward()))
+        // Any point along the ray will do: halfway in depth (reverse-Z,
+        // so 1 would be the near plane and 0 the far one).
+        let along = inverse * Vec4::new(ndc.x, ndc.y, 0.5, 1.0);
+        let along = along.truncate() / along.w;
+        (self.position, (along - self.position).normalize_or(self.forward()))
+    }
+}
+
+/// A right-handed reverse-Z perspective projection: depth 1 at `near`,
+/// 0 at `far` (0..1 clip depth, as wgpu's). Every view drawn into the
+/// scene depth uses it (the camera, target cameras, global illumination's
+/// captures); shadow maps keep standard depth. Reverse-Z with a float
+/// depth buffer keeps nearly constant relative precision at every
+/// distance, whatever `far / near` is. `far` may be infinite.
+pub(crate) fn reverse_z_perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
+    if far.is_finite() {
+        // Swapping the planes of the standard projection flips the depth.
+        glam::camera::rh::proj::directx::perspective(fov_y, aspect, far, near)
+    } else {
+        glam::camera::rh::proj::directx::perspective_infinite_reverse(fov_y, aspect, near)
+    }
+}
+
+/// The distance in front of the camera (along its view axis) of a
+/// reverse-Z depth `depth` of [`reverse_z_perspective`]: the inverse of
+/// that projection's depth (the shaders' depth of field and global
+/// illumination do the same).
+#[cfg(test)]
+pub(crate) fn linear_depth(depth: f32, near: f32, far: f32) -> f32 {
+    // depth = near * (far - d) / (d * (far - near)), solved for d.
+    if far.is_finite() {
+        near * far / (near + depth * (far - near))
+    } else {
+        near / depth
     }
 }
 
@@ -918,10 +962,30 @@ pub struct Lighting {
     /// again, in frames, 1 to 8. At 1 every cascade is drawn every frame. Above
     /// 1 the far ones take turns: each is drawn into a box a little bigger
     /// than it needs and kept for up to this many frames, or until the
-    /// camera leaves its box or the sun moves. Far shadows of moving things
+    /// camera leaves its box or the sun moves (past
+    /// [`shadow_sun_step`](Self::shadow_sun_step), if set). Far shadows of moving things
     /// then lag by up to that many frames. Default 2: half the far
     /// cascades' drawing.
     pub shadow_refresh: u32,
+    /// How far the sun may turn, in radians, before its shadows follow it.
+    /// 0 (the default): every frame's shadows use the exact sun direction.
+    /// Above 0, the sun's shadow maps are drawn from a held direction that
+    /// moves only once the true direction has turned more than this from
+    /// it; then it jumps to the true direction and is held there. So a sun
+    /// that turns a little every frame (a day and night cycle) keeps still,
+    /// cached shadows, which change in one step every `shadow_sun_step`
+    /// instead of shimmering every frame. Lighting and the sky still use
+    /// the exact direction.
+    ///
+    /// The hold has hysteresis built in: after a jump the true direction
+    /// must turn a whole step away again, so a sun wobbling around one
+    /// angle never flips the shadows back and forth. It depends only on
+    /// the directions drawn since the hold began, so the same sequence of
+    /// frames gives the same shadows. The hold starts over (at the true
+    /// direction) when this value changes or shadows are turned off; a new
+    /// sun more than a step away (a new scene, a time skip) is followed at
+    /// once. Around 0.01 to 0.03 (half a degree to two) suits a day cycle.
+    pub shadow_sun_step: f32,
     /// How soft the sun's shadow edges are: how many lookups each lit pixel
     /// takes in the shadow map. Default [`ShadowFilter::Softest`].
     pub shadow_filter: ShadowFilter,
@@ -960,6 +1024,7 @@ impl Default for Lighting {
             shadow_cascades: 4,
             shadow_resolution: SHADOW_MAP_SIZE,
             shadow_refresh: 2,
+            shadow_sun_step: 0.0,
             shadow_filter: ShadowFilter::Softest,
             light_shadow_views: 12,
             light_shadow_resolution: LIGHT_SHADOW_SIZE,
@@ -1309,6 +1374,93 @@ mod tests {
         let (_, left) = camera.screen_ray(Vec2::new(0.0, 300.0));
         let right_axis = camera.rotation * Vec3::X;
         assert!(left.dot(right_axis) < 0.0);
+    }
+
+    /// The reverse-Z depth of a point `distance` in front of a camera with
+    /// `projection`.
+    fn depth_at(projection: Mat4, distance: f32) -> f32 {
+        let clip = projection * Vec4::new(0.0, 0.0, -distance, 1.0);
+        clip.z / clip.w
+    }
+
+    #[test]
+    fn reverse_z_puts_the_near_plane_at_one_and_the_far_plane_at_zero() {
+        for (near, far) in [(0.1, 1000.0), (0.01, 16_000.0), (0.5, 50.0)] {
+            let m = reverse_z_perspective(1.0, 1.5, near, far);
+            assert!(
+                (depth_at(m, near) - 1.0).abs() < 1e-6,
+                "near {near}: {}",
+                depth_at(m, near)
+            );
+            assert!(depth_at(m, far).abs() < 1e-6, "far {far}: {}", depth_at(m, far));
+            // Nearer is greater all the way.
+            let mut last = 2.0;
+            for d in [near, near * 2.0, (near * far).sqrt(), far * 0.5, far] {
+                let z = depth_at(m, d);
+                assert!(z < last, "{d}: {z} after {last}");
+                last = z;
+            }
+            // Past the far plane and before the near plane: clipped.
+            assert!(depth_at(m, far * 1.01) < 0.0 && depth_at(m, near * 0.99) > 1.0);
+        }
+    }
+
+    #[test]
+    fn an_infinite_far_plane_reaches_zero_only_at_infinity() {
+        let m = reverse_z_perspective(1.0, 1.0, 0.01, f32::INFINITY);
+        assert!((depth_at(m, 0.01) - 1.0).abs() < 1e-6);
+        for d in [10.0, 1e4, 1e7] {
+            let z = depth_at(m, d);
+            assert!(z > 0.0 && (z - 0.01 / d).abs() < 1e-6 * z.max(1e-9), "{d}: {z}");
+        }
+        // The same picture as a finite far plane (x and y don't depend on it).
+        let finite = reverse_z_perspective(1.0, 1.0, 0.01, 1000.0);
+        assert_eq!(m.x_axis, finite.x_axis);
+        assert_eq!(m.y_axis, finite.y_axis);
+    }
+
+    #[test]
+    fn linear_depth_undoes_the_projection() {
+        for (near, far) in [(0.1, 1000.0), (0.01, 16_000.0), (0.01, f32::INFINITY)] {
+            let m = reverse_z_perspective(1.0, 1.0, near, far);
+            for d in [near, 1.0, 100.0, 400.0, 5000.0] {
+                let back = linear_depth(depth_at(m, d), near, far);
+                assert!((back - d).abs() <= d * 1e-4, "{near}..{far}: {d} came back as {back}");
+            }
+        }
+    }
+
+    /// How far apart two distances `distance` in front of the camera must
+    /// be to get different 32-bit float depths: the depth buffer's step
+    /// there. `depth` maps a distance to the stored depth.
+    fn depth_step(distance: f64, depth: impl Fn(f64) -> f64) -> f64 {
+        let stored = depth(distance) as f32;
+        let next = f32::from_bits(stored.to_bits() + 1);
+        // The depth's slope at that distance turns one float step into metres.
+        let h = distance * 1e-6;
+        let slope = (depth(distance + h) - depth(distance - h)) / (2.0 * h);
+        f64::from(next - stored).abs() / slope.abs()
+    }
+
+    #[test]
+    fn reverse_z_depth_steps_are_micrometres_where_standard_z_has_centimetres() {
+        let (near, far) = (0.01f64, 16_000.0f64);
+        let standard = |d: f64| far * (d - near) / (d * (far - near));
+        let reverse = |d: f64| near * (far - d) / (d * (far - near));
+        // The engine's own projection is the reverse one.
+        let m = reverse_z_perspective(1.0, 1.0, near as f32, far as f32);
+        assert!((f64::from(depth_at(m, 250.0)) - reverse(250.0)).abs() < 1e-9);
+        for (d, standard_at_least) in [(100.0, 0.02), (400.0, 0.4)] {
+            let coarse = depth_step(d, standard);
+            let fine = depth_step(d, reverse);
+            eprintln!("{d} m: standard-Z step {coarse:.4} m, reverse-Z step {fine:.2e} m");
+            // Negative control: standard depth is centimetres to a metre
+            // coarse there, as the issue measured.
+            assert!(coarse >= standard_at_least, "standard-Z at {d} m: {coarse} m");
+            // Reverse-Z is finer than a tenth of a millimetre.
+            assert!(fine < 1e-4, "reverse-Z at {d} m: {fine} m");
+            assert!(coarse / fine > 1000.0);
+        }
     }
 
     #[test]

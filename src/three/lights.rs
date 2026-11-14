@@ -699,7 +699,7 @@ pub(crate) mod tests {
                         let p = center + Vec3::new(dx, dy, dz);
                         let clip = c.view_proj() * p.extend(1.0);
                         let ndc = clip.truncate() / clip.w;
-                        if clip.w <= 0.0 || ndc.x.abs() >= 1.0 || ndc.y.abs() >= 1.0 || ndc.z < 0.0 || ndc.z >= 1.0 {
+                        if clip.w <= 0.0 || ndc.x.abs() >= 1.0 || ndc.y.abs() >= 1.0 || ndc.z <= 0.0 || ndc.z > 1.0 {
                             continue;
                         }
                         let x = ((ndc.x * 0.5 + 0.5) * GRID[0] as f32) as usize;

@@ -932,8 +932,8 @@ impl SideBuilder {
     ) -> Option<wgpu::RenderPipeline> {
         let (write, compare) = match role {
             PipelineRole::Opaque | PipelineRole::OpaqueCoverage => (false, wgpu::CompareFunction::Equal),
-            PipelineRole::OpaqueSolid => (true, wgpu::CompareFunction::Less),
-            PipelineRole::Transparent => (false, wgpu::CompareFunction::Less),
+            PipelineRole::OpaqueSolid => (true, super::SCENE_DEPTH_NEARER),
+            PipelineRole::Transparent => (false, super::SCENE_DEPTH_NEARER),
             _ => return None,
         };
         if role == PipelineRole::OpaqueCoverage && self.samples <= 1 {
@@ -1143,7 +1143,7 @@ impl SideBuilder {
                 vs(role),
                 fs(role),
                 cull,
-                depth(true, wgpu::CompareFunction::Less, Default::default()),
+                depth(true, super::SCENE_DEPTH_NEARER, Default::default()),
                 msaa,
                 &[],
             )
@@ -1185,7 +1185,7 @@ impl SideBuilder {
                     vs(PipelineRole::PrepassCoverage),
                     fs(PipelineRole::PrepassCoverage),
                     cull,
-                    depth(true, wgpu::CompareFunction::Less, Default::default()),
+                    depth(true, super::SCENE_DEPTH_NEARER, Default::default()),
                     coverage_msaa,
                     &unwritten,
                 ),
@@ -1222,7 +1222,7 @@ impl SideBuilder {
                 vs(PipelineRole::OpaqueSolid),
                 fs(PipelineRole::OpaqueSolid),
                 cull,
-                depth(true, wgpu::CompareFunction::Less, Default::default()),
+                depth(true, super::SCENE_DEPTH_NEARER, Default::default()),
                 msaa,
                 &opaque_target,
             ),
@@ -1233,7 +1233,7 @@ impl SideBuilder {
                 vs(PipelineRole::Transparent),
                 fs(PipelineRole::Transparent),
                 cull,
-                depth(false, wgpu::CompareFunction::Less, Default::default()),
+                depth(false, super::SCENE_DEPTH_NEARER, Default::default()),
                 msaa,
                 &transparent_target,
             ),

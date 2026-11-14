@@ -98,11 +98,12 @@ impl HistoryReset {
 /// Whether the camera `now` is a cut from the one `before`: it turned a
 /// lot or jumped far in one frame, so what was drawn then is no history.
 fn camera_cut(before: Mat4, now: Mat4) -> bool {
-    // Where the view starts and which way it looks.
+    // Where the view starts and which way it looks (reverse-Z: the near
+    // plane is at depth 1, the far plane at 0).
     let eye = |m: Mat4| {
         let inverse = m.inverse();
-        let near = inverse.project_point3(Vec3::ZERO);
-        let far = inverse.project_point3(Vec3::Z);
+        let near = inverse.project_point3(Vec3::Z);
+        let far = inverse.project_point3(Vec3::ZERO);
         (near, (far - near).normalize_or_zero())
     };
     let (a, b) = (eye(before), eye(now));

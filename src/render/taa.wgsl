@@ -134,7 +134,8 @@ fn fs_resolve(in: Full) -> Resolved {
     var alpha_lo = 1.0;
     var alpha_hi = 0.0;
     var nearest = home;
-    var nearest_depth = 2.0;
+    // Reverse-Z depth: nearer is greater (1 the near plane, 0 the far).
+    var nearest_depth = -1.0;
     for (var n = 0; n < 9; n++) {
         let at = clamp(home + vec2<i32>(n % 3 - 1, n / 3 - 1), vec2<i32>(0), last);
         let c = safe(textureLoad(current, at, 0));
@@ -149,11 +150,11 @@ fn fs_resolve(in: Full) -> Resolved {
         alpha_lo = min(alpha_lo, c.a);
         alpha_hi = max(alpha_hi, c.a);
         // The nearest of the pixel's samples: edges take the front surface.
-        var d = 2.0;
+        var d = -1.0;
         for (var k = 0; k < samples; k++) {
-            d = min(d, textureLoad(depth, at, k));
+            d = max(d, textureLoad(depth, at, k));
         }
-        if d < nearest_depth {
+        if d > nearest_depth {
             nearest_depth = d;
             nearest = at;
         }
