@@ -19,6 +19,7 @@ pub(crate) struct ScriptedClick {
 
 impl Ctx {
     pub(crate) fn update_retained_ui(&mut self) {
+        self.localize_ui();
         let text = std::mem::take(&mut self.ui_state.retained_input_text);
         let mut input = self.retained_input(&self.ui, text);
         if let Some(click) = self.ui_state.scripted.take() {
@@ -48,6 +49,31 @@ impl Ctx {
         self.follow_ui_ime();
         #[cfg(feature = "3d")]
         self.update_ui_panels();
+    }
+
+    /// Keyed UI text follows the string tables (`Ui::localize`): the fonts
+    /// tables name are loaded first, falling back to the built-in font.
+    fn localize_ui(&mut self) {
+        let Some(strings) = self.world.get_resource_mut::<crate::locale::Strings>() else {
+            return;
+        };
+        if strings.revision() == self.ui_state.localized {
+            return;
+        }
+        for (language, path) in strings.fonts_to_load() {
+            strings.fonts_tried.push((language.clone(), path.clone()));
+            match self.gfx.try_load_font(&path) {
+                Ok(font) => {
+                    if self.gfx.font_fallbacks(font).is_empty() {
+                        self.gfx.set_font_fallbacks(font, &[crate::text::Font::DEFAULT]);
+                    }
+                    strings.set_font(&language, font);
+                }
+                Err(e) => eprintln!("ponko: the {language} string table's font: {e}"),
+            }
+        }
+        self.ui.localize(strings);
+        self.ui_state.localized = strings.revision();
     }
 
     /// After the UI's frame: IME is allowed while its focus is on a text
@@ -161,6 +187,8 @@ impl Ctx {
     }
 
     pub(crate) fn draw_retained_ui(&mut self) {
+        // The language may have changed in this frame's systems.
+        self.localize_ui();
         // Move the tree out while issuing draw calls; no callback borrowing the
         // game, context and node tree simultaneously is required.
         let spare = self.ui_state.retained_spare.take().unwrap_or_default();

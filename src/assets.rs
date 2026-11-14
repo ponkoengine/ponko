@@ -948,6 +948,48 @@ impl Assets {
         loaded.unwrap_or_else(|e| panic!("{e}"));
     }
 
+    /// Loads a string table file (see [`crate::locale`] for the format) into
+    /// the [`Strings`](crate::locale::Strings) resource, which it adds if the
+    /// world has none. The first table loaded is the reference language and
+    /// the current one. With [hot reload](crate::game::Game::hot_reload) on,
+    /// editing the file replaces the table while the game runs, and UI nodes
+    /// that hold a key show the new text; a file that doesn't parse keeps
+    /// the old table and prints why.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::locale::Strings;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.assets.add_source(MemorySource::new("built-in")
+    ///         .with("lang/en.json", r#"{"language": "en", "strings": {"play": "Play"}}"#)
+    ///         .with("lang/es.json", r#"{"language": "es", "strings": {"play": "Jugar"}}"#));
+    ///     ctx.assets.load_strings(&mut ctx.world, "lang/en.json").unwrap();
+    ///     ctx.assets.load_strings(&mut ctx.world, "lang/es.json").unwrap();
+    ///     let strings = ctx.world.resource_mut::<Strings>();
+    ///     strings.set_language("es");
+    ///     assert_eq!(strings.get("play"), "Jugar");
+    /// });
+    /// ```
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if no source
+    /// has the file, [`Decode`](crate::error::ErrorKind::Decode) if it isn't a
+    /// string table (see [`StringTable::from_json`](crate::locale::StringTable::from_json)).
+    pub fn load_strings(&mut self, world: &mut World, path: &str) -> Result<(), crate::error::Error> {
+        self.load_data(
+            world,
+            path,
+            Box::new(|world: &mut World, text: &str| {
+                let table = crate::locale::StringTable::from_json(text)?;
+                if world.get_resource::<crate::locale::Strings>().is_none() {
+                    world.insert_resource(crate::locale::Strings::default());
+                }
+                world.resource_mut::<crate::locale::Strings>().insert(table);
+                Ok(())
+            }),
+        )
+    }
+
     /// Loads a JSON file into the reflected component `T` of `entity` (object
     /// fields merge), reloading it when the file changes. `T` must be
     /// registered with `World::reflect`; the name the file is applied under

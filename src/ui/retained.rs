@@ -477,6 +477,8 @@ pub(super) struct Node {
     pub preedit: String,
     /// The caret inside `preedit`, a byte range.
     pub preedit_cursor: Option<(usize, usize)>,
+    /// The string table key its text comes from ([`Ui::set_text_key`]).
+    pub key: Option<Box<super::retained_locale::TextKey>>,
 }
 pub(super) struct Screen {
     pub root: UiId,
@@ -526,6 +528,8 @@ pub struct Ui {
     events: std::collections::VecDeque<UiEvent>,
     /// IME composition ([`Ui::preedit`], [`Ui::ime_area`]).
     pub(super) ime: super::retained_ime::UiImeState,
+    /// Which string tables the keyed nodes show ([`Ui::localize`]).
+    pub(super) locale: super::retained_locale::UiLocaleState,
     pub(super) focus: Option<UiId>,
     pub(super) hovered: Option<UiId>,
     pub(super) pressed: Option<UiId>,
@@ -568,6 +572,7 @@ impl Default for Ui {
             visible: Vec::new(),
             events: std::collections::VecDeque::new(),
             ime: Default::default(),
+            locale: Default::default(),
             focus: None,
             hovered: None,
             pressed: None,
@@ -638,6 +643,7 @@ impl Ui {
             ime: true,
             preedit: String::new(),
             preedit_cursor: None,
+            key: None,
         }));
         id
     }
@@ -733,6 +739,7 @@ impl Ui {
         }
     }
     /// Set label or input text. Input control characters are discarded.
+    /// A node that held a string table key ([`Ui::set_text_key`]) lets go of it.
     /// ```
     /// use ponko::prelude::*;
     /// let mut ui = ponko::ui::Ui::default(); let id = ui.add(ponko::ui::UiWidget::Label, ponko::ui::UiLayout::auto());
@@ -740,14 +747,8 @@ impl Ui {
     /// ```
     pub fn set_text(&mut self, id: UiId, text: impl AsRef<str>) {
         if let Some(n) = self.node_mut(id) {
-            n.text.clear();
-            if n.widget == UiWidget::TextInput {
-                n.text.extend(text.as_ref().chars().filter(|c| !c.is_control()));
-            } else {
-                n.text.push_str(text.as_ref());
-            }
-            n.caret = n.text.len();
-            n.anchor = n.caret;
+            n.key = None;
+            n.put_text(text.as_ref());
         }
     }
     /// Read text, or `None` for a stale ID.
