@@ -4,7 +4,7 @@
 //! endpoint's `editor.*` methods use the same functions, and the tests run
 //! it headless.
 
-use glam::{EulerRot, Quat, Vec2, Vec3, Vec4};
+use glam::{EulerRot, Quat, Vec2, Vec3};
 use ponko_ecs::{Entity, World};
 
 use crate::d3::{Camera, Transform};
@@ -123,8 +123,9 @@ pub(crate) fn ground_point(ray: &Ray, height: f32, fallback: f32) -> Vec3 {
 }
 
 /// Window point (logical pixels) of world point `p`; `None` behind the camera.
+#[cfg(any(test, feature = "inspector"))]
 pub(crate) fn world_to_screen(camera: &Camera, p: Vec3) -> Option<Vec2> {
-    let clip = camera.view_proj() * Vec4::new(p.x, p.y, p.z, 1.0);
+    let clip = camera.view_proj() * glam::Vec4::new(p.x, p.y, p.z, 1.0);
     if clip.w <= 1e-5 {
         return None;
     }
@@ -134,6 +135,7 @@ pub(crate) fn world_to_screen(camera: &Camera, p: Vec3) -> Option<Vec2> {
 }
 
 /// World units one window pixel spans at `p`'s depth.
+#[cfg(any(test, feature = "inspector"))]
 pub(crate) fn pixel_size(camera: &Camera, p: Vec3) -> f32 {
     let depth = (p - camera.position).dot(camera.forward()).max(camera.near);
     2.0 * depth * (camera.fov_y * 0.5).tan() / camera.viewport().y.max(1.0)
@@ -456,13 +458,17 @@ impl Drag {
 }
 
 /// The gizmo's size on screen, in pixels from its center to an axis tip.
+#[cfg(any(test, feature = "inspector"))]
 pub(crate) const GIZMO_PIXELS: f32 = 90.0;
 /// How close (pixels) the mouse must be to a handle to grab it.
+#[cfg(any(test, feature = "inspector"))]
 pub(crate) const GRAB_PIXELS: f32 = 8.0;
 /// Points per rotation ring.
+#[cfg(any(test, feature = "inspector"))]
 const RING_POINTS: usize = 48;
 
 /// Where the gizmo's parts are on screen.
+#[cfg(any(test, feature = "inspector"))]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Layout {
     pub center: Vec2,
@@ -476,6 +482,7 @@ pub(crate) struct Layout {
 
 /// Lays the gizmo for `mode` out on screen around `pivot` with `axes`;
 /// `None` when the pivot is behind the camera.
+#[cfg(any(test, feature = "inspector"))]
 pub(crate) fn layout(camera: &Camera, mode: Mode, pivot: Vec3, axes: [Vec3; 3]) -> Option<Layout> {
     let center = world_to_screen(camera, pivot)?;
     let length = GIZMO_PIXELS * pixel_size(camera, pivot);
@@ -500,6 +507,7 @@ pub(crate) fn layout(camera: &Camera, mode: Mode, pivot: Vec3, axes: [Vec3; 3]) 
 }
 
 /// Distance from `p` to the segment `a`–`b`.
+#[cfg(any(test, feature = "inspector"))]
 pub(crate) fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> f32 {
     let ab = b - a;
     let t = if ab.length_squared() < 1e-6 {
@@ -512,6 +520,7 @@ pub(crate) fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> f32 {
 
 /// The handle under window point `mouse`, if any: the center first, then
 /// the plane handles, then the nearest axis (or ring).
+#[cfg(any(test, feature = "inspector"))]
 pub(crate) fn hit(layout: &Layout, mode: Mode, mouse: Vec2) -> Option<Handle> {
     if mode == Mode::Rotate {
         let mut best: Option<(f32, usize)> = None;
