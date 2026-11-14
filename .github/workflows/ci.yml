@@ -1090,6 +1090,9 @@ jobs:
           bash scripts/ci-retry.sh node web/smoke/node_modules/playwright-core/cli.js install --with-deps chromium firefox webkit
       - name: Runner tests
         run: node --test web/smoke/*.test.mjs web/gallery/*.test.mjs
+      # The native lockstep players of the multiplayer step need ALSA and udev.
+      - name: Install ALSA and udev headers (the native lockstep example)
+        run: bash scripts/ci-apt-install.sh libasound2-dev libudev-dev
       # The platformer (examples/ember_hop) publishes its state like
       # coin_dash; its browser run is the web gallery's page check.
       - name: Build the fixtures (2D, 3D with --features 3d, the complete games)
