@@ -214,6 +214,7 @@ fn games_reflect_the_builtin_components_by_default() {
             "PointLight3D",
             "ReceivesDecals",
             "ShadowMesh",
+            "ShadowOnly",
             "SpotLight3D",
         ]);
         expected.sort();

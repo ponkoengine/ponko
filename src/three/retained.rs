@@ -550,11 +550,16 @@ impl<'a> Source<'a> {
         }
     }
 
-    /// What of `flags` (see [`Culler::classify`]) draws it: all of them,
-    /// or only the shadow maps' for a [`ShadowOnly`] model.
+    /// Which passes draw it (see [`Culler::classify_spheres`]): all that
+    /// see it, or only the shadow maps for a [`ShadowOnly`] model, which
+    /// isn't counted as occluded either since no camera draws it.
     #[inline]
-    fn shown(&self, flags: u32) -> u32 {
-        if self.shadow_only { flags & !1 } else { flags }
+    fn classify(&self, culler: &Culler, sphere: [f32; 4], caster: [f32; 4]) -> u32 {
+        if self.shadow_only {
+            culler.classify_spheres_shadow_only(sphere, caster)
+        } else {
+            culler.classify_spheres(sphere, caster)
+        }
     }
 
     fn mesh(&self) -> u32 {
@@ -1016,7 +1021,7 @@ impl Pass<'_> {
         };
         if self.rush && !sampled(entity) {
             let derived = derive(source, self.assets, self.overrides);
-            let flags = source.shown(self.culler.classify_spheres(derived.sphere, derived.caster_sphere));
+            let flags = source.classify(&self.culler, derived.sphere, derived.caster_sphere);
             if flags == 0 {
                 return UNCHANGED;
             }
@@ -1051,7 +1056,7 @@ impl Pass<'_> {
             cold.mesh.store(derived.mesh, Ordering::Relaxed);
             cold.caster.store(derived.caster, Ordering::Relaxed);
             hot.digest.store(digest, Ordering::Relaxed);
-            let flags = source.shown(self.culler.classify_spheres(derived.sphere, derived.caster_sphere));
+            let flags = source.classify(&self.culler, derived.sphere, derived.caster_sphere);
             cold.pending.store(flags, Ordering::Relaxed);
             if flags != 0 {
                 if self.write_in_place(k, source, flags, derived.mesh, derived.caster) {
@@ -1067,7 +1072,7 @@ impl Pass<'_> {
             }
         } else if self.how.cull {
             let [x, y, z, r, cx, cy, cz, cr] = load(&self.spheres[k]);
-            let flags = source.shown(self.culler.classify_spheres([x, y, z, r], [cx, cy, cz, cr]));
+            let flags = source.classify(&self.culler, [x, y, z, r], [cx, cy, cz, cr]);
             if flags != was {
                 cold.pending.store(flags, Ordering::Relaxed);
                 if flags != 0 {
@@ -1231,7 +1236,7 @@ impl Tracked {
                     return;
                 }
                 let derived = derive(source, assets, overrides);
-                let flags = source.shown(culler.classify_spheres(derived.sphere, derived.caster_sphere));
+                let flags = source.classify(&culler, derived.sphere, derived.caster_sphere);
                 if flags != 0 {
                     let seen = (flags, derived.mesh, derived.caster);
                     new += self.rush_drawn(entity, source, seen, &frame, &mut now, lists, arena, motion);
@@ -1386,11 +1391,11 @@ impl Tracked {
             let cold = &mut self.cold[k];
             *cold.mesh.get_mut() = derived.mesh;
             *cold.caster.get_mut() = derived.caster;
-            flags = source.shown((frame.culler).classify_spheres(derived.sphere, derived.caster_sphere));
+            flags = source.classify(&frame.culler, derived.sphere, derived.caster_sphere);
             (mesh, caster) = (derived.mesh, derived.caster);
         } else if frame.how.cull {
             let [x, y, z, r, cx, cy, cz, cr] = self.spheres[k].each_mut().map(|w| f32::from_bits(*w.get_mut()));
-            flags = source.shown(frame.culler.classify_spheres([x, y, z, r], [cx, cy, cz, cr]));
+            flags = source.classify(&frame.culler, [x, y, z, r], [cx, cy, cz, cr]);
             if flags == was {
                 return;
             }

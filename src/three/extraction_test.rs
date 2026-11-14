@@ -1140,6 +1140,32 @@ fn models_hidden_behind_an_earlier_frames_depth_keep_up_with_it() {
     assert_eq!(scene.frame.occluded, 0);
 }
 
+fn shadow_only_models_behind_an_occluder_are_not_counted_as_occluded() {
+    let mut scene = Scene::new(900);
+    scene.camera.occlusion_culling = true;
+    let wall = |scene: &Scene| {
+        let depth = (0..64).map(|i| if i % 8 < 4 { 0.05 } else { 1.0 }).collect();
+        OcclusionGrid::new(scene.camera.view_proj(), scene.camera.position, 8, 8, depth)
+    };
+    scene.frame.occlusion = Some(wall(&scene));
+    scene.check("plain models behind the wall");
+    let hidden = scene.frame.occluded;
+    assert!(hidden > 0, "normal models behind it are counted");
+    let models = scene.models.clone();
+    for &e in &models {
+        scene.world.insert(e, ShadowOnly);
+    }
+    scene.frame.occlusion = Some(wall(&scene));
+    scene.check("shadow only behind the wall");
+    assert_eq!(scene.frame.occluded, 0, "no camera draws them: none is occluded");
+    for &e in &models {
+        scene.world.remove::<ShadowOnly>(e);
+    }
+    scene.frame.occlusion = Some(wall(&scene));
+    scene.check("shown again");
+    assert_eq!(scene.frame.occluded, hidden);
+}
+
 fn models_outside_the_view_are_counted_from_what_is_kept() {
     let mut scene = Scene::new(1500);
     scene.collect();
@@ -1304,6 +1330,7 @@ both_ways!(
     skinned_models_keep_up_as_their_number_changes,
     point_and_spot_light_shadows_keep_up_with_their_lights,
     models_hidden_behind_an_earlier_frames_depth_keep_up_with_it,
+    shadow_only_models_behind_an_occluder_are_not_counted_as_occluded,
     models_outside_the_view_are_counted_from_what_is_kept,
     while_most_models_move_their_culling_isnt_counted,
     a_target_cameras_view_keeps_up,

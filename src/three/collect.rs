@@ -1052,6 +1052,22 @@ impl Culler<'_> {
         )
     }
 
+    /// [`classify_spheres`](Self::classify_spheres) for something only the
+    /// shadow maps draw ([`ShadowOnly`]): just the shadow views' bits, and
+    /// never counted in `occluded`, since no camera would have drawn it.
+    pub fn classify_spheres_shadow_only(&self, sphere: [f32; 4], caster: [f32; 4]) -> u32 {
+        if sphere[3] < 0.0 {
+            return 0;
+        }
+        let center = |s: [f32; 4]| Vec3::new(s[0], s[1], s[2]);
+        let flags = self.classify_uncounted(
+            center(sphere),
+            sphere[3],
+            (caster[3] >= 0.0).then(|| (center(caster), caster[3])),
+        );
+        flags & !(1 | OCCLUDED)
+    }
+
     /// Whether culling gives other answers than with the views in `key`
     /// (those of the frame before), which become these. An occlusion grid
     /// is new every frame.

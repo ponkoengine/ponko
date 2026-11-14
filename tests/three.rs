@@ -1523,6 +1523,43 @@ fn lod_hysteresis_is_a_scene_component() {
     });
 }
 
+#[test]
+fn shadow_only_survives_a_saved_and_loaded_world() {
+    Game::new("t", 1, 1).run_headless(0, |ctx| {
+        let body = ctx.world.spawn((Transform::default(), ponko::render::ShadowOnly));
+        let plain = ctx.world.spawn((Transform::default(),));
+        assert_eq!(ctx.world.get_json(body, "ShadowOnly").unwrap(), serde_json::Value::Null);
+        let save = ctx.world.save();
+        ctx.world.clear();
+        ctx.world.load(&save).unwrap();
+        assert!(ctx.world.has::<ponko::render::ShadowOnly>(body));
+        assert!(!ctx.world.has::<ponko::render::ShadowOnly>(plain));
+    });
+}
+
+#[test]
+fn scene_files_with_shadow_only_spawn_it() {
+    let file = TempAsset::new("shadow-only-scene.json");
+    let scene = serde_json::json!({
+        "format": "ponko-world",
+        "version": 1,
+        "entities": [
+            { "entity": 0, "components": {
+                "Transform3D": { "position": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] },
+                "ShadowOnly": null,
+            } },
+        ],
+        "resources": {},
+    });
+    file.write(&serde_json::to_string(&scene).unwrap());
+    let name = file.name().to_string();
+    Game::new("t", 1, 1).run_headless(0, move |ctx| {
+        ctx.load_scene(&name).unwrap();
+        let count = ctx.world.query::<&ponko::render::ShadowOnly>().iter().count();
+        assert_eq!(count, 1);
+    });
+}
+
 // ANCHOR: gpu_buffers
 fn gpu_particles(ctx: &mut Ctx) -> GpuBuffer {
     let items = ctx.gfx.create_gpu_buffer(128, &[]);

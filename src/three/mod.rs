@@ -584,7 +584,10 @@ pub struct ShadowMesh(pub Option<Mesh>);
 /// its head but whose shadow should still show, or for a caster that only
 /// stands in for others. Works on plain models and on skinned ones (posed by
 /// a [`Skeleton`] or [`SkinOf`]); [`LodGroup`]s, terrain and instance
-/// batches don't read it. Remove it to show the model again.
+/// batches don't read it. Remove it to show the model again. Editor picking
+/// still selects a shadow-only model, so it can be found and edited.
+///
+/// In scene files it's `"ShadowOnly": null`.
 ///
 /// ```no_run
 /// # use ponko::prelude::*;
@@ -593,7 +596,7 @@ pub struct ShadowMesh(pub Option<Mesh>);
 /// ctx.world.insert(body, ponko::render::ShadowOnly);
 /// # }
 /// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Component)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, Component)]
 pub struct ShadowOnly;
 
 /// Draws the entity's [`Model`] with this material instead of the ones its

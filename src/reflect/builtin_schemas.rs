@@ -339,6 +339,10 @@ pub(super) fn builtin<T: 'static>() -> Option<ValueSchema> {
     if id == std::any::TypeId::of::<crate::render::ReceivesDecals>() {
         return Some(receivesdecals());
     }
+    #[cfg(feature = "3d")]
+    if id == std::any::TypeId::of::<crate::render::ShadowOnly>() {
+        return Some(ValueSchema::Null);
+    }
     #[cfg(feature = "physics")]
     if id == std::any::TypeId::of::<crate::d2::RigidBody>() {
         return Some(rigidbody());
@@ -705,6 +709,7 @@ pub(in crate::reflect) mod tests {
             check!(crate::d3::Decal, crate::d3::Decal::default());
             check!(crate::render::ReceivesDecals, crate::render::ReceivesDecals::default());
             check!(crate::render::LodHysteresis, crate::render::LodHysteresis::default());
+            check!(crate::render::ShadowOnly, crate::render::ShadowOnly);
         }
         #[cfg(any(feature = "physics", feature = "physics3d"))]
         let kinds = [
