@@ -1,19 +1,30 @@
-//! Repeated queries do not allocate after matching-cache warmup. Its own test binary: it counts every
-//! allocation through a global allocator.
+//! Repeated queries do not allocate after matching-cache warmup. Its own test
+//! binary: it replaces the global allocator. Only allocations on the thread
+//! between `start_counting` and `counted` are counted, so the test harness's
+//! other threads can't fail it.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
 use ponko_ecs::*;
 
 struct Counting;
 
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// Allocations on this thread since `start_counting`; `None` when not counting.
+    static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// Counts an allocation if this thread is counting.
+fn note() {
+    // `try_with`: the allocator may run while this thread's locals are torn down.
+    let _ = ALLOCATIONS.try_with(|n| n.set(n.get().map(|n| n + 1)));
+}
 
 // SAFETY: forwards to the system allocator, only counting calls.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        note();
         // SAFETY: the caller's contract, forwarded.
         unsafe { System.alloc(layout) }
     }
@@ -22,7 +33,7 @@ unsafe impl GlobalAlloc for Counting {
         unsafe { System.dealloc(ptr, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        note();
         // SAFETY: the caller's contract, forwarded.
         unsafe { System.realloc(ptr, layout, new_size) }
     }
@@ -30,6 +41,18 @@ unsafe impl GlobalAlloc for Counting {
 
 #[global_allocator]
 static GLOBAL: Counting = Counting;
+
+/// Starts counting the heap allocations (and reallocations) of this thread.
+fn start_counting() {
+    ALLOCATIONS.with(|n| n.set(Some(0)));
+}
+
+/// Stops counting on this thread and returns the count since `start_counting`.
+fn counted() -> usize {
+    ALLOCATIONS
+        .with(Cell::take)
+        .expect("start_counting was called on this thread")
+}
 
 #[derive(Component)]
 struct Marker<const N: usize>;
@@ -69,11 +92,11 @@ fn warmed_matching_and_reconstructed_queries_do_not_allocate() {
         assert_eq!(q.iter().count(), 64);
     };
     frame(&mut w);
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    start_counting();
     for _ in 0..10 {
         frame(&mut w);
     }
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed) - before, 0);
+    assert_eq!(counted(), 0);
 }
 
 fn fragmented(layouts: u64) -> World {
@@ -136,11 +159,11 @@ fn automatic_indexing_allocates_nothing_once_warm() {
     // Two frames: every signature is seen, then decided.
     let rows = automatic_frame(&mut w, &filter, &ids);
     assert_eq!(automatic_frame(&mut w, &filter, &ids), rows);
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    start_counting();
     for _ in 0..10 {
         assert_eq!(automatic_frame(&mut w, &filter, &ids), rows);
     }
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed) - before, 0);
+    assert_eq!(counted(), 0);
     let stats = w.query_cache_stats();
     assert!(
         stats.indexed >= 2 && stats.hits >= 20,
@@ -153,12 +176,12 @@ fn a_small_world_remembers_and_allocates_nothing() {
     let ids = [w.register::<Num>(), w.register::<Marker<1>>()];
     let filter = DynFilter::With(w.register::<Marker<2>>()).compile().unwrap();
     let rows = automatic_frame(&mut w, &filter, &ids);
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    start_counting();
     for _ in 0..10 {
         assert_eq!(automatic_frame(&mut w, &filter, &ids), rows);
         assert_eq!(w.query::<&Num>().filter::<With<Marker<0>>>().cached().count(), 8);
     }
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed) - before, 0);
+    assert_eq!(counted(), 0);
     assert_eq!(w.query_cache_stats().bytes, 0, "the index was never created");
 }
 
@@ -195,11 +218,11 @@ fn a_full_table_and_its_sweeps_allocate_nothing() {
     for _ in 0..3 {
         frame(&mut w);
     }
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    start_counting();
     for _ in 0..200 {
         frame(&mut w);
     }
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed) - before, 0);
+    assert_eq!(counted(), 0);
     assert_eq!(w.query_cache_stats().signatures, 2);
 }
 
@@ -225,20 +248,20 @@ fn views_reading_the_index_allocate_nothing() {
     for _ in 0..3 {
         assert_eq!(frame(&mut w, &mut state), rows);
     }
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    start_counting();
     for _ in 0..10 {
         assert_eq!(frame(&mut w, &mut state), rows);
     }
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed) - before, 0);
+    assert_eq!(counted(), 0);
     assert_eq!(w.query_cache_stats().indexed, 2);
 
     // A new archetype: the next view scans and notes it, and the index
     // catches up when the view after that is prepared. The note reuses its
     // storage.
     w.spawn((Num(7), Marker::<0>, Marker::<2>, Extra(1)));
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    start_counting();
     assert_eq!(frame(&mut w, &mut state), rows + 3);
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed) - before, 0);
+    assert_eq!(counted(), 0);
 }
 
 /// A world with a table of two signatures, both in use: one only by a
@@ -302,11 +325,11 @@ fn a_signature_only_views_use_survives_sweeps_without_allocating() {
         }
     };
     frame(&mut w, &mut state);
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    start_counting();
     for _ in 0..200 {
         frame(&mut w, &mut state);
     }
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed) - before, 0);
+    assert_eq!(counted(), 0);
     let stats = w.query_cache_stats();
     assert_eq!((stats.signatures, stats.indexed, stats.evictions), (2, 2, 0));
 }
@@ -352,13 +375,13 @@ fn views_a_full_table_refuses_do_not_push_out_a_rarely_used_signature() {
     for n in 0..3 {
         frame(&mut w, &mut state, n);
     }
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    start_counting();
     let hits = w.query_cache_stats().hits;
     // Long enough for the views to ask again several times.
     for n in 0..400 {
         frame(&mut w, &mut state, n);
     }
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed) - before, 0);
+    assert_eq!(counted(), 0);
     let stats = w.query_cache_stats();
     assert_eq!((stats.signatures, stats.indexed, stats.evictions), (2, 2, 0));
     assert_eq!(
@@ -368,10 +391,9 @@ fn views_a_full_table_refuses_do_not_push_out_a_rarely_used_signature() {
     );
 }
 
-/// One test, so nothing else allocates while a case counts. Not under
-/// Miri: these are 256-archetype worlds run for hundreds of frames, and
-/// Miri runs the same paths in the small worlds of `query_cache.rs`,
-/// `query_cache_views.rs` and the unit tests of the index.
+/// Not under Miri: these are 256-archetype worlds run for hundreds of
+/// frames, and Miri runs the same paths in the small worlds of
+/// `query_cache.rs`, `query_cache_views.rs` and the unit tests of the index.
 #[test]
 #[cfg_attr(miri, ignore = "big worlds; allocation counts need no interpreter")]
 fn the_index_allocates_nothing_in_steady_state() {
@@ -382,4 +404,20 @@ fn the_index_allocates_nothing_in_steady_state() {
     views_reading_the_index_allocate_nothing();
     a_signature_only_views_use_survives_sweeps_without_allocating();
     views_a_full_table_refuses_do_not_push_out_a_rarely_used_signature();
+}
+
+/// The negative control: an allocation made on the measuring thread is
+/// counted, so a zero above means nothing allocated.
+#[test]
+fn an_allocation_on_the_measuring_thread_is_counted() {
+    start_counting();
+    let boxed = std::hint::black_box(Box::new(7u64));
+    assert_eq!(counted(), 1);
+    let mut grown: Vec<u64> = Vec::with_capacity(1);
+    start_counting();
+    grown.extend(std::hint::black_box([1, 2, 3]));
+    assert_eq!(counted(), 1, "growing a buffer counts too");
+    start_counting();
+    std::hint::black_box(*boxed + grown[2]);
+    assert_eq!(counted(), 0);
 }
