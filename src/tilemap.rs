@@ -5,12 +5,14 @@
 //!   flipped tiles and [parallax](TileMap::parallax).
 //! - [`AutoTile`]: picks each tile's frame from its neighbours (4- or
 //!   8-neighbour bitmasks), for maps built in code.
-//! - [`TileMap::solid_rects`] and (feature `physics`) [`TileMap::colliders`]:
+//! - [`TileMap::solid_rects`] and (feature `physics`) `TileMap::colliders`:
 //!   collision from tiles, merged into few rectangles.
 //! - [`Level`]: levels made in [Tiled](https://www.mapeditor.org/) (`.tmx`,
 //!   `.tmj`) and [LDtk](https://ldtk.io/) (`.ldtk`), spawned with
 //!   [`Ctx::spawn_level`](crate::ctx::Ctx::spawn_level): every layer, tileset,
 //!   object and custom property, reloaded when the file changes.
+
+#![deny(missing_docs)]
 
 mod autotile;
 mod colliders;

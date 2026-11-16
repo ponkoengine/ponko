@@ -38,6 +38,10 @@ pub const MAX_DECALS_PER_CLUSTER: usize = 64;
 /// surface it lands on. Put hundreds on screen ([`Decal::MAX`](crate::d3::Decal::MAX) at most).
 /// Parent a decal to a model (see `Attached`) to carry it along.
 ///
+/// **WebGL2:** decals are not drawn there, nor on any GPU with fewer than 17
+/// sampled textures per shader stage; nothing else changes (see
+/// [`GpuFeature::Decals`](crate::render::GpuFeature::Decals)).
+///
 /// Images come from the texture array set with
 /// [`Graphics::set_decal_textures`](crate::gfx::Graphics::set_decal_textures); without
 /// one a decal is a flat `color` rectangle. Surfaces whose model has no

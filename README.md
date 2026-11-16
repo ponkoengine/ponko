@@ -9,7 +9,7 @@ Rust is the primary API; C and C++ bindings support native integrations.
 No large visual editor is required.
 
 [**Website**](https://ponko.dev/) · [**Guide**](https://ponko.dev/guide/) ·
-[**Play the examples**](https://ponkoengine.github.io/ponko/) ·
+[**Examples in the browser**](https://ponko.dev/guide/web.html) ·
 [**API**](https://docs.rs/ponko/) · [**Project vision**](PROJECT_VISION.md) ·
 [**Roadmap**](ROADMAP.md) · [**Architecture**](ARCHITECTURE.md) ·
 [**Contribute**](CONTRIBUTING.md)
@@ -68,7 +68,7 @@ cargo add ponko
 ```
 
 Put a picture named `crab.png` in the project's `assets/` folder (for example
-[the engine's own](https://raw.githubusercontent.com/ponkoengine/ponko/main/assets/crab.png)),
+[the engine's own](https://gitlab.com/ponkoengine/ponko/-/raw/main/assets/crab.png)),
 then use this in `src/main.rs`:
 
 ```rust
@@ -174,14 +174,32 @@ acceptance suites remain development goals. See
 [Working with AI agents](book/src/agents.md), [control](book/src/control.md),
 and [profiling](book/src/profiling.md).
 
+## Cookbook
+
+[Fifty small recipes](book/src/cookbook/index.md) for what most games do. Each
+is a few lines to copy, shown in Rust and C++ (two are Rust only, and say why), and each is compiled and
+run headless by a test, so it cannot rot. By task:
+
+| I want to... | Recipes |
+|---|---|
+| Move things | [walk](book/src/cookbook/moving.md#walk-with-the-keyboard), [gamepad](book/src/cookbook/moving.md#walk-with-a-gamepad-too), [jump](book/src/cookbook/moving.md#jump), [dash](book/src/cookbook/moving.md#dash-with-a-cooldown), [click to move](book/src/cookbook/moving.md#click-to-move), [drag](book/src/cookbook/moving.md#drag-a-sprite-with-the-mouse), [rebind keys](book/src/cookbook/moving.md#let-the-player-rebind-a-key) |
+| Fight and collect | [shoot](book/src/cookbook/gameplay.md#shoot-bullets), [pick up](book/src/cookbook/gameplay.md#pick-up-coins), [damage](book/src/cookbook/gameplay.md#damage-and-death), [health bars](book/src/cookbook/gameplay.md#draw-a-health-bar), [waves](book/src/cookbook/gameplay.md#waves-of-enemies), [chase and patrol](book/src/cookbook/gameplay.md#an-enemy-that-chases-the-player), [loot](book/src/cookbook/gameplay.md#drop-loot-when-something-dies) |
+| Time things | [fuses](book/src/cookbook/time.md#a-fuse-that-goes-off), [timers](book/src/cookbook/time.md#do-something-every-few-seconds), [easing](book/src/cookbook/time.md#slide-something-with-easing), [day and night](book/src/cookbook/time.md#a-day-and-a-night), [slow motion](book/src/cookbook/time.md#slow-motion) |
+| Build menus | [pause](book/src/cookbook/menus.md#a-pause-menu), [title](book/src/cookbook/menus.md#a-title-screen), [game over](book/src/cookbook/menus.md#game-over-and-play-again), [HUD](book/src/cookbook/menus.md#a-heads-up-display), [volume](book/src/cookbook/menus.md#a-volume-slider), [sliding panel](book/src/cookbook/menus.md#a-panel-that-slides-in) |
+| Control the camera | [follow](book/src/cookbook/camera.md#follow-the-player), [shake](book/src/cookbook/camera.md#shake-the-screen), [zoom](book/src/cookbook/camera.md#zoom-toward-the-cursor), [pixel art](book/src/cookbook/camera.md#pixel-perfect-pixel-art), [minimap](book/src/cookbook/camera.md#a-minimap) |
+| Use physics | [contact damage](book/src/cookbook/physics.md#damage-on-contact), [knockback](book/src/cookbook/physics.md#knock-something-back), [line of sight](book/src/cookbook/physics.md#line-of-sight), [click a body](book/src/cookbook/physics.md#click-a-body-to-select-it), [platformer](book/src/cookbook/physics.md#a-platformer-player) |
+| Work in 3D | [click an object](book/src/cookbook/three-d.md#click-a-3d-object), [walk with a camera](book/src/cookbook/three-d.md#walk-with-a-third-person-camera) |
+| Load and place things | [a Tiled level](book/src/cookbook/world.md#load-a-level-from-a-tiled-map), [prefabs](book/src/cookbook/world.md#spawn-a-prefab), [attach](book/src/cookbook/world.md#attach-one-thing-to-another), [debug shapes](book/src/cookbook/world.md#draw-what-the-ai-is-thinking) |
+| Add sound and saves | [footsteps](book/src/cookbook/sound-and-saves.md#footsteps), [event sounds](book/src/cookbook/sound-and-saves.md#a-sound-for-an-event), [save and load](book/src/cookbook/sound-and-saves.md#save-and-load-the-game), [settings](book/src/cookbook/sound-and-saves.md#keep-settings-and-a-best-score), [save on quit](book/src/cookbook/sound-and-saves.md#save-and-quit) |
+
 ## Examples
 
 Most of them run in a browser too, without installing anything: the
-[web gallery](https://ponkoengine.github.io/ponko/) has the newest release's
-examples, each with what it shows and its source.
+[web chapter](https://ponko.dev/guide/web.html) tells how to build and serve the
+examples, and the project's website lists the newest release's.
 
 ```sh
-git clone https://github.com/ponkoengine/ponko
+git clone https://gitlab.com/ponkoengine/ponko
 cd ponko
 cargo run --release --example window
 cargo run --release --example terrain --features 3d

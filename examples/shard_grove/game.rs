@@ -41,13 +41,11 @@ use ponko::anim::{
 };
 use ponko::audio::{AudioEffects, AudioRolloff};
 use ponko::d3::*;
-use ponko::input::{Gamepad, GamepadAxis, GamepadButton, GamepadStick};
 use ponko::nav::{NavBakeSettings, NavSource};
 use ponko::particles::{ParticleCurve, ParticleGradient};
 use ponko::prelude::*;
 use ponko::render::{GraphicsQuality, MaterialDesc, Mesh, MeshData};
 use ponko::storage::Storage;
-use ponko::ui::{UiEvent, UiLayout};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -389,10 +387,7 @@ pub struct Buses {
 pub fn warden_graph(skeleton: &Skeleton, clip: &mut dyn FnMut(&str) -> AnimationClip) -> Arc<AnimationGraph> {
     use warden_anim::*;
     let _ = skeleton;
-    let once = |c: AnimationClip| AnimationState {
-        looping: false,
-        ..AnimationState::new(Motion::Clip(c))
-    };
+    let once = |c: AnimationClip| AnimationState::new(Motion::Clip(c)).with_looping(false);
     let states = vec![
         AnimationState::new(Motion::Clip(clip("idle"))),
         AnimationState::new(Motion::Clip(clip("walk"))),
@@ -642,7 +637,7 @@ impl Plugin for Rules {
         // ANCHOR: level
         // The level: drawn, solid, and walkable for the crawlers.
         let look = ctx.gfx.load_mesh(LEVEL);
-        let solid = ctx.load_collision_mesh(LEVEL).expect("the grove loads");
+        let solid = ctx.load_collision_mesh(LEVEL);
         ctx.world.spawn((
             Transform::default(),
             Model::new(look),
@@ -1180,7 +1175,7 @@ pub fn step_crawlers(ctx: &mut Ctx) {
             }
             animator.set_bool(crawler_anim::STUNNED, c.stun > 0.0);
         });
-    ponko::systems::step_navmesh3d(ctx);
+    systems::step_navmesh3d(ctx);
     // Face the way they moved.
     ctx.world
         .query::<(&mut Transform, &mut Crawler, &mut Animator)>()
@@ -1315,6 +1310,29 @@ impl Plugin for Presentation {
         lighting.ambient_intensity = 0.35;
         ctx.scene3d.camera.position = vec3(0.0, 20.0, 34.0);
         ctx.scene3d.camera.look_at(Vec3::ZERO);
+        ctx.world.insert_resource(Cameras::default());
+    }
+}
+
+/// The camera rigs: one behind the warden, one circling the grove on the
+/// title.
+#[derive(Debug, Clone, Copy)]
+pub struct Cameras {
+    pub chase: ThirdPersonCamera,
+    pub title: OrbitCamera,
+}
+
+impl Default for Cameras {
+    fn default() -> Self {
+        let mut chase = ThirdPersonCamera::default();
+        chase.height = 1.4;
+        chase.distance = 7.3;
+        chase.pitch = -0.28; // looking down a little
+        chase.follow_smoothing = 0.07;
+        let mut title = OrbitCamera::new(Vec3::ZERO, 35.0);
+        title.pitch = -0.54;
+        title.smoothing = 0.0;
+        Self { chase, title }
     }
 }
 
@@ -1327,19 +1345,19 @@ pub fn present(ctx: &mut Ctx) {
 
     // The camera: behind the warden, or circling the grove on the title.
     match warden(&mut ctx.world) {
-        Some((_, at)) => {
-            let behind = Quat::from_rotation_y(view.yaw) * vec3(0.0, 3.4, 7.0);
-            let eye = at + behind;
-            let cam = &mut ctx.scene3d.camera;
-            let blend = 1.0 - (-10.0 * dt).exp();
-            cam.position = cam.position.lerp(eye, blend);
-            cam.look_at(at + Vec3::Y * 1.4);
+        Some((who, at)) => {
+            // Behind the warden, coming in front of walls between them.
+            let rigs = ctx.world.resource_mut::<Cameras>();
+            rigs.chase.yaw = view.yaw;
+            let filter = QueryFilter::default().exclude(who);
+            rigs.chase
+                .update_with_physics(&mut ctx.scene3d.camera, at, &ctx.physics3d, filter, dt);
         }
         None => {
-            let angle = time * 0.05;
-            let cam = &mut ctx.scene3d.camera;
-            cam.position = vec3(angle.sin() * 30.0, 18.0, angle.cos() * 30.0);
-            cam.look_at(Vec3::ZERO);
+            let rigs = ctx.world.resource_mut::<Cameras>();
+            rigs.chase.snap(); // straight behind the warden when play starts
+            rigs.title.yaw = time * 0.05;
+            rigs.title.update(&mut ctx.scene3d.camera, dt);
         }
     }
     // Shards spin and bob.
@@ -1423,7 +1441,7 @@ impl Plugin for Screens {
         let ui = &mut panel.ui;
         let root = ui.root().layout(UiLayout::fill().padding(12.0)).id();
         let text = ui.title(root, "").layout(UiLayout::fill()).name("gate.sign").id();
-        ui.push_screen(root, false);
+        ui.push_modeless(root);
         ctx.world
             .spawn((Transform::at(vec3(0.0, 5.2, -21.1)), model, panel, GateSign { text }));
     }
@@ -1431,7 +1449,7 @@ impl Plugin for Screens {
 
 fn build_screens(ctx: &mut Ctx) -> ScreenUi {
     let ui = &mut ctx.ui;
-    let menu = |ui: &mut ponko::ui::Ui, name: &str, title: &str, height: f32| {
+    let menu = |ui: &mut Ui, name: &str, title: &str, height: f32| {
         let root = ui
             .root()
             .layout(UiLayout::centered(440.0, height).padding(24.0).gap(10.0))
@@ -1635,7 +1653,7 @@ pub fn update_screens(ctx: &mut Ctx) {
             ctx.ui.pop_screen();
         }
         if let Some(root) = want {
-            ctx.ui.push_screen(root, true);
+            ctx.ui.push_modal(root);
         }
     }
     let in_run = matches!(screen, Screen::Playing | Screen::Paused);

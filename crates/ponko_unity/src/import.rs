@@ -17,7 +17,7 @@ use crate::fbx::{ModelFile, ModelMaterial};
 use crate::glb::{self, Primitive, Vertices};
 use crate::hierarchy::GameObject;
 use crate::material::{Surface, UnityMaterial};
-use crate::{Error, Hierarchy, ObjRef, Project, UnityFile, UnityMesh, UnityTexture, Value};
+use crate::{Error, ErrorKind, Hierarchy, ObjRef, Project, UnityFile, UnityMesh, UnityTexture, Value};
 
 const MESH_FILTER: i32 = 33;
 const MESH_RENDERER: i32 = 23;
@@ -112,7 +112,7 @@ pub struct Importer<'p> {
     models: HashMap<(ObjRef, Vec<ObjRef>), Option<String>>,
     materials: HashMap<ObjRef, Option<UnityMaterial>>,
     /// Model files (FBX, OBJ) read so far, by GUID.
-    model_files: HashMap<String, Result<ModelFile, String>>,
+    model_files: HashMap<String, Result<ModelFile, Error>>,
     /// Images to write, by file name under `meshes/textures/`.
     jobs: BTreeMap<String, Job>,
     used_names: HashSet<String>,
@@ -658,9 +658,9 @@ impl<'p> Importer<'p> {
         let glb = self.build_glb(&unity, &mats, clip_root);
         let file_name = self.unique_name(&unity.name, mesh, materials);
         let dir = self.out.join("meshes");
-        std::fs::create_dir_all(&dir).map_err(|e| Error::new(format!("{}: {e}", dir.display())))?;
+        std::fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
         let at = dir.join(&file_name);
-        std::fs::write(&at, glb).map_err(|e| Error::new(format!("{}: {e}", at.display())))?;
+        std::fs::write(&at, glb).map_err(|e| Error::io(&at, e))?;
         self.report.meshes += 1;
         Ok(Some(format!("{}meshes/{file_name}", self.prefix)))
     }
@@ -693,21 +693,21 @@ impl<'p> Importer<'p> {
                 Ok(m) => m,
                 Err(e) => {
                     self.report
-                        .skip(format!("a mesh that can't be read: {}", first_words(&e.message)));
+                        .skip(format!("a mesh that can't be read: {}", first_words(e.message())));
                     return Ok(None);
                 }
             }
         } else if MODEL_FILES.contains(&ext.as_str()) {
             let mesh = match self.model_file(guid) {
                 Ok(model) => model.mesh(mesh.file_id),
-                Err(e) => Err(Error::new(e.clone())),
+                Err(e) => Err(e.clone()),
             };
             match mesh {
                 Ok(m) => m,
                 Err(e) => {
                     self.report.skip(format!(
                         "a mesh that can't be read from a .{ext}: {}",
-                        first_words(&e.message)
+                        first_words(e.message())
                     ));
                     return Ok(None);
                 }
@@ -719,13 +719,13 @@ impl<'p> Importer<'p> {
         Ok(Some(unity))
     }
     /// The model file (FBX, OBJ) with this GUID, read once.
-    fn model_file(&mut self, guid: &str) -> &Result<ModelFile, String> {
+    fn model_file(&mut self, guid: &str) -> &Result<ModelFile, Error> {
         let project = self.project;
         self.model_files.entry(guid.to_string()).or_insert_with(|| {
             let path = project
                 .path_of(guid)
-                .ok_or_else(|| format!("no asset has GUID {guid}"))?;
-            ModelFile::open(&project.root().join(path)).map_err(|e| e.message)
+                .ok_or_else(|| Error::invalid(format!("no asset has GUID {guid}")))?;
+            ModelFile::open(&project.root().join(path))
         })
     }
 
@@ -1147,7 +1147,7 @@ impl<'p> Importer<'p> {
     pub fn finish(mut self) -> Result<Report, Error> {
         use rayon::prelude::*;
         let dir = self.out.join("meshes").join("textures");
-        std::fs::create_dir_all(&dir).map_err(|e| Error::new(format!("{}: {e}", dir.display())))?;
+        std::fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
         let jobs: Vec<(String, Job)> = std::mem::take(&mut self.jobs).into_iter().collect();
         let results: Vec<Result<bool, Error>> = jobs
             .par_iter()
@@ -1158,14 +1158,17 @@ impl<'p> Importer<'p> {
                 };
                 image
                     .save_with_format(&at, image::ImageFormat::Png)
-                    .map_err(|e| Error::new(format!("{}: {e}", at.display())))?;
+                    .map_err(|e| match e {
+                        image::ImageError::IoError(e) => Error::io(&at, e),
+                        e => Error::new(ErrorKind::Other, e.to_string()).at_path(&at),
+                    })?;
                 Ok(true)
             })
             .collect();
         if !self.custom_materials.is_empty() {
             let at = self.out.join("materials.json");
             let text = serde_json::to_string_pretty(&self.custom_materials).expect("JSON");
-            std::fs::write(&at, text).map_err(|e| Error::new(format!("{}: {e}", at.display())))?;
+            std::fs::write(&at, text).map_err(|e| Error::io(&at, e))?;
         }
         for r in results {
             if r? {

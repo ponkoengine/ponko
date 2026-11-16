@@ -66,12 +66,12 @@ fn things_fall_ten_units_per_second() {
 
 The same game can run windowed or headless: the boids example does both
 (`HEADLESS=1 cargo run --release --example boids`), and
-[`examples/headless.rs`](https://github.com/ponkoengine/ponko/blob/main/examples/headless.rs)
+[`examples/headless.rs`](../../examples/headless.rs)
 simulates a million agents this way.
 
 ## A complete game, tested headlessly
 
-[`examples/coin_dash`](https://github.com/ponkoengine/ponko/tree/main/examples/coin_dash)
+[`examples/coin_dash`](../../examples/coin_dash)
 is a small complete game (title, settings, pause and result screens, win, lose,
 restart, saved progress, keyboard and gamepad; one picture file, everything else
 made in code) built so that a test can play it. Packaging it, the settings and the
@@ -100,7 +100,7 @@ every frame:
 {{#include ../../examples/coin_dash/game.rs:read_input}}
 ```
 
-Because `rules` reads only the `Intent`, [`tests/coin_dash.rs`](https://github.com/ponkoengine/ponko/blob/main/tests/coin_dash.rs)
+Because `rules` reads only the `Intent`, [`tests/coin_dash.rs`](../../tests/coin_dash.rs)
 replaces step 1 with a scripted player: a sim system added before the game's
 own, which writes the `Intent` each tick. The game's plugin is added
 unchanged:
@@ -183,7 +183,7 @@ fn menu(ctx: &mut Ctx) {
     if ctx.ui.events().any(|e| e.clicked().is_some() && e.clicked() == settings) {
         ctx.ui.pop_screen();
         let screen = ctx.ui.find("settings").unwrap();
-        ctx.ui.push_screen(screen, false);
+        ctx.ui.push_modeless(screen);
     }
 }
 
@@ -204,7 +204,7 @@ fn menu_opens_settings() {
                 .layout(ponko::ui::UiLayout::fixed(200.0, 40.0))
                 .name("menu.settings");
             ctx.ui.root().layout(ponko::ui::UiLayout::fill()).name("settings");
-            ctx.ui.push_screen(root, false);
+            ctx.ui.push_modeless(root);
         });
     report.assert_passed();
 }
@@ -220,7 +220,7 @@ fn menu_opens_settings() {
 </div>
 </div>
 
-[`tests/coin_dash_menus.rs`](https://github.com/ponkoengine/ponko/blob/main/tests/coin_dash_menus.rs)
+[`tests/coin_dash_menus.rs`](../../tests/coin_dash_menus.rs)
 plays the coin_dash menus this way, with the game's real `read_input` and its
 retained-UI settings screen, and checks the UI at every step: the title
 screen, the settings (Tab to a button, click "+", click "Back"), a round, the
@@ -255,6 +255,36 @@ noise of the busy machine it was measured on, with the same 358 allocations
 per run. With frames, `headless/frames-10k-ticks` costs about 0.9 µs a frame
 for that empty game (the UI frame and the built-in draw systems), and no
 allocations per frame.
+
+## The pointer, sounds and quitting
+
+A headless run has no mouse. Its pointer rests at the window's top-left
+corner until a test moves it: `InputEvent::MouseMove(pixel)` puts it on a
+window pixel (`ctx.input.mouse_pos()`, `ctx.mouse_world()` and the UI's
+hover follow it), and `InputEvent::MouseWheel(lines)` turns the wheel for
+one tick. Feed them with `ctx.input.feed(..)` or as scenario steps
+(`mouse_move` and `mouse_wheel` in the JSON form), so a click test aims at
+the thing it clicks instead of moving the camera under a fixed pointer.
+
+Nothing is heard either, but `ctx.audio.started()` lists the sounds
+started in the tick that is running (or, in a frame system, the frame so
+far): each with its handle, sound, bus, volume, speed and looping. Every
+headless sound gets a handle of its own. `ctx.quit_requested()` says
+whether a system called `ctx.quit()`; the run ends before the next tick. A
+system added after the game's own records both, so a test asserts what was
+played and that the game asked to quit:
+
+```rust
+{{#include ../../tests/audio.rs:headless_ears}}
+```
+
+C: `ponko_ctx_feed_mouse_move`, `ponko_ctx_feed_mouse_wheel`,
+`ponko_input_scenario_mouse_move` and `ponko_input_scenario_mouse_wheel`;
+`ponko_ctx_sounds_started` and `ponko_ctx_sound_started` (a versioned
+`PonkoSoundStarted`); `ponko_ctx_quit_requested`. C++:
+`input_event::mouse_move` and `input_event::wheel`, `ctx::sounds_started()`
+and `ctx::quit_requested()`. The [cookbook](cookbook/index.md)'s click,
+sound and quit recipes are tested this way.
 
 ## Builds without a window
 
@@ -291,3 +321,28 @@ physics or navigation by accident, and that builds without the default
 features carry no JPEG or other image decoder (`scripts/feature-deps.sh`). Everything in
 this chapter works the same. Drawing calls do nothing, and `Game::run`
 (C: `ponko_game_run`) stops with a message that says to use `run_headless`.
+
+## Fallible headless startup
+
+`try_run_headless` returns the first stored setup or plugin error, including
+when asked to run zero ticks. It opens no window or GPU. For example:
+
+```rust
+use ponko::prelude::*;
+fn main() -> Result<(), Error> {
+    let world = Game::new("Simulation", 1, 1)
+        .try_setup(|ctx| {
+            let value = "42".parse::<u32>()
+                .map_err(|e| Error::new(ErrorKind::Invalid, e.to_string()))?;
+            ctx.world.insert_resource(value);
+            Ok(())
+        })
+        .try_run_headless(10)?;
+    assert_eq!(*world.resource::<u32>(), 42);
+    Ok(())
+}
+```
+
+The direct `Game::try_run_headless(ticks, setup)` form retains the existing
+unit-or-frame-closure callback convention. Register fallible work through
+`try_setup`; `SetupResult` has no blanket implementation for `Result`.

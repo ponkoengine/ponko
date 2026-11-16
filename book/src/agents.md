@@ -65,6 +65,7 @@ ctx.world.reflect::<Health>();
 | `shader_status` | | did a shader edit take effect? Each custom shader's last compile or hot reload result, and its errors with line and column in your `.wgsl` file ([details](3d.md)) |
 | `record_trace` | | the next N frames as a Perfetto trace, to find hitches |
 | `perf_hud` | | show the performance overlay, e.g. before a screenshot |
+| `debug_draw` | | turn [debug drawing](debug-draw.md) and the engine's debug views (colliders, navmesh, bounds, lights, hierarchy) on or off, e.g. before a screenshot |
 | `list_events` | | event types the game shows tools, and how many are in flight |
 | `subscribe_events` / `take_events` | | collect [events](events.md) while ticks run, then see what happened (each with its tick) |
 | `read_logs` | | recent stdout/stderr of any running game, also one you started yourself ([logs](control.md#logs)); pass `next` back as `since` for only new lines |
@@ -357,7 +358,7 @@ shader diagnostics (`shader_status`) and GPU reports by pass (`perf_report`).
 Their presence does not imply a general gameplay-input recording/replay
 service. Reliable autonomous creation of complete games remains
 a long-term objective, with human review and reproducible evidence still
-required. See [the project vision](https://github.com/ponkoengine/ponko/blob/main/PROJECT_VISION.md).
+required. See [the project vision](../../PROJECT_VISION.md).
 
 ### Instance schemas and GPU details
 
@@ -517,3 +518,46 @@ guide:
   what keeps them honest.
 - The suite drives games through MCP, so it is the same for games written in
   C or C++; its own tasks are Rust games.
+
+## Capture, compare, fix
+
+Capture a fixed camera with `screenshot` and `max_size: 0` to keep full
+resolution. Save the approved capture as your reference. After a change,
+call `compare_images` with `a` (reference PNG), `b` (actual PNG), and
+optionally `heatmap` (a new PNG path). Omit `b` to capture the selected
+windowed game's next frame at full resolution; `instance` selects the game.
+Headless games cannot capture a frame. Two files need no running game.
+Paths are local to the MCP server, not relative to the game's asset folder.
+Existing heatmap files are refused, including input paths.
+
+The result is JSON with `summary`, `within`, and `heatmap` (null if omitted).
+`summary` reports `max_channel` and `mean` absolute RGBA error (0–255),
+`outliers`, `pixels`, `percent_over` (0–100), `beyond` (maximum error after
+edge allowance), `edges`, `ssim`, and up to eight `regions`. Regions are
+four-connected outliers sorted by pixel count, with `x`, `y`, `width`,
+`height`, and `pixels`; coordinates start at the top left. The heatmap shows
+outliers in red and matching pixels in dim grey. Size mismatches are errors,
+never implicit scaling.
+
+`tolerance` is per-channel slack (integer 0–255, default 0); `threshold` is
+the allowed percent of pixels beyond it (0–100, default 0). `edge` (0–16,
+default 0) allows symmetric local edge movement, using the same comparison
+as offscreen render tests. SSIM uses global Rec.709 luminance with standard
+constants: a cheap structural score in [-1, 1], with 1 for identical
+luminance. It ignores alpha and is diagnostic only; RGBA thresholds decide
+`within`. Fix unexpected regions and recapture at the same camera before
+comparing again. Review intended visual changes before replacing a baseline.
+
+For CI, the CPU-only command works without a game or GPU:
+
+```sh
+ponko image-diff reference.png actual.png --tolerance 4 --threshold 0.5 --heatmap change.png
+```
+
+It prints the same JSON summary, exits 0 within the threshold and 1 when
+exceeded or on an input/IO error. `--threshold` defaults to zero percent.
+The Rust library is `ponko_image_diff::compare` for borrowed RGBA8 buffers,
+or `compare_files` for PNG paths. Offscreen tests use this implementation
+with their existing tolerances and retain their reference update workflow.
+No C/C++ ABI is provided for offline file comparison; native games can use
+the CLI or MCP tools without adding runtime bindings.

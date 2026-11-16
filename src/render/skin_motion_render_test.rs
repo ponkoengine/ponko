@@ -59,13 +59,12 @@ fn two_boxes(morph: bool) -> MeshData {
         // "shift": the upper box (the corners after the lower box's) goes a
         // unit left.
         let n = cube.positions.len();
-        bar.morph_targets.push(MorphTarget {
-            name: "shift".into(),
-            positions: (0..2 * n)
+        bar.morph_targets.push(MorphTarget::new(
+            "shift",
+            (0..2 * n)
                 .map(|i| if i >= n { vec3(-1.0, 0.0, 0.0) } else { Vec3::ZERO })
                 .collect(),
-            normals: Vec::new(),
-        });
+        ));
     }
     bar
 }
@@ -91,16 +90,8 @@ impl Rig {
         let material = ctx.gfx.create_material(glow);
         let data = two_boxes(morph);
         let skeleton = Skeleton::new(vec![
-            Joint {
-                name: "base".into(),
-                parent: None,
-                rest: Transform3D::default(),
-            },
-            Joint {
-                name: "top".into(),
-                parent: Some(0),
-                rest: Transform3D::at(PIVOT),
-            },
+            Joint::new("base", None),
+            Joint::new("top", 0).with_rest(Transform3D::at(PIVOT)),
         ]);
         let bar = if morph {
             let mesh = ctx.gfx.create_mesh(&data, material);

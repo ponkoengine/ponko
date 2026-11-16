@@ -20,6 +20,7 @@
 //! The engine records raw window events here. State lives in fixed-size
 //! arrays indexed by enum discriminant, so lookups are O(1) and nothing
 //! allocates per frame.
+#![deny(missing_docs)]
 
 use glam::Vec2;
 #[cfg(feature = "window")]
@@ -34,6 +35,16 @@ macro_rules! define_keys {
         ///
         /// Physical keys keep controls in the same place on every keyboard layout:
         /// `Key::W` is the key above `S` on QWERTY, AZERTY and Dvorak alike.
+        ///
+        /// ```
+        /// use ponko::actions::InputEvent;
+        /// use ponko::prelude::*;
+        /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+        ///     ctx.input.feed(InputEvent::Key(Key::W, true));
+        ///     assert!(ctx.input.key_down(Key::W));
+        ///     assert!(!ctx.input.key_down(Key::S));
+        /// });
+        /// ```
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
         #[non_exhaustive]
         #[allow(missing_docs)] // named after the keys
@@ -111,6 +122,16 @@ define_keys! {
 }
 
 /// A mouse button.
+///
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::actions::InputEvent;
+/// Game::new("t", 1, 1).run_headless(0, |ctx| {
+///     ctx.input.feed(InputEvent::Mouse(MouseButton::Left, true));
+///     assert!(ctx.input.mouse_down(MouseButton::Left));
+///     assert!(!ctx.input.mouse_down(MouseButton::Right));
+/// });
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum MouseButton {
@@ -153,6 +174,18 @@ impl MouseButton {
 
 /// A gamepad button, named by its position, so it means the same on every
 /// brand of controller.
+///
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::actions::InputEvent;
+/// use ponko::input::{Gamepad, GamepadAxis, GamepadButton, GamepadStick};
+/// Game::new("t", 1, 1).run_headless(0, |ctx| {
+///     let pad = Gamepad::from_slot(0).unwrap();
+///     ctx.input.feed(InputEvent::GamepadButton(pad, GamepadButton::South, true));
+///     assert!(ctx.input.gamepad_down(pad, GamepadButton::South));
+///     assert!(!ctx.input.gamepad_down(pad, GamepadButton::East));
+/// });
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum GamepadButton {
@@ -217,6 +250,17 @@ impl GamepadButton {
 
 /// One axis of a gamepad: a stick's x or y (`-1.0..=1.0`, y down is
 /// positive like screen coordinates) or a trigger (`0.0..=1.0`).
+///
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::actions::InputEvent;
+/// use ponko::input::{Gamepad, GamepadAxis, GamepadButton, GamepadStick};
+/// Game::new("t", 1, 1).run_headless(0, |ctx| {
+///     let pad = Gamepad::from_slot(0).unwrap();
+///     ctx.input.feed(InputEvent::GamepadAxis(pad, GamepadAxis::LeftStickX, 0.5));
+///     assert_eq!(ctx.input.gamepad_axis(pad, GamepadAxis::LeftStickX), 0.5);
+/// });
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum GamepadAxis {
@@ -248,6 +292,19 @@ impl GamepadAxis {
 }
 
 /// Which stick, for [`Input::gamepad_stick`](crate::input::Input::gamepad_stick).
+///
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::actions::InputEvent;
+/// use ponko::input::{Gamepad, GamepadAxis, GamepadButton, GamepadStick};
+/// Game::new("t", 1, 1).run_headless(0, |ctx| {
+///     let pad = Gamepad::from_slot(0).unwrap();
+///     ctx.input.feed(InputEvent::GamepadAxis(pad, GamepadAxis::LeftStickX, 1.0));
+///     let left = ctx.input.gamepad_stick(pad, GamepadStick::Left);
+///     assert_eq!(left.x, 1.0);
+///     assert_eq!(ctx.input.gamepad_stick(pad, GamepadStick::Right), Vec2::ZERO);
+/// });
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum GamepadStick {
     /// The left stick.
@@ -259,6 +316,20 @@ pub enum GamepadStick {
 /// A connected gamepad, from [`Input::gamepads`](crate::input::Input::gamepads). It
 /// keeps its slot while connected, so `pads[0]` stays player one; a pad that
 /// reconnects takes the lowest free slot.
+///
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::actions::InputEvent;
+/// use ponko::input::{Gamepad, GamepadAxis, GamepadButton, GamepadStick};
+/// Game::new("t", 1, 1).run_headless(0, |ctx| {
+///     // A pad is named by its slot; queries on a slot with nothing connected
+///     // read as nothing pressed.
+///     let pad = Gamepad::from_slot(2).unwrap();
+///     assert_eq!(pad.slot(), 2);
+///     assert!(ctx.input.gamepads().is_empty());
+///     assert!(!ctx.input.gamepad_down(pad, GamepadButton::South));
+/// });
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "u8", into = "u8")]
 pub struct Gamepad(pub(crate) u8);
@@ -379,9 +450,9 @@ impl<const N: usize> ButtonStates<N> {
 
 /// Keyboard, mouse, gamepads and named actions this frame: `ctx.input`.
 ///
-/// The everyday reads also have shortcuts on [`Ctx`](crate::ctx::Ctx)
-/// (`ctx.key_down`, `ctx.key_pressed`, `ctx.key_released`, `ctx.mouse_pos`);
-/// everything else is here.
+/// Every read is spelled here: `ctx.input.key_down(..)`, `key_pressed`,
+/// `key_released`, `mouse_pos()`. The same-named methods on
+/// [`Ctx`](crate::ctx::Ctx) are deprecated forwarders.
 ///
 /// - **What lives here:** what is held (`key_down`, `mouse_down`,
 ///   `gamepad_down`), what changed this frame (`*_pressed`, `*_released`),
@@ -566,6 +637,16 @@ impl Input {
     /// if ctx.input.key_down(Key::Right) { pos.x += 200.0 * ctx.time.dt(); }
     /// # }
     /// ```
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::actions::InputEvent;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     assert!(!ctx.input.key_down(Key::Right));
+    ///     ctx.input.feed(InputEvent::Key(Key::Right, true));
+    ///     assert!(ctx.input.key_down(Key::Right));
+    /// });
+    /// ```
     #[must_use]
     pub fn key_down(&self, key: Key) -> bool {
         self.keys.down[key as usize]
@@ -579,6 +660,15 @@ impl Input {
     /// if ctx.input.key_pressed(Key::P) { *paused = !*paused; }
     /// # }
     /// ```
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::actions::InputEvent;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.input.feed(InputEvent::Key(Key::P, true));
+    ///     assert!(ctx.input.key_pressed(Key::P)); // the frame it went down
+    /// });
+    /// ```
     #[must_use]
     pub fn key_pressed(&self, key: Key) -> bool {
         self.keys.pressed[key as usize]
@@ -591,6 +681,17 @@ impl Input {
     /// # fn update(ctx: &mut Ctx, charging: &mut bool) {
     /// if ctx.input.key_released(Key::Space) { *charging = false; }
     /// # }
+    /// ```
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::actions::InputEvent;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.input.feed(InputEvent::Key(Key::Space, true));
+    ///     assert!(!ctx.input.key_released(Key::Space));
+    ///     ctx.input.feed(InputEvent::Key(Key::Space, false));
+    ///     assert!(ctx.input.key_released(Key::Space));
+    /// });
     /// ```
     #[must_use]
     pub fn key_released(&self, key: Key) -> bool {
@@ -644,6 +745,15 @@ impl Input {
     /// # fn update(ctx: &mut Ctx) {
     /// let target = ctx.input.mouse_pos();
     /// # }
+    /// ```
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::actions::InputEvent;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     // Before any mouse event the pointer is at the top-left corner.
+    ///     assert_eq!(ctx.input.mouse_pos(), Vec2::ZERO);
+    /// });
     /// ```
     #[must_use]
     pub fn mouse_pos(&self) -> Vec2 {
@@ -910,6 +1020,10 @@ impl Input {
 
     /// Like [`action_id`](Self::action_id), but returns the error instead of
     /// logging it.
+    ///
+    /// # Errors
+    /// [`UnknownAction`](crate::actions::UnknownAction) if no action has that name.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// # fn example(ctx: &Ctx) {
@@ -1034,6 +1148,35 @@ impl Input {
     /// ctx.input.feed(ponko::actions::InputEvent::Key(Key::Space, true));
     /// # }
     /// ```
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::actions::InputEvent;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.input.feed(InputEvent::Key(Key::Space, true));
+    ///     assert!(ctx.input.key_down(Key::Space));
+    ///     ctx.input.feed(InputEvent::FocusLost); // releases everything held
+    ///     assert!(!ctx.input.key_down(Key::Space));
+    /// });
+    /// ```
+    ///
+    /// A headless run's pointer rests at the window's top-left corner until
+    /// something moves it; [`MouseMove`](crate::actions::InputEvent::MouseMove)
+    /// puts it on a point (the UI's hover follows it too), and
+    /// [`MouseWheel`](crate::actions::InputEvent::MouseWheel) turns the wheel
+    /// for this frame:
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::actions::InputEvent;
+    /// Game::new("t", 800, 600).run_headless(0, |ctx| {
+    ///     ctx.input.feed(InputEvent::MouseMove(vec2(400.0, 300.0)));
+    ///     ctx.input.feed(InputEvent::MouseWheel(vec2(0.0, 2.0)));
+    ///     assert_eq!(ctx.input.mouse_pos(), vec2(400.0, 300.0));
+    ///     assert_eq!(ctx.input.mouse_wheel(), vec2(0.0, 2.0));
+    ///     assert_eq!(ctx.mouse_world(), ctx.camera.screen_to_world(vec2(400.0, 300.0)));
+    /// });
+    /// ```
     pub fn feed(&mut self, event: crate::actions::InputEvent) {
         use crate::actions::InputEvent;
         match event {
@@ -1043,6 +1186,8 @@ impl Input {
             InputEvent::GamepadAxis(p, a, value) => self.set_gamepad_axis(p, a, value),
             InputEvent::FocusLost => self.release_all(),
             InputEvent::GamepadDisconnected(p) => self.disconnect_gamepad(p),
+            InputEvent::MouseMove(at) => self.set_mouse_pos(at),
+            InputEvent::MouseWheel(lines) => self.add_mouse_wheel(lines),
         }
     }
 

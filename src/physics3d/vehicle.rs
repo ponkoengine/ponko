@@ -214,6 +214,12 @@ impl Wheel3D {
     /// A wheel of `radius` mounted at `position` (its center at full
     /// compression, in the chassis's frame), with the usual suspension and
     /// tyres.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let front_left = ponko::d3::Wheel::new(vec3(-0.8, 0.0, 1.3), 0.35);
+    /// assert_eq!(front_left.radius, 0.35);
+    /// ```
     #[must_use]
     pub fn new(position: Vec3, radius: f32) -> Self {
         let suspension_distance = 0.3;
@@ -334,6 +340,11 @@ impl Vehicle3D {
     pub const MAX_WHEELS: usize = 8;
 
     /// A vehicle with no wheels yet, rolling on everything.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// assert!(ponko::d3::Vehicle::new().wheels().is_empty());
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -348,6 +359,14 @@ impl Vehicle3D {
     /// # Panics
     ///
     /// If it already has [`MAX_WHEELS`](Self::MAX_WHEELS).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let car = ponko::d3::Vehicle::new()
+    ///     .with_wheel(ponko::d3::Wheel::new(vec3(-0.8, 0.0, 1.3), 0.35))
+    ///     .with_wheel(ponko::d3::Wheel::new(vec3(0.8, 0.0, 1.3), 0.35));
+    /// assert_eq!(car.wheels().len(), 2);
+    /// ```
     #[must_use]
     #[track_caller]
     pub fn with_wheel(mut self, wheel: Wheel3D) -> Self {
@@ -363,12 +382,27 @@ impl Vehicle3D {
     }
 
     /// The wheels.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let car = ponko::d3::Vehicle::new().with_wheel(ponko::d3::Wheel::default());
+    /// assert_eq!(car.wheels().len(), 1);
+    /// ```
     #[must_use]
     pub fn wheels(&self) -> &[Wheel3D] {
         &self.wheels[..(self.wheel_count as usize).min(Self::MAX_WHEELS)]
     }
 
     /// The wheels, to set their inputs.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut car = ponko::d3::Vehicle::new().with_wheel(ponko::d3::Wheel::default());
+    /// for wheel in car.wheels_mut() {
+    ///     wheel.radius = 0.4;
+    /// }
+    /// assert_eq!(car.wheels()[0].radius, 0.4);
+    /// ```
     pub fn wheels_mut(&mut self) -> &mut [Wheel3D] {
         let n = (self.wheel_count as usize).min(Self::MAX_WHEELS);
         &mut self.wheels[..n]

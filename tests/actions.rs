@@ -249,3 +249,88 @@ fn set_action_changes_one_action_in_place_keeping_ids_and_the_others_state() {
         assert_eq!(ctx.input.action_axis(throttle), 1.0);
     });
 }
+
+#[test]
+fn named_button_constructors_preserve_legacy_events_and_float_equality() {
+    use ponko::actions::ButtonState::{Held, Released};
+    let pad = Gamepad::from_slot(0).unwrap();
+    for (state, down) in [(Held, true), (Released, false)] {
+        assert_eq!(InputEvent::key(Key::Space, state), InputEvent::Key(Key::Space, down));
+        assert_eq!(
+            InputEvent::mouse(MouseButton::Left, state),
+            InputEvent::Mouse(MouseButton::Left, down)
+        );
+        assert_eq!(
+            InputEvent::gamepad_button(pad, GamepadButton::South, state),
+            InputEvent::GamepadButton(pad, GamepadButton::South, down)
+        );
+    }
+    let axis = InputEvent::GamepadAxis(pad, GamepadAxis::LeftStickX, 0.5);
+    assert_eq!(axis, axis);
+    let nan = InputEvent::GamepadAxis(pad, GamepadAxis::LeftStickX, f32::NAN);
+    assert_ne!(nan, nan);
+    assert_ne!(InputEvent::FocusLost, InputEvent::GamepadDisconnected(pad));
+}
+
+#[test]
+fn repeated_held_events_do_not_repeat_edges_for_any_button_source() {
+    use ponko::actions::ButtonState::{Held, Released};
+    let pad = Gamepad::from_slot(0).unwrap();
+    let events = [
+        (InputEvent::key(Key::Space, Held), InputEvent::key(Key::Space, Released)),
+        (
+            InputEvent::mouse(MouseButton::Left, Held),
+            InputEvent::mouse(MouseButton::Left, Released),
+        ),
+        (
+            InputEvent::gamepad_button(pad, GamepadButton::South, Held),
+            InputEvent::gamepad_button(pad, GamepadButton::South, Released),
+        ),
+    ];
+    for (held, released) in events {
+        let mut frame = 0;
+        Game::new("named states", 1, 1)
+            .sim_system(move |ctx: &mut Ctx| {
+                ctx.input.feed(held);
+                assert!(ctx.input.action_down("jump"));
+                assert_eq!(ctx.input.action_pressed("jump"), frame == 0);
+                if frame == 1 {
+                    ctx.input.feed(released);
+                    assert!(ctx.input.action_released("jump"));
+                    assert!(!ctx.input.action_down("jump"));
+                }
+                frame += 1;
+            })
+            .run_headless(2, |ctx| ctx.input.set_actions(bindings()));
+    }
+}
+
+#[test]
+fn json_errors_use_engine_kind_and_keep_decode_location_and_context() {
+    fn round_trip(map: &ActionMap) -> Result<ActionMap, Error> {
+        ActionMap::from_json(&map.to_json()?)
+    }
+    assert_eq!(round_trip(&bindings()).unwrap(), bindings());
+    let err = ActionMap::from_json("{\n  invalid\n}").unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Json);
+    assert!(err.message().contains("decoding action map"));
+    assert!(err.message().contains("line 2 column"));
+}
+
+#[test]
+fn map_equality_compares_bindings_ignoring_runtime_edges_and_slot_history() {
+    let map = bindings();
+    let mut changed = map.clone();
+    changed.remove("jump");
+    assert_ne!(map, changed);
+    changed.set("temporary", Action::Button(vec![]));
+    changed.remove("temporary");
+    changed.set("jump", map.get("jump").unwrap().clone());
+    assert_eq!(map, changed);
+    Game::new("equality", 1, 1).run_headless(0, |ctx| {
+        ctx.input.set_actions(map.clone());
+        ctx.input.feed(InputEvent::Key(Key::Space, true));
+        assert_eq!(*ctx.input.actions(), map);
+        assert_eq!(ActionMap::from_json(&map.to_json().unwrap()).unwrap(), map);
+    });
+}

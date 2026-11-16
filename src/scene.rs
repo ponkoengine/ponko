@@ -4,6 +4,7 @@
 //! menu, a test setup. A prefab is an entity or a tree of them, spawned as
 //! many times as you like: a tree, an enemy, a cart with its wheels. Both are JSON, so they
 //! diff well, and agents and the editor write them like any other file.
+#![deny(missing_docs)]
 
 use serde_json::{Value, json};
 
@@ -59,14 +60,16 @@ impl Ctx {
     /// | Other resources | Kept as they were (scores you didn't reflect, tuning loaded with [`load_resource`](crate::assets::Assets::load_resource), a baked navigation mesh). |
     /// | Components that aren't reflected | Gone with their entities; [`save_scene`](crate::assets::Assets::save_scene) reports them under `"not_saved"`. |
     /// | [`commands`](Self::commands) | Commands queued earlier in the running system are dropped: they were meant for the old entities. Commands queued after the load apply as usual. |
-    /// | [`events`](Self::events) | Kept: events sent before the load can still be read for their usual lifetime. Entity ids inside them (such as [`CollisionStarted`](crate::collision::CollisionStarted)) refer to the old world. |
+    /// | [`events`](Self::events) | Kept: events sent before the load can still be read for their usual lifetime. Entity ids inside them (such as `CollisionStarted`) refer to the old world. |
     /// | 2D and 3D physics | Bodies, characters and joints are removed at once (queries find nothing), then built from the new components at the next physics step, from rest unless the scene has a velocity component. Gravity, collision meshes, contact hooks and settings are kept. |
     /// | [`spatial`](Self::spatial) neighbor grid | Refilled at the start of the next simulation tick. |
     /// | 3D navigation (`NavMesh3D`, with the `navmesh` feature) | The baked mesh, a resource, is kept. Crowd agents are components, so they go with their entities; `step_navmesh3d` frees the old agents' crowd slots at its next step, and agents added to the new scene's entities (even with the same ids) start from where they are. |
     /// | [`Attached`](crate::attach::Attached), `Attached3D` (with the `3d` feature) | Reflected: the scene's attachments, to the scene's entities. [`follow_attachments`](crate::systems::follow_attachments) places them at its next run and despawns those whose entity isn't in the scene. |
-    /// | Skeletons and morph weights | Components that aren't saved: gone with their entities unless the game adds them again. The engine's skinning scratch is rebuilt every frame from the world as it is. |
-    /// | [`SkinOf`](crate::anim::SkinOf), [`AttachToJoint`](crate::anim::AttachToJoint), 3D joints | Reflected: the scene's, to the scene's entities. Skeletons aren't saved, so skins and joint attachments show once the game gives their entity a skeleton again. |
+    /// | 2D skeletons ([`Skeleton`](crate::skeleton2d::Skeleton)) | Reflected as `Skeleton2D`: the file each plays (loaded with the scene's assets), its clip or state, clock, parameters and skin. Skeletons built in code, with no file, aren't saved. |
+    /// | 3D skeletons and morph weights | Components that aren't saved: gone with their entities unless the game adds them again. The engine's skinning scratch is rebuilt every frame from the world as it is. |
+    /// | `SkinOf`, `AttachToJoint`, 3D joints | Reflected: the scene's, to the scene's entities. Skeletons aren't saved, so skins and joint attachments show once the game gives their entity a skeleton again. |
     /// | [`PrefabParts`] | Reflected: the scene's prefab trees keep their parts, for [`despawn_prefab`](Self::despawn_prefab). |
+    /// | [`Children`](crate::hierarchy::Children) | Reflected: the scene's children lists, in their saved order. |
     /// | Assets | Textures, meshes and collision files the scene names are loaded first and stay cached. Loaded assets are never unloaded by a load. |
     /// | Prefabs | Kept: files [`spawn_prefab`](Self::spawn_prefab) read stay cached, so spawning one after a load doesn't read it again. |
     /// | Positional sounds | A sound playing from an entity stops at the next audio update unless that entity still has the same playing source; other sounds and music keep playing. |
@@ -178,7 +181,7 @@ impl Ctx {
         let save = crate::reflect::migrate_save(&self.world, save)?;
         self.load_scene_assets(&save)?;
         self.world.load(&save)?;
-        self.commands = ponko_ecs::Commands::new();
+        self.commands = self.world.commands();
         self.scene_loads += 1;
         #[cfg(feature = "physics")]
         self.physics.forget_bodies();
@@ -212,6 +215,13 @@ impl Ctx {
     /// one, with its root's components changed for this use (see the guide's
     /// "Prefabs with children").
     ///
+    /// A `.glb` or `.gltf` file spawns as a 3D scene, an entity for every
+    /// node with what its custom properties ask for (with the `3d` feature;
+    /// see `GltfRoot::spawn`, which takes
+    /// options, and the guide's "From Blender to the game"). `at` is then a
+    /// `Vec3` or a `d3::Transform`, and the root has a
+    /// `GltfRoot` instead of [`PrefabParts`].
+    ///
     /// ```no_run
     /// # use ponko::prelude::*;
     /// # fn f(ctx: &mut Ctx) {
@@ -227,9 +237,15 @@ impl Ctx {
     /// it includes) is missing or a component isn't reflected,
     /// [`Json`](crate::error::ErrorKind::Json) if it isn't a prefab, a component
     /// doesn't fit, or prefabs include each other in a loop, and the error of
-    /// an asset it names that can't be loaded. The error's path is `path`;
-    /// nothing is spawned then.
+    /// an asset it names that can't be loaded. A glTF file's errors are
+    /// `GltfRoot::spawn`'s, and
+    /// [`Unsupported`](crate::error::ErrorKind::Unsupported) for a 2D `at`
+    /// or without the `3d` feature. The error's path is `path`; nothing is
+    /// spawned then.
     pub fn spawn_prefab(&mut self, path: &str, at: impl Into<Placement>) -> Result<Entity, crate::error::Error> {
+        if is_gltf(path) {
+            return self.spawn_gltf_prefab(path, at.into());
+        }
         let in_prefab = |e: crate::error::Error| e.context(path).with_path(path);
         let file = self.prefab_file(path).map_err(in_prefab)?;
         if let [single] = &file.entries[..]
@@ -261,7 +277,8 @@ impl Ctx {
     /// Despawns `root` and the [`PrefabParts`] that
     /// [`spawn_prefab`](Self::spawn_prefab) gave it, and returns how many
     /// entities that was. An entity without parts is despawned alone, so this
-    /// also suits entities that didn't come from a prefab.
+    /// also suits entities that didn't come from a prefab. The root of a glTF
+    /// scene goes with every node's entity and the meshes made for it.
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
@@ -271,6 +288,10 @@ impl Ctx {
     /// # }
     /// ```
     pub fn despawn_prefab(&mut self, root: Entity) -> usize {
+        #[cfg(feature = "3d")]
+        if let Some(n) = self.despawn_gltf(root) {
+            return n;
+        }
         let parts = self
             .world
             .get::<PrefabParts>(root)
@@ -281,6 +302,34 @@ impl Ctx {
             n += usize::from(self.world.despawn(part));
         }
         n
+    }
+
+    /// A glTF file spawned as a prefab: a scene with default options.
+    fn spawn_gltf_prefab(&mut self, path: &str, at: Placement) -> Result<Entity, crate::error::Error> {
+        #[cfg(feature = "3d")]
+        {
+            let at = match at {
+                Placement::Position3(at) => crate::d3::Transform::at(at),
+                Placement::D3(at) => at,
+                Placement::Position2(_) | Placement::D2(_) => {
+                    return Err(crate::error::Error::new(
+                        crate::error::ErrorKind::Unsupported,
+                        "a glTF file is a 3D scene: place it with a Vec3 or a d3::Transform",
+                    )
+                    .with_path(path));
+                }
+            };
+            self.spawn_gltf(path, at, crate::d3::GltfOptions::default())
+        }
+        #[cfg(not(feature = "3d"))]
+        {
+            let _ = at;
+            Err(crate::error::Error::new(
+                crate::error::ErrorKind::Unsupported,
+                "glTF files spawn as scenes with the `3d` feature",
+            )
+            .with_path(path))
+        }
     }
 
     /// The prefab file `path`, read, checked and its assets loaded the first
@@ -645,6 +694,7 @@ impl crate::assets::Assets {
     /// for the same component and field replaces its loader.
     ///
     /// ```
+    /// use ponko::assets::MemorySource;
     /// # use ponko::prelude::*;
     /// /// A shop item: its icon is an image, saved by name.
     /// #[derive(Clone, serde::Serialize, serde::Deserialize, Component)]
@@ -735,6 +785,13 @@ fn field_names(json: &Value, component: &str, field: &str, out: &mut Vec<String>
 
 /// Spawns `components` with the position set to `at` (adding a transform if
 /// there's none).
+/// Whether `path` names a glTF file (`.gltf` or `.glb`), which
+/// [`Ctx::spawn_prefab`](crate::ctx::Ctx::spawn_prefab) spawns as a scene.
+fn is_gltf(path: &str) -> bool {
+    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str());
+    ext.is_some_and(|e| e.eq_ignore_ascii_case("gltf") || e.eq_ignore_ascii_case("glb"))
+}
+
 fn spawn_at(world: &mut ponko_ecs::World, mut components: Value, at: Placement) -> Result<Entity, crate::error::Error> {
     match at {
         Placement::Position2(at) => match components.get_mut("Transform2D") {

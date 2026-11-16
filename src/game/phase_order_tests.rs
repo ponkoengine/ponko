@@ -45,6 +45,7 @@ fn bare(game: Game) -> Game {
 fn frame(game: &mut Game, ctx: &mut Ctx, ticks: u32) {
     ctx.begin_frame(FrameTiming {
         dt: 1.0 / 60.0,
+        seconds: 1.0 / 60.0,
         fixed_steps: ticks,
         alpha: 0.0,
     });
@@ -58,7 +59,7 @@ fn retained_ui_updates_before_simulation_and_frame_systems() {
     let mut ctx = ctx();
     let root = ctx.ui.add(
         crate::ui::UiWidget::Panel,
-        crate::ui::UiLayout::custom(Style {
+        crate::ui::UiLayout::unstable_custom(Style {
             size: Size {
                 width: Dimension::length(300.0),
                 height: Dimension::length(200.0),
@@ -69,7 +70,7 @@ fn retained_ui_updates_before_simulation_and_frame_systems() {
     let button = ctx.ui.add_child(
         root,
         crate::ui::UiWidget::Button,
-        crate::ui::UiLayout::custom(Style {
+        crate::ui::UiLayout::unstable_custom(Style {
             size: Size {
                 width: Dimension::length(70.0),
                 height: Dimension::length(30.0),
@@ -78,7 +79,7 @@ fn retained_ui_updates_before_simulation_and_frame_systems() {
             ..Default::default()
         }),
     );
-    ctx.ui.push_screen(root, false);
+    ctx.ui.push_modeless(root);
     let mut game = bare(Game::new("t", 1, 1))
         .sim_system(|ctx: &mut Ctx| {
             let line = format!("sim focus={}", ctx.ui.focus().is_some());
@@ -289,11 +290,7 @@ fn builtin_animation_and_particles_run_between_frame_and_late_systems() {
         d3::Transform as Transform3D,
     };
     use glam::Vec3;
-    let skeleton = Skeleton::new(vec![Joint {
-        name: "root".into(),
-        parent: None,
-        rest: Transform3D::default(),
-    }]);
+    let skeleton = Skeleton::new(vec![Joint::new("root", None)]);
     let clip = AnimationClip::new("rest", &skeleton, vec![]);
     let animator = Animator::new(
         AnimationGraph::new(

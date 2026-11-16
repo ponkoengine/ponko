@@ -69,7 +69,7 @@ impl LightTextures {
                 super::traffic::reallocated();
                 assert!(
                     height <= device.limits().max_texture_dimension_2d,
-                    "punctual light texture exceeds adapter capacity"
+                    "ponko: more point lights, spot lights and decals in view than this GPU can index; use fewer of them at once"
                 );
                 *target = texture(device, "grown light data", target.width(), height, target.format());
                 *view = target.create_view(&Default::default());

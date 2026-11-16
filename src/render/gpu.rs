@@ -10,7 +10,12 @@ use super::batch::{self, DrawList, PanelDraw, SpriteInstance};
 use super::timer::GpuTimer;
 use super::{FrameStatus, RenderStats, Screenshot};
 use crate::color::Color;
+use crate::error::Error;
 
+#[path = "startup.rs"]
+mod startup;
+
+#[derive(Clone)]
 pub(super) struct GpuTexture {
     pub(super) bind_group: wgpu::BindGroup,
     pub(super) texture: wgpu::Texture,
@@ -55,6 +60,11 @@ pub(crate) struct Renderer {
     camera_layout: wgpu::BindGroupLayout,
     panel_pipeline: Option<wgpu::RenderPipeline>,
     panel_cameras: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    /// The 2D views' cameras (`Ctx::views2d`, the main camera's first),
+    /// made as views first need them.
+    view_cameras2d: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    /// This frame's 2D views (beside `view_cameras2d`), kept between frames.
+    sprite_views: Vec<super::views::SpriteView>,
     /// Blend modes and sprite materials: their pipelines and bind groups.
     sprite_pipelines: super::sprite_pipelines::SpritePipelines,
     /// 2D lighting's passes, made the first frame lighting is on.
@@ -62,15 +72,12 @@ pub(crate) struct Renderer {
     texture_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     nearest_sampler: wgpu::Sampler,
-    textures: Vec<GpuTexture>,
+    /// Textures by id; a freed texture's slot goes to the next one made.
+    textures: super::gpu_textures::GpuTextures,
     /// CPU-uploaded alpha summaries (masks only where alpha-tested); unknown
     /// GPU-written textures stay conservative.
     #[cfg(feature = "3d")]
     texture_alpha: super::texture_alpha::TextureAlphas,
-    /// A 1x1 white texture freed textures' slots show (made on first use).
-    blank: Option<wgpu::Texture>,
-    /// Ids of freed textures (their slots show `blank`).
-    freed_textures: std::collections::HashSet<u32>,
 
     instance_buffer: wgpu::Buffer,
     /// Capacity of `instance_buffer`, in sprites.
@@ -125,6 +132,9 @@ pub(crate) struct Renderer {
     display_wait_ms: f32,
     /// The last captured frame, waiting to be picked up.
     screenshot: Option<Screenshot>,
+    /// Several cameras in the window: each 3D view's picture and where it
+    /// goes, and the 2D views (see `views.rs`).
+    views: super::views::WindowViews,
 
     /// The inspector's drawing for the next frame, and egui's renderer
     /// (made the first time the inspector opens).
@@ -151,11 +161,14 @@ pub(super) fn sprite_pipeline(
         format,
         wgpu::BlendState::ALPHA_BLENDING,
         "fs_main",
+        wgpu::VertexStepMode::Instance,
     )
 }
 
 /// A sprite pipeline drawing into `format` with fragment entry point
-/// `fragment` and `blend` (blend modes and sprite materials).
+/// `fragment` and `blend` (blend modes and sprite materials). `step`:
+/// `Instance` draws a quad per record, `Vertex` a triangle list with a
+/// record per vertex (`batch::MESH`).
 pub(super) fn sprite_pipeline_with(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -163,6 +176,7 @@ pub(super) fn sprite_pipeline_with(
     format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
     fragment: &str,
+    step: wgpu::VertexStepMode,
 ) -> wgpu::RenderPipeline {
     let instance_attributes = wgpu::vertex_attr_array![
         0 => Float32x2, // pos
@@ -181,7 +195,7 @@ pub(super) fn sprite_pipeline_with(
             compilation_options: Default::default(),
             buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: size_of::<SpriteInstance>() as u64,
-                step_mode: wgpu::VertexStepMode::Instance,
+                step_mode: step,
                 attributes: &instance_attributes,
             })],
         },
@@ -210,7 +224,7 @@ pub(super) struct SpritePass<'a> {
     pub(super) scale: f32,
     pub(super) pipeline: &'a wgpu::RenderPipeline,
     pub(super) instances: &'a wgpu::Buffer,
-    pub(super) textures: &'a [GpuTexture],
+    pub(super) textures: &'a dyn super::gpu_textures::TextureTable,
     /// Camera, batches, and where the layer's instances start in `instances`.
     pub(super) layers: &'a [(&'a wgpu::BindGroup, &'a [batch::Batch], u32)],
 }
@@ -331,10 +345,12 @@ impl Renderer {
         super::PipelineStats::default()
     }
 
-    /// See `Renderer3D::mesh_costs`; empty before any 3D.
+    /// See `Renderer3D::visit_mesh_costs`; visits nothing before any 3D.
     #[cfg(feature = "3d")]
-    pub fn mesh_costs(&self) -> Vec<(u32, usize, usize, usize, usize)> {
-        self.three.as_ref().map(|t| t.mesh_costs()).unwrap_or_default()
+    pub fn visit_mesh_costs(&self, visit: impl FnMut(u32, usize, usize, usize, usize)) {
+        if let Some(three) = &self.three {
+            three.visit_mesh_costs(visit);
+        }
     }
 
     /// Draw frames that the window can't take offscreen instead of skipping
@@ -420,7 +436,12 @@ impl Renderer {
     /// Opens the GPU and sets up drawing to `window`, waiting for the GPU
     /// (desktop; the web build calls [`Self::new_async`]).
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn new(window: Arc<Window>, display: winit::event_loop::OwnedDisplayHandle, vsync: bool, msaa: u32) -> Self {
+    pub fn new(
+        window: Arc<Window>,
+        display: winit::event_loop::OwnedDisplayHandle,
+        vsync: bool,
+        msaa: u32,
+    ) -> Result<Self, Error> {
         pollster::block_on(Self::new_async(window, display, vsync, msaa))
     }
 
@@ -429,25 +450,28 @@ impl Renderer {
         display: winit::event_loop::OwnedDisplayHandle,
         vsync: bool,
         msaa: u32,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let descriptor = wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display));
         // In a browser, use WebGPU where it works and WebGL2 elsewhere.
         #[cfg(target_arch = "wasm32")]
         let instance = wgpu::util::new_instance_with_webgpu_detection(descriptor).await;
         #[cfg(not(target_arch = "wasm32"))]
         let instance = wgpu::Instance::new(descriptor);
-        let surface = instance
-            .create_surface(window.clone())
-            .unwrap_or_else(|e| panic!("ponko: could not create a GPU surface: {e}"));
+        let surface = startup::result(
+            instance.create_surface(window.clone()),
+            "could not create a GPU surface",
+        )?;
 
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                ..Default::default()
-            })
-            .await
-            .unwrap_or_else(|e| panic!("ponko: no compatible GPU found: {e}"));
+        let adapter = startup::result(
+            instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    compatible_surface: Some(&surface),
+                    ..Default::default()
+                })
+                .await,
+            "no compatible GPU found",
+        )?;
 
         // `PONKO_GPU_TIER` opens the device as a weaker GPU would be.
         let forced_tier = super::GpuTier::forced();
@@ -462,37 +486,39 @@ impl Renderer {
         {
             required_features |= adapter.features() & super::blocks::FEATURES;
         }
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("ponko device"),
-                required_features: forced_tier.map_or(required_features, |t| t.device_features(required_features)),
-                // The defaults ask for more than WebGL2 has; we need little.
-                required_limits: if let Some(tier) = forced_tier {
-                    // The tier's limits, but a surface as large as the window.
-                    tier.window_limits(wgpu::Limits {
-                        max_sampled_textures_per_shader_stage: adapter
-                            .limits()
-                            .max_sampled_textures_per_shader_stage
-                            .clamp(16, 24),
-                        ..wgpu::Limits::default()
-                    })
-                } else if cfg!(target_arch = "wasm32") {
-                    adapter.limits()
-                } else {
-                    // One more sampled texture than the default 16, where
-                    // the adapter has it: projected decals' images.
-                    wgpu::Limits {
-                        max_sampled_textures_per_shader_stage: adapter
-                            .limits()
-                            .max_sampled_textures_per_shader_stage
-                            .clamp(16, 24),
-                        ..wgpu::Limits::default()
-                    }
-                },
-                ..Default::default()
-            })
-            .await
-            .unwrap_or_else(|e| panic!("ponko: could not open the GPU device: {e}"));
+        let (device, queue) = startup::result(
+            adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("ponko device"),
+                    required_features: forced_tier.map_or(required_features, |t| t.device_features(required_features)),
+                    // The defaults ask for more than WebGL2 has; we need little.
+                    required_limits: if let Some(tier) = forced_tier {
+                        // The tier's limits, but a surface as large as the window.
+                        tier.window_limits(wgpu::Limits {
+                            max_sampled_textures_per_shader_stage: adapter
+                                .limits()
+                                .max_sampled_textures_per_shader_stage
+                                .clamp(16, 24),
+                            ..wgpu::Limits::default()
+                        })
+                    } else if cfg!(target_arch = "wasm32") {
+                        adapter.limits()
+                    } else {
+                        // One more sampled texture than the default 16, where
+                        // the adapter has it: projected decals' images.
+                        wgpu::Limits {
+                            max_sampled_textures_per_shader_stage: adapter
+                                .limits()
+                                .max_sampled_textures_per_shader_stage
+                                .clamp(16, 24),
+                            ..wgpu::Limits::default()
+                        }
+                    },
+                    ..Default::default()
+                })
+                .await,
+            "could not open the GPU device",
+        )?;
 
         // The 3D frame's samples per pixel: the game's choice where this GPU
         // can multisample both 3D targets that much, else 4 (always works).
@@ -522,9 +548,7 @@ impl Renderer {
         let tiled = adapter.get_info().backend == wgpu::Backend::Metal;
 
         let size = window.inner_size();
-        let mut config = surface
-            .get_default_config(&adapter, size.width.max(1), size.height.max(1))
-            .expect("ponko: the GPU can't draw to this window");
+        let mut config = startup::config(surface.get_default_config(&adapter, size.width.max(1), size.height.max(1)))?;
         // Prefer an sRGB target so blending happens in linear light.
         let caps = surface.get_capabilities(&adapter);
         if let Some(srgb) = caps.formats.iter().copied().find(|f| f.is_srgb()) {
@@ -640,7 +664,7 @@ impl Renderer {
             &[]
         };
 
-        Self {
+        Ok(Self {
             window,
             instance,
             surface,
@@ -661,16 +685,16 @@ impl Renderer {
             camera_layout,
             panel_pipeline: None,
             panel_cameras: Vec::new(),
+            view_cameras2d: Vec::new(),
+            sprite_views: Vec::new(),
             sprite_pipelines,
             lights2d: None,
             texture_layout,
             sampler,
             nearest_sampler,
-            textures: Vec::new(),
+            textures: Default::default(),
             #[cfg(feature = "3d")]
             texture_alpha: Default::default(),
-            blank: None,
-            freed_textures: Default::default(),
             instance_buffer,
             instance_capacity: INITIAL_INSTANCE_CAPACITY,
             too_many_sprites: false,
@@ -704,13 +728,14 @@ impl Renderer {
             #[cfg(feature = "3d")]
             last_prepare_3d_ms: 0.0,
             screenshot: None,
+            views: Default::default(),
             #[cfg(feature = "inspector")]
             overlay: None,
             #[cfg(feature = "inspector")]
             egui: None,
             #[cfg(feature = "inspector")]
             egui_free: Vec::new(),
-        }
+        })
     }
 
     fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
@@ -1083,11 +1108,11 @@ impl Renderer {
         // A lookup table must be a strip of n squares of n x n.
         let lut = scene.post.lut.filter(|t| {
             let n = t.height();
-            (2..=64).contains(&n)
-                && t.width() == n * n
-                && (t.id as usize) < self.textures.len()
-                && !self.freed_textures.contains(&t.id)
+            (2..=64).contains(&n) && t.width() == n * n && self.textures.live(t.id).is_some()
         });
+        if !scene.frame.debug_lines.is_empty() {
+            self.three(); // debug lines draw in the 3D frame, even without models
+        }
         if let Some(three) = &mut self.three {
             let lut = lut.map(|t| (t.id, t.height()));
             let input = super::gpu3d::Prepare3D { scene, lut, size };
@@ -1095,6 +1120,71 @@ impl Renderer {
         }
         self.prepare_3d_ms = collect_ms + start.elapsed().as_secs_f32() * 1000.0;
         self.collect_ms = collect_ms;
+    }
+
+    /// Draws the 3D frame of several cameras (`SceneSettings::views`), each
+    /// into a picture of its rectangle's size, for `render` to copy into the
+    /// window: the main camera's `main` into `main_rect`, then each of
+    /// `views` (its frame, rectangle and clear color) in order. Each is
+    /// prepared, drawn and submitted before the next is prepared; the main
+    /// frame first, as it draws the shadow maps the others read.
+    #[cfg(feature = "3d")]
+    pub fn prepare_3d_views<'a>(
+        &mut self,
+        main: (&crate::three::Scene3D<'a>, crate::camera::Viewport, Color),
+        views: impl ExactSizeIterator<Item = (crate::three::Scene3D<'a>, crate::camera::Viewport, Color)>,
+        collect_ms: f32,
+    ) {
+        let start = web_time::Instant::now();
+        if !main.0.frame.debug_lines.is_empty() || main.0.frame.window_views.iter().any(|f| !f.debug_lines.is_empty()) {
+            self.three(); // debug lines draw in the 3D frame, even without models
+        }
+        let Some(three) = &mut self.three else {
+            self.views.frame3d.clear();
+            return;
+        };
+        if let Some(timer) = &mut self.timer {
+            timer.collect(&self.device);
+            timer.begin_frame();
+            self.views.timer_begun = true;
+        }
+        let textures = &self.textures;
+        // A lookup table must be a strip of n squares of n x n.
+        let lut = |post: &crate::three::Post| {
+            post.lut
+                .filter(|t| {
+                    let n = t.height();
+                    (2..=64).contains(&n) && t.width() == n * n && textures.live(t.id).is_some()
+                })
+                .map(|t| (t.id, t.height()))
+        };
+        self.views.draw_3d(
+            &self.device,
+            &self.queue,
+            three,
+            self.view_format,
+            [self.config.width, self.config.height],
+            (*main.0, main.1, main.2),
+            views,
+            &lut,
+            textures,
+            self.timer.as_ref(),
+        );
+        self.prepare_3d_ms = collect_ms + start.elapsed().as_secs_f32() * 1000.0;
+        self.collect_ms = collect_ms;
+    }
+
+    /// Forgets the 3D views' state and pictures: the frame has one camera
+    /// filling the window again.
+    #[cfg(feature = "3d")]
+    pub fn drop_3d_views(&mut self) {
+        if let Some(three) = &mut self.three
+            && three.view_count() > 0
+        {
+            three.keep_views(&self.device, 0);
+        }
+        self.views.outputs.clear();
+        self.views.frame3d.clear();
     }
 
     pub fn display_wait_ms(&self) -> f32 {
@@ -1165,6 +1255,7 @@ impl Renderer {
         for buffer in [&self.camera_buffer, &self.ui_camera_buffer]
             .into_iter()
             .chain(self.panel_cameras.iter().map(|(b, _)| b))
+            .chain(self.view_cameras2d.iter().map(|(b, _)| b))
         {
             t.buffer(C::Other, "2d camera", buffer);
         }
@@ -1172,7 +1263,12 @@ impl Renderer {
         if let Some(timer) = &self.timer {
             timer.tally_memory(&mut t);
         }
-        for texture in self.textures.iter().map(|t| &t.texture).chain(&self.blank) {
+        for texture in self
+            .textures
+            .iter()
+            .map(|t| &t.texture)
+            .chain(self.textures.blank().map(|b| &b.texture))
+        {
             t.texture(C::Textures, "texture", texture);
         }
         let (mut memory, allocations) = t.finish_listed();
@@ -1211,15 +1307,14 @@ impl Renderer {
             view_formats: &[],
         });
         let bind_group = self.sprite_bind_group(&texture, false);
-        let id = self.textures.len() as u32;
-        self.three().add_render_target(id, &texture);
-        self.textures.push(GpuTexture {
+        let id = self.textures.add(GpuTexture {
             bind_group,
-            texture,
+            texture: texture.clone(),
             nearest: false,
             // Drawn fresh each frame: no mipmaps to make.
             mips: Some(false),
         });
+        self.three().add_render_target(id, &texture);
         id
     }
 
@@ -1227,14 +1322,13 @@ impl Renderer {
     pub fn create_texture(&mut self, width: u32, height: u32, rgba: &[u8]) -> u32 {
         let texture = self.upload_texture(width, height, rgba);
         let bind_group = self.sprite_bind_group(&texture, false);
-        self.textures.push(GpuTexture {
+        let id = self.textures.add(GpuTexture {
             bind_group,
             texture,
             nearest: false,
             #[cfg(feature = "3d")]
             mips: None,
         });
-        let id = (self.textures.len() - 1) as u32;
         #[cfg(feature = "3d")]
         self.texture_alpha.created(id, width, height, rgba);
         id
@@ -1252,27 +1346,26 @@ impl Renderer {
     pub fn create_compressed_texture(&mut self, image: &crate::compressed::CompressedImage) -> u32 {
         let texture = super::blocks::upload(&self.device, &self.queue, "compressed texture", &[image]);
         let bind_group = self.sprite_bind_group(&texture, false);
-        self.textures.push(GpuTexture {
+        self.textures.add(GpuTexture {
             bind_group,
             texture,
             nearest: false,
             #[cfg(feature = "3d")]
             mips: Some(!image.srgb),
-        });
-        (self.textures.len() - 1) as u32
+        })
     }
 
     /// Replaces texture `id` with a block-compressed image (resolution
     /// streaming, hot reload), like [`replace_texture`](Self::replace_texture).
     #[cfg(feature = "compressed-textures")]
     pub fn replace_compressed_texture(&mut self, id: u32, image: &crate::compressed::CompressedImage) {
-        let Some(old) = self.textures.get(id as usize) else {
+        let Some(old) = self.textures.live(id) else {
             return;
         };
         let nearest = old.nearest;
         let texture = super::blocks::upload(&self.device, &self.queue, "compressed texture", &[image]);
         let bind_group = self.sprite_bind_group(&texture, nearest);
-        self.textures[id as usize] = GpuTexture {
+        *self.textures.live_mut(id).expect("live") = GpuTexture {
             bind_group,
             texture,
             nearest,
@@ -1302,7 +1395,7 @@ impl Renderer {
     /// streaming): the same id, sampling and mipmap kind, so sprites and
     /// materials showing it see the new pixels at once.
     pub fn replace_texture(&mut self, id: u32, width: u32, height: u32, rgba: &[u8]) {
-        let Some(old) = self.textures.get(id as usize) else {
+        let Some(old) = self.textures.live(id) else {
             return;
         };
         let nearest = old.nearest;
@@ -1310,7 +1403,7 @@ impl Renderer {
         let mips = old.mips;
         let texture = self.upload_texture(width, height, rgba);
         let bind_group = self.sprite_bind_group(&texture, nearest);
-        self.textures[id as usize] = GpuTexture {
+        *self.textures.live_mut(id).expect("live") = GpuTexture {
             bind_group,
             texture,
             nearest,
@@ -1330,31 +1423,27 @@ impl Renderer {
         }
     }
 
-    /// Frees texture `id`: its slot shows a 1x1 white texture from now on,
-    /// so sprites and materials still showing it draw white, and target
+    /// Frees texture `id`: it shows a 1x1 white texture from now on, so
+    /// sprites and materials still showing it draw white, and target
     /// cameras and compute passes let go of it if it was a render target.
+    /// Its slot goes to the next texture made, under a new id.
     pub fn free_texture(&mut self, id: u32) {
-        if id as usize >= self.textures.len() {
+        if self.textures.live(id).is_none() {
             return;
         }
-        let blank = match &self.blank {
-            Some(blank) => blank.clone(),
-            None => {
-                let blank = self.upload_texture(1, 1, &[255; 4]);
-                self.blank = Some(blank.clone());
-                blank
-            }
-        };
-        let bind_group = self.sprite_bind_group(&blank, false);
-        self.textures[id as usize] = GpuTexture {
-            bind_group,
-            texture: blank,
-            nearest: false,
-            // 1x1: no mipmaps to make.
-            #[cfg(feature = "3d")]
-            mips: Some(false),
-        };
-        self.freed_textures.insert(id);
+        if self.textures.blank().is_none() {
+            let texture = self.upload_texture(1, 1, &[255; 4]);
+            let bind_group = self.sprite_bind_group(&texture, false);
+            self.textures.set_blank(GpuTexture {
+                bind_group,
+                texture,
+                nearest: false,
+                // 1x1: no mipmaps to make.
+                #[cfg(feature = "3d")]
+                mips: Some(false),
+            });
+        }
+        self.textures.free(id);
         #[cfg(feature = "3d")]
         self.texture_alpha.forget(id);
         #[cfg(feature = "3d")]
@@ -1467,7 +1556,7 @@ impl Renderer {
     /// (normals, ORM), averaged as stored rather than as light.
     #[cfg(feature = "3d")]
     fn ensure_mips(&mut self, id: u32, linear: bool) {
-        let Some(tex) = self.textures.get(id as usize) else {
+        let Some(tex) = self.textures.live(id) else {
             return;
         };
         if tex.mips.is_some() {
@@ -1479,7 +1568,9 @@ impl Renderer {
         // a linear view of its sRGB texture: it is remade as a linear one.
         let remake_as_data = linear && self.image_view_formats.is_empty();
         if levels == 1 && !remake_as_data {
-            self.textures[id as usize].mips = Some(linear);
+            if let Some(tex) = self.textures.live_mut(id) {
+                tex.mips = Some(linear);
+            }
             return;
         }
         let size = wgpu::Extent3d {
@@ -1491,8 +1582,14 @@ impl Renderer {
         let mips = self
             .mips
             .get_or_insert_with(|| super::mips::MipMaker::new(&self.device));
+        let Some(GpuTexture {
+            texture: old, nearest, ..
+        }) = self.textures.live(id).cloned()
+        else {
+            return;
+        };
         let texture = if remake_as_data {
-            mips.data_texture(&self.device, &mut encoder, &self.textures[id as usize].texture, levels)
+            mips.data_texture(&self.device, &mut encoder, &old, levels)
         } else {
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("material texture"),
@@ -1507,17 +1604,13 @@ impl Renderer {
                     | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: self.image_view_formats,
             });
-            encoder.copy_texture_to_texture(
-                self.textures[id as usize].texture.as_image_copy(),
-                texture.as_image_copy(),
-                size,
-            );
+            encoder.copy_texture_to_texture(old.as_image_copy(), texture.as_image_copy(), size);
             mips.generate(&self.device, &mut encoder, &texture, linear);
             texture
         };
         self.queue.submit([encoder.finish()]);
-        let bind_group = self.sprite_bind_group(&texture, self.textures[id as usize].nearest);
-        let tex = &mut self.textures[id as usize];
+        let bind_group = self.sprite_bind_group(&texture, nearest);
+        let tex = self.textures.live_mut(id).expect("still live");
         tex.texture = texture;
         tex.bind_group = bind_group;
         tex.mips = Some(linear);
@@ -1526,11 +1619,12 @@ impl Renderer {
     /// Remakes texture `id`'s mipmaps after its pixels changed.
     fn refresh_mips(&mut self, id: u32) {
         #[cfg(feature = "3d")]
-        if let Some(linear) = self.textures[id as usize].mips
+        if let Some(tex) = self.textures.live(id)
+            && let Some(linear) = tex.mips
             && let Some(mips) = &self.mips
         {
             let mut encoder = self.device.create_command_encoder(&Default::default());
-            mips.generate(&self.device, &mut encoder, &self.textures[id as usize].texture, linear);
+            mips.generate(&self.device, &mut encoder, &tex.texture, linear);
             self.queue.submit([encoder.finish()]);
         }
         #[cfg(not(feature = "3d"))]
@@ -1540,14 +1634,17 @@ impl Renderer {
     /// Replaces every pixel of texture `id` (same size as created).
     pub fn update_texture(&mut self, id: u32, width: u32, height: u32, rgba: &[u8]) {
         debug_assert_eq!(rgba.len(), (width * height * 4) as usize);
+        let Some(tex) = self.textures.live(id) else {
+            return;
+        };
         // A block-compressed texture can't take pixels: it becomes RGBA8.
-        if self.textures[id as usize].texture.format().is_compressed() {
+        if tex.texture.format().is_compressed() {
             self.replace_texture(id, width, height, rgba);
             return;
         }
         self.queue.uploading(Upload::Textures).write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.textures[id as usize].texture,
+                texture: &tex.texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -1580,7 +1677,10 @@ impl Renderer {
     #[cfg(feature = "3d")]
     fn region_alpha_changed(&mut self, id: u32, at: [u32; 2], size: [u32; 2], rgba: &[u8]) -> bool {
         let alpha_tested = self.three.as_ref().is_some_and(|three| three.alpha_tested(id));
-        let (device, queue, texture) = (&self.device, &self.queue, &self.textures[id as usize].texture);
+        let Some(texture) = self.textures.live(id).map(|t| &t.texture) else {
+            return false;
+        };
+        let (device, queue) = (&self.device, &self.queue);
         self.texture_alpha.region(id, at, size, rgba, alpha_tested, |_, _| {
             super::texture_alpha::read_alpha(device, queue, texture)
         })
@@ -1588,8 +1688,11 @@ impl Renderer {
 
     /// Switches texture `id` between smooth and hard-edged sampling.
     pub fn set_filter(&mut self, id: u32, nearest: bool) {
-        let bind_group = self.sprite_bind_group(&self.textures[id as usize].texture, nearest);
-        let tex = &mut self.textures[id as usize];
+        let Some(tex) = self.textures.live(id) else {
+            return;
+        };
+        let bind_group = self.sprite_bind_group(&tex.texture, nearest);
+        let tex = self.textures.live_mut(id).expect("live");
         tex.bind_group = bind_group;
         tex.nearest = nearest;
     }
@@ -1600,9 +1703,12 @@ impl Renderer {
         // Compared before the write: a first mask is read back as it was.
         #[cfg(feature = "3d")]
         let alpha_changed = self.region_alpha_changed(id, at, size, rgba);
+        let Some(tex) = self.textures.live(id) else {
+            return;
+        };
         self.queue.uploading(Upload::Textures).write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.textures[id as usize].texture,
+                texture: &tex.texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d {
                     x: at[0],
@@ -1669,6 +1775,7 @@ impl Renderer {
         ui_view: Mat4,
         capture: bool,
         lights: &crate::light2d::Lighting2D,
+        cameras2d: &[crate::camera::views::Camera2DFrame],
     ) -> FrameStatus {
         // `None` when the window can't be drawn to right now; a requested
         // screenshot is still drawn (offscreen), so it never waits on the
@@ -1734,7 +1841,12 @@ impl Renderer {
         }
 
         let cpu_start = web_time::Instant::now();
-        if let Some(timer) = &mut self.timer {
+        // Drawing the 3D views began the timer's frame already.
+        if let Some(timer) = self
+            .timer
+            .as_mut()
+            .filter(|_| !std::mem::take(&mut self.views.timer_begun))
+        {
             timer.collect(&self.device);
             timer.begin_frame();
         }
@@ -1742,7 +1854,7 @@ impl Renderer {
         let (ui, ui_batches) = ui.finish();
         let panels: Vec<_> = panels
             .iter_mut()
-            .filter(|p| (p.texture as usize) < self.textures.len())
+            .filter(|p| self.textures.live(p.texture).is_some())
             .map(|p| (p.texture, p.size, p.list.finish()))
             .collect();
         let panel_sprites: usize = panels.iter().map(|(_, _, (sprites, _))| sprites.len()).sum();
@@ -1753,7 +1865,7 @@ impl Renderer {
             + panels.iter().map(|(_, _, (_, batches))| batches.len()).sum::<usize>();
         #[cfg(feature = "3d")]
         if let Some(three) = &self.three {
-            self.stats.draw_calls += three.draw_calls();
+            self.stats.draw_calls += three.draw_calls() + self.views.draw_calls;
             let [(instances, triangles), (shadow_instances, shadow_triangles)] = three.counts();
             self.stats.instances = instances;
             self.stats.triangles = triangles;
@@ -1892,12 +2004,39 @@ impl Renderer {
                 &self.queue,
                 &lights.frame,
                 world_view,
+                cameras2d.iter().map(|c| c.view_proj),
                 [self.config.width, self.config.height],
                 &lights.normal_maps,
                 &self.textures,
                 world_batches,
             );
         }
+        // 2D views: each camera's matrix, rectangle, layers and clear.
+        let window = [self.config.width, self.config.height];
+        while self.view_cameras2d.len() < cameras2d.len() {
+            self.view_cameras2d.push(self.make_camera("2d view camera"));
+        }
+        for (camera, (buffer, _)) in cameras2d.iter().zip(&self.view_cameras2d) {
+            let matrix = camera.view_proj.to_cols_array();
+            self.queue
+                .uploading(Upload::Uniforms)
+                .write_buffer(buffer, 0, bytemuck::cast_slice(&matrix));
+        }
+        if cameras2d.iter().any(|c| c.clear.is_some()) {
+            self.views.pipelines(&self.device, self.view_format);
+        }
+        self.sprite_views.clear();
+        self.sprite_views
+            .extend(cameras2d.iter().map(|c| super::views::SpriteView {
+                rect: c.rect.physical(window),
+                layers: c.layers,
+                clear: c.clear,
+            }));
+        let views2d = (
+            &self.sprite_views[..],
+            &self.view_cameras2d[..],
+            self.views.pipelines.as_ref(),
+        );
         let lighting = self.lights2d.as_ref().filter(|_| lit).map(|l| Lighting {
             lights: l,
             frame: &lights.frame,
@@ -1927,7 +2066,10 @@ impl Renderer {
                     label: Some("ui panels"),
                 });
                 for (i, (texture, size, (_, batches))) in panels.iter().enumerate() {
-                    let view = self.textures[*texture as usize]
+                    let view = self
+                        .textures
+                        .live(*texture)
+                        .expect("a live panel target")
                         .texture
                         .create_view(&wgpu::TextureViewDescriptor::default());
                     let layers = [(&self.panel_cameras[i].1, *batches, panel_starts[i])];
@@ -1967,8 +2109,8 @@ impl Renderer {
         let record_start = web_time::Instant::now();
         if let Some(view) = &view {
             let timer = self.timer.as_ref();
-            let sprite_clear = self.draw_3d(&mut buffers_3d, view, clear, timer);
-            Self::sprites_lit(
+            let sprite_clear = self.draw_3d_views(&mut buffers_3d, &mut encoder, view, clear, timer);
+            Self::sprites_in_views(
                 &mut encoder,
                 view,
                 sprite_clear,
@@ -1976,6 +2118,7 @@ impl Renderer {
                 &pass,
                 Some((&self.sprite_pipelines, self.view_format)),
                 lighting.as_ref(),
+                views2d,
             );
         }
         // A screenshot draws the same sprites a second time, into a texture
@@ -1983,8 +2126,8 @@ impl Renderer {
         let capture = capture.then(|| {
             let target = Capture::new(&self.device, self.config.width, self.config.height, self.view_format);
             let target_view = target.texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let sprite_clear = self.draw_3d(&mut buffers_3d, &target_view, clear, None);
-            Self::sprites_lit(
+            let sprite_clear = self.draw_3d_views(&mut buffers_3d, &mut encoder, &target_view, clear, None);
+            Self::sprites_in_views(
                 &mut encoder,
                 &target_view,
                 sprite_clear,
@@ -1992,6 +2135,7 @@ impl Renderer {
                 &pass,
                 Some((&self.sprite_pipelines, self.view_format)),
                 lighting.as_ref(),
+                views2d,
             );
             target.copy(&mut encoder);
             target
@@ -2021,8 +2165,10 @@ impl Renderer {
         if hidden {
             self.hidden_in_flight.push_back(submitted);
         }
+        // With 3D views, the main 3D frame was submitted (and its occlusion
+        // readback started) when they were drawn.
         #[cfg(feature = "3d")]
-        if let Some(three) = &mut self.three {
+        if let Some(three) = self.three.as_mut().filter(|_| self.views.frame3d.is_empty()) {
             three.submitted();
         }
         if let Some(timer) = &mut self.timer {
@@ -2135,6 +2281,26 @@ impl Renderer {
         Some(clear)
     }
 
+    /// [`draw_3d`](Self::draw_3d), or with 3D views (see
+    /// [`prepare_3d_views`](Self::prepare_3d_views)) their pictures copied
+    /// into their rectangles of `view`, the rest cleared to `clear`.
+    fn draw_3d_views(
+        &self,
+        buffers: &mut Vec<wgpu::CommandBuffer>,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        clear: Color,
+        timer: Option<&GpuTimer>,
+    ) -> Option<Color> {
+        if self.views.frame3d.is_empty() {
+            return self.draw_3d(buffers, view, clear, timer);
+        }
+        let size = [self.config.width, self.config.height];
+        let writes = timer.and_then(|t| t.pass("window views"));
+        self.views.composite(encoder, view, size, clear, writes);
+        None
+    }
+
     /// A camera uniform and its bind group for the sprite pipeline.
     fn make_camera(&self, label: &str) -> (wgpu::Buffer, wgpu::BindGroup) {
         let buffer = self.device.new_buffer(&wgpu::BufferDescriptor {
@@ -2203,6 +2369,7 @@ impl Renderer {
             p.textures,
             lighting.normal_maps,
             timer.and_then(|t| t.pass("2d lights")),
+            None,
         );
         let rest = SpritePass { layers: rest, ..*p };
         if !rest.layers.iter().all(|(_, batches, _)| batches.is_empty()) {
@@ -2243,46 +2410,180 @@ impl Renderer {
         pass.set_pipeline(p.pipeline);
         pass.set_vertex_buffer(0, p.instances.slice(..));
         // The look the pass draws with now: plain sprites (0) until a batch
-        // with a blend mode or material comes.
-        let mut look = 0;
-        for (camera, batches, base) in p.layers {
-            pass.set_bind_group(0, *camera, &[]);
-            for batch in *batches {
-                let [width, height] = p.viewport;
-                let (x, y, w, h) = batch.clip.map_or((0, 0, width, height), |r| {
-                    let x = (r.min.x * p.scale).floor().clamp(0.0, width as f32) as u32;
-                    let y = (r.min.y * p.scale).floor().clamp(0.0, height as f32) as u32;
-                    let right = (r.max.x * p.scale).ceil().clamp(x as f32, width as f32) as u32;
-                    let bottom = (r.max.y * p.scale).ceil().clamp(y as f32, height as f32) as u32;
-                    (x, y, right - x, bottom - y)
-                });
-                if w == 0 || h == 0 {
-                    continue;
-                }
-                pass.set_scissor_rect(x, y, w, h);
-                // `Texture::NONE` (no texture) draws nothing.
-                let Some(texture) = p.textures.get(batch.texture as usize) else {
-                    continue;
-                };
-                if batch.material != look {
-                    match looks.filter(|_| batch.material != 0) {
-                        Some((looks, format)) => {
-                            // Not made (a GPU error): skipped.
-                            let Some((pipeline, material)) = looks.get(batch.material, format) else {
-                                continue;
-                            };
-                            pass.set_pipeline(pipeline);
-                            if let Some(material) = material {
-                                pass.set_bind_group(2, material, &[]);
-                            }
+        // with a blend mode or material, or a mesh, comes.
+        let mut look = (0, false);
+        let [width, height] = p.viewport;
+        for &(camera, batches, base) in p.layers {
+            pass.set_bind_group(0, camera, &[]);
+            Self::sprite_batches(
+                &mut pass,
+                p,
+                (batches, base),
+                ([0, 0, width, height], u32::MAX),
+                looks,
+                &mut look,
+            );
+        }
+    }
+
+    /// Draws `batches` (their instances from `base` on) with the bound
+    /// camera, inside `area` (`[x, y, width, height]` of the target, in
+    /// pixels): those on one of `mask`'s render layers, each clipped to its
+    /// own clip too. `look` is the pipeline the pass has set.
+    fn sprite_batches(
+        pass: &mut wgpu::RenderPass<'_>,
+        p: &SpritePass<'_>,
+        (batches, base): (&[batch::Batch], u32),
+        (area, mask): ([u32; 4], u32),
+        looks: Option<(&super::sprite_pipelines::SpritePipelines, wgpu::TextureFormat)>,
+        look: &mut (u32, bool),
+    ) {
+        let [ax, ay, aw, ah] = area;
+        let (right, bottom) = (ax + aw, ay + ah);
+        for batch in batches {
+            if batch.layers & mask == 0 {
+                continue;
+            }
+            let (x, y, w, h) = batch.clip.map_or((ax, ay, aw, ah), |r| {
+                let x = (r.min.x * p.scale).floor().clamp(ax as f32, right as f32) as u32;
+                let y = (r.min.y * p.scale).floor().clamp(ay as f32, bottom as f32) as u32;
+                let r_x = (r.max.x * p.scale).ceil().clamp(x as f32, right as f32) as u32;
+                let b_y = (r.max.y * p.scale).ceil().clamp(y as f32, bottom as f32) as u32;
+                (x, y, r_x - x, b_y - y)
+            });
+            if w == 0 || h == 0 {
+                continue;
+            }
+            pass.set_scissor_rect(x, y, w, h);
+            // `Texture::NONE` (no texture) draws nothing.
+            let Some(texture) = p.textures.texture(batch.texture) else {
+                continue;
+            };
+            if (batch.material, batch.mesh) != *look {
+                match looks.filter(|_| batch.material != 0 || batch.mesh) {
+                    Some((looks, format)) => {
+                        // Not made (a GPU error): skipped.
+                        let Some((pipeline, material)) = looks.get(batch.material, format, batch.mesh) else {
+                            continue;
+                        };
+                        pass.set_pipeline(pipeline);
+                        if let Some(material) = material {
+                            pass.set_bind_group(2, material, &[]);
                         }
-                        None => pass.set_pipeline(p.pipeline),
                     }
-                    look = batch.material;
+                    // Meshes need their own pipeline: without it, none.
+                    None if batch.mesh => continue,
+                    None => pass.set_pipeline(p.pipeline),
                 }
-                pass.set_bind_group(1, &texture.bind_group, &[]);
+                *look = (batch.material, batch.mesh);
+            }
+            pass.set_bind_group(1, &texture.bind_group, &[]);
+            if batch.mesh {
+                pass.draw(base + batch.start..base + batch.end, 0..1);
+            } else {
                 pass.draw(0..6, base + batch.start..base + batch.end);
             }
+        }
+    }
+
+    /// [`sprites_lit`](Self::sprites_lit), or with 2D views (`views` not
+    /// empty: the main camera first, each with its camera at the same
+    /// index of `cameras`) the world's sprites once per view, each through
+    /// its camera, into its rectangle, on its layers (after its clear, if
+    /// it has one), then the other layers (the UI) over the whole target,
+    /// unlit. With `lighting`, each view's sprites are lit (normals, light
+    /// map and composite in its rectangle, through its camera) before the
+    /// next view draws over its own part, so a view drawn on top of
+    /// another (a minimap) is lit once, by its own camera's light.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn sprites_in_views(
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        clear: Option<Color>,
+        timer: Option<&GpuTimer>,
+        p: &SpritePass<'_>,
+        looks: Option<(&super::sprite_pipelines::SpritePipelines, wgpu::TextureFormat)>,
+        lighting: Option<&Lighting<'_>>,
+        (views, cameras, fill): (
+            &[super::views::SpriteView],
+            &[(wgpu::Buffer, wgpu::BindGroup)],
+            Option<&super::views::ViewPipelines>,
+        ),
+    ) {
+        let (false, Some((&(_, world, base), rest))) = (views.is_empty(), p.layers.split_first()) else {
+            Self::sprites_lit(encoder, view, clear, timer, p, looks, lighting);
+            return;
+        };
+        // The encoder stays locked while a pass is open (`forget_lifetime`),
+        // which lets the lighting passes come between two views'.
+        let begin = |encoder: &mut wgpu::CommandEncoder, clear: Option<Color>| -> wgpu::RenderPass<'static> {
+            encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("sprites"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: clear.map_or(wgpu::LoadOp::Load, |c| wgpu::LoadOp::Clear(c.to_linear_wgpu())),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: timer.and_then(|t| t.pass("sprites")),
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime()
+        };
+        let window = p.viewport;
+        let mut clear = clear;
+        let mut pass: Option<wgpu::RenderPass<'static>> = None;
+        for (i, (v, (_, camera))) in views.iter().zip(cameras).enumerate() {
+            let Some(rect) = super::views::clip_rect(v.rect, window) else {
+                continue;
+            };
+            let open = pass.get_or_insert_with(|| begin(encoder, clear.take()));
+            if let (Some(color), Some(fill)) = (v.clear, fill) {
+                fill.fill(open, rect, color);
+            }
+            if !world.is_empty() {
+                let [x, y, w, h] = rect;
+                open.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
+                open.set_pipeline(p.pipeline);
+                open.set_vertex_buffer(0, p.instances.slice(..));
+                open.set_bind_group(0, camera, &[]);
+                let mut look = (0, false);
+                Self::sprite_batches(open, p, (world, base), (rect, v.layers), looks, &mut look);
+            }
+            if let Some(lighting) = lighting {
+                drop(pass.take());
+                lighting.lights.draw(
+                    encoder,
+                    view,
+                    lighting.frame,
+                    (camera, world, base),
+                    p.instances,
+                    p.textures,
+                    lighting.normal_maps,
+                    timer.and_then(|t| t.pass("2d lights")),
+                    Some(&super::lights2d::LitView {
+                        index: i,
+                        camera,
+                        rect,
+                        layers: v.layers,
+                    }),
+                );
+            }
+        }
+        // Every view off the window: the clear still happens.
+        if clear.is_some() {
+            pass.get_or_insert_with(|| begin(encoder, clear.take()));
+        }
+        drop(pass);
+        let rest = SpritePass { layers: rest, ..*p };
+        if !rest.layers.iter().all(|(_, batches, _)| batches.is_empty()) {
+            Self::sprite_pass_with(encoder, view, None, None, &rest, looks);
         }
     }
 }

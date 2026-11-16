@@ -28,10 +28,16 @@ How a block is compiled (the same idea as rustdoc, kept deliberately small):
   explain it). The blocks of `migrating-to-*.md` are not compiled: they show
   code from before the change.
 
+Every `use ponko::...;` line in a Rust block (and in an `{{#include}}`d
+region) must name a path that exists in the API snapshot (`api/ponko/*.txt`,
+see scripts/api-snapshots.py), so a guide can't tell readers to import a path
+that is not there (`use ponko::d2::LevelObject;` when the type lives in
+`ponko::tilemap`). A glob (`use ponko::d3::*;`) needs its module to exist.
+
 Generated files keep the markdown's line numbers, so a compiler error at
 `src/physics.rs:40` is `book/src/physics.md:40`.
 
-Usage: scripts/check-book-snippets.py [--features a,b] [--no-compile] [--keep]
+Usage: scripts/check-book-snippets.py [--features a,b] [--no-compile] [--keep] [--selftest]
 """
 
 import argparse
@@ -93,6 +99,18 @@ EXPLAINS_OLD_NAMES = {NAMING, BOOK / "migrating-to-0.1.md"}
 README = ROOT / "README.md"
 
 
+def chapters():
+    """The guide's chapters: book/src/*.md, and the pages of a folder of chapters (the cookbook)."""
+    return [*sorted(BOOK.glob("*.md")), *sorted(BOOK.glob("*/*.md"))]
+
+
+def chapter_stem(md):
+    """A name for the chapter's generated file: `physics`, or `cookbook-physics` for a page in a folder."""
+    if BOOK not in md.parents:
+        return md.stem  # README.md
+    return "-".join(md.relative_to(BOOK).with_suffix("").parts)
+
+
 def label(md):
     """A markdown file's path as errors name it (`book/src/x.md`, `README.md`)."""
     return md.relative_to(ROOT).as_posix()
@@ -150,13 +168,113 @@ def check_prose(md):
     return problems
 
 
+API_DIR = ROOT / "api" / "ponko"
+USE_STMT = re.compile(r"\b(?:pub\s+)?use\s+(?:::)?ponko::([^;]*);")
+ITEM_PATH = re.compile(r"\bponko(?:::\w+)*")
+INCLUDE = re.compile(r"\{\{#(?:rustdoc_)?include\s+([^}\s:]+)((?::[\w.-]*)*)\s*\}\}")
+ANCHOR_LINE = re.compile(r"\bANCHOR(?:_END)?:\s*\S+")
+
+
+def load_api_paths():
+    """(names, prefixes): every item path in the API snapshot, and the paths below it that the snapshot can't list.
+
+    Those are the contents of a glob re-export and of a re-exported third-party
+    crate (`pub use ponko::reflect::json`, which is `serde_json`): the snapshot
+    names the re-export, not what is in the other crate.
+    """
+    names, prefixes = set(), []
+    for listing in sorted(API_DIR.glob("*.txt")):
+        for line in listing.read_text().split("\n"):
+            if not line or line.startswith("impl "):
+                continue
+            m = ITEM_PATH.search(line)
+            if not m:
+                continue
+            if "<<" in line:
+                prefixes.append(m.group(0) + "::")
+            elif line.startswith("pub use "):
+                names.add(m.group(0))
+                prefixes.append(m.group(0) + "::")
+            else:
+                names.add(m.group(0))
+    return names, prefixes
+
+
+def expand_use_tree(tree):
+    """`{a, b::{c, d}}` after `ponko::` -> ['a', 'b::c', 'b::d'] (`as` renames and `self` dropped)."""
+    tree = tree.strip()
+    brace = tree.find("{")
+    if brace < 0:
+        path = re.sub(r"\s+as\s+\w+$", "", tree.strip())
+        return [path.strip()]
+    prefix, depth, part, parts = tree[:brace], 0, "", []
+    inner = tree[brace + 1 : tree.rindex("}")]
+    for ch in inner + ",":
+        if ch == "," and depth == 0:
+            if part.strip():
+                parts.append(part.strip())
+            part = ""
+            continue
+        depth += {"{": 1, "}": -1}.get(ch, 0)
+        part += ch
+    out = []
+    for p in parts:
+        for sub in expand_use_tree(p):
+            out.append(prefix + sub if sub != "self" else prefix.rstrip(":"))
+    return out
+
+
+def check_use_paths(code, where, api):
+    """Problems for the `use ponko::...;` statements in `code`; `where` is `file:line` of its first line."""
+    names, prefixes = api
+    problems = []
+    path, _, first = where.rpartition(":")
+    for m in USE_STMT.finditer(code):
+        line = int(first) + code.count("\n", 0, m.start())
+        for rel in expand_use_tree(m.group(1)):
+            full = "ponko" + ("::" + rel if rel else "")
+            module = full[:-3] if full.endswith("::*") else full
+            if module in names or any((module + "::").startswith(p) for p in prefixes):
+                continue
+            problems.append(f"{path}:{line}: `use {full};` names a path that is not in the API snapshot (api/ponko/*.txt)")
+    return problems
+
+
+def included_text(md, line):
+    """The text a `{{#include path:anchor}}` line pulls in, or None if it isn't a readable include."""
+    m = INCLUDE.search(line)
+    if not m:
+        return None
+    target = (md.parent / m.group(1)).resolve()
+    if not target.is_file():
+        return None
+    lines = target.read_text().split("\n")
+    spec = [x for x in m.group(2).split(":")[1:]]
+    if len(spec) == 1 and not re.fullmatch(r"\d*", spec[0]):
+        name, region, on = spec[0], [], False
+        for l in lines:
+            if re.search(rf"\bANCHOR_END:\s*{re.escape(name)}\s*$", l):
+                on = False
+            elif re.search(rf"\bANCHOR:\s*{re.escape(name)}\s*$", l):
+                on = True
+            elif on and not ANCHOR_LINE.search(l):
+                region.append(l)
+        return "\n".join(region)
+    if spec:
+        start = int(spec[0]) if spec[0] else 1
+        end = int(spec[1]) if len(spec) > 1 and spec[1] else len(lines)
+        return "\n".join(lines[start - 1 : end])
+    return "\n".join(lines)
+
+
 def generate(out_src, features):
     """Write src/<chapter>.rs for every chapter with blocks. Returns (checked, skipped, ignored, problems)."""
     modules = []
     checked = skipped = 0
     ignored = []
     problems = []
-    for md in [*sorted(BOOK.glob("*.md")), README]:
+    api = load_api_paths()
+    for md in [*chapters(), README]:
         # A migration chapter shows the old code, which no longer compiles
         # (changelog.py writes them from the `Before:` and `After:` snippets).
         migration = md.name.startswith("migrating-to-")
@@ -167,6 +285,13 @@ def generate(out_src, features):
         out = []  # generated lines; len(out) is the line number reached
         for start, end, attrs, body in extract(md):
             rel = f"{label(md)}:{start}"
+            # The `use ponko::` lines, as written or as pulled in from an example's source.
+            shown = "\n".join(unhide(l) for l in body)
+            problems.extend(check_use_paths(shown, f"{label(md)}:{start + 1}", api))
+            for offset, l in enumerate(body):
+                pulled = included_text(md, l)
+                if pulled:
+                    problems.extend(check_use_paths(pulled, f"{label(md)}:{start + 1 + offset}", api))
             if "ignore" in attrs:
                 ignored.append(rel)
                 if not any(IGNORE_REASON.search(l) for l in body):
@@ -199,9 +324,9 @@ def generate(out_src, features):
             out.extend(code)
             out.append(footer)
             checked += 1
-            modules.append((md.stem, md.name))
+            modules.append((chapter_stem(md), md.name))
         if out:
-            (out_src / f"{md.stem}.rs").write_text("\n".join(out) + "\n")
+            (out_src / f"{chapter_stem(md)}.rs").write_text("\n".join(out) + "\n")
     if len(ignored) > MAX_IGNORED:
         problems.append(f"{len(ignored)} `ignore` blocks ({', '.join(ignored)}); at most {MAX_IGNORED} are allowed")
     stems = sorted({stem for stem, _ in modules})
@@ -213,12 +338,29 @@ def generate(out_src, features):
     return checked, skipped, ignored, problems
 
 
+def selftest():
+    """The `use ponko::` check, with made-up input against the real snapshot."""
+    api = load_api_paths()
+    good = "use ponko::prelude::*;\nuse ponko::d3::*;\nuse ponko::render::{MaterialDesc, Mesh, MeshData};\nuse ponko::tilemap::LevelObject;"
+    assert check_use_paths(good, "x.md:1", api) == []
+    for bad in ("use ponko::d2::LevelObject;", "use ponko::d3::Model;", "use ponko::d9::*;", "use ponko::ui::{UiLayout, Nope};"):
+        found = check_use_paths(bad, "x.md:7", api)
+        assert len(found) == 1 and found[0].startswith("x.md:7:"), (bad, found)
+    assert expand_use_tree("a::{b, c::{d, self}}") == ["a::b", "a::c::d", "a::c"]
+    assert check_use_paths("use ponko::reflect::json::json;", "x.md:1", api) == [], "re-exported crates are not listed"
+    print("check-book-snippets.py: self-test passed")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--features", default=DEFAULT_FEATURES, help="ponko features to enable (default: %(default)s)")
     ap.add_argument("--no-compile", action="store_true", help="only extract and validate the blocks")
     ap.add_argument("--keep", action="store_true", help="keep the scratch crate's files (always kept under target/)")
+    ap.add_argument("--selftest", action="store_true", help="check the `use ponko::` path check with made-up input")
     args = ap.parse_args()
+    if args.selftest:
+        return selftest()
 
     target = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target")
     crate = target / "book-snippets"

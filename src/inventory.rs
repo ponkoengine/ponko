@@ -25,22 +25,22 @@ pub enum AssetClass {
     /// (glyph atlases, UI images), which the game can't free, so it can read
     /// more than [`LiveCounts::textures`](crate::handle::LiveCounts::textures).
     Texture,
-    /// 3D: textures cameras draw into ([`Graphics::create_render_target`](crate::gfx::Graphics::create_render_target)),
+    /// 3D: textures cameras draw into (`Graphics::create_render_target`),
     /// freed with [`Graphics::free`](crate::gfx::Graphics::free).
     RenderTarget,
-    /// 3D: [`TextureArray`](crate::terrain::TextureArray)s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    /// 3D: `TextureArray`s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
     TextureArray,
-    /// 3D: [`Material`](crate::render::Material)s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    /// 3D: `Material`s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
     Material,
-    /// 3D: material [`Shader`](crate::render::Shader)s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    /// 3D: material `Shader`s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
     Shader,
-    /// 3D: [`Mesh`](crate::render::Mesh)es, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    /// 3D: `Mesh`es, freed with [`Graphics::free`](crate::gfx::Graphics::free).
     Mesh,
-    /// 3D: [`GpuBuffer`](crate::render::GpuBuffer)s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    /// 3D: `GpuBuffer`s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
     GpuBuffer,
-    /// 3D: screen [`Effect`](crate::render::Effect)s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    /// 3D: screen `Effect`s, freed with [`Graphics::free`](crate::gfx::Graphics::free).
     Effect,
-    /// 3D: [`Compute`](crate::render::Compute) passes, freed with [`Graphics::free`](crate::gfx::Graphics::free).
+    /// 3D: `Compute` passes, freed with [`Graphics::free`](crate::gfx::Graphics::free).
     Compute,
     /// [`Sound`](crate::audio::Sound)s, loaded or made, freed with [`Audio::free`](crate::audio::Audio::free).
     Sound,
@@ -423,10 +423,42 @@ impl Ledger {
     }
 }
 
-/// Oldest first, then by id.
-fn oldest_first(mut records: Vec<AssetRecord>) -> Vec<AssetRecord> {
-    records.sort_by_key(|r| (r.made_frame, r.id));
-    records
+// Reuse the owner string at each output slot before sorting the records.
+fn write_record(
+    ledger: &Ledger,
+    out: &mut Vec<AssetRecord>,
+    at: &mut usize,
+    class: AssetClass,
+    id: u32,
+    bytes: u64,
+    engine: bool,
+) {
+    let (made_frame, owner) = ledger.birth(class, id);
+    // Sorting output must not make a stable file owner exchange slots with
+    // a code/engine owner and lose its string buffer on every refresh.
+    if let Some(found) = out[*at..].iter().position(|r| r.class == class && r.id == id) {
+        out.swap(*at, *at + found);
+    }
+    if *at == out.len() {
+        out.push(ledger.record(class, id, bytes, engine));
+    } else {
+        let record = &mut out[*at];
+        record.class = class;
+        record.id = id;
+        record.bytes = bytes;
+        record.made_frame = made_frame;
+        record.age_frames = ledger.now.saturating_sub(made_frame);
+        match (&mut record.owner, owner, engine) {
+            (AssetOwner::File(buffer), Some(name), false) => {
+                buffer.clear();
+                buffer.push_str(name);
+            }
+            (_, _, true) => record.owner = AssetOwner::Engine,
+            (_, Some(name), false) => record.owner = AssetOwner::File(name.into()),
+            (_, None, false) => record.owner = AssetOwner::Code,
+        }
+    }
+    *at += 1;
 }
 
 impl crate::gfx::Graphics {
@@ -434,44 +466,96 @@ impl crate::gfx::Graphics {
     /// first (see [`AssetRecord`]); empty for [`AssetClass::Sound`], which
     /// [`Audio::asset_handles`](crate::audio::Audio::asset_handles) lists.
     /// It allocates: for diagnostics and tests, after
-    /// [`Ctx::asset_inventory`] says which class to look at.
+    /// [`Ctx::asset_inventory`] says which class to look at. Per-frame code
+    /// uses [`asset_handles_into`](Self::asset_handles_into).
     #[must_use]
     pub fn asset_handles(&self, class: AssetClass) -> Vec<AssetRecord> {
-        let ledger = &self.asset_ledger;
         let mut out = Vec::new();
+        self.asset_handles_into(class, &mut out);
+        out
+    }
+
+    /// Replaces `out` with [`asset_handles`](Self::asset_handles), oldest
+    /// first. The old contents are dropped; the vector and the file-owner
+    /// strings are reused, so only new records, a record that changes owner
+    /// kind, or a longer name allocate. [`AssetClass::Sound`] gives an empty
+    /// list here: [`Audio::asset_handles_into`](crate::audio::Audio::asset_handles_into)
+    /// lists sounds.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::inventory::AssetClass;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let mut handles = Vec::new();
+    ///     ctx.gfx.create_texture(1, 1, &[255; 4]);
+    ///     ctx.gfx.asset_handles_into(AssetClass::Texture, &mut handles);
+    ///     assert_eq!(handles.len(), 1);
+    ///     ctx.gfx.asset_handles_into(AssetClass::Sound, &mut handles);
+    ///     assert!(handles.is_empty(), "replaced, not appended");
+    /// });
+    /// ```
+    pub fn asset_handles_into(&self, class: AssetClass, out: &mut Vec<AssetRecord>) {
+        let ledger = &self.asset_ledger;
+        let mut at = 0;
         match class {
             AssetClass::Texture => {
                 for (&id, &bytes) in &ledger.textures {
-                    out.push(ledger.record(class, id, bytes, !self.textures_live.was_made(id)));
+                    write_record(ledger, out, &mut at, class, id, bytes, !self.textures_live.was_made(id));
                 }
             }
             AssetClass::Sound => {}
             #[cfg(feature = "3d")]
             _ => self.assets3d.records(class, &self.textures_live, |id, bytes| {
-                out.push(ledger.record(class, id, bytes, false));
+                write_record(ledger, out, &mut at, class, id, bytes, false);
             }),
             #[cfg(not(feature = "3d"))]
             _ => {}
         }
-        oldest_first(out)
+        out.truncate(at);
+        out.sort_unstable_by_key(|r| (r.made_frame, r.id));
     }
 }
 
 impl crate::audio::Audio {
     /// Every live sound, with its bytes, age and owner, oldest first (see
     /// [`AssetRecord`]): [`Graphics::asset_handles`](crate::gfx::Graphics::asset_handles)
-    /// for sounds.
+    /// for sounds. It allocates; [`asset_handles_into`](Self::asset_handles_into)
+    /// reuses a vector.
     #[must_use]
     pub fn asset_handles(&self) -> Vec<AssetRecord> {
-        let records = self
-            .sounds_live
-            .ids()
-            .map(|id| {
-                self.ledger
-                    .record(AssetClass::Sound, id, self.backend.sound_bytes(id), false)
-            })
-            .collect();
-        oldest_first(records)
+        let mut out = Vec::new();
+        self.asset_handles_into(&mut out);
+        out
+    }
+
+    /// Replaces `out` with [`asset_handles`](Self::asset_handles), oldest
+    /// first. The old contents are dropped; the vector and the file-owner
+    /// strings are reused, so only new records, a record that changes owner
+    /// kind, or a longer name allocate.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let mut sounds = vec![];
+    ///     ctx.audio.asset_handles_into(&mut sounds);
+    ///     assert!(sounds.is_empty(), "no sound is loaded yet");
+    /// });
+    /// ```
+    pub fn asset_handles_into(&self, out: &mut Vec<AssetRecord>) {
+        let mut at = 0;
+        for id in self.sounds_live.ids() {
+            write_record(
+                &self.ledger,
+                out,
+                &mut at,
+                AssetClass::Sound,
+                id,
+                self.backend.sound_bytes(id),
+                false,
+            );
+        }
+        out.truncate(at);
+        out.sort_unstable_by_key(|r| (r.made_frame, r.id));
     }
 }
 

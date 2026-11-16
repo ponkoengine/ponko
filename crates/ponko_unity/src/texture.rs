@@ -47,14 +47,15 @@ impl UnityTexture {
                 b["m_Format"].as_i64().and_then(graphics_format),
             ),
             _ => {
-                return Err(Error::new(format!(
+                return Err(Error::invalid(format!(
                     "object {} is a {}, not a texture",
                     object.file_id, object.type_name
                 )));
             }
         };
         let name = b["m_Name"].as_str().unwrap_or("").to_string();
-        let layout = layout.ok_or_else(|| Error::new(format!("{name}: a compressed or unknown texture format")))?;
+        let layout =
+            layout.ok_or_else(|| Error::unsupported(format!("{name}: a compressed or unknown texture format")))?;
         let size = |key: &str| u32::try_from(b[key].as_i64().unwrap_or(0)).unwrap_or(0);
         let (width, height) = (size("m_Width"), size("m_Height"));
         let data: Vec<u8> = match &b["image data"] {
@@ -74,7 +75,7 @@ impl UnityTexture {
             data.len()
         };
         if level == 0 || per_layer < level {
-            return Err(Error::new(format!(
+            return Err(Error::invalid(format!(
                 "{name}: {} bytes of data for {width}x{height}x{layers}",
                 data.len()
             )));
@@ -151,7 +152,7 @@ mod tests {
         assert!(
             UnityTexture::from_object(&file.objects[0])
                 .unwrap_err()
-                .message
+                .message()
                 .contains("compressed")
         );
         let short = dxt.replace("m_TextureFormat: 10", "m_TextureFormat: 4");
@@ -159,7 +160,7 @@ mod tests {
         assert!(
             UnityTexture::from_object(&file.objects[0])
                 .unwrap_err()
-                .message
+                .message()
                 .contains("bytes of data")
         );
     }

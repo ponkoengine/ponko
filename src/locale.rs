@@ -61,8 +61,10 @@
 //! assert_eq!(strings.format("coins", &[("count", Arg::from(0))]), "0 pièce");
 //! ```
 
+#![deny(missing_docs)]
+
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -467,7 +469,7 @@ pub struct StringTable {
     group: String,
     digits: Option<[char; 10]>,
     font: Option<String>,
-    strings: HashMap<String, Entry>,
+    strings: BTreeMap<String, Entry>,
 }
 
 /// Languages written right to left, by code.
@@ -494,11 +496,20 @@ impl StringTable {
             group: String::new(),
             digits: None,
             font: None,
-            strings: HashMap::new(),
+            strings: BTreeMap::new(),
         }
     }
 
     /// Reads a table file's text.
+    ///
+    /// ```
+    /// use ponko::locale::StringTable;
+    /// let table = StringTable::from_json(r#"{"language": "de", "strings": {"play": "Spielen"}}"#).unwrap();
+    /// assert_eq!(table.language(), "de");
+    /// assert!(table.contains("play"));
+    /// // A file without a language is an error.
+    /// assert!(StringTable::from_json(r#"{"strings": {}}"#).is_err());
+    /// ```
     ///
     /// # Errors
     /// [`ErrorKind::Decode`] if it isn't JSON, has no `language`, or a value
@@ -581,56 +592,137 @@ impl StringTable {
     }
 
     /// The language's code, as the file gives it.
+    ///
+    /// ```
+    /// use ponko::locale::StringTable;
+    /// let table = StringTable::new("fr");
+    /// assert_eq!(table.language(), "fr");
+    /// ```
     #[must_use]
     pub fn language(&self) -> &str {
         &self.language
     }
 
     /// The language's name for a menu (the file's `name`, or the code).
+    ///
+    /// ```
+    /// use ponko::locale::StringTable;
+    /// let table = StringTable::from_json(r#"{"language": "ar", "name": "العربية", "direction": "rtl", "font": "fonts/arabic.ttf",
+    ///     "strings": {"play": "العب", "quit": "خروج"}}"#).unwrap();
+    /// assert_eq!(table.name(), "العربية");
+    /// assert_eq!(StringTable::new("fr").name(), "fr"); // the code, without a name
+    /// ```
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Whether the language is written right to left.
+    ///
+    /// ```
+    /// use ponko::locale::StringTable;
+    /// let table = StringTable::from_json(r#"{"language": "ar", "name": "العربية", "direction": "rtl", "font": "fonts/arabic.ttf",
+    ///     "strings": {"play": "العب", "quit": "خروج"}}"#).unwrap();
+    /// assert!(table.is_rtl());
+    /// assert!(!StringTable::new("en").is_rtl());
+    /// ```
     #[must_use]
     pub fn is_rtl(&self) -> bool {
         self.rtl
     }
 
     /// The font file the table names (`font`), if any.
+    ///
+    /// ```
+    /// use ponko::locale::StringTable;
+    /// let table = StringTable::from_json(r#"{"language": "ar", "name": "العربية", "direction": "rtl", "font": "fonts/arabic.ttf",
+    ///     "strings": {"play": "العب", "quit": "خروج"}}"#).unwrap();
+    /// assert_eq!(table.font_path(), Some("fonts/arabic.ttf"));
+    /// assert_eq!(StringTable::new("en").font_path(), None);
+    /// ```
     #[must_use]
     pub fn font_path(&self) -> Option<&str> {
         self.font.as_deref()
     }
 
     /// Whether the table has text for `key`.
+    ///
+    /// ```
+    /// use ponko::locale::StringTable;
+    /// let table = StringTable::from_json(r#"{"language": "ar", "name": "العربية", "direction": "rtl", "font": "fonts/arabic.ttf",
+    ///     "strings": {"play": "العب", "quit": "خروج"}}"#).unwrap();
+    /// assert!(table.contains("play") && !table.contains("options"));
+    /// ```
     #[must_use]
     pub fn contains(&self, key: &str) -> bool {
         self.strings.contains_key(key)
     }
 
     /// How many keys the table has.
+    ///
+    /// ```
+    /// use ponko::locale::StringTable;
+    /// let table = StringTable::from_json(r#"{"language": "ar", "name": "العربية", "direction": "rtl", "font": "fonts/arabic.ttf",
+    ///     "strings": {"play": "العب", "quit": "خروج"}}"#).unwrap();
+    /// assert_eq!(table.len(), 2);
+    /// ```
     #[must_use]
     pub fn len(&self) -> usize {
         self.strings.len()
     }
 
     /// Whether the table has no keys.
+    ///
+    /// ```
+    /// use ponko::locale::StringTable;
+    /// let mut table = StringTable::new("en");
+    /// assert!(table.is_empty());
+    /// table.set("play", "Play");
+    /// assert!(!table.is_empty());
+    /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.strings.is_empty()
     }
 
-    /// The table's keys, sorted.
+    /// Collects the table's sorted keys, allocating a vector; see [`Self::iter_keys`].
+    ///
+    /// ```
+    /// use ponko::locale::StringTable;
+    /// let mut table = StringTable::new("en");
+    /// table.set("quit", "Quit");
+    /// table.set("play", "Play");
+    /// assert_eq!(table.keys(), ["play", "quit"]);
+    /// ```
     #[must_use]
     pub fn keys(&self) -> Vec<&str> {
-        let mut keys: Vec<&str> = self.strings.keys().map(String::as_str).collect();
-        keys.sort_unstable();
-        keys
+        self.iter_keys().collect()
+    }
+
+    /// The table's keys in sorted order, without allocating: for walking a
+    /// table every frame (a debug overlay, a missing-key check).
+    ///
+    /// ```
+    /// use ponko::locale::StringTable;
+    /// let mut table = StringTable::new("en");
+    /// table.set("quit", "Quit");
+    /// table.set("play", "Play");
+    /// assert_eq!(table.iter_keys().len(), 2);
+    /// assert!(table.iter_keys().eq(["play", "quit"]));
+    /// ```
+    pub fn iter_keys(&self) -> impl ExactSizeIterator<Item = &str> + '_ {
+        self.strings.keys().map(String::as_str)
     }
 
     /// Sets `key`'s text (one text for every plural form).
+    ///
+    /// ```
+    /// use ponko::locale::StringTable;
+    /// let mut table = StringTable::new("en");
+    /// table.set("play", "Play");
+    /// table.set("play", "Play now"); // replaces it
+    /// assert_eq!(table.len(), 1);
+    /// ```
     pub fn set(&mut self, key: &str, text: &str) {
         self.strings.insert(key.to_string(), Entry::Text(text.to_string()));
     }
@@ -825,6 +917,21 @@ impl Strings {
     /// Adds a language's table, or replaces the table of the same language
     /// (a reloaded file). The first table is the reference language and
     /// becomes the current one.
+    ///
+    /// ```
+    /// use ponko::locale::{StringTable, Strings};
+    /// let mut strings = Strings::default();
+    /// let mut en = StringTable::new("en");
+    /// en.set("play", "Play");
+    /// let mut de = StringTable::new("de");
+    /// de.set("play", "Spielen");
+    /// strings.insert(en);
+    /// strings.insert(de);
+    /// assert_eq!(strings.languages(), ["en", "de"]);
+    /// // Inserting a language again replaces its table.
+    /// strings.insert(StringTable::new("de"));
+    /// assert_eq!(strings.languages().len(), 2);
+    /// ```
     pub fn insert(&mut self, table: StringTable) {
         match self.tables.iter().position(|t| t.language == table.language) {
             Some(at) => {
@@ -846,13 +953,52 @@ impl Strings {
 
     /// The languages with a table, reference first: their codes, for a
     /// language menu ([`table`](Self::table) has their names). The
-    /// pseudo-locale isn't listed.
+    /// pseudo-locale isn't listed. Allocates; see [`Self::iter_languages`].
+    ///
+    /// ```
+    /// use ponko::locale::{StringTable, Strings};
+    /// let mut strings = Strings::default();
+    /// let mut en = StringTable::new("en");
+    /// en.set("play", "Play");
+    /// let mut de = StringTable::new("de");
+    /// de.set("play", "Spielen");
+    /// strings.insert(en);
+    /// strings.insert(de);
+    /// assert_eq!(strings.languages(), ["en", "de"]);
+    /// ```
     #[must_use]
     pub fn languages(&self) -> Vec<&str> {
-        self.tables.iter().map(|t| t.language.as_str()).collect()
+        self.iter_languages().collect()
+    }
+
+    /// Language codes, reference first, without allocating; the pseudo-locale
+    /// isn't listed. [`languages`](Self::languages) collects them.
+    ///
+    /// ```
+    /// use ponko::locale::{StringTable, Strings};
+    /// let mut strings = Strings::default();
+    /// strings.insert(StringTable::new("en"));
+    /// strings.insert(StringTable::new("de"));
+    /// assert!(strings.iter_languages().eq(["en", "de"]));
+    /// ```
+    pub fn iter_languages(&self) -> impl ExactSizeIterator<Item = &str> + '_ {
+        self.tables.iter().map(|t| t.language.as_str())
     }
 
     /// The table of `language`.
+    ///
+    /// ```
+    /// use ponko::locale::{StringTable, Strings};
+    /// let mut strings = Strings::default();
+    /// let mut en = StringTable::new("en");
+    /// en.set("play", "Play");
+    /// let mut de = StringTable::new("de");
+    /// de.set("play", "Spielen");
+    /// strings.insert(en);
+    /// strings.insert(de);
+    /// assert_eq!(strings.table("de").unwrap().language(), "de");
+    /// assert!(strings.table("fr").is_none());
+    /// ```
     #[must_use]
     pub fn table(&self, language: &str) -> Option<&StringTable> {
         self.tables.iter().find(|t| t.language == language)
@@ -860,6 +1006,19 @@ impl Strings {
 
     /// The reference language's code (the first table's), or `""` with no
     /// tables.
+    ///
+    /// ```
+    /// use ponko::locale::{StringTable, Strings};
+    /// let mut strings = Strings::default();
+    /// let mut en = StringTable::new("en");
+    /// en.set("play", "Play");
+    /// let mut de = StringTable::new("de");
+    /// de.set("play", "Spielen");
+    /// strings.insert(en);
+    /// strings.insert(de);
+    /// assert_eq!(strings.reference(), "en"); // the first table
+    /// assert_eq!(Strings::default().reference(), "");
+    /// ```
     #[must_use]
     pub fn reference(&self) -> &str {
         self.tables.first().map_or("", |t| t.language.as_str())
@@ -867,6 +1026,18 @@ impl Strings {
 
     /// The current language's code: [`PSEUDO`](Self::PSEUDO) for the
     /// pseudo-locale, `""` with no tables.
+    ///
+    /// ```
+    /// use ponko::locale::{StringTable, Strings};
+    /// let mut strings = Strings::default();
+    /// let mut en = StringTable::new("en");
+    /// en.set("play", "Play");
+    /// let mut de = StringTable::new("de");
+    /// de.set("play", "Spielen");
+    /// strings.insert(en);
+    /// strings.insert(de);
+    /// assert_eq!(strings.language(), "en");
+    /// ```
     #[must_use]
     pub fn language(&self) -> &str {
         if self.pseudo {
@@ -879,6 +1050,21 @@ impl Strings {
     /// [`PSEUDO`](Self::PSEUDO). Returns whether it could; an unknown code
     /// keeps the current language. UI nodes that hold a key follow on the
     /// next frame.
+    ///
+    /// ```
+    /// use ponko::locale::{StringTable, Strings};
+    /// let mut strings = Strings::default();
+    /// let mut en = StringTable::new("en");
+    /// en.set("play", "Play");
+    /// let mut de = StringTable::new("de");
+    /// de.set("play", "Spielen");
+    /// strings.insert(en);
+    /// strings.insert(de);
+    /// assert!(strings.set_language("de"));
+    /// assert_eq!(strings.language(), "de");
+    /// assert!(!strings.set_language("fr")); // no table: stays German
+    /// assert_eq!(strings.language(), "de");
+    /// ```
     pub fn set_language(&mut self, language: &str) -> bool {
         if language == Self::PSEUDO {
             if !self.pseudo {
@@ -901,12 +1087,38 @@ impl Strings {
     /// Changes whenever the text could have: a table inserted or reloaded,
     /// the language or a font changed. Code that caches localized text
     /// redoes it when this differs from the value it saw.
+    ///
+    /// ```
+    /// use ponko::locale::{StringTable, Strings};
+    /// let mut strings = Strings::default();
+    /// let mut en = StringTable::new("en");
+    /// en.set("play", "Play");
+    /// let mut de = StringTable::new("de");
+    /// de.set("play", "Spielen");
+    /// strings.insert(en);
+    /// strings.insert(de);
+    /// let before = strings.revision();
+    /// strings.set_language("de");
+    /// assert_ne!(strings.revision(), before);
+    /// ```
     #[must_use]
     pub fn revision(&self) -> u64 {
         self.revision
     }
 
     /// Whether the current language is written right to left.
+    ///
+    /// ```
+    /// use ponko::locale::{StringTable, Strings};
+    /// let mut strings = Strings::default();
+    /// let mut en = StringTable::new("en");
+    /// en.set("play", "Play");
+    /// let mut de = StringTable::new("de");
+    /// de.set("play", "Spielen");
+    /// strings.insert(en);
+    /// strings.insert(de);
+    /// assert!(!strings.is_rtl());
+    /// ```
     #[must_use]
     pub fn is_rtl(&self) -> bool {
         !self.pseudo && self.current.is_some_and(|i| self.tables[i].rtl)
@@ -984,6 +1196,18 @@ impl Strings {
     }
 
     /// Whether the current language or the reference language has `key`.
+    ///
+    /// ```
+    /// use ponko::locale::{StringTable, Strings};
+    /// let mut strings = Strings::default();
+    /// let mut en = StringTable::new("en");
+    /// en.set("play", "Play");
+    /// let mut de = StringTable::new("de");
+    /// de.set("play", "Spielen");
+    /// strings.insert(en);
+    /// strings.insert(de);
+    /// assert!(strings.contains("play") && !strings.contains("options"));
+    /// ```
     #[must_use]
     pub fn contains(&self, key: &str) -> bool {
         self.lookup(key).is_some()
@@ -1010,6 +1234,23 @@ impl Strings {
 
     /// [`format`](Self::format) into `out` (cleared first), so text
     /// redrawn every frame reuses one string.
+    ///
+    /// ```
+    /// use ponko::locale::{StringTable, Strings};
+    /// let mut strings = Strings::default();
+    /// let mut en = StringTable::new("en");
+    /// en.set("play", "Play");
+    /// let mut de = StringTable::new("de");
+    /// de.set("play", "Spielen");
+    /// strings.insert(en);
+    /// strings.insert(de);
+    /// let mut line = String::new();
+    /// strings.format_into("play", &[], &mut line);
+    /// assert_eq!(line, "Play");
+    /// strings.set_language("de");
+    /// strings.format_into("play", &[], &mut line); // cleared first
+    /// assert_eq!(line, "Spielen");
+    /// ```
     pub fn format_into(&self, key: &str, args: &[(&str, Arg)], out: &mut String) {
         out.clear();
         let Some((table, entry)) = self.lookup(key) else {
@@ -1059,6 +1300,24 @@ impl Strings {
     /// keys, plural forms its rules use, and arguments the reference text
     /// uses. The reference language itself is checked for plural forms.
     /// Sorted by key; empty for an unknown language.
+    ///
+    /// ```
+    /// use ponko::locale::{StringTable, Strings};
+    /// let mut strings = Strings::default();
+    /// let mut en = StringTable::new("en");
+    /// en.set("play", "Play");
+    /// let mut de = StringTable::new("de");
+    /// de.set("play", "Spielen");
+    /// strings.insert(en);
+    /// strings.insert(de);
+    /// let mut en = StringTable::new("en");
+    /// en.set("quit", "Quit");
+    /// strings.insert(en);
+    /// // German has no "quit" yet.
+    /// let gaps = strings.missing("de");
+    /// assert_eq!(gaps.len(), 1);
+    /// assert_eq!(gaps[0].key, "quit");
+    /// ```
     #[must_use]
     pub fn missing(&self, language: &str) -> Vec<Missing> {
         let (Some(reference), Some(table)) = (self.tables.first(), self.table(language)) else {

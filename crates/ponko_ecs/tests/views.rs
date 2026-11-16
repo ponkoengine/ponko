@@ -131,7 +131,7 @@ fn get_of_an_undeclared_component_panics() {
 }
 
 #[test]
-#[should_panic(expected = "that would alias")]
+#[should_panic(expected = "remove the duplicate access or split it into sequential queries")]
 fn a_view_query_that_aliases_panics() {
     let mut w = world();
     let mut state = ViewState::new().write::<Pos>();

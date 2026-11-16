@@ -22,6 +22,7 @@ impl PonkoQueryFilter2D {
     fn into_engine(self) -> ponko::d2::QueryFilter {
         ponko::d2::QueryFilter {
             exclude: self.exclude.then(|| ponko_ecs::Entity::from_bits(self.exclude_entity)),
+            groups: ponko::d2::CollisionGroups::ALL,
             sensors: self.sensors,
         }
     }

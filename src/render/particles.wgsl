@@ -49,8 +49,8 @@ fn soft_fade(position: vec4<f32>, depth: f32, softness: f32) -> f32 {
     let size = vec2<i32>(textureDimensions(scene_depth_texture));
     let at = clamp(vec2<i32>(position.xy), vec2<i32>(0), size - 1);
     let scene = textureLoad(scene_depth_texture, at, 0);
-    if scene >= 1.0 {
-        return 1.0; // the sky: nothing behind to meet
+    if scene <= 0.0 {
+        return 1.0; // the sky (reverse-Z far plane): nothing behind to meet
     }
     let ndc = vec2<f32>(position.x / f32(size.x) * 2.0 - 1.0, 1.0 - position.y / f32(size.y) * 2.0);
     let world = camera.inv_view_proj * vec4<f32>(ndc, scene, 1.0);

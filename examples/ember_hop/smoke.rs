@@ -79,7 +79,7 @@ pub fn screen_name(screen: Screen) -> &'static str {
         Screen::Title => "Title",
         Screen::Playing => "Playing",
         Screen::Paused => "Paused",
-        Screen::Dying { .. } => "Dying",
+        Screen::Dying => "Dying",
         Screen::Transition { .. } => "Transition",
         Screen::Finished => "Finished",
     }
@@ -116,7 +116,7 @@ impl Smoke {
 /// Sim system (before the rules): the walk-through's player.
 pub fn walkthrough(ctx: &mut Ctx) {
     let tick = ctx.time.sim_tick();
-    let screen = *ctx.world.resource::<Screen>();
+    let screen = screen(&ctx.world);
     let (step, since) = {
         let smoke = ctx.world.resource_mut::<Smoke>();
         let name = screen_name(screen).to_string();
@@ -174,7 +174,7 @@ pub fn autopilot(ctx: &mut Ctx) {
         move_x: 1.0,
         ..*ctx.world.resource::<Intent>()
     };
-    if *ctx.world.resource::<Screen>() != Screen::Playing {
+    if screen(&ctx.world) != Screen::Playing {
         return;
     }
     let Some((hero, at, grounded)) = ctx
@@ -290,7 +290,7 @@ pub fn publish_web_state(ctx: &mut Ctx) {
         hero.height(),
         size.x,
         size.y,
-        screen_name(*ctx.world.resource::<Screen>()),
+        screen_name(screen(&ctx.world)),
         run.level,
         run.sparks,
         if ctx.storage.is_persistent() {

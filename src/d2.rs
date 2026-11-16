@@ -6,7 +6,9 @@
 //! emitter, the lights and occluders, and the sprite. This module is their
 //! one path, under these names, so it is the name rustdoc and the guide
 //! use. The rest of 2D lives in its topic module: [`tilemap`](crate::tilemap),
-//! [`sheet`](crate::sheet) (sprite-sheet animation), [`attach`](crate::attach),
+//! [`sheet`](crate::sheet) (sprite-sheet animation),
+//! [`skeleton2d`](crate::skeleton2d) (bones, skinned sprites, blending, IK),
+//! [`attach`](crate::attach),
 //! [`spatial`](crate::spatial), [`flow`](crate::flow),
 //! [`particles`](crate::particles) (curves and gradients shared with 3D),
 //! `collision` (shared with 3D) and
@@ -56,6 +58,12 @@
 //! Every GPU tier draws it, WebGL2 included: the light map is a plain
 //! render target, shadows are stencil volumes, and nothing needs compute
 //! or storage buffers.
+
+#![deny(missing_docs)]
+#[doc(inline)]
+pub use crate::camera::follow2d::{FollowCamera2D as FollowCamera, PixelPerfect2D as PixelPerfect};
+/// Another 2D camera in the window: split screen, a minimap (see [`Ctx::views2d`](crate::ctx::Ctx::views2d)).
+pub use crate::camera::views::View2D as View;
 #[doc(inline)]
 pub use crate::camera2d::Camera2D as Camera;
 #[doc(inline)]
@@ -71,4 +79,6 @@ pub use crate::particles2d::{
 };
 #[cfg(feature = "physics")]
 #[doc(inline)]
-pub use crate::physics::{Collider, Physics, QueryFilter, RayHit as Hit, RigidBody, Shape, Velocity};
+pub use crate::physics::{
+    Collider, CollisionGroups, Penetration, Physics, PointHit, QueryFilter, RayHit as Hit, RigidBody, Shape, Velocity,
+};

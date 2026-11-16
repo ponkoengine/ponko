@@ -121,6 +121,10 @@ pub struct SystemView<'a> {
     /// Networking, as `ctx.net`: `sys.net.lockstep` is
     /// `ctx.net.lockstep`.
     pub net: ViewNet<'a>,
+    /// Debug drawing, as `ctx.debug`, with no declaration needed. Alone it
+    /// is `ctx.debug`; in a parallel batch, a buffer of the system's own,
+    /// added to `ctx.debug` when the batch ends.
+    pub debug: &'a mut crate::debug::DebugDraw,
     name: &'static str,
     access: &'a SystemAccess,
     random: Random,
@@ -456,6 +460,9 @@ pub(crate) struct ViewTask {
     f: ViewFn,
     /// In a batch: its own commands, applied when the batch ends.
     pub(crate) commands: Commands,
+    /// In a batch: what it drew with `sys.debug`, added to `ctx.debug`
+    /// when the batch ends.
+    pub(crate) debug: crate::debug::DebugDraw,
     /// In a batch: the events it sent, delivered when the batch ends.
     pub(crate) outbox: Outbox,
     /// In a batch: the event types it read in this run.
@@ -470,6 +477,8 @@ pub(crate) struct ViewTask {
     pub(crate) allocs: u64,
     /// Its last run in a batch returned (it didn't panic).
     pub(crate) finished: bool,
+    /// In a batch: a run condition doesn't hold, so this run does nothing.
+    pub(crate) skip: bool,
     /// Its usual run time in microseconds (a moving average), which decides
     /// whether a batch is worth sending to other threads. 0 before it ran.
     pub(crate) usual_us: f32,
@@ -496,6 +505,7 @@ impl ViewRunner {
                 access,
                 f,
                 commands: Commands::new(),
+                debug: crate::debug::DebugDraw::new(false),
                 outbox: Outbox::default(),
                 read: Vec::new(),
                 slots: 0..0,
@@ -503,6 +513,7 @@ impl ViewRunner {
                 last_ms: 0.0,
                 allocs: 0,
                 finished: false,
+                skip: false,
                 usual_us: 0.0,
             },
         }
@@ -538,6 +549,7 @@ impl ViewRunner {
             #[cfg(feature = "physics3d")]
             physics3d: Held::Lent(&mut ctx.physics3d),
             net: Held::Lent(&mut ctx.net.lockstep),
+            debug: &mut ctx.debug,
         };
         // The world's own change window, which the game set for this system.
         self.state.override_changes_since(None);
@@ -565,12 +577,19 @@ struct Rest<'a> {
     #[cfg(feature = "physics3d")]
     physics3d: Held<'a, crate::d3::Physics>,
     net: Held<'a, crate::net::Net>,
+    debug: &'a mut crate::debug::DebugDraw,
 }
 
 impl<'a> Rest<'a> {
     /// What a parallel batch gives a system: its own commands, events and
     /// random stream, the shared read-only services, and no others.
-    fn shared(commands: &'a mut Commands, events: Port<'a>, random: Random, shared: &Shared<'a>) -> Self {
+    fn shared(
+        commands: &'a mut Commands,
+        events: Port<'a>,
+        random: Random,
+        shared: &Shared<'a>,
+        debug: &'a mut crate::debug::DebugDraw,
+    ) -> Self {
         Rest {
             commands,
             events,
@@ -587,6 +606,7 @@ impl<'a> Rest<'a> {
             #[cfg(feature = "physics3d")]
             physics3d: Held::Absent,
             net: Held::Absent,
+            debug,
         }
     }
 
@@ -619,6 +639,7 @@ impl<'a> Rest<'a> {
             net: ViewNet {
                 lockstep: ViewService::new(of(Service::Net), self.net),
             },
+            debug: self.debug,
             name,
             access,
             random: self.random,
@@ -632,17 +653,24 @@ impl ViewTask {
     pub(crate) fn run_shared(&mut self, world: WorldView<'_>, shared: &Shared<'_>) {
         #[cfg(feature = "profiling")]
         puffin::profile_scope!("system", self.name);
+        self.read.clear();
+        if self.skip {
+            self.finished = true;
+            return;
+        }
         let allocs_before = shared.count_allocs.then(crate::perf::alloc_counts);
         let start = Instant::now();
-        self.read.clear();
         self.finished = false;
         let events = Port::Batch {
             slots: &shared.slots[self.slots.clone()],
             read: &mut self.read,
             outbox: &mut self.outbox,
         };
-        let mut view =
-            Rest::shared(&mut self.commands, events, self.random, shared).view(world, self.name, &self.access);
+        let mut view = Rest::shared(&mut self.commands, events, self.random, shared, &mut self.debug).view(
+            world,
+            self.name,
+            &self.access,
+        );
         (self.f)(&mut view);
         self.finished = true;
         self.last_ms = start.elapsed().as_secs_f32() * 1000.0;

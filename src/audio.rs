@@ -4,13 +4,13 @@
 //! **What lives here:** loading and creating sounds ([`Audio::load`],
 //! [`Audio::create`], [`Audio::load_stream`]), playing them
 //! ([`Audio::play`], [`Audio::play_ex`], [`Audio::play_on`], and
-//! [`Audio::play_at`] for a point in the 3D world), the handles of what is
+//! `Audio::play_at` for a point in the 3D world, feature `3d`), the handles of what is
 //! playing ([`Audio::stop`], [`Audio::set_effects`]), the mixer (buses
 //! with [`Audio::bus`], [`Audio::set_bus_volume`], [`Audio::mute_bus`];
 //! the bus tree, [`BusEffect`] chains and [`Ducking`];
 //! [`MixerSnapshot`]s; [`Audio::load_mixer`] for a mixer file and
 //! [`MixerState`] for the settings) and the 3D listener
-//! ([`Audio::set_listener`]).
+//! (`Audio::set_listener`, feature `3d`).
 //!
 //! **When to call it:** load in setup and keep the [`Sound`] handles; play,
 //! stop and mix from any system. It only borrows `ctx.audio`, so a sound can
@@ -21,6 +21,8 @@
 //! none (servers, CI), the feature is off, or the run is headless,
 //! everything here still works and is simply silent, so game code never
 //! needs a special case. Positional sound needs the `3d` feature.
+
+#![deny(missing_docs)]
 
 #[cfg(feature = "3d")]
 pub(crate) mod spatial;
@@ -102,6 +104,38 @@ impl Default for SoundParams {
             looping: false,
         }
     }
+}
+
+/// A sound that was started: what [`Audio::started`] lists, so a test (or
+/// a tool) can see what a game played, headless runs included.
+///
+/// ```
+/// use ponko::prelude::*;
+/// Game::new("t", 1, 1).run_headless(0, |ctx| {
+///     let beep = ctx.audio.create(8000, &[0.0; 800]);
+///     let playing = ctx.audio.play_ex(beep, SoundParams { volume: 0.5, ..Default::default() });
+///     let started = ctx.audio.started()[0];
+///     assert_eq!((started.playing, started.sound, started.volume), (playing, beep, 0.5));
+///     assert_eq!(started.bus, ctx.audio.bus("sfx"));
+/// });
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct SoundStarted {
+    /// Its handle, as the play call returned it (headless runs hand out
+    /// handles too, a different one for each sound).
+    pub playing: Playing,
+    /// The sound.
+    pub sound: Sound,
+    /// The bus it plays on: `sfx` for [`Audio::play`] and [`Audio::play_ex`].
+    pub bus: AudioBus,
+    /// Its volume, 0 to 1 as asked for; for a sound played at a point in the
+    /// 3D world, with the distance's fall-off applied at the start.
+    pub volume: f32,
+    /// Its speed (and pitch), 1 as recorded.
+    pub speed: f32,
+    /// Whether it starts over at its end.
+    pub looping: bool,
 }
 
 mod bus_effects;
@@ -253,7 +287,10 @@ mod backend {
     #[derive(Default)]
     pub struct Audio {
         manager: Option<Option<Manager>>,
+        /// Sounds by slot; a freed sound's slot goes to the next one made,
+        /// under a new id (`ids`).
         sounds: Vec<Clip>,
+        ids: crate::handle::SlotIds,
         playing: HashMap<u64, Voice>,
         next: u64,
         pub(super) buses: BusRegistry,
@@ -324,7 +361,7 @@ mod backend {
         }
         /// What sound `id` holds, as `inventory` counts it.
         pub fn sound_bytes(&self, id: u32) -> u64 {
-            self.sounds.get(id as usize).map_or(0, Self::clip_bytes)
+            self.clip(id).map_or(0, Self::clip_bytes)
         }
         fn clip_bytes(clip: &Clip) -> u64 {
             match clip {
@@ -337,7 +374,7 @@ mod backend {
         }
         pub fn replace(&mut self, id: u32, bytes: Vec<u8>) -> Result<(), String> {
             let data = decode(bytes)?;
-            if let Some(clip) = self.sounds.get_mut(id as usize)
+            if let Some(clip) = self.clip_mut(id)
                 && !matches!(clip, Clip::Freed)
             {
                 *clip = Clip::Static(Box::new(data));
@@ -346,8 +383,11 @@ mod backend {
         }
         /// Drops sound `id`'s data and stops its voices.
         pub fn free(&mut self, id: u32) {
-            if let Some(clip) = self.sounds.get_mut(id as usize) {
+            if let Some(clip) = self.clip_mut(id)
+                && !matches!(clip, Clip::Freed)
+            {
                 *clip = Clip::Freed;
+                self.ids.release(id);
             }
             for voice in self.playing.values_mut().filter(|v| v.sound == id) {
                 voice.handle.stop();
@@ -366,12 +406,11 @@ mod backend {
                     .map_err(|e| e.to_string())?
                     .duration()
                     .as_secs_f32();
-                return Ok((index as u32, seconds));
+                return Ok((self.ids.id_in(index), seconds));
             }
             let data = StreamingSoundData::from_file(&path).map_err(|e| e.to_string())?;
             let seconds = data.duration().as_secs_f32();
-            self.sounds.push(Clip::Stream(StreamFrom::File(path)));
-            Ok(((self.sounds.len() - 1) as u32, seconds))
+            Ok((self.push(Clip::Stream(StreamFrom::File(path))), seconds))
         }
         /// A sound streamed from encoded `bytes` held in memory (an asset
         /// source's): only the header is decoded now, the samples as it plays.
@@ -383,8 +422,7 @@ mod backend {
                 .map_err(|e| format!("could not decode the sound: {e}"))?
                 .duration()
                 .as_secs_f32();
-            self.sounds.push(Clip::Stream(from));
-            Ok(((self.sounds.len() - 1) as u32, seconds))
+            Ok((self.push(Clip::Stream(from)), seconds))
         }
         /// The web has no files to stream from: stream the fetched copy.
         #[cfg(target_arch = "wasm32")]
@@ -399,8 +437,7 @@ mod backend {
             let seconds = super::chunked::header(&bytes)
                 .map_err(|e| format!("could not decode the sound: {e}"))?
                 .seconds();
-            self.sounds.push(Clip::Stream(StreamFrom::Memory(bytes)));
-            Ok(((self.sounds.len() - 1) as u32, seconds))
+            Ok((self.push(Clip::Stream(StreamFrom::Memory(bytes))), seconds))
         }
         pub fn create(&mut self, sample_rate: u32, samples: &[f32]) -> (u32, f32) {
             let frames: Arc<[Frame]> = samples.iter().map(|&s| Frame::from_mono(s)).collect();
@@ -413,8 +450,28 @@ mod backend {
         }
         fn add(&mut self, data: StaticSoundData) -> (u32, f32) {
             let seconds = data.duration().as_secs_f32();
-            self.sounds.push(Clip::Static(Box::new(data)));
-            ((self.sounds.len() - 1) as u32, seconds)
+            (self.push(Clip::Static(Box::new(data))), seconds)
+        }
+        /// Puts `clip` in a freed slot or a new one; returns its id.
+        fn push(&mut self, clip: Clip) -> u32 {
+            let id = self.ids.make(self.sounds.len(), "sound");
+            match self.sounds.get_mut((id & crate::handle::INDEX_MASK) as usize) {
+                Some(slot) => *slot = clip,
+                None => self.sounds.push(clip),
+            }
+            id
+        }
+        /// Slots in the sound table, live or freed.
+        #[cfg(test)]
+        pub fn slots(&self) -> usize {
+            self.sounds.len()
+        }
+        /// Sound `id`'s clip; `None` for an id whose slot went to a newer sound.
+        fn clip(&self, id: u32) -> Option<&Clip> {
+            self.sounds.get(self.ids.slot(id)?)
+        }
+        fn clip_mut(&mut self, id: u32) -> Option<&mut Clip> {
+            self.sounds.get_mut(self.ids.slot(id)?)
         }
         fn prepare(&mut self, bus: AudioBus) -> Option<()> {
             self.buses.ensure_default();
@@ -429,6 +486,7 @@ mod backend {
             let manager = self.manager.as_mut()?.as_mut()?;
             self.tracks.ensure(manager, &self.buses, bus)
         }
+        #[cfg(test)]
         pub fn play(&mut self, sound: u32, p: SoundParams) -> u64 {
             self.play_on(sound, p, AudioBus::default(), AudioEffects::default())
         }
@@ -459,7 +517,7 @@ mod backend {
             };
             let volume = volume_db(p.volume);
             let speed = f64::from(finite(p.speed, 1.0).max(0.01));
-            let Some(clip) = self.sounds.get(sound as usize) else {
+            let Some(clip) = self.clip(sound) else {
                 return;
             };
             let handle = match clip {
@@ -722,9 +780,10 @@ mod backend {
     use super::{AudioBus, AudioEffects, BusRegistry, SoundParams};
     #[derive(Default)]
     pub struct Audio {
-        count: u32,
-        /// Sounds freed (each id once: `Ctx::free` checks).
-        freed: u32,
+        /// Sound ids: a freed sound's slot goes to the next one made.
+        ids: crate::handle::SlotCounter,
+        /// Sounds made and not freed (`Ctx::free` frees each id once).
+        live: u32,
         next: u64,
         pub(super) buses: BusRegistry,
         #[cfg(feature = "3d")]
@@ -741,13 +800,21 @@ mod backend {
         }
         pub fn user_gesture(&mut self) {}
         pub fn load(&mut self, _bytes: Vec<u8>) -> Result<(u32, f32), String> {
-            self.count += 1;
-            Ok((self.count - 1, 0.0))
+            Ok((self.make(), 0.0))
+        }
+        fn make(&mut self) -> u32 {
+            self.live += 1;
+            self.ids.make("sound")
+        }
+        /// Slots given out, live, freed or retired.
+        #[cfg(test)]
+        pub fn slots(&self) -> usize {
+            self.ids.slots()
         }
         /// Sounds made and not freed; nothing is decoded without the
         /// `audio` feature.
         pub fn inventory(&self) -> (usize, u64) {
-            ((self.count - self.freed) as usize, 0)
+            (self.live as usize, 0)
         }
         pub fn sound_bytes(&self, _id: u32) -> u64 {
             0
@@ -761,19 +828,16 @@ mod backend {
         pub fn replace(&mut self, _id: u32, _bytes: Vec<u8>) -> Result<(), String> {
             Ok(())
         }
-        pub fn free(&mut self, _id: u32) {
-            self.freed += 1;
+        pub fn free(&mut self, id: u32) {
+            self.live -= 1;
+            self.ids.release(id);
         }
         pub fn create(&mut self, sample_rate: u32, samples: &[f32]) -> (u32, f32) {
-            self.count += 1;
-            (self.count - 1, samples.len() as f32 / sample_rate.max(1) as f32)
+            (self.make(), samples.len() as f32 / sample_rate.max(1) as f32)
         }
-        pub fn play(&mut self, _sound: u32, _p: SoundParams) -> u64 {
+        pub fn play_on(&mut self, _sound: u32, _p: SoundParams, _bus: AudioBus, _effects: AudioEffects) -> u64 {
             self.next += 1;
             self.next
-        }
-        pub fn play_on(&mut self, sound: u32, p: SoundParams, _bus: AudioBus, _effects: AudioEffects) -> u64 {
-            self.play(sound, p)
         }
         pub fn sync_buses(&mut self) {}
         pub fn effects(&mut self, _id: u64, _effects: AudioEffects) {}
@@ -787,8 +851,9 @@ pub(crate) use backend::Audio as Backend;
 
 /// Sounds, playing handles, buses and the listener: `ctx.audio`.
 ///
-/// `ctx.load_sound` and `ctx.play_sound` are shortcuts for
-/// [`load`](Self::load) and [`play`](Self::play); everything else is here.
+/// Every call is spelled here: [`load`](Self::load) and
+/// [`play`](Self::play) as `ctx.audio.load(..)` and `ctx.audio.play(..)`.
+/// `Ctx::load_sound` and `Ctx::play_sound` are deprecated forwarders.
 ///
 /// - **What lives here:** loading and creating sounds, playing them (also
 ///   at a point in the 3D world), the handles of what is playing, mixer
@@ -817,7 +882,7 @@ pub struct Audio {
     /// The mixer: kira, or the silent stand-in without the `audio` feature.
     pub(crate) backend: Backend,
     /// The game's sounds, by id, live or freed.
-    pub(crate) sounds_live: crate::handle::LiveSet,
+    pub(crate) sounds_live: crate::handle::SlotLiveSet,
     /// Sounds and streams loaded from files, by origin: loading one again
     /// returns the same handle.
     pub(crate) loaded: crate::asset_cache::AssetCache<Sound>,
@@ -827,6 +892,10 @@ pub struct Audio {
     pub(crate) watcher: crate::hot_reload::SharedWatcher,
     /// No window: nothing is played.
     pub(crate) headless: bool,
+    /// The last handle a headless run gave out: they count up from 1.
+    pub(crate) silent: u64,
+    /// The sounds started since the last tick ended or frame began ([`Audio::started`]).
+    pub(crate) started: Vec<SoundStarted>,
     /// When each live sound was made and which file it came from.
     pub(crate) ledger: crate::inventory::Ledger,
 }
@@ -854,7 +923,10 @@ impl Audio {
         self.try_load(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load`](Self::load) with errors as values:
+    /// [`load`](Self::load) with errors as values.
+    ///
+    /// # Errors
+    ///
     /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound),
     /// [`Io`](crate::error::ErrorKind::Io), or (with the `audio` feature)
     /// [`Decode`](crate::error::ErrorKind::Decode) if it can't be decoded.
@@ -949,10 +1021,46 @@ impl Audio {
     /// # }
     /// ```
     pub fn play_ex(&mut self, sound: Sound, params: SoundParams) -> Playing {
-        if self.headless {
-            return Playing(0);
-        }
-        Playing(self.backend.play(sound.id, params))
+        self.play_on(sound, params, AudioBus::default(), AudioEffects::default())
+    }
+
+    /// The sounds started in this tick, oldest first: by the systems of the
+    /// tick that is running, or, in a frame system, by the frame's systems
+    /// so far. The list is emptied when a tick ends and when a frame
+    /// begins. Every way of playing adds to it ([`play`](Self::play),
+    /// [`play_ex`](Self::play_ex), [`play_on`](Self::play_on), and
+    /// positional sound with the `3d` feature), and so do headless runs,
+    /// which play nothing, so a test asserts what the game played:
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let world = Game::new("t", 1, 1)
+    ///     .setup(|ctx| {
+    ///         let beep = ctx.audio.create(8000, &[0.0; 800]);
+    ///         ctx.world.insert_resource(beep);
+    ///         ctx.world.insert_resource(0u32);
+    ///     })
+    ///     .sim_system(|ctx| {
+    ///         if ctx.time.sim_tick() == 2 {
+    ///             let beep = *ctx.world.resource::<Sound>();
+    ///             ctx.audio.play(beep);
+    ///         }
+    ///     })
+    ///     .sim_system(|ctx| {
+    ///         let heard = ctx.audio.started().len() as u32;
+    ///         *ctx.world.resource_mut::<u32>() += heard * (1 + ctx.time.sim_tick() as u32);
+    ///     })
+    ///     .run_headless(5);
+    /// assert_eq!(*world.resource::<u32>(), 3, "one sound, seen on tick 2 only");
+    /// ```
+    #[must_use]
+    pub fn started(&self) -> &[SoundStarted] {
+        &self.started
+    }
+
+    /// The tick ended or a frame began: [`started`](Self::started) starts over.
+    pub(crate) fn forget_started(&mut self) {
+        self.started.clear();
     }
 
     /// Whether the game can be heard yet: always on the desktop (and

@@ -11,6 +11,16 @@ use crate::three::{GpuMaterialDesc, Scene3D, SkinFrame, SkyLight};
 
 const SIZE: u32 = 128;
 
+/// How a scene's boxes are made.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Build {
+    Models,
+    /// One instance batch per mesh, culled on that path.
+    Batch(BatchPath),
+    /// One empty instance batch per mesh, and a cell of it per box.
+    Cells(BatchPath),
+}
+
 /// An offscreen renderer with a 1x1 white texture, and a `Ctx` to fill.
 struct Rig {
     device: wgpu::Device,
@@ -18,9 +28,13 @@ struct Rig {
     output: wgpu::Texture,
     target: wgpu::TextureView,
     textures: Vec<GpuTexture>,
-    renderer: Renderer3D,
-    ctx: Ctx,
+    renderer: Box<Renderer3D>,
+    ctx: Box<Ctx>,
     size: (u32, u32),
+    /// The instance batches (one per mesh, in the order the meshes first
+    /// come) and cells [`blocks`](Self::blocks) made.
+    batches: Vec<crate::render::InstanceBatch>,
+    cells: Vec<crate::render::InstanceCell>,
 }
 
 impl Rig {
@@ -138,8 +152,10 @@ impl Rig {
             view_formats: &[],
         });
         let target = output.create_view(&Default::default());
-        let renderer = Renderer3D::new(&device, &layout, output.format(), 0, &white, 4, true);
-        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(size.0 as f32, size.1 as f32));
+        // Boxed: a test that holds two rigs by value comes close to a test
+        // thread's 2 MiB stack.
+        let renderer = Box::new(Renderer3D::new(&device, &layout, output.format(), 0, &white, 4, true));
+        let mut ctx = Box::new(Ctx::new(1.0 / 60.0, Vec2::new(size.0 as f32, size.1 as f32)));
         ctx.scene3d.sky.atmosphere = false;
         ctx.gfx.assets3d.decals_supported = supports_decals(&device);
         ctx.gfx.assets3d.gi_supported = true;
@@ -152,6 +168,8 @@ impl Rig {
             renderer,
             ctx,
             size,
+            batches: Vec::new(),
+            cells: Vec::new(),
         })
     }
 
@@ -285,20 +303,29 @@ impl Rig {
     /// an opening in the roof onto that wall (not the floor), and the
     /// camera inside, looking west.
     fn red_wall_room(gi: bool, slots: bool) -> Option<Self> {
+        Self::red_wall_room_of(gi, slots, Build::Models)
+    }
+
+    /// [`red_wall_room`](Self::red_wall_room), its walls, floor and roof
+    /// models or instance batches on path `batch`, one per color.
+    fn red_wall_room_of(gi: bool, slots: bool, batch: Build) -> Option<Self> {
         let mut rig = Self::new(slots)?;
         let white = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
         let red = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::rgb(0.9, 0.04, 0.04)));
         let (inner, outer) = (3.5, 3.9);
-        rig.block(white, vec3(-outer, -0.9, -outer), vec3(outer, -0.5, outer)); // floor
-        rig.block(red, vec3(-outer, -0.5, -outer), vec3(-inner, 3.5, outer)); // west
-        rig.block(white, vec3(inner, -0.5, -outer), vec3(outer, 3.5, outer)); // east
-        rig.block(white, vec3(-inner, -0.5, -outer), vec3(inner, 3.5, -inner)); // north
-        rig.block(white, vec3(-inner, -0.5, inner), vec3(inner, 3.5, outer)); // south
-        // The roof, with an opening from x -2 to 0 and z -1.5 to 1.5.
-        rig.block(white, vec3(-outer, 3.5, -outer), vec3(-2.0, 3.9, outer));
-        rig.block(white, vec3(0.0, 3.5, -outer), vec3(outer, 3.9, outer));
-        rig.block(white, vec3(-2.0, 3.5, -outer), vec3(0.0, 3.9, -1.5));
-        rig.block(white, vec3(-2.0, 3.5, 1.5), vec3(0.0, 3.9, outer));
+        let blocks = [
+            (white, vec3(-outer, -0.9, -outer), vec3(outer, -0.5, outer)), // floor
+            (red, vec3(-outer, -0.5, -outer), vec3(-inner, 3.5, outer)),   // west
+            (white, vec3(inner, -0.5, -outer), vec3(outer, 3.5, outer)),   // east
+            (white, vec3(-inner, -0.5, -outer), vec3(inner, 3.5, -inner)), // north
+            (white, vec3(-inner, -0.5, inner), vec3(inner, 3.5, outer)),   // south
+            // The roof, with an opening from x -2 to 0 and z -1.5 to 1.5.
+            (white, vec3(-outer, 3.5, -outer), vec3(-2.0, 3.9, outer)),
+            (white, vec3(0.0, 3.5, -outer), vec3(outer, 3.9, outer)),
+            (white, vec3(-2.0, 3.5, -outer), vec3(0.0, 3.9, -1.5)),
+            (white, vec3(-2.0, 3.5, 1.5), vec3(0.0, 3.9, outer)),
+        ];
+        rig.blocks(&blocks, batch);
         let lighting = &mut rig.ctx.scene3d.lighting;
         // From the upper east: through the opening onto the west wall,
         // between 0 and 2 high.
@@ -319,6 +346,127 @@ impl Rig {
         rig.ctx.scene3d.camera.position = vec3(2.0, 1.3, 0.3);
         rig.ctx.scene3d.camera.look_at(vec3(-3.5, -0.2, 0.0));
         Some(rig)
+    }
+
+    /// A white box (the inside from -3.5 to 3.5 across, -0.5 to 3.5 high,
+    /// walls 0.4 thick, between the probe planes), no sun and no ambient
+    /// light, and a shadowed point light outside it, east and above the
+    /// roof. `open`: without the east wall, so the light shines in. The
+    /// camera is inside, looking up at the roof, which the light never
+    /// reaches directly: whatever lights it is bounced light. `batch`:
+    /// the box is one instance batch on that path instead of models.
+    fn light_box(open: bool, gi: bool, batch: Build) -> Option<Self> {
+        let mut rig = Self::new(true)?;
+        let white = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
+        let (inner, outer) = (3.5, 3.9);
+        let mut walls = vec![
+            (white, vec3(-outer, -0.9, -outer), vec3(outer, -0.5, outer)), // floor
+            (white, vec3(-outer, 3.5, -outer), vec3(outer, 3.9, outer)),   // roof
+            (white, vec3(-outer, -0.5, -outer), vec3(-inner, 3.5, outer)), // west
+            (white, vec3(-inner, -0.5, -outer), vec3(inner, 3.5, -inner)), // north
+            (white, vec3(-inner, -0.5, inner), vec3(inner, 3.5, outer)),   // south
+        ];
+        if !open {
+            walls.push((white, vec3(inner, -0.5, -outer), vec3(outer, 3.5, outer))); // east
+        }
+        rig.blocks(&walls, batch);
+        rig.ctx.world.spawn((
+            Transform3D::at(vec3(7.0, 5.0, 0.0)),
+            crate::d3::PointLight {
+                intensity: 400.0,
+                range: 20.0,
+                shadows: true,
+                ..Default::default()
+            },
+        ));
+        let lighting = &mut rig.ctx.scene3d.lighting;
+        lighting.sun_intensity = 0.0;
+        lighting.ambient_intensity = 0.0;
+        rig.ctx.scene3d.sky.sky_color = Color::BLACK;
+        rig.ctx.scene3d.sky.ground_color = Color::BLACK;
+        lighting.gi = GlobalIllumination {
+            enabled: gi,
+            extent: vec3(12.0, 6.0, 12.0),
+            spacing: 1.0,
+            probes_per_frame: crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME,
+            intensity: 1.0,
+        };
+        rig.ctx.scene3d.camera.position = vec3(-1.5, 0.5, 0.3);
+        rig.ctx.scene3d.camera.look_at(vec3(0.5, 3.5, 0.0));
+        Some(rig)
+    }
+
+    /// Boxes of a mesh each, from `lo` to `hi`, built as `build` says.
+    fn blocks(&mut self, blocks: &[(Mesh, Vec3, Vec3)], build: Build) {
+        let (path, cells) = match build {
+            Build::Models => {
+                for &(mesh, lo, hi) in blocks {
+                    self.block(mesh, lo, hi);
+                }
+                return;
+            }
+            Build::Batch(path) => (path, false),
+            Build::Cells(path) => (path, true),
+        };
+        self.renderer.batching.path = path;
+        let transform =
+            |lo: Vec3, hi: Vec3| Mat4::from_scale_rotation_translation(hi - lo, Quat::IDENTITY, (lo + hi) * 0.5);
+        let mut meshes: Vec<Mesh> = Vec::new();
+        for b in blocks {
+            if !meshes.contains(&b.0) {
+                meshes.push(b.0);
+            }
+        }
+        let options = crate::render::InstanceBatchOptions::default();
+        let mut batches = Vec::new();
+        for &mesh in &meshes {
+            let transforms: Vec<Mat4> = if cells {
+                Vec::new()
+            } else {
+                blocks
+                    .iter()
+                    .filter(|b| b.0 == mesh)
+                    .map(|&(_, lo, hi)| transform(lo, hi))
+                    .collect()
+            };
+            let batch = self.ctx.gfx.create_instance_batch(mesh, &transforms, options);
+            self.sync_row(batch.id);
+            batches.push(batch);
+        }
+        self.batches.extend_from_slice(&batches);
+        if cells {
+            for &(mesh, lo, hi) in blocks {
+                let batch = batches[meshes.iter().position(|&m| m == mesh).unwrap()];
+                self.add_cell(batch, transform(lo, hi));
+            }
+        }
+    }
+
+    /// Hands row `row` of the batch table to the renderer, as `Graphics`
+    /// does.
+    fn sync_row(&mut self, row: u32) {
+        self.renderer.set_instance_batch(
+            &self.device,
+            &self.queue,
+            row,
+            self.ctx.gfx.assets3d.instance_batches[row as usize].as_ref(),
+        );
+    }
+
+    /// Adds a cell of one instance at `transform` to `batch`, on both sides.
+    fn add_cell(&mut self, batch: crate::render::InstanceBatch, transform: Mat4) -> crate::render::InstanceCell {
+        let cell = self.ctx.gfx.add_instance_cell(batch, &[transform], &[]);
+        let row = self.ctx.gfx.instance_cell_row(cell).expect("uploaded");
+        self.sync_row(row);
+        self.cells.push(cell);
+        cell
+    }
+
+    /// Frees `cell` on both sides.
+    fn free_cell(&mut self, cell: crate::render::InstanceCell) {
+        let row = self.ctx.gfx.instance_cell_row(cell).expect("live");
+        self.ctx.free(cell);
+        self.sync_row(row);
     }
 
     /// The color of the world point `p` in `pixels`.
@@ -364,6 +512,254 @@ fn a_sunlit_red_wall_tints_the_floor_beside_it_red() {
     );
 }
 
+/// How bright the roof inside [`Rig::light_box`] is (the sum of its red,
+/// green and blue), over a few points of it.
+fn roof_inside(open: bool, gi: bool, batch: Build) -> Option<i32> {
+    let mut rig = Rig::light_box(open, gi, batch)?;
+    let pixels = rig.draw(if gi { 80 } else { 1 });
+    let points = [vec3(0.5, 3.5, 0.0), vec3(-0.5, 3.5, 1.0), vec3(1.0, 3.5, -1.0)];
+    Some(
+        points
+            .iter()
+            .map(|&p| rig.at(&pixels, p).iter().sum::<i32>())
+            .max()
+            .unwrap(),
+    )
+}
+
+#[test]
+fn a_light_outside_a_closed_box_adds_no_bounce_inside() {
+    let Some(dark) = roof_inside(false, false, Build::Models) else {
+        return;
+    };
+    let Some(open) = roof_inside(true, true, Build::Models) else {
+        return;
+    };
+    let Some(closed) = roof_inside(false, true, Build::Models) else {
+        return;
+    };
+    eprintln!("roof inside the box: {dark} without bounced light, {open} with the box open, {closed} closed");
+    // The light never reaches the roof itself.
+    assert!(dark <= 6, "no direct light on the roof: {dark}");
+    // Positive control: through the open side, it bounces off the floor
+    // and walls onto the roof.
+    assert!(open > 60, "bounced light through the open side: {open}");
+    // Closed, the probes see the light's shadow: nothing gets in (before
+    // they did, the roof was as bright as in the open box). What is left
+    // is the probes' own leak along the walls' seams.
+    assert!(
+        closed * 20 < open,
+        "no bounced light in the closed box: {closed} vs {open} open"
+    );
+}
+
+#[test]
+fn instance_batches_bounce_and_block_light_like_models() {
+    // Both paths: culled on the CPU, and by the compute pass (where the
+    // device has it; elsewhere that batch takes the CPU path too).
+    for path in [BatchPath::Cpu, BatchPath::Gpu] {
+        // The red wall room, its walls, floor and roof as batches: the red
+        // wall tints the floor (the probes see it), and the roof keeps the
+        // sun off the floor (their sun shadow map has it).
+        let Some(mut models) = Rig::red_wall_room_of(true, true, Build::Models) else {
+            return;
+        };
+        let Some(mut batches) = Rig::red_wall_room_of(true, true, Build::Batch(path)) else {
+            return;
+        };
+        let (a, b) = (models.draw(80), batches.draw(80));
+        // Batches culled on the GPU keep a list as long as the batch for
+        // every view: the probes add seven (their shadow map, six face
+        // directions), however many probes update (16 here).
+        for batch in batches
+            .renderer
+            .static_batches
+            .iter()
+            .flatten()
+            .filter(|b| b.route == Route::Gpu)
+        {
+            let most = 1 + crate::three::MAX_CASCADES + crate::three::gi::GI_BATCH_FACES;
+            assert!(batch.views.len() <= most, "{} views", batch.views.len());
+        }
+        let near_red = vec3(-3.0, -0.5, -0.8);
+        let far_side = vec3(-0.5, -0.5, -0.8);
+        let (m, n) = (models.at(&a, near_red), batches.at(&b, near_red));
+        let (mf, nf) = (models.at(&a, far_side), batches.at(&b, far_side));
+        eprintln!("{path:?}: floor by the red wall: {m:?} models, {n:?} batches; further away {mf:?}, {nf:?}");
+        assert!(n[0] > n[1] + 20, "{path:?}: red bounce light from a batch wall: {n:?}");
+        for (x, y) in [(m, n), (mf, nf)] {
+            assert!(
+                (0..3).all(|k| (x[k] - y[k]).abs() <= 12),
+                "{path:?}: batches light the floor as models do: {x:?} vs {y:?}"
+            );
+        }
+        // A batch box closed around the light's shadow lets nothing in;
+        // open, it bounces the light as models do.
+        let Some(open) = roof_inside(true, true, Build::Batch(path)) else {
+            return;
+        };
+        let Some(closed) = roof_inside(false, true, Build::Batch(path)) else {
+            return;
+        };
+        eprintln!("{path:?}: roof inside a batch box: {open} open, {closed} closed");
+        assert!(open > 60, "{path:?}: bounced light off batch walls: {open}");
+        assert!(
+            closed * 20 < open,
+            "{path:?}: no bounced light in the closed batch box: {closed} vs {open}"
+        );
+    }
+}
+
+#[test]
+fn instance_cells_bounce_and_block_light_like_one_batch() {
+    for path in [BatchPath::Cpu, BatchPath::Gpu] {
+        // The red wall room as one batch per color, and as one cell per
+        // wall (of an empty batch per color): the same picture.
+        let Some(mut whole) = Rig::red_wall_room_of(true, true, Build::Batch(path)) else {
+            return;
+        };
+        let Some(mut cells) = Rig::red_wall_room_of(true, true, Build::Cells(path)) else {
+            return;
+        };
+        let (a, b) = (whole.draw(80), cells.draw(80));
+        let near_red = vec3(-3.0, -0.5, -0.8);
+        let far_side = vec3(-0.5, -0.5, -0.8);
+        let (w, c) = (whole.at(&a, near_red), cells.at(&b, near_red));
+        let (wf, cf) = (whole.at(&a, far_side), cells.at(&b, far_side));
+        eprintln!("{path:?}: floor by the red wall: {w:?} one batch, {c:?} cells; further away {wf:?}, {cf:?}");
+        assert!(c[0] > c[1] + 20, "{path:?}: red bounce light from a cell: {c:?}");
+        for (x, y) in [(w, c), (wf, cf)] {
+            assert!(
+                (0..3).all(|k| (x[k] - y[k]).abs() <= 12),
+                "{path:?}: cells light the floor as one batch does: {x:?} vs {y:?}"
+            );
+        }
+        // What the batch rows keep for their views, with every wall in.
+        let (views, lists, most) = cells.renderer.batch_view_lists();
+        let shadow_views = 1 + crate::three::MAX_CASCADES;
+        let red_row = cells.ctx.gfx.instance_cell_row(cells.cells[1]).unwrap();
+        let bound = if cells.renderer.batch_route(red_row) == Some(Route::Gpu) {
+            // One view per culling view a GPU row is seen in.
+            shadow_views + crate::three::gi::GI_BATCH_FACES
+        } else {
+            // A list per view: the probes' at most 7 + 6 x 16.
+            shadow_views
+                + crate::three::gi::GI_BATCH_FACES
+                + 6 * crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME as usize
+        };
+        assert!(
+            most <= bound,
+            "{path:?}: a row keeps {most} views and lists, at most {bound}"
+        );
+        // The red wall's cell freed: the probes that look from then on
+        // don't see it, so its light fades with every round of updates
+        // (585 probes, 16 a frame). Not at once: each update keeps some of
+        // the old light, and the probes' red light on the floor is what
+        // other probes see, bounce after bounce.
+        let tint = |rig: &Rig, pixels: &[u8]| {
+            let c = rig.at(pixels, near_red);
+            c[0] - c[1]
+        };
+        let before = tint(&cells, &b);
+        let red = cells.cells[1];
+        cells.free_cell(red);
+        let round = cells.draw(37);
+        let later = cells.draw(400);
+        let (after_round, after_more) = (tint(&cells, &round), tint(&cells, &later));
+        eprintln!("{path:?}: red tint by the wall {before}, freed: {after_round} after a round, {after_more} later");
+        assert!(
+            after_round * 10 < before * 7,
+            "{path:?}: a freed cell stops bouncing light: {after_round} vs {before}"
+        );
+        assert!(after_more <= 4, "{path:?}: none of its light is left: {after_more}");
+        // Cells coming and going reuse rows: what the rows keep for their
+        // views doesn't grow, and stays within the bound.
+        for _ in 0..10 {
+            let red_batch = cells.batches[1];
+            let wall = Mat4::from_scale_rotation_translation(vec3(0.4, 4.0, 7.8), Quat::IDENTITY, vec3(-3.7, 1.5, 0.0));
+            let cell = cells.add_cell(red_batch, wall);
+            let _ = cells.draw(3);
+            let now = cells.renderer.batch_view_lists();
+            assert!(
+                now.0 <= views && now.1 <= lists && now.2 <= bound,
+                "{path:?}: rows keep {now:?} views, lists and most, against {:?} before",
+                (views, lists, most)
+            );
+            cells.free_cell(cell);
+            let _ = cells.draw(3);
+        }
+    }
+}
+
+#[test]
+fn probe_views_leave_out_subpixel_instances_of_level_batches_too() {
+    // The same instances three times, on the CPU path: tiny cubes as one
+    // mesh, as two distance levels, and big ones. The probes' views keep
+    // the tiny ones only near the probes, whether the batch has levels
+    // or not.
+    let Some(mut rig) = Rig::new(true) else {
+        return;
+    };
+    rig.renderer.batching.path = BatchPath::Cpu;
+    let cube = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
+    let mut tiny = Vec::new();
+    let mut big = Vec::new();
+    for i in 0..41 {
+        for j in 0..41 {
+            let at = vec3(i as f32 * 0.5 - 10.0, 0.5, j as f32 * 0.5 - 10.0);
+            tiny.push(Mat4::from_scale_rotation_translation(
+                Vec3::splat(0.1),
+                Quat::IDENTITY,
+                at,
+            ));
+            big.push(Mat4::from_scale_rotation_translation(
+                Vec3::splat(2.0),
+                Quat::IDENTITY,
+                at,
+            ));
+        }
+    }
+    let options = crate::render::InstanceBatchOptions::default();
+    let one = rig.ctx.gfx.create_instance_batch(cube, &tiny, options);
+    let level = |min_distance, max_distance| crate::render::InstanceLevel {
+        mesh: cube,
+        min_distance,
+        max_distance,
+        camera: true,
+        shadows: true,
+    };
+    let levels =
+        rig.ctx
+            .gfx
+            .create_instance_batch_levels(&[level(0.0, 5.0), level(5.0, f32::INFINITY)], &tiny, &[], options);
+    let large = rig.ctx.gfx.create_instance_batch(cube, &big, options);
+    for batch in [one, levels, large] {
+        rig.sync_row(batch.id);
+    }
+    rig.ctx.scene3d.lighting.gi = GlobalIllumination {
+        enabled: true,
+        extent: vec3(12.0, 6.0, 12.0),
+        spacing: 1.0,
+        probes_per_frame: crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME,
+        intensity: 1.0,
+    };
+    rig.ctx.scene3d.camera.position = vec3(0.3, 2.0, 0.2);
+    rig.ctx.scene3d.camera.look_at(vec3(5.0, 0.0, 3.0));
+    let _ = rig.draw(1);
+    let count = |b: crate::render::InstanceBatch| rig.renderer.probe_view_instances(b.id);
+    let (one, levels, large) = (count(one), count(levels), count(large));
+    eprintln!("instances in this frame's probe views: {one} tiny, {levels} tiny in levels, {large} big");
+    // Big ones are all wider than a probe pixel: what the views hold.
+    assert!(large > 1000, "positive control: the probes see the field: {large}");
+    assert!(
+        one * 4 < large,
+        "most tiny ones are under a probe pixel: {one} of {large}"
+    );
+    assert!(one > 0, "the nearest tiny ones are kept: {one}");
+    // Levels: the same cut (before, their cells were drawn whole).
+    assert_eq!(levels, one, "a batch of levels keeps what a batch of one mesh keeps");
+}
+
 #[test]
 fn without_the_texture_slot_bounced_light_is_skipped() {
     // As on WebGL2: the frame is the same as with it off.
@@ -377,15 +773,29 @@ fn without_the_texture_slot_bounced_light_is_skipped() {
     assert_eq!(off.draw(1), on.draw(3));
 }
 
-/// GPU cost of global illumination in a town-like scene at 1280x720: off,
-/// at the defaults, and at the most probes a frame. Run in release
-/// (`cargo test --release --lib --features 3d -- --ignored --nocapture
-/// gi_cost`); prints the GPU frame time and the GI passes' times from the
-/// engine's timestamp profiler, and the CPU time to collect a frame.
+/// GPU cost of global illumination in a town-like scene at 1920x1080: off,
+/// at the defaults, and at the most probes a frame. The town has 900
+/// buildings (models), 1682 bushes in one instance batch and a shadowed
+/// point light by the camera. Run in release (`cargo test --release --lib
+/// --features 3d -- --ignored --nocapture gi_cost`); prints the GPU frame
+/// time and the GI passes' times from the engine's timestamp profiler, and
+/// the CPU time to collect a frame. Then again with a glass pane in front
+/// of every building: transparent (the probes skip it), and the same panes
+/// opaque (drawn in the probes' views): the difference is what drawing
+/// see-through surfaces in the probes would at least cost.
 #[test]
 #[ignore = "benchmark: run in release"]
 fn gi_cost() {
-    let Some(mut rig) = Rig::sized(true, (1280, 720)) else {
+    gi_cost_in(None, true);
+    // What the bushes cost: before instance batches were in the probes'
+    // views, the town cost them about this much.
+    gi_cost_in(None, false);
+    gi_cost_in(Some(crate::render::Blend::Transparent), true);
+    gi_cost_in(Some(crate::render::Blend::Opaque), true);
+}
+
+fn gi_cost_in(glass: Option<crate::render::Blend>, with_bushes: bool) {
+    let Some(mut rig) = Rig::sized(true, (1920, 1080)) else {
         return;
     };
     let Some(mut timer) = super::timer::GpuTimer::new(&rig.device, &rig.queue) else {
@@ -394,6 +804,19 @@ fn gi_cost() {
     };
     let white = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
     let tinted = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::rgb(0.8, 0.5, 0.3)));
+    let bush = rig.mesh(
+        &MeshData::sphere(0.6, 12),
+        MaterialDesc::color(Color::rgb(0.2, 0.5, 0.2)),
+    );
+    let pane = glass.map(|blend| {
+        rig.mesh(
+            &MeshData::cube(1.0),
+            MaterialDesc {
+                blend,
+                ..MaterialDesc::color(Color::rgba(0.6, 0.8, 0.9, 0.4))
+            },
+        )
+    });
     rig.block(white, vec3(-60.0, -1.0, -60.0), vec3(60.0, 0.0, 60.0));
     // 30 x 30 buildings, 4 apart, 3 to 12 high.
     let mut seed = 7u32;
@@ -401,21 +824,52 @@ fn gi_cost() {
         seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
         (seed >> 8) as f32 / (1 << 24) as f32
     };
+    let mut bushes = Vec::new();
     for i in 0..30 {
         for j in 0..30 {
             let at = vec3(i as f32 * 4.0 - 58.0, 0.0, j as f32 * 4.0 - 58.0);
             let mesh = if (i + j) % 3 == 0 { tinted } else { white };
             let height = 3.0 + random() * 9.0;
             rig.block(mesh, at, at + vec3(2.5, height, 2.5));
+            if let Some(pane) = pane {
+                rig.block(pane, at + vec3(0.0, 0.5, 2.6), at + vec3(2.5, 2.5, 2.65));
+            }
+            if with_bushes && i < 29 && j < 29 {
+                for k in 0..2 {
+                    let p = at + vec3(3.25 + k as f32 * 0.4 - 0.2, 0.5, 3.25 + random() - 0.5);
+                    bushes.push(Mat4::from_translation(p));
+                }
+            }
         }
     }
+    if with_bushes {
+        let batch = rig
+            .ctx
+            .gfx
+            .create_instance_batch(bush, &bushes, crate::render::InstanceBatchOptions::default());
+        rig.renderer.set_instance_batch(
+            &rig.device,
+            &rig.queue,
+            batch.id,
+            rig.ctx.gfx.assets3d.instance_batches[batch.id as usize].as_ref(),
+        );
+    }
+    rig.ctx.world.spawn((
+        Transform3D::at(vec3(6.0, 4.0, 5.0)),
+        crate::d3::PointLight {
+            intensity: 30.0,
+            range: 15.0,
+            shadows: true,
+            ..Default::default()
+        },
+    ));
     rig.ctx.scene3d.lighting.sun_direction = vec3(-0.4, -1.0, -0.3);
     rig.ctx.scene3d.camera.position = vec3(1.0, 1.7, 1.0);
     rig.ctx.scene3d.camera.look_at(vec3(20.0, 3.0, 12.0));
     rig.ctx.scene3d.camera.far = 200.0;
     // Rounds of every setting, each setting's best round kept: this runs
     // on machines doing other things too.
-    let settings = [
+    let all = [
         ("off", None),
         (
             "defaults (4 probes a frame)",
@@ -426,6 +880,11 @@ fn gi_cost() {
             Some(crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME),
         ),
     ];
+    let settings = if glass.is_some() || !with_bushes {
+        &all[..2]
+    } else {
+        &all[..]
+    };
     let mut best = vec![(f32::MAX, f64::MAX, f64::MAX, String::new()); settings.len()];
     for _ in 0..5 {
         for (k, &(_, gi)) in settings.iter().enumerate() {
@@ -483,8 +942,16 @@ fn gi_cost() {
             b.2 = b.2.min(cpu);
         }
     }
+    let scene = match glass {
+        None if !with_bushes => "town without the bushes",
+        None => "town",
+        Some(crate::render::Blend::Transparent) => "town, transparent panes",
+        Some(_) => "town, the panes opaque",
+    };
     for ((label, _), (gpu, wait, cpu, parts)) in settings.iter().zip(&best) {
-        println!("gi {label}: GPU frame {gpu:.3} ms ({parts}); submit to done {wait:.3} ms; collect {cpu:.3} ms");
+        println!(
+            "gi {label} ({scene}): GPU frame {gpu:.3} ms ({parts}); submit to done {wait:.3} ms; collect {cpu:.3} ms"
+        );
     }
 }
 

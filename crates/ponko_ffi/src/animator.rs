@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use ponko::anim::AnimationEvent;
 use ponko::anim::AnimationGraph;
+use ponko::anim::AnimationGraphError;
 use ponko::anim::AnimationLayer;
 use ponko::anim::AnimationParameter;
 use ponko::anim::AnimationState;
@@ -136,15 +137,7 @@ pub unsafe extern "C" fn ponko_motion_clip(clip: *const PonkoClip, out_motion: *
 /// `out_motion` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ponko_motion_blend1d(parameter: usize, out_motion: *mut *mut PonkoMotion) -> PonkoStatus {
-    boundary(|| {
-        motion_out(
-            Motion::Blend1D {
-                parameter: ParamId(parameter),
-                children: Vec::new(),
-            },
-            out_motion,
-        )
-    })
+    boundary(|| motion_out(Motion::blend_1d(ParamId(parameter), Vec::new()), out_motion))
 }
 
 /// An empty 2D blend tree on float parameters `x` and `y`; add children
@@ -158,16 +151,7 @@ pub unsafe extern "C" fn ponko_motion_blend1d(parameter: usize, out_motion: *mut
 /// `out_motion` writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ponko_motion_blend2d(x: usize, y: usize, out_motion: *mut *mut PonkoMotion) -> PonkoStatus {
-    boundary(|| {
-        motion_out(
-            Motion::Blend2D {
-                x: ParamId(x),
-                y: ParamId(y),
-                children: Vec::new(),
-            },
-            out_motion,
-        )
-    })
+    boundary(|| motion_out(Motion::blend_2d(ParamId(x), ParamId(y), Vec::new()), out_motion))
 }
 
 /// Adds `child` to a 1D tree at `threshold`, its clock scaled by
@@ -189,13 +173,7 @@ pub unsafe extern "C" fn ponko_motion_blend1d_add(
         let child = take_motion(child)?;
         match tree.as_mut().map(|t| &mut t.0) {
             Some(Motion::Blend1D { children, .. }) => {
-                children.push((
-                    threshold,
-                    MotionChild {
-                        motion: child,
-                        time_scale,
-                    },
-                ));
+                children.push((threshold, MotionChild::new(child).with_time_scale(time_scale)));
                 Ok(())
             }
             Some(_) => Err(invalid("that motion is not a 1D blend tree")),
@@ -224,13 +202,7 @@ pub unsafe extern "C" fn ponko_motion_blend2d_add(
         let child = take_motion(child)?;
         match tree.as_mut().map(|t| &mut t.0) {
             Some(Motion::Blend2D { children, .. }) => {
-                children.push((
-                    Vec2::new(x, y),
-                    MotionChild {
-                        motion: child,
-                        time_scale,
-                    },
-                ));
+                children.push((Vec2::new(x, y), MotionChild::new(child).with_time_scale(time_scale)));
                 Ok(())
             }
             Some(_) => Err(invalid("that motion is not a 2D blend tree")),
@@ -390,10 +362,7 @@ pub unsafe extern "C" fn ponko_animation_graph_add_event(
             .states
             .get_mut(state)
             .ok_or_else(|| invalid_owned(format!("no state {state}")))?;
-        s.events.push(AnimationEvent {
-            time,
-            name: name.into(),
-        });
+        s.events.push(AnimationEvent::new(time, name));
         Ok(())
     })
 }
@@ -558,8 +527,7 @@ pub unsafe extern "C" fn ponko_ctx_animator_set_float(
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
             let a = animator(c, entity_bits)?;
-            check_float(a, parameter, value)?;
-            a.set_float(ParamId(parameter), value);
+            a.try_set_float(ParamId(parameter), value).map_err(graph_error)?;
             Ok(())
         })
     })
@@ -582,8 +550,7 @@ pub unsafe extern "C" fn ponko_ctx_animator_set_bool(
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
             let a = animator(c, entity_bits)?;
-            check_bool(a, parameter)?;
-            a.set_bool(ParamId(parameter), value);
+            a.try_set_bool(ParamId(parameter), value).map_err(graph_error)?;
             Ok(())
         })
     })
@@ -607,8 +574,7 @@ pub unsafe extern "C" fn ponko_ctx_animator_set_trigger(
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
             let a = animator(c, entity_bits)?;
-            check_trigger(a, parameter)?;
-            a.set_trigger(ParamId(parameter), value);
+            a.try_set_trigger(ParamId(parameter), value).map_err(graph_error)?;
             Ok(())
         })
     })
@@ -660,8 +626,7 @@ pub unsafe extern "C" fn ponko_ctx_animator_crossfade(
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
             let a = animator(c, entity_bits)?;
-            check_crossfade(a, state, duration, offset)?;
-            a.crossfade(StateId(state), duration, offset);
+            a.try_crossfade(StateId(state), duration, offset).map_err(graph_error)?;
             Ok(())
         })
     })
@@ -796,49 +761,16 @@ pub enum PonkoRootMotion {
 
 /// `Animator` panics on purpose for a wrong parameter index or kind; these
 /// check first, so a C caller gets `PONKO_INVALID_ARGUMENT` instead.
-fn check_float(a: &Animator, parameter: usize, value: f32) -> Result<(), Failure> {
-    if !value.is_finite() {
-        return Err(invalid("value must be finite"));
-    }
-    match a.parameter(ParamId(parameter)) {
-        Some(AnimationParameter::Float(_)) => Ok(()),
-        _ => Err(invalid("that parameter is not a float")),
-    }
-}
-
-fn check_bool(a: &Animator, parameter: usize) -> Result<(), Failure> {
-    match a.parameter(ParamId(parameter)) {
-        Some(AnimationParameter::Bool(_)) => Ok(()),
-        _ => Err(invalid("that parameter is not a bool")),
-    }
-}
-
-fn check_trigger(a: &Animator, parameter: usize) -> Result<(), Failure> {
-    match a.parameter(ParamId(parameter)) {
-        Some(AnimationParameter::Trigger(_)) => Ok(()),
-        _ => Err(invalid("that parameter is not a trigger")),
-    }
-}
-
-fn check_crossfade(a: &Animator, state: usize, duration: f32, offset: f32) -> Result<(), Failure> {
-    if state >= a.state_count() {
-        return Err(invalid("no such animation state"));
-    }
-    if !(duration.is_finite() && duration >= 0.) {
-        return Err(invalid("crossfade duration must be finite and not negative"));
-    }
-    if !(offset.is_finite() && offset >= 0.) {
-        return Err(invalid("crossfade offset must be finite and not negative"));
-    }
-    Ok(())
+/// An animator's refusal of a command, as a C-side "invalid argument".
+fn graph_error(e: AnimationGraphError) -> Failure {
+    invalid_owned(e.to_string())
 }
 
 fn layer(c: &mut Ctx, bits: u64, index: usize) -> Result<&mut Animator, Failure> {
-    let a = animator(c, bits)?;
-    if index >= a.layer_count() {
-        return Err(invalid("no such animation layer"));
-    }
-    Ok(&mut a.layer_mut(LayerId(index)).animator)
+    animator(c, bits)?
+        .get_layer_mut(LayerId(index))
+        .map(|l| &mut *l.animator)
+        .ok_or_else(|| invalid("no such animation layer"))
 }
 
 /// Adds a layer playing `graph` over `entity`'s animator, with its own
@@ -914,11 +846,10 @@ pub unsafe extern "C" fn ponko_ctx_animator_set_layer_weight(
             if !weight.is_finite() {
                 return Err(invalid("layer weight must be finite"));
             }
-            let a = animator(c, entity_bits)?;
-            if layer >= a.layer_count() {
-                return Err(invalid("no such animation layer"));
-            }
-            a.layer_mut(LayerId(layer)).weight = weight.clamp(0., 1.);
+            animator(c, entity_bits)?
+                .get_layer_mut(LayerId(layer))
+                .ok_or_else(|| invalid("no such animation layer"))?
+                .weight = weight.clamp(0., 1.);
             Ok(())
         })
     })
@@ -942,8 +873,7 @@ pub unsafe extern "C" fn ponko_ctx_animator_layer_set_float(
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
             let a = layer(c, entity_bits, layer_index)?;
-            check_float(a, parameter, value)?;
-            a.set_float(ParamId(parameter), value);
+            a.try_set_float(ParamId(parameter), value).map_err(graph_error)?;
             Ok(())
         })
     })
@@ -967,8 +897,7 @@ pub unsafe extern "C" fn ponko_ctx_animator_layer_set_bool(
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
             let a = layer(c, entity_bits, layer_index)?;
-            check_bool(a, parameter)?;
-            a.set_bool(ParamId(parameter), value);
+            a.try_set_bool(ParamId(parameter), value).map_err(graph_error)?;
             Ok(())
         })
     })
@@ -992,8 +921,7 @@ pub unsafe extern "C" fn ponko_ctx_animator_layer_set_trigger(
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
             let a = layer(c, entity_bits, layer_index)?;
-            check_trigger(a, parameter)?;
-            a.set_trigger(ParamId(parameter), value);
+            a.try_set_trigger(ParamId(parameter), value).map_err(graph_error)?;
             Ok(())
         })
     })
@@ -1019,8 +947,7 @@ pub unsafe extern "C" fn ponko_ctx_animator_layer_crossfade(
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
             let a = layer(c, entity_bits, layer_index)?;
-            check_crossfade(a, state, duration, offset)?;
-            a.crossfade(StateId(state), duration, offset);
+            a.try_crossfade(StateId(state), duration, offset).map_err(graph_error)?;
             Ok(())
         })
     })

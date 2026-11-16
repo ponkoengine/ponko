@@ -25,11 +25,7 @@ fn morph(ctx: &mut Ctx) {
     let mut sheet = MeshData::plane(1.0);
     let mut dent = vec![Vec3::ZERO; sheet.positions.len()];
     dent[2] = vec3(0.0, 0.0, -0.4);
-    sheet.morph_targets.push(MorphTarget {
-        name: "dent".into(),
-        positions: dent,
-        normals: Vec::new(),
-    });
+    sheet.morph_targets.push(MorphTarget::new("dent", dent));
 
     let mut halfway = sheet.morph_targets[0].clone();
     halfway.name = "dent_half".into();
@@ -54,10 +50,10 @@ fn morph(ctx: &mut Ctx) {
     weights.set(dent, 0.5); // halfway dented
     let mut skeleton = Skeleton::new(vec![]);
     let expression =
-        ponko::anim::AnimationClip::new("expression", &skeleton, vec![]).with_morph_tracks(vec![MorphAnimation {
-            name: "dent".into(),
-            track: AnimationTrack::new(vec![0.0, 1.0], vec![Vec4::ZERO, Vec4::X], Interpolation::Linear),
-        }]);
+        ponko::anim::AnimationClip::new("expression", &skeleton, vec![]).with_morph_tracks(vec![MorphAnimation::new(
+            "dent",
+            AnimationTrack::new(vec![0.0, 1.0], vec![Vec4::ZERO, Vec4::X], Interpolation::Linear),
+        )]);
     expression.sample(0.5, &mut skeleton);
     ctx.world
         .spawn((Transform::default(), Model::new(mesh), weights, skeleton));
@@ -79,10 +75,10 @@ fn a_named_morph_target_is_weighted_on_a_model() {
 }
 
 fn morph_clip(s: &Skeleton, name: &str, value: f32) -> ponko::anim::AnimationClip {
-    ponko::anim::AnimationClip::new("face", s, vec![]).with_morph_tracks(vec![MorphAnimation {
-        name: name.into(),
-        track: AnimationTrack::new(vec![0., 2.], vec![Vec4::splat(value); 2], Interpolation::Linear),
-    }])
+    ponko::anim::AnimationClip::new("face", s, vec![]).with_morph_tracks(vec![MorphAnimation::new(
+        name,
+        AnimationTrack::new(vec![0., 2.], vec![Vec4::splat(value); 2], Interpolation::Linear),
+    )])
 }
 fn graph(motions: Vec<Motion>) -> std::sync::Arc<AnimationGraph> {
     AnimationGraph::new(
@@ -106,10 +102,10 @@ fn scalar_sampling_modes_preserve_unanimated_weights() {
         ),
     ] {
         let mut s = Skeleton::new(vec![]);
-        let clip = ponko::anim::AnimationClip::new("face", &s, vec![]).with_morph_tracks(vec![MorphAnimation {
-            name: "smile".into(),
-            track: AnimationTrack::new(vec![0., 2.], values, mode),
-        }]);
+        let clip = ponko::anim::AnimationClip::new("face", &s, vec![]).with_morph_tracks(vec![MorphAnimation::new(
+            "smile",
+            AnimationTrack::new(vec![0., 2.], values, mode),
+        )]);
         assert_eq!(clip.duration(), 2.);
         clip.sample(1., &mut s);
         let mut w = ponko::anim::MorphWeights(vec![0.7, 0.3]);
@@ -122,25 +118,13 @@ fn morphs_blend_in_trees_crossfades_and_masked_additive_layers() {
     let mut s = Skeleton::new(vec![]);
     let a = morph_clip(&s, "smile", 0.2);
     let b = morph_clip(&s, "smile", 0.8);
-    let tree = Motion::Blend1D {
-        parameter: ponko::anim::ParamId(0),
-        children: vec![
-            (
-                0.,
-                MotionChild {
-                    motion: Motion::Clip(a.clone()),
-                    time_scale: 1.,
-                },
-            ),
-            (
-                1.,
-                MotionChild {
-                    motion: Motion::Clip(b.clone()),
-                    time_scale: 1.,
-                },
-            ),
+    let tree = Motion::blend_1d(
+        ponko::anim::ParamId(0),
+        vec![
+            (0., MotionChild::new(Motion::Clip(a.clone()))),
+            (1., MotionChild::new(Motion::Clip(b.clone()))),
         ],
-    };
+    );
     let mut animator = Animator::new(graph(vec![tree, Motion::Clip(b.clone()), Motion::Clip(a)]));
     let names = ["smile".into(), "untouched".into()];
     let read = |s: &Skeleton| {
@@ -170,16 +154,8 @@ fn morphs_blend_in_trees_crossfades_and_masked_additive_layers() {
 fn automatic_morph_only_animation_writes_components_and_attachments_without_drift() {
     Game::new("morph", 1, 1).run_headless(0, |ctx| {
         let mut mesh = MeshData::plane(1.);
-        mesh.morph_targets.push(MorphTarget {
-            name: "smile".into(),
-            positions: vec![Vec3::Y; 4],
-            normals: vec![],
-        });
-        mesh.morph_targets.push(MorphTarget {
-            name: "other".into(),
-            positions: vec![Vec3::X; 4],
-            normals: vec![],
-        });
+        mesh.morph_targets.push(MorphTarget::new("smile", vec![Vec3::Y; 4]));
+        mesh.morph_targets.push(MorphTarget::new("other", vec![Vec3::X; 4]));
         let material = ctx.gfx.default_material();
         let mesh = ctx.gfx.create_mesh(&mesh, material);
         let skeleton = Skeleton::new(vec![]);
@@ -209,15 +185,12 @@ fn automatic_morph_only_animation_writes_components_and_attachments_without_drif
 #[test]
 fn morphs_blend_in_2d_and_override_layers_without_touching_other_targets() {
     let mut skeleton = Skeleton::new(vec![]);
-    let child = |v| MotionChild {
-        motion: Motion::Clip(morph_clip(&skeleton, "smile", v)),
-        time_scale: 1.,
-    };
-    let tree = Motion::Blend2D {
-        x: ponko::anim::ParamId(0),
-        y: ponko::anim::ParamId(1),
-        children: vec![(Vec2::ZERO, child(0.2)), (Vec2::ONE, child(0.8))],
-    };
+    let child = |v| MotionChild::new(Motion::Clip(morph_clip(&skeleton, "smile", v)));
+    let tree = Motion::blend_2d(
+        ponko::anim::ParamId(0),
+        ponko::anim::ParamId(1),
+        vec![(Vec2::ZERO, child(0.2)), (Vec2::ONE, child(0.8))],
+    );
     let graph = AnimationGraph::new(
         vec![AnimationParameter::Float(0.5), AnimationParameter::Float(0.5)],
         vec![AnimationState::new(tree)],
@@ -239,11 +212,7 @@ fn morphs_blend_in_2d_and_override_layers_without_touching_other_targets() {
 #[test]
 fn invalid_frame_mappings_are_rejected_and_replacing_tracks_updates_duration() {
     let mut mesh = MeshData::plane(1.);
-    mesh.morph_targets.push(MorphTarget {
-        name: "shape".into(),
-        positions: vec![Vec3::ZERO; 4],
-        normals: vec![],
-    });
+    mesh.morph_targets.push(MorphTarget::new("shape", vec![Vec3::ZERO; 4]));
     for frame in [
         MorphFrame {
             channel: 1,

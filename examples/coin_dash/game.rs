@@ -13,9 +13,11 @@
 //! [`SettingsScreen`] is a fourth plugin beside them, and [`CoinDash`] adds
 //! all four.
 //!
-//! The game moves through five [`Screen`]s: `Title` → `Playing` ⇄ `Paused`,
+//! The game moves through five [`Screen`]s, the engine's game states
+//! (`ponko::state`): `Title` → `Playing` ⇄ `Paused` (pushed over it),
 //! `Playing` → `Result` → `Playing` again (or back to `Title`), and
-//! `Title` ⇄ `Settings`. Only `rules` changes the screen. The best time and
+//! `Title` ⇄ `Settings`. Only `rules` asks for a new screen; entering
+//! `Playing` starts a round and entering `Title` clears the field. The best time and
 //! most coins are kept in a small [`Progress`] file, and the player's choices
 //! (UI scale, volume, rebound controls, language) in a [`settings::Settings`]
 //! file; both survive a missing or damaged file.
@@ -38,6 +40,7 @@ pub mod smoke;
 use ponko::d2::{Sprite, Transform};
 use ponko::locale::{Arg, Strings};
 use ponko::prelude::*;
+use ponko::state::State;
 use ponko::storage::Storage;
 use serde::{Deserialize, Serialize};
 use settings::Settings;
@@ -81,8 +84,9 @@ pub struct Sounds {
     select: Sound,
 }
 
-/// Which screen the game is on. A resource, so tests and tools can read it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which screen the game is on: the game's state, so tests and tools can
+/// read it ([`screen`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Screen {
     /// The menu shown at startup: best results, "press Enter".
     Title,
@@ -90,14 +94,14 @@ pub enum Screen {
     Settings,
     /// A round is running.
     Playing,
-    /// A round is frozen. Nothing moves and the clock stops.
+    /// A round is frozen, pushed over `Playing`. Nothing moves and the clock stops.
     Paused,
     /// The round ended; waiting for "play again" or "back to title".
     Result(Outcome),
 }
 
 /// How a round ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Outcome {
     Won,
     Lost,
@@ -221,9 +225,7 @@ impl Plugin for SettingsScreen {
     }
     fn setup(&self, ctx: &mut Ctx) {
         for table in LANGUAGES {
-            ctx.assets
-                .load_strings(&mut ctx.world, table)
-                .unwrap_or_else(|e| panic!("{e}"));
+            ctx.assets.load_strings(&mut ctx.world, table);
         }
         let (loaded, load) = Settings::load(&mut ctx.storage);
         ctx.input.set_actions(settings::bindings_for(&loaded.controls));
@@ -237,13 +239,17 @@ impl Plugin for SettingsScreen {
     }
 }
 
-/// Layer 2: the rules, on the fixed tick, and the resources they own. The
-/// game starts on the title screen with the progress loaded from `ctx.storage`.
+/// Layer 2: the rules, on the fixed tick, the screens and the resources
+/// they own. The game starts on the title screen with the progress loaded
+/// from `ctx.storage`.
 pub struct Rules;
 
 impl Plugin for Rules {
     fn build(&self, game: Game) -> Game {
-        game.add(Phase::AfterPhysics, rules)
+        game.state(Screen::Title)
+            .on_enter(Screen::Title, |ctx: &mut Ctx| ctx.world.clear())
+            .on_enter(Screen::Playing, new_round)
+            .add(Phase::AfterPhysics, rules)
     }
     fn setup(&self, ctx: &mut Ctx) {
         ctx.world.insert_resource(Round {
@@ -258,7 +264,6 @@ impl Plugin for Rules {
             load,
             save_failed: false,
         });
-        ctx.world.insert_resource(Screen::Title);
     }
 }
 
@@ -364,10 +369,17 @@ pub fn read_input(ctx: &mut Ctx) {
 }
 // ANCHOR_END: read_input
 
-/// Starts the next round: clears the field, then places the player in the
-/// middle and the coins at random spots. The spots come from the context's
+/// The screen the game is on.
+pub fn screen(world: &World) -> Screen {
+    *world.resource::<State<Screen>>().get()
+}
+
+/// Entering `Playing` (from the title, the result screen, or a restart):
+/// clears the field, then places the player in the middle and the coins at
+/// random spots for the next round. The spots come from the context's
 /// seeded random numbers, so a given seed and round number always give one layout.
-pub fn new_round(ctx: &mut Ctx, number: u32) {
+pub fn new_round(ctx: &mut Ctx) {
+    let number = ctx.world.resource::<Round>().number + 1;
     ctx.world.clear();
     let art = *ctx.world.resource::<Art>();
     let mut rng = ctx.random().stream(u64::from(number));
@@ -385,17 +397,10 @@ pub fn new_round(ctx: &mut Ctx, number: u32) {
         number,
         new_best: false,
     });
-    ctx.world.insert_resource(Screen::Playing);
-}
-
-/// Back to the title screen: the field is emptied, the saved progress stays.
-fn to_title(ctx: &mut Ctx) {
-    ctx.world.clear();
-    ctx.world.insert_resource(Screen::Title);
 }
 
 /// Sim system: the whole game, one fixed step at a time. What a button does
-/// depends on the screen:
+/// depends on the screen (a new screen shows from the next tick on):
 ///
 /// | Screen | confirm | restart | pause | back | settings |
 /// |---|---|---|---|---|---|
@@ -420,15 +425,14 @@ pub fn rules(ctx: &mut Ctx) {
     // `take` cleared the latches; keep the held direction for the next tick.
     ctx.world.resource_mut::<Intent>().direction = direction;
 
-    let next_round = ctx.world.resource::<Round>().number + 1;
-    match *ctx.world.resource::<Screen>() {
+    match *ctx.state::<Screen>() {
         Screen::Title => {
             if confirm {
                 sfx(ctx, |s| s.select);
-                new_round(ctx, next_round);
+                ctx.set_state(Screen::Playing);
             } else if settings {
                 sfx(ctx, |s| s.select);
-                ctx.world.insert_resource(Screen::Settings);
+                ctx.set_state(Screen::Settings);
             } else if pause || back {
                 ctx.quit();
             }
@@ -438,31 +442,15 @@ pub fn rules(ctx: &mut Ctx) {
                 settings::leave_settings(ctx);
             }
         }
-        Screen::Playing => {
-            if pause {
-                ctx.world.insert_resource(Screen::Paused);
-            } else if restart {
-                new_round(ctx, next_round);
-            } else {
-                play(ctx, direction);
-            }
-        }
-        Screen::Paused => {
-            if back {
-                to_title(ctx);
-            } else if restart {
-                new_round(ctx, next_round);
-            } else if pause || confirm {
-                ctx.world.insert_resource(Screen::Playing);
-            }
-        }
-        Screen::Result(_) => {
-            if confirm || restart {
-                new_round(ctx, next_round);
-            } else if pause || back {
-                to_title(ctx);
-            }
-        }
+        Screen::Playing if pause => ctx.push_state(Screen::Paused),
+        Screen::Playing if restart => ctx.set_state(Screen::Playing),
+        Screen::Playing => play(ctx, direction),
+        Screen::Paused if back => ctx.set_state(Screen::Title),
+        Screen::Paused if restart => ctx.set_state(Screen::Playing),
+        Screen::Paused if pause || confirm => ctx.pop_state::<Screen>(),
+        Screen::Result(_) if confirm || restart => ctx.set_state(Screen::Playing),
+        Screen::Result(_) if pause || back => ctx.set_state(Screen::Title),
+        Screen::Paused | Screen::Result(_) => {}
     }
 }
 
@@ -519,7 +507,7 @@ fn finish_round(ctx: &mut Ctx, outcome: Outcome) {
         Outcome::Won => sfx(ctx, |s| s.win),
         Outcome::Lost => sfx(ctx, |s| s.lose),
     }
-    ctx.world.insert_resource(Screen::Result(outcome));
+    ctx.set_state(Screen::Result(outcome));
 }
 
 // ---- Saved progress ---------------------------------------------------------
@@ -688,7 +676,7 @@ pub fn screen_lines(world: &World) -> Vec<Line> {
             ],
         )
     };
-    let mut lines = match *world.resource::<Screen>() {
+    let mut lines = match screen(world) {
         // The settings screen is the retained UI's; a round shows only the HUD.
         Screen::Playing | Screen::Settings => return Vec::new(),
         Screen::Title => {
@@ -786,7 +774,7 @@ pub fn hud(ctx: &mut Ctx) {
     let scale = ctx.world.resource::<Settings>().ui_scale;
     let font = strings(&ctx.world).font().unwrap_or(Font::DEFAULT);
     let text = |size: f32, color| TextParams::default().with_font(font).with_size(size).with_color(color);
-    if matches!(*ctx.world.resource::<Screen>(), Screen::Playing | Screen::Paused) {
+    if ctx.world.resource::<State<Screen>>().in_stack(&Screen::Playing) {
         let round = ctx.world.resource::<Round>().clone();
         let status = strings(&ctx.world).format(
             "hud.status",

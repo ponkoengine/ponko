@@ -4,6 +4,7 @@
 use super::{SystemFn, SystemId, builtin_id, hot, hot_view};
 use crate::access::SystemAccess;
 use crate::ctx::Ctx;
+use crate::state::{Condition, IntoCondition};
 use crate::system_view::{SystemView, ViewFn};
 
 /// What a system runs, before it is registered.
@@ -33,6 +34,8 @@ pub struct SystemConfig {
     pub(super) builtin: Option<SystemId>,
     pub(super) every: u32,
     pub(super) access: Option<SystemAccess>,
+    /// From `run_if`: it runs only when all of them hold.
+    pub(super) conditions: Vec<Condition>,
 }
 
 /// Anything [`Game::add`](super::Game::add) registers as a system.
@@ -154,6 +157,37 @@ pub trait IntoSystem<Takes>: Sized {
         config.access = Some(access);
         config
     }
+
+    /// Runs the system only when `condition` holds, checked right before it
+    /// would run: [`in_state`](crate::state::in_state) and
+    /// [`in_stack`](crate::state::in_stack) for game states, or a closure
+    /// `|ctx: &Ctx| -> bool`. Calling it again adds another condition; the
+    /// system runs when all of them hold. See the
+    /// [`state`](crate::state#run-conditions) module.
+    ///
+    /// A state condition adds a read of the state's resource to the
+    /// system's declared access (whenever it is declared), so the parallel
+    /// scheduler orders it after systems that write the state; a closure
+    /// condition makes a view system run alone.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// # #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    /// # enum Screen { Title, Playing }
+    /// fn movement(_: &mut Ctx) {}
+    /// fn cheat_menu(_: &mut Ctx) {}
+    ///
+    /// let game = Game::new("t", 1, 1)
+    ///     .state(Screen::Title)
+    ///     .add(Phase::AfterPhysics, movement.run_if(in_state(Screen::Playing)))
+    ///     .add(Phase::Frame, cheat_menu.run_if(|ctx: &Ctx| ctx.input.key_down(Key::F1)));
+    /// # let _ = game;
+    /// ```
+    fn run_if<When>(self, condition: impl IntoCondition<When>) -> SystemConfig {
+        let mut config = self.into_system();
+        config.conditions.push(condition.into_condition());
+        config
+    }
 }
 
 impl<F: FnMut(&mut Ctx) + 'static> IntoSystem<Ctx> for F {
@@ -166,6 +200,7 @@ impl<F: FnMut(&mut Ctx) + 'static> IntoSystem<Ctx> for F {
             builtin: builtin.map(|b| b.0),
             every: 1,
             access: None,
+            conditions: Vec::new(),
         }
     }
 }
@@ -178,6 +213,7 @@ impl<F: FnMut(&mut SystemView<'_>) + Send + 'static> IntoSystem<SystemView<'stat
             builtin: None,
             every: 1,
             access: None,
+            conditions: Vec::new(),
         }
     }
 }

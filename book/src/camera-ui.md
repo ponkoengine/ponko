@@ -7,11 +7,11 @@ drawn with sprites, so it batches with the rest of the frame.
 
 There are two kinds of coordinates:
 
-- **World units**: sprites, `ctx.draw`, and the shapes below. They go
+- **World units**: sprites, `ctx.gfx.draw`, and the shapes below. They go
   through the camera.
 - **Window pixels**: UI and text, drawn on top of the world. `(0, 0)` is the
-  window's top-left. Use `DrawParams::default().with_screen(true)` to draw a sprite
-  in window pixels (an icon in a HUD).
+  window's top-left. Use `DrawParams::default().with_space(DrawSpace::Screen)` to draw a sprite
+  in window pixels (an icon in a HUD); see [Coordinate spaces](drawing.md#coordinate-spaces).
 
 The default camera shows world point `(0, 0)` at the top-left at zoom 1, so
 until you move it, world units are window pixels.
@@ -25,7 +25,7 @@ pixels per world unit). Its methods do the usual jobs:
 
 | Want to | Call |
 |---|---|
-| follow something | `ctx.camera.look_at(hero)` every frame |
+| follow something | `ctx.camera.look_at(hero)` every frame, or a [rig](#camera-rigs) |
 | zoom toward the mouse | `ctx.camera.zoom_at(ctx.input.mouse_pos(), 1.1)` |
 | know what the mouse points at | `ctx.mouse_world()` |
 | put a label on a unit | `ctx.camera.world_to_screen(unit)` |
@@ -68,6 +68,178 @@ ctx.camera.look_at(bounds / 2.0);
 
 ```cpp
 {{#include ../../examples/cpp/guide.cpp:camera_fit}}
+```
+
+</div>
+</div>
+
+## Camera rigs
+
+Most games want more than `look_at(hero)`: a camera that eases after the
+hero, lets it move a little without scrolling, shows more of where it is
+heading and stops at the level's edges. The rigs do that. Each is a plain
+struct you keep (a resource is a good home, as it holds the camera's state)
+and update once a frame, after the thing it follows moved. They move the
+camera the same way at 30, 60 and 144 frames a second: their smoothing is
+solved exactly, not stepped. Leave them out and nothing changes.
+
+| Rig | For |
+|---|---|
+| [`d2::FollowCamera`](https://docs.rs/ponko/latest/ponko/d2/struct.FollowCamera.html) | following a hero: dead zone, look-ahead, offset, level bounds |
+| [`d2::PixelPerfect`](https://docs.rs/ponko/latest/ponko/d2/struct.PixelPerfect.html) | pixel art: a whole-number zoom, a camera on the pixel grid |
+| [`camera::CameraShake`](https://docs.rs/ponko/latest/ponko/camera/struct.CameraShake.html) | shake that grows with "trauma", in 2D and 3D |
+| `d3::OrbitCamera`, `d3::FirstPersonCamera`, `d3::ThirdPersonCamera` | 3D: see [Camera rigs in 3D](3d.md#camera-rigs) |
+
+### Following something
+
+<div class="lang-pair">
+<div>
+
+```rust
+use ponko::d2::FollowCamera;
+# let hero = vec2(400.0, 300.0);
+
+// Once, in setup:
+let follow = FollowCamera::default()
+    .with_dead_zone(vec2(32.0, 48.0)) // move this much without scrolling
+    .with_look_ahead(vec2(48.0, 0.0)) // show more of where it's heading
+    .with_bounds(Rect::new(0.0, 0.0, 4000.0, 720.0)); // never past the level
+ctx.world.insert_resource(follow);
+
+// Every frame, after the hero moved:
+let dt = ctx.time.frame_dt();
+ctx.world.resource_mut::<FollowCamera>().update(&mut ctx.camera, hero, dt);
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:follow_camera}}
+```
+
+</div>
+</div>
+
+The first update puts the camera on the target at once; so does `snap` (a
+respawn, a new level). `smooth_time` (0.15 s by default) is how long it
+takes to catch up, and 0 sticks to the target. The look-ahead turns the way
+the target moves; a game that knows which way its hero faces can set
+`facing` itself, as [Ember Hop](ember-hop.md#camera-particles-and-sound)
+does.
+
+Give the rig a world position. An entity's `Transform` is already in the
+world when it has a parent (see [the hierarchy](hierarchy.md)), so a rig can
+follow a child, a rider's head or a turret, the same way.
+
+### Pixel art
+
+`PixelPerfect` sets the zoom to the largest whole number of window pixels
+per art pixel that fits the window, and moves the camera in whole art
+pixels, so art pixels never come out unevenly sized or shimmer as the
+camera scrolls. Apply it after whatever placed the camera:
+
+<div class="lang-pair">
+<div>
+
+```rust
+use ponko::d2::PixelPerfect;
+
+let pixels = PixelPerfect::new(320.0, 180.0); // the size the art is drawn for
+pixels.apply(&mut ctx.camera);
+// A window that isn't a whole multiple shows a little more world;
+// this is where exactly 320 x 180 is, to put bars around it:
+let art = pixels.screen_rect(ctx.camera.viewport());
+# let _ = art;
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:pixel_perfect}}
+```
+
+</div>
+</div>
+
+### Shake
+
+`CameraShake` follows trauma: hits add some, it wears off over a second,
+and the camera shakes with its square, so small bumps barely move it.
+The shake follows smooth noise, in window pixels in 2D and as small turns
+in 3D (a turning camera never shakes into a wall). Apply it after the
+camera is placed for the frame:
+
+<div class="lang-pair">
+<div>
+
+```rust
+use ponko::camera::CameraShake;
+# let mut shake = CameraShake::default();
+# let hit = true;
+
+if hit {
+    shake.add_trauma(0.5);
+}
+shake.update(ctx.time.frame_dt());
+shake.apply_2d(&mut ctx.camera); // or apply_3d(&mut ctx.scene3d.camera)
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:camera_shake}}
+```
+
+</div>
+</div>
+
+For your own smoothing, the rigs' helpers are in `ponko::camera`:
+`smooth_damp` (a critically damped spring that eases in and settles
+without overshoot; keep its velocity between calls), `damp` (half of the
+way left every half-life) and `damp_angle` (the short way round). All three
+are exact for a target that holds still, so they don't depend on the frame
+rate. C and C++: `ponko_smooth_damp`, `ponko_damp`, `ponko_damp_angle` (and
+`_vec2`, `_vec3`; C++ overloads in `ponko::`).
+
+## Screen and world
+
+Every conversion between window pixels (the mouse, UI) and the world, for
+both cameras. They take and give window pixels and follow the camera's part
+of the window, its `rect` (the whole window unless you split it; see
+[Several cameras](viewports.md)):
+
+| Want to | 2D (`ctx.camera`) | 3D (`ctx.scene3d.camera`) |
+|---|---|---|
+| world point under a window point | `screen_to_world(p)` (`ctx.mouse_world()` for the mouse) | `screen_to_world(p, depth)`: `depth` units ahead |
+| ray under a window point | | `screen_ray(p)`: start and unit direction |
+| ground point under a window point | | `screen_to_ground(p, height)`: `None` if the ray points away |
+| window point of a world point | `world_to_screen(w)` | `world_to_screen(w)`: `None` behind the camera |
+| size of the camera's part of the window | `viewport()` | `viewport()` |
+| the camera drawing at a window point | `d2::View::camera_at(&ctx.camera, &ctx.views2d, p)` | `ctx.scene3d.camera_at(p)` |
+
+<div class="lang-pair">
+<div>
+
+```rust
+# let (hero, player) = (vec2(10.0, 20.0), vec3(0.0, 0.0, 0.0));
+let label = ctx.camera.world_to_screen(hero);
+let clicked = ctx.camera.screen_to_world(ctx.input.mouse_pos());
+let cam = &ctx.scene3d.camera;
+let (from, dir) = cam.screen_ray(ctx.input.mouse_pos());
+let ground = cam.screen_to_ground(ctx.input.mouse_pos(), 0.0);
+let cursor = cam.screen_to_world(ctx.input.mouse_pos(), 4.0);
+let name_tag = cam.world_to_screen(player + Vec3::Y * 2.0);
+# let _ = (label, clicked, from, dir, ground, cursor, name_tag);
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:screen_world}}
 ```
 
 </div>

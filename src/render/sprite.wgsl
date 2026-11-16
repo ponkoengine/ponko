@@ -36,7 +36,9 @@ fn vs_main(@builtin(vertex_index) vi: u32, inst: Instance) -> VertexOut {
         vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
         vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
     );
-    let corner = corners[vi];
+    // Mesh vertices (zero size) draw from one vertex each, so `vi` runs
+    // past the six corners: the corner then doesn't matter.
+    let corner = corners[vi % 6u];
 
     let local = (corner - inst.pivot) * inst.size;
     let c = cos(inst.rotation);

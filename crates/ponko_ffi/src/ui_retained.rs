@@ -1,7 +1,7 @@
 //! Retained UI from C (Rust `Ui`, `UiWidget`, `UiPaint`, `Ctx::ui`).
 //!
 //! Build a tree once with `ponko_ctx_ui_add_*`, give roots to
-//! `ponko_ctx_ui_push_screen`, and change text, values and styles later. The
+//! `ponko_ctx_ui_push_screen_with_mode`, and change text, values and styles later. The
 //! engine lays the tree out and handles input before your systems run; read
 //! what happened with `ponko_ctx_ui_next_event`, one event at a time, so no
 //! callback borrows your game state. Nodes are named by `uint64_t` ids that are
@@ -18,6 +18,7 @@
 //! Text insertion and keyboard capture are context-wide input operations.
 use std::ffi::c_char;
 
+use ponko::ui::ScreenMode;
 use ponko::ui::Ui;
 use ponko::ui::UiEvent;
 use ponko::ui::UiId;
@@ -1296,8 +1297,8 @@ unsafe fn add(
         with_ui(ctx, target, |ui| {
             let parent = (parent != PONKO_UI_NONE).then(|| existing(ui, parent)).transpose()?;
             let id = match parent {
-                Some(parent) => ui.add_child(parent, widget, UiLayout::custom(style)),
-                None => ui.add(widget, UiLayout::custom(style)),
+                Some(parent) => ui.add_child(parent, widget, UiLayout::unstable_custom(style)),
+                None => ui.add(widget, UiLayout::unstable_custom(style)),
             };
             ui.set_text(id, start.text);
             if let Some(paint) = start.paint {
@@ -1596,7 +1597,7 @@ pub unsafe extern "C" fn ponko_ctx_ui_set_layout(
         let style = style_or_default(layout)?;
         with_ui(ctx, target, |ui| {
             let id = existing(ui, id)?;
-            ui.set_layout(id, UiLayout::custom(style));
+            ui.set_layout(id, UiLayout::unstable_custom(style));
             Ok(())
         })
     })
@@ -1615,10 +1616,10 @@ unsafe fn update_style(
             let mut style = ui
                 .node_layout(id)
                 .ok_or_else(|| invalid("UI node has no style"))?
-                .into_style();
+                .into_unstable_style();
             f(&mut style)?;
             prepare_grid_names(&mut style);
-            ui.set_layout(id, UiLayout::custom(style));
+            ui.set_layout(id, UiLayout::unstable_custom(style));
             Ok(())
         })
     }
@@ -1986,10 +1987,83 @@ pub unsafe extern "C" fn ponko_ctx_ui_scroll(
 
 // ---- screens and focus -------------------------------------------------------
 
-/// Pushes a detached root as the top screen. Only the top screen takes input;
-/// a `modal` one also dims the screens below it and owns the pointer outside
-/// its rectangle. Fails with `PONKO_INVALID_ARGUMENT` if the node has a parent,
-/// is already a screen or is shown as a HUD (`ponko_ctx_ui_show_hud`).
+/// How a pushed screen treats the screens below it (Rust `ScreenMode`), for
+/// `ponko_ctx_ui_push_screen_with_mode`. Passed as a `uint32_t`: another value
+/// fails with `PONKO_INVALID_ARGUMENT`. More modes may be added.
+/// ```
+/// assert_eq!(ponko_ffi::PonkoUiScreenMode::PONKO_UI_SCREEN_MODE_MODAL as u32, 1);
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum PonkoUiScreenMode {
+    /// A menu or page: drawn as it is, no overlay.
+    PONKO_UI_SCREEN_MODE_MODELESS,
+    /// A dialog: dims the screens below it, owns the pointer outside its
+    /// rectangle and is a dialog to screen readers.
+    PONKO_UI_SCREEN_MODE_MODAL,
+}
+
+/// A `PonkoUiScreenMode`; `None` for an unknown one.
+pub(crate) fn screen_mode(mode: u32) -> Option<ScreenMode> {
+    match mode {
+        m if m == PonkoUiScreenMode::PONKO_UI_SCREEN_MODE_MODELESS as u32 => Some(ScreenMode::Modeless),
+        m if m == PonkoUiScreenMode::PONKO_UI_SCREEN_MODE_MODAL as u32 => Some(ScreenMode::Modal),
+        _ => None,
+    }
+}
+
+/// Both push entry points; `None` is an unknown mode.
+/// # Safety
+/// `ctx` null or live.
+unsafe fn push_screen(ctx: *mut PonkoCtx, target: u64, root: u64, mode: Option<ScreenMode>) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        with_ui(ctx, target, |ui| {
+            let mode = mode.ok_or_else(|| invalid("unknown PonkoUiScreenMode"))?;
+            let root = existing(ui, root)?;
+            if ui.parent(root).is_some() {
+                return Err(invalid("UI screen must be a detached root"));
+            }
+            if ui.is_screen(root) {
+                return Err(invalid("UI screen already on stack"));
+            }
+            if ui.is_hud(root) {
+                return Err(invalid("UI screen is shown as a HUD"));
+            }
+            ui.push_screen_with_mode(root, mode);
+            Ok(())
+        })
+    })
+}
+
+/// Pushes a detached root as the top screen, in `mode` (a
+/// `PonkoUiScreenMode`). Only the top screen takes input; a
+/// `PONKO_UI_SCREEN_MODE_MODAL` one also dims the screens below it and owns
+/// the pointer outside its rectangle. Fails with `PONKO_INVALID_ARGUMENT` if
+/// the node has a parent, is already a screen, is shown as a HUD
+/// (`ponko_ctx_ui_show_hud`) or `mode` is not a `PonkoUiScreenMode`.
+/// ```
+/// use ponko_ffi::{PonkoUiScreenMode::PONKO_UI_SCREEN_MODE_MODAL, PONKO_UI_SCREEN};
+/// let status = unsafe { ponko_ffi::ponko_ctx_ui_push_screen_with_mode(std::ptr::null_mut(), PONKO_UI_SCREEN, 0, PONKO_UI_SCREEN_MODE_MODAL as u32) };
+/// assert_eq!(status as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_push_screen_with_mode(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    root: u64,
+    mode: u32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { push_screen(ctx, target, root, screen_mode(mode)) }
+}
+
+/// Deprecated: use `ponko_ctx_ui_push_screen_with_mode`, which names the
+/// mode. `modal` true is `PONKO_UI_SCREEN_MODE_MODAL`, false
+/// `PONKO_UI_SCREEN_MODE_MODELESS`; it stays in ABI 2 and behaves the same.
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ui_push_screen(std::ptr::null_mut(), ponko_ffi::PONKO_UI_SCREEN, 0, true) } as u32, 1);
 /// ```
@@ -2002,23 +2076,9 @@ pub unsafe extern "C" fn ponko_ctx_ui_push_screen(
     root: u64,
     modal: bool,
 ) -> PonkoStatus {
+    let mode = if modal { ScreenMode::Modal } else { ScreenMode::Modeless };
     // SAFETY: forwarded caller contract.
-    boundary(|| unsafe {
-        with_ui(ctx, target, |ui| {
-            let root = existing(ui, root)?;
-            if ui.parent(root).is_some() {
-                return Err(invalid("UI screen must be a detached root"));
-            }
-            if ui.is_screen(root) {
-                return Err(invalid("UI screen already on stack"));
-            }
-            if ui.is_hud(root) {
-                return Err(invalid("UI screen is shown as a HUD"));
-            }
-            ui.push_screen(root, modal);
-            Ok(())
-        })
-    })
+    unsafe { push_screen(ctx, target, root, Some(mode)) }
 }
 
 /// Pops the top screen and writes its root to `out_root` (`PONKO_UI_NONE`
@@ -2613,7 +2673,10 @@ pub unsafe extern "C" fn ponko_ctx_ui_add_title(
             let parent = existing(ui, parent)?;
             out(
                 out_id,
-                ui.title(parent, text).layout(UiLayout::custom(style)).id().bits(),
+                ui.title(parent, text)
+                    .layout(UiLayout::unstable_custom(style))
+                    .id()
+                    .bits(),
             )
         })
     })
@@ -2857,7 +2920,7 @@ mod tests {
         for (c, rust) in pairs {
             // SAFETY: presets hold no pointers.
             let style = unsafe { layout_style(&c) }.ok().unwrap();
-            assert_eq!(style, rust.into_style());
+            assert_eq!(style, rust.into_unstable_style());
         }
     }
 

@@ -162,7 +162,7 @@ by a fixed rule (the full table is on `Ctx::load_scene` in the API docs):
 | Commands and events | Commands queued earlier in the running system are dropped; events stay readable (their entity ids are the old world's). |
 | 2D and 3D physics | Old bodies leave at once; the scene's are built at the next physics step, from rest. Gravity and settings stay. |
 | Crowd agents, 3D UI panels, skeletons | Components that aren't saved: gone with their entities. Old crowd slots are freed at the next navigation step, and the keyboard focus of a 3D panel is forgotten. |
-| `Attached`, `SkinOf`, `AttachToJoint`, 3D joints, `PrefabParts` | Reflected: the scene's, naming the scene's entities. Skins and joint attachments show once their entity has a skeleton again. |
+| `Attached`, `SkinOf`, `AttachToJoint`, 3D joints, `PrefabParts`, `Children` | Reflected: the scene's, naming the scene's entities. Skins and joint attachments show once their entity has a skeleton again. |
 | Assets and prefabs | Stay cached; a load never unloads anything. |
 | Positional sounds | A sound playing from a replaced entity stops; music and other sounds play on. |
 | Camera, screen UI, lighting, input, time, random seed | Kept. Temporal effects (TAA) forget their history, and the inspector its selection. |

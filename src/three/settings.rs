@@ -38,6 +38,16 @@ use super::{Camera3D, ComputePass, Lighting, LodSettings, Post, ScreenEffect, Sk
 /// s.set_quality(ponko::render::GraphicsQuality::High);
 /// # }
 /// ```
+///
+/// # Defaults and cost
+///
+/// [`Default`] is the default of each part: [`Camera3D`], [`Lighting`] (with
+/// its shadows on), [`Sky`] (the atmosphere on, no fog), [`Post`] (4x
+/// multisampling, tone mapping and a little bloom), [`LodSettings`], no
+/// [`RenderPasses`] and automatic quality off. Holding the settings costs
+/// nothing; the renderer pays for what each part turns on, as the docs of
+/// the part say. They are plain values (the pass lists are `Vec`s), so
+/// copying them allocates only for those.
 #[derive(Debug, Clone)]
 pub struct SceneSettings {
     /// The 3D camera: position, rotation, field of view.
@@ -95,6 +105,23 @@ pub struct SceneSettings {
     pub lod: LodSettings,
     /// The game's own GPU passes, run each frame: see [`RenderPasses`].
     pub passes: RenderPasses,
+    /// More 3D cameras, each drawing the world into its part of the window
+    /// after the main [`camera`](Self::camera), in order: split screen, a
+    /// minimap, a picture in picture. Empty by default, which costs
+    /// nothing; each view costs about a frame of its size (see
+    /// [`d3::View`](crate::d3::View)).
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// use ponko::camera::Viewport;
+    /// ctx.scene3d.camera.rect = Viewport::split(2, 0);
+    /// let mut p2 = ctx.scene3d.camera;
+    /// p2.rect = Viewport::split(2, 1);
+    /// ctx.scene3d.views.push(d3::View::new(p2));
+    /// # }
+    /// ```
+    pub views: Vec<crate::d3::View>,
     /// Automatic quality's policy, freeze and pins (the running controller
     /// lives on the context).
     pub(crate) autotune: AutotuneSettings,
@@ -117,8 +144,40 @@ impl SceneSettings {
             post: Post::default(),
             lod: LodSettings::default(),
             passes: RenderPasses::default(),
+            views: Vec::new(),
             autotune: AutotuneSettings::default(),
         }
+    }
+
+    /// The camera that draws the window at `screen` (logical pixels, as
+    /// [`mouse_pos`](crate::input::Input::mouse_pos)): the last of the
+    /// [`views`](Self::views) whose rectangle holds it (they draw on top),
+    /// else the main [`camera`](Self::camera), also outside every
+    /// rectangle. For picking with several cameras: aim through it with
+    /// its [`screen_ray`](Camera3D::screen_ray) or
+    /// [`screen_to_ground`](Camera3D::screen_to_ground), which work in the
+    /// window's coordinates.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn update(ctx: &mut Ctx) {
+    /// if ctx.input.mouse_pressed(MouseButton::Left) {
+    ///     let click = ctx.input.mouse_pos();
+    ///     let camera = ctx.scene3d.camera_at(click);
+    ///     if let Some(ground) = camera.screen_to_ground(click, 0.0) {
+    ///         println!("clicked the ground at {ground}");
+    ///     }
+    /// }
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn camera_at(&self, screen: Vec2) -> &Camera3D {
+        self.views
+            .iter()
+            .rev()
+            .map(|v| &v.camera)
+            .find(|c| c.screen_rect().contains(screen))
+            .unwrap_or(&self.camera)
     }
 }
 
@@ -139,6 +198,16 @@ impl SceneSettings {
 /// ctx.scene3d.passes.effects.clear(); // and gone again
 /// # }
 /// ```
+///
+/// # Defaults and cost
+///
+/// [`Default`] has every list empty, which costs nothing. Each entry costs
+/// its own pass every frame: a compute pass runs its shader once per texel
+/// of its target or element of its buffer, a screen or target effect is a
+/// full-screen pass, and a target camera draws the 3D world again into its
+/// target. Compute passes need compute shaders and buffer passes need
+/// storage buffers: on WebGL2 texture passes are rejected when made and
+/// buffer passes do nothing.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[non_exhaustive]
 pub struct RenderPasses {

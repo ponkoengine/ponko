@@ -1,7 +1,7 @@
 ### Added
 - A web gallery of the examples, playable in the browser: each release
-  publishes the examples that run on the web to
-  <https://ponkoengine.github.io/ponko/>, a page each with the demo, what it
+  publishes the examples that run on the web
+  as a gallery, a page each with the demo, what it
   shows, its controls, whether it needs WebGPU and its source at the release.
   A demo that needs WebGPU says so, and what to try, on a browser without it;
   the others fall back to WebGL2. `node web/gallery/build.mjs` builds it

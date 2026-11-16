@@ -823,35 +823,55 @@ fn shadow_only_models_cast_their_shadow_but_no_camera_draws_them() {
     assert_eq!(scene.check("skinned, shown"), seen + 1);
 }
 
-fn a_kept_cascade_draws_nothing_and_is_right_when_its_turn_comes() {
+fn a_held_cascade_lists_its_casters_and_its_generation_follows_them() {
     let mut scene = Scene::new(1500);
     scene.lighting.shadow_refresh = 4;
     scene.lighting.shadow_cascades = 4;
-    let mut kept = 0;
+    scene.collect();
+    let mut last = drawn(&scene.frame);
+    let mut generations = scene.frame.shadow_generations;
+    let (mut held, mut followed, mut kept) = (0, 0, 0);
     for frame in 0..24 {
-        // A model moves through the cascades while some are kept.
+        // A model moves through the cascades while some boxes are held.
         let e = scene.models[frame * 31 % scene.models.len()];
         scene.world.get_mut::<Transform3D>(e).unwrap().position.y += 1.5;
         scene.collect();
         // A frame built from nothing draws every cascade, into the same boxes
-        // as the ones this frame drew again.
+        // as the ones this frame fitted anew.
         let fresh = scene.fresh();
         let (now, new) = (drawn(&scene.frame), drawn(&fresh));
+        let previous = |cascade: usize| generations[cascade];
         for cascade in 0..scene.frame.cascades {
             let of = |d: &Drawn| d.iter().filter(|r| r.0 == 1 + cascade).cloned().collect::<Vec<_>>();
-            if scene.frame.redrawn & (1 << cascade) == 0 {
+            let same_generation = scene.frame.shadow_generations[cascade] == previous(cascade);
+            if of(&now) != of(&last) {
+                // What a renderer keeps by generation must be what it drew.
                 assert!(
-                    of(&now).is_empty(),
-                    "frame {frame}: kept cascade {cascade} draws nothing"
+                    !same_generation,
+                    "frame {frame}: cascade {cascade} changed, its generation too"
                 );
+                followed += 1;
+            } else if same_generation {
                 kept += 1;
+            }
+            if scene.frame.redrawn & (1 << cascade) == 0 {
+                // A held box lists its casters as any other.
+                assert!(
+                    !of(&now).is_empty(),
+                    "frame {frame}: held cascade {cascade} lists its casters"
+                );
+                held += 1;
             } else if scene.frame.sun_view_proj[cascade] == fresh.sun_view_proj[cascade] {
                 assert!(of(&now) == of(&new), "frame {frame}: cascade {cascade}");
             }
         }
         assert!(now.iter().filter(|r| r.0 == 0).eq(new.iter().filter(|r| r.0 == 0)));
+        last = now;
+        generations = scene.frame.shadow_generations;
     }
-    assert!(kept > 10, "the far cascades were kept on most frames");
+    assert!(held > 10, "far boxes were held on most frames: {held}");
+    assert!(followed > 10, "the moving model changed cascades' lists: {followed}");
+    assert!(kept > 10, "unchanged lists keep their generation: {kept}");
 }
 
 fn models_are_counted_once_each_also_in_cascades_that_are_kept() {
@@ -871,14 +891,15 @@ fn models_are_counted_once_each_also_in_cascades_that_are_kept() {
             .sum::<usize>()
     });
     assert!(models < instances, "{models} models in {instances} instances");
-    // Nothing moves: as many models whichever cascades a frame draws again.
-    let mut fewest = scene.frame.drawn;
+    // Nothing moves: as many models whichever boxes a frame holds, and the
+    // same caster lists (by generation) every frame.
+    let generations = scene.frame.shadow_generations;
     for _ in 0..8 {
         scene.collect();
         assert_eq!(scene.frame.models, models);
-        fewest = fewest.min(scene.frame.drawn);
+        assert_eq!(scene.frame.drawn, instances, "every cascade lists its casters");
+        assert_eq!(scene.frame.shadow_generations, generations, "nothing changed");
     }
-    assert!(fewest < instances, "some frames kept a cascade's map");
 }
 
 fn moved_models_are_listed_with_where_they_were() {
@@ -1236,6 +1257,54 @@ fn while_most_models_move_their_culling_isnt_counted() {
     assert_eq!(outside, 6000 - scene.frame.visible);
 }
 
+fn models_on_layers_the_camera_leaves_out_cast_their_shadow_only() {
+    use crate::camera::RenderLayers;
+    let mut scene = Scene::new(400);
+    let seen = scene.check("every layer");
+    let casting = shadow_instances(&scene.frame);
+    let models = scene.models.clone();
+    // Half the models on layer 1, which the camera leaves out.
+    for &e in models.iter().step_by(2) {
+        scene.world.insert(e, RenderLayers::layer(1));
+    }
+    assert_eq!(scene.check("layer 1 on, camera draws all"), seen);
+    scene.camera.layers = RenderLayers::ALL.without(1);
+    let fewer = scene.check("layer 1 left out");
+    assert!(fewer < seen && fewer > 0, "{fewer} of {seen}");
+    assert_eq!(shadow_instances(&scene.frame), casting, "every shadow still falls");
+    // Moved to another layer the camera draws: seen again, in place.
+    scene.world.insert(models[0], RenderLayers::layer(2));
+    scene.check("one moved to layer 2");
+    // A camera of layer 1 only: just those.
+    scene.camera.layers = RenderLayers::layer(1);
+    let only = scene.check("only layer 1");
+    assert!(only > 0 && only < seen, "{only}");
+    // A skinned model leaves out the same way.
+    let body = scene.world.spawn((RenderLayers::layer(3),));
+    let matrix = Mat4::from_translation(Vec3::new(0.0, 0.0, 1.0));
+    scene.skins.draws = vec![SkinDraw {
+        mesh: 1,
+        instance: Instance3D {
+            model: matrix.to_cols_array_2d(),
+            color: [1.0; 4],
+        },
+        entity: body.to_bits(),
+        matrix,
+        scale: 1.0,
+        bounds: (Vec3::ZERO, 1.0),
+        first: 0,
+        morph_first: 0,
+        morph_count: 0,
+        material: u32::MAX,
+        parts: (0, 0),
+        lod: u32::MAX,
+        posed_motion: false,
+    }];
+    assert_eq!(scene.check("skinned, another layer"), only);
+    scene.camera.layers = RenderLayers::ALL;
+    assert_eq!(scene.check("every layer again"), seen + 1);
+}
+
 fn a_target_cameras_view_keeps_up() {
     // A target camera's frame: its own lens and viewport, no shadows and no
     // probes of its own.
@@ -1318,7 +1387,8 @@ both_ways!(
     random_edits_always_draw_what_a_frame_built_from_nothing_draws,
     shadow_only_casters_follow_edits_too,
     shadow_only_models_cast_their_shadow_but_no_camera_draws_them,
-    a_kept_cascade_draws_nothing_and_is_right_when_its_turn_comes,
+    models_on_layers_the_camera_leaves_out_cast_their_shadow_only,
+    a_held_cascade_lists_its_casters_and_its_generation_follows_them,
     models_are_counted_once_each_also_in_cascades_that_are_kept,
     moved_models_are_listed_with_where_they_were,
     what_is_kept_per_model_is_bounded_and_stops_growing,
@@ -1336,3 +1406,65 @@ both_ways!(
     a_target_cameras_view_keeps_up,
     the_views_around_the_probes_keep_up,
 );
+
+#[test]
+fn window_views_collect_without_allocating_once_warm() {
+    let mut scene = Scene::new(400);
+    scene.lighting.shadows = true;
+    scene.lighting.light_shadow_views = 2;
+    let cone = SpotLight3D {
+        shadows: true,
+        range: 15.0,
+        ..Default::default()
+    };
+    scene
+        .world
+        .spawn((Transform3D::at(Vec3::new(6.0, 5.0, 2.0)).looking_at(Vec3::ZERO), cone));
+    let mut settings = crate::render::SceneSettings {
+        camera: scene.camera,
+        lighting: scene.lighting,
+        ..Default::default()
+    };
+    for side in [-1.0, 1.0] {
+        let mut camera = scene.camera;
+        camera.position = Vec3::new(30.0 * side, 12.0, 0.0);
+        camera.look_at(Vec3::ZERO);
+        settings.views.push(crate::d3::View::new(camera));
+    }
+    let line = crate::debug::LineInstance {
+        a: [0.0; 3],
+        width: 2.0,
+        b: [1.0; 3],
+        color: [255; 4],
+    };
+    let frame = |scene: &mut Scene, count: bool| {
+        let frame = &mut scene.frame;
+        frame.debug_lines.clear();
+        frame.debug_lines.tested.push(line);
+        frame.shadow_views.clear();
+        frame.shadow_views.extend(settings.views.iter().map(|v| v.camera));
+        frame.collect(
+            &mut scene.world,
+            &scene.assets,
+            &scene.skins,
+            &scene.camera,
+            &scene.lighting,
+        );
+        let mut views =
+            || super::api::collect_window_views(&mut scene.world, &scene.assets, frame, &settings, &scene.skins);
+        if count {
+            crate::three::lights::tests::count_allocations(views).1
+        } else {
+            views();
+            0
+        }
+    };
+    // Negative control: the first collection grows the views' buffers.
+    assert!(frame(&mut scene, true) > 0, "a cold collection allocates");
+    for _ in 0..3 {
+        frame(&mut scene, false);
+    }
+    assert!(scene.frame.window_views.iter().all(|v| v.debug_lines.tested == [line]));
+    assert!(scene.frame.window_views.iter().all(|v| !v.runs.is_empty()));
+    assert_eq!(frame(&mut scene, true), 0, "two views, collected again");
+}

@@ -6,6 +6,8 @@ use std::io::{Read, Write};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::Value;
 
+use super::JsonValue;
+
 use crate::error::{Error, ErrorKind};
 
 /// The first bytes of a binary save. `0x89` is never the first byte of JSON
@@ -74,7 +76,7 @@ impl SaveFormat {
 
     /// `save` in this format. Never fails: any JSON value can be written.
     #[must_use]
-    pub fn encode(self, save: &Value) -> Vec<u8> {
+    pub fn encode(self, save: &JsonValue) -> Vec<u8> {
         match self {
             Self::Json => serde_json::to_vec_pretty(save).expect("a JSON value always serializes"),
             Self::Binary => {
@@ -104,7 +106,7 @@ impl SaveFormat {
     /// [`ErrorKind::Json`] for JSON text that doesn't parse;
     /// [`ErrorKind::Decode`] for a binary save that is cut short, damaged
     /// (its checksum doesn't match) or of a layout this engine doesn't know.
-    pub fn decode(bytes: &[u8]) -> Result<Value, Error> {
+    pub fn decode(bytes: &[u8]) -> Result<JsonValue, Error> {
         let Some(rest) = bytes.strip_prefix(MAGIC) else {
             return serde_json::from_slice(bytes).map_err(Error::from);
         };

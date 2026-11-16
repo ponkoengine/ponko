@@ -20,7 +20,7 @@ boundary, and `each_par` runs them on all cores.
 
 ## Get the library
 
-**From a release.** Each GitHub release, starting with 0.1.0, has an archive
+**From a release.** Each release, starting with 0.1.0, has an archive
 per platform: `ponko-v0.1.0-linux-x86_64.tar.gz`,
 `ponko-v0.1.0-macos-arm64.tar.gz` and `ponko-v0.1.0-windows-x86_64.zip`.
 Each holds
@@ -140,11 +140,21 @@ it takes (see [Queries](ecs.md#queries)); `world.query<A, B>(fn)` hands you
 whole arrays instead. While a loop runs, the world and context are busy:
 other world or context calls throw (C: return `PONKO_BUSY`), except
 
-- commands: `despawn_later`, `spawn_later`, `set_later`, `remove_later`,
-  applied when the system returns (in `each` and `query`, not in the `_par`
+- commands: `despawn_later`, `despawn_recursive_later`, `spawn_later`,
+  `set_later`, `remove_later`, applied when the system returns (in `each` and `query`, not in the `_par`
   versions);
 - events: `send` and `read` (also not in the `_par` versions; see
   [Events](events.md));
+- debug shapes (`debug()`, but not `frustum`), the 2D draw calls `draw`,
+  `draw_rect`, `draw_line` and `draw_circle`, and `play_sound` (also not in
+  the `_par` versions), so a loop can draw a bar or play a step for each
+  entity it visits;
+- 2D and 3D physics queries (`cast_ray` and the other casts, overlaps,
+  `closest_point`, `penetrations`, and their `3d` forms such as `cast_ray3d`
+  and `overlap_sphere3d`) and a third-person camera's `update_physics` (not
+  in the `_par` versions), so a loop can check the ground under each body or
+  have the camera follow the character. Anything that changes physics
+  (gravity, impulses, bodies) is still refused inside a loop;
 - spatial queries, and the clock values `dt()`, `sim_tick()`, `random()`.
 
 `each_par` and `query_par` split archetypes into slices and run your function
@@ -319,6 +329,84 @@ The older `ponko_ctx_load_texture` and friends keep their status codes; the
 C++ `load_*` calls now use the `try_` functions, so the `ponko::error` they
 throw has the real kind and path.
 
+`PONKO_UNSUPPORTED` means this machine or build can't do it.
+`ponko_game_run` returns it when the game can't start here: no usable GPU or
+graphics device, no window or event loop, or a library built without the
+`window` feature. A launcher can then show its own message or fall back to
+another mode; `ponko_last_error()` says what was missing. (Earlier releases
+returned `PONKO_INVALID_ARGUMENT` there.) C++'s `game::run` throws a
+`ponko::error` of kind `PONKO_ERROR_UNSUPPORTED` as before. Treat any status
+but `PONKO_OK` as a failure: new ones can arrive in any release.
+
+## Settings that can grow
+
+A C struct can't gain a field without breaking programs built against the
+older header, so the ABI 2 settings structs (`PonkoMaterialDesc`,
+`PonkoNavBakeSettings`, `PonkoLighting`, `PonkoCollider`, ...) stay as they
+are. Settings that grow get a **versioned descriptor** beside them, named
+`...Ex`: it starts with `struct_size` and `version`, holds the ABI 2 struct,
+then the fields added since. Set the two header fields, fill it with its
+`_defaults` call (or read the current values), change what you need:
+
+```c
+{{#include ../../examples/cpp/guide.c:versioned_descriptor}}
+```
+
+The library reads only the fields of the version you compiled against, so a
+program built today keeps working with a library that has added fields: they
+get their defaults. It refuses a descriptor whose header wasn't set, or that
+comes from a newer `ponko.h` than the library, and it never keeps a pointer
+to it. The full rule is in
+[STABILITY.md](../../STABILITY.md) ("Versioned descriptors").
+
+| Descriptor | Calls | What it adds to ABI 2 |
+|---|---|---|
+| `PonkoMaterialDescEx` | `ponko_ctx_create_material_ex`, `ponko_ctx_update_material_ex` | the stencil state, in the same description |
+| `PonkoNavBakeSettingsEx` | `ponko_ctx_bake_navmesh_ex` | nothing yet: the place new bake settings go |
+| `PonkoLightingEx` | `ponko_ctx_lighting_ex`, `ponko_ctx_set_lighting_ex` | `shadow_sun_size` (the sun's size for contact-hardening shadows) and `shadow_sun_step` |
+| `PonkoColliderEx` | `ponko_set_collider_ex`, `ponko_get_collider_ex` | a 2D collider's collision groups and polygon corners, in one call |
+| `PonkoQueryFilterEx` | the `ponko_ctx_*_ex` 2D and 3D queries | one filter for both, collision groups included |
+| `PonkoPostEx` | `ponko_ctx_post_ex`, `ponko_ctx_set_post_ex`, `ponko_post_ex_lerp`, `ponko_post_blend_volumes` | split toning, depth of field and the sample count (`msaa`); blending two looks, and post volumes (`PonkoPostVolume` boxes) |
+| `PonkoParticleSettings3DEx` | `ponko_particle_settings3d_ex_defaults`, `ponko_ctx_set_particle_emitter3d_ex` | `softness`: soft particles |
+| `PonkoCamera3DEx` | `ponko_ctx_camera3d_ex`, `ponko_ctx_set_camera3d_ex`, `ponko_camera3d_ex_from` | `occlusion_culling` and `particles` (whether it draws particles, trails and lines) |
+| `PonkoTargetCameraEx` | `ponko_ctx_set_target_cameras_ex`, `ponko_ctx_target_camera_ex`, `ponko_target_camera_ex_from` | `particles`, per target camera |
+| `PonkoWindowModeEx`, `PonkoWindowVideoModeEx` | `ponko_ctx_window_mode_ex`, `ponko_ctx_window_set_mode_ex`, `ponko_ctx_window_video_mode_ex` | new in this release (no ABI 2 struct): the [window](window.md#c-and-c) mode and a monitor's exclusive modes |
+| `PonkoWindowPropertiesEx`, `PonkoWindowStateEx`, `PonkoWindowMonitorEx`, `PonkoWindowImageEx`, `PonkoWindowEventEx` | `ponko_ctx_window_properties_ex`, `ponko_ctx_window_state_ex`, `ponko_ctx_window_monitor_ex`, `ponko_ctx_window_set_icon_ex`, `ponko_ctx_window_set_cursor_image_ex`, `ponko_ctx_window_event_ex` | new in this release: requested and reported window state, monitors, icon and cursor images, window events |
+
+In C++ the same types are `ponko::material_desc_ex`,
+`nav_bake_settings_ex`, `lighting_ex`, `collider_ex`, `query_filter_ex`,
+`post_ex`, `camera3d_ex` and `target_camera_ex`.
+`material_desc_ex_of(desc)`, `nav_bake_ex_defaults()`,
+`lighting_ex_defaults()`, `collider_ex_of(collider)`,
+`query_filter_ex_of(filter)`, `post_ex_defaults()`, `camera3d_ex_of(camera)`
+and `target_camera_ex_of(camera)` fill the header for you; `ctx::lighting_ex`,
+`ctx::set_lighting`, `ctx::create_material`, `ctx::update_material`,
+`ctx::bake_navmesh`, `world_view::set`, `world_view::get_collider_ex`,
+`ctx::post_ex`, `ctx::set_post`, `ctx::camera3d_ex`, `ctx::set_camera3d`,
+`ctx::target_camera_ex` and `ctx::set_target_cameras_ex` take them. The C++
+query methods keep taking `filter2d` and `filter3d`, which carry the
+collision groups already, and `particle_settings` has `softness` (its
+`ctx::set_particle_emitter3d` calls the versioned entry point). The 3D picture's
+descriptors are shown in [3D: split toning and depth of
+field](3d.md#split-toning-and-depth-of-field), [soft particles](3d.md#soft-particles) and
+[render targets](3d.md#render-targets):
+
+```c
+{{#include ../../examples/cpp/guide.c:versioned_post}}
+```
+
+An array of descriptors can't have a stride that older callers agree on, so a
+list of them is passed as an array of pointers (`ponko_ctx_set_target_cameras_ex`),
+and a struct that is only a plain box around one (`PonkoPostVolume`) points at
+its descriptor.
+
+`scripts/check-settings-fields.py` (part of `check-ffi-coverage.py`) keeps
+this complete: every public field of a Rust settings struct (`Post`,
+`ParticleSettings`, `Camera`, `Lighting`, `MaterialDesc`, ...) has a field of
+the same name in its C struct or descriptor, or a line in
+`scripts/settings-fields.txt` that names where C sets it, or a Rust-only entry
+with its reason.
+
 ## C functions without a C++ wrapper
 
 Every C function in `ponko.h` has a C++ wrapper in `ponko.hpp`, except these,
@@ -326,6 +414,7 @@ where C++ does the same thing another way:
 
 | C function | In C++ |
 |---|---|
+| `ponko_ctx_ui_push_screen` | `ui::push_screen`, including its deprecated bool overload, uses `ponko_ctx_ui_push_screen_with_mode` |
 | `ponko_ctx_load_texture`, `ponko_ctx_load_mesh`, `ponko_ctx_load_sound`, `ponko_ctx_load_stream`, `ponko_ctx_load_font` | `ctx::load_*` call the `ponko_ctx_try_load_*` functions, so the `ponko::error` they throw has the kind and path |
 | `ponko_query`, `ponko_query_par` | `world_view::each` and `query` (and the `_par` versions) call `ponko_query_with`, `ponko_query_filtered` or `ponko_query_cached`, which also take change filters |
 | `ponko_filter_check` | `with`, `without`, `or_` and `all_of` are C++ types; the query checks them when it runs |
@@ -333,6 +422,10 @@ where C++ does the same thing another way:
 | `ponko_entity_bits` | `ponko::bits(entity)`, inline |
 | `ponko_text3d_default` | `ponko::text3d{}`: its member initializers are the same defaults |
 | `ponko_game_plugin` | `game::plugin(object)`, for any object with `build(ponko::game&)` and an optional `setup(ponko::ctx&)` |
+| `ponko_ctx_spawn_later` | `ctx::spawn_later` calls `ponko_ctx_spawn_later_entity`, so it can return the new entity |
+| `ponko_ctx_cast_ray_filtered`, `ponko_ctx_overlap_ball` (2D) | `ctx::cast_ray_filtered` and `ctx::overlap_ball` call `ponko_ctx_cast_ray2d` and `ponko_ctx_overlap_circle2d`, which also take the `filter2d`'s collision groups |
+| `ponko_ctx_cast_ray2d_ex`, `ponko_ctx_cast_ray2d_all_ex`, `ponko_ctx_cast_circle2d_ex`, `ponko_ctx_cast_box2d_ex`, `ponko_ctx_cast_capsule2d_ex`, `ponko_ctx_overlap_point2d_ex`, `ponko_ctx_overlap_circle2d_ex`, `ponko_ctx_overlap_box2d_ex`, `ponko_ctx_overlap_capsule2d_ex`, `ponko_ctx_closest_point2d_ex`, `ponko_ctx_penetrations2d_ex`, `ponko_ctx_cast_ray3d_ex`, `ponko_ctx_cast_ray3d_all_ex`, `ponko_ctx_cast_sphere3d_ex`, `ponko_ctx_cast_capsule3d_ex`, `ponko_ctx_cast_box3d_ex`, `ponko_ctx_overlap_point3d_ex`, `ponko_ctx_overlap_sphere3d_ex`, `ponko_ctx_overlap_box3d_ex`, `ponko_ctx_overlap_capsule3d_ex`, `ponko_ctx_closest_point3d_ex`, `ponko_ctx_penetrations3d_ex` | The `ctx` queries of the same names take a `filter2d` or `filter3d`, which carries the collision groups already; `query_filter_ex_of` turns one into a `PonkoQueryFilterEx` for the C calls |
+| `ponko_ctx_set_particle_emitter3d` | `ctx::set_particle_emitter3d` calls `ponko_ctx_set_particle_emitter3d_ex`, which also takes the settings' `softness` |
 
 `scripts/check-cpp-api.py` keeps this true: CI fails when a C function has no
 C++ wrapper and isn't on this list (`scripts/cpp-c-only.txt`, with the reasons).
@@ -363,16 +456,20 @@ binding arrives:
 | `Storage::write_json`, `Storage::read_json` | [Saves and settings](storage.md#save-slots) | Generic over Rust types; serialize yourself and pass the bytes to `storage_write` and `storage_read` |
 | `SaveFormat`, `Storage::save_world_in_background` | [Saves and settings](storage.md#large-worlds) | Not bound yet: save slots are JSON, written on the game's thread by `ponko_ctx_save_world`; `ponko_ctx_load_world` reads binary slots too |
 | `UiAccessAdapter::for_ns_view` | [Retained game UI](ui.md#the-screen-reader-adapter) | It needs a Rust `Ui`; the engine's own window gets the adapter, and `ponko_ui_access_*` give a snapshot for one of your own |
-| `SplitToning`, `DepthOfField`, `Post::lerp`, `PostVolume` | [3D: split toning and depth of field](3d.md#split-toning-and-depth-of-field) | Not in `PonkoPost` yet (adding fields changes its layout); set the other post settings with `post` and `set_post` |
 | `NavObstacleShape` | [3D navigation meshes](navigation3d.md#obstacle-shapes) | Obstacles are unturned boxes: `ponko_ctx_set_nav_obstacle` and `ponko_ctx_set_nav_carve_obstacle` |
-| `ParticleSettings::softness` | [3D](3d.md#soft-particles) | `PonkoParticleSettings3D`'s layout is fixed: C and C++ particles are drawn hard |
-| `Camera::particles` | [3D](3d.md#render-targets) | `PonkoCamera3D`'s layout is fixed: C and C++ cameras always draw particles, trails and lines |
 | `SkyShader` | [A sky of your own](3d.md#a-sky-of-your-own) | The built-in atmosphere or the flat sky (`PonkoSky`); sky shaders have no C binding yet |
+| `Graphics::stream_instance_cell` | [Streaming instance cells](3d.md#streaming-instance-cells) | Build a cell's matrices on your own threads, then `ponko_ctx_add_instance_cell` (`ctx::add_instance_cell`) on the game's |
+| `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |
+| `Graphics::instance_cell_state` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: a cell added from C is on the GPU at once |
 | `Ui::set_rich`, `Ui::set_inline_image`, `Ui::set_inline_font`, `Ui::link`, `UiEvent::LinkClicked` | [Retained game UI](ui.md#rich-text) | Not bound yet: several labels side by side, each with its own paint; a button for each link |
 | `Graphics::load_lights`, `Graphics::load_cameras` | [3D](3d.md#gltf-extensions-lights-and-cameras) | Models load with the same glTF extensions; a file's lights and cameras aren't returned yet, so place them yourself |
-| `Prediction`, `InputQueue`, `Smoothing` | [Client prediction](networking.md#your-own-player-at-once-client-prediction) | Generic over the game's own state and input types; keep the input history and replay it in your own code |
+| `Smoothing` | [Client prediction](networking.md#your-own-player-at-once-client-prediction) | Generic over what is drawn; prediction and the input queue are bound (`ponko::prediction`), so fade the correction offset (`reconciled::before`) yourself |
+| `GltfScene::load`, `gltf_properties_schema` | [From Blender to the game](blender.md#c-and-c) | Spawn the file with `ponko_ctx_spawn_gltf` and read its nodes from the entities; `PONKO_SCHEMA=<file>` (`ponko schema`) writes the schema for any game |
 | `Physics3D::move_character` | [3D physics](physics3d.md#a-walking-character) | Characters walk with the physics step only; one tick can't be replayed on its own |
 | `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ games don't build for the web yet |
+| `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |
+| `perf::net_alloc_bytes` | [Profiling](profiling.md) | C and C++ count the frees of their own memory nowhere; `ponko_ctx_live_counts` and the asset inventory are the leak checks |
+| `Animator::normalized_time_f64`, `Skeleton::normalized_time_f64` | [The simulation clock](sim-clock.md#very-long-sessions) | The C API reads the `f32` normalized time; its steps get coarse after hours of one looping state |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in

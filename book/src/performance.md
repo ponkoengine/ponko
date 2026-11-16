@@ -7,8 +7,8 @@ These are historical measurements made under the Ponko name, retained
 without rerunning them for the Ponko documentation update. They are specific
 workload results, not current-version guarantees or proof of overall engine
 superiority. See [the engine comparison](comparison.md) and baseline issues
-[#132](https://github.com/ponkoengine/ponko/issues/132) and
-[#134](https://github.com/ponkoengine/ponko/issues/134) for measurement scope.
+#132 and
+#134 for measurement scope.
 
 ## ECS iteration
 
@@ -688,7 +688,7 @@ Run it yourself:
 - Ponko: `CUBES=100000 BENCH_SECONDS=10 cargo run --release --features 3d --example 3d`
   (fullscreen; `BENCH_WINDOWED=1` keeps the window).
 - Unity: the project and the steps are in
-  [`bench/unity`](https://github.com/ponkoengine/ponko/tree/main/bench/unity).
+  [`bench/unity`](../../bench/unity).
 
 On macOS, a game in a window is shown at most once per display refresh
 even with vsync off. To measure past 120 FPS, run fullscreen

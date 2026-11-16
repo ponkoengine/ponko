@@ -1,8 +1,10 @@
 //! The 2D camera, public as [`d2::Camera`](crate::d2::Camera).
 
+#![deny(missing_docs)]
+
 use glam::{Mat4, Vec2, vec4};
 
-use crate::camera::Rect;
+use crate::camera::{Rect, RenderLayers, Viewport};
 
 /// Which part of the world the window shows: [`ctx.camera`](crate::ctx::Ctx::camera).
 ///
@@ -22,12 +24,23 @@ use crate::camera::Rect;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera2D {
-    /// The world point at the window's top-left corner.
+    /// The world point at the top-left corner of the part of the window
+    /// it draws into ([`rect`](Self::rect)): the window's corner by default.
     pub position: Vec2,
     /// Window pixels per world unit: 2 shows everything twice as big.
     pub zoom: f32,
-    /// Window size in pixels, kept up to date by the engine.
-    viewport: Vec2,
+    /// The part of the window it draws into: the whole window by default.
+    /// Split screen and minimaps give each camera its own (see
+    /// [`d2::View`](crate::d2::View)); its conversions, [`viewport`](Self::viewport)
+    /// and [`visible_rect`](Self::visible_rect) follow it at once.
+    pub rect: Viewport,
+    /// Which [`RenderLayers`] it draws: all by default. Sprites drawn on
+    /// other layers (see [`Graphics::set_layers`](crate::gfx::Graphics::set_layers))
+    /// don't show through it.
+    pub layers: RenderLayers,
+    /// The window's size in logical pixels, kept up to date by the engine;
+    /// its part of it comes from `rect`.
+    window: Vec2,
 }
 
 impl Camera2D {
@@ -38,15 +51,39 @@ impl Camera2D {
         Self {
             position: Vec2::ZERO,
             zoom: 1.0,
-            viewport,
+            rect: Viewport::FULL,
+            layers: RenderLayers::ALL,
+            window: viewport,
         }
     }
 
-    pub(crate) fn set_viewport(&mut self, viewport: Vec2) {
-        self.viewport = viewport;
+    /// Learns the window's size (its part of it comes from its
+    /// [`rect`](Self::rect)).
+    pub(crate) fn place(&mut self, window: Vec2) {
+        self.window = window;
     }
 
-    /// The window size in pixels.
+    /// Its part of the window's top-left corner, in logical pixels.
+    fn origin(&self) -> Vec2 {
+        self.rect.pixels(self.window).min
+    }
+
+    /// The part of the window it draws into, in logical pixels (the whole
+    /// window unless its [`rect`](Self::rect) says otherwise).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("Duel", 800, 600).run_headless(1, |ctx| {
+    ///     assert_eq!(ctx.camera.screen_rect(), Rect::new(0.0, 0.0, 800.0, 600.0));
+    /// });
+    /// ```
+    #[must_use]
+    pub fn screen_rect(&self) -> Rect {
+        self.rect.pixels(self.window)
+    }
+
+    /// The size in pixels of the part of the window it draws into: the
+    /// window's size unless its [`rect`](Self::rect) says otherwise.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -57,7 +94,7 @@ impl Camera2D {
     /// ```
     #[must_use]
     pub fn viewport(&self) -> Vec2 {
-        self.viewport
+        self.rect.pixels(self.window).size()
     }
 
     /// The world point under window pixel `screen`.
@@ -73,7 +110,7 @@ impl Camera2D {
     /// ```
     #[must_use]
     pub fn screen_to_world(&self, screen: Vec2) -> Vec2 {
-        self.position + screen / self.zoom
+        self.position + (screen - self.origin()) / self.zoom
     }
 
     /// The window pixel where world point `world` appears.
@@ -87,7 +124,7 @@ impl Camera2D {
     /// ```
     #[must_use]
     pub fn world_to_screen(&self, world: Vec2) -> Vec2 {
-        (world - self.position) * self.zoom
+        self.origin() + (world - self.position) * self.zoom
     }
 
     /// The world point in the middle of the window.
@@ -101,7 +138,7 @@ impl Camera2D {
     /// ```
     #[must_use]
     pub fn center(&self) -> Vec2 {
-        self.position + self.viewport / (2.0 * self.zoom)
+        self.position + self.viewport() / (2.0 * self.zoom)
     }
 
     /// Moves the camera so `world` is in the middle of the window. Call it
@@ -114,7 +151,7 @@ impl Camera2D {
     /// # }
     /// ```
     pub fn look_at(&mut self, world: Vec2) {
-        self.position = world - self.viewport / (2.0 * self.zoom);
+        self.position = world - self.viewport() / (2.0 * self.zoom);
     }
 
     /// Multiplies the zoom by `factor`, keeping the world point under window
@@ -135,7 +172,7 @@ impl Camera2D {
         let anchor = self.screen_to_world(screen);
         let (lo, hi) = Self::ZOOM_LIMITS;
         self.zoom = (self.zoom * factor).clamp(lo, hi);
-        self.position = anchor - screen / self.zoom;
+        self.position = anchor - (screen - self.origin()) / self.zoom;
     }
 
     /// The part of the world the window shows.
@@ -150,13 +187,13 @@ impl Camera2D {
     pub fn visible_rect(&self) -> Rect {
         Rect {
             min: self.position,
-            max: self.position + self.viewport / self.zoom,
+            max: self.position + self.viewport() / self.zoom,
         }
     }
 
     /// World → clip space for the GPU.
     pub(crate) fn view_proj(&self) -> Mat4 {
-        let size = self.viewport.max(Vec2::ONE);
+        let size = self.viewport().max(Vec2::ONE);
         let (sx, sy) = (2.0 * self.zoom / size.x, -2.0 * self.zoom / size.y);
         Mat4::from_cols(
             vec4(sx, 0.0, 0.0, 0.0),
@@ -182,6 +219,25 @@ mod tests {
         assert!(clip(Vec2::ZERO).abs_diff_eq(Vec2::new(-1.0, 1.0), 1e-6));
         assert!(clip(Vec2::new(800.0, 600.0)).abs_diff_eq(Vec2::new(1.0, -1.0), 1e-6));
         assert_eq!(c.screen_to_world(Vec2::new(10.0, 20.0)), Vec2::new(10.0, 20.0));
+    }
+
+    #[test]
+    fn a_camera_in_part_of_the_window_converts_from_that_part() {
+        let mut c = cam();
+        c.rect = Viewport::split(2, 1);
+        c.place(Vec2::new(800.0, 600.0));
+        assert_eq!(c.viewport(), Vec2::new(400.0, 600.0));
+        assert_eq!(c.screen_rect(), Rect::new(400.0, 0.0, 400.0, 600.0));
+        c.position = Vec2::new(10.0, 20.0);
+        c.zoom = 2.0;
+        // The right half's top-left corner shows the camera's position.
+        assert_eq!(c.screen_to_world(Vec2::new(400.0, 0.0)), Vec2::new(10.0, 20.0));
+        assert_eq!(c.world_to_screen(Vec2::new(10.0, 20.0)), Vec2::new(400.0, 0.0));
+        let w = Vec2::new(-30.0, 77.0);
+        assert!(c.screen_to_world(c.world_to_screen(w)).abs_diff_eq(w, 1e-4));
+        let before = c.screen_to_world(Vec2::new(500.0, 100.0));
+        c.zoom_at(Vec2::new(500.0, 100.0), 1.5);
+        assert!(c.screen_to_world(Vec2::new(500.0, 100.0)).abs_diff_eq(before, 1e-3));
     }
 
     #[test]

@@ -233,7 +233,7 @@ pub(crate) fn check_aliasing<Q: QueryData>(world: &World, ids: &Q::Ids) {
         for &(other, other_mut) in &seen[..n] {
             if other == id && (mutable || other_mut) {
                 panic!(
-                    "query `{}` accesses `{}` twice, once mutably; that would alias",
+                    "query `{}` accesses `{}` twice, once mutably; remove the duplicate access or split it into sequential queries",
                     std::any::type_name::<Q>(),
                     world.component_info(id).name()
                 );

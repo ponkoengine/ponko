@@ -461,7 +461,7 @@ mod files {
     #[test]
     fn unloading_many_different_files_returns_to_baseline() {
         headless(|ctx| {
-            let mut pack = MemorySource::new("pack");
+            let mut pack = ponko::assets::MemorySource::new("pack");
             for i in 0..30 {
                 pack = pack.with(format!("models/house{i}.glb"), HOUSE);
             }

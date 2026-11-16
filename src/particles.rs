@@ -30,5 +30,7 @@
 //! world.spawn((ponko::d2::Transform::at(vec2(400.0, 300.0)), ParticleEmitter::new(sparks)));
 //! ```
 
+#![deny(missing_docs)]
+
 #[doc(inline)]
 pub use crate::particles2d::{ParticleCurve, ParticleGradient, ParticleSpace};

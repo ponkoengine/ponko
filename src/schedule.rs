@@ -136,6 +136,7 @@
 //! let stages = plan.stages_in(Phase::AfterPhysics);
 //! assert_eq!((stages[0].len, stages[1].len), (2, 1));
 //! ```
+#![deny(missing_docs)]
 
 use std::fmt;
 
@@ -150,6 +151,18 @@ use crate::game::SystemId;
 pub const DEFAULT_PARALLEL_THRESHOLD: std::time::Duration = std::time::Duration::from_micros(50);
 
 /// Why a system runs alone, as a stage of its own.
+///
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::schedule::Alone;
+/// // A system without a declaration may use anything, so it runs alone.
+/// let plan = Game::new("alone", 1, 1)
+///     .add(Phase::AfterPhysics, (|_: &mut Ctx| {}).named("plain"))
+///     .schedule_plan();
+/// let plain = plan.systems.iter().find(|s| s.name == "plain").unwrap();
+/// assert_eq!(plain.alone, Some(Alone::Undeclared));
+/// assert_eq!(Alone::Undeclared.to_string(), "undeclared");
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Alone {
@@ -169,6 +182,12 @@ pub enum Alone {
     /// A view system that runs at an interval (not every tick): a batch
     /// runs as a whole, so a system that skips ticks stays out of it.
     Interval,
+    /// A view system with a run condition that takes `&Ctx`
+    /// ([`IntoSystem::run_if`](crate::game::IntoSystem::run_if) with a
+    /// closure): the closure may read anything, so it is checked right
+    /// before the system, alone. State conditions
+    /// ([`in_state`](crate::state::in_state)) don't do this.
+    Condition,
 }
 
 impl fmt::Display for Alone {
@@ -179,6 +198,7 @@ impl fmt::Display for Alone {
             Alone::Service(s) => write!(f, "holds service `{s}`"),
             Alone::SendsAndReads(n) => write!(f, "sends and reads events `{n}`"),
             Alone::Interval => f.write_str("runs at an interval"),
+            Alone::Condition => f.write_str("has a run condition that takes `&Ctx`"),
         }
     }
 }
@@ -211,6 +231,23 @@ impl fmt::Display for OrderError {
 impl std::error::Error for OrderError {}
 
 /// One system of a [`SchedulePlan`].
+///
+/// ```
+/// use ponko::access::SystemAccess;
+/// use ponko::prelude::*;
+/// use ponko::system_view::SystemView;
+/// #[derive(Component)]
+/// struct A;
+/// #[derive(Component)]
+/// struct B;
+/// let plan = Game::new("plan", 1, 1)
+///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<A>()).named("a"))
+///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<B>()).named("b"))
+///     .schedule_plan();
+/// let a = plan.systems.iter().find(|s| s.name == "a").unwrap();
+/// assert_eq!(a.phase, Phase::AfterPhysics);
+/// assert_eq!(a.alone, None, "a view system with a declaration can share a batch");
+/// ```
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct PlannedSystem {
@@ -230,6 +267,39 @@ pub struct PlannedSystem {
 /// Why a stage starts where it does: what keeps its first system out of
 /// the stage before it. Also, per system ([`PlannedSystem::boundary`]),
 /// what keeps that system out of the stage before its own.
+///
+/// ```
+/// use ponko::access::SystemAccess;
+/// use ponko::prelude::*;
+/// use ponko::schedule::Boundary;
+/// use ponko::system_view::SystemView;
+/// #[derive(Component)]
+/// struct A;
+/// #[derive(Component)]
+/// struct B;
+/// let mut game = Game::new("boundary", 1, 1);
+/// let a = game.add_system(
+///     Phase::AfterPhysics,
+///     (|_: &mut SystemView| {}).access(SystemAccess::new().write::<A>()).named("a"),
+/// );
+/// let b = game.add_system(
+///     Phase::AfterPhysics,
+///     (|_: &mut SystemView| {}).access(SystemAccess::new().write::<B>()).named("b"),
+/// );
+/// let c = game.add_system(
+///     Phase::AfterPhysics,
+///     (|_: &mut SystemView| {}).access(SystemAccess::new().write::<A>()).named("c"),
+/// );
+/// // `c` writes what `a` writes: it can't join their batch.
+/// let plan = game.schedule_plan();
+/// let c_stage = &plan.stages[plan.stage_of("c").unwrap()];
+/// assert!(matches!(c_stage.boundary, Boundary::Conflict { .. }));
+/// // `order` keeps `b` after `a` although they don't conflict.
+/// let plan = game.order(a, b).schedule_plan();
+/// let b_stage = &plan.stages[plan.stage_of("b").unwrap()];
+/// assert!(matches!(b_stage.boundary, Boundary::Order { .. }));
+/// # let _ = c;
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Boundary {
@@ -273,6 +343,30 @@ pub enum Boundary {
 /// The members are in registration order, but need not be neighbours: a
 /// system that doesn't interact with the systems registered before it may
 /// join an earlier stage than theirs.
+///
+/// ```
+/// use ponko::access::SystemAccess;
+/// use ponko::prelude::*;
+/// use ponko::system_view::SystemView;
+/// #[derive(Component)]
+/// struct A;
+/// #[derive(Component)]
+/// struct B;
+/// # #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+/// # enum Screen { Playing }
+/// let plan = Game::new("stage", 1, 1)
+///     .state(Screen::Playing)
+///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<A>()))
+///     // A state condition reads only the state: the system still shares the batch.
+///     .add(
+///         Phase::AfterPhysics,
+///         (|_: &mut SystemView| {}).access(SystemAccess::new().write::<B>()).run_if(in_state(Screen::Playing)),
+///     )
+///     .schedule_plan();
+/// let stage = plan.stages_in(Phase::AfterPhysics)[0];
+/// assert!(stage.is_batch());
+/// assert_eq!((stage.len, stage.systems()), (2, &[stage.first, stage.first + 1][..]));
+/// ```
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Stage {
@@ -293,12 +387,44 @@ pub struct Stage {
 impl Stage {
     /// The indexes of its systems in [`SchedulePlan::systems`], in
     /// registration order (the same as [`members`](Self::members)).
+    ///
+    /// ```
+    /// use ponko::access::SystemAccess;
+    /// use ponko::prelude::*;
+    /// use ponko::system_view::SystemView;
+    /// #[derive(Component)]
+    /// struct A;
+    /// #[derive(Component)]
+    /// struct B;
+    /// let plan = Game::new("plan", 1, 1)
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<A>()).named("a"))
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<B>()).named("b"))
+    ///     .schedule_plan();
+    /// let stage = plan.stages_in(Phase::AfterPhysics)[0];
+    /// assert_eq!(plan.names(stage), ["a", "b"]);
+    /// assert_eq!(stage.systems(), stage.members.as_slice());
+    /// ```
     #[must_use]
     pub fn systems(&self) -> &[usize] {
         &self.members
     }
 
     /// `true` if more than one system shares the stage.
+    ///
+    /// ```
+    /// use ponko::access::SystemAccess;
+    /// use ponko::prelude::*;
+    /// use ponko::system_view::SystemView;
+    /// #[derive(Component)]
+    /// struct A;
+    /// #[derive(Component)]
+    /// struct B;
+    /// let plan = Game::new("plan", 1, 1)
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<A>()).named("a"))
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<B>()).named("b"))
+    ///     .schedule_plan();
+    /// assert!(plan.stages_in(Phase::AfterPhysics)[0].is_batch());
+    /// ```
     #[must_use]
     pub fn is_batch(&self) -> bool {
         self.len > 1
@@ -313,6 +439,32 @@ impl Stage {
 /// [`Game::parallel_systems`](crate::game::Game::parallel_systems) is on: it shows
 /// what turning it on would run together. Printing it (`{plan}`) lists every
 /// stage with the reason it starts there.
+///
+/// ```
+/// use ponko::access::SystemAccess;
+/// use ponko::prelude::*;
+/// use ponko::schedule::Alone;
+/// use ponko::system_view::SystemView;
+/// #[derive(Component)]
+/// struct A;
+/// #[derive(Component)]
+/// struct B;
+/// let plan = Game::new("plan", 1, 1)
+///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<A>()).named("a"))
+///     // A closure condition may read anything: the system runs alone.
+///     .add(
+///         Phase::AfterPhysics,
+///         (|_: &mut SystemView| {})
+///             .access(SystemAccess::new().write::<B>())
+///             .named("b")
+///             .run_if(|ctx: &Ctx| ctx.time.sim_tick() > 10),
+///     )
+///     .schedule_plan();
+/// assert_eq!(plan.batches().count(), 0);
+/// let b = plan.systems.iter().find(|s| s.name == "b").unwrap();
+/// assert_eq!(b.alone, Some(Alone::Condition));
+/// println!("{plan}");
+/// ```
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct SchedulePlan {
@@ -323,25 +475,119 @@ pub struct SchedulePlan {
 }
 
 impl SchedulePlan {
-    /// The stages of `phase`, in run order.
+    /// Stages of `phase` in run order, without allocating (building the plan
+    /// itself does allocate). [`stages_in`](Self::stages_in) collects them.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let plan = Game::new("plan", 1, 1).system(|_: &mut Ctx| {}).schedule_plan();
+    /// let stages = plan.iter_stages_in(Phase::Frame).count();
+    /// assert_eq!(stages, plan.stages_in(Phase::Frame).len());
+    /// assert!(stages >= 1);
+    /// ```
+    pub fn iter_stages_in(&self, phase: Phase) -> impl Iterator<Item = &Stage> + '_ {
+        self.stages.iter().filter(move |s| s.phase == phase)
+    }
+
+    /// The names of `stage`'s systems in registration order, without
+    /// allocating. `stage` must belong to this plan, as with
+    /// [`names`](Self::names), which collects them.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// fn spin(_: &mut Ctx) {}
+    /// let plan = Game::new("plan", 1, 1).system(spin).schedule_plan();
+    /// let stage = plan.iter_stages_in(Phase::Frame).next().unwrap();
+    /// assert!(plan.iter_names(stage).any(|n| n.ends_with("spin")));
+    /// ```
+    pub fn iter_names<'a>(&'a self, stage: &'a Stage) -> impl Iterator<Item = &'static str> + 'a {
+        stage.members.iter().map(|&i| self.systems[i].name)
+    }
+
+    /// Collects stages of `phase` in run order, allocating; see [`Self::iter_stages_in`].
+    ///
+    /// ```
+    /// use ponko::access::SystemAccess;
+    /// use ponko::prelude::*;
+    /// use ponko::system_view::SystemView;
+    /// #[derive(Component)]
+    /// struct A;
+    /// #[derive(Component)]
+    /// struct B;
+    /// let plan = Game::new("plan", 1, 1)
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<A>()).named("a"))
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<B>()).named("b"))
+    ///     .schedule_plan();
+    /// assert_eq!(plan.stages_in(Phase::AfterPhysics).len(), 1, "a and b share one batch");
+    /// assert!(plan.stages_in(Phase::BeforePhysics).is_empty(), "nothing was added there");
+    /// ```
     #[must_use]
     pub fn stages_in(&self, phase: Phase) -> Vec<&Stage> {
-        self.stages.iter().filter(|s| s.phase == phase).collect()
+        self.iter_stages_in(phase).collect()
     }
 
     /// The stages with more than one system.
+    ///
+    /// ```
+    /// use ponko::access::SystemAccess;
+    /// use ponko::prelude::*;
+    /// use ponko::system_view::SystemView;
+    /// #[derive(Component)]
+    /// struct A;
+    /// #[derive(Component)]
+    /// struct B;
+    /// let plan = Game::new("plan", 1, 1)
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<A>()).named("a"))
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<B>()).named("b"))
+    ///     .schedule_plan();
+    /// let batch = plan.batches().next().unwrap();
+    /// assert_eq!(plan.names(batch), ["a", "b"]);
+    /// assert_eq!(plan.batches().count(), 1);
+    /// ```
     pub fn batches(&self) -> impl Iterator<Item = &Stage> + '_ {
         self.stages.iter().filter(|s| s.is_batch())
     }
 
-    /// The names of `stage`'s systems, in registration order.
+    /// Collects `stage`'s system names in registration order, allocating; see [`Self::iter_names`].
+    ///
+    /// ```
+    /// use ponko::access::SystemAccess;
+    /// use ponko::prelude::*;
+    /// use ponko::system_view::SystemView;
+    /// #[derive(Component)]
+    /// struct A;
+    /// #[derive(Component)]
+    /// struct B;
+    /// let plan = Game::new("plan", 1, 1)
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<A>()).named("a"))
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<B>()).named("b"))
+    ///     .schedule_plan();
+    /// let stage = plan.stages_in(Phase::AfterPhysics)[0];
+    /// assert_eq!(plan.names(stage), ["a", "b"]);
+    /// ```
     #[must_use]
     pub fn names(&self, stage: &Stage) -> Vec<&'static str> {
-        stage.members.iter().map(|&i| self.systems[i].name).collect()
+        self.iter_names(stage).collect()
     }
 
     /// The index of the stage that runs the system named `name` (the first
     /// one, if several systems share the name).
+    ///
+    /// ```
+    /// use ponko::access::SystemAccess;
+    /// use ponko::prelude::*;
+    /// use ponko::system_view::SystemView;
+    /// #[derive(Component)]
+    /// struct A;
+    /// #[derive(Component)]
+    /// struct B;
+    /// let plan = Game::new("plan", 1, 1)
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<A>()).named("a"))
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<B>()).named("b"))
+    ///     .schedule_plan();
+    /// assert_eq!(plan.stage_of("a"), plan.stage_of("b"), "they share a batch");
+    /// assert_eq!(plan.stage_of("missing"), None);
+    /// ```
     #[must_use]
     pub fn stage_of(&self, name: &str) -> Option<usize> {
         let system = self.systems.iter().position(|s| s.name == name)?;
@@ -411,6 +657,8 @@ pub(crate) struct PlanInput<'a> {
     pub(crate) view: bool,
     /// It runs at an interval, not every tick.
     pub(crate) interval: bool,
+    /// It has a run condition that may read anything (a closure).
+    pub(crate) condition: bool,
     /// An explicit barrier was placed before it.
     pub(crate) barrier: bool,
 }
@@ -427,6 +675,9 @@ fn why_alone(s: &PlanInput<'_>) -> Option<Alone> {
     }
     if s.interval {
         return Some(Alone::Interval);
+    }
+    if s.condition {
+        return Some(Alone::Condition);
     }
     access.batch_problem().map(|p| match p {
         Unbatchable::Service(s) => Alone::Service(s),
@@ -650,6 +901,7 @@ mod tests {
             access: Some(access),
             view: true,
             interval: false,
+            condition: false,
             barrier: false,
         }
     }
@@ -847,6 +1099,7 @@ mod tests {
         );
         let every_other_tick = PlanInput {
             interval: true,
+            condition: false,
             ..view("b", &b)
         };
         let plan = plan(&[view("a", &a), every_other_tick, view("c", &c)], &[]);
@@ -1047,6 +1300,7 @@ mod tests {
                     access: (rng.below(10) != 0).then_some(a),
                     view: rng.below(8) != 0,
                     interval: false,
+                    condition: false,
                     barrier: rng.below(10) == 0,
                 })
                 .collect();

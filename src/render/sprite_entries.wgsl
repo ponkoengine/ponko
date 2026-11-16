@@ -28,7 +28,9 @@ fn vs_main(@builtin(vertex_index) vi: u32, inst: SpriteInstance) -> SpriteVertex
         vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
         vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
     );
-    let corner = corners[vi];
+    // Mesh vertices (zero size) draw from one vertex each, so `vi` runs
+    // past the six corners: the corner then doesn't matter.
+    let corner = corners[vi % 6u];
     let local = (corner - inst.pivot) * inst.size;
     let c = cos(inst.rotation);
     let s = sin(inst.rotation);
@@ -37,7 +39,8 @@ fn vs_main(@builtin(vertex_index) vi: u32, inst: SpriteInstance) -> SpriteVertex
     out.clip = camera.view_proj * vec4<f32>(world, 0.0, 1.0);
     out.uv = inst.uv.xy + corner * inst.uv.zw;
     out.color = vec4<f32>(ponko_srgb_to_linear(inst.color.rgb), inst.color.a);
-    out.local = corner;
+    // A mesh vertex carries where it is in the mesh's bounds as its pivot.
+    out.local = select(corner, inst.pivot, all(inst.size == vec2<f32>(0.0)));
     out.world = world;
     return out;
 }

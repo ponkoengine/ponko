@@ -105,9 +105,14 @@ impl Graphics {
     }
 
     /// [`create_texture_array`](Self::create_texture_array) with errors as
-    /// values: [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) for no
-    /// layers, a zero size or a layer of the wrong length,
-    /// [`Limit`](crate::error::ErrorKind::Limit) for one larger than the GPU takes.
+    /// values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) for no layers,
+    /// a zero size or a layer of the wrong length,
+    /// [`Limit`](crate::error::ErrorKind::Limit) for one larger than the GPU
+    /// takes.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -191,12 +196,16 @@ impl Graphics {
             .unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_texture_array`](Self::load_texture_array) with errors as
-    /// values: [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if a file
-    /// is missing, [`Io`](crate::error::ErrorKind::Io) if one can't be read,
-    /// [`Decode`](crate::error::ErrorKind::Decode) if one isn't an image (each with
-    /// that file as its path), and [`Invalid`](crate::error::ErrorKind::Invalid) for
-    /// no files or images of different sizes.
+    /// [`load_texture_array`](Self::load_texture_array) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if a file is
+    /// missing, [`Io`](crate::error::ErrorKind::Io) if one can't be read,
+    /// [`Decode`](crate::error::ErrorKind::Decode) if one isn't an image (each
+    /// with that file as its path), and
+    /// [`Invalid`](crate::error::ErrorKind::Invalid) for no files or images of
+    /// different sizes.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -386,17 +395,34 @@ impl Graphics {
         self.try_set_decal_textures(array).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`set_decal_textures`](Self::set_decal_textures) with errors as
-    /// values: [`ErrorKind::BadHandle`](crate::error::ErrorKind::BadHandle) for an
+    /// [`set_decal_textures`](Self::set_decal_textures) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::BadHandle`](crate::error::ErrorKind::BadHandle) for an
     /// array this game didn't make (or freed),
     /// [`Invalid`](crate::error::ErrorKind::Invalid) for one not made with
     /// [`TextureKind::Data`].
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::terrain::TextureKind;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let pixel: &[u8] = &[255; 4];
+    ///     let color = ctx.gfx.create_texture_array(1, 1, &[pixel], TextureKind::Color);
+    ///     let err = ctx.gfx.try_set_decal_textures(Some(color)).unwrap_err();
+    ///     assert_eq!(err.kind(), ErrorKind::Invalid, "decal images are data, not color");
+    ///     let data = ctx.gfx.create_texture_array(1, 1, &[pixel], TextureKind::Data);
+    ///     assert!(ctx.gfx.try_set_decal_textures(Some(data)).is_ok());
+    ///     assert!(ctx.gfx.try_set_decal_textures(None).is_ok(), "None clears them");
+    /// });
+    /// ```
     pub fn try_set_decal_textures(&mut self, array: Option<TextureArray>) -> Result<(), crate::error::Error> {
         if let Some(a) = array {
             if !self.has_texture_array(a) {
                 return Err(crate::error::Error::new(
                     crate::error::ErrorKind::BadHandle,
-                    "decal textures: that texture array wasn't made by this context",
+                    "decal textures: that texture array wasn't made by this game; create or load it in this game",
                 ));
             }
             if !self.assets3d.array_data.get(a.id as usize).copied().unwrap_or(false) {

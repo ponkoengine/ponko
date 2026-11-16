@@ -6,7 +6,8 @@ use crate::game::{
     PONKO_SYSTEM_ANIMATE_SPRITES, PONKO_SYSTEM_DRAW_PARTICLES, PONKO_SYSTEM_DRAW_SPRITES, PONKO_SYSTEM_DRAW_TILEMAPS,
     PONKO_SYSTEM_FOLLOW_ATTACHMENTS, PONKO_SYSTEM_INTERPOLATE_PHYSICS3D, PONKO_SYSTEM_PHYSICS, PONKO_SYSTEM_PHYSICS3D,
     PONKO_SYSTEM_REBUILD_SPATIAL_GRID, PONKO_SYSTEM_STEP_NAVMESH3D, PONKO_SYSTEM_UPDATE_ANIMATORS,
-    PONKO_SYSTEM_UPDATE_AUDIO3D, PONKO_SYSTEM_UPDATE_PARTICLES, PonkoGame, build, phase,
+    PONKO_SYSTEM_UPDATE_AUDIO3D, PONKO_SYSTEM_UPDATE_PARTICLES, PONKO_SYSTEM_UPDATE_SKELETONS2D, PonkoGame, build,
+    phase,
 };
 use crate::{Failure, PonkoStatus, boundary, invalid};
 use ponko::access::SystemAccess;
@@ -38,7 +39,8 @@ fn builtin_access(id: u32) -> Result<SystemAccess, Failure> {
         | PONKO_SYSTEM_UPDATE_ANIMATORS
         | PONKO_SYSTEM_UPDATE_PARTICLES
         | PONKO_SYSTEM_UPDATE_AUDIO3D
-        | PONKO_SYSTEM_DRAW_PARTICLES => SystemAccess::exclusive(),
+        | PONKO_SYSTEM_DRAW_PARTICLES
+        | PONKO_SYSTEM_UPDATE_SKELETONS2D => SystemAccess::exclusive(),
         _ => return Err(invalid("not a PONKO_SYSTEM_* built-in")),
     })
 }
@@ -66,6 +68,7 @@ fn add_builtin(g: Game, p: Phase, id: u32) -> (Game, Result<(), Failure>) {
         PONKO_SYSTEM_UPDATE_PARTICLES => g.add(p, systems::update_particles),
         PONKO_SYSTEM_UPDATE_AUDIO3D => g.add(p, systems::update_audio3d),
         PONKO_SYSTEM_DRAW_PARTICLES => g.add(p, systems::draw_particles),
+        PONKO_SYSTEM_UPDATE_SKELETONS2D => g.add(p, systems::update_skeletons2d),
         _ => {
             // Says why: not a built-in, or one this build doesn't have.
             let why = builtin_access(id)

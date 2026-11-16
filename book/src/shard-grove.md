@@ -1,6 +1,6 @@
 # Shard Grove: a 3D game, start to finish
 
-[`examples/shard_grove`](https://github.com/ponkoengine/ponko/tree/main/examples/shard_grove)
+[`examples/shard_grove`](../../examples/shard_grove)
 is the engine's 3D reference game. The other 3D examples each show one
 system; Shard Grove puts them together in one small third-person game: a
 glTF level that is drawn, solid and walkable for the enemies, skinned glTF
@@ -93,7 +93,9 @@ file, so the mesh's own node is the first of the warden's nine joints.
 The warden is a [`Character`](physics3d.md) controller: the rules set its
 velocity from the stick, turned by the view's yaw so that "forward" is
 where the camera looks, and the physics step moves it along the walls and up
-the ramp. The camera follows from behind and above.
+the ramp. The camera follows from behind and above: a
+[`ThirdPersonCamera`](3d.md#camera-rigs) that comes in front of the walls
+between it and the warden. On the title an `OrbitCamera` circles the grove.
 
 The crawlers are `NavAgent`s. Each walks between two points of its route
 until the warden comes within 8 m, then chases (re-planning only when the
@@ -206,8 +208,8 @@ What the game found missing or awkward, and what is not covered yet:
 
 | Gap | Status |
 |---|---|
-| 3D physics had no pause like the 2D `ctx.physics.set_paused`; the game held the warden's velocity at zero on menus. | Fixed by `ctx.physics3d.set_paused` ([#452](https://github.com/ponkoengine/ponko/issues/452)) |
-| `NavAgent` had private fields, so it couldn't be built with `..Default::default()`; the game set fields on a default. | Fixed: its progress moved into `NavAgent::state`, so it builds with struct-update syntax ([#453](https://github.com/ponkoengine/ponko/issues/453)) |
+| 3D physics had no pause like the 2D `ctx.physics.set_paused`; the game held the warden's velocity at zero on menus. | Fixed by `ctx.physics3d.set_paused` (#452) |
+| `NavAgent` had private fields, so it couldn't be built with `..Default::default()`; the game set fields on a default. | Fixed: its progress moved into `NavAgent::state`, so it builds with struct-update syntax (#453) |
 | A frame-rate performance baseline per GPU tier (`PONKO_BENCH`) needs runs on real GPUs with a window. | Open |
 | CI doesn't package and play it on every OS yet, as it does Ember Hop; its headless tests run in the test job on Linux, macOS and Windows. | Open |
 | One level: level streaming isn't part of the game. | Open |

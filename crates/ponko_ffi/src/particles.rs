@@ -254,7 +254,7 @@ pub(crate) fn finite(values: &[f32]) -> bool {
 ///
 /// # Safety
 /// The key pointers are null or point to their counts of keys.
-unsafe fn settings_from_c(s: &PonkoParticleSettings3D) -> Result<ParticleSettings3D, Failure> {
+pub(crate) unsafe fn settings_from_c(s: &PonkoParticleSettings3D) -> Result<ParticleSettings3D, Failure> {
     let ranges = [
         ("lifetime", s.lifetime_min, s.lifetime_max),
         ("speed", s.speed_min, s.speed_max),

@@ -3,7 +3,7 @@
 //! marks, and each frame uploads only the parts that changed: particles
 //! that stood still, ribbons and lines that kept their shape and text that
 //! stayed the same cost nothing.
-use super::gpu::GpuTexture;
+use super::gpu_textures::TextureTable;
 use crate::d3::ParticleBlend as ParticleBlend3D;
 use crate::render::traffic::{MAX_WRITES, Synced, Upload};
 use crate::three::particles::{ParticleFrame, ParticleInstance, ParticleRun};
@@ -148,7 +148,7 @@ impl Particles {
                     depth_stencil: Some(wgpu::DepthStencilState {
                         format: depth,
                         depth_write_enabled: Some(false),
-                        depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                        depth_compare: Some(wgpu::CompareFunction::GreaterEqual), // reverse-Z scene depth
                         stencil: Default::default(),
                         bias: Default::default(),
                     }),
@@ -319,19 +319,25 @@ impl Particles {
 
     /// Draws the main view's ribbons and lines, then its particles, then
     /// its text (each set farthest first).
-    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, textures: &[GpuTexture], white: u32) {
+    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, textures: &dyn TextureTable, white: u32) {
         self.draw_view(&self.main, pass, textures, white);
     }
 
     /// [`draw`](Self::draw) for `view`.
-    pub fn draw_view(&self, view: &ParticleView, pass: &mut wgpu::RenderPass<'_>, textures: &[GpuTexture], white: u32) {
+    pub fn draw_view(
+        &self,
+        view: &ParticleView,
+        pass: &mut wgpu::RenderPass<'_>,
+        textures: &dyn TextureTable,
+        white: u32,
+    ) {
         if !view.has_draws() {
             return;
         }
         let texture = |id: Option<u32>| {
             textures
-                .get(id.unwrap_or(white) as usize)
-                .or_else(|| textures.get(white as usize))
+                .texture(id.unwrap_or(white))
+                .or_else(|| textures.texture(white))
         };
         pass.set_bind_group(0, &view.group, &[]);
         if !view.strip_runs.is_empty() {
@@ -365,7 +371,7 @@ impl Particles {
             }
         }
         if view.text_count > 0
-            && let Some(atlas) = view.text_atlas.and_then(|id| textures.get(id as usize))
+            && let Some(atlas) = view.text_atlas.and_then(|id| textures.texture(id))
         {
             pass.set_pipeline(&self.text);
             pass.set_bind_group(1, &atlas.bind_group, &[]);

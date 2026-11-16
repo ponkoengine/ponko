@@ -4,7 +4,7 @@
 //! focus and queued events ([`Ui`]); who has the pointer and the keyboard
 //! ([`Ui::wants_pointer`], [`Ui::wants_keyboard`]); and the immediate
 //! widgets for debug overlays, `ctx.ui.immediate` ([`UiImmediate`]), with
-//! their [`UiStyle`]. A [`d3::UiPanel`](crate::d3::UiPanel) carries a tree of its own for a
+//! their [`UiStyle`]. A `d3::UiPanel` (feature `3d`) carries a tree of its own for a
 //! surface in the 3D world.
 //!
 //! **When to call it.** Build the tree in setup, then change its text,
@@ -39,7 +39,7 @@
 //!     let click = ctx.audio.create(8000, &[0.0; 80]);
 //!     ctx.world.insert_resource(click);
 //!     let start = ctx.ui.add(ponko::ui::UiWidget::Button, ponko::ui::UiLayout::auto());
-//!     ctx.ui.push_screen(start, false);
+//!     ctx.ui.push_modeless(start);
 //! });
 //! ```
 //!
@@ -55,6 +55,8 @@
 //!
 //! UI is drawn in window pixels on top of everything, built from sprites, so
 //! it batches with everything else.
+
+#![deny(missing_docs)]
 
 use crate::color::Color;
 
@@ -153,11 +155,11 @@ pub use access::{
 pub use access_native::UiAccessAdapter;
 pub use build::{UiBuilder, UiLayout, UiTheme};
 pub use immediate::{UiImmediate, UiImmediateFrame};
-pub use retained::{Ui, UiEvent, UiId, UiInput, UiPaint, UiTextAlign, UiWidget};
+pub use retained::{ScreenMode, Ui, UiEvent, UiId, UiInput, UiPaint, UiTextAlign, UiWidget};
 
 /// Unstable: the [Taffy](https://docs.rs/taffy/0.15.1/taffy/) layout crate
 /// behind [`UiLayout`], for the settings its presets and refinements don't
-/// cover ([`UiLayout::custom`], [`UiLayout::style_mut`]). Not covered by
-/// ponko's stability promise: its types change when ponko upgrades Taffy.
+/// cover ([`UiLayout::unstable_custom`], [`UiLayout::unstable_style_mut`]).
+/// Not covered by ponko's stability promise: its types change when ponko upgrades Taffy.
 /// Prefer [`UiLayout`]'s own methods.
 pub use taffy as unstable_taffy;

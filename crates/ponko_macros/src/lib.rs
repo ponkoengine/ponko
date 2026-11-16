@@ -17,7 +17,7 @@
 //! guide's [ECS chapter](https://ponko.dev/guide/ecs.html) explains
 //! components.
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};

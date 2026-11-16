@@ -556,3 +556,37 @@ fn a_one_tick_scenario_started_by_a_system_feeds_its_input_to_the_next_tick() {
         }
     );
 }
+
+#[test]
+fn mouse_move_and_wheel_steps_place_the_pointer_and_turn_the_wheel_for_one_tick() {
+    let scenario = InputScenario::from_json(
+        r#"{
+            "version": 1,
+            "steps": [
+                { "tick": 1, "type": "mouse_move", "position": [320, 240] },
+                { "tick": 2, "type": "mouse_wheel", "delta": [0, -3] }
+            ]
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        InputScenario::from_value(&scenario.to_json()).unwrap().to_json(),
+        scenario.to_json(),
+        "the new steps round-trip"
+    );
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let log = seen.clone();
+    Game::new("pointer", 640, 480)
+        .sim_system(move |ctx: &mut Ctx| log.borrow_mut().push((ctx.input.mouse_pos(), ctx.input.mouse_wheel())))
+        .input_scenario(scenario)
+        .run_headless(4, |_| {});
+    let seen = seen.borrow();
+    assert_eq!(seen[0], (Vec2::ZERO, Vec2::ZERO), "the pointer starts at the corner");
+    assert_eq!(seen[1], (vec2(320.0, 240.0), Vec2::ZERO));
+    assert_eq!(
+        seen[2],
+        (vec2(320.0, 240.0), vec2(0.0, -3.0)),
+        "it stays put; the wheel turns"
+    );
+    assert_eq!(seen[3], (vec2(320.0, 240.0), Vec2::ZERO), "for one tick only");
+}

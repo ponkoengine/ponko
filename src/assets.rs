@@ -29,6 +29,7 @@
 //! `ctx.assets` borrows apart from it.
 //!
 //! ```
+//! use ponko::assets::MemorySource;
 //! use ponko::prelude::*;
 //!
 //! #[derive(serde::Deserialize)]
@@ -53,6 +54,7 @@
 //!    desktop, the files fetched from `assets/index.json` in a browser).
 //! 2. **Decode** them on the CPU (`decode_image`): no GPU, any thread.
 //! 3. **Create** the GPU resource on the game thread (`Graphics::create_texture`).
+#![deny(missing_docs)]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -145,6 +147,7 @@ pub trait AssetSource: 'static {
 /// `include_bytes!`, generated at startup, or made up in a test.
 ///
 /// ```
+/// use ponko::assets::MemorySource;
 /// # use ponko::prelude::*;
 /// Game::new("t", 1, 1).run_headless(0, |ctx| {
 ///     let mut pixel = Vec::new();
@@ -164,6 +167,13 @@ pub struct MemorySource {
 
 impl MemorySource {
     /// An empty source called `id`.
+    ///
+    /// ```
+    /// use ponko::assets::{AssetSource, MemorySource};
+    /// let source = MemorySource::new("embedded");
+    /// assert_eq!(source.id(), "embedded");
+    /// assert!(!source.contains("a.txt")); // empty to begin with
+    /// ```
     pub fn new(id: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -172,6 +182,13 @@ impl MemorySource {
     }
 
     /// Adds (or replaces) file `name`, builder style.
+    ///
+    /// ```
+    /// use ponko::assets::{AssetSource, MemorySource};
+    /// let source = MemorySource::new("embedded").with("a.txt", "hello").with("b.bin", vec![1, 2, 3]);
+    /// assert_eq!(source.read("a.txt").unwrap(), b"hello");
+    /// assert!(source.contains("b.bin"));
+    /// ```
     #[must_use]
     pub fn with(mut self, name: impl Into<String>, bytes: impl Into<Vec<u8>>) -> Self {
         self.insert(name, bytes);
@@ -179,6 +196,14 @@ impl MemorySource {
     }
 
     /// Adds (or replaces) file `name`.
+    ///
+    /// ```
+    /// use ponko::assets::{AssetSource, MemorySource};
+    /// let mut source = MemorySource::new("embedded");
+    /// source.insert("a.txt", "one");
+    /// source.insert("a.txt", "two"); // replaces
+    /// assert_eq!(source.read("a.txt").unwrap(), b"two");
+    /// ```
     pub fn insert(&mut self, name: impl Into<String>, bytes: impl Into<Vec<u8>>) {
         self.files.insert(name.into(), bytes.into().into());
     }
@@ -222,12 +247,18 @@ impl Origin {
         }
     }
 
-    /// Where the asset is, for listings: the file's path, or `source:name`.
-    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
-    pub(crate) fn display(&self) -> String {
+    /// Replaces a listing name, retaining its capacity.
+    #[cfg(feature = "3d")]
+    pub(crate) fn display_into(&self, out: &mut String) {
+        use std::fmt::Write;
+        out.clear();
         match self {
-            Origin::File(path) => path.display().to_string(),
-            Origin::Source { source, name } => format!("{source}:{name}"),
+            Origin::File(path) => {
+                let _ = write!(out, "{}", path.display());
+            }
+            Origin::Source { source, name } => {
+                let _ = write!(out, "{source}:{name}");
+            }
         }
     }
 }
@@ -330,7 +361,7 @@ impl Sources {
         assert!(!id.is_empty(), "ponko: an asset source needs a non-empty id");
         assert!(
             self.list.iter().all(|s| s.id() != id),
-            "ponko: an asset source called \"{id}\" was already added"
+            "ponko: an asset source called \"{id}\" was already added; choose a unique AssetSource::id()"
         );
         self.list.push(source);
     }
@@ -555,7 +586,10 @@ pub(crate) fn asset_roots() -> Vec<PathBuf> {
     if let Ok(dir) = std::env::current_dir() {
         roots.push(dir.join("assets"));
     }
-    roots.dedup();
+    // The working directory is often the manifest directory too: list each
+    // folder once, in search order.
+    let mut seen = std::collections::HashSet::new();
+    roots.retain(|root| seen.insert(root.clone()));
     roots
 }
 
@@ -583,8 +617,44 @@ pub(crate) fn resolve(name: &str) -> Result<PathBuf, String> {
     let searched: Vec<String> = roots.iter().map(|r| format!("  {}", r.display())).collect();
     Err(format!(
         "\"{name}\" not found in assets/. Looked in:\n{}",
-        searched.join("\n")
+        searched.join("\n") + &nearby_assets(name, &roots)
     ))
+}
+
+/// Suggestions are bounded to the requested folder, only on lookup failure.
+#[cfg(not(target_arch = "wasm32"))]
+fn nearby_assets(name: &str, roots: &[PathBuf]) -> String {
+    let requested = Path::new(name);
+    let filename = requested
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    let mut nearby = Vec::new();
+    for root in roots {
+        let folder = root.join(requested.parent().unwrap_or_else(|| Path::new("")));
+        if let Ok(entries) = std::fs::read_dir(folder) {
+            for entry in entries.take(256).flatten() {
+                let candidate = entry.file_name().to_string_lossy().into_owned();
+                let lower = candidate.to_lowercase();
+                let common = lower.chars().zip(filename.chars()).take_while(|(a, b)| a == b).count();
+                if lower == filename || common >= 2 || Path::new(&candidate).file_stem() == requested.file_stem() {
+                    nearby.push(candidate);
+                }
+            }
+        }
+    }
+    nearby.sort();
+    nearby.dedup();
+    nearby.truncate(8);
+    format!(
+        "\nCheck spelling and case, or place the file under one of these assets/ folders. Nearby names: {}",
+        if nearby.is_empty() {
+            "(none)".into()
+        } else {
+            nearby.join(", ")
+        }
+    )
 }
 
 /// Reads an asset file found by [`resolve`].
@@ -894,6 +964,7 @@ impl Assets {
     /// earlier stay cached where they were found.
     ///
     /// ```
+    /// use ponko::assets::MemorySource;
     /// # use ponko::prelude::*;
     /// #[derive(serde::Deserialize)]
     /// struct Rules {
@@ -918,6 +989,7 @@ impl Assets {
     /// once (`add_source` panics on a duplicate id).
     ///
     /// ```
+    /// use ponko::assets::MemorySource;
     /// # use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
     ///     assert!(!ctx.assets.has_source("built-in"));
@@ -939,6 +1011,7 @@ impl Assets {
     /// reported with the asset's name and source in front of its message.
     ///
     /// ```
+    /// use ponko::assets::MemorySource;
     /// # use ponko::prelude::*;
     /// /// A level in a tiny made-up format: one row of tiles per line.
     /// struct Tiles(Vec<Vec<u8>>);
@@ -1013,7 +1086,22 @@ impl Assets {
         world: &mut World,
         path: &str,
     ) {
-        let loaded = self.load_data(
+        self.try_load_resource::<R>(world, path)
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    /// Loads and replaces a deserialized resource, with the same hot reload
+    /// behavior as [`Self::load_resource`], returning errors instead of panicking.
+    ///
+    /// # Errors
+    /// Returns a source/read/JSON error with `path`. Failed loads leave the
+    /// existing resource unchanged and do not register a reload callback.
+    pub fn try_load_resource<R: Send + Sync + 'static + serde::de::DeserializeOwned>(
+        &mut self,
+        world: &mut World,
+        path: &str,
+    ) -> Result<(), crate::error::Error> {
+        self.load_data(
             world,
             path,
             Box::new(|world: &mut World, text: &str| {
@@ -1021,8 +1109,7 @@ impl Assets {
                 world.insert_resource(value);
                 Ok(())
             }),
-        );
-        loaded.unwrap_or_else(|e| panic!("{e}"));
+        )
     }
 
     /// Loads a string table file (see [`crate::locale`] for the format) into
@@ -1034,25 +1121,39 @@ impl Assets {
     /// the old table and prints why.
     ///
     /// ```
+    /// use ponko::assets::MemorySource;
     /// # use ponko::prelude::*;
     /// use ponko::locale::Strings;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
     ///     ctx.assets.add_source(MemorySource::new("built-in")
     ///         .with("lang/en.json", r#"{"language": "en", "strings": {"play": "Play"}}"#)
     ///         .with("lang/es.json", r#"{"language": "es", "strings": {"play": "Jugar"}}"#));
-    ///     ctx.assets.load_strings(&mut ctx.world, "lang/en.json").unwrap();
-    ///     ctx.assets.load_strings(&mut ctx.world, "lang/es.json").unwrap();
+    ///     ctx.assets.load_strings(&mut ctx.world, "lang/en.json");
+    ///     ctx.assets.load_strings(&mut ctx.world, "lang/es.json");
     ///     let strings = ctx.world.resource_mut::<Strings>();
     ///     strings.set_language("es");
     ///     assert_eq!(strings.get("play"), "Jugar");
     /// });
     /// ```
     ///
+    /// # Panics
+    /// If the file is missing or isn't a string table, with the engine's
+    /// message (it starts with `ponko:`). [`try_load_strings`](Self::try_load_strings)
+    /// returns the error instead.
+    pub fn load_strings(&mut self, world: &mut World, path: &str) {
+        self.try_load_strings(world, path).unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    /// [`load_strings`](Self::load_strings), returning the error instead of
+    /// panicking: the format and hot reload are the same, and a failed load
+    /// leaves the tables as they were.
+    ///
     /// # Errors
     /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if no source
     /// has the file, [`Decode`](crate::error::ErrorKind::Decode) if it isn't a
-    /// string table (see [`StringTable::from_json`](crate::locale::StringTable::from_json)).
-    pub fn load_strings(&mut self, world: &mut World, path: &str) -> Result<(), crate::error::Error> {
+    /// valid string table, or [`Json`](crate::error::ErrorKind::Json) for malformed
+    /// JSON (see [`StringTable::from_json`](crate::locale::StringTable::from_json)).
+    pub fn try_load_strings(&mut self, world: &mut World, path: &str) -> Result<(), crate::error::Error> {
         self.load_data(
             world,
             path,
@@ -1068,7 +1169,10 @@ impl Assets {
     }
 
     /// Loads a JSON file into the reflected component `T` of `entity` (object
-    /// fields merge), reloading it when the file changes. `T` must be
+    /// fields merge), reloading it when the file changes. Like every
+    /// reflection edit it returns its errors (a runtime operation: the
+    /// entity may be gone) instead of panicking; [`load_resource`](Self::load_resource)
+    /// is the typed, panicking loader that replaces a whole resource. `T` must be
     /// registered with `World::reflect`; the name the file is applied under
     /// comes from the type, so it can't drift from it.
     /// ```
@@ -1076,21 +1180,21 @@ impl Assets {
     /// # #[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
     /// # struct Stats { hp: f32 }
     /// # fn f(ctx: &mut Ctx, e: Entity) -> Result<(), ponko::prelude::Error> {
-    /// ctx.assets.load_component_json::<Stats>(&mut ctx.world, "stats.json", e)?;
+    /// ctx.assets.load_reflected_component_json::<Stats>(&mut ctx.world, "stats.json", e)?;
     /// # Ok(()) }
     /// ```
     ///
     /// # Errors
     ///
-    /// As [`load_resource_json`](Self::load_resource_json), and
+    /// As [`load_reflected_resource_json`](Self::load_reflected_resource_json), and
     /// [`ErrorKind::BadHandle`](crate::error::ErrorKind::BadHandle) if `entity` is dead.
-    pub fn load_component_json<T: 'static>(
+    pub fn load_reflected_component_json<T: 'static>(
         &mut self,
         world: &mut World,
         path: &str,
         entity: Entity,
     ) -> Result<(), crate::error::Error> {
-        self.load_component_json_named(
+        self.load_reflected_component_json_named(
             world,
             path,
             entity,
@@ -1101,9 +1205,9 @@ impl Assets {
     /// Loads a JSON file into the reflected component `component` of `entity`
     /// by name: the C and C++ way, and for components registered by name.
     /// Rust code that has the type uses
-    /// [`load_component_json`](Self::load_component_json).
+    /// [`load_reflected_component_json`](Self::load_reflected_component_json).
     #[doc(hidden)]
-    pub fn load_component_json_named(
+    pub fn load_reflected_component_json_named(
         &mut self,
         world: &mut World,
         path: &str,
@@ -1131,7 +1235,7 @@ impl Assets {
     /// # #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
     /// # struct Rules { speed: f32 }
     /// # fn f(ctx: &mut Ctx) -> Result<(), ponko::prelude::Error> {
-    /// ctx.assets.load_resource_json::<Rules>(&mut ctx.world, "rules.json")?;
+    /// ctx.assets.load_reflected_resource_json::<Rules>(&mut ctx.world, "rules.json")?;
     /// # Ok(()) }
     /// ```
     ///
@@ -1142,15 +1246,19 @@ impl Assets {
     /// can't be read, [`Decode`](crate::error::ErrorKind::Decode) if it isn't UTF-8
     /// and [`Json`](crate::error::ErrorKind::Json) if it isn't valid JSON for `T`.
     /// The error's path is `path`.
-    pub fn load_resource_json<T: 'static>(&mut self, world: &mut World, path: &str) -> Result<(), crate::error::Error> {
-        self.load_resource_json_named(world, path, &crate::reflect::short_name(std::any::type_name::<T>()))
+    pub fn load_reflected_resource_json<T: 'static>(
+        &mut self,
+        world: &mut World,
+        path: &str,
+    ) -> Result<(), crate::error::Error> {
+        self.load_reflected_resource_json_named(world, path, &crate::reflect::short_name(std::any::type_name::<T>()))
     }
 
     /// Loads a JSON file into the reflected resource `name` by name: the C
     /// and C++ way. Rust code that has the type uses
-    /// [`load_resource_json`](Self::load_resource_json).
+    /// [`load_reflected_resource_json`](Self::load_reflected_resource_json).
     #[doc(hidden)]
-    pub fn load_resource_json_named(
+    pub fn load_reflected_resource_json_named(
         &mut self,
         world: &mut World,
         path: &str,
@@ -1167,7 +1275,12 @@ impl Assets {
         )
     }
 
-    fn load_data(&mut self, world: &mut World, path: &str, apply: DataLoader) -> Result<(), crate::error::Error> {
+    pub(crate) fn load_data(
+        &mut self,
+        world: &mut World,
+        path: &str,
+        apply: DataLoader,
+    ) -> Result<(), crate::error::Error> {
         let (origin, text) = self.read_text(path)?;
         apply(world, &text).map_err(|e| e.context(path).with_path(path))?;
         self.data_loaders.push(apply);
@@ -1312,6 +1425,20 @@ impl Assets {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn missing_assets_suggest_case_and_extension_near_misses() {
+        let root = std::env::temp_dir().join(format!("ponko-nearby-assets-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Wall.PNG"), []).unwrap();
+        std::fs::write(root.join("wall.jpg"), []).unwrap();
+        let suggestions = nearby_assets("wall.png", std::slice::from_ref(&root));
+        assert!(suggestions.contains("Wall.PNG"), "{suggestions}");
+        assert!(suggestions.contains("wall.jpg"), "{suggestions}");
+        assert!(suggestions.contains("Check spelling and case"), "{suggestions}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[cfg(not(feature = "compressed-textures"))]
     #[test]

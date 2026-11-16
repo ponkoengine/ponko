@@ -83,7 +83,7 @@ impl AnimationClip {
     /// or a clip that holds only humanoid muscle curves.
     pub fn parse(text: &str) -> Result<Self, Error> {
         if !text.trim_start().starts_with(['%', '-']) || text.contains('\0') {
-            return Err(Error::new(
+            return Err(Error::decode(
                 "animation clip is not Unity text YAML; binary clips go through parse_binary or read",
             ));
         }
@@ -106,7 +106,7 @@ impl AnimationClip {
         let m = &file
             .of_class(74)
             .next()
-            .ok_or_else(|| Error::new("expected AnimationClip"))?
+            .ok_or_else(|| Error::invalid("expected AnimationClip"))?
             .body;
         let mut curves = Vec::new();
         let mut morphs: Vec<Morph> = Vec::new();
@@ -143,7 +143,7 @@ impl AnimationClip {
                 })
                 .collect();
             if keys.iter().any(|k| k.value.iter().any(|v| !v.is_finite())) {
-                return Err(Error::new("non-finite animation key"));
+                return Err(Error::invalid("non-finite animation key"));
             }
             if !keys.is_empty() {
                 curves.push(Curve {
@@ -232,7 +232,7 @@ impl AnimationClip {
             || rate <= 0.0
             || (stop - start) * rate > 1_000_000.0
         {
-            return Err(Error::new("invalid animation clip timing/sample rate"));
+            return Err(Error::invalid("invalid animation clip timing/sample rate"));
         }
         // Sampling makes a value per sample time (each frame and each key)
         // for every curve: bounded, so a short file can't ask for gigabytes.
@@ -257,7 +257,7 @@ impl AnimationClip {
         key_times.dedup();
         let samples = (frames + key_times.len()).saturating_mul(curves.len() + morphs.len());
         if samples > MAX_SAMPLES {
-            return Err(Error::new(format!(
+            return Err(Error::invalid(format!(
                 "animation clip too long to sample: {} curves over {frames} frames and {} key times (at most {MAX_SAMPLES} samples)",
                 curves.len() + morphs.len(),
                 key_times.len()
@@ -284,12 +284,12 @@ impl AnimationClip {
     /// # Errors
     /// Reports file errors and what [`AnimationClip::parse`] does.
     pub fn read(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
-        let bytes = std::fs::read(path.as_ref()).map_err(|e| Error::new(e.to_string()))?;
+        let bytes = std::fs::read(path.as_ref()).map_err(|e| Error::io(path.as_ref(), e))?;
         if crate::binary::is_binary(&bytes) {
             return Self::parse_binary(&bytes);
         }
         let text = std::str::from_utf8(&bytes)
-            .map_err(|_| Error::new("animation clip is neither Unity text YAML nor a binary serialized file"))?;
+            .map_err(|_| Error::decode("animation clip is neither Unity text YAML nor a binary serialized file"))?;
         Self::parse(text)
     }
 
@@ -568,13 +568,13 @@ fn vector_keys(curve: &Value, skipped: &mut Vec<String>) -> Result<Vec<Key>, Err
             outgoing: vector(&k["outSlope"]),
         };
         if !key.time.is_finite() || key.value.iter().any(|v| !v.is_finite()) {
-            return Err(Error::new("non-finite animation key"));
+            return Err(Error::invalid("non-finite animation key"));
         }
         keys.push(key);
     }
     keys.sort_by(|a, b| a.time.total_cmp(&b.time));
     if keys.windows(2).any(|w| w[0].time == w[1].time) {
-        return Err(Error::new("duplicate animation key time"));
+        return Err(Error::invalid("duplicate animation key time"));
     }
     Ok(keys)
 }
@@ -592,13 +592,13 @@ fn scalar_keys(curve: &Value, skipped: &mut Vec<String>) -> Result<Vec<SKey>, Er
             outgoing: number(&k["outSlope"]),
         };
         if !key.time.is_finite() || !key.value.is_finite() || key.incoming.is_nan() || key.outgoing.is_nan() {
-            return Err(Error::new("non-finite animation key"));
+            return Err(Error::invalid("non-finite animation key"));
         }
         keys.push(key);
     }
     keys.sort_by(|a, b| a.time.total_cmp(&b.time));
     if keys.windows(2).any(|w| w[0].time == w[1].time) {
-        return Err(Error::new("duplicate animation key time"));
+        return Err(Error::invalid("duplicate animation key time"));
     }
     Ok(keys)
 }
@@ -757,7 +757,7 @@ fn baked_curves(
     let bindings = baked::bindings(&m["m_ClipBindingConstant"]);
     let needed: usize = bindings.iter().map(|b| b.width).sum();
     if needed > channels.len() {
-        return Err(Error::new(format!(
+        return Err(Error::invalid(format!(
             "animation clip bindings read {needed} curves but its baked data holds {}",
             channels.len()
         )));
@@ -796,7 +796,7 @@ fn baked_curves(
     }
     if humanoid > 0 || bindings.is_empty() {
         if curves.is_empty() && morphs.is_empty() {
-            return Err(Error::new(HUMANOID_ONLY));
+            return Err(Error::unsupported(HUMANOID_ONLY));
         }
         skipped.push("skipped humanoid muscle curves (retargeting is not supported)".into());
     }
@@ -1031,7 +1031,7 @@ mod tests {
         assert!(
             AnimationClip::parse("binary")
                 .unwrap_err()
-                .message
+                .message()
                 .contains("parse_binary")
         );
         // A zero `m_Compressed` and empty baked containers are an empty clip.

@@ -8,6 +8,7 @@
 mod actions;
 mod alloc;
 mod archetypes;
+mod debug_draw;
 mod ecs_suite;
 mod extraction;
 #[cfg(feature = "render")]
@@ -33,7 +34,9 @@ mod render_report;
 #[cfg(feature = "render")]
 mod render_scenes;
 mod report;
+mod rollback;
 mod schedule;
+mod skeleton2d;
 mod sparse_set;
 mod sprites;
 mod streaming;
@@ -70,6 +73,9 @@ struct Spr {
 }
 #[derive(Component, Clone, Copy, Default, ponko_ecs::Component)]
 struct Tag;
+/// A link to another entity (the last shot of a gun).
+#[derive(Clone, Copy, ponko_ecs::Component)]
+struct Shot(#[allow(dead_code)] ponko_ecs::Entity);
 #[derive(Component, Clone, Copy, Default, ponko_ecs::Component)]
 struct M0;
 #[derive(Component, Clone, Copy, Default, ponko_ecs::Component)]
@@ -222,6 +228,7 @@ fn main() {
     nav3d::carve(&mut b);
     extraction::run(&mut b);
     net::run(&mut b);
+    rollback::run(&mut b);
     actions::run(&mut b);
     query_cache::run(&mut b);
     query_filters::run(&mut b);
@@ -244,6 +251,8 @@ fn main() {
     sparse_set::run(&mut b);
     sprites::run(&mut b);
     particles2d::run(&mut b);
+    debug_draw::run(&mut b);
+    skeleton2d::run(&mut b);
 
     // Resource scoping versus the previous public take/put workaround.
     for scoped in [false, true] {
@@ -627,7 +636,11 @@ fn main() {
     b.steady(
         "commands/spawn-despawn",
         50,
-        || (ponko_ecs::World::new(), Vec::new(), ponko_ecs::Commands::new()),
+        || {
+            let w = ponko_ecs::World::new();
+            let cmd = w.commands();
+            (w, Vec::new(), cmd)
+        },
         |(w, es, cmd)| {
             for i in 0..ADD_REMOVE_N {
                 cmd.spawn(ent(i));
@@ -641,6 +654,72 @@ fn main() {
             w.apply(cmd);
         },
     );
+    // The same with each spawn in a closure that gets the entity only when
+    // applied (a `spawn_then` design), for comparison.
+    b.steady(
+        "commands/spawn-then-despawn",
+        50,
+        || {
+            let w = ponko_ecs::World::new();
+            let cmd = w.commands();
+            (w, Vec::new(), cmd)
+        },
+        |(w, es, cmd)| {
+            for i in 0..ADD_REMOVE_N {
+                cmd.add(move |w| {
+                    w.spawn(ent(i));
+                });
+            }
+            w.apply(cmd);
+            es.clear();
+            w.query::<ponko_ecs::Entity>().for_each(|e| es.push(e));
+            for &e in es.iter() {
+                cmd.despawn(e);
+            }
+            w.apply(cmd);
+        },
+    );
+    // Spawns that something else refers to: each shot is linked from one of
+    // 1,000 guns. With reserved ids, then in a closure that links it when
+    // applied (a `spawn_then` design).
+    fn guns() -> (
+        ponko_ecs::World,
+        Vec<ponko_ecs::Entity>,
+        Vec<ponko_ecs::Entity>,
+        ponko_ecs::Commands,
+    ) {
+        let mut w = ponko_ecs::World::new();
+        let guns = (0..1000).map(|_| w.spawn((Tag,))).collect();
+        let cmd = w.commands();
+        (w, guns, Vec::new(), cmd)
+    }
+    fn despawn_shots(w: &mut ponko_ecs::World, es: &mut Vec<ponko_ecs::Entity>, cmd: &mut ponko_ecs::Commands) {
+        es.clear();
+        w.query::<(ponko_ecs::Entity, &Pos)>().for_each(|(e, _)| es.push(e));
+        for &e in es.iter() {
+            cmd.despawn(e);
+        }
+        w.apply(cmd);
+    }
+    b.steady("commands/spawn-link", 50, guns, |(w, guns, es, cmd)| {
+        for i in 0..ADD_REMOVE_N {
+            let shot = cmd.spawn(ent(i));
+            cmd.insert(guns[i % guns.len()], Shot(shot));
+        }
+        w.apply(cmd);
+        despawn_shots(w, es, cmd);
+    });
+    b.steady("commands/spawn-then-link", 50, guns, |(w, guns, es, cmd)| {
+        for i in 0..ADD_REMOVE_N {
+            let gun = guns[i % guns.len()];
+            cmd.add(move |w| {
+                let shot = w.spawn(ent(i));
+                w.insert(gun, Shot(shot));
+            });
+        }
+        w.apply(cmd);
+        despawn_shots(w, es, cmd);
+    });
 
     // ---- iterate: pos += vel * dt over 1M entities, one archetype -------------
     b.steady(
@@ -1338,6 +1417,122 @@ fn flow_benches(b: &mut Bench) {
                         }
                     });
                 black_box(world);
+            },
+        );
+    }
+    // ---- hierarchy: 100k transforms under one root ---------------------------
+    // `deep`: a chain 100k long; `wide`: 100k children of one root. `moving`
+    // moves the root before every update, so every transform is placed;
+    // `still` moves nothing, so the update finds nothing to do.
+    for shape in ["deep", "wide"] {
+        for moving in [true, false] {
+            use ponko::d2::Transform as Transform2D;
+            use ponko::prelude::{World, WorldHierarchy, vec2};
+            let name = format!("hierarchy/100k-{shape}-{}", if moving { "moving" } else { "still" });
+            b.steady(
+                &name,
+                20,
+                || {
+                    let mut world = World::new();
+                    let root = world.spawn((Transform2D::default(),));
+                    let mut up = root;
+                    for _ in 0..100_000 {
+                        let e = world.spawn((Transform2D::default(),));
+                        world.insert(e, ponko::attach::Attached::to(up).offset(vec2(1.0, 0.0)));
+                        if shape == "deep" {
+                            up = e;
+                        }
+                    }
+                    world.update_hierarchy();
+                    (world, root)
+                },
+                |(world, root)| {
+                    if moving {
+                        world.get_mut::<Transform2D>(*root).unwrap().position.y += 1.0;
+                    }
+                    world.update_hierarchy();
+                },
+            );
+        }
+    }
+    // 100k roots with one child each: the first update (every link is new)
+    // and then every root moving each update.
+    {
+        use ponko::d2::Transform as Transform2D;
+        use ponko::prelude::{World, WorldHierarchy, vec2};
+        let pairs = || {
+            let mut world = World::new();
+            for i in 0..100_000 {
+                let base = world.spawn((Transform2D::at(vec2(i as f32, 0.0)),));
+                world.spawn((
+                    Transform2D::default(),
+                    ponko::attach::Attached::to(base).offset(vec2(0.0, 1.0)),
+                ));
+            }
+            world
+        };
+        // A still root with 100k children: each update one child is
+        // despawned and a new one attached, so the tree changes but
+        // nothing moves.
+        b.steady(
+            "hierarchy/100k-wide-churn",
+            20,
+            || {
+                let mut world = World::new();
+                let root = world.spawn((Transform2D::default(),));
+                let kids: std::collections::VecDeque<_> = (0..100_000)
+                    .map(|_| world.spawn((Transform2D::default(), ponko::attach::Attached::to(root))))
+                    .collect();
+                world.update_hierarchy();
+                (world, root, kids)
+            },
+            |(world, root, kids)| {
+                if let Some(old) = kids.pop_front() {
+                    world.despawn(old);
+                }
+                kids.push_back(world.spawn((Transform2D::default(), ponko::attach::Attached::to(*root))));
+                world.update_hierarchy();
+            },
+        );
+        b.run("hierarchy/100k-pairs-first-update", 10, pairs, |world| {
+            world.update_hierarchy()
+        });
+        b.steady(
+            "hierarchy/100k-pairs-moving",
+            20,
+            || {
+                let mut world = pairs();
+                world.update_hierarchy();
+                world
+            },
+            |world| {
+                world
+                    .query::<&mut Transform2D>()
+                    .filter::<ponko::prelude::Without<ponko::attach::Attached>>()
+                    .for_each(|t| t.position.y += 1.0);
+                world.update_hierarchy();
+            },
+        );
+    }
+    {
+        use ponko::d3::Transform as Transform3D;
+        use ponko::prelude::{World, WorldHierarchy, vec3};
+        b.steady(
+            "hierarchy/100k-wide-moving-3d",
+            20,
+            || {
+                let mut world = World::new();
+                let root = world.spawn((Transform3D::default(),));
+                for _ in 0..100_000 {
+                    let link = ponko::attach::Attached3D::to(root).offset(Transform3D::at(vec3(1.0, 0.0, 0.0)));
+                    world.spawn((Transform3D::default(), link));
+                }
+                world.update_hierarchy();
+                (world, root)
+            },
+            |(world, root)| {
+                world.get_mut::<Transform3D>(*root).unwrap().position.y += 1.0;
+                world.update_hierarchy();
             },
         );
     }

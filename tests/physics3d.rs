@@ -910,14 +910,14 @@ fn load_collision_mesh_makes_a_gltf_file_solid_in_one_call() {
         1,
         Vec3::ZERO,
         move |ctx| {
-            let house = ctx.load_collision_mesh("models/house.glb").unwrap();
+            let house = ctx.load_collision_mesh("models/house.glb");
             let tall = CollisionMeshOptions {
                 scale: vec3(1.0, 3.0, 1.0),
                 ..Default::default()
             };
             let hull = CollisionMeshOptions { convex: true, ..tall };
-            let tall = ctx.load_collision_mesh_with("models/house.glb", tall).unwrap();
-            let hull = ctx.load_collision_mesh_with("models/house.glb", hull).unwrap();
+            let tall = ctx.load_collision_mesh_with("models/house.glb", tall);
+            let hull = ctx.load_collision_mesh_with("models/house.glb", hull);
             for (x, mesh) in [(0.0, house), (10.0, tall), (20.0, hull)] {
                 ctx.world.spawn((
                     Transform3D::at(vec3(x, 0.0, 0.0)),
@@ -928,11 +928,11 @@ fn load_collision_mesh_makes_a_gltf_file_solid_in_one_call() {
             ctx.assets.save_scene(&ctx.world, &saved_name).unwrap();
             // Each file and options once: loading again, or a scene naming the
             // same file, gives the same mesh.
-            let again = ctx.load_collision_mesh("models/house.glb").unwrap();
+            let again = ctx.load_collision_mesh("models/house.glb");
             let defaults = CollisionMeshOptions::default();
-            let same = ctx.load_collision_mesh_with("models/house.glb", defaults).unwrap();
+            let same = ctx.load_collision_mesh_with("models/house.glb", defaults);
             ctx.world.insert_resource(vec![house, again, same, tall, hull]);
-            let missing = ctx.load_collision_mesh("models/no-such-file.glb").unwrap_err();
+            let missing = ctx.try_load_collision_mesh("models/no-such-file.glb").unwrap_err();
             ctx.world.insert_resource(missing.path().map(str::to_string));
         },
         |ctx| {
@@ -1000,7 +1000,7 @@ fn a_scene_and_load_collision_mesh_share_one_mesh() {
         Vec3::ZERO,
         move |ctx| {
             ctx.load_scene(&name).unwrap();
-            let mesh = ctx.load_collision_mesh("models/house.glb").unwrap();
+            let mesh = ctx.load_collision_mesh("models/house.glb");
             ctx.world.insert_resource(mesh);
         },
         |ctx| {
@@ -1045,4 +1045,42 @@ fn a_crowd_of_characters_moves_the_same_way_every_run() {
     assert_eq!(first.len(), 40);
     assert_eq!(first, run());
     assert_eq!(first, run());
+}
+
+#[test]
+fn try_load_collision_mesh_reports_a_missing_file_and_shares_the_plain_loaders_mesh() {
+    use ponko::d3::CollisionMeshOptions;
+    Game::new("collision loaders", 1, 1).run_headless(0, |ctx| {
+        let mesh = ctx.load_collision_mesh("models/house.glb");
+        assert_eq!(mesh, ctx.try_load_collision_mesh("models/house.glb").unwrap());
+        assert_eq!(
+            mesh,
+            ctx.try_load_collision_mesh_with("models/house.glb", CollisionMeshOptions::default())
+                .unwrap()
+        );
+        let missing = "models/missing-collision-convention.glb";
+        let error = ctx.try_load_collision_mesh(missing).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::NotFound);
+        let error = ctx
+            .try_load_collision_mesh_with(missing, CollisionMeshOptions::default())
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::NotFound);
+        assert_eq!(error.path(), Some(missing));
+    });
+}
+
+#[test]
+#[should_panic(expected = "ponko:")]
+fn load_collision_mesh_panics_with_the_engine_message_for_a_missing_file() {
+    Game::new("collision loaders", 1, 1).run_headless(0, |ctx| {
+        ctx.load_collision_mesh("models/missing-collision-convention.glb");
+    });
+}
+
+#[test]
+#[should_panic(expected = "ponko:")]
+fn load_collision_mesh_with_panics_with_the_engine_message_for_a_missing_file() {
+    Game::new("collision loaders", 1, 1).run_headless(0, |ctx| {
+        ctx.load_collision_mesh_with("models/missing-collision-convention.glb", Default::default());
+    });
 }

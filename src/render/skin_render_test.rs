@@ -151,16 +151,8 @@ fn draw_bent(morph: bool, mixed: bool, downlevel: bool, grow: bool) {
     // upper half on joint 1 (1 up). Glowing, so light doesn't matter.
     let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(SIZE as f32, SIZE as f32));
     let skeleton = Skeleton::new(vec![
-        Joint {
-            name: "base".into(),
-            parent: None,
-            rest: Transform3D::default(),
-        },
-        Joint {
-            name: "top".into(),
-            parent: Some(0),
-            rest: Transform3D::at(vec3(0.0, 1.0, 0.0)),
-        },
+        Joint::new("base", None),
+        Joint::new("top", 0).with_rest(Transform3D::at(vec3(0.0, 1.0, 0.0))),
     ]);
     let mut bar = MeshData::cube(1.0);
     for p in &mut bar.positions {
@@ -168,15 +160,13 @@ fn draw_bent(morph: bool, mixed: bool, downlevel: bool, grow: bool) {
     }
     if morph {
         // "lean": the top corners go left and down.
-        bar.morph_targets.push(MorphTarget {
-            name: "lean".into(),
-            positions: bar
-                .positions
+        bar.morph_targets.push(MorphTarget::new(
+            "lean",
+            bar.positions
                 .iter()
                 .map(|p| if p.y > 1.0 { vec3(-1.6, -0.6, 0.0) } else { Vec3::ZERO })
                 .collect(),
-            normals: Vec::new(),
-        });
+        ));
     } else {
         bar.joints = bar.positions.iter().map(|p| [u16::from(p.y > 1.0), 0, 0, 0]).collect();
         bar.weights = vec![[1.0, 0.0, 0.0, 0.0]; bar.positions.len()];

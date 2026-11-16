@@ -155,7 +155,10 @@ fn systems_skipped_by_every_neither_run_nor_flush_anything() {
     let world = Game::new("barriers", 1, 1)
         .add(
             Phase::AfterPhysics,
-            (|ctx: &mut Ctx| ctx.commands.spawn((Marker(0),))).every(3),
+            (|ctx: &mut Ctx| {
+                ctx.commands.spawn((Marker(0),));
+            })
+            .every(3),
         )
         .sim_system(|ctx: &mut Ctx| {
             let n = markers(ctx);

@@ -124,8 +124,10 @@ Nothing is left out silently, and nothing unavailable is written as 0:
 | `PONKO_RENDER_SCALE` | 1 | Multiplies every scene's object counts |
 | `PONKO_RENDER_MATCHED` | 0 | 1: draw only what the Bevy copies draw too (see below) |
 | `PONKO_RENDER_TAA` | 0 | 1: temporal antialiasing instead of the preset's, so motion vectors are drawn (no preset turns TAA on) |
+| `PONKO_RENDER_SHADOW_FILTER` | the preset's | The sun shadow filter instead of the preset's (and the scene's): 1 `Sharp`, 2 `Soft`, 3 `Softest`, 4 `ContactHardening` |
 | `PONKO_RENDER_WIND` | 0 | 1: `game-like`'s tree crowns sway in a material `vertex` function, and 4,096 cubes are placed from a GPU buffer of 262,144 elements that keeps its last frame (what motion vectors of `vertex` functions and buffers cost) |
 | `PONKO_RENDER_VERTEX_MOTION` | 1 | 0: the motion pass ignores what `vertex` functions do (the control for `PONKO_RENDER_WIND` with TAA) |
+| `PONKO_RENDER_VIEWS` | 1 | 2 or 4: split screen, the main camera and one or three views (`ctx.scene3d.views`), each circling the scene from its own side, drawn into their parts of the target as a game's window draws them. Preparing and encoding interleave there, so `prepare` is 0 and `encode` holds both; `submit` is the copy into the target |
 | `PONKO_GPU_TIER` | unset | Opens the device as a weaker GPU (`webgl2`, `baseline`), as the engine's tests do |
 
 A value that doesn't parse stops the run and names the variable.

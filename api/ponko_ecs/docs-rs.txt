@@ -140,14 +140,16 @@ impl<'a> core::marker::Copy for ponko_ecs::ChunkQuery<'a>
 pub struct ponko_ecs::Commands
 impl ponko_ecs::Commands
 pub fn ponko_ecs::Commands::add(&mut self, impl core::ops::function::FnOnce(&mut ponko_ecs::World) + core::marker::Send + 'static)
+pub fn ponko_ecs::Commands::bind(&mut self, &ponko_ecs::World)
 pub fn ponko_ecs::Commands::clear(&mut self)
 pub fn ponko_ecs::Commands::despawn(&mut self, ponko_ecs::Entity)
 pub fn ponko_ecs::Commands::insert<T: ponko_ecs::Component>(&mut self, ponko_ecs::Entity, T)
+pub fn ponko_ecs::Commands::is_bound_to(&self, &ponko_ecs::World) -> bool
 pub fn ponko_ecs::Commands::is_empty(&self) -> bool
 pub fn ponko_ecs::Commands::len(&self) -> usize
 pub fn ponko_ecs::Commands::new() -> Self
 pub fn ponko_ecs::Commands::remove<T: ponko_ecs::Component>(&mut self, ponko_ecs::Entity)
-pub fn ponko_ecs::Commands::spawn<B: ponko_ecs::Bundle>(&mut self, B)
+pub fn ponko_ecs::Commands::spawn<B: ponko_ecs::Bundle>(&mut self, B) -> ponko_ecs::Entity
 impl core::default::Default for ponko_ecs::Commands
 pub fn ponko_ecs::Commands::default() -> Self
 impl core::ops::drop::Drop for ponko_ecs::Commands
@@ -405,6 +407,7 @@ impl ponko_ecs::World
 pub fn ponko_ecs::World::allocated_bytes(&self) -> usize
 pub fn ponko_ecs::World::apply(&mut self, &mut ponko_ecs::Commands)
 pub fn ponko_ecs::World::clear(&mut self)
+pub fn ponko_ecs::World::commands(&self) -> ponko_ecs::Commands
 pub fn ponko_ecs::World::component_at(&self, usize) -> core::option::Option<ponko_ecs::ComponentId>
 pub fn ponko_ecs::World::component_id<T: ponko_ecs::Component>(&self) -> core::option::Option<ponko_ecs::ComponentId>
 pub fn ponko_ecs::World::component_info(&self, ponko_ecs::ComponentId) -> &ponko_ecs::ComponentInfo
@@ -436,6 +439,7 @@ pub fn ponko_ecs::World::resource<R: core::marker::Send + core::marker::Sync + '
 pub fn ponko_ecs::World::resource_mut<R: core::marker::Send + core::marker::Sync + 'static>(&mut self) -> &mut R
 pub fn ponko_ecs::World::resource_scope<R: core::marker::Send + core::marker::Sync + 'static, T>(&mut self, impl core::ops::function::FnOnce(&mut Self, &mut R) -> T) -> T
 pub fn ponko_ecs::World::resources_mut<R: ponko_ecs::ResourceTuple>(&mut self) -> <R as ponko_ecs::ResourceTuple>::Refs
+pub fn ponko_ecs::World::return_idle_ids(&mut self)
 pub fn ponko_ecs::World::sort_by<T: ponko_ecs::Component>(&mut self, impl core::ops::function::Fn(&T) -> u64 + core::marker::Sync)
 pub fn ponko_ecs::World::spawn<B: ponko_ecs::Bundle>(&mut self, B) -> ponko_ecs::Entity
 pub fn ponko_ecs::World::spawn_at<B: ponko_ecs::Bundle>(&mut self, ponko_ecs::Entity, B) -> bool

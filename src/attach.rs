@@ -3,12 +3,13 @@
 //! (`Attached3D`, with the `3d` feature): the parent and child links of a
 //! scene's hierarchy.
 
-use glam::Vec2;
-use rayon::prelude::*;
-
 use crate::ctx::Ctx;
+#[cfg(test)]
 use crate::d2::Transform as Transform2D;
-use ponko_ecs::{Component, Entity, With, World};
+use glam::Vec2;
+#[cfg(any(test, feature = "3d"))]
+use ponko_ecs::World;
+use ponko_ecs::{Component, Entity};
 
 /// Keeps this entity's [`d2::Transform`](crate::d2::Transform) position and rotation at an offset
 /// from another entity's, updated by [`follow_attachments`](crate::systems::follow_attachments). Its own scale
@@ -71,50 +72,15 @@ impl Attached {
     }
 }
 
-/// Chains deeper than this are treated as broken (a loop, most likely).
+/// Bound for the legacy 2D placement test helper.
+#[cfg(test)]
 const MAX_DEPTH: usize = 64;
 
-/// Scratch kept between ticks so following allocates nothing.
-#[derive(Default)]
-struct Scratch {
-    attached: Vec<(Entity, Attached)>,
-    placed: Vec<Option<(Vec2, f32)>>,
-}
-
 /// The system behind [`systems::follow_attachments`](crate::systems::follow_attachments); it keeps
-/// this path for its name (`ponko::attach::follow_attachments`).
+/// this path for its name (`ponko::attach::follow_attachments`). It is the
+/// hierarchy's update: see [`crate::hierarchy`].
 pub(crate) fn follow_attachments(ctx: &mut Ctx) {
-    #[cfg(feature = "3d")]
-    follow3d(ctx);
-    let mut s = ctx.world.remove_resource::<Scratch>().unwrap_or_default();
-    // Same entities, in the same order, as the writing query below.
-    ctx.world
-        .query::<(Entity, &Attached)>()
-        .filter::<With<Transform2D>>()
-        .par_collect_into(&mut s.attached, |(e, a)| (e, *a));
-    if !s.attached.is_empty() {
-        let world = &ctx.world;
-        s.placed.clear();
-        s.attached
-            .par_iter()
-            .map(|&(_, a)| place(world, a))
-            .collect_into_vec(&mut s.placed);
-        let placed = &s.placed;
-        ctx.world
-            .query::<(&mut Transform2D, &Attached)>()
-            .par_for_each_indexed(|i, (t, _)| {
-                if let Some((position, rotation)) = placed[i] {
-                    t.position = position;
-                    t.rotation = rotation;
-                }
-            });
-        for (&(e, _), placed) in s.attached.iter().zip(&s.placed) {
-            if placed.is_none() {
-                ctx.commands.despawn(e);
-            }
-        }
-    }
-    ctx.world.insert_resource(s);
+    crate::hierarchy::WorldHierarchy::update_hierarchy(&mut ctx.world);
 }
 
 /// [`place`], for the editor's tests.
@@ -125,6 +91,7 @@ pub(crate) fn tests_place(world: &World, a: Attached) -> Option<(Vec2, f32)> {
 
 /// Where `a` puts its entity: from the root of the chain down. `None` if
 /// something up the chain is gone (or the chain loops).
+#[cfg(test)]
 fn place(world: &World, a: Attached) -> Option<(Vec2, f32)> {
     // Walk up to the first entity that isn't attached, keeping the links.
     let mut links = [a; MAX_DEPTH];
@@ -243,85 +210,27 @@ pub(crate) fn relative3d(parent: &crate::d3::Transform, world: &crate::d3::Trans
     }
 }
 
-/// Scratch kept between ticks so following in 3D allocates nothing.
-#[cfg(feature = "3d")]
-#[derive(Default)]
-struct Scratch3D {
-    attached: Vec<(Entity, Attached3D)>,
-    placed: Vec<Option<crate::d3::Transform>>,
-}
-
-/// [`follow_attachments`] for [`Attached3D`].
-#[cfg(feature = "3d")]
-fn follow3d(ctx: &mut Ctx) {
-    use crate::d3::Transform as T3;
-    let mut s = ctx.world.remove_resource::<Scratch3D>().unwrap_or_default();
-    ctx.world
-        .query::<(Entity, &Attached3D)>()
-        .filter::<With<T3>>()
-        .par_collect_into(&mut s.attached, |(e, a)| (e, *a));
-    if !s.attached.is_empty() {
-        let world = &ctx.world;
-        s.placed.clear();
-        s.attached
-            .par_iter()
-            .map(|&(_, a)| place3d(world, a))
-            .collect_into_vec(&mut s.placed);
-        let placed = &s.placed;
-        ctx.world
-            .query::<(&mut T3, &Attached3D)>()
-            .par_for_each_indexed(|i, (t, _)| {
-                if let Some(at) = placed[i] {
-                    *t = at;
-                }
-            });
-        for (&(e, _), placed) in s.attached.iter().zip(&s.placed) {
-            if placed.is_none() {
-                ctx.commands.despawn(e);
-            }
-        }
-    }
-    ctx.world.insert_resource(s);
-}
-
 /// Where `a` puts its entity: from the root of the chain down. `None` if
 /// something up the chain is gone (or the chain loops).
 #[cfg(feature = "3d")]
 pub(crate) fn place3d(world: &World, a: Attached3D) -> Option<crate::d3::Transform> {
-    let mut links = [a; MAX_DEPTH];
-    let mut depth = 1;
+    // Editor-only placement also accepts deep trees. A live acyclic chain
+    // cannot contain more links than the world's entity count, plus the
+    // supplied (possibly virtual) link. Bound the walk to reject cycles.
+    let mut links = vec![a];
     let mut up = a.to;
     while let Some(&next) = world.get::<Attached3D>(up) {
-        if depth == MAX_DEPTH {
+        if links.len() > world.len() {
             return None;
         }
-        links[depth] = next;
-        depth += 1;
+        links.push(next);
         up = next.to;
     }
     let mut at = *world.get::<crate::d3::Transform>(up)?;
-    for link in links[..depth].iter().rev() {
+    for link in links.iter().rev() {
         at = compose3d(&at, &link.offset);
     }
     Some(at)
-}
-
-/// Places every 3D attachment now, without despawning broken ones: for the
-/// editor, whose edits must show while the simulation is paused.
-#[cfg(feature = "3d")]
-pub(crate) fn settle3d(world: &mut World) {
-    let attached: Vec<(Entity, Attached3D)> = world
-        .query::<(Entity, &Attached3D)>()
-        .iter()
-        .map(|(e, a)| (e, *a))
-        .collect();
-    for (e, a) in attached {
-        if let Some(at) = place3d(world, a)
-            && let Some(t) = world.get_mut::<crate::d3::Transform>(e)
-        {
-            *t = at;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -368,6 +277,21 @@ mod tests {
         assert!((at.position - vec3(10.0, 0.0, -4.0)).length() < 1e-5, "{}", at.position);
         assert!(at.rotation.angle_between(turn) < 1e-5);
         assert_eq!(at.scale, glam::Vec3::splat(2.0));
+    }
+
+    #[cfg(feature = "3d")]
+    #[test]
+    fn editor_placement_accepts_chains_deeper_than_64() {
+        use crate::d3::Transform as T3;
+        let mut world = World::new();
+        let mut parent = world.spawn((T3::default(),));
+        for _ in 0..128 {
+            parent = world.spawn((T3::default(), Attached3D::to(parent).offset(T3::at(glam::Vec3::X))));
+        }
+        assert_eq!(
+            place3d(&world, Attached3D::to(parent)).unwrap().position,
+            glam::Vec3::X * 128.0
+        );
     }
 
     #[cfg(feature = "3d")]

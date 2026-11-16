@@ -69,6 +69,11 @@ impl InterestConfig {
     /// [`MAX_INTEREST_TIERS`] tiers with positive, increasing radii and an
     /// `every` of at least 1, and a hysteresis from 0 up to (not including)
     /// the first radius.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the first setting that breaks one of those rules.
+    ///
     /// ```
     /// use ponko::net::InterestConfig;
     /// assert!(ponko::net::InterestConfig::default().validate().is_ok());
@@ -236,9 +241,14 @@ fn cell_key(c: [i32; 3]) -> u64 {
 }
 
 impl Interest {
-    /// Panics if the config is invalid: no tiers or more than
+    /// A tracker for `config`.
+    ///
+    /// # Panics
+    ///
+    /// If the config is invalid: no tiers or more than
     /// [`MAX_INTEREST_TIERS`], radii not positive and increasing, an `every`
     /// of 0, or a hysteresis that is negative or not below the first radius.
+    ///
     /// ```
     /// let interest = ponko::net::Interest::new(Default::default());
     /// assert_eq!(interest.config().tiers.len(), 2);

@@ -31,8 +31,8 @@ Every call is spelled on its service: `ctx.time.dt()`,
 `Ctx` (`ctx.dt()`, `ctx.key_down(k)`, `ctx.key_pressed(k)`,
 `ctx.key_released(k)`, `ctx.mouse_pos()`, `ctx.draw(..)`,
 `ctx.draw_text(..)`, `ctx.load_texture(..)`, `ctx.load_sound(..)`,
-`ctx.play_sound(..)`); those are deprecated, and the compiler names the
-service call that replaces each. `ctx.quit()` is the context's own.
+`ctx.play_sound(..)`); those are deprecated since 0.2 and go in 0.3, and the
+compiler names the service call that replaces each. `ctx.quit()` is the context's own.
 
 A few more methods stay on `Ctx` because they use several areas at once:
 `ctx.free(handle)`, `ctx.is_live(handle)` and `ctx.live_counts()` (see

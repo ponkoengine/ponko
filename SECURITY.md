@@ -8,7 +8,7 @@ Security fixes go to the latest 0.x release (as a patch release) and to
 ## Reporting a vulnerability
 
 Please **don't** open a public issue. Report it privately through
-[GitHub's private vulnerability reporting](https://github.com/ponkoengine/ponko/security/advisories/new)
+[a confidential issue](https://gitlab.com/ponkoengine/ponko/-/issues/new?issue%5Bconfidential%5D=true)
 instead. Include what's affected, how to reproduce it, and what an attacker
 could do with it.
 

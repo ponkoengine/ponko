@@ -1318,6 +1318,10 @@ pub(crate) const METHODS: &[(&str, &str)] = &[
         "show or hide the on-screen performance overlay; params: on (bool)",
     ),
     (
+        "debug.draw",
+        "debug drawing (the game's ctx.debug lines, shapes and labels) and the engine's own debug views: turn them on or off and see what is drawn; params: on? (bool: debug drawing on or off), views? (object of view name to bool; views: colliders, navmesh, bounds, lights, hierarchy), clear? (true drops everything drawn, timed shapes too). Returns on, views (each view's state) and drawn (lines_2d, lines_3d, labels the next frame shows, before the views add theirs)",
+    ),
+    (
         "quality.set",
         "switch the 3D graphics quality preset; params: level (low, medium, high, ultra or recommended)",
     ),
@@ -2075,6 +2079,7 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
             ctx.perf.set_hud(on);
             json!(on)
         }
+        "debug.draw" => crate::debug::control::handle(ctx, params)?,
         "quality.set" => quality_set(ctx, params)?,
         "game.quit" => {
             ctx.quit();

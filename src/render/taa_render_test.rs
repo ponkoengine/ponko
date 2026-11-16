@@ -15,10 +15,10 @@ use crate::three::{Frame3D, GpuMaterialDesc, Scene3D, SkinFrame, SkyLight};
 struct Rig {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    renderer: Renderer3D,
+    renderer: Box<Renderer3D>,
     textures: Vec<GpuTexture>,
     output: wgpu::Texture,
-    ctx: Ctx,
+    ctx: Box<Ctx>,
     frame: Frame3D,
     cube: Mesh,
     size: u32,
@@ -47,7 +47,9 @@ impl Rig {
         let (layout, white, textures) = white_textures(&device, &queue);
         let output = target(&device, (size, size), wgpu::TextureFormat::Rgba8UnormSrgb);
         // A box that shines white and lights nothing, on black.
-        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(size as f32, size as f32));
+        // Boxed: a test that holds two rigs by value comes close to a test
+        // thread's 2 MiB stack.
+        let mut ctx = Box::new(Ctx::new(1.0 / 60.0, Vec2::new(size as f32, size as f32)));
         let glow = MaterialDesc {
             color: Color::BLACK,
             roughness: 1.0,
@@ -57,7 +59,7 @@ impl Rig {
         let material = ctx.gfx.create_material(glow);
         let cube_data = MeshData::cube(1.0);
         let cube = ctx.gfx.create_mesh(&cube_data, material);
-        let mut renderer = Renderer3D::new(&device, &layout, output.format(), 0, &white, 4, true);
+        let mut renderer = Box::new(Renderer3D::new(&device, &layout, output.format(), 0, &white, 4, true));
         renderer.create_material(&device, &GpuMaterialDesc::new(&glow), &textures);
         renderer.create_mesh(
             &device,

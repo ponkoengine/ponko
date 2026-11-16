@@ -22,6 +22,9 @@ use crate::ui_retained::{check_output, copy_string, existing, id_to_c, optional_
 use crate::{Failure, PonkoCtx, PonkoStatus, boundary, error, invalid};
 
 /// What a node is to assistive technology (`PonkoUiAccessNode::role`).
+/// Rust's `UiRole` can gain roles in a minor release; until ABI 2 has a
+/// constant for one, such a node reads as `PONKO_UI_ROLE_GROUP` here (its
+/// text, `ponko_ctx_ui_access_text`, names the real role).
 /// ```
 /// assert_eq!(ponko_ffi::PonkoUiRole::PONKO_UI_ROLE_SLIDER as u32, 8);
 /// ```
@@ -50,7 +53,9 @@ pub enum PonkoUiRole {
     PONKO_UI_ROLE_SLIDER,
 }
 
-/// Which kind of value a node has (`PonkoUiAccessNode::value_kind`).
+/// Which kind of value a node has (`PonkoUiAccessNode::value_kind`). A kind
+/// of value Rust gains in a minor release reads as
+/// `PONKO_UI_ACCESS_VALUE_NONE` until this enum has a constant for it.
 /// ```
 /// assert_eq!(ponko_ffi::PonkoUiAccessValueKind::PONKO_UI_ACCESS_VALUE_RANGE as u32, 3);
 /// ```
@@ -200,6 +205,9 @@ fn role_to_c(role: UiRole) -> PonkoUiRole {
         UiRole::TextInput => PonkoUiRole::PONKO_UI_ROLE_TEXT_INPUT,
         UiRole::CheckBox => PonkoUiRole::PONKO_UI_ROLE_CHECKBOX,
         UiRole::Slider => PonkoUiRole::PONKO_UI_ROLE_SLIDER,
+        // A role added in Rust before it has a constant here: the generic
+        // container is the closest safe description.
+        _ => PonkoUiRole::PONKO_UI_ROLE_GROUP,
     }
 }
 
@@ -220,6 +228,8 @@ fn node_to_c(n: &UiAccessNode) -> PonkoUiAccessNode {
             f32::from(u8::from(*on)),
         ),
         UiAccessValue::Range(v) => (PonkoUiAccessValueKind::PONKO_UI_ACCESS_VALUE_RANGE, *v),
+        // A kind of value added in Rust before it has a constant here.
+        _ => (PonkoUiAccessValueKind::PONKO_UI_ACCESS_VALUE_NONE, 0.0),
     };
     let (anchor, caret) = n.selection.unwrap_or((0, 0));
     PonkoUiAccessNode {

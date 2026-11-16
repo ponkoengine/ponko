@@ -24,22 +24,17 @@ Storage::read_json               storage.md        # storage_read the bytes and 
 SaveFormat                       storage.md        # C and C++ save slots are JSON; a binary save goes through Rust for now
 Storage::save_world_in_background  storage.md      # C and C++ save slots on the game's thread with ponko_ctx_save_world
 UiAccessAdapter::for_ns_view     ui.md             # needs a Rust Ui; the engine's window gets the adapter; ponko_ui_access_* give a snapshot
-SplitToning                      3d.md             # not in PonkoPost yet: adding fields changes its layout
-DepthOfField                     3d.md             # same
-Post::lerp                       3d.md             # same; blend PonkoPost fields yourself
-PostVolume                       3d.md             # same
 NavObstacleShape                 navigation3d.md   # C and C++ obstacles are unturned boxes; ponko_ctx_set_nav_obstacle and its carve variant
-ParticleSettings::softness       3d.md             # PonkoParticleSettings3D's layout is fixed; C and C++ particles are drawn hard
-Camera::particles                3d.md             # PonkoCamera3D's layout is fixed; C and C++ cameras always draw particles, trails and lines
 SkyShader                        3d.md             # C and C++ games use the built-in atmosphere or the flat sky
+Graphics::stream_instance_cell   3d.md             # Job is Rust's; C and C++ games build a cell's matrices on their own threads and call ponko_ctx_add_instance_cell
+InstanceCellData                 3d.md             # same: the matrices and colours go straight to ponko_ctx_add_instance_cell
+Graphics::instance_cell_state    3d.md             # same: a cell added from C is on the GPU at once
 Ui::set_rich                     ui.md             # not bound yet; labels side by side with their own paint
 Ui::set_inline_image             ui.md             # same
 Ui::set_inline_font              ui.md             # same
 Ui::link                         ui.md             # same; a button for each link
 UiEvent::LinkClicked             ui.md             # same
-Prediction                       networking.md     # generic over the game's own state and input types; C and C++ games keep their own input history
-InputQueue                       networking.md     # same: queue the decoded inputs in C or C++ yourself
-Smoothing                        networking.md     # same: fade the correction offset yourself
+Smoothing                        networking.md     # generic over what is drawn (Smooth types); C and C++ fade the correction offset themselves
 Physics3D::move_character        physics3d.md      # C and C++ characters walk with the physics step only; no replay of one tick
 Net::accept_web                  networking.md     # not bound yet; C and C++ hosts take UDP players only
 Net::join_web                    networking.md     # same; C and C++ games don't build for the web yet
@@ -49,3 +44,10 @@ NetMessages::join_web            networking.md     # same
 NetMessages::web_addr            networking.md     # same
 Graphics::load_lights            3d.md             # glTF lights and cameras: read the file's KHR_lights_punctual and cameras yourself; models load with the same extensions
 Graphics::load_cameras           3d.md             # same
+SkeletonData::add_bone           skeleton2d.md     # C and C++ skeletons come from files (Ponko's format or a Spine export) through the assets
+SpineAtlas                       skeleton2d.md     # load the export, its .atlas and pages through the assets (a memory source for files in memory)
+GltfScene::load                  blender.md        # C and C++ spawn the file (ponko_ctx_spawn_gltf) and read its nodes from the entities
+gltf_properties_schema           blender.md        # PONKO_SCHEMA=<file> (ponko schema) writes it for C and C++ games too
+perf::net_alloc_bytes            profiling.md      # C and C++ games count no frees of their own memory here; ponko_ctx_live_counts and the asset inventory are their leak checks
+Animator::normalized_time_f64    sim-clock.md      # the C API reads the f32 normalized time
+Skeleton::normalized_time_f64    sim-clock.md      # same

@@ -32,6 +32,17 @@ pub const TERRAIN_LAYERS: usize = 8;
 ///
 /// New fields may be added in any release: build one with
 /// [`TerrainMaterialDesc::new`] and the `with_*` methods.
+///
+/// # Defaults and cost
+///
+/// [`TerrainMaterialDesc::new`] takes the layers, the weight map and where
+/// it lies, and sets the rest: no normal maps, a `normal_strength` of 1, each
+/// layer repeating every 4 world units and a `roughness` of 0.9. The
+/// description itself is a few numbers and three texture-array handles; the
+/// memory is that of those arrays, which you make and free yourself. Drawing
+/// reads the weight map and, for every ground pixel, blends each of the
+/// layers it has (at most [`TerrainTile::LAYERS`](crate::terrain::TerrainTile::LAYERS)), with an
+/// extra normal-map read per layer when `normals` is set.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct TerrainMaterialDesc {
@@ -229,6 +240,15 @@ impl TerrainTile {
     /// Up to how far from the camera the finest mesh is drawn, in world
     /// units. The tile's size unless changed with
     /// [`with_lod_distance`](Self::with_lod_distance).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let ground = ctx.gfx.default_material();
+    ///     let tile = ctx.gfx.create_terrain_tile(&[0.0; 9 * 9], 16.0, ground);
+    ///     assert_eq!(tile.lod_distance(), 16.0, "the tile's size, by default");
+    /// });
+    /// ```
     #[must_use]
     pub fn lod_distance(&self) -> f32 {
         self.lod_distance
@@ -288,11 +308,29 @@ impl Graphics {
     }
 
     /// [`create_terrain_material`](Self::create_terrain_material) with errors
-    /// as values: [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) for a
+    /// as values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) for a
     /// description that doesn't fit together (too many layers, too few weight
     /// images or normal maps, a size not above 0),
     /// [`BadHandle`](crate::error::ErrorKind::BadHandle) for an array this game
     /// didn't make.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::terrain::{TerrainMaterialDesc, TextureKind};
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let pixel: &[u8] = &[255; 4];
+    ///     // Five layers need two weight images (four layers each), but there is one.
+    ///     let layers = ctx.gfx.create_texture_array(1, 1, &[pixel; 5], TextureKind::Color);
+    ///     let weights = ctx.gfx.create_texture_array(1, 1, &[pixel], TextureKind::Data);
+    ///     let desc = TerrainMaterialDesc::new(layers, weights, Vec2::ZERO, vec2(64.0, 64.0));
+    ///     let err = ctx.gfx.try_create_terrain_material(&desc).unwrap_err();
+    ///     assert_eq!(err.kind(), ErrorKind::Invalid);
+    /// });
+    /// ```
     pub fn try_create_terrain_material(&mut self, desc: &TerrainMaterialDesc) -> Result<Material, crate::error::Error> {
         desc.check()
             .map_err(|e| crate::error::Error::new(crate::error::ErrorKind::Invalid, e))?;
@@ -300,7 +338,7 @@ impl Graphics {
         if arrays.into_iter().flatten().any(|a| !self.has_texture_array(a)) {
             return Err(crate::error::Error::new(
                 crate::error::ErrorKind::BadHandle,
-                "that texture array wasn't made by this game",
+                "that texture array wasn't made by this game; create or load it in this game",
             ));
         }
         let shader = match self.assets3d.terrain_shader {

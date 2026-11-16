@@ -334,7 +334,7 @@ fn a_retained_label_in_arabic_starts_at_the_right() {
         ctx.gfx.set_font_fallbacks(Font::DEFAULT, &[arabic]);
         let root = ctx.ui.root().layout(crate::ui::UiLayout::fill()).id();
         ctx.ui.label(root, text).layout(crate::ui::UiLayout::row(32.0));
-        ctx.ui.push_screen(root, false);
+        ctx.ui.push_modeless(root);
         ctx.ui.layout(size);
         ctx.draw_retained_ui();
         rig.shot(&mut ctx)

@@ -4,7 +4,10 @@
 //! counts allocations per frame and per system (the overlay, benchmark
 //! reports and [`Perf::report`](crate::perf::Perf::report) show them). It
 //! counts only while profiling is on, so a game that leaves it installed pays
-//! one relaxed atomic load per allocation.
+//! one relaxed atomic load per allocation and per free.
+//!
+//! It also counts the bytes freed, so [`net_alloc_bytes`] tells how much of
+//! what was allocated is still held: the number a leak check watches.
 //!
 //! Counts are for the whole process: allocations on rayon workers or other
 //! threads count too, and a system that allocates inside `par_for_each` is
@@ -18,6 +21,7 @@ use crate::scope::ACTIVE;
 
 static COUNT: AtomicU64 = AtomicU64::new(0);
 static BYTES: AtomicU64 = AtomicU64::new(0);
+static FREED: AtomicU64 = AtomicU64::new(0);
 static SEEN: AtomicBool = AtomicBool::new(false);
 
 /// Heap allocations made while profiling was on, from [`alloc_counts`].
@@ -51,6 +55,13 @@ fn note(bytes: usize) {
     }
 }
 
+#[inline]
+fn note_free(bytes: usize) {
+    if ACTIVE.load(Relaxed) > 0 {
+        FREED.fetch_add(bytes as u64, Relaxed);
+    }
+}
+
 // SAFETY: every method forwards to `System` with the same arguments; the
 // counting only touches atomics and never allocates.
 unsafe impl GlobalAlloc for CountingAllocator {
@@ -67,12 +78,14 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        note_free(layout.size());
         // SAFETY: `ptr` came from `System` with this layout.
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         note(new_size);
+        note_free(layout.size());
         // SAFETY: as above.
         unsafe { System.realloc(ptr, layout, new_size) }
     }
@@ -103,6 +116,29 @@ pub fn alloc_counts() -> AllocCounts {
     }
 }
 
+/// Bytes allocated minus bytes freed, both counted while profiling was on
+/// (a reallocation counts as a free of the old size and an allocation of
+/// the new one). Take two readings with profiling on and subtract: the
+/// difference is what the code between them still holds, so a loop that
+/// gives back everything it takes reads (close to) zero however long it
+/// runs, and a leak grows with every pass. Memory allocated before
+/// profiling was turned on and freed after counts as a negative.
+///
+/// Like [`alloc_counts`] it covers the whole process, and it is zero
+/// unless [`CountingAllocator`] is installed.
+///
+/// ```
+/// let before = ponko::perf::net_alloc_bytes();
+/// let after = ponko::perf::net_alloc_bytes();
+/// assert_eq!(after - before, 0, "nothing ran in between");
+/// ```
+pub fn net_alloc_bytes() -> i64 {
+    // Read freed first: an allocation and its free landing between the two
+    // loads then can't make the figure smaller than it is.
+    let freed = FREED.load(Relaxed);
+    BYTES.load(Relaxed) as i64 - freed as i64
+}
+
 /// `true` once an allocation has been counted: the counting allocator is
 /// installed (or C++ reports its own).
 pub(crate) fn counting() -> bool {
@@ -123,5 +159,14 @@ mod tests {
         // Other tests may be counting too, so only check the lower bound.
         assert!(after.count > before.count && after.bytes >= before.bytes + 100);
         assert!(counting());
+    }
+
+    #[test]
+    fn frees_count_only_while_profiling() {
+        crate::scope::enable();
+        let before = FREED.load(Relaxed);
+        note_free(64);
+        crate::scope::disable();
+        assert!(FREED.load(Relaxed) >= before + 64);
     }
 }

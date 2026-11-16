@@ -374,6 +374,7 @@ impl Editor {
                     name: name.into(),
                     before,
                 });
+                settle(&mut ctx.world);
             }
             return Ok(());
         };
@@ -411,6 +412,7 @@ impl Editor {
             name: name.into(),
             before,
         });
+        settle(&mut ctx.world);
         Ok(())
     }
 
@@ -622,11 +624,10 @@ impl Before {
 }
 
 /// Places every attachment now (the simulation may be paused while
-/// editing): 3D ones; 2D ones follow when `follow_attachments` runs.
+/// editing), 2D and 3D, and brings the children lists up to date; broken
+/// links are left for `follow_attachments` to despawn.
 pub(crate) fn settle(world: &mut ponko_ecs::World) {
-    #[cfg(feature = "3d")]
-    crate::attach::settle3d(world);
-    let _ = world;
+    crate::hierarchy::settle(world);
 }
 
 /// Gives `e` the world transform `t`. If it's attached, its offset changes
@@ -777,7 +778,8 @@ pub(crate) struct Node {
     pub parent: Option<(Entity, Link)>,
     /// It's a prefab instance's root (it has `PrefabParts`).
     pub prefab: bool,
-    /// The entities that hang off it, in id order.
+    /// The entities that hang off it: attached ones in the parent's
+    /// children order, then the others in id order.
     pub children: Vec<Entity>,
 }
 
@@ -810,6 +812,16 @@ pub(crate) fn hierarchy(world: &ponko_ecs::World) -> Vec<Node> {
             && let Some(parent) = nodes.get_mut(&p)
         {
             parent.children.push(e);
+        }
+    }
+    // Attached children in their parent's order (its `Children`), the
+    // rest after them in id order.
+    for node in nodes.values_mut() {
+        if node.children.len() > 1 && world.get::<crate::hierarchy::Children>(node.entity).is_some() {
+            use crate::hierarchy::WorldHierarchy;
+            let order: HashMap<Entity, usize> = world.children(node.entity).enumerate().map(|(i, c)| (c, i)).collect();
+            node.children
+                .sort_by_key(|c| order.get(c).copied().unwrap_or(usize::MAX));
         }
     }
     // Depth first from the roots; entities in a loop have no root above
@@ -1189,6 +1201,24 @@ mod tests {
         assert_eq!(nodes[2].parent, Some((part, Link::Attached)));
         assert_eq!(nodes[0].children, vec![part]);
         assert_eq!(tree(&ctx.world, &[root]), vec![root, part, attached]);
+    }
+
+    #[test]
+    fn the_hierarchy_shows_children_in_the_parents_order() {
+        use crate::hierarchy::WorldHierarchy;
+        let mut ctx = ctx();
+        let mut ed = Editor::default();
+        let parent = ctx.world.spawn((Transform2D::default(),));
+        let a = ctx.world.spawn((Transform2D::default(),));
+        let b = ctx.world.spawn((Transform2D::default(),));
+        ed.set_parent(&mut ctx, a, Some(parent)).unwrap();
+        ed.set_parent(&mut ctx, b, Some(parent)).unwrap();
+        assert_eq!(ctx.world.children(parent).collect::<Vec<_>>(), [a, b], "listed at once");
+        ctx.world.set_child_index(b, 0);
+        let nodes = hierarchy(&ctx.world);
+        assert_eq!(nodes[0].children, vec![b, a]);
+        let order: Vec<Entity> = nodes.iter().map(|n| n.entity).collect();
+        assert_eq!(order, vec![parent, b, a]);
     }
 
     #[test]

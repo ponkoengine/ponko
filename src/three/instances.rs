@@ -5,7 +5,9 @@ use crate::gfx::Graphics;
 use glam::{Mat4, Vec3};
 
 /// A persistent batch. Handles are never recycled; freeing twice is harmless.
-/// Create one batch per streamed region and free it when that region unloads.
+/// A streamed world adds and drops its instances one cell at a time
+/// ([`InstanceCell`](crate::render::InstanceCell)), or makes one batch per
+/// streamed region and frees it when that region unloads.
 ///
 /// Free a batch before the meshes it draws. A batch whose mesh (or one of
 /// whose level meshes) was freed draws nothing from the next frame on, and
@@ -31,6 +33,17 @@ pub struct InstanceBatch {
 /// let settings = ponko::render::InstanceBatchOptions { max_distance: 500.0, ..Default::default() };
 /// assert!(settings.cast_shadows);
 /// ```
+///
+/// # Defaults and cost
+///
+/// [`Default`] is 32-unit cells, no distance limit, shadows cast, a white
+/// tint and [`BatchCulling::Auto`]. Instances are culled cell by cell, so a
+/// smaller `cell_size` culls more precisely and a larger one tests fewer
+/// cells; an infinite `max_distance` draws everything the camera sees, while
+/// a finite one drops far instances before they cost a draw. `cast_shadows`
+/// adds the batch to every shadow view that reaches it (the sun's cascades
+/// and each shadow-casting light), so turning it off for small props saves
+/// shadow draws.
 #[derive(Clone, Copy, Debug)]
 pub struct InstanceBatchOptions {
     /// Width of each spatial cell in world units. Must be finite and positive.
@@ -66,7 +79,7 @@ pub struct InstanceBatchOptions {
 pub enum BatchCulling {
     /// The renderer picks by the batch's size, and keeps batches of several
     /// distance levels and see-through batches on the CPU path (see the
-    /// guide's "Which path a batch takes").
+    /// guide's "Which path a batch takes"). WebGL2 always takes the CPU path.
     #[default]
     Auto,
     /// Cull every instance in the compute pass and draw with indirect
@@ -95,6 +108,23 @@ impl Default for InstanceBatchOptions {
 /// A mesh drawn in a half-open distance band, measured to the instance origin.
 /// Overlapping bands draw both levels. Sun views use the main camera; local
 /// shadows use the light position. Mesh shadow settings still apply.
+///
+/// ```
+/// # use ponko::prelude::*;
+/// use ponko::render::{InstanceBatchOptions, InstanceLevel, MaterialDesc, MeshData};
+/// Game::new("t", 1, 1).run_headless(0, |ctx| {
+///     let mat = ctx.gfx.create_material(MaterialDesc::default());
+///     let near = ctx.gfx.create_mesh(&MeshData::cube(1.0), mat);
+///     let far = ctx.gfx.create_mesh(&MeshData::cube(0.5), mat);
+///     // The detailed mesh up to 50 units, a cheaper one beyond.
+///     let levels = [
+///         InstanceLevel { mesh: near, min_distance: 0.0, max_distance: 50.0, camera: true, shadows: true },
+///         InstanceLevel { mesh: far, min_distance: 50.0, max_distance: f32::INFINITY, camera: true, shadows: false },
+///     ];
+///     let batch = ctx.gfx.create_instance_batch_levels(&levels, &[Mat4::IDENTITY], &[], InstanceBatchOptions::default());
+///     assert_eq!(ctx.gfx.instance_batch_len(batch), Some(1));
+/// });
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct InstanceLevel {
     /// Mesh and materials for this level. Must outlive the batch: while it
@@ -134,6 +164,16 @@ pub(crate) struct Batch {
     /// Withdrawn from the renderer because a level's mesh was freed (see
     /// `Assets3D::validate_instance_batches`).
     pub suspended: bool,
+    /// The level meshes' bounds this batch was built with: its cells are
+    /// built with them too, also while a mesh is evicted.
+    pub bounds: (Vec3, f32),
+    /// Instances counted for the automatic path choice: its own, or for an
+    /// instance cell, its whole batch's when it was uploaded.
+    pub route_count: u32,
+    /// For an instance cell's row: the batch it belongs to.
+    pub parent: Option<u32>,
+    /// For a batch: its live instance cells (see `instance_cells.rs`).
+    pub members: Vec<super::InstanceCell>,
 }
 impl Batch {
     fn new(mesh: Mesh, transforms: &[Mat4], options: InstanceBatchOptions, bounds: (Vec3, f32)) -> Self {
@@ -152,7 +192,7 @@ impl Batch {
             true,
         )
     }
-    fn levels(
+    pub(crate) fn levels(
         levels: &[InstanceLevel],
         transforms: &[Mat4],
         colors: &[Color],
@@ -166,10 +206,16 @@ impl Batch {
         );
         assert!(
             options.cell_size.is_finite() && options.cell_size > 0.0,
-            "invalid cell size"
+            "instance batch: cell_size must be finite and > 0; choose a positive cell size"
         );
-        assert!(options.max_distance >= 0.0, "invalid maximum distance");
-        assert!(transforms.len() <= 16_777_216, "too many instances");
+        assert!(
+            options.max_distance >= 0.0,
+            "instance batch: max_distance must be >= 0; use 0 for unlimited distance"
+        );
+        assert!(
+            transforms.len() <= 16_777_216,
+            "instance batch: too many instances; split into batches of at most 16777216"
+        );
         let mut sorted: Vec<_> = transforms
             .iter()
             .enumerate()
@@ -201,6 +247,10 @@ impl Batch {
             spheres: Vec::with_capacity(sorted.len()),
             cells: Vec::new(),
             suspended: false,
+            bounds,
+            route_count: transforms.len() as u32,
+            parent: None,
+            members: Vec::new(),
         };
         let mut previous = None;
         for (key, matrix, center, radius, color) in sorted {
@@ -238,8 +288,27 @@ impl Batch {
 }
 impl Graphics {
     /// Uploads transforms once; the mesh retains its normal materials.
-    /// See [`InstanceBatch`] for an example. Empty batches are valid.
-    /// Panics for skinned meshes: use model entities with `Skeleton`/`SkinOf`.
+    /// See [`InstanceBatch`] for an example. Empty batches are valid. For
+    /// skinned meshes use model entities with `Skeleton`/`SkinOf` instead.
+    ///
+    /// # Panics
+    ///
+    /// For a freed mesh or a skinned one, an `options.cell_size` that is not
+    /// finite and positive, a negative `options.max_distance`, more than
+    /// 16 777 216 transforms, or a transform that is not finite and affine.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # use ponko::render::{InstanceBatchOptions, MaterialDesc, MeshData};
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let mat = ctx.gfx.create_material(MaterialDesc::default());
+    ///     let mesh = ctx.gfx.create_mesh(&MeshData::cube(1.0), mat);
+    ///     // A grove: three trees, culled cell by cell.
+    ///     let trees: Vec<Mat4> = (0..3).map(|i| Mat4::from_translation(vec3(i as f32 * 10.0, 0.0, 0.0))).collect();
+    ///     let batch = ctx.gfx.create_instance_batch(mesh, &trees, InstanceBatchOptions::default());
+    ///     assert_eq!(ctx.gfx.instance_batch_len(batch), Some(3));
+    /// });
+    /// ```
     pub fn create_instance_batch(
         &mut self,
         mesh: Mesh,
@@ -247,7 +316,10 @@ impl Graphics {
         options: InstanceBatchOptions,
     ) -> InstanceBatch {
         self.check_static_instance_mesh(mesh);
-        let bounds = self.assets3d.live_bounds(mesh.id).expect("invalid mesh");
+        let bounds = self
+            .assets3d
+            .live_bounds(mesh.id)
+            .expect("instance batch: mesh is freed or foreign; create a live mesh in this game");
         let batch = Batch::new(mesh, transforms, options, bounds);
         let id = self.assets3d.instance_batches.len() as u32;
         if let Some(r) = self.renderer.as_mut() {
@@ -261,6 +333,15 @@ impl Graphics {
     /// distance, independently of `options.max_distance` (legacy API only).
     /// Empty colours use `options.tint`; otherwise one sRGB colour is required
     /// per transform. Cell width and `cast_shadows` apply to every level.
+    ///
+    /// # Panics
+    ///
+    /// For no levels, a level whose mesh is freed or skinned, or a distance
+    /// band that is not finite, nonnegative and ordered; for colours that are
+    /// neither empty nor one per transform; and for the invalid options and
+    /// transforms of [`create_instance_batch`](Self::create_instance_batch).
+    ///
+    /// See [`InstanceLevel`] for an example.
     pub fn create_instance_batch_levels(
         &mut self,
         levels: &[InstanceLevel],
@@ -268,7 +349,9 @@ impl Graphics {
         colors: &[Color],
         options: InstanceBatchOptions,
     ) -> InstanceBatch {
-        let bounds = self.instance_level_bounds(levels).expect("invalid instance level mesh");
+        let bounds = self
+            .instance_level_bounds(levels)
+            .expect("instance level: mesh is freed or foreign; create a live mesh in this game");
         let batch = Batch::levels(levels, transforms, colors, options, bounds, false);
         let id = self.assets3d.instance_batches.len() as u32;
         if let Some(r) = self.renderer.as_mut() {
@@ -294,18 +377,40 @@ impl Graphics {
         for level in levels {
             assert!(
                 level.min_distance.is_finite() && level.min_distance >= 0.0 && level.max_distance > level.min_distance,
-                "invalid instance distance band"
+                "instance level: use finite min_distance >= 0 and max_distance > min_distance"
             );
             self.check_static_instance_mesh(level.mesh);
             let (center, radius) = self.assets3d.live_bounds(level.mesh.id)?;
             lo = lo.min(center - radius);
             hi = hi.max(center + radius);
         }
-        Some(((lo + hi) * 0.5, (hi - lo).length() * 0.5))
+        // A sphere around the boxes' centre holding every level's sphere:
+        // a level's own when they are alike (the box's corners would be
+        // farther by up to the square root of 3).
+        let center = (lo + hi) * 0.5;
+        let radius = levels
+            .iter()
+            .filter_map(|l| self.assets3d.live_bounds(l.mesh.id))
+            .map(|(c, r)| c.distance(center) + r)
+            .fold(0.0, f32::max);
+        Some((center, radius))
     }
     /// Changes a live batch's culling preference and immediately reselects its
     /// path using the current materials. Returns false for a freed batch.
     /// Device capability and size limits still apply to `PreferGpu`.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # use ponko::render::{InstanceBatchOptions, MaterialDesc, MeshData};
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let mat = ctx.gfx.create_material(MaterialDesc::default());
+    ///     let mesh = ctx.gfx.create_mesh(&MeshData::cube(1.0), mat);
+    ///     let batch = ctx.gfx.create_instance_batch(mesh, &[Mat4::IDENTITY], InstanceBatchOptions::default());
+    ///     assert!(ctx.gfx.set_instance_batch_culling(batch, ponko::render::BatchCulling::PreferCpu));
+    ///     ctx.gfx.free(batch);
+    ///     assert!(!ctx.gfx.set_instance_batch_culling(batch, ponko::render::BatchCulling::PreferGpu), "freed");
+    /// });
+    /// ```
     pub fn set_instance_batch_culling(&mut self, batch: InstanceBatch, culling: BatchCulling) -> bool {
         let Some(Some(data)) = self.assets3d.instance_batches.get_mut(batch.id as usize) else {
             return false;
@@ -315,16 +420,48 @@ impl Graphics {
             renderer.set_instance_batch(batch.id, Some(data));
         }
         self.assets3d.instance_batch_revision = self.assets3d.instance_batch_revision.wrapping_add(1);
+        self.set_instance_cells_culling(batch.id, culling);
         true
     }
     /// Replaces transforms and rebuilds cells. Returns false for a freed handle.
     /// See [`InstanceBatch`].
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # use ponko::render::{InstanceBatchOptions, MaterialDesc, MeshData};
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let mat = ctx.gfx.create_material(MaterialDesc::default());
+    ///     let mesh = ctx.gfx.create_mesh(&MeshData::cube(1.0), mat);
+    ///     let batch = ctx.gfx.create_instance_batch(mesh, &[Mat4::IDENTITY], InstanceBatchOptions::default());
+    ///     assert!(ctx.gfx.update_instance_batch(batch, &[Mat4::IDENTITY, Mat4::from_translation(Vec3::X)]));
+    ///     assert_eq!(ctx.gfx.instance_batch_len(batch), Some(2));
+    /// });
+    /// ```
     pub fn update_instance_batch(&mut self, batch: InstanceBatch, transforms: &[Mat4]) -> bool {
         self.update_instance_batch_colors(batch, transforms, &[])
     }
     /// Replaces transforms and sRGB colours, rebuilding cells. Empty colours
     /// restore the uniform tint, as does `update_instance_batch`.
     /// Returns false for a freed batch or mesh.
+    ///
+    /// # Panics
+    ///
+    /// For colours that are neither empty nor one per transform, or a
+    /// transform that is not finite and affine.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # use ponko::render::{InstanceBatchOptions, MaterialDesc, MeshData};
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let mat = ctx.gfx.create_material(MaterialDesc::default());
+    ///     let mesh = ctx.gfx.create_mesh(&MeshData::cube(1.0), mat);
+    ///     let batch = ctx.gfx.create_instance_batch(mesh, &[Mat4::IDENTITY; 2], InstanceBatchOptions::default());
+    ///     // One sRGB colour per transform.
+    ///     assert!(ctx.gfx.update_instance_batch_colors(batch, &[Mat4::IDENTITY; 2], &[Color::RED, Color::BLUE]));
+    ///     // Empty colours restore the batch's tint.
+    ///     assert!(ctx.gfx.update_instance_batch_colors(batch, &[Mat4::IDENTITY; 2], &[]));
+    /// });
+    /// ```
     pub fn update_instance_batch_colors(
         &mut self,
         batch: InstanceBatch,
@@ -342,7 +479,7 @@ impl Graphics {
         let Some(bounds) = bounds else {
             return false;
         };
-        let new = Batch::levels(
+        let mut new = Batch::levels(
             &old.levels,
             transforms,
             colors,
@@ -350,6 +487,8 @@ impl Graphics {
             bounds,
             old.legacy_distance,
         );
+        // Its instance cells stay as they are.
+        new.members = old.members.clone();
         if let Some(r) = self.renderer.as_mut() {
             r.set_instance_batch(batch.id, Some(&new));
         }
@@ -360,6 +499,7 @@ impl Graphics {
     /// Frees instance batch `id`: the engine side of [`Graphics::free`](crate::gfx::Graphics::free).
     pub(crate) fn free_instance_batch_id(&mut self, id: u32) {
         let batch = InstanceBatch { id };
+        self.free_instance_cells_of(id);
         if let Some(slot) = self.assets3d.instance_batches.get_mut(batch.id as usize) {
             *slot = None;
             self.assets3d.instance_batch_revision = self.assets3d.instance_batch_revision.wrapping_add(1);
@@ -379,13 +519,24 @@ impl Graphics {
             }
         });
     }
-    /// Returns the instance count, or None for a freed handle. See [`InstanceBatch`].
+    /// Returns the instance count, its [instance cells](crate::render::InstanceCell)'
+    /// included, or None for a freed handle. See [`InstanceBatch`].
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # use ponko::render::{InstanceBatchOptions, MaterialDesc, MeshData};
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let mat = ctx.gfx.create_material(MaterialDesc::default());
+    ///     let mesh = ctx.gfx.create_mesh(&MeshData::cube(1.0), mat);
+    ///     let batch = ctx.gfx.create_instance_batch(mesh, &[], InstanceBatchOptions::default());
+    ///     assert_eq!(ctx.gfx.instance_batch_len(batch), Some(0), "empty batches are valid");
+    ///     ctx.gfx.free(batch);
+    ///     assert_eq!(ctx.gfx.instance_batch_len(batch), None);
+    /// });
+    /// ```
     pub fn instance_batch_len(&self, batch: InstanceBatch) -> Option<usize> {
-        self.assets3d
-            .instance_batches
-            .get(batch.id as usize)?
-            .as_ref()
-            .map(|b| b.instances.len())
+        let data = self.assets3d.instance_batches.get(batch.id as usize)?.as_ref()?;
+        Some(data.instances.len() + self.instance_cells_len(data))
     }
 }
 impl super::Assets3D {

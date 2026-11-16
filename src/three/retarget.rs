@@ -169,7 +169,7 @@ impl HumanBone {
 /// ```
 /// use ponko::prelude::*;
 /// use ponko::anim::{HumanBone, HumanoidMap, Joint, Skeleton};
-/// let joint = |name: &str, parent| Joint { name: name.into(), parent, rest: ponko::d3::Transform::default() };
+/// let joint = |name: &str, parent| Joint::new(name, parent);
 /// let s = Skeleton::new(vec![joint("mixamorig:Hips", None), joint("mixamorig:LeftUpLeg", Some(0)), joint("tail", Some(0))]);
 /// let mut map = HumanoidMap::detect(&s);
 /// assert_eq!(map.get(HumanBone::Hips), Some(0));
@@ -524,8 +524,7 @@ struct Leg {
 ///         (-0.2, 0.4, 0.), (-0.3, 0., 0.), (-0.3, 0., 0.), (0.1, -0.05, 0.), (0., -0.45, 0.), (0., -0.45, 0.),
 ///         (-0.1, -0.05, 0.), (0., -0.45, 0.), (0., -0.45, 0.)];
 ///     let parents = [None, Some(0), Some(1), Some(1), Some(3), Some(4), Some(1), Some(6), Some(7), Some(0), Some(9), Some(10), Some(0), Some(12), Some(13)];
-///     Skeleton::new((0..15).map(|i| Joint { name: names[i].into(), parent: parents[i],
-///         rest: ponko::d3::Transform::at(Vec3::from(at[i]) * size) }).collect())
+///     Skeleton::new((0..15).map(|i| Joint::new(names[i], parents[i]).with_rest(ponko::d3::Transform::at(Vec3::from(at[i]) * size))).collect())
 /// }
 /// let a = humanoid(["Hips", "Spine", "Head", "LeftArm", "LeftForeArm", "LeftHand", "RightArm", "RightForeArm", "RightHand",
 ///     "LeftUpLeg", "LeftLeg", "LeftFoot", "RightUpLeg", "RightLeg", "RightFoot"], 1.0);
@@ -688,7 +687,7 @@ impl Retargeter {
     pub fn retarget_pose(&mut self, source: &Skeleton, target: &mut Skeleton) {
         assert!(
             source.joints().len() >= self.source.joints().len() && target.joints().len() >= self.target.joints().len(),
-            "Retargeter::retarget_pose: skeletons have fewer joints than the ones it was made for"
+            "Retargeter::retarget_pose: skeletons have fewer joints than the ones it was made for; use the original skeletons or rebuild the Retargeter"
         );
         let rest = source.joints().iter().map(|j| &j.rest);
         globals(
@@ -777,14 +776,13 @@ impl Retargeter {
             .pairs
             .iter()
             .zip(rotations.into_iter().zip(positions))
-            .map(|(pair, (rotation, position))| JointAnimation {
-                joint: pair.target,
-                name: self.target.joints()[pair.target].name.clone(),
-                translation: pair
-                    .translate
-                    .then(|| AnimationTrack::new(times.clone(), position, Interpolation::Linear)),
-                rotation: Some(AnimationTrack::new(times.clone(), rotation, Interpolation::Linear)),
-                scale: None,
+            .map(|(pair, (rotation, position))| {
+                JointAnimation::new(pair.target, self.target.joints()[pair.target].name.clone())
+                    .with_translation(
+                        pair.translate
+                            .then(|| AnimationTrack::new(times.clone(), position, Interpolation::Linear)),
+                    )
+                    .with_rotation(AnimationTrack::new(times.clone(), rotation, Interpolation::Linear))
             })
             .collect();
         let out = AnimationClip::new(clip.name(), &self.target, tracks);

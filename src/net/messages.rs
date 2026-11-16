@@ -446,7 +446,13 @@ impl NetMessages {
         }
     }
     /// Bind a nonblocking UDP host. `max_clients` is 1..=1024, excluding host.
-    /// Port zero chooses an available port. Socket/configuration errors are returned.
+    /// Port zero chooses an available port.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` if `max_clients` is outside 1..=1024, or the error of
+    /// binding or configuring the socket.
+    ///
     /// ```
     /// let host = ponko::net::NetMessages::host("127.0.0.1:0", 4).unwrap();
     /// ```
@@ -459,7 +465,14 @@ impl NetMessages {
         Ok(Self::new(Wire::Udp(socket), true, max_clients))
     }
     /// Start joining a UDP host. Poll both sides until `Connected` or
-    /// `Disconnected`; address resolution/bind errors are returned immediately.
+    /// `Disconnected`.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` if `addr` resolves to no address, or the error of
+    /// resolving it or binding the local socket. They are returned at once;
+    /// a host that never answers shows up later as `Disconnected`.
+    ///
     /// ```
     /// let client = ponko::net::NetMessages::join("127.0.0.1:7777").unwrap();
     /// ```
@@ -476,7 +489,12 @@ impl NetMessages {
         Ok(net)
     }
     /// In-memory star topology: first endpoint hosts. Packets arrive newest
-    /// first to exercise reordering. Panics unless `players` is 2..=1025.
+    /// first to exercise reordering.
+    ///
+    /// # Panics
+    ///
+    /// Unless `players` is 2..=1025.
+    ///
     /// ```
     /// assert_eq!(ponko::net::NetMessages::loopback(3).len(), 3);
     /// ```
@@ -485,6 +503,11 @@ impl NetMessages {
     }
     /// Like `loopback`, dropping every `drop_one_in`th outgoing datagram per
     /// endpoint (zero disables loss). A value of one drops all packets.
+    ///
+    /// # Panics
+    ///
+    /// Unless `players` is 2..=1025.
+    ///
     /// ```
     /// let nets = ponko::net::NetMessages::loopback_lossy(2, 5);
     /// assert_eq!(nets.len(), 2);
@@ -512,7 +535,12 @@ impl NetMessages {
             })
             .collect()
     }
-    /// Set silence/connection timeout (default ten seconds). Must be positive.
+    /// Set silence/connection timeout (default ten seconds).
+    ///
+    /// # Panics
+    ///
+    /// If `timeout` is zero.
+    ///
     /// ```
     /// let net = ponko::net::NetMessages::loopback(2).remove(0)
     ///     .timeout(std::time::Duration::from_secs(3));
@@ -604,6 +632,13 @@ impl NetMessages {
     /// Queue bytes for a connected peer. Returns `NotConnected` for unknown or
     /// joining peers, `InvalidInput` above 1 MiB and `WouldBlock` when the lane's
     /// 4 MiB send budget is exhausted. Reliable messages remain queued until acked.
+    ///
+    /// # Errors
+    ///
+    /// `NotConnected` for an unknown or still joining peer, `InvalidInput`
+    /// for more than 1 MiB (or an exhausted unreliable sequence), and
+    /// `WouldBlock` when the lane's 4 MiB send budget is full.
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// let mut nets = ponko::net::NetMessages::loopback(2);
@@ -634,8 +669,13 @@ impl NetMessages {
         link.renet.send_message(lane.channel(), payload);
         Ok(())
     }
-    /// Serialize JSON and queue it as bytes. Serialization and send errors are
-    /// returned; the application may use `MessageEvent::decode` to receive it.
+    /// Serialize JSON and queue it as bytes; the application may use
+    /// `MessageEvent::decode` to receive it.
+    ///
+    /// # Errors
+    ///
+    /// The serialization error, or any error of [`send`](Self::send).
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// let mut nets = ponko::net::NetMessages::loopback(2);
@@ -647,6 +687,12 @@ impl NetMessages {
     }
     /// Queue a message for all connected peers. Stops on the first error;
     /// earlier peers may already have it. Hosts do not implicitly relay messages.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` for more than 1 MiB, or the first error of
+    /// [`send`](Self::send) for a connected peer.
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// ponko::net::NetMessages::loopback(2)[0].send_to_all(ponko::net::Lane::Reliable, b"hello").unwrap();
@@ -669,8 +715,13 @@ impl NetMessages {
         Ok(())
     }
     /// Poll with elapsed wall time, once per game frame. Processes at most 256
-    /// incoming datagrams per call. Errors from UDP are returned. If events are
-    /// full, returns `WouldBlock`: drain `events()` and continue polling.
+    /// incoming datagrams per call.
+    ///
+    /// # Errors
+    ///
+    /// Errors from the UDP socket, and `WouldBlock` if the event queue is
+    /// full: drain `events()` and continue polling.
+    ///
     /// ```
     /// let mut nets = ponko::net::NetMessages::loopback(2);
     /// nets[0].poll().unwrap();
@@ -681,6 +732,11 @@ impl NetMessages {
     }
     /// Poll with an explicit elapsed duration for deterministic tests or a
     /// caller-owned clock. Do not mix with `poll` in one clock interval.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`poll`](Self::poll).
+    ///
     /// ```
     /// let mut nets = ponko::net::NetMessages::loopback(2);
     /// nets[0].poll_elapsed(std::time::Duration::from_millis(16)).unwrap();
@@ -875,6 +931,12 @@ impl NetMessages {
     /// Disconnect immediately and discard queued messages. Sends three best-effort
     /// notifications; if all are lost the remote reports a timeout. A local
     /// `Disconnected` event is queued even if the socket returns an error.
+    ///
+    /// # Errors
+    ///
+    /// `NotConnected` for an unknown peer, or the socket's error while
+    /// sending the notifications.
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// let mut nets = ponko::net::NetMessages::loopback(2);

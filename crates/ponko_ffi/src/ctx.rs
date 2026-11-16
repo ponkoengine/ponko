@@ -16,7 +16,9 @@ use ponko_ecs::{Commands, Entity};
 
 use crate::keys::{button_from_c, gamepad_axis_from_c, gamepad_button_from_c, key_from_c};
 use crate::types::*;
-use crate::{Failure, Kind, PonkoStatus, PonkoValue, PonkoWorld, boundary, error, insert_value, invalid, spawn_values};
+use crate::{
+    Failure, Kind, PonkoStatus, PonkoValue, PonkoWorld, boundary, error, insert_value, invalid, spawn_values_as,
+};
 
 /// What a system gets: the world, the clock, input, drawing and commands.
 /// Valid only during the callback it was passed to.
@@ -26,6 +28,11 @@ pub struct PonkoCtx {
     ctx: *mut Ctx,
     commands_busy: AtomicBool,
     events_busy: AtomicBool,
+    debug_busy: AtomicBool,
+    gfx_busy: AtomicBool,
+    audio_busy: AtomicBool,
+    #[cfg(feature = "physics3d")]
+    camera3d_busy: AtomicBool,
     dt: f32,
     sim_tick: u64,
     sim_time: f64,
@@ -57,6 +64,11 @@ pub(crate) fn with_ctx<R>(ctx: &mut Ctx, f: impl FnOnce(*mut PonkoCtx) -> R) -> 
         ctx: raw,
         commands_busy: AtomicBool::new(false),
         events_busy: AtomicBool::new(false),
+        debug_busy: AtomicBool::new(false),
+        gfx_busy: AtomicBool::new(false),
+        audio_busy: AtomicBool::new(false),
+        #[cfg(feature = "physics3d")]
+        camera3d_busy: AtomicBool::new(false),
         dt: snapshot.0,
         sim_tick: snapshot.1,
         sim_time: snapshot.2,
@@ -85,7 +97,7 @@ pub(crate) unsafe fn ctx_access<R>(
     f(unsafe { &mut *handle.ctx })
 }
 
-unsafe fn commands<R>(
+pub(crate) unsafe fn commands<R>(
     handle: *const PonkoCtx,
     f: impl FnOnce(&mut Commands) -> Result<R, Failure>,
 ) -> Result<R, Failure> {
@@ -94,22 +106,7 @@ unsafe fn commands<R>(
     }
     // SAFETY: caller supplies a live ctx from a running callback.
     let handle = unsafe { &*handle };
-    if handle.world.parallel.load(Ordering::Acquire) {
-        return Err(error(
-            PonkoStatus::PONKO_BUSY,
-            "commands are off during ponko_query_par",
-        ));
-    }
-    if handle.commands_busy.swap(true, Ordering::Acquire) {
-        return Err(error(PonkoStatus::PONKO_BUSY, "commands are in use"));
-    }
-    struct Reset<'a>(&'a AtomicBool);
-    impl Drop for Reset<'_> {
-        fn drop(&mut self) {
-            self.0.store(false, Ordering::Release);
-        }
-    }
-    let _reset = Reset(&handle.commands_busy);
+    let _held = hold(handle, &handle.commands_busy, "commands are off during ponko_query_par")?;
     // SAFETY: `commands` is a field no other ABI call touches while this flag
     // is set; ctx-wide calls never run while a C callback (our caller) runs
     // inside them, because they don't call back into C.
@@ -126,22 +123,157 @@ pub(crate) unsafe fn events<R>(
     }
     // SAFETY: caller supplies a live ctx from a running callback.
     let handle = unsafe { &*handle };
-    if handle.world.parallel.load(Ordering::Acquire) {
-        return Err(error(PonkoStatus::PONKO_BUSY, "events are off during ponko_query_par"));
-    }
-    if handle.events_busy.swap(true, Ordering::Acquire) {
-        return Err(error(PonkoStatus::PONKO_BUSY, "events are in use"));
-    }
-    struct Reset<'a>(&'a AtomicBool);
-    impl Drop for Reset<'_> {
-        fn drop(&mut self) {
-            self.0.store(false, Ordering::Release);
-        }
-    }
-    let _reset = Reset(&handle.events_busy);
+    let _held = hold(handle, &handle.events_busy, "events are off during ponko_query_par")?;
     // SAFETY: `events` is a field only these calls touch, one at a time
     // (the flag), and ctx-wide calls never run while a C callback runs.
     f(unsafe { &mut (*handle.ctx).events })
+}
+
+/// Clears a part's busy flag when the call that took it ends.
+struct Held<'a>(&'a AtomicBool);
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Takes `flag`, the busy flag of the part of the ctx named `what`, for one
+/// call: refused during `ponko_query_par` and while another call holds it.
+fn hold<'a>(handle: &'a PonkoCtx, flag: &'a AtomicBool, what: &'static str) -> Result<Held<'a>, Failure> {
+    if handle.world.parallel.load(Ordering::Acquire) {
+        return Err(error(PonkoStatus::PONKO_BUSY, what));
+    }
+    if flag.swap(true, Ordering::Acquire) {
+        return Err(error(PonkoStatus::PONKO_BUSY, "that part of the ctx is in use"));
+    }
+    Ok(Held(flag))
+}
+
+/// Debug drawing, usable inside `ponko_query` callbacks like commands and
+/// events: a shape drawn for each entity a query visits.
+pub(crate) unsafe fn debug_draw<R>(
+    handle: *const PonkoCtx,
+    f: impl FnOnce(&mut ponko::debug::DebugDraw) -> Result<R, Failure>,
+) -> Result<R, Failure> {
+    if handle.is_null() {
+        return Err(invalid("ctx is null"));
+    }
+    // SAFETY: caller supplies a live ctx from a running callback.
+    let handle = unsafe { &*handle };
+    let _held = hold(
+        handle,
+        &handle.debug_busy,
+        "debug drawing is off during ponko_query_par",
+    )?;
+    // SAFETY: `debug` is a field only these calls touch, one at a time
+    // (the flag), and ctx-wide calls never run while a C callback runs.
+    f(unsafe { &mut (*handle.ctx).debug })
+}
+
+/// 2D drawing (sprites, rectangles, lines, circles), usable inside
+/// `ponko_query` callbacks like commands: a sprite for each entity.
+pub(crate) unsafe fn gfx_access<R>(
+    handle: *const PonkoCtx,
+    f: impl FnOnce(&mut ponko::gfx::Graphics) -> Result<R, Failure>,
+) -> Result<R, Failure> {
+    if handle.is_null() {
+        return Err(invalid("ctx is null"));
+    }
+    // SAFETY: caller supplies a live ctx from a running callback.
+    let handle = unsafe { &*handle };
+    let _held = hold(handle, &handle.gfx_busy, "drawing is off during ponko_query_par")?;
+    // SAFETY: as in `debug_draw`, for `gfx`.
+    f(unsafe { &mut (*handle.ctx).gfx })
+}
+
+/// Playing sounds, usable inside `ponko_query` callbacks like commands.
+pub(crate) unsafe fn audio_access<R>(
+    handle: *const PonkoCtx,
+    f: impl FnOnce(&mut ponko::audio::Audio) -> Result<R, Failure>,
+) -> Result<R, Failure> {
+    if handle.is_null() {
+        return Err(invalid("ctx is null"));
+    }
+    // SAFETY: caller supplies a live ctx from a running callback.
+    let handle = unsafe { &*handle };
+    let _held = hold(handle, &handle.audio_busy, "sounds are off during ponko_query_par")?;
+    // SAFETY: as in `debug_draw`, for `audio`.
+    f(unsafe { &mut (*handle.ctx).audio })
+}
+
+/// The 2D physics world, read-only (ray and shape casts, overlaps), usable
+/// inside `ponko_query` callbacks: a ground check for each entity a query
+/// visits. Nothing a query callback can call changes physics (those calls
+/// go through `ctx_access`, refused while a query runs).
+#[cfg(feature = "physics")]
+pub(crate) unsafe fn physics_read<R>(
+    handle: *const PonkoCtx,
+    f: impl FnOnce(&ponko::d2::Physics) -> Result<R, Failure>,
+) -> Result<R, Failure> {
+    if handle.is_null() {
+        return Err(invalid("ctx is null"));
+    }
+    // SAFETY: caller supplies a live ctx from a running callback.
+    let handle = unsafe { &*handle };
+    if handle.world.parallel.load(Ordering::Acquire) {
+        return Err(error(
+            PonkoStatus::PONKO_BUSY,
+            "physics queries are off during ponko_query_par",
+        ));
+    }
+    // SAFETY: only shared reads of `physics` happen while a C callback runs:
+    // every call that changes it takes the whole ctx (`ctx_access`), which
+    // never runs while a C callback runs inside it, nor during a query.
+    f(unsafe { &(*handle.ctx).physics })
+}
+
+/// The 3D physics world, read-only (ray and shape casts, overlaps, closest
+/// point, penetrations), usable inside `ponko_query` callbacks like the 2D
+/// `physics_read`: a ground check for each entity a query visits.
+#[cfg(feature = "physics3d")]
+pub(crate) unsafe fn physics3d_read<R>(
+    handle: *const PonkoCtx,
+    f: impl FnOnce(&ponko::d3::Physics) -> Result<R, Failure>,
+) -> Result<R, Failure> {
+    if handle.is_null() {
+        return Err(invalid("ctx is null"));
+    }
+    // SAFETY: caller supplies a live ctx from a running callback.
+    let handle = unsafe { &*handle };
+    if handle.world.parallel.load(Ordering::Acquire) {
+        return Err(error(
+            PonkoStatus::PONKO_BUSY,
+            "3D physics queries are off during ponko_query_par",
+        ));
+    }
+    // SAFETY: as in `physics_read`, for `physics3d`.
+    f(unsafe { &(*handle.ctx).physics3d })
+}
+
+/// The 3D camera, with the 3D physics world to read (a camera rig kept out
+/// of walls), usable inside `ponko_query` callbacks: the camera follows the
+/// character a query visits.
+#[cfg(feature = "physics3d")]
+pub(crate) unsafe fn camera3d_with_physics<R>(
+    handle: *const PonkoCtx,
+    f: impl FnOnce(&mut ponko::d3::Camera, &ponko::d3::Physics) -> Result<R, Failure>,
+) -> Result<R, Failure> {
+    if handle.is_null() {
+        return Err(invalid("ctx is null"));
+    }
+    // SAFETY: caller supplies a live ctx from a running callback.
+    let handle = unsafe { &*handle };
+    let _held = hold(
+        handle,
+        &handle.camera3d_busy,
+        "the 3D camera is off during ponko_query_par",
+    )?;
+    let ctx = handle.ctx;
+    // SAFETY: the camera is a field only these calls touch, one at a time (the
+    // flag); `physics3d` is only read while a C callback runs (as in
+    // `physics_read`); the two fields don't overlap.
+    unsafe { f(&mut (*ctx).scene3d.camera, &(*ctx).physics3d) }
 }
 
 /// The built-in grid, read-only. Usable from any thread during a callback.
@@ -326,6 +458,47 @@ pub unsafe extern "C" fn ponko_ctx_quit(ctx: *mut PonkoCtx) -> PonkoStatus {
         })
     })
 }
+/// Multiplies the 2D camera's zoom by `factor`, keeping the world point
+/// under window pixel `screen` where it is (Rust `Camera2D::zoom_at`):
+/// zoom toward the mouse. The zoom stays within the camera's limits.
+/// `factor` not finite and above 0, or `screen` not finite:
+/// `PONKO_INVALID_ARGUMENT`.
+/// ```
+/// use ponko_ffi::*;
+/// let at = PonkoVec2 { x: 0.0, y: 0.0 };
+/// assert_eq!(unsafe { ponko_ctx_camera_zoom_at(std::ptr::null_mut(), at, 1.1) }, PonkoStatus::PONKO_INVALID_ARGUMENT);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_camera_zoom_at(ctx: *mut PonkoCtx, screen: PonkoVec2, factor: f32) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let screen: ponko::prelude::Vec2 = to_c(screen);
+            if !(factor.is_finite() && factor > 0.0 && screen.is_finite()) {
+                return Err(invalid("zoom_at needs a finite point and a finite factor above 0"));
+            }
+            c.camera.zoom_at(screen, factor);
+            Ok(())
+        })
+    })
+}
+
+/// Whether `ponko_ctx_quit` was called (Rust `Ctx::quit_requested`): the
+/// game ends after this frame, a headless run before its next tick. For a
+/// test that a system asked to quit, read it in a system after that one.
+/// ```
+/// use ponko_ffi::*;
+/// assert_eq!(unsafe { ponko_ctx_quit_requested(std::ptr::null_mut(), &mut false) }, PonkoStatus::PONKO_INVALID_ARGUMENT);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_requested` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_quit_requested(ctx: *mut PonkoCtx, out_requested: *mut bool) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { ctx_access(ctx, |c| out(out_requested, c.quit_requested())) })
+}
 /// Pauses the simulation (frame systems keep running).
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_pause(std::ptr::null_mut()) } as u32, 1);
@@ -374,7 +547,10 @@ pub unsafe extern "C" fn ponko_ctx_step(ctx: *mut PonkoCtx) -> PonkoStatus {
         })
     })
 }
-/// Simulation speed multiplier (1..64); results don't depend on it.
+/// Sets how fast simulated time runs (Rust `Time::set_speed`): 1 real
+/// time, 4 four times as fast, 0.25 a quarter speed (slow motion). Ticks
+/// stay the same length, so results don't depend on it; only how many ticks
+/// run per frame changes. Negative or not finite: `PONKO_INVALID_ARGUMENT`.
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_set_sim_speed(std::ptr::null_mut(), 2.0) } as u32, 1);
 /// ```
@@ -769,7 +945,7 @@ pub unsafe extern "C" fn ponko_ctx_load_json(
                 full.rsplit("::").next().unwrap_or(full).to_string()
             };
             c.assets
-                .load_component_json_named(&mut c.world, path, Entity::from_bits(entity), &name)
+                .load_reflected_component_json_named(&mut c.world, path, Entity::from_bits(entity), &name)
                 .map_err(crate::invalid_owned)
         })
     })
@@ -796,7 +972,7 @@ pub unsafe extern "C" fn ponko_ctx_load_resource_json(
             let path = text(path)?;
             let name = text(name)?;
             c.assets
-                .load_resource_json_named(&mut c.world, path, name)
+                .load_reflected_resource_json_named(&mut c.world, path, name)
                 .map_err(crate::invalid_owned)
         })
     })
@@ -915,8 +1091,8 @@ pub unsafe extern "C" fn ponko_ctx_clear(ctx: *mut PonkoCtx, color: PonkoColor) 
 pub unsafe extern "C" fn ponko_ctx_draw(ctx: *mut PonkoCtx, texture: PonkoTexture, pos: PonkoVec2) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
-        ctx_access(ctx, |c| {
-            c.gfx.draw(texture_from_c(texture), to_c(pos));
+        gfx_access(ctx, |g| {
+            g.draw(texture_from_c(texture), to_c(pos));
             Ok(())
         })
     })
@@ -938,12 +1114,11 @@ pub unsafe extern "C" fn ponko_ctx_draw_ex(
 ) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
-        ctx_access(ctx, |c| {
+        gfx_access(ctx, |g| {
             if params.is_null() {
                 return Err(invalid("params is null"));
             }
-            c.gfx
-                .draw_ex(texture_from_c(texture), to_c(pos), draw_params_from_c(&*params));
+            g.draw_ex(texture_from_c(texture), to_c(pos), draw_params_from_c(&*params));
             Ok(())
         })
     })
@@ -1126,7 +1301,8 @@ pub unsafe extern "C" fn ponko_ctx_despawn_later(ctx: *mut PonkoCtx, entity: u64
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_spawn_later(std::ptr::null_mut(), std::ptr::null(), 0) } as u32, 1);
 /// ```
 /// Works inside `ponko_query` callbacks (not `ponko_query_par`).
-/// Applied after the system returns.
+/// Applied after the system returns. `ponko_ctx_spawn_later_entity` also
+/// returns the new entity's id.
 /// # Safety
 /// `ctx` must be null or live; pointer arguments must be valid.
 #[unsafe(no_mangle)]
@@ -1134,6 +1310,28 @@ pub unsafe extern "C" fn ponko_ctx_spawn_later(
     ctx: *mut PonkoCtx,
     values: *const PonkoValue,
     count: usize,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { ponko_ctx_spawn_later_entity(ctx, values, count, std::ptr::null_mut()) }
+}
+/// `ponko_ctx_spawn_later` that also writes the new entity's id to
+/// `out_entity` (may be null) right away, so later commands of this system
+/// can use it (`ponko_ctx_set_later` on it, or storing it in another
+/// entity's component). The id is reserved: nothing else gets it, the
+/// entity is alive once the spawn is applied after the system, and if the
+/// spawn fails (bad values) the id stays dead.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_spawn_later_entity(std::ptr::null_mut(), std::ptr::null(), 0, std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// Works inside `ponko_query` callbacks (not `ponko_query_par`).
+/// # Safety
+/// `ctx` must be null or live; pointer arguments must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_spawn_later_entity(
+    ctx: *mut PonkoCtx,
+    values: *const PonkoValue,
+    count: usize,
+    out_entity: *mut u64,
 ) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
@@ -1146,12 +1344,19 @@ pub unsafe extern "C" fn ponko_ctx_spawn_later(
             } else {
                 Owned::copy(std::slice::from_raw_parts(values, count))?
             };
-            c.add(move |w| {
+            let e = c.spawn_with(move |w, e| {
                 // SAFETY: the values point into `owned`, which lives until this returns.
-                if let Err(f) = spawn_values(w, &owned.values()) {
-                    report("spawn_later", f)
+                match spawn_values_as(w, &owned.values(), Some(e)) {
+                    Ok(_) => true,
+                    Err(f) => {
+                        report("spawn_later", f);
+                        false
+                    }
                 }
             });
+            if !out_entity.is_null() {
+                *out_entity = e.to_bits();
+            }
             Ok(())
         })
     })

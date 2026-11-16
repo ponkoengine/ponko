@@ -2,12 +2,13 @@
 //! shaders, each material's parameters and textures (bind group 2), and a
 //! pipeline per shader, blend mode and target format, made the first time
 //! a frame draws with them. Plain sprites never come here: they keep the
-//! renderer's own sprite pipeline.
+//! renderer's own sprite pipeline. Triangle meshes (`batch::MESH`) do, plain
+//! or not: the same shaders, reading the same records once per vertex.
 
 use std::collections::HashMap;
 
 use super::batch::Batch;
-use super::gpu::GpuTexture;
+use super::gpu_textures::TextureTable;
 use super::traffic::Counted;
 use crate::render::{ShaderDiagnostic, ShaderKind};
 use crate::sprite_material::{BlendMode, SPRITE_VARIANT, split_style};
@@ -61,6 +62,8 @@ struct Key {
     shader: Option<(u32, u32)>,
     blend: BlendMode,
     format: wgpu::TextureFormat,
+    /// Draws triangle-list vertices (`batch::MESH`), not instanced sprites.
+    mesh: bool,
 }
 
 struct Shader {
@@ -206,6 +209,7 @@ impl SpritePipelines {
             shader: Some((id, self.versions)),
             blend: BlendMode::Alpha,
             format,
+            mesh: false,
         };
         let pipeline = self.build(device, key, &module);
         if let Some(error) = end_scope(scope) {
@@ -281,8 +285,9 @@ impl SpritePipelines {
         }
     }
 
-    /// What style key `style` draws with into `format`.
-    fn resolve(&self, style: u32, format: wgpu::TextureFormat) -> Resolved {
+    /// What style key `style` draws with into `format`, as sprites or as
+    /// mesh vertices.
+    fn resolve(&self, style: u32, format: wgpu::TextureFormat, mesh: bool) -> Resolved {
         let (blend, material) = split_style(style);
         let custom = material.and_then(|m| {
             let index = m as usize;
@@ -296,6 +301,7 @@ impl SpritePipelines {
                 shader: custom.map(|c| c.0),
                 blend,
                 format,
+                mesh,
             },
             custom.map(|c| c.1),
         )
@@ -306,17 +312,19 @@ impl SpritePipelines {
     pub(crate) fn prepare(
         &mut self,
         device: &wgpu::Device,
-        textures: &[GpuTexture],
+        textures: &dyn TextureTable,
         batches: &[Batch],
         format: wgpu::TextureFormat,
     ) {
-        let mut last = 0;
+        let mut last = (0, false);
         for batch in batches {
-            if batch.material == 0 || batch.material == last {
+            // Plain sprites use the renderer's own pipeline.
+            let look = (batch.material, batch.mesh);
+            if look == (0, false) || look == last {
                 continue;
             }
-            last = batch.material;
-            let (key, material) = self.resolve(batch.material, format);
+            last = look;
+            let (key, material) = self.resolve(batch.material, format, batch.mesh);
             if !self.pipelines.contains_key(&key) {
                 let module = match key.shader {
                     Some((id, _)) => self.shaders[id as usize].as_ref().map(|s| s.module.clone()),
@@ -335,12 +343,12 @@ impl SpritePipelines {
 
     /// Makes material `index`'s bind group if it has none or a texture it
     /// shows was replaced.
-    fn bind_material(&mut self, device: &wgpu::Device, textures: &[GpuTexture], index: usize) {
+    fn bind_material(&mut self, device: &wgpu::Device, textures: &dyn TextureTable, index: usize) {
         let Some(material) = self.materials[index].as_mut() else {
             return;
         };
         let current = material.textures.map(|t| {
-            t.and_then(|t| textures.get(t as usize))
+            t.and_then(|t| textures.texture(t))
                 .map_or_else(|| self.white.clone(), |t| t.texture.clone())
         });
         if material.bind_group.as_ref().is_some_and(|(_, made)| *made == current) {
@@ -384,8 +392,9 @@ impl SpritePipelines {
         &self,
         style: u32,
         format: wgpu::TextureFormat,
+        mesh: bool,
     ) -> Option<(&wgpu::RenderPipeline, Option<&wgpu::BindGroup>)> {
-        let (key, material) = self.resolve(style, format);
+        let (key, material) = self.resolve(style, format, mesh);
         let pipeline = self.pipelines.get(&key)?;
         let bind_group = match material {
             Some(index) => Some(&self.materials[index].as_ref()?.bind_group.as_ref()?.0),
@@ -407,6 +416,11 @@ impl SpritePipelines {
             key.format,
             blend_state(key.blend),
             entry(key.blend, custom),
+            if key.mesh {
+                wgpu::VertexStepMode::Vertex
+            } else {
+                wgpu::VertexStepMode::Instance
+            },
         )
     }
 }

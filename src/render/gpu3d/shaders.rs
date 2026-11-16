@@ -294,7 +294,7 @@ impl Shaders {
 /// scene depth is declared as a float texture instead (see [`depth_as_float`]).
 pub(in crate::render) fn for_samples(source: &str, samples: u32, float_depth: bool) -> std::borrow::Cow<'_, str> {
     if float_depth {
-        std::borrow::Cow::Owned(depth_as_float(source, samples))
+        std::borrow::Cow::Owned(depth_as_float(&without_contact_shadows(source), samples))
     } else if samples > 1 {
         std::borrow::Cow::Borrowed(source)
     } else {
@@ -319,6 +319,36 @@ pub(super) fn reads_depth_as_float(device: &wgpu::Device) -> bool {
         return true;
     }
     device.adapter_info().backend == wgpu::Backend::Gl
+}
+
+/// The first and last lines of the mesh prelude's contact-hardening sun
+/// shadows (`ShadowFilter::ContactHardening`).
+const CONTACT_BEGIN: &str = "// ---- contact-hardening sun shadows: begin ----";
+const CONTACT_END: &str = "// ---- contact-hardening sun shadows: end ----";
+
+/// What the GL backend draws instead of contact-hardening shadows: the
+/// fixed 3x3 filter (`Softest`).
+const CONTACT_FALLBACK: &str =
+    "fn contact_light(i: i32, c: vec4<f32>, n: vec3<f32>, turn: f32) -> f32 { return cascade_light(i, c); }";
+
+/// `source` with the mesh prelude's contact-hardening sun shadows replaced
+/// by [`CONTACT_FALLBACK`], for the GL backend (WebGL2): they load texels
+/// of the shadow map, and its shading language has no way to load a texel
+/// of a depth texture (see [`reads_depth_as_float`]). The lines don't
+/// move, so error messages point at the same lines. A source without them
+/// is returned as it is.
+pub(in crate::render) fn without_contact_shadows(source: &str) -> std::borrow::Cow<'_, str> {
+    let (Some(begin), Some(end)) = (source.find(CONTACT_BEGIN), source.find(CONTACT_END)) else {
+        return std::borrow::Cow::Borrowed(source);
+    };
+    let end = end + CONTACT_END.len();
+    let lines = source[begin..end].matches('\n').count();
+    let mut out = String::with_capacity(source.len());
+    out.push_str(&source[..begin]);
+    out.push_str(CONTACT_FALLBACK);
+    out.extend(std::iter::repeat_n('\n', lines));
+    out.push_str(&source[end..]);
+    std::borrow::Cow::Owned(out)
 }
 
 #[cfg(test)]
@@ -932,8 +962,8 @@ impl SideBuilder {
     ) -> Option<wgpu::RenderPipeline> {
         let (write, compare) = match role {
             PipelineRole::Opaque | PipelineRole::OpaqueCoverage => (false, wgpu::CompareFunction::Equal),
-            PipelineRole::OpaqueSolid => (true, wgpu::CompareFunction::Less),
-            PipelineRole::Transparent => (false, wgpu::CompareFunction::Less),
+            PipelineRole::OpaqueSolid => (true, super::SCENE_DEPTH_NEARER),
+            PipelineRole::Transparent => (false, super::SCENE_DEPTH_NEARER),
             _ => return None,
         };
         if role == PipelineRole::OpaqueCoverage && self.samples <= 1 {
@@ -1143,7 +1173,7 @@ impl SideBuilder {
                 vs(role),
                 fs(role),
                 cull,
-                depth(true, wgpu::CompareFunction::Less, Default::default()),
+                depth(true, super::SCENE_DEPTH_NEARER, Default::default()),
                 msaa,
                 &[],
             )
@@ -1185,7 +1215,7 @@ impl SideBuilder {
                     vs(PipelineRole::PrepassCoverage),
                     fs(PipelineRole::PrepassCoverage),
                     cull,
-                    depth(true, wgpu::CompareFunction::Less, Default::default()),
+                    depth(true, super::SCENE_DEPTH_NEARER, Default::default()),
                     coverage_msaa,
                     &unwritten,
                 ),
@@ -1222,7 +1252,7 @@ impl SideBuilder {
                 vs(PipelineRole::OpaqueSolid),
                 fs(PipelineRole::OpaqueSolid),
                 cull,
-                depth(true, wgpu::CompareFunction::Less, Default::default()),
+                depth(true, super::SCENE_DEPTH_NEARER, Default::default()),
                 msaa,
                 &opaque_target,
             ),
@@ -1233,7 +1263,7 @@ impl SideBuilder {
                 vs(PipelineRole::Transparent),
                 fs(PipelineRole::Transparent),
                 cull,
-                depth(false, wgpu::CompareFunction::Less, Default::default()),
+                depth(false, super::SCENE_DEPTH_NEARER, Default::default()),
                 msaa,
                 &transparent_target,
             ),

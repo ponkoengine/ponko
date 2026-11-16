@@ -17,6 +17,15 @@ pub struct ComponentId(pub(crate) u32);
 
 impl ComponentId {
     /// The id as a plain number (stable for the lifetime of the world).
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component)]
+    /// struct Pos(f32);
+    /// let mut world = World::new();
+    /// let id = world.register::<Pos>();
+    /// assert_eq!(world.component_at(id.index()), Some(id));
+    /// ```
     #[must_use]
     pub fn index(self) -> usize {
         self.0 as usize
@@ -43,11 +52,29 @@ pub struct ComponentInfo {
 
 impl ComponentInfo {
     /// Type name for Rust components, the registered name otherwise.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component)]
+    /// struct Pos(f32);
+    /// let mut world = World::new();
+    /// let id = world.register::<Pos>();
+    /// assert!(world.component_info(id).name().ends_with("Pos"));
+    /// ```
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
     /// Size and alignment of one value.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component)]
+    /// struct Pos(f32, f32);
+    /// let mut world = World::new();
+    /// let id = world.register::<Pos>();
+    /// assert_eq!(world.component_info(id).layout().size(), 8);
+    /// ```
     #[must_use]
     pub fn layout(&self) -> Layout {
         self.layout
@@ -76,7 +103,10 @@ impl ComponentInfo {
 ///
 /// A column whose component is tracked ([`World::track_changes`]) keeps two
 /// `u32` change stamps per row in the same buffer, after the values: when
-/// each value was added, and when it last changed. Tracking adds nothing to
+/// each value was added, and when it last changed. After them comes one
+/// summary stamp per block of [`CHANGE_BLOCK`] rows: the newest `changed`
+/// stamp in the block, so `Added`/`Changed` filters skip blocks nobody
+/// wrote to without reading their rows. Tracking adds nothing to
 /// this struct, and an untracked column (every column, unless a game asks)
 /// is laid out and handled exactly as if change detection didn't exist:
 /// loops over many archetypes are sensitive to the size of this struct.
@@ -95,6 +125,37 @@ pub(crate) struct Column {
 
 /// Bytes of change stamps per row of a tracked column: `added` and `changed`.
 const STAMP_BYTES: usize = 2 * std::mem::size_of::<u32>();
+
+/// Rows per block of a tracked column's change summary: each block keeps
+/// the newest `changed` stamp of its rows (see [`Column`]).
+pub(crate) const CHANGE_BLOCK: usize = 64;
+
+/// Blocks of [`CHANGE_BLOCK`] rows covering `rows` rows.
+#[inline]
+pub(crate) fn blocks(rows: usize) -> usize {
+    rows.div_ceil(CHANGE_BLOCK)
+}
+
+/// Of two stamps, the one written later: the one fewer ticks older than
+/// `now`, the current tick's low 32 bits. Stamps are never newer than `now`
+/// and never more than `u32::MAX` ticks old (they are aged).
+#[inline]
+pub(crate) fn newest(a: u32, b: u32, now: u32) -> u32 {
+    if now.wrapping_sub(a) <= now.wrapping_sub(b) {
+        a
+    } else {
+        b
+    }
+}
+
+/// One column's stamps for reading: its `added` or `changed` stamp per row,
+/// and its summary per block of [`CHANGE_BLOCK`] rows, which covers both
+/// (a value's `added` stamp is never newer than its `changed` stamp).
+#[derive(Clone, Copy)]
+pub(crate) struct Stamps {
+    pub(crate) rows: *const u32,
+    pub(crate) blocks: *const u32,
+}
 
 impl Column {
     fn new(item: Layout, drop: Option<DropFn>) -> Self {
@@ -120,6 +181,31 @@ impl Column {
     #[inline]
     fn stamps_offset(&self, cap: usize) -> usize {
         (self.size * cap).next_multiple_of(std::mem::align_of::<u32>())
+    }
+
+    /// The block summary of a tracked column: one stamp per block of
+    /// [`CHANGE_BLOCK`] rows, `blocks(cap)` of them, after both stamp
+    /// arrays. `None` if untracked. `cap` must be the column's capacity.
+    #[inline]
+    pub(crate) fn summary(&self, cap: usize) -> Option<*mut u32> {
+        self.stamps(cap).map(|(added, _)| {
+            // SAFETY: the summary follows the two arrays of `cap` stamps.
+            unsafe { added.add(2 * cap) }
+        })
+    }
+
+    /// Sets the summary of the blocks of `rows` to `stamp`, the current
+    /// tick's: the newest stamp there is. Does nothing if untracked.
+    #[inline]
+    fn summarize(&self, cap: usize, rows: std::ops::Range<usize>, stamp: u32) {
+        if rows.is_empty() {
+            return;
+        }
+        if let Some(summary) = self.summary(cap) {
+            let (first, end) = (rows.start / CHANGE_BLOCK, blocks(rows.end));
+            // SAFETY: `rows.end <= cap`, so its blocks are within the summary.
+            unsafe { std::slice::from_raw_parts_mut(summary.add(first), end - first).fill(stamp) };
+        }
     }
 
     /// The `added` and `changed` stamp arrays, `cap` stamps each, if this
@@ -174,6 +260,8 @@ impl Column {
                 changed.add(row).write(stamp);
             }
         }
+        // Every block, live or not, so that no summary stamp is left unwritten.
+        self.summarize(cap, 0..cap, stamp);
     }
 
     #[inline(always)]
@@ -195,14 +283,15 @@ impl Column {
         self.drop
     }
 
-    /// The buffer for `cap` rows: the values, then the stamps of a tracked
-    /// column.
+    /// The buffer for `cap` rows: the values, then the stamps and the block
+    /// summary of a tracked column.
     fn array(&self, cap: usize) -> Layout {
         let values = self.size.checked_mul(cap).expect("column too large");
         let (size, align) = if self.tracked {
             let size = values
                 .checked_next_multiple_of(std::mem::align_of::<u32>())
                 .and_then(|values| values.checked_add(cap.checked_mul(STAMP_BYTES)?))
+                .and_then(|size| size.checked_add(blocks(cap) * std::mem::size_of::<u32>()))
                 .expect("column too large");
             (size, (self.align as usize).max(std::mem::align_of::<u32>()))
         } else {
@@ -229,6 +318,7 @@ impl Column {
                         let to = fresh.as_ptr().add(self.stamps_offset(new_cap)).cast::<u32>();
                         std::ptr::copy_nonoverlapping(added, to, old_cap);
                         std::ptr::copy_nonoverlapping(changed, to.add(new_cap), old_cap);
+                        std::ptr::copy_nonoverlapping(added.add(2 * old_cap), to.add(2 * new_cap), blocks(old_cap));
                     }
                     if !pool.put(old, self.data) {
                         alloc::dealloc(self.data.as_ptr(), old);
@@ -236,6 +326,7 @@ impl Column {
                 }
             }
             self.data = fresh;
+            self.clear_new_blocks(old_cap, new_cap);
             return;
         }
         let p = unsafe {
@@ -248,14 +339,29 @@ impl Column {
         self.data = NonNull::new(p).unwrap_or_else(|| alloc::handle_alloc_error(new));
         if self.tracked && old_cap != 0 {
             // The stamps still sit after `old_cap` values: move them behind
-            // `new_cap` values. `changed` goes first; both arrays move up,
-            // and it lands past where `added` still is.
+            // `new_cap` values. The summary goes first, then `changed`; all
+            // three arrays move up, and each lands past where the ones
+            // before it still are.
             unsafe {
                 let from = self.data.as_ptr().add(self.stamps_offset(old_cap)).cast::<u32>();
                 let (added, changed) = self.stamps(new_cap).expect("tracked");
+                std::ptr::copy(from.add(2 * old_cap), added.add(2 * new_cap), blocks(old_cap));
                 std::ptr::copy(from.add(old_cap), changed, old_cap);
                 std::ptr::copy(from, added, old_cap);
             }
+        }
+        self.clear_new_blocks(old_cap, new_cap);
+    }
+
+    /// Writes the summary of the blocks a grow from `old_cap` to `new_cap`
+    /// rows added. They hold no live row yet: the first row that becomes
+    /// live in one sets its summary (see [`Column::cover`]); until then any
+    /// value is correct, and 0 keeps the memory initialized.
+    fn clear_new_blocks(&self, old_cap: usize, new_cap: usize) {
+        if let Some(summary) = self.summary(new_cap) {
+            let (from, to) = (blocks(old_cap), blocks(new_cap));
+            // SAFETY: the summary for `new_cap` rows holds `blocks(new_cap)` stamps.
+            unsafe { std::slice::from_raw_parts_mut(summary.add(from), to - from).fill(0) };
         }
     }
 
@@ -269,8 +375,9 @@ impl Column {
 
     /// Reorders the first `perm.len()` values (and their stamps): new row
     /// `i` gets old row `perm[i]`. `perm` must be a permutation of
-    /// `0..perm.len()`, and `cap` the column's capacity.
-    unsafe fn permute(&mut self, perm: &[u32], cap: usize) {
+    /// `0..perm.len()`, and `cap` the column's capacity. `now` is the current
+    /// tick's low 32 bits, to summarize the moved stamps.
+    unsafe fn permute(&mut self, perm: &[u32], cap: usize, now: u32) {
         let size = self.size;
         let layout = self.array(cap);
         if layout.size() == 0 || perm.is_empty() {
@@ -292,6 +399,17 @@ impl Column {
                 for (i, &old) in perm.iter().enumerate() {
                     to.add(i).write(added.add(old as usize).read());
                     to.add(cap + i).write(changed.add(old as usize).read());
+                }
+                // The summary of each block: the newest of its moved stamps;
+                // 0 for blocks without live rows, as a grow leaves them.
+                let summary = to.add(2 * cap);
+                for block in 0..blocks(cap) {
+                    let rows = (block * CHANGE_BLOCK).min(perm.len())..((block + 1) * CHANGE_BLOCK).min(perm.len());
+                    let newest = rows
+                        .map(|row| to.add(cap + row).read())
+                        .reduce(|a, b| newest(a, b, now))
+                        .unwrap_or(0);
+                    summary.add(block).write(newest);
                 }
             }
         }
@@ -465,7 +583,9 @@ impl Archetype {
     /// the entity handle, and 8 bytes of change stamps for each component
     /// whose changes are tracked
     /// ([`World::track_changes`](crate::World::track_changes)). What one more
-    /// entity costs, with no slack.
+    /// entity costs, with no slack. (A tracked component also keeps 4 bytes
+    /// per 64 rows of capacity, counted in
+    /// [`allocated_bytes`](Self::allocated_bytes).)
     ///
     /// ```
     /// use ponko_ecs::{Component, World};
@@ -500,10 +620,7 @@ impl Archetype {
     /// ```
     #[must_use]
     pub fn allocated_bytes(&self) -> usize {
-        self.columns
-            .iter()
-            .map(|c| (c.size() + c.stamp_bytes()) * self.cap())
-            .sum::<usize>()
+        self.columns.iter().map(|c| c.array(self.cap()).size()).sum::<usize>()
             + self.entities.capacity() * std::mem::size_of::<Entity>()
     }
 
@@ -585,7 +702,8 @@ impl Archetype {
 
     /// Reorders all rows: new row `i` gets old row `perm[i]`. `perm` must be
     /// a permutation of `0..len()`. The caller updates entity locations.
-    pub(crate) fn permute(&mut self, perm: &[u32]) {
+    /// `now` is the current tick's low 32 bits.
+    pub(crate) fn permute(&mut self, perm: &[u32], now: u32) {
         assert_eq!(perm.len(), self.len());
         debug_assert!({
             let mut seen = vec![false; perm.len()];
@@ -593,7 +711,7 @@ impl Archetype {
         });
         let cap = self.cap();
         for c in self.columns.iter_mut() {
-            unsafe { c.permute(perm, cap) };
+            unsafe { c.permute(perm, cap, now) };
         }
         let old = std::mem::take(&mut self.entities);
         self.entities = perm.iter().map(|&p| old[p as usize]).collect();
@@ -665,7 +783,9 @@ impl Archetype {
     }
 
     /// Removes `row` by moving the last row into it, dropping the removed
-    /// values. Returns the entity that moved into `row`, if any.
+    /// values. Returns the entity that moved into `row`, if any. In a
+    /// tracked archetype the caller has set `row`'s block summary first
+    /// ([`Changes::log_despawn`](crate::change::Changes::log_despawn)).
     pub(crate) unsafe fn swap_remove_drop(&mut self, row: usize) -> Option<Entity> {
         let last = self.len() - 1;
         for c in self.columns.iter_mut() {
@@ -715,44 +835,79 @@ impl Archetype {
         for c in self.columns.iter() {
             if let Some((added, changed)) = c.stamps(cap) {
                 // SAFETY: `row < cap`, the length of both stamp arrays.
+                // The summary follows the two arrays; `row`'s block is in it.
                 unsafe {
                     added.add(row).write(stamp);
                     changed.add(row).write(stamp);
+                    added.add(2 * cap + row / CHANGE_BLOCK).write(stamp);
                 }
             }
         }
     }
 
-    /// Stamps column `col` of `row`: changed at `stamp`, and added too if
-    /// `added`. Does nothing for an untracked column.
+    /// Sets the block summary of `row` in column `col` to `stamp`, the
+    /// current tick's, if the column is tracked: before the last row's
+    /// stamps move into `row`. `row` must be within the capacity.
+    #[inline]
+    pub(crate) fn summarize(&self, col: usize, row: usize, stamp: u32) {
+        let cap = self.cap();
+        debug_assert!(row < cap);
+        if let Some((added, _)) = self.columns[col].stamps(cap) {
+            // SAFETY: the summary follows the two arrays of `cap` stamps;
+            // `row < cap`, so its block is in it.
+            unsafe { added.add(2 * cap + row / CHANGE_BLOCK).write(stamp) };
+        }
+    }
+
+    /// Stamps column `col` of `row`: changed at `stamp` (the current
+    /// tick's), and added too if `added`. Does nothing for an untracked
+    /// column.
     #[inline]
     pub(crate) fn stamp(&self, col: usize, row: usize, stamp: u32, added: bool) {
         debug_assert!(row < self.cap());
-        if let Some((a, c)) = self.columns[col].stamps(self.cap()) {
-            // SAFETY: `row < cap`, the length of both stamp arrays.
+        let cap = self.cap();
+        if let Some((a, c)) = self.columns[col].stamps(cap) {
+            // SAFETY: `row < cap`, the length of both stamp arrays. The
+            // summary follows them; `row`'s block is in it.
             unsafe {
                 c.add(row).write(stamp);
                 if added {
                     a.add(row).write(stamp);
                 }
+                a.add(2 * cap + row / CHANGE_BLOCK).write(stamp);
             }
         }
     }
 
-    /// The live `changed` stamps of component `id`, to mark rows as changed;
-    /// `None` if it isn't here or isn't tracked.
-    pub(crate) fn changed_stamps(&self, id: ComponentId) -> Option<*mut u32> {
-        self.columns[self.column_index(id)?].stamps(self.cap()).map(|s| s.1)
+    /// Stamps rows `rows` of column `col` as changed at `stamp`, the current
+    /// tick's. Does nothing for an untracked column. The rows must be live,
+    /// and nothing else may read or write these stamps meanwhile.
+    #[inline]
+    pub(crate) fn stamp_changed(&self, col: usize, rows: std::ops::Range<usize>, stamp: u32) {
+        debug_assert!(rows.start <= rows.end && rows.end <= self.len());
+        let column = &self.columns[col];
+        if let Some((_, changed)) = column.stamps(self.cap()) {
+            // SAFETY: `rows` are live rows, with one stamp each.
+            unsafe { std::slice::from_raw_parts_mut(changed.add(rows.start), rows.len()).fill(stamp) };
+            column.summarize(self.cap(), rows, stamp);
+        }
     }
 
     /// The live stamps of component `id` for reading: its `added` array if
-    /// `added`, else its `changed` array.
-    pub(crate) fn read_stamps(&self, id: ComponentId, added: bool) -> Option<*const u32> {
-        let (a, c) = self.columns[self.column_index(id)?].stamps(self.cap())?;
-        Some(if added { a.cast_const() } else { c.cast_const() })
+    /// `added`, else its `changed` array, and its block summary.
+    pub(crate) fn read_stamps(&self, id: ComponentId, added: bool) -> Option<Stamps> {
+        let column = &self.columns[self.column_index(id)?];
+        let (a, c) = column.stamps(self.cap())?;
+        Some(Stamps {
+            rows: if added { a.cast_const() } else { c.cast_const() },
+            blocks: column.summary(self.cap())?.cast_const(),
+        })
     }
 
-    /// Moves the stamps of row `last` into `row` (the stamp half of a swap-remove).
+    /// Moves the stamps of row `last` into `row` (the stamp half of a
+    /// swap-remove). The caller has set `row`'s block summary to the
+    /// current tick ([`summarize`](Self::summarize)), which covers the
+    /// moved stamps.
     pub(crate) fn swap_remove_stamps(&self, row: usize, last: usize) {
         if row == last {
             return;
@@ -773,7 +928,13 @@ impl Archetype {
     /// component both archetypes have: moving an entity between archetypes
     /// isn't a change to the components it keeps. `dst_row` must be within
     /// `dst`'s capacity.
-    pub(crate) fn copy_stamps_to(&self, row: usize, dst: &Archetype, dst_row: usize) {
+    ///
+    /// Sets the block summary of `dst_row` in `dst`, and of `row` here
+    /// (where the last row's stamps move next), to `now`, the current
+    /// tick's low 32 bits: as new as any stamp, so it covers the moved ones
+    /// (readers that haven't seen `now` look at those blocks' rows once).
+    #[inline]
+    pub(crate) fn copy_stamps_to(&self, row: usize, dst: &Archetype, dst_row: usize, now: u32) {
         debug_assert!(row < self.len() && dst_row < dst.cap());
         let mut j = 0;
         let cap = self.cap();
@@ -781,6 +942,9 @@ impl Archetype {
             let Some((added, changed)) = c.stamps(cap) else {
                 continue;
             };
+            // SAFETY: the summary follows the two arrays of `cap` stamps,
+            // and `row`'s block is in it.
+            unsafe { added.add(2 * cap + row / CHANGE_BLOCK).write(now) };
             let id = self.ids[i];
             while j < dst.ids.len() && dst.ids[j] < id {
                 j += 1;
@@ -789,9 +953,11 @@ impl Archetype {
                 // A component is tracked in every archetype or in none.
                 let (dst_added, dst_changed) = dst.columns[j].stamps(dst.cap()).expect("tracked in both");
                 // SAFETY: `row` is live here; `dst_row` is within `dst`'s capacity.
+                // The summary follows the two arrays of `dst.cap()` stamps.
                 unsafe {
                     dst_added.add(dst_row).write(added.add(row).read());
                     dst_changed.add(dst_row).write(changed.add(row).read());
+                    dst_added.add(2 * dst.cap() + dst_row / CHANGE_BLOCK).write(now);
                 }
             }
         }
@@ -806,11 +972,13 @@ impl Archetype {
             let Some((added, changed)) = c.stamps(cap) else {
                 continue;
             };
-            for stamps in [added, changed] {
-                for row in 0..len {
-                    // SAFETY: `row` is a live row of a tracked column.
+            // SAFETY: the summary follows the two stamp arrays.
+            let summary = unsafe { added.add(2 * cap) };
+            for (stamps, n) in [(added, len), (changed, len), (summary, blocks(cap))] {
+                for i in 0..n {
+                    // SAFETY: `i` is a live row of a tracked column, or one of its blocks.
                     unsafe {
-                        let stamp = stamps.add(row);
+                        let stamp = stamps.add(i);
                         if now.wrapping_sub(stamp.read()) > max_age {
                             stamp.write(now.wrapping_sub(max_age));
                         }
@@ -1008,14 +1176,19 @@ mod tests {
 
     #[test]
     fn a_tracked_buffer_holds_the_values_then_aligned_stamps() {
-        // Three 1-byte values, then (after one byte of padding) 3 + 3 stamps.
+        // Three 1-byte values, then (after one byte of padding) 3 + 3 stamps
+        // and the summary of the one block of rows.
         let mut column = Column::new(Layout::new::<u8>(), None);
         assert_eq!(column.array(3), Layout::from_size_align(3, 1).unwrap());
         assert_eq!(column.stamps(3), None);
         // SAFETY: untracked, and no rows are in use.
         unsafe { column.start_tracking(0, 0, 0) };
         assert_eq!(column.array(0).size(), 0);
-        assert_eq!(column.array(3), Layout::from_size_align(4 + 3 * 8, 4).unwrap());
+        assert_eq!(column.array(3), Layout::from_size_align(4 + 3 * 8 + 4, 4).unwrap());
+        assert_eq!(
+            column.array(65),
+            Layout::from_size_align(68 + 65 * 8 + 2 * 4, 4).unwrap()
+        );
         assert_eq!(column.stamps_offset(3), 4);
         // A wider alignment is kept; zero-sized values leave only stamps.
         let mut wide = Column::new(Layout::new::<u128>(), None);
@@ -1025,7 +1198,7 @@ mod tests {
             wide.start_tracking(0, 0, 0);
             empty.start_tracking(0, 0, 0);
         }
-        assert_eq!(wide.array(2), Layout::from_size_align(32 + 16, 16).unwrap());
-        assert_eq!(empty.array(5), Layout::from_size_align(40, 4).unwrap());
+        assert_eq!(wide.array(2), Layout::from_size_align(32 + 16 + 4, 16).unwrap());
+        assert_eq!(empty.array(5), Layout::from_size_align(40 + 4, 4).unwrap());
     }
 }

@@ -402,7 +402,7 @@ impl ViewState {
     pub(crate) fn prepare(&mut self, world: &mut World) {
         assert!(
             !self.is_prepared(),
-            "ViewState: {} is already viewing a world",
+            "ViewState: {} is already viewing a world; finish the current view first",
             self.label
         );
         // The world is held exclusively here: let its archetype index
@@ -436,7 +436,7 @@ impl ViewState {
         }
         assert_eq!(
             self.world, world.uid,
-            "ViewState::finish: {} was prepared for another world",
+            "ViewState::finish: {} was prepared for another world; finish with the world passed to prepare",
             self.label
         );
         for lent in &mut self.lent {
@@ -491,7 +491,7 @@ impl ViewState {
         );
         assert_eq!(
             self.world, world.uid,
-            "ViewState::view: {} was prepared for another world",
+            "ViewState::view: {} was prepared for another world; use the world passed to prepare",
             self.label
         );
         WorldView {
@@ -641,14 +641,17 @@ impl<'w> WorldView<'w> {
     }
 
     /// A query over the declared components: `Q` is what
-    /// [`World::query`] takes. Panics if `Q` touches a component the
-    /// declaration doesn't allow (with the mutability it asks for), or if
-    /// it asks for one component twice and once mutably.
+    /// [`World::query`] takes.
+    ///
+    /// # Panics
+    /// If `Q` touches a component the declaration doesn't allow (with the
+    /// mutability it asks for), or if it asks for one component twice and
+    /// once mutably.
     #[track_caller]
     pub fn query<Q: QueryData>(&mut self) -> ViewQuery<'_, Q> {
         let Some(ids) = Q::ids_in(self.world) else {
             panic!(
-                "{}: query `{}` uses a component its declared access doesn't name",
+                "{}: query `{}` uses a component its declared access doesn't name; add it to SystemAccess",
                 self.label,
                 std::any::type_name::<Q>()
             );
@@ -772,6 +775,9 @@ impl<'w> WorldView<'w> {
     }
 
     /// The resource `R` (declared read or write), if there is one.
+    ///
+    /// # Panics
+    /// If `R` is undeclared.
     #[track_caller]
     #[must_use]
     pub fn get_resource<R: Send + Sync + 'static>(&self) -> Option<&R> {
@@ -790,8 +796,13 @@ impl<'w> WorldView<'w> {
     #[track_caller]
     #[must_use]
     pub fn resource<R: Send + Sync + 'static>(&self) -> &R {
-        self.get_resource()
-            .unwrap_or_else(|| panic!("{}: no resource of type `{}`", self.label, std::any::type_name::<R>()))
+        self.get_resource().unwrap_or_else(|| {
+            panic!(
+                "{}: no resource of type `{}`; call world.insert_resource before running this system",
+                self.label,
+                std::any::type_name::<R>()
+            )
+        })
     }
 
     #[track_caller]
@@ -804,6 +815,9 @@ impl<'w> WorldView<'w> {
     }
 
     /// The resource `R` to change (declared write), if there is one.
+    ///
+    /// # Panics
+    /// If `R` is not declared for writing.
     #[track_caller]
     pub fn get_resource_mut<R: Send + Sync + 'static>(&mut self) -> Option<&mut R> {
         self.written::<R>().value.as_mut().map(|v| v.downcast_mut().unwrap())
@@ -816,17 +830,27 @@ impl<'w> WorldView<'w> {
     #[track_caller]
     pub fn resource_mut<R: Send + Sync + 'static>(&mut self) -> &mut R {
         let label = self.label;
-        self.get_resource_mut()
-            .unwrap_or_else(|| panic!("{label}: no resource of type `{}`", std::any::type_name::<R>()))
+        self.get_resource_mut().unwrap_or_else(|| {
+            panic!(
+                "{label}: no resource of type `{}`; call world.insert_resource before running this system",
+                std::any::type_name::<R>()
+            )
+        })
     }
 
     /// Stores resource `R` (declared write), replacing any existing one.
+    ///
+    /// # Panics
+    /// If `R` is not declared for writing.
     #[track_caller]
     pub fn insert_resource<R: Send + Sync + 'static>(&mut self, value: R) {
         self.written::<R>().value = Some(Box::new(value));
     }
 
     /// Removes and returns resource `R` (declared write).
+    ///
+    /// # Panics
+    /// If `R` is not declared for writing.
     #[track_caller]
     pub fn remove_resource<R: Send + Sync + 'static>(&mut self) -> Option<R> {
         self.written::<R>().value.take().map(|v| *v.downcast().unwrap())
@@ -1153,8 +1177,11 @@ pub struct ViewGroup {
 }
 
 impl ViewGroup {
-    /// Checks `states`. `Err((i, j))` names the first two whose
-    /// declarations overlap (or that are the same state twice).
+    /// Checks `states`.
+    ///
+    /// # Errors
+    /// `Err((i, j))` names the first two whose declarations overlap (or
+    /// that are the same state twice).
     pub fn new<'a>(states: impl IntoIterator<Item = &'a ViewState>) -> Result<Self, (usize, usize)> {
         let states: Vec<&ViewState> = states.into_iter().collect();
         for (j, b) in states.iter().enumerate() {
@@ -1247,7 +1274,7 @@ impl ViewGroup {
             let state = split(item).0;
             assert_eq!(
                 state.id, self.ids[i],
-                "ViewGroup::run: item {i} isn't the state this group checked"
+                "ViewGroup::run: item {i} isn't the state this group checked; rebuild the group for these states"
             );
             state.prepare(guard.world);
         }
@@ -1261,7 +1288,7 @@ impl ViewGroup {
             // Checked again: `split` decides what it returns on every call.
             assert_eq!(
                 state.id, ids[i],
-                "ViewGroup::run: item {i} isn't the state this group checked"
+                "ViewGroup::run: item {i} isn't the state this group checked; rebuild the group for these states"
             );
             // SAFETY: `guard` holds the only (mutable) borrow of the world,
             // so nothing changes it through `&mut World` and only these

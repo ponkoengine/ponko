@@ -138,6 +138,16 @@ impl StencilFace {
 ///
 /// New fields may be added in any release: build one with its
 /// constructors or [`Default`] and the `with_*` methods.
+///
+/// # Defaults and cost
+///
+/// [`Default`] compares against a reference of 0 with all bits read and
+/// written, at order 0, and each face's test and operations are those of
+/// [`StencilFace::default`]. A material without a stencil costs nothing
+/// for it. A solid material with one gives up the depth prepass and draws
+/// after the other solids, so it is not in the depth that ambient occlusion,
+/// reflections and motion vectors read, and the depth target gets its stencil
+/// bits only once a material asks for them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Stencil {

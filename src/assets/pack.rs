@@ -246,6 +246,7 @@ enum Data {
 /// such as downloadable content, or one embedded in the program:
 ///
 /// ```no_run
+/// use ponko::assets::PackSource;
 /// # use ponko::prelude::*;
 /// # fn setup(ctx: &mut Ctx) -> Result<(), ponko::prelude::Error> {
 /// ctx.assets.add_source(PackSource::open("dlc/forest.pack")?);

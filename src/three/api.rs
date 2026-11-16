@@ -83,6 +83,11 @@ impl GpuMaterialDesc {
     }
 }
 
+/// A glTF file's nodes, the mesh made for each node that has one, and
+/// where the file is on disk, when it is a file
+/// ([`Graphics::load_node_meshes`]).
+pub(crate) type NodeMeshes = (gltf::LoadedNodes, Vec<Option<Mesh>>, Option<std::path::PathBuf>);
+
 impl Graphics {
     /// Puts a material on the GPU: a color (and texture), how rough and how
     /// metallic, and light it gives off.
@@ -102,10 +107,14 @@ impl Graphics {
         self.try_create_material(desc).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`create_material`](Self::create_material) with errors as values:
+    /// [`create_material`](Self::create_material) with errors as values.
+    ///
+    /// # Errors
+    ///
     /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) if roughness or
-    /// metallic is outside 0..=1, [`BadHandle`](crate::error::ErrorKind::BadHandle)
-    /// if its shader or texture arrays weren't made by this game.
+    /// metallic is outside 0..=1,
+    /// [`BadHandle`](crate::error::ErrorKind::BadHandle) if its shader or
+    /// texture arrays weren't made by this game.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -148,7 +157,7 @@ impl Graphics {
     pub fn update_material(&mut self, material: Material, desc: MaterialDesc) {
         assert!(
             material.id < self.assets3d.materials,
-            "ponko: update_material: that material wasn't made by this game"
+            "ponko: update_material: that material wasn't made by this game; update a material this game created"
         );
         self.check_material(&desc).unwrap_or_else(|e| panic!("{e}"));
         if !self.assets3d.materials_live.contains(material.id) {
@@ -209,7 +218,13 @@ impl Graphics {
         counts.computes = a.computes_live.len();
         counts.effects = a.effects_live.len();
         counts.gpu_buffers = a.gpu_buffers.iter().filter(|&&len| len > 0).count();
-        counts.instance_batches = a.instance_batches.iter().flatten().count();
+        counts.instance_batches = a
+            .instance_batches
+            .iter()
+            .flatten()
+            .filter(|b| b.parent.is_none())
+            .count();
+        counts.instance_cells = a.instance_cells.live();
         counts.texture_arrays = a.arrays_live.len();
     }
 
@@ -297,13 +312,16 @@ impl Graphics {
         if let Some(shader) = desc.shader
             && shader.id >= self.assets3d.shaders
         {
-            return Err(Error::new(ErrorKind::BadHandle, "that shader wasn't made by this game"));
+            return Err(Error::new(
+                ErrorKind::BadHandle,
+                "that shader wasn't made by this game; create or load it in this game",
+            ));
         }
         for array in desc.custom_arrays.into_iter().flatten() {
             if self.assets3d.arrays.get(array.id as usize) != Some(&array) {
                 return Err(Error::new(
                     ErrorKind::BadHandle,
-                    "that texture array wasn't made by this game",
+                    "that texture array wasn't made by this game; create or load it in this game",
                 ));
             }
         }
@@ -343,13 +361,16 @@ impl Graphics {
         self.try_load_shader(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_shader`](Self::load_shader) with errors as values:
-    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file is
-    /// missing, [`Io`](crate::error::ErrorKind::Io) if it can't be read,
+    /// [`load_shader`](Self::load_shader) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file
+    /// is missing, [`Io`](crate::error::ErrorKind::Io) if it can't be read,
     /// [`Decode`](crate::error::ErrorKind::Decode) if it isn't UTF-8 text and
     /// [`Shader`](crate::error::ErrorKind::Shader) if it doesn't compile (the
-    /// message has the compiler's log). With hot reload on, a file that
-    /// doesn't compile still returns a stand-in, as `load_shader` does.
+    /// message has the compiler's log). With hot reload on, a file that doesn't
+    /// compile still returns a stand-in, as `load_shader` does.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -416,7 +437,10 @@ impl Graphics {
         self.try_create_shader(name, source).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`create_shader`](Self::create_shader) with errors as values:
+    /// [`create_shader`](Self::create_shader) with errors as values.
+    ///
+    /// # Errors
+    ///
     /// [`ErrorKind::Shader`](crate::error::ErrorKind::Shader) if it doesn't
     /// compile, with the compiler's log in the message.
     ///
@@ -515,10 +539,13 @@ impl Graphics {
         self.try_create_mesh(data, material).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`create_mesh`](Self::create_mesh) with errors as values:
-    /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) if the data doesn't
-    /// fit together, [`BadHandle`](crate::error::ErrorKind::BadHandle) if the
-    /// material comes from another game.
+    /// [`create_mesh`](Self::create_mesh) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) if the data
+    /// doesn't fit together, [`BadHandle`](crate::error::ErrorKind::BadHandle)
+    /// if the material comes from another game.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -536,7 +563,7 @@ impl Graphics {
         if material.id >= self.assets3d.materials {
             return Err(Error::new(
                 ErrorKind::BadHandle,
-                "create_mesh: that material wasn't made by this game",
+                "create_mesh: that material wasn't made by this game; create it with create_material in this game",
             ));
         }
         Ok(self.mesh_from_parts(data, &[(0..data.indices.len() as u32, material)], None, Vec::new()))
@@ -564,9 +591,12 @@ impl Graphics {
         self.try_create_plain_mesh(data).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`create_plain_mesh`](Self::create_plain_mesh) with errors as values:
-    /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) if the data doesn't
-    /// fit together.
+    /// [`create_plain_mesh`](Self::create_plain_mesh) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) if the data
+    /// doesn't fit together.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -598,8 +628,8 @@ impl Graphics {
     /// # use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
     ///     let skeleton = ponko::anim::Skeleton::new(vec![
-    ///         ponko::anim::Joint { name: "base".into(), parent: None, rest: ponko::d3::Transform::default() },
-    ///         ponko::anim::Joint { name: "top".into(), parent: Some(0), rest: ponko::d3::Transform::at(vec3(0.0, 1.0, 0.0)) },
+    ///         ponko::anim::Joint::new("base", None),
+    ///         ponko::anim::Joint::new("top", 0).with_rest(ponko::d3::Transform::at(vec3(0.0, 1.0, 0.0))),
     ///     ]);
     ///     let mut post = ponko::render::MeshData::cube(0.2);
     ///     // Corners above the middle follow the top joint.
@@ -630,7 +660,7 @@ impl Graphics {
         }
         assert!(
             material.id < self.assets3d.materials,
-            "ponko: create_skinned_mesh: that material wasn't made by this game"
+            "ponko: create_skinned_mesh: that material wasn't made by this game; create it with create_material in this game"
         );
         let rest = Skeleton::from_shared(skeleton.shared_joints().clone());
         let inverse_binds = (0..n).map(|j| rest.joint_matrix(j).inverse()).collect();
@@ -675,10 +705,13 @@ impl Graphics {
         self.try_load_skeleton(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_skeleton`](Self::load_skeleton) with errors as values: those
-    /// of [`try_load_mesh`](Self::try_load_mesh), or
-    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file has
-    /// no skins.
+    /// [`load_skeleton`](Self::load_skeleton) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`try_load_mesh`](Self::try_load_mesh), or
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file
+    /// has no skins.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -699,7 +732,12 @@ impl Graphics {
     }
 
     /// Loads all animation clips from a glTF file, cached per file.
-    /// Panics with the loading error if the file cannot be loaded.
+    ///
+    /// # Panics
+    ///
+    /// With the loading error if the file cannot be loaded; see
+    /// [`try_load_clips`](Self::try_load_clips).
+    ///
     /// ```no_run
     /// # use ponko::prelude::*;
     /// # fn f(ctx: &mut Ctx) {
@@ -710,10 +748,14 @@ impl Graphics {
         self.try_load_clips(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_clips`](Self::load_clips) with errors as values: those of
-    /// [`try_load_mesh`](Self::try_load_mesh), and
-    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) for a file without
-    /// skins or animations.
+    /// [`load_clips`](Self::load_clips) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`try_load_mesh`](Self::try_load_mesh), and
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) for a file
+    /// without skins or animations.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
@@ -736,7 +778,13 @@ impl Graphics {
             })
     }
 
-    /// Loads a named clip. Panics with available names if it is missing.
+    /// Loads a named clip.
+    ///
+    /// # Panics
+    ///
+    /// If the file cannot be loaded or has no clip called `name`; the message
+    /// lists the clips it has. See [`try_load_clip`](Self::try_load_clip).
+    ///
     /// ```no_run
     /// # use ponko::prelude::*;
     /// # fn f(ctx: &mut Ctx) {
@@ -747,10 +795,14 @@ impl Graphics {
         self.try_load_clip(path, name).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_clip`](Self::load_clip) with errors as values: those of
-    /// [`try_load_clips`](Self::try_load_clips), and
-    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file has no
-    /// clip called `name` (the message lists the ones it has).
+    /// [`load_clip`](Self::load_clip) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`try_load_clips`](Self::try_load_clips), and
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file
+    /// has no clip called `name` (the message lists the ones it has).
+    ///
     /// ```no_run
     /// # use ponko::prelude::*;
     /// # fn f(ctx: &mut Ctx) {
@@ -791,8 +843,11 @@ impl Graphics {
         self.try_load_lights(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_lights`](Self::load_lights) with errors as values: those of
-    /// [`try_load_mesh`](Self::try_load_mesh).
+    /// [`load_lights`](Self::load_lights) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`try_load_mesh`](Self::try_load_mesh).
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -833,8 +888,11 @@ impl Graphics {
         self.try_load_cameras(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_cameras`](Self::load_cameras) with errors as values: those of
-    /// [`try_load_mesh`](Self::try_load_mesh).
+    /// [`load_cameras`](Self::load_cameras) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`try_load_mesh`](Self::try_load_mesh).
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -879,11 +937,14 @@ impl Graphics {
         self.try_load_mesh(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_mesh`](Self::load_mesh) with errors as values:
-    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file is
-    /// missing, [`Io`](crate::error::ErrorKind::Io) if it can't be read,
-    /// [`Decode`](crate::error::ErrorKind::Decode) if it isn't a glTF model this
-    /// engine can read (including files it names that are missing).
+    /// [`load_mesh`](Self::load_mesh) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file
+    /// is missing, [`Io`](crate::error::ErrorKind::Io) if it can't be read,
+    /// [`Decode`](crate::error::ErrorKind::Decode) if it isn't a glTF model
+    /// this engine can read (including files it names that are missing).
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -943,6 +1004,51 @@ impl Graphics {
         Ok((loaded, image_keys))
     }
 
+    /// Reads glTF file `path` node by node (`gltf::load_nodes`) and makes a
+    /// mesh of each node that has triangles, in the node's own space, with
+    /// the file's materials (shared with [`load_mesh`](Self::load_mesh)).
+    /// Each call makes new meshes; the caller frees them. `refresh` (the
+    /// file changed) reads its images again and updates its materials in
+    /// place. Also returns where the file is on disk, when it is a file.
+    pub(crate) fn load_node_meshes(&mut self, path: &str, refresh: bool) -> Result<NodeMeshes, crate::error::Error> {
+        let found = self.asset_sources.find(path)?;
+        let file = found.origin.clone();
+        let on_disk = match &file {
+            assets::Origin::File(at) => Some(at.clone()),
+            assets::Origin::Source { .. } => None,
+        };
+        let bytes = found.into_bytes().map_err(|e| e.with_path(path))?;
+        let shared = &self.assets3d.shared_images;
+        let sources = &self.asset_sources;
+        let loaded = gltf::load_nodes(path, &bytes, &mut |name| sources.read(name), &|source| {
+            !refresh && SharedImage::of(sources, source).is_some_and(|key| shared.contains_key(&key))
+        })
+        .map_err(|e| crate::error::Error::decode(path, e))?;
+        let image_keys = loaded
+            .image_sources
+            .iter()
+            .map(|source| source.as_deref().and_then(|s| SharedImage::of(sources, s)))
+            .collect();
+        let materials = self.file_materials(path, &file, &loaded.materials, &loaded.images, image_keys, refresh);
+        let meshes = loaded
+            .nodes
+            .iter()
+            .map(|node| {
+                node.mesh.as_ref().map(|m| {
+                    let parts: Vec<(Range<u32>, Material)> = m
+                        .parts
+                        .iter()
+                        .map(|(range, i)| (range.clone(), materials[*i]))
+                        .collect();
+                    let mesh = self.mesh_from_parts(&m.data, &parts, None, m.morph_defaults.clone());
+                    self.asset_ledger.own(crate::inventory::AssetClass::Mesh, mesh.id, path);
+                    mesh
+                })
+            })
+            .collect();
+        Ok((loaded, meshes, on_disk))
+    }
+
     /// The shared-image key of each image of a decoded glTF file (a file
     /// decoded on a worker, which can't look at the asset sources).
     pub(crate) fn image_keys(&self, loaded: &gltf::Loaded) -> Vec<Option<SharedImage>> {
@@ -968,7 +1074,7 @@ impl Graphics {
         loaded: gltf::Loaded,
         image_keys: Vec<Option<SharedImage>>,
     ) -> Mesh {
-        let materials = self.file_materials(path, &file, &loaded, image_keys);
+        let materials = self.file_materials(path, &file, &loaded.materials, &loaded.images, image_keys, false);
         let parts: Vec<(Range<u32>, Material)> = loaded
             .parts
             .iter()
@@ -1007,30 +1113,38 @@ impl Graphics {
     /// are made again, from the file's textures that are still live, so a
     /// file loaded, partly freed and loaded again never leaves unreachable
     /// materials or textures behind.
+    ///
+    /// `refresh` (a file that changed on disk) makes its textures again from
+    /// `images` and updates its live materials in place, so what shows them
+    /// shows the new file; textures no other file uses are freed.
     fn file_materials(
         &mut self,
         path: &str,
         file: &assets::Origin,
-        loaded: &gltf::Loaded,
+        loaded_materials: &[gltf::LoadedMaterial],
+        images: &[gltf::Image],
         image_keys: Vec<Option<SharedImage>>,
+        refresh: bool,
     ) -> Vec<Material> {
         let live = |gfx: &Self, m: &Material| gfx.assets3d.materials_live.contains(m.id);
         let kept = self.assets3d.file_materials.get(file).cloned().unwrap_or_default();
-        if kept.len() == loaded.materials.len() && kept.iter().all(|m| live(self, m)) {
+        if !refresh && kept.len() == loaded_materials.len() && kept.iter().all(|m| live(self, m)) {
             return kept;
         }
         let old_textures = self.assets3d.file_textures.get(file).cloned().unwrap_or_default();
-        let textures: Vec<crate::texture::Texture> = loaded
-            .images
+        let textures: Vec<crate::texture::Texture> = images
             .iter()
             .zip(image_keys)
             .enumerate()
             .map(|(i, ((w, h, rgba), key))| {
-                if let Some(&t) = old_textures.get(i).filter(|t| self.textures_live.contains(t.id)) {
+                if let Some(&t) = old_textures
+                    .get(i)
+                    .filter(|t| !refresh && self.textures_live.contains(t.id))
+                {
                     return t;
                 }
                 match key {
-                    Some(key) => match self.assets3d.shared_images.get(&key) {
+                    Some(key) => match self.assets3d.shared_images.get(&key).filter(|_| !refresh) {
                         Some(&t) => t,
                         None => {
                             let t = self.create_texture(*w, *h, rgba);
@@ -1046,12 +1160,22 @@ impl Graphics {
             self.asset_ledger.own(crate::inventory::AssetClass::Texture, t.id, path);
         }
         self.assets3d.file_textures.insert(file.clone(), textures.clone());
-        let materials: Vec<Material> = loaded
-            .materials
+        if refresh {
+            for t in old_textures {
+                let used = textures.contains(&t) || self.assets3d.file_textures.values().any(|ts| ts.contains(&t));
+                if !used && self.textures_live.contains(t.id) {
+                    self.free(t);
+                }
+            }
+        }
+        let materials: Vec<Material> = loaded_materials
             .iter()
             .enumerate()
             .map(|(i, m)| {
-                if let Some(&old) = kept.get(i).filter(|old| live(self, old)) {
+                let old = kept.get(i).copied().filter(|old| live(self, old));
+                if let Some(old) = old
+                    && !refresh
+                {
                     return old;
                 }
                 let texture = |i: Option<usize>| i.map(|i| textures[i]);
@@ -1069,6 +1193,10 @@ impl Graphics {
                     double_sided: m.double_sided,
                     ..Default::default()
                 };
+                if let Some(old) = old {
+                    self.update_material(old, desc);
+                    return old;
+                }
                 let material = self.create_material(desc);
                 self.asset_ledger
                     .own(crate::inventory::AssetClass::Material, material.id, path);
@@ -1153,9 +1281,12 @@ impl Graphics {
         self.try_load_mesh_data(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_mesh_data`](Self::load_mesh_data) with errors as values:
-    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file is
-    /// missing, [`Io`](crate::error::ErrorKind::Io) if it can't be read,
+    /// [`load_mesh_data`](Self::load_mesh_data) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file
+    /// is missing, [`Io`](crate::error::ErrorKind::Io) if it can't be read,
     /// [`Decode`](crate::error::ErrorKind::Decode) if it isn't a glTF file with
     /// triangles (including files it names that are missing).
     ///
@@ -1245,7 +1376,7 @@ impl Graphics {
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
     ///     let mut quad = ponko::render::MeshData::plane(1.0);
     ///     let up = vec![vec3(0.0, 0.1, 0.0); quad.positions.len()];
-    ///     quad.morph_targets.push(ponko::anim::MorphTarget { name: "lift".into(), positions: up, normals: Vec::new() });
+    ///     quad.morph_targets.push(ponko::anim::MorphTarget::new("lift", up));
     ///     let material = ctx.gfx.default_material();
     ///     let mesh = ctx.gfx.create_mesh(&quad, material);
     ///     assert_eq!(ctx.gfx.morph_target(mesh, "lift"), Some(0));
@@ -1275,7 +1406,29 @@ impl Graphics {
     /// ```
     #[must_use]
     pub fn loaded_materials(&self, name: &str) -> Vec<(Material, MaterialDesc)> {
-        self.assets3d.loaded_materials.get(name).cloned().unwrap_or_default()
+        let mut out = Vec::new();
+        self.loaded_materials_into(name, &mut out);
+        out
+    }
+
+    /// Replaces `out` with what [`loaded_materials`](Self::loaded_materials)
+    /// returns for `name`: the old contents are dropped (empty when no glTF
+    /// material has that name) and its capacity is reused, so a loop that
+    /// keeps one vector doesn't allocate once it has grown.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let mut found = Vec::new();
+    ///     ctx.gfx.loaded_materials_into("Brick", &mut found);
+    ///     assert!(found.is_empty(), "nothing is loaded yet");
+    /// });
+    /// ```
+    pub fn loaded_materials_into(&self, name: &str, out: &mut Vec<(Material, MaterialDesc)>) {
+        out.clear();
+        if let Some(materials) = self.assets3d.loaded_materials.get(name) {
+            out.extend_from_slice(materials);
+        }
     }
 
     /// Frees mesh `id`: the engine side of [`Graphics::free`] with a mesh.
@@ -1463,32 +1616,75 @@ impl Graphics {
     /// # Game::new("t", 1, 1).system(heaviest).run_headless(1, |_| {});
     /// ```
     pub fn mesh_costs(&self) -> Vec<super::MeshCost> {
+        let mut out = Vec::new();
+        self.mesh_costs_into(&mut out);
+        out
+    }
+
+    /// Replaces `out` with [`mesh_costs`](Self::mesh_costs): largest triangle
+    /// total first, the mesh id breaking ties. The old contents are dropped,
+    /// and the vector and the records' name strings are reused, so only new
+    /// records or longer names allocate. `out` is empty headless or before any
+    /// draw.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let mut costs = Vec::new();
+    /// let mut heaviest = move |ctx: &mut Ctx| {
+    ///     ctx.gfx.mesh_costs_into(&mut costs);
+    ///     for c in costs.iter().take(5) {
+    ///         println!("{} triangles", c.triangles + c.shadow_triangles);
+    ///     }
+    /// };
+    /// Game::new("t", 1, 1).system(move |ctx: &mut Ctx| heaviest(ctx)).run_headless(1, |_| {});
+    /// ```
+    pub fn mesh_costs_into(&self, out: &mut Vec<super::MeshCost>) {
         let Some(renderer) = self.renderer.as_ref() else {
-            return Vec::new();
+            out.clear();
+            return;
         };
-        let names: std::collections::HashMap<u32, String> = self
-            .assets3d
-            .loaded
-            .iter()
-            .map(|(origin, mesh)| (mesh.id, origin.display()))
-            .collect();
-        let mut costs: Vec<super::MeshCost> = renderer
-            .mesh_costs()
-            .into_iter()
-            .map(|(slot, models, triangles, shadow_models, shadow_triangles)| {
-                let mesh = self.assets3d.mesh_in_slot(slot);
-                super::MeshCost {
-                    mesh,
-                    name: names.get(&mesh.id).cloned(),
-                    models,
-                    triangles,
-                    shadow_models,
-                    shadow_triangles,
+        let mut len = 0;
+        renderer.visit_mesh_costs(|slot, models, triangles, shadow_models, shadow_triangles| {
+            let mesh = self.assets3d.mesh_in_slot(slot);
+            let at = out[..len].iter().position(|c| c.mesh == mesh).unwrap_or_else(|| {
+                let at = len;
+                // Keep a loaded mesh's name with its handle when cost sorting
+                // changes the order relative to renderer runs.
+                if let Some(found) = out[at..].iter().position(|c| c.mesh == mesh) {
+                    out.swap(at, at + found);
                 }
-            })
-            .collect();
-        costs.sort_by_key(|c| std::cmp::Reverse(c.triangles + c.shadow_triangles));
-        costs
+                if at == out.len() {
+                    out.push(super::MeshCost {
+                        mesh,
+                        name: None,
+                        models: 0,
+                        triangles: 0,
+                        shadow_models: 0,
+                        shadow_triangles: 0,
+                    });
+                }
+                let cost = &mut out[at];
+                cost.mesh = mesh;
+                cost.models = 0;
+                cost.triangles = 0;
+                cost.shadow_models = 0;
+                cost.shadow_triangles = 0;
+                if let Some((origin, _)) = self.assets3d.loaded.iter().find(|(_, m)| **m == mesh) {
+                    origin.display_into(cost.name.get_or_insert_with(String::new));
+                } else {
+                    cost.name = None;
+                }
+                len += 1;
+                at
+            });
+            let cost = &mut out[at];
+            cost.models += models;
+            cost.triangles += triangles;
+            cost.shadow_models += shadow_models;
+            cost.shadow_triangles += shadow_triangles;
+        });
+        out.truncate(len);
+        out.sort_unstable_by_key(|c| (std::cmp::Reverse(c.triangles + c.shadow_triangles), c.mesh.id));
     }
 
     /// Writes sampled skeleton morph channels to the models of `world`,
@@ -1833,7 +2029,8 @@ impl Ctx {
                 && self.world.query::<&super::Trail3D>().count() == 0
                 && self.world.query::<&super::Line3D>().count() == 0
                 && self.gfx.frame3d.particles.texts.vertices.is_empty()
-                && self.world.query::<&super::Text3D>().count() == 0)
+                && self.world.query::<&super::Text3D>().count() == 0
+                && self.gfx.frame3d.debug_lines.is_empty())
         {
             return; // no drawable 3D scene
         }
@@ -1871,6 +2068,13 @@ impl Ctx {
         } else if let Some(grid) = renderer.take_occlusion() {
             self.gfx.frame3d.occlusion = Some(grid);
         }
+        // Several cameras: the sun's cascades cover every view.
+        let views_on = !self.scene3d.views.is_empty() || !self.scene3d.camera.rect.is_full();
+        self.gfx.frame3d.shadow_views.clear();
+        if self.scene3d.lighting.shadows {
+            let cameras = self.scene3d.views.iter().map(|v| v.camera);
+            self.gfx.frame3d.shadow_views.extend(cameras);
+        }
         self.gfx.frame3d.collect(
             &mut self.world,
             &self.gfx.assets3d,
@@ -1878,6 +2082,26 @@ impl Ctx {
             &self.scene3d.camera,
             &self.scene3d.lighting,
         );
+        if views_on {
+            collect_window_views(
+                &mut self.world,
+                &self.gfx.assets3d,
+                &mut self.gfx.frame3d,
+                &self.scene3d,
+                &skins,
+            );
+        } else {
+            self.gfx.frame3d.window_views.clear();
+        }
+        // `ctx.debug`'s lines are on the default layer.
+        if !self
+            .scene3d
+            .camera
+            .layers
+            .intersects(crate::camera::RenderLayers::DEFAULT)
+        {
+            self.gfx.frame3d.debug_lines.clear();
+        }
         self.gfx.frame3d.skins = skins;
         let light = if self.scene3d.sky.atmosphere && self.scene3d.sky.shader.is_none() {
             match self.gfx.frame3d.sky_light {
@@ -1902,9 +2126,84 @@ impl Ctx {
             time,
             occlusion: self.scene3d.camera.occlusion_culling,
         };
-        renderer.prepare_3d(&scene, collect_ms);
+        if views_on {
+            let clear = self.gfx.clear_color;
+            let views = self
+                .scene3d
+                .views
+                .iter()
+                .zip(&self.gfx.frame3d.window_views)
+                .map(|(view, frame)| {
+                    let scene = super::Scene3D {
+                        frame,
+                        camera: view.camera.position,
+                        post: view.post.as_ref().unwrap_or(&self.scene3d.post),
+                        occlusion: false,
+                        ..scene
+                    };
+                    (scene, view.camera.rect, view.clear.unwrap_or(clear))
+                });
+            renderer.prepare_3d_views((&scene, self.scene3d.camera.rect, clear), views, collect_ms);
+            for frame in &mut self.gfx.frame3d.window_views {
+                frame.motion.reset = false;
+            }
+        } else {
+            renderer.drop_3d_views();
+            renderer.prepare_3d(&scene, collect_ms);
+        }
         self.gfx.frame3d.motion.reset = false;
     }
+}
+
+/// Collects what each window view (`SceneSettings::views`) draws, each
+/// into a frame of its own: its camera's models (on its layers), lights
+/// and particles. The shadow maps, poses, probes and screen effects are
+/// the main frame's.
+pub(crate) fn collect_window_views(
+    world: &mut ponko_ecs::World,
+    assets: &super::Assets3D,
+    main: &mut super::Frame3D,
+    settings: &super::SceneSettings,
+    skins: &super::SkinFrame,
+) {
+    let mut frames = std::mem::take(&mut main.window_views);
+    frames.resize_with(settings.views.len(), Default::default);
+    let lighting = super::Lighting {
+        shadows: false,
+        gi: super::GlobalIllumination {
+            enabled: false,
+            ..settings.lighting.gi
+        },
+        ..settings.lighting
+    };
+    for (frame, view) in frames.iter_mut().zip(&settings.views) {
+        let post = view.post.as_ref().unwrap_or(&settings.post);
+        frame.size_limit = main.size_limit;
+        frame.lod = settings.lod;
+        frame.motion.enabled =
+            post.anti_aliasing == super::AntiAliasing::Taa || (post.ao_temporal && post.ambient_occlusion.enabled);
+        frame.occlusion = None;
+        // The main frame's local light shadows (planned for every camera).
+        frame.lights.share_shadows(&main.lights);
+        frame.collect(world, assets, skins, &view.camera, &lighting);
+        frame.lights.share_with_view(&main.lights);
+        frame.light_views = main.light_views;
+        // The main frame's shadow maps, which cover this view too.
+        frame.cascades = main.cascades;
+        frame.sun_view_proj = main.sun_view_proj;
+        frame.cascade_texel = main.cascade_texel;
+        frame.shadow_size = main.shadow_size;
+        frame.probes = main.probes;
+        frame.effects.clone_from(&main.effects);
+        // `ctx.debug`'s lines are on the default layer.
+        let lines = &mut frame.debug_lines;
+        lines.clear();
+        if view.camera.layers.intersects(crate::camera::RenderLayers::DEFAULT) {
+            lines.tested.extend_from_slice(&main.debug_lines.tested);
+            lines.top.extend_from_slice(&main.debug_lines.top);
+        }
+    }
+    main.window_views = frames;
 }
 
 #[cfg(test)]

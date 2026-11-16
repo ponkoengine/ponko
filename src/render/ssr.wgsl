@@ -6,6 +6,19 @@
 // surface's roughness and with its Fresnel, see environment_light in
 // mesh.wgsl). Normals come from the depth, as there is no normal buffer: flat
 // faces, so normal maps don't bend these reflections.
+//
+// How blurred a reflection is depends on the surface's roughness and on
+// how far the ray went: the reflected light comes from a cone, which is
+// narrow where the ray starts. The trace writes, beside the color, the
+// cone's spread: the footprint, in full-size pixels, of a cone of tangent 1
+// around the ray where it ends, seen through the surface (a mirror image
+// of the hit, as far behind the surface as the hit is in front of it). The
+// opaque pass multiplies it by its roughness's cone (see `reflection_at`
+// in mesh_main.wgsl). A ray that finds nothing has none (0); `fs_fill`
+// gives it its nearest neighbors', whose light the filtered levels spread
+// over it. It reaches the opaque pass through the alpha of the first level
+// of the screen image (GTAO's denoise, or `fs_mark` without it, copies it
+// there).
 struct Settings {
     inverse: mat4x4<f32>,  // this frame's clip space to the world
     projection: mat4x4<f32>, // the world to this frame's clip space
@@ -33,6 +46,9 @@ fn coordinate(p: vec2<i32>) -> vec2<i32> {
     return clamp(p, vec2<i32>(0), vec2<i32>(textureDimensions(depth)) - 1);
 }
 fn z_at(p: vec2<i32>) -> f32 { return textureLoad(depth, coordinate(p), 0); }
+// The depth is reverse-Z: 1 at the near plane, 0 at the far plane and the
+// sky, so farther is smaller. Next to the far plane counts as sky.
+fn is_sky(z: f32) -> bool { return z <= 0.000001; }
 fn ndc(p: vec2<i32>) -> vec2<f32> {
     let uv = (vec2<f32>(coordinate(p)) + 0.5) / vec2<f32>(textureDimensions(depth));
     return uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0);
@@ -65,16 +81,37 @@ fn edge_fade(uv: vec2<f32>) -> f32 {
 fn behind(c: vec4<f32>) -> bool {
     let q = vec2<i32>(to_uv(c) * vec2<f32>(textureDimensions(depth)));
     let z = z_at(q);
-    return z < 0.999999 && c.z / c.w > z;
+    return !is_sky(z) && c.z / c.w < z;
 }
 
-// What the pixel reflects: rgb the color, alpha how much it counts (0: the
-// ray found nothing on screen; the environment stands in).
-@fragment fn fs_trace(in: Full) -> @location(0) vec4<f32> {
+// The footprint, in full-size pixels, of a cone of tangent 1 around a ray
+// from `center` (seen along `view`, toward the camera) that ends after
+// `travel`: its diameter there, 2 * travel, seen at the mirror image of the
+// ray's end, `travel` behind the surface along the view ray.
+fn cone_spread(center: vec3<f32>, view: vec3<f32>, travel: f32) -> f32 {
+    let mirrored = settings.projection * vec4<f32>(center - view * travel, 1.0);
+    if mirrored.w <= 0.0 { return 0.0; }
+    // How a step across the view ray moves the image on screen (the
+    // derivative of the projection, which is linear in clip space).
+    let across = safe_normalize(cross(view, vec3<f32>(0.0, 1.0, 0.0)), vec3<f32>(1.0, 0.0, 0.0));
+    let step = settings.projection * vec4<f32>(across, 0.0);
+    let moved = (step.xy * mirrored.w - mirrored.xy * step.w) / (mirrored.w * mirrored.w);
+    let pixels = length(moved * 0.5 * vec2<f32>(textureDimensions(depth)));
+    return 2.0 * travel * pixels;
+}
+
+// The trace's two targets: what the pixel reflects (rgb the color times
+// alpha, alpha how much it counts; 0: the ray found nothing on screen, the
+// environment stands in) and, where the ray found something, the cone's
+// spread (see the top) and 1.
+struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
+
+@fragment fn fs_trace(in: Full) -> Traced {
     // The top left of the 2x2 full-size pixels this one stands for.
     let p = vec2<i32>(in.at.xy) * 2;
     let strength = settings.params.x;
-    if strength <= 0.0 || z_at(p) >= 0.999999 { return vec4<f32>(0.0); }
+    let missed = Traced(vec4<f32>(0.0), vec2<f32>(0.0));
+    if strength <= 0.0 || is_sky(z_at(p)) { return missed; }
     let center = position(p);
     let view = normalize(settings.camera.xyz - center);
     // The less discontinuous neighbor on either side of each axis.
@@ -119,7 +156,7 @@ fn behind(c: vec4<f32>) -> bool {
         if !on_screen(uv) { break; }
         let q = vec2<i32>(uv * size);
         let z = z_at(q);
-        if z < 0.999999 && c.z / c.w > z {
+        if !is_sky(z) && c.z / c.w < z {
             // Behind it, by less than its assumed thickness (or the step):
             // a hit. Further behind, the ray passed behind it; go on.
             let gap = c.w - scene_w(q, z);
@@ -137,17 +174,62 @@ fn behind(c: vec4<f32>) -> bool {
         before = f;
         before_w = c.w;
     }
-    if hit < 0.0 { return vec4<f32>(0.0); }
+    if hit < 0.0 { return missed; }
     let uv = to_uv(mix(start, end, hit));
     // Where the hit was in the last frame's image.
-    let last = settings.previous * vec4<f32>(position(vec2<i32>(uv * size)), 1.0);
-    if last.w <= 0.0 { return vec4<f32>(0.0); }
+    let found = position(vec2<i32>(uv * size));
+    let last = settings.previous * vec4<f32>(found, 1.0);
+    if last.w <= 0.0 { return missed; }
     let last_uv = to_uv(last);
-    if !on_screen(last_uv) { return vec4<f32>(0.0); }
+    if !on_screen(last_uv) { return missed; }
     let color = textureSampleLevel(image, image_sampler, last_uv, 0.0).rgb;
     let far = 1.0 - smoothstep(0.6, 1.0, hit * reach);
     let confidence = strength * far * edge_fade(uv) * edge_fade(last_uv);
-    return vec4<f32>(color * confidence, confidence);
+    let spread = cone_spread(center, view, distance(origin, found));
+    return Traced(vec4<f32>(color * confidence, confidence), vec2<f32>(spread, 1.0));
+}
+
+// The cone's spread where the ray found nothing: its nearest neighbors'
+// (bound as `image`, the trace's: spread and 1 where there was a hit), at
+// half size. The light the filtered levels spread over a miss is what those
+// neighbors found, so it blurs as theirs does: a miss beside a contact
+// reflection stays sharp, one beside a distant reflection takes its wide
+// glow. Rings of eight taps 1, 2, 4, 8 and 16 pixels out (to a coarsest
+// level's footprint), each tap filtered over four pixels; the first ring
+// with hits gives their mean. None: 0, and the miss shows the environment
+// (its filtered levels would only spread faraway light over it). Most
+// misses have no hit anywhere near (a floor that reflects the sky): one
+// look at a coarse filtered level (`coarse`, level 4, whose pixels are 16
+// full-size ones; without filtered levels the trace's own) says so, and
+// they skip the search.
+@group(0) @binding(8) var coarse: texture_2d<f32>;
+
+@fragment fn fs_fill(in: Full) -> @location(0) vec4<f32> {
+    let own = textureLoad(image, vec2<i32>(in.at.xy), 0).rg;
+    if own.y > 0.0 { return vec4<f32>(own.x); }
+    let texel = 1.0 / vec2<f32>(textureDimensions(image));
+    if textureSampleLevel(coarse, image_sampler, in.at.xy * texel, 0.0).a <= 0.0 { return vec4<f32>(0.0); }
+    for (var ring = 0u; ring < 5u; ring++) {
+        // Between four pixels, so each tap averages them.
+        let r = f32(1u << ring) + 0.5;
+        var sum = vec2<f32>(0.0);
+        for (var k = 0; k < 8; k++) {
+            let angle = f32(k) * 0.7853982;
+            let at = in.at.xy + vec2<f32>(cos(angle), sin(angle)) * r;
+            sum += textureSampleLevel(image, image_sampler, at * texel, 0.0).rg;
+        }
+        if sum.y > 0.0 { return vec4<f32>(sum.x / sum.y); }
+    }
+    return vec4<f32>(0.0);
+}
+
+// Without GTAO, the first level of the screen image: blue 1 says the
+// reflections are there, alpha is the cone's spread (bound as `image`, at
+// half size, filled).
+@fragment fn fs_mark(in: Full) -> @location(0) vec4<f32> {
+    let half = vec2<i32>(in.at.xy) / 2;
+    let spread = textureLoad(image, min(half, vec2<i32>(textureDimensions(image)) - 1), 0).r;
+    return vec4<f32>(0.0, 0.0, 1.0, spread);
 }
 
 // This frame's opaque image, for the next frame's reflections.
@@ -190,7 +272,7 @@ fn center_pixel(x: vec2<i32>, size: vec2<i32>) -> vec2<i32> {
 // The surface at the center of pixel `x` of an image of `size` (w 0: sky).
 fn center_at(x: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
     let p = center_pixel(x, size);
-    return select(vec4<f32>(position(p), 1.0), vec4<f32>(0.0), z_at(p) >= 0.999999);
+    return select(vec4<f32>(position(p), 1.0), vec4<f32>(0.0), is_sky(z_at(p)));
 }
 // The step from `c`, at pixel `x` of level 2 (`local` in this workgroup's
 // part of it, `size` in all), to its neighbor along one axis, on the side

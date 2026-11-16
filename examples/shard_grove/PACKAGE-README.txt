@@ -2,7 +2,7 @@ Shard Grove
 ===========
 
 A small third-person 3D game made with the Ponko engine
-(https://github.com/ponkoengine/ponko). Guide the warden through a walled
+(https://gitlab.com/ponkoengine/ponko). Guide the warden through a walled
 grove: find the six shards while crawlers patrol and chase you, stun them
 with a pulse, save at the shrines, and leave by the gate once it opens.
 

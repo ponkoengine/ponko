@@ -5,12 +5,18 @@
 //! game for players, and `ponko notices` writes a library's third-party
 //! notices ([`package`]); `ponko pack` packs a folder of assets into one
 //! asset pack ([`pack`]); `ponko textures` compresses a folder's images
-//! into KTX2 textures ([`textures`], feature `textures`). Arguments are
+//! into KTX2 textures ([`textures`], feature `textures`); `ponko cook`
+//! turns source assets into runtime-ready ones ([`cook`]). Arguments are
 //! parsed by hand.
 
+#![deny(missing_docs)]
+
+mod cook;
+mod image_diff;
 mod new;
 mod pack;
 mod package;
+mod schema;
 mod templates;
 #[cfg(feature = "textures")]
 mod textures;
@@ -24,8 +30,11 @@ Usage:
   ponko new <path> [--2d | --3d | --headless | --server] [--path <engine> | --git <url>]
   ponko package [--bin <name> | --example <name>] [--web] [--format <list>] [...]
   ponko notices --out <file> [-p <package>] [...]
-  ponko pack [<folder>] [--out <file>] [--exclude <pattern>]... [--textures]
+  ponko pack [<folder>] [--out <file>] [--exclude <pattern>]... [--textures] [--cook]
+  ponko cook [<folder>] [--out <folder> | --pack <file>] [--platform <name>]
   ponko textures [<folder>] [--out <folder>] [--force] [--check]
+  ponko image-diff a.png b.png [--tolerance <0..255>] [--threshold <percent>] [--heatmap out.png]
+  ponko schema [--out <file>] [--bin <name> | --example <name>]
   ponko help [<command>]
   ponko --version
 
@@ -34,6 +43,10 @@ Commands:
   package  Build the game and package it for players (zip, app, dmg, tar.gz, web)
   notices  Write THIRD-PARTY-NOTICES.txt for a crate
   pack     Pack a folder of assets into one asset pack (what games ship)
+  cook     Turn source assets into runtime-ready ones (compressed textures,
+           optimized meshes, FLAC sounds, checked shaders), cached
+  image-diff Compare PNG images and optionally write a difference heatmap
+  schema   Write the glTF custom properties schema of a game (for editors)
   textures Compress images into GPU textures (KTX2: BC7, BC5, BC4, UASTC)
 
 Guide: https://ponko.dev/guide/getting-started.html";
@@ -59,6 +72,7 @@ fn run(args: &[String]) -> Result<String, String> {
         None => return Ok(USAGE.to_string()),
     };
     match command {
+        "image-diff" => image_diff::run(rest),
         "new" => {
             if rest.iter().any(|a| a == "-h" || a == "--help") {
                 return Ok(new::USAGE.to_string());
@@ -92,6 +106,22 @@ fn run(args: &[String]) -> Result<String, String> {
             let dir = std::env::current_dir().map_err(|e| format!("can't read the current folder: {e}"))?;
             pack::pack_command(&options, &dir)
         }
+        "cook" => {
+            if rest.iter().any(|a| a == "-h" || a == "--help") {
+                return Ok(cook::USAGE.to_string());
+            }
+            let options = cook::Options::parse(rest)?;
+            let dir = std::env::current_dir().map_err(|e| format!("can't read the current folder: {e}"))?;
+            cook::cook_command(&options, &dir)
+        }
+        "schema" => {
+            if rest.iter().any(|a| a == "-h" || a == "--help") {
+                return Ok(schema::USAGE.to_string());
+            }
+            let options = schema::Options::parse(rest)?;
+            let dir = std::env::current_dir().map_err(|e| format!("can't read the current folder: {e}"))?;
+            schema::schema_command(&options, &dir)
+        }
         "textures" => {
             #[cfg(feature = "textures")]
             {
@@ -111,10 +141,13 @@ fn run(args: &[String]) -> Result<String, String> {
         }
         "help" | "-h" | "--help" => match rest.first().map(String::as_str) {
             None => Ok(USAGE.to_string()),
+            Some("image-diff") => Ok(image_diff::USAGE.to_string()),
             Some("new") => Ok(new::USAGE.to_string()),
             Some("package") => Ok(package::USAGE.to_string()),
             Some("notices") => Ok(package::NOTICES_USAGE.to_string()),
             Some("pack") => Ok(pack::USAGE.to_string()),
+            Some("cook") => Ok(cook::USAGE.to_string()),
+            Some("schema") => Ok(schema::USAGE.to_string()),
             #[cfg(feature = "textures")]
             Some("textures") => Ok(textures::USAGE.to_string()),
             Some(other) => Err(format!("no command `{other}`\n\n{USAGE}")),
@@ -163,6 +196,18 @@ mod tests {
             );
         }
         assert!(run_str(&["notices", "-h"]).unwrap().contains("--out <file>"));
+    }
+
+    #[test]
+    fn help_for_cook_lists_its_kinds_and_options() {
+        for args in [&["help", "cook"][..], &["cook", "--help"]] {
+            let out = run_str(args).unwrap();
+            assert!(
+                out.contains("--platform") && out.contains("cook.json") && out.contains("FLAC"),
+                "{out}"
+            );
+        }
+        assert!(run_str(&[]).unwrap().contains("ponko cook"));
     }
 
     #[test]

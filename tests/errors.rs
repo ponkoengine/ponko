@@ -144,12 +144,12 @@ fn data_files_report_missing_files_bad_json_and_dead_entities() {
         ctx.world.reflect::<Tuning>();
         let err = ctx
             .assets
-            .load_resource_json::<Tuning>(&mut ctx.world, "no/such.json")
+            .load_reflected_resource_json::<Tuning>(&mut ctx.world, "no/such.json")
             .unwrap_err();
         assert_eq!((err.kind(), err.path()), (ErrorKind::NotFound, Some("no/such.json")));
         let err = ctx
             .assets
-            .load_resource_json::<Tuning>(&mut ctx.world, &bad)
+            .load_reflected_resource_json::<Tuning>(&mut ctx.world, &bad)
             .unwrap_err();
         assert_eq!((err.kind(), err.path()), (ErrorKind::Json, Some(bad.as_str())));
         let dead = ctx.world.spawn((Tuning::default(),));
@@ -157,7 +157,7 @@ fn data_files_report_missing_files_bad_json_and_dead_entities() {
         let good = temp_file("tuning-good.json", br#"{"speed": 2}"#);
         let err = ctx
             .assets
-            .load_component_json::<Tuning>(&mut ctx.world, &good, dead)
+            .load_reflected_component_json::<Tuning>(&mut ctx.world, &good, dead)
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::BadHandle);
         let err = ctx
@@ -270,6 +270,7 @@ mod three {
 
     use ponko::terrain::{TerrainMaterialDesc, TextureKind};
 
+    #[cfg(feature = "window")]
     const BROKEN: &str = "fn surface(s: Surface) -> Surface { return 1.0; }";
 
     #[test]

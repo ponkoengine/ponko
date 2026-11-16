@@ -319,7 +319,7 @@ Measured on an Apple M4 Max (10 performance cores), one simulation tick,
 entity. With the scheduler off, the same games take what they took before
 it existed: 8 µs for 64 tiny systems, before and after. The machine was in
 use; details and the caveats are in
-[`crates/ponko_bench/SCHEDULE.md`](https://github.com/ponkoengine/ponko/blob/main/crates/ponko_bench/SCHEDULE.md).)
+[`crates/ponko_bench/SCHEDULE.md`](../../crates/ponko_bench/SCHEDULE.md).)
 
 So:
 
@@ -344,3 +344,23 @@ So:
 It pays off for simulations with several independent, heavy systems per
 tick (thousands of entities each, or expensive per-entity work), written
 as view systems.
+
+## Reusing inspection output
+
+`SchedulePlan::iter_stages_in(phase)` and `iter_names(stage)` borrow a plan
+without temporary vectors; `stages_in` and `names` remain collecting conveniences.
+Building a plan itself may allocate and validates ordering. Native games can
+inspect the formatted plan through `ponko_game_schedule_plan`; borrowed Rust
+stage iterators have no native counterpart.
+
+For asset inspectors, keep output vectors between refreshes and pass them to
+`Graphics::loaded_materials_into(name, out)`, `mesh_costs_into(out)`,
+`streamed_assets_into(out)`, or graphics/audio `asset_handles_into`. These
+**replace**, rather than append to, existing contents and reuse vector capacity.
+Record names reuse their string buffers where possible. New records, longer names,
+or changed owner kinds may allocate; removing records drops their strings. Do
+not clear the vector yourself before refreshing. Mesh costs are largest triangle
+total first, streamed assets are kind/name ordered, handles are oldest first.
+Native material and handle listings already accept caller-owned arrays, but may
+allocate internally; mesh-cost and streamed-asset inspection, and the borrowed
+iterators, have no native binding yet (a gap for the maintainers to close).

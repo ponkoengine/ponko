@@ -130,13 +130,16 @@ pub(crate) fn oblique(view_proj: Mat4, view: Mat4, plane: Vec4) -> Mat4 {
         return view_proj;
     }
     let projection = view_proj * view.inverse();
-    // The far corner of the frustum on the plane's side, in view space.
+    // The far corner of the frustum on the plane's side, in view space
+    // (reverse-Z: the far plane is at depth 0).
     let clip_plane = projection.inverse().transpose() * c;
-    let q = projection.inverse() * Vec4::new(clip_plane.x.signum(), clip_plane.y.signum(), 1.0, 1.0);
-    // Depth 0..1: the near plane is the z row; scaled so the far plane
-    // still passes through that corner.
-    let z = c / c.dot(q);
+    let q = projection.inverse() * Vec4::new(clip_plane.x.signum(), clip_plane.y.signum(), 0.0, 1.0);
+    // Reverse-Z depth 1..0: the near plane is `w - z >= 0` and the far
+    // plane `z >= 0`. The near plane becomes the clip plane (w - z = c,
+    // scaled), and the far plane still passes through that corner (where
+    // w is 1).
     let mut rows = projection.transpose().to_cols_array_2d();
+    let z = Vec4::from_array(rows[3]) - c / c.dot(q);
     rows[2] = z.to_array();
     Mat4::from_cols_array_2d(&rows).transpose() * view
 }
@@ -170,9 +173,13 @@ impl Graphics {
     }
 
     /// [`create_render_target`](Self::create_render_target) with errors as
-    /// values: [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) for a zero
-    /// size, [`Limit`](crate::error::ErrorKind::Limit) for one larger than the GPU
-    /// takes.
+    /// values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) for a zero
+    /// size, [`Limit`](crate::error::ErrorKind::Limit) for one larger than the
+    /// GPU takes.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -199,8 +206,7 @@ impl Graphics {
             ));
         }
         let texture = if self.headless {
-            self.headless_textures += 1;
-            Texture::new(self.headless_textures, width, height)
+            Texture::new(self.headless_textures.make("texture"), width, height)
         } else {
             let renderer = self.renderer();
             let max = renderer.max_texture_size();
@@ -270,10 +276,10 @@ mod tests {
             assert!((0.0..=1.0).contains(&d), "{p} kept, depth {d}");
         }
         for p in [Vec3::new(0.0, 0.5, 0.0), Vec3::new(2.0, -1.0, -10.0)] {
-            assert!(depth(p) < 0.0, "{p} is below the plane");
+            assert!(depth(p) > 1.0, "{p} is below the plane");
         }
-        // On the plane: depth 0.
-        assert!(depth(Vec3::new(0.0, 1.0, -3.0)).abs() < 1e-4);
+        // On the plane: depth 1, the (reverse-Z) near plane.
+        assert!((depth(Vec3::new(0.0, 1.0, -3.0)) - 1.0).abs() < 1e-4);
     }
 
     #[test]

@@ -163,13 +163,9 @@ pub unsafe extern "C" fn ponko_ctx_set_skeleton(
                         )));
                     }
                 };
-                list.push(Joint {
-                    name: name.to_string(),
-                    parent,
-                    rest: transform_from_c(j.rest),
-                });
+                list.push(Joint::new(name.to_string(), parent).with_rest(transform_from_c(j.rest)));
             }
-            c.world.insert(e, Skeleton::new(list));
+            c.world.insert(e, Skeleton::try_new(list).map_err(invalid_owned)?);
             Ok(())
         })
     })
@@ -444,14 +440,8 @@ pub unsafe extern "C" fn ponko_ctx_attach_to_joint(
                 return Err(invalid("offset is null"));
             };
             let (e, of) = (entity(c, entity_bits)?, entity(c, skeleton_entity)?);
-            c.world.insert(
-                e,
-                AttachToJoint {
-                    skeleton: of,
-                    joint,
-                    offset: transform_from_c(*offset),
-                },
-            );
+            c.world
+                .insert(e, AttachToJoint::new(of, joint).with_offset(transform_from_c(*offset)));
             Ok(())
         })
     })

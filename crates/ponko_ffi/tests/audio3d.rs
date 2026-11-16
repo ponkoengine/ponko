@@ -119,7 +119,7 @@ unsafe fn effects_and_streams(ctx: *mut PonkoCtx, run: &Run, beep: PonkoSound) {
         // Playing on a bus: with and without params, effects and output.
         let mut p = PonkoPlaying { id: 77 };
         assert_eq!(ponko_ctx_play_sound_on(ctx, beep, null(), music, null(), &mut p), OK);
-        assert_eq!(p.id, 0, "headless voices have id 0");
+        assert_ne!(p.id, 77, "headless voices get a handle of their own");
         let mut params = ponko_sound_params_default();
         params.looping = true;
         params.volume = 0.5;

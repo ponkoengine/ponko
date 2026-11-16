@@ -61,10 +61,13 @@ centered dialog near the top: `UiLayout::centered(360.0, 180.0).top(180.0)`).
 `hidden()` takes a node and its subtree out of layout, drawing, input and the
 accessibility tree; set the layout again without it to show the node.
 Children stack top to bottom, except in a row. For a Taffy setting the
-presets don't cover (named grid lines, templates), `UiLayout::custom(style)`
-wraps a `ui::unstable_taffy::Style` and `style_mut()` edits one. That module
-is the Taffy crate itself: it is outside ponko's stability promise and changes
-when ponko upgrades Taffy.
+presets don't cover (named grid lines, templates), the escape hatch is
+`UiLayout::unstable_custom(style)`, which wraps a `ui::unstable_taffy::Style`,
+with `unstable_style()`, `unstable_style_mut()` and `into_unstable_style()` to
+read and edit one. That module is the Taffy crate itself, and the `unstable_`
+in each name says what STABILITY.md promises: nothing. These change when ponko
+upgrades Taffy; use the presets in code that must keep compiling. (The old
+names `custom`, `style`, `style_mut` and `into_style` still work, deprecated.)
 Give a scroll view a bounded size; `fill()` shrinks to the space its siblings
 leave. `UiWidget::Scroll` clips descendants and supports wheel scrolling,
 content dragging and a vertical scrollbar. `set_scroll` uses unscaled layout
@@ -143,7 +146,7 @@ CSS escapes; reserved CSS keywords and names starting with digits are rejected.
 use ponko::ui::{Ui, UiWidget, unstable_taffy::*};
 use ponko::ui::unstable_taffy::style_helpers::*;
 let mut tree = ponko::ui::Ui::default();
-let dashboard = tree.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::custom(Style {
+let dashboard = tree.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::unstable_custom(Style {
     display: Display::Grid,
     size: Size { width: length(600.0), height: length(400.0) },
     grid_template_columns: vec![repeat(2, vec![fr(1.0)])],
@@ -159,7 +162,7 @@ let dashboard = tree.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::custom
     ..Style::default()
 }));
 let placement = GridPlacement::NamedLine("main".into(), 0);
-let main = tree.add_child(dashboard, ponko::ui::UiWidget::Label, ponko::ui::UiLayout::custom(Style {
+let main = tree.add_child(dashboard, ponko::ui::UiWidget::Label, ponko::ui::UiLayout::unstable_custom(Style {
     grid_column: Line { start: placement.clone(), end: placement.clone() },
     grid_row: Line { start: placement.clone(), end: placement },
     ..Style::default()
@@ -210,7 +213,7 @@ use ponko::ui::unstable_taffy::*;
 use ponko::ui::unstable_taffy::style_helpers::*;
 let mut tree = ponko::ui::Ui::default();
 // Four 100-point columns; lines 3 and 5 are both called "edge".
-let strip = tree.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::custom(Style {
+let strip = tree.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::unstable_custom(Style {
     display: Display::Grid,
     size: Size { width: length(400.0), height: length(40.0) },
     grid_template_columns: vec![length(100.0), length(100.0), length(100.0), length(100.0)],
@@ -218,7 +221,7 @@ let strip = tree.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::custom(Sty
     ..Style::default()
 }));
 // From line 1 to the second "edge" line: all four columns.
-let banner = tree.add_child(strip, ponko::ui::UiWidget::Label, ponko::ui::UiLayout::custom(Style {
+let banner = tree.add_child(strip, ponko::ui::UiWidget::Label, ponko::ui::UiLayout::unstable_custom(Style {
     grid_column: Line { start: line(1), end: GridPlacement::NamedSpan("edge".into(), 2) },
     ..Style::default()
 }));
@@ -267,10 +270,22 @@ callers against the regenerated header.
 </div>
 </div>
 
-Push a detached root with `push_screen(root, modal)`. All screens render in stack
-order; only the top receives input, even when it is not modal. A modal screen
-dims earlier screens and owns pointer input outside its rectangle too. Pop with
-`pop_screen()`; nodes remain available for reuse. Escape/gamepad East pops the
+Push a detached root with `push_modeless(root)` for a menu or page, or
+`push_modal(root)` for a dialog; `push_screen_with_mode(root, mode)` takes the
+`ScreenMode` as a value, for code that decides it at run time. All screens
+render in stack order; only the top receives input, even when it is modeless. A
+modal screen dims earlier screens, owns pointer input outside its rectangle
+too, and is a dialog to screen readers. `ScreenMode` is `#[non_exhaustive]`:
+give a `match` on it a `_` arm. (`push_screen(root, modal: bool)` still works,
+deprecated; C has `ponko_ctx_ui_push_screen_with_mode` and C++
+`push_screen(root, ponko::ui::screen_mode::modal)`, `push_modal` and
+`push_modeless`.) Pop with
+`pop_screen()`; nodes remain available for reuse. Popping never removes
+them: the game does, with `ui.remove(root)` (the root and everything under
+it), and the freed slots go to the next nodes made. Push the same root again
+to show a menu you keep; remove a menu you build fresh each time it opens
+after you pop it, or every opening adds a menu's worth of nodes for the rest
+of the session. Escape/gamepad East pops the
 top screen and emits `ScreenPopped`, consuming the rest of that input snapshot.
 The previous screen's focus is restored when possible. Even the last screen can
 be popped; game code decides whether to reopen it.
@@ -280,7 +295,7 @@ be popped; game code decides whether to reopen it.
 A screen opens with nothing focused, so a keyboard or gamepad player would
 press Tab or an arrow key before Enter does anything. Mark the node it
 should open on with `.focused()` (or `ui.set_initial_focus(id, true)`): every
-`push_screen` of that screen focuses it, so the menu is ready for Enter at
+push of that screen focuses it, so the menu is ready for Enter at
 once, and opens on it again the next time it is pushed. `ui.set_focus(id)`
 moves the focus from code at any time (it returns `false`, and leaves the
 focus alone, for a node that can't take it: not a button, text input, toggle
@@ -294,7 +309,7 @@ takes it away.
 let menu = ctx.ui.root().layout(UiLayout::centered(300.0, 200.0).gap(12.0)).id();
 ctx.ui.button(menu, "Play").layout(UiLayout::row(44.0)).focused();
 let quit = ctx.ui.button(menu, "Quit").layout(UiLayout::row(44.0)).id();
-ctx.ui.push_screen(menu, false); // Play has the focus
+ctx.ui.push_modeless(menu); // Play has the focus
 ctx.ui.set_focus(quit); // now Quit has it
 # }
 ```
@@ -493,7 +508,7 @@ fn dialogue(ctx: &mut Ctx) {
         .rich()
         .wrap()
         .layout(UiLayout::auto().width(320.0));
-    ctx.ui.push_screen(root, false);
+    ctx.ui.push_modeless(root);
 }
 
 fn links(ctx: &mut Ctx) {
@@ -557,6 +572,13 @@ text; give sliders, text inputs, images and icon-only buttons one with
 inputs expose their text as the value, never as the name, and their caret and
 selection as byte offsets. Names never change layout, focus or events.
 
+New widgets bring new roles, and assistive technology can ask for more than
+today's requests, so `UiRole`, `UiAccessValue` and `UiAccessAction` are
+`#[non_exhaustive]`: a `match` on one needs a `_` arm (`role.as_str()` names
+any role). From C, a role or value that has no ABI-2 constant yet reads as
+`PONKO_UI_ROLE_GROUP` or `PONKO_UI_ACCESS_VALUE_NONE`; the text from
+`ponko_ctx_ui_access_text` names the real role.
+
 Two more things a screen reader uses:
 
 - A **description** (`.accessible_description("Starts a new run")`) is read
@@ -575,7 +597,7 @@ let mut ui = ponko::ui::Ui::default();
 let root = ui.root().layout(ponko::ui::UiLayout::fill()).id();
 ui.button(root, "Play");
 ui.slider(root).layout(ponko::ui::UiLayout::row(20.0)).value(0.25).accessible_name("Volume");
-ui.push_screen(root, false);
+ui.push_modeless(root);
 ui.layout(vec2(800.0, 600.0));
 assert_eq!(
     ui.accessibility_tree().to_string(),

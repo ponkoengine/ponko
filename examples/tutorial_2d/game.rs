@@ -12,9 +12,6 @@ use ponko::d2::*;
 use ponko::prelude::*;
 use ponko::tilemap::LevelObject;
 // ANCHOR_END: use_level
-// ANCHOR: use_menu
-use ponko::ui::{UiEvent, UiLayout};
-// ANCHOR_END: use_menu
 // ANCHOR: use_saves
 use serde::{Deserialize, Serialize};
 // ANCHOR_END: use_saves
@@ -130,7 +127,7 @@ pub const JUMP_SPEED: f32 = 330.0;
 
 /// Keys and a gamepad, bound to the same three actions.
 pub fn bindings() -> ActionMap {
-    let pad = ponko::input::Gamepad::from_slot(0).expect("slot 0 exists");
+    let pad = Gamepad::from_slot(0).expect("slot 0 exists");
     let mut map = ActionMap::default();
     map.set(
         "walk",
@@ -145,7 +142,7 @@ pub fn bindings() -> ActionMap {
             },
             AxisBinding::Gamepad {
                 pad,
-                axis: ponko::input::GamepadAxis::LeftStickX,
+                axis: GamepadAxis::LeftStickX,
                 deadzone: 0.2,
             },
         ]),
@@ -158,7 +155,7 @@ pub fn bindings() -> ActionMap {
             ButtonBinding::Key(Key::W),
             ButtonBinding::Gamepad {
                 pad,
-                button: ponko::input::GamepadButton::South,
+                button: GamepadButton::South,
             },
         ]),
     );
@@ -169,7 +166,7 @@ pub fn bindings() -> ActionMap {
             ButtonBinding::Key(Key::Escape),
             ButtonBinding::Gamepad {
                 pad,
-                button: ponko::input::GamepadButton::Start,
+                button: GamepadButton::Start,
             },
         ]),
     );
@@ -385,7 +382,7 @@ impl Plugin for Menu {
             .layout(UiLayout::row(44.0))
             .name("menu.quit")
             .id();
-        ui.push_screen(screen, false);
+        ui.push_modeless(screen);
         ctx.world.insert_resource(TitleScreen {
             screen,
             message,
@@ -438,7 +435,7 @@ fn menu(ctx: &mut Ctx) {
 /// Opens the title screen, unless it is open.
 fn open(ctx: &mut Ctx, title: TitleScreen) {
     if !ctx.ui.is_shown(title.screen) {
-        ctx.ui.push_screen(title.screen, false);
+        ctx.ui.push_modeless(title.screen);
     }
 }
 // ANCHOR_END: menu

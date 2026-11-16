@@ -189,6 +189,42 @@ fn wgpu_own(report: &wgpu::AllocatorReport) -> (u64, usize) {
     (own.iter().sum(), own.len())
 }
 
+/// How far the count may be from the figure where the allocator's report
+/// gives each allocation (Direct3D 12, Vulkan): less than a 720p RGBA8
+/// target (3.5 MiB), so forgetting one fails.
+const REPORTED_SLACK: u64 = 3 << 20;
+
+/// The label of the textures [`placed_by_driver`] makes.
+const PROBE: &str = "gpu memory probe";
+
+/// What the allocator gives a texture like `texture`: a probe made the same
+/// way, looked up in the allocator's report by its label, then destroyed
+/// (and freed by a poll, so the next probe is the only one). `None` where
+/// there is no report.
+fn placed_by_driver(device: &wgpu::Device, texture: &wgpu::Texture) -> Option<u64> {
+    let probe = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(PROBE),
+        size: texture.size(),
+        mip_level_count: texture.mip_level_count(),
+        sample_count: texture.sample_count(),
+        dimension: texture.dimension(),
+        format: texture.format(),
+        usage: texture.usage(),
+        view_formats: &[],
+    });
+    let report = device.generate_allocator_report();
+    probe.destroy();
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let sizes: Vec<u64> = report?
+        .allocations
+        .iter()
+        .filter(|a| a.name == PROBE)
+        .map(|a| a.size)
+        .collect();
+    assert_eq!(sizes.len(), 1, "one probe in the report: {sizes:?}");
+    Some(sizes[0])
+}
+
 /// Draws each preset and compares the counted total with the adapter's
 /// figure, where the platform has one. Does nothing unless run as the
 /// child of the test above.
@@ -206,11 +242,16 @@ fn wgpu_own(report: &wgpu::AllocatorReport) -> (u64, usize) {
 /// - wgpu's allocator (Direct3D 12, Vulkan): the report names each
 ///   allocation, so what wgpu makes for itself ([`wgpu_own`]) is taken
 ///   out, and the engine's resources are counted as the allocator places
-///   them (whole 64 KiB pages on Direct3D 12, [`D3D12_PAGE`]). On the
-///   Windows runner's software adapter (WARP) the raw figure was a nearly
-///   constant 22-28 MB above the count at every preset (Low 29%, High 9%),
-///   the same on every GPU tier: fixed costs, not a class the engine
-///   undercounts. Within the same 5% and 10% after that.
+///   them: whole 64 KiB pages on Direct3D 12 ([`D3D12_PAGE`]), and a
+///   multisampled texture at the size the driver gives the same texture
+///   ([`placed_by_driver`]). The driver lays samples out in its own tiles:
+///   on the Windows runner's software adapter (WARP) a 4x 720p colour
+///   target takes 6 MiB more than its samples, and a 1x1 4x depth stand-in
+///   7.6 MiB; together about 17-21 MiB at every preset. What is left is
+///   small and fixed, so on a hardware adapter the two agree within
+///   [`REPORTED_SLACK`] as well as the 5% and 10%: a forgotten
+///   screen-sized target breaks it. A software adapter (WARP) places tiny
+///   multisampled textures erratically, so only the 5% and 10% hold there.
 ///
 /// A resource the engine forgets to count (a missing 16 MB light atlas,
 /// a frame target) still breaks either comparison.
@@ -242,12 +283,14 @@ fn adapter_figure_child() {
         // What the draws dropped (the readback buffer) is freed by a poll.
         f.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let t = tally(&f);
-        let placed = t.placed_bytes(page);
+        let placed = t.placed_bytes(page, |t| {
+            (t.sample_count() > 1).then(|| placed_by_driver(&f.device, t)).flatten()
+        });
         let m = t.finish();
         let raw = adapter_bytes(&f.device).0.expect("reported above");
         println!("{m}");
         // The engine's share of the figure, and what it is compared with.
-        let (counted, adapter) = match f.device.generate_allocator_report() {
+        let (counted, adapter, slack) = match f.device.generate_allocator_report() {
             Some(report) => {
                 let (own, n) = wgpu_own(&report);
                 println!(
@@ -256,9 +299,14 @@ fn adapter_figure_child() {
                     m.total,
                     placed as f64 / 1048576.0
                 );
-                (placed, raw - own)
+                // A software adapter places tiny multisampled textures
+                // erratically (a 1x1 4x depth stand-in takes 7.6 MiB on
+                // WARP, which a probe made the same way doesn't always
+                // reproduce): only the 5% and 10% bounds hold there.
+                let slack = (!f.software).then_some(REPORTED_SLACK);
+                (placed, raw - own, slack)
             }
-            None => (m.total, raw),
+            None => (m.total, raw, None),
         };
         let ratio = counted as f64 / adapter as f64;
         println!(
@@ -272,18 +320,18 @@ fn adapter_figure_child() {
         } else {
             0.10
         };
-        if (ratio - 1.0).abs() >= within {
+        let apart = counted.abs_diff(adapter);
+        if (ratio - 1.0).abs() >= within || slack.is_some_and(|slack| apart >= slack) {
             off.push(format!(
                 "{quality:?}: counted {counted} bytes, the adapter reports {adapter} (raw {raw})"
             ));
-        }
-    }
-    if !off.is_empty() {
-        // Where the difference is: the allocator's largest allocations.
-        if let Some(mut report) = f.device.generate_allocator_report() {
-            report.allocations.sort_by_key(|a| std::cmp::Reverse(a.size));
-            for a in report.allocations.iter().take(40) {
-                println!("{:>12} {}", a.size, a.name);
+            // Where the difference is: this preset's largest allocations.
+            if let Some(mut report) = f.device.generate_allocator_report() {
+                report.allocations.sort_by_key(|a| std::cmp::Reverse(a.size));
+                println!("{quality:?}: the allocator's largest allocations:");
+                for a in report.allocations.iter().take(40) {
+                    println!("{:>12} {}", a.size, a.name);
+                }
             }
         }
     }

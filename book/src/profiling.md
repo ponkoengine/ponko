@@ -81,6 +81,35 @@ allocations are counted too; `PONKO_COUNT_CPP_ALLOCATIONS` adds your `new`
 calls. (A C game can call `ponko_note_allocation(bytes)` from its own
 allocator.)
 
+The counting allocator also counts what is freed, so
+`perf::net_alloc_bytes()` (bytes allocated minus bytes freed while
+profiling is on) tells how much of what a stretch of play allocated is
+still held. Take a reading after a warm-up, play on, take another: a game
+that gives back what it takes stays near zero however long it runs, and a
+leak grows with every pass.
+
+```rust
+# use ponko::prelude::*;
+# fn load_and_unload_level(_: &mut Ctx) {}
+fn leak_check(ctx: &mut Ctx) {
+    ctx.perf.set_profiling(true); // counted only while profiling is on
+    load_and_unload_level(ctx); // warm-up: caches and tables fill
+    let before = ponko::perf::net_alloc_bytes();
+    for _ in 0..10 {
+        load_and_unload_level(ctx);
+    }
+    let kept = ponko::perf::net_alloc_bytes() - before;
+    println!("{kept} bytes still held");
+}
+```
+
+The engine's own long-run test does this over 200 000 ticks
+(`tests/long_run.rs`); "Very long sessions" in
+[the simulation clock](sim-clock.md#very-long-sessions) says what may grow.
+`net_alloc_bytes` is Rust-only: C and C++ count frees of their own memory
+nowhere, so there `ponko_ctx_live_counts` and the asset inventory are the
+leak checks.
+
 ### In a running game
 
 <div class="lang-pair">

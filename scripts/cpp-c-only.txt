@@ -29,3 +29,37 @@ ponko_entity_bits        # ponko::bits(PonkoEntity)
 # C++ types with their own defaults.
 ponko_text3d_default     # ponko::text3d's member initializers are the same defaults (tests.cpp compares them)
 ponko_game_plugin        # game::plugin takes any object with build(game&) and an optional setup(ctx&)
+ponko_ctx_spawn_later    # ctx::spawn_later calls ponko_ctx_spawn_later_entity, to return the new entity
+
+# 2D filtered queries: the filter2d also carries collision groups, which the
+# older calls can't take.
+ponko_ctx_cast_ray_filtered  # ctx::cast_ray_filtered calls ponko_ctx_cast_ray2d, which also takes the filter's groups
+ponko_ctx_overlap_ball       # ctx::overlap_ball (2D) calls ponko_ctx_overlap_circle2d, which also takes the filter's groups
+# Queries with a versioned filter (PonkoQueryFilterEx): the C++ query methods take
+# filter2d / filter3d, which already carry the groups; query_filter_ex_of converts one
+# for these calls when a filter field arrives that the ABI 2 calls can't take.
+ponko_ctx_cast_ray2d_ex         # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_cast_ray2d_all_ex     # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_cast_circle2d_ex      # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_cast_box2d_ex         # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_cast_capsule2d_ex     # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_overlap_point2d_ex    # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_overlap_circle2d_ex   # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_overlap_box2d_ex      # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_overlap_capsule2d_ex  # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_closest_point2d_ex    # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_penetrations2d_ex     # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_cast_ray3d_ex         # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_cast_ray3d_all_ex     # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_cast_sphere3d_ex      # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_cast_capsule3d_ex     # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_cast_box3d_ex         # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_overlap_point3d_ex    # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_overlap_sphere3d_ex   # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_overlap_box3d_ex      # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_overlap_capsule3d_ex  # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_closest_point3d_ex    # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_penetrations3d_ex     # ctx's query of the same name with a filter2d/filter3d (groups included)
+ponko_ctx_set_particle_emitter3d  # ctx::set_particle_emitter3d calls ponko_ctx_set_particle_emitter3d_ex, which also takes the softness
+
+ponko_ctx_ui_push_screen # ui::push_screen uses ponko_ctx_ui_push_screen_with_mode, including its deprecated bool overload

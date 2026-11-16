@@ -34,15 +34,15 @@
 #[path = "smoke.rs"]
 pub mod smoke;
 
-use ponko::collision::CollisionStarted;
 use ponko::d2::{
-    Collider, ParticleEmitter, ParticleSettings, ParticleShape, QueryFilter, RigidBody, Transform, Velocity,
+    Collider, FollowCamera, ParticleEmitter, ParticleSettings, ParticleShape, PixelPerfect, QueryFilter, RigidBody,
+    Transform, Velocity,
 };
-use ponko::input::{Gamepad, GamepadAxis, GamepadButton};
 use ponko::particles::{ParticleCurve, ParticleGradient};
 use ponko::prelude::*;
 use ponko::render::BlendMode;
-use ponko::sheet::{Animation, SpriteSheet};
+use ponko::sheet::Animation;
+use ponko::state::State;
 use ponko::storage::Storage;
 use ponko::tilemap::{AutoTile, LevelLayer, LevelObject, LevelOptions, LevelRoot, TileMap};
 use serde::{Deserialize, Serialize};
@@ -217,8 +217,11 @@ pub struct Run {
     pub time: f32,
 }
 
-/// Which screen the game is on. Only `rules` changes it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Which screen the game is on: the game's state. Only `rules` changes it.
+/// The timed screens (`Dying`, `Transition`) read how long they have been
+/// on from the state ([`screen_seconds`]), so a value never changes while
+/// its screen lasts.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Screen {
     /// The title scene: "new run", "continue".
     Title,
@@ -227,15 +230,11 @@ pub enum Screen {
     Paused,
     /// The hero was lost; the run starts again at the last brazier after
     /// [`DEATH_DELAY`].
-    Dying {
-        t: f32,
-    },
+    Dying,
     /// Fading out of a level and into the next one (`to`), or to the end
     /// (`None`). The level is swapped halfway.
     Transition {
         to: Option<usize>,
-        t: f32,
-        swapped: bool,
     },
     /// Every level done: the results, until any key or button.
     Finished,
@@ -465,7 +464,11 @@ impl Plugin for Rules {
     fn build(&self, game: Game) -> Game {
         // The physics step runs only while something should move: not on the
         // title, the pause or the end screen.
-        game.physics(vec2(0.0, GRAVITY))
+        // Every start of play (a new run, the next level, a respawn without
+        // a save) saves the run, on the playing screen.
+        game.state(Screen::Title)
+            .on_enter(Screen::Playing, save_run)
+            .physics(vec2(0.0, GRAVITY))
             .add(Phase::BeforePhysics, hold_physics)
             .sim_system(rules)
     }
@@ -487,8 +490,10 @@ impl Plugin for Rules {
         let (progress, status) = Progress::load(&mut ctx.storage);
         ctx.world.insert_resource(progress);
         ctx.world.insert_resource(status);
-        ctx.world.insert_resource(Screen::Title);
-        to_title(ctx);
+        let look = FollowCamera::default().with_look_ahead(vec2(24.0, 0.0));
+        ctx.world.insert_resource(look.with_offset(vec2(0.0, -12.0)));
+        // The game starts on the title screen (`Game::state`): only its scene.
+        show_title(ctx);
     }
 }
 
@@ -496,8 +501,8 @@ impl Plugin for Rules {
 /// rules keep running, so they see the press that resumes.
 pub fn hold_physics(ctx: &mut Ctx) {
     let moving = matches!(
-        *ctx.world.resource::<Screen>(),
-        Screen::Playing | Screen::Dying { .. } | Screen::Transition { .. }
+        screen(&ctx.world),
+        Screen::Playing | Screen::Dying | Screen::Transition { .. }
     );
     ctx.physics.set_paused(!moving);
 }
@@ -557,10 +562,26 @@ fn notice(ctx: &mut Ctx, text: impl Into<String>) {
     };
 }
 
+/// The current game screen; changes requested by rules apply between ticks.
+pub fn screen(world: &World) -> Screen {
+    *world.resource::<State<Screen>>().get()
+}
+
+/// Seconds the current screen has been on (a pause doesn't count).
+pub fn screen_seconds(ctx: &Ctx) -> f32 {
+    ctx.seconds_in_state::<Screen>()
+}
+
 // ---- screens -------------------------------------------------------------------
 
 /// To the title: the title scene replaces the world.
 pub fn to_title(ctx: &mut Ctx) {
+    show_title(ctx);
+    ctx.set_state(Screen::Title);
+}
+
+/// The title scene, in place of the world.
+fn show_title(ctx: &mut Ctx) {
     if let Err(e) = ctx.load_scene(TITLE_SCENE) {
         // The title is decoration: say why it is missing and go on.
         eprintln!("ember_hop: {e}");
@@ -568,7 +589,6 @@ pub fn to_title(ctx: &mut Ctx) {
     }
     ctx.camera.zoom = ZOOM;
     ctx.camera.look_at(vec2(160.0, 90.0));
-    *ctx.world.resource_mut::<Screen>() = Screen::Title;
 }
 
 /// A saved run to continue.
@@ -582,16 +602,18 @@ pub fn has_saved_run(storage: &Storage) -> bool {
 pub fn new_run(ctx: &mut Ctx) {
     *ctx.world.resource_mut::<Run>() = Run::default();
     enter_level(ctx, 0);
+    ctx.set_state(Screen::Playing);
 }
 
 /// Continues the saved run: the world as it was saved, the level around it.
+/// The run is saved on the playing screen, which the load brings back with
+/// the world (a load isn't a change of screen: nothing is entered or left).
 /// `false` (and a notice) if there is none or it can't be read.
 pub fn continue_run(ctx: &mut Ctx) -> bool {
     match ctx.load_world(RUN_SLOT) {
         Ok(()) => {
             ctx.world.resource_mut::<Tally>().loads += 1;
             rehydrate(ctx);
-            *ctx.world.resource_mut::<Screen>() = Screen::Playing;
             true
         }
         Err(e) => {
@@ -601,7 +623,8 @@ pub fn continue_run(ctx: &mut Ctx) -> bool {
     }
 }
 
-/// Starts level `index` from its file and saves the run.
+/// Starts level `index` from its file; entering the playing screen saves
+/// the run.
 pub fn enter_level(ctx: &mut Ctx, index: usize) {
     ctx.world.clear();
     {
@@ -623,8 +646,6 @@ pub fn enter_level(ctx: &mut Ctx, index: usize) {
         .map_or(vec2(40.0, 40.0), |o| o.position);
     spawn_hero(ctx, start);
     snap_camera(ctx);
-    save_run(ctx);
-    *ctx.world.resource_mut::<Screen>() = Screen::Playing;
 }
 
 /// The hero at `at`.
@@ -745,7 +766,7 @@ fn lose_hero(ctx: &mut Ctx, hero: Entity) {
     let art = *ctx.world.resource::<Art>();
     burst(ctx, at, puff(art.ember, Color::hex(0xff8a2a), 40, 120.0), 1.2);
     sfx(ctx, |s| s.hurt);
-    *ctx.world.resource_mut::<Screen>() = Screen::Dying { t: 0.0 };
+    ctx.set_state(Screen::Dying);
 }
 
 /// Back at the last save (the level's start or its last brazier); the
@@ -755,18 +776,18 @@ pub fn respawn(ctx: &mut Ctx) {
         let run = ctx.world.resource::<Run>();
         (run.deaths + 1, run.time)
     };
-    let loaded = ctx.load_world(RUN_SLOT).is_ok();
-    if loaded {
+    // The save is on the playing screen: loading it brings that back.
+    if ctx.load_world(RUN_SLOT).is_ok() {
         ctx.world.resource_mut::<Tally>().loads += 1;
         rehydrate(ctx);
     } else {
         let level = ctx.world.resource::<Run>().level;
         enter_level(ctx, level);
+        ctx.set_state(Screen::Playing);
     }
     let run = ctx.world.resource_mut::<Run>();
     run.deaths = deaths;
     run.time = time;
-    *ctx.world.resource_mut::<Screen>() = Screen::Playing;
 }
 
 /// Every level done: the results are recorded and the run's slot deleted.
@@ -809,7 +830,7 @@ pub fn rules(ctx: &mut Ctx) {
     }
     tick_bursts(ctx, dt);
 
-    match *ctx.world.resource::<Screen>() {
+    match screen(&ctx.world) {
         Screen::Title => {
             if intent.confirm {
                 sfx(ctx, |s| s.select);
@@ -821,49 +842,33 @@ pub fn rules(ctx: &mut Ctx) {
                 ctx.quit();
             }
         }
+        Screen::Playing if intent.pause => ctx.push_state(Screen::Paused),
         Screen::Playing => {
-            if intent.pause {
-                *ctx.world.resource_mut::<Screen>() = Screen::Paused;
-                return;
-            }
             ctx.world.resource_mut::<Run>().time += dt;
             play(ctx, &intent, &hits);
         }
-        Screen::Paused => {
-            if intent.pause || intent.confirm {
-                *ctx.world.resource_mut::<Screen>() = Screen::Playing;
-            } else if intent.back {
-                // The run stays in its slot: "continue" picks it up.
-                to_title(ctx);
-            }
-        }
-        Screen::Dying { t } => {
-            let t = t + dt;
-            if t >= DEATH_DELAY {
-                respawn(ctx);
-            } else {
-                *ctx.world.resource_mut::<Screen>() = Screen::Dying { t };
-            }
-        }
-        Screen::Transition { to, t, swapped } => {
-            let t = t + dt;
-            let mut swapped = swapped;
-            if !swapped && t >= FADE {
-                swapped = true;
+        Screen::Paused if intent.pause || intent.confirm => ctx.pop_state::<Screen>(),
+        // The run stays in its slot: "continue" picks it up.
+        Screen::Paused if intent.back => to_title(ctx),
+        Screen::Paused => {}
+        Screen::Dying if screen_seconds(ctx) >= DEATH_DELAY => respawn(ctx),
+        Screen::Dying => {}
+        Screen::Transition { to } => {
+            let t = screen_seconds(ctx);
+            // Halfway, the next level (or the end) replaces the old one.
+            if t >= FADE && t - dt < FADE {
                 match to {
                     Some(level) => enter_level(ctx, level),
                     None => finish_run(ctx),
                 }
             }
-            *ctx.world.resource_mut::<Screen>() = if t >= 2.0 * FADE {
-                if to.is_some() {
+            if t >= 2.0 * FADE {
+                ctx.set_state(if to.is_some() {
                     Screen::Playing
                 } else {
                     Screen::Finished
-                }
-            } else {
-                Screen::Transition { to, t, swapped }
-            };
+                });
+            }
         }
         Screen::Finished => {
             if intent.any || intent.confirm || intent.back {
@@ -1116,11 +1121,7 @@ fn level_cleared(ctx: &mut Ctx) {
     let next = (level + 1 < LEVELS.len()).then_some(level + 1);
     ctx.world.resource_mut::<Tally>().levels_cleared += 1;
     sfx(ctx, |s| s.clear);
-    *ctx.world.resource_mut::<Screen>() = Screen::Transition {
-        to: next,
-        t: 0.0,
-        swapped: false,
-    };
+    ctx.set_state(Screen::Transition { to: next });
 }
 
 // ---- particles -------------------------------------------------------------------
@@ -1241,40 +1242,37 @@ impl Plugin for Presentation {
     }
 }
 
-/// Where the camera wants to be: on the hero, a little ahead of it, inside
-/// the level.
-pub fn camera_target(ctx: &mut Ctx) -> Option<Vec2> {
-    let (at, facing) = ctx
-        .world
-        .query::<(&Transform, &Player)>()
-        .iter()
-        .next()
-        .map(|(t, p)| (t.position, p.facing))?;
-    let size = ctx.world.resource::<CurrentLevel>().size;
-    let half = ctx.camera.visible_rect().size() / 2.0;
-    let want = at + vec2(facing * 24.0, -12.0);
-    let clamp = |v: f32, lo: f32, hi: f32| if hi < lo { (lo + hi) / 2.0 } else { v.clamp(lo, hi) };
-    Some(vec2(
-        clamp(want.x, half.x, size.x - half.x),
-        clamp(want.y, half.y, size.y - half.y),
-    ))
-}
+/// The camera's pixel grid: 320 x 180 art pixels at a whole zoom.
+const PIXELS: PixelPerfect = PixelPerfect::new(WINDOW.x / ZOOM, WINDOW.y / ZOOM);
 
+/// Puts the camera on the hero at once (a new level, a respawn).
 fn snap_camera(ctx: &mut Ctx) {
-    ctx.camera.zoom = ZOOM;
-    if let Some(target) = camera_target(ctx) {
-        ctx.camera.look_at(target);
-    }
+    aim_camera(ctx, true);
 }
 
 // ANCHOR: camera
-/// Frame system: the camera eases toward the hero.
+/// Frame system: the camera eases toward a point ahead of the hero (a
+/// `FollowCamera` resource), inside the level, on the pixel grid.
 pub fn follow_camera(ctx: &mut Ctx) {
-    if let Some(target) = camera_target(ctx) {
-        let center = ctx.camera.center();
-        let ease = 1.0 - (-8.0 * ctx.time.frame_dt()).exp();
-        ctx.camera.look_at(center + (target - center) * ease);
+    aim_camera(ctx, false);
+}
+
+fn aim_camera(ctx: &mut Ctx, snap: bool) {
+    let mut heroes = ctx.world.query::<(&Transform, &Player)>();
+    let Some((at, facing)) = heroes.iter().next().map(|(t, p)| (t.position, p.facing)) else {
+        return;
+    };
+    let (size, dt) = (ctx.world.resource::<CurrentLevel>().size, ctx.time.frame_dt());
+    PIXELS.apply(&mut ctx.camera); // the zoom first: the bounds depend on it
+    let follow = ctx.world.resource_mut::<FollowCamera>();
+    follow.bounds = Some(Rect::new(0.0, 0.0, size.x, size.y));
+    follow.facing.x = facing; // look the way the hero faces
+    if snap {
+        follow.snap(&mut ctx.camera, at);
+    } else {
+        follow.update(&mut ctx.camera, at, dt);
     }
+    PIXELS.apply(&mut ctx.camera);
 }
 // ANCHOR_END: camera
 
@@ -1311,9 +1309,10 @@ pub fn draw_overlay(ctx: &mut Ctx) {
         );
     }
     // The fade between levels.
-    let fade = match *ctx.world.resource::<Screen>() {
-        Screen::Transition { t, .. } => 1.0 - ((t - FADE).abs() / FADE).min(1.0),
-        Screen::Dying { t } => (t / DEATH_DELAY).min(1.0) * 0.6,
+    let t = screen_seconds(ctx);
+    let fade = match screen(&ctx.world) {
+        Screen::Transition { .. } => 1.0 - ((t - FADE).abs() / FADE).min(1.0),
+        Screen::Dying => (t / DEATH_DELAY).min(1.0) * 0.6,
         _ => 0.0,
     };
     if fade > 0.0 {
@@ -1346,7 +1345,7 @@ pub fn screen_lines(world: &World, storage: &Storage) -> Vec<Line> {
     let text = Color::hex(0xe8dcc8);
     let dim = Color::hex(0x9a8fb0);
     let progress = world.resource::<Progress>();
-    match *world.resource::<Screen>() {
+    match screen(world) {
         Screen::Title => {
             let mut lines = vec![
                 line("Ember Hop", 64.0, title),
@@ -1405,10 +1404,10 @@ pub fn screen_lines(world: &World, storage: &Storage) -> Vec<Line> {
 }
 
 fn hud(ctx: &mut Ctx) {
-    let screen = *ctx.world.resource::<Screen>();
+    let screen = screen(&ctx.world);
     if matches!(
         screen,
-        Screen::Playing | Screen::Paused | Screen::Dying { .. } | Screen::Transition { .. }
+        Screen::Playing | Screen::Paused | Screen::Dying | Screen::Transition { .. }
     ) {
         let run = ctx.world.resource::<Run>().clone();
         let level = ctx.world.resource::<CurrentLevel>().title.clone();

@@ -28,18 +28,19 @@ fn hidden(center:vec3<f32>, radius:f32) -> bool {
     if depth[3] == 0.0 {return false;}
     let vp=mat4x4<f32>(vec4<f32>(depth[4],depth[5],depth[6],depth[7]),vec4<f32>(depth[8],depth[9],depth[10],depth[11]),vec4<f32>(depth[12],depth[13],depth[14],depth[15]),vec4<f32>(depth[16],depth[17],depth[18],depth[19]));
     let extent=vec3<f32>(radius+depth[2]);
-    var lo=vec2<f32>(1e30); var hi=vec2<f32>(-1e30); var nearest=1e30;
+    // Reverse-Z: nearer is greater, the grid keeps each tile's smallest.
+    var lo=vec2<f32>(1e30); var hi=vec2<f32>(-1e30); var nearest=-1e30;
     for(var i=0u;i<8u;i++) {
         let sign=vec3<f32>(select(-1.0,1.0,(i&1u)!=0u),select(-1.0,1.0,(i&2u)!=0u),select(-1.0,1.0,(i&4u)!=0u));
         let clip=vp*vec4<f32>(center+extent*sign,1.0);
         if clip.w <= 1e-5 {return false;}
-        lo=min(lo,clip.xy/clip.w); hi=max(hi,clip.xy/clip.w); nearest=min(nearest,clip.z/clip.w);
+        lo=min(lo,clip.xy/clip.w); hi=max(hi,clip.xy/clip.w); nearest=max(nearest,clip.z/clip.w);
     }
-    if any(lo < vec2<f32>(-1.0)) || any(hi > vec2<f32>(1.0)) || nearest < 0.0 {return false;}
+    if any(lo < vec2<f32>(-1.0)) || any(hi > vec2<f32>(1.0)) || nearest > 1.0 {return false;}
     let w=u32(depth[0]); let h=u32(depth[1]);
     let a=min(vec2<u32>((vec2<f32>(lo.x,-hi.y)*0.5+0.5)*vec2<f32>(f32(w),f32(h))),vec2<u32>(w-1u,h-1u));
     let b=min(vec2<u32>((vec2<f32>(hi.x,-lo.y)*0.5+0.5)*vec2<f32>(f32(w),f32(h))),vec2<u32>(w-1u,h-1u));
-    for(var y=a.y;y<=b.y;y++) {for(var x=a.x;x<=b.x;x++) {if nearest <= depth[24u+y*w+x] {return false;}}}
+    for(var y=a.y;y<=b.y;y++) {for(var x=a.x;x<=b.x;x++) {if nearest >= depth[24u+y*w+x] {return false;}}}
     return true;
 }
 fn word(i:u32) -> vec4<f32> {return vec4<f32>(depth[i],depth[i+1u],depth[i+2u],depth[i+3u]);}

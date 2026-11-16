@@ -66,7 +66,7 @@
 //!   `Assets`, `Perf`) can be declared but aren't offered to view systems;
 //!   systems that use them keep `&mut Ctx`.
 //! - **Physics and navigation** steps declare what they touch
-//!   ([`step_physics_access`](crate::systems::step_physics_access) and its
+//!   (`step_physics_access` and its
 //!   siblings in [`systems`](crate::systems)) and keep `&mut Ctx`: checked
 //!   in debug builds, sequential. Other built-in systems stay exclusive.
 //! - **Foreign (C/C++) systems** declare components, resources and events

@@ -179,6 +179,12 @@ impl Exec {
                 }
                 ctx.set_sim_steps(s.every);
             }
+            if !s.conditions_hold(ctx) {
+                // Skipped: it keeps its place in the change history, and
+                // uses up its change tick as it would in a batch.
+                ctx.world.advance_change_tick();
+                return;
+            }
             run_one(s, ctx, index);
         };
         let Exec { built, runners, slots } = self;
@@ -339,8 +345,16 @@ fn run_batch(
             unreachable!("a batch only has view systems");
         };
         let mut runner = taken.take().expect("a batch gives its systems back");
+        // State conditions only change between ticks: checked here, they
+        // say what they would say right before the system.
+        runner.task.skip = !s.batch_conditions_hold(&ctx.world);
+        // Its own command buffer spawns in this world (a no-op after the
+        // first batch; the world can only change by being replaced).
+        runner.task.commands.bind(&ctx.world);
         // The stream `Ctx::random` gives this system.
         runner.task.random = Random::new(ctx.seed, tick, base + i);
+        // Its own debug drawing buffer, drawing as `ctx.debug` does.
+        runner.task.debug.follow(&ctx.debug);
         // Each view compares changes against its own system's last run.
         runner
             .state
@@ -361,8 +375,10 @@ fn run_batch(
             }
         }
         runner.task.slots = first..slots.len();
-        work_us += runner.task.usual_us;
-        slowest_us = slowest_us.max(runner.task.usual_us);
+        if !runner.task.skip {
+            work_us += runner.task.usual_us;
+            slowest_us = slowest_us.max(runner.task.usual_us);
+        }
         runners.push(runner);
     }
     // Other threads only when it pays, and never while profiling: the
@@ -412,9 +428,10 @@ fn run_batch(
         for (&i, mut runner) in members.iter().zip(runners.drain(..)) {
             let s = &mut systems[i];
             runner.task.commands.clear();
+            runner.task.debug.clear();
             runner.task.outbox.clear();
             runner.task.read.clear();
-            if runner.task.finished {
+            if runner.task.finished && !runner.task.skip {
                 s.changes_seen = ChangesSeen {
                     world: world_id,
                     tick: ponko_ecs::Tick::from_bits(ticks.of(i)),
@@ -440,7 +457,13 @@ fn run_batch(
     for (&i, mut runner) in members.iter().zip(runners.drain(..)) {
         let s = &mut systems[i];
         let task = &mut runner.task;
+        if task.skip {
+            // A condition skipped it: nothing ran, nothing to deliver or time.
+            s.run = Run::View(Some(runner));
+            continue;
+        }
         task.outbox.flush(&mut ctx.events);
+        ctx.debug.absorb(&mut task.debug);
         let mut ms = task.last_ms;
         // Its writes belong to the tick it wrote in: it won't be shown
         // them again, every later system will.

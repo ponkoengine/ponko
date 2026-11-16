@@ -1,0 +1,243 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "written by hand for the Ponko guide (one cube mesh, used by every node)"
+  },
+  "extensionsUsed": [
+    "KHR_lights_punctual"
+  ],
+  "extensions": {
+    "KHR_lights_punctual": {
+      "lights": [
+        {
+          "name": "lantern",
+          "type": "point",
+          "color": [
+            1.0,
+            0.85,
+            0.6
+          ],
+          "intensity": 2000.0,
+          "range": 10.0
+        }
+      ]
+    }
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Courtyard",
+      "nodes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Ground",
+      "mesh": 1,
+      "translation": [
+        0,
+        -0.1,
+        0
+      ],
+      "scale": [
+        20,
+        0.2,
+        20
+      ],
+      "extras": {
+        "ponko:collider": "trimesh"
+      }
+    },
+    {
+      "name": "Crate",
+      "mesh": 0,
+      "translation": [
+        2,
+        0.5,
+        0
+      ],
+      "extras": {
+        "ponko:collider": "box",
+        "ponko:body": "dynamic"
+      }
+    },
+    {
+      "name": "Start",
+      "translation": [
+        0,
+        0,
+        4
+      ],
+      "extras": {
+        "ponko:spawn": "player"
+      }
+    },
+    {
+      "name": "Lantern",
+      "translation": [
+        0,
+        2.5,
+        0
+      ],
+      "extensions": {
+        "KHR_lights_punctual": {
+          "light": 0
+        }
+      },
+      "extras": {
+        "ponko:shadows": true,
+        "flicker": 0.2
+      }
+    },
+    {
+      "name": "Pillar",
+      "mesh": 0,
+      "translation": [
+        -3,
+        1.5,
+        -3
+      ],
+      "scale": [
+        0.5,
+        3,
+        0.5
+      ],
+      "extras": {
+        "ponko:collider": "hull"
+      }
+    },
+    {
+      "name": "Gate",
+      "translation": [
+        0,
+        0,
+        -6
+      ],
+      "children": [
+        6
+      ]
+    },
+    {
+      "name": "Door",
+      "mesh": 0,
+      "translation": [
+        0,
+        1,
+        0
+      ],
+      "scale": [
+        2,
+        2,
+        0.2
+      ],
+      "extras": {
+        "door": "north"
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "cube",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0
+          },
+          "indices": 1,
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "ground",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0
+          },
+          "indices": 1,
+          "material": 1
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "wood",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.55,
+          0.35,
+          0.2,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      }
+    },
+    {
+      "name": "stone",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.5,
+          0.5,
+          0.48,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      }
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 168,
+      "uri": "data:application/octet-stream;base64,AAAAvwAAAL8AAAC/AAAAPwAAAL8AAAC/AAAAPwAAAD8AAAC/AAAAvwAAAD8AAAC/AAAAvwAAAL8AAAA/AAAAPwAAAL8AAAA/AAAAPwAAAD8AAAA/AAAAvwAAAD8AAAA/AAACAAEAAAADAAIABAAFAAYABAAGAAcAAAABAAUAAAAFAAQAAwAHAAYAAwAGAAIAAAAEAAcAAAAHAAMAAQACAAYAAQAGAAUA"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 96,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 96,
+      "byteLength": 72,
+      "target": 34963
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 8,
+      "type": "VEC3",
+      "min": [
+        -0.5,
+        -0.5,
+        -0.5
+      ],
+      "max": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    }
+  ]
+}

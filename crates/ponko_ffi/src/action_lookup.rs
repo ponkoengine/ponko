@@ -19,7 +19,7 @@ unsafe fn map_ref<'a>(map: *const PonkoActionMap) -> Result<&'a ActionMap, Failu
 
 /// `action`'s kind (0 button, 1 scalar, 2 vector) and its sources as the
 /// descriptions `ponko_action_map_set` takes.
-pub(crate) fn action_to_c(action: &Action) -> (u32, Vec<PonkoActionBinding>) {
+pub(crate) fn action_to_c(action: &Action) -> Result<(u32, Vec<PonkoActionBinding>), Failure> {
     let blank = PonkoActionBinding {
         kind: 0,
         pad: 0,
@@ -34,69 +34,79 @@ pub(crate) fn action_to_c(action: &Action) -> (u32, Vec<PonkoActionBinding>) {
         ..blank
     };
     use PonkoActionSource::*;
-    match action {
+    Ok(match action {
         Action::Button(list) => (
             0,
             list.iter()
-                .map(|b| match *b {
-                    ButtonBinding::Key(k) => PonkoActionBinding {
-                        first: k as u32,
-                        ..source(PONKO_ACTION_KEY)
-                    },
-                    ButtonBinding::Mouse(m) => PonkoActionBinding {
-                        first: m as u32,
-                        ..source(PONKO_ACTION_MOUSE)
-                    },
-                    ButtonBinding::Gamepad { pad, button } => PonkoActionBinding {
-                        pad: pad.slot() as u32,
-                        first: button as u32,
-                        ..source(PONKO_ACTION_GAMEPAD_BUTTON)
-                    },
+                .map(|b| {
+                    Ok(match *b {
+                        ButtonBinding::Key(k) => PonkoActionBinding {
+                            first: k as u32,
+                            ..source(PONKO_ACTION_KEY)
+                        },
+                        ButtonBinding::Mouse(m) => PonkoActionBinding {
+                            first: m as u32,
+                            ..source(PONKO_ACTION_MOUSE)
+                        },
+                        ButtonBinding::Gamepad { pad, button } => PonkoActionBinding {
+                            pad: pad.slot() as u32,
+                            first: button as u32,
+                            ..source(PONKO_ACTION_GAMEPAD_BUTTON)
+                        },
+                        _ => return Err(invalid("action source is not supported by this ABI")),
+                    })
                 })
-                .collect(),
+                .collect::<Result<_, _>>()?,
         ),
         Action::Axis(list) => (
             1,
             list.iter()
-                .map(|b| match *b {
-                    AxisBinding::Keys { negative, positive } => PonkoActionBinding {
-                        first: negative as u32,
-                        second: positive as u32,
-                        ..source(PONKO_ACTION_KEYS)
-                    },
-                    AxisBinding::Gamepad { pad, axis, deadzone } => PonkoActionBinding {
-                        pad: pad.slot() as u32,
-                        first: axis as u32,
-                        deadzone,
-                        ..source(PONKO_ACTION_GAMEPAD_AXIS)
-                    },
+                .map(|b| {
+                    Ok(match *b {
+                        AxisBinding::Keys { negative, positive } => PonkoActionBinding {
+                            first: negative as u32,
+                            second: positive as u32,
+                            ..source(PONKO_ACTION_KEYS)
+                        },
+                        AxisBinding::Gamepad { pad, axis, deadzone } => PonkoActionBinding {
+                            pad: pad.slot() as u32,
+                            first: axis as u32,
+                            deadzone,
+                            ..source(PONKO_ACTION_GAMEPAD_AXIS)
+                        },
+                        _ => return Err(invalid("action source is not supported by this ABI")),
+                    })
                 })
-                .collect(),
+                .collect::<Result<_, _>>()?,
         ),
         Action::Axis2(list) => (
             2,
             list.iter()
-                .map(|b| match *b {
-                    Axis2Binding::Keys { left, right, up, down } => PonkoActionBinding {
-                        first: left as u32,
-                        second: right as u32,
-                        third: up as u32,
-                        fourth: down as u32,
-                        ..source(PONKO_ACTION_KEYS2)
-                    },
-                    Axis2Binding::Gamepad { pad, stick, deadzone } => PonkoActionBinding {
-                        pad: pad.slot() as u32,
-                        first: match stick {
-                            GamepadStick::Left => 0,
-                            GamepadStick::Right => 1,
+                .map(|b| {
+                    Ok(match *b {
+                        Axis2Binding::Keys { left, right, up, down } => PonkoActionBinding {
+                            first: left as u32,
+                            second: right as u32,
+                            third: up as u32,
+                            fourth: down as u32,
+                            ..source(PONKO_ACTION_KEYS2)
                         },
-                        deadzone,
-                        ..source(PONKO_ACTION_GAMEPAD_STICK)
-                    },
+                        Axis2Binding::Gamepad { pad, stick, deadzone } => PonkoActionBinding {
+                            pad: pad.slot() as u32,
+                            first: match stick {
+                                GamepadStick::Left => 0,
+                                GamepadStick::Right => 1,
+                            },
+                            deadzone,
+                            ..source(PONKO_ACTION_GAMEPAD_STICK)
+                        },
+                        _ => return Err(invalid("action source is not supported by this ABI")),
+                    })
                 })
-                .collect(),
+                .collect::<Result<_, _>>()?,
         ),
-    }
+        _ => return Err(invalid("action kind is not supported by this ABI")),
+    })
 }
 
 /// The number of actions in `map` (Rust `ActionMap::len`).
@@ -184,7 +194,7 @@ pub unsafe extern "C" fn ponko_action_map_get(
         let action = map
             .get(name)
             .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "no action of that name"))?;
-        let (kind, bindings) = action_to_c(action);
+        let (kind, bindings) = action_to_c(action)?;
         for (i, b) in bindings.iter().take(capacity).enumerate() {
             out_bindings.add(i).write(*b);
         }

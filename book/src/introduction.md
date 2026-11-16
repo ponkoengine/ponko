@@ -11,9 +11,9 @@ help. Modular internals should support an integrated experience: common things
 work immediately, advanced things can be customized, and neither requires
 understanding the whole engine.
 
-Read the [project vision](https://github.com/ponkoengine/ponko/blob/main/PROJECT_VISION.md),
-[architecture](https://github.com/ponkoengine/ponko/blob/main/ARCHITECTURE.md),
-and [roadmap](https://github.com/ponkoengine/ponko/blob/main/ROADMAP.md) for direction,
+Read the [project vision](../../PROJECT_VISION.md),
+[architecture](../../ARCHITECTURE.md),
+and [roadmap](../../ROADMAP.md) for direction,
 current limitations and planned work. The [Bevy and Unity comparison](comparison.md)
 explains the tradeoffs; Ponko does not claim feature parity or overall superiority.
 
@@ -91,9 +91,9 @@ benchmark results do not establish a general engine ranking.
 Formerly Crabby Engine; [Naming and compatibility](naming.md) maps the old
 names to the new ones. This guide follows `main`; an installed release may
 differ. Ponko is at 0.x:
-[STABILITY.md](https://github.com/ponkoengine/ponko/blob/main/STABILITY.md)
+[STABILITY.md](../../STABILITY.md)
 says what a release may change and what it keeps (API and ABI, MSRV, saved
 worlds, MCP and determinism).
 
 Help improve the engine through
-[Contributing](https://github.com/ponkoengine/ponko/blob/main/CONTRIBUTING.md).
+[Contributing](../../CONTRIBUTING.md).

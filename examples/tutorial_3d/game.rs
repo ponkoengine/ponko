@@ -13,9 +13,6 @@ use ponko::d3::*;
 use ponko::prelude::*;
 use ponko::render::{MaterialDesc, Mesh, MeshData};
 // ANCHOR_END: use_yard
-// ANCHOR: use_hud
-use ponko::ui::{UiEvent, UiLayout};
-// ANCHOR_END: use_hud
 
 // ANCHOR: game
 /// The window title.
@@ -50,7 +47,7 @@ impl Plugin for Yard {
         // What you see: every mesh and material in the file.
         let look = ctx.gfx.load_mesh(YARD);
         // What you stand on: the same triangles as a collision mesh.
-        let solid = ctx.load_collision_mesh(YARD).expect("the yard loads");
+        let solid = ctx.load_collision_mesh(YARD);
         ctx.world.spawn((
             Transform::default(),
             Model::new(look),
@@ -96,7 +93,6 @@ actions! {
 
 /// Keys and a gamepad, bound to the same actions.
 pub fn bindings() -> ActionMap {
-    use ponko::input::{Gamepad, GamepadAxis, GamepadButton, GamepadStick};
     let pad = Gamepad::from_slot(0).expect("slot 0 exists");
     let mut map = ActionMap::default();
     map.set(
@@ -429,7 +425,7 @@ fn hud(ctx: &mut Ctx) {
     let (lit, all) = lanterns_lit(&mut ctx.world);
     ctx.ui.set_text(ids.count, format!("Lanterns lit: {lit} / {all}"));
     if lit == all && !ctx.ui.is_shown(ids.done) {
-        ctx.ui.push_screen(ids.done, true);
+        ctx.ui.push_modal(ids.done);
     }
 }
 

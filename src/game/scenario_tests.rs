@@ -68,6 +68,7 @@ fn game_without_scenario() -> (Game, Ctx) {
 fn frame(game: &mut Game, ctx: &mut Ctx, ticks: u32) {
     ctx.begin_frame(FrameTiming {
         dt: 1.0 / 60.0,
+        seconds: 1.0 / 60.0,
         fixed_steps: ticks,
         alpha: 0.0,
     });

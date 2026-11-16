@@ -272,7 +272,9 @@ mod violations {
     #[test]
     #[should_panic(expected = "records commands")]
     fn undeclared_commands_panic() {
-        run_one(SystemAccess::new(), |ctx| ctx.commands.spawn((Health(1),)));
+        run_one(SystemAccess::new(), |ctx| {
+            ctx.commands.spawn((Health(1),));
+        });
     }
 
     #[test]

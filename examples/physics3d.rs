@@ -6,7 +6,7 @@
 //!
 //! Click to lock the mouse (Escape lets it go, Escape again quits). The
 //! mouse looks, WASD walks, Shift runs, Space jumps; left click shoves the
-//! crate you're looking at.
+//! crate you're looking at, right click drops a new crate where you look.
 
 #[cfg(feature = "3d")]
 use ponko::d3::*;
@@ -26,6 +26,8 @@ struct Player {
     id: Entity,
     yaw: f32,
     pitch: f32,
+    /// How a dropped crate looks.
+    crate_model: Model,
 }
 
 // ANCHOR: world
@@ -84,6 +86,7 @@ fn build_world(ctx: &mut Ctx) {
         id,
         yaw: 0.0,
         pitch: 0.0,
+        crate_model: Model::new(crate_mesh),
     });
 }
 // ANCHOR_END: world
@@ -149,6 +152,39 @@ fn shove(ctx: &mut Ctx) {
 }
 // ANCHOR_END: queries
 
+// ANCHOR: shape_queries
+/// Right click drops a crate where a 1 m box pushed from the eye would stop
+/// (up to 20 m), moved out of anything it would sink into.
+fn drop_crate(ctx: &mut Ctx) {
+    let p = ctx.world.resource::<Player>();
+    let (me, model, turn) = (p.id, p.crate_model, Quat::from_rotation_y(p.yaw));
+    let (eye, forward) = (ctx.scene3d.camera.position, ctx.scene3d.camera.rotation * Vec3::NEG_Z);
+    let not_me = QueryFilter::default().exclude(me);
+    let size = Vec3::ONE;
+    let travel = ctx
+        .physics3d
+        .cast_box(eye, size, turn, forward, 20.0, not_me)
+        .map_or(20.0, |hit| hit.distance);
+    let mut at = eye + forward * travel;
+    let mut pushes = Vec::new();
+    let shape = Collider::cuboid(size).shape;
+    ctx.physics3d.penetrations(shape, at, turn, not_me, &mut pushes);
+    if let Some(out) = pushes.first() {
+        at += out.normal * out.depth;
+    }
+    ctx.world.spawn((
+        Transform {
+            rotation: turn,
+            ..Transform::at(at)
+        },
+        model,
+        RigidBody::dynamic(),
+        Collider::cuboid(size).density(150.0).friction(0.7),
+        Velocity::default(),
+    ));
+}
+// ANCHOR_END: shape_queries
+
 // ANCHOR: look
 /// Every frame: the mouse turns the head (raw motion, so it works while the
 /// cursor is locked) and the camera sits at the walker's eyes. A click
@@ -160,6 +196,8 @@ fn eyes(ctx: &mut Ctx) {
         } else {
             ctx.input.set_cursor_locked(true);
         }
+    } else if ctx.input.mouse_pressed(MouseButton::Right) && ctx.input.cursor_locked() {
+        drop_crate(ctx);
     } else if ctx.input.key_pressed(Key::Escape) {
         if ctx.input.cursor_locked() {
             ctx.input.set_cursor_locked(false);

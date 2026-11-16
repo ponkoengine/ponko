@@ -275,7 +275,7 @@ fn humanoid_only_clips_are_rejected_clearly() {
         dense: (2, 2, 30.0, 0.0, vec![0.0, 0.1, 0.2, 0.3]),
         constant: Vec::new(),
     };
-    let message = AnimationClip::parse(&baked_yaml(&b, "")).unwrap_err().message;
+    let message = AnimationClip::parse(&baked_yaml(&b, "")).unwrap_err().to_string();
     assert!(message.contains("humanoid"), "{message}");
 }
 
@@ -747,7 +747,7 @@ fn clips_too_long_to_sample_are_errors() {
     };
     assert!(clip(2).is_ok());
     let err = clip(40).unwrap_err();
-    assert!(err.message.contains("too long to sample"), "{err}");
+    assert!(err.message().contains("too long to sample"), "{err}");
 }
 
 /// Packed vectors with no bits per item have no data to check their count
@@ -758,5 +758,5 @@ fn packed_vectors_without_bits_cant_claim_huge_counts() {
     let started = std::time::Instant::now();
     let err = AnimationClip::parse(text).unwrap_err();
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
-    assert!(err.message.contains("differ in count"), "{err}");
+    assert!(err.message().contains("differ in count"), "{err}");
 }

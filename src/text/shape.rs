@@ -93,7 +93,8 @@ pub(crate) struct Shaper {
 impl Shaper {
     /// Keeps a font's bytes for shaping.
     pub fn set_bytes(&mut self, id: u32, bytes: &[u8], index: u32) {
-        let i = id as usize;
+        // By slot: a freed font's slot goes to the next font loaded.
+        let i = (id & crate::handle::INDEX_MASK) as usize;
         if self.faces.len() <= i {
             self.faces.resize_with(i + 1, || None);
         }
@@ -107,7 +108,7 @@ impl Shaper {
 
     /// Drops what was kept for font `id` (freed or replaced).
     pub fn forget_font(&mut self, id: u32) {
-        if let Some(face) = self.faces.get_mut(id as usize) {
+        if let Some(face) = self.faces.get_mut((id & crate::handle::INDEX_MASK) as usize) {
             *face = None;
         }
         self.glyphs.retain(|k, _| k.0 != id);
@@ -122,7 +123,7 @@ impl Shaper {
 
     /// The face of font `id`, with its shaper tables made.
     fn face(&mut self, id: u32) -> Option<&Face> {
-        let i = id as usize;
+        let i = (id & crate::handle::INDEX_MASK) as usize;
         if id == 0 && self.faces.first().is_none_or(Option::is_none) {
             if self.faces.is_empty() {
                 self.faces.push(None);

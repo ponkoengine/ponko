@@ -9,7 +9,7 @@ moved twice, only the final name is listed.
 It covers the Rust API only. **The C ABI is unchanged**: version 2, the same
 `ponko_*` functions, layouts and numeric values (the removed `crabby_*` C names
 are in [Naming and compatibility](naming.md)). The changelog's "Breaking
-changes" explains the reasons; [STABILITY.md](https://github.com/ponkoengine/ponko/blob/main/STABILITY.md)
+changes" explains the reasons; [STABILITY.md](../../STABILITY.md)
 says what the 0.x versions promise from here on.
 
 Most code needs three changes: `use ponko::prelude::*;`,
@@ -125,7 +125,7 @@ Renamed or with new arguments:
 | `ctx.free_mesh(m)`, `free_instance_batch(b)`, `free_gpu_buffer(b)` | `ctx.free(h)` |
 | `ctx.load_mesh_data(..)` | `ctx.gfx.try_load_mesh_data(..)` (or `load_mesh_data`, which panics) |
 | `ctx.bake_reflection_probe`, `load_reflection_probe`, `write_animated_morphs` | the same on `ctx.gfx`, with `&mut ctx.world` first |
-| `ctx.draw(&t, pos)`, `ctx.play_sound(&s)` | `ctx.draw(t, pos)`, `ctx.play_sound(s)` (handles by value; also `draw_ex`, `set_texture_filter`, `update_texture`, `play_ex`, `play_on`, `play_at`) |
+| `ctx.draw(&t, pos)`, `ctx.play_sound(&s)` | `ctx.gfx.draw(t, pos)`, `ctx.audio.play(s)` (handles by value; also `draw_ex`, `set_texture_filter`, `update_texture`, `play_ex`, `play_on`, `play_at`) |
 | `ctx.spawn_prefab(path, (x, y).into())` | `ctx.spawn_prefab(path, vec2(x, y))` (also a `Vec3`, `d2::Transform` or `d3::Transform`) |
 
 ## `Ctx` fields

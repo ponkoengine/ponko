@@ -6,6 +6,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use ponko::assets::{AssetSource, MemorySource};
 #[allow(unused_imports)]
 #[cfg(feature = "3d")]
 use ponko::d3::{ReflectionProbe as ReflectionProbe3D, Transform as Transform3D};

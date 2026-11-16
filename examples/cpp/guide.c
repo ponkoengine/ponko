@@ -117,7 +117,7 @@ static void retained_ui(PonkoCtx* ctx, void* user) {
     uint64_t root, buy;
     ponko_ctx_ui_add_panel(ctx, PONKO_UI_SCREEN, PONKO_UI_NONE, &column, &root);
     ponko_ctx_ui_add_button(ctx, PONKO_UI_SCREEN, root, "Buy", NULL, &buy); /* NULL layout: default */
-    ponko_ctx_ui_push_screen(ctx, PONKO_UI_SCREEN, root, false);
+    ponko_ctx_ui_push_screen_with_mode(ctx, PONKO_UI_SCREEN, root, PONKO_UI_SCREEN_MODE_MODELESS);
 
     PonkoUiEvent event;
     while (ponko_ctx_ui_next_event(ctx, PONKO_UI_SCREEN, &event) == PONKO_OK)
@@ -137,14 +137,49 @@ static void retained_ui(PonkoCtx* ctx, void* user) {
     ponko_ctx_create_ui_panel(ctx, terminal, 600, 400, (PonkoVec2){1.2f, 0.8f}, &texture);
     uint64_t button;
     ponko_ctx_ui_add_button(ctx, terminal, PONKO_UI_NONE, "Buy", NULL, &button);
-    ponko_ctx_ui_push_screen(ctx, terminal, button, false);
+    ponko_ctx_ui_push_screen_with_mode(ctx, terminal, button, PONKO_UI_SCREEN_MODE_MODELESS);
     // ANCHOR_END: ui_panel_c
     CHECK(ponko_ctx_ui_top_screen(ctx, terminal, &top) == PONKO_OK && top == button);
+}
+
+static void versioned_descriptors(PonkoCtx* ctx) {
+    // ANCHOR: versioned_descriptor
+    PonkoLightingEx light = {.struct_size = sizeof light, .version = PONKO_LIGHTING_EX_VERSION};
+    CHECK(ponko_ctx_lighting_ex(ctx, &light) == PONKO_OK);  // the current lighting, all fields
+    light.lighting.shadow_filter = 4;                        // contact-hardening shadows
+    light.shadow_sun_size = 1.5f;                            // a field ABI 2's PonkoLighting lacks
+    CHECK(ponko_ctx_set_lighting_ex(ctx, &light) == PONKO_OK);
+
+    PonkoMaterialDescEx glass = {.struct_size = sizeof glass, .version = PONKO_MATERIAL_DESC_EX_VERSION};
+    CHECK(ponko_material_desc_ex_defaults(&glass) == PONKO_OK);  // white, roughness 0.6, no stencil
+    glass.desc.color = (PonkoColor){.6f, .8f, 1, .5f};
+    glass.has_stencil = true;
+    glass.stencil = ponko_stencil_mark(1);
+    PonkoMaterial material;
+    CHECK(ponko_ctx_create_material_ex(ctx, &glass, &material) == PONKO_OK);
+    // ANCHOR_END: versioned_descriptor
+
+    // ANCHOR: versioned_post
+    PonkoPostEx post = {.struct_size = sizeof post, .version = PONKO_POST_EX_VERSION};
+    CHECK(ponko_ctx_post_ex(ctx, &post) == PONKO_OK);
+    post.split_toning_shadows = (PonkoColor){.35f, .55f, .6f, 1};      // teal shadows
+    post.split_toning_highlights = (PonkoColor){.7f, .5f, .35f, 1};    // orange highlights
+    post.dof_enabled = true;                                           // blur what is out of focus
+    post.dof_focus_distance = 4;
+    CHECK(ponko_ctx_set_post_ex(ctx, &post) == PONKO_OK);
+
+    PonkoParticleSettings3DEx smoke = {.struct_size = sizeof smoke, .version = PONKO_PARTICLE_SETTINGS3D_EX_VERSION};
+    CHECK(ponko_particle_settings3d_ex_defaults(&smoke) == PONKO_OK);
+    smoke.settings.rate = 20;
+    smoke.softness = 1.5f;                                             // fade where it meets the ground
+    // ponko_ctx_set_particle_emitter3d_ex(ctx, entity, &smoke) gives an entity the emitter
+    // ANCHOR_END: versioned_post
 }
 
 static void setup(PonkoCtx* ctx, void* user) {
     handles(ctx, user);
     retained_ui(ctx, user);
+    versioned_descriptors(ctx);
 }
 
 int main(void) {

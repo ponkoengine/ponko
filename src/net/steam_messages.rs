@@ -156,6 +156,12 @@ impl SteamLobby {
         }
     }
     /// Create a lobby for 1..=250 members, including its owner.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` if `max_members` is outside 1..=250. Steam's own
+    /// failures arrive later, through [`poll`](Self::poll).
+    ///
     /// ```no_run
     /// # use ponko::prelude::*;
     /// # let client = steamworks::Client::init_app(480).unwrap();
@@ -174,6 +180,12 @@ impl SteamLobby {
         ))
     }
     /// Join by lobby id; completion/errors arrive through `poll`.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` if the lobby id is zero. A lobby that is full, closed
+    /// or gone arrives later, through [`poll`](Self::poll).
+    ///
     /// ```no_run
     /// # use ponko::prelude::*;
     /// # let client = steamworks::Client::init_app(480).unwrap();
@@ -192,6 +204,11 @@ impl SteamLobby {
         ))
     }
     /// Run callbacks and report asynchronous errors. Never blocks.
+    ///
+    /// # Errors
+    ///
+    /// The failure of the create or join request, once Steam reports it.
+    ///
     /// ```no_run
     /// # fn f(lobby: &ponko::net::SteamLobby) { let _ = lobby.poll(); }
     /// ```
@@ -242,6 +259,14 @@ impl SteamLobby {
     }
     /// Set metadata (owner only). Keys are 1..=254 bytes, values at most
     /// 8191 bytes; neither may contain NUL. Check version compatibility before play.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` for a key or value outside those limits,
+    /// `NotConnected` while the lobby is still being created or joined (or
+    /// after leaving), and an error if Steam refuses (only the owner may set
+    /// metadata).
+    ///
     /// ```no_run
     /// # fn f(lobby: &ponko::net::SteamLobby) { let _ = lobby.set_metadata("version", "1"); }
     /// ```
@@ -256,6 +281,12 @@ impl SteamLobby {
     }
     /// Open the overlay invite dialog. Existing invite argument/wait helpers
     /// also work for these lobbies.
+    ///
+    /// # Errors
+    ///
+    /// `NotConnected` while the lobby is still being created or joined (or
+    /// after leaving).
+    ///
     /// ```no_run
     /// # fn f(lobby: &ponko::net::SteamLobby) { let _ = lobby.invite(); }
     /// ```
@@ -263,7 +294,13 @@ impl SteamLobby {
         self.api.invite(self.ready()?);
         Ok(())
     }
-    /// Leave once. A pending request must finish first (returns `WouldBlock`).
+    /// Leave once. A pending request must finish first.
+    ///
+    /// # Errors
+    ///
+    /// `WouldBlock` while the lobby is still being created or joined, or the
+    /// lobby's failure if it failed.
+    ///
     /// ```no_run
     /// # fn f(lobby: &mut ponko::net::SteamLobby) { let _ = lobby.leave(); }
     /// ```
@@ -377,6 +414,11 @@ impl NetMessages {
     /// Host message traffic through Steam relays, creating a friends-only
     /// lobby. `max_clients` is 1..=249 (Steam permits 250 lobby members).
     /// Use one message endpoint per Steam client; lockstep uses a separate channel.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` if `max_clients` is outside 1..=249.
+    ///
     /// ```no_run
     /// # use ponko::prelude::*;
     /// let client = steamworks::Client::init_app(480).unwrap();
@@ -393,6 +435,11 @@ impl NetMessages {
     }
     /// Join a message host by lobby id. Poll until `Connected`; lobby failures
     /// are returned by `poll`. Host migration requires a new endpoint.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` if the lobby id is zero.
+    ///
     /// ```no_run
     /// # use ponko::prelude::*;
     /// # let client = steamworks::Client::init_app(480).unwrap();

@@ -472,7 +472,7 @@ impl Audio {
         self.backend.buses.get(bus).map_or(&[], |s| &s.ducking)
     }
     /// Plays a decoded or streamed sound on a bus with per-voice effects.
-    /// `ctx.play_sound` and `ctx.audio.play_ex` use `sfx` and default effects.
+    /// `ctx.audio.play` and `ctx.audio.play_ex` use `sfx` and default effects.
     /// ```
     /// # use ponko::prelude::*;
     /// # fn f(ctx: &mut Ctx, sound: Sound) {
@@ -481,10 +481,21 @@ impl Audio {
     /// # }
     /// ```
     pub fn play_on(&mut self, sound: Sound, params: SoundParams, bus: AudioBus, effects: AudioEffects) -> Playing {
-        if self.headless {
-            return Playing(0);
-        }
-        Playing(self.backend.play_on(sound.id, params, bus, effects.validated()))
+        let playing = if self.headless {
+            self.silent += 1;
+            Playing(self.silent)
+        } else {
+            Playing(self.backend.play_on(sound.id, params, bus, effects.validated()))
+        };
+        self.started.push(super::SoundStarted {
+            playing,
+            sound,
+            bus,
+            volume: params.volume,
+            speed: params.speed,
+            looping: params.looping,
+        });
+        playing
     }
     /// Changes a playing voice's low-pass cutoff and reverb send with Kira
     /// smoothing. Does nothing for stopped or headless voices.
@@ -522,7 +533,10 @@ impl Audio {
         self.try_load_stream(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_stream`](Self::load_stream) with errors as values:
+    /// [`load_stream`](Self::load_stream) with errors as values.
+    ///
+    /// # Errors
+    ///
     /// [`ErrorKind::NotFound`] if no source has
     /// it, [`Io`](crate::error::ErrorKind::Io) if it can't be read, or (with the
     /// `audio` feature) [`Decode`](crate::error::ErrorKind::Decode) if its header

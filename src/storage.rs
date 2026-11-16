@@ -43,6 +43,7 @@
 //! [`Job`] thread, and [`set_save_format`](Storage::set_save_format) with
 //! [`SaveFormat::Binary`] writes slots in a compact binary encoding of the
 //! same save. Loading reads either format.
+#![deny(missing_docs)]
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
@@ -175,6 +176,15 @@ impl Storage {
 
     /// The folder the files are in: `None` on the web, and when the game has
     /// no app id.
+    ///
+    /// ```
+    /// use ponko::storage::Storage;
+    /// let dir = std::env::temp_dir().join(format!("ponko-doc-dir-{}", std::process::id()));
+    /// let mut files = Storage::in_folder(&dir);
+    /// assert_eq!(files.dir(), Some(dir.as_path()));
+    /// # let _ = &mut files;
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
     #[must_use]
     pub fn dir(&self) -> Option<&Path> {
         match &self.backend {
@@ -187,6 +197,15 @@ impl Storage {
     /// ([`Game::app_id`](crate::game::Game::app_id)), or on a desktop with no
     /// home folder. Every call fails with
     /// [`ErrorKind::Unsupported`] then.
+    ///
+    /// ```
+    /// use ponko::storage::Storage;
+    /// let dir = std::env::temp_dir().join(format!("ponko-doc-avail-{}", std::process::id()));
+    /// let mut files = Storage::in_folder(&dir);
+    /// assert!(files.is_available());
+    /// # let _ = &mut files;
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
     #[must_use]
     pub fn is_available(&self) -> bool {
         !matches!(self.backend, Backend::Off)
@@ -195,6 +214,15 @@ impl Storage {
     /// Whether files outlive the run: `true` for a folder, and on the web
     /// when the page's database opened (some private windows refuse it;
     /// files then last only until the page closes).
+    ///
+    /// ```
+    /// use ponko::storage::Storage;
+    /// let dir = std::env::temp_dir().join(format!("ponko-doc-persist-{}", std::process::id()));
+    /// let mut files = Storage::in_folder(&dir);
+    /// assert!(files.is_persistent()); // a folder outlives the run
+    /// # let _ = &mut files;
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
     #[must_use]
     pub fn is_persistent(&self) -> bool {
         match self.backend {
@@ -212,6 +240,16 @@ impl Storage {
     /// one, never half of it). [`write`](Self::write) itself returns once the
     /// file is there on the desktop. A game can show "saving..." while it is
     /// `true`.
+    ///
+    /// ```
+    /// use ponko::storage::Storage;
+    /// let dir = std::env::temp_dir().join(format!("ponko-doc-saving-{}", std::process::id()));
+    /// let mut files = Storage::in_folder(&dir);
+    /// assert!(!files.is_saving()); // nothing is queued
+    /// files.write("a.txt", b"x").unwrap();
+    /// assert!(!files.is_saving()); // `write` returns once the file is there
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
     #[must_use]
     pub fn is_saving(&self) -> bool {
         if self.queue.is_busy() {
@@ -227,6 +265,16 @@ impl Storage {
     /// Writes `bytes` as the file `name`, creating its folders. Safe against
     /// crashes: the old file stays whole until the new one is complete, and
     /// is then kept as the backup ([`read_backup`](Self::read_backup)).
+    ///
+    /// ```
+    /// use ponko::storage::Storage;
+    /// let dir = std::env::temp_dir().join(format!("ponko-doc-write-{}", std::process::id()));
+    /// let mut files = Storage::in_folder(&dir);
+    /// files.write("saves/slot1.bin", b"hello").unwrap();
+    /// assert_eq!(std::fs::read(dir.join("saves/slot1.bin")).unwrap(), b"hello");
+    /// assert!(files.write("../outside", b"no").is_err()); // names stay inside the folder
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
     ///
     /// # Errors
     ///
@@ -244,6 +292,16 @@ impl Storage {
     }
 
     /// The bytes of the file `name`.
+    ///
+    /// ```
+    /// use ponko::storage::Storage;
+    /// let dir = std::env::temp_dir().join(format!("ponko-doc-read-{}", std::process::id()));
+    /// let mut files = Storage::in_folder(&dir);
+    /// files.write("a.txt", b"hello").unwrap();
+    /// assert_eq!(files.read("a.txt").unwrap(), b"hello");
+    /// assert_eq!(files.read("missing.txt").unwrap_err().kind(), ponko::error::ErrorKind::NotFound);
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
     ///
     /// # Errors
     ///
@@ -281,6 +339,16 @@ impl Storage {
 
     /// Whether the file `name` exists (`false` for a bad name or when
     /// storage is off).
+    ///
+    /// ```
+    /// use ponko::storage::Storage;
+    /// let dir = std::env::temp_dir().join(format!("ponko-doc-exists-{}", std::process::id()));
+    /// let mut files = Storage::in_folder(&dir);
+    /// assert!(!files.exists("a.txt"));
+    /// files.write("a.txt", b"x").unwrap();
+    /// assert!(files.exists("a.txt"));
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
     #[must_use]
     pub fn exists(&self, name: &str) -> bool {
         if check_name(name).is_err() {
@@ -297,6 +365,16 @@ impl Storage {
 
     /// Every file's name, in sorted order, including those in folders
     /// (`"saves/slot1.json"`). Backups and unfinished writes aren't listed.
+    ///
+    /// ```
+    /// use ponko::storage::Storage;
+    /// let dir = std::env::temp_dir().join(format!("ponko-doc-list-{}", std::process::id()));
+    /// let mut files = Storage::in_folder(&dir);
+    /// files.write("b.txt", b"x").unwrap();
+    /// files.write("saves/a.txt", b"x").unwrap();
+    /// assert_eq!(files.list().unwrap(), ["b.txt", "saves/a.txt"]);
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
     ///
     /// # Errors
     ///
@@ -323,6 +401,17 @@ impl Storage {
     /// Deletes the file `name` and its backup. A file that isn't there is
     /// already deleted.
     ///
+    /// ```
+    /// use ponko::storage::Storage;
+    /// let dir = std::env::temp_dir().join(format!("ponko-doc-delete-{}", std::process::id()));
+    /// let mut files = Storage::in_folder(&dir);
+    /// files.write("a.txt", b"x").unwrap();
+    /// files.delete("a.txt").unwrap();
+    /// assert!(!files.exists("a.txt"));
+    /// files.delete("a.txt").unwrap(); // already gone is fine
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
+    ///
     /// # Errors
     ///
     /// [`ErrorKind::Io`] if the disk refuses, [`ErrorKind::Invalid`] for a bad
@@ -335,6 +424,16 @@ impl Storage {
 
     /// Writes `value` as pretty-printed JSON, safely as [`write`](Self::write).
     ///
+    /// ```
+    /// use ponko::storage::Storage;
+    /// let dir = std::env::temp_dir().join(format!("ponko-doc-wjson-{}", std::process::id()));
+    /// let mut files = Storage::in_folder(&dir);
+    /// files.write_json("settings.json", &[1, 2, 3]).unwrap();
+    /// let text = std::fs::read_to_string(dir.join("settings.json")).unwrap();
+    /// assert!(text.contains('2'));
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
+    ///
     /// # Errors
     ///
     /// As `write`, and [`ErrorKind::Json`] if `value` can't be written as JSON.
@@ -344,6 +443,17 @@ impl Storage {
     }
 
     /// Reads the JSON file `name` as a `T`.
+    ///
+    /// ```
+    /// use ponko::storage::Storage;
+    /// let dir = std::env::temp_dir().join(format!("ponko-doc-rjson-{}", std::process::id()));
+    /// let mut files = Storage::in_folder(&dir);
+    /// files.write_json("settings.json", &vec![1, 2, 3]).unwrap();
+    /// let numbers: Vec<i32> = files.read_json("settings.json").unwrap();
+    /// assert_eq!(numbers, [1, 2, 3]);
+    /// assert!(files.read_json::<String>("settings.json").is_err()); // not a string
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
     ///
     /// # Errors
     ///

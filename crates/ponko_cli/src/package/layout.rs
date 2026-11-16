@@ -181,7 +181,8 @@ pub struct Metadata {
     pub pack: Option<PackMeta>,
 }
 
-/// The `pack` key: `true`, `false` or `{ exclude = [...], textures = true }`.
+/// The `pack` key: `true`, `false` or `{ exclude = [...], textures = true,
+/// cook = false }`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackMeta {
     pub enabled: bool,
@@ -189,6 +190,8 @@ pub struct PackMeta {
     pub exclude: Vec<String>,
     /// Convert images to KTX2 textures per `textures.json`, as `ponko pack --textures`.
     pub textures: bool,
+    /// Cook the files (`ponko cook`) into the pack: on by default.
+    pub cook: bool,
 }
 
 impl Default for PackMeta {
@@ -197,6 +200,7 @@ impl Default for PackMeta {
             enabled: true,
             exclude: Vec::new(),
             textures: false,
+            cook: true,
         }
     }
 }
@@ -306,9 +310,14 @@ impl Metadata {
                                     .as_bool()
                                     .ok_or_else(|| format!("{at} pack.textures: expected true or false"))?;
                             }
+                            "cook" => {
+                                pack.cook = value
+                                    .as_bool()
+                                    .ok_or_else(|| format!("{at} pack.cook: expected true or false"))?;
+                            }
                             other => {
                                 return Err(format!(
-                                    "{at} pack: unknown key `{other}` (the keys are exclude and textures)"
+                                    "{at} pack: unknown key `{other}` (the keys are exclude, textures and cook)"
                                 ));
                             }
                         }
@@ -1006,7 +1015,7 @@ mod tests {
         let m = Metadata::from_cargo(&json!({"ponko": {"pack": false}}), None).unwrap();
         assert!(!m.pack.unwrap().enabled);
         let meta = json!({"ponko": {
-            "pack": {"exclude": ["**/*.psd"], "textures": true},
+            "pack": {"exclude": ["**/*.psd"], "textures": true, "cook": false},
             "examples": {"demo": {"pack": false}}
         }});
         let m = Metadata::from_cargo(&meta, None).unwrap();
@@ -1015,9 +1024,11 @@ mod tests {
             PackMeta {
                 enabled: true,
                 exclude: vec!["**/*.psd".into()],
-                textures: true
+                textures: true,
+                cook: false
             }
         );
+        assert!(PackMeta::default().cook, "packages are cooked unless the game says no");
         assert!(!Metadata::from_cargo(&meta, Some("demo")).unwrap().pack.unwrap().enabled);
         assert_eq!(Metadata::from_cargo(&json!(null), None).unwrap().pack, None);
         for (bad, needle) in [

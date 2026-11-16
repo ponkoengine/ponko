@@ -3,6 +3,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use ponko::assets::{AssetSource, MemorySource};
 #[allow(unused_imports)]
 use ponko::d2::{Sprite, Transform as Transform2D};
 #[allow(unused_imports)]

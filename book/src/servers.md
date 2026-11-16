@@ -124,7 +124,7 @@ template logs `player_joined`, `client_left`, `bad_message`, ...):
 ```rust
 use ponko::server::{LogLevel, log};
 
-log(LogLevel::Info, "player_joined", serde_json::json!({ "peer": 3, "name": "ann" }));
+log(LogLevel::Info, "player_joined", json!({ "peer": 3, "name": "ann" }));
 ```
 
 `ServerConfig::log_format(LogFormat::Text)` writes

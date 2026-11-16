@@ -86,7 +86,7 @@ fn coin_dash_menus_lead_into_play_and_back_with_the_ui_checked_at_each_step() {
         .plugin(CoinDash)
         .system(move |ctx: &mut Ctx| {
             let shown = Shown {
-                screen: *ctx.world.resource::<Screen>(),
+                screen: screen(&ctx.world),
                 settings_ui: ctx.ui.find("settings").is_some_and(|id| ctx.ui.is_shown(id)),
             };
             log.borrow_mut().push((ctx.time.sim_tick() - 1, shown));

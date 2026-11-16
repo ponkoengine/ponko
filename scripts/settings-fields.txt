@@ -1,0 +1,85 @@
+# The Rust settings structs a C game sets through a C struct, for
+# scripts/check-settings-fields.py: every public field of each has a field of the
+# same name in one of its C structs (the ABI 2 struct, and the versioned `...Ex`
+# descriptor beside it, STABILITY.md "Versioned descriptors"), or a line here
+# that says where else C reaches it.
+#
+# Format:
+#   struct <Name> <Rust struct> <Rust file> <C structs, comma separated>
+#   <Name>.<field>  <C field | C function | ->  # reason
+# `<Name>` is the public name (the Rust-only list uses it too). A C field or
+# function names the counterpart when it is called something else; `-` means
+# C can't reach the field: it needs a line `<Name>::<field>` on
+# scripts/rust-only.txt, with its row in the "Still Rust-only" table of
+# book/src/c-cpp.md.
+
+struct Post Post src/three/post.rs PonkoPost,PonkoPostEx
+Post.ambient_occlusion      ao_enabled              # AmbientOcclusion's fields are the ao_* fields
+Post.split_toning           split_toning_shadows    # SplitToning's fields are the split_toning_* fields
+Post.depth_of_field         dof_enabled             # DepthOfField's fields are the dof_* fields
+
+struct AmbientOcclusion AmbientOcclusion src/three/post.rs PonkoPost
+AmbientOcclusion.enabled    ao_enabled              # prefixed in the flat C struct
+AmbientOcclusion.radius     ao_radius               # same
+AmbientOcclusion.intensity  ao_intensity            # same
+AmbientOcclusion.slices     ao_slices               # same
+AmbientOcclusion.steps      ao_steps                # same
+
+struct SplitToning SplitToning src/three/post.rs PonkoPostEx
+SplitToning.shadows         split_toning_shadows    # prefixed in the flat C struct
+SplitToning.highlights      split_toning_highlights # same
+SplitToning.balance         split_toning_balance    # same
+
+struct DepthOfField DepthOfField src/three/post.rs PonkoPostEx
+DepthOfField.enabled        dof_enabled             # prefixed in the flat C struct
+DepthOfField.focus_distance dof_focus_distance      # same
+DepthOfField.focus_range    dof_focus_range         # same
+DepthOfField.blur           dof_blur                # same
+
+struct ParticleSettings ParticleSettings3D src/three/particles.rs PonkoParticleSettings3D,PonkoParticleSettings3DEx
+ParticleSettings.lifetime         lifetime_min           # a range is a _min and a _max field
+ParticleSettings.speed            speed_min              # same
+ParticleSettings.size             size_min               # same
+ParticleSettings.rotation         rotation_min           # same
+ParticleSettings.sheet            sheet_columns          # columns and rows
+ParticleSettings.size_over_life   size_keys              # a pointer and a count
+ParticleSettings.color_over_life  color_keys             # same
+
+struct Camera Camera3D src/three/mod.rs PonkoCamera3D,PonkoCamera3DEx
+Camera.rect                ponko_ctx_set_camera3d_view  # PonkoView3D.rect, with the camera and its layers
+Camera.layers              ponko_ctx_set_camera3d_view  # PonkoView3D.layers
+struct TargetCamera TargetCamera src/three/target.rs PonkoTargetCamera,PonkoTargetCameraEx
+TargetCamera.clip_plane           has_clip_plane         # has_clip_plane and the four numbers of clip_plane
+
+struct Lighting Lighting src/three/mod.rs PonkoLighting,PonkoLightingEx
+Lighting.gi                       gi_enabled             # GlobalIllumination's fields are the gi_* fields
+
+struct GlobalIllumination GlobalIllumination src/three/gi.rs PonkoLighting
+GlobalIllumination.enabled          gi_enabled           # prefixed in the flat C struct
+GlobalIllumination.extent           gi_extent            # same
+GlobalIllumination.spacing          gi_spacing           # same
+GlobalIllumination.probes_per_frame gi_probes_per_frame  # same
+GlobalIllumination.intensity        gi_intensity         # same
+
+struct Sky Sky src/three/sky.rs PonkoSky,PonkoLighting
+Sky.shader                        rust-only:SkyShader    # sky shaders have no C binding
+Sky.shader_params                 rust-only:SkyShader    # same
+Sky.authored_ambient              rust-only:SkyShader    # same
+
+struct Material MaterialDesc src/three/mod.rs PonkoMaterialDesc,PonkoMaterialDescEx
+
+struct NavBakeSettings NavBakeSettings src/nav3d/mod.rs PonkoNavBakeSettings,PonkoNavBakeSettingsEx
+
+struct ParticleSettings2D ParticleSettings2D src/particles2d.rs PonkoParticleSettings2D
+ParticleSettings2D.lifetime         lifetime_min         # a range is a _min and a _max field
+ParticleSettings2D.speed            speed_min            # same
+ParticleSettings2D.size             size_min             # same
+ParticleSettings2D.rotation         rotation_min         # same
+ParticleSettings2D.sheet            sheet_columns        # columns and rows
+ParticleSettings2D.size_over_life   size_keys            # a pointer and a count
+ParticleSettings2D.color_over_life  color_keys           # same
+
+struct WindowSettings WindowSettings src/window.rs PonkoWindowPropertiesEx,PonkoWindowModeEx
+WindowSettings.mode ponko_ctx_window_set_mode_ex # fullscreen choice has its own versioned descriptor
+WindowSettings.position ponko_ctx_window_set_position # integer physical desktop coordinates
+WindowSettings.title ponko_ctx_window_set_title # copied UTF-8 title

@@ -31,7 +31,9 @@ assets, licenses and THIRD-PARTY-NOTICES.txt, lays them out for the platform,
 archives them and starts the packaged game once headless (`PONKO_SMOKE`) to
 check it runs. The files under assets/ ship as one asset pack, assets.pack
 (as `ponko pack` makes it), which the game reads where its assets/ folder
-would be. What goes in comes from `[package.metadata.ponko]` in the game's
+would be. The pack holds them cooked (as `ponko cook` makes them: textures
+compressed when the game reads KTX2, meshes optimized, sounds in FLAC,
+shaders checked), under the same names. What goes in comes from `[package.metadata.ponko]` in the game's
 Cargo.toml (name, id, icon, assets, files, pack); see the guide's packaging
 chapter.
 
@@ -54,7 +56,8 @@ Options:
   --locked                        As for cargo build
   --no-build                      Package the program as already built
   --no-pack                       Ship the assets as loose files in assets/
-                                  instead of one assets.pack
+                                  instead of one assets.pack (not cooked)
+  --no-cook                       Pack the source files as they are
   --format <list>                 folder, zip, tar.gz, dmg (comma-separated);
                                   `folder` alone: the plain folder, no archive
                                   and no app bundle
@@ -95,6 +98,7 @@ pub struct Options {
     pub locked: bool,
     pub no_build: bool,
     pub no_pack: bool,
+    pub no_cook: bool,
     pub formats: Option<Vec<Format>>,
     pub out: Option<PathBuf>,
     pub no_smoke: bool,
@@ -139,6 +143,7 @@ impl Options {
                 "--locked" => o.locked = true,
                 "--no-build" => o.no_build = true,
                 "--no-pack" => o.no_pack = true,
+                "--no-cook" => o.no_cook = true,
                 "--format" => o.formats = Some(Format::parse_list(&value()?)?),
                 "--out" => o.out = Some(value()?.into()),
                 "--no-smoke" => o.no_smoke = true,
@@ -422,8 +427,13 @@ fn game(
 }
 
 /// The asset pack of the game's files under `assets/`, if it has any, and
-/// a line for the report.
-fn pack_assets(game: &Game, dir: &Path, meta: &PackMeta) -> Result<Option<(Vec<u8>, String)>, String> {
+/// lines for the report; cooked with `cook`.
+fn pack_assets(
+    game: &Game,
+    dir: &Path,
+    meta: &PackMeta,
+    cook: Option<crate::cook::Settings>,
+) -> Result<Option<(Vec<u8>, String)>, String> {
     let files: Vec<(String, PathBuf)> = game
         .assets
         .iter()
@@ -444,8 +454,9 @@ fn pack_assets(game: &Game, dir: &Path, meta: &PackMeta) -> Result<Option<(Vec<u
         exclude: &meta.exclude,
         textures: meta.textures,
         compress: true,
+        cook,
     };
-    let (packed, converted) = crate::pack::pack_files(&files, &dir.join("assets"), &settings)?;
+    let (packed, converted, cooked) = crate::pack::pack_files(&files, &dir.join("assets"), &settings)?;
     let mut line = format!(
         "assets: {} files ({}) in {} ({}, {} deflated)",
         packed.files,
@@ -456,6 +467,10 @@ fn pack_assets(game: &Game, dir: &Path, meta: &PackMeta) -> Result<Option<(Vec<u
     );
     if !converted.is_empty() {
         line.push_str(&format!(", {} textures converted to KTX2", converted.len()));
+    }
+    match cooked {
+        Some(summary) => line.push_str(&format!("\nassets {summary}")),
+        None => line.push_str(", not cooked"),
     }
     Ok(Some((packed.bytes, line)))
 }
@@ -472,7 +487,9 @@ fn feature_args(options: &Options) -> Vec<String> {
     out
 }
 
-/// Builds the program; returns the executable (or the .wasm for the web).
+/// Builds the program; returns the executable (or the .wasm for the web)
+/// and the features the engine (the `ponko` library) was built with, when
+/// cargo said (not with `--no-build`).
 fn build(
     options: &Options,
     project: &Project,
@@ -480,7 +497,7 @@ fn build(
     example: bool,
     triple: &str,
     explicit: bool,
-) -> Result<PathBuf, String> {
+) -> Result<(PathBuf, Option<Vec<String>>), String> {
     let profile = options.profile.as_deref().unwrap_or("release");
     let package = project.package["name"].as_str().unwrap_or_default();
     let kind = if example { "example" } else { "bin" };
@@ -499,7 +516,7 @@ fn build(
         }
         let exe = dir.join(Platform::from_triple(triple)?.exe_name(target));
         return if exe.is_file() {
-            Ok(exe)
+            Ok((exe, None))
         } else {
             Err(format!(
                 "--no-build: {} does not exist; build the {kind} first",
@@ -532,12 +549,16 @@ fn build(
         .spawn()
         .map_err(|e| format!("can't run cargo build: {e}"))?;
     let mut found = None;
+    let mut engine = None;
     let reader = BufReader::new(child.stdout.take().ok_or("cargo build has no output")?);
     for line in reader.lines() {
         let line = line.map_err(|e| e.to_string())?;
         let Ok(msg) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
+        if let Some(features) = engine_features(&msg) {
+            engine = Some(features);
+        }
         let ours = msg["reason"] == "compiler-artifact"
             && msg["target"]["name"] == target
             && msg["target"]["kind"]
@@ -559,7 +580,40 @@ fn build(
     if !status.success() {
         return Err(format!("cargo build failed ({status})"));
     }
-    found.ok_or_else(|| format!("cargo build made no program for `{target}`"))
+    let found = found.ok_or_else(|| format!("cargo build made no program for `{target}`"))?;
+    Ok((found, engine))
+}
+
+/// The features of the engine library, from a cargo build message about it.
+fn engine_features(msg: &Value) -> Option<Vec<String>> {
+    let engine = msg["reason"] == "compiler-artifact"
+        && msg["target"]["name"] == "ponko"
+        && msg["target"]["kind"]
+            .as_array()
+            .is_some_and(|k| k.iter().any(|k| k == "lib"));
+    engine.then(|| {
+        msg["features"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|f| f.as_str().map(str::to_string))
+            .collect()
+    })
+}
+
+/// How `ponko package` cooks a game's assets for `platform`, given the
+/// engine features it was built with (`None`: not known, so textures stay
+/// as they are).
+fn cook_settings(platform: &Platform, engine: Option<&[String]>, target_dir: &Path) -> crate::cook::Settings {
+    crate::cook::Settings {
+        platform: if platform.os == Os::Web {
+            crate::cook::Platform::Web
+        } else {
+            crate::cook::Platform::Desktop
+        },
+        reads: crate::cook::Reads::from_features(engine.unwrap_or_default()),
+        cache: Some(target_dir.join("cook-cache")),
+    }
 }
 
 /// The third-party notices for what the program links on `triple`.
@@ -834,12 +888,6 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
     }
     let mut notes = Vec::new();
     let (game, icon, pack_meta) = game(&project, &target, example, &mut notes)?;
-    let pack = if pack_meta.enabled && !options.no_pack {
-        let dir = project.manifest.parent().unwrap_or(Path::new("."));
-        pack_assets(&game, dir, &pack_meta)?
-    } else {
-        None
-    };
     let out = cwd.join(
         options
             .out
@@ -847,7 +895,19 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
             .unwrap_or_else(|| project.target_dir.join("package")),
     );
 
-    let built = build(options, &project, &target, example, &triple, explicit)?;
+    let (built, engine) = build(options, &project, &target, example, &triple, explicit)?;
+    // Packed after the build: the cook asks what the engine was built to read.
+    let pack = if pack_meta.enabled && !options.no_pack {
+        let dir = project.manifest.parent().unwrap_or(Path::new("."));
+        let cook = (pack_meta.cook && !options.no_cook)
+            .then(|| cook_settings(&platform, engine.as_deref(), &project.target_dir));
+        if cook.is_some() && engine.is_none() {
+            notes.push("textures are packed as they are: with --no-build the engine's features aren't known".into());
+        }
+        pack_assets(&game, dir, &pack_meta, cook)?
+    } else {
+        None
+    };
     // An example also links its package's dev-dependencies; a binary is the game itself.
     let edges = if example { "normal,dev" } else { "normal" };
     let (notices, count, without) = third_party_notices(options, &project, &triple, &game.name, edges, !example)?;

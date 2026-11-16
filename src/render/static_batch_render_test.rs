@@ -61,8 +61,8 @@ pub(super) struct BatchRig {
     output: wgpu::Texture,
     target: wgpu::TextureView,
     textures: Vec<GpuTexture>,
-    pub renderer: Renderer3D,
-    pub ctx: Ctx,
+    pub renderer: Box<Renderer3D>,
+    pub ctx: Box<Ctx>,
     frame: Frame3D,
     size: (u32, u32),
     /// GPU pass times, where the device has timestamp queries.
@@ -104,8 +104,21 @@ impl BatchRig {
         let (layout, white, textures) = support::white_textures(&gpu.device, &gpu.queue);
         let output = support::target(&gpu.device, setup.size, wgpu::TextureFormat::Rgba8UnormSrgb);
         let target = output.create_view(&Default::default());
-        let renderer = Renderer3D::new(&gpu.device, &layout, output.format(), 0, &white, 4, true);
-        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(setup.size.0 as f32, setup.size.1 as f32));
+        // Boxed, as in the other rigs: a test that holds two rigs by value
+        // comes close to a test thread's 2 MiB stack.
+        let renderer = Box::new(Renderer3D::new(
+            &gpu.device,
+            &layout,
+            output.format(),
+            0,
+            &white,
+            4,
+            true,
+        ));
+        let mut ctx = Box::new(Ctx::new(
+            1.0 / 60.0,
+            Vec2::new(setup.size.0 as f32, setup.size.1 as f32),
+        ));
         ctx.scene3d.sky.atmosphere = false;
         ctx.scene3d.lighting.shadows = false;
         // What every tier's textures hold (a game's renderer caps it too).
@@ -258,6 +271,11 @@ impl BatchRig {
             .set_instance_batch(&self.gpu.device, &self.gpu.queue, batch.id, None);
     }
 
+    /// The frame the rig collects into (kept between frames).
+    pub fn frame3d(&mut self) -> &mut Frame3D {
+        &mut self.frame
+    }
+
     /// Collects and prepares the frame (everything before recording).
     fn prepare(&mut self) -> Frame3D {
         let ctx = &mut self.ctx;
@@ -388,7 +406,7 @@ impl BatchRig {
 }
 
 /// A material that glows `color` whatever the light.
-fn glow(color: Color) -> MaterialDesc {
+pub(super) fn glow(color: Color) -> MaterialDesc {
     MaterialDesc {
         color: Color::BLACK,
         emissive: color,
@@ -489,10 +507,10 @@ fn fly(rig: &mut BatchRig, k: usize) {
 
 /// The depth grid a readback of the frame drawn from `view_proj` would
 /// give for the wall alone: the wall's depth where it covers a whole grid
-/// cell, the far plane elsewhere.
+/// cell, the far plane elsewhere (reverse-Z: 0).
 fn wall_grid(view_proj: Mat4, camera: Vec3) -> OcclusionGrid {
     let (w, h) = (32u32, 32u32);
-    let mut depth = vec![1.0f32; (w * h) as usize];
+    let mut depth = vec![0.0f32; (w * h) as usize];
     // The face towards the camera (which stays in front of the wall).
     let z = WALL.1.z;
     let corners = [
@@ -504,12 +522,13 @@ fn wall_grid(view_proj: Mat4, camera: Vec3) -> OcclusionGrid {
     .map(|c| view_proj * c.extend(1.0));
     if corners.iter().all(|c| c.w > 1e-3) {
         let ndc = corners.map(|c| c.truncate() / c.w);
-        // The rectangle inside all four edges, and the farthest depth.
+        // The rectangle inside all four edges, and the farthest depth (the
+        // smallest, reverse-Z).
         let left = ndc[0].x.max(ndc[2].x);
         let right = ndc[1].x.min(ndc[3].x);
         let bottom = ndc[0].y.max(ndc[1].y);
         let top = ndc[2].y.min(ndc[3].y);
-        let far = ndc.iter().map(|c| c.z).fold(0.0, f32::max);
+        let far = ndc.iter().map(|c| c.z).fold(1.0, f32::min);
         for y in 0..h {
             for x in 0..w {
                 let (x0, x1) = (x as f32 / w as f32 * 2.0 - 1.0, (x + 1) as f32 / w as f32 * 2.0 - 1.0);
@@ -525,7 +544,7 @@ fn wall_grid(view_proj: Mat4, camera: Vec3) -> OcclusionGrid {
 
 /// What the same-device comparisons allow: the paths draw the same
 /// triangles with the same shaders, so only the order of draws differs.
-const SAME_DEVICE: support::Tolerance = support::Tolerance {
+pub(super) const SAME_DEVICE: support::Tolerance = support::Tolerance {
     channel: 2,
     outliers: 0.0,
     edge: 0,
@@ -533,7 +552,7 @@ const SAME_DEVICE: support::Tolerance = support::Tolerance {
 
 /// Asserts `a` and `b` are the same picture within `tolerance`, and that
 /// the picture isn't empty (`lit`: the least fraction of non-black pixels).
-fn assert_same(what: &str, a: &support::Image, b: &support::Image, tolerance: support::Tolerance, lit: f32) {
+pub(super) fn assert_same(what: &str, a: &support::Image, b: &support::Image, tolerance: support::Tolerance, lit: f32) {
     let d = support::diff(a, b, tolerance.channel);
     eprintln!("{what}: {d}");
     if !d.within(tolerance) {
@@ -658,6 +677,7 @@ fn late_occlusion_culling_pops_nothing_on_either_path() {
 
 #[test]
 fn both_paths_cast_the_same_sun_shadows_as_the_camera_moves() {
+    // Boxed: two rigs by value come close to a test thread's 2 MiB stack.
     let rigs = [BatchPath::Gpu, BatchPath::Cpu].map(|path| {
         let (mut rig, _) = field_rig(RigSetup::default(), path)?;
         // A lit ground under the field, so the batches' shadows show.
@@ -683,7 +703,7 @@ fn both_paths_cast_the_same_sun_shadows_as_the_camera_moves() {
         rig.batch(slab, &slabs, Default::default());
         rig.ctx.scene3d.lighting.shadows = true;
         rig.ctx.scene3d.lighting.shadow_distance = 60.0;
-        Some(rig)
+        Some(Box::new(rig))
     });
     let [Some(mut gpu), Some(mut cpu)] = rigs else { return };
     for k in 0..10 {
@@ -718,7 +738,7 @@ fn both_paths_cast_the_same_sun_shadows_as_the_camera_moves() {
 
 /// The colours of a target camera's texture (16-bit floats), clamped to
 /// 0..=255 like a displayed picture.
-fn target_image(rig: &BatchRig, texture: &wgpu::Texture) -> support::Image {
+pub(super) fn target_image(rig: &BatchRig, texture: &wgpu::Texture) -> support::Image {
     let bytes = support::read_texture(&rig.gpu.device, &rig.gpu.queue, texture);
     let half = |b: &[u8]| -> f32 {
         let bits = u16::from_le_bytes([b[0], b[1]]);
@@ -1611,7 +1631,7 @@ fn batches_past_one_pool_get_another_and_draw_the_same() {
 }
 
 /// A lit ground under the origin's surroundings, so shadows show.
-fn ground(rig: &mut BatchRig) {
+pub(super) fn ground(rig: &mut BatchRig) {
     let ground = rig.mesh(
         &MeshData::plane(160.0),
         MaterialDesc {
@@ -1641,7 +1661,7 @@ fn stacked_levels(rig: &mut BatchRig) -> Vec<InstanceLevel> {
 }
 
 /// A shadowed point light: six shadow views that reach `range`.
-fn shadowed_lamp(rig: &mut BatchRig, at: Vec3, range: f32) -> Entity {
+pub(super) fn shadowed_lamp(rig: &mut BatchRig, at: Vec3, range: f32) -> Entity {
     rig.ctx.world.spawn((
         Transform3D::at(at),
         PointLight3D {
@@ -2086,7 +2106,7 @@ fn a_depth_grid_past_the_culling_buffer_is_left_out_and_reported() {
             rig.ctx.scene3d.camera.position,
             1024,
             1024,
-            vec![0.0; 1024 * 1024],
+            vec![1.0; 1024 * 1024], // reverse-Z: the near plane
         ));
         let image = rig.image();
         assert_same("without the oversized grid", &image, &all, SAME_DEVICE, 0.05);
@@ -2099,7 +2119,7 @@ fn a_depth_grid_past_the_culling_buffer_is_left_out_and_reported() {
         rig.ctx.scene3d.camera.position,
         16,
         16,
-        vec![0.0; 256],
+        vec![1.0; 256],
     ));
     let hidden = rig.image();
     let red = |i: &support::Image| i.fraction(0..i.width, 0..i.height, |p| p[0] > 200 && p[1] < 60 && p[2] < 60);

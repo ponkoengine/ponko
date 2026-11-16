@@ -1,6 +1,6 @@
 # Ember Hop: a platformer, start to finish
 
-[`examples/ember_hop`](https://github.com/ponkoengine/ponko/tree/main/examples/ember_hop)
+[`examples/ember_hop`](../../examples/ember_hop)
 is the engine's second reference game. [Coin Dash](packaging.md) draws
 everything in code; Ember Hop is built from the engine's content features:
 levels made in the [Tiled](https://www.mapeditor.org/) map editor, prefabs, a
@@ -57,7 +57,10 @@ them up, so a press between two ticks is never lost:
 ```
 
 The rules are a small state machine over the screens (title, playing, paused,
-dying, the fade between levels, the end):
+dying, the fade between levels, the end), kept in the engine's
+[game states](states.md): the pause is pushed over play, and the dying and
+fading screens are [timed states](states.md#timed-states) that read
+`ctx.seconds_in_state` instead of keeping a timer:
 
 ```rust
 {{#include ../../examples/ember_hop/game.rs:rules}}
@@ -122,8 +125,10 @@ The pause screen holds only the physics step: a system before the step calls
   with `ctx.load_scene`: some ground, the hero, a lit brazier, sparks and the
   lantern post.
 - **The run** is saved in the save slot `run` with
-  `ctx.storage.save_world` when a level starts and when a brazier is lit. A
-  loss, and "continue" on the title, load it with `ctx.load_world`. The game
+  `ctx.storage.save_world` when play starts (on entering the `Playing`
+  screen: a new run, the next level) and when a brazier is lit, so a save is
+  always on the playing screen. A loss, and "continue" on the title, load it
+  with `ctx.load_world`, which brings that screen back with the world. The game
   keeps the run's numbers (`Run`, a reflected resource), its own components
   and the engine's (sprites with their animations, bodies, particle emitters)
   in the save. The level isn't in it: `ctx.spawn_level_with` marks its tiles,
@@ -141,8 +146,10 @@ The pause screen holds only the physics step: a system before the step calls
 
 ## Camera, particles and sound
 
-The camera zooms in three times and eases toward a point ahead of the hero,
-clamped so it never shows outside the level:
+The camera is a [`FollowCamera`](camera-ui.md#camera-rigs): it eases toward
+a point ahead of the way the hero faces, never shows outside the level, and
+a [`PixelPerfect`](camera-ui.md#pixel-art) keeps it at a whole zoom (three
+times, in the 960 x 540 window) on the pixel grid:
 
 ```rust
 {{#include ../../examples/ember_hop/game.rs:camera}}
@@ -152,8 +159,8 @@ The hero leaves a trail of embers, lit braziers burn, and sparks, flares,
 stomps and losses throw short bursts (`ParticleEmitter` with additive
 blending). Sprites animate from sprite sheets (`Animation`); the hero's sheet
 has idle, run, jump and fall frames, and it faces left with a negative
-x scale ([#440](https://github.com/ponkoengine/ponko/issues/440)). Sound
-effects are WAV files loaded with `ctx.load_sound`; the music is an Ogg
+x scale (#440). Sound
+effects are WAV files loaded with `ctx.audio.load`; the music is an Ogg
 Vorbis loop streamed with `ctx.audio.load_stream`.
 
 ## Tests without a window
@@ -222,7 +229,7 @@ at the player's first click or key press ([Audio](audio.md#in-a-browser)).
 
 | Gap | Where it is tracked |
 |---|---|
-| Sprites have no flip; the hero uses a negative scale. | [#440](https://github.com/ponkoengine/ponko/issues/440) |
+| Sprites have no flip; the hero uses a negative scale. | #440 |
 | Rust only; no C or C++ counterpart. | No native port planned yet |
 
 ## Assets and licenses

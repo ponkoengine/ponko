@@ -117,7 +117,7 @@ impl Smoke {
 /// Sim system (runs before `rules`): the player of the walk-through.
 pub fn autoplay(ctx: &mut Ctx) {
     let tick = ctx.time.sim_tick();
-    let screen = *ctx.world.resource::<Screen>();
+    let screen = screen(&ctx.world);
     let (step, since) = {
         let smoke = ctx.world.resource_mut::<Smoke>();
         let name = screen_name(screen);
@@ -246,7 +246,7 @@ pub fn publish_web_state(ctx: &mut Ctx) {
         counts.clicks,
         size.x,
         size.y,
-        screen_name(*ctx.world.resource::<Screen>()),
+        screen_name(screen(&ctx.world)),
         ctx.world.resource::<settings::SettingsFile>().load,
         if ctx.storage.is_persistent() {
             "persistent"

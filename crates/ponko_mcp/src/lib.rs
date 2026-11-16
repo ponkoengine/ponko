@@ -27,13 +27,12 @@
 //! server as a library, answering a JSON-RPC message without stdio:
 //!
 //! ```
-//! use ponko_mcp::{Config, Server};
-//! use serde_json::json;
+//! use ponko_mcp::{Config, JsonValue, Server, json};
 //!
 //! let mut server = Server::new(Config::from_env());
 //! let init = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
 //!                    "params": { "protocolVersion": "2025-06-18" } });
-//! let reply = server.handle(&init).unwrap();
+//! let reply: JsonValue = server.handle(&init).unwrap();
 //! assert_eq!(reply["result"]["serverInfo"]["name"], "ponko-mcp");
 //! ```
 //!
@@ -41,7 +40,7 @@
 //! The guide's [AI agents chapter](https://ponko.dev/guide/agents.html) lists
 //! every tool and how agents use them.
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -50,7 +49,23 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
+
+/// Builds a [`JsonValue`] from JSON-like syntax: `serde_json`'s `json!`
+/// macro, so a request can be written without depending on `serde_json`.
+pub use serde_json::json;
+
+/// A JSON value: a JSON-RPC message for [`Server::handle`], or its reply.
+///
+/// It is `serde_json::Value` itself under a name that comes with this crate,
+/// so values pass to and from `serde_json` code unchanged. The `serde_json`
+/// behind it follows the compatibility promise for re-exported crates
+/// (STABILITY.md in the engine's repository).
+pub type JsonValue = Value;
+
+/// A JSON object (the members of a [`JsonValue::Object`]):
+/// `serde_json::Map<String, serde_json::Value>` itself, see [`JsonValue`].
+pub type JsonMap = Map<String, Value>;
 
 /// MCP protocol versions this server speaks, newest first.
 const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -503,6 +518,23 @@ fn tools() -> Vec<Tool> {
             required: &["on"],
         },
         Tool {
+            name: "debug_draw",
+            description: "Turn a running game's debug drawing on or off (the lines, shapes and labels its code draws with ctx.debug) and the engine's own debug views: physics colliders, the navigation mesh, bounds, light volumes, the transform hierarchy's axes. Returns what is on and how many lines and labels the next frame shows. Use it before a screenshot to see colliders or navigation, then turn the views off again. With no arguments, just reports.",
+            writes: false,
+            params: || {
+                json!({
+                    "on": { "type": "boolean", "description": "Debug drawing on or off" },
+                    "views": {
+                        "type": "object",
+                        "description": "View names to true (show) or false (hide): colliders, navmesh, bounds, lights, hierarchy",
+                        "additionalProperties": { "type": "boolean" }
+                    },
+                    "clear": { "type": "boolean", "description": "true drops everything drawn so far, timed shapes too" }
+                })
+            },
+            required: &[],
+        },
+        Tool {
             name: "set_graphics_quality",
             description: "Switch a 3D game's graphics quality preset while it runs (render scale, shadows, ambient occlusion, reflections, anti-aliasing), fitted to what its GPU can do. Returns the settings before (`previous`) and after (`quality`), and `fitted_to_gpu`: true when the preset had to be lowered for the GPU (always false for `recommended`, which already fits); after fitting, `quality.level` may read `custom`. Use it between two perf_report calls to measure what quality costs. It only changes the picture, never the simulation, and it pins render scale and shadow resolution against the game's automatic quality tuning until the game restarts. Not offered by a read-only server: it changes what the player sees.",
             writes: true,
@@ -574,6 +606,22 @@ fn tools() -> Vec<Tool> {
             required: &[],
         },
         Tool {
+            name: "compare_images",
+            description: "Compare two local PNG paths, or a reference path with a full-size live screenshot (omit b). Returns JSON summary, within, and optional heatmap path. Channel errors include alpha; SSIM measures global Rec.709 luminance. Paths belong to the MCP server; heatmap must be a new file. No game needed when b is supplied.",
+            writes: false,
+            params: || {
+                json!({
+                    "a": { "type": "string", "description": "Reference PNG path" },
+                    "b": { "type": "string", "description": "Actual PNG path; omit to capture the selected windowed game" },
+                    "tolerance": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Per-channel tolerance, default 0" },
+                    "threshold": { "type": "number", "minimum": 0, "maximum": 100, "description": "Allowed percent over tolerance, default 0" },
+                    "edge": { "type": "integer", "minimum": 0, "maximum": 16, "description": "Symmetric edge allowance in pixels, default 0" },
+                    "heatmap": { "type": "string", "description": "New output PNG path (never overwritten)" }
+                })
+            },
+            required: &["a"],
+        },
+        Tool {
             name: "screenshot",
             description: "Capture the next frame of a windowed game and return it as an image, to check what the game looks like. Headless games have no frames; launch with headless: false.",
             writes: false,
@@ -612,7 +660,7 @@ fn tools() -> Vec<Tool> {
         },
         Tool {
             name: "run_input_scenario",
-            description: "Run a tick-indexed input scenario against a paused game that allows input injection (launched with `launch`, or started with PONKO_INPUT_INJECTION=1) and wait for it to end. The scenario is a versioned JSON object: input steps (key, mouse, gamepad_button, gamepad_axis, focus_lost, gamepad_disconnected) fed through the game's real input path before the tick's systems run, UI steps (ui_click, ui_type) that click or type into the retained UI's node of that name (in a window, in the frame after the tick), IME steps (ime_enabled, ime_preedit with text and optional cursor [start, end] in bytes, ime_commit with text, ime_disabled) that replay an input-method composition into the focused text input, and checks (expect_action, expect_resource, expect_count, expect_ui) evaluated after them; tick 0 is the next simulation tick. Returns the report: status passed/failed/cancelled, ticks run, and for a failed check its step, tick, expected and actual values. The run stops at the first failed check. Held inputs are released when the run ends, fails or is cancelled (also on a timeout or error here), unless `keep_input_when_done` is set; then cancel_input_scenario releases them. A failed check or a cancel takes back only the ticks this run queued, not ticks someone else asked for.",
+            description: "Run a tick-indexed input scenario against a paused game that allows input injection (launched with `launch`, or started with PONKO_INPUT_INJECTION=1) and wait for it to end. The scenario is a versioned JSON object: input steps (key, mouse, gamepad_button, gamepad_axis, focus_lost, gamepad_disconnected, mouse_move with position [x, y], mouse_wheel with delta [x, y]) fed through the game's real input path before the tick's systems run, UI steps (ui_click, ui_type) that click or type into the retained UI's node of that name (in a window, in the frame after the tick), IME steps (ime_enabled, ime_preedit with text and optional cursor [start, end] in bytes, ime_commit with text, ime_disabled) that replay an input-method composition into the focused text input, and checks (expect_action, expect_resource, expect_count, expect_ui) evaluated after them; tick 0 is the next simulation tick. Returns the report: status passed/failed/cancelled, ticks run, and for a failed check its step, tick, expected and actual values. The run stops at the first failed check. Held inputs are released when the run ends, fails or is cancelled (also on a timeout or error here), unless `keep_input_when_done` is set; then cancel_input_scenario releases them. A failed check or a cancel takes back only the ticks this run queued, not ticks someone else asked for.",
             writes: true,
             params: || {
                 json!({
@@ -943,7 +991,7 @@ fn tools() -> Vec<Tool> {
 /// unknown tool; empty for tools that work without one (or fall back).
 fn tool_methods(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
-        "list_instances" | "launch" | "read_logs" => &[],
+        "list_instances" | "launch" | "read_logs" | "compare_images" => &[],
         "instance_info" => &["info"],
         "instance_capabilities" => &["capabilities"],
         "world_summary" => &["world.summary"],
@@ -959,6 +1007,7 @@ fn tool_methods(name: &str) -> Option<&'static [&'static str]> {
         "shader_status" => &["shaders.status"],
         "record_trace" => &["perf.trace"],
         "perf_hud" => &["perf.hud"],
+        "debug_draw" => &["debug.draw"],
         "set_graphics_quality" => &["quality.set"],
         "list_events" => &["events.list"],
         "subscribe_events" => &["events.subscribe"],
@@ -1075,8 +1124,7 @@ fn destructive(tool: &str) -> bool {
 /// The MCP server state. One per agent connection.
 ///
 /// ```
-/// use ponko_mcp::{Config, Server};
-/// use serde_json::json;
+/// use ponko_mcp::{Config, Server, json};
 ///
 /// let mut server = Server::new(Config::from_env());
 /// let reply = server.handle(&json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })).unwrap();
@@ -1100,7 +1148,7 @@ impl Server {
 
     /// Handles one JSON-RPC message. Returns the reply, or `None` for
     /// notifications (which get no reply).
-    pub fn handle(&mut self, msg: &Value) -> Option<Value> {
+    pub fn handle(&mut self, msg: &JsonValue) -> Option<JsonValue> {
         let id = msg.get("id").cloned();
         let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
         let params = msg.get("params").cloned().unwrap_or(Value::Null);
@@ -1131,7 +1179,7 @@ impl Server {
             "protocolVersion": version,
             "capabilities": { "tools": { "listChanged": false } },
             "serverInfo": { "name": "ponko-mcp", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": "Tools for Ponko games. Start with list_instances; if none is running, use launch (headless and paused by default). Then world_summary and list_entities to look around, run_ticks to advance the simulation, and get_entity / set_component to check and change state. Every tool except list_instances and launch takes `instance`, optional when only one game runs. Components must be reflected in the game (world.reflect::<T>()) to be read or written as JSON."
+            "instructions": "Tools for Ponko games. Start with list_instances; if none is running, use launch (headless and paused by default). Then world_summary and list_entities to look around, run_ticks to advance the simulation, and get_entity / set_component to check and change state. Game tools take `instance`, optional when only one game runs. compare_images can compare local files without a game. Components must be reflected in the game (world.reflect::<T>()) to be read or written as JSON."
         })
     }
 
@@ -1213,6 +1261,7 @@ impl Server {
             Value::Object(m)
         };
         match name {
+            "compare_images" => self.compare_images(args),
             "list_instances" => Ok(Value::Array(
                 discover(&self.config.instances_dir)
                     .iter()
@@ -1242,6 +1291,7 @@ impl Server {
             "shader_status" => self.instance(args)?.call("shaders.status", json!({})),
             "record_trace" => self.instance(args)?.call("perf.trace", pass(&["frames", "path"])),
             "perf_hud" => self.instance(args)?.call("perf.hud", pass(&["on"])),
+            "debug_draw" => self.instance(args)?.call("debug.draw", pass(&["on", "views", "clear"])),
             "set_graphics_quality" => self.instance(args)?.call("quality.set", pass(&["level"])),
             "list_resources" => self.instance(args)?.call("resources.list", json!({})),
             "get_resource" => self.instance(args)?.call("resource.get", pass(&["resource"])),
@@ -1367,6 +1417,52 @@ impl Server {
         report["name"] = json!(i.name());
         report["mcp"] = json!({ "read_only": self.config.read_only, "tools": tools });
         Ok(report)
+    }
+
+    fn compare_images(&self, args: &Value) -> Result<Value, String> {
+        use ponko_image_diff::{Tolerance, compare_files};
+        let a = args["a"].as_str().ok_or("`a` must be a PNG path")?;
+        let channel = match args.get("tolerance") {
+            None => 0,
+            Some(v) => v.as_u64().filter(|n| *n <= 255).ok_or("`tolerance` must be 0..255")? as u8,
+        };
+        let threshold = match args.get("threshold") {
+            None => 0.0,
+            Some(v) => v
+                .as_f64()
+                .filter(|n| (0.0..=100.0).contains(n))
+                .ok_or("`threshold` must be 0..100")?,
+        };
+        let edge = match args.get("edge") {
+            None => 0,
+            Some(v) => v.as_u64().filter(|n| *n <= 16).ok_or("`edge` must be 0..16")? as u32,
+        };
+        let heatmap = match args.get("heatmap") {
+            None => None,
+            Some(v) => Some(Path::new(v.as_str().ok_or("`heatmap` must be a path")?)),
+        };
+        let shot;
+        let live = !args.as_object().is_some_and(|o| o.contains_key("b"));
+        let b = if live {
+            shot = self.instance(args)?.call("screenshot", json!({ "max_size": 0 }))?;
+            shot["path"]
+                .as_str()
+                .ok_or("the game didn't return a screenshot path")?
+        } else {
+            args["b"].as_str().ok_or("`b` must be a PNG path")?
+        };
+        let tolerance = Tolerance {
+            channel,
+            outliers: (threshold / 100.0) as f32,
+            edge,
+        };
+        let compared = compare_files(Path::new(a), Path::new(b), tolerance, heatmap);
+        // The live capture is a temporary file owned by this call.
+        if live {
+            let _ = std::fs::remove_file(b);
+        }
+        let summary = compared?;
+        Ok(json!({ "summary": summary, "within": summary.within(tolerance), "heatmap": heatmap }))
     }
 
     /// The `screenshot` tool: the image plus a line saying where it is.
@@ -1671,6 +1767,11 @@ fn tail(path: &Path, lines: usize) -> String {
 }
 
 /// Runs the server on stdin/stdout until stdin closes.
+///
+/// # Errors
+///
+/// If reading stdin or writing stdout fails. A line that isn't JSON is not an
+/// error: it gets a JSON-RPC parse-error reply and the server carries on.
 ///
 /// ```no_run
 /// ponko_mcp::serve_stdio(ponko_mcp::Config::from_env()).unwrap();

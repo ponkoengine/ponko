@@ -115,7 +115,7 @@ impl Bits<'_> {
             let byte = *self
                 .data
                 .get(self.at / 8)
-                .ok_or_else(|| Error::new("packed animation data ends early"))?;
+                .ok_or_else(|| Error::decode("packed animation data ends early"))?;
             let offset = (self.at % 8) as u32;
             let take = (n - got).min(8 - offset);
             value |= u64::from((byte >> offset) & ((1u16 << take) - 1) as u8) << got;
@@ -135,11 +135,11 @@ pub(crate) fn packed_ints(v: &Value) -> Result<Vec<u32>, Error> {
     let items = count(&v["m_NumItems"]);
     let size = v["m_BitSize"].as_i64().unwrap_or(0).clamp(0, 32) as u32;
     if size == 0 && items > MAX_UNPACKED {
-        return Err(Error::new("packed animation data: too many items"));
+        return Err(Error::decode("packed animation data: too many items"));
     }
     let data = bytes_of(&v["m_Data"]);
     if (items as u64 * u64::from(size)).div_ceil(8) > data.len() as u64 {
-        return Err(Error::new("packed animation data ends early"));
+        return Err(Error::decode("packed animation data ends early"));
     }
     let mut bits = Bits { data: &data, at: 0 };
     (0..items).map(|_| bits.read(size)).collect()
@@ -154,13 +154,13 @@ pub(crate) fn packed_floats(v: &Value) -> Result<Vec<f32>, Error> {
     let start = v["m_Start"].as_f32().unwrap_or(0.0);
     if size == 0 {
         if items > MAX_UNPACKED {
-            return Err(Error::new("packed animation data: too many items"));
+            return Err(Error::decode("packed animation data: too many items"));
         }
         return Ok(vec![start; items]);
     }
     let data = bytes_of(&v["m_Data"]);
     if (items as u64 * u64::from(size)).div_ceil(8) > data.len() as u64 {
-        return Err(Error::new("packed animation data ends early"));
+        return Err(Error::decode("packed animation data ends early"));
     }
     let max = ((1u64 << size) - 1) as f32;
     let mut bits = Bits { data: &data, at: 0 };
@@ -176,7 +176,7 @@ pub(crate) fn packed_quats(v: &Value) -> Result<Vec<[f32; 4]>, Error> {
     let items = count(&v["m_NumItems"]);
     let data = bytes_of(&v["m_Data"]);
     if items as u64 * 4 > data.len() as u64 {
-        return Err(Error::new("packed animation data ends early"));
+        return Err(Error::decode("packed animation data ends early"));
     }
     let mut bits = Bits { data: &data, at: 0 };
     let mut out = Vec::with_capacity(items);
@@ -221,12 +221,12 @@ pub(crate) fn compressed_rotation(entry: &Value) -> Result<Vec<CompressedKeys>, 
     let values = packed_quats(&entry["m_Values"])?;
     let n = values.len();
     if count(&entry["m_Times"]["m_NumItems"]) != n {
-        return Err(Error::new(
+        return Err(Error::decode(
             "compressed rotation curve: times and values differ in count",
         ));
     }
     if ![0, n * 4, n * 8].contains(&count(&entry["m_Slopes"]["m_NumItems"])) {
-        return Err(Error::new("compressed rotation curve: unexpected slope count"));
+        return Err(Error::decode("compressed rotation curve: unexpected slope count"));
     }
     let times = packed_ints(&entry["m_Times"])?;
     let slopes = packed_floats(&entry["m_Slopes"])?;
@@ -236,7 +236,7 @@ pub(crate) fn compressed_rotation(entry: &Value) -> Result<Vec<CompressedKeys>, 
         0 => 0,
         l if l == n * 8 => 8,
         l if l == n * 4 => 4,
-        _ => return Err(Error::new("compressed rotation curve: unexpected slope count")),
+        _ => return Err(Error::decode("compressed rotation curve: unexpected slope count")),
     };
     let mut keys = Vec::with_capacity(n);
     let mut ticks = 0u64;
@@ -298,12 +298,12 @@ fn streamed(clip: &Value) -> Result<Vec<Vec<SKey>>, Error> {
     // Each curve has keys in the data (5 words each), so a count past the
     // data's size is corrupt.
     if curves > words.len() {
-        return Err(Error::new("streamed clip: too many curves"));
+        return Err(Error::decode("streamed clip: too many curves"));
     }
     let mut keys: Vec<Vec<Cubic>> = (0..curves).map(|_| Vec::new()).collect();
     let mut initial: Vec<Option<f32>> = vec![None; curves];
     let mut at = 0;
-    let short = || Error::new("streamed clip: data ends early");
+    let short = || Error::decode("streamed clip: data ends early");
     while at < words.len() {
         let time = f32::from_bits(words[at]);
         let n = *words.get(at + 1).ok_or_else(short)? as usize;
@@ -318,7 +318,7 @@ fn streamed(clip: &Value) -> Result<Vec<Vec<SKey>>, Error> {
         for key in body.as_chunks::<5>().0 {
             let curve = key[0] as usize;
             if curve >= curves {
-                return Err(Error::new("streamed clip: key for a curve past the curve count"));
+                return Err(Error::decode("streamed clip: key for a curve past the curve count"));
             }
             let coef = [1, 2, 3, 4].map(|i| f32::from_bits(key[i]));
             if sentinel {
@@ -385,15 +385,15 @@ fn dense(clip: &Value) -> Result<Vec<Vec<SKey>>, Error> {
     if curves == 0 || frames == 0 {
         // Curves with no frames: empty, but each still takes its binding.
         if curves > MAX_UNPACKED {
-            return Err(Error::new("dense clip: too many curves"));
+            return Err(Error::decode("dense clip: too many curves"));
         }
         return Ok(vec![Vec::new(); curves]);
     }
     if !(rate.is_finite() && rate > 0.0) || !begin.is_finite() {
-        return Err(Error::new("dense clip: invalid sample rate"));
+        return Err(Error::invalid("dense clip: invalid sample rate"));
     }
     if (frames as u64) * (curves as u64) > samples.len() as u64 {
-        return Err(Error::new("dense clip: fewer samples than frames times curves"));
+        return Err(Error::invalid("dense clip: fewer samples than frames times curves"));
     }
     let dt = 1.0 / rate;
     Ok((0..curves)

@@ -1,14 +1,20 @@
 //! 3D physics: the same pile of boxes stepped through Ponko
 //! (`Game::physics3d`, components synced every tick) and through rapier3d
 //! directly, plus characters walking and cars driving over heightfield
-//! terrain.
+//! terrain, and 10,000 queries (rays, shape casts, closest points,
+//! penetrations) through a level of fixed bodies.
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use ponko::d3::Character as Character3D;
 use ponko::d3::Collider as Collider3D;
+use ponko::d3::Physics as Physics3D;
 use ponko::d3::RigidBody as RigidBody3D;
 use ponko::d3::Transform as Transform3D;
 use ponko::d3::Vehicle as Vehicle3D;
 use ponko::d3::Wheel as Wheel3D;
-use ponko::prelude::{Game, Vec3, vec3};
+use ponko::d3::{Hit as Hit3D, Penetration as Penetration3D, QueryFilter as QueryFilter3D};
+use ponko::prelude::{Ctx, Game, Quat, Vec3, vec3};
 use rapier3d::prelude as rp;
 
 use crate::Bench;
@@ -47,6 +53,7 @@ fn walls(width: f32) -> [(Vec3, Vec3); 5] {
 }
 
 pub fn run(b: &mut Bench) {
+    queries(b);
     for n in [1_000, 10_000] {
         let (boxes, width) = scene(n);
         b.run(
@@ -304,3 +311,153 @@ static LOOKUP_NS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::n
 
 /// The process's live heap on the churn benchmark's last tick.
 static LAST_LIVE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// Queries per run of the query benchmarks (the 2D ones run as many).
+pub const QUERIES: usize = 10_000;
+
+/// A 3D level of fixed bodies: `n` 1 m boxes and spheres on a 2 m grid on
+/// the ground (y = 0), every third one a sphere.
+fn level(n: usize) -> Vec<(Vec3, bool)> {
+    let per_row = (n as f32).sqrt().ceil() as usize;
+    (0..n)
+        .map(|i| {
+            (
+                vec3((i % per_row) as f32 * 2.0, 0.0, (i / per_row) as f32 * 2.0),
+                i % 3 == 0,
+            )
+        })
+        .collect()
+}
+
+/// Query `i` of a run: from points along the level's -X edge, fanning
+/// across it in the ground plane (deterministic, no RNG), as the 2D
+/// benchmark's rays do.
+fn query(i: usize, size: f32) -> (Vec3, Vec3) {
+    let t = i as f32 / QUERIES as f32;
+    let origin = vec3(-1.0, 0.0, t * size);
+    let angle = (t * 37.0).sin() * 0.6;
+    (origin, vec3(angle.cos(), 0.0, angle.sin()))
+}
+
+/// The 3D physics of a headless game that stepped once over `level`.
+fn stepped(level: &[(Vec3, bool)]) -> Physics3D {
+    let taken = Rc::new(RefCell::new(None));
+    let slot = taken.clone();
+    let level = level.to_vec();
+    Game::new("bench", 1, 1)
+        .physics3d(Vec3::ZERO)
+        .sim_system(move |ctx: &mut Ctx| {
+            if ctx.time.sim_tick() == 1 {
+                *slot.borrow_mut() = Some(std::mem::take(&mut ctx.physics3d));
+            }
+        })
+        .run_headless(2, move |ctx| {
+            for &(at, round) in &level {
+                let collider = if round {
+                    Collider3D::sphere(0.5)
+                } else {
+                    Collider3D::cuboid(Vec3::ONE)
+                };
+                ctx.world.spawn((Transform3D::at(at), RigidBody3D::fixed(), collider));
+            }
+        });
+    taken.borrow_mut().take().expect("stepped")
+}
+
+/// 10k ray casts (nearest hit), all-hit ray casts, sphere and turned box
+/// casts, closest points and penetrations over a 1,000-body level, through
+/// Ponko's queries, and ray and box casts through rapier's directly. The
+/// same level, queries and counts as the 2D `physics/rays-10k`.
+fn queries(b: &mut Bench) {
+    let level = level(1_000);
+    let size = (level.len() as f32).sqrt().ceil() * 2.0;
+    let filter = QueryFilter3D::default();
+    let turn = Quat::from_rotation_y(0.3);
+    let mut count = |name: &str, op: &mut dyn FnMut(&Physics3D, usize) -> usize| {
+        b.run(
+            &format!("physics3d/queries-10k/ponko-{name}"),
+            5,
+            || stepped(&level),
+            |p| {
+                let found: usize = (0..QUERIES).map(|i| op(p, i)).sum();
+                std::hint::black_box(found);
+            },
+        );
+    };
+    let range = 2.0 * size;
+    count("cast_ray", &mut |p, i| {
+        let (o, d) = query(i, size);
+        usize::from(p.cast_ray(o, d, range, filter).is_some())
+    });
+    let mut hits = Vec::<Hit3D>::with_capacity(256);
+    count("cast_ray_all", &mut |p, i| {
+        let (o, d) = query(i, size);
+        p.cast_ray_all(o, d, range, filter, &mut hits);
+        hits.len()
+    });
+    count("cast_sphere", &mut |p, i| {
+        let (o, d) = query(i, size);
+        usize::from(p.cast_sphere(o, 0.2, d, range, filter).is_some())
+    });
+    count("cast_box", &mut |p, i| {
+        let (o, d) = query(i, size);
+        usize::from(p.cast_box(o, Vec3::splat(0.4), turn, d, range, filter).is_some())
+    });
+    count("closest_point", &mut |p, i| {
+        let (o, d) = query(i, size);
+        // Points inside the level, between and inside the bodies.
+        let at = o + d * (i % 64) as f32 * 0.5 + Vec3::Y * 0.3;
+        usize::from(p.closest_point(at, 4.0, filter).is_some())
+    });
+    let mut pushes = Vec::<Penetration3D>::with_capacity(64);
+    let shape = Collider3D::cuboid(Vec3::splat(0.8)).shape;
+    count("penetrations", &mut |p, i| {
+        let (o, d) = query(i, size);
+        let at = o + d * (i % 64) as f32 * 0.5;
+        p.penetrations(shape, at, turn, filter, &mut pushes);
+        pushes.len()
+    });
+
+    let rapier_world = || {
+        let mut w = rp::PhysicsWorld::new();
+        for &(at, round) in &level {
+            let body = w.insert_body(rp::RigidBodyBuilder::fixed().translation(rp::Vector::new(at.x, at.y, at.z)));
+            let collider = if round {
+                rp::ColliderBuilder::ball(0.5)
+            } else {
+                rp::ColliderBuilder::cuboid(0.5, 0.5, 0.5)
+            };
+            w.insert_collider(collider, Some(body));
+        }
+        w.step();
+        w
+    };
+    let to_rp = |v: Vec3| rp::Vector::new(v.x, v.y, v.z);
+    b.run("physics3d/queries-10k/rapier-cast_ray", 5, rapier_world, |w| {
+        let filter = rp::QueryFilter::default().exclude_sensors();
+        let mut found = 0;
+        for i in 0..QUERIES {
+            let (o, d) = query(i, size);
+            let ray = rp::Ray::new(to_rp(o), to_rp(d));
+            found += usize::from(w.cast_ray_and_get_normal(&ray, range, true, filter).is_some());
+        }
+        std::hint::black_box(found);
+    });
+    b.run("physics3d/queries-10k/rapier-cast_box", 5, rapier_world, |w| {
+        let filter = rp::QueryFilter::default().exclude_sensors();
+        let options = rapier3d::parry::query::ShapeCastOptions {
+            max_time_of_impact: range,
+            target_distance: 0.0,
+            stop_at_penetration: true,
+            compute_impact_geometry_on_penetration: true,
+        };
+        let cube = rp::Cuboid::new(rp::Vector::splat(0.2));
+        let mut found = 0;
+        for i in 0..QUERIES {
+            let (o, d) = query(i, size);
+            let pose = rp::Pose::from_parts(to_rp(o), rp::Rotation::from_xyzw(turn.x, turn.y, turn.z, turn.w));
+            found += usize::from(w.cast_shape(&pose, to_rp(d), &cube, options, filter).is_some());
+        }
+        std::hint::black_box(found);
+    });
+}

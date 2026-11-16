@@ -106,3 +106,28 @@ it needs the udev headers (`sudo apt-get install libudev-dev`).
 and gamepad axis that went down this frame, as bindings an `ActionMap`
 accepts: the query behind a rebinding screen. See
 [Named input actions](actions.md#rebinding-screens-what-was-just-pressed).
+
+## Feeding synthetic button input
+
+Use the named held state when feeding headless tests or replay input:
+
+```rust
+# use ponko::prelude::*;
+use ponko::actions::{ButtonState, InputEvent};
+use ponko::input::{Gamepad, GamepadButton};
+# fn example(ctx: &mut Ctx) {
+ctx.input.feed(InputEvent::key(Key::Space, ButtonState::Held));
+ctx.input.feed(InputEvent::mouse(MouseButton::Left, ButtonState::Released));
+let pad = Gamepad::from_slot(0).unwrap();
+ctx.input.feed(InputEvent::gamepad_button(pad, GamepadButton::South, ButtonState::Held));
+# }
+```
+
+`Held` persists until `Released` (or focus/device loss). The transition to
+held generates a pressed-this-frame edge; repeated `Held` events do not repeat
+it. Edges clear at frame end, while held state remains. A press and release
+within one frame preserve both edges. The existing boolean event variants
+remain available (`true` means held). `InputEvent` supports `PartialEq` for
+sequence assertions; axis values use ordinary float equality, so NaN is unequal
+to itself. In C/C++, the existing input injection calls keep their boolean
+held arguments and the same edge behavior.

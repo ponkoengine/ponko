@@ -55,8 +55,8 @@ never as a change to what the existing ones turn on.
 | Release | When | Contains |
 |---|---|---|
 | Patch (0.1.1, 0.1.2, ...) | As needed: within days for a regression or a security fix, otherwise when there are fixes to ship | Bug fixes and additions. Nothing that breaks code written for the same minor. |
-| Minor (0.2.0, 0.3.0, ...) | When the P1 scope of its [milestone](https://github.com/ponkoengine/ponko/milestones) is done, roughly every 8 to 12 weeks | New features and breaking changes, each break with its migration entry. |
-| 1.0 | When the [readiness checklist](https://github.com/ponkoengine/ponko/issues/432) is complete | The last 0.x release with the compatibility promise attached. It breaks nothing. |
+| Minor (0.2.0, 0.3.0, ...) | When the P1 scope of its [milestone](https://gitlab.com/ponkoengine/ponko/-/milestones) is done, roughly every 8 to 12 weeks | New features and breaking changes, each break with its migration entry. |
+| 1.0 | When the readiness checklist (#432) is complete | The last 0.x release with the compatibility promise attached. It breaks nothing. |
 
 - **A release is scope, not a date.** P1 issues define a minor; what is not
   ready moves to the next one instead of delaying or rushing the release.
@@ -92,13 +92,17 @@ Not covered by the versions, and allowed to change in any release:
 - The `bench-internals` cargo feature and what it turns on (benchmark
   drivers for `crates/ponko_bench`, which is not published).
 - `ponko::ui::unstable_taffy`, a re-export of the `taffy` layout crate for
-  advanced UI layout.
-- **Re-exported third-party crates and types.** Their major versions are
-  Ponko's choice, and a Ponko minor release can move to a new one, which is a
-  breaking change for code that uses them directly (it is listed under
-  Breaking changes): `glam` (`Vec2`, `Vec3`, `Quat`, `Mat4`, ... in the crate
-  root and the prelude), `serde_json` (`ponko::json!` and reflection values)
-  and `steamworks` (`ponko::net::steam`, feature `steam`).
+  advanced UI layout, and the `UiLayout` methods that hand out or accept its
+  types: `UiLayout::unstable_custom`, `UiLayout::unstable_style`,
+  `UiLayout::unstable_style_mut` and `UiLayout::into_unstable_style`, plus their
+  deprecated old names `UiLayout::custom`, `UiLayout::style`,
+  `UiLayout::style_mut` and `UiLayout::into_style`. They sit next to the stable
+  presets (`UiLayout::row`, `column`, ...), but their signatures follow
+  Taffy's, so a Ponko release may change them, and the Taffy version behind
+  them, when Taffy changes. Use the presets in code that must keep compiling.
+- **Which version of a re-exported crate** (`glam`, `serde_json`,
+  `steamworks`) stands behind Ponko's names, before 1.0: see
+  [Re-exported crates](#re-exported-crates).
 - Error message text, log output, the inspector's look, and the exact
   frames rendered: tests should check behavior, not strings or pixels.
 - Performance. Regressions are bugs, and benchmark numbers go in PRs, but
@@ -117,19 +121,76 @@ Fallible calls follow one convention, built on `ponko::error::Error`:
 - Operations that fail in normal play (scene loads, prefab spawns, network
   joins) return a `Result` under their plain name and have no panicking twin.
 
-Every loader and creator on the `ctx.gfx` and `ctx.assets` services follows
-it: textures, meshes, mesh data, skeletons, clips, sounds, fonts, materials,
-shaders, screen effects, compute passes, render targets, texture arrays,
-terrain materials, UI panels and reflection probes, plus the data-file
-loaders and scene and prefab saving. Callbacks a game hands these services
-(`Assets::load_with`'s decoder, `Assets::scene_asset_field`'s loader) return
-`ponko::error::Error` too, and so do the play-time calls on `Ctx`
-(`load_scene`, `load_scene_lockstep`, `spawn_prefab`, `start_ragdoll`),
-performance reports and budgets (`PerfReport::from_json`, `load`,
-`Budget::from_json`), and checks (`MeshData::check`,
-`EcsDiagnostics::matching`). `String: From<ponko::error::Error>` lets `?` turn
-an `Error` into a `String` (its message, without the prefix) in code that uses
-strings for errors.
+Every setup loader follows it: collision meshes
+(`Ctx::load_collision_mesh`, `load_collision_mesh_with`), string tables
+(`Assets::load_strings`) and typed data files (`Assets::load_resource`) panic
+under the plain name and have a `try_` twin. Runtime operations (scene,
+world and level loads, `Assets::load_with`'s custom decoder, and the reflected
+JSON loaders `load_reflected_resource_json` and
+`load_reflected_component_json`, which merge into existing data and fail for a
+dead entity or an unreflected type) return `Result` under their plain name.
+There is one name per loader: 0.2.0 removed `load_resource_json` and
+`load_component_json` in favor of the `load_reflected_*_json` names, and
+changed the plain collision-mesh and string-table loaders from `Result` to
+panicking (migration entries in the changelog).
+
+### Loader policy inventory
+
+This table covers every public Rust `load_*` method across engine features
+(the API snapshots omit hidden FFI helpers). `Error` means `ponko::error::Error`.
+Panicking setup loaders print the engine error, starting with `ponko:`.
+Runtime entries describe load failures, not panics from user callbacks or
+unrelated programmer invariants. Available methods depend on cargo features.
+
+<!-- loader-policy-table:start -->
+| Service and `load_*` method | Plain return | Load failure / fallible form |
+|---|---|---|
+| `Graphics::load_texture` | `Texture` | Panics; `try_load_texture` returns `Result<Texture, Error>` |
+| `Graphics::load_font`, `load_system_font` | `Font` | Panics; matching `try_load_*` returns `Result<Font, Error>` |
+| `Graphics::load_mesh` | `Mesh` | Panics; `try_load_mesh` returns `Result<Mesh, Error>` |
+| `Graphics::load_mesh_data` | `MeshData` | Panics; `try_load_mesh_data` returns `Result<MeshData, Error>` |
+| `Graphics::load_skeleton` | `Skeleton` | Panics; `try_load_skeleton` returns `Result<Skeleton, Error>` |
+| `Graphics::load_clip` | `AnimationClip` | Panics; `try_load_clip` returns `Result<AnimationClip, Error>` |
+| `Graphics::load_clips` | `Vec<AnimationClip>` | Panics; `try_load_clips` returns `Result<Vec<AnimationClip>, Error>` |
+| `Graphics::load_cameras` | `Vec<ModelCamera>` | Panics; `try_load_cameras` returns `Result<Vec<ModelCamera>, Error>` |
+| `Graphics::load_lights` | `Vec<ModelLight>` | Panics; `try_load_lights` returns `Result<Vec<ModelLight>, Error>` |
+| `Graphics::load_shader` | `Shader` | Panics; `try_load_shader` returns `Result<Shader, Error>` |
+| `Graphics::load_sky_shader` | `SkyShader` | Panics; `try_load_sky_shader` returns `Result<SkyShader, Error>` |
+| `Graphics::load_sprite_shader` | `SpriteShader` | Panics; `try_load_sprite_shader` returns `Result<SpriteShader, Error>` |
+| `Graphics::load_effect` | `Effect` | Panics; `try_load_effect` returns `Result<Effect, Error>` |
+| `Graphics::load_compute` | `Compute` | Panics; `try_load_compute` returns `Result<Compute, Error>` |
+| `Graphics::load_texture_array` | `TextureArray` | Panics; `try_load_texture_array` returns `Result<TextureArray, Error>` |
+| `Graphics::load_reflection_probe` | `()` | Panics; `try_load_reflection_probe` returns `Result<(), Error>` |
+| `Ctx::load_skeleton2d` | `Arc<SkeletonData>` | Panics; `try_load_skeleton2d` returns `Result<Arc<SkeletonData>, Error>` |
+| `Audio::load_mixer` | `()` | Panics; `try_load_mixer` returns `Result<(), Error>` |
+| `Audio::load_stream` | `Sound` | Panics; `try_load_stream` returns `Result<Sound, Error>` |
+| `Assets::load_resource` | `()` | Panics; `try_load_resource` returns `Result<(), Error>`; replaces the whole resource |
+| `Assets::load_strings` | `()` | Panics; `try_load_strings` returns `Result<(), Error>` |
+| `Assets::load_reflected_resource_json`, `load_reflected_component_json` | `Result<(), Error>` | Reflection edits; no panic on load failure; object fields merge |
+| `Assets::load_with` | `Result<T, Error>` | Custom decoder operation; propagates source/decoder errors (a user decoder can panic) |
+| `Assets::load_level` | `Result<Level, Error>` | Runtime level operation; no panic on load failure |
+| `Ctx::load_scene`, `load_scene_lockstep`, `load_world` | `Result<(), Error>` | Runtime world operations; no panic on load failure |
+| `Ctx::load_collision_mesh`, `load_collision_mesh_with` | `CollisionMesh` | Panics; matching `try_load_*` returns `Result<CollisionMesh, Error>` |
+| `Ctx::load_texture`, `load_sound` | `Texture`, `Sound` | Deprecated forwarding shortcuts, removed in the next minor; panic; use `gfx.load_texture` / `audio.load` (fallible: `gfx.try_load_texture` / `audio.try_load`) |
+<!-- loader-policy-table:end -->
+
+`tests/loader_convention.rs` walks all API snapshots: a `load_x` that returns
+`Result` must be one of the runtime operations in its short closed list, and
+every other `load_x` must have a `try_load_x` twin returning
+`Result<_, ponko::error::Error>`. It also checks that every `load_*` appears
+in this table and in the data-files chapter, and that the two tables are
+identical. A new conforming pair needs only a table row. The only
+`load_*` that don't have a twin are the `Ctx::load_texture` and `load_sound`
+shortcuts, deprecated forwarders to `ctx.gfx` and `ctx.audio` (which have the
+twins) that the next minor removes. Data reload failures preserve the previous
+value and report the error; they do not invoke the setup panic path. Native
+bindings: C returns a status with `ponko_last_error_kind()`, C++ throws
+`ponko::error` from `load_x` and returns `ponko::result` from `try_load_x`.
+
+Callbacks a game hands the services (`Assets::load_with`'s decoder,
+`Assets::scene_asset_field`'s loader) return `ponko::error::Error` too.
+`String: From<ponko::error::Error>` lets `?` turn an `Error` into a `String`
+(its message, without the prefix).
 
 ## The crate root and globs
 
@@ -142,6 +203,13 @@ prelude.
 `scripts/check-naming.py --paths` fails CI on an item with a second public
 path; a `#[deprecated]` alias of a moved item stays for one minor.
 
+The prelude's contents are API too: removing a name breaks code that used
+it through the glob, and adding one can make a game's own glob import of
+the same name ambiguous. Both happen only in minor releases, and the
+CHANGELOG names every name the prelude gains or loses.
+`tests/first_game_imports.rs` lists what the tutorials and reference games
+import beyond it, with the reason for each.
+
 The root glob also brings in the root modules (`audio`, `input`, `net`,
 `render`, `ui`, ...). For a game that writes it and depends on a crate of the
 same name, a path in code then means the Ponko module, and a
@@ -149,6 +217,39 @@ same name, a path in code then means the Ponko module, and a
 the crate `::name::...` or to import `ponko::prelude::*` instead. A new root
 module is therefore a source change for such games, so the CHANGELOG names
 every root module a release adds.
+
+## Re-exported crates
+
+Some of Ponko's API is another crate's types, re-exported as they are, so
+values pass between Ponko and code that uses the crate directly:
+
+| Crate | Ponko's names |
+|---|---|
+| `glam` | `ponko::math` (`Vec2`, `Vec3`, `Vec4`, `Quat`, `Mat4`, `UVec2`, `EulerRot` and the constructors `vec2`, ...), its home; the prelude re-exports the common ones as the same items |
+| `serde_json` | `ponko::reflect::JsonValue` and `JsonMap` (its `Value` and `Map<String, Value>`), `ponko::reflect::json` (the crate), `json!` in the prelude; `ponko_mcp::JsonValue`, `JsonMap` and `json!` |
+| `steamworks` | `ponko::net::steam` (feature `steam`) |
+
+Ponko promises that these names are those crates' types, not the types'
+behavior: their methods and trait implementations (`Vec2::length`,
+`Quat::from_euler`, `JsonValue::as_object`, ...) are the crate's and are
+documented there. Ponko picks the version:
+
+- **A compatible release** of the crate, one Cargo may select by itself, can
+  come with any Ponko release, patch releases too. It may add methods and
+  trait implementations, which can rarely make a method call ambiguous with
+  a game's own extension trait, as any dependency update can.
+- **An incompatible release** (glam 0.34 to 0.35, serde_json 1 to 2) is a
+  breaking change. Before 1.0, a Ponko minor release may make it for any of
+  the three, and the CHANGELOG lists it under Breaking changes. From 1.0 on,
+  an incompatible `glam` or `serde_json` comes only with a Ponko major
+  release; `steamworks` follows the Steam SDK, and its rule after 1.0 is
+  written here before 1.0.
+- A game that also depends on the crate directly names the same version
+  range as Ponko (`cargo tree -i glam` shows it), or uses Ponko's names and
+  no direct dependency at all.
+- The re-export decides only the Rust types: saved worlds and other files
+  keep their own compatibility rules ([Saved worlds](#saved-worlds)),
+  whatever version of `serde_json` writes them.
 
 ## Minimum Rust version (MSRV)
 
@@ -179,6 +280,71 @@ in any release, so a `switch` needs a `default:`. Statuses don't change
 with it: a call that returned `PONKO_INVALID_ARGUMENT` for a missing file
 still does, and says `PONKO_ERROR_NOT_FOUND` as its kind. The C++ wrapper
 throws `ponko::error`, a `std::runtime_error` with `kind()`.
+
+New statuses can arrive like new kinds, so treat any status but `PONKO_OK`
+as a failure. `PONKO_UNSUPPORTED` means this machine or build can't do it:
+`ponko_game_run` returns it when the game can't start here (no usable GPU
+or graphics device, no window or event loop, a build without the `window`
+feature), so a launcher can show its own message or fall back. Releases
+before it returned `PONKO_INVALID_ARGUMENT` there; that is the one status
+that changed, and only for those startup failures.
+
+### Versioned descriptors
+
+ABI 2 settings structs (`PonkoMaterialDesc`, `PonkoNavBakeSettings`,
+`PonkoLighting`, `PonkoCollider`, ...) have fixed layouts, so a release can't
+add a field to them. Settings that will grow get a versioned descriptor
+next to them, named `...Ex`, and their own entry points
+(`ponko_ctx_create_material_ex`, `ponko_ctx_bake_navmesh_ex`,
+`ponko_ctx_set_lighting_ex`, `ponko_set_collider_ex`, the
+`ponko_ctx_*_ex` queries taking a `PonkoQueryFilterEx`,
+`ponko_ctx_set_post_ex`, `ponko_ctx_set_particle_emitter3d_ex`,
+`ponko_ctx_set_camera3d_ex`, `ponko_ctx_set_target_cameras_ex`). The ABI 2 structs
+and calls stay as they are, and the layout checks keep them that way. Every
+descriptor follows these rules:
+
+- **Header first.** It starts with `uint32_t struct_size` and
+  `uint32_t version`. The caller sets them to `sizeof` the struct and its
+  `PONKO_..._VERSION` from the header it compiled against, then fills the
+  fields with the struct's `..._defaults` (or `..._from`) call, which writes
+  only what that version has:
+
+  ```c
+  PonkoLightingEx l = {.struct_size = sizeof l, .version = PONKO_LIGHTING_EX_VERSION};
+  ponko_ctx_lighting_ex(ctx, &l);
+  l.shadow_sun_size = 1.5;
+  ponko_ctx_set_lighting_ex(ctx, &l);
+  ```
+
+- **Fields only grow at the end.** A new version appends fields after the
+  last one and bumps `PONKO_..._VERSION`; existing fields never move or
+  change meaning. An ABI 2 struct embedded in a descriptor (its first field
+  after the header) stays that struct.
+- **Old callers get defaults.** The library reads and writes only the
+  fields of the caller's `version`: fields added later get their defaults
+  when it reads (the engine's default, or for a `set` call the current
+  value, as each call documents), and are left alone in the caller's memory
+  when it writes. A newer caller's larger struct is fine: the library
+  ignores the fields past the versions it knows.
+- **Refused, not guessed.** `version` 0 (the header wasn't set), a version
+  newer than the library knows (the program needs a newer library), a
+  `struct_size` smaller than its version's fields, and null fail with
+  `PONKO_INVALID_ARGUMENT` and a message saying which; nothing changes.
+- **No retained pointers.** A descriptor, and anything it points to, only
+  has to live for the call: the library copies what it keeps.
+
+- **A list is a list of pointers.** An array of descriptors would need a
+  stride every caller agrees on, so a call that takes several
+  (`ponko_ctx_set_target_cameras_ex`) takes an array of pointers to them. A
+  plain struct that only holds one (`PonkoPostVolume`) points at it.
+- **Every new Rust settings field gets a C counterpart, or a reason.**
+  `scripts/check-settings-fields.py` fails for a public field of a listed Rust
+  settings struct (`scripts/settings-fields.txt`) that has no field of the
+  same name in its C struct or descriptor, no line naming where C sets it, and
+  no entry on `scripts/rust-only.txt`.
+
+A future ABI version may make the `...Ex` forms the only ones and drop the
+suffix; until then both stay.
 
 The C and C++ names stay flat (`ponko_ctx_cast_ray_filtered`,
 `ctx.graphics_quality()`, ...) even where the Rust API groups things into
@@ -230,7 +396,7 @@ What gives the same world from the same seed and inputs:
 
 | | Same machine, same build | Other OS or CPU, same build | Other engine version |
 |---|---|---|---|
-| ECS, scheduling, `ctx.random` | yes | yes, see below | not promised |
+| ECS, scheduling, `ctx.random()` | yes | yes, see below | not promised |
 | Your sim code with `+ - * /` and `sqrt` on `f32`/`f64` | yes | yes | yes |
 | `sin`, `cos`, `powf`, `exp`, ... | yes | **may differ** | — |
 | Physics (`physics`) | yes | **no** | not promised |
@@ -249,6 +415,13 @@ What gives the same world from the same seed and inputs:
 - `Game::parallel_systems` doesn't change any of this: a simulation gives
   the same world with it on or off and on any number of threads, so
   lockstep peers may differ in that setting.
+- Entity ids are part of that world, also the ones `commands.spawn`
+  reserves: the same spawns in the same order get the same ids, with the
+  scheduler on or off and on any number of threads. Not inside a parallel
+  query (`par_for_each`): spawns recorded from its threads get distinct
+  ids and are all applied, but which item gets which id depends on timing.
+  To keep ids deterministic there, collect with `par_collect_into` and
+  spawn in its order.
 
 ## Platforms
 

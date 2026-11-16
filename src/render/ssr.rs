@@ -8,10 +8,18 @@
 //! red and green), the reflections in the second (half size), followed by up to four
 //! depth-aware filtered reflection levels (one compute dispatch makes them
 //! all, see `Blur`). Blue 1 in the
-//! first level says the second is there: GTAO writes it, or without GTAO a
-//! clear of the new image. (GTAO's own RG8 image and the opaque pass's
+//! first level says the second is there: GTAO writes it, or without GTAO
+//! the trace's mark pass. (GTAO's own RG8 image and the opaque pass's
 //! black stand-in read 0 there; GLSL ES can't count a texture's levels.)
+//!
+//! The first level's alpha is the reflection cone's spread (see
+//! `ssr.wgsl`): how much a ray's length widens its blur. The trace writes
+//! it to a half-size image of its own, a fill pass gives the rays that
+//! found nothing their neighbors', and GTAO's denoise (or the mark pass,
+//! without GTAO) copies it into that alpha, so the opaque pass blurs each
+//! reflection by its roughness and how far its ray went.
 use crate::render::traffic::{Counted, Upload};
+#[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use glam::{Mat4, Vec3};
@@ -28,6 +36,11 @@ struct Settings {
 
 /// The image the opaque pass reads GTAO and the reflections from.
 pub(super) const SCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// The reflection cone's spread, in full-size pixels (see `ssr.wgsl`).
+pub(super) const SPREAD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+/// The trace's second target: the cone's spread and 1 where its ray found
+/// something, 0 where it didn't.
+pub(super) const HITS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 
 /// Lets the cost test time frames with and without the filtered levels.
 #[cfg(test)]
@@ -45,6 +58,11 @@ pub(super) struct Ssr {
     layout: wgpu::BindGroupLayout,
     trace_pipeline: wgpu::RenderPipeline,
     copy_pipeline: wgpu::RenderPipeline,
+    /// The cone's spread where rays found nothing.
+    fill_layout: wgpu::BindGroupLayout,
+    fill_pipeline: wgpu::RenderPipeline,
+    /// Without GTAO: the first level's mark and the cone's spread.
+    mark_pipeline: wgpu::RenderPipeline,
     blur_layout: wgpu::BindGroupLayout,
     blur_pipeline: wgpu::ComputePipeline,
     uniform: wgpu::Buffer,
@@ -66,12 +84,20 @@ pub(super) struct SsrTargets {
     pub ao: wgpu::TextureView,
     /// Its second level, the trace's target.
     output: wgpu::TextureView,
+    /// The trace's second target, at the second level's size: the cone's
+    /// spread where the rays found something, and whether they did.
+    hits: wgpu::TextureView,
+    /// The same filled in where they didn't, which GTAO's denoise or the
+    /// mark pass copies into the first level's alpha.
+    spread: wgpu::TextureView,
     /// The filtered levels, if there's room for any of them.
     blur: Option<Blur>,
-    /// Without GTAO, until the first level has its blue mark.
-    unmarked: AtomicBool,
+    /// Without GTAO: the mark pass writes the first level each frame.
+    mark: bool,
     trace_group: wgpu::BindGroup,
     copy_group: wgpu::BindGroup,
+    fill_group: wgpu::BindGroup,
+    mark_group: wgpu::BindGroup,
 }
 
 /// The filtered levels' pass: the compute shader writes them to `levels`,
@@ -95,6 +121,12 @@ impl SsrTargets {
     /// checking them against what the frame's passes declare.
     pub fn images(&self) -> (&wgpu::TextureView, Option<&wgpu::Texture>) {
         (&self.history, self.blur.as_ref().map(|b| &b.levels))
+    }
+
+    /// The cone's spread, as the trace writes it, and filled in (see the
+    /// module docs).
+    pub fn spread(&self) -> (&wgpu::TextureView, &wgpu::TextureView) {
+        (&self.hits, &self.spread)
     }
 }
 
@@ -139,7 +171,14 @@ impl Ssr {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = |entry, format| {
+        let target = |format| {
+            Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })
+        };
+        let pipeline = |entry, targets: &[Option<wgpu::ColorTargetState>]| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry),
                 layout: Some(&pipeline_layout),
@@ -153,11 +192,7 @@ impl Ssr {
                     module: &shader,
                     entry_point: Some(entry),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets,
                 }),
                 primitive: Default::default(),
                 depth_stencil: None,
@@ -166,7 +201,46 @@ impl Ssr {
                 cache: None,
             })
         };
-        let trace_pipeline = pipeline("fs_trace", SCREEN_FORMAT);
+        let trace_pipeline = pipeline("fs_trace", &[target(SCREEN_FORMAT), target(HITS_FORMAT)]);
+        let fill_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("screen reflection spread"),
+            entries: &[
+                texture(1, wgpu::TextureSampleType::Float { filterable: true }, false),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                texture(8, wgpu::TextureSampleType::Float { filterable: true }, false),
+            ],
+        });
+        let fill_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("fs_fill"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("screen reflection spread"),
+                bind_group_layouts: &[Some(&fill_layout)],
+                immediate_size: 0,
+            })),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_full"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_fill"),
+                compilation_options: Default::default(),
+                targets: &[target(SPREAD_FORMAT)],
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let mark_pipeline = pipeline("fs_mark", &[target(SCREEN_FORMAT)]);
         let compute = |binding, ty| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::COMPUTE,
@@ -228,7 +302,7 @@ impl Ssr {
             compilation_options: Default::default(),
             cache: None,
         });
-        let copy_pipeline = pipeline("fs_copy", super::gpu3d::HDR_FORMAT);
+        let copy_pipeline = pipeline("fs_copy", &[target(super::gpu3d::HDR_FORMAT)]);
         let uniform = device
             .uploading(Upload::Uniforms)
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -246,6 +320,9 @@ impl Ssr {
             layout,
             trace_pipeline,
             copy_pipeline,
+            fill_layout,
+            fill_pipeline,
+            mark_pipeline,
             blur_layout,
             blur_pipeline,
             uniform,
@@ -290,7 +367,8 @@ impl Ssr {
     }
 
     /// Targets for frames of `size`: `depth` the prepass's, `lit` the image
-    /// the opaque pass resolves into; `ao` whether GTAO writes `ao`.
+    /// the opaque pass resolves into; `ao` whether GTAO writes `ao` (and
+    /// copies the cone's spread into it).
     pub fn targets(
         &self,
         device: &wgpu::Device,
@@ -340,6 +418,18 @@ impl Ssr {
                 ..Default::default()
             })
         };
+        let half = |label, format| {
+            texture(
+                label,
+                ((extent.0 >> 1).max(1), (extent.1 >> 1).max(1)),
+                1,
+                format,
+                wgpu::TextureUsages::RENDER_ATTACHMENT,
+            )
+            .create_view(&Default::default())
+        };
+        let hits = half("screen reflection hits", HITS_FORMAT);
+        let spread = half("screen reflection spread", SPREAD_FORMAT);
         let group = |image: &wgpu::TextureView| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("screen reflections"),
@@ -430,15 +520,44 @@ impl Ssr {
             blur,
             trace_group: group(&history),
             copy_group: group(lit),
+            fill_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("screen reflection spread"),
+                layout: &self.fill_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&hits),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                    // A coarse filtered level, or the trace's own without
+                    // any (see `fs_fill`).
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::TextureView(&level(if levels > 2 {
+                            levels.min(5) - 1
+                        } else {
+                            1
+                        })),
+                    },
+                ],
+            }),
+            mark_group: group(&spread),
             history,
             ao: level(0),
             output: level(1),
-            unmarked: AtomicBool::new(!ao),
+            hits,
+            spread,
+            mark: !ao,
             screen: screen.create_view(&Default::default()),
         }
     }
 
-    /// The trace, after the depth prepass, and the filtered levels.
+    /// The trace, after the depth prepass and before GTAO (whose denoise
+    /// reads the cone's spread), the filtered levels and, without GTAO, the
+    /// mark pass.
     pub fn trace<'t>(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -446,32 +565,28 @@ impl Ssr {
         time: &dyn Fn(&'static str) -> Option<wgpu::RenderPassTimestampWrites<'t>>,
     ) {
         super::gpu3d::mark_step("reflections");
-        if targets.unmarked.swap(false, Ordering::Relaxed) {
-            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("3d screen reflections mark"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &targets.ao,
+        {
+            let attachment = |view| {
+                Some(wgpu::RenderPassColorAttachment {
+                    view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            b: 1.0,
-                            ..wgpu::Color::TRANSPARENT
-                        }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },
-                })],
+                })
+            };
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("3d screen reflections"),
+                color_attachments: &[attachment(&targets.output), attachment(&targets.hits)],
+                timestamp_writes: time("screen reflections"),
                 ..Default::default()
             });
+            pass.set_pipeline(&self.trace_pipeline);
+            pass.set_bind_group(0, &targets.trace_group, &[]);
+            pass.draw(0..3, 0..1);
         }
-        self.full_screen(
-            encoder,
-            "3d screen reflections",
-            &self.trace_pipeline,
-            &targets.trace_group,
-            &targets.output,
-            time("screen reflections"),
-        );
         if let Some(blur) = &targets.blur
             && !filter_skipped()
         {
@@ -506,6 +621,26 @@ impl Ssr {
                     blur.levels.size().mip_level_size(mip, wgpu::TextureDimension::D2),
                 );
             }
+        }
+        super::gpu3d::mark_step("reflection spread");
+        self.full_screen(
+            encoder,
+            "3d screen reflection spread",
+            &self.fill_pipeline,
+            &targets.fill_group,
+            &targets.spread,
+            None,
+        );
+        if targets.mark {
+            super::gpu3d::mark_step("reflection mark");
+            self.full_screen(
+                encoder,
+                "3d screen reflections mark",
+                &self.mark_pipeline,
+                &targets.mark_group,
+                &targets.ao,
+                None,
+            );
         }
     }
 
@@ -577,6 +712,8 @@ impl SsrTargets {
             ("reflection screen", &self.screen),
             ("reflection ao", &self.ao),
             ("reflection output", &self.output),
+            ("reflection hits", &self.hits),
+            ("reflection spread", &self.spread),
         ] {
             t.view(C::FrameTargets, label, view);
         }

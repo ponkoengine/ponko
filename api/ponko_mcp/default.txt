@@ -1,4 +1,5 @@
 pub mod ponko_mcp
+pub use ponko_mcp::json
 pub struct ponko_mcp::Config
 pub ponko_mcp::Config::instances_dir: std::path::PathBuf
 pub ponko_mcp::Config::logs_dir: std::path::PathBuf
@@ -11,8 +12,10 @@ impl core::fmt::Debug for ponko_mcp::Config
 pub fn ponko_mcp::Config::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko_mcp::Server
 impl ponko_mcp::Server
-pub fn ponko_mcp::Server::handle(&mut self, &serde_json::value::Value) -> core::option::Option<serde_json::value::Value>
+pub fn ponko_mcp::Server::handle(&mut self, &ponko_mcp::JsonValue) -> core::option::Option<ponko_mcp::JsonValue>
 pub fn ponko_mcp::Server::new(ponko_mcp::Config) -> Self
 pub fn ponko_mcp::control_env_feature(&std::path::Path, core::option::Option<&str>) -> core::option::Option<alloc::string::String>
 pub fn ponko_mcp::default_instances_dir() -> core::option::Option<std::path::PathBuf>
 pub fn ponko_mcp::serve_stdio(ponko_mcp::Config) -> core::io::error::Result<()>
+pub type ponko_mcp::JsonMap = serde_json::map::Map<alloc::string::String, serde_json::value::Value>
+pub type ponko_mcp::JsonValue = serde_json::value::Value

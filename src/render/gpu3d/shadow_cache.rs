@@ -17,6 +17,23 @@
 //! What a view holds is recorded once the frame that drew it is recorded
 //! (see [`ShadowCache::commit`]), so a frame that is prepared but never
 //! drawn leaves the record matching the maps.
+//!
+//! Comparing a view's casters costs a pass over its instances, so a view
+//! is first checked cheaply: the collector numbers each view's caster list
+//! (`Frame3D::shadow_generations`, a new number whenever an instance,
+//! mesh or material override in it changes), and a view placed the same,
+//! with nothing it reads changed (the epoch) and the same number as when
+//! it was found to hold its casters, is kept without the comparison. The
+//! renderer's own changes reach only the views they concern: a material by
+//! the views that use it, an instance batch by the views its box (before
+//! or after) can be seen in. The camera's position counts only for
+//! cascades with instance batches culled by distance, and only when one
+//! of their cells may have crossed a band edge.
+//!
+//! The sun's far cascades hold their box between frames
+//! (`Lighting::shadow_refresh`), so a camera moving inside it keeps their
+//! maps; held or not, every cascade's casters are listed and checked here,
+//! so a kept map never lags behind its casters.
 
 use super::*;
 use std::sync::atomic::AtomicBool;
@@ -47,6 +64,9 @@ impl ShaderShadow {
 pub(super) struct ShadowContent {
     /// `ShadowCache::epoch` when drawn; 0 never matches (it starts at 1).
     epoch: u64,
+    /// The collector's generation of the view's caster list it was last
+    /// found to hold (`Frame3D::shadow_generations`); 0 never matches.
+    generation: u64,
     /// The view's view-projection, its eye (static batch distance culling),
     /// and its tile in the light atlas (zero for the sun's cascades).
     caster: [[f32; 4]; 4],
@@ -61,11 +81,22 @@ pub(super) struct ShadowContent {
 }
 
 impl ShadowContent {
-    fn matches(&self, epoch: u64, key: &ViewKey, runs: &[Run], ident: Ident<'_>, instances: &[Instance3D]) -> bool {
-        self.epoch == epoch
-            && self.caster == key.caster
-            && self.eye == key.eye
-            && self.tile == key.tile
+    /// Whether it was drawn as `key` places it, with nothing it reads
+    /// changed since: `eye` says whether its eye draws what `key`'s would.
+    fn placed(&self, epoch: u64, key: &ViewKey, eye: bool) -> bool {
+        self.epoch == epoch && self.caster == key.caster && eye && self.tile == key.tile
+    }
+
+    fn matches(
+        &self,
+        epoch: u64,
+        key: &ViewKey,
+        eye: bool,
+        runs: &[Run],
+        ident: Ident<'_>,
+        instances: &[Instance3D],
+    ) -> bool {
+        self.placed(epoch, key, eye)
             && self.runs.len() == runs.len()
             && {
                 let mut at = 0;
@@ -90,8 +121,17 @@ impl ShadowContent {
             }
     }
 
-    fn set(&mut self, epoch: u64, key: &ViewKey, runs: &[Run], ident: Ident<'_>, instances: &[Instance3D]) {
+    fn set(
+        &mut self,
+        epoch: u64,
+        generation: u64,
+        key: &ViewKey,
+        runs: &[Run],
+        ident: Ident<'_>,
+        instances: &[Instance3D],
+    ) {
         self.epoch = epoch;
+        self.generation = generation;
         self.caster = key.caster;
         self.eye = key.eye;
         self.tile = key.tile;
@@ -120,6 +160,8 @@ pub(super) struct ViewKey {
     pub caster: [[f32; 4]; 4],
     pub eye: [f32; 3],
     pub tile: [u32; 3],
+    /// The collector's generation of the view's caster list.
+    pub generation: u64,
 }
 
 /// Which views this frame draws and keeps, and what each layer and tile holds.
@@ -144,6 +186,14 @@ pub(super) struct ShadowCache {
     /// Per material shader: whether it has its own `vertex` and `surface`.
     pub shaders: Vec<ShaderShadow>,
     materials: Vec<u32>,
+    /// Tests: keep views placed the same whatever their casters do (models,
+    /// or instance batches' distance bands): the lag kept views used to
+    /// have, a negative control for comparisons.
+    #[cfg(test)]
+    pub ignore_casters: bool,
+    /// Tests: views whose casters this frame compared one by one.
+    #[cfg(test)]
+    pub compared: u32,
 }
 
 impl Default for ShadowCache {
@@ -159,6 +209,10 @@ impl Default for ShadowCache {
             recorded: AtomicBool::new(false),
             shaders: vec![ShaderShadow::default()],
             materials: Vec::new(),
+            #[cfg(test)]
+            ignore_casters: false,
+            #[cfg(test)]
+            compared: 0,
         }
     }
 }
@@ -208,6 +262,44 @@ impl ShadowCache {
         }
     }
 
+    /// An instance batch changed: only the views it reaches (`reaches`,
+    /// given a view's view-projection: whether the batch, before or after
+    /// the change, can be drawn in it) are drawn again, including a frame
+    /// already recorded but not committed yet.
+    pub fn batch_changed(&mut self, reaches: impl Fn(Mat4) -> bool) {
+        for content in self.drawn.iter_mut().chain(&mut self.pending) {
+            if content.epoch != 0 && reaches(Mat4::from_cols_array_2d(&content.caster)) {
+                content.epoch = 0;
+            }
+        }
+    }
+
+    /// The eye view `v`'s layer or tile was drawn from.
+    pub fn drawn_eye(&self, v: usize) -> [f32; 3] {
+        self.drawn[v].eye
+    }
+
+    /// Keeps view `v` without comparing its casters when its layer or tile
+    /// holds what this frame would draw: placed the same (`eye`: drawn from
+    /// an eye that draws the same) with nothing it reads changed, and the
+    /// same generation of its caster list. True if kept.
+    pub fn unchanged(&mut self, v: usize, key: &ViewKey, eye: bool) -> bool {
+        let drawn = &self.drawn[v];
+        #[cfg(test)]
+        let (same, eye) = if self.ignore_casters {
+            (drawn.generation != 0, true)
+        } else {
+            (drawn.generation == key.generation, eye)
+        };
+        #[cfg(not(test))]
+        let same = drawn.generation == key.generation;
+        let kept = same && drawn.placed(self.epoch, key, eye);
+        if kept {
+            self.kept |= 1 << v;
+        }
+        kept
+    }
+
     /// Invalidate only maps which actually used this material, including a
     /// frame already recorded but not committed yet.
     pub fn material_changed(&mut self, id: u32) {
@@ -240,26 +332,36 @@ impl ShadowCache {
         self.forget_mask = 0;
     }
 
-    /// Decides for view `v` (which the frame would draw): true to keep it.
-    /// `volatile`: drawn from data that can't be compared.
+    /// Decides for view `v` (which the frame would draw) by comparing its
+    /// casters with what its layer or tile holds: true to keep it.
+    /// `eye`: see [`unchanged`](Self::unchanged). `volatile`: drawn from
+    /// data that can't be compared.
+    #[allow(clippy::too_many_arguments)]
     pub fn plan(
         &mut self,
         v: usize,
         key: &ViewKey,
+        eye: bool,
         runs: &[Run],
         ident: Ident<'_>,
         instances: &[Instance3D],
         volatile: bool,
     ) -> bool {
         let bit = 1 << v;
-        if !volatile && self.drawn[v].matches(self.epoch, key, runs, ident, instances) {
+        #[cfg(test)]
+        {
+            self.compared += u32::from(!volatile);
+        }
+        if !volatile && self.drawn[v].matches(self.epoch, key, eye, runs, ident, instances) {
+            // The same casters: the next frames with this list skip the comparison.
+            self.drawn[v].generation = key.generation;
             self.kept |= bit;
             return true;
         }
         if volatile {
             self.forget_mask |= bit;
         } else {
-            self.pending[v].set(self.epoch, key, runs, ident, instances);
+            self.pending[v].set(self.epoch, key.generation, key, runs, ident, instances);
             self.pending[v].materials.clear();
             self.pending[v].materials.extend_from_slice(&self.materials);
             self.pending_mask |= bit;
@@ -274,6 +376,10 @@ impl ShadowCache {
         self.forget_mask = 0;
         self.kept = 0;
         self.light_kept = 0;
+        #[cfg(test)]
+        {
+            self.compared = 0;
+        }
     }
 
     /// A view the frame doesn't draw or keep: its record goes, as its layer
@@ -379,14 +485,13 @@ impl Renderer3D {
         // Static batches cull the cascades' casters by distance from the camera.
         let by_distance = self.static_batches.iter().flatten().any(|b| b.shadow_distance());
         for v in shadow_views(self.lists.cascades, self.lists.light_views) {
+            let generation = frame.shadow_generations[v];
             let key = if v < MAX_CASCADES {
-                if self.lists.redrawn & (1 << v) == 0 {
-                    continue; // kept by the collector: holds what it drew
-                }
                 ViewKey {
                     caster: frame.sun_view_proj[v].to_cols_array_2d(),
                     eye: if by_distance { camera.to_array() } else { [0.0; 3] },
                     tile: [0; 3],
+                    generation,
                 }
             } else {
                 let i = v - MAX_CASCADES;
@@ -394,27 +499,40 @@ impl Renderer3D {
                     caster: frame.lights.shadow_views[i].to_cols_array_2d(),
                     eye: frame.lights.shadow_positions.get(i).map_or([0.0; 3], |p| p.to_array()),
                     tile: self.lists.light_tiles.get(i).copied().unwrap_or_default(),
+                    generation,
                 }
             };
-            let runs = std::mem::take(&mut self.lists.shadow_runs[v]);
-            let volatile = self.shadow_volatile(&runs);
-            self.lists.shadow_runs[v] = runs;
-            let (overrides, base) = (&self.lists.material_overrides, self.lists.override_base);
-            let listed = &self.lists.override_parts;
-            let ident = |mesh: u32| {
-                let k = (mesh & !FADED).checked_sub(base);
-                match k.and_then(|k| overrides.get(k as usize)) {
-                    Some(o) => {
-                        let (start, len) = (o.parts.0 as usize, o.parts.1 as usize);
-                        (o.mesh | (mesh & FADED), o.material, &listed[start..start + len])
+            // An eye that moved draws the same while no instance batch's
+            // distance band can have changed what it draws.
+            let drawn_eye = self.shadow_cache.drawn_eye(v);
+            let eye = drawn_eye == key.eye || (v < MAX_CASCADES && self.shadow_bands_hold(drawn_eye, key.eye));
+            let kept = self.shadow_cache.unchanged(v, &key, eye) || {
+                let runs = std::mem::take(&mut self.lists.shadow_runs[v]);
+                let volatile = self.shadow_volatile(&runs);
+                self.lists.shadow_runs[v] = runs;
+                let (overrides, base) = (&self.lists.material_overrides, self.lists.override_base);
+                let listed = &self.lists.override_parts;
+                let ident = |mesh: u32| {
+                    let k = (mesh & !FADED).checked_sub(base);
+                    match k.and_then(|k| overrides.get(k as usize)) {
+                        Some(o) => {
+                            let (start, len) = (o.parts.0 as usize, o.parts.1 as usize);
+                            (o.mesh | (mesh & FADED), o.material, &listed[start..start + len])
+                        }
+                        None => (mesh, u32::MAX, &[][..]),
                     }
-                    None => (mesh, u32::MAX, &[][..]),
-                }
+                };
+                self.shadow_cache.plan(
+                    v,
+                    &key,
+                    eye,
+                    &self.lists.shadow_runs[v],
+                    &ident,
+                    &frame.instances,
+                    volatile,
+                )
             };
-            if self
-                .shadow_cache
-                .plan(v, &key, &self.lists.shadow_runs[v], &ident, &frame.instances, volatile)
-            {
+            if kept {
                 self.lists.shadow_runs[v].clear();
                 if v < MAX_CASCADES {
                     self.lists.redrawn &= !(1 << v);
@@ -486,9 +604,21 @@ impl Renderer3D {
         self.shadow_cache.kept
     }
 
+    /// How many shadow views the last prepared frame compared caster by
+    /// caster (the others were kept by their list's generation, or drawn).
+    pub fn shadow_views_compared(&self) -> u32 {
+        self.shadow_cache.compared
+    }
+
     /// Makes the next frame draw every shadow view (a reference to compare with).
     pub fn forget_shadows(&mut self) {
         self.shadow_cache.invalidate();
+    }
+
+    /// Keeps shadow views placed the same whatever their casters do from
+    /// now on: the lag kept views used to have (a negative control).
+    pub fn ignore_shadow_casters(&mut self) {
+        self.shadow_cache.ignore_casters = true;
     }
 }
 

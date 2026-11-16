@@ -165,6 +165,7 @@ fn collider() -> ValueSchema {
         ("restitution", Number),
         ("sensor", Bool),
         ("offset", Vec2),
+        ("groups", collisiongroups()),
     ])
 }
 #[cfg(feature = "physics")]
@@ -231,7 +232,7 @@ fn colliderfocus() -> ValueSchema {
 fn rect() -> ValueSchema {
     ValueSchema::object([("min", Vec2), ("max", Vec2)])
 }
-#[cfg(feature = "physics3d")]
+#[cfg(any(feature = "physics", feature = "physics3d"))]
 fn collisiongroups() -> ValueSchema {
     ValueSchema::object([("memberships", Unsigned), ("filter", Unsigned)])
 }
@@ -299,6 +300,9 @@ pub(super) fn builtin<T: 'static>() -> Option<ValueSchema> {
     if id == std::any::TypeId::of::<crate::scene::PrefabParts>() {
         return Some(prefab_parts());
     }
+    if id == std::any::TypeId::of::<crate::hierarchy::Children>() {
+        return Some(prefab_parts());
+    }
     #[cfg(feature = "3d")]
     if id == std::any::TypeId::of::<crate::anim::SkinOf>() {
         return Some(skin_of());
@@ -342,6 +346,9 @@ pub(super) fn builtin<T: 'static>() -> Option<ValueSchema> {
     #[cfg(feature = "3d")]
     if id == std::any::TypeId::of::<crate::render::ShadowOnly>() {
         return Some(ValueSchema::Null);
+    }
+    if id == std::any::TypeId::of::<crate::camera::RenderLayers>() {
+        return Some(Unsigned);
     }
     #[cfg(feature = "physics")]
     if id == std::any::TypeId::of::<crate::d2::RigidBody>() {
@@ -676,18 +683,12 @@ pub(in crate::reflect) mod tests {
             crate::scene::PrefabParts,
             crate::scene::PrefabParts(vec![e(1), e(2 | 3 << 32)])
         );
+        check!(crate::hierarchy::Children, crate::hierarchy::Children::default());
         #[cfg(feature = "3d")]
         {
             check!(crate::anim::SkinOf, crate::anim::SkinOf(e(4)));
             check!(crate::attach::Attached3D, crate::attach::Attached3D::to(e(4)));
-            check!(
-                crate::anim::AttachToJoint,
-                crate::anim::AttachToJoint {
-                    skeleton: e(4),
-                    joint: 2,
-                    offset: crate::d3::Transform::default(),
-                }
-            );
+            check!(crate::anim::AttachToJoint, crate::anim::AttachToJoint::new(e(4), 2));
         }
         #[cfg(feature = "physics3d")]
         {
@@ -711,6 +712,7 @@ pub(in crate::reflect) mod tests {
             check!(crate::render::LodHysteresis, crate::render::LodHysteresis::default());
             check!(crate::render::ShadowOnly, crate::render::ShadowOnly);
         }
+        check!(crate::camera::RenderLayers, crate::camera::RenderLayers::layer(1));
         #[cfg(any(feature = "physics", feature = "physics3d"))]
         let kinds = [
             crate::collision::BodyKind::Dynamic,

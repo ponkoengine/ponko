@@ -5,9 +5,10 @@ use std::ffi::c_char;
 
 use ponko::scenario::{InputScenario, ScenarioCheck, ScenarioReport, ScenarioStatus};
 
-use crate::actions::input_event;
+use crate::actions::{input_event, pointer_event};
 use crate::ctx::{ctx_access, out, text};
 use crate::game::build;
+use crate::types::PonkoVec2;
 use crate::{
     Failure, PonkoCtx, PonkoGame, PonkoStatus, PonkoWorld, access, boundary, error, invalid, invalid_owned, write_text,
 };
@@ -249,6 +250,57 @@ pub unsafe extern "C" fn ponko_input_scenario_at(
     unsafe {
         edit(scenario, || {
             let event = input_event(kind, slot, input, value)?;
+            Ok(move |s: InputScenario| s.at(tick, event))
+        })
+    }
+}
+
+/// Adds a pointer move at simulation tick `tick`: the pointer goes to
+/// `position`, in window pixels (as `ponko_ctx_feed_mouse_move`), before
+/// that tick's simulation systems run. The JSON step is `mouse_move`.
+/// ```
+/// let s = ponko_ffi::ponko_input_scenario_new();
+/// let at = ponko_ffi::PonkoVec2 { x: 400.0, y: 300.0 };
+/// assert_eq!(unsafe { ponko_ffi::ponko_input_scenario_mouse_move(s, 2, at) } as u32, 0);
+/// unsafe { ponko_ffi::ponko_input_scenario_free(s) };
+/// ```
+/// # Safety
+/// `scenario` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_input_scenario_mouse_move(
+    scenario: *mut PonkoInputScenario,
+    tick: u64,
+    position: PonkoVec2,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        edit(scenario, || {
+            let event = pointer_event(true, position)?;
+            Ok(move |s: InputScenario| s.at(tick, event))
+        })
+    }
+}
+
+/// Adds a wheel turn of `lines` at simulation tick `tick` (as
+/// `ponko_ctx_feed_mouse_wheel`). The JSON step is `mouse_wheel`.
+/// ```
+/// let s = ponko_ffi::ponko_input_scenario_new();
+/// let notch = ponko_ffi::PonkoVec2 { x: 0.0, y: 1.0 };
+/// assert_eq!(unsafe { ponko_ffi::ponko_input_scenario_mouse_wheel(s, 2, notch) } as u32, 0);
+/// unsafe { ponko_ffi::ponko_input_scenario_free(s) };
+/// ```
+/// # Safety
+/// `scenario` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_input_scenario_mouse_wheel(
+    scenario: *mut PonkoInputScenario,
+    tick: u64,
+    lines: PonkoVec2,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        edit(scenario, || {
+            let event = pointer_event(false, lines)?;
             Ok(move |s: InputScenario| s.at(tick, event))
         })
     }

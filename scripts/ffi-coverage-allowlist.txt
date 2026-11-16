@@ -14,7 +14,6 @@ ponko_ctx_draw_text               # headless runs skip text layout entirely (no 
 ponko_ctx_warm_render_pipelines   # builds GPU pipelines; does nothing without a renderer
 
 # A real window.
-ponko_game_run                    # opens the window and blocks until it closes
 ponko_game_vsync                  # read only when a window opens; nothing to observe headless
 ponko_game_fullscreen             # same
 ponko_ctx_set_texture_filter      # sets the sampler of a texture; headless textures keep none

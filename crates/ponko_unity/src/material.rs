@@ -100,7 +100,7 @@ impl UnityMaterial {
     /// If it isn't a material.
     pub fn from_object(object: &UnityObject) -> Result<Self, crate::Error> {
         if object.class_id != 21 {
-            return Err(crate::Error::new(format!(
+            return Err(crate::Error::invalid(format!(
                 "object {} is a {}, not a Material",
                 object.file_id, object.type_name
             )));

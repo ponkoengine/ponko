@@ -161,6 +161,19 @@ static void die(ponko::ctx& ctx) {
 }
 // ANCHOR_END: ecs_commands
 
+// ANCHOR: ecs_spawn_ids
+struct Bullet { float speed; };
+struct Aim { ponko::entity bullet; };
+
+static void fire_at_guns(ponko::ctx& ctx) {
+    ctx.world().each([&](ponko::entity gun, const Enemy&) {
+        // The id exists now; the entity once the commands are applied.
+        const ponko::entity bullet = ctx.spawn_later(Bullet{9});
+        ctx.set_later(gun, Aim{bullet});
+    });
+}
+// ANCHOR_END: ecs_spawn_ids
+
 // ANCHOR: ecs_changes
 struct HealthBar { float width; };
 
@@ -786,6 +799,27 @@ static std::optional<ponko::ray_hit> laser(ponko::ctx& ctx, ponko::vec2 from) {
 }
 // ANCHOR_END: physics_queries
 
+// ANCHOR: physics_shape_queries
+static const ponko::vec2 crate_size{30, 30};
+
+// Where a crate dropped at `from` would land: its box swept straight down.
+static std::optional<ponko::vec2> landing(ponko::ctx& ctx, ponko::vec2 from) {
+    auto hit = ctx.cast_box(from, crate_size, 0, {0, 1}, 700);
+    if (!hit) return std::nullopt;
+    return ponko::vec2{from.x, from.y + hit->distance};
+}
+
+// Everything the laser passes through, nearest first, into `hits`.
+static void pierced(ponko::ctx& ctx, ponko::vec2 from, std::vector<ponko::ray_hit>& hits) {
+    ctx.cast_ray_all(from, {0, 1}, 700, hits);
+}
+
+// The nearest solid surface within 150 px of `at`.
+static std::optional<ponko::point_hit2d> nearest(ponko::ctx& ctx, ponko::vec2 at) {
+    return ctx.closest_point(at, 150);
+}
+// ANCHOR_END: physics_shape_queries
+
 static bool physics_snippets() {
     bool landed = false;
     // ANCHOR: physics_setup
@@ -795,7 +829,13 @@ static bool physics_snippets() {
         // ANCHOR_END: physics_setup
         .sim_system([&](ponko::ctx& ctx) {
             if (ctx.sim_tick() == 100) blast(ctx, {300, 690});
-            if (ctx.sim_tick() == 1) landed = laser(ctx, {500, 0}).has_value();
+            if (ctx.sim_tick() == 1) {
+                landed = laser(ctx, {500, 0}).has_value();
+                std::vector<ponko::ray_hit> hits;
+                pierced(ctx, {500, 0}, hits);
+                landed = landed && !hits.empty() && landing(ctx, {500, 0}).has_value() &&
+                         (!nearest(ctx, {500, 0}) || nearest(ctx, {500, 0})->distance <= 150);
+            }
         }, "test")
         .run_headless(120, [](ponko::ctx& ctx) { build_level(ctx.world()); });
     return landed && world.size() == 5;
@@ -849,6 +889,30 @@ static std::optional<ponko::hit3d> look(ponko::ctx& ctx, ponko::vec3 eye, ponko:
 }
 // ANCHOR_END: physics3d_queries
 
+// ANCHOR: physics3d_shape_queries
+/// Where a 1 m crate pushed from `eye` along `forward` would stop (up to
+/// 20 m), moved out of anything it would sink into.
+static ponko::vec3 crate_stop(ponko::ctx& ctx, ponko::vec3 eye, ponko::vec3 forward, ponko::quat turn) {
+    const auto not_me = ponko::filter3d().exclude(ctx.world().resource<Walker>().id);
+    const ponko::vec3 size{1, 1, 1};
+    auto hit = ctx.cast_box3d(eye, size, turn, forward, 20, not_me);
+    const float travel = hit ? hit->distance : 20;
+    ponko::vec3 at{eye.x + forward.x * travel, eye.y + forward.y * travel, eye.z + forward.z * travel};
+    std::vector<ponko::penetration3d> pushes;
+    ctx.penetrations3d(ponko::box_collider(size), at, turn, pushes, not_me);
+    if (!pushes.empty()) {
+        const auto& out = pushes.front();
+        at = {at.x + out.normal.x * out.depth, at.y + out.normal.y * out.depth, at.z + out.normal.z * out.depth};
+    }
+    return at;
+}
+
+/// The nearest solid surface within 5 m of `at`.
+static std::optional<ponko::point_hit3d> nearest3d(ponko::ctx& ctx, ponko::vec3 at) {
+    return ctx.closest_point3d(at, 5);
+}
+// ANCHOR_END: physics3d_shape_queries
+
 static bool physics3d_snippets() {
     bool saw_ground = false;
     // ANCHOR: physics3d_setup
@@ -857,7 +921,13 @@ static bool physics3d_snippets() {
         .sim_system(walk, "walk")
         // ANCHOR_END: physics3d_setup
         .sim_system([&](ponko::ctx& ctx) {
-            if (ctx.sim_tick() == 1) saw_ground = look(ctx, {0, 10, 0}, {0, -1, 0}).has_value();
+            if (ctx.sim_tick() == 1) {
+                saw_ground = look(ctx, {0, 10, 0}, {0, -1, 0}).has_value();
+                // Dropped from 10 m up, a crate lands on the ground (at most
+                // 3.2 m high here), and the ground is within 5 m of it.
+                const auto stop = crate_stop(ctx, {0, 10, 0}, {0, -1, 0}, ponko::quat_identity());
+                saw_ground = saw_ground && stop.y < 5 && nearest3d(ctx, stop).has_value();
+            }
         }, "test")
         .run_headless(100, build_world3d);
     const auto me = world.resource<Walker>().id;
@@ -1028,6 +1098,16 @@ struct Tuning { float speed; float damage; };
     // Systems read ctx.world().resource<Tuning>(): the file's current values.
 }
 // ANCHOR_END: data_files
+
+// ANCHOR: loader_failure
+[[maybe_unused]] static void load_tables(ponko::ctx& ctx) {
+    // Setup code: a missing file is a bug, so this throws ponko::error (which Rust panics for).
+    ctx.load_strings("lang/en.json");
+    // A file that may be absent (a mod's language): ask, and carry on without it.
+    auto fr = ctx.try_load_strings("lang/fr.json");
+    if (!fr && fr.kind() != PONKO_ERROR_NOT_FOUND) std::fprintf(stderr, "%s\n", fr.error().what());
+}
+// ANCHOR_END: loader_failure
 
 // ---- Sound -------------------------------------------------------------------------
 [[maybe_unused]] static void sound(ponko::ctx& ctx) {
@@ -1273,6 +1353,46 @@ static void turrets_ride_on_tanks() {
 }
 // ANCHOR_END: attach
 
+// ANCHOR: hierarchy
+static void a_body_with_an_arm_and_a_hand() {
+    ponko::world w;
+    const auto body = w.spawn(ponko::transform_at({10, 0}));
+    const auto arm = w.spawn(ponko::transform_at({12, 0}));
+    const auto hand = w.spawn(ponko::transform_at({14, 0}));
+    w.set_parent(arm, body);   // keeps it where it is
+    w.set_parent(hand, arm);
+
+    auto t = w.get<ponko::transform2d>(body);
+    t.position.y = 5;
+    w.set(body, t);
+    w.update_hierarchy();      // game::follow_attachments() does this each tick
+    const auto at = w.get<ponko::transform2d>(hand).position;
+    if (at != ponko::vec2{14, 5} || w.descendants(body) != std::vector<ponko::entity>{arm, hand}) std::abort();
+    if (w.despawn_recursive(body) != 3) std::abort();
+}
+// ANCHOR_END: hierarchy
+
+// ANCHOR: hierarchy_commands
+struct Wreck { int parts; };
+
+static void clear_wrecks(ponko::ctx& ctx) {
+    ctx.world().each([&](ponko::entity e, const Wreck&) {
+        ctx.despawn_recursive_later(e);   // it and everything under it, after the system
+    });
+}
+// ANCHOR_END: hierarchy_commands
+
+static void wrecks_go_with_their_parts() {
+    ponko::entity part = 0;
+    auto w = ponko::game("wrecks", 1, 1).sim_system(clear_wrecks).run_headless(1, [&](ponko::ctx& ctx) {
+        auto world = ctx.world();
+        const auto car = world.spawn(ponko::transform_at({0, 0}), Wreck{4});
+        part = world.spawn(ponko::transform_at({1, 0}));
+        world.set_parent(part, car);
+    });
+    if (w.alive(part) || w.size() != 0) std::abort();
+}
+
 // ---- Scenes and prefabs -------------------------------------------------------------
 // ANCHOR: scenes
 struct Palm { float height; };
@@ -1385,6 +1505,31 @@ static void carts(ponko::ctx& ctx) {
 static void a_cart_comes_and_goes_whole() {
     auto world = ponko::game("guide", 1, 1).run_headless(0, carts);
     if (world.size() != 0) { std::fprintf(stderr, "%zu left\n", world.size()); std::abort(); }
+}
+
+// ---- glTF scenes from Blender ------------------------------------------------------------
+// ANCHOR: courtyard
+/// Spawns the courtyard from Blender (a glTF file) and puts the player on
+/// its spawn point.
+static ponko::entity courtyard(ponko::ctx& ctx) {
+    const ponko::entity root = ponko::spawn_gltf(ctx, "levels/courtyard.gltf", ponko::transform3d_at({0, 0, 0}));
+    const ponko::entity start = ponko::gltf_node(ctx, root, "Start").value();
+    if (ponko::spawn_point_name(ctx, start) != "player") std::abort();
+    auto world = ctx.world();
+    world.spawn(world.get<ponko::transform3d>(start));   // the player, where the file says
+    // A node by its path, and a custom property of the game's own (JSON).
+    const ponko::entity lantern = ponko::gltf_node(ctx, root, "Lantern").value();
+    if (ponko::gltf_node_extras(ctx, lantern).find("\"flicker\":0.2") == std::string::npos) std::abort();
+    return root;
+}
+// ANCHOR_END: courtyard
+
+static void the_courtyard_spawns() {
+    ponko::game("guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        const ponko::entity root = courtyard(ctx);
+        if (!ponko::gltf_node(ctx, root, "Gate/Door") || ponko::gltf_node(ctx, root, "Nowhere")) std::abort();
+        if (!ponko::despawn_gltf(ctx, root) || ponko::despawn_gltf(ctx, root)) std::abort();
+    });
 }
 
 // ---- 3D -------------------------------------------------------------------------------
@@ -1539,8 +1684,8 @@ static void yard(ponko::ctx& ctx, ponko::mesh tree, ponko::mesh blob, ponko::mes
 /// quarter of its range.
 static ponko::entity lod_object(ponko::ctx& ctx, ponko::mesh high, ponko::mesh low) {
     auto e = ctx.world().spawn(ponko::transform3d_at({0, 0, 0}));
-    ponko::lod_level near_level{0.25f, 0.25f, {ponko::lod_renderer_of(high)}};
-    ponko::lod_level far_level{0.03f, 0, {ponko::lod_renderer_of(low)}};
+    ponko::lod_level near_level{0.25f, 0.25f, {ponko::lod_renderer_of(high)}, false, {}};
+    ponko::lod_level far_level{0.03f, 0, {ponko::lod_renderer_of(low)}, false, {}};
     ctx.set_lod_group(e, 2, {near_level, far_level});
     // Lower quality: drop detail at 70% of the distance.
     ctx.set_lod({0.7f, true});
@@ -1694,6 +1839,66 @@ static void speed_lens(ponko::ctx& ctx, float speed) {
     ctx.set_post(post);
 }
 // ANCHOR_END: lens
+
+// ANCHOR: split_toning
+/// Teal shadows, orange highlights: a film look.
+static void teal_and_orange(ponko::ctx& ctx) {
+    auto post = ctx.post_ex();
+    post.split_toning_shadows = {0.35f, 0.55f, 0.6f, 1};
+    post.split_toning_highlights = {0.7f, 0.5f, 0.35f, 1};
+    post.split_toning_balance = 0.1f; // a little more of the picture counts as highlights
+    ctx.set_post(post);
+}
+// ANCHOR_END: split_toning
+
+// ANCHOR: depth_of_field
+/// Focus on the person the camera talks to; the background melts away.
+static void close_up(ponko::ctx& ctx, ponko::vec3 speaker) {
+    auto post = ctx.post_ex();
+    auto eye = ctx.camera3d().position;
+    post.dof_enabled = true;
+    post.dof_focus_distance = std::hypot(std::hypot(speaker.x - eye.x, speaker.y - eye.y), speaker.z - eye.z);
+    post.dof_focus_range = 0.5f; // half a meter either side stays sharp
+    post.dof_blur = 0.015f;
+    ctx.set_post(post);
+}
+// ANCHOR_END: depth_of_field
+
+// ANCHOR: post_volumes
+/// The looks of a level: outdoors everywhere, a cave and a sunset garden.
+struct looks {
+    ponko::post_ex outdoors;
+    std::vector<ponko::post_volume> volumes;
+};
+
+static looks make_looks() {
+    looks l{ponko::post_ex_defaults(), {}};
+    auto cave = l.outdoors;
+    cave.post.exposure = 1.0f; // eyes adjusted to the dark
+    cave.post.saturation = 0.6f;
+    cave.split_toning_shadows = {0.35f, 0.45f, 0.65f, 1};
+    auto garden = l.outdoors;
+    garden.post.temperature = 0.4f;
+    garden.post.bloom = 0.2f;
+    garden.split_toning_highlights = {0.75f, 0.5f, 0.35f, 1};
+    // Boxes: center, size, how far outside they fade out, the look.
+    l.volumes.push_back(ponko::post_volume_around({0, 2, -20}, {8, 6, 20}, 4, cave));
+    l.volumes.push_back(ponko::post_volume_around({0, 2, -55}, {20, 10, 20}, 6, garden));
+    return l;
+}
+
+/// Every frame, after the camera moved: the look where the camera is.
+static void blend_looks(ponko::ctx& ctx, const looks& l) {
+    ctx.set_post(ponko::blend_post_volumes(l.outdoors, l.volumes, ctx.camera3d().position));
+}
+// ANCHOR_END: post_volumes
+
+// ANCHOR: post_lerp
+/// Walking out of the water: the underwater look fades into the normal one over `seconds`.
+static void surface(ponko::ctx& ctx, const ponko::post_ex& underwater, const ponko::post_ex& normal, float since, float seconds) {
+    ctx.set_post(ponko::post_lerp(underwater, normal, since / seconds));
+}
+// ANCHOR_END: post_lerp
 
 // ANCHOR: ssr
 /// Wet streets and polished floors reflect what's on screen.
@@ -1896,6 +2101,15 @@ static void follow_reflections(ponko::ctx& ctx) {
 }
 // ANCHOR_END: mirror
 
+// ANCHOR: monitor
+/// A security monitor shows the room, but not the smoke.
+static void monitor(ponko::ctx& ctx, ponko::texture screen) {
+    auto camera = ponko::target_camera_ex_of(ponko::target_camera_of(ctx.camera3d(), screen));
+    camera.particles = false;
+    ctx.set_target_cameras_ex({camera});
+}
+// ANCHOR_END: monitor
+
 // ANCHOR: terrain_material
 static float hill_height(float x, float z) { return std::sin(x * 0.02f) * 6 + std::cos(z * 0.03f) * 4; }
 
@@ -2083,6 +2297,19 @@ static void the_village_has_five_spinning_houses() {
         if (ctx.mesh_shadows(tuft)) { std::fprintf(stderr, "mesh shadows\n"); std::abort(); }
         meadow(ctx);
         if (ctx.post().tonemap != uint32_t(ponko::tonemap::agx)) { std::fprintf(stderr, "post\n"); std::abort(); }
+        teal_and_orange(ctx);
+        close_up(ctx, {0, 1, 0});
+        if (!ctx.post_ex().dof_enabled || ctx.post_ex().split_toning_balance != 0.1f) { std::fprintf(stderr, "split toning\n"); std::abort(); }
+        {
+            auto l = make_looks();
+            auto cam = ctx.camera3d();
+            cam.position = {0, 2, -20};
+            ctx.set_camera3d(cam);
+            blend_looks(ctx, l);
+            if (ctx.post_ex().post.exposure != 1.0f) { std::fprintf(stderr, "post volumes\n"); std::abort(); }
+            surface(ctx, l.volumes[0].post, l.outdoors, 1, 4);
+            if (std::fabs(ctx.post_ex().post.exposure - 0.75f) > 1e-5f) { std::fprintf(stderr, "post lerp\n"); std::abort(); }
+        }
     });
     int houses = 0;
     world.each([&](const ponko::transform3d& t, const Spin&) {
@@ -2118,6 +2345,9 @@ static void the_pond_mirrors_the_camera() {
         auto cam = ctx.camera3d();
         cam.position = {3, 5, 1};
         ctx.set_camera3d(cam);
+        follow_reflections(ctx);
+        monitor(ctx, ctx.target_cameras()[0].target);
+        if (ctx.target_camera_ex(0).particles) { std::fprintf(stderr, "monitor\n"); std::abort(); }
         follow_reflections(ctx);
         auto list = ctx.target_cameras();
         if (list.size() != 1 || list[0].camera.position.y != -5 || list[0].target.width != 32) {
@@ -2203,10 +2433,10 @@ static void projected_decals(ponko::ctx& ctx) {
 // ANCHOR: punctual_lights
 static void punctual_lights(ponko::ctx& ctx) {
     ctx.world().spawn(ponko::transform3d_at({0, 3, 0}),
-        ponko::point_light3d{ponko::rgb(1, .3f, .1f), 30, 12, false});
+        ponko::point_light3d{ponko::rgb(1, .3f, .1f), 30, 12, false, 0});
     auto aim = ponko::looking_at(ponko::transform3d_at({4, 3, 0}), {0, 0, 0});
     ctx.world().spawn(aim,
-        ponko::spot_light3d{ponko::colors::white, 60, 20, .2f, .5f, true}); // casts shadows
+        ponko::spot_light3d{ponko::colors::white, 60, 20, .2f, .5f, true, 0}); // casts shadows
 }
 // ANCHOR_END: punctual_lights
 
@@ -2218,14 +2448,14 @@ static void street_lights(ponko::ctx& ctx) {
     light.light_shadow_atlas = 8192; // room for more shadow views
     light.light_shadow_views = 24;   // as many as there can be
     ctx.set_lighting(light);
-    ponko::point_light3d lamp{ponko::rgb(1, .8f, .6f), 40, 12, true};
+    ponko::point_light3d lamp{ponko::rgb(1, .8f, .6f), 40, 12, true, 0};
     lamp.shadow_resolution = 2048; // always sharp
     ctx.world().spawn(ponko::transform3d_at({0, 3, 0}), lamp);
     for (int i = 0; i < 18; i++) {
         float x = -20 + 2.5f * i;
         auto at = ponko::looking_at(ponko::transform3d_at({x, 5, -30}), {x, 0, -29.9f});
         // Sized by how big they look: smaller the farther they are.
-        ctx.world().spawn(at, ponko::spot_light3d{ponko::colors::white, 60, 8, .3f, .5f, true});
+        ctx.world().spawn(at, ponko::spot_light3d{ponko::colors::white, 60, 8, .3f, .5f, true, 0});
     }
 }
 // ANCHOR_END: light_shadow_atlas
@@ -2639,6 +2869,10 @@ static void campfire(ponko::ctx& ctx) {
     ctx.set_particle_emitter3d(e, fire);
     ctx.particle_burst(e, 20); // more at any time
     // ANCHOR_END: particles
+    // ANCHOR: soft_particles
+    auto smoke = ponko::particle_settings().rate(20).softness(1.5f);
+    ctx.set_particle_emitter3d(ctx.world().spawn(ponko::transform3d_at({0, 0, 0})), smoke);
+    // ANCHOR_END: soft_particles
 }
 
 static void sparks2d(ponko::ctx& ctx) {
@@ -2802,7 +3036,7 @@ static void build_shop(ponko::ctx& ctx) {
     auto buy = tree.add_button(root, "Buy selected item", ui::fixed(220, 40));
     tree.set_enabled(buy, false);
     tree.set_name(buy, "buy");
-    tree.push_screen(root);
+    tree.push_modeless(root);
     // ANCHOR_END: shop_tree
 
     // ANCHOR: ui_grid_areas
@@ -2874,7 +3108,7 @@ static void shop_events(ponko::ctx& ctx) {
         tree.set_text(buy, ("Buy item " + item).c_str());
         tree.set_text(*tree.find("message"), ("Buy item " + item + "?").c_str());
     } else if (name == "buy") {
-        tree.push_screen(*tree.find("dialog"), true);
+        tree.push_modal(*tree.find("dialog"));
     } else if (name == "confirm" || name == "cancel") {
         tree.pop_screen();
         if (name == "confirm") tree.set_text(*tree.find("title"), "Purchase complete!");
@@ -2927,7 +3161,7 @@ static void panel_guide(ponko::ctx& ctx) {
     auto panel = ctx.panel_ui(terminal);
     auto root = panel.add_panel(ui::none, ui::fill().padding(20).gap(12));
     panel.set_name(panel.add_button(root, "Buy", ui::fixed(200, 60)), "buy");
-    panel.push_screen(root);
+    panel.push_modeless(root);
     // ANCHOR_END: panel_create
 
     // Click it by hand, as a headless test would (a window's mouse does this itself).
@@ -3005,7 +3239,7 @@ static void string_tables(ponko::ctx& ctx) {
     auto root = ui.add_panel(u::none, u::fill());
     auto play = ui.add_button(root, "", u::fixed(200, 40));
     ui.set_text_key(play, "menu.play");  // follows the language
-    ui.push_screen(root);
+    ui.push_modeless(root);
     ctx.set_language("fr");
     std::string coins = ctx.format("hud.coins", {ponko::arg("count", 0)});  // "0 pièce"
     if (coins != "0 pièce" || !ctx.missing_strings().empty()) std::abort();
@@ -3044,6 +3278,23 @@ void persistent_instances(ponko::ctx& ctx, ponko::mesh mesh) {
     ctx.free_instance_batch(batch);
 }
 // ANCHOR_END: gpu_instances
+
+// ANCHOR: instance_cells
+void streamed_cell(ponko::ctx& ctx, ponko::mesh tree) {
+    // An empty batch: the world's cells bring its instances.
+    auto forest = ctx.create_instance_batch(tree, {});
+    // Build a cell's matrices on a thread of your own (std::async), then
+    // add the cell on the game's: only its instances are uploaded.
+    std::vector<std::array<float,16>> trees;
+    for (int i=0; i<64; ++i) {
+        trees.push_back({1,0,0,0, 0,1,0,0, 0,0,1,0, float(i%8)*4.0f,0,float(i/8)*4.0f,1});
+    }
+    auto cell = ctx.add_instance_cell(forest, trees);
+    ctx.replace_instance_cell(cell, trees); // new instances for this cell alone
+    ctx.free_instance_cell(cell);           // it went out of reach
+    ctx.free_instance_batch(forest);        // frees the cells it still has
+}
+// ANCHOR_END: instance_cells
 
 // ANCHOR: batch_culling
 void choose_batch_culling(ponko::ctx& ctx, ponko::instance_batch batch) {
@@ -3238,7 +3489,7 @@ static void menu_opens_settings() {
             auto ui = ctx.ui_retained();
             if (auto clicked = ui.take_click(); clicked && clicked == ui.find("menu.settings")) {
                 ui.pop_screen();
-                ui.push_screen(*ui.find("settings"));
+                ui.push_modeless(*ui.find("settings"));
             }
         })
         .run_headless_scenario(scenario, [](ponko::ctx& ctx) {
@@ -3247,7 +3498,7 @@ static void menu_opens_settings() {
             auto menu = ui.add_panel(u::none, u::fill());
             ui.set_name(ui.add_button(menu, "Settings", u::fixed(200, 40)), "menu.settings");
             ui.set_name(ui.add_panel(u::none, u::fill()), "settings");
-            ui.push_screen(menu);
+            ui.push_modeless(menu);
         });
     if (!run.report.passed()) throw std::runtime_error(run.world.scenario_report_json());
 }
@@ -3458,8 +3709,276 @@ static void chat_box(ponko::ctx& ctx, Chat& chat) {
 }
 // ANCHOR_END: ime_own_widget
 
+static void debug_draw_guide(ponko::ctx& ctx) {
+    const ponko::vec3 eye{0, 1.5f, 0}, aim{0, 0, -4}, hit{0, 0.5f, -4};
+    // ANCHOR: debug_draw
+    auto debug = ctx.debug();
+    debug.set_enabled(true); // on by default in debug builds of the engine
+    // Until this system runs again: a ray, a box and a label in the 3D world.
+    debug.ray(eye, aim, ponko::colors::yellow);
+    debug.box(hit, {1, 1, 1}, ponko::quat_identity(), ponko::colors::red);
+    debug.text(hit, "target", ponko::colors::white);
+    // For two seconds, over everything, 3 pixels wide.
+    auto marker = ponko::debug_draw::style();
+    marker.seconds = 2;
+    marker.on_top = true;
+    marker.width = 3;
+    debug.sphere(hit, 0.5f, ponko::colors::green, marker);
+    // In window pixels: a frame around the minimap.
+    auto pixels = ponko::debug_draw::style();
+    pixels.screen = true;
+    debug.box(ponko::vec2{110, 110}, ponko::vec2{200, 200}, ponko::colors::white, pixels);
+    // ANCHOR_END: debug_draw
+    // ANCHOR: debug_draw_views
+    debug.show(PONKO_DEBUG_VIEW_COLLIDERS, true);
+    debug.show(PONKO_DEBUG_VIEW_HIERARCHY, true);
+    // ANCHOR_END: debug_draw_views
+    const auto drawn = debug.stats();
+    if (drawn.lines_3d < 13 || drawn.lines_2d != 4 || drawn.labels != 1 || !debug.showing(PONKO_DEBUG_VIEW_COLLIDERS)) {
+        std::fprintf(stderr, "debug drawing guide\n");
+        std::abort();
+    }
+}
+
+// ---- Game states --------------------------------------------------------------
+// ANCHOR: states
+enum class screen : std::uint32_t { title, playing, paused };
+
+struct score { int ticks; };
+
+static void add_states(ponko::game& game) {
+    game.state(screen::title)
+        .on_enter(screen::playing, [](ponko::ctx& ctx) { ctx.world().set_resource(score{0}); })
+        // Runs only while playing, not under the pause menu.
+        .add_in_state(ponko::phase::after_physics, screen::playing, [](ponko::ctx& ctx) {
+            auto s = ctx.world().resource<score>();
+            s.ticks += 1;
+            ctx.world().set_resource(s);
+        }, "play")
+        // The menus ask for changes; they apply at the end of the tick.
+        .sim_system([](ponko::ctx& ctx) {
+            if (ctx.sim_tick() == 0) ctx.set_state(screen::playing);
+            if (ctx.sim_tick() == 5) ctx.push_state(screen::paused);
+            if (ctx.sim_tick() == 8) ctx.pop_state();
+        }, "menus");
+}
+// ANCHOR_END: states
+
+[[maybe_unused]] static void add_waves(ponko::game& game) {
+    // ANCHOR: states_condition
+    game.add_if(ponko::phase::after_physics,
+                [](ponko::ctx& ctx) { return ctx.sim_tick() % 600 == 0; },
+                [](ponko::ctx& ctx) { /* spawn a wave */ (void)ctx; }, "spawn wave");
+    // ANCHOR_END: states_condition
+}
+
+// ANCHOR: state_screen
+static void add_pause_screen(ponko::game& game) {
+    game.state_screen(screen::paused, ponko::ui::screen_mode::modal, [](ponko::ctx& ctx) {
+        auto ui = ctx.ui_retained();
+        const auto menu = ui.add_panel(ponko::ui::none, ponko::ui::centered(300, 160));
+        const auto resume = ui.add_button(menu, "Resume");
+        ui.set_initial_focus(resume);
+        ui.set_closes_screen(resume); // like Escape: closes the menu, which pops Paused
+        return menu;
+    });
+}
+// ANCHOR_END: state_screen
+
+static void state_screen_guide() {
+    ponko::game game("Pause", 800, 600);
+    game.state(screen::playing).headless_frames(true);
+    add_pause_screen(game);
+    std::vector<std::pair<std::uint64_t, bool>> up; // (tick, a screen is up)
+    game.sim_system([](ponko::ctx& ctx) { if (ctx.sim_tick() == 1) ctx.push_state(screen::paused); }, "pause")
+        .system([&](ponko::ctx& ctx) { up.emplace_back(ctx.sim_tick(), ctx.ui_retained().top_screen().has_value()); }, "watch");
+    ponko::input_scenario enter; // Resume has the focus: Enter presses it
+    enter.at(4, ponko::input_event::key(PONKO_KEY_ENTER, true)).at(5, ponko::input_event::key(PONKO_KEY_ENTER, false));
+    game.run_headless_scenario(enter.duration(8), [](ponko::ctx&) {});
+    // Pushed on tick 1, up after it; Enter on tick 4 closed it and popped the state.
+    const std::vector<std::pair<std::uint64_t, bool>> want{{1, false}, {2, true}, {3, true}, {4, true},
+                                                           {5, false}, {6, false}, {7, false}, {8, false}};
+    if (up != want) {
+        std::fprintf(stderr, "state screen guide\n");
+        std::abort();
+    }
+}
+
+static void states_guide() {
+    ponko::game game("States", 1, 1);
+    add_states(game);
+    auto world = game.run_headless(10);
+    // Playing on ticks 1-5 and 9: six ticks of play.
+    const int ticks = world.resource<score>().ticks;
+    if (ticks != 6) { std::fprintf(stderr, "states guide: %d\n", ticks); std::abort(); }
+}
+
+// The guide's native prediction (networking chapter): pure data, run below.
+// ANCHOR: native_prediction
+struct Runner {          // trivially copyable, no padding: compared byte for byte
+    std::int32_t x = 0;  // fixed point, so client and server make the same bytes
+    std::int32_t vx = 0;
+};
+struct Stride { std::int32_t ax = 0; };
+// The step both sides run, for one input.
+static void run_step(Runner& w, const Stride& p) { w.vx += p.ax; w.x += w.vx; }
+// ANCHOR_END: native_prediction
+
+static void native_prediction_runs() {
+    // ANCHOR: native_prediction_loop
+    ponko::prediction<Runner, Stride> client(Runner{});    // keeps 256 unconfirmed inputs
+    ponko::input_queue<Stride> server_inputs;              // one per client, on the server
+    Runner server{};
+
+    // Client, every fixed tick: apply the input at once, send every unconfirmed one.
+    std::uint16_t seq = client.predict(Stride{1}, run_step);
+    for (auto& [n, input] : client.unacked()) server_inputs.push(n, input);  // your packets
+
+    // Server: apply each input once, in order, then answer with (ack, state).
+    while (auto next = server_inputs.pop()) run_step(server, next->second);
+    std::uint16_t ack = *server_inputs.ack();
+
+    // Client, on the answer: confirm, or start again from the server and replay.
+    ponko::reconciled<Runner> r = client.reconcile(ack, server, run_step);
+    if (r.corrected()) { /* slide the drawn position from *r.before */ }
+    // ANCHOR_END: native_prediction_loop
+    if (seq != 0 || r.outcome != PONKO_RECONCILE_CONFIRMED || client.state().x != 1) std::abort();
+}
+
+// Compiled for the guide's retargeting section (the files are the game's own).
+[[maybe_unused]] static void retargeting_guide(ponko::ctx& ctx) {
+    // ANCHOR: retargeting
+    auto world = ctx.world();
+    ponko::entity pack = world.spawn(), hero = world.spawn();
+    ctx.load_skeleton(pack, "models/pack_rig.glb");
+    ctx.load_skeleton(hero, "models/hero.glb");
+    ponko::humanoid_map pack_map = ctx.detect_humanoid_map(pack);
+    ponko::humanoid_map hero_map = ctx.detect_humanoid_map(hero);
+    hero_map.set(PONKO_HUMAN_BONE_CHEST, 7);  // a joint name it didn't know
+    ponko::retargeter retarget = ctx.create_retargeter(pack, pack_map, hero, hero_map);  // throws, naming a missing bone
+    ponko::clip walk = retarget.retarget(ctx.load_clip("models/pack_walk.glb", "walk"));
+    // ANCHOR_END: retargeting
+    (void)walk;
+}
+
+static void camera_rigs_guide() {
+    ponko::game("rigs", 1280, 720).physics3d({0, -9.81f, 0}).run_headless(1, [](ponko::ctx& ctx) {
+        ponko::vec2 hero{400, 300};
+        ponko::vec3 player{0, 0, 0};
+        ponko::entity player_entity = ctx.world().spawn();
+        // ANCHOR: follow_camera
+        ponko::follow_camera2d follow; // keep it: it holds the camera's state
+        follow.dead_zone = {32, 48};
+        follow.look_ahead = {48, 0};
+        follow.set_bounds({{0, 0}, {4000, 720}});
+        // Every frame, after the hero moved:
+        follow.update(ctx, hero, ctx.dt());
+        // ANCHOR_END: follow_camera
+        // ANCHOR: pixel_perfect
+        ponko::pixel_perfect pixels(320, 180);
+        pixels.apply(ctx); // after the camera is placed: a whole zoom, whole pixels
+        ponko::rect art = pixels.screen_rect(ctx); // bars go around this
+        // ANCHOR_END: pixel_perfect
+        // ANCHOR: camera_shake
+        ponko::camera_shake shake;
+        shake.add_trauma(0.5f); // a hit
+        // Every frame, after the camera is placed:
+        shake.update(ctx.dt());
+        shake.apply2d(ctx); // or apply3d
+        // ANCHOR_END: camera_shake
+        // ANCHOR: screen_world
+        ponko::vec2 label = ctx.world_to_screen(hero);
+        ponko::vec2 clicked = ctx.screen_to_world(ctx.mouse_pos()); // ctx.mouse_world() too
+        auto [from, dir] = ctx.screen_ray(ctx.mouse_pos());
+        std::optional<ponko::vec3> ground = ctx.screen_to_ground(ctx.mouse_pos(), 0);
+        ponko::vec3 cursor = ctx.screen_to_world3d(ctx.mouse_pos(), 4); // 4 units ahead
+        std::optional<ponko::vec2> name_tag = ctx.world_to_screen3d({player.x, player.y + 2, player.z});
+        // ANCHOR_END: screen_world
+        // ANCHOR: rigs3d
+        ponko::orbit_camera orbit; // a model viewer
+        orbit.mouse_controls(ctx);
+        orbit.update(ctx, ctx.dt());
+
+        ponko::first_person_camera eyes; // walking around
+        eyes.look(ctx.mouse_motion());
+        eyes.update(ctx, {player.x, player.y + 1.7f, player.z}, ctx.dt());
+
+        ponko::third_person_camera chase; // behind a character, in front of walls
+        chase.look(ctx.mouse_motion());
+        auto filter = ponko::query_filter_ex_defaults();
+        filter.exclude = true; // not the character's own collider
+        filter.exclude_entity = player_entity;
+        chase.update_physics(ctx, player, filter, ctx.dt());
+        ponko::vec3 forward = chase.flat_forward(); // walk this way for "forward"
+        // ANCHOR_END: rigs3d
+        (void)art; (void)label; (void)clicked; (void)from; (void)dir; (void)ground; (void)cursor; (void)name_tag;
+        (void)forward;
+    });
+}
+
+static void viewports_guide() {
+    ponko::game("Rally", 1280, 720).run_headless(1, [](ponko::ctx& ctx) {
+        ponko::entity icon = ctx.world().spawn();
+        // ANCHOR: split_screen3d
+        // Player one in the left half, player two in the right one.
+        auto p1 = ctx.camera3d_view();
+        p1.rect = ponko::split_viewport(2, 0);
+        ctx.set_camera3d_view(p1);
+        auto p2 = p1;
+        p2.rect = ponko::split_viewport(2, 1);
+        p2.camera.position.x += 30;
+        ctx.add_view3d(p2);
+        // Each frame, move both cameras:
+        auto views = ctx.views3d();
+        views[0].camera.position.x += 0.1f;
+        ctx.set_view3d(0, views[0]);
+        // ANCHOR_END: split_screen3d
+        // ANCHOR: minimap
+        // Icons on layer 1: only the map draws them.
+        ctx.world().set_render_layers(icon, ponko::render_layer(1));
+        auto main = ctx.camera3d_view();
+        main.layers = ponko::render_layers_all & ~ponko::render_layer(1);
+        ctx.set_camera3d_view(main);
+        ponko::view3d map;
+        map.rect = {0.75f, 0.0f, 0.25f, 0.25f}; // the top-right corner
+        map.camera.position = {0, 80, 0};
+        map.camera.rotation = ponko::quat_from_axis_angle({1, 0, 0}, -1.5707964f); // straight down, -Z up
+        map.layers = ponko::render_layers_all;
+        auto cheap = ctx.post();
+        cheap.bloom = 0;
+        cheap.ao_enabled = false;
+        ctx.add_view3d(map.with_post(cheap));
+        // ANCHOR_END: minimap
+        // ANCHOR: split_screen2d
+        auto left = ctx.camera_view();
+        left.rect = ponko::split_viewport(2, 0);
+        ctx.set_camera_view(left);
+        ponko::view2d right;
+        right.rect = ponko::split_viewport(2, 1);
+        right.camera.position = {2000, 0};
+        ctx.add_view2d(right.with_clear({0.1f, 0.1f, 0.2f, 1}));
+        // Draw a marker only the views on layer 1 show:
+        ctx.set_draw_layers(ponko::render_layer(1));
+        ctx.draw_rect({{10, 10}, {20, 20}}, {1, 1, 0, 1});
+        ctx.set_draw_layers(ponko::render_layers_default);
+        // ANCHOR_END: split_screen2d
+        // ANCHOR: pick_views
+        ponko::vec2 mouse = ctx.mouse_pos();
+        int which = ctx.camera3d_at(mouse); // -1: the main camera, else a view
+        std::optional<ponko::vec3> ground = ctx.screen_to_ground_at(mouse, 0);
+        ponko::vec2 clicked = ctx.screen_to_world_at(mouse); // 2D
+        // ANCHOR_END: pick_views
+        (void)which; (void)ground; (void)clicked;
+    });
+}
+
 int main() {
+    viewports_guide();
+    camera_rigs_guide();
     builder_setup_runs_headless();
+    states_guide();
+    state_screen_guide();
+    native_prediction_runs();
     ponko::game("ime guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         Chat chat{true, "Hi "};
         ctx.feed_ime(ponko::ime_preedit("にほ", 6, 6));
@@ -3492,6 +4011,7 @@ int main() {
     ponko::game("ribbon guide", 1, 1).run_headless(0, ribbons);
     ponko::game("particle 2d guide", 1, 1).run_headless(0, sparks2d);
     ponko::game("2d lights guide", 1, 1).run_headless(0, lights2d);
+    ponko::game("debug drawing guide", 1, 1).run_headless(0, debug_draw_guide);
     if (!messages_round_trip()) { std::fprintf(stderr, "no message\n"); std::abort(); }
     if (!replication_snippets()) { std::fprintf(stderr, "replication snippets failed\n"); std::abort(); }
     ponko::game("sound guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
@@ -3545,12 +4065,23 @@ int main() {
     storage_keeps_files_between_runs();
     old_saves::old_saves_still_load();
     a_cart_comes_and_goes_whole();
+    the_courtyard_spawns();
     the_village_has_five_spinning_houses();
     things_fall_ten_units_per_second();
     turrets_ride_on_tanks();
+    a_body_with_an_arm_and_a_hand();
+    wrecks_go_with_their_parts();
     crowds_reach_the_goal();
     the_dead_are_buried();
     shots_arrive_before_the_next_system();
+    {
+        auto w = ponko::game("spawn id guide", 1, 1)
+            .sim_system(fire_at_guns, "fire")
+            .run_headless(1, [](ponko::ctx& ctx) { ctx.world().spawn(Enemy{}); });
+        std::vector<ponko::entity> aimed;
+        w.each([&](const Aim& a) { aimed.push_back(a.bullet); });
+        if (aimed.size() != 1 || w.get<Bullet>(aimed[0]).speed != 9) std::abort();
+    }
 
     // Run the other snippets headless once, so they're exercised, not only compiled.
     ponko::sound click{};
@@ -3693,6 +4224,7 @@ int main() {
     ponko::game("static instances",1,1).run_headless(0,[](ponko::ctx& ctx) {
         auto material=ctx.create_material(ponko::material_of(ponko::colors::white));
         persistent_instances(ctx,ctx.create_mesh(ponko::mesh_data::cube(1.0f),material));
+        streamed_cell(ctx,ctx.create_mesh(ponko::mesh_data::cube(1.0f),material));
     });
     book::run_all();
     std::puts("guide snippets ok");
@@ -3723,4 +4255,32 @@ int main() {
         lobby.leave();
     }
     // ANCHOR_END: general_steam_lobby
+}
+
+// Compiled for the guide's 2D skeleton chapter; a game calls these from its
+// setup and systems.
+[[maybe_unused]] static void skeleton2d_guide(ponko::ctx& ctx, ponko::vec2 mouse, ponko::vec2 origin) {
+    // ANCHOR: skeleton2d_play
+    ponko::entity puppet = ctx.world().spawn(ponko::transform_at({200, 300}));
+    ctx.set_skeleton2d(puppet, "hero/hero.json");
+    ctx.skeleton2d_play(puppet, "walk");
+    // ANCHOR_END: skeleton2d_play
+    // ANCHOR: skeleton2d_events
+    while (auto event = ctx.skeleton2d_next_event(puppet)) {
+        if (*event == "step") {
+            // play a footstep
+        }
+    }
+    // ANCHOR_END: skeleton2d_events
+    // ANCHOR: skeleton2d_graph
+    std::size_t speed = ctx.skeleton2d_parameter_index(puppet, "speed"); // throws if the file lacks it
+    ctx.skeleton2d_set_float(puppet, speed, 0.5f);
+    std::size_t hit = ctx.skeleton2d_parameter_index(puppet, "hit");
+    ctx.skeleton2d_set_trigger(puppet, hit);
+    // ANCHOR_END: skeleton2d_graph
+    // ANCHOR: skeleton2d_ik
+    std::size_t reach = ctx.skeleton2d_ik_index(puppet, "reach");
+    ctx.skeleton2d_set_ik_target(puppet, reach, {mouse.x - origin.x, mouse.y - origin.y});
+    ctx.skeleton2d_set_ik_mix(puppet, reach, 0.75f); // three quarters of the way
+    // ANCHOR_END: skeleton2d_ik
 }

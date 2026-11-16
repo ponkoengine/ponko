@@ -72,7 +72,7 @@ mod before {
     pub fn shop(ui: &mut Ui) -> Shop {
         let root = ui.add(
             UiWidget::Panel,
-            crate::ui::UiLayout::custom(Style {
+            crate::ui::UiLayout::unstable_custom(Style {
                 size: Size {
                     width: percent(1.0),
                     height: percent(1.0),
@@ -83,18 +83,22 @@ mod before {
                 ..Default::default()
             }),
         );
-        let title = ui.add_child(root, UiWidget::Label, crate::ui::UiLayout::custom(fixed(400.0, 32.0)));
+        let title = ui.add_child(
+            root,
+            UiWidget::Label,
+            crate::ui::UiLayout::unstable_custom(fixed(400.0, 32.0)),
+        );
         ui.set_text(title, "General store — choose an item");
         let note = ui.add_child(
             root,
             UiWidget::TextInput,
-            crate::ui::UiLayout::custom(fixed(360.0, 36.0)),
+            crate::ui::UiLayout::unstable_custom(fixed(360.0, 36.0)),
         );
         ui.set_text(note, "Your order note");
         let scroll = ui.add_child(
             root,
             UiWidget::Scroll,
-            crate::ui::UiLayout::custom(Style {
+            crate::ui::UiLayout::unstable_custom(Style {
                 size: Size {
                     width: percent(1.0),
                     height: length(360.0),
@@ -107,7 +111,7 @@ mod before {
         let grid = ui.add_child(
             scroll,
             UiWidget::Panel,
-            crate::ui::UiLayout::custom(Style {
+            crate::ui::UiLayout::unstable_custom(Style {
                 display: Display::Grid,
                 size: Size {
                     width: percent(0.95),
@@ -125,7 +129,7 @@ mod before {
             let item = ui.add_child(
                 grid,
                 UiWidget::Button,
-                crate::ui::UiLayout::custom(Style {
+                crate::ui::UiLayout::unstable_custom(Style {
                     min_size: Size::length(0.0),
                     padding: crate::ui::unstable_taffy::Rect::length(8.0),
                     ..Default::default()
@@ -142,16 +146,24 @@ mod before {
             );
             items.push(item);
         }
-        let gift = ui.add_child(root, UiWidget::Toggle, crate::ui::UiLayout::custom(fixed(220.0, 28.0)));
+        let gift = ui.add_child(
+            root,
+            UiWidget::Toggle,
+            crate::ui::UiLayout::unstable_custom(fixed(220.0, 28.0)),
+        );
         ui.set_text(gift, "Gift wrap");
-        let buy = ui.add_child(root, UiWidget::Button, crate::ui::UiLayout::custom(fixed(220.0, 40.0)));
+        let buy = ui.add_child(
+            root,
+            UiWidget::Button,
+            crate::ui::UiLayout::unstable_custom(fixed(220.0, 40.0)),
+        );
         ui.set_text(buy, "Buy selected item");
         ui.set_enabled(buy, false);
-        ui.push_screen(root, false);
+        ui.push_modeless(root);
 
         let dialog = ui.add(
             UiWidget::Panel,
-            crate::ui::UiLayout::custom(Style {
+            crate::ui::UiLayout::unstable_custom(Style {
                 size: Size {
                     width: length(360.0),
                     height: length(180.0),
@@ -168,17 +180,21 @@ mod before {
                 ..Default::default()
             }),
         );
-        let message = ui.add_child(dialog, UiWidget::Label, crate::ui::UiLayout::custom(fixed(320.0, 40.0)));
+        let message = ui.add_child(
+            dialog,
+            UiWidget::Label,
+            crate::ui::UiLayout::unstable_custom(fixed(320.0, 40.0)),
+        );
         let confirm = ui.add_child(
             dialog,
             UiWidget::Button,
-            crate::ui::UiLayout::custom(fixed(240.0, 36.0)),
+            crate::ui::UiLayout::unstable_custom(fixed(240.0, 36.0)),
         );
         ui.set_text(confirm, "Confirm purchase");
         let cancel = ui.add_child(
             dialog,
             UiWidget::Button,
-            crate::ui::UiLayout::custom(fixed(240.0, 30.0)),
+            crate::ui::UiLayout::unstable_custom(fixed(240.0, 30.0)),
         );
         ui.set_text(cancel, "Back");
         Shop {
@@ -209,7 +225,7 @@ mod before {
                 ui.set_text(shop.buy, format!("Buy item {}", index + 1));
             } else if id == shop.buy {
                 ui.set_text(shop.message, format!("Buy item {}?", shop.selected.unwrap() + 1));
-                ui.push_screen(shop.dialog, true);
+                ui.push_modal(shop.dialog);
             } else if id == shop.confirm || id == shop.cancel {
                 ui.pop_screen();
                 if id == shop.confirm {
@@ -223,7 +239,7 @@ mod before {
     pub fn panel(ui: &mut Ui) -> UiId {
         let root = ui.add(
             UiWidget::Panel,
-            crate::ui::UiLayout::custom(Style {
+            crate::ui::UiLayout::unstable_custom(Style {
                 size: Size {
                     width: percent(1.0),
                     height: percent(1.0),
@@ -237,7 +253,7 @@ mod before {
         let buy = ui.add_child(
             root,
             UiWidget::Button,
-            crate::ui::UiLayout::custom(Style {
+            crate::ui::UiLayout::unstable_custom(Style {
                 size: Size {
                     width: length(200.0),
                     height: length(60.0),
@@ -247,7 +263,7 @@ mod before {
             }),
         );
         ui.set_text(buy, "Buy");
-        ui.push_screen(root, false);
+        ui.push_modeless(root);
         buy
     }
 }
@@ -769,7 +785,7 @@ fn mixed_screen(painter: &Painter, scale: f32, immediate_text: f32) -> (Image, [
         .layout(UiLayout::fill())
         .background(Color::rgba(0.0, 0.0, 0.0, 0.0))
         .id();
-    ctx.ui.push_screen(root, false);
+    ctx.ui.push_modeless(root);
     let panel = ctx.ui.panel(root).layout(anchored(20.0, 100.0, 120.0, 40.0)).id();
     let button = ctx
         .ui
@@ -883,7 +899,7 @@ fn composing_field(
     ctx.ui.set_scale(scale);
     let root = ctx.ui.root().layout(UiLayout::fill()).id();
     let field = ctx.ui.text_input(root).layout(UiLayout::fixed(360.0, 40.0)).id();
-    ctx.ui.push_screen(root, false);
+    ctx.ui.push_modeless(root);
     ctx.ui.set_focus(field);
     let input = UiInput {
         text: format!("to {committed}"),

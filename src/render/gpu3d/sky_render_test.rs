@@ -14,11 +14,12 @@ pub(in crate::render) fn use_unbounded_sky(renderer: &mut Renderer3D, device: &w
 }
 
 /// The atmosphere's background as it was before sky shaders split it into
-/// `far_dir` and `background`, word for word.
+/// `far_dir` and `background`, word for word but for the far plane's
+/// depth (0 since the scene depth became reverse-Z).
 const ORIGINAL_FS_SKY: &str = "
 @fragment
 fn fs_sky_original(in: FullScreen) -> @location(0) vec4<f32> {
-    let far = frame.inv_view_proj * vec4<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0, 1.0, 1.0);
+    let far = frame.inv_view_proj * vec4<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0, 0.0, 1.0);
     let dir = normalize(far.xyz / far.w - frame.camera.xyz);
     var light = sky_radiance(dir) + stars(dir);
     let sun = dot(dir, frame.sun_dir.xyz);
@@ -67,7 +68,7 @@ fn use_sky_source(renderer: &mut Renderer3D, device: &wgpu::Device, sky: &str, e
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            depth_compare: Some(SCENE_DEPTH_NEARER_OR_EQUAL),
             stencil: Default::default(),
             bias: Default::default(),
         }),

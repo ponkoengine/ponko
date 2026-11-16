@@ -176,6 +176,29 @@ pub struct PonkoDrawParams {
     pub region: PonkoRect,
 }
 
+/// Coordinate space for immediate sprite draws; preserves the existing descriptor layout.
+#[repr(C)]
+#[allow(non_camel_case_types)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PonkoDrawSpace {
+    /// World units through the camera.
+    PONKO_DRAW_SPACE_WORLD = 0,
+    /// Window pixels over the world, ignoring the camera.
+    PONKO_DRAW_SPACE_SCREEN = 1,
+}
+
+/// Returns draw options with a named coordinate space.
+/// ```
+/// use ponko_ffi::*;
+/// let p = ponko_draw_params_with_space(ponko_draw_params_default(), PonkoDrawSpace::PONKO_DRAW_SPACE_SCREEN);
+/// assert!(p.screen);
+/// ```
+#[unsafe(no_mangle)]
+pub extern "C" fn ponko_draw_params_with_space(mut params: PonkoDrawParams, space: PonkoDrawSpace) -> PonkoDrawParams {
+    params.screen = space == PonkoDrawSpace::PONKO_DRAW_SPACE_SCREEN;
+    params
+}
+
 /// Default draw options: no scale, rotation or tint, centered.
 /// ```
 /// assert!(!ponko_ffi::ponko_draw_params_default().screen);
@@ -326,7 +349,11 @@ pub(crate) fn draw_params_from_c(p: &PonkoDrawParams) -> DrawParams {
         .with_color(to_c(p.color))
         .with_z(p.z)
         .with_pivot(to_c(p.pivot))
-        .with_screen(p.screen);
+        .with_space(if p.screen {
+            ponko::prelude::DrawSpace::Screen
+        } else {
+            ponko::prelude::DrawSpace::World
+        });
     params.region = rect_from_c(p.has_region, p.region);
     params
 }

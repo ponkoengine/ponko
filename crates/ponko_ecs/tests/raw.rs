@@ -71,3 +71,46 @@ fn the_raw_view_spawns_and_inserts_through_pointers() {
     assert!(!unsafe { world.raw().insert_dynamic(spawned, small, (&a as *const Small).cast()) });
     assert_eq!(world.len(), 2);
 }
+
+#[test]
+fn a_deferred_raw_spawn_places_its_values_at_the_reserved_id() {
+    let mut world = World::new();
+    let small = world.register::<Small>();
+    let mut commands = world.commands();
+    let placed = commands.spawn_with(move |w, e| {
+        let value = Small(11);
+        // SAFETY: the pointer points to a valid `Small`, which needs no
+        // drop, so the world may take a copy.
+        unsafe {
+            w.raw()
+                .spawn_reserved_dynamic(e, &[(small, (&value as *const Small).cast())])
+        };
+        true
+    });
+    // A spawn that reports failure places nothing and frees its id.
+    let refused = commands.spawn_with(|_, _| false);
+    assert!(!world.is_alive(placed));
+    world.apply(&mut commands);
+    assert_eq!(world.get::<Small>(placed), Some(&Small(11)));
+    assert!(!world.is_alive(refused));
+    let reused = commands.spawn((Marker,));
+    world.apply(&mut commands);
+    assert_eq!(reused.index(), refused.index());
+    assert_ne!(reused, refused);
+    assert_eq!(world.len(), 2);
+}
+
+#[test]
+#[should_panic(expected = "isn't a reserved id of this world")]
+fn a_raw_spawn_at_an_id_nobody_reserved_panics() {
+    let mut world = World::new();
+    let id = world.register::<Small>();
+    let taken = world.spawn((Marker,));
+    let value = Small(1);
+    // SAFETY: as above; the call panics before taking the value.
+    unsafe {
+        world
+            .raw()
+            .spawn_reserved_dynamic(taken, &[(id, (&value as *const Small).cast())])
+    };
+}

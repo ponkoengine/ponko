@@ -99,6 +99,8 @@ pub use lod_bench::{LodBench, LodFrame, LodMemory, LodPath, LodScene};
 mod scene_bench;
 #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "bench-internals")))]
 pub use scene_bench::{SceneBench, SceneFrame, SceneKind, SceneSetup};
+#[cfg(test)]
+mod cook_shader_parts_test;
 mod resources;
 mod screen_space;
 mod shader_checks;
@@ -115,6 +117,7 @@ mod stencil_render_test;
 mod targets;
 mod variants;
 mod vertex_motion;
+mod views;
 use super::capabilities::GpuLimits;
 use crate::render::traffic::{self, Counted, MAX_WRITES, MIRRORED, Mirror, NewBuffer, Synced, Upload};
 pub(crate) use draw_order::StateChanges;
@@ -144,7 +147,9 @@ pub(crate) use variants::{Instancing, Pass, PipelineRole, ShaderVariant, Sides};
 
 use glam::{Mat4, Vec3};
 
+#[cfg(test)]
 use super::gpu::GpuTexture;
+use super::gpu_textures::TextureTable;
 use super::lights::LightTextures;
 use super::taa::{self, Taa};
 use super::timer::GpuTimer;
@@ -160,6 +165,16 @@ use crate::three::{Frame3D, MaterialOverride, Scene3D};
 use crate::three::{ShaderDiagnostic, ShaderKind};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// The scene depth is reverse-Z (`three::reverse_z_perspective`): the near
+/// plane at 1, the far plane (and the sky) at 0, so it starts cleared to 0
+/// and nearer means greater. Shadow maps keep standard depth (cleared to 1,
+/// `Less`), as their samplers compare.
+const SCENE_DEPTH_CLEAR: f32 = 0.0;
+/// The scene depth's test for what writes it: nearer is greater.
+const SCENE_DEPTH_NEARER: wgpu::CompareFunction = wgpu::CompareFunction::Greater;
+/// The scene depth's test for what only reads it (the sky at the far
+/// plane, particles): as near or nearer.
+const SCENE_DEPTH_NEARER_OR_EQUAL: wgpu::CompareFunction = wgpu::CompareFunction::GreaterEqual;
 /// The usage the sun's shadow map adds in tests, so they can read it back
 /// (`Renderer3D::shadow_map_bytes`); otherwise none.
 const SHADOW_READBACK: wgpu::TextureUsages = if cfg!(test) {
@@ -247,6 +262,8 @@ pub(crate) struct Renderer3D {
     scene_layout: wgpu::BindGroupLayout,
     /// The scene bind group of passes that can't see the scene.
     no_scene: wgpu::BindGroup,
+    /// `no_scene`'s colour stand-in, kept for the GPU memory report.
+    no_scene_color: wgpu::TextureView,
     /// The global illumination atlas's stand-in while it's off.
     no_gi: wgpu::TextureView,
     dummy_depth: wgpu::TextureView,
@@ -314,6 +331,8 @@ pub(crate) struct Renderer3D {
     /// The depth grid occlusion culling tests against.
     occlusion: super::occlusion::Occlusion,
     particles: super::particles::Particles,
+    /// `ctx.debug`'s 3D lines (made the first time a frame has one).
+    debug_lines: Option<Box<super::debug_lines::DebugLines>>,
 
     // ---- Scene targets: replaced when the size or the passes change ----
     targets: Option<Targets>,
@@ -344,6 +363,13 @@ pub(crate) struct Renderer3D {
     // ---- Kept from frame to frame ----
     /// What the temporal effects keep (see `history.rs`).
     history: History,
+    /// The window views' own frame state (`views.rs`), in
+    /// `SceneSettings::views` order.
+    extra_views: Vec<views::ViewState>,
+    /// Whether a window view is being prepared or drawn: the steps the
+    /// main frame does for every view (skinning, compute passes, shadow
+    /// maps, target cameras, probes) are skipped.
+    extra: bool,
     frame_buffer: wgpu::Buffer,
     /// What `frame_buffer` holds (see `sync_frame`).
     frame_mirror: Mirror,
@@ -551,7 +577,7 @@ impl Renderer3D {
             immediate_size: 0,
         });
         // Passes that can't see the scene bind a 1x1 stand-in (black, far).
-        let (no_scene, dummy_depth) = {
+        let (no_scene, no_scene_color, dummy_depth) = {
             let tiny = |label, format, samples, usage| {
                 device
                     .create_texture(&wgpu::TextureDescriptor {
@@ -579,6 +605,7 @@ impl Renderer3D {
             );
             (
                 scene_bind_group(device, &scene_layout, &color, &depth, scene_depth_sampler.as_ref()),
+                color,
                 depth,
             )
         };
@@ -748,7 +775,7 @@ impl Renderer3D {
             Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_compare: Some(SCENE_DEPTH_NEARER_OR_EQUAL),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -943,13 +970,17 @@ impl Renderer3D {
                 storage_read,
                 storage_write,
                 storage_buffers: Vec::new(),
+                freed_material: None,
                 storage_dummy,
                 past_copy: None,
             },
             shaders,
             scene_layout,
             no_scene,
+            no_scene_color,
             history: History::default(),
+            extra_views: Vec::new(),
+            extra: false,
             post,
             effects: Effects::default(),
             custom_passes: Default::default(),
@@ -990,6 +1021,7 @@ impl Renderer3D {
             compute_layouts,
             skinning: skinning::Skinning::new(device, GpuLimits::of(device).gpu_skinning()),
             particles,
+            debug_lines: None,
             occlusion: super::occlusion::Occlusion::new(device, compute),
             occluded: 0,
             shadows: ShadowMaps {
@@ -1232,7 +1264,7 @@ impl Renderer3D {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        textures: &[GpuTexture],
+        textures: &dyn TextureTable,
         texture: Option<u32>,
         array: Option<u32>,
     ) {
@@ -1244,11 +1276,16 @@ impl Renderer3D {
 
     /// Binds the materials that read texture `texture` again, keeping their
     /// maps on (see `Resources::texture_replaced`).
-    pub fn texture_replaced(&mut self, device: &wgpu::Device, textures: &[GpuTexture], texture: u32) {
+    pub fn texture_replaced(&mut self, device: &wgpu::Device, textures: &dyn TextureTable, texture: u32) {
         self.resources.texture_replaced(device, textures, texture);
     }
 
-    pub fn create_material(&mut self, device: &wgpu::Device, desc: &GpuMaterialDesc, textures: &[GpuTexture]) -> u32 {
+    pub fn create_material(
+        &mut self,
+        device: &wgpu::Device,
+        desc: &GpuMaterialDesc,
+        textures: &dyn TextureTable,
+    ) -> u32 {
         self.shadow_cache.invalidate();
         let shaders = self.shaders.sets.len() as u32;
         let id = self.resources.create_material(device, desc, textures, shaders);
@@ -1273,7 +1310,7 @@ impl Renderer3D {
         queue: &wgpu::Queue,
         id: u32,
         desc: &GpuMaterialDesc,
-        textures: &[GpuTexture],
+        textures: &dyn TextureTable,
     ) -> bool {
         if (id as usize) < self.resources.materials.len() {
             self.shadow_cache.invalidate();
@@ -1330,6 +1367,9 @@ impl Renderer3D {
         if let Some(targets) = &self.targets {
             targets.tally_memory(t);
         }
+        for view in &self.extra_views {
+            view.tally_memory(t);
+        }
         self.render_targets.tally_memory(t);
         self.post.tally_memory(t);
         if let Some(taa) = &self.screen.taa {
@@ -1345,11 +1385,15 @@ impl Renderer3D {
         self.lights.tally_memory(t, C::Other);
         self.occlusion.tally_memory(t);
         self.particles.tally_memory(t);
+        if let Some(lines) = &self.debug_lines {
+            lines.tally_memory(t);
+        }
         t.buffer(C::Other, "frame uniforms", &self.frame_buffer);
         t.texture(C::Other, "sky lookup", &self.sky_texture);
         for (label, view) in [
             ("sky view lookup", &self.sky_view),
             ("probe stand-in", &self.no_gi),
+            ("scene color stand-in", &self.no_scene_color),
             ("depth stand-in", &self.dummy_depth),
             ("decal stand-in", &self.no_decal_view),
         ] {
@@ -1423,10 +1467,17 @@ impl Renderer3D {
     }
 
     /// Material `id` was freed: it draws as the default material from now
-    /// on, and lets go of its textures.
-    pub fn free_material(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, textures: &[GpuTexture]) {
+    /// on, and lets go of its textures and its own buffer and bind group:
+    /// freed materials share the default's (material ids aren't reused).
+    pub fn free_material(&mut self, device: &wgpu::Device, _queue: &wgpu::Queue, id: u32, textures: &dyn TextureTable) {
+        if (id as usize) >= self.resources.materials.len() {
+            return;
+        }
+        self.shadow_cache.invalidate();
+        let shaders = self.shaders.sets.len() as u32;
+        self.resources.free_material(device, id, textures, shaders);
         let default = GpuMaterialDesc::new(&crate::three::MaterialDesc::default());
-        self.update_material(device, queue, id, &default, textures);
+        self.assign_stencil(id, &default);
     }
 
     /// Material shader `id` (an index into `shaders`) was freed: its
@@ -1456,7 +1507,13 @@ impl Renderer3D {
     }
 
     /// Texture array `id` was freed: it reads as the white one from now on.
-    pub fn free_texture_array(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, textures: &[GpuTexture]) {
+    pub fn free_texture_array(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: u32,
+        textures: &dyn TextureTable,
+    ) {
         let Some(view) = self.resources.arrays.get_mut(id as usize) else {
             return;
         };
@@ -1535,6 +1592,9 @@ impl Renderer3D {
             .check(device, queue, &self.instances, 0, "instances");
         self.moved.check(device, queue);
         self.particles.check_mirrors(device, queue);
+        if let Some(lines) = &self.debug_lines {
+            lines.check_mirrors(device, queue);
+        }
         self.skinning.check_mirrors(device, queue);
         self.environment.check_mirrors(device, queue);
         if let Some(ao) = &self.screen.ao {
@@ -1703,6 +1763,7 @@ impl Renderer3D {
             + (parts + view_parts) * 2
             + self.lists.views.len() * usize::from(self.atmosphere)
             + self.particles.draw_count()
+            + self.debug_lines.as_ref().map_or(0, |l| l.draw_count())
             + self.effects.frame.len()
             + self.effects.target_frame.len()
             + usize::from(self.screen.ao_enabled) * 2
@@ -1771,10 +1832,10 @@ impl Renderer3D {
         [count(&self.lists.runs), shadows]
     }
 
-    /// Per mesh: (mesh, camera models, camera triangles, shadow models,
-    /// shadow triangles), for meshes drawn this frame, in mesh order.
-    pub fn mesh_costs(&self) -> Vec<(u32, usize, usize, usize, usize)> {
-        let mut out: Vec<(u32, usize, usize, usize, usize)> = Vec::new();
+    /// Visits each draw run as (mesh, camera models, camera triangles,
+    /// shadow models, shadow triangles). A mesh can occur in multiple runs;
+    /// callers aggregate them without an intermediate allocation.
+    pub fn visit_mesh_costs(&self, mut visit: impl FnMut(u32, usize, usize, usize, usize)) {
         let tris = |mesh: u32| -> usize {
             self.resources.meshes[self.base(mesh) as usize]
                 .parts
@@ -1785,20 +1846,11 @@ impl Renderer3D {
         let mut add = |mesh: u32, count: u32, shadow: bool| {
             // A material override counts towards its mesh.
             let mesh = self.material_override(mesh).map_or(mesh & !FADED, |o| o.mesh);
-            let at = match out.binary_search_by_key(&mesh, |e| e.0) {
-                Ok(i) => i,
-                Err(i) => {
-                    out.insert(i, (mesh, 0, 0, 0, 0));
-                    i
-                }
-            };
             let (n, t) = (count as usize, tris(mesh) * count as usize);
             if shadow {
-                out[at].3 += n;
-                out[at].4 += t;
+                visit(mesh, 0, 0, n, t);
             } else {
-                out[at].1 += n;
-                out[at].2 += t;
+                visit(mesh, n, t, 0, 0);
             }
         };
         for &(mesh, _, count) in &self.lists.runs {
@@ -1809,7 +1861,6 @@ impl Renderer3D {
                 add(mesh, count, true);
             }
         }
-        out
     }
 
     /// Whether this frame has anything to draw.
@@ -1817,6 +1868,7 @@ impl Renderer3D {
         self.static_batches.iter().any(Option::is_some)
             || !self.lists.runs.is_empty()
             || self.particles.has_draws()
+            || self.debug_lines.as_ref().is_some_and(|l| l.count() > 0)
             || !self.lists.computes.is_empty()
             || !self.lists.scene_computes.is_empty()
     }

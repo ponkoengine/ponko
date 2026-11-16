@@ -72,6 +72,7 @@ impl Ao {
                 texture(4, wgpu::TextureSampleType::Float { filterable: false }, false),
                 texture(3, wgpu::TextureSampleType::Float { filterable: false }, false),
                 texture(1, wgpu::TextureSampleType::Float { filterable: false }, false),
+                texture(5, wgpu::TextureSampleType::Float { filterable: false }, false),
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -216,9 +217,12 @@ impl Ao {
         size: (u32, u32),
         depth: &wgpu::TextureView,
         dummy_color: &wgpu::TextureView,
-        reflections: Option<&wgpu::TextureView>,
+        reflections: Option<(&wgpu::TextureView, &wgpu::TextureView)>,
         velocity: &wgpu::TextureView,
     ) -> AoTargets {
+        // With reflections: the first level of their image, and their
+        // cone's spread for its alpha.
+        let spread = reflections.map_or(dummy_color, |r| r.1);
         let target = |half: bool, format| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -239,7 +243,7 @@ impl Ao {
         };
         let raw = target(self.half, wgpu::TextureFormat::Rg8Unorm);
         let output = reflections
-            .cloned()
+            .map(|r| r.0.clone())
             .unwrap_or_else(|| target(false, wgpu::TextureFormat::Rg8Unorm));
         let history = std::array::from_fn(|_| {
             if self.temporal {
@@ -272,6 +276,10 @@ impl Ao {
                     wgpu::BindGroupEntry {
                         binding: 2,
                         resource: self.uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(spread),
                     },
                 ],
             })

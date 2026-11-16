@@ -25,7 +25,7 @@ pub fn build(ctx: &mut Ctx) {
         .name("gift");
     let buy = ui.button(root, "Buy selected item");
     buy.layout(UiLayout::fixed(220.0, 40.0)).enabled(false).name("buy");
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     // ANCHOR_END: shop_tree
 
     // ANCHOR: shop_dialog
@@ -56,7 +56,7 @@ pub fn shop(ctx: &mut Ctx) {
         ui.set_text(buy, format!("Buy item {item}"));
         ui.set_text(message, format!("Buy item {item}?"));
     } else if clicked == "buy" {
-        ui.push_screen(dialog, true);
+        ui.push_modal(dialog);
     } else if clicked == "confirm" || clicked == "cancel" {
         ui.pop_screen();
         if clicked == "confirm" {

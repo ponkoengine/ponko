@@ -3,7 +3,7 @@
 //! (`fuzz/`).
 #![cfg(feature = "3d")]
 
-use ponko::assets::MemorySource;
+use ponko::assets::{AssetSource, MemorySource};
 use ponko::prelude::*;
 
 /// A triangle on node 0 with a two-key animation channel whose target is

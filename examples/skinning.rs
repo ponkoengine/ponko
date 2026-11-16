@@ -25,10 +25,9 @@ struct Bend(ponko::anim::AnimationClip);
 fn chain() -> Skeleton {
     Skeleton::new(
         (0..JOINTS)
-            .map(|i| Joint {
-                name: format!("joint_{i}"),
-                parent: i.checked_sub(1),
-                rest: Transform::at(Vec3::Y * if i == 0 { 0.0 } else { STEP }),
+            .map(|i| {
+                Joint::new(format!("joint_{i}"), i.checked_sub(1))
+                    .with_rest(Transform::at(Vec3::Y * if i == 0 { 0.0 } else { STEP }))
             })
             .collect(),
     )
@@ -121,13 +120,7 @@ fn bend_clip(skeleton: &Skeleton) -> ponko::anim::AnimationClip {
     ponko::anim::AnimationClip::new(
         "bend",
         skeleton,
-        vec![JointAnimation {
-            joint: 1,
-            name: "joint_1".into(),
-            translation: None,
-            rotation: Some(rotation),
-            scale: None,
-        }],
+        vec![JointAnimation::new(1, "joint_1").with_rotation(rotation)],
     )
 }
 // ANCHOR_END: clip_code
@@ -257,11 +250,7 @@ fn main() {
                     ctx.world.spawn((
                         Transform::default(),
                         Model::new(ball),
-                        AttachToJoint {
-                            skeleton: tentacle,
-                            joint: tip,
-                            offset: Transform::at(vec3(0.0, 0.12, 0.0)),
-                        },
+                        AttachToJoint::new(tentacle, tip).with_offset(Transform::at(vec3(0.0, 0.12, 0.0))),
                     ));
                     // ANCHOR_END: skin_parts
                 }

@@ -62,7 +62,7 @@ fn label(ctx: &mut Ctx, offset: Vec2, width: f32, text: &str, rich: bool) -> cra
         .layout(layout)
         .id();
     ctx.ui.set_rich(label, rich);
-    ctx.ui.push_screen(root, false);
+    ctx.ui.push_modeless(root);
     ctx.draw_retained_ui();
     label
 }
@@ -191,10 +191,10 @@ fn labels_are_laid_out_as_wide_as_they_are_drawn() {
             ctx.ui.set_scale(ui_scale);
             let root = ctx.ui.root().layout(UiLayout::fill()).id();
             let mut layout = UiLayout::auto();
-            layout.style_mut().position = taffy::Position::Absolute;
+            layout.unstable_style_mut().position = taffy::Position::Absolute;
             let text = "Settings and more";
             let id = ctx.ui.label(root, text).size(17.0).layout(layout).id();
-            ctx.ui.push_screen(root, false);
+            ctx.ui.push_modeless(root);
             ctx.draw_retained_ui();
             let laid_out = ctx.ui.rect(id).unwrap().size().x;
             let drawn = ctx.gfx.measure_text_ex(text, Font::DEFAULT, 17.0 * ui_scale).x;

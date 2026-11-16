@@ -71,7 +71,7 @@ fn headless_frames_lay_the_ui_out_in_the_virtual_window() {
         })
         .run_headless(1, |ctx| {
             let root = ctx.ui.root().layout(UiLayout::fill()).name("root").id();
-            ctx.ui.push_screen(root, false);
+            ctx.ui.push_modeless(root);
         });
     let rect = rect.borrow().unwrap();
     assert_eq!((rect.min, rect.max), (Vec2::ZERO, vec2(640.0, 480.0)));
@@ -94,7 +94,7 @@ fn form(ctx: &mut Ctx) {
         .layout(UiLayout::fixed(100.0, 30.0))
         .enabled(false)
         .name("form.off");
-    ctx.ui.push_screen(root, false);
+    ctx.ui.push_modeless(root);
     let modal = ctx
         .ui
         .root()
@@ -120,7 +120,7 @@ fn form_game(events: &Events) -> Game {
                 events.borrow_mut().push((tick, event));
                 // OK opens the modal confirmation; Yes closes it.
                 if event.clicked() == ctx.ui.find("form.ok") {
-                    ctx.ui.push_screen(confirm, true);
+                    ctx.ui.push_modal(confirm);
                 } else if event.clicked() == ctx.ui.find("confirm.yes") {
                     ctx.ui.pop_screen();
                 }

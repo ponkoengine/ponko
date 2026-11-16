@@ -72,6 +72,16 @@ pub(crate) const MAX_RENDER_SCALE: f32 = 2.0;
 /// let ao = ponko::render::AmbientOcclusion { enabled: true, radius: 1.0, ..Default::default() };
 /// assert_eq!(ao.slices, 3);
 /// ```
+///
+/// # Defaults and cost
+///
+/// [`Default`] is off, with a radius of 1, an intensity of 1, 3 slices and 6
+/// steps. While off it costs nothing. On, it adds a full-screen pass before
+/// the opaque lighting (shared with contact shadows, [`Post::contact_shadows`]),
+/// in which each pixel takes about `slices × steps × 2` depth samples (36 at
+/// the default); [`Post::ao_half_resolution`] traces a quarter of the pixels
+/// and [`Post::ao_temporal`] adds a history image. It needs compute shaders:
+/// WebGL2 draws without it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AmbientOcclusion {
     /// Enable screen-space occlusion of ambient light only. Ignored on
@@ -213,6 +223,15 @@ impl DepthOfField {
 
     /// The blur, as a fraction of the scene's height, of something `depth`
     /// world units in front of the camera (what the pass computes).
+    ///
+    /// ```
+    /// use ponko::render::DepthOfField;
+    /// let dof = DepthOfField { enabled: true, focus_distance: 10.0, focus_range: 2.0, blur: 0.01 };
+    /// assert_eq!(dof.blur_at(10.0), 0.0, "in focus");
+    /// assert_eq!(dof.blur_at(11.0), 0.0, "inside the sharp band");
+    /// assert!(dof.blur_at(30.0) > dof.blur_at(15.0), "blurrier the further out of focus");
+    /// assert!(dof.blur_at(1000.0) <= dof.blur);
+    /// ```
     #[must_use]
     pub fn blur_at(&self, depth: f32) -> f32 {
         if !self.is_on() {
@@ -242,6 +261,21 @@ impl DepthOfField {
 ///
 /// Two looks blend with [`Post::lerp`], and [`PostVolume`]s blend them by
 /// where the camera is.
+///
+/// # Defaults and cost
+///
+/// [`Default`] draws at the window's resolution with 4x multisampling and
+/// no post antialiasing, ACES tone mapping, a bloom of 0.05, and ambient
+/// occlusion, contact shadows, reflections, depth of field, vignette and the
+/// lens effects off; exposure, contrast, saturation, temperature and tint are
+/// neutral. What is off costs nothing. What is on adds work, as each field
+/// says: a pass for a `render_scale` other than 1, one full-screen pass for
+/// FXAA and three for SMAA, a motion pass, a resolve pass and three
+/// full-size HDR images for TAA, a full-screen pass for ambient occlusion
+/// and contact shadows together, a half-resolution pass for reflections,
+/// and multisampling at 2 instead of 4 saves about a third of the GPU time on
+/// a large screen. On WebGL2 the compute-based ones (TAA, ambient occlusion,
+/// contact shadows, reflections) are off.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct Post {
@@ -259,12 +293,14 @@ pub struct Post {
     /// Ambient-only GTAO, before opaque lighting.
     pub ambient_occlusion: AmbientOcclusion,
     /// Trace GTAO at half width and height, then bilaterally upsample.
-    /// Contact shadows remain full resolution. Default false.
+    /// Contact shadows remain full resolution. Default false. Only matters
+    /// where ambient occlusion runs (not on WebGL2).
     pub ao_half_resolution: bool,
     /// Accumulate GTAO over frames with rotating slices, following the
     /// camera and moving models (the same motion vectors as TAA) and
     /// rejecting history whose depth disagrees. Independent of TAA. Default
-    /// false; enable to trade history cost for fewer samples.
+    /// false; enable to trade history cost for fewer samples. Only matters
+    /// where ambient occlusion runs (not on WebGL2).
     pub ao_temporal: bool,
     /// Contact shadows: how far, in world units, each pixel looks toward
     /// the sun across the depth buffer for something close that blocks
@@ -272,6 +308,8 @@ pub struct Post {
     /// under feet, pebbles and cups, in creases. 0 (the default) is off;
     /// 0.3 suits people and props. Only things on screen cast them. Shares
     /// a full-screen pass with [`AmbientOcclusion`] (one pass for both).
+    /// **WebGL2:** off whatever the value, as ambient occlusion is: it needs
+    /// compute shaders.
     pub contact_shadows: f32,
     /// Screen-space reflections: how strongly glossy surfaces (roughness
     /// below about 0.7, fully below 0.4) reflect what's on screen, 0 to 1,
@@ -284,8 +322,12 @@ pub struct Post {
     /// reflection. The colors come from the last frame's image, so the
     /// first frame after a camera cut reflects only the environment. A
     /// half-resolution pass after the depth prepass; [`AntiAliasing::Taa`]
-    /// smooths its grain. Reflections use depth-aware filtered mips as roughness
-    /// increases; the blur footprint is bounded in screen pixels. 0 (the default) is off.
+    /// smooths its grain. The blur follows the cone a rough surface
+    /// reflects: it grows with roughness and with how far the reflected
+    /// ray went, so a contact reflection stays sharp on a rough floor
+    /// while a distant one blurs (depth-aware filtered mips, up to about 32
+    /// pixels). 0 (the default) is off. **WebGL2:** off whatever the value:
+    /// it needs compute shaders.
     /// ```
     /// use ponko::prelude::*;
     /// assert_eq!(ponko::render::Post::default().ssr, 0.0);
@@ -316,6 +358,11 @@ pub struct Post {
     /// at all, so turn on FXAA or SMAA there. A count that isn't used is
     /// said once on stderr and is the Multisampling fallback in
     /// [`GpuCapabilities`](crate::render::GpuCapabilities).
+    ///
+    /// With several cameras ([`d3::View`](crate::d3::View)) the main
+    /// camera's count applies to every view, and a view's own `msaa` is
+    /// ignored: every 3D pipeline is built for the renderer's one sample
+    /// count, and a count per view would build and keep a second set of them.
     /// ```no_run
     /// # use ponko::prelude::*;
     /// Game::new("game", 1280, 720)
@@ -633,6 +680,16 @@ pub struct PostVolume {
 
 impl PostVolume {
     /// A box of `size` around `center`, fading out over `blend_distance`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::render::{Post, PostVolume};
+    /// let mut dim = Post::default();
+    /// dim.exposure = 1.0;
+    /// let cave = PostVolume::new(vec3(0.0, 2.0, -30.0), vec3(20.0, 6.0, 20.0), 5.0, dim);
+    /// assert_eq!(cave.min, vec3(-10.0, -1.0, -40.0));
+    /// assert_eq!(cave.max, vec3(10.0, 5.0, -20.0));
+    /// ```
     #[must_use]
     pub fn new(center: Vec3, size: Vec3, blend_distance: f32, post: Post) -> Self {
         let half = size.abs() * 0.5;

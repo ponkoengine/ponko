@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use ponko::assets::MemorySource;
 #[allow(unused_imports)]
 use ponko::d2::{Sprite, Transform as Transform2D};
 #[allow(unused_imports)]

@@ -473,6 +473,8 @@ pub const PONKO_SYSTEM_UPDATE_PARTICLES: u32 = 11;
 pub const PONKO_SYSTEM_UPDATE_AUDIO3D: u32 = 12;
 /// 2D particle drawing, after the sprites.
 pub const PONKO_SYSTEM_DRAW_PARTICLES: u32 = 13;
+/// 2D skeletons advancing and posing, at the end of `PONKO_PHASE_ANIMATE`.
+pub const PONKO_SYSTEM_UPDATE_SKELETONS2D: u32 = 14;
 
 /// Removes systems by id (Rust's `Game::remove`): an id from
 /// `ponko_game_add_system_id`, or a `PONKO_SYSTEM_*` constant for a
@@ -755,7 +757,11 @@ pub unsafe extern "C" fn ponko_game_profile_headless(
 
 /// Opens the window and runs the game until it quits, then frees `game`.
 /// `setup` (may be null) runs once first: load textures, spawn entities.
-/// On macOS it must be called from the main thread.
+/// On macOS it must be called from the main thread. When the game can't
+/// start on this machine (no usable GPU or graphics device, no window or
+/// event loop, a build without the `window` feature) it returns
+/// `PONKO_UNSUPPORTED` and `ponko_last_error()` says why; other failures
+/// keep their statuses.
 /// # Safety
 /// Live game (consumed even on failure); callbacks and `user` valid until it returns.
 /// ```no_run
@@ -769,8 +775,7 @@ pub unsafe extern "C" fn ponko_game_run(game: *mut PonkoGame, setup: PonkoSystem
     boundary(|| {
         // SAFETY: forwarded caller contract.
         let game = unsafe { take(game)? };
-        game.run(setup_fn(setup, user));
-        Ok(())
+        game.try_run(setup_fn(setup, user)).map_err(crate::startup_error)
     })
 }
 

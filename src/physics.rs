@@ -6,6 +6,8 @@
 //! Physics is opt-in per entity, so the million-entity paths (spatial grid,
 //! flow fields) stay as fast as before.
 
+#![deny(missing_docs)]
+
 use std::sync::mpsc;
 
 use rapier2d::prelude as rp;
@@ -17,6 +19,9 @@ use crate::physics_links::LinkTable;
 use crate::{ctx::Ctx, events::Events};
 use glam::Vec2;
 use ponko_ecs::{Component, Entity, With, World};
+
+mod query;
+pub use query::{Penetration, PointHit, QueryFilter, RayHit};
 
 /// Makes an entity a physics body. It also needs a [`Collider`] and a
 /// [`d2::Transform`](crate::d2::Transform).
@@ -54,6 +59,13 @@ impl Default for RigidBody {
 
 impl RigidBody {
     /// A body moved by gravity and collisions.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let crate_body = ponko::d2::RigidBody::dynamic();
+    /// assert_eq!(crate_body.kind, BodyKind::Dynamic);
+    /// assert_eq!(crate_body.gravity_scale, 1.0);
+    /// ```
     #[must_use]
     pub const fn dynamic() -> Self {
         Self {
@@ -66,6 +78,12 @@ impl RigidBody {
         }
     }
     /// A body that never moves.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let wall = ponko::d2::RigidBody::fixed();
+    /// assert_eq!(wall.kind, BodyKind::Fixed);
+    /// ```
     #[must_use]
     pub const fn fixed() -> Self {
         Self {
@@ -74,6 +92,12 @@ impl RigidBody {
         }
     }
     /// A body only you move.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let platform = ponko::d2::RigidBody::kinematic();
+    /// assert_eq!(platform.kind, BodyKind::Kinematic);
+    /// ```
     #[must_use]
     pub const fn kinematic() -> Self {
         Self {
@@ -172,6 +196,10 @@ pub struct Collider {
     /// Where the shape sits relative to the entity's position.
     #[serde(default)]
     pub offset: Vec2,
+    /// Which colliders it touches, and which queries see it (every group
+    /// by default). Saves written before this field load with every group.
+    #[serde(default)]
+    pub groups: CollisionGroups,
 }
 
 // Collider defaults for fields missing from JSON, as in `Collider::of`.
@@ -191,19 +219,38 @@ impl Collider {
             restitution: 0.0,
             sensor: false,
             offset: Vec2::ZERO,
+            groups: CollisionGroups::ALL,
         }
     }
     /// A circle.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let ball = ponko::d2::Collider::circle(8.0);
+    /// assert_eq!(ball.shape, ponko::d2::Shape::Circle { radius: 8.0 });
+    /// ```
     #[must_use]
     pub fn circle(radius: f32) -> Self {
         Self::of(Shape::Circle { radius })
     }
     /// A rectangle `size` wide and high.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let crate_shape = ponko::d2::Collider::rect(vec2(32.0, 16.0));
+    /// assert_eq!(crate_shape.shape, ponko::d2::Shape::Rect { size: vec2(32.0, 16.0) });
+    /// ```
     #[must_use]
     pub fn rect(size: Vec2) -> Self {
         Self::of(Shape::Rect { size })
     }
     /// A vertical capsule (good for characters).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let hero = ponko::d2::Collider::capsule(24.0, 8.0);
+    /// assert_eq!(hero.shape, ponko::d2::Shape::Capsule { height: 24.0, radius: 8.0 });
+    /// ```
     #[must_use]
     pub fn capsule(height: f32, radius: f32) -> Self {
         Self::of(Shape::Capsule { height, radius })
@@ -242,29 +289,147 @@ impl Collider {
         })
     }
     /// With this density.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let lead = ponko::d2::Collider::circle(8.0).density(11.0);
+    /// assert_eq!(lead.density, 11.0);
+    /// ```
     #[must_use]
     pub fn density(self, density: f32) -> Self {
         Self { density, ..self }
     }
     /// With this friction.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let ice = ponko::d2::Collider::rect(vec2(64.0, 8.0)).friction(0.02);
+    /// assert_eq!(ice.friction, 0.02);
+    /// ```
     #[must_use]
     pub fn friction(self, friction: f32) -> Self {
         Self { friction, ..self }
     }
     /// With this bounciness.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let rubber = ponko::d2::Collider::circle(8.0).restitution(0.9);
+    /// assert_eq!(rubber.restitution, 0.9);
+    /// ```
     #[must_use]
     pub fn restitution(self, restitution: f32) -> Self {
         Self { restitution, ..self }
     }
     /// As a sensor: reports overlaps, doesn't collide.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let trigger = ponko::d2::Collider::rect(vec2(64.0, 64.0)).sensor();
+    /// assert!(trigger.sensor);
+    /// ```
     #[must_use]
     pub fn sensor(self) -> Self {
         Self { sensor: true, ..self }
     }
     /// Shifted from the entity's position.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let head = ponko::d2::Collider::circle(4.0).offset(vec2(0.0, -12.0));
+    /// assert_eq!(head.offset, vec2(0.0, -12.0));
+    /// ```
     #[must_use]
     pub fn offset(self, offset: Vec2) -> Self {
         Self { offset, ..self }
+    }
+    /// In these collision groups: it touches only colliders whose groups
+    /// agree ([`CollisionGroups::touches`]), and only queries whose
+    /// [`QueryFilter::groups`] agree see it.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::d2::CollisionGroups;
+    /// const PLAYER: u32 = 1 << 0;
+    /// const DEBRIS: u32 = 1 << 1;
+    /// // Debris bumps into the player and the walls, never into other debris.
+    /// let shard = ponko::d2::Collider::circle(2.0).groups(CollisionGroups::new(DEBRIS, !DEBRIS));
+    /// assert!(!shard.groups.touches(shard.groups));
+    /// assert!(shard.groups.touches(CollisionGroups::new(PLAYER, u32::MAX)));
+    /// ```
+    #[must_use]
+    pub fn groups(self, groups: CollisionGroups) -> Self {
+        Self { groups, ..self }
+    }
+}
+
+/// Which 2D colliders touch which: a collider is a member of the groups in
+/// `memberships` (one bit each, 32 groups) and touches colliders whose
+/// memberships share a bit with its `filter`. Both sides must agree.
+/// Queries use the same test against [`QueryFilter::groups`]. The 2D form
+/// of `d3::CollisionGroups`, with the same rules.
+///
+/// ```
+/// use ponko::d2::CollisionGroups;
+/// const PLAYER: u32 = 1 << 0;
+/// const DEBRIS: u32 = 1 << 1;
+/// // Debris hits everything except other debris.
+/// let debris = CollisionGroups::new(DEBRIS, !DEBRIS);
+/// assert!(!debris.touches(debris));
+/// assert!(debris.touches(CollisionGroups::new(PLAYER, u32::MAX)));
+/// assert_eq!(CollisionGroups::default(), CollisionGroups::ALL);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(C)]
+pub struct CollisionGroups {
+    /// The groups this collider is in.
+    pub memberships: u32,
+    /// The groups it touches.
+    pub filter: u32,
+}
+
+impl Default for CollisionGroups {
+    fn default() -> Self {
+        Self::ALL
+    }
+}
+
+impl CollisionGroups {
+    /// In every group, touching every group (the default).
+    pub const ALL: Self = Self::new(u32::MAX, u32::MAX);
+
+    /// Member of `memberships`, touching `filter`.
+    ///
+    /// ```
+    /// use ponko::d2::CollisionGroups;
+    /// let player = CollisionGroups::new(1, u32::MAX);
+    /// assert_eq!((player.memberships, player.filter), (1, u32::MAX));
+    /// ```
+    #[must_use]
+    pub const fn new(memberships: u32, filter: u32) -> Self {
+        Self { memberships, filter }
+    }
+
+    /// Whether colliders with these groups and `other` touch.
+    ///
+    /// ```
+    /// use ponko::d2::CollisionGroups;
+    /// let a = CollisionGroups::new(0b01, 0b10);
+    /// let b = CollisionGroups::new(0b10, 0b01);
+    /// assert!(a.touches(b) && b.touches(a));
+    /// assert!(!a.touches(a));
+    /// ```
+    #[must_use]
+    pub const fn touches(self, other: Self) -> bool {
+        self.memberships & other.filter != 0 && other.memberships & self.filter != 0
+    }
+
+    fn to_rp(self) -> rp::InteractionGroups {
+        rp::InteractionGroups::new(
+            rp::Group::from_bits_retain(self.memberships),
+            rp::Group::from_bits_retain(self.filter),
+            rp::InteractionTestMode::And,
+        )
     }
 }
 
@@ -294,43 +459,6 @@ impl Velocity {
     }
 }
 
-/// Which colliders a 2D query sees. Defaults to solid colliders, excluding sensors.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct QueryFilter {
-    /// Entity to look through.
-    pub exclude: Option<Entity>,
-    /// Include sensor colliders.
-    pub sensors: bool,
-}
-impl QueryFilter {
-    /// Excludes one entity.
-    #[must_use]
-    pub fn exclude(self, entity: Entity) -> Self {
-        Self {
-            exclude: Some(entity),
-            ..self
-        }
-    }
-    /// Includes sensors.
-    #[must_use]
-    pub fn with_sensors(self) -> Self {
-        Self { sensors: true, ..self }
-    }
-}
-
-/// What a ray hit.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RayHit {
-    /// The entity whose collider was hit.
-    pub entity: Entity,
-    /// Where the ray hit, in world pixels.
-    pub point: Vec2,
-    /// The surface's outward direction at `point`.
-    pub normal: Vec2,
-    /// From the ray's start to `point`.
-    pub distance: f32,
-}
-
 /// What the world last knew of one body, to notice your changes.
 #[derive(Clone, Copy)]
 struct Link {
@@ -345,6 +473,41 @@ struct Link {
 /// The physics world: `ctx.physics`. Add it to a game with
 /// [`Game::physics`](crate::game::Game::physics); then entities with
 /// [`RigidBody`], [`Collider`] and [`d2::Transform`](crate::d2::Transform) are simulated.
+///
+/// It also answers questions about the world as of the last step: rays
+/// ([`cast_ray`](Self::cast_ray), [`cast_ray_all`](Self::cast_ray_all)),
+/// swept shapes ([`cast_circle`](Self::cast_circle), [`cast_box`](Self::cast_box),
+/// [`cast_capsule`](Self::cast_capsule)), overlaps ([`overlap_point`](Self::overlap_point),
+/// [`overlap_circle`](Self::overlap_circle), [`overlap_box`](Self::overlap_box),
+/// [`overlap_capsule`](Self::overlap_capsule)), the nearest collider
+/// ([`closest_point`](Self::closest_point)) and how deep a shape sinks in
+/// ([`penetrations`](Self::penetrations)).
+///
+/// # Query rules
+///
+/// The 2D and 3D queries follow the same rules:
+///
+/// - **Direction.** Any non-zero direction works: it is normalized, so
+///   distances are in world units along it. A zero or non-finite direction
+///   finds nothing.
+/// - **Range.** `max_distance` may be `f32::INFINITY`; a negative or NaN
+///   one, or a non-finite origin or rotation, finds nothing.
+/// - **Starting inside.** A ray that starts inside a collider hits it at
+///   distance 0, at the origin, with a zero normal. A shape cast that starts
+///   touching or overlapping a collider hits it at distance 0, with the
+///   contact point and the normal that pushes the shape out.
+/// - **Order.** Lists of hits come nearest first; equal distances are
+///   ordered by entity id ([`Entity::to_bits`], lowest first). Overlap lists
+///   come in no particular order. A single-hit query with two hits at
+///   exactly the same distance returns either one.
+/// - **Sizes.** A radius or size below `f32::EPSILON` (or NaN) counts as
+///   that tiny shape.
+/// - **Filter.** Every query takes a [`QueryFilter`]: solid colliders in
+///   every group by default, no sensors. `.exclude(e)` looks through one
+///   entity, `.groups(g)` sees what a collider in those groups would touch,
+///   `.with_sensors()` sees sensors too.
+/// - **Timing.** Queries see the world as the last physics step left it: a
+///   body spawned or moved this tick is seen after the next step.
 pub struct Physics {
     world: rp::PhysicsWorld,
     /// By entity, packed: its memory follows the live bodies, not the
@@ -380,6 +543,13 @@ fn from_rp(v: rp::Vector) -> Vec2 {
 impl Physics {
     /// Physics pulling everything by `gravity` (pixels/s²; y is down, so
     /// `vec2(0.0, 980.0)` falls).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let physics = ponko::d2::Physics::new(vec2(0.0, 980.0));
+    /// assert_eq!(physics.gravity(), vec2(0.0, 980.0));
+    /// assert_eq!(physics.body_count(), 0);
+    /// ```
     #[must_use]
     pub fn new(gravity: Vec2) -> Self {
         let (collision_tx, collisions) = mpsc::channel();
@@ -405,10 +575,23 @@ impl Physics {
     }
 
     /// The pull on every dynamic body.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let physics = ponko::d2::Physics::new(Vec2::ZERO);
+    /// assert_eq!(physics.gravity(), Vec2::ZERO);
+    /// ```
     pub fn gravity(&self) -> Vec2 {
         self.gravity
     }
     /// Changes the pull on every dynamic body.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut physics = ponko::d2::Physics::new(Vec2::ZERO);
+    /// physics.set_gravity(vec2(0.0, 500.0)); // the moon
+    /// assert_eq!(physics.gravity().y, 500.0);
+    /// ```
     pub fn set_gravity(&mut self, gravity: Vec2) {
         self.gravity = gravity;
     }
@@ -447,12 +630,33 @@ impl Physics {
     }
 
     /// `true` while [`set_paused`](Self::set_paused) holds the step.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut physics = ponko::d2::Physics::default();
+    /// assert!(!physics.is_paused());
+    /// physics.set_paused(true);
+    /// assert!(physics.is_paused());
+    /// ```
     #[must_use]
     pub fn is_paused(&self) -> bool {
         self.paused
     }
 
     /// How many bodies are simulated.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// struct Bodies(usize);
+    /// fn count(ctx: &mut Ctx) {
+    ///     let n = ctx.physics.body_count();
+    ///     ctx.world.insert_resource(Bodies(n));
+    /// }
+    /// let world = Game::new("t", 1, 1).physics(Vec2::ZERO).sim_system(count).run_headless(3, |ctx| {
+    ///     ctx.world.spawn((ponko::d2::Transform::default(), ponko::d2::RigidBody::dynamic(), ponko::d2::Collider::circle(5.0)));
+    /// });
+    /// assert_eq!(world.resource::<Bodies>().0, 1);
+    /// ```
     pub fn body_count(&self) -> usize {
         self.world.bodies.len()
     }
@@ -464,75 +668,24 @@ impl Physics {
             .map(|c| Entity::from_bits(c.user_data as u64))
     }
 
-    fn query_filter(&self, filter: QueryFilter) -> rp::QueryFilter<'static> {
-        let mut result = rp::QueryFilter::default();
-        if !filter.sensors {
-            result = result.exclude_sensors();
-        }
-        if let Some(link) = filter.exclude.and_then(|entity| self.link(entity)) {
-            result = result.exclude_rigid_body(link.body);
-        }
-        result
-    }
-
-    /// The first collider a ray from `origin` towards `direction` hits
-    /// within `max_distance`, among those `filter` lets through (solid
-    /// colliders by default; `QueryFilter::default().with_sensors()` for
-    /// sensors too). Up to date as of the last physics step. A zero
-    /// direction or a non-finite origin hits nothing, as in 3D.
+    /// Pushes a dynamic body once (an explosion, a kick), in mass ×
+    /// pixels/s. Returns false if `e` isn't a physics body.
     ///
     /// ```
     /// use ponko::prelude::*;
-    /// fn look_right(ctx: &mut Ctx) {
-    ///     let filter = ponko::d2::QueryFilter::default();
-    ///     if let Some(hit) = ctx.physics.cast_ray(Vec2::ZERO, Vec2::X, 500.0, filter) {
-    ///         ctx.world.insert_resource(hit);
-    ///     }
+    /// struct Ball(Entity);
+    /// struct Kicked(bool);
+    /// fn kick(ctx: &mut Ctx) {
+    ///     let ball = ctx.world.resource::<Ball>().0;
+    ///     let kicked = ctx.physics.apply_impulse(ball, vec2(500.0, 0.0));
+    ///     ctx.world.insert_resource(Kicked(kicked));
     /// }
-    /// let world = Game::new("t", 1, 1).physics(Vec2::ZERO).sim_system(look_right).run_headless(2, |ctx| {
-    ///     ctx.world.spawn((ponko::d2::Transform::at(vec2(100.0, 0.0)), ponko::d2::RigidBody::fixed(), ponko::d2::Collider::circle(10.0)));
+    /// let world = Game::new("t", 1, 1).physics(Vec2::ZERO).sim_system(kick).run_headless(3, |ctx| {
+    ///     let ball = ctx.world.spawn((ponko::d2::Transform::default(), ponko::d2::RigidBody::dynamic(), ponko::d2::Collider::circle(5.0)));
+    ///     ctx.world.insert_resource(Ball(ball));
     /// });
-    /// // Queries see bodies once they have been stepped: the second tick hits.
-    /// assert_eq!(world.resource::<ponko::d2::Hit>().distance, 90.0);
+    /// assert!(world.resource::<Kicked>().0);
     /// ```
-    pub fn cast_ray(&self, origin: Vec2, direction: Vec2, max_distance: f32, filter: QueryFilter) -> Option<RayHit> {
-        let dir = direction.normalize_or_zero();
-        if dir == Vec2::ZERO || !origin.is_finite() {
-            return None;
-        }
-        let ray = rp::Ray::new(to_rp(origin), to_rp(dir));
-        let (handle, hit) = self
-            .world
-            .cast_ray_and_get_normal(&ray, max_distance, true, self.query_filter(filter))?;
-        Some(RayHit {
-            entity: self.entity_of(handle)?,
-            point: origin + dir * hit.time_of_impact,
-            normal: from_rp(hit.normal),
-            distance: hit.time_of_impact,
-        })
-    }
-
-    /// Every collider overlapping a point; clears `out` first.
-    pub fn overlap_point(&self, point: Vec2, filter: QueryFilter, out: &mut Vec<Entity>) {
-        out.clear();
-        for (handle, _) in self.world.intersect_point(to_rp(point), self.query_filter(filter)) {
-            out.extend(self.entity_of(handle));
-        }
-    }
-
-    /// Every collider overlapping a circle; clears `out` first. A radius
-    /// below `f32::EPSILON` (or NaN) is treated as that tiny circle, as in 3D.
-    pub fn overlap_circle(&self, center: Vec2, radius: f32, filter: QueryFilter, out: &mut Vec<Entity>) {
-        out.clear();
-        let ball = rp::Ball::new(radius.max(f32::EPSILON));
-        let pose = rp::Pose::from_translation(to_rp(center));
-        for (handle, _) in self.world.intersect_shape(pose, &ball, self.query_filter(filter)) {
-            out.extend(self.entity_of(handle));
-        }
-    }
-
-    /// Pushes a dynamic body once (an explosion, a kick), in mass ×
-    /// pixels/s. Returns false if `e` isn't a physics body.
     pub fn apply_impulse(&mut self, e: Entity, impulse: Vec2) -> bool {
         let Some(link) = self.link(e) else { return false };
         let handle = link.body;
@@ -546,6 +699,22 @@ impl Physics {
     }
 
     /// The mass of a body (from its collider's density and area).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// struct Ball(Entity);
+    /// struct Weight(Option<f32>);
+    /// fn weigh(ctx: &mut Ctx) {
+    ///     let ball = ctx.world.resource::<Ball>().0;
+    ///     let mass = ctx.physics.mass(ball);
+    ///     ctx.world.insert_resource(Weight(mass));
+    /// }
+    /// let world = Game::new("t", 1, 1).physics(Vec2::ZERO).sim_system(weigh).run_headless(3, |ctx| {
+    ///     let ball = ctx.world.spawn((ponko::d2::Transform::default(), ponko::d2::RigidBody::dynamic(), ponko::d2::Collider::circle(5.0)));
+    ///     ctx.world.insert_resource(Ball(ball));
+    /// });
+    /// assert!(world.resource::<Weight>().0.unwrap() > 0.0);
+    /// ```
     pub fn mass(&self, e: Entity) -> Option<f32> {
         let link = self.link(e)?;
         self.world.bodies.get(link.body).map(|b| b.mass())
@@ -642,6 +811,7 @@ fn collider_of(c: Collider, e: Entity) -> rp::Collider {
         .restitution(c.restitution)
         .sensor(c.sensor)
         .translation(to_rp(c.offset))
+        .collision_groups(c.groups.to_rp())
         .active_events(rp::ActiveEvents::COLLISION_EVENTS)
         .user_data(u128::from(e.to_bits()))
         .build()

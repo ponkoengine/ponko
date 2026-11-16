@@ -265,7 +265,7 @@ frees it after), plus wgpu's own TLAS instance buffer.
 |---|---|---|
 | GPU, 1920x1080 frame | trace 1.20 ms (1.197 / 1.205, two runs; its trace is half size, 960x540), filtered levels +0.19 ms | 0.84 ms for camera + reflection rays at 960x540; 2.93 ms at 1920x1080 |
 | Scene in the measurement | one box on a floor | 4.3 M instanced triangles |
-| Memory at 1920x1080 | about 23.5 MB of its own (history 16.6 MB, reflection levels 5.5 MB, filtered levels 1.4 MB, all RGBA16F), plus a full-size level shared with ambient occlusion | 13.3 MB of acceleration structures for this scene (grows with unique geometry, not resolution), plus an output image |
+| Memory at 1920x1080 | about 26.6 MB of its own (history 16.6 MB, reflection levels 5.5 MB, filtered levels 1.4 MB, all RGBA16F; half-size hit and footprint images 3.1 MB), plus a full-size level shared with ambient occlusion | 13.3 MB of acceleration structures for this scene (grows with unique geometry, not resolution), plus an output image |
 | Off-screen and hidden geometry | missing (measured) | present (measured) |
 | Per frame for moving objects | nothing extra | a TLAS rebuild (1.4 to 1.9 ms wall for 2,049 instances); skinned and morphed meshes need BLAS refits, not measured |
 

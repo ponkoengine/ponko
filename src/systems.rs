@@ -11,19 +11,20 @@
 //! | Function | Id in [`Systems`](crate::game::Systems) | Added by | Phase |
 //! |---|---|---|---|
 //! | [`rebuild_spatial_grid`] | `REBUILD_SPATIAL_GRID` | `Game::spatial_grid` | `Input` |
-//! | [`step_physics`] | `PHYSICS` | `Game::physics` | `Physics` |
-//! | [`step_physics3d`] | `PHYSICS3D` | `Game::physics3d` | `Physics` |
-//! | [`interpolate_physics3d`] | `INTERPOLATE_PHYSICS3D` | `Game::physics3d` | `Frame` |
-//! | [`update_animators`] | `UPDATE_ANIMATORS` | always (`3d`) | end of `Animate` |
+//! | `step_physics` (feature `physics`) | `PHYSICS` | `Game::physics` | `Physics` |
+//! | `step_physics3d` (feature `physics3d`) | `PHYSICS3D` | `Game::physics3d` | `Physics` |
+//! | `interpolate_physics3d` (feature `physics3d`) | `INTERPOLATE_PHYSICS3D` | `Game::physics3d` | `Frame` |
+//! | `update_animators` | `UPDATE_ANIMATORS` | always (`3d`) | end of `Animate` |
+//! | [`update_skeletons2d`] | `UPDATE_SKELETONS2D` | always | end of `Animate` |
 //! | [`update_particles`] | `UPDATE_PARTICLES` | always | end of `Animate` |
-//! | [`update_audio3d`] | `UPDATE_AUDIO3D` | always (`3d`) | end of `Draw` |
+//! | `update_audio3d` | `UPDATE_AUDIO3D` | always (`3d`) | end of `Draw` |
 //! | [`animate_sprites`] | `ANIMATE_SPRITES` | always | `Draw` |
 //! | [`draw_tilemaps`] | `DRAW_TILEMAPS` | always | `Draw` |
 //! | [`draw_sprites`] | `DRAW_SPRITES` | always | `Draw` |
 //! | [`draw_particles`] | `DRAW_PARTICLES` | always | `Draw` |
 //! | [`follow_attachments`] | `FOLLOW_ATTACHMENTS` | you | your choice |
-//! | [`step_navmesh3d`] | `STEP_NAVMESH3D` | you | your choice |
-//! | [`apply_net_poses`] | | you | your choice |
+//! | `step_navmesh3d` (feature `navmesh`) | `STEP_NAVMESH3D` | you | your choice |
+//! | `apply_net_poses` (feature `3d`) | | you | your choice |
 //!
 //! ```
 //! use ponko::{systems, prelude::{Game, Phase, Systems}};
@@ -62,6 +63,17 @@ pub use crate::physics3d::{
 #[cfg(feature = "3d")]
 pub fn update_animators(ctx: &mut Ctx) {
     ctx.update_animators();
+}
+
+/// Advances every 2D [`Skeleton`](crate::skeleton2d::Skeleton) that isn't
+/// manual by this frame's time (after applying hot reloads of skeleton
+/// files) and poses it. The game runs it at the end of
+/// [`Phase::Animate`](crate::game::Phase::Animate)
+/// ([`Systems::UPDATE_SKELETONS2D`](crate::game::Systems::UPDATE_SKELETONS2D)),
+/// after the 3D animators and before the particles; with no skeleton it
+/// does nothing.
+pub fn update_skeletons2d(ctx: &mut Ctx) {
+    ctx.update_skeletons2d();
 }
 
 /// Advances every 2D [`ParticleEmitter`](crate::d2::ParticleEmitter) and,

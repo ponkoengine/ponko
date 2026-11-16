@@ -611,23 +611,24 @@ fn instance_levels_refresh_cached_sun_cascades_across_shadow_bands() {
         }
     }
     let mut frames = [Frame3D::default(), Frame3D::default()];
-    let mut compare = |ctx: &mut Ctx, equal: bool| {
-        let [cached, reference] = &mut renderers;
-        let [a, b] = &mut frames;
+    // The reference collects the same frames (holding the same boxes) and
+    // draws every cascade; the cached renderer must match it every frame.
+    let compare = |renderers: &mut [Renderer3D; 2], frames: &mut [Frame3D; 2], ctx: &mut Ctx, equal: bool| {
+        let [cached, reference] = renderers;
+        let [a, b] = frames;
         let image = rig.draw(cached, a, ctx);
-        // Bypass both cache layers in the reference, including deferred turns.
-        *b = Frame3D::default();
         reference.forget_shadows();
         let expected = rig.draw(reference, b, ctx);
         assert_eq!(reference.shadow_cascades_redrawn(), 4);
+        assert_eq!(a.sun_view_proj, b.sun_view_proj, "the same boxes");
         let matches = image == expected;
         if equal {
-            assert!(matches, "cached shadow bands differ from a fresh draw");
+            assert!(matches, "cached shadow bands differ from drawing every cascade");
         }
         (image, a.redrawn, cached.shadow_cascades_redrawn(), matches)
     };
-    compare(&mut ctx, true);
-    let (with_proxy, collected, redrawn, _) = compare(&mut ctx, true);
+    compare(&mut renderers, &mut frames, &mut ctx, true);
+    let (with_proxy, collected, redrawn, _) = compare(&mut renderers, &mut frames, &mut ctx, true);
     assert_eq!(
         collected & 0b1100,
         0,
@@ -638,33 +639,131 @@ fn instance_levels_refresh_cached_sun_cascades_across_shadow_bands() {
         "stationary content redraws no cascades in either cache layer"
     );
     ctx.gfx.set_mesh_shadows(proxy, false);
-    let (without_proxy, _, redrawn, _) = compare(&mut ctx, true);
+    let (without_proxy, _, redrawn, _) = compare(&mut renderers, &mut frames, &mut ctx, true);
     assert_eq!(redrawn, 4, "mesh shadow flags invalidate cached cascades");
     assert_ne!(
         with_proxy, without_proxy,
         "shadow-only geometry must cast a visible sun shadow"
     );
     ctx.gfx.set_mesh_shadows(proxy, true);
-    compare(&mut ctx, true);
+    compare(&mut renderers, &mut frames, &mut ctx, true);
+    // Half a unit closer: both casters cross a band edge, the far one
+    // while its cascade's box is held. Every frame matches the reference.
     ctx.scene3d.camera.position.z = 6.5;
     ctx.scene3d.camera.look_at(Vec3::ZERO);
-    let mut refreshed = 0;
-    let mut stale_seen = false;
-    let refresh = ctx.scene3d.lighting.shadow_refresh;
-    for turn in 0..refresh {
-        let (_, collected, _, matches) = compare(&mut ctx, turn + 1 == refresh);
-        assert!(
-            (collected & 0b1100).count_ones() <= 1,
-            "band crossings preserve far-cascade turns"
-        );
-        refreshed |= collected;
-        stale_seen |= !matches;
+    let (crossed, refit, redrawn, _) = compare(&mut renderers, &mut frames, &mut ctx, true);
+    assert_ne!(refit & 0b1100, 0b1100, "a far box is held: {refit:b}");
+    assert_eq!(redrawn, 4, "the crossing redraws the held far cascades too");
+    assert_ne!(crossed, with_proxy, "the crossing shows");
+    for _ in 0..3 {
+        compare(&mut renderers, &mut frames, &mut ctx, true);
     }
-    assert!(
-        stale_seen,
-        "the far caster must exercise deferred shadow content before its turn"
+    let (_, _, redrawn, _) = compare(&mut renderers, &mut frames, &mut ctx, true);
+    assert_eq!(redrawn, 0, "still again: no cascade is drawn");
+
+    // Negative control: a cache that ignores what changed under its held
+    // far cascades misses the far caster crossing back.
+    renderers[0].ignore_shadow_casters();
+    ctx.scene3d.camera.position.z = 6.0;
+    ctx.scene3d.camera.look_at(Vec3::ZERO);
+    let stale = (0..2).any(|_| !compare(&mut renderers, &mut frames, &mut ctx, false).3);
+    assert!(stale, "a lagging far cascade shows in the comparison");
+}
+
+/// Instance batches culled by distance from the camera for their shadows:
+/// a camera moving inside the held far cascades' boxes keeps their maps
+/// while no band edge lies near any of the batch's cells, and they match
+/// drawing every cascade again.
+#[test]
+fn a_camera_move_crossing_no_band_edge_keeps_held_cascades() {
+    let Some(rig) = Rig::new() else {
+        crate::render::render_test_support::no_gpu("no GPU adapter or device");
+        return;
+    };
+    let mut ctx = Ctx::new(1.0 / 60.0, Vec2::splat(SIZE as f32));
+    ctx.scene3d.camera.position = vec3(0.0, 9.0, 9.0);
+    ctx.scene3d.camera.look_at(Vec3::ZERO);
+    ctx.scene3d.sky.atmosphere = false;
+    ctx.scene3d.lighting.shadow_cascades = CASCADES;
+    ctx.scene3d.lighting.shadow_resolution = 512;
+    ctx.scene3d.lighting.shadow_distance = 30.0;
+    ctx.scene3d.lighting.shadow_refresh = 8;
+    let desc = MaterialDesc {
+        color: Color::WHITE,
+        roughness: 1.0,
+        ..Default::default()
+    };
+    let material = ctx.gfx.create_material(desc);
+    let ground = MeshData::plane(60.0);
+    let cube = MeshData::cube(1.0);
+    let floor = ctx.gfx.create_mesh(&ground, material);
+    let proxy = ctx.gfx.create_mesh(&cube, material);
+    ctx.world.spawn((Transform3D::default(), Model::new(floor)));
+    // Pillars out to 20 units away, casting within 80 of the camera: no
+    // band edge near any of them.
+    let pillars: Vec<Mat4> = (0..8)
+        .map(|i| {
+            Mat4::from_scale_rotation_translation(
+                vec3(0.5, 3.0, 0.5),
+                Quat::IDENTITY,
+                vec3(-6.0 + i as f32 * 1.7, 1.5, -4.0 - i as f32 * 2.0),
+            )
+        })
+        .collect();
+    let batch = ctx.gfx.create_instance_batch_levels(
+        &[InstanceLevel {
+            mesh: proxy,
+            min_distance: 0.0,
+            max_distance: 80.0,
+            camera: true,
+            shadows: true,
+        }],
+        &pillars,
+        &[],
+        Default::default(),
     );
-    assert_eq!(refreshed, 0b1111, "every cascade converges within one refresh cycle");
+    let mut renderers = [rig.renderer(), rig.renderer()];
+    for r in &mut renderers {
+        r.create_material(&rig.device, &GpuMaterialDesc::new(&desc), &rig.textures);
+        r.create_mesh(
+            &rig.device,
+            &ground,
+            &[(0..ground.indices.len() as u32, material)],
+            true,
+        );
+        r.create_mesh(&rig.device, &cube, &[(0..cube.indices.len() as u32, material)], true);
+        r.set_instance_batch(
+            &rig.device,
+            &rig.queue,
+            batch.id,
+            ctx.gfx.assets3d.instance_batches[batch.id as usize].as_ref(),
+        );
+    }
+    let mut frames = [Frame3D::default(), Frame3D::default()];
+    let far = 1 << (CASCADES - 1);
+    let mut kept = 0;
+    for i in 0..16 {
+        if i >= 2 {
+            ctx.scene3d.camera.position.x += 0.01;
+        }
+        let [cached, reference] = &mut renderers;
+        let [a, b] = &mut frames;
+        let image = rig.draw(cached, a, &mut ctx);
+        reference.forget_shadows();
+        let expected = rig.draw(reference, b, &mut ctx);
+        assert_eq!(a.sun_view_proj, b.sun_view_proj, "the same boxes");
+        assert!(image == expected, "frame {i}: kept cascades differ from drawing them");
+        if i >= 2 && a.redrawn & far == 0 {
+            // The far box is held: the moving eye alone doesn't redraw it.
+            assert_ne!(
+                cached.shadow_views_kept() & far,
+                0,
+                "frame {i}: the held far cascade is kept"
+            );
+            kept += 1;
+        }
+    }
+    assert!(kept >= 8, "the far box was held on most frames: {kept}");
 }
 
 #[test]
@@ -995,4 +1094,480 @@ fn lazily_built_alpha_masks_keep_cutout_shadows_exact() {
     assert_eq!(kept, 1);
     assert_ne!(stale, expected, "stale cutout shadows differ from a full redraw");
     assert_eq!(expected, solid, "back to the first image");
+}
+
+/// With `Lighting::shadow_sun_step`, a sun turning a little every frame
+/// leaves the sun's shadow maps bit for bit the same, and kept by the
+/// cache, until it has turned past the step; then they change once.
+/// Negative control: with no step they change every frame.
+#[test]
+fn a_slowly_turning_sun_keeps_its_shadow_maps_until_the_step() {
+    let Some(rig) = Rig::new() else {
+        crate::render::render_test_support::no_gpu("no GPU adapter or device");
+        return;
+    };
+    let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(SIZE as f32, SIZE as f32));
+    let matte = MaterialDesc {
+        color: Color::WHITE,
+        roughness: 1.0,
+        ..Default::default()
+    };
+    let material = ctx.gfx.create_material(matte);
+    let ground = MeshData::plane(20.0);
+    let cube = MeshData::cube(1.0);
+    let ground_mesh = ctx.gfx.create_mesh(&ground, material);
+    let cube_mesh = ctx.gfx.create_mesh(&cube, material);
+    ctx.world.spawn((Transform3D::default(), Model::new(ground_mesh)));
+    ctx.world
+        .spawn((Transform3D::at(vec3(0.0, 1.0, 0.0)), Model::new(cube_mesh)));
+    ctx.world
+        .spawn((Transform3D::at(vec3(3.0, 1.0, 2.0)), Model::new(cube_mesh)));
+    ctx.scene3d.camera.position = vec3(0.0, 9.0, 9.0);
+    ctx.scene3d.camera.look_at(Vec3::ZERO);
+    ctx.scene3d.lighting.shadows = true;
+    ctx.scene3d.lighting.shadow_cascades = CASCADES;
+    ctx.scene3d.lighting.shadow_resolution = 512;
+    ctx.scene3d.lighting.shadow_distance = 30.0;
+    ctx.scene3d.lighting.shadow_refresh = 1;
+    ctx.scene3d.sky.atmosphere = false;
+    // The sun turns 0.1 degrees about the vertical each frame, 50 degrees
+    // down: 0.064 degrees of turn a frame.
+    let sun = |frame: usize| {
+        let (s, c) = (frame as f32 * 0.1).to_radians().sin_cos();
+        vec3(c * 0.64, -0.77, s * 0.64)
+    };
+
+    // Each frame: whether the shadow maps changed since the frame before,
+    // and how many cascades the cache kept.
+    let run = |ctx: &mut Ctx, step: f32, frames: usize| -> Vec<(bool, u32)> {
+        ctx.scene3d.lighting.shadow_sun_step = step;
+        let mut renderer = rig.renderer();
+        renderer.create_material(&rig.device, &GpuMaterialDesc::new(&matte), &rig.textures);
+        renderer.create_mesh(
+            &rig.device,
+            &ground,
+            &[(0..ground.indices.len() as u32, material)],
+            true,
+        );
+        renderer.create_mesh(&rig.device, &cube, &[(0..cube.indices.len() as u32, material)], true);
+        let mut frame = Frame3D::default();
+        let mut last = None;
+        (0..frames)
+            .map(|i| {
+                ctx.scene3d.lighting.sun_direction = sun(i);
+                rig.draw(&mut renderer, &mut frame, ctx);
+                let map = renderer.shadow_map_bytes(&rig.device, &rig.queue);
+                let changed = last.as_ref().is_some_and(|l| *l != map);
+                last = Some(map);
+                (changed, (renderer.shadow_views_kept() & 0b11).count_ones())
+            })
+            .collect()
+    };
+
+    // A 1 degree step: the turn passes it after 16 frames (1 / 0.064).
+    let held = run(&mut ctx, 1f32.to_radians(), 40);
+    let changed: Vec<usize> = (1..held.len()).filter(|&i| held[i].0).collect();
+    assert_eq!(changed, [16, 32], "the maps change only at each step");
+    for (i, &(change, kept)) in held.iter().enumerate().skip(1) {
+        let expect = if change { 0 } else { CASCADES };
+        assert_eq!(kept, expect, "frame {i}: cascades kept between steps, drawn at a step");
+    }
+
+    // Negative control: the exact direction changes the maps every frame.
+    let exact = run(&mut ctx, 0.0, 6);
+    assert!(
+        exact[1..].iter().all(|&(change, kept)| change && kept == 0),
+        "{exact:?}"
+    );
+}
+
+/// With contact-hardening sun shadows (`ShadowFilter::ContactHardening`),
+/// far cascades kept from earlier frames (their box held by
+/// `Lighting::shadow_refresh`, their map kept by the renderer) draw exactly
+/// like the same cascades drawn again into the same boxes: while nothing
+/// moves, while the camera moves inside the held boxes, while the sun
+/// turns within its held step and past it, and while a caster moves. The
+/// reference is a second renderer collecting the same frames (so holding
+/// the same boxes) which keeps no view. Negative control: a cache that
+/// ignores caster changes (the lag kept far cascades used to have) shows
+/// the moving caster's stale shadow in the comparison.
+#[test]
+fn contact_hardening_shadows_from_kept_cascades_match_redrawn_ones() {
+    let Some(rig) = Rig::new() else {
+        crate::render::render_test_support::no_gpu("no GPU adapter or device");
+        return;
+    };
+    let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(SIZE as f32, SIZE as f32));
+    let matte = MaterialDesc {
+        color: Color::WHITE,
+        roughness: 1.0,
+        ..Default::default()
+    };
+    let material = ctx.gfx.create_material(matte);
+    let ground = MeshData::plane(40.0);
+    let cube = MeshData::cube(1.0);
+    let ground_mesh = ctx.gfx.create_mesh(&ground, material);
+    let cube_mesh = ctx.gfx.create_mesh(&cube, material);
+    ctx.world.spawn((Transform3D::default(), Model::new(ground_mesh)));
+    // Tall posts and a block: their shadows' far ends have wide edges.
+    for (x, z) in [(-2.0, 0.0), (1.5, -2.0), (3.0, 2.0)] {
+        ctx.world.spawn((
+            Transform3D {
+                position: vec3(x, 2.0, z),
+                scale: vec3(0.4, 4.0, 0.4),
+                ..Default::default()
+            },
+            Model::new(cube_mesh),
+        ));
+    }
+    let mover = ctx
+        .world
+        .spawn((Transform3D::at(vec3(0.0, 1.0, 1.0)), Model::new(cube_mesh)));
+    ctx.scene3d.camera.position = vec3(0.0, 9.0, 9.0);
+    ctx.scene3d.camera.look_at(Vec3::ZERO);
+    ctx.scene3d.sky.atmosphere = false;
+    let lighting = &mut ctx.scene3d.lighting;
+    lighting.shadows = true;
+    lighting.shadow_cascades = CASCADES;
+    lighting.shadow_resolution = 512;
+    lighting.shadow_distance = 30.0;
+    // The far cascade is drawn every fourth frame and kept in between.
+    lighting.shadow_refresh = 4;
+    lighting.shadow_filter = crate::render::ShadowFilter::ContactHardening;
+    lighting.shadow_sun_size = 3.0;
+    lighting.shadow_sun_step = 1f32.to_radians();
+    // The sun turns 0.1 degrees about the vertical a frame, 50 degrees
+    // down: 0.064 degrees of turn a frame, past the step every 16 frames.
+    let sun = |frame: usize| {
+        let (s, c) = (frame as f32 * 0.1).to_radians().sin_cos();
+        vec3(c * 0.64, -0.77, s * 0.64)
+    };
+    lighting.sun_direction = sun(0);
+
+    let mut renderers = [rig.renderer(), rig.renderer()];
+    for r in &mut renderers {
+        r.create_material(&rig.device, &GpuMaterialDesc::new(&matte), &rig.textures);
+        r.create_mesh(
+            &rig.device,
+            &ground,
+            &[(0..ground.indices.len() as u32, material)],
+            true,
+        );
+        r.create_mesh(&rig.device, &cube, &[(0..cube.indices.len() as u32, material)], true);
+    }
+    let mut frames = [Frame3D::default(), Frame3D::default()];
+    // Draws a frame with both: how many pixels differ, whether the cached
+    // renderer kept the far cascade, and its image.
+    let mut draw = |renderers: &mut [Renderer3D; 2], ctx: &mut Ctx| -> (usize, bool, Vec<u8>) {
+        let [cached, reference] = renderers;
+        let [cached_frame, reference_frame] = &mut frames;
+        let image = rig.draw(cached, cached_frame, ctx);
+        reference.forget_shadows();
+        let expected = rig.draw(reference, reference_frame, ctx);
+        assert_eq!(
+            cached_frame.sun_view_proj, reference_frame.sun_view_proj,
+            "the reference draws into the boxes the cache keeps"
+        );
+        assert_eq!(cached_frame.cascade_texel, reference_frame.cascade_texel);
+        assert_eq!(
+            reference.shadow_cascades_redrawn(),
+            CASCADES,
+            "the reference draws every cascade"
+        );
+        let far = 1 << (CASCADES - 1);
+        let kept = cached.shadow_views_kept() & far != 0;
+        let differing = image.chunks(4).zip(expected.chunks(4)).filter(|(a, b)| a != b).count();
+        (differing, kept, image)
+    };
+    let kept_frames = std::cell::Cell::new(0);
+    let mut check = |renderers: &mut [Renderer3D; 2], ctx: &mut Ctx, what: &str| -> Vec<u8> {
+        let (differing, kept, image) = draw(renderers, ctx);
+        assert_eq!(
+            differing, 0,
+            "{what}: {differing} pixels differ from redrawing every cascade"
+        );
+        kept_frames.set(kept_frames.get() + usize::from(kept));
+        image
+    };
+
+    for _ in 0..8 {
+        check(&mut renderers, &mut ctx, "still");
+    }
+    for _ in 0..12 {
+        ctx.scene3d.camera.position.x += 0.003;
+        check(&mut renderers, &mut ctx, "camera moving inside the kept boxes");
+    }
+    // The shadow maps change only where the held direction jumps (lighting
+    // follows the exact direction, so the picture itself changes a little
+    // every frame).
+    check(&mut renderers, &mut ctx, "before the sun turns");
+    let mut last = renderers[0].shadow_map_bytes(&rig.device, &rig.queue);
+    let mut steps = Vec::new();
+    for i in 1..=40 {
+        ctx.scene3d.lighting.sun_direction = sun(i);
+        check(&mut renderers, &mut ctx, &format!("sun turned for {i} frames"));
+        let map = renderers[0].shadow_map_bytes(&rig.device, &rig.queue);
+        if map != last {
+            steps.push(i);
+        }
+        last = map;
+    }
+    let kept_frames = kept_frames.get();
+    eprintln!("far cascade kept in {kept_frames} of 61 frames; the shadow maps changed at frames {steps:?}");
+    assert!(kept_frames >= 30, "the far cascade is kept most frames: {kept_frames}");
+    assert_eq!(steps, [16, 32], "the cached maps change only at the sun's steps");
+
+    // A caster moving while the far cascade's box is held: its shadow
+    // follows it every frame.
+    for _ in 0..8 {
+        ctx.world.get_mut::<Transform3D>(mover).unwrap().position.x += 0.3;
+        check(&mut renderers, &mut ctx, "a caster moving under the held far cascade");
+    }
+    for _ in 0..3 {
+        check(&mut renderers, &mut ctx, "settled");
+    }
+    let [(_, _), work] = renderers[0].counts();
+    assert_eq!(work, (0, 0), "a still frame draws no shadow casters");
+    assert_eq!(renderers[0].shadow_cascades_redrawn(), 0, "nor any cascade pass");
+
+    // Negative control: ignoring caster changes, the far cascade lags
+    // behind the moving caster, and the comparison sees that.
+    renderers[0].ignore_shadow_casters();
+    let mut stale = 0;
+    for _ in 0..8 {
+        ctx.world.get_mut::<Transform3D>(mover).unwrap().position.x += 0.3;
+        let (differing, kept, _) = draw(&mut renderers, &mut ctx);
+        stale += usize::from(kept && differing > 0);
+    }
+    assert!(stale > 0, "a lagging far cascade shows in the comparison");
+}
+
+/// Far cascades whose box is held from an earlier frame
+/// (`Lighting::shadow_refresh`) draw exactly what drawing every shadow view
+/// again draws whenever their casters change: a caster moving, spawned and
+/// despawned, a level-of-detail group switching level, a mesh's data made
+/// again, an instance batch made and freed. The reference is a second
+/// renderer collecting the same frames (so holding the same boxes) which
+/// keeps no view. Still frames keep every cascade and draw no caster;
+/// a change redraws only the cascades it reaches. Negative control: a cache
+/// that ignores caster changes (the lag held far cascades used to have)
+/// shows stale shadows in the same comparison.
+#[test]
+fn held_cascades_follow_every_caster_change() {
+    use crate::render::{LodGroup, LodLevel, LodRenderer};
+    let Some(rig) = Rig::new() else {
+        crate::render::render_test_support::no_gpu("no GPU adapter or device");
+        return;
+    };
+    let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(SIZE as f32, SIZE as f32));
+    let matte = MaterialDesc {
+        color: Color::WHITE,
+        roughness: 1.0,
+        ..Default::default()
+    };
+    let material = ctx.gfx.create_material(matte);
+    let ground = MeshData::plane(80.0);
+    let cube = MeshData::cube(1.0);
+    let ball = MeshData::sphere(0.5, 12);
+    let ground_mesh = ctx.gfx.create_mesh(&ground, material);
+    let cube_mesh = ctx.gfx.create_mesh(&cube, material);
+    // Made again with other data, on the GPU only, halfway through.
+    let remade_mesh = ctx.gfx.create_mesh(&cube, material);
+    ctx.world.spawn((Transform3D::default(), Model::new(ground_mesh)));
+    ctx.world
+        .spawn((Transform3D::at(vec3(0.0, 1.0, 0.0)), Model::new(cube_mesh)));
+    // Far casters, in the far cascade only.
+    let far_post = |x: f32, z: f32| Transform3D {
+        position: vec3(x, 1.5, z),
+        scale: vec3(0.6, 3.0, 0.6),
+        ..Default::default()
+    };
+    let mover = ctx.world.spawn((far_post(2.0, -14.0), Model::new(cube_mesh)));
+    ctx.world.spawn((far_post(5.0, -17.0), Model::new(remade_mesh)));
+    let tall = LodRenderer {
+        offset: Transform3D {
+            position: vec3(0.0, 2.5, 0.0),
+            scale: vec3(0.5, 5.0, 0.5),
+            ..Default::default()
+        },
+        ..LodRenderer::new(cube_mesh)
+    };
+    let group = LodGroup::new(
+        5.0,
+        vec![
+            LodLevel::new(0.3, vec![tall]),
+            LodLevel::new(0.001, vec![LodRenderer::new(cube_mesh)]),
+        ],
+    );
+    ctx.world.spawn((Transform3D::at(vec3(-4.0, 0.5, -15.0)), group));
+    ctx.scene3d.camera.position = vec3(0.0, 9.0, 9.0);
+    ctx.scene3d.camera.look_at(vec3(0.0, 0.0, -4.0));
+    ctx.scene3d.sky.atmosphere = false;
+    let lighting = &mut ctx.scene3d.lighting;
+    lighting.shadows = true;
+    lighting.shadow_cascades = CASCADES;
+    lighting.shadow_resolution = 512;
+    lighting.shadow_distance = 40.0;
+    // The far cascade's box is held for up to 8 frames.
+    lighting.shadow_refresh = 8;
+    lighting.sun_direction = vec3(0.4, -0.8, 0.45);
+
+    let mut renderers = [rig.renderer(), rig.renderer()];
+    for r in &mut renderers {
+        r.create_material(&rig.device, &GpuMaterialDesc::new(&matte), &rig.textures);
+        for data in [&ground, &cube, &cube] {
+            r.create_mesh(&rig.device, data, &[(0..data.indices.len() as u32, material)], true);
+        }
+    }
+    let mut frames = [Frame3D::default(), Frame3D::default()];
+    let near = 1u32;
+    let far = 1u32 << (CASCADES - 1);
+    let last = std::cell::RefCell::new(Vec::new());
+    // Draws a frame with both: how many pixels differ, the views the
+    // cached renderer kept, whether the far box was held, and the cascade
+    // passes it drew.
+    let draw = |renderers: &mut [Renderer3D; 2], frames: &mut [Frame3D; 2], ctx: &mut Ctx| {
+        let [cached, reference] = renderers;
+        let [cached_frame, reference_frame] = frames;
+        let image = rig.draw(cached, cached_frame, ctx);
+        reference.forget_shadows();
+        let expected = rig.draw(reference, reference_frame, ctx);
+        assert_eq!(
+            cached_frame.sun_view_proj, reference_frame.sun_view_proj,
+            "the reference draws into the boxes the cache holds"
+        );
+        assert_eq!(reference.shadow_cascades_redrawn(), CASCADES);
+        let differing = image.chunks(4).zip(expected.chunks(4)).filter(|(a, b)| a != b).count();
+        let held = cached_frame.redrawn & far == 0;
+        let changed = image != *last.borrow();
+        *last.borrow_mut() = image;
+        (
+            differing,
+            cached.shadow_views_kept(),
+            held,
+            cached.shadow_cascades_redrawn(),
+            changed,
+        )
+    };
+    // A frame that must match; returns (views kept, far box held, cascade
+    // passes drawn, whether the picture changed).
+    let check = |renderers: &mut [Renderer3D; 2], frames: &mut [Frame3D; 2], ctx: &mut Ctx, what: &str| {
+        let (differing, kept, held, passes, changed) = draw(renderers, frames, ctx);
+        assert_eq!(
+            differing, 0,
+            "{what}: {differing} pixels differ from drawing every view"
+        );
+        (kept, held, passes, changed)
+    };
+
+    check(&mut renderers, &mut frames, &mut ctx, "first frame");
+    for _ in 0..3 {
+        let (kept, held, passes, _) = check(&mut renderers, &mut frames, &mut ctx, "still");
+        assert_eq!(kept & (near | far), near | far, "still: every cascade is kept");
+        assert_eq!(passes, 0, "still: no cascade pass");
+        let [_, (casters, triangles)] = renderers[0].counts();
+        assert_eq!((casters, triangles), (0, 0), "still: no shadow caster is drawn");
+        assert_eq!(renderers[0].shadow_views_compared(), 0, "still: no caster is compared");
+        let _ = held;
+    }
+
+    // Each change: the far cascade is drawn again (the near one, which it
+    // doesn't reach, is kept), and the picture shows the change. With the
+    // camera still, the far box is the same whether it is held or fitted
+    // anew on its turn; most changes land on frames that hold it, where
+    // the cache used to keep the map.
+    let changes = std::cell::Cell::new(0);
+    let held_changes = std::cell::Cell::new(0);
+    let change =
+        |renderers: &mut [Renderer3D; 2], frames: &mut [Frame3D; 2], ctx: &mut Ctx, what: &str, visible: bool| {
+            let box_before = frames[0].sun_view_proj;
+            let (kept, held, passes, changed) = check(renderers, frames, ctx, what);
+            assert_eq!(frames[0].sun_view_proj, box_before, "{what}: the same boxes");
+            held_changes.set(held_changes.get() + usize::from(held));
+            assert_eq!(kept & far, 0, "{what}: the far cascade is drawn again");
+            assert_ne!(kept & near, 0, "{what}: the near cascade is kept");
+            assert_eq!(passes, 1, "{what}: one cascade pass");
+            if visible {
+                assert!(changed, "{what}: the change shows");
+            }
+            changes.set(changes.get() + 1);
+            // Settled: kept again.
+            let (kept, _, passes, _) = check(renderers, frames, ctx, &format!("after {what}"));
+            assert_eq!((kept & far, passes), (far, 0), "after {what}: kept again");
+        };
+    ctx.world.get_mut::<Transform3D>(mover).unwrap().position.x += 0.5;
+    change(&mut renderers, &mut frames, &mut ctx, "far caster moved", true);
+    let extra = ctx.world.spawn((far_post(-1.0, -19.0), Model::new(cube_mesh)));
+    change(&mut renderers, &mut frames, &mut ctx, "far caster spawned", true);
+    ctx.world.despawn(extra);
+    change(&mut renderers, &mut frames, &mut ctx, "far caster despawned", true);
+    for f in &mut frames {
+        f.lod.bias = 4.0;
+    }
+    change(&mut renderers, &mut frames, &mut ctx, "level of detail switched", true);
+    for f in &mut frames {
+        f.lod.bias = 1.0;
+    }
+    change(
+        &mut renderers,
+        &mut frames,
+        &mut ctx,
+        "level of detail switched back",
+        true,
+    );
+
+    // A mesh made again with other data (the renderer's own change, which
+    // the collector doesn't see): every view is drawn again.
+    for r in &mut renderers {
+        r.create_mesh_at(
+            &rig.device,
+            remade_mesh.id,
+            &ball,
+            &[(0..ball.indices.len() as u32, material)],
+            true,
+        );
+    }
+    let (kept, _, _, changed) = check(&mut renderers, &mut frames, &mut ctx, "mesh made again");
+    assert!(changed, "mesh made again: the change shows");
+    assert_eq!(kept & far, 0, "mesh made again: the far cascade is drawn again");
+    check(&mut renderers, &mut frames, &mut ctx, "after the mesh");
+
+    // An instance batch made and freed in the far cascade.
+    let batch = ctx.gfx.create_instance_batch(
+        cube_mesh,
+        &[Mat4::from_scale_rotation_translation(
+            vec3(0.6, 3.0, 0.6),
+            Quat::IDENTITY,
+            vec3(-1.0, 1.5, -19.0),
+        )],
+        Default::default(),
+    );
+    let sync = |renderers: &mut [Renderer3D; 2], ctx: &Ctx| {
+        for r in renderers {
+            r.set_instance_batch(
+                &rig.device,
+                &rig.queue,
+                batch.id,
+                ctx.gfx.assets3d.instance_batches[batch.id as usize].as_ref(),
+            );
+        }
+    };
+    sync(&mut renderers, &ctx);
+    change(&mut renderers, &mut frames, &mut ctx, "instance batch made", true);
+    ctx.gfx.free(batch);
+    sync(&mut renderers, &ctx);
+    change(&mut renderers, &mut frames, &mut ctx, "instance batch freed", true);
+    assert_eq!(changes.get(), 7);
+    assert!(held_changes.get() >= 4, "{} changes on held frames", held_changes.get());
+
+    // Negative control: ignoring caster changes, the far cascade lags
+    // behind the moving caster, and the comparison sees that.
+    renderers[0].ignore_shadow_casters();
+    let mut stale = 0;
+    for _ in 0..4 {
+        ctx.world.get_mut::<Transform3D>(mover).unwrap().position.x += 0.5;
+        let (differing, kept, _, _, _) = draw(&mut renderers, &mut frames, &mut ctx);
+        stale += usize::from(kept & far != 0 && differing > 0);
+    }
+    assert!(stale > 0, "a lagging far cascade shows in the comparison");
 }

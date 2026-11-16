@@ -277,7 +277,7 @@ impl Panels {
         }
         if let Some(drag) = &mut self.drag {
             if down && ctx.world.is_alive(drag.e) {
-                let to = ctx.camera.screen_to_world(pos) + drag.grab;
+                let to = crate::d2::View::camera_at(&ctx.camera, &ctx.views2d, pos).screen_to_world(pos) + drag.grab;
                 if let Some(t) = ctx.world.get_mut::<Transform2D>(drag.e)
                     && t.position != to
                 {
@@ -292,7 +292,7 @@ impl Panels {
 
     /// A click in the world at window point `at`.
     fn click(&mut self, ctx: &mut Ctx, at: Vec2, keep_placing: bool, add: bool) {
-        let world_at = ctx.camera.screen_to_world(at);
+        let world_at = crate::d2::View::camera_at(&ctx.camera, &ctx.views2d, at).screen_to_world(at);
         if let Some(path) = self.placing.clone() {
             let placed = ctx.edit(|ed, ctx| ed.spawn_prefab(ctx, &path, world_at));
             if let Some(e) = self.report(placed) {
@@ -789,7 +789,7 @@ fn entity_at(world: &World, rows: &[(usize, usize)], row: usize) -> Option<Entit
 /// the entity with a `Transform2D` closest to it, within [`PICK_RADIUS`]
 /// pixels. Sprites are hit by their unrotated rectangle.
 fn pick(ctx: &mut Ctx, at: Vec2) -> Option<Entity> {
-    let camera = ctx.camera;
+    let camera = *crate::d2::View::camera_at(&ctx.camera, &ctx.views2d, at);
     let world_at = camera.screen_to_world(at);
     let mut top: Option<(f32, Entity)> = None;
     for (e, t, s) in ctx.world.query::<(Entity, &Transform2D, &Sprite)>().iter() {

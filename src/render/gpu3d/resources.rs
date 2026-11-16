@@ -13,7 +13,7 @@ use std::ops::Range;
 
 use super::skinning;
 use crate::render::Material;
-use crate::render::gpu::GpuTexture;
+use crate::render::gpu_textures::TextureTable;
 use crate::render::traffic::{Counted, NewBuffer, Upload};
 use crate::three::{GpuMaterialDesc, MaterialTextures, MeshData, linear};
 
@@ -43,6 +43,11 @@ pub(super) struct Resources {
     /// Copies a buffer's elements over its copy of the last frame's: made
     /// when a buffer first keeps one.
     pub(super) past_copy: Option<wgpu::ComputePipeline>,
+    /// The default material's buffer and bind group, shared by every freed
+    /// material: material ids are never given out again, so a freed one
+    /// keeps its table entry but not GPU memory of its own. Made at the
+    /// first free.
+    pub(super) freed_material: Option<(wgpu::Buffer, wgpu::BindGroup)>,
 }
 
 impl Resources {
@@ -52,11 +57,11 @@ impl Resources {
         if self.storage_read.is_some() {
             assert!(
                 u64::from(len) * 16 <= device.limits().max_storage_buffer_binding_size,
-                "GPU buffer exceeds device limit"
+                "ponko: create_gpu_buffer: {len} elements exceed this GPU's storage buffer limit; split the data into smaller buffers"
             );
             assert!(
                 len.div_ceil(64) <= device.limits().max_compute_workgroups_per_dimension,
-                "GPU buffer exceeds dispatch limit"
+                "ponko: create_gpu_buffer: {len} elements exceed this GPU's compute dispatch limit; split the data into smaller buffers"
             );
             slot = Some(self.storage(device, len, false, data));
         }
@@ -252,9 +257,12 @@ impl Resources {
         self.arrays.len() as u32 - 1
     }
 
-    pub(super) fn material_texture<'a>(&self, map: Option<u32>, textures: &'a [GpuTexture]) -> &'a wgpu::Texture {
-        let id = map.filter(|&t| (t as usize) < textures.len()).unwrap_or(self.white);
-        &textures[id as usize].texture
+    pub(super) fn material_texture<'a>(&self, map: Option<u32>, textures: &'a dyn TextureTable) -> &'a wgpu::Texture {
+        let texture = map.and_then(|t| textures.texture(t));
+        &texture
+            .or_else(|| textures.texture(self.white))
+            .expect("the white texture is made first")
+            .texture
     }
 
     pub(super) fn material_array(&self, id: Option<u32>) -> &wgpu::TextureView {
@@ -262,7 +270,7 @@ impl Resources {
             .unwrap_or(&self.white_array)
     }
 
-    pub(super) fn material_bindings(&self, desc: &GpuMaterialDesc, textures: &[GpuTexture]) -> MaterialBindings {
+    pub(super) fn material_bindings(&self, desc: &GpuMaterialDesc, textures: &dyn TextureTable) -> MaterialBindings {
         self.bindings_for(desc.textures, desc.arrays, textures)
     }
 
@@ -270,7 +278,7 @@ impl Resources {
         &self,
         maps: crate::three::MaterialTextures,
         array_ids: [Option<u32>; 3],
-        textures: &[GpuTexture],
+        textures: &dyn TextureTable,
     ) -> MaterialBindings {
         MaterialBindings {
             maps,
@@ -288,7 +296,7 @@ impl Resources {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        textures: &[GpuTexture],
+        textures: &dyn TextureTable,
         texture: Option<u32>,
         array: Option<u32>,
     ) {
@@ -320,7 +328,7 @@ impl Resources {
     /// Binds the materials that read texture `texture` again, keeping their
     /// maps on: its pixels moved to a new GPU texture (a streamed texture
     /// at another resolution). `rebind_materials` is for freed ones.
-    pub(super) fn texture_replaced(&mut self, device: &wgpu::Device, textures: &[GpuTexture], texture: u32) {
+    pub(super) fn texture_replaced(&mut self, device: &wgpu::Device, textures: &dyn TextureTable, texture: u32) {
         for i in 0..self.materials.len() {
             let material = &self.materials[i];
             let (maps, array_ids) = (material.bindings.maps, material.bindings.array_ids);
@@ -339,7 +347,7 @@ impl Resources {
         &self,
         bindings: &MaterialBindings,
         desc: &GpuMaterialDesc,
-        textures: &[GpuTexture],
+        textures: &dyn TextureTable,
     ) -> bool {
         bindings.maps == desc.textures
             && bindings.array_ids == desc.arrays
@@ -415,7 +423,7 @@ impl Resources {
         &mut self,
         device: &wgpu::Device,
         desc: &GpuMaterialDesc,
-        textures: &[GpuTexture],
+        textures: &dyn TextureTable,
         shaders: u32,
     ) -> u32 {
         let buffer = device
@@ -446,12 +454,16 @@ impl Resources {
         queue: &wgpu::Queue,
         id: u32,
         desc: &GpuMaterialDesc,
-        textures: &[GpuTexture],
+        textures: &dyn TextureTable,
         shaders: u32,
     ) -> bool {
         let Some(material) = self.materials.get(id as usize) else {
             return false;
         };
+        if self.freed_material.as_ref().is_some_and(|(b, _)| *b == material.buffer) {
+            // Freed: it shares the default's buffer, which stays as it is.
+            return false;
+        }
         let changed_blend = material.transparent != desc.transparent;
         queue
             .uploading(Upload::Materials)
@@ -470,6 +482,41 @@ impl Resources {
         material.cutout = desc.cutout;
         material.double_sided = desc.double_sided;
         changed_blend
+    }
+
+    /// Material `id` was freed: it draws as the default material from now
+    /// on, through the buffer and bind group every freed material shares,
+    /// and its own are dropped.
+    pub(super) fn free_material(&mut self, device: &wgpu::Device, id: u32, textures: &dyn TextureTable, shaders: u32) {
+        let default = GpuMaterialDesc::new(&crate::three::MaterialDesc::default());
+        let Some(material) = self.materials.get(id as usize) else {
+            return;
+        };
+        let shared = match &self.freed_material {
+            Some((buffer, _)) if *buffer == material.buffer => return,
+            Some(shared) => shared.clone(),
+            None => {
+                let buffer =
+                    device
+                        .uploading(Upload::Materials)
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("3d freed material"),
+                            contents: bytemuck::bytes_of(&default.uniform),
+                            usage: wgpu::BufferUsages::UNIFORM,
+                        });
+                let bindings = self.material_bindings(&default, textures);
+                let bind_group = self.material_bind_group(device, &buffer, &bindings);
+                self.freed_material.insert((buffer, bind_group)).clone()
+            }
+        };
+        let bindings = self.material_bindings(&default, textures);
+        let material = &mut self.materials[id as usize];
+        (material.buffer, material.bind_group) = shared;
+        material.bindings = bindings;
+        material.shader = default.shader.min(shaders - 1);
+        material.transparent = default.transparent;
+        material.cutout = default.cutout;
+        material.double_sided = default.double_sided;
     }
 
     /// Makes mesh `id`: a freed one's slot, or the next new one.

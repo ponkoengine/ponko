@@ -22,7 +22,7 @@ ponko pack: pack a folder of assets into one asset pack
 
 Usage:
   ponko pack [<folder>] [--out <file>] [--exclude <pattern>]... [--textures]
-             [--no-compress]
+             [--cook [--platform <name>]] [--no-compress]
   ponko pack --list <file>
 
 Packs every file in <folder> (default: assets) and its subfolders, hidden
@@ -43,6 +43,10 @@ you. The same files always give the same pack, byte for byte.
                         --exclude if the game loads only the .ktx2 names).
                         A .ktx2 already in the folder and newer than its
                         image and the settings is packed as it is.
+  --cook                Pack the files as `ponko cook` makes them (same
+                        names; compressed textures, optimized meshes, FLAC
+                        sounds, checked shaders), cached in target/cook-cache
+  --platform <name>     With --cook: desktop (default), web or mobile
   --no-compress         Store every file as it is (by default a file is
                         deflated when that makes it at least 10% smaller;
                         PNG, JPEG, Ogg and other compressed formats are
@@ -65,11 +69,14 @@ pub struct Options {
     pub textures: bool,
     pub no_compress: bool,
     pub list: Option<PathBuf>,
+    /// Cook the files first, for this platform.
+    pub cook: Option<crate::cook::Platform>,
 }
 
 impl Options {
     pub fn parse(args: &[String]) -> Result<Options, String> {
         let mut o = Options::default();
+        let mut platform = None;
         let mut args = args.iter();
         while let Some(arg) = args.next() {
             let mut value = |flag: &str| {
@@ -84,9 +91,19 @@ impl Options {
                 "--textures" => o.textures = true,
                 "--no-compress" => o.no_compress = true,
                 "--list" => o.list = Some(value("--list")?.into()),
+                "--cook" => {
+                    o.cook.get_or_insert_default();
+                }
+                "--platform" => platform = Some(crate::cook::Platform::parse(&value("--platform")?)?),
                 flag if flag.starts_with('-') => return Err(format!("unknown option `{flag}`\n\n{USAGE}")),
                 path if o.folder.is_none() => o.folder = Some(path.into()),
                 extra => return Err(format!("unexpected argument `{extra}`\n\n{USAGE}")),
+            }
+        }
+        if let Some(platform) = platform {
+            match &mut o.cook {
+                Some(p) => *p = platform,
+                None => return Err("--platform goes with --cook".into()),
             }
         }
         if o.list.is_some() && (o.folder.is_some() || o.out.is_some()) {
@@ -368,17 +385,20 @@ pub struct Settings<'a> {
     pub exclude: &'a [String],
     pub textures: bool,
     pub compress: bool,
+    /// Cook the files (`ponko cook`) before packing them.
+    pub cook: Option<crate::cook::Settings>,
 }
 
 /// Packs `files` (name in the pack, path on disk): leaves out the excluded
 /// ones, converts the images first with `textures` (the settings files are
 /// `textures.json` beside them or in a folder above, up to `root`), reads
-/// the rest. Returns the pack and the conversions made, for the report.
+/// the rest, and cooks them all with `settings.cook`. Returns the pack, the
+/// conversions made and the cook's summary, for the report.
 pub fn pack_files(
     files: &[(String, PathBuf)],
     root: &Path,
     settings: &Settings,
-) -> Result<(Packed, Vec<String>), String> {
+) -> Result<(Packed, Vec<String>, Option<String>), String> {
     let excluded = |name: &str| settings.exclude.iter().any(|p| glob(p.as_bytes(), name.as_bytes()));
     let kept: Vec<(String, PathBuf)> = files.iter().filter(|(name, _)| !excluded(name)).cloned().collect();
     let mut contents: BTreeMap<String, Vec<u8>> = BTreeMap::new();
@@ -401,8 +421,19 @@ pub fn pack_files(
         let bytes = std::fs::read(&path).map_err(|e| format!("can't read {}: {e}", path.display()))?;
         contents.insert(name, bytes);
     }
-    let packed = write(contents.into_iter().collect(), settings.compress)?;
-    Ok((packed, converted))
+    let mut summary = None;
+    let files: Vec<(String, Vec<u8>)> = match &settings.cook {
+        Some(cook) => {
+            let files: Vec<(String, Vec<u8>)> = contents.into_iter().collect();
+            let config = crate::cook::config_of(&files)?;
+            let cooked = crate::cook::cook_files(files, &config, cook)?;
+            summary = Some(cooked.summary());
+            cooked.files
+        }
+        None => contents.into_iter().collect(),
+    };
+    let packed = write(files, settings.compress)?;
+    Ok((packed, converted, summary))
 }
 
 /// The KTX2 textures `--textures` adds (see `textures::convert_for_pack`).
@@ -466,13 +497,19 @@ pub fn pack_command(options: &Options, dir: &Path) -> Result<String, String> {
         exclude: &options.exclude,
         textures: options.textures,
         compress: !options.no_compress,
+        cook: options.cook.map(|platform| crate::cook::Settings {
+            platform,
+            reads: crate::cook::Reads::ALL,
+            cache: Some(dir.join("target").join("cook-cache")),
+        }),
     };
-    let (packed, converted) = pack_files(&files, &folder, &settings)?;
+    let (packed, converted, cooked) = pack_files(&files, &folder, &settings)?;
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("can't make {}: {e}", parent.display()))?;
     }
     std::fs::write(&out, &packed.bytes).map_err(|e| format!("can't write {}: {e}", out.display()))?;
     let mut report = Vec::new();
+    report.extend(cooked);
     if !converted.is_empty() {
         report.push(format!(
             "converted {} textures: {}",

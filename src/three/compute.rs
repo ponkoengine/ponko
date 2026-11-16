@@ -178,13 +178,16 @@ impl Graphics {
         self.try_load_compute(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_compute`](Self::load_compute) with errors as values:
-    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file is
-    /// missing, [`Io`](crate::error::ErrorKind::Io) if it can't be read,
+    /// [`load_compute`](Self::load_compute) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file
+    /// is missing, [`Io`](crate::error::ErrorKind::Io) if it can't be read,
     /// [`Decode`](crate::error::ErrorKind::Decode) if it isn't UTF-8 text and
     /// [`Shader`](crate::error::ErrorKind::Shader) if it doesn't compile (the
-    /// message has the compiler's log). With hot reload on, a file that
-    /// doesn't compile still returns a stand-in, as `load_compute` does.
+    /// message has the compiler's log). With hot reload on, a file that doesn't
+    /// compile still returns a stand-in, as `load_compute` does.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -258,9 +261,20 @@ impl Graphics {
         self.try_create_compute(name, source).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`create_compute`](Self::create_compute) with errors as values:
+    /// [`create_compute`](Self::create_compute) with errors as values.
+    ///
+    /// # Errors
+    ///
     /// [`ErrorKind::Shader`](crate::error::ErrorKind::Shader) if it doesn't
     /// compile, with the compiler's log in the message.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let err = ctx.gfx.try_create_compute("broken", "fn compute(c: Cell) -> vec4<f32> { return 1; }").unwrap_err();
+    ///     assert_eq!(err.kind(), ErrorKind::Shader);
+    /// });
+    /// ```
     pub fn try_create_compute(&mut self, name: &str, source: &str) -> Result<Compute, crate::error::Error> {
         let id = self.assets3d.computes;
         let compiled = self.compile_compute(name, source, None);
@@ -328,6 +342,11 @@ impl Graphics {
 }
 
 /// A GPU array of `vec4<f32>`. Empty initial data creates zeroed elements.
+///
+/// **WebGL2** has no storage buffers: the handle works, but no GPU copy is
+/// made, compute passes using buffers do nothing, and
+/// [`Graphics::set_mesh_gpu_buffer`](crate::gfx::Graphics::set_mesh_gpu_buffer) panics with a fix (see
+/// [`GpuFeature::StorageBuffers`](crate::render::GpuFeature::StorageBuffers)).
 /// ```
 /// # use ponko::prelude::*;
 /// Game::new("buffers", 1, 1).run_headless(0, |ctx| {
@@ -352,11 +371,26 @@ impl Graphics {
     /// Creates `len` elements. Initial data may be empty or exactly `len` elements.
     /// A freed buffer's slot is reused first, under a new id, so the freed
     /// handle stays dead (see [`Ctx::free`](crate::ctx::Ctx::free)).
-    /// Panics for zero length or mismatched data. See [`crate::render::GpuBuffer`].
+    /// See [`crate::render::GpuBuffer`].
+    ///
+    /// # Panics
+    ///
+    /// For zero length, or initial data that is neither empty nor exactly
+    /// `len` elements.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     // 1000 sparks: a position and a velocity each would be two elements.
+    ///     let sparks = ctx.gfx.create_gpu_buffer(1000, &[]);
+    ///     let seeded = ctx.gfx.create_gpu_buffer(2, &[Vec4::X, Vec4::Y]);
+    ///     assert_ne!(sparks, seeded);
+    /// });
+    /// ```
     pub fn create_gpu_buffer(&mut self, len: u32, data: &[glam::Vec4]) -> GpuBuffer {
         assert!(
             len > 0 && (data.is_empty() || data.len() == len as usize),
-            "invalid GPU buffer length"
+            "ponko: create_gpu_buffer needs len > 0 and either no data or exactly len Vec4 values"
         );
         let id = (self.assets3d.gpu_buffer_ids).make(self.assets3d.gpu_buffers.len(), "GPU buffer");
         let b = GpuBuffer { id };
@@ -406,13 +440,28 @@ impl Graphics {
             r.free_gpu_buffer(b.slot());
         }
     }
-    /// Updates a range before the next frame. Panics for invalid handles or ranges.
+    /// Updates a range before the next frame.
     /// See [`crate::render::GpuBuffer`] for an example.
+    ///
+    /// # Panics
+    ///
+    /// For a handle that is freed or from another game, or a range that does
+    /// not fit in the buffer.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let buffer = ctx.gfx.create_gpu_buffer(8, &[]);
+    ///     ctx.gfx.write_gpu_buffer(buffer, 2, &[Vec4::ONE, Vec4::ZERO]); // elements 2 and 3
+    /// });
+    /// ```
     pub fn write_gpu_buffer(&mut self, b: GpuBuffer, offset: u32, data: &[glam::Vec4]) {
-        let len = self.gpu_buffer_len(b).expect("invalid GPU buffer");
+        let len = self.gpu_buffer_len(b).expect(
+            "ponko: GPU buffer was freed or belongs to another game; create a live buffer with create_gpu_buffer",
+        );
         assert!(
             offset <= len && data.len() <= (len - offset) as usize,
-            "GPU buffer write out of bounds"
+            "ponko: write_gpu_buffer range exceeds its length; reduce offset or data length"
         );
         if !data.is_empty()
             && let Some(r) = self.renderer.as_mut()
@@ -431,8 +480,12 @@ impl Graphics {
     /// while they are off). The copy starts as the buffer is, so turning it
     /// on adds no motion; `keep: false` gives the memory back. Elements
     /// written from the CPU ([`write_gpu_buffer`](Self::write_gpu_buffer))
-    /// count as moved from where the last frame drew them. Panics for an
-    /// invalid handle.
+    /// count as moved from where the last frame drew them.
+    ///
+    /// # Panics
+    ///
+    /// For a buffer that is freed or from another game.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// Game::new("b", 1, 1).run_headless(0, |ctx| {
@@ -441,7 +494,9 @@ impl Graphics {
     /// });
     /// ```
     pub fn set_gpu_buffer_motion(&mut self, b: GpuBuffer, keep: bool) {
-        self.gpu_buffer_len(b).expect("invalid GPU buffer");
+        self.gpu_buffer_len(b).expect(
+            "ponko: GPU buffer was freed or belongs to another game; create a live buffer with create_gpu_buffer",
+        );
         if let Some(r) = self.renderer.as_mut()
             && !self.headless
         {
@@ -463,8 +518,13 @@ impl Graphics {
     /// shader puts the instances: give the whole simulation's extent (in the
     /// entity's space, around the entity) with
     /// [`Graphics::set_mesh_gpu_bounds`](crate::gfx::Graphics::set_mesh_gpu_bounds). Disable occlusion culling for
-    /// shader-displaced geometry. Unsupported GPUs draw nothing. Panics for
-    /// invalid handles or count.
+    /// shader-displaced geometry. Unsupported GPUs draw nothing.
+    ///
+    /// # Panics
+    ///
+    /// For a mesh or buffer that is freed or from another game, a skinned
+    /// mesh, or an invalid `count`.
+    ///
     /// ```no_run
     /// # use ponko::prelude::*;
     /// # fn f(ctx: &mut Ctx, mesh: ponko::render::Mesh) {
@@ -474,7 +534,10 @@ impl Graphics {
     /// # }
     /// ```
     pub fn set_mesh_gpu_buffer(&mut self, mesh: super::Mesh, b: GpuBuffer, count: u32) {
-        assert!(self.is_live(mesh), "invalid mesh");
+        assert!(
+            self.is_live(mesh),
+            "ponko: mesh was freed or belongs to another game; load or create a live mesh in this game"
+        );
         assert!(
             self.assets3d
                 .skins
@@ -483,8 +546,8 @@ impl Graphics {
             "skinned meshes cannot use GPU-buffer instances: spawn Model entities with Skeleton or SkinOf so each pose is evaluated"
         );
         assert!(
-            count <= self.gpu_buffer_len(b).expect("invalid GPU buffer"),
-            "GPU instance count out of bounds"
+            count <= self.gpu_buffer_len(b).expect("ponko: GPU buffer was freed or belongs to another game; create a live buffer with create_gpu_buffer"),
+            "ponko: instance count exceeds GPU buffer length; reduce count or create a larger buffer"
         );
         if let Some(r) = self.renderer.as_mut()
             && !self.headless
@@ -496,8 +559,13 @@ impl Graphics {
     /// with `radius`, in the mesh's space: where a buffer-driven
     /// simulation (see [`Graphics::set_mesh_gpu_buffer`](crate::gfx::Graphics::set_mesh_gpu_buffer)) can put its instances.
     /// The result is the mesh's own bounds united with the sphere; calling it
-    /// again replaces the sphere. Panics for a freed mesh or a negative or
-    /// non-finite radius.
+    /// again replaces the sphere.
+    ///
+    /// # Panics
+    ///
+    /// For a freed mesh, a negative or non-finite radius, or a non-finite
+    /// center.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// Game::new("b", 1, 1).run_headless(0, |ctx| {
@@ -509,9 +577,12 @@ impl Graphics {
     pub fn set_mesh_gpu_bounds(&mut self, mesh: super::Mesh, center: Vec3, radius: f32) {
         assert!(
             radius >= 0.0 && radius.is_finite() && center.is_finite(),
-            "invalid bounds"
+            "ponko: set_mesh_gpu_bounds needs a finite center and finite radius >= 0"
         );
-        assert!(self.is_live(mesh), "invalid mesh");
+        assert!(
+            self.is_live(mesh),
+            "ponko: mesh was freed or belongs to another game; load or create a live mesh in this game"
+        );
         let slot = mesh.slot();
         let own = *self
             .assets3d

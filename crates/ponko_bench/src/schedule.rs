@@ -169,8 +169,37 @@ fn scheduler_off(b: &mut Bench) {
     }
 }
 
+/// What run conditions cost when they are used: `schedule-off/` with a
+/// game state and `.run_if(in_state(..))` on every system (it always
+/// holds). Against `schedule-off/`, which has no conditions at all.
+fn conditions(b: &mut Bench) {
+    #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    enum Mode {
+        Playing,
+    }
+    for (systems, entities) in [(64, 100), (8, 16_000)] {
+        for kind in ["ctx", "views"] {
+            let name = format!("conditions/{kind}/{systems}x{entities}/light");
+            if b.skips(&name) {
+                continue;
+            }
+            let mut game = game("default").state(Mode::Playing);
+            let when = || in_state(Mode::Playing);
+            for_each_val!(systems, N => {
+                game = if kind == "ctx" {
+                    game.add(Phase::AfterPhysics, light_ctx::<N>.run_if(when()))
+                } else {
+                    game.add(Phase::AfterPhysics, light::<N>.access(SystemAccess::new().write::<Val<N>>()).run_if(when()))
+                };
+            });
+            measure(b, &name, game, 60, 400, |ctx| spawn(ctx, entities, systems));
+        }
+    }
+}
+
 pub fn run(b: &mut Bench) {
     scheduler_off(b);
+    conditions(b);
     // Many tiny systems: what a simple game looks like. Other threads can
     // only cost here.
     for systems in [4, 16, 64] {

@@ -16,7 +16,7 @@ struct Frame {
     // In the shadow pass: the cascade being drawn.
     caster_view_proj: mat4x4<f32>,
     camera: vec4<f32>,     // xyz: camera position; w: 0 in shadow maps, else 1
-    sun_dir: vec4<f32>,    // xyz: unit vector towards the sun
+    sun_dir: vec4<f32>,    // xyz: unit vector towards the sun; w: contact-hardening shadow edge width per unit of distance (0: off)
     sun_color: vec4<f32>,  // rgb: linear color times intensity
     sky: vec4<f32>,        // rgb: linear, times ambient intensity
     ground: vec4<f32>,
@@ -37,7 +37,7 @@ struct Frame {
     light_view_proj: array<mat4x4<f32>, 24>,
     // Each view's tile in the light shadow atlas, in uv: x, y, side.
     light_rect: array<vec4<f32>, 24>,
-    light_shadow: vec4<f32>, // views (0: none), atlas texel size in uv, normal offset in texels, w: sun shadow filter (1 to 3)
+    light_shadow: vec4<f32>, // views (0: none), atlas texel size in uv, normal offset in texels, w: sun shadow filter (1 to 4)
     probes: array<ReflectionVolume, 4>,
     // Temporal antialiasing: `view_proj` carries the sub-pixel jitter; these
     // are the camera without it, and last frame's, to tell motion from jitter.
@@ -603,6 +603,110 @@ fn cascade_light(i: i32, c: vec4<f32>) -> f32 {
     return lit / 9.0;
 }
 
+// ---- contact-hardening sun shadows: begin ----
+// (`ShadowFilter::ContactHardening`.) The GL backend can't load a texel of a
+// depth texture, so it replaces this part, line for line, with a
+// `contact_light` that filters as `Softest` (see `without_contact_shadows`).
+
+// Point `k` of 16 on a spiral filling the unit disc evenly (a Vogel disc),
+// turned by `turn` radians.
+fn contact_disc(k: i32, turn: f32) -> vec2<f32> {
+    let a = f32(k) * 2.39996323 + turn;
+    return vec2<f32>(cos(a), sin(a)) * sqrt((f32(k) + 0.5) / 16.0);
+}
+
+// How much light cascade `i` lets through at `c` (from `cascade_coords`),
+// with an edge as wide as the sun seen from the caster makes it, in world
+// units: first the casters within `contact_search(i)` of the point and
+// their mean distance from it (16 reads of the depths), then 16 lookups
+// across the edge's width. `n` is the surface's normal: each read is
+// compared with the depth the surface's plane has there, so a sloped
+// surface doesn't shadow itself. `turn` turns the pattern (per pixel).
+fn contact_light(i: i32, c: vec4<f32>, n: vec3<f32>, turn: f32) -> f32 {
+    let m = frame.sun_view_proj[i];
+    // The cascade's axes in the world, and its scales (orthographic).
+    let ax = vec3<f32>(m[0].x, m[1].x, m[2].x);
+    let ay = vec3<f32>(m[0].y, m[1].y, m[2].y);
+    let az = vec3<f32>(m[0].z, m[1].z, m[2].z);
+    let scale = vec3<f32>(length(ax), length(ay), length(az));
+    // Shadow map uv per world unit along its x and y (uv's y points down).
+    let to_uv = vec2<f32>(0.5 * scale.x, -0.5 * scale.y);
+    // The depth (world units along the sunlight) the surface's plane gains
+    // per world unit across the map; the depth grows away from the sun.
+    let facing = max(dot(n, -az / scale.z), 0.25);
+    let slope = vec2<f32>(dot(n, ax / scale.x), dot(n, ay / scale.y)) / facing * scale.z;
+    let texel = frame.cascade_texel[i];
+    let bias = 0.5 * texel * scale.z;
+    let search = contact_search(i);
+    let size = vec2<i32>(textureDimensions(shadow_map));
+    var blockers = 0.0;
+    var gap = 0.0;
+    for (var k = 0; k < 16; k++) {
+        let o = contact_disc(k, turn) * search;
+        let at = clamp(vec2<i32>((c.xy + o * to_uv) * vec2<f32>(size)), vec2<i32>(0), size - 1);
+        let depth = textureLoad(shadow_map, at, i, 0);
+        let surface = c.z + dot(slope, o) - bias;
+        if depth < surface {
+            blockers += 1.0;
+            gap += surface - depth;
+        }
+    }
+    if blockers == 0.0 {
+        return 1.0;
+    }
+    if blockers == 16.0 {
+        // Casters all around, at most the edge's width away: in shadow.
+        return 0.0;
+    }
+    // The casters' mean distance in world units gives the edge's width; no
+    // narrower than `Softest`'s edge in this cascade, no wider than searched.
+    let distance = gap / blockers / scale.z;
+    let radius = clamp(0.5 * frame.sun_dir.w * distance, 1.5 * texel, search);
+    var lit = 0.0;
+    for (var k = 0; k < 16; k++) {
+        let o = contact_disc(k, turn) * radius;
+        lit += textureSampleCompareLevel(shadow_map, shadow_sampler, c.xy + o * to_uv, i, c.z + dot(slope, o) - bias);
+    }
+    return lit / 16.0;
+}
+// ---- contact-hardening sun shadows: end ----
+
+// How far, in world units, contact-hardening shadows look for casters
+// around a point in cascade `i`: half the edge a caster a quarter of the
+// shadow distance away casts, and at least `Softest`'s edge there. The same
+// in every cascade, so an edge keeps its width where two cascades meet.
+fn contact_search(i: i32) -> f32 {
+    return max(0.125 * frame.sun_dir.w * frame.shadow.w, 1.5 * frame.cascade_texel[i]);
+}
+
+// Whether the sun's shadows are contact-hardening this frame.
+fn contact_hardening() -> bool {
+    return frame.light_shadow.w > 3.5 && frame.sun_dir.w > 0.0;
+}
+
+// How the contact-hardening lookups turn at `world`: by a different angle
+// at each pixel (interleaved gradient noise), and also each frame with
+// temporal antialiasing on (its jitter is 0 without), so the antialiasing
+// averages the pattern away; without it the pattern stays still.
+fn contact_turn(world: vec3<f32>) -> f32 {
+    let clip = frame.view_proj * vec4<f32>(world, 1.0);
+    let pixel = floor((clip.xy / clip.w * vec2<f32>(0.5, -0.5) + 0.5) * frame.screen.xy);
+    var per_frame = 0.0;
+    if any(frame.jitter.xy != vec2<f32>(0.0)) {
+        per_frame = fract(sin(dot(frame.jitter.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    }
+    let noise = fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+    return (noise + per_frame) * 6.28318531;
+}
+
+// How much light cascade `i` lets through at `c`, with this frame's filter.
+fn sun_cascade_light(i: i32, c: vec4<f32>, n: vec3<f32>, turn: f32, contact: bool) -> f32 {
+    if contact {
+        return contact_light(i, c, n, turn);
+    }
+    return cascade_light(i, c);
+}
+
 // How much sun reaches `world` (0 in shadow, 1 lit). The first cascade
 // whose box holds the point gives the sharpest shadow; near that box's edge
 // it fades into the next cascade, so the step between them doesn't show.
@@ -614,16 +718,26 @@ fn sunlight(world: vec3<f32>, n: vec3<f32>) -> f32 {
     if count == 0 || fade >= 1.0 {
         return 1.0;
     }
-    // The 3x3 filter reaches one texel further out than the point.
-    let inside = 1.0 - 2.0 * frame.shadow.y;
+    let contact = contact_hardening();
+    var turn = 0.0;
+    if contact {
+        turn = contact_turn(world);
+    }
     var lit = 1.0;
     for (var i = 0; i < count; i++) {
         let c = cascade_coords(i, world, n);
+        // The 3x3 filter reaches one texel further out than the point;
+        // contact-hardening lookups as far as they search, and a texel.
+        var inside = 1.0 - 2.0 * frame.shadow.y;
+        if contact {
+            let m = frame.sun_view_proj[i];
+            inside -= contact_search(i) * length(vec3<f32>(m[0].x, m[1].x, m[2].x));
+        }
         if c.w < inside {
-            lit = cascade_light(i, c);
+            lit = sun_cascade_light(i, c, n, turn, contact);
             let blend = smoothstep(0.85, 1.0, c.w / inside);
             if blend > 0.0 && i + 1 < count {
-                lit = mix(lit, cascade_light(i + 1, cascade_coords(i + 1, world, n)), blend);
+                lit = mix(lit, sun_cascade_light(i + 1, cascade_coords(i + 1, world, n), n, turn, contact), blend);
             }
             break;
         }

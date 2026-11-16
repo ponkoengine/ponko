@@ -196,7 +196,19 @@ pub(crate) struct Lists {
     spare: (Vec<Instance3D>, Vec<u32>),
     /// How many times the array was packed again.
     pub repacks: u32,
+    /// The views whose instances changed this frame (bit `view` each): a
+    /// thing entered or left them, changed mesh, or was drawn otherwise.
+    /// Atomic: tasks writing instances in place mark it (see
+    /// [`Pass::write_in_place`]).
+    touched: AtomicU32,
+    /// Per view, a number that changes whenever what the view draws
+    /// changes, and never comes back (see [`generation`](Self::generation)).
+    generations: [u64; VIEWS],
 }
+
+/// Hands out list generations: unique across every `Lists`, so two frames'
+/// generations never meet.
+static GENERATIONS: AtomicU64 = AtomicU64::new(1);
 
 impl Default for Lists {
     fn default() -> Self {
@@ -209,6 +221,8 @@ impl Default for Lists {
             things: 0,
             spare: Default::default(),
             repacks: 0,
+            touched: AtomicU32::new(0),
+            generations: [0; VIEWS],
         }
     }
 }
@@ -217,7 +231,9 @@ impl Lists {
     /// Starts a frame.
     pub fn begin(&mut self, arena: &mut Vec<Instance3D>) {
         self.fresh = self.views.iter().all(|v| v.count == 0);
+        *self.touched.get_mut() = 0;
         if self.fresh {
+            *self.touched.get_mut() = VIEW_BITS;
             arena.clear();
             self.owners.clear();
             for view in &mut self.views {
@@ -297,14 +313,25 @@ impl Lists {
                 (true, true) => {
                     let (from, to) = (old.bucket(view), new.bucket(view));
                     if from == to {
-                        arena[self.views[view].slots[id as usize] as usize] = *instance;
+                        let slot = &mut arena[self.views[view].slots[id as usize] as usize];
+                        if bytemuck::bytes_of(slot) != bytemuck::bytes_of(instance) {
+                            *slot = *instance;
+                            *self.touched.get_mut() |= bit;
+                        }
                     } else {
                         self.leave(arena, view, from, id);
                         self.enter(arena, view, to, id, instance);
+                        *self.touched.get_mut() |= bit;
                     }
                 }
-                (true, false) => self.leave(arena, view, old.bucket(view), id),
-                _ => self.enter(arena, view, new.bucket(view), id, instance),
+                (true, false) => {
+                    self.leave(arena, view, old.bucket(view), id);
+                    *self.touched.get_mut() |= bit;
+                }
+                _ => {
+                    self.enter(arena, view, new.bucket(view), id, instance);
+                    *self.touched.get_mut() |= bit;
+                }
             }
         }
         self.applied[id as usize] = new;
@@ -330,7 +357,10 @@ impl Lists {
             } else {
                 // The others move to its end, leaving their place behind.
                 let to = arena.len();
-                assert!(to + (cap as usize) < NONE as usize, "too many 3D instances");
+                assert!(
+                    to + (cap as usize) < NONE as usize,
+                    "too many 3D instances; free unused instance batches or reduce their sizes"
+                );
                 arena.resize(to + cap as usize, Instance3D::default());
                 owners.resize(to + cap as usize, NONE);
                 arena.copy_within(from..from + n, to);
@@ -372,6 +402,12 @@ impl Lists {
     /// or is more than twice what its blocks need with room to grow (space
     /// left behind by blocks that moved, or kept by blocks that shrank).
     pub fn finish(&mut self, arena: &mut Vec<Instance3D>) {
+        let mut touched = *self.touched.get_mut() & VIEW_BITS;
+        while touched != 0 {
+            let view = touched.trailing_zeros() as usize;
+            touched &= touched - 1;
+            self.generations[view] = GENERATIONS.fetch_add(1, Ordering::Relaxed);
+        }
         if self.fresh {
             if !arena.is_empty() {
                 self.repack(arena, true);
@@ -431,6 +467,23 @@ impl Lists {
         owners.shrink_to(arena.len());
         self.spare = (packed, owners);
         self.repacks += 1;
+    }
+
+    /// Marks the views of `flags` (bit `view` each) as changed this frame,
+    /// for a change the lists can't see (what a mesh id stands for).
+    pub fn touch(&self, flags: u32) {
+        let flags = flags & VIEW_BITS;
+        // Most changes land in views marked already: no write then.
+        if self.touched.load(Ordering::Relaxed) & flags != flags {
+            self.touched.fetch_or(flags, Ordering::Relaxed);
+        }
+    }
+
+    /// A number standing for what `view` draws: the same while it draws
+    /// the same instances of the same meshes, another (never seen before,
+    /// in any frame's lists) once that changes. Set by [`finish`](Self::finish).
+    pub fn generation(&self, view: usize) -> u64 {
+        self.generations[view]
     }
 
     /// How many things some view draws, each counted once.
@@ -498,7 +551,9 @@ struct Source<'a> {
     parts: Option<&'a ModelMaterials>,
     /// Whether it has a [`Skeleton`].
     skeleton: bool,
-    /// Whether it has [`ShadowOnly`]: no view but the shadow maps draws it.
+    /// Whether it has [`ShadowOnly`], or is on none of the camera's
+    /// [`RenderLayers`](crate::camera::RenderLayers): no view but the
+    /// shadow maps draws it.
     shadow_only: bool,
 }
 
@@ -519,6 +574,7 @@ type ModelItem<'a> = (
     Option<&'a ModelMaterial>,
     Option<&'a ModelMaterials>,
     Option<&'a ShadowOnly>,
+    Option<&'a crate::camera::RenderLayers>,
 );
 
 impl<'a> Source<'a> {
@@ -533,6 +589,7 @@ impl<'a> Source<'a> {
         material: Option<&ModelMaterial>,
         parts: Option<&'a ModelMaterials>,
         shadow_only: Option<&ShadowOnly>,
+        (layers, mask): (Option<&crate::camera::RenderLayers>, u32),
     ) -> Self {
         Self {
             transform,
@@ -546,7 +603,8 @@ impl<'a> Source<'a> {
             material: material.map_or(NONE, |o| o.0.id),
             parts: parts.filter(|p| !p.raw().is_empty()),
             skeleton: skeleton.is_some(),
-            shadow_only: shadow_only.is_some(),
+            // On none of the camera's layers: only its shadow shows.
+            shadow_only: shadow_only.is_some() || layers.copied().unwrap_or_default().0 & mask == 0,
         }
     }
 
@@ -981,6 +1039,8 @@ impl Pass<'_> {
             return false;
         };
         let words: &[u32] = bytemuck::cast_slice(std::slice::from_ref(&instance));
+        // A changed model: the views drawing it may draw it otherwise.
+        self.lists.touch(flags);
         for slot in slots {
             for (to, &word) in self.arena[slot * WORDS..][..WORDS].iter().zip(words) {
                 to.store(word, Ordering::Relaxed);
@@ -994,8 +1054,21 @@ impl Pass<'_> {
     /// only one model in [`SAMPLE`] is; the others are worked out and
     /// culled from their components alone. Returns what goes into
     /// `Tracked::results`.
-    fn check(&self, (entity, t, m, shadow, skeleton, receives, material, parts, shadow_only): ModelItem<'_>) -> u32 {
-        let source = Source::of(t, m, shadow, skeleton, receives, material, parts, shadow_only);
+    fn check(
+        &self,
+        (entity, t, m, shadow, skeleton, receives, material, parts, shadow_only, layers): ModelItem<'_>,
+    ) -> u32 {
+        let source = Source::of(
+            t,
+            m,
+            shadow,
+            skeleton,
+            receives,
+            material,
+            parts,
+            shadow_only,
+            (layers, self.culler.layers()),
+        );
         let find = || {
             let bits = entity.to_bits();
             match self.slot_of.get(entity.index() as usize) {
@@ -1202,7 +1275,7 @@ impl Tracked {
         let mut models = world.query::<ModelItem<'_>>().filter::<Without<SkinOf>>();
         if !rush {
             models.for_each(
-                |(entity, t, m, shadow, skeleton, receives, material, parts, shadow_only)| {
+                |(entity, t, m, shadow, skeleton, receives, material, parts, shadow_only, layers)| {
                     let k = match self.find(entity) {
                         Some(k) => {
                             found += 1;
@@ -1213,7 +1286,17 @@ impl Tracked {
                             self.admit(entity, lists)
                         }
                     };
-                    let source = Source::of(t, m, shadow, skeleton, receives, material, parts, shadow_only);
+                    let source = Source::of(
+                        t,
+                        m,
+                        shadow,
+                        skeleton,
+                        receives,
+                        material,
+                        parts,
+                        shadow_only,
+                        (layers, culler.layers()),
+                    );
                     self.settle(k, source, &frame, &mut tally, lists, arena, motion);
                 },
             );
@@ -1229,8 +1312,18 @@ impl Tracked {
         let mut now = std::mem::take(&mut self.fresh_drawn);
         now.clear();
         models.for_each(
-            |(entity, t, m, shadow, skeleton, receives, material, parts, shadow_only)| {
-                let source = Source::of(t, m, shadow, skeleton, receives, material, parts, shadow_only);
+            |(entity, t, m, shadow, skeleton, receives, material, parts, shadow_only, layers)| {
+                let source = Source::of(
+                    t,
+                    m,
+                    shadow,
+                    skeleton,
+                    receives,
+                    material,
+                    parts,
+                    shadow_only,
+                    (layers, culler.layers()),
+                );
                 if sampled(entity) {
                     new += self.rush_sampled(entity, source, &frame, &mut tally, &mut now, lists, arena, motion);
                     return;

@@ -92,7 +92,7 @@ fn query_get_single_entity() {
 }
 
 #[test]
-#[should_panic(expected = "twice")]
+#[should_panic(expected = "remove the duplicate access or split it into sequential queries")]
 fn aliasing_query_panics() {
     let mut w = World::new();
     let _ = w.query::<(&mut Pos, &Pos)>();
@@ -191,7 +191,7 @@ fn tuple_or_filters_allow_optional_mutable_fetches_and_builder_filters() {
 }
 
 #[test]
-#[should_panic(expected = "twice")]
+#[should_panic(expected = "remove the duplicate access or split it into sequential queries")]
 fn tuple_or_filters_do_not_bypass_optional_mutable_alias_checks() {
     let mut w = World::new();
     let _ = w

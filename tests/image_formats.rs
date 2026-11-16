@@ -6,6 +6,7 @@
 //! `cargo test -p ponko --no-default-features --test image_formats` (JPEG off)
 //! and `cargo test -p ponko --features image-formats --test image_formats`.
 
+use ponko::assets::MemorySource;
 use ponko::error::ErrorKind;
 use ponko::prelude::*;
 

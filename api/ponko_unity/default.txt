@@ -1,4 +1,21 @@
 pub mod ponko_unity
+#[non_exhaustive] pub enum ponko_unity::ErrorKind
+pub ponko_unity::ErrorKind::Decode
+pub ponko_unity::ErrorKind::Invalid
+pub ponko_unity::ErrorKind::Io
+pub ponko_unity::ErrorKind::Other
+pub ponko_unity::ErrorKind::Unsupported
+impl core::clone::Clone for ponko_unity::ErrorKind
+pub fn ponko_unity::ErrorKind::clone(&self) -> Self
+impl core::cmp::Eq for ponko_unity::ErrorKind
+impl core::cmp::PartialEq for ponko_unity::ErrorKind
+pub fn ponko_unity::ErrorKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_unity::ErrorKind
+pub fn ponko_unity::ErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko_unity::ErrorKind
+pub fn ponko_unity::ErrorKind::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko_unity::ErrorKind
+impl core::marker::StructuralPartialEq for ponko_unity::ErrorKind
 pub enum ponko_unity::Surface
 pub ponko_unity::Surface::Cutout(f32)
 pub ponko_unity::Surface::Opaque
@@ -115,18 +132,22 @@ pub fn ponko_unity::Channel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::
 impl core::marker::Copy for ponko_unity::Channel
 impl core::marker::StructuralPartialEq for ponko_unity::Channel
 pub struct ponko_unity::Error
-pub ponko_unity::Error::message: alloc::string::String
+impl ponko_unity::Error
+pub fn ponko_unity::Error::kind(&self) -> ponko_unity::ErrorKind
+pub fn ponko_unity::Error::line(&self) -> core::option::Option<usize>
+pub fn ponko_unity::Error::message(&self) -> &str
+pub fn ponko_unity::Error::path(&self) -> core::option::Option<&std::path::Path>
 impl core::clone::Clone for ponko_unity::Error
 pub fn ponko_unity::Error::clone(&self) -> Self
 impl core::cmp::Eq for ponko_unity::Error
 impl core::cmp::PartialEq for ponko_unity::Error
 pub fn ponko_unity::Error::eq(&self, &Self) -> bool
 impl core::error::Error for ponko_unity::Error
+pub fn ponko_unity::Error::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
 impl core::fmt::Debug for ponko_unity::Error
 pub fn ponko_unity::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for ponko_unity::Error
 pub fn ponko_unity::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for ponko_unity::Error
 pub struct ponko_unity::GameObject
 pub ponko_unity::GameObject::active: bool
 pub ponko_unity::GameObject::components: alloc::vec::Vec<ponko_unity::UnityObject>

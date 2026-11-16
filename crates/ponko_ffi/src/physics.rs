@@ -343,7 +343,7 @@ pub unsafe extern "C" fn ponko_ctx_set_gravity(ctx: *mut crate::PonkoCtx, gravit
 /// `max_distance`, as of the last physics step. `*out_found` says whether
 /// anything was hit; `*out_hit` is written only then.
 /// # Safety
-/// Live ctx, outside query callbacks; writable outputs.
+/// Live ctx (inside a `ponko_query` callback too, not `ponko_query_par`); writable outputs.
 /// ```
 /// use ponko_ffi::*;
 /// let (mut found, mut hit) = (false, PonkoRayHit::default());
@@ -367,7 +367,7 @@ pub unsafe extern "C" fn ponko_ctx_cast_ray(
 /// them and sets `*out_count` to how many there are in total, so a
 /// too-small buffer can be grown and the call repeated.
 /// # Safety
-/// Live ctx, outside query callbacks; `out_entities` writable for `capacity`
+/// Live ctx (inside a `ponko_query` callback too, not `ponko_query_par`); `out_entities` writable for `capacity`
 /// entities (may be null if 0); writable count.
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_physics_at(std::ptr::null_mut(), Default::default(), std::ptr::null_mut(), 0, std::ptr::null_mut()) } as u32, 1);
@@ -470,7 +470,7 @@ mod imp {
     use ponko_ecs::Entity;
 
     use super::*;
-    use crate::ctx::{collect, ctx_access, events, out};
+    use crate::ctx::{collect, ctx_access, events, out, physics_read};
     use crate::game::{build, ok};
     use crate::types::to_c;
     use crate::{PonkoCtx, boundary, builtin, error};
@@ -579,6 +579,8 @@ mod imp {
                 restitution: non_negative(c.restitution, AMOUNT)?,
                 sensor: c.sensor,
                 offset: finite(c.offset, "collider offset must be finite")?,
+                // PonkoCollider has no groups (ABI 2): ponko_set_collider_groups sets them.
+                groups: ponko::d2::CollisionGroups::ALL,
             })
         }
         fn to_c(&self) -> PonkoCollider {
@@ -742,10 +744,10 @@ mod imp {
             }
             // SAFETY: forwarded caller contract.
             let hit = unsafe {
-                ctx_access(ctx, |c| {
+                physics_read(ctx, |p| {
                     // The C call has no filter: it sees sensors too.
                     let sensors = ponko::d2::QueryFilter::default().with_sensors();
-                    Ok(c.physics.cast_ray(to_c(origin), to_c(direction), max_distance, sensors))
+                    Ok(p.cast_ray(to_c(origin), to_c(direction), max_distance, sensors))
                 })?
             };
             // SAFETY: checked non-null; the caller supplies writable outputs.
@@ -780,12 +782,12 @@ mod imp {
             FOUND.with_borrow_mut(|found| {
                 // SAFETY: forwarded caller contract.
                 unsafe {
-                    ctx_access(ctx, |c| {
+                    physics_read(ctx, |p| {
                         // The C calls have no filter: they see sensors too.
                         let sensors = ponko::d2::QueryFilter::default().with_sensors();
                         match radius {
-                            None => c.physics.overlap_point(to_c(at), sensors, found),
-                            Some(r) => c.physics.overlap_circle(to_c(at), r, sensors, found),
+                            None => p.overlap_point(to_c(at), sensors, found),
+                            Some(r) => p.overlap_circle(to_c(at), r, sensors, found),
                         }
                         Ok(())
                     })?;

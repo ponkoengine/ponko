@@ -4,5 +4,8 @@
 //! (`d3::NavMesh`, `d3::NavAgent`, `d3::NavObstacle`); this module holds
 //! what baking one takes. Grid navigation in 2D is [`flow`](crate::flow);
 //! the agent system is `systems::step_navmesh3d`.
+
+#![deny(missing_docs)]
+
 #[cfg(feature = "navmesh")]
 pub use crate::nav3d::{NavBakeError, NavBakeSettings, NavSource};

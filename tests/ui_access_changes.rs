@@ -40,7 +40,7 @@ fn menu() -> Menu {
         .id();
     let music = ui.toggle(root, "Music").layout(UiLayout::row(30.0)).value(1.0).id();
     let quit = ui.button(root, "Quit").layout(UiLayout::row(30.0)).enabled(false).id();
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     ui.layout(VIEW);
     Menu {
         ui,
@@ -204,7 +204,7 @@ fn modal_screens_remove_what_they_cover_and_popping_brings_it_back() {
     let (mut m, mut tracker) = watched();
     let dialog = m.ui.root().layout(UiLayout::centered(300.0, 120.0)).id();
     let yes = m.ui.button(dialog, "Yes").layout(UiLayout::row(30.0)).id();
-    m.ui.push_screen(dialog, true);
+    m.ui.push_modal(dialog);
     idle(&mut m.ui);
 
     let opened = tracker.update(&m.ui).unwrap();
@@ -232,7 +232,7 @@ fn a_non_modal_overlay_makes_the_screen_below_inert_without_removing_it() {
     let (mut m, mut tracker) = watched();
     let toast = m.ui.root().layout(UiLayout::anchored(0.0, 0.0, 200.0, 40.0)).id();
     m.ui.label(toast, "Saved").layout(UiLayout::row(20.0));
-    m.ui.push_screen(toast, false);
+    m.ui.push_modeless(toast);
     idle(&mut m.ui);
     let shown = tracker.update(&m.ui).unwrap();
     assert!(shown.removed.is_empty() && shown.screens_changed);
@@ -407,7 +407,7 @@ fn requests_for_nodes_the_keyboard_could_not_reach_do_nothing() {
     // Under a modal dialog the menu can't be reached either.
     let dialog = m.ui.root().layout(UiLayout::centered(300.0, 120.0)).id();
     let yes = m.ui.button(dialog, "Yes").layout(UiLayout::row(30.0)).id();
-    m.ui.push_screen(dialog, true);
+    m.ui.push_modal(dialog);
     idle(&mut m.ui);
     m.ui.push_access_action(UiAccessAction::Activate(m.play));
     m.ui.push_access_action(UiAccessAction::Activate(yes));
@@ -438,10 +438,10 @@ fn focusing_a_node_scrolled_out_of_view_brings_it_into_view() {
     for i in 0..20 {
         // Rows that keep their height, so the list overflows.
         let mut row = UiLayout::row(30.0);
-        row.style_mut().flex_shrink = 0.0;
+        row.unstable_style_mut().flex_shrink = 0.0;
         last = ui.button(list, format!("Item {i}")).layout(row).id();
     }
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     ui.layout(VIEW);
     assert_eq!(ui.scroll(list), Some(Vec2::ZERO));
     assert!(

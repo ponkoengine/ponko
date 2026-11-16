@@ -14,7 +14,7 @@ fn fs_effect(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     p.world = scene_position(at.xy);
     p.distance = distance(p.world, frame.camera.xyz);
     let size = vec2<i32>(textureDimensions(scene_depth_texture));
-    p.sky = textureLoad(scene_depth_texture, clamp(vec2<i32>(at.xy), vec2<i32>(0), size - 1), 0) >= 1.0;
+    p.sky = textureLoad(scene_depth_texture, clamp(vec2<i32>(at.xy), vec2<i32>(0), size - 1), 0) <= 0.0; // reverse-Z: the sky is at 0
     return vec4<f32>(effect(p), 1.0);
 }
 
@@ -46,6 +46,6 @@ fn fs_effect_target(in: TargetOut) -> @location(0) vec4<f32> {
     p.color = scene_color(at);
     p.world = scene_position(at);
     p.distance = distance(p.world, frame.camera.xyz);
-    p.sky = textureLoad(scene_depth_texture, texel, 0) >= 1.0;
+    p.sky = textureLoad(scene_depth_texture, texel, 0) <= 0.0; // reverse-Z: the sky is at 0
     return vec4<f32>(effect(p), 1.0);
 }

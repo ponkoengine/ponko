@@ -15,12 +15,16 @@ use ponko_ecs::{Component, Entity, Without, World};
 ///
 /// ```
 /// # use ponko::prelude::*;
-/// let shoulder = ponko::anim::Joint { name: "shoulder".into(), parent: None, rest: ponko::d3::Transform::default() };
-/// let elbow = ponko::anim::Joint { name: "elbow".into(), parent: Some(0), rest: ponko::d3::Transform::at(vec3(0.0, -0.3, 0.0)) };
+/// let shoulder = ponko::anim::Joint::new("shoulder", None);
+/// let elbow = ponko::anim::Joint::new("elbow", 0).with_rest(ponko::d3::Transform::at(vec3(0.0, -0.3, 0.0)));
 /// let arm = ponko::anim::Skeleton::new(vec![shoulder, elbow]);
 /// assert_eq!(arm.find("elbow"), Some(1));
 /// ```
+///
+/// New fields may be added in any release: build one with
+/// [`new`](Self::new) and [`with_rest`](Self::with_rest).
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Joint {
     /// Its name, for finding it and for binding meshes made for another
     /// skeleton with the same names.
@@ -32,6 +36,32 @@ pub struct Joint {
     pub rest: Transform3D,
 }
 
+impl Joint {
+    /// A joint called `name` hanging from `parent` (an earlier joint's
+    /// index, or `None` for a root), at rest where its parent is; place it
+    /// with [`with_rest`](Self::with_rest).
+    /// ```
+    /// use ponko::anim::Joint;
+    /// let hip = Joint::new("hip", None);
+    /// let knee = Joint::new("knee", 0);
+    /// assert_eq!((hip.parent, knee.parent), (None, Some(0)));
+    /// ```
+    #[must_use]
+    pub fn new(name: impl Into<String>, parent: impl Into<Option<usize>>) -> Self {
+        Self {
+            name: name.into(),
+            parent: parent.into(),
+            rest: Transform3D::default(),
+        }
+    }
+
+    with_fields! {
+        /// Sets [`rest`](Self::rest), where it sits relative to its parent
+        /// at rest.
+        rest: Transform3D => with_rest;
+    }
+}
+
 /// A component that poses the skinned [`Model`] on the same entity (and the
 /// models whose [`SkinOf`] points at it): each joint's `pose` is where it
 /// sits relative to its parent this frame, and the mesh's corners follow
@@ -40,6 +70,9 @@ pub struct Joint {
 /// [`Skeleton::new`]. Cloning one is cheap: the joints are shared.
 ///
 /// A skinned model without a skeleton draws in the pose it was modelled in.
+///
+/// **WebGL2:** meshes are posed on the CPU there (the same picture) instead
+/// of by a compute pass, at the price of CPU time.
 ///
 /// ```no_run
 /// # use ponko::prelude::*;
@@ -70,7 +103,7 @@ impl Skeleton {
     ///
     /// ```
     /// # use ponko::prelude::*;
-    /// let root = ponko::anim::Joint { name: "root".into(), parent: None, rest: ponko::d3::Transform::at(vec3(0.0, 1.0, 0.0)) };
+    /// let root = ponko::anim::Joint::new("root", None).with_rest(ponko::d3::Transform::at(vec3(0.0, 1.0, 0.0)));
     /// let s = ponko::anim::Skeleton::new(vec![root]);
     /// assert_eq!(s.joint_matrix(0), Mat4::from_translation(vec3(0.0, 1.0, 0.0)));
     /// ```
@@ -78,20 +111,51 @@ impl Skeleton {
     /// # Panics
     ///
     /// If a joint's parent isn't an earlier joint, or there are more than
-    /// 65536 joints.
+    /// 65536 joints; [`try_new`](Self::try_new) returns those as errors.
     #[must_use]
     pub fn new(joints: Vec<Joint>) -> Self {
-        assert!(joints.len() <= 1 << 16, "Skeleton::new: more than 65536 joints");
+        Self::try_new(joints).unwrap_or_else(|e| panic!("Skeleton::new: {}", e.message()))
+    }
+
+    /// A skeleton of `joints`, at rest, like [`new`](Self::new), or why the
+    /// joints can't form one. For joint lists from files or tools.
+    ///
+    /// # Errors
+    ///
+    /// An [`ErrorKind::Limit`](crate::error::ErrorKind::Limit)
+    /// error for more than 65536 joints, an
+    /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) error naming the
+    /// first joint whose parent doesn't come before it.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::anim::{Joint, Skeleton};
+    /// let orphan = Joint::new("hand", 3);
+    /// let err = Skeleton::try_new(vec![orphan]).unwrap_err();
+    /// assert_eq!(err.kind(), ErrorKind::Invalid);
+    /// ```
+    pub fn try_new(joints: Vec<Joint>) -> Result<Self, crate::error::Error> {
+        use crate::error::{Error, ErrorKind};
+        if joints.len() > 1 << 16 {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                format!("more than 65536 joints ({})", joints.len()),
+            ));
+        }
         for (i, j) in joints.iter().enumerate() {
-            if let Some(p) = j.parent {
-                assert!(
-                    p < i,
-                    "Skeleton::new: joint {i} ({}) hangs from joint {p}, which doesn't come before it",
-                    j.name
-                );
+            if let Some(p) = j.parent
+                && p >= i
+            {
+                return Err(Error::new(
+                    ErrorKind::Invalid,
+                    format!(
+                        "joint {i} ({}) hangs from joint {p}, which doesn't come before it",
+                        j.name
+                    ),
+                ));
             }
         }
-        Self::from_shared(joints.into())
+        Ok(Self::from_shared(joints.into()))
     }
 
     pub(crate) fn from_shared(joints: Arc<[Joint]>) -> Self {
@@ -110,7 +174,7 @@ impl Skeleton {
     ///
     /// ```
     /// # use ponko::prelude::*;
-    /// let s = ponko::anim::Skeleton::new(vec![ponko::anim::Joint { name: "hip".into(), parent: None, rest: ponko::d3::Transform::default() }]);
+    /// let s = ponko::anim::Skeleton::new(vec![ponko::anim::Joint::new("hip", None)]);
     /// assert_eq!(s.joints()[0].name, "hip");
     /// ```
     #[must_use]
@@ -122,7 +186,7 @@ impl Skeleton {
     ///
     /// ```
     /// # use ponko::prelude::*;
-    /// let s = ponko::anim::Skeleton::new(vec![ponko::anim::Joint { name: "hip".into(), parent: None, rest: ponko::d3::Transform::default() }]);
+    /// let s = ponko::anim::Skeleton::new(vec![ponko::anim::Joint::new("hip", None)]);
     /// assert_eq!(s.find("hip"), Some(0));
     /// assert_eq!(s.find("tail"), None);
     /// ```
@@ -135,7 +199,7 @@ impl Skeleton {
     ///
     /// ```
     /// # use ponko::prelude::*;
-    /// let mut s = ponko::anim::Skeleton::new(vec![ponko::anim::Joint { name: "hip".into(), parent: None, rest: ponko::d3::Transform::default() }]);
+    /// let mut s = ponko::anim::Skeleton::new(vec![ponko::anim::Joint::new("hip", None)]);
     /// s.pose[0].position.y = 3.0;
     /// s.reset_pose();
     /// assert_eq!(s.pose[0], ponko::d3::Transform::default());
@@ -166,8 +230,8 @@ impl Skeleton {
     ///
     /// ```
     /// # use ponko::prelude::*;
-    /// let root = ponko::anim::Joint { name: "root".into(), parent: None, rest: ponko::d3::Transform::at(vec3(0.0, 1.0, 0.0)) };
-    /// let tip = ponko::anim::Joint { name: "tip".into(), parent: Some(0), rest: ponko::d3::Transform::at(vec3(0.0, 2.0, 0.0)) };
+    /// let root = ponko::anim::Joint::new("root", None).with_rest(ponko::d3::Transform::at(vec3(0.0, 1.0, 0.0)));
+    /// let tip = ponko::anim::Joint::new("tip", 0).with_rest(ponko::d3::Transform::at(vec3(0.0, 2.0, 0.0)));
     /// let mut s = ponko::anim::Skeleton::new(vec![root, tip]);
     /// s.pose[0].rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
     /// let at = s.joint_matrix(1).transform_point3(Vec3::ZERO);
@@ -250,11 +314,15 @@ pub struct SkinOf(pub Entity);
 /// ctx.world.spawn((
 ///     ponko::d3::Transform::default(),
 ///     ponko::render::Model::new(cup),
-///     ponko::anim::AttachToJoint { skeleton: person, joint: hand, offset: ponko::d3::Transform::at(vec3(0.0, 0.05, 0.0)) },
+///     ponko::anim::AttachToJoint::new(person, hand).with_offset(ponko::d3::Transform::at(vec3(0.0, 0.05, 0.0))),
 /// ));
 /// # }
 /// ```
+///
+/// New fields may be added in any release: build one with
+/// [`new`](Self::new) and [`with_offset`](Self::with_offset).
 #[derive(Debug, Clone, Copy, PartialEq, Component, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct AttachToJoint {
     /// The entity with the [`Skeleton`].
     pub skeleton: Entity,
@@ -262,6 +330,31 @@ pub struct AttachToJoint {
     pub joint: usize,
     /// Where this entity sits in the joint's space.
     pub offset: Transform3D,
+}
+
+impl AttachToJoint {
+    /// Follow joint `joint` of the skeleton on entity `skeleton`, sitting
+    /// exactly on the joint; move it with [`with_offset`](Self::with_offset).
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # let person = ponko::prelude::World::new().spawn((ponko::d3::Transform::default(),));
+    /// let held = ponko::anim::AttachToJoint::new(person, 3).with_offset(ponko::d3::Transform::at(vec3(0.0, 0.05, 0.0)));
+    /// assert_eq!(held.joint, 3);
+    /// ```
+    #[must_use]
+    pub fn new(skeleton: Entity, joint: usize) -> Self {
+        Self {
+            skeleton,
+            joint,
+            offset: Transform3D::default(),
+        }
+    }
+
+    with_fields! {
+        /// Sets [`offset`](Self::offset), where this entity sits in the
+        /// joint's space.
+        offset: Transform3D => with_offset;
+    }
 }
 
 /// How a skinned mesh binds to joints: per joint it uses (a "slot", which
@@ -324,7 +417,7 @@ impl MeshSkin {
 ///     let mut quad = ponko::render::MeshData::plane(1.0);
 ///     let mut up = vec![Vec3::ZERO; quad.positions.len()];
 ///     up[0] = vec3(0.0, 0.5, 0.0);
-///     quad.morph_targets.push(ponko::anim::MorphTarget { name: "raise".into(), positions: up, normals: Vec::new() });
+///     quad.morph_targets.push(ponko::anim::MorphTarget::new("raise", up));
 ///     let material = ctx.gfx.default_material();
 ///     let mesh = ctx.gfx.create_mesh(&quad, material);
 ///     let raise = ctx.gfx.morph_target(mesh, "raise").unwrap();
@@ -870,16 +963,8 @@ mod tests {
 
     fn arm() -> Skeleton {
         Skeleton::new(vec![
-            Joint {
-                name: "root".into(),
-                parent: None,
-                rest: Transform3D::default(),
-            },
-            Joint {
-                name: "tip".into(),
-                parent: Some(0),
-                rest: Transform3D::at(vec3(0.0, 1.0, 0.0)),
-            },
+            Joint::new("root", None),
+            Joint::new("tip", 0).with_rest(Transform3D::at(vec3(0.0, 1.0, 0.0))),
         ])
     }
 
@@ -1023,11 +1108,7 @@ mod tests {
         world.spawn((Model::new(mesh), SkinOf(other)));
         let cup = world.spawn((
             Transform3D::default(),
-            AttachToJoint {
-                skeleton: body,
-                joint: 1,
-                offset: Transform3D::at(vec3(0.0, 0.5, 0.0)),
-            },
+            AttachToJoint::new(body, 1).with_offset(Transform3D::at(vec3(0.0, 0.5, 0.0))),
         ));
         let mut frame = SkinFrame::default();
         frame.collect(&mut world, &assets);
@@ -1057,14 +1138,7 @@ mod tests {
         bent.pose[0].rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
         let mesh = super::super::Mesh { id: 0 };
         let body = world.spawn((Transform3D::default(), Model::new(mesh), bent));
-        let cup = world.spawn((
-            Transform3D::default(),
-            AttachToJoint {
-                skeleton: body,
-                joint: 1,
-                offset: Transform3D::default(),
-            },
-        ));
+        let cup = world.spawn((Transform3D::default(), AttachToJoint::new(body, 1)));
         let mut frame = SkinFrame::default();
         frame.collect(&mut world, &assets);
         assert_eq!(frame.draws.len(), 1);
@@ -1081,14 +1155,7 @@ mod tests {
         // The game adds an unbent skeleton to the same id.
         world.insert(body, Model::new(mesh));
         world.insert(body, arm());
-        world.insert(
-            cup,
-            AttachToJoint {
-                skeleton: body,
-                joint: 1,
-                offset: Transform3D::default(),
-            },
-        );
+        world.insert(cup, AttachToJoint::new(body, 1));
         frame.collect(&mut world, &assets);
         assert_eq!(frame.draws.len(), 1);
         assert_eq!(frame.draws[0].matrix, Transform3D::at(vec3(5.0, 0.0, 0.0)).matrix());
@@ -1139,11 +1206,10 @@ mod tests {
             indices: vec![0, 1, 2],
             ..Default::default()
         };
-        data.morph_targets.push(crate::anim::MorphTarget {
-            name: "lift".into(),
-            positions: vec![vec3(0.0, 0.0, 2.0), Vec3::ZERO, Vec3::ZERO],
-            normals: Vec::new(),
-        });
+        data.morph_targets.push(crate::anim::MorphTarget::new(
+            "lift",
+            vec![vec3(0.0, 0.0, 2.0), Vec3::ZERO, Vec3::ZERO],
+        ));
         Assets3D {
             bounds: vec![data.bounds()],
             morphs: vec![MeshMorph::new(&data, vec![0.25]).map(Arc::new)],
@@ -1205,11 +1271,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "doesn't come before it")]
     fn parents_come_first() {
-        let _ = Skeleton::new(vec![Joint {
-            name: "loop".into(),
-            parent: Some(0),
-            rest: Transform3D::default(),
-        }]);
+        let _ = Skeleton::new(vec![Joint::new("loop", 0)]);
     }
 }
 

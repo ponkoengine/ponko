@@ -26,7 +26,7 @@ use super::{
 /// | `lighting.shadow_cascades` | 2 | 3 | 4 | 4 |
 /// | `lighting.shadow_resolution` | 1024 | 2048 | 2048 | 4096 |
 /// | `lighting.shadow_refresh` | 4 | 2 | 2 | 1 |
-/// | `lighting.shadow_filter` | `Sharp` | `Soft` | `Softest` | `Softest` |
+/// | `lighting.shadow_filter` | `Sharp` | `Soft` | `ContactHardening` | `ContactHardening` |
 /// | `lighting.light_shadow_views` | 0 | 4 | 8 | 24 |
 /// | `lighting.light_shadow_resolution` | 512 | 512 | 1024 | 2048 |
 /// | `lighting.light_shadow_atlas` | 1024 | 2048 | 4096 | 8192 |
@@ -61,12 +61,12 @@ pub enum GraphicsQuality {
     /// views of up to 512² for point and spot lights in a 2048² atlas, FXAA,
     /// no AO.
     Medium,
-    /// Four 2048² cascades reaching 80 units, eight views of up to 1024² for
-    /// point and spot lights in a 4096² atlas, light AO (2 slices, 4
-    /// steps), screen-space reflections, SMAA.
+    /// Four 2048² cascades reaching 80 units with contact-hardening edges,
+    /// eight views of up to 1024² for point and spot lights in a 4096² atlas,
+    /// light AO (2 slices, 4 steps), screen-space reflections, SMAA.
     High,
     /// Four 4096² cascades (256 MB of shadow maps) reaching 120 units, all
-    /// redrawn every frame, 24 views of up to 2048² for point and spot
+    /// redrawn every frame, with contact-hardening edges, 24 views of up to 2048² for point and spot
     /// lights in an 8192² atlas (another 256 MB), finer AO (4 slices, 8
     /// steps), screen-space reflections, global illumination, SMAA.
     Ultra,
@@ -133,7 +133,7 @@ impl GraphicsQuality {
                 shadow_cascades: 4,
                 shadow_resolution: 2048,
                 shadow_refresh: 2,
-                shadow_filter: ShadowFilter::Softest,
+                shadow_filter: ShadowFilter::ContactHardening,
                 light_shadow_views: 8,
                 light_shadow_resolution: 1024,
                 light_shadow_atlas: 4096,
@@ -154,7 +154,7 @@ impl GraphicsQuality {
                 shadow_cascades: 4,
                 shadow_resolution: 4096,
                 shadow_refresh: 1,
-                shadow_filter: ShadowFilter::Softest,
+                shadow_filter: ShadowFilter::ContactHardening,
                 light_shadow_views: MAX_LIGHT_SHADOW_VIEWS as u32,
                 light_shadow_resolution: 2048,
                 light_shadow_atlas: 8192,
@@ -362,7 +362,8 @@ impl SceneSettings {
     /// Takes out of the current settings what the GPU in `caps` can't do, as
     /// the renderer would draw them anyway: TAA becomes FXAA, and ambient
     /// occlusion, screen-space reflections and global illumination go off
-    /// where they're unavailable; shadow maps and the light shadow atlas
+    /// where they're unavailable; contact-hardening sun shadows become
+    /// `Softest` on WebGL2 (and any GL backend); shadow maps and the light shadow atlas
     /// shrink to the largest texture the GPU allows. Asking for more is
     /// never a GPU error (the renderer falls back by itself); fitting makes
     /// the settings say what is drawn, for an options menu.
@@ -395,6 +396,9 @@ impl SceneSettings {
         if !caps.available(F::GlobalIllumination) {
             lighting.gi.enabled = false;
         }
+        if lighting.shadow_filter == ShadowFilter::ContactHardening && !contact_shadows_drawn(caps) {
+            lighting.shadow_filter = ShadowFilter::Softest;
+        }
         let max = caps.limits.max_texture_dimension_2d;
         if max > 0 {
             lighting.shadow_resolution = lighting.shadow_resolution.min(max.max(MIN_SHADOW_RESOLUTION));
@@ -405,6 +409,13 @@ impl SceneSettings {
                 super::shadow_atlas::floor_pow2(lighting.light_shadow_atlas.min(max.max(MIN_LIGHT_SHADOW_ATLAS)));
         }
     }
+}
+
+/// Whether the GPU in `caps` draws `ShadowFilter::ContactHardening`: not
+/// on the GL backend (WebGL2 and native OpenGL ES), whose shading language
+/// can't read the shadow map's depths; the renderer draws `Softest` there.
+fn contact_shadows_drawn(caps: &crate::render::GpuCapabilities) -> bool {
+    caps.tier != crate::render::GpuTier::WebGl2 && caps.adapter.backend != "gl"
 }
 
 #[cfg(test)]
@@ -475,8 +486,9 @@ mod tests {
         assert_eq!((low.ambient_occlusion, low.anti_aliasing), (false, AntiAliasing::None));
         assert_eq!(
             (low.shadow_filter, medium.shadow_filter, high.shadow_filter),
-            (ShadowFilter::Sharp, ShadowFilter::Soft, ShadowFilter::Softest)
+            (ShadowFilter::Sharp, ShadowFilter::Soft, ShadowFilter::ContactHardening)
         );
+        assert_eq!(ultra.shadow_filter, ShadowFilter::ContactHardening);
         assert_eq!(
             (medium.shadow_distance, medium.shadow_cascades, medium.shadow_resolution),
             (50.0, 3, 2048)
@@ -661,5 +673,57 @@ mod tests {
         assert_eq!((p.ssr, l.gi.enabled), (0.0, false));
         assert_eq!(l.light_shadow_atlas, 2048);
         assert_eq!(l.shadow_cascades, 4, "untouched");
+    }
+
+    #[test]
+    fn shadow_sun_size_sets_how_fast_contact_hardening_edges_widen() {
+        let mut l = Lighting::default();
+        assert_eq!(l.penumbra_per_distance(), 0.0, "the fixed filters ignore it");
+        l.shadow_filter = ShadowFilter::ContactHardening;
+        let real = l.penumbra_per_distance();
+        assert!((real - 0.00925).abs() < 1e-4, "the real sun: {real} per unit");
+        l.shadow_sun_size = 6.0;
+        assert!((l.penumbra_per_distance() - 2.0 * 3f32.to_radians().tan()).abs() < 1e-6);
+        l.shadow_sun_size = 90.0;
+        let most = l.penumbra_per_distance();
+        assert!(
+            (most - 2.0 * 5f32.to_radians().tan()).abs() < 1e-6,
+            "clamped to 10 degrees: {most}"
+        );
+        l.shadow_sun_size = -1.0;
+        assert_eq!(l.penumbra_per_distance(), 0.0, "no smaller than a point");
+        l.shadow_sun_size = f32::NAN;
+        assert_eq!(l.penumbra_per_distance(), real, "a NaN counts as the default");
+    }
+
+    #[test]
+    fn contact_hardening_shadows_are_off_by_default_and_on_in_high_and_ultra() {
+        assert_eq!(Lighting::default().shadow_filter, ShadowFilter::Softest);
+        for q in GraphicsQuality::ALL {
+            let on = q.preset().shadow_filter == ShadowFilter::ContactHardening;
+            assert_eq!(on, matches!(q, GraphicsQuality::High | GraphicsQuality::Ultra), "{q:?}");
+        }
+    }
+
+    #[test]
+    fn fitting_to_webgl2_falls_back_from_contact_hardening_to_the_fixed_filter() {
+        use crate::render::GpuTier;
+        let fitted = |caps: &crate::render::GpuCapabilities| {
+            let mut s = SceneSettings::default();
+            s.set_quality(GraphicsQuality::High);
+            s.fit_quality_to(caps);
+            s.lighting.shadow_filter
+        };
+        assert_eq!(fitted(&GpuTier::Desktop.report()), ShadowFilter::ContactHardening);
+        assert_eq!(fitted(&GpuTier::Baseline.report()), ShadowFilter::ContactHardening);
+        assert_eq!(fitted(&GpuTier::WebGl2.report()), ShadowFilter::Softest);
+        let mut gl = GpuTier::Desktop.report();
+        gl.adapter.backend = "gl".to_owned();
+        assert_eq!(fitted(&gl), ShadowFilter::Softest, "native OpenGL ES draws Softest too");
+        // Fitting changes nothing else about the filter.
+        let mut s = SceneSettings::default();
+        s.lighting.shadow_filter = ShadowFilter::Soft;
+        s.fit_quality_to(&GpuTier::WebGl2.report());
+        assert_eq!(s.lighting.shadow_filter, ShadowFilter::Soft);
     }
 }

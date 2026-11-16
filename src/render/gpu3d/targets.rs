@@ -312,7 +312,7 @@ impl Renderer3D {
                 size,
                 &depth_read,
                 &self.post.black,
-                ssr.as_ref().map(|s| &s.ao),
+                ssr.as_ref().map(|s| (&s.ao, s.spread().1)),
                 velocity.as_ref().map(|v| v.velocity()).unwrap_or(&self.post.black),
             )
         });

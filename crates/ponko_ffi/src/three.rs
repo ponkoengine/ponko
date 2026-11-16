@@ -511,7 +511,9 @@ pub struct PonkoLighting {
     /// (1: every frame). Default 2.
     pub shadow_refresh: u32,
     /// How soft the sun's shadow edges are, 1 (one lookup per pixel, the
-    /// cheapest) to 3 (nine, the softest). Default 3.
+    /// cheapest) to 3 (nine, the softest), or 4: contact-hardening, sharp
+    /// where a shadow meets its caster and softer further from it (the
+    /// sun's size for it is `PonkoLightingEx::shadow_sun_size`). Default 3.
     pub shadow_filter: u32,
     /// Whether `equator_color` is used: the ambient light then goes from
     /// `ground_color` below through `equator_color` on the horizon to
@@ -2016,7 +2018,7 @@ pub unsafe extern "C" fn ponko_ctx_models_drawn(ctx: *mut PonkoCtx, out_count: *
     boundary(|| unsafe { ctx_access(ctx, |c| out(out_count, c.gfx.models_drawn())) })
 }
 
-fn camera_to_c(c: &Camera3D) -> PonkoCamera3D {
+pub(crate) fn camera_to_c(c: &Camera3D) -> PonkoCamera3D {
     PonkoCamera3D {
         position: to_c(c.position),
         rotation: quat_to_c(c.rotation),
@@ -2027,7 +2029,7 @@ fn camera_to_c(c: &Camera3D) -> PonkoCamera3D {
 }
 
 /// A Rust camera from a C one, keeping `base`'s window size; checked.
-fn camera_from_c(base: Camera3D, cam: &PonkoCamera3D) -> Result<Camera3D, crate::Failure> {
+pub(crate) fn camera_from_c(base: Camera3D, cam: &PonkoCamera3D) -> Result<Camera3D, crate::Failure> {
     if !(cam.fov_y > 0.0 && cam.fov_y < std::f32::consts::PI) {
         return Err(invalid("fov_y must be between 0 and pi"));
     }
@@ -2047,7 +2049,7 @@ fn camera_from_c(base: Camera3D, cam: &PonkoCamera3D) -> Result<Camera3D, crate:
     Ok(camera)
 }
 
-fn target_camera_to_c(t: &TargetCamera) -> PonkoTargetCamera {
+pub(crate) fn target_camera_to_c(t: &TargetCamera) -> PonkoTargetCamera {
     PonkoTargetCamera {
         camera: camera_to_c(&t.camera),
         target: texture_to_c(t.target),
@@ -2315,40 +2317,41 @@ pub unsafe extern "C" fn ponko_ctx_lighting(ctx: *mut PonkoCtx, out_lighting: *m
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
-            let (l, sky) = (&c.scene3d.lighting, &c.scene3d.sky);
-            out(
-                out_lighting,
-                PonkoLighting {
-                    sun_direction: to_c(l.sun_direction),
-                    sun_color: to_c(l.sun_color),
-                    sun_intensity: l.sun_intensity,
-                    sky_color: to_c(sky.sky_color),
-                    ground_color: to_c(sky.ground_color),
-                    ambient_intensity: l.ambient_intensity,
-                    shadows: l.shadows,
-                    shadow_distance: l.shadow_distance,
-                    shadow_cascades: l.shadow_cascades,
-                    shadow_resolution: l.shadow_resolution,
-                    light_shadow_views: l.light_shadow_views,
-                    light_shadow_resolution: l.light_shadow_resolution,
-                    light_shadow_atlas: l.light_shadow_atlas,
-                    shadow_refresh: l.shadow_refresh,
-                    shadow_filter: l.shadow_filter as u32,
-                    has_equator: sky.equator_color.is_some(),
-                    equator_color: to_c(sky.equator_color.unwrap_or(sky.sky_color)),
-                    gi_enabled: l.gi.enabled,
-                    gi_extent: to_c(l.gi.extent),
-                    gi_spacing: l.gi.spacing,
-                    gi_probes_per_frame: l.gi.probes_per_frame,
-                    gi_intensity: l.gi.intensity,
-                },
-            )
+            out(out_lighting, lighting_to_c(&c.scene3d.lighting, &c.scene3d.sky))
         })
     })
 }
 
+/// The sun and sky light as C's: Rust keeps the ambient colors on the sky.
+pub(crate) fn lighting_to_c(l: &ponko::render::Lighting, sky: &Sky) -> PonkoLighting {
+    PonkoLighting {
+        sun_direction: to_c(l.sun_direction),
+        sun_color: to_c(l.sun_color),
+        sun_intensity: l.sun_intensity,
+        sky_color: to_c(sky.sky_color),
+        ground_color: to_c(sky.ground_color),
+        ambient_intensity: l.ambient_intensity,
+        shadows: l.shadows,
+        shadow_distance: l.shadow_distance,
+        shadow_cascades: l.shadow_cascades,
+        shadow_resolution: l.shadow_resolution,
+        light_shadow_views: l.light_shadow_views,
+        light_shadow_resolution: l.light_shadow_resolution,
+        light_shadow_atlas: l.light_shadow_atlas,
+        shadow_refresh: l.shadow_refresh,
+        shadow_filter: l.shadow_filter as u32,
+        has_equator: sky.equator_color.is_some(),
+        equator_color: to_c(sky.equator_color.unwrap_or(sky.sky_color)),
+        gi_enabled: l.gi.enabled,
+        gi_extent: to_c(l.gi.extent),
+        gi_spacing: l.gi.spacing,
+        gi_probes_per_frame: l.gi.probes_per_frame,
+        gi_intensity: l.gi.intensity,
+    }
+}
+
 /// Changes the sun and sky light. Intensities and the shadow distance
-/// can't be negative; `shadow_cascades` is 1 to 4, `shadow_refresh` 1 to 8, `shadow_filter` 1 to 3; the shadow resolutions
+/// can't be negative; `shadow_cascades` is 1 to 4, `shadow_refresh` 1 to 8, `shadow_filter` 1 to 4; the shadow resolutions
 /// and `light_shadow_views` must be in their ranges (see `PonkoLighting`).
 /// With `gi_enabled`, `gi_extent` and `gi_spacing` must be above zero,
 /// `gi_probes_per_frame` 1 to 16 and `gi_intensity` not negative.
@@ -2534,54 +2537,150 @@ pub unsafe extern "C" fn ponko_ctx_set_sky(ctx: *mut PonkoCtx, sky: *const Ponko
     })
 }
 
+/// The C view of Rust post settings (every field `PonkoPost` has).
+pub(crate) fn post_to_c(p: &ponko::render::Post) -> PonkoPost {
+    PonkoPost {
+        render_scale: p.render_scale,
+        sharpen: p.sharpen,
+        anti_aliasing: p.anti_aliasing as u32,
+        ao_enabled: p.ambient_occlusion.enabled,
+        ao_radius: p.ambient_occlusion.radius,
+        ao_intensity: p.ambient_occlusion.intensity,
+        ao_slices: p.ambient_occlusion.slices,
+        ao_steps: p.ambient_occlusion.steps,
+        ao_half_resolution: p.ao_half_resolution,
+        ao_temporal: p.ao_temporal,
+        exposure: p.exposure,
+        tonemap: p.tonemap as u32,
+        bloom: p.bloom,
+        bloom_threshold: p.bloom_threshold,
+        contrast: p.contrast,
+        saturation: p.saturation,
+        temperature: p.temperature,
+        tint: p.tint,
+        vignette: p.vignette,
+        chromatic_aberration: p.chromatic_aberration,
+        lens_distortion: p.lens_distortion,
+        lens_scale: p.lens_scale,
+        has_lut: p.lut.is_some(),
+        lut: p.lut.map(texture_to_c).unwrap_or(PonkoTexture {
+            id: 0,
+            width: 0,
+            height: 0,
+        }),
+        taa_sharpness: p.taa_sharpness,
+        contact_shadows: p.contact_shadows,
+        ssr: p.ssr,
+        ssr_max_distance: p.ssr_max_distance,
+    }
+}
+
 /// Reads the 3D post-processing settings.
 /// # Safety
 /// `ctx` null or live; output writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ponko_ctx_post(ctx: *mut PonkoCtx, out_post: *mut PonkoPost) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
-    boundary(|| unsafe {
-        ctx_access(ctx, |c| {
-            let p = &c.scene3d.post;
-            out(
-                out_post,
-                PonkoPost {
-                    render_scale: p.render_scale,
-                    sharpen: p.sharpen,
-                    anti_aliasing: p.anti_aliasing as u32,
-                    ao_enabled: p.ambient_occlusion.enabled,
-                    ao_radius: p.ambient_occlusion.radius,
-                    ao_intensity: p.ambient_occlusion.intensity,
-                    ao_slices: p.ambient_occlusion.slices,
-                    ao_steps: p.ambient_occlusion.steps,
-                    ao_half_resolution: p.ao_half_resolution,
-                    ao_temporal: p.ao_temporal,
-                    exposure: p.exposure,
-                    tonemap: p.tonemap as u32,
-                    bloom: p.bloom,
-                    bloom_threshold: p.bloom_threshold,
-                    contrast: p.contrast,
-                    saturation: p.saturation,
-                    temperature: p.temperature,
-                    tint: p.tint,
-                    vignette: p.vignette,
-                    chromatic_aberration: p.chromatic_aberration,
-                    lens_distortion: p.lens_distortion,
-                    lens_scale: p.lens_scale,
-                    has_lut: p.lut.is_some(),
-                    lut: p.lut.map(texture_to_c).unwrap_or(PonkoTexture {
-                        id: 0,
-                        width: 0,
-                        height: 0,
-                    }),
-                    taa_sharpness: p.taa_sharpness,
-                    contact_shadows: p.contact_shadows,
-                    ssr: p.ssr,
-                    ssr_max_distance: p.ssr_max_distance,
-                },
-            )
-        })
-    })
+    boundary(|| unsafe { ctx_access(ctx, |c| out(out_post, post_to_c(&c.scene3d.post))) })
+}
+
+/// Checks C post settings and writes them over `post`: every field of
+/// `PonkoPost`, so the rest (the sample count, split toning, depth of field)
+/// stays as it was. Nothing is written when a value is refused.
+pub(crate) fn post_from_c(post: &mut ponko::render::Post, p: &PonkoPost) -> Result<(), crate::Failure> {
+    let anti_aliasing = match p.anti_aliasing {
+        0 => AntiAliasing::None,
+        1 => AntiAliasing::Fxaa,
+        2 => AntiAliasing::Smaa,
+        3 => AntiAliasing::Taa,
+        _ => return Err(invalid("anti_aliasing must be 0 to 3")),
+    };
+    if !(0.0..=1.0).contains(&p.taa_sharpness) {
+        return Err(invalid("taa_sharpness must be 0 to 1"));
+    }
+    if !(p.contact_shadows.is_finite() && p.contact_shadows >= 0.0) {
+        return Err(invalid("contact_shadows can't be negative"));
+    }
+    if !(0.0..=1.0).contains(&p.ssr) || !(p.ssr_max_distance.is_finite() && p.ssr_max_distance > 0.0) {
+        return Err(invalid("ssr must be 0 to 1 and ssr_max_distance above zero"));
+    }
+    if !p.ao_radius.is_finite()
+        || p.ao_radius <= 0.0
+        || !p.ao_intensity.is_finite()
+        || p.ao_intensity < 0.0
+        || !(1..=8).contains(&p.ao_slices)
+        || !(1..=16).contains(&p.ao_steps)
+    {
+        return Err(invalid(
+            "AO requires positive finite radius, nonnegative finite intensity, 1..8 slices and 1..16 steps",
+        ));
+    }
+    if !(0.0..=1.0).contains(&p.chromatic_aberration)
+        || !(-1.0..=1.0).contains(&p.lens_distortion)
+        || !(p.lens_scale.is_finite() && p.lens_scale > 0.0)
+    {
+        return Err(invalid(
+            "chromatic_aberration must be 0 to 1, lens_distortion -1 to 1 and lens_scale above zero",
+        ));
+    }
+    if !(ponko::render::Post::MIN_RENDER_SCALE..=ponko::render::Post::MAX_RENDER_SCALE).contains(&p.render_scale)
+        || !(0.0..=1.0).contains(&p.sharpen)
+    {
+        return Err(invalid("render_scale must be 0.25 to 2 and sharpen 0 to 1"));
+    }
+    let tonemap = match p.tonemap {
+        0 => Tonemap::Aces,
+        1 => Tonemap::AgX,
+        2 => Tonemap::Neutral,
+        3 => Tonemap::None,
+        _ => return Err(invalid("tonemap must be 0 to 3")),
+    };
+    let finite = [
+        p.exposure,
+        p.bloom,
+        p.bloom_threshold,
+        p.contrast,
+        p.saturation,
+        p.temperature,
+        p.tint,
+        p.vignette,
+    ]
+    .iter()
+    .all(|v| v.is_finite());
+    if !finite || p.bloom < 0.0 || p.bloom_threshold < 0.0 || p.contrast < 0.0 || p.saturation < 0.0 {
+        return Err(invalid("bloom, threshold, contrast and saturation can't be negative"));
+    }
+    // Every field but the MSAA sample count, which C sets with `ponko_game_msaa`.
+    post.render_scale = p.render_scale;
+    post.sharpen = p.sharpen;
+    post.anti_aliasing = anti_aliasing;
+    post.taa_sharpness = p.taa_sharpness;
+    post.ambient_occlusion = AmbientOcclusion {
+        enabled: p.ao_enabled,
+        radius: p.ao_radius,
+        intensity: p.ao_intensity,
+        slices: p.ao_slices,
+        steps: p.ao_steps,
+    };
+    post.ao_half_resolution = p.ao_half_resolution;
+    post.ao_temporal = p.ao_temporal;
+    post.exposure = p.exposure;
+    post.tonemap = tonemap;
+    post.bloom = p.bloom;
+    post.bloom_threshold = p.bloom_threshold;
+    post.contrast = p.contrast;
+    post.saturation = p.saturation;
+    post.temperature = p.temperature;
+    post.tint = p.tint;
+    post.vignette = p.vignette;
+    post.chromatic_aberration = p.chromatic_aberration;
+    post.lens_distortion = p.lens_distortion;
+    post.lens_scale = p.lens_scale;
+    post.lut = p.has_lut.then(|| texture_from_c(p.lut));
+    post.contact_shadows = p.contact_shadows;
+    post.ssr = p.ssr;
+    post.ssr_max_distance = p.ssr_max_distance;
+    Ok(())
 }
 
 /// Changes the 3D post-processing settings. `tonemap` must be 0 to 3;
@@ -2600,103 +2699,12 @@ pub unsafe extern "C" fn ponko_ctx_set_post(ctx: *mut PonkoCtx, post: *const Pon
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
-            let Some(&p) = post.as_ref() else {
+            let Some(p) = post.as_ref() else {
                 return Err(invalid("post is null"));
             };
-            let anti_aliasing = match p.anti_aliasing {
-                0 => AntiAliasing::None,
-                1 => AntiAliasing::Fxaa,
-                2 => AntiAliasing::Smaa,
-                3 => AntiAliasing::Taa,
-                _ => return Err(invalid("anti_aliasing must be 0 to 3")),
-            };
-            if !(0.0..=1.0).contains(&p.taa_sharpness) {
-                return Err(invalid("taa_sharpness must be 0 to 1"));
-            }
-            if !(p.contact_shadows.is_finite() && p.contact_shadows >= 0.0) {
-                return Err(invalid("contact_shadows can't be negative"));
-            }
-            if !(0.0..=1.0).contains(&p.ssr) || !(p.ssr_max_distance.is_finite() && p.ssr_max_distance > 0.0) {
-                return Err(invalid("ssr must be 0 to 1 and ssr_max_distance above zero"));
-            }
-            if !p.ao_radius.is_finite()
-                || p.ao_radius <= 0.0
-                || !p.ao_intensity.is_finite()
-                || p.ao_intensity < 0.0
-                || !(1..=8).contains(&p.ao_slices)
-                || !(1..=16).contains(&p.ao_steps)
-            {
-                return Err(invalid(
-                    "AO requires positive finite radius, nonnegative finite intensity, 1..8 slices and 1..16 steps",
-                ));
-            }
-            if !(0.0..=1.0).contains(&p.chromatic_aberration)
-                || !(-1.0..=1.0).contains(&p.lens_distortion)
-                || !(p.lens_scale.is_finite() && p.lens_scale > 0.0)
-            {
-                return Err(invalid(
-                    "chromatic_aberration must be 0 to 1, lens_distortion -1 to 1 and lens_scale above zero",
-                ));
-            }
-            if !(ponko::render::Post::MIN_RENDER_SCALE..=ponko::render::Post::MAX_RENDER_SCALE)
-                .contains(&p.render_scale)
-                || !(0.0..=1.0).contains(&p.sharpen)
-            {
-                return Err(invalid("render_scale must be 0.25 to 2 and sharpen 0 to 1"));
-            }
-            let tonemap = match p.tonemap {
-                0 => Tonemap::Aces,
-                1 => Tonemap::AgX,
-                2 => Tonemap::Neutral,
-                3 => Tonemap::None,
-                _ => return Err(invalid("tonemap must be 0 to 3")),
-            };
-            let finite = [
-                p.exposure,
-                p.bloom,
-                p.bloom_threshold,
-                p.contrast,
-                p.saturation,
-                p.temperature,
-                p.tint,
-                p.vignette,
-            ]
-            .iter()
-            .all(|v| v.is_finite());
-            if !finite || p.bloom < 0.0 || p.bloom_threshold < 0.0 || p.contrast < 0.0 || p.saturation < 0.0 {
-                return Err(invalid("bloom, threshold, contrast and saturation can't be negative"));
-            }
-            // Every field but the MSAA sample count, which C sets with `ponko_game_msaa`.
-            let post = &mut c.scene3d.post;
-            post.render_scale = p.render_scale;
-            post.sharpen = p.sharpen;
-            post.anti_aliasing = anti_aliasing;
-            post.taa_sharpness = p.taa_sharpness;
-            post.ambient_occlusion = AmbientOcclusion {
-                enabled: p.ao_enabled,
-                radius: p.ao_radius,
-                intensity: p.ao_intensity,
-                slices: p.ao_slices,
-                steps: p.ao_steps,
-            };
-            post.ao_half_resolution = p.ao_half_resolution;
-            post.ao_temporal = p.ao_temporal;
-            post.exposure = p.exposure;
-            post.tonemap = tonemap;
-            post.bloom = p.bloom;
-            post.bloom_threshold = p.bloom_threshold;
-            post.contrast = p.contrast;
-            post.saturation = p.saturation;
-            post.temperature = p.temperature;
-            post.tint = p.tint;
-            post.vignette = p.vignette;
-            post.chromatic_aberration = p.chromatic_aberration;
-            post.lens_distortion = p.lens_distortion;
-            post.lens_scale = p.lens_scale;
-            post.lut = p.has_lut.then(|| texture_from_c(p.lut));
-            post.contact_shadows = p.contact_shadows;
-            post.ssr = p.ssr;
-            post.ssr_max_distance = p.ssr_max_distance;
+            let mut next = c.scene3d.post;
+            post_from_c(&mut next, p)?;
+            c.scene3d.post = next;
             Ok(())
         })
     })
@@ -2745,7 +2753,8 @@ pub struct PonkoGraphicsQuality {
     pub anti_aliasing: u32,
     /// How often the far shadow cascades are drawn again, in frames, 1 to 8.
     pub shadow_refresh: u32,
-    /// How soft the sun's shadow edges are, 1 (one lookup) to 3 (nine).
+    /// How soft the sun's shadow edges are, 1 (one lookup) to 3 (nine), or 4
+    /// (contact-hardening; the high and ultra presets).
     pub shadow_filter: u32,
     /// Screen-space reflections' strength, 0 (off) to 1.
     pub ssr: f32,
@@ -2791,13 +2800,15 @@ fn light_atlas_ok(size: u32) -> bool {
     (1024..=8192).contains(&size) && size.is_power_of_two()
 }
 
-/// The sun shadow filter for C's 1 (sharp) to 3 (softest).
+/// The sun shadow filter for C's 1 (sharp) to 3 (softest), or 4
+/// (contact-hardening).
 fn shadow_filter_from_c(filter: u32) -> Result<ShadowFilter, crate::Failure> {
     match filter {
         1 => Ok(ShadowFilter::Sharp),
         2 => Ok(ShadowFilter::Soft),
         3 => Ok(ShadowFilter::Softest),
-        _ => Err(invalid("shadow_filter must be 1 to 3")),
+        4 => Ok(ShadowFilter::ContactHardening),
+        _ => Err(invalid("shadow_filter must be 1 to 4")),
     }
 }
 
@@ -4448,7 +4459,7 @@ pub unsafe extern "C" fn ponko_ctx_update_instance_batch_colors(
 }
 
 /// Caller guarantees non-null arrays have their stated lengths.
-unsafe fn instance_arrays(
+pub(crate) unsafe fn instance_arrays(
     matrices: *const [f32; 16],
     count: usize,
     colors: *const PonkoColor,

@@ -128,14 +128,14 @@ pub enum Refused {
 
 /// The gamepad buttons the retained UI uses for navigation, which no control
 /// may take: the keyboard side reserves Escape, Tab and the arrow keys the same way.
-pub fn is_reserved_pad(button: ponko::input::GamepadButton) -> bool {
+pub fn is_reserved_pad(button: GamepadButton) -> bool {
     matches!(
         button,
-        ponko::input::GamepadButton::East
-            | ponko::input::GamepadButton::DPadUp
-            | ponko::input::GamepadButton::DPadDown
-            | ponko::input::GamepadButton::DPadLeft
-            | ponko::input::GamepadButton::DPadRight
+        GamepadButton::East
+            | GamepadButton::DPadUp
+            | GamepadButton::DPadDown
+            | GamepadButton::DPadLeft
+            | GamepadButton::DPadRight
     )
 }
 
@@ -146,7 +146,7 @@ pub fn is_reserved_pad(button: ponko::input::GamepadButton) -> bool {
 #[serde(default)]
 pub struct Controls {
     pub keys: [Key; 9],
-    pub pads: [Option<ponko::input::GamepadButton>; 9],
+    pub pads: [Option<GamepadButton>; 9],
 }
 
 impl Default for Controls {
@@ -168,11 +168,11 @@ impl Default for Controls {
                 None,
                 None,
                 None,
-                Some(ponko::input::GamepadButton::South),
-                Some(ponko::input::GamepadButton::West),
-                Some(ponko::input::GamepadButton::Start),
-                Some(ponko::input::GamepadButton::East),
-                Some(ponko::input::GamepadButton::North),
+                Some(GamepadButton::South),
+                Some(GamepadButton::West),
+                Some(GamepadButton::Start),
+                Some(GamepadButton::East),
+                Some(GamepadButton::North),
             ],
         }
     }
@@ -183,7 +183,7 @@ impl Controls {
         self.keys[control as usize]
     }
 
-    pub fn pad(&self, control: Control) -> Option<ponko::input::GamepadButton> {
+    pub fn pad(&self, control: Control) -> Option<GamepadButton> {
         self.pads[control as usize]
     }
 
@@ -241,7 +241,7 @@ impl Controls {
     // ANCHOR_END: set_key
 
     /// Gives `control` the gamepad button, unless it is not allowed.
-    pub fn set_pad(&mut self, control: Control, button: ponko::input::GamepadButton) -> Result<(), Refused> {
+    pub fn set_pad(&mut self, control: Control, button: GamepadButton) -> Result<(), Refused> {
         if control.is_movement() {
             return Err(Refused::NoButton);
         }
@@ -274,8 +274,7 @@ impl Controls {
                 // East is Back's default, so it is allowed there and nowhere else.
                 Some(button) => {
                     !c.is_movement()
-                        && (!is_reserved_pad(button)
-                            || (button == ponko::input::GamepadButton::East && c == Control::Back))
+                        && (!is_reserved_pad(button) || (button == GamepadButton::East && c == Control::Back))
                         && pads.insert(button)
                 }
             };
@@ -302,7 +301,7 @@ pub fn key_name(key: Key) -> String {
 /// The input bindings for `controls`: the chosen keys and buttons, the fixed
 /// alternates, and the left stick.
 pub fn bindings_for(controls: &Controls) -> ActionMap {
-    let pad = ponko::input::Gamepad::from_slot(0).expect("slot 0 exists");
+    let pad = Gamepad::from_slot(0).expect("slot 0 exists");
     let key = |c| controls.key(c);
     let mut map = ActionMap::default();
     map.set(
@@ -322,7 +321,7 @@ pub fn bindings_for(controls: &Controls) -> ActionMap {
             },
             Axis2Binding::Gamepad {
                 pad,
-                stick: ponko::input::GamepadStick::Left,
+                stick: GamepadStick::Left,
                 deadzone: 0.2,
             },
         ]),
@@ -412,7 +411,7 @@ pub fn leave_settings(ctx: &mut Ctx) {
     let settings = ctx.world.resource::<Settings>().clone();
     let failed = ctx.storage.is_available() && settings.save(&mut ctx.storage).is_err();
     ctx.world.resource_mut::<SettingsFile>().save_failed = failed;
-    ctx.world.insert_resource(Screen::Title);
+    ctx.set_state(Screen::Title);
 }
 
 // ---- The settings screen ----------------------------------------------------
@@ -487,119 +486,101 @@ impl SettingsUi {
     fn build(ui: &mut Ui, settings: &Settings) -> SettingsUi {
         let root = ui
             .root()
-            .layout(ponko::ui::UiLayout::fill().padding(16.0).gap(6.0))
+            .layout(UiLayout::fill().padding(16.0).gap(6.0))
             .background(Color::hex(0x14181f))
             .name("settings")
             .id();
         ui.label(root, "")
             .text_key("settings.title")
-            .layout(ponko::ui::UiLayout::row(40.0))
+            .layout(UiLayout::row(40.0))
             .size(28.0);
 
-        let strip = ui.panel(root).layout(ponko::ui::UiLayout::row(34.0).gap(8.0)).id();
+        let strip = ui.panel(root).layout(UiLayout::row(34.0).gap(8.0)).id();
         ui.label(strip, "")
             .text_key("settings.scale")
-            .layout(ponko::ui::UiLayout::fixed(150.0, 34.0));
-        let scale_down = ui
-            .button(strip, "-")
-            .layout(ponko::ui::UiLayout::fixed(40.0, 34.0))
-            .id();
+            .layout(UiLayout::fixed(150.0, 34.0));
+        let scale_down = ui.button(strip, "-").layout(UiLayout::fixed(40.0, 34.0)).id();
         let scale_label = ui
             .label(strip, "")
-            .layout(ponko::ui::UiLayout::fixed(70.0, 34.0))
+            .layout(UiLayout::fixed(70.0, 34.0))
             .name("settings.scale")
             .id();
         let scale_up = ui
             .button(strip, "+")
-            .layout(ponko::ui::UiLayout::fixed(40.0, 34.0))
+            .layout(UiLayout::fixed(40.0, 34.0))
             .name("settings.scale_up")
             .id();
 
-        let strip = ui.panel(root).layout(ponko::ui::UiLayout::row(34.0).gap(8.0)).id();
+        let strip = ui.panel(root).layout(UiLayout::row(34.0).gap(8.0)).id();
         ui.label(strip, "")
             .text_key("settings.volume")
-            .layout(ponko::ui::UiLayout::fixed(150.0, 34.0));
+            .layout(UiLayout::fixed(150.0, 34.0));
         let volume = ui
             .slider(strip)
-            .layout(ponko::ui::UiLayout::fixed(240.0, 34.0))
+            .layout(UiLayout::fixed(240.0, 34.0))
             .value(settings.volume)
             .id();
 
-        let strip = ui.panel(root).layout(ponko::ui::UiLayout::row(34.0).gap(8.0)).id();
+        let strip = ui.panel(root).layout(UiLayout::row(34.0).gap(8.0)).id();
         ui.label(strip, "")
             .text_key("settings.language")
-            .layout(ponko::ui::UiLayout::fixed(150.0, 34.0));
+            .layout(UiLayout::fixed(150.0, 34.0));
         let language = ui
             .button(strip, "")
-            .layout(ponko::ui::UiLayout::fixed(160.0, 34.0))
+            .layout(UiLayout::fixed(160.0, 34.0))
             .name("settings.language")
             .id();
 
         ui.label(root, "")
             .text_key("settings.hint")
-            .layout(ponko::ui::UiLayout::row(52.0))
+            .layout(UiLayout::row(52.0))
             .size(16.0)
             .wrap();
-        let scroll = ui.scroll_area(root).layout(ponko::ui::UiLayout::fill()).id();
+        let scroll = ui.scroll_area(root).layout(UiLayout::fill()).id();
         let list = ui
             .panel(scroll)
-            .layout(ponko::ui::UiLayout::auto().vertical().gap(4.0).width_fraction(0.95))
+            .layout(UiLayout::auto().vertical().gap(4.0).width_fraction(0.95))
             .id();
         let mut rows = Vec::new();
         for control in Control::ALL {
-            let strip = ui.panel(list).layout(ponko::ui::UiLayout::row(32.0).gap(8.0)).id();
+            let strip = ui.panel(list).layout(UiLayout::row(32.0).gap(8.0)).id();
             ui.label(strip, "")
                 .text_key(control.key())
-                .layout(ponko::ui::UiLayout::fixed(150.0, 32.0));
-            let key = ui
-                .button(strip, "")
-                .layout(ponko::ui::UiLayout::fixed(120.0, 32.0))
-                .id();
+                .layout(UiLayout::fixed(150.0, 32.0));
+            let key = ui.button(strip, "").layout(UiLayout::fixed(120.0, 32.0)).id();
             let pad = if control.is_movement() {
                 ui.label(strip, "")
                     .text_key("settings.left_stick")
-                    .layout(ponko::ui::UiLayout::fixed(120.0, 32.0));
+                    .layout(UiLayout::fixed(120.0, 32.0));
                 None
             } else {
-                Some(
-                    ui.button(strip, "")
-                        .layout(ponko::ui::UiLayout::fixed(120.0, 32.0))
-                        .id(),
-                )
+                Some(ui.button(strip, "").layout(UiLayout::fixed(120.0, 32.0)).id())
             };
             rows.push(Row { control, key, pad });
         }
 
-        let strip = ui.panel(root).layout(ponko::ui::UiLayout::row(36.0).gap(8.0)).id();
+        let strip = ui.panel(root).layout(UiLayout::row(36.0).gap(8.0)).id();
         let reset = ui
             .button(strip, "")
             .text_key("settings.reset")
-            .layout(ponko::ui::UiLayout::fixed(190.0, 36.0))
+            .layout(UiLayout::fixed(190.0, 36.0))
             .id();
         let back = ui
             .button(strip, "")
             .text_key("settings.back")
-            .layout(ponko::ui::UiLayout::fixed(120.0, 36.0))
+            .layout(UiLayout::fixed(120.0, 36.0))
             .name("settings.back")
             .id();
-        let status = ui
-            .label(root, "")
-            .layout(ponko::ui::UiLayout::row(24.0))
-            .size(16.0)
-            .id();
+        let status = ui.label(root, "").layout(UiLayout::row(24.0)).size(16.0).id();
 
         // The prompt: a modal screen with nothing to focus, so no key can press
         // a button behind it; Escape and East pop it (the engine does that).
         let prompt = ui
             .root()
-            .layout(ponko::ui::UiLayout::centered(460.0, 110.0).padding(16.0).gap(8.0))
+            .layout(UiLayout::centered(460.0, 110.0).padding(16.0).gap(8.0))
             .background(Color::hex(0x2b3240))
             .id();
-        let prompt_text = ui
-            .label(prompt, "")
-            .layout(ponko::ui::UiLayout::fixed(420.0, 78.0))
-            .wrap()
-            .id();
+        let prompt_text = ui.label(prompt, "").layout(UiLayout::fixed(420.0, 78.0)).wrap().id();
 
         SettingsUi {
             root,
@@ -691,7 +672,7 @@ pub fn step_scale(current: f32, direction: i32) -> f32 {
 /// or Escape), runs the rebinding prompt, and closes the screen again when the
 /// game has left it.
 pub fn settings_ui(ctx: &mut Ctx) {
-    let on_screen = *ctx.world.resource::<Screen>() == Screen::Settings;
+    let on_screen = screen(&ctx.world) == Screen::Settings;
     if ctx.world.get_resource::<SettingsUi>().is_none() {
         if !on_screen {
             return;
@@ -722,21 +703,21 @@ fn drive(ctx: &mut Ctx, state: &mut SettingsUi, on_screen: bool) {
         let settings = ctx.world.resource::<Settings>().clone();
         state.refresh(&mut ctx.ui, &settings, ctx.input.actions(), strings(&ctx.world));
         ctx.ui.set_text(state.status, "");
-        ctx.ui.push_screen(state.root, false);
+        ctx.ui.push_modeless(state.root);
         state.open = true;
     }
 
     // One at a time: the body changes the tree between events.
     while let Some(event) = ctx.ui.next_event() {
         match event {
-            ponko::ui::UiEvent::Clicked(id) => click(ctx, state, id),
-            ponko::ui::UiEvent::Changed(id) if id == state.volume => {
+            UiEvent::Clicked(id) => click(ctx, state, id),
+            UiEvent::Changed(id) if id == state.volume => {
                 let volume = ctx.ui.value(id).unwrap_or(0.8).clamp(0.0, 1.0);
                 ctx.world.resource_mut::<Settings>().volume = volume;
             }
-            ponko::ui::UiEvent::ScreenPopped(id) if id == state.prompt => state.capture = None,
+            UiEvent::ScreenPopped(id) if id == state.prompt => state.capture = None,
             // Escape (or East) on the settings screen: leave, as the Back button does.
-            ponko::ui::UiEvent::ScreenPopped(id) if id == state.root => {
+            UiEvent::ScreenPopped(id) if id == state.root => {
                 state.open = false;
                 ctx.world.resource_mut::<Intent>().close_settings = true;
             }
@@ -794,7 +775,7 @@ fn click(ctx: &mut Ctx, state: &mut SettingsUi, id: UiId) {
         let name = control.label(strings(&ctx.world));
         ctx.ui
             .set_text_key(state.prompt_text, prompt, &[("control", Arg::from(name))]);
-        ctx.ui.push_screen(state.prompt, true);
+        ctx.ui.push_modal(state.prompt);
         state.capture = Some(Capture {
             control,
             device,
@@ -824,7 +805,7 @@ pub fn apply_language(world: &mut World, settings: &Settings) {
 /// What the player pressed while the prompt was open, if anything: the first
 /// new press of the device the prompt asked for. The engine reports every key
 /// and button that went down this frame, so the screen lists none of them.
-fn pressed(ctx: &Ctx, device: Device) -> Option<(String, Result<Key, ponko::input::GamepadButton>)> {
+fn pressed(ctx: &Ctx, device: Device) -> Option<(String, Result<Key, GamepadButton>)> {
     ctx.input.pressed_this_frame().find_map(|press| match (device, press) {
         (Device::Key, PressedInput::Button(ButtonBinding::Key(key))) => Some((format!("{key:?}"), Ok(key))),
         (Device::Pad, PressedInput::Button(ButtonBinding::Gamepad { button, .. })) => {

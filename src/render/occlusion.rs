@@ -1,5 +1,6 @@
 //! The depth that occlusion culling tests against: the camera's depth shrunk
-//! to a small grid of each tile's farthest depth by a compute pass, read back
+//! to a small grid of each tile's farthest depth (the smallest: the depth is
+//! reverse-Z) by a compute pass, read back
 //! through a small ring of buffers so the CPU never waits for the GPU (the
 //! grid arrives one to three frames late, like the GPU timer's results).
 
@@ -31,11 +32,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.grid.x || id.y >= params.grid.y { return; }
     let start = id.xy * params.tile;
     let end = min(start + vec2<u32>(params.tile), params.size);
-    var far = 0.0;
+    var far = 1.0;
     for (var y = start.y; y < end.y; y++) {
         for (var x = start.x; x < end.x; x++) {
             for (var s = 0u; s < params.samples; s++) {
-                far = max(far, textureLoad(depth, vec2<i32>(i32(x), i32(y)), i32(s)));
+                far = min(far, textureLoad(depth, vec2<i32>(i32(x), i32(y)), i32(s)));
             }
         }
     }

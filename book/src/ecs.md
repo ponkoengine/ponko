@@ -374,6 +374,166 @@ fn die(ctx: &mut Ctx) {
 
 The engine applies commands after every system, so the next system sees them.
 
+### A deferred spawn gives you the entity
+
+`commands.spawn` returns the new entity right away, so the commands after it
+can use it: give it more components, or store it in another entity. The
+entity becomes alive when the commands are applied; until then
+`world.is_alive` says no and queries don't see it.
+
+<div class="lang-pair">
+<div>
+
+```rust
+# #[derive(Component)]
+# struct Enemy;
+#[derive(Component)]
+struct Bullet { speed: f32 }
+#[derive(Component)]
+struct Aim(Entity);
+
+fn fire_at_guns(ctx: &mut Ctx) {
+    let cmds = &mut ctx.commands;
+    ctx.world.query::<(Entity, &Enemy)>().for_each(|(gun, _)| {
+        // The id exists now; the entity once the commands are applied.
+        let bullet = cmds.spawn((Bullet { speed: 9.0 },));
+        cmds.insert(gun, Aim(bullet));
+    });
+}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:ecs_spawn_ids}}
+```
+
+</div>
+</div>
+
+The id is reserved in the world when `spawn` returns: nothing else gets it,
+also not a spawn made directly in `ctx.world` meanwhile. If the spawn never
+happens (the commands are cleared or dropped, an earlier command panics, or
+the bundle can't be spawned), the id is given back and its handle stays dead
+for good, like a despawned one. C has the same as
+`ponko_ctx_spawn_later_entity`.
+
+`ctx.commands` and a view system's `sys.commands` are tied to the game's
+world. A buffer of your own comes from `world.commands()`; `Commands::new()`
+makes one that isn't tied to a world yet, and `spawn` on it panics until it
+is applied once or `bind` is called. Several buffers can record at once, one
+per thread, without ever handing out the same id; from a `par_for_each`, put
+one behind a `Mutex`:
+
+```rust
+# use std::sync::Mutex;
+# #[derive(Component)]
+# struct Enemy;
+# #[derive(Component)]
+# struct Bullet { speed: f32 }
+# #[derive(Component)]
+# struct Aim(Entity);
+# let mut world = World::new();
+let commands = Mutex::new(world.commands());
+world.query::<(Entity, &Enemy)>().par_for_each(|(gun, _)| {
+    let mut cmds = commands.lock().unwrap();
+    let bullet = cmds.spawn((Bullet { speed: 9.0 },));
+    cmds.insert(gun, Aim(bullet));
+});
+world.apply(&mut commands.into_inner().unwrap());
+```
+
+Ids are deterministic wherever the commands are: spawns recorded in the
+same order get the same ids, in plain systems and view systems, with the
+parallel scheduler on or off and on any number of threads (a system that
+records commands runs alone or last in its batch). Inside a parallel query
+they are not: which item gets which id depends on the order the threads
+take the lock, like the order of the commands they record. Every spawn
+still gets its own id and is applied. When the ids matter (anything keyed
+by entity, such as random streams per entity or a lockstep checksum),
+compute in parallel and spawn in query order:
+
+```rust
+# #[derive(Component)]
+# struct Enemy;
+# #[derive(Component)]
+# struct Bullet { speed: f32 }
+# #[derive(Component)]
+# struct Aim(Entity);
+# let mut world = World::new();
+# let mut cmds = world.commands();
+let mut shots = Vec::new();
+world
+    .query::<(Entity, &Enemy)>()
+    .par_collect_into(&mut shots, |(gun, _)| (gun, 9.0));
+for (gun, speed) in shots {
+    let bullet = cmds.spawn((Bullet { speed },));
+    cmds.insert(gun, Aim(bullet));
+}
+world.apply(&mut cmds);
+```
+
+A `World::reset` (or loading a saved world) makes ids reserved before it
+meaningless: applying a spawn recorded before it panics.
+
+So that deferred spawns reuse slots, the world sets free slots aside for
+command buffers: as many as they took in one frame lately. The engine sizes
+that set once per frame with `world.return_idle_ids()`, which gives the rest
+back, so a game that stops spawning through commands doesn't keep them; a
+world you drive yourself calls it once per frame too.
+
+Spawns and despawns made directly in the world pay nothing for this: the
+world takes new indices for its own spawns 256 at a time, so `world.spawn`
+only compares the slot table's length with the end of its own range, as it
+compared it with the largest index before. A deferred spawn costs about
+2 ns more than before (on top of the 24 ns a spawn and despawn through
+commands cost): its slot is set aside when an earlier buffer is applied,
+its id is written to the buffer's list and read back when the spawn is
+applied, and the slot is touched once more to claim it.
+
+Measured with `ponko_bench` in release builds on an M4 Max that was busy
+with other builds (load average 58–61): each benchmark's fastest run
+(of 10 for the `spawn`/`despawn` rows, of 50 for the `commands` rows),
+three runs of base and of this change interleaved, milliseconds:
+
+| Benchmark | Before | Reserved ids |
+|---|---|---|
+| `spawn/ponko` (1,000,000 spawns) | 13.85–13.99 | 13.74–14.51 |
+| `spawn/ponko-batch` | 10.34–10.64 | 9.96–10.45 |
+| `despawn/ponko` (1,000,000 despawns) | 8.14–8.54 | 8.23–8.26 |
+| `commands/insert-remove` | 4.59–4.76 | 4.71–4.77 |
+| `commands/spawn-despawn` (100,000 deferred) | 2.38–2.42 | 2.59–2.83 |
+| `commands/spawn-then-despawn` (callback design) | | 2.39–2.40 |
+| `commands/spawn-link` | | 3.18–3.34 |
+| `commands/spawn-then-link` (callback design) | | 2.90–3.09 |
+
+The first four are equal within the noise of a busy machine (five more
+rounds of the two closest: `commands/insert-remove` 4.65 against 4.66,
+`despawn/ponko` 8.06 against 8.03). Across sessions the deferred spawn
+measured 1.6–2.1 ns more.
+
+Two other designs were measured:
+
+- A `spawn_then(bundle, |world, entity| ...)` that hands the entity to a
+  callback when applied costs what a spawn did (`commands/spawn-then-*`).
+  We took reserved ids anyway: with them the entity is an ordinary value as
+  soon as it is spawned, so it can be stored in locals, components and
+  events, returned from functions, linked both ways between two new
+  entities and passed to C, none of which a callback that runs later can
+  do without nesting.
+- Lock-free reservation, where buffers take ids with one atomic operation
+  on a cursor over the world's free list and the world settles them when
+  it next has `&mut` access, would make deferred spawns as cheap as direct
+  ones. Here a buffer isn't a borrow of the world: it can record on another
+  thread while the world spawns directly, so every direct spawn would have
+  to update that cursor atomically too. One uncontended atomic
+  read-modify-write in `world.spawn` alone made `spawn/ponko` 3.5% and
+  `spawn/ponko-batch` 2.4% slower, so direct spawns would pay for what only
+  deferred ones use. The world's free list stays its own; buffers take
+  slots from a set it puts aside when it applies them, under a lock taken
+  about once per apply (and once per 256 new indices), not per spawn.
+
 ## Change detection
 
 Some work only needs the entities that changed: resize a health bar when
@@ -509,12 +669,17 @@ after looking, then `.since(seen)` on the next query and
 removal logs don't grow.
 
 **What it costs.** For a component that isn't tracked: nothing. For a
-tracked one: 8 bytes per entity, and one stamp per entity for each
-mutable visit. With 1M entities on an Apple M-series laptop, a `&mut`
-loop takes 0.20 ms instead of 0.17 ms, a `&T` loop is unchanged, and a
-`Changed<T>` loop that finds nothing takes 0.5 ms (it reads one stamp per
-entity). `cargo run --release -p ponko_bench -- changes` prints the
-numbers for your machine.
+tracked one: 8 bytes per entity plus 4 bytes per 64 entities, and one
+stamp per entity for each mutable visit. The 4 bytes keep the newest
+change of each run of 64 rows, so a `Changed<T>` or `Added<T>` filter
+skips 64 entities at a time where nobody wrote, and a still world costs
+per chunk, not per entity. With 1M entities on an Apple M-series laptop,
+a `&mut` loop takes 0.20 ms instead of 0.17 ms, a `&T` loop is
+unchanged, and a `Changed<T>` loop takes 0.02 ms when it finds nothing
+(0.5 ms when it read every stamp), 0.4 ms when 1% of the entities
+changed, spread out (most chunks then hold one), and 1.0 ms when all
+did. `cargo run --release -p ponko_bench -- changes` prints the numbers
+for your machine.
 
 ## Resources
 

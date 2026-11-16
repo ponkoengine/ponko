@@ -1,4 +1,5 @@
 //! [`Game`]: window creation and the main loop.
+#![deny(missing_docs)]
 
 use std::time::Duration;
 use web_time::Instant;
@@ -12,6 +13,8 @@ mod server;
 mod system;
 #[cfg(feature = "window")]
 mod window;
+#[cfg(feature = "window")]
+mod window_service;
 
 pub use system::{IntoSystem, SystemConfig};
 
@@ -37,6 +40,15 @@ const OCCLUDED_POLL: Duration = Duration::from_millis(100);
 /// don't conflict share a batch and may run at the same time; see
 /// [`SchedulePlan`](crate::schedule::SchedulePlan). A
 /// phase always ends before the next one starts.
+///
+/// ```
+/// use ponko::prelude::*;
+/// // Phases run in this order; the fixed-tick ones come before the frame ones.
+/// assert!(Phase::Input < Phase::BeforePhysics);
+/// assert!(Phase::Physics < Phase::AfterPhysics);
+/// assert!(Phase::SimLast < Phase::Frame);
+/// assert!(Phase::Frame < Phase::Draw);
+/// ```
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Phase {
@@ -54,8 +66,9 @@ pub enum Phase {
     Frame,
     /// Per-frame pose work after frame gameplay. The built-in particle
     /// update ([`Systems::UPDATE_PARTICLES`]) runs at the end of this phase,
-    /// after your systems in it; with the `3d` feature, the animators
-    /// ([`Systems::UPDATE_ANIMATORS`]) run just before it.
+    /// after your systems in it; the 2D skeletons
+    /// ([`Systems::UPDATE_SKELETONS2D`]) run just before it, and with the
+    /// `3d` feature the animators ([`Systems::UPDATE_ANIMATORS`]) before those.
     Animate,
     /// Per-frame work after animation and before drawing.
     Late,
@@ -95,6 +108,17 @@ pub trait Plugin {
     fn build(&self, game: Game) -> Game;
     /// Initializes this module before systems start. Commands apply afterward.
     fn setup(&self, _ctx: &mut Ctx) {}
+
+    /// Fallible startup hook. Existing plugins delegate to `setup` by default.
+    ///
+    /// # Errors
+    /// Whatever the plugin's startup fails with. The first error stops
+    /// startup, and the fallible runners ([`Game::try_run`],
+    /// [`Game::try_run_headless`]) return it.
+    fn try_setup(&self, ctx: &mut Ctx) -> Result<(), crate::error::Error> {
+        self.setup(ctx);
+        Ok(())
+    }
 }
 
 /// An opaque registration handle, from [`Game::add_system`], for
@@ -127,7 +151,7 @@ impl Systems {
     pub const FOLLOW_ATTACHMENTS: SystemId = SystemId(8);
     /// Navigation update, when explicitly registered.
     pub const STEP_NAVMESH3D: SystemId = SystemId(9);
-    /// Advances every [`Animator`](crate::anim::Animator) and poses its skeleton
+    /// Advances every `Animator` and poses its skeleton
     /// (feature `3d`). Stays at the end of [`Phase::Animate`].
     pub const UPDATE_ANIMATORS: SystemId = SystemId(10);
     /// Advances particle emitters (2D, and with feature `3d` the 3D ones
@@ -140,6 +164,10 @@ impl Systems {
     pub const UPDATE_AUDIO3D: SystemId = SystemId(12);
     /// 2D particle drawing, after the sprites.
     pub const DRAW_PARTICLES: SystemId = SystemId(13);
+    /// Advances every 2D [`Skeleton`](crate::skeleton2d::Skeleton). Stays at
+    /// the end of [`Phase::Animate`], after the 3D animators and before the
+    /// particles.
+    pub const UPDATE_SKELETONS2D: SystemId = SystemId(14);
 }
 
 impl SystemId {
@@ -184,6 +212,7 @@ fn builtin_id(name: &str) -> Option<(SystemId, &'static str)> {
         (builtin!(draw_sprites), Systems::DRAW_SPRITES),
         (builtin!(draw_particles), Systems::DRAW_PARTICLES),
         (builtin!(update_particles), Systems::UPDATE_PARTICLES),
+        (builtin!(update_skeletons2d), Systems::UPDATE_SKELETONS2D),
         (builtin!(spatial::rebuild_spatial_grid), Systems::REBUILD_SPATIAL_GRID),
         (builtin!(attach::follow_attachments), Systems::FOLLOW_ATTACHMENTS),
         #[cfg(feature = "physics")]
@@ -282,6 +311,8 @@ pub struct Game {
     /// Reload asset and data files when they change (`PONKO_HOT_RELOAD` overrides).
     hot_reload: bool,
     inspector: bool,
+    /// From `debug_draw`: `None` keeps the build's default.
+    debug_draw: Option<bool>,
     /// Scheduled input from `input_scenario`, fed at the start of sim ticks.
     input_scenario: Option<crate::scenario::InputScenario>,
     /// Whether tools may start input scenarios through the control endpoint.
@@ -304,15 +335,18 @@ pub struct Game {
     app_id: Option<String>,
     /// From `data_dir`: the exact folder for `ctx.storage`.
     data_dir: Option<std::path::PathBuf>,
+    /// From `state`: each state type's on-enter and on-exit work (a
+    /// `state::Shared<S>`), in registration order.
+    states: Vec<(std::any::TypeId, Box<dyn std::any::Any>)>,
 }
 
-type SetupFn = Box<dyn FnOnce(&mut Ctx)>;
+type SetupFn = Box<dyn FnOnce(&mut Ctx) -> Result<(), crate::error::Error>>;
 
 /// A game with stored startup callbacks and closure-free run methods.
 ///
 /// Returned by [`Game::setup`], or by [`Game::configured`] for a game with
-/// no setup of its own. Configure systems and window options on `Game`
-/// first, then register one or more setup callbacks. A configured game still
+/// no setup of its own. Configuration builders remain available in any order
+/// before and after registering setup callbacks. A configured game still
 /// takes the settings a test or a tool adds without touching the game's
 /// code: [`headless_frames`](Self::headless_frames),
 /// [`input_scenario`](Self::input_scenario) and
@@ -326,25 +360,240 @@ pub struct ConfiguredGame {
     game: Game,
 }
 
-fn run_setups(setups: Vec<SetupFn>, ctx: &mut Ctx) {
+fn run_setups(setups: Vec<SetupFn>, ctx: &mut Ctx) -> Result<(), crate::error::Error> {
     for setup in setups {
-        setup(ctx);
+        setup(ctx)?;
         ctx.apply_commands();
         ctx.follow_msaa();
     }
+    Ok(())
 }
 
 impl ConfiguredGame {
+    /// See [`Game::add`].
+    pub fn add<T>(mut self, phase: Phase, system: impl IntoSystem<T>) -> Self {
+        self.game = self.game.add(phase, system);
+        self
+    }
+
+    /// See [`Game::parallel_systems`].
+    pub fn parallel_systems(mut self, on: bool) -> Self {
+        self.game = self.game.parallel_systems(on);
+        self
+    }
+
+    /// See [`Game::parallel_threshold`].
+    pub fn parallel_threshold(mut self, work: Duration) -> Self {
+        self.game = self.game.parallel_threshold(work);
+        self
+    }
+
+    /// See [`Game::parallel_systems_env`].
+    pub fn parallel_systems_env(mut self, obeyed: bool) -> Self {
+        self.game = self.game.parallel_systems_env(obeyed);
+        self
+    }
+
+    /// See [`Game::barrier`].
+    pub fn barrier(mut self, phase: Phase) -> Self {
+        self.game = self.game.barrier(phase);
+        self
+    }
+
+    /// See [`Game::order`].
+    pub fn order(mut self, first: SystemId, second: SystemId) -> Self {
+        self.game = self.game.order(first, second);
+        self
+    }
+
+    /// See [`Game::remove`].
+    pub fn remove(mut self, id: SystemId) -> Self {
+        self.game = self.game.remove(id);
+        self
+    }
+
+    /// See [`Game::state`].
+    #[track_caller]
+    pub fn state<S: crate::state::States>(mut self, initial: S) -> Self {
+        self.game = self.game.state(initial);
+        self
+    }
+
+    /// See [`Game::on_enter`].
+    #[track_caller]
+    pub fn on_enter<S: crate::state::States>(mut self, state: S, work: impl FnMut(&mut Ctx) + 'static) -> Self {
+        self.game = self.game.on_enter(state, work);
+        self
+    }
+
+    /// See [`Game::on_exit`].
+    #[track_caller]
+    pub fn on_exit<S: crate::state::States>(mut self, state: S, work: impl FnMut(&mut Ctx) + 'static) -> Self {
+        self.game = self.game.on_exit(state, work);
+        self
+    }
+
+    /// See [`Game::state_screen`].
+    #[track_caller]
+    pub fn state_screen<S: crate::state::States>(
+        mut self,
+        state: S,
+        mode: crate::ui::ScreenMode,
+        build: impl FnMut(&mut Ctx) -> crate::ui::UiId + 'static,
+    ) -> Self {
+        self.game = self.game.state_screen(state, mode, build);
+        self
+    }
+
+    /// See [`Game::lockstep`].
+    pub fn lockstep(mut self, net: crate::net::Net) -> Self {
+        self.game = self.game.lockstep(net);
+        self
+    }
+
+    /// See [`Game::messages`].
+    pub fn messages(mut self, net: crate::net::NetMessages) -> Self {
+        self.game = self.game.messages(net);
+        self
+    }
+
+    /// See [`Game::physics`].
+    #[cfg(feature = "physics")]
+    pub fn physics(mut self, gravity: Vec2) -> Self {
+        self.game = self.game.physics(gravity);
+        self
+    }
+
+    /// See [`Game::physics3d`].
+    #[cfg(feature = "physics3d")]
+    pub fn physics3d(mut self, gravity: glam::Vec3) -> Self {
+        self.game = self.game.physics3d(gravity);
+        self
+    }
+
+    /// See [`Game::spatial_grid`].
+    pub fn spatial_grid(mut self, cell_size: f32) -> Self {
+        self.game = self.game.spatial_grid(cell_size);
+        self
+    }
+
+    /// See [`Game::input_injection`].
+    pub fn input_injection(mut self, on: bool) -> Self {
+        self.game = self.game.input_injection(on);
+        self
+    }
+
+    /// See [`Game::control_endpoint`].
+    pub fn control_endpoint(mut self, on: bool) -> Self {
+        self.game = self.game.control_endpoint(on);
+        self
+    }
+
+    /// See [`Game::hot_reload`].
+    pub fn hot_reload(mut self, on: bool) -> Self {
+        self.game = self.game.hot_reload(on);
+        self
+    }
+
+    /// See [`Game::inspector`].
+    pub fn inspector(mut self, on: bool) -> Self {
+        self.game = self.game.inspector(on);
+        self
+    }
+
+    /// See [`Game::debug_draw`].
+    pub fn debug_draw(mut self, on: bool) -> Self {
+        self.game = self.game.debug_draw(on);
+        self
+    }
+
+    /// See [`Game::app_id`].
+    pub fn app_id(mut self, app_id: impl Into<String>) -> Self {
+        self.game = self.game.app_id(app_id);
+        self
+    }
+
+    /// See [`Game::fixed_hz`].
+    pub fn fixed_hz(mut self, hz: u32) -> Self {
+        self.game = self.game.fixed_hz(hz);
+        self
+    }
+
+    /// See [`Game::vsync`].
+    pub fn vsync(mut self, on: bool) -> Self {
+        self.game = self.game.vsync(on);
+        self
+    }
+
+    /// See [`Game::fullscreen`].
+    pub fn fullscreen(mut self, on: bool) -> Self {
+        self.game = self.game.fullscreen(on);
+        self
+    }
+
+    /// Appends fallible startup work. The first error stops setup and is returned
+    /// by the fallible runner ([`try_run`](Self::try_run) or
+    /// [`try_run_headless`](Self::try_run_headless)); no systems run after
+    /// that failure.
+    pub fn try_setup(mut self, setup: impl FnOnce(&mut Ctx) -> Result<(), crate::error::Error> + 'static) -> Self {
+        self.game.setups.push(Box::new(setup));
+        self
+    }
+
+    /// Runs with recoverable startup errors. See [`Game::try_run`].
+    ///
+    /// # Errors
+    /// As [`Game::try_run`].
+    pub fn try_run(self) -> Result<(), crate::error::Error> {
+        self.game.try_run(|_| {})
+    }
+
+    /// Runs without a window or GPU, returning the first setup error.
+    ///
+    /// # Errors
+    /// The first error of a [`try_setup`](Self::try_setup) callback or a
+    /// plugin's [`try_setup`](Plugin::try_setup).
+    pub fn try_run_headless(self, ticks: u64) -> Result<World, crate::error::Error> {
+        self.game.try_run_headless(ticks, |_| {})
+    }
+
     /// Appends a startup callback. Callbacks run once in registration order,
     /// after runtime initialization and before any systems. Deferred commands
     /// are applied after each callback, including when running zero ticks.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let world = Game::new("t", 1, 1)
+    ///     .setup(|ctx| ctx.world.insert_resource(1u32))
+    ///     .setup(|ctx| *ctx.world.resource_mut::<u32>() += 1) // runs after the first
+    ///     .run_headless(0);
+    /// assert_eq!(*world.resource::<u32>(), 2);
+    /// ```
     pub fn setup(mut self, setup: impl FnOnce(&mut Ctx) + 'static) -> Self {
-        self.game.setups.push(Box::new(setup));
+        self.game.setups.push(Box::new(move |ctx| {
+            setup(ctx);
+            Ok(())
+        }));
         self
     }
 
     /// Registers a plugin after earlier startup callbacks. Its systems are
     /// configured immediately and its setup joins the same ordered queue.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// struct Counter;
+    /// impl Plugin for Counter {
+    ///     fn build(&self, game: Game) -> Game {
+    ///         game.sim_system(|ctx: &mut Ctx| *ctx.world.resource_mut::<u32>() += 1)
+    ///     }
+    ///     fn setup(&self, ctx: &mut Ctx) {
+    ///         ctx.world.insert_resource(0u32);
+    ///     }
+    /// }
+    /// let world = Game::new("t", 1, 1).setup(|_| {}).plugin(Counter).run_headless(3);
+    /// assert_eq!(*world.resource::<u32>(), 3);
+    /// ```
     pub fn plugin(mut self, plugin: impl Plugin + 'static) -> Self {
         self.game = self.game.plugin(plugin);
         self
@@ -352,12 +601,37 @@ impl ConfiguredGame {
 
     /// Opens the window and runs with the stored setup callbacks.
     /// Has the same platform requirements and panics as [`Game::run`].
+    ///
+    /// ```no_run
+    /// use ponko::prelude::*;
+    /// fn quit_on_escape(ctx: &mut Ctx) {
+    ///     if ctx.input.key_pressed(Key::Escape) {
+    ///         ctx.quit();
+    ///     }
+    /// }
+    /// Game::new("t", 800, 600).system(quit_on_escape).setup(|_| {}).run();
+    /// ```
+    ///
+    /// # Panics
+    /// As [`Game::run`].
     pub fn run(self) {
         self.game.run(|_| {});
     }
 
     /// Runs fixed ticks without a window or GPU, returning the world.
     /// Frame systems do not run; see [`Game::run_headless`].
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let world = Game::new("t", 1, 1)
+    ///     .setup(|ctx| ctx.world.insert_resource(0u64))
+    ///     .sim_system(|ctx: &mut Ctx| *ctx.world.resource_mut::<u64>() += 1)
+    ///     .run_headless(10);
+    /// assert_eq!(*world.resource::<u64>(), 10);
+    /// ```
+    ///
+    /// # Panics
+    /// As [`Game::run_headless`].
     pub fn run_headless(self, ticks: u64) -> World {
         self.game.run_headless(ticks, |_| {})
     }
@@ -382,7 +656,7 @@ impl ConfiguredGame {
     ///     Game::new("Menu", 640, 480).setup(|ctx| {
     ///         let root = ctx.ui.root().layout(ponko::ui::UiLayout::fill()).id();
     ///         ctx.ui.button(root, "Play").name("menu.play").focused();
-    ///         ctx.ui.push_screen(root, false);
+    ///         ctx.ui.push_modeless(root);
     ///     })
     /// }
     ///
@@ -422,6 +696,23 @@ impl ConfiguredGame {
     }
 
     /// Sets the seed for [`Ctx::random`]: [`Game::seed`].
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// // The same seed gives the same random numbers.
+    /// fn roll(seed: u64) -> u32 {
+    ///     Game::new("t", 1, 1)
+    ///         .seed(seed)
+    ///         .setup(|ctx| {
+    ///             let n = ctx.random().stream(0).below(1000);
+    ///             ctx.world.insert_resource(n);
+    ///         })
+    ///         .run_headless(0)
+    ///         .resource::<u32>()
+    ///         .clone()
+    /// }
+    /// assert_eq!(roll(42), roll(42));
+    /// ```
     pub fn seed(mut self, seed: u64) -> Self {
         self.game = self.game.seed(seed);
         self
@@ -429,6 +720,16 @@ impl ConfiguredGame {
 
     /// Adds a frame system after the game's own: [`Game::system`]. For a
     /// test or a tool that watches or drives a finished game.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// // Frame systems run once per drawn frame, so a headless run skips them.
+    /// let world = Game::new("t", 1, 1)
+    ///     .setup(|ctx| ctx.world.insert_resource(0u32))
+    ///     .system(|ctx: &mut Ctx| *ctx.world.resource_mut::<u32>() += 1)
+    ///     .run_headless(4);
+    /// assert_eq!(*world.resource::<u32>(), 0);
+    /// ```
     pub fn system<F: FnMut(&mut Ctx) + 'static>(mut self, system: F) -> Self {
         self.game = self.game.system(system);
         self
@@ -436,6 +737,15 @@ impl ConfiguredGame {
 
     /// Adds a simulation system after the game's own: [`Game::sim_system`].
     /// For a test or a tool that watches or drives a finished game.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let world = Game::new("t", 1, 1)
+    ///     .setup(|ctx| ctx.world.insert_resource(0u32))
+    ///     .sim_system(|ctx: &mut Ctx| *ctx.world.resource_mut::<u32>() += 1)
+    ///     .run_headless(4);
+    /// assert_eq!(*world.resource::<u32>(), 4); // once per simulated tick
+    /// ```
     pub fn sim_system<F: FnMut(&mut Ctx) + 'static>(mut self, system: F) -> Self {
         self.game = self.game.sim_system(system);
         self
@@ -476,6 +786,8 @@ struct System {
     enforced: bool,
     /// `Game::barrier` was called before it was added: it starts a stage.
     barrier: bool,
+    /// From `run_if`: it runs only when all of them hold. Empty for most.
+    conditions: Vec<crate::state::Condition>,
 }
 
 /// A system's place in the world's change history: the change tick at which
@@ -506,7 +818,10 @@ fn next_system_id() -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
     static NEXT: AtomicU32 = AtomicU32::new(1024);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
-    assert!(id >= 1024, "system ID space exhausted");
+    assert!(
+        id >= 1024,
+        "system ID space exhausted; create fewer systems in one process"
+    );
     id
 }
 
@@ -555,6 +870,9 @@ fn end_timings(ctx: &mut Ctx) {
 /// everything: while one never runs (the simulation is paused, say), the
 /// removal logs of tracked components grow with every removal.
 fn forget_seen_removals<'a>(ctx: &mut Ctx, systems: impl Iterator<Item = &'a System>) {
+    // Also once per frame or tick: slots set aside for deferred spawns
+    // that no buffer took go back to the world.
+    ctx.world.return_idle_ids();
     if let Some(oldest) = systems.map(|s| s.changes_seen.in_world(&ctx.world)).min() {
         ctx.world.forget_removed(oldest);
     }
@@ -624,13 +942,16 @@ impl System {
             builtin,
             every,
             access,
+            conditions,
         } = config;
         let id = next_system_id();
+        // State conditions read the state: declared, so the scheduler sees it.
+        let with_conditions = |access| conditions.iter().fold(access, |a, c| c.declare(a));
         let (run, access, enforced) = match run {
-            system::ConfigRun::Ctx(f) => (Run::Ctx(f), access, false),
+            system::ConfigRun::Ctx(f) => (Run::Ctx(f), access.map(with_conditions), false),
             system::ConfigRun::View(f) => {
                 // A view system that declares nothing can reach nothing.
-                let access = access.unwrap_or_default();
+                let access = with_conditions(access.unwrap_or_default());
                 if let Some(problem) = access.view_problem() {
                     panic!("Game::add: view system `{name}` {problem}");
                 }
@@ -652,7 +973,21 @@ impl System {
             changes_seen: ChangesSeen::default(),
             enforced,
             barrier: false,
+            conditions,
         }
+    }
+
+    /// Whether its run conditions hold now (always, without any).
+    #[inline]
+    fn conditions_hold(&mut self, ctx: &mut Ctx) -> bool {
+        self.conditions.is_empty() || self.conditions.iter_mut().all(|c| c.holds(ctx))
+    }
+
+    /// [`conditions_hold`](Self::conditions_hold) for a system in a batch,
+    /// whose conditions only read the world.
+    #[inline]
+    fn batch_conditions_hold(&self, world: &ponko_ecs::World) -> bool {
+        self.conditions.iter().all(|c| c.holds_in_batch(world))
     }
 
     /// A built-in that stays at the end of its phase.
@@ -786,6 +1121,7 @@ impl Game {
             control: control::env_control(),
             hot_reload: cfg!(debug_assertions),
             inspector: cfg!(debug_assertions),
+            debug_draw: None,
             input_scenario: None,
             input_injection: false,
             headless_frames: false,
@@ -797,9 +1133,11 @@ impl Game {
             exec: batch::Exec::default(),
             app_id: None,
             data_dir: None,
+            states: Vec::new(),
         };
         #[cfg(feature = "3d")]
         game.insert_system(Phase::Animate, System::last(crate::systems::update_animators));
+        game.insert_system(Phase::Animate, System::last(crate::systems::update_skeletons2d));
         game.insert_system(Phase::Animate, System::last(crate::systems::update_particles));
         #[cfg(feature = "3d")]
         game.insert_system(Phase::Draw, System::last(crate::systems::update_audio3d));
@@ -1098,6 +1436,22 @@ impl Game {
     ///
     /// # Panics
     /// If an [`order`](Self::order) pair contradicts the run order.
+    ///
+    /// ```
+    /// use ponko::access::SystemAccess;
+    /// use ponko::prelude::*;
+    /// use ponko::system_view::SystemView;
+    /// #[derive(Component)]
+    /// struct A;
+    /// #[derive(Component)]
+    /// struct B;
+    /// let game = Game::new("plan", 1, 1)
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<A>()).named("a"))
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<B>()).named("b"));
+    /// let plan = game.schedule_plan();
+    /// assert_eq!(plan.batches().count(), 1, "they touch different data: one batch");
+    /// println!("{plan}");
+    /// ```
     #[must_use]
     #[track_caller]
     pub fn schedule_plan(&self) -> crate::schedule::SchedulePlan {
@@ -1124,6 +1478,7 @@ impl Game {
                     view: s.enforced,
                     // A batch runs every tick: an interval system stays alone.
                     interval: s.every > 1,
+                    condition: s.conditions.iter().any(crate::state::Condition::reads_ctx),
                     barrier: s.barrier,
                 })
             })
@@ -1132,6 +1487,21 @@ impl Game {
 
     /// Every system in run order with its declared access, and which
     /// declared systems in the same phase could run together.
+    ///
+    /// ```
+    /// use ponko::access::SystemAccess;
+    /// use ponko::prelude::*;
+    /// use ponko::system_view::SystemView;
+    /// #[derive(Component)]
+    /// struct A;
+    /// #[derive(Component)]
+    /// struct B;
+    /// let report = Game::new("report", 1, 1)
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<A>()).named("a"))
+    ///     .add(Phase::AfterPhysics, (|_: &mut SystemView| {}).access(SystemAccess::new().write::<B>()).named("b"))
+    ///     .access_report();
+    /// assert!(report.parallel_pairs().any(|pair| pair == ("a", "b")));
+    /// ```
     #[must_use]
     pub fn access_report(&self) -> crate::access::AccessReport {
         let systems = (self.sim_systems.iter())
@@ -1199,8 +1569,20 @@ impl Game {
     /// assert_eq!(world.resource::<String>(), "server");
     /// ```
     pub fn setup(mut self, setup: impl FnOnce(&mut Ctx) + 'static) -> ConfiguredGame {
-        self.setups.push(Box::new(setup));
+        self.setups.push(Box::new(move |ctx| {
+            setup(ctx);
+            Ok(())
+        }));
         ConfiguredGame { game: self }
+    }
+
+    /// Stores a fallible setup callback, enabling `?` for asset loading.
+    pub fn try_setup(
+        mut self,
+        setup: impl FnOnce(&mut Ctx) -> Result<(), crate::error::Error> + 'static,
+    ) -> ConfiguredGame {
+        self.setups.push(Box::new(setup));
+        self.configured()
     }
 
     /// The game as it is, with the closure-free `.run()` and
@@ -1230,15 +1612,40 @@ impl Game {
     /// Composes an optional module. Its build runs now; its setup runs in
     /// registration order with the [`Game::setup`] callbacks, before the
     /// closure passed to `run`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// struct Counter;
+    /// impl Plugin for Counter {
+    ///     fn build(&self, game: Game) -> Game {
+    ///         game.sim_system(|ctx: &mut Ctx| *ctx.world.resource_mut::<u32>() += 1)
+    ///     }
+    ///     fn setup(&self, ctx: &mut Ctx) {
+    ///         ctx.world.insert_resource(0u32);
+    ///     }
+    /// }
+    /// let world = Game::new("t", 1, 1).plugin(Counter).run_headless(5, |_| {});
+    /// assert_eq!(*world.resource::<u32>(), 5);
+    /// ```
     pub fn plugin(self, plugin: impl Plugin + 'static) -> Self {
         let mut game = plugin.build(self);
-        game.setups.push(Box::new(move |ctx| plugin.setup(ctx)));
+        game.setups.push(Box::new(move |ctx| plugin.try_setup(ctx)));
         game
     }
 
     /// Removes all registrations with this ID, including built-ins. An absent
     /// or already removed ID is a no-op. Runtime event readers remain distinct
     /// even when multiple registrations share a built-in ID.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut game = Game::new("remove", 1, 1);
+    /// let id = game.add_system(Phase::AfterPhysics, |_: &mut Ctx| {});
+    /// let game = game.remove(id);
+    /// assert_eq!(game.system_count(id), 0);
+    /// // Removing it again does nothing.
+    /// assert_eq!(game.remove(id).system_count(id), 0);
+    /// ```
     pub fn remove(mut self, id: SystemId) -> Self {
         self.remove_id(id);
         self
@@ -1324,6 +1731,224 @@ impl Game {
     pub fn messages(mut self, net: crate::net::NetMessages) -> Self {
         self.messages = Some(net);
         self
+    }
+
+    /// Gives the game a state machine of type `S` (usually an `enum` of the
+    /// game's: title, playing, paused), starting in `initial`. See the
+    /// [`state`](crate::state) module for how states change and when.
+    ///
+    /// It adds the [`State<S>`](crate::state::State) resource (reflected, so
+    /// saves, tools and lockstep checksums carry it) before every setup
+    /// callback, and the two systems that apply its changes between ticks:
+    /// the first of the tick (in [`Phase::Input`], for changes asked for
+    /// between ticks) and the last (in [`Phase::SimLast`], for changes the
+    /// tick asked for). `initial`'s [`on_enter`](Self::on_enter) work runs
+    /// at the start of the first tick.
+    /// Systems run only in some states with
+    /// [`run_if`](IntoSystem::run_if)`(`[`in_state`](crate::state::in_state)`(..))`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+    /// enum Screen { Title, Playing }
+    ///
+    /// let world = Game::new("t", 1, 1)
+    ///     .state(Screen::Title)
+    ///     .setup(|ctx| ctx.set_state(Screen::Playing))
+    ///     .run_headless(1);
+    /// assert_eq!(world.resource::<ponko::state::State<Screen>>().get(), &Screen::Playing);
+    /// ```
+    ///
+    /// # Panics
+    /// If the game already has a state of type `S`.
+    #[track_caller]
+    pub fn state<S: crate::state::States>(mut self, initial: S) -> Self {
+        let id = std::any::TypeId::of::<S>();
+        assert!(
+            !self.states.iter().any(|(t, _)| *t == id),
+            "Game::state: the game already has a state of type `{}`; register each state type once",
+            std::any::type_name::<S>()
+        );
+        let shared = crate::state::transitions::<S>();
+        let index = self.states.len();
+        self.states.push((id, Box::new(shared.clone())));
+        // The resource exists before any setup callback, which may read it.
+        self.setups.insert(
+            index,
+            Box::new(move |ctx: &mut Ctx| {
+                use crate::reflect::WorldReflect;
+                ctx.world.reflect_resource::<crate::state::State<S>>();
+                ctx.world.insert_resource(crate::state::State::new(initial));
+                Ok(())
+            }),
+        );
+        // Where the state changes: first in the tick (after the state types
+        // before it) and last, staying after the tick's other systems.
+        let name = std::any::type_name_of_val(&crate::state::apply_state::<S>);
+        let apply = |start: bool| {
+            let shared = shared.clone();
+            System::from_config((move |ctx: &mut Ctx| crate::state::apply_state(ctx, &shared, start)).named(name))
+        };
+        let mut first = apply(true);
+        first.stage = Phase::Input;
+        self.sim_systems.insert(index, first);
+        let mut last = apply(false);
+        last.last = true;
+        self.insert_system(Phase::SimLast, last);
+        self.exec.invalidate();
+        self
+    }
+
+    /// Runs `work` each time state machine `S` enters `state`, between
+    /// ticks (see [`state`](Self::state)). Work for one state runs in
+    /// registration order, with its commands applied after each.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// # #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    /// # enum Screen { Title, Playing }
+    /// #[derive(Component)]
+    /// struct Player;
+    ///
+    /// let mut world = Game::new("t", 1, 1)
+    ///     .state(Screen::Playing)
+    ///     .on_enter(Screen::Playing, |ctx: &mut Ctx| { ctx.world.spawn((Player,)); })
+    ///     .run_headless(3, |_| {});
+    /// assert_eq!(world.query::<&Player>().iter().count(), 1);
+    /// ```
+    ///
+    /// # Panics
+    /// If the game has no state of type `S` yet: call [`state`](Self::state) first.
+    #[track_caller]
+    pub fn on_enter<S: crate::state::States>(self, state: S, work: impl FnMut(&mut Ctx) + 'static) -> Self {
+        self.transitions::<S>("on_enter")
+            .borrow_mut()
+            .enter
+            .push((state, hot(work)));
+        self
+    }
+
+    /// Runs `work` each time state machine `S` leaves `state`: before the
+    /// state changes, so `ctx.state()` is still `state` inside it. Popping a
+    /// state pushed over it leaves only the pushed one; setting a new state
+    /// leaves every state on the stack, top first. As
+    /// [`on_enter`](Self::on_enter) otherwise.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// # #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    /// # enum Screen { Playing, Paused }
+    /// let world = Game::new("t", 1, 1)
+    ///     .state(Screen::Playing)
+    ///     .on_exit(Screen::Paused, |ctx: &mut Ctx| {
+    ///         assert_eq!(ctx.state::<Screen>(), &Screen::Paused);
+    ///         *ctx.world.resource_mut::<u32>() += 1;
+    ///     })
+    ///     .sim_system(|ctx| match ctx.time.sim_tick() {
+    ///         0 => ctx.push_state(Screen::Paused),
+    ///         1 => ctx.pop_state::<Screen>(),
+    ///         _ => {}
+    ///     })
+    ///     .run_headless(3, |ctx| ctx.world.insert_resource(0u32));
+    /// assert_eq!(*world.resource::<u32>(), 1);
+    /// ```
+    ///
+    /// # Panics
+    /// If the game has no state of type `S` yet: call [`state`](Self::state) first.
+    #[track_caller]
+    pub fn on_exit<S: crate::state::States>(self, state: S, work: impl FnMut(&mut Ctx) + 'static) -> Self {
+        self.transitions::<S>("on_exit")
+            .borrow_mut()
+            .exit
+            .push((state, hot(work)));
+        self
+    }
+
+    /// Shows a UI screen while state machine `S` is in `state`: each time
+    /// the game enters `state`, `build` makes the screen's tree and returns
+    /// its root, which is pushed with `mode` ([`Ui::push_screen_with_mode`](crate::ui::Ui::push_screen_with_mode));
+    /// each time it leaves, the screen is taken down and its nodes removed.
+    /// A pause menu, an options page, a game over screen, in one call.
+    ///
+    /// When the player closes the screen (Escape, a gamepad's East button,
+    /// or a button that [closes its screen](crate::ui::UiBuilder::closes_screen)),
+    /// the state is left too: popped, if it was pushed over another one
+    /// ([`Ctx::push_state`]). A state that was set has nothing to go back
+    /// to, so its screen comes straight back up: it lasts as long as the
+    /// state. A state pushed over `state` leaves the screen up below its
+    /// own (`state` was not left). This is `on_enter`, `on_exit` and a frame
+    /// system; without frames (a plain headless run) the screen is pushed
+    /// and taken down all the same.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::ui::ScreenMode;
+    /// # #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    /// # enum Screen { Playing, Paused }
+    /// let world = Game::new("t", 800, 600)
+    ///     .state(Screen::Playing)
+    ///     .state_screen(Screen::Paused, ScreenMode::Modal, |ctx| {
+    ///         let menu = ctx.ui.root().name("pause.menu").id();
+    ///         ctx.ui.button(menu, "Resume").closes_screen();
+    ///         menu
+    ///     })
+    ///     .sim_system(|ctx| {
+    ///         let menu = ctx.ui.find("pause.menu");
+    ///         match ctx.time.sim_tick() {
+    ///             0 => ctx.push_state(Screen::Paused),
+    ///             1 => assert!(menu.is_some_and(|m| ctx.ui.is_screen(m)), "up while paused"),
+    ///             2 => ctx.pop_state::<Screen>(),
+    ///             3 => assert_eq!(menu, None, "taken down and removed"),
+    ///             _ => {}
+    ///         }
+    ///     })
+    ///     .run_headless(4, |_| {});
+    /// ```
+    ///
+    /// # Panics
+    /// If the game has no state of type `S` yet: call [`state`](Self::state)
+    /// first. When entered, as [`push_screen_with_mode`](crate::ui::Ui::push_screen_with_mode)
+    /// does, if `build` returns a node that has a parent or is already up.
+    #[track_caller]
+    pub fn state_screen<S: crate::state::States>(
+        self,
+        state: S,
+        mode: crate::ui::ScreenMode,
+        build: impl FnMut(&mut Ctx) -> crate::ui::UiId + 'static,
+    ) -> Self {
+        let work = crate::state::state_screen(state.clone(), mode, build);
+        self.on_enter(state.clone(), work.enter)
+            .on_exit(state, work.exit)
+            .system(work.frame)
+    }
+
+    /// Whether [`state`](Self::state) gave the game a state of type `S`:
+    /// for a plugin that adds one only if the game hasn't.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let game = Game::new("t", 1, 1).state(0u8);
+    /// assert!(game.has_state::<u8>() && !game.has_state::<u32>());
+    /// ```
+    #[must_use]
+    pub fn has_state<S: crate::state::States>(&self) -> bool {
+        let id = std::any::TypeId::of::<S>();
+        self.states.iter().any(|(t, _)| *t == id)
+    }
+
+    #[track_caller]
+    fn transitions<S: crate::state::States>(&self, method: &str) -> crate::state::Shared<S> {
+        let id = std::any::TypeId::of::<S>();
+        let found = self.states.iter().find(|(t, _)| *t == id);
+        match found.and_then(|(_, t)| t.downcast_ref::<crate::state::Shared<S>>()) {
+            Some(t) => t.clone(),
+            None => panic!(
+                "Game::{method}: the game has no state of type `{}`; call `Game::state` first",
+                std::any::type_name::<S>()
+            ),
+        }
     }
 
     /// Moves the sessions from the builder into `ctx.net`, before setup.
@@ -1598,7 +2223,7 @@ impl Game {
     ///     .run_headless_scenario(scenario, |ctx| {
     ///         let root = ctx.ui.root().layout(ponko::ui::UiLayout::fill()).id();
     ///         let play = ctx.ui.button(root, "Play").name("menu.play").id();
-    ///         ctx.ui.push_screen(root, false);
+    ///         ctx.ui.push_modeless(root);
     ///         ctx.world.insert_resource(Menu { play });
     ///         ctx.world.insert_resource(Started::default());
     ///     });
@@ -1732,6 +2357,24 @@ impl Game {
         self
     }
 
+    /// Whether debug drawing ([`ctx.debug`](crate::ctx::Ctx::debug)) draws
+    /// when the game starts. On by default in debug builds, off in release
+    /// builds, where every debug drawing call is then one branch that
+    /// returns. Systems turn it on and off with
+    /// [`DebugDraw::set_enabled`](crate::debug::DebugDraw::set_enabled),
+    /// tools with the control endpoint's `debug.draw` method.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let mut on = false;
+    /// Game::new("t", 64, 64).debug_draw(true).run_headless(0, |ctx| on = ctx.debug.enabled());
+    /// assert!(on);
+    /// ```
+    pub fn debug_draw(mut self, on: bool) -> Self {
+        self.debug_draw = Some(on);
+        self
+    }
+
     /// Constructs the context both loops run: the services from the game's
     /// configuration (seed, hot reload, spatial grid, physics worlds, the
     /// lockstep session and message endpoint), before setup and before the control endpoint
@@ -1748,6 +2391,9 @@ impl Game {
             ctx.set_headless(true);
         }
         ctx.assets.watcher.set_on(crate::hot_reload::enabled(self.hot_reload));
+        if let Some(on) = self.debug_draw {
+            ctx.debug.set_enabled(on);
+        }
         if let Some(cell) = self.spatial_cell {
             ctx.spatial = crate::spatial::SpatialGrid::new(cell);
         }
@@ -2008,6 +2654,7 @@ impl Game {
                 changes_seen: Default::default(),
                 enforced: false,
                 barrier: false,
+                conditions: Vec::new(),
             },
         );
     }
@@ -2095,6 +2742,7 @@ impl Game {
                     access: s.access.cloned(),
                     view: s.view,
                     interval: s.interval,
+                    condition: s.condition,
                     barrier: s.barrier,
                 })
                 .collect(),
@@ -2154,7 +2802,7 @@ impl Game {
     /// a game that pauses behind a menu still sees the scenario input that
     /// closes it. To hold only physics (a pause screen whose sim systems keep
     /// running, in a window and headless alike), use
-    /// [`Physics::set_paused`](crate::d2::Physics::set_paused) (2D) or
+    /// `Physics::set_paused` (2D) or
     /// `ctx.physics3d.set_paused` (3D, feature `physics3d`). Textures
     /// still load (for their sizes), but nothing is uploaded to a GPU.
     ///
@@ -2184,12 +2832,32 @@ impl Game {
     /// [`setup`](Self::setup) and call [`ConfiguredGame::run_headless`],
     /// which takes no closure. This form remains for short tests, and for a
     /// setup that borrows a local variable, which a stored callback can't.
+    ///
+    /// # Panics
+    /// If a stored setup callback or plugin fails
+    /// ([`try_run_headless`](Self::try_run_headless) returns the error
+    /// instead), or if a system panics.
     pub fn run_headless<S, U>(self, ticks: u64, setup: S) -> World
     where
         S: FnOnce(&mut Ctx) -> U,
         U: SetupResult,
     {
-        self.run_headless_inner(ticks, None, setup).0
+        self.try_run_headless(ticks, setup).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Runs fixed ticks headlessly, returning stored setup/plugin failures.
+    /// The final callback retains the unit-or-frame-closure convention; use
+    /// [`try_setup`](Self::try_setup) to register fallible work.
+    ///
+    /// # Errors
+    /// The first error of a stored setup callback or plugin; no tick runs
+    /// after it.
+    pub fn try_run_headless<S, U>(self, ticks: u64, setup: S) -> Result<World, crate::error::Error>
+    where
+        S: FnOnce(&mut Ctx) -> U,
+        U: SetupResult,
+    {
+        self.run_headless_inner(ticks, None, setup).map(|result| result.0)
     }
 
     /// Like [`run_headless`](Self::run_headless), but times everything and
@@ -2202,6 +2870,9 @@ impl Game {
     ///
     /// Counting allocations needs [`CountingAllocator`](crate::perf::CountingAllocator)
     /// as the global allocator.
+    ///
+    /// # Panics
+    /// If a stored setup callback or plugin fails, or a system panics.
     ///
     /// ```
     /// use ponko::prelude::*;
@@ -2227,7 +2898,9 @@ impl Game {
         S: FnOnce(&mut Ctx) -> U,
         U: SetupResult,
     {
-        let (world, report) = self.run_headless_inner(ticks, Some(warmup), setup);
+        let (world, report) = self
+            .run_headless_inner(ticks, Some(warmup), setup)
+            .unwrap_or_else(|e| panic!("{e}"));
         (world, report.unwrap_or_default())
     }
 
@@ -2236,7 +2909,7 @@ impl Game {
         ticks: u64,
         warmup: Option<u64>,
         setup: S,
-    ) -> (World, Option<crate::perf::PerfReport>)
+    ) -> Result<(World, Option<crate::perf::PerfReport>), crate::error::Error>
     where
         S: FnOnce(&mut Ctx) -> U,
         U: SetupResult,
@@ -2246,7 +2919,7 @@ impl Game {
         let mut ctx = self.build_ctx(true);
         let control = self.start_control(&mut ctx, true);
         ctx.set_in_setup(true);
-        run_setups(std::mem::take(&mut self.setups), &mut ctx);
+        run_setups(std::mem::take(&mut self.setups), &mut ctx)?;
         let frame_fn = setup(&mut ctx).into_frame_fn();
         match frame_fn {
             Some(f) if self.headless_frames => self.add_setup_closure(f),
@@ -2258,6 +2931,7 @@ impl Game {
 
         let timing = FrameTiming {
             dt: fixed_dt as f32,
+            seconds: fixed_dt,
             fixed_steps: 1,
             alpha: 0.0,
         };
@@ -2315,7 +2989,7 @@ impl Game {
             }
         }
         let report = warmup.map(|_| ctx.perf.report());
-        (std::mem::take(&mut ctx.world), report)
+        Ok((std::mem::take(&mut ctx.world), report))
     }
 
     /// Opens the window and runs the game until it is closed.
@@ -2358,6 +3032,13 @@ impl Game {
     /// assets and runs, on machines without a display or GPU. Not read in
     /// browsers.
     ///
+    /// # Schema runs
+    /// With `PONKO_SCHEMA=<file>`, `run` opens no window either: it runs
+    /// the setup headless, writes the JSON Schema of the glTF custom
+    /// properties this game reads (`gltf_properties_schema`,
+    /// with the components the setup reflected) to `file` and returns. This
+    /// is what `ponko schema` does. It needs the `3d` feature.
+    ///
     /// # Panics
     /// If the operating system refuses to create the event loop or window,
     /// or no usable GPU is found, and always when the `window` feature is
@@ -2367,21 +3048,97 @@ impl Game {
         S: FnOnce(&mut Ctx) -> U,
         U: SetupResult,
     {
+        self.try_run(setup).unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    /// Runs with recoverable startup failures. Native builds return event-loop,
+    /// window, surface, adapter and device initialization errors, plus errors
+    /// from stored setup callbacks/plugins. User panics and later device loss
+    /// are not recovered. Startup failures return directly without invoking the
+    /// panic hook, including in `panic = "abort"` builds. Mid-game surface loss
+    /// ("lost the GPU surface") is not covered by this startup result.
+    ///
+    /// In browsers, only event-loop construction errors can return here. Once
+    /// submitted, winit transfers control to the browser using a JavaScript
+    /// control-flow exception: this call does not return, even on normal exit.
+    /// Window/GPU initialization and setup complete asynchronously; their errors
+    /// are logged to the console as error diagnostics without invoking the panic
+    /// hook and stop startup, not returned to this caller.
+    ///
+    /// # Errors
+    /// Event-loop, window, surface, adapter or device initialization fails
+    /// (or the `window` feature is off and this is not a smoke run), or a
+    /// stored setup callback or plugin fails.
+    pub fn try_run<S, U>(self, setup: S) -> Result<(), crate::error::Error>
+    where
+        S: FnOnce(&mut Ctx) -> U,
+        U: SetupResult,
+    {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(out) = std::env::var_os(ENV_SCHEMA).filter(|v| !v.is_empty()) {
+            return self.write_schema(std::path::Path::new(&out), setup);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(ticks) = smoke_ticks(std::env::var(ENV_SMOKE).ok().as_deref()) {
-            let world = self.headless_frames(true).run_headless(ticks, setup);
+            let world = self.headless_frames(true).try_run_headless(ticks, setup)?;
             eprintln!("ponko: smoke run passed: {ticks} ticks, {} entities", world.len());
-            return;
+            return Ok(());
         }
         #[cfg(feature = "window")]
-        window::run(self, setup);
+        {
+            window::run(self, setup)
+        }
         #[cfg(not(feature = "window"))]
         {
             drop((self, setup));
-            panic!(
-                "ponko: Game::run needs a window, and this build has none \
-                 (the `window` feature is off); use Game::run_headless"
-            );
+            Err(crate::error::Error::new(
+                crate::error::ErrorKind::Unsupported,
+                "Game::run needs a window, and this build has none (the `window` feature is off); use Game::run_headless",
+            ))
+        }
+    }
+}
+
+/// `PONKO_SCHEMA=<file>`: [`Game::run`] runs the setup headless, writes the
+/// glTF properties schema of the game's reflected components there and
+/// returns (what `ponko schema` does).
+#[cfg(not(target_arch = "wasm32"))]
+const ENV_SCHEMA: &str = "PONKO_SCHEMA";
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Game {
+    /// The schema run of `PONKO_SCHEMA`: setup only, no window, then the
+    /// schema of [`gltf_properties_schema`](crate::d3::gltf_properties_schema)
+    /// written to `out`.
+    fn write_schema<S, U>(self, out: &std::path::Path, setup: S) -> Result<(), crate::error::Error>
+    where
+        S: FnOnce(&mut Ctx) -> U,
+        U: SetupResult,
+    {
+        #[cfg(feature = "3d")]
+        {
+            let world = self.try_run_headless(0, setup)?;
+            let schema = crate::d3::gltf_properties_schema(&world);
+            let text = serde_json::to_string_pretty(&schema)? + "\n";
+            std::fs::write(out, text).map_err(|e| {
+                crate::error::Error::new(
+                    crate::error::ErrorKind::Io,
+                    format!("can't write the schema to {}: {e}", out.display()),
+                )
+            })?;
+            eprintln!("ponko: wrote the glTF properties schema to {}", out.display());
+            Ok(())
+        }
+        #[cfg(not(feature = "3d"))]
+        {
+            drop((self, setup));
+            Err(crate::error::Error::new(
+                crate::error::ErrorKind::Unsupported,
+                format!(
+                    "{ENV_SCHEMA} is set ({}), but the glTF properties schema needs the `3d` feature",
+                    out.display()
+                ),
+            ))
         }
     }
 }
@@ -2448,6 +3205,7 @@ mod tests {
             .remove(Systems::DRAW_PARTICLES)
             .remove(Systems::UPDATE_ANIMATORS)
             .remove(Systems::UPDATE_PARTICLES)
+            .remove(Systems::UPDATE_SKELETONS2D)
             .remove(Systems::UPDATE_AUDIO3D)
     }
     fn frame_b(ctx: &mut Ctx) {
@@ -2464,12 +3222,7 @@ mod tests {
         use crate::anim::Joint;
         use crate::anim::Motion;
         use crate::anim::Skeleton;
-        use crate::d3::Transform as Transform3D;
-        let skeleton = Skeleton::new(vec![Joint {
-            name: "root".into(),
-            parent: None,
-            rest: Transform3D::default(),
-        }]);
+        let skeleton = Skeleton::new(vec![Joint::new("root", None)]);
         let clip = AnimationClip::new("rest", &skeleton, vec![]);
         let animator = Animator::new(
             AnimationGraph::new(
@@ -2698,7 +3451,8 @@ mod tests {
         };
         let user_animate = listed.iter().position(|n| n.contains("closure")).unwrap();
         assert!(user_animate < at("update_animators"));
-        assert!(at("update_animators") < at("update_particles"));
+        assert!(at("update_animators") < at("update_skeletons2d"));
+        assert!(at("update_skeletons2d") < at("update_particles"));
         assert!(at("update_particles") < at("late"), "{listed:?}");
         // Positional audio follows the late and the drawing systems.
         assert!(at("late") < at("update_audio3d"), "{listed:?}");
@@ -2712,6 +3466,7 @@ mod tests {
             phases,
             [
                 (Phase::Animate, false),
+                (Phase::Animate, true),
                 (Phase::Animate, true),
                 (Phase::Animate, true),
                 (Phase::Late, false),

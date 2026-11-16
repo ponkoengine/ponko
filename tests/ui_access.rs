@@ -49,7 +49,7 @@ fn menu() -> Menu {
         .id();
     let music = ui.toggle(root, "Music").layout(UiLayout::row(30.0)).value(1.0).id();
     let quit = ui.button(root, "Quit").layout(UiLayout::row(30.0)).enabled(false).id();
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     ui.layout(VIEW);
     Menu {
         ui,
@@ -286,7 +286,7 @@ fn modal_screens_hide_the_screens_below_and_restore_them_on_pop() {
     let question = m.ui.label(dialog, "Really quit?").layout(UiLayout::row(20.0)).id();
     let yes = m.ui.button(dialog, "Yes").layout(UiLayout::row(30.0)).id();
     m.ui.set_accessible_name(dialog, "Confirm");
-    m.ui.push_screen(dialog, true);
+    m.ui.push_modal(dialog);
     press(&mut m.ui, next());
 
     let tree = m.ui.accessibility_tree();
@@ -320,7 +320,7 @@ fn non_modal_overlays_keep_lower_screens_readable_but_inert() {
     let mut m = menu();
     let hud = m.ui.root().layout(UiLayout::anchored(0.0, 0.0, 100.0, 40.0)).id();
     let pause = m.ui.button(hud, "Pause").layout(UiLayout::fill()).id();
-    m.ui.push_screen(hud, false);
+    m.ui.push_modeless(hud);
     m.ui.layout(VIEW);
     let tree = m.ui.accessibility_tree();
     assert_eq!(tree.screens(), &[m.root, hud]);
@@ -347,7 +347,7 @@ fn huds_are_read_under_the_screens_inert_and_hidden_by_a_modal() {
     assert!(!tree.get(m.play).unwrap().inert, "the menu still takes input");
 
     let dialog = m.ui.root().layout(UiLayout::centered(200.0, 100.0)).id();
-    m.ui.push_screen(dialog, true);
+    m.ui.push_modal(dialog);
     m.ui.layout(VIEW);
     assert_eq!(m.ui.accessibility_tree().screens(), &[dialog]);
 }
@@ -391,7 +391,7 @@ fn images_scrolls_and_panels_have_roles() {
     ui.set_accessible_name(icon, "Coin");
     let deco = ui.add_child(list, UiWidget::Image, UiLayout::fixed(16.0, 16.0));
     let box_ = ui.panel(list).id();
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     ui.layout(VIEW);
     let tree = ui.accessibility_tree();
     assert_eq!(tree.get(list).unwrap().role, UiRole::ScrollView);
@@ -403,4 +403,41 @@ fn images_scrolls_and_panels_have_roles() {
         tree.to_string(),
         "group\n  scroll-view\n    image \"Coin\"\n    image\n    group\n"
     );
+}
+
+/// With an exhaustive enum the `_` arms below are unreachable, and this test
+/// would not compile: the accessibility enums leave room for new roles,
+/// values and actions.
+#[test]
+#[deny(unreachable_patterns)]
+fn accessibility_enums_are_non_exhaustive() {
+    use ponko::ui::UiAccessAction;
+    let role = |role: UiRole| match role {
+        UiRole::Group
+        | UiRole::Dialog
+        | UiRole::Label
+        | UiRole::Button
+        | UiRole::Image
+        | UiRole::ScrollView
+        | UiRole::TextInput
+        | UiRole::CheckBox
+        | UiRole::Slider => role.as_str(),
+        _ => "newer",
+    };
+    let value = |value: &UiAccessValue| match value {
+        UiAccessValue::None | UiAccessValue::Text(_) | UiAccessValue::Checked(_) | UiAccessValue::Range(_) => "known",
+        _ => "newer",
+    };
+    let action = |action: &UiAccessAction| match action {
+        UiAccessAction::Focus(_)
+        | UiAccessAction::Activate(_)
+        | UiAccessAction::SetValue(..)
+        | UiAccessAction::Increment(_)
+        | UiAccessAction::Decrement(_)
+        | UiAccessAction::SetText(..) => action.target(),
+        _ => UiId::from_bits(0),
+    };
+    assert_eq!(role(UiRole::Slider), "slider");
+    assert_eq!(value(&UiAccessValue::Checked(true)), "known");
+    assert_eq!(action(&UiAccessAction::Focus(UiId::from_bits(3))), UiId::from_bits(3));
 }

@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::rc::Rc;
 
-use ponko::prelude::{AssetSource, MemorySource};
+use ponko::assets::{AssetSource, MemorySource};
 
 use crate::ctx::{ctx_access, text};
 use crate::{Failure, PonkoCtx, PonkoStatus, boundary, engine_error, invalid, invalid_owned};

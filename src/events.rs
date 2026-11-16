@@ -5,6 +5,7 @@
 //! system that runs every tick (or every frame) sees each event exactly
 //! once: events sent earlier in the same tick right away, later ones on its
 //! next run. Old events are dropped automatically.
+#![deny(missing_docs)]
 
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, VecDeque};
@@ -121,6 +122,19 @@ enum Key {
 
 impl Events {
     /// Sends an event to every system that reads `T`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// struct Hit(u32);
+    /// let world = Game::new("t", 1, 1)
+    ///     .sim_system(|ctx: &mut Ctx| ctx.events.send(Hit(7)))
+    ///     .sim_system(|ctx: &mut Ctx| {
+    ///         let total: u32 = ctx.events.read::<Hit>().iter().map(|h| h.0).sum();
+    ///         ctx.world.insert_resource(total);
+    ///     })
+    ///     .run_headless(2, |_| {});
+    /// assert_eq!(*world.resource::<u32>(), 7); // read once, then marked as seen
+    /// ```
     pub fn send<T: Send + Sync + 'static>(&mut self, event: T) {
         self.note::<T>(true);
         let (frame, tick) = (self.frame, self.tick);
@@ -131,6 +145,25 @@ impl Events {
 
     /// The `T` events this system hasn't seen yet, oldest first. The next
     /// call from the same system returns only newer ones.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// struct Hit(u32);
+    /// let world = Game::new("t", 1, 1)
+    ///     .sim_system(|ctx: &mut Ctx| {
+    ///         if ctx.time.sim_tick() == 0 {
+    ///             ctx.events.send(Hit(3));
+    ///         }
+    ///     })
+    ///     .sim_system(|ctx: &mut Ctx| {
+    ///         // Each event reaches this system once, however many ticks pass.
+    ///         let seen = ctx.events.read::<Hit>().len() as u32;
+    ///         let total = ctx.world.get_resource::<u32>().copied().unwrap_or(0);
+    ///         ctx.world.insert_resource(total + seen);
+    ///     })
+    ///     .run_headless(4, |_| {});
+    /// assert_eq!(*world.resource::<u32>(), 1);
+    /// ```
     pub fn read<T: 'static>(&mut self) -> &[T] {
         self.note::<T>(false);
         let reader = self.reader;

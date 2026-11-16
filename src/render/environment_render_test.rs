@@ -721,6 +721,7 @@ fn the_atmosphere_has_no_dark_streak_at_negative_x() {
 fn frame_time(rig: &mut Rig, dt: f32) {
     rig.ctx.time.begin_frame(crate::time::FrameTiming {
         dt,
+        seconds: f64::from(dt),
         fixed_steps: 0,
         alpha: 0.0,
     });

@@ -198,6 +198,6 @@ fn prefabs_nesting_in_a_loop_are_an_error() {
     std::fs::write(dir.join("Assets/Loop.prefab.meta"), "guid: loop0000\n").unwrap();
     let project = Project::open(&dir).unwrap();
     let err = Hierarchy::load(&project, "loop0000").unwrap_err();
-    assert!(err.message.contains("loop"), "{err}");
+    assert!(err.message().contains("loop"), "{err}");
     std::fs::remove_dir_all(&dir).unwrap();
 }

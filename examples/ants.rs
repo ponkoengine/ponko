@@ -334,7 +334,7 @@ fn spawn_ant(cmds: &mut Commands, sprite: Option<Texture>, home: Entity, at: Vec
     match sprite {
         Some(tex) => cmds.spawn((t, ant, Sprite::new(tex).with_color(Color::hex(0xD4553A)))),
         None => cmds.spawn((t, ant)),
-    }
+    };
 }
 
 fn spawn_food(cmds: &mut Commands, rng: &mut Rng, bounds: Vec2, nests: &[Vec2]) {

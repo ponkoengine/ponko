@@ -27,6 +27,14 @@ use ponko::prelude::*;
 use ponko::render::MeshData;
 use serde::{Deserialize, Serialize};
 
+/// The name a test's file really has: unique to this process, so two test runs in one
+/// checkout (a terminal next to an IDE, two agents sharing a tree) never delete each
+/// other's files. The same input gives the same name for the whole run.
+fn unique(name: &str) -> &'static str {
+    let stem = name.strip_prefix("test-").unwrap_or(name);
+    Box::leak(format!("test-{}-{stem}", std::process::id()).into_boxed_str())
+}
+
 /// A file under `assets/` that is deleted when the test ends, pass or fail.
 struct TempAsset(&'static str);
 impl Drop for TempAsset {
@@ -61,7 +69,7 @@ struct Marker;
 
 #[test]
 fn commands_queued_before_a_load_are_dropped_and_later_ones_apply() {
-    let file = TempAsset("test-lifecycle-commands.json");
+    let file = TempAsset(unique("test-lifecycle-commands.json"));
     let mut kept = None;
     let mut world = Game::new("t", 1, 1)
         .sim_system(move |ctx: &mut Ctx| {
@@ -72,7 +80,7 @@ fn commands_queued_before_a_load_are_dropped_and_later_ones_apply() {
             // Meant for the old world: after the load `e` names the scene's entity.
             ctx.commands.despawn(e);
             ctx.commands.spawn((Marker,));
-            ctx.load_scene("test-lifecycle-commands.json").unwrap();
+            ctx.load_scene(unique("test-lifecycle-commands.json")).unwrap();
             ctx.commands.spawn((Tag(99),));
         })
         .run_headless(2, |ctx| {
@@ -101,14 +109,14 @@ struct Ping(u32);
 
 #[test]
 fn events_sent_before_a_load_can_still_be_read() {
-    let file = TempAsset("test-lifecycle-events.json");
+    let file = TempAsset(unique("test-lifecycle-events.json"));
     let got = std::rc::Rc::new(std::cell::Cell::new(None));
     let seen = got.clone();
     Game::new("t", 1, 1)
         .sim_system(|ctx: &mut Ctx| {
             if ctx.time.sim_tick() == 1 {
                 ctx.events.send(Ping(7));
-                ctx.load_scene("test-lifecycle-events.json").unwrap();
+                ctx.load_scene(unique("test-lifecycle-events.json")).unwrap();
             }
         })
         .sim_system(move |ctx: &mut Ctx| {
@@ -126,7 +134,7 @@ fn events_sent_before_a_load_can_still_be_read() {
 
 #[test]
 fn reflected_resources_follow_the_scene_and_other_state_stays() {
-    let file = TempAsset("test-lifecycle-resources.json");
+    let file = TempAsset(unique("test-lifecycle-resources.json"));
     let mut world = Game::new("t", 1, 1).run_headless(0, |ctx| {
         ctx.world.reflect::<Tag>();
         ctx.world.reflect_resource::<Level>();
@@ -150,7 +158,7 @@ fn reflected_resources_follow_the_scene_and_other_state_stays() {
 
 #[test]
 fn a_scene_with_an_unreflected_component_changes_nothing() {
-    let file = TempAsset("test-lifecycle-invalid.json");
+    let file = TempAsset(unique("test-lifecycle-invalid.json"));
     write_asset(
         file.0,
         &serde_json::json!({
@@ -175,7 +183,7 @@ fn a_scene_with_an_unreflected_component_changes_nothing() {
 
 #[test]
 fn a_scene_with_a_missing_texture_changes_nothing_but_keeps_loaded_ones() {
-    let file = TempAsset("test-lifecycle-missing-asset.json");
+    let file = TempAsset(unique("test-lifecycle-missing-asset.json"));
     let sprite =
         |texture: &str| serde_json::json!({ "texture": texture, "size": [8.0, 8.0], "color": [1.0, 1.0, 1.0, 1.0] });
     write_asset(
@@ -236,8 +244,8 @@ mod physics {
     #[test]
     fn a_body_in_a_same_id_scene_starts_from_rest() {
         let (a, b) = (
-            TempAsset("test-lifecycle-fall-a.json"),
-            TempAsset("test-lifecycle-fall-b.json"),
+            TempAsset(unique("test-lifecycle-fall-a.json")),
+            TempAsset(unique("test-lifecycle-fall-b.json")),
         );
         let mut ball = None;
         let mut world = Game::new("t", 1, 1)
@@ -245,7 +253,7 @@ mod physics {
             .sim_system(|ctx: &mut Ctx| {
                 // Half a second of falling, then the next scene.
                 if ctx.time.sim_tick() == 30 {
-                    ctx.load_scene("test-lifecycle-fall-b.json").unwrap();
+                    ctx.load_scene(unique("test-lifecycle-fall-b.json")).unwrap();
                 }
             })
             .run_headless(60, |ctx| ball = Some(two_scenes(ctx, a.0, b.0)));
@@ -260,15 +268,17 @@ mod physics {
     #[test]
     fn a_direct_world_load_also_rebuilds_bodies_at_the_next_step() {
         let (a, b) = (
-            TempAsset("test-lifecycle-raw-a.json"),
-            TempAsset("test-lifecycle-raw-b.json"),
+            TempAsset(unique("test-lifecycle-raw-a.json")),
+            TempAsset(unique("test-lifecycle-raw-b.json")),
         );
         let mut world = Game::new("t", 1, 1)
             .physics(GRAVITY)
             .sim_system(|ctx: &mut Ctx| {
                 if ctx.time.sim_tick() == 30 {
                     let text = std::fs::read_to_string(
-                        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/test-lifecycle-raw-b.json"),
+                        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("assets")
+                            .join(unique("test-lifecycle-raw-b.json")),
                     )
                     .unwrap();
                     ctx.world.load(&serde_json::from_str(&text).unwrap()).unwrap();
@@ -284,8 +294,8 @@ mod physics {
     #[test]
     fn queries_follow_the_new_scene_from_the_next_step() {
         let (a, b) = (
-            TempAsset("test-lifecycle-query-a.json"),
-            TempAsset("test-lifecycle-query-b.json"),
+            TempAsset(unique("test-lifecycle-query-a.json")),
+            TempAsset(unique("test-lifecycle-query-b.json")),
         );
         let checked = std::rc::Rc::new(std::cell::Cell::new(0));
         let done = checked.clone();
@@ -304,7 +314,7 @@ mod physics {
                     5 => {
                         let before = hit(ctx).expect("scene A's ball");
                         assert!((before.point.x + 10.0).abs() < 0.5, "{:?}", before.point);
-                        ctx.load_scene("test-lifecycle-query-b.json").unwrap();
+                        ctx.load_scene(unique("test-lifecycle-query-b.json")).unwrap();
                         assert!(hit(ctx).is_none(), "no stale bodies between the load and the next step");
                         assert_eq!(ctx.physics.body_count(), 0);
                         done.set(done.get() + 1);
@@ -324,13 +334,13 @@ mod physics {
                     .world
                     .spawn((Transform2D::at(Vec2::ZERO), RigidBody::fixed(), Collider::circle(10.0)));
                 ctx.assets
-                    .save_scene(&ctx.world, "test-lifecycle-query-a.json")
+                    .save_scene(&ctx.world, unique("test-lifecycle-query-a.json"))
                     .unwrap();
                 ctx.world.get_mut::<Transform2D>(ball).unwrap().position = vec2(500.0, 0.0);
                 ctx.assets
-                    .save_scene(&ctx.world, "test-lifecycle-query-b.json")
+                    .save_scene(&ctx.world, unique("test-lifecycle-query-b.json"))
                     .unwrap();
-                ctx.load_scene("test-lifecycle-query-a.json").unwrap();
+                ctx.load_scene(unique("test-lifecycle-query-a.json")).unwrap();
             });
         drop((a, b));
         assert_eq!(checked.get(), 2);
@@ -338,8 +348,8 @@ mod physics {
 
     #[test]
     fn gravity_survives_a_load_and_a_failed_load_keeps_the_bodies() {
-        let file = TempAsset("test-lifecycle-gravity.json");
-        let bad = TempAsset("test-lifecycle-gravity-bad.json");
+        let file = TempAsset(unique("test-lifecycle-gravity.json"));
+        let bad = TempAsset(unique("test-lifecycle-gravity-bad.json"));
         write_asset(
             bad.0,
             &serde_json::json!({ "format": "ponko-world", "version": 99, "entities": [] }),
@@ -349,9 +359,9 @@ mod physics {
             .sim_system(|ctx: &mut Ctx| match ctx.time.sim_tick() {
                 2 => {
                     ctx.physics.set_gravity(vec2(0.0, -50.0));
-                    assert!(ctx.load_scene("test-lifecycle-gravity-bad.json").is_err());
+                    assert!(ctx.load_scene(unique("test-lifecycle-gravity-bad.json")).is_err());
                     assert_eq!(ctx.physics.body_count(), 1, "a failed load leaves physics alone");
-                    ctx.load_scene("test-lifecycle-gravity.json").unwrap();
+                    ctx.load_scene(unique("test-lifecycle-gravity.json")).unwrap();
                 }
                 3 => assert_eq!(
                     ctx.physics.gravity(),
@@ -378,14 +388,14 @@ mod physics3d {
     #[test]
     fn a_3d_body_in_a_same_id_scene_starts_from_rest() {
         let (a, b) = (
-            TempAsset("test-lifecycle-fall3d-a.json"),
-            TempAsset("test-lifecycle-fall3d-b.json"),
+            TempAsset(unique("test-lifecycle-fall3d-a.json")),
+            TempAsset(unique("test-lifecycle-fall3d-b.json")),
         );
         let mut world = Game::new("t", 1, 1)
             .physics3d(vec3(0.0, -9.81, 0.0))
             .sim_system(|ctx: &mut Ctx| {
                 if ctx.time.sim_tick() == 30 {
-                    ctx.load_scene("test-lifecycle-fall3d-b.json").unwrap();
+                    ctx.load_scene(unique("test-lifecycle-fall3d-b.json")).unwrap();
                 }
             })
             .run_headless(60, |ctx| {
@@ -414,8 +424,8 @@ mod physics3d {
 
 #[test]
 fn prefabs_stay_cached_across_a_load() {
-    let prefab = TempAsset("test-lifecycle-prefab.json");
-    let scene = TempAsset("test-lifecycle-prefab-scene.json");
+    let prefab = TempAsset(unique("test-lifecycle-prefab.json"));
+    let scene = TempAsset(unique("test-lifecycle-prefab-scene.json"));
     let mut world = Game::new("t", 1, 1).run_headless(0, |ctx| {
         ctx.world.reflect::<Tag>();
         let model = ctx.world.spawn((Transform2D::default(), Tag(5)));
@@ -439,14 +449,14 @@ fn prefabs_stay_cached_across_a_load() {
 #[test]
 fn attachments_follow_the_new_scenes_entities() {
     let (a, b) = (
-        TempAsset("test-lifecycle-attach-a.json"),
-        TempAsset("test-lifecycle-attach-b.json"),
+        TempAsset(unique("test-lifecycle-attach-a.json")),
+        TempAsset(unique("test-lifecycle-attach-b.json")),
     );
     let mut ids = None;
     let world = Game::new("t", 1, 1)
         .sim_system(|ctx: &mut Ctx| {
             if ctx.time.sim_tick() == 2 {
-                ctx.load_scene("test-lifecycle-attach-b.json").unwrap();
+                ctx.load_scene(unique("test-lifecycle-attach-b.json")).unwrap();
             }
         })
         .sim_system(systems::follow_attachments)
@@ -485,7 +495,7 @@ struct Step(u32);
 /// inside the crate, in `src/scene.rs`.)
 #[test]
 fn loads_in_setup_and_simulation_systems_run_on_every_lockstep_peer() {
-    let file = TempAsset("test-lifecycle-lockstep.json");
+    let file = TempAsset(unique("test-lifecycle-lockstep.json"));
     // Written first: both peers read it.
     Game::new("t", 1, 1).run_headless(0, |ctx| {
         ctx.world.reflect::<Tag>();
@@ -502,7 +512,7 @@ fn loads_in_setup_and_simulation_systems_run_on_every_lockstep_peer() {
                         ctx.net.set_input(&Step(ctx.time.sim_tick() as u32));
                         if ctx.time.sim_tick() == 10 {
                             assert_eq!(ctx.world.query::<&Tag>().iter().next().unwrap().0, 1);
-                            ctx.load_scene("test-lifecycle-lockstep.json").unwrap();
+                            ctx.load_scene(unique("test-lifecycle-lockstep.json")).unwrap();
                         }
                         if ctx.time.sim_tick() == 29 {
                             let desync = ctx.net.desync().cloned();
@@ -513,7 +523,7 @@ fn loads_in_setup_and_simulation_systems_run_on_every_lockstep_peer() {
                         ctx.world.reflect::<Tag>();
                         assert_eq!(ctx.net.state(), NetState::Connecting);
                         // Setup runs on every peer before the first tick.
-                        ctx.load_scene_lockstep("test-lifecycle-lockstep.json").unwrap();
+                        ctx.load_scene_lockstep(unique("test-lifecycle-lockstep.json")).unwrap();
                         ctx.world.query::<&mut Tag>().for_each(|t| t.0 = 1);
                     });
                 let desync = world
@@ -604,12 +614,12 @@ mod navigation {
     #[test]
     fn crowd_agents_of_the_old_scene_leave_the_crowd() {
         let (a, b) = (
-            TempAsset("test-lifecycle-nav-a.json"),
-            TempAsset("test-lifecycle-nav-b.json"),
+            TempAsset(unique("test-lifecycle-nav-a.json")),
+            TempAsset(unique("test-lifecycle-nav-b.json")),
         );
         let (a2, b2) = (
-            TempAsset("test-lifecycle-nav-a2.json"),
-            TempAsset("test-lifecycle-nav-b2.json"),
+            TempAsset(unique("test-lifecycle-nav-a2.json")),
+            TempAsset(unique("test-lifecycle-nav-b2.json")),
         );
         // Control: reloading scene A keeps the blocker, and the walker goes round it.
         let round = walk(a2.0, a2.0, b2.0);
@@ -622,7 +632,7 @@ mod navigation {
 
     #[test]
     fn the_baked_navigation_mesh_survives_a_load() {
-        let file = TempAsset("test-lifecycle-nav-mesh.json");
+        let file = TempAsset(unique("test-lifecycle-nav-mesh.json"));
         let world = Game::new("t", 1, 1).run_headless(0, |ctx| {
             ctx.world.reflect::<Tag>();
             let plane = NavSource::from_mesh(&MeshData::plane(20.0), Transform3D::default());

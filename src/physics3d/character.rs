@@ -68,6 +68,12 @@ impl Default for Character3D {
 impl Character3D {
     /// A character `height` tall (feet to head) and `radius` wide, with the
     /// default limits.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let hero = ponko::d3::Character::new(1.8, 0.3);
+    /// assert_eq!((hero.height, hero.radius), (1.8, 0.3));
+    /// ```
     #[must_use]
     pub fn new(height: f32, radius: f32) -> Self {
         Self {

@@ -15,7 +15,10 @@ C and C++ have asset sources and `load_asset_with` too;
 ## Embedding files in the executable
 
 `MemorySource` holds named files in memory. Fill it with `include_bytes!` and
-the game needs nothing next to the executable:
+the game needs nothing next to the executable. It lives in `ponko::assets`,
+with `PackSource` and the `AssetSource` trait (not in the prelude: a game
+names them only where it adds a source), so start the file with
+`use ponko::assets::MemorySource;`:
 
 <div class="lang-pair">
 <div>
@@ -172,4 +175,4 @@ A source also makes headless tests self-contained: a test that adds a
 `MemorySource` with a generated image or a JSON file doesn't depend on the
 repository's `assets/` folder (see [Headless runs and
 testing](headless.md)). The engine's own tests do this in
-[`tests/asset_sources.rs`](https://github.com/ponkoengine/ponko/blob/main/tests/asset_sources.rs).
+[`tests/asset_sources.rs`](../../tests/asset_sources.rs).

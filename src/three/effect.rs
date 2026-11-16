@@ -188,13 +188,16 @@ impl Graphics {
         self.try_load_effect(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_effect`](Self::load_effect) with errors as values:
-    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file is
-    /// missing, [`Io`](crate::error::ErrorKind::Io) if it can't be read,
+    /// [`load_effect`](Self::load_effect) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file
+    /// is missing, [`Io`](crate::error::ErrorKind::Io) if it can't be read,
     /// [`Decode`](crate::error::ErrorKind::Decode) if it isn't UTF-8 text and
     /// [`Shader`](crate::error::ErrorKind::Shader) if it doesn't compile (the
-    /// message has the compiler's log). With hot reload on, a file that
-    /// doesn't compile still returns a stand-in, as `load_effect` does.
+    /// message has the compiler's log). With hot reload on, a file that doesn't
+    /// compile still returns a stand-in, as `load_effect` does.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -260,9 +263,20 @@ impl Graphics {
         self.try_create_effect(name, source).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`create_effect`](Self::create_effect) with errors as values:
+    /// [`create_effect`](Self::create_effect) with errors as values.
+    ///
+    /// # Errors
+    ///
     /// [`ErrorKind::Shader`](crate::error::ErrorKind::Shader) if it doesn't
     /// compile, with the compiler's log in the message.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let err = ctx.gfx.try_create_effect("broken", "fn effect(p: Pixel) -> vec3<f32> { return 1; }").unwrap_err();
+    ///     assert_eq!(err.kind(), ErrorKind::Shader);
+    /// });
+    /// ```
     pub fn try_create_effect(&mut self, name: &str, source: &str) -> Result<Effect, crate::error::Error> {
         let id = self.assets3d.effects;
         let compiled = self.compile_effect(name, source, None);
