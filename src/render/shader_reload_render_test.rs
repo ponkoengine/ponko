@@ -269,12 +269,15 @@ fn pipeline_creation_and_reload_stalls_are_measured() {
     let Some((device, mut renderer)) = rig() else {
         return;
     };
+    let before = renderer.pipeline_stats();
     let start = std::time::Instant::now();
     let id = renderer.create_shader(&device, "red.wgsl", RED).unwrap();
     let create = start.elapsed();
+    let created = renderer.pipeline_stats();
     let start = std::time::Instant::now();
     renderer.create_shader(&device, "red again.wgsl", RED).unwrap();
     let shared = start.elapsed();
+    let again = renderer.pipeline_stats();
     let start = std::time::Instant::now();
     renderer.replace_shader(&device, id, "red.wgsl", BLUE).unwrap();
     let reload = start.elapsed();
@@ -302,7 +305,16 @@ fn pipeline_creation_and_reload_stalls_are_measured() {
         s.slowest_build_ms,
     );
     assert!(s.builds >= 7 && s.slowest_build_ms > 0.0);
-    assert!(shared < create, "sharing skips the compile");
+    // Sharing skips the compile: counted, not timed (two wall-clock times
+    // compare unreliably on a busy machine).
+    assert_eq!(created.compiles, before.compiles + 1, "a new shader is compiled");
+    assert_eq!(again.compiles, created.compiles, "sharing skips the compile");
+    assert_eq!(
+        again.shared,
+        created.shared + 1,
+        "the identical shader shares the pipelines"
+    );
+    assert_eq!(again.builds, created.builds, "and builds nothing");
 }
 
 /// Every set built is either still in use or was invalidated.

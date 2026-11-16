@@ -435,7 +435,7 @@ fn spawn_unit(cmds: &mut Commands, sprite: Option<Texture>, team: Team, at: Vec2
     match sprite {
         Some(tex) => cmds.spawn((d2::Transform::at(at), Sprite::new(tex).with_color(team.color()), unit)),
         None => cmds.spawn((d2::Transform::at(at), unit)),
-    }
+    };
 }
 
 fn setup(ctx: &mut Ctx, units: usize, seed: u64, sprite: Option<Texture>) {

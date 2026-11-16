@@ -1,4 +1,4 @@
-//! `load_component_json::<T>` / `load_resource_json::<T>`: the name comes from the type.
+//! `load_reflected_component_json::<T>` / `load_reflected_resource_json::<T>`: the name comes from the type.
 mod common;
 
 use common::TempAsset;
@@ -32,17 +32,17 @@ fn typed_component_and_resource_loaders_match_the_string_forms() {
         let e2 = ctx.world.spawn((Stats { hp: 1.0, armor: 5.0 },));
 
         ctx.assets
-            .load_component_json::<Stats>(&mut ctx.world, stats.name(), e)
+            .load_reflected_component_json::<Stats>(&mut ctx.world, stats.name(), e)
             .unwrap();
         ctx.assets
-            .load_component_json_named(&mut ctx.world, stats.name(), e2, "Stats")
+            .load_reflected_component_json_named(&mut ctx.world, stats.name(), e2, "Stats")
             .unwrap();
         // Object fields merge: hp from the file, armor kept.
         assert_eq!(ctx.world.get::<Stats>(e), Some(&Stats { hp: 7.0, armor: 5.0 }));
         assert_eq!(ctx.world.get::<Stats>(e2), ctx.world.get::<Stats>(e));
 
         ctx.assets
-            .load_resource_json::<Tuning>(&mut ctx.world, tuning.name())
+            .load_reflected_resource_json::<Tuning>(&mut ctx.world, tuning.name())
             .unwrap();
         assert_eq!(
             *ctx.world.resource::<Tuning>(),
@@ -61,13 +61,13 @@ fn a_type_that_was_not_reflected_is_an_error_not_a_panic() {
         let e = ctx.world.spawn((Stats::default(),));
         let error = ctx
             .assets
-            .load_component_json::<Stats>(&mut ctx.world, stats.name(), e)
+            .load_reflected_component_json::<Stats>(&mut ctx.world, stats.name(), e)
             .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::NotFound);
         assert!(error.message().contains("Stats"), "{error}");
         let error = ctx
             .assets
-            .load_resource_json::<Tuning>(&mut ctx.world, stats.name())
+            .load_reflected_resource_json::<Tuning>(&mut ctx.world, stats.name())
             .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::NotFound);
         assert!(error.message().contains("Tuning"), "{error}");

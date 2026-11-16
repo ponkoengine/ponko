@@ -89,6 +89,7 @@ fn a_fresh_project_packages_for_the_host_with_one_command() {
     };
     // The assets ship in one pack, which the smoke run read them from.
     assert!(report.contains("in assets.pack"), "{report}");
+    assert!(report.contains("assets cooked "), "the pack is cooked: {report}");
     for file in ["assets.pack", "THIRD-PARTY-NOTICES.txt"] {
         assert!(inner.join(file).is_file(), "{file} in {}", inner.display());
     }

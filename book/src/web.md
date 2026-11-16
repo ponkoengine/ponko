@@ -1,16 +1,15 @@
 # Web builds: games in the browser
 
-The same game code runs in a browser tab. **Try it:** the
-[web gallery](https://ponkoengine.github.io/ponko/) has the examples of the
-newest release, playable in the browser, each with what it shows, its
-controls, whether it needs WebGPU and its source at that release. Among them:
+The same game code runs in a browser tab. **Try it:** the examples build
+into a gallery (below), with a page for each: what it shows, its controls,
+whether it needs WebGPU and its source at that release. Among them:
 
-- [The battle](https://ponkoengine.github.io/ponko/battle/): two armies of
+- The battle: two armies of
   10,000 units on flow fields. Click to rally, `A` to attack, `D` to defend.
   Add `?inspector=open` to the address to open the [inspector](inspector.md).
-- [Flow fields](https://ponkoengine.github.io/ponko/flow/): 20,000 agents
+- Flow fields: 20,000 agents
   find their way to where you click.
-- [A 3D scene](https://ponkoengine.github.io/ponko/3d/): materials, a sun with
+- A 3D scene: materials, a sun with
   shadows and instanced models.
 
 Games draw with WebGPU where the browser has it, and WebGL2 where it
@@ -26,8 +25,8 @@ cargo install wasm-bindgen-cli --version 0.2.130   # the wasm-bindgen version in
 ```
 
 Then, from your game's folder, with
-[`web/build.sh`](https://github.com/ponkoengine/ponko/blob/main/web/build.sh)
-and [`web/index.html`](https://github.com/ponkoengine/ponko/blob/main/web/index.html)
+[`web/build.sh`](../../web/build.sh)
+and [`web/index.html`](../../web/index.html)
 copied from the engine's repository:
 
 ```sh
@@ -59,7 +58,7 @@ with WebGPU or, where the browser lacks it, WebGL2. Each release builds the
 gallery for its version and publishes it (the release workflow,
 `.github/workflows/release.yml`). Adding an example is one line in
 `examples.json`; the gallery's
-[README](https://github.com/ponkoengine/ponko/blob/main/web/gallery/README.md)
+[README](../../web/gallery/README.md)
 has the fields, and how to check every page in a headless browser.
 
 ## What's different in a browser
@@ -141,7 +140,7 @@ WebGL2 in all three browsers on `main`; WebGPU is tried too, and a
 browser that can't show a WebGPU canvas is reported as unsupported, with the
 reason, never as a pass. Each run leaves a report, a trace and a screenshot.
 See its
-[README](https://github.com/ponkoengine/ponko/blob/main/web/smoke/README.md)
+[README](../../web/smoke/README.md)
 for running it, adding a fixture for another example, and what runs where.
 
 ## C and C++

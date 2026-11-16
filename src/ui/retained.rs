@@ -22,7 +22,25 @@ use taffy::prelude::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UiId(pub(super) usize);
 
+/// Bits of a [`UiId`] that name its slot in the node table; the bits above
+/// count how often the slot was used before. A removed node's slot is
+/// used again under the next generation, so a UI that builds and removes
+/// menus all session keeps a table the size of its largest UI, and an id
+/// kept past [`Ui::remove`] never names the node made in its slot. A slot
+/// whose generations run out is retired instead of wrapping (after 4095
+/// uses on 32-bit targets; never in practice on 64-bit ones).
+const SLOT_BITS: u32 = if usize::BITS >= 64 { 32 } else { 20 };
+const SLOT_MASK: usize = (1 << SLOT_BITS) - 1;
+/// The last generation, never given out: `UiId::from_bits(u64::MAX)` has it.
+const LAST_GENERATION: usize = usize::MAX >> SLOT_BITS;
+
 impl UiId {
+    /// The node table slot this id names (live or stale).
+    #[inline]
+    pub(super) const fn slot(self) -> usize {
+        self.0 & SLOT_MASK
+    }
+
     /// The id as an integer, for hosts that store ids outside the UI (the C
     /// API does).
     /// ```
@@ -90,7 +108,7 @@ pub enum UiWidget {
     /// let _ = ponko::ui::UiWidget::Scroll;
     /// ```
     Scroll,
-    /// Single-line Unicode input, with basic selection (no IME/clipboard).
+    /// Single-line Unicode input, with selection, IME and clipboard shortcuts.
     /// ```
     /// use ponko::prelude::*;
     /// let _ = ponko::ui::UiWidget::TextInput;
@@ -280,7 +298,9 @@ pub enum UiEvent {
     /// let _ = ponko::ui::UiEvent::Submitted(id);
     /// ```
     Submitted(UiId),
-    /// Cancel popped this screen; the input is consumed for this frame.
+    /// The screen was closed by the player: Cancel (Escape, a gamepad's East
+    /// button) or a button that [closes its screen](Ui::set_closes_screen)
+    /// popped it. The input is consumed for this frame.
     /// ```
     /// use ponko::prelude::*;
     /// let mut ui = ponko::ui::Ui::default();
@@ -297,7 +317,7 @@ pub enum UiEvent {
     /// let mut ui = Ui::default();
     /// let root = ui.root().layout(UiLayout::fill()).id();
     /// let line = ui.label(root, "[link=rules]Rules[/link]").rich().id();
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// ui.layout(vec2(320.0, 240.0));
     /// let at = ui.rect(line).unwrap().min + vec2(4.0, 4.0);
     /// ui.frame(vec2(320.0, 240.0), &UiInput { pointer: at, pressed: true, held: true, ..Default::default() });
@@ -464,6 +484,9 @@ pub struct UiInput {
 }
 
 pub(super) struct Node {
+    /// The id this node was made under: an id naming its slot under an
+    /// older generation is stale.
+    pub id: UiId,
     pub widget: UiWidget,
     pub layout: NodeId,
     pub parent: Option<UiId>,
@@ -490,6 +513,8 @@ pub(super) struct Node {
     pub title: bool,
     /// Its screen opens with it focused ([`Ui::set_initial_focus`]).
     pub initial_focus: bool,
+    /// Pressing it also closes its screen ([`Ui::set_closes_screen`]).
+    pub closes_screen: bool,
     /// A text input takes IME composition ([`Ui::set_ime_allowed`]).
     pub ime: bool,
     /// The IME composition it shows at its caret; empty: none.
@@ -501,6 +526,31 @@ pub(super) struct Node {
     /// Its text is markup ([`Ui::set_rich`]), parsed.
     pub rich: Option<Box<super::rich::RichText>>,
 }
+/// How a screen pushed on the [`Ui`]'s stack treats the screens below it
+/// ([`Ui::push_screen_with_mode`]). Either way only the top screen takes
+/// input; more modes may come, so a `match` needs a `_` arm.
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::ui::ScreenMode;
+/// let mut ui = ponko::ui::Ui::default();
+/// let root = ui.root().id();
+/// ui.push_screen_with_mode(root, ScreenMode::Modal);
+/// let dims = matches!(ui.screen_mode(root), Some(ScreenMode::Modal));
+/// assert!(dims);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum ScreenMode {
+    /// A menu, page or HUD-like screen: drawn as it is, no overlay. The
+    /// default.
+    #[default]
+    Modeless,
+    /// A dialog: draws a dim overlay over the screens below it, owns the
+    /// pointer outside its own rectangle (a click there is swallowed) and is
+    /// a dialog to assistive technology.
+    Modal,
+}
+
 pub(super) struct Screen {
     pub root: UiId,
     pub modal: bool,
@@ -536,17 +586,23 @@ enum Drag {
 /// use ponko::prelude::*;
 /// let mut ui = ponko::ui::Ui::default();
 /// let root = ui.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::auto());
-/// ui.push_screen(root, false);
+/// ui.push_modeless(root);
 /// ui.frame(vec2(800.0,600.0), &ponko::ui::UiInput::default());
 /// ```
 pub struct Ui {
     pub(super) tree: TaffyTree<usize>,
     pub(super) nodes: Vec<Option<Node>>,
+    /// Ids of removed nodes whose slots are used next, under a new
+    /// generation (see [`SLOT_BITS`]).
+    free_ids: Vec<UiId>,
     pub(super) screens: Vec<Screen>,
     /// The HUD roots ([`Ui::show_hud`]), drawn below every screen, bottom first.
     pub(super) huds: Vec<UiId>,
     pub(super) visible: Vec<UiId>,
     events: std::collections::VecDeque<UiEvent>,
+    /// The screens the player closed in this frame (each also sent a
+    /// `ScreenPopped`), kept apart from `events`, which systems drain.
+    closed: Vec<UiId>,
     /// IME composition ([`Ui::preedit`], [`Ui::ime_area`]).
     pub(super) ime: super::retained_ime::UiImeState,
     /// Which string tables the keyed nodes show ([`Ui::localize`]).
@@ -577,7 +633,7 @@ pub struct Ui {
     pub(super) names: std::collections::HashMap<String, UiId>,
     /// The immediate widgets (a panel, a label, a button drawn the frame
     /// they are called) and their style. Only the screen's UI (`ctx.ui`)
-    /// shows them; a [`UiPanel3D`](crate::d3::UiPanel)'s tree leaves it unused.
+    /// shows them; a `d3::UiPanel`'s tree leaves it unused.
     pub immediate: super::UiImmediate,
     /// The mouse is over the inspector overlay.
     pub(crate) overlay_has_pointer: bool,
@@ -597,10 +653,12 @@ impl Default for Ui {
         Self {
             tree: TaffyTree::new(),
             nodes: Vec::new(),
+            free_ids: Vec::new(),
             screens: Vec::new(),
             huds: Vec::new(),
             visible: Vec::new(),
             events: std::collections::VecDeque::new(),
+            closed: Vec::new(),
             ime: Default::default(),
             locale: Default::default(),
             focus: None,
@@ -628,10 +686,10 @@ impl Default for Ui {
 }
 impl Ui {
     pub(super) fn node(&self, id: UiId) -> Option<&Node> {
-        self.nodes.get(id.0)?.as_ref()
+        self.nodes.get(id.slot())?.as_ref().filter(|n| n.id == id)
     }
     pub(super) fn node_mut(&mut self, id: UiId) -> Option<&mut Node> {
-        self.nodes.get_mut(id.0)?.as_mut()
+        self.nodes.get_mut(id.slot())?.as_mut().filter(|n| n.id == id)
     }
     pub(super) fn paint_mut(&mut self, id: UiId) -> Option<&mut UiPaint> {
         Some(&mut self.node_mut(id)?.paint)
@@ -646,13 +704,24 @@ impl Ui {
     /// let root = ui.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::auto());
     /// ```
     pub fn add(&mut self, widget: UiWidget, layout: UiLayout) -> UiId {
-        let id = UiId(self.nodes.len());
+        let id = match self.free_ids.pop() {
+            Some(freed) => UiId(freed.0 + (1 << SLOT_BITS)),
+            None => {
+                assert!(
+                    self.nodes.len() < SLOT_MASK,
+                    "ponko: more than {SLOT_MASK} UI nodes; remove nodes you no longer show"
+                );
+                self.nodes.push(None);
+                UiId(self.nodes.len() - 1)
+            }
+        };
         let layout = self
             .tree
-            .new_leaf_with_context(layout.into_style(), id.0)
+            .new_leaf_with_context(layout.into_unstable_style(), id.slot())
             .expect("valid UI layout");
         let paint = self.theme.paint(widget);
-        self.nodes.push(Some(Node {
+        self.nodes[id.slot()] = Some(Node {
+            id,
             widget,
             layout,
             parent: None,
@@ -673,15 +742,21 @@ impl Ui {
             name: String::new(),
             title: false,
             initial_focus: false,
+            closes_screen: false,
             ime: true,
             preedit: String::new(),
             preedit_cursor: None,
             key: None,
             rich: None,
-        }));
+        });
         id
     }
-    /// Add a child. Panics if the parent was removed or belongs to another UI.
+    /// Add a child.
+    ///
+    /// # Panics
+    ///
+    /// If the parent was removed or belongs to another UI.
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// let mut ui = ponko::ui::Ui::default();
@@ -689,7 +764,10 @@ impl Ui {
     /// let child = ui.add_child(root, ponko::ui::UiWidget::Label, ponko::ui::UiLayout::auto());
     /// ```
     pub fn add_child(&mut self, parent: UiId, widget: UiWidget, layout: UiLayout) -> UiId {
-        let p = self.node(parent).expect("UI parent must exist").layout;
+        let p = self
+            .node(parent)
+            .expect("UI parent is freed or absent; add a live parent in this UI first")
+            .layout;
         let id = self.add(widget, layout);
         let node = self.node_mut(id).unwrap();
         node.parent = Some(parent);
@@ -710,7 +788,10 @@ impl Ui {
         while let Some(child) = self.node(id).and_then(|n| n.children.last().copied()) {
             self.remove(child);
         }
-        if let Some(n) = self.nodes.get_mut(id.0).and_then(Option::take) {
+        if let Some(n) = self.node(id).is_some().then(|| self.nodes[id.slot()].take()).flatten() {
+            if (id.0 >> SLOT_BITS) + 1 < LAST_GENERATION {
+                self.free_ids.push(id);
+            }
             if let Some(parent) = n.parent.and_then(|p| self.node_mut(p)) {
                 parent.children.retain(|&c| c != id);
             }
@@ -751,7 +832,7 @@ impl Ui {
     /// ```
     pub fn set_layout(&mut self, id: UiId, layout: UiLayout) {
         if let Some(n) = self.node(id) {
-            let _ = self.tree.set_style(n.layout, layout.into_style());
+            let _ = self.tree.set_style(n.layout, layout.into_unstable_style());
         }
     }
     /// The node's current layout, or `None` for a removed node.
@@ -763,7 +844,7 @@ impl Ui {
     /// ```
     pub fn node_layout(&self, id: UiId) -> Option<UiLayout> {
         let style = self.tree.style(self.node(id)?.layout).ok()?;
-        Some(UiLayout::custom(style.clone()))
+        Some(UiLayout::unstable_custom(style.clone()))
     }
     /// Replace visual style.
     /// ```
@@ -850,38 +931,111 @@ impl Ui {
     pub fn scroll(&self, id: UiId) -> Option<Vec2> {
         Some(self.node(id)?.scroll)
     }
-    /// Push a detached root; only the top screen is interactive. `modal`
-    /// draws a dim overlay below this screen. Duplicate/parented roots panic,
-    /// and so does a root shown as a [HUD](Self::show_hud).
+    /// Push a detached root as the new top screen, in `mode`: only the top
+    /// screen is interactive, and a [`ScreenMode::Modal`] one also draws a
+    /// dim overlay below itself, owns the pointer outside its rectangle and
+    /// is a dialog to assistive technology. A detached root that has a
+    /// parent, is already on the stack or is shown as a [HUD](Self::show_hud)
+    /// panics.
+    ///
+    /// # Panics
+    ///
+    /// If `root` has a parent (or was removed), is already a screen, or is
+    /// shown as a [HUD](Self::show_hud).
     ///
     /// The screen opens with its [initial focus](Self::set_initial_focus)
     /// (the builder's [`focused`](super::UiBuilder::focused)) focused, every
     /// time it is pushed; without one, nothing is focused until Tab, an
     /// arrow key or [`set_focus`](Self::set_focus).
+    ///
+    /// [`push_modal`](Self::push_modal) and
+    /// [`push_modeless`](Self::push_modeless) say the same in fewer words.
     /// ```
     /// use ponko::prelude::*;
-    /// let mut ui = ponko::ui::Ui::default(); let root = ui.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::auto());
-    /// ui.push_screen(root, true);
+    /// use ponko::ui::{ScreenMode, UiLayout, UiWidget};
+    /// let mut ui = ponko::ui::Ui::default();
+    /// let menu = ui.add(UiWidget::Panel, UiLayout::fill());
+    /// let dialog = ui.add(UiWidget::Panel, UiLayout::centered(300.0, 120.0));
+    /// ui.push_screen_with_mode(menu, ScreenMode::Modeless);
+    /// ui.push_screen_with_mode(dialog, ScreenMode::Modal);
+    /// assert_eq!(ui.screen_mode(dialog), Some(ScreenMode::Modal));
+    /// assert_eq!(ui.screen_mode(menu), Some(ScreenMode::Modeless));
     /// ```
-    pub fn push_screen(&mut self, root: UiId, modal: bool) {
+    pub fn push_screen_with_mode(&mut self, root: UiId, mode: ScreenMode) {
         assert!(
             self.node(root).is_some_and(|n| n.parent.is_none()),
-            "UI screen must be a detached root"
+            "UI screen must be a detached root; add a root node or detach it before pushing"
         );
         assert!(
             !self.screens.iter().any(|s| s.root == root),
-            "UI screen already on stack"
+            "UI screen already on stack; pop it before pushing again"
         );
-        assert!(!self.huds.contains(&root), "UI screen is shown as a HUD");
+        assert!(
+            !self.huds.contains(&root),
+            "UI screen is shown as a HUD; hide the HUD before pushing it"
+        );
         self.screens.push(Screen {
             root,
-            modal,
+            modal: mode == ScreenMode::Modal,
             saved_focus: self.focus.take(),
         });
         self.pressed = None;
         self.drag = None;
         self.hovered = None;
         self.focus = self.initial_focus_in(root);
+    }
+    /// Push `root` as a [modal](ScreenMode::Modal) screen: a dialog that
+    /// dims what is below it and keeps the input to itself. Short for
+    /// [`push_screen_with_mode`](Self::push_screen_with_mode)`(root, ScreenMode::Modal)`.
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut ui = ponko::ui::Ui::default();
+    /// let root = ui.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::auto());
+    /// ui.push_modal(root);
+    /// assert_eq!(ui.screen_mode(root), Some(ponko::ui::ScreenMode::Modal));
+    /// ```
+    pub fn push_modal(&mut self, root: UiId) {
+        self.push_screen_with_mode(root, ScreenMode::Modal);
+    }
+    /// Push `root` as a [modeless](ScreenMode::Modeless) screen: a menu or
+    /// page drawn as it is, with no overlay. Short for
+    /// [`push_screen_with_mode`](Self::push_screen_with_mode)`(root, ScreenMode::Modeless)`.
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut ui = ponko::ui::Ui::default();
+    /// let root = ui.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::auto());
+    /// ui.push_modeless(root);
+    /// assert_eq!(ui.top_screen(), Some(root));
+    /// ```
+    pub fn push_modeless(&mut self, root: UiId) {
+        self.push_screen_with_mode(root, ScreenMode::Modeless);
+    }
+    /// The old form of [`push_screen_with_mode`](Self::push_screen_with_mode):
+    /// `true` is [`ScreenMode::Modal`], `false` [`ScreenMode::Modeless`].
+    #[deprecated(
+        since = "0.2.0",
+        note = "use `push_modeless(root)`, `push_modal(root)` or `push_screen_with_mode(root, mode)`"
+    )]
+    pub fn push_screen(&mut self, root: UiId, modal: bool) {
+        self.push_screen_with_mode(root, if modal { ScreenMode::Modal } else { ScreenMode::Modeless });
+    }
+    /// The mode `root` was pushed with, or `None` when it is not on the
+    /// screen stack.
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut ui = ponko::ui::Ui::default();
+    /// let root = ui.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::auto());
+    /// assert_eq!(ui.screen_mode(root), None);
+    /// ui.push_modeless(root);
+    /// assert_eq!(ui.screen_mode(root), Some(ponko::ui::ScreenMode::Modeless));
+    /// ```
+    pub fn screen_mode(&self, root: UiId) -> Option<ScreenMode> {
+        let screen = self.screens.iter().find(|s| s.root == root)?;
+        Some(if screen.modal {
+            ScreenMode::Modal
+        } else {
+            ScreenMode::Modeless
+        })
     }
     /// The first node under `root`, depth-first, marked as its screen's
     /// initial focus that can take the focus now.
@@ -910,7 +1064,7 @@ impl Ui {
     /// let root = ui.root().layout(UiLayout::fill()).id();
     /// let play = ui.button(root, "Play").layout(UiLayout::row(40.0)).id();
     /// let quit = ui.button(root, "Quit").layout(UiLayout::row(40.0)).id();
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// assert!(ui.set_focus(quit));
     /// ui.frame(vec2(800.0, 600.0), &UiInput { confirm: true, ..Default::default() });
     /// assert_eq!(ui.events().filter_map(ponko::ui::UiEvent::clicked).last(), Some(quit));
@@ -931,7 +1085,7 @@ impl Ui {
     /// let mut ui = ponko::ui::Ui::default();
     /// let root = ui.root().id();
     /// let ok = ui.button(root, "OK").focused().id();
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// assert_eq!(ui.focus(), Some(ok));
     /// ui.clear_focus();
     /// assert_eq!(ui.focus(), None);
@@ -940,7 +1094,7 @@ impl Ui {
         self.focus = None;
     }
     /// Marks `id` as the node its screen opens on (or unmarks it): every
-    /// [`push_screen`](Self::push_screen) of the screen focuses it, so a
+    /// [push](Self::push_screen_with_mode) of the screen focuses it, so a
     /// keyboard or gamepad player can press Enter at once, and a menu that
     /// is opened again starts on it again. If several nodes of a screen are
     /// marked, the first one (depth-first) that can take the focus wins. The
@@ -952,7 +1106,7 @@ impl Ui {
     /// let play = ui.button(root, "Play").id();
     /// ui.set_initial_focus(play, true);
     /// assert!(ui.is_initial_focus(play));
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// assert_eq!(ui.focus(), Some(play));
     /// ```
     pub fn set_initial_focus(&mut self, id: UiId, on: bool) {
@@ -973,6 +1127,44 @@ impl Ui {
     pub fn is_initial_focus(&self, id: UiId) -> bool {
         self.node(id).is_some_and(|n| n.initial_focus)
     }
+    /// Makes pressing button `id` also close its screen (or stops it): a
+    /// Back, Cancel, Close or Resume button. A click or Enter on it sends
+    /// its [`Clicked`](UiEvent::Clicked) and then pops its screen as
+    /// Escape would, with a [`ScreenPopped`](UiEvent::ScreenPopped), so a
+    /// game that handles Escape handles the button too. Only while its
+    /// screen is the top one, as only that one takes input. The builder's
+    /// [`closes_screen`](super::UiBuilder::closes_screen) does the same.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::ui::{UiEvent, UiInput};
+    /// let mut ui = ponko::ui::Ui::default();
+    /// let dialog = ui.root().id();
+    /// let back = ui.button(dialog, "Back").focused().id();
+    /// ui.set_closes_screen(back, true);
+    /// assert!(ui.closes_screen(back));
+    /// ui.push_modal(dialog);
+    /// ui.frame(vec2(800.0, 600.0), &UiInput { confirm: true, ..Default::default() });
+    /// let events: Vec<UiEvent> = ui.events().collect();
+    /// assert_eq!(events, [UiEvent::Clicked(back), UiEvent::ScreenPopped(dialog)]);
+    /// assert!(!ui.is_screen(dialog));
+    /// ```
+    pub fn set_closes_screen(&mut self, id: UiId, on: bool) {
+        if let Some(n) = self.node_mut(id) {
+            n.closes_screen = on;
+        }
+    }
+    /// Whether pressing `id` closes its screen
+    /// ([`set_closes_screen`](Self::set_closes_screen)).
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut ui = ponko::ui::Ui::default();
+    /// let root = ui.root().id();
+    /// let ok = ui.button(root, "OK").id();
+    /// assert!(!ui.closes_screen(ok));
+    /// ```
+    pub fn closes_screen(&self, id: UiId) -> bool {
+        self.node(id).is_some_and(|n| n.closes_screen)
+    }
     /// Whether `id` may take the focus now, before layout gives it a size.
     fn can_focus(&self, id: UiId) -> bool {
         self.interactive(id)
@@ -991,9 +1183,14 @@ impl Ui {
     /// focus, and it doesn't make [`wants_pointer`](Self::wants_pointer) or
     /// [`wants_keyboard`](Self::wants_keyboard) true, so the game keeps its
     /// keys. Anything the player clicks belongs on a screen
-    /// ([`push_screen`](Self::push_screen)). Several HUDs are drawn in the
-    /// order they were shown; showing one again changes nothing. Panics like
-    /// `push_screen` for a node with a parent, or one on the screen stack.
+    /// ([`push_modeless`](Self::push_modeless)). Several HUDs are drawn in the
+    /// order they were shown; showing one again changes nothing.
+    ///
+    /// # Panics
+    ///
+    /// Like [`push_screen_with_mode`](Self::push_screen_with_mode), for a node
+    /// with a parent, or one on the screen stack.
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// use ponko::ui::{UiInput, UiLayout};
@@ -1008,9 +1205,12 @@ impl Ui {
     pub fn show_hud(&mut self, root: UiId) {
         assert!(
             self.node(root).is_some_and(|n| n.parent.is_none()),
-            "UI HUD must be a detached root"
+            "UI HUD must be a detached root; add a root node or detach it first"
         );
-        assert!(!self.is_screen(root), "UI HUD is already a screen");
+        assert!(
+            !self.is_screen(root),
+            "UI HUD is already a screen; pop it before showing it as a HUD"
+        );
         if !self.huds.contains(&root) {
             self.huds.push(root);
         }
@@ -1045,7 +1245,7 @@ impl Ui {
     /// ```
     /// use ponko::prelude::*;
     /// let mut ui = ponko::ui::Ui::default(); let root = ui.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::auto());
-    /// ui.push_screen(root, true); assert_eq!(ui.pop_screen(), Some(root));
+    /// ui.push_modal(root); assert_eq!(ui.pop_screen(), Some(root));
     /// ```
     pub fn pop_screen(&mut self) -> Option<UiId> {
         let screen = self.screens.pop()?;
@@ -1074,7 +1274,7 @@ impl Ui {
     /// let mut ui = ponko::ui::Ui::default();
     /// let root = ui.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::auto());
     /// assert!(!ui.is_screen(root));
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// assert!(ui.is_screen(root));
     /// ```
     pub fn is_screen(&self, id: UiId) -> bool {
@@ -1090,7 +1290,7 @@ impl Ui {
     /// let root = ui.root().id();
     /// let ok = ui.button(root, "OK").id();
     /// assert!(!ui.is_shown(ok), "built, not pushed");
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// assert!(ui.is_shown(ok));
     /// ui.set_layout(ok, ponko::ui::UiLayout::auto().hidden());
     /// assert!(!ui.is_shown(ok));
@@ -1164,7 +1364,7 @@ impl Ui {
     /// let mut ui = ponko::ui::Ui::default();
     /// let root = ui.root().layout(ponko::ui::UiLayout::fill()).id();
     /// let ok = ui.button(root, "OK").layout(ponko::ui::UiLayout::fixed(100.0, 40.0)).id();
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// let at = |pressed, held, released| ponko::ui::UiInput {
     ///     pointer: vec2(50.0, 20.0),
     ///     pressed,
@@ -1313,7 +1513,7 @@ impl Ui {
         let k = self.scale * self.pixels;
         let roots = self.huds.iter().chain(self.screens.iter().map(|s| &s.root));
         for root in roots {
-            let layout = nodes[root.0].as_ref().unwrap().layout;
+            let layout = nodes[root.slot()].as_ref().unwrap().layout;
             let _ = self.tree.compute_layout_with_measure(
                 layout,
                 Size {
@@ -1466,6 +1666,7 @@ impl Ui {
     /// ```
     pub fn frame(&mut self, viewport: Vec2, input: &UiInput) {
         self.events.clear();
+        self.closed.clear();
         self.consumed = false;
         self.pointer = input.pointer;
         self.layout(viewport);
@@ -1474,7 +1675,7 @@ impl Ui {
         let ime_keys = self.ime_owns_keys(input);
         if input.cancel && !ime_keys {
             if let Some(root) = self.pop_screen() {
-                self.events.push_back(UiEvent::ScreenPopped(root));
+                self.screen_closed(root);
             }
             self.layout(viewport);
             self.apply_composition(input);
@@ -1678,7 +1879,19 @@ impl Ui {
             return;
         }
         match self.node(id).unwrap().widget {
-            UiWidget::Button => self.events.push_back(UiEvent::Clicked(id)),
+            UiWidget::Button => {
+                self.events.push_back(UiEvent::Clicked(id));
+                if self.node(id).is_some_and(|n| n.closes_screen) {
+                    let mut root = id;
+                    while let Some(parent) = self.parent(root) {
+                        root = parent;
+                    }
+                    if self.top_screen() == Some(root) {
+                        self.pop_screen();
+                        self.screen_closed(root);
+                    }
+                }
+            }
             UiWidget::Toggle => {
                 let v = 1.0 - self.value(id).unwrap();
                 self.change_value(id, v);
@@ -1686,6 +1899,17 @@ impl Ui {
             UiWidget::TextInput => self.events.push_back(UiEvent::Submitted(id)),
             _ => {}
         }
+    }
+    /// The player closed screen `root` (it was popped).
+    fn screen_closed(&mut self, root: UiId) {
+        self.events.push_back(UiEvent::ScreenPopped(root));
+        self.closed.push(root);
+    }
+    /// Whether the player closed screen `root` in this frame (Escape, or a
+    /// button that closes its screen), whether or not a system has read the
+    /// `ScreenPopped` event yet.
+    pub(crate) fn closed_this_frame(&self, root: UiId) -> bool {
+        self.closed.contains(&root)
     }
     pub(super) fn push_changed(&mut self, id: UiId) {
         self.events.push_back(UiEvent::Changed(id));
@@ -1697,7 +1921,7 @@ impl Ui {
         }
     }
     fn caret_at(&mut self, id: UiId, p: Vec2) -> usize {
-        let n = self.nodes[id.0].as_ref().unwrap();
+        let n = self.nodes[id.slot()].as_ref().unwrap();
         let layout = self.tree.layout(n.layout).unwrap();
         let font = if self.external_fonts {
             n.paint.font
@@ -1864,3 +2088,6 @@ pub(super) fn wrap_end(text: &mut crate::text::Text, line: &str, font: Font, siz
     }
     line.len()
 }
+
+#[path = "clipboard.rs"]
+mod clipboard;

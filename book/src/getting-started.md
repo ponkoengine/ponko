@@ -9,7 +9,7 @@ headers for sound and gamepads: `sudo apt-get install libasound2-dev libudev-dev
 Clone the repository and run any example:
 
 ```sh
-git clone https://github.com/ponkoengine/ponko
+git clone https://gitlab.com/ponkoengine/ponko
 cd ponko
 cargo run --release --example boids
 ```
@@ -42,10 +42,11 @@ cargo test               # headless tests: no window, no GPU
 cargo run                # the game, in a window
 ponko package            # the download for players: release build, assets, licenses, archive
 ponko textures           # GPU-compressed .ktx2 textures from your images (see Drawing)
+ponko cook               # runtime-ready assets under the same names (package does it for you)
 ```
 
 `ponko_cli` is new in 0.2; until that release, install it from the
-repository: `cargo install ponko_cli --git https://github.com/ponkoengine/ponko`.
+repository: `cargo install ponko_cli --git https://gitlab.com/ponkoengine/ponko`.
 
 | Template | Engine features | What's in it |
 |---|---|---|
@@ -78,7 +79,7 @@ instead (for features that are only on `main` so far, see below).
 
 The same templates work with
 [cargo-generate](https://github.com/cargo-generate/cargo-generate), if you
-have it: `cargo generate --git https://github.com/ponkoengine/ponko
+have it: `cargo generate --git https://gitlab.com/ponkoengine/ponko
 crates/ponko_cli/templates/2d` (or `3d`, `headless`).
 
 ### The fast debug profile
@@ -115,14 +116,17 @@ In `Cargo.toml` that is:
 ponko = "0.1"
 ```
 
-Its API reference is [on docs.rs](https://docs.rs/ponko/0.1/ponko/). This
-guide follows the `main` branch, so after a release a page can describe an
-API that is only on `main` so far (the note under each page's title says
-so). To use those, depend on `main` instead:
-`ponko = { git = "https://github.com/ponkoengine/ponko" }` (or
-`cargo add ponko --git https://github.com/ponkoengine/ponko`). The
-[changelog](https://github.com/ponkoengine/ponko/blob/main/CHANGELOG.md) lists
-what each release added.
+Its API reference is [on docs.rs](https://docs.rs/ponko/0.1/ponko/). **This
+guide matches the `main` branch, the unreleased 0.2**, not 0.1.0: a page can
+describe an API that is only on `main` so far (the note under each page's
+title says so), and the tutorials need 0.2. To use those, depend on `main`
+instead:
+`ponko = { git = "https://gitlab.com/ponkoengine/ponko" }` (or
+`cargo add ponko --git https://gitlab.com/ponkoengine/ponko`). The
+[changelog](../../CHANGELOG.md) lists
+what each release added. [The API reference](api.md#which-version-the-guide-matches)
+says how to build the reference for `main` locally, with the features the
+3D, physics and navigation chapters need.
 
 Then in `src/main.rs` (Rust) or `main.cpp` (C++, see [C and C++](c-cpp.md)
 for building):
@@ -257,7 +261,50 @@ Calls that can fail in normal play return `Result<_, ponko::error::Error>` under
 their plain name and have no panicking twin: loading a scene and spawning a
 prefab (`ctx.load_scene`, `ctx.spawn_prefab`), saving them
 (`ctx.assets.save_scene`, `save_prefab`), loading JSON into a component or
-resource (`ctx.assets.load_component_json`, `load_resource_json`), starting a ragdoll,
+resource (`ctx.assets.load_reflected_component_json`, `load_reflected_resource_json`), starting a ragdoll,
 baking a reflection probe, and your own decoders (`ctx.assets.load_with`).
 In C and C++, `ponko_last_error_kind()` and `ponko::error::kind()` give the
 same kinds ([C and C++](c-cpp.md)).
+
+## Recoverable startup
+
+Use `try_setup` to return loader errors with `?`, and a fallible runner to
+let the caller decide how to present them. Setup callbacks and plugins run
+in registration order; the first error stops startup before any systems run.
+Configuration such as `.fixed_hz(60)` can come before or after `.try_setup(...)`.
+
+```rust,no_run
+use ponko::prelude::*;
+
+fn main() -> Result<(), Error> {
+    Game::new("My game", 800, 600)
+        .try_setup(|ctx| {
+            let texture = ctx.gfx.try_load_texture("player.png")?;
+            ctx.world.insert_resource(texture);
+            Ok(())
+        })
+        .fixed_hz(60)
+        .try_run()?;
+    Ok(())
+}
+```
+
+On native platforms `try_run` returns event-loop, window, GPU surface,
+adapter and device initialization failures, plus setup/plugin errors.
+Startup failures return directly without invoking the panic hook, including
+in `panic = "abort"` builds. User panics, later device loss, and the mid-game
+"lost the GPU surface" panic are not covered. The ordinary `run` and
+`run_headless` methods panic with the error's message.
+
+Browser startup is asynchronous. Only event-loop construction errors can
+return to the caller. After submission, winit transfers control using a
+JavaScript control-flow exception; the call does not return, even on normal
+exit. Window/GPU/setup failures after submission are reported in the browser
+console as error diagnostics (without invoking the panic hook) and stop
+startup. A Rust `main` returning `Result` cannot receive
+those later failures; use the console to diagnose them.
+
+The C `ponko_game_run` is built on `try_run`: a refused window, GPU or
+event loop comes back as `PONKO_INVALID_ARGUMENT` (not a caught panic), with
+`ponko_last_error_kind()` giving `PONKO_ERROR_UNSUPPORTED` and `ponko_last_error()`
+the message. C++ `ponko::game::run` throws `ponko::error` from that status.

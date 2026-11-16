@@ -143,16 +143,38 @@ impl Networking {
         self.lockstep.player()
     }
     /// [`Net::players`] of the lockstep session.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(1, |ctx| {
+    ///     assert_eq!(ctx.net.players(), 1); // offline: just this player
+    /// });
+    /// ```
     #[must_use]
     pub fn players(&self) -> usize {
         self.lockstep.players()
     }
     /// [`Net::state`] of the lockstep session.
+    ///
+    /// ```
+    /// # use ponko::net::NetState;
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(1, |ctx| {
+    ///     assert_eq!(ctx.net.state(), NetState::Offline);
+    /// });
+    /// ```
     #[must_use]
     pub fn state(&self) -> NetState {
         self.lockstep.state()
     }
     /// [`Net::error`] of the lockstep session.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(1, |ctx| {
+    ///     assert!(ctx.net.error().is_none());
+    /// });
+    /// ```
     #[must_use]
     pub fn error(&self) -> Option<&str> {
         self.lockstep.error()
@@ -187,6 +209,14 @@ impl Networking {
         self.lockstep.set_input_bytes(input);
     }
     /// [`Net::input`] of the lockstep session.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(1, |ctx| {
+    ///     // No such player: no input.
+    ///     assert_eq!(ctx.net.input::<u8>(5), None);
+    /// });
+    /// ```
     #[must_use]
     pub fn input<T: DeserializeOwned>(&self, player: usize) -> Option<T> {
         self.lockstep.input(player)

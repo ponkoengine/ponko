@@ -3,6 +3,8 @@
 //! [`SpriteMaterialDesc`], re-exported from [`d2`](crate::d2) and
 //! [`render`](crate::render).
 
+#![deny(missing_docs)]
+
 use glam::Vec4;
 use ponko_ecs::Component;
 
@@ -138,6 +140,15 @@ pub struct SpriteMaterial {
 ///
 /// New fields may be added in any release: start from
 /// [`SpriteMaterialDesc::new`] or `Default` and chain the `with_*` methods.
+///
+/// # Defaults and cost
+///
+/// [`Default`] has no shader (the built-in look, texture × tint), four zero
+/// params and no extra textures. The description holds handles and 64 bytes
+/// of params. A shader runs once for every pixel a sprite with the material
+/// covers, and sprites drawn with different materials are different batches:
+/// consecutive ones with the same material (and texture and blend mode) are
+/// one draw call, each change of material starts another.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct SpriteMaterialDesc {
@@ -162,6 +173,16 @@ impl Default for SpriteMaterialDesc {
 
 impl SpriteMaterialDesc {
     /// A material drawn with `shader`.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # use ponko::render::SpriteMaterialDesc;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let wobble = ctx.gfx.create_sprite_shader("wobble", "fn fragment(p: SpritePixel) -> vec4<f32> { return p.color; }");
+    ///     let desc = SpriteMaterialDesc::new(wobble);
+    ///     assert_eq!(desc.shader, Some(wobble));
+    /// });
+    /// ```
     #[must_use]
     pub fn new(shader: SpriteShader) -> Self {
         Self {
@@ -175,6 +196,13 @@ impl SpriteMaterialDesc {
     /// # Panics
     ///
     /// If `index` is 4 or more.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let desc = ponko::render::SpriteMaterialDesc::default().with_param(0, vec4(1.0, 0.5, 0.0, 1.0));
+    /// assert_eq!(desc.params[0], vec4(1.0, 0.5, 0.0, 1.0));
+    /// assert_eq!(desc.params[3], Vec4::ZERO);
+    /// ```
     #[must_use]
     pub fn with_param(mut self, index: usize, value: Vec4) -> Self {
         assert!(index < 4, "ponko: a sprite material has params 0 to 3, not {index}");
@@ -187,6 +215,15 @@ impl SpriteMaterialDesc {
     /// # Panics
     ///
     /// If `index` is 2 or more.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let noise = ctx.gfx.create_texture(1, 1, &[128; 4]);
+    ///     let desc = ponko::render::SpriteMaterialDesc::default().with_texture(1, noise);
+    ///     assert_eq!(desc.textures, [None, Some(noise)]);
+    /// });
+    /// ```
     #[must_use]
     pub fn with_texture(mut self, index: usize, texture: Texture) -> Self {
         assert!(index < 2, "ponko: a sprite material has textures 0 and 1, not {index}");
@@ -198,13 +235,14 @@ impl SpriteMaterialDesc {
 /// The number the renderer batches a draw's look by: 0 for the built-in
 /// look with alpha blending (plain sprites), otherwise the material
 /// (`id + 1`, 0 for none) above the blend mode's two bits. Below
-/// `batch::CLIPPED`.
+/// `batch::MESH` and `batch::CLIPPED`.
 #[inline]
 pub(crate) fn style_key(blend: BlendMode, material: Option<SpriteMaterial>) -> u32 {
     let material = material.map_or(0, |m| m.id.wrapping_add(1));
-    // Ids that would reach the clip bit can't happen (a game would have
-    // to make half a billion materials); they draw with the built-in look.
-    let material = if material < 1 << 29 { material } else { 0 };
+    // Ids that would reach the mesh bit can't happen (a game would have
+    // to make a quarter of a billion materials); they draw with the
+    // built-in look.
+    let material = if material < 1 << 28 { material } else { 0 };
     (material << 2) | blend as u32
 }
 
@@ -273,8 +311,11 @@ impl Graphics {
         self.try_load_sprite_shader(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_sprite_shader`](Self::load_sprite_shader) with errors as
-    /// values: [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound),
+    /// [`load_sprite_shader`](Self::load_sprite_shader) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound),
     /// [`Io`](crate::error::ErrorKind::Io), [`Decode`](crate::error::ErrorKind::Decode)
     /// or [`Shader`](crate::error::ErrorKind::Shader) (with the compiler's log).
     ///
@@ -335,8 +376,11 @@ impl Graphics {
             .unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`create_sprite_shader`](Self::create_sprite_shader) with errors as
-    /// values: [`ErrorKind::Shader`](crate::error::ErrorKind::Shader) with
+    /// [`create_sprite_shader`](Self::create_sprite_shader) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::Shader`](crate::error::ErrorKind::Shader) with
     /// the compiler's log; [`shader_status`](Self::shader_status) has it as data.
     ///
     /// ```
@@ -492,13 +536,14 @@ mod tests {
         for blend in BlendMode::ALL {
             for material in [None, Some(SpriteMaterial { id: 0 }), Some(SpriteMaterial { id: 77 })] {
                 let key = style_key(blend, material);
-                assert!(key < crate::render::batch::CLIPPED);
+                assert!(key < crate::render::batch::MESH);
                 assert_eq!(split_style(key), (blend, material.map(|m| m.id)));
             }
         }
         // The empty handle and ids past the key's room draw the built-in look.
         assert_eq!(style_key(BlendMode::Additive, Some(SpriteMaterial { id: u32::MAX })), 1);
         assert_eq!(style_key(BlendMode::Additive, Some(SpriteMaterial { id: 1 << 30 })), 1);
+        assert_eq!(style_key(BlendMode::Additive, Some(SpriteMaterial { id: 1 << 28 })), 1);
     }
 
     #[test]

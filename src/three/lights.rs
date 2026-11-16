@@ -156,6 +156,9 @@ pub(crate) struct LightGrid {
     /// The first shadow view of each point light, then each spot light, in
     /// query order (-1: unshadowed).
     first_view: Vec<i32>,
+    /// Whether `first_view` and `shadow_tiles` were taken from another grid
+    /// (see [`share_shadows`](Self::share_shadows)) for the next `collect`.
+    shared: bool,
     /// R32Uint texels: (offset, count) for each cluster, then packed indices.
     pub lists: Vec<u32>,
     /// near, inverse log depth span times slice count, padding.
@@ -169,11 +172,42 @@ impl LightGrid {
     /// Lists the lights each cluster sees. Shadowed lights nearest the
     /// camera also get shadow views, up to `budget` of them (0: none), each
     /// a tile of an `atlas`² shadow atlas up to `size` texels wide.
+    #[cfg(test)]
     pub fn collect(&mut self, world: &mut World, camera: &Camera3D, budget: usize, size: u32, atlas: u32) {
+        self.collect_for(world, camera, &[], budget, size, atlas);
+    }
+
+    /// Lists the lights each of `camera`'s clusters sees. Shadow views (up
+    /// to `budget`, tiles of an `atlas`² atlas up to `size` texels wide) go
+    /// to the shadowed lights nearest any of `camera` and `others` (each
+    /// light's tiles sized for the camera nearest it), so every view gets
+    /// the shadows near it from one shared atlas (see
+    /// [`share_with_view`](Self::share_with_view)).
+    pub fn collect_for(
+        &mut self,
+        world: &mut World,
+        camera: &Camera3D,
+        others: &[Camera3D],
+        budget: usize,
+        size: u32,
+        atlas: u32,
+    ) {
         self.lights.clear();
         self.bounds.clear();
         self.atlas = floor_pow2(atlas.max(MIN_TILE));
-        self.plan_shadows(world, camera, budget, floor_pow2(size.max(MIN_TILE)).min(self.atlas));
+        if std::mem::take(&mut self.shared) {
+            // Another grid's views: it draws them, this one only reads them.
+            self.shadow_views.clear();
+            self.shadow_positions.clear();
+        } else {
+            self.plan_shadows(
+                world,
+                camera,
+                others,
+                budget,
+                floor_pow2(size.max(MIN_TILE)).min(self.atlas),
+            );
+        }
         let first_view = std::mem::take(&mut self.first_view);
         let mut first_views = first_view.iter().copied();
         let near = camera.near.max(f32::MIN_POSITIVE);
@@ -236,20 +270,63 @@ impl LightGrid {
         }
     }
 
+    /// Makes the next [`collect`](Self::collect) give every light the
+    /// shadow views `main` gave it, instead of planning its own: global
+    /// illumination's probe views read the main view's shadow atlas, so a
+    /// light behind a wall lights nothing past it there either. `main` must
+    /// have been collected from the same world, unchanged since.
+    pub fn share_shadows(&mut self, main: &LightGrid) {
+        self.first_view.clear();
+        self.first_view.extend_from_slice(&main.first_view);
+        self.shadow_tiles.clear();
+        self.shadow_tiles.extend_from_slice(&main.shadow_tiles);
+        self.shared = true;
+    }
+
+    /// Makes this grid, collected for a window view after `main` (the main
+    /// camera's, collected with [`collect_for`](Self::collect_for) and the
+    /// view's camera among its others), read `main`'s light shadows: the
+    /// same lights shadowed, the same atlas tiles and view matrices. Call
+    /// [`share_shadows`](Self::share_shadows) before its `collect` and this
+    /// after. Reuses its buffers.
+    pub fn share_with_view(&mut self, main: &LightGrid) {
+        self.shadow_views.clone_from(&main.shadow_views);
+        self.shadow_positions.clone_from(&main.shadow_positions);
+        self.atlas = main.atlas;
+    }
+
     /// Gives shadowed lights shadow views, nearest the camera first, while
     /// views are left, sizes each light's tiles (see [`tile_side`]), fits and
     /// packs them into the atlas, and works out each view's matrix. Fills
     /// `first_view` for every point light, then every spot light, in query
     /// order.
-    fn plan_shadows(&mut self, world: &mut World, camera: &Camera3D, budget: usize, max_side: u32) {
+    fn plan_shadows(
+        &mut self,
+        world: &mut World,
+        camera: &Camera3D,
+        others: &[Camera3D],
+        budget: usize,
+        max_side: u32,
+    ) {
         let shadows = budget > 0;
         self.shadow_views.clear();
         self.shadow_positions.clear();
         self.shadow_tiles.clear();
         self.candidates.clear();
         self.first_view.clear();
-        let reach = |t: &Transform3D, range: f32| t.position.distance(camera.position) - range;
-        let side = |t: &Transform3D, range: f32, hint: u32| tile_side(t.position, range, hint, camera, max_side);
+        // Each light is judged from the camera nearest it.
+        let nearest = |at: Vec3| {
+            others.iter().fold(camera, |best, c| {
+                if c.position.distance_squared(at) < best.position.distance_squared(at) {
+                    c
+                } else {
+                    best
+                }
+            })
+        };
+        let reach = |t: &Transform3D, range: f32| t.position.distance(nearest(t.position).position) - range;
+        let side =
+            |t: &Transform3D, range: f32, hint: u32| tile_side(t.position, range, hint, nearest(t.position), max_side);
         for (i, (t, p)) in world.query::<(&Transform3D, &PointLight3D)>().iter().enumerate() {
             self.first_view.push(-1);
             if shadows && p.shadows && shadow_light_ok(t, p.range, p.intensity) {
@@ -600,6 +677,44 @@ pub(crate) mod tests {
         assert_eq!(g.bounds[1].1[..2], [15, 8]);
     }
     #[test]
+    fn shadows_go_to_the_lights_nearest_any_of_the_windows_cameras() {
+        let mut w = World::new();
+        // One near the main camera, one near a second camera far away.
+        for at in [Vec3::new(0.0, 0.0, -15.0), Vec3::new(100.0, 0.0, -5.0)] {
+            w.spawn((
+                Transform3D::at(at),
+                PointLight3D {
+                    range: 2.0,
+                    shadows: true,
+                    ..Default::default()
+                },
+            ));
+        }
+        let mut other = camera();
+        other.position = Vec3::new(100.0, 0.0, 0.0);
+        // Room for one point light's six views.
+        let mut g = LightGrid::default();
+        g.collect(&mut w, &camera(), 6, LIGHT_SHADOW_SIZE, LIGHT_SHADOW_ATLAS_SIZE);
+        assert_eq!(g.first_view, [0, -1], "the main camera alone: the light near it");
+        g.collect_for(
+            &mut w,
+            &camera(),
+            &[other],
+            6,
+            LIGHT_SHADOW_SIZE,
+            LIGHT_SHADOW_ATLAS_SIZE,
+        );
+        assert_eq!(g.first_view, [-1, 0], "the light nearest any camera");
+        // A view's grid reads the main grid's shadows.
+        let mut view = LightGrid::default();
+        view.share_shadows(&g);
+        view.collect(&mut w, &other, 0, LIGHT_SHADOW_SIZE, LIGHT_SHADOW_ATLAS_SIZE);
+        view.share_with_view(&g);
+        assert_eq!(view.shadow_views, g.shadow_views);
+        assert_eq!(view.shadow_tiles, g.shadow_tiles);
+        assert_eq!(view.atlas, g.atlas);
+    }
+    #[test]
     fn overlapping_lights_are_not_truncated_and_capacity_is_retained() {
         let mut w = World::new();
         for _ in 0..1000 {
@@ -699,7 +814,7 @@ pub(crate) mod tests {
                         let p = center + Vec3::new(dx, dy, dz);
                         let clip = c.view_proj() * p.extend(1.0);
                         let ndc = clip.truncate() / clip.w;
-                        if clip.w <= 0.0 || ndc.x.abs() >= 1.0 || ndc.y.abs() >= 1.0 || ndc.z < 0.0 || ndc.z >= 1.0 {
+                        if clip.w <= 0.0 || ndc.x.abs() >= 1.0 || ndc.y.abs() >= 1.0 || ndc.z <= 0.0 || ndc.z > 1.0 {
                             continue;
                         }
                         let x = ((ndc.x * 0.5 + 0.5) * GRID[0] as f32) as usize;

@@ -173,6 +173,25 @@ impl<'a> RawWorld<'a> {
         unsafe { self.0.spawn_at_dynamic_inner(e, components) }
     }
 
+    /// [`spawn_dynamic`](Self::spawn_dynamic) at `e`, an id a
+    /// [`Commands`](crate::Commands) buffer of this world reserved: the
+    /// dynamic form of [`World::spawn_reserved`], for the callbacks of
+    /// `Commands::spawn_with`.
+    ///
+    /// # Safety
+    /// As for [`spawn_dynamic`](Self::spawn_dynamic). If this panics, the
+    /// values stay the caller's.
+    ///
+    /// # Panics
+    /// If a component id appears twice, or `e` isn't a reserved, not yet
+    /// spawned id of this world.
+    #[doc(hidden)]
+    #[inline]
+    pub unsafe fn spawn_reserved_dynamic(&mut self, e: Entity, components: &[(ComponentId, *const u8)]) {
+        // SAFETY: forwarded from the caller.
+        unsafe { self.0.spawn_reserved_dynamic_inner(e, components) }
+    }
+
     /// Pointer to resource `name`, for reading and writing, or `None`. It
     /// stays valid until the resource is replaced or removed.
     ///

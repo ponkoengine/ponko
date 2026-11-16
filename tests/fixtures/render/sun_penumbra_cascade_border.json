@@ -1,0 +1,17 @@
+{
+  "name": "sun_penumbra_cascade_border",
+  "scene": "A white beam (1 wide, 0.4 high, 2 above the floor, from z -25 to 5) over a floor drawn as the sun mask (unlit), sun direction (1, -1, 0), ShadowFilter::ContactHardening, shadow_sun_size 6 degrees, 2 cascades of 1024² over 20 units, every cascade redrawn every frame; camera at (2, 1.2, 4) looking at (2, 0, -4); 128x128, 4x multisampling, no tonemapping, no antialiasing. The beam's shadow runs away from the camera across the border between the two cascades with edges of one width.",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.0075,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "cc9de196a3c61efd",
+  "reason": "New: contact-hardening sun shadows (a pole on a plane, and a beam's shadow across a cascade border)"
+}

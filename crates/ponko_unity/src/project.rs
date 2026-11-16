@@ -31,11 +31,13 @@ impl Project {
     ///
     /// # Errors
     ///
-    /// If `root` has no `Assets` folder, or a folder can't be read.
+    /// [`ErrorKind::Invalid`](crate::ErrorKind::Invalid) if `root` has no
+    /// `Assets` folder; [`ErrorKind::Io`](crate::ErrorKind::Io) if a folder
+    /// can't be read.
     pub fn open(root: impl AsRef<Path>) -> Result<Self, Error> {
         let root = root.as_ref().to_path_buf();
         if !root.join("Assets").is_dir() {
-            return Err(Error::new(format!("{} has no Assets folder", root.display())));
+            return Err(Error::invalid("not a Unity project: it has no Assets folder").at_path(&root));
         }
         let mut project = Self {
             root: root.clone(),
@@ -51,7 +53,7 @@ impl Project {
     }
 
     fn scan(&mut self, dir: &Path) -> Result<(), Error> {
-        let entries = std::fs::read_dir(dir).map_err(|e| Error::new(format!("{}: {e}", dir.display())))?;
+        let entries = std::fs::read_dir(dir).map_err(|e| Error::io(dir, e))?;
         for entry in entries.flatten() {
             let path = entry.path();
             let Ok(kind) = entry.file_type() else { continue };
@@ -121,7 +123,7 @@ impl Project {
     pub fn load(&self, guid: &str) -> Result<UnityFile, Error> {
         let path = self
             .path_of(guid)
-            .ok_or_else(|| Error::new(format!("no asset has GUID {guid}")))?;
+            .ok_or_else(|| Error::invalid(format!("no asset has GUID {guid}")))?;
         UnityFile::read(path)
     }
 }

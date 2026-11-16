@@ -4,7 +4,7 @@ use std::ffi::c_char;
 use ponko::prelude::{Font, Playing, Sound, SoundParams, TextParams};
 use ponko::ui::UiStyle;
 
-use crate::ctx::{ctx_access, out, text};
+use crate::ctx::{audio_access, ctx_access, gfx_access, out, text};
 use crate::types::*;
 use crate::{PonkoCtx, PonkoStatus, boundary, invalid};
 
@@ -118,7 +118,7 @@ pub struct PonkoSound {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PonkoPlaying {
-    /// Engine-internal id; 0 in headless runs.
+    /// Engine-internal id; headless runs, which play nothing, number theirs from 1.
     pub id: u64,
 }
 
@@ -215,8 +215,8 @@ pub(crate) fn playing_from_c(p: PonkoPlaying) -> Playing {
 pub unsafe extern "C" fn ponko_ctx_draw_rect(ctx: *mut PonkoCtx, rect: PonkoRect, color: PonkoColor) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
-        ctx_access(ctx, |c| {
-            c.gfx.draw_rect(to_c(rect), to_c(color));
+        gfx_access(ctx, |g| {
+            g.draw_rect(to_c(rect), to_c(color));
             Ok(())
         })
     })
@@ -241,8 +241,8 @@ pub unsafe extern "C" fn ponko_ctx_draw_line(
 ) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
-        ctx_access(ctx, |c| {
-            c.gfx.draw_line(to_c(a), to_c(b), width, to_c(color));
+        gfx_access(ctx, |g| {
+            g.draw_line(to_c(a), to_c(b), width, to_c(color));
             Ok(())
         })
     })
@@ -265,8 +265,8 @@ pub unsafe extern "C" fn ponko_ctx_draw_circle(
 ) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
-        ctx_access(ctx, |c| {
-            c.gfx.draw_circle(to_c(center), radius, to_c(color));
+        gfx_access(ctx, |g| {
+            g.draw_circle(to_c(center), radius, to_c(color));
             Ok(())
         })
     })
@@ -572,13 +572,13 @@ pub unsafe extern "C" fn ponko_ctx_play_sound(
 ) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
-        ctx_access(ctx, |c| {
+        audio_access(ctx, |a| {
             let p = if params.is_null() {
                 ponko_sound_params_default()
             } else {
                 *params
             };
-            let playing = c.audio.play_ex(
+            let playing = a.play_ex(
                 sound_from_c(sound),
                 SoundParams {
                     volume: p.volume,

@@ -1,6 +1,6 @@
 # A complete game, packaged
 
-[`examples/coin_dash`](https://github.com/ponkoengine/ponko/tree/main/examples/coin_dash)
+[`examples/coin_dash`](../../examples/coin_dash)
 is the engine's reference for a small *finished* game: title screen, settings,
 rounds with a win and a loss, pause, restart, result screens, sound, saved
 progress, keyboard and gamepad, and a download you can unzip anywhere. It uses
@@ -73,7 +73,7 @@ files = [                     # put at the package's top: licenses, a readme for
 | `icon` | none: macOS shows the generic app icon |
 | `assets` | `["assets"]` if that folder exists, else nothing; hidden files (`.DS_Store`) are left out |
 | `files` | the `LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*` files beside `Cargo.toml` |
-| `pack` | `true`: the files under `assets/` in one `assets.pack`; `false` ships them loose; a table sets packing up: `exclude` (patterns of files left out) and `textures = true` (images converted to KTX2 per `textures.json`, as `ponko pack --textures`) |
+| `pack` | `true`: the files under `assets/` in one `assets.pack`, [cooked](#cooking-assets-ponko-cook); `false` ships them loose; a table sets packing up: `exclude` (patterns of files left out), `textures = true` (images converted to KTX2 per `textures.json`, as `ponko pack --textures`) and `cook = false` (the source files as they are) |
 
 Paths are relative to `Cargo.toml`. An unknown key, an id that isn't reverse
 DNS, a missing file and two files at one place in the package are errors that
@@ -159,6 +159,126 @@ arrive. The first frame barely moves because the 14 MB release `.wasm`
 gains more, and the request count falls from one per file to two whatever
 their number.
 
+### Cooking assets: `ponko cook`
+
+Source assets are made for editing; a shipped game wants them ready to
+load. `ponko cook` turns a folder of them into runtime-ready files **under
+the same names**, and `ponko package` cooks the files it puts in
+`assets.pack`. The engine finds a texture's, sound's and model's format from
+its first bytes, so a cooked `bricks.png` that holds KTX2 blocks still loads
+with `ctx.gfx.load_texture("bricks.png")`: the game's code doesn't change.
+While you work, games run the source files in `assets/` directly, with hot
+reload; nothing needs cooking to iterate.
+
+```sh
+ponko cook                              # assets/ -> target/cooked/desktop/
+ponko cook --platform mobile            # textures as Basis Universal UASTC
+ponko cook art --pack dist/art.pack     # one asset pack of the cooked files
+ponko pack --cook                       # the same, as ponko pack's option
+```
+
+| Source | Cooked | Kept as it is when |
+|---|---|---|
+| PNG, JPEG | KTX2 with a full mip chain: BC7 for colors (sRGB) and data, BC5 for normal maps, BC4 for masks on `desktop` and `web`; Basis Universal UASTC on `mobile` (transcoded at load to ASTC 4x4, ETC2 or BC7) | a glTF model uses it (models decode their images to RGBA8), 16 bits per channel (a height map), sides not multiples of 4, or the game reads no KTX2 |
+| glTF, GLB | one GLB: triangles reordered for the vertex cache and for overdraw, vertices in the order they are first used (meshoptimizer), unused vertices dropped; normals as 16-bit and texture coordinates in 0..1 as 16-bit unsigned integers (`KHR_mesh_quantization`, an error under 2e-5); positions stay floats, so colliders, navigation meshes and node transforms read the same numbers | compressed geometry (meshopt, Draco) or an extension the cooker doesn't rewrite; vertices that two primitives share keep their order |
+| WAV (8, 16, 24-bit PCM) | FLAC: lossless, smaller | float or 32-bit samples |
+| WGSL | the same file, checked: composed with the engine's code for its kind (found from its hook: `vertex`/`surface`, `fragment`, `sky`, `effect`, `compute`) and validated with naga, as the engine does at load; an error names the file's own line | `"shader": "keep"` |
+| anything else | copied | |
+
+A model's nodes, materials, animations, skins and every `extras` are written
+back as they were read: only the mesh data changes. A shader, model or sound
+that can't be cooked fails the cook with every such file and the reason.
+
+**Settings.** `cook.json` in the folder (optional) gives assets their own
+settings by path or pattern (`*` within a folder name, `**` across them; an
+exact path wins, then the longest pattern). With none, everything gets the
+defaults above.
+
+```json
+{
+  "assets": {
+    "ui/**": "keep",
+    "raw/**": "skip",
+    "*_normal.png": { "texture": "normal" },
+    "masks/*.png": { "texture": "mask", "mipmaps": false },
+    "hero.png": { "basis": true },
+    "music/*.wav": { "audio": "keep" },
+    "props/*.glb": { "quantize": false },
+    "fx/glow.wgsl": { "shader": "effect" }
+  }
+}
+```
+
+`"keep"` copies a file as it is and `"skip"` leaves it out. `texture` is
+`color` (the default), `linear`, `normal`, `mask` or `keep`; `basis` and
+`mipmaps` override the platform's choice. `audio` is `flac` or `keep`;
+`optimize` and `quantize` (both on by default) are for models; `shader`
+names a kind, `module` for a file with its own entry points, or `keep`. A
+`textures.json` (see [`ponko textures`](drawing.md#compressed-textures))
+gives image kinds too, so a project that has one keeps its settings.
+`cook.json` itself stays out of the cooked files.
+
+**The cache.** Each result is stored in `target/cook-cache` (`--cache`) under
+a SHA-256 of the cooker's version, the platform, the asset's settings and its
+bytes (and a model's buffers). A second cook reads unchanged files back; a
+changed file or setting is cooked again, alone. Files are cooked on every
+core, and the same input always gives the same bytes: no time, path or
+machine goes into a cooked file.
+
+**In `ponko package`.** The pack is cooked by default, after the build:
+cargo says which engine features the game was built with, and images become
+KTX2 only for a game that reads it (the `compressed-textures` feature); for
+others they stay PNG and JPEG. The web gets BC textures, as the desktop does
+(a browser's GPU without them gets RGBA8, decoded at load). `--no-cook` or
+`pack = { cook = false }` packs the source files; `--no-pack` ships loose
+source files, uncooked. The report has the cook's line; Shard Grove's,
+packaged a second time:
+
+```text
+assets: 11 files (254.2 KiB) in assets.pack (198.1 KiB, 4 deflated)
+assets cooked 0 files, 11 from the cache, 0 copied, 0 left out: 413.8 KiB -> 254.2 KiB in 0.00 s
+smoke run: passed, 120 ticks headless from an unrelated folder in 0.7 s
+```
+
+**Measured.** Shard Grove, the 3D reference game (three models, eight
+sounds, no image textures), cooked with a release `ponko` on an Apple
+laptop that was compiling other work at the same time (load average about
+70), so the times are rough:
+
+| | Source | Cooked |
+|---|---|---|
+| Asset bytes | 413.8 KiB | 254.2 KiB (sounds 345.7 KiB -> 188.8 KiB in FLAC) |
+| `assets.pack` in its package | 349.6 KiB | 198.1 KiB (and its smoke run passes on it) |
+| Cook, cold / warm | | 0.01–0.24 s / 0.01 s (11 files from the cache) |
+| Setup loads (its 3 `load_mesh`, 1 `load_mesh_data`, 8 `audio.load`; median of 31 headless runs, release) | 0.56 ms | 1.02–1.10 ms |
+| Models alone cooked (sounds left as WAV) | 0.56 ms | 0.56 ms |
+| Video memory | same | same: no textures; the engine builds its own vertex buffers, and the level mesh has the same 398 corners and 594 indices |
+
+Its meshes are low-poly with flat shading, so the vertex cache reorder finds
+nothing to gain (2.00 cache misses per triangle before and after), and
+quantization saves a few percent. FLAC decoding costs about half a
+millisecond more for its 8 seconds of sound (mono, 22 kHz) than reading WAV: a smaller
+download for a little load time. Set `"audio": "keep"` for sounds whose
+load time matters more.
+
+Images are where cooking saves video memory. Eight generated 512 x 512
+color images (6.3 MiB of PNG), cooked the same way on the same busy machine:
+
+| | Source | Desktop (BC7) | Mobile (UASTC) |
+|---|---|---|---|
+| Files | 6.3 MiB | 2.2 MiB | 2.6 MiB |
+| Video memory, with mipmaps | 10.7 MiB (RGBA8) | 2.7 MiB | 2.7 MiB (as ASTC 4x4 or BC7) |
+| Cook, cold / warm | | 0.77–0.79 s / under 0.01 s | 0.81 s |
+
+`ponko cook` is a command, so C and C++ games use it as it is; there is no C
+API to cook at run time. Not cooked yet: positions are not quantized
+(dequantizing them needs a scale on the node, which game code that reads
+node transforms would see), meshes are not simplified into levels of detail,
+textures inside GLB files and sounds in other formats are kept, and the
+shader check covers the engine's composition and naga's validation but not
+the extra rules the engine checks at load (the hook's signature, no
+bindings of your own).
+
 ### The notices
 
 `THIRD-PARTY-NOTICES.txt` lists every library the program links on the
@@ -211,7 +331,7 @@ a macOS app made on a Mac is sealed ad hoc (`codesign --sign -`), so the bundle
 is consistent and not reported as damaged, but it carries no developer
 identity: Gatekeeper asks the player to allow it. Windows and Linux packages
 are left unsigned. Release signing with the project's certificates is
-[#282](https://github.com/ponkoengine/ponko/issues/282).
+#282.
 
 ### The web folder
 
@@ -258,7 +378,7 @@ Mac. What the command doesn't do yet:
   systems headless; it draws nothing. Coin Dash's window walk-through
   ([below](#the-smoke-test)) is what opens a window.
 - **Signing and notarization** are the hook above; the project's own release
-  signing is [#282](https://github.com/ponkoengine/ponko/issues/282).
+  signing is #282.
 - A C or C++ game is not packaged by it (its program is not a Cargo target);
   see [C and C++](#c-and-c).
 
@@ -268,7 +388,7 @@ From a fresh checkout, with a Rust toolchain (on Linux also the ALSA and udev
 development headers, as for any example):
 
 ```sh
-git clone https://github.com/ponkoengine/ponko && cd ponko
+git clone https://gitlab.com/ponkoengine/ponko && cd ponko
 cargo run --release --example coin_dash --features text-shaping   # play it
 cargo test --test coin_dash                  # the whole game, headlessly
 ```
@@ -396,8 +516,8 @@ asset list, the retained settings screen and the keys work as on the desktop.
 Progress and settings are kept in the browser's storage through the same
 `ctx.storage` calls ([Saves and settings](storage.md#in-the-browser)); it has
 no quit command. The `web-smoke` CI job (the
-browser runner of `web/smoke`, [issue
-#173](https://github.com/ponkoengine/ponko/issues/173)) builds it after
+browser runner of `web/smoke`, issue
+#173) builds it after
 the fixture and runs it in headless Chromium on WebGL2: it checks that the
 asset was fetched and decoded as 32 x 32, that the simulation advances, that a
 click and keys arrive, and that the screen the game reports follows them
@@ -515,16 +635,16 @@ in C++ too: `ctx.ui_retained().set_scale(scale)` and
 
 What this exercise found that the engine or the project doesn't do yet, with
 the issue that owns it (an entry says "no issue" where none does; they belong
-in [#207](https://github.com/ponkoengine/ponko/issues/207), the API friction
+in #207, the API friction
 index, or a new one):
 
 | Gap | Where it is tracked |
 |---|---|
-| `run_headless` runs no frame systems and no UI frame, so screens built on the retained UI are tested by hand-feeding `Ui::frame`. | Phases: [#198](https://github.com/ponkoengine/ponko/issues/198); scripted input: [#179](https://github.com/ponkoengine/ponko/issues/179) |
-| No native screen-reader adapter for the retained UI. | [#183](https://github.com/ponkoengine/ponko/issues/183) |
-| Immediate-mode text and UI don't follow the retained UI's scale; the theme and builders are the retained UI's only. | [#203](https://github.com/ponkoengine/ponko/issues/203) |
-| Saves and settings are plain files in the data folder; what a scene replacement does to them and to runtime services is undefined. | [#178](https://github.com/ponkoengine/ponko/issues/178); save-file compatibility fixtures [#174](https://github.com/ponkoengine/ponko/issues/174) |
-| The browser matrix is Chromium on SwiftShader WebGL2 only (no real-GPU WebGPU, Firefox, Safari or mobile). | [#173](https://github.com/ponkoengine/ponko/issues/173) |
-| The window smoke proves "a window opens and frames are drawn", not what they look like; no image regression for a whole game. | [#135](https://github.com/ponkoengine/ponko/issues/135) |
+| `run_headless` runs no frame systems and no UI frame, so screens built on the retained UI are tested by hand-feeding `Ui::frame`. | Phases: #198; scripted input: #179 |
+| No native screen-reader adapter for the retained UI. | #183 |
+| Immediate-mode text and UI don't follow the retained UI's scale; the theme and builders are the retained UI's only. | #203 |
+| Saves and settings are plain files in the data folder; what a scene replacement does to them and to runtime services is undefined. | #178; save-file compatibility fixtures #174 |
+| The browser matrix is Chromium on SwiftShader WebGL2 only (no real-GPU WebGPU, Firefox, Safari or mobile). | #173 |
+| The window smoke proves "a window opens and frames are drawn", not what they look like; no image regression for a whole game. | #135 |
 | The C and C++ bindings have no counterpart of this game (it is Rust only). | No native port planned yet |
-| Packages aren't attached to a release, signed or notarized, and there is no installer; the third-party notice is generated by a short script (on macOS, 33 of the 188 linked libraries ship no license file in their published source, so only their declared license and authors are listed; the package says which) rather than by a license-policy tool. | [#282](https://github.com/ponkoengine/ponko/issues/282) |
+| Packages aren't attached to a release, signed or notarized, and there is no installer; the third-party notice is generated by a short script (on macOS, 33 of the 188 linked libraries ship no license file in their published source, so only their declared license and authors are listed; the package says which) rather than by a license-policy tool. | #282 |

@@ -42,6 +42,8 @@
 //! });
 //! ```
 
+#![deny(missing_docs)]
+
 use glam::Vec2;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -81,9 +83,10 @@ enum Layer {
 
 /// Drawing and GPU assets: `ctx.gfx`.
 ///
-/// `ctx.draw`, `ctx.draw_text` and `ctx.load_texture` are shortcuts for
-/// [`draw`](Self::draw), [`draw_text`](Self::draw_text) and
-/// [`load_texture`](Self::load_texture); everything else is here.
+/// Every call is spelled here: [`draw`](Self::draw),
+/// [`draw_text`](Self::draw_text) and [`load_texture`](Self::load_texture)
+/// as `ctx.gfx.draw(..)` and so on. The same-named methods on `Ctx` are
+/// deprecated forwarders.
 ///
 /// - **What lives here:** the frame's draw queues (sprites, text, shapes),
 ///   textures, fonts and screenshots, and with the `3d` feature meshes,
@@ -134,9 +137,9 @@ pub struct Graphics {
     /// The frame being built (for shader status reports).
     pub(crate) frame: u64,
     /// Texture ids handed out while headless (no GPU to allocate them).
-    pub(crate) headless_textures: u32,
+    pub(crate) headless_textures: crate::handle::SlotCounter,
     /// The textures the game made and hasn't freed.
-    pub(crate) textures_live: crate::handle::LiveSet,
+    pub(crate) textures_live: crate::handle::SlotLiveSet,
     /// What the live assets cost (see `Ctx::asset_inventory`).
     pub(crate) asset_ledger: crate::inventory::Ledger,
     /// Shared with the other services that load files.
@@ -165,6 +168,9 @@ pub struct Graphics {
     pub(crate) screenshots: Vec<ScreenshotRequest>,
     pub(crate) draw_list: DrawList,
     pub(crate) ui_list: DrawList,
+    /// This frame's 2D cameras when there are views (the main one first);
+    /// empty while the main camera alone draws the whole window.
+    pub(crate) cameras2d: Vec<crate::camera::views::Camera2DFrame>,
     pub(crate) clear_color: Color,
     pub(crate) text: Text,
     /// Reused for a text field's selection spans.
@@ -203,7 +209,7 @@ impl Graphics {
             sim_tick: 0,
             headless: false,
             frame: 0,
-            headless_textures: 0,
+            headless_textures: crate::handle::SlotCounter::starting_at(1),
             textures_live: Default::default(),
             asset_ledger: Default::default(),
             asset_sources,
@@ -222,6 +228,7 @@ impl Graphics {
             screenshots: Vec::new(),
             draw_list: DrawList::default(),
             ui_list: DrawList::default(),
+            cameras2d: Vec::new(),
             clear_color: Color::PONKO_DARK,
             text: Text::new(),
             selection_scratch: Vec::new(),
@@ -252,6 +259,32 @@ impl Graphics {
     /// ```
     pub fn clear(&mut self, color: Color) {
         self.clear_color = color;
+    }
+
+    /// Puts what is drawn in the world from now on (this frame) on
+    /// `layers`: a 2D camera ([`ctx.camera`](crate::ctx::Ctx::camera) or a
+    /// [`d2::View`](crate::d2::View)'s) draws it only if its
+    /// [`layers`](crate::d2::Camera::layers) share one. Each frame starts
+    /// on [`RenderLayers::DEFAULT`](crate::camera::RenderLayers::DEFAULT),
+    /// which every camera draws unless told otherwise. Sprite entities
+    /// take theirs from a [`RenderLayers`](crate::camera::RenderLayers)
+    /// component instead. Screen UI is drawn over every camera, whatever
+    /// its layers. Sprites off the default layer batch like clipped ones:
+    /// a little extra work for each sprite drawn while it is set.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::camera::RenderLayers;
+    /// # fn update(ctx: &mut Ctx, crab: Texture, marker: Texture) {
+    /// ctx.gfx.draw(crab, vec2(400.0, 300.0)); // every camera
+    /// ctx.gfx.set_layers(RenderLayers::layer(1));
+    /// ctx.gfx.draw(marker, vec2(400.0, 300.0)); // the minimap only
+    /// ctx.gfx.set_layers(RenderLayers::DEFAULT);
+    /// ctx.camera.layers = RenderLayers::ALL.without(1);
+    /// # }
+    /// ```
+    pub fn set_layers(&mut self, layers: crate::camera::RenderLayers) {
+        self.draw_list.set_layers(layers.0);
     }
 
     /// Draws `texture` centered at `pos`, in world units (window pixels until
@@ -463,7 +496,10 @@ impl Graphics {
         self.try_load_font(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_font`](Self::load_font) with errors as values:
+    /// [`load_font`](Self::load_font) with errors as values.
+    ///
+    /// # Errors
+    ///
     /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound),
     /// [`Io`](crate::error::ErrorKind::Io), or [`Decode`](crate::error::ErrorKind::Decode)
     /// if it isn't a font.
@@ -572,7 +608,10 @@ impl Graphics {
         self.try_load_system_font(family).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_system_font`](Self::load_system_font) with errors as values:
+    /// [`load_system_font`](Self::load_system_font) with errors as values.
+    ///
+    /// # Errors
+    ///
     /// [`NotFound`](crate::error::ErrorKind::NotFound) if no installed font
     /// has that family,
     /// [`Unsupported`](crate::error::ErrorKind::Unsupported) without the
@@ -661,13 +700,17 @@ impl Graphics {
     }
 
     /// [`load_texture`](Self::load_texture) with errors as values, for
-    /// optional assets: [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound)
+    /// optional assets. Like `load_texture`, it also names the texture, so
+    /// sprites showing it can be saved.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound)
     /// if no source has it, [`Io`](crate::error::ErrorKind::Io) if it can't be
     /// read, [`Decode`](crate::error::ErrorKind::Decode) if it isn't an image,
     /// [`Unsupported`](crate::error::ErrorKind::Unsupported) if it is an image in
     /// a format this build leaves out (the message names the `image-*`
-    /// feature to enable). Like `load_texture`, it also names the texture, so
-    /// sprites showing it can be saved.
+    /// feature to enable).
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -785,8 +828,7 @@ impl Graphics {
         let (width, height) = (image.width, image.height);
         let bytes = image.bytes();
         let id = if self.headless {
-            self.headless_textures += 1;
-            self.headless_textures
+            self.headless_textures.make("texture")
         } else {
             let renderer = self.renderer();
             let max = renderer.max_texture_size();
@@ -843,11 +885,10 @@ impl Graphics {
         let bytes = crate::inventory::rgba8_bytes(width, height);
         if self.headless {
             // No GPU: a handle that remembers its size, so game logic still works.
-            self.headless_textures += 1;
-            self.asset_ledger.textures.insert(self.headless_textures, bytes);
-            self.asset_ledger
-                .made(crate::inventory::AssetClass::Texture, self.headless_textures);
-            return Texture::new(self.headless_textures, width, height);
+            let id = self.headless_textures.make("texture");
+            self.asset_ledger.textures.insert(id, bytes);
+            self.asset_ledger.made(crate::inventory::AssetClass::Texture, id);
+            return Texture::new(id, width, height);
         }
         let renderer = self.renderer();
         let max = renderer.max_texture_size();
@@ -882,9 +923,10 @@ impl Graphics {
             self.assets3d.render_targets.retain(|t| t.id != id);
             self.assets3d.shared_images.retain(|_, t| t.id != id);
         }
-        if let Some(renderer) = self.renderer.as_mut()
-            && !self.headless
-        {
+        // The slot goes to the next texture made, under a new id.
+        if self.headless {
+            self.headless_textures.release(id);
+        } else if let Some(renderer) = self.renderer.as_mut() {
             renderer.free_texture(id);
         }
     }
@@ -1029,6 +1071,14 @@ impl Graphics {
     /// illumination, GPU timestamps, ...) whether it's available and, if
     /// not, the fallback used and why. `None` in headless runs and before
     /// the window opens. See [`GpuCapabilities`](crate::render::GpuCapabilities).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     // No GPU is opened without a window.
+    ///     assert!(ctx.gfx.gpu_capabilities().is_none());
+    /// });
+    /// ```
     #[must_use]
     pub fn gpu_capabilities(&self) -> Option<&crate::render::GpuCapabilities> {
         self.renderer.as_ref().map(Renderer::capabilities)

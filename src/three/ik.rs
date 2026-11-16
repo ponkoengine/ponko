@@ -114,7 +114,7 @@ pub fn two_bone_ik(s: &mut Skeleton, model: &Transform3D, chain: [usize; 3], tar
 ///
 /// ```
 /// use ponko::prelude::*;
-/// let mut s = ponko::anim::Skeleton::new(vec![ponko::anim::Joint { name: "head".into(), parent: None, rest: ponko::d3::Transform::default() }]);
+/// let mut s = ponko::anim::Skeleton::new(vec![ponko::anim::Joint::new("head", None)]);
 /// ponko::anim::look_at_joint(&mut s, &ponko::d3::Transform::default(), 0, Vec3::Z, Vec3::X, 1.0, 0.5);
 /// ```
 #[allow(clippy::too_many_arguments)]
@@ -195,8 +195,9 @@ impl crate::ctx::Ctx {
             if !visible || a.w <= 0.0 || b.w <= 0.0 {
                 continue;
             }
+            let area = self.scene3d.camera.screen_rect();
             let screen = |v: glam::Vec4| {
-                (glam::Vec2::new(v.x / v.w, -v.y / v.w) + glam::Vec2::ONE) * 0.5 * self.scene3d.camera.viewport
+                area.min + (glam::Vec2::new(v.x / v.w, -v.y / v.w) + glam::Vec2::ONE) * 0.5 * area.size()
             };
             let a = self.camera.screen_to_world(screen(a));
             let b = self.camera.screen_to_world(screen(b));
@@ -212,10 +213,12 @@ mod tests {
     fn arm() -> Skeleton {
         Skeleton::new(
             (0usize..3)
-                .map(|i| Joint {
-                    name: i.to_string(),
-                    parent: i.checked_sub(1),
-                    rest: Transform3D::at(if i == 0 { Vec3::ZERO } else { Vec3::X }),
+                .map(|i| {
+                    Joint::new(i.to_string(), i.checked_sub(1)).with_rest(Transform3D::at(if i == 0 {
+                        Vec3::ZERO
+                    } else {
+                        Vec3::X
+                    }))
                 })
                 .collect(),
         )
@@ -237,14 +240,10 @@ mod tests {
         let mut joints = s.joints().to_vec();
         joints.insert(
             0,
-            Joint {
-                name: "parent".into(),
-                parent: None,
-                rest: Transform3D {
-                    rotation: Quat::from_rotation_z(0.7),
-                    ..Transform3D::default()
-                },
-            },
+            Joint::new("parent", None).with_rest(Transform3D {
+                rotation: Quat::from_rotation_z(0.7),
+                ..Transform3D::default()
+            }),
         );
         for j in &mut joints[1..] {
             j.parent = Some(j.parent.map_or(0, |p| p + 1));

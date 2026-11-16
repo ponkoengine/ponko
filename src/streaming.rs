@@ -24,7 +24,7 @@
 //! feature) says which cells of a grid to load or drop as the camera moves.
 //!
 //! [`Graphics::stream_texture`](crate::gfx::Graphics::stream_texture) (and, with the `3d` feature,
-//! [`Graphics::stream_mesh`](crate::gfx::Graphics::stream_mesh)) never wait: the first call starts decoding the file
+//! `Graphics::stream_mesh`) never wait: the first call starts decoding the file
 //! on a [`Job`] thread and returns `None`; once decoded, the
 //! asset is uploaded at the start of a frame, within the
 //! [upload budget](crate::gfx::Graphics::set_upload_budget). A texture appears first as a
@@ -42,6 +42,8 @@
 //! several ticks or none). Without it, decodes finish when the workers do:
 //! the frame an asset arrives in, and so the order new textures get their
 //! ids in, can differ between runs.
+
+#![deny(missing_docs)]
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -64,6 +66,15 @@ pub const DEFAULT_UPLOAD_BUDGET: u64 = 16 << 20;
 /// Where a streamed asset is ([`Graphics::asset_state`](crate::gfx::Graphics::asset_state)). States change only
 /// in the upload step at the start of a frame, in the order assets were
 /// asked for.
+///
+/// ```
+/// # use ponko::prelude::*;
+/// use ponko::streaming::AssetState;
+/// Game::new("t", 1, 1).run_headless(0, |ctx| {
+///     let state = ctx.gfx.asset_state(ponko::streaming::ResidencyKind::Texture, "never/asked.png");
+///     assert_eq!(state, AssetState::Unknown);
+/// });
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AssetState {
@@ -89,6 +100,12 @@ pub enum AssetState {
 
 impl AssetState {
     /// Its name in reports, such as `"streaming"`.
+    ///
+    /// ```
+    /// use ponko::streaming::AssetState;
+    /// assert_eq!(AssetState::Streaming.name(), "streaming");
+    /// assert_eq!(AssetState::Evicted.name(), "evicted");
+    /// ```
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -317,6 +334,9 @@ enum Request {
     Texture(String),
     #[cfg(feature = "3d")]
     Mesh(String),
+    /// A streamed instance cell, by handle id.
+    #[cfg(feature = "3d")]
+    InstanceCell(u32),
 }
 
 /// The upload queue and every streamed asset (a `Ctx` field).
@@ -388,6 +408,12 @@ impl Streaming {
     #[cfg(feature = "3d")]
     pub(crate) fn queue_mesh(&mut self, name: &str) {
         self.queue.push_back(Request::Mesh(name.to_string()));
+    }
+
+    /// Queues a streamed instance cell's upload step.
+    #[cfg(feature = "3d")]
+    pub(crate) fn queue_instance_cell(&mut self, id: u32) {
+        self.queue.push_back(Request::InstanceCell(id));
     }
 }
 
@@ -462,6 +488,7 @@ impl crate::gfx::Graphics {
     /// a worker. In a browser, decoding runs when the load starts.
     ///
     /// ```
+    /// use ponko::assets::MemorySource;
     /// # use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
     ///     let mut png = Vec::new();
@@ -528,6 +555,7 @@ impl crate::gfx::Graphics {
     /// those materials sample the stand-in.
     ///
     /// ```
+    /// use ponko::assets::MemorySource;
     /// # use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
     ///     let mut png = Vec::new();
@@ -556,6 +584,14 @@ impl crate::gfx::Graphics {
     /// # Errors
     ///
     /// As `try_load_texture`.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let err = ctx.gfx.try_resident_texture("no/such.png").unwrap_err();
+    ///     assert_eq!(err.kind(), ErrorKind::NotFound);
+    /// });
+    /// ```
     pub fn try_resident_texture(&mut self, path: &str) -> Result<Texture, crate::error::Error> {
         let now = self.residency_now();
         self.forget_freed_texture(path);
@@ -582,6 +618,15 @@ impl crate::gfx::Graphics {
     /// # Panics
     ///
     /// As `resident_texture`.
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// // The player's portrait must never be the blurry stand-in.
+    /// let portrait = ctx.gfx.pin_resident_texture("ui/portrait.png");
+    /// # let _ = portrait;
+    /// # }
+    /// ```
     pub fn pin_resident_texture(&mut self, path: &str) -> Texture {
         let texture = self.resident_texture(path);
         self.residency.set_mut(ResidencyKind::Texture).set_pinned(path, true);
@@ -590,6 +635,15 @@ impl crate::gfx::Graphics {
 
     /// Lets a [pinned](Self::pin_resident_texture) texture be evicted
     /// again, from the start of the next frame if the budget needs it gone.
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// ctx.gfx.pin_resident_texture("ui/portrait.png");
+    /// // ... the portrait screen closes:
+    /// ctx.gfx.unpin_resident_texture("ui/portrait.png");
+    /// # }
+    /// ```
     pub fn unpin_resident_texture(&mut self, path: &str) {
         self.residency.set_mut(ResidencyKind::Texture).set_pinned(path, false);
     }
@@ -622,6 +676,8 @@ impl crate::gfx::Graphics {
                 Request::Texture(name) => self.texture_step(world, name, budget.saturating_sub(spent), uploads == 0),
                 #[cfg(feature = "3d")]
                 Request::Mesh(name) => self.mesh_step(world, name, budget.saturating_sub(spent), uploads == 0),
+                #[cfg(feature = "3d")]
+                Request::InstanceCell(id) => self.instance_cell_step(*id, budget.saturating_sub(spent), uploads == 0),
             };
             match step {
                 Step::Uploaded { bytes, again } => {
@@ -1069,6 +1125,14 @@ impl crate::gfx::Graphics {
 
     /// Why loading the asset of `kind` called `name` failed, while it is
     /// [`AssetState::Failed`].
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     // Only a failed asset has an error.
+    ///     assert!(ctx.gfx.asset_error(ponko::streaming::ResidencyKind::Texture, "fine.png").is_none());
+    /// });
+    /// ```
     #[must_use]
     pub fn asset_error(&self, kind: ResidencyKind, name: &str) -> Option<&crate::error::Error> {
         if self.asset_state(kind, name) != AssetState::Failed {
@@ -1080,27 +1144,65 @@ impl crate::gfx::Graphics {
     /// Every asset streamed or loaded under residency, by kind then name:
     /// its state, handle id and GPU resolution. For diagnostics (`perf.get`
     /// lists them too).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     assert!(ctx.gfx.streamed_assets().is_empty(), "nothing streamed yet");
+    /// });
+    /// ```
     #[must_use]
     pub fn streamed_assets(&self) -> Vec<StreamedAsset> {
         let mut out = Vec::new();
-        #[cfg(feature = "3d")]
-        self.list_streamed_meshes(&mut out);
-        for (name, t) in &self.streaming.textures {
-            out.push(StreamedAsset {
-                kind: ResidencyKind::Texture,
-                name: name.clone(),
-                state: self.asset_state(ResidencyKind::Texture, name),
-                id: t.texture.map(|t| t.id),
-                size: t.size,
-            });
-        }
+        self.streamed_assets_into(&mut out);
         out
+    }
+
+    /// Replaces `out` with [`streamed_assets`](Self::streamed_assets), by kind
+    /// then name. The old contents are dropped and the vector and each
+    /// record's name string are reused (clearing `out` yourself first only
+    /// throws the strings away), so only new records or longer names allocate.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let mut assets = Vec::new();
+    ///     ctx.gfx.streamed_assets_into(&mut assets);
+    ///     assert!(assets.is_empty(), "nothing streamed yet");
+    /// });
+    /// ```
+    pub fn streamed_assets_into(&self, out: &mut Vec<StreamedAsset>) {
+        let mut at = 0;
+        #[cfg(feature = "3d")]
+        self.list_streamed_meshes(out, &mut at);
+        for (name, t) in &self.streaming.textures {
+            write_streamed(
+                out,
+                &mut at,
+                ResidencyKind::Texture,
+                name,
+                self.asset_state(ResidencyKind::Texture, name),
+                t.texture.map(|t| t.id),
+                t.size,
+            );
+        }
+        out.truncate(at);
     }
 
     /// Sets how many bytes the upload step may send to the GPU each frame;
     /// `None` for no limit. Default [`DEFAULT_UPLOAD_BUDGET`]. A smaller
     /// budget spreads streaming over more frames and keeps each one short;
     /// one upload larger than the budget still goes, alone in its frame.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.gfx.set_upload_budget(Some(4 << 20)); // 4 MiB a frame
+    ///     assert_eq!(ctx.gfx.upload_stats().budget, Some(4 << 20));
+    ///     ctx.gfx.set_upload_budget(None); // no limit
+    ///     assert_eq!(ctx.gfx.upload_stats().budget, None);
+    /// });
+    /// ```
     pub fn set_upload_budget(&mut self, bytes_per_frame: Option<u64>) {
         self.streaming.budget = bytes_per_frame;
         self.streaming.stats.budget = bytes_per_frame;
@@ -1117,11 +1219,27 @@ impl crate::gfx::Graphics {
     /// States are fixed per frame, not per simulation tick: a frame can run
     /// several ticks or none, so for the same ticks each run, also run the
     /// same frames (as headless runs and fixed frame rates do).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     // A replay or a lockstep game wants the same frames every run.
+    ///     ctx.gfx.set_deterministic_uploads(true);
+    /// });
+    /// ```
     pub fn set_deterministic_uploads(&mut self, on: bool) {
         self.streaming.deterministic = on;
     }
 
     /// The upload queue's budget and counters.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let stats = ctx.gfx.upload_stats();
+    ///     assert_eq!((stats.pending, stats.total_uploads, stats.failures), (0, 0, 0));
+    /// });
+    /// ```
     #[must_use]
     pub fn upload_stats(&self) -> UploadStats {
         let mut stats = self.streaming.stats;
@@ -1207,6 +1325,36 @@ fn decode_texture(
     let TextureFormats = gpu;
     let image = assets::decode_image(&bytes, name, &what)?;
     Ok((origin, pyramid(image, max)))
+}
+
+// Replace a slot without dropping its owned name buffer.
+pub(crate) fn write_streamed(
+    out: &mut Vec<StreamedAsset>,
+    at: &mut usize,
+    kind: ResidencyKind,
+    name: &str,
+    state: AssetState,
+    id: Option<u32>,
+    size: [u32; 2],
+) {
+    if *at == out.len() {
+        out.push(StreamedAsset {
+            kind,
+            name: name.into(),
+            state,
+            id,
+            size,
+        });
+    } else {
+        let record = &mut out[*at];
+        record.name.clear();
+        record.name.push_str(name);
+        record.kind = kind;
+        record.state = state;
+        record.id = id;
+        record.size = size;
+    }
+    *at += 1;
 }
 
 #[cfg(test)]

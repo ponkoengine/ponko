@@ -10,13 +10,15 @@ and naming the dependency line that compiles its examples.
 """
 import json
 import sys
+from pathlib import Path
 
-REPO_URL = "https://github.com/ponkoengine/ponko"
+# The project's home is the one line in PROJECT_URL (see scripts/project-url.py).
+REPO_URL = (Path(__file__).resolve().parent.parent / "PROJECT_URL").read_text().strip()
 NOTE = (
     "**Which version?** This guide follows the `main` branch, so it can "
     "describe APIs that the latest crates.io release does not have yet. "
     f'Its examples compile against `ponko = {{ git = "{REPO_URL}" }}`; the '
-    f"[changelog]({REPO_URL}/blob/main/CHANGELOG.md) says what each release has."
+    f"[changelog]({REPO_URL}/-/blob/main/CHANGELOG.md) says what each release has."
 )
 
 

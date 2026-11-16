@@ -63,6 +63,12 @@ The sound API stays; it just makes no noise. The C library has the same
 switch: build `ponko_ffi` with `--no-default-features`. Linux builds with audio need
 the ALSA headers (`libasound2-dev` on Debian and Ubuntu).
 
+A headless run plays nothing, but still hands each sound a handle of its
+own and lists what was started: `ctx.audio.started()` (C++
+`ctx::sounds_started()`) gives the sounds started this tick, with their
+bus, volume, speed and looping, so a test can check what the game played
+(see [Headless runs](headless.md#the-pointer-sounds-and-quitting)).
+
 ## Sound in 3D
 
 With the `3d` feature, pair `d3::AudioSource` with `d3::Transform`, or play a

@@ -79,6 +79,7 @@ pub(super) fn unavailable(ctx: &Ctx, method: &str) -> Option<String> {
 fn limited(ctx: &Ctx, method: &str) -> Option<&'static str> {
     match method {
         "perf.hud" if ctx.headless => Some("accepted, but a headless game draws no overlay"),
+        "debug.draw" if ctx.headless => Some("accepted, but a headless game draws nothing"),
         #[cfg(feature = "3d")]
         "quality.set" if ctx.headless => Some(
             "accepted (the settings change and perf.get reports them), but a headless game draws nothing, and `recommended` needs a GPU",

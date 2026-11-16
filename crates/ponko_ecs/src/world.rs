@@ -180,6 +180,13 @@ impl World {
     }
 
     /// An empty world.
+    ///
+    /// ```
+    /// use ponko_ecs::World;
+    /// let world = World::new();
+    /// assert!(world.is_empty());
+    /// assert_eq!(world.len(), 0);
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         let mut w = World {
@@ -212,6 +219,21 @@ impl World {
     ///
     /// Components come as a tuple; note the trailing comma for one component:
     /// `world.spawn((Health(10),))`.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component, Debug, PartialEq)]
+    /// struct Health(i32);
+    /// #[derive(Component)]
+    /// struct Player;
+    /// let mut world = World::new();
+    /// let e = world.spawn((Health(10), Player));
+    /// assert_eq!(world.get::<Health>(e), Some(&Health(10)));
+    /// assert!(world.has::<Player>(e));
+    /// ```
+    ///
+    /// # Panics
+    /// If the bundle names the same component type twice.
     pub fn spawn<B: Bundle>(&mut self, bundle: B) -> Entity {
         self.recorder.note(|l| l.structural = true);
         let a = self.bundle_archetype::<B>();
@@ -220,6 +242,18 @@ impl World {
     }
 
     /// Spawns many entities of the same shape. Faster than calling `spawn` in a loop.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component)]
+    /// struct Coin(u32);
+    /// let mut world = World::new();
+    /// world.spawn_batch((0..100).map(|i| (Coin(i),)));
+    /// assert_eq!(world.len(), 100);
+    /// ```
+    ///
+    /// # Panics
+    /// If the bundle names the same component type twice.
     pub fn spawn_batch<B: Bundle>(&mut self, bundles: impl IntoIterator<Item = B>) {
         self.recorder.note(|l| l.structural = true);
         let iter = bundles.into_iter();
@@ -250,6 +284,9 @@ impl World {
     /// let fresh = world.spawn((Name("new"),)); // fresh handles never collide
     /// assert_ne!(fresh, saved);
     /// ```
+    ///
+    /// # Panics
+    /// If the bundle names the same component type twice.
     pub fn spawn_at<B: Bundle>(&mut self, e: Entity, bundle: B) -> bool {
         self.recorder.note(|l| l.structural = true);
         if !self.entities.alloc_at(e) {
@@ -341,7 +378,7 @@ impl World {
     pub fn reset(&mut self) {
         self.recorder.note(|l| l.structural = true);
         self.clear();
-        self.entities = Default::default();
+        self.entities.reset();
     }
 
     #[inline]
@@ -372,17 +409,29 @@ impl World {
 
     /// Removes an entity and drops its components. Returns `false` if it was
     /// already gone.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component, Debug, PartialEq)]
+    /// struct Pos(f32);
+    /// let mut world = World::new();
+    /// let e = world.spawn((Pos(1.0),));
+    /// assert!(world.despawn(e));
+    /// assert!(!world.despawn(e)); // already gone
+    /// assert!(world.get::<Pos>(e).is_none()); // the old handle stays dead
+    /// ```
     pub fn despawn(&mut self, e: Entity) -> bool {
         self.recorder.note(|l| l.structural = true);
         let Some(loc) = self.entities.get(e) else { return false };
         // Free the slot first: if a component's drop panics, the entity is already gone.
         self.entities.free(e);
-        if self.archetypes[loc.archetype as usize].tracked() {
-            self.changes
-                .log_despawn(&self.infos, &self.archetypes[loc.archetype as usize], e);
-        }
         let a = loc.archetype as usize;
-        let moved = unsafe { self.archetypes[a].swap_remove_drop(loc.row as usize) };
+        // One bounds check for both uses.
+        let archetype = &mut self.archetypes[a];
+        if archetype.tracked() {
+            self.changes.log_despawn(&self.infos, archetype, e, loc.row as usize);
+        }
+        let moved = unsafe { archetype.swap_remove_drop(loc.row as usize) };
         let Some(moved) = moved else {
             // The removed row was the last one; row 0 means it was the only
             // one. Deciding this from what `swap_remove_drop` returned, not
@@ -409,18 +458,49 @@ impl World {
     }
 
     /// `true` if `e` hasn't been despawned.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component)]
+    /// struct Tag;
+    /// let mut world = World::new();
+    /// let e = world.spawn((Tag,));
+    /// assert!(world.is_alive(e));
+    /// world.despawn(e);
+    /// assert!(!world.is_alive(e));
+    /// ```
     #[must_use]
     pub fn is_alive(&self, e: Entity) -> bool {
         self.entities.get(e).is_some()
     }
 
     /// Number of live entities.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component, Debug, PartialEq)]
+    /// struct Pos(f32);
+    /// let mut world = World::new();
+    /// world.spawn((Pos(0.0),));
+    /// world.spawn((Pos(1.0),));
+    /// assert_eq!(world.len(), 2);
+    /// ```
     #[must_use]
     pub fn len(&self) -> usize {
         self.entities.len()
     }
 
     /// `true` if there are no live entities.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component)]
+    /// struct Tag;
+    /// let mut world = World::new();
+    /// assert!(world.is_empty());
+    /// world.spawn((Tag,));
+    /// assert!(!world.is_empty());
+    /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -453,6 +533,17 @@ impl World {
     // ---- single-entity access -----------------------------------------------
 
     /// Component `T` of entity `e`, or `None` if `e` is dead or doesn't have one.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component, Debug, PartialEq)]
+    /// struct Pos(f32);
+    /// let mut world = World::new();
+    /// let e = world.spawn((Pos(2.0),));
+    /// assert_eq!(world.get::<Pos>(e), Some(&Pos(2.0)));
+    /// world.despawn(e);
+    /// assert_eq!(world.get::<Pos>(e), None);
+    /// ```
     #[must_use]
     pub fn get<T: Component>(&self, e: Entity) -> Option<&T> {
         let id = self.component_id::<T>()?;
@@ -462,6 +553,16 @@ impl World {
     }
 
     /// Mutable version of [`get`](Self::get).
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component, Debug, PartialEq)]
+    /// struct Pos(f32);
+    /// let mut world = World::new();
+    /// let e = world.spawn((Pos(2.0),));
+    /// world.get_mut::<Pos>(e).unwrap().0 += 1.0;
+    /// assert_eq!(world.get::<Pos>(e), Some(&Pos(3.0)));
+    /// ```
     pub fn get_mut<T: Component>(&mut self, e: Entity) -> Option<&mut T> {
         let id = self.component_id::<T>()?;
         self.recorder.note(|l| l.component(id, true));
@@ -477,6 +578,18 @@ impl World {
     }
 
     /// `true` if `e` is alive and has component `T`.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component, Debug, PartialEq)]
+    /// struct Pos(f32);
+    /// #[derive(Component)]
+    /// struct Tag;
+    /// let mut world = World::new();
+    /// let e = world.spawn((Pos(0.0),));
+    /// assert!(world.has::<Pos>(e));
+    /// assert!(!world.has::<Tag>(e));
+    /// ```
     #[must_use]
     pub fn has<T: Component>(&self, e: Entity) -> bool {
         self.component_id::<T>().is_some_and(|id| self.locate(e, id).is_some())
@@ -523,6 +636,21 @@ impl World {
 
     /// Adds component `value` to `e`, replacing any existing `T`.
     /// Returns `false` (and drops `value`) if `e` is dead.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component)]
+    /// struct Tag;
+    /// #[derive(Component, Debug, PartialEq)]
+    /// struct Pos(f32);
+    /// let mut world = World::new();
+    /// let e = world.spawn((Tag,));
+    /// assert!(world.insert(e, Pos(1.0)));
+    /// assert!(world.insert(e, Pos(2.0))); // replaces
+    /// assert_eq!(world.get::<Pos>(e), Some(&Pos(2.0)));
+    /// world.despawn(e);
+    /// assert!(!world.insert(e, Pos(3.0))); // dead
+    /// ```
     pub fn insert<T: Component>(&mut self, e: Entity, value: T) -> bool {
         self.recorder.note(|l| l.structural = true);
         let id = self.register::<T>();
@@ -535,6 +663,17 @@ impl World {
     }
 
     /// Takes component `T` off `e` and returns it.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component, Debug, PartialEq)]
+    /// struct Pos(f32);
+    /// let mut world = World::new();
+    /// let e = world.spawn((Pos(1.0),));
+    /// assert_eq!(world.remove::<Pos>(e), Some(Pos(1.0)));
+    /// assert_eq!(world.remove::<Pos>(e), None);
+    /// assert!(world.is_alive(e)); // only the component went
+    /// ```
     pub fn remove<T: Component>(&mut self, e: Entity) -> Option<T> {
         self.recorder.note(|l| l.structural = true);
         let id = self.component_id::<T>()?;
@@ -552,6 +691,18 @@ impl World {
     ///
     /// `Q` is `&T`, `&mut T`, `Option<&T>`, `Option<&mut T>`, `Entity`, or a
     /// tuple of those. See [`Query`] for filters and iterators.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component, Debug, PartialEq)]
+    /// struct Pos(f32);
+    /// let mut world = World::new();
+    /// world.spawn((Pos(1.0),));
+    /// world.spawn((Pos(2.0),));
+    /// world.query::<&mut Pos>().for_each(|p| p.0 *= 10.0);
+    /// let sum: f32 = world.query::<&Pos>().iter().map(|p| p.0).sum();
+    /// assert_eq!(sum, 30.0);
+    /// ```
     ///
     /// # Panics
     /// If `Q` asks for the same component twice and at least once mutably.
@@ -600,7 +751,7 @@ impl World {
             sort_keys(&mut keyed);
             let perm: Vec<u32> = keyed.iter().map(|&(_, row)| row).collect();
             let arch = &mut self.archetypes[a];
-            arch.permute(&perm);
+            arch.permute(&perm, self.changes.stamp());
             for (row, &e) in arch.entities.iter().enumerate() {
                 self.entities.set_row(e, row);
             }
@@ -611,12 +762,30 @@ impl World {
 
     /// Stores a global value (game settings, a random generator, the score...),
     /// replacing any existing value of the same type.
+    ///
+    /// ```
+    /// use ponko_ecs::World;
+    /// struct Score(u32);
+    /// let mut world = World::new();
+    /// world.insert_resource(Score(1));
+    /// world.insert_resource(Score(2)); // replaces
+    /// assert_eq!(world.resource::<Score>().0, 2);
+    /// ```
     pub fn insert_resource<R: Send + Sync + 'static>(&mut self, value: R) {
         self.note_resource::<R>(true);
         self.resources.insert(TypeId::of::<R>(), Box::new(value));
     }
 
     /// The resource of type `R`.
+    ///
+    /// ```
+    /// use ponko_ecs::World;
+    /// struct Score(u32);
+    /// let mut world = World::new();
+    /// world.insert_resource(Score(7));
+    /// assert_eq!(world.resource::<Score>().0, 7);
+    /// assert!(world.get_resource::<String>().is_none()); // the checking form
+    /// ```
     ///
     /// # Panics
     /// If there is none; use [`get_resource`](Self::get_resource) to check.
@@ -627,6 +796,18 @@ impl World {
     }
 
     /// Mutable version of [`resource`](Self::resource).
+    ///
+    /// ```
+    /// use ponko_ecs::World;
+    /// struct Score(u32);
+    /// let mut world = World::new();
+    /// world.insert_resource(Score(0));
+    /// world.resource_mut::<Score>().0 += 5;
+    /// assert_eq!(world.resource::<Score>().0, 5);
+    /// ```
+    ///
+    /// # Panics
+    /// If there is none; use [`get_resource_mut`](Self::get_resource_mut) to check.
     #[track_caller]
     pub fn resource_mut<R: Send + Sync + 'static>(&mut self) -> &mut R {
         self.get_resource_mut().unwrap_or_else(|| missing_resource::<R>())
@@ -704,6 +885,15 @@ impl World {
     }
 
     /// The resource of type `R`, if there is one.
+    ///
+    /// ```
+    /// use ponko_ecs::World;
+    /// struct Score(u32);
+    /// let mut world = World::new();
+    /// assert!(world.get_resource::<Score>().is_none());
+    /// world.insert_resource(Score(1));
+    /// assert_eq!(world.get_resource::<Score>().map(|s| s.0), Some(1));
+    /// ```
     #[must_use]
     pub fn get_resource<R: Send + Sync + 'static>(&self) -> Option<&R> {
         self.note_resource::<R>(false);
@@ -713,6 +903,17 @@ impl World {
     }
 
     /// Mutable version of [`get_resource`](Self::get_resource).
+    ///
+    /// ```
+    /// use ponko_ecs::World;
+    /// struct Score(u32);
+    /// let mut world = World::new();
+    /// world.insert_resource(Score(1));
+    /// if let Some(score) = world.get_resource_mut::<Score>() {
+    ///     score.0 += 1;
+    /// }
+    /// assert_eq!(world.resource::<Score>().0, 2);
+    /// ```
     pub fn get_resource_mut<R: Send + Sync + 'static>(&mut self) -> Option<&mut R> {
         self.note_resource::<R>(true);
         self.resources
@@ -721,6 +922,15 @@ impl World {
     }
 
     /// Removes and returns the resource of type `R`.
+    ///
+    /// ```
+    /// use ponko_ecs::World;
+    /// struct Score(u32);
+    /// let mut world = World::new();
+    /// world.insert_resource(Score(3));
+    /// assert_eq!(world.remove_resource::<Score>().unwrap().0, 3);
+    /// assert!(world.remove_resource::<Score>().is_none());
+    /// ```
     pub fn remove_resource<R: Send + Sync + 'static>(&mut self) -> Option<R> {
         self.note_resource::<R>(true);
         self.resources
@@ -914,8 +1124,110 @@ impl World {
 
     // ---- commands --------------------------------------------------------------
 
+    /// An empty command buffer tied to this world: its
+    /// [`spawn`](Commands::spawn) reserves the new entity's id here and
+    /// returns it right away. Keep it and reuse it; applying empties it.
+    ///
+    /// ```
+    /// # use ponko_ecs::*;
+    /// #[derive(Component)]
+    /// struct Ship;
+    /// #[derive(Component)]
+    /// struct Parent(Entity);
+    ///
+    /// let mut world = World::new();
+    /// let mut commands = world.commands();
+    /// let parent = commands.spawn((Ship,));
+    /// let child = commands.spawn((Parent(parent),));
+    /// world.apply(&mut commands);
+    /// assert_eq!(world.get::<Parent>(child).unwrap().0, parent);
+    /// assert!(world.is_alive(parent));
+    /// ```
+    #[must_use]
+    pub fn commands(&self) -> Commands {
+        let mut commands = Commands::new();
+        commands.bind(self);
+        commands
+    }
+
+    /// Sizes the set of free slots the world keeps aside for
+    /// [`Commands::spawn`], so deferred spawns reuse slots: call it once per
+    /// frame (the engine does). It keeps as many as command buffers took in
+    /// one frame lately, taken from the free list, and gives the rest back,
+    /// so a game that stops spawning through commands doesn't keep them.
+    /// "Lately" starts at two calls and doubles whenever buffers need more
+    /// right after the set shrank, so a buffer that spawns a burst only now
+    /// and then doesn't make the slot table grow either.
+    ///
+    /// ```
+    /// # use ponko_ecs::*;
+    /// #[derive(Component)]
+    /// struct Spark;
+    ///
+    /// let mut world = World::new();
+    /// let mut commands = world.commands();
+    /// // Each frame, sparks from the last one go and 100 new ones come.
+    /// let mut sparks = Vec::new();
+    /// for _ in 0..10 {
+    ///     for e in sparks.drain(..) {
+    ///         commands.despawn(e);
+    ///     }
+    ///     sparks.extend((0..100).map(|_| commands.spawn((Spark,))));
+    ///     world.apply(&mut commands);
+    ///     world.return_idle_ids();
+    /// }
+    /// // Then the game stops spawning through commands.
+    /// for e in sparks {
+    ///     world.despawn(e);
+    /// }
+    /// for _ in 0..2 {
+    ///     world.return_idle_ids();
+    /// }
+    /// // The slots set aside for the next frame's sparks went back:
+    /// // `world.spawn` reuses every slot.
+    /// let slots = world.entity_slots();
+    /// world.spawn_batch((0..slots).map(|_| (Spark,)));
+    /// assert_eq!(world.entity_slots(), slots);
+    /// ```
+    pub fn return_idle_ids(&mut self) {
+        self.entities.return_idle();
+    }
+
+    /// Spawns an entity at `e`, an id a [`Commands`] buffer of this world
+    /// reserved. For the callbacks of `Commands::spawn_with`; everything
+    /// else uses [`Commands::spawn`], which calls this.
+    ///
+    /// # Panics
+    ///
+    /// If `e` isn't a reserved, not yet spawned id of this world (nothing
+    /// is changed then).
+    #[doc(hidden)]
+    pub fn spawn_reserved<B: Bundle>(&mut self, e: Entity, bundle: B) {
+        self.recorder.note(|l| l.structural = true);
+        // Everything that can fail first, so a panic leaves `e` reserved
+        // for its command to release.
+        let a = self.bundle_archetype::<B>();
+        self.entities.claim(e);
+        self.spawn_in::<B>(a, bundle, e);
+    }
+
     /// Applies commands recorded while the world was busy (e.g. during a query).
-    /// Leaves `commands` empty and ready to reuse.
+    /// Leaves `commands` empty and ready to reuse, tied to this world (so
+    /// its [`spawn`](Commands::spawn) reserves ids here from now on).
+    ///
+    /// ```
+    /// # use ponko_ecs::*;
+    /// # #[derive(Component)]
+    /// # struct Coin;
+    /// let mut world = World::new();
+    /// let mut commands = world.commands();
+    /// let coin = commands.spawn((Coin,));
+    /// let other = commands.spawn((Coin,));
+    /// commands.despawn(other);
+    /// world.apply(&mut commands);
+    /// assert!(world.is_alive(coin) && !world.is_alive(other));
+    /// assert!(commands.is_empty(), "the buffer is ready to reuse");
+    /// ```
     pub fn apply(&mut self, commands: &mut Commands) {
         self.recorder.note(|l| l.structural = true);
         commands.apply(self);
@@ -948,12 +1260,13 @@ impl World {
         align: usize,
         drop: Option<DropFn>,
     ) -> ComponentId {
-        let layout = Layout::from_size_align(size, align).expect("invalid component size/alignment");
+        let layout = Layout::from_size_align(size, align)
+            .expect("invalid component size/alignment; use a nonzero power-of-two alignment and a size fitting Layout");
         if let Some(&id) = self.by_name.get(name) {
             let info = &self.infos[id.index()];
             assert!(
                 info.layout == layout && info.type_id.is_none(),
-                "component name `{name}` is already registered with a different layout"
+                "component name `{name}` is already registered with a different layout; use its original layout or a unique name"
             );
             return id;
         }
@@ -967,7 +1280,10 @@ impl World {
     }
 
     fn push_info(&mut self, info: ComponentInfo) -> ComponentId {
-        let id = ComponentId(u32::try_from(self.infos.len()).expect("too many component types"));
+        let id = ComponentId(
+            u32::try_from(self.infos.len())
+                .expect("too many component types; reuse registered types instead of registering more"),
+        );
         self.by_name.entry(info.name.clone()).or_insert(id);
         self.infos.push(info);
         id
@@ -1013,6 +1329,17 @@ impl World {
     }
 
     /// Every component type registered so far, indexed by [`ComponentId::index`].
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, World};
+    /// #[derive(Component)]
+    /// struct Pos(f32);
+    /// let mut world = World::new();
+    /// assert!(world.components().is_empty());
+    /// let id = world.register::<Pos>();
+    /// assert_eq!(world.components().len(), 1);
+    /// assert_eq!(world.components()[id.index()].layout().size(), 4);
+    /// ```
     #[must_use]
     pub fn components(&self) -> &[ComponentInfo] {
         &self.infos
@@ -1088,6 +1415,15 @@ impl World {
         true
     }
 
+    /// Implementation of [`RawWorld::spawn_reserved_dynamic`](crate::RawWorld::spawn_reserved_dynamic).
+    pub(crate) unsafe fn spawn_reserved_dynamic_inner(&mut self, e: Entity, components: &[(ComponentId, *const u8)]) {
+        self.recorder.note(|l| l.structural = true);
+        let a = self.dynamic_archetype(components, "spawn_reserved_dynamic");
+        self.entities.claim(e);
+        // SAFETY: forwarded caller contract; `e` was just claimed.
+        unsafe { self.write_dynamic(a, e, components) };
+    }
+
     /// The archetype holding exactly these components (panics on duplicates).
     fn dynamic_archetype(&mut self, components: &[(ComponentId, *const u8)], caller: &str) -> usize {
         let mut ids = std::mem::take(&mut self.scratch_ids);
@@ -1097,7 +1433,7 @@ impl World {
         let unique = ids.windows(2).all(|w| w[0] != w[1]);
         let a = if unique { Some(self.archetype_for(&ids)) } else { None };
         self.scratch_ids = ids;
-        a.unwrap_or_else(|| panic!("{caller}: the same component was given twice"))
+        a.unwrap_or_else(|| panic!("{caller}: the same component was given twice; remove the duplicate component"))
     }
 
     /// Appends freshly allocated `e` to archetype `a` with these values.
@@ -1345,7 +1681,7 @@ impl World {
         assert_eq!(
             sorted.len(),
             ids.len(),
-            "bundle `{}` has the same component twice",
+            "bundle `{}` has the same component twice; remove the duplicate component",
             std::any::type_name::<B>()
         );
         let a = self.archetype_for(&sorted);
@@ -1411,7 +1747,8 @@ impl World {
         }
         if s.tracked() {
             // The components the entity keeps take their stamps along.
-            s.copy_stamps_to(row, d, new_row);
+            let now = self.changes.stamp();
+            s.copy_stamps_to(row, d, new_row, now);
             s.swap_remove_stamps(row, last);
         }
         s.entities.swap_remove(row);

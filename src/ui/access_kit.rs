@@ -215,7 +215,7 @@ mod tests {
             .id();
         let music = ui.toggle(root, "Music").layout(UiLayout::row(30.0)).value(1.0).id();
         let quit = ui.button(root, "Quit").layout(UiLayout::row(30.0)).enabled(false).id();
-        ui.push_screen(root, false);
+        ui.push_modeless(root);
         ui.layout(VIEW);
         Menu {
             ui,
@@ -383,7 +383,7 @@ mod tests {
         tracker.update(&m.ui);
         let dialog = m.ui.root().layout(UiLayout::centered(300.0, 120.0)).id();
         let yes = m.ui.button(dialog, "Yes").layout(UiLayout::row(30.0)).id();
-        m.ui.push_screen(dialog, true);
+        m.ui.push_modal(dialog);
         m.ui.frame(VIEW, &UiInput::default());
 
         let changes = tracker.update(&m.ui).unwrap();
@@ -400,7 +400,7 @@ mod tests {
         // A non-modal overlay keeps the screen below, without its actions.
         m.ui.pop_screen();
         let toast = m.ui.root().layout(UiLayout::anchored(0.0, 0.0, 200.0, 40.0)).id();
-        m.ui.push_screen(toast, false);
+        m.ui.push_modeless(toast);
         m.ui.frame(VIEW, &UiInput::default());
         let changes = tracker.update(&m.ui).unwrap();
         let update = partial_update(tracker.tree(), &changes, "", 1.0, false);

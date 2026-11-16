@@ -179,7 +179,10 @@ impl Net {
     /// Unless `players` is 2 to 8.
     #[must_use]
     pub fn steam_host(client: &Client, players: usize) -> Net {
-        assert!((2..=super::MAX_PLAYERS).contains(&players), "2 to 8 players");
+        assert!(
+            (2..=super::MAX_PLAYERS).contains(&players),
+            "Steam: expected 2 to 8 players; pass a player count in that range"
+        );
         let steam = Steam::new(client, true);
         let lobby = steam.lobby.clone();
         client

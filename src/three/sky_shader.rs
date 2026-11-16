@@ -34,13 +34,16 @@ impl Graphics {
         self.try_load_sky_shader(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`load_sky_shader`](Self::load_sky_shader) with errors as values:
-    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file is
-    /// missing, [`Io`](crate::error::ErrorKind::Io) if it can't be read,
+    /// [`load_sky_shader`](Self::load_sky_shader) with errors as values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file
+    /// is missing, [`Io`](crate::error::ErrorKind::Io) if it can't be read,
     /// [`Decode`](crate::error::ErrorKind::Decode) if it isn't UTF-8 text and
     /// [`Shader`](crate::error::ErrorKind::Shader) if it doesn't compile (the
-    /// message has the compiler's log). With hot reload on, a file that
-    /// doesn't compile still returns a stand-in, as `load_sky_shader` does.
+    /// message has the compiler's log). With hot reload on, a file that doesn't
+    /// compile still returns a stand-in, as `load_sky_shader` does.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -105,7 +108,10 @@ impl Graphics {
             .unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`create_sky_shader`](Self::create_sky_shader) with errors as values:
+    /// [`create_sky_shader`](Self::create_sky_shader) with errors as values.
+    ///
+    /// # Errors
+    ///
     /// [`ErrorKind::Shader`](crate::error::ErrorKind::Shader) if it doesn't
     /// compile or has no `sky` function, with the reason in the message.
     ///

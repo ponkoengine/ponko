@@ -54,8 +54,7 @@ impl ModelFile {
             ignore_embedded: true,
             ..Default::default()
         };
-        let scene = ufbx::load_file(&path.to_string_lossy(), opts)
-            .map_err(|e| Error::new(format!("{}: {}", path.display(), e.description)))?;
+        let scene = ufbx::load_file(&path.to_string_lossy(), opts).map_err(|e| fbx_error(path, &e))?;
         let mut meta = path.as_os_str().to_owned();
         meta.push(".meta");
         let meta = std::fs::read_to_string(meta).unwrap_or_default();
@@ -139,7 +138,7 @@ impl ModelFile {
         let name = self
             .names
             .get(&file_id)
-            .ok_or_else(|| Error::new(format!("no mesh {file_id} in the model's .meta")))?;
+            .ok_or_else(|| Error::invalid(format!("no mesh {file_id} in the model's .meta")))?;
         let node = self
             .scene
             .nodes
@@ -152,7 +151,7 @@ impl ModelFile {
                     .meshes
                     .iter()
                     .find(|m| m.element.name == name.as_str())
-                    .ok_or_else(|| Error::new(format!("no mesh \"{name}\" in the model")))?,
+                    .ok_or_else(|| Error::invalid(format!("no mesh \"{name}\" in the model")))?,
                 None,
             ),
         };
@@ -177,7 +176,7 @@ impl ModelFile {
         let skin = mesh.skin_deformers.first();
         if let Some(skin) = skin {
             if skin.clusters.len() > u16::MAX as usize {
-                return Err(Error::new("too many skin joints"));
+                return Err(Error::unsupported("too many skin joints"));
             }
             let convert = |matrix: &ufbx::Matrix| {
                 let basis = glam::Mat4::from_cols(
@@ -207,7 +206,7 @@ impl ModelFile {
                 let bone = cluster
                     .bone_node
                     .as_ref()
-                    .ok_or_else(|| Error::new("skin cluster has no bone"))?;
+                    .ok_or_else(|| Error::invalid("skin cluster has no bone"))?;
                 data.joints.push(bone.element.typed_id as usize);
                 data.inverse_binds
                     .push(convert(&cluster.mesh_node_to_bone).to_cols_array());
@@ -855,6 +854,24 @@ fn convert_matrix_relative(
         };
         (convert(&mesh).inverse() * world).to_cols_array()
     }
+}
+
+/// An importer error for a failure of the FBX loader.
+fn fbx_error(path: &Path, e: &ufbx::Error) -> Error {
+    use ufbx::ErrorType as T;
+    let error = match e.type_ {
+        T::FileNotFound | T::Io => {
+            let kind = if e.type_ == T::FileNotFound {
+                std::io::ErrorKind::NotFound
+            } else {
+                std::io::ErrorKind::Other
+            };
+            Error::io(path, std::io::Error::new(kind, e.description.to_string()))
+        }
+        T::UnrecognizedFileFormat | T::FeatureDisabled => Error::unsupported(e.description.to_string()),
+        _ => Error::decode(e.description.to_string()),
+    };
+    error.at_path(path)
 }
 
 #[cfg(test)]

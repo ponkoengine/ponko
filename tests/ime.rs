@@ -35,7 +35,7 @@ fn form(ctx: &mut Ctx) {
         .layout(UiLayout::fixed(300.0, 30.0))
         .ime_allowed(false)
         .name("pin");
-    ctx.ui.push_screen(root, false);
+    ctx.ui.push_modeless(root);
 }
 
 /// A game with [`form`] that logs what field `field` shows each frame.

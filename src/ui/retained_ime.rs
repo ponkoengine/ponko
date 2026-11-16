@@ -86,7 +86,7 @@ impl Ui {
     /// let mut ui = Ui::default();
     /// let root = ui.add(UiWidget::Panel, UiLayout::auto());
     /// let name = ui.add_child(root, UiWidget::TextInput, UiLayout::auto());
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// assert!(!ui.wants_ime());
     /// ui.set_focus(name);
     /// assert!(ui.wants_ime());
@@ -104,7 +104,7 @@ impl Ui {
     /// let mut ui = Ui::default();
     /// let root = ui.add(UiWidget::Panel, UiLayout::auto());
     /// let name = ui.add_child(root, UiWidget::TextInput, UiLayout::fixed(200.0, 30.0));
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// ui.set_focus(name);
     /// let input = UiInput { preedit: "にほ".into(), composing: true, ..Default::default() };
     /// ui.frame(vec2(800.0, 600.0), &input);
@@ -180,7 +180,7 @@ impl Ui {
 
     /// The caret of the text input `id` as it is drawn, in window units.
     fn caret_area(&mut self, id: UiId) -> Rect {
-        let n = self.nodes[id.0].as_ref().unwrap();
+        let n = self.nodes[id.slot()].as_ref().unwrap();
         let layout = self.tree.layout(n.layout).unwrap();
         let font = if self.external_fonts {
             n.paint.font

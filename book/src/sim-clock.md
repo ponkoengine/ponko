@@ -215,3 +215,64 @@ works in `par_for_each` (C++: `each_par`).
 If the sim rate is lower than the frame rate, `ctx.time.fixed_alpha()` (0..1)
 tells a frame system how far it is between the last tick and the next, for
 interpolating positions when drawing.
+
+## Very long sessions
+
+A game left running for hours (a server, a kiosk, an idle game) keeps its
+clocks exact and its memory flat. The engine's tests hold it to this: ten
+simulated hours headless, ten hours of 144 Hz frames on a 60 Hz clock
+(`tests/long_session_time.rs`, `src/time.rs`), 200 000 ticks of a game that
+makes and frees everything it can (`tests/long_run.rs`) and 2000 drawn
+frames that do the same on the GPU.
+
+**The clocks.**
+
+- `sim_tick()` is a `u64` and `sim_time()` is `sim_tick() * fixed_dt` in
+  `f64`: after ten hours it is exact to the nanosecond, after a year to a
+  few nanoseconds. Nothing is added up, so nothing drifts.
+- `fixed_alpha()` comes from what is left over after the last tick, never
+  more than one step, so interpolation is as precise after a week as in the
+  first second. No step is ever lost: rounding can hold one back to the next
+  frame (`fixed_alpha()` then reads 1.0).
+- `elapsed()` adds up the frames' times in `f64`: within microseconds of the
+  real time after ten hours.
+- `dt()`, `sim_dt()` and `fixed_dt()` are per-step values and don't grow.
+
+**What loses precision: absolute time in an `f32`.** An `f32` holding
+seconds since the start steps in 3.9 ms after ten hours, 7.8 ms after a
+day, 31 ms after three days. That is what you get from
+`ctx.time.elapsed() as f32` in your own code, and what 3D material shaders
+see as their time (`frame.time.x`). For anything periodic (a blinking
+light, a scrolling texture, a bobbing pickup), wrap it before converting:
+`(ctx.time.elapsed() % period) as f32`. The engine's own looping clocks
+wrap the same way (sprite-sheet animations within their loop, camera
+shake every 4096 s) or count in `f64`: a 3D `Animator` and a 2D
+`Skeleton` keep their unwrapped normalized time (loops so far plus the
+fraction of this one, which exit times and events read) in `f64`, so a
+state looping for days poses, fires events and moves its root on
+schedule. Their `normalized_time()` hands it out as an `f32`, which steps
+coarsely after hours (a one-second loop in steps of 1/256 after ten);
+`normalized_time_f64()` reads it in full (Rust only: the C API reads the
+`f32`). Shader time has no such fix: wrapping it would make every effect
+that reads it jump once a period, so a shader with long-running motion
+wraps its own period (pass `(elapsed % period) as f32` in
+`MaterialDesc::custom`, for example).
+
+**Memory.** Entity ids, UI nodes, textures (render targets included),
+sounds, fonts, meshes, GPU buffers, collision meshes and instance cells
+reuse what was freed: the next one made takes a freed one's slot, under a
+new handle, so making and freeing them for hours holds memory where it
+was, and archetypes and the query cache stay as they are. No handle is
+given out twice: a slot is given out 4095 times and then retired, which
+costs a few hundred bytes per 4095 made (200 000 textures and sounds made
+and freed hold 5 KB more in the engine's test). A handle kept past its
+`free` stays dead: it never reaches what its slot holds next, and a sprite
+or material still showing a freed texture draws white. Materials,
+shaders, compute passes, screen effects and texture arrays never reuse an
+id: a freed one keeps a small table entry (a freed 3D material holds no
+GPU memory of its own), so make them once and change them
+(`ctx.gfx.update_material`) rather than making new ones all session.
+Popped UI screens keep their nodes until the game removes them (see
+[the screen stack](ui.md#screen-stack-and-modal-dialogs)). To check your own game, count with
+[`perf::net_alloc_bytes`](profiling.md#count-allocations) across a stretch
+of play and compare `ctx.live_counts()` before and after.

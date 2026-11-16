@@ -510,11 +510,7 @@ fn lit_and_unlit_features_render_on_skinned_and_instanced_geometry() {
                         ..Default::default()
                     };
                     let mut data = MeshData::plane(1.0);
-                    let skeleton = Skeleton::new(vec![Joint {
-                        name: "root".into(),
-                        parent: None,
-                        rest: Transform3D::default(),
-                    }]);
+                    let skeleton = Skeleton::new(vec![Joint::new("root", None)]);
                     let material = rig.ctx.gfx.create_material(desc);
                     let mesh = if path == "skinned" {
                         data.joints = vec![[0; 4]; data.positions.len()];

@@ -75,12 +75,16 @@ fn headless_runs_neither_update_the_retained_ui_nor_run_frame_late_or_draw_steps
                 flex_shrink: 0.0,
                 ..Default::default()
             };
-            let root = ctx
-                .ui
-                .add(UiWidget::Panel, ponko::ui::UiLayout::custom(size(300.0, 200.0)));
-            ctx.ui
-                .add_child(root, UiWidget::Button, ponko::ui::UiLayout::custom(size(70.0, 30.0)));
-            ctx.ui.push_screen(root, false);
+            let root = ctx.ui.add(
+                UiWidget::Panel,
+                ponko::ui::UiLayout::unstable_custom(size(300.0, 200.0)),
+            );
+            ctx.ui.add_child(
+                root,
+                UiWidget::Button,
+                ponko::ui::UiLayout::unstable_custom(size(70.0, 30.0)),
+            );
+            ctx.ui.push_modeless(root);
             ctx.input.feed(InputEvent::Key(Key::Tab, true));
         });
     assert_eq!(*log.borrow(), ["sim", "sim"], "only simulation systems run");

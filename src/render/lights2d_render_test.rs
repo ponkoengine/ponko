@@ -192,7 +192,7 @@ impl Rig {
                 min: Vec2::ZERO,
                 max: Vec2::splat(SIZE as f32),
             };
-            frame.collect(world, view, ambient);
+            frame.collect(world, [view], ambient);
         }
         if frame.on {
             self.lights.prepare(
@@ -200,6 +200,7 @@ impl Rig {
                 &self.queue,
                 &frame,
                 projection,
+                std::iter::empty(),
                 [SIZE, SIZE],
                 normal_maps,
                 &self.textures,

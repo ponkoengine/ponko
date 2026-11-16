@@ -203,6 +203,11 @@ and sizes, occlusion and shadows, with the crossover the renderer uses:
 [STATIC_BATCHES.md](STATIC_BATCHES.md) (an offscreen renderer benchmark:
 `cargo test --release --lib --features 3d static_batch_benchmark -- --ignored --nocapture`).
 
+Instance cells streamed around a flying camera, one cell at a time against
+one batch made again, with upload time per cell and frame-time percentiles:
+[INSTANCE_CELLS.md](INSTANCE_CELLS.md) (an offscreen renderer benchmark:
+`cargo test --release --lib --features 3d instance_cells_benchmark -- --ignored --nocapture`).
+
 A whole 3D frame of ordinary models (prepare, record, submit, GPU), before
 and after the renderer's split into subsystems:
 [RENDERER_FRAME.md](RENDERER_FRAME.md) (an offscreen renderer benchmark:

@@ -8,6 +8,8 @@
 //! steps (in windowed games) a pose blended between the last two steps, so
 //! motion looks smooth at any frame rate.
 
+#![deny(missing_docs)]
+
 use std::sync::Mutex;
 
 use rapier3d::prelude as rp;
@@ -37,7 +39,7 @@ pub(crate) use ragdoll::{blend_back, pose_ragdolls};
 pub use streaming::{ColliderFocus, CollisionMeshData, TerrainCollider};
 
 pub use character::Character3D;
-pub use query::{Hit3D, QueryFilter3D};
+pub use query::{Hit3D, Penetration3D, PointHit3D, QueryFilter3D};
 pub use vehicle::{FrictionCurve, Vehicle3D, Wheel3D};
 
 /// The simulation rate [`Game::physics3d`](crate::game::Game::physics3d) sets,
@@ -106,6 +108,13 @@ impl RigidBody3D {
     }
 
     /// A body moved by gravity and collisions.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let crate_body = ponko::d3::RigidBody::dynamic();
+    /// assert_eq!(crate_body.kind, BodyKind::Dynamic);
+    /// assert_eq!(crate_body.gravity_scale, 1.0);
+    /// ```
     #[must_use]
     pub const fn dynamic() -> Self {
         Self {
@@ -121,6 +130,12 @@ impl RigidBody3D {
         }
     }
     /// A body that never moves (ground, walls, terrain).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let ground = ponko::d3::RigidBody::fixed();
+    /// assert_eq!(ground.kind, BodyKind::Fixed);
+    /// ```
     #[must_use]
     pub const fn fixed() -> Self {
         Self {
@@ -130,6 +145,12 @@ impl RigidBody3D {
     }
     /// A body only you move, through its [`Velocity3D`] or [`d3::Transform`](crate::d3::Transform)
     /// (platforms, doors). It pushes dynamic bodies and isn't pushed back.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let door = ponko::d3::RigidBody::kinematic();
+    /// assert_eq!(door.kind, BodyKind::Kinematic);
+    /// ```
     #[must_use]
     pub const fn kinematic() -> Self {
         Self {
@@ -260,12 +281,26 @@ impl CollisionGroups {
     pub const ALL: Self = Self::new(u32::MAX, u32::MAX);
 
     /// Member of `memberships`, touching `filter`.
+    ///
+    /// ```
+    /// use ponko::d3::CollisionGroups;
+    /// let player = CollisionGroups::new(1, u32::MAX);
+    /// assert_eq!((player.memberships, player.filter), (1, u32::MAX));
+    /// ```
     #[must_use]
     pub const fn new(memberships: u32, filter: u32) -> Self {
         Self { memberships, filter }
     }
 
     /// Whether colliders with these groups and `other` touch.
+    ///
+    /// ```
+    /// use ponko::d3::CollisionGroups;
+    /// let a = CollisionGroups::new(0b01, 0b10);
+    /// let b = CollisionGroups::new(0b10, 0b01);
+    /// assert!(a.touches(b) && b.touches(a));
+    /// assert!(!a.touches(a));
+    /// ```
     #[must_use]
     pub const fn touches(self, other: Self) -> bool {
         self.memberships & other.filter != 0 && other.memberships & self.filter != 0
@@ -335,17 +370,35 @@ impl Collider3D {
         }
     }
     /// A ball.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let ball = ponko::d3::Collider::sphere(0.5);
+    /// assert_eq!(ball.shape, ponko::d3::Shape::Sphere { radius: 0.5 });
+    /// ```
     #[must_use]
     pub fn sphere(radius: f32) -> Self {
         Self::of(Shape3D::Sphere { radius })
     }
     /// A box `size` wide, high and deep.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let wall = ponko::d3::Collider::cuboid(vec3(10.0, 3.0, 0.5));
+    /// assert_eq!(wall.shape, ponko::d3::Shape::Cuboid { size: vec3(10.0, 3.0, 0.5) });
+    /// ```
     #[must_use]
     pub fn cuboid(size: Vec3) -> Self {
         Self::of(Shape3D::Cuboid { size })
     }
     /// An upright capsule: `height` between the centers of its round ends
     /// (so `height + 2 × radius` tall).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let hero = ponko::d3::Collider::capsule(1.0, 0.3);
+    /// assert_eq!(hero.shape, ponko::d3::Shape::Capsule { height: 1.0, radius: 0.3 });
+    /// ```
     #[must_use]
     pub fn capsule(height: f32, radius: f32) -> Self {
         Self::of(Shape3D::Capsule { height, radius })
@@ -415,6 +468,12 @@ pub struct Velocity3D {
 
 impl Velocity3D {
     /// Moving at `linear`, not spinning.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let jump = ponko::d3::Velocity::linear(vec3(0.0, 6.0, 0.0));
+    /// assert_eq!(jump.angular, Vec3::ZERO);
+    /// ```
     #[must_use]
     pub const fn linear(linear: Vec3) -> Self {
         Self {
@@ -520,6 +579,34 @@ impl rp::EventHandler for Collector {
 /// [`Game::physics3d`](crate::game::Game::physics3d); then entities with
 /// [`RigidBody3D`], [`Collider3D`] and [`d3::Transform`](crate::d3::Transform) are simulated, and
 /// entities with [`Character3D`] and [`d3::Transform`](crate::d3::Transform) walk.
+///
+/// # Query rules
+///
+/// The 3D and 2D queries follow the same rules (every 3D query has a 2D
+/// form with the same name and arguments; a sphere is a circle there):
+///
+/// - **Direction.** Any non-zero direction works: it is normalized, so
+///   distances are in world units along it. A zero or non-finite direction
+///   finds nothing.
+/// - **Range.** `max_distance` may be `f32::INFINITY`; a negative or NaN
+///   one, or a non-finite origin or rotation, finds nothing.
+/// - **Starting inside.** A ray that starts inside a collider hits it at
+///   distance 0, at the origin, with a zero normal. A shape cast that starts
+///   touching or overlapping a collider hits it at distance 0, with the
+///   contact point and the normal that pushes the shape out.
+/// - **Order.** Lists of hits come nearest first; equal distances are
+///   ordered by entity id ([`Entity::to_bits`], lowest first).
+///   [`penetrations`](Self::penetrations) come deepest first, equal depths
+///   by entity id. Overlap lists come in no particular order. A single-hit
+///   query with two hits at exactly the same distance returns either one.
+/// - **Sizes.** A radius or size below `f32::EPSILON` (or NaN) counts as
+///   that tiny shape.
+/// - **Filter.** Every query takes a [`QueryFilter3D`]: solid colliders in
+///   every group by default, no sensors. `.exclude(e)` looks through one
+///   entity, `.groups(g)` sees what a collider in those groups would touch,
+///   `.with_sensors()` sees sensors too.
+/// - **Timing.** Queries see the world as the last physics step left it: a
+///   body spawned or moved this tick is seen after the next step.
 pub struct Physics3D {
     world: rp::PhysicsWorld,
     joints: Vec<joints::Link>,
@@ -608,6 +695,13 @@ impl Physics3D {
 
     /// Physics pulling everything by `gravity` (meters/s²; `vec3(0.0, -9.81, 0.0)`
     /// is Earth's).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let physics = ponko::d3::Physics::new(vec3(0.0, -9.81, 0.0));
+    /// assert_eq!(physics.gravity().y, -9.81);
+    /// assert_eq!(physics.body_count(), 0);
+    /// ```
     #[must_use]
     pub fn new(gravity: Vec3) -> Self {
         Self {
@@ -662,10 +756,23 @@ impl Physics3D {
     }
 
     /// The pull on every dynamic body and character.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let physics = ponko::d3::Physics::new(Vec3::ZERO);
+    /// assert_eq!(physics.gravity(), Vec3::ZERO);
+    /// ```
     pub fn gravity(&self) -> Vec3 {
         self.gravity
     }
     /// Changes the pull on every dynamic body and character.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut physics = ponko::d3::Physics::new(Vec3::ZERO);
+    /// physics.set_gravity(vec3(0.0, -1.62, 0.0)); // the moon
+    /// assert_eq!(physics.gravity().y, -1.62);
+    /// ```
     pub fn set_gravity(&mut self, gravity: Vec3) {
         self.gravity = gravity;
     }
@@ -715,6 +822,19 @@ impl Physics3D {
     }
 
     /// How many bodies are simulated (characters included).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// struct Bodies(usize);
+    /// fn count(ctx: &mut Ctx) {
+    ///     let n = ctx.physics3d.body_count();
+    ///     ctx.world.insert_resource(Bodies(n));
+    /// }
+    /// let world = Game::new("t", 1, 1).physics3d(Vec3::ZERO).sim_system(count).run_headless(3, |ctx| {
+    ///     ctx.world.spawn((ponko::d3::Transform::default(), ponko::d3::RigidBody::dynamic(), ponko::d3::Collider::sphere(0.5)));
+    /// });
+    /// assert_eq!(world.resource::<Bodies>().0, 1);
+    /// ```
     pub fn body_count(&self) -> usize {
         self.world.bodies.len()
     }
@@ -733,6 +853,22 @@ impl Physics3D {
     /// Pushes a dynamic body once (an explosion, a kick), in kg × m/s at its
     /// center of mass. Returns false if `e` isn't a physics body (yet:
     /// bodies join at the next physics step).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// struct Ball(Entity);
+    /// struct Kicked(bool);
+    /// fn kick(ctx: &mut Ctx) {
+    ///     let ball = ctx.world.resource::<Ball>().0;
+    ///     let kicked = ctx.physics3d.apply_impulse(ball, vec3(5.0, 0.0, 0.0));
+    ///     ctx.world.insert_resource(Kicked(kicked));
+    /// }
+    /// let world = Game::new("t", 1, 1).physics3d(Vec3::ZERO).sim_system(kick).run_headless(3, |ctx| {
+    ///     let ball = ctx.world.spawn((ponko::d3::Transform::default(), ponko::d3::RigidBody::dynamic(), ponko::d3::Collider::sphere(0.5)));
+    ///     ctx.world.insert_resource(Ball(ball));
+    /// });
+    /// assert!(world.resource::<Kicked>().0);
+    /// ```
     pub fn apply_impulse(&mut self, e: Entity, impulse: Vec3) -> bool {
         let Some(link) = self.link(e) else { return false };
         let handle = link.body;
@@ -761,6 +897,22 @@ impl Physics3D {
 
     /// The mass of a body in kg (from its collider's density and volume,
     /// or [`RigidBody3D::mass`]).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// struct Ball(Entity);
+    /// struct Weight(Option<f32>);
+    /// fn weigh(ctx: &mut Ctx) {
+    ///     let ball = ctx.world.resource::<Ball>().0;
+    ///     let mass = ctx.physics3d.mass(ball);
+    ///     ctx.world.insert_resource(Weight(mass));
+    /// }
+    /// let world = Game::new("t", 1, 1).physics3d(Vec3::ZERO).sim_system(weigh).run_headless(3, |ctx| {
+    ///     let ball = ctx.world.spawn((ponko::d3::Transform::default(), ponko::d3::RigidBody::dynamic(), ponko::d3::Collider::sphere(0.5)));
+    ///     ctx.world.insert_resource(Ball(ball));
+    /// });
+    /// assert!(world.resource::<Weight>().0.unwrap() > 0.0);
+    /// ```
     pub fn mass(&self, e: Entity) -> Option<f32> {
         let link = self.link(e)?;
         self.world.bodies.get(link.body).map(|b| b.mass())
@@ -776,6 +928,23 @@ impl Physics3D {
     /// Where a body is as of the last physics step: what [`d3::Transform`](crate::d3::Transform)
     /// holds right after the step (between steps it holds a blend of the
     /// last two, for drawing).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// struct Ball(Entity);
+    /// struct Where(Option<Vec3>);
+    /// fn look(ctx: &mut Ctx) {
+    ///     let ball = ctx.world.resource::<Ball>().0;
+    ///     let at = ctx.physics3d.position(ball);
+    ///     ctx.world.insert_resource(Where(at));
+    /// }
+    /// let world = Game::new("t", 1, 1).physics3d(Vec3::ZERO).sim_system(look).run_headless(3, |ctx| {
+    ///     let at = ponko::d3::Transform::at(vec3(1.0, 2.0, 3.0));
+    ///     let ball = ctx.world.spawn((at, ponko::d3::RigidBody::dynamic(), ponko::d3::Collider::sphere(0.5)));
+    ///     ctx.world.insert_resource(Ball(ball));
+    /// });
+    /// assert_eq!(world.resource::<Where>().0, Some(vec3(1.0, 2.0, 3.0)));
+    /// ```
     pub fn position(&self, e: Entity) -> Option<Vec3> {
         self.link(e).map(|l| l.curr.position)
     }
@@ -872,9 +1041,24 @@ impl Physics3D {
     /// Whether `mesh` is a live mesh of this world, as
     /// [`Ctx::is_live`](crate::ctx::Ctx::is_live) tells. False for
     /// [`Handle::NONE`](crate::handle::Handle::NONE).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let physics = ponko::d3::Physics::default();
+    /// assert!(!physics.is_live(Handle::NONE));
+    /// ```
     #[must_use]
     pub fn is_live(&self, mesh: CollisionMesh) -> bool {
         self.mesh(mesh).is_some()
+    }
+
+    /// The box `mesh` fills, around the entity's position in its frame:
+    /// its smallest and largest corner. `None` for a freed mesh. For debug
+    /// drawing's collider view.
+    pub(crate) fn mesh_bounds(&self, mesh: CollisionMesh) -> Option<(Vec3, Vec3)> {
+        let slot = self.mesh(mesh)?;
+        let aabb = slot.shape.as_ref()?.compute_local_aabb();
+        Some((from_rp(aabb.mins) + slot.offset, from_rp(aabb.maxs) + slot.offset))
     }
 
     /// How many collision meshes are live.
@@ -1487,6 +1671,7 @@ mod tests {
     fn frame(ctx: &mut Ctx, alpha: f32) {
         ctx.begin_frame(FrameTiming {
             dt: 0.01,
+            seconds: 0.01,
             fixed_steps: 0,
             alpha,
         });

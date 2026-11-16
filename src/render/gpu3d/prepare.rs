@@ -49,9 +49,16 @@ impl Renderer3D {
         let view = self.prepare_view(device, queue, scene, lut, window);
         let gi_frame = frame.gi.as_deref().filter(|_| self.frame_sources.gi);
         self.prepare_gi(device, queue, gi_frame);
+        // A reload changes every view's shading: each window view drops
+        // its history too, the next time it draws.
+        if self.history.content_changed {
+            for v in &mut self.extra_views {
+                v.content_changed();
+            }
+        }
         let (rebuild, previous_view_proj) = self.begin_history(scene, &view);
         self.prepare_screen_passes(device, queue, scene, &view);
-        let total = self.prepare_lists(device, queue, scene, gi_frame);
+        let total = self.prepare_lists(device, queue, scene, &frame.skins, gi_frame);
         if !self.upload_instances(device, queue, frame, gi_frame, total) {
             return;
         }
@@ -61,6 +68,49 @@ impl Renderer3D {
         self.stencil_read_only = self.stencil.any() && self.splits_transparent();
         self.advance_history(queue, scene, &view, previous_view_proj);
         self.prepare_occlusion(device, queue, scene, &view);
+    }
+
+    /// [`prepare`](Self::prepare) for a window view (see `views.rs`), with
+    /// its state swapped in and `self.extra` set: the view's camera, post
+    /// settings, history, lists, instances, lights and targets. It reads
+    /// the main frame's shadow maps (`scene.frame` carries their cascades),
+    /// skinned poses and global illumination (from `main`, the main
+    /// frame), and leaves everything the main frame updates for all views
+    /// alone.
+    pub(super) fn prepare_extra(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        input: &Prepare3D<'_>,
+        main: &Frame3D,
+    ) {
+        let skins = &main.skins;
+        let gi_frame = main
+            .gi
+            .as_deref()
+            .filter(|_| self.frame_sources.gi && self.gi.is_some());
+        let &Prepare3D {
+            scene,
+            lut,
+            size: window,
+        } = input;
+        let &Scene3D { frame, .. } = scene;
+        let view = self.prepare_view(device, queue, scene, lut, window);
+        let (rebuild, previous_view_proj) = self.begin_history(scene, &view);
+        self.prepare_screen_passes(device, queue, scene, &view);
+        let total = self.prepare_lists(device, queue, scene, skins, None);
+        if !self.upload_instances(device, queue, frame, None, total) {
+            return;
+        }
+        self.finish_static(device, queue);
+        let rebind = self.bind_decal_array(frame.decal_array);
+        if self.lights.upload(device, queue, &frame.lights, &frame.decals) || rebind {
+            self.frame_bind_group = self.frame_sources.bind_group(device, &self.frame_buffer, &self.lights);
+        }
+        self.upload_uniforms(device, queue, scene, &view, previous_view_proj, gi_frame);
+        self.prepare_targets(device, &view, rebuild);
+        self.stencil_read_only = self.stencil.any() && self.splits_transparent();
+        self.advance_history(queue, scene, &view, previous_view_proj);
     }
 
     /// Switches between adapter-supported multisampled counts at a frame
@@ -107,7 +157,7 @@ impl Renderer3D {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: self.shaders.depth_format(),
                 depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_compare: Some(super::SCENE_DEPTH_NEARER_OR_EQUAL),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -257,6 +307,7 @@ impl Renderer3D {
         self.lists.moved_runs.clear();
         self.particles
             .prepare(device, queue, &frame.particles, view_proj, scene.camera);
+        self.prepare_debug_lines(device, queue, &frame.debug_lines, view_proj, size);
         let ao_on = post.ambient_occlusion.enabled
             && post.ambient_occlusion.radius.is_finite()
             && post.ambient_occlusion.intensity.is_finite()
@@ -489,6 +540,7 @@ impl Renderer3D {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         scene: &Scene3D<'_>,
+        skins: &crate::three::SkinFrame,
         gi_frame: Option<&crate::three::gi::GiFrame>,
     ) -> usize {
         let &Scene3D {
@@ -498,6 +550,7 @@ impl Renderer3D {
             occlusion,
             ..
         } = scene;
+        let extra = self.extra;
         // A sky shader takes the place of the atmosphere and the flat sky.
         self.sky_shader = sky.shader.map(|s| s.id).filter(|&id| self.has_sky_shader(id));
         self.atmosphere = sky.atmosphere || self.sky_shader.is_some();
@@ -517,12 +570,12 @@ impl Renderer3D {
         // Skinned models carry their own: listed only when one has any.
         self.lists.skin_overrides.clear();
         let none = MaterialOverride::NONE;
-        if frame.skins.draws.iter().any(|d| (d.material, d.parts) != none) {
+        if skins.draws.iter().any(|d| (d.material, d.parts) != none) {
             let offset = self.lists.override_parts.len() as u32;
-            self.lists.override_parts.extend_from_slice(&frame.skins.part_materials);
+            self.lists.override_parts.extend_from_slice(&skins.part_materials);
             self.lists
                 .skin_overrides
-                .extend(frame.skins.draws.iter().map(|d| MaterialOverride {
+                .extend(skins.draws.iter().map(|d| MaterialOverride {
                     mesh: d.mesh,
                     material: d.material,
                     parts: (d.parts.0 + offset, d.parts.1),
@@ -551,9 +604,12 @@ impl Renderer3D {
             &self.shaders.layout,
             |i| custom.skips(Stage::TargetEffect, i),
         );
-        self.lists.cascades = frame.cascades;
-        self.lists.redrawn = frame.redrawn;
-        self.lists.light_views = frame.light_views;
+        // A window view draws no shadow map: it reads the main frame's.
+        self.lists.cascades = if extra { 0 } else { frame.cascades };
+        // Every cascade is drawn unless its map already holds what it would
+        // draw (see `plan_shadows`).
+        self.lists.redrawn = (1 << self.lists.cascades) - 1;
+        self.lists.light_views = if extra { 0 } else { frame.light_views };
         self.lists.light_tiles.clear();
         self.lists.light_tiles.extend_from_slice(&frame.lights.shadow_tiles);
         for (mine, theirs) in self.lists.shadow_runs.iter_mut().zip(&frame.shadow_runs) {
@@ -566,6 +622,13 @@ impl Renderer3D {
         let mut computes = std::mem::take(&mut self.lists.scene_computes);
         self.list_computes(device, &frame.scene_computes, Stage::SceneCompute, &mut computes);
         self.lists.scene_computes = computes;
+        if extra {
+            // The game's compute passes and target effects run once, in the
+            // main frame.
+            self.lists.computes.clear();
+            self.lists.scene_computes.clear();
+            self.effects.target_frame.clear();
+        }
         // Target cameras' instances follow the main view's in one buffer,
         // then those of global illumination's probe views.
         let total = frame.instances.len()
@@ -574,8 +637,10 @@ impl Renderer3D {
         let mut views = std::mem::take(&mut self.lists.views);
         let mut used = 0;
         let mut offset = frame.instances.len() as u32;
-        self.particles.begin_targets();
-        for (camera_index, view) in frame.views.iter().enumerate() {
+        if !extra {
+            self.particles.begin_targets();
+        }
+        for (camera_index, view) in frame.views.iter().enumerate().filter(|_| !extra) {
             let Some(target) = self.render_targets.view_target(
                 device,
                 view.target,
@@ -608,7 +673,9 @@ impl Renderer3D {
         }
         views.truncate(used);
         self.lists.views = views;
-        self.particles.end_targets();
+        if !extra {
+            self.particles.end_targets();
+        }
         self.lists.gi_runs.clear();
         self.lists.gi_face_runs.clear();
         self.lists.gi_faces.clear();
@@ -618,7 +685,14 @@ impl Renderer3D {
             self.lists.gi_face_runs.extend(g.face_runs.iter().map(moved));
             self.lists.gi_faces.extend_from_slice(&g.faces);
         }
-        // Skinned models: only those some pass draws are posed.
+        // Skinned models: only those some pass draws are posed (by the
+        // main frame, for every view).
+        if extra {
+            self.order_runs();
+            self.sort_blended(&frame.instances, camera, total as u32);
+            self.order_solid_parts(&frame.instances, camera);
+            return total + self.lists.blended.len();
+        }
         let real = self.resources.meshes.len() as u32;
         let mut drawn = std::mem::take(&mut self.lists.skin_drawn);
         drawn.clear();
@@ -676,6 +750,7 @@ impl Renderer3D {
             && total == 0
             && frame.particles.instances.is_empty()
             && frame.particles.strips.runs.is_empty()
+            && frame.debug_lines.is_empty()
         {
             self.too_many = false;
             return false;
@@ -853,7 +928,9 @@ impl Renderer3D {
             sun_view_proj: frame.sun_view_proj.map(|m| m.to_cols_array_2d()),
             caster_view_proj: Mat4::IDENTITY.to_cols_array_2d(),
             camera: camera.extend(1.0).to_array(),
-            sun_dir: sun.extend(0.0).to_array(),
+            // w: how much a contact-hardening shadow's edge widens per
+            // unit of distance from its caster (0 with the other filters).
+            sun_dir: sun.extend(lighting.penumbra_per_distance()).to_array(),
             sun_color: light.sun.extend(0.0).to_array(),
             sky: ambient(light.sky),
             ground: ambient(light.ground),
@@ -981,6 +1058,12 @@ impl Renderer3D {
             authored_ambient && self.atmosphere,
             [uniform.sky, uniform.ground, equator],
         );
+        sync_frame(queue, &self.frame_buffer, 0, &mut self.frame_mirror, &uniform);
+        if self.extra {
+            // A window view: its frame alone; the probes, target cameras
+            // and shadow views are the main frame's.
+            return;
+        }
         self.environment.upload(device, queue, &frame.probe_uploads);
         self.environment.bakes.clear();
         self.environment.bakes.extend_from_slice(&frame.probe_bakes);
@@ -988,7 +1071,6 @@ impl Renderer3D {
         self.environment.refresh.clear();
         self.environment.refresh.extend_from_slice(&frame.probe_refresh);
         self.environment.prepare_refresh(device, &self.render_targets.textures);
-        sync_frame(queue, &self.frame_buffer, 0, &mut self.frame_mirror, &uniform);
         // Each target camera's frame: the same, seen from it.
         for view in &frame.views {
             let Some(target) = self.render_targets.views.iter().position(|&(id, _)| id == view.target) else {
@@ -1029,7 +1111,7 @@ impl Renderer3D {
         }
         // Global illumination's probe views: the same, from each probe, lit
         // by their own sun shadow map (one cascade around the grid, not
-        // fading out), without point and spot light shadows.
+        // fading out) and the main view's point and spot light shadows.
         if let (Some(g), Some(gi)) = (gi_frame, &mut self.gi) {
             let mut theirs = uniform;
             theirs.cluster_depth = cluster_depth(&g.capture);
@@ -1040,7 +1122,6 @@ impl Renderer3D {
             theirs.shadow = [1.0, 1.0 / GI_SHADOW_SIZE as f32, 1.5, f32::MAX];
             theirs.sun_view_proj[0] = g.sun_view_proj.to_cols_array_2d();
             theirs.cascade_texel[0] = g.sun_texel;
-            theirs.light_shadow[0] = 0.0;
             for (i, view_proj) in g.face_view_proj.iter().enumerate() {
                 let probe = g.updates[i / 6].position;
                 theirs.view_proj = view_proj.to_cols_array_2d();
@@ -1145,5 +1226,34 @@ impl Renderer3D {
             self.history.camera = Some(unjittered);
             self.history.time = Some(time);
         }
+    }
+}
+
+impl Renderer3D {
+    /// Uploads `ctx.debug`'s 3D lines (see `debug_lines.rs`), making the
+    /// pipelines the first time there are some, and again when the scene's
+    /// sample count or depth format changed.
+    fn prepare_debug_lines(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        lines: &crate::debug::GpuLines,
+        view_proj: Mat4,
+        size: (u32, u32),
+    ) {
+        let made_for = (self.samples, self.shaders.depth_format());
+        if self.debug_lines.as_ref().is_some_and(|l| l.made_for != made_for) {
+            self.debug_lines = None;
+        }
+        if self.debug_lines.is_none() && lines.is_empty() {
+            return;
+        }
+        self.debug_lines
+            .get_or_insert_with(|| {
+                Box::new(super::super::debug_lines::DebugLines::new(
+                    device, made_for.0, made_for.1,
+                ))
+            })
+            .prepare(device, queue, lines, view_proj, size);
     }
 }

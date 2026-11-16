@@ -54,6 +54,11 @@ pub(super) struct FrameLists {
     pub(super) gi_runs: Vec<Run>,
     pub(super) gi_face_runs: Vec<Run>,
     pub(super) gi_faces: Vec<(u32, u32)>,
+    /// The instance batches' first visibility slot for the probes: their
+    /// sun shadow map's, then one per face direction, then one per view in
+    /// `gi_faces` order (see `GiFrame::batch_views`). None when no probe
+    /// updates.
+    pub(super) gi_batch_slot: Option<usize>,
     /// The compute passes, in order: (compute, index into the render
     /// targets' `computes` or a GPU buffer id with the top bit set, material).
     pub(super) computes: Vec<(u32, usize, u32)>,
@@ -95,6 +100,7 @@ impl Default for FrameLists {
             gi_runs: Vec::new(),
             gi_face_runs: Vec::new(),
             gi_faces: Vec::new(),
+            gi_batch_slot: None,
             computes: Vec::new(),
             scene_computes: Vec::new(),
             skin_drawn: Vec::new(),

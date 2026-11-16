@@ -178,7 +178,7 @@ impl Rig {
             .layout(UiLayout::auto().width(240.0))
             .id();
         ctx.ui.set_rich(label, rich);
-        ctx.ui.push_screen(root, false);
+        ctx.ui.push_modeless(root);
         ctx.ui.layout(vec2(SIZE.0 as f32, SIZE.1 as f32));
         ctx.draw_retained_ui();
         self.shot(ctx)

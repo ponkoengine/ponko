@@ -79,11 +79,7 @@ fn rig(joints: &[(&str, Option<usize>, Vec3, Quat)]) -> Skeleton {
                         }
                     }
                 };
-                Joint {
-                    name: name.into(),
-                    parent,
-                    rest,
-                }
+                Joint::new(name, parent).with_rest(rest)
             })
             .collect(),
     )
@@ -195,13 +191,13 @@ fn walk(s: &Skeleton) -> AnimationClip {
     for &t in &times {
         hips.push(vec3(0.0, HIP_HEIGHT + 0.01 * (4.0 * PI * t).cos(), SPEED * t).extend(0.0));
     }
-    tracks.push(JointAnimation {
-        joint: 0,
-        name: s.joints()[0].name.clone(),
-        translation: Some(AnimationTrack::new(times.clone(), hips.clone(), Interpolation::Linear)),
-        rotation: None,
-        scale: None,
-    });
+    tracks.push(
+        JointAnimation::new(0, s.joints()[0].name.clone()).with_translation(AnimationTrack::new(
+            times.clone(),
+            hips.clone(),
+            Interpolation::Linear,
+        )),
+    );
     for (side, offset, x) in [("Left", 0.0, 0.1), ("Right", 0.5, -0.1)] {
         let find = |part: &str| s.find(&format!("mixamorig:{side}{part}")).unwrap();
         let (up, knee, foot, arm) = (find("UpLeg"), find("Leg"), find("Foot"), find("Arm"));
@@ -226,13 +222,13 @@ fn walk(s: &Skeleton) -> AnimationClip {
             )));
         }
         for (joint, values) in [(up, ru), (knee, rk), (foot, rf), (arm, ra)] {
-            tracks.push(JointAnimation {
-                joint,
-                name: s.joints()[joint].name.clone(),
-                translation: None,
-                rotation: Some(AnimationTrack::new(times.clone(), values, Interpolation::Linear)),
-                scale: None,
-            });
+            tracks.push(
+                JointAnimation::new(joint, s.joints()[joint].name.clone()).with_rotation(AnimationTrack::new(
+                    times.clone(),
+                    values,
+                    Interpolation::Linear,
+                )),
+            );
         }
     }
     AnimationClip::new("walk", s, tracks)
@@ -368,14 +364,8 @@ fn retargeted_clips_work_in_blend_trees_with_root_motion() {
     let (a, b, mut r) = retargeter();
     let walk_b = r.retarget(&walk(&a));
     let idle_b = r.retarget(&AnimationClip::new("idle", &a, vec![]));
-    let child = |clip: &AnimationClip| MotionChild {
-        motion: Motion::Clip(clip.clone()),
-        time_scale: 1.0,
-    };
-    let tree = Motion::Blend1D {
-        parameter: ParamId(0),
-        children: vec![(0.0, child(&idle_b)), (1.0, child(&walk_b))],
-    };
+    let child = |clip: &AnimationClip| MotionChild::new(Motion::Clip(clip.clone()));
+    let tree = Motion::blend_1d(ParamId(0), vec![(0.0, child(&idle_b)), (1.0, child(&walk_b))]);
     let mut animator = Animator::new(graph(
         vec![AnimationState::new(tree)],
         vec![AnimationParameter::Float(1.0)],
@@ -419,17 +409,15 @@ fn retargeted_clips_work_in_masked_layers() {
     let wave_a = AnimationClip::new(
         "wave",
         &a,
-        vec![JointAnimation {
-            joint: a.find("mixamorig:LeftArm").unwrap(),
-            name: "mixamorig:LeftArm".into(),
-            translation: None,
-            rotation: Some(AnimationTrack::new(
-                vec![0.0],
-                vec![Vec4::from_array(Quat::from_rotation_z(1.2).to_array())],
-                Interpolation::Step,
-            )),
-            scale: None,
-        }],
+        vec![
+            JointAnimation::new(a.find("mixamorig:LeftArm").unwrap(), "mixamorig:LeftArm").with_rotation(
+                AnimationTrack::new(
+                    vec![0.0],
+                    vec![Vec4::from_array(Quat::from_rotation_z(1.2).to_array())],
+                    Interpolation::Step,
+                ),
+            ),
+        ],
     );
     let wave_b = r.retarget(&wave_a);
     let mut base = Animator::new(graph(vec![AnimationState::new(Motion::Clip(walk_b.clone()))], vec![]));
@@ -469,11 +457,7 @@ fn common_naming_schemes_are_detected() {
             names
                 .iter()
                 .enumerate()
-                .map(|(i, n)| Joint {
-                    name: (*n).into(),
-                    parent: i.checked_sub(1),
-                    rest: Transform::default(),
-                })
+                .map(|(i, n)| Joint::new(*n, i.checked_sub(1)))
                 .collect(),
         )
     };

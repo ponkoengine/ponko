@@ -17,7 +17,7 @@ fn tables() -> Strings {
     let mut strings = None;
     Game::new("t", 1, 1).run_headless(0, |ctx| {
         for table in LANGUAGES {
-            ctx.assets.load_strings(&mut ctx.world, table).unwrap();
+            ctx.assets.load_strings(&mut ctx.world, table);
         }
         strings = Some(ctx.world.resource::<Strings>().clone());
     });
@@ -117,7 +117,7 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
 fn the_language_button_switches_the_game_into_arabic_and_the_choice_is_kept() {
     let data = temp_dir("arabic");
     let world = switch_language_on_the_settings_screen(&data, "رجوع");
-    assert_eq!(*world.resource::<Screen>(), Screen::Title);
+    assert_eq!(screen(&world), Screen::Title);
     let strings = world.resource::<Strings>();
     assert_eq!(strings.language(), "ar");
     assert!(strings.is_rtl());

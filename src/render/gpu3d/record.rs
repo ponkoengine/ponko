@@ -92,7 +92,7 @@ impl Part {
 pub(super) struct FrameParts<'a, 't> {
     pub(super) view: &'a wgpu::TextureView,
     pub(super) clear: wgpu::Color,
-    pub(super) textures: &'a [GpuTexture],
+    pub(super) textures: &'a dyn TextureTable,
     pub(super) targets: &'a Targets,
     pub(super) split: bool,
     pub(super) time: &'a PassTimer<'a, 't>,
@@ -157,7 +157,7 @@ impl Renderer3D {
     pub(super) fn stencil_ops(&self, clear: Option<bool>) -> Option<wgpu::Operations<u32>> {
         let depth = clear.map(|clear| wgpu::Operations {
             load: if clear {
-                wgpu::LoadOp::Clear(1.0)
+                wgpu::LoadOp::Clear(super::SCENE_DEPTH_CLEAR)
             } else {
                 wgpu::LoadOp::Load
             },
@@ -289,6 +289,9 @@ impl Renderer3D {
 
     /// Records the occlusion depth grid's reduction, timed as a compute pass.
     pub(super) fn record_occlusion(&self, encoder: &mut wgpu::CommandEncoder, frame: &FrameParts<'_, '_>) {
+        if self.extra {
+            return; // the grid is the main camera's
+        }
         let timestamps = (frame.time)("occlusion depth").map(|t| wgpu::ComputePassTimestampWrites {
             query_set: t.query_set,
             beginning_of_pass_write_index: t.beginning_of_pass_write_index,
@@ -317,7 +320,7 @@ impl Renderer3D {
         device: &wgpu::Device,
         view: &wgpu::TextureView,
         clear: wgpu::Color,
-        textures: &[GpuTexture],
+        textures: &dyn TextureTable,
         timer: Option<&GpuTimer>,
     ) -> Vec<wgpu::CommandBuffer> {
         self.state_counters.take();
@@ -326,7 +329,9 @@ impl Renderer3D {
         };
         let time = |name| timer.and_then(|t| t.pass(name));
         let split = self.splits_transparent();
-        self.shadow_cache.recorded();
+        if !self.extra {
+            self.shadow_cache.recorded();
+        }
         let mut parts = Vec::with_capacity(8 + self.lists.cascades + self.lists.light_views);
         parts.push(Part::Prelude);
         for cascade in shadow_views(self.lists.cascades, self.lists.light_views) {
@@ -358,10 +363,11 @@ impl Renderer3D {
                 });
             }
         }
-        if !self.lists.views.is_empty() || self.environment.has_probes() {
+        // A window view (see `views.rs`) draws only its own camera's passes.
+        if !self.extra && (!self.lists.views.is_empty() || self.environment.has_probes()) {
             parts.push(Part::Views);
         }
-        if self.gi.as_ref().is_some_and(|g| g.update_count() > 0) {
+        if !self.extra && self.gi.as_ref().is_some_and(|g| g.update_count() > 0) {
             parts.push(Part::Gi);
         }
         parts.extend([Part::Prepass, Part::Opaque]);
@@ -415,6 +421,9 @@ impl Renderer3D {
         match part {
             Part::Prelude => {
                 self.cull_static(encoder, time);
+                if self.extra {
+                    return; // the main frame posed, computed and drew the sky
+                }
                 // Skinned models first: every pass draws them posed.
                 if self.skinning.has_work() {
                     passes::mark("skinning");
@@ -539,7 +548,7 @@ impl Renderer3D {
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: &targets.depth,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
+                            load: wgpu::LoadOp::Clear(super::SCENE_DEPTH_CLEAR),
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: self.stencil_ops(Some(true)),
@@ -597,15 +606,16 @@ impl Renderer3D {
                     }
                     self.draw_models(&mut pass, &self.lists.moved_runs, Kind::Velocity, self.moved.buffer());
                 }
+                // The trace first: GTAO's denoise copies its cone's spread.
+                if let (Some(ssr), Some(images)) = (&self.screen.ssr, &targets.ssr) {
+                    ssr.trace(encoder, images, &time);
+                }
                 if self.screen.ao_enabled {
                     self.screen
                         .ao
                         .as_ref()
                         .unwrap()
                         .draw(encoder, targets.ao.as_ref().unwrap(), time);
-                }
-                if let (Some(ssr), Some(images)) = (&self.screen.ssr, &targets.ssr) {
-                    ssr.trace(encoder, images, &time);
                 }
             }
             Part::Opaque => {
@@ -682,6 +692,7 @@ impl Renderer3D {
                     if !split {
                         self.draw_models(&mut pass, &self.lists.blended_runs, Kind::Transparent, &self.instances);
                         self.particles.draw(&mut pass, textures, self.resources.white);
+                        self.draw_debug_lines(&mut pass);
                     }
                 }
                 if let (Some(ssr), Some(images)) = (&self.screen.ssr, &targets.ssr) {
@@ -739,6 +750,7 @@ impl Renderer3D {
                     pass.set_bind_group(2, &targets.scene, &[]);
                     self.draw_models(&mut pass, &self.lists.blended_runs, Kind::Transparent, &self.instances);
                     self.particles.draw(&mut pass, textures, self.resources.white);
+                    self.draw_debug_lines(&mut pass);
                 }
             }
             Part::Post => self.record_post(encoder, frame),
@@ -772,8 +784,10 @@ impl Renderer3D {
             let offset = (self.shadows.stride * MAX_SHADOW_VIEWS as u64) as u32;
             pass.set_bind_group(0, &self.shadows.bind_group, &[offset]);
             pass.set_bind_group(2, &self.no_scene, &[]);
-            // Models only: instance batches are culled for the main camera.
             self.draw_model_runs(&mut pass, &self.lists.gi_runs, Kind::Shadow(0), &self.instances);
+            if let Some(slot) = self.lists.gi_batch_slot {
+                self.draw_static(&mut pass, Kind::Shadow(0), slot);
+            }
         }
         // Each view in its own square of the views image.
         let views = |pass: &mut wgpu::RenderPass<'_>, kind| {
@@ -790,6 +804,12 @@ impl Renderer3D {
                     kind,
                     &self.instances,
                 );
+                // The batches this view sees: those culled on the GPU in
+                // its face direction's slot, the others in its own.
+                if let Some(slot) = self.lists.gi_batch_slot {
+                    self.draw_static(pass, kind, slot + 1 + i % 6);
+                    self.draw_static(pass, kind, slot + crate::three::gi::GI_BATCH_FACES + i);
+                }
             }
         };
         let pass = |encoder: &mut wgpu::CommandEncoder, label, first: bool, timestamps, kind| {
@@ -809,7 +829,7 @@ impl Renderer3D {
                     view: &gi.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: if first {
-                            wgpu::LoadOp::Clear(1.0)
+                            wgpu::LoadOp::Clear(super::SCENE_DEPTH_CLEAR)
                         } else {
                             wgpu::LoadOp::Load
                         },
@@ -847,7 +867,7 @@ impl Renderer3D {
         batch_view: usize,
         clear: wgpu::Color,
         time: &PassTimer<'_, 't>,
-        particles: Option<(&super::super::particles::ParticleView, &[GpuTexture])>,
+        particles: Option<(&super::super::particles::ParticleView, &dyn TextureTable)>,
     ) {
         passes::mark("prepass");
         passes::mark("color");
@@ -858,7 +878,7 @@ impl Renderer3D {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &target.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(super::SCENE_DEPTH_CLEAR),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: self.stencil_ops(Some(true)),
@@ -1230,5 +1250,14 @@ impl Renderer3D {
         }
         self.state_counters.add(&n);
         self.shaders.cache.counters.looked_up(lookups);
+    }
+}
+
+impl Renderer3D {
+    /// `ctx.debug`'s 3D lines, last in the pass that draws the particles.
+    fn draw_debug_lines(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(lines) = &self.debug_lines {
+            lines.draw(pass);
+        }
     }
 }

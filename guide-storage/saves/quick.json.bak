@@ -1,0 +1,16 @@
+{
+  "entities": [
+    {
+      "components": {
+        "Palm": {
+          "height": 3.0
+        }
+      },
+      "entity": 0
+    }
+  ],
+  "format": "ponko-world",
+  "not_saved": {},
+  "resources": {},
+  "version": 1
+}

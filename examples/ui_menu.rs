@@ -64,7 +64,7 @@ pub fn build(ui: &mut Ui) -> Menu {
         .value(1.0)
         .id();
     let quit = ui.button(root, "Quit").layout(UiLayout::fixed(240.0, 40.0)).id();
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
 
     let dialog = ui
         .root()
@@ -96,7 +96,7 @@ pub fn react(ui: &mut Ui, menu: &Menu, event: UiEvent) -> bool {
             let name = ui.text(menu.name).unwrap_or_default().to_owned();
             ui.set_text(menu.status, format!("Started a run for {name}"));
         }
-        UiEvent::Clicked(id) if id == menu.quit => ui.push_screen(menu.dialog, true),
+        UiEvent::Clicked(id) if id == menu.quit => ui.push_modal(menu.dialog),
         UiEvent::Clicked(id) if id == menu.no => {
             ui.pop_screen();
         }

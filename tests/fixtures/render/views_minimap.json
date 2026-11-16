@@ -1,0 +1,17 @@
+{
+  "name": "views_minimap",
+  "scene": "A minimap: the red and green boxes on the grey floor seen from 2.4 up and 5 back of the red box, and in the top-right corner (48x48 from x = 80) a camera 40 up looking straight down with -z up (fov 0.5) that also draws a yellow marker above the red box on render layer 1, which the main camera leaves out; white sun, no shadows; 128x128, 4x multisampling, no tonemapping, no bloom.",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.0075,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "893ade6702c95fb3",
+  "reason": "New window-view scene: minimap"
+}

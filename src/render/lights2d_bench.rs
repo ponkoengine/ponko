@@ -323,7 +323,9 @@ impl Lights2DBench {
         // One batch: the sprites are already on the GPU, all one texture.
         let batches = [Batch {
             clip: None,
+            layers: 1,
             material: 0,
+            mesh: false,
             texture: 0,
             start: 0,
             end: self.sprites as u32,
@@ -336,7 +338,7 @@ impl Lights2DBench {
         let ambient = self.scene.lit.then_some(Color::rgb(0.1, 0.1, 0.15));
         // Unlit: what the engine does every frame for a game without
         // lights (finds none and turns nothing on).
-        self.frame.collect(&mut self.world, view, ambient);
+        self.frame.collect(&mut self.world, [view], ambient);
         let collect = collect_start.elapsed();
         if self.frame.on {
             self.lights.prepare(
@@ -344,6 +346,7 @@ impl Lights2DBench {
                 &self.queue,
                 &self.frame,
                 crate::ctx::screen_projection(Vec2::new(w, h)),
+                std::iter::empty(),
                 [self.scene.size.0, self.scene.size.1],
                 &self.normal_maps,
                 &self.textures,

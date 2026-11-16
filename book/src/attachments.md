@@ -45,8 +45,13 @@ one tick, whatever order the entities were spawned in.
 
 When the entity at the top of a chain is despawned, everything attached to
 it (directly or down the chain) is despawned in the same tick. A chain that
-loops back on itself, or is more than 64 links deep, is treated as broken
-and despawned too.
+loops back on itself is treated as broken and despawned too. Chains can be
+as deep as you like.
+
+Attachments are the links of the [entity hierarchy](hierarchy.md): each
+parent also keeps its children in order, and `World` has methods to
+reparent without moving (`set_parent`), reorder, walk the tree and despawn
+a whole subtree.
 
 ## Cost
 

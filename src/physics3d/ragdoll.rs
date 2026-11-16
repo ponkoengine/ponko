@@ -92,8 +92,8 @@ struct Bone {
 /// use ponko::prelude::*;
 /// Game::new("t", 1, 1).physics3d(vec3(0.0, -9.81, 0.0)).run_headless(1, |ctx| {
 ///     let skeleton = ponko::anim::Skeleton::new(vec![
-///         ponko::anim::Joint { name: "hips".into(), parent: None, rest: ponko::d3::Transform::at(vec3(0.0, 1.0, 0.0)) },
-///         ponko::anim::Joint { name: "head".into(), parent: Some(0), rest: ponko::d3::Transform::at(vec3(0.0, 0.8, 0.0)) },
+///         ponko::anim::Joint::new("hips", None).with_rest(ponko::d3::Transform::at(vec3(0.0, 1.0, 0.0))),
+///         ponko::anim::Joint::new("head", 0).with_rest(ponko::d3::Transform::at(vec3(0.0, 0.8, 0.0))),
 ///     ]);
 ///     let body = ctx.world.spawn((ponko::d3::Transform::default(), skeleton));
 ///     ctx.start_ragdoll(body, &[ponko::d3::RagdollBone::new("hips", 0.15), ponko::d3::RagdollBone::new("head", 0.1)]).unwrap();
@@ -117,7 +117,7 @@ impl Ragdoll3D {
     /// ```
     /// # use ponko::prelude::*;
     /// # Game::new("t", 1, 1).physics3d(Vec3::ZERO).run_headless(1, |ctx| {
-    /// # let skeleton = ponko::anim::Skeleton::new(vec![ponko::anim::Joint { name: "hips".into(), parent: None, rest: ponko::d3::Transform::default() }]);
+    /// # let skeleton = ponko::anim::Skeleton::new(vec![ponko::anim::Joint::new("hips", None)]);
     /// # let e = ctx.world.spawn((ponko::d3::Transform::default(), skeleton));
     /// ctx.start_ragdoll(e, &[ponko::d3::RagdollBone::new("hips", 0.15)]).unwrap();
     /// let hips = ctx.world.get::<ponko::d3::Ragdoll>(e).unwrap().body(0).unwrap();
@@ -131,7 +131,7 @@ impl Ragdoll3D {
     /// ```
     /// # use ponko::prelude::*;
     /// # Game::new("t", 1, 1).physics3d(Vec3::ZERO).run_headless(1, |ctx| {
-    /// # let skeleton = ponko::anim::Skeleton::new(vec![ponko::anim::Joint { name: "hips".into(), parent: None, rest: ponko::d3::Transform::default() }]);
+    /// # let skeleton = ponko::anim::Skeleton::new(vec![ponko::anim::Joint::new("hips", None)]);
     /// # let e = ctx.world.spawn((ponko::d3::Transform::default(), skeleton));
     /// # ctx.start_ragdoll(e, &[ponko::d3::RagdollBone::new("hips", 0.15)]).unwrap();
     /// for (joint, body) in ctx.world.get::<ponko::d3::Ragdoll>(e).unwrap().bodies() {
@@ -147,7 +147,7 @@ impl Ragdoll3D {
     /// ```
     /// # use ponko::prelude::*;
     /// # Game::new("t", 1, 1).physics3d(Vec3::ZERO).run_headless(1, |ctx| {
-    /// # let skeleton = ponko::anim::Skeleton::new(vec![ponko::anim::Joint { name: "hips".into(), parent: None, rest: ponko::d3::Transform::default() }]);
+    /// # let skeleton = ponko::anim::Skeleton::new(vec![ponko::anim::Joint::new("hips", None)]);
     /// # let e = ctx.world.spawn((ponko::d3::Transform::default(), skeleton));
     /// # ctx.start_ragdoll(e, &[ponko::d3::RagdollBone::new("hips", 0.15)]).unwrap();
     /// assert!(!ctx.world.get::<ponko::d3::Ragdoll>(e).unwrap().is_blending());
@@ -321,7 +321,7 @@ impl Ctx {
     /// ```
     /// # use ponko::prelude::*;
     /// # Game::new("t", 1, 1).physics3d(Vec3::ZERO).run_headless(1, |ctx| {
-    /// # let skeleton = ponko::anim::Skeleton::new(vec![ponko::anim::Joint { name: "hips".into(), parent: None, rest: ponko::d3::Transform::default() }]);
+    /// # let skeleton = ponko::anim::Skeleton::new(vec![ponko::anim::Joint::new("hips", None)]);
     /// # let e = ctx.world.spawn((ponko::d3::Transform::default(), skeleton));
     /// # ctx.start_ragdoll(e, &[ponko::d3::RagdollBone::new("hips", 0.15)]).unwrap();
     /// ctx.stop_ragdoll(e, 0.5); // half a second back to the animation

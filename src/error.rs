@@ -1,5 +1,6 @@
 //! The engine's one error type, [`Error`], and what kind of failure it is,
 //! [`ErrorKind`].
+#![deny(missing_docs)]
 
 use std::fmt;
 
@@ -95,18 +96,38 @@ impl Error {
     }
 
     /// What kind of failure this is.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let err = Error::new(ErrorKind::NotFound, "no such file");
+    /// assert_eq!(err.kind(), ErrorKind::NotFound);
+    /// ```
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         self.kind
     }
 
     /// The asset path (as passed to the call) when the error is about one.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let err = Error::new(ErrorKind::NotFound, "no such file");
+    /// assert_eq!(err.path(), None);
+    /// assert_eq!(err.with_path("a.png").path(), Some("a.png"));
+    /// ```
     #[must_use]
     pub fn path(&self) -> Option<&str> {
         self.path.as_deref()
     }
 
     /// The message for people, without the `ponko:` prefix.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let err = Error::new(ErrorKind::Invalid, "speed must be positive");
+    /// assert_eq!(err.message(), "speed must be positive"); // no `ponko:` prefix
+    /// assert_eq!(err.to_string(), "ponko: speed must be positive");
+    /// ```
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message

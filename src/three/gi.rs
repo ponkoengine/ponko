@@ -39,17 +39,19 @@ pub const MAX_GI_PROBES_PER_FRAME: u32 = 16;
 /// probe every `spacing` world units). Every frame, `probes_per_frame` of
 /// them look around: the nearest new probes first, then the ones whose
 /// last look is oldest, nearer ones more often. Each draws six small views
-/// of what's around it, lit by the sun (with shadows), point and spot
-/// lights, the sky and the probes' own light, so light bounces once more
-/// each time a probe looks again. Inside the grid, surfaces take this light
+/// of the opaque models and instance batches around it, lit by the sun,
+/// point and spot lights (each with its shadows), the sky and the probes'
+/// own light, so light bounces once more each time a probe looks again.
+/// Transparent surfaces and particles are left out. Inside the grid, surfaces take this light
 /// instead of the sky and ground ambient light; toward its edges it fades
 /// back to that. Probes only count where they can see the surface, which
 /// keeps light from leaking through walls thicker than about a tenth of the
 /// spacing.
 ///
 /// Cost: the probes' views are drawn on the GPU each frame (six per probe,
-/// 16x16 pixels each, of the models near the grid), and a shadow map of the
-/// grid's surroundings. Fewer probes per frame are cheaper but slower to
+/// 16x16 pixels each, of the models and instance batches near the grid),
+/// and a shadow map of the grid's surroundings. Point and spot light
+/// shadows come from the camera's own shadow maps. Fewer probes per frame are cheaper but slower to
 /// catch up when the light changes or the camera moves. The probes'
 /// memory is 8 bytes times 320 texels per probe (about 6.5 MB for the
 /// default 17x9x17 grid).
@@ -164,6 +166,13 @@ pub(crate) const GI_FACES: [(Vec3, Vec3); 6] = [
     (Vec3::Z, Vec3::Y),
     (Vec3::NEG_Z, Vec3::Y),
 ];
+/// Where each update's own views start in [`GiFrame::batch_views`], after
+/// the sun shadow map's and the six face directions'.
+pub(crate) const GI_BATCH_FACES: usize = 7;
+/// Instance batches leave out of a probe's view the instances narrower
+/// than one of its pixels: a bounding radius under this fraction of the
+/// distance to the probe (a view is 16 pixels across 90 degrees).
+pub(crate) const GI_SMALLEST: f32 = 1.0 / 16.0;
 /// A run split into more pieces than this for one view is drawn whole
 /// (from its first instance the view sees to its last).
 const MAX_PIECES: usize = 8;
@@ -324,6 +333,14 @@ pub(crate) struct GiFrame {
     /// texel's size in world units.
     pub sun_view_proj: Mat4,
     pub sun_texel: f32,
+    /// What the instance batches are culled for, for the probes: the sun
+    /// shadow map's view; one view per face direction ([`GI_FACES`] order)
+    /// holding that face of every probe updated this frame (for batches
+    /// culled on the GPU, whose every view keeps a list as long as the
+    /// batch); then each update's six views (as `faces`, for batches
+    /// culled on the CPU), with their probe. Cut off at the side of the
+    /// views' box ahead. None without updates.
+    pub batch_views: Vec<(Mat4, Option<Vec3>)>,
     probes: GiProbes,
     /// Each captured instance's bounding sphere in the world.
     spheres: Vec<Vec4>,
@@ -376,6 +393,8 @@ impl Frame3D {
         eye.fov_y = 2.0 * 0.5f32.atan();
         eye.near = above * 0.05;
         eye.far = above + 2.0 * half.y;
+        // Particles aren't drawn in the probes' views: not collected either.
+        eye.particles = false;
         let inner = Lighting {
             shadows: false,
             gi: GlobalIllumination {
@@ -386,6 +405,9 @@ impl Frame3D {
         };
         gi.capture.lod = self.lod;
         gi.capture.size_limit = self.size_limit;
+        // Lit by the main view's point and spot light shadows (its atlas is
+        // drawn before the probes' views): no shadow views of their own.
+        gi.capture.lights.share_shadows(&self.lights);
         gi.capture.collect(world, assets, skins, &eye, &inner);
         gi.capture_view_proj = eye.view_proj();
 
@@ -406,11 +428,60 @@ impl Frame3D {
         gi.sun_texel = texel;
 
         gi.cull_faces(assets);
+        gi.plan_batch_views(lo, hi);
         self.gi = Some(gi);
     }
 }
 
 impl GiFrame {
+    /// [`batch_views`](Self::batch_views), for the views' box `lo..hi`.
+    ///
+    /// A probe's face looking along `forward` sees a point at least as far
+    /// ahead of the probe as it lies to the side of it (a 90 degree view).
+    /// So every face of this frame's probes looking that way sees only
+    /// what a 90 degree view sees from behind them all: centred on them
+    /// across, as far behind the rearmost as they spread across. Each
+    /// face's own view reaches to the box's side ahead of it (models come
+    /// from that box too), not the whole way its depth goes.
+    fn plan_batch_views(&mut self, lo: Vec3, hi: Vec3) {
+        self.batch_views.clear();
+        if self.updates.is_empty() {
+            return;
+        }
+        self.batch_views.push((self.sun_view_proj, None));
+        let ahead = |forward: Vec3| Vec3::select(forward.cmpgt(Vec3::ZERO), hi, lo).dot(forward);
+        let perspective = |near: f32, far: f32| {
+            glam::camera::rh::proj::directx::perspective(std::f32::consts::FRAC_PI_2, 1.0, near, far)
+        };
+        for (forward, up) in GI_FACES {
+            let right = forward.cross(up);
+            // The probes in the face's own axes: ahead, right, up.
+            let (mut min, mut max) = (Vec3::INFINITY, Vec3::NEG_INFINITY);
+            for u in &self.updates {
+                let p = Vec3::new(u.position.dot(forward), u.position.dot(right), u.position.dot(up));
+                min = min.min(p);
+                max = max.max(p);
+            }
+            let center = (min + max) * 0.5;
+            let spread = 0.5 * (max.y - min.y).max(max.z - min.z);
+            let back = min.x - spread;
+            let eye = forward * back + right * center.y + up * center.z;
+            // The faces see from their near plane on, past the probes.
+            let near = spread + 0.5 * self.near;
+            let far = (ahead(forward) - back).max(2.0 * near);
+            let view = glam::camera::rh::view::look_to_mat4(eye, forward, up);
+            self.batch_views.push((perspective(near, far) * view, None));
+        }
+        for update in &self.updates {
+            for (forward, up) in GI_FACES {
+                let far = (ahead(forward) - update.position.dot(forward)).max(2.0 * self.near);
+                let view = glam::camera::rh::view::look_to_mat4(update.position, forward, up);
+                self.batch_views
+                    .push((perspective(self.near, far) * view, Some(update.position)));
+            }
+        }
+    }
+
     /// Each update's six views and what each of them draws: the runs of
     /// `capture` cut down to the instances inside the view.
     fn cull_faces(&mut self, assets: &Assets3D) {
@@ -446,8 +517,8 @@ impl GiFrame {
         self.faces.clear();
         self.face_runs.clear();
         self.face_view_proj.clear();
-        let projection =
-            glam::camera::rh::proj::directx::perspective(std::f32::consts::FRAC_PI_2, 1.0, self.near, self.far);
+        // Reverse-Z, as every view drawn into the scene depth's format.
+        let projection = super::reverse_z_perspective(std::f32::consts::FRAC_PI_2, 1.0, self.near, self.far);
         let far = self.far;
         for update in &self.updates {
             let probe = update.position;
@@ -502,6 +573,7 @@ impl GlobalIllumination {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::vec3;
 
     #[test]
     fn probe_counts_follow_extent_and_spacing_within_limits() {
@@ -587,6 +659,73 @@ mod tests {
         let fresh = out.iter().filter(|u| u.keep == 0.0).count();
         assert_eq!(fresh, 15);
         assert!(out.iter().all(|u| u.position.x == 3.0));
+    }
+
+    #[test]
+    fn batch_views_hold_everything_the_probes_faces_see() {
+        let mut gi = GiFrame {
+            near: 0.05,
+            ..Default::default()
+        };
+        let (lo, hi) = (Vec3::new(-9.0, -5.0, -9.0), Vec3::new(9.0, 7.0, 9.0));
+        // Probes spread apart, as the oldest ones are, not only clustered.
+        for (i, p) in [vec3(0.0, 0.0, 0.0), vec3(4.0, 2.0, -3.0), vec3(-6.0, -1.0, 5.0)]
+            .into_iter()
+            .enumerate()
+        {
+            gi.updates.push(GiUpdate {
+                slot: i as u32,
+                position: p,
+                code: 1.0,
+                keep: 0.0,
+            });
+        }
+        gi.plan_batch_views(lo, hi);
+        assert_eq!(
+            gi.batch_views.len(),
+            GI_BATCH_FACES + 6 * 3,
+            "the sun's, each face direction's, then each probe face's"
+        );
+        let inside = |m: Mat4, p: Vec3| {
+            let c = m * p.extend(1.0);
+            let slack = 1e-3 * c.w.abs() + 1e-4;
+            c.w > 0.0 && c.x.abs() <= c.w + slack && c.y.abs() <= c.w + slack && c.z >= -slack && c.z <= c.w + slack
+        };
+        let mut seed = 3u32;
+        let mut random = move || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as f32 / (1 << 24) as f32
+        };
+        let mut seen = 0;
+        for _ in 0..20_000 {
+            let p = lo + (hi - lo) * Vec3::new(random(), random(), random());
+            for (k, u) in gi.updates.iter().enumerate() {
+                for (face, (forward, up)) in GI_FACES.iter().enumerate() {
+                    let d = p - u.position;
+                    let ahead = d.dot(*forward);
+                    let sees =
+                        ahead >= gi.near && d.dot(forward.cross(*up)).abs() <= ahead && d.dot(*up).abs() <= ahead;
+                    if sees {
+                        seen += 1;
+                        assert!(
+                            inside(gi.batch_views[GI_BATCH_FACES + 6 * k + face].0, p),
+                            "face {face} of the probe at {} sees {p}",
+                            u.position
+                        );
+                        assert!(
+                            inside(gi.batch_views[1 + face].0, p),
+                            "the view of every face {face} holds what the probe at {} sees: {p}",
+                            u.position
+                        );
+                    }
+                }
+            }
+        }
+        assert!(seen > 10_000, "the faces see the box: {seen}");
+        // No probe updates: nothing to cull for.
+        gi.updates.clear();
+        gi.plan_batch_views(lo, hi);
+        assert!(gi.batch_views.is_empty());
     }
 
     #[test]

@@ -122,6 +122,9 @@ serde_json = "1.0.154"
 rmp-serde = "1.3.1"
 lz4_flex = "0.13.1"
 rayon = "1.12.0"
+# The hierarchy's children lists keep their first few entries inline. Already
+# built in every configuration (the UI layout crate `taffy` uses it).
+smallvec = "1.16.4"
 rapier2d = { version = "0.36.1", optional = true }
 rapier3d = { version = "0.36.1", optional = true }
 fontdue = "0.9.5"
@@ -170,6 +173,7 @@ texture2ddecoder = { version = "0.1.2", optional = true }
 
 # Waits for the GPU on desktop (feature `window`); the web build awaits it.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"], optional = true }
 pollster = { version = "1.0.1", optional = true }
 # Basis Universal's UASTC transcoder (feature `basis-universal`): the C++
 # library, built with the system's C++ compiler. Not on the web: it can't be
@@ -234,12 +238,13 @@ wasm-bindgen-futures = "0.4.80"
 js-sys = "0.3.107"
 # Sound through WebAudio (kira plays through cpal).
 cpal = { version = "0.18.2", features = ["wasm-bindgen"], optional = true }
-web-sys = { version = "0.3.107", features = ["Window", "Document", "Element", "HtmlCanvasElement", "Location", "Request", "RequestInit", "Headers", "Response", "console", "Event", "HtmlElement", "HtmlTextAreaElement", "CssStyleDeclaration", "CompositionEvent", "InputEvent", "KeyboardEvent", "EventTarget", "Node", "DomRect", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "WebSocket", "BinaryType", "MessageEvent", "CloseEvent"] }
+web-sys = { version = "0.3.107", features = ["Navigator", "Clipboard", "Window", "Document", "Element", "HtmlCanvasElement", "Location", "Request", "RequestInit", "Headers", "Response", "console", "Event", "HtmlElement", "HtmlTextAreaElement", "CssStyleDeclaration", "CompositionEvent", "InputEvent", "KeyboardEvent", "EventTarget", "Node", "DomRect", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "WebSocket", "BinaryType", "MessageEvent", "CloseEvent"] }
 
 # The validation bundle example drives a launched game through the MCP
 # server's tools, in-process. Path only (no version): the MCP crate's tests
 # depend on the engine, and a published cycle between the two can't resolve.
 [dev-dependencies]
+ponko_image_diff = { path = "crates/ponko_image_diff", version = "0.1.0" }
 ponko_mcp = { path = "crates/ponko_mcp" }
 # The renderer's tests translate its shaders to GLSL ES 3.0, as wgpu does for
 # WebGL2 (src/render/gpu3d/webgl2_shaders_test.rs). The naga wgpu already uses.
@@ -281,7 +286,7 @@ navmesh = ["3d", "dep:navmesh-rs", "dep:libm"]
 default = ["audio", "window", "inspector", "gamepad", "image-jpeg"]
 # A window and GPU rendering (winit + wgpu). Off: `Game::run_headless` only,
 # for simulation servers and CI; drawing calls do nothing, `Game::run` panics.
-window = ["dep:wgpu", "dep:winit", "dep:pollster", "dep:objc2-metal"]
+window = ["dep:arboard", "dep:wgpu", "dep:winit", "dep:pollster", "dep:objc2-metal"]
 # Sound with kira. Off: the sound API stays and is silent (for servers).
 audio = ["dep:kira", "dep:cpal", "dep:symphonia"]
 # The runtime inspector (egui overlay, toggled with the ` key): entities and their
@@ -493,7 +498,7 @@ name = "web_smoke_3d"
 required-features = ["3d"]
 
 [workspace]
-members = [".", "crates/ponko_ecs", "crates/ponko_macros", "crates/ponko_bench", "crates/ponko_mcp", "crates/ponko_ffi", "crates/ponko_unity", "crates/ponko_cli"]
+members = [".", "crates/ponko_image_diff", "crates/ponko_ecs", "crates/ponko_macros", "crates/ponko_bench", "crates/ponko_mcp", "crates/ponko_ffi", "crates/ponko_unity", "crates/ponko_cli"]
 
 [workspace.package]
 edition = "2024"
@@ -501,7 +506,7 @@ edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 authors = ["Leon Mamić and Ponko contributors"]
-repository = "https://github.com/ponkoengine/ponko"
+repository = "https://gitlab.com/ponkoengine/ponko"
 homepage = "https://ponko.dev/"
 
 # Debug builds with light optimization: games and tests run 5-6x faster
@@ -516,6 +521,10 @@ required-features = ["3d"]
 
 [[example]]
 name = "post_volumes"
+required-features = ["3d"]
+
+[[example]]
+name = "split_screen"
 required-features = ["3d"]
 
 [[example]]

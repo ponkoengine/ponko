@@ -85,13 +85,14 @@ impl Rig {
             rig.of_node[node.index()] = at as u16;
             let matrix = Mat4::from_cols_array_2d(&node.transform().matrix());
             rig.rest.push(parent.map_or(matrix, |p| rig.rest[p] * matrix));
-            rig.joints.push(Joint {
-                name: node
-                    .name()
-                    .map_or_else(|| format!("node {}", node.index()), str::to_string),
-                parent,
-                rest,
-            });
+            rig.joints.push(
+                Joint::new(
+                    node.name()
+                        .map_or_else(|| format!("node {}", node.index()), str::to_string),
+                    parent,
+                )
+                .with_rest(rest),
+            );
             let children: Vec<_> = node.children().collect();
             stack.extend(children.into_iter().rev().map(|c| (c, Some(at))));
         }
@@ -181,76 +182,21 @@ pub(crate) fn load(
     } = gltf_ext::prepare(name, bytes, read)?;
     check_accessors(&gltf).map_err(|e| format!("{name}: {e}"))?;
     check_node_tree(&gltf).map_err(|e| format!("{name}: {e}"))?;
-    let folder = folder_of(name);
-
-    // Materials, with each image decoded once.
-    let mut images = Images {
-        decoded: Vec::new(),
-        keys: Vec::new(),
-        sources: Vec::new(),
-        have,
-        document: &gltf,
-        buffers: &buffers,
-        folder,
+    let FileMaterials {
+        mut materials,
+        mappings,
+        images,
+        image_sources,
+    } = read_materials(
+        &gltf,
+        &buffers,
+        &json,
+        &preferred_image,
         name,
-    };
-    let mut materials: Vec<LoadedMaterial> = Vec::new();
-    // How each material's textures lie on its meshes (`KHR_texture_transform`).
-    let mut mappings: Vec<UvMapping> = Vec::new();
-    for material in gltf.materials() {
-        let pbr = material.pbr_metallic_roughness();
-        let [r, g, b, a] = pbr.base_color_factor();
-        let extensions = material
-            .index()
-            .map(|i| gltf_ext::material_extensions(&json, i, name, &mut warnings));
-        let strength = extensions.as_ref().map_or(1.0, |e| e.emissive_strength);
-        let [er, eg, eb] = material.emissive_factor().map(|c| c * strength);
-        let transmission = extensions.as_ref().map_or(0.0, |e| e.transmission);
-        mappings.push(extensions.map_or(UvMapping::PLAIN, |e| e.mapping));
-        let mut get = |t: Option<gltf::Texture>| match t {
-            Some(t) => images.texture(&t, &preferred_image, &mut warnings, read).map(Some),
-            None => Ok(None),
-        };
-        let image = get(pbr.base_color_texture().map(|i| i.texture()))?;
-        let emissive_map = get(material.emissive_texture().map(|i| i.texture()))?;
-        let normal = material.normal_texture();
-        let normal_strength = normal.as_ref().map_or(1.0, |n| n.scale());
-        let normal_map = get(normal.map(|n| n.texture()))?;
-        // glTF keeps roughness in green and metalness in blue, and
-        // occlusion in red of its own image, often the same one.
-        let mr = pbr.metallic_roughness_texture().map(|i| i.texture().source().index());
-        let occlusion = material.occlusion_texture().map(|i| i.texture().source().index());
-        let orm_map = match (mr, occlusion) {
-            (None, None) => None,
-            (Some(m), Some(o)) if m == o => Some(images.get(m, read)?),
-            (m, o) => Some(images.orm(m, o, read)?),
-        };
-        // glTF factors are linear; Color is sRGB. Transmission
-        // (`KHR_materials_transmission`) is drawn as see-through blending:
-        // what passes through isn't covered.
-        let blend = match material.alpha_mode() {
-            _ if transmission > 0.0 => Blend::Transparent,
-            gltf::material::AlphaMode::Opaque => Blend::Opaque,
-            gltf::material::AlphaMode::Mask => Blend::Cutout,
-            gltf::material::AlphaMode::Blend => Blend::Transparent,
-        };
-        materials.push(LoadedMaterial {
-            name: material.name().unwrap_or("").to_string(),
-            color: Color::rgba(to_srgb(r), to_srgb(g), to_srgb(b), a * (1.0 - transmission)),
-            roughness: pbr.roughness_factor(),
-            metallic: pbr.metallic_factor(),
-            emissive: Color::rgb(to_srgb(er), to_srgb(eg), to_srgb(eb)),
-            image,
-            normal_map,
-            normal_strength,
-            orm_map,
-            emissive_map,
-            blend,
-            double_sided: material.double_sided(),
-        });
-    }
-    let image_sources = images.sources;
-    let images = images.decoded;
+        have,
+        read,
+        &mut warnings,
+    )?;
     let default_material = materials.len();
 
     // Every primitive in the scene, placed by its node, grouped by material.
@@ -345,27 +291,7 @@ pub(crate) fn load(
         materials.push(LoadedMaterial::plain());
     }
 
-    let mut data = MeshData::default();
-    let mut parts = Vec::with_capacity(by_material.len());
-    for (material, part) in by_material {
-        let base = data.positions.len() as u32;
-        let first = data.indices.len() as u32;
-        data.positions.extend(part.positions);
-        data.normals.extend(part.normals);
-        data.uvs.extend(part.uvs);
-        data.colors.extend(part.colors);
-        data.uvs1.extend(part.uvs1);
-        data.joints.extend(part.joints);
-        data.weights.extend(part.weights);
-        merge_targets(
-            &mut data.morph_targets,
-            base as usize,
-            part.morph_targets,
-            data.positions.len(),
-        );
-        data.indices.extend(part.indices.iter().map(|i| i + base));
-        parts.push((first..data.indices.len() as u32, material));
-    }
+    let (mut data, parts) = merge_by_material(by_material);
     // Importer-authored in-between frames are ordinary glTF targets plus
     // a channel mapping in mesh extras. Resolve indices after name merging.
     for mesh in gltf.meshes() {
@@ -431,6 +357,298 @@ pub(crate) fn load(
     })
 }
 
+/// One node of a file's scene, read on its own by [`load_nodes`].
+pub(crate) struct LoadedNode {
+    /// Its name in the file.
+    pub name: Option<String>,
+    /// Its parent, as an index into [`LoadedNodes::nodes`] (parents come
+    /// before their children).
+    pub parent: Option<usize>,
+    /// Where it is in its parent's space.
+    pub local: Transform3D,
+    /// Its `extras`, as the file has them (any JSON).
+    pub extras: Option<serde_json::Value>,
+    /// Its own mesh in its own space (children's meshes are theirs), each
+    /// part with its material; `None` without triangles.
+    pub mesh: Option<NodeMesh>,
+    /// Its light (`KHR_lights_punctual`), relative to the node.
+    pub light: Option<ModelLight>,
+    /// Whether its mesh is skinned (read in its bind pose).
+    pub skinned: bool,
+}
+
+/// The mesh of one node, from [`load_nodes`].
+pub(crate) struct NodeMesh {
+    pub data: MeshData,
+    /// Index ranges of `data`, each with its material (an index into
+    /// [`LoadedNodes::materials`]).
+    pub parts: Vec<(Range<u32>, usize)>,
+    /// Its morph targets' default weights.
+    pub morph_defaults: Vec<f32>,
+}
+
+/// A file read node by node, by [`load_nodes`].
+pub(crate) struct LoadedNodes {
+    /// Every node of the file's default scene: depth first, parents first,
+    /// children in the file's order.
+    pub nodes: Vec<LoadedNode>,
+    pub materials: Vec<LoadedMaterial>,
+    pub images: Vec<Image>,
+    pub image_sources: Vec<Option<String>>,
+}
+
+/// Parses glTF `bytes` as [`load`] does, but keeps every node of the
+/// default scene apart: its place in the tree, its transform, its extras
+/// and its own mesh in its own space, instead of one merged mesh.
+/// Skinned meshes are read in their bind pose, without joints.
+pub(crate) fn load_nodes(
+    name: &str,
+    bytes: &[u8],
+    read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+    have: &dyn Fn(&str) -> bool,
+) -> Result<LoadedNodes, String> {
+    check_glb_length(name, bytes)?;
+    let gltf_ext::Prepared {
+        document: gltf,
+        buffers,
+        json,
+        preferred_image,
+        mut warnings,
+    } = gltf_ext::prepare(name, bytes, read)?;
+    check_accessors(&gltf).map_err(|e| format!("{name}: {e}"))?;
+    check_node_tree(&gltf).map_err(|e| format!("{name}: {e}"))?;
+    let FileMaterials {
+        mut materials,
+        mappings,
+        images,
+        image_sources,
+    } = read_materials(
+        &gltf,
+        &buffers,
+        &json,
+        &preferred_image,
+        name,
+        have,
+        read,
+        &mut warnings,
+    )?;
+    let default_material = materials.len();
+    let mut uses_default = false;
+    let scene = gltf
+        .default_scene()
+        .or_else(|| gltf.scenes().next())
+        .ok_or_else(|| format!("{name}: has no scene"))?;
+    let mut nodes = Vec::new();
+    let mut stack: Vec<(gltf::Node, Option<usize>)> = scene.nodes().map(|n| (n, None)).collect();
+    stack.reverse();
+    while let Some((node, parent)) = stack.pop() {
+        let (t, r, s) = node.transform().decomposed();
+        let local = Transform3D {
+            position: Vec3::from(t),
+            rotation: Quat::from_array(r).normalize(),
+            scale: Vec3::from(s),
+        };
+        let extras = node
+            .extras()
+            .as_ref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok());
+        let mut mesh = None;
+        if let Some(m) = node.mesh() {
+            let targets = target_names(&m);
+            let mut by_material: Vec<(usize, MeshData)> = Vec::new();
+            for primitive in m.primitives() {
+                if primitive.mode() != gltf::mesh::Mode::Triangles {
+                    continue;
+                }
+                let material = primitive.material().index().unwrap_or(default_material);
+                uses_default |= material == default_material;
+                let at = match by_material.iter().position(|(mat, _)| *mat == material) {
+                    Some(i) => i,
+                    None => {
+                        by_material.push((material, MeshData::default()));
+                        by_material.len() - 1
+                    }
+                };
+                let part = Part {
+                    matrix: Mat4::IDENTITY,
+                    binding: &Binding::None,
+                    targets: &targets,
+                    mapping: mappings.get(material).copied().unwrap_or(UvMapping::PLAIN),
+                };
+                append(&mut by_material[at].1, &primitive, &buffers, &part, name)?;
+            }
+            if !by_material.is_empty() {
+                let (data, parts) = merge_by_material(by_material);
+                let label = node.name().unwrap_or("a node");
+                data.problem().map_err(|e| format!("{name}: {label}: {e}"))?;
+                let weights = node.weights().or_else(|| m.weights());
+                let morph_defaults = data
+                    .morph_targets
+                    .iter()
+                    .map(|t| {
+                        let k = targets.iter().position(|n| *n == t.name);
+                        k.and_then(|k| weights.and_then(|w| w.get(k))).copied().unwrap_or(0.0)
+                    })
+                    .collect();
+                mesh = Some(NodeMesh {
+                    data,
+                    parts,
+                    morph_defaults,
+                });
+            }
+        }
+        nodes.push(LoadedNode {
+            name: node.name().map(str::to_string),
+            parent,
+            local,
+            extras,
+            mesh,
+            light: gltf_ext::light_of(&json, node.index(), Mat4::IDENTITY, node.name()),
+            skinned: node.skin().is_some(),
+        });
+        let at = nodes.len() - 1;
+        let children: Vec<_> = node.children().collect();
+        stack.extend(children.into_iter().rev().map(|c| (c, Some(at))));
+    }
+    if uses_default {
+        materials.push(LoadedMaterial::plain());
+    }
+    for warning in &warnings {
+        gltf_ext::warn(warning);
+    }
+    Ok(LoadedNodes {
+        nodes,
+        materials,
+        images,
+        image_sources,
+    })
+}
+
+/// One mesh of meshes grouped by material, with each group's index range
+/// and material.
+fn merge_by_material(by_material: Vec<(usize, MeshData)>) -> (MeshData, Vec<(Range<u32>, usize)>) {
+    let mut data = MeshData::default();
+    let mut parts = Vec::with_capacity(by_material.len());
+    for (material, part) in by_material {
+        let base = data.positions.len() as u32;
+        let first = data.indices.len() as u32;
+        data.positions.extend(part.positions);
+        data.normals.extend(part.normals);
+        data.uvs.extend(part.uvs);
+        data.colors.extend(part.colors);
+        data.uvs1.extend(part.uvs1);
+        data.joints.extend(part.joints);
+        data.weights.extend(part.weights);
+        merge_targets(
+            &mut data.morph_targets,
+            base as usize,
+            part.morph_targets,
+            data.positions.len(),
+        );
+        data.indices.extend(part.indices.iter().map(|i| i + base));
+        parts.push((first..data.indices.len() as u32, material));
+    }
+    (data, parts)
+}
+
+/// A glTF file's materials, how their textures lie on meshes, and their
+/// decoded images (see [`Loaded`]).
+struct FileMaterials {
+    materials: Vec<LoadedMaterial>,
+    /// How each material's textures lie on its meshes (`KHR_texture_transform`).
+    mappings: Vec<UvMapping>,
+    images: Vec<Image>,
+    image_sources: Vec<Option<String>>,
+}
+
+/// Reads every material of `gltf`, decoding each image it uses once.
+#[allow(clippy::too_many_arguments)]
+fn read_materials(
+    gltf: &gltf::Document,
+    buffers: &[Vec<u8>],
+    json: &serde_json::Value,
+    preferred_image: &[Option<usize>],
+    name: &str,
+    have: &dyn Fn(&str) -> bool,
+    read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+    warnings: &mut Vec<String>,
+) -> Result<FileMaterials, String> {
+    let folder = folder_of(name);
+
+    // Materials, with each image decoded once.
+    let mut images = Images {
+        decoded: Vec::new(),
+        keys: Vec::new(),
+        sources: Vec::new(),
+        have,
+        document: gltf,
+        buffers,
+        folder,
+        name,
+    };
+    let mut materials: Vec<LoadedMaterial> = Vec::new();
+    // How each material's textures lie on its meshes (`KHR_texture_transform`).
+    let mut mappings: Vec<UvMapping> = Vec::new();
+    for material in gltf.materials() {
+        let pbr = material.pbr_metallic_roughness();
+        let [r, g, b, a] = pbr.base_color_factor();
+        let extensions = material
+            .index()
+            .map(|i| gltf_ext::material_extensions(json, i, name, warnings));
+        let strength = extensions.as_ref().map_or(1.0, |e| e.emissive_strength);
+        let [er, eg, eb] = material.emissive_factor().map(|c| c * strength);
+        let transmission = extensions.as_ref().map_or(0.0, |e| e.transmission);
+        mappings.push(extensions.map_or(UvMapping::PLAIN, |e| e.mapping));
+        let mut get = |t: Option<gltf::Texture>| match t {
+            Some(t) => images.texture(&t, preferred_image, warnings, read).map(Some),
+            None => Ok(None),
+        };
+        let image = get(pbr.base_color_texture().map(|i| i.texture()))?;
+        let emissive_map = get(material.emissive_texture().map(|i| i.texture()))?;
+        let normal = material.normal_texture();
+        let normal_strength = normal.as_ref().map_or(1.0, |n| n.scale());
+        let normal_map = get(normal.map(|n| n.texture()))?;
+        // glTF keeps roughness in green and metalness in blue, and
+        // occlusion in red of its own image, often the same one.
+        let mr = pbr.metallic_roughness_texture().map(|i| i.texture().source().index());
+        let occlusion = material.occlusion_texture().map(|i| i.texture().source().index());
+        let orm_map = match (mr, occlusion) {
+            (None, None) => None,
+            (Some(m), Some(o)) if m == o => Some(images.get(m, read)?),
+            (m, o) => Some(images.orm(m, o, read)?),
+        };
+        // glTF factors are linear; Color is sRGB. Transmission
+        // (`KHR_materials_transmission`) is drawn as see-through blending:
+        // what passes through isn't covered.
+        let blend = match material.alpha_mode() {
+            _ if transmission > 0.0 => Blend::Transparent,
+            gltf::material::AlphaMode::Opaque => Blend::Opaque,
+            gltf::material::AlphaMode::Mask => Blend::Cutout,
+            gltf::material::AlphaMode::Blend => Blend::Transparent,
+        };
+        materials.push(LoadedMaterial {
+            name: material.name().unwrap_or("").to_string(),
+            color: Color::rgba(to_srgb(r), to_srgb(g), to_srgb(b), a * (1.0 - transmission)),
+            roughness: pbr.roughness_factor(),
+            metallic: pbr.metallic_factor(),
+            emissive: Color::rgb(to_srgb(er), to_srgb(eg), to_srgb(eb)),
+            image,
+            normal_map,
+            normal_strength,
+            orm_map,
+            emissive_map,
+            blend,
+            double_sided: material.double_sided(),
+        });
+    }
+    Ok(FileMaterials {
+        materials,
+        mappings,
+        image_sources: images.sources,
+        images: images.decoded,
+    })
+}
+
 /// The names of `mesh`'s morph targets: from its extras' `targetNames`
 /// (the usual way exporters name them), else `<mesh>.<i>`.
 fn target_names(mesh: &gltf::Mesh) -> Vec<String> {
@@ -462,11 +680,10 @@ fn merge_targets(into: &mut Vec<MorphTarget>, before: usize, new: Vec<MorphTarge
         let at = match into.iter().position(|t| t.name == target.name) {
             Some(at) => at,
             None => {
-                into.push(MorphTarget {
-                    name: target.name.clone(),
-                    positions: vec![Vec3::ZERO; before],
-                    normals: vec![Vec3::ZERO; before],
-                });
+                into.push(
+                    MorphTarget::new(target.name.clone(), vec![Vec3::ZERO; before])
+                        .with_normals(vec![Vec3::ZERO; before]),
+                );
                 into.len() - 1
             }
         };
@@ -492,7 +709,7 @@ fn read_clips(
 ) -> Result<Vec<super::AnimationClip>, String> {
     use super::{AnimationClip, AnimationTrack, Interpolation, JointAnimation, Skeleton};
     use gltf::animation::util::ReadOutputs;
-    let source = Skeleton::new(rig.joints.clone());
+    let source = Skeleton::try_new(rig.joints.clone())?;
     document
         .animations()
         .map(|animation| {
@@ -569,23 +786,14 @@ fn read_clips(
                             if let Some(at) = morphs.iter().position(|t: &super::MorphAnimation| t.name == *name) {
                                 morphs.remove(at);
                             }
-                            morphs.push(super::MorphAnimation {
-                                name: name.clone(),
-                                track,
-                            });
+                            morphs.push(super::MorphAnimation::new(name.clone(), track));
                         }
                         continue;
                     }
                 };
                 let track = AnimationTrack::try_new(times, values, interpolation)?;
                 let at = tracks.iter().position(|t| t.joint == joint).unwrap_or_else(|| {
-                    tracks.push(JointAnimation {
-                        joint,
-                        name: rig.joints[joint].name.clone(),
-                        translation: None,
-                        rotation: None,
-                        scale: None,
-                    });
+                    tracks.push(JointAnimation::new(joint, rig.joints[joint].name.clone()));
                     tracks.len() - 1
                 });
                 match property {
@@ -594,14 +802,14 @@ fn read_clips(
                     _ => tracks[at].scale = Some(track),
                 }
             }
-            Ok(AnimationClip::new(
+            Ok(AnimationClip::try_new(
                 animation
                     .name()
                     .map_or_else(|| format!("animation {}", animation.index()), str::to_string),
                 &source,
                 tracks,
-            )
-            .with_morph_tracks(morphs))
+            )?
+            .try_with_morph_tracks(morphs)?)
         })
         .collect()
 }
@@ -745,15 +953,17 @@ fn append(
             offsets(v, corners, name)
         };
         let (positions, normals) = (read(target.positions())?, read(target.normals())?);
-        targets.push(MorphTarget {
-            name: part_of.targets.get(k).cloned().unwrap_or_else(|| format!("{name}.{k}")),
-            positions: if positions.is_empty() {
-                vec![Vec3::ZERO; corners]
-            } else {
-                positions.iter().map(|d| matrix.transform_vector3(*d)).collect()
-            },
-            normals: normals.iter().map(|d| normal_matrix * *d).collect(),
-        });
+        targets.push(
+            MorphTarget::new(
+                part_of.targets.get(k).cloned().unwrap_or_else(|| format!("{name}.{k}")),
+                if positions.is_empty() {
+                    vec![Vec3::ZERO; corners]
+                } else {
+                    positions.iter().map(|d| matrix.transform_vector3(*d)).collect()
+                },
+            )
+            .with_normals(normals.iter().map(|d| normal_matrix * *d).collect()),
+        );
     }
     merge_targets(&mut out.morph_targets, base as usize, targets, out.positions.len());
     if part.uvs.is_empty() {

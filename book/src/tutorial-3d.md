@@ -10,9 +10,9 @@ covers the same features ([C and C++](c-cpp.md)), but this walkthrough has
 no C++ version yet.
 
 Every piece of code below is pulled from the finished game,
-[`examples/tutorial_3d`](https://github.com/ponkoengine/ponko/tree/main/examples/tutorial_3d)
+[`examples/tutorial_3d`](../../examples/tutorial_3d)
 in the engine's repository, which CI compiles and
-[`tests/tutorial_3d.rs`](https://github.com/ponkoengine/ponko/blob/main/tests/tutorial_3d.rs)
+[`tests/tutorial_3d.rs`](../../tests/tutorial_3d.rs)
 walks. As in the [2D tutorial](tutorial-2d.md), each step is one
 [plugin](systems.md#plugins) and only adds code, so the game builds and runs
 after every step. Doing the 2D one first helps, but isn't needed.
@@ -27,7 +27,7 @@ cargo run
 ```
 
 A window opens with a spinning cube. This tutorial needs Ponko 0.2; until
-it's released, add `--git https://github.com/ponkoengine/ponko` to `ponko
+it's released, add `--git https://gitlab.com/ponkoengine/ponko` to `ponko
 new`, which depends on the engine's `main` branch.
 
 The game uses 3D physics, which includes 3D. In `Cargo.toml`:
@@ -38,7 +38,7 @@ ponko = { version = "0.2", features = ["physics3d"] }
 ```
 
 **The yard.** Copy
-[`assets/tutorial_3d/yard.glb`](https://github.com/ponkoengine/ponko/tree/main/assets/tutorial_3d)
+[`assets/tutorial_3d/yard.glb`](../../assets/tutorial_3d)
 from the engine's repository into your project's `assets/tutorial_3d/`. It is
 a small glTF scene made for this tutorial (under the engine's license, MIT
 or Apache-2.0): ground, walls, a platform with a ramp, stairs up to a ledge
@@ -52,8 +52,13 @@ and most 3D editors export them.
 {{#include ../../examples/tutorial_3d/game.rs:use_yard}}
 ```
 
-`ponko::d3` holds the 3D names: `Transform`, `Model`, `MeshData`,
-`RigidBody`, `Collider`, `Character`, `PointLight`.
+The three lines are the whole import map of the game. `ponko::prelude`
+holds what every game needs, among it `Model` (the component that draws a
+mesh), the math types, keys and gamepads, and the UI; `ponko::d3` holds the 3D names that have a 2D twin:
+`Transform`, `RigidBody`, `Collider`, `Character`, `PointLight`; and the
+mesh and material types live in `ponko::render` (`Mesh`, `MeshData`,
+`MaterialDesc`). The same lines are at the top of
+`examples/tutorial_3d/game.rs`.
 
 ## Step 1: a glTF scene
 
@@ -64,8 +69,8 @@ now, and each other line at its step:
 {{#include ../../examples/tutorial_3d/game.rs:game}}
 ```
 
-As in the template, `game()` returns a game ready to `run()` (the plugins
-hold all of its setup, which `.configured()` says), so `src/main.rs` stays
+As in the template, `game() -> ConfiguredGame`: a game ready to `run()` (the
+plugins hold all of its setup, which `.configured()` says), so `src/main.rs` stays
 as the template wrote it, and the tests in [step 6](#step-6-test-it) add
 their settings to the same `game()`.
 
@@ -174,13 +179,8 @@ crates and they topple.
 ## Step 5: UI
 
 A counter in the corner and a panel when every lantern is lit, with the
-[retained UI](ui.md). Add its names to the `use` lines:
-
-```rust
-{{#include ../../examples/tutorial_3d/game.rs:use_hud}}
-```
-
-and the plugin:
+[retained UI](ui.md). Its names (`Ui`, `UiEvent`, `UiLayout`) come with the
+prelude, so the plugin is all you add:
 
 ```rust
 {{#include ../../examples/tutorial_3d/game.rs:hud}}
@@ -189,8 +189,8 @@ and the plugin:
 - The counter is a label on a **HUD**, shown at setup with `show_hud`: it
   is always drawn, under every screen, takes no input and Escape never
   closes it ([HUDs](ui.md#huds)). The panel is a second root, pushed on top
-  as a **modal** screen (it dims what is below and takes all input) when
-  the last lantern is lit. It opens with "Play again" focused
+  with `push_modal` as a **modal** screen (it dims what is below and takes
+  all input) when the last lantern is lit. It opens with "Play again" focused
   (`.focused()`), so Enter presses it.
 - `hud` sets the counter's text every frame from the lanterns themselves,
   so it can't drift from the game.
@@ -227,7 +227,7 @@ system of the test's own, and the panel's button clicked by name:
 {{#include ../../tests/tutorial_3d.rs:all_lit}}
 ```
 
-[`tests/tutorial_3d.rs`](https://github.com/ponkoengine/ponko/blob/main/tests/tutorial_3d.rs)
+[`tests/tutorial_3d.rs`](../../tests/tutorial_3d.rs)
 also turns, walks up the ramp and lets the crates fall.
 
 ## Step 7: package it
@@ -252,6 +252,35 @@ check that it runs ([Packaging any game](packaging.md#packaging-any-game-ponko-p
 `--web` needs the `wasm32-unknown-unknown` target and `wasm-bindgen-cli`,
 as the [2D tutorial's last step](tutorial-2d.md#step-7-package-it-and-put-it-on-the-web)
 shows; browsers draw it with WebGPU or WebGL2 ([Web builds](web.md)).
+
+## The yard from Blender
+
+The yard here is plain geometry: `load_mesh` draws the file and
+`load_collision_mesh` makes it solid, and the lanterns and crates are
+placed in code. A level made in Blender can carry all of that itself:
+give its objects custom properties (`ponko:collider` = `trimesh` on the
+walls, `ponko:spawn` = `player` on an empty where the walker starts,
+`ponko:prefab` = a lantern prefab on each lantern's empty, your own
+components by name) and spawn the exported file as a prefab:
+
+```rust
+# use ponko::prelude::*;
+# fn yard(ctx: &mut Ctx) -> Result<(), Error> {
+let yard = ctx.spawn_prefab("levels/courtyard.gltf", vec3(0.0, 0.0, 0.0))?;
+let start = ctx
+    .world
+    .query::<(&ponko::d3::Transform, &ponko::d3::SpawnPoint)>()
+    .iter()
+    .find(|(_, p)| p.name == "player")
+    .map(|(t, _)| *t);
+# let _ = (yard, start);
+# Ok(()) }
+```
+
+Each object is then an entity with its model, collider and components,
+and exporting again while the game runs updates the yard in place.
+[From Blender to the game](blender.md) lists the properties and the
+export settings.
 
 ## Where next
 

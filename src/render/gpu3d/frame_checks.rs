@@ -7,6 +7,15 @@
 use super::passes::{self, Features, Format, Resource, Samples};
 use super::{DEPTH_FORMAT, FADED, HDR_FORMAT, MAX_CASCADES, Part, Renderer3D, Run, Targets};
 
+/// What only the main camera's frame records, for every window view (see
+/// `views.rs`): posing, the sky's maps, buffer pasts and occlusion.
+const MAIN_ONLY: Features = Features::SKINNING
+    .with(Features::SKY_TEXTURE)
+    .with(Features::SKY_BRDF)
+    .with(Features::SKY_MAPS)
+    .with(Features::BUFFER_PAST)
+    .with(Features::OCCLUSION);
+
 /// What a frame's parts are recorded against: the frame's features. Empty
 /// in release builds.
 #[derive(Clone, Copy)]
@@ -93,6 +102,8 @@ fn declared(resource: Resource, output: wgpu::TextureFormat, samples: u32) -> (O
         Format::Velocity => Some(crate::render::taa::VELOCITY_FORMAT),
         Format::Occlusion => Some(wgpu::TextureFormat::Rg8Unorm),
         Format::Screen => Some(crate::render::ssr::SCREEN_FORMAT),
+        Format::Spread => Some(crate::render::ssr::SPREAD_FORMAT),
+        Format::Hits => Some(crate::render::ssr::HITS_FORMAT),
         Format::Output => Some(output),
         Format::Buffer | Format::Any => None,
     };
@@ -208,6 +219,7 @@ impl Renderer3D {
         ]
         .into_iter()
         .fold(Features::NONE, Features::with)
+        .without(if self.extra { MAIN_ONLY } else { Features::NONE })
     }
 
     /// The textures behind the frame's resources, where the renderer holds
@@ -257,6 +269,14 @@ impl Renderer3D {
                 .as_ref()
                 .and_then(|s| s.images().1)
                 .map(|levels| (Resource::ReflectionLevels, levels)),
+            targets
+                .ssr
+                .as_ref()
+                .map(|s| view(Resource::ReflectionHits, s.spread().0)),
+            targets
+                .ssr
+                .as_ref()
+                .map(|s| view(Resource::ReflectionSpread, s.spread().1)),
             targets.ao.as_ref().map(|a| view(Resource::AoRaw, a.images().0)),
             // Without temporal accumulation the history is a stand-in.
             targets

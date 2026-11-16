@@ -253,6 +253,36 @@ ctx.world.spawn((ponko::d3::Transform::at(vec3(x, y, z)), tile));
 The weight maps are `Texture2D`s in the same file: read them with
 `UnityTexture` and their rows already line up with the tile.
 
+## When an import fails
+
+Every importer call that can fail returns `ponko_unity::Error`. Don't read
+its text to decide what to do: ask it. `error.kind()` is an `ErrorKind`:
+
+| Kind | Means | Example |
+|---|---|---|
+| `Io` | a file or folder couldn't be read or written | the file is missing |
+| `Decode` | the data isn't well formed | bad YAML, a truncated binary asset |
+| `Unsupported` | well formed, but something the importer doesn't handle | an asset older than Unity 2022, compressed meshes and textures |
+| `Invalid` | it parses but doesn't make sense | a missing field, a reference to nothing, prefabs nesting in a loop, a folder with no `Assets` |
+| `Other` | anything else | |
+
+`error.path()` is the file when one is known, `error.line()` the line of a
+text file, and `error.message()` the cause without either; printing the error
+gives all three. For an `Io` error, `std::error::Error::source` is the
+`std::io::Error`, so its `kind()` (`NotFound`, `PermissionDenied`, ...) is
+there too. `ErrorKind` is `#[non_exhaustive]`: keep a `_` arm.
+
+```rust
+use ponko_unity::{ErrorKind, UnityFile};
+
+match UnityFile::read("MyUnityGame/Assets/Scenes/Town.unity") {
+    Ok(file) => println!("{} objects", file.objects.len()),
+    Err(e) if e.kind() == ErrorKind::Io => println!("can't open {:?}", e.path()),
+    Err(e) if e.kind() == ErrorKind::Unsupported => println!("resave it in a newer editor: {e}"),
+    Err(e) => println!("{e}"), // Decode and Invalid name the line when they know it
+}
+```
+
 ## From C and C++
 
 The importer is a Rust tool: run it once, as above. What it writes are

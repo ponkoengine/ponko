@@ -317,24 +317,35 @@ impl crate::gfx::Graphics {
     }
 
     /// Adds the streamed and resident meshes to `out` (`streamed_assets`).
-    pub(crate) fn list_streamed_meshes(&self, out: &mut Vec<StreamedAsset>) {
-        let mut names: Vec<&String> = self.streaming.meshes.keys().collect();
-        names.extend(self.residency.reserved_meshes.keys());
-        names.extend(self.residency.set(ResidencyKind::Mesh).names());
-        names.sort_unstable();
-        names.dedup();
-        for name in names {
+    pub(crate) fn list_streamed_meshes(&self, out: &mut Vec<StreamedAsset>, at: &mut usize) {
+        // Ordered merge of three name sets, without a temporary collection.
+        let mut streamed = self.streaming.meshes.keys().peekable();
+        let mut reserved = self.residency.reserved_meshes.keys().peekable();
+        let mut resident = self.residency.set(ResidencyKind::Mesh).names().peekable();
+        loop {
+            let name = [
+                streamed.peek().copied(),
+                reserved.peek().copied(),
+                resident.peek().copied(),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            let Some(name) = name else { break };
+            if streamed.peek().copied() == Some(name) {
+                streamed.next();
+            }
+            if reserved.peek().copied() == Some(name) {
+                reserved.next();
+            }
+            if resident.peek().copied() == Some(name) {
+                resident.next();
+            }
             let id = self
                 .live_resident_mesh(name)
                 .map(|m| m.id)
                 .or_else(|| self.residency.reserved_meshes.get(name).copied());
-            out.push(StreamedAsset {
-                kind: ResidencyKind::Mesh,
-                name: name.clone(),
-                state: self.mesh_state(name),
-                id,
-                size: [0, 0],
-            });
+            crate::streaming::write_streamed(out, at, ResidencyKind::Mesh, name, self.mesh_state(name), id, [0, 0]);
         }
     }
 }

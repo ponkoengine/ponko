@@ -56,6 +56,16 @@ impl crate::gfx::Graphics {
     /// # Panics
     ///
     /// As `resident_mesh`.
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// let player = ctx.gfx.pin_resident_mesh("models/hero.glb");
+    /// // Later, when the hero is gone for good:
+    /// ctx.gfx.unpin_resident_mesh("models/hero.glb");
+    /// # let _ = player;
+    /// # }
+    /// ```
     pub fn pin_resident_mesh(&mut self, path: &str) -> Mesh {
         let mesh = self.resident_mesh(path);
         self.residency.set_mut(ResidencyKind::Mesh).set_pinned(path, true);
@@ -65,6 +75,14 @@ impl crate::gfx::Graphics {
     /// Lets a [pinned](Self::pin_resident_mesh) mesh be evicted again, from
     /// the start of the next frame if the budget needs it gone. Does nothing
     /// for one that isn't resident.
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// ctx.gfx.pin_resident_mesh("models/hero.glb");
+    /// ctx.gfx.unpin_resident_mesh("models/hero.glb"); // evictable again
+    /// # }
+    /// ```
     pub fn unpin_resident_mesh(&mut self, path: &str) {
         self.residency.set_mut(ResidencyKind::Mesh).set_pinned(path, false);
     }
@@ -183,6 +201,17 @@ impl crate::gfx::Graphics {
                 }
             }
         });
+        // Instance cells show their batch's meshes: a streamed world drops
+        // the cells first, and then the meshes may go.
+        for cell in self
+            .assets3d
+            .instance_batches
+            .iter()
+            .flatten()
+            .filter(|b| b.parent.is_some())
+        {
+            ids.extend(cell.levels.iter().map(|l| l.mesh.id));
+        }
         ids
     }
 }

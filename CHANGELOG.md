@@ -845,6 +845,6 @@ macOS and Windows attached to the GitHub release. Everything below is new.
 - C API (`ponko_ffi`) with a generated header, and a header-only C++17
   wrapper (`include/crabby.hpp`) covering nearly the whole engine.
 
-[Unreleased]: https://github.com/ponkoengine/ponko/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/ponkoengine/ponko/compare/v0.0.1...v0.1.0
-[0.0.1]: https://github.com/ponkoengine/ponko/releases/tag/v0.0.1
+[Unreleased]: https://gitlab.com/ponkoengine/ponko/-/compare/v0.1.0...HEAD
+[0.1.0]: https://gitlab.com/ponkoengine/ponko/-/compare/v0.0.1...v0.1.0
+[0.0.1]: https://gitlab.com/ponkoengine/ponko/-/tags/v0.0.1

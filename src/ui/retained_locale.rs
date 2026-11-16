@@ -107,7 +107,7 @@ impl Ui {
     /// tables nor the keys changed since the last call, so it is cheap to
     /// call every frame. The engine calls it for `ctx.ui` before each frame
     /// when the world has a [`Strings`] resource; a host that drives a `Ui`
-    /// itself (a test, a [`UiPanel`](crate::d3::UiPanel)'s tree) calls it.
+    /// itself (a test, a `d3::UiPanel`'s tree) calls it.
     pub fn localize(&mut self, strings: &Strings) {
         if !self.locale.dirty && self.locale.revision == strings.revision() {
             return;

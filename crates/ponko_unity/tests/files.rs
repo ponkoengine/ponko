@@ -97,9 +97,11 @@ fn scalars_keep_their_exact_text() {
 #[test]
 fn bad_headers_say_where() {
     let err = UnityFile::parse("--- !u!1 &100\nGameObject: {}\n--- nonsense\nX: 1\n").unwrap_err();
-    assert!(err.message.contains("line 3"), "{err}");
+    assert_eq!(err.line(), Some(3), "{err}");
+    assert_eq!(err.kind(), ErrorKind::Decode);
     let err = UnityFile::parse("--- !u!1 &100\nGameObject:\n  a: [1, 2\n").unwrap_err();
-    assert!(err.message.starts_with("line "), "{err}");
+    assert!(err.line().is_some(), "{err}");
+    assert!(err.to_string().starts_with("line "), "{err}");
 }
 
 #[test]
@@ -243,13 +245,13 @@ fn projects_map_guids_to_files() {
 fn deeply_nested_yaml_is_an_error_not_a_stack_overflow() {
     let deep_list = format!("--- !u!1 &1\nGameObject:\n  a:\n  {}x\n", "- ".repeat(200_000));
     let err = UnityFile::parse(&deep_list).unwrap_err();
-    assert!(err.message.contains("nested deeper than 128"), "{err}");
+    assert!(err.message().contains("nested deeper than 128"), "{err}");
     let mut deep_map = String::from("--- !u!1 &1\nGameObject:\n");
     for level in 1..200 {
         deep_map.push_str(&format!("{}a:\n", " ".repeat(level)));
     }
     let err = UnityFile::parse(&deep_map).unwrap_err();
-    assert!(err.message.contains("nested deeper than 128"), "{err}");
+    assert!(err.message().contains("nested deeper than 128"), "{err}");
     let deep_flow = format!(
         "--- !u!1 &1\nGameObject: {}{}\n",
         "{a: ".repeat(100_000),
@@ -296,7 +298,7 @@ fn counts_without_data_are_errors_not_huge_allocations() {
     assert!(
         mesh(stream, shapes)
             .unwrap_err()
-            .message
+            .message()
             .contains("stream out of range")
     );
     let long = "    m_VertexCount: 4611686018427387904\n    m_Channels:\n    - {stream: 0, offset: 0, format: 0, dimension: 3}\n    _typelessdata: ''\n";
@@ -334,7 +336,7 @@ fn blend_shape_channels_sharing_frames_are_errors() {
     let started = std::time::Instant::now();
     let err = mesh(&shared).unwrap_err();
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
-    assert!(err.message.contains("share frames"), "{err}");
+    assert!(err.message().contains("share frames"), "{err}");
     let partly = "    - {name: a, frameIndex: 0, frameCount: 10}\n    - {name: b, frameIndex: 5, frameCount: 10}\n";
     assert!(mesh(partly).is_err());
 }

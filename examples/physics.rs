@@ -1,7 +1,9 @@
 //! Physics: crates, balls and rocks fall, stack, bounce and slide down a
 //! ramp. Left click drops a crate, right click a ball, middle click a rock
 //! (a polygon), Space blasts everything near the mouse away,
-//! and the bell rings (turns red) when something lands in the bucket.
+//! and the bell rings (turns red) when something lands in the bucket. A
+//! ghost box shows where a crate would land, dots where the laser passes
+//! through bodies, and a blue line the nearest surface.
 //!
 //!   `cargo run --release --example physics --features physics`
 //!
@@ -104,6 +106,31 @@ fn laser(ctx: &mut Ctx) -> Option<Hit> {
 }
 // ANCHOR_END: queries
 
+// ANCHOR: shape_queries
+const CRATE: Vec2 = Vec2::new(30.0, 30.0);
+
+/// Where a crate dropped at the mouse would land: its box swept straight down.
+fn landing(ctx: &Ctx) -> Option<Vec2> {
+    let from = ctx.mouse_world();
+    let hit = ctx
+        .physics
+        .cast_box(from, CRATE, 0.0, Vec2::Y, H, QueryFilter::default())?;
+    Some(from + Vec2::Y * hit.distance)
+}
+
+/// Everything the laser passes through, nearest first, into `hits`.
+fn pierced(ctx: &Ctx, hits: &mut Vec<Hit>) {
+    let solids = QueryFilter::default();
+    ctx.physics.cast_ray_all(ctx.mouse_world(), Vec2::Y, H, solids, hits);
+}
+
+/// The nearest solid surface within 150 px of the mouse.
+fn nearest(ctx: &Ctx) -> Option<PointHit> {
+    ctx.physics
+        .closest_point(ctx.mouse_world(), 150.0, QueryFilter::default())
+}
+// ANCHOR_END: shape_queries
+
 fn drop_things(ctx: &mut Ctx) {
     let at = ctx.mouse_world();
     if ctx.input.mouse_pressed(MouseButton::Left) {
@@ -195,6 +222,23 @@ fn draw(ctx: &mut Ctx) {
             }
             _ => {} // shapes added in later versions
         }
+    }
+    if let Some(at) = landing(ctx) {
+        let h = CRATE / 2.0;
+        let ghost = [vec2(-h.x, -h.y), vec2(h.x, -h.y), vec2(h.x, h.y), vec2(-h.x, h.y)].map(|c| at + c);
+        for i in 0..4 {
+            ctx.gfx
+                .draw_line(ghost[i], ghost[(i + 1) % 4], 1.0, Color::rgba(1.0, 1.0, 1.0, 0.4));
+        }
+    }
+    let mut hits = Vec::new();
+    pierced(ctx, &mut hits);
+    for hit in &hits {
+        ctx.gfx.draw_circle(hit.point, 2.0, Color::rgba(1.0, 0.6, 0.6, 0.8));
+    }
+    if let Some(near) = nearest(ctx).filter(|n| !n.inside) {
+        ctx.gfx
+            .draw_line(ctx.mouse_world(), near.point, 1.0, Color::rgba(0.5, 0.8, 1.0, 0.6));
     }
     if let Some(hit) = laser(ctx) {
         ctx.gfx

@@ -51,6 +51,15 @@ use super::linear;
 /// ctx.scene3d.sky.sky_color = Color::hex(0x9CC4E4);
 /// # }
 /// ```
+///
+/// # Defaults and cost
+///
+/// [`Default`] is the physical atmosphere on, a haze of 1, a sun disc of 1.5
+/// degrees, stars at 1, and fog and light shafts off. Fog costs nothing while
+/// its density is 0. Light shafts cost 16 shadow map taps per pixel and need
+/// the sun's shadows. A [`SkyShader`] runs your code wherever the engine
+/// looks at the sky (background, fog color, reflections, ambient light and
+/// what reflection probes capture).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct Sky {

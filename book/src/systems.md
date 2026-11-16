@@ -551,7 +551,7 @@ declared; see [Declared system access](system-access.md). With
 same time; see [Parallel systems](parallel-systems.md) for the rules and
 for when it pays off. Existing unannotated `sim_system`
 callbacks remain usable and exclusive.
-See [the architecture](https://github.com/ponkoengine/ponko/blob/main/ARCHITECTURE.md)
+See [the architecture](../../ARCHITECTURE.md)
 for current subsystem boundaries.
 
 ## Systems with state
@@ -594,3 +594,31 @@ systems are in the list under their names (`ponko::systems::update_animators`,
 `ponko::ecs::draw_sprites`), next to yours, in the order they run. For a full
 timeline, build with `--features profiling` and open
 [puffin_viewer](https://github.com/EmbarkStudios/puffin) on `127.0.0.1:8585`.
+
+## Fallible setup and plugins
+
+Setup can use `?` without changing any system signature:
+
+```rust,no_run
+use ponko::prelude::*;
+fn main() -> Result<(), Error> {
+    Game::new("Systems", 800, 600)
+        .try_setup(|ctx| {
+            let texture = ctx.gfx.try_load_texture("player.png")?;
+            ctx.world.insert_resource(texture);
+            Ok(())
+        })
+        .fixed_hz(60)
+        .sim_system(|_ctx| {})
+        .try_run()?;
+    Ok(())
+}
+```
+
+A plugin may override `Plugin::try_setup(&self, ctx: &mut Ctx) -> Result<(), Error>`.
+Its default calls the existing `setup` hook, preserving existing plugins.
+Callbacks and plugins share one ordered queue; a failure stops the queue
+and prevents systems from running. All consuming configuration builders
+remain available on `ConfiguredGame`, including physics, scheduling and
+window settings. See [startup limitations](getting-started.md#recoverable-startup)
+for native GPU and asynchronous browser behavior.

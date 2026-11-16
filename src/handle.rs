@@ -18,20 +18,23 @@
 //!   nothing.
 //! - An empty handle: [`Handle::NONE`], which is never live.
 //!
-//! No handle is ever given out twice. Kinds that streamed worlds make and
-//! free all the time (meshes, GPU buffers and collision meshes) reuse a
-//! freed one's table slot, so their tables don't grow, but under a new
-//! handle: it counts how often its slot was given out (up to 4095 times;
-//! then the slot is retired rather than counting from zero again). The
-//! other kinds never reuse a slot.
+//! No handle is ever given out twice. Kinds that games make and free all
+//! the time (textures and render targets, sounds, fonts, meshes, GPU
+//! buffers, instance cells and collision meshes) reuse a freed one's table
+//! slot, so their tables stay the size of the most held at once however
+//! long the game runs, but under a new handle: it counts how often its
+//! slot was given out (up to 4095 times; then the slot is retired rather
+//! than counting from zero again, which costs one table entry per 4095
+//! makes). The other kinds never reuse a slot.
 //!
 //! Freeing something others still use is defined: they draw with the
 //! default. A model whose mesh was freed draws nothing (as with
-//! [`Mesh::NONE`](crate::render::Mesh::NONE)); a material whose texture was freed
+//! `Mesh::NONE`); a material whose texture was freed
 //! samples white, as if it had none; a mesh part whose material was freed
 //! draws with the default material; text in a freed font uses the built-in
 //! one. Nothing is reference counted: freeing is explicit, and handles
 //! stay `Copy`.
+#![deny(missing_docs)]
 
 use std::hash::Hash;
 
@@ -44,12 +47,12 @@ mod sealed {
 
 /// A handle to a resource the engine holds for the game: [`Texture`](crate::texture::Texture),
 /// [`Sound`](crate::audio::Sound), [`Font`](crate::text::Font),
-/// [`SpriteShader`](crate::render::SpriteShader), [`SpriteMaterial`](crate::render::SpriteMaterial), and with the `3d` feature [`Mesh`](crate::render::Mesh),
-/// [`Material`](crate::render::Material), [`Shader`](crate::render::Shader),
-/// [`Compute`](crate::render::Compute), [`Effect`](crate::render::Effect),
-/// [`GpuBuffer`](crate::render::GpuBuffer), [`InstanceBatch`](crate::render::InstanceBatch),
-/// [`TextureArray`](crate::terrain::TextureArray) and [`TerrainTile`](crate::terrain::TerrainTile)
-/// (with `physics3d`, [`CollisionMesh`](crate::d3::CollisionMesh) too).
+/// [`SpriteShader`](crate::render::SpriteShader), [`SpriteMaterial`](crate::render::SpriteMaterial), and with the `3d` feature `Mesh`,
+/// `Material`, `Shader`,
+/// `Compute`, `Effect`,
+/// `GpuBuffer`, `InstanceBatch`,
+/// `TextureArray` and `TerrainTile`
+/// (with `physics3d`, `CollisionMesh` too).
 /// Render targets are textures.
 ///
 /// Check one with [`Ctx::is_live`] and release it with [`Ctx::free`].
@@ -156,6 +159,9 @@ pub struct LiveCounts {
     pub gpu_buffers: usize,
     /// Instance batches.
     pub instance_batches: usize,
+    /// Instance cells (parts of instance batches, see
+    /// `InstanceCell`).
+    pub instance_cells: usize,
     /// Texture arrays.
     pub texture_arrays: usize,
     /// Sounds, streams included.
@@ -284,12 +290,12 @@ impl Graphics {
 
     /// Releases what `handle` names, as [`Ctx::free`] describes: whatever
     /// still uses it draws with the default. Freeing it again, or freeing
-    /// [`Handle::NONE`], does nothing. Meshes and GPU buffers give their
-    /// table slots to the next ones made (streamed worlds make and free
-    /// them all the time) under new handles, so the freed handle stays dead
-    /// and freeing it again leaves the new resource alone; a freed buffer's
-    /// [compute passes](crate::render::RenderPasses::compute) (and
-    /// [scene compute passes](crate::render::RenderPasses::scene_compute)) are removed
+    /// [`Handle::NONE`], does nothing. Textures, fonts, meshes and GPU
+    /// buffers give their table slots to the next ones made under new
+    /// handles, so the freed handle stays dead and freeing it again leaves
+    /// the new resource alone; a freed buffer's
+    /// `compute passes` (and
+    /// `scene compute passes`) are removed
     /// before its slot is reused.
     ///
     /// ```
@@ -406,6 +412,7 @@ impl LiveSet {
     }
 
     /// The live ids, in order.
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub(crate) fn ids(&self) -> impl Iterator<Item = u32> + '_ {
         self.state
             .iter()
@@ -415,24 +422,147 @@ impl LiveSet {
     }
 }
 
+/// Which ids of a kind that reuses freed slots ([`SlotIds`]: textures and
+/// sounds) are live. It keeps one entry per slot, not per id, so a kind
+/// made and freed a million times in one slot costs one entry.
+#[derive(Debug, Default)]
+pub(crate) struct SlotLiveSet {
+    /// Per slot: the id it was last given out as, and whether that id is
+    /// live. A slot never given out has no entry (or `None`).
+    slots: Vec<Option<(u32, bool)>>,
+    live: usize,
+}
+
+impl SlotLiveSet {
+    /// Marks `id` made and live. An id older than its slot's current one,
+    /// or one already freed, stays dead.
+    pub(crate) fn insert(&mut self, id: u32) {
+        let slot = (id & INDEX_MASK) as usize;
+        if slot >= self.slots.len() {
+            self.slots.resize(slot + 1, None);
+        }
+        match self.slots[slot] {
+            Some((current, _)) if id >> INDEX_BITS <= current >> INDEX_BITS => {}
+            Some((_, true)) => self.slots[slot] = Some((id, true)),
+            _ => {
+                self.slots[slot] = Some((id, true));
+                self.live += 1;
+            }
+        }
+    }
+
+    /// Whether `id` was made and not freed.
+    pub(crate) fn contains(&self, id: u32) -> bool {
+        self.slots.get((id & INDEX_MASK) as usize) == Some(&Some((id, true)))
+    }
+
+    /// Whether `id` was made, freed or not: its slot was given out under
+    /// its generation or a later one.
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
+    pub(crate) fn was_made(&self, id: u32) -> bool {
+        self.slots
+            .get((id & INDEX_MASK) as usize)
+            .copied()
+            .flatten()
+            .is_some_and(|(current, _)| id >> INDEX_BITS <= current >> INDEX_BITS)
+    }
+
+    /// Marks `id` freed; true if it was live (the caller then lets its
+    /// slot be given out again).
+    pub(crate) fn remove(&mut self, id: u32) -> bool {
+        match self.slots.get_mut((id & INDEX_MASK) as usize) {
+            Some(Some((current, live))) if *current == id && *live => {
+                *live = false;
+                self.live -= 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// How many are live.
+    pub(crate) fn len(&self) -> usize {
+        self.live
+    }
+
+    /// The live ids, in slot order.
+    pub(crate) fn ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.slots.iter().filter_map(|s| match s {
+            Some((id, true)) => Some(*id),
+            _ => None,
+        })
+    }
+
+    /// Slots it keeps an entry for.
+    #[cfg(test)]
+    pub(crate) fn slots(&self) -> usize {
+        self.slots.len()
+    }
+}
+
+/// [`SlotIds`] for a kind whose table holds nothing per slot (a headless
+/// run's textures, the silent audio backend's sounds): the ids, and how
+/// many slots were ever given out.
+#[derive(Debug)]
+pub(crate) struct SlotCounter {
+    ids: SlotIds,
+    slots: usize,
+}
+
+impl SlotCounter {
+    /// Counting slots from `first` (the ones below it are never given out).
+    pub(crate) const fn starting_at(first: usize) -> Self {
+        Self {
+            ids: SlotIds {
+                ids: Vec::new(),
+                free: Vec::new(),
+            },
+            slots: first,
+        }
+    }
+
+    /// The id for a new resource (see [`SlotIds::make`]).
+    pub(crate) fn make(&mut self, what: &str) -> u32 {
+        let id = self.ids.make(self.slots, what);
+        if (id & INDEX_MASK) as usize == self.slots {
+            self.slots += 1;
+        }
+        id
+    }
+
+    /// Lets freed `id`'s slot be given out again (see [`SlotIds::release`]).
+    pub(crate) fn release(&mut self, id: u32) {
+        self.ids.release(id);
+    }
+
+    /// Slots given out so far, live, freed or retired.
+    #[cfg(test)]
+    pub(crate) fn slots(&self) -> usize {
+        self.slots
+    }
+}
+
+impl Default for SlotCounter {
+    fn default() -> Self {
+        Self::starting_at(0)
+    }
+}
+
 /// Bits of a [`SlotIds`] id that name its slot in the kind's tables; the
 /// bits above count how often the slot was given out before. 20 bits allow
 /// about a million slots at once, far more meshes or buffers than a GPU
 /// holds; the 12 bits above let one slot be given out 4095 times before it
 /// is retired, so a slot that streaming hammers costs one table entry per
 /// 4095 makes instead of one per make.
-#[cfg(feature = "3d")]
 pub(crate) const INDEX_BITS: u32 = 20;
 /// The slot bits of a [`SlotIds`] id (see [`INDEX_BITS`]).
-#[cfg(feature = "3d")]
 pub(crate) const INDEX_MASK: u32 = (1 << INDEX_BITS) - 1;
 /// The last generation, never given out: `NONE` (`u32::MAX`) and the
 /// engine's other sentinel ids (`u32::MAX - 1`, ...) have it.
-#[cfg(feature = "3d")]
 const LAST_GENERATION: u32 = u32::MAX >> INDEX_BITS;
 
 /// The one id scheme for handle kinds whose tables reuse freed slots
-/// (meshes, GPU buffers, collision meshes): the id each slot was last given
+/// (textures, sounds, meshes, GPU buffers, collision meshes): the id each slot was last given
 /// out as, and the freed ones waiting to be given out again. An id is its
 /// slot in the low [`INDEX_BITS`] and its generation above; a freed slot is
 /// given out again under the next generation, so a handle kept past `free`
@@ -441,7 +571,6 @@ const LAST_GENERATION: u32 = u32::MAX >> INDEX_BITS;
 ///
 /// Whether an id is live is the kind's own table's business (a mesh's
 /// bounds, a buffer's length); this only maps ids to slots.
-#[cfg(feature = "3d")]
 #[derive(Debug, Default)]
 pub(crate) struct SlotIds {
     /// The id each slot was last given out as; shorter than the kind's
@@ -452,7 +581,6 @@ pub(crate) struct SlotIds {
     free: Vec<u32>,
 }
 
-#[cfg(feature = "3d")]
 impl SlotIds {
     /// The id for a new resource: a freed slot under its next generation,
     /// or else slot `len` (the kind's table length: the caller adds the
@@ -477,6 +605,7 @@ impl SlotIds {
 
     /// Gives `id` out again as it is (a resident mesh reloaded under the
     /// handle it had before it was evicted; see [`keep`](Self::keep)).
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub(crate) fn remake(&mut self, id: u32) {
         self.set(id);
     }
@@ -501,6 +630,7 @@ impl SlotIds {
 
     /// The id `slot` was last given out as.
     #[inline]
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub(crate) fn id_in(&self, slot: usize) -> u32 {
         self.ids.get(slot).copied().unwrap_or(slot as u32)
     }
@@ -515,6 +645,7 @@ impl SlotIds {
 
     /// Takes freed `id` back out of the pool, so its slot is kept for
     /// [`remake`](Self::remake); false if it wasn't there (retired).
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub(crate) fn keep(&mut self, id: u32) -> bool {
         match self.free.iter().rposition(|&f| f == id) {
             Some(i) => {
@@ -651,6 +782,7 @@ mod three {
     use crate::render::Effect;
     use crate::render::GpuBuffer;
     use crate::render::InstanceBatch;
+    use crate::render::InstanceCell;
     use crate::render::Material;
     use crate::render::Mesh;
     use crate::render::Shader;
@@ -692,6 +824,12 @@ mod three {
         InstanceBatch,
         |g: &Graphics, h: InstanceBatch| g.instance_batch_len(h).is_some(),
         |g: &mut Graphics, h: InstanceBatch| g.free_instance_batch_id(h.id)
+    );
+    // A cell's slot goes to the next cell, under a new handle.
+    id_handle!(
+        InstanceCell,
+        |g: &Graphics, h: InstanceCell| g.instance_cell_len(h).is_some(),
+        |g: &mut Graphics, h: InstanceCell| g.free_instance_cell(h)
     );
 
     impl sealed::Sealed for TextureArray {}
@@ -813,8 +951,87 @@ mod tests {
         assert_eq!(set.len(), 0);
     }
 
+    #[test]
+    fn a_slot_live_set_tracks_the_current_id_of_each_slot() {
+        let mut set = SlotLiveSet::default();
+        let (a, b) = (0, 1 << INDEX_BITS); // slot 0, generations 0 and 1
+        set.insert(a);
+        assert!(set.contains(a) && set.was_made(a) && !set.was_made(b));
+        assert!(set.remove(a) && !set.remove(a));
+        set.insert(a);
+        assert!(!set.contains(a), "a freed id stays freed");
+        set.insert(b);
+        assert!(set.contains(b) && !set.contains(a));
+        assert!(set.was_made(a) && set.was_made(b), "the older id was made too");
+        assert!(!set.remove(a), "freeing the stale id leaves the new one alone");
+        assert_eq!((set.len(), set.slots()), (1, 1));
+        assert_eq!(set.ids().collect::<Vec<_>>(), [b]);
+        assert!(!set.contains(u32::MAX) && !set.was_made(u32::MAX));
+    }
+
+    /// Made, freed and made again 200 000 times: textures (headless) and
+    /// sounds take one slot per 4095 makes (each slot is given out 4095
+    /// times, then retired), in the id tables, the live-handle tables and
+    /// the audio backend's sound table, and never give an id out twice.
+    #[test]
+    fn two_hundred_thousand_texture_and_sound_cycles_reuse_their_slots() {
+        const CYCLES: usize = 200_000;
+        let most = CYCLES / 4095 + 2;
+        crate::game::Game::new("t", 1, 1).run_headless(0, |ctx| {
+            let mut ids = std::collections::HashSet::new();
+            let mut last = None;
+            for _ in 0..CYCLES {
+                let texture = ctx.gfx.create_texture(1, 1, &[255; 4]);
+                let sound = ctx.audio.create(8_000, &[0.0; 8]);
+                assert!(ids.insert((texture.id, sound.id)), "an id given out twice");
+                if let Some((texture, sound)) = last {
+                    assert!(
+                        !ctx.is_live(texture) && !ctx.is_live(sound),
+                        "a freed handle stays dead"
+                    );
+                }
+                ctx.free(texture);
+                ctx.free(sound);
+                last = Some((texture, sound));
+            }
+            let slots = [
+                ctx.gfx.headless_textures.slots(),
+                ctx.gfx.textures_live.slots(),
+                ctx.audio.sounds_live.slots(),
+                ctx.audio.backend.slots(),
+            ];
+            assert!(slots.iter().all(|&n| n <= most), "slots (at most {most}): {slots:?}");
+            assert_eq!(ctx.live_counts(), LiveCounts::default());
+        });
+    }
+
+    /// A handle kept past `free` never reaches what its slot holds next:
+    /// it isn't live, freeing it again leaves the new one alone, and
+    /// updating it changes nothing.
+    #[test]
+    fn a_freed_handle_stays_dead_after_its_slot_is_reused() {
+        crate::game::Game::new("t", 1, 1).run_headless(0, |ctx| {
+            let old = ctx.gfx.create_texture(1, 1, &[255; 4]);
+            ctx.free(old);
+            let new = ctx.gfx.create_texture(1, 1, &[255; 4]);
+            assert_eq!(new.id & INDEX_MASK, old.id & INDEX_MASK, "the same slot");
+            assert_ne!(new, old);
+            ctx.free(old);
+            ctx.gfx.update_texture(old, &[0; 4]);
+            assert!(ctx.is_live(new) && !ctx.is_live(old));
+            assert_eq!(ctx.live_counts().textures, 1);
+
+            let old = ctx.audio.create(8_000, &[0.0; 8]);
+            ctx.free(old);
+            let new = ctx.audio.create(8_000, &[0.0; 8]);
+            assert_eq!(new.id & INDEX_MASK, old.id & INDEX_MASK, "the same slot");
+            ctx.free(old);
+            assert!(ctx.is_live(new) && !ctx.is_live(old));
+            assert_eq!(ctx.live_counts().sounds, 1);
+        });
+    }
+
     /// One kind's table as the engine keeps one: `make`, then add the slot.
-    #[cfg(feature = "3d")]
     fn make(ids: &mut SlotIds, table: &mut usize) -> u32 {
         let id = ids.make(*table, "test");
         if (id & INDEX_MASK) as usize == *table {
@@ -823,7 +1040,6 @@ mod tests {
         id
     }
 
-    #[cfg(feature = "3d")]
     #[test]
     fn a_freed_slot_comes_back_under_its_next_generation() {
         let (mut ids, mut table) = (SlotIds::default(), 0);
@@ -841,7 +1057,6 @@ mod tests {
     /// A slot hammered by streaming is given out 4095 times, then retired:
     /// no id repeats, and none has the generation `NONE` and the engine's
     /// other sentinels use.
-    #[cfg(feature = "3d")]
     #[test]
     fn a_slot_is_retired_instead_of_wrapping() {
         let (mut ids, mut table) = (SlotIds::default(), 0);
@@ -872,7 +1087,6 @@ mod tests {
         assert!(message.contains("no mesh slot left"), "{message}");
     }
 
-    #[cfg(feature = "3d")]
     #[test]
     fn a_kept_id_is_given_out_again_as_it_was() {
         let (mut ids, mut table) = (SlotIds::default(), 0);

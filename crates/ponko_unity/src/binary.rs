@@ -63,7 +63,7 @@ const MAX_DEPTH: usize = 128;
 impl<'a> Reader<'a> {
     fn bytes(&mut self, n: usize) -> Result<&'a [u8], Error> {
         let end = self.at.checked_add(n).filter(|&e| e <= self.data.len());
-        let end = end.ok_or_else(|| Error::new(format!("binary asset: data ends early (at byte {})", self.at)))?;
+        let end = end.ok_or_else(|| Error::decode(format!("binary asset: data ends early (at byte {})", self.at)))?;
         let b = &self.data[self.at..end];
         self.at = end;
         Ok(b)
@@ -78,7 +78,7 @@ impl<'a> Reader<'a> {
     /// than its size allows. Charged before the memory is taken.
     fn spend(&mut self, n: usize) -> Result<(), Error> {
         self.budget = self.budget.checked_sub(n).ok_or_else(|| {
-            Error::new("binary asset: it decodes to more than its size allows (corrupt counts or offsets?)")
+            Error::decode("binary asset: it decodes to more than its size allows (corrupt counts or offsets?)")
         })?;
         Ok(())
     }
@@ -110,7 +110,7 @@ impl<'a> Reader<'a> {
     fn count(&mut self) -> Result<usize, Error> {
         let at = self.at;
         let n = self.i32()?;
-        usize::try_from(n).map_err(|_| Error::new(format!("binary asset: a count of {n} (at byte {at})")))
+        usize::try_from(n).map_err(|_| Error::decode(format!("binary asset: a count of {n} (at byte {at})")))
     }
     fn u64(&mut self) -> Result<u64, Error> {
         Ok(u64::from_le_bytes(self.array()?))
@@ -130,7 +130,7 @@ impl<'a> Reader<'a> {
         let end = rest
             .iter()
             .position(|&b| b == 0)
-            .ok_or_else(|| Error::new("binary asset: unterminated string"))?;
+            .ok_or_else(|| Error::decode("binary asset: unterminated string"))?;
         let s = String::from_utf8_lossy(&rest[..end]).into_owned();
         self.at += end + 1;
         Ok(s)
@@ -163,7 +163,7 @@ pub(crate) fn parse(data: &[u8]) -> Result<UnityFile, Error> {
     let version = r.u32()?;
     let _legacy_offset = r.u32()?;
     if version < 22 {
-        return Err(Error::new(format!(
+        return Err(Error::unsupported(format!(
             "binary asset format {version} is older than Unity 2022 (22); resave it"
         )));
     }
@@ -173,14 +173,14 @@ pub(crate) fn parse(data: &[u8]) -> Result<UnityFile, Error> {
     let _file_size = r.u64()?;
     let data_offset = r.u64()?;
     let data_offset =
-        usize::try_from(data_offset).map_err(|_| Error::new(format!("binary asset: data at byte {data_offset}")))?;
+        usize::try_from(data_offset).map_err(|_| Error::decode(format!("binary asset: data at byte {data_offset}")))?;
     let _unknown = r.u64()?;
     r.big = big_endian;
 
     let _unity_version = r.cstring()?;
     let _platform = r.i32()?;
     if r.u8()? == 0 {
-        return Err(Error::new(
+        return Err(Error::unsupported(
             "binary asset has no type trees (only editor-saved assets are supported)",
         ));
     }
@@ -196,7 +196,7 @@ pub(crate) fn parse(data: &[u8]) -> Result<UnityFile, Error> {
         let path_id = r.i64()?;
         let start = r.i64()?;
         let start = usize::try_from(start)
-            .map_err(|_| Error::new(format!("binary asset: object {path_id} starts at {start}")))?;
+            .map_err(|_| Error::decode(format!("binary asset: object {path_id} starts at {start}")))?;
         let size = r.u32()? as usize;
         let type_index = r.i32()?;
         let type_index = usize::try_from(type_index).unwrap_or(usize::MAX);
@@ -227,13 +227,13 @@ pub(crate) fn parse(data: &[u8]) -> Result<UnityFile, Error> {
             .checked_add(start)
             .and_then(|begin| Some(begin..begin.checked_add(size)?))
             .filter(|range| range.end <= data.len())
-            .ok_or_else(|| Error::new(format!("binary asset: object {path_id} lies outside the data")))?;
+            .ok_or_else(|| Error::decode(format!("binary asset: object {path_id} lies outside the data")))?;
         ranges.push((range, path_id));
     }
     ranges.sort_by_key(|(range, _)| (range.start, range.end));
     for pair in ranges.windows(2) {
         if pair[1].0.start < pair[0].0.end {
-            return Err(Error::new(format!(
+            return Err(Error::decode(format!(
                 "binary asset: objects {} and {} overlap",
                 pair[0].1, pair[1].1
             )));
@@ -244,7 +244,7 @@ pub(crate) fn parse(data: &[u8]) -> Result<UnityFile, Error> {
     for (path_id, start, size, type_index) in entries {
         let ty = types
             .get(type_index)
-            .ok_or_else(|| Error::new(format!("binary asset: object {path_id} has no type {type_index}")))?;
+            .ok_or_else(|| Error::decode(format!("binary asset: object {path_id} has no type {type_index}")))?;
         let begin = data_offset + start; // checked above
         let bytes = &data[begin..begin + size];
         let mut o = Reader {
@@ -260,7 +260,7 @@ pub(crate) fn parse(data: &[u8]) -> Result<UnityFile, Error> {
         let body = read_node(&mut o, &ty.nodes, &mut i, &guids)?;
         r.budget = o.budget;
         if o.at != bytes.len() {
-            return Err(Error::new(format!(
+            return Err(Error::decode(format!(
                 "binary asset: object {path_id} ({}) read {} of its {} bytes",
                 ty.nodes[0].ty,
                 o.at,
@@ -312,10 +312,10 @@ fn read_type(r: &mut Reader) -> Result<Type, Error> {
     let count = usize::try_from(count)
         .ok()
         .filter(|&c| c > 0 && c <= r.remaining() / NODE_BYTES)
-        .ok_or_else(|| Error::new(format!("binary asset: a type tree with {count} nodes")))?;
+        .ok_or_else(|| Error::decode(format!("binary asset: a type tree with {count} nodes")))?;
     let strings_len = r.i32()?;
     let strings_len = usize::try_from(strings_len)
-        .map_err(|_| Error::new(format!("binary asset: type tree strings of {strings_len} bytes")))?;
+        .map_err(|_| Error::decode(format!("binary asset: type tree strings of {strings_len} bytes")))?;
     let mut raw = Vec::with_capacity(count);
     for _ in 0..count {
         let _version = r.u16()?;
@@ -342,7 +342,7 @@ fn read_type(r: &mut Reader) -> Result<Type, Error> {
         let rest = table.get(at..).unwrap_or_default();
         let window = &rest[..rest.len().min(MAX_NAME + 1)];
         let end = window.iter().position(|&b| b == 0).ok_or_else(|| {
-            Error::new(if window.len() > MAX_NAME {
+            Error::decode(if window.len() > MAX_NAME {
                 format!("binary asset: a type tree name longer than {MAX_NAME} bytes")
             } else {
                 "binary asset: a type tree name without an end".to_owned()
@@ -387,7 +387,7 @@ fn read_node(r: &mut Reader, nodes: &[Node], i: &mut usize, guids: &[String]) ->
     r.spend(VALUE_COST)?;
     r.depth += 1;
     if r.depth > MAX_DEPTH {
-        return Err(Error::new(format!(
+        return Err(Error::decode(format!(
             "binary asset: values nested deeper than {MAX_DEPTH}"
         )));
     }
@@ -427,7 +427,7 @@ fn read_node_value(r: &mut Reader, nodes: &[Node], i: &mut usize, guids: &[Strin
         // be in its subtree (deeper), so nesting is bounded by the levels.
         let element = *i + 2;
         if element >= end {
-            return Err(Error::new(format!(
+            return Err(Error::decode(format!(
                 "binary asset: array {} has no element type in its subtree",
                 node.name
             )));
@@ -455,7 +455,7 @@ fn read_node_value(r: &mut Reader, nodes: &[Node], i: &mut usize, guids: &[Strin
         let external = (file > 0)
             .then(|| usize::try_from(file - 1))
             .transpose()
-            .map_err(|_| Error::new(format!("binary asset: a reference into external file {file}")))?;
+            .map_err(|_| Error::decode(format!("binary asset: a reference into external file {file}")))?;
         if let Some(g) = external.and_then(|f| guids.get(f)) {
             r.spend(entry_cost("guid") + VALUE_COST + g.len())?;
             entries.push(("guid".to_owned(), Value::Scalar(g.clone())));
@@ -490,7 +490,7 @@ fn read_node_value(r: &mut Reader, nodes: &[Node], i: &mut usize, guids: &[Strin
 fn read_array(r: &mut Reader, nodes: &[Node], element: usize, n: usize, guids: &[String]) -> Result<Value, Error> {
     let el = nodes
         .get(element)
-        .ok_or_else(|| Error::new("binary asset: an array without an element type"))?;
+        .ok_or_else(|| Error::decode("binary asset: an array without an element type"))?;
     // Numbers come out as one compact list (64-bit integers stay text, as
     // an f64 can't hold them all).
     let wide = matches!(
@@ -499,14 +499,17 @@ fn read_array(r: &mut Reader, nodes: &[Node], element: usize, n: usize, guids: &
     );
     if el.end == element + 1 && el.flags & ALIGN == 0 && !wide {
         let Some(size) = number_size(&el.ty) else {
-            return Err(Error::new(format!(
+            return Err(Error::unsupported(format!(
                 "binary asset: an array of {} isn't supported",
                 el.ty
             )));
         };
         // Checked against the data first: each number takes its bytes.
         if n.checked_mul(size).is_none_or(|bytes| bytes > r.remaining()) {
-            return Err(Error::new(format!("binary asset: data ends early (at byte {})", r.at)));
+            return Err(Error::decode(format!(
+                "binary asset: data ends early (at byte {})",
+                r.at
+            )));
         }
         r.spend(n * std::mem::size_of::<f64>())?;
         let mut numbers = Vec::with_capacity(n);

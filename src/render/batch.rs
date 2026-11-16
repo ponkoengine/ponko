@@ -4,6 +4,13 @@
 //! Ordering rule: higher `z` draws on top; for equal `z`, later draws go on
 //! top (painter's order). Consecutive sprites with the same texture, clip
 //! rectangle, blend mode and material become one instanced draw call.
+//!
+//! Triangle meshes (2D skeletons' parts) go through the same list: each
+//! vertex is one entry, a `SpriteInstance` with zero size whose `pos` is the
+//! vertex and `uv` its texture coordinate, flagged by [`MESH`] in its style.
+//! A mesh's vertices share one `z` and are pushed together, so sorting
+//! keeps them together and in order; their batches are drawn as triangle
+//! lists from the same buffer, in the same order as the sprites around them.
 
 use bytemuck::{Pod, Zeroable};
 
@@ -58,6 +65,23 @@ impl SpriteInstance {
         }
     }
 
+    /// One vertex of a triangle mesh pushed with [`DrawList::push_mesh`]:
+    /// at `pos` (world units), showing texture coordinate `uv` (0..1),
+    /// tinted `color`. `local` is where it is inside the mesh's bounds
+    /// (0..1), what sprite shaders see as the pixel's `local`.
+    #[inline]
+    pub fn vertex(pos: [f32; 2], uv: [f32; 2], local: [f32; 2], color: [u8; 4]) -> Self {
+        let q = |x: f32| (x.clamp(0.0, 1.0) * 65535.0).round() as u16;
+        Self {
+            pos,
+            size: [0.0; 2],
+            pivot: [f16_bits(local[0]), f16_bits(local[1])],
+            rotation: 0.0,
+            color,
+            uv: [q(uv[0]), q(uv[1]), 0, 0],
+        }
+    }
+
     /// The same sprite showing only part of its texture.
     #[inline]
     pub fn with_uv(mut self, uv: [u16; 4]) -> Self {
@@ -100,12 +124,17 @@ pub(crate) fn f16_bits(x: f32) -> u16 {
     sign | (half + round) as u16
 }
 
-/// A run of instances that share one texture, clip and look.
+/// A run of instances that share one texture, clip, look and render layers.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Batch {
     pub clip: Option<crate::camera::Rect>,
+    /// The render layers its sprites are on (`RenderLayers` bits): a 2D
+    /// camera draws it if they share one with the camera's.
+    pub layers: u32,
     /// Blend mode and material (`sprite_material::style_key`); 0 for plain sprites.
     pub material: u32,
+    /// The entries are triangle-list vertices ([`MESH`]), not sprites.
+    pub mesh: bool,
     pub texture: u32,
     pub start: u32,
     pub end: u32,
@@ -129,12 +158,16 @@ pub(crate) struct DrawList {
     instances: Vec<SpriteInstance>,
     textures: Vec<u32>,
     zs: Vec<f32>,
-    /// Each sprite's clip and look: its style key (`sprite_material`), or
-    /// with `CLIPPED` set, an index into `clipped`. 0 for plain sprites.
+    /// Each sprite's clip, layers and look: its style key
+    /// (`sprite_material`), or with `CLIPPED` set, an index into `clipped`.
+    /// 0 for plain sprites.
     states: Vec<u32>,
-    /// This frame's clipped states: the clip and the style key.
-    clipped: Vec<(crate::camera::Rect, u32)>,
+    /// This frame's clipped states (clipped or not on the default layer):
+    /// the clip, the style key and the render layers.
+    clipped: Vec<Clipped>,
     clip: Option<crate::camera::Rect>,
+    /// The render layers sprites are pushed on; `None`: the default one.
+    layers: Option<u32>,
     /// True once two different `z` values have been pushed this frame.
     needs_sort: bool,
 
@@ -192,8 +225,19 @@ impl Slots {
     }
 }
 
+/// A sprite state that is not one style key: its clip, style key and render
+/// layers.
+type Clipped = (Option<crate::camera::Rect>, u32, u32);
+
+/// The render layers of a sprite without any (`RenderLayers::DEFAULT`).
+const DEFAULT_LAYERS: u32 = 1;
+
 /// A `DrawList` state with this bit is an index into its clipped states.
 pub(crate) const CLIPPED: u32 = 1 << 31;
+
+/// A style key with this bit is a triangle-list vertex, not a sprite (see
+/// the module docs). Below [`CLIPPED`], above every style key.
+pub(crate) const MESH: u32 = 1 << 30;
 
 /// Maps an `f32` to a `u32` whose unsigned order matches the float order.
 fn z_key(z: f32) -> u32 {
@@ -204,6 +248,22 @@ fn z_key(z: f32) -> u32 {
 impl DrawList {
     pub fn set_clip(&mut self, clip: Option<crate::camera::Rect>) {
         self.clip = clip;
+    }
+
+    /// The clip sprites are pushed with now.
+    pub fn clip(&self) -> Option<crate::camera::Rect> {
+        self.clip
+    }
+
+    /// The render layers the sprites pushed from now on are on (until
+    /// [`clear`](Self::clear)); `RenderLayers::DEFAULT` is the default.
+    pub fn set_layers(&mut self, layers: u32) {
+        self.layers = (layers != DEFAULT_LAYERS).then_some(layers);
+    }
+
+    /// The render layers sprites are pushed on now.
+    pub fn layers(&self) -> u32 {
+        self.layers.unwrap_or(DEFAULT_LAYERS)
     }
     #[inline]
     pub fn push(&mut self, texture: u32, z: f32, instance: SpriteInstance) {
@@ -221,9 +281,10 @@ impl DrawList {
         {
             self.needs_sort = true;
         }
-        let state = match self.clip {
-            None => style,
-            Some(clip) => self.clipped_state(clip, style),
+        let state = if self.clip.is_none() && self.layers.is_none() {
+            style
+        } else {
+            self.clipped_state(self.clip, style, self.layers.unwrap_or(DEFAULT_LAYERS))
         };
         self.states.push(state);
         self.instances.push(instance);
@@ -231,13 +292,24 @@ impl DrawList {
         self.zs.push(z);
     }
 
+    /// Pushes a triangle list: every three of `vertices` (made with
+    /// [`SpriteInstance::vertex`]) are one triangle, drawn with `texture`
+    /// and `style` at `z`, after what was pushed before at the same `z`.
+    pub fn push_mesh(&mut self, texture: u32, style: u32, z: f32, vertices: &[SpriteInstance]) {
+        debug_assert!(vertices.len().is_multiple_of(3), "a triangle list");
+        debug_assert!(style & MESH == 0);
+        for v in vertices {
+            self.push_styled(texture, style | MESH, z, *v);
+        }
+    }
+
     /// The state of a clipped sprite: the same index for the same clip and
     /// style all frame, so equal ones still batch together. Kept out of
     /// line: most sprites aren't clipped, and the push loop stays small.
     #[cold]
     #[inline(never)]
-    fn clipped_state(&mut self, clip: crate::camera::Rect, style: u32) -> u32 {
-        let wanted = (clip, style);
+    fn clipped_state(&mut self, clip: Option<crate::camera::Rect>, style: u32, layers: u32) -> u32 {
+        let wanted = (clip, style, layers);
         let at = match self.clipped.last() {
             Some(last) if *last == wanted => self.clipped.len() - 1,
             _ => match self.clipped.iter().position(|c| *c == wanted) {
@@ -251,22 +323,23 @@ impl DrawList {
         CLIPPED | at as u32
     }
 
-    /// The clip and style of `state`.
+    /// The clip, style and render layers of `state`.
     #[inline]
-    fn resolve(clipped: &[(crate::camera::Rect, u32)], state: u32) -> (Option<crate::camera::Rect>, u32) {
-        if state & CLIPPED == 0 {
-            (None, state)
+    fn resolve(clipped: &[Clipped], state: u32) -> (Option<crate::camera::Rect>, u32, bool, u32) {
+        let (clip, style, layers) = if state & CLIPPED == 0 {
+            (None, state, DEFAULT_LAYERS)
         } else {
-            let (clip, style) = clipped[(state & !CLIPPED) as usize];
-            (Some(clip), style)
-        }
+            clipped[(state & !CLIPPED) as usize]
+        };
+        (clip, style & !MESH, style & MESH != 0, layers)
     }
 
     /// Whether any sprite this frame has a blend mode or material other
-    /// than the plain one (the renderer then prepares their pipelines).
+    /// than the plain one, or is a mesh (the renderer then prepares their
+    /// pipelines).
     #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub fn batches_styled(batches: &[Batch]) -> bool {
-        batches.iter().any(|b| b.material != 0)
+        batches.iter().any(|b| b.material != 0 || b.mesh)
     }
 
     /// Appends `n` sprites that `fill` writes through [`Slots::write`],
@@ -315,6 +388,7 @@ impl DrawList {
         self.states.clear();
         self.clipped.clear();
         self.clip = None;
+        self.layers = None;
         self.needs_sort = false;
         self.batches.clear();
     }
@@ -359,11 +433,13 @@ impl DrawList {
                 Some(b) if b.texture == texture && run_state == state => b.end = i + 1,
                 _ => {
                     batches.extend(run);
-                    let (clip, material) = Self::resolve(&self.clipped, state);
+                    let (clip, material, mesh, layers) = Self::resolve(&self.clipped, state);
                     run_state = state;
                     run = Some(Batch {
                         clip,
+                        layers,
                         material,
+                        mesh,
                         texture,
                         start: i,
                         end: i + 1,
@@ -375,12 +451,7 @@ impl DrawList {
     }
 
     /// One batch per run of equal textures and states, in order.
-    fn build_batches(
-        batches: &mut Vec<Batch>,
-        textures: &[u32],
-        states: &[u32],
-        clipped: &[(crate::camera::Rect, u32)],
-    ) {
+    fn build_batches(batches: &mut Vec<Batch>, textures: &[u32], states: &[u32], clipped: &[Clipped]) {
         let mut start = 0;
         while start < textures.len() {
             let texture = textures[start];
@@ -390,10 +461,12 @@ impl DrawList {
                 .zip(&states[start..])
                 .position(|(&t, &s)| t != texture || s != state)
                 .unwrap_or(textures.len() - start);
-            let (clip, material) = Self::resolve(clipped, state);
+            let (clip, material, mesh, layers) = Self::resolve(clipped, state);
             batches.push(Batch {
                 clip,
+                layers,
                 material,
+                mesh,
                 texture,
                 start: start as u32,
                 end: (start + len) as u32,
@@ -458,19 +531,46 @@ mod tests {
             &[
                 Batch {
                     clip: None,
+                    layers: 1,
                     material: 0,
+                    mesh: false,
                     texture: 1,
                     start: 0,
                     end: 101
                 },
                 Batch {
                     clip: None,
+                    layers: 1,
                     material: 0,
+                    mesh: false,
                     texture: 2,
                     start: 101,
                     end: n as u32 + 1
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn layer_changes_split_batches_and_reset_with_the_frame() {
+        let mut list = DrawList::default();
+        list.push(1, 0.0, inst(1.0));
+        list.set_layers(0b10);
+        list.push(1, 0.0, inst(2.0));
+        list.push(1, 0.0, inst(3.0));
+        list.set_layers(1);
+        list.push(1, 0.0, inst(4.0));
+        let (_, batches) = list.finish();
+        let layers: Vec<_> = batches.iter().map(|b| (b.layers, b.end - b.start)).collect();
+        assert_eq!(layers, [(1, 1), (0b10, 2), (1, 1)]);
+        assert!(batches.iter().all(|b| b.clip.is_none()));
+        list.set_layers(0b100);
+        list.clear();
+        list.push(1, 0.0, inst(5.0));
+        assert_eq!(
+            list.finish().1[0].layers,
+            1,
+            "the next frame starts on the default layer"
         );
     }
 
@@ -546,14 +646,18 @@ mod tests {
             &[
                 Batch {
                     clip: None,
+                    layers: 1,
                     material: 0,
+                    mesh: false,
                     texture: 1,
                     start: 0,
                     end: 2
                 },
                 Batch {
                     clip: None,
+                    layers: 1,
                     material: 0,
+                    mesh: false,
                     texture: 2,
                     start: 2,
                     end: 4
@@ -578,7 +682,9 @@ mod tests {
             batches,
             &[Batch {
                 clip: None,
+                layers: 1,
                 material: 0,
+                mesh: false,
                 texture: 7,
                 start: 0,
                 end: 1000
@@ -600,21 +706,27 @@ mod tests {
             &[
                 Batch {
                     clip: None,
+                    layers: 1,
                     material: 0,
+                    mesh: false,
                     texture: 1,
                     start: 0,
                     end: 2
                 },
                 Batch {
                     clip: None,
+                    layers: 1,
                     material: 0,
+                    mesh: false,
                     texture: 2,
                     start: 2,
                     end: 3
                 },
                 Batch {
                     clip: None,
+                    layers: 1,
                     material: 0,
+                    mesh: false,
                     texture: 1,
                     start: 3,
                     end: 4
@@ -638,14 +750,18 @@ mod tests {
             &[
                 Batch {
                     clip: None,
+                    layers: 1,
                     material: 0,
+                    mesh: false,
                     texture: 1,
                     start: 0,
                     end: 4
                 },
                 Batch {
                     clip: None,
+                    layers: 1,
                     material: 0,
+                    mesh: false,
                     texture: 2,
                     start: 4,
                     end: 5
@@ -668,7 +784,9 @@ mod tests {
             batches,
             &[Batch {
                 clip: None,
+                layers: 1,
                 material: 0,
+                mesh: false,
                 texture: 3,
                 start: 0,
                 end: 1

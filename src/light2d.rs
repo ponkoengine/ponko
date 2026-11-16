@@ -3,6 +3,8 @@
 //! path; the module docs of [`d2`](crate::d2) describe them) and the
 //! ambient light and normal maps on [`Graphics`].
 
+#![deny(missing_docs)]
+
 use bytemuck::{Pod, Zeroable};
 use glam::Vec2;
 use ponko_ecs::{Component, World};
@@ -214,6 +216,12 @@ impl Occluder2D {
     const CIRCLE_SIDES: usize = 16;
 
     /// A rectangle `size` wide and tall, centered on the entity.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let wall = ponko::d2::Occluder::rect(vec2(64.0, 16.0));
+    /// assert_eq!(wall.edges().len(), 4);
+    /// ```
     #[must_use]
     pub fn rect(size: Vec2) -> Self {
         let h = size.abs() * 0.5;
@@ -226,6 +234,12 @@ impl Occluder2D {
     }
 
     /// A circle of `radius`, centered on the entity (a 16-sided polygon).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let pillar = ponko::d2::Occluder::circle(12.0);
+    /// assert_eq!(pillar.edges().len(), 16);
+    /// ```
     #[must_use]
     pub fn circle(radius: f32) -> Self {
         let r = radius.abs();
@@ -237,6 +251,17 @@ impl Occluder2D {
 
     /// A closed polygon through `points`, relative to the entity, in either
     /// winding order. It may be concave; it must not cross itself.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let corner = [vec2(0.0, 0.0), vec2(30.0, 0.0), vec2(0.0, 30.0)];
+    /// let reversed = [corner[2], corner[1], corner[0]];
+    /// let a = ponko::d2::Occluder::polygon(&corner);
+    /// assert_eq!(a.edges().len(), 3);
+    /// // Either winding order gives edges with the outside on the same side.
+    /// assert_eq!(a.edges().iter().map(|e| (e[1] - e[0]).perp_dot(vec2(1.0, 1.0))).filter(|d| *d < 0.0).count(),
+    ///            ponko::d2::Occluder::polygon(&reversed).edges().iter().map(|e| (e[1] - e[0]).perp_dot(vec2(1.0, 1.0))).filter(|d| *d < 0.0).count());
+    /// ```
     #[must_use]
     pub fn polygon(points: &[Vec2]) -> Self {
         let n = points.len();
@@ -258,6 +283,12 @@ impl Occluder2D {
 
     /// A thin wall from `a` to `b` (relative to the entity), casting
     /// shadows toward both sides.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let fence = ponko::d2::Occluder::line(vec2(-50.0, 0.0), vec2(50.0, 0.0));
+    /// assert_eq!(fence.edges().len(), 2);
+    /// ```
     #[must_use]
     pub fn line(a: Vec2, b: Vec2) -> Self {
         Self::from_edges(vec![[a, b], [b, a]])
@@ -267,6 +298,14 @@ impl Occluder2D {
     /// the outside on its left on screen (the outward normal is
     /// `(d.y, -d.x)` for `d = to - from`). An edge casts a shadow from a
     /// light behind it.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let wall = ponko::d2::Occluder::rect(vec2(10.0, 4.0));
+    /// for [from, to] in wall.edges() {
+    ///     assert!(from.abs().cmple(vec2(5.0, 2.0)).all() && to.abs().cmple(vec2(5.0, 2.0)).all());
+    /// }
+    /// ```
     #[must_use]
     pub fn edges(&self) -> &[[Vec2; 2]] {
         &self.edges
@@ -389,6 +428,13 @@ impl Graphics {
 
     /// The ambient light set with
     /// [`set_ambient_light2d`](Self::set_ambient_light2d).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.gfx.ambient_light2d(), None, "no ambient color set by default");
+    /// });
+    /// ```
     #[must_use]
     pub fn ambient_light2d(&self) -> Option<Color> {
         self.lights2d.ambient
@@ -423,6 +469,17 @@ impl Graphics {
 
     /// The normal map given to `texture` with
     /// [`set_normal_map`](Self::set_normal_map).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let bricks = ctx.gfx.create_texture(2, 2, &[255; 16]);
+    ///     let bumps = ctx.gfx.create_texture(2, 2, &[128; 16]);
+    ///     assert_eq!(ctx.gfx.normal_map(bricks), None);
+    ///     ctx.gfx.set_normal_map(bricks, Some(bumps));
+    ///     assert_eq!(ctx.gfx.normal_map(bricks), Some(bumps));
+    /// });
+    /// ```
     #[must_use]
     pub fn normal_map(&self, texture: Texture) -> Option<Texture> {
         self.lights2d.normal_maps.get(texture.id as usize).copied().flatten()
@@ -465,6 +522,8 @@ pub(crate) struct LightFrame2D {
     edges: Vec<[Vec2; 2]>,
     shadowed: Vec<LightInstance>,
     casting: Vec<LightInstance>,
+    /// Scratch: the world rectangle each camera sees.
+    views: Vec<Rect>,
 }
 
 /// How far point and spot light shadows reach, in radii: the volume's far
@@ -493,6 +552,11 @@ fn circle_in(view: Rect, center: Vec2, radius: f32) -> bool {
     nearest.distance_squared(center) <= radius * radius
 }
 
+/// Whether the circle at `center` of `radius` overlaps any of `views`.
+fn circle_in_any(views: &[Rect], center: Vec2, radius: f32) -> bool {
+    views.iter().any(|&v| circle_in(v, center, radius))
+}
+
 /// The distance from `p` to the segment `a`-`b`.
 fn segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
     let d = b - a;
@@ -501,11 +565,15 @@ fn segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
 }
 
 impl LightFrame2D {
-    /// Gathers this frame's lights in `view` and their shadows from
-    /// `world`, with `ambient` (sRGB). Reuses its buffers: steady frames
-    /// don't allocate. Off, and nearly free, when the world has no 2D
-    /// lights and there is no ambient light.
-    pub(crate) fn collect(&mut self, world: &mut World, view: Rect, ambient: Option<Color>) {
+    /// Gathers this frame's lights in `views` (each camera's world
+    /// rectangle: one for one camera, more for split screen) and their
+    /// shadows from `world`, with `ambient` (sRGB). The lights and shadow
+    /// volumes are in world units, so every camera draws the same ones.
+    /// Reuses its buffers: steady frames don't allocate. Off, and nearly
+    /// free, when the world has no 2D lights and there is no ambient light.
+    pub(crate) fn collect(&mut self, world: &mut World, views: impl IntoIterator<Item = Rect>, ambient: Option<Color>) {
+        self.views.clear();
+        self.views.extend(views);
         self.lights.clear();
         self.shadows.clear();
         self.vertices.clear();
@@ -521,7 +589,7 @@ impl LightFrame2D {
         }
         let a = light_color(ambient.unwrap_or(Color::BLACK), 0.5);
         self.ambient = [a[0], a[1], a[2], 1.0];
-        let (lights, shadowed) = (&mut self.lights, &mut self.shadowed);
+        let (lights, shadowed, view) = (&mut self.lights, &mut self.shadowed, &self.views[..]);
         let mut push = |light: LightInstance, shadows: bool| {
             if shadows {
                 shadowed.push(light)
@@ -530,7 +598,7 @@ impl LightFrame2D {
             }
         };
         world.query::<(&Transform2D, &PointLight2D)>().for_each(|(t, l)| {
-            if !(l.intensity > 0.0 && l.radius > 0.0) || !circle_in(view, t.position, l.radius) {
+            if !(l.intensity > 0.0 && l.radius > 0.0) || !circle_in_any(view, t.position, l.radius) {
                 return;
             }
             let c = light_color(l.color, l.intensity * 0.5);
@@ -545,7 +613,7 @@ impl LightFrame2D {
             );
         });
         world.query::<(&Transform2D, &SpotLight2D)>().for_each(|(t, l)| {
-            if !(l.intensity > 0.0 && l.radius > 0.0 && l.angle > 0.0) || !circle_in(view, t.position, l.radius) {
+            if !(l.intensity > 0.0 && l.radius > 0.0 && l.angle > 0.0) || !circle_in_any(view, t.position, l.radius) {
                 return;
             }
             let c = light_color(l.color, l.intensity * 0.5);
@@ -585,16 +653,16 @@ impl LightFrame2D {
             );
         });
         if !self.shadowed.is_empty() {
-            self.collect_edges(world, view);
+            self.collect_edges(world);
             self.build_shadows();
         }
         self.free = self.lights.len() as u32 - self.shadows.len() as u32;
     }
 
     /// The world-space edges of every occluder a shadowed light can reach.
-    fn collect_edges(&mut self, world: &mut World, view: Rect) {
+    fn collect_edges(&mut self, world: &mut World) {
         let directional = self.shadowed.iter().any(|l| l.place[2] == 0.0);
-        let shadowed = &self.shadowed;
+        let (shadowed, views) = (&self.shadowed, &self.views);
         let edges = &mut self.edges;
         world.query::<(&Transform2D, &Occluder2D)>().for_each(|(t, o)| {
             let scale = t.scale;
@@ -606,7 +674,7 @@ impl LightFrame2D {
             // Directional shadows reach the view from anywhere; others
             // only from occluders within a shadowed light's reach.
             let wanted = if directional {
-                shadowed.iter().any(near) || circle_in(grow(view, ENDLESS), t.position, reach)
+                shadowed.iter().any(near) || views.iter().any(|&v| circle_in(grow(v, ENDLESS), t.position, reach))
             } else {
                 shadowed.iter().any(near)
             };
@@ -716,7 +784,7 @@ mod tests {
 
     fn frame(world: &mut World, ambient: Option<Color>) -> LightFrame2D {
         let mut f = LightFrame2D::default();
-        f.collect(world, view(), ambient);
+        f.collect(world, [view()], ambient);
         f
     }
 
@@ -924,9 +992,9 @@ mod tests {
             ));
         }
         let mut f = LightFrame2D::default();
-        f.collect(&mut world, view(), None);
+        f.collect(&mut world, [view()], None);
         let caps = (f.lights.capacity(), f.vertices.capacity(), f.edges.capacity());
-        f.collect(&mut world, view(), None);
+        f.collect(&mut world, [view()], None);
         assert_eq!(caps, (f.lights.capacity(), f.vertices.capacity(), f.edges.capacity()));
     }
 }

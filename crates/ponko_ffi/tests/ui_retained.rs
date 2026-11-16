@@ -446,6 +446,71 @@ fn screens_stack_modal_and_pop() {
     run(screens_stack_and_pop);
 }
 
+unsafe fn screen_modes(ctx: Ctx) {
+    unsafe {
+        use PonkoUiScreenMode::*;
+        let base = panel(ctx, PONKO_UI_NONE, &size(100.0, 100.0));
+        let dialog = panel(ctx, PONKO_UI_NONE, &size(300.0, 200.0));
+        let child = button(ctx, dialog, c"Ok", &size(80.0, 30.0));
+        let mut pointer = true;
+        assert_eq!(
+            ponko_ctx_ui_push_screen_with_mode(ctx, PONKO_UI_SCREEN, base, PONKO_UI_SCREEN_MODE_MODELESS as u32),
+            PONKO_OK
+        );
+        // A modeless dialog leaves the pointer outside it to the game.
+        assert_eq!(
+            ponko_ctx_ui_push_screen_with_mode(ctx, PONKO_UI_SCREEN, dialog, PONKO_UI_SCREEN_MODE_MODELESS as u32),
+            PONKO_OK
+        );
+        frame(
+            ctx,
+            PonkoUiInput {
+                pointer: v2(500.0, 500.0),
+                ..ponko_ui_input_default()
+            },
+        );
+        assert_eq!(ponko_ctx_ui_wants_pointer(ctx, PONKO_UI_SCREEN, &mut pointer), PONKO_OK);
+        assert!(!pointer, "modeless: nothing under the pointer");
+        let mut popped = 0;
+        assert_eq!(ponko_ctx_ui_pop_screen(ctx, PONKO_UI_SCREEN, &mut popped), PONKO_OK);
+
+        // Modal owns it, exactly as `ponko_ctx_ui_push_screen(.., true)` does.
+        for push in [
+            |ctx, d| ponko_ctx_ui_push_screen_with_mode(ctx, PONKO_UI_SCREEN, d, PONKO_UI_SCREEN_MODE_MODAL as u32),
+            |ctx, d| ponko_ctx_ui_push_screen(ctx, PONKO_UI_SCREEN, d, true),
+        ] as [unsafe fn(Ctx, u64) -> PonkoStatus; 2]
+        {
+            assert_eq!(push(ctx, dialog), PONKO_OK);
+            frame(
+                ctx,
+                PonkoUiInput {
+                    pointer: v2(500.0, 500.0),
+                    ..ponko_ui_input_default()
+                },
+            );
+            assert_eq!(ponko_ctx_ui_wants_pointer(ctx, PONKO_UI_SCREEN, &mut pointer), PONKO_OK);
+            assert!(pointer, "modal: the pointer outside is the dialog's");
+            click(ctx, v2(10.0, 10.0));
+            assert_eq!(events(ctx), [(PonkoUiEventKind::PONKO_UI_EVENT_CLICKED, child)]);
+            assert_eq!(ponko_ctx_ui_pop_screen(ctx, PONKO_UI_SCREEN, &mut popped), PONKO_OK);
+            assert_eq!(popped, dialog);
+        }
+
+        // An unknown mode is an error, not undefined behavior, and pushes nothing.
+        assert_eq!(
+            ponko_ctx_ui_push_screen_with_mode(ctx, PONKO_UI_SCREEN, dialog, 7),
+            PONKO_INVALID_ARGUMENT
+        );
+        let mut top = 0;
+        assert_eq!(ponko_ctx_ui_top_screen(ctx, PONKO_UI_SCREEN, &mut top), PONKO_OK);
+        assert_eq!(top, base);
+    }
+}
+#[test]
+fn screen_modes_match_the_old_bool() {
+    run(screen_modes);
+}
+
 // ---- grid, absolute positions, scrolling -------------------------------------------
 
 unsafe fn grid_absolute_and_scroll(ctx: Ctx) {

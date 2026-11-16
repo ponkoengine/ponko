@@ -12,11 +12,12 @@ use winit::keyboard::PhysicalKey;
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use super::*;
+use crate::error::{Error, ErrorKind};
 use crate::input::{Key, MouseButton};
 use crate::render::{FrameStatus, Renderer};
 
 /// `Game::run`: opens the window and runs until it closes.
-pub(super) fn run<S, U>(mut game: Game, setup: S)
+pub(super) fn run<S, U>(mut game: Game, setup: S) -> Result<(), Error>
 where
     S: FnOnce(&mut Ctx) -> U,
     U: SetupResult,
@@ -29,7 +30,7 @@ where
     connect_hotpatch();
     let event_loop = EventLoop::<Ready>::with_user_event()
         .build()
-        .unwrap_or_else(|e| panic!("ponko: could not start the event loop: {e}"));
+        .map_err(|e| Error::new(ErrorKind::Unsupported, format!("could not start the event loop: {e}")))?;
 
     let clock = Clock::new(game.fixed_hz);
     let mut ctx = game.build_ctx(false);
@@ -51,7 +52,9 @@ where
         config: game,
         setup: Some(setup),
         started: false,
+        error: None,
         window: None,
+        cursor_sources: Default::default(),
         ctx,
         clock,
         last_frame: Instant::now(),
@@ -66,9 +69,13 @@ where
         gamepads: None,
     };
 
-    event_loop
-        .run_app(&mut app)
-        .unwrap_or_else(|e| panic!("ponko: the event loop stopped with an error: {e}"));
+    event_loop.run_app(&mut app).map_err(|e| {
+        Error::new(
+            ErrorKind::Unsupported,
+            format!("the event loop stopped with an error: {e}"),
+        )
+    })?;
+    app.error.map_or(Ok(()), Err)
 }
 
 /// Starts the puffin server; the returned handle keeps it running.
@@ -126,7 +133,7 @@ fn print_mesh_costs(ctx: &Ctx) {
 }
 
 /// The GPU is ready (with the assets, on the web): setup can run.
-struct Ready(Renderer);
+struct Ready(Result<Renderer, Error>);
 
 struct App<S> {
     /// Delivers [`Ready`] from the task that opens the GPU (web builds).
@@ -136,7 +143,9 @@ struct App<S> {
     setup: Option<S>,
     /// Setup has run; frames may run.
     started: bool,
+    error: Option<Error>,
     window: Option<Arc<Window>>,
+    cursor_sources: super::window_service::CursorQueue,
     ctx: Ctx,
     clock: Clock,
     last_frame: Instant,
@@ -222,7 +231,12 @@ where
             inspector.frame(window, &mut self.ctx);
         }
 
-        if self.ctx.quit_requested() {
+        if let Some(source) = self.cursor_sources.borrow_mut().take()
+            && let Some(window) = &self.window
+        {
+            window.set_cursor(event_loop.create_custom_cursor(source));
+        }
+        if self.ctx.quit_requested() || self.ctx.window.close_requested() {
             event_loop.exit();
             return;
         }
@@ -357,7 +371,11 @@ where
 
         if let Some(setup) = self.setup.take() {
             self.ctx.set_in_setup(true);
-            run_setups(std::mem::take(&mut self.config.setups), &mut self.ctx);
+            if let Err(error) = run_setups(std::mem::take(&mut self.config.setups), &mut self.ctx) {
+                self.ctx.set_in_setup(false);
+                self.error = Some(error);
+                return;
+            }
             let frame_fn = setup(&mut self.ctx).into_frame_fn();
             self.ctx.set_in_setup(false);
             self.ctx.apply_commands();
@@ -381,6 +399,10 @@ where
     U: SetupResult,
 {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.error.is_some() {
+            event_loop.exit();
+            return;
+        }
         if let Some(window) = &self.window {
             if let Some(renderer) = &mut self.ctx.gfx.renderer {
                 renderer.surface_event(crate::render::surface_lifecycle::SurfaceEvent::Suspended(false));
@@ -407,9 +429,19 @@ where
         // hidden and is shown right after.
         #[cfg(all(feature = "accessibility", any(target_os = "macos", target_os = "windows")))]
         let attributes = attributes.with_visible(false);
-        let window = event_loop
-            .create_window(attributes)
-            .unwrap_or_else(|e| panic!("ponko: could not create the window: {e}"));
+        let window = match event_loop.create_window(attributes) {
+            Ok(window) => window,
+            Err(e) => {
+                self.error = Some(Error::new(
+                    ErrorKind::Unsupported,
+                    format!("could not create the window: {e}"),
+                ));
+                #[cfg(target_arch = "wasm32")]
+                eprintln!("{}", self.error.as_ref().expect("just set"));
+                event_loop.exit();
+                return;
+            }
+        };
         #[cfg(feature = "accessibility")]
         {
             self.access = Some(crate::ui::UiAccessAdapter::for_window(&window, &self.config.title));
@@ -417,6 +449,19 @@ where
             window.set_visible(true);
         }
         let window = Arc::new(window);
+        self.ctx.window.attach(
+            super::window_service::Backend::new(window.clone(), self.cursor_sources.clone()),
+            crate::window::WindowSettings {
+                title: self.config.title.clone(),
+                size: Vec2::new(self.config.width as f32, self.config.height as f32),
+                mode: if self.config.fullscreen {
+                    crate::window::WindowMode::Borderless(None)
+                } else {
+                    crate::window::WindowMode::Windowed
+                },
+                ..Default::default()
+            },
+        );
         self.window = Some(window.clone());
         let display = event_loop.owned_display_handle();
         let vsync = self.config.vsync;
@@ -430,7 +475,13 @@ where
 
         // Desktop: open the GPU and start right away.
         #[cfg(not(target_arch = "wasm32"))]
-        self.start(Renderer::new(window, display, vsync, msaa));
+        match Renderer::new(window, display, vsync, msaa) {
+            Ok(renderer) => self.start(renderer),
+            Err(error) => self.error = Some(error),
+        }
+        if self.error.is_some() {
+            event_loop.exit();
+        }
 
         // Web: the browser can't block, so fetch the assets, read the
         // player's stored files (`ctx.storage`) and open the GPU
@@ -452,8 +503,15 @@ where
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, Ready(renderer): Ready) {
-        self.start(renderer);
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, Ready(renderer): Ready) {
+        match renderer {
+            Ok(renderer) => self.start(renderer),
+            Err(error) => self.error = Some(error),
+        }
+        if let Some(error) = &self.error {
+            eprintln!("{error}");
+            event_loop.exit();
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -495,8 +553,28 @@ where
             }
         }
 
+        let engine_event = match &event {
+            WindowEvent::CloseRequested => Some(crate::window::WindowEvent::CloseRequested),
+            WindowEvent::Focused(v) => Some(crate::window::WindowEvent::Focused(*v)),
+            WindowEvent::DroppedFile(p) => Some(crate::window::WindowEvent::FileDropped(p.clone())),
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                Some(crate::window::WindowEvent::ScaleFactorChanged(*scale_factor as f32))
+            }
+            WindowEvent::Resized(_) => Some(crate::window::WindowEvent::Minimized(
+                window.is_minimized().unwrap_or(false),
+            )),
+            _ => None,
+        };
+        if let Some(event) = engine_event
+            && self.ctx.window.feed_event(&event)
+        {
+            self.ctx.events.send(event);
+            window.request_redraw();
+        }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                window.request_redraw();
+            }
 
             WindowEvent::RedrawRequested => self.run_frame(event_loop),
 

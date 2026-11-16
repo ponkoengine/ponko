@@ -4,6 +4,8 @@
 //! they're drawn, packed into one atlas texture, and drawn as sprites in
 //! screen space. Steady-state frames only look glyphs up.
 
+#![deny(missing_docs)]
+
 use std::collections::HashMap;
 
 use glam::Vec2;
@@ -72,21 +74,45 @@ impl Default for TextParams {
 
 impl TextParams {
     /// Same settings drawn with `font`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let params = TextParams::default().with_font(Font::DEFAULT);
+    /// assert_eq!(params.font, Font::DEFAULT);
+    /// ```
     #[must_use]
     pub fn with_font(self, font: Font) -> Self {
         Self { font, ..self }
     }
     /// Same settings with line height `size` in window pixels.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let title = TextParams::default().with_size(48.0);
+    /// assert_eq!(title.size, 48.0);
+    /// ```
     #[must_use]
     pub fn with_size(self, size: f32) -> Self {
         Self { size, ..self }
     }
     /// Same settings with text color `color`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let red = TextParams::default().with_color(Color::RED);
+    /// assert_eq!(red.color, Color::RED);
+    /// ```
     #[must_use]
     pub fn with_color(self, color: Color) -> Self {
         Self { color, ..self }
     }
     /// Same settings with draw order `z` among screen-space drawing.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let on_top = TextParams::default().with_z(10.0);
+    /// assert_eq!(on_top.z, 10.0);
+    /// ```
     #[must_use]
     pub fn with_z(self, z: f32) -> Self {
         Self { z, ..self }
@@ -168,9 +194,12 @@ pub(crate) struct SdfAtlas {
 }
 
 pub(crate) struct Text {
+    /// Fonts by slot; a freed font's slot goes to the next one loaded,
+    /// under a new id (`ids`).
     fonts: Vec<Option<fontdue::Font>>,
+    ids: crate::handle::SlotIds,
     /// Which fonts are live (the built-in one always is).
-    live: crate::handle::LiveSet,
+    live: crate::handle::SlotLiveSet,
     glyphs: HashMap<(u32, char, u32), Glyph>,
     /// Shelf packer: next free spot and the current row's height.
     cursor: [u32; 2],
@@ -185,7 +214,7 @@ pub(crate) struct Text {
     line_widths: Vec<f32>,
     /// Signed-distance glyphs for text drawn at any size (3D text).
     pub sdf: SdfAtlas,
-    /// Each font's fallback chain, by font id: fonts tried in order for a
+    /// Each font's fallback chain, by font slot: fonts tried in order for a
     /// character the font lacks.
     fallbacks: Vec<Vec<Font>>,
     /// Which strings are shaped (with `text-shaping`).
@@ -210,9 +239,14 @@ impl Text {
     pub fn new() -> Self {
         Self {
             fonts: vec![None],
+            ids: {
+                let mut ids = crate::handle::SlotIds::default();
+                assert_eq!(ids.make(0, "font"), Font::DEFAULT.0);
+                ids
+            },
             live: {
-                let mut live = crate::handle::LiveSet::default();
-                live.insert(0);
+                let mut live = crate::handle::SlotLiveSet::default();
+                live.insert(Font::DEFAULT.0);
                 live
             },
             glyphs: HashMap::new(),
@@ -272,8 +306,15 @@ impl Text {
                 )
             })?
         };
-        self.fonts.push(Some(font));
-        let id = self.fonts.len() as u32 - 1;
+        let id = self.ids.make(self.fonts.len(), "font");
+        let slot = (id & crate::handle::INDEX_MASK) as usize;
+        if slot == self.fonts.len() {
+            self.fonts.push(None);
+        }
+        self.fonts[slot] = Some(font);
+        if let Some(chain) = self.fallbacks.get_mut(slot) {
+            chain.clear();
+        }
         self.live.insert(id);
         #[cfg(feature = "text-shaping")]
         self.shaper.set_bytes(id, bytes, index);
@@ -283,7 +324,11 @@ impl Text {
     /// Sets the fonts tried, in order, for characters `font` has no glyph
     /// for. Freed fonts in the chain are skipped.
     pub fn set_fallbacks(&mut self, font: Font, fallbacks: &[Font]) {
-        let i = font.0 as usize;
+        // A freed font's slot may hold a newer font: leave its chain alone.
+        if !self.has_font(font) {
+            return;
+        }
+        let i = (font.0 & crate::handle::INDEX_MASK) as usize;
         if self.fallbacks.len() <= i {
             self.fallbacks.resize_with(i + 1, Vec::new);
         }
@@ -295,7 +340,10 @@ impl Text {
 
     /// `font`'s fallback chain.
     pub fn fallbacks(&self, font: Font) -> &[Font] {
-        self.fallbacks.get(font.0 as usize).map_or(&[], Vec::as_slice)
+        self.ids
+            .slot(font.0)
+            .and_then(|i| self.fallbacks.get(i))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Which strings are shaped.
@@ -331,9 +379,9 @@ impl Text {
         if self.font(font).lookup_glyph_index(c) != 0 {
             return font;
         }
-        let chain = self.fallbacks.get(font.0 as usize).map_or(0, Vec::len);
+        let chain = self.fallbacks(font).len();
         for i in 0..chain {
-            let f = self.fallbacks[font.0 as usize][i];
+            let f = self.fallbacks(font)[i];
             if self.has_font(f) && self.font(f).lookup_glyph_index(c) != 0 {
                 return f;
             }
@@ -351,7 +399,12 @@ impl Text {
         if font == Font::DEFAULT || !self.live.remove(font.0) {
             return false;
         }
-        self.fonts[font.0 as usize] = None;
+        let slot = (font.0 & crate::handle::INDEX_MASK) as usize;
+        self.fonts[slot] = None;
+        if let Some(chain) = self.fallbacks.get_mut(slot) {
+            chain.clear();
+        }
+        self.ids.release(font.0);
         self.glyphs.retain(|k, _| k.0 != font.0);
         self.sdf.glyphs.retain(|k, _| k.0 != font.0);
         #[cfg(feature = "text-shaping")]
@@ -375,7 +428,7 @@ impl Text {
         if !self.has_font(font) {
             return Ok(());
         }
-        self.fonts[font.0 as usize] = Some(new);
+        self.fonts[(font.0 & crate::handle::INDEX_MASK) as usize] = Some(new);
         self.glyphs.retain(|k, _| k.0 != font.0);
         self.sdf.glyphs.retain(|k, _| k.0 != font.0);
         #[cfg(feature = "text-shaping")]
@@ -387,7 +440,8 @@ impl Text {
     }
 
     fn font(&mut self, font: Font) -> &fontdue::Font {
-        let slot = &mut self.fonts[font.0 as usize];
+        // Callers pass a live font (`resolve`); anything else reads the built-in one.
+        let slot = &mut self.fonts[self.ids.slot(font.0).unwrap_or(0)];
         slot.get_or_insert_with(|| {
             fontdue::Font::from_bytes(epaint_default_fonts::UBUNTU_LIGHT, fontdue::FontSettings::default())
                 .expect("the built-in font is valid")
@@ -795,6 +849,33 @@ fn signed_distance(coverage: &[u8], w: u32, h: u32, spread: u32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A font loaded and freed again and again keeps one slot, every load
+    /// is a new handle, a freed font stays dead, and a font in a reused
+    /// slot starts without the freed one's fallbacks.
+    #[test]
+    fn fonts_loaded_and_freed_reuse_their_slot_and_stay_dead() {
+        let mut t = Text::new();
+        let bytes = epaint_default_fonts::UBUNTU_LIGHT;
+        let first = t.add_font(bytes).unwrap();
+        t.set_fallbacks(first, &[Font::DEFAULT]);
+        let mut seen = std::collections::HashSet::from([first]);
+        let mut last = first;
+        for _ in 0..300 {
+            assert!(t.free_font(last));
+            assert!(!t.free_font(last), "freed once");
+            let font = t.add_font(bytes).unwrap();
+            assert!(seen.insert(font), "{font:?} given out twice");
+            assert!(t.has_font(font) && !t.has_font(last));
+            last = font;
+        }
+        assert_eq!(t.fonts.len(), 2, "the built-in font's slot and one more");
+        assert_eq!(t.loaded_fonts(), 1);
+        assert!(t.fallbacks(last).is_empty(), "no fallbacks inherited");
+        t.set_fallbacks(first, &[Font::DEFAULT]);
+        assert!(t.fallbacks(last).is_empty(), "a stale font can't set them");
+        assert!(t.layout("Hi", last, 20.0, false).x > 0.0);
+    }
 
     #[test]
     fn layout_measures_lines_and_kerning() {

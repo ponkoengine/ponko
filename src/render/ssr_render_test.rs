@@ -389,7 +389,7 @@ fn reflections_and_ambient_occlusion_share_the_opaque_pass_image() {
 }
 
 #[test]
-fn a_glossy_floor_has_a_wider_lower_peak_reflection() {
+fn a_glossy_floor_has_a_wider_reflection_no_brighter_than_a_mirrors() {
     fn profile(roughness: f32) -> Option<(f32, f32)> {
         let (mut rig, reflection, _) = floor_rig(roughness)?;
         // Keep the bright source below display clipping so peak comparison
@@ -420,9 +420,11 @@ fn a_glossy_floor_has_a_wider_lower_peak_reflection() {
     let Some(mirror) = profile(0.0) else { return };
     let Some(glossy) = profile(0.35) else { return };
     eprintln!("reflection peak / RMS width: mirror {mirror:?}, roughness 0.35 {glossy:?}");
+    // The box is close to the floor: blurred by its ray's cone, the middle
+    // of its reflection keeps the mirror's brightness.
     assert!(
-        glossy.0 < mirror.0 * 0.95,
-        "glossy peak falls: {mirror:?} -> {glossy:?}"
+        glossy.0 <= mirror.0,
+        "glossy peak doesn't rise: {mirror:?} -> {glossy:?}"
     );
     assert!(
         glossy.1 > mirror.1 * 1.1,
@@ -705,4 +707,357 @@ fn screen_space_reflections_lose_a_box_hidden_behind_a_wall() {
     eprintln!("ssr reflection of the glowing box: in view {seen}, behind a wall {hidden} (red, 0-255)");
     assert!(seen > 120, "the box in view is reflected: {seen}");
     assert!(hidden < 40, "the box behind the wall is not: {hidden}");
+}
+
+// ---- The reflection cone: blur by roughness and hit distance ----
+
+use super::regression_stage::{EFFECT_REFERENCE, Stage};
+use super::render_test_support::{Image, check_reference, reference_rejects};
+
+/// Two thin glowing red bars (0.06 thick, 2.4 long, along x) over a white metal floor
+/// of `roughness`, nothing else lit, the bars kept below display clipping
+/// (exposure -5). The low bar's reflection is a contact reflection: the
+/// floor's ray reaches it after about 0.7. The high bar's, after about 2.6.
+/// Returns the floor points that mirror a point on each, low then high.
+fn bars_over_a_floor(stage: &mut Stage, roughness: f32) -> (Vec3, Vec3) {
+    let floor = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::WHITE,
+            roughness,
+            metallic: 1.0,
+            ..Default::default()
+        },
+    );
+    let glow = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::BLACK,
+            emissive: Color::rgb(4.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    stage.block(floor, vec3(-10.0, -1.0, -10.0), vec3(10.0, 0.0, 10.0));
+    stage.block(glow, vec3(-2.6, 0.22, -0.03), vec3(-0.2, 0.28, 0.03));
+    stage.block(glow, vec3(0.2, 1.17, -0.03), vec3(2.6, 1.23, 0.03));
+    stage.ctx.scene3d.lighting.sun_intensity = 0.0;
+    stage.ctx.scene3d.lighting.ambient_intensity = 0.0;
+    stage.ctx.scene3d.post.exposure = -5.0;
+    stage.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
+    stage.ctx.scene3d.camera.look_at(vec3(0.0, 0.5, 0.0));
+    // Points on the bars mirrored, (-1, -0.25, 0) and (1, -1.2, 0), seen
+    // through the floor.
+    let through = |p: Vec3| {
+        let eye = stage.ctx.scene3d.camera.position;
+        eye + (p - eye) * (eye.y / (eye.y - p.y))
+    };
+    (through(vec3(-1.0, -0.25, 0.0)), through(vec3(1.0, -1.2, 0.0)))
+}
+
+/// A reflection's vertical profile in the red channel as linear light
+/// (0 to 1), through the pixel of `at`: `on` minus `off` (the same frame
+/// without reflections), within 14 pixels. Its peak and RMS width (pixels)
+/// about its center of mass.
+fn vertical_profile(stage: &Stage, on: &Image, off: &Image, at: Vec3) -> (f32, f32) {
+    let (x, cy) = stage.pixel(at);
+    let rows = cy.saturating_sub(14)..=(cy + 14).min(on.height - 1);
+    let values: Vec<(f32, f32)> = rows
+        .map(|y| {
+            let linear = |image: &Image| {
+                let v = f32::from(image.pixel(x, y)[0]) / 255.0;
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            let value = linear(on) - linear(off);
+            (y as f32, value.max(0.0))
+        })
+        .collect();
+    let energy: f32 = values.iter().map(|v| v.1).sum();
+    assert!(energy > 0.2, "the floor reflects the bar at {at}: {values:?}");
+    let center = values.iter().map(|v| v.0 * v.1).sum::<f32>() / energy;
+    let moment = values.iter().map(|v| (v.0 - center).powi(2) * v.1).sum::<f32>();
+    let peak = values.iter().map(|v| v.1).fold(0.0, f32::max);
+    (peak, (moment / energy).sqrt())
+}
+
+/// The (peak, RMS width) of the low and the high bar's reflections.
+type BarProfiles = [(f32, f32); 2];
+
+/// The two bars' reflections at `roughness`, settled: (low, high), each
+/// (peak, RMS width), and the frame with reflections. With `ao`, GTAO's
+/// denoise (half size, temporal) carries the reflection cone's spread to
+/// the opaque pass; without, the reflections' own mark pass.
+fn bar_reflections(roughness: f32, ao: bool) -> Option<(BarProfiles, Image, Stage)> {
+    let mut stage = Stage::new()?;
+    if !crate::render::render_test_support::needs(&stage.device, GpuFeature::ScreenSpaceReflections) {
+        return None;
+    }
+    let (low, high) = bars_over_a_floor(&mut stage, roughness);
+    let post = &mut stage.ctx.scene3d.post;
+    post.ambient_occlusion.enabled = ao;
+    post.ao_half_resolution = true;
+    post.ao_temporal = true;
+    let off = stage.settled(2);
+    stage.ctx.scene3d.post.ssr = 1.0;
+    let on = stage.settled(4);
+    let profiles = [
+        vertical_profile(&stage, &on, &off, low),
+        vertical_profile(&stage, &on, &off, high),
+    ];
+    stage.ctx.scene3d.post.ssr = 0.0;
+    Some((profiles, on, stage))
+}
+
+#[test]
+fn rough_reflections_match_their_references() {
+    for (roughness, name) in [
+        (0.2, "regression_ssr_roughness_20"),
+        (0.4, "regression_ssr_roughness_40"),
+    ] {
+        let Some((profiles, image, mut stage)) = bar_reflections(roughness, false) else {
+            return;
+        };
+        eprintln!(
+            "roughness {roughness}: (peak, RMS width) low bar {:?}, high bar {:?}",
+            profiles[0], profiles[1]
+        );
+        check_reference(
+            name,
+            &image,
+            EFFECT_REFERENCE,
+            &format!(
+                "Two thin red glowing bars (emissive 4, 0, 0; 0.06 thick, 2.4 long, along x) over a white metal floor \
+                 (roughness {roughness}): one 0.25 up from x -2.6 to -0.2, one 1.2 up from x 0.2 to 2.6; nothing \
+                 lit, exposure -5, \
+                 screen-space reflections at 1.0, fourth frame; camera at (0, 2, 6) looking at (0, 0.5, 0); \
+                 128x128, 4x multisampling, no tonemapping."
+            ),
+            &stage.info,
+        );
+        let off = stage.image();
+        reference_rejects(name, &off, EFFECT_REFERENCE, "reflections off");
+        stage.finish();
+    }
+}
+
+/// Offscreen timestamp measurement; run with --release --ignored
+/// --nocapture. The frame's GPU time and the reflection passes' spans at
+/// 1920x1080 with the High preset's screen effects (reflections, half-size
+/// temporal ambient occlusion with 2 slices and 4 steps) and with
+/// reflections alone, over a glossy floor with a glowing box.
+#[test]
+#[ignore]
+fn reflection_gpu_cost_at_1080p() {
+    let Some(mut rig) = Rig::sized(1920, 1080) else { return };
+    let Some(mut timer) = super::timer::GpuTimer::new(&rig.device, &rig.queue) else {
+        crate::render::render_test_support::skip("timestamp queries unavailable");
+        return;
+    };
+    let floor = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            roughness: 0.35,
+            metallic: 1.0,
+            ..Default::default()
+        },
+    );
+    rig.ctx.world.spawn((
+        Transform3D {
+            position: vec3(0.0, -0.5, 0.0),
+            scale: vec3(20.0, 1.0, 20.0),
+            ..Default::default()
+        },
+        Model::new(floor),
+    ));
+    let block = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::BLACK,
+            emissive: Color::rgb(4.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    rig.ctx.world.spawn((
+        Transform3D {
+            position: vec3(0.0, 1.0, 0.0),
+            ..Default::default()
+        },
+        Model::new(block),
+    ));
+    rig.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
+    rig.ctx.scene3d.camera.look_at(Vec3::ZERO);
+    rig.ctx.scene3d.post.ssr = 1.0;
+    rig.ctx.scene3d.post.bloom = 0.0;
+    rig.ctx.scene3d.lighting.shadows = false;
+    let median = |samples: &mut Vec<f32>| {
+        samples.sort_by(f32::total_cmp);
+        samples[samples.len() / 2]
+    };
+    for ao in [true, false] {
+        let post = &mut rig.ctx.scene3d.post;
+        post.ambient_occlusion.enabled = ao;
+        post.ambient_occlusion.slices = 2;
+        post.ambient_occlusion.steps = 4;
+        post.ao_half_resolution = true;
+        post.ao_temporal = true;
+        let mut frames = Vec::new();
+        let mut passes: Vec<(&'static str, Vec<f32>)> = Vec::new();
+        for frame in 0..400 {
+            rig.draw_timed(Some(&mut timer));
+            // Results come back a few frames late.
+            if frame < 40 {
+                continue;
+            }
+            frames.push(timer.last_frame.iter().map(|s| s.ms).sum::<f32>());
+            for span in &timer.last_frame {
+                match passes.iter_mut().find(|(name, _)| *name == span.name) {
+                    Some((_, times)) => times.push(span.ms),
+                    None => passes.push((span.name, vec![span.ms])),
+                }
+            }
+        }
+        assert!(!frames.is_empty(), "GPU timestamps must be collected");
+        let spans: Vec<String> = passes
+            .iter_mut()
+            .map(|(name, times)| format!("{name} {:.4}", median(times)))
+            .collect();
+        eprintln!(
+            "1920x1080, ambient occlusion {ao}: frame median {:.4} ms; passes: {}",
+            median(&mut frames),
+            spans.join(", ")
+        );
+    }
+}
+
+#[test]
+fn contact_reflections_stay_sharper_than_distant_ones_on_a_rough_floor() {
+    for ao in [false, true] {
+        contact_reflections_stay_sharper(ao);
+    }
+}
+
+fn contact_reflections_stay_sharper(ao: bool) {
+    let Some((mirror, _, mirror_stage)) = bar_reflections(0.0, ao) else {
+        return;
+    };
+    mirror_stage.finish();
+    let Some((rough, _, rough_stage)) = bar_reflections(0.4, ao) else {
+        return;
+    };
+    rough_stage.finish();
+    // How much of the mirror's peak each reflection keeps, and how much
+    // wider the contact reflection is. (Blurred by roughness alone, the
+    // contact reflection kept 0.19 of its peak and grew 3.2 times wider.)
+    let kept = [rough[0].0 / mirror[0].0, rough[1].0 / mirror[1].0];
+    let wider = rough[0].1 / mirror[0].1;
+    eprintln!(
+        "ambient occlusion {ao}: (peak, RMS width) mirror {mirror:?}, roughness 0.4 {rough:?}: peaks kept \
+         {kept:.2?}, contact x{wider:.2} wider"
+    );
+    assert!(kept[1] < 0.25, "the distant reflection blurs: x{:.2}", kept[1]);
+    assert!(kept[0] > 0.5, "the contact reflection stays sharp: x{:.2}", kept[0]);
+    assert!(kept[0] > kept[1] * 3.0, "far more than the distant one: {kept:.2?}");
+    assert!(wider < 1.6, "and about as narrow as the mirror's: x{wider:.2}");
+}
+
+#[test]
+fn a_thin_bright_bar_keeps_its_peak_in_a_rough_contact_reflection() {
+    let Some((mirror, _, mirror_stage)) = bar_reflections(0.0, false) else {
+        return;
+    };
+    mirror_stage.finish();
+    let Some((glossy, _, glossy_stage)) = bar_reflections(0.2, false) else {
+        return;
+    };
+    glossy_stage.finish();
+    let kept = glossy[0].0 / mirror[0].0;
+    eprintln!(
+        "low bar's reflection peak (linear): mirror {:.3}, roughness 0.2 {:.3} (x{kept:.2})",
+        mirror[0].0, glossy[0].0
+    );
+    assert!(
+        kept > 0.8,
+        "the thin bar's contact reflection keeps its peak: x{kept:.2}"
+    );
+}
+
+/// A mirror floor and a glowing box 20 across, `distance` away, drawn by
+/// a camera with `near` and `far` planes: the red at the box's reflection
+/// without and with reflections, and beside it (the sky's reflection).
+fn distant_box(near: f32, far: f32, distance: f32) -> Option<([f32; 3], [f32; 3], [f32; 3])> {
+    let mut stage = Stage::new()?;
+    if !crate::render::render_test_support::needs(&stage.device, GpuFeature::ScreenSpaceReflections) {
+        return None;
+    }
+    let mirror = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::WHITE,
+            roughness: 0.0,
+            metallic: 1.0,
+            ..Default::default()
+        },
+    );
+    let glow = stage.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc {
+            color: Color::BLACK,
+            emissive: Color::rgb(4.0, 0.0, 0.0),
+            ..Default::default()
+        },
+    );
+    let s = distance / 150.0;
+    stage.block(mirror, vec3(-300.0, -1.0, -300.0), vec3(300.0, 0.0, 30.0));
+    stage.block(glow, vec3(-10.0, 2.0, -160.0) * s, vec3(10.0, 22.0, -140.0) * s);
+    stage.ctx.scene3d.lighting.sun_intensity = 0.0;
+    stage.ctx.scene3d.lighting.ambient_intensity = 0.0;
+    let camera = &mut stage.ctx.scene3d.camera;
+    camera.near = near;
+    camera.far = far;
+    camera.position = vec3(0.0, 2.0, 6.0);
+    camera.look_at(vec3(0.0, 2.0, -100.0));
+    stage.ctx.scene3d.post.ssr_max_distance = 400.0;
+    let eye = stage.ctx.scene3d.camera.position;
+    let through = |p: Vec3| eye + (p - eye) * (eye.y / (eye.y - p.y));
+    let (reflection, aside) = (
+        through(vec3(0.0, -12.0, -150.0) * s),
+        through(vec3(40.0, -12.0, -150.0) * s),
+    );
+    let off = stage.settled(2);
+    stage.ctx.scene3d.post.ssr = 1.0;
+    let on = stage.settled(4);
+    let found = (
+        stage.color_at(&off, reflection),
+        stage.color_at(&on, reflection),
+        stage.color_at(&on, aside),
+    );
+    stage.finish();
+    Some(found)
+}
+
+/// The march compares reverse-Z depths (1 at the near plane, 0 at the far
+/// one and the sky): with a near plane of a centimetre, with and without a
+/// far plane, a mirror floor finds a glowing box 15 and 150 away (where
+/// the depth is under 0.0001), and doesn't take the sky beside it for a
+/// surface. (Without a far plane, every frame used to count as a camera
+/// cut, which dropped the reflections' last image: no reflections at all.)
+#[test]
+fn the_march_finds_distant_hits_in_reverse_z_depth_without_a_far_plane() {
+    for far in [1000.0, f32::INFINITY] {
+        for distance in [15.0, 150.0] {
+            let Some((dark, red, beside)) = distant_box(0.01, far, distance) else {
+                return;
+            };
+            eprintln!("far {far}, box {distance} away: floor under it off {dark:?}, on {red:?}; beside it {beside:?}");
+            assert!(dark[0] < 40.0, "without reflections the floor is dark: {dark:?}");
+            assert!(
+                red[0] > 120.0 && red[0] > red[1] * 3.0,
+                "far {far}: the box {distance} away is mirrored: {red:?}"
+            );
+            assert!(beside[0] < 40.0, "the sky beside it is not a surface: {beside:?}");
+        }
+    }
 }

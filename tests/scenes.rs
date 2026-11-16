@@ -590,11 +590,7 @@ fn a_3d_prefab_keeps_its_skin_targets_and_joint_attachments() {
         let hat = ctx.world.spawn((SkinOf(body),));
         let cup = ctx.world.spawn((
             T3::at(vec3(5.0, 0.0, -2.0)),
-            AttachToJoint {
-                skeleton: body,
-                joint: 3,
-                offset: T3::at(vec3(0.0, 0.1, 0.0)),
-            },
+            AttachToJoint::new(body, 3).with_offset(T3::at(vec3(0.0, 0.1, 0.0))),
         ));
         ctx.assets.save_prefab(&ctx.world, body, file.name()).unwrap();
         for e in [body, hat, cup] {
@@ -717,7 +713,7 @@ fn a_prefab_with_an_animated_sprite_spawns_animating() {
     let mut crab = None;
     let world = game().headless_frames(true).run_headless(20, |ctx| {
         ctx.assets
-            .add_source(MemorySource::new("prefabs").with("prefabs/crab.json", prefab));
+            .add_source(ponko::assets::MemorySource::new("prefabs").with("prefabs/crab.json", prefab));
         crab = Some(ctx.spawn_prefab("prefabs/crab.json", vec2(5.0, 5.0)).unwrap());
     });
     let crab = crab.unwrap();

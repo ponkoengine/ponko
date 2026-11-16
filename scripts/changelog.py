@@ -291,9 +291,9 @@ def chapter_text(version, entries):
         'them; look the message up below.',
         '',
         'The entries come from the release\'s changelog entries, so the '
-        '[CHANGELOG](https://github.com/ponkoengine/ponko/blob/main/CHANGELOG.md) lists the same '
+        '[CHANGELOG](../../CHANGELOG.md) lists the same '
         'changes in short form next to the rest of the release. '
-        '[STABILITY.md](https://github.com/ponkoengine/ponko/blob/main/STABILITY.md) says what '
+        '[STABILITY.md](../../STABILITY.md) says what '
         'minor releases may break and how a replaced item is deprecated first where that is cheap.',
         '',
         START_MARK,

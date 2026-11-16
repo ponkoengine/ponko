@@ -1,6 +1,8 @@
 //! 2D particles: the emitter types are public in [`d2`](crate::d2), the
 //! shared curves in [`particles`](crate::particles).
 
+#![deny(missing_docs)]
+
 use std::ops::{Add, AddAssign, Mul};
 
 use glam::Vec2;
@@ -24,7 +26,13 @@ use crate::texture::Texture;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParticleCurve(Vec<(f32, f32)>);
 impl ParticleCurve {
-    /// Creates a curve; panics for empty, unordered or nonfinite keys/values.
+    /// Creates a curve of `(time, value)` keys, times in `0..=1`.
+    ///
+    /// # Panics
+    ///
+    /// If `keys` is empty, a time is outside `0..=1` or not strictly
+    /// increasing, or a time or value is not finite.
+    ///
     /// ```
     /// use ponko::particles::ParticleCurve;
     /// let c = ParticleCurve::new(vec![(0.0, 2.0)]);
@@ -76,7 +84,13 @@ impl Default for ParticleCurve {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParticleGradient(Vec<(f32, Color)>);
 impl ParticleGradient {
-    /// Creates a gradient; panics for empty, unordered or nonfinite keys/colors.
+    /// Creates a gradient of `(time, color)` keys, times in `0..=1`.
+    ///
+    /// # Panics
+    ///
+    /// If `keys` is empty, a time is outside `0..=1` or not strictly
+    /// increasing, or a time or color channel is not finite.
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// use ponko::particles::ParticleGradient;
@@ -312,6 +326,16 @@ pub enum ParticleShape2D {
 /// All numeric inputs must be finite; ranges must be ordered and
 /// nonnegative (rotation may be negative). Invalid settings panic in
 /// [`ParticleEmitter2D::new`].
+///
+/// # Defaults and cost
+///
+/// [`Default`] emits 10 particles per second, looping, in world space, each
+/// living 1 to 2 s with a speed of 50 to 100 px/s from a point, pulled down by
+/// a gravity of 200 px/s², alpha blended, at `z` 0, with a pool of 1024 slots.
+/// The pool is allocated once when the emitter is made: 32 bytes per slot, so
+/// 32 KiB at the default, whatever the rate. Each frame costs a CPU update of
+/// the live particles, and each live particle is one sprite in the batch (no
+/// extra pass or draw call beyond a blend mode or material change).
 /// ```
 /// use ponko::d2::{ParticleEmitter, ParticleSettings};
 /// use ponko::render::BlendMode;
@@ -445,6 +469,15 @@ impl ParticleSettings2D {
     }
 
     /// Sets [`texture`](Self::texture).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// # fn f(spark: Texture) {
+    /// let s = ponko::d2::ParticleSettings::default().with_texture(spark);
+    /// assert_eq!(s.texture, Some(spark));
+    /// assert_eq!(s.with_texture(None).texture, None);
+    /// # }
+    /// ```
     #[must_use]
     pub fn with_texture(mut self, texture: impl Into<Option<Texture>>) -> Self {
         self.texture = texture.into();
@@ -452,6 +485,14 @@ impl ParticleSettings2D {
     }
 
     /// Sets [`material`](Self::material).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// # fn f(glow: ponko::render::SpriteMaterial) {
+    /// let s = ponko::d2::ParticleSettings::default().with_material(glow);
+    /// assert_eq!(s.material, Some(glow));
+    /// # }
+    /// ```
     #[must_use]
     pub fn with_material(mut self, material: impl Into<Option<SpriteMaterial>>) -> Self {
         self.material = material.into();
@@ -459,6 +500,12 @@ impl ParticleSettings2D {
     }
 
     /// Sets [`lifetime`](Self::lifetime): seconds, from `min` to `max`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let s = ponko::d2::ParticleSettings::default().with_lifetime(0.5, 1.5);
+    /// assert_eq!(s.lifetime, (0.5, 1.5));
+    /// ```
     #[must_use]
     pub fn with_lifetime(mut self, min: f32, max: f32) -> Self {
         self.lifetime = (min, max);
@@ -466,6 +513,12 @@ impl ParticleSettings2D {
     }
 
     /// Sets [`speed`](Self::speed): pixels per second, from `min` to `max`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let s = ponko::d2::ParticleSettings::default().with_speed(10.0, 20.0);
+    /// assert_eq!(s.speed, (10.0, 20.0));
+    /// ```
     #[must_use]
     pub fn with_speed(mut self, min: f32, max: f32) -> Self {
         self.speed = (min, max);
@@ -473,6 +526,12 @@ impl ParticleSettings2D {
     }
 
     /// Sets [`size`](Self::size): pixels, from `min` to `max`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let s = ponko::d2::ParticleSettings::default().with_size(1.0, 2.0);
+    /// assert_eq!(s.size, (1.0, 2.0));
+    /// ```
     #[must_use]
     pub fn with_size(mut self, min: f32, max: f32) -> Self {
         self.size = (min, max);
@@ -480,6 +539,12 @@ impl ParticleSettings2D {
     }
 
     /// Sets [`rotation`](Self::rotation): radians, from `min` to `max`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let s = ponko::d2::ParticleSettings::default().with_rotation(-1.0, 1.0);
+    /// assert_eq!(s.rotation, (-1.0, 1.0));
+    /// ```
     #[must_use]
     pub fn with_rotation(mut self, min: f32, max: f32) -> Self {
         self.rotation = (min, max);
@@ -487,6 +552,12 @@ impl ParticleSettings2D {
     }
 
     /// Sets [`sheet`](Self::sheet): a sprite sheet of `columns` by `rows`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let s = ponko::d2::ParticleSettings::default().with_sheet(4, 2);
+    /// assert_eq!(s.sheet, (4, 2));
+    /// ```
     #[must_use]
     pub fn with_sheet(mut self, columns: u32, rows: u32) -> Self {
         self.sheet = (columns, rows);
@@ -539,7 +610,16 @@ impl Default for ParticleEmitter2D {
 }
 
 impl ParticleEmitter2D {
-    /// Allocates the entire particle pool. Panics for invalid settings.
+    /// Allocates the entire particle pool (`max_particles` slots, 32 bytes
+    /// each) up front, so emitting never allocates.
+    ///
+    /// # Panics
+    ///
+    /// For invalid settings: a non-finite number, an unordered range, a
+    /// lifetime that is not positive, a negative speed, size, rate or drag, a
+    /// duration that is not positive, a non-finite shape or `z`, or a
+    /// sprite-sheet grid with a zero side.
+    ///
     /// ```
     /// use ponko::d2::{ParticleEmitter, ParticleSettings};
     /// let e = ParticleEmitter::new(ParticleSettings::default().with_max_particles(64));

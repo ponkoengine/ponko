@@ -15,7 +15,7 @@ use glam::{Vec2, Vec3};
 /// Start it with [`Job::spawn`], then check [`Job::take`] each frame: the
 /// game keeps running meanwhile. GPU work (making meshes, textures) belongs
 /// on the game's thread, after the job; building the data for it (heights,
-/// [`MeshData`](crate::render::MeshData), decoded images) belongs in the job. In a
+/// `MeshData`, decoded images) belongs in the job. In a
 /// browser, which has no threads here, the work runs when it's spawned.
 ///
 /// ```
@@ -147,10 +147,13 @@ impl<T> Job<T> {
         if let Some(result) = self.done.take() {
             return *result;
         }
-        assert!(!self.taken, "ponko: Job::wait: the result was already taken");
-        self.result
-            .recv()
-            .unwrap_or_else(|_| panic!("ponko: a job's work panicked"))
+        assert!(
+            !self.taken,
+            "ponko: Job::wait: the result was already taken; consume each job result only once"
+        );
+        self.result.recv().unwrap_or_else(|_| {
+            panic!("ponko: a job's work panicked; fix the panic in the closure passed to Job::spawn")
+        })
     }
 
     fn poll(&mut self) {
@@ -160,7 +163,9 @@ impl<T> Job<T> {
         match self.result.try_recv() {
             Ok(result) => self.done = Some(Box::new(result)),
             Err(mpsc::TryRecvError::Empty) => {}
-            Err(mpsc::TryRecvError::Disconnected) => panic!("ponko: a job's work panicked"),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                panic!("ponko: a job's work panicked; fix the panic in the closure passed to Job::spawn")
+            }
         }
     }
 }

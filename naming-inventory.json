@@ -73,6 +73,12 @@
       "category": "intentional history",
       "reason": "Immutable historical ABI or saved-format baseline and its provenance/generator."
     },
+    "crates/ponko_image_diff/NOTICE": {
+      "occurrences": 1,
+      "path_occurrences": 0,
+      "category": "intentional history",
+      "reason": "Preserved project instructions, README text, release history or legal attribution."
+    },
     "crates/ponko_macros/NOTICE": {
       "occurrences": 1,
       "path_occurrences": 0,

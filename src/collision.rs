@@ -1,7 +1,7 @@
 //! What 2D and 3D physics share: how a body moves, and collision events.
 //! With the `physics` or `physics3d` feature.
 //!
-//! These types are documented here; [`d2`](crate::d2), [`d3`](crate::d3)
+//! These types are documented here; [`d2`](crate::d2), `d3`
 //! and the [prelude](crate::prelude) re-export them.
 
 use serde::{Deserialize, Serialize};

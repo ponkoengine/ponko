@@ -1,0 +1,17 @@
+{
+  "name": "views2d_split_screen_lights",
+  "scene": "Two 2D cameras side by side (64x64 each, 128x64 window), the right one 16 world units to the right: a light-grey floor lit by one shadowed white point light (radius 30, falloff 0.5) at world (40, 32), a wall (2 x 16) at world (30, 32) casting its shadow to the left, dim blue ambient light; no UI.",
+  "width": 128,
+  "height": 64,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.0075,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "b15eeb224ae7a48f",
+  "reason": "New: 2D lights and shadows in both halves of a 2D split screen"
+}

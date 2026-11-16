@@ -123,7 +123,7 @@ def undocumented(text):
                        and not stripped.startswith(('{', '}', ':', ')')))
             if is_decl and not group:
                 above = number - 2
-                while above >= 0 and re.match(r'^\s*template<[^{;]*>\s*$', lines[above]):
+                while above >= 0 and re.match(r'^\s*(template<[^{;]*>|\[\[.*\]\])\s*$', lines[above]):
                     above -= 1
                 documented = '///' in line or (above >= 0 and lines[above].strip().startswith('///'))
                 if not documented:
@@ -161,13 +161,13 @@ def book_problems():
     problems = []
     block = re.compile(r'^```(c|cpp)\b[^\n]*\n(.*?)^```', re.MULTILINE | re.DOTALL)
     include = re.compile(r'\{\{#include ([^}:]+)(?::([\w-]+))?\}\}')
-    for chapter in sorted(BOOK.glob('*.md')):
+    for chapter in [*sorted(BOOK.glob('*.md')), *sorted(BOOK.glob('*/*.md'))]:
         if chapter.name.startswith('migrating-to-'):
             continue  # shows code from before a change, which is not compiled
         text = chapter.read_text()
         for match in block.finditer(text):
             line = text.count('\n', 0, match.start()) + 1
-            where = f'book/src/{chapter.name}:{line}'
+            where = f'{chapter.relative_to(ROOT).as_posix()}:{line}'
             lines = [line.strip() for line in match.group(2).splitlines() if line.strip()]
             if not lines or not all(include.fullmatch(line) for line in lines):
                 problems.append(f'{where}: a ```{match.group(1)} block that is not compiled. Put the code in '

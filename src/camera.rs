@@ -1,6 +1,33 @@
-//! [`Rect`], and [`camera_controls`] for the 2D camera ([`d2::Camera`](crate::d2::Camera)).
+//! [`Rect`], [`camera_controls`] for the 2D camera ([`d2::Camera`](crate::d2::Camera)),
+//! several cameras in one window ([`Viewport`], [`RenderLayers`],
+//! [`d2::View`](crate::d2::View) and `d3::View`), and what every camera rig shares: [`CameraShake`] and the smoothing
+//! helpers [`smooth_damp`], [`damp`] and [`damp_angle`].
+//!
+//! The rigs themselves are in the dimension modules: 2D
+//! [`d2::FollowCamera`](crate::d2::FollowCamera) and
+//! [`d2::PixelPerfect`](crate::d2::PixelPerfect); 3D (feature `3d`)
+//! `d3::OrbitCamera`, `d3::FirstPersonCamera` and `d3::ThirdPersonCamera`.
+//! Each is a plain struct you keep (as a resource, say) and update once a
+//! frame; each moves the camera the same way at every frame rate.
+
+#![deny(missing_docs)]
 
 use glam::Vec2;
+
+mod damp;
+pub(crate) mod follow2d;
+#[cfg(feature = "3d")]
+pub(crate) mod rigs3d;
+#[cfg(feature = "3d")]
+mod screen3d;
+mod shake;
+pub(crate) mod views;
+#[cfg(feature = "3d")]
+pub(crate) mod views3d;
+
+pub use damp::{damp, damp_angle, smooth_damp};
+pub use shake::CameraShake;
+pub use views::{RenderLayers, Viewport};
 
 /// An axis-aligned rectangle: `min` is the top-left corner, `max` the
 /// bottom-right (y grows downward, like window pixels).

@@ -1,5 +1,6 @@
 //! A glTF file made solid in 3D physics in one call (Rust's
-//! `Ctx::load_collision_mesh` and `Ctx::load_collision_mesh_with`).
+//! `Ctx::try_load_collision_mesh` and `Ctx::try_load_collision_mesh_with`: C has no
+//! panics, so a bad file is a failed status with its kind).
 
 use std::ffi::c_char;
 
@@ -67,7 +68,7 @@ mod imp {
             ctx_access(ctx, |c| {
                 let path = text(path)?;
                 let mesh = c
-                    .load_collision_mesh_with(path, CollisionMeshOptions { scale, convex })
+                    .try_load_collision_mesh_with(path, CollisionMeshOptions { scale, convex })
                     .map_err(engine_error)?;
                 out(out_mesh, mesh_to_c(mesh))
             })

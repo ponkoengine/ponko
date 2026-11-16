@@ -1,7 +1,7 @@
 # ponko_unity
 
 Reads Unity projects saved as text (Force Text serialization) for importing
-them into [Ponko](https://github.com/ponkoengine/ponko): scenes, prefabs,
+them into [Ponko](https://gitlab.com/ponkoengine/ponko): scenes, prefabs,
 materials and mesh assets, the GUIDs in `.meta` files, and mesh, texture and
 animation data.
 

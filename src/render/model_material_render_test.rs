@@ -443,11 +443,7 @@ fn skinned_and_morphing_models_draw_with_the_override() {
     let Some(mut rig) = Rig::new(true) else {
         return;
     };
-    let skeleton = Skeleton::new(vec![Joint {
-        name: "root".into(),
-        parent: None,
-        rest: Transform3D::default(),
-    }]);
+    let skeleton = Skeleton::new(vec![Joint::new("root", None)]);
     let (mut bent, [left, right]) = two_cubes();
     bent.joints = vec![[0; 4]; bent.positions.len()];
     bent.weights = vec![[1.0, 0.0, 0.0, 0.0]; bent.positions.len()];
@@ -457,11 +453,9 @@ fn skinned_and_morphing_models_draw_with_the_override() {
         Some(&skeleton),
     );
     let (mut shaped, _) = two_cubes();
-    shaped.morph_targets.push(MorphTarget {
-        name: "still".into(),
-        positions: vec![Vec3::ZERO; shaped.positions.len()],
-        normals: Vec::new(),
-    });
+    shaped
+        .morph_targets
+        .push(MorphTarget::new("still", vec![Vec3::ZERO; shaped.positions.len()]));
     let morphing = rig.mesh_parts(&shaped, &[(left, glowing(GREEN)), (right, glowing(GREEN))], None);
     let red = rig.material(glowing(RED));
     let blue = rig.material(glowing(BLUE));

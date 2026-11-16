@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ponko::assets::MemorySource;
 use ponko::locale::{
     Arg, Missing, MissingKind, PluralCategory, StringTable, Strings, plural_categories, plural_category,
 };
@@ -238,17 +239,17 @@ fn temp_file(name: &str, text: &str) -> PathBuf {
 }
 
 #[test]
-fn load_strings_adds_the_resource_and_reports_a_missing_file() {
+fn try_load_strings_reports_a_missing_file_and_load_strings_adds_the_resource() {
     Game::new("t", 1, 1).run_headless(0, |ctx| {
         ctx.assets.add_source(
             MemorySource::new("built-in")
                 .with("lang/en.json", EN)
                 .with("lang/ar.json", AR),
         );
-        ctx.assets.load_strings(&mut ctx.world, "lang/en.json").unwrap();
-        ctx.assets.load_strings(&mut ctx.world, "lang/ar.json").unwrap();
+        ctx.assets.load_strings(&mut ctx.world, "lang/en.json");
+        ctx.assets.load_strings(&mut ctx.world, "lang/ar.json");
         assert_eq!(ctx.world.resource::<Strings>().languages(), ["en", "ar"]);
-        let err = ctx.assets.load_strings(&mut ctx.world, "lang/xx.json").unwrap_err();
+        let err = ctx.assets.try_load_strings(&mut ctx.world, "lang/xx.json").unwrap_err();
         assert_eq!(err.kind(), ErrorKind::NotFound);
     });
 }
@@ -271,7 +272,7 @@ fn run_reloading(path: &Path, edit: impl Fn() + 'static) -> Vec<String> {
                 std::thread::sleep(Duration::from_millis(400));
             }
         })
-        .run_headless(5, move |ctx| ctx.assets.load_strings(&mut ctx.world, &name).unwrap());
+        .run_headless(5, move |ctx| ctx.assets.load_strings(&mut ctx.world, &name));
     seen.lock().unwrap().clone()
 }
 
@@ -308,7 +309,7 @@ fn keyed_labels_follow_the_language_from_the_next_frame() {
             let root = ctx.ui.root().id();
             let label = ctx.ui.label(root, "").name("coins").id();
             ctx.ui.set_text_key(label, "hud.coins", &count(2));
-            ctx.ui.push_screen(root, false);
+            ctx.ui.push_modeless(root);
         });
     let texts = texts.lock().unwrap().clone();
     assert_eq!(texts.first().map(String::as_str), Some("2 coins"));
@@ -374,15 +375,15 @@ fn a_tables_font_file_is_loaded_for_its_language_with_the_built_in_font_behind_i
             let ar = AR.replace("\"name\"", "\"font\": \"fonts/NotoSansArabic-Subset.ttf\", \"name\"");
             ctx.assets
                 .add_source(MemorySource::new("built-in").with("en.json", EN).with("ar.json", ar));
-            ctx.assets.load_strings(&mut ctx.world, "en.json").unwrap();
-            ctx.assets.load_strings(&mut ctx.world, "ar.json").unwrap();
+            ctx.assets.load_strings(&mut ctx.world, "en.json");
+            ctx.assets.load_strings(&mut ctx.world, "ar.json");
             assert_eq!(
                 ctx.world.resource::<Strings>().table("ar").unwrap().font_path(),
                 Some("fonts/NotoSansArabic-Subset.ttf")
             );
             let root = ctx.ui.root().id();
             ctx.ui.label(root, "").text_key("menu.play").name("play");
-            ctx.ui.push_screen(root, false);
+            ctx.ui.push_modeless(root);
             *handle.lock().unwrap() = Some(ctx.gfx.load_font("fonts/NotoSansArabic-Subset.ttf"));
         });
     let arabic = loaded.lock().unwrap().unwrap();
@@ -391,4 +392,10 @@ fn a_tables_font_file_is_loaded_for_its_language_with_the_built_in_font_behind_i
     assert_eq!(strings_font, Some(arabic));
     assert_eq!(fallbacks, [Font::DEFAULT], "Latin text inside Arabic still draws");
     assert_eq!(text, "العب");
+}
+
+#[test]
+#[should_panic(expected = "ponko:")]
+fn load_strings_panics_with_the_engine_message_for_a_missing_table() {
+    Game::new("t", 1, 1).run_headless(0, |ctx| ctx.assets.load_strings(&mut ctx.world, "lang/none.json"));
 }

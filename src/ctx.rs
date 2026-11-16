@@ -1,11 +1,12 @@
 //! [`Ctx`]: everything game code talks to each frame.
+#![deny(missing_docs)]
 
 use glam::{Mat4, Vec2};
 use ponko_ecs::{Commands, World};
 
 use crate::assets;
 use crate::audio::Audio;
-use crate::camera::Rect;
+use crate::camera::{Rect, RenderLayers};
 use crate::camera2d::Camera2D;
 use crate::color::Color;
 use crate::ecs::{Sprite, Transform2D};
@@ -53,7 +54,7 @@ pub(crate) fn screen_projection(size: Vec2) -> Mat4 {
 /// | [`assets`](Self::assets) | [`Assets`](crate::assets::Assets): asset sources, data files, saving scenes and prefabs, hot reload. |
 /// | [`perf`](Self::perf) | [`Perf`](crate::perf::Perf): timings, the HUD, traces, profiling reports. |
 /// | [`storage`](Self::storage) | [`Storage`](crate::storage::Storage): the player's saves and settings, crash-safe, on the desktop and the web. |
-/// | [`camera`](Self::camera), `scene3d` | What the renderer reads when the frame is drawn: the 2D camera, and with `3d` the [`SceneSettings`](crate::render::SceneSettings) (camera, lighting, sky, post-processing, levels of detail, GPU passes, quality). |
+/// | [`camera`](Self::camera), `scene3d` | What the renderer reads when the frame is drawn: the 2D camera, and with `3d` the `SceneSettings` (camera, lighting, sky, post-processing, levels of detail, GPU passes, quality). |
 /// | [`spatial`](Self::spatial), `physics`, `physics3d`, [`net`](Self::net) | Neighbor queries, the physics worlds, [`Networking`](crate::net::Networking): lockstep, messages, snapshots. |
 ///
 /// # Shortcuts
@@ -140,6 +141,13 @@ pub struct Ctx {
     ///   of every tick in their frame.
     /// - A system skipped by its interval ([`IntoSystem::every`](crate::game::IntoSystem::every))
     ///   doesn't run, so it records nothing.
+    ///
+    /// [`spawn`](Commands::spawn) returns the new entity right away, so a
+    /// later command of the same system can point at it; it is alive once
+    /// the commands are applied. The id is reserved in `world`: if a system
+    /// replaces `ctx.world` with another world, spawns it recorded before
+    /// can't be applied (that panics), spawns recorded after the next apply
+    /// go to the new world.
     ///
     /// Changes made directly through [`world`](Self::world) are immediate.
     /// C and C++ systems follow the same rules. The guide's "Systems and the
@@ -237,6 +245,8 @@ pub struct Ctx {
     /// ```
     pub time: Time,
     window_size: Vec2,
+    /// Window requests and observed OS state; inert in headless runs.
+    pub window: crate::window::WindowService,
     quit_requested: bool,
     /// Which part of the world the window shows. Move it, zoom it, or make
     /// it follow something; see [`d2::Camera`](crate::d2::Camera).
@@ -249,10 +259,26 @@ pub struct Ctx {
     /// # }
     /// ```
     pub camera: crate::d2::Camera,
+    /// More 2D cameras, each drawing the world into its part of the window
+    /// after the main [`camera`](Self::camera), in order: split screen, a
+    /// minimap, a picture in picture. Empty by default (it then costs
+    /// nothing); see [`d2::View`](crate::d2::View). The engine keeps their
+    /// cameras' sizes up to date, as the main one's.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// ctx.camera.rect = ponko::camera::Viewport::split(2, 0);
+    /// let mut p2 = ctx.camera;
+    /// p2.rect = ponko::camera::Viewport::split(2, 1);
+    /// ctx.views2d.push(d2::View::new(p2));
+    /// # }
+    /// ```
+    pub views2d: Vec<crate::d2::View>,
     /// How the 3D world is drawn (feature `3d`): the camera, lighting, sky
     /// and fog, post-processing, levels of detail, the game's own GPU passes,
     /// graphics quality presets and automatic quality. See
-    /// [`SceneSettings`](crate::render::SceneSettings).
+    /// `SceneSettings`.
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
@@ -276,7 +302,7 @@ pub struct Ctx {
     /// use ponko::prelude::*;
     /// # fn setup(ctx: &mut Ctx) {
     /// let root = ctx.ui.add(ponko::ui::UiWidget::Panel, ponko::ui::UiLayout::auto());
-    /// ctx.ui.push_screen(root, false);
+    /// ctx.ui.push_modeless(root);
     /// # }
     /// ```
     pub ui: crate::ui::Ui,
@@ -326,6 +352,22 @@ pub struct Ctx {
     /// # }
     /// ```
     pub perf: crate::perf::Perf,
+    /// Debug drawing: lines, shapes and text labels in the 2D world, the 3D
+    /// world or on the screen, for a moment or for some seconds, and the
+    /// engine's own views (colliders, navmesh, bounds, lights, hierarchy).
+    /// On in debug builds, off in release builds unless
+    /// [`Game::debug_draw`](crate::game::Game::debug_draw) says otherwise.
+    /// See [`DebugDraw`](crate::debug::DebugDraw).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx, from: Vec3, hit: Vec3) {
+    /// ctx.debug.line(from, hit, Color::RED);
+    /// ctx.debug.sphere(hit, 0.2, Color::RED).seconds(2.0);
+    /// ctx.debug.show(ponko::debug::DebugView::Colliders, true);
+    /// # }
+    /// ```
+    pub debug: crate::debug::DebugDraw,
     /// The player's own files (saves, settings) in the per-user data folder,
     /// or the browser's storage on the web, with crash-safe writes. Needs an
     /// app id ([`Game::app_id`](crate::game::Game::app_id)). See
@@ -352,6 +394,7 @@ impl Ctx {
         crate::reflect::describe_transform2d(&mut world);
         crate::reflect::WorldReflect::reflect::<crate::attach::Attached>(&mut world);
         crate::reflect::WorldReflect::reflect::<crate::scene::PrefabParts>(&mut world);
+        crate::reflect::WorldReflect::reflect::<crate::hierarchy::Children>(&mut world);
         #[cfg(feature = "3d")]
         crate::reflect::WorldReflect::reflect::<crate::d3::Transform>(&mut world);
         #[cfg(feature = "3d")]
@@ -368,6 +411,7 @@ impl Ctx {
             crate::reflect::WorldReflect::reflect::<crate::anim::AttachToJoint>(&mut world);
             crate::reflect::WorldReflect::reflect::<crate::attach::Attached3D>(&mut world);
         }
+        crate::reflect::WorldReflect::reflect::<RenderLayers>(&mut world);
         crate::reflect::reflect_sprite(&mut world);
         crate::reflect::WorldReflect::reflect::<crate::light2d::PointLight2D>(&mut world);
         crate::reflect::WorldReflect::reflect::<crate::light2d::SpotLight2D>(&mut world);
@@ -375,6 +419,7 @@ impl Ctx {
         crate::reflect::WorldReflect::reflect::<crate::light2d::Occluder2D>(&mut world);
         crate::reflect::reflect_particle_emitter2d(&mut world);
         crate::reflect::reflect_animation(&mut world);
+        crate::reflect::reflect_skeleton2d(&mut world);
         // The file names behind sprites and models: the world saves by them,
         // the graphics service fills them in as files load.
         let gfx = crate::gfx::Graphics::new(
@@ -399,8 +444,8 @@ impl Ctx {
                 watcher,
                 ..Default::default()
             },
+            commands: world.commands(),
             world,
-            commands: Commands::new(),
             spatial: SpatialGrid::default(),
             #[cfg(feature = "physics")]
             physics: crate::d2::Physics::default(),
@@ -419,13 +464,16 @@ impl Ctx {
             input: Input::new(),
             time: Time::new(fixed_dt),
             window_size,
+            window: crate::window::WindowService::default(),
             quit_requested: false,
             camera: Camera2D::new(window_size),
+            views2d: Vec::new(),
             #[cfg(feature = "3d")]
             scene3d: crate::render::SceneSettings::new(window_size),
             ui_state: UiState::default(),
             ui: crate::ui::Ui::default(),
             perf: crate::perf::Perf::new(),
+            debug: crate::debug::DebugDraw::default(),
             storage: crate::storage::Storage::default(),
         };
         #[cfg(feature = "3d")]
@@ -446,18 +494,17 @@ impl Ctx {
         #[cfg(feature = "3d")]
         self.draw_ui_panels();
         self.follow_window_size();
+        self.collect_cameras2d();
+        self.flush_debug_draw();
         #[cfg(feature = "3d")]
         self.prepare_3d();
+        if self.gfx.renderer.is_some() {
+            self.collect_lights2d();
+        }
         #[cfg(feature = "3d")]
         let panels = self.ui_state.panels.frame_draws();
         #[cfg(not(feature = "3d"))]
         let panels: &mut [crate::render::batch::PanelDraw] = &mut [];
-        if self.gfx.renderer.is_some() {
-            let lights = &mut self.gfx.lights2d;
-            lights
-                .frame
-                .collect(&mut self.world, self.camera.visible_rect(), lights.ambient);
-        }
         let status = match self.gfx.renderer.as_mut() {
             Some(renderer) => renderer.render(
                 &mut self.gfx.draw_list,
@@ -468,6 +515,7 @@ impl Ctx {
                 screen_projection(self.window_size),
                 capture,
                 &self.gfx.lights2d,
+                &self.gfx.cameras2d,
             ),
             None => FrameStatus::Skipped,
         };
@@ -544,8 +592,49 @@ impl Ctx {
     /// The 3D camera's view takes the window's size again, also after the
     /// game replaced `scene3d` (its `Default` has a 1×1 view).
     fn follow_window_size(&mut self) {
+        self.place_cameras();
+    }
+
+    /// This frame's 2D lights and shadows, for every 2D camera's view:
+    /// split screen lights each half.
+    pub(crate) fn collect_lights2d(&mut self) {
+        let lights = &mut self.gfx.lights2d;
+        let views =
+            std::iter::once(self.camera.visible_rect()).chain(self.views2d.iter().map(|v| v.camera.visible_rect()));
+        lights.frame.collect(&mut self.world, views, lights.ambient);
+    }
+
+    /// This frame's 2D cameras for the renderer: none while the main camera
+    /// alone draws the whole window on every layer (the frame is drawn as
+    /// it always was), else the main one and every view.
+    fn collect_cameras2d(&mut self) {
+        use crate::camera::views::Camera2DFrame;
+        let cameras = &mut self.gfx.cameras2d;
+        cameras.clear();
+        if self.views2d.is_empty() && self.camera.rect.is_full() && self.camera.layers == RenderLayers::ALL {
+            return;
+        }
+        cameras.push(Camera2DFrame::of(&self.camera, None));
+        cameras.extend(self.views2d.iter().map(|v| Camera2DFrame::of(&v.camera, v.clear)));
+    }
+
+    /// Tells every camera the window's size (each takes its part of it
+    /// from its `rect`): the main 2D and 3D cameras, the 2D views' and the
+    /// 3D views'. At the start of every frame and when the window changes
+    /// size, so views added with a camera made elsewhere know it too.
+    pub(crate) fn place_cameras(&mut self) {
+        let window = self.window_size;
+        self.camera.place(window);
+        for view in &mut self.views2d {
+            view.camera.place(window);
+        }
         #[cfg(feature = "3d")]
-        self.scene3d.camera.set_viewport(self.window_size);
+        {
+            self.scene3d.camera.place(window);
+            for view in &mut self.scene3d.views {
+                view.camera.place(window);
+            }
+        }
     }
 
     /// Engine side, before the frame's first simulation tick or frame
@@ -560,12 +649,17 @@ impl Ctx {
     /// Engine side: start a new frame with fresh timing.
     pub(crate) fn begin_frame(&mut self, timing: FrameTiming) {
         self.time.begin_frame(timing);
+        // Each camera's part of the window, for this frame's conversions
+        // (headless frames too).
+        self.place_cameras();
         self.events.begin_frame(self.time.frame(), self.time.sim_tick());
         self.gfx.frame = self.time.frame();
         self.gfx.asset_ledger.now = self.time.frame();
         self.audio.ledger.now = self.time.frame();
+        self.audio.forget_started();
         self.gfx.text.begin_frame();
         self.ui.immediate.begin_frame();
+        self.debug.begin_frame(self.time.elapsed());
         #[cfg(feature = "3d")]
         self.unlink_freed_gpu_buffers();
     }
@@ -576,12 +670,30 @@ impl Ctx {
 
     pub(crate) fn set_window_size(&mut self, size: Vec2) {
         self.window_size = size;
-        self.camera.set_viewport(size);
-        #[cfg(feature = "3d")]
-        self.scene3d.camera.set_viewport(size);
+        self.place_cameras();
     }
 
-    pub(crate) fn quit_requested(&self) -> bool {
+    /// Whether [`quit`](Self::quit) was called: the game ends after this
+    /// frame (a headless run, before its next tick). For a test that a
+    /// system asked to quit, read it in a system after that one.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let world = Game::new("t", 1, 1)
+    ///     .sim_system(|ctx| {
+    ///         if ctx.time.sim_tick() == 3 {
+    ///             ctx.quit();
+    ///         }
+    ///     })
+    ///     .sim_system(|ctx| {
+    ///         let quit = ctx.quit_requested();
+    ///         ctx.world.resource_mut::<Vec<bool>>().push(quit);
+    ///     })
+    ///     .run_headless(10, |ctx| ctx.world.insert_resource(Vec::<bool>::new()));
+    /// assert_eq!(*world.resource::<Vec<bool>>(), [false, false, false, true], "and no tick after it");
+    /// ```
+    #[must_use]
+    pub fn quit_requested(&self) -> bool {
         self.quit_requested
     }
 
@@ -669,6 +781,8 @@ impl Ctx {
         // Residency tells ticks apart by this (it is also set before each
         // system), so loads between ticks see the new one.
         self.gfx.sim_tick = self.time.sim_tick();
+        self.debug.end_tick();
+        self.audio.forget_started();
     }
 
     pub(crate) fn set_sim_steps(&mut self, steps: u32) {
@@ -677,6 +791,7 @@ impl Ctx {
 
     pub(crate) fn set_in_sim(&mut self, in_sim: bool) {
         self.time.set_in_sim(in_sim);
+        self.debug.set_in_sim(in_sim);
     }
 
     /// Random numbers for this system and tick: `ctx.random().of(entity)`
@@ -723,7 +838,10 @@ impl Ctx {
 
     /// Engine side: apply commands recorded by the system that just ran.
     pub(crate) fn apply_commands(&mut self) {
-        if !self.commands.is_empty() {
+        if self.commands.is_empty() {
+            // A system may have replaced the world: spawn into the new one.
+            self.commands.bind(&self.world);
+        } else {
             self.world.apply(&mut self.commands);
         }
         self.perf.entities = self.world.len();
@@ -736,10 +854,11 @@ impl Ctx {
         let draw_list = &mut self.gfx.draw_list;
         // Plain sprites first, on the same path as before blend modes and
         // materials existed; then the (usually few) sprites with either.
-        let mut query = self
-            .world
-            .query::<(&Transform2D, &Sprite)>()
-            .filter::<(Without<BlendMode>, Without<SpriteMaterial>)>();
+        let mut query = self.world.query::<(&Transform2D, &Sprite)>().filter::<(
+            Without<BlendMode>,
+            Without<SpriteMaterial>,
+            Without<RenderLayers>,
+        )>();
         let n = query.count();
         if n < SPRITES_PARALLEL_MIN {
             query.for_each(|(t, s)| draw_list.push(s.texture.id, s.z, sprite_instance(t, s)));
@@ -753,6 +872,33 @@ impl Ctx {
             }
         }
         self.draw_styled_sprites();
+        self.draw_layered_sprites();
+        crate::skeleton2d::draw_skeletons(self);
+    }
+
+    /// The sprites with [`RenderLayers`](crate::camera::RenderLayers), each
+    /// on its layers; most games have none, so it stays out of line.
+    #[inline(never)]
+    fn draw_layered_sprites(&mut self) {
+        use crate::sprite_material::{BlendMode, SpriteMaterial, style_key};
+        let draw_list = &mut self.gfx.draw_list;
+        let mut layered = self.world.query::<(
+            &Transform2D,
+            &Sprite,
+            &RenderLayers,
+            Option<&BlendMode>,
+            Option<&SpriteMaterial>,
+        )>();
+        if layered.count() == 0 {
+            return;
+        }
+        let before = draw_list.layers();
+        layered.for_each(|(t, s, l, b, m)| {
+            draw_list.set_layers(l.0);
+            let style = style_key(b.copied().unwrap_or_default(), m.copied());
+            draw_list.push_styled(s.texture.id, style, s.z, sprite_instance(t, s));
+        });
+        draw_list.set_layers(before);
     }
 
     /// The sprites with a [`BlendMode`](crate::render::BlendMode) or a
@@ -761,12 +907,15 @@ impl Ctx {
     #[inline(never)]
     fn draw_styled_sprites(&mut self) {
         use crate::sprite_material::{BlendMode, SpriteMaterial, style_key};
-        use ponko_ecs::{Or, With};
+        use ponko_ecs::{Or, With, Without};
         let draw_list = &mut self.gfx.draw_list;
         let mut styled = self
             .world
             .query::<(&Transform2D, &Sprite, Option<&BlendMode>, Option<&SpriteMaterial>)>()
-            .filter::<Or<(With<BlendMode>, With<SpriteMaterial>)>>();
+            .filter::<(
+                Or<(With<BlendMode>, With<SpriteMaterial>)>,
+                Without<crate::camera::RenderLayers>,
+            )>();
         let n = styled.count();
         if n == 0 {
             // Visiting an `Or` query checks every sprite even when none
@@ -815,6 +964,10 @@ impl Ctx {
         crate::reflect::asset_names(json, "Animation", "texture", &mut names);
         for name in names.drain(..) {
             self.gfx.try_load_texture(&name)?;
+        }
+        crate::reflect::asset_names(json, "Skeleton2D", "skeleton", &mut names);
+        for name in names.drain(..) {
+            self.try_load_skeleton2d(&name)?;
         }
         #[cfg(feature = "3d")]
         {
@@ -878,6 +1031,12 @@ impl Ctx {
                 }
                 Asset::Level => {
                     let applied = self.reload_level(&name);
+                    self.assets.report_reload(name, applied);
+                    continue;
+                }
+                #[cfg(feature = "3d")]
+                Asset::GltfScene => {
+                    let applied = self.reload_gltf(&name);
                     self.assets.report_reload(name, applied);
                     continue;
                 }
@@ -1001,6 +1160,13 @@ impl Ctx {
     ///
     /// Deprecated: [`Ctx`] holds the services, and each call has one
     /// spelling, on its service: `ctx.gfx.draw`.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx, texture: Texture) {
+    /// ctx.gfx.draw(texture, vec2(10.0, 10.0)); // not `ctx.draw(texture, pos)`
+    /// # }
+    /// ```
     #[deprecated(since = "0.2.0", note = "use `ctx.gfx.draw`")]
     pub fn draw(&mut self, texture: Texture, pos: Vec2) {
         self.gfx.draw(texture, pos);
@@ -1012,6 +1178,13 @@ impl Ctx {
     ///
     /// Deprecated: [`Ctx`] holds the services, and each call has one
     /// spelling, on its service: `ctx.gfx.draw_text`.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// ctx.gfx.draw_text("score", vec2(8.0, 8.0), 16.0, Color::WHITE); // not `ctx.draw_text(..)`
+    /// # }
+    /// ```
     #[deprecated(since = "0.2.0", note = "use `ctx.gfx.draw_text`")]
     pub fn draw_text(&mut self, text: &str, pos: Vec2, size: f32, color: Color) {
         self.gfx.draw_text(text, pos, size, color);
@@ -1025,6 +1198,14 @@ impl Ctx {
     ///
     /// Deprecated: [`Ctx`] holds the services, and each call has one
     /// spelling, on its service: `ctx.gfx.load_texture`.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// let hero = ctx.gfx.load_texture("hero.png"); // not `ctx.load_texture(path)`
+    /// # let _ = hero;
+    /// # }
+    /// ```
     #[deprecated(since = "0.2.0", note = "use `ctx.gfx.load_texture`")]
     pub fn load_texture(&mut self, path: &str) -> Texture {
         self.gfx.load_texture(path)
@@ -1036,6 +1217,14 @@ impl Ctx {
     ///
     /// Deprecated: [`Ctx`] holds the services, and each call has one
     /// spelling, on its service: `ctx.audio.load`.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// let beep = ctx.audio.load("beep.ogg"); // not `ctx.load_sound(path)`
+    /// # let _ = beep;
+    /// # }
+    /// ```
     #[deprecated(since = "0.2.0", note = "use `ctx.audio.load`")]
     pub fn load_sound(&mut self, path: &str) -> crate::audio::Sound {
         self.audio.load(path)
@@ -1048,6 +1237,13 @@ impl Ctx {
     ///
     /// Deprecated: [`Ctx`] holds the services, and each call has one
     /// spelling, on its service: `ctx.audio.play`.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx, beep: Sound) {
+    /// ctx.audio.play(beep); // not `ctx.play_sound(beep)`
+    /// # }
+    /// ```
     #[deprecated(since = "0.2.0", note = "use `ctx.audio.play`")]
     pub fn play_sound(&mut self, sound: crate::audio::Sound) -> crate::audio::Playing {
         self.audio.play(sound)
@@ -1104,6 +1300,14 @@ impl Ctx {
     ///
     /// Deprecated: [`Ctx`] holds the services, and each call has one
     /// spelling, on its service: `ctx.time.dt()`.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &Ctx) {
+    /// let dt = ctx.time.dt(); // not `ctx.dt()`
+    /// # let _ = dt;
+    /// # }
+    /// ```
     #[deprecated(since = "0.2.0", note = "use `ctx.time.dt()`")]
     pub fn dt(&self) -> f32 {
         self.time.dt()
@@ -1115,6 +1319,14 @@ impl Ctx {
     ///
     /// Deprecated: [`Ctx`] holds the services, and each call has one
     /// spelling, on its service: `ctx.input.key_down`.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &Ctx) {
+    /// let held = ctx.input.key_down(Key::Space); // not `ctx.key_down(key)`
+    /// # let _ = held;
+    /// # }
+    /// ```
     #[deprecated(since = "0.2.0", note = "use `ctx.input.key_down`")]
     pub fn key_down(&self, key: Key) -> bool {
         self.input.key_down(key)
@@ -1124,6 +1336,14 @@ impl Ctx {
     ///
     /// Deprecated: [`Ctx`] holds the services, and each call has one
     /// spelling, on its service: `ctx.input.key_pressed`.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &Ctx) {
+    /// let jump = ctx.input.key_pressed(Key::Space); // not `ctx.key_pressed(key)`
+    /// # let _ = jump;
+    /// # }
+    /// ```
     #[deprecated(since = "0.2.0", note = "use `ctx.input.key_pressed`")]
     pub fn key_pressed(&self, key: Key) -> bool {
         self.input.key_pressed(key)
@@ -1133,6 +1353,14 @@ impl Ctx {
     ///
     /// Deprecated: [`Ctx`] holds the services, and each call has one
     /// spelling, on its service: `ctx.input.key_released`.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &Ctx) {
+    /// let let_go = ctx.input.key_released(Key::Space); // not `ctx.key_released(key)`
+    /// # let _ = let_go;
+    /// # }
+    /// ```
     #[deprecated(since = "0.2.0", note = "use `ctx.input.key_released`")]
     pub fn key_released(&self, key: Key) -> bool {
         self.input.key_released(key)
@@ -1145,13 +1373,22 @@ impl Ctx {
     ///
     /// Deprecated: [`Ctx`] holds the services, and each call has one
     /// spelling, on its service: `ctx.input.mouse_pos()`.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &Ctx) {
+    /// let at = ctx.input.mouse_pos(); // not `ctx.mouse_pos()`
+    /// # let _ = at;
+    /// # }
+    /// ```
     #[deprecated(since = "0.2.0", note = "use `ctx.input.mouse_pos()`")]
     pub fn mouse_pos(&self) -> Vec2 {
         self.input.mouse_pos()
     }
 
     /// The world point under the mouse: [`ctx.input.mouse_pos()`](crate::input::Input::mouse_pos)
-    /// through the [`camera`](Self::camera).
+    /// through the 2D camera there ([`d2::View::camera_at`](crate::d2::View::camera_at):
+    /// the [`camera`](Self::camera) unless there are [`views2d`](Self::views2d)).
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -1162,7 +1399,8 @@ impl Ctx {
     /// # }
     /// ```
     pub fn mouse_world(&self) -> Vec2 {
-        self.camera.screen_to_world(self.input.mouse_pos())
+        let mouse = self.input.mouse_pos();
+        crate::d2::View::camera_at(&self.camera, &self.views2d, mouse).screen_to_world(mouse)
     }
 
     // ---------------------------------------------------------------- gamepads
@@ -1289,6 +1527,7 @@ mod tests {
     fn timing(dt: f32) -> FrameTiming {
         FrameTiming {
             dt,
+            seconds: f64::from(dt),
             fixed_steps: 1,
             alpha: 0.25,
         }

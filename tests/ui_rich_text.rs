@@ -11,7 +11,7 @@ const VIEW: Vec2 = Vec2::new(400.0, 300.0);
 /// The whole window, its children as wide as their text (not stretched).
 fn root_layout() -> UiLayout {
     let mut layout = UiLayout::fill();
-    layout.style_mut().align_items = ponko::ui::unstable_taffy::AlignItems::START;
+    layout.unstable_style_mut().align_items = ponko::ui::unstable_taffy::AlignItems::START;
     layout
 }
 
@@ -22,7 +22,7 @@ fn screen(text: &str, width: Option<f32>, rich: bool) -> (Ui, UiId) {
     let layout = width.map_or(UiLayout::auto(), |w| UiLayout::auto().width(w));
     let label = ui.label(root, text).layout(layout).wrap().id();
     ui.set_rich(label, rich);
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     ui.layout(VIEW);
     (ui, label)
 }
@@ -98,7 +98,7 @@ fn inline_images_take_room_as_tall_as_the_text() {
         let root = ctx.ui.root().layout(root_layout()).id();
         let with = ctx.ui.label(root, "Press [img=pad_a alt=A] now").rich().id();
         let without = ctx.ui.label(root, "Press  now").rich().id();
-        ctx.ui.push_screen(root, false);
+        ctx.ui.push_modeless(root);
         ctx.ui.layout(VIEW);
         let extra = ctx.ui.rect(with).unwrap().size().x - ctx.ui.rect(without).unwrap().size().x;
         // Twice as wide as tall, at the label's 18 unit text (its theme size).
@@ -113,7 +113,7 @@ fn an_image_named_later_replaces_its_alternative_text() {
     Game::new("rich", 320, 240).run_headless(1, |ctx| {
         let root = ctx.ui.root().layout(root_layout()).id();
         let label = ctx.ui.label(root, "[img=pad_a alt=AAAAAAAA]").rich().id();
-        ctx.ui.push_screen(root, false);
+        ctx.ui.push_modeless(root);
         ctx.ui.layout(VIEW);
         let before = ctx.ui.rect(label).unwrap().size().x;
         let glyph = ctx.gfx.create_texture(16, 16, &[255; 16 * 16 * 4]);
@@ -149,7 +149,7 @@ fn a_link_in_a_button_takes_the_click_and_the_rest_clicks_the_button() {
     let mut ui = Ui::default();
     let root = ui.root().layout(root_layout()).id();
     let button = ui.button(root, "Agree to the [link=terms]terms[/link]").rich().id();
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     ui.layout(VIEW);
     let rect = ui.rect(button).unwrap();
     let left = Vec2::new(rect.min.x + 14.0, rect.center().y);
@@ -249,7 +249,7 @@ fn a_right_to_left_string_table_entry_keeps_its_markup_and_order() {
     let root = ui.root().layout(root_layout()).id();
     let line = ui.label(root, "").rich().layout(UiLayout::auto().width(380.0)).id();
     ui.set_text_key(line, "greet", &[("name", Arg::from("مريم"))]);
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     ui.localize(&strings);
     ui.layout(VIEW);
     assert_eq!(ui.accessible_name(line), Some("مريم: مرحبا بالعالم"));

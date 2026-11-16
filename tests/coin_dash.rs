@@ -17,6 +17,7 @@ use ponko::input::{Gamepad, GamepadAxis, GamepadButton, Input};
 use ponko::prelude::*;
 #[allow(unused_imports)]
 use ponko::scenario::InputScenario;
+use ponko::state::State;
 #[allow(unused_imports)]
 use ponko::ui::UiInput;
 use std::cell::{Cell, RefCell};
@@ -60,9 +61,9 @@ fn storage_of(path: &std::path::Path) -> ponko::storage::Storage {
 /// title screen.
 fn on_title(_: &mut Ctx) {}
 
-/// For a [`script`]ed game: skips the title screen, round 1 is already running.
+/// For a [`script`]ed game: skips the title screen, round 1 runs from the first tick.
 fn first_round(ctx: &mut Ctx) {
-    new_round(ctx, 1);
+    ctx.set_state(Screen::Playing);
 }
 
 /// The game's startup alone, for tests that call its systems by hand in a
@@ -71,6 +72,8 @@ fn setup_with(ctx: &mut Ctx, save: Option<PathBuf>) {
     if let Some(path) = save {
         ctx.storage = storage_of(&path);
     }
+    // The state `Rules` gives a game; these games have no ticks to enter it.
+    ctx.world.insert_resource(State::new(Screen::Title));
     PlayerInput.setup(ctx);
     SettingsScreen.setup(ctx);
     Rules.setup(ctx);
@@ -80,15 +83,19 @@ fn setup_with(ctx: &mut Ctx, save: Option<PathBuf>) {
 /// [`setup_with`] nothing saved, then round 1 already running.
 fn setup_playing(ctx: &mut Ctx) {
     setup_with(ctx, None);
-    new_round(ctx, 1);
+    ctx.world.insert_resource(State::new(Screen::Playing));
+    new_round(ctx);
+}
+
+/// `rules`, by hand, then the screen it asked for (without the on-enter work,
+/// which these games without ticks don't run): what the next tick would see.
+fn rules_then_screen(ctx: &mut Ctx) {
+    rules(ctx);
+    ctx.world.resource_mut::<State<Screen>>().apply_next();
 }
 
 fn intent(ctx: &mut Ctx) -> &mut Intent {
     ctx.world.resource_mut::<Intent>()
-}
-
-fn screen(world: &World) -> Screen {
-    *world.resource::<Screen>()
 }
 
 fn player_and_coins(ctx: &mut Ctx) -> (Vec2, Vec<Vec2>) {
@@ -166,7 +173,7 @@ fn a_finished_round_stays_finished_until_the_player_moves_on() {
     let mut world = script(move |ctx| {
         chase_nearest_coin(ctx);
         // Once won, keep "walking" and let the clock run: nothing may change.
-        if matches!(*ctx.world.resource::<Screen>(), Screen::Result(_)) {
+        if matches!(screen(&ctx.world), Screen::Result(_)) {
             let round = ctx.world.resource::<Round>().clone();
             let seen = (round.collected, round.time_left);
             assert_eq!(*frozen.get_or_insert(seen), seen, "state changed after winning");
@@ -247,7 +254,7 @@ fn restart_works_in_the_middle_of_a_round_too() {
 fn the_next_round_can_be_won_too() {
     // Win, play again, win again: the whole loop twice.
     let mut world = script(move |ctx| {
-        if matches!(*ctx.world.resource::<Screen>(), Screen::Result(_)) && ctx.world.resource::<Round>().number == 1 {
+        if matches!(screen(&ctx.world), Screen::Result(_)) && ctx.world.resource::<Round>().number == 1 {
             intent(ctx).confirm = true;
         }
         chase_nearest_coin(ctx);
@@ -263,9 +270,10 @@ fn the_next_round_can_be_won_too() {
 
 #[test]
 fn rounds_are_reproducible_and_each_round_has_its_own_layout() {
+    // Round 1 starts with the first tick.
     let layout_after = |ticks| coin_layout(&mut script(|_| {}).run_headless(ticks, first_round));
-    assert_eq!(layout_after(0), layout_after(0), "same seed, same coins");
-    assert_eq!(layout_after(0).len(), COINS);
+    assert_eq!(layout_after(1), layout_after(1), "same seed, same coins");
+    assert_eq!(layout_after(1).len(), COINS);
 
     // Same inputs on both runs: identical games, tick for tick.
     let play =
@@ -275,7 +283,7 @@ fn rounds_are_reproducible_and_each_round_has_its_own_layout() {
     assert_eq!(a.resource::<Round>().time_left, b.resource::<Round>().time_left);
 
     // Round 2 is not round 1 again.
-    assert_ne!(layout_after(0), coin_layout(&mut a));
+    assert_ne!(layout_after(1), coin_layout(&mut a));
 }
 
 #[test]
@@ -463,7 +471,7 @@ fn back_does_nothing_while_playing() {
 fn result_screen_offers_play_again_and_back_to_the_title() {
     // Title -> play -> lose -> play again (round 2) -> lose -> back to title.
     let world = script(|ctx| {
-        let over = matches!(*ctx.world.resource::<Screen>(), Screen::Result(_));
+        let over = matches!(screen(&ctx.world), Screen::Result(_));
         let number = ctx.world.resource::<Round>().number;
         if over {
             if number == 1 {
@@ -486,7 +494,7 @@ fn result_screen_offers_play_again_and_back_to_the_title() {
 #[test]
 fn pause_on_the_result_screen_goes_back_to_the_title() {
     let world = script(|ctx| {
-        if matches!(*ctx.world.resource::<Screen>(), Screen::Result(_)) {
+        if matches!(screen(&ctx.world), Screen::Result(_)) {
             intent(ctx).pause = true;
             ctx.quit();
         }
@@ -765,7 +773,7 @@ fn keyed(scenario: InputScenario, extra: impl FnMut(&mut Ctx) + 'static) -> Game
         .input_scenario(scenario)
         .sim_system(read_input)
         .sim_system(extra)
-        .sim_system(rules)
+        .plugin(Rules)
 }
 
 fn tap(scenario: InputScenario, tick: u64, key: Key) -> InputScenario {
@@ -907,7 +915,7 @@ fn every_button_binding_sets_its_own_request_which_the_sim_takes_once() {
                 let i = *ctx.world.resource::<Intent>();
                 let set = [i.confirm, i.restart, i.pause, i.back];
                 assert_eq!(set.iter().filter(|s| **s).count(), 1, "{press:?}: {set:?}");
-                rules(ctx);
+                rules_then_screen(ctx);
                 assert!(!flag(ctx.world.resource::<Intent>()), "{name}: taken exactly once");
             });
         }
@@ -1029,7 +1037,7 @@ fn bounds(ctx: &Ctx, name: &str) -> Rect {
 fn open_settings(ctx: &mut Ctx, save: Option<PathBuf>) {
     setup_with(ctx, save);
     intent(ctx).settings = true;
-    rules(ctx);
+    rules_then_screen(ctx);
     assert_eq!(screen(&ctx.world), Screen::Settings);
     idle(ctx); // builds and shows the screen
     idle(ctx); // lays it out
@@ -1050,7 +1058,7 @@ fn the_settings_screen_opens_from_the_title_and_leaves_with_its_back_button() {
         tab_to(ctx, "Back");
         press_confirm(ctx);
         assert!(intent(ctx).close_settings, "the Back button asks to close");
-        rules(ctx);
+        rules_then_screen(ctx);
         assert_eq!(screen(&ctx.world), Screen::Title);
         idle(ctx); // the game takes the screen off the UI's stack ...
         assert!(ctx.ui.top_screen().is_none());
@@ -1073,14 +1081,14 @@ fn escape_and_the_east_button_close_the_settings_screen_too() {
             },
         );
         assert!(intent(ctx).close_settings);
-        rules(ctx);
+        rules_then_screen(ctx);
         assert_eq!(screen(&ctx.world), Screen::Title);
         idle(ctx);
         assert!(ctx.ui.top_screen().is_none());
 
         // And it can be opened again.
         intent(ctx).settings = true;
-        rules(ctx);
+        rules_then_screen(ctx);
         idle(ctx);
         assert!(ctx.ui.wants_keyboard());
     });
@@ -1290,10 +1298,10 @@ fn the_hints_on_the_other_screens_show_the_rebound_keys() {
         rebind_key_through_the_screen(ctx, Control::Confirm, Key::K);
         rebind_key_through_the_screen(ctx, Control::Back, Key::B);
         intent(ctx).close_settings = true;
-        rules(ctx);
+        rules_then_screen(ctx);
         let title: Vec<String> = screen_lines(&ctx.world).into_iter().map(|l| l.text).collect();
         assert!(title.iter().any(|t| t.starts_with("K: play")), "{title:?}");
-        ctx.world.insert_resource(Screen::Paused);
+        ctx.world.insert_resource(State::new(Screen::Paused));
         let paused: Vec<String> = screen_lines(&ctx.world).into_iter().map(|l| l.text).collect();
         assert!(paused.iter().any(|t| t.contains("B: title")), "{paused:?}");
     });
@@ -1386,7 +1394,7 @@ fn chosen_settings_are_saved_when_leaving_and_come_back_next_run() {
         press_confirm(ctx);
         tab_to(ctx, "Back");
         press_confirm(ctx);
-        rules(ctx);
+        rules_then_screen(ctx);
         assert_eq!(screen(&ctx.world), Screen::Title);
         assert!(!ctx.world.resource::<SettingsFile>().save_failed);
         *kept.borrow_mut() = Some(settings_of(ctx));
@@ -1499,7 +1507,7 @@ fn settings_that_cannot_be_written_do_not_stop_the_game() {
     let world = Game::new("t", 800, 600).run_headless(0, |ctx| {
         open_settings(ctx, Some(blocker.join("progress.json")));
         intent(ctx).close_settings = true;
-        rules(ctx);
+        rules_then_screen(ctx);
         assert!(ctx.world.resource::<SettingsFile>().save_failed);
         assert_eq!(screen(&ctx.world), Screen::Title);
     });
@@ -1728,7 +1736,7 @@ fn the_settings_screen_shows_the_installed_bindings_not_a_copy() {
         ctx.input.set_action("confirm", confirm);
         assert_eq!(settings_of(ctx).controls.key(Control::Confirm), Key::Enter);
         intent(ctx).settings = true;
-        rules(ctx);
+        rules_then_screen(ctx);
         idle(ctx);
         idle(ctx);
         let tree = ctx.ui.accessibility_tree();
@@ -1849,7 +1857,7 @@ fn the_smoke_walk_through_gives_up_instead_of_hanging() {
         .run_headless(MAX_TICKS + 1, |ctx| {
             setup_with(ctx, None);
             setup_smoke(ctx, None, "headless");
-            ctx.world.insert_resource(Screen::Paused); // nothing here moves it on
+            ctx.world.insert_resource(State::new(Screen::Paused)); // nothing here moves it on
         });
     let smoke = world.remove_resource::<Smoke>().unwrap();
     assert!(!smoke.finished());

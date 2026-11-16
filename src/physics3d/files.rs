@@ -72,34 +72,74 @@ impl Ctx {
     /// [`load_collision_mesh_with`](Self::load_collision_mesh_with) scales
     /// it or makes a convex hull instead.
     ///
-    /// Fails if the file can't be read or has no triangles.
+    /// A setup loader: a missing file is a bug. [`try_load_collision_mesh`](Self::try_load_collision_mesh)
+    /// returns the error instead.
+    ///
+    /// # Panics
+    /// If the file can't be read or has no triangles, with the engine's
+    /// message (it starts with `ponko:`).
     ///
     /// ```no_run
     /// use ponko::d3::*;
     /// use ponko::prelude::*;
     /// # fn setup(ctx: &mut Ctx) {
     /// let look = ctx.gfx.load_mesh("yard.glb");
-    /// let solid = ctx.load_collision_mesh("yard.glb").expect("the yard loads");
+    /// let solid = ctx.load_collision_mesh("yard.glb");
     /// ctx.world.spawn((Transform::default(), Model::new(look), RigidBody::fixed(), Collider::mesh(solid)));
     /// # }
     /// ```
-    pub fn load_collision_mesh(&mut self, path: &str) -> Result<CollisionMesh, Error> {
-        self.load_collision_mesh_with(path, CollisionMeshOptions::default())
+    pub fn load_collision_mesh(&mut self, path: &str) -> CollisionMesh {
+        self.try_load_collision_mesh(path).unwrap_or_else(|e| panic!("{e}"))
     }
 
     /// [`load_collision_mesh`](Self::load_collision_mesh), scaled or as a
     /// convex hull ([`CollisionMeshOptions`]).
+    ///
+    /// # Panics
+    /// As [`load_collision_mesh`](Self::load_collision_mesh), and if no
+    /// convex hull can be made of the file (it would be flat).
     ///
     /// ```no_run
     /// use ponko::d3::*;
     /// use ponko::prelude::*;
     /// # fn setup(ctx: &mut Ctx) {
     /// let hull = CollisionMeshOptions { convex: true, ..Default::default() };
-    /// let rock = ctx.load_collision_mesh_with("rock.glb", hull).expect("the rock loads");
+    /// let rock = ctx.load_collision_mesh_with("rock.glb", hull);
     /// ctx.world.spawn((Transform::default(), RigidBody::dynamic(), Collider::mesh(rock)));
     /// # }
     /// ```
-    pub fn load_collision_mesh_with(
+    pub fn load_collision_mesh_with(&mut self, path: &str, options: CollisionMeshOptions) -> CollisionMesh {
+        self.try_load_collision_mesh_with(path, options)
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// [`load_collision_mesh`](Self::load_collision_mesh), returning the error
+    /// instead of panicking: for a file that may be missing or broken (a
+    /// mod's level, a download).
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`] for a missing file, [`ErrorKind::Invalid`] if
+    /// it has no triangles or no shape can be made of it.
+    ///
+    /// ```no_run
+    /// use ponko::d3::*;
+    /// use ponko::prelude::*;
+    /// # fn setup(ctx: &mut Ctx) -> Result<(), Error> {
+    /// let solid = ctx.try_load_collision_mesh("mods/yard.glb")?;
+    /// # let _ = solid;
+    /// # Ok(()) }
+    /// ```
+    pub fn try_load_collision_mesh(&mut self, path: &str) -> Result<CollisionMesh, Error> {
+        self.try_load_collision_mesh_with(path, CollisionMeshOptions::default())
+    }
+
+    /// [`load_collision_mesh_with`](Self::load_collision_mesh_with), returning
+    /// the error instead of panicking; see
+    /// [`try_load_collision_mesh`](Self::try_load_collision_mesh).
+    ///
+    /// # Errors
+    /// As [`try_load_collision_mesh`](Self::try_load_collision_mesh).
+    pub fn try_load_collision_mesh_with(
         &mut self,
         path: &str,
         options: CollisionMeshOptions,

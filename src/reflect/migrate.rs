@@ -19,6 +19,8 @@ use std::sync::Arc;
 use ponko_ecs::World;
 use serde_json::{Map, Value};
 
+use super::{JsonMap, JsonValue};
+
 use super::{ReflectError, SAVE_FORMAT};
 
 /// Key of the game's save version in a world save.
@@ -174,7 +176,7 @@ impl Migration {
     pub fn convert_component(
         self,
         component: &str,
-        convert: impl Fn(Value) -> Result<Value, String> + Send + Sync + 'static,
+        convert: impl Fn(JsonValue) -> Result<JsonValue, String> + Send + Sync + 'static,
     ) -> Self {
         self.with(Op::ConvertComponent {
             component: component.into(),
@@ -194,7 +196,7 @@ impl Migration {
     /// Component `component` has a new field `field`: older saves get
     /// `value` for it (components that have it keep theirs). The same as a
     /// `#[serde(default = ...)]`, but kept with the version that added it.
-    pub fn add_field(self, component: &str, field: &str, value: Value) -> Self {
+    pub fn add_field(self, component: &str, field: &str, value: JsonValue) -> Self {
         self.with(Op::AddField {
             component: component.into(),
             field: field.into(),
@@ -219,7 +221,7 @@ impl Migration {
         self,
         component: &str,
         field: &str,
-        convert: impl Fn(Value) -> Result<Value, String> + Send + Sync + 'static,
+        convert: impl Fn(JsonValue) -> Result<JsonValue, String> + Send + Sync + 'static,
     ) -> Self {
         self.with(Op::ConvertField {
             component: component.into(),
@@ -266,10 +268,7 @@ impl Migration {
     /// by component name), for what the other changes don't cover, such as
     /// a field that moves between components depending on another's value.
     /// An entity left with no components is dropped from the save.
-    pub fn entities(
-        self,
-        change: impl Fn(&mut Map<String, Value>) -> Result<(), String> + Send + Sync + 'static,
-    ) -> Self {
+    pub fn entities(self, change: impl Fn(&mut JsonMap) -> Result<(), String> + Send + Sync + 'static) -> Self {
         self.with(Op::Entities(Arc::new(change)))
     }
 
@@ -291,7 +290,7 @@ impl Migration {
     pub fn convert_resource(
         self,
         resource: &str,
-        convert: impl Fn(Value) -> Result<Value, String> + Send + Sync + 'static,
+        convert: impl Fn(JsonValue) -> Result<JsonValue, String> + Send + Sync + 'static,
     ) -> Self {
         self.with(Op::ConvertResource {
             resource: resource.into(),
@@ -302,7 +301,7 @@ impl Migration {
     /// Runs `change` on the whole save (`"entities"`, `"resources"`, the
     /// format of [`WorldReflect::save`](super::WorldReflect::save)): the
     /// last resort, for example to spawn an entity that older saves lack.
-    pub fn save(self, change: impl Fn(&mut Value) -> Result<(), String> + Send + Sync + 'static) -> Self {
+    pub fn save(self, change: impl Fn(&mut JsonValue) -> Result<(), String> + Send + Sync + 'static) -> Self {
         self.with(Op::Save(Arc::new(change)))
     }
 
@@ -311,7 +310,7 @@ impl Migration {
         self.ops.is_empty()
     }
 
-    fn apply(&self, save: &mut Value) -> Result<(), String> {
+    fn apply(&self, save: &mut JsonValue) -> Result<(), String> {
         for op in &self.ops {
             apply(op, save)?;
         }
@@ -451,7 +450,7 @@ impl SaveMigrations {
     /// [`ReflectError::NewerSave`] for a save of a newer version than the
     /// game's, [`ReflectError::Migration`] if a step fails, and
     /// [`ReflectError::BadValue`] if `"game_version"` isn't a version.
-    pub fn migrate<'a>(&self, save: &'a Value) -> Result<Cow<'a, Value>, ReflectError> {
+    pub fn migrate<'a>(&self, save: &'a JsonValue) -> Result<Cow<'a, JsonValue>, ReflectError> {
         if save.get("format").and_then(Value::as_str) != Some(SAVE_FORMAT) {
             return Ok(Cow::Borrowed(save));
         }
@@ -476,7 +475,7 @@ impl SaveMigrations {
 }
 
 /// The `"game_version"` of `save`: 0 if it has none.
-fn saved_version(save: &Value) -> Result<u32, ReflectError> {
+fn saved_version(save: &JsonValue) -> Result<u32, ReflectError> {
     match save.get(GAME_VERSION) {
         None | Some(Value::Null) => Ok(0),
         Some(v) => v
@@ -503,7 +502,7 @@ pub(crate) fn game_version(world: &World) -> Option<u32> {
     world.get_resource::<SaveMigrations>().map(SaveMigrations::version)
 }
 
-fn apply(op: &Op, save: &mut Value) -> Result<(), String> {
+fn apply(op: &Op, save: &mut JsonValue) -> Result<(), String> {
     match op {
         Op::Save(change) => change(save),
         Op::RenameResource { from, to } => {
@@ -546,7 +545,7 @@ fn apply(op: &Op, save: &mut Value) -> Result<(), String> {
     }
 }
 
-fn resources(save: &mut Value) -> Result<Option<&mut Map<String, Value>>, String> {
+fn resources(save: &mut JsonValue) -> Result<Option<&mut JsonMap>, String> {
     match save.get_mut("resources") {
         None => Ok(None),
         Some(Value::Object(map)) => Ok(Some(map)),
@@ -568,7 +567,7 @@ fn fields<'a>(
     }
 }
 
-fn entity_op(op: &Op, c: &mut Map<String, Value>) -> Result<(), String> {
+fn entity_op(op: &Op, c: &mut JsonMap) -> Result<(), String> {
     match op {
         Op::RenameComponent { from, to } => {
             if let Some(value) = c.remove(from) {

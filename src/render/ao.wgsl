@@ -15,6 +15,10 @@ struct Settings {
 @group(0) @binding(2) var<uniform> settings: Settings;
 @group(0) @binding(3) var history: texture_2d<f32>;
 @group(0) @binding(4) var velocity: texture_2d<f32>;
+// With screen-space reflections: their cone's spread, at half size, which
+// the denoise copies into its alpha for the opaque pass (see ssr.wgsl).
+// Without them a stand-in, and the RG8 target drops the alpha.
+@group(0) @binding(5) var spread: texture_2d<f32>;
 struct Full { @builtin(position) at: vec4<f32> };
 @vertex fn vs_full(@builtin(vertex_index) i: u32) -> Full {
     var out: Full;
@@ -28,11 +32,16 @@ fn safe_normalize(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
     return select(fallback, v / max(length(v), 0.00001), dot(v, v) > 0.00000001);
 }
 fn z_at(p: vec2<i32>) -> f32 { return textureLoad(depth, coordinate(p), 0); }
-// Only velocity dilation needs all MSAA samples; keep horizon tracing cheap.
+// The depth is reverse-Z: 1 at the near plane, 0 at the far plane and the
+// sky. Next to the far plane counts as sky too (as far as 1 - 1e-6 did
+// with standard depth).
+fn is_sky(z: f32) -> bool { return z <= 0.000001; }
+// The nearest of a pixel's samples (the greatest reverse-Z depth). Only
+// velocity dilation needs all MSAA samples; keep horizon tracing cheap.
 fn motion_depth(p: vec2<i32>) -> f32 {
-    var z = 1.0;
+    var z = 0.0;
     for (var sample = 0; sample < i32(textureNumSamples(depth)); sample++) {
-        z = min(z, textureLoad(depth, coordinate(p), sample));
+        z = max(z, textureLoad(depth, coordinate(p), sample));
     }
     return z;
 }
@@ -42,6 +51,23 @@ fn position_at_depth(p: vec2<i32>, z: f32) -> vec3<f32> {
     return h.xyz / h.w;
 }
 fn position(p: vec2<i32>) -> vec3<f32> { return position_at_depth(p, z_at(p)); }
+// How far in front of the camera (clip w) pixel `p` is.
+fn view_distance(p: vec2<i32>) -> f32 {
+    let uv = (vec2<f32>(coordinate(p)) + 0.5) / vec2<f32>(textureDimensions(depth));
+    let h = settings.inverse * vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), z_at(p), 1.0);
+    return 1.0 / max(abs(h.w), 1e-20);
+}
+// How much the distance in front of the camera changes over one pixel at
+// `p`, on the side of each axis that changes least (so a silhouette next to
+// the pixel doesn't count). Temporal antialiasing moves each frame's pixels
+// by a fraction of one: on a surface seen at a grazing angle far away, the
+// distance under a pixel changes by this much from frame to frame.
+fn distance_slope(p: vec2<i32>) -> f32 {
+    let w = view_distance(p);
+    let x = min(abs(view_distance(p + vec2<i32>(1, 0)) - w), abs(view_distance(p - vec2<i32>(1, 0)) - w));
+    let y = min(abs(view_distance(p + vec2<i32>(0, 1)) - w), abs(view_distance(p - vec2<i32>(0, 1)) - w));
+    return max(x, y);
+}
 // Steps of the march toward the sun for contact shadows.
 const CONTACT_STEPS: i32 = 12;
 
@@ -63,7 +89,7 @@ fn contact_shadow(p: vec2<i32>, center: vec3<f32>) -> f32 {
         let uv = clip.xy / clip.w * vec2<f32>(0.5, -0.5) + 0.5;
         if any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0)) { break; }
         let q = vec2<i32>(uv * size);
-        if z_at(q) >= 0.999999 { continue; }
+        if is_sky(z_at(q)) { continue; }
         let gap = distance(at, settings.camera.xyz) - distance(position(q), settings.camera.xyz);
         if gap > bias && gap < length {
             return 1.0;
@@ -74,7 +100,7 @@ fn contact_shadow(p: vec2<i32>, center: vec3<f32>) -> f32 {
 
 @fragment fn fs_ao(in: Full) -> @location(0) vec4<f32> {
     let p = coordinate(vec2<i32>(in.at.xy * select(1.0, 2.0, settings.temporal.z > 0.0)));
-    if z_at(p) >= 0.999999 { return vec4<f32>(0.0); }
+    if is_sky(z_at(p)) { return vec4<f32>(0.0); }
     let center = position(p);
     var contact = 0.0;
     if settings.sun.w > 0.0 && settings.temporal.z == 0.0 {
@@ -118,7 +144,7 @@ fn contact_shadow(p: vec2<i32>, center: vec3<f32>) -> f32 {
             for (var step = 1u; step <= u32(settings.params.w); step++) {
                 let offset = direction * sign_side * max(1.0, pixel_radius * pow(f32(step) / settings.params.w, 2.0));
                 let at = p + vec2<i32>(round(offset));
-                if any(at < vec2<i32>(0)) || any(at >= vec2<i32>(textureDimensions(depth))) || z_at(at) >= 0.999999 { continue; }
+                if any(at < vec2<i32>(0)) || any(at >= vec2<i32>(textureDimensions(depth))) || is_sky(z_at(at)) { continue; }
                 let delta = position(at) - center;
                 let dist = length(delta);
                 if dist < 0.001 || dist > radius { continue; }
@@ -136,12 +162,12 @@ fn contact_shadow(p: vec2<i32>, center: vec3<f32>) -> f32 {
     let ao = pow(clamp(visibility / settings.params.z, 0.0, 1.0), settings.params.y);
     return vec4<f32>(1.0 - ao, contact, 0.0, 1.0);
 }
-// Blue 1 marks screen-space reflections in the target's second level (an RG8
-// target drops it; see ssr.rs).
+// Blue 1 marks screen-space reflections in the target's second level, alpha
+// is their cone's spread (an RG8 target drops both; see ssr.rs).
 struct Resolved { @location(0) color: vec4<f32>, @location(1) history: vec4<f32> };
 fn resolve_ao(in: Full) -> Resolved {
     let p = vec2<i32>(in.at.xy);
-    if z_at(p) >= 0.999999 { return Resolved(vec4<f32>(0.0, 0.0, 1.0, 0.0), vec4<f32>(0.0)); }
+    if is_sky(z_at(p)) { return Resolved(vec4<f32>(0.0, 0.0, 1.0, 0.0), vec4<f32>(0.0)); }
     let center = position(p);
     var sum = vec2<f32>(0.0);
     var total = 0.0;
@@ -153,7 +179,7 @@ fn resolve_ao(in: Full) -> Resolved {
         for (var x = begin; x <= end; x++) {
             let q = clamp(base + vec2<i32>(x, y), vec2<i32>(0), vec2<i32>(textureDimensions(image))-1);
             let at = coordinate(q * scale + vec2<i32>(scale / 2));
-            if z_at(at) >= 0.999999 { continue; }
+            if is_sky(z_at(at)) { continue; }
             let delta = position(at) - center;
             let w = exp(-dot(vec2<f32>(at-p) / f32(scale), vec2<f32>(at-p) / f32(scale)) * 0.25) * exp(-dot(delta, delta) / max(settings.params.x * settings.params.x * 0.01, 0.000001));
             sum += textureLoad(image, q, 0).rg * w;
@@ -171,7 +197,7 @@ fn resolve_ao(in: Full) -> Resolved {
             for (var x = -1; x <= 1; x++) {
                 let q = coordinate(p + vec2<i32>(x,y));
                 let z = motion_depth(q);
-                if z < nearest_z { nearest_z = z; nearest = q; }
+                if z > nearest_z { nearest_z = z; nearest = q; }
             }
         }
         let near_clip = settings.previous * vec4<f32>(position_at_depth(nearest, nearest_z), 1.0);
@@ -181,14 +207,21 @@ fn resolve_ao(in: Full) -> Resolved {
         let uv = (vec2<f32>(p) + 0.5) / size + camera_motion + textureLoad(velocity, nearest, 0).xy;
         if near_clip.w > 0.0 && clip.w > 0.0 && all(uv >= vec2<f32>(0.0)) && all(uv < vec2<f32>(1.0)) {
             let old = textureLoad(history, vec2<i32>(uv * vec2<f32>(textureDimensions(history))), 0);
-            // Store previous projected depth; reject newly exposed surfaces and sky.
-            if old.w > 0.0 && abs(old.z - clip.z) < max(0.001, abs(clip.z) * 0.002) {
+            // The previous frame stored its distance along the view (clip w,
+            // linear, unlike the reverse-Z depth); reject newly exposed
+            // surfaces and sky. The allowance grows with the surface's
+            // slope across a pixel, or the jitter of temporal antialiasing
+            // rejects the history of distant, grazing ground every frame and
+            // the rotating sample pattern shows as a pulse.
+            let allowance = max(max(0.001, abs(clip.w) * 0.002), distance_slope(p) * 1.5);
+            if old.w > 0.0 && abs(old.z - clip.w) < allowance {
                 value.x = mix(value.x, clamp(old.x, value.x - 0.15, value.x + 0.15), settings.temporal.x);
             }
         }
     }
-    let depth_value = (settings.projection * vec4<f32>(center, 1.0)).z;
-    return Resolved(vec4<f32>(value, 1.0, 1.0), vec4<f32>(value, depth_value, 1.0));
+    let depth_value = (settings.projection * vec4<f32>(center, 1.0)).w;
+    let cone = textureLoad(spread, min(p / 2, vec2<i32>(textureDimensions(spread)) - 1), 0).r;
+    return Resolved(vec4<f32>(value, 1.0, cone), vec4<f32>(value, depth_value, 1.0));
 }
 
 @fragment fn fs_denoise(in: Full) -> Resolved { return resolve_ao(in); }

@@ -114,8 +114,9 @@ fn strings(c: &mut Ctx) -> Result<&mut Strings, Failure> {
     })
 }
 
-/// Loads a string table file from the assets (Rust's `assets.load_strings`;
-/// see the guide's "Localization" for the format). The first table is the
+/// Loads a string table file from the assets (Rust's `assets.try_load_strings`:
+/// C has no panics, so a missing or broken file is a failed status, with the
+/// kind in `ponko_last_error_kind()`; see the guide's "Localization" for the format). The first table is the
 /// reference language and the current one; with hot reload on, an edited
 /// file replaces its table.
 /// ```
@@ -129,7 +130,9 @@ pub unsafe extern "C" fn ponko_ctx_load_strings(ctx: *mut PonkoCtx, path: *const
     boundary(|| unsafe {
         let path = text(path)?;
         ctx_access(ctx, |c| {
-            c.assets.load_strings(&mut c.world, path).map_err(crate::engine_error)
+            c.assets
+                .try_load_strings(&mut c.world, path)
+                .map_err(crate::engine_error)
         })
     })
 }

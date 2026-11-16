@@ -61,7 +61,7 @@ fn an_unchanged_ui_costs_the_tracker_no_allocations_and_a_change_is_still_seen()
         .layout(UiLayout::row(30.0))
         .text("Ann")
         .accessible_name("Player name");
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     ui.frame(VIEW, &UiInput::default());
 
     let mut tracker = UiAccessTracker::new();

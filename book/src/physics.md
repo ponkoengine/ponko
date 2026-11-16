@@ -146,15 +146,24 @@ gives bodies a push:
 </div>
 </div>
 
-- `cast_ray(origin, direction, max_distance, filter)`: the first collider hit,
-  with the point, the surface normal and the distance.
-- `overlap_point(point, filter, &mut out)` and
-  `overlap_circle(center, r, filter, &mut out)`: everything there. `out` is
-  reused, so no allocation per call.
+- `cast_ray(origin, direction, max_distance, filter)`: the closest hit,
+  with the entity, point, surface normal and distance.
+- `cast_ray_all(.., &mut out)`: every hit, nearest first.
+- `cast_circle`, `cast_box` and `cast_capsule`: sweep a shape (a bullet
+  with size, a crate, a character) and get the first thing it would touch.
+- `overlap_point`, `overlap_circle`, `overlap_box` and `overlap_capsule`:
+  every entity inside, into `out`.
+- `closest_point(point, max_distance, filter)`: the nearest collider and
+  its nearest point.
+- `penetrations(shape, position, rotation, filter, &mut out)`: how deep a
+  shape sinks into each collider it overlaps, and the way out.
 
-A `d2::QueryFilter` sees solid colliders by default; `.with_sensors()` adds
-sensors and `.exclude(entity)` skips one body. The C and C++ `cast_ray`,
-`entities_at` and `entities_in_circle` take no filter and see sensors too.
+Every query takes a `d2::QueryFilter` (C++ `ponko::filter2d`):
+`.exclude(e)` looks through one entity (the one asking), `.groups(g)` sees
+what a collider in those groups would touch, and `.with_sensors()` sees
+sensors too (they're skipped by default). Lists go into a `Vec` you keep,
+so queries don't allocate. The C and C++ `cast_ray`, `entities_at` and
+`entities_in_circle` take no filter and see sensors too.
 - `apply_impulse(e, impulse)`: a one-off push in mass × pixels/s (multiply by
   `mass(e)` to get a speed change).
 - `set_gravity(g)`: change the pull for everyone.
@@ -163,6 +172,89 @@ sensors and `.exclude(entity)` skips one body. The C and C++ `cast_ray`,
 
 New bodies join at the next step, so a query in the tick you spawned them
 won't see them yet.
+
+### Shape casts and the nearest surface
+
+A ray is a point moving along a line; a shape cast moves a whole circle,
+box or capsule, so a crate or a character finds what it would bump into:
+
+<div class="lang-pair">
+<div>
+
+```rust
+{{#include ../../examples/physics.rs:shape_queries}}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:physics_shape_queries}}
+```
+
+</div>
+</div>
+
+A character pushed into a wall (by a moving platform, or after a
+teleport) gets out with `penetrations`: each entry has the collider, how
+deep the shape is in (`depth`) and the direction out (`normal`), deepest
+first. Moving by `normal * depth` of the first one frees the shape from
+that collider:
+
+```rust
+# use ponko::prelude::*;
+fn unstick(ctx: &mut Ctx, player: Entity) {
+    let shape = ponko::d2::Collider::capsule(24.0, 8.0).shape;
+    let Some(at) = ctx.world.get::<d2::Transform>(player).map(|t| t.position) else {
+        return;
+    };
+    let mut pushes = Vec::new();
+    let not_me = ponko::d2::QueryFilter::default().exclude(player);
+    ctx.physics.penetrations(shape, at, 0.0, not_me, &mut pushes);
+    if let (Some(out), Some(t)) = (pushes.first(), ctx.world.get_mut::<d2::Transform>(player)) {
+        t.position += out.normal * out.depth;
+    }
+}
+```
+
+Polygons work as query shapes too (`penetrations` takes any `d2::Shape`).
+
+### Collision groups
+
+A collider is in some of 32 groups and touches colliders in others, as in
+3D: `Collider::circle(4.0).groups(CollisionGroups::new(DEBRIS, !DEBRIS))`
+makes debris that bounces off everything except other debris. Queries use
+the same test with their filter's `.groups(g)`, so a ground probe can see
+only `TERRAIN`. From C, `ponko_set_collider_groups` sets a collider's
+groups (C++ `world.set_collider_groups(e, groups)`); `PonkoCollider` has no
+groups field, so setting the collider again gives it every group.
+
+### Query rules
+
+The 2D and 3D queries follow the same rules:
+
+- **Direction.** Any non-zero direction works: it is normalized, so
+  distances are in world units along it. A zero or non-finite direction
+  finds nothing.
+- **Range.** `max_distance` may be `f32::INFINITY`; a negative or NaN one,
+  or a non-finite origin or rotation, finds nothing.
+- **Starting inside.** A ray that starts inside a collider hits it at
+  distance 0, at the origin, with a zero normal. A shape cast that starts
+  touching or overlapping a collider hits it at distance 0, with the
+  contact point and the normal that pushes the shape out.
+- **Order.** Lists of hits come nearest first; equal distances are ordered
+  by entity id (`Entity::to_bits`, lowest first). Overlap lists come in no
+  particular order. A single-hit query with two hits at exactly the same
+  distance returns either one.
+- **Sizes.** A radius or size below `f32::EPSILON` (or NaN) counts as that
+  tiny shape.
+
+In both, `closest_point` treats a point inside a collider as its own
+nearest point (distance 0, `inside` set), and `penetrations` lists deepest
+first, equal depths by entity id. Every 2D query has a 3D form with the same
+name, arguments and rules (a circle in 2D is a sphere in 3D:
+`cast_sphere`, `overlap_sphere`;
+[3D physics](physics3d.md#rays-shape-casts-and-overlaps)).
 
 ## Determinism and cost
 

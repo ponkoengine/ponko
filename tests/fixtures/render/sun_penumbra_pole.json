@@ -1,0 +1,17 @@
+{
+  "name": "sun_penumbra_pole",
+  "scene": "A white pole (0.5 thick, 3 tall) at the origin on a floor drawn as the sun mask (unlit, white lit, black in shadow), sun direction (1, -1, 0), ShadowFilter::ContactHardening, shadow_sun_size 3 degrees, 4 cascades of 2048² over 30 units; camera at (1.7, 4.5, 0.01) looking straight down at (1.7, 0, 0); 128x128, 4x multisampling, no tonemapping, no antialiasing. The shadow is sharp at the pole's foot (left) and soft towards its tip (right).",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.0075,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "f3d6788ca0a37b09",
+  "reason": "New: contact-hardening sun shadows (a pole on a plane, and a beam's shadow across a cascade border)"
+}

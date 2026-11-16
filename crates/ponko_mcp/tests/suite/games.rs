@@ -419,7 +419,7 @@ fn hud_setup(ctx: &mut Ctx) {
     ctx.world.reflect_resource::<HudStyle>();
     let root = ctx.ui.root().name("hud").id();
     let score = ctx.ui.label(root, "").name("hud.score").id();
-    ctx.ui.push_screen(root, false);
+    ctx.ui.push_modeless(root);
     ctx.world.insert_resource(Hud { score });
 }
 

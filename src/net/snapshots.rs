@@ -248,6 +248,11 @@ impl Default for SnapshotConfig {
 impl SnapshotConfig {
     /// Checks the settings: `capacity` at least 2, and the times finite and
     /// not negative. The constructors panic with this message.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the first setting that breaks one of those rules.
+    ///
     /// ```
     /// use ponko::net::SnapshotConfig;
     /// assert!(ponko::net::SnapshotConfig::default().validate().is_ok());
@@ -327,8 +332,12 @@ impl<T: Interpolate> SnapshotBuffer<T> {
         Self::with_config(SnapshotConfig::default())
     }
 
-    /// An empty buffer. Panics if `capacity` is below 2 or a time setting is
-    /// negative or not finite.
+    /// An empty buffer.
+    ///
+    /// # Panics
+    ///
+    /// If `capacity` is below 2 or a time setting is negative or not finite.
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// let b = ponko::net::SnapshotBuffer::<f32>::with_config(ponko::net::SnapshotConfig { delay: 0.2, ..Default::default() });
@@ -755,7 +764,11 @@ impl<T: Interpolate> SnapshotStream<T> {
 
     /// Sets how far in the past to show the entity; for example when
     /// the link gets worse. Takes effect at once (the picture jumps).
-    /// Panics if negative or not finite.
+    ///
+    /// # Panics
+    ///
+    /// If `delay` is negative or not finite.
+    ///
     /// ```
     /// let mut s = ponko::net::SnapshotStream::<f32>::new();
     /// s.set_delay(0.2);

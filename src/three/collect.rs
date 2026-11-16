@@ -73,7 +73,6 @@ pub(crate) const FADED: u32 = 1 << 31;
 #[derive(Default)]
 pub(crate) struct Frame3D {
     pub static_shadowless: Vec<u32>,
-    pub(crate) instance_batch_revision: u64,
     /// The instances the runs point into. Between the blocks (and past a
     /// block's instances, where it has room to grow) are instances no run
     /// draws.
@@ -119,13 +118,29 @@ pub(crate) struct Frame3D {
     pub sun_view_proj: [Mat4; MAX_CASCADES],
     /// Each cascade's size, in world units per shadow-map texel.
     pub cascade_texel: [f32; MAX_CASCADES],
-    /// Which cascades are drawn this frame, one bit each: the rest keep
-    /// what an earlier frame drew into them (see `Lighting::shadow_refresh`).
+    /// Which cascades were fitted to the camera anew this frame, one bit
+    /// each: the rest hold the box an earlier frame drew them in (see
+    /// `Lighting::shadow_refresh`). Every cascade lists its casters either
+    /// way; the renderer keeps a cascade's map while it is placed the same
+    /// and its casters are unchanged (see `shadow_generations`).
     pub redrawn: u32,
+    /// Per shadow view, a number that changes whenever the casters it lists
+    /// change (another instance, mesh or material override) and never comes
+    /// back: the renderer keeps a view whose number is the one it drew it
+    /// with without comparing its casters again.
+    pub shadow_generations: [u64; MAX_SHADOW_VIEWS],
+    /// Last frame's material overrides (`override_base`, `material_overrides`
+    /// list and parts): when they differ, what an override id stands for may
+    /// have changed, so every shadow view counts as changed.
+    last_overrides: (u32, Vec<MaterialOverride>, Vec<(u32, u32)>),
     /// What each far cascade's shadow map holds, from the frame that drew it.
     cascade_cache: [Option<CachedCascade>; MAX_CASCADES],
     /// Counts frames, for taking turns redrawing the far cascades.
     frame_number: u32,
+    /// The sun direction the cascades were last drawn from and the
+    /// `Lighting::shadow_sun_step` it was held with (see [`hold_sun`]);
+    /// `None` without a step or shadows.
+    held_sun: Option<(Vec3, f32)>,
     /// The screen effects to run, in order: (effect, material).
     pub effects: Vec<(u32, u32)>,
     /// The target effects to run, in order: (effect, target texture, material).
@@ -151,6 +166,15 @@ pub(crate) struct Frame3D {
     /// What each target camera draws, in `RenderPasses::target_cameras` order (only
     /// the main frame has these).
     pub views: Vec<ViewFrame>,
+    /// The other window views' cameras (`SceneSettings::views`): the sun's
+    /// cascades are fitted around their views too, and shadow casters are
+    /// kept for all of them, so every view reads this frame's shadow maps.
+    /// Empty with one view (only the main frame has these).
+    pub shadow_views: Vec<Camera3D>,
+    /// What each window view (`SceneSettings::views`) draws, in order: a
+    /// frame of its own camera, kept between frames as this one is (only
+    /// the main frame has these).
+    pub window_views: Vec<Frame3D>,
     /// The light the sky gave last, and what it was worked out from.
     pub sky_light: Option<(Lighting, super::Sky, super::SkyLight)>,
     /// This frame's skinned models (only the main frame has these; target
@@ -174,6 +198,8 @@ pub(crate) struct Frame3D {
     /// The first mesh id of `material_overrides`: past the meshes and the
     /// skinned models.
     pub override_base: u32,
+    /// `ctx.debug`'s 3D lines this frame (only the main frame has these).
+    pub debug_lines: crate::debug::GpuLines,
     /// Each view's instances, and what they were collected from.
     lists: Lists,
     tracked: Tracked,
@@ -368,13 +394,6 @@ impl Frame3D {
         camera: &Camera3D,
         lighting: &Lighting,
     ) {
-        let batches_changed = self.instance_batch_revision != assets.instance_batch_revision;
-        self.instance_batch_revision = assets.instance_batch_revision;
-        let static_shadow_changed = self.static_shadowless.iter().copied().ne(assets
-            .shadowless
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &off)| off.then_some(i as u32)));
         self.static_shadowless.clear();
         self.static_shadowless.extend(
             assets
@@ -398,9 +417,10 @@ impl Frame3D {
         } else {
             0
         };
-        self.lights.collect(
+        self.lights.collect_for(
             world,
             camera,
+            &self.shadow_views,
             self.light_budget,
             self.light_shadow_size,
             self.light_atlas,
@@ -424,14 +444,27 @@ impl Frame3D {
         } else {
             0
         };
+        // The direction the cascades are drawn from: the exact one, or one
+        // held until the sun turns past `shadow_sun_step`.
+        let step = lighting.shadow_sun_step;
+        let shadow_sun = if self.cascades > 0 && step > 0.0 && step.is_finite() {
+            let held = self.held_sun.filter(|&(_, s)| s == step).map(|(d, _)| d);
+            let sun = hold_sun(held, lighting.sun_direction, step);
+            self.held_sun = Some((sun, step));
+            sun
+        } else {
+            self.held_sun = None;
+            lighting.sun_direction
+        };
         let splits = cascade_splits(camera.near, lighting.shadow_distance, self.cascades);
         // Each cascade's box is open towards the sun: casters above it
         // still shade what's inside, so its near plane isn't tested.
         // Far cascades can keep an earlier frame's shadow map: each is drawn
-        // into a box a little bigger than it needs, and kept while what the
-        // camera sees of that stretch stays inside it, the sun stays put and
-        // its turn hasn't come (see `Lighting::shadow_refresh`). Kept
-        // cascades draw nothing.
+        // into a box a little bigger than it needs, and the box is held
+        // while what the camera sees of that stretch stays inside it, the
+        // sun stays put and its turn hasn't come (see
+        // `Lighting::shadow_refresh`). A held box lists its casters as any
+        // other: the renderer keeps its map only while they are unchanged.
         let refresh = lighting.shadow_refresh.clamp(1, MAX_SHADOW_REFRESH);
         let first_far = if refresh > 1 {
             far_cascades(self.cascades)
@@ -443,38 +476,31 @@ impl Frame3D {
         let mut sun_planes = [[Vec4::ZERO; 5]; MAX_CASCADES];
         for i in 0..self.cascades {
             let near = if i == 0 { camera.near } else { splits[i - 1] };
+            // The slice of every view this cascade covers, in one sphere.
+            let sphere = cover_sphere(camera, &self.shadow_views, near, splits[i]);
             if i >= first_far {
-                let (center, radius) = slice_sphere(camera, near, splits[i]);
+                let (center, radius) = sphere;
                 let turn = (self.frame_number + i as u32).is_multiple_of(refresh);
                 let kept = self.cascade_cache[i].filter(|c| {
                     !turn
-                        && !static_shadow_changed
-                        && !batches_changed
                         && c.size == self.shadow_size
                         && c.cascades == self.cascades
-                        && c.sun == lighting.sun_direction
+                        && c.sun == shadow_sun
                         && center.distance(c.center) + radius <= c.reach
                 });
                 if let Some(c) = kept {
-                    // Its casters stay in its list (culled against the box
-                    // its map was drawn with), but no run draws them.
+                    // Its casters are culled against the box its map was
+                    // drawn with.
                     self.sun_view_proj[i] = c.view_proj;
                     self.cascade_texel[i] = c.texel;
                 } else {
-                    let (m, texel, reach) = sun_box(
-                        camera,
-                        lighting.sun_direction,
-                        near,
-                        splits[i],
-                        self.shadow_size,
-                        1.0 + CACHE_MARGIN,
-                    );
+                    let (m, texel, reach) = sun_box(sphere, shadow_sun, self.shadow_size, 1.0 + CACHE_MARGIN);
                     self.cascade_cache[i] = Some(CachedCascade {
                         view_proj: m,
                         texel,
                         center,
                         reach,
-                        sun: lighting.sun_direction,
+                        sun: shadow_sun,
                         size: self.shadow_size,
                         cascades: self.cascades,
                     });
@@ -484,7 +510,7 @@ impl Frame3D {
                 }
             } else {
                 self.cascade_cache[i] = None;
-                let (m, texel) = sun_view_proj(camera, lighting.sun_direction, near, splits[i], self.shadow_size);
+                let (m, texel, _) = sun_box(sphere, shadow_sun, self.shadow_size, 1.0);
                 self.sun_view_proj[i] = m;
                 self.cascade_texel[i] = texel;
                 self.redrawn |= 1 << i;
@@ -502,22 +528,28 @@ impl Frame3D {
         // What the sun's shadows can fall on: the view out to the shadow
         // distance. A caster is drawn into the cascades only if its shadow,
         // swept along the sunlight, can reach that (Unity's caster sweep).
-        let receivers = frustum_planes(
-            Camera3D {
-                far: lighting
-                    .shadow_distance
-                    .clamp(camera.near * 2.0, camera.far.max(camera.near * 2.0)),
-                ..*camera
-            }
-            .view_proj(),
-        );
+        // With other views, every caster in the cascades is kept: their
+        // views' receivers aren't this camera's.
+        let receivers = if self.shadow_views.is_empty() {
+            frustum_planes(
+                Camera3D {
+                    far: lighting
+                        .shadow_distance
+                        .clamp(camera.near * 2.0, camera.far.max(camera.near * 2.0)),
+                    ..*camera
+                }
+                .view_proj(),
+            )
+        } else {
+            [Vec4::W; 6]
+        };
         // Which passes see a model: bit 0 the camera, bit 1 + i shadow view
         // i (cascades, then light views from MAX_CASCADES on).
         let culler = Culler {
             planes: frustum_planes(self.view_proj),
             receivers,
             camera: camera.position,
-            sunlight: lighting.sun_direction.try_normalize().unwrap_or(Vec3::NEG_Y),
+            sunlight: shadow_sun.try_normalize().unwrap_or(Vec3::NEG_Y),
             sweep: lighting.shadow_distance * 2.0,
             sun_planes,
             cascades: self.cascades,
@@ -527,6 +559,7 @@ impl Frame3D {
             // Hidden behind what an earlier frame drew: still casts shadows.
             occlusion: self.occlusion.as_ref().filter(|_| camera.occlusion_culling),
             occluded: std::sync::atomic::AtomicUsize::new(0),
+            layers: camera.layers.0,
         };
         // `bounds`: the camera mesh's, and the shadow mesh's (`None`: no
         // shadow), as (center, radius) in model space.
@@ -679,7 +712,14 @@ impl Frame3D {
             let caster = assets.casts_shadows(d.mesh).then_some(d.bounds);
             // A `ShadowOnly` model: only the shadow maps (not counted as
             // hidden from the camera, which never draws it).
-            let f = if world.has::<ShadowOnly>(ponko_ecs::Entity::from_bits(d.entity)) {
+            let e = ponko_ecs::Entity::from_bits(d.entity);
+            // On none of the camera's layers: only its shadows are drawn.
+            let off_layers = !world
+                .get::<crate::camera::RenderLayers>(e)
+                .copied()
+                .unwrap_or_default()
+                .intersects(camera.layers);
+            let f = if off_layers || world.has::<ShadowOnly>(e) {
                 classify_uncounted(d.matrix, d.scale, d.bounds, caster) & !(1 | OCCLUDED)
             } else {
                 classify_at(d.matrix, d.scale, d.bounds, caster)
@@ -752,8 +792,15 @@ impl Frame3D {
                 Option<&LodHysteresis>,
                 Option<&ModelMaterial>,
                 Option<&ModelMaterials>,
+                Option<&crate::camera::RenderLayers>,
             )>()
-            .for_each(|(entity, t, g, decals, hysteresis, material, parts)| {
+            .for_each(|(entity, t, g, decals, hysteresis, material, parts, layers)| {
+                // On none of the camera's layers: only its shadows are drawn.
+                let keep = if layers.copied().unwrap_or_default().0 & camera.layers.0 == 0 {
+                    !1
+                } else {
+                    !0
+                };
                 // `hidden`: the renderers of the pick the occlusion grid
                 // hid from the camera, counted once whatever else sees them.
                 let (mut pick, mut seen, mut hidden) = picks[at];
@@ -799,7 +846,7 @@ impl Frame3D {
                             // Its materials come with the skinned draw.
                             let found = skinned(posed, ordinal, drawn, casts);
                             hidden += found.map_or(0, |(_, _, f)| u32::from(f & OCCLUDED != 0));
-                            if let Some((d, mesh, f)) = found.map(|(d, mesh, f)| (d, mesh, f & !OCCLUDED))
+                            if let Some((d, mesh, f)) = found.map(|(d, mesh, f)| (d, mesh, f & !OCCLUDED & keep))
                                 && f != 0
                             {
                                 let mut instance = d.instance;
@@ -816,7 +863,7 @@ impl Frame3D {
                             }
                         } else if let Some((matrix, f)) = lod_flags(t, r, drawn, casts).map(|(m, f)| {
                             hidden += u32::from(f & OCCLUDED != 0);
-                            (m, f & !OCCLUDED)
+                            (m, f & !OCCLUDED & keep)
                         }) && f != 0
                         {
                             let mut model = matrix.to_cols_array_2d();
@@ -901,6 +948,16 @@ impl Frame3D {
             });
         transients.finish(&mut lists, &mut arena);
         motion.finish();
+        // What an override id stands for may have changed: every shadow
+        // view's casters count as changed.
+        let overrides = &self.material_overrides;
+        let last = &mut self.last_overrides;
+        if last.0 != self.override_base || last.1 != overrides.list || last.2 != overrides.parts {
+            lists.touch(!1);
+            last.0 = self.override_base;
+            last.1.clone_from(&overrides.list);
+            last.2.clone_from(&overrides.parts);
+        }
         lists.finish(&mut arena);
         self.occluded = culler.occluded.into_inner();
         lists.runs(0, &mut self.runs);
@@ -908,9 +965,9 @@ impl Frame3D {
         self.models = lists.things();
         self.drawn = self.visible;
         for (i, runs) in self.shadow_runs.iter_mut().enumerate() {
-            // A kept cascade's casters stay in its list; nothing draws them.
+            self.shadow_generations[i] = lists.generation(1 + i);
             let drawn = if i < MAX_CASCADES {
-                i < self.cascades && self.redrawn & (1 << i) != 0
+                i < self.cascades
             } else {
                 i - MAX_CASCADES < self.light_views
             };
@@ -985,6 +1042,9 @@ pub(super) struct Culler<'a> {
     occlusion: Option<&'a super::occlusion::OcclusionGrid>,
     /// How many spheres in view were culled as hidden.
     occluded: std::sync::atomic::AtomicUsize,
+    /// The camera's [`RenderLayers`](crate::camera::RenderLayers) bits:
+    /// a model on none of them is drawn only into the shadow maps.
+    layers: u32,
 }
 
 /// Set by [`Culler::classify_uncounted`] when the occlusion grid hid the
@@ -1081,6 +1141,11 @@ impl Culler<'_> {
         flags & !(1 | OCCLUDED)
     }
 
+    /// The camera's layer bits (see [`Culler::layers`]'s field).
+    pub fn layers(&self) -> u32 {
+        self.layers
+    }
+
     /// Whether culling gives other answers than with the views in `key`
     /// (those of the frame before), which become these. An occlusion grid
     /// is new every frame.
@@ -1098,6 +1163,7 @@ impl Culler<'_> {
             n += 1;
         };
         put(f32::from(u8::from(self.occlusion.is_some())));
+        put(f32::from_bits(self.layers));
         put(self.cascades as f32);
         put(self.light_views as f32);
         put(self.sweep);
@@ -1168,9 +1234,35 @@ pub(crate) fn cascade_splits(near: f32, distance: f32, count: usize) -> [f32; MA
 /// orthographic box around that part of the view, facing along the
 /// sunlight, moved in whole shadow-map texels so shadow edges don't shimmer
 /// as the camera moves.
+#[cfg(test)]
 pub(crate) fn sun_view_proj(camera: &Camera3D, sun_direction: Vec3, near: f32, far: f32, size: u32) -> (Mat4, f32) {
-    let (m, texel, _) = sun_box(camera, sun_direction, near, far, size, 1.0);
+    let (m, texel, _) = sun_box(slice_sphere(camera, near, far), sun_direction, size, 1.0);
     (m, texel)
+}
+
+/// The smallest sphere (nearly) holding `camera`'s slice from `near` to
+/// `far` and that of every camera in `others`: what a cascade shared by
+/// several views covers. Just `camera`'s slice without others.
+fn cover_sphere(camera: &Camera3D, others: &[Camera3D], near: f32, far: f32) -> (Vec3, f32) {
+    let mut sphere = slice_sphere(camera, near, far);
+    for other in others {
+        let (c, r) = slice_sphere(other, near.max(other.near), far);
+        let (center, radius) = sphere;
+        let gap = c.distance(center);
+        if gap + r <= radius {
+            continue; // inside already
+        }
+        if gap + radius <= r {
+            sphere = (c, r);
+            continue;
+        }
+        let grown = (gap + radius + r) * 0.5;
+        sphere = (
+            center + (c - center) * ((grown - radius) / gap.max(f32::MIN_POSITIVE)),
+            grown,
+        );
+    }
+    sphere
 }
 
 /// The bounding sphere of what the camera sees from `near` to `far` away:
@@ -1181,19 +1273,21 @@ fn slice_sphere(camera: &Camera3D, near: f32, far: f32) -> (Vec3, f32) {
     // made the radius wobble at rounding boundaries even during tiny moves.
     let near = near.clamp(camera.near, far * 0.5);
     let middle = (near + far) * 0.5;
-    let aspect = (camera.viewport.x / camera.viewport.y.max(1.0)).max(1e-3);
+    let size = camera.viewport();
+    let aspect = (size.x / size.y.max(1.0)).max(1e-3);
     let height = far * (camera.fov_y * 0.5).tan();
     let radius = Vec3::new(height * aspect, height, far - middle).length();
     let center = camera.position + camera.forward() * middle;
     (center, radius)
 }
 
-/// [`sun_view_proj`] with the box `grow` times as wide as the view's
-/// slice needs, and how far from the slice's center the box reaches
+/// [`sun_view_proj`] for a slice of the views (see [`cover_sphere`]) with
+/// the box `grow` times as wide as it needs, and how far from the slice's
+/// center the box reaches
 /// (anything within that distance of it is inside the box).
-fn sun_box(camera: &Camera3D, sun_direction: Vec3, near: f32, far: f32, size: u32, grow: f32) -> (Mat4, f32, f32) {
+fn sun_box(slice: (Vec3, f32), sun_direction: Vec3, size: u32, grow: f32) -> (Mat4, f32, f32) {
     let light = sun_direction.try_normalize().unwrap_or(Vec3::NEG_Y);
-    let (center, radius) = slice_sphere(camera, near, far);
+    let (center, radius) = slice;
     let radius = (radius * grow * 16.0).ceil() / 16.0;
 
     let up = if light.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
@@ -1210,6 +1304,24 @@ fn sun_box(camera: &Camera3D, sun_direction: Vec3, near: f32, far: f32, size: u3
         glam::camera::rh::proj::directx::orthographic(-radius, radius, -radius, radius, 0.0, back + radius);
     // Snapping moved the box by up to a texel in each direction.
     (projection * view, texel, radius - texel * 2.0)
+}
+
+/// The sun direction to draw the cascades from, given the one they were
+/// last drawn from (`held`, `None` to start over), the true `sun` and
+/// `Lighting::shadow_sun_step` (above 0): `held` while the true direction
+/// is within `step` radians of it, otherwise the true direction
+/// (normalized), which is held from then on. Holding, rather than snapping
+/// to a fixed grid of directions, gives hysteresis for free: after a jump
+/// the sun must turn a whole step again, so one wobbling across a boundary
+/// can't flip the shadows back and forth, and the steps come every `step`
+/// radians whatever axis the sun turns about (a grid's cells shrink
+/// towards its poles).
+pub(crate) fn hold_sun(held: Option<Vec3>, sun: Vec3, step: f32) -> Vec3 {
+    let sun = sun.try_normalize().unwrap_or(Vec3::NEG_Y);
+    match held {
+        Some(held) if held.dot(sun) >= step.min(std::f32::consts::PI).cos() => held,
+        _ => sun,
+    }
 }
 
 /// The first of `cascades` cascades that can be kept between frames: the
@@ -1263,6 +1375,39 @@ fn capsule_visible(planes: &[Vec4], a: Vec3, b: Vec3, radius: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_shared_cascade_covers_every_views_slice() {
+        let window = glam::Vec2::new(640.0, 360.0);
+        let mut a = Camera3D::new(window);
+        a.position = Vec3::new(-40.0, 2.0, 0.0);
+        a.look_at(Vec3::new(-40.0, 2.0, -10.0));
+        let mut b = a;
+        b.position = Vec3::new(40.0, 2.0, 0.0);
+        b.look_at(Vec3::new(40.0, 2.0, 10.0));
+        assert_eq!(
+            cover_sphere(&a, &[], 0.1, 20.0),
+            slice_sphere(&a, 0.1, 20.0),
+            "one view: its own slice"
+        );
+        let (center, radius) = cover_sphere(&a, &[b], 0.1, 20.0);
+        for (c, r) in [slice_sphere(&a, 0.1, 20.0), slice_sphere(&b, 0.1, 20.0)] {
+            assert!(
+                center.distance(c) + r <= radius * 1.0001,
+                "{c} {r} outside {center} {radius}"
+            );
+        }
+        // Nearly as small as it can be: the two slices side by side.
+        let (_, ra) = slice_sphere(&a, 0.1, 20.0);
+        let (ca, _) = slice_sphere(&a, 0.1, 20.0);
+        let (cb, _) = slice_sphere(&b, 0.1, 20.0);
+        assert!(radius <= (ca.distance(cb) + 2.0 * ra) * 0.5 + 1e-3);
+        // A view inside another's slice changes nothing.
+        let mut inside = a;
+        inside.position += a.forward() * 5.0;
+        let near = cover_sphere(&a, &[inside], 5.0, 20.0);
+        assert!(near.1 >= slice_sphere(&a, 5.0, 20.0).1);
+    }
     use super::super::TERRAIN_LODS;
     use super::*;
     use crate::color::Color;
@@ -1691,11 +1836,11 @@ mod tests {
         let mut frame = Frame3D::default();
         let mut collect = |frame: &mut Frame3D, camera: &Camera3D, lighting: &Lighting| {
             frame.collect(&mut world, &assets, &SkinFrame::default(), camera, lighting);
-            (frame.redrawn, frame.sun_view_proj, frame.shadow_runs.clone())
+            (frame.redrawn, frame.sun_view_proj, frame.shadow_generations)
         };
         let (first, matrices, _) = collect(&mut frame, &camera, &lighting);
         assert_eq!(first, 0b1111, "the first frame draws every cascade");
-        let (second, kept, runs) = collect(&mut frame, &camera, &lighting);
+        let (second, kept, generations) = collect(&mut frame, &camera, &lighting);
         let (third, _, _) = collect(&mut frame, &camera, &lighting);
         // Near cascades every frame; the far two (2 and 3) alternate.
         assert_eq!(second & 0b11, 0b11);
@@ -1707,9 +1852,14 @@ mod tests {
             kept[skipped], matrices[skipped],
             "a kept cascade samples the map it drew"
         );
-        assert!(runs[skipped].is_empty(), "and draws nothing");
-        let drawn = 5 - skipped;
-        assert!(!runs[drawn].is_empty(), "the other far cascade draws its casters");
+        assert!(
+            frame.shadow_runs[2..4].iter().all(|r| !r.is_empty()),
+            "held or not, the far cascades list their casters"
+        );
+        assert_eq!(
+            frame.shadow_generations, generations,
+            "unchanged: a renderer keeps both far maps"
+        );
     }
 
     #[test]
@@ -1738,6 +1888,135 @@ mod tests {
         // So does a new shadow map size.
         lighting.shadow_resolution = 1024;
         assert_eq!(redrawn(&camera, &lighting), 0b1111);
+    }
+
+    /// The sun direction `degrees` around the Y axis from the start, tilted
+    /// 50 degrees down.
+    fn turned(degrees: f32) -> Vec3 {
+        let (s, c) = degrees.to_radians().sin_cos();
+        Vec3::new(c * 0.64, -0.77, s * 0.64)
+    }
+
+    #[test]
+    fn a_held_sun_moves_only_past_the_step_and_does_not_flip_back() {
+        let step = 2f32.to_radians();
+        let start = hold_sun(None, turned(0.0), step);
+        assert!(
+            (start - turned(0.0).normalize()).length() < 1e-6,
+            "starts at the true direction"
+        );
+        // Turning less than a step (0.64 of the yaw is the angle, tilted).
+        let mut held = start;
+        for d in [0.5, 1.0, 2.0, 3.0] {
+            held = hold_sun(Some(held), turned(d), step);
+            assert_eq!(held, start, "{d} degrees of yaw is less than a 2 degree step");
+        }
+        // Past the step: it jumps to the true direction.
+        let past = hold_sun(Some(held), turned(3.4), step);
+        assert_ne!(past, start);
+        assert!(past.angle_between(turned(3.4)) < 1e-4);
+        // Hysteresis: wobbling back across the boundary keeps the new one.
+        for d in [3.2, 3.0, 3.4, 2.8, 3.6] {
+            assert_eq!(hold_sun(Some(past), turned(d), step), past, "{d}");
+        }
+        // And the old one would have flipped back on the same wobble: it is
+        // the true direction past the step, not a fixed boundary, that counts.
+        assert_eq!(hold_sun(Some(start), turned(3.0), step), start);
+        // Deterministic: the same frames give the same directions.
+        let run = |frames: usize| {
+            let mut held = None;
+            (0..frames)
+                .map(|i| {
+                    let d = hold_sun(held, turned(i as f32 * 0.05), step);
+                    held = Some(d);
+                    d
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run(400), run(400));
+        let changes = run(400).windows(2).filter(|w| w[0] != w[1]).count();
+        // 20 degrees of yaw, about 12.8 of turn: six 2-degree steps.
+        assert_eq!(changes, 6);
+    }
+
+    #[test]
+    fn a_held_sun_keeps_the_cascades_and_their_cache_until_the_step() {
+        let (mut world, assets, camera, mut lighting) = cache_scene(8);
+        lighting.shadow_sun_step = 2f32.to_radians();
+        let mut frame = Frame3D::default();
+        let mut far_draws = 0;
+        let mut changes = 0;
+        let mut last = None;
+        for i in 0..120 {
+            lighting.sun_direction = turned(i as f32 * 0.05);
+            frame.collect(&mut world, &assets, &SkinFrame::default(), &camera, &lighting);
+            far_draws += (frame.redrawn & 0b1100).count_ones();
+            if last.is_some_and(|m| m != frame.sun_view_proj) {
+                changes += 1;
+            }
+            last = Some(frame.sun_view_proj);
+        }
+        // 6 degrees of yaw is about 3.8 of turn: one step, at frame 2/0.05.
+        assert_eq!(changes, 1, "the cascades move once");
+        // Far cascades: drawn on the first frame and at the step (2 each),
+        // otherwise only when their turn comes, every 8 frames.
+        let turns = 2 * 120 / 8;
+        assert!(far_draws <= 4 + turns, "{far_draws} far draws");
+        // Without the step, the moving sun draws them every frame.
+        lighting.shadow_sun_step = 0.0;
+        let mut exact = 0;
+        for i in 0..120 {
+            lighting.sun_direction = turned(i as f32 * 0.05);
+            frame.collect(&mut world, &assets, &SkinFrame::default(), &camera, &lighting);
+            exact += (frame.redrawn & 0b1100).count_ones();
+        }
+        assert_eq!(exact, 240);
+    }
+
+    #[test]
+    fn a_changed_step_or_no_shadows_starts_the_hold_over() {
+        let (mut world, assets, camera, mut lighting) = cache_scene(1);
+        let mut frame = Frame3D::default();
+        let mut collect = |frame: &mut Frame3D, lighting: &Lighting| {
+            frame.collect(&mut world, &assets, &SkinFrame::default(), &camera, lighting);
+            frame.sun_view_proj
+        };
+        lighting.shadow_sun_step = 0.1;
+        lighting.sun_direction = turned(0.0);
+        let held = collect(&mut frame, &lighting);
+        lighting.sun_direction = turned(1.0);
+        assert_eq!(collect(&mut frame, &lighting), held, "held within the step");
+        let exact = {
+            let mut fresh = Frame3D::default();
+            collect(&mut fresh, &lighting)
+        };
+        assert_ne!(exact, held);
+        lighting.shadow_sun_step = 0.2;
+        assert_eq!(
+            collect(&mut frame, &lighting),
+            exact,
+            "a new step starts at the true direction"
+        );
+        lighting.shadows = false;
+        collect(&mut frame, &lighting);
+        lighting.shadows = true;
+        lighting.sun_direction = turned(2.0);
+        let fresh = {
+            let mut fresh = Frame3D::default();
+            collect(&mut fresh, &lighting)
+        };
+        assert_eq!(collect(&mut frame, &lighting), fresh, "shadows back on: starts over");
+        // A step of 0 is today's behaviour: the exact direction, bit for bit.
+        lighting.shadow_sun_step = 0.0;
+        let splits = cascade_splits(camera.near, lighting.shadow_distance, 4);
+        let (m, _) = sun_view_proj(
+            &camera,
+            lighting.sun_direction,
+            splits[2],
+            splits[3],
+            lighting.shadow_size(0),
+        );
+        assert_eq!(collect(&mut frame, &lighting)[3], m);
     }
 
     #[test]

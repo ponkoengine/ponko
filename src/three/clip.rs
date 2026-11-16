@@ -2,6 +2,7 @@
 use std::sync::{Arc, Mutex};
 
 use super::{Joint, Skeleton};
+use crate::error::{Error, ErrorKind};
 use glam::{Quat, Vec4};
 
 /// Interpolation between keys. Cubic values are stored as incoming tangent,
@@ -37,22 +38,47 @@ pub struct AnimationTrack {
 }
 impl AnimationTrack {
     /// Makes a track. Vector values use xyz (w is ignored); rotations use xyzw.
-    /// Panics unless times are finite, nonnegative, strictly increasing and
+    /// [`try_new`](Self::try_new) returns the failures as an error instead.
+    ///
+    /// # Panics
+    ///
+    /// Unless times are finite, nonnegative, strictly increasing and
     /// nonempty, and values are finite with one per key (three for cubic).
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// let t = ponko::anim::AnimationTrack::new(vec![0.0, 1.0], vec![Vec4::ZERO, Vec4::ONE], ponko::anim::Interpolation::Linear);
     /// assert_eq!(t.values().len(), 2);
     /// ```
     pub fn new(times: Vec<f32>, values: Vec<Vec4>, interpolation: Interpolation) -> Self {
-        Self::try_new(times, values, interpolation).unwrap_or_else(|e| panic!("AnimationTrack::new: {e}"))
+        Self::try_new(times, values, interpolation).unwrap_or_else(|e| panic!("AnimationTrack::new: {}", e.message()))
     }
-    pub(crate) fn try_new(times: Vec<f32>, values: Vec<Vec4>, interpolation: Interpolation) -> Result<Self, String> {
+    /// Makes a track like [`new`](Self::new), or says why the keys are
+    /// unusable. For data from files or tools.
+    ///
+    /// # Errors
+    ///
+    /// An [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) error
+    /// when times are empty, not finite, negative or not strictly
+    /// increasing, or when a value is not finite or the value count is not
+    /// one per key (three per key for cubic).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::anim::{AnimationTrack, Interpolation};
+    /// let err = AnimationTrack::try_new(vec![1.0, 0.0], vec![Vec4::ZERO; 2], Interpolation::Step).unwrap_err();
+    /// assert_eq!(err.kind(), ErrorKind::Invalid);
+    /// assert!(AnimationTrack::try_new(vec![0.0], vec![Vec4::ONE], Interpolation::Step).is_ok());
+    /// ```
+    pub fn try_new(times: Vec<f32>, values: Vec<Vec4>, interpolation: Interpolation) -> Result<Self, Error> {
         if times.is_empty()
             || times.iter().any(|t| !t.is_finite() || *t < 0.0)
             || times.windows(2).any(|t| t[0] >= t[1])
         {
-            return Err("key times must be nonempty, finite, nonnegative and strictly increasing".into());
+            return Err(Error::new(
+                ErrorKind::Invalid,
+                "key times must be nonempty, finite, nonnegative and strictly increasing",
+            ));
         }
         let count = if interpolation == Interpolation::CubicSpline {
             3
@@ -60,7 +86,10 @@ impl AnimationTrack {
             1
         };
         if values.len() != times.len() * count || values.iter().any(|v| !v.is_finite()) {
-            return Err("invalid animation value count or non-finite value".into());
+            return Err(Error::new(
+                ErrorKind::Invalid,
+                "invalid animation value count or non-finite value",
+            ));
         }
         Ok(Self {
             times,
@@ -145,12 +174,19 @@ fn quaternion(v: Vec4) -> Quat {
 
 /// Tracks for a joint, identified both by its source index and name.
 /// Missing tracks leave the corresponding pose property untouched.
+///
+/// New fields may be added in any release: build one with
+/// [`new`](Self::new) and the `with_*` methods.
 /// ```
 /// use ponko::prelude::*;
-/// let joint = ponko::anim::JointAnimation { joint: 0, name: "root".into(), translation: None, rotation: None, scale: None };
-/// assert_eq!(joint.name, "root");
+/// use ponko::anim::{AnimationTrack, Interpolation, JointAnimation};
+/// let bob = AnimationTrack::new(vec![0.0, 0.5], vec![Vec4::ZERO, Vec4::Y], Interpolation::Linear);
+/// let root = JointAnimation::new(0, "root").with_translation(bob);
+/// assert_eq!(root.name, "root");
+/// assert!(root.rotation.is_none());
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct JointAnimation {
     /// Index in the source skeleton.
     pub joint: usize,
@@ -163,20 +199,70 @@ pub struct JointAnimation {
     /// Local scale keys, xyz.
     pub scale: Option<AnimationTrack>,
 }
+impl JointAnimation {
+    /// No tracks yet for joint `joint` (its index in the source skeleton)
+    /// called `name`; add them with the `with_*` methods.
+    /// ```
+    /// let hip = ponko::anim::JointAnimation::new(0, "hip");
+    /// assert_eq!((hip.joint, hip.name.as_str()), (0, "hip"));
+    /// ```
+    #[must_use]
+    pub fn new(joint: usize, name: impl Into<String>) -> Self {
+        Self {
+            joint,
+            name: name.into(),
+            translation: None,
+            rotation: None,
+            scale: None,
+        }
+    }
+
+    with_fields! {
+        /// Sets [`translation`](Self::translation), the local position keys
+        /// (xyz; `None`: untouched).
+        translation: Option<AnimationTrack> => with_translation;
+        /// Sets [`rotation`](Self::rotation), the local rotation keys (xyzw
+        /// quaternions; `None`: untouched).
+        rotation: Option<AnimationTrack> => with_rotation;
+        /// Sets [`scale`](Self::scale), the local scale keys (xyz; `None`:
+        /// untouched).
+        scale: Option<AnimationTrack> => with_scale;
+    }
+}
 /// A named morph channel. Values use the track's x component, in units where
 /// 1 is full weight. Cubic tangents use weight units per second.
+///
+/// New fields may be added in any release: build one with
+/// [`new`](Self::new).
 /// ```
 /// use ponko::prelude::*;
-/// let channel = ponko::anim::MorphAnimation { name: "smile".into(), track: ponko::anim::AnimationTrack::new(
-///     vec![0.0], vec![Vec4::ONE], ponko::anim::Interpolation::Step) };
+/// use ponko::anim::{AnimationTrack, Interpolation, MorphAnimation};
+/// let channel = MorphAnimation::new("smile", AnimationTrack::new(vec![0.0], vec![Vec4::ONE], Interpolation::Step));
 /// assert_eq!(channel.name, "smile");
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct MorphAnimation {
     /// Mesh target name; unrelated targets are untouched.
     pub name: String,
     /// Scalar keys in x.
     pub track: AnimationTrack,
+}
+impl MorphAnimation {
+    /// Keys `track` (weights in x) for the morph target called `name`.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::anim::{AnimationTrack, Interpolation, MorphAnimation};
+    /// let blink = MorphAnimation::new("blink", AnimationTrack::new(vec![0.0], vec![Vec4::X], Interpolation::Step));
+    /// assert_eq!(blink.track.times(), &[0.0]);
+    /// ```
+    #[must_use]
+    pub fn new(name: impl Into<String>, track: AnimationTrack) -> Self {
+        Self {
+            name: name.into(),
+            track,
+        }
+    }
 }
 #[derive(Debug)]
 struct ClipData {
@@ -211,7 +297,12 @@ impl AnimationClip {
         &self.0.joints
     }
     /// Makes a clip from tracks for `source`. Duration is the last key time.
-    /// Panics if a track's source index and name disagree with the skeleton.
+    /// [`try_new`](Self::try_new) returns the failure as an error instead.
+    ///
+    /// # Panics
+    ///
+    /// If a track's source index and name disagree with the skeleton.
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// let s = ponko::anim::Skeleton::new(vec![]);
@@ -219,11 +310,37 @@ impl AnimationClip {
     /// assert_eq!(clip.duration(), 0.0);
     /// ```
     pub fn new(name: impl Into<String>, source: &Skeleton, tracks: Vec<JointAnimation>) -> Self {
-        for t in &tracks {
-            assert!(
-                source.joints().get(t.joint).is_some_and(|j| j.name == t.name),
-                "AnimationClip::new: joint index and name must match source skeleton"
-            );
+        Self::try_new(name, source, tracks).unwrap_or_else(|e| panic!("AnimationClip::new: {}", e.message()))
+    }
+    /// Makes a clip like [`new`](Self::new). For clips built from files or
+    /// tools.
+    ///
+    /// # Errors
+    ///
+    /// An [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) error naming the
+    /// first track whose joint index is not in `source` or whose name is not
+    /// that joint's name.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::anim::{AnimationClip, JointAnimation, Skeleton};
+    /// let s = Skeleton::new(vec![]);
+    /// let stray = JointAnimation::new(0, "hip");
+    /// let err = AnimationClip::try_new("walk", &s, vec![stray]).unwrap_err();
+    /// assert_eq!(err.kind(), ErrorKind::Invalid);
+    /// ```
+    pub fn try_new(name: impl Into<String>, source: &Skeleton, tracks: Vec<JointAnimation>) -> Result<Self, Error> {
+        if let Some(t) = tracks
+            .iter()
+            .find(|t| source.joints().get(t.joint).is_none_or(|j| j.name != t.name))
+        {
+            return Err(Error::new(
+                ErrorKind::Invalid,
+                format!(
+                    "joint index and name must match source skeleton (track for joint {} \"{}\")",
+                    t.joint, t.name
+                ),
+            ));
         }
         let duration = tracks
             .iter()
@@ -231,28 +348,59 @@ impl AnimationClip {
             .flatten()
             .map(|t| *t.times.last().unwrap())
             .fold(0.0, f32::max);
-        Self(Arc::new(ClipData {
+        Ok(Self(Arc::new(ClipData {
             name: name.into(),
             duration,
             tracks,
             morphs: Vec::new(),
             joints: source.shared_joints().clone(),
             bindings: Mutex::new(Vec::new()),
-        }))
+        })))
     }
-    /// Replaces named morph tracks on a clip. Duplicate names are rejected.
+    /// Replaces named morph tracks on a clip.
+    /// [`try_with_morph_tracks`](Self::try_with_morph_tracks) returns the
+    /// failure as an error instead.
+    ///
+    /// # Panics
+    ///
+    /// On duplicate track names.
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// let clip = ponko::anim::AnimationClip::new("face", &ponko::anim::Skeleton::new(vec![]), vec![])
     ///     .with_morph_tracks(vec![]);
     /// assert!(clip.morph_tracks().is_empty());
     /// ```
-    pub fn with_morph_tracks(mut self, tracks: Vec<MorphAnimation>) -> Self {
-        for (i, t) in tracks.iter().enumerate() {
-            assert!(
-                !tracks[..i].iter().any(|p| p.name == t.name),
-                "duplicate morph track name"
-            );
+    pub fn with_morph_tracks(self, tracks: Vec<MorphAnimation>) -> Self {
+        self.try_with_morph_tracks(tracks)
+            .unwrap_or_else(|e| panic!("AnimationClip::with_morph_tracks: {}", e.message()))
+    }
+    /// Replaces named morph tracks like
+    /// [`with_morph_tracks`](Self::with_morph_tracks).
+    ///
+    /// # Errors
+    ///
+    /// An [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) error naming the
+    /// first repeated track name (the clip is dropped).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::anim::{AnimationClip, AnimationTrack, Interpolation, MorphAnimation, Skeleton};
+    /// let smile = MorphAnimation::new("smile", AnimationTrack::new(vec![0.0], vec![Vec4::ONE], Interpolation::Step));
+    /// let clip = AnimationClip::new("face", &Skeleton::new(vec![]), vec![]);
+    /// let err = clip.try_with_morph_tracks(vec![smile.clone(), smile]).unwrap_err();
+    /// assert_eq!(err.kind(), ErrorKind::Invalid);
+    /// ```
+    pub fn try_with_morph_tracks(mut self, tracks: Vec<MorphAnimation>) -> Result<Self, Error> {
+        if let Some(t) = tracks
+            .iter()
+            .enumerate()
+            .find_map(|(i, t)| tracks[..i].iter().any(|p| p.name == t.name).then_some(t))
+        {
+            return Err(Error::new(
+                ErrorKind::Invalid,
+                format!("duplicate morph track name \"{}\"", t.name),
+            ));
         }
         if Arc::get_mut(&mut self.0).is_none() {
             self.0 = Arc::new(ClipData {
@@ -277,7 +425,7 @@ impl AnimationClip {
             )
             .fold(0., f32::max);
         data.morphs = tracks;
-        self
+        Ok(self)
     }
     /// Named morph tracks, in weight units (1 is full weight).
     /// ```
@@ -420,16 +568,7 @@ mod tests {
     use crate::d3::Transform as Transform3D;
     use glam::Vec3;
     fn skeleton(names: &[&str]) -> Skeleton {
-        Skeleton::new(
-            names
-                .iter()
-                .map(|n| Joint {
-                    name: (*n).into(),
-                    parent: None,
-                    rest: Transform3D::default(),
-                })
-                .collect(),
-        )
+        Skeleton::new(names.iter().map(|n| Joint::new(*n, None)).collect())
     }
     fn track(interpolation: Interpolation, values: Vec<Vec4>) -> AnimationTrack {
         AnimationTrack::new(vec![0.0, 2.0], values, interpolation)
@@ -438,13 +577,10 @@ mod tests {
         AnimationClip::new(
             "move",
             s,
-            vec![JointAnimation {
-                joint: 0,
-                name: "root".into(),
-                translation: Some(track(Interpolation::Linear, vec![Vec4::ZERO, Vec4::splat(4.0)])),
-                rotation: None,
-                scale: None,
-            }],
+            vec![
+                JointAnimation::new(0, "root")
+                    .with_translation(track(Interpolation::Linear, vec![Vec4::ZERO, Vec4::splat(4.0)])),
+            ],
         )
     }
     #[test]
@@ -513,21 +649,19 @@ mod tests {
         let c = AnimationClip::new(
             "turn",
             &s,
-            vec![JointAnimation {
-                joint: 0,
-                name: "root".into(),
-                translation: None,
-                rotation: Some(AnimationTrack::new(
-                    vec![0.0],
-                    vec![Vec4::from_array(q.to_array())],
-                    Interpolation::Linear,
-                )),
-                scale: Some(AnimationTrack::new(
-                    vec![0.0],
-                    vec![Vec4::splat(3.0)],
-                    Interpolation::Step,
-                )),
-            }],
+            vec![
+                JointAnimation::new(0, "root")
+                    .with_rotation(AnimationTrack::new(
+                        vec![0.0],
+                        vec![Vec4::from_array(q.to_array())],
+                        Interpolation::Linear,
+                    ))
+                    .with_scale(AnimationTrack::new(
+                        vec![0.0],
+                        vec![Vec4::splat(3.0)],
+                        Interpolation::Step,
+                    )),
+            ],
         );
         for w in [0.0, 0.5, 1.0] {
             s.reset_pose();
@@ -548,16 +682,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "joint index and name")]
     fn mismatched_source_joint_is_rejected() {
-        AnimationClip::new(
-            "bad",
-            &skeleton(&["root"]),
-            vec![JointAnimation {
-                joint: 0,
-                name: "missing".into(),
-                translation: None,
-                rotation: None,
-                scale: None,
-            }],
-        );
+        AnimationClip::new("bad", &skeleton(&["root"]), vec![JointAnimation::new(0, "missing")]);
     }
 }

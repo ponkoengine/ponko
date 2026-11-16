@@ -167,7 +167,7 @@ pub struct GpuMemory {
     pub textures: u64,
     /// 3D mesh vertex and index buffers.
     pub meshes: u64,
-    /// The game's 3D [`GpuBuffer`](crate::render::GpuBuffer)s.
+    /// The game's 3D `GpuBuffer`s.
     pub gpu_buffers: u64,
     /// What a frame is drawn into: scene color and depth (multisampled),
     /// post-processing (bloom, antialiasing, scaling), ambient occlusion,

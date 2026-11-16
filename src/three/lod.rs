@@ -196,6 +196,15 @@ impl LodLevel {
 /// ctx.scene3d.lod.bias = 0.5; // low detail: switch to cheaper levels twice as soon
 /// # }
 /// ```
+///
+/// # Defaults and cost
+///
+/// [`Default`] is a `bias` of 1 (levels switch at their own thresholds) and
+/// `crossfade` on. Choosing a level is a small CPU step per group per frame
+/// and the settings hold no memory. A bias above 1 and crossfading are the
+/// settings that cost GPU time: a higher bias keeps heavier levels on screen
+/// longer, and while a crossfade runs both levels are drawn, each with a
+/// dither pattern. Turning `crossfade` off draws one level at a time.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct LodSettings {

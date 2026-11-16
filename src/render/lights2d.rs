@@ -7,6 +7,7 @@ use glam::Mat4;
 
 use super::batch::{Batch, SpriteInstance};
 use super::gpu::GpuTexture;
+use super::gpu_textures::TextureTable;
 use super::traffic::{self, Counted, NewBuffer, Upload};
 use crate::light2d::{LightFrame2D, LightInstance};
 use crate::sprite_material::{BlendMode, split_style};
@@ -49,9 +50,23 @@ struct Targets {
     normals: Option<(wgpu::TextureView, wgpu::BindGroup)>,
 }
 
+/// One camera's part of a frame of several 2D cameras, lit by
+/// [`Lights2D::draw`]: its light camera (`index` into the views
+/// [`Lights2D::prepare`] was given), its sprite camera, its rectangle of
+/// the target (`[x, y, width, height]`, pixels) and its render layers.
+pub(crate) struct LitView<'a> {
+    pub(crate) index: usize,
+    pub(crate) camera: &'a wgpu::BindGroup,
+    pub(crate) rect: [u32; 4],
+    pub(crate) layers: u32,
+}
+
 pub(crate) struct Lights2D {
     view_buffer: wgpu::Buffer,
     view_group: wgpu::BindGroup,
+    view_layout: wgpu::BindGroupLayout,
+    /// Each 2D view's light camera (split screen), kept between frames.
+    view_cameras: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     sample_layout: wgpu::BindGroupLayout,
     /// The light pass's normals when no pass wrote any: flat, none mapped.
     flat_normals: wgpu::BindGroup,
@@ -369,6 +384,8 @@ impl Lights2D {
             vertex_capacity,
             view_buffer,
             view_group,
+            view_layout,
+            view_cameras: Vec::new(),
             sample_layout,
             flat_normals,
             no_normal_map,
@@ -385,8 +402,9 @@ impl Lights2D {
     }
 
     /// Uploads `frame`'s lights and shadows for a frame of `size` pixels
-    /// seen through `view_proj`, and finds whether `batches` (the world's)
-    /// need the normal pass.
+    /// seen through `view_proj` (and, with several 2D cameras, through each
+    /// of `views`, drawn with [`LitView`]s), and finds whether `batches`
+    /// (the world's) need the normal pass.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare(
         &mut self,
@@ -394,9 +412,10 @@ impl Lights2D {
         queue: &wgpu::Queue,
         frame: &LightFrame2D,
         view_proj: Mat4,
+        views: impl ExactSizeIterator<Item = Mat4>,
         size: [u32; 2],
         normal_maps: &[Option<Texture>],
-        textures: &[GpuTexture],
+        textures: &dyn TextureTable,
         batches: &[Batch],
     ) {
         let size = [size[0].max(1), size[1].max(1)];
@@ -408,6 +427,28 @@ impl Lights2D {
             0,
             bytemuck::cast_slice(&view_proj.to_cols_array()),
         );
+        while self.view_cameras.len() < views.len() {
+            let buffer = device.new_buffer(&wgpu::BufferDescriptor {
+                label: Some("2d lights view camera"),
+                size: 64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("2d lights view camera"),
+                layout: &self.view_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+            self.view_cameras.push((buffer, group));
+        }
+        for (matrix, (buffer, _)) in views.zip(&self.view_cameras) {
+            queue
+                .uploading(Upload::Uniforms)
+                .write_buffer(buffer, 0, bytemuck::cast_slice(&matrix.to_cols_array()));
+        }
         // Lights and shadow vertices: as many as the device's buffers hold.
         let light_size = size_of::<LightInstance>();
         let most = traffic::most_bytes(device, wgpu::BufferUsages::VERTEX);
@@ -466,8 +507,11 @@ impl Lights2D {
     /// Records the normal pass (if [`prepare`](Self::prepare) found it
     /// needed), the light map and the composite onto `frame_view`, which
     /// holds the world's sprites. `camera`, `instances`, `batches` and
-    /// `base`: the world layer as the sprite pass drew it; `scale` and
-    /// `viewport` place clip rectangles.
+    /// `base`: the world layer as the sprite pass drew it. With `view`
+    /// (one camera of several), all three only in its rectangle, through
+    /// its cameras, the normals of sprites on its layers only: the frame
+    /// draws each camera's sprites and then lights them before the next
+    /// camera draws over its own part.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw(
         &self,
@@ -476,16 +520,34 @@ impl Lights2D {
         frame: &LightFrame2D,
         world: (&wgpu::BindGroup, &[Batch], u32),
         instances: &wgpu::Buffer,
-        textures: &[GpuTexture],
+        textures: &dyn TextureTable,
         normal_maps: &[Option<Texture>],
         timestamps: Option<wgpu::RenderPassTimestampWrites<'_>>,
+        view: Option<&LitView<'_>>,
     ) {
         let Some(targets) = &self.targets else {
             return;
         };
+        let light_camera = match view {
+            Some(v) => match self.view_cameras.get(v.index) {
+                Some((_, group)) => group,
+                None => return,
+            },
+            None => &self.view_group,
+        };
+        let (world, area, mask) = match view {
+            Some(v) => ((v.camera, world.1, world.2), Some(v.rect), v.layers),
+            None => (world, None, u32::MAX),
+        };
+        let place = |pass: &mut wgpu::RenderPass<'_>| {
+            if let Some([x, y, w, h]) = area {
+                pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
+                pass.set_scissor_rect(x, y, w, h);
+            }
+        };
         let normals = match (&targets.normals, self.normal_pass) {
             (Some((view, group)), true) => {
-                self.draw_normals(encoder, view, world, instances, textures, normal_maps);
+                self.draw_normals(encoder, view, world, instances, textures, normal_maps, (area, mask));
                 group
             }
             _ => &self.flat_normals,
@@ -529,8 +591,9 @@ impl Lights2D {
                     multiview_mask: None,
                 })
                 .forget_lifetime();
-            pass.set_bind_group(0, &self.view_group, &[]);
+            pass.set_bind_group(0, light_camera, &[]);
             pass.set_bind_group(1, normals, &[]);
+            place(&mut pass);
             pass
         };
         {
@@ -580,20 +643,26 @@ impl Lights2D {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        if let Some([x, y, w, h]) = area {
+            pass.set_scissor_rect(x, y, w, h);
+        }
         pass.set_pipeline(&self.composite_pipeline);
         pass.set_bind_group(0, &targets.composite, &[]);
         pass.draw(0..3, 0..1);
     }
 
-    /// The world's sprites again, writing their normals.
+    /// The world's sprites again, writing their normals: those on `mask`'s
+    /// layers, in `area` of the target if given.
+    #[allow(clippy::too_many_arguments)]
     fn draw_normals(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         (camera, batches, base): (&wgpu::BindGroup, &[Batch], u32),
         instances: &wgpu::Buffer,
-        textures: &[GpuTexture],
+        textures: &dyn TextureTable,
         normal_maps: &[Option<Texture>],
+        (area, mask): (Option<[u32; 4]>, u32),
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("2d normals"),
@@ -617,14 +686,21 @@ impl Lights2D {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        if let Some([x, y, w, h]) = area {
+            pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
+            pass.set_scissor_rect(x, y, w, h);
+        }
         pass.set_bind_group(0, camera, &[]);
         pass.set_vertex_buffer(0, instances.slice(..));
         let mut current = None;
         for batch in batches {
+            if batch.layers & mask == 0 {
+                continue;
+            }
             let Some(normals) = normals_of(batch, normal_maps, textures) else {
                 continue;
             };
-            let Some(texture) = textures.get(batch.texture as usize) else {
+            let Some(texture) = textures.texture(batch.texture) else {
                 continue;
             };
             let (pipeline, group) = match normals {
@@ -643,19 +719,20 @@ impl Lights2D {
 }
 
 /// What `batch` writes into the normal pass: nothing (`None`: glows and
-/// darkening drawn additive or multiplied, clipped draws), flat (`Some(None)`),
+/// darkening drawn additive or multiplied, clipped draws, meshes), flat (`Some(None)`),
 /// or its texture's normal map.
 fn normals_of<'a>(
     batch: &Batch,
     normal_maps: &[Option<Texture>],
-    textures: &'a [GpuTexture],
+    textures: &'a dyn TextureTable,
 ) -> Option<Option<&'a GpuTexture>> {
     let (blend, _) = split_style(batch.material);
-    if matches!(blend, BlendMode::Additive | BlendMode::Multiply) || batch.clip.is_some() {
+    // Meshes (2D skeletons' parts) are lit as flat: the clear color.
+    if matches!(blend, BlendMode::Additive | BlendMode::Multiply) || batch.clip.is_some() || batch.mesh {
         return None;
     }
     let map = normal_maps.get(batch.texture as usize).copied().flatten();
-    Some(map.and_then(|m| textures.get(m.id as usize)))
+    Some(map.and_then(|m| textures.texture(m.id)))
 }
 
 fn sample_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, view: &wgpu::TextureView) -> wgpu::BindGroup {
@@ -728,6 +805,9 @@ impl Lights2D {
             ("2d light vertices", &self.vertices),
         ] {
             t.buffer(C::Other, label, buffer);
+        }
+        for (buffer, _) in &self.view_cameras {
+            t.buffer(C::Other, "2d light view camera", buffer);
         }
     }
 }

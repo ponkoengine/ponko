@@ -7,8 +7,8 @@ src = "src"
 
 [output.html]
 additional-css = ["theme/lang-pair.css"]
-git-repository-url = "https://github.com/ponkoengine/ponko"
-edit-url-template = "https://github.com/ponkoengine/ponko/edit/main/book/{path}"
+git-repository-url = "https://gitlab.com/ponkoengine/ponko"
+edit-url-template = "https://gitlab.com/ponkoengine/ponko/-/edit/main/book/{path}"
 # The website builds the guide into /guide/ (it overrides this).
 site-url = "/guide/"
 
@@ -17,6 +17,14 @@ enable = true
 limit-results = 30
 boost-title = 2
 boost-hierarchy = 2
+
+# Links from a chapter to a file of the repository are relative
+# (`../../STABILITY.md`), which works in the repository browser. This turns
+# them into links to the project's host for the built guide, which lives
+# elsewhere (scripts/project-url.py; the host is PROJECT_URL). Not optional: a
+# build without it would ship dead links.
+[preprocessor.repo-links]
+command = "python3 ../scripts/project-url.py preprocess"
 
 # Puts a note under every chapter title saying the guide follows `main`
 # (scripts/guide-note.py). The command runs from the book folder.

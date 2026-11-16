@@ -52,7 +52,7 @@ impl UnityTerrain {
     /// square (Ponko's tiles are).
     pub fn from_object(object: &UnityObject) -> Result<Self, Error> {
         if object.class_id != 156 {
-            return Err(Error::new(format!(
+            return Err(Error::invalid(format!(
                 "object {} is a {}, not TerrainData",
                 object.file_id, object.type_name
             )));
@@ -72,16 +72,16 @@ impl UnityTerrain {
                 .collect(),
         };
         if n < 2 || n.checked_mul(n) != Some(raw.len()) {
-            return Err(Error::new(format!(
+            return Err(Error::invalid(format!(
                 "{name}: {} heights for a resolution of {n}",
                 raw.len()
             )));
         }
         let [sx, sy, sz] = map["m_Scale"]
             .vec3()
-            .ok_or_else(|| Error::new(format!("{name}: no m_Scale")))?;
+            .ok_or_else(|| Error::invalid(format!("{name}: no m_Scale")))?;
         if sx != sz || sx <= 0.0 {
-            return Err(Error::new(format!(
+            return Err(Error::unsupported(format!(
                 "{name}: heights {sx} apart along X but {sz} along Z; Ponko's tiles are square"
             )));
         }

@@ -74,11 +74,12 @@ fn pipeline(
             buffers: &[],
         },
         primitive: Default::default(),
-        // Behind everything: only where the depth is still the far plane.
+        // Behind everything: only where the depth is still the far plane
+        // (0, reverse-Z).
         depth_stencil: depth.map(|format| wgpu::DepthStencilState {
             format,
             depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            depth_compare: Some(super::SCENE_DEPTH_NEARER_OR_EQUAL),
             stencil: Default::default(),
             bias: Default::default(),
         }),

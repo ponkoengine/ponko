@@ -261,7 +261,7 @@ mod mac {
                 .id();
             let music = ui.toggle(root, "Music").layout(UiLayout::row(30.0)).value(1.0).id();
             let quit = ui.button(root, "Quit").layout(UiLayout::row(30.0)).enabled(false).id();
-            ui.push_screen(root, false);
+            ui.push_modeless(root);
             let mut menu = Self {
                 view,
                 adapter,
@@ -497,7 +497,7 @@ AXGroup
         let dialog = menu.ui.root().layout(UiLayout::centered(300.0, 120.0)).id();
         menu.ui.label(dialog, "Quit the game?").layout(UiLayout::row(24.0));
         let yes = menu.ui.button(dialog, "Yes").layout(UiLayout::row(30.0)).id();
-        menu.ui.push_screen(dialog, true);
+        menu.ui.push_modal(dialog);
         menu.frame(UiInput::default());
 
         assert!(

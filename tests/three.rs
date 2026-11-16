@@ -1834,7 +1834,7 @@ fn freed_gpu_buffers_reuse_slots_under_new_ids_and_drop_their_passes() {
     });
 }
 #[test]
-#[should_panic(expected = "invalid GPU buffer")]
+#[should_panic(expected = "GPU buffer was freed or belongs to another game; create a live buffer")]
 fn a_freed_gpu_buffer_rejects_writes() {
     Game::new("buffers", 1, 1).run_headless(0, |ctx| {
         let b = ctx.gfx.create_gpu_buffer(1, &[]);
@@ -1843,7 +1843,7 @@ fn a_freed_gpu_buffer_rejects_writes() {
     });
 }
 #[test]
-#[should_panic(expected = "out of bounds")]
+#[should_panic(expected = "reduce offset or data length")]
 fn gpu_buffer_writes_validate_ranges() {
     Game::new("buffers", 1, 1).run_headless(0, |ctx| {
         let b = ctx.gfx.create_gpu_buffer(1, &[]);

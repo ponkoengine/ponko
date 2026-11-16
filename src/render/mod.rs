@@ -1,7 +1,9 @@
 //! Rendering: GPU capabilities and frame statistics, and with the `3d`
 //! feature the home of the 3D rendering types: meshes, materials, models,
 //! shaders and effects, levels of detail, instancing and render settings.
-//! [`d3`](crate::d3) re-exports them for `use ponko::d3::*;`.
+//! `d3` re-exports them for `use ponko::d3::*;`.
+
+#![deny(missing_docs)]
 
 // The GPU side (wgpu setup, textures, the instanced sprite pass) lives in
 // `gpu`, behind the `window` feature; without it, `none` stands in.
@@ -11,11 +13,15 @@ pub(crate) mod batch;
 pub(crate) mod blocks;
 pub(crate) mod capabilities;
 #[cfg(all(feature = "window", feature = "3d"))]
+mod debug_lines;
+#[cfg(all(feature = "window", feature = "3d"))]
 mod gi;
 #[cfg(feature = "window")]
 mod gpu;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod gpu3d;
+#[cfg(feature = "window")]
+mod gpu_textures;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod lights;
 #[cfg(feature = "window")]
@@ -58,6 +64,8 @@ pub(crate) mod texture_alpha;
 mod timer;
 #[cfg(feature = "window")]
 pub(crate) mod traffic;
+#[cfg(feature = "window")]
+mod views;
 
 pub use crate::sprite_material::{BlendMode, SpriteMaterial, SpriteMaterialDesc, SpriteShader};
 #[cfg(feature = "3d")]
@@ -103,6 +111,17 @@ pub use shader_status::{ShaderDiagnostic, ShaderKind, ShaderOutcome, ShaderStatu
 /// frame rate: if `gpu_ms` is close to the frame time, the GPU is the
 /// bottleneck (too many pixels or sprites); if neither is, the time goes
 /// into your systems or into waiting for the display.
+///
+/// ```
+/// # use ponko::prelude::*;
+/// fn check(ctx: &mut Ctx) {
+///     let stats: ponko::render::RenderStats = ctx.perf.render_stats();
+///     // Headless runs draw nothing: every count is zero and there is no GPU time.
+///     assert_eq!((stats.sprites, stats.draw_calls), (0, 0));
+///     assert_eq!(stats.gpu_ms, None);
+/// }
+/// # Game::new("t", 1, 1).system(check).run_headless(1, |_| {});
+/// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct RenderStats {
     /// Sprites drawn.
@@ -125,7 +144,7 @@ pub struct RenderStats {
     pub record_ms: f32,
     /// Of `cpu_ms`, the time handing the command buffers to the GPU, in ms.
     pub submit_ms: f32,
-    /// 3D models the camera draws (one per drawn [`Model`]).
+    /// 3D models the camera draws (one per drawn `Model`).
     pub instances: usize,
     /// Triangles the camera's passes draw (each once, though the depth
     /// prepass draws the solid ones a second time).
@@ -140,7 +159,7 @@ pub struct RenderStats {
     /// 3D pipeline variants built while drawing (crossfading level-of-detail
     /// models, buffer-driven instances), each the first time a frame needed
     /// it. Each one costs several milliseconds inside its frame; call
-    /// [`Graphics::warm_render_pipelines`](crate::gfx::Graphics::warm_render_pipelines)
+    /// `Graphics::warm_render_pipelines`
     /// while loading to build them up front. Always 0 without the `3d` feature.
     pub pipelines_built: usize,
     /// What the renderer sent to the GPU since the frame before: bytes
@@ -154,7 +173,7 @@ pub struct RenderStats {
     pub instance_batches: InstanceBatchStats,
 }
 
-/// How the instance batches ([`InstanceBatch`]) are culled and drawn:
+/// How the instance batches (`InstanceBatch`) are culled and drawn:
 /// [`RenderStats::instance_batches`].
 ///
 /// A batch is *GPU-driven* (culled per instance by one compute dispatch
@@ -192,7 +211,7 @@ pub struct InstanceBatchStats {
     /// Batches culled on the CPU by choice: below the measured crossover
     /// (CPU culling of a few cells costs less than the GPU path's fixed
     /// cost per batch), or because the game asked with
-    /// [`BatchCulling::PreferCpu`].
+    /// `BatchCulling::PreferCpu`.
     pub cpu_small: u32,
     /// Batches culled on the CPU because the device has no compute
     /// culling (WebGL2 and other devices below the baseline tier).
@@ -383,6 +402,8 @@ mod contact_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod coverage_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod debug_lines_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod draw_order_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod effect_shadow_render_test;
@@ -422,9 +443,19 @@ mod regression_render_test;
 mod regression_sequence_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod regression_stage;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod reverse_z_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod views2d_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod views_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod gltf_extensions_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod instance_cells_bench;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod instance_cells_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 pub(crate) mod render_test_support;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -436,6 +467,8 @@ mod shafts_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod single_sample_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod skeleton2d_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod skin_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod sprite_material_render_test;
@@ -445,6 +478,8 @@ mod ssr_render_test;
 mod static_batch_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod static_batch_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod sun_penumbra_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod target_effect_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -488,6 +523,9 @@ mod residency_render_test;
 mod asset_lifetime_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod long_run_render_test;
+
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod mesh_arena_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -509,6 +547,8 @@ pub use crate::three::{
 #[doc(hidden)]
 #[cfg(all(feature = "3d", any(test, feature = "bench-internals")))]
 pub use crate::three::{ExtractionBench, ExtractionSample};
+#[cfg(feature = "3d")]
+pub use crate::three::{InstanceCell, InstanceCellData};
 
 /// Shared additive JSON shape for the inspector and frame benchmarks.
 pub(crate) fn state_changes_json(changes: Option<[u32; 5]>) -> serde_json::Value {

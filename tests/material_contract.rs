@@ -34,11 +34,7 @@ fn material_features(ctx: &mut Ctx) {
 
 // ANCHOR: material_skin
 fn skinned_material(ctx: &mut Ctx) {
-    let skeleton = Skeleton::new(vec![Joint {
-        name: "root".into(),
-        parent: None,
-        rest: d3::Transform::default(),
-    }]);
+    let skeleton = Skeleton::new(vec![Joint::new("root", None).with_rest(d3::Transform::default())]);
     let mut data = MeshData::cube(1.0);
     data.joints = vec![[0; 4]; data.positions.len()];
     data.weights = vec![[1.0, 0.0, 0.0, 0.0]; data.positions.len()];
@@ -143,11 +139,7 @@ fn contract_errors_name_the_hook_rule_and_fix_at_the_user_line() {
 #[should_panic(expected = "skinned meshes cannot use persistent instance batches")]
 fn skinned_static_batches_explain_how_to_draw_a_pose() {
     Game::new("contract", 1, 1).run_headless(0, |ctx| {
-        let skeleton = Skeleton::new(vec![Joint {
-            name: "root".into(),
-            parent: None,
-            rest: d3::Transform::default(),
-        }]);
+        let skeleton = Skeleton::new(vec![Joint::new("root", None).with_rest(d3::Transform::default())]);
         let mut data = MeshData::cube(1.0);
         data.joints = vec![[0; 4]; data.positions.len()];
         data.weights = vec![[1.0, 0.0, 0.0, 0.0]; data.positions.len()];
@@ -162,11 +154,7 @@ fn skinned_static_batches_explain_how_to_draw_a_pose() {
 #[should_panic(expected = "skinned meshes cannot use GPU-buffer instances")]
 fn skinned_gpu_buffers_explain_how_to_draw_a_pose() {
     Game::new("contract", 1, 1).run_headless(0, |ctx| {
-        let skeleton = Skeleton::new(vec![Joint {
-            name: "root".into(),
-            parent: None,
-            rest: d3::Transform::default(),
-        }]);
+        let skeleton = Skeleton::new(vec![Joint::new("root", None).with_rest(d3::Transform::default())]);
         let mut data = MeshData::cube(1.0);
         data.joints = vec![[0; 4]; data.positions.len()];
         data.weights = vec![[1.0, 0.0, 0.0, 0.0]; data.positions.len()];

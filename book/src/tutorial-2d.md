@@ -11,9 +11,9 @@ covers the same features ([C and C++](c-cpp.md)), but this walkthrough has
 no C++ version yet.
 
 Every piece of code below is pulled from the finished game,
-[`examples/tutorial_2d`](https://github.com/ponkoengine/ponko/tree/main/examples/tutorial_2d)
+[`examples/tutorial_2d`](../../examples/tutorial_2d)
 in the engine's repository, which CI compiles and
-[`tests/tutorial_2d.rs`](https://github.com/ponkoengine/ponko/blob/main/tests/tutorial_2d.rs)
+[`tests/tutorial_2d.rs`](../../tests/tutorial_2d.rs)
 plays. If something doesn't work for you, compare with those files.
 
 The game is built in five steps, and each step is one
@@ -35,7 +35,7 @@ cargo run
 
 A window opens with an orange square you can move with the arrow keys.
 This tutorial needs Ponko 0.2; until it's released, make the project with
-`ponko new crab_cove --git https://github.com/ponkoengine/ponko`, which
+`ponko new crab_cove --git https://gitlab.com/ponkoengine/ponko`, which
 depends on the engine's `main` branch.
 
 The crab falls and collides, so turn on 2D physics in `Cargo.toml`:
@@ -49,7 +49,7 @@ ponko = { version = "0.2", features = ["physics"] }
 `features`.)
 
 **The art.** Copy the folder
-[`assets/tutorial_2d`](https://github.com/ponkoengine/ponko/tree/main/assets/tutorial_2d)
+[`assets/tutorial_2d`](../../assets/tutorial_2d)
 from the engine's repository into your project's `assets/`, so you have
 `assets/tutorial_2d/cove.tmx` and its neighbours: a level, its tileset
 (`cove.tsx` and `tiles.png`), the crab (`crab.png`) and two sounds
@@ -64,13 +64,17 @@ and `assets/settings.json`. Put this at the top of the empty `src/lib.rs`:
 {{#include ../../examples/tutorial_2d/game.rs:use_level}}
 ```
 
-`ponko::d2` holds the 2D names: `Transform`, `Sprite`, `RigidBody`,
-`Collider` and the tilemap types.
+The three lines are the whole import map of the game. `ponko::prelude`
+holds what every game needs (`Game`, `Ctx`, `World`, the math types such as
+`Vec2`, keys and gamepads, the UI, ...); `ponko::d2` holds the 2D names: `Transform`, `Sprite`,
+`RigidBody` and `Collider`; the level types live in their topic module,
+`ponko::tilemap` (here `LevelObject`). The same lines are at the top of
+`examples/tutorial_2d/game.rs`.
 
 ## Step 1: sprites and a level
 
-The whole game is a function that returns a `Game`. Here it is as it will
-look at the end; for now, add it with only the first plugin,
+The whole game is a function, `game() -> ConfiguredGame`. Here it is as it
+will look at the end; for now, add it with only the first plugin,
 `.plugin(Level)`, and add each other line when you reach its step:
 
 ```rust
@@ -78,7 +82,7 @@ look at the end; for now, add it with only the first plugin,
 ```
 
 Like the template's, it returns a `ConfiguredGame`, a game ready to
-`run()`: `.configured()` says the plugins hold all of its setup. So
+`run()` (a `Game` whose setup is finished): `.configured()` says the plugins hold all of its setup. So
 `src/main.rs` stays as the template wrote it, calling `game().run()` (or
 `run_headless` without a window), and the tests in
 [step 6](#step-6-test-it) add their settings to the same `game()`.
@@ -166,13 +170,13 @@ when the crab touches one:
   start touching ([Collisions](physics.md#collisions)). `touch` runs after
   the step (`sim_system`), reads the new events, and keeps the ones between
   the crab and a sensor.
-- A coin is despawned and counted, and `ctx.play_sound` plays its sound,
-  loaded once at startup with `ctx.load_sound` ([Sound](audio.md)).
+- A coin is despawned and counted, and `ctx.audio.play` plays its sound,
+  loaded once at startup with `ctx.audio.load` ([Sound](audio.md)).
 - The flag sends a `LevelDone` event of our own
   ([Events](events.md)): nothing here needs to know who reacts to it. Steps
   4 and 5 do. Then the level starts over.
 - Falling into the water (below the level) starts over too, and `hud` draws
-  the count with `ctx.draw_text`, in window pixels on top of the world.
+  the count with `ctx.gfx.draw_text`, in window pixels on top of the world.
 
 Add `.plugin(Pickups)` and play: coins chime and disappear, the flag plays a
 tune and puts you back at the start.
@@ -180,20 +184,15 @@ tune and puts you back at the start.
 ## Step 4: a menu
 
 A title screen with Play and Quit, made with the [retained UI](ui.md).
-Add the UI names to the `use` lines at the top:
-
-```rust
-{{#include ../../examples/tutorial_2d/game.rs:use_menu}}
-```
-
-and the plugin:
+Its names (`Ui`, `UiEvent`, `UiLayout`) come with the prelude, so the plugin
+is all you add:
 
 ```rust
 {{#include ../../examples/tutorial_2d/game.rs:menu}}
 ```
 
 - The setup builds the screen once: a centered root with a title, two
-  labels and two buttons, laid out in a column. `push_screen` shows it. The
+  labels and two buttons, laid out in a column. `push_modeless` shows it. The
   nodes get **names** (`menu.play`), which tests and tools use to find and
   click them.
 - `.focused()` makes Play the node the screen opens on, every time it is
@@ -271,7 +270,7 @@ Saving and loading, with the storage in a folder of the test's own
 The `play_moved` helper it uses puts the crab at given places on given
 ticks; it and the other tests (walls, jumping, coins, the flag, the water,
 the menu) are in
-[`tests/tutorial_2d.rs`](https://github.com/ponkoengine/ponko/blob/main/tests/tutorial_2d.rs).
+[`tests/tutorial_2d.rs`](../../tests/tutorial_2d.rs).
 `cargo test` runs them all in a fraction of a second.
 
 ## Step 7: package it, and put it on the web

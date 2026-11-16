@@ -62,13 +62,27 @@ ctx.gfx.draw_ex(crab, vec2(200.0, 100.0), params);
 </div>
 </div>
 
-Coordinates are world units, which are window pixels (`(0, 0)` at the
-top-left) until you move the camera; see [Camera, text and UI](camera-ui.md).
+## Coordinate spaces
 
-`DrawParams` (and `TextParams` for text) start from `default()` and change
-what they need with `with_*` methods (`with_scale`, `with_rotation`,
-`with_color`, `with_z`, `with_pivot`, `with_screen`, `with_region`). They are
-`#[non_exhaustive]`, so they can't be written as struct literals.
+Sprite positions use world units through the 2D camera by default. Before
+moving or zooming the camera, these coincide with window pixels, with `(0, 0)`
+at the top-left. For a HUD, use
+`DrawParams::default().with_space(DrawSpace::Screen)`: positions are window
+pixels, ignore the camera, and draw over the world. `DrawSpace::World` restores
+the default. `with_screen(bool)` is deprecated in favor of these named choices.
+The same `DrawSpace` type (`ponko::debug::DrawSpace` is the same type) picks
+the space of [debug shapes](debug-draw.md) with `.space(..)`.
+
+Immediate text (`draw_text` / `TextParams`) always uses window pixels; it has
+no world-space selector. World-space 3D text uses the separate `Text3D` API.
+See [Camera, text and UI](camera-ui.md) for camera controls.
+
+`DrawParams` and `TextParams` start from `default()` and change what they need
+with `with_*` methods. They are `#[non_exhaustive]`, so external code cannot
+use struct literals. C uses `ponko_draw_params_with_space(params,
+PONKO_DRAW_SPACE_SCREEN)`; C++ uses
+`ponko::with_space(params, ponko::draw_space::screen)`. Existing descriptor
+layouts and the `screen` field are unchanged.
 
 ## Textures
 
@@ -502,7 +516,9 @@ let bricks = ctx.gfx.load_texture("bricks.ktx2");
 `ponko textures` makes them from your images, once, at build time. It
 converts every PNG and JPEG under a folder (default `assets`) into a
 `.ktx2` file next to it, with its mipmaps, and skips those already up to
-date:
+date (to keep loading `bricks.png` and ship it compressed instead, let
+[`ponko cook`](packaging.md#cooking-assets-ponko-cook) or `ponko package`
+cook it under its own name):
 
 ```sh
 ponko textures assets

@@ -178,6 +178,7 @@ fn built_in_systems_are_removed_by_their_constants() {
             PONKO_SYSTEM_UPDATE_ANIMATORS,
             PONKO_SYSTEM_UPDATE_PARTICLES,
             PONKO_SYSTEM_UPDATE_AUDIO3D,
+            PONKO_SYSTEM_UPDATE_SKELETONS2D,
         ] {
             assert_eq!(ponko_game_remove(g, id), PONKO_OK);
         }
@@ -205,6 +206,7 @@ fn built_in_systems_are_removed_by_their_constants() {
         (PONKO_SYSTEM_UPDATE_PARTICLES, Systems::UPDATE_PARTICLES),
         (PONKO_SYSTEM_UPDATE_AUDIO3D, Systems::UPDATE_AUDIO3D),
         (PONKO_SYSTEM_DRAW_PARTICLES, Systems::DRAW_PARTICLES),
+        (PONKO_SYSTEM_UPDATE_SKELETONS2D, Systems::UPDATE_SKELETONS2D),
     ];
     for (c, rust) in pairs {
         assert_eq!(c, rust.to_bits());

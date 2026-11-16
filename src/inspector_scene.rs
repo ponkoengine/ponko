@@ -147,7 +147,7 @@ fn label(ctx: &Ctx, e: Entity) -> String {
                 .filter(|n| {
                     !matches!(
                         n.as_str(),
-                        "Transform2D" | "Transform3D" | "Attached" | "Attached3D" | "PrefabParts"
+                        "Transform2D" | "Transform3D" | "Attached" | "Attached3D" | "PrefabParts" | "Children"
                     )
                 })
                 .take(3)
@@ -167,7 +167,7 @@ impl Panels {
     pub(super) fn pick_any(&self, ctx: &mut Ctx, at: Vec2) -> Option<Entity> {
         #[cfg(feature = "3d")]
         if self.scene.active3d {
-            let ray = crate::edit3d::Ray::from_screen(&ctx.scene3d.camera, at);
+            let ray = crate::edit3d::Ray::from_screen(ctx.scene3d.camera_at(at), at);
             return crate::edit3d::pick(&ctx.world, &ctx.gfx.assets3d, &ray, &[]).map(|h| h.entity);
         }
         super::pick(ctx, at)
@@ -923,6 +923,16 @@ mod tests {
         assert!(p.error.as_deref().is_some_and(|e| e.contains("loop")), "{:?}", p.error);
         p.reparent(&mut ctx, child, None);
         assert!(editor::hierarchy(&ctx.world)[1].parent.is_none());
+    }
+
+    #[test]
+    fn a_parents_label_leaves_out_its_children_list() {
+        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(1280.0, 720.0));
+        let parent = ctx.world.spawn((crate::d2::Transform::default(),));
+        let child = ctx.world.spawn((crate::d2::Transform::default(),));
+        Panels::default().reparent(&mut ctx, child, Some(parent));
+        assert!(ctx.world.get::<crate::hierarchy::Children>(parent).is_some());
+        assert_eq!(label(&ctx, parent), "entity");
     }
 
     #[cfg(feature = "3d")]

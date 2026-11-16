@@ -299,19 +299,10 @@ fn opaque_color(in: VertexOut, front: bool, dp_x: vec3<f32>, dp_y: vec3<f32>) ->
     let screen = textureLoad(scene_color_texture, ao_at, 0);
     s.occlusion *= 1.0 - screen.r;
     contact_shadow = screen.g;
-    // Blue marks screen-space reflections in a second level, at half size.
+    // Blue marks screen-space reflections in a second level, at half size;
+    // alpha is their cone's spread (see ssr.wgsl).
     if screen.b > 0.5 && s.roughness < 0.7 {
-        let size = vec2<f32>(textureDimensions(scene_color_texture));
-        let last = min(5.0, floor(log2(max(size.x, size.y))));
-        // Fixed screen-space footprint: up to 32 full-size pixels, blended
-        // between the two nearest levels.
-        let lod = clamp(1.0 + max(s.roughness - 0.05, 0.0) * 9.0, 1.0, last);
-        let low = i32(floor(lod));
-        let uv = s.screen / size;
-        var filtered = reflection_level(uv, low);
-        if fract(lod) > 0.0 && low < i32(last) {
-            filtered = mix(filtered, reflection_level(uv, low + 1), fract(lod));
-        }
+        let filtered = reflection_at(s.screen, s.roughness, screen.a);
         screen_reflection = vec4<f32>(filtered.rgb / max(filtered.a, 0.00001), filtered.a);
     }
     return vec4<f32>(fog(shade(s), s.world), 1.0);
@@ -438,6 +429,46 @@ fn fs_velocity(in: VelocityOut) -> @location(0) vec2<f32> {
     let a = in.rigid.xy / in.rigid.w;
     let b = in.before.xy / in.before.w;
     return vec2<f32>((b.x - a.x) * 0.5, (a.y - b.y) * 0.5);
+}
+
+// The tangent of the cone around the mirror direction that holds most of
+// the light a surface of `roughness` reflects: the angle that holds 0.244
+// of a Phong lobe of the specular power that matches its GGX lobe (alpha,
+// roughness squared). 0.001 for a mirror's 0.03, 0.05 at 0.2, 0.19 at 0.4.
+fn reflection_cone(roughness: f32) -> f32 {
+    let a = roughness * roughness;
+    let power = 2.0 / max(a * a, 0.000001) - 2.0;
+    let c = pow(0.244, 1.0 / (power + 1.0));
+    return sqrt(max(1.0 - c * c, 0.0)) / c;
+}
+
+// The screen-space reflections at full-size pixel `pixel` of a surface of
+// `roughness` whose ray's cone spreads by `spread` (see ssr.wgsl):
+// confidence-premultiplied radiance, blurred over the cone's footprint,
+// its tangent times the spread, in full-size pixels. A reflection that
+// starts close to what it shows stays sharp on a rough surface; one that
+// travels far blurs. A pixel of level n is 2^n full-size pixels wide.
+fn reflection_at(pixel: vec2<f32>, roughness: f32, spread: f32) -> vec4<f32> {
+    let size = vec2<f32>(textureDimensions(scene_color_texture));
+    let last = min(5.0, floor(log2(max(size.x, size.y))));
+    let footprint = reflection_cone(roughness) * spread;
+    let lod = clamp(log2(max(footprint, 1.0)), 1.0, last);
+    let uv = pixel / size;
+    if lod < 2.0 {
+        // Footprints narrower than a pixel of level 2: four taps of the
+        // trace's own level, from one point apart to one of its pixels, so
+        // the blur grows smoothly instead of mixing in level 2, which
+        // spreads a thin bright detail over four full-size pixels at once.
+        let o = (lod - 1.0) * 0.5 / vec2<f32>(textureDimensions(scene_color_texture, 1));
+        return 0.25 * (reflection_level(uv + o, 1) + reflection_level(uv - o, 1)
+            + reflection_level(uv + vec2<f32>(o.x, -o.y), 1) + reflection_level(uv + vec2<f32>(-o.x, o.y), 1));
+    }
+    let low = i32(floor(lod));
+    var filtered = reflection_level(uv, low);
+    if fract(lod) > 0.0 && low < i32(last) {
+        filtered = mix(filtered, reflection_level(uv, low + 1), fract(lod));
+    }
+    return filtered;
 }
 
 // Reflection mips contain confidence-premultiplied radiance. Material

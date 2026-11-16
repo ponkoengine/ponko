@@ -111,7 +111,7 @@ impl Text {
             }
         };
         let found = found.filter(|&f| self.has_font(f))?;
-        let i = font.0 as usize;
+        let i = (font.0 & crate::handle::INDEX_MASK) as usize;
         if self.fallbacks.len() <= i {
             self.fallbacks.resize_with(i + 1, Vec::new);
         }

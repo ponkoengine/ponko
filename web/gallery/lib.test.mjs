@@ -129,8 +129,9 @@ test("the run command names the example's features", () => {
   assert.equal(runCommand(entry({ features: ["physics3d", "x"] })), "cargo run --release --example battle --features physics3d,x");
 });
 
-test("the README, the guide and the release notes link the gallery", () => {
-  assert.ok(readFileSync(join(ROOT, "README.md"), "utf8").includes(GALLERY_URL), "README.md");
-  assert.ok(readFileSync(join(ROOT, "book", "src", "web.md"), "utf8").includes(GALLERY_URL), "book/src/web.md");
+test("the README and the guide point to the gallery's chapter and the release notes link the gallery", () => {
+  // The docs link the guide's web chapter, not the gallery's host (scripts/project-url.py keeps old hosts out).
+  assert.ok(readFileSync(join(ROOT, "README.md"), "utf8").includes("https://ponko.dev/guide/web.html"), "README.md");
+  assert.ok(readFileSync(join(ROOT, "book", "src", "web.md"), "utf8").includes("web/gallery/"), "book/src/web.md");
   assert.ok(readFileSync(join(ROOT, "scripts", "release-check.py"), "utf8").includes(GALLERY_URL), "scripts/release-check.py");
 });

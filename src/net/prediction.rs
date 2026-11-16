@@ -151,8 +151,13 @@ impl<S: Clone + PartialEq, I> Prediction<S, I> {
 
     /// Predicting from `state`, keeping up to `capacity` unconfirmed inputs
     /// (more than a round trip's worth of ticks; when the server stops
-    /// answering, the oldest are dropped). Panics unless `capacity` is
-    /// 1..=32768 (half the sequence range, so numbers stay unambiguous).
+    /// answering, the oldest are dropped).
+    ///
+    /// # Panics
+    ///
+    /// Unless `capacity` is 1..=32768 (half the sequence range, so numbers
+    /// stay unambiguous).
+    ///
     /// ```
     /// let p = ponko::net::Prediction::<f32, u8>::with_capacity(0.0, 64);
     /// assert_eq!(p.unacked().len(), 0);
@@ -425,8 +430,12 @@ impl<I: Clone> InputQueue<I> {
     }
 
     /// An empty queue holding up to `capacity` inputs: when a client sends
-    /// faster than the server applies, the oldest are dropped. Panics
-    /// unless `capacity` is 1..=32768.
+    /// faster than the server applies, the oldest are dropped.
+    ///
+    /// # Panics
+    ///
+    /// Unless `capacity` is 1..=32768.
+    ///
     /// ```
     /// let mut q = ponko::net::InputQueue::with_capacity(2);
     /// for seq in 0..3 { q.push(seq, ()); }
@@ -447,6 +456,16 @@ impl<I: Clone> InputQueue<I> {
     }
 
     /// Queues input `seq` (in order, whatever order packets came in).
+    ///
+    /// ```
+    /// use ponko::net::{InputPush, InputQueue};
+    /// let mut queue = InputQueue::new();
+    /// assert_eq!(queue.push(0, "left"), InputPush::Added);
+    /// assert_eq!(queue.push(0, "left"), InputPush::Duplicate); // a resent packet
+    /// assert_eq!(queue.push(1, "right"), InputPush::Added);
+    /// assert_eq!(queue.pop(), Some((0, "left")));
+    /// assert_eq!(queue.push(0, "left"), InputPush::Late); // already applied
+    /// ```
     pub fn push(&mut self, seq: u16, input: I) -> InputPush {
         if self.last.as_ref().is_some_and(|(last, _)| seq_diff(seq, *last) <= 0) {
             self.stats.late += 1;
@@ -477,6 +496,16 @@ impl<I: Clone> InputQueue<I> {
 
     /// Takes the oldest queued input, if any. Inputs that never arrived
     /// before it are skipped (counted in [`InputStats::skipped`]).
+    ///
+    /// ```
+    /// use ponko::net::InputQueue;
+    /// let mut queue = InputQueue::new();
+    /// queue.push(1, 'b'); // packets arrive out of order
+    /// queue.push(0, 'a');
+    /// assert_eq!(queue.pop(), Some((0, 'a')));
+    /// assert_eq!(queue.pop(), Some((1, 'b')));
+    /// assert_eq!(queue.pop(), None);
+    /// ```
     pub fn pop(&mut self) -> Option<(u16, I)> {
         let (seq, input) = self.queued.pop_front()?;
         self.count_skipped(seq);

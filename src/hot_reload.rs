@@ -58,6 +58,9 @@ pub(crate) enum Asset {
     SkyShader(u32),
     /// A file of a level (`Ctx::spawn_level`); the watched name is the level's path.
     Level,
+    /// A glTF file spawned as a scene (`GltfRoot::spawn`); the watched name is its path.
+    #[cfg(feature = "3d")]
+    GltfScene,
     /// A mixer file (`Audio::load_mixer`), applied again whole.
     Mixer,
 }

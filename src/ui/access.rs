@@ -21,7 +21,23 @@ use taffy::prelude::Display;
 /// use ponko::prelude::*;
 /// assert_eq!(ponko::ui::UiRole::of(ponko::ui::UiWidget::Toggle), ponko::ui::UiRole::CheckBox);
 /// ```
+///
+/// New widgets bring new roles in minor releases, so the enum is
+/// `#[non_exhaustive]`: a `match` on it needs a `_` arm, and
+/// [`UiRole::as_str`] gives every role, old or new, a stable text.
+/// ```
+/// use ponko::ui::UiRole;
+/// fn announce(role: UiRole) -> &'static str {
+///     match role {
+///         UiRole::Button => "press it",
+///         UiRole::Slider => "slide it",
+///         _ => role.as_str(),
+///     }
+/// }
+/// assert_eq!(announce(UiRole::Label), "label");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum UiRole {
     /// A container: a panel or a non-modal screen root.
     Group,
@@ -87,11 +103,15 @@ impl UiRole {
 /// let mut ui = ponko::ui::Ui::default();
 /// let root = ui.root().id();
 /// let music = ui.toggle(root, "Music").value(1.0).id();
-/// ui.push_screen(root, false);
+/// ui.push_modeless(root);
 /// ui.layout(vec2(800.0, 600.0));
 /// assert_eq!(ui.accessibility_tree().get(music).unwrap().value, ponko::ui::UiAccessValue::Checked(true));
 /// ```
+///
+/// New roles may bring new kinds of value in minor releases, so the enum is
+/// `#[non_exhaustive]`: a `match` on it needs a `_` arm.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum UiAccessValue {
     /// No value (groups, labels, buttons, images).
     None,
@@ -144,7 +164,7 @@ impl UiLive {
 /// let mut ui = ponko::ui::Ui::default();
 /// let root = ui.root().id();
 /// let play = ui.button(root, "Play").id();
-/// ui.push_screen(root, false);
+/// ui.push_modeless(root);
 /// ui.layout(vec2(800.0, 600.0));
 /// let tree = ui.accessibility_tree();
 /// let node = tree.get(play).unwrap();
@@ -204,7 +224,7 @@ pub struct UiAccessNode {
 /// let root = ui.root().layout(ponko::ui::UiLayout::fill()).id();
 /// ui.button(root, "Play");
 /// ui.slider(root).layout(ponko::ui::UiLayout::row(20.0)).value(0.25).accessible_name("Volume");
-/// ui.push_screen(root, false);
+/// ui.push_modeless(root);
 /// ui.layout(vec2(800.0, 600.0));
 /// assert_eq!(
 ///     ui.accessibility_tree().to_string(),
@@ -378,7 +398,7 @@ impl Ui {
     /// let root = ui.root().id();
     /// let status = ui.label(root, "3 lives").id();
     /// ui.set_live_region(status, ponko::ui::UiLive::Assertive);
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// ui.layout(vec2(800.0, 600.0));
     /// assert_eq!(ui.accessibility_tree().get(status).unwrap().live, ponko::ui::UiLive::Assertive);
     /// ```
@@ -405,7 +425,7 @@ impl Ui {
     /// let mut ui = ponko::ui::Ui::default();
     /// let root = ui.root().id();
     /// let play = ui.button(root, "Play").id();
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// ui.frame(vec2(800.0, 600.0), &ponko::ui::UiInput { next: true, ..Default::default() });
     /// assert_eq!(ui.accessibility_tree().focus(), Some(play));
     /// ```
@@ -513,7 +533,7 @@ impl Ui {
     /// let mut ui = ponko::ui::Ui::default();
     /// let root = ui.root().layout(ponko::ui::UiLayout::fill()).id();
     /// let play = ui.button(root, "Play").id();
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// ui.layout(vec2(800.0, 600.0));
     /// ui.push_access_action(UiAccessAction::Activate(play));
     /// ui.frame(vec2(800.0, 600.0), &UiInput::default());
@@ -592,13 +612,18 @@ pub(super) const SLIDER_STEP: f32 = 0.05;
 /// let mut ui = ponko::ui::Ui::default();
 /// let root = ui.root().layout(ponko::ui::UiLayout::fill()).id();
 /// let volume = ui.slider(root).layout(ponko::ui::UiLayout::row(20.0)).value(0.5).id();
-/// ui.push_screen(root, false);
+/// ui.push_modeless(root);
 /// ui.layout(vec2(800.0, 600.0));
 /// ui.push_access_action(UiAccessAction::Increment(volume));
 /// ui.frame(vec2(800.0, 600.0), &UiInput::default());
 /// assert!((ui.value(volume).unwrap() - 0.55).abs() < 1e-6);
 /// ```
+///
+/// Assistive technology can ask for more than these (scroll, expand, ...),
+/// and later minor releases may add them, so the enum is
+/// `#[non_exhaustive]`: a `match` on it needs a `_` arm.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum UiAccessAction {
     /// Move keyboard focus to the node.
     Focus(UiId),
@@ -719,7 +744,7 @@ impl Seen<'_> {
 /// let mut ui = ponko::ui::Ui::default();
 /// let root = ui.root().layout(ponko::ui::UiLayout::fill()).id();
 /// let play = ui.button(root, "Play").id();
-/// ui.push_screen(root, false);
+/// ui.push_modeless(root);
 /// ui.layout(vec2(800.0, 600.0));
 /// let mut tracker = ponko::ui::UiAccessTracker::new();
 /// tracker.update(&ui);
@@ -756,7 +781,7 @@ pub struct UiAccessChanges {
 /// let mut ui = ponko::ui::Ui::default();
 /// let root = ui.root().layout(ponko::ui::UiLayout::fill()).id();
 /// ui.button(root, "Play");
-/// ui.push_screen(root, false);
+/// ui.push_modeless(root);
 /// ui.layout(vec2(800.0, 600.0));
 /// let mut tracker = ponko::ui::UiAccessTracker::new();
 /// assert_eq!(tracker.update(&ui).unwrap().changed.len(), 2, "the first look reports everything");
@@ -795,7 +820,7 @@ impl UiAccessTracker {
     /// use ponko::prelude::*;
     /// let mut ui = ponko::ui::Ui::default();
     /// let root = ui.root().id();
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// ui.layout(vec2(800.0, 600.0));
     /// let mut tracker = ponko::ui::UiAccessTracker::new();
     /// tracker.update(&ui);
@@ -819,7 +844,7 @@ impl UiAccessTracker {
     /// let mut ui = ponko::ui::Ui::default();
     /// let root = ui.root().layout(ponko::ui::UiLayout::fill()).id();
     /// let hint = ui.label(root, "Press start").id();
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// ui.layout(vec2(800.0, 600.0));
     /// let mut tracker = ponko::ui::UiAccessTracker::new();
     /// tracker.update(&ui);

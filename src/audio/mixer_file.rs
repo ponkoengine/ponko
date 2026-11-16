@@ -87,11 +87,15 @@ impl Audio {
         self.try_load_mixer(path).unwrap_or_else(|e| panic!("{e}"));
     }
 
-    /// [`load_mixer`](Self::load_mixer) with errors as values:
+    /// [`load_mixer`](Self::load_mixer) with errors as values.
+    ///
+    /// # Errors
+    ///
     /// [`NotFound`](ErrorKind::NotFound), [`Io`](ErrorKind::Io),
     /// [`Json`](ErrorKind::Json) for a file that doesn't parse, or
     /// [`Invalid`](ErrorKind::Invalid) for one that names a bus it doesn't
     /// define, loops its parents, or breaks a limit.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
@@ -113,6 +117,13 @@ impl Audio {
 
     /// Applies a mixer definition held in a string, in the format of
     /// [`load_mixer`](Self::load_mixer)'s file. On an error nothing changes.
+    ///
+    /// # Errors
+    ///
+    /// [`Json`](ErrorKind::Json) for text that doesn't parse, or
+    /// [`Invalid`](ErrorKind::Invalid) for a definition that names a bus it
+    /// doesn't define, loops its parents, or breaks a limit.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {

@@ -122,6 +122,14 @@ let before = ctx.live_counts();
 assert_eq!(ctx.live_counts(), before);
 ```
 
+Textures, render targets, sounds, fonts, meshes, GPU buffers, collision
+meshes and instance cells give a freed slot out again under a new id, so a
+game that makes and frees them all session keeps tables the size of the
+most it held at once; the freed handle stays dead. Materials and the other
+kinds never give out an id twice, and each one ever made keeps a small
+table entry. "Very long sessions" in
+[the simulation clock](sim-clock.md#very-long-sessions) has the numbers.
+
 ## Finding a leak
 
 `ctx.asset_inventory()` counts the same handles by class with estimated

@@ -243,6 +243,181 @@ Try it: `cargo run --example lockstep -- host 7777` in one terminal and
 `cargo run --example lockstep -- join 127.0.0.1:7777` in another.
 
 
+## Rollback
+
+Lockstep waits: a tick runs once every player's input for it is in, and
+input delay hides the round trip. That suits strategy games; a fighting or
+racing game wants the press to show on the next frame whatever the ping.
+**Rollback** (GGPO-style) runs every tick at once: inputs that haven't
+arrived are **predicted** (each player keeps pressing what they pressed
+last), and when a real input differs, the game **loads** the state saved
+before that tick and **re-simulates** the ticks since with the real
+inputs. It costs a save every tick and a few extra ticks when a guess was
+wrong, so it fits games whose state is small and whose tick is cheap.
+
+`ponko::net::Rollback` is the session: input delay, prediction, the saved
+states, when to roll back, a stall when a peer falls too far behind, and
+the packets that carry inputs between peers. The game implements
+`RollbackGame`: save and load **its own** state, and advance one tick from
+every player's input. What the state holds is up to the game; here, an ECS
+world whose bodies are copied component by component:
+
+```rust
+use ponko::net::{Rollback, RollbackGame};
+use serde::{Deserialize, Serialize};
+
+#[derive(Component, Clone, Copy)]
+struct Body { pos: Vec2, vel: Vec2 }
+
+/// One player's input for one tick. `Default` is "nothing pressed".
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
+struct Pad { x: i8, jump: bool }
+
+struct Match { world: World, tick: u64 }
+
+/// What a save holds: every body, and the tick.
+#[derive(Default)]
+struct Saved { tick: u64, bodies: Vec<(Entity, Body)> }
+
+impl RollbackGame<Pad> for Match {
+    type State = Saved;
+    fn save(&mut self, into: &mut Saved) {
+        into.tick = self.tick;
+        into.bodies.clear(); // reuses the buffer: no allocation per tick
+        into.bodies.extend(self.world.query::<(Entity, &Body)>().iter().map(|(e, b)| (e, *b)));
+    }
+    fn load(&mut self, from: &Saved) {
+        self.tick = from.tick;
+        for &(e, b) in &from.bodies {
+            *self.world.get_mut::<Body>(e).unwrap() = b;
+        }
+    }
+    fn advance(&mut self, inputs: &[Pad]) {
+        // Everything a tick reads comes from the state and `inputs`; the
+        // randomness is seeded by the tick, so a re-simulation repeats it.
+        let mut rng = Rng::new(self.tick);
+#         let _ = (inputs, rng.u64());
+        self.tick += 1;
+    }
+}
+
+# let mut world = World::new();
+# let mut game = Match { world, tick: 0 };
+# let pressed = Pad::default();
+# fn send_to_peers(_: &[u8]) {}
+# let received: Vec<Vec<u8>> = Vec::new();
+// Player 0 of 2: two ticks of input delay, at most 8 ticks predicted.
+let mut session = Rollback::new(2, 0).input_delay(2).max_prediction(8);
+// Every fixed tick: what arrived, the tick, and a packet out.
+for packet in &received {
+    session.receive(packet);
+}
+session.advance(&mut game, pressed);
+send_to_peers(session.packet());
+```
+
+- **Packets:** `packet()` is one datagram (at most 1,400 bytes) for every
+  other peer; send it each tick over any unreliable transport, such as
+  [messages](#application-messages-rust) on `Lane::Unreliable`. It repeats
+  every input the peers haven't acknowledged, so a lost packet costs only
+  bytes. `receive` takes theirs, in any order, duplicates included, and
+  ignores packets from a session with other settings.
+- **Input delay** (default 2 ticks, at most 16): input given now is used
+  that many ticks later on every peer. Two ticks make a 33 ms round trip
+  invisible at 60 Hz; 0 rolls back every time an input changes. Every
+  peer must use the same delay.
+- **Prediction window** (`max_prediction`, default 8, at most 32): a peer
+  runs at most that many ticks past the last tick it has everyone's input
+  for, then `advance` returns `Advance::Stalled` until packets come. It is
+  also the deepest rollback, so the worst tick costs one load and
+  `max_prediction + 1` saves and ticks.
+- **Desyncs:** give `RollbackGame::checksum` a hash of a saved state and the
+  peers compare it every `checksum_every` confirmed ticks (default 60);
+  `desync()` names the first tick and player that differ.
+- `stats()` counts ticks, predicted ticks, rollbacks, re-simulated ticks,
+  the deepest rollback, stalls and bytes sent; `confirmed_frame()` is the
+  last tick that will never be rolled back.
+- **Free when unused:** nothing runs unless a game makes a `Rollback`: no
+  thread, no socket, no work in the engine's loop. The game calls it from
+  its own fixed tick.
+
+`tests/net_rollback.rs` plays two and four peers over a scripted network
+with 4–8 ticks of latency (so packets reorder), 10% loss and duplicates:
+every peer ends in exactly the world an offline run with the same inputs
+reaches, and the confirmed checksums agree on every tick.
+
+### What a rollback must capture
+
+Everything a tick reads that an earlier tick wrote. In this engine:
+
+| State | Must the game save it? | Can it? |
+|---|---|---|
+| The tick | Yes: it seeds the randomness | A field in the state |
+| `ctx.random()` | No: its numbers come from (seed, tick, system, entity), so a re-simulated tick draws the same ones | — |
+| An `Rng` the game keeps | Yes | `Rng` is `Clone` |
+| Components and resources | Those that change | Copy them, as above; `World::save` / `World::load` work but cost far more (below) |
+| Spawned and despawned entities | Yes, if the tick spawns | Not through `World::load`: it resets the entity allocator, so the next spawn can get another id than on a peer that didn't roll back (`a_world_load_does_not_restore_which_ids_new_spawns_get`). Keep a fixed pool, or ids of your own |
+| 2D physics (rapier) | Yes: bodies, colliders, contacts, islands, the broad phase | Yes for rapier itself: every part is `Clone`, and a restored copy steps bit for bit like the original (checked by the benchmark). `ctx.physics` doesn't expose it yet, so a rollback game steps its own physics for now |
+| Events | Only those read in a later tick than they were sent | Not generically (the queues are type-erased); keep such events in the state |
+| Timers and cooldowns | Yes | Fields or components in the state |
+| Sounds and effects | No: they are output | Play them only for ticks that are confirmed, or remember (tick, what) and skip repeats |
+| Derived data rebuilt every tick (the spatial grid) | No | — |
+
+### What it costs
+
+`cargo run --release -p ponko_bench -- rollback/` on an Apple M4 Max
+(14 cores), three runs while other builds kept it busy (load average
+60–150): the fastest run, with the range of medians where they differ
+much. A "tick" is the test's game (players pushing a crowd); physics is a
+pile of 10 px boxes in rapier that has settled for a second.
+
+| Per operation (ms) | 100 | 1,000 | 10,000 |
+|---|---|---|---|
+| Typed copy, save | < 0.001 | 0.001 | 0.016 |
+| Typed copy, load | 0.001 | 0.006 | 0.058 |
+| `World::save` (JSON) | 0.08 | 0.66 (5–29) | 7.9 (33–42) |
+| `World::load` (JSON) | 0.03 | 0.29 | 3.4 |
+| One tick of the game | < 0.001 | 0.001 | 0.010 |
+| Rapier state, save (clone) | 0.039 | 0.43 | 17 (33–82) |
+| Rapier state, load | 0.038 | 0.42 | 7.3 (7.5–16) |
+| One rapier step | 0.020 | 0.21 | 9.8 (12–36) |
+
+The worst tick is one load plus `max_prediction + 1` saves and ticks;
+with the default window of 8:
+
+- **Without physics, typed copies:** 10,000 entities, about 0.3 ms. A
+  whole two-peer session of 300 ticks with 1,000 entities over a 4–8 tick,
+  10%-loss link took 4.9 ms for both peers (about 2.5 ms each) against
+  0.38 ms for one offline run: 475 ticks re-simulated across both peers,
+  and a save every tick.
+- **`World::save` and `World::load`:** 1,000 entities already take 6 ms in
+  the best case (9 saves of 0.66 ms) and far more at the median, and
+  allocate about 21,000 times per save; one save of 10,000 entities takes
+  8 to 40 ms. Too slow for every tick, and they don't restore entity ids
+  (above).
+- **With 2D physics:** 1,000 bodies, about 6 ms (a third of a 60 Hz
+  frame); 100 bodies, under 1 ms. At 10,000 bodies one step takes at
+  least 10 ms and one save at least 17 ms, so a single tick fills a 60 Hz
+  frame and there is no time to re-simulate.
+
+### The decision
+
+**Shipped, limited:** `Rollback` and `RollbackGame`, for games that own a
+small state: a few players and up to thousands of plain entities, or up to
+about a thousand bodies of their own rapier world. **Not shipped:**
+rolling back a whole `Game` (every component, `ctx.physics`, events) from
+the engine's loop. The only whole-world snapshot, `World::save`, is
+50 to several hundred times slower than a typed copy and doesn't keep
+entity ids; the engine's services (the physics links, event queues) have
+no snapshot; and the loop can't re-run simulation systems on demand. That
+needs a typed world snapshot (a copy of the component columns and the
+entity allocator) and a save and load for `ctx.physics` first.
+
+Lockstep stays the choice for big simulations (its cost doesn't grow with
+the world), and client prediction for server-authoritative games.
+`Rollback` is Rust-only: it is generic over the game's own input and state
+types, which C and C++ can't name.
+
 ## Which transport
 
 Everything networking is behind `ctx.net` (and in the `ponko::net` module):
@@ -252,6 +427,7 @@ Everything networking is behind `ctx.net` (and in the `ponko::net` module):
 | Lockstep (above) | Deterministic simulations with 2–8 players: only inputs cross the network | `Game::lockstep(net)`, then `ctx.net.set_input` and `ctx.net.input` (`ctx.net.lockstep`) |
 | [Messages](#application-messages-rust) | Everything else: your own packets on reliable and unreliable lanes | `Game::messages(endpoint)`, then `ctx.net.messages` |
 | [Snapshots](#replicating-state-over-messages) | Server-authoritative worlds on top of messages | `ctx.net.snapshots` and `ctx.net.interest` |
+| [Rollback](#rollback) | Small deterministic games that must answer at once (fighting, racing): predict, roll back, re-simulate | `Rollback::new(players, me)`, a `RollbackGame`, packets over messages |
 
 Lockstep and messages are independent and can run side by side. A
 single-player game has an offline lockstep session and nothing else.
@@ -721,8 +897,43 @@ and the client predicts and replays it with that call. Limits:
   numbers and fixed tick. Different builds or platforms may round
   differently (feature `physics-determinism` makes the physics agree);
   then corrections are tiny and smoothed rather than absent.
-- Prediction is Rust-only for now: the types are generic over the game's
-  own state and input, which C and C++ can't name.
+
+**From C and C++.** The state and the input are plain bytes there: a
+`ponko::prediction<State, Input>` takes any trivially copyable types, and a
+step that is any callable `void(State&, const Input&)`. The server keeps a
+`ponko::input_queue<Input>` per client.
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:native_prediction}}
+```
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:native_prediction_loop}}
+```
+
+- **Copies:** the state and every input are copied in and out; nothing
+  keeps a pointer to yours. States are compared **byte for byte**, so give
+  the state no padding and make the step produce the same bytes on both
+  sides (fixed point, or rounded floats).
+- **Replay is deterministic:** a correction calls the same step with the
+  stored inputs, oldest first, so the same server state and inputs give the
+  same result every time.
+- **A step that throws** stops the call: the remaining replay steps are
+  skipped, the exception comes out of `predict` or `reconcile`, and the
+  state is whatever the finished steps left. Call `reset` with a state you
+  trust before predicting again. The step must not call its own prediction.
+- **Capacity** is 256 unconfirmed inputs by default (`prediction(state,
+  capacity)`, at most 32768); `unacked(seqs, inputs, n)` copies them without
+  allocating, and a steady predict-and-reconcile loop allocates nothing.
+- `Smoothing` stays Rust-only: fade the drawn offset from `*r.before`
+  yourself.
+
+C has the same thing as `ponko_prediction_new` (state size, input size,
+capacity), `ponko_prediction_predict` and `ponko_prediction_reconcile` with
+a `PonkoPredictStepFn` (it returns `false` to stop the call; buffers are
+16-byte aligned), and `ponko_input_queue_*`. This covers the client and
+server bookkeeping only; sending the packets and running a live game over a
+real network are still yours, as in Rust.
 
 ### Testing it
 

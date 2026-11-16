@@ -8,15 +8,15 @@ use crate::gfx::Graphics;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ShaderKind {
-    /// A material shader ([`Graphics::create_shader`](crate::gfx::Graphics::create_shader), [`Graphics::load_shader`](crate::gfx::Graphics::load_shader)).
+    /// A material shader (`Graphics::create_shader`, `Graphics::load_shader`).
     Material,
-    /// A screen effect ([`Graphics::create_effect`](crate::gfx::Graphics::create_effect), [`Graphics::load_effect`](crate::gfx::Graphics::load_effect)).
+    /// A screen effect (`Graphics::create_effect`, `Graphics::load_effect`).
     Effect,
-    /// A compute pass ([`Graphics::create_compute`](crate::gfx::Graphics::create_compute), [`Graphics::load_compute`](crate::gfx::Graphics::load_compute)).
+    /// A compute pass (`Graphics::create_compute`, `Graphics::load_compute`).
     Compute,
     /// A sprite shader ([`Graphics::create_sprite_shader`](crate::gfx::Graphics::create_sprite_shader), [`Graphics::load_sprite_shader`](crate::gfx::Graphics::load_sprite_shader)).
     Sprite,
-    /// A sky shader ([`Graphics::create_sky_shader`](crate::gfx::Graphics::create_sky_shader), [`Graphics::load_sky_shader`](crate::gfx::Graphics::load_sky_shader)).
+    /// A sky shader (`Graphics::create_sky_shader`, `Graphics::load_sky_shader`).
     Sky,
 }
 
@@ -224,5 +224,29 @@ impl Graphics {
     pub(crate) fn report_stand_in(path: &str, error: &crate::error::Error) {
         eprintln!("{error}");
         eprintln!("ponko: {path} uses a stand-in until it compiles; hot reload is watching it");
+    }
+}
+
+#[cfg(test)]
+mod message_tests {
+    #[test]
+    fn shader_display_keeps_file_location_and_snippet() {
+        use ponko::render::{ShaderDiagnostic, ShaderKind};
+        let diagnostic = ShaderDiagnostic {
+            shader: "water.wgsl".into(),
+            kind: ShaderKind::Sprite,
+            variant: String::new(),
+            line: Some(4),
+            column: Some(5),
+            in_engine_code: false,
+            message: "unknown name".into(),
+            label: "declare this name".into(),
+            notes: vec![],
+            source_line: Some("    bad_name".into()),
+        };
+        let terminal = diagnostic.to_string();
+        assert!(terminal.contains("water.wgsl:4:5: error: unknown name"));
+        assert!(terminal.contains("    bad_name"));
+        assert!(terminal.contains("^ declare this name"));
     }
 }

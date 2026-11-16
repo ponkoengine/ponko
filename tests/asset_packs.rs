@@ -5,6 +5,7 @@
 //! `the_shared_fixture_is_what_the_writer_makes` checks it still is), so
 //! these tests read exactly what `ponko pack` writes.
 
+use ponko::assets::{AssetSource, PackSource};
 use ponko::prelude::*;
 
 fn sample() -> Vec<u8> {

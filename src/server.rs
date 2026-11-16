@@ -37,6 +37,8 @@
 //! The guide's "Dedicated servers" chapter has the project template, the
 //! container image and what to watch in production.
 
+#![deny(missing_docs)]
+
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -68,6 +70,15 @@ impl Default for ServerConfig {
 impl ServerConfig {
     /// The defaults: a report every 10 s, JSON lines, no shutdown grace,
     /// catch up at most 5 ticks, `SIGINT`/`SIGTERM` handled, no tick limit.
+    ///
+    /// ```
+    /// use ponko::server::ServerConfig;
+    /// use std::time::Duration;
+    /// let config = ServerConfig::new();
+    /// // The defaults are all overridable.
+    /// let quiet = config.report_every(Duration::ZERO).signals(false);
+    /// assert!(!quiet.stop_handle().is_stopping());
+    /// ```
     pub fn new() -> Self {
         Self {
             report_every: Duration::from_secs(10),
@@ -203,11 +214,27 @@ impl StopHandle {
 
     /// Asks the server to stop ([`StopReason::Requested`]). It finishes the
     /// current tick, then the shutdown grace begins.
+    ///
+    /// ```
+    /// use ponko::server::ServerConfig;
+    /// let stop = ServerConfig::new().stop_handle();
+    /// assert!(!stop.is_stopping());
+    /// stop.stop();
+    /// assert!(stop.is_stopping());
+    /// ```
     pub fn stop(&self) {
         self.0.store(true, Ordering::Release);
     }
 
     /// Whether [`stop`](Self::stop) was called.
+    ///
+    /// ```
+    /// use ponko::server::ServerConfig;
+    /// let stop = ServerConfig::new().stop_handle();
+    /// let from_another_thread = stop.clone();
+    /// std::thread::spawn(move || from_another_thread.stop()).join().unwrap();
+    /// assert!(stop.is_stopping());
+    /// ```
     pub fn is_stopping(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }

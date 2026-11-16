@@ -98,12 +98,16 @@ impl HistoryReset {
 /// Whether the camera `now` is a cut from the one `before`: it turned a
 /// lot or jumped far in one frame, so what was drawn then is no history.
 fn camera_cut(before: Mat4, now: Mat4) -> bool {
-    // Where the view starts and which way it looks.
+    // Where the view starts and which way it looks (reverse-Z: the near
+    // plane is at depth 1, the far plane at 0). The second point is half
+    // way in depth, not on the far plane: without one (an infinite far
+    // plane) depth 0 is infinitely far, and its direction would be NaN, a
+    // cut every frame.
     let eye = |m: Mat4| {
         let inverse = m.inverse();
-        let near = inverse.project_point3(Vec3::ZERO);
-        let far = inverse.project_point3(Vec3::Z);
-        (near, (far - near).normalize_or_zero())
+        let near = inverse.project_point3(Vec3::Z);
+        let ahead = inverse.project_point3(Vec3::new(0.0, 0.0, 0.5));
+        (near, (ahead - near).normalize_or_zero())
     };
     let (a, b) = (eye(before), eye(now));
     !(a.0.distance(b.0) < TAA_CUT_DISTANCE && a.1.dot(b.1) > TAA_CUT_ANGLE.cos())
@@ -113,3 +117,25 @@ fn camera_cut(before: Mat4, now: Mat4) -> bool {
 const TAA_CUT_DISTANCE: f32 = 50.0;
 
 const TAA_CUT_ANGLE: f32 = std::f32::consts::FRAC_PI_4;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_still_camera_without_a_far_plane_is_no_cut() {
+        for far in [1000.0, f32::INFINITY] {
+            let projection = crate::three::reverse_z_perspective(1.0, 1.5, 0.01, far);
+            // At (0, 2, 6), looking along -z; then turned around.
+            let view = Mat4::from_translation(Vec3::new(0.0, -2.0, -6.0));
+            let camera = projection * view;
+            assert!(!camera_cut(camera, camera), "far {far}: the same camera is no cut");
+            // Negative control: turned around, it is one.
+            let back = Mat4::from_rotation_y(std::f32::consts::PI) * view;
+            assert!(
+                camera_cut(camera, projection * back),
+                "far {far}: turned around is a cut"
+            );
+        }
+    }
+}

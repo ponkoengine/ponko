@@ -62,11 +62,13 @@ fn nothing_is_tracked_until_asked() {
     let health = w.track_changes::<Health>();
     assert!(w.component_info(health).tracks_changes());
     assert!(!w.component_info(w.component_id::<Armor>().unwrap()).tracks_changes());
-    // Tracking costs two 4-byte stamps per row of the tracked component, and
-    // nothing for the others.
+    // Tracking costs two 4-byte stamps per row of the tracked component and
+    // a 4-byte summary per 64 rows (one block here), and nothing for the
+    // others.
     assert_eq!(row_bytes(&w), row + 8);
-    assert_eq!(w.allocated_bytes() / (row + 8), bytes / row, "the same capacity");
-    assert_eq!(w.allocated_bytes() % (row + 8), 0);
+    let stamped = w.allocated_bytes() - 4;
+    assert_eq!(stamped / (row + 8), bytes / row, "the same capacity");
+    assert_eq!(stamped % (row + 8), 0);
     assert_eq!(w.track_changes::<Health>(), health, "tracking twice is harmless");
 }
 
@@ -548,7 +550,7 @@ fn zero_sized_components_can_be_tracked() {
 #[test]
 fn commands_are_stamped_when_applied() {
     let (mut w, [a, b, c], _) = three();
-    let mut commands = Commands::new();
+    let mut commands = w.commands();
     commands.insert(a, Health(10));
     commands.insert(b, Armor(1));
     commands.remove::<Health>(c);
@@ -1371,7 +1373,7 @@ fn generated_sequences_report_exactly_what_the_model_changed() {
         let mut readers: Vec<Tick> = vec![Tick::default()];
         // Late tracking stamps what exists; the model learns the same.
         let mut tracking = seed % 2 == 0;
-        let mut commands = Commands::new();
+        let mut commands = w.commands();
         // Entities with a recorded, not yet applied `insert(e, Armor(7))`.
         let mut pending: Vec<Entity> = Vec::new();
         for op in 0..ops {
@@ -1691,4 +1693,189 @@ fn a_change_filter_is_recorded_as_reading_its_component() {
     let mut expected = vec![(health, false), (armor, false)];
     expected.sort_by_key(|&(id, _)| id.index());
     assert_eq!(read, expected);
+}
+
+/// The filters skip blocks of rows nobody wrote to (see `RowFilter`): every
+/// way a stamp is written or moved must keep its block's summary newer than
+/// any reader that hasn't seen it. Random edits over a few thousand
+/// entities (many blocks, two archetypes, swaps, moves, sorts, growth)
+/// against a plain model of when each `Health` was added and last changed.
+#[test]
+fn change_filters_that_skip_still_blocks_find_exactly_what_changed() {
+    use std::collections::HashMap;
+
+    struct Rng(u64);
+    impl Rng {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 % n as u64) as usize
+        }
+    }
+
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let mut w = World::new();
+    w.track_changes::<Health>();
+    // Entity -> (added, changed) ticks of its `Health`.
+    let mut model: HashMap<Entity, (Tick, Tick)> = HashMap::new();
+    let mut live: Vec<Entity> = Vec::new();
+    let mut readers: Vec<Tick> = vec![Tick::default()];
+    let check = |w: &mut World, model: &HashMap<Entity, (Tick, Tick)>, readers: &[Tick], step: usize| {
+        for &since in readers {
+            let want_changed = sorted(model.iter().filter(|(_, t)| t.1 > since).map(|(&e, _)| e).collect());
+            let want_added = sorted(model.iter().filter(|(_, t)| t.0 > since).map(|(&e, _)| e).collect());
+            assert_eq!(
+                changed::<Health>(w, since),
+                want_changed,
+                "step {step}, since {since:?}"
+            );
+            assert_eq!(added::<Health>(w, since), want_added, "step {step}, since {since:?}");
+            let mut q = w.query::<Entity>().filter::<Changed<Health>>().since(since);
+            assert_eq!(q.count(), want_changed.len(), "step {step}: count");
+            let mut each = Vec::new();
+            q.for_each(|e| each.push(e));
+            assert_eq!(sorted(each), want_changed, "step {step}: for_each");
+            let mut either = w
+                .query::<Entity>()
+                .filter::<Or<(Changed<Health>, With<Player>)>>()
+                .since(since)
+                .iter()
+                .collect::<Vec<_>>();
+            either.retain(|&e| !w.has::<Player>(e));
+            assert_eq!(sorted(either), want_changed, "step {step}: in an `Or`");
+            let id = w.component_id::<Health>().unwrap();
+            let ids = [id];
+            let mut chunks = Vec::new();
+            w.raw()
+                .query_chunks(ChunkQuery::new(&ids).writes(0).changed(1).since(since), |chunk| {
+                    chunks.extend_from_slice(chunk.entities)
+                });
+            assert_eq!(sorted(chunks), want_changed, "step {step}: query_chunks");
+        }
+    };
+
+    let steps = if cfg!(miri) { 60 } else { 400 };
+    for step in 0..steps {
+        let now = w.change_tick();
+        let ops = 1 + rng.below(40);
+        for _ in 0..ops {
+            match rng.below(12) {
+                // Spawn, now and then a burst that grows the archetypes.
+                0 | 1 => {
+                    let n = if rng.below(10) == 0 { 200 } else { 1 };
+                    for _ in 0..n {
+                        let e = if rng.below(2) == 0 {
+                            w.spawn((Health(0),))
+                        } else {
+                            w.spawn((Health(0), Armor(0)))
+                        };
+                        model.insert(e, (now, now));
+                        live.push(e);
+                    }
+                }
+                2 if !live.is_empty() => {
+                    let e = live.swap_remove(rng.below(live.len()));
+                    w.despawn(e);
+                    model.remove(&e);
+                }
+                3 if !live.is_empty() => {
+                    let e = live[rng.below(live.len())];
+                    if let Some(h) = w.get_mut::<Health>(e) {
+                        h.0 += 1;
+                        model.get_mut(&e).unwrap().1 = now;
+                    }
+                }
+                4 if !live.is_empty() => {
+                    let e = live[rng.below(live.len())];
+                    if w.mark_changed::<Health>(e) && model.contains_key(&e) {
+                        model.get_mut(&e).unwrap().1 = now;
+                    }
+                }
+                // Moves between archetypes keep the stamps.
+                5 if !live.is_empty() => {
+                    let e = live[rng.below(live.len())];
+                    if w.has::<Armor>(e) {
+                        w.remove::<Armor>(e);
+                    } else {
+                        w.insert(e, Armor(1));
+                    }
+                }
+                // Removing and inserting again counts as added.
+                6 if !live.is_empty() => {
+                    let e = live[rng.below(live.len())];
+                    if w.remove::<Health>(e).is_some() {
+                        model.remove(&e);
+                    } else {
+                        w.insert(e, Health(2));
+                        model.insert(e, (now, now));
+                    }
+                }
+                // Replacing a value is a change, not an addition.
+                7 if !live.is_empty() => {
+                    let e = live[rng.below(live.len())];
+                    if w.has::<Health>(e) {
+                        w.insert(e, Health(3));
+                        model.get_mut(&e).unwrap().1 = now;
+                    }
+                }
+                // A query marks every entity it borrows mutably.
+                8 if rng.below(8) == 0 => {
+                    w.query::<(Entity, &mut Health, &Armor)>().for_each(|(e, h, _)| {
+                        h.0 += 1;
+                        model.get_mut(&e).unwrap().1 = now;
+                    });
+                }
+                9 if rng.below(8) == 0 => {
+                    w.sort_by::<Health>(|h| h.0 as u64 ^ 0x55);
+                }
+                _ => {}
+            }
+        }
+        if step % 7 == 0 {
+            check(&mut w, &model, &readers, step);
+        }
+        let seen = w.advance_change_tick();
+        if rng.below(4) == 0 {
+            readers.push(seen);
+            if readers.len() > 6 {
+                readers.remove(1);
+            }
+        }
+    }
+    check(&mut w, &model, &readers, 400);
+}
+
+#[test]
+fn a_change_moved_to_another_archetype_is_seen_in_its_new_block() {
+    let mut w = World::new();
+    w.track_changes::<Health>();
+    let es: Vec<_> = (0..200).map(|i| w.spawn((Health(i),))).collect();
+    // Something already in the destination, stamped long ago.
+    let old = w.spawn((Health(-1), Armor(0)));
+    let seen = w.advance_change_tick();
+    w.get_mut::<Health>(es[10]).unwrap().0 = 1000;
+    w.get_mut::<Health>(es[150]).unwrap().0 = 2000;
+    w.advance_change_tick();
+    // `es[10]` joins a block that only held a still row, `es[150]` starts
+    // nothing new: both keep their stamps, and readers still see them.
+    w.insert(es[10], Armor(1));
+    w.insert(es[150], Armor(2));
+    assert_eq!(changed::<Health>(&mut w, seen), sorted(vec![es[10], es[150]]));
+    // A move into the first row of an empty archetype starts its block.
+    w.insert(es[150], Player);
+    assert_eq!(changed::<Health>(&mut w, seen), sorted(vec![es[10], es[150]]));
+    let _ = old;
+}
+
+#[test]
+fn tracking_a_component_many_entities_already_have_counts_them_all_as_changed() {
+    let mut w = World::new();
+    let es: Vec<_> = (0..300).map(|i| w.spawn((Health(i),))).collect();
+    let before = w.advance_change_tick();
+    w.track_changes::<Health>();
+    assert_eq!(changed::<Health>(&mut w, before), es);
+    assert_eq!(added::<Health>(&mut w, before), es);
+    let now = w.advance_change_tick();
+    assert_eq!(changed::<Health>(&mut w, now), []);
 }

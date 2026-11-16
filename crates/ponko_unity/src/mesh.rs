@@ -232,7 +232,7 @@ fn blend_shapes(shapes: &crate::Value, count: usize) -> Result<Vec<BlendShape>, 
         .collect();
     ranges.sort_unstable();
     if ranges.windows(2).any(|w| w[1].0 < w[0].1) {
-        return Err(Error::new("blend shapes: two channels share frames"));
+        return Err(Error::invalid("blend shapes: two channels share frames"));
     }
     let mut out = Vec::new();
     let mut entries = 0usize;
@@ -249,7 +249,7 @@ fn blend_shapes(shapes: &crate::Value, count: usize) -> Result<Vec<BlendShape>, 
             let read = n.min(vertices.len().saturating_sub(first));
             entries = entries.saturating_add(expanded.max(1)).saturating_add(read);
             if entries > MAX_SHAPE_ENTRIES {
-                return Err(Error::new(format!(
+                return Err(Error::invalid(format!(
                     "blend shapes: more than {MAX_SHAPE_ENTRIES} vertex offsets to expand or read"
                 )));
             }
@@ -320,16 +320,19 @@ impl UnityMesh {
     /// its data is shorter than its layout says.
     pub fn from_object(object: &UnityObject) -> Result<Self, Error> {
         if object.class_id != 43 {
-            return Err(Error::new(format!(
+            return Err(Error::invalid(format!(
                 "{} isn't a Mesh (class {})",
                 object.type_name, object.class_id
             )));
         }
         let m = &object.body;
         let name = m["m_Name"].as_str().unwrap_or_default().to_owned();
-        let fail = |what: &str| Error::new(format!("mesh {name}: {what}"));
+        let fail = |what: &str| Error::invalid(format!("mesh {name}: {what}"));
+        let unsupported = |what: &str| Error::unsupported(format!("mesh {name}: {what}"));
         if m["m_MeshCompression"].as_i64().unwrap_or(0) != 0 {
-            return Err(fail("compressed meshes aren't supported (turn Mesh Compression off)"));
+            return Err(unsupported(
+                "compressed meshes aren't supported (turn Mesh Compression off)",
+            ));
         }
         let vd = &m["m_VertexData"];
         let count = vd["m_VertexCount"].as_i64().ok_or_else(|| fail("no m_VertexCount"))?;
@@ -351,7 +354,7 @@ impl UnityMesh {
                     stream: small("stream", 31)?,
                     offset: small("offset", 4096)?,
                     format: VertexFormat::from_unity(c["format"].as_i64().unwrap_or(0))
-                        .ok_or_else(|| fail("unknown vertex format"))?,
+                        .ok_or_else(|| unsupported("unknown vertex format"))?,
                     dimension: (c["dimension"].as_i64().unwrap_or(0) & 0xf) as usize,
                 })
             })
@@ -412,14 +415,15 @@ impl UnityMesh {
             blend_shapes: Vec::new(),
         };
         // As many vertices as the data holds positions for.
-        mesh.blend_shapes = blend_shapes(&m["m_Shapes"], mesh.positions.len()).map_err(|e| fail(&e.message))?;
+        mesh.blend_shapes =
+            blend_shapes(&m["m_Shapes"], mesh.positions.len()).map_err(|e| e.with_context(&format!("mesh {name}")))?;
         for (slot, uv) in mesh.uvs.iter_mut().zip(uvs) {
             *slot = uv?;
         }
         let binds = m["m_BindPose"].as_seq().unwrap_or_default();
         if !binds.is_empty() {
             if binds.len() > u16::MAX as usize {
-                return Err(fail("too many skin joints"));
+                return Err(unsupported("too many skin joints"));
             }
             let inverse_binds: Vec<[f32; 16]> = binds
                 .iter()
@@ -492,7 +496,7 @@ impl UnityMesh {
         let short = || fail("index buffer too short or out of range");
         for sub in m["m_SubMeshes"].as_seq().unwrap_or_default() {
             if sub["topology"].as_i64().unwrap_or(0) != 0 {
-                return Err(fail("only triangle submeshes are supported"));
+                return Err(unsupported("only triangle submeshes are supported"));
             }
             let first = usize::try_from(sub["firstByte"].as_i64().unwrap_or(0)).map_err(|_| short())?
                 / if wide { 4 } else { 2 };

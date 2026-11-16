@@ -65,7 +65,7 @@ struct Index(#[allow(dead_code)] u64);
 fn reused_commands_record_and_apply_without_allocating() {
     let mut world = World::new();
     let entities: Vec<_> = (0..256u64).map(|i| world.spawn((Index(i),))).collect();
-    let mut commands = Commands::new();
+    let mut commands = world.commands();
     let frame = |world: &mut World, commands: &mut Commands| {
         for &e in &entities {
             commands.insert(e, Marked(7));

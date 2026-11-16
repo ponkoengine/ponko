@@ -61,7 +61,14 @@ cargo fmt --all --check
 cargo build --workspace --examples
 cargo test --workspace
 cargo clippy --workspace --all-targets
+python3 scripts/collect-panics.py --check   # every panic site has a reviewed decision
 ```
+
+`collect-panics.py --check` fails for a new or changed `panic!`, `assert!`,
+`unwrap` or `expect` in the engine or ECS production code. Review the site
+(`--help`, and "Panics" in `book/src/contributing.md`): a message that names
+the misuse and the fix, an `Error`, or an `invariant` recorded with its reason.
+Don't bless a site without looking at it.
 
 If you touched unsafe code in `crates/ponko_ecs`, also run the ECS tests under Miri:
 

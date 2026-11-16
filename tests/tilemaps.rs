@@ -2,6 +2,7 @@
 //! parallax, autotiling and solid tiles, checked headless. The fixture
 //! levels are in `tests/fixtures/tilemaps`.
 
+use ponko::assets::MemorySource;
 use ponko::d2::{Sprite, Transform as Transform2D};
 use ponko::prelude::*;
 use ponko::tilemap::{

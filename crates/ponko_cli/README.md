@@ -1,6 +1,6 @@
 # ponko_cli
 
-The `ponko` command for [Ponko](https://github.com/ponkoengine/ponko) games.
+The `ponko` command for [Ponko](https://gitlab.com/ponkoengine/ponko) games.
 
 ```sh
 cargo install ponko_cli
@@ -25,13 +25,18 @@ files); see the guide's [packaging chapter](https://ponko.dev/guide/packaging.ht
 ```sh
 ponko package          # for this computer
 ponko package --web    # for browsers
+ponko cook             # assets/ cooked: compressed textures, optimized meshes, FLAC, checked shaders
 ```
+
+The package's `assets.pack` holds the assets cooked (as `ponko cook` makes
+them, under the same names, cached by content); games run their source
+assets while you work.
 
 The templates are also usable with
 [cargo-generate](https://github.com/cargo-generate/cargo-generate):
 
 ```sh
-cargo generate --git https://github.com/ponkoengine/ponko crates/ponko_cli/templates/2d
+cargo generate --git https://gitlab.com/ponkoengine/ponko crates/ponko_cli/templates/2d
 ```
 
 - Getting started: <https://ponko.dev/guide/getting-started.html>

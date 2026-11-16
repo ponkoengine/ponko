@@ -440,77 +440,16 @@ pub(super) fn assert_region(
     );
 }
 
-/// How far an image may stray from what it's compared with: each channel by
-/// up to `channel`, and beyond that on at most `outliers` (0..=1) of the
-/// pixels.
-///
-/// `edge` is for comparing frames of two adapters. Rasterisers put an edge
-/// (a silhouette, a shadow's border) up to a pixel apart and resolve its
-/// samples differently, so along edges the same picture differs by the
-/// whole contrast of the edge. With `edge` 1 a pixel is compared with the
-/// other image's pixels up to one pixel away in each direction: it is fine
-/// when every channel lies within `channel` of the range those pixels
-/// span, and the same is asked of the other image's pixel against this
-/// image's neighbours (so a thin line missing on either side still
-/// counts). Flat areas are compared as with `edge` 0; an edge that moved
-/// further than `edge` pixels, or a shade that changed, is beyond the
-/// tolerance. `outliers` then only has to cover what isn't an edge.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub(super) struct Tolerance {
-    pub channel: u8,
-    pub outliers: f32,
-    /// How many pixels an edge may sit apart (0: pixels are compared in
-    /// place).
-    #[serde(default)]
-    pub edge: u32,
-}
+pub(super) use ponko_image_diff::{Diff, Tolerance};
 
-/// How two images of the same size differ.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Diff {
-    /// The largest difference of any channel.
-    pub max_channel: u8,
-    /// The mean absolute difference over every channel, 0..=255.
-    pub mean: f32,
-    /// Pixels with a channel differing by more than the tolerance's (after
-    /// the tolerance's allowance for edges).
-    pub outliers: usize,
-    pub pixels: usize,
-    /// The largest difference left after the allowance for edges: what
-    /// `channel` would have to be for no pixel to be beyond it.
-    pub beyond: u8,
-    /// Pixels of the second image that lie on an edge: a neighbour within
-    /// the tolerance's `edge` differs from them by more than `channel`.
-    /// (0 without an allowance for edges.)
-    pub edges: usize,
-}
-
-impl Diff {
-    pub fn within(&self, tolerance: Tolerance) -> bool {
-        self.outliers as f32 <= tolerance.outliers * self.pixels as f32
+fn view(image: &Image) -> ponko_image_diff::Image<'_> {
+    ponko_image_diff::Image {
+        width: image.width,
+        height: image.height,
+        rgba: &image.rgba,
     }
 }
 
-impl std::fmt::Display for Diff {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let share = |n: usize| n as f32 * 100.0 / self.pixels.max(1) as f32;
-        write!(
-            f,
-            "max channel difference {} ({} off edges), mean {:.3}, {} of {} pixels ({:.2}%) beyond the tolerance, \
-             {:.1}% of pixels on edges",
-            self.max_channel,
-            self.beyond,
-            self.mean,
-            self.outliers,
-            self.pixels,
-            share(self.outliers),
-            share(self.edges)
-        )
-    }
-}
-
-/// How `a` differs from `b`, counting pixels with a channel off by more than
-/// `channel`, each compared in place.
 pub(super) fn diff(a: &Image, b: &Image, channel: u8) -> Diff {
     diff_within(
         a,
@@ -523,68 +462,8 @@ pub(super) fn diff(a: &Image, b: &Image, channel: u8) -> Diff {
     )
 }
 
-/// How far `pixel` is outside the range that `other`'s pixels up to `reach`
-/// away from (x, y) span, as the worst channel; and that range's own width.
-fn outside(pixel: &[u8], other: &Image, x: usize, y: usize, reach: usize) -> (u8, u8) {
-    let (width, height) = (other.width as usize, other.height as usize);
-    let (mut low, mut high) = ([255u8; 4], [0u8; 4]);
-    for ny in y.saturating_sub(reach)..=(y + reach).min(height - 1) {
-        for nx in x.saturating_sub(reach)..=(x + reach).min(width - 1) {
-            let at = (ny * width + nx) * 4;
-            for c in 0..4 {
-                low[c] = low[c].min(other.rgba[at + c]);
-                high[c] = high[c].max(other.rgba[at + c]);
-            }
-        }
-    }
-    let excess = (0..4)
-        .map(|c| low[c].saturating_sub(pixel[c]).max(pixel[c].saturating_sub(high[c])))
-        .max()
-        .unwrap();
-    (excess, (0..4).map(|c| high[c] - low[c]).max().unwrap())
-}
-
-/// What the pixel at (x, y) differs by after the allowance for edges (each
-/// image's pixel against the other's neighbours, the worse of the two),
-/// and whether `b` has an edge there wider than `channel`.
-fn excess(a: &Image, b: &Image, x: usize, y: usize, tolerance: Tolerance) -> (u8, bool) {
-    let (at, reach) = ((y * a.width as usize + x) * 4, tolerance.edge as usize);
-    let (p, q) = (&a.rgba[at..at + 4], &b.rgba[at..at + 4]);
-    let (ours, span) = outside(p, b, x, y, reach);
-    (ours.max(outside(q, a, x, y, reach).0), span > tolerance.channel)
-}
-
-/// How `a` differs from `b` under `tolerance`: its `channel`, and its
-/// allowance for edges (see [`Tolerance`]).
 pub(super) fn diff_within(a: &Image, b: &Image, tolerance: Tolerance) -> Diff {
-    assert_eq!(
-        (a.width, a.height),
-        (b.width, b.height),
-        "comparing images of different sizes"
-    );
-    let (width, height) = (a.width as usize, a.height as usize);
-    let (mut max_channel, mut sum, mut outliers, mut beyond, mut edges) = (0u8, 0u64, 0usize, 0u8, 0usize);
-    for y in 0..height {
-        for x in 0..width {
-            let at = (y * width + x) * 4;
-            let (p, q) = (&a.rgba[at..at + 4], &b.rgba[at..at + 4]);
-            sum += p.iter().zip(q).map(|(x, y)| u64::from(x.abs_diff(*y))).sum::<u64>();
-            max_channel = max_channel.max(p.iter().zip(q).map(|(x, y)| x.abs_diff(*y)).max().unwrap());
-            let (left, edge) = excess(a, b, x, y, tolerance);
-            beyond = beyond.max(left);
-            outliers += usize::from(left > tolerance.channel);
-            edges += usize::from(edge);
-        }
-    }
-    let pixels = a.rgba.len() / 4;
-    Diff {
-        max_channel,
-        mean: sum as f32 / (pixels * 4).max(1) as f32,
-        outliers,
-        pixels,
-        beyond,
-        edges,
-    }
+    ponko_image_diff::compare(&view(a), &view(b), tolerance).expect("valid render test images of equal size")
 }
 
 /// Prints `line` and appends it to `comparisons.log` in `output`: test
@@ -742,21 +621,11 @@ pub(super) enum Checked {
 /// `image` with the pixels beyond `tolerance` of `reference` in red and the
 /// rest as dim grey.
 fn difference_image(image: &Image, reference: &Image, tolerance: Tolerance) -> Image {
-    let mut shown = image.clone();
-    let width = image.width as usize;
-    for y in 0..image.height as usize {
-        for x in 0..width {
-            let beyond = excess(image, reference, x, y, tolerance).0 > tolerance.channel;
-            let p = &mut shown.rgba[(y * width + x) * 4..][..4];
-            let grey = ((u16::from(p[0]) + u16::from(p[1]) + u16::from(p[2])) / 12) as u8;
-            p.copy_from_slice(&if beyond {
-                [255, 0, 0, 255]
-            } else {
-                [grey, grey, grey, 255]
-            });
-        }
+    Image {
+        width: image.width,
+        height: image.height,
+        rgba: ponko_image_diff::heatmap(&view(image), &view(reference), tolerance).expect("valid reference images"),
     }
-    shown
 }
 
 /// A negative control for a reference: `image`, a frame of the same scene

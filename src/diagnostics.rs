@@ -231,6 +231,7 @@ pub struct AloneDiagnostics {
     /// - `sends_and_reads`: a view system that sends and reads one event
     ///   type (`item`).
     /// - `interval`: a view system that doesn't run every tick.
+    /// - `condition`: a view system with a run condition that takes `&Ctx`.
     pub reason: String,
     /// The service or event type, for the reasons that name one.
     pub item: Option<String>,
@@ -459,6 +460,7 @@ pub(crate) struct PlanSystem {
     pub access: Option<SystemAccess>,
     pub view: bool,
     pub interval: bool,
+    pub condition: bool,
     pub barrier: bool,
 }
 
@@ -585,6 +587,7 @@ fn plan_of(source: &PlanSource) -> Option<SchedulePlan> {
             access: s.access.as_ref(),
             view: s.view,
             interval: s.interval,
+            condition: s.condition,
             barrier: s.barrier,
         })
         .collect();
@@ -614,6 +617,7 @@ fn alone(why: Alone) -> AloneDiagnostics {
         Alone::Service(s) => ("service", Some(s.name().to_string())),
         Alone::SendsAndReads(n) => ("sends_and_reads", Some(n.to_string())),
         Alone::Interval => ("interval", None),
+        Alone::Condition => ("condition", None),
     };
     AloneDiagnostics {
         reason: reason.to_string(),

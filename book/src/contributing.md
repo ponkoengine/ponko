@@ -1,8 +1,8 @@
 # Contributing
 
-Start with [`CONTRIBUTING.md`](https://github.com/ponkoengine/ponko/blob/main/CONTRIBUTING.md).
+Start with [`CONTRIBUTING.md`](../../CONTRIBUTING.md).
 The detailed maintainer/agent integration checklist is in
-[`AGENTS.md`](https://github.com/ponkoengine/ponko/blob/main/AGENTS.md).
+[`AGENTS.md`](../../AGENTS.md).
 In short:
 
 - Work on a branch, open a pull request to `main`, wait for CI.
@@ -56,7 +56,7 @@ cargo install mdbook --locked
 mdbook serve book --open
 ```
 
-Every page has an edit button (top right) that opens the file on GitHub.
+Every page has an edit button (top right) that opens the file in the project's repository.
 
 ### Rust snippets compile
 
@@ -90,9 +90,41 @@ ctx.world.despawn(enemy);
 - The check enables the `3d`, `physics`, `physics3d`, `navmesh` and `steam`
   features, so snippets for those compile without extra setup.
 
+## Panics and error messages
+
+A panic or error message says what the caller did and how to fix it
+("…; call `world.track_changes::<T>()` first"), not only what went wrong.
+Panics that are part of the API get a `#[should_panic(expected = "...")]`
+test, so the wording stays helpful.
+
+`scripts/collect-panics.py` lists every `panic!`, `assert!`, `unwrap` and
+`expect` in the engine and ECS production code with its reviewed
+classification from `scripts/panic-audit.json`:
+
+- `caller-contract`: a caller can reach it, and the message names the misuse
+  and the fix;
+- `invariant`: internal, no caller can reach it;
+- `forwarded-error`: re-raises an `Error` whose message already says both;
+- `non-panic-method`: a method that only shares a name.
+
+`--check` fails while a new or changed site has no decision. Give the site a
+message with a remedy, turn it into an `Error`, or record why it is an
+internal invariant:
+
+```sh
+python3 scripts/collect-panics.py --check
+python3 scripts/collect-panics.py --record src/gfx.rs:120 invariant "set just above"
+python3 scripts/test_collect_panics.py
+```
+
+It is a lexical scan, not a proof: it finds the sites, a person decides.
+Run `python3 scripts/collect-panics.py --check` with the other checks before you
+declare a change ready, next to `cargo fmt`, `cargo clippy` and
+`scripts/check-naming.py`.
+
 ## License
 
 Ponko is dual licensed under
-[MIT](https://github.com/ponkoengine/ponko/blob/main/LICENSE-MIT) or
-[Apache-2.0](https://github.com/ponkoengine/ponko/blob/main/LICENSE-APACHE),
+[MIT](../../LICENSE-MIT) or
+[Apache-2.0](../../LICENSE-APACHE),
 at your option. Contributions are accepted under the same terms.

@@ -54,11 +54,12 @@ pub(super) struct Stage {
     pub queue: wgpu::Queue,
     /// The adapter it draws on.
     pub info: wgpu::AdapterInfo,
-    pub renderer: Renderer3D,
-    pub ctx: Ctx,
+    pub renderer: Box<Renderer3D>,
+    pub ctx: Box<Ctx>,
     pub output: wgpu::Texture,
     pub size: (u32, u32),
-    textures: Vec<GpuTexture>,
+    /// The textures materials sample (the white ones).
+    pub textures: Vec<GpuTexture>,
     view_format: Option<wgpu::TextureFormat>,
     errors: Arc<Mutex<Vec<String>>>,
 }
@@ -91,8 +92,21 @@ impl Stage {
         let (layout, white, textures) = white_textures(&device, &queue);
         let output = Self::target(&device, setup.size, setup.format, setup.view_format);
         let drawn_format = setup.view_format.unwrap_or(setup.format);
-        let renderer = Renderer3D::new(&device, &layout, drawn_format, 0, &white, setup.samples, true);
-        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(setup.size.0 as f32, setup.size.1 as f32));
+        // Boxed: a test that holds two stages by value comes close to a test
+        // thread's 2 MiB stack.
+        let renderer = Box::new(Renderer3D::new(
+            &device,
+            &layout,
+            drawn_format,
+            0,
+            &white,
+            setup.samples,
+            true,
+        ));
+        let mut ctx = Box::new(Ctx::new(
+            1.0 / 60.0,
+            Vec2::new(setup.size.0 as f32, setup.size.1 as f32),
+        ));
         ctx.gfx.assets3d.decals_supported = supports_decals(&device);
         ctx.gfx.assets3d.gi_supported = supports_gi(&device);
         // A black background, and the picture as lit: no curve, no glow.
@@ -546,16 +560,8 @@ pub(super) fn shadowed(stage: &mut Stage) -> (Entity, Vec3, Vec3) {
 pub(super) fn skinned(stage: &mut Stage) -> Entity {
     stage.floor();
     let skeleton = Skeleton::new(vec![
-        Joint {
-            name: "base".into(),
-            parent: None,
-            rest: Transform3D::default(),
-        },
-        Joint {
-            name: "top".into(),
-            parent: Some(0),
-            rest: Transform3D::at(vec3(0.0, 1.0, 0.0)),
-        },
+        Joint::new("base", None),
+        Joint::new("top", 0).with_rest(Transform3D::at(vec3(0.0, 1.0, 0.0))),
     ]);
     // Two boxes on top of each other, each wholly on its joint, so the
     // bar bends at the joint and not along its whole length.

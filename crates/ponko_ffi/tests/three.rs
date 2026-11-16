@@ -516,6 +516,8 @@ unsafe extern "C" fn setup(ctx: *mut PonkoCtx, user: *mut c_void) {
             ),
             (4096, 24, 8192, 4)
         );
+        assert_eq!(light.shadow_filter, 4, "ultra has contact-hardening sun shadows");
+        assert_eq!(ponko_ctx_set_lighting(ctx, &light), PONKO_OK, "and C can set them back");
         assert_eq!(ponko_ctx_post(ctx, &mut back), PONKO_OK);
         assert!(
             back.ao_half_resolution
@@ -572,7 +574,7 @@ unsafe extern "C" fn setup(ctx: *mut PonkoCtx, user: *mut c_void) {
             PonkoGraphicsQuality { anti_aliasing: 4, ..q },
             PonkoGraphicsQuality { shadow_refresh: 0, ..q },
             PonkoGraphicsQuality { shadow_filter: 0, ..q },
-            PonkoGraphicsQuality { shadow_filter: 4, ..q },
+            PonkoGraphicsQuality { shadow_filter: 5, ..q },
             PonkoGraphicsQuality { ssr: 2.0, ..q },
             PonkoGraphicsQuality {
                 shadow_distance: f32::NAN,
@@ -621,7 +623,7 @@ unsafe extern "C" fn setup(ctx: *mut PonkoCtx, user: *mut c_void) {
                 ..light
             },
             PonkoLighting {
-                shadow_filter: 4,
+                shadow_filter: 5,
                 ..light
             },
         ] {

@@ -43,6 +43,7 @@ fn bare(game: Game) -> Game {
 fn frame(game: &mut Game, ctx: &mut Ctx, ticks: u32) {
     ctx.begin_frame(FrameTiming {
         dt: 1.0 / 60.0,
+        seconds: 1.0 / 60.0,
         fixed_steps: ticks,
         alpha: 0.0,
     });
@@ -158,7 +159,9 @@ fn commands_from_frame_systems_apply_before_late_and_draw_phases() {
             log(ctx, format!("animate {n}"));
             ctx.commands.spawn((Marker,));
         })
-        .add(Phase::Frame, |ctx: &mut Ctx| ctx.commands.spawn((Marker,)));
+        .add(Phase::Frame, |ctx: &mut Ctx| {
+            ctx.commands.spawn((Marker,));
+        });
     let mut ctx = ctx();
     frame(&mut game, &mut ctx, 0);
     assert_eq!(take(&mut ctx), ["animate 1", "late 2", "draw 3"]);

@@ -142,7 +142,6 @@ pub(crate) struct SpatialState {
     /// the frame's positional sound was updated): the default listener.
     pub(crate) camera: AudioListener3D,
     voices: Vec<Voice>,
-    next_silent: u64,
 }
 
 impl SpatialState {
@@ -209,12 +208,7 @@ impl Audio {
         let offset = position - listener.position;
         let mut params = settings.sound;
         params.volume *= gain(offset.length(), settings);
-        let id = if self.headless {
-            self.backend.spatial.next_silent += 1;
-            Playing(self.backend.spatial.next_silent)
-        } else {
-            self.play_on(sound, params, settings.bus, settings.effects)
-        };
+        let id = self.play_on(sound, params, settings.bus, settings.effects);
         self.backend.spatialize(
             id.0,
             params.volume,
@@ -281,14 +275,9 @@ pub(crate) fn update_audio3d(ctx: &mut Ctx) {
             let offset = transform.position - listener.position;
             let mut params = source.settings.sound;
             params.volume *= gain(offset.length(), source.settings);
-            let id = Playing(if ctx.headless {
-                ctx.audio.backend.spatial.next_silent += 1;
-                ctx.audio.backend.spatial.next_silent
-            } else {
-                ctx.audio
-                    .backend
-                    .play_on(source.sound.id, params, source.settings.bus, source.settings.effects)
-            });
+            let id = ctx
+                .audio
+                .play_on(source.sound, params, source.settings.bus, source.settings.effects);
             source.playing = Some(id);
             ctx.audio.backend.spatial.voices.push(Voice {
                 id,

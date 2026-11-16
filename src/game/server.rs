@@ -20,6 +20,9 @@ const PAUSED_WAIT: Duration = Duration::from_millis(50);
 impl ConfiguredGame {
     /// Runs as a dedicated server with the stored setup callbacks:
     /// [`Game::run_server`].
+    ///
+    /// # Panics
+    /// As [`Game::run_server`].
     pub fn run_server(self, config: ServerConfig) -> World {
         self.game.run_server(config, |_| {})
     }
@@ -61,6 +64,9 @@ impl Game {
     /// let status = world.resource::<ServerStatus>();
     /// assert_eq!((status.tick, status.stopping), (10, Some(StopReason::MaxTicks)));
     /// ```
+    ///
+    /// # Panics
+    /// If a stored setup callback or plugin fails, or a system panics.
     pub fn run_server<S, U>(mut self, config: ServerConfig, setup: S) -> World
     where
         S: FnOnce(&mut Ctx) -> U,
@@ -88,7 +94,7 @@ impl Game {
             ..ServerStatus::default()
         });
         ctx.set_in_setup(true);
-        run_setups(std::mem::take(&mut self.setups), &mut ctx);
+        run_setups(std::mem::take(&mut self.setups), &mut ctx).unwrap_or_else(|e| panic!("{e}"));
         let frame_fn = setup(&mut ctx).into_frame_fn();
         match frame_fn {
             Some(f) if self.headless_frames => self.add_setup_closure(f),
@@ -122,6 +128,7 @@ impl Game {
 
         let timing = FrameTiming {
             dt: fixed_dt as f32,
+            seconds: fixed_dt,
             fixed_steps: 1,
             alpha: 0.0,
         };
@@ -281,6 +288,7 @@ impl Game {
                     target_hz: hz,
                     ..ServerStatus::default()
                 });
+                Ok(())
             }),
         );
         self.sim_system(|ctx: &mut Ctx| ctx.world.resource_mut::<ServerStatus>().tick += 1)

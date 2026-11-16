@@ -18,11 +18,14 @@ It also holds the "Still Rust-only" table of book/src/c-cpp.md to
 scripts/rust-only.txt (see that file): the table and the list name the same
 Rust items, each item still exists, no C function of its own has appeared
 for it, and every chapter that says "Rust-only" is one the list covers.
+Last, scripts/check-settings-fields.py: every public field of a Rust settings
+struct has a C counterpart or a reason (scripts/settings-fields.txt).
 
     python3 scripts/check-ffi-coverage.py          # check
     python3 scripts/check-ffi-coverage.py --list   # print the untested exports
 """
 from pathlib import Path
+import importlib.util
 import re
 import sys
 
@@ -181,6 +184,16 @@ def rust_only_problems():
     return problems
 
 
+def settings_field_problems():
+    """Every field of a Rust settings struct has a C counterpart or a reason
+    (scripts/check-settings-fields.py, which also runs on its own)."""
+    path = ROOT / 'scripts' / 'check-settings-fields.py'
+    spec = importlib.util.spec_from_file_location('check_settings_fields', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.problems_found()
+
+
 def main():
     names = exports()
     missing = untested(names, test_text())
@@ -198,6 +211,7 @@ def main():
     for name in sorted((allowed.keys() & names) - missing):
         problems.append(f'{name}: has a test now; remove it from the allowlist.')
     problems += rust_only_problems()
+    problems += settings_field_problems()
     if problems:
         print('\n'.join(problems))
         return 1

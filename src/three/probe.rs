@@ -705,11 +705,15 @@ impl Graphics {
     }
 
     /// [`load_reflection_probe`](Self::load_reflection_probe) with errors as
-    /// values: [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file
+    /// values.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if the file
     /// is missing, [`Io`](crate::error::ErrorKind::Io) if it can't be read,
-    /// [`Decode`](crate::error::ErrorKind::Decode) if it isn't an image or holds
-    /// non-finite radiance, [`Invalid`](crate::error::ErrorKind::Invalid) if it isn't
-    /// 2:1, and the errors of
+    /// [`Decode`](crate::error::ErrorKind::Decode) if it isn't an image or
+    /// holds non-finite radiance, [`Invalid`](crate::error::ErrorKind::Invalid)
+    /// if it isn't 2:1, and the errors of
     /// [`bake_reflection_probe`](Self::bake_reflection_probe).
     ///
     /// ```

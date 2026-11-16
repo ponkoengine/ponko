@@ -1,0 +1,17 @@
+{
+  "name": "views_split_screen",
+  "scene": "Two-player split screen: a red box at x = -6 and a green box at x = +6 on a grey floor, the left half's camera 2.4 up and 5 back from the red box, the right half's from the green one; white sun from the upper left front, no shadows; 128x128 (two 64x128 pictures), 4x multisampling, no tonemapping, no bloom.",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.0075,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "001f7e062bdb3b2a",
+  "reason": "New window-view scenes: split screen and minimap"
+}

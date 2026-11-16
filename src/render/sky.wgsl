@@ -27,7 +27,8 @@ struct FullScreen {
 fn vs_far(@builtin(vertex_index) i: u32) -> FullScreen {
     let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
     var out: FullScreen;
-    out.clip = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.0, 1.0);
+    // Depth 0: the far plane of the reverse-Z scene depth.
+    out.clip = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
     out.uv = uv;
     return out;
 }
@@ -134,9 +135,10 @@ fn stars(dir: vec3<f32>) -> vec3<f32> {
     return tint * glow * twinkle * (h - 0.996) * 1500.0 * dark * smoothstep(0.0, 0.15, dir.y);
 }
 
-// The direction from the camera through the far plane at `uv`.
+// The direction from the camera through the far plane at `uv` (depth 0,
+// reverse-Z).
 fn far_dir(uv: vec2<f32>) -> vec3<f32> {
-    let far = frame.inv_view_proj * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.0, 1.0);
+    let far = frame.inv_view_proj * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
     return normalize(far.xyz / far.w - frame.camera.xyz);
 }
 

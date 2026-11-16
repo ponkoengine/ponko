@@ -131,6 +131,12 @@ pub(crate) enum Resource {
     /// The reflections' filtered levels, before they are copied into the
     /// screen image.
     ReflectionLevels,
+    /// The reflection cone's spread, as the trace writes it: where its
+    /// rays found something.
+    ReflectionHits,
+    /// The reflection cone's spread filled in where the rays found nothing,
+    /// before it is copied into the screen image's first level.
+    ReflectionSpread,
     /// Last frame's opaque image, which reflections trace against.
     ReflectionHistory,
     /// Temporal antialiasing's accumulated image.
@@ -182,6 +188,11 @@ pub(crate) enum Format {
     Occlusion,
     /// The image the opaque pass reads reflections from.
     Screen,
+    /// The reflection cone's spread: one 16-bit float channel.
+    Spread,
+    /// The reflection cone's spread and whether a ray found anything: two
+    /// 16-bit float channels.
+    Hits,
     /// The window's (or render target's) color format.
     Output,
     /// Decided by the game or by another module: not checked.
@@ -210,7 +221,7 @@ pub(crate) struct Desc {
 
 impl Resource {
     /// Every resource, in declaration order.
-    pub(crate) const ALL: [Resource; 45] = {
+    pub(crate) const ALL: [Resource; 47] = {
         use Resource::*;
         [
             VisibleDraws,
@@ -247,6 +258,8 @@ impl Resource {
             AmbientOcclusion,
             ScreenImage,
             ReflectionLevels,
+            ReflectionHits,
+            ReflectionSpread,
             ReflectionHistory,
             TaaHistory,
             OcclusionGrid,
@@ -312,6 +325,8 @@ impl Resource {
             Resource::AmbientOcclusion => desc("ambient occlusion", Frame, F::Occlusion, One),
             Resource::ScreenImage => desc("screen image", Frame, F::Screen, One),
             Resource::ReflectionLevels => desc("reflection levels", Frame, F::Screen, One),
+            Resource::ReflectionHits => desc("reflection hits", Frame, F::Hits, One),
+            Resource::ReflectionSpread => desc("reflection spread", Frame, F::Spread, One),
             Resource::ReflectionHistory => desc("reflection history", Persistent, F::Hdr, One),
             Resource::TaaHistory => desc("taa history", Persistent, F::Hdr, One),
             Resource::OcclusionGrid => desc("occlusion grid", Frame, F::Buffer, One),
@@ -933,6 +948,7 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 When::ALWAYS,
                 models![
                     u(GiShadowMap, A::Sample),
+                    u(LightShadowAtlas, A::Sample),
                     u(SkyTexture, A::Sample),
                     u(Environment, A::Sample),
                     u(GiViewColor, A::Color),
@@ -973,6 +989,49 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                     u(SceneDepth, A::DepthRead),
                 ],
             ),
+            // Before ambient occlusion: its denoise copies the cone's spread.
+            step(
+                "reflections",
+                on(F::SSR),
+                &[
+                    u(SceneDepth, A::SampleMs),
+                    u(ReflectionHistory, A::SamplePrevious),
+                    u(ScreenImage, A::Color),
+                    u(ReflectionHits, A::Color),
+                ],
+            ),
+            // The trace's level, filtered into the levels below it.
+            step(
+                "reflection levels",
+                on(F::SSR_LEVELS),
+                &[
+                    u(ScreenImage, A::Read),
+                    u(ReflectionLevels, A::Write),
+                    u(ReflectionLevels, A::CopyFrom),
+                    u(ScreenImage, A::CopyTo),
+                ],
+            ),
+            // The cone's spread where the rays found nothing, near a filtered
+            // level's hits (or the trace's, without them).
+            step(
+                "reflection spread",
+                on(F::SSR),
+                &[
+                    u(ReflectionHits, A::Sample),
+                    u(ScreenImage, A::Sample),
+                    u(ReflectionSpread, A::Color),
+                ],
+            ),
+            // Without ambient occlusion: the first level's mark and the
+            // cone's spread.
+            step(
+                "reflection mark",
+                When {
+                    all: F::SSR,
+                    none: F::AO,
+                },
+                &[u(ReflectionSpread, A::Sample), u(ScreenImage, A::Color)],
+            ),
             step(
                 "ambient occlusion",
                 on(F::AO),
@@ -988,28 +1047,10 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                     u(AoHistory, A::SamplePrevious).on(F::AO_TEMPORAL),
                     u(AoHistory, A::Color).on(F::AO_TEMPORAL),
                     u(AmbientOcclusion, A::Color).off(F::SSR),
-                    // With reflections, it is the first level of their image.
+                    // With reflections, it is the first level of their image,
+                    // and its alpha the cone's spread.
                     u(ScreenImage, A::Color).on(F::SSR),
-                ],
-            ),
-            step(
-                "reflections",
-                on(F::SSR),
-                &[
-                    u(SceneDepth, A::SampleMs),
-                    u(ReflectionHistory, A::SamplePrevious),
-                    u(ScreenImage, A::Color),
-                ],
-            ),
-            // The trace's level, filtered into the levels below it.
-            step(
-                "reflection levels",
-                on(F::SSR_LEVELS),
-                &[
-                    u(ScreenImage, A::Read),
-                    u(ReflectionLevels, A::Write),
-                    u(ReflectionLevels, A::CopyFrom),
-                    u(ScreenImage, A::CopyTo),
+                    u(ReflectionSpread, A::Sample).on(F::SSR),
                 ],
             ),
         ],

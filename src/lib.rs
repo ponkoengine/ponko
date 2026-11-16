@@ -38,6 +38,7 @@
 //!   game's world (`ctx.world`), with systems added on [`Game`](game::Game);
 //!   [`events`] carries messages between systems, [`systems`] holds the
 //!   engine's built-in systems and [`schedule`] explains which run together.
+//! - [`math`]: vectors, quaternions and matrices (glam's types).
 //! - [`input`] and [`actions`]: keys, mouse, gamepads and rebindable actions.
 //! - [`ui`] and [`text`]: the retained UI, fonts and text layout.
 //! - [`audio`]: sound effects and music.
@@ -91,7 +92,7 @@
 //!   benchmark crate. Not part of the API; they change in any release.
 //!
 //! What a 0.x release may change, and what it keeps, is in
-//! [STABILITY.md](https://github.com/ponkoengine/ponko/blob/main/STABILITY.md).
+//! [STABILITY.md](https://gitlab.com/ponkoengine/ponko/-/blob/main/STABILITY.md).
 
 #![warn(missing_docs)]
 // docs.rs: "Available on crate feature X only" on feature-gated items.
@@ -128,7 +129,9 @@ pub mod color;
 pub(crate) mod compressed;
 mod control;
 mod ctx;
+pub mod debug;
 pub mod diagnostics;
+mod draw_space;
 mod ecs;
 #[cfg(feature = "3d")]
 mod edit3d;
@@ -141,6 +144,7 @@ pub mod game;
 mod gamepad;
 pub mod gfx;
 pub mod handle;
+pub mod hierarchy;
 
 /// Raw handle ids, for the engine's own language bindings (`ponko_ffi`),
 /// whose C handles are plain ids. **Not part of the API**: hidden, unstable,
@@ -181,6 +185,7 @@ mod hot_reload;
 pub mod input;
 pub mod inventory;
 pub mod locale;
+pub mod math;
 
 #[cfg(feature = "inspector")]
 mod inspector;
@@ -222,8 +227,10 @@ mod schema;
 mod scope;
 pub mod server;
 pub mod sheet;
+pub mod skeleton2d;
 pub mod spatial;
 mod sprite_material;
+pub mod state;
 pub mod storage;
 /// Deprecated: [`Job`](crate::streaming::Job) and `CellStreamer` moved to
 /// [`streaming`], next to the asset streaming they work with.
@@ -256,3 +263,6 @@ pub mod ecs_core {
     #[doc(no_inline)]
     pub use ponko_ecs::*;
 }
+
+/// Window control and headless backend seam.
+pub mod window;

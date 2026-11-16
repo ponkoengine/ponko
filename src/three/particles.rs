@@ -56,6 +56,19 @@ pub enum ParticleBlend3D {
 /// Settings copied into an emitter. Change settings by creating a new emitter.
 /// All numeric inputs must be finite; ranges must be ordered and nonnegative
 /// (rotation may be negative). Invalid settings panic in `ParticleEmitter3D::new`.
+///
+/// # Defaults and cost
+///
+/// [`Default`] emits 10 particles per second, looping, in world space, each
+/// living 1 to 2 s with a speed of 1 to 2 units/s from a point, pulled down
+/// by a gravity of 9.81 units/s², 0.1 to 0.2 units wide, alpha blended, with
+/// a pool of 1024 slots and soft particles off. The pool is allocated once
+/// when the emitter is made: 40 bytes per slot, so 40 KiB at the default,
+/// whatever the rate. Each live particle is one camera-facing quad in an
+/// instanced draw; a particle that stands still costs no upload. Alpha
+/// particles are sorted far to near together; `softness` above 0 reads the
+/// scene's depth, which costs a copy of the frame (see
+/// [`softness`](Self::softness)).
 /// ```
 /// use ponko::prelude::*;
 /// let settings = ponko::d3::ParticleSettings::default().with_rate(40.0).with_blend(ponko::d3::ParticleBlend::Additive);
@@ -176,6 +189,12 @@ impl ParticleSettings3D {
     }
 
     /// Sets [`lifetime`](Self::lifetime): seconds, from `min` to `max`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let s = ponko::d3::ParticleSettings::default().with_lifetime(0.5, 1.5);
+    /// assert_eq!(s.lifetime, (0.5, 1.5));
+    /// ```
     #[must_use]
     pub fn with_lifetime(mut self, min: f32, max: f32) -> Self {
         self.lifetime = (min, max);
@@ -183,6 +202,12 @@ impl ParticleSettings3D {
     }
 
     /// Sets [`speed`](Self::speed): units per second, from `min` to `max`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let s = ponko::d3::ParticleSettings::default().with_speed(10.0, 20.0);
+    /// assert_eq!(s.speed, (10.0, 20.0));
+    /// ```
     #[must_use]
     pub fn with_speed(mut self, min: f32, max: f32) -> Self {
         self.speed = (min, max);
@@ -190,6 +215,12 @@ impl ParticleSettings3D {
     }
 
     /// Sets [`size`](Self::size): billboard size, from `min` to `max`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let s = ponko::d3::ParticleSettings::default().with_size(1.0, 2.0);
+    /// assert_eq!(s.size, (1.0, 2.0));
+    /// ```
     #[must_use]
     pub fn with_size(mut self, min: f32, max: f32) -> Self {
         self.size = (min, max);
@@ -197,6 +228,12 @@ impl ParticleSettings3D {
     }
 
     /// Sets [`rotation`](Self::rotation): radians, from `min` to `max`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let s = ponko::d3::ParticleSettings::default().with_rotation(-1.0, 1.0);
+    /// assert_eq!(s.rotation, (-1.0, 1.0));
+    /// ```
     #[must_use]
     pub fn with_rotation(mut self, min: f32, max: f32) -> Self {
         self.rotation = (min, max);
@@ -204,6 +241,12 @@ impl ParticleSettings3D {
     }
 
     /// Sets [`sheet`](Self::sheet): a sprite sheet of `columns` by `rows`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let s = ponko::d3::ParticleSettings::default().with_sheet(4, 2);
+    /// assert_eq!(s.sheet, (4, 2));
+    /// ```
     #[must_use]
     pub fn with_sheet(mut self, columns: u32, rows: u32) -> Self {
         self.sheet = (columns, rows);
@@ -246,7 +289,16 @@ impl Default for ParticleEmitter3D {
     }
 }
 impl ParticleEmitter3D {
-    /// Allocates the entire particle pool. Panics for invalid settings.
+    /// Allocates the entire particle pool (`max_particles` slots, 40 bytes
+    /// each) up front, so emitting never allocates.
+    ///
+    /// # Panics
+    ///
+    /// For invalid settings: a non-finite number, an unordered range, a
+    /// lifetime that is not positive, a negative speed, size, rate or drag, a
+    /// duration that is not positive, a non-finite shape, or a sprite-sheet
+    /// grid with a zero side.
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// let e = ponko::d3::ParticleEmitter::new(ponko::d3::ParticleSettings::default().with_max_particles(64));
@@ -264,9 +316,18 @@ impl ParticleEmitter3D {
         )
         .unwrap_or_else(|e| panic!("{e}"));
         match s.shape {
-            ParticleShape3D::Sphere { radius } => assert!(radius.is_finite(), "invalid particle sphere"),
-            ParticleShape3D::Cone { angle } => assert!(angle.is_finite(), "invalid particle cone"),
-            ParticleShape3D::Box { half_extents } => assert!(half_extents.is_finite(), "invalid particle box"),
+            ParticleShape3D::Sphere { radius } => assert!(
+                radius.is_finite(),
+                "particle sphere: radius must be finite; replace NaN or infinity"
+            ),
+            ParticleShape3D::Cone { angle } => assert!(
+                angle.is_finite(),
+                "particle cone: angle must be finite; replace NaN or infinity"
+            ),
+            ParticleShape3D::Box { half_extents } => assert!(
+                half_extents.is_finite(),
+                "particle box: half_extents must be finite; replace NaN or infinity"
+            ),
             _ => {}
         }
         Self {
@@ -292,6 +353,17 @@ impl ParticleEmitter3D {
     /// ```
     pub fn live_count(&self) -> usize {
         self.particles.len()
+    }
+
+    /// The settings the emitter was made with.
+    /// ```
+    /// use ponko::prelude::*;
+    /// let e = ponko::d3::ParticleEmitter::new(ponko::d3::ParticleSettings::default().with_softness(1.5));
+    /// assert_eq!(e.settings().softness, 1.5);
+    /// ```
+    #[must_use]
+    pub fn settings(&self) -> &ParticleSettings3D {
+        &self.settings
     }
 
     pub(crate) fn update(&mut self, dt: f32, transform: &Transform3D) {

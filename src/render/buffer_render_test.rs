@@ -22,8 +22,8 @@ pub(super) struct Rig {
     output: wgpu::Texture,
     target: wgpu::TextureView,
     textures: Vec<GpuTexture>,
-    pub renderer: Renderer3D,
-    pub ctx: Ctx,
+    pub renderer: Box<Renderer3D>,
+    pub ctx: Box<Ctx>,
     /// What the last draw collected: kept between draws, as a game's is.
     frame: Frame3D,
     /// The clock the next draw is drawn at: (seconds since the start,
@@ -143,11 +143,13 @@ impl Rig {
             view_formats: &[],
         });
         let target = output.create_view(&Default::default());
-        let mut renderer = Renderer3D::new(&device, &layout, output.format(), 0, &white, 4, true);
+        // Boxed: a test that holds two rigs by value comes close to a test
+        // thread's 2 MiB stack.
+        let mut renderer = Box::new(Renderer3D::new(&device, &layout, output.format(), 0, &white, 4, true));
         // These suites test the GPU-driven path wherever the device has it,
         // whatever the batch's size.
         renderer.batching.path = BatchPath::Gpu;
-        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(SIZE as f32, SIZE as f32));
+        let mut ctx = Box::new(Ctx::new(1.0 / 60.0, Vec2::new(SIZE as f32, SIZE as f32)));
         ctx.scene3d.sky.atmosphere = false;
         Some(Self {
             device,

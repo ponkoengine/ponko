@@ -284,17 +284,20 @@ pub struct SceneBench {
     textures: Vec<GpuTexture>,
     texture_bytes: u64,
     mips: Option<crate::render::mips::MipMaker>,
-    renderer: Renderer3D,
+    renderer: Box<Renderer3D>,
     timer: Option<GpuTimer>,
     gpu_frames_read: u64,
     /// The latest timed frame's passes: name and ms, same names added up.
     gpu_passes: Vec<(&'static str, f64)>,
-    ctx: Ctx,
+    ctx: Box<Ctx>,
     content: Content,
     /// The camera circles this point at this distance and height.
     orbit: (Vec3, f32, f32),
     frames: u32,
     shadow_workload: Option<String>,
+    /// Several cameras in the window (`PONKO_RENDER_VIEWS`): the main one
+    /// and the views, drawn as a game's window draws them.
+    window_views: crate::render::views::WindowViews,
 }
 
 /// Bytes of an RGBA8 texture with a full mip chain.
@@ -420,7 +423,9 @@ impl SceneBench {
             view_formats: &[],
         });
         let target = output.create_view(&Default::default());
-        let renderer = Renderer3D::new(
+        // Boxed, with the context: the bench is moved around by value, and
+        // tests that hold one come close to a test thread's 2 MiB stack.
+        let renderer = Box::new(Renderer3D::new(
             &device,
             &layout,
             output.format(),
@@ -428,8 +433,11 @@ impl SceneBench {
             &white.texture,
             samples,
             solid_prepass,
-        );
-        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(setup.size.0 as f32, setup.size.1 as f32));
+        ));
+        let mut ctx = Box::new(Ctx::new(
+            1.0 / 60.0,
+            Vec2::new(setup.size.0 as f32, setup.size.1 as f32),
+        ));
         ctx.scene3d.set_quality(setup.quality);
         ctx.gfx.assets3d.decals_supported = super::supports_decals(&device);
         let timer = GpuTimer::new(&device, &queue);
@@ -459,6 +467,7 @@ impl SceneBench {
             orbit: (Vec3::ZERO, 10.0, 5.0),
             frames: 0,
             shadow_workload: std::env::var("PONKO_SHADOW_WORKLOAD").ok(),
+            window_views: Default::default(),
         };
         bench.build();
         if setup.matched {
@@ -476,6 +485,33 @@ impl SceneBench {
         // TAA, for what motion vectors cost (no preset turns it on).
         if std::env::var("PONKO_RENDER_TAA").is_ok_and(|v| v.trim() == "1") {
             bench.ctx.scene3d.post.anti_aliasing = crate::render::AntiAliasing::Taa;
+        }
+        // The sun shadow filter, for comparing filters on one scene: 1
+        // (sharp) to 4 (contact-hardening).
+        if let Ok(filter) = std::env::var("PONKO_RENDER_SHADOW_FILTER") {
+            bench.ctx.scene3d.lighting.shadow_filter = match filter.trim() {
+                "1" => ShadowFilter::Sharp,
+                "2" => ShadowFilter::Soft,
+                "3" => ShadowFilter::Softest,
+                "4" => ShadowFilter::ContactHardening,
+                other => return Err(format!("PONKO_RENDER_SHADOW_FILTER={other} is not 1, 2, 3 or 4")),
+            };
+        }
+        // `PONKO_RENDER_VIEWS=2` or `4`: split screen, each camera circling
+        // the scene from its own side (what each more view costs).
+        if let Some(views) = std::env::var("PONKO_RENDER_VIEWS").ok().filter(|v| v.trim() != "1") {
+            let n = match views.trim() {
+                "2" => 2,
+                "4" => 4,
+                other => return Err(format!("PONKO_RENDER_VIEWS={other} is not 1, 2 or 4")),
+            };
+            let camera = &mut bench.ctx.scene3d.camera;
+            camera.rect = crate::camera::Viewport::split(n, 0);
+            for i in 1..n {
+                let mut view = *camera;
+                view.rect = crate::camera::Viewport::split(n, i);
+                bench.ctx.scene3d.views.push(crate::d3::View::new(view));
+            }
         }
         bench.place_camera();
         let _ = bench.device.poll(wgpu::PollType::wait_indefinitely());
@@ -732,10 +768,12 @@ impl SceneBench {
         let height = 1.8;
         let skeleton = Skeleton::new(
             (0..JOINTS)
-                .map(|j| Joint {
-                    name: format!("joint {j}"),
-                    parent: j.checked_sub(1),
-                    rest: Transform3D::at(Vec3::new(0.0, if j == 0 { 0.0 } else { height / JOINTS as f32 }, 0.0)),
+                .map(|j| {
+                    Joint::new(format!("joint {j}"), j.checked_sub(1)).with_rest(Transform3D::at(Vec3::new(
+                        0.0,
+                        if j == 0 { 0.0 } else { height / JOINTS as f32 },
+                        0.0,
+                    )))
                 })
                 .collect(),
         );
@@ -1292,10 +1330,20 @@ impl SceneBench {
             _ => 0.004,
         };
         let angle = 0.6 + self.frames as f32 * step;
-        let camera = &mut self.ctx.scene3d.camera;
-        camera.position = center + Vec3::new(angle.cos() * distance, height, angle.sin() * distance);
-        camera.look_at(center);
-        camera.far = (distance * 6.0).max(300.0);
+        let place = |camera: &mut crate::three::Camera3D, angle: f32| {
+            camera.position = center + Vec3::new(angle.cos() * distance, height, angle.sin() * distance);
+            camera.look_at(center);
+            camera.far = (distance * 6.0).max(300.0);
+        };
+        place(&mut self.ctx.scene3d.camera, angle);
+        let n = self.ctx.scene3d.views.len() + 1;
+        for (i, view) in self.ctx.scene3d.views.iter_mut().enumerate() {
+            place(
+                &mut view.camera,
+                angle + std::f32::consts::TAU * (i + 1) as f32 / n as f32,
+            );
+        }
+        self.ctx.place_cameras();
     }
 
     /// Moves what the scene moves this frame.
@@ -1350,6 +1398,11 @@ impl SceneBench {
         } else if let Some(grid) = self.renderer.take_occlusion() {
             frame.occlusion = Some(grid);
         }
+        // Several cameras: the sun's cascades cover every view.
+        frame.shadow_views.clear();
+        if ctx.scene3d.lighting.shadows {
+            frame.shadow_views.extend(ctx.scene3d.views.iter().map(|v| v.camera));
+        }
         frame.collect(
             &mut ctx.world,
             &ctx.gfx.assets3d,
@@ -1357,6 +1410,10 @@ impl SceneBench {
             &ctx.scene3d.camera,
             &ctx.scene3d.lighting,
         );
+        if !ctx.scene3d.views.is_empty() {
+            crate::three::api::collect_window_views(&mut ctx.world, &ctx.gfx.assets3d, frame, &ctx.scene3d, &skins);
+        }
+        let frame = &mut ctx.gfx.frame3d;
         frame.skins = skins;
         if ctx.scene3d.sky.atmosphere {
             match frame.sky_light {
@@ -1388,51 +1445,56 @@ impl SceneBench {
         let updated = Instant::now();
         let light = self.collect();
         let collected = Instant::now();
-        let ctx = &mut self.ctx;
-        let scene = Scene3D {
-            frame: &ctx.gfx.frame3d,
-            lighting: &ctx.scene3d.lighting,
-            sky: &ctx.scene3d.sky,
-            light,
-            camera: ctx.scene3d.camera.position,
-            post: &ctx.scene3d.post,
-            time: (self.frames as f32 / 60.0, 1.0 / 60.0),
-            occlusion: ctx.scene3d.camera.occlusion_culling,
+        let (prepared, encoded, submitted, command_buffers) = if self.ctx.scene3d.views.is_empty() {
+            let ctx = &mut self.ctx;
+            let scene = Scene3D {
+                frame: &ctx.gfx.frame3d,
+                lighting: &ctx.scene3d.lighting,
+                sky: &ctx.scene3d.sky,
+                light,
+                camera: ctx.scene3d.camera.position,
+                post: &ctx.scene3d.post,
+                time: (self.frames as f32 / 60.0, 1.0 / 60.0),
+                occlusion: ctx.scene3d.camera.occlusion_culling,
+            };
+            self.renderer.prepare(
+                &self.device,
+                &self.queue,
+                &Prepare3D {
+                    scene: &scene,
+                    lut: None,
+                    size: self.setup.size,
+                },
+            );
+            ctx.gfx.frame3d.motion.reset = false;
+            let prepared = Instant::now();
+            if let Some(timer) = &mut self.timer {
+                timer.begin_frame();
+            }
+            let mut buffers = self.renderer.draw(
+                &self.device,
+                &self.target,
+                wgpu::Color::BLACK,
+                &self.textures,
+                self.timer.as_ref(),
+            );
+            if let Some(timer) = &mut self.timer {
+                let mut encoder = self.device.create_command_encoder(&Default::default());
+                timer.resolve(&mut encoder);
+                buffers.push(encoder.finish());
+            }
+            let command_buffers = buffers.len();
+            let encoded = Instant::now();
+            self.queue.submit(buffers);
+            let submitted = Instant::now();
+            if let Some(timer) = &mut self.timer {
+                timer.submitted();
+            }
+            self.renderer.submitted();
+            (prepared, encoded, submitted, command_buffers)
+        } else {
+            self.draw_views(light)
         };
-        self.renderer.prepare(
-            &self.device,
-            &self.queue,
-            &Prepare3D {
-                scene: &scene,
-                lut: None,
-                size: self.setup.size,
-            },
-        );
-        ctx.gfx.frame3d.motion.reset = false;
-        let prepared = Instant::now();
-        if let Some(timer) = &mut self.timer {
-            timer.begin_frame();
-        }
-        let mut buffers = self.renderer.draw(
-            &self.device,
-            &self.target,
-            wgpu::Color::BLACK,
-            &self.textures,
-            self.timer.as_ref(),
-        );
-        if let Some(timer) = &mut self.timer {
-            let mut encoder = self.device.create_command_encoder(&Default::default());
-            timer.resolve(&mut encoder);
-            buffers.push(encoder.finish());
-        }
-        let command_buffers = buffers.len();
-        let encoded = Instant::now();
-        self.queue.submit(buffers);
-        let submitted = Instant::now();
-        if let Some(timer) = &mut self.timer {
-            timer.submitted();
-        }
-        self.renderer.submitted();
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         let done = Instant::now();
 
@@ -1488,6 +1550,75 @@ impl SceneBench {
             command_buffers,
             uploads: crate::render::traffic::take(),
         }
+    }
+
+    /// A frame of several cameras, as a game's window draws it (see
+    /// `Renderer::prepare_3d_views`): each camera's picture prepared, drawn
+    /// and submitted in turn, then copied into its rectangle. Preparing and
+    /// encoding interleave, so all of it counts as encoding; the copy is
+    /// the submit. Gives when preparing, encoding and submitting ended, and
+    /// the command buffers of the copy.
+    fn draw_views(&mut self, light: SkyLight) -> (Instant, Instant, Instant, usize) {
+        let prepared = Instant::now();
+        if let Some(timer) = &mut self.timer {
+            timer.begin_frame();
+        }
+        let ctx = &mut self.ctx;
+        let main = Scene3D {
+            frame: &ctx.gfx.frame3d,
+            lighting: &ctx.scene3d.lighting,
+            sky: &ctx.scene3d.sky,
+            light,
+            camera: ctx.scene3d.camera.position,
+            post: &ctx.scene3d.post,
+            time: (self.frames as f32 / 60.0, 1.0 / 60.0),
+            occlusion: ctx.scene3d.camera.occlusion_culling,
+        };
+        let views = ctx
+            .scene3d
+            .views
+            .iter()
+            .zip(&ctx.gfx.frame3d.window_views)
+            .map(|(view, frame)| {
+                let scene = Scene3D {
+                    frame,
+                    camera: view.camera.position,
+                    post: view.post.as_ref().unwrap_or(&ctx.scene3d.post),
+                    occlusion: false,
+                    ..main
+                };
+                (scene, view.camera.rect, view.clear.unwrap_or(Color::BLACK))
+            });
+        let size = [self.setup.size.0, self.setup.size.1];
+        self.window_views.draw_3d(
+            &self.device,
+            &self.queue,
+            &mut self.renderer,
+            self.output.format(),
+            size,
+            (main, ctx.scene3d.camera.rect, Color::BLACK),
+            views,
+            &|_| None,
+            &self.textures,
+            self.timer.as_ref(),
+        );
+        ctx.gfx.frame3d.motion.reset = false;
+        for frame in &mut ctx.gfx.frame3d.window_views {
+            frame.motion.reset = false;
+        }
+        let encoded = Instant::now();
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.window_views
+            .composite(&mut encoder, &self.target, size, Color::BLACK, None);
+        if let Some(timer) = &mut self.timer {
+            timer.resolve(&mut encoder);
+        }
+        self.queue.submit([encoder.finish()]);
+        let submitted = Instant::now();
+        if let Some(timer) = &mut self.timer {
+            timer.submitted();
+        }
+        (prepared, encoded, submitted, 1)
     }
 
     // ------------------------------------------------------------ reporting
@@ -1605,6 +1736,7 @@ impl SceneBench {
                 "shadow_resolution": l.shadow_resolution,
                 "shadow_refresh": l.shadow_refresh,
                 "shadow_filter": l.shadow_filter as u32,
+                "shadow_sun_size": l.shadow_sun_size,
                 "light_shadow_views": l.light_shadow_views,
                 "light_shadow_resolution": l.light_shadow_resolution,
                 "light_shadow_atlas": l.light_shadow_atlas,

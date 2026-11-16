@@ -20,7 +20,7 @@ impl Renderer {
         match *self {}
     }
     #[cfg(feature = "3d")]
-    pub fn mesh_costs(&self) -> Vec<(u32, usize, usize, usize, usize)> {
+    pub fn visit_mesh_costs(&self, _visit: impl FnMut(u32, usize, usize, usize, usize)) {
         match *self {}
     }
     pub fn set_draw_hidden(&mut self, _on: bool, _always: bool) {
@@ -257,6 +257,19 @@ impl Renderer {
     pub fn prepare_3d(&mut self, _scene: &crate::three::Scene3D<'_>, _collect_ms: f32) {
         match *self {}
     }
+    #[cfg(feature = "3d")]
+    pub fn prepare_3d_views<'a>(
+        &mut self,
+        _main: (&crate::three::Scene3D<'a>, crate::camera::Viewport, crate::color::Color),
+        _views: impl ExactSizeIterator<Item = (crate::three::Scene3D<'a>, crate::camera::Viewport, crate::color::Color)>,
+        _collect_ms: f32,
+    ) {
+        match *self {}
+    }
+    #[cfg(feature = "3d")]
+    pub fn drop_3d_views(&mut self) {
+        match *self {}
+    }
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -268,6 +281,7 @@ impl Renderer {
         _ui_view: Mat4,
         _capture: bool,
         _lights: &crate::light2d::Lighting2D,
+        _cameras2d: &[crate::camera::views::Camera2DFrame],
     ) -> FrameStatus {
         match *self {}
     }

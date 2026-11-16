@@ -714,7 +714,7 @@ pub unsafe extern "C" fn ponko_ctx_physics3d_free_mesh(
 /// physics step. `*out_found` says whether anything was hit; `*out_hit` is
 /// written only then.
 /// # Safety
-/// Live ctx, outside query callbacks; writable outputs.
+/// Live ctx (inside a `ponko_query` callback too, not `ponko_query_par`); writable outputs.
 /// ```
 /// use ponko_ffi::*;
 /// let (mut found, mut hit) = (false, PonkoHit3D::default());
@@ -750,7 +750,7 @@ pub unsafe extern "C" fn ponko_ctx_cast_ray3d(
 /// up to `capacity` hits and sets `*out_count` to how many there are, so a
 /// too-small buffer can be grown and the call repeated.
 /// # Safety
-/// Live ctx, outside query callbacks; `out_hits` writable for `capacity`
+/// Live ctx (inside a `ponko_query` callback too, not `ponko_query_par`); `out_hits` writable for `capacity`
 /// (may be null if 0); writable count.
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_cast_ray3d_all(std::ptr::null_mut(), Default::default(), Default::default(), 1.0, ponko_ffi::ponko_query_filter3d(), std::ptr::null_mut(), 0, std::ptr::null_mut()) } as u32, 1);
@@ -857,7 +857,7 @@ pub unsafe extern "C" fn ponko_ctx_cast_capsule3d(
 /// Entities whose collider overlaps the ball. Writes up to `capacity` and
 /// sets `*out_count` to how many there are in total.
 /// # Safety
-/// Live ctx, outside query callbacks; `out_entities` writable for
+/// Live ctx (inside a `ponko_query` callback too, not `ponko_query_par`); `out_entities` writable for
 /// `capacity` (may be null if 0); writable count.
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_overlap_sphere3d(std::ptr::null_mut(), Default::default(), 1.0, ponko_ffi::ponko_query_filter3d(), std::ptr::null_mut(), 0, std::ptr::null_mut()) } as u32, 1);
@@ -1020,7 +1020,7 @@ mod imp {
     use ponko_ecs::Entity;
 
     use super::*;
-    use crate::ctx::{collect, ctx_access, out};
+    use crate::ctx::{collect, ctx_access, out, physics3d_read};
     use crate::game::{build, ok};
     use crate::types::to_c;
     use crate::{CMirror, Failure, Kind, Mirror, PonkoCtx, boundary, builtin, error, invalid, mirror};
@@ -1489,8 +1489,7 @@ mod imp {
             let filter = filter_from_c(filter);
             // SAFETY: forwarded caller contract.
             let hit = unsafe {
-                ctx_access(ctx, |c| {
-                    let p = &c.physics3d;
+                physics3d_read(ctx, |p| {
                     Ok(match shape {
                         Cast::Ray => p.cast_ray(origin, direction, max_distance, filter),
                         Cast::Sphere(r) => p.cast_sphere(origin, r, direction, max_distance, filter),
@@ -1530,9 +1529,8 @@ mod imp {
                 let filter = filter_from_c(filter);
                 // SAFETY: forwarded caller contract.
                 unsafe {
-                    ctx_access(ctx, |c| {
-                        c.physics3d
-                            .cast_ray_all(to_c(origin), to_c(direction), max_distance, filter, hits);
+                    physics3d_read(ctx, |p| {
+                        p.cast_ray_all(to_c(origin), to_c(direction), max_distance, filter, hits);
                         Ok(())
                     })?;
                     let mut n = 0;
@@ -1566,8 +1564,7 @@ mod imp {
                 let (center, filter) = (to_c(center), filter_from_c(filter));
                 // SAFETY: forwarded caller contract.
                 unsafe {
-                    ctx_access(ctx, |c| {
-                        let p = &c.physics3d;
+                    physics3d_read(ctx, |p| {
                         match shape {
                             Overlap::Sphere(r) => p.overlap_sphere(center, r, filter, found),
                             Overlap::Box(size, q) => {

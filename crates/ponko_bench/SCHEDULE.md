@@ -200,3 +200,24 @@ system may move across one).
 - While profiling (`Game::profile_headless`, `Perf::set_profiling(true)`),
   batches stay on the game's thread so each system can be charged its own
   allocations; and on the web there are no threads to use.
+
+## Run conditions (`run_if`)
+
+`conditions/...` is `schedule-off/...` with a game state and
+`.run_if(in_state(..))` on every system (the condition always holds).
+Medians and minimums in µs per tick, Apple M4 Max, release, two runs each
+(load average 80-145: other builds were running). "before" is the
+revision without game states; "after" adds them.
+
+| benchmark | before (min / p50) | after, no condition (min / p50) | after, `run_if` on all (min / p50) |
+|---|---|---|---|
+| `ctx/64x100/light` | 9.46 / 9.62, 9.75 / 10.08 | 9.42 / 9.62, 9.42 / 9.75 | 9.58 / 9.79, 9.42 / 9.67 |
+| `views/64x100/light` | 9.92 / 10.17, 10.33 / 10.58 | 10.12 / 10 (three reruns) | 10.08 / 10.42, 10.38 / 10.67 |
+| `ctx/8x16000/light` | 21.67 / 22.46, 22.25 / 22.67 | 22.04 / 22.29, 22.21 / 22.62 | 22.25 / 22.58, 21.88 / 22.12 |
+| `views/8x16000/light` | 22.29 / 22.71, 22.08 / 22.38 | 22.25 / 22.54, 22.25 / 22.46 | 22.33 / 22.50, 21.75 / 22.29 |
+
+No difference above the noise (about 0.3 µs per tick here, under 5 ns per
+system for 64 systems): a system without a condition checks an empty list;
+one with a state condition reads one resource. The `views/64x100` medians
+of the first "after" runs were bimodal (10 or 23 µs between runs of the
+same binary under this load); three reruns gave 10 µs medians for both.

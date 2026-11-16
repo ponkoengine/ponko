@@ -125,21 +125,26 @@ player walks on is exactly what `ctx.gfx.load_mesh(path)` draws.
 `ctx.load_collision_mesh_with(path, CollisionMeshOptions { scale, convex })`
 scales the corners first, or makes a convex hull (for a dynamic body)
 instead. Each file and options is read once; loading it again gives the same
-mesh. It fails with an error for a missing file or one without triangles.
+mesh. Like the other setup loaders they panic, with a message starting
+`ponko:`, for a missing file or one without triangles;
+`try_load_collision_mesh` and `try_load_collision_mesh_with` return the
+error instead ([Data files](data-files.md#loader-failure-policy)).
 
 ```rust
 # use ponko::d3::*;
 # use ponko::prelude::*;
 # fn setup(ctx: &mut Ctx) {
 let look = ctx.gfx.load_mesh("yard.glb");
-let solid = ctx.load_collision_mesh("yard.glb").expect("the yard loads");
+let solid = ctx.load_collision_mesh("yard.glb");
 ctx.world.spawn((Transform::default(), Model::new(look), RigidBody::fixed(), Collider::mesh(solid)));
 # }
 ```
 
 C++: `ctx.load_collision_mesh(path, scale, convex)` (the last two default to
-the file as it is); C: `ponko_ctx_load_collision_mesh(ctx, path, scale,
-convex, &mesh)`. For triangles of your own, `MeshData::triangles()` gives a
+the file as it is; it throws `ponko::error`, and `try_load_collision_mesh`
+returns a `ponko::result`); C: `ponko_ctx_load_collision_mesh(ctx, path,
+scale, convex, &mesh)`, which returns a status with the error kind in
+`ponko_last_error_kind()`. For triangles of your own, `MeshData::triangles()` gives a
 mesh's indices three at a time, the shape `trimesh` takes.
 
 In a scene file, a mesh collider names its mesh file the same way, and
@@ -380,10 +385,14 @@ Try it: `cargo run --release --example vehicle --features physics3d`.
 - `cast_ray(origin, direction, max_distance, filter)`: the closest hit,
   with the entity, point, surface normal and distance.
 - `cast_ray_all(.., &mut out)`: every hit, nearest first.
-- `cast_sphere` and `cast_capsule`: sweep a shape (a wheel, a character)
-  and get the first thing it would touch.
-- `overlap_sphere`, `overlap_box` and `overlap_capsule`: every entity
-  inside, into `out`.
+- `cast_sphere`, `cast_box` and `cast_capsule`: sweep a shape (a wheel,
+  a crate, a character) and get the first thing it would touch.
+- `overlap_point`, `overlap_sphere`, `overlap_box` and `overlap_capsule`:
+  every entity inside, into `out`.
+- `closest_point(point, max_distance, filter)`: the nearest collider and
+  its nearest point.
+- `penetrations(shape, position, rotation, filter, &mut out)`: how deep a
+  shape sinks into each collider it overlaps, and the way out.
 - `apply_impulse(e, impulse)` and `apply_impulse_at(e, impulse, point)`:
   a push in kg × m/s (multiply by `mass(e)` for a speed change); at a point
   it also spins the body.
@@ -394,8 +403,93 @@ what a collider in those groups would touch, and `.with_sensors()` sees
 sensors too (they're skipped by default). Lists go into a `Vec` you keep,
 so queries don't allocate.
 
+The 2D and 3D queries follow the same rules:
+
+- **Direction.** Any non-zero direction works: it is normalized, so
+  distances are in world units along it. A zero or non-finite direction
+  finds nothing.
+- **Range.** `max_distance` may be `f32::INFINITY`; a negative or NaN one,
+  or a non-finite origin or rotation, finds nothing.
+- **Starting inside.** A ray that starts inside a collider hits it at
+  distance 0, at the origin, with a zero normal. A shape cast that starts
+  touching or overlapping a collider hits it at distance 0, with the
+  contact point and the normal that pushes the shape out.
+- **Order.** Lists of hits come nearest first; equal distances are ordered
+  by entity id (`Entity::to_bits`, lowest first). Overlap lists come in no
+  particular order. A single-hit query with two hits at exactly the same
+  distance returns either one.
+- **Sizes.** A radius or size below `f32::EPSILON` (or NaN) counts as that
+  tiny shape.
+
+`closest_point` treats a point inside a collider as its own nearest point
+(distance 0, `inside` set), and `penetrations` lists deepest first, equal
+depths by entity id. Every 3D query has a 2D form with the same name,
+arguments and rules (a sphere in 3D is a circle in 2D: `cast_circle`,
+`overlap_circle`); [2D physics](physics.md#rays-overlaps-and-pushes) has
+them, and a test asks both the same questions and compares the answers.
+
 New bodies join at the next step, so a query in the tick you spawned them
 won't see them yet.
+
+### Shape casts and the nearest surface
+
+A ray is a point moving along a line; a shape cast moves a whole sphere,
+box or capsule, so a crate or a character finds what it would bump into.
+`cast_box` takes the box's turn as well (`Quat::IDENTITY` for none):
+
+<div class="lang-pair">
+<div>
+
+```rust
+{{#include ../../examples/physics3d.rs:shape_queries}}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:physics3d_shape_queries}}
+```
+
+</div>
+</div>
+
+A body pushed into a wall (by a moving platform, or after a teleport) gets
+out with `penetrations`: each entry has the collider, how deep the shape
+is in (`depth`) and the direction out (`normal`), deepest first. Moving by
+`normal * depth` of the first one frees the shape from that collider. The
+nearest surface is `closest_point`, for snapping to the ground or "how far
+is the nearest wall":
+
+```rust
+# use ponko::prelude::*;
+fn unstick(ctx: &mut Ctx, me: Entity) {
+    let shape = ponko::d3::Collider::capsule(1.2, 0.3).shape;
+    let Some(at) = ctx.world.get::<d3::Transform>(me).map(|t| t.position) else {
+        return;
+    };
+    let mut pushes = Vec::new();
+    let not_me = ponko::d3::QueryFilter::default().exclude(me);
+    ctx.physics3d.penetrations(shape, at, Quat::IDENTITY, not_me, &mut pushes);
+    if let (Some(out), Some(t)) = (pushes.first(), ctx.world.get_mut::<d3::Transform>(me)) {
+        t.position += out.normal * out.depth;
+    }
+}
+
+fn wall_distance(ctx: &Ctx, at: Vec3) -> Option<f32> {
+    let near = ctx.physics3d.closest_point(at, 10.0, ponko::d3::QueryFilter::default())?;
+    Some(near.distance)
+}
+```
+
+Collision meshes work as query shapes too (`penetrations` takes any
+`d3::Shape`, and a mesh keeps the offset it was made with), and every
+query sees convex hulls, triangle meshes and heightfield terrain. From C:
+`ponko_ctx_cast_box3d`, `ponko_ctx_overlap_point3d`,
+`ponko_ctx_closest_point3d` and `ponko_ctx_penetrations3d` (the shape is a
+`PonkoCollider3D`; its settings other than the shape are ignored); C++
+`ctx::cast_box3d`, `overlap_point3d`, `closest_point3d` and
+`penetrations3d`.
 
 `ctx.physics3d.set_paused(true)` holds the step while the other sim systems
 run, for a pause screen
@@ -445,6 +539,24 @@ leaves itself out of its filter (`groups = CollisionGroups::new(CROWD, !CROWD)`)
 and each sweep only meets the level.
 For bigger crowds, move them yourself, with a ray down to find the ground.
 Level geometry as a triangle mesh is somewhat cheaper than a heightfield.
+
+Queries only read the world, and with reused buffers they don't allocate.
+10,000 of each through a level of 1,000 fixed boxes and spheres
+(`cargo run --release -p ponko_bench -- queries-10k`, M4 Max, median of 5;
+the 2D `physics/rays-10k` runs the same counts):
+
+| 10,000 queries | Time |
+|---|---|
+| `cast_ray` | 1.4 ms (rapier alone: 1.2 ms) |
+| `cast_ray_all` | 11.4 ms |
+| `cast_sphere` | 9.0 ms |
+| `cast_box`, turned | 9.5 ms (rapier alone: 9.1 ms) |
+| `closest_point` | 1.2 ms |
+| `penetrations`, a turned box | 7.9 ms |
+
+Ponko's shape casts also check whether the shape starts inside something
+(the "starting inside" rule), which rapier's own cast doesn't; with that,
+a box cast costs about 4% more than rapier's.
 
 Try it: `cargo run --release --example physics3d --features physics3d`.
 

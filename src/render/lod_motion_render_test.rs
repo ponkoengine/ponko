@@ -190,16 +190,8 @@ fn glowing(color: Color) -> MaterialDesc {
 /// Two joints: a base, and a top 1 up.
 fn arm() -> Skeleton {
     Skeleton::new(vec![
-        Joint {
-            name: "base".into(),
-            parent: None,
-            rest: Transform3D::default(),
-        },
-        Joint {
-            name: "top".into(),
-            parent: Some(0),
-            rest: Transform3D::at(vec3(0.0, 1.0, 0.0)),
-        },
+        Joint::new("base", None),
+        Joint::new("top", 0).with_rest(Transform3D::at(vec3(0.0, 1.0, 0.0))),
     ])
 }
 

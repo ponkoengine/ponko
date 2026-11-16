@@ -79,6 +79,56 @@ pub unsafe extern "C" fn ponko_ctx_ui_set_initial_focus(
     })
 }
 
+/// Makes pressing button `id` also close its screen (or stops it, `on`
+/// false): a Back, Close or Resume button. A click or Enter on it sends its
+/// `clicked` event and then pops its screen as Escape would, with a
+/// `screen_popped` event (Rust `Ui::set_closes_screen`). `PONKO_NOT_FOUND`
+/// for a node that doesn't exist.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ui_set_closes_screen(std::ptr::null_mut(), ponko_ffi::PONKO_UI_SCREEN, 0, true) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_set_closes_screen(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    id: u64,
+    on: bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        with_ui(ctx, target, |ui| {
+            let id = existing(ui, id)?;
+            ui.set_closes_screen(id, on);
+            Ok(())
+        })
+    })
+}
+
+/// Whether pressing node `id` closes its screen
+/// (`ponko_ctx_ui_set_closes_screen`).
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ui_closes_screen(std::ptr::null_mut(), ponko_ffi::PONKO_UI_SCREEN, 0, &mut false) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_on` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_closes_screen(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    id: u64,
+    out_on: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        with_ui(ctx, target, |ui| {
+            let id = existing(ui, id)?;
+            out(out_on, ui.closes_screen(id))
+        })
+    })
+}
+
 /// Shows the tree under a detached `root` as a HUD: display-only UI (a
 /// score, a health bar) drawn below every screen. Escape (or a gamepad's
 /// East button) never closes it, it takes no pointer or focus, and it

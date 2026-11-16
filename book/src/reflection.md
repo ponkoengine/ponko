@@ -132,6 +132,34 @@ let copy = world.spawn_json(snapshot)?;
 
 Components that aren't reflected are left out of `entity_json`.
 
+## The JSON types
+
+The values are `ponko::reflect::JsonValue`, and save migrations hand an
+entity's components over as a `ponko::reflect::JsonMap` (a JSON object).
+They are `serde_json`'s `Value` and `Map<String, Value>` themselves under
+names that come with the engine: a game names them without adding
+`serde_json` to its own dependencies, and values pass to and from code that
+uses `serde_json` directly unchanged. `json!` (in the prelude) builds them.
+The `serde_json` crate itself is `ponko::reflect::json` (`json::from_str`,
+`json::to_string_pretty`, ...).
+
+```rust
+use ponko::reflect::{JsonMap, JsonValue};
+
+# world.reflect::<ponko::d2::Transform>();
+# let e = world.spawn((ponko::d2::Transform::default(),));
+let snapshot: JsonValue = world.entity_json(e)?;
+let components: &JsonMap = snapshot.as_object().expect("an object, keyed by name");
+assert!(components.contains_key("Transform2D"));
+```
+
+Which `serde_json` stands behind them follows the compatibility promise for
+re-exported crates in `STABILITY.md`; the names don't change how saves are
+written. The MCP server crate has the same aliases, `ponko_mcp::JsonValue`
+and `ponko_mcp::JsonMap`, plus `ponko_mcp::json!` for writing a request.
+C and C++ have no counterpart to these names: the native API passes JSON
+as text, and native games use their own JSON library to read it.
+
 ## Errors
 
 Every call returns a `ReflectError` that says what went wrong:

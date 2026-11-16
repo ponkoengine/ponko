@@ -360,7 +360,7 @@ impl UiAccessAdapter {
     /// use ponko::prelude::*;
     /// let mut ui = ponko::ui::Ui::default();
     /// let root = ui.root().id();
-    /// ui.push_screen(root, false);
+    /// ui.push_modeless(root);
     /// ui.frame(vec2(800.0, 600.0), &ponko::ui::UiInput::default());
     /// let mut adapter = ponko::ui::UiAccessAdapter::inert();
     /// adapter.update(&mut ui, 2.0);
@@ -757,7 +757,7 @@ mod tests {
                 .value(0.5)
                 .accessible_name("Volume")
                 .id();
-            ui.push_screen(root, false);
+            ui.push_modeless(root);
             ui.frame(VIEW, &UiInput::default());
             let mut adapter = UiAccessAdapter::inert();
             adapter.set_title("Sample menu");

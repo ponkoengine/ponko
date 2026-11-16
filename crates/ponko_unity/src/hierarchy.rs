@@ -361,7 +361,7 @@ fn expand(
     let source = b["m_SourcePrefab"]
         .obj_ref()
         .and_then(|r| r.guid)
-        .ok_or_else(|| Error::new(format!("prefab instance {} has no source prefab", instance.file_id)))?;
+        .ok_or_else(|| Error::invalid(format!("prefab instance {} has no source prefab", instance.file_id)))?;
     let parent = modification["m_TransformParent"].obj_ref().unwrap_or(ObjRef {
         file_id: 0,
         guid: None,
@@ -458,10 +458,10 @@ fn expand(
     }
     // A prefab: its own flattened objects, overridden, then re-keyed.
     if loading.contains(&source) {
-        return Err(Error::new(format!("prefabs nest in a loop through {source}")));
+        return Err(Error::invalid(format!("prefabs nest in a loop through {source}")));
     }
     if loading.len() >= MAX_NESTING {
-        return Err(Error::new(format!(
+        return Err(Error::invalid(format!(
             "prefabs nest more than {MAX_NESTING} deep (at {source})"
         )));
     }
@@ -477,7 +477,7 @@ fn expand(
     // Checked before the copy.
     let inner_weight = cache[&source].weight;
     if flat.weight.saturating_add(inner_weight) > MAX_WEIGHT {
-        return Err(Error::new(format!(
+        return Err(Error::invalid(format!(
             "prefab instance {}: the objects placed come to more than {} MiB (prefabs placed too many times?)",
             instance.file_id,
             MAX_WEIGHT >> 20
@@ -572,13 +572,13 @@ const MAX_PATH_PARTS: usize = 64;
 /// from `steps`; out of steps, it's an error (so a modification's work is
 /// bounded by `steps`, not by the sizes it names or the maps it searches).
 pub(crate) fn set_path(v: &mut Value, path: &str, value: Value, steps: &mut usize) -> Result<(), Error> {
-    let too_much = || Error::new(format!("property path {path:?}: more work than the file's size allows"));
+    let too_much = || Error::invalid(format!("property path {path:?}: more work than the file's size allows"));
     let mut take = |n: usize| -> Result<(), Error> {
         *steps = steps.checked_sub(n).ok_or_else(too_much)?;
         Ok(())
     };
     if path.split('.').count() > MAX_PATH_PARTS {
-        return Err(Error::new(format!(
+        return Err(Error::invalid(format!(
             "property path {path:?}: more than {MAX_PATH_PARTS} parts"
         )));
     }
@@ -700,7 +700,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(small, Ok(256));
         assert!(took < std::time::Duration::from_secs(10), "took {took:?}");
-        assert!(err.unwrap().message.contains("placed too many times"));
+        assert!(err.unwrap().message().contains("placed too many times"));
     }
 
     /// A size or index from a modification can't make a huge array, and a

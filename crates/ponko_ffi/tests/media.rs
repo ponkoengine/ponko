@@ -210,8 +210,12 @@ fn sounds_are_made_from_samples_and_silent_headless() {
     run(1, Some(make_sounds), (&mut s as *mut Sounds).cast());
     let beep = s.beep.unwrap();
     assert!((beep.seconds - 0.5).abs() < 1e-3, "{}", beep.seconds);
-    // Headless runs play nothing, and say so with id 0.
-    assert!(s.playing.iter().all(|p| p.id == 0));
+    // Headless runs play nothing, but still hand each sound its own handle.
+    let ids: Vec<u64> = s.playing.iter().map(|p| p.id).collect();
+    assert!(
+        ids.iter().all(|id| *id != 0) && ids.windows(2).all(|w| w[0] < w[1]),
+        "{ids:?}"
+    );
     assert_eq!(s.errors, [PONKO_INVALID_ARGUMENT; 3]);
 }
 

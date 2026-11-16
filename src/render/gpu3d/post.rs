@@ -59,7 +59,7 @@ use super::{
     for_samples, passes,
 };
 use crate::render::AntiAliasing;
-use crate::render::gpu::GpuTexture;
+use crate::render::gpu_textures::TextureTable;
 use crate::render::smaa::Smaa;
 use crate::render::traffic::{MIRRORED, Mirror, NewBuffer, Upload};
 use crate::three::PostUniform;
@@ -527,6 +527,12 @@ impl PostChain {
         }
     }
 
+    /// Trades SMAA's passes (sized for one view) with `other`'s, for a
+    /// window view (see `views.rs`).
+    pub(super) fn swap_smaa(&mut self, other: &mut Option<Smaa>) {
+        std::mem::swap(&mut self.smaa, other);
+    }
+
     /// The chain's images for a scene of `size`, reading the frame from
     /// `hdr` or (after an odd number of screen effects) `scene_view`.
     pub(super) fn targets(
@@ -637,7 +643,7 @@ impl PostChain {
         images: &PostTargets,
         in_hdr: bool,
         view: &wgpu::TextureView,
-        textures: &[GpuTexture],
+        textures: &dyn TextureTable,
         time: &PassTimer<'_, 't>,
     ) {
         let (post, bloom_prefilter) = if in_hdr {
@@ -722,7 +728,10 @@ impl PostChain {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, post, &[]);
-        pass.set_bind_group(1, &textures[self.lut as usize].bind_group, &[]);
+        let lut = textures
+            .texture(self.lut)
+            .expect("a live lookup table (checked in prepare)");
+        pass.set_bind_group(1, &lut.bind_group, &[]);
         pass.draw(0..3, 0..1);
         drop(pass);
         match self.aa {
@@ -797,7 +806,7 @@ impl Renderer3D {
         }
         // GPU buffers that keep their last frame copy what this frame drew,
         // for the next frame's motion pass, before anything changes them.
-        if self.screen.velocity_on && self.resources.keeps_buffer_pasts() {
+        if self.screen.velocity_on && self.resources.keeps_buffer_pasts() && !self.extra {
             let timestamps = time("buffer motion copy").map(|t| wgpu::ComputePassTimestampWrites {
                 query_set: t.query_set,
                 beginning_of_pass_write_index: t.beginning_of_pass_write_index,

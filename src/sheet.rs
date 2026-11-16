@@ -1,5 +1,7 @@
 //! Sprite sheets (many frames in one texture) and frame animation.
 
+#![deny(missing_docs)]
+
 use glam::Vec2;
 
 use crate::camera::Rect;
@@ -124,7 +126,9 @@ pub struct Animation {
     pub fps: f32,
     /// Start over at the end (default), or stop on the last frame.
     pub looping: bool,
-    /// Seconds played so far.
+    /// Seconds played so far; for a looping animation, seconds into the
+    /// current loop (the engine keeps it below one loop, so it stays
+    /// precise however long the game runs).
     pub time: f32,
 }
 
@@ -177,6 +181,18 @@ impl Animation {
         self.first + step
     }
 
+    /// Plays `dt` more seconds. A looping animation's time wraps around
+    /// at the end of its loop: an f32 that counted up for hours would step
+    /// in whole milliseconds (after 10 hours of 60 Hz frames, every step
+    /// rounds to 15.6 ms instead of 16.7 ms, and the animation runs 6% slow).
+    pub(crate) fn advance(&mut self, dt: f32) {
+        self.time += dt;
+        let length = self.frames as f32 / self.fps;
+        if self.looping && length > 0.0 && self.time >= length {
+            self.time = self.time.rem_euclid(length);
+        }
+    }
+
     /// `true` once an animation made with [`once`](Self::once) reached its
     /// last frame (never for looping ones).
     ///
@@ -204,7 +220,7 @@ pub(crate) fn animate_sprites(ctx: &mut Ctx) {
     ctx.world
         .query::<(&mut Animation, &mut Sprite)>()
         .par_for_each(|(a, s)| {
-            a.time += dt;
+            a.advance(dt);
             s.texture = a.sheet.texture;
             s.region = Some(a.sheet.frame(a.current_frame()));
         });
@@ -226,6 +242,40 @@ mod tests {
         assert_eq!(s.frame(0), Rect::new(0.0, 0.0, 16.0, 16.0));
         assert_eq!(s.frame(5), Rect::new(16.0, 16.0, 16.0, 16.0));
         assert_eq!(s.frame(8), s.frame(0), "wraps");
+    }
+
+    /// The frame shown on each of `ticks` steps of `dt`.
+    fn frames(a: &mut Animation, ticks: usize, dt: f32) -> Vec<u32> {
+        (0..ticks)
+            .map(|_| {
+                a.advance(dt);
+                a.current_frame()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_looping_animation_keeps_its_speed_after_ten_hours() {
+        // 10 frames a second at 60 steps a second: a new frame every 6 steps.
+        let dt = 1.0 / 60.0;
+        let changes = |f: &[u32]| f.windows(2).filter(|w| w[0] != w[1]).count();
+        let mut a = Animation::new(sheet(), 0..4, 10.0);
+        assert!((19..=20).contains(&changes(&frames(&mut a, 120, dt))));
+        for _ in 0..10 * 3600 * 60 {
+            a.advance(dt);
+        }
+        assert!(a.time < 0.4, "within one loop: {}", a.time);
+        // Ten hours in, the same steps from the same place in the loop show
+        // the same frames as a fresh animation, changing every 6 steps.
+        let mut fresh = Animation::new(sheet(), 0..4, 10.0);
+        fresh.time = a.time;
+        let late = frames(&mut a, 120, dt);
+        assert_eq!(late, frames(&mut fresh, 120, dt));
+        assert!((19..=20).contains(&changes(&late)), "{late:?}");
+        // The negative control: a time counted up for 10 hours steps in
+        // 1/256 s, so 1/60 s rounds to 1/64 s and the animation runs slow.
+        let unwrapped = 36_000.0_f32;
+        assert_eq!((unwrapped + dt) - unwrapped, 1.0 / 64.0);
     }
 
     #[test]

@@ -25,23 +25,22 @@ integration checklist; you only need the parts relevant to your contribution.
 
 ## Questions, bugs and ideas
 
-- **Questions:** ask in [Q&A](https://github.com/ponkoengine/ponko/discussions/categories/q-a),
-  so the answer stays findable for the next person.
-- **Bugs:** open an [issue](https://github.com/ponkoengine/ponko/issues/new/choose)
+- **Questions:** ask in the [issue tracker](https://gitlab.com/ponkoengine/ponko/-/issues)
+  and say it is a question, so the answer stays findable for the next person.
+- **Bugs:** open an [issue](https://gitlab.com/ponkoengine/ponko/-/issues/new)
   with the smallest code that shows the problem, your OS and GPU, and what
   you expected.
-- **Ideas and features:** start in [Ideas](https://github.com/ponkoengine/ponko/discussions/categories/ideas),
-  or open an issue if you already have a concrete design, so we can agree on
+- **Ideas and features:** open an issue describing the idea (or, if you already have a concrete design, the design), so we can agree on
   the shape before you write the code. The engine aims for one obvious way to
   do each thing, so a new API gets discussed before it's built.
-- **Made something?** Share it in [Show and tell](https://github.com/ponkoengine/ponko/discussions/categories/show-and-tell).
+- **Made something?** Tell us in an [issue](https://gitlab.com/ponkoengine/ponko/-/issues).
 - **Security issues:** don't open a public issue; see [SECURITY.md](SECURITY.md).
 
 ## Finding a manageable contribution
 
 You do not need to understand the whole engine to fix an isolated bug, improve an
 example or clarify a guide page. Start with one reproducible behavior and its tests.
-Browse the [open issues](https://github.com/ponkoengine/ponko/issues), check for an
+Browse the [open issues](https://gitlab.com/ponkoengine/ponko/-/issues), check for an
 existing assignee or active PR, and comment with the slice you want to tackle.
 
 The ECS/rendering backlog (#132–#166) uses `help wanted`, `priority: P0` through
@@ -51,12 +50,12 @@ P1 addresses high-impact limitations, P2 is useful lower-urgency work, and P3 is
 this backlog has no difficulty labels. Read acceptance criteria and dependencies,
 and ask for a bounded first step if the scope is unclear.
 
-For example, [#133](https://github.com/ponkoengine/ponko/issues/133) covers ECS
-correctness tests and [#135](https://github.com/ponkoengine/ponko/issues/135)
+For example, #133 covers ECS
+correctness tests and #135
 covers visual regressions; a focused reproducer or test case can contribute toward
 either without claiming the entire issue. Performance work starts with the baselines
-in [#132](https://github.com/ponkoengine/ponko/issues/132) and
-[#134](https://github.com/ponkoengine/ponko/issues/134).
+in #132 and
+#134.
 [ROADMAP.md](ROADMAP.md) explains the sequence; verify live issue status before starting.
 
 ## Setting up
@@ -67,7 +66,7 @@ ALSA and udev headers for audio and gamepads
 side, you need CMake and a C++17 compiler.
 
 ```sh
-git clone https://github.com/ponkoengine/ponko && cd ponko
+git clone https://gitlab.com/ponkoengine/ponko && cd ponko
 cargo test --workspace
 cargo run --release --example battle
 ```
@@ -573,7 +572,7 @@ release branch (`v0.1.1` on `release-0.1`, see
       so; retry the deploy in Cloudflare Pages then. The API reference of the
       release appears on docs.rs by itself.
    6. **Publishes the web gallery** of the examples
-      (<https://ponkoengine.github.io/ponko/>, `web/gallery/README.md`). Job
+      (see `web/gallery/README.md`). Job
       `gallery` builds it for the tag and checks every page in headless
       Chromium before the approval (a failed page stops only the gallery, not
       the release); job `gallery-pages` deploys it to GitHub Pages after

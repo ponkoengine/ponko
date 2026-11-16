@@ -7,7 +7,7 @@ in 0.1.0**, the release that finished the rename, so there is one name for each
 thing. The C ABI is **version 2**; layouts, enum values, ownership and calling
 conventions did not change in the rename. This chapter says what replaced the
 old names. See also
-[STABILITY.md](https://github.com/ponkoengine/ponko/blob/main/STABILITY.md).
+[STABILITY.md](../../STABILITY.md).
 
 ## Native code
 
@@ -198,13 +198,32 @@ CI runs it in the API snapshots job.
 ## Prelude and service imports
 
 `use ponko::prelude::*;` is the default game import. It includes the game loop,
-context, ECS, math, input, colors, textures/sounds/fonts, the `d2` and `d3`
-modules and reflection registration. Add `d2::*` or `d3::*` for one dimension, then explicit
-service imports as needed. `Pose`, `Material` and `Job` are deliberately absent
-from the prelude so games can define them freely.
+context, ECS, math, input (keys, mouse, gamepads, actions), colors,
+textures/sounds/fonts, menus (`Ui`, `UiEvent`, `UiLayout`), game-state run
+conditions (`in_state`), the `d2` and `d3` modules and reflection
+registration. Add `d2::*` or `d3::*` for one dimension (the camera rigs and
+physics are there), then explicit service imports as needed.
+
+What stays out, and why:
+
+- Names a game is likely to define itself: `Pose`, `Material`, `Job`,
+  `Motion`, `Shader`, `State` (the state resource; systems read the state with
+  `ctx.state::<S>()`), `Storage` (the save service; `ctx.storage` needs no
+  import), `Mesh`, `Animation`.
+- Machinery a game names only when it extends the engine: the asset sources
+  (`assets::AssetSource`, `MemorySource`, `PackSource`) and `game::SetupResult`,
+  the bound behind `try_setup` and plugins' fallible setup.
+- Topics with many types of their own: levels (`tilemap`), skeletal animation
+  (`anim`), translation (`locale`), navigation (`nav`), rendering details
+  (`render`), debug drawing (`debug`, used through `ctx.debug`).
+
+`tests/first_game_imports.rs` lists every import the two tutorials and the
+three reference games need beyond the prelude and their dimension module,
+each with its reason, so the list can't grow unnoticed.
 
 | Area | Canonical module |
 |---|---|
+| Vectors, quaternions, matrices | `math` (glam's types; the common ones are in the prelude; C and C++ have their own `PonkoVec2`, `ponko::vec2`, ...) |
 | Networking, replication, interest, Steam | `net` (`net::steam` is the SDK) |
 | Frame/per-system reports, budgets, scopes | `perf` |
 | Materials, effects, compute, targets, quality | `render` |
@@ -213,7 +232,7 @@ from the prelude so games can define them freely.
 | Retained UI and layout | `ui` (`UiLayout`; raw Taffy in `ui::unstable_taffy`) |
 | Physics | `d2`, `d3` (step systems in `systems`) |
 | Navigation | `flow` (grids), `d3` (navigation meshes), `nav` (baking) |
-| Reflection JSON | `reflect::json` |
+| Reflection JSON | `reflect` (`JsonValue`, `JsonMap`; the `serde_json` crate is `reflect::json`) |
 | Advanced ECS and native storage | `ecs_core` |
 
 ### The root glob
@@ -243,8 +262,9 @@ lists every removed name with its replacement. Moving off them:
   (`net::MAX_PLAYERS`, `input::MAX_GAMEPADS`, `random::DEFAULT_SEED`,
   `d3::Physics::HZ`, `scenario::SCENARIO_VERSION`,
   `streaming::DEFAULT_UPLOAD_BUDGET`).
-- Crates and helpers: `serde_json` is `reflect::json` (and `Value` is
-  `reflect::json::Value`; `json!` stays in the prelude), `steamworks` is
+- Crates and helpers: `serde_json` is `reflect::json` (its `Value` and
+  `Map` are named `reflect::JsonValue` and `reflect::JsonMap`; `json!` stays
+  in the prelude), glam's types are in `math`, `steamworks` is
   `net::steam`, `ui_layout` is `ui::unstable_taffy` (prefer `ui::UiLayout`), `QueryFilter` and `ViewQuery`
   (the ECS ones) are in `ecs_core`, `Interpolate` is `net::Interpolate`,
   `FieldType` and `ValueSchema` are in `reflect`, `RawFlowView` is

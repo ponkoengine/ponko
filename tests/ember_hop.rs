@@ -73,10 +73,6 @@ fn first<T: Component>(ctx: &mut Ctx) -> Option<Vec2> {
         .map(|(t, _)| t.position)
 }
 
-fn screen(world: &World) -> Screen {
-    *world.resource::<Screen>()
-}
-
 fn intent(ctx: &mut Ctx) -> &mut Intent {
     ctx.world.resource_mut::<Intent>()
 }
@@ -282,6 +278,32 @@ fn landing_on_a_drip_stomps_it_and_bounces() {
     assert_eq!(world.resource::<Run>().deaths, 0);
 }
 
+/// Every on-enter and on-exit of every screen, in order: `("enter", name)`.
+type Changes = std::rc::Rc<std::cell::RefCell<Vec<(&'static str, &'static str)>>>;
+
+/// `game` with on-enter and on-exit work on every screen that logs into the
+/// returned list.
+fn logging_screen_changes(mut game: Game) -> (Game, Changes) {
+    let changes = Changes::default();
+    let mut screens = vec![
+        Screen::Title,
+        Screen::Playing,
+        Screen::Paused,
+        Screen::Dying,
+        Screen::Finished,
+    ];
+    screens.push(Screen::Transition { to: None });
+    screens.extend((0..LEVELS.len()).map(|l| Screen::Transition { to: Some(l) }));
+    for s in screens {
+        let name = game::smoke::screen_name(s);
+        let (enter, exit) = (changes.clone(), changes.clone());
+        game = game
+            .on_enter(s, move |_: &mut Ctx| enter.borrow_mut().push(("enter", name)))
+            .on_exit(s, move |_: &mut Ctx| exit.borrow_mut().push(("exit", name)));
+    }
+    (game, changes)
+}
+
 #[test]
 fn walking_into_a_drip_loses_the_hero_and_starts_the_level_again() {
     let dir = data_dir("drip");
@@ -318,6 +340,38 @@ fn walking_into_a_drip_loses_the_hero_and_starts_the_level_again() {
 }
 
 #[test]
+fn a_loss_enters_dying_once_and_playing_once_after_the_delay() {
+    let dir = data_dir("dying-once");
+    let (game, changes) = logging_screen_changes(scripted(&dir, move |ctx| {
+        let tick = ctx.time.sim_tick();
+        if tick == 1 {
+            new_run(ctx);
+        }
+        if tick == 10 {
+            let drip = first::<Drip>(ctx).expect("a drip");
+            teleport(ctx, drip + vec2(-2.0, 0.0));
+        }
+    }));
+    // DEATH_DELAY is 0.8 s: about 48 ticks of the dying screen.
+    let world = game.run_headless(80, |_| {});
+    assert_eq!(screen(&world), Screen::Playing, "back after the loss");
+    assert_eq!(
+        *changes.borrow(),
+        [
+            ("enter", "Title"),
+            ("exit", "Title"),
+            ("enter", "Playing"),
+            ("exit", "Playing"),
+            ("enter", "Dying"),
+        ],
+        "the dying screen's timer doesn't leave and enter it every tick; the \
+         respawn loads the run's save, which brings the playing screen back \
+         with the world (a load isn't a change: nothing is left or entered)"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn spikes_water_and_the_fall_are_hazards() {
     for (name, kind) in [("spikes", 0), ("water", 1), ("fall", 2)] {
         let dir = data_dir(name);
@@ -350,11 +404,7 @@ fn spikes_water_and_the_fall_are_hazards() {
             }
         })
         .run_headless(8, |_| {});
-        assert!(
-            matches!(screen(&world), Screen::Dying { .. }),
-            "{name}: {:?}",
-            screen(&world)
-        );
+        assert!(matches!(screen(&world), Screen::Dying), "{name}: {:?}", screen(&world));
     }
 }
 
@@ -544,7 +594,7 @@ fn continue_picks_up_the_saved_run_from_the_title() {
             intent(ctx).back = true;
         }
         if tick == 24 {
-            assert_eq!(*ctx.world.resource::<Screen>(), Screen::Title);
+            assert_eq!(screen(&ctx.world), Screen::Title);
             assert!(has_saved_run(&ctx.storage));
             intent(ctx).resume_run = true;
         }
@@ -729,7 +779,7 @@ fn any_key_or_button_leaves_the_end_screen() {
             .headless_frames(true)
             .plugin(EmberHop)
             .run_headless_scenario(scenario, |ctx| {
-                *ctx.world.resource_mut::<Screen>() = Screen::Finished;
+                ctx.set_state(Screen::Finished);
             });
         report.assert_passed();
         assert_eq!(screen(&world), Screen::Title, "{name}");
@@ -740,10 +790,12 @@ fn any_key_or_button_leaves_the_end_screen() {
 #[test]
 fn the_autopilot_plays_the_whole_game() {
     let dir = data_dir("autopilot");
-    let world = game::smoke::smoke_game(Game::new("ember hop smoke", 960, 540).data_dir(&dir))
-        .run_headless(game::smoke::MAX_TICKS + 1, |ctx| {
-            game::smoke::setup_smoke(ctx, None, "test")
-        });
+    let (game, changes) = logging_screen_changes(game::smoke::smoke_game(
+        Game::new("ember hop smoke", 960, 540).data_dir(&dir),
+    ));
+    let world = game.run_headless(game::smoke::MAX_TICKS + 1, |ctx| {
+        game::smoke::setup_smoke(ctx, None, "test")
+    });
     let smoke = world.resource::<game::smoke::Smoke>();
     let report = smoke.report();
     assert!(smoke.finished(), "{report:#?}");
@@ -762,6 +814,46 @@ fn the_autopilot_plays_the_whole_game() {
             "Finished",
             "Title"
         ]
+    );
+    // On-enter work runs once per screen change, and nowhere else.
+    // Continuing loads the run's save, which is on the playing screen: the
+    // load brings it back with the world, without entering it.
+    let entered: Vec<_> = changes
+        .borrow()
+        .iter()
+        .filter(|c| c.0 == "enter")
+        .map(|c| c.1)
+        .collect();
+    assert_eq!(
+        entered,
+        [
+            "Title",
+            "Playing",
+            "Transition",
+            "Playing",
+            "Paused",
+            "Title",
+            "Transition",
+            "Finished",
+            "Title"
+        ],
+        "{:?}",
+        changes.borrow()
+    );
+    let left: Vec<_> = changes.borrow().iter().filter(|c| c.0 == "exit").map(|c| c.1).collect();
+    assert_eq!(
+        left,
+        [
+            "Title",
+            "Playing",
+            "Transition",
+            "Paused",
+            "Playing",
+            "Playing",
+            "Transition",
+            "Finished"
+        ],
+        "leaving the pause for the title leaves the play below it too"
     );
     assert!(report.loads >= 1, "continued the saved run");
     assert!(report.drips_burned >= 3);

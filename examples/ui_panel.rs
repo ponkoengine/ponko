@@ -13,7 +13,7 @@ pub fn setup(ctx: &mut Ctx) {
     let ui = &mut panel.ui;
     let root = ui.root().layout(UiLayout::fill().padding(20.0).gap(12.0)).id();
     ui.button(root, "Buy").layout(UiLayout::fixed(200.0, 60.0)).name("buy");
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     ctx.world.spawn((Transform::at(vec3(0.0, 1.5, -2.0)), model, panel));
     // ANCHOR_END: panel_create
 }

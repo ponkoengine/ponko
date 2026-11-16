@@ -35,6 +35,42 @@ impl Ctx {
                 input.text.push_str(&click.text);
             }
         }
+        let shortcut = self.input.key_down(Key::LeftCtrl)
+            || self.input.key_down(Key::RightCtrl)
+            || self.input.key_down(Key::LeftSuper)
+            || self.input.key_down(Key::RightSuper);
+        if shortcut && !self.input.composing() {
+            if [Key::A, Key::C, Key::X, Key::V]
+                .iter()
+                .any(|k| self.input.key_pressed(*k))
+            {
+                input.text.clear();
+            }
+            if (self.input.key_pressed(Key::C) || self.input.key_pressed(Key::X))
+                && let Some(text) = self.ui.selected_text().filter(|s| !s.is_empty())
+                && self.window.clipboard_write(text).is_ok()
+                && self.input.key_pressed(Key::X)
+            {
+                input.backspace = true;
+            }
+            if self.input.key_pressed(Key::V) && self.ui.selected_text().is_some() {
+                self.window.paste_target = self.ui.focus();
+            }
+        }
+        if let Some(target) = self.window.paste_target {
+            if self.input.composing() || self.ui.focus() != Some(target) {
+                self.window.paste_target = None;
+            } else {
+                match self.window.clipboard_read() {
+                    Ok(Some(text)) => {
+                        input.text.push_str(&text);
+                        self.window.paste_target = None;
+                    }
+                    Err(_) => self.window.paste_target = None,
+                    Ok(None) => {}
+                }
+            }
+        }
         // The IME composition goes to the screen's UI only: world panels
         // don't place the candidate window.
         let mut preedit = std::mem::take(&mut self.ui_state.retained_preedit);

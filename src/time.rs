@@ -17,6 +17,7 @@
 //! query over `ctx.world` is alive.
 //!
 //! Kept free of any windowing types so it can be unit tested directly.
+#![deny(missing_docs)]
 
 use ponko_ecs::Entity;
 
@@ -40,6 +41,10 @@ pub(crate) const MAX_STEPS_PER_FRAME: u32 = 64;
 pub(crate) struct FrameTiming {
     /// Clamped seconds since the previous frame.
     pub dt: f32,
+    /// The same in full precision: what [`Time::elapsed`] adds up, so the
+    /// frame clock doesn't drift by `dt`'s rounding (about 2 ms in 10 hours
+    /// of 60 Hz frames).
+    pub seconds: f64,
     /// How many fixed steps the game should run this frame.
     pub fixed_steps: u32,
     /// How far (0..1) we are between the last fixed step and the next one.
@@ -82,6 +87,7 @@ impl Clock {
 
         FrameTiming {
             dt: dt as f32,
+            seconds: dt,
             fixed_steps: steps as u32,
             alpha: (self.accumulator / self.fixed_dt) as f32,
         }
@@ -163,6 +169,7 @@ impl Time {
             },
             timing: FrameTiming {
                 dt: 0.0,
+                seconds: 0.0,
                 fixed_steps: 0,
                 alpha: 0.0,
             },
@@ -176,7 +183,7 @@ impl Time {
     /// Engine side: start a new frame with fresh timing.
     pub(crate) fn begin_frame(&mut self, timing: FrameTiming) {
         self.timing = timing;
-        self.elapsed += f64::from(timing.dt);
+        self.elapsed += timing.seconds;
         self.frame += 1;
         if timing.dt > 0.0 {
             let instant = 1.0 / timing.dt;
@@ -252,6 +259,15 @@ impl Time {
     /// # fn update(ctx: &mut Ctx, pos: &mut Vec2) {
     /// pos.x += 200.0 * ctx.time.dt(); // 200 pixels per second
     /// # }
+    /// ```
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// // In a simulation system, `dt` is the fixed step.
+    /// Game::new("t", 1, 1)
+    ///     .fixed_hz(50)
+    ///     .sim_system(|ctx: &mut Ctx| assert!((ctx.time.dt() - 0.02).abs() < 1e-6))
+    ///     .run_headless(3, |_| {});
     /// ```
     #[must_use]
     pub fn dt(&self) -> f32 {
@@ -399,6 +415,18 @@ impl Time {
     }
 
     /// Simulated seconds so far: `sim_tick() * fixed_dt()`.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let world = Game::new("t", 1, 1)
+    ///     .fixed_hz(10)
+    ///     .sim_system(|ctx: &mut Ctx| {
+    ///         let expected = ctx.time.sim_tick() as f64 * ctx.time.fixed_dt() as f64;
+    ///         assert!((ctx.time.sim_time() - expected).abs() < 1e-6);
+    ///     })
+    ///     .run_headless(5, |_| {});
+    /// let _ = world;
+    /// ```
     #[must_use]
     pub fn sim_time(&self) -> f64 {
         self.sim.tick as f64 * self.sim.step
@@ -417,16 +445,43 @@ impl Time {
     ///     }
     /// }
     /// ```
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     assert!(!ctx.time.is_paused());
+    ///     ctx.time.pause();
+    ///     assert!(ctx.time.is_paused());
+    /// });
+    /// ```
     pub fn pause(&mut self) {
         self.sim.paused = true;
     }
 
     /// Lets simulation systems run again after [`pause`](Self::pause).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.time.pause();
+    ///     ctx.time.resume();
+    ///     assert!(!ctx.time.is_paused());
+    /// });
+    /// ```
     pub fn resume(&mut self) {
         self.sim.paused = false;
     }
 
     /// `true` while the simulation is paused.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     assert!(!ctx.time.is_paused()); // a game starts running
+    ///     ctx.time.pause();
+    ///     assert!(ctx.time.is_paused());
+    /// });
+    /// ```
     #[must_use]
     pub fn is_paused(&self) -> bool {
         self.sim.paused
@@ -434,6 +489,16 @@ impl Time {
 
     /// Runs exactly one extra simulation tick next frame. Meant for stepping
     /// through a paused simulation; each call adds one tick.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.time.pause();
+    ///     ctx.time.step(); // one more tick, then paused again
+    ///     ctx.time.step(); // calls add up
+    ///     assert!(ctx.time.is_paused());
+    /// });
+    /// ```
     pub fn step(&mut self) {
         self.sim.pending_steps = self.sim.pending_steps.saturating_add(1);
     }
@@ -462,6 +527,15 @@ impl Time {
     }
 
     /// Current simulation speed (see [`set_speed`](Self::set_speed)).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.time.speed(), 1.0);
+    ///     ctx.time.set_speed(4.0);
+    ///     assert_eq!(ctx.time.speed(), 4.0);
+    /// });
+    /// ```
     #[must_use]
     pub fn speed(&self) -> f32 {
         self.sim.speed
@@ -620,6 +694,7 @@ mod tests {
     fn frame(dt: f32) -> FrameTiming {
         FrameTiming {
             dt,
+            seconds: f64::from(dt),
             fixed_steps: 1,
             alpha: 0.5,
         }
@@ -657,6 +732,48 @@ mod tests {
         time.advance_tick();
         assert_eq!(time.sim_tick(), 2);
         assert_eq!(time.sim_time(), 0.5);
+    }
+
+    /// Ten hours of 144 Hz frames feeding a 60 Hz simulation: every step
+    /// is taken (none lost, none extra), the frame clock adds up to ten
+    /// hours to the microsecond, and the interpolation fraction repeats
+    /// exactly as it did in the first second.
+    #[test]
+    fn ten_hours_of_frames_lose_no_step_and_keep_interpolation_exact() {
+        const HZ: u64 = 144;
+        let frames = 10 * 3600 * HZ;
+        let mut clock = Clock::new(60);
+        let mut time = Time::new(clock.fixed_dt());
+        let dt = 1.0 / HZ as f64;
+        let mut steps = 0u64;
+        let mut first = Vec::new();
+        let mut last = Vec::new();
+        for n in 0..frames {
+            let timing = clock.advance(dt, 1.0);
+            time.begin_frame(timing);
+            steps += u64::from(timing.fixed_steps);
+            if n < HZ {
+                first.push(timing.alpha);
+            } else if n >= frames - HZ {
+                last.push(timing.alpha);
+            }
+        }
+        // 60 steps for every 144 frames, exactly: rounding may hold one
+        // step back to the next frame, never lose it.
+        let expected = frames * 60 / HZ;
+        assert!(steps == expected || steps + 1 == expected, "{steps} of {expected}");
+        // 1.0 when the last step was held back by rounding.
+        assert!((0.0..=1.0).contains(&time.fixed_alpha()), "{}", time.fixed_alpha());
+        let simulated = steps as f64 / 60.0 + f64::from(time.fixed_alpha()) / 60.0;
+        assert!((simulated - 36_000.0).abs() < 1e-6, "{simulated}");
+        // Summing the frames in f64 stays within microseconds (3 µs here);
+        // summing their f32 `dt`s, as before, was off by 0.27 ms (1.9 ms at
+        // 60 Hz).
+        assert!((time.elapsed() - 36_000.0).abs() < 2e-5, "{}", time.elapsed());
+        // The same frames in the same place of the 144:60 cycle, ten hours
+        // apart: the same fractions.
+        let worst = first.iter().zip(&last).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+        assert!(worst < 1e-5, "alpha drifted by {worst}");
     }
 
     #[test]

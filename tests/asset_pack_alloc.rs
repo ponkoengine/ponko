@@ -5,7 +5,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ponko::prelude::*;
+use ponko::assets::{AssetSource, PackSource};
 
 /// The system allocator, noting the largest single request.
 struct Largest;

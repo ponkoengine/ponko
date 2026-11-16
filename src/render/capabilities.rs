@@ -53,12 +53,28 @@ pub struct GpuCapabilities {
 
 impl GpuCapabilities {
     /// The entry for `feature`.
+    ///
+    /// ```
+    /// use ponko::render::{GpuFeature, GpuTier};
+    /// let caps = GpuTier::WebGl2.report();
+    /// let taa = caps.feature(GpuFeature::TemporalAntialiasing).unwrap();
+    /// assert!(!taa.available);
+    /// assert!(taa.fallback.is_some() && taa.reason.is_some());
+    /// ```
     #[must_use]
     pub fn feature(&self, feature: GpuFeature) -> Option<&GpuFeatureStatus> {
         self.features.iter().find(|f| f.feature == feature)
     }
 
     /// Whether `feature` is available on this GPU.
+    ///
+    /// ```
+    /// use ponko::render::{GpuFeature, GpuTier};
+    /// // Draw an effect's settings only where it can run.
+    /// let caps = GpuTier::Baseline.report();
+    /// assert!(caps.available(GpuFeature::Compute));
+    /// assert!(!GpuTier::WebGl2.report().available(GpuFeature::Compute));
+    /// ```
     #[must_use]
     pub fn available(&self, feature: GpuFeature) -> bool {
         self.feature(feature).is_some_and(|f| f.available)
@@ -66,6 +82,13 @@ impl GpuCapabilities {
 }
 
 /// The GPU the renderer opened, as the graphics driver names it.
+///
+/// ```
+/// // A report built without a GPU (`GpuTier::report`) has an empty adapter.
+/// let adapter = ponko::render::GpuTier::Baseline.report().adapter;
+/// assert_eq!(adapter, ponko::render::GpuAdapter::default());
+/// assert!(adapter.name.is_empty());
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GpuAdapter {
     /// The adapter's name, such as the GPU model.
@@ -82,6 +105,16 @@ pub struct GpuAdapter {
 }
 
 /// The device limits the renderer's feature choices depend on.
+///
+/// ```
+/// use ponko::render::GpuTier;
+/// // WebGL2 has no compute shaders and no storage buffers.
+/// let webgl2 = GpuTier::WebGl2.minimum_limits();
+/// assert_eq!(webgl2.max_compute_workgroups_per_dimension, 0);
+/// assert_eq!(webgl2.max_storage_buffers_per_shader_stage, 0);
+/// // Decals need 17 sampled textures, global illumination 18.
+/// assert!(GpuTier::Desktop.minimum_limits().max_sampled_textures_per_shader_stage >= 18);
+/// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GpuLimits {
     /// Largest texture width or height.
@@ -105,11 +138,11 @@ pub struct GpuLimits {
 }
 
 /// What the device's limits allow for instance batches
-/// ([`InstanceBatch`](crate::render::InstanceBatch)): [`GpuCapabilities::instance_batches`].
+/// (`InstanceBatch`): [`GpuCapabilities::instance_batches`].
 ///
 /// A batch is *GPU-driven* when the device has compute culling and the
 /// batch has one distance level and at least `min_gpu_instances` instances
-/// (or what [`BatchCulling`](crate::render::BatchCulling) asks): one compute dispatch
+/// (or what `BatchCulling` asks): one compute dispatch
 /// culls every such batch per instance, and each is drawn with indirect
 /// draws. Every other batch is culled on the CPU, cell by cell, and drawn
 /// with direct draws. Both paths draw the same picture. A batch past a
@@ -140,7 +173,7 @@ pub struct GpuBatchLimits {
     /// heavy meshes one by one saves more drawing than the compute pass
     /// costs. Measured on the same one GPU, with single-level batches only;
     /// a batch can overrule both with
-    /// [`BatchCulling`](crate::render::BatchCulling).
+    /// `BatchCulling`.
     ///
     /// Batches of several distance levels skip both rules under
     /// `BatchCulling::Auto` and stay on the CPU path, however many
@@ -190,6 +223,13 @@ const BATCH_VERTEX_BYTES: u64 = 80;
 /// A renderer feature that depends on what the GPU can do.
 ///
 /// New features may be added; match with a wildcard arm.
+///
+/// ```
+/// use ponko::render::GpuFeature;
+/// assert!(GpuFeature::ALL.contains(&GpuFeature::ScreenSpaceReflections));
+/// assert!(GpuFeature::Decals.is_3d());
+/// assert!(!GpuFeature::Compute.is_3d());
+/// ```
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -242,6 +282,12 @@ impl GpuFeature {
     ];
 
     /// Whether the feature belongs to the 3D renderer (the `3d` Cargo feature).
+    ///
+    /// ```
+    /// use ponko::render::GpuFeature;
+    /// let only_3d: Vec<_> = GpuFeature::ALL.iter().filter(|f| f.is_3d()).collect();
+    /// assert_eq!(only_3d.len(), GpuFeature::ALL.len() - 2);
+    /// ```
     #[must_use]
     pub fn is_3d(self) -> bool {
         !matches!(self, GpuFeature::Timestamps | GpuFeature::Compute)
@@ -250,6 +296,16 @@ impl GpuFeature {
 
 /// Whether one [`GpuFeature`] is available, and if not, what the renderer
 /// does instead and why.
+///
+/// ```
+/// use ponko::render::{GpuFeature, GpuTier};
+/// for status in GpuTier::WebGl2.report().features.iter().filter(|s| !s.available) {
+///     // Every unavailable feature names its fallback and its reason.
+///     assert!(status.fallback.is_some() && status.reason.is_some(), "{:?}", status.feature);
+/// }
+/// let compute = GpuTier::Desktop.report().feature(GpuFeature::Compute).unwrap().clone();
+/// assert!(compute.available && compute.fallback.is_none() && compute.reason.is_none());
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GpuFeatureStatus {
     /// The feature.
@@ -281,7 +337,7 @@ pub struct GpuFeatureStatus {
 /// the per-feature entries of [`GpuCapabilities`] are the exact answer.
 /// Nothing in the table fails on a weaker tier: each unavailable feature
 /// falls back as its [`GpuFeatureStatus`] says.
-/// [`SceneSettings::set_recommended_quality`](crate::render::SceneSettings::set_recommended_quality)
+/// `SceneSettings::set_recommended_quality`
 /// picks a preset per tier.
 ///
 /// ```
@@ -316,6 +372,12 @@ impl GpuTier {
 
     /// The tier's name: `webgl2`, `baseline` or `desktop` (also its JSON
     /// form and what `PONKO_GPU_TIER` takes).
+    ///
+    /// ```
+    /// use ponko::render::GpuTier;
+    /// assert_eq!(GpuTier::WebGl2.name(), "webgl2");
+    /// assert_eq!(GpuTier::Desktop.to_string(), "desktop");
+    /// ```
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -326,6 +388,13 @@ impl GpuTier {
     }
 
     /// The highest tier whose minimum `limits` meet.
+    ///
+    /// ```
+    /// use ponko::render::GpuTier;
+    /// for tier in GpuTier::ALL {
+    ///     assert_eq!(GpuTier::of(&tier.minimum_limits()), tier);
+    /// }
+    /// ```
     #[must_use]
     pub fn of(limits: &GpuLimits) -> GpuTier {
         if !limits.compute_culling() {
@@ -338,6 +407,13 @@ impl GpuTier {
     }
 
     /// The least a device of this tier has (see the table above).
+    ///
+    /// ```
+    /// use ponko::render::GpuTier;
+    /// let floor = GpuTier::Baseline.minimum_limits();
+    /// assert!(floor.max_storage_buffers_per_shader_stage >= 4);
+    /// assert!(floor.max_texture_dimension_2d >= 2048);
+    /// ```
     #[must_use]
     pub fn minimum_limits(self) -> GpuLimits {
         match self {
@@ -379,6 +455,15 @@ impl GpuTier {
     /// queries, 4x multisampling, an empty adapter): the features the tier
     /// guarantees, and for the others the fallback and the reason. Built
     /// without a GPU, so tools and docs can list them.
+    ///
+    /// ```
+    /// use ponko::render::{GpuFeature, GpuTier};
+    /// let caps = GpuTier::WebGl2.report();
+    /// assert_eq!(caps.tier, GpuTier::WebGl2);
+    /// assert!(!caps.available(GpuFeature::AmbientOcclusion));
+    /// // The report serializes to JSON for tools.
+    /// assert_eq!(serde_json::to_value(&caps).unwrap()["tier"], "webgl2");
+    /// ```
     #[must_use]
     pub fn report(self) -> GpuCapabilities {
         report(
@@ -393,6 +478,12 @@ impl GpuTier {
     /// The features a device of this tier may lack, in report order:
     /// the unavailable entries of [`report`](Self::report). GPU timestamps
     /// are listed at every tier: they depend on the device, not the tier.
+    ///
+    /// ```
+    /// use ponko::render::{GpuFeature, GpuTier};
+    /// assert!(GpuTier::WebGl2.unavailable_features().contains(&GpuFeature::Compute));
+    /// assert!(!GpuTier::Desktop.unavailable_features().contains(&GpuFeature::Compute));
+    /// ```
     #[must_use]
     pub fn unavailable_features(self) -> Vec<GpuFeature> {
         self.report()
@@ -410,6 +501,13 @@ impl GpuTier {
     /// game draws as on such a device (with this GPU's backend: it doesn't
     /// switch to WebGL2 itself). An unknown name is ignored with a warning.
     /// Always `None` on the web.
+    ///
+    /// ```
+    /// use ponko::render::GpuTier;
+    /// // Run the game's own checks against the tier it was asked to try.
+    /// let tier = GpuTier::forced().unwrap_or(GpuTier::Desktop);
+    /// assert!(GpuTier::ALL.contains(&tier));
+    /// ```
     #[must_use]
     pub fn forced() -> Option<GpuTier> {
         if cfg!(target_arch = "wasm32") {

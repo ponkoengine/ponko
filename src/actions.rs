@@ -1,4 +1,7 @@
 //! Named, rebindable input. Configuration allocates; evaluating input does not.
+
+#![deny(missing_docs)]
+
 use crate::input::Gamepad;
 use crate::input::GamepadAxis;
 use crate::input::GamepadButton;
@@ -14,7 +17,16 @@ use std::collections::BTreeMap;
 /// use ponko::prelude::{ButtonBinding, Key};
 /// let binding = ButtonBinding::Key(Key::Space);
 /// ```
+///
+/// External matches must handle future variants:
+/// ```compile_fail,E0004
+/// use ponko::actions::ButtonBinding;
+/// fn exhaustive(value: ButtonBinding) {
+///     match value { ButtonBinding::Key(_) => (), ButtonBinding::Mouse(_) => (), ButtonBinding::Gamepad { .. } => () }
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ButtonBinding {
     /// Physical keyboard key.
     Key(Key),
@@ -35,7 +47,16 @@ pub enum ButtonBinding {
 /// use ponko::prelude::{AxisBinding, Key};
 /// let binding = AxisBinding::Keys { negative: Key::A, positive: Key::D };
 /// ```
+///
+/// External matches must handle future variants:
+/// ```compile_fail,E0004
+/// use ponko::actions::AxisBinding;
+/// fn exhaustive(value: AxisBinding) {
+///     match value { AxisBinding::Keys { .. } => (), AxisBinding::Gamepad { .. } => () }
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum AxisBinding {
     /// Opposing keys cancel.
     Keys {
@@ -61,7 +82,16 @@ pub enum AxisBinding {
 /// use ponko::prelude::{Axis2Binding, Key};
 /// let binding = Axis2Binding::Keys { left: Key::A, right: Key::D, up: Key::W, down: Key::S };
 /// ```
+///
+/// External matches must handle future variants:
+/// ```compile_fail,E0004
+/// use ponko::actions::Axis2Binding;
+/// fn exhaustive(value: Axis2Binding) {
+///     match value { Axis2Binding::Keys { .. } => (), Axis2Binding::Gamepad { .. } => () }
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Axis2Binding {
     /// Four physical keys (for example WASD).
     Keys {
@@ -115,6 +145,12 @@ pub enum PressedInput {
 }
 impl PressedInput {
     /// The button binding, for a key, mouse button or gamepad button.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let pressed = PressedInput::Button(ButtonBinding::Key(Key::Space));
+    /// assert_eq!(pressed.button(), Some(&ButtonBinding::Key(Key::Space)));
+    /// ```
     pub fn button(&self) -> Option<&ButtonBinding> {
         match self {
             PressedInput::Button(b) => Some(b),
@@ -122,6 +158,12 @@ impl PressedInput {
         }
     }
     /// The axis binding, for a stick or trigger.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let pressed = PressedInput::Button(ButtonBinding::Key(Key::Space));
+    /// assert!(pressed.axis().is_none()); // a key is not an axis
+    /// ```
     pub fn axis(&self) -> Option<&AxisBinding> {
         match self {
             PressedInput::Axis(a) => Some(a),
@@ -136,7 +178,16 @@ impl PressedInput {
 /// use ponko::prelude::{Action, ButtonBinding, Key};
 /// let jump = Action::Button(vec![ButtonBinding::Key(Key::Space)]);
 /// ```
+///
+/// External matches must handle future variants:
+/// ```compile_fail,E0004
+/// use ponko::actions::Action;
+/// fn exhaustive(value: Action) {
+///     match value { Action::Button(_) => (), Action::Axis(_) => (), Action::Axis2(_) => () }
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Action {
     /// Digital sources.
     Button(Vec<ButtonBinding>),
@@ -212,6 +263,15 @@ impl ActionId {
     /// returns it (after logging an error).
     pub const NONE: ActionId = ActionId(u32::MAX);
     /// Whether this is [`NONE`](Self::NONE).
+    ///
+    /// ```
+    /// use ponko::actions::ActionId;
+    /// use ponko::prelude::*;
+    /// let map = ActionMap::default();
+    /// assert!(ActionId::NONE.is_none());
+    /// assert!(ActionId::default().is_none());
+    /// assert!(map.resolve("jump").is_err());
+    /// ```
     pub fn is_none(self) -> bool {
         self == Self::NONE
     }
@@ -242,6 +302,12 @@ pub struct UnknownAction {
 }
 impl UnknownAction {
     /// The name that was asked for.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let err = ActionMap::default().resolve("jmup").unwrap_err();
+    /// assert_eq!(err.name(), "jmup");
+    /// ```
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -347,6 +413,7 @@ struct State {
 }
 
 /// Serializable bindings, ordered by name. Runtime state is never serialized.
+/// Equality compares bindings only, ignoring runtime edges and context-local ids.
 /// Unknown names and queries of the wrong kind return false/zero; resolve a
 /// name once with [`ActionMap::resolve`] or `Input::action_id` to learn of a typo.
 ///
@@ -373,6 +440,12 @@ pub struct ActionMap {
     states: Vec<State>,
     #[serde(skip)]
     order: Vec<u32>,
+}
+// Compare persistent configuration, not cached edges or context-local ids.
+impl PartialEq for ActionMap {
+    fn eq(&self, other: &Self) -> bool {
+        self.bindings == other.bindings
+    }
 }
 impl ActionMap {
     /// Add or replace an action. Installation on a context starts with no edges.
@@ -443,6 +516,10 @@ impl ActionMap {
     }
     /// Resolves an action name once, for the id-based queries. An unknown
     /// name is an error that lists the known actions.
+    ///
+    /// # Errors
+    /// [`UnknownAction`] if `name` is not bound in this map.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// let mut map = ActionMap::default();
@@ -471,20 +548,31 @@ impl ActionMap {
         self.order = self.bindings.keys().map(|n| self.slots[n]).collect();
     }
     /// Save bindings to JSON. Use `std::fs::write` to persist them.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Json`](crate::error::ErrorKind::Json) with encoding context.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// let json = ActionMap::default().to_json().unwrap();
     /// ```
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
+    pub fn to_json(&self) -> Result<String, crate::error::Error> {
+        serde_json::to_string_pretty(self).map_err(|e| crate::error::Error::from(e).context("encoding action map"))
     }
-    /// Load bindings from JSON. A malformed document returns an error.
+    /// Load bindings from JSON. A malformed document returns
+    /// [`ErrorKind::Json`](crate::error::ErrorKind::Json), preserving the decoder
+    /// message (including line and column) with action-map context.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Json`](crate::error::ErrorKind::Json) if `json` is not a
+    /// valid action map.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// let map = ActionMap::from_json(r#"{"bindings":{}}"#).unwrap();
     /// ```
-    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(json)
+    pub fn from_json(json: &str) -> Result<Self, crate::error::Error> {
+        serde_json::from_str(json).map_err(|e| crate::error::Error::from(e).context("decoding action map"))
     }
     /// Installs over `old`: names that had a slot keep it (so ids resolved
     /// earlier stay valid), new names get the next ones; all state restarts.
@@ -601,13 +689,35 @@ fn deadzone_value(value: f32, deadzone: f32) -> f32 {
     value.signum() * ((value.abs().min(1.0) - deadzone).max(0.0) / (1.0 - deadzone))
 }
 
+/// The held state of a synthetic digital input, not a one-frame edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ButtonState {
+    /// The button is up.
+    Released,
+    /// The button remains down until released (or focus/device loss).
+    Held,
+}
+
 /// Raw input for headless tests and replay. Feed before querying actions.
+/// A transition from released to held generates a pressed-this-frame edge;
+/// repeated held events do not generate another edge. A release generates a
+/// released edge. Both edges survive a tap within a frame and clear at its end.
+/// Axis events use ordinary float equality: NaN does not equal itself.
 /// ```
 /// use ponko::prelude::*;
-/// use ponko::actions::InputEvent;
-/// let event = ponko::actions::InputEvent::Key(Key::Space, true);
+/// use ponko::actions::{ButtonState, InputEvent};
+/// let event = InputEvent::key(Key::Space, ButtonState::Held);
 /// ```
-#[derive(Debug, Clone, Copy)]
+///
+/// External matches must handle future variants:
+/// ```compile_fail,E0004
+/// use ponko::actions::InputEvent;
+/// fn exhaustive(value: InputEvent) {
+///     match value { InputEvent::Key(..) => (), InputEvent::Mouse(..) => (), InputEvent::GamepadButton(..) => (), InputEvent::GamepadAxis(..) => (), InputEvent::FocusLost => (), InputEvent::GamepadDisconnected(_) => (), InputEvent::MouseMove(_) => (), InputEvent::MouseWheel(_) => () }
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum InputEvent {
     /// Key and held state.
     Key(Key, bool),
@@ -621,4 +731,41 @@ pub enum InputEvent {
     FocusLost,
     /// Release a controller's buttons and center its axes.
     GamepadDisconnected(Gamepad),
+    /// The pointer moves to this point of the window, in window pixels from
+    /// the top-left corner (`ctx.input.mouse_pos()`). A headless run's
+    /// pointer starts at `(0, 0)` and stays wherever this puts it.
+    MouseMove(Vec2),
+    /// The wheel turns by this much this frame, in lines (notches): `y > 0`
+    /// is away from the user (`ctx.input.mouse_wheel()`). Several in one
+    /// frame add up.
+    MouseWheel(Vec2),
+}
+
+impl InputEvent {
+    /// Set a key's held state. Repeating `Held` does not repeat its pressed edge.
+    ///
+    /// ```
+    /// use ponko::actions::{ButtonState, InputEvent};
+    /// use ponko::prelude::*;
+    /// assert_eq!(InputEvent::key(Key::Space, ButtonState::Held), InputEvent::Key(Key::Space, true));
+    /// assert_eq!(InputEvent::key(Key::Space, ButtonState::Released), InputEvent::Key(Key::Space, false));
+    /// ```
+    pub const fn key(key: Key, state: ButtonState) -> Self {
+        Self::Key(key, matches!(state, ButtonState::Held))
+    }
+    /// Set a mouse button's held state, with the same edge rules as [`Self::key`].
+    ///
+    /// ```
+    /// use ponko::actions::{ButtonState, InputEvent};
+    /// use ponko::prelude::*;
+    /// let down = InputEvent::mouse(MouseButton::Left, ButtonState::Held);
+    /// assert_eq!(down, InputEvent::Mouse(MouseButton::Left, true));
+    /// ```
+    pub const fn mouse(button: MouseButton, state: ButtonState) -> Self {
+        Self::Mouse(button, matches!(state, ButtonState::Held))
+    }
+    /// Set a gamepad button's held state, with the same edge rules as [`Self::key`].
+    pub const fn gamepad_button(pad: Gamepad, button: GamepadButton, state: ButtonState) -> Self {
+        Self::GamepadButton(pad, button, matches!(state, ButtonState::Held))
+    }
 }

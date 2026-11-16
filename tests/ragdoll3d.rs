@@ -19,11 +19,7 @@ const GRAVITY: Vec3 = Vec3::new(0.0, -9.81, 0.0);
 /// A stick figure: hips 1 m up, a spine 0.6 m above them, a head 0.4 m
 /// above that, and an arm sticking out sideways from the spine.
 fn figure() -> Skeleton {
-    let joint = |name: &str, parent, at: Vec3| Joint {
-        name: name.into(),
-        parent,
-        rest: Transform::at(at),
-    };
+    let joint = |name: &str, parent, at: Vec3| Joint::new(name, parent).with_rest(Transform::at(at));
     Skeleton::new(vec![
         joint("hips", None, vec3(0.0, 1.0, 0.0)),
         joint("spine", Some(0), vec3(0.0, 0.6, 0.0)),

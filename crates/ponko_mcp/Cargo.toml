@@ -21,6 +21,7 @@ name = "ponko-mcp"
 path = "src/main.rs"
 
 [dependencies]
+ponko_image_diff = { path = "../ponko_image_diff", version = "0.1.0" }
 serde_json = "1.0.154"
 
 [dev-dependencies]

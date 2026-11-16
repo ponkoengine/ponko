@@ -9,7 +9,7 @@ use ponko_ecs::*;
 fn commands_apply_in_order() {
     let mut w = World::new();
     let es: Vec<_> = (0..10).map(|i| w.spawn((Pos(i as f32, 0.0),))).collect();
-    let mut cmd = Commands::new();
+    let mut cmd = w.commands();
     w.query::<(Entity, &Pos)>().for_each(|(e, p)| {
         if p.0 < 5.0 {
             cmd.despawn(e);
@@ -51,7 +51,7 @@ fn unapplied_commands_drop_their_values_once() {
     let dropped = counter();
     let mut w = World::new();
     let e = w.spawn((Pos(0.0, 0.0),));
-    let mut cmd = Commands::new();
+    let mut cmd = w.commands();
     cmd.spawn((Counted(dropped.clone()),));
     cmd.insert(e, Counted(dropped.clone()));
     let held = Counted(dropped.clone());
@@ -66,7 +66,7 @@ fn cleared_commands_drop_their_values_once_and_apply_nothing() {
     let drops = counter();
     let mut w = World::new();
     let e = w.spawn((Tag,));
-    let mut c = Commands::new();
+    let mut c = w.commands();
     c.spawn((Counted(drops.clone()),));
     c.insert(e, Counted(drops.clone()));
     c.despawn(e);
@@ -97,7 +97,8 @@ fn a_value_whose_drop_panics_in_clear_is_never_dropped_twice() {
             }
         }
     }
-    let mut c = Commands::new();
+    let w = World::new();
+    let mut c = w.commands();
     c.spawn((Loud,));
     c.spawn((Loud,));
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.clear()));
@@ -114,7 +115,7 @@ fn applied_values_move_into_the_world_without_extra_drops() {
     let dropped = counter();
     let mut w = World::new();
     let e = w.spawn((Pos(0.0, 0.0),));
-    let mut cmd = Commands::new();
+    let mut cmd = w.commands();
     cmd.insert(e, Counted(dropped.clone()));
     cmd.spawn((Counted(dropped.clone()), Pos(1.0, 0.0)));
     w.apply(&mut cmd);
@@ -129,7 +130,7 @@ fn applied_values_move_into_the_world_without_extra_drops() {
 fn a_panicking_command_drops_the_rest_and_leaves_commands_reusable() {
     let dropped = counter();
     let mut w = World::new();
-    let mut cmd = Commands::new();
+    let mut cmd = w.commands();
     cmd.add(|w| w.insert_resource(1u32));
     cmd.add(|_| panic!("command failed"));
     cmd.spawn((Counted(dropped.clone()),));
@@ -157,7 +158,7 @@ fn commands_carry_zero_sized_and_over_aligned_values() {
 
     let mut w = World::new();
     let e = w.spawn((Pos(0.0, 0.0),));
-    let mut cmd = Commands::new();
+    let mut cmd = w.commands();
     // Odd sizes first, so later values start at unaligned offsets.
     cmd.insert(e, Byte(7));
     cmd.insert(e, Tag);
@@ -178,7 +179,7 @@ fn commands_carry_zero_sized_and_over_aligned_values() {
 #[test]
 fn reused_commands_apply_each_batch_once() {
     let mut w = World::new();
-    let mut cmd = Commands::new();
+    let mut cmd = w.commands();
     for round in 0..3 {
         for i in 0..100 {
             cmd.spawn((Pos(i as f32, round as f32),));

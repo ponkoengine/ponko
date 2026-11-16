@@ -3,15 +3,20 @@
 //!
 //! | Pick | For | Start with | Example |
 //! |---|---|---|---|
-//! | **Lockstep** ([`Net`]) | Deterministic simulations with 2–8 players (strategy, fighting, co-op puzzles): every peer runs the same ticks from the same inputs, so only inputs cross the network | [`Game::lockstep`](crate::game::Game::lockstep), then `ctx.net.set_input` / `ctx.net.input` | [`examples/lockstep.rs`](https://github.com/ponkoengine/ponko/blob/main/examples/lockstep.rs) |
-//! | **Messages** ([`NetMessages`]) | Everything else: your own packets on reliable and unreliable lanes between a host and its clients (chat, lobbies, events, your own replication) | [`Game::messages`](crate::game::Game::messages), then `ctx.net.messages` | [`examples/net_messages.rs`](https://github.com/ponkoengine/ponko/blob/main/examples/net_messages.rs) |
-//! | **Snapshots** ([`NetSnapshots`], [`SnapshotStream`], [`Interest`], [`Authority`]) | Server-authoritative worlds on top of messages: the owner sends timestamped states, everyone else shows them a little in the past | `ctx.net.snapshots` and `ctx.net.interest` | [`examples/net_replication.rs`](https://github.com/ponkoengine/ponko/blob/main/examples/net_replication.rs) |
+//! | **Lockstep** ([`Net`]) | Deterministic simulations with 2–8 players (strategy, fighting, co-op puzzles): every peer runs the same ticks from the same inputs, so only inputs cross the network | [`Game::lockstep`](crate::game::Game::lockstep), then `ctx.net.set_input` / `ctx.net.input` | [`examples/lockstep.rs`](https://gitlab.com/ponkoengine/ponko/-/blob/main/examples/lockstep.rs) |
+//! | **Messages** ([`NetMessages`]) | Everything else: your own packets on reliable and unreliable lanes between a host and its clients (chat, lobbies, events, your own replication) | [`Game::messages`](crate::game::Game::messages), then `ctx.net.messages` | [`examples/net_messages.rs`](https://gitlab.com/ponkoengine/ponko/-/blob/main/examples/net_messages.rs) |
+//! | **Snapshots** ([`NetSnapshots`], [`SnapshotStream`], [`Interest`], [`Authority`]) | Server-authoritative worlds on top of messages: the owner sends timestamped states, everyone else shows them a little in the past | `ctx.net.snapshots` and `ctx.net.interest` | [`examples/net_replication.rs`](https://gitlab.com/ponkoengine/ponko/-/blob/main/examples/net_replication.rs) |
 //!
 //! The player's own entity in a server-authoritative game is **predicted**:
 //! [`Prediction`] applies the local input at once and replays the inputs the
 //! server hasn't confirmed when its state disagrees, [`InputQueue`] is the
 //! server's side, and [`Smoothing`] hides the corrections
-//! ([`examples/net_prediction.rs`](https://github.com/ponkoengine/ponko/blob/main/examples/net_prediction.rs)).
+//! ([`examples/net_prediction.rs`](https://gitlab.com/ponkoengine/ponko/-/blob/main/examples/net_prediction.rs)).
+//!
+//! Small deterministic games that can save and load their whole state
+//! cheaply (fighting, racing, arena games) can use **rollback** instead of
+//! lockstep's waiting: [`Rollback`] runs every tick at once with predicted
+//! inputs and re-simulates when a real input differs, over any transport.
 //!
 //! Lockstep and messages are independent and can run side by side: lockstep
 //! for the simulation, messages for a chat that must not hold ticks back.
@@ -41,6 +46,8 @@
 //! Plain UDP on std sockets (and WebSocket for browser players), polled
 //! from the game thread: no async runtime, no extra thread.
 
+#![deny(missing_docs)]
+
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
@@ -67,6 +74,7 @@ pub use messages::{Lane, MAX_MESSAGE_BYTES, MessageEvent, MessageStats, NetMessa
 
 mod interest;
 mod prediction;
+mod rollback;
 mod sequence;
 mod service;
 pub(crate) mod snapshots;
@@ -78,6 +86,7 @@ pub use interest::{
     InterestViewer, MAX_INTEREST_TIERS,
 };
 pub use prediction::{InputPush, InputQueue, InputStats, Prediction, PredictionStats, Reconciled, Smooth, Smoothing};
+pub use rollback::{Advance, Rollback, RollbackDesync, RollbackGame, RollbackStats};
 pub use sequence::{Authority, AuthorityCheck, LatestWins, UpdateStamp, seq_diff, seq_newer};
 pub use service::{NetSnapshots, Networking};
 #[cfg(feature = "3d")]
@@ -299,7 +308,10 @@ impl Net {
     /// can't be bound (in use, not this machine's).
     pub fn host(addr: impl ToSocketAddrs, players: usize) -> io::Result<Net> {
         if !(2..=MAX_PLAYERS).contains(&players) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "2 to 8 players"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Net: expected 2 to 8 players; pass a player count in that range",
+            ));
         }
         let transport = Udp::bind(addr)?;
         Ok(Self::with(Session::new(Box::new(transport), Role::Host), 0, players))
@@ -406,7 +418,10 @@ impl Net {
     #[doc(hidden)]
     #[must_use]
     pub fn loopback_lossy(players: usize, drop_one_in: u32) -> Vec<Net> {
-        assert!((2..=MAX_PLAYERS).contains(&players), "2 to 8 players");
+        assert!(
+            (2..=MAX_PLAYERS).contains(&players),
+            "Net: expected 2 to 8 players; pass a player count in that range"
+        );
         let (txs, rxs): (Vec<_>, Vec<_>) = (0..players).map(|_| mpsc::channel()).unzip();
         let txs = std::sync::Arc::new(txs);
         rxs.into_iter()
@@ -563,10 +578,11 @@ impl Net {
     /// If the encoded input is over [`MAX_INPUT_BYTES`].
     pub fn set_input<T: Serialize>(&mut self, input: &T) {
         self.pending.clear();
-        serde_json::to_writer(&mut self.pending, input).expect("inputs serialize");
+        serde_json::to_writer(&mut self.pending, input)
+            .expect("Net::send: input serialization failed; fix the input type serializer");
         assert!(
             self.pending.len() <= MAX_INPUT_BYTES,
-            "input is over {MAX_INPUT_BYTES} bytes"
+            "input is over {MAX_INPUT_BYTES} bytes; send a smaller input type"
         );
     }
 
@@ -582,7 +598,10 @@ impl Net {
     ///
     /// If `input` is over [`MAX_INPUT_BYTES`].
     pub fn set_input_bytes(&mut self, input: &[u8]) {
-        assert!(input.len() <= MAX_INPUT_BYTES, "input is over {MAX_INPUT_BYTES} bytes");
+        assert!(
+            input.len() <= MAX_INPUT_BYTES,
+            "input is over {MAX_INPUT_BYTES} bytes; send a smaller input type"
+        );
         self.pending.clear();
         self.pending.extend_from_slice(input);
     }

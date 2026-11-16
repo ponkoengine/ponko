@@ -113,12 +113,12 @@ materials, lighting, shadows and post-processing. WGSL surface shaders,
 full-screen effects and compute workloads have existing APIs. Large static
 instance batches use GPU culling on supported devices, with device-dependent
 fallbacks. See [3D](3d.md), [profiling](profiling.md) and the source modules
-listed in [ARCHITECTURE.md](https://github.com/ponkoengine/ponko/blob/main/ARCHITECTURE.md).
+listed in [ARCHITECTURE.md](../../ARCHITECTURE.md).
 
 Those features do not establish graphics parity. The 3D renderer is split
 into subsystems that each own their pipelines, GPU objects and state, with
 `Renderer3D` coordinating the frame (see
-[ARCHITECTURE.md](https://github.com/ponkoengine/ponko/blob/main/ARCHITECTURE.md)).
+[ARCHITECTURE.md](../../ARCHITECTURE.md)).
 Pipelines are cached per shader, variant, target format and device features,
 and GPU capability tiers have documented fallbacks (see
 [GPU tiers](3d.md#gpu-tiers)). A game can add its own GPU work at named
@@ -218,7 +218,7 @@ Ponko's tests run in CI on Linux, macOS and Windows. The browser target
 builds are run in headless Chromium and WebKit in the merge queue. That does
 not mean that every desktop feature works on every browser. Mobile and
 consoles are not currently validated release targets.
-[STABILITY.md](https://github.com/ponkoengine/ponko/blob/main/STABILITY.md)
+[STABILITY.md](../../STABILITY.md)
 is the compatibility contract: ordinary 0.x minor releases may break the API
 and C ABI, with each break listed under Breaking changes in the CHANGELOG.
 
@@ -248,5 +248,5 @@ should be evaluated alongside its familiar GameObject workflow.
 Use [the performance chapter](performance.md) as a record of specific
 reproducible workloads, not a league table of engines. Match workloads,
 resolution, quality, build configuration and target hardware before drawing
-conclusions. Consult [the roadmap](https://github.com/ponkoengine/ponko/blob/main/ROADMAP.md)
+conclusions. Consult [the roadmap](../../ROADMAP.md)
 for unresolved foundations; it is directional and has no promised dates.

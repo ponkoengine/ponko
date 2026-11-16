@@ -1,8 +1,10 @@
 //! Freeing what models use, drawn offscreen: a model whose texture was
 //! freed draws untextured (white), one whose material was freed draws with
-//! the default material, and one whose mesh was freed draws nothing. Skips
-//! without a GPU (a skip is not a pass).
+//! the default material, and one whose mesh was freed draws nothing; a
+//! freed texture's slot taken by a new texture doesn't reach materials
+//! that read the freed one. Skips without a GPU (a skip is not a pass).
 use super::gpu::GpuTexture;
+use super::gpu_textures::GpuTextures;
 use super::gpu3d::*;
 #[allow(unused_imports)]
 use crate::d3::Transform as Transform3D;
@@ -21,7 +23,7 @@ struct Rig {
     layout: wgpu::BindGroupLayout,
     output: wgpu::Texture,
     target: wgpu::TextureView,
-    textures: Vec<GpuTexture>,
+    textures: GpuTextures,
     renderer: Renderer3D,
     ctx: Ctx,
 }
@@ -79,15 +81,17 @@ impl Rig {
             layout,
             output,
             target,
-            textures: Vec::new(),
+            textures: GpuTextures::default(),
             renderer,
             ctx,
         };
-        rig.push_texture(white);
+        let white = rig.gpu_texture(white);
+        rig.textures.set_blank(white.clone());
+        assert_eq!(rig.textures.add(white), 0);
         Some(rig)
     }
 
-    fn push_texture(&mut self, texture: wgpu::Texture) {
+    fn gpu_texture(&self, texture: wgpu::Texture) -> GpuTexture {
         let view = texture.create_view(&Default::default());
         let sampler = self.device.create_sampler(&Default::default());
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -104,36 +108,29 @@ impl Rig {
                 },
             ],
         });
-        self.textures.push(GpuTexture {
+        GpuTexture {
             bind_group,
             texture,
             nearest: false,
             mips: None,
-        });
+        }
     }
 
     /// A 1x1 texture of `rgba`, on the CPU and the GPU (the headless
-    /// `Ctx` numbers textures from 1, as `textures` does past the white one).
+    /// `Ctx` gives out ids as `textures` does past the white one).
     fn texture(&mut self, rgba: [u8; 4]) -> Texture {
         let texture = self.ctx.gfx.create_texture(1, 1, &rgba);
-        assert_eq!(texture.id as usize, self.textures.len());
-        let gpu = image(&self.device, &self.queue, rgba);
-        self.push_texture(gpu);
+        let gpu = self.gpu_texture(image(&self.device, &self.queue, rgba));
+        assert_eq!(self.textures.add(gpu), texture.id);
         texture
     }
 
-    /// Frees `texture` as the window's renderer does: its slot shows white,
-    /// and the materials that read it are bound again.
+    /// Frees `texture` as the window's renderer does: it shows white (its
+    /// slot goes to the next texture), and the materials that read it are
+    /// bound again.
     fn free_texture(&mut self, texture: Texture) {
         self.ctx.free(texture);
-        let white = self.textures[0].texture.clone();
-        let bind_group = self.textures[0].bind_group.clone();
-        self.textures[texture.id as usize] = GpuTexture {
-            bind_group,
-            texture: white,
-            nearest: false,
-            mips: Some(false),
-        };
+        assert!(self.textures.free(texture.id));
         self.renderer.free_render_target(texture.id);
         self.renderer
             .rebind_materials(&self.device, &self.queue, &self.textures, Some(texture.id), None);
@@ -328,6 +325,45 @@ fn models_whose_texture_material_or_mesh_was_freed_draw_the_default() {
     assert!(r.iter().all(|&c| c < 10), "right: nothing: {r:?}");
 }
 
+/// A material whose base map was freed reads white, and keeps reading
+/// white after a new texture takes the freed one's slot and the materials
+/// are bound again: the freed id never reaches the new texture.
+#[test]
+fn a_material_reading_a_freed_texture_stays_white_after_its_slot_is_reused() {
+    let Some(mut rig) = Rig::new() else {
+        return;
+    };
+    let red = rig.texture([255, 0, 0, 255]);
+    let material = rig.material(MaterialDesc {
+        texture: Some(red),
+        roughness: 1.0,
+        ..Default::default()
+    });
+    let mesh = rig.mesh(material);
+    rig.ctx.scene3d.camera.position = vec3(0.0, 0.0, 6.0);
+    rig.ctx.scene3d.camera.look_at(Vec3::ZERO);
+    rig.ctx.world.spawn((Transform3D::default(), Model::new(mesh)));
+    let view_proj = rig.ctx.scene3d.camera.view_proj();
+    let grey = |c: [u32; 3]| c[1] > 20 && c[0].abs_diff(c[1]) < 30 && c[2].abs_diff(c[1]) < 30;
+
+    let before = around(&rig.draw(), view_proj, Vec3::ZERO);
+    assert!(before[0] > 2 * before[1].max(10), "red first: {before:?}");
+    rig.free_texture(red);
+    let freed = around(&rig.draw(), view_proj, Vec3::ZERO);
+    assert!(grey(freed), "white (lit grey) once freed: {freed:?}");
+
+    let green = rig.texture([0, 255, 0, 255]);
+    let slot = crate::handle::INDEX_MASK;
+    assert_eq!(green.id & slot, red.id & slot, "the new texture takes the slot");
+    assert_ne!(green, red);
+    rig.renderer
+        .rebind_materials(&rig.device, &rig.queue, &rig.textures, Some(red.id), None);
+    rig.renderer.texture_replaced(&rig.device, &rig.textures, green.id);
+    let reused = around(&rig.draw(), view_proj, Vec3::ZERO);
+    eprintln!("red {before:?}, freed {freed:?}, slot reused {reused:?}");
+    assert!(grey(reused), "still white, not green: {reused:?}");
+}
+
 #[test]
 fn freed_effects_compute_passes_and_targets_are_left_out_of_the_frame() {
     let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(64.0, 64.0));
@@ -410,11 +446,37 @@ fn a_texture_replaced_at_another_resolution_shows_in_the_materials_that_use_it()
         },
         blue.size(),
     );
-    let id = streamed.id as usize;
-    rig.push_texture(blue);
-    let replaced = rig.textures.pop().expect("just pushed");
-    rig.textures[id] = replaced;
+    let replaced = rig.gpu_texture(blue);
+    *rig.textures.live_mut(streamed.id).expect("live") = replaced;
     rig.renderer.texture_replaced(&rig.device, &rig.textures, streamed.id);
     let after = around(&rig.draw(), view_proj, Vec3::ZERO);
     assert!(after[2] > 150 && after[0] < 60, "blue after: {after:?}");
+}
+
+#[test]
+fn mesh_cost_visits_count_drawn_models_and_stop_counting_freed_meshes() {
+    let Some(mut rig) = Rig::new() else {
+        return;
+    };
+    let material = rig.material(MaterialDesc::default());
+    let mesh = rig.mesh(material);
+    rig.ctx.scene3d.camera.position = vec3(0.0, 0.0, 8.0);
+    rig.ctx.scene3d.camera.look_at(Vec3::ZERO);
+    rig.ctx.world.spawn((Transform3D::default(), Model::new(mesh)));
+    rig.draw();
+    let mut models = 0;
+    let mut triangles = 0;
+    rig.renderer.visit_mesh_costs(|slot, n, t, _, _| {
+        assert_eq!(slot, mesh.slot());
+        models += n;
+        triangles += t;
+    });
+    assert_eq!(models, 1);
+    assert!(triangles > 0);
+    rig.ctx.free(mesh);
+    rig.renderer.free_mesh(mesh.id);
+    rig.draw();
+    rig.renderer.visit_mesh_costs(|_, n, t, _, _| {
+        assert_eq!((n, t), (0, 0));
+    });
 }

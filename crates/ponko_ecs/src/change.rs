@@ -44,7 +44,7 @@ use std::marker::PhantomData;
 use crate::bundle::Component;
 use crate::entity::Entity;
 use crate::query::{Filters, OrTerm, QueryCache, QueryData, QueryFilter};
-use crate::storage::{Archetype, ComponentId, ComponentInfo};
+use crate::storage::{Archetype, CHANGE_BLOCK, ComponentId, ComponentInfo, Stamps};
 use crate::view::SharedFilters;
 use crate::world::{Chunk, World};
 
@@ -241,12 +241,15 @@ impl Changes {
         }
     }
 
-    /// Logs that `e`, a row of `arch`, is being despawned.
+    /// Logs that `e`, row `row` of `arch`, is being despawned, and sets
+    /// the block summary of `row` to now in its tracked columns: the last
+    /// row's stamps move there next.
     #[cold]
-    pub(crate) fn log_despawn(&mut self, infos: &[ComponentInfo], arch: &Archetype, e: Entity) {
-        for &id in arch.component_ids() {
+    pub(crate) fn log_despawn(&mut self, infos: &[ComponentInfo], arch: &Archetype, e: Entity, row: usize) {
+        for (col, &id) in arch.component_ids().iter().enumerate() {
             if infos[id.index()].tracked {
                 self.log_removal(id, e);
+                arch.summarize(col, row, self.stamp());
             }
         }
     }
@@ -287,9 +290,17 @@ const MAX_CLAUSES: usize = 8;
 /// Which rows of one archetype pass a query's `Added`/`Changed` filters:
 /// every clause must hold, and a clause holds when any of its terms (a
 /// stamp array) is newer than the reader's tick.
+///
+/// Each term also has its column's block summary (the newest stamp of each
+/// block of [`CHANGE_BLOCK`] rows): a block where some clause has no term
+/// with a summary newer than the reader's tick has no passing row, and is
+/// skipped without reading its rows. A still world costs one summary per
+/// block, not one stamp per row.
 #[derive(Clone, Copy)]
 pub(crate) struct RowFilter {
     terms: [*const u32; MAX_TERMS],
+    /// `blocks[i]` is the block summary of the column of `terms[i]`.
+    blocks: [*const u32; MAX_TERMS],
     /// Clause `c` holds the terms `terms[ends[c - 1]..ends[c]]`.
     ends: [u8; MAX_CLAUSES],
     n_terms: u8,
@@ -301,6 +312,7 @@ impl RowFilter {
     pub(crate) fn new(clock: Clock) -> Self {
         RowFilter {
             terms: [std::ptr::null(); MAX_TERMS],
+            blocks: [std::ptr::null(); MAX_TERMS],
             ends: [0; MAX_CLAUSES],
             n_terms: 0,
             n_clauses: 0,
@@ -309,8 +321,9 @@ impl RowFilter {
     }
 
     /// Adds a term to the clause being built: the live stamps of one column.
-    pub(crate) fn term(&mut self, stamps: *const u32) {
-        self.terms[self.n_terms as usize] = stamps;
+    pub(crate) fn term(&mut self, stamps: Stamps) {
+        self.terms[self.n_terms as usize] = stamps.rows;
+        self.blocks[self.n_terms as usize] = stamps.blocks;
         self.n_terms += 1;
     }
 
@@ -342,6 +355,57 @@ impl RowFilter {
         }
         true
     }
+
+    /// Whether some row of block `block` (rows `block * CHANGE_BLOCK..`)
+    /// may pass: every clause has a term whose block summary is newer than
+    /// the reader's tick. `false` means no row of the block passes.
+    #[inline]
+    fn block_may_pass(&self, block: usize) -> bool {
+        let mut start = 0;
+        for &end in &self.ends[..self.n_clauses as usize] {
+            let end = end as usize;
+            // SAFETY: each block summary holds a stamp for every block of
+            // the archetype's capacity, and `block` holds a live row.
+            let any = self.blocks[start..end]
+                .iter()
+                .any(|&blocks| self.clock.is_newer(unsafe { blocks.add(block).read() }));
+            if !any {
+                return false;
+            }
+            start = end;
+        }
+        true
+    }
+
+    /// The first row at or after `row` and before `len` that passes, if any.
+    /// Skips the blocks [`block_may_pass`](Self::block_may_pass) rules out.
+    #[inline]
+    fn first_passing(&self, mut row: usize, len: usize) -> Option<usize> {
+        while row < len {
+            let block = row / CHANGE_BLOCK;
+            let block_end = ((block + 1) * CHANGE_BLOCK).min(len);
+            if self.block_may_pass(block)
+                && let Some(found) = (row..block_end).find(|&r| self.passes(r))
+            {
+                return Some(found);
+            }
+            row = block_end;
+        }
+        None
+    }
+
+    /// How many rows of `0..len` pass, stopping at `max`.
+    fn count(&self, len: usize, max: usize) -> usize {
+        let mut n = 0;
+        let mut row = 0;
+        while n < max
+            && let Some(found) = self.first_passing(row, len)
+        {
+            n += 1;
+            row = found + 1;
+        }
+        n
+    }
 }
 
 /// The rows of one tracked archetype that pass a query's row filter, as
@@ -365,14 +429,10 @@ impl Runs<'_> {
     /// The next run `start..end` of passing rows.
     fn next_run(&mut self) -> Option<(usize, usize)> {
         let len = self.arch.len();
-        let mut start = self.next;
-        while start < len && !self.rows.passes(start) {
-            start += 1;
-        }
-        if start >= len {
+        let Some(start) = self.rows.first_passing(self.next, len) else {
             self.next = len;
             return None;
-        }
+        };
         let mut end = start + 1;
         while end < len && self.rows.passes(end) {
             end += 1;
@@ -405,10 +465,8 @@ pub(crate) fn mark_row<Q: QueryData>(arch: &Archetype, ids: &Q::Ids, stamp: u32,
 /// may read or write these stamps meanwhile: the caller holds the world
 /// mutably, or is a view that declared writing the component.
 fn mark_rows(arch: &Archetype, id: ComponentId, stamp: u32, start: usize, end: usize) {
-    debug_assert!(start <= end && end <= arch.len());
-    if let Some(changed) = arch.changed_stamps(id) {
-        // SAFETY: `start..end` are live rows, with one stamp each.
-        unsafe { std::slice::from_raw_parts_mut(changed.add(start), end - start).fill(stamp) };
+    if let Some(col) = arch.column_index(id) {
+        arch.stamp_changed(col, start..end, stamp);
     }
 }
 
@@ -485,7 +543,7 @@ pub(crate) fn visit_row<Q: QueryData>(
 #[inline(never)]
 pub(crate) fn count(arch: &Archetype, filters: &Filters, clock: Clock) -> usize {
     match filters.row_filter(arch, clock) {
-        Some(rows) => (0..arch.len()).filter(|&row| rows.passes(row)).count(),
+        Some(rows) => rows.count(arch.len(), usize::MAX),
         None => arch.len(),
     }
 }
@@ -493,7 +551,7 @@ pub(crate) fn count(arch: &Archetype, filters: &Filters, clock: Clock) -> usize 
 /// [`count`], but it stops looking once it has found `max` rows.
 pub(crate) fn count_at_most(arch: &Archetype, filters: &Filters, clock: Clock, max: usize) -> usize {
     match filters.row_filter(arch, clock) {
-        Some(rows) => (0..arch.len()).filter(|&row| rows.passes(row)).take(max).count(),
+        Some(rows) => rows.count(arch.len(), max),
         None => arch.len().min(max),
     }
 }
@@ -644,9 +702,10 @@ impl World {
     /// otherwise, so call this once, before the first query that filters on
     /// `T` (in a game, in setup).
     ///
-    /// Tracking costs 8 bytes per entity that has `T`, and a stamp whenever
-    /// one of the operations below touches `T`. Components that aren't
-    /// tracked cost nothing.
+    /// Tracking costs 8 bytes per entity that has `T` (plus 4 bytes per 64,
+    /// the newest change of each run of 64 rows, which lets the filters skip
+    /// rows nobody wrote to), and a stamp whenever one of the operations
+    /// below touches `T`. Components that aren't tracked cost nothing.
     ///
     /// What counts, for a tracked component:
     ///
@@ -1112,6 +1171,32 @@ mod tests {
         assert!(changed(&mut world, before).contains(&2));
         let now = world.change_tick();
         assert_eq!(changed(&mut world, now), []);
+    }
+
+    #[test]
+    fn block_summaries_age_with_their_rows() {
+        let mut world = World::new();
+        world.track_changes::<Pos>();
+        // Several blocks of rows, all stamped long ago.
+        let es: Vec<_> = (0..300).map(|i| world.spawn((Pos(i),))).collect();
+        world.skip_change_ticks(u64::from(MAX_AGE) + 100);
+        let before = world.advance_change_tick();
+        world.get_mut::<Pos>(es[250]).unwrap().0 = 1000;
+        let after = world.advance_change_tick();
+        for _ in 0..3 {
+            // Each step crosses an aging pass, and `before` stays younger than
+            // `MAX_AGE`: old blocks stay old, the changed one stays newer.
+            world.skip_change_ticks(AGE_EVERY / 2 + 10);
+            assert_eq!(changed(&mut world, before), [1000]);
+            assert_eq!(changed(&mut world, after), []);
+        }
+        // A row moved into an old block by a despawn keeps its stamp.
+        let seen = world.advance_change_tick();
+        world.get_mut::<Pos>(es[299]).unwrap().0 = 2000;
+        world.despawn(es[3]);
+        assert_eq!(changed(&mut world, seen), [2000]);
+        world.skip_change_ticks(AGE_EVERY);
+        assert_eq!(changed(&mut world, seen), [2000]);
     }
 
     #[test]

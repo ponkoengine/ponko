@@ -4,6 +4,7 @@
 //! `#[derive(Serialize, Deserialize)]` can be reflected. It is what tools use
 //! to look inside a running game: the agent (MCP) bridge, the inspector, and
 //! save/load.
+#![deny(missing_docs)]
 
 use std::collections::HashMap;
 use std::fmt;
@@ -20,11 +21,40 @@ mod builtin_schemas;
 mod migrate;
 mod particles;
 mod save_format;
+mod skeleton2d;
 pub(crate) use animation::reflect_animation;
 pub(crate) use migrate::migrate as migrate_save;
 pub use migrate::{Migration, SaveMigrations};
 pub(crate) use particles::reflect_particle_emitter2d;
 pub use save_format::SaveFormat;
+pub(crate) use skeleton2d::reflect_skeleton2d;
+
+/// A JSON value, as reflection reads and writes it ([`WorldReflect::get_json`],
+/// [`WorldReflect::save`], save migrations, ...).
+///
+/// It is `serde_json::Value` itself under a name that comes with the engine,
+/// so a game can name the type without depending on `serde_json`, and values
+/// pass to and from `serde_json` code unchanged. Build values with the
+/// prelude's `json!`. Which `serde_json` is behind it follows Ponko's
+/// compatibility promise for re-exported crates (STABILITY.md); this alias
+/// does not change how saved data is written.
+///
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::reflect::JsonValue;
+///
+/// let mut world = World::new();
+/// world.reflect::<d2::Transform>();
+/// let e = world.spawn((d2::Transform::at(vec2(1.0, 2.0)),));
+/// let snapshot: JsonValue = world.entity_json(e).unwrap();
+/// assert_eq!(snapshot["Transform2D"]["position"], json!([1.0, 2.0]));
+/// ```
+pub type JsonValue = Value;
+
+/// A JSON object, as save migrations hand an entity's components to
+/// [`Migration::entities`]: `serde_json::Map<String, serde_json::Value>`
+/// itself, see [`JsonValue`].
+pub type JsonMap = serde_json::Map<String, Value>;
 
 use crate::schema::{SchemaSource, schema_json};
 
@@ -86,7 +116,11 @@ impl fmt::Display for ReflectError {
                 f,
                 "no reflected component named `{name}` (register it with `world.reflect::<T>()`)"
             ),
-            Self::NoSuchEntity(e) => write!(f, "entity {} does not exist", e.to_bits()),
+            Self::NoSuchEntity(e) => write!(
+                f,
+                "entity {} does not exist; use a live entity from this world",
+                e.to_bits()
+            ),
             Self::MissingComponent { entity, component } => {
                 write!(f, "entity {} has no `{component}`", entity.to_bits())
             }
@@ -95,7 +129,10 @@ impl fmt::Display for ReflectError {
                 f,
                 "no reflected resource named `{name}` (register it with `world.reflect_resource::<T>()`)"
             ),
-            Self::MissingResource(name) => write!(f, "resource `{name}` is not in the world"),
+            Self::MissingResource(name) => write!(
+                f,
+                "resource `{name}` is not in the world; call world.insert_resource first"
+            ),
             Self::NewerSave { saved, current } => write!(
                 f,
                 "the save is from a newer version of the game (game save version {saved}; this build reads up to {current})"
@@ -335,6 +372,13 @@ pub enum FieldType {
 
 impl FieldType {
     /// Bytes the field takes.
+    ///
+    /// ```
+    /// use ponko::reflect::FieldType;
+    /// assert_eq!(FieldType::F32.size(), 4);
+    /// assert_eq!(FieldType::Vec2.size(), 8);
+    /// assert_eq!(FieldType::Color.size(), 16);
+    /// ```
     #[must_use]
     pub fn size(self) -> usize {
         match self {
@@ -624,7 +668,7 @@ pub trait WorldReflect {
     ///
     /// If `name` isn't reflected, `e` is dead or lacks it, or the value can't be
     /// written as JSON.
-    fn get_json(&self, e: Entity, name: &str) -> Result<Value, ReflectError>;
+    fn get_json(&self, e: Entity, name: &str) -> Result<JsonValue, ReflectError>;
 
     /// Writes component `name` of entity `e` from JSON, adding the component
     /// if the entity doesn't have it.
@@ -647,7 +691,7 @@ pub trait WorldReflect {
     /// # Errors
     ///
     /// If `name` isn't reflected, `e` is dead, or `value` doesn't fit the type.
-    fn set_json(&mut self, e: Entity, name: &str, value: Value) -> Result<(), ReflectError>;
+    fn set_json(&mut self, e: Entity, name: &str, value: JsonValue) -> Result<(), ReflectError>;
 
     /// Removes component `name` from entity `e`. Returns whether it had it.
     ///
@@ -679,7 +723,7 @@ pub trait WorldReflect {
     /// # Errors
     ///
     /// If `e` is dead or a component can't be written as JSON.
-    fn entity_json(&self, e: Entity) -> Result<Value, ReflectError>;
+    fn entity_json(&self, e: Entity) -> Result<JsonValue, ReflectError>;
 
     /// Spawns an entity from a JSON object keyed by component name, the
     /// format [`entity_json`](Self::entity_json) returns. On error nothing
@@ -700,7 +744,7 @@ pub trait WorldReflect {
     ///
     /// If a name isn't reflected or a value doesn't fit its type; nothing is
     /// spawned then.
-    fn spawn_json(&mut self, components: Value) -> Result<Entity, ReflectError>;
+    fn spawn_json(&mut self, components: JsonValue) -> Result<Entity, ReflectError>;
 
     /// The whole world as JSON: every entity that has reflected components,
     /// with its id, sorted by id. Components that aren't reflected are not
@@ -716,7 +760,7 @@ pub trait WorldReflect {
     /// let save = world.save();
     /// assert_eq!(save["entities"].as_array().unwrap().len(), 1);
     /// ```
-    fn save(&self) -> Value;
+    fn save(&self) -> JsonValue;
 
     /// Replaces every entity with those in `save` (from [`save`](Self::save)),
     /// **with the same ids**, so components that refer to entities stay
@@ -761,7 +805,7 @@ pub trait WorldReflect {
     /// always load in the same session, and in any session unless it once had
     /// over 4 million entities alive and was then saved with less than an
     /// eighth of them.
-    fn load(&mut self, save: &Value) -> Result<(), ReflectError>;
+    fn load(&mut self, save: &JsonValue) -> Result<(), ReflectError>;
 
     /// Makes resource `R` visible to reflection under its type name without
     /// the module path, like [`reflect`](Self::reflect) does for components.
@@ -813,7 +857,7 @@ pub trait WorldReflect {
     /// # Errors
     ///
     /// If `name` isn't a reflected resource or isn't in the world.
-    fn resource_json(&self, name: &str) -> Result<Value, ReflectError>;
+    fn resource_json(&self, name: &str) -> Result<JsonValue, ReflectError>;
 
     /// Writes a reflected resource from JSON, inserting it if it's missing.
     /// For a resource that exists, an object changes only the fields it
@@ -834,7 +878,7 @@ pub trait WorldReflect {
     /// # Errors
     ///
     /// If `name` isn't a reflected resource, or `value` doesn't fit its type.
-    fn set_resource_json(&mut self, name: &str, value: Value) -> Result<(), ReflectError>;
+    fn set_resource_json(&mut self, name: &str, value: JsonValue) -> Result<(), ReflectError>;
 
     /// Makes resource `name`, one with no Rust type (stored with
     /// [`RawWorld::insert_resource_dynamic`](ponko_ecs::RawWorld::insert_resource_dynamic), the C and C++ path), visible to
@@ -1038,7 +1082,7 @@ impl WorldReflect for World {
             // Describing the same component again replaces its fields.
             Some(&i) if reg.list[i].type_name == name => reg.list[i] = entry(&name),
             Some(&i) => panic!(
-                "World::reflect_fields: `{name}` is already reflected as `{}`",
+                "World::reflect_fields: `{name}` is already reflected as `{}`; use a unique name or its original schema",
                 reg.list[i].type_name
             ),
             None => {
@@ -1052,7 +1096,7 @@ impl WorldReflect for World {
         registry(self).map_or_else(Vec::new, |r| r.list.iter().map(|c| c.name.as_str()).collect())
     }
 
-    fn get_json(&self, e: Entity, name: &str) -> Result<Value, ReflectError> {
+    fn get_json(&self, e: Entity, name: &str) -> Result<JsonValue, ReflectError> {
         let c = find(self, name)?;
         if !self.is_alive(e) {
             return Err(ReflectError::NoSuchEntity(e));
@@ -1066,7 +1110,7 @@ impl WorldReflect for World {
         }
     }
 
-    fn set_json(&mut self, e: Entity, name: &str, value: Value) -> Result<(), ReflectError> {
+    fn set_json(&mut self, e: Entity, name: &str, value: JsonValue) -> Result<(), ReflectError> {
         let c = find(self, name)?;
         if !self.is_alive(e) {
             return Err(ReflectError::NoSuchEntity(e));
@@ -1090,7 +1134,7 @@ impl WorldReflect for World {
         Ok((c.remove)(self, e))
     }
 
-    fn entity_json(&self, e: Entity) -> Result<Value, ReflectError> {
+    fn entity_json(&self, e: Entity) -> Result<JsonValue, ReflectError> {
         if !self.is_alive(e) {
             return Err(ReflectError::NoSuchEntity(e));
         }
@@ -1103,7 +1147,7 @@ impl WorldReflect for World {
         Ok(Value::Object(out))
     }
 
-    fn spawn_json(&mut self, components: Value) -> Result<Entity, ReflectError> {
+    fn spawn_json(&mut self, components: JsonValue) -> Result<Entity, ReflectError> {
         let Value::Object(map) = components else {
             return Err(ReflectError::BadValue {
                 component: "<entity>".into(),
@@ -1165,7 +1209,7 @@ impl WorldReflect for World {
         registry(self).map_or_else(Vec::new, |r| r.resources.iter().map(|c| c.name.as_str()).collect())
     }
 
-    fn resource_json(&self, name: &str) -> Result<Value, ReflectError> {
+    fn resource_json(&self, name: &str) -> Result<JsonValue, ReflectError> {
         let r = find_resource(self, name)?;
         match (r.get)(self) {
             Some(v) => v.map_err(bad_value(name)),
@@ -1173,7 +1217,7 @@ impl WorldReflect for World {
         }
     }
 
-    fn set_resource_json(&mut self, name: &str, value: Value) -> Result<(), ReflectError> {
+    fn set_resource_json(&mut self, name: &str, value: JsonValue) -> Result<(), ReflectError> {
         let r = find_resource(self, name)?;
         let value = match (r.get)(self) {
             Some(current) if value.is_object() => {
@@ -1217,7 +1261,7 @@ impl WorldReflect for World {
         match reg.resource_by_name.get(name) {
             Some(&i) if reg.resources[i].type_name == name => reg.resources[i] = entry,
             Some(&i) => panic!(
-                "World::reflect_resource_fields: `{name}` is already reflected as `{}`",
+                "World::reflect_resource_fields: `{name}` is already reflected as `{}`; use a unique name or its original schema",
                 reg.resources[i].type_name
             ),
             None => {
@@ -1248,7 +1292,7 @@ impl WorldReflect for World {
         Ok(())
     }
 
-    fn save(&self) -> Value {
+    fn save(&self) -> JsonValue {
         let reflected = self.reflected_components();
         let mut entities: Vec<Entity> = Vec::new();
         let mut not_saved: std::collections::BTreeMap<String, usize> = Default::default();
@@ -1300,7 +1344,7 @@ impl WorldReflect for World {
         save
     }
 
-    fn load(&mut self, save: &Value) -> Result<(), ReflectError> {
+    fn load(&mut self, save: &JsonValue) -> Result<(), ReflectError> {
         let bad = |message: String| ReflectError::BadValue {
             component: "<save>".into(),
             message,

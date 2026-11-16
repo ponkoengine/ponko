@@ -64,11 +64,11 @@ pub unsafe extern "C" fn ponko_mesh_data_add_morph_target(
         }
         let read =
             |p: *const PonkoVec3| -> Vec<_> { std::slice::from_raw_parts(p, count).iter().map(|&v| to_c(v)).collect() };
-        let target = MorphTarget {
-            name: name.to_string(),
-            positions: read(positions),
-            normals: if normals.is_null() { Vec::new() } else { read(normals) },
-        };
+        let target = MorphTarget::new(name.to_string(), read(positions)).with_normals(if normals.is_null() {
+            Vec::new()
+        } else {
+            read(normals)
+        });
         if target.positions.iter().chain(&target.normals).any(|v| !v.is_finite()) {
             return Err(invalid("an offset isn't a finite number"));
         }
@@ -329,27 +329,19 @@ pub unsafe extern "C" fn ponko_clip_set_morph_track(
                 1
             };
         let values = std::slice::from_raw_parts(values, n);
-        if times.iter().any(|v| !v.is_finite() || *v < 0.)
-            || times.windows(2).any(|w| w[0] >= w[1])
-            || values.iter().any(|v| !v.is_finite())
-        {
-            return Err(invalid("invalid morph keys"));
-        }
-        let track = ponko::anim::AnimationTrack::new(
+        let track = ponko::anim::AnimationTrack::try_new(
             times,
             values
                 .iter()
                 .map(|v| ponko::prelude::Vec4::new(*v, 0., 0., 0.))
                 .collect(),
             interpolation,
-        );
+        )
+        .map_err(invalid_owned)?;
         let mut tracks = clip.0.morph_tracks().to_vec();
         tracks.retain(|t| t.name != name);
-        tracks.push(ponko::anim::MorphAnimation {
-            name: name.into(),
-            track,
-        });
-        clip.0 = clip.0.clone().with_morph_tracks(tracks);
+        tracks.push(ponko::anim::MorphAnimation::new(name, track));
+        clip.0 = clip.0.clone().try_with_morph_tracks(tracks).map_err(invalid_owned)?;
         Ok(())
     })
 }

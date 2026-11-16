@@ -1,0 +1,89 @@
+pub mod ponko_image_diff
+#[non_exhaustive] pub enum ponko_image_diff::ErrorKind
+pub ponko_image_diff::ErrorKind::Decode
+pub ponko_image_diff::ErrorKind::Invalid
+pub ponko_image_diff::ErrorKind::Io
+impl core::clone::Clone for ponko_image_diff::ErrorKind
+pub fn ponko_image_diff::ErrorKind::clone(&self) -> Self
+impl core::cmp::Eq for ponko_image_diff::ErrorKind
+impl core::cmp::PartialEq for ponko_image_diff::ErrorKind
+pub fn ponko_image_diff::ErrorKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_image_diff::ErrorKind
+pub fn ponko_image_diff::ErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_image_diff::ErrorKind
+impl core::marker::StructuralPartialEq for ponko_image_diff::ErrorKind
+pub struct ponko_image_diff::Diff
+pub ponko_image_diff::Diff::beyond: u8
+pub ponko_image_diff::Diff::edges: usize
+pub ponko_image_diff::Diff::max_channel: u8
+pub ponko_image_diff::Diff::mean: f32
+pub ponko_image_diff::Diff::outliers: usize
+pub ponko_image_diff::Diff::percent_over: f64
+pub ponko_image_diff::Diff::pixels: usize
+pub ponko_image_diff::Diff::regions: alloc::vec::Vec<ponko_image_diff::Region>
+pub ponko_image_diff::Diff::ssim: f64
+impl ponko_image_diff::Diff
+pub fn ponko_image_diff::Diff::within(&self, ponko_image_diff::Tolerance) -> bool
+impl core::clone::Clone for ponko_image_diff::Diff
+pub fn ponko_image_diff::Diff::clone(&self) -> Self
+impl core::fmt::Debug for ponko_image_diff::Diff
+pub fn ponko_image_diff::Diff::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko_image_diff::Diff
+pub fn ponko_image_diff::Diff::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for ponko_image_diff::Diff
+pub fn ponko_image_diff::Diff::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub struct ponko_image_diff::Error
+impl ponko_image_diff::Error
+pub fn ponko_image_diff::Error::kind(&self) -> ponko_image_diff::ErrorKind
+pub fn ponko_image_diff::Error::message(&self) -> &str
+pub fn ponko_image_diff::Error::path(&self) -> core::option::Option<&std::path::Path>
+impl core::clone::Clone for ponko_image_diff::Error
+pub fn ponko_image_diff::Error::clone(&self) -> Self
+impl core::convert::From<ponko_image_diff::Error> for alloc::string::String
+pub fn alloc::string::String::from(ponko_image_diff::Error) -> Self
+impl core::error::Error for ponko_image_diff::Error
+pub fn ponko_image_diff::Error::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for ponko_image_diff::Error
+pub fn ponko_image_diff::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko_image_diff::Error
+pub fn ponko_image_diff::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct ponko_image_diff::Image<'a>
+pub ponko_image_diff::Image::height: u32
+pub ponko_image_diff::Image::rgba: &'a [u8]
+pub ponko_image_diff::Image::width: u32
+impl<'a> core::clone::Clone for ponko_image_diff::Image<'a>
+pub fn ponko_image_diff::Image<'a>::clone(&self) -> Self
+impl<'a> core::fmt::Debug for ponko_image_diff::Image<'a>
+pub fn ponko_image_diff::Image<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for ponko_image_diff::Image<'a>
+pub struct ponko_image_diff::Region
+pub ponko_image_diff::Region::height: u32
+pub ponko_image_diff::Region::pixels: usize
+pub ponko_image_diff::Region::width: u32
+pub ponko_image_diff::Region::x: u32
+pub ponko_image_diff::Region::y: u32
+impl core::clone::Clone for ponko_image_diff::Region
+pub fn ponko_image_diff::Region::clone(&self) -> Self
+impl core::fmt::Debug for ponko_image_diff::Region
+pub fn ponko_image_diff::Region::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for ponko_image_diff::Region
+pub fn ponko_image_diff::Region::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub struct ponko_image_diff::Tolerance
+pub ponko_image_diff::Tolerance::channel: u8
+pub ponko_image_diff::Tolerance::edge: u32
+pub ponko_image_diff::Tolerance::outliers: f32
+impl core::clone::Clone for ponko_image_diff::Tolerance
+pub fn ponko_image_diff::Tolerance::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_image_diff::Tolerance
+pub fn ponko_image_diff::Tolerance::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_image_diff::Tolerance
+pub fn ponko_image_diff::Tolerance::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_image_diff::Tolerance
+impl core::marker::StructuralPartialEq for ponko_image_diff::Tolerance
+impl serde_core::ser::Serialize for ponko_image_diff::Tolerance
+pub fn ponko_image_diff::Tolerance::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko_image_diff::Tolerance
+pub fn ponko_image_diff::Tolerance::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub fn ponko_image_diff::compare(&ponko_image_diff::Image<'_>, &ponko_image_diff::Image<'_>, ponko_image_diff::Tolerance) -> core::result::Result<ponko_image_diff::Diff, ponko_image_diff::Error>
+pub fn ponko_image_diff::compare_files(&std::path::Path, &std::path::Path, ponko_image_diff::Tolerance, core::option::Option<&std::path::Path>) -> core::result::Result<ponko_image_diff::Diff, ponko_image_diff::Error>
+pub fn ponko_image_diff::heatmap(&ponko_image_diff::Image<'_>, &ponko_image_diff::Image<'_>, ponko_image_diff::Tolerance) -> core::result::Result<alloc::vec::Vec<u8>, ponko_image_diff::Error>

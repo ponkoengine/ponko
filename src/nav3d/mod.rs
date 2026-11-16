@@ -16,6 +16,8 @@
 //! character controller. Crowd avoidance is opt-in. Bake for the largest
 //! agent radius/height; agents larger than that radius are stopped.
 
+#![deny(missing_docs)]
+
 use crate::ctx::Ctx;
 use crate::d3::Transform as Transform3D;
 use crate::render::MeshData;
@@ -260,6 +262,12 @@ impl NavMesh3D {
     /// Bakes ordered world triangles with bounded backend memory/work budgets.
     /// Empty triangle soups and nonfinite inputs are errors; an entirely steep
     /// surface successfully produces an empty, unqueryable mesh.
+    ///
+    /// # Errors
+    ///
+    /// A [`NavBakeError`] for an empty triangle list, nonfinite vertices or
+    /// settings, or a source or setting beyond the bake's limits.
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// let source = ponko::nav::NavSource::from_mesh(&ponko::render::MeshData::plane(10.0), ponko::d3::Transform::default());
@@ -267,6 +275,25 @@ impl NavMesh3D {
     /// ```
     pub fn bake(sources: &[NavSource], settings: NavBakeSettings) -> Result<Self, NavBakeError> {
         NavState::bake(sources, settings).map(|state| Self { state: Some(state) })
+    }
+    /// Calls `f` with both ends of every polygon edge (shared edges once per
+    /// polygon), for debug drawing's navmesh view.
+    pub(crate) fn for_each_edge(&self, mut f: impl FnMut(Vec3, Vec3)) {
+        let Some(state) = &self.state else { return };
+        let mesh = &state.mesh;
+        for i in 0..mesh.max_tiles() as usize {
+            let Some(tile) = mesh.tile(i) else { continue };
+            let at = |v: u16| {
+                let i = v as usize * 3;
+                Vec3::from_slice(&tile.verts[i..i + 3])
+            };
+            for poly in &tile.polys {
+                let verts = &poly.verts[..poly.vert_count as usize];
+                for (k, &v) in verts.iter().enumerate() {
+                    f(at(v), at(verts[(k + 1) % verts.len()]));
+                }
+            }
+        }
     }
     /// Nearest unblocked surface within a Euclidean distance, including Y.
     /// ```
@@ -313,6 +340,12 @@ impl NavMesh3D {
     }
     /// Rebuilds at most `budget` cached layers; returns the number of update steps.
     /// Call once per frame for manually managed meshes. The sim system uses one.
+    ///
+    /// # Errors
+    ///
+    /// A [`NavBakeError`] if rebuilding a layer fails. Layers not yet rebuilt
+    /// stay queued.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// let source = ponko::nav::NavSource::from_mesh(&ponko::render::MeshData::plane(10.0), ponko::d3::Transform::default());

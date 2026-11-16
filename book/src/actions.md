@@ -132,8 +132,9 @@ keep next to their fixtures (`InputScenario::from_json`, `to_json`; C++
 }
 ```
 
-Input steps are `key`, `mouse`, `gamepad_button`, `gamepad_axis`, `focus_lost`
-and `gamepad_disconnected`; check steps are `expect_action`, `expect_resource`
+Input steps are `key`, `mouse`, `gamepad_button`, `gamepad_axis`, `focus_lost`,
+`gamepad_disconnected`, `mouse_move` (`position`, window pixels as `[x, y]`)
+and `mouse_wheel` (`delta`, in notches); check steps are `expect_action`, `expect_resource`
 and `expect_count`. Steps may come in any order, and a step's number in a
 failure report is its position in the file. Unknown fields, a `version` this
 engine doesn't read, more than 100,000 steps and steps past `duration` are
@@ -285,7 +286,8 @@ and `ctx::set_action`.
 serde JSON format in both languages. Write that string to your settings file
 using normal file I/O. Read it back with `ActionMap::from_json` /
 `action_map::from_json`, then install the result. Invalid JSON fails before
-changing active bindings. Rust returns `Result`; C++ throws the usual engine
+changing active bindings. Rust returns `Result<_, ponko::error::Error>` with `ErrorKind::Json` and
+action-map context plus the decoder location; C++ throws the usual engine
 exception. Button state is never saved.
 
 The C API uses an owned `PonkoActionMap`: create/free, set/remove,
@@ -370,3 +372,27 @@ each with `key()`, `mouse()`, `button()`, `axis()`, `pad()` and `binding()`.
 The reference game's settings screen is built on it (see
 [Packaging a game](packaging.md)), and `tests/pressed_this_frame.rs` drives the
 query with an input scenario, tick by tick.
+
+## Matching bindings in a rebinding screen
+
+`Action`, `ButtonBinding`, `AxisBinding`, `Axis2Binding` and `InputEvent` are
+non-exhaustive: include a `_` arm so future input sources can be added.
+For example, a rebinding screen can label the sources it understands:
+
+```rust
+# use ponko::prelude::*;
+fn label(binding: &ButtonBinding) -> String {
+    match binding {
+        ButtonBinding::Key(key) => format!("Key {key:?}"),
+        ButtonBinding::Mouse(button) => format!("Mouse {button:?}"),
+        ButtonBinding::Gamepad { pad, button } => format!("Pad {} {button:?}", pad.slot()),
+        _ => "Other input".into(),
+    }
+}
+```
+
+`ActionMap` equality compares binding configuration only, ignoring cached
+edges and context-local action ids. This lets a settings screen compare a
+loaded map with its edited copy. Analog bindings use ordinary float equality.
+The C/C++ ABI is unchanged: digital injection still accepts a held boolean,
+and JSON errors keep the existing status and engine error kind.

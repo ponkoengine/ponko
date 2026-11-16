@@ -112,12 +112,13 @@ fn cs_update(
         let length1 = length(ray);
         let depth = textureLoad(gi_view_depth, at, 0);
         var radiance = textureLoad(gi_views, at, 0).rgb;
-        if depth >= 1.0 {
+        if depth <= 0.0 {
             // Nothing there: the sky.
             radiance = environment_sample(0.0, ray / length1, 0.3, false);
         }
-        // Distance along the view, then along the ray.
-        let along = near * far / max(far - depth * (far - near), 1e-6);
+        // Distance along the view (reverse-Z: 1 near, 0 far), then along
+        // the ray.
+        let along = near * far / max(near + depth * (far - near), 1e-6);
         let distance = min(along * length1, far);
         gi_seen[i] = vec2<u32>(pack2x16float(radiance.rg), pack2x16float(vec2<f32>(radiance.b, distance)));
     }

@@ -42,9 +42,11 @@ mod dimensions;
 mod filters;
 mod flow;
 mod game;
+mod gltf_scenes;
 mod grid;
 mod handles;
 mod headless_ui;
+mod hierarchy;
 mod keys;
 mod levels;
 mod lights2d;
@@ -61,6 +63,9 @@ mod physics;
 mod physics3d;
 mod physics3d_stream;
 mod physics_pause;
+mod queries2d;
+mod queries3d;
+mod states;
 // After `physics3d`: it uses the collision mesh struct, which the header defines there.
 mod collision_files;
 mod prefab;
@@ -77,7 +82,9 @@ pub use dimensions::*;
 mod scenario;
 mod scene;
 mod shader_status;
+mod skeleton2d;
 mod skin;
+mod sounds_started;
 mod sprite_material;
 mod steam;
 mod steam_lobby;
@@ -89,6 +96,8 @@ mod text3d;
 mod three;
 // After `three`: it uses the quality struct, which the header defines there.
 mod gpu;
+// After `three`: it uses the instance batch handle, which the header defines there.
+mod instance_cells;
 mod tiles;
 mod types;
 mod ui_access;
@@ -114,11 +123,26 @@ mod motion;
 mod ime;
 // Localization (#411).
 mod locale;
+// Debug drawing (#29).
+mod debug;
+// Versioned descriptors, retargeting and prediction (gl#18). Last: they use
+// structs the header defines in the modules above.
+mod collision_ex;
+mod descriptors;
+mod descriptors_render;
+mod prediction;
+mod retarget;
+// Camera rigs and screen/world conversion (gl#30); versioned descriptors.
+mod camera_rigs;
+mod viewports;
 pub use access::*;
 pub use actions::*;
 pub use animator::*;
+pub use debug::*;
 pub use ime::*;
 pub use locale::*;
+pub use skeleton2d::*;
+pub use states::*;
 /// Counts the library's heap allocations while profiling is on (one atomic
 /// load per allocation otherwise), so a C or C++ game's reports show how many
 /// the engine makes. A Rust program that links this crate as a library and
@@ -135,18 +159,25 @@ pub use audio_mixer::*;
 pub use audio3d::*;
 pub use buffer_motion::*;
 pub use builtins::*;
+pub use camera_rigs::*;
 pub use changes::*;
+pub use collision_ex::*;
 pub use collision_files::*;
 pub use contacts3d::*;
 pub use ctx::*;
+pub use descriptors::*;
+pub use descriptors_render::*;
 pub use diagnostics::*;
 pub use filters::*;
 pub use flow::*;
 pub use game::*;
+pub use gltf_scenes::*;
 pub use gpu::*;
 pub use grid::*;
 pub use handles::*;
 pub use headless_ui::*;
+pub use hierarchy::*;
+pub use instance_cells::*;
 pub use keys::*;
 pub use levels::*;
 pub use lights2d::*;
@@ -165,14 +196,18 @@ pub use physics::*;
 pub use physics_pause::*;
 pub use physics3d::*;
 pub use physics3d_stream::*;
+pub use prediction::*;
 pub use prefab::*;
 pub use pressed::*;
+pub use queries2d::*;
+pub use queries3d::*;
 pub use query_cache::*;
 pub use ragdoll::*;
 pub use reflect::*;
 pub use replicate::*;
 pub use residency::*;
 pub use resources::*;
+pub use retarget::*;
 pub use save_migrations::*;
 pub use saves::*;
 pub use scenario::*;
@@ -180,6 +215,7 @@ pub use scene::*;
 pub use scene_passes::*;
 pub use shader_status::*;
 pub use skin::*;
+pub use sounds_started::*;
 pub use sprite_material::*;
 pub use steam::*;
 pub use steam_lobby::*;
@@ -199,6 +235,7 @@ pub use ui_immediate::*;
 pub use ui_panel3d::*;
 pub use ui_retained::*;
 pub use vehicle3d::*;
+pub use viewports::*;
 
 use ponko::d2::Sprite;
 use ponko::d2::Transform as Transform2D;
@@ -229,6 +266,12 @@ pub enum PonkoStatus {
     PONKO_BUSY = 3,
     /// Rust caught a panic. No unwind crossed the ABI.
     PONKO_PANIC = 4,
+    /// This machine or build can't do it: no usable GPU or graphics
+    /// device, no window or event loop, or a feature this build lacks.
+    /// `ponko_game_run` returns it when the game can't start here (Rust's
+    /// `Game::try_run` failing with `ErrorKind::Unsupported`), so a
+    /// launcher can show its own message or fall back.
+    PONKO_UNSUPPORTED = 5,
 }
 use PonkoStatus::*;
 
@@ -354,6 +397,7 @@ fn kind_of_status(status: PonkoStatus) -> PonkoErrorKind {
         PONKO_INVALID_ARGUMENT => PonkoErrorKind::PONKO_ERROR_INVALID,
         PONKO_NOT_FOUND => PonkoErrorKind::PONKO_ERROR_NOT_FOUND,
         PONKO_BUSY | PONKO_PANIC => PonkoErrorKind::PONKO_ERROR_OTHER,
+        PONKO_UNSUPPORTED => PonkoErrorKind::PONKO_ERROR_UNSUPPORTED,
     }
 }
 
@@ -414,6 +458,18 @@ pub(crate) fn engine_error(e: ponko::prelude::Error) -> Failure {
     };
     let mut failure = invalid_owned(e);
     failure.0 = status;
+    failure
+}
+/// A startup failure of `ponko_game_run`: `PONKO_UNSUPPORTED` when the
+/// engine says this machine or build can't run the game
+/// (`ErrorKind::Unsupported`: no GPU, device, window or event loop), else as
+/// [`engine_error`].
+pub(crate) fn startup_error(e: ponko::prelude::Error) -> Failure {
+    let unsupported = e.kind() == ponko::prelude::ErrorKind::Unsupported;
+    let mut failure = engine_error(e);
+    if unsupported {
+        failure.0 = PONKO_UNSUPPORTED;
+    }
     failure
 }
 /// Copies `message` into a thread-local buffer, cut at a character boundary.
@@ -963,6 +1019,17 @@ pub unsafe extern "C" fn ponko_spawn(
 
 /// Validates and spawns; shared by `ponko_spawn` and `ponko_ctx_spawn_later`.
 pub(crate) unsafe fn spawn_values(w: &mut World, values: &[PonkoValue]) -> Result<Entity, Failure> {
+    // SAFETY: forwarded caller contract.
+    unsafe { spawn_values_as(w, values, None) }
+}
+
+/// [`spawn_values`] at `at`, an id `ctx.commands` reserved, when given.
+/// Nothing is spawned when this fails.
+pub(crate) unsafe fn spawn_values_as(
+    w: &mut World,
+    values: &[PonkoValue],
+    at: Option<Entity>,
+) -> Result<Entity, Failure> {
     if values.len() > w.components().len() {
         return Err(invalid("more values than registered components"));
     }
@@ -987,7 +1054,13 @@ pub(crate) unsafe fn spawn_values(w: &mut World, values: &[PonkoValue]) -> Resul
         components.push((id, ptr));
     }
     // SAFETY: every pointer refers to a value of the registered layout.
-    Ok(unsafe { w.raw().spawn_dynamic(&components) })
+    Ok(match at {
+        None => unsafe { w.raw().spawn_dynamic(&components) },
+        Some(e) => {
+            unsafe { w.raw().spawn_reserved_dynamic(e, &components) };
+            e
+        }
+    })
 }
 
 /// Despawns an entity; stale or missing entities return `PONKO_NOT_FOUND`.
@@ -1388,6 +1461,25 @@ pub(crate) unsafe fn chunk_in_parallel(
 mod tests {
     use super::*;
     #[test]
+    fn startup_failures_this_machine_cannot_run_report_unsupported() {
+        use ponko::prelude::{Error, ErrorKind};
+        let status = boundary(|| {
+            Err(startup_error(Error::new(
+                ErrorKind::Unsupported,
+                "no compatible GPU found",
+            )))
+        });
+        assert_eq!(status, PONKO_UNSUPPORTED);
+        assert_eq!(ponko_last_error_kind(), PonkoErrorKind::PONKO_ERROR_UNSUPPORTED);
+        let message = unsafe { CStr::from_ptr(ponko_last_error()) }.to_str().unwrap();
+        assert!(message.contains("no compatible GPU found"), "{message}");
+        // Other startup failures keep the statuses they always had.
+        let status = boundary(|| Err(startup_error(Error::new(ErrorKind::NotFound, "no such font"))));
+        assert_eq!(status, PONKO_NOT_FOUND);
+        let status = boundary(|| Err(startup_error(Error::new(ErrorKind::Invalid, "bad setup"))));
+        assert_eq!(status, PONKO_INVALID_ARGUMENT);
+    }
+    #[test]
     fn panics_are_contained_and_release_the_borrow_guard() {
         let world = ponko_world_new();
         let result =
@@ -1468,3 +1560,6 @@ mod tests {
         assert_eq!(world.get::<Name>(e).unwrap().0, "rust owned");
     }
 }
+
+mod window;
+pub use window::*;

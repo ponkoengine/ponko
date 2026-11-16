@@ -7,6 +7,16 @@ use super::{Lighting, Post, SceneSettings};
 /// Opt-in GPU quality policy for one scene. Off until passed to
 /// [`SceneSettings::set_quality_autotune`]. Only render scale and sun shadow
 /// resolution are controlled; every other setting stays game-owned.
+///
+/// # Defaults and cost
+///
+/// [`Default`] aims at 16.667 ms of GPU time (60 Hz), with a render scale
+/// from 0.5 to 1 and a sun shadow resolution from 512 to 2048. The policy
+/// itself is a few numbers and costs nothing while it is off. Running, it
+/// reads the GPU frame times (which need
+/// [`GpuFeature::Timestamps`](crate::render::GpuFeature::Timestamps)), and
+/// every change of render scale or shadow resolution makes new render
+/// targets or shadow maps.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct QualityAutotune {
     /// GPU frame budget in milliseconds. Default 16.667 (60 Hz).

@@ -860,7 +860,10 @@ impl Ui {
     /// Parses node `id`'s markup if its text or the names changed.
     pub(super) fn parse_rich_node(&mut self, id: UiId) {
         let assets = &self.rich_assets;
-        if let Some(Some(n)) = self.nodes.get_mut(id.0)
+        if let Some(Some(n)) = self
+            .nodes
+            .get_mut(id.slot())
+            .filter(|n| n.as_ref().is_some_and(|n| n.id == id))
             && let Some(rich) = n.rich.as_deref_mut()
             && rich.parsed != assets.revision
         {
@@ -905,7 +908,7 @@ impl Ui {
     pub(super) fn link_under(&mut self, id: UiId, point: Vec2) -> Option<u32> {
         let rect = self.text_box(id)?;
         // The node from its field, so the measure and scratch borrow apart.
-        let n = self.nodes.get(id.0)?.as_ref()?;
+        let n = self.nodes.get(id.slot())?.as_ref().filter(|n| n.id == id)?;
         let rich = n.rich()?;
         if rich.links.is_empty() {
             return None;

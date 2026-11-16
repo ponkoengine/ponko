@@ -485,7 +485,9 @@ impl InputScenario {
     ///
     /// ponko::input::Input steps are `key` (`key`, `down`), `mouse` (`button`, `down`),
     /// `gamepad_button` (`pad`, `button`, `down`), `gamepad_axis` (`pad`,
-    /// `axis`, `value`), `focus_lost` and `gamepad_disconnected` (`pad`).
+    /// `axis`, `value`), `focus_lost`, `gamepad_disconnected` (`pad`),
+    /// `mouse_move` (`position`, window pixels as `[x, y]`) and `mouse_wheel`
+    /// (`delta`, lines as `[x, y]`).
     /// UI steps are `ui_click` (`node`) and `ui_type` (`node`, `text`), see
     /// [`click`](Self::click) and [`type_text`](Self::type_text).
     /// IME steps ([`ime`](Self::ime)) are `ime_enabled`, `ime_preedit`
@@ -1414,6 +1416,14 @@ enum StepWire {
         tick: u64,
         pad: Gamepad,
     },
+    MouseMove {
+        tick: u64,
+        position: [f32; 2],
+    },
+    MouseWheel {
+        tick: u64,
+        delta: [f32; 2],
+    },
     ExpectAction {
         tick: u64,
         action: String,
@@ -1484,6 +1494,8 @@ impl StepWire {
             | Self::GamepadAxis { tick, .. }
             | Self::FocusLost { tick }
             | Self::GamepadDisconnected { tick, .. }
+            | Self::MouseMove { tick, .. }
+            | Self::MouseWheel { tick, .. }
             | Self::ExpectAction { tick, .. }
             | Self::ExpectResource { tick, .. }
             | Self::ExpectCount { tick, .. }
@@ -1505,6 +1517,8 @@ impl StepWire {
             Self::GamepadAxis { pad, axis, value, .. } => Step::Input(InputEvent::GamepadAxis(pad, axis, value)),
             Self::FocusLost { .. } => Step::Input(InputEvent::FocusLost),
             Self::GamepadDisconnected { pad, .. } => Step::Input(InputEvent::GamepadDisconnected(pad)),
+            Self::MouseMove { position, .. } => Step::Input(InputEvent::MouseMove(position.into())),
+            Self::MouseWheel { delta, .. } => Step::Input(InputEvent::MouseWheel(delta.into())),
             Self::ExpectAction {
                 action,
                 pressed,
@@ -1567,6 +1581,14 @@ impl StepWire {
             InputEvent::GamepadAxis(pad, axis, value) => Self::GamepadAxis { tick, pad, axis, value },
             InputEvent::FocusLost => Self::FocusLost { tick },
             InputEvent::GamepadDisconnected(pad) => Self::GamepadDisconnected { tick, pad },
+            InputEvent::MouseMove(at) => Self::MouseMove {
+                tick,
+                position: at.into(),
+            },
+            InputEvent::MouseWheel(lines) => Self::MouseWheel {
+                tick,
+                delta: lines.into(),
+            },
         }
     }
 

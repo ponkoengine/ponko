@@ -1,0 +1,17 @@
+{
+  "name": "regression_ssr_roughness_20",
+  "scene": "Two thin red glowing bars (emissive 4, 0, 0; 0.06 thick, 2.4 long, along x) over a white metal floor (roughness 0.2): one 0.25 up from x -2.6 to -0.2, one 1.2 up from x 0.2 to 2.6; nothing lit, exposure -5, screen-space reflections at 1.0, fourth frame; camera at (0, 2, 6) looking at (0, 0.5, 0); 128x128, 4x multisampling, no tonemapping.",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 16,
+    "outliers": 0.015,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "9a39d8e8ea4ea29e",
+  "reason": "Reflection cone: the blur follows roughness and each ray's hit distance, so the low bar's contact reflection stays sharp while the high bar's blurs; rays that miss take their nearest neighbours' cone instead of the coarsest level, so the wide halo around the contact reflection is gone."
+}

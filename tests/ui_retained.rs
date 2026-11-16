@@ -16,8 +16,11 @@ fn sized(w: f32, h: f32) -> Style {
 }
 fn scene() -> (Ui, UiId) {
     let mut ui = Ui::default();
-    let root = ui.add(UiWidget::Panel, ponko::ui::UiLayout::custom(sized(300.0, 200.0)));
-    ui.push_screen(root, false);
+    let root = ui.add(
+        UiWidget::Panel,
+        ponko::ui::UiLayout::unstable_custom(sized(300.0, 200.0)),
+    );
+    ui.push_modeless(root);
     (ui, root)
 }
 #[test]
@@ -27,22 +30,34 @@ fn row_column_padding_and_gap_have_exact_positions() {
     style.flex_direction = FlexDirection::Row;
     style.padding = Edges::length(10.0);
     style.gap = Size::length(8.0);
-    ui.set_layout(root, ponko::ui::UiLayout::custom(style));
-    let a = ui.add_child(root, UiWidget::Button, ponko::ui::UiLayout::custom(sized(40.0, 30.0)));
-    let b = ui.add_child(root, UiWidget::Button, ponko::ui::UiLayout::custom(sized(50.0, 30.0)));
+    ui.set_layout(root, ponko::ui::UiLayout::unstable_custom(style));
+    let a = ui.add_child(
+        root,
+        UiWidget::Button,
+        ponko::ui::UiLayout::unstable_custom(sized(40.0, 30.0)),
+    );
+    let b = ui.add_child(
+        root,
+        UiWidget::Button,
+        ponko::ui::UiLayout::unstable_custom(sized(50.0, 30.0)),
+    );
     ui.layout(vec2(800.0, 600.0));
     assert_eq!(ui.rect(a).unwrap().min, vec2(10.0, 10.0));
     assert_eq!(ui.rect(b).unwrap().min, vec2(58.0, 10.0));
     let mut style = sized(300.0, 200.0);
     style.flex_direction = FlexDirection::Column;
-    ui.set_layout(root, ponko::ui::UiLayout::custom(style));
+    ui.set_layout(root, ponko::ui::UiLayout::unstable_custom(style));
     ui.layout(vec2(800.0, 600.0));
     assert_eq!(ui.rect(b).unwrap().min.y, 30.0);
 }
 #[test]
 fn grid_places_inventory_cells_and_scroll_clamps() {
     let (mut ui, root) = scene();
-    let scroll = ui.add_child(root, UiWidget::Scroll, ponko::ui::UiLayout::custom(sized(150.0, 80.0)));
+    let scroll = ui.add_child(
+        root,
+        UiWidget::Scroll,
+        ponko::ui::UiLayout::unstable_custom(sized(150.0, 80.0)),
+    );
     let mut grid = sized(140.0, 200.0);
     grid.display = Display::Grid;
     grid.grid_template_columns = vec![length(60.0), length(60.0)];
@@ -50,9 +65,17 @@ fn grid_places_inventory_cells_and_scroll_clamps() {
         width: LengthPercentage::length(4.0),
         height: LengthPercentage::length(4.0),
     };
-    let grid = ui.add_child(scroll, UiWidget::Panel, ponko::ui::UiLayout::custom(grid));
-    let a = ui.add_child(grid, UiWidget::Button, ponko::ui::UiLayout::custom(sized(60.0, 40.0)));
-    let b = ui.add_child(grid, UiWidget::Button, ponko::ui::UiLayout::custom(sized(60.0, 40.0)));
+    let grid = ui.add_child(scroll, UiWidget::Panel, ponko::ui::UiLayout::unstable_custom(grid));
+    let a = ui.add_child(
+        grid,
+        UiWidget::Button,
+        ponko::ui::UiLayout::unstable_custom(sized(60.0, 40.0)),
+    );
+    let b = ui.add_child(
+        grid,
+        UiWidget::Button,
+        ponko::ui::UiLayout::unstable_custom(sized(60.0, 40.0)),
+    );
     ui.layout(vec2(800.0, 600.0));
     assert_eq!(ui.rect(b).unwrap().min.x - ui.rect(a).unwrap().min.x, 64.0);
     ui.set_scroll(scroll, vec2(0.0, 999.0));
@@ -63,8 +86,16 @@ fn grid_places_inventory_cells_and_scroll_clamps() {
 #[test]
 fn press_release_events_and_disabled_focus() {
     let (mut ui, root) = scene();
-    let a = ui.add_child(root, UiWidget::Button, ponko::ui::UiLayout::custom(sized(70.0, 30.0)));
-    let b = ui.add_child(root, UiWidget::Button, ponko::ui::UiLayout::custom(sized(70.0, 30.0)));
+    let a = ui.add_child(
+        root,
+        UiWidget::Button,
+        ponko::ui::UiLayout::unstable_custom(sized(70.0, 30.0)),
+    );
+    let b = ui.add_child(
+        root,
+        UiWidget::Button,
+        ponko::ui::UiLayout::unstable_custom(sized(70.0, 30.0)),
+    );
     ui.set_enabled(a, false);
     ui.frame(
         vec2(800.0, 600.0),
@@ -106,7 +137,11 @@ fn press_release_events_and_disabled_focus() {
 #[test]
 fn only_top_screen_receives_input_and_cancel_restores_focus() {
     let (mut ui, root) = scene();
-    let buy = ui.add_child(root, UiWidget::Button, ponko::ui::UiLayout::custom(sized(70.0, 30.0)));
+    let buy = ui.add_child(
+        root,
+        UiWidget::Button,
+        ponko::ui::UiLayout::unstable_custom(sized(70.0, 30.0)),
+    );
     ui.frame(
         vec2(800.0, 600.0),
         &UiInput {
@@ -114,9 +149,16 @@ fn only_top_screen_receives_input_and_cancel_restores_focus() {
             ..Default::default()
         },
     );
-    let dialog = ui.add(UiWidget::Panel, ponko::ui::UiLayout::custom(sized(300.0, 200.0)));
-    let yes = ui.add_child(dialog, UiWidget::Button, ponko::ui::UiLayout::custom(sized(70.0, 30.0)));
-    ui.push_screen(dialog, true);
+    let dialog = ui.add(
+        UiWidget::Panel,
+        ponko::ui::UiLayout::unstable_custom(sized(300.0, 200.0)),
+    );
+    let yes = ui.add_child(
+        dialog,
+        UiWidget::Button,
+        ponko::ui::UiLayout::unstable_custom(sized(70.0, 30.0)),
+    );
+    ui.push_modal(dialog);
     ui.frame(
         vec2(800.0, 600.0),
         &UiInput {
@@ -144,7 +186,7 @@ fn unicode_text_selection_editing_and_submission() {
     let field = ui.add_child(
         root,
         UiWidget::TextInput,
-        ponko::ui::UiLayout::custom(sized(160.0, 30.0)),
+        ponko::ui::UiLayout::unstable_custom(sized(160.0, 30.0)),
     );
     ui.frame(
         vec2(800.0, 600.0),
@@ -188,7 +230,7 @@ fn two_queued_events() -> (Ui, UiId) {
     let field = ui.add_child(
         root,
         UiWidget::TextInput,
-        ponko::ui::UiLayout::custom(sized(160.0, 30.0)),
+        ponko::ui::UiLayout::unstable_custom(sized(160.0, 30.0)),
     );
     ui.frame(
         vec2(800.0, 600.0),
@@ -224,11 +266,15 @@ fn untaken_events_are_gone_after_the_next_frame() {
 #[test]
 fn pointer_capture_survives_drag_and_scrollbar_matches_scroll_range() {
     let (mut ui, root) = scene();
-    let scroll = ui.add_child(root, UiWidget::Scroll, ponko::ui::UiLayout::custom(sized(150.0, 80.0)));
+    let scroll = ui.add_child(
+        root,
+        UiWidget::Scroll,
+        ponko::ui::UiLayout::unstable_custom(sized(150.0, 80.0)),
+    );
     ui.add_child(
         scroll,
         UiWidget::Panel,
-        ponko::ui::UiLayout::custom(sized(140.0, 300.0)),
+        ponko::ui::UiLayout::unstable_custom(sized(140.0, 300.0)),
     );
     ui.frame(
         vec2(800.0, 600.0),
@@ -262,24 +308,28 @@ fn pointer_capture_survives_drag_and_scrollbar_matches_scroll_range() {
 #[test]
 fn navigation_reveals_clipped_buttons_and_skips_disabled_subtrees() {
     let (mut ui, root) = scene();
-    let scroll = ui.add_child(root, UiWidget::Scroll, ponko::ui::UiLayout::custom(sized(100.0, 50.0)));
+    let scroll = ui.add_child(
+        root,
+        UiWidget::Scroll,
+        ponko::ui::UiLayout::unstable_custom(sized(100.0, 50.0)),
+    );
     let mut column = sized(100.0, 150.0);
     column.flex_direction = FlexDirection::Column;
-    let column = ui.add_child(scroll, UiWidget::Panel, ponko::ui::UiLayout::custom(column));
+    let column = ui.add_child(scroll, UiWidget::Panel, ponko::ui::UiLayout::unstable_custom(column));
     let a = ui.add_child(
         column,
         UiWidget::Button,
-        ponko::ui::UiLayout::custom(sized(100.0, 50.0)),
+        ponko::ui::UiLayout::unstable_custom(sized(100.0, 50.0)),
     );
     let b = ui.add_child(
         column,
         UiWidget::Button,
-        ponko::ui::UiLayout::custom(sized(100.0, 50.0)),
+        ponko::ui::UiLayout::unstable_custom(sized(100.0, 50.0)),
     );
     let c = ui.add_child(
         column,
         UiWidget::Button,
-        ponko::ui::UiLayout::custom(sized(100.0, 50.0)),
+        ponko::ui::UiLayout::unstable_custom(sized(100.0, 50.0)),
     );
     ui.frame(
         vec2(800.0, 600.0),
@@ -309,21 +359,33 @@ fn stale_ids_scaling_and_absolute_constraints() {
     style.inset.left = ponko::ui::unstable_taffy::LengthPercentageAuto::length(12.0);
     style.inset.top = ponko::ui::unstable_taffy::LengthPercentageAuto::length(7.0);
     style.min_size.width = ponko::ui::unstable_taffy::LengthPercentageAuto::length(40.0);
-    let id = ui.add_child(root, UiWidget::Button, ponko::ui::UiLayout::custom(style));
+    let id = ui.add_child(root, UiWidget::Button, ponko::ui::UiLayout::unstable_custom(style));
     ui.set_scale(2.0);
     ui.layout(vec2(800.0, 600.0));
     assert_eq!(ui.rect(id).unwrap().min, vec2(24.0, 14.0));
     assert_eq!(ui.rect(id).unwrap().size(), vec2(80.0, 60.0));
     ui.remove(id);
-    let new = ui.add_child(root, UiWidget::Button, ponko::ui::UiLayout::custom(sized(20.0, 20.0)));
+    let new = ui.add_child(
+        root,
+        UiWidget::Button,
+        ponko::ui::UiLayout::unstable_custom(sized(20.0, 20.0)),
+    );
     assert_ne!(id, new);
     assert!(ui.rect(id).is_none());
 }
 #[test]
 fn toggle_slider_wheel_and_no_release_without_press() {
     let (mut ui, root) = scene();
-    let toggle = ui.add_child(root, UiWidget::Toggle, ponko::ui::UiLayout::custom(sized(70.0, 30.0)));
-    let slider = ui.add_child(root, UiWidget::Slider, ponko::ui::UiLayout::custom(sized(100.0, 30.0)));
+    let toggle = ui.add_child(
+        root,
+        UiWidget::Toggle,
+        ponko::ui::UiLayout::unstable_custom(sized(70.0, 30.0)),
+    );
+    let slider = ui.add_child(
+        root,
+        UiWidget::Slider,
+        ponko::ui::UiLayout::unstable_custom(sized(100.0, 30.0)),
+    );
     ui.frame(
         vec2(800.0, 600.0),
         &UiInput {
@@ -380,12 +442,12 @@ fn focusing_text_by_pointer_does_not_submit_and_hidden_nodes_do_not_hit() {
     let field = ui.add_child(
         root,
         UiWidget::TextInput,
-        ponko::ui::UiLayout::custom(sized(120.0, 30.0)),
+        ponko::ui::UiLayout::unstable_custom(sized(120.0, 30.0)),
     );
     let hidden = ui.add_child(
         root,
         UiWidget::Button,
-        ponko::ui::UiLayout::custom(sized(120.0, 30.0)).hidden(),
+        ponko::ui::UiLayout::unstable_custom(sized(120.0, 30.0)).hidden(),
     );
     ui.frame(
         vec2(800.0, 600.0),
@@ -411,12 +473,24 @@ fn focusing_text_by_pointer_does_not_submit_and_hidden_nodes_do_not_hit() {
 #[test]
 fn nested_clips_and_wheel_offsets_do_not_leak_hits() {
     let (mut ui, root) = scene();
-    let outer = ui.add_child(root, UiWidget::Scroll, ponko::ui::UiLayout::custom(sized(100.0, 60.0)));
+    let outer = ui.add_child(
+        root,
+        UiWidget::Scroll,
+        ponko::ui::UiLayout::unstable_custom(sized(100.0, 60.0)),
+    );
     let mut column = sized(100.0, 200.0);
     column.flex_direction = FlexDirection::Column;
-    let column = ui.add_child(outer, UiWidget::Panel, ponko::ui::UiLayout::custom(column));
-    let first = ui.add_child(column, UiWidget::Button, ponko::ui::UiLayout::custom(sized(80.0, 40.0)));
-    let second = ui.add_child(column, UiWidget::Button, ponko::ui::UiLayout::custom(sized(80.0, 40.0)));
+    let column = ui.add_child(outer, UiWidget::Panel, ponko::ui::UiLayout::unstable_custom(column));
+    let first = ui.add_child(
+        column,
+        UiWidget::Button,
+        ponko::ui::UiLayout::unstable_custom(sized(80.0, 40.0)),
+    );
+    let second = ui.add_child(
+        column,
+        UiWidget::Button,
+        ponko::ui::UiLayout::unstable_custom(sized(80.0, 40.0)),
+    );
     ui.frame(
         vec2(800.0, 600.0),
         &UiInput {
@@ -435,13 +509,17 @@ fn last_screen_cancel_owns_input_until_next_frame_and_text_allows_vertical_navig
     let (mut ui, root) = scene();
     let mut style = sized(300.0, 200.0);
     style.flex_direction = FlexDirection::Column;
-    ui.set_layout(root, ponko::ui::UiLayout::custom(style));
+    ui.set_layout(root, ponko::ui::UiLayout::unstable_custom(style));
     let field = ui.add_child(
         root,
         UiWidget::TextInput,
-        ponko::ui::UiLayout::custom(sized(100.0, 30.0)),
+        ponko::ui::UiLayout::unstable_custom(sized(100.0, 30.0)),
     );
-    let button = ui.add_child(root, UiWidget::Button, ponko::ui::UiLayout::custom(sized(100.0, 30.0)));
+    let button = ui.add_child(
+        root,
+        UiWidget::Button,
+        ponko::ui::UiLayout::unstable_custom(sized(100.0, 30.0)),
+    );
     ui.frame(
         vec2(800.0, 600.0),
         &UiInput {
@@ -504,7 +582,7 @@ fn builders_match_add_child_and_setters() {
     let volume = ui.slider(root).value(0.25).id();
     let note = ui.text_input(root).text("hi\n").id();
     let list = ui.scroll_area(root).id();
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     ui.layout(vec2(400.0, 300.0));
     assert_ne!(ui.hit_test(ui.rect(buy).unwrap().center()), Some(buy), "disabled");
     assert_eq!(ui.value(gift), Some(1.0));
@@ -532,9 +610,9 @@ fn layout_presets_place_rows_columns_anchors_and_dialogs() {
         .label(root, "100 HP")
         .layout(UiLayout::anchored(0.5, 0.0, 0.5, 0.1))
         .id();
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     let dialog = ui.root().layout(UiLayout::centered(200.0, 100.0)).id();
-    ui.push_screen(dialog, true);
+    ui.push_modal(dialog);
     ui.layout(vec2(800.0, 600.0));
 
     let rect = |id| {
@@ -563,7 +641,7 @@ fn grid_preset_wraps_cells_into_equal_columns() {
     let root = ui.root().layout(UiLayout::fixed(320.0, 400.0)).id();
     let grid = ui.panel(root).layout(UiLayout::grid(4, 40.0).gap(0.0)).id();
     let cells: Vec<UiId> = (0..6).map(|i| ui.button(grid, format!("{i}")).id()).collect();
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     ui.layout(vec2(800.0, 600.0));
     assert_eq!(ui.rect(cells[3]).unwrap().min, vec2(240.0, 0.0));
     assert_eq!(ui.rect(cells[4]).unwrap().min, vec2(0.0, 40.0));
@@ -747,7 +825,7 @@ fn events_are_taken_once_and_untaken_ones_stay_queued() {
         .name("ok")
         .id();
     let music = ui.toggle(root, "Music").layout(UiLayout::fixed(100.0, 40.0)).id();
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     let viewport = vec2(400.0, 300.0);
     let click = |ui: &mut Ui, at: Vec2| {
         for (pressed, released) in [(true, false), (false, true)] {
@@ -788,8 +866,8 @@ fn top_and_left_place_a_preset_in_pixels() {
         .id();
     let row = ui.panel(root).layout(UiLayout::row(20.0).top(30.0).left(10.0)).id();
     let dialog = ui.root().layout(UiLayout::centered(200.0, 100.0).top(40.0)).id();
-    ui.push_screen(root, false);
-    ui.push_screen(dialog, true);
+    ui.push_modeless(root);
+    ui.push_modal(dialog);
     ui.layout(vec2(800.0, 600.0));
     assert_eq!(ui.rect(map).unwrap().min, vec2(16.0, 8.0));
     assert_eq!(ui.rect(map).unwrap().size(), vec2(200.0, 150.0));
@@ -812,23 +890,27 @@ fn auto_margins_share_the_windows_free_space_around_a_screen_root() {
     let mut ui = Ui::default();
     let centered = ui.add(
         UiWidget::Panel,
-        ponko::ui::UiLayout::custom(margins(auto(), auto(), auto(), auto())),
+        ponko::ui::UiLayout::unstable_custom(margins(auto(), auto(), auto(), auto())),
     );
     let across = ui.add(
         UiWidget::Panel,
-        ponko::ui::UiLayout::custom(margins(auto(), auto(), length(40.0), auto())),
+        ponko::ui::UiLayout::unstable_custom(margins(auto(), auto(), length(40.0), auto())),
     );
     let right = ui.add(
         UiWidget::Panel,
-        ponko::ui::UiLayout::custom(margins(auto(), length(10.0), length(0.0), length(0.0))),
+        ponko::ui::UiLayout::unstable_custom(margins(auto(), length(10.0), length(0.0), length(0.0))),
     );
     let plain = ui.add(
         UiWidget::Panel,
-        ponko::ui::UiLayout::custom(margins(length(5.0), length(0.0), length(7.0), length(0.0))),
+        ponko::ui::UiLayout::unstable_custom(margins(length(5.0), length(0.0), length(7.0), length(0.0))),
     );
-    let child = ui.add_child(plain, UiWidget::Button, ponko::ui::UiLayout::custom(sized(20.0, 20.0)));
+    let child = ui.add_child(
+        plain,
+        UiWidget::Button,
+        ponko::ui::UiLayout::unstable_custom(sized(20.0, 20.0)),
+    );
     for root in [centered, across, right, plain] {
-        ui.push_screen(root, false);
+        ui.push_modeless(root);
     }
     ui.layout(vec2(800.0, 600.0));
     let at = |ui: &Ui, id| ui.rect(id).unwrap().min;
@@ -893,7 +975,7 @@ fn confirm() -> UiInput {
 fn set_focus_then_enter_clicks_that_button() {
     let mut ui = Ui::default();
     let (root, _, quit) = menu(&mut ui);
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     assert_eq!(ui.focus(), None, "nothing is focused without asking");
     assert!(ui.set_focus(quit));
     assert_eq!(ui.focus(), Some(quit));
@@ -907,7 +989,7 @@ fn set_focus_refuses_what_cant_be_focused() {
     let (root, play, quit) = menu(&mut ui);
     let label = ui.label(root, "Hello").id();
     assert!(!ui.set_focus(play), "not on a screen yet");
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     assert!(ui.set_focus(play));
     assert!(!ui.set_focus(label), "a label");
     ui.set_enabled(quit, false);
@@ -920,7 +1002,7 @@ fn set_focus_refuses_what_cant_be_focused() {
     // Only the top screen takes the focus.
     let dialog = ui.root().id();
     let ok = ui.button(dialog, "OK").id();
-    ui.push_screen(dialog, true);
+    ui.push_modal(dialog);
     assert!(!ui.set_focus(play), "under another screen");
     assert!(ui.set_focus(ok));
     ui.clear_focus();
@@ -933,7 +1015,7 @@ fn a_screen_opens_on_its_focused_node_every_time_it_is_pushed() {
     let root = ui.root().layout(UiLayout::fill()).id();
     ui.button(root, "Settings").layout(UiLayout::row(40.0));
     let play = ui.button(root, "Play").layout(UiLayout::row(40.0)).focused().id();
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     assert_eq!(ui.focus(), Some(play), "before the first layout");
     ui.frame(vec2(800.0, 600.0), &confirm());
     assert_eq!(ui.events().filter_map(UiEvent::clicked).last(), Some(play));
@@ -948,13 +1030,13 @@ fn a_screen_opens_on_its_focused_node_every_time_it_is_pushed() {
     );
     assert_ne!(ui.focus(), Some(play));
     ui.pop_screen();
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     assert_eq!(ui.focus(), Some(play));
 
     // A screen above it, popped, gives back the focus the menu had.
     let dialog = ui.root().id();
     let ok = ui.button(dialog, "OK").focused().id();
-    ui.push_screen(dialog, true);
+    ui.push_modal(dialog);
     assert_eq!(ui.focus(), Some(ok));
     ui.pop_screen();
     assert_eq!(ui.focus(), Some(play));
@@ -962,12 +1044,12 @@ fn a_screen_opens_on_its_focused_node_every_time_it_is_pushed() {
     // A disabled focus mark is skipped; unmarked, nothing is focused.
     ui.pop_screen();
     ui.set_enabled(play, false);
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     assert_eq!(ui.focus(), None);
     ui.pop_screen();
     ui.set_enabled(play, true);
     ui.set_initial_focus(play, false);
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     assert_eq!(ui.focus(), None);
 }
 
@@ -988,7 +1070,7 @@ fn a_hud_stays_up_when_escape_closes_the_screen_above_it() {
     assert_eq!(ui.events().count(), 0, "nothing popped");
 
     let (menu, play, _) = menu(&mut ui);
-    ui.push_screen(menu, true);
+    ui.push_modal(menu);
     ui.frame(vec2(800.0, 600.0), &UiInput::default());
     assert!(ui.is_shown(count) && ui.is_shown(play));
     ui.frame(vec2(800.0, 600.0), &escape);
@@ -1035,7 +1117,7 @@ fn a_hud_takes_no_pointer_and_no_focus() {
 
     // Drawn below the screens: a screen's button over it takes the click.
     let (menu, play, _) = menu(&mut ui);
-    ui.push_screen(menu, false);
+    ui.push_modeless(menu);
     ui.frame(vec2(800.0, 600.0), &at(true, false));
     ui.frame(vec2(800.0, 600.0), &at(false, true));
     assert_eq!(ui.events().filter_map(UiEvent::clicked).last(), Some(play));
@@ -1046,7 +1128,7 @@ fn a_hud_takes_no_pointer_and_no_focus() {
 fn a_screen_cant_also_be_a_hud() {
     let mut ui = Ui::default();
     let root = ui.root().id();
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
     ui.show_hud(root);
 }
 
@@ -1056,5 +1138,153 @@ fn a_hud_cant_also_be_a_screen() {
     let mut ui = Ui::default();
     let root = ui.root().id();
     ui.show_hud(root);
-    ui.push_screen(root, false);
+    ui.push_modeless(root);
+}
+
+// ---- screen modes -----------------------------------------------------------------
+
+/// What a pushed screen does to input and assistive technology, read back.
+fn screen_behaviour(
+    push: impl FnOnce(&mut Ui, UiId),
+) -> (bool, bool, Option<ponko::ui::ScreenMode>, ponko::ui::UiRole) {
+    let mut ui = Ui::default();
+    let dialog = ui.add(UiWidget::Panel, UiLayout::fixed(100.0, 100.0));
+    push(&mut ui, dialog);
+    let input = UiInput {
+        pointer: vec2(500.0, 500.0),
+        ..Default::default()
+    };
+    ui.frame(vec2(800.0, 600.0), &input);
+    let role = ui.accessibility_tree().get(dialog).unwrap().role;
+    (ui.wants_pointer(), ui.is_screen(dialog), ui.screen_mode(dialog), role)
+}
+
+#[test]
+fn push_modal_owns_the_pointer_and_is_a_dialog() {
+    use ponko::ui::{ScreenMode, UiRole};
+    let modal = screen_behaviour(|ui, root| ui.push_modal(root));
+    assert_eq!(modal, (true, true, Some(ScreenMode::Modal), UiRole::Dialog));
+    let modeless = screen_behaviour(|ui, root| ui.push_modeless(root));
+    assert_eq!(modeless, (false, true, Some(ScreenMode::Modeless), UiRole::Group));
+}
+
+#[test]
+fn push_screen_with_mode_matches_the_shorthands() {
+    use ponko::ui::ScreenMode;
+    for (mode, shorthand) in [
+        (ScreenMode::Modal, Ui::push_modal as fn(&mut Ui, UiId)),
+        (ScreenMode::Modeless, Ui::push_modeless),
+    ] {
+        assert_eq!(
+            screen_behaviour(|ui, root| ui.push_screen_with_mode(root, mode)),
+            screen_behaviour(shorthand)
+        );
+    }
+    assert_eq!(ScreenMode::default(), ScreenMode::Modeless);
+}
+
+#[test]
+#[allow(deprecated)]
+fn deprecated_push_screen_bool_still_means_the_same_mode() {
+    assert_eq!(
+        screen_behaviour(|ui, root| ui.push_screen(root, true)),
+        screen_behaviour(|ui, root| ui.push_modal(root))
+    );
+    assert_eq!(
+        screen_behaviour(|ui, root| ui.push_screen(root, false)),
+        screen_behaviour(|ui, root| ui.push_modeless(root))
+    );
+}
+
+#[test]
+fn screen_mode_is_none_off_the_stack() {
+    let mut ui = Ui::default();
+    let root = ui.add(UiWidget::Panel, UiLayout::auto());
+    assert_eq!(ui.screen_mode(root), None);
+    ui.push_modal(root);
+    assert_eq!(ui.pop_screen(), Some(root));
+    assert_eq!(ui.screen_mode(root), None);
+}
+
+#[test]
+#[should_panic(expected = "UI screen already on stack")]
+fn push_modal_twice_panics() {
+    let mut ui = Ui::default();
+    let root = ui.add(UiWidget::Panel, UiLayout::auto());
+    ui.push_modeless(root);
+    ui.push_modal(root);
+}
+
+#[test]
+#[deny(unreachable_patterns)]
+fn screen_mode_is_non_exhaustive() {
+    // With an exhaustive enum the `_` arm is unreachable, and this test
+    // would not compile.
+    let named = |mode: ponko::ui::ScreenMode| match mode {
+        ponko::ui::ScreenMode::Modeless => "modeless",
+        ponko::ui::ScreenMode::Modal => "modal",
+        _ => "newer",
+    };
+    assert_eq!(named(ponko::ui::ScreenMode::Modal), "modal");
+}
+
+// ---- the unstable layout escape hatch ----------------------------------------------
+
+#[test]
+fn unstable_layout_methods_reach_the_taffy_style() {
+    let mut layout = UiLayout::unstable_custom(sized(40.0, 30.0));
+    assert_eq!(layout.unstable_style().size.width, Dimension::length(40.0));
+    layout.unstable_style_mut().flex_grow = 2.0;
+    assert_eq!(layout.clone().into_unstable_style().flex_grow, 2.0);
+    let mut ui = Ui::default();
+    let id = ui.add(UiWidget::Panel, layout.clone());
+    assert_eq!(ui.node_layout(id), Some(layout));
+}
+
+#[test]
+#[allow(deprecated)]
+fn deprecated_layout_names_are_the_unstable_methods() {
+    let mut old = UiLayout::custom(sized(40.0, 30.0));
+    let mut new = UiLayout::unstable_custom(sized(40.0, 30.0));
+    assert_eq!(old, new);
+    old.style_mut().flex_grow = 3.0;
+    new.unstable_style_mut().flex_grow = 3.0;
+    assert_eq!(old.style(), new.unstable_style());
+    assert_eq!(old.into_style(), new.into_unstable_style());
+}
+
+#[test]
+fn removed_nodes_give_their_slots_back_and_stale_ids_stay_dead() {
+    let mut ui = Ui::default();
+    let hud = ui.root().layout(UiLayout::fill()).id();
+    ui.label(hud, "Score").layout(UiLayout::row(30.0));
+    ui.show_hud(hud);
+    // A menu built, opened, closed and removed many times over: the same
+    // few slots are used again, under new ids each time.
+    let mut seen = std::collections::HashSet::new();
+    let mut slots = std::collections::HashSet::new();
+    let mut last = None;
+    for _ in 0..1000 {
+        let root = ui.root().layout(UiLayout::fill()).id();
+        let play = ui.button(root, "Play").layout(UiLayout::row(40.0)).focused().id();
+        ui.push_modal(root);
+        ui.frame(vec2(800.0, 600.0), &UiInput::default());
+        assert_eq!(ui.focus(), Some(play));
+        for id in [root, play] {
+            assert!(seen.insert(id.bits()), "{id:?} was given out before");
+            slots.insert(id.bits() & 0xF_FFFF);
+        }
+        if let Some((old_root, old_play)) = last {
+            // Stale ids name nothing, even with their slots in use again.
+            assert!(ui.rect(old_root).is_none() && ui.rect(old_play).is_none());
+            assert!(!ui.set_focus(old_play));
+            ui.remove(old_play); // does nothing to the live node in its slot
+            assert_eq!(ui.focus(), Some(play));
+        }
+        assert_eq!(ui.pop_screen(), Some(root));
+        ui.remove(root);
+        last = Some((root, play));
+    }
+    assert!(slots.len() <= 2, "the menu's slots are reused: {} used", slots.len());
+    assert!(ui.rect(hud).is_some(), "the HUD is untouched");
 }

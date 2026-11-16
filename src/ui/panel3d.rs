@@ -195,7 +195,10 @@ impl Graphics {
             .unwrap_or_else(|message| panic!("{message}"))
     }
 
-    /// [`create_ui_panel`](Self::create_ui_panel) with errors as values:
+    /// [`create_ui_panel`](Self::create_ui_panel) with errors as values.
+    ///
+    /// # Errors
+    ///
     /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) for a size that
     /// isn't positive and finite, and the errors of
     /// [`try_create_render_target`](Self::try_create_render_target).
@@ -399,8 +402,8 @@ mod tests {
                 size: taffy::Size::from_percent(1.0, 1.0),
                 ..Default::default()
             };
-            let button = p.ui.add(UiWidget::Button, crate::ui::UiLayout::custom(style));
-            p.ui.push_screen(button, false);
+            let button = p.ui.add(UiWidget::Button, crate::ui::UiLayout::unstable_custom(style));
+            p.ui.push_modeless(button);
             (ctx.world.spawn((Transform3D::at(vec3(0.0, 0.0, z)), p)), button)
         };
         let (near, near_button) = spawn(-3.0);

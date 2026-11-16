@@ -1,7 +1,7 @@
 Ember Hop
 =========
 
-A small platformer made with the Ponko engine (https://github.com/ponkoengine/ponko).
+A small platformer made with the Ponko engine (https://gitlab.com/ponkoengine/ponko).
 Carry an ember spirit through two caves: collect the sparks, burn or stomp
 the drips, light the braziers and reach the lantern at the end of each cave.
 

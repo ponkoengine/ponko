@@ -1,27 +1,15 @@
 //! Shared animation graphs and per-entity playback.
 use super::{AnimationClip, Skeleton, Transform3D};
+use crate::anim::graph::{
+    AnimationEvent, AnimationGraphError, AnimationParameter, AnimationTransition, ParamId, StateId,
+};
+use crate::anim::graph::{
+    check_command, check_parameters, check_transitions, consume_triggers, expect_kind, float_parameter,
+    select_transition, set_bool, set_float, set_trigger,
+};
 use glam::{Quat, Vec2, Vec3};
 use ponko_ecs::Component;
-use std::fmt;
 use std::sync::Arc;
-
-/// A state of an [`AnimationGraph`]: its position in the graph's state list,
-/// from 0.
-/// ```
-/// let walk = ponko::anim::StateId(1);
-/// assert_eq!(walk.0, 1);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct StateId(pub usize);
-
-/// A parameter of an [`AnimationGraph`]: its position in the graph's
-/// parameter list, from 0.
-/// ```
-/// let speed = ponko::anim::ParamId(0);
-/// assert_eq!(speed.0, 0);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ParamId(pub usize);
 
 /// An overlay of an [`Animator`], as [`Animator::add_layer`] returns it:
 /// overlays are numbered from 0 in the order they were added (the base
@@ -32,85 +20,6 @@ pub struct ParamId(pub usize);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LayerId(pub usize);
-
-/// Why [`AnimationGraph::new`] refused a graph.
-/// ```
-/// use ponko::anim::{AnimationGraph, AnimationGraphError, StateId};
-/// let err = AnimationGraph::new(vec![], vec![], vec![], StateId(0)).unwrap_err();
-/// assert_eq!(err, AnimationGraphError::InvalidInitialState(StateId(0)));
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum AnimationGraphError {
-    /// The initial state is not in the state list.
-    InvalidInitialState(StateId),
-    /// A float parameter's default is NaN or infinite.
-    NonFiniteParameter(ParamId),
-    /// A state's speed is negative or not finite.
-    InvalidSpeed(StateId),
-    /// A state's event time is outside 0..1.
-    InvalidEventTime(StateId),
-    /// A state's blend tree has a child time scale that is not positive and finite.
-    InvalidTimeScale(StateId),
-    /// A state's 1D blend has no children, or thresholds that are not
-    /// finite and strictly increasing.
-    InvalidThresholds(StateId),
-    /// A state's 2D blend has no children, or a point that is not finite.
-    InvalidPoints(StateId),
-    /// A transition (by its position in the list) names a state that is not
-    /// in the state list.
-    InvalidTransitionState(usize),
-    /// A transition's duration, offset or exit time is negative or not finite.
-    InvalidTransitionClock(usize),
-    /// A transition's condition threshold is not finite.
-    InvalidThreshold(usize),
-    /// A parameter is used as a kind it isn't (or is not in the list).
-    WrongParameterKind {
-        /// The parameter.
-        parameter: ParamId,
-        /// The kind it is used as: `"float"`, `"bool"` or `"trigger"`.
-        expected: &'static str,
-    },
-}
-
-impl fmt::Display for AnimationGraphError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidInitialState(s) => write!(f, "initial state {} is not in the graph", s.0),
-            Self::NonFiniteParameter(p) => write!(f, "parameter {} has a non-finite default", p.0),
-            Self::InvalidSpeed(s) => write!(f, "state {} has an invalid speed", s.0),
-            Self::InvalidEventTime(s) => write!(f, "state {} has an event time outside 0..1", s.0),
-            Self::InvalidTimeScale(s) => write!(f, "state {} has an invalid child time scale", s.0),
-            Self::InvalidThresholds(s) => write!(f, "state {} has invalid 1D blend thresholds", s.0),
-            Self::InvalidPoints(s) => write!(f, "state {} has invalid 2D blend points", s.0),
-            Self::InvalidTransitionState(t) => write!(f, "transition {t} names a state that is not in the graph"),
-            Self::InvalidTransitionClock(t) => write!(f, "transition {t} has an invalid duration, offset or exit time"),
-            Self::InvalidThreshold(t) => write!(f, "transition {t} has a non-finite threshold"),
-            Self::WrongParameterKind { parameter, expected } => {
-                write!(f, "parameter {} is not a {expected} parameter", parameter.0)
-            }
-        }
-    }
-}
-
-impl std::error::Error for AnimationGraphError {}
-
-/// Parameter defaults; a [`ParamId`] (the position in the graph's list)
-/// identifies each.
-/// ```
-/// use ponko::anim::AnimationParameter;
-/// let speed = ponko::anim::AnimationParameter::Float(0.0);
-/// ```
-#[derive(Debug, Clone, Copy)]
-#[non_exhaustive]
-pub enum AnimationParameter {
-    /// Floating point value.
-    Float(f32),
-    /// Persistent boolean value.
-    Bool(bool),
-    /// One-shot flag, consumed only by a selected transition.
-    Trigger(bool),
-}
 
 /// A recursive motion. Trees use seconds, with each child scaling its clock.
 /// Tree duration is the longest child duration divided by its time scale.
@@ -128,13 +37,18 @@ pub enum Motion {
     /// A single clip.
     Clip(AnimationClip),
     /// Sorted, distinct thresholds on a float parameter. Ends clamp.
+    /// Build one with [`Motion::blend_1d`]; fields may be added in any
+    /// release.
+    #[non_exhaustive]
     Blend1D {
         /// Float parameter.
         parameter: ParamId,
         /// Threshold and child pairs, in increasing order.
         children: Vec<(f32, MotionChild)>,
     },
-    /// Freeform points on two float parameters.
+    /// Freeform points on two float parameters. Build one with
+    /// [`Motion::blend_2d`]; fields may be added in any release.
+    #[non_exhaustive]
     Blend2D {
         /// X float parameter.
         x: ParamId,
@@ -145,12 +59,52 @@ pub enum Motion {
     },
 }
 
+impl Motion {
+    /// A 1D blend tree on float parameter `parameter`: `children` are
+    /// threshold and child pairs in strictly increasing threshold order.
+    /// [`AnimationGraph::new`] checks the order and the parameter's kind.
+    /// ```
+    /// use ponko::anim::{AnimationClip, Motion, MotionChild, ParamId, Skeleton};
+    /// let s = Skeleton::new(vec![]);
+    /// let walk = MotionChild::new(Motion::Clip(AnimationClip::new("walk", &s, vec![])));
+    /// let run = MotionChild::new(Motion::Clip(AnimationClip::new("run", &s, vec![])));
+    /// let locomotion = Motion::blend_1d(ParamId(0), vec![(1.0, walk), (3.0, run)]);
+    /// assert!(matches!(locomotion, Motion::Blend1D { .. }));
+    /// ```
+    #[must_use]
+    pub fn blend_1d(parameter: ParamId, children: Vec<(f32, MotionChild)>) -> Self {
+        Self::Blend1D { parameter, children }
+    }
+
+    /// A 2D freeform blend tree on float parameters `x` and `y`: `children`
+    /// are point and child pairs.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::anim::{AnimationClip, Motion, MotionChild, ParamId, Skeleton};
+    /// let s = Skeleton::new(vec![]);
+    /// let child = |name: &str| MotionChild::new(Motion::Clip(AnimationClip::new(name, &s, vec![])));
+    /// let strafe = Motion::blend_2d(ParamId(0), ParamId(1), vec![(Vec2::ZERO, child("idle")), (Vec2::X, child("right"))]);
+    /// assert!(matches!(strafe, Motion::Blend2D { .. }));
+    /// ```
+    #[must_use]
+    pub fn blend_2d(x: ParamId, y: ParamId, children: Vec<(Vec2, MotionChild)>) -> Self {
+        Self::Blend2D { x, y, children }
+    }
+}
+
 /// A motion inside a tree; positive time scale multiplies seconds.
+///
+/// New fields may be added in any release: build one with
+/// [`new`](Self::new) and the `with_*` methods.
 /// ```
 /// use ponko::prelude::*;
-/// let child = ponko::anim::MotionChild { motion: ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])), time_scale: 1.0 };
+/// use ponko::anim::{AnimationClip, Motion, MotionChild, Skeleton};
+/// let idle = AnimationClip::new("idle", &Skeleton::new(vec![]), vec![]);
+/// let child = MotionChild::new(Motion::Clip(idle)).with_time_scale(1.5);
+/// assert_eq!(child.time_scale, 1.5);
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct MotionChild {
     /// Nested clip or tree.
     pub motion: Motion,
@@ -158,26 +112,42 @@ pub struct MotionChild {
     pub time_scale: f32,
 }
 
-/// A named event on a state's normalized clock.
-/// ```
-/// use ponko::anim::AnimationEvent;
-/// let step = ponko::anim::AnimationEvent { time: 0.5, name: "step".into() };
-/// ```
-#[derive(Debug, Clone)]
-pub struct AnimationEvent {
-    /// Normalized time in [0, 1); zero fires on loop wrap, not initial entry.
-    pub time: f32,
-    /// Shared event name; reporting clones the Arc without allocating.
-    pub name: Arc<str>,
+impl MotionChild {
+    /// `motion` at its recorded speed (time scale 1).
+    /// ```
+    /// use ponko::anim::{AnimationClip, Motion, MotionChild, Skeleton};
+    /// let idle = AnimationClip::new("idle", &Skeleton::new(vec![]), vec![]);
+    /// assert_eq!(MotionChild::new(Motion::Clip(idle)).time_scale, 1.0);
+    /// ```
+    #[must_use]
+    pub fn new(motion: Motion) -> Self {
+        Self { motion, time_scale: 1. }
+    }
+
+    with_fields! {
+        /// Sets [`time_scale`](Self::time_scale), the positive clock
+        /// multiplier (2 plays the child twice as fast).
+        time_scale: f32 => with_time_scale;
+    }
 }
 
 /// State playback settings. Use [`AnimationState::new`] for looping defaults.
+///
+/// New fields may be added in any release: build one with
+/// [`new`](Self::new) and the `with_*` methods.
 /// ```
 /// use ponko::prelude::*;
-/// let s = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])));
-/// assert!(s.looping);
+/// use ponko::anim::{AnimationClip, AnimationEvent, AnimationState, Motion, Skeleton};
+/// let hit = AnimationClip::new("hit", &Skeleton::new(vec![]), vec![]);
+/// let s = AnimationState::new(Motion::Clip(hit))
+///     .with_looping(false)
+///     .with_speed(1.25)
+///     .with_event(AnimationEvent::new(0.4, "impact"));
+/// assert!(!s.looping);
+/// assert_eq!(s.events.len(), 1);
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct AnimationState {
     /// Motion to sample.
     pub motion: Motion,
@@ -197,6 +167,7 @@ impl AnimationState {
     /// let s = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])));
     /// assert_eq!(s.speed, 1.0);
     /// ```
+    #[must_use]
     pub fn new(motion: Motion) -> Self {
         Self {
             motion,
@@ -206,108 +177,33 @@ impl AnimationState {
             events: Vec::new(),
         }
     }
-}
 
-/// Transition predicates, all of which must hold.
-/// ```
-/// use ponko::anim::{AnimationCondition, ParamId};
-/// let moving = AnimationCondition::Greater(ParamId(0), 0.05);
-/// ```
-#[derive(Debug, Clone, Copy)]
-#[non_exhaustive]
-pub enum AnimationCondition {
-    /// Float parameter strictly greater than threshold.
-    Greater(ParamId, f32),
-    /// Float parameter strictly less than threshold.
-    Less(ParamId, f32),
-    /// Boolean parameter equals the given value.
-    Bool(ParamId, bool),
-    /// Trigger parameter is set.
-    Trigger(ParamId),
-}
-
-/// An ordered transition. The graph's first matching transition wins, with at
-/// most one taken per update; any-state transitions ignore exit time and do
-/// not reenter their current target. Exit time is a minimum on the state's
-/// unwrapped normalized clock, checked against the end of this update.
-///
-/// New fields may be added in any release: build one with
-/// [`new`](Self::new) or [`from_any`](Self::from_any) and the `with_*`
-/// methods.
-/// ```
-/// use ponko::anim::{AnimationCondition, AnimationTransition, ParamId, StateId};
-/// let t = AnimationTransition::new(StateId(0), StateId(1))
-///     .with_condition(AnimationCondition::Greater(ParamId(0), 0.5))
-///     .with_exit_time(1.0)
-///     .with_duration(0.12);
-/// assert_eq!(t.from, Some(StateId(0)));
-/// ```
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub struct AnimationTransition {
-    /// Source state, or None for any state.
-    pub from: Option<StateId>,
-    /// Target state.
-    pub to: StateId,
-    /// Required predicates; an empty list always matches.
-    pub conditions: Vec<AnimationCondition>,
-    /// Optional minimum normalized time, ignored for any-state transitions.
-    pub exit_time: Option<f32>,
-    /// Crossfade duration in seconds, independent of playback speed.
-    pub duration: f32,
-    /// Target normalized starting time.
-    pub offset: f32,
-}
-
-impl AnimationTransition {
-    /// A transition from state `from` to `to`, with no conditions (it always
-    /// matches), no exit time, no crossfade and no offset.
+    /// Adds an event (see [`events`](Self::events)); call once per event.
     /// ```
-    /// use ponko::anim::{AnimationTransition, StateId};
-    /// let t = AnimationTransition::new(StateId(0), StateId(1));
-    /// assert_eq!((t.duration, t.exit_time), (0.0, None));
+    /// use ponko::anim::{AnimationClip, AnimationEvent, AnimationState, Motion, Skeleton};
+    /// let walk = AnimationClip::new("walk", &Skeleton::new(vec![]), vec![]);
+    /// let s = AnimationState::new(Motion::Clip(walk))
+    ///     .with_event(AnimationEvent::new(0.0, "left_foot"))
+    ///     .with_event(AnimationEvent::new(0.5, "right_foot"));
+    /// assert_eq!(s.events.len(), 2);
     /// ```
     #[must_use]
-    pub fn new(from: StateId, to: StateId) -> Self {
-        Self {
-            from: Some(from),
-            ..Self::from_any(to)
-        }
-    }
-
-    /// A transition from any state to `to` (not reentering `to` itself),
-    /// otherwise as [`new`](Self::new).
-    /// ```
-    /// use ponko::anim::{AnimationTransition, StateId};
-    /// assert_eq!(AnimationTransition::from_any(StateId(2)).from, None);
-    /// ```
-    #[must_use]
-    pub fn from_any(to: StateId) -> Self {
-        Self {
-            from: None,
-            to,
-            conditions: Vec::new(),
-            exit_time: None,
-            duration: 0.,
-            offset: 0.,
-        }
-    }
-
-    /// Adds a predicate that must hold (all of them must).
-    #[must_use]
-    pub fn with_condition(mut self, condition: AnimationCondition) -> Self {
-        self.conditions.push(condition);
+    pub fn with_event(mut self, event: AnimationEvent) -> Self {
+        self.events.push(event);
         self
     }
 
     with_fields! {
-        /// Sets [`exit_time`](Self::exit_time), the minimum normalized time
-        /// before it is taken (`None`: any time).
-        exit_time: Option<f32> => with_exit_time;
-        /// Sets [`duration`](Self::duration), the crossfade in seconds.
-        duration: f32 => with_duration;
-        /// Sets [`offset`](Self::offset), the target's normalized starting time.
-        offset: f32 => with_offset;
+        /// Sets [`speed`](Self::speed), the nonnegative playback multiplier.
+        speed: f32 => with_speed;
+        /// Sets [`speed_parameter`](Self::speed_parameter), the float
+        /// parameter multiplying speed (`None`: none).
+        speed_parameter: Option<ParamId> => with_speed_parameter;
+        /// Sets [`looping`](Self::looping): wrap time when true, otherwise
+        /// hold the motion's last pose.
+        looping: bool => with_looping;
+        /// Replaces [`events`](Self::events).
+        events: Vec<AnimationEvent> => with_events;
     }
 }
 
@@ -327,7 +223,16 @@ pub struct AnimationGraph {
 }
 impl AnimationGraph {
     /// Checks ids, parameter kinds, finite clocks and nonempty trees, and
-    /// returns the shared graph, or what is wrong with it.
+    /// returns the shared graph.
+    ///
+    /// # Errors
+    ///
+    /// An [`AnimationGraphError`] naming what is wrong with the graph: an
+    /// initial state that isn't in it, a parameter, state or transition that
+    /// refers to an id or a parameter of the wrong kind, a speed that isn't a
+    /// finite, nonnegative number, an event time outside `0..1`, or an empty
+    /// blend tree.
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// use ponko::anim::StateId;
@@ -343,13 +248,7 @@ impl AnimationGraph {
         if initial.0 >= states.len() {
             return Err(AnimationGraphError::InvalidInitialState(initial));
         }
-        for (i, p) in parameters.iter().enumerate() {
-            if let AnimationParameter::Float(v) = p
-                && !v.is_finite()
-            {
-                return Err(AnimationGraphError::NonFiniteParameter(ParamId(i)));
-            }
-        }
+        check_parameters(&parameters)?;
         for (i, s) in states.iter_mut().enumerate() {
             let id = StateId(i);
             s.motion.validate(&parameters, id)?;
@@ -368,61 +267,13 @@ impl AnimationGraph {
             }
             s.events.sort_by(|a, b| a.time.total_cmp(&b.time));
         }
-        for (i, t) in transitions.iter().enumerate() {
-            if !(t.to.0 < states.len() && t.from.is_none_or(|s| s.0 < states.len())) {
-                return Err(AnimationGraphError::InvalidTransitionState(i));
-            }
-            if !(t.duration.is_finite()
-                && t.duration >= 0.
-                && t.offset.is_finite()
-                && t.offset >= 0.
-                && t.exit_time.is_none_or(|v| v.is_finite() && v >= 0.))
-            {
-                return Err(AnimationGraphError::InvalidTransitionClock(i));
-            }
-            for c in &t.conditions {
-                match *c {
-                    AnimationCondition::Greater(p, v) | AnimationCondition::Less(p, v) => {
-                        expect_kind(&parameters, p, "float")?;
-                        if !v.is_finite() {
-                            return Err(AnimationGraphError::InvalidThreshold(i));
-                        }
-                    }
-                    AnimationCondition::Bool(p, _) => expect_kind(&parameters, p, "bool")?,
-                    AnimationCondition::Trigger(p) => expect_kind(&parameters, p, "trigger")?,
-                }
-            }
-        }
+        check_transitions(&parameters, &transitions, states.len())?;
         Ok(Arc::new(Self {
             parameters,
             states,
             transitions,
             initial: initial.0,
         }))
-    }
-}
-/// `Ok` when parameter `p` exists and is of kind `expected`.
-fn expect_kind(
-    parameters: &[AnimationParameter],
-    p: ParamId,
-    expected: &'static str,
-) -> Result<(), AnimationGraphError> {
-    let kind = match parameters.get(p.0) {
-        Some(AnimationParameter::Float(_)) => "float",
-        Some(AnimationParameter::Bool(_)) => "bool",
-        Some(AnimationParameter::Trigger(_)) => "trigger",
-        None => "",
-    };
-    if kind == expected {
-        Ok(())
-    } else {
-        Err(AnimationGraphError::WrongParameterKind { parameter: p, expected })
-    }
-}
-fn float_parameter(p: &[AnimationParameter], i: ParamId) -> f32 {
-    match p.get(i.0) {
-        Some(AnimationParameter::Float(v)) => *v,
-        _ => panic!("AnimationGraph: expected float parameter"),
     }
 }
 impl Motion {
@@ -470,7 +321,7 @@ impl Motion {
     #[allow(clippy::too_many_arguments)]
     fn sample(
         &self,
-        time: f32,
+        time: f64,
         looping: bool,
         weight: f32,
         p: &[AnimationParameter],
@@ -484,12 +335,14 @@ impl Motion {
         match self {
             Self::Clip(c) => {
                 scratch.reset_pose();
+                // Within one loop before narrowing: the clock counts whole
+                // loops in f64, so the pose stays exact however long it runs.
                 let t = if looping && c.duration() > 0. {
-                    time.rem_euclid(c.duration())
+                    time.rem_euclid(f64::from(c.duration()))
                 } else {
                     time
                 };
-                c.sample(t, scratch);
+                c.sample(t as f32, scratch);
                 *total += weight;
                 mix(&mut output.pose, &scratch.pose, weight / *total);
                 output.morphs.mix(&scratch.morphs, weight / *total);
@@ -546,8 +399,8 @@ impl Motion {
     /// counting whole loops, blended with the same weights as the pose.
     pub(crate) fn root_delta(
         &self,
-        from: f32,
-        to: f32,
+        from: f64,
+        to: f64,
         looping: bool,
         p: &[AnimationParameter],
         skeleton: &Skeleton,
@@ -560,8 +413,8 @@ impl Motion {
     #[allow(clippy::too_many_arguments)]
     fn add_root_delta(
         &self,
-        from: f32,
-        to: f32,
+        from: f64,
+        to: f64,
         looping: bool,
         weight: f32,
         p: &[AnimationParameter],
@@ -574,8 +427,8 @@ impl Motion {
         }
         let child = |c: &MotionChild, w: f32, sum: &mut (Vec3, f32)| {
             c.motion.add_root_delta(
-                from * c.time_scale,
-                to * c.time_scale,
+                from * f64::from(c.time_scale),
+                to * f64::from(c.time_scale),
                 looping,
                 w,
                 p,
@@ -597,12 +450,13 @@ impl Motion {
                     (pb - pa, angle_delta(ya, yb))
                 };
                 let (position, angle) = if looping && d > 0. {
-                    let loops = (to / d).floor() - (from / d).floor();
+                    let d64 = f64::from(d);
+                    let loops = ((to / d64).floor() - (from / d64).floor()) as f32;
                     let (lp, ly) = between(0., d);
-                    let (pp, py) = between(from.rem_euclid(d), to.rem_euclid(d));
+                    let (pp, py) = between(from.rem_euclid(d64) as f32, to.rem_euclid(d64) as f32);
                     (pp + lp * loops, py + ly * loops)
                 } else {
-                    between(from, to)
+                    between(from as f32, to as f32)
                 };
                 sum.0 += position * weight;
                 sum.1 += angle * weight;
@@ -649,7 +503,7 @@ impl MotionChild {
     #[allow(clippy::too_many_arguments)]
     fn sample(
         &self,
-        time: f32,
+        time: f64,
         looping: bool,
         weight: f32,
         p: &[AnimationParameter],
@@ -657,8 +511,15 @@ impl MotionChild {
         scratch: &mut Skeleton,
         total: &mut f32,
     ) {
-        self.motion
-            .sample(time * self.time_scale, looping, weight, p, output, scratch, total);
+        self.motion.sample(
+            time * f64::from(self.time_scale),
+            looping,
+            weight,
+            p,
+            output,
+            scratch,
+            total,
+        );
     }
 }
 fn mix(output: &mut [Transform3D], source: &[Transform3D], weight: f32) {
@@ -670,7 +531,7 @@ fn mix(output: &mut [Transform3D], source: &[Transform3D], weight: f32) {
 }
 #[derive(Debug, Clone)]
 struct Fade {
-    source: Option<(usize, f32)>,
+    source: Option<(usize, f64)>,
     elapsed: f32,
     duration: f32,
 }
@@ -893,7 +754,10 @@ pub struct Animator {
     graph: Arc<AnimationGraph>,
     parameters: Vec<AnimationParameter>,
     state: usize,
-    time: f32,
+    /// Seconds into the state, unwrapped (whole loops included). f64: an
+    /// f32 counting up would step in milliseconds after hours in one
+    /// looping state, and the animation would run slow and judder.
+    time: f64,
     fade: Option<Fade>,
     pending: Option<(usize, f32, f32)>,
     buffers: Option<(Skeleton, Skeleton, Skeleton)>,
@@ -951,7 +815,14 @@ impl Animator {
         self.layers.push(layer);
         LayerId(index)
     }
-    /// Edit an overlay by index; panics for an invalid index.
+    /// Edit an overlay by index. For an index from outside (a save file, a
+    /// script, a C caller) use [`get_layer_mut`](Self::get_layer_mut).
+    ///
+    /// # Panics
+    ///
+    /// For an index this animator didn't return from
+    /// [`add_layer`](Self::add_layer).
+    ///
     /// ```
     /// use ponko::prelude::*;
     /// # let s = ponko::anim::Skeleton::new(vec![]);
@@ -962,7 +833,26 @@ impl Animator {
     /// a.layer_mut(index).weight = 0.25;
     /// ```
     pub fn layer_mut(&mut self, layer: LayerId) -> &mut AnimationLayer {
-        &mut self.layers[layer.0]
+        self.get_layer_mut(layer).unwrap_or_else(|| {
+            panic!(
+                "Animator::layer_mut: no layer {}; add a layer first or use get_layer_mut",
+                layer.0
+            )
+        })
+    }
+    /// Edit an overlay by index, or `None` when there is no such overlay.
+    /// ```
+    /// use ponko::prelude::*;
+    /// # let s = ponko::anim::Skeleton::new(vec![]);
+    /// # let state = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &s, vec![])));
+    /// # let g = ponko::anim::AnimationGraph::new(vec![], vec![state], vec![], ponko::anim::StateId(0)).expect("a valid graph");
+    /// # let mut a = ponko::anim::Animator::new(g.clone());
+    /// let index = a.add_layer(ponko::anim::AnimationLayer::new(g));
+    /// a.get_layer_mut(index).expect("just added").weight = 0.25;
+    /// assert!(a.get_layer_mut(ponko::anim::LayerId(7)).is_none());
+    /// ```
+    pub fn get_layer_mut(&mut self, layer: LayerId) -> Option<&mut AnimationLayer> {
+        self.layers.get_mut(layer.0)
     }
     /// Number of overlays added with [`add_layer`](Self::add_layer).
     /// ```
@@ -1013,7 +903,14 @@ impl Animator {
     pub fn state_count(&self) -> usize {
         self.graph.states.len()
     }
-    /// Set a float by index. Panics on a wrong type/index or non-finite value.
+    /// Set a float by index. Use it with ids from your own graph, and
+    /// [`try_set_float`](Self::try_set_float) for ids or values from outside.
+    ///
+    /// # Panics
+    ///
+    /// On an index that isn't a float parameter of the graph, or a value that
+    /// is not finite.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// # let s = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])));
@@ -1021,13 +918,37 @@ impl Animator {
     /// a.set_float(ponko::anim::ParamId(0), 1.5);
     /// ```
     pub fn set_float(&mut self, parameter: ParamId, value: f32) {
-        assert!(value.is_finite(), "Animator: non-finite float");
-        match self.parameters.get_mut(parameter.0) {
-            Some(AnimationParameter::Float(v)) => *v = value,
-            _ => panic!("Animator: expected float parameter"),
-        }
+        self.try_set_float(parameter, value)
+            .unwrap_or_else(|e| panic!("Animator::set_float: {e}"));
     }
-    /// Set a persistent bool by index; panics on a wrong type/index.
+    /// Set a float by index, or say why not. Nothing changes on an error.
+    ///
+    /// # Errors
+    ///
+    /// [`WrongParameterKind`](AnimationGraphError::WrongParameterKind) for an
+    /// index that isn't a float parameter (or isn't in the graph),
+    /// [`NonFiniteValue`](AnimationGraphError::NonFiniteValue) for NaN or
+    /// infinity.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # let s = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])));
+    /// # let mut a = ponko::anim::Animator::new(ponko::anim::AnimationGraph::new(vec![ponko::anim::AnimationParameter::Float(0.)],vec![s],vec![],ponko::anim::StateId(0)).expect("a valid graph"));
+    /// use ponko::anim::{AnimationGraphError, ParamId};
+    /// assert_eq!(a.try_set_float(ParamId(0), 1.5), Ok(()));
+    /// assert_eq!(a.try_set_float(ParamId(0), f32::NAN), Err(AnimationGraphError::NonFiniteValue(ParamId(0))));
+    /// assert!(a.try_set_float(ParamId(9), 1.0).is_err());
+    /// ```
+    pub fn try_set_float(&mut self, parameter: ParamId, value: f32) -> Result<(), AnimationGraphError> {
+        set_float(&mut self.parameters, parameter, value)
+    }
+    /// Set a persistent bool by index (use
+    /// [`try_set_bool`](Self::try_set_bool) for ids from outside).
+    ///
+    /// # Panics
+    ///
+    /// On an index that isn't a bool parameter of the graph.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// # let s = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])));
@@ -1035,12 +956,33 @@ impl Animator {
     /// a.set_bool(ponko::anim::ParamId(0), true);
     /// ```
     pub fn set_bool(&mut self, parameter: ParamId, value: bool) {
-        match self.parameters.get_mut(parameter.0) {
-            Some(AnimationParameter::Bool(v)) => *v = value,
-            _ => panic!("Animator: expected bool parameter"),
-        }
+        self.try_set_bool(parameter, value)
+            .unwrap_or_else(|e| panic!("Animator::set_bool: {e}"));
     }
-    /// Set or reset a trigger by index; panics on a wrong type/index.
+    /// Set a persistent bool by index, or say why not.
+    ///
+    /// # Errors
+    ///
+    /// [`WrongParameterKind`](AnimationGraphError::WrongParameterKind) for an
+    /// index that isn't a bool parameter (or isn't in the graph).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # let s = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])));
+    /// # let mut a = ponko::anim::Animator::new(ponko::anim::AnimationGraph::new(vec![ponko::anim::AnimationParameter::Bool(false)],vec![s],vec![],ponko::anim::StateId(0)).expect("a valid graph"));
+    /// assert_eq!(a.try_set_bool(ponko::anim::ParamId(0), true), Ok(()));
+    /// assert!(a.try_set_bool(ponko::anim::ParamId(1), true).is_err());
+    /// ```
+    pub fn try_set_bool(&mut self, parameter: ParamId, value: bool) -> Result<(), AnimationGraphError> {
+        set_bool(&mut self.parameters, parameter, value)
+    }
+    /// Set or reset a trigger by index (use
+    /// [`try_set_trigger`](Self::try_set_trigger) for ids from outside).
+    ///
+    /// # Panics
+    ///
+    /// On an index that isn't a trigger parameter of the graph.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// # let s = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])));
@@ -1048,10 +990,25 @@ impl Animator {
     /// a.set_trigger(ponko::anim::ParamId(0), true);
     /// ```
     pub fn set_trigger(&mut self, parameter: ParamId, value: bool) {
-        match self.parameters.get_mut(parameter.0) {
-            Some(AnimationParameter::Trigger(v)) => *v = value,
-            _ => panic!("Animator: expected trigger parameter"),
-        }
+        self.try_set_trigger(parameter, value)
+            .unwrap_or_else(|e| panic!("Animator::set_trigger: {e}"));
+    }
+    /// Set or reset a trigger by index, or say why not.
+    ///
+    /// # Errors
+    ///
+    /// [`WrongParameterKind`](AnimationGraphError::WrongParameterKind) for an
+    /// index that isn't a trigger parameter (or isn't in the graph).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # let s = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])));
+    /// # let mut a = ponko::anim::Animator::new(ponko::anim::AnimationGraph::new(vec![ponko::anim::AnimationParameter::Trigger(false)],vec![s],vec![],ponko::anim::StateId(0)).expect("a valid graph"));
+    /// assert_eq!(a.try_set_trigger(ponko::anim::ParamId(0), true), Ok(()));
+    /// assert!(a.try_set_trigger(ponko::anim::ParamId(1), true).is_err());
+    /// ```
+    pub fn try_set_trigger(&mut self, parameter: ParamId, value: bool) -> Result<(), AnimationGraphError> {
+        set_trigger(&mut self.parameters, parameter, value)
     }
     /// Destination state index, including while crossfading.
     /// ```
@@ -1070,9 +1027,28 @@ impl Animator {
     /// # let a = ponko::anim::Animator::new(ponko::anim::AnimationGraph::new(vec![],vec![s],vec![],ponko::anim::StateId(0)).expect("a valid graph"));
     /// assert_eq!(a.normalized_time(), 0.0);
     /// ```
+    ///
+    /// An `f32`: after hours in one looping state its fraction steps
+    /// coarsely (a 1 s loop reads in steps of 1/256 after ten hours).
+    /// The animator itself keeps time in `f64`, so poses, events, exit
+    /// times and root motion stay exact; [`normalized_time_f64`](Self::normalized_time_f64)
+    /// reads the same clock in full.
     pub fn normalized_time(&self) -> f32 {
+        self.normalized_time_f64() as f32
+    }
+    /// [`normalized_time`](Self::normalized_time) in full precision: whole
+    /// loops plus the fraction of the current one, exact after any length
+    /// of play.
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # let s = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])));
+    /// # let a = ponko::anim::Animator::new(ponko::anim::AnimationGraph::new(vec![],vec![s],vec![],ponko::anim::StateId(0)).expect("a valid graph"));
+    /// let loops = a.normalized_time_f64().floor();
+    /// assert_eq!(loops, 0.0);
+    /// ```
+    pub fn normalized_time_f64(&self) -> f64 {
         let d = self.graph.states[self.state].motion.duration();
-        if d > 0. { self.time / d } else { 0. }
+        if d > 0. { self.time / f64::from(d) } else { 0. }
     }
     /// Destination weight; one when no crossfade is active.
     /// ```
@@ -1085,8 +1061,14 @@ impl Animator {
         self.fade.as_ref().map_or(1., |f| (f.elapsed / f.duration).min(1.))
     }
     /// Queue a fixed-time fade; applied on the next update, before advancing.
-    /// Multiple commands before an update use the last command. Panics for
-    /// invalid state, negative/non-finite duration or normalized offset.
+    /// Multiple commands before an update use the last command. Use
+    /// [`try_crossfade`](Self::try_crossfade) for states from outside.
+    ///
+    /// # Panics
+    ///
+    /// For a state that isn't in the graph, or a negative or non-finite
+    /// duration or normalized offset.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// # let s = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])));
@@ -1094,20 +1076,46 @@ impl Animator {
     /// a.crossfade(ponko::anim::StateId(0), 0.12, 0.0);
     /// ```
     pub fn crossfade(&mut self, state: StateId, duration: f32, normalized_offset: f32) {
-        assert!(
-            state.0 < self.graph.states.len()
-                && duration.is_finite()
-                && duration >= 0.
-                && normalized_offset.is_finite()
-                && normalized_offset >= 0.,
-            "Animator: invalid playback command"
-        );
+        self.try_crossfade(state, duration, normalized_offset)
+            .unwrap_or_else(|e| panic!("Animator: invalid playback command: {e}"));
+    }
+    /// Queue a fade like [`crossfade`](Self::crossfade), or say why not.
+    /// Nothing is queued on an error.
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownState`](AnimationGraphError::UnknownState) for a state not in
+    /// the graph, [`InvalidPlayback`](AnimationGraphError::InvalidPlayback)
+    /// for a negative or non-finite duration or offset.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # let s = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])));
+    /// # let mut a = ponko::anim::Animator::new(ponko::anim::AnimationGraph::new(vec![],vec![s],vec![],ponko::anim::StateId(0)).expect("a valid graph"));
+    /// use ponko::anim::{AnimationGraphError, StateId};
+    /// assert_eq!(a.try_crossfade(StateId(0), 0.2, 0.0), Ok(()));
+    /// assert_eq!(a.try_crossfade(StateId(4), 0.2, 0.0), Err(AnimationGraphError::UnknownState(StateId(4))));
+    /// ```
+    pub fn try_crossfade(
+        &mut self,
+        state: StateId,
+        duration: f32,
+        normalized_offset: f32,
+    ) -> Result<(), AnimationGraphError> {
+        check_command(self.graph.states.len(), state, duration, normalized_offset)?;
         self.pending = Some((state.0, duration, normalized_offset));
+        Ok(())
     }
     /// Queue an immediate state change at a normalized time; applied on update.
+    /// Use [`try_play`](Self::try_play) for states from outside.
     /// The pose snaps: with TAA or temporal AO on, call
     /// [`Graphics::reset_motion`](crate::gfx::Graphics::reset_motion) for the
     /// posed model on that frame, so its jump is not read as motion.
+    ///
+    /// # Panics
+    ///
+    /// For a state that isn't in the graph, or a negative or non-finite time.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// # let s = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])));
@@ -1116,6 +1124,27 @@ impl Animator {
     /// ```
     pub fn play(&mut self, state: StateId, normalized_time: f32) {
         self.crossfade(state, 0., normalized_time);
+    }
+    /// Queue an immediate state change like [`play`](Self::play), or say why
+    /// not. Nothing is queued on an error.
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownState`](AnimationGraphError::UnknownState) for a state
+    /// not in the graph,
+    /// [`InvalidPlayback`](AnimationGraphError::InvalidPlayback) for a
+    /// negative or non-finite time.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # let s = ponko::anim::AnimationState::new(ponko::anim::Motion::Clip(ponko::anim::AnimationClip::new("idle", &ponko::anim::Skeleton::new(vec![]), vec![])));
+    /// # let mut a = ponko::anim::Animator::new(ponko::anim::AnimationGraph::new(vec![],vec![s],vec![],ponko::anim::StateId(0)).expect("a valid graph"));
+    /// use ponko::anim::{AnimationGraphError, StateId};
+    /// assert_eq!(a.try_play(StateId(0), 0.5), Ok(()));
+    /// assert_eq!(a.try_play(StateId(0), -1.0), Err(AnimationGraphError::InvalidPlayback(StateId(0))));
+    /// ```
+    pub fn try_play(&mut self, state: StateId, normalized_time: f32) -> Result<(), AnimationGraphError> {
+        self.try_crossfade(state, 0., normalized_time)
     }
     /// Takes the oldest unread event, if any (for reading events one at a
     /// time, as the C API does; [`drain_events`](Self::drain_events) takes all).
@@ -1138,26 +1167,27 @@ impl Animator {
     pub fn drain_events(&mut self) -> impl Iterator<Item = Arc<str>> + '_ {
         self.events.drain(..)
     }
-    fn advance(&self, state: usize, time: f32, dt: f32) -> f32 {
+    fn advance(&self, state: usize, time: f64, dt: f32) -> f64 {
         let s = &self.graph.states[state];
         let speed = s.speed
             * s.speed_parameter
                 .map_or(1., |p| float_parameter(&self.parameters, p).max(0.));
-        let next = (time + dt * speed).min(f32::MAX);
-        if s.looping { next } else { next.min(s.motion.duration()) }
-    }
-    fn matches(&self, c: &AnimationCondition) -> bool {
-        match *c {
-            AnimationCondition::Greater(i, v) => float_parameter(&self.parameters, i) > v,
-            AnimationCondition::Less(i, v) => float_parameter(&self.parameters, i) < v,
-            AnimationCondition::Bool(i, v) => matches!(self.parameters[i.0], AnimationParameter::Bool(b) if b == v),
-            AnimationCondition::Trigger(i) => matches!(self.parameters[i.0], AnimationParameter::Trigger(true)),
+        let next = (time + f64::from(dt * speed)).min(f64::from(f32::MAX));
+        if s.looping {
+            next
+        } else {
+            next.min(f64::from(s.motion.duration()))
         }
     }
     /// Advance by nonnegative finite seconds and sample into the skeleton.
-    /// Panics on invalid dt. Calls with zero dt apply queued commands and
+    /// Calls with zero dt apply queued commands and
     /// transitions but emit no events. Warm up once with each skeleton layout
     /// before allocation-sensitive gameplay (clip name binding also warms up).
+    ///
+    /// # Panics
+    ///
+    /// If `dt` is negative or not finite.
+    ///
     /// ```
     /// # use ponko::prelude::*;
     /// let mut skeleton = ponko::anim::Skeleton::new(vec![]);
@@ -1193,14 +1223,9 @@ impl Animator {
         }
         let command = self.pending.take();
         let selected = if command.is_none() {
-            self.graph.transitions.iter().position(|t| {
-                t.from.map_or(t.to.0 != self.state, |s| s.0 == self.state)
-                    && (t.from.is_none()
-                        || t.exit_time.is_none_or(|exit| {
-                            let d = self.graph.states[self.state].motion.duration();
-                            d > 0. && self.advance(self.state, self.time, dt) / d >= exit
-                        }))
-                    && t.conditions.iter().all(|c| self.matches(c))
+            select_transition(&self.graph.transitions, &self.parameters, self.state, |exit| {
+                let d = self.graph.states[self.state].motion.duration();
+                d > 0. && self.advance(self.state, self.time, dt) / f64::from(d) >= f64::from(exit)
             })
         } else {
             None
@@ -1208,11 +1233,7 @@ impl Animator {
         let command = command.or_else(|| {
             selected.map(|i| {
                 let t = &self.graph.transitions[i];
-                for c in &t.conditions {
-                    if let AnimationCondition::Trigger(p) = *c {
-                        self.parameters[p.0] = AnimationParameter::Trigger(false);
-                    }
-                }
+                consume_triggers(&mut self.parameters, t);
                 (t.to.0, t.duration, t.offset)
             })
         });
@@ -1236,9 +1257,9 @@ impl Animator {
             };
             self.state = state;
             let s = &self.graph.states[state];
-            self.time = offset * s.motion.duration();
+            self.time = f64::from(offset * s.motion.duration());
             if !s.looping {
-                self.time = self.time.min(s.motion.duration());
+                self.time = self.time.min(f64::from(s.motion.duration()));
             }
         }
         let old = self.time;
@@ -1303,14 +1324,14 @@ impl Animator {
         skeleton.pose.clone_from(&output.pose);
         skeleton.morphs.clone_from(&output.morphs);
     }
-    fn collect_events(&mut self, old: f32, new: f32) {
+    fn collect_events(&mut self, old: f64, new: f64) {
         let state = &self.graph.states[self.state];
         let d = state.motion.duration();
         if d <= 0. || new <= old || state.events.is_empty() {
             return;
         }
-        let start = f64::from(old) / f64::from(d);
-        let end = f64::from(new) / f64::from(d);
+        let start = old / f64::from(d);
+        let end = new / f64::from(d);
         let mut cycle = if state.looping { start.floor() } else { 0. };
         while cycle <= end.floor() && self.events.len() < 64 {
             for e in &state.events {
@@ -1333,11 +1354,11 @@ impl Animator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::anim::AnimationCondition;
     use crate::anim::AnimationTrack;
     use crate::anim::Interpolation;
     use crate::anim::Joint;
     use crate::anim::JointAnimation;
-    use crate::d3::Transform as Transform3D;
     use glam::Vec4;
     /// A graph that must be valid, with plain indices for brevity.
     fn graph(
@@ -1349,27 +1370,17 @@ mod tests {
         AnimationGraph::new(parameters, states, transitions, StateId(initial)).expect("a valid graph")
     }
     fn skeleton() -> Skeleton {
-        Skeleton::new(vec![Joint {
-            name: "root".into(),
-            parent: None,
-            rest: Transform3D::default(),
-        }])
+        Skeleton::new(vec![Joint::new("root", None)])
     }
     fn clip(s: &Skeleton, x: f32) -> AnimationClip {
         AnimationClip::new(
             "pose",
             s,
-            vec![JointAnimation {
-                joint: 0,
-                name: "root".into(),
-                translation: Some(AnimationTrack::new(
-                    vec![0., 1.],
-                    vec![Vec4::new(x, 0., 0., 0.); 2],
-                    Interpolation::Linear,
-                )),
-                rotation: None,
-                scale: None,
-            }],
+            vec![JointAnimation::new(0, "root").with_translation(AnimationTrack::new(
+                vec![0., 1.],
+                vec![Vec4::new(x, 0., 0., 0.); 2],
+                Interpolation::Linear,
+            ))],
         )
     }
     fn near(a: f32, b: f32) {
@@ -1377,18 +1388,7 @@ mod tests {
     }
     #[test]
     fn layers_weight_mask_and_additive_rotation() {
-        let mut s = Skeleton::new(vec![
-            Joint {
-                name: "root".into(),
-                parent: None,
-                rest: Transform3D::default(),
-            },
-            Joint {
-                name: "arm".into(),
-                parent: Some(0),
-                rest: Transform3D::default(),
-            },
-        ]);
+        let mut s = Skeleton::new(vec![Joint::new("root", None), Joint::new("arm", 0)]);
         let mut a = animator(&s, Motion::Clip(clip(&s, 2.)), vec![]);
         let overlay = animator(&s, Motion::Clip(clip(&s, 10.)), vec![]);
         let mut layer = AnimationLayer::new(overlay.graph.clone());
@@ -1406,17 +1406,11 @@ mod tests {
         let rotation = AnimationClip::new(
             "add",
             &s,
-            vec![JointAnimation {
-                joint: 0,
-                name: "root".into(),
-                translation: None,
-                scale: None,
-                rotation: Some(AnimationTrack::new(
-                    vec![0., 1.],
-                    vec![Vec4::W, Vec4::from_array(glam::Quat::from_rotation_z(0.2).to_array())],
-                    Interpolation::Linear,
-                )),
-            }],
+            vec![JointAnimation::new(0, "root").with_rotation(AnimationTrack::new(
+                vec![0., 1.],
+                vec![Vec4::W, Vec4::from_array(glam::Quat::from_rotation_z(0.2).to_array())],
+                Interpolation::Linear,
+            ))],
         );
         let mut layer = AnimationLayer::new(animator(&s, Motion::Clip(rotation), vec![]).graph);
         layer.mode = LayerBlend::Additive;
@@ -1438,17 +1432,11 @@ mod tests {
         AnimationClip::new(
             "walk",
             s,
-            vec![JointAnimation {
-                joint: 0,
-                name: "root".into(),
-                translation: Some(AnimationTrack::new(
-                    vec![0., 1.],
-                    vec![Vec4::ZERO, Vec4::new(distance, 0., 0., 0.)],
-                    Interpolation::Linear,
-                )),
-                rotation: None,
-                scale: None,
-            }],
+            vec![JointAnimation::new(0, "root").with_translation(AnimationTrack::new(
+                vec![0., 1.],
+                vec![Vec4::ZERO, Vec4::new(distance, 0., 0., 0.)],
+                Interpolation::Linear,
+            ))],
         )
     }
     #[test]
@@ -1516,19 +1504,49 @@ mod tests {
     fn animator(_s: &Skeleton, motion: Motion, parameters: Vec<AnimationParameter>) -> Animator {
         Animator::new(graph(parameters, vec![AnimationState::new(motion)], vec![], 0))
     }
-    fn child(s: &Skeleton, x: f32) -> MotionChild {
-        MotionChild {
-            motion: Motion::Clip(clip(s, x)),
-            time_scale: 1.,
+    /// Ten hours of 60 Hz updates in one looping state: the pose still
+    /// moves by one step's worth each update, its events fire once a loop,
+    /// and the clock reads ten hours' worth of loops.
+    #[test]
+    fn a_looping_state_keeps_its_speed_and_events_after_ten_hours() {
+        let mut s = skeleton();
+        let state = AnimationState::new(Motion::Clip(walk(&s, 1.))).with_event(AnimationEvent::new(0.5, "step"));
+        let mut a = Animator::new(graph(vec![], vec![state], vec![], 0));
+        let dt = 1. / 60.;
+        let steps = 10 * 3600 * 60;
+        for _ in 0..steps {
+            a.update(dt, &mut s);
         }
+        a.drain_events().for_each(drop);
+        let loops = a.normalized_time_f64();
+        let expected = steps as f64 * f64::from(dt);
+        assert!((loops - expected).abs() < 1e-6, "{loops} loops, expected {expected}");
+        // The next two seconds: every step moves the root by 1/60 (or
+        // wraps), and the event fires twice.
+        let mut x = s.pose[0].position.x;
+        for _ in 0..120 {
+            a.update(dt, &mut s);
+            let now = s.pose[0].position.x;
+            let moved = (now - x).rem_euclid(1.);
+            assert!((moved - dt).abs() < 1e-4, "moved {moved} in one step");
+            x = now;
+        }
+        assert_eq!(a.drain_events().count(), 2);
+        // The negative control: a clock in f32 at ten hours steps in 1/256
+        // s, so a 1/60 s step would land on 1/64 s.
+        let clock = 36_000.0_f32;
+        assert_eq!((clock + dt) - clock, 1. / 64.);
+    }
+    fn child(s: &Skeleton, x: f32) -> MotionChild {
+        MotionChild::new(Motion::Clip(clip(s, x)))
     }
     #[test]
     fn one_dimensional_blends_match_thresholds_and_interpolate_neighbours() {
         let mut s = skeleton();
-        let tree = Motion::Blend1D {
-            parameter: ParamId(0),
-            children: vec![(0., child(&s, 0.)), (1., child(&s, 10.)), (2., child(&s, 30.))],
-        };
+        let tree = Motion::blend_1d(
+            ParamId(0),
+            vec![(0., child(&s, 0.)), (1., child(&s, 10.)), (2., child(&s, 30.))],
+        );
         let mut a = animator(&s, tree, vec![AnimationParameter::Float(0.)]);
         for (v, want) in [
             (-1., 0.),
@@ -1553,21 +1571,8 @@ mod tests {
             .enumerate()
             .map(|(i, p)| (p, child(&s, i as f32)))
             .collect();
-        let tree = Motion::Blend2D {
-            x: ParamId(0),
-            y: ParamId(1),
-            children,
-        };
-        let nested = Motion::Blend1D {
-            parameter: ParamId(0),
-            children: vec![(
-                0.,
-                MotionChild {
-                    motion: tree,
-                    time_scale: 1.,
-                },
-            )],
-        };
+        let tree = Motion::blend_2d(ParamId(0), ParamId(1), children);
+        let nested = Motion::blend_1d(ParamId(0), vec![(0., MotionChild::new(tree))]);
         let mut a = animator(&s, nested, vec![AnimationParameter::Float(0.); 2]);
         for (i, p) in points.into_iter().enumerate() {
             a.set_float(ParamId(0), p.x);
@@ -1663,17 +1668,9 @@ mod tests {
     #[test]
     fn events_cross_loop_wrap_in_time_order_and_reuse_buffer() {
         let mut s = skeleton();
-        let mut state = AnimationState::new(Motion::Clip(clip(&s, 0.)));
-        state.events = vec![
-            AnimationEvent {
-                time: 0.9,
-                name: "end".into(),
-            },
-            AnimationEvent {
-                time: 0.1,
-                name: "start".into(),
-            },
-        ];
+        let state = AnimationState::new(Motion::Clip(clip(&s, 0.)))
+            .with_event(AnimationEvent::new(0.9, "end"))
+            .with_event(AnimationEvent::new(0.1, "start"));
         let mut a = Animator::new(graph(vec![], vec![state], vec![], 0));
         a.play(StateId(0), 0.8);
         a.update(0.4, &mut s);
@@ -1692,28 +1689,16 @@ mod tests {
         let c = AnimationClip::new(
             "ramp",
             &s,
-            vec![JointAnimation {
-                joint: 0,
-                name: "root".into(),
-                translation: Some(AnimationTrack::new(
-                    vec![0., 1.],
-                    vec![Vec4::ZERO, Vec4::X],
-                    Interpolation::Linear,
-                )),
-                rotation: None,
-                scale: None,
-            }],
+            vec![JointAnimation::new(0, "root").with_translation(AnimationTrack::new(
+                vec![0., 1.],
+                vec![Vec4::ZERO, Vec4::X],
+                Interpolation::Linear,
+            ))],
         );
-        let mut state = AnimationState::new(Motion::Blend1D {
-            parameter: ParamId(0),
-            children: vec![(
-                0.,
-                MotionChild {
-                    motion: Motion::Clip(c),
-                    time_scale: 2.,
-                },
-            )],
-        });
+        let mut state = AnimationState::new(Motion::blend_1d(
+            ParamId(0),
+            vec![(0., MotionChild::new(Motion::Clip(c)).with_time_scale(2.))],
+        ));
         state.speed = 2.;
         state.speed_parameter = Some(ParamId(0));
         state.looping = false;
@@ -1732,10 +1717,10 @@ mod tests {
     #[test]
     fn duplicate_thresholds_are_rejected() {
         let s = skeleton();
-        let state = AnimationState::new(Motion::Blend1D {
-            parameter: ParamId(0),
-            children: vec![(0., child(&s, 0.)), (0., child(&s, 1.))],
-        });
+        let state = AnimationState::new(Motion::blend_1d(
+            ParamId(0),
+            vec![(0., child(&s, 0.)), (0., child(&s, 1.))],
+        ));
         let err =
             AnimationGraph::new(vec![AnimationParameter::Float(0.)], vec![state], vec![], StateId(0)).unwrap_err();
         assert_eq!(err, AnimationGraphError::InvalidThresholds(StateId(0)));
@@ -1813,17 +1798,11 @@ mod tests {
         let ramp = AnimationClip::new(
             "ramp",
             &s,
-            vec![JointAnimation {
-                joint: 0,
-                name: "root".into(),
-                translation: Some(AnimationTrack::new(
-                    vec![0., 1.],
-                    vec![Vec4::ZERO, Vec4::X],
-                    Interpolation::Linear,
-                )),
-                rotation: None,
-                scale: None,
-            }],
+            vec![JointAnimation::new(0, "root").with_translation(AnimationTrack::new(
+                vec![0., 1.],
+                vec![Vec4::ZERO, Vec4::X],
+                Interpolation::Linear,
+            ))],
         );
         let mut a = Animator::new(graph(
             vec![],

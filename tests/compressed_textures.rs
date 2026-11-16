@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ponko::assets::MemorySource;
 use ponko::inventory::AssetClass;
 use ponko::prelude::*;
 use ponko::streaming::{AssetState, ResidencyKind};

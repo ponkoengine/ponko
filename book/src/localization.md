@@ -55,12 +55,12 @@ so it stands out on screen.
 # use ponko::prelude::*;
 use ponko::locale::{Arg, Strings};
 # fn setup(ctx: &mut Ctx) -> Result<(), Error> {
-ctx.assets.load_strings(&mut ctx.world, "lang/en.json")?;
-ctx.assets.load_strings(&mut ctx.world, "lang/fr.json")?;
+ctx.assets.load_strings(&mut ctx.world, "lang/en.json");
+ctx.assets.load_strings(&mut ctx.world, "lang/fr.json");
 
 let root = ctx.ui.root().id();
 let play = ctx.ui.button(root, "").text_key("menu.play").id();
-ctx.ui.push_screen(root, false);
+ctx.ui.push_modeless(root);
 
 let strings = ctx.world.resource_mut::<Strings>();
 strings.set_language("fr");
@@ -169,3 +169,11 @@ fills keyed nodes in when you drive a UI by hand). In C++ they are
 `languages`, `language_is_rtl`, `set_language_font`, `language_font`,
 `format` (with `ponko::arg`) and `missing_strings`, `ponko::plural`, and
 `ui::tree::set_text_key` and `localize`.
+
+## Inspecting languages and keys
+
+`StringTable::iter_keys()` borrows sorted keys without allocating.
+`Strings::iter_languages()` borrows language codes in reference-first insertion
+order, excluding the pseudo-locale. Both are exact-size iterators. `keys()` and
+`languages()` retain their collecting, allocating behavior. Native localization
+currently exposes lookup and selection, not these borrowed Rust iterators.

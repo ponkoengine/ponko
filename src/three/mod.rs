@@ -9,6 +9,8 @@
 //! Coordinates are right-handed with Y up (as in glTF): a camera with no
 //! rotation looks down -Z.
 
+#![deny(missing_docs)]
+
 /// `with_*` builder methods for `#[non_exhaustive]` descriptions, one per
 /// field: `with_field(value)` returns the description with that field set.
 /// An `Option<T>` field's method takes `impl Into<Option<T>>`, so both
@@ -36,7 +38,7 @@ macro_rules! with_fields {
 }
 
 mod animator;
-mod api;
+pub(crate) mod api;
 mod clip;
 mod collect;
 mod compute;
@@ -48,10 +50,14 @@ pub use extraction_bench::{ExtractionBench, ExtractionSample};
 pub(crate) mod gi;
 mod gltf;
 mod gltf_ext;
+mod gltf_props;
+mod gltf_scene;
 mod ik;
 pub(crate) mod instances;
 mod retarget;
 pub use instances::{BatchCulling, InstanceBatch, InstanceBatchOptions, InstanceLevel};
+pub(crate) mod instance_cells;
+pub use instance_cells::{InstanceCell, InstanceCellData};
 mod lod;
 pub(crate) mod occlusion;
 pub use gi::GlobalIllumination;
@@ -107,9 +113,8 @@ pub use far_terrain::FarTerrain;
 mod texture_array;
 
 pub use animator::{
-    AnimationCondition, AnimationEvent, AnimationGraph, AnimationGraphError, AnimationLayer, AnimationParameter,
-    AnimationState, AnimationTransition, Animator, JointMask, LayerBlend, LayerId, Motion, MotionChild, ParamId,
-    RootMotion, StateId,
+    AnimationGraph, AnimationLayer, AnimationState, Animator, JointMask, LayerBlend, LayerId, Motion, MotionChild,
+    RootMotion,
 };
 pub(crate) use api::GpuMaterialDesc;
 #[cfg(feature = "window")]
@@ -125,6 +130,8 @@ pub(crate) use collect::{Frame3D, MAX_SHADOW_RESOLUTION, MIN_SHADOW_RESOLUTION, 
 pub use compute::{Compute, ComputePass, GpuBuffer};
 pub use effect::{Effect, ScreenEffect, TargetEffect};
 pub use gltf_ext::{ModelCamera, ModelLight, ModelLightKind, ModelProjection};
+pub use gltf_props::{NodeBody, NodeCollider, NodeProperties, gltf_properties_schema};
+pub use gltf_scene::{GltfNode, GltfOptions, GltfRoot, GltfScene, GltfSceneNode, SpawnPoint};
 pub use mesh::{MeshData, MorphFrame, MorphTarget};
 pub use post::{AmbientOcclusion, AntiAliasing, DepthOfField, Post, PostVolume, SplitToning, Tonemap};
 pub(crate) use post::{MAX_RENDER_SCALE, MIN_RENDER_SCALE};
@@ -421,6 +428,17 @@ pub enum Blend {
 /// New fields may be added in any release: build one with
 /// [`MaterialDesc::color`] or [`Default`] and the `with_*` methods, or set
 /// the public fields of a `mut` value.
+///
+/// # Defaults and cost
+///
+/// [`Default`] is an opaque, single-sided, white material with a roughness of
+/// 0.6, no metal, no light of its own and no textures, shader or stencil.
+/// The description holds handles, so textures are shared, never copied. What
+/// costs is what you turn on: [`Blend::Transparent`] is drawn after all solid
+/// geometry and casts no shadow, [`Blend::Cutout`] runs the material's shader
+/// for hidden pixels and shadows too (opaque skips it), `double_sided`
+/// rasterizes both faces, and each texture map is one more read per pixel.
+/// A custom `shader` runs your code for every pixel the material covers.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct MaterialDesc {
@@ -762,8 +780,14 @@ pub struct Camera3D {
     /// How tall the view is, as an angle in radians. Default 60°.
     pub fov_y: f32,
     /// Nothing closer than this is drawn. Default 0.1.
+    ///
+    /// The scene depth is reverse-Z (the near plane at depth 1, the far
+    /// plane at 0, in a 32-bit float), so its precision hardly depends on
+    /// the near plane: a first-person camera can use 0.01 for a held item
+    /// without the distant world losing depth precision.
     pub near: f32,
-    /// Nothing farther than this is drawn. Default 1000.
+    /// Nothing farther than this is drawn (it is also where culling, light
+    /// clusters and the sky start). Default 1000.
     pub far: f32,
     /// Skip models hidden behind what was drawn a frame or two before.
     /// Default off.
@@ -780,8 +804,21 @@ pub struct Camera3D {
     /// scene without them (a security monitor, a map view): see
     /// [`TargetCamera::with_particles`](crate::render::TargetCamera::with_particles).
     pub particles: bool,
-    /// Window size in pixels, kept up to date by the engine.
-    viewport: Vec2,
+    /// The part of the window it draws into: the whole window by default.
+    /// Split screen, minimaps and picture in picture give each camera its
+    /// own (see `d3::View`); its aspect ratio, [`screen_ray`](Self::screen_ray),
+    /// [`world_to_screen`](Self::world_to_screen) and the other screen
+    /// conversions follow it at once. A
+    /// [`TargetCamera`](crate::render::TargetCamera) ignores it: it fills
+    /// its target.
+    pub rect: crate::camera::Viewport,
+    /// Which [`RenderLayers`](crate::camera::RenderLayers) it draws: all by
+    /// default. Models on other layers aren't drawn by it (their shadows
+    /// still fall in its view). Target cameras read it too.
+    pub layers: crate::camera::RenderLayers,
+    /// The window's size in logical pixels, kept up to date by the engine;
+    /// its part of it comes from `rect`.
+    window: Vec2,
 }
 
 impl Camera3D {
@@ -794,17 +831,54 @@ impl Camera3D {
             far: 1000.0,
             occlusion_culling: false,
             particles: true,
-            viewport,
+            rect: crate::camera::Viewport::FULL,
+            layers: crate::camera::RenderLayers::ALL,
+            window: viewport,
         }
     }
 
     pub(crate) fn set_viewport(&mut self, viewport: Vec2) {
-        self.viewport = viewport;
+        self.window = viewport;
     }
 
-    /// The window size the camera projects to, in logical pixels.
-    pub(crate) fn viewport(&self) -> Vec2 {
-        self.viewport
+    /// Learns the window's size (its part of it comes from its
+    /// [`rect`](Self::rect)).
+    pub(crate) fn place(&mut self, window: Vec2) {
+        self.window = window;
+    }
+
+    /// Its part of the window's top-left corner, in logical pixels.
+    fn origin(&self) -> Vec2 {
+        self.rect.pixels(self.window).min
+    }
+
+    /// The part of the window it draws into, in logical pixels (the whole
+    /// window unless its [`rect`](Self::rect) says otherwise).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("Race", 800, 600).run_headless(1, |ctx| {
+    ///     assert_eq!(ctx.scene3d.camera.screen_rect(), Rect::new(0.0, 0.0, 800.0, 600.0));
+    /// });
+    /// ```
+    #[must_use]
+    pub fn screen_rect(&self) -> crate::camera::Rect {
+        self.rect.pixels(self.window)
+    }
+
+    /// The size the camera projects to, in logical pixels: the window's, or
+    /// that of the part of it its [`rect`](Self::rect) gives it. Kept up to
+    /// date by the engine (as [`d2::Camera::viewport`](crate::d2::Camera::viewport)).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &Ctx) {
+    /// let aspect = ctx.scene3d.camera.viewport().x / ctx.scene3d.camera.viewport().y;
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn viewport(&self) -> Vec2 {
+        self.rect.pixels(self.window).size()
     }
 
     /// Turns the camera to look at `target`, keeping +Y up.
@@ -833,12 +907,19 @@ impl Camera3D {
         self.rotation * Vec3::NEG_Z
     }
 
-    /// World to clip space: projection times view.
+    /// World to clip space: projection times view. The depth is
+    /// reverse-Z: see [`Camera3D::projection`].
     #[must_use]
     pub(crate) fn view_proj(&self) -> Mat4 {
-        let aspect = (self.viewport.x / self.viewport.y.max(1.0)).max(1e-3);
-        let projection = glam::camera::rh::proj::directx::perspective(self.fov_y, aspect, self.near, self.far);
-        projection * self.view()
+        self.projection() * self.view()
+    }
+
+    /// The camera's own space to clip space: a reverse-Z perspective, with
+    /// the near plane at depth 1 and the far plane at depth 0 (see
+    /// [`reverse_z_perspective`]).
+    pub(crate) fn projection(&self) -> Mat4 {
+        let aspect = (self.viewport().x / self.viewport().y.max(1.0)).max(1e-3);
+        reverse_z_perspective(self.fov_y, aspect, self.near, self.far)
     }
 
     /// World to the camera's own space.
@@ -862,14 +943,46 @@ impl Camera3D {
     /// ```
     #[must_use]
     pub fn screen_ray(&self, screen: Vec2) -> (Vec3, Vec3) {
+        let screen = screen - self.origin();
         let ndc = Vec2::new(
-            screen.x / self.viewport.x.max(1.0) * 2.0 - 1.0,
-            1.0 - screen.y / self.viewport.y.max(1.0) * 2.0,
+            screen.x / self.viewport().x.max(1.0) * 2.0 - 1.0,
+            1.0 - screen.y / self.viewport().y.max(1.0) * 2.0,
         );
         let inverse = self.view_proj().inverse();
-        let far = inverse * Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
-        let far = far.truncate() / far.w;
-        (self.position, (far - self.position).normalize_or(self.forward()))
+        // Any point along the ray will do: halfway in depth (reverse-Z,
+        // so 1 would be the near plane and 0 the far one).
+        let along = inverse * Vec4::new(ndc.x, ndc.y, 0.5, 1.0);
+        let along = along.truncate() / along.w;
+        (self.position, (along - self.position).normalize_or(self.forward()))
+    }
+}
+
+/// A right-handed reverse-Z perspective projection: depth 1 at `near`,
+/// 0 at `far` (0..1 clip depth, as wgpu's). Every view drawn into the
+/// scene depth uses it (the camera, target cameras, global illumination's
+/// captures); shadow maps keep standard depth. Reverse-Z with a float
+/// depth buffer keeps nearly constant relative precision at every
+/// distance, whatever `far / near` is. `far` may be infinite.
+pub(crate) fn reverse_z_perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
+    if far.is_finite() {
+        // Swapping the planes of the standard projection flips the depth.
+        glam::camera::rh::proj::directx::perspective(fov_y, aspect, far, near)
+    } else {
+        glam::camera::rh::proj::directx::perspective_infinite_reverse(fov_y, aspect, near)
+    }
+}
+
+/// The distance in front of the camera (along its view axis) of a
+/// reverse-Z depth `depth` of [`reverse_z_perspective`]: the inverse of
+/// that projection's depth (the shaders' depth of field and global
+/// illumination do the same).
+#[cfg(test)]
+pub(crate) fn linear_depth(depth: f32, near: f32, far: f32) -> f32 {
+    // depth = near * (far - d) / (d * (far - near)), solved for d.
+    if far.is_finite() {
+        near * far / (near + depth * (far - near))
+    } else {
+        near / depth
     }
 }
 
@@ -886,6 +999,19 @@ impl Camera3D {
 /// ctx.scene3d.lighting.sun_color = Color::hex(0xFFB066);
 /// # }
 /// ```
+///
+/// # Defaults and cost
+///
+/// [`Default`] is a warm sun of intensity 3 shining down and a little
+/// sideways, ambient light at the sky's own brightness, bounced light off,
+/// and shadows on: the sun's cast out to 60 world units in 4 cascades of
+/// 2048 x 2048 texels (`4 * resolution² * cascades` bytes: 64 MiB), the
+/// far cascades refitted every 2 frames, and up to 12 point and spot light
+/// shadow views in an atlas of 4096 x 4096 texels (`4 * atlas²` bytes: 64
+/// MiB, allocated once a light casts shadows). A still scene draws no
+/// shadow pass, since shadow maps are kept while their casters are
+/// unchanged. Fewer cascades, a smaller resolution and `shadows: false` are
+/// the ways to spend less.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct Lighting {
@@ -914,17 +1040,72 @@ pub struct Lighting {
     /// the memory (`4 * resolution² * cascades` bytes) and sharpens shadows.
     /// Changing it at run time makes new shadow maps. Default 2048.
     pub shadow_resolution: u32,
-    /// How often the far cascades (the farther half of them) are drawn
-    /// again, in frames, 1 to 8. At 1 every cascade is drawn every frame. Above
-    /// 1 the far ones take turns: each is drawn into a box a little bigger
-    /// than it needs and kept for up to this many frames, or until the
-    /// camera leaves its box or the sun moves. Far shadows of moving things
-    /// then lag by up to that many frames. Default 2: half the far
-    /// cascades' drawing.
+    /// How many frames the far cascades (the farther half of them) keep
+    /// the box they are drawn in, 1 to 8. At 1 every cascade is fitted to
+    /// the camera every frame, so a moving camera draws them all every
+    /// frame. Above 1 the far ones are drawn into a box a little bigger
+    /// than they need, held for up to this many frames (they take turns
+    /// fitting a new one), or until the camera leaves it or the sun moves
+    /// (past [`shadow_sun_step`](Self::shadow_sun_step), if set): while the
+    /// camera moves inside it their shadow maps can be kept. Default 2.
+    ///
+    /// Whatever this is, a shadow map (a cascade, or a point or spot
+    /// light's view) is kept from frame to frame only while it holds what
+    /// drawing it again would draw, so a still scene draws no shadow pass
+    /// and shadows never lag behind their casters. A kept map is drawn
+    /// again on the frame that:
+    /// - places it differently: a new cascade box, a light that moved;
+    /// - changes a caster it holds or one coming into it: a model moved,
+    ///   spawned, despawned, given another mesh, tint or material; a
+    ///   level-of-detail group switching level; a terrain tile or
+    ///   shadow-only caster changing; an instance batch or instance cell
+    ///   made, changed or freed where the map can see it (only the maps it
+    ///   reaches); an instance batch level whose distance band from the
+    ///   camera may have taken instances in or out;
+    /// - changes what its casters are drawn with: a mesh's data or shadow
+    ///   setting, a material or shader its casters use (only the maps that
+    ///   use it), a texture a cut-out or custom shader reads, the shadow
+    ///   maps' size.
+    ///
+    /// Maps holding casters drawn from data that can change unseen
+    /// (skinned or morphing models, meshes drawn from GPU buffers, custom
+    /// vertex functions reading the time or the camera) are drawn every
+    /// frame.
     pub shadow_refresh: u32,
+    /// How far the sun may turn, in radians, before its shadows follow it.
+    /// 0 (the default): every frame's shadows use the exact sun direction.
+    /// Above 0, the sun's shadow maps are drawn from a held direction that
+    /// moves only once the true direction has turned more than this from
+    /// it; then it jumps to the true direction and is held there. So a sun
+    /// that turns a little every frame (a day and night cycle) keeps still,
+    /// cached shadows, which change in one step every `shadow_sun_step`
+    /// instead of shimmering every frame. Lighting and the sky still use
+    /// the exact direction.
+    ///
+    /// The hold has hysteresis built in: after a jump the true direction
+    /// must turn a whole step away again, so a sun wobbling around one
+    /// angle never flips the shadows back and forth. It depends only on
+    /// the directions drawn since the hold began, so the same sequence of
+    /// frames gives the same shadows. The hold starts over (at the true
+    /// direction) when this value changes or shadows are turned off; a new
+    /// sun more than a step away (a new scene, a time skip) is followed at
+    /// once. Around 0.01 to 0.03 (half a degree to two) suits a day cycle.
+    pub shadow_sun_step: f32,
     /// How soft the sun's shadow edges are: how many lookups each lit pixel
-    /// takes in the shadow map. Default [`ShadowFilter::Softest`].
+    /// takes in the shadow map, or [`ShadowFilter::ContactHardening`] for
+    /// edges sharp where a shadow touches its caster and softer further
+    /// away. Default [`ShadowFilter::Softest`].
     pub shadow_filter: ShadowFilter,
+    /// How large the sun is for its shadows' soft edges, in degrees across
+    /// (0 to 10): with [`ShadowFilter::ContactHardening`], a shadow's edge
+    /// is as wide as the sun seen from the shadow's caster covers, so it
+    /// widens by about `2 × tan(shadow_sun_size / 2)` per unit of distance
+    /// from the caster. The other filters ignore it. Default 0.53, the real
+    /// sun: the shadow of a 10-unit pole under a sun straight above has an
+    /// edge about 0.09 units wide at the tip.
+    /// It is apart from [`Sky::sun_size`], which draws the disc in the sky
+    /// (often larger than the real sun, so it reads on a screen).
+    pub shadow_sun_size: f32,
     /// How many shadow views point and spot lights may share, 0 to
     /// [`PointLight::MAX_SHADOW_VIEWS`](crate::d3::PointLight::MAX_SHADOW_VIEWS): a shadowed spot light takes one, a
     /// shadowed point light six. 0 turns point and spot light shadows off.
@@ -960,7 +1141,9 @@ impl Default for Lighting {
             shadow_cascades: 4,
             shadow_resolution: SHADOW_MAP_SIZE,
             shadow_refresh: 2,
+            shadow_sun_step: 0.0,
             shadow_filter: ShadowFilter::Softest,
+            shadow_sun_size: DEFAULT_SHADOW_SUN_SIZE,
             light_shadow_views: 12,
             light_shadow_resolution: LIGHT_SHADOW_SIZE,
             light_shadow_atlas: LIGHT_SHADOW_ATLAS_SIZE,
@@ -998,7 +1181,29 @@ impl Lighting {
     pub(crate) fn light_shadow_budget(&self) -> usize {
         (self.light_shadow_views as usize).min(MAX_LIGHT_SHADOW_VIEWS)
     }
+    /// How much a contact-hardening shadow's edge widens per unit of
+    /// distance from its caster: the width of the sun's disc, seen from the
+    /// caster, at one unit (`2 × tan(size / 2)`), with
+    /// [`shadow_sun_size`](Self::shadow_sun_size) clamped to 0 to
+    /// [`MAX_SHADOW_SUN_SIZE`] (a NaN counts as the default). 0 for the
+    /// other filters.
+    pub(crate) fn penumbra_per_distance(&self) -> f32 {
+        if self.shadow_filter != ShadowFilter::ContactHardening {
+            return 0.0;
+        }
+        let size = if self.shadow_sun_size.is_nan() {
+            DEFAULT_SHADOW_SUN_SIZE
+        } else {
+            self.shadow_sun_size.clamp(0.0, MAX_SHADOW_SUN_SIZE)
+        };
+        2.0 * (size.to_radians() * 0.5).tan()
+    }
 }
+
+/// [`Lighting::shadow_sun_size`]'s default, in degrees: the real sun.
+pub(crate) const DEFAULT_SHADOW_SUN_SIZE: f32 = 0.53;
+/// The largest [`Lighting::shadow_sun_size`] drawn, in degrees.
+pub(crate) const MAX_SHADOW_SUN_SIZE: f32 = 10.0;
 
 /// How soft the sun's shadow edges are ([`Lighting::shadow_filter`]): how
 /// many lookups each lit pixel takes in the shadow map. Each step costs about
@@ -1006,6 +1211,10 @@ impl Lighting {
 /// ```
 /// use ponko::render::{Lighting, ShadowFilter};
 /// assert_eq!(Lighting::default().shadow_filter, ShadowFilter::Softest);
+/// // Shadows sharp at their caster's foot and soft further away:
+/// let mut lighting = Lighting::default();
+/// lighting.shadow_filter = ShadowFilter::ContactHardening;
+/// lighting.shadow_sun_size = 1.0; // degrees: a larger sun, softer edges
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
@@ -1015,12 +1224,29 @@ pub enum ShadowFilter {
     Sharp = 1,
     /// Four lookups (3x3 texels).
     Soft = 2,
-    /// Nine lookups (4x4 texels): the softest edges.
+    /// Nine lookups (4x4 texels): the softest of the fixed-width edges.
     #[default]
     Softest = 3,
+    /// Contact-hardening shadows (as "PCSS" elsewhere): sharp where a
+    /// shadow meets its caster and softer the further it falls from it,
+    /// as the sun's size makes them ([`Lighting::shadow_sun_size`]). Each
+    /// lit pixel first looks for what casts its shadow (16 reads around
+    /// it), then filters the edge with 16 lookups across the width that
+    /// distance gives; pixels with nothing nearby that casts a shadow stop
+    /// after the first 16. The width is in world units, so it stays the
+    /// same where two cascades meet; it is never narrower than
+    /// [`Softest`](Self::Softest)'s edge in that cascade, and grows up to
+    /// what a caster a quarter of [`Lighting::shadow_distance`] away
+    /// gives. With temporal antialiasing on, the lookup pattern turns
+    /// every frame and the antialiasing smooths it; without, it stays
+    /// still. On the GL backend (WebGL2) it draws as
+    /// [`Softest`](Self::Softest): its shading language can't read the
+    /// shadow map's depths.
+    ContactHardening = 4,
 }
 
 /// This frame's 3D scene, as the renderer gets it.
+#[derive(Clone, Copy)]
 pub(crate) struct Scene3D<'a> {
     pub frame: &'a Frame3D,
     pub lighting: &'a Lighting,
@@ -1110,6 +1336,8 @@ pub(crate) struct Assets3D {
     pub gpu_buffer_ids: crate::handle::SlotIds,
     pub instance_batches: Vec<Option<instances::Batch>>,
     pub instance_batch_revision: u64,
+    /// Instance cells: their handles, and which rows of `instance_batches` they have.
+    pub instance_cells: instance_cells::InstanceCells,
     /// Freed GPU buffers' ids whose compute passes haven't been removed yet;
     /// they are released to `gpu_buffer_ids` then.
     pub unlinking_gpu_buffers: Vec<u32>,
@@ -1155,7 +1383,7 @@ impl Assets3D {
     pub(crate) fn records(
         &self,
         class: crate::inventory::AssetClass,
-        textures_live: &crate::handle::LiveSet,
+        textures_live: &crate::handle::SlotLiveSet,
         mut f: impl FnMut(u32, u64),
     ) {
         use crate::inventory::{AssetClass, mip_chain_bytes};
@@ -1194,7 +1422,7 @@ impl Assets3D {
     /// whether each handle is live (`Ctx::asset_inventory`).
     /// Freed ones aren't counted; `textures_live` says which render
     /// targets are.
-    pub(crate) fn inventory(&self, textures_live: &crate::handle::LiveSet) -> [crate::inventory::AssetCount; 8] {
+    pub(crate) fn inventory(&self, textures_live: &crate::handle::SlotLiveSet) -> [crate::inventory::AssetCount; 8] {
         use crate::inventory::{AssetClass, mip_chain_bytes};
         let count = |class, live: usize, bytes: u64| crate::inventory::AssetCount { class, live, bytes };
         // Render targets are linear HDR: 8 bytes a pixel.
@@ -1311,6 +1539,93 @@ mod tests {
         assert!(left.dot(right_axis) < 0.0);
     }
 
+    /// The reverse-Z depth of a point `distance` in front of a camera with
+    /// `projection`.
+    fn depth_at(projection: Mat4, distance: f32) -> f32 {
+        let clip = projection * Vec4::new(0.0, 0.0, -distance, 1.0);
+        clip.z / clip.w
+    }
+
+    #[test]
+    fn reverse_z_puts_the_near_plane_at_one_and_the_far_plane_at_zero() {
+        for (near, far) in [(0.1, 1000.0), (0.01, 16_000.0), (0.5, 50.0)] {
+            let m = reverse_z_perspective(1.0, 1.5, near, far);
+            assert!(
+                (depth_at(m, near) - 1.0).abs() < 1e-6,
+                "near {near}: {}",
+                depth_at(m, near)
+            );
+            assert!(depth_at(m, far).abs() < 1e-6, "far {far}: {}", depth_at(m, far));
+            // Nearer is greater all the way.
+            let mut last = 2.0;
+            for d in [near, near * 2.0, (near * far).sqrt(), far * 0.5, far] {
+                let z = depth_at(m, d);
+                assert!(z < last, "{d}: {z} after {last}");
+                last = z;
+            }
+            // Past the far plane and before the near plane: clipped.
+            assert!(depth_at(m, far * 1.01) < 0.0 && depth_at(m, near * 0.99) > 1.0);
+        }
+    }
+
+    #[test]
+    fn an_infinite_far_plane_reaches_zero_only_at_infinity() {
+        let m = reverse_z_perspective(1.0, 1.0, 0.01, f32::INFINITY);
+        assert!((depth_at(m, 0.01) - 1.0).abs() < 1e-6);
+        for d in [10.0, 1e4, 1e7] {
+            let z = depth_at(m, d);
+            assert!(z > 0.0 && (z - 0.01 / d).abs() < 1e-6 * z.max(1e-9), "{d}: {z}");
+        }
+        // The same picture as a finite far plane (x and y don't depend on it).
+        let finite = reverse_z_perspective(1.0, 1.0, 0.01, 1000.0);
+        assert_eq!(m.x_axis, finite.x_axis);
+        assert_eq!(m.y_axis, finite.y_axis);
+    }
+
+    #[test]
+    fn linear_depth_undoes_the_projection() {
+        for (near, far) in [(0.1, 1000.0), (0.01, 16_000.0), (0.01, f32::INFINITY)] {
+            let m = reverse_z_perspective(1.0, 1.0, near, far);
+            for d in [near, 1.0, 100.0, 400.0, 5000.0] {
+                let back = linear_depth(depth_at(m, d), near, far);
+                assert!((back - d).abs() <= d * 1e-4, "{near}..{far}: {d} came back as {back}");
+            }
+        }
+    }
+
+    /// How far apart two distances `distance` in front of the camera must
+    /// be to get different 32-bit float depths: the depth buffer's step
+    /// there. `depth` maps a distance to the stored depth.
+    fn depth_step(distance: f64, depth: impl Fn(f64) -> f64) -> f64 {
+        let stored = depth(distance) as f32;
+        let next = f32::from_bits(stored.to_bits() + 1);
+        // The depth's slope at that distance turns one float step into metres.
+        let h = distance * 1e-6;
+        let slope = (depth(distance + h) - depth(distance - h)) / (2.0 * h);
+        f64::from(next - stored).abs() / slope.abs()
+    }
+
+    #[test]
+    fn reverse_z_depth_steps_are_micrometres_where_standard_z_has_centimetres() {
+        let (near, far) = (0.01f64, 16_000.0f64);
+        let standard = |d: f64| far * (d - near) / (d * (far - near));
+        let reverse = |d: f64| near * (far - d) / (d * (far - near));
+        // The engine's own projection is the reverse one.
+        let m = reverse_z_perspective(1.0, 1.0, near as f32, far as f32);
+        assert!((f64::from(depth_at(m, 250.0)) - reverse(250.0)).abs() < 1e-9);
+        for (d, standard_at_least) in [(100.0, 0.02), (400.0, 0.4)] {
+            let coarse = depth_step(d, standard);
+            let fine = depth_step(d, reverse);
+            eprintln!("{d} m: standard-Z step {coarse:.4} m, reverse-Z step {fine:.2e} m");
+            // Negative control: standard depth is centimetres to a metre
+            // coarse there, as the issue measured.
+            assert!(coarse >= standard_at_least, "standard-Z at {d} m: {coarse} m");
+            // Reverse-Z is finer than a tenth of a millimetre.
+            assert!(fine < 1e-4, "reverse-Z at {d} m: {fine} m");
+            assert!(coarse / fine > 1000.0);
+        }
+    }
+
     #[test]
     fn the_view_projection_puts_the_target_in_the_middle() {
         let mut camera = Camera3D::new(Vec2::new(800.0, 600.0));
@@ -1422,8 +1737,8 @@ mod c_api_mirror {
             max_particles: _,
             space: _,
             seed: _,
-            // Rust-only for now (the C struct's layout is frozen): see the
-            // "Still Rust-only" table in book/src/c-cpp.md.
+            // Not in PonkoParticleSettings3D (its layout is frozen): it is the
+            // `softness` of PonkoParticleSettings3DEx.
             softness: _,
         } = ParticleSettings3D::default();
         let texture = TextureArray {

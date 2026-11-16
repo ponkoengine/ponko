@@ -347,6 +347,62 @@ pub unsafe extern "C" fn ponko_ctx_feed_input(
     })
 }
 
+/// Moves the pointer to `position`, in window pixels from the top-left
+/// corner, as if the mouse moved there (Rust `InputEvent::MouseMove`):
+/// `ponko_ctx_mouse_pos`, `ponko_ctx_mouse_world` and the UI's hover follow
+/// it. A headless run's pointer rests at (0, 0) until this moves it. Not a
+/// finite point: `PONKO_INVALID_ARGUMENT`.
+/// ```
+/// let at = ponko_ffi::PonkoVec2 { x: 10.0, y: 20.0 };
+/// assert_ne!(unsafe { ponko_ffi::ponko_ctx_feed_mouse_move(std::ptr::null_mut(), at) } as u32, 0);
+/// ```
+/// # Safety
+/// Context must be live in its callback, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_feed_mouse_move(ctx: *mut PonkoCtx, position: PonkoVec2) -> PonkoStatus {
+    // SAFETY: caller supplies callback context.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            c.input.feed(pointer_event(true, position)?);
+            Ok(())
+        })
+    })
+}
+
+/// Turns the wheel by `lines` (notches; y > 0 is away from the user) for
+/// this frame, as if the mouse sent it (Rust `InputEvent::MouseWheel`):
+/// `ponko_ctx_mouse_wheel` reads it until the frame ends. Not finite:
+/// `PONKO_INVALID_ARGUMENT`.
+/// ```
+/// let notch = ponko_ffi::PonkoVec2 { x: 0.0, y: 1.0 };
+/// assert_ne!(unsafe { ponko_ffi::ponko_ctx_feed_mouse_wheel(std::ptr::null_mut(), notch) } as u32, 0);
+/// ```
+/// # Safety
+/// Context must be live in its callback, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_feed_mouse_wheel(ctx: *mut PonkoCtx, lines: PonkoVec2) -> PonkoStatus {
+    // SAFETY: caller supplies callback context.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            c.input.feed(pointer_event(false, lines)?);
+            Ok(())
+        })
+    })
+}
+
+/// A pointer move (`movement`) or a wheel turn, checked to be finite.
+pub(crate) fn pointer_event(movement: bool, v: PonkoVec2) -> Result<InputEvent, Failure> {
+    let v: ponko::prelude::Vec2 = to_c(v);
+    if !v.is_finite() {
+        return Err(invalid("a pointer position or wheel turn must be finite"));
+    }
+    Ok(if movement {
+        InputEvent::MouseMove(v)
+    } else {
+        InputEvent::MouseWheel(v)
+    })
+}
+
 /// The event `ponko_ctx_feed_input` (and a scenario's input step) describes.
 pub(crate) fn input_event(kind: u32, slot: u32, input: u32, value: f32) -> Result<InputEvent, Failure> {
     Ok(match kind {

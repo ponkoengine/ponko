@@ -92,6 +92,20 @@ pub trait Component: Send + Sync + 'static {}
 /// Implemented for tuples of up to 12 components, by this crate only: the
 /// trait is sealed.
 ///
+/// ```
+/// use ponko_ecs::{Component, World};
+/// #[derive(Component)]
+/// struct Pos(f32);
+/// #[derive(Component)]
+/// struct Vel(f32);
+/// let mut world = World::new();
+/// // A bundle is a tuple of components; one component needs the trailing comma.
+/// world.spawn((Pos(0.0), Vel(1.0)));
+/// world.spawn((Pos(5.0),));
+/// assert_eq!(world.query::<&Pos>().iter().count(), 2);
+/// assert_eq!(world.query::<(&Pos, &Vel)>().iter().count(), 1);
+/// ```
+///
 /// # Safety
 /// `write` must call `f` exactly once per element, in the order of
 /// `component_ids`, with a pointer to a value whose ownership the callee takes.

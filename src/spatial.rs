@@ -221,7 +221,10 @@ impl<T: Copy + Send + Sync> SpatialGrid<T> {
     /// steps run on all cores for big grids; counting is one pass.
     fn sort_unsorted(&mut self) {
         let n = self.unsorted.len();
-        assert!(n < u32::MAX as usize, "SpatialGrid: too many entities");
+        assert!(
+            n < u32::MAX as usize,
+            "SpatialGrid: too many entities; split the population into smaller grids"
+        );
         // About 4 entries per bucket: with locality-preserving buckets this
         // is fastest (smaller arrays to clear and sum), and dense worlds
         // still get a bucket per occupied cell.

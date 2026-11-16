@@ -48,7 +48,7 @@
 //! builder from [`World::query`], [`Commands`] for deferred changes, and
 //! [`Component`] with its derive.
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 // docs.rs: "Available on crate feature X only" on feature-gated items.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 

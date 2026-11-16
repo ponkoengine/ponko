@@ -48,6 +48,9 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    # Boost Software License (permissive), used by arboard's Windows
+    # clipboard-win/error-code text backend; not the Business Source License.
+    "BSL-1.0",
     "ISC",
     "MIT",
     # symphonia (kira's audio decoders) and triple_buffer.

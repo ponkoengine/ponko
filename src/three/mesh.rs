@@ -65,10 +65,14 @@ pub struct MeshData {
 /// // "raise": lifts the first corner 0.5 up.
 /// let mut up = vec![Vec3::ZERO; quad.positions.len()];
 /// up[0] = vec3(0.0, 0.5, 0.0);
-/// quad.morph_targets.push(ponko::anim::MorphTarget { name: "raise".into(), positions: up, normals: Vec::new() });
+/// quad.morph_targets.push(ponko::anim::MorphTarget::new("raise", up));
 /// assert!(quad.check().is_ok());
 /// ```
+///
+/// New fields may be added in any release: build one with
+/// [`new`](Self::new) and [`with_normals`](Self::with_normals).
 #[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct MorphTarget {
     /// What it's called, to find it by name ([`Graphics::morph_target`](crate::gfx::Graphics::morph_target)).
     pub name: String,
@@ -76,6 +80,30 @@ pub struct MorphTarget {
     pub positions: Vec<Vec3>,
     /// One normal offset per corner; empty when normals don't change.
     pub normals: Vec<Vec3>,
+}
+
+impl MorphTarget {
+    /// A target called `name` moving each corner by `positions` (one per
+    /// corner) at full weight, leaving normals as they are.
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let raise = ponko::anim::MorphTarget::new("raise", vec![Vec3::Y; 4]);
+    /// assert!(raise.normals.is_empty());
+    /// ```
+    #[must_use]
+    pub fn new(name: impl Into<String>, positions: Vec<Vec3>) -> Self {
+        Self {
+            name: name.into(),
+            positions,
+            normals: Vec::new(),
+        }
+    }
+
+    with_fields! {
+        /// Sets [`normals`](Self::normals), one normal offset per corner
+        /// (empty: normals don't change).
+        normals: Vec<Vec3> => with_normals;
+    }
 }
 
 /// One frame of a piecewise linear morph channel. The channel's weight is
@@ -302,7 +330,7 @@ impl MeshData {
     }
 
     /// The triangles: [`indices`](Self::indices) three at a time, the
-    /// shape [`Physics::trimesh`](crate::d3::Physics::trimesh) takes. Extra
+    /// shape `Physics::trimesh` takes. Extra
     /// indices at the end that make no whole triangle are left out.
     ///
     /// ```

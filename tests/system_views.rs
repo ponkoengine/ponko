@@ -362,10 +362,12 @@ fn declared_audio_plays_sounds_and_is_silent_headless() {
             let sound = sys.world.resource::<Click>().0;
             let a = sys.play_sound(sound);
             let b = sys.audio.play_ex(sound, SoundParams::default());
-            sys.world.resource_mut::<Log>().0.push(format!("{}", a == b));
+            // Silent, but each sound has its own handle and is listed.
+            let heard = sys.audio.started().len();
+            sys.world.resource_mut::<Log>().0.push(format!("{} {heard}", a != b));
         },
     );
-    assert_eq!(world.resource::<Log>().0, ["true"]);
+    assert_eq!(world.resource::<Log>().0, ["true 2"]);
 }
 
 #[test]
