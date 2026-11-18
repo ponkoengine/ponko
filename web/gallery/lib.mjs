@@ -3,7 +3,7 @@
 // build.mjs builds the examples and calls these; lib.test.mjs tests them
 // (`node --test web/gallery`). See README.md.
 
-export const REPO = "https://github.com/ponkoengine/ponko";
+export const REPO = "https://gitlab.com/ponkoengine/ponko";
 // Where the release workflow publishes the gallery (GitHub Pages of the
 // repository); the README, the guide and the release notes link here.
 export const GALLERY_URL = "https://ponkoengine.github.io/ponko/";
@@ -77,10 +77,10 @@ export function versionOf(ref) {
   return match ? match[1] : null;
 }
 
-/** The example's source on GitHub at `ref`: a file (`examples/x.rs`) or a folder (`examples/x/`). */
+/** The example's source on GitLab at `ref`: a file (`examples/x.rs`) or a folder (`examples/x/`). */
 export function sourceUrl(path, ref, repo = REPO) {
   const folder = path.endsWith("/");
-  return `${repo}/${folder ? "tree" : "blob"}/${encodeURIComponent(ref)}/${folder ? path.slice(0, -1) : path}`;
+  return `${repo}/-/${folder ? "tree" : "blob"}/${encodeURIComponent(ref)}/${folder ? path.slice(0, -1) : path}`;
 }
 
 /** The command that runs the example on the desktop. */
