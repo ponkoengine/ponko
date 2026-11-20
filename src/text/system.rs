@@ -79,6 +79,7 @@ impl Text {
     pub(crate) fn set_system_fallback(&mut self, on: bool) {
         self.shaper.system.fallback = on;
         self.shaper.forget_shapes();
+        self.revision += 1;
     }
 
     /// A system font with a glyph for `c`, appended to `font`'s fallback
