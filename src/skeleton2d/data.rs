@@ -835,8 +835,10 @@ impl SkeletonData {
     /// The first attachment of a slot is what it shows at rest.
     ///
     /// # Panics
-    /// If `slot` isn't a slot, the name is taken in the slot, or a mesh
-    /// vertex names a bone that isn't there.
+    /// If `slot` isn't a slot, the name is taken in the slot, a mesh
+    /// vertex names a bone that isn't there, a clipping mask ends at a slot
+    /// that isn't there, or a path's vertices don't make whole points (three
+    /// each) or its `lengths` don't give one per curve.
     pub fn add_attachment(&mut self, slot: usize, name: &str, attachment: impl Into<Attachment>) {
         self.add_skin_attachment(0, slot, name, attachment);
     }
