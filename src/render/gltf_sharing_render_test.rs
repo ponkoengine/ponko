@@ -38,7 +38,7 @@ fn plates(shared: bool) -> Vec<u8> {
             }
         }
     }
-    while bin.len() % 4 != 0 {
+    while !bin.len().is_multiple_of(4) {
         bin.push(0);
     }
     let meshes = if shared { 1 } else { NODES };
@@ -71,7 +71,7 @@ fn plates(shared: bool) -> Vec<u8> {
         ]
     });
     let mut json = json.to_string().into_bytes();
-    while json.len() % 4 != 0 {
+    while !json.len().is_multiple_of(4) {
         json.push(b' ');
     }
     let total = 12 + 8 + json.len() + 8 + bin.len();
