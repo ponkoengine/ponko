@@ -15,6 +15,7 @@ mod debug_draw;
 mod determinism;
 mod ecs_suite;
 mod extraction;
+mod gltf_scenes;
 mod hooks;
 #[cfg(feature = "render")]
 mod lights2d;
@@ -233,6 +234,7 @@ fn main() {
     membership::run(b.filter.as_deref());
     physics::run(&mut b);
     physics3d::run(&mut b);
+    gltf_scenes::run(&mut b);
     nav3d::run(&mut b);
     nav3d::carve(&mut b);
     extraction::run(&mut b);
