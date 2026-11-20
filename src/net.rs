@@ -53,7 +53,7 @@
 
 #![deny(missing_docs)]
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc;
@@ -63,7 +63,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::perf::Instant;
-use crate::reflect::WorldReflect;
+use crate::reflect::WorldHashParts;
 use ponko_ecs::World;
 
 #[cfg(any(test, fuzzing))]
@@ -1271,48 +1271,29 @@ impl Peer {
     }
 }
 
-/// A hash of the reflected world at one tick, per component.
+/// A hash of the reflected world at one tick, per component: the public
+/// [`world_hash`](crate::reflect::world_hash), part by part.
 struct Check {
     tick: u64,
-    total: u64,
-    parts: Vec<(String, u64)>,
+    hash: WorldHashParts,
 }
 
-fn fnv(mut h: u64, bytes: &[u8]) -> u64 {
-    for &b in bytes {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x100_0000_01b3);
-    }
-    h
-}
-const FNV_START: u64 = 0xcbf2_9ce4_8422_2325;
+/// Parts a check message carries at most; a desync names only these.
+const CHECK_PARTS: usize = 64;
 
 impl Check {
     fn of(world: &World, tick: u64) -> Check {
-        let save = world.save();
-        let mut parts: BTreeMap<String, u64> = BTreeMap::new();
-        for e in save["entities"].as_array().into_iter().flatten() {
-            let id = e["entity"].as_u64().unwrap_or(0).to_le_bytes();
-            for (name, value) in e["components"].as_object().into_iter().flatten() {
-                let h = parts.entry(name.clone()).or_insert(FNV_START);
-                *h = fnv(fnv(*h, &id), value.to_string().as_bytes());
-            }
+        Check {
+            tick,
+            hash: WorldHashParts::of(world),
         }
-        for (name, value) in save["resources"].as_object().into_iter().flatten() {
-            parts.insert(format!("resource:{name}"), fnv(FNV_START, value.to_string().as_bytes()));
-        }
-        let parts: Vec<(String, u64)> = parts.into_iter().collect();
-        let total = parts
-            .iter()
-            .fold(FNV_START, |h, (n, v)| fnv(fnv(h, n.as_bytes()), &v.to_le_bytes()));
-        Check { tick, total, parts }
     }
     fn write(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.tick.to_le_bytes());
-        out.extend_from_slice(&self.total.to_le_bytes());
-        let parts = self.parts.len().min(64);
+        out.extend_from_slice(&self.hash.total.to_le_bytes());
+        let parts = self.hash.parts.len().min(CHECK_PARTS);
         out.push(parts as u8);
-        for (name, hash) in &self.parts[..parts] {
+        for (name, hash) in &self.hash.parts[..parts] {
             let name = &name.as_bytes()[..name.len().min(255)];
             out.push(name.len() as u8);
             out.extend_from_slice(name);
@@ -1329,27 +1310,22 @@ impl Check {
             let name = String::from_utf8_lossy(r.take(len as usize)?).into_owned();
             parts.push((name, r.u64()?));
         }
-        Some(Check { tick, total, parts })
+        Some(Check {
+            tick,
+            hash: WorldHashParts { total, parts },
+        })
     }
     fn compare(&self, theirs: &Check, player: usize) -> Option<Desync> {
-        if self.total == theirs.total {
+        if self.hash.total == theirs.hash.total {
             return None;
         }
-        let mut components: Vec<String> = Vec::new();
-        for (name, hash) in &self.parts {
-            if theirs.parts.iter().find(|(n, _)| n == name).map(|(_, h)| h) != Some(hash) {
-                components.push(name.clone());
-            }
-        }
-        for (name, _) in &theirs.parts {
-            if !self.parts.iter().any(|(n, _)| n == name) {
-                components.push(name.clone());
-            }
-        }
+        // Only the parts a message carries can be compared.
+        let mut ours = self.hash.clone();
+        ours.parts.truncate(CHECK_PARTS);
         Some(Desync {
             tick: self.tick,
             player,
-            components,
+            components: ours.differing(&theirs.hash),
         })
     }
 }
@@ -1555,6 +1531,7 @@ pub use steamworks as steam;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reflect::WorldReflect;
 
     #[test]
     fn streams_fill_in_order_and_ignore_old_ticks() {
@@ -1584,6 +1561,6 @@ mod tests {
         let mut out = Vec::new();
         cb.write(&mut out);
         let back = Check::read(&mut Reader(&out)).unwrap();
-        assert_eq!((back.tick, back.total, back.parts), (cb.tick, cb.total, cb.parts));
+        assert_eq!((back.tick, back.hash), (cb.tick, cb.hash));
     }
 }

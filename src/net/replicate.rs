@@ -538,7 +538,8 @@ impl Inner {
     /// A hash of everything both sides must declare alike.
     fn schema_hash(&self) -> u64 {
         let mut h = Fnv::new();
-        h.str("ponko-replication-1");
+        // 2: events in MessagePack (1 sent JSON).
+        h.str("ponko-replication-2");
         for kind in &self.kinds {
             h.str(&kind.name);
             for spec in &kind.specs {
@@ -816,7 +817,7 @@ impl Inner {
             ReplicationRole::Client => self.client.server_tick,
             _ => self.tick,
         };
-        match serde_json::to_vec(event) {
+        match encode_event(event) {
             Ok(payload) => self.outbox.push((target, index as u16, tick, payload)),
             Err(e) => panic!(
                 "Replication: event `{}` doesn't serialize: {e}",
@@ -826,18 +827,46 @@ impl Inner {
     }
 }
 
+/// An event's payload: MessagePack, with fields by position (no names),
+/// so a small event takes a few bytes.
+fn encode_event<T: Serialize>(event: &T) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+    rmp_serde::to_vec(event)
+}
+
+/// An `EVENT` message: the kind, the event type and the tick as varints,
+/// then the payload.
 fn write_event(out: &mut Vec<u8>, index: u16, tick: u64, payload: &[u8]) {
     out.clear();
     out.push(wire::EVENT);
-    out.extend_from_slice(&index.to_le_bytes());
-    out.extend_from_slice(&tick.to_le_bytes());
+    push_varint(out, u64::from(index));
+    push_varint(out, tick);
     out.extend_from_slice(payload);
 }
 
 fn read_event(bytes: &[u8]) -> Option<(u16, u64, &[u8])> {
-    let index = u16::from_le_bytes(bytes.get(..2)?.try_into().ok()?);
-    let tick = u64::from_le_bytes(bytes.get(2..10)?.try_into().ok()?);
-    Some((index, tick, &bytes[10..]))
+    let (index, bytes) = take_varint(bytes)?;
+    let (tick, bytes) = take_varint(bytes)?;
+    Some((u16::try_from(index).ok()?, tick, bytes))
+}
+
+/// LEB128: seven bits a byte, low first; the top bit says more follow.
+fn push_varint(out: &mut Vec<u8>, mut value: u64) {
+    while value >= 0x80 {
+        out.push(value as u8 | 0x80);
+        value >>= 7;
+    }
+    out.push(value as u8);
+}
+
+fn take_varint(bytes: &[u8]) -> Option<(u64, &[u8])> {
+    let mut value = 0u64;
+    for (i, &b) in bytes.iter().enumerate().take(10) {
+        value |= u64::from(b & 0x7f) << (7 * i);
+        if b & 0x80 == 0 {
+            return Some((value, &bytes[i + 1..]));
+        }
+    }
+    None
 }
 
 fn deliver_event<T: DeserializeOwned + Send + Sync + 'static>(
@@ -846,7 +875,7 @@ fn deliver_event<T: DeserializeOwned + Send + Sync + 'static>(
     tick: u64,
     bytes: &[u8],
 ) -> bool {
-    match serde_json::from_slice::<T>(bytes) {
+    match rmp_serde::from_slice::<T>(bytes) {
         Ok(event) => {
             events.send(NetEvent { from, tick, event });
             true
@@ -1317,3 +1346,97 @@ const _: fn() = || {
     fn check<T: Send + Sync>() {}
     check::<Replication>();
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Deserialize;
+
+    /// Events a game sends, for their size on the wire.
+    #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+    struct Hit {
+        target: NetId,
+        damage: f32,
+        at: glam::Vec2,
+        critical: bool,
+    }
+
+    #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+    struct Chat {
+        text: String,
+    }
+
+    #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+    enum Pickup {
+        Coin(u32),
+        Key { door: u16 },
+    }
+
+    /// The `EVENT` message as it was sent before (JSON payload, then a
+    /// fixed 2-byte type and 8-byte tick), for comparison.
+    fn json_message<T: Serialize>(event: &T) -> usize {
+        1 + 2 + 8 + serde_json::to_vec(event).unwrap().len()
+    }
+
+    fn binary_message<T: Serialize>(event: &T, tick: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        write_event(&mut out, 3, tick, &encode_event(event).unwrap());
+        out
+    }
+
+    fn round_trip<T: Serialize + DeserializeOwned + Send + Sync + Clone + PartialEq + std::fmt::Debug + 'static>(
+        event: &T,
+        tick: u64,
+    ) -> usize {
+        let message = binary_message(event, tick);
+        let (index, back_tick, payload) = read_event(&message[1..]).expect("a whole message");
+        assert_eq!((index, back_tick), (3, tick));
+        let mut events = Events::default();
+        assert!(deliver_event::<T>(&mut events, PeerId::HOST, back_tick, payload));
+        let got: Vec<T> = events.read::<NetEvent<T>>().iter().map(|e| e.event.clone()).collect();
+        assert_eq!(got, [event.clone()]);
+        message.len()
+    }
+
+    #[test]
+    fn events_travel_in_binary_and_arrive_unchanged() {
+        let tick = 54_321; // 15 minutes at 60 Hz
+        let hit = Hit {
+            target: NetId::from_index(417),
+            damage: 12.5,
+            at: glam::vec2(-153.27, 88.06),
+            critical: true,
+        };
+        let chat = Chat { text: "gg".into() };
+        let pickups = [Pickup::Coin(25), Pickup::Key { door: 7 }];
+        let rows = [
+            ("Hit", round_trip(&hit, tick), json_message(&hit)),
+            ("Chat", round_trip(&chat, tick), json_message(&chat)),
+            ("Pickup::Coin", round_trip(&pickups[0], tick), json_message(&pickups[0])),
+            ("Pickup::Key", round_trip(&pickups[1], tick), json_message(&pickups[1])),
+        ];
+        for (name, binary, json) in rows {
+            println!("{name}: {binary} bytes per event (JSON: {json})");
+            assert!(binary < json, "{name}: {binary} bytes in binary, {json} as JSON");
+        }
+    }
+
+    #[test]
+    fn events_that_dont_decode_are_dropped() {
+        let message = binary_message(&Chat { text: "gg".into() }, 1);
+        let (_, tick, payload) = read_event(&message[1..]).unwrap();
+        let mut events = Events::default();
+        assert!(!deliver_event::<Hit>(&mut events, PeerId::HOST, tick, payload));
+        assert!(events.read::<NetEvent<Hit>>().is_empty());
+        assert_eq!(read_event(&[0x80]), None, "a varint cut short");
+    }
+
+    #[test]
+    fn event_varints_round_trip_at_their_edges() {
+        for value in [0, 1, 127, 128, 16_383, 16_384, u64::from(u32::MAX), u64::MAX] {
+            let mut out = Vec::new();
+            push_varint(&mut out, value);
+            assert_eq!(take_varint(&out), Some((value, &[][..])), "{value}");
+        }
+    }
+}
