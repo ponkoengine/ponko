@@ -217,8 +217,13 @@ per primitive (the test `a_level_too_big_for_one_range_gets_a_range_per_primitiv
 cook compresses eligible images inside meshopt and Draco models using the
 same texture rules as other models. It preserves the original buffers and
 view layout, including external buffer references, and adds the KTX2 data
-alongside them. Set a model's `texture` rule to `keep` to keep its embedded
-textures, or use the `keep` rule to copy the whole model verbatim.
+alongside them. The bytes of each image it replaced stay where they were,
+so no offset moves; in a GLB's own chunk they are zeroed, which a pack
+deflates to almost nothing (an image in an external `.bin` stays as it
+is). The engine then uploads the KTX2 images as GPU blocks and still
+decompresses the geometry at load (feature `gltf-meshopt`). Set a model's
+`texture` rule to `keep` to keep its embedded textures, or use the `keep`
+rule to copy the whole model verbatim.
 
 <a id="model-image-files"></a>**A model's image files.** The cook reads each
 glTF model's materials and cooks the image files they name for their use:

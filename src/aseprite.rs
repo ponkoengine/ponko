@@ -296,39 +296,62 @@ impl Graphics {
     fn read_aseprite_data(
         &self,
         path: &str,
-        // Only the loose-source path needs these before packing.
-        _split_layers: bool,
-        _max: u32,
+        #[cfg_attr(
+            not(feature = "aseprite-source"),
+            expect(unused_variables, reason = "for loose sources")
+        )]
+        split_layers: bool,
+        #[cfg_attr(
+            not(feature = "aseprite-source"),
+            expect(unused_variables, reason = "for loose sources")
+        )]
+        max: u32,
     ) -> Result<(export::Export, Image, Vec<Origin>), Error> {
-        let cooked;
-        let json_path = if let Some((stem, _)) = path
+        let Some((stem, _)) = path
             .rsplit_once('.')
             .filter(|(_, ext)| ext.eq_ignore_ascii_case("aseprite") || ext.eq_ignore_ascii_case("ase"))
-        {
-            #[cfg(feature = "aseprite-source")]
-            match self.asset_sources.find(path) {
-                Ok(found) if matches!(found.origin, Origin::File(_)) => {
-                    let origin = found.origin.clone();
-                    let bytes = found.into_bytes().map_err(|error| error.with_path(path))?;
-                    let sheet = ponko_aseprite::decode(&bytes, _split_layers, _max)
-                        .map_err(|error| Error::new(ErrorKind::Decode, error).with_path(path))?;
-                    let export = serde_json::from_value(sheet.export)
-                        .map_err(|error| Error::new(ErrorKind::Decode, error.to_string()).with_path(path))?;
-                    let image = Image {
-                        width: sheet.width,
-                        height: sheet.height,
-                        rgba: sheet.rgba,
-                    };
-                    return Ok((export, image, vec![origin]));
-                }
-                Err(error) if error.kind() != ErrorKind::NotFound => return Err(error),
-                _ => {}
-            }
-            cooked = format!("{stem}.json");
-            cooked.as_str()
-        } else {
-            path
+        else {
+            return self.read_aseprite_export(path);
         };
+        // A loose source file in development; anything else (a pack, a
+        // cooked build) reads the export the cook wrote beside it.
+        #[cfg(feature = "aseprite-source")]
+        match self.asset_sources.find(path) {
+            Ok(found) if matches!(found.origin, Origin::File(_)) => {
+                let origin = found.origin.clone();
+                let bytes = found.into_bytes().map_err(|error| error.with_path(path))?;
+                let sheet =
+                    ponko_aseprite::decode(&bytes, split_layers, max).map_err(|error| Error::decode(path, error))?;
+                let export =
+                    serde_json::from_value(sheet.export).map_err(|error| Error::decode(path, error.to_string()))?;
+                let image = Image {
+                    width: sheet.width,
+                    height: sheet.height,
+                    rgba: sheet.rgba,
+                };
+                return Ok((export, image, vec![origin]));
+            }
+            Err(error) if error.kind() != ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+        let json = format!("{stem}.json");
+        self.read_aseprite_export(&json).map_err(|error| {
+            if error.kind() != ErrorKind::NotFound || error.path() != Some(json.as_str()) {
+                return error;
+            }
+            let how = if cfg!(feature = "aseprite-source") {
+                "cook the assets (`ponko cook`) or keep the source file loose in `assets/`"
+            } else {
+                "cook the assets (`ponko cook`) or turn on ponko's `aseprite-source` feature to read it directly"
+            };
+            error.context(format_args!(
+                "{path} is an Aseprite source and {json} isn't beside it: {how}"
+            ))
+        })
+    }
+
+    /// Reads a JSON Array export and its sheet.
+    fn read_aseprite_export(&self, json_path: &str) -> Result<(export::Export, Image, Vec<Origin>), Error> {
         let found = self.asset_sources.find(json_path)?;
         let source = found.origin.clone();
         let input = found.into_text(json_path)?;

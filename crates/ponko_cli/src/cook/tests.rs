@@ -770,3 +770,37 @@ fn image_only_cooking_keeps_external_geometry_buffers_through_cache_hits() {
     }
     std::fs::remove_dir_all(cache).unwrap();
 }
+
+/// The kept-geometry fixture: `tests/fixtures/cook-kept/source/packed.glb`,
+/// a model with meshopt-compressed geometry and its own images, and what
+/// `ponko cook` makes of it in `cooked/`. The engine's offscreen GPU test
+/// (`src/render/model_textures_render_test.rs`) decompresses both and
+/// checks the cooked images stay GPU blocks. `PONKO_UPDATE_COOK_FIXTURE=1`
+/// writes them again.
+#[cfg(all(feature = "textures", feature = "meshes"))]
+#[test]
+fn the_kept_geometry_fixture_is_what_cook_makes_of_its_source() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/cook-kept");
+    if std::env::var_os("PONKO_UPDATE_COOK_FIXTURE").is_some() {
+        let (json, bin) = gltf::tests::meshopt_textured(32);
+        let source = vec![("packed.glb".to_string(), gltf::tests::glb(&json, &bin))];
+        let cooked = cook_files(source.clone(), &Config::default(), &settings(None)).unwrap();
+        for (folder, files) in [("source", &source), ("cooked", &cooked.files)] {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            for (name, bytes) in files {
+                std::fs::write(root.join(folder).join(name), bytes).unwrap();
+            }
+        }
+    }
+    let source = read_folder(&root.join("source"), None).unwrap();
+    let committed = read_folder(&root.join("cooked"), None).unwrap();
+    let cooked = cook_files(source.clone(), &Config::default(), &settings(None)).unwrap();
+    assert_eq!(outcome(&cooked, "packed.glb"), Outcome::Cooked, "{}", cooked.report());
+    let (now, then) = (&cooked.files[0].1, &committed[0].1);
+    let (now_json, then_json) = (gltf_json(now).unwrap(), gltf_json(then).unwrap());
+    // Texture encoders use floats, so another CPU may round a last bit
+    // differently: the same layout and geometry.
+    assert_eq!(now_json["bufferViews"], then_json["bufferViews"]);
+    assert_eq!(now_json["accessors"], gltf_json(&source[0].1).unwrap()["accessors"]);
+    assert_eq!(now.len(), then.len());
+}

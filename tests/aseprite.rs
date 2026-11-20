@@ -177,6 +177,20 @@ fn an_aseprite_source_name_also_loads_its_cooked_export() {
     });
 }
 
+#[test]
+fn a_source_name_without_its_export_says_how_to_get_one() {
+    Game::new("aseprite", 1, 1).run_headless(0, |ctx| {
+        let err = ctx.gfx.try_load_aseprite("art/missing.aseprite", false).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NotFound);
+        assert!(
+            err.message()
+                .contains("art/missing.aseprite is an Aseprite source and art/missing.json isn't beside it"),
+            "{err}"
+        );
+        assert!(err.message().contains("ponko cook"), "{err}");
+    });
+}
+
 #[cfg(all(feature = "aseprite-source", not(target_arch = "wasm32")))]
 #[test]
 fn loose_aseprite_edits_refresh_live_playback_without_an_export() {

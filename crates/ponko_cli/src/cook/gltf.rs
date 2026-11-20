@@ -367,11 +367,12 @@ pub fn cook(
     #[cfg(feature = "textures")]
     if let (Some(ext), Some(images)) = (kept_geometry, options.images) {
         let count = doc.buffers.len();
+        let image_views = kept::image_views(&doc.json);
         let report = textures::compress(&mut doc, images).map_err(fail)?;
         if report.images == 0 {
             return Ok(Err(kept_reason(ext)));
         }
-        let out = kept::write(doc, count, binary, has_bin).map_err(fail)?;
+        let out = kept::write(doc, count, binary, has_bin, &image_views).map_err(fail)?;
         let note = format!("{ext} geometry kept, {} images compressed", report.images);
         return Ok(Ok((out, note, Some((report.before, report.after)))));
     }

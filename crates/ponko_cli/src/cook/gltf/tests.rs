@@ -475,6 +475,79 @@ pub fn textured(n: u32, size: u32) -> (Value, Vec<u8>) {
     (json, bin)
 }
 
+/// [`textured`]`(2, size)` with its vertex and index views compressed
+/// with meshoptimizer (`EXT_meshopt_compression`, as gltfpack writes
+/// them): those views read a fallback buffer that holds no data, and their
+/// streams sit in the GLB's own chunk beside the images.
+#[cfg(feature = "meshes")]
+pub fn meshopt_textured(size: u32) -> (Value, Vec<u8>) {
+    let ext = "EXT_meshopt_compression";
+    let (mut json, bin) = textured(2, size);
+    let vertices = json["accessors"][0]["count"].as_u64().unwrap() as usize;
+    let (mut out, mut fallback) = (Vec::new(), 0);
+    for (i, view) in json["bufferViews"].as_array_mut().unwrap().iter_mut().enumerate() {
+        let at = view["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let len = view["byteLength"].as_u64().unwrap() as usize;
+        let raw = &bin[at..at + len];
+        while !out.len().is_multiple_of(4) {
+            out.push(0);
+        }
+        // Views 0 to 2 are positions, normals and texture coordinates; 3
+        // the indices. The rest (animation, images) stay as they are.
+        let (stream, stride, count, mode) = match i {
+            0 | 1 => (
+                meshopt::encode_vertex_buffer(raw.as_chunks::<12>().0).unwrap(),
+                12,
+                len / 12,
+                "ATTRIBUTES",
+            ),
+            2 => (
+                meshopt::encode_vertex_buffer(raw.as_chunks::<8>().0).unwrap(),
+                8,
+                len / 8,
+                "ATTRIBUTES",
+            ),
+            3 => {
+                let indices: Vec<u32> = raw
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|b| u16::from_le_bytes(*b).into())
+                    .collect();
+                (
+                    meshopt::encode_index_buffer(&indices, vertices).unwrap(),
+                    2,
+                    indices.len(),
+                    "TRIANGLES",
+                )
+            }
+            _ => {
+                view["byteOffset"] = json!(out.len());
+                out.extend_from_slice(raw);
+                continue;
+            }
+        };
+        view["buffer"] = json!(1);
+        view["byteOffset"] = json!(fallback);
+        if mode == "ATTRIBUTES" {
+            view["byteStride"] = json!(stride);
+        }
+        view["extensions"] = json!({ext: {
+            "buffer": 0, "byteOffset": out.len(), "byteLength": stream.len(),
+            "byteStride": stride, "count": count, "mode": mode
+        }});
+        fallback = (fallback + len).next_multiple_of(4);
+        out.extend(stream);
+    }
+    json["buffers"] = json!([
+        {"byteLength": out.len()},
+        {"byteLength": fallback, "extensions": {ext: {"fallback": true}}}
+    ]);
+    json["extensionsUsed"] = json!([ext]);
+    json["extensionsRequired"] = json!([ext]);
+    (json, out)
+}
+
 /// The KTX2 image of texture `t` of a cooked file, and its `vkFormat`.
 #[cfg(feature = "textures")]
 fn ktx2_of(out: &[u8], t: usize) -> (Vec<u8>, u32) {
@@ -977,4 +1050,61 @@ fn images_are_compressed_without_relocating_meshopt_or_draco_geometry() {
         assert!(note.contains("3 images compressed"));
         assert!(gpu.is_some());
     }
+}
+
+#[cfg(all(feature = "textures", feature = "meshes"))]
+#[test]
+fn a_meshopt_models_images_become_ktx2_and_its_streams_stay_byte_for_byte() {
+    let (json, bin) = meshopt_textured(16);
+    let source = glb(&json, &bin);
+    let (out, note, gpu) = cook("packed.glb", &source, &[], ALL).unwrap().unwrap();
+    assert_eq!(note, "EXT_meshopt_compression geometry kept, 3 images compressed");
+    let (before, after) = gpu.unwrap();
+    assert!(after * 3 < before, "{before} -> {after}");
+    let (cooked, blob) = split_glb(&out).unwrap();
+    let blob = blob.unwrap();
+    assert_eq!(cooked["accessors"], json["accessors"]);
+    assert_eq!(cooked["buffers"][1], json["buffers"][1], "the fallback buffer");
+    let views = json["bufferViews"].as_array().unwrap();
+    assert_eq!(&cooked["bufferViews"].as_array().unwrap()[..views.len()], views);
+    // Every compressed stream and the animation's data are where they were.
+    for view in &views[..6] {
+        let place = view["extensions"]["EXT_meshopt_compression"]
+            .as_object()
+            .map_or(view, |_| &view["extensions"]["EXT_meshopt_compression"]);
+        let at = place["byteOffset"].as_u64().unwrap() as usize;
+        let range = at..at + place["byteLength"].as_u64().unwrap() as usize;
+        assert_eq!(blob[range.clone()], bin[range]);
+    }
+    // The four source images: three became KTX2 and were zeroed; the
+    // occlusion, merged into the metallic-roughness image, too.
+    for (i, image) in json["images"].as_array().unwrap().iter().enumerate() {
+        let view = &views[image["bufferView"].as_u64().unwrap() as usize];
+        let at = view["byteOffset"].as_u64().unwrap() as usize;
+        let range = at..at + view["byteLength"].as_u64().unwrap() as usize;
+        assert!(bin[range.clone()].starts_with(b"\x89PNG"), "image {i} of the source");
+        assert!(blob[range].iter().all(|b| *b == 0), "image {i} is zeroed");
+    }
+    assert_eq!(ktx2_of(&out, 0).1, 146, "base color: BC7 sRGB");
+}
+
+#[cfg(feature = "textures")]
+#[test]
+fn a_kept_models_image_that_something_else_still_reads_is_not_zeroed() {
+    let (mut json, bin) = textured(2, 16);
+    let ext = "KHR_draco_mesh_compression";
+    json["extensionsUsed"] = json!([ext]);
+    // The Draco stream claims the base color's view as well.
+    let color_view = json["images"][0]["bufferView"].clone();
+    json["meshes"][0]["primitives"][0]["extensions"] = json!({(ext): {"bufferView": color_view, "attributes": {}}});
+    let options = Options {
+        images: Some(Images { basis: false }),
+        ..ALL
+    };
+    let (out, _, _) = cook("shared.glb", &glb(&json, &bin), &[], options).unwrap().unwrap();
+    let (_, blob) = split_glb(&out).unwrap();
+    let view = &json["bufferViews"][color_view.as_u64().unwrap() as usize];
+    let at = view["byteOffset"].as_u64().unwrap() as usize;
+    let range = at..at + view["byteLength"].as_u64().unwrap() as usize;
+    assert_eq!(blob.unwrap()[range.clone()], bin[range]);
 }
