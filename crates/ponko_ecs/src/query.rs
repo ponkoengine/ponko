@@ -577,12 +577,14 @@ pub(crate) struct ParPlan {
     plans: usize,
 }
 
-/// Plans between checks whether the plan storage can shrink.
+/// Plans between checks whether the plan storage can shrink. Smaller under
+/// Miri, where the tests that fill a whole window would run for hours.
 #[cfg(feature = "parallel")]
-const PAR_PLAN_SHRINK_WINDOW: usize = 64;
-/// Plan entries kept whatever the recent plans used (32 bytes each).
+const PAR_PLAN_SHRINK_WINDOW: usize = if cfg!(miri) { 8 } else { 64 };
+/// Plan entries kept whatever the recent plans used (32 bytes each). Smaller
+/// under Miri for the same reason.
 #[cfg(feature = "parallel")]
-const PAR_PLAN_RETAIN: usize = 4096;
+const PAR_PLAN_RETAIN: usize = if cfg!(miri) { 64 } else { 4096 };
 
 #[cfg(feature = "parallel")]
 impl ParPlan {
