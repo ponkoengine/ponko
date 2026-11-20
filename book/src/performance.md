@@ -3,12 +3,14 @@
 Numbers from a MacBook Pro (M4 Max), release builds. Reproduce them yourself;
 every number here has a command next to it.
 
-These are historical measurements made under the Ponko name, retained
-without rerunning them for the Ponko documentation update. They are specific
-workload results, not current-version guarantees or proof of overall engine
-superiority. See [the engine comparison](comparison.md) and baseline issues
-#132 and
-#134 for measurement scope.
+The ECS, simulation and example numbers in this chapter were measured again
+on 2026-11-20 on an idle machine, at revision `e60e15a8`, one benchmark at a
+time. A few rows still carry the date or the conditions they were measured
+under (the Unity comparison, the sprite renders, the before-and-after tables
+of a change, the C++ row); each says so. They are specific workload results,
+not current-version guarantees or proof of overall engine superiority. See
+[the engine comparison](comparison.md) and baseline issues #132 and #134 for
+measurement scope.
 
 ## ECS iteration
 
@@ -16,10 +18,15 @@ superiority. See [the engine comparison](comparison.md) and baseline issues
 
 | Benchmark (1M entities) | Ponko | bevy_ecs | hecs |
 |---|---|---|---|
-| iterate `(&mut Pos, &Vel)` | 0.15 ms | 0.36 ms | 1.77 ms |
+| iterate `(&mut Pos, &Vel)` | 0.17 ms | 0.39 ms | 0.71 ms |
+
+hecs here is its plain `for` loop; with the `fold` fast path the ECS matrix
+below measures 0.19 ms (Ponko 0.17, bevy_ecs 0.41).
 
 `par_for_each` on a heavy per-entity workload, 10M entities: 8.1 ms on all
-cores vs 57.6 ms on one.
+cores vs 57.6 ms on one (measured 2026-11-02, not run again). The steering
+workload of the ECS matrix below, at 1M entities, measured again on
+2026-11-20: 0.61 ms on all cores against 5.2 ms on one.
 
 The full ECS matrix (1k/100k/1M entities: iteration, parallel scaling,
 spawning, spawn/despawn and add/remove churn, optional and filtered queries,
@@ -42,8 +49,8 @@ never checked in CI.
 
 | Agents | ms per tick |
 |---|---|
-| 1M | 1.0 |
-| 10M | 8.7 |
+| 1M | 0.91 |
+| 10M | 7.2 |
 
 ## Boids (neighbor search)
 
@@ -51,7 +58,7 @@ never checked in CI.
 
 | Boids | ms per tick |
 |---|---|
-| 20k | 0.9 |
+| 20k | 0.93 |
 | 100k | 3.7 |
 | 1M | ~33 |
 
@@ -62,9 +69,9 @@ pheromone sensing, trail laying, foraging, colony growth.
 
 | Ants | ms per tick |
 |---|---|
-| 5k | 0.22 |
-| 50k | 1.2 |
-| 1M | 15 |
+| 5k | 0.21 |
+| 50k | 0.93 |
+| 1M | 15.6 |
 
 ## Flow fields (pathfinding)
 
@@ -74,11 +81,11 @@ following it around walls and mud, with a new goal every 2 seconds.
 
 | What | Time |
 |---|---|
-| `compute`, 256 × 256 cells | 1.25 ms |
-| `compute`, 1024 × 1024 cells | 13.0 ms |
-| 1M `direction_at` lookups, parallel | 0.29 ms |
-| 20k units, per tick | 0.14 ms |
-| 1M units, per tick | 3.2 ms |
+| `compute`, 256 × 256 cells | 0.88 ms |
+| `compute`, 1024 × 1024 cells | 13.8 ms |
+| 1M `direction_at` lookups, parallel | 0.32 ms |
+| 20k units, per tick | 0.11 ms |
+| 1M units, per tick | 1.7 ms |
 
 ## Battle (the flagship demo)
 
@@ -89,9 +96,9 @@ with the army, so the crowd density stays the same.
 
 | Units | Map (cells) | ms per tick |
 |---|---|---|
-| 20k | 400 × 225 | 0.57 |
+| 20k | 400 × 225 | 0.60 |
 | 200k | 1264 × 711 | 4.0 |
-| 1M | 2828 × 1590 | 18.9 |
+| 1M | 2828 × 1590 | 19.3 |
 
 With a window, 20k units run at the display's 120 FPS with 1.2 ms of
 simulation per frame.
@@ -116,8 +123,8 @@ How it stays fast, in case your game needs the same tricks:
 
 | What | Per tick |
 |---|---|
-| 100k [events](events.md) sent, read by another system and dropped | 0.42 ms (4.2 ns per event) |
-| 100k [attachments](attachments.md) following 100k moving entities | 0.66 ms |
+| 100k [events](events.md) sent, read by another system and dropped | 0.44 ms (4.4 ns per event) |
+| 100k [attachments](attachments.md) following 100k moving entities | 1.1 ms |
 
 Both allocate nothing once running: events reuse their buffers, and
 attachments are placed in parallel into scratch kept between ticks.
@@ -702,7 +709,7 @@ even with vsync off. To measure past 120 FPS, run fullscreen
 
 Speed is half of scale; the other half is what each entity costs. The
 headless example prints it: 1M agents with `d2::Transform`, `Sprite` and a
-small `Agent` component take **76 bytes per entity** allocated, spare
+small `Agent` component take **96 bytes per entity** allocated, spare
 capacity included.
 
 From code, `world.allocated_bytes()` is the total for all component data,

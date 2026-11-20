@@ -225,22 +225,22 @@ shows how to build and serve them locally. The [website](https://ponko.dev/) has
 
 ## Performance
 
-Measured on an earlier version of the engine and not rerun for 0.1.0. Native
-release builds on a MacBook Pro (M4 Max); web builds run on one thread and are
-slower. Reproduction commands and workload context are on the
+Measured on 2026-11-20 on an idle MacBook Pro (M4 Max), native release builds,
+at revision `e60e15a8` (the sprite and Unity rows below are older and were not
+run again); web builds run on one thread and are slower. Reproduction commands and workload context are on the
 [benchmarks page](book/src/performance.md).
 
 | Workload | Time |
 |---|---|
-| ECS iteration, 1M entities: Ponko / bevy_ecs / hecs | **0.15** / 0.36 / 1.77 ms |
-| Headless simulation, 10M agents | 8.7 ms per tick |
-| Battle, 1M units: flow fields, spatial grids, fighting | 18.9 ms per tick |
-| Ant colonies, 1M ants | 15 ms per tick |
+| ECS iteration, 1M entities: Ponko / bevy_ecs / hecs | **0.17** / 0.39 / 0.71 ms |
+| Headless simulation, 10M agents | 7.2 ms per tick |
+| Battle, 1M units: flow fields, spatial grids, fighting | 19.3 ms per tick |
+| Ant colonies, 1M ants | 16 ms per tick |
 | Boids, 1M, with neighbor search | ~33 ms per tick |
-| 100k events sent and read | 0.42 ms per tick |
+| 100k events sent and read | 0.44 ms per tick |
 | 1M moving sprites (1.6 px), rendered | 120 FPS (display cap) |
 | 3D, 100k spinning cubes with shadows: Ponko / Unity 6 ([details](book/src/performance.md#3d-ponko-vs-unity)) | **402** / 54 FPS (7.5x) |
-| Memory per entity, 1M agents | 76 bytes |
+| Memory per entity, 1M agents | 96 bytes |
 
 ### 3D: Ponko vs Unity 6
 
@@ -259,8 +259,8 @@ differences are detailed in the linked notes.
 What's not equal, and how to rerun both sides, is on the
 [benchmarks page](book/src/performance.md#3d-ponko-vs-unity).
 
-The measurements above come from an earlier version and were not rerun for
-0.1.0. The Unity comparison uses GameObjects
+The Unity comparison above and the sprite row come from an earlier version and
+were not run again on 2026-11-20. The Unity comparison uses GameObjects
 with per-object `Update`, not Entities/DOTS; it does not establish a general
 engine ranking. GPU feature parity, scene differences, dependency versions,
 and workload details matter. Consult the linked reproduction notes before

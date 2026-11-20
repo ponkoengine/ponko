@@ -890,7 +890,8 @@ mod tests {
         text.replace("\r\n", "\n")
     }
 
-    const SCENES: [&str; 7] = [
+    const SCENES: [&str; 8] = [
+        "single-material",
         "static-world",
         "dynamic-world",
         "multi-material",
@@ -982,7 +983,8 @@ mod tests {
             baseline(include_str!("../baselines/render-bevy.csv")),
         ] {
             assert_eq!(other.lines().next(), Some(header));
-            for scene in &SCENES[..3] {
+            // The three scenes the matched and Bevy runs draw.
+            for scene in &SCENES[1..4] {
                 assert!(other.contains(&format!("\n{scene},cpu,frame,ms,")), "{scene}");
             }
         }

@@ -1,13 +1,13 @@
 scene,group,metric,unit,samples,min,p50,p95,p99,max,mean,note
-static-world,cpu,update,ms,600,0.000041,0.000834,0.001500,0.001875,0.002750,0.000888,
-static-world,cpu,cpu,ms,600,6.714916,7.255125,7.924417,8.129584,49.645208,7.478225,
-static-world,cpu,frame,ms,600,9.424416,10.726875,14.130167,18.407583,58.201125,11.254337,
+static-world,cpu,update,ms,600,0.000292,0.000875,0.001458,0.001834,0.017666,0.000934,
+static-world,cpu,cpu,ms,600,6.591334,7.006208,7.482250,7.729125,8.608375,7.054112,
+static-world,cpu,frame,ms,600,9.235250,10.303500,12.374333,14.039250,16.663500,10.529110,
 static-world,gpu,total,ms,0,,,,,,,"this program reads no GPU timestamps from Bevy (its render diagnostics record them on Vulkan and DX12 only)"
-dynamic-world,cpu,update,ms,600,0.221084,0.292583,0.347875,0.367250,0.392958,0.292946,
-dynamic-world,cpu,cpu,ms,600,3.681917,4.502084,5.225334,5.381416,6.765291,4.604764,
-dynamic-world,cpu,frame,ms,600,5.811625,6.873583,8.484667,9.326625,10.689500,7.013657,
+dynamic-world,cpu,update,ms,600,0.214417,0.292250,0.352291,0.407083,0.444125,0.294245,
+dynamic-world,cpu,cpu,ms,600,3.320916,4.468500,4.945084,6.025542,7.418292,4.480114,
+dynamic-world,cpu,frame,ms,600,5.338333,6.790542,8.252208,9.124625,10.391833,6.874582,
 dynamic-world,gpu,total,ms,0,,,,,,,"this program reads no GPU timestamps from Bevy (its render diagnostics record them on Vulkan and DX12 only)"
-multi-material,cpu,update,ms,600,0.000041,0.000250,0.001125,0.002333,0.005542,0.000405,
-multi-material,cpu,cpu,ms,600,1.603958,1.851334,2.552500,2.809375,3.049542,1.954231,
-multi-material,cpu,frame,ms,600,2.973875,3.482959,4.780709,5.870167,7.017041,3.683755,
+multi-material,cpu,update,ms,600,0.000042,0.000666,0.001250,0.001583,0.007125,0.000694,
+multi-material,cpu,cpu,ms,600,1.636583,2.079000,2.502250,2.679709,2.818292,2.100910,
+multi-material,cpu,frame,ms,600,3.012291,3.779042,4.437292,5.647042,5.954792,3.848176,
 multi-material,gpu,total,ms,0,,,,,,,"this program reads no GPU timestamps from Bevy (its render diagnostics record them on Vulkan and DX12 only)"

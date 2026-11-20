@@ -473,10 +473,10 @@ cargo run --release -p ponko_bench --bin replication -- 3
 
 | Scenario | Payload, B/s per client | On the wire, B/s per client | Entities a client holds | Server CPU per tick: median, p90 |
 |---|---|---|---|---|
-| All move, no budget | 571,428 | 588,949 | 1,000 | 1.6 ms, 8.3 ms |
-| All move, 64 KB/s budget (the default) | 63,893 | 67,578 | 1,000 | 0.92 ms, 1.7 ms |
-| 1 in 10 move, 64 KB/s | 63,894 | 67,578 | 1,000 | 0.77 ms, 1.3 ms |
-| All move, interest rings (250 m every tick, 500 m every 4th) | 62,256 (58,562 to 63,923 by client) | 65,915 | 235 | 1.0 ms, 1.3 ms |
+| All move, no budget | 571,428 | 588,949 | 1,000 | 0.73 ms, 0.77 ms |
+| All move, 64 KB/s budget (the default) | 63,893 | 67,578 | 1,000 | 0.38 ms, 0.42 ms |
+| 1 in 10 move, 64 KB/s | 63,894 | 67,578 | 1,000 | 0.26 ms, 0.28 ms |
+| All move, interest rings (250 m every tick, 500 m every 4th) | 62,256 (58,562 to 63,923 by client) | 65,915 | 235 | 0.36 ms, 0.38 ms |
 
 *Payload* is replication's packets; *on the wire* adds the transport's
 framing, acknowledgements and resends. Ten seconds were measured after a
@@ -484,11 +484,10 @@ two-second warm-up (everyone joining and getting the spawn burst). Server
 CPU is its whole tick: receiving, the game's systems, finding what
 changed, encoding and sending to all 16 clients.
 
-The CPU times come from three runs on a 14-core Apple M4 Max under a
-load average of about 150 (other builds were running); the medians
-varied from 1.55 to 2.0 ms in the first scenario and by under 0.15 ms in
-the others. **They are to be repeated on a quiet machine**; the byte counts
-don't change.
+The CPU times come from three runs on a 14-core Apple M4 Max on an idle
+machine (2026-11-20, nothing else running); the medians of the runs varied by
+under 0.03 ms in every scenario (0.728 to 0.755 ms in the first). The byte
+counts are exact and don't change.
 
 ## Checks for a person
 
