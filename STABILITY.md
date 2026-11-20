@@ -197,7 +197,6 @@ unrelated programmer invariants. Available methods depend on cargo features.
 | `Assets::load_resource` | `()` | Panics; `try_load_resource` returns `Result<(), Error>`; replaces the whole resource |
 | `Assets::load_strings` | `()` | Panics; `try_load_strings` returns `Result<(), Error>` |
 | `Assets::load_behavior_tree` | `()` | Panics; `try_load_behavior_tree` returns `Result<(), Error>` |
-| `BehaviorTrees::insert` | `()` | Panics on a subtree cycle; `try_insert` returns `Result<(), Error>` |
 | `Assets::load_reflected_resource_json`, `load_reflected_component_json` | `Result<(), Error>` | Reflection edits; no panic on load failure; object fields merge |
 | `Assets::load_with` | `Result<T, Error>` | Custom decoder operation; propagates source/decoder errors (a user decoder can panic) |
 | `Graphics::load_aseprite` / `try_load_aseprite` | `Aseprite` / `Result<Aseprite, Error>` | Named sprite atlas and timeline, cached and hot reloaded |
