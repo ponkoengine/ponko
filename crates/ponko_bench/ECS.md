@@ -230,5 +230,84 @@ change): an `Option<&T>` query in ponko takes 2.7–2.8× as long as `iter` over
 the same number of entities at 100k and 1M, and is about 17–20% slower than
 bevy's there; hecs runs the same query in about the time of its own `iter`
 (210 µs at 1M, against 480 µs for ponko), so on this row ponko is the slowest
-of the three. Spawning one entity at a time costs a fifth to a third more than
+of the three. (Since done: [below](#costs-won-back-since-the-baselines).) Spawning one entity at a time costs a fifth to a third more than
 `spawn_batch` (1.2× at 100k, 1.3× at 1k and 1M).
+
+## Costs won back since the baselines
+
+Issue #136 took back what required components (#47) and the change
+summary (#89) had cost spawns and despawns, and the `Option<&T>` gap
+above. Not a re-recording of the baselines: other builds kept the machine
+busy (load average 75–185), so only interleaved before/after runs count.
+
+**The rows.** `ponko_bench` from `origin/dev` (before) and from the issue's
+branch (after), both built with
+`RUSTFLAGS="-C llvm-args=-align-all-functions=6"`, run alternately (the
+order flipped every round), 8 rounds. Median of the rounds' p50s, ms; the
+ratio is after/before per round (median), and "faster" counts the rounds
+where after won:
+
+| Row | before | after | ratio | faster |
+|---|---:|---:|---:|---:|
+| `ecs/spawn-loop-100k/ponko` | 1.324 | 0.929 | 0.71 | 8/8 |
+| `ecs/spawn-batch-100k/ponko` | 1.069 | 0.493 | 0.46 | 8/8 |
+| `ecs/spawn-despawn-100k/ponko` | 0.235 | 0.194 | 0.83 | 8/8 |
+| `ecs/spawn-loop-100k/ponko-required` | 1.549 | 1.134 | 0.73 | 8/8 |
+| `ecs/spawn-batch-100k/ponko-required` | 1.142 | 0.491 | 0.43 | 8/8 |
+| `ecs/spawn-despawn-100k/ponko-required` | 0.267 | 0.200 | 0.78 | 7/8 |
+| `ecs/spawn-loop-100k/ponko-hooked` | 2.170 | 1.698 | 0.78 | 8/8 |
+| `ecs/optional-100k/ponko` | 0.0475 | 0.0215 | 0.45 | 8/8 |
+| `ecs/optional-1m/ponko` | 0.507 | 0.220 | 0.43 | 8/8 |
+| `ecs/optional-1m/hecs` (unchanged code) | 0.228 | 0.227 | 0.99 | 5/8 |
+| `ecs/iter-1m/ponko` | 0.181 | 0.182 | 1.01 | 3/8 |
+| `archetypes-1024/ponko` | 0.006 | 0.006 | 1.00 | 1/8 |
+| `query-build+count-x1000/ponko` | 2.350 | 2.358 | 1.00 | 3/8 |
+
+The 1M spawn rows moved the same way but swung by 2–5× between rounds
+(memory pressure from the other builds); `despawn/ponko` (9.4–82 ms) and
+`changes/ponko-despawn-tracked` (14–148 ms) swung too much to read, so the
+despawn numbers below come from instruction counts.
+
+**Against the code before #47 and #89.** A harness that links three
+copies of `ponko_ecs` (`dc3ca02d`, before both; `origin/dev`; the branch)
+and runs the same workloads in one process, interleaved, 40 rounds at 100k
+entities, reading instructions and cycles from `proc_pid_rusage`.
+Instruction counts are exact; cycles move by about 2% between builds of
+the same code. Branch / `dc3ca02d`:
+
+| Workload | instructions | cycles | rounds slower |
+|---|---:|---:|---:|
+| spawn one by one, `(Pos, Vel, Spr)` | 0.750 | 0.704 | 7/40 |
+| `spawn_batch` | 0.503 | 0.550 | 0/40 |
+| spawn-and-despawn churn | 0.838 | 0.790 | 4/40 |
+| despawn, nothing tracked | 0.957 | 1.012 | 23/40 |
+| despawn, `Pos` tracked | 0.968 | 0.965 | 9/40 |
+| despawn, `Pos` and `Vel` tracked | 0.991 | 1.030 | 30/40 |
+
+`origin/dev` was at 1.10 instructions and 1.07 cycles (one tracked
+component) and 1.14 and 1.17 (two) on the tracked despawns. A spawn that
+fills a gap (`Pos` requires `Vel`) runs 39 instructions more than one that
+names `Vel` (81 on `origin/dev`): 1.18× its cycles one by one, 0.91× in a
+batch, 1.05× in churn.
+
+**`query-build+count-x1000`: 1.5 ms (2026-11-09) to 2.4 ms (2026-11-20).**
+The same harness with `ponko_ecs` at every revision between the records
+that changed the query code. Instructions per 1000 builds and counts over
+1024 archetypes:
+
+| Revision | Minstr |
+|---|---:|
+| `de3fb5c7` (the 2026-11-09 record) | 33.1 |
+| `de3660dd` (#223, the query index) | 36.1 |
+| `ec495a4d` (#269, typed `With`/`Without`/`Or` filters) | 64.8 |
+| `348c9efb` | 41.4 |
+| `9d90dcc3` through `origin/dev` and the branch | 42.2 |
+
+Since 2026-11-11 the count hasn't moved: the code costs about 40
+instructions per archetype (a build plus a count over one archetype is
+about 420; skipping the index lookup with `uncached()` saves about 840 per
+build). The rise came with the typed filters and the index, which test
+every archetype against the filters and the occupied-archetype list. The
+rest of the gap between records is the machine and the layout: the same
+`origin/dev` source measured 8.6 M and 9.6 M cycles in two binaries that
+placed it differently, with the same instruction count.

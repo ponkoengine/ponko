@@ -398,9 +398,11 @@ fn despawns_across_many_blocks_keep_change_filters_exact() {
     let mut w = World::new();
     w.track_changes::<Health>();
     w.track_changes::<Armor>();
-    let mut live: Vec<Entity> = (0..1000).map(|i| w.spawn((Health(i), Armor(i)))).collect();
+    // Under Miri: five blocks of 64 and fewer rounds, still crossing blocks.
+    let (n, rounds) = if cfg!(miri) { (320, 6) } else { (1000, 20) };
+    let mut live: Vec<Entity> = (0..n).map(|i| w.spawn((Health(i), Armor(i)))).collect();
     let mut rng = Rng::new(136);
-    for round in 0..20 {
+    for round in 0..rounds {
         let seen = w.advance_change_tick();
         let mut health = Vec::new();
         let mut armor = Vec::new();
@@ -429,7 +431,7 @@ fn despawns_across_many_blocks_keep_change_filters_exact() {
         assert_eq!(changed::<Armor>(&mut w, seen), sorted(armor), "round {round}");
         assert_eq!(added::<Health>(&mut w, seen), [], "round {round}");
     }
-    assert_eq!(w.len(), 500);
+    assert_eq!(w.len(), (n - 25 * rounds) as usize);
 }
 
 #[test]

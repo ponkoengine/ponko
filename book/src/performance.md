@@ -43,6 +43,25 @@ comparison and the committed baselines. `cargo test -p ponko_bench` checks
 that every workload does the same work in all three libraries; timings are
 never checked in CI.
 
+### What ECS features cost
+
+ECS features cost nothing where they aren't used: spawns, despawns and
+queries in a world without required components, hooks or change detection
+cost no more than before those features existed. Where they are used,
+these costs remain:
+
+| Feature | Cost where it is used |
+|---|---|
+| A [required component](ecs.md#required-components) the bundle doesn't give | Its constructor runs, on a path of its own: a one-by-one spawn costs about 1.2× one that names the component itself, about 40 instructions or 2 ns more. A batch costs the same as naming it, spawn-and-despawn churn about 1.03×. |
+| [Change detection](ecs.md#change-detection), despawning | A despawn from an archetype with tracked components also logs each one's removal and moves its stamps: with one tracked component it costs no more than a despawn did before change detection kept its per-block summary, with two about 3% more. |
+| Change detection, inserting and removing | The entity's block in its new archetype is marked as changed now: the next `Changed` loop reads the stamps of those 64 rows once. |
+| `Option<&T>` in a query | Nothing per entity in `for_each` with one or two of them: the loop is chosen per archetype. With three or more, and in the parallel loops, each entity tests whether its archetype has the component. |
+| Many archetypes | Matching a query costs about 40 instructions per archetype it tests, filters included: 2.2–2.4 ms for 1000 builds and counts of a query over 1024 archetypes. Worlds with 64 or more archetypes index repeated queries that leave archetypes out. |
+
+Numbers are from an Apple M4 Max, release builds; `crates/ponko_bench/REQUIRED.md`
+and `crates/ponko_bench/ECS.md` have the runs. Measure your own with
+`cargo run --release -p ponko_bench -- 'ecs/spawn|ecs/optional|changes/ponko-despawn'`.
+
 ## Headless simulation
 
 `AGENTS=1000000 cargo run --release --example headless`
