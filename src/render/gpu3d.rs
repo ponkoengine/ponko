@@ -67,6 +67,7 @@
 //! `targets.rs` makes their images, so a new one of those still touches
 //! pass preparation, the targets and `passes.rs`.
 
+mod crowds;
 mod custom_passes;
 mod depth_copy;
 mod draw_order;
@@ -117,8 +118,10 @@ mod stencil_render_test;
 mod targets;
 mod variants;
 mod vertex_motion;
+mod view_model;
 mod views;
 use super::capabilities::GpuLimits;
+use crate::handle::{INDEX_MASK, write_slot};
 use crate::render::traffic::{self, Counted, MAX_WRITES, MIRRORED, Mirror, NewBuffer, Synced, Upload};
 pub(crate) use draw_order::StateChanges;
 use effects::{EffectPass, Effects};
@@ -267,6 +270,10 @@ pub(crate) struct Renderer3D {
     /// The global illumination atlas's stand-in while it's off.
     no_gi: wgpu::TextureView,
     dummy_depth: wgpu::TextureView,
+    /// With a texture slot for the reflections' spread image (see
+    /// `GpuLimits::reflection_spread`): its stand-in, for every scene bind
+    /// group but the opaque pass's with reflections.
+    no_spread: Option<wgpu::TextureView>,
     no_decal_view: wgpu::TextureView,
     /// The physical sky: made into `sky_view` each frame, then drawn behind
     /// everything. Only with an atmosphere.
@@ -297,6 +304,9 @@ pub(crate) struct Renderer3D {
     static_culling: Option<Culling>,
     /// The batches' path choice, draw order and per-frame scratch.
     pub(crate) batching: Batching,
+    /// Crowds of skinned characters (see `crowds.rs`); nothing is made
+    /// for them until a game makes one.
+    crowds: crowds::Crowds,
     /// The game's shader pipelines in use before the GPU checked them (a
     /// browser's WebGPU answers later; see `shader_checks.rs`).
     shader_checks: Vec<shader_checks::PendingCheck>,
@@ -349,6 +359,13 @@ pub(crate) struct Renderer3D {
     atmosphere: bool,
     /// This frame's sky shader, if it has one the renderer made.
     sky_shader: Option<u32>,
+    /// This frame's sky kit (`Sky::kit`), when it draws the sky (no sky
+    /// shader of the game's and its shader built).
+    kit: Option<crate::three::SkyKit>,
+    /// The sky kit's passes (see `clouds.rs`): made the first frame it's on.
+    clouds: Option<Box<super::clouds::Clouds>>,
+    /// How far the kit's clouds have drifted with the wind so far.
+    cloud_drift: glam::Vec2,
     /// How many models in view the frame culled as hidden.
     pub occluded: usize,
     /// This frame has more instances than the device's largest buffer
@@ -366,10 +383,17 @@ pub(crate) struct Renderer3D {
     /// The window views' own frame state (`views.rs`), in
     /// `SceneSettings::views` order.
     extra_views: Vec<views::ViewState>,
+    /// The first-person view model's pass (`view_model.rs`); `None`
+    /// without one.
+    view_model: Option<view_model::ViewModelPass>,
     /// Whether a window view is being prepared or drawn: the steps the
     /// main frame does for every view (skinning, compute passes, shadow
     /// maps, target cameras, probes) are skipped.
     extra: bool,
+    /// The frame's small buffer writes, gathered and uploaded by `prepare`
+    /// (see `traffic::WriteBatch`); `draw` records their copies into place
+    /// first (or the next `prepare` does, if the frame wasn't drawn).
+    writes: std::sync::Mutex<traffic::WriteBatch>,
     frame_buffer: wgpu::Buffer,
     /// What `frame_buffer` holds (see `sync_frame`).
     frame_mirror: Mirror,
@@ -423,6 +447,9 @@ impl Renderer3D {
             count: None,
         };
         let gi = supports_gi(device);
+        // The opaque pass reads the reflections' spread image itself (see
+        // `ssr.rs`) where there's a texture slot for it.
+        let spread = shaders::supports_reflection_spread(device);
         let frame_bindings = frame_entries(all_stages, false, decals, gi);
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("3d frame layout"),
@@ -505,6 +532,16 @@ impl Renderer3D {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                 count: None,
             }))
+            .chain(spread.then_some(wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: all_stages,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }))
             .collect::<Vec<_>>(),
         });
         let storage_layout = |read_only| {
@@ -576,8 +613,9 @@ impl Renderer3D {
             },
             immediate_size: 0,
         });
-        // Passes that can't see the scene bind a 1x1 stand-in (black, far).
-        let (no_scene, no_scene_color, dummy_depth) = {
+        // Passes that can't see the scene bind a 1x1 stand-in (black, far),
+        // and so does any but the opaque pass for the reflections' spread.
+        let (no_scene, no_scene_color, dummy_depth, no_spread) = {
             let tiny = |label, format, samples, usage| {
                 device
                     .create_texture(&wgpu::TextureDescriptor {
@@ -603,10 +641,26 @@ impl Renderer3D {
                 samples,
                 wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
             );
+            let no_spread = spread.then(|| {
+                tiny(
+                    "3d no reflection spread",
+                    crate::render::ssr::SPREAD_FORMAT,
+                    1,
+                    wgpu::TextureUsages::TEXTURE_BINDING,
+                )
+            });
             (
-                scene_bind_group(device, &scene_layout, &color, &depth, scene_depth_sampler.as_ref()),
+                scene_bind_group(
+                    device,
+                    &scene_layout,
+                    &color,
+                    &depth,
+                    scene_depth_sampler.as_ref(),
+                    no_spread.as_ref(),
+                ),
                 color,
                 depth,
+                no_spread,
             )
         };
         let material_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -627,6 +681,7 @@ impl Renderer3D {
                 decals,
                 gi,
                 storage: storage_supported,
+                spread,
             },
             samples,
             float_depth,
@@ -961,12 +1016,14 @@ impl Renderer3D {
                 meshes: Vec::new(),
                 mesh_arena: Default::default(),
                 materials: Vec::new(),
+                material_ids: Default::default(),
                 material_layout,
                 material_sampler,
                 linear_views: true,
                 white,
                 arrays: Vec::new(),
                 white_array: array_view(white_array),
+                lightmap: None,
                 storage_read,
                 storage_write,
                 storage_buffers: Vec::new(),
@@ -980,7 +1037,9 @@ impl Renderer3D {
             no_scene_color,
             history: History::default(),
             extra_views: Vec::new(),
+            view_model: None,
             extra: false,
+            writes: Default::default(),
             post,
             effects: Effects::default(),
             custom_passes: Default::default(),
@@ -997,6 +1056,7 @@ impl Renderer3D {
             gi: None,
             no_gi,
             dummy_depth,
+            no_spread,
             frame_buffer,
             sky_view,
             sky_texture,
@@ -1006,6 +1066,9 @@ impl Renderer3D {
             sky_shaders: sky_shaders::SkyShaders::new(sky_lut_layout),
             atmosphere: false,
             sky_shader: None,
+            kit: None,
+            clouds: None,
+            cloud_drift: glam::Vec2::ZERO,
             frame_bind_group,
             lights,
             frame_sources,
@@ -1017,6 +1080,7 @@ impl Renderer3D {
             static_shadowless: Vec::new(),
             static_culling: None,
             batching: Batching::default(),
+            crowds: crowds::Crowds::new(shadow_layout.clone()),
             buffer_computes: Vec::new(),
             compute_layouts,
             skinning: skinning::Skinning::new(device, GpuLimits::of(device).gpu_skinning()),
@@ -1094,19 +1158,38 @@ impl Renderer3D {
     }
 
     /// Compiles a compute pass from the game's WGSL; returns its id.
+    #[cfg(test)]
     pub fn create_compute(
         &mut self,
         device: &wgpu::Device,
         name: &str,
         user: &str,
     ) -> Result<u32, Box<ShaderDiagnostic>> {
+        let slot = self.compute_pipelines.len() as u32;
+        self.create_compute_at(device, slot, name, user)?;
+        Ok(slot)
+    }
+
+    pub fn create_compute_at(
+        &mut self,
+        device: &wgpu::Device,
+        id: u32,
+        name: &str,
+        user: &str,
+    ) -> Result<(), Box<ShaderDiagnostic>> {
         let start = crate::perf::Instant::now();
-        let made = self.compile_compute(device, name, user);
+        let made = self.compile_compute(device, id, name, user);
         self.shaders.cache.counters.compiled(start.elapsed());
         made
     }
 
-    fn compile_compute(&mut self, device: &wgpu::Device, name: &str, user: &str) -> Result<u32, Box<ShaderDiagnostic>> {
+    fn compile_compute(
+        &mut self,
+        device: &wgpu::Device,
+        id: u32,
+        name: &str,
+        user: &str,
+    ) -> Result<(), Box<ShaderDiagnostic>> {
         let source = compose_compute(user);
         super::diagnose(name, ShaderKind::Compute, COMPUTE_VARIANT, &source)?;
         let layouts = if defines(user, "update") {
@@ -1115,9 +1198,9 @@ impl Renderer3D {
             &self.compute_layouts
         };
         if layouts.is_none() && defines(user, "update") {
-            self.buffer_computes.push(true);
-            self.compute_pipelines.push(None);
-            return Ok(self.compute_pipelines.len() as u32 - 1);
+            write_slot(&mut self.buffer_computes, id, true);
+            write_slot(&mut self.compute_pipelines, id, None);
+            return Ok(());
         }
         let Some((_, layout)) = layouts else {
             return Err(super::without_location(
@@ -1133,7 +1216,6 @@ impl Renderer3D {
             name,
             &for_samples(&source, self.samples, self.float_depth),
         )?;
-        let id = self.compute_pipelines.len() as u32;
         self.installed(ShaderKind::Compute, id);
         if let Some(verdict) = verdict {
             let swap = Swap::Compute {
@@ -1142,9 +1224,9 @@ impl Renderer3D {
             };
             self.wait_for_verdict(id, name, COMPUTE_VARIANT, swap, verdict);
         }
-        self.buffer_computes.push(defines(user, "update"));
-        self.compute_pipelines.push(Some(pipeline));
-        Ok(id)
+        write_slot(&mut self.buffer_computes, id, defines(user, "update"));
+        write_slot(&mut self.compute_pipelines, id, Some(pipeline));
+        Ok(())
     }
 
     /// Builds a compute pass's pipeline from its checked `source` in a GPU
@@ -1253,9 +1335,74 @@ impl Renderer3D {
         self.resources.set_mesh_gpu_buffer(mesh, b, count);
     }
 
-    /// Keeps a texture array for materials; returns its id.
+    /// Keeps a texture array in its assigned slot.
+    pub fn add_texture_array_at(&mut self, slot: u32, texture: &wgpu::Texture) {
+        self.resources.add_texture_array_at(slot, texture);
+    }
+
+    #[cfg(test)]
     pub fn add_texture_array(&mut self, texture: &wgpu::Texture) -> u32 {
-        self.resources.add_texture_array(texture)
+        let slot = self.resources.arrays.len() as u32;
+        self.add_texture_array_at(slot, texture);
+        slot
+    }
+
+    /// Uploads baked lighting (`BakedLighting::gpu_layers`: `side` square
+    /// RGBA half-float layers) and binds it in every material's empty third
+    /// array slot; `None` takes it away.
+    pub fn set_baked_lighting(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layers: Option<(u32, &[Vec<u16>])>,
+        textures: &dyn TextureTable,
+    ) {
+        let view = layers.map(|(side, layers)| {
+            // Two layers at least: the GL backend takes a one-layer array
+            // for a 2D texture.
+            let count = layers.len().max(2) as u32;
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("3d baked lighting"),
+                size: wgpu::Extent3d {
+                    width: side,
+                    height: side,
+                    depth_or_array_layers: count,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            for (i, layer) in layers.iter().enumerate() {
+                queue.uploading(Upload::Textures).write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: i as u32,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    bytemuck::cast_slice(layer),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(side * 8),
+                        rows_per_image: Some(side),
+                    },
+                    wgpu::Extent3d {
+                        width: side,
+                        height: side,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            array_view(&texture)
+        });
+        self.resources.set_lightmap(device, view, textures);
     }
 
     /// Binds again the materials that read texture `texture` or texture
@@ -1280,17 +1427,29 @@ impl Renderer3D {
         self.resources.texture_replaced(device, textures, texture);
     }
 
+    #[cfg(any(test, feature = "bench-internals"))]
     pub fn create_material(
         &mut self,
         device: &wgpu::Device,
         desc: &GpuMaterialDesc,
         textures: &dyn TextureTable,
     ) -> u32 {
+        let id = self.resources.materials.len() as u32;
+        self.create_material_at(device, id, desc, textures);
+        id
+    }
+
+    pub fn create_material_at(
+        &mut self,
+        device: &wgpu::Device,
+        id: u32,
+        desc: &GpuMaterialDesc,
+        textures: &dyn TextureTable,
+    ) {
         self.shadow_cache.invalidate();
         let shaders = self.shaders.sets.len() as u32;
-        let id = self.resources.create_material(device, desc, textures, shaders);
-        self.assign_stencil(id, desc);
-        id
+        self.resources.create_material_at(device, id, desc, textures, shaders);
+        self.assign_stencil(id & INDEX_MASK, desc);
     }
 
     /// Material `id` draws with `desc`'s stencil state (or none).
@@ -1298,7 +1457,7 @@ impl Renderer3D {
         if desc.stencil.is_none() && !self.stencil.has(id) {
             return;
         }
-        let m = &self.resources.materials[id as usize];
+        let m = self.resources.material(id);
         self.stencil
             .assign(&self.shaders, id, desc.stencil.as_ref(), m.shader, m.double_sided);
     }
@@ -1312,16 +1471,15 @@ impl Renderer3D {
         desc: &GpuMaterialDesc,
         textures: &dyn TextureTable,
     ) -> bool {
-        if (id as usize) < self.resources.materials.len() {
-            self.shadow_cache.invalidate();
+        if !self.resources.material_ids.contains(id) {
+            return false;
         }
+        self.shadow_cache.invalidate();
         let shaders = self.shaders.sets.len() as u32;
         let changed = self
             .resources
             .update_material(device, queue, id, desc, textures, shaders);
-        if (id as usize) < self.resources.materials.len() {
-            self.assign_stencil(id, desc);
-        }
+        self.assign_stencil(id & INDEX_MASK, desc);
         changed
     }
 
@@ -1362,6 +1520,7 @@ impl Renderer3D {
         if let Some(culling) = &self.static_culling {
             culling.tally_memory(t);
         }
+        self.crowds.tally_memory(t);
         t.buffer(C::InstanceBatches, "model instances", &self.instances);
         t.buffer(C::InstanceBatches, "moved instances", self.moved.buffer());
         if let Some(targets) = &self.targets {
@@ -1381,6 +1540,9 @@ impl Renderer3D {
         if let Some(ssr) = &self.screen.ssr {
             ssr.tally_memory(t);
         }
+        if let Some(clouds) = &self.clouds {
+            clouds.tally_memory(t);
+        }
         self.resources.tally_memory(t);
         self.lights.tally_memory(t, C::Other);
         self.occlusion.tally_memory(t);
@@ -1389,6 +1551,7 @@ impl Renderer3D {
             lines.tally_memory(t);
         }
         t.buffer(C::Other, "frame uniforms", &self.frame_buffer);
+        self.tally_view_model(t);
         t.texture(C::Other, "sky lookup", &self.sky_texture);
         for (label, view) in [
             ("sky view lookup", &self.sky_view),
@@ -1399,6 +1562,9 @@ impl Renderer3D {
         ] {
             t.view(C::Other, label, view);
         }
+        if let Some(view) = &self.no_spread {
+            t.view(C::Other, "reflection spread stand-in", view);
+        }
     }
 
     /// Frees mesh `id`'s GPU memory; it draws nothing from now on.
@@ -1408,16 +1574,28 @@ impl Renderer3D {
     }
 
     /// Compiles a material shader from the game's WGSL; returns its index.
+    #[cfg(any(test, feature = "bench-internals"))]
     pub fn create_shader(
         &mut self,
         device: &wgpu::Device,
         name: &str,
         user: &str,
     ) -> Result<u32, Box<ShaderDiagnostic>> {
+        let slot = self.shaders.sets.len() as u32;
+        self.create_shader_at(device, slot, name, user)?;
+        Ok(slot)
+    }
+
+    pub fn create_shader_at(
+        &mut self,
+        device: &wgpu::Device,
+        id: u32,
+        name: &str,
+        user: &str,
+    ) -> Result<(), Box<ShaderDiagnostic>> {
         let (pipelines, verdict) = self
             .shaders
             .material_pipelines(device, name, user, None, self.defer_checks())?;
-        let id = self.shaders.sets.len() as u32;
         self.installed(ShaderKind::Material, id);
         if let Some((variant, verdict)) = verdict {
             let swap = Swap::Material {
@@ -1426,9 +1604,9 @@ impl Renderer3D {
             };
             self.wait_for_verdict(id, name, &variant, swap, verdict);
         }
-        self.shaders.sets.push(pipelines);
-        self.shadow_cache.shaders.push(ShadowCache::shader_traits(user));
-        Ok(id)
+        write_slot(&mut self.shaders.sets, id, pipelines);
+        write_slot(&mut self.shadow_cache.shaders, id, ShadowCache::shader_traits(user));
+        Ok(())
     }
 
     /// Recompiles shader `id` (hot reload). On an error the old one stays.
@@ -1468,16 +1646,15 @@ impl Renderer3D {
 
     /// Material `id` was freed: it draws as the default material from now
     /// on, and lets go of its textures and its own buffer and bind group:
-    /// freed materials share the default's (material ids aren't reused).
+    /// freed materials share the default's.
     pub fn free_material(&mut self, device: &wgpu::Device, _queue: &wgpu::Queue, id: u32, textures: &dyn TextureTable) {
-        if (id as usize) >= self.resources.materials.len() {
+        if !self.resources.material_ids.contains(id) {
             return;
         }
         self.shadow_cache.invalidate();
-        let shaders = self.shaders.sets.len() as u32;
-        self.resources.free_material(device, id, textures, shaders);
+        self.resources.free_material(device, id, textures);
         let default = GpuMaterialDesc::new(&crate::three::MaterialDesc::default());
-        self.assign_stencil(id, &default);
+        self.assign_stencil(id & INDEX_MASK, &default);
     }
 
     /// Material shader `id` (an index into `shaders`) was freed: its
@@ -1493,14 +1670,20 @@ impl Renderer3D {
                     self.shadow_cache.material_changed(index as u32);
                 }
                 material.shader = 0;
+                self.stencil.use_builtin_shader(&self.shaders, index);
             }
         }
         self.shaders.free(id);
+        self.forget_shader_checks(ShaderKind::Material, id);
+        if let Some(traits) = self.shadow_cache.shaders.get_mut(id as usize) {
+            *traits = ShadowCache::shader_traits("");
+        }
     }
 
     /// Compute pass `id` was freed: its pipeline goes, and passes naming it
     /// are skipped.
     pub fn free_compute(&mut self, id: u32) {
+        self.forget_shader_checks(ShaderKind::Compute, id);
         if let Some(pipeline) = self.compute_pipelines.get_mut(id as usize) {
             *pipeline = None;
         }
@@ -1573,6 +1756,8 @@ impl Renderer3D {
     /// static batches' views and culling. Call after a frame was submitted.
     #[cfg(test)]
     pub(crate) fn check_mirrors(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        // Writes gathered but not drawn yet land first.
+        self.submit_pending_writes(device, queue);
         self.frame_mirror
             .check(device, queue, &self.frame_buffer, 0, "frame uniform");
         for (i, mirror) in self.shadows.mirrors.iter().enumerate() {
@@ -1597,6 +1782,9 @@ impl Renderer3D {
         }
         self.skinning.check_mirrors(device, queue);
         self.environment.check_mirrors(device, queue);
+        if let Some(clouds) = &self.clouds {
+            clouds.check_mirrors(device, queue);
+        }
         if let Some(ao) = &self.screen.ao {
             ao.check_mirrors(device, queue);
         }
@@ -1695,9 +1883,21 @@ impl Renderer3D {
     }
 
     /// The newest depth grid read back for occlusion culling, if one came
-    /// back since the last call.
+    /// back since the last call (test hook: frames use `replace_occlusion`).
+    #[cfg(test)]
     pub fn take_occlusion(&mut self) -> Option<crate::three::occlusion::OcclusionGrid> {
         self.occlusion.latest.take()
+    }
+
+    /// Puts the newest depth grid read back, if one came back since the
+    /// last call, into `slot`; the grid it held is kept to build a later
+    /// one in (no allocation once warm).
+    pub fn replace_occlusion(&mut self, slot: &mut Option<crate::three::occlusion::OcclusionGrid>) {
+        if let Some(grid) = self.occlusion.latest.take()
+            && let Some(old) = slot.replace(grid)
+        {
+            self.occlusion.spare = Some(old);
+        }
     }
 
     /// Starts reading this frame's occlusion depth back. Call after submitting.
@@ -1759,8 +1959,15 @@ impl Renderer3D {
             .flat_map(|(_, runs, _)| runs)
             .map(|&(mesh, _, _)| self.resources.meshes[self.base(mesh) as usize].parts.len())
             .sum();
+        // The view model's held items: one lit draw per part, no prepass.
+        let held_parts: usize = self
+            .view_model_runs()
+            .iter()
+            .map(|&(mesh, _, _)| self.resources.meshes[self.base(mesh) as usize].parts.len())
+            .sum();
         self.lists.computes.len()
             + (parts + view_parts) * 2
+            + held_parts
             + self.lists.views.len() * usize::from(self.atmosphere)
             + self.particles.draw_count()
             + self.debug_lines.as_ref().map_or(0, |l| l.draw_count())
@@ -1806,7 +2013,7 @@ impl Renderer3D {
                     .is_some_and(resources::StorageBuffer::keeps_past)
             });
             for (part, &(_, own)) in mesh.parts.iter().enumerate() {
-                let m = &self.resources.materials[self.part_material(run_mesh, part, own) as usize];
+                let m = self.resources.material(self.part_material(run_mesh, part, own));
                 parts +=
                     usize::from(!m.transparent && record::still_moves(&self.shaders.sets[m.shader as usize], kept));
             }
@@ -1866,6 +2073,7 @@ impl Renderer3D {
     /// Whether this frame has anything to draw.
     pub fn has_draws(&self) -> bool {
         self.static_batches.iter().any(Option::is_some)
+            || self.crowds.has_draws()
             || !self.lists.runs.is_empty()
             || self.particles.has_draws()
             || self.debug_lines.as_ref().is_some_and(|l| l.count() > 0)
@@ -2081,6 +2289,10 @@ mod material_render_test;
 #[cfg(test)]
 #[path = "gpu3d/webgl2_shaders_test.rs"]
 mod webgl2_shaders_test;
+
+#[cfg(test)]
+#[path = "gpu3d/water_shaders_test.rs"]
+mod water_shaders_test;
 
 #[cfg(test)]
 #[path = "capabilities_render_test.rs"]

@@ -301,6 +301,30 @@ pub unsafe extern "C" fn ponko_ctx_skeleton2d_state(
     })
 }
 
+/// Unwrapped normalized time of the 2D skeleton, in double precision (1 is one play).
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_skeleton2d_normalized_time_f64(std::ptr::null_mut(), 0, std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_time` null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_skeleton2d_normalized_time_f64(
+    ctx: *mut PonkoCtx,
+    entity_bits: u64,
+    out_time: *mut f64,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            if out_time.is_null() {
+                return Err(invalid("output is null"));
+            }
+            out_time.write(skeleton(c, entity_bits)?.normalized_time_f64());
+            Ok(())
+        })
+    })
+}
+
 /// The index of the state machine's state named `name`, for
 /// `ponko_ctx_skeleton2d_crossfade_state`. `PONKO_NOT_FOUND` if there is
 /// none (or no state machine).
@@ -577,6 +601,88 @@ pub unsafe extern "C" fn ponko_ctx_skeleton2d_set_ik_mix(
                 return Err(invalid("no such IK constraint"));
             }
             s.set_ik_mix(ik, mix);
+            Ok(())
+        })
+    })
+}
+
+/// Turns bone `bone` of `entity`'s skeleton so its +x axis points at
+/// `target` (the skeleton's own space), `mix` of the way (0 to 1), and
+/// moves the bones below it (Rust `Skeleton::look_at`). A one-off: call it
+/// in a late system, after the update; the next update poses the bone from
+/// its clips again.
+/// ```
+/// let to = ponko_ffi::PonkoVec2 { x: 1.0, y: 2.0 };
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_skeleton2d_look_at(std::ptr::null_mut(), 0, 0, to, 1.0) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_skeleton2d_look_at(
+    ctx: *mut PonkoCtx,
+    entity_bits: u64,
+    bone: usize,
+    target: PonkoVec2,
+    mix: f32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let target = Vec2::new(
+                finite(target.x, "target must be finite")?,
+                finite(target.y, "target must be finite")?,
+            );
+            let mix = finite(mix, "mix must be finite")?;
+            let s = skeleton(c, entity_bits)?;
+            if bone >= s.data().bones().len() {
+                return Err(invalid("no such bone"));
+            }
+            s.look_at(bone, target, mix);
+            Ok(())
+        })
+    })
+}
+
+/// Bends bone `upper` of `entity`'s skeleton and its child `lower` so the
+/// tip of `lower` reaches `target` (the skeleton's own space), or as close
+/// as their lengths allow, `mix` of the way (Rust `Skeleton::two_bone_ik`).
+/// `bend_positive`: the joint turns clockwise on screen; false the other
+/// way. A one-off, as `ponko_ctx_skeleton2d_look_at`. `PONKO_INVALID_ARGUMENT`
+/// if `lower`'s parent isn't `upper`.
+/// ```
+/// let to = ponko_ffi::PonkoVec2 { x: 1.0, y: 2.0 };
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_skeleton2d_two_bone_ik(std::ptr::null_mut(), 0, 0, 1, to, true, 1.0) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_skeleton2d_two_bone_ik(
+    ctx: *mut PonkoCtx,
+    entity_bits: u64,
+    upper: usize,
+    lower: usize,
+    target: PonkoVec2,
+    bend_positive: bool,
+    mix: f32,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let target = Vec2::new(
+                finite(target.x, "target must be finite")?,
+                finite(target.y, "target must be finite")?,
+            );
+            let mix = finite(mix, "mix must be finite")?;
+            let s = skeleton(c, entity_bits)?;
+            let bones = s.data().bones();
+            if upper >= bones.len() || lower >= bones.len() {
+                return Err(invalid("no such bone"));
+            }
+            // `Skeleton::two_bone_ik` panics on purpose for such a chain.
+            if bones[lower].parent != Some(upper) {
+                return Err(invalid("the lower bone must be a child of the upper one"));
+            }
+            s.two_bone_ik(upper, lower, target, bend_positive, mix);
             Ok(())
         })
     })

@@ -141,17 +141,30 @@ pub unsafe extern "C" fn ponko_game_msaa(game: *mut PonkoGame, samples: u32) -> 
     // SAFETY: forwarded caller contract.
     unsafe {
         build(game, |g| match samples {
-            2 | 4 => ok(g.plugin(Msaa(samples))),
+            2 | 4 => ok(g.plugin(Msaa(samples, unique_name("msaa")))),
             _ => reject(g, "msaa takes 2 or 4 samples"),
         })
     }
 }
-/// The startup MSAA sample count, set on the scene's post settings.
-struct Msaa(u32);
+/// The startup MSAA sample count, set on the scene's post settings, and
+/// a name of its own (a C game may set it more than once; the last wins).
+struct Msaa(u32, String);
+
+/// A plugin name no other registration has: the C API's startup callbacks
+/// are plugins, and a game may add any number of them.
+fn unique_name(what: &str) -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("ponko_ffi::{what}#{n}")
+}
 
 impl ponko::prelude::Plugin for Msaa {
     fn build(&self, game: Game) -> Game {
         game
+    }
+
+    fn name(&self) -> &str {
+        &self.1
     }
 
     fn setup(&self, ctx: &mut Ctx) {
@@ -516,7 +529,11 @@ pub unsafe extern "C" fn ponko_game_setup(
     // SAFETY: forwarded caller contract.
     unsafe {
         build(game, |g| match setup {
-            Some(_) => ok(g.plugin(Startup { setup, user })),
+            Some(_) => ok(g.plugin(Startup {
+                setup,
+                user,
+                name: unique_name("setup"),
+            })),
             None => reject(g, "setup is null"),
         })
     }
@@ -571,7 +588,13 @@ pub unsafe extern "C" fn ponko_game_plugin(
             }
         }
         match setup {
-            Some(_) => build(game, |g| ok(g.plugin(Startup { setup, user }))),
+            Some(_) => build(game, |g| {
+                ok(g.plugin(Startup {
+                    setup,
+                    user,
+                    name: unique_name("setup"),
+                }))
+            }),
             None => PonkoStatus::PONKO_OK,
         }
     }
@@ -688,11 +711,17 @@ unsafe fn take(game: *mut PonkoGame) -> Result<Game, Failure> {
 struct Startup {
     setup: crate::PonkoSystemFn,
     user: *mut c_void,
+    /// Its own, so a game adds as many as it likes.
+    name: String,
 }
 
 impl Plugin for Startup {
     fn build(&self, game: Game) -> Game {
         game
+    }
+
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn setup(&self, ctx: &mut Ctx) {

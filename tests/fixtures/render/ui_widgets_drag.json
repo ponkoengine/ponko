@@ -1,0 +1,17 @@
+{
+  "name": "ui_widgets_drag",
+  "scene": "UiTheme::dark(), 256x200: a list of 10,000 saves showing its first rows with \"Save 2\" chosen and tinted, a 4-column grid of numbered cells with 5 chosen; below, two containers, the \"Gem\" button (text centred) in the left one, outlined while dragged, and a see-through copy of it over the right one, which is outlined in the accent; UI scale 1, drawn with the window's sprite pipeline into an sRGB target",
+  "width": 256,
+  "height": 200,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 24,
+    "outliers": 0.004,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "0d73736122586fd9",
+  "reason": "Widget references drawn at UI scale 1 on smaller sheets, control text centred and checked for contrast"
+}

@@ -1,0 +1,17 @@
+{
+  "name": "touch_controls_held",
+  "scene": "the same on-screen touch controls with the stick pushed fully to the right (its knob at the right of its disc) and the A button held (brighter); the corner button idle",
+  "width": 256,
+  "height": 144,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 24,
+    "outliers": 0.004,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "f687c80992709a0c",
+  "reason": "new on-screen touch controls test"
+}

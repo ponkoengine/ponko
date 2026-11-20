@@ -1,0 +1,17 @@
+{
+  "name": "ui_widgets_dropdown",
+  "scene": "the ui_widgets_controls_dark sheet, its key-binding field not listening (\"Space\"), with the dropdown open below itself: Low, Medium, High on a control-colored panel with a border, High chosen, tinted in the accent and focused; UI scale 1, drawn with the window's sprite pipeline into an sRGB target",
+  "width": 256,
+  "height": 168,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 24,
+    "outliers": 0.004,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "d388dfb250a32cfb",
+  "reason": "Widget references drawn at UI scale 1 on smaller sheets, control text centred and checked for contrast"
+}

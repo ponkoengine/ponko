@@ -1,0 +1,1613 @@
+//! Crowds of skinned characters (`Graphics::create_crowd`, see
+//! `three/crowd.rs`): the renderer's side.
+//!
+//! Two paths, picked by the device:
+//!
+//! - **GPU** (compute culling: compute shaders and four storage buffers a
+//!   stage). The records live in a storage buffer (two, so the motion
+//!   vectors have the last frame's), the baked animation in another. Each
+//!   frame one compute dispatch tests every character against every view
+//!   and appends it to the visible list of each (view, level) that draws
+//!   it, and a second writes the counts into the indirect draws
+//!   (`crowd_cull.wgsl`). Each (view, level, mesh part) is then one indirect
+//!   draw, whose vertex shader skins every corner from the bake, between
+//!   the clip's two nearest frames and blended with a second clip
+//!   (`crowd_vertex.wgsl`), before the material's own `vertex` runs. A
+//!   material's crowd pipelines are built the first time a crowd draws it.
+//! - **CPU** (WebGL2: no compute shaders, no storage buffers, and every
+//!   texture slot of the mesh shaders already taken, so no vertex shader can
+//!   read the bake). Each level's mesh is posed on the CPU once per baked
+//!   frame when the crowd is made, into one vertex buffer; each frame the
+//!   characters are culled on the CPU, grouped by (view, level, the baked
+//!   frame nearest their time) and drawn with the material's plain
+//!   pipelines, the vertex buffer bound at their frame. No blending between
+//!   frames or clips (a character shows the clip it shows more of), and no
+//!   motion vectors (WebGL2 has no temporal antialiasing).
+//!
+//! A game without crowds makes none of this: no buffers, pipelines or passes.
+
+use std::sync::{Arc, Weak};
+
+use glam::{Mat4, Vec3, Vec4};
+
+use super::instances::intersects;
+use super::pipeline_cache::TargetKey;
+use super::record::Kind;
+use super::shaders::{Pipelines, ShaderPipelines, compose_material};
+use super::skinning::GpuSkin;
+use super::{GpuLimits, Instance3D, Instancing, MAX_CASCADES, Renderer3D, ShaderVariant, Sides, Vertex};
+use crate::render::traffic::{self, Counted, NewBuffer, Upload};
+use crate::three::crowd::{CrowdData, CrowdRecord, MAX_CROWD_LEVELS, top_influences};
+
+/// Joints (`Uint16x4`) and weights (`Float32x4`) of each corner, from the
+/// skin's influence buffer.
+const CROWD_ATTRIBUTES: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![10 => Uint16x4, 11 => Float32x4];
+
+/// The third vertex buffer of a crowd's pipelines (see [`GpuSkin::influences`]).
+pub(super) const INFLUENCE_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+    array_stride: 24,
+    step_mode: wgpu::VertexStepMode::Vertex,
+    attributes: &CROWD_ATTRIBUTES,
+};
+
+const CULL: &str = include_str!("crowd_cull.wgsl");
+const VERTEX: &str = include_str!("crowd_vertex.wgsl");
+
+/// Bytes of one indirect indexed draw.
+const ARGS: u64 = 20;
+/// Bytes of the cull pass's uniform (see `Params` in `crowd_cull.wgsl`).
+const PARAMS: u64 = 48 + 16 * MAX_CROWD_LEVELS as u64;
+/// What the CPU path's posed frames may take per crowd: more frames than
+/// fit are thinned out (every second one, every third...).
+const POSED_BYTES: u64 = 64 << 20;
+
+/// The crowd's material shader: `compose_material`'s, with each corner's
+/// joints and weights in `VertexIn` and the crowd's `static_instance` in
+/// place of the batches' (so `world_vertex` sees the posed corner).
+pub(super) fn compose_crowd(user: &str, decals: bool, gi: bool) -> String {
+    const FIELDS: &str = "    @location(9) uv1: vec2<f32>,\n};";
+    const BINDINGS: &str = "@group(3) @binding(1) var<storage, read> static_indices: array<u32>;\n";
+    let source = compose_material(user, decals, gi);
+    let helper = include_str!("instance_vertex.wgsl");
+    // Invariants: the mesh shader's own text (checked by
+    // `crowd_shaders_compose_on_the_mesh_shader`).
+    debug_assert!(source.contains(FIELDS) && source.contains(BINDINGS) && source.contains(helper));
+    source
+        .replacen(
+            FIELDS,
+            "    @location(9) uv1: vec2<f32>,\n    @location(10) crowd_joints: vec4<u32>,\n    @location(11) crowd_weights: vec4<f32>,\n};",
+            1,
+        )
+        .replacen(BINDINGS, &format!("{BINDINGS}{VERTEX}"), 1)
+        .replacen(helper, "", 1)
+}
+
+/// One level of a crowd, as the renderer draws it.
+#[derive(Clone, Copy)]
+struct Level {
+    mesh: u32,
+    min: f32,
+    max: f32,
+    camera: bool,
+    shadows: bool,
+    influences: u32,
+    section: u32,
+    slots: u32,
+}
+
+/// What a frame's upload and culling read of a crowd besides its levels.
+#[derive(Clone, Copy)]
+struct Frame {
+    count: u32,
+    clips: u32,
+    bounds: (Vec3, f32),
+    /// Seconds its clips played on since its records were first drawn,
+    /// and as of the last frame for the last frame's records.
+    elapsed: f32,
+    past_elapsed: f32,
+}
+
+/// Which of the frame's view slots are drawn: the camera, the cascades and
+/// light views drawn this frame, the target cameras.
+#[derive(Clone, Copy)]
+struct Drawn {
+    cascades: usize,
+    light_views: usize,
+    /// The first target camera's slot.
+    targets: usize,
+}
+
+impl Drawn {
+    fn slot(self, s: usize) -> bool {
+        match s {
+            0 => true,
+            s if s >= self.targets => true,
+            s if s <= MAX_CASCADES => s - 1 < self.cascades,
+            s => s - 1 - MAX_CASCADES < self.light_views,
+        }
+    }
+
+    fn shadow(self, s: usize) -> bool {
+        (1..self.targets).contains(&s)
+    }
+}
+
+/// A crowd on the renderer's side.
+struct GpuCrowd {
+    levels: Vec<Level>,
+    casts: bool,
+    clips: u32,
+    count: u32,
+    bounds: (Vec3, f32),
+    min: Vec3,
+    max: Vec3,
+    /// The bake it was made from (a new bake makes the crowd anew).
+    animation: Arc<[[f32; 4]]>,
+    /// When its records were first drawn (`None`: not yet), and the ones
+    /// the last frame drew; whether an update waits for the next frame.
+    epoch: Option<f32>,
+    past_epoch: f32,
+    updated: bool,
+    /// Whether this frame draws records newer than the last frame's.
+    moved: bool,
+    path: Path,
+}
+
+enum Path {
+    Gpu(Box<GpuPath>),
+    Cpu(Box<CpuPath>),
+}
+
+/// What the GPU path keeps (see the module's docs).
+struct GpuPath {
+    /// The records, twice: the frame's (`current`) and the last ones.
+    records: [wgpu::Buffer; 2],
+    capacity: u32,
+    current: usize,
+    anim: wgpu::Buffer,
+    params: wgpu::Buffer,
+    /// Per level, at the uniform alignment: its `CrowdLevel` (see `crowd_vertex.wgsl`).
+    levels: wgpu::Buffer,
+    /// Views, then the level of each indirect draw.
+    views: wgpu::Buffer,
+    visible: wgpu::Buffer,
+    /// Per (view, level) a count, then the indirect draws.
+    draws: wgpu::Buffer,
+    /// Views the buffers have room for.
+    view_capacity: u32,
+    /// Entries of one (view, level) list.
+    region: u32,
+    /// Indirect draws per view, and the first of each level.
+    parts: u32,
+    part_base: Vec<u32>,
+    /// The cull bind group, per current records buffer.
+    cull: [wgpu::BindGroup; 2],
+    /// The draw bind group, per current buffer and whether the last frame's
+    /// records are the other one.
+    draw: [[wgpu::BindGroup; 2]; 2],
+    /// Views culled this frame (0: none drawn).
+    culled: u32,
+    /// Per-frame upload scratch.
+    scratch: Vec<u8>,
+}
+
+/// What the CPU path keeps (see the module's docs).
+struct CpuPath {
+    records: Vec<CrowdRecord>,
+    spheres: Vec<[f32; 4]>,
+    /// Per clip: its first frame among the posed ones, how many were posed,
+    /// and every how many baked frames one was.
+    clips: Vec<(u32, u32, f32, bool, u32)>,
+    step: u32,
+    /// Per level: its posed frames, frame after frame (`None`: its mesh had
+    /// no corners on the CPU), and corners a frame.
+    posed: Vec<Option<(wgpu::Buffer, u32)>>,
+    /// This frame's characters, grouped as `runs` says.
+    instances: Option<wgpu::Buffer>,
+    instance_capacity: u32,
+    /// (view, level, posed frame, first instance, count), by view.
+    runs: Vec<(u32, u32, u32, u32, u32)>,
+    /// Per view: its range of `runs`.
+    view_runs: Vec<(u32, u32)>,
+    keys: Vec<(u64, u32)>,
+    frames: Vec<u32>,
+    out: Vec<Instance3D>,
+}
+
+/// What every crowd on the GPU path shares, made with the first one.
+struct Shared {
+    cull_layout: wgpu::BindGroupLayout,
+    cull: wgpu::ComputePipeline,
+    finish: wgpu::ComputePipeline,
+    draw_layout: wgpu::BindGroupLayout,
+    layout: wgpu::PipelineLayout,
+    shadow_layout: wgpu::PipelineLayout,
+    /// A zero-stride instance buffer for vertex slot 1 (the records come
+    /// from storage).
+    marker: wgpu::Buffer,
+    /// Storage and uniform offset alignments, in bytes.
+    storage_align: u32,
+    uniform_align: u32,
+    max_binding: u64,
+    max_groups: u32,
+}
+
+/// One material shader's crowd pipelines.
+struct CrowdSet {
+    set: Weak<ShaderPipelines>,
+    sides: Sides,
+    targets: TargetKey,
+    /// `None`: the crowd module didn't build; its crowds draw nothing.
+    pipelines: Option<Pipelines>,
+}
+
+/// The renderer's crowds (see the module's docs).
+pub(super) struct Crowds {
+    /// The shadow passes' frame layout (the renderer keeps no other copy).
+    shadow_frame: wgpu::BindGroupLayout,
+    crowds: Vec<Option<GpuCrowd>>,
+    shared: Option<Shared>,
+    sets: Vec<CrowdSet>,
+    /// This frame: the shadow views a crowd draws into.
+    shadow_mask: u32,
+    /// The last prepared frame's time.
+    last_now: Option<f32>,
+    /// Limits already reported, so each is said once.
+    reported: bool,
+}
+
+impl Crowds {
+    pub(super) fn new(shadow_frame: wgpu::BindGroupLayout) -> Self {
+        Self {
+            shadow_frame,
+            crowds: Vec::new(),
+            shared: None,
+            sets: Vec::new(),
+            shadow_mask: 0,
+            last_now: None,
+            reported: false,
+        }
+    }
+
+    /// Whether a frame draws any crowd.
+    pub(super) fn has_draws(&self) -> bool {
+        self.crowds.iter().flatten().any(|c| c.count > 0)
+    }
+
+    /// Whether the frame's cull pass runs (see `Renderer3D::cull_crowds`).
+    pub(super) fn culls(&self) -> bool {
+        self.shared.is_some()
+            && self.crowds.iter().flatten().any(|c| match &c.path {
+                Path::Gpu(g) => c.count > 0 && g.culled > 0,
+                Path::Cpu(_) => false,
+            })
+    }
+
+    /// Whether a crowd draws into shadow view `v` this frame (it moves:
+    /// the view is drawn anew).
+    pub(super) fn reaches_shadow_view(&self, v: usize) -> bool {
+        self.shadow_mask & (1 << v) != 0
+    }
+
+    /// GPU objects the crowds made: buffers, bind groups and pipelines
+    /// (none without a crowd).
+    #[cfg(test)]
+    pub(super) fn gpu_objects(&self) -> usize {
+        let crowds: usize = self
+            .crowds
+            .iter()
+            .flatten()
+            .map(|c| match &c.path {
+                Path::Gpu(_) => 14,
+                Path::Cpu(p) => p.posed.iter().flatten().count() + usize::from(p.instances.is_some()),
+            })
+            .sum();
+        crowds + if self.shared.is_some() { 8 } else { 0 } + self.sets.len()
+    }
+
+    pub(super) fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
+        use crate::render::memory::MemoryClass as C;
+        for crowd in self.crowds.iter().flatten() {
+            match &crowd.path {
+                Path::Gpu(g) => {
+                    for b in &g.records {
+                        t.buffer(C::InstanceBatches, "crowd records", b);
+                    }
+                    t.buffer(C::Skinning, "crowd animation", &g.anim);
+                    t.buffer(C::InstanceBatches, "crowd views", &g.views);
+                    t.buffer(C::InstanceBatches, "crowd visible lists", &g.visible);
+                    t.buffer(C::InstanceBatches, "crowd draws", &g.draws);
+                    t.buffer(C::InstanceBatches, "crowd levels", &g.levels);
+                    t.buffer(C::InstanceBatches, "crowd cull params", &g.params);
+                }
+                Path::Cpu(p) => {
+                    for (b, _) in p.posed.iter().flatten() {
+                        t.buffer(C::Skinning, "crowd posed frames", b);
+                    }
+                    if let Some(b) = &p.instances {
+                        t.buffer(C::InstanceBatches, "crowd instances", b);
+                    }
+                }
+            }
+        }
+        if let Some(shared) = &self.shared {
+            t.buffer(C::InstanceBatches, "crowd marker", &shared.marker);
+        }
+    }
+
+    /// The crowd pipelines of `set` drawn with `sides`, if built.
+    fn pipelines(&self, set: &Arc<ShaderPipelines>, sides: Sides) -> Option<&Pipelines> {
+        let at = Arc::as_ptr(set);
+        self.sets
+            .iter()
+            .find(|s| s.sides == sides && std::ptr::eq(s.set.as_ptr(), at))?
+            .pipelines
+            .as_ref()
+    }
+}
+
+/// A call into wgpu from the crowd code: in test builds what the call
+/// allocates is wgpu's (a test asserts the crowd code itself allocates
+/// nothing in a steady frame).
+macro_rules! gpu {
+    ($call:expr) => {{
+        #[cfg(test)]
+        let _wgpu = crate::three::lights::tests::unmarked();
+        $call
+    }};
+}
+
+/// `x` rounded up to a multiple of `to`.
+fn align(x: u64, to: u64) -> u64 {
+    x.div_ceil(to) * to
+}
+
+impl Renderer3D {
+    /// Hands crowd `id` over (`None`: it was freed or withdrawn). The same
+    /// bake and levels again only replaces the characters.
+    pub fn set_crowd(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, crowd: Option<&CrowdData>) {
+        let id = id as usize;
+        while self.crowds.crowds.len() <= id {
+            self.crowds.crowds.push(None);
+        }
+        let Some(data) = crowd else {
+            self.crowds.crowds[id] = None;
+            return;
+        };
+        let same = self.crowds.crowds[id].as_ref().is_some_and(|c| {
+            Arc::ptr_eq(&c.animation, &data.texels)
+                && c.levels.len() == data.levels.len()
+                && c.levels.iter().zip(&data.levels).all(|(l, d)| l.mesh == d.mesh.slot())
+        });
+        if !same {
+            self.crowds.crowds[id] = self.make_crowd(device, data);
+        }
+        let shared = self.crowds.shared.as_ref();
+        let Some(crowd) = self.crowds.crowds[id].as_mut() else {
+            return;
+        };
+        let before = crowd.count;
+        crowd.count = data.records.len() as u32;
+        crowd.min = data.min;
+        crowd.max = data.max;
+        crowd.updated = true;
+        match &mut crowd.path {
+            Path::Gpu(g) => {
+                let shared =
+                    shared.expect("crowds on the GPU path have their shared state; invariant: made with the first");
+                let grown = crowd.count > g.capacity;
+                if grown {
+                    g.grow(device, shared, crowd.count);
+                }
+                // The last frame's records stay in the other buffer (a new
+                // or grown crowd has none: both hold the new ones).
+                let fresh = !same || grown;
+                let next = 1 - g.current;
+                queue.uploading(Upload::StaticBatches).write_buffer(
+                    &g.records[next],
+                    0,
+                    bytemuck::cast_slice(&data.records),
+                );
+                if fresh {
+                    queue.uploading(Upload::StaticBatches).write_buffer(
+                        &g.records[1 - next],
+                        0,
+                        bytemuck::cast_slice(&data.records),
+                    );
+                } else if crowd.count > before {
+                    // Characters appended have no last record: they start
+                    // from their new one, not from what last stood there.
+                    let tail = &data.records[before as usize..];
+                    queue.uploading(Upload::StaticBatches).write_buffer(
+                        &g.records[1 - next],
+                        u64::from(before) * size_of::<CrowdRecord>() as u64,
+                        bytemuck::cast_slice(tail),
+                    );
+                }
+            }
+            Path::Cpu(p) => {
+                p.records.clear();
+                p.records.extend_from_slice(&data.records);
+                p.spheres.clear();
+                p.spheres.extend_from_slice(&data.spheres);
+            }
+        }
+    }
+
+    /// A new crowd on the path this device takes, or `None` if it can't be
+    /// drawn here (said once).
+    fn make_crowd(&mut self, device: &wgpu::Device, data: &CrowdData) -> Option<GpuCrowd> {
+        let levels: Vec<Level> = data
+            .levels
+            .iter()
+            .zip(&data.sections)
+            .map(|(l, s)| Level {
+                mesh: l.mesh.slot(),
+                min: l.min_distance,
+                max: l.max_distance,
+                camera: l.camera,
+                shadows: l.shadows && data.options.cast_shadows,
+                influences: u32::from(l.influences),
+                section: s.start,
+                slots: s.slots,
+            })
+            .collect();
+        let gpu = self.resources.storage_read.is_some() && GpuLimits::of(device).compute_culling();
+        let path = if gpu {
+            if self.crowds.shared.is_none() {
+                self.crowds.shared = Some(self.make_crowd_shared(device));
+            }
+            let shared = self.crowds.shared.as_ref()?;
+            let anim = device
+                .uploading(Upload::Skins)
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("crowd animation"),
+                    contents: bytemuck::cast_slice(&data.texels),
+                    usage: wgpu::BufferUsages::STORAGE,
+                });
+            let mut part_base = Vec::with_capacity(levels.len());
+            let mut parts = 0;
+            for level in &levels {
+                part_base.push(parts);
+                parts += self
+                    .resources
+                    .meshes
+                    .get(level.mesh as usize)
+                    .map_or(0, |m| m.parts.len() as u32);
+            }
+            Path::Gpu(Box::new(GpuPath::new(
+                device,
+                shared,
+                anim,
+                (data.records.len() as u32).max(1),
+                levels.len(),
+                parts,
+                part_base,
+            )))
+        } else {
+            Path::Cpu(Box::new(self.pose_on_cpu(device, data, &levels)))
+        };
+        Some(GpuCrowd {
+            casts: levels.iter().any(|l| l.shadows),
+            levels,
+            clips: data.clips,
+            count: 0,
+            bounds: data.bounds,
+            min: data.min,
+            max: data.max,
+            animation: data.texels.clone(),
+            epoch: None,
+            past_epoch: 0.0,
+            updated: true,
+            moved: false,
+            path,
+        })
+    }
+
+    fn make_crowd_shared(&self, device: &wgpu::Device) -> Shared {
+        let limits = device.limits();
+        let storage = |binding, read_only, visibility, dynamic| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only },
+                has_dynamic_offset: dynamic,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let uniform = |binding, visibility, dynamic| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: dynamic,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let compute = wgpu::ShaderStages::COMPUTE;
+        let cull_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("crowd cull"),
+            entries: &[
+                uniform(0, compute, false),
+                storage(1, true, compute, false),
+                storage(2, true, compute, false),
+                storage(3, false, compute, false),
+                storage(4, false, compute, false),
+            ],
+        });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("crowd cull"),
+            source: wgpu::ShaderSource::Wgsl(CULL.into()),
+        });
+        let cull_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("crowd cull"),
+            bind_group_layouts: &[Some(&cull_layout)],
+            immediate_size: 0,
+        });
+        let entry = |name| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(name),
+                layout: Some(&cull_pipeline_layout),
+                module: &module,
+                entry_point: Some(name),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        let (cull, finish) = (entry("cull"), entry("finish"));
+        // `items` and `static_indices` as material shaders declare them
+        // (their `surface` may read `items`), then the crowd's own.
+        let both = wgpu::ShaderStages::VERTEX_FRAGMENT;
+        let vertex = wgpu::ShaderStages::VERTEX;
+        let draw_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("crowd draw"),
+            entries: &[
+                storage(0, true, both, false),
+                storage(1, true, both, true),
+                storage(2, true, vertex, false),
+                storage(3, true, vertex, false),
+                uniform(4, vertex, true),
+            ],
+        });
+        let pipeline_layout = |label, frame: &wgpu::BindGroupLayout| {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(label),
+                bind_group_layouts: &[
+                    Some(frame),
+                    Some(&self.resources.material_layout),
+                    Some(&self.scene_layout),
+                    Some(&draw_layout),
+                ],
+                immediate_size: 0,
+            })
+        };
+        let layout = pipeline_layout("crowd pipeline layout", &self.frame_sources.layout);
+        let shadow_layout = pipeline_layout("crowd shadow pipeline layout", &self.crowds.shadow_frame);
+        let marker = device.new_buffer(&wgpu::BufferDescriptor {
+            label: Some("crowd instance marker"),
+            size: size_of::<Instance3D>() as u64,
+            usage: wgpu::BufferUsages::VERTEX,
+            mapped_at_creation: false,
+        });
+        Shared {
+            cull_layout,
+            cull,
+            finish,
+            draw_layout,
+            layout,
+            shadow_layout,
+            marker,
+            storage_align: limits.min_storage_buffer_offset_alignment,
+            uniform_align: limits.min_uniform_buffer_offset_alignment,
+            max_binding: limits.max_storage_buffer_binding_size.min(limits.max_buffer_size),
+            max_groups: limits.max_compute_workgroups_per_dimension,
+        }
+    }
+
+    /// The CPU path's crowd: each level's mesh posed once per kept baked
+    /// frame, into one vertex buffer per level.
+    fn pose_on_cpu(&self, device: &wgpu::Device, data: &CrowdData, levels: &[Level]) -> CpuPath {
+        let table: Vec<[f32; 4]> = data.texels[..data.clips as usize].to_vec();
+        let corners: Vec<u64> = levels
+            .iter()
+            .map(|l| {
+                self.resources
+                    .meshes
+                    .get(l.mesh as usize)
+                    .and_then(|m| m.skin.as_ref())
+                    .and_then(GpuSkin::rest_on_cpu)
+                    .map_or(0, |(v, _)| v.len() as u64)
+            })
+            .collect();
+        let kept = |step: u32| -> u64 { table.iter().map(|c| u64::from((c[1] as u32 - 1) / step + 1)).sum() };
+        let bytes = |step: u32| kept(step) * corners.iter().sum::<u64>() * size_of::<Vertex>() as u64;
+        let longest = table.iter().map(|c| c[1] as u32).max().unwrap_or(1).max(1);
+        let mut step = 1;
+        while step < longest && bytes(step) > POSED_BYTES {
+            step += 1;
+        }
+        let mut clips = Vec::with_capacity(table.len());
+        let mut first = 0;
+        for c in &table {
+            let count = (c[1] as u32 - 1) / step + 1;
+            clips.push((first, count, c[2], c[3] > 0.5, c[0] as u32));
+            first += count;
+        }
+        let mut posed = Vec::with_capacity(levels.len());
+        let mut skin = Vec::new();
+        let mut vertices: Vec<Vertex> = Vec::new();
+        for level in levels {
+            let rest = self
+                .resources
+                .meshes
+                .get(level.mesh as usize)
+                .and_then(|m| m.skin.as_ref())
+                .and_then(GpuSkin::rest_on_cpu);
+            let Some((rest, influences)) = rest.filter(|(v, _)| !v.is_empty()) else {
+                posed.push(None);
+                continue;
+            };
+            vertices.clear();
+            for (c, &(_, count, _, _, baked_first)) in table.iter().zip(&clips) {
+                let frames = c[1] as u32;
+                for k in 0..count {
+                    let g = baked_first + (k * step).min(frames - 1);
+                    skin.clear();
+                    for s in 0..level.slots {
+                        let at = (level.section + (g * level.slots + s) * 3) as usize;
+                        let [r0, r1, r2] = [0, 1, 2].map(|r| Vec4::from(data.texels[at + r]));
+                        skin.push(Mat4::from_cols(
+                            Vec4::new(r0.x, r1.x, r2.x, 0.0),
+                            Vec4::new(r0.y, r1.y, r2.y, 0.0),
+                            Vec4::new(r0.z, r1.z, r2.z, 0.0),
+                            Vec4::new(r0.w, r1.w, r2.w, 1.0),
+                        ));
+                    }
+                    vertices.extend(rest.iter().zip(influences).map(|(v, i)| {
+                        let (j, w) = top_influences(i.joints, i.weights, level.influences as u8);
+                        let m = if w.iter().sum::<f32>() > 0.0 {
+                            let last = skin.len().saturating_sub(1) as u16;
+                            crate::three::blend_skin(&skin, j.map(|j| j.min(last)), w)
+                        } else {
+                            Mat4::IDENTITY
+                        };
+                        let p = m.transform_point3(Vec3::from(v.position));
+                        let n = m.transform_vector3(Vec3::from(v.normal)).normalize_or(Vec3::Y);
+                        Vertex {
+                            position: p.to_array(),
+                            normal: n.to_array(),
+                            ..*v
+                        }
+                    }));
+                }
+            }
+            let buffer = device
+                .uploading(Upload::Skins)
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("crowd posed frames"),
+                    contents: bytemuck::cast_slice(&vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            posed.push(Some((buffer, rest.len() as u32)));
+        }
+        if step > 1 {
+            traffic::too_big(
+                "a crowd's posed frames on the CPU path",
+                bytes(1) as usize,
+                POSED_BYTES as usize,
+                &format!("every {step}th baked frame is kept; bake fewer frames or give far levels fewer corners"),
+            );
+        }
+        CpuPath {
+            records: Vec::new(),
+            spheres: Vec::new(),
+            clips,
+            step,
+            posed,
+            instances: None,
+            instance_capacity: 0,
+            runs: Vec::new(),
+            view_runs: Vec::new(),
+            keys: Vec::new(),
+            frames: Vec::new(),
+            out: Vec::new(),
+        }
+    }
+
+    /// Readies this frame's crowds: their clips' time, the views they're
+    /// culled against (on the GPU, or here on the CPU path), the shadow
+    /// views they reach, and the crowd pipelines of the materials they
+    /// draw. Runs after the batches' views are known (`prepare_static`) and
+    /// before the shadow views are planned. Nothing without a crowd.
+    pub(super) fn prepare_crowds(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &crate::three::Frame3D,
+        (now, dt): (f32, f32),
+    ) {
+        self.crowds.shadow_mask = 0;
+        if self.crowds.crowds.iter().all(Option::is_none) {
+            self.crowds.last_now = None;
+            return;
+        }
+        // Tests count what the crowd code itself allocates in a frame.
+        #[cfg(test)]
+        let _crowd_code = crate::three::lights::tests::marked();
+        let last_now = self.crowds.last_now.unwrap_or(now - dt);
+        self.crowds.last_now = Some(now);
+        let drawn = Drawn {
+            cascades: self.lists.cascades,
+            light_views: self.lists.light_views,
+            targets: 1 + MAX_CASCADES + frame.light_views,
+        };
+        let views = self.lists.gi_batch_slot.unwrap_or(self.batching.slots.len());
+        let slots = &self.batching.slots;
+        let crowds = &mut self.crowds;
+        for crowd in crowds.crowds.iter_mut().flatten() {
+            crowd.moved = std::mem::take(&mut crowd.updated);
+            // A new crowd's last frame is its first records, played back.
+            crowd.past_epoch = crowd.epoch.unwrap_or(now);
+            if crowd.moved {
+                crowd.epoch = Some(now);
+            }
+            if crowd.casts && crowd.count > 0 {
+                let casting = || crowd.levels.iter().filter(|l| l.shadows);
+                let near = casting().map(|l| l.min).fold(f32::INFINITY, f32::min);
+                let far = casting().map(|l| l.max).fold(0.0, f32::max);
+                for v in super::shadow_views(drawn.cascades, drawn.light_views) {
+                    let slot = &slots[v + 1];
+                    if intersects(crowd.min, crowd.max, &slot.planes, slot.eye, near, far) {
+                        crowds.shadow_mask |= 1 << v;
+                    }
+                }
+            }
+            let info = Frame {
+                count: crowd.count,
+                clips: crowd.clips,
+                bounds: crowd.bounds,
+                elapsed: now - crowd.epoch.unwrap_or(now),
+                past_elapsed: last_now - crowd.past_epoch,
+            };
+            let GpuCrowd {
+                levels, path, moved, ..
+            } = crowd;
+            match path {
+                Path::Gpu(g) => {
+                    let Some(shared) = &crowds.shared else { continue };
+                    if views as u32 > g.view_capacity {
+                        g.fit_views(
+                            device,
+                            queue,
+                            shared,
+                            views as u32,
+                            levels,
+                            &self.resources.meshes,
+                            &mut crowds.reported,
+                        );
+                    }
+                    g.culled = (views as u32).min(g.view_capacity);
+                    if *moved {
+                        g.current = 1 - g.current;
+                    }
+                    g.upload(queue, shared, levels, info, slots, drawn);
+                }
+                Path::Cpu(p) => {
+                    p.cull(levels, info, slots, views, drawn);
+                    p.upload(device, queue);
+                }
+            }
+        }
+        self.prepare_crowd_pipelines(device);
+    }
+
+    /// Builds the crowd pipelines of every material a GPU-path crowd draws
+    /// and drops those of shaders gone.
+    fn prepare_crowd_pipelines(&mut self, device: &wgpu::Device) {
+        let targets = self.shaders.cache.targets;
+        self.crowds
+            .sets
+            .retain(|s| s.targets == targets && s.set.strong_count() > 0);
+        for crowd in self.crowds.crowds.iter().flatten() {
+            if !matches!(crowd.path, Path::Gpu(_)) {
+                continue;
+            }
+            for level in &crowd.levels {
+                let mesh = level.mesh;
+                let Some(m) = self.resources.meshes.get(mesh as usize) else {
+                    continue;
+                };
+                for (part, &(_, own)) in m.parts.iter().enumerate() {
+                    let material = self.part_material(mesh, part, own);
+                    let Some(gm) = self.resources.materials.get(material as usize) else {
+                        continue;
+                    };
+                    let set = self.shaders.sets[gm.shader as usize].clone();
+                    let sides = Sides::of(gm.double_sided);
+                    if self.crowds.pipelines(&set, sides).is_some()
+                        || self
+                            .crowds
+                            .sets
+                            .iter()
+                            .any(|s| s.sides == sides && std::ptr::eq(s.set.as_ptr(), Arc::as_ptr(&set)))
+                    {
+                        continue;
+                    }
+                    let pipelines = self.build_crowd_pipelines(device, &set, sides);
+                    self.crowds.sets.push(CrowdSet {
+                        set: Arc::downgrade(&set),
+                        sides,
+                        targets,
+                        pipelines,
+                    });
+                }
+            }
+        }
+    }
+
+    /// A material shader's crowd pipelines for `sides`, or `None` (said)
+    /// if its code doesn't build with the crowd's parts.
+    fn build_crowd_pipelines(
+        &self,
+        device: &wgpu::Device,
+        set: &Arc<ShaderPipelines>,
+        sides: Sides,
+    ) -> Option<Pipelines> {
+        let shared = self.crowds.shared.as_ref()?;
+        let source = self.shaders.compose_like(set, compose_crowd)?;
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("crowd material"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let builder = super::shaders::SideBuilder {
+            module,
+            layout: shared.layout.clone(),
+            shadow_layout: shared.shadow_layout.clone(),
+            crowd: true,
+            ..set.builder.clone()
+        };
+        let pipelines = builder.build(ShaderVariant::new(sides, Instancing::Plain));
+        match super::end_scope(scope, false) {
+            Ok(None) => Some(pipelines),
+            Ok(Some(error)) => {
+                traffic::warn(&format!(
+                    "a crowd's material shader doesn't build with the crowd's vertex code (its crowds draw nothing): {error}"
+                ));
+                None
+            }
+            Err(_) => Some(pipelines),
+        }
+    }
+
+    /// The crowds' cull pass (GPU path), at the start of the frame.
+    pub(super) fn cull_crowds<'t>(&self, encoder: &mut wgpu::CommandEncoder, time: &super::PassTimer<'_, 't>) {
+        if self.extra || !self.crowds.culls() {
+            return;
+        }
+        let Some(shared) = &self.crowds.shared else { return };
+        super::passes::mark("static cull");
+        for crowd in self.crowds.crowds.iter().flatten() {
+            if let Path::Gpu(g) = &crowd.path
+                && crowd.count > 0
+                && g.culled > 0
+            {
+                let counts = u64::from(g.view_capacity) * crowd.levels.len() as u64 * 4;
+                encoder.clear_buffer(&g.draws, 0, Some(counts));
+            }
+        }
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("crowd cull"),
+            timestamp_writes: time("crowd cull").map(|t| wgpu::ComputePassTimestampWrites {
+                query_set: t.query_set,
+                beginning_of_pass_write_index: t.beginning_of_pass_write_index,
+                end_of_pass_write_index: t.end_of_pass_write_index,
+            }),
+        });
+        for crowd in self.crowds.crowds.iter().flatten() {
+            let Path::Gpu(g) = &crowd.path else { continue };
+            if crowd.count == 0 || g.culled == 0 {
+                continue;
+            }
+            pass.set_bind_group(0, &g.cull[g.current], &[]);
+            let groups = crowd.count.div_ceil(64);
+            let row = groups.min(shared.max_groups);
+            pass.set_pipeline(&shared.cull);
+            pass.dispatch_workgroups(row, groups.div_ceil(row), 1);
+            pass.set_pipeline(&shared.finish);
+            pass.dispatch_workgroups((g.culled * g.parts).div_ceil(64), 1, 1);
+        }
+    }
+
+    /// Draws every crowd's levels that `view` sees, for one pass (`view`
+    /// as the batches number them: 0 the camera, then the shadow views,
+    /// then target cameras). Neither global illumination's views nor
+    /// window views draw crowds.
+    pub(super) fn draw_crowds(&self, pass: &mut wgpu::RenderPass<'_>, kind: Kind, view: usize) {
+        if self.extra || kind == Kind::VelocityStill || self.crowds.crowds.is_empty() {
+            return;
+        }
+        let mut n = super::draw_order::StateChanges::default();
+        for crowd in self.crowds.crowds.iter().flatten() {
+            if crowd.count == 0 {
+                continue;
+            }
+            match &crowd.path {
+                Path::Gpu(g) => self.draw_gpu_crowd(pass, &mut n, crowd, g, kind, view),
+                Path::Cpu(p) if kind != Kind::Velocity => self.draw_cpu_crowd(pass, &mut n, crowd, p, kind, view),
+                Path::Cpu(_) => {}
+            }
+        }
+        self.state_counters.add(&n);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_gpu_crowd(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        n: &mut super::draw_order::StateChanges,
+        crowd: &GpuCrowd,
+        g: &GpuPath,
+        kind: Kind,
+        view: usize,
+    ) {
+        let Some(shared) = &self.crowds.shared else { return };
+        if view as u32 >= g.culled {
+            return;
+        }
+        let shadow = matches!(kind, Kind::Shadow(_));
+        let levels = crowd.levels.len();
+        let mut bound_buffers = false;
+        for (l, level) in crowd.levels.iter().enumerate() {
+            if !(if shadow { level.shadows } else { level.camera }) {
+                continue;
+            }
+            let Some(mesh) = self.resources.meshes.get(level.mesh as usize) else {
+                continue;
+            };
+            let (Some((vertices, indices)), Some(skin)) = (mesh.buffers(&self.resources.mesh_arena), &mesh.skin) else {
+                continue;
+            };
+            let list = (view * levels + l) as u64;
+            let offsets = [
+                (list * u64::from(g.region) * 4) as u32,
+                (l as u64 * u64::from(shared.uniform_align)) as u32,
+            ];
+            let mut level_bound = false;
+            for (part, (_, own)) in mesh.parts.iter().enumerate() {
+                let material = self.part_material(level.mesh, part, *own);
+                let Some(m) = self.resources.materials.get(material as usize) else {
+                    continue;
+                };
+                let Some(role) = self.draw_role(kind, material, m) else {
+                    continue;
+                };
+                let shader = &self.shaders.sets[m.shader as usize];
+                let Some(pipeline) = self
+                    .crowds
+                    .pipelines(shader, Sides::of(m.double_sided))
+                    .and_then(|p| p.for_kind(kind, role))
+                else {
+                    continue;
+                };
+                pass.set_pipeline(pipeline);
+                n.pipelines += 1;
+                if !bound_buffers {
+                    pass.set_vertex_buffer(1, shared.marker.slice(..));
+                    n.vertex_buffers += 1;
+                    bound_buffers = true;
+                }
+                if !level_bound {
+                    pass.set_vertex_buffer(0, vertices.slice(..));
+                    pass.set_vertex_buffer(2, skin.influences().slice(..));
+                    pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_bind_group(3, &g.draw[g.current][usize::from(crowd.moved)], &offsets);
+                    n.vertex_buffers += 2;
+                    n.index_buffers += 1;
+                    n.bind_groups += 1;
+                    level_bound = true;
+                }
+                pass.set_bind_group(1, &m.bind_group, &[]);
+                n.bind_groups += 1;
+                let draw = u64::from(g.parts) * view as u64 + u64::from(g.part_base[l]) + part as u64;
+                let at = u64::from(g.view_capacity) * levels as u64 * 4 + draw * ARGS;
+                pass.draw_indexed_indirect(&g.draws, at);
+                n.draws += 1;
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_cpu_crowd(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        n: &mut super::draw_order::StateChanges,
+        crowd: &GpuCrowd,
+        p: &CpuPath,
+        kind: Kind,
+        view: usize,
+    ) {
+        let (Some(&(start, end)), Some(instances)) = (p.view_runs.get(view), &p.instances) else {
+            return;
+        };
+        let mut dummy = false;
+        for &(_, l, frame, first, count) in &p.runs[start as usize..end as usize] {
+            let level = &crowd.levels[l as usize];
+            let Some((posed, corners)) = &p.posed[l as usize] else {
+                continue;
+            };
+            let Some(mesh) = self.resources.meshes.get(level.mesh as usize) else {
+                continue;
+            };
+            let Some((_, indices)) = mesh.buffers(&self.resources.mesh_arena) else {
+                continue;
+            };
+            let frame_bytes = u64::from(*corners) * size_of::<Vertex>() as u64;
+            let mut bound = false;
+            for (part, (range, own)) in mesh.parts.iter().enumerate() {
+                let material = self.part_material(level.mesh, part, *own);
+                let Some(m) = self.resources.materials.get(material as usize) else {
+                    continue;
+                };
+                let Some(role) = self.draw_role(kind, material, m) else {
+                    continue;
+                };
+                let shader = &self.shaders.sets[m.shader as usize];
+                let variant = ShaderVariant::new(Sides::of(m.double_sided), Instancing::Plain);
+                let Some(pipeline) = self.draw_pipeline(shader, material, variant, kind, role) else {
+                    continue;
+                };
+                pass.set_pipeline(pipeline);
+                n.pipelines += 1;
+                if let Some(d) = self.resources.storage_dummy.as_ref().filter(|_| !dummy) {
+                    pass.set_bind_group(3, d, &[]);
+                    n.bind_groups += 1;
+                    dummy = true;
+                }
+                if let Some(reference) = self.stencil.reference(material) {
+                    pass.set_stencil_reference(reference);
+                }
+                if !bound {
+                    let at = u64::from(frame) * frame_bytes;
+                    pass.set_vertex_buffer(0, posed.slice(at..at + frame_bytes));
+                    let at = u64::from(first) * size_of::<Instance3D>() as u64;
+                    pass.set_vertex_buffer(
+                        1,
+                        instances.slice(at..at + u64::from(count) * size_of::<Instance3D>() as u64),
+                    );
+                    pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                    n.vertex_buffers += 2;
+                    n.index_buffers += 1;
+                    bound = true;
+                }
+                pass.set_bind_group(1, &m.bind_group, &[]);
+                n.bind_groups += 1;
+                pass.draw_indexed(range.clone(), 0, 0..count);
+                n.draws += 1;
+            }
+        }
+    }
+}
+
+impl GpuPath {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        device: &wgpu::Device,
+        shared: &Shared,
+        anim: wgpu::Buffer,
+        capacity: u32,
+        levels: usize,
+        parts: u32,
+        part_base: Vec<u32>,
+    ) -> Self {
+        let records = Self::records(device, capacity);
+        let params = device.new_buffer(&wgpu::BufferDescriptor {
+            label: Some("crowd cull params"),
+            size: PARAMS,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let level_buffer = device.new_buffer(&wgpu::BufferDescriptor {
+            label: Some("crowd levels"),
+            size: levels as u64 * u64::from(shared.uniform_align),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let (views, visible, draws) = Self::view_buffers(device, 1, 1, 1, 1);
+        let cull = Self::cull_groups(device, shared, &records, &params, &views, &visible, &draws);
+        let draw = Self::draw_groups(device, shared, &records, &visible, &anim, &level_buffer, 4);
+        Self {
+            records,
+            capacity,
+            current: 0,
+            anim,
+            params,
+            levels: level_buffer,
+            views,
+            visible,
+            draws,
+            view_capacity: 0,
+            region: 1,
+            parts,
+            part_base,
+            cull,
+            draw,
+            culled: 0,
+            scratch: Vec::new(),
+        }
+    }
+
+    fn records(device: &wgpu::Device, capacity: u32) -> [wgpu::Buffer; 2] {
+        [0, 1].map(|_| {
+            device.new_buffer(&wgpu::BufferDescriptor {
+                label: Some("crowd records"),
+                size: u64::from(capacity) * size_of::<CrowdRecord>() as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        })
+    }
+
+    /// The views, visible lists and draws buffers for `views` views of
+    /// `levels` levels, `region` entries a list and `parts` draws a view.
+    fn view_buffers(
+        device: &wgpu::Device,
+        views: u32,
+        levels: u32,
+        region: u32,
+        parts: u32,
+    ) -> (wgpu::Buffer, wgpu::Buffer, wgpu::Buffer) {
+        let views_buffer = device.new_buffer(&wgpu::BufferDescriptor {
+            label: Some("crowd views"),
+            size: (u64::from(views) * 7 + u64::from(parts.div_ceil(4)).max(1)) * 16,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let visible = device.new_buffer(&wgpu::BufferDescriptor {
+            label: Some("crowd visible lists"),
+            size: u64::from(views) * u64::from(levels) * u64::from(region) * 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let draws = device.new_buffer(&wgpu::BufferDescriptor {
+            label: Some("crowd draws"),
+            size: (u64::from(views) * u64::from(levels) * 4 + u64::from(views) * u64::from(parts).max(1) * ARGS)
+                .max(16),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        (views_buffer, visible, draws)
+    }
+
+    fn cull_groups(
+        device: &wgpu::Device,
+        shared: &Shared,
+        records: &[wgpu::Buffer; 2],
+        params: &wgpu::Buffer,
+        views: &wgpu::Buffer,
+        visible: &wgpu::Buffer,
+        draws: &wgpu::Buffer,
+    ) -> [wgpu::BindGroup; 2] {
+        records.each_ref().map(|r| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("crowd cull"),
+                layout: &shared.cull_layout,
+                entries: &[params, r, views, visible, draws]
+                    .iter()
+                    .enumerate()
+                    .map(|(binding, b)| wgpu::BindGroupEntry {
+                        binding: binding as u32,
+                        resource: b.as_entire_binding(),
+                    })
+                    .collect::<Vec<_>>(),
+            })
+        })
+    }
+
+    /// The draw groups: per current buffer, the last frame's records the
+    /// same buffer (`[c][0]`) or the other (`[c][1]`); `static_indices` a
+    /// list of `list_bytes`, the level uniform one level's.
+    fn draw_groups(
+        device: &wgpu::Device,
+        shared: &Shared,
+        records: &[wgpu::Buffer; 2],
+        visible: &wgpu::Buffer,
+        anim: &wgpu::Buffer,
+        levels: &wgpu::Buffer,
+        list_bytes: u64,
+    ) -> [[wgpu::BindGroup; 2]; 2] {
+        fn sized(buffer: &wgpu::Buffer, size: u64) -> wgpu::BindingResource<'_> {
+            wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer,
+                offset: 0,
+                size: wgpu::BufferSize::new(size),
+            })
+        }
+        let group = |current: usize, past: usize| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("crowd draw"),
+                layout: &shared.draw_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: records[current].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: sized(visible, list_bytes),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: records[past].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: anim.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: sized(levels, 32),
+                    },
+                ],
+            })
+        };
+        [[group(0, 0), group(0, 1)], [group(1, 1), group(1, 0)]]
+    }
+
+    /// Room for `capacity` records (the last ones are lost: the next frame
+    /// draws no motion from them).
+    fn grow(&mut self, device: &wgpu::Device, shared: &Shared, capacity: u32) {
+        self.capacity = capacity;
+        self.records = Self::records(device, capacity);
+        // The lists grow with the records: made again with the views.
+        self.view_capacity = 0;
+        self.rebind(device, shared);
+    }
+
+    fn rebind(&mut self, device: &wgpu::Device, shared: &Shared) {
+        self.cull = Self::cull_groups(
+            device,
+            shared,
+            &self.records,
+            &self.params,
+            &self.views,
+            &self.visible,
+            &self.draws,
+        );
+        let list_bytes = u64::from(self.region) * 4;
+        self.draw = Self::draw_groups(
+            device,
+            shared,
+            &self.records,
+            &self.visible,
+            &self.anim,
+            &self.levels,
+            list_bytes,
+        );
+    }
+
+    /// Room for `views` views' lists and draws (as many as the device's
+    /// storage binding holds), with the draws' fixed words written.
+    #[allow(clippy::too_many_arguments)]
+    fn fit_views(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        shared: &Shared,
+        views: u32,
+        levels: &[Level],
+        meshes: &[super::GpuMesh],
+        reported: &mut bool,
+    ) {
+        let l = levels.len() as u64;
+        let per_entry = u64::from(shared.storage_align / 4).max(1);
+        let region = align(1 + u64::from(self.capacity), per_entry);
+        let list_bytes = region * 4;
+        let most = (shared.max_binding / (l * list_bytes).max(1)) as u32;
+        let capacity = views.min(most).max(1);
+        if capacity < views && !*reported {
+            *reported = true;
+            traffic::too_big(
+                "a crowd's visible lists",
+                (u64::from(views) * l * list_bytes) as usize,
+                shared.max_binding as usize,
+                "the crowd isn't drawn in the last views (target cameras first)",
+            );
+        }
+        self.region = region as u32;
+        self.view_capacity = capacity;
+        (self.views, self.visible, self.draws) =
+            Self::view_buffers(device, capacity, l as u32, self.region, self.parts);
+        // The draws' fixed words: index count and first index of each part.
+        let mut args: Vec<u32> = Vec::with_capacity((capacity * self.parts * 5) as usize);
+        for _ in 0..capacity {
+            for level in levels {
+                if let Some(mesh) = meshes.get(level.mesh as usize) {
+                    for (range, _) in &mesh.parts {
+                        args.extend([range.end - range.start, 0, range.start, 0, 0]);
+                    }
+                }
+            }
+        }
+        if !args.is_empty() {
+            let at = u64::from(capacity) * l * 4;
+            queue
+                .uploading(Upload::StaticBatches)
+                .write_buffer(&self.draws, at, bytemuck::cast_slice(&args));
+        }
+        self.rebind(device, shared);
+    }
+
+    /// This frame's cull uniform, views and level uniforms.
+    fn upload(
+        &mut self,
+        queue: &wgpu::Queue,
+        shared: &Shared,
+        levels: &[Level],
+        crowd: Frame,
+        slots: &[super::instances::SlotView],
+        drawn: Drawn,
+    ) {
+        // The cull uniform.
+        let mut params = [0u32; (PARAMS / 4) as usize];
+        let groups = crowd.count.div_ceil(64);
+        let row = groups.min(shared.max_groups).max(1);
+        params[..8].copy_from_slice(&[
+            crowd.count,
+            self.culled,
+            levels.len() as u32,
+            self.parts,
+            self.region,
+            self.view_capacity * levels.len() as u32,
+            row * 64,
+            0,
+        ]);
+        let (center, radius) = crowd.bounds;
+        params[8..12].copy_from_slice(&[center.x, center.y, center.z, radius].map(f32::to_bits));
+        for (l, level) in levels.iter().enumerate() {
+            let band = [
+                level.min,
+                level.max,
+                f32::from(u8::from(level.camera)),
+                f32::from(u8::from(level.shadows)),
+            ];
+            params[12 + l * 4..16 + l * 4].copy_from_slice(&band.map(f32::to_bits));
+        }
+        gpu!(
+            queue
+                .uploading(Upload::StaticBatches)
+                .write_buffer(&self.params, 0, bytemuck::cast_slice(&params))
+        );
+        // The views (one not drawn this frame culls everything), then each
+        // draw's level.
+        let scratch = &mut self.scratch;
+        scratch.clear();
+        for (s, slot) in slots.iter().enumerate().take(self.culled as usize) {
+            for plane in slot.planes {
+                let plane = if drawn.slot(s) {
+                    plane.to_array()
+                } else {
+                    [0.0, 0.0, 0.0, -1e30]
+                };
+                scratch.extend_from_slice(bytemuck::cast_slice(&plane));
+            }
+            let eye = [slot.eye.x, slot.eye.y, slot.eye.z, f32::from(u8::from(drawn.shadow(s)))];
+            scratch.extend_from_slice(bytemuck::cast_slice(&eye));
+        }
+        for (l, &base) in self.part_base.iter().enumerate() {
+            let end = self.part_base.get(l + 1).copied().unwrap_or(self.parts);
+            for _ in base..end {
+                scratch.extend_from_slice(&(l as u32).to_ne_bytes());
+            }
+        }
+        scratch.resize(
+            align(scratch.len() as u64, 16) as usize + 16 * usize::from(self.parts == 0),
+            0,
+        );
+        gpu!(
+            queue
+                .uploading(Upload::StaticBatches)
+                .write_buffer(&self.views, 0, scratch)
+        );
+        // The levels' uniforms.
+        let stride = shared.uniform_align as usize;
+        scratch.clear();
+        scratch.resize(levels.len() * stride, 0);
+        for (l, level) in levels.iter().enumerate() {
+            let words = [
+                level.section,
+                level.slots,
+                level.influences,
+                crowd.clips,
+                crowd.elapsed.to_bits(),
+                crowd.past_elapsed.to_bits(),
+                0,
+                0,
+            ];
+            scratch[l * stride..l * stride + 32].copy_from_slice(bytemuck::cast_slice(&words));
+        }
+        gpu!(
+            queue
+                .uploading(Upload::StaticBatches)
+                .write_buffer(&self.levels, 0, scratch)
+        );
+    }
+}
+
+impl CpuPath {
+    /// The baked frame nearest each character's time, among the posed ones.
+    fn frame_of(&self, record: &CrowdRecord, elapsed: f32) -> u32 {
+        let [clips, ta, tb, packed] = record.anim;
+        let blend = (packed & 0xffff) as f32 / 65535.0;
+        let speed = f32::from((packed >> 16) as u16 as i16) / 256.0;
+        let (clip, time) = if blend >= 0.5 {
+            (clips >> 16, f32::from_bits(tb))
+        } else {
+            (clips & 0xffff, f32::from_bits(ta))
+        };
+        let Some(&(first, count, fps, looping, _)) = self.clips.get(clip as usize).or(self.clips.last()) else {
+            return 0;
+        };
+        let step = self.step as f32;
+        // In baked frames, then among the posed ones (every `step`th).
+        let last = ((count - 1) * self.step) as f32;
+        let mut p = (time + speed * elapsed) * fps;
+        p = if looping && last > 0.0 {
+            p.rem_euclid(last)
+        } else {
+            p.clamp(0.0, last)
+        };
+        first + ((p / step).round() as u32).min(count - 1)
+    }
+
+    /// Culls the characters against this frame's views on the CPU and
+    /// groups the visible ones by (view, level, posed frame).
+    fn cull(
+        &mut self,
+        levels: &[Level],
+        crowd: Frame,
+        slots: &[super::instances::SlotView],
+        views: usize,
+        drawn: Drawn,
+    ) {
+        self.frames.clear();
+        for i in 0..self.records.len() {
+            let f = self.frame_of(&self.records[i], crowd.elapsed);
+            self.frames.push(f);
+        }
+        self.keys.clear();
+        for (v, slot) in slots.iter().enumerate().take(views) {
+            if !drawn.slot(v) {
+                continue;
+            }
+            let shadow = drawn.shadow(v);
+            for (i, s) in self.spheres.iter().enumerate() {
+                let center = Vec3::new(s[0], s[1], s[2]);
+                if !slot.planes.iter().all(|p| p.truncate().dot(center) + p.w >= -s[3]) {
+                    continue;
+                }
+                let m = &self.records[i].instance.model;
+                let distance = Vec3::new(m[3][0], m[3][1], m[3][2]).distance(slot.eye);
+                for (l, level) in levels.iter().enumerate() {
+                    let kind = if shadow { level.shadows } else { level.camera };
+                    if kind && distance >= level.min && distance < level.max {
+                        let key = (v as u64) << 40 | (l as u64) << 32 | u64::from(self.frames[i]);
+                        self.keys.push((key, i as u32));
+                    }
+                }
+            }
+        }
+        self.keys.sort_unstable();
+        self.out.clear();
+        self.runs.clear();
+        self.view_runs.clear();
+        self.view_runs.resize(views, (0, 0));
+        for &(key, i) in &self.keys {
+            let (v, l, f) = ((key >> 40) as u32, (key >> 32) as u32 & 0xff, key as u32);
+            match self.runs.last_mut() {
+                Some(run) if (run.0, run.1, run.2) == (v, l, f) => run.4 += 1,
+                _ => self.runs.push((v, l, f, self.out.len() as u32, 1)),
+            }
+            self.out.push(self.records[i as usize].instance);
+        }
+        let mut start = 0;
+        for (v, range) in self.view_runs.iter_mut().enumerate() {
+            let end = start + self.runs[start..].iter().take_while(|r| r.0 == v as u32).count();
+            *range = (start as u32, end as u32);
+            start = end;
+        }
+    }
+
+    fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let count = self.out.len() as u32;
+        if count > self.instance_capacity || self.instances.is_none() {
+            self.instance_capacity = count.max(64).next_power_of_two();
+            self.instances = Some(device.new_buffer(&wgpu::BufferDescriptor {
+                label: Some("crowd instances"),
+                size: u64::from(self.instance_capacity) * size_of::<Instance3D>() as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        if let Some(buffer) = &self.instances
+            && count > 0
+        {
+            gpu!(
+                queue
+                    .uploading(Upload::StaticBatches)
+                    .write_buffer(buffer, 0, bytemuck::cast_slice(&self.out))
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+impl Renderer3D {
+    /// GPU objects made for crowds (see [`Crowds::gpu_objects`]).
+    pub(crate) fn crowd_gpu_objects(&self) -> usize {
+        self.crowds.gpu_objects()
+    }
+
+    /// Whether this frame runs the crowds' cull pass.
+    pub(crate) fn crowds_cull(&self) -> bool {
+        self.crowds.culls()
+    }
+
+    /// Whether crowd `id` takes the GPU path (`None`: no such crowd).
+    pub(crate) fn crowd_on_gpu(&self, id: u32) -> Option<bool> {
+        let crowd = self.crowds.crowds.get(id as usize)?.as_ref()?;
+        Some(matches!(crowd.path, Path::Gpu(_)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crowd_shaders_compose_on_the_mesh_shader() {
+        // A game shader that reads `items` and moves vertices with time.
+        let game = "fn vertex(v: Vertex) -> Vertex {
+            var out = v;
+            out.position.y += sin(frame.time.x) * 0.01 + items[0].x * 0.0;
+            return out;
+        }";
+        for user in ["", game] {
+            for (decals, gi) in [(false, false), (true, false), (true, true)] {
+                let drawn = super::super::vertex_motion::with_past(user);
+                let source = compose_crowd(&drawn, decals, gi);
+                assert!(source.contains("crowd_joints") && source.contains("fn static_instance"));
+                assert_eq!(
+                    source.matches("fn static_instance").count(),
+                    1,
+                    "the batches' helper is replaced"
+                );
+                for samples in [1, 4] {
+                    super::super::shaders::check_shader(
+                        "crowd material",
+                        &super::super::shaders::for_samples(&source, samples, false),
+                    )
+                    .unwrap_or_else(|e| panic!("{e}"));
+                }
+            }
+        }
+        super::super::shaders::check_shader("crowd cull", CULL).unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    #[test]
+    fn drawn_slots_are_the_camera_the_frames_shadow_views_and_targets() {
+        let d = Drawn {
+            cascades: 2,
+            light_views: 1,
+            targets: 1 + MAX_CASCADES + 1,
+        };
+        let drawn: Vec<bool> = (0..d.targets + 2).map(|s| d.slot(s)).collect();
+        let mut expected = vec![true, true, true];
+        expected.extend(std::iter::repeat_n(false, MAX_CASCADES - 2));
+        expected.extend([true, true, true]);
+        assert_eq!(drawn, expected);
+        assert!(!d.shadow(0) && d.shadow(1) && d.shadow(d.targets - 1) && !d.shadow(d.targets));
+    }
+}

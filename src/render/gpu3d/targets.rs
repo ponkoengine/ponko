@@ -166,6 +166,7 @@ impl Renderer3D {
                 .frame_sources
                 .bind_group(device, &target.frame_buffer, &target.lights);
         }
+        self.rebind_view_model(device);
         self.rebind_gi(device);
     }
 
@@ -277,6 +278,7 @@ impl Renderer3D {
             &scene_view,
             depth_copy.as_ref().map_or(&depth_read, |c| &c.view),
             self.scene_depth_sampler.as_ref(),
+            self.no_spread.as_ref(),
         );
         let scene_of_hdr = scene_bind_group(
             device,
@@ -284,6 +286,7 @@ impl Renderer3D {
             &hdr,
             &depth_read,
             self.scene_depth_sampler.as_ref(),
+            self.no_spread.as_ref(),
         );
         let velocity = self
             .screen
@@ -299,12 +302,16 @@ impl Renderer3D {
             Some(t) => &t.input_view,
             None => &hdr,
         };
-        let ssr = self
-            .screen
-            .ssr
-            .as_ref()
-            .filter(|_| self.screen.ssr_on)
-            .map(|s| s.targets(device, size, &depth_read, lit, self.screen.ao_enabled));
+        let ssr = self.screen.ssr.as_ref().filter(|_| self.screen.ssr_on).map(|s| {
+            s.targets(
+                device,
+                size,
+                &depth_read,
+                lit,
+                self.screen.ao_enabled,
+                self.no_spread.is_some(),
+            )
+        });
         // With reflections, GTAO writes the first level of their image.
         let ao = self.screen.ao.as_ref().filter(|_| self.screen.ao_enabled).map(|ao| {
             ao.targets(
@@ -325,6 +332,10 @@ impl Renderer3D {
                 screen,
                 &self.dummy_depth,
                 self.scene_depth_sampler.as_ref(),
+                // The reflections' spread, where the opaque pass reads it.
+                self.no_spread
+                    .as_ref()
+                    .map(|stand_in| ssr.as_ref().map_or(stand_in, |s| s.spread().1)),
             )
         });
         Targets {
@@ -668,6 +679,7 @@ pub(in crate::render) fn scene_bind_group(
     color: &wgpu::TextureView,
     depth: &wgpu::TextureView,
     depth_sampler: Option<&wgpu::Sampler>,
+    spread: Option<&wgpu::TextureView>,
 ) -> wgpu::BindGroup {
     let mut entries = vec![
         wgpu::BindGroupEntry {
@@ -684,6 +696,14 @@ pub(in crate::render) fn scene_bind_group(
         entries.push(wgpu::BindGroupEntry {
             binding: 2,
             resource: wgpu::BindingResource::Sampler(sampler),
+        });
+    }
+    // With a texture slot for it: the reflections' spread image, or its
+    // stand-in (see `GpuLimits::reflection_spread`).
+    if let Some(spread) = spread {
+        entries.push(wgpu::BindGroupEntry {
+            binding: 3,
+            resource: wgpu::BindingResource::TextureView(spread),
         });
     }
     device.create_bind_group(&wgpu::BindGroupDescriptor {

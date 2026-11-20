@@ -34,9 +34,14 @@ libc = "0.2"
 
 [features]
 render = ["ponko/window"]
+# The positional sound benchmark (`audio3d/...`): Kira, mixing offline.
+audio = ["ponko/audio", "ponko/3d"]
 # The text benchmarks' shaped cases, and the ASCII case with shaping
 # compiled in (its cost must match the build without it).
 text-shaping = ["ponko/text-shaping"]
+# The video benchmark (`video/frame`): decoding a clip named by
+# PONKO_BENCH_VIDEO.
+video = ["ponko/video"]
 
 [[bin]]
 name = "instances"
@@ -50,6 +55,10 @@ path = "src/bin/characters.rs"
 [[bin]]
 name = "saves"
 path = "src/bin/saves.rs"
+
+[[bin]]
+name = "replication"
+path = "src/bin/replication.rs"
 
 [[bin]]
 name = "render_compare"

@@ -248,7 +248,7 @@ fn images_the_engine_reads_as_rgba8_anyway_are_kept() {
     for (name, why) in [
         ("heights.png", "16 bits"),
         ("odd.png", "not a multiple of 4"),
-        ("skins/rock a.png", "glTF model's image"),
+        ("skins/rock a.png", "no material uses"),
     ] {
         match outcome(&cooked, name) {
             Outcome::Kept(Some(reason)) => assert!(reason.contains(why), "{name}: {reason}"),
@@ -389,6 +389,60 @@ fn cook_command_writes_a_folder_it_owns_and_a_pack() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A `.gltf` file reading `models/<bin>` as its buffer.
+#[cfg(feature = "meshes")]
+fn gltf_with_buffer(bin: &str) -> (Vec<u8>, Vec<u8>) {
+    let (mut json, data) = gltf::tests::grid(3);
+    json["buffers"][0]["uri"] = serde_json::json!(bin);
+    (serde_json::to_vec(&json).unwrap(), data)
+}
+
+#[cfg(feature = "meshes")]
+#[test]
+fn a_cooked_gltf_leaves_out_the_buffers_its_glb_holds() {
+    let (text, data) = gltf_with_buffer("grid.bin");
+    let files = vec![
+        ("models/grid.gltf".to_string(), text.clone()),
+        ("models/grid.bin".to_string(), data.clone()),
+    ];
+    let cooked = cook_files(files, &Config::default(), &settings(None)).unwrap();
+    assert!(file(&cooked, "models/grid.gltf").starts_with(b"glTF"));
+    assert!(
+        !cooked.files.iter().any(|(n, _)| n == "models/grid.bin"),
+        "{}",
+        cooked.report()
+    );
+    assert_eq!(
+        outcome(&cooked, "models/grid.bin"),
+        Outcome::Embedded("models/grid.gltf".into())
+    );
+    assert!(
+        cooked
+            .report()
+            .contains("models/grid.bin: left out, inside models/grid.gltf")
+    );
+
+    // A model that stays as it is still reads it; so does one a rule keeps.
+    let (mut kept, _) = gltf_with_buffer("grid.bin");
+    let mut json: serde_json::Value = serde_json::from_slice(&kept).unwrap();
+    json["extensionsUsed"] = serde_json::json!(["EXT_unknown"]);
+    kept = serde_json::to_vec(&json).unwrap();
+    let files = vec![
+        ("models/grid.gltf".to_string(), text.clone()),
+        ("models/other.gltf".to_string(), kept),
+        ("models/grid.bin".to_string(), data.clone()),
+    ];
+    let cooked = cook_files(files, &Config::default(), &settings(None)).unwrap();
+    assert_eq!(file(&cooked, "models/grid.bin"), data.as_slice());
+    let files = vec![
+        ("models/grid.gltf".to_string(), text),
+        ("models/grid.bin".to_string(), data.clone()),
+    ];
+    let config = Config::parse(r#"{"assets": {"models/*.bin": "keep"}}"#).unwrap();
+    let cooked = cook_files(files, &config, &settings(None)).unwrap();
+    assert_eq!(file(&cooked, "models/grid.bin"), data.as_slice());
+}
+
 /// The shared fixture `tests/fixtures/cook/` (at the repository root):
 /// `source/` and what `ponko cook` makes of it in `cooked/`. The engine's
 /// test `tests/cooked_assets.rs` loads both through the same calls and
@@ -406,30 +460,47 @@ fn the_shared_cook_fixture_is_what_cook_makes_of_its_source() {
                 flac::tests::wav(22_050, 1, 16, &flac::tests::tone(2_205, 1, 16)),
             ),
             ("grid.glb".to_string(), gltf::tests::glb(&json, &bin)),
+            ("panel.glb".to_string(), {
+                let (json, bin) = gltf::tests::textured(2, 32);
+                gltf::tests::glb(&json, &bin)
+            }),
+            ("level.glb".to_string(), {
+                let (json, bin) = gltf::tests::level(4, 12.0, 4);
+                gltf::tests::glb(&json, &bin)
+            }),
+            ("hero.aseprite".to_string(), super::aseprite::tests::hero()),
         ];
+        let mut source = source;
+        source.extend(model_with_image_files(32));
         let _ = std::fs::remove_dir_all(&root);
         for (name, bytes) in &source {
-            std::fs::create_dir_all(root.join("source")).unwrap();
-            std::fs::write(root.join("source").join(name), bytes).unwrap();
+            let path = root.join("source").join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
         }
         let cooked = cook_files(source, &Config::default(), &settings(None)).unwrap();
         for (name, bytes) in &cooked.files {
-            std::fs::create_dir_all(root.join("cooked")).unwrap();
-            std::fs::write(root.join("cooked").join(name), bytes).unwrap();
+            let path = root.join("cooked").join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
         }
     }
     let source = read_folder(&root.join("source"), None).unwrap();
     let committed = read_folder(&root.join("cooked"), None).unwrap();
     let cooked = cook_files(source, &Config::default(), &settings(None)).unwrap();
-    assert_eq!(cooked.counts().0, 3, "{}", cooked.report());
+    assert_eq!(cooked.counts().0, 10, "{}", cooked.report());
+    assert_eq!(cooked.files.len(), committed.len(), "{}", cooked.report());
     for ((name, now), (committed_name, then)) in cooked.files.iter().zip(&committed) {
         assert_eq!(name, committed_name);
         // FLAC is integer arithmetic: the same bytes everywhere. Texture
         // and mesh encoders use floats, so another CPU may round a last
         // bit differently: the same format and layout.
         match name.as_str() {
-            "beep.wav" => assert_eq!(now, then, "{name}"),
-            "tile.png" => assert_eq!(now[..48], then[..48], "{name}: the same KTX2 header"),
+            // So are the Aseprite file's sheet (kept as PNG: 14 x 10
+            // isn't a multiple of 4) and its JSON.
+            // The occlusion image merged into the crate's ORM is kept.
+            "beep.wav" | "hero.json" | "hero.png" | "maps/crate_ao.png" => assert_eq!(now, then, "{name}"),
+            _ if name.ends_with(".png") => assert_eq!(now[..48], then[..48], "{name}: the same KTX2 header"),
             _ => assert_eq!(
                 gltf_json(now).unwrap()["accessors"],
                 gltf_json(then).unwrap()["accessors"],
@@ -437,4 +508,208 @@ fn the_shared_cook_fixture_is_what_cook_makes_of_its_source() {
             ),
         }
     }
+}
+
+/// A rule as `cook.json` writes it (only what it sets).
+fn rule_json(rule: &Rule) -> serde_json::Value {
+    if rule.keep {
+        return "keep".into();
+    }
+    if rule.skip {
+        return "skip".into();
+    }
+    let mut m = serde_json::Map::new();
+    if let Some(t) = rule.texture {
+        let name = match t {
+            TextureKind::Color => "color",
+            TextureKind::Linear => "linear",
+            TextureKind::Normal => "normal",
+            TextureKind::Mask => "mask",
+            TextureKind::Keep => "keep",
+        };
+        m.insert("texture".into(), name.into());
+    }
+    let flags = [
+        ("basis", rule.basis),
+        ("mipmaps", rule.mipmaps),
+        ("optimize", rule.optimize),
+        ("quantize", rule.quantize),
+    ];
+    for (key, v) in flags {
+        if let Some(v) = v {
+            m.insert(key.into(), v.into());
+        }
+    }
+    if let Some(flac) = rule.flac {
+        m.insert("audio".into(), if flac { "flac" } else { "keep" }.into());
+    }
+    if let Some(s) = rule.shader {
+        m.insert("shader".into(), s.name().into());
+    }
+    serde_json::Value::Object(m)
+}
+
+/// The editor shows and writes these settings; its tests read the same
+/// fixture (`tests/fixtures/cook-rules/` at the repository root).
+#[test]
+fn the_editor_fixture_gives_the_rules_the_editor_shows() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/cook-rules");
+    let config = Config::parse(&std::fs::read_to_string(root.join(CONFIG)).unwrap()).unwrap();
+    let expected: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("expected.json")).unwrap()).unwrap();
+    for (path, want) in expected.as_object().unwrap() {
+        assert_eq!(&rule_json(&config.rule_for(path)), want, "{path}");
+    }
+}
+
+/// A `.gltf` (the grid) whose material reads its images from files: a
+/// color image, a normal map, and metallic-roughness and occlusion images
+/// in a folder of their own, `size` x `size` each.
+#[cfg(all(feature = "textures", feature = "meshes"))]
+fn model_with_image_files(size: u32) -> Vec<(String, Vec<u8>)> {
+    let (mut json, bin) = gltf::tests::grid(2);
+    json["materials"] = serde_json::json!([{
+        "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}, "metallicRoughnessTexture": {"index": 2}},
+        "normalTexture": {"index": 1},
+        "occlusionTexture": {"index": 3}
+    }]);
+    json["meshes"][0]["primitives"][0]["material"] = serde_json::json!(0);
+    json["textures"] = serde_json::json!([{"source": 0}, {"source": 1}, {"source": 2}, {"source": 3}]);
+    json["images"] = serde_json::json!([
+        {"uri": "crate.png"}, {"uri": "crate_n.png"}, {"uri": "../maps/crate_mr.png"}, {"uri": "../maps/crate_ao.png"}
+    ]);
+    let solid = |rgba: [u8; 4]| {
+        let image = image::RgbaImage::from_pixel(size, size, image::Rgba(rgba));
+        let mut out = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    vec![
+        ("models/crate.glb".to_string(), gltf::tests::glb(&json, &bin)),
+        ("models/crate.png".to_string(), png(size, size)),
+        ("models/crate_n.png".to_string(), solid([128, 128, 255, 255])),
+        ("maps/crate_mr.png".to_string(), solid([0, 200, 30, 255])),
+        ("maps/crate_ao.png".to_string(), solid([90, 90, 90, 255])),
+    ]
+}
+
+/// The image files a model reads are compressed for their use, whether the
+/// model itself is cooked or kept: color BC7 sRGB, the normal map BC5, and
+/// the metallic-roughness image with the occlusion merged into its red as
+/// the engine merges it (BC7, linear), carrying the `ponkoOrm` key that
+/// names both files, so the engine keeps it compressed. The occlusion file
+/// stays as it is.
+#[cfg(all(feature = "textures", feature = "meshes"))]
+#[test]
+fn a_models_image_files_are_compressed_for_their_use_with_the_occlusion_merged() {
+    use crate::textures::tests::{decode, read};
+    for config in [
+        Config::default(),
+        Config::parse(r#"{"assets": {"models/crate.glb": "keep"}}"#).unwrap(),
+    ] {
+        let cooked = cook_files(model_with_image_files(8), &config, &settings(None)).unwrap();
+        let format = |name: &str| read(file(&cooked, name)).0.format;
+        assert_eq!(format("models/crate.png"), Some(ktx2::Format::BC7_SRGB_BLOCK));
+        assert_eq!(format("models/crate_n.png"), Some(ktx2::Format::BC5_UNORM_BLOCK));
+        let orm = file(&cooked, "maps/crate_mr.png");
+        let (header, levels) = read(orm);
+        assert_eq!(header.format, Some(ktx2::Format::BC7_UNORM_BLOCK));
+        let note: Vec<(String, Vec<u8>)> = ktx2::Reader::new(orm)
+            .unwrap()
+            .key_value_data()
+            .map(|(k, v)| (k.to_string(), v.to_vec()))
+            .collect();
+        assert!(
+            note.iter()
+                .any(|(k, v)| k == "ponkoOrm" && v == b"crate_mr.png|crate_ao.png\0"),
+            "{note:?}"
+        );
+        let pixels = decode(ktx2::Format::BC7_UNORM_BLOCK, &levels[0], 8, 8);
+        for p in pixels.chunks(4) {
+            assert!((i32::from(p[0]) - 90).abs() <= 2, "occlusion in red: {p:?}");
+            assert!((i32::from(p[1]) - 200).abs() <= 2, "roughness in green: {p:?}");
+            assert!((i32::from(p[2]) - 30).abs() <= 2, "metalness in blue: {p:?}");
+        }
+        match outcome(&cooked, "maps/crate_ao.png") {
+            Outcome::Kept(Some(why)) => assert!(why.contains("merged into maps/crate_mr.png"), "{why}"),
+            other => panic!("{other:?}"),
+        }
+        let gpu: Vec<(u64, u64)> = cooked
+            .entries
+            .iter()
+            .filter(|e| e.name.ends_with(".png"))
+            .filter_map(|e| e.gpu)
+            .collect();
+        let (before, after) = gpu.iter().fold((0, 0), |(a, b), g| (a + g.0, b + g.1));
+        eprintln!("the crate's image files: {before} bytes of video memory as RGBA8, {after} cooked");
+        assert!(after * 3 < before, "{before} -> {after}");
+    }
+}
+
+/// A model that reads the same metallic-roughness image with two occlusion
+/// images can't have both merged into it: it stays as it is, and the
+/// engine merges each pair.
+#[cfg(all(feature = "textures", feature = "meshes"))]
+#[test]
+fn a_metallic_roughness_image_with_two_occlusions_is_kept() {
+    let mut files = model_with_image_files(8);
+    let other = {
+        let (mut json, bin) = gltf::tests::grid(2);
+        json["materials"] = serde_json::json!([{
+            "pbrMetallicRoughness": {"metallicRoughnessTexture": {"index": 0}},
+            "occlusionTexture": {"index": 1}
+        }]);
+        json["textures"] = serde_json::json!([{"source": 0}, {"source": 1}]);
+        json["images"] = serde_json::json!([{"uri": "maps/crate_mr.png"}, {"uri": "maps/crate_ao2.png"}]);
+        gltf::tests::glb(&json, &bin)
+    };
+    files.push(("barrel.glb".to_string(), other));
+    files.push(("maps/crate_ao2.png".to_string(), png(8, 8)));
+    let cooked = cook_files(files, &Config::default(), &settings(None)).unwrap();
+    match outcome(&cooked, "maps/crate_mr.png") {
+        Outcome::Kept(Some(why)) => assert!(why.contains("two uses"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// An Aseprite file is cooked into the export the engine reads, in its
+/// place; an export already beside it (from Aseprite, for hot reload while
+/// developing) is replaced by the one made from the file, and `"keep"`
+/// keeps the Aseprite file and its export as they are.
+#[cfg(all(feature = "aseprite", feature = "textures"))]
+#[test]
+fn an_aseprite_file_is_cooked_into_its_export_replacing_an_old_one() {
+    let hero = super::aseprite::tests::hero();
+    let fresh = cook_files(
+        vec![("art/hero.aseprite".into(), hero.clone())],
+        &Config::default(),
+        &settings(None),
+    )
+    .unwrap();
+    let names: Vec<&str> = fresh.files.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["art/hero.json", "art/hero.png"]);
+    let old = vec![
+        ("art/hero.aseprite".to_string(), hero),
+        ("art/hero.json".to_string(), b"{}".to_vec()),
+        ("art/hero.png".to_string(), png(4, 4)),
+    ];
+    let cooked = cook_files(old.clone(), &Config::default(), &settings(None)).unwrap();
+    assert_eq!(cooked.files, fresh.files, "the old export is replaced");
+    let entry = cooked.entries.iter().find(|e| e.name == "art/hero.aseprite").unwrap();
+    assert!(
+        entry
+            .note
+            .contains("replacing the art/hero.json and art/hero.png beside it"),
+        "{}",
+        entry.note
+    );
+    let kept = cook_files(
+        old,
+        &Config::parse(r#"{"assets": {"art/hero.aseprite": "keep"}}"#).unwrap(),
+        &settings(None),
+    )
+    .unwrap();
+    let names: Vec<&str> = kept.files.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["art/hero.aseprite", "art/hero.json", "art/hero.png"]);
+    assert_eq!(file(&kept, "art/hero.json"), b"{}");
 }

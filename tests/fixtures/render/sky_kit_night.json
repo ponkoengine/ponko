@@ -1,0 +1,17 @@
+{
+  "name": "sky_kit_night",
+  "scene": "the sky kit at 23:00: a waning gibbous moon over the dark land, stars, moonlit clouds",
+  "width": 192,
+  "height": 112,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 16,
+    "outliers": 0.015,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "62927bb314f8f0c6",
+  "reason": "new: the sky kit at four times of day"
+}

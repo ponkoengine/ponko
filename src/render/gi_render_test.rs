@@ -9,7 +9,7 @@ use crate::prelude::*;
 use crate::render::{GlobalIllumination, MaterialDesc, Mesh, MeshData, Model};
 use crate::three::{GpuMaterialDesc, Scene3D, SkinFrame, SkyLight};
 
-const SIZE: u32 = 128;
+pub(super) const SIZE: u32 = 128;
 
 /// How a scene's boxes are made.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -22,15 +22,15 @@ enum Build {
 }
 
 /// An offscreen renderer with a 1x1 white texture, and a `Ctx` to fill.
-struct Rig {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    output: wgpu::Texture,
-    target: wgpu::TextureView,
-    textures: Vec<GpuTexture>,
-    renderer: Box<Renderer3D>,
-    ctx: Box<Ctx>,
-    size: (u32, u32),
+pub(super) struct Rig {
+    pub(super) device: wgpu::Device,
+    pub(super) queue: wgpu::Queue,
+    pub(super) output: wgpu::Texture,
+    pub(super) target: wgpu::TextureView,
+    pub(super) textures: Vec<GpuTexture>,
+    pub(super) renderer: Box<Renderer3D>,
+    pub(super) ctx: Box<Ctx>,
+    pub(super) size: (u32, u32),
     /// The instance batches (one per mesh, in the order the meshes first
     /// come) and cells [`blocks`](Self::blocks) made.
     batches: Vec<crate::render::InstanceBatch>,
@@ -41,18 +41,30 @@ impl Rig {
     /// `None` without a GPU that can draw global illumination. `slots`
     /// false: a device at the default limits (16 texture slots, as WebGL2),
     /// which can't.
-    fn new(slots: bool) -> Option<Self> {
+    pub(super) fn new(slots: bool) -> Option<Self> {
         Self::sized(slots, (SIZE, SIZE))
     }
 
     /// [`new`](Self::new), drawing `size` pixels, with GPU timestamps
     /// where the GPU has them.
-    fn sized(slots: bool, size: (u32, u32)) -> Option<Self> {
+    pub(super) fn sized(slots: bool, size: (u32, u32)) -> Option<Self> {
+        Self::opened(Some(slots), size)
+    }
+
+    /// [`new`](Self::new) on whatever texture slots the device (or the
+    /// forced tier) has: for what draws on any of them.
+    pub(super) fn any() -> Option<Self> {
+        Self::opened(None, (SIZE, SIZE))
+    }
+
+    /// A rig drawing `size` pixels; `slots`: as [`sized`](Self::sized),
+    /// `None` takes the device as it comes.
+    fn opened(slots: Option<bool>, size: (u32, u32)) -> Option<Self> {
         let gpu = crate::render::render_test_support::gpu_with(|adapter| {
             // As the engine asks: more texture slots where the adapter has them.
             Ok(wgpu::DeviceDescriptor {
                 required_limits: wgpu::Limits {
-                    max_sampled_textures_per_shader_stage: if slots {
+                    max_sampled_textures_per_shader_stage: if slots != Some(false) {
                         adapter.limits().max_sampled_textures_per_shader_stage.clamp(16, 24)
                     } else {
                         16
@@ -64,7 +76,9 @@ impl Rig {
             })
         })?;
         let (device, queue) = (gpu.device, gpu.queue);
-        if supports_gi(&device) != slots {
+        if let Some(slots) = slots
+            && supports_gi(&device) != slots
+        {
             crate::render::render_test_support::skip(format_args!(
                 "the device {} the texture slot global illumination needs, and this test wants the opposite",
                 if slots { "lacks" } else { "has" }
@@ -174,7 +188,7 @@ impl Rig {
     }
 
     /// A mesh of `data` with `desc`, on the CPU and the GPU.
-    fn mesh(&mut self, data: &MeshData, desc: MaterialDesc) -> Mesh {
+    pub(super) fn mesh(&mut self, data: &MeshData, desc: MaterialDesc) -> Mesh {
         let material = self.ctx.gfx.create_material(desc);
         let mesh = self.ctx.gfx.create_mesh(data, material);
         self.renderer
@@ -186,7 +200,7 @@ impl Rig {
 
     /// Draws `frames` frames (the probes update a few each) and reads the
     /// last one back (RGBA).
-    fn draw(&mut self, frames: usize) -> Vec<u8> {
+    pub(super) fn draw(&mut self, frames: usize) -> Vec<u8> {
         for _ in 0..frames {
             let _ = self.frame(None);
         }
@@ -195,7 +209,7 @@ impl Rig {
 
     /// Collects and draws one frame, timed by `timer`; returns how long the
     /// GPU took from the submit to finishing it, in milliseconds.
-    fn frame(&mut self, mut timer: Option<&mut super::timer::GpuTimer>) -> f64 {
+    pub(super) fn frame(&mut self, mut timer: Option<&mut super::timer::GpuTimer>) -> f64 {
         if let Some(t) = timer.as_deref_mut() {
             t.collect(&self.device);
             t.begin_frame();
@@ -260,7 +274,7 @@ impl Rig {
     }
 
     /// The last frame drawn (RGBA).
-    fn read_back(&self) -> Vec<u8> {
+    pub(super) fn read_back(&self) -> Vec<u8> {
         let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: u64::from(self.size.0 * self.size.1 * 4),
@@ -470,7 +484,7 @@ impl Rig {
     }
 
     /// The color of the world point `p` in `pixels`.
-    fn at(&self, pixels: &[u8], p: Vec3) -> [i32; 3] {
+    pub(super) fn at(&self, pixels: &[u8], p: Vec3) -> [i32; 3] {
         let c = self.ctx.scene3d.camera.view_proj() * p.extend(1.0);
         let ndc = c.truncate() / c.w;
         let x = ((ndc.x * 0.5 + 0.5) * SIZE as f32) as u32;
@@ -760,6 +774,151 @@ fn probe_views_leave_out_subpixel_instances_of_level_batches_too() {
     assert_eq!(levels, one, "a batch of levels keeps what a batch of one mesh keeps");
 }
 
+/// A field of `n` x `n` cubes 0.5 apart around the origin, each `size` wide.
+fn cube_field(n: usize, size: f32) -> Vec<Mat4> {
+    let half = (n - 1) as f32 * 0.25;
+    (0..n * n)
+        .map(|k| {
+            let at = vec3((k / n) as f32 * 0.5 - half, 0.5, (k % n) as f32 * 0.5 - half);
+            Mat4::from_scale_rotation_translation(Vec3::splat(size), Quat::IDENTITY, at)
+        })
+        .collect()
+}
+
+/// The probe grid of the subpixel tests, its 16 probes a frame by the camera.
+fn field_gi(rig: &mut Rig, enabled: bool) {
+    rig.ctx.scene3d.lighting.gi = GlobalIllumination {
+        enabled,
+        extent: vec3(12.0, 6.0, 12.0),
+        spacing: 1.0,
+        probes_per_frame: crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME,
+        intensity: 1.0,
+    };
+    rig.ctx.scene3d.camera.position = vec3(0.3, 2.0, 0.2);
+    rig.ctx.scene3d.camera.look_at(vec3(5.0, 0.0, 3.0));
+}
+
+#[test]
+fn level_batches_keep_probe_radii_only_while_gi_is_on() {
+    // A batch of distance levels on the CPU path keeps 4 bytes an
+    // instance for the probes' size cut: none while global illumination
+    // is off, and none again once it was off for good.
+    let Some(mut rig) = Rig::new(true) else {
+        return;
+    };
+    rig.renderer.batching.path = BatchPath::Cpu;
+    let cube = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
+    let tiny = cube_field(41, 0.1);
+    let level = |min_distance, max_distance| crate::render::InstanceLevel {
+        mesh: cube,
+        min_distance,
+        max_distance,
+        camera: true,
+        shadows: true,
+    };
+    let levels = [level(0.0, 5.0), level(5.0, f32::INFINITY)];
+    let options = crate::render::InstanceBatchOptions::default();
+    let batch = rig.ctx.gfx.create_instance_batch_levels(&levels, &tiny, &[], options);
+    let one = rig.ctx.gfx.create_instance_batch(cube, &tiny, options);
+    rig.sync_row(batch.id);
+    rig.sync_row(one.id);
+    let radii = tiny.len().div_ceil(4) * 16;
+    field_gi(&mut rig, false);
+    let _ = rig.draw(3);
+    let (off, shared) = rig.renderer.probe_radii_bytes(batch.id);
+    eprintln!("{} instances: {off} bytes of probe radii with GI off", tiny.len());
+    assert_eq!(off, 0, "GI off: nothing per instance");
+    assert!(shared, "the bounding spheres are the engine's, not a copy");
+    // On: built the first frame, and the cut is the same as before.
+    rig.ctx.scene3d.lighting.gi.enabled = true;
+    let _ = rig.draw(1);
+    let on = rig.renderer.probe_radii_bytes(batch.id).0;
+    eprintln!("{on} bytes with GI on");
+    assert_eq!(on, radii, "on: 4 bytes an instance");
+    let count = |rig: &Rig, b: crate::render::InstanceBatch| rig.renderer.probe_view_instances(b.id);
+    let (in_levels, in_one) = (count(&rig, batch), count(&rig, one));
+    assert!(in_one > 0, "the probes see the nearest ones: {in_one}");
+    assert_eq!(in_levels, in_one, "levels cut as a batch of one mesh does");
+    // A batch made while it is on has them at once.
+    let later = rig.ctx.gfx.create_instance_batch_levels(&levels, &tiny, &[], options);
+    rig.sync_row(later.id);
+    assert_eq!(rig.renderer.probe_radii_bytes(later.id).0, radii);
+    // Off for a moment: kept. Off for good: dropped.
+    rig.ctx.scene3d.lighting.gi.enabled = false;
+    let _ = rig.draw(Renderer3D::PROBE_RADII_FRAMES as usize - 1);
+    assert_eq!(rig.renderer.probe_radii_bytes(batch.id).0, radii, "off for a moment");
+    rig.ctx.scene3d.lighting.gi.enabled = true;
+    let _ = rig.draw(1);
+    rig.ctx.scene3d.lighting.gi.enabled = false;
+    let _ = rig.draw(Renderer3D::PROBE_RADII_FRAMES as usize);
+    for b in [batch, later] {
+        assert_eq!(rig.renderer.probe_radii_bytes(b.id).0, 0, "off for good");
+    }
+    // And on again: the same cut.
+    rig.ctx.scene3d.lighting.gi.enabled = true;
+    let _ = rig.draw(1);
+    assert_eq!(rig.renderer.probe_radii_bytes(batch.id).0, radii);
+    assert_eq!(count(&rig, batch), count(&rig, one));
+}
+
+#[test]
+fn gpu_probe_views_leave_out_subpixel_instances() {
+    // The CPU path's size cut, on the GPU path: tiny cubes and big ones at
+    // the same places, culled on the GPU. The probes' face views keep the
+    // tiny ones only near this frame's probes.
+    let Some(mut rig) = Rig::new(true) else {
+        return;
+    };
+    rig.renderer.batching.path = BatchPath::Gpu;
+    let cube = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
+    let options = crate::render::InstanceBatchOptions::default();
+    let tiny = rig.ctx.gfx.create_instance_batch(cube, &cube_field(41, 0.1), options);
+    let large = rig.ctx.gfx.create_instance_batch(cube, &cube_field(41, 2.0), options);
+    for batch in [tiny, large] {
+        rig.sync_row(batch.id);
+        if rig.renderer.batch_route(batch.id) != Some(Route::Gpu) {
+            crate::render::render_test_support::skip("no GPU culling");
+            return;
+        }
+    }
+    field_gi(&mut rig, true);
+    let mut counts = [[0; 2]; 2];
+    for (cut, row) in [false, true].into_iter().zip(&mut counts) {
+        rig.renderer.batching.no_probe_cut = !cut;
+        // The same probes, the frame with and without the cut: the grid
+        // starts over for each.
+        rig.ctx.scene3d.lighting.gi.enabled = false;
+        let _ = rig.draw(1);
+        rig.ctx.scene3d.lighting.gi.enabled = true;
+        let _ = rig.draw(1);
+        for (count, batch) in row.iter_mut().zip([tiny, large]) {
+            *count = rig.renderer.gpu_probe_view_instances(&rig.device, &rig.queue, batch.id);
+        }
+    }
+    let [[tiny_before, large_before], [tiny_after, large_after]] = counts;
+    eprintln!(
+        "instances drawn in the probes' face views, before the cut: {tiny_before} tiny, \
+         {large_before} big; with it: {tiny_after} tiny, {large_after} big"
+    );
+    assert!(
+        large_before > 1000,
+        "positive control: the views see the field: {large_before}"
+    );
+    assert_eq!(
+        large_after, large_before,
+        "big ones are all wider than a pixel: all kept"
+    );
+    assert!(
+        tiny_before > 1000,
+        "without the cut, the tiny ones are drawn too: {tiny_before}"
+    );
+    assert!(
+        tiny_after * 4 < tiny_before,
+        "most tiny ones are left out: {tiny_after} of {tiny_before}"
+    );
+    assert!(tiny_after > 0, "the ones near the probes are kept: {tiny_after}");
+}
+
 #[test]
 fn without_the_texture_slot_bounced_light_is_skipped() {
     // As on WebGL2: the frame is the same as with it off.
@@ -951,6 +1110,101 @@ fn gi_cost_in(glass: Option<crate::render::Blend>, with_bushes: bool) {
     for ((label, _), (gpu, wait, cpu, parts)) in settings.iter().zip(&best) {
         println!(
             "gi {label} ({scene}): GPU frame {gpu:.3} ms ({parts}); submit to done {wait:.3} ms; collect {cpu:.3} ms"
+        );
+    }
+}
+
+/// GPU cost of global illumination's passes at 1920x1080 over a field of
+/// small instances culled on the GPU: 160,000 pebbles (12-segment spheres
+/// 0.1 wide, 0.25 apart over 100 x 100) on a ground, 16 probes a frame.
+/// Rounds with the probes' size cut and without it (as before it) take
+/// turns, so both see the same load; each round is 40 frames after 10 to
+/// settle. Run in release (`cargo test --release --lib --features 3d --
+/// --ignored --nocapture gi_cost_small_instances`); prints each setting's
+/// median round: the GI passes' GPU time, the GPU frame, and the pebbles
+/// drawn in the probes' face views.
+#[test]
+#[ignore = "benchmark: run in release"]
+fn gi_cost_small_instances() {
+    let Some(mut rig) = Rig::sized(true, (1920, 1080)) else {
+        return;
+    };
+    let Some(mut timer) = super::timer::GpuTimer::new(&rig.device, &rig.queue) else {
+        crate::render::render_test_support::skip("no GPU timestamps");
+        return;
+    };
+    let ground = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
+    rig.block(ground, vec3(-60.0, -1.0, -60.0), vec3(60.0, 0.0, 60.0));
+    let pebble = rig.mesh(
+        &MeshData::sphere(0.05, 12),
+        MaterialDesc::color(Color::rgb(0.5, 0.45, 0.4)),
+    );
+    let n = 400;
+    let pebbles: Vec<Mat4> = (0..n * n)
+        .map(|k| Mat4::from_translation(vec3((k / n) as f32 * 0.25 - 50.0, 0.05, (k % n) as f32 * 0.25 - 50.0)))
+        .collect();
+    rig.renderer.batching.path = BatchPath::Gpu;
+    let batch = rig
+        .ctx
+        .gfx
+        .create_instance_batch(pebble, &pebbles, crate::render::InstanceBatchOptions::default());
+    rig.sync_row(batch.id);
+    if rig.renderer.batch_route(batch.id) != Some(Route::Gpu) {
+        crate::render::render_test_support::skip("no GPU culling");
+        return;
+    }
+    rig.ctx.scene3d.lighting.sun_direction = vec3(-0.4, -1.0, -0.3);
+    rig.ctx.scene3d.lighting.gi = GlobalIllumination {
+        enabled: true,
+        probes_per_frame: crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME,
+        ..Default::default()
+    };
+    rig.ctx.scene3d.camera.position = vec3(1.0, 1.7, 1.0);
+    rig.ctx.scene3d.camera.look_at(vec3(20.0, 0.0, 12.0));
+    rig.ctx.scene3d.camera.far = 200.0;
+    // (GI passes, frame, pebbles in the probe views, culling) of each round.
+    let mut rounds: [Vec<(f32, f32, u32, f32)>; 2] = [Vec::new(), Vec::new()];
+    for _ in 0..6 {
+        for (cut, round) in [false, true].into_iter().zip(&mut rounds) {
+            rig.renderer.batching.no_probe_cut = !cut;
+            for _ in 0..10 {
+                let _ = rig.frame(Some(&mut timer));
+            }
+            let (mut frames, mut gi, mut total, mut cull) = (0, 0.0, 0.0, 0.0);
+            let mut read = timer.frames_read;
+            for _ in 0..40 {
+                let _ = rig.frame(Some(&mut timer));
+                if timer.frames_read != read {
+                    read = timer.frames_read;
+                    frames += 1;
+                    let spans = &timer.last_frame;
+                    let end = spans.iter().map(|p| p.start_ms + p.ms).fold(0.0, f32::max);
+                    total += end - spans.iter().map(|p| p.start_ms).fold(f32::MAX, f32::min);
+                    gi += spans
+                        .iter()
+                        .filter(|p| p.name.starts_with("gi"))
+                        .map(|p| p.ms)
+                        .sum::<f32>();
+                    cull += spans
+                        .iter()
+                        .filter(|p| p.name == "static instance cull")
+                        .map(|p| p.ms)
+                        .sum::<f32>();
+                }
+            }
+            let drawn = rig.renderer.gpu_probe_view_instances(&rig.device, &rig.queue, batch.id);
+            let n = frames.max(1) as f32;
+            round.push((gi / n, total / n, drawn, cull / n));
+        }
+    }
+    for (label, round) in ["without the size cut", "with the size cut"].iter().zip(&mut rounds) {
+        round.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (gi, frame, drawn, cull) = round[round.len() / 2];
+        let all: Vec<String> = round.iter().map(|r| format!("{:.3}", r.0)).collect();
+        println!(
+            "gi small instances, {label}: GI passes {gi:.3} ms (rounds {}), instance culling \
+             {cull:.3} ms, GPU frame {frame:.3} ms, {drawn} pebbles in the probes' face views",
+            all.join(" ")
         );
     }
 }

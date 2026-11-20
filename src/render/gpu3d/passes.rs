@@ -74,8 +74,14 @@ pub(crate) enum Resource {
     BufferPasts,
     /// The sky in every direction.
     SkyTexture,
-    /// The filtered sky and probe maps that image-based lighting reads.
+    /// The filtered sky and probe maps that image-based lighting reads
+    /// (and the sky kit's cloud shadow map, in a corner of the same atlas).
     Environment,
+    /// The sky kit's cloud march, at half the frame's size.
+    CloudTrace,
+    /// The sky kit's resolved clouds: this frame's, and last frame's that
+    /// the resolve reprojects.
+    CloudHistory,
     /// The sun's shadow cascades. Cascades not redrawn are kept from an
     /// earlier frame.
     SunShadowMap,
@@ -129,13 +135,15 @@ pub(crate) enum Resource {
     /// occlusion) from.
     ScreenImage,
     /// The reflections' filtered levels, before they are copied into the
-    /// screen image.
+    /// screen image, and beside the first the hits' means for the spread's
+    /// fill.
     ReflectionLevels,
     /// The reflection cone's spread, as the trace writes it: where its
     /// rays found something.
     ReflectionHits,
-    /// The reflection cone's spread filled in where the rays found nothing,
-    /// before it is copied into the screen image's first level.
+    /// The reflection cone's spread filled in where the rays found nothing:
+    /// the opaque pass reads it, or a copy in the screen image's first
+    /// level.
     ReflectionSpread,
     /// Last frame's opaque image, which reflections trace against.
     ReflectionHistory,
@@ -221,7 +229,7 @@ pub(crate) struct Desc {
 
 impl Resource {
     /// Every resource, in declaration order.
-    pub(crate) const ALL: [Resource; 47] = {
+    pub(crate) const ALL: [Resource; 49] = {
         use Resource::*;
         [
             VisibleDraws,
@@ -234,6 +242,8 @@ impl Resource {
             BufferPasts,
             SkyTexture,
             Environment,
+            CloudTrace,
+            CloudHistory,
             SunShadowMap,
             LightShadowAtlas,
             TargetDepth,
@@ -298,6 +308,8 @@ impl Resource {
             Resource::BufferPasts => desc("GPU buffers' last frame", Persistent, F::Buffer, One),
             Resource::SkyTexture => desc("sky texture", Persistent, F::Hdr, One),
             Resource::Environment => desc("environment maps", Persistent, F::Hdr, One),
+            Resource::CloudTrace => desc("cloud trace", Frame, F::Hdr, One),
+            Resource::CloudHistory => desc("cloud history", Persistent, F::Hdr, One),
             Resource::SunShadowMap => desc("sun shadow map", Persistent, F::Depth, One),
             Resource::LightShadowAtlas => desc("light shadow atlas", Persistent, F::Depth, One),
             Resource::TargetDepth => desc("target camera depth", Frame, F::Depth, Scene),
@@ -443,6 +455,15 @@ features! {
     /// Depth of field: it swaps the frame between the lit frame and the
     /// effects' scratch once more, like one more screen effect.
     DOF = 39, "depth of field";
+    /// The opaque pass reads the reflections' spread image directly: the
+    /// device has a texture slot for it.
+    SSR_SPREAD = 40, "reflection spread slot";
+    /// The sky kit's cloud shadow map is drawn.
+    CLOUD_SHADOWS = 41, "cloud shadows";
+    /// The sky kit's volumetric clouds are marched, resolved and composited.
+    CLOUDS = 42, "volumetric clouds";
+    /// The sky kit's air lookup is drawn (with the sky texture).
+    KIT_SKY = 43, "sky kit lookup";
 }
 
 impl Features {
@@ -463,6 +484,7 @@ impl Features {
         (Features::AO_TEMPORAL, Features::AO),
         (Features::AO_TEMPORAL, Features::VELOCITY),
         (Features::SSR_LEVELS, Features::SSR),
+        (Features::SSR_SPREAD, Features::SSR),
         (Features::GI_UPDATE, Features::GI),
     ];
 
@@ -884,6 +906,32 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 on(F::SKY_MAPS),
                 &[u(SkyTexture, A::CopyFrom), u(Environment, A::CopyTo)],
             ),
+            // The air alone, through the sky texture into the atlas.
+            step(
+                "sky kit lookup",
+                on(F::KIT_SKY),
+                &[
+                    u(SkyTexture, A::Color),
+                    u(SkyTexture, A::CopyFrom),
+                    u(Environment, A::CopyTo),
+                ],
+            ),
+            // Into its own square of the environment atlas.
+            step("cloud shadows", on(F::CLOUD_SHADOWS), &[u(Environment, A::Color)]),
+            step(
+                "clouds",
+                on(F::CLOUDS),
+                &[u(CloudHistory, A::SamplePrevious), u(CloudTrace, A::Color)],
+            ),
+            step(
+                "cloud resolve",
+                on(F::CLOUDS),
+                &[
+                    u(CloudTrace, A::Sample),
+                    u(CloudHistory, A::SamplePrevious),
+                    u(CloudHistory, A::Color),
+                ],
+            ),
         ],
     },
     Pass {
@@ -990,6 +1038,9 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 ],
             ),
             // Before ambient occlusion: its denoise copies the cone's spread.
+            // With the spread image read directly and without ambient
+            // occlusion, the first frame also clears the screen image's first
+            // level to say the reflections are there; nothing else writes it.
             step(
                 "reflections",
                 on(F::SSR),
@@ -1000,35 +1051,39 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                     u(ReflectionHits, A::Color),
                 ],
             ),
-            // The trace's level, filtered into the levels below it.
+            // The trace's level, filtered into the levels below it, and its
+            // hits averaged over 4x4 and 16x16 of their pixels for the
+            // spread's fill.
             step(
                 "reflection levels",
                 on(F::SSR_LEVELS),
                 &[
                     u(ScreenImage, A::Read),
+                    u(ReflectionHits, A::Read),
                     u(ReflectionLevels, A::Write),
                     u(ReflectionLevels, A::CopyFrom),
                     u(ScreenImage, A::CopyTo),
                 ],
             ),
-            // The cone's spread where the rays found nothing, near a filtered
-            // level's hits (or the trace's, without them).
+            // The cone's spread where the rays found nothing: the nearest
+            // hits' mean, beside the first level. (Without the levels, on
+            // tiny screens, it reads a blank stand-in.)
             step(
                 "reflection spread",
                 on(F::SSR),
                 &[
                     u(ReflectionHits, A::Sample),
-                    u(ScreenImage, A::Sample),
+                    u(ReflectionLevels, A::Sample).on(F::SSR_LEVELS),
                     u(ReflectionSpread, A::Color),
                 ],
             ),
-            // Without ambient occlusion: the first level's mark and the
-            // cone's spread.
+            // Without ambient occlusion and a slot for the spread image: the
+            // first level's mark and the cone's spread.
             step(
                 "reflection mark",
                 When {
                     all: F::SSR,
-                    none: F::AO,
+                    none: F::AO.with(F::SSR_SPREAD),
                 },
                 &[u(ReflectionSpread, A::Sample), u(ScreenImage, A::Color)],
             ),
@@ -1072,8 +1127,11 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 lit_models![
                     u(TargetImage, A::Sample),
                     u(GiProbes, A::Sample),
+                    // The resolved clouds, over the sky.
+                    u(CloudHistory, A::Sample).on(F::CLOUDS),
                     u(AmbientOcclusion, A::Sample).on(F::AO).off(F::SSR),
                     u(ScreenImage, A::Sample).on(F::SSR),
+                    u(ReflectionSpread, A::Sample).on(F::SSR_SPREAD),
                     u(SceneDepth, A::DepthLoad),
                     // The lit frame: resolved from the multisampled color, or
                     // drawn directly with one sample; into temporal

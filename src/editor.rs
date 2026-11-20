@@ -16,6 +16,30 @@ use serde_json::{Value, json};
 use crate::{ctx::Ctx, reflect::WorldReflect};
 use glam::Vec2;
 
+#[cfg(feature = "editor")]
+#[path = "editor_cook.rs"]
+pub(crate) mod cook;
+#[path = "editor_document.rs"]
+mod document;
+#[cfg(feature = "editor")]
+#[path = "editor_play.rs"]
+pub(crate) mod play;
+#[cfg(feature = "editor")]
+#[path = "editor_prefab.rs"]
+pub(crate) mod prefab;
+#[cfg(feature = "editor")]
+#[path = "editor_thumbs.rs"]
+pub(crate) mod thumbs;
+#[cfg(feature = "editor")]
+pub(crate) use document::DiskChange;
+
+/// How often the document's file is looked at for changes (for tests).
+#[cfg(all(test, feature = "editor"))]
+pub(crate) fn document_check_every() -> web_time::Duration {
+    document::CHECK_EVERY
+}
+pub(crate) use document::Kind as DocKind;
+
 /// Undo steps kept; older ones are dropped.
 const MAX_UNDO: usize = 200;
 
@@ -36,28 +60,66 @@ enum Undo {
     /// [`Editor::remap`] points the other steps at them, and references
     /// between them (attachments, prefab parts) are kept.
     Despawned(Vec<(Entity, Value)>),
+    /// Resource `name` was `before`.
+    Resource { name: String, before: Value },
     /// Several changes made as one (a drag of several entities).
-    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     Group(Vec<Undo>),
+}
+
+/// A recorded step: what puts it back, and the state of the document the
+/// world was in on the other side of it (see [`Editor::dirty`]).
+#[derive(Debug)]
+struct Step {
+    undo: Undo,
+    state: u64,
 }
 
 /// Edits with undo and redo, and the world saved by Play for Stop.
 #[derive(Default)]
 pub(crate) struct Editor {
-    undo: Vec<Undo>,
-    redo: Vec<Undo>,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
+    /// The state the world is in: each change makes a new one, undo and
+    /// redo go back to the one they left. The document is clean while it's
+    /// the state it was saved (or opened) in.
+    state: u64,
+    /// States handed out so far.
+    states: u64,
+    /// The last step is still taking changes: the component a drag in the
+    /// panels keeps setting (see [`set_merged`](Self::set_merged)).
+    open: Option<Merge>,
+    /// The file being edited and what is known about it on disk.
+    pub(crate) doc: document::Document,
     /// Entities that were despawned and brought back by an undo or redo,
     /// to the entity that stands for them now. Older steps keep naming the
     /// first ids; they are looked up here, and component values that name
     /// them are read through it.
     remap: HashMap<Entity, Entity>,
     /// The world as it was when Play was pressed, how many undo steps there
-    /// were then (steps taken while playing are dropped by Stop), and the
-    /// remap of then.
-    played_from: Option<(Value, usize, HashMap<Entity, Entity>)>,
+    /// were then (steps taken while playing are dropped by Stop), the
+    /// remap and the state of then.
+    played_from: Option<Played>,
     /// `Ctx::scene_loads` the history belongs to: a load since then
     /// replaced the entities its steps name.
     loads: u64,
+}
+
+/// What Play saved for Stop.
+struct Played {
+    save: Value,
+    steps: usize,
+    remap: HashMap<Entity, Entity>,
+    state: u64,
+    /// The entities there were at Play.
+    #[cfg(feature = "editor")]
+    alive: std::collections::HashSet<Entity>,
+}
+
+/// What a merging step changes: one component of one entity, or one resource.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Merge {
+    Component(Entity, String),
+    Resource(String),
 }
 
 /// Marks an entity whose components a restore hasn't set yet.
@@ -71,8 +133,11 @@ impl Ctx {
     pub(crate) fn edit<R>(&mut self, f: impl FnOnce(&mut Editor, &mut Ctx) -> R) -> R {
         let mut editor = std::mem::take(&mut self.editor);
         if editor.loads != self.scene_loads {
+            // Something else loaded a scene: that file is the document now.
             editor.forget_history();
             editor.loads = self.scene_loads;
+            let path = self.scene_file.clone();
+            editor.doc.opened(path, document::Kind::Scene, editor.state);
         }
         let out = f(&mut editor, self);
         self.editor = editor;
@@ -87,14 +152,35 @@ impl Editor {
         self.played_from.is_some()
     }
 
+    /// The state the world is in (see `state`): changes with every edit,
+    /// undo and redo, so a view of the world can be kept until it does.
+    #[cfg(feature = "editor")]
+    pub(crate) fn revision(&self) -> u64 {
+        self.state
+    }
+
     fn forget_history(&mut self) {
         self.undo.clear();
         self.redo.clear();
         self.remap.clear();
-        if let Some((_, steps, remap)) = &mut self.played_from {
-            *steps = 0;
-            remap.clear();
+        self.open = None;
+        self.state = self.new_state();
+        if let Some(played) = &mut self.played_from {
+            played.steps = 0;
+            played.remap.clear();
+            played.state = self.state;
         }
+    }
+
+    fn new_state(&mut self) -> u64 {
+        self.states += 1;
+        self.states
+    }
+
+    /// Whether the world differs from the document's file: something was
+    /// changed since it was opened or saved, and not undone.
+    pub fn dirty(&self) -> bool {
+        self.state != self.doc.saved
     }
 
     /// Runs the game, first saving the world for [`stop`](Self::stop).
@@ -102,8 +188,22 @@ impl Editor {
     #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
     pub fn play(&mut self, ctx: &mut Ctx) {
         if self.played_from.is_none() {
-            self.played_from = Some((ctx.world.save(), self.undo.len(), self.remap.clone()));
+            self.played_from = Some(Played {
+                save: ctx.world.save(),
+                steps: self.undo.len(),
+                remap: self.remap.clone(),
+                state: self.state,
+                #[cfg(feature = "editor")]
+                alive: ctx
+                    .world
+                    .raw_ref()
+                    .archetypes()
+                    .iter()
+                    .flat_map(|a| a.entities().iter().copied())
+                    .collect(),
+            });
         }
+        self.open = None;
         ctx.time.resume();
     }
 
@@ -115,19 +215,21 @@ impl Editor {
     /// running, so Stop can be retried.
     #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
     pub fn stop(&mut self, ctx: &mut Ctx) -> Result<(), crate::error::Error> {
-        let Some((save, _, _)) = &self.played_from else {
+        let Some(played) = &self.played_from else {
             ctx.time.pause();
             return Ok(());
         };
         // Pause only once the world is back: a refused Stop changes nothing.
-        ctx.replace_world(save)?;
+        ctx.replace_world(&played.save)?;
         ctx.time.pause();
-        let Some((_, steps, remap)) = self.played_from.take() else {
+        let Some(played) = self.played_from.take() else {
             return Ok(());
         };
-        self.undo.truncate(steps);
+        self.undo.truncate(played.steps);
         self.redo.clear();
-        self.remap = remap;
+        self.remap = played.remap;
+        self.state = played.state;
+        self.open = None;
         // The editor's own load: the steps from before Play still hold.
         self.loads = ctx.scene_loads;
         Ok(())
@@ -136,7 +238,10 @@ impl Editor {
     /// Keeps the world as it is now: Stop won't go back.
     #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
     pub fn keep(&mut self) {
-        self.played_from = None;
+        if self.played_from.take().is_some() {
+            // The world is what playing made of it: not the file any more.
+            self.state = self.new_state();
+        }
     }
 
     pub fn can_undo(&self) -> bool {
@@ -151,12 +256,29 @@ impl Editor {
     fn record(&mut self, step: Undo) {
         if self.undo.len() == MAX_UNDO {
             self.undo.remove(0);
-            if let Some((_, steps, _)) = &mut self.played_from {
-                *steps = steps.saturating_sub(1);
+            if let Some(played) = &mut self.played_from {
+                played.steps = played.steps.saturating_sub(1);
             }
         }
-        self.undo.push(step);
+        let state = self.state;
+        self.undo.push(Step { undo: step, state });
+        self.state = self.new_state();
         self.redo.clear();
+        self.open = None;
+    }
+
+    /// Ends the step that [`set_merged`](Self::set_merged) and
+    /// [`set_resource_merged`](Self::set_resource_merged) keep adding to:
+    /// the next change is a step of its own. The panels call it when the
+    /// mouse button goes up.
+    #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
+    pub fn end_merge(&mut self) {
+        self.open = None;
+    }
+
+    /// Whether the last step takes `key`'s next change.
+    fn merges(&self, key: &Merge) -> bool {
+        self.open.as_ref() == Some(key) && self.redo.is_empty() && !self.undo.is_empty()
     }
 
     /// The entity that stands for `e` now (`e` itself unless it was
@@ -180,6 +302,77 @@ impl Editor {
         Ok(())
     }
 
+    /// [`set`](Self::set) for a change that goes on (a number dragged in
+    /// the panels): changes to the same component, one after another, are
+    /// one undo step until [`end_merge`](Self::end_merge) or another change.
+    #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
+    pub fn set_merged(
+        &mut self,
+        ctx: &mut Ctx,
+        e: Entity,
+        name: &str,
+        value: Value,
+    ) -> Result<(), crate::error::Error> {
+        let key = Merge::Component(e, name.to_string());
+        if !self.merges(&key) {
+            self.set(ctx, e, name, value)?;
+            self.open = Some(key);
+            return Ok(());
+        }
+        ctx.load_scene_assets(&json!({ name: &value }))?;
+        ctx.world.set_json(e, name, value)?;
+        // The step keeps the value from before the drag; the world is in
+        // a state it wasn't in before.
+        self.state = self.new_state();
+        settle(&mut ctx.world);
+        Ok(())
+    }
+
+    /// Writes resource `name`, which must be inserted already, with undo.
+    #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
+    pub fn set_resource(&mut self, ctx: &mut Ctx, name: &str, value: Value) -> Result<(), crate::error::Error> {
+        let before = ctx.world.resource_json(name)?;
+        ctx.world.set_resource_json(name, value)?;
+        self.record(Undo::Resource {
+            name: name.to_string(),
+            before,
+        });
+        Ok(())
+    }
+
+    /// [`set_resource`](Self::set_resource) for a change that goes on, merged
+    /// like [`set_merged`](Self::set_merged).
+    #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
+    pub fn set_resource_merged(&mut self, ctx: &mut Ctx, name: &str, value: Value) -> Result<(), crate::error::Error> {
+        let key = Merge::Resource(name.to_string());
+        if !self.merges(&key) {
+            self.set_resource(ctx, name, value)?;
+            self.open = Some(key);
+            return Ok(());
+        }
+        ctx.world.set_resource_json(name, value)?;
+        self.state = self.new_state();
+        Ok(())
+    }
+
+    /// Names `e` (its [`EntityName`](crate::hierarchy::EntityName), shown in the
+    /// hierarchy and saved with the scene), with undo. An empty name takes
+    /// the name away.
+    #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
+    pub fn rename(&mut self, ctx: &mut Ctx, e: Entity, name: &str) -> Result<(), crate::error::Error> {
+        let name = name.trim();
+        if name.is_empty() {
+            if ctx.world.get::<crate::hierarchy::EntityName>(e).is_some() {
+                return self.remove(ctx, e, "EntityName");
+            }
+            return Ok(());
+        }
+        if ctx.world.get::<crate::hierarchy::EntityName>(e).map(|n| n.0.as_str()) == Some(name) {
+            return Ok(());
+        }
+        self.set(ctx, e, "EntityName", json!(name))
+    }
+
     /// Adds component `name` to `e` with its default fields (types whose
     /// fields all have defaults; others say which field is missing).
     #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
@@ -200,21 +393,9 @@ impl Editor {
         Ok(())
     }
 
-    /// Records that `e`'s transform was `before` a drag that moved it
-    /// directly (the drag itself changes the world every frame).
-    #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
-    pub fn moved(&mut self, e: Entity, before: Value) {
-        self.record(Undo::Component {
-            e,
-            name: "Transform2D".into(),
-            before: Some(before),
-        });
-    }
-
     /// Records, as one step, that these components were as given before a
     /// change made directly (a gizmo drag of several entities). Components
     /// that didn't change are left out; nothing is recorded if none did.
-    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub fn changed(&mut self, world: &ponko_ecs::World, before: Before) {
         let steps: Vec<Undo> = before
             .0
@@ -235,6 +416,15 @@ impl Editor {
         e
     }
 
+    /// Spawns an entity with only a 3D transform `at`.
+    #[cfg(feature = "3d")]
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub fn spawn_empty3d(&mut self, ctx: &mut Ctx, at: crate::d3::Transform) -> Entity {
+        let e = ctx.world.spawn((at,));
+        self.record(Undo::Spawned(vec![e]));
+        e
+    }
+
     /// Spawns prefab `path` at `at`, with undo (which despawns its parts too).
     pub fn spawn_prefab(
         &mut self,
@@ -243,6 +433,26 @@ impl Editor {
         at: impl Into<crate::scene::Placement>,
     ) -> Result<Entity, crate::error::Error> {
         let e = ctx.spawn_prefab(path, at)?;
+        // Remembers where it came from, for overrides and apply (not glTF
+        // scenes: their root names its file already).
+        let ext = std::path::Path::new(path).extension().and_then(|x| x.to_str());
+        if !ext.is_some_and(|x| x.eq_ignore_ascii_case("gltf") || x.eq_ignore_ascii_case("glb")) {
+            ctx.world.insert(e, crate::hierarchy::PrefabInstance::new(path));
+        }
+        self.record(Undo::Spawned(vec![e]));
+        settle(&mut ctx.world);
+        Ok(e)
+    }
+
+    /// Spawns a sprite of image `path` at world point `at`, with undo.
+    #[cfg(feature = "editor")]
+    pub fn spawn_sprite(&mut self, ctx: &mut Ctx, path: &str, at: Vec2) -> Result<Entity, crate::error::Error> {
+        let components = json!({
+            "Transform2D": serde_json::to_value(crate::d2::Transform::at(at)).map_err(crate::error::Error::from)?,
+            "Sprite": { "texture": path },
+        });
+        ctx.load_scene_assets(&components).map_err(|e| e.with_path(path))?;
+        let e = ctx.world.spawn_json(components)?;
         self.record(Undo::Spawned(vec![e]));
         settle(&mut ctx.world);
         Ok(e)
@@ -416,6 +626,86 @@ impl Editor {
         Ok(())
     }
 
+    /// [`set_parent`](Self::set_parent) for several children, as one undo
+    /// step. Nothing changes if any of them can't be linked.
+    #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
+    pub fn set_parents(
+        &mut self,
+        ctx: &mut Ctx,
+        children: &[Entity],
+        parent: Option<Entity>,
+    ) -> Result<(), crate::error::Error> {
+        let mark = self.undo.len();
+        for &child in children {
+            if let Err(e) = self.set_parent(ctx, child, parent) {
+                while self.undo.len() > mark {
+                    self.undo(ctx)?;
+                }
+                self.redo.clear();
+                return Err(e);
+            }
+        }
+        self.group_since(mark);
+        Ok(())
+    }
+
+    /// Spawns an empty entity attached to `parent`, on top of it (2D or 3D
+    /// as `parent` is), as one undo step.
+    #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
+    pub fn spawn_child(&mut self, ctx: &mut Ctx, parent: Entity) -> Result<Entity, crate::error::Error> {
+        if !ctx.world.is_alive(parent) {
+            return Err(crate::error::Error::new(
+                crate::error::ErrorKind::NotFound,
+                format!("no entity {}", parent.to_bits()),
+            ));
+        }
+        let mark = self.undo.len();
+        #[cfg(feature = "3d")]
+        if let Some(&t) = ctx.world.get::<crate::d3::Transform>(parent) {
+            let e = ctx.world.spawn((crate::d3::Transform::at(t.position),));
+            self.record(Undo::Spawned(vec![e]));
+            self.set_parent(ctx, e, Some(parent))?;
+            self.group_since(mark);
+            return Ok(e);
+        }
+        let at = ctx
+            .world
+            .get::<crate::d2::Transform>(parent)
+            .map_or(Vec2::ZERO, |t| t.position);
+        let e = self.spawn_empty(ctx, at);
+        if ctx.world.get::<crate::d2::Transform>(parent).is_some() {
+            self.set_parent(ctx, e, Some(parent))?;
+        }
+        self.group_since(mark);
+        Ok(e)
+    }
+
+    /// Makes the steps recorded since the history had `mark` steps one step.
+    #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
+    fn group_since(&mut self, mark: usize) {
+        if self.undo.len() <= mark + 1 {
+            return;
+        }
+        let steps: Vec<Step> = self.undo.drain(mark..).collect();
+        let state = steps[0].state;
+        // Undone last first: `apply` of a group runs its parts in reverse.
+        let group = Undo::Group(steps.into_iter().map(|s| s.undo).collect());
+        self.undo.push(Step { undo: group, state });
+    }
+
+    /// Moves, turns or scales 2D entities to these world transforms, as
+    /// one step; attached ones keep their parent and get a new offset, and
+    /// what is attached to them follows.
+    pub fn set_transforms2d(&mut self, ctx: &mut Ctx, to: &[(Entity, crate::d2::Transform)]) {
+        let entities: Vec<Entity> = to.iter().map(|&(e, _)| e).collect();
+        let before = Before::of2d(&ctx.world, &entities);
+        for &(e, t) in to {
+            place_world2d(&mut ctx.world, e, t);
+        }
+        settle(&mut ctx.world);
+        self.changed(&ctx.world, before);
+    }
+
     /// Moves, turns or scales entities to these world transforms, as one
     /// step; attached ones keep their parent and get a new offset, and
     /// what is attached to them follows.
@@ -435,8 +725,13 @@ impl Editor {
         let Some(step) = self.undo.pop() else {
             return Ok(false);
         };
-        let back = self.apply(ctx, step)?;
-        self.redo.push(back);
+        self.open = None;
+        let back = self.apply(ctx, step.undo)?;
+        self.redo.push(Step {
+            undo: back,
+            state: self.state,
+        });
+        self.state = step.state;
         settle(&mut ctx.world);
         Ok(true)
     }
@@ -447,8 +742,13 @@ impl Editor {
         let Some(step) = self.redo.pop() else {
             return Ok(false);
         };
-        let back = self.apply(ctx, step)?;
-        self.undo.push(back);
+        self.open = None;
+        let back = self.apply(ctx, step.undo)?;
+        self.undo.push(Step {
+            undo: back,
+            state: self.state,
+        });
+        self.state = step.state;
         settle(&mut ctx.world);
         Ok(true)
     }
@@ -490,6 +790,11 @@ impl Editor {
                 }
                 Undo::Spawned(back)
             }
+            Undo::Resource { name, before } => {
+                let now = ctx.world.resource_json(&name)?;
+                ctx.world.set_resource_json(&name, before)?;
+                Undo::Resource { name, before: now }
+            }
             Undo::Group(steps) => {
                 let mut back = Vec::with_capacity(steps.len());
                 for step in steps.into_iter().rev() {
@@ -513,6 +818,12 @@ pub(crate) struct AssetList {
     pub scenes: Vec<String>,
     /// (mesh file, number in it, name) of each material of a loaded mesh file.
     pub materials: Vec<(String, usize, String)>,
+    /// Images (`.png`, `.jpg`, `.jpeg`).
+    pub textures: Vec<String>,
+    /// Sounds (`.wav`, `.ogg`, `.flac`, `.mp3`).
+    pub sounds: Vec<String>,
+    /// Shaders (`.wgsl`).
+    pub shaders: Vec<String>,
 }
 
 /// Folders below `assets/` the browser looks into, at most.
@@ -546,8 +857,12 @@ pub(crate) fn browse(ctx: &Ctx) -> AssetList {
                 }
                 let Ok(rel) = path.strip_prefix(&root) else { continue };
                 let rel = rel.to_string_lossy().replace('\\', "/");
-                match path.extension().and_then(|e| e.to_str()) {
+                let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+                match ext.as_deref() {
                     Some("glb" | "gltf") => out.meshes.push(rel),
+                    Some("png" | "jpg" | "jpeg") => out.textures.push(rel),
+                    Some("wav" | "ogg" | "flac" | "mp3") => out.sounds.push(rel),
+                    Some("wgsl") => out.shaders.push(rel),
                     Some("json") => match json_format(&path).as_deref() {
                         Some(crate::scene::PREFAB_FORMAT) => out.prefabs.push(rel),
                         Some("ponko-world") => out.scenes.push(rel),
@@ -555,13 +870,21 @@ pub(crate) fn browse(ctx: &Ctx) -> AssetList {
                     },
                     _ => {}
                 }
-                if out.meshes.len() + out.prefabs.len() + out.scenes.len() >= BROWSE_FILES {
+                let listed = out.meshes.len() + out.prefabs.len() + out.scenes.len();
+                if listed + out.textures.len() + out.sounds.len() + out.shaders.len() >= BROWSE_FILES {
                     break;
                 }
             }
         }
     }
-    for list in [&mut out.meshes, &mut out.prefabs, &mut out.scenes] {
+    for list in [
+        &mut out.meshes,
+        &mut out.prefabs,
+        &mut out.scenes,
+        &mut out.textures,
+        &mut out.sounds,
+        &mut out.shaders,
+    ] {
         list.sort();
         list.dedup();
     }
@@ -605,11 +928,21 @@ impl Offset3 {
 
 /// Components as they were before a direct change, for
 /// [`Editor::changed`]: (entity, component, value or `None` if absent).
-#[cfg_attr(not(feature = "3d"), allow(dead_code))]
 #[derive(Default, Debug)]
 pub(crate) struct Before(Vec<(Entity, String, Option<Value>)>);
 
 impl Before {
+    /// The 2D transforms and attachments of `entities`: what a 2D gizmo drag changes.
+    pub fn of2d(world: &ponko_ecs::World, entities: &[Entity]) -> Self {
+        let mut out = Vec::with_capacity(entities.len() * 2);
+        for &e in entities {
+            for name in ["Transform2D", "Attached"] {
+                out.push((e, name.to_string(), world.get_json(e, name).ok()));
+            }
+        }
+        Self(out)
+    }
+
     /// The 3D transforms and attachments of `entities`: what a gizmo drag changes.
     #[cfg(feature = "3d")]
     pub fn of3d(world: &ponko_ecs::World, entities: &[Entity]) -> Self {
@@ -677,16 +1010,38 @@ fn link3d(world: &ponko_ecs::World, child: Entity, parent: Entity) -> Option<Val
 
 /// `child`'s 2D [`Attached`](crate::attach::Attached) to `parent`, where it is now.
 fn link2d(world: &ponko_ecs::World, child: Entity, parent: Entity) -> Option<Value> {
+    serde_json::to_value(attached2d(world, child, parent)?).ok()
+}
+
+/// The 2D attachment to `parent` that puts `child` where it is now.
+fn attached2d(world: &ponko_ecs::World, child: Entity, parent: Entity) -> Option<crate::attach::Attached> {
     use crate::d2::Transform as T2;
     let c = world.get::<T2>(child)?;
     let p = world.get::<T2>(parent)?;
     let divide = |a: f32, b: f32| if b == 0.0 { a } else { a / b };
     let local = Vec2::from_angle(-p.rotation).rotate(c.position - p.position);
     let offset = Vec2::new(divide(local.x, p.scale.x), divide(local.y, p.scale.y));
-    let link = crate::attach::Attached::to(parent)
-        .offset(offset)
-        .rotated(c.rotation - p.rotation);
-    serde_json::to_value(link).ok()
+    Some(
+        crate::attach::Attached::to(parent)
+            .offset(offset)
+            .rotated(c.rotation - p.rotation),
+    )
+}
+
+/// Gives `e` the 2D world transform `t`. If it's attached, its offset
+/// changes too, so the attachment keeps it there.
+pub(crate) fn place_world2d(world: &mut ponko_ecs::World, e: Entity, t: crate::d2::Transform) {
+    use crate::attach::Attached;
+    if let Some(at) = world.get_mut::<crate::d2::Transform>(e) {
+        *at = t;
+    }
+    if let Some(&a) = world.get::<Attached>(e)
+        && let Some(link) = attached2d(world, e, a.to)
+        && let Some(at) = world.get_mut::<Attached>(e)
+    {
+        at.offset = link.offset;
+        at.rotation = link.rotation;
+    }
 }
 
 /// How an entity hangs off its parent in the hierarchy.
@@ -1013,11 +1368,11 @@ mod tests {
         let mut ctx = ctx();
         let mut ed = Editor::default();
         let e = ctx.world.spawn((Transform2D::at(vec2(1.0, 2.0)),));
-        let before = ctx.world.get_json(e, "Transform2D").unwrap();
+        let before = Before::of2d(&ctx.world, &[e]);
         for x in 0..10 {
             ctx.world.get_mut::<Transform2D>(e).unwrap().position.x = x as f32; // the drag
         }
-        ed.moved(e, before);
+        ed.changed(&ctx.world, before);
         ed.undo(&mut ctx).unwrap();
         assert_eq!(at(&ctx, e), vec2(1.0, 2.0));
     }
@@ -1254,6 +1609,198 @@ mod tests {
             !ctx.edit(|ed, ctx| ed.undo(ctx)).unwrap(),
             "the steps named the old world"
         );
+    }
+
+    #[derive(Serialize, Deserialize, Default, Clone, Copy, PartialEq, Debug)]
+    #[serde(default)]
+    struct Rules {
+        speed: f32,
+    }
+
+    #[test]
+    fn a_dragged_number_is_one_undo_step_until_the_button_goes_up() {
+        let mut ctx = ctx();
+        let mut ed = Editor::default();
+        let e = ctx.world.spawn((Hp(1.0),));
+        for v in [2.0, 3.0, 4.0] {
+            ed.set_merged(&mut ctx, e, "Hp", json!(v)).unwrap();
+        }
+        ed.end_merge();
+        ed.set_merged(&mut ctx, e, "Hp", json!(9.0)).unwrap();
+        assert_eq!(ctx.world.get::<Hp>(e), Some(&Hp(9.0)));
+        ed.undo(&mut ctx).unwrap();
+        assert_eq!(
+            ctx.world.get::<Hp>(e),
+            Some(&Hp(4.0)),
+            "the second drag is its own step"
+        );
+        ed.undo(&mut ctx).unwrap();
+        assert_eq!(ctx.world.get::<Hp>(e), Some(&Hp(1.0)), "the first drag undoes whole");
+        assert!(!ed.can_undo());
+        ed.redo(&mut ctx).unwrap();
+        assert_eq!(ctx.world.get::<Hp>(e), Some(&Hp(4.0)), "and redoes whole");
+    }
+
+    #[test]
+    fn another_change_ends_a_merge() {
+        let mut ctx = ctx();
+        let mut ed = Editor::default();
+        let a = ctx.world.spawn((Hp(1.0),));
+        let b = ctx.world.spawn((Hp(1.0),));
+        ed.set_merged(&mut ctx, a, "Hp", json!(2.0)).unwrap();
+        ed.set_merged(&mut ctx, b, "Hp", json!(5.0)).unwrap();
+        ed.set_merged(&mut ctx, a, "Hp", json!(3.0)).unwrap();
+        ed.undo(&mut ctx).unwrap();
+        assert_eq!(ctx.world.get::<Hp>(a), Some(&Hp(2.0)));
+        ed.undo(&mut ctx).unwrap();
+        assert_eq!(ctx.world.get::<Hp>(b), Some(&Hp(1.0)));
+    }
+
+    #[test]
+    fn the_document_is_dirty_after_a_change_and_clean_when_it_is_undone() {
+        let mut ctx = ctx();
+        let mut ed = Editor::default();
+        assert!(!ed.dirty(), "a new editor edits the world as it is");
+        let e = ed.spawn_empty(&mut ctx, Vec2::ZERO);
+        assert!(ed.dirty());
+        ed.undo(&mut ctx).unwrap();
+        assert!(!ed.dirty(), "back where the document was");
+        ed.redo(&mut ctx).unwrap();
+        assert!(ed.dirty());
+        let _ = e;
+        // A merged drag dirties too, even past its first change.
+        ed.undo(&mut ctx).unwrap();
+        let hp = ctx.world.spawn((Hp(1.0),));
+        ed.set_merged(&mut ctx, hp, "Hp", json!(2.0)).unwrap();
+        ed.set_merged(&mut ctx, hp, "Hp", json!(1.0)).unwrap();
+        assert!(ed.dirty(), "the world went through a change");
+        ed.undo(&mut ctx).unwrap();
+        assert!(!ed.dirty());
+    }
+
+    #[test]
+    fn stop_returns_to_the_documents_state_and_keep_dirties_it() {
+        let mut ctx = ctx();
+        let mut ed = Editor::default();
+        ed.play(&mut ctx);
+        ctx.world.spawn((Transform2D::default(),)); // the game plays
+        ed.stop(&mut ctx).unwrap();
+        assert!(!ed.dirty(), "Stop put the saved world back");
+        ed.play(&mut ctx);
+        ctx.world.spawn((Transform2D::default(),));
+        ed.keep();
+        assert!(ed.dirty(), "the world is what playing made of it");
+    }
+
+    #[test]
+    fn resource_edits_undo_and_redo() {
+        let mut ctx = ctx();
+        ctx.world.reflect_resource::<Rules>();
+        ctx.world.insert_resource(Rules { speed: 1.0 });
+        let mut ed = Editor::default();
+        ed.set_resource_merged(&mut ctx, "Rules", json!({ "speed": 2.0 }))
+            .unwrap();
+        ed.set_resource_merged(&mut ctx, "Rules", json!({ "speed": 3.0 }))
+            .unwrap();
+        assert!(ed.dirty());
+        ed.undo(&mut ctx).unwrap();
+        assert_eq!(ctx.world.resource::<Rules>().speed, 1.0);
+        ed.redo(&mut ctx).unwrap();
+        assert_eq!(ctx.world.resource::<Rules>().speed, 3.0);
+        assert!(ed.set_resource(&mut ctx, "Missing", json!(1)).is_err());
+    }
+
+    #[test]
+    fn renaming_names_an_entity_and_undo_takes_the_name_back() {
+        use crate::hierarchy::EntityName;
+        let mut ctx = ctx();
+        let mut ed = Editor::default();
+        let e = ctx.world.spawn((Transform2D::default(),));
+        ed.rename(&mut ctx, e, "  Gate  ").unwrap();
+        assert_eq!(ctx.world.get::<EntityName>(e), Some(&EntityName::new("Gate")));
+        ed.rename(&mut ctx, e, "Gate").unwrap();
+        assert_eq!(ed.undo.len(), 1, "the same name again changes nothing");
+        ed.rename(&mut ctx, e, "").unwrap();
+        assert!(ctx.world.get::<EntityName>(e).is_none(), "an empty name takes it away");
+        ed.undo(&mut ctx).unwrap();
+        ed.undo(&mut ctx).unwrap();
+        assert!(ctx.world.get::<EntityName>(e).is_none());
+        ed.rename(&mut ctx, e, "Gate").unwrap();
+        let save = ctx.world.save();
+        assert!(
+            save.to_string().contains("EntityName"),
+            "names are saved with the scene"
+        );
+    }
+
+    #[test]
+    fn reparenting_several_is_one_step_and_a_refused_one_changes_nothing() {
+        let mut ctx = ctx();
+        let mut ed = Editor::default();
+        let parent = ctx.world.spawn((Transform2D::default(),));
+        let a = ctx.world.spawn((Transform2D::at(vec2(5.0, 0.0)),));
+        let b = ctx.world.spawn((Transform2D::at(vec2(0.0, 5.0)),));
+        ed.set_parents(&mut ctx, &[a, b], Some(parent)).unwrap();
+        assert_eq!(ancestors(&ctx.world, a), [parent]);
+        assert_eq!(ancestors(&ctx.world, b), [parent]);
+        assert_eq!(ed.undo.len(), 1);
+        ed.undo(&mut ctx).unwrap();
+        assert!(ancestors(&ctx.world, a).is_empty() && ancestors(&ctx.world, b).is_empty());
+        // `parent` under `a` and then `a` under `parent` would loop.
+        let refused = ed.set_parents(&mut ctx, &[parent, a], Some(a));
+        assert!(refused.is_err());
+        assert!(
+            ancestors(&ctx.world, parent).is_empty(),
+            "the first link was taken back"
+        );
+        assert!(!ed.can_redo());
+        assert_eq!(ed.undo.len(), 0);
+    }
+
+    #[test]
+    fn a_new_child_hangs_off_its_parent_and_undoes_in_one_step() {
+        let mut ctx = ctx();
+        let mut ed = Editor::default();
+        let parent = ctx.world.spawn((Transform2D::at(vec2(7.0, 3.0)),));
+        let child = ed.spawn_child(&mut ctx, parent).unwrap();
+        assert_eq!(ancestors(&ctx.world, child), [parent]);
+        assert_eq!(at(&ctx, child), vec2(7.0, 3.0));
+        ed.undo(&mut ctx).unwrap();
+        assert!(!ctx.world.is_alive(child));
+        assert_eq!(ctx.world.len(), 1);
+        ed.redo(&mut ctx).unwrap();
+        assert_eq!(ctx.world.len(), 2);
+        let to = ctx
+            .world
+            .query::<&crate::attach::Attached>()
+            .iter()
+            .map(|a| a.to)
+            .next();
+        assert_eq!(to, Some(parent), "redone, still hanging off its parent");
+    }
+
+    #[test]
+    fn moving_an_attached_2d_child_changes_its_offset_so_it_stays_there() {
+        let mut ctx = ctx();
+        let mut ed = Editor::default();
+        let parent = ctx.world.spawn((Transform2D::at(vec2(10.0, 0.0)),));
+        let child = ctx.world.spawn((Transform2D::at(vec2(12.0, 0.0)),));
+        ed.set_parent(&mut ctx, child, Some(parent)).unwrap();
+        let moved = Transform2D {
+            rotation: 0.5,
+            ..Transform2D::at(vec2(20.0, 5.0))
+        };
+        ed.set_transforms2d(&mut ctx, &[(child, moved)]);
+        settle(&mut ctx.world);
+        let t = *ctx.world.get::<Transform2D>(child).unwrap();
+        assert!(t.position.distance(vec2(20.0, 5.0)) < 1e-4, "{:?}", t.position);
+        assert!((t.rotation - 0.5).abs() < 1e-5);
+        // The parent moves: the child keeps its new offset from it.
+        ed.set_transforms2d(&mut ctx, &[(parent, Transform2D::at(vec2(0.0, 0.0)))]);
+        assert!(at(&ctx, child).distance(vec2(10.0, 5.0)) < 1e-4);
+        ed.undo(&mut ctx).unwrap();
+        ed.undo(&mut ctx).unwrap();
+        assert!(at(&ctx, child).distance(vec2(12.0, 0.0)) < 1e-4);
     }
 
     #[cfg(feature = "3d")]

@@ -1,0 +1,4160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The custom properties (glTF node extras) the engine reads. Keys without the ponko: prefix belong to the game and are not checked.",
+  "properties": {
+    "ponko": {
+      "additionalProperties": false,
+      "description": "the same properties without the prefix, as one object",
+      "properties": {
+        "Animation": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "columns": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "first": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "fps": {
+                  "type": "number"
+                },
+                "frame_size": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "frames": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "len": {
+                  "anyOf": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "looping": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "texture": {
+                  "type": "string"
+                },
+                "time": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "texture",
+                "frame_size",
+                "fps"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component Animation, as JSON"
+        },
+        "AttachToJoint": {
+          "anyOf": [
+            {
+              "properties": {
+                "joint": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "offset": {
+                  "properties": {
+                    "position": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 3,
+                      "minItems": 3,
+                      "type": "array"
+                    },
+                    "rotation": {
+                      "maxItems": 4,
+                      "minItems": 4,
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "type": "array"
+                    },
+                    "scale": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 3,
+                      "minItems": 3,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "rotation",
+                    "position",
+                    "scale"
+                  ],
+                  "type": "object"
+                },
+                "skeleton": {
+                  "format": "entity",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "skeleton",
+                "joint",
+                "offset"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component AttachToJoint, as JSON"
+        },
+        "Attached": {
+          "anyOf": [
+            {
+              "properties": {
+                "offset": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "rotation": {
+                  "type": "number"
+                },
+                "to": {
+                  "format": "entity",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "to",
+                "offset",
+                "rotation"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component Attached, as JSON"
+        },
+        "Attached3D": {
+          "anyOf": [
+            {
+              "properties": {
+                "offset": {
+                  "properties": {
+                    "position": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 3,
+                      "minItems": 3,
+                      "type": "array"
+                    },
+                    "rotation": {
+                      "maxItems": 4,
+                      "minItems": 4,
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "type": "array"
+                    },
+                    "scale": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 3,
+                      "minItems": 3,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "rotation",
+                    "position",
+                    "scale"
+                  ],
+                  "type": "object"
+                },
+                "to": {
+                  "format": "entity",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "to",
+                "offset"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component Attached3D, as JSON"
+        },
+        "Barrel": {
+          "description": "the reflected component Barrel, as JSON"
+        },
+        "Children": {
+          "anyOf": [
+            {
+              "items": {
+                "format": "entity",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component Children, as JSON"
+        },
+        "Decal3D": {
+          "anyOf": [
+            {
+              "properties": {
+                "angle_fade_end": {
+                  "type": "number"
+                },
+                "angle_fade_start": {
+                  "type": "number"
+                },
+                "color": {
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    },
+                    "g": {
+                      "type": "number"
+                    },
+                    "r": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "r",
+                    "g",
+                    "b",
+                    "a"
+                  ],
+                  "type": "object"
+                },
+                "depth_fade": {
+                  "type": "number"
+                },
+                "image": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "layers": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "max_distance": {
+                  "type": "number"
+                },
+                "metallic": {
+                  "type": "number"
+                },
+                "normal_image": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "normal_strength": {
+                  "type": "number"
+                },
+                "opacity": {
+                  "type": "number"
+                },
+                "order": {
+                  "type": "integer"
+                },
+                "roughness": {
+                  "type": "number"
+                },
+                "size": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "uv_max": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "uv_min": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "size",
+                "image",
+                "normal_image",
+                "uv_min",
+                "uv_max",
+                "color",
+                "opacity",
+                "normal_strength",
+                "roughness",
+                "metallic",
+                "angle_fade_start",
+                "angle_fade_end",
+                "depth_fade",
+                "max_distance",
+                "order",
+                "layers"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component Decal3D, as JSON"
+        },
+        "DirectionalLight2D": {
+          "anyOf": [
+            {
+              "properties": {
+                "color": {
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    },
+                    "g": {
+                      "type": "number"
+                    },
+                    "r": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "r",
+                    "g",
+                    "b",
+                    "a"
+                  ],
+                  "type": "object"
+                },
+                "direction": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "elevation": {
+                  "type": "number"
+                },
+                "intensity": {
+                  "type": "number"
+                },
+                "shadows": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "color",
+                "intensity",
+                "direction",
+                "elevation",
+                "shadows"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component DirectionalLight2D, as JSON"
+        },
+        "Health": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "hp": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "hp"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component Health, as JSON"
+        },
+        "LodGroup": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "center": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "levels": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fade_width": {
+                        "type": "number"
+                      },
+                      "renderers": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "color": {
+                              "properties": {
+                                "a": {
+                                  "type": "number"
+                                },
+                                "b": {
+                                  "type": "number"
+                                },
+                                "g": {
+                                  "type": "number"
+                                },
+                                "r": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "r",
+                                "g",
+                                "b",
+                                "a"
+                              ],
+                              "type": "object"
+                            },
+                            "mesh": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "offset": {
+                              "properties": {
+                                "position": {
+                                  "items": {
+                                    "type": "number"
+                                  },
+                                  "maxItems": 3,
+                                  "minItems": 3,
+                                  "type": "array"
+                                },
+                                "rotation": {
+                                  "maxItems": 4,
+                                  "minItems": 4,
+                                  "prefixItems": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    }
+                                  ],
+                                  "type": "array"
+                                },
+                                "scale": {
+                                  "items": {
+                                    "type": "number"
+                                  },
+                                  "maxItems": 3,
+                                  "minItems": 3,
+                                  "type": "array"
+                                }
+                              },
+                              "required": [
+                                "rotation",
+                                "position",
+                                "scale"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "offset",
+                            "color"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "screen_height": {
+                        "type": "number"
+                      },
+                      "shadow": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "Same"
+                            ],
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "Casters": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "color": {
+                                      "properties": {
+                                        "a": {
+                                          "type": "number"
+                                        },
+                                        "b": {
+                                          "type": "number"
+                                        },
+                                        "g": {
+                                          "type": "number"
+                                        },
+                                        "r": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "r",
+                                        "g",
+                                        "b",
+                                        "a"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "mesh": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "offset": {
+                                      "properties": {
+                                        "position": {
+                                          "items": {
+                                            "type": "number"
+                                          },
+                                          "maxItems": 3,
+                                          "minItems": 3,
+                                          "type": "array"
+                                        },
+                                        "rotation": {
+                                          "maxItems": 4,
+                                          "minItems": 4,
+                                          "prefixItems": [
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "number"
+                                            }
+                                          ],
+                                          "type": "array"
+                                        },
+                                        "scale": {
+                                          "items": {
+                                            "type": "number"
+                                          },
+                                          "maxItems": 3,
+                                          "minItems": 3,
+                                          "type": "array"
+                                        }
+                                      },
+                                      "required": [
+                                        "rotation",
+                                        "position",
+                                        "scale"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  },
+                                  "required": [
+                                    "offset",
+                                    "color"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "Casters"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "screen_height",
+                      "fade_width",
+                      "renderers",
+                      "shadow"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "size": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "size",
+                "center",
+                "levels"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component LodGroup, as JSON"
+        },
+        "LodHysteresis": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component LodHysteresis, as JSON"
+        },
+        "Model": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "color": {
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    },
+                    "g": {
+                      "type": "number"
+                    },
+                    "r": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "r",
+                    "g",
+                    "b",
+                    "a"
+                  ],
+                  "type": "object"
+                },
+                "mesh": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "color"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component Model, as JSON"
+        },
+        "ModelMaterial": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "material": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  ]
+                },
+                "mesh": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mesh",
+                "material"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component ModelMaterial, as JSON"
+        },
+        "ModelMaterials": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "parts": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "material": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        ]
+                      },
+                      "mesh": {
+                        "type": "string"
+                      },
+                      "part": {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "part",
+                      "mesh",
+                      "material"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "parts"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component ModelMaterials, as JSON"
+        },
+        "Occluder2D": {
+          "anyOf": [
+            {
+              "properties": {
+                "edges": {
+                  "items": {
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "items": {
+                          "type": "number"
+                        },
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "type": "array"
+                      },
+                      {
+                        "items": {
+                          "type": "number"
+                        },
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "type": "array"
+                      }
+                    ],
+                    "type": "array"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "edges"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component Occluder2D, as JSON"
+        },
+        "ParticleEmitter2D": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "blend": {
+                  "enum": [
+                    "alpha",
+                    "additive",
+                    "multiply",
+                    "premultiplied"
+                  ],
+                  "type": "string"
+                },
+                "burst": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "color_over_life": {
+                  "items": {
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "properties": {
+                          "a": {
+                            "type": "number"
+                          },
+                          "b": {
+                            "type": "number"
+                          },
+                          "g": {
+                            "type": "number"
+                          },
+                          "r": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "r",
+                          "g",
+                          "b",
+                          "a"
+                        ],
+                        "type": "object"
+                      }
+                    ],
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                "drag": {
+                  "type": "number"
+                },
+                "duration": {
+                  "type": "number"
+                },
+                "gravity": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "lifetime": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "looping": {
+                  "type": "boolean"
+                },
+                "max_particles": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "rate": {
+                  "type": "number"
+                },
+                "rotation": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "seed": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "shape": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "point"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "circle": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "radius": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "radius"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "circle"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "cone": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "angle": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "angle"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "cone"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "rect": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "half_extents": {
+                              "items": {
+                                "type": "number"
+                              },
+                              "maxItems": 2,
+                              "minItems": 2,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "half_extents"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "rect"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "sheet": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "size": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "size_over_life": {
+                  "items": {
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ],
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                "space": {
+                  "enum": [
+                    "world",
+                    "local"
+                  ],
+                  "type": "string"
+                },
+                "speed": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "texture": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "z": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "rate",
+                "burst",
+                "duration",
+                "looping",
+                "lifetime",
+                "speed",
+                "shape",
+                "gravity",
+                "drag",
+                "size",
+                "rotation",
+                "size_over_life",
+                "color_over_life",
+                "sheet",
+                "blend",
+                "z",
+                "max_particles",
+                "space",
+                "seed"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component ParticleEmitter2D, as JSON"
+        },
+        "PointLight2D": {
+          "anyOf": [
+            {
+              "properties": {
+                "color": {
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    },
+                    "g": {
+                      "type": "number"
+                    },
+                    "r": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "r",
+                    "g",
+                    "b",
+                    "a"
+                  ],
+                  "type": "object"
+                },
+                "falloff": {
+                  "type": "number"
+                },
+                "height": {
+                  "type": "number"
+                },
+                "intensity": {
+                  "type": "number"
+                },
+                "radius": {
+                  "type": "number"
+                },
+                "shadows": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "color",
+                "intensity",
+                "radius",
+                "falloff",
+                "height",
+                "shadows"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component PointLight2D, as JSON"
+        },
+        "PointLight3D": {
+          "anyOf": [
+            {
+              "properties": {
+                "color": {
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    },
+                    "g": {
+                      "type": "number"
+                    },
+                    "r": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "r",
+                    "g",
+                    "b",
+                    "a"
+                  ],
+                  "type": "object"
+                },
+                "intensity": {
+                  "type": "number"
+                },
+                "range": {
+                  "type": "number"
+                },
+                "shadow_resolution": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "shadows": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "color",
+                "intensity",
+                "range",
+                "shadows",
+                "shadow_resolution"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component PointLight3D, as JSON"
+        },
+        "PrefabParts": {
+          "anyOf": [
+            {
+              "items": {
+                "format": "entity",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component PrefabParts, as JSON"
+        },
+        "ReceivesDecals": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component ReceivesDecals, as JSON"
+        },
+        "RenderLayers": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component RenderLayers, as JSON"
+        },
+        "ShadowMesh": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "mesh": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component ShadowMesh, as JSON"
+        },
+        "ShadowOnly": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component ShadowOnly, as JSON"
+        },
+        "Skeleton2D": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "clip": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "color": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "a": {
+                          "type": "number"
+                        },
+                        "b": {
+                          "type": "number"
+                        },
+                        "g": {
+                          "type": "number"
+                        },
+                        "r": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "r",
+                        "g",
+                        "b",
+                        "a"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "looping": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "manual": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parameters": {
+                  "anyOf": [
+                    {
+                      "x-ponko-opaque": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "skeleton": {
+                  "type": "string"
+                },
+                "skin": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "speed": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "state": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "time": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "z": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "skeleton"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component Skeleton2D, as JSON"
+        },
+        "SkinOf": {
+          "anyOf": [
+            {
+              "format": "entity",
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component SkinOf, as JSON"
+        },
+        "SpotLight2D": {
+          "anyOf": [
+            {
+              "properties": {
+                "angle": {
+                  "type": "number"
+                },
+                "color": {
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    },
+                    "g": {
+                      "type": "number"
+                    },
+                    "r": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "r",
+                    "g",
+                    "b",
+                    "a"
+                  ],
+                  "type": "object"
+                },
+                "falloff": {
+                  "type": "number"
+                },
+                "height": {
+                  "type": "number"
+                },
+                "intensity": {
+                  "type": "number"
+                },
+                "radius": {
+                  "type": "number"
+                },
+                "shadows": {
+                  "type": "boolean"
+                },
+                "softness": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "color",
+                "intensity",
+                "radius",
+                "falloff",
+                "height",
+                "angle",
+                "softness",
+                "shadows"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component SpotLight2D, as JSON"
+        },
+        "SpotLight3D": {
+          "anyOf": [
+            {
+              "properties": {
+                "color": {
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    },
+                    "g": {
+                      "type": "number"
+                    },
+                    "r": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "r",
+                    "g",
+                    "b",
+                    "a"
+                  ],
+                  "type": "object"
+                },
+                "inner_angle": {
+                  "type": "number"
+                },
+                "intensity": {
+                  "type": "number"
+                },
+                "outer_angle": {
+                  "type": "number"
+                },
+                "range": {
+                  "type": "number"
+                },
+                "shadow_resolution": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "shadows": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "color",
+                "intensity",
+                "range",
+                "inner_angle",
+                "outer_angle",
+                "shadows",
+                "shadow_resolution"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component SpotLight3D, as JSON"
+        },
+        "Sprite": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "color": {
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    },
+                    "g": {
+                      "type": "number"
+                    },
+                    "r": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "r",
+                    "g",
+                    "b",
+                    "a"
+                  ],
+                  "type": "object"
+                },
+                "pivot": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "region": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "max": {
+                          "items": {
+                            "type": "number"
+                          },
+                          "maxItems": 2,
+                          "minItems": 2,
+                          "type": "array"
+                        },
+                        "min": {
+                          "items": {
+                            "type": "number"
+                          },
+                          "maxItems": 2,
+                          "minItems": 2,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "min",
+                        "max"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "texture": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "z": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "color",
+                "z",
+                "pivot"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component Sprite, as JSON"
+        },
+        "Transform2D": {
+          "anyOf": [
+            {
+              "properties": {
+                "position": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "rotation": {
+                  "type": "number"
+                },
+                "scale": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "position",
+                "rotation",
+                "scale"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component Transform2D, as JSON"
+        },
+        "Transform3D": {
+          "anyOf": [
+            {
+              "properties": {
+                "position": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "rotation": {
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "scale": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "rotation",
+                "position",
+                "scale"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "the reflected component Transform3D, as JSON"
+        },
+        "body": {
+          "description": "how the collider's body moves (default fixed)",
+          "enum": [
+            "fixed",
+            "dynamic",
+            "kinematic"
+          ]
+        },
+        "collider": {
+          "description": "a collider made from the node's mesh",
+          "enum": [
+            "box",
+            "sphere",
+            "capsule",
+            "hull",
+            "trimesh"
+          ]
+        },
+        "collides_with": {
+          "anyOf": [
+            {
+              "maximum": 31,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "items": {
+                "maximum": 31,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "collision groups (0 to 31) the collider touches"
+        },
+        "collision_layers": {
+          "anyOf": [
+            {
+              "maximum": 31,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "items": {
+                "maximum": 31,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "collision groups (0 to 31) the collider is in"
+        },
+        "hidden": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ]
+            }
+          ],
+          "description": "the mesh isn't drawn (a collision or navigation proxy)"
+        },
+        "layers": {
+          "anyOf": [
+            {
+              "maximum": 31,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "items": {
+                "maximum": 31,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "render layers (0 to 31) the model is on"
+        },
+        "lod": {
+          "anyOf": [
+            {
+              "items": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "screen heights of a level-of-detail group made of the node's children"
+        },
+        "navmesh": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ]
+            }
+          ],
+          "description": "whether the mesh is walkable ground for navigation meshes"
+        },
+        "prefab": {
+          "description": "a prefab file spawned in the node's place",
+          "minLength": 1,
+          "type": "string"
+        },
+        "sensor": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ]
+            }
+          ],
+          "description": "the collider reports overlaps and blocks nothing"
+        },
+        "shadows": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                0,
+                1
+              ]
+            }
+          ],
+          "description": "whether the node's light casts shadows"
+        },
+        "spawn": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "const": true
+            }
+          ],
+          "description": "a named spawn point; true names it after the node"
+        }
+      },
+      "type": "object"
+    },
+    "ponko:Animation": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "columns": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "first": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fps": {
+              "type": "number"
+            },
+            "frame_size": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "frames": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "len": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "looping": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "texture": {
+              "type": "string"
+            },
+            "time": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "texture",
+            "frame_size",
+            "fps"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component Animation, as JSON"
+    },
+    "ponko:AttachToJoint": {
+      "anyOf": [
+        {
+          "properties": {
+            "joint": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "offset": {
+              "properties": {
+                "position": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "rotation": {
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "scale": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "rotation",
+                "position",
+                "scale"
+              ],
+              "type": "object"
+            },
+            "skeleton": {
+              "format": "entity",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "skeleton",
+            "joint",
+            "offset"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component AttachToJoint, as JSON"
+    },
+    "ponko:Attached": {
+      "anyOf": [
+        {
+          "properties": {
+            "offset": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "rotation": {
+              "type": "number"
+            },
+            "to": {
+              "format": "entity",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "to",
+            "offset",
+            "rotation"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component Attached, as JSON"
+    },
+    "ponko:Attached3D": {
+      "anyOf": [
+        {
+          "properties": {
+            "offset": {
+              "properties": {
+                "position": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "rotation": {
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "scale": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "rotation",
+                "position",
+                "scale"
+              ],
+              "type": "object"
+            },
+            "to": {
+              "format": "entity",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "to",
+            "offset"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component Attached3D, as JSON"
+    },
+    "ponko:Barrel": {
+      "description": "the reflected component Barrel, as JSON"
+    },
+    "ponko:Children": {
+      "anyOf": [
+        {
+          "items": {
+            "format": "entity",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component Children, as JSON"
+    },
+    "ponko:Decal3D": {
+      "anyOf": [
+        {
+          "properties": {
+            "angle_fade_end": {
+              "type": "number"
+            },
+            "angle_fade_start": {
+              "type": "number"
+            },
+            "color": {
+              "properties": {
+                "a": {
+                  "type": "number"
+                },
+                "b": {
+                  "type": "number"
+                },
+                "g": {
+                  "type": "number"
+                },
+                "r": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "r",
+                "g",
+                "b",
+                "a"
+              ],
+              "type": "object"
+            },
+            "depth_fade": {
+              "type": "number"
+            },
+            "image": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "layers": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_distance": {
+              "type": "number"
+            },
+            "metallic": {
+              "type": "number"
+            },
+            "normal_image": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "normal_strength": {
+              "type": "number"
+            },
+            "opacity": {
+              "type": "number"
+            },
+            "order": {
+              "type": "integer"
+            },
+            "roughness": {
+              "type": "number"
+            },
+            "size": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "uv_max": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "uv_min": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "size",
+            "image",
+            "normal_image",
+            "uv_min",
+            "uv_max",
+            "color",
+            "opacity",
+            "normal_strength",
+            "roughness",
+            "metallic",
+            "angle_fade_start",
+            "angle_fade_end",
+            "depth_fade",
+            "max_distance",
+            "order",
+            "layers"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component Decal3D, as JSON"
+    },
+    "ponko:DirectionalLight2D": {
+      "anyOf": [
+        {
+          "properties": {
+            "color": {
+              "properties": {
+                "a": {
+                  "type": "number"
+                },
+                "b": {
+                  "type": "number"
+                },
+                "g": {
+                  "type": "number"
+                },
+                "r": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "r",
+                "g",
+                "b",
+                "a"
+              ],
+              "type": "object"
+            },
+            "direction": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "elevation": {
+              "type": "number"
+            },
+            "intensity": {
+              "type": "number"
+            },
+            "shadows": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "color",
+            "intensity",
+            "direction",
+            "elevation",
+            "shadows"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component DirectionalLight2D, as JSON"
+    },
+    "ponko:Health": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "hp": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "hp"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component Health, as JSON"
+    },
+    "ponko:LodGroup": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "center": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "levels": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "fade_width": {
+                    "type": "number"
+                  },
+                  "renderers": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "color": {
+                          "properties": {
+                            "a": {
+                              "type": "number"
+                            },
+                            "b": {
+                              "type": "number"
+                            },
+                            "g": {
+                              "type": "number"
+                            },
+                            "r": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "r",
+                            "g",
+                            "b",
+                            "a"
+                          ],
+                          "type": "object"
+                        },
+                        "mesh": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "offset": {
+                          "properties": {
+                            "position": {
+                              "items": {
+                                "type": "number"
+                              },
+                              "maxItems": 3,
+                              "minItems": 3,
+                              "type": "array"
+                            },
+                            "rotation": {
+                              "maxItems": 4,
+                              "minItems": 4,
+                              "prefixItems": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "number"
+                                }
+                              ],
+                              "type": "array"
+                            },
+                            "scale": {
+                              "items": {
+                                "type": "number"
+                              },
+                              "maxItems": 3,
+                              "minItems": 3,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "rotation",
+                            "position",
+                            "scale"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "offset",
+                        "color"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "screen_height": {
+                    "type": "number"
+                  },
+                  "shadow": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "Same"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "Casters": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "color": {
+                                  "properties": {
+                                    "a": {
+                                      "type": "number"
+                                    },
+                                    "b": {
+                                      "type": "number"
+                                    },
+                                    "g": {
+                                      "type": "number"
+                                    },
+                                    "r": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "r",
+                                    "g",
+                                    "b",
+                                    "a"
+                                  ],
+                                  "type": "object"
+                                },
+                                "mesh": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "offset": {
+                                  "properties": {
+                                    "position": {
+                                      "items": {
+                                        "type": "number"
+                                      },
+                                      "maxItems": 3,
+                                      "minItems": 3,
+                                      "type": "array"
+                                    },
+                                    "rotation": {
+                                      "maxItems": 4,
+                                      "minItems": 4,
+                                      "prefixItems": [
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "number"
+                                        }
+                                      ],
+                                      "type": "array"
+                                    },
+                                    "scale": {
+                                      "items": {
+                                        "type": "number"
+                                      },
+                                      "maxItems": 3,
+                                      "minItems": 3,
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": [
+                                    "rotation",
+                                    "position",
+                                    "scale"
+                                  ],
+                                  "type": "object"
+                                }
+                              },
+                              "required": [
+                                "offset",
+                                "color"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "Casters"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "screen_height",
+                  "fade_width",
+                  "renderers",
+                  "shadow"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "size": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "size",
+            "center",
+            "levels"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component LodGroup, as JSON"
+    },
+    "ponko:LodHysteresis": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component LodHysteresis, as JSON"
+    },
+    "ponko:Model": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "color": {
+              "properties": {
+                "a": {
+                  "type": "number"
+                },
+                "b": {
+                  "type": "number"
+                },
+                "g": {
+                  "type": "number"
+                },
+                "r": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "r",
+                "g",
+                "b",
+                "a"
+              ],
+              "type": "object"
+            },
+            "mesh": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "color"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component Model, as JSON"
+    },
+    "ponko:ModelMaterial": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "material": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              ]
+            },
+            "mesh": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mesh",
+            "material"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component ModelMaterial, as JSON"
+    },
+    "ponko:ModelMaterials": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "parts": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "material": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  "mesh": {
+                    "type": "string"
+                  },
+                  "part": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "part",
+                  "mesh",
+                  "material"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "parts"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component ModelMaterials, as JSON"
+    },
+    "ponko:Occluder2D": {
+      "anyOf": [
+        {
+          "properties": {
+            "edges": {
+              "items": {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  },
+                  {
+                    "items": {
+                      "type": "number"
+                    },
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "type": "array"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "edges"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component Occluder2D, as JSON"
+    },
+    "ponko:ParticleEmitter2D": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "blend": {
+              "enum": [
+                "alpha",
+                "additive",
+                "multiply",
+                "premultiplied"
+              ],
+              "type": "string"
+            },
+            "burst": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "color_over_life": {
+              "items": {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "properties": {
+                      "a": {
+                        "type": "number"
+                      },
+                      "b": {
+                        "type": "number"
+                      },
+                      "g": {
+                        "type": "number"
+                      },
+                      "r": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "r",
+                      "g",
+                      "b",
+                      "a"
+                    ],
+                    "type": "object"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "drag": {
+              "type": "number"
+            },
+            "duration": {
+              "type": "number"
+            },
+            "gravity": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "lifetime": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "looping": {
+              "type": "boolean"
+            },
+            "max_particles": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rate": {
+              "type": "number"
+            },
+            "rotation": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "seed": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "shape": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "point"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "circle": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "radius": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "radius"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "circle"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cone": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "angle": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "angle"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "cone"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "rect": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "half_extents": {
+                          "items": {
+                            "type": "number"
+                          },
+                          "maxItems": 2,
+                          "minItems": 2,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "half_extents"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "rect"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "sheet": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              ],
+              "type": "array"
+            },
+            "size": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "size_over_life": {
+              "items": {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "space": {
+              "enum": [
+                "world",
+                "local"
+              ],
+              "type": "string"
+            },
+            "speed": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "texture": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "z": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "rate",
+            "burst",
+            "duration",
+            "looping",
+            "lifetime",
+            "speed",
+            "shape",
+            "gravity",
+            "drag",
+            "size",
+            "rotation",
+            "size_over_life",
+            "color_over_life",
+            "sheet",
+            "blend",
+            "z",
+            "max_particles",
+            "space",
+            "seed"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component ParticleEmitter2D, as JSON"
+    },
+    "ponko:PointLight2D": {
+      "anyOf": [
+        {
+          "properties": {
+            "color": {
+              "properties": {
+                "a": {
+                  "type": "number"
+                },
+                "b": {
+                  "type": "number"
+                },
+                "g": {
+                  "type": "number"
+                },
+                "r": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "r",
+                "g",
+                "b",
+                "a"
+              ],
+              "type": "object"
+            },
+            "falloff": {
+              "type": "number"
+            },
+            "height": {
+              "type": "number"
+            },
+            "intensity": {
+              "type": "number"
+            },
+            "radius": {
+              "type": "number"
+            },
+            "shadows": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "color",
+            "intensity",
+            "radius",
+            "falloff",
+            "height",
+            "shadows"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component PointLight2D, as JSON"
+    },
+    "ponko:PointLight3D": {
+      "anyOf": [
+        {
+          "properties": {
+            "color": {
+              "properties": {
+                "a": {
+                  "type": "number"
+                },
+                "b": {
+                  "type": "number"
+                },
+                "g": {
+                  "type": "number"
+                },
+                "r": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "r",
+                "g",
+                "b",
+                "a"
+              ],
+              "type": "object"
+            },
+            "intensity": {
+              "type": "number"
+            },
+            "range": {
+              "type": "number"
+            },
+            "shadow_resolution": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "shadows": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "color",
+            "intensity",
+            "range",
+            "shadows",
+            "shadow_resolution"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component PointLight3D, as JSON"
+    },
+    "ponko:PrefabParts": {
+      "anyOf": [
+        {
+          "items": {
+            "format": "entity",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component PrefabParts, as JSON"
+    },
+    "ponko:ReceivesDecals": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component ReceivesDecals, as JSON"
+    },
+    "ponko:RenderLayers": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component RenderLayers, as JSON"
+    },
+    "ponko:ShadowMesh": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mesh": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component ShadowMesh, as JSON"
+    },
+    "ponko:ShadowOnly": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component ShadowOnly, as JSON"
+    },
+    "ponko:Skeleton2D": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "clip": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "a": {
+                      "type": "number"
+                    },
+                    "b": {
+                      "type": "number"
+                    },
+                    "g": {
+                      "type": "number"
+                    },
+                    "r": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "r",
+                    "g",
+                    "b",
+                    "a"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "looping": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "manual": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "parameters": {
+              "anyOf": [
+                {
+                  "x-ponko-opaque": true
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "skeleton": {
+              "type": "string"
+            },
+            "skin": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "speed": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "time": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "z": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "skeleton"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component Skeleton2D, as JSON"
+    },
+    "ponko:SkinOf": {
+      "anyOf": [
+        {
+          "format": "entity",
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component SkinOf, as JSON"
+    },
+    "ponko:SpotLight2D": {
+      "anyOf": [
+        {
+          "properties": {
+            "angle": {
+              "type": "number"
+            },
+            "color": {
+              "properties": {
+                "a": {
+                  "type": "number"
+                },
+                "b": {
+                  "type": "number"
+                },
+                "g": {
+                  "type": "number"
+                },
+                "r": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "r",
+                "g",
+                "b",
+                "a"
+              ],
+              "type": "object"
+            },
+            "falloff": {
+              "type": "number"
+            },
+            "height": {
+              "type": "number"
+            },
+            "intensity": {
+              "type": "number"
+            },
+            "radius": {
+              "type": "number"
+            },
+            "shadows": {
+              "type": "boolean"
+            },
+            "softness": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "color",
+            "intensity",
+            "radius",
+            "falloff",
+            "height",
+            "angle",
+            "softness",
+            "shadows"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component SpotLight2D, as JSON"
+    },
+    "ponko:SpotLight3D": {
+      "anyOf": [
+        {
+          "properties": {
+            "color": {
+              "properties": {
+                "a": {
+                  "type": "number"
+                },
+                "b": {
+                  "type": "number"
+                },
+                "g": {
+                  "type": "number"
+                },
+                "r": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "r",
+                "g",
+                "b",
+                "a"
+              ],
+              "type": "object"
+            },
+            "inner_angle": {
+              "type": "number"
+            },
+            "intensity": {
+              "type": "number"
+            },
+            "outer_angle": {
+              "type": "number"
+            },
+            "range": {
+              "type": "number"
+            },
+            "shadow_resolution": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "shadows": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "color",
+            "intensity",
+            "range",
+            "inner_angle",
+            "outer_angle",
+            "shadows",
+            "shadow_resolution"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component SpotLight3D, as JSON"
+    },
+    "ponko:Sprite": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "color": {
+              "properties": {
+                "a": {
+                  "type": "number"
+                },
+                "b": {
+                  "type": "number"
+                },
+                "g": {
+                  "type": "number"
+                },
+                "r": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "r",
+                "g",
+                "b",
+                "a"
+              ],
+              "type": "object"
+            },
+            "pivot": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "region": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "max": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array"
+                    },
+                    "min": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "min",
+                    "max"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "texture": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "z": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "color",
+            "z",
+            "pivot"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component Sprite, as JSON"
+    },
+    "ponko:Transform2D": {
+      "anyOf": [
+        {
+          "properties": {
+            "position": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "rotation": {
+              "type": "number"
+            },
+            "scale": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "position",
+            "rotation",
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component Transform2D, as JSON"
+    },
+    "ponko:Transform3D": {
+      "anyOf": [
+        {
+          "properties": {
+            "position": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "rotation": {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "scale": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            }
+          },
+          "required": [
+            "rotation",
+            "position",
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "the reflected component Transform3D, as JSON"
+    },
+    "ponko:body": {
+      "description": "how the collider's body moves (default fixed)",
+      "enum": [
+        "fixed",
+        "dynamic",
+        "kinematic"
+      ]
+    },
+    "ponko:collider": {
+      "description": "a collider made from the node's mesh",
+      "enum": [
+        "box",
+        "sphere",
+        "capsule",
+        "hull",
+        "trimesh"
+      ]
+    },
+    "ponko:collides_with": {
+      "anyOf": [
+        {
+          "maximum": 31,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "items": {
+            "maximum": 31,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "collision groups (0 to 31) the collider touches"
+    },
+    "ponko:collision_layers": {
+      "anyOf": [
+        {
+          "maximum": 31,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "items": {
+            "maximum": 31,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "collision groups (0 to 31) the collider is in"
+    },
+    "ponko:hidden": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "enum": [
+            0,
+            1
+          ]
+        }
+      ],
+      "description": "the mesh isn't drawn (a collision or navigation proxy)"
+    },
+    "ponko:layers": {
+      "anyOf": [
+        {
+          "maximum": 31,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "items": {
+            "maximum": 31,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "render layers (0 to 31) the model is on"
+    },
+    "ponko:lod": {
+      "anyOf": [
+        {
+          "items": {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "screen heights of a level-of-detail group made of the node's children"
+    },
+    "ponko:navmesh": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "enum": [
+            0,
+            1
+          ]
+        }
+      ],
+      "description": "whether the mesh is walkable ground for navigation meshes"
+    },
+    "ponko:prefab": {
+      "description": "a prefab file spawned in the node's place",
+      "minLength": 1,
+      "type": "string"
+    },
+    "ponko:sensor": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "enum": [
+            0,
+            1
+          ]
+        }
+      ],
+      "description": "the collider reports overlaps and blocks nothing"
+    },
+    "ponko:shadows": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "enum": [
+            0,
+            1
+          ]
+        }
+      ],
+      "description": "whether the node's light casts shadows"
+    },
+    "ponko:spawn": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "const": true
+        }
+      ],
+      "description": "a named spawn point; true names it after the node"
+    }
+  },
+  "propertyNames": {
+    "anyOf": [
+      {
+        "not": {
+          "pattern": "^ponko:"
+        }
+      },
+      {
+        "enum": [
+          "ponko:Animation",
+          "ponko:AttachToJoint",
+          "ponko:Attached",
+          "ponko:Attached3D",
+          "ponko:Barrel",
+          "ponko:Children",
+          "ponko:Decal3D",
+          "ponko:DirectionalLight2D",
+          "ponko:Health",
+          "ponko:LodGroup",
+          "ponko:LodHysteresis",
+          "ponko:Model",
+          "ponko:ModelMaterial",
+          "ponko:ModelMaterials",
+          "ponko:Occluder2D",
+          "ponko:ParticleEmitter2D",
+          "ponko:PointLight2D",
+          "ponko:PointLight3D",
+          "ponko:PrefabParts",
+          "ponko:ReceivesDecals",
+          "ponko:RenderLayers",
+          "ponko:ShadowMesh",
+          "ponko:ShadowOnly",
+          "ponko:Skeleton2D",
+          "ponko:SkinOf",
+          "ponko:SpotLight2D",
+          "ponko:SpotLight3D",
+          "ponko:Sprite",
+          "ponko:Transform2D",
+          "ponko:Transform3D",
+          "ponko:body",
+          "ponko:collider",
+          "ponko:collides_with",
+          "ponko:collision_layers",
+          "ponko:hidden",
+          "ponko:layers",
+          "ponko:lod",
+          "ponko:navmesh",
+          "ponko:prefab",
+          "ponko:sensor",
+          "ponko:shadows",
+          "ponko:spawn"
+        ]
+      }
+    ]
+  },
+  "title": "Ponko glTF node properties",
+  "type": "object"
+}

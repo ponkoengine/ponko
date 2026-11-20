@@ -137,6 +137,17 @@ fn stars(dir: vec3<f32>) -> vec3<f32> {
     return tint * glow * twinkle * (h - 0.996) * 1500.0 * dark * smoothstep(0.0, 0.15, dir.y);
 }
 
+// Set while a sky shader's `sky` runs for the background, not for the sky
+// texture that fog, reflections and the ambient light read.
+var<private> sky_background: bool;
+
+// Whether a sky shader's `sky` is drawing the background: details only the
+// background needs (sharp stars, the moon's face) can be left out of the
+// coarse sky texture.
+fn drawing_background() -> bool {
+    return sky_background;
+}
+
 // The direction from the camera through the far plane at `uv` (depth 0,
 // reverse-Z).
 fn far_dir(uv: vec2<f32>) -> vec3<f32> {
@@ -154,12 +165,16 @@ fn fs_sky(in: FullScreen) -> @location(0) vec4<f32> {
 // The background in direction `dir`, where the sky gives `sky_light`: with the
 // stars, the sun's disk and the height fog.
 fn background(dir: vec3<f32>, sky_light: vec3<f32>) -> vec4<f32> {
-    var light = sky_light + stars(dir);
-    // The sun's disk, with a soft edge; bright enough for bloom to catch.
-    let sun = dot(dir, frame.sun_dir.xyz);
-    let edge = 1.0 - frame.atmosphere.z;
-    let disk = smoothstep(frame.atmosphere.z - edge * 0.2, frame.atmosphere.z + edge * 0.2, sun);
-    light += frame.sun_color.rgb * disk * 40.0 * step(-0.02, dir.y);
+    var light = sky_light;
+    // The sky kit draws its own sun and stars, behind its clouds.
+    if frame.sky_kit[5].y == 0.0 {
+        light += stars(dir);
+        // The sun's disk, with a soft edge; bright enough for bloom to catch.
+        let sun = dot(dir, frame.sun_dir.xyz);
+        let edge = 1.0 - frame.atmosphere.z;
+        let disk = smoothstep(frame.atmosphere.z - edge * 0.2, frame.atmosphere.z + edge * 0.2, sun);
+        light += frame.sun_color.rgb * disk * 40.0 * step(-0.02, dir.y);
+    }
     // Height fog reaches the sky too: all the way to the horizon, and below
     // it. Distance fog doesn't: the sky has no distance.
     return vec4<f32>(fog_along(light, frame.camera.xyz + dir * 20000.0, false), 1.0);
@@ -181,5 +196,6 @@ fn fs_lut_shader(in: FullScreen) -> @location(0) vec4<f32> {
 @fragment
 fn fs_sky_shader(in: FullScreen) -> @location(0) vec4<f32> {
     let dir = far_dir(in.uv);
+    sky_background = true;
     return background(dir, max(sky(dir), vec3<f32>(0.0)));
 }

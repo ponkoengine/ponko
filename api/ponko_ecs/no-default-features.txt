@@ -216,6 +216,21 @@ impl core::marker::StructuralPartialEq for ponko_ecs::Entity
 impl ponko_ecs::QueryData for ponko_ecs::Entity
 pub type ponko_ecs::Entity::Item<'a> = ponko_ecs::Entity
 impl ponko_ecs::ReadOnlyQueryData for ponko_ecs::Entity
+pub struct ponko_ecs::HookWorld<'w>
+impl ponko_ecs::HookWorld<'_>
+pub fn ponko_ecs::HookWorld<'_>::commands(&mut self) -> &mut ponko_ecs::Commands
+pub fn ponko_ecs::HookWorld<'_>::get<T: ponko_ecs::Component>(&self, ponko_ecs::Entity) -> core::option::Option<&T>
+pub fn ponko_ecs::HookWorld<'_>::get_mut<T: ponko_ecs::Component>(&mut self, ponko_ecs::Entity) -> core::option::Option<&mut T>
+pub fn ponko_ecs::HookWorld<'_>::get_resource<R: core::marker::Send + core::marker::Sync + 'static>(&self) -> core::option::Option<&R>
+pub fn ponko_ecs::HookWorld<'_>::get_resource_mut<R: core::marker::Send + core::marker::Sync + 'static>(&mut self) -> core::option::Option<&mut R>
+pub fn ponko_ecs::HookWorld<'_>::has<T: ponko_ecs::Component>(&self, ponko_ecs::Entity) -> bool
+pub fn ponko_ecs::HookWorld<'_>::insert_resource<R: core::marker::Send + core::marker::Sync + 'static>(&mut self, R)
+pub fn ponko_ecs::HookWorld<'_>::is_alive(&self, ponko_ecs::Entity) -> bool
+pub fn ponko_ecs::HookWorld<'_>::query<Q: ponko_ecs::QueryData>(&mut self) -> ponko_ecs::Query<'_, Q>
+pub fn ponko_ecs::HookWorld<'_>::resource<R: core::marker::Send + core::marker::Sync + 'static>(&self) -> &R
+pub fn ponko_ecs::HookWorld<'_>::resource_mut<R: core::marker::Send + core::marker::Sync + 'static>(&mut self) -> &mut R
+pub fn ponko_ecs::HookWorld<'_>::resource_scope<R: core::marker::Send + core::marker::Sync + 'static, T>(&mut self, impl core::ops::function::FnOnce(&mut ponko_ecs::HookWorld<'_>, &mut R) -> T) -> T
+pub fn ponko_ecs::HookWorld<'_>::world(&self) -> &ponko_ecs::World
 pub struct ponko_ecs::Lookup<'a, L: ponko_ecs::QueryData>
 impl<L: ponko_ecs::QueryData> ponko_ecs::Lookup<'_, L>
 pub fn ponko_ecs::Lookup<'_, L>::contains(&self, ponko_ecs::Entity) -> bool
@@ -284,6 +299,17 @@ pub fn ponko_ecs::QueryIter<'a, Q>::next(&mut self) -> core::option::Option<Self
 pub struct ponko_ecs::QueryLookup<'w, Q: ponko_ecs::QueryData, L: ponko_ecs::QueryData>
 impl<Q: ponko_ecs::QueryData, L: ponko_ecs::QueryData> ponko_ecs::QueryLookup<'_, Q, L>
 pub fn ponko_ecs::QueryLookup<'_, Q, L>::for_each(&mut self, impl core::ops::function::FnMut(<Q as ponko_ecs::QueryData>::Item, &mut ponko_ecs::Lookup<'_, L>))
+pub struct ponko_ecs::QueryRef<'w, Q: ponko_ecs::ReadOnlyQueryData>
+impl<'w, Q: ponko_ecs::ReadOnlyQueryData> ponko_ecs::QueryRef<'w, Q>
+pub fn ponko_ecs::QueryRef<'w, Q>::cached(self) -> Self
+pub fn ponko_ecs::QueryRef<'w, Q>::count(&self) -> usize
+pub fn ponko_ecs::QueryRef<'w, Q>::filter<F: ponko_ecs::QueryFilter>(self) -> Self
+pub fn ponko_ecs::QueryRef<'w, Q>::for_each(&self, impl core::ops::function::FnMut(<Q as ponko_ecs::QueryData>::Item))
+pub fn ponko_ecs::QueryRef<'w, Q>::get(&self, ponko_ecs::Entity) -> core::option::Option<<Q as ponko_ecs::QueryData>::Item>
+pub fn ponko_ecs::QueryRef<'w, Q>::iter(&self) -> ponko_ecs::QueryIter<'w, Q>
+pub fn ponko_ecs::QueryRef<'w, Q>::since(self, ponko_ecs::Tick) -> Self
+pub fn ponko_ecs::QueryRef<'w, Q>::single(&self) -> core::result::Result<<Q as ponko_ecs::QueryData>::Item, ponko_ecs::SingleError> where Q: 'w
+pub fn ponko_ecs::QueryRef<'w, Q>::uncached(self) -> Self
 pub struct ponko_ecs::QueryResources<'w, Q: ponko_ecs::QueryData, R: ponko_ecs::ResourceSet>
 impl<Q: ponko_ecs::QueryData, R: ponko_ecs::ResourceSet> ponko_ecs::QueryResources<'_, Q, R>
 pub fn ponko_ecs::QueryResources<'_, Q, R>::for_each(&mut self, impl core::ops::function::FnMut(<Q as ponko_ecs::QueryData>::Item, <R as ponko_ecs::ResourceSet>::Item))
@@ -291,6 +317,8 @@ pub fn ponko_ecs::QueryResources<'_, Q, R>::resources(&mut self) -> <R as ponko_
 impl<Q: ponko_ecs::QueryData, R: ponko_ecs::ResourceSet> core::ops::drop::Drop for ponko_ecs::QueryResources<'_, Q, R>
 pub fn ponko_ecs::QueryResources<'_, Q, R>::drop(&mut self)
 pub struct ponko_ecs::RawWorld<'a>(_)
+impl ponko_ecs::RawWorld<'_>
+pub unsafe fn ponko_ecs::RawWorld<'_>::require_dynamic(&mut self, ponko_ecs::ComponentId, ponko_ecs::ComponentId, *const u8)
 impl<'a> ponko_ecs::RawWorld<'a>
 pub fn ponko_ecs::RawWorld<'a>::for_each_chunk(&mut self, &[ponko_ecs::ComponentId], impl core::ops::function::FnMut(ponko_ecs::Chunk<'_>))
 pub fn ponko_ecs::RawWorld<'a>::get_dynamic_mut(&mut self, ponko_ecs::Entity, ponko_ecs::ComponentId) -> core::option::Option<*mut u8>
@@ -316,6 +344,9 @@ pub fn ponko_ecs::RawWorldRef<'a>::resource_layout_dynamic(&self, &str) -> core:
 impl<'a> core::clone::Clone for ponko_ecs::RawWorldRef<'a>
 pub fn ponko_ecs::RawWorldRef<'a>::clone(&self) -> Self
 impl<'a> core::marker::Copy for ponko_ecs::RawWorldRef<'a>
+pub struct ponko_ecs::Requires<'w>
+impl<'w> ponko_ecs::Requires<'w>
+pub fn ponko_ecs::Requires<'w>::add<R: ponko_ecs::Component>(&mut self, fn() -> R) -> &mut Self
 pub struct ponko_ecs::Tick(_)
 impl ponko_ecs::Tick
 pub fn ponko_ecs::Tick::from_bits(u64) -> Self
@@ -421,6 +452,7 @@ pub fn ponko_ecs::World::is_empty(&self) -> bool
 pub fn ponko_ecs::World::len(&self) -> usize
 pub fn ponko_ecs::World::new() -> Self
 pub fn ponko_ecs::World::query<Q: ponko_ecs::QueryData>(&mut self) -> ponko_ecs::Query<'_, Q>
+pub fn ponko_ecs::World::query_ref<Q: ponko_ecs::ReadOnlyQueryData>(&self) -> ponko_ecs::QueryRef<'_, Q>
 pub fn ponko_ecs::World::record_access(&mut self)
 pub fn ponko_ecs::World::record_access_into(&mut self, ponko_ecs::AccessLog)
 pub fn ponko_ecs::World::register<T: ponko_ecs::Component>(&mut self) -> ponko_ecs::ComponentId
@@ -438,12 +470,19 @@ pub fn ponko_ecs::World::spawn_at<B: ponko_ecs::Bundle>(&mut self, ponko_ecs::En
 pub fn ponko_ecs::World::spawn_batch<B: ponko_ecs::Bundle>(&mut self, impl core::iter::traits::collect::IntoIterator<Item = B>)
 pub fn ponko_ecs::World::take_access_log(&mut self) -> core::option::Option<ponko_ecs::AccessLog>
 impl ponko_ecs::World
+pub fn ponko_ecs::World::on_add<T: ponko_ecs::Component>(&mut self, ponko_ecs::Hook)
+pub fn ponko_ecs::World::on_remove<T: ponko_ecs::Component>(&mut self, ponko_ecs::Hook)
+pub fn ponko_ecs::World::on_replace<T: ponko_ecs::Component>(&mut self, ponko_ecs::ReplaceHook<T>)
+impl ponko_ecs::World
 pub fn ponko_ecs::World::query_cache_policy(&self) -> ponko_ecs::QueryCachePolicy
 pub fn ponko_ecs::World::query_cache_stats(&self) -> ponko_ecs::QueryCacheStats
 pub fn ponko_ecs::World::set_query_cache_policy(&mut self, ponko_ecs::QueryCachePolicy)
 impl ponko_ecs::World
 pub fn ponko_ecs::World::raw(&mut self) -> ponko_ecs::RawWorld<'_>
 pub fn ponko_ecs::World::raw_ref(&self) -> ponko_ecs::RawWorldRef<'_>
+impl ponko_ecs::World
+pub fn ponko_ecs::World::require<T: ponko_ecs::Component, R: ponko_ecs::Component>(&mut self, fn() -> R)
+pub fn ponko_ecs::World::requires(&self, ponko_ecs::ComponentId, ponko_ecs::ComponentId) -> bool
 impl core::default::Default for ponko_ecs::World
 pub fn ponko_ecs::World::default() -> Self
 pub struct ponko_ecs::WorldView<'w>
@@ -479,6 +518,7 @@ impl<A: ponko_ecs::Component, B: ponko_ecs::Component, C: ponko_ecs::Component> 
 impl<A: ponko_ecs::Component, B: ponko_ecs::Component> ponko_ecs::Bundle for (A, B)
 impl<A: ponko_ecs::Component> ponko_ecs::Bundle for (A)
 pub trait ponko_ecs::Component: core::marker::Send + core::marker::Sync + 'static
+pub fn ponko_ecs::Component::requires(&mut ponko_ecs::Requires<'_>)
 pub trait ponko_ecs::FilterTree: core::marker::Sized
 pub fn ponko_ecs::FilterTree::shape(&self) -> ponko_ecs::FilterShape<'_, Self>
 impl ponko_ecs::FilterTree for ponko_ecs::DynFilter
@@ -617,3 +657,5 @@ impl<A: core::marker::Send + core::marker::Sync + 'static> ponko_ecs::ResourceTu
 pub type (A)::Refs<'w> = (&'w mut A)
 pub fn ponko_ecs::compile_tree<T: ponko_ecs::FilterTree>(&T, impl core::ops::function::Fn(u32) -> core::option::Option<ponko_ecs::ComponentId>) -> core::result::Result<ponko_ecs::CompiledFilter, ponko_ecs::FilterError>
 pub type ponko_ecs::DropFn = fn(*mut u8)
+pub type ponko_ecs::Hook = for<'w> fn(&mut ponko_ecs::HookWorld<'w>, ponko_ecs::Entity)
+pub type ponko_ecs::ReplaceHook<T> = for<'w, 'v> fn(&mut ponko_ecs::HookWorld<'w>, ponko_ecs::Entity, &'v T)

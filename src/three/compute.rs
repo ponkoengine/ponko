@@ -3,8 +3,9 @@
 //! trails, wet ground, ripples, heat, fog of war).
 
 use super::Material;
+use super::target::RenderTarget;
 use crate::gfx::Graphics;
-use crate::texture::Texture;
+use crate::handle::INDEX_MASK;
 use glam::Vec3;
 
 /// A compute pass shader, made with [`Graphics::load_compute`](crate::gfx::Graphics::load_compute) or
@@ -65,7 +66,7 @@ pub struct Compute {
 ///
 /// ```no_run
 /// # use ponko::prelude::*;
-/// # fn f(ctx: &mut Ctx, trails: ponko::render::Compute, snow: Texture, player: Vec3) {
+/// # fn f(ctx: &mut Ctx, trails: ponko::render::Compute, snow: ponko::render::RenderTarget, player: Vec3) {
 /// let feet = ctx.gfx.create_material(
 ///     ponko::render::MaterialDesc::default().with_custom([player.extend(0.5), Vec4::ZERO, Vec4::ZERO, Vec4::ZERO]),
 /// );
@@ -76,9 +77,9 @@ pub struct Compute {
 pub struct ComputePass {
     /// The shader.
     pub compute: Compute,
-    /// What it updates: made by [`Graphics::create_render_target`](crate::gfx::Graphics::create_render_target); other
-    /// textures are skipped.
-    pub target: Texture,
+    /// What it updates: made by [`Graphics::create_render_target`](crate::gfx::Graphics::create_render_target).
+    /// Unused (and [`RenderTarget::NONE`](crate::handle::Handle::NONE)) when `buffer` is set.
+    pub target: RenderTarget,
     /// Storage buffer target, instead of `target`, when present.
     pub buffer: Option<GpuBuffer>,
     /// Where its values and textures come from. `None`: the default
@@ -98,7 +99,7 @@ impl ComputePass {
     pub fn for_buffer(compute: Compute, buffer: GpuBuffer) -> Self {
         Self {
             compute,
-            target: Texture::new(0, 0, 0),
+            target: <RenderTarget as crate::handle::Handle>::NONE,
             buffer: Some(buffer),
             material: None,
         }
@@ -108,12 +109,12 @@ impl ComputePass {
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
-    /// # fn f(ctx: &mut Ctx, c: ponko::render::Compute, t: Texture) {
+    /// # fn f(ctx: &mut Ctx, c: ponko::render::Compute, t: ponko::render::RenderTarget) {
     /// ctx.scene3d.passes.compute.push(ponko::render::ComputePass::new(c, t));
     /// # }
     /// ```
     #[must_use]
-    pub fn new(compute: Compute, target: Texture) -> Self {
+    pub fn new(compute: Compute, target: RenderTarget) -> Self {
         Self {
             compute,
             target,
@@ -127,7 +128,7 @@ impl ComputePass {
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
-    /// # fn f(c: ponko::render::Compute, t: Texture, m: ponko::render::Material) {
+    /// # fn f(c: ponko::render::Compute, t: ponko::render::RenderTarget, m: ponko::render::Material) {
     /// let pass = ponko::render::ComputePass::new(c, t).with_material(m);
     /// # }
     /// ```
@@ -213,15 +214,16 @@ impl Graphics {
             Err(e) if self.keeps_failed_load(&origin) => {
                 let e = e.with_path(path);
                 Self::report_stand_in(path, &e);
-                let id = self.assets3d.computes;
-                self.compile_compute(path, super::COMPUTE_STAND_IN, None)
+                let id = self.assets3d.compute_ids.next("compute");
+                self.compile_compute(path, super::COMPUTE_STAND_IN, id, false)
                     .map_err(|_| e)?;
                 if let Some(renderer) = self.renderer.as_mut()
                     && !self.headless
                 {
-                    renderer.free_compute(id);
+                    renderer.free_compute(id & INDEX_MASK);
                 }
-                self.assets3d.computes += 1;
+                let id = self.assets3d.compute_ids.make("compute");
+                self.keep_shader_name(super::ShaderKind::Compute, id, path);
                 self.assets3d.computes_live.insert(id);
                 self.asset_ledger.made(crate::inventory::AssetClass::Compute, id);
                 Compute { id }
@@ -276,10 +278,11 @@ impl Graphics {
     /// });
     /// ```
     pub fn try_create_compute(&mut self, name: &str, source: &str) -> Result<Compute, crate::error::Error> {
-        let id = self.assets3d.computes;
-        let compiled = self.compile_compute(name, source, None);
+        let id = self.assets3d.compute_ids.next("compute");
+        let compiled = self.compile_compute(name, source, id, false);
         self.record_shader(name, super::ShaderKind::Compute, false, compiled)?;
-        self.assets3d.computes += 1;
+        let id = self.assets3d.compute_ids.make("compute");
+        self.keep_shader_name(super::ShaderKind::Compute, id, name);
         self.assets3d.computes_live.insert(id);
         self.asset_ledger.made(crate::inventory::AssetClass::Compute, id);
         Ok(Compute { id })
@@ -290,7 +293,8 @@ impl Graphics {
         &mut self,
         name: &str,
         source: &str,
-        replace: Option<u32>,
+        id: u32,
+        replace: bool,
     ) -> Result<(), Box<super::ShaderDiagnostic>> {
         #[cfg(feature = "window")]
         crate::render::diagnose(
@@ -302,15 +306,14 @@ impl Graphics {
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
         {
-            let built = match replace {
-                Some(id) => renderer.replace_compute(id, name, source),
-                None => renderer
-                    .create_compute(name, source)
-                    .map(|gpu_id| debug_assert_eq!(gpu_id, self.assets3d.computes)),
-            };
-            built?;
+            let slot = id & INDEX_MASK;
+            if replace {
+                renderer.replace_compute(slot, name, source)?;
+            } else {
+                renderer.create_compute(slot, name, source)?;
+            }
         }
-        let _ = (name, source, replace);
+        let _ = (name, source, id, replace);
         Ok(())
     }
 
@@ -319,7 +322,7 @@ impl Graphics {
         if !self.assets3d.computes_live.contains(id) {
             return Ok(());
         }
-        let compiled = self.compile_compute(name, source, Some(id));
+        let compiled = self.compile_compute(name, source, id, true);
         Ok(self.record_shader(name, super::ShaderKind::Compute, true, compiled)?)
     }
 
@@ -329,6 +332,8 @@ impl Graphics {
         if !self.assets3d.computes_live.remove(id) {
             return;
         }
+        self.assets3d.compute_ids.release(id);
+        self.forget_shader_name(super::ShaderKind::Compute, id);
         self.asset_ledger.freed(crate::inventory::AssetClass::Compute, id);
         self.assets3d.loaded_computes.retain(|_, c| c.id != id);
         self.watcher
@@ -336,7 +341,7 @@ impl Graphics {
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
         {
-            renderer.free_compute(id);
+            renderer.free_compute(id & INDEX_MASK);
         }
     }
 }
@@ -661,14 +666,20 @@ mod tests {
             assert_eq!(frame.computes, [(simulate.id, buffer, material.id)]);
             assert_eq!(
                 frame.scene_computes,
-                [(meter.id, light.id, material.id), (simulate.id, buffer, material.id)]
+                [
+                    (meter.id, light.texture.id, material.id),
+                    (simulate.id, buffer, material.id)
+                ]
             );
             // Freeing the buffer takes its passes out of both stages.
             ctx.gfx.free(particles);
             ctx.collect_passes(Some(material));
             assert!(ctx.scene3d.passes.compute.is_empty());
             assert_eq!(ctx.scene3d.passes.scene_compute.len(), 1);
-            assert_eq!(ctx.gfx.frame3d.scene_computes, [(meter.id, light.id, material.id)]);
+            assert_eq!(
+                ctx.gfx.frame3d.scene_computes,
+                [(meter.id, light.texture.id, material.id)]
+            );
         });
     }
 

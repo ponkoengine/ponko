@@ -89,7 +89,7 @@ fn main() {
                     let settings = ctx.gfx.create_material(
                         MaterialDesc::default()
                             .with_custom([vec4(0.0, 0.18, 0.0, 0.0), Vec4::ZERO, Vec4::ZERO, Vec4::ZERO])
-                            .with_custom_textures([Some(average), None]),
+                            .with_custom_textures([Some(average.texture()), None]),
                     );
                     ctx.scene3d
                         .passes

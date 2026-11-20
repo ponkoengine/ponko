@@ -576,6 +576,141 @@ fn the_menus_work_with_the_keyboard() {
     assert_eq!(screen(&world), Screen::Playing);
 }
 
+/// Where the title's "New game" and the pause menu's "Resume" are, from a
+/// run that opens both menus.
+fn menu_buttons(dir: &Path) -> (Vec2, Vec2) {
+    let found = std::rc::Rc::new(std::cell::Cell::new((Vec2::ZERO, Vec2::ZERO)));
+    let seen = found.clone();
+    let center = |ctx: &Ctx, id: fn(&ScreenUi) -> UiId| {
+        let ids = ctx.world.resource::<ScreenUi>();
+        ctx.ui.rect(id(ids)).expect("a menu button").center()
+    };
+    scripted(dir, move |ctx| match ctx.time.sim_tick() {
+        3 => seen.set((center(ctx, |ids| ids.new_game), Vec2::ZERO)),
+        4 => intent(ctx).menu = Some(Menu::NewGame),
+        8 => intent(ctx).pause = true,
+        12 => seen.set((seen.get().0, center(ctx, |ids| ids.resume))),
+        _ => {}
+    })
+    .headless_frames(true)
+    .run_headless(13, |_| {});
+    found.get()
+}
+
+#[test]
+fn a_stretch_of_the_game_can_be_played_by_touch() {
+    let dir = data_dir("touch");
+    // The menus take taps. A tap fed by a system comes after the UI read
+    // this frame's input, so the menu taps are scenario steps, which the
+    // engine feeds first, like a window's events.
+    let (new_game, resume) = menu_buttons(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    let scenario = InputScenario::new().tap(5, new_game).tap(110, resume).duration(120);
+    let track = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = track.clone();
+    let (world, report) = Game::new("shard grove touch", 1280, 720)
+        .data_dir(&dir)
+        .headless_frames(true)
+        // The fingers on the on-screen controls, before the game reads its
+        // input (the controls stand aside while a menu is open).
+        .add(Phase::Input, |ctx: &mut Ctx| {
+            let control = |ctx: &Ctx, action: &str| ctx.input.touch_control_center(action).expect("a control");
+            let feed = |ctx: &mut Ctx, event| ctx.input.feed(event);
+            match ctx.time.sim_tick() {
+                8 => park_crawlers(ctx),
+                // The left stick forward while the right stick turns.
+                20 => {
+                    let (walk, turn) = (control(ctx, "move"), control(ctx, "turn"));
+                    feed(ctx, InputEvent::touch_start(2, walk));
+                    feed(ctx, InputEvent::touch_move(2, walk + vec2(0.0, -200.0)));
+                    feed(ctx, InputEvent::touch_start(3, turn));
+                    feed(ctx, InputEvent::touch_move(3, turn + vec2(200.0, 0.0)));
+                }
+                50 => {
+                    let (walk, turn) = (control(ctx, "move"), control(ctx, "turn"));
+                    feed(ctx, InputEvent::touch_end(2, walk + vec2(0.0, -200.0)));
+                    feed(ctx, InputEvent::touch_end(3, turn + vec2(200.0, 0.0)));
+                }
+                60 => feed(ctx, InputEvent::touch_start(4, control(ctx, "pulse"))),
+                62 => feed(ctx, InputEvent::touch_end(4, control(ctx, "pulse"))),
+                70 => feed(ctx, InputEvent::touch_start(5, control(ctx, "jump"))),
+                72 => feed(ctx, InputEvent::touch_end(5, control(ctx, "jump"))),
+                100 => feed(ctx, InputEvent::touch_start(6, control(ctx, "pause"))),
+                101 => feed(ctx, InputEvent::touch_end(6, control(ctx, "pause"))),
+                _ => {}
+            }
+        })
+        .plugin(ShardGrove)
+        .sim_system(move |ctx: &mut Ctx| {
+            let yaw = ctx.world.resource::<View>().yaw;
+            let screen = screen(&ctx.world);
+            let at = warden(&mut ctx.world).map(|(_, at)| at);
+            log.borrow_mut().push((ctx.time.sim_tick(), at, yaw, screen));
+        })
+        .run_headless_scenario(scenario, |_| {});
+    report.assert_passed();
+    let track = track.borrow();
+    let at = |tick: u64| *track.iter().find(|s| s.0 == tick).expect("a tick");
+    assert_eq!(at(10).3, Screen::Playing, "the tap on New game started a run");
+    let (start, end) = (at(19).1.expect("a warden"), at(50).1.expect("a warden"));
+    assert!(start.distance(end) > 1.0, "the stick walked: {start} to {end}");
+    assert!(at(50).2 < at(19).2 - 0.3, "the right stick turned the view right");
+    assert_eq!(world.resource::<Tally>().pulses, 1, "the pulse button pulsed");
+    let before = at(69).1.unwrap().y;
+    let top = (70..95).map(|t| at(t).1.unwrap().y).fold(f32::MIN, f32::max);
+    assert!(top > before + 0.3, "the jump button jumped: {before} to {top}");
+    assert_eq!(at(105).3, Screen::Paused, "the corner button paused");
+    assert_eq!(screen(&world), Screen::Playing, "the tap on Resume resumed");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_menus_fade_in_and_out_and_their_buttons_ease() {
+    let dir = data_dir("menu-motion");
+    // Each tick: the title menu's opacity, whether it is shown (takes
+    // input), whether it is still animating.
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = seen.clone();
+    scripted(&dir, move |ctx| {
+        let ids = *ctx.world.resource::<ScreenUi>();
+        if ctx.time.sim_tick() == 30 {
+            intent(ctx).menu = Some(Menu::NewGame);
+        }
+        assert!(
+            !ctx.ui.theme().transition.is_instant(),
+            "the buttons ease between states"
+        );
+        let opacity = ctx.ui.drawn(ids.title).map_or(0.0, |d| d.opacity);
+        log.borrow_mut()
+            .push((opacity, ctx.ui.is_shown(ids.title), ctx.ui.is_animating(ids.title)));
+    })
+    .headless_frames(true)
+    .run_headless(60, |_| {});
+    let seen = seen.borrow();
+    // The title fades in while it already takes input, and ends opaque.
+    // (The game pushes it in its first frame's late systems.)
+    let start = seen.iter().position(|s| s.1).expect("the title is pushed");
+    let shown: Vec<_> = seen[start..].iter().take_while(|s| s.1).collect();
+    assert!(
+        shown.iter().any(|s| s.0 > 0.0 && s.0 < 1.0),
+        "the title fades in: {shown:?}"
+    );
+    assert!(
+        shown.windows(2).all(|w| w[1].0 >= w[0].0),
+        "and only gets more opaque: {shown:?}"
+    );
+    assert_eq!(shown.last().unwrap().0, 1.0);
+    // A new game takes the title off the stack at once; it fades out
+    // without input, then stops animating.
+    let gone: Vec<_> = seen.iter().skip(start + shown.len()).collect();
+    assert!(gone.iter().all(|s| !s.1), "the title takes no input once left");
+    assert!(
+        gone.iter().any(|s| s.0 > 0.0 && s.0 < 1.0),
+        "the title fades out: {gone:?}"
+    );
+    assert!(!gone.last().unwrap().2, "the fade ends");
+}
+
 #[test]
 fn the_sign_over_the_gate_is_ui_in_the_world() {
     let dir = data_dir("sign");

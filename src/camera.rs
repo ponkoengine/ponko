@@ -15,6 +15,7 @@
 use glam::Vec2;
 
 mod damp;
+pub(crate) mod feed;
 pub(crate) mod follow2d;
 #[cfg(feature = "3d")]
 pub(crate) mod rigs3d;
@@ -26,6 +27,7 @@ pub(crate) mod views;
 pub(crate) mod views3d;
 
 pub use damp::{damp, damp_angle, smooth_damp};
+pub use feed::CameraTarget;
 pub use shake::CameraShake;
 pub use views::{RenderLayers, Viewport};
 

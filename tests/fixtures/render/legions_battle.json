@@ -1,0 +1,17 @@
+{
+  "name": "legions_battle",
+  "scene": "The legions example, 4000 units of seed 1 after 330 ticks, drawn with its own animation and ground at 2 pixels per world unit on the middle of the fight: red soldiers and archers on the left, blue on the right, arrows and the fallen between, on grass, mud and rock.",
+  "width": 256,
+  "height": 144,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.01,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "b20e3de09317b340",
+  "reason": "New reference: the legions showcase battle (#52)."
+}

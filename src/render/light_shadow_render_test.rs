@@ -230,6 +230,8 @@ fn local_shadow_levels(batch: bool, point: bool, compute: bool, casts: bool, cam
             ctx.gfx.assets3d.instance_batches[handle.id as usize].as_ref(),
         );
     }
+    // How many passes drew into the light shadow atlas, last draw.
+    let light_passes = std::cell::Cell::new(0);
     let mut draw = |ctx: &mut Ctx| -> Vec<u8> {
         let mut frame = Frame3D::default();
         frame.collect(
@@ -262,6 +264,7 @@ fn local_shadow_levels(batch: bool, point: bool, compute: bool, casts: bool, cam
                 size: (SIZE, SIZE),
             },
         );
+        light_passes.set(renderer.light_shadow_passes());
         let buffers = renderer.draw(&device, &target, wgpu::Color::BLACK, &textures, None);
         queue.submit(buffers);
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
@@ -301,6 +304,8 @@ fn local_shadow_levels(batch: bool, point: bool, compute: bool, casts: bool, cam
     // is still in the cone, in the open.
     let (under, open) = (vec3(0.0, 0.0, 0.6), vec3(0.0, 0.0, 2.5));
     let shadowed = draw(&mut ctx);
+    // The spot light's view and the point light's six share one pass.
+    assert_eq!(light_passes.get(), 1, "the light views are drawn in one pass");
     ctx.world.get_mut::<SpotLight3D>(light).unwrap().shadows = false;
     if let Some(light) = point_light {
         ctx.world.get_mut::<PointLight3D>(light).unwrap().shadows = false;

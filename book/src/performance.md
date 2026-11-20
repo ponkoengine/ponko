@@ -96,6 +96,10 @@ with the army, so the crowd density stays the same.
 With a window, 20k units run at the display's 120 FPS with 1.2 ms of
 simulation per frame.
 
+The simulation showcase, [Legions](legions.md), adds archers, arrows and
+replays that end with the same world hash; its chapter has its numbers at
+10,000, 100,000 and 250,000 units.
+
 How it stays fast, in case your game needs the same tricks:
 - Marching units look for enemies only on their turn (`ctx.time.turns(4)`),
   units in a fight every tick.

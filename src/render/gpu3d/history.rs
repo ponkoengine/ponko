@@ -30,7 +30,7 @@ pub(super) struct History {
     pub(super) camera: Option<Mat4>,
     /// The time (`frame.time.xy`) of the last frame drawn: a material's
     /// `vertex` runs as of it for the motion pass (`frame.time.zw`).
-    pub(super) time: Option<(f32, f32)>,
+    pub(super) time: Option<(f64, f32)>,
     /// Why this frame dropped the temporal history, if it did.
     #[cfg(test)]
     pub(super) reset: HistoryReset,

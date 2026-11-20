@@ -14,15 +14,17 @@ use crate::texture::Texture;
 
 /// A bone's transform relative to its parent: translation, then rotation
 /// (radians, clockwise on screen like [`Transform2D`](crate::d2::Transform)),
-/// then scale. A bone points along its local +x axis.
+/// then scale, with an optional shear. A bone points along its local +x axis.
 ///
 /// ```
 /// use ponko::prelude::*;
 /// use ponko::skeleton2d::BonePose;
 /// let elbow = BonePose::at(vec2(20.0, 0.0)).with_rotation(0.5);
 /// assert_eq!(elbow.scale, Vec2::ONE);
+/// assert_eq!(elbow.shear, Vec2::ZERO);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct BonePose {
     /// Offset from the parent's origin, in the parent's units.
     pub translation: Vec2,
@@ -30,6 +32,11 @@ pub struct BonePose {
     pub rotation: f32,
     /// Size multiplier along the bone's own axes; negative mirrors.
     pub scale: Vec2,
+    /// Extra turn of each of the bone's axes, radians clockwise on screen:
+    /// `x` turns its +x axis and `y` its +y axis (as Spine's shear does,
+    /// mirrored to y-down). Zero: no shear, the axes stay square.
+    #[serde(default)]
+    pub shear: Vec2,
 }
 
 impl Default for BonePose {
@@ -44,7 +51,20 @@ impl BonePose {
         translation: Vec2::ZERO,
         rotation: 0.0,
         scale: Vec2::ONE,
+        shear: Vec2::ZERO,
     };
+
+    /// A pose from its parts: `translation`, `rotation` (radians, clockwise
+    /// on screen) and `scale`, without shear.
+    #[must_use]
+    pub fn new(translation: Vec2, rotation: f32, scale: Vec2) -> Self {
+        Self {
+            translation,
+            rotation,
+            scale,
+            shear: Vec2::ZERO,
+        }
+    }
 
     /// A pose at `translation` with no rotation and scale 1.
     #[must_use]
@@ -67,13 +87,70 @@ impl BonePose {
         Self { scale, ..self }
     }
 
-    /// The pose's matrix: translate · rotate · scale.
-    pub(crate) fn matrix(&self) -> Affine2 {
-        Affine2::from_scale_angle_translation(self.scale, self.rotation, self.translation)
+    /// The same pose with shear `shear` (radians; see [`shear`](Self::shear)).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::skeleton2d::BonePose;
+    /// // Its +y axis turns an eighth of a turn clockwise; +x stays.
+    /// let lean = BonePose::IDENTITY.with_shear(vec2(0.0, std::f32::consts::FRAC_PI_4));
+    /// assert_eq!(lean.shear.y, std::f32::consts::FRAC_PI_4);
+    /// ```
+    #[must_use]
+    pub fn with_shear(self, shear: Vec2) -> Self {
+        Self { shear, ..self }
     }
 
-    /// The pose `t` of the way to `other`: translation and scale linearly,
-    /// rotation along the shorter way round.
+    /// The pose's matrix: translate · rotate · scale, its +x axis turned by
+    /// `rotation + shear.x` and its +y axis by `rotation + shear.y`.
+    pub(crate) fn matrix(&self) -> Affine2 {
+        if self.shear == Vec2::ZERO {
+            return Affine2::from_scale_angle_translation(self.scale, self.rotation, self.translation);
+        }
+        let (sx, cx) = (self.rotation + self.shear.x).sin_cos();
+        let (sy, cy) = (self.rotation + self.shear.y).sin_cos();
+        Affine2::from_cols(
+            Vec2::new(cx, sx) * self.scale.x,
+            Vec2::new(-sy, cy) * self.scale.y,
+            self.translation,
+        )
+    }
+
+    /// The pose whose [`matrix`](Self::matrix) is `m`, without shear on
+    /// its x axis (a turn of x is a rotation): exact for any invertible
+    /// matrix, so `pose_of(p.matrix())` gives `p.matrix()` back.
+    pub(crate) fn of_matrix(m: Affine2) -> Self {
+        let (x, y) = (m.matrix2.x_axis, m.matrix2.y_axis);
+        let sx = x.length();
+        if sx <= 1e-6 {
+            // No x axis to measure the turn from: turn by the y axis alone.
+            return Self {
+                translation: m.translation,
+                rotation: (-y.x).atan2(y.y),
+                scale: Vec2::new(0.0, y.length()),
+                shear: Vec2::ZERO,
+            };
+        }
+        let rotation = x.y.atan2(x.x);
+        let det = x.x * y.y - y.x * x.y;
+        let sy = if det < 0.0 { -y.length() } else { y.length() };
+        // The y axis turned back by the rotation: sy (-sin shear, cos shear).
+        let back = glam::Mat2::from_angle(-rotation) * y;
+        let shear = if sy == 0.0 {
+            0.0
+        } else {
+            (-back.x / sy).atan2(back.y / sy)
+        };
+        Self {
+            translation: m.translation,
+            rotation,
+            scale: Vec2::new(sx, sy),
+            shear: Vec2::new(0.0, shear),
+        }
+    }
+
+    /// The pose `t` of the way to `other`: translation, scale and shear
+    /// linearly, rotation along the shorter way round.
     ///
     /// ```
     /// use ponko::prelude::*;
@@ -91,6 +168,7 @@ impl BonePose {
             translation: self.translation.lerp(other.translation, t),
             rotation: self.rotation + angle_delta(self.rotation, other.rotation) * t,
             scale: self.scale.lerp(other.scale, t),
+            shear: self.shear.lerp(other.shear, t),
         }
     }
 }
@@ -316,6 +394,40 @@ impl SkinnedMesh {
     }
 }
 
+/// A polygon that clips what the slots after it draw: from its own slot's
+/// place in the draw order up to and including slot `end`, only the parts
+/// inside the polygon are drawn (Spine's clipping attachment). Its
+/// vertices follow their bones as a [`SkinnedMesh`]'s do; their `uv` is
+/// unused. Any simple polygon, convex or not, in either winding.
+///
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::skeleton2d::{BonePose, ClippingMask, MeshVertex, SkeletonData};
+/// let mut data = SkeletonData::new();
+/// let root = data.add_bone("root", None, BonePose::IDENTITY, 0.0);
+/// let window = data.add_slot("window", root);
+/// let corner = |x, y| MeshVertex::new(vec2(x, y), Vec2::ZERO, &[(root, 1.0)]);
+/// let square = vec![corner(0.0, 0.0), corner(10.0, 0.0), corner(10.0, 10.0), corner(0.0, 10.0)];
+/// data.add_attachment(window, "window", ClippingMask::new(square, None)); // clips every slot after it
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct ClippingMask {
+    /// The polygon's corners, in order, at rest (skeleton units).
+    pub vertices: Vec<MeshVertex>,
+    /// The last slot it clips; `None`: every slot drawn after it.
+    pub end: Option<usize>,
+}
+
+impl ClippingMask {
+    /// A mask with corners `vertices` (in order around the polygon) that
+    /// clips the slots drawn after its own up to `end` (`None`: all of them).
+    #[must_use]
+    pub fn new(vertices: Vec<MeshVertex>, end: Option<usize>) -> Self {
+        Self { vertices, end }
+    }
+}
+
 /// What a slot can show.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -324,15 +436,22 @@ pub enum Attachment {
     Sprite(SpritePart),
     /// A mesh deformed by its bones.
     Mesh(SkinnedMesh),
+    /// Nothing itself: clips what the next slots draw.
+    Clipping(ClippingMask),
 }
 
+/// The texture of attachments that show no image.
+const NO_TEXTURE: Texture = Texture::new(u32::MAX, 0, 0);
+
 impl Attachment {
-    /// The image it shows.
+    /// The image it shows (an empty texture for a [`ClippingMask`], which
+    /// shows none).
     #[must_use]
     pub fn texture(&self) -> Texture {
         match self {
             Self::Sprite(s) => s.texture,
             Self::Mesh(m) => m.texture,
+            Self::Clipping(_) => NO_TEXTURE,
         }
     }
 
@@ -341,13 +460,26 @@ impl Attachment {
         match self {
             Self::Sprite(s) => &s.image,
             Self::Mesh(m) => &m.image,
+            Self::Clipping(_) => "",
         }
     }
 
-    pub(crate) fn texture_mut(&mut self) -> (&str, &mut Texture) {
+    /// Its image file and texture, for the ones that show an image.
+    pub(crate) fn texture_mut(&mut self) -> Option<(&str, &mut Texture)> {
         match self {
-            Self::Sprite(s) => (&s.image, &mut s.texture),
-            Self::Mesh(m) => (&m.image, &mut m.texture),
+            Self::Sprite(s) => Some((&s.image, &mut s.texture)),
+            Self::Mesh(m) => Some((&m.image, &mut m.texture)),
+            Self::Clipping(_) => None,
+        }
+    }
+
+    /// The vertices that follow bones by weight: a mesh's, or a clipping
+    /// mask's corners.
+    fn weighted(&self) -> Option<&[MeshVertex]> {
+        match self {
+            Self::Sprite(_) => None,
+            Self::Mesh(m) => Some(&m.vertices),
+            Self::Clipping(c) => Some(&c.vertices),
         }
     }
 }
@@ -401,6 +533,92 @@ impl IkConstraint {
     }
 }
 
+/// A transform constraint, applied after animation (in its turn among the
+/// IK constraints): its bones take on some of its target bone's rotation,
+/// position, scale and shear, as Spine's transform constraints do.
+///
+/// In world space (the default) each bone moves toward the target's
+/// skeleton-space transform; `local` mixes the bones' poses relative to
+/// their parents instead. `relative` adds the target's transform to the
+/// bone's rather than moving toward it. Each mix is 0 (none) to 1 (fully);
+/// the offsets are added to the target's values.
+///
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::skeleton2d::{BonePose, SkeletonData, TransformConstraint};
+/// let mut data = SkeletonData::new();
+/// let root = data.add_bone("root", None, BonePose::IDENTITY, 0.0);
+/// let leader = data.add_bone("leader", Some(root), BonePose::at(vec2(10.0, 0.0)), 0.0);
+/// let follower = data.add_bone("follower", Some(root), BonePose::IDENTITY, 0.0);
+/// let mut follow = TransformConstraint::new("follow", &[follower], leader);
+/// follow.mix_translate = vec2(0.5, 0.5); // half way to the leader
+/// data.add_transform_constraint(follow);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct TransformConstraint {
+    /// Its name, unique in the skeleton.
+    pub name: Arc<str>,
+    /// The bones it moves, in order.
+    pub bones: Vec<usize>,
+    /// The bone they follow.
+    pub target: usize,
+    /// How much of the target's rotation the bones take.
+    pub mix_rotate: f32,
+    /// How much of the target's position, along x and along y.
+    pub mix_translate: Vec2,
+    /// How much of the target's scale, along the bones' x and y axes.
+    pub mix_scale: Vec2,
+    /// How much of the target's shear of its y axis.
+    pub mix_shear_y: f32,
+    /// Added to the target's rotation (radians, clockwise on screen).
+    pub offset_rotation: f32,
+    /// A point in the target's space whose position the bones take
+    /// (world space), or added to the target's translation (`local`).
+    pub offset_translation: Vec2,
+    /// Added to the target's scale.
+    pub offset_scale: Vec2,
+    /// Added to the target's y shear (radians).
+    pub offset_shear_y: f32,
+    /// Mix the bones' poses relative to their parents with the target's,
+    /// instead of their skeleton-space transforms.
+    pub local: bool,
+    /// Add the target's transform to the bones' instead of moving them
+    /// toward it.
+    pub relative: bool,
+}
+
+impl TransformConstraint {
+    /// A constraint named `name` that moves `bones` fully onto bone
+    /// `target`'s skeleton-space rotation, position, scale and shear, with
+    /// no offsets.
+    #[must_use]
+    pub fn new(name: &str, bones: &[usize], target: usize) -> Self {
+        Self {
+            name: name.into(),
+            bones: bones.to_vec(),
+            target,
+            mix_rotate: 1.0,
+            mix_translate: Vec2::ONE,
+            mix_scale: Vec2::ONE,
+            mix_shear_y: 1.0,
+            offset_rotation: 0.0,
+            offset_translation: Vec2::ZERO,
+            offset_scale: Vec2::ZERO,
+            offset_shear_y: 0.0,
+            local: false,
+            relative: false,
+        }
+    }
+}
+
+/// A constraint in the order constraints apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Constraint {
+    Ik(usize),
+    Transform(usize),
+}
+
 /// An attachment under a name in a slot of a skin.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Named {
@@ -408,8 +626,8 @@ pub(crate) struct Named {
     pub(crate) slot: usize,
     pub(crate) name: Arc<str>,
     pub(crate) attachment: Attachment,
-    /// For meshes: each vertex's influences in its bones' rest spaces
-    /// (bone, position, weight), four per vertex.
+    /// For meshes and clipping masks: each vertex's influences in its
+    /// bones' rest spaces (bone, position, weight), four per vertex.
     pub(crate) binds: Vec<(u16, Vec2, f32)>,
     /// For meshes: the bounds of its rest positions, for sprite shaders' `local`.
     pub(crate) bounds: (Vec2, Vec2),
@@ -472,6 +690,9 @@ pub struct SkeletonData {
     pub(crate) lookup: HashMap<(usize, usize, Arc<str>), usize>,
     pub(crate) clips: Vec<Clip>,
     pub(crate) ik: Vec<IkConstraint>,
+    pub(crate) transforms: Vec<TransformConstraint>,
+    /// Every constraint, in the order they apply.
+    pub(crate) constraints: Vec<Constraint>,
     pub(crate) graph: Option<Arc<SkeletonGraph>>,
     /// What an import left out or changed, each naming the file and the
     /// feature; printed when the file loads.
@@ -511,7 +732,7 @@ impl SkeletonData {
     }
 
     /// What importing it left out: each warning names the file and the
-    /// feature it doesn't read (a Spine shear, a clipping attachment...).
+    /// feature it doesn't read (a Spine inherit mode, a linked mesh...).
     /// [`Ctx::load_skeleton2d`](crate::ctx::Ctx::load_skeleton2d) prints
     /// them when the file loads. Empty for Ponko's own format, which
     /// refuses what it doesn't know.
@@ -634,10 +855,16 @@ impl SkeletonData {
         let attachment = attachment.into();
         let mut binds = Vec::new();
         let mut bounds = (Vec2::ZERO, Vec2::ONE);
-        if let Attachment::Mesh(mesh) = &attachment {
+        if let Attachment::Clipping(mask) = &attachment {
+            assert!(
+                mask.end.is_none_or(|e| e < self.slots.len()),
+                "ponko: clipping mask \"{name}\" ends at a slot that isn't in the skeleton; add that slot first or end at None"
+            );
+        }
+        if let Some(vertices) = attachment.weighted() {
             let mut min = Vec2::splat(f32::MAX);
             let mut max = Vec2::splat(f32::MIN);
-            for v in &mesh.vertices {
+            for v in vertices {
                 min = min.min(v.position);
                 max = max.max(v.position);
                 for (bone, weight) in v.bones.into_iter().zip(v.weights) {
@@ -654,7 +881,7 @@ impl SkeletonData {
                     binds.push((bone, local, weight));
                 }
             }
-            if !mesh.vertices.is_empty() {
+            if !vertices.is_empty() {
                 bounds = (min, (max - min).max(Vec2::splat(1e-6)));
             }
         }
@@ -684,7 +911,10 @@ impl SkeletonData {
             "ponko: the skeleton has a clip named \"{}\" already; use a unique name",
             clip.name
         );
-        if let Err(e) = clip.check(self.bones.len(), self.slots.len()) {
+        if let Err(e) = clip
+            .check(self.bones.len(), self.slots.len())
+            .and_then(|()| self.check_deform(&clip))
+        {
             panic!("ponko: {e}");
         }
         self.clips.push(clip);
@@ -701,8 +931,100 @@ impl SkeletonData {
         if let Err(e) = self.check_ik(&ik) {
             panic!("ponko: {e}");
         }
+        self.push_ik(ik)
+    }
+
+    pub(crate) fn push_ik(&mut self, ik: IkConstraint) -> usize {
         self.ik.push(ik);
+        self.constraints.push(Constraint::Ik(self.ik.len() - 1));
         self.ik.len() - 1
+    }
+
+    /// Adds a transform constraint and returns its index. Constraints (IK
+    /// and transform) apply in the order they were added.
+    ///
+    /// # Panics
+    /// If the name is taken, a bone isn't there, the target is one of its
+    /// bones, or a mix or offset isn't a number.
+    pub fn add_transform_constraint(&mut self, constraint: TransformConstraint) -> usize {
+        if let Err(e) = self.check_transform(&constraint) {
+            panic!("ponko: {e}");
+        }
+        self.push_transform(constraint)
+    }
+
+    pub(crate) fn push_transform(&mut self, constraint: TransformConstraint) -> usize {
+        self.transforms.push(constraint);
+        self.constraints.push(Constraint::Transform(self.transforms.len() - 1));
+        self.transforms.len() - 1
+    }
+
+    pub(crate) fn check_transform(&self, c: &TransformConstraint) -> Result<(), SkeletonError> {
+        let n = self.bones.len();
+        if self.transform_constraint(&c.name).is_some() {
+            return Err(err(format!(
+                "the skeleton has a transform constraint named \"{}\" already; use a unique name",
+                c.name
+            )));
+        }
+        if c.target >= n || c.bones.iter().any(|&b| b >= n) {
+            return Err(err(format!(
+                "transform constraint \"{}\" needs bones and a target that are in the skeleton",
+                c.name
+            )));
+        }
+        if c.bones.contains(&c.target) {
+            return Err(err(format!(
+                "transform constraint \"{}\" can't move its own target",
+                c.name
+            )));
+        }
+        let numbers = [
+            c.mix_rotate,
+            c.mix_translate.x,
+            c.mix_translate.y,
+            c.mix_scale.x,
+            c.mix_scale.y,
+            c.mix_shear_y,
+            c.offset_rotation,
+            c.offset_translation.x,
+            c.offset_translation.y,
+            c.offset_scale.x,
+            c.offset_scale.y,
+            c.offset_shear_y,
+        ];
+        if !numbers.iter().all(|v| v.is_finite()) {
+            return Err(err(format!(
+                "transform constraint \"{}\"'s mixes and offsets must be numbers",
+                c.name
+            )));
+        }
+        Ok(())
+    }
+
+    /// `Ok` if every deform track of `clip` names a mesh of this skeleton
+    /// and has one offset per vertex and influence (four per vertex).
+    pub(crate) fn check_deform(&self, clip: &super::Clip) -> Result<(), SkeletonError> {
+        for t in &clip.deform {
+            let vertices = self
+                .lookup
+                .get(&(t.skin, t.slot, t.attachment.clone()))
+                .and_then(|&i| self.attachments[i].attachment.weighted());
+            let Some(vertices) = vertices else {
+                return Err(err(format!(
+                    "clip \"{}\" deforms \"{}\" in slot {} of skin {}, which isn't a mesh or clipping mask there",
+                    clip.name, t.attachment, t.slot, t.skin
+                )));
+            };
+            let want = vertices.len() * 4;
+            if t.keys.iter().any(|k| k.value.len() != want) {
+                return Err(err(format!(
+                    "clip \"{}\": every deform key of \"{}\" needs {want} offsets (four per vertex)",
+                    clip.name, t.attachment
+                )));
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn check_ik(&self, ik: &IkConstraint) -> Result<(), SkeletonError> {
@@ -766,6 +1088,12 @@ impl SkeletonData {
         &self.ik
     }
 
+    /// Its transform constraints.
+    #[must_use]
+    pub fn transform_constraints(&self) -> &[TransformConstraint] {
+        &self.transforms
+    }
+
     /// Its skins' names; `"default"` is the first.
     #[must_use]
     pub fn skins(&self) -> &[Arc<str>] {
@@ -808,6 +1136,12 @@ impl SkeletonData {
         self.ik.iter().position(|c| &*c.name == name)
     }
 
+    /// The index of the transform constraint named `name`.
+    #[must_use]
+    pub fn transform_constraint(&self, name: &str) -> Option<usize> {
+        self.transforms.iter().position(|c| &*c.name == name)
+    }
+
     /// The attachment slot `slot` shows under `name` with skin `skin`: the
     /// skin's own, else the default skin's.
     #[must_use]
@@ -830,10 +1164,7 @@ impl SkeletonData {
     pub fn images(&self) -> Vec<&str> {
         let mut names: Vec<&str> = Vec::new();
         for a in &self.attachments {
-            let image = match &a.attachment {
-                Attachment::Sprite(s) => &*s.image,
-                Attachment::Mesh(m) => &*m.image,
-            };
+            let image = a.attachment.image();
             if !image.is_empty() && !names.contains(&image) {
                 names.push(image);
             }
@@ -851,5 +1182,29 @@ impl From<SpritePart> for Attachment {
 impl From<SkinnedMesh> for Attachment {
     fn from(mesh: SkinnedMesh) -> Self {
         Self::Mesh(mesh)
+    }
+}
+
+impl From<ClippingMask> for Attachment {
+    fn from(mask: ClippingMask) -> Self {
+        Self::Clipping(mask)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_matrix_decomposes_into_a_pose_that_builds_it_again() {
+        for (t, r, s, h) in [
+            (Vec2::new(3.0, -2.0), 0.7, Vec2::new(2.0, 0.5), 0.0),
+            (Vec2::ZERO, -2.5, Vec2::new(1.5, -3.0), 0.4),
+            (Vec2::ONE, 1.2, Vec2::new(-1.0, 2.0), -0.9),
+        ] {
+            let m = BonePose::new(t, r, s).with_shear(Vec2::new(0.0, h)).matrix();
+            let back = BonePose::of_matrix(m).matrix();
+            assert!(back.abs_diff_eq(m, 1e-4), "{m} != {back}");
+        }
     }
 }

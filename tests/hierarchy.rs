@@ -333,6 +333,36 @@ fn a_despawned_parent_takes_its_subtree_at_the_next_update() {
 }
 
 #[test]
+fn children_linked_since_the_last_update_go_with_a_parent_despawned_before_the_next() {
+    let mut world = World::new();
+    world.update_hierarchy();
+    let (root, kids) = family(&mut world);
+    world.despawn(root);
+    world.update_hierarchy();
+    assert!(kids.iter().all(|&k| !world.is_alive(k)));
+}
+
+#[test]
+fn a_games_own_hook_on_children_runs_next_to_the_hierarchys() {
+    #[derive(Default)]
+    struct Orphaned(usize);
+    fn count(world: &mut HookWorld, parent: Entity) {
+        let n = world.get::<Children>(parent).map_or(0, Children::len);
+        world.resource_mut::<Orphaned>().0 += n;
+    }
+    let mut world = World::new();
+    world.insert_resource(Orphaned::default());
+    world.on_remove::<Children>(count);
+    let (root, [a, b, c]) = family(&mut world);
+    world.update_hierarchy(); // the hierarchy adds its own hook
+    world.despawn(a);
+    world.despawn(root);
+    world.update_hierarchy();
+    assert!(![b, c].iter().any(|&k| world.is_alive(k)));
+    assert_eq!(world.resource::<Orphaned>().0, 3, "the root's list, before it went");
+}
+
+#[test]
 fn the_game_keeps_children_lists_for_attachments_added_any_way() {
     let mut ids = None;
     let world = Game::new("hierarchy", 1, 1)

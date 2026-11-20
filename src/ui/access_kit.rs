@@ -33,6 +33,21 @@ fn role(role: UiRole) -> Role {
         UiRole::TextInput => Role::TextInput,
         UiRole::CheckBox => Role::CheckBox,
         UiRole::Slider => Role::Slider,
+        UiRole::ComboBox => Role::ComboBox,
+        UiRole::TabList => Role::TabList,
+        UiRole::Tab => Role::Tab,
+        UiRole::TabPanel => Role::TabPanel,
+        UiRole::RadioGroup => Role::RadioGroup,
+        UiRole::RadioButton => Role::RadioButton,
+        UiRole::ProgressBar | UiRole::Spinner => Role::ProgressIndicator,
+        UiRole::SpinButton => Role::SpinButton,
+        UiRole::List => Role::ListBox,
+        UiRole::ListItem => Role::ListBoxOption,
+        UiRole::Grid => Role::Grid,
+        UiRole::GridCell => Role::GridCell,
+        UiRole::Menu => Role::Menu,
+        UiRole::MenuItem => Role::MenuItem,
+        UiRole::Splitter => Role::Splitter,
     }
 }
 
@@ -73,6 +88,23 @@ fn node(n: &UiAccessNode) -> Node {
             node.set_max_numeric_value(1.0);
             node.set_numeric_value_step(f64::from(SLIDER_STEP));
         }
+        UiAccessValue::Number { value, min, max, step } => {
+            node.set_numeric_value(*value);
+            node.set_min_numeric_value(*min);
+            node.set_max_numeric_value(*max);
+            node.set_numeric_value_step(*step);
+        }
+    }
+    if n.selected || matches!(n.role, UiRole::Tab | UiRole::ListItem | UiRole::GridCell) {
+        node.set_selected(n.selected);
+    }
+    if let Some(open) = n.expanded {
+        node.set_expanded(open);
+    }
+    if let Some((at, of)) = n.position {
+        // AccessKit counts from 0.
+        node.set_position_in_set(at.saturating_sub(1));
+        node.set_size_of_set(of);
     }
     node.set_bounds(Rect {
         x0: f64::from(n.rect.min.x),
@@ -96,7 +128,20 @@ fn node(n: &UiAccessNode) -> Node {
     if n.focusable {
         node.add_action(Action::Focus);
         match n.role {
-            UiRole::Button | UiRole::CheckBox => node.add_action(Action::Click),
+            UiRole::Button
+            | UiRole::CheckBox
+            | UiRole::Tab
+            | UiRole::RadioButton
+            | UiRole::MenuItem
+            | UiRole::ListItem
+            | UiRole::ComboBox
+            | UiRole::List
+            | UiRole::Grid => node.add_action(Action::Click),
+            UiRole::SpinButton | UiRole::Splitter => {
+                node.add_action(Action::Increment);
+                node.add_action(Action::Decrement);
+                node.add_action(Action::SetValue);
+            }
             UiRole::TextInput => {
                 node.add_action(Action::Click);
                 node.add_action(Action::SetValue);

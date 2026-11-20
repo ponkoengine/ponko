@@ -77,6 +77,8 @@ pub(crate) struct Occlusion {
     params: wgpu::Buffer,
     farthest: Option<wgpu::Buffer>,
     bind_group: Option<wgpu::BindGroup>,
+    /// The depth `bind_group` reads: it is made again only for another.
+    bound_depth: Option<wgpu::TextureView>,
     slots: [Slot; SLOTS],
     /// The slot this frame fills, if one was free and culling is on.
     current: Option<usize>,
@@ -84,6 +86,9 @@ pub(crate) struct Occlusion {
     frame: u64,
     /// The newest grid read back, until it is taken.
     pub latest: Option<OcclusionGrid>,
+    /// A grid handed back (see `Renderer3D::replace_occlusion`), whose
+    /// storage the next one read back is built in.
+    pub spare: Option<OcclusionGrid>,
 }
 
 impl Occlusion {
@@ -114,11 +119,13 @@ impl Occlusion {
             }),
             farthest: None,
             bind_group: None,
+            bound_depth: None,
             slots: [slot(), slot(), slot()],
             current: None,
             next: 0,
             frame: 0,
             latest: None,
+            spare: None,
         }
     }
 
@@ -138,9 +145,11 @@ impl Occlusion {
                 let (w, h) = slot.grid;
                 let bytes = (w * h) as usize * 4;
                 if let Ok(view) = buffer.get_mapped_range(..) {
-                    let depth: Vec<f32> = bytemuck::cast_slice(&view[..bytes]).to_vec();
+                    // Built in the storage of a grid handed back, if any.
+                    let mut grid = self.spare.take().or_else(|| self.latest.take()).unwrap_or_default();
+                    grid.rebuild(slot.view_proj, slot.camera, w, h, bytemuck::cast_slice(&view[..bytes]));
                     drop(view);
-                    self.latest = Some(OcclusionGrid::new(slot.view_proj, slot.camera, w, h, depth));
+                    self.latest = Some(grid);
                 }
             }
             buffer.unmap();
@@ -170,7 +179,9 @@ impl Occlusion {
         self.collect(device);
         if !on {
             self.latest = None;
+            self.spare = None;
             self.bind_group = None;
+            self.bound_depth = None;
             return;
         }
         let i = self.next;
@@ -184,6 +195,7 @@ impl Occlusion {
             if self.farthest.is_some() {
                 traffic::reallocated();
             }
+            self.bind_group = None;
             self.farthest = Some(device.new_buffer(&wgpu::BufferDescriptor {
                 label: Some("3d occlusion depth"),
                 size: bytes,
@@ -203,6 +215,7 @@ impl Occlusion {
             }));
         }
         if self.pipeline.as_ref().is_none_or(|p| p.0 != samples) {
+            self.bind_group = None;
             self.pipeline = Some(build(device, samples));
         }
         let Some((_, _, layout)) = &self.pipeline else { return };
@@ -218,24 +231,30 @@ impl Occlusion {
                 pad: [0; 2],
             }),
         );
-        self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("3d occlusion"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.params.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(depth),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: farthest.as_entire_binding(),
-                },
-            ],
-        }));
+        if self.bound_depth.as_ref() != Some(depth) {
+            self.bind_group = None;
+        }
+        if self.bind_group.is_none() {
+            self.bound_depth = Some(depth.clone());
+            self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("3d occlusion"),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.params.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(depth),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: farthest.as_entire_binding(),
+                    },
+                ],
+            }));
+        }
         self.frame += 1;
         let slot = &mut self.slots[i];
         slot.view_proj = view_proj;

@@ -47,8 +47,10 @@ pub use vehicle::{FrictionCurve, Vehicle3D, Wheel3D};
 /// [`Game::fixed_hz`](crate::game::Game::fixed_hz): 50 steps per second.
 pub(crate) const PHYSICS3D_HZ: u32 = 50;
 
-/// Makes an entity a 3D physics body. It also needs a [`Collider3D`] and a
-/// [`d3::Transform`](crate::d3::Transform).
+/// Makes an entity a 3D physics body. It also needs a [`Collider3D`]. It
+/// requires a [`d3::Transform`](crate::d3::Transform) and a
+/// [`Velocity3D`]: an entity that lacks them gets them (at the origin, at
+/// rest) when the body arrives, so a spawn names only what differs.
 ///
 /// ```
 /// use ponko::prelude::*;
@@ -58,6 +60,7 @@ pub(crate) const PHYSICS3D_HZ: u32 = 50;
 /// assert_eq!(ground.kind, ponko::collision::BodyKind::Fixed);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Component)]
+#[component(requires(Transform3D, Velocity3D))]
 #[serde(default)]
 pub struct RigidBody3D {
     /// Dynamic, fixed or kinematic.
@@ -316,7 +319,11 @@ impl CollisionGroups {
 }
 
 /// The solid shape of a 3D body, its surface (friction, bounciness) and
-/// what it touches.
+/// what it touches. It requires a [`RigidBody3D`]: an entity that gets a
+/// collider without one gets [`RigidBody3D::fixed`] (ground, walls, a
+/// sensor that stays put), and with it a
+/// [`d3::Transform`](crate::d3::Transform) and a [`Velocity3D`]. Give a
+/// body in the same spawn, or insert one, to make it move.
 ///
 /// ```
 /// use ponko::prelude::*;
@@ -326,6 +333,7 @@ impl CollisionGroups {
 /// assert_eq!(ball.friction, 0.5);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Component)]
+#[component(requires(RigidBody3D = RigidBody3D::fixed()))]
 pub struct Collider3D {
     /// Sphere, box, capsule or a mesh.
     pub shape: Shape3D,
@@ -949,6 +957,39 @@ impl Physics3D {
         self.link(e).map(|l| l.curr.position)
     }
 
+    /// How a body is turned as of the last physics step (the rotation
+    /// [`position`](Self::position)'s transform holds right after it).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// struct Ball(Entity);
+    /// struct Turned(Option<Quat>);
+    /// fn look(ctx: &mut Ctx) {
+    ///     let ball = ctx.world.resource::<Ball>().0;
+    ///     let turned = ctx.physics3d.rotation(ball);
+    ///     ctx.world.insert_resource(Turned(turned));
+    /// }
+    /// let world = Game::new("t", 1, 1).physics3d(Vec3::ZERO).sim_system(look).run_headless(3, |ctx| {
+    ///     let ball = ctx.world.spawn((ponko::d3::Transform::default(), ponko::d3::RigidBody::dynamic(), ponko::d3::Collider::sphere(0.5)));
+    ///     ctx.world.insert_resource(Ball(ball));
+    /// });
+    /// assert_eq!(world.resource::<Turned>().0, Some(Quat::IDENTITY));
+    /// ```
+    pub fn rotation(&self, e: Entity) -> Option<Quat> {
+        self.link(e).map(|l| l.curr.rotation)
+    }
+
+    /// How fast a body's point at `point` (in the world) moves, as of the
+    /// last physics step: its velocity plus its spin around its centre of
+    /// mass. `None` if `e` isn't a physics body.
+    pub fn velocity_at(&self, e: Entity, point: Vec3) -> Option<Vec3> {
+        let link = self.link(e)?;
+        self.world
+            .bodies
+            .get(link.body)
+            .map(|b| from_rp(b.velocity_at_point(to_rp(point))))
+    }
+
     /// A convex hull around `points` (rocks, crates, vehicle bodies), for
     /// [`Collider3D::mesh`]. `None` if the points are all on one plane or
     /// not finite.
@@ -1052,13 +1093,58 @@ impl Physics3D {
         self.mesh(mesh).is_some()
     }
 
-    /// The box `mesh` fills, around the entity's position in its frame:
-    /// its smallest and largest corner. `None` for a freed mesh. For debug
-    /// drawing's collider view.
-    pub(crate) fn mesh_bounds(&self, mesh: CollisionMesh) -> Option<(Vec3, Vec3)> {
-        let slot = self.mesh(mesh)?;
-        let aabb = slot.shape.as_ref()?.compute_local_aabb();
-        Some((from_rp(aabb.mins) + slot.offset, from_rp(aabb.maxs) + slot.offset))
+    /// Calls `edge` with the edges of `mesh` scaled by `scale`, in the
+    /// collider's frame (the entity's, before its rotation and position):
+    /// every edge of a convex hull, and of triangle meshes and heightfields
+    /// the three edges of each triangle within `reach` of `near` (in that
+    /// frame too), found through the mesh's own tree or grid, so a big mesh
+    /// costs what is near. For debug drawing's colliders view; allocates
+    /// nothing. `false` for a freed mesh.
+    pub(crate) fn mesh_edges_near(
+        &self,
+        mesh: CollisionMesh,
+        scale: Vec3,
+        (near, reach): (Vec3, f32),
+        mut edge: impl FnMut(Vec3, Vec3),
+    ) -> bool {
+        use rapier3d::parry::bounding_volume::Aabb;
+        use rapier3d::parry::query::PointQuery;
+        use rapier3d::parry::shape::Triangle;
+        let Some(slot) = self.mesh(mesh) else {
+            return false;
+        };
+        let Some(shape) = slot.shape.as_ref() else {
+            return false;
+        };
+        let scale = scale.abs().max(Vec3::splat(1e-6));
+        let place = |p: rp::Vector| (from_rp(p) + slot.offset) * scale;
+        // The query box in the shape's own (unscaled) frame.
+        let center = near / scale - slot.offset;
+        let half = Vec3::splat(reach) / scale;
+        let query = Aabb::new(to_rp(center - half), to_rp(center + half));
+        let mut triangle = |t: &Triangle| {
+            let (a, b, c) = (place(t.a), place(t.b), place(t.c));
+            let placed = Triangle::new(to_rp(a), to_rp(b), to_rp(c));
+            if placed.distance_to_local_point(to_rp(near), true) <= reach {
+                edge(a, b);
+                edge(b, c);
+                edge(c, a);
+            }
+        };
+        if let Some(field) = shape.as_heightfield() {
+            field.map_elements_in_local_aabb(&query, &mut |_, t| triangle(t));
+        } else if let Some(trimesh) = shape.as_trimesh() {
+            for i in trimesh.bvh().intersect_aabb(&query) {
+                triangle(&trimesh.triangle(i));
+            }
+        } else if let Some(hull) = shape.as_convex_polyhedron() {
+            let points = hull.points();
+            for e in hull.edges() {
+                let [a, b] = e.vertices;
+                edge(place(points[a as usize]), place(points[b as usize]));
+            }
+        }
+        true
     }
 
     /// How many collision meshes are live.

@@ -127,6 +127,8 @@ pub(crate) struct UiState {
     /// A click (and typed text) an input scenario asked for, applied by the
     /// retained UI's next frame.
     pub(crate) scripted: Option<retained_draw::ScriptedClick>,
+    /// The on-screen touch controls' nodes.
+    pub(crate) touch: touch::TouchControlsUi,
     /// World-space panels' input and drawing.
     #[cfg(feature = "3d")]
     pub panels: panel3d::Panels,
@@ -137,6 +139,7 @@ mod access;
 mod access_kit;
 #[cfg(feature = "accessibility")]
 mod access_native;
+mod anim;
 mod build;
 mod immediate;
 #[cfg(feature = "3d")]
@@ -148,14 +151,19 @@ mod retained_draw;
 mod retained_ime;
 mod retained_locale;
 mod rich;
+pub mod touch;
+mod widgets;
+mod widgets_draw;
 pub use access::{
     UiAccessAction, UiAccessChanges, UiAccessNode, UiAccessTracker, UiAccessTree, UiAccessValue, UiLive, UiRole,
 };
 #[cfg(feature = "accessibility")]
 pub use access_native::UiAccessAdapter;
+pub use anim::{UiDrawn, UiProperty, UiRepeat, UiScreenTransition, UiTimeline, UiTransition, UiTween, UiValue};
 pub use build::{UiBuilder, UiLayout, UiTheme};
 pub use immediate::{UiImmediate, UiImmediateFrame};
 pub use retained::{ScreenMode, Ui, UiEvent, UiId, UiInput, UiPaint, UiTextAlign, UiWidget};
+pub use widgets::{UiAxis, binding_label};
 
 /// Unstable: the [Taffy](https://docs.rs/taffy/0.15.1/taffy/) layout crate
 /// behind [`UiLayout`], for the settings its presets and refinements don't

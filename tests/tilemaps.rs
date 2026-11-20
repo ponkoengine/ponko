@@ -724,3 +724,168 @@ fn a_loaded_save_and_the_level_respawned_without_its_saved_objects_make_the_leve
     // Saving again still holds only the coin.
     assert_eq!(world.save()["entities"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn ldtk_world_layout_preserves_free_offsets_and_accumulates_linear_sizes() {
+    Game::new("layout", 1, 1).run_headless(0, |ctx| {
+        let path = fixture("layout.ldtk");
+        let worlds = ctx.assets.load_ldtk_worlds(&path).unwrap();
+        assert_eq!((&worlds[0].identifier[..], &worlds[0].iid[..]), ("Hub", "hub"));
+        let room = &worlds[0].levels[0];
+        assert_eq!(
+            (room.position, room.size, room.depth),
+            (vec2(-48., 80.), UVec2::new(64, 32), 2)
+        );
+        assert_eq!(worlds[1].levels[1].position, vec2(0., 48.));
+        let options = LevelOptions::default().level("trail-end").at_ldtk_position();
+        let root = ctx.spawn_level_with(&path, vec2(100., 200.), options).unwrap();
+        assert_eq!(ctx.world.get::<Transform2D>(root).unwrap().position, vec2(100., 248.));
+    });
+}
+
+#[derive(ponko::prelude::Component, serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
+struct PickupStats {
+    value: u32,
+    labels: Vec<String>,
+}
+
+#[test]
+fn ldtk_fields_fill_reflected_components_at_the_authored_world_position() {
+    use ponko::reflect::WorldReflect as _;
+    Game::new("layout", 1, 1).run_headless(0, |ctx| {
+        ctx.world.reflect::<PickupStats>();
+        let options = LevelOptions::default()
+            .level("hub-room")
+            .at_ldtk_position()
+            .reflect_entity("Pickup", "PickupStats");
+        ctx.spawn_level_with(&fixture("layout.ldtk"), Vec2::ZERO, options)
+            .unwrap();
+        let mut query = ctx.world.query::<(&PickupStats, &LevelObject, &Transform2D)>();
+        let (stats, object, transform) = query.iter().next().unwrap();
+        assert_eq!(
+            *stats,
+            PickupStats {
+                value: 7,
+                labels: vec!["red".into(), "small".into()]
+            }
+        );
+        assert_eq!(object.properties.str("iid"), Some("pickup-1"));
+        assert_eq!(transform.position, vec2(-34., 96.));
+    });
+}
+
+#[test]
+fn ldtk_bad_reflection_leaves_no_partial_level() {
+    Game::new("layout", 1, 1).run_headless(0, |ctx| {
+        let options = LevelOptions::default().reflect_entity("Pickup", "Missing");
+        let err = ctx
+            .spawn_level_with(&fixture("layout.ldtk"), Vec2::ZERO, options)
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NotFound);
+        assert_eq!(ctx.world.query::<&LevelObject>().iter().count(), 0);
+        assert_eq!(ctx.world.query::<&LevelRoot>().iter().count(), 0);
+    });
+}
+
+#[test]
+fn ldtk_reload_applies_world_placement_and_rolls_back_bad_reflected_fields() {
+    use ponko::reflect::WorldReflect as _;
+    use std::time::Duration;
+
+    let path = std::env::temp_dir().join(format!("ponko-layout-{}.ldtk", std::process::id()));
+    let input = include_str!("fixtures/tilemaps/layout.ldtk");
+    std::fs::write(&path, input).unwrap();
+    let name = path.to_str().unwrap().to_owned();
+    let reload_path = path.clone();
+    Game::new("layout", 1, 1)
+        .hot_reload(true)
+        .sim_system(move |ctx: &mut Ctx| {
+            let mut objects = ctx.world.query::<(Entity, &PickupStats, &Transform2D)>();
+            let (_, stats, transform) = objects.iter().next().unwrap();
+            match ctx.time.sim_tick() {
+                1 => {
+                    assert_eq!((stats.value, transform.position), (7, vec2(-34., 96.)));
+                    let changed = input
+                        .replace("-48", "-104")
+                        .replace("\"__value\": 7", "\"__value\": 12");
+                    std::fs::write(&reload_path, changed).unwrap();
+                }
+                2 => {
+                    assert_eq!((stats.value, transform.position), (12, vec2(-90., 96.)));
+                    std::fs::write(
+                        &reload_path,
+                        input.replace("\"__value\": 7", "\"__value\": \"invalid\""),
+                    )
+                    .unwrap();
+                }
+                3 => {
+                    assert!(ctx.assets.reloaded_files().is_empty());
+                    assert_eq!((stats.value, transform.position), (12, vec2(-90., 96.)));
+                    assert_eq!(objects.iter().count(), 1);
+                }
+                _ => {}
+            }
+            std::thread::sleep(Duration::from_millis(275));
+        })
+        .run_headless(4, |ctx| {
+            ctx.world.reflect::<PickupStats>();
+            let options = LevelOptions::default()
+                .at_ldtk_position()
+                .reflect_entity("Pickup", "PickupStats");
+            ctx.spawn_level_with(&name, Vec2::ZERO, options).unwrap();
+        });
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn ldtk_external_level_files_hot_reload_without_replacing_the_root() {
+    let folder = std::env::temp_dir().join(format!("ponko-layout-external-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("world.ldtk");
+    let external = folder.join("room.ldtkl");
+    std::fs::write(
+        &path,
+        r#"{"jsonVersion":"1.5.3","worldLayout":"GridVania","worldGridWidth":32,"worldGridHeight":32,
+        "levels":[{"identifier":"Room","iid":"room","worldX":64,"worldY":32,
+        "pxWid":32,"pxHei":32,"externalRelPath":"room.ldtkl"}]}"#,
+    )
+    .unwrap();
+    let room = |px: u32| {
+        format!(
+            r#"{{"pxWid":32,"pxHei":32,"layerInstances":[{{"__type":"Entities",
+        "__identifier":"Actors","entityInstances":[{{"__identifier":"Marker","px":[{px},5]}}]}}]}}"#
+        )
+    };
+    std::fs::write(&external, room(5)).unwrap();
+    let name = path.to_str().unwrap().to_owned();
+    let watched = name.clone();
+    let edit = external.clone();
+    let mut root = None;
+    let world = Game::new("layout", 1, 1)
+        .hot_reload(true)
+        .sim_system(move |ctx: &mut Ctx| match ctx.time.sim_tick() {
+            1 => {
+                std::fs::write(&edit, room(17)).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(275));
+            }
+            2 => assert!(ctx.assets.reloaded_files().contains(&watched)),
+            _ => {}
+        })
+        .run_headless(3, |ctx| {
+            let world = &ctx.assets.load_ldtk_worlds(&name).unwrap()[0];
+            assert_eq!(world.layout, ponko::tilemap::LdtkLayout::GridVania);
+            assert_eq!(world.grid_size, UVec2::splat(32));
+            root = Some(
+                ctx.spawn_level_with(&name, Vec2::ZERO, LevelOptions::default().at_ldtk_position())
+                    .unwrap(),
+            );
+        });
+    let root = world.get::<LevelRoot>(root.unwrap()).unwrap();
+    assert_eq!(root.entities.len(), 1);
+    assert_eq!(
+        world.get::<Transform2D>(root.entities[0]).unwrap().position,
+        vec2(81., 37.)
+    );
+    std::fs::remove_dir_all(folder).unwrap();
+}

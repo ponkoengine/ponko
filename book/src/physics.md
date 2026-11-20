@@ -40,7 +40,12 @@ things for this tick's step (forces, velocities) go in `BeforePhysics` with
 ## Bodies and colliders
 
 An entity becomes a physics body with three components: a `d2::Transform`, a
-`RigidBody` (how it moves) and a `Collider` (its shape, in pixels):
+`RigidBody` (how it moves) and a `Collider` (its shape, in pixels). The
+components bring what they need
+([required components](ecs.md#required-components)): a `RigidBody` brings a
+`d2::Transform` (at the origin) and a `Velocity` (at rest) if the spawn has
+none, and a `Collider` without a body brings `RigidBody::fixed()`. So a wall
+is a transform and a collider, and a spawn names only what differs:
 
 <div class="lang-pair">
 <div>
@@ -87,8 +92,9 @@ spatial grid and everything else just follow. Set a transform yourself and
 the body teleports there. Change a `RigidBody` or `Collider` and the body is
 rebuilt; despawn the entity (or remove either component) and it's gone.
 
-Add a `Velocity` component to read a body's speed after every step, or to
-set it (a jump, a thrown crate, a moving platform):
+Every body has a `Velocity` component (the body requires one): read it for
+the body's speed after every step, or set it (a jump, a thrown crate, a
+moving platform):
 
 ```rust
 # let player = ctx.world.spawn((ponko::d2::Transform::default(),));

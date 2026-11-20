@@ -7,7 +7,7 @@ pub const USAGE: &str = "\
 ponko new: make a new game project from a template
 
 Usage:
-  ponko new <path> [--2d | --3d | --headless | --server] [--path <engine> | --git <url>]
+  ponko new <path> [--2d | --3d | --headless | --server | --plugin] [--path <engine> | --git <url>]
 
 The project goes in the folder <path> (it must not exist, or be empty); its
 name is the folder's name.
@@ -17,13 +17,17 @@ Templates:
   --3d        A 3D game: a mesh, a camera and a sun (the engine's `3d` feature)
   --headless  A simulation without a window, GPU or sound
   --server    A dedicated game server: headless, a bot client, a Dockerfile
+  --plugin    A plugin crate for other people's games: a library with a
+              Plugin, its tests, the engine without default features
 
 The engine dependency (the released version from crates.io by default):
   --path <engine>  An engine checkout on this machine
   --git <url>      An engine Git repository (its default branch)
 
-Each project has a fast dev profile, an assets/ folder, headless tests
-(`cargo test`), an .mcp.json for ponko-mcp and an AGENTS.md for coding agents.";
+Each game has a fast dev profile, an assets/ folder, headless tests
+(`cargo test`), an .mcp.json for ponko-mcp and an AGENTS.md for coding agents.
+A plugin crate has headless tests and an AGENTS.md; the guide's \"Plugins for
+other crates\" says how to name and version it.";
 
 /// Where the generated project gets the engine from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,6 +71,7 @@ impl Options {
                 "--3d" => Some(Kind::ThreeD),
                 "--headless" => Some(Kind::Headless),
                 "--server" => Some(Kind::Server),
+                "--plugin" => Some(Kind::Plugin),
                 "--path" | "--git" => {
                     if engine != Engine::Released {
                         return Err("give --path or --git once".into());
@@ -90,7 +95,7 @@ impl Options {
             };
             if let Some(k) = picked {
                 if kind.is_some_and(|old| old != k) {
-                    return Err("pick one of --2d, --3d, --headless and --server".into());
+                    return Err("pick one of --2d, --3d, --headless, --server and --plugin".into());
                 }
                 kind = Some(k);
             }
@@ -320,16 +325,26 @@ pub fn generate(options: &Options, cwd: &Path) -> Result<String, String> {
         Kind::ThreeD => "3D game",
         Kind::Headless => "headless simulation",
         Kind::Server => "dedicated server",
+        Kind::Plugin => "plugin crate",
     };
     let from = match &engine {
         Engine::Released => "the released engine from crates.io".to_string(),
         Engine::Path(p) => format!("the engine at {}", p.display()),
         Engine::Git(url) => format!("the engine from {url}"),
     };
+    if options.kind == Kind::Plugin {
+        return Ok(format!(
+            "Made the {kind} `{project}` in {}, using {from}.\n\n  cd {}\n  cargo test     # headless tests\n\n\
+             Games add it with `.plugin({krate}::PulsePlugin)`. Naming and versioning: \
+             https://ponko.dev/guide/plugins.html",
+            dir.display(),
+            options.target.display()
+        ));
+    }
     let run = match options.kind {
         Kind::Headless => "cargo run",
         Kind::Server => "cargo run      # the server; `cargo run --example client` joins it",
-        Kind::TwoD | Kind::ThreeD => "cargo run      # opens a window",
+        Kind::TwoD | Kind::ThreeD | Kind::Plugin => "cargo run      # opens a window",
     };
     Ok(format!(
         "Made the {kind} `{project}` in {}, using {from}.\n\n  cd {}\n  cargo test     # headless tests\n  {run}\n\n\
@@ -385,6 +400,34 @@ mod tests {
             (o.kind, o.engine),
             (Kind::Headless, Engine::Git("https://example.com/ponko".into()))
         );
+    }
+
+    #[test]
+    fn plugin_picks_the_plugin_crate_template() {
+        let o = parse(&["acme-weather", "--plugin", "--path", "../ponko"]).unwrap();
+        assert_eq!((o.kind, o.engine), (Kind::Plugin, Engine::Path("../ponko".into())));
+        assert!(parse(&["a", "--plugin", "--2d"]).unwrap_err().contains("--plugin"));
+    }
+
+    #[test]
+    fn a_plugin_crate_is_a_library_with_tests_and_no_game_files() {
+        let tmp = Temp::new("plugin");
+        let options = Options {
+            target: "acme-weather".into(),
+            kind: Kind::Plugin,
+            engine: Engine::Released,
+        };
+        let message = generate(&options, &tmp.0).unwrap();
+        assert!(message.contains(".plugin(acme_weather::PulsePlugin)"), "{message}");
+        let dir = tmp.0.join("acme-weather");
+        for file in ["Cargo.toml", "src/lib.rs", "tests/plugin.rs", "README.md", "AGENTS.md"] {
+            assert!(dir.join(file).is_file(), "{file}");
+        }
+        for file in ["src/main.rs", "assets", ".mcp.json"] {
+            assert!(!dir.join(file).exists(), "{file}");
+        }
+        let readme = std::fs::read_to_string(dir.join("README.md")).unwrap();
+        assert!(readme.contains("acme_weather::PulsePlugin"), "{readme}");
     }
 
     #[test]
@@ -459,7 +502,13 @@ mod tests {
             }
             let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
             assert!(manifest.contains(&format!("name = \"my-{}\"", kind.folder())));
-            let main = std::fs::read_to_string(dir.join("src/main.rs")).unwrap();
+            // A game's main starts it; a plugin's docs show it added to a game.
+            let entry = if kind == Kind::Plugin {
+                "src/lib.rs"
+            } else {
+                "src/main.rs"
+            };
+            let main = std::fs::read_to_string(dir.join(entry)).unwrap();
             assert!(main.contains(&format!("my_{}::", kind.folder())), "{main}");
             assert!(!dir.join("cargo-generate.toml").exists());
         }

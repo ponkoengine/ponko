@@ -232,7 +232,10 @@ fn matching_bracket(s: &[u8], open: usize) -> Option<usize> {
 pub(super) fn vertex_past(user: &str, source: &str) -> VertexPast {
     use wgpu::naga;
     if disabled()
-        || !(user.contains("motion_frame_time") || user.contains("motion_item") || user.contains("drawing_last_frame"))
+        || !(user.contains("motion_frame_time")
+            || user.contains("motion_item")
+            || user.contains("drawing_last_frame")
+            || user.contains("ponko_elapsed_time_wrapped"))
     {
         return VertexPast::default();
     }

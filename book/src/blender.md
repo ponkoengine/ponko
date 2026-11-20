@@ -44,8 +44,16 @@ or a `d3::Transform`), and makes
 
 Find nodes with `GltfRoot::entity("Gate/Door")` (a path, or just a name),
 by their `GltfNode`, or by the components the properties put on them.
-`ctx.despawn_prefab(root)` removes the scene, its entities and the meshes
-made for it. `GltfRoot::spawn(ctx, path, at, options)` spawns with
+`ctx.despawn_prefab(root)` removes the scene and its entities.
+
+Every spawn of one file shares the file's meshes and materials: a file of
+three meshes spawned a hundred times holds three meshes (1,488 bytes by
+the engine's own count, `ctx.asset_inventory()`), where each spawn used
+to make its own (300 meshes, 148,800 bytes). They are freed with the last
+scene of the file, and when a world load replaces the scenes; a mesh
+`load_mesh` holds from the same file keeps the materials.
+
+`GltfRoot::spawn(ctx, path, at, options)` spawns with
 options (below). Skinned meshes are drawn still, in their bind pose: load animated
 characters with `load_mesh` and put them in with a prefab (`ponko:prefab`).
 Cameras in the file aren't spawned; `ctx.gfx.load_cameras(path)` reads
@@ -161,20 +169,43 @@ when the environment variable `PONKO_SCHEMA` names a file; that is all
 `ponko schema` sets. From Rust, `ponko::d3::gltf_properties_schema(&world)`
 returns the same schema.
 
-Editors and scripts check properties against it before exporting. In
-Blender's Python console, a check of the names:
+Editors and scripts check properties against it before exporting: the
+Blender add-on below does, and any JSON Schema validator (every language
+has one) can.
 
-```python
-import bpy, json
-schema = json.load(open(bpy.path.abspath("//ponko-schema.json")))
-known = schema["properties"]
-for obj in bpy.data.objects:
-    for key in obj.keys():
-        if key.startswith("ponko:") and key not in known:
-            print(f"{obj.name}: {key} is not a property the game reads")
-```
+## The Blender add-on
 
-A full JSON Schema validator (any language has one) checks the values too.
+[`tools/blender/ponko_properties`](../../tools/blender/ponko_properties)
+is a small Blender add-on (plain Python, outside the engine's crates)
+that reads the game's `ponko-schema.json` and offers its properties:
+
+1. Zip the `ponko_properties` folder, then in Blender **Edit →
+   Preferences → Add-ons → Install...** pick the zip and enable **Ponko
+   properties** (or copy the folder into Blender's `scripts/addons`).
+2. Write the schema next to the `.blend` file (`ponko schema --out
+   ponko-schema.json`). The add-on reads `//ponko-schema.json` (the
+   folder of the `.blend`); the **Ponko** panel in **Object Properties**
+   takes another path, and **Reload schema** reads it again after the
+   game reflected new components.
+3. **Add Ponko property** offers every `ponko:` key the game reads, with
+   its description, searchable: the convention's keys first, then the
+   reflected components. A new property starts with a value that fits:
+   the first choice of `ponko:collider` and `ponko:body`, a Boolean for
+   switches, a Float Array for `ponko:lod`, and a component's required
+   fields as JSON text (`{"hp": 0}`).
+4. The panel lists the object's `ponko:` properties and, under each one
+   that doesn't fit, what is wrong, with the engine's suggestions
+   (`"ponko:colider": no property is called "colider"; did you mean
+   "ponko:collider"?`). **Check all objects** checks every object of the
+   file before you export; the glTF exporter also prints the problems of
+   each object it exports (the export still runs).
+
+The checks are the engine's: the same suggestions, JSON in a String
+property read as JSON, a component's value against its
+[described](reflection.md) fields. They live in
+`tools/blender/ponko_properties/schema.py`, which needs no Blender, so a
+build script can check `.blend` exports too; its tests run with
+`python3 -m unittest discover -s tools/blender`.
 
 ## Export again while the game runs
 
@@ -198,11 +229,29 @@ the old entity goes and a new one comes.
 
 Everything a file spawns is rebuilt from the file, so it carries
 `NotSaved` and stays out of world saves, except prefab instances, which are
-the game's state (an opened chest, a moved barrel). After loading a save,
-spawn the file again with
-`GltfRoot::spawn(ctx, path, at, GltfOptions::default().without_saved_objects())`
-(C: `without_saved_objects = true`), so the save's prefab instances aren't
-doubled. This is the rule [levels from Tiled and LDtk](tiles.md#levels-and-saves) follow.
+the game's state (an opened chest, a moved barrel). The save also holds a
+record of each scene: its file, where it was spawned, and the entity of
+each prefab node's instance. To load, load the save, then spawn the file
+again as usual:
+
+```rust
+{{#include ../../tests/gltf_scenes.rs:saved_level}}
+```
+
+The scene adopts the saved instances: `GltfRoot::entity("BarrelA")` is the
+saved entity again, where the game left it and with what it changed, and
+an instance the game had despawned (a barrel blown up) isn't spawned
+again. Prefab nodes added to the file since the save are spawned. When
+the save holds several scenes of one file, a spawn takes the one saved
+nearest to where it is spawned.
+
+`GltfOptions::without_saved_objects()` (C: `without_saved_objects = true`),
+which earlier versions needed after a load, is no longer needed and still
+works: the scene adopts the saved instances and spawns no prefab node the
+save has no instance for. A save written before saves held the record
+(its instances aren't linked to their nodes) still loads: scenes spawned
+after it leave their prefab nodes to the save, as `without_saved_objects`
+did, and print a note; the next save keeps it that way.
 
 ## Navigation meshes
 
@@ -230,16 +279,25 @@ let nav = ponko::d3::NavMesh::bake(&[scene.nav_source()], ponko::nav::NavBakeSet
 `ponko::despawn_gltf`, `ponko::gltf_node`, `ponko::gltf_node_extras` and
 `ponko::spawn_point_name`. Components named in properties are reflected
 ones, so a C or C++ component needs `reflect_fields` first
-([C and C++ components](reflection.md#c-and-c-components)). Reading a file
-without spawning it (`GltfScene::load`) and the schema as a value
-(`gltf_properties_schema`) are Rust-only; `PONKO_SCHEMA` works for every
-game.
+([C and C++ components](reflection.md#c-and-c-components)).
+
+Reading a file without spawning it (`GltfScene::load`) is
+`ponko_gltf_scene_load` (C++ `ponko::gltf_scene_json`), which writes the
+scene as JSON text: its nodes with their paths, parents, transforms,
+custom properties, mesh sizes and lights, and its spawn points. The schema
+(`gltf_properties_schema`) is `ponko_gltf_properties_schema` (C++
+`ponko::gltf_properties_schema`). Navigation meshes from a file
+(`nav_source`) are Rust-only.
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:courtyard_read}}
+```
 
 ## What it doesn't do (yet)
 
-- Each spawn makes its own meshes: a file spawned many times holds many
-  copies. For many copies of one object, use a prefab or `load_mesh` and
-  your own entities.
+- Spawns of one file share its meshes, but each spawn makes its own
+  entities and collision shapes: for thousands of copies of one object,
+  [GPU-driven instances](3d.md#gpu-driven-instances) draw them cheaper.
 - A Transform keeps one scale per axis: a non-uniformly scaled parent with
   a rotated child is placed approximately.
 - A `.gltf` file's separate `.bin` and images are read again when the

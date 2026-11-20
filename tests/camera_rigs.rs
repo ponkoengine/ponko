@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use ponko::camera::CameraShake;
+use ponko::camera::{CameraShake, CameraTarget};
 use ponko::d2::{FollowCamera, PixelPerfect};
 use ponko::prelude::*;
 
@@ -81,6 +81,121 @@ fn a_shaken_camera_returns_to_rest_when_the_trauma_is_gone() {
             }
         })
         .run_headless(80, |_| {});
+}
+
+/// The hero: moved 2 units right every tick.
+#[derive(Clone, Copy, Component)]
+struct Runner;
+
+fn run_right(ctx: &mut Ctx) {
+    ctx.world
+        .query::<(&mut d2::Transform, &Runner)>()
+        .for_each(|(t, _)| t.position.x += 2.0);
+}
+
+#[test]
+fn a_follow_camera_resource_follows_the_camera_target_with_no_camera_system() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let seen = log.clone();
+    Game::new("fed", 640, 360)
+        .headless_frames(true)
+        .sim_system(run_right)
+        // Late systems see the camera the engine placed this frame.
+        .add(Phase::Late, move |ctx: &mut Ctx| {
+            let hero = ctx
+                .world
+                .query::<(&d2::Transform, &Runner)>()
+                .iter()
+                .next()
+                .unwrap()
+                .0
+                .position;
+            seen.borrow_mut().push((hero, ctx.camera.center()));
+        })
+        .run_headless(30, |ctx| {
+            ctx.world.insert_resource(FollowCamera::default().with_smooth_time(0.0));
+            ctx.world
+                .spawn((d2::Transform::at(vec2(100.0, 50.0)), Runner, CameraTarget));
+        });
+    let log = log.borrow();
+    assert_eq!(log.len(), 30);
+    for (hero, center) in log.iter() {
+        assert!(hero.distance(*center) < 1e-3, "on the hero: {center} for {hero}");
+    }
+    assert!(log.last().unwrap().0.x > 150.0, "the hero ran");
+}
+
+#[test]
+fn a_new_camera_target_is_cut_to_and_no_target_leaves_the_camera_alone() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let seen = log.clone();
+    let mut tick = 0;
+    Game::new("cut", 640, 360)
+        .headless_frames(true)
+        .sim_system(run_right)
+        .sim_system(move |ctx: &mut Ctx| {
+            tick += 1;
+            let heroes: Vec<Entity> = ctx.world.query::<(Entity, &Runner)>().iter().map(|(e, _)| e).collect();
+            if tick == 20 {
+                // Lost: no target for a while; the game shows a spot of its own.
+                for e in heroes {
+                    ctx.world.despawn(e);
+                }
+                ctx.camera.look_at(vec2(-500.0, -500.0));
+            } else if tick == 30 {
+                // Respawned far away.
+                ctx.world
+                    .spawn((d2::Transform::at(vec2(3000.0, 50.0)), Runner, CameraTarget));
+            }
+        })
+        .add(Phase::Late, move |ctx: &mut Ctx| {
+            let hero = ctx
+                .world
+                .query::<(&d2::Transform, &Runner)>()
+                .iter()
+                .next()
+                .map(|(t, _)| t.position);
+            seen.borrow_mut().push((hero, ctx.camera.center()));
+        })
+        .run_headless(40, |ctx| {
+            ctx.world.insert_resource(FollowCamera::default().with_smooth_time(0.5));
+            ctx.world
+                .spawn((d2::Transform::at(vec2(100.0, 50.0)), Runner, CameraTarget));
+        });
+    let log = log.borrow();
+    // The first frame cuts to the hero; then the camera eases after it, behind.
+    let (hero, center) = log[0];
+    assert!(hero.unwrap().distance(center) < 1e-3, "{log:?}");
+    let (hero, center) = log[15];
+    assert!(center.x < hero.unwrap().x - 1.0, "easing behind the runner: {log:?}");
+    // No target: the game's own camera position stays.
+    for (hero, center) in &log[20..29] {
+        assert!(
+            hero.is_none() && center.distance(vec2(-500.0, -500.0)) < 1e-3,
+            "{log:?}"
+        );
+    }
+    // The new target is cut to, not eased to from across the level.
+    let (hero, center) = log[29];
+    assert!(hero.unwrap().distance(center) < 1e-3, "{log:?}");
+}
+
+#[test]
+fn the_follow_camera_keeps_a_pixel_perfect_grid() {
+    Game::new("retro", 1280, 720).run_headless(1, |ctx| {
+        let mut follow = FollowCamera::default()
+            .with_smooth_time(0.2)
+            .with_pixel_perfect(PixelPerfect::new(320.0, 180.0))
+            .with_bounds(Rect::new(0.0, 0.0, 1000.0, 180.0));
+        follow.update(&mut ctx.camera, vec2(10.3, 90.0), 0.0);
+        assert_eq!(ctx.camera.zoom, 4.0);
+        // The bounds were applied at the zoom: the left edge of the level.
+        assert_eq!(ctx.camera.visible_rect().min.x, 0.0);
+        for i in 1..20 {
+            follow.update(&mut ctx.camera, vec2(10.3 + 7.7 * i as f32, 90.0), 1.0 / 60.0);
+            assert_eq!(ctx.camera.position, ctx.camera.position.round());
+        }
+    });
 }
 
 #[cfg(feature = "3d")]
@@ -204,5 +319,91 @@ mod three {
         let far = log.last().unwrap().1;
         // 1.5 s after the wall went: 7.5 half-lives of easing out.
         assert!((far.z - rig.distance).abs() < 0.02, "back out to its distance: {far}");
+    }
+    #[test]
+    fn three_d_rig_resources_follow_the_camera_target() {
+        use ponko::d3::{FirstPersonCamera, Transform};
+        let at = vec3(4.0, 0.0, -2.0);
+        // Third person, sticking to the target: where the rig puts the camera itself.
+        let mut rig = ThirdPersonCamera::default();
+        rig.follow_smoothing = 0.0;
+        let seen = Rc::new(RefCell::new(None));
+        let out = seen.clone();
+        Game::new("chase", 800, 600)
+            .headless_frames(true)
+            .add(Phase::Late, move |ctx: &mut Ctx| {
+                let mut expected = ctx.scene3d.camera;
+                let mut fresh = rig;
+                fresh.update(&mut expected, at, 0.0);
+                *out.borrow_mut() = Some((ctx.scene3d.camera, expected));
+            })
+            .run_headless(3, move |ctx| {
+                ctx.world.insert_resource(rig);
+                ctx.world.spawn((Transform::at(at), CameraTarget));
+            });
+        let (camera, expected) = seen.borrow().unwrap();
+        assert!(
+            camera.position.abs_diff_eq(expected.position, 1e-4),
+            "{} vs {}",
+            camera.position,
+            expected.position
+        );
+        assert!(camera.rotation.abs_diff_eq(expected.rotation, 1e-5));
+        assert!(camera.position.z > at.z + 1.0, "behind the target");
+        // First person: at the eye, `height` above the target.
+        let seen = Rc::new(RefCell::new(None));
+        let out = seen.clone();
+        Game::new("walk", 800, 600)
+            .headless_frames(true)
+            .add(Phase::Late, move |ctx: &mut Ctx| {
+                *out.borrow_mut() = Some(ctx.scene3d.camera)
+            })
+            .run_headless(2, move |ctx| {
+                let mut eyes = FirstPersonCamera::default();
+                eyes.yaw = 0.5;
+                ctx.world.insert_resource(eyes);
+                ctx.world.spawn((Transform::at(at), CameraTarget));
+            });
+        let camera = seen.borrow().unwrap();
+        assert!(
+            camera.position.abs_diff_eq(at + Vec3::Y * 1.6, 1e-5),
+            "{}",
+            camera.position
+        );
+        assert!(
+            camera.forward().x < -0.4,
+            "turned left by the yaw: {}",
+            camera.forward()
+        );
+    }
+
+    #[cfg(feature = "physics3d")]
+    #[test]
+    fn a_fed_third_person_camera_stays_in_front_of_walls_but_not_its_targets_own_collider() {
+        use ponko::d3::{Character, Collider, RigidBody, Transform};
+        let seen = Rc::new(RefCell::new(None));
+        let out = seen.clone();
+        let mut rig = ThirdPersonCamera::default();
+        rig.pitch = 0.0;
+        Game::new("cave", 800, 600)
+            .physics3d(Vec3::ZERO)
+            .headless_frames(true)
+            .add(Phase::Late, move |ctx: &mut Ctx| {
+                *out.borrow_mut() = Some(ctx.scene3d.camera.position)
+            })
+            .run_headless(10, move |ctx| {
+                ctx.world.insert_resource(rig);
+                // The character's own capsule is around the pivot: not a wall.
+                ctx.world
+                    .spawn((Transform::default(), Character::new(1.8, 0.35), CameraTarget));
+                let wall = Transform::at(vec3(0.0, 1.5, 2.5));
+                ctx.world
+                    .spawn((wall, RigidBody::fixed(), Collider::cuboid(vec3(10.0, 10.0, 1.0))));
+            });
+        let at = seen.borrow().unwrap();
+        assert!(
+            at.z <= 2.0 - rig.collision_radius + 1e-2 && at.z > 1.0,
+            "in front of the wall: {at}"
+        );
     }
 }

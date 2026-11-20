@@ -1,0 +1,17 @@
+{
+  "name": "ui_widgets_controls_light",
+  "scene": "UiTheme::light() (4 unit corner radius), 256x168, a column with 10 unit padding: a dropdown showing \"High\" with its arrow and a number field \"5\" between - and +; a key-binding field listening (\"Press a key\", wide border) and an \"Apply\" button; a tab strip with \"Audio\" chosen and underlined in the accent above its page's label. Every control's text centred on its height, the button's, number's and key binding's across too, three quarters of the theme's spacing from the edges at least; UI scale 1, drawn with the window's sprite pipeline into an sRGB target",
+  "width": 256,
+  "height": 168,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 24,
+    "outliers": 0.004,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "35dfa1d9145c921b",
+  "reason": "Widget references drawn at UI scale 1 on smaller sheets, control text centred and checked for contrast"
+}

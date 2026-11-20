@@ -3,6 +3,7 @@
 use crate::actions::{PonkoActionBinding, PonkoActionMap, PonkoActionSource, action_from_c};
 use crate::ctx::{ctx_access, out, text};
 use crate::perf::write_text;
+use crate::touch::{gesture_axis_to_c, gesture_to_c};
 use crate::{Failure, PonkoCtx, PonkoStatus, boundary, error, invalid};
 use ponko::input::GamepadStick;
 use ponko::prelude::{Action, ActionMap, Axis2Binding, AxisBinding, ButtonBinding};
@@ -53,6 +54,10 @@ pub(crate) fn action_to_c(action: &Action) -> Result<(u32, Vec<PonkoActionBindin
                             first: button as u32,
                             ..source(PONKO_ACTION_GAMEPAD_BUTTON)
                         },
+                        ButtonBinding::Gesture(g) => PonkoActionBinding {
+                            first: gesture_to_c(g),
+                            ..source(PONKO_ACTION_GESTURE)
+                        },
                         _ => return Err(invalid("action source is not supported by this ABI")),
                     })
                 })
@@ -73,6 +78,12 @@ pub(crate) fn action_to_c(action: &Action) -> Result<(u32, Vec<PonkoActionBindin
                             first: axis as u32,
                             deadzone,
                             ..source(PONKO_ACTION_GAMEPAD_AXIS)
+                        },
+                        AxisBinding::Gesture { axis, scale } => PonkoActionBinding {
+                            first: gesture_axis_to_c(axis)
+                                .ok_or_else(|| invalid("action source is not supported by this ABI"))?,
+                            deadzone: scale,
+                            ..source(PONKO_ACTION_GESTURE_AXIS)
                         },
                         _ => return Err(invalid("action source is not supported by this ABI")),
                     })
@@ -99,6 +110,10 @@ pub(crate) fn action_to_c(action: &Action) -> Result<(u32, Vec<PonkoActionBindin
                             },
                             deadzone,
                             ..source(PONKO_ACTION_GAMEPAD_STICK)
+                        },
+                        Axis2Binding::Drag { scale } => PonkoActionBinding {
+                            deadzone: scale,
+                            ..source(PONKO_ACTION_DRAG)
                         },
                         _ => return Err(invalid("action source is not supported by this ABI")),
                     })

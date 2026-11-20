@@ -283,6 +283,47 @@ fn a_system_starts_and_cancels_a_scenario() {
     }
 }
 
+/// Records from tick 1 (started during tick 0), presses Space during tick 2
+/// and stops during tick 4.
+unsafe extern "C" fn record_input(ctx: *mut PonkoCtx, user: *mut c_void) {
+    let recorded = unsafe { &mut *user.cast::<*mut PonkoInputScenario>() };
+    unsafe {
+        match ponko_ctx_sim_tick(ctx) {
+            0 => assert_eq!(ponko_ctx_start_input_recording(ctx), PONKO_OK),
+            2 => assert_eq!(ponko_ctx_feed_input(ctx, 0, 0, SPACE, 1.0), PONKO_OK),
+            4 => {
+                assert_eq!(ponko_ctx_stop_input_recording(ctx, recorded), PONKO_OK);
+                let mut none = null_mut();
+                assert_eq!(ponko_ctx_stop_input_recording(ctx, &mut none), PONKO_OK);
+                assert!(none.is_null(), "no recording runs any more");
+                assert_eq!(ponko_ctx_stop_input_recording(ctx, null_mut()), PONKO_INVALID_ARGUMENT);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn a_system_records_live_input_into_a_scenario() {
+    unsafe {
+        let mut recorded: *mut PonkoInputScenario = null_mut();
+        let game = new_game();
+        assert_eq!(
+            ponko_game_sim_system(game, c"r".as_ptr(), 1, Some(record_input), (&raw mut recorded).cast()),
+            PONKO_OK
+        );
+        ponko_world_free(run_game(game, 5, |_| {}));
+        assert!(!recorded.is_null());
+        let (mut ticks, mut steps) = (0, 0);
+        assert_eq!(ponko_input_scenario_info(recorded, &mut ticks, &mut steps), PONKO_OK);
+        assert_eq!((ticks, steps), (4, 1), "ticks 1 to 4; one key");
+        let text: serde_json::Value = serde_json::from_str(&json(recorded)).unwrap();
+        assert_eq!(text["steps"][0]["tick"], 1, "fed during tick 2, the recording's tick 1");
+        assert_eq!(ponko_ctx_start_input_recording(null_mut()), PONKO_INVALID_ARGUMENT);
+        ponko_input_scenario_free(recorded);
+    }
+}
+
 /// Whether Space was held in each tick, seen by a simulation system that
 /// runs after the scenario's input.
 unsafe extern "C" fn record_space(ctx: *mut PonkoCtx, user: *mut c_void) {

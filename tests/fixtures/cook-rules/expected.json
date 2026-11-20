@@ -1,0 +1,12 @@
+{
+  "hero.png": { "texture": "linear", "basis": true },
+  "ui/icons/star.png": { "texture": "mask", "mipmaps": false },
+  "ui/big/panel.png": "keep",
+  "raw/sketch.psd": "skip",
+  "rock_normal.png": { "texture": "normal" },
+  "art/rock_normal.png": {},
+  "music/theme.wav": { "audio": "keep" },
+  "props/crate.glb": { "quantize": false, "optimize": true },
+  "fx/glow.wgsl": { "shader": "effect" },
+  "tree.png": {}
+}

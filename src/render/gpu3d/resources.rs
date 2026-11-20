@@ -12,16 +12,22 @@
 use std::ops::Range;
 
 use super::skinning;
+use crate::handle::{INDEX_MASK, write_slot};
 use crate::render::Material;
 use crate::render::gpu_textures::TextureTable;
 use crate::render::traffic::{Counted, NewBuffer, Upload};
 use crate::three::{GpuMaterialDesc, MaterialTextures, MeshData, linear};
+
+/// Reserved by the handle allocator. Draw-state caches use u32::MAX for
+/// an unbound material, so this needs its own slot value.
+pub(super) const FALLBACK_MATERIAL_SLOT: u32 = INDEX_MASK;
 
 /// Every mesh, material, texture array and GPU buffer the scene draws with.
 pub(super) struct Resources {
     pub(super) meshes: Vec<GpuMesh>,
     pub(super) mesh_arena: super::mesh_arena::MeshArena,
     pub(super) materials: Vec<GpuMaterial>,
+    pub(super) material_ids: crate::handle::SlotLiveSet,
     pub(super) material_layout: wgpu::BindGroupLayout,
     pub(super) material_sampler: wgpu::Sampler,
     /// Whether a texture made for sprites can also be read through its
@@ -33,6 +39,9 @@ pub(super) struct Resources {
     pub(super) arrays: Vec<wgpu::TextureView>,
     /// A 1x1 white one-layer array, for materials without one.
     pub(super) white_array: wgpu::TextureView,
+    /// The baked lighting (see `three::bake`): bound in the third array
+    /// slot (`custom_array2`) of every material that sets no array there.
+    pub(super) lightmap: Option<wgpu::TextureView>,
     /// The game's GPU buffers, by id, and what binds them: read by material
     /// shaders, written by compute passes. `None` where the GPU has no
     /// storage buffers (WebGL2); `storage_dummy` is bound by draws without one.
@@ -43,11 +52,8 @@ pub(super) struct Resources {
     /// Copies a buffer's elements over its copy of the last frame's: made
     /// when a buffer first keeps one.
     pub(super) past_copy: Option<wgpu::ComputePipeline>,
-    /// The default material's buffer and bind group, shared by every freed
-    /// material: material ids are never given out again, so a freed one
-    /// keeps its table entry but not GPU memory of its own. Made at the
-    /// first free.
-    pub(super) freed_material: Option<(wgpu::Buffer, wgpu::BindGroup)>,
+    /// The plain material a freed handle draws with. Made at the first free.
+    pub(super) freed_material: Option<GpuMaterial>,
 }
 
 impl Resources {
@@ -251,10 +257,9 @@ impl Resources {
         }
     }
 
-    /// Keeps a texture array for materials; returns its id.
-    pub(super) fn add_texture_array(&mut self, texture: &wgpu::Texture) -> u32 {
-        self.arrays.push(array_view(texture));
-        self.arrays.len() as u32 - 1
+    /// Keeps a texture array in the slot assigned by the game's handle table.
+    pub(super) fn add_texture_array_at(&mut self, slot: u32, texture: &wgpu::Texture) {
+        write_slot(&mut self.arrays, slot, array_view(texture));
     }
 
     pub(super) fn material_texture<'a>(&self, map: Option<u32>, textures: &'a dyn TextureTable) -> &'a wgpu::Texture {
@@ -268,6 +273,43 @@ impl Resources {
     pub(super) fn material_array(&self, id: Option<u32>) -> &wgpu::TextureView {
         id.and_then(|id| self.arrays.get(id as usize))
             .unwrap_or(&self.white_array)
+    }
+
+    /// What a material's array slot `slot` binds for array `id`: the baked
+    /// lighting in an empty third slot, while there is one.
+    pub(super) fn material_slot_array(&self, slot: usize, id: Option<u32>) -> &wgpu::TextureView {
+        match (&self.lightmap, slot, id) {
+            (Some(lightmap), 2, None) => lightmap,
+            _ => self.material_array(id),
+        }
+    }
+
+    /// Sets the baked lighting array (`None`: none) and binds every material
+    /// that sets no third array again, so it reads it there.
+    pub(super) fn set_lightmap(
+        &mut self,
+        device: &wgpu::Device,
+        lightmap: Option<wgpu::TextureView>,
+        textures: &dyn TextureTable,
+    ) {
+        self.lightmap = lightmap;
+        for i in 0..self.materials.len() {
+            let material = &self.materials[i];
+            if material.bindings.array_ids[2].is_some()
+                || self
+                    .freed_material
+                    .as_ref()
+                    .is_some_and(|fallback| fallback.buffer == material.buffer)
+            {
+                continue;
+            }
+            let (maps, array_ids) = (material.bindings.maps, material.bindings.array_ids);
+            let bindings = self.bindings_for(maps, array_ids, textures);
+            let bind_group = self.material_bind_group(device, &material.buffer, &bindings);
+            let material = &mut self.materials[i];
+            material.bind_group = bind_group;
+            material.bindings = bindings;
+        }
     }
 
     pub(super) fn material_bindings(&self, desc: &GpuMaterialDesc, textures: &dyn TextureTable) -> MaterialBindings {
@@ -284,7 +326,7 @@ impl Resources {
             maps,
             array_ids,
             textures: std::array::from_fn(|i| self.material_texture(maps[i], textures).clone()),
-            arrays: std::array::from_fn(|i| self.material_array(array_ids[i]).clone()),
+            arrays: std::array::from_fn(|i| self.material_slot_array(i, array_ids[i]).clone()),
         }
     }
 
@@ -303,7 +345,7 @@ impl Resources {
         for i in 0..self.materials.len() {
             let material = &self.materials[i];
             let maps = material.bindings.maps;
-            let array_ids = material.bindings.array_ids;
+            let mut array_ids = material.bindings.array_ids;
             let reads_texture = texture.is_some_and(|t| maps.contains(&Some(t)));
             if !reads_texture && !array.is_some_and(|a| array_ids.contains(&Some(a))) {
                 continue;
@@ -314,6 +356,13 @@ impl Resources {
                     if map == texture {
                         let offset = std::mem::offset_of!(crate::three::MaterialUniform, maps) + 4 * (slot - 1);
                         queue.write_buffer(&material.buffer, offset as u64, &0u32.to_le_bytes());
+                    }
+                }
+            }
+            if let Some(array) = array {
+                for id in &mut array_ids {
+                    if *id == Some(array) {
+                        *id = None;
                     }
                 }
             }
@@ -360,7 +409,8 @@ impl Resources {
                 .arrays
                 .iter()
                 .zip(desc.arrays)
-                .all(|(view, id)| view == self.material_array(id))
+                .enumerate()
+                .all(|(slot, (view, id))| view == self.material_slot_array(slot, id))
     }
 
     pub(super) fn material_bind_group(
@@ -417,15 +467,28 @@ impl Resources {
         })
     }
 
-    /// Makes the next new material; `shaders`: how many material shaders
+    /// Makes a material in its assigned slot; `shaders`: how many material shaders
     /// there are (one naming a later shader draws with the last).
-    pub(super) fn create_material(
+    pub(super) fn create_material_at(
         &mut self,
+        device: &wgpu::Device,
+        id: u32,
+        desc: &GpuMaterialDesc,
+        textures: &dyn TextureTable,
+        shaders: u32,
+    ) {
+        let material = self.build_material(device, desc, textures, shaders);
+        write_slot(&mut self.materials, id & INDEX_MASK, material);
+        self.material_ids.insert(id);
+    }
+
+    fn build_material(
+        &self,
         device: &wgpu::Device,
         desc: &GpuMaterialDesc,
         textures: &dyn TextureTable,
         shaders: u32,
-    ) -> u32 {
+    ) -> GpuMaterial {
         let buffer = device
             .uploading(Upload::Materials)
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -435,7 +498,7 @@ impl Resources {
             });
         let bindings = self.material_bindings(desc, textures);
         let bind_group = self.material_bind_group(device, &buffer, &bindings);
-        self.materials.push(GpuMaterial {
+        GpuMaterial {
             buffer,
             bind_group,
             bindings,
@@ -443,8 +506,27 @@ impl Resources {
             transparent: desc.transparent,
             cutout: desc.cutout,
             double_sided: desc.double_sided,
-        });
-        self.materials.len() as u32 - 1
+        }
+    }
+
+    /// The draw slot of a known handle. A stale generation draws with the
+    /// plain material, even when its old slot is live under a new handle.
+    pub(super) fn material_slot(&self, id: u32) -> Option<u32> {
+        if self.material_ids.contains(id) {
+            Some(id & INDEX_MASK)
+        } else if self.material_ids.was_made(id) {
+            Some(FALLBACK_MATERIAL_SLOT)
+        } else {
+            None
+        }
+    }
+
+    /// Material at a resolved draw slot, or the shared fallback for a freed id.
+    pub(super) fn material(&self, slot: u32) -> &GpuMaterial {
+        match self.materials.get(slot as usize) {
+            Some(material) => material,
+            None => self.freed_material.as_ref().expect("a freed material has a fallback"),
+        }
     }
 
     /// Changes material `id` in place: every model using it changes.
@@ -457,13 +539,11 @@ impl Resources {
         textures: &dyn TextureTable,
         shaders: u32,
     ) -> bool {
-        let Some(material) = self.materials.get(id as usize) else {
-            return false;
-        };
-        if self.freed_material.as_ref().is_some_and(|(b, _)| *b == material.buffer) {
-            // Freed: it shares the default's buffer, which stays as it is.
+        if !self.material_ids.contains(id) {
             return false;
         }
+        let slot = (id & INDEX_MASK) as usize;
+        let material = &self.materials[slot];
         let changed_blend = material.transparent != desc.transparent;
         queue
             .uploading(Upload::Materials)
@@ -471,12 +551,12 @@ impl Resources {
         if !self.material_bindings_match(&material.bindings, desc, textures) {
             let bindings = self.material_bindings(desc, textures);
             let bind_group = self.material_bind_group(device, &material.buffer, &bindings);
-            let material = &mut self.materials[id as usize];
+            let material = &mut self.materials[slot];
             material.bind_group = bind_group;
             material.bindings = bindings;
         }
         let shader = desc.shader.min(shaders - 1);
-        let material = &mut self.materials[id as usize];
+        let material = &mut self.materials[slot];
         material.shader = shader;
         material.transparent = desc.transparent;
         material.cutout = desc.cutout;
@@ -484,39 +564,19 @@ impl Resources {
         changed_blend
     }
 
-    /// Material `id` was freed: it draws as the default material from now
-    /// on, through the buffer and bind group every freed material shares,
-    /// and its own are dropped.
-    pub(super) fn free_material(&mut self, device: &wgpu::Device, id: u32, textures: &dyn TextureTable, shaders: u32) {
-        let default = GpuMaterialDesc::new(&crate::three::MaterialDesc::default());
-        let Some(material) = self.materials.get(id as usize) else {
+    /// Drops the material's own GPU resources and installs the shared
+    /// fallback for any old draws that still name it.
+    pub(super) fn free_material(&mut self, device: &wgpu::Device, id: u32, textures: &dyn TextureTable) {
+        if !self.material_ids.remove(id) {
             return;
-        };
-        let shared = match &self.freed_material {
-            Some((buffer, _)) if *buffer == material.buffer => return,
-            Some(shared) => shared.clone(),
-            None => {
-                let buffer =
-                    device
-                        .uploading(Upload::Materials)
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("3d freed material"),
-                            contents: bytemuck::bytes_of(&default.uniform),
-                            usage: wgpu::BufferUsages::UNIFORM,
-                        });
-                let bindings = self.material_bindings(&default, textures);
-                let bind_group = self.material_bind_group(device, &buffer, &bindings);
-                self.freed_material.insert((buffer, bind_group)).clone()
-            }
-        };
-        let bindings = self.material_bindings(&default, textures);
-        let material = &mut self.materials[id as usize];
-        (material.buffer, material.bind_group) = shared;
-        material.bindings = bindings;
-        material.shader = default.shader.min(shaders - 1);
-        material.transparent = default.transparent;
-        material.cutout = default.cutout;
-        material.double_sided = default.double_sided;
+        }
+        if self.freed_material.is_none() {
+            let default = GpuMaterialDesc::new(&crate::three::MaterialDesc::default());
+            self.freed_material = Some(self.build_material(device, &default, textures, 1));
+        }
+        if let Some(fallback) = &self.freed_material {
+            self.materials[(id & INDEX_MASK) as usize] = fallback.clone();
+        }
     }
 
     /// Makes mesh `id`: a freed one's slot, or the next new one.
@@ -645,7 +705,10 @@ impl Resources {
         for view in self.arrays.iter().chain([&self.white_array]) {
             t.view(C::Textures, "texture array", view);
         }
-        for material in &self.materials {
+        if let Some(view) = &self.lightmap {
+            t.view(C::Textures, "baked lighting", view);
+        }
+        for material in self.materials.iter().chain(&self.freed_material) {
             t.buffer(C::Other, "material uniforms", &material.buffer);
             for texture in &material.bindings.textures {
                 t.texture(C::Textures, "material texture", texture);
@@ -760,6 +823,7 @@ fn past_copy_pipeline(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> 
     })
 }
 
+#[derive(Clone)]
 pub(super) struct GpuMaterial {
     pub(super) buffer: wgpu::Buffer,
     pub(super) bind_group: wgpu::BindGroup,
@@ -774,6 +838,7 @@ pub(super) struct GpuMaterial {
 // Keep the resource identities as well as the requested handles: mip generation
 // and reloads can replace a texture in place. Comparing these fixed arrays does
 // not allocate or create views on uniform-only updates.
+#[derive(Clone)]
 pub(super) struct MaterialBindings {
     pub(super) maps: MaterialTextures,
     pub(super) array_ids: [Option<u32>; 3],

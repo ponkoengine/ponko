@@ -583,6 +583,27 @@ fn a_late_rejection_handed_down_also_frees_shaders_sharing_the_rejected_code() {
     assert_eq!(pipelines(&renderer, red), blue, "the newer code stays");
 }
 
+#[test]
+fn late_rejection_after_slot_reuse_still_reaches_shaders_sharing_that_code() {
+    let Some((device, mut renderer)) = rig() else {
+        return;
+    };
+    renderer.defer_checks = true;
+    let old = renderer.create_shader(&device, "old.wgsl", BAD_SAMPLING).unwrap();
+    let twin = renderer.create_shader(&device, "twin.wgsl", BAD_SAMPLING).unwrap();
+    assert_eq!(pipelines(&renderer, twin), pipelines(&renderer, old));
+    assert_eq!(renderer.pending_shader_checks(), 1);
+
+    renderer.free_shader(old);
+    renderer
+        .create_shader_at(&device, old, "replacement.wgsl", BLUE)
+        .unwrap();
+    let replacement = pipelines(&renderer, old);
+    renderer.poll_shader_checks(&device, &mut Vec::new());
+    assert_eq!(pipelines(&renderer, twin), pipelines(&renderer, 0));
+    assert_eq!(pipelines(&renderer, old), replacement);
+}
+
 /// What `Ctx` does when a shader file fails at first load (a stand-in,
 /// and for a compute pass, its pipeline freed) and a saved fix reloads it.
 #[test]

@@ -90,6 +90,17 @@ static void handles(PonkoCtx* ctx, void* user) {
     CHECK(live);
     CHECK(ponko_ctx_handle_is_live(ctx, PONKO_HANDLE_MESH, mesh.id, &live) == PONKO_OK && !live);
 
+    // ANCHOR: render_target_kind
+    PonkoTexture target; /* a render target is a PonkoTexture too */
+    ponko_ctx_create_render_target(ctx, 64, 64, &target);
+    bool is_target = false, image_is_target = true;
+    ponko_ctx_handle_is_live(ctx, PONKO_HANDLE_RENDER_TARGET, target.id, &is_target);        /* true */
+    ponko_ctx_handle_is_live(ctx, PONKO_HANDLE_RENDER_TARGET, texture.id, &image_is_target); /* false */
+    // ANCHOR_END: render_target_kind
+    CHECK(is_target && !image_is_target);
+    CHECK(ponko_ctx_handle_free(ctx, PONKO_HANDLE_RENDER_TARGET, texture.id) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_handle_free(ctx, PONKO_HANDLE_RENDER_TARGET, target.id) == PONKO_OK);
+
     // ANCHOR: asset_inventory
     PonkoAssetCount textures;
     ponko_ctx_asset_count(ctx, PONKO_ASSET_CLASS_TEXTURE, &textures);
@@ -125,6 +136,34 @@ static void retained_ui(PonkoCtx* ctx, void* user) {
     // ANCHOR_END: ui_c
     uint64_t top = PONKO_UI_NONE;
     CHECK(ponko_ctx_ui_top_screen(ctx, PONKO_UI_SCREEN, &top) == PONKO_OK && top == root);
+
+    // ANCHOR: ui_widgets_c
+    const char* levels[] = {"Low", "Medium", "High"};
+    PonkoUiLayout field = ponko_ui_layout_fixed(220, 32);
+    uint64_t quality, list;
+    ponko_ctx_ui_add_dropdown(ctx, PONKO_UI_SCREEN, root, levels, 3, &field, &quality);
+    ponko_ctx_ui_set_tooltip(ctx, PONKO_UI_SCREEN, quality, "How detailed the world looks");
+    /* A list keeps nodes only for the rows on screen: 10 000 items cost what 10 do. */
+    PonkoUiLayout box = ponko_ui_layout_fixed(300, 240);
+    ponko_ctx_ui_add_list(ctx, PONKO_UI_SCREEN, root, 1, 24.0f, &box, &list);
+    ponko_ctx_ui_set_list_len(ctx, PONKO_UI_SCREEN, list, 10000);
+
+    /* The extended event carries what the widget set's events need. */
+    PonkoUiEventEx ev = {.struct_size = sizeof ev, .version = PONKO_UI_EVENT_EX_VERSION};
+    while (ponko_ctx_ui_next_event_ex(ctx, PONKO_UI_SCREEN, &ev) == PONKO_OK) {
+        uint64_t choice = PONKO_UI_NO_INDEX;
+        if (ev.kind == PONKO_UI_EVENT_CHANGED && ev.id == quality)
+            ponko_ctx_ui_selected(ctx, PONKO_UI_SCREEN, quality, &choice);
+        else if (ev.kind == PONKO_UI_EVENT_CHOSEN) { /* context-menu entry ev.index of node ev.id */ }
+    }
+    /* A custom theme: the dark one with square corners. */
+    PonkoUiThemeEx theme = {.struct_size = sizeof theme, .version = PONKO_UI_THEME_EX_VERSION};
+    ponko_ui_theme_ex_dark(&theme);
+    theme.radius = 0;
+    ponko_ctx_ui_set_theme_ex(ctx, PONKO_UI_SCREEN, &theme);
+    // ANCHOR_END: ui_widgets_c
+    uint64_t chosen = PONKO_UI_NONE;
+    CHECK(ponko_ctx_ui_selected(ctx, PONKO_UI_SCREEN, quality, &chosen) == PONKO_OK && chosen == 0);
 
     PonkoTransform3D at = ponko_transform3d_at((PonkoVec3){0, 1, -2});
     uint32_t transform3d = 0;

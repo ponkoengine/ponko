@@ -6,10 +6,131 @@
 
 pub(crate) mod ime;
 
+use std::cell::RefCell;
+
+use js_sys::Function;
+use wasm_bindgen::prelude::{Closure, wasm_bindgen};
 use wasm_bindgen::{JsCast, JsValue};
-use wasm_bindgen_futures::JsFuture;
+use wasm_bindgen_futures::{JsFuture, future_to_promise};
 use winit::platform::web::WindowAttributesExtWebSys;
-use winit::window::WindowAttributes;
+use winit::window::{Window, WindowAttributes};
+
+use crate::error::{Error, ErrorKind};
+
+type StartupCallback = Box<dyn FnOnce(Result<(), Error>)>;
+
+#[derive(Default)]
+struct Startup {
+    result: Option<Result<(), Error>>,
+    callbacks: Vec<StartupCallback>,
+}
+
+thread_local! {
+    static STARTUP: RefCell<Startup> = RefCell::default();
+}
+
+/// Registers a callback for the result of starting the browser game.
+///
+/// The callback runs once, after window and graphics initialization and setup,
+/// or immediately if startup already finished. A callback registered in setup
+/// runs after setup returns. This hook covers recoverable startup failures.
+/// Panics and failures while playing are reported separately.
+pub fn on_startup(callback: impl FnOnce(Result<(), Error>) + 'static) {
+    let mut callback = Some(Box::new(callback) as StartupCallback);
+    let result = STARTUP.with_borrow_mut(|startup| {
+        if startup.result.is_none() {
+            startup.callbacks.extend(callback.take());
+        }
+        startup.result.clone()
+    });
+    if let (Some(callback), Some(result)) = (callback, result) {
+        callback(result);
+    }
+}
+
+/// JavaScript's `game.js` export. Call after initializing the Wasm module.
+#[wasm_bindgen(js_name = onPonkoStartup)]
+#[doc(hidden)]
+pub fn on_ponko_startup(callback: Function) {
+    on_startup(move |result| {
+        let value = result.err().map_or(JsValue::NULL, |error| {
+            let value = js_sys::Error::new(error.message());
+            let _ = js_sys::Reflect::set(
+                value.as_ref(),
+                &JsValue::from_str("kind"),
+                &JsValue::from_str(&format!("{:?}", error.kind())),
+            );
+            value.into()
+        });
+        if let Err(exception) = callback.call1(&JsValue::UNDEFINED, &value) {
+            web_sys::console::error_1(&exception);
+        }
+    });
+}
+
+/// Completes startup exactly once, including for callbacks added after it.
+/// Take the callbacks out before calling them so they can subscribe again.
+pub(crate) fn finish_startup(result: Result<(), Error>) {
+    let callbacks = STARTUP.with_borrow_mut(|startup| {
+        if startup.result.is_some() {
+            return Vec::new();
+        }
+        startup.result = Some(result.clone());
+        std::mem::take(&mut startup.callbacks)
+    });
+    if let Err(error) = &result {
+        log_error(&error.to_string());
+    }
+    for callback in callbacks {
+        callback(result.clone());
+    }
+}
+
+/// Watches the actual game canvas during startup, including while the
+/// renderer is pending. After setup, surface loss belongs to the game loop.
+pub(crate) struct StartupContextListener {
+    canvas: web_sys::HtmlCanvasElement,
+    lost: Closure<dyn FnMut(web_sys::Event)>,
+}
+
+impl StartupContextListener {
+    pub(crate) fn new(window: &Window, on_lost: impl Fn() + 'static) -> Option<Self> {
+        use winit::platform::web::WindowExtWebSys;
+        let canvas = window.canvas()?;
+        let lost = Closure::wrap(Box::new(move |_: web_sys::Event| on_lost()) as Box<dyn FnMut(_)>);
+        canvas
+            .add_event_listener_with_callback("webglcontextlost", lost.as_ref().unchecked_ref())
+            .ok()?;
+        Some(Self { canvas, lost })
+    }
+}
+
+impl Drop for StartupContextListener {
+    fn drop(&mut self) {
+        let _ = self
+            .canvas
+            .remove_event_listener_with_callback("webglcontextlost", self.lost.as_ref().unchecked_ref());
+    }
+}
+
+pub(crate) fn context_lost() -> Error {
+    Error::new(
+        ErrorKind::Unsupported,
+        "The WebGL2 context was lost during startup. Reload the page to try again.",
+    )
+}
+
+/// How many worker threads run the game's parallel work (parallel queries
+/// and the parallel scheduler's batches; jobs have their own, half as
+/// many): 0 for a build without threads (the default web build), on a
+/// page that isn't cross-origin isolated, and before startup is done. See
+/// the guide's "Threads on the web" and [`Game::web_threads`](crate::Game::web_threads).
+pub fn threads() -> usize {
+    #[cfg(target_feature = "atomics")]
+    return crate::web_threads::frame_threads();
+    #[cfg(not(target_feature = "atomics"))]
+    return 0;
+}
 
 /// The id of the `<canvas>` the game draws into, when the page has one.
 /// Without it, the engine adds a canvas at the end of the page.
@@ -88,20 +209,21 @@ pub(crate) async fn fetch_assets() {
         }),
         Err(_) => return,
     };
-    // Start every request before waiting for any.
-    let requests: Vec<_> = names
-        .into_iter()
-        .map(|name| {
-            let request = window.fetch_with_str(&format!("assets/{name}"));
-            (name, request)
-        })
-        .collect();
-    for (name, request) in requests {
-        match bytes(request).await {
-            Ok(data) => crate::assets::insert_web_file(name, data),
-            Err(e) => log_error(&format!("ponko: could not fetch assets/{name}: {e}")),
-        }
+    // Handle all fetch promises as soon as they start. Waiting on requests
+    // in order can leave a later network rejection unhandled in the browser.
+    let requests = js_sys::Array::new();
+    for name in names {
+        let window = window.clone();
+        let request = future_to_promise(async move {
+            match bytes(window.fetch_with_str(&format!("assets/{name}"))).await {
+                Ok(data) => crate::assets::insert_web_file(name, data),
+                Err(e) => log_error(&format!("ponko: could not fetch assets/{name}: {e}")),
+            }
+            Ok(JsValue::UNDEFINED)
+        });
+        requests.push(&request);
     }
+    let _ = JsFuture::from(js_sys::Promise::all(&requests)).await;
 }
 
 /// Fetches an asset pack with at most two range requests: its first

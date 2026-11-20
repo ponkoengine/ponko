@@ -26,6 +26,7 @@ fn loaders(snapshot: &str) -> BTreeMap<String, String> {
 const RUNTIME_OPERATIONS: &[(&str, &str)] = &[
     ("ponko::assets::Assets", "load_with"),
     ("ponko::assets::Assets", "load_level"),
+    ("ponko::assets::Assets", "load_ldtk_worlds"),
     ("ponko::assets::Assets", "load_reflected_resource_json"),
     ("ponko::assets::Assets", "load_reflected_component_json"),
     ("ponko::prelude::Ctx", "load_scene"),

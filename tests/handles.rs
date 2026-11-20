@@ -225,9 +225,9 @@ mod three {
             frees(ctx, a, array);
             let target = |ctx: &mut Ctx| ctx.gfx.create_render_target(8, 8);
             let t = target(ctx);
-            assert!(ctx.gfx.is_render_target(t));
+            assert!(ctx.gfx.is_render_target(t.texture()));
             frees(ctx, t, target);
-            assert!(!ctx.gfx.is_render_target(t));
+            assert!(!ctx.gfx.is_render_target(t.texture()));
             assert_eq!(ctx.live_counts(), before, "everything made was freed");
             assert!(ctx.is_live(white));
             // C's PONKO_HANDLE_NONE.
@@ -376,6 +376,54 @@ mod three {
         });
     }
 
+    /// A render target is its own handle kind over the texture it draws
+    /// into: `texture()` reads it as that texture, and the two live and die
+    /// together, whichever of them is freed.
+    #[test]
+    fn a_render_target_and_its_texture_live_and_die_together() {
+        use ponko::render::RenderTarget;
+        Game::new("t", 1, 1).run_headless(0, |ctx| {
+            let before = ctx.live_counts();
+            let target: RenderTarget = ctx.gfx.create_render_target(8, 4);
+            assert!(ctx.is_live(target) && ctx.is_live(target.texture()));
+            assert_eq!((target.width(), target.height()), (8, 4));
+            let now = ctx.live_counts();
+            assert_eq!(now.render_targets, before.render_targets + 1);
+            assert_eq!(now.textures, before.textures + 1, "a render target is a texture too");
+
+            ctx.free(target);
+            assert!(!ctx.is_live(target) && !ctx.is_live(target.texture()));
+            assert_eq!(ctx.live_counts(), before);
+
+            // Freed as the texture it reads as, the target is gone too.
+            let other = ctx.gfx.create_render_target(8, 4);
+            assert_ne!(other, target, "never given out twice");
+            ctx.free(other.texture());
+            assert!(!ctx.is_live(other) && !ctx.gfx.is_render_target(other.texture()));
+            assert_eq!(ctx.live_counts(), before);
+
+            // NONE is never live, whichever kind reads it.
+            assert!(!ctx.is_live(RenderTarget::NONE) && !ctx.is_live(RenderTarget::NONE.texture()));
+            ctx.free(RenderTarget::NONE);
+        });
+    }
+
+    /// Plain textures and render targets take ids from one pool, but a
+    /// render target freed twice never frees the plain texture made after
+    /// it, whichever slot that took.
+    #[test]
+    fn freeing_a_stale_render_target_never_frees_a_plain_texture() {
+        Game::new("t", 1, 1).run_headless(0, |ctx| {
+            let target = ctx.gfx.create_render_target(2, 2);
+            ctx.free(target);
+            let plain = ctx.gfx.create_texture(2, 2, &[255; 16]);
+            assert!(ctx.is_live(plain));
+            ctx.free(target); // stale: nothing
+            assert!(ctx.is_live(plain));
+            ctx.free(plain);
+        });
+    }
+
     /// A buffer freed through the service keeps its id out of the pool
     /// until the compute passes writing to it are gone, so a stale pass
     /// never writes into the next buffer that takes the id.
@@ -461,9 +509,10 @@ mod three {
                     Model::new(other),
                     ModelMaterial(material),
                 ));
-                for h in [image, normal, target] {
+                for h in [image, normal] {
                     ctx.free(h);
                 }
+                ctx.free(target);
                 ctx.free(shader);
                 ctx.free(array);
                 ctx.free(material);

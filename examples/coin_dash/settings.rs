@@ -28,6 +28,7 @@
 
 use super::*;
 use ponko::locale::{Arg, Strings};
+use ponko::ui::UiScreenTransition;
 use std::collections::HashSet;
 
 /// Layout version of the settings file; another version is recovered from.
@@ -332,6 +333,10 @@ pub fn bindings_for(controls: &Controls) -> ActionMap {
             list.push(ButtonBinding::Gamepad { pad, button });
         }
         list.extend(extra.map(ButtonBinding::Key));
+        // On a touch screen a tap anywhere starts, resumes, plays again.
+        if control == Control::Confirm {
+            list.push(ButtonBinding::Gesture(Gesture::Tap));
+        }
         Action::Button(list)
     };
     let fixed = |control| match control {
@@ -581,6 +586,10 @@ impl SettingsUi {
             .background(Color::hex(0x2b3240))
             .id();
         let prompt_text = ui.label(prompt, "").layout(UiLayout::fixed(420.0, 78.0)).wrap().id();
+        // The screen fades in and out; the prompt grows into place.
+        let fade = UiScreenTransition::fade(0.15);
+        ui.set_screen_transition(root, fade, UiScreenTransition::fade(0.1));
+        ui.set_screen_transition(prompt, UiScreenTransition::zoom(0.9, 0.12).with_fade(), fade);
 
         SettingsUi {
             root,

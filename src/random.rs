@@ -137,16 +137,37 @@ impl Rng {
         self.f32() * std::f32::consts::TAU
     }
 
-    /// A direction: a vector of length 1 at a random angle.
+    /// A direction: a vector of length 1 pointing anywhere, every direction
+    /// equally likely.
+    ///
+    /// Bit-identical on every platform (and in the C++ header's `rng`): it
+    /// picks a point in a disk with integers and divides it by its length,
+    /// with no `sin` or `cos`, whose results differ between platforms'
+    /// math libraries. It takes one or more numbers from the generator
+    /// (1.27 on average).
     ///
     /// ```
     /// # use ponko::prelude::*;
     /// let dir = Rng::new(7).unit_vec2();
-    /// assert!((dir.length() - 1.0).abs() < 1e-5);
+    /// assert!((dir.length() - 1.0).abs() < 1e-6);
     /// ```
     #[inline]
     pub fn unit_vec2(&mut self) -> Vec2 {
-        Vec2::from_angle(self.angle())
+        // Two 24-bit integer coordinates in [-2^23, 2^23), kept when the
+        // point lies in the disk of radius 2^23 (78.5 % of draws). The
+        // square length is exact as an integer and as an `f64` (< 2^53),
+        // and `sqrt` and `/` round the same everywhere.
+        const HALF: i64 = 1 << 23;
+        loop {
+            let bits = self.u64();
+            let x = (bits >> 40) as i64 - HALF;
+            let y = ((bits >> 16) & 0xFF_FFFF) as i64 - HALF;
+            let d2 = x * x + y * y;
+            if d2 != 0 && d2 <= HALF * HALF {
+                let d = (d2 as f64).sqrt();
+                return Vec2::new((x as f64 / d) as f32, (y as f64 / d) as f32);
+            }
+        }
     }
 }
 
@@ -256,6 +277,37 @@ mod tests {
         }
         assert!(seen.iter().all(|&s| s));
         assert_eq!(rng.below(0), 0);
+    }
+
+    #[test]
+    fn unit_vectors_have_length_one_and_point_every_way_alike() {
+        let mut rng = Rng::new(11);
+        let mut sectors = [0u32; 8];
+        for _ in 0..80_000 {
+            let v = rng.unit_vec2();
+            assert!((v.length() - 1.0).abs() < 1e-6, "{v}");
+            let angle = v.y.atan2(v.x) + std::f32::consts::PI;
+            sectors[((angle / std::f32::consts::TAU * 8.0) as usize).min(7)] += 1;
+        }
+        assert!(sectors.iter().all(|&n| (9_500..10_500).contains(&n)), "{sectors:?}");
+    }
+
+    /// Pins `unit_vec2` bit for bit: no platform math library is involved,
+    /// and the C++ header's `rng::unit_vec2` (examples/cpp/tests.cpp)
+    /// checks the same bits.
+    #[test]
+    fn unit_vectors_are_the_same_bits_everywhere() {
+        let mut rng = Rng::new(42);
+        let bits: Vec<[u32; 2]> = (0..4).map(|_| rng.unit_vec2().to_array().map(f32::to_bits)).collect();
+        assert_eq!(
+            bits,
+            [
+                [0xbf7ffc9f, 0xbc266865],
+                [0x3f2e9265, 0xbf3b3eb5],
+                [0xbf70cf38, 0x3eadbea9],
+                [0xbd82aa6b, 0xbf7f7a7a]
+            ]
+        );
     }
 
     #[test]

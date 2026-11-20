@@ -12,6 +12,6 @@
   "adapter": "Apple M4 Max",
   "backend": "Metal",
   "driver": "unknown",
-  "checksum": "9a39d8e8ea4ea29e",
-  "reason": "Reflection cone: the blur follows roughness and each ray's hit distance, so the low bar's contact reflection stays sharp while the high bar's blurs; rays that miss take their nearest neighbours' cone instead of the coarsest level, so the wide halo around the contact reflection is gone."
+  "checksum": "a55ba7a03ad3da38",
+  "reason": "Screen-space reflections: rebuilt march (no grain in contact reflections) and a hits pyramid for the spread fill (smooth edges on wide blurred reflections)"
 }

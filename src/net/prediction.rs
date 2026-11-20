@@ -179,6 +179,23 @@ impl<S: Clone + PartialEq, I> Prediction<S, I> {
         }
     }
 
+    /// The same prediction, giving its first input the number `seq`
+    /// instead of 0: for an entity that joins an input stream already
+    /// running, so its numbers match the stream's (the server acknowledges
+    /// inputs by the stream's numbers).
+    /// ```
+    /// let mut p = ponko::net::Prediction::new(0i32).starting_at(500);
+    /// assert_eq!(p.predict(1, |s, i| *s += i), 500);
+    /// assert_eq!(p.next_seq(), 501);
+    /// ```
+    #[must_use]
+    pub fn starting_at(mut self, seq: u16) -> Self {
+        if !self.started {
+            self.next_seq = seq;
+        }
+        self
+    }
+
     /// Runs one tick: `step` applies `input` to the predicted state, and the
     /// input is kept (with its sequence number, returned) until the server
     /// confirms it. Call it once per fixed tick, in the same place the

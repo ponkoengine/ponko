@@ -13,7 +13,7 @@ whether it needs WebGPU and its source at that release. Among them:
   shadows and instanced models.
 
 Games draw with WebGPU where the browser has it, and WebGL2 where it
-doesn't, so they run in every current desktop browser.
+doesn't. Running the game requires at least one usable graphics backend.
 
 ## Building your game
 
@@ -72,12 +72,16 @@ most two range requests ([Assets in one
 pack](packaging.md#assets-in-one-pack-ponko-pack)). `load_texture` and
 the other loading functions then work as usual.
 
-**One thread.** Browsers can run WebAssembly on several threads only on
-specially configured servers, so web builds use one. Parallel queries
-(`par_for_each`) still work, just on a single core: the battle's 20,000
-units take about 4.5 ms per tick in Chrome, against 0.5 ms native on all
-cores of the same machine. Plan for tens of thousands of units on the web,
-rather than millions.
+**One thread, unless you build with threads.** Browsers run WebAssembly on
+several threads only on pages served with two particular headers, so an
+ordinary web build uses one. Parallel queries (`par_for_each`) still work,
+just on a single core: the battle's 20,000 units take about 4.5 ms per tick
+in Chrome, against 0.5 ms native on all cores of the same machine. Plan for
+tens of thousands of units on the web, rather than millions. A build with
+threads (`web/build.sh --threads`, on nightly Rust) runs parallel queries,
+the parallel scheduler and jobs on Web Workers where the page has those
+headers, and on one thread where it doesn't: see [Threads on the
+web](web-threads.md).
 
 **Measure time with the engine's `Instant`.** `std::time::Instant::now()`
 panics in browsers. `ponko::perf::Instant` is the same type on desktop and
@@ -120,10 +124,61 @@ takes browser players with `accept_web` next to its desktop players (see
 **Not available on the web:** the [control endpoint](control.md) and
 [MCP](agents.md) tools, [hot reload](data-files.md) of files, [hot
 patching](hot-patching.md) of code, and anything that writes files
-(`ctx.gfx.save_screenshot`, saving the world to a path). The player's own
+(`ctx.gfx.save_screenshot`, saving the world to a path), and [video
+playback](video.md#in-a-browser) (the page's own `<video>` element plays
+intros instead). The player's own
 files do work: `ctx.storage` keeps them in the browser's storage (see [Saves
 and settings](storage.md#in-the-browser)). `println!` output goes
 nowhere; panics appear in the browser's developer console.
+
+## Startup errors
+
+The generated page keeps “Loading…” visible until window creation, graphics
+initialization and setup finish. It displays the engine's error if neither
+WebGPU nor WebGL2 can start, the WebGL2 context is lost during startup, or
+setup returns an error. Use `try_setup` with fallible loading calls for assets
+the game needs to start:
+
+```rust,no_run
+# use ponko::prelude::*;
+Game::new("My Game", 800, 600)
+    .try_setup(|ctx| {
+        let _logo = ctx.gfx.try_load_texture("logo.png")?;
+        Ok(())
+    })
+    .run();
+```
+
+Custom pages can subscribe using the `onPonkoStartup(callback)` export from
+the generated `game.js`. Register it after calling `init()` and handling
+winit's “Using exceptions for control flow” exception. The callback runs once
+with `null` on success or an `Error` with a `kind` (a Rust `ErrorKind` variant
+name, such as `"Unsupported"` or `"NotFound"`) and a `message`. A callback
+registered after startup receives the result immediately.
+
+```js
+import init, { onPonkoStartup } from "./game.js";
+
+try {
+  await init();
+} catch (error) {
+  if (!String(error).includes("Using exceptions for control flow")) throw error;
+}
+
+onPonkoStartup((error) => {
+  const status = document.getElementById("status");
+  if (error) status.textContent = error.message;
+  else status.remove();
+});
+```
+
+In Rust browser builds with the `window` feature, register
+`ponko::web::on_startup` before running the game to receive the same
+`Result<(), ponko::error::Error>`. `Game::try_run` can return errors from
+creating the event loop synchronously. Later initialization and setup report
+through the callback. This contract covers recoverable startup errors.
+Panics appear in the developer console, and failures during play use the
+game loop's normal handling.
 
 ## Testing in a browser
 
@@ -138,7 +193,9 @@ the complete-game reference `coin_dash` ([A complete game,
 packaged](packaging.md#the-web-build)) are built and checked there. CI runs
 WebGL2 in all three browsers on `main`; WebGPU is tried too, and a
 browser that can't show a WebGPU canvas is reported as unsupported, with the
-reason, never as a pass. Each run leaves a report, a trace and a screenshot.
+reason, never as a pass. The 2D fixture's startup failure cases check both
+the callback's error and the message shown on the page. Each run leaves a
+report, a trace and a screenshot.
 See its
 [README](../../web/smoke/README.md)
 for running it, adding a fixture for another example, and what runs where.

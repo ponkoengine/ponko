@@ -5,7 +5,7 @@
 
 use glam::Vec2;
 
-use super::{Batch, DebugLine, ON_TOP, SCREEN, THREE_D};
+use super::{Batch, DebugLabel, DebugLine, ON_TOP, SCREEN, THREE_D};
 use crate::camera::{Rect, RenderLayers};
 use crate::ctx::Ctx;
 use crate::render::batch::SpriteInstance;
@@ -27,25 +27,84 @@ pub(crate) struct LineInstance {
     pub color: [u8; 4],
 }
 
-/// This frame's 3D lines, for the renderer: the depth-tested ones, then
-/// those on top. Cleared each frame, capacity kept.
+/// A depth-tested 3D label, for the 3D frame's text (`three::text3d`).
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(not(feature = "3d"), allow(dead_code))]
+pub(crate) struct GpuLabel {
+    pub at: glam::Vec3,
+    pub color: crate::color::Color,
+    /// In pixels.
+    pub size: f32,
+    /// Its text in [`GpuLines::text`].
+    pub text: std::ops::Range<usize>,
+}
+
+/// This frame's 3D lines, for the renderer, in the order they are drawn:
+/// the depth-tested opaque ones, the depth-tested see-through ones, then
+/// the same two on top; and the depth-tested 3D labels, drawn as 3D text.
+/// Opaque lines (alpha 1, nearly all) are drawn without blending, which
+/// costs a fraction of blending with several samples a pixel. Cleared each
+/// frame, capacity kept.
 #[derive(Default, Debug)]
 pub(crate) struct GpuLines {
     pub tested: Vec<LineInstance>,
+    pub tested_blended: Vec<LineInstance>,
     pub top: Vec<LineInstance>,
+    pub top_blended: Vec<LineInstance>,
+    pub labels: Vec<GpuLabel>,
+    /// The labels' text, one after the other.
+    pub text: String,
 }
 
 impl GpuLines {
-    /// No line this frame.
+    /// No line or label this frame.
     #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub(crate) fn is_empty(&self) -> bool {
-        self.tested.is_empty() && self.top.is_empty()
+        self.lists().iter().all(|l| l.is_empty()) && self.labels.is_empty()
     }
 
     #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub(crate) fn clear(&mut self) {
         self.tested.clear();
+        self.tested_blended.clear();
         self.top.clear();
+        self.top_blended.clear();
+        self.labels.clear();
+        self.text.clear();
+    }
+
+    /// The four lists of lines, in the order they are drawn.
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
+    pub(crate) fn lists(&self) -> [&[LineInstance]; 4] {
+        [&self.tested, &self.tested_blended, &self.top, &self.top_blended]
+    }
+
+    /// How many lines there are.
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
+    pub(crate) fn line_count(&self) -> usize {
+        self.lists().iter().map(|l| l.len()).sum()
+    }
+
+    /// Adds `other`'s lines (not its labels: those are the main camera's).
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
+    pub(crate) fn extend_lines(&mut self, other: &GpuLines) {
+        self.tested.extend_from_slice(&other.tested);
+        self.tested_blended.extend_from_slice(&other.tested_blended);
+        self.top.extend_from_slice(&other.top);
+        self.top_blended.extend_from_slice(&other.top_blended);
+    }
+
+    /// Adds a depth-tested 3D label saying `text`.
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
+    fn push_label(&mut self, l: &DebugLabel, text: &str) {
+        let start = self.text.len();
+        self.text.push_str(text);
+        self.labels.push(GpuLabel {
+            at: l.at,
+            color: l.color,
+            size: l.size,
+            text: start..self.text.len(),
+        });
     }
 
     fn push(&mut self, l: &DebugLine) {
@@ -55,10 +114,12 @@ impl GpuLines {
             b: l.b.to_array(),
             color: l.color,
         };
-        if l.flags & ON_TOP != 0 {
-            self.top.push(line);
-        } else {
-            self.tested.push(line);
+        let opaque = l.color[3] == u8::MAX;
+        match (l.flags & ON_TOP != 0, opaque) {
+            (false, true) => self.tested.push(line),
+            (false, false) => self.tested_blended.push(line),
+            (true, true) => self.top.push(line),
+            (true, false) => self.top_blended.push(line),
         }
     }
 }
@@ -198,6 +259,13 @@ impl Out<'_> {
                 ..Default::default()
             };
             if label.flags & THREE_D != 0 {
+                if label.flags & super::TESTED != 0 {
+                    // In the 3D frame, against its depth (`three::text3d`).
+                    if cfg!(feature = "3d") {
+                        lines.push_label(label, text);
+                    }
+                    continue;
+                }
                 #[cfg(feature = "3d")]
                 for (camera, clip) in cameras3d(self.scene3d) {
                     if let Some(at) = on_screen3d(camera, label.at) {
@@ -249,7 +317,7 @@ impl Ctx {
             self.hand_over_debug_draw();
         }
         #[cfg(feature = "3d")]
-        let lines = self.gfx.frame3d.debug_lines.tested.len() + self.gfx.frame3d.debug_lines.top.len();
+        let lines = self.gfx.frame3d.debug_lines.line_count();
         #[cfg(not(feature = "3d"))]
         let lines = 0;
         let (sprites, batches) = self.gfx.draw_list.finish();

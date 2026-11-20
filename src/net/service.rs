@@ -9,9 +9,11 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::{
-    Desync, Interest, LatestWins, Net, NetMessages, NetState, NetStats, Pose, SnapshotSample, SnapshotStream,
-    UpdateStamp,
+    Desync, Interest, LatestWins, Net, NetMessages, NetState, NetStats, Pose, Replication, SnapshotSample,
+    SnapshotStream, UpdateStamp,
 };
+use crate::events::Events;
+use ponko_ecs::World;
 
 /// All of a game's networking: `ctx.net`. Each transport is a field, and the
 /// engine drives the ones that are there:
@@ -22,9 +24,11 @@ use super::{
 /// | [`messages`](Self::messages) | The byte-message endpoint ([`NetMessages`]) from [`Game::messages`](crate::game::Game::messages) | Polled once per frame before any system (once per tick headless), also while paused |
 /// | [`snapshots`](Self::snapshots) | Incoming [`Pose`] snapshots per remote entity ([`NetSnapshots`]) | Nothing to drive: push when a packet arrives, sample when drawing |
 /// | [`interest`](Self::interest) | Who receives which entity ([`Interest`]), if the game set one | Nothing: only the game knows its viewers, so it calls [`Interest::update`] on its send tick |
+/// | [`replication`](Self::replication) | Declared replication ([`Replication`]) over `messages`; off unless [`Game::replication`](crate::game::Game::replication) gave one | Every simulation tick: takes what arrived before the systems, sends after them |
 ///
 /// A single-player game has an offline `lockstep`, no `messages`, no
-/// `interest` and no snapshot streams, and pays nothing for them.
+/// `interest`, no snapshot streams and replication off, and pays nothing
+/// for them.
 ///
 /// The lockstep calls of a simulation system are also methods here
 /// (`ctx.net.set_input(..)` is `ctx.net.lockstep.set_input(..)`), and
@@ -100,6 +104,11 @@ pub struct Networking {
     /// Which peer receives which entity, if the game uses interest
     /// management. The game calls [`Interest::update`] on its send tick.
     pub interest: Option<Interest>,
+    /// Declared replication ([`Replication`]): marked components of marked
+    /// entities kept in step from the server to its clients over
+    /// [`messages`](Self::messages). Off unless the game was given one with
+    /// [`Game::replication`](crate::game::Game::replication).
+    pub replication: Replication,
     /// What the engine's last poll of `messages` returned, if it failed.
     message_error: Option<io::Error>,
 }
@@ -227,13 +236,37 @@ impl Networking {
         self.lockstep.input_bytes(player)
     }
 
-    /// Once per frame, before any system: polls the message endpoint.
-    pub(crate) fn begin_frame(&mut self) {
+    /// Start of a simulation tick: replication takes what arrived.
+    pub(crate) fn replication_begin_tick(&mut self, world: &mut World, events: &mut Events, tick: u64, hz: f64) {
+        if self.replication.is_active() {
+            self.replication
+                .begin_tick(self.messages.as_mut(), world, events, tick, hz);
+        }
+    }
+
+    /// End of a simulation tick: replication sends.
+    pub(crate) fn replication_end_tick(&mut self, world: &mut World) {
+        if self.replication.is_active() {
+            self.replication.end_tick(self.messages.as_mut(), world);
+        }
+    }
+
+    /// Once a frame after its ticks: replication shows interpolated values.
+    pub(crate) fn replication_frame(&mut self, world: &mut World, alpha: f64) {
+        if self.replication.is_active() {
+            self.replication.frame(world, alpha);
+        }
+    }
+
+    /// Once per frame, before any system: polls the message endpoint
+    /// (`game_time`: the game's clock, seconds, for
+    /// [`NetMessages::game_clock`]).
+    pub(crate) fn begin_frame(&mut self, game_time: f64) {
         let Some(messages) = &mut self.messages else {
             self.message_error = None;
             return;
         };
-        self.message_error = messages.poll().err();
+        self.message_error = messages.poll_frame(game_time).err();
     }
 }
 
@@ -244,6 +277,7 @@ impl std::fmt::Debug for Networking {
             .field("messages", &self.messages.is_some())
             .field("snapshots", &self.snapshots.len())
             .field("interest", &self.interest.is_some())
+            .field("replication", &self.replication.role())
             .finish_non_exhaustive()
     }
 }

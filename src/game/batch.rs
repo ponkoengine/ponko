@@ -58,11 +58,22 @@ impl Settings {
             threshold_us: threshold.as_secs_f32() * 1e6,
             // Only asked when the scheduler is on: the question starts
             // rayon's global thread pool, which a game that never turns
-            // the scheduler on must not get from here. And the web has no
-            // threads; asking there would set up a pool of the page's own.
-            threads: on && !cfg!(target_arch = "wasm32") && rayon::current_num_threads() > 1,
+            // the scheduler on must not get from here.
+            threads: on && pool_threads() > 1,
         }
     }
+}
+
+/// The threads a batch can go to. The web has them only in a build with
+/// threads on a page that allows them, and never asks rayon there: that
+/// would set up a pool of the page's own thread.
+fn pool_threads() -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    return rayon::current_num_threads();
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    return crate::web_threads::frame_threads();
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    return 1;
 }
 
 /// The builder's settings after the environment variable's `value`.

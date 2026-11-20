@@ -80,12 +80,16 @@ const MIME = {
 /** An empty page on the same (secure) origin: WebGPU isn't exposed on about:blank. */
 const PROBE_PATH = "/__smoke_probe.html";
 
-/** A static file server for `root` on a free localhost port. */
-export async function serve(root) {
+/**
+ * A static file server for `root` on a free localhost port. `headers` go on
+ * every page and file it serves (threads.mjs sends the cross-origin
+ * isolation headers this way).
+ */
+export async function serve(root, headers = {}) {
   const server = createServer(async (req, res) => {
     const path = decodeURIComponent(new URL(req.url, "http://x").pathname);
     if (path === PROBE_PATH) {
-      res.writeHead(200, { "content-type": MIME[".html"] }).end("<!doctype html><title>probe</title>");
+      res.writeHead(200, { "content-type": MIME[".html"], ...headers }).end("<!doctype html><title>probe</title>");
       return;
     }
     const file = normalize(join(root, path.endsWith("/") ? path + "index.html" : path));
@@ -95,7 +99,7 @@ export async function serve(root) {
     }
     try {
       const body = await readFile(file);
-      res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" }).end(body);
+      res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream", ...headers }).end(body);
     } catch {
       res.writeHead(404).end("not found");
     }
@@ -237,6 +241,17 @@ async function smokeState(page) {
       gpu: gpu ? JSON.parse(gpu) : null,
       status: status && status.className === "error" ? status.textContent : null,
     };
+  });
+}
+
+/** Verify the template and independently subscribe to the generated glue. */
+async function startupResult(page) {
+  return page.evaluate(async () => {
+    const { onPonkoStartup } = await import(new URL("./game.js", location.href));
+    // Late subscribers must get the same result synchronously.
+    let error;
+    onPonkoStartup((value) => { error = value; });
+    return error && { kind: error.kind, message: error.message };
   });
 }
 
@@ -410,18 +425,21 @@ async function main() {
     // Software GL contexts occasionally fail to start; ask again before
     // calling a backend unsupported.
     step = "probing the browser's WebGPU and WebGL2";
-    for (let attempt = 1; ; attempt++) {
-      const probeContext = await browser.newContext();
-      report.capabilities = await probe(probeContext, url, args.backend);
-      await probeContext.close();
-      report.probeAttempts = attempt;
-      if (backendAvailable(report.capabilities, args.backend) || attempt === 3) break;
-      log(`probe ${attempt} lacked the backend: ${JSON.stringify(report.capabilities)}; retrying`);
-      await sleep(1000);
+    if (args.case !== "no-graphics") {
+      const backend = args.case === "context-lost" ? "webgl2" : args.backend;
+      for (let attempt = 1; ; attempt++) {
+        const probeContext = await browser.newContext();
+        report.capabilities = await probe(probeContext, url, backend);
+        await probeContext.close();
+        report.probeAttempts = attempt;
+        if (backendAvailable(report.capabilities, backend) || attempt === 3) break;
+        log(`probe ${attempt} lacked the backend: ${JSON.stringify(report.capabilities)}; retrying`);
+        await sleep(1000);
+      }
+      log(`WebGPU adapter: ${JSON.stringify(report.capabilities.webgpu)}; WebGL2: ${JSON.stringify(report.capabilities.webgl2)}`);
+      const reason = unsupportedReason(report.capabilities, backend, args.browser);
+      if (reason) throw new Failure("unsupported", reason);
     }
-    log(`WebGPU adapter: ${JSON.stringify(report.capabilities.webgpu)}; WebGL2: ${JSON.stringify(report.capabilities.webgl2)}`);
-    const reason = unsupportedReason(report.capabilities, args.backend, args.browser);
-    if (reason) throw new Failure("unsupported", reason);
 
     const context = await browser.newContext({ viewport: { width: 800, height: 600 } });
     gameContext = context;
@@ -430,10 +448,37 @@ async function main() {
       // `npx playwright show-trace trace.zip`.
       await context.tracing.start({ screenshots: true, snapshots: false, sources: false, title: `${args.fixture ?? "site"} ${args.browser} ${args.backend}` });
     }
-    if (args.backend === "webgl2") {
+    if (args.backend === "webgl2" || args.case === "no-graphics" || args.case === "context-lost") {
       // Hide WebGPU so the engine takes its WebGL2 fallback.
       await context.addInitScript(() => {
         Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined, configurable: true });
+      });
+    }
+    if (args.case === "no-graphics") {
+      await context.addInitScript(() => {
+        const getContext = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function (kind, ...options) {
+          return kind === "webgl2" ? null : getContext.call(this, kind, ...options);
+        };
+      });
+    }
+    if (args.case === "context-lost") {
+      await context.addInitScript(() => {
+        const fetchAsset = window.fetch.bind(window);
+        window.fetch = async (url, ...options) => {
+          if (url === "assets/index.json") {
+            // Lose the real canvas context while Ponko is still starting.
+            const canvas = document.querySelector("canvas#ponko");
+            const extension = canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context");
+            if (!extension) throw new Error("test requires WEBGL_lose_context");
+            const lost = new Promise((resolve) => {
+              canvas.addEventListener("webglcontextlost", resolve, { once: true });
+            });
+            extension.loseContext();
+            await lost;
+          }
+          return fetchAsset(url, ...options);
+        };
       });
     }
     if (args.music === "required") await context.addInitScript(watchAudio);
@@ -496,16 +541,49 @@ async function main() {
     // 1. Startup: the first frame publishes the state.
     step = "waiting for the first frame";
     const deadline = Date.now() + args.timeout * 1000;
+    const expectedStartup = {
+      "no-graphics": ["Unsupported", "WebGPU or WebGL2"],
+      "context-lost": ["Unsupported", "WebGL2 context was lost during startup"],
+      "missing-asset": args.fixture === "web_smoke" ? ["NotFound", args.asset] : null,
+    }[args.case];
     let snapshot;
     for (;;) {
       snapshot = await call(smokeState(page));
-      const failure = appFailure(snapshot.status);
-      if (failure) throw await settled(failure);
+      if (expectedStartup) {
+        if (snapshot.status) {
+          step = "checking the page's startup error";
+          const [kind, detail] = expectedStartup;
+          const error = await call(startupResult(page));
+          const panic = report.console.find((entry) => entry.text.includes("panicked at"));
+          report.startupError = error;
+          report.startupMessage = snapshot.status;
+          if (error?.kind !== kind || !error.message?.includes(detail) ||
+              snapshot.status !== `Could not start the game: ${error.message}` ||
+              snapshot.state || panic || report.pageErrors.length) {
+            throw new Failure("startup-report", `wanted ${kind} mentioning "${detail}" on the page, got ${JSON.stringify({ error, status: snapshot.status, state: snapshot.state, panic, pageErrors: report.pageErrors })}`);
+          }
+          if (args.case === "missing-asset" &&
+              !report.requests.some((r) => r.path === `/assets/${args.asset}` && r.status === 404)) {
+            throw new Failure("startup-report", `no HTTP 404 for /assets/${args.asset}`);
+          }
+          throw new Failure(CASES[args.case], snapshot.status);
+        }
+      } else {
+        const failure = appFailure(snapshot.status);
+        if (failure) throw await settled(failure);
+      }
       if (snapshot.state && snapshot.state.ticks > 0) break;
       if (Date.now() > deadline) {
         throw new Failure("startup-timeout", `no running frame within ${args.timeout}s (state: ${JSON.stringify(snapshot.state)})`);
       }
       await sleep(100);
+    }
+    if (args.fixture === "web_smoke") {
+      const success = await call(startupResult(page));
+      const loading = await call(page.locator("#status").count());
+      if (success !== null || loading) {
+        throw new Failure("startup-report", "the running fixture should report startup success and clear the loading message");
+      }
     }
     report.startupSeconds = elapsed();
     report.backend = await call(canvasBackend(page));

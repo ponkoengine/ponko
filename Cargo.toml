@@ -35,7 +35,7 @@ include = [
 [package.metadata.docs.rs]
 # Everything public. Left out: `hotpatch` (a dev tool, no API) and
 # `bench-internals` (unstable, not part of the API).
-features = ["physics", "physics3d", "physics-determinism", "steam", "3d", "navmesh", "accessibility", "control-env", "profiling"]
+features = ["physics", "physics3d", "physics-determinism", "steam", "3d", "navmesh", "accessibility", "control-env", "profiling", "video", "lobby", "webrtc"]
 targets = ["x86_64-unknown-linux-gnu"]
 rustdoc-args = ["--cfg", "docsrs"]
 
@@ -98,6 +98,23 @@ files = [
     { from = "examples/ember_hop/PACKAGE-README.txt", to = "README.txt" },
 ]
 
+# The simulation showcase, a 100,000-unit battle that replays bit for bit
+# (book/src/legions.md): `ponko package --example legions`. It draws its
+# sprites in code, so it ships no assets; the package carries a replay to
+# check against.
+[package.metadata.ponko.examples.legions]
+name = "Legions"
+id = "dev.ponko.legions"
+assets = []
+files = [
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+    "NOTICE",
+    "examples/legions/CONTENT-NOTICES.txt",
+    { from = "examples/legions/PACKAGE-README.txt", to = "README.txt" },
+    { from = "examples/legions/replays/skirmish.json", to = "skirmish.json" },
+]
+
 [dependencies]
 taffy = { version = "0.15.1", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "content_size"] }
 navmesh-rs = { version = "0.2.1", optional = true, default-features = false, features = ["std", "libm", "recast", "detour", "crowd", "tilecache", "polyref64"] }
@@ -105,6 +122,8 @@ navmesh-rs = { version = "0.2.1", optional = true, default-features = false, fea
 libm = { version = "0.2.16", optional = true }
 renet = "2.0.0"
 ponko_ecs = { path = "crates/ponko_ecs", version = "0.1.0", features = ["serde", "derive"] }
+# `#[derive(Replicate)]` (exported as `ponko::net::Replicate`).
+ponko_macros = { path = "crates/ponko_macros", version = "0.1.0" }
 half = { version = "2.7.1", optional = true }
 bytemuck = { version = "1.25.2", features = ["derive"] }
 glam = { version = "0.34.2", features = ["serde"] }
@@ -139,7 +158,7 @@ unicode-script = { version = "0.5.9", optional = true }
 # Character coverage of system fonts (feature `system-fonts`); the font
 # parser harfrust is built on.
 read-fonts = { version = "0.41.0", default-features = false, features = ["std"], optional = true }
-kira = { version = "0.12.6", default-features = false, features = ["cpal", "ogg", "vorbis", "wav", "pcm", "mp3", "flac"], optional = true }
+kira = { version = "0.12.6", default-features = false, features = ["cpal", "ogg", "vorbis", "wav", "pcm", "mp3", "flac", "adpcm", "aiff"], optional = true }
 # Kira's decoders (its formats turn them on), used directly to stream on the
 # web, where Kira's decoder thread can't run: already built for Kira.
 symphonia = { version = "0.6.1", default-features = false, optional = true }
@@ -170,11 +189,20 @@ accesskit = { version = "0.25.2", optional = true }
 ktx2 = { version = "0.5.0", optional = true }
 ruzstd = { version = "0.9.1", optional = true, default-features = false, features = ["std"] }
 texture2ddecoder = { version = "0.1.2", optional = true }
+# Video playback (feature `video`): the WebM (Matroska) demuxer, pure
+# Rust with no dependencies of its own. The AV1 decoder is native only,
+# below.
+matroska-demuxer = { version = "0.8.1", optional = true }
 
 # Waits for the GPU on desktop (feature `window`); the web build awaits it.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"], optional = true }
 pollster = { version = "1.0.1", optional = true }
+# AV1 pictures for `video`: rav1d, the Rust port of dav1d, 8-bit only and
+# without its assembly (that needs nasm on x86-64, and rav1d 1.1.0's
+# package can't build it on arm64). Not on the web: it uses `libc` error
+# numbers that wasm32-unknown-unknown doesn't define.
+rav1d = { version = "1.1.0", optional = true, default-features = false, features = ["bitdepth_8"] }
 # Basis Universal's UASTC transcoder (feature `basis-universal`): the C++
 # library, built with the system's C++ compiler. Not on the web: it can't be
 # built for wasm32-unknown-unknown, so a web build of the feature reads
@@ -191,6 +219,12 @@ tungstenite = { version = "0.28.0", default-features = false, features = ["hands
 # the system's C++ compiler. Not on the web, like `basis-universal`: a web
 # build loads such files only when they carry uncompressed fallback data.
 meshopt = { version = "0.7.0", optional = true }
+# WebRTC data channels on the desktop (feature `webrtc`, `NetMessages::host_rtc`
+# and `join_rtc`): str0m is sans-IO (no threads, no async runtime: polled
+# from the game thread like the UDP transports) and speaks to browsers.
+# Its DTLS needs aws-lc (a C library built with the system's C compiler);
+# the guide's "Peer to peer" section compares the alternatives.
+str0m = { version = "0.25.0", optional = true, default-features = false, features = ["aws-lc-rs"] }
 
 # The system's fonts by family name and coverage (feature `system-fonts`):
 # desktop only, the web has no font files to read.
@@ -238,7 +272,7 @@ wasm-bindgen-futures = "0.4.80"
 js-sys = "0.3.107"
 # Sound through WebAudio (kira plays through cpal).
 cpal = { version = "0.18.2", features = ["wasm-bindgen"], optional = true }
-web-sys = { version = "0.3.107", features = ["Navigator", "Clipboard", "Window", "Document", "Element", "HtmlCanvasElement", "Location", "Request", "RequestInit", "Headers", "Response", "console", "Event", "HtmlElement", "HtmlTextAreaElement", "CssStyleDeclaration", "CompositionEvent", "InputEvent", "KeyboardEvent", "EventTarget", "Node", "DomRect", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "WebSocket", "BinaryType", "MessageEvent", "CloseEvent"] }
+web-sys = { version = "0.3.107", features = ["Navigator", "Clipboard", "Window", "Document", "Element", "HtmlCanvasElement", "Location", "Request", "RequestInit", "Headers", "Response", "console", "Event", "HtmlElement", "HtmlTextAreaElement", "CssStyleDeclaration", "CompositionEvent", "InputEvent", "KeyboardEvent", "EventTarget", "Node", "DomRect", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "Worker", "WorkerOptions", "WorkerType", "ErrorEvent", "Url"] }
 
 # The validation bundle example drives a launched game through the MCP
 # server's tools, in-process. Path only (no version): the MCP crate's tests
@@ -293,6 +327,13 @@ audio = ["dep:kira", "dep:cpal", "dep:symphonia"]
 # components with live editing, resources, system timings, sim controls.
 # Off: no egui in the build.
 inspector = ["window", "dep:egui", "dep:egui-wgpu", "dep:egui-winit"]
+# The editor as an app: `ponko editor <project>` builds the game with this
+# feature and starts it in edit mode (`PONKO_EDITOR`), its window given to
+# the inspector's panels: hierarchy, components, gizmos, undo, saving
+# scenes and prefabs. Off (the default): `PONKO_EDITOR` is ignored and no
+# edit-mode code is in the build. The in-game inspector is the `inspector`
+# feature.
+editor = ["inspector"]
 # Screen-reader support for the retained UI (`ctx.ui`): roles, names, values
 # and focus are given to the system's accessibility API, and its requests
 # (press, focus, set value) reach the UI. macOS (VoiceOver), Windows (UI
@@ -330,6 +371,36 @@ steam = ["dep:steamworks"]
 # networking and replays), a little slower: rapier's enhanced-determinism
 # (for 3D physics too, when `physics3d` is on).
 physics-determinism = ["physics", "rapier2d/enhanced-determinism", "rapier3d?/enhanced-determinism"]
+# A client for a lobby server (`ponko::net::lobby`): rooms with codes,
+# matchmaking queues, host migration and a relay, over the message
+# endpoint's UDP or WebSocket transport. The server is the `ponko_lobby`
+# crate. No dependencies of its own. Off: no lobby module in the build.
+lobby = []
+# Peer-to-peer connections over WebRTC data channels for message endpoints
+# (`NetMessages::host_rtc`, `join_rtc`, `ponko::net::rtc`): browser to
+# browser, browser to desktop and desktop to desktop, through NATs with
+# STUN. Signaling goes through any channel the game has; with `lobby`, the
+# lobby server's relay carries it. The desktop side is str0m (and aws-lc for
+# its DTLS), the browser side the browser's own RTCPeerConnection.
+# Off: no WebRTC code or crates in the build.
+webrtc = [
+    "dep:str0m",
+    "web-sys/RtcPeerConnection",
+    "web-sys/RtcConfiguration",
+    "web-sys/RtcIceServer",
+    "web-sys/RtcDataChannel",
+    "web-sys/RtcDataChannelInit",
+    "web-sys/RtcDataChannelEvent",
+    "web-sys/RtcDataChannelState",
+    "web-sys/RtcDataChannelType",
+    "web-sys/RtcPeerConnectionIceEvent",
+    "web-sys/RtcIceCandidate",
+    "web-sys/RtcIceCandidateInit",
+    "web-sys/RtcSessionDescription",
+    "web-sys/RtcSessionDescriptionInit",
+    "web-sys/RtcSdpType",
+    "web-sys/RtcPeerConnectionState",
+]
 
 # 3D: meshes, materials, glTF models, a perspective camera and sun light,
 # drawn under the 2D layer (`Transform3D`, `Model`, `ctx.scene3d`).
@@ -410,6 +481,11 @@ basis-universal = ["compressed-textures", "dep:basis-universal"]
 # load. Builds meshoptimizer's C++ decoder; desktop and native only: on the
 # web such a file loads only from its uncompressed fallback, if it has one.
 gltf-meshopt = ["3d", "dep:meshopt"]
+# Video playback (`ponko::video::Video`): WebM files with AV1 pictures and
+# Vorbis sound, decoded on the CPU into a texture, the sound through the
+# mixer. Desktop only: on the web loading a video reports `Unsupported`.
+# See the guide's "Video" chapter.
+video = ["dep:matroska-demuxer", "dep:rav1d", "symphonia?/mkv"]
 
 # Runs on the main thread (AppKit requires it), so it is its own program
 # without the test harness. Does nothing off macOS.
@@ -454,12 +530,20 @@ name = "3d"
 required-features = ["3d"]
 
 [[example]]
+name = "bake_lighting"
+required-features = ["3d"]
+
+[[example]]
 name = "shaders"
 required-features = ["3d"]
 
 [[example]]
 name = "terrain"
 required-features = ["3d"]
+
+[[example]]
+name = "water"
+required-features = ["physics3d"]
 
 [[example]]
 name = "streaming"
@@ -494,11 +578,15 @@ name = "stylized_sky"
 required-features = ["3d"]
 
 [[example]]
+name = "sky_kit"
+required-features = ["3d"]
+
+[[example]]
 name = "web_smoke_3d"
 required-features = ["3d"]
 
 [workspace]
-members = [".", "crates/ponko_image_diff", "crates/ponko_ecs", "crates/ponko_macros", "crates/ponko_bench", "crates/ponko_mcp", "crates/ponko_ffi", "crates/ponko_unity", "crates/ponko_cli"]
+members = [".", "crates/ponko_image_diff", "crates/ponko_ecs", "crates/ponko_macros", "crates/ponko_bench", "crates/ponko_mcp", "crates/ponko_ffi", "crates/ponko_unity", "crates/ponko_cli", "crates/ponko_lobby"]
 
 [workspace.package]
 edition = "2024"
@@ -532,11 +620,19 @@ name = "skinning"
 required-features = ["3d"]
 
 [[example]]
+name = "crowd"
+required-features = ["3d"]
+
+[[example]]
 name = "audio3d"
 required-features = ["3d"]
 
 [[example]]
 name = "net_messages"
+
+[[example]]
+name = "net_webrtc"
+required-features = ["webrtc"]
 
 [[example]]
 name = "navmesh3d"
@@ -559,3 +655,6 @@ name = "ui_shop"
 
 [[example]]
 name = "ui_menu"
+
+[[example]]
+name = "ui_widgets"

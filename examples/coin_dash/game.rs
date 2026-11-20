@@ -42,6 +42,7 @@ use ponko::locale::{Arg, Strings};
 use ponko::prelude::*;
 use ponko::state::State;
 use ponko::storage::Storage;
+use ponko::ui::{UiTheme, UiTransition};
 use serde::{Deserialize, Serialize};
 use settings::Settings;
 
@@ -212,8 +213,21 @@ impl Plugin for PlayerInput {
         ctx.input.set_actions(bindings());
         ctx.world.insert_resource(Act::resolve(ctx));
         ctx.world.insert_resource(Intent::default());
+        ctx.input.set_touch_controls(touch_controls());
     }
 }
+
+// ANCHOR: touch
+/// The on-screen controls, shown on touch screens only: a stick to move,
+/// pause in the corner while a round is on, settings on the title. A tap
+/// anywhere else confirms (see [`settings::bindings_for`]).
+pub fn touch_controls() -> ponko::ui::touch::TouchControls {
+    ponko::ui::touch::TouchControls::new()
+        .stick("move")
+        .corner_button("pause", "II")
+        .corner_button("settings", "Set")
+}
+// ANCHOR_END: touch
 
 /// The player's choices (UI scale, volume, controls): loaded at startup,
 /// changed on the settings screen.
@@ -230,6 +244,12 @@ impl Plugin for SettingsScreen {
         let (loaded, load) = Settings::load(&mut ctx.storage);
         ctx.input.set_actions(settings::bindings_for(&loaded.controls));
         ctx.ui.set_scale(loaded.ui_scale);
+        // The settings screen's controls ease between their states.
+        ctx.ui.set_theme(UiTheme {
+            transition: UiTransition::new(0.12),
+            press_scale: 0.97,
+            ..*ctx.ui.theme()
+        });
         settings::apply_language(&mut ctx.world, &loaded);
         ctx.world.insert_resource(loaded);
         ctx.world.insert_resource(settings::SettingsFile {
@@ -276,6 +296,7 @@ impl Plugin for Drawing {
         game.add(Phase::Frame, hud)
     }
     fn setup(&self, ctx: &mut Ctx) {
+        ctx.world.insert_resource(MenuFade::default());
         ctx.gfx.clear(Color::hex(0x14181f));
         let disc = disc(ctx);
         let coin = ctx.gfx.load_texture(COIN_ASSET);
@@ -352,6 +373,10 @@ pub fn bindings() -> ActionMap {
 // ANCHOR: read_input
 /// Frame system: named actions to [`Intent`]. Runs once per rendered frame.
 pub fn read_input(ctx: &mut Ctx) {
+    let on = screen(&ctx.world);
+    ctx.input
+        .set_touch_control_shown("pause", matches!(on, Screen::Playing | Screen::Paused));
+    ctx.input.set_touch_control_shown("settings", on == Screen::Title);
     let act = *ctx.world.resource::<Act>();
     let direction = ctx.input.action_axis2(act.movement);
     let confirm = ctx.input.action_pressed(act.confirm);
@@ -768,9 +793,44 @@ pub fn screen_lines(world: &World) -> Vec<Line> {
     lines
 }
 
+/// How the lines of a screen come in: they fade in and rise into place, on
+/// the UI clock, so they come in the same way on a paused round.
+pub const MENU_IN: UiTransition = UiTransition::new(0.25);
+/// How far the lines rise as they come in, at UI scale 1.
+const MENU_RISE: f32 = 12.0;
+
+/// The lines of which screen are shown, since when on the UI clock
+/// ([`Ui::clock`](ponko::ui::Ui::clock)), and how far they have come in.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MenuFade {
+    pub screen: Option<Screen>,
+    pub since: f64,
+    /// 0 when the screen has just changed, 1 once its lines are in.
+    pub shown: f32,
+}
+
+/// How far the current screen's lines have come in, 0 to 1.
+fn menu_fade(ctx: &mut Ctx) -> f32 {
+    let now = ctx.ui.clock();
+    let reduced = ctx.ui.reduced_motion();
+    let current = screen(&ctx.world);
+    let fade = ctx.world.resource_mut::<MenuFade>();
+    if fade.screen != Some(current) {
+        fade.screen = Some(current);
+        fade.since = now;
+    }
+    fade.shown = if reduced {
+        1.0
+    } else {
+        MENU_IN.progress((now - fade.since) as f32)
+    };
+    fade.shown
+}
+
 /// Frame system: the text on top of the sprites, at the player's UI scale,
 /// with the current language's font (the built-in one for English).
 pub fn hud(ctx: &mut Ctx) {
+    let shown = menu_fade(ctx);
     let scale = ctx.world.resource::<Settings>().ui_scale;
     let font = strings(&ctx.world).font().unwrap_or(Font::DEFAULT);
     let text = |size: f32, color| TextParams::default().with_font(font).with_size(size).with_color(color);
@@ -798,12 +858,13 @@ pub fn hud(ctx: &mut Ctx) {
     // The block of lines, centred on the arena.
     let lines = screen_lines(&ctx.world);
     let height: f32 = lines.iter().map(|l| l.size * scale * 1.5).sum();
-    let mut y = (ARENA.y - height) / 2.0;
+    let mut y = (ARENA.y - height) / 2.0 + MENU_RISE * scale * (1.0 - shown);
     for l in lines {
         let size = l.size * scale;
         let width = ctx.gfx.measure_text_ex(&l.text, font, size).x;
+        let color = l.color.with_alpha(l.color.a * shown);
         ctx.gfx
-            .draw_text_ex(&l.text, vec2((ARENA.x - width) / 2.0, y), text(size, l.color));
+            .draw_text_ex(&l.text, vec2((ARENA.x - width) / 2.0, y), text(size, color));
         y += size * 1.5;
     }
 }

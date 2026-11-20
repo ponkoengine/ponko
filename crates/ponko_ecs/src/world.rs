@@ -11,7 +11,45 @@ use crate::entity::{Entities, Entity, Location};
 use crate::query::{Query, QueryData};
 use crate::storage::{Archetype, ComponentId, ComponentInfo, DropFn, TypeMap, drop_ptr};
 
+/// The bit of [`BundleInfo::archetype`] (and of what `bundle_archetype`
+/// returns) that marks a bundle whose archetype has a component with an
+/// `on_add` hook, or that lacks a component it requires. No archetype
+/// index reaches it, so the bounds check that indexing the archetypes
+/// makes anyway sends such spawns to the hooked path, and other spawns
+/// check nothing more: a separate test of a flag per spawn measured 2 to
+/// 5 % slower one-by-one spawns (`crates/ponko_bench/HOOKS.md`).
+const HOOKED_BUNDLE: usize = 1 << (usize::BITS - 1);
+
+/// Writes `bundle` into a new row of `arch` for `e` and returns the row;
+/// `cols` maps the bundle's elements to `arch`'s columns.
+#[inline(always)]
+fn write_row<B: Bundle>(
+    arch: &mut Archetype,
+    cols: &[usize],
+    changes: &crate::change::Changes,
+    pool: &mut crate::storage::BufferPool,
+    bundle: B,
+    e: Entity,
+) -> usize {
+    arch.reserve_row(changes, pool);
+    let row = arch.len();
+    // SAFETY: `reserve_row` made room for `row` in every column; `cols`
+    // maps each element to the column of its type, so `src` (a value of that
+    // type, moved out of `bundle`) is copied into storage of its own layout.
+    unsafe {
+        bundle.write(&mut |i, src| {
+            let c = &arch.columns[cols[i]];
+            std::ptr::copy_nonoverlapping(src, c.ptr(row), c.size());
+        });
+    }
+    arch.entities.push(e);
+    row
+}
+
 struct BundleInfo {
+    /// The archetype (the bundle's components and those they require),
+    /// with [`HOOKED_BUNDLE`] set if it has `on_add` hooks or the bundle
+    /// lacks a required component.
     archetype: usize,
     /// Column index in the archetype for each tuple element.
     columns: Box<[usize]>,
@@ -91,6 +129,12 @@ pub struct World {
     pub(crate) recorder: Recorder,
     /// Change detection: the tick counter and the removal logs.
     pub(crate) changes: crate::change::Changes,
+    /// Whether a component hook was ever registered: the one thing a
+    /// despawn, insert or remove checks in a world without hooks.
+    pub(crate) hooked: bool,
+    /// Component hooks and the commands they recorded. Boxed: a world
+    /// without hooks shouldn't be bigger for them.
+    pub(crate) hooks: Box<crate::hooks::Hooks>,
     /// Unique per world, so a [`ViewState`](crate::ViewState) prepared on
     /// one world is never used to view another.
     pub(crate) uid: u64,
@@ -206,6 +250,8 @@ impl World {
             scratch_ids: Vec::new(),
             recorder: Recorder::default(),
             changes: Default::default(),
+            hooked: false,
+            hooks: Default::default(),
             uid: crate::view::next_world_uid(),
         };
         let empty = w.archetype_for(&[]); // archetype 0: entities with no components
@@ -258,7 +304,12 @@ impl World {
         self.recorder.note(|l| l.structural = true);
         let iter = bundles.into_iter();
         let a = self.bundle_archetype::<B>();
-        self.archetypes[a].reserve(iter.size_hint().0, &mut self.slots.buffers);
+        let Some(arch) = self.archetypes.get_mut(a) else {
+            // `a` is tagged (`HOOKED_BUNDLE`): the archetype has `on_add`
+            // hooks, or the bundle lacks a component it requires.
+            return self.spawn_batch_hooked(a & !HOOKED_BUNDLE, iter);
+        };
+        arch.reserve(iter.size_hint().0, &mut self.slots.buffers);
         for b in iter {
             let e = self.entities.alloc();
             self.spawn_in::<B>(a, b, e);
@@ -336,6 +387,14 @@ impl World {
             .iter()
             .flat_map(|a| a.entities.iter().copied())
             .collect();
+        if self.hooked {
+            // The hooks' commands run after the last despawn.
+            let held = self.hold_hooks();
+            for e in all {
+                held.world.despawn(e);
+            }
+            return;
+        }
         for e in all {
             self.despawn(e);
         }
@@ -377,23 +436,73 @@ impl World {
     /// ```
     pub fn reset(&mut self) {
         self.recorder.note(|l| l.structural = true);
-        self.clear();
+        if self.hooked {
+            // `on_remove` hooks run; what they record is dropped, since the
+            // world starts over.
+            let held = self.hold_hooks();
+            held.world.clear();
+            held.world.drop_hook_commands();
+        } else {
+            self.clear();
+        }
         self.entities.reset();
     }
 
+    /// Places `e`, allocated and without a location, with `bundle` in
+    /// archetype `a` as `bundle_archetype` returned it, and runs the
+    /// `on_add` hooks if it is tagged as having some.
     #[inline]
     fn spawn_in<B: Bundle>(&mut self, a: usize, bundle: B, e: Entity) -> Entity {
         let cols = &self.bundles[&TypeId::of::<B>()].columns;
+        // A tagged index (`HOOKED_BUNDLE`) is past the end: the bounds check
+        // that indexing made here sends it to the hooked path.
+        let Some(arch) = self.archetypes.get_mut(a) else {
+            return self.spawn_hooked::<B>(a & !HOOKED_BUNDLE, bundle, e);
+        };
+        let row = write_row(arch, cols, &self.changes, &mut self.slots.buffers, bundle, e);
+        self.placed(a, row, e);
+        e
+    }
+
+    /// [`spawn_in`](Self::spawn_in) of a tagged bundle (`a` untagged):
+    /// places `e` with the components the bundle lacks and requires, then
+    /// runs the archetype's `on_add` hooks and their commands.
+    #[cold]
+    #[inline(never)]
+    fn spawn_hooked<B: Bundle>(&mut self, a: usize, bundle: B, e: Entity) -> Entity {
+        let cols = &self.bundles[&TypeId::of::<B>()].columns;
         let arch = &mut self.archetypes[a];
-        arch.reserve_row(&self.changes, &mut self.slots.buffers);
-        let row = arch.len();
-        unsafe {
-            bundle.write(&mut |i, src| {
-                let c = &arch.columns[cols[i]];
-                std::ptr::copy_nonoverlapping(src, c.ptr(row), c.size());
-            });
+        let row = match self.hooks.fills.get(&TypeId::of::<B>()) {
+            Some(fills) => {
+                arch.reserve_row(&self.changes, &mut self.slots.buffers);
+                let row = arch.len();
+                // If a constructor panics, `e` goes back; the values made
+                // before it are leaked, never dropped twice.
+                let unplaced = Unplaced {
+                    entities: &mut self.entities,
+                    e,
+                };
+                for &(col, make) in fills.iter() {
+                    let c = &arch.columns[col];
+                    // SAFETY: `reserve_row` made room for `row`; `col` is
+                    // the column of the component `make` makes.
+                    unsafe { make.write(c.ptr(row), c.size()) };
+                }
+                std::mem::forget(unplaced);
+                write_row(arch, cols, &self.changes, &mut self.slots.buffers, bundle, e)
+            }
+            None => write_row(arch, cols, &self.changes, &mut self.slots.buffers, bundle, e),
+        };
+        self.placed(a, row, e);
+        if self.hooks.adds(a) {
+            self.run_spawn_hooks(a, e);
         }
-        arch.entities.push(e);
+        e
+    }
+
+    /// Records that `e` was written to `row` of archetype `a`.
+    #[inline(always)]
+    fn placed(&mut self, a: usize, row: usize, e: Entity) {
         if row == 0 {
             self.slots.filled(a);
         }
@@ -404,7 +513,20 @@ impl World {
                 row: row as u32,
             },
         );
-        e
+    }
+
+    /// [`spawn_batch`](Self::spawn_batch) of a tagged bundle (`a`
+    /// untagged): each entity gets what it requires, its hooks run once it
+    /// is placed, and their commands after the last.
+    #[cold]
+    #[inline(never)]
+    fn spawn_batch_hooked<B: Bundle>(&mut self, a: usize, iter: impl Iterator<Item = B>) {
+        self.archetypes[a].reserve(iter.size_hint().0, &mut self.slots.buffers);
+        let held = self.hold_hooks();
+        for b in iter {
+            let e = held.world.entities.alloc();
+            held.world.spawn_hooked::<B>(a, b, e);
+        }
     }
 
     /// Removes an entity and drops its components. Returns `false` if it was
@@ -423,6 +545,28 @@ impl World {
     pub fn despawn(&mut self, e: Entity) -> bool {
         self.recorder.note(|l| l.structural = true);
         let Some(loc) = self.entities.get(e) else { return false };
+        if self.hooked && self.hooks.removes(loc.archetype as usize) {
+            return self.despawn_hooked(e, loc);
+        }
+        self.despawn_at(e, loc)
+    }
+
+    /// [`despawn`](Self::despawn) of an entity with `on_remove` hooks:
+    /// they run first, while it is whole, then it goes, then their commands.
+    #[cold]
+    #[inline(never)]
+    fn despawn_hooked(&mut self, e: Entity, loc: Location) -> bool {
+        self.run_despawn_hooks(loc.archetype as usize, e);
+        // Hooks can't change the world's structure, so `e` is where it was;
+        // looked up again all the same.
+        let gone = self.entities.get(e).is_some_and(|loc| self.despawn_at(e, loc));
+        self.flush_hooks();
+        gone
+    }
+
+    /// Despawns `e`, which is at `loc`: [`despawn`](Self::despawn) after the hooks.
+    #[inline(always)]
+    fn despawn_at(&mut self, e: Entity, loc: Location) -> bool {
         // Free the slot first: if a component's drop panics, the entity is already gone.
         self.entities.free(e);
         let a = loc.archetype as usize;
@@ -680,9 +824,32 @@ impl World {
         let loc = self.entities.get(e)?;
         let arch = &self.archetypes[loc.archetype as usize];
         let col = arch.column_index(id)?;
+        if self.hooked && self.hooks.removes_component(id) {
+            return self.remove_hooked::<T>(e, id);
+        }
         let value = unsafe { arch.columns[col].ptr(loc.row as usize).cast::<T>().read() };
         self.move_without(e, loc, id);
         Some(value)
+    }
+
+    /// [`remove`](Self::remove) of a component with `on_remove` hooks: they
+    /// run first, while `e` still has it, then their commands after it went.
+    #[cold]
+    #[inline(never)]
+    fn remove_hooked<T: Component>(&mut self, e: Entity, id: ComponentId) -> Option<T> {
+        self.run_hooks(id, e, crate::hooks::Kind::Remove);
+        // Hooks can't change the world's structure; looked up again all the same.
+        let value = self.locate(e, id).map(|ptr| {
+            // SAFETY: `id` is `T`'s column, and the value is forgotten by
+            // `move_without` right after, so it is owned once.
+            let value = unsafe { ptr.cast::<T>().read() };
+            if let Some(loc) = self.entities.get(e) {
+                self.move_without(e, loc, id);
+            }
+            value
+        });
+        self.flush_hooks();
+        value
     }
 
     // ---- queries -------------------------------------------------------------
@@ -708,6 +875,46 @@ impl World {
     /// If `Q` asks for the same component twice and at least once mutably.
     pub fn query<Q: QueryData>(&mut self) -> Query<'_, Q> {
         Query::new(self)
+    }
+
+    /// Loops over every entity that has the components in `Q`, reading only,
+    /// from a shared world: for code that holds `&World`, such as a hash of
+    /// the game state, a save, or a check in a test.
+    ///
+    /// `Q` is `&T`, `Option<&T>`, [`Entity`], or a tuple of those
+    /// ([`ReadOnlyQueryData`](crate::ReadOnlyQueryData)); `&mut T` doesn't
+    /// compile. Nothing is registered: a component the world has never seen
+    /// matches no entity (and reads as `None` through `Option<&T>`). Several
+    /// read-only queries can be held at once, and their items live as long
+    /// as the world's borrow. See [`QueryRef`](crate::QueryRef).
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, Entity, World};
+    /// #[derive(Component, Debug, PartialEq)]
+    /// struct Pos(f32);
+    /// #[derive(Component)]
+    /// struct Hidden;
+    ///
+    /// fn total(world: &World) -> f32 {
+    ///     world.query_ref::<&Pos>().iter().map(|p| p.0).sum()
+    /// }
+    /// let mut world = World::new();
+    /// world.spawn((Pos(1.0),));
+    /// let e = world.spawn((Pos(2.0),));
+    /// assert_eq!(total(&world), 3.0);
+    /// assert_eq!(world.query_ref::<(Entity, &Pos)>().get(e).map(|(_, p)| p), Some(&Pos(2.0)));
+    /// assert_eq!(world.query_ref::<&Hidden>().count(), 0); // never seen: no match
+    /// ```
+    ///
+    /// ```compile_fail
+    /// # use ponko_ecs::{Component, World};
+    /// # #[derive(Component)]
+    /// # struct Pos(f32);
+    /// let world = World::new();
+    /// world.query_ref::<&mut Pos>(); // read-only
+    /// ```
+    pub fn query_ref<Q: crate::ReadOnlyQueryData>(&self) -> crate::QueryRef<'_, Q> {
+        crate::QueryRef::new(self)
     }
 
     /// Reorders entities in memory so that, within each archetype that has
@@ -1230,6 +1437,12 @@ impl World {
     /// ```
     pub fn apply(&mut self, commands: &mut Commands) {
         self.recorder.note(|l| l.structural = true);
+        if self.hooked {
+            // Commands that hooks record run after all of these.
+            let held = self.hold_hooks();
+            commands.apply(held.world);
+            return;
+        }
         commands.apply(self);
     }
 
@@ -1249,6 +1462,7 @@ impl World {
             tracked: false,
         });
         self.by_type.insert(TypeId::of::<T>(), id);
+        T::requires(&mut crate::required::Requires::new(self, id));
         id
     }
 
@@ -1442,6 +1656,10 @@ impl World {
     /// `a` is the archetype of exactly these ids, `e` is allocated and has no
     /// location yet, and each pointer points to a valid value of its component.
     unsafe fn write_dynamic(&mut self, a: usize, e: Entity, components: &[(ComponentId, *const u8)]) {
+        if self.hooked && self.hooks.requires(a) {
+            // SAFETY: forwarded caller contract.
+            return unsafe { self.write_dynamic_required(a, e, components) };
+        }
         let arch = &mut self.archetypes[a];
         arch.reserve_row(&self.changes, &mut self.slots.buffers);
         let row = arch.len();
@@ -1462,6 +1680,61 @@ impl World {
                 row: row as u32,
             },
         );
+        if self.hooked && self.hooks.adds(a) {
+            self.run_spawn_hooks(a, e);
+        }
+    }
+
+    /// [`write_dynamic`](Self::write_dynamic) where a component of `a`
+    /// requires others: `e` goes to the archetype with the ones the given
+    /// components lack, made first.
+    ///
+    /// # Safety
+    /// As [`write_dynamic`](Self::write_dynamic).
+    #[cold]
+    #[inline(never)]
+    unsafe fn write_dynamic_required(&mut self, a: usize, e: Entity, components: &[(ComponentId, *const u8)]) {
+        let order: Vec<ComponentId> = components.iter().map(|c| c.0).collect();
+        let mut missing = Vec::new();
+        self.hooks.missing(&order, &self.archetypes[a].ids, &mut missing);
+        let a = if missing.is_empty() {
+            a
+        } else {
+            let mut ids = self.archetypes[a].ids.to_vec();
+            ids.extend(missing.iter().map(|m| m.0));
+            ids.sort_unstable();
+            self.archetype_for(&ids)
+        };
+        let arch = &mut self.archetypes[a];
+        arch.reserve_row(&self.changes, &mut self.slots.buffers);
+        let row = arch.len();
+        let column = |arch: &Archetype, id: ComponentId| {
+            arch.column_index(id)
+                .expect("invariant: the archetype was made with every component given and required")
+        };
+        // If a constructor panics, `e` goes back; the values made before
+        // it are leaked, never dropped twice.
+        let unplaced = Unplaced {
+            entities: &mut self.entities,
+            e,
+        };
+        for &(id, make) in &missing {
+            let c = &arch.columns[column(arch, id)];
+            // SAFETY: `row` is reserved spare capacity of the column of the
+            // component `make` makes.
+            unsafe { make.write(c.ptr(row), c.size()) };
+        }
+        std::mem::forget(unplaced);
+        for &(id, src) in components {
+            let c = &arch.columns[column(arch, id)];
+            // SAFETY: as in `write_dynamic`.
+            unsafe { std::ptr::copy_nonoverlapping(src, c.ptr(row), c.size()) };
+        }
+        arch.entities.push(e);
+        self.placed(a, row, e);
+        if self.hooks.adds(a) {
+            self.run_spawn_hooks(a, e);
+        }
     }
 
     /// Implementation of [`RawWorld::insert_dynamic`](crate::RawWorld::insert_dynamic).
@@ -1481,6 +1754,10 @@ impl World {
             }
         });
         if let Some(col) = self.archetypes[src].column_index(id) {
+            if self.hooked && self.hooks.replaces_component(id) {
+                // SAFETY: forwarded caller contract.
+                return unsafe { self.replace_hooked(e, id, value) };
+            }
             let arch = &self.archetypes[src];
             let c = &arch.columns[col];
             let dst = c.ptr(loc.row as usize);
@@ -1495,6 +1772,12 @@ impl World {
                 arch.stamp(col, loc.row as usize, self.changes.stamp(), false);
             }
             return true;
+        }
+        // Read once: nothing below registers hooks or requirements.
+        let hooked = self.hooked;
+        if hooked && self.hooks.requires_component(id) {
+            // SAFETY: forwarded caller contract; `e` lacks `id`.
+            return unsafe { self.insert_arriving(e, loc, id, value) };
         }
         let dst = match self.archetypes[src]
             .add_edges
@@ -1522,12 +1805,156 @@ impl World {
         if arch.tracked() {
             arch.stamp(col, row, self.changes.stamp(), true);
         }
+        if hooked && self.hooks.adds_component(id) {
+            self.added_hooked(e, id);
+        }
+        true
+    }
+
+    /// The end of an insert that gave `e` component `id`, which has
+    /// `on_add` hooks: runs them, then their commands.
+    #[cold]
+    #[inline(never)]
+    fn added_hooked(&mut self, e: Entity, id: ComponentId) {
+        self.run_hooks(id, e, crate::hooks::Kind::Add);
+        self.flush_hooks();
+    }
+
+    /// An insert that gives `e` (at `loc`) component `id`, which it lacks,
+    /// and which requires others: `e` gets `id` and
+    /// the components it requires and `e` lacks in one move, then the
+    /// `on_add` hooks of all of them run (in component-id order), then
+    /// their commands.
+    ///
+    /// # Safety
+    /// As [`insert_dynamic_inner`](Self::insert_dynamic_inner); `e` is
+    /// alive at `loc` and lacks `id`.
+    #[cold]
+    #[inline(never)]
+    unsafe fn insert_arriving(&mut self, e: Entity, loc: Location, id: ComponentId, value: *const u8) -> bool {
+        let src = loc.archetype as usize;
+        let mut missing = Vec::new();
+        let mut ids = self.archetypes[src].ids.to_vec();
+        ids.push(id);
+        self.hooks.missing(&[id], &ids, &mut missing);
+        // The required values first, so a constructor that panics leaves
+        // `e` as it was (the values made before it are leaked).
+        let mut made: Vec<(ComponentId, TempValue)> = missing
+            .iter()
+            .map(|&(rid, make)| {
+                let layout = self.infos[rid.index()].layout;
+                let mut temp = TempValue::new(layout);
+                // SAFETY: `temp` has room for a value of `rid`, which `make` makes.
+                unsafe { make.write(temp.ptr(), layout.size()) };
+                (rid, temp)
+            })
+            .collect();
+        let edge = self.archetypes[src]
+            .add_edges
+            .get(&id)
+            .and_then(|&e| self.slots.leads(e));
+        let dst = match edge {
+            // Only `id` arrives: the cached edge, as a plain insert takes.
+            Some(d) if missing.is_empty() => d,
+            _ => {
+                ids.extend(missing.iter().map(|m| m.0));
+                ids.sort_unstable();
+                let d = self.archetype_for(&ids);
+                if missing.is_empty() {
+                    self.add_edge(src, id, d);
+                }
+                d
+            }
+        };
+        let row = self.move_row(e, loc, dst);
+        let arch = &self.archetypes[dst];
+        let stamp = self.changes.stamp();
+        let put = |cid: ComponentId, from: *const u8| {
+            let col = arch
+                .column_index(cid)
+                .expect("invariant: the archetype was made with every arriving component");
+            let c = &arch.columns[col];
+            // SAFETY: `row` is `e`'s new row, whose column `col` the move
+            // left uninitialized; `from` is a valid value of `cid`, moved in.
+            unsafe { std::ptr::copy_nonoverlapping(from, c.ptr(row), c.size()) };
+            if arch.tracked() {
+                arch.stamp(col, row, stamp, true);
+            }
+        };
+        put(id, value);
+        for (rid, temp) in &mut made {
+            put(*rid, temp.ptr());
+        }
+        // The temporaries only free their room: the values are in the world now.
+        drop(made);
+        if missing.is_empty() {
+            // Only `id` arrived (no allocation on this path).
+            if self.hooks.adds_component(id) {
+                self.run_hooks(id, e, crate::hooks::Kind::Add);
+                self.flush_hooks();
+            }
+        } else if self.hooks.adds_component(id) || missing.iter().any(|m| self.hooks.adds_component(m.0)) {
+            let mut arrived: Vec<ComponentId> = missing.iter().map(|m| m.0).collect();
+            arrived.push(id);
+            arrived.sort_unstable();
+            for cid in arrived {
+                self.run_hooks(cid, e, crate::hooks::Kind::Add);
+            }
+            self.flush_hooks();
+        }
+        true
+    }
+
+    /// An insert that replaces `e`'s component `id`, which has
+    /// `on_replace` hooks: they run with the new value at `value`, then the
+    /// old value is dropped and the new one written, then their commands.
+    ///
+    /// # Safety
+    /// As [`insert_dynamic_inner`](Self::insert_dynamic_inner); `e` is alive
+    /// and has `id`.
+    #[cold]
+    #[inline(never)]
+    unsafe fn replace_hooked(&mut self, e: Entity, id: ComponentId, value: *const u8) -> bool {
+        // SAFETY: `id` has `on_replace` hooks, so it is a Rust component,
+        // and the caller's value is a valid one, outside the world.
+        unsafe { self.run_replace_hooks(id, e, value) };
+        // Hooks can't change the world's structure; looked up again all the same.
+        let Some(loc) = self.entities.get(e) else { return false };
+        let arch = &self.archetypes[loc.archetype as usize];
+        let Some(col) = arch.column_index(id) else { return false };
+        let c = &arch.columns[col];
+        let dst = c.ptr(loc.row as usize);
+        // SAFETY: as in `insert_dynamic_inner`: the old value is dropped,
+        // then overwritten with the caller's.
+        unsafe {
+            if let Some(d) = c.drop_fn() {
+                d(dst);
+            }
+            std::ptr::copy_nonoverlapping(value, dst, c.size());
+        }
+        if arch.tracked() {
+            arch.stamp(col, loc.row as usize, self.changes.stamp(), false);
+        }
+        self.flush_hooks();
         true
     }
 
     /// Implementation of [`RawWorld::remove_dynamic`](crate::RawWorld::remove_dynamic).
     pub(crate) fn remove_dynamic_inner(&mut self, e: Entity, id: ComponentId) -> bool {
         self.recorder.note(|l| l.structural = true);
+        if self.hooked && self.hooks.removes_component(id) && self.locate(e, id).is_some() {
+            // The hooks run first, while `e` still has it; their commands
+            // after it went.
+            self.run_hooks(id, e, crate::hooks::Kind::Remove);
+            let removed = self.remove_dynamic_now(e, id);
+            self.flush_hooks();
+            return removed;
+        }
+        self.remove_dynamic_now(e, id)
+    }
+
+    /// [`remove_dynamic_inner`](Self::remove_dynamic_inner) after the hooks.
+    fn remove_dynamic_now(&mut self, e: Entity, id: ComponentId) -> bool {
         let Some(loc) = self.entities.get(e) else { return false };
         let arch = &self.archetypes[loc.archetype as usize];
         let Some(col) = arch.column_index(id) else { return false };
@@ -1605,6 +2032,9 @@ impl World {
             }
         };
         self.slots.created(a);
+        if self.hooked {
+            self.hooks.archetype_created(a, &self.archetypes[a].ids);
+        }
         self.archetype_by_ids.insert(key, a);
         a
     }
@@ -1684,16 +2114,60 @@ impl World {
             "bundle `{}` has the same component twice; remove the duplicate component",
             std::any::type_name::<B>()
         );
-        let a = self.archetype_for(&sorted);
+        self.place_bundle(TypeId::of::<B>(), &ids)
+    }
+
+    /// Caches where bundle `key`, of components `ids` (in its order, no
+    /// duplicates), spawns: the archetype of those and the components they
+    /// require, tagged ([`HOOKED_BUNDLE`]) if that has `on_add` hooks or
+    /// the bundle lacks a required component. Returns the tagged index.
+    fn place_bundle(&mut self, key: TypeId, ids: &[ComponentId]) -> usize {
+        let mut all = ids.to_vec();
+        let mut missing = Vec::new();
+        if self.hooked {
+            self.hooks.missing(ids, &all, &mut missing);
+            all.extend(missing.iter().map(|m| m.0));
+        }
+        all.sort_unstable();
+        let a = self.archetype_for(&all);
         // The bundle remembers its archetype: never reclaim it.
         self.slots.pin(a);
-        let columns = ids
+        let arch = &self.archetypes[a];
+        let column = |id: ComponentId| {
+            arch.column_index(id)
+                .expect("invariant: the archetype was made with every component of the bundle")
+        };
+        let columns = ids.iter().map(|&id| column(id)).collect();
+        let fills: Box<[_]> = missing.iter().map(|&(id, make)| (column(id), make)).collect();
+        let tagged = !fills.is_empty() || self.hooks.adds(a);
+        if fills.is_empty() {
+            self.hooks.fills.remove(&key);
+        } else {
+            self.hooks.fills.insert(key, fills);
+        }
+        let archetype = if tagged { a | HOOKED_BUNDLE } else { a };
+        self.bundles.insert(key, BundleInfo { archetype, columns });
+        archetype
+    }
+
+    /// Places every cached bundle again ([`place_bundle`](Self::place_bundle)),
+    /// after a hook or a requirement was registered: requirements change
+    /// the archetype, hooks the tag. In the order of their archetypes, so
+    /// new archetypes get the same indices in every run.
+    pub(crate) fn rebuild_bundles(&mut self) {
+        let mut cached: Vec<(usize, TypeId, Vec<ComponentId>)> = self
+            .bundles
             .iter()
-            .map(|&id| self.archetypes[a].column_index(id).unwrap())
+            .map(|(&key, info)| {
+                let arch = &self.archetypes[info.archetype & !HOOKED_BUNDLE];
+                let ids = info.columns.iter().map(|&c| arch.ids[c]).collect();
+                (info.archetype & !HOOKED_BUNDLE, key, ids)
+            })
             .collect();
-        self.bundles
-            .insert(TypeId::of::<B>(), BundleInfo { archetype: a, columns });
-        a
+        cached.sort_unstable_by_key(|c| c.0);
+        for (_, key, ids) in cached {
+            self.place_bundle(key, &ids);
+        }
     }
 
     /// Moves `e` to the archetype without component `id`. The value of `id`
@@ -1779,7 +2253,7 @@ fn sort_keys(keyed: &mut [(u64, u32)]) {
     #[cfg(feature = "parallel")]
     if keyed.len() > 50_000 {
         use rayon::slice::ParallelSliceMut;
-        keyed.par_sort_unstable_by_key(|k| k.0);
+        crate::par::run(|| keyed.par_sort_unstable_by_key(|k| k.0));
         return;
     }
     keyed.sort_unstable_by_key(|k| k.0);
@@ -1814,6 +2288,20 @@ fn two_mut<T>(v: &mut [T], a: usize, b: usize) -> (&mut T, &mut T) {
     } else {
         let (l, r) = v.split_at_mut(a);
         (&mut r[0], &mut l[b])
+    }
+}
+
+/// Frees entity `e`, allocated and not yet placed, if dropped: while the
+/// required values of a spawn are made, so a constructor that panics
+/// leaves no id behind that is neither alive nor free.
+struct Unplaced<'a> {
+    entities: &'a mut Entities,
+    e: Entity,
+}
+
+impl Drop for Unplaced<'_> {
+    fn drop(&mut self) {
+        self.entities.free(self.e);
     }
 }
 

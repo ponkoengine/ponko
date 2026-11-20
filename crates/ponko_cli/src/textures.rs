@@ -452,6 +452,18 @@ pub struct Encoded {
 
 /// Encodes `width` x `height` RGBA8 pixels per `rule`.
 pub fn encode(rgba: &[u8], width: u32, height: u32, rule: Rule) -> Result<Encoded, String> {
+    encode_with(rgba, width, height, rule, &[])
+}
+
+/// [`encode`], with key/value entries of the file's own after the writer's
+/// (keys sorted, none starting with `KTX`).
+pub fn encode_with(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    rule: Rule,
+    key_values: &[(&str, &str)],
+) -> Result<Encoded, String> {
     if rule.kind == Kind::Ui {
         // RGBA8, sampled through sRGB like every image the engine loads.
         let mut levels = vec![rgba.to_vec()];
@@ -470,7 +482,14 @@ pub fn encode(rgba: &[u8], width: u32, height: u32, rule: Rule) -> Result<Encode
             .0;
         return Ok(Encoded {
             levels: levels.len(),
-            file: write_ktx2(Some(ktx2::Format::R8G8B8A8_SRGB), dfd, width, height, &levels),
+            file: write_ktx2(
+                Some(ktx2::Format::R8G8B8A8_SRGB),
+                dfd,
+                width,
+                height,
+                &levels,
+                key_values,
+            ),
             format: "RGBA8",
             gpu_bytes,
         });
@@ -505,7 +524,7 @@ pub fn encode(rgba: &[u8], width: u32, height: u32, rule: Rule) -> Result<Encode
         let gpu_bytes = levels.iter().map(|l| l.len() as u64).sum();
         return Ok(Encoded {
             levels: levels.len(),
-            file: write_ktx2(None, uastc_dfd(srgb, channel), width, height, &levels),
+            file: write_ktx2(None, uastc_dfd(srgb, channel), width, height, &levels, key_values),
             format: if srgb { "UASTC sRGB" } else { "UASTC" },
             gpu_bytes,
         });
@@ -539,7 +558,7 @@ pub fn encode(rgba: &[u8], width: u32, height: u32, rule: Rule) -> Result<Encode
     let gpu_bytes = blocks.iter().map(|l| l.len() as u64).sum();
     Ok(Encoded {
         levels: blocks.len(),
-        file: write_ktx2(Some(format), dfd, width, height, &blocks),
+        file: write_ktx2(Some(format), dfd, width, height, &blocks, key_values),
         format: name,
         gpu_bytes,
     })
@@ -657,13 +676,17 @@ fn write_ktx2(
     width: u32,
     height: u32,
     levels: &[Vec<u8>],
+    key_values: &[(&str, &str)],
 ) -> Vec<u8> {
     let dfd = ktx2::dfd::Block::Basic(dfd).to_vec();
     let dfd_len = 4 + dfd.len();
-    let kvd = key_value(
+    let mut kvd = key_value(
         b"KTXwriter",
         concat!("ponko textures ", env!("CARGO_PKG_VERSION")).as_bytes(),
     );
+    for (key, value) in key_values {
+        kvd.extend(key_value(key.as_bytes(), value.as_bytes()));
+    }
     let dfd_at = 80 + 24 * levels.len();
     let kvd_at = dfd_at + dfd_len;
     let packed: Vec<Vec<u8>> = levels
@@ -730,7 +753,7 @@ fn key_value(key: &[u8], value: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn args(list: &[&str]) -> Vec<String> {
@@ -813,7 +836,7 @@ mod tests {
         rgba
     }
 
-    fn read(file: &[u8]) -> (ktx2::Header, Vec<Vec<u8>>) {
+    pub(crate) fn read(file: &[u8]) -> (ktx2::Header, Vec<Vec<u8>>) {
         let reader = ktx2::Reader::new(file).expect("a valid KTX2 file");
         let levels = reader
             .levels()
@@ -839,7 +862,7 @@ mod tests {
         sum / n
     }
 
-    fn decode(format: ktx2::Format, blocks: &[u8], w: u32, h: u32) -> Vec<u8> {
+    pub(crate) fn decode(format: ktx2::Format, blocks: &[u8], w: u32, h: u32) -> Vec<u8> {
         let mut pixels = vec![0u32; (w * h) as usize];
         let (w, h) = (w as usize, h as usize);
         match format {

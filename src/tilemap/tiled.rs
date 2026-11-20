@@ -758,6 +758,7 @@ fn read_map(map: &Value, path: &str, reader: &mut Reader) -> Result<Level, Error
     let layers = r.layers;
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     Ok(Level {
+        ldtk: None,
         name: name.rsplit_once('.').map_or(name, |(n, _)| n).to_string(),
         size: UVec2::new(num_or(map, "width", 0.0) as u32, num_or(map, "height", 0.0) as u32),
         cell_size: tile,

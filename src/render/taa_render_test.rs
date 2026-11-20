@@ -1131,7 +1131,7 @@ fn runtime_sample_changes_rebuild_main_and_target_camera_attachments_without_his
     // target() includes copy-src, so both the main view and camera are read back.
     rig.ctx.set_headless(true);
     let handle = rig.ctx.gfx.create_render_target(SIZE, SIZE);
-    rig.renderer.add_render_target(handle.id, &texture);
+    rig.renderer.add_render_target(handle.texture.id, &texture);
     rig.ctx
         .scene3d
         .passes

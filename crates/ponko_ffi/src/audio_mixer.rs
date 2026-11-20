@@ -7,7 +7,7 @@ use std::ffi::c_char;
 
 use ponko::audio::{
     BusEffect, BusSnapshot, CompressorEffect, DelayEffect, Ducking, EffectOverride, FilterEffect, FilterMode,
-    MixerSnapshot, MixerState, ReverbEffect,
+    MixerSnapshot, MixerState, PitchShiftEffect, ReverbEffect,
 };
 
 use crate::audio3d::{PonkoAudioBus, bus_from_c, bus_to_c};
@@ -27,6 +27,9 @@ pub enum PonkoBusEffectKind {
     PONKO_BUS_EFFECT_COMPRESSOR = 2,
     /// An echo (`DelayEffect`).
     PONKO_BUS_EFFECT_DELAY = 3,
+    /// A pitch shift at the same speed (`PitchShiftEffect`): reads `ratio`
+    /// (the frequency ratio, 2 an octave up) and `mix`.
+    PONKO_BUS_EFFECT_PITCH_SHIFT = 4,
 }
 
 /// Which frequencies a bus filter lets through (Rust `FilterMode`).
@@ -71,7 +74,8 @@ pub struct PonkoBusEffect {
     pub stereo_width: f32,
     /// Compressor: level in dB above which it compresses.
     pub threshold_db: f32,
-    /// Compressor: 4 turns 4 dB over the threshold into 1.
+    /// Compressor: 4 turns 4 dB over the threshold into 1. Pitch shift: the
+    /// frequency ratio, 0.25–4 (2 is an octave up).
     pub ratio: f32,
     /// Compressor: seconds to clamp down.
     pub attack: f32,
@@ -96,6 +100,7 @@ pub extern "C" fn ponko_bus_effect_default(kind: PonkoBusEffectKind) -> PonkoBus
         PonkoBusEffectKind::PONKO_BUS_EFFECT_REVERB => BusEffect::Reverb(ReverbEffect::default()),
         PonkoBusEffectKind::PONKO_BUS_EFFECT_COMPRESSOR => BusEffect::Compressor(CompressorEffect::default()),
         PonkoBusEffectKind::PONKO_BUS_EFFECT_DELAY => BusEffect::Delay(DelayEffect::default()),
+        PonkoBusEffectKind::PONKO_BUS_EFFECT_PITCH_SHIFT => BusEffect::PitchShift(PitchShiftEffect::default()),
     })
 }
 
@@ -171,6 +176,11 @@ fn effect_to_c(e: BusEffect) -> PonkoBusEffect {
             out.feedback_db = d.feedback_db;
             out.mix = d.mix;
         }
+        BusEffect::PitchShift(p) => {
+            out.kind = PonkoBusEffectKind::PONKO_BUS_EFFECT_PITCH_SHIFT;
+            out.ratio = p.ratio;
+            out.mix = p.mix;
+        }
         _ => {}
     }
     out
@@ -200,6 +210,10 @@ fn effect_from_c(e: &PonkoBusEffect) -> BusEffect {
         PonkoBusEffectKind::PONKO_BUS_EFFECT_DELAY => BusEffect::Delay(DelayEffect {
             delay: e.delay,
             feedback_db: e.feedback_db,
+            mix: e.mix,
+        }),
+        PonkoBusEffectKind::PONKO_BUS_EFFECT_PITCH_SHIFT => BusEffect::PitchShift(PitchShiftEffect {
+            ratio: e.ratio,
             mix: e.mix,
         }),
     }

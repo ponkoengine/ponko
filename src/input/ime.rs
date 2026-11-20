@@ -126,6 +126,7 @@ impl Input {
     /// });
     /// ```
     pub fn feed_ime(&mut self, event: ImeEvent) {
+        self.record_ime(&event);
         let ime = &mut self.ime;
         match event {
             ImeEvent::Enabled => {}

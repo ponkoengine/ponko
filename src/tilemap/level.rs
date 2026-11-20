@@ -8,7 +8,7 @@ use glam::{UVec2, Vec2};
 use ponko_ecs::{Component, Entity};
 use serde_json::Value;
 
-use super::TileMap;
+use super::{LdtkLevel, LdtkWorld, TileMap};
 use crate::assets::{Assets, Origin};
 use crate::camera::Rect;
 use crate::color::Color;
@@ -16,7 +16,7 @@ use crate::ctx::Ctx;
 use crate::ecs::Transform2D;
 use crate::error::{Error, ErrorKind};
 use crate::hot_reload::Asset;
-use crate::reflect::NotSaved;
+use crate::reflect::{NotSaved, WorldReflect};
 use crate::sheet::SpriteSheet;
 
 /// Custom properties from the editor: Tiled's custom properties, LDtk's
@@ -271,6 +271,8 @@ pub struct Layer {
 pub struct Level {
     /// The level's name (LDtk) or the file name (Tiled).
     pub name: String,
+    /// Authored world placement for an LDtk level.
+    pub ldtk: Option<LdtkLevel>,
     /// Size in cells of [`cell_size`](Self::cell_size).
     pub size: UVec2,
     /// The grid's cell size in pixels.
@@ -314,6 +316,10 @@ pub struct LevelOptions {
     pub solid: Vec<String>,
     /// The LDtk level to spawn (identifier or iid); the first one if `None`.
     pub level: Option<String>,
+    /// Add the selected LDtk level's world position to the spawn origin.
+    pub ldtk_position: bool,
+    /// LDtk entity classes and their reflected component names.
+    pub reflected_entities: Vec<(String, String)>,
     /// No colliders at all.
     pub no_colliders: bool,
     /// None of the objects a world save holds: those spawned as prefabs
@@ -347,6 +353,25 @@ impl LevelOptions {
         self.level = Some(name.into());
         self
     }
+    /// For LDtk, treat the spawn position as the world origin and place
+    /// the selected level at its authored offset from that origin.
+    #[must_use]
+    pub fn at_ldtk_position(mut self) -> Self {
+        self.ldtk_position = true;
+        self
+    }
+
+    /// Apply the fields of each LDtk entity of this class to the given
+    /// registered [reflected component](WorldReflect::reflect). Field
+    /// identifiers must match the component's JSON keys. This works on
+    /// plain entities and prefab instances. The synthetic `iid` and `tags`
+    /// properties are excluded. Invalid values abort the level spawn.
+    #[must_use]
+    pub fn reflect_entity(mut self, class: impl Into<String>, component: impl Into<String>) -> Self {
+        self.reflected_entities.push((class.into(), component.into()));
+        self
+    }
+
     /// Spawn no colliders, even with the `physics` feature.
     #[must_use]
     pub fn without_colliders(mut self) -> Self {
@@ -408,6 +433,8 @@ pub struct LevelRoot {
     pub properties: Properties,
     /// Every entity spawned for it: layers, objects and colliders.
     pub entities: Vec<Entity>,
+    /// The authored offset applied at spawn, zero when placement is local.
+    pub(crate) ldtk_offset: Vec2,
 }
 
 /// On each layer entity of a spawned level: the layer's name and custom
@@ -473,7 +500,7 @@ pub(super) fn parse_color(s: &str) -> Option<Color> {
 /// Resolves `rel` (a path in file `base`) to an asset name: relative to
 /// `base`'s folder, with `.` and `..` worked out. Both may use `\\` (Windows)
 /// or `/`; the result uses `/`. An absolute `rel` (`/x`, `C:/x`) stays as is.
-pub(super) fn resolve(base: &str, rel: &str) -> String {
+pub(crate) fn resolve(base: &str, rel: &str) -> String {
     let rel = rel.replace('\\', "/");
     let base = base.replace('\\', "/");
     let joined = if rel.starts_with('/') || rel.contains(':') {
@@ -652,6 +679,19 @@ fn covers(s: &LevelObject, size: Vec2) -> bool {
 }
 
 impl Assets {
+    /// Reads an LDtk project's worlds and level placements without loading
+    /// the separate level files or any textures. Use a level's iid with
+    /// [`LevelOptions::level`] to select it unambiguously.
+    ///
+    /// # Errors
+    ///
+    /// Returns an asset error if the project is missing, unreadable, or
+    /// cannot be decoded as LDtk.
+    pub fn load_ldtk_worlds(&self, path: &str) -> Result<Vec<LdtkWorld>, Error> {
+        let (_, input) = self.read_text(path)?;
+        super::ldtk::read_worlds(&input).map_err(|e| e.context(path).with_path(path))
+    }
+
     /// Reads the level at `path` (Tiled `.tmx` / `.tmj`, LDtk `.ldtk`) and
     /// the files it uses, without spawning anything: for tools, or to read
     /// a level's data your own way. See [`Level`] for what is read.
@@ -786,6 +826,8 @@ impl Ctx {
     /// As [`spawn_level`](Self::spawn_level).
     pub fn spawn_level_with(&mut self, path: &str, at: Vec2, options: LevelOptions) -> Result<Entity, Error> {
         let (level, files) = Level::read(&self.assets, path, &options)?;
+        let ldtk_offset = ldtk_offset(&level, &options);
+        let at = at + ldtk_offset;
         let entities = self
             .spawn_level_parts(&level, at, &options)
             .map_err(|e| e.with_path(path))?;
@@ -796,11 +838,12 @@ impl Ctx {
                 options,
                 properties: level.properties.clone(),
                 entities,
+                ldtk_offset,
             },
             NotSaved,
         ));
         for file in files.into_iter().filter_map(|(_, file)| file) {
-            watch_once(&self.assets, path, file);
+            self.assets.watcher.watch(path, file, Asset::Level);
         }
         Ok(root)
     }
@@ -916,8 +959,28 @@ impl Ctx {
                 }
                 LayerKind::Objects(objects) => {
                     for obj in objects {
-                        let e = self.spawn_level_object(level, obj, origin, z, color, options, &mut sheet)?;
-                        spawned.extend(e);
+                        if let Some(e) = self.spawn_level_object(level, obj, origin, z, color, options, &mut sheet)? {
+                            spawned.push(e);
+                            if level.ldtk.is_some() {
+                                for (_, component) in options
+                                    .reflected_entities
+                                    .iter()
+                                    .filter(|(class, _)| *class == obj.class)
+                                {
+                                    let fields = obj
+                                        .properties
+                                        .iter()
+                                        .filter(|(name, _)| !matches!(*name, "iid" | "tags"))
+                                        .map(|(name, value)| (name.to_owned(), value.clone()))
+                                        .collect();
+                                    self.world
+                                        .set_json(e, component, Value::Object(fields))
+                                        .map_err(|err| {
+                                            Error::from(err).context(format_args!("LDtk entity {}", obj.class))
+                                        })?;
+                                }
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -970,15 +1033,14 @@ impl Ctx {
             rotation: obj.rotation,
             ..Transform2D::at(position)
         };
-        let e = self.world.spawn((transform, obj.clone(), NotSaved));
+        let mut transform = transform;
+        let mut sprite = None;
         if let Some((set, id, flip)) = obj.tile
             && obj.visible
             && usize::from(set) < level.tilesets.len()
         {
             let s = sheet(self, set)?;
-            let mut sprite = s.sprite(id);
-            sprite.z = z;
-            sprite.color = color;
+            sprite = Some(s.sprite(id).with_z(z).with_color(color));
             let mut scale = obj.size / s.frame_size.max(Vec2::ONE);
             if flip & TileMap::FLIP_X != 0 {
                 scale.x = -scale.x;
@@ -986,7 +1048,10 @@ impl Ctx {
             if flip & TileMap::FLIP_Y != 0 {
                 scale.y = -scale.y;
             }
-            self.world.insert(e, Transform2D { scale, ..transform });
+            transform.scale = scale;
+        }
+        let e = self.world.spawn((transform, obj.clone(), NotSaved));
+        if let Some(sprite) = sprite {
             self.world.insert(e, sprite);
         }
         Ok(Some(e))
@@ -1042,39 +1107,57 @@ impl Ctx {
     /// Spawns every level loaded from `path` again (hot reload). On an
     /// error the old ones stay.
     pub(crate) fn reload_level(&mut self, path: &str) -> Result<(), String> {
-        let roots: Vec<(Entity, Vec2, LevelOptions)> = self
+        let roots: Vec<_> = self
             .world
             .query::<(Entity, &Transform2D, &LevelRoot)>()
             .iter()
             .filter(|(_, _, r)| r.path == path)
-            .map(|(e, t, r)| (e, t.position, r.options.clone()))
+            .map(|(e, t, r)| (e, t.position - r.ldtk_offset, r.clone()))
             .collect();
-        for (root, at, options) in roots {
-            let (level, _) = Level::read(&self.assets, path, &options).map_err(|e| e.to_string())?;
-            let old = self
-                .world
-                .get::<LevelRoot>(root)
-                .map(|r| r.entities.clone())
-                .unwrap_or_default();
-            for e in old {
-                self.world.despawn(e);
+        let mut replacements = Vec::new();
+        let result = (|| -> Result<(), Error> {
+            for (root, origin, old) in roots {
+                let (level, files) = Level::read(&self.assets, path, &old.options)?;
+                let offset = ldtk_offset(&level, &old.options);
+                let at = origin + offset;
+                let entities = self.spawn_level_parts(&level, at, &old.options)?;
+                replacements.push((root, at, old.entities, level.properties, offset, entities, files));
             }
-            let entities = self
-                .spawn_level_parts(&level, at, &options)
-                .map_err(|e| e.to_string())?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            for (_, _, _, _, _, entities, _) in replacements {
+                for entity in entities {
+                    self.world.despawn(entity);
+                }
+            }
+            return Err(e.to_string());
+        }
+        for (root, at, old, properties, offset, entities, files) in replacements {
+            for entity in old {
+                self.world.despawn(entity);
+            }
             if let Some(r) = self.world.get_mut::<LevelRoot>(root) {
                 r.entities = entities;
-                r.properties = level.properties;
+                r.properties = properties;
+                r.ldtk_offset = offset;
+            }
+            if let Some(t) = self.world.get_mut::<Transform2D>(root) {
+                t.position = at;
+            }
+            for file in files.into_iter().filter_map(|(_, file)| file) {
+                self.assets.watcher.watch(path, file, Asset::Level);
             }
         }
         Ok(())
     }
 }
 
-/// Watches `file` for the level `path`, once.
-fn watch_once(assets: &Assets, path: &str, file: PathBuf) {
-    if !assets.watcher.watching(&file, |a| matches!(a, Asset::Level)) {
-        assets.watcher.watch(path, file, Asset::Level);
+fn ldtk_offset(level: &Level, options: &LevelOptions) -> Vec2 {
+    if options.ldtk_position {
+        level.ldtk.as_ref().map_or(Vec2::ZERO, |l| l.position)
+    } else {
+        Vec2::ZERO
     }
 }
 

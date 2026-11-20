@@ -18,12 +18,14 @@ C and C++ games use them too (see [From C and C++](#from-c-and-c) below).
 
 | Type | What it is |
 |---|---|
-| `SkeletonData` | The shared description, loaded once: bones and their rest pose, slots, skins and attachments, clips, IK constraints, an optional state machine. |
-| `Bone` | A name, a parent and a rest `BonePose` (translation, rotation, scale) relative to the parent. |
+| `SkeletonData` | The shared description, loaded once: bones and their rest pose, slots, skins and attachments, clips, IK and transform constraints, an optional state machine. |
+| `Bone` | A name, a parent and a rest `BonePose` (translation, rotation, scale, shear) relative to the parent. |
 | `Slot` | A place on a bone that shows one attachment at a time, in draw order. |
 | `SpritePart` | A rigid attachment: a texture (or a region of one) with a size, pivot and offset from its bone. |
 | `SkinnedMesh` | A bending attachment: vertices with UVs and up to four weighted bones each, and triangles. |
-| `Clip` | Keys for bones (translate, rotate, scale), slots (attachment, visibility, color), draw order and events. |
+| `ClippingMask` | A polygon on bones that clips what the next slots draw, up to an end slot. |
+| `Clip` | Keys for bones (translate, rotate, scale, shear, or one axis at a time), slots (attachment, visibility, color), mesh deforms, draw order and events. |
+| `TransformConstraint` | Bones that take on some of a target bone's rotation, position, scale and shear. |
 | `SkeletonGraph` | The state machine: states that play a clip or a 1D blend, with the same parameters, conditions and transitions as the 3D animator (`ponko::anim`). |
 | `Skeleton` | The component: what plays, its clock and its pose. |
 
@@ -183,8 +185,31 @@ puppet.set_ik_mix(0, 0.75);                    // three quarters of the way
 Constraints apply after the clips every update. For one-off posing,
 `look_at(bone, target, mix)` and `two_bone_ik(upper, lower, target,
 bend_positive, mix)` change the current pose directly, until the next
-update poses it again (call them after it, or set `manual`). A target out
-of reach straightens the chain toward it.
+update poses it again (call them after it, in a late system, or set
+`manual`). A target out of reach straightens the chain toward it.
+
+<div class="lang-pair">
+<div>
+
+```rust
+# use ponko::skeleton2d::Skeleton;
+# fn pose(puppet: &mut Skeleton, mouse: Vec2, origin: Vec2) {
+if let (Some(head), Some(upper), Some(lower)) = (puppet.bone("head"), puppet.bone("arm"), puppet.bone("hand")) {
+    puppet.look_at(head, mouse - origin, 1.0);                     // the head follows the mouse
+    puppet.two_bone_ik(upper, lower, mouse - origin, true, 0.5);   // the arm half way to it
+}
+# }
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:skeleton2d_one_off}}
+```
+
+</div>
+</div>
 
 ## Building one in code
 
@@ -339,6 +364,11 @@ which must hold), `exit_time` (the source's normalized time it waits for),
 `duration` (crossfade seconds) and `offset` (the next state's starting
 normalized time).
 
+Shear, transform constraints, clipping masks and deform keys are not in
+this format yet: build them in code (`BonePose::with_shear`,
+`add_transform_constraint`, a `ClippingMask` attachment, a clip's
+`with_deform_track`) or import them from Spine.
+
 ### Importing Spine JSON
 
 `load_skeleton2d` also reads Spine JSON exports (Spine 4.x, and 3.x files),
@@ -358,26 +388,40 @@ file, as `<attachment path or name>.png`. Editing the atlas or the export
 reloads every skeleton playing it. To read an export from memory, use
 `SpineAtlas::parse` and `SkeletonData::from_spine_json_with_atlas`.
 
-Read: bones (position, rotation, scale, length), slots (rest attachment,
-color), every skin's region and mesh attachments (weighted meshes keep
-each vertex's four strongest bones), IK constraints (with their mix and
-bend direction), and animations' bone rotate/translate/scale timelines
-slot attachment and color timelines,
-draw order and events, with their curves: linear, stepped and bezier,
-exactly as Spine evaluates them. 3.x rotations turn the shorter way between
-keys, as 3.x does.
+Read: bones (position, rotation, scale, shear, length), slots (rest
+attachment, color), every skin's region, mesh and clipping attachments
+(weighted meshes keep each vertex's four strongest bones), IK constraints
+(with their mix and bend direction), transform constraints (world or
+local, absolute or relative, every mix and offset; 4.x and 3.x names),
+applied in their `order` with the IK constraints, and animations' bone
+timelines (rotate, translate, scale and shear, and 4.x's one-axis
+`translatex`, `translatey`, `scalex`, `scaley`, `shearx` and `sheary`,
+each with its own key times), deform timelines (4.x under `attachments`,
+3.x under `deform`; offsets of weighted meshes stay with their bones),
+slot attachment and color timelines, draw order and events, with their
+curves: linear, stepped and bezier, exactly as Spine evaluates them. 3.x
+rotations turn the shorter way between keys, as 3.x does.
 
-Not read: shear, inherit modes other than normal, skin-specific bones and
+A clipping attachment clips the slots after its own up to its `end` slot,
+regions and meshes alike, to any simple polygon. Deforms, like slot keys,
+come from the stronger side of a crossfade or blend: they switch at the
+half-way point rather than blending.
+
+Not read: inherit modes other than normal, skin-specific bones and
 constraints, dark colors, slot blend modes, hidden slots, sequences,
-linked meshes, bounding boxes, paths, points, clipping, IK softness,
-compress, stretch and uniform scale, transform, path and physics
-constraints, event values, and timelines for separate x or y (4.x
-`translatex` and the like), shear, inherit, `rgb`, `alpha` and two-color
-tints, IK, constraints, deform and sequences. A file using any of them still loads, and each one it uses is
-a warning naming the feature, where it is and the file:
+linked meshes, bounding boxes, paths, points, IK softness, compress,
+stretch and uniform scale, event values, and timelines for inherit,
+`rgb`, `alpha` and two-color tints, IK and constraint mixes and
+sequences. Path and physics constraints are not evaluated either: path
+constraints follow path attachments (bezier splines measured along their
+length) that Ponko has no shape for, and Spine's physics is a spring
+simulation stepped at its own fixed rate with state of its own per
+skeleton, which a pose sampled from clips can't reproduce; their bones keep
+their animated pose. A file using any of them still loads, and each one
+it uses is a warning naming the feature, where it is and the file:
 
 ```text
-hero/hero.json: Spine shear (bone "arm") isn't read; the bone is posed without it
+hero/hero.json: Spine inherit mode "noScale" (bone "arm") isn't read; the bone inherits its parent's rotation and scale as "normal" does
 ```
 
 `load_skeleton2d` prints the warnings (to the browser console on the web);
@@ -395,7 +439,8 @@ C and C++ games load skeleton files and put skeletons on entities:
 entity, and every call names the entity: `ponko_ctx_skeleton2d_play`,
 `_crossfade`, `_crossfade_state`, `_state`, `_set_float`, `_set_bool`,
 `_set_trigger`, `_next_event`, `_set_ik_target`, `_clear_ik_target`,
-`_set_ik_mix`, `_bone`, `_set_attachment`, `_reset_attachment`,
+`_set_ik_mix`, `_look_at`, `_two_bone_ik` (one-off posing, after the
+update), `_bone`, `_set_attachment`, `_reset_attachment`,
 `_attachment`, `_set_skin`, `_set_look` (z, tint and speed), `_set_manual`
 and `_update`. Names become indices once with `_state_index`,
 `_parameter_index`, `_ik_index`, `_bone_index` and `_slot_index`.
@@ -405,11 +450,9 @@ it), changing nothing; a missing clip, skin or name is `PONKO_NOT_FOUND`.
 The built-in update is `PONKO_SYSTEM_UPDATE_SKELETONS2D`
 (`ponko::systems::update_skeletons2d`).
 
-Building skeletons in code (`SkeletonData::add_bone` and the rest),
-`Skeleton::look_at` and `Skeleton::two_bone_ik`, and `SpineAtlas` are
-Rust-only: C and C++ skeletons come from files through the assets (a
-memory source for files held in memory), and aim with an IK constraint in
-the file and `ponko_ctx_skeleton2d_set_ik_target`.
+Building skeletons in code (`SkeletonData::add_bone` and the rest) and
+`SpineAtlas` are Rust-only: C and C++ skeletons come from files through
+the assets (a memory source for files held in memory).
 
 ## Saves, scenes, prefabs and the inspector
 
@@ -443,3 +486,26 @@ all cores), draws them, then orders and batches the draw list:
 | `skeleton2d/1k-z` (two layers) | 19.3 ms | 6.8 ms | 234,000 vertices, 1 batch |
 
 Parts on one texture (or atlas) and one look batch into one draw call.
+
+Posing and drawing are timed on their own by `skeleton2d/update-1k`,
+`draw-1k`, `update-10k` and `draw-10k` (the same skeletons, 1,000 or 10,000
+of them). Posing runs on all cores. Drawing splits the skeletons into runs,
+and each thread builds its runs' vertices into its own chunk. The chunks are
+then copied into the draw list in draw order, so the result is the same as
+drawing them one by one (posing was on all cores already). Three runs
+each, before (drawing on one thread) and
+after, taken in turns on the same busy machine (load average 50 to 90).
+These are **to be repeated on a quiet machine**:
+
+| Benchmark | Before: median | Before: min | After: median | After: min |
+|---|---|---|---|---|
+| `update-1k` | 3.5 to 7.2 ms | 0.64 to 0.75 ms | 1.1 to 2.8 ms | 0.49 to 0.52 ms |
+| `draw-1k` | 3.8 to 6.2 ms | 2.5 to 2.6 ms | 3.1 to 21 ms | 0.63 to 0.87 ms |
+| `update-10k` | 7.8 to 30 ms | 5.4 to 6.0 ms | 19 to 30 ms | 4.0 to 5.0 ms |
+| `draw-10k` | 29 to 89 ms | 25.6 to 26.6 ms | 33 to 50 ms | 5.6 to 8.4 ms |
+
+The minimums (the closest to an idle machine) show drawing three to four
+times faster. The medians are within the noise of the other work on the
+machine: a parallel draw waits for cores that other processes hold.
+Posing, drawing and clipping allocate nothing per frame once warm, apart
+from rayon's job queue taking a new block now and then on all cores.

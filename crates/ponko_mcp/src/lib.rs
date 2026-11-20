@@ -529,10 +529,27 @@ fn tools() -> Vec<Tool> {
                         "description": "View names to true (show) or false (hide): colliders, navmesh, bounds, lights, hierarchy",
                         "additionalProperties": { "type": "boolean" }
                     },
+                    "toggles": {
+                        "type": "object",
+                        "description": "The game's own debug toggle names (the answer's `toggles` lists them) to true (on) or false (off)",
+                        "additionalProperties": { "type": "boolean" }
+                    },
                     "clear": { "type": "boolean", "description": "true drops everything drawn so far, timed shapes too" }
                 })
             },
             required: &[],
+        },
+        Tool {
+            name: "call_game_method",
+            description: "Call a method the game or one of its plugins added to its control endpoint (Rust `Game::control_method`): game-specific tools such as `weather.set_rain`. instance_capabilities lists them in `methods`, marked `added: true`, with what each takes; engine methods are reached through this server's other tools. Returns the method's answer, or its error.",
+            writes: true,
+            params: || {
+                json!({
+                    "method": { "type": "string", "description": "The method's name, `namespace.method`" },
+                    "params": { "type": "object", "description": "The method's parameters (default {})" }
+                })
+            },
+            required: &["method"],
         },
         Tool {
             name: "set_graphics_quality",
@@ -660,7 +677,7 @@ fn tools() -> Vec<Tool> {
         },
         Tool {
             name: "run_input_scenario",
-            description: "Run a tick-indexed input scenario against a paused game that allows input injection (launched with `launch`, or started with PONKO_INPUT_INJECTION=1) and wait for it to end. The scenario is a versioned JSON object: input steps (key, mouse, gamepad_button, gamepad_axis, focus_lost, gamepad_disconnected, mouse_move with position [x, y], mouse_wheel with delta [x, y]) fed through the game's real input path before the tick's systems run, UI steps (ui_click, ui_type) that click or type into the retained UI's node of that name (in a window, in the frame after the tick), IME steps (ime_enabled, ime_preedit with text and optional cursor [start, end] in bytes, ime_commit with text, ime_disabled) that replay an input-method composition into the focused text input, and checks (expect_action, expect_resource, expect_count, expect_ui) evaluated after them; tick 0 is the next simulation tick. Returns the report: status passed/failed/cancelled, ticks run, and for a failed check its step, tick, expected and actual values. The run stops at the first failed check. Held inputs are released when the run ends, fails or is cancelled (also on a timeout or error here), unless `keep_input_when_done` is set; then cancel_input_scenario releases them. A failed check or a cancel takes back only the ticks this run queued, not ticks someone else asked for.",
+            description: "Run a tick-indexed input scenario against a paused game that allows input injection (launched with `launch`, or started with PONKO_INPUT_INJECTION=1) and wait for it to end. The scenario is a versioned JSON object: input steps (key, mouse, gamepad_button, gamepad_axis, focus_lost, gamepad_disconnected, gamepad_connected, gamepad_motion with gyro and accel [x, y, z], mouse_move with position [x, y], mouse_wheel with delta [x, y]) fed through the game's real input path before the tick's systems run, UI steps (ui_click, ui_type) that click or type into the retained UI's node of that name (in a window, in the frame after the tick), IME steps (ime_enabled, ime_preedit with text and optional cursor [start, end] in bytes, ime_commit with text, ime_disabled) that replay an input-method composition into the focused text input, and checks (expect_action, expect_resource, expect_count, expect_ui) evaluated after them; tick 0 is the next simulation tick. Returns the report: status passed/failed/cancelled, ticks run, and for a failed check its step, tick, expected and actual values. The run stops at the first failed check. Held inputs are released when the run ends, fails or is cancelled (also on a timeout or error here), unless `keep_input_when_done` is set; then cancel_input_scenario releases them. A failed check or a cancel takes back only the ticks this run queued, not ticks someone else asked for.",
             writes: true,
             params: || {
                 json!({
@@ -956,9 +973,27 @@ fn tools() -> Vec<Tool> {
         },
         Tool {
             name: "save_edited_scene",
-            description: "Save the world back to the scene file it was loaded from or last saved to, as the editor's Save does (or to path, inside assets/).",
+            description: "Save the edited document back to its file (the scene loaded or saved last, or the prefab opened), as the editor's Save does, or to path, inside assets/, as the editor's Save as does. Clears the unsaved-changes mark.",
             writes: true,
-            params: || json!({ "path": { "type": "string", "description": "Path inside assets/, e.g. levels/yard.json (default: the scene that was loaded)" } }),
+            params: || {
+                json!({
+                    "path": { "type": "string", "description": "Path inside assets/, e.g. levels/yard.json (default: the document's file)" },
+                    "as": { "type": "string", "enum": ["scene", "prefab"], "description": "Save as a scene (the whole world) or a prefab (the world's one root entity and what hangs off it); default: the document's kind" }
+                })
+            },
+            required: &[],
+        },
+        Tool {
+            name: "editor_document",
+            description: "The document the editor edits: its file, kind (scene or prefab), whether it has unsaved changes (dirty), and whether another program changed the file meanwhile. new starts an empty untitled scene, open opens a scene or prefab file from assets/ (a prefab alone in an empty world), reload reads the file again; each clears the undo history and drops unsaved changes.",
+            writes: true,
+            params: || {
+                json!({
+                    "new": { "type": "boolean", "description": "Start an empty, untitled scene" },
+                    "open": { "type": "string", "description": "A scene or prefab .json file inside assets/" },
+                    "reload": { "type": "boolean", "description": "Read the document's file again" }
+                })
+            },
             required: &[],
         },
         Tool {
@@ -1008,6 +1043,8 @@ fn tool_methods(name: &str) -> Option<&'static [&'static str]> {
         "record_trace" => &["perf.trace"],
         "perf_hud" => &["perf.hud"],
         "debug_draw" => &["debug.draw"],
+        // Methods the game added; checked against its list when called.
+        "call_game_method" => &[],
         "set_graphics_quality" => &["quality.set"],
         "list_events" => &["events.list"],
         "subscribe_events" => &["events.subscribe"],
@@ -1052,6 +1089,7 @@ fn tool_methods(name: &str) -> Option<&'static [&'static str]> {
         "undo_edit" => &["editor.undo"],
         "redo_edit" => &["editor.redo"],
         "save_edited_scene" => &["editor.save"],
+        "editor_document" => &["editor.document"],
         "set_camera_3d" => &["editor.camera"],
         _ => return None,
     })
@@ -1116,6 +1154,7 @@ fn destructive(tool: &str) -> bool {
             | "save_prefab"
             | "delete_entities"
             | "save_edited_scene"
+            | "editor_document"
     )
 }
 
@@ -1291,7 +1330,26 @@ impl Server {
             "shader_status" => self.instance(args)?.call("shaders.status", json!({})),
             "record_trace" => self.instance(args)?.call("perf.trace", pass(&["frames", "path"])),
             "perf_hud" => self.instance(args)?.call("perf.hud", pass(&["on"])),
-            "debug_draw" => self.instance(args)?.call("debug.draw", pass(&["on", "views", "clear"])),
+            "debug_draw" => self
+                .instance(args)?
+                .call("debug.draw", pass(&["on", "views", "toggles", "clear"])),
+            "call_game_method" => {
+                let method = args
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .ok_or("`method` must be the name of a method the game added")?;
+                let instance = self.instance(args)?;
+                let methods = instance.call("methods", json!({}))?;
+                let added = methods
+                    .as_array()
+                    .is_some_and(|all| all.iter().any(|m| m["name"] == method && m["added"] == true));
+                if !added {
+                    return Err(format!(
+                        "`{method}` is not a method this game added (instance_capabilities lists them, marked `added`); engine methods have tools of their own"
+                    ));
+                }
+                instance.call(method, args.get("params").cloned().unwrap_or_else(|| json!({})))
+            }
             "set_graphics_quality" => self.instance(args)?.call("quality.set", pass(&["level"])),
             "list_resources" => self.instance(args)?.call("resources.list", json!({})),
             "get_resource" => self.instance(args)?.call("resource.get", pass(&["resource"])),
@@ -1360,7 +1418,10 @@ impl Server {
                 .call("editor.duplicate", pass(&["entities", "offset"])),
             "undo_edit" => self.instance(args)?.call("editor.undo", json!({})),
             "redo_edit" => self.instance(args)?.call("editor.redo", json!({})),
-            "save_edited_scene" => self.instance(args)?.call("editor.save", pass(&["path"])),
+            "save_edited_scene" => self.instance(args)?.call("editor.save", pass(&["path", "as"])),
+            "editor_document" => self
+                .instance(args)?
+                .call("editor.document", pass(&["new", "open", "reload"])),
             "set_camera_3d" => self.instance(args)?.call(
                 "editor.camera",
                 pass(&["position", "look_at", "fov", "turn", "fly", "focus"]),

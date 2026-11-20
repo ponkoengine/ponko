@@ -105,6 +105,86 @@ In C++, `Sprite` values are `ponko::sprite` (`sprite_of(texture, tint, z)`).
 They can be spawned, read and set, but not used as query columns, because
 the engine stores sprites in a Rust layout. `d2::Transform` can.
 
+## Sprites and animations from Aseprite
+
+Ponko reads Aseprite's **JSON Array** sprite sheet export plus its PNG.
+Aseprite handles compositing, linked cels and image modes during export,
+so Ponko can use its existing JSON and PNG decoders. The engine repacks the
+export at load into a single atlas, restoring trimmed cels to their original
+canvas so their position and sprite pivot stay consistent.
+
+```sh
+aseprite -b --list-tags --list-slices hero.aseprite \
+  --format json-array --data hero.json --sheet hero.png
+```
+
+Add `--split-layers --list-layers` before the source file and
+`--filename-format '{frame}:{layer}'` to export individual layers. Use
+unique layer names and export the full timeline with **Ignore Empty**
+disabled. In Rust pass `true` for split layers, then select a layer with
+`Some("Body")`. `atlas.layers()` gives their names in draw order when the
+export includes layer metadata. Use separate sprites if you need to set
+each layer's tint or draw order. A missing cel in one layer stays
+transparent and shares the other layers' frame timing.
+
+<div class="lang-pair">
+<div>
+
+```rust
+# fn sprites(ctx: &mut Ctx) -> Result<(), Error> {
+let atlas = ctx.gfx.try_load_aseprite("sprites/hero.json", false)?;
+let idle = atlas.animation("Idle", None)?;
+if let Some(frame) = idle.sprite_at(0.0) {
+    ctx.world.spawn((ponko::d2::Transform::at(vec2(120.0, 80.0)), frame, idle));
+}
+# Ok(())
+# }
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:aseprite_import}}
+```
+
+</div>
+</div>
+
+The built-in sprite animation system advances a tag using each frame's
+duration. Forward, reverse and both ping-pong directions and repeat counts
+are read from the export. Use an empty tag to loop the whole timeline.
+`atlas.sprite(0, None)` selects a static frame. A named slice's bounds,
+pivot and nine-slice center are available from `atlas.slice("Hitbox", frame)`
+in source canvas coordinates. The C API exposes `ponko_ctx_aseprite_frame`
+and `ponko_ctx_play_aseprite`. Slice metadata is available through the Rust
+atlas API.
+
+When [hot reload](#hot-reload) is on, edits to either disk file repack the
+atlas and refresh existing playback. An invalid edit keeps the last good
+atlas. The context owns the atlas texture. Re-select static sprites when an
+edit changes their atlas layout.
+
+Keep the JSON and sheet together in your assets or asset pack. If you want
+to preserve exact pixel colors when running [`ponko cook`](packaging.md),
+set the PNG to `"keep"` in `cook.json`. The cooker copies the JSON and may
+compress the PNG according to its usual settings. A cooked KTX2 sheet uses
+the engine's `compressed-textures` feature, just like other KTX2 images.
+
+**No export step.** [`ponko cook`](packaging.md#cooking-assets-ponko-cook)
+reads `.aseprite` files itself and writes the same export next to each:
+`hero.aseprite` becomes `hero.json` and `hero.png`, with every frame on a
+whole canvas, the tags (direction and repeats), slices and, with
+`"layers": true` for the file in `cook.json`, each visible layer under
+`{frame}:{layer}` names. The game loads `hero.json` as above. The Aseprite
+file itself isn't in the cooked files. While you develop, the game reads
+`assets/` as it is, with hot reload, so keep exporting from Aseprite there
+if you edit sprites while it runs: the cook replaces that export with the
+one it makes from the `.aseprite` file, so a shipped sheet is never older
+than its source. Group opacity isn't applied to the layers in a group, and
+tilemap layers aren't read: export those from Aseprite and set the file to
+`"keep"`.
+
 ## Blend modes and sprite shaders
 
 A sprite blends with what's behind it by its alpha. Add a `BlendMode` next to
@@ -575,8 +655,11 @@ file resident, and hot reload, where a `.png` may even be replaced by its
 bytes. `update_texture` on one turns it into an RGBA8 texture. Without the
 feature, loading a `.ktx2` fails with an `Unsupported` error naming it.
 Cube maps, 3D textures and Basis ETC1S files aren't read yet. The KTX2
-textures of glTF files (`KHR_texture_basisu`, with `basis-universal`) are
-decoded to RGBA8 as the model loads, not kept as blocks. The C library has the
+textures of glTF files (`KHR_texture_basisu`, which `ponko cook` writes) are
+kept as blocks too, when the GPU has their format (UASTC needs
+`basis-universal`); a model's occlusion merged into its metallic-roughness
+texture must come merged, as the cook writes it, or it is decoded to RGBA8
+to merge. The C library has the
 same features (`cargo build -p ponko_ffi --features compressed-textures`);
 its released builds leave them out.
 

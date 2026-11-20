@@ -21,6 +21,7 @@ engine's repository, `cargo run -p ponko_cli -- package` runs it):
 cd my_game
 ponko package                 # for this computer: zip, app in a dmg, or tar.gz
 ponko package --web           # a folder to put on any static web host
+ponko package --web --threads # the same, with threads where the host allows them
 ```
 
 It builds the game in release, packs its assets into one file, collects its
@@ -46,7 +47,7 @@ engine finds the assets next to the program, and inside an app bundle in
 `Contents/Resources` ([below](#the-package)), so an unpacked game works from any
 folder. The files under `assets/` ship as one asset pack, `assets.pack`
 ([below](#assets-in-one-pack-ponko-pack)); `--no-pack` ships them as loose
-files in `assets/` instead.
+files in `assets/` instead, [cooked](#cooking-assets-ponko-cook) all the same.
 
 ### What goes in: `[package.metadata.ponko]`
 
@@ -63,6 +64,7 @@ pack = { exclude = ["**/*.psd"] }  # how files under assets/ go into assets.pack
 files = [                     # put at the package's top: licenses, a readme for players, notices
     "LICENSE-MIT",
     { from = "docs/PLAYER-README.txt", to = "README.txt" },
+    { from = "docs/manual.pdf", to = "docs/manual.pdf" },  # `to` can name a folder inside the package
 ]
 ```
 
@@ -72,12 +74,12 @@ files = [                     # put at the package's top: licenses, a readme for
 | `id` | `local.<name>`, with a note to set one |
 | `icon` | none: macOS shows the generic app icon |
 | `assets` | `["assets"]` if that folder exists, else nothing; hidden files (`.DS_Store`) are left out |
-| `files` | the `LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*` files beside `Cargo.toml` |
+| `files` | the `LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*` files beside `Cargo.toml`; a path is put at the package's top under its file name, `{ from, to }` at `to`: a file name or a path inside the package such as `docs/README.txt` (`/`-separated, no `..`), made in each place the package has its files (on macOS inside the app's `Resources` and beside the app) |
 | `pack` | `true`: the files under `assets/` in one `assets.pack`, [cooked](#cooking-assets-ponko-cook); `false` ships them loose; a table sets packing up: `exclude` (patterns of files left out), `textures = true` (images converted to KTX2 per `textures.json`, as `ponko pack --textures`) and `cook = false` (the source files as they are) |
 
 Paths are relative to `Cargo.toml`. An unknown key, an id that isn't reverse
-DNS, a missing file and two files at one place in the package are errors that
-name the key. For an example of a package (`--example <name>`),
+DNS, a missing file, two files at one place in the package and a file where
+another needs a folder are errors that name the key. For an example of a package (`--example <name>`),
 `[package.metadata.ponko.examples.<name>]` takes the same keys and overrides
 the table above it; this repository's root `Cargo.toml` describes Coin Dash
 that way.
@@ -179,15 +181,52 @@ ponko pack --cook                       # the same, as ponko pack's option
 
 | Source | Cooked | Kept as it is when |
 |---|---|---|
-| PNG, JPEG | KTX2 with a full mip chain: BC7 for colors (sRGB) and data, BC5 for normal maps, BC4 for masks on `desktop` and `web`; Basis Universal UASTC on `mobile` (transcoded at load to ASTC 4x4, ETC2 or BC7) | a glTF model uses it (models decode their images to RGBA8), 16 bits per channel (a height map), sides not multiples of 4, or the game reads no KTX2 |
-| glTF, GLB | one GLB: triangles reordered for the vertex cache and for overdraw, vertices in the order they are first used (meshoptimizer), unused vertices dropped; normals as 16-bit and texture coordinates in 0..1 as 16-bit unsigned integers (`KHR_mesh_quantization`, an error under 2e-5); positions stay floats, so colliders, navigation meshes and node transforms read the same numbers | compressed geometry (meshopt, Draco) or an extension the cooker doesn't rewrite; vertices that two primitives share keep their order |
+| PNG, JPEG | KTX2 with a full mip chain: BC7 for colors (sRGB) and data, BC5 for normal maps, BC4 for masks on `desktop` and `web`; Basis Universal UASTC on `mobile` (transcoded at load to ASTC 4x4, ETC2 or BC7). An image file a glTF model reads (its `uri`) is cooked for its use there, whether the model is cooked or kept: base color BC7 sRGB, normal map BC5, metallic-roughness BC7 with the occlusion merged in ([below](#model-image-files)) | a glTF model reads it with two uses (one texture as color and as data), as the occlusion merged into a metallic-roughness file, or beside an image inside the model; 16 bits per channel (a height map), sides not multiples of 4, or the game reads no KTX2 |
+| glTF, GLB | one GLB: triangles reordered for the vertex cache and for overdraw, vertices in the order they are first used (meshoptimizer), unused vertices dropped; normals as 16-bit and texture coordinates in 0..1 as 16-bit unsigned integers (`KHR_mesh_quantization`, an error under 2e-5); positions as 16-bit integers when that moves none by more than 0.1 mm (one range for a mesh up to 13 m across, else one per primitive up to 13 m; [below](#quantized-positions)); the images a GLB holds as KTX2 for their use (`KHR_texture_basisu`): base color BC7 sRGB, normal map BC5, metallic-roughness BC7 with the occlusion merged in, as the engine merges it; UASTC on `mobile`; a `.gltf` file's `.bin` buffers stay out, as the GLB holds them | compressed geometry (meshopt, Draco) or an extension the cooker doesn't rewrite; vertices that two primitives share keep their order; positions of skinned, instanced or morphed meshes, of primitives past 13 m and of shared position data; images with two uses (one texture as color and as data), 16 bits or sides not multiples of 4 (images in their own files are cooked as images, above) |
+| Aseprite (`.aseprite`, `.ase`) | the JSON Array export and PNG sheet [`load_aseprite`](drawing.md#sprites-and-animations-from-aseprite) reads, `hero.json` and `hero.png` beside it, made without Aseprite: frames composited with layer and cel opacity and blend modes, durations, tags with direction and repeats, slices with their pivot and nine-slice center; `"layers": true` exports each visible layer (`--split-layers`); the sheet is then cooked as any PNG | `"keep"`; a file the cook can't read (tilemap layers too) fails it. An export already beside it is replaced by the one the cook makes |
 | WAV (8, 16, 24-bit PCM) | FLAC: lossless, smaller | float or 32-bit samples |
-| WGSL | the same file, checked: composed with the engine's code for its kind (found from its hook: `vertex`/`surface`, `fragment`, `sky`, `effect`, `compute`) and validated with naga, as the engine does at load; an error names the file's own line | `"shader": "keep"` |
+| WGSL | the same file, checked: the engine's own rules for its kind (the hook's signature, no entry points and no bindings of its own), then composed with the engine's code for its kind (found from its hook: `vertex`/`surface`, `fragment`, `sky`, `effect`, `compute`) and validated with naga, as the engine does at load; an error names the file's own line | `"shader": "keep"` |
 | anything else | copied | |
 
 A model's nodes, materials, animations, skins and every `extras` are written
-back as they were read: only the mesh data changes. A shader, model or sound
-that can't be cooked fails the cook with every such file and the reason.
+back as they were read: only the mesh data and the images change. A shader,
+model or sound that can't be cooked fails the cook with every such file and
+the reason.
+
+<a id="quantized-positions"></a>**Quantized positions.** 16-bit positions
+count steps across the mesh's bounds, so they need a scale and an offset.
+The cook puts them on a new child node that shows the mesh (marked
+`PONKO_quantized_positions`) and takes the mesh off its node; the engine
+folds that child back as it loads, so game code sees the source's tree:
+`GltfScene` nodes, their names, parents, transforms, `extras` and the
+colliders, bodies and spawn points made from them are the same, and every
+position (in `load_mesh_data`, mesh colliders, a navigation mesh baked from
+the level) is within 0.1 mm of the source's. A tool that reads the cooked
+file without the engine sees the extra node with its scale.
+A mesh larger than one 16-bit range holds within the bound (a level made of
+tiles, 13.1 m) gets a range per primitive instead: each primitive that fits
+gets its own child node and mesh (marked with the source mesh and its
+primitives), and primitives too large for one stay floats on one more
+child. The engine puts the primitives back in one mesh, in their order,
+each with its own scale. A 48 m test level of 16 primitives (1,089 corners
+each) is 627,716 bytes with float positions and 561,256 bytes with a range
+per primitive (the test `a_level_too_big_for_one_range_gets_a_range_per_primitive`).
+`"quantize": false` keeps a model's positions and normals as floats.
+
+<a id="model-image-files"></a>**A model's image files.** The cook reads each
+glTF model's materials and cooks the image files they name for their use:
+the base color as sRGB, the normal map as BC5, and the metallic-roughness
+image as linear BC7 with the occlusion image merged into its red, the ORM
+image the engine would otherwise merge on the CPU at load. The merged file
+keeps its name and carries a `ponkoOrm` key naming both sources; when a
+model's material names the same two files, the engine uploads it as it is,
+in blocks, and doesn't read the occlusion file. That works for a model the
+cook keeps as it is too (`"keep"`, or one with an extension the cooker
+doesn't rewrite), so its occlusion no longer costs RGBA8. The occlusion file
+is kept as it is, for any other reader. The fixture model of
+`model_textures_render_test` (32 x 32 base color, normal map,
+metallic-roughness and occlusion files, the model itself not cooked) takes
+16380 bytes of textures with its PNGs and 4176 bytes with its cooked files.
 
 **Settings.** `cook.json` in the folder (optional) gives assets their own
 settings by path or pattern (`*` within a folder name, `**` across them; an
@@ -204,6 +243,7 @@ defaults above.
     "hero.png": { "basis": true },
     "music/*.wav": { "audio": "keep" },
     "props/*.glb": { "quantize": false },
+    "sprites/hero.aseprite": { "layers": true },
     "fx/glow.wgsl": { "shader": "effect" }
   }
 }
@@ -212,7 +252,8 @@ defaults above.
 `"keep"` copies a file as it is and `"skip"` leaves it out. `texture` is
 `color` (the default), `linear`, `normal`, `mask` or `keep`; `basis` and
 `mipmaps` override the platform's choice. `audio` is `flac` or `keep`;
-`optimize` and `quantize` (both on by default) are for models; `shader`
+`optimize` and `quantize` (both on by default) are for models; `layers`
+(off by default) exports an Aseprite file's layers each on its own; `shader`
 names a kind, `module` for a file with its own entry points, or `keep`. A
 `textures.json` (see [`ponko textures`](drawing.md#compressed-textures))
 gives image kinds too, so a project that has one keeps its settings.
@@ -230,8 +271,10 @@ cargo says which engine features the game was built with, and images become
 KTX2 only for a game that reads it (the `compressed-textures` feature); for
 others they stay PNG and JPEG. The web gets BC textures, as the desktop does
 (a browser's GPU without them gets RGBA8, decoded at load). `--no-cook` or
-`pack = { cook = false }` packs the source files; `--no-pack` ships loose
-source files, uncooked. The report has the cook's line; Shard Grove's,
+`pack = { cook = false }` packs the source files; `--no-pack` ships the
+cooked files loose under their names (`--no-cook` with it: the source
+files). A `.gltf` file's `.bin` buffers stay out of the cooked files, and
+the cook's line counts them as left out. The report has the cook's line; Shard Grove's,
 packaged a second time:
 
 ```text
@@ -256,12 +299,38 @@ laptop that was compiling other work at the same time (load average about
 
 Its meshes are low-poly with flat shading, so the vertex cache reorder finds
 nothing to gain (2.00 cache misses per triangle before and after), and
-quantization saves a few percent. FLAC decoding costs about half a
-millisecond more for its 8 seconds of sound (mono, 22 kHz) than reading WAV: a smaller
-download for a little load time. Set `"audio": "keep"` for sounds whose
-load time matters more.
+quantization saves a few percent (the level is 47 m across, past the bound
+for 16-bit positions, and the characters are skinned, so positions stay
+floats). FLAC decoding costs about half a millisecond more for its 8 seconds
+of sound (mono, 22 kHz) than reading WAV: a smaller download for a little
+load time. Set `"audio": "keep"` for sounds whose load time matters more.
 
-Images are where cooking saves video memory. Eight generated 512 x 512
+Short sounds stay FLAC by default. Each sound loaded alone (read from memory
+and decoded), WAV and FLAC alternating, 41 rounds, three runs of a release
+build on the same busy machine (load average 136–141); the median in
+microseconds and the run's quartiles of the third run (the other two agree
+within 2.5 µs):
+
+| Sound | Length | WAV | FLAC | FLAC bytes |
+|---|---|---|---|---|
+| select | 0.05 s | 5.1 (4.4–6.1) | 8.7 (8.2–9.3) | 2248 -> 1033 |
+| shard | 0.27 s | 11.5 (10.8–12.2) | 31.3 (31.1–32.2) | 11948 -> 6821 |
+| hurt | 0.30 s | 12.7 (12.3–13.3) | 27.3 (26.9–27.7) | 13274 -> 11778 |
+| pulse | 0.55 s | 22.2 (21.2–22.7) | 46.8 (46.2–47.4) | 24298 -> 19038 |
+| wind | 3.75 s | 113.4 (110.5–115.9) | 291.4 (289.9–293.0) | 165420 -> 123171 |
+
+FLAC decodes 2–3 times slower, past the noise for every sound, but a short
+sound costs 4 to 25 µs more, once, at load: 0.06 ms for the four under
+0.6 s, against 25 % fewer bytes to download. That isn't worth a second
+rule, so the cook keeps one: every PCM WAV becomes FLAC. (The measurement is
+the ignored test `measure_sound_load_times` in `tests/cooked_assets.rs`.)
+
+Images are where cooking saves video memory, models' own images too. The
+test model of `model_textures_render_test` (a 32 x 32 base color, normal
+map, metallic-roughness and occlusion image in one GLB) takes 16380 bytes of
+textures as the engine uploads its PNGs (RGBA8 with mipmaps, occlusion
+merged into metallic-roughness) and 4176 bytes cooked (three BC textures),
+by the engine's own video memory accounting. Eight generated 512 x 512
 color images (6.3 MiB of PNG), cooked the same way on the same busy machine:
 
 | | Source | Desktop (BC7) | Mobile (UASTC) |
@@ -271,13 +340,8 @@ color images (6.3 MiB of PNG), cooked the same way on the same busy machine:
 | Cook, cold / warm | | 0.77–0.79 s / under 0.01 s | 0.81 s |
 
 `ponko cook` is a command, so C and C++ games use it as it is; there is no C
-API to cook at run time. Not cooked yet: positions are not quantized
-(dequantizing them needs a scale on the node, which game code that reads
-node transforms would see), meshes are not simplified into levels of detail,
-textures inside GLB files and sounds in other formats are kept, and the
-shader check covers the engine's composition and naga's validation but not
-the extra rules the engine checks at load (the hook's signature, no
-bindings of your own).
+API to cook at run time. Not cooked yet: meshes are not simplified into
+levels of detail, and sounds in other formats are kept.
 
 ### The notices
 
@@ -343,10 +407,17 @@ the command to install the right one). The page is the engine's
 `web/index.html`, titled with the game's name and with the icon as favicon,
 and its canvas names the pack (`<canvas id="ponko" data-pack="assets.pack">`),
 which the engine fetches before setup. With `--no-pack` the assets are loose
-and `assets/index.json` lists the files under `assets/` the engine fetches
+(cooked) and `assets/index.json` lists the files under `assets/` the engine fetches
 instead. Serve the folder from any static host (`python3 -m http.server -d
 <folder> 8000` locally). There is no smoke run for it: the browser runner in
 `web/smoke` is the engine's own test, not part of the command.
+
+`--threads` builds it with threads, on nightly Rust (see [Threads on the
+web](web-threads.md)). The folder then also holds `ponko-worker.js`, and
+files that make common hosts send the two headers threads need: `_headers`
+for Netlify and Cloudflare Pages, `vercel.json` for Vercel, and
+`.htaccess` for Apache. On another host, set the headers yourself. Without
+them the game runs on one thread.
 
 ### Other platforms and limits
 

@@ -35,8 +35,10 @@ use crate::reflect::WorldReflect;
 
 mod capabilities;
 mod editor;
+mod game_methods;
 mod inspector;
 mod query;
+pub(crate) use game_methods::GameExtensions;
 use query::{Condition, FieldPath, FieldStats};
 
 /// Environment variable that turns the endpoint on (`1`).
@@ -1196,11 +1198,11 @@ pub(crate) const METHODS: &[(&str, &str)] = &[
     ),
     (
         "editor.transform",
-        "move, turn and scale entities as the editor's gizmo does, as one undo step; attached ones keep their parent, and what is attached to them follows; params: entities [ids], translate? [x, y, z], rotate? [x, y, z] (degrees about each axis, about the entities' middle), scale? (a factor or [x, y, z], along each entity's own axes), space? (\"world\" or \"local\": the first entity's axes), snap? (true, or { step, angle (degrees), scale })",
+        "move, turn and scale entities as the editor's gizmo does, as one undo step; attached ones keep their parent, and what is attached to them follows; params: entities [ids], translate? [x, y, z] ([x, y] in 2D), rotate? [x, y, z] (degrees about each axis, about the entities' middle; in 2D one number of degrees), scale? (a factor or [x, y, z] / [x, y], along each entity's own axes), space? (\"world\" or \"local\": the first entity's axes), snap? (true, or { step, angle (degrees), scale }; the 2D grid is 8 world pixels by default). Entities with a 2D transform (and no 3D one) are edited in 2D",
     ),
     (
         "editor.drag",
-        "drag a handle of the gizmo from one window point to another, as the mouse does in the editor, as one undo step; params: entities [ids], mode (translate, rotate or scale), handle (x, y, z, xy, xz, yz or center), from [x, y], to [x, y], space? (world or local), snap? (as editor.transform)",
+        "drag a handle of the gizmo from one window point to another, as the mouse does in the editor, as one undo step; params: entities [ids], mode (translate, rotate or scale), handle (x, y, z, xy, xz, yz or center; in 2D x, y or center, and rotate drags the ring), from [x, y], to [x, y], space? (world or local), snap? (as editor.transform)",
     ),
     (
         "editor.parent",
@@ -1237,7 +1239,11 @@ pub(crate) const METHODS: &[(&str, &str)] = &[
     ("editor.redo", "redo the last undone editor change"),
     (
         "editor.save",
-        "save the world back to the scene file it was loaded from (or last saved to); params: path? (a .json file relative to assets/)",
+        "save the edited document back to its file (the scene loaded or saved last, or the prefab opened), which clears its unsaved-changes mark; params: path? (a .json file relative to assets/: save as that file), as? (\"scene\" or \"prefab\": a prefab holds the world's one root entity). Returns the document as editor.document does",
+    ),
+    (
+        "editor.document",
+        "the document the editor edits: its file (null when untitled), kind (scene or prefab), dirty (unsaved changes), changed_on_disk (another program changed the file while there were unsaved changes), can_undo, can_redo; params: new? (true: an empty untitled scene), open? (a scene or prefab .json in assets/: a prefab opens alone in an empty world), reload? (true: the file again, dropping unsaved changes). Opening clears the undo history",
     ),
     (
         "editor.camera",
@@ -1751,6 +1757,7 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
             METHODS
                 .iter()
                 .map(|(name, about)| json!({ "name": name, "about": about }))
+                .chain(ctx.extensions.listed())
                 .collect(),
         ),
         "info" => json!({
@@ -1934,6 +1941,7 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
         "editor.undo" => editor::undo(ctx, false)?,
         "editor.redo" => editor::undo(ctx, true)?,
         "editor.save" => editor::save(ctx, params)?,
+        "editor.document" => editor::document(ctx, params)?,
         "editor.camera" => editor::camera(ctx, params)?,
         "prefab.save" => {
             let e = entity_param(params)?;
@@ -2145,7 +2153,8 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
         // Windowed games answer it after the next frame (see `answer`);
         // headless ones were refused above.
         "screenshot" => return Err("screenshots are taken after the next frame".into()),
-        other => return Err(format!("unknown method `{other}` (call `methods` for the list)")),
+        // Not the engine's: a method the game or one of its plugins added.
+        other => return game_methods::call(ctx, other, params),
     })
 }
 
@@ -3217,7 +3226,13 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
             let c = connect();
-            if ask(&c)["error"].as_str().unwrap().contains("token") {
+            // While every slot is taken the server hangs up on the newcomer, and
+            // writing the request to it can fail with a broken pipe: that is "not
+            // yet", so ask again, as the loop is for.
+            if ask_with(&c, "wrong")["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("token"))
+            {
                 break;
             }
             assert!(
@@ -3365,7 +3380,13 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
             let c = connect();
-            if ask(&c)["error"].as_str().unwrap().contains("token") {
+            // While every slot is taken the server hangs up on the newcomer, and
+            // writing the request to it can fail with a broken pipe: that is "not
+            // yet", so ask again, as the loop is for.
+            if ask_with(&c, "wrong")["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("token"))
+            {
                 break;
             }
             assert!(

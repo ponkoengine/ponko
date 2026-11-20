@@ -18,9 +18,11 @@
 //!   (a [`BlendMode`](crate::render::BlendMode) or
 //!   [`SpriteMaterial`](crate::render::SpriteMaterial) on the entity applies
 //!   to all its parts).
-//! - Clips key bone translation, rotation and scale (relative to the rest
-//!   pose), slot attachments (sprite swaps), visibility and color, draw
-//!   order, and events. The state machine reuses
+//! - Clips key bone translation, rotation, scale and shear (relative to the
+//!   rest pose, both axes at once or one at a time), mesh vertex offsets
+//!   (deforms), slot attachments (sprite swaps), visibility and color, draw
+//!   order, and events. [`TransformConstraint`]s and [`IkConstraint`]s adjust
+//!   the pose, and a [`ClippingMask`] hides what lies outside it. The state machine reuses
 //!   [`anim`](crate::anim)'s parameters, conditions and transitions.
 //!
 //! A game with no skeleton pays nothing: no system work beyond an empty
@@ -68,9 +70,10 @@ mod skeleton;
 mod spine;
 
 pub use atlas::SpineAtlas;
-pub use clip::{Bezier, BoneTrack, Clip, Curve, Key, SlotTrack};
+pub use clip::{Bezier, BoneChannel, BoneTrack, ChannelTrack, Clip, Curve, DeformTrack, Key, SlotTrack};
 pub use data::{
-    Attachment, Bone, BonePose, IkConstraint, MeshVertex, SkeletonData, SkeletonError, SkinnedMesh, Slot, SpritePart,
+    Attachment, Bone, BonePose, ClippingMask, IkConstraint, MeshVertex, SkeletonData, SkeletonError, SkinnedMesh, Slot,
+    SpritePart, TransformConstraint,
 };
 pub(crate) use draw::draw_skeletons;
 pub use graph::{SkeletonGraph, SkeletonMotion, SkeletonState};

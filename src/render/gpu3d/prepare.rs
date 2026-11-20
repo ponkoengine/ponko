@@ -37,7 +37,51 @@ impl Renderer3D {
     ///
     /// The steps run in this order; each is a method below, and says what it
     /// decides for the later ones.
+    ///
+    /// Its small buffer writes are gathered into one upload (see
+    /// `traffic::WriteBatch`), whose copies [`draw`](Self::draw) puts first.
     pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, input: &Prepare3D<'_>) {
+        self.batch_writes(device, queue, |r| r.prepare_frame(device, queue, input));
+    }
+
+    /// Runs `prepare` (a frame's or a window view's) with this thread's
+    /// buffer writes gathered into one upload, whose copies `draw` records.
+    /// Copies of a frame prepared but not drawn are submitted first: they
+    /// land before anything this one writes.
+    pub(super) fn batch_writes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, prepare: impl FnOnce(&mut Self)) {
+        self.submit_pending_writes(device, queue);
+        let writes = self.writes.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let gathering = traffic::begin_batch(std::mem::take(writes));
+        prepare(self);
+        if gathering {
+            let writes = self.writes.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner);
+            *writes = traffic::end_batch();
+            writes.upload(device, queue);
+        }
+    }
+
+    /// Submits the copies of writes uploaded but not drawn yet, if any.
+    pub(super) fn submit_pending_writes(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut writes = self.writes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if writes.has_copies() {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("frame writes"),
+            });
+            writes.record(&mut encoder);
+            queue.submit([encoder.finish()]);
+        }
+    }
+
+    /// Records the copies of the writes `prepare` uploaded, first in `encoder`.
+    pub(super) fn record_pending_writes(&self, encoder: &mut wgpu::CommandEncoder) {
+        self.writes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .record(encoder);
+    }
+
+    /// The steps of [`prepare`](Self::prepare).
+    fn prepare_frame(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, input: &Prepare3D<'_>) {
         self.resources.mesh_arena.flush(device, queue);
         self.prepare_stencil(device);
         let &Prepare3D {
@@ -62,6 +106,7 @@ impl Renderer3D {
         if !self.upload_instances(device, queue, frame, gi_frame, total) {
             return;
         }
+        self.prepare_crowds(device, queue, frame, (scene.time.0 as f32, scene.time.1));
         self.prepare_shadows_and_lights(device, queue, frame, camera);
         self.upload_uniforms(device, queue, scene, &view, previous_view_proj, gi_frame);
         self.prepare_targets(device, &view, rebuild);
@@ -106,6 +151,7 @@ impl Renderer3D {
         let rebind = self.bind_decal_array(frame.decal_array);
         if self.lights.upload(device, queue, &frame.lights, &frame.decals) || rebind {
             self.frame_bind_group = self.frame_sources.bind_group(device, &self.frame_buffer, &self.lights);
+            self.rebind_view_model(device);
         }
         self.upload_uniforms(device, queue, scene, &view, previous_view_proj, gi_frame);
         self.prepare_targets(device, &view, rebuild);
@@ -175,6 +221,10 @@ impl Renderer3D {
             cache: None,
         });
         self.rebuild_sky_shaders(device);
+        let depth_format = self.shaders.depth_format();
+        if let Some(clouds) = &mut self.clouds {
+            clouds.rebuild_composite(device, samples, depth_format);
+        }
         let float_depth = self.float_depth;
         self.particles = super::super::particles::Particles::new(
             device,
@@ -457,7 +507,11 @@ impl Renderer3D {
     ) {
         list.clear();
         for (index, &(compute, target, material)) in wanted.iter().enumerate() {
-            if material as usize >= self.resources.materials.len() || self.custom_passes.skips(stage, index) {
+            let compute = compute & crate::handle::INDEX_MASK;
+            let Some(material) = self.resources.material_slot(material) else {
+                continue;
+            };
+            if self.custom_passes.skips(stage, index) {
                 continue;
             }
             if self.buffer_computes.get(compute as usize).copied() != Some(target & (1 << 31) != 0) {
@@ -518,15 +572,16 @@ impl Renderer3D {
         }));
         writers.extend(textures(Stage::SceneCompute, &frame.scene_computes));
         writers.extend(textures(Stage::TargetEffect, &frame.target_effects));
-        let (materials, targets) = (&self.resources.materials, &self.render_targets.textures);
+        let (resources, targets) = (&self.resources, &self.render_targets.textures);
         self.custom_passes.run(|pass| {
             // Only target effects render to their target (see `check`).
             let Some(&(_, _, material)) = frame.target_effects.get(pass.index) else {
                 return false;
             };
             let target = targets.iter().find(|(t, _)| *t == pass.target);
-            materials
-                .get(material as usize)
+            resources
+                .material_slot(material)
+                .map(|slot| resources.material(slot))
                 .zip(target)
                 .is_some_and(|(m, (_, texture))| m.bindings.textures.contains(texture))
         });
@@ -551,9 +606,15 @@ impl Renderer3D {
             ..
         } = scene;
         let extra = self.extra;
-        // A sky shader takes the place of the atmosphere and the flat sky.
+        // A sky shader takes the place of the atmosphere and the flat sky,
+        // and so does the sky kit (when the game has no sky shader of its own).
         self.sky_shader = sky.shader.map(|s| s.id).filter(|&id| self.has_sky_shader(id));
-        self.atmosphere = sky.atmosphere || self.sky_shader.is_some();
+        self.kit = sky
+            .kit
+            .filter(|_| sky.shader.is_none())
+            .filter(|_| self.ensure_kit_sky(device));
+        self.atmosphere = sky.atmosphere || self.sky_shader.is_some() || self.kit.is_some();
+        self.prepare_kit(device, scene);
         self.lists.override_base = frame.override_base;
         self.lists.material_overrides.clear();
         let meshes = self.resources.meshes.len() as u32;
@@ -585,13 +646,14 @@ impl Renderer3D {
         self.lists.runs.clear();
         self.lists.runs.extend_from_slice(&frame.runs);
         self.effects.frame.clear();
-        let (effects, materials) = (self.effects.pipelines.len(), self.resources.materials.len());
-        self.effects.frame.extend(
-            frame
-                .effects
-                .iter()
-                .filter(|&&(e, m)| (e as usize) < effects && (m as usize) < materials),
-        );
+        let pipelines = &self.effects.pipelines;
+        self.effects
+            .frame
+            .extend(frame.effects.iter().filter_map(|&(effect, material)| {
+                let effect = effect & crate::handle::INDEX_MASK;
+                pipelines.get(effect as usize)?.as_ref()?;
+                Some((effect, self.resources.material_slot(material)?))
+            }));
         // The game's passes that would break a resource rule are left out
         // (see `custom_passes.rs`).
         self.check_custom_passes(frame);
@@ -599,7 +661,7 @@ impl Renderer3D {
         self.effects.prepare_targets(
             device,
             &frame.target_effects,
-            &self.resources.materials,
+            &self.resources,
             &self.render_targets.textures,
             &self.shaders.layout,
             |i| custom.skips(Stage::TargetEffect, i),
@@ -633,7 +695,8 @@ impl Renderer3D {
         // then those of global illumination's probe views.
         let total = frame.instances.len()
             + frame.views.iter().map(|v| v.frame.instances.len()).sum::<usize>()
-            + gi_frame.map_or(0, |g| g.capture.instances.len());
+            + gi_frame.map_or(0, |g| g.capture.instances.len())
+            + frame.view_model.as_ref().map_or(0, |v| v.instances.len());
         let mut views = std::mem::take(&mut self.lists.views);
         let mut used = 0;
         let mut offset = frame.instances.len() as u32;
@@ -685,6 +748,9 @@ impl Renderer3D {
             self.lists.gi_face_runs.extend(g.face_runs.iter().map(moved));
             self.lists.gi_faces.extend_from_slice(&g.faces);
         }
+        // The view model's held items after them (see `view_model.rs`).
+        let offset = offset + gi_frame.map_or(0, |g| g.capture.instances.len() as u32);
+        self.prepare_view_model(device, frame, offset);
         // Skinned models: only those some pass draws are posed (by the
         // main frame, for every view).
         if extra {
@@ -703,7 +769,8 @@ impl Renderer3D {
             .iter()
             .chain(shadow_views(self.lists.cascades, self.lists.light_views).flat_map(|v| &self.lists.shadow_runs[v]))
             .chain(self.lists.views.iter().flat_map(|(_, r, _)| r))
-            .chain(&self.lists.gi_runs);
+            .chain(&self.lists.gi_runs)
+            .chain(self.view_model_runs());
         for &(mesh, _, _) in runs {
             if let Some(d) = (mesh & !FADED)
                 .checked_sub(real)
@@ -751,6 +818,7 @@ impl Renderer3D {
             && frame.particles.instances.is_empty()
             && frame.particles.strips.runs.is_empty()
             && frame.debug_lines.is_empty()
+            && !self.crowds.has_draws()
         {
             self.too_many = false;
             return false;
@@ -790,6 +858,7 @@ impl Renderer3D {
         for instances in std::iter::once(&frame.instances)
             .chain(views)
             .chain(gi_frame.map(|g| &g.capture.instances))
+            .chain(frame.view_model.as_ref().map(|v| &v.instances))
             .chain(std::iter::once(&self.lists.blended))
         {
             let bytes = bytemuck::cast_slice(instances);
@@ -836,6 +905,7 @@ impl Renderer3D {
         let rebind = self.bind_decal_array(frame.decal_array);
         if self.lights.upload(device, queue, &frame.lights, &frame.decals) || rebind {
             self.frame_bind_group = self.frame_sources.bind_group(device, &self.frame_buffer, &self.lights);
+            self.rebind_view_model(device);
         }
         if rebind {
             for (_, target) in &mut self.render_targets.views {
@@ -907,7 +977,11 @@ impl Renderer3D {
         for (mine, &[x, y, side]) in light_rect.iter_mut().zip(&frame.lights.shadow_tiles) {
             *mine = [x as f32 / atlas, y as f32 / atlas, side as f32 / atlas, 0.0];
         }
+        let past_time = self.history.time.unwrap_or(time);
+        let (time_seconds, time_fraction) = super::frame::split_elapsed(time.0, past_time.0);
         let mut uniform = FrameUniform {
+            time_seconds,
+            time_fraction,
             light_view_proj,
             light_rect,
             probes: frame.probes,
@@ -945,10 +1019,7 @@ impl Renderer3D {
             cascade_texel: frame.cascade_texel,
             // zw: the last drawn frame's, which the motion pass runs
             // `vertex` as of (this frame's on the first).
-            time: {
-                let past = self.history.time.unwrap_or(time);
-                [time.0, time.1, past.0, past.1]
-            },
+            time: [time.0 as f32, time.1, past_time.0 as f32, past_time.1],
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
             screen: [
                 size.0 as f32,
@@ -989,6 +1060,7 @@ impl Renderer3D {
                 Some(_) => sky.shader_params.map(|p| p.to_array()),
                 None => [[0.0; 4]; 4],
             },
+            sky_kit: self.kit_uniform(device, queue, (sun, camera, sky.stars), size, unjittered),
         };
         if let (Some(g), Some(gi)) = (gi_frame, &self.gi) {
             let (n, origin) = (g.grid.counts.as_vec3(), g.grid.origin.as_vec3());
@@ -999,9 +1071,9 @@ impl Renderer3D {
             ];
         }
         // A three-color ambient, from the authored colors.
-        let authored_ambient = match self.sky_shader {
-            Some(_) => sky.authored_ambient,
-            None => !sky.atmosphere,
+        let authored_ambient = match (self.sky_shader, self.kit) {
+            (Some(_), _) | (None, Some(_)) => sky.authored_ambient,
+            (None, None) => !sky.atmosphere,
         };
         let equator = match sky.equator_color {
             Some(c) if authored_ambient => {
@@ -1041,24 +1113,35 @@ impl Renderer3D {
                 equator[2],
                 equator[3],
             ],
-            self.sky_shader.map(|id| {
-                let mut key = [0.0; 18];
-                key[0] = id as f32;
-                key[1] = f32::from(sky.authored_ambient);
-                for (k, v) in key[2..]
-                    .iter_mut()
-                    .zip(sky.shader_params.iter().flat_map(|p| p.to_array()))
-                {
-                    *k = v;
-                }
-                key
-            }),
+            self.sky_shader
+                .map(|id| {
+                    let mut key = [0.0; 18];
+                    key[0] = id as f32;
+                    key[1] = f32::from(sky.authored_ambient);
+                    for (k, v) in key[2..]
+                        .iter_mut()
+                        .zip(sky.shader_params.iter().flat_map(|p| p.to_array()))
+                    {
+                        *k = v;
+                    }
+                    key
+                })
+                .or_else(|| {
+                    // The kit, as a sky shader none of the game's ids can be.
+                    let kit = self.kit?;
+                    let mut key = [0.0; 18];
+                    key[0] = -1.0;
+                    key[1] = f32::from(sky.authored_ambient);
+                    key[2..].copy_from_slice(&kit.bake_key(self.cloud_drift));
+                    Some(key)
+                }),
             self.atmosphere,
             lighting.ambient_intensity,
             authored_ambient && self.atmosphere,
             [uniform.sky, uniform.ground, equator],
         );
         sync_frame(queue, &self.frame_buffer, 0, &mut self.frame_mirror, &uniform);
+        self.upload_view_model(queue, frame, &uniform, view_proj * unjittered.inverse());
         if self.extra {
             // A window view: its frame alone; the probes, target cameras
             // and shadow views are the main frame's.
@@ -1106,6 +1189,9 @@ impl Renderer3D {
                 1.0 / view.size.1.max(1) as f32,
             ];
             theirs.sky_light[3] = (view.camera.y / 1000.0).max(0.0);
+            // The sky kit's cloud passes are the main view's: target cameras
+            // draw the flat cloud layer.
+            theirs.sky_kit[5][0] = 0.0;
             let target = &mut self.render_targets.views[target].1;
             sync_frame(queue, &target.frame_buffer, 0, &mut target.frame_mirror, &theirs);
         }
@@ -1122,6 +1208,7 @@ impl Renderer3D {
             theirs.shadow = [1.0, 1.0 / GI_SHADOW_SIZE as f32, 1.5, f32::MAX];
             theirs.sun_view_proj[0] = g.sun_view_proj.to_cols_array_2d();
             theirs.cascade_texel[0] = g.sun_texel;
+            theirs.sky_kit[5][0] = 0.0;
             for (i, view_proj) in g.face_view_proj.iter().enumerate() {
                 let probe = g.updates[i / 6].position;
                 theirs.view_proj = view_proj.to_cols_array_2d();

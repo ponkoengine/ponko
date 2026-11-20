@@ -38,7 +38,8 @@ plugins, so the tests can build the same game without a window:
 2. `Rules`: one sim system, after the physics step, is the whole game. It
    reads only the `Intent`, the world and the physics results, so a test can
    write the `Intent` itself and get the same game on every run.
-3. `Presentation`: the camera, the glows, the fade between levels, the text.
+3. `Presentation`: the glows, the fade between levels, the text (the camera
+   is the engine's, see below).
    None of it changes the game.
 4. `Music`: the music loop, started once.
 
@@ -146,10 +147,13 @@ The pause screen holds only the physics step: a system before the step calls
 
 ## Camera, particles and sound
 
-The camera is a [`FollowCamera`](camera-ui.md#camera-rigs): it eases toward
-a point ahead of the way the hero faces, never shows outside the level, and
-a [`PixelPerfect`](camera-ui.md#pixel-art) keeps it at a whole zoom (three
-times, in the 960 x 540 window) on the pixel grid:
+The camera is a [`FollowCamera`](camera-ui.md#camera-rigs) the engine moves:
+a resource, and a `CameraTarget` on the hero. It eases toward a point ahead
+of the way the hero runs, never shows outside the level (each level sets its
+`bounds`), and its [`PixelPerfect`](camera-ui.md#pixel-art) keeps it at a
+whole zoom (three times, in the 960 x 540 window) on the pixel grid. A new
+hero (a new level, a respawn, a loaded save) is a new target, so the camera
+cuts to it. The game has no camera system:
 
 ```rust
 {{#include ../../examples/ember_hop/game.rs:camera}}

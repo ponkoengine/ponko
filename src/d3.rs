@@ -81,6 +81,8 @@ pub use crate::three::{
     GltfNode, GltfOptions, GltfRoot, GltfScene, GltfSceneNode, NodeBody, NodeCollider, NodeProperties, SpawnPoint,
     gltf_properties_schema,
 };
+#[doc(inline)]
+pub use crate::three::{HeldItem, VIEW_MODEL_LAYER, ViewModel};
 
 #[doc(inline)]
 pub use crate::audio::spatial::{

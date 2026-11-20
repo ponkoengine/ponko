@@ -21,6 +21,9 @@ Controls
   Pause           Esc or P, or Start
   Menus           the mouse, or Tab and the arrow keys, and Enter; Esc goes back
 
+On a touch screen two sticks (walk and turn), Jump and Pulse buttons and a
+pause button appear; tap the menus' buttons.
+
 Three touches from a crawler and the run is lost: "Try again" starts from the
 last shrine. A stunned crawler doesn't hurt.
 

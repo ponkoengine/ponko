@@ -104,9 +104,9 @@ macro_rules! gpu {
 
 /// One view's frustum and eye, for this frame's culling of every batch.
 #[derive(Clone, Copy, PartialEq)]
-struct SlotView {
-    planes: [glam::Vec4; 6],
-    eye: Vec3,
+pub(super) struct SlotView {
+    pub(super) planes: [glam::Vec4; 6],
+    pub(super) eye: Vec3,
 }
 
 /// The renderer's batch settings and per-frame scratch (kept between
@@ -115,8 +115,8 @@ struct SlotView {
 pub(crate) struct Batching {
     /// The path batches made from now on take (tests and benchmarks force one).
     pub path: BatchPath,
-    /// This frame's views, by slot.
-    slots: Vec<SlotView>,
+    /// This frame's views, by slot (crowds cull against them too).
+    pub(super) slots: Vec<SlotView>,
     /// Every live batch level as (mesh, batch, level), sorted: batches of
     /// one mesh are drawn together, so they share its buffers, pipeline
     /// and material.
@@ -143,7 +143,20 @@ pub(crate) struct Batching {
     built: u32,
     /// Scratch for the probes' views' lists (see `keep_probe_visible`).
     probe_runs: Vec<(u32, u32)>,
+    /// While batches keep `origin_radii` (global illumination is on, or
+    /// was until a moment ago): the frames since it was last on.
+    probe_radii: Option<u32>,
+    /// Tests and benchmarks: GPU-culled probe face views without the size
+    /// cut, as before it, to compare.
+    #[cfg(test)]
+    pub no_probe_cut: bool,
 }
+
+/// Global illumination off for this many prepared frames in a row counts
+/// as off for good: batches of distance levels drop the radii its probes'
+/// views cut by (see `Renderer3D::keep_probe_radii`). A game turning it
+/// off for a moment (a menu, a cut) doesn't build them again after.
+const PROBE_RADII_FRAMES: u32 = 120;
 
 /// What `Batching::reported` flags.
 const SKIPPED_VIEW: u32 = 1;
@@ -470,8 +483,12 @@ pub(crate) struct StaticBatch {
     /// Batches of distance levels on the CPU path, whose `distances` hold
     /// origins: four radii at a time of a sphere around each origin that
     /// holds the instance (global illumination's probe views cut by size
-    /// and view with them, see `keep_probe_visible`). 4 bytes an instance.
+    /// and view with them, see `keep_probe_visible`). 4 bytes an instance,
+    /// only while global illumination is on (see `keep_probe_radii`).
     origin_radii: Vec<glam::Vec4>,
+    /// What `origin_radii` are made from, for those batches: the
+    /// instances' bounding spheres, shared with the engine's batch.
+    spheres: Option<std::sync::Arc<Vec<[f32; 4]>>>,
     pub(super) compute: bool,
     pub(crate) route: Route,
     arguments: Vec<Vec<u32>>,
@@ -517,6 +534,30 @@ impl StaticBatch {
                     .any(|l| l.shadows && (l.min_distance > 0.0 || l.max_distance.is_finite()))
             }
     }
+    /// Builds `origin_radii` from the shared spheres (see the field),
+    /// four at a time as `distances` holds the origins, and has every
+    /// list made without them built again.
+    fn make_origin_radii(&mut self) {
+        let Some(spheres) = self.spheres.as_deref().filter(|s| !s.is_empty()) else {
+            return;
+        };
+        let last = spheres.len() - 1;
+        self.origin_radii = self
+            .distances
+            .iter()
+            .enumerate()
+            .map(|(quad, d)| {
+                glam::Vec4::from_array(std::array::from_fn(|lane| {
+                    let [x, y, z, radius] = spheres[(quad * 4 + lane).min(last)];
+                    Vec3::new(x, y, z).distance(Vec3::new(d.x[lane], d.y[lane], d.z[lane])) + radius
+                }))
+            })
+            .collect();
+        for seen in &mut self.seen {
+            seen.0 = None;
+        }
+    }
+
     /// Whether the level has anything to draw in the view.
     fn draws(&self, slot: usize, level: usize) -> bool {
         if self.compute {
@@ -728,12 +769,12 @@ fn range(buffer: &wgpu::Buffer, (at, bytes): (u64, u64)) -> wgpu::BindingResourc
     })
 }
 
-fn planes(matrix: Mat4) -> [glam::Vec4; 6] {
+pub(super) fn planes(matrix: Mat4) -> [glam::Vec4; 6] {
     let r = [matrix.row(0), matrix.row(1), matrix.row(2), matrix.row(3)];
     [r[3] + r[0], r[3] - r[0], r[3] + r[1], r[3] - r[1], r[2], r[3] - r[2]]
         .map(|p| p / p.truncate().length().max(f32::MIN_POSITIVE))
 }
-fn intersects(min: Vec3, max: Vec3, planes: &[glam::Vec4; 6], eye: Vec3, near: f32, far: f32) -> bool {
+pub(super) fn intersects(min: Vec3, max: Vec3, planes: &[glam::Vec4; 6], eye: Vec3, near: f32, far: f32) -> bool {
     let center = (min + max) * 0.5;
     let radius = (max - min).length() * 0.5;
     let distance = center.distance(eye);
@@ -1013,7 +1054,7 @@ impl Renderer3D {
                     // The batch's block: a header, its records, its cells.
                     let mut source = Vec::with_capacity(1 + 6 * count as usize + 2 * batch.cells.len());
                     source.push([count as f32, batch.cells.len() as f32, 0.0, 0.0]);
-                    for (i, sphere) in batch.instances.iter().zip(&batch.spheres) {
+                    for (i, sphere) in batch.instances.iter().zip(batch.spheres.iter()) {
                         source.extend_from_slice(&i.model);
                         source.push(i.color);
                         source.push(*sphere);
@@ -1093,7 +1134,7 @@ impl Renderer3D {
                     .collect()
             })
             .collect();
-        StaticBatch {
+        let mut made = StaticBatch {
             levels: batch.levels.clone(),
             vertices,
             compute: pooled.is_some(),
@@ -1134,27 +1175,19 @@ impl Renderer3D {
             } else {
                 Vec::new()
             },
-            origin_radii: if cpu && !batch.legacy_distance {
-                (0..batch.instances.len().div_ceil(4))
-                    .map(|quad| {
-                        glam::Vec4::from_array(std::array::from_fn(|lane| {
-                            let i = (quad * 4 + lane).min(batch.instances.len() - 1);
-                            let [x, y, z, radius] = batch.spheres[i];
-                            let origin = batch.instances[i].model[3];
-                            Vec3::new(x, y, z).distance(Vec3::new(origin[0], origin[1], origin[2])) + radius
-                        }))
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            },
+            origin_radii: Vec::new(),
+            spheres: (cpu && !batch.legacy_distance).then(|| batch.spheres.clone()),
             route,
             arguments,
             options: batch.options,
             legacy_distance: batch.legacy_distance,
             count,
             blend,
+        };
+        if self.batching.probe_radii.is_some() {
+            made.make_origin_radii();
         }
+        made
     }
 
     /// How the live batches are routed, and what the GPU-driven ones hold.
@@ -1190,6 +1223,31 @@ impl Renderer3D {
         stats.cull_jobs = self.batching.jobs;
         stats.views_skipped = self.batching.skipped;
         stats
+    }
+
+    /// Batches of distance levels on the CPU path keep the radii global
+    /// illumination's probe views cut by only while it is on: built for
+    /// every such batch the first frame it is on (and for those made while
+    /// it is), dropped once it was off for [`PROBE_RADII_FRAMES`]. Off, a
+    /// frame costs one comparison here and nothing per instance.
+    fn keep_probe_radii(batching: &mut Batching, batches: &mut [Option<StaticBatch>], gi_on: bool) {
+        match (gi_on, &mut batching.probe_radii) {
+            (true, Some(off)) => *off = 0,
+            (true, None) => {
+                batching.probe_radii = Some(0);
+                for batch in batches.iter_mut().flatten() {
+                    batch.make_origin_radii();
+                }
+            }
+            (false, Some(off)) if *off + 1 < PROBE_RADII_FRAMES => *off += 1,
+            (false, Some(_)) => {
+                batching.probe_radii = None;
+                for batch in batches.iter_mut().flatten() {
+                    batch.origin_radii = Vec::new();
+                }
+            }
+            (false, None) => {}
+        }
     }
 
     /// Says a limit was hit, once until `clear` is called for it.
@@ -1236,6 +1294,8 @@ impl Renderer3D {
         let slots = gi_slot + gi_views.len();
         let probe = |slot: usize| slot.checked_sub(gi_slot).and_then(|k| gi_views[k].1);
         self.lists.gi_batch_slot = (!gi_views.is_empty()).then_some(gi_slot);
+        let gi_on = frame.gi.is_some() && self.frame_sources.gi;
+        Self::keep_probe_radii(&mut self.batching, &mut self.static_batches, gi_on);
         let batching = &mut self.batching;
         batching.slots.clear();
         for slot in 0..slots {
@@ -1266,10 +1326,21 @@ impl Renderer3D {
         // Whether the compute pass has the grid (the CPU path reads it itself).
         let mut gpu_grid = false;
         if let Some(cull) = &mut self.static_culling {
-            cull.fit_views(device, slots);
+            // Global illumination's probes updated this frame, after the
+            // views: the probes' face views of GPU-culled batches leave out
+            // what is under a pixel from all of them (see `instances.wgsl`).
+            let probes = gi_views.iter().skip(GI_BATCH_FACES).step_by(6).filter_map(|v| v.1);
+            let probe_floats = probes.clone().count() * 4;
+            cull.fit_views(device, slots + probe_floats.div_ceil(VIEW));
+            let views = slots.min(cull.max_views);
+            let probes_fit = views * VIEW + probe_floats <= cull.view_room * VIEW;
             let mut header = [0.0f32; 24];
             // Where the views start, after the header and the grid's room.
             header[20] = f32::from_bits(cull.grid_floats as u32);
+            // Where the probes start, how many, and the size cut.
+            header[21] = f32::from_bits((cull.grid_floats as usize + views * VIEW) as u32);
+            header[22] = f32::from_bits(if probes_fit { (probe_floats / 4) as u32 } else { 0 });
+            header[23] = crate::three::gi::GI_SMALLEST;
             if let Some((g, (w, h, depth))) = grid {
                 let depth: &[u8] = bytemuck::cast_slice(depth);
                 if 96 + depth.len() as u64 <= cull.grid_floats * 4 {
@@ -1299,6 +1370,11 @@ impl Renderer3D {
                     cull.views.extend(plane.to_array());
                 }
                 cull.views.extend(view.eye.extend(0.0).to_array());
+            }
+            if probes_fit {
+                for probe in probes {
+                    cull.views.extend(probe.extend(0.0).to_array());
+                }
             }
             cull.views_mirror.upload(
                 queue,
@@ -1548,6 +1624,10 @@ impl Renderer3D {
         let most_groups = u64::from(side) * u64::from(side) * u64::from(max_groups);
         let most_jobs = u64::from(max_groups) * 64;
         let occlusion = batching.occlusion;
+        // The probes' face views (global illumination) cut by size.
+        let probe_faces = self.lists.gi_batch_slot.map_or(0..0, |gi| gi + 1..gi + GI_BATCH_FACES);
+        #[cfg(test)]
+        let probe_faces = if batching.no_probe_cut { 0..0 } else { probe_faces };
         for batch in self.static_batches.iter_mut().flatten() {
             let Some(pooled) = &batch.pooled else { continue };
             let pool = &mut culling.pools[pooled.pool];
@@ -1592,7 +1672,9 @@ impl Renderer3D {
                     }
                     continue;
                 }
-                let flags = u32::from(batch.legacy_distance) | (u32::from(view.slot == 0 && occlusion) << 1);
+                let flags = u32::from(batch.legacy_distance)
+                    | (u32::from(view.slot == 0 && occlusion) << 1)
+                    | (u32::from(probe_faces.contains(&view.slot)) << 2);
                 page.table.extend([
                     block,
                     (view.visibility.0 / 4) as u32,
@@ -1797,7 +1879,7 @@ impl Renderer3D {
         let mut level_bound = false;
         for (part, (range, material)) in mesh.parts.iter().enumerate() {
             let material = self.part_material(run_mesh, part, *material);
-            let m = &self.resources.materials[material as usize];
+            let m = self.resources.material(material);
             let Some(role) = self.draw_role(kind, material, m) else {
                 continue;
             };
@@ -1974,6 +2056,9 @@ impl Culling {
 
 #[cfg(test)]
 impl Renderer3D {
+    /// See [`PROBE_RADII_FRAMES`].
+    pub(crate) const PROBE_RADII_FRAMES: u32 = PROBE_RADII_FRAMES;
+
     /// Instances batch `id` (on the CPU path) draws in this frame's probe
     /// views (global illumination), summed over the views and levels.
     pub(crate) fn probe_view_instances(&self, id: u32) -> u32 {
@@ -1989,6 +2074,45 @@ impl Renderer3D {
             .flatten()
             .map(|&(_, count)| count)
             .sum()
+    }
+
+    /// Instances GPU-driven batch `id` drew in the last frame's probe face
+    /// views (global illumination), summed over the views and levels: read
+    /// back from their indirect draw arguments.
+    pub(crate) fn gpu_probe_view_instances(&self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32) -> u32 {
+        let (Some(gi), Some(Some(batch))) = (self.lists.gi_batch_slot, self.static_batches.get(id as usize)) else {
+            return 0;
+        };
+        let faces = gi + 1..gi + crate::three::gi::GI_BATCH_FACES;
+        let (Some(culling), Some(pooled)) = (&self.static_culling, &batch.pooled) else {
+            return 0;
+        };
+        let pool = &culling.pools[pooled.pool];
+        batch
+            .views
+            .iter()
+            .filter(|v| v.active && faces.contains(&v.slot))
+            .map(|v| {
+                let count = traffic::read_back(device, queue, &pool.pages[v.page].args.buffer, v.args + 4, 4);
+                u32::from_ne_bytes(count.try_into().expect("4 bytes"))
+            })
+            .sum()
+    }
+
+    /// Bytes batch `id` keeps for global illumination's probe views on the
+    /// CPU path (its `origin_radii`), and whether it shares the engine's
+    /// bounding spheres instead of holding a copy.
+    pub(crate) fn probe_radii_bytes(&self, id: u32) -> (usize, bool) {
+        let Some(Some(batch)) = self.static_batches.get(id as usize) else {
+            return (0, false);
+        };
+        (
+            batch.origin_radii.capacity() * size_of::<glam::Vec4>(),
+            batch
+                .spheres
+                .as_ref()
+                .is_some_and(|s| std::sync::Arc::strong_count(s) > 1),
+        )
     }
 
     /// Of every live batch row: how many views (GPU path) and per-view lists

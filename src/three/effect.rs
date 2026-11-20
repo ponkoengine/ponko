@@ -2,8 +2,9 @@
 //! bloom and tone mapping (sun shafts, underwater, heat haze, outlines).
 
 use super::Material;
+use super::target::RenderTarget;
 use crate::gfx::Graphics;
-use crate::texture::Texture;
+use crate::handle::INDEX_MASK;
 
 /// A screen effect shader, made with [`Graphics::load_effect`](crate::gfx::Graphics::load_effect) or
 /// [`Graphics::create_effect`](crate::gfx::Graphics::create_effect); a cheap handle. Run it by adding a
@@ -94,8 +95,8 @@ impl ScreenEffect {
 ///   [`RenderPasses::scene_compute`](crate::render::RenderPasses::scene_compute)), which
 ///   run earlier, see the one from the frame before (all 0 at first).
 ///
-/// **Resources.** `target` must be made by [`Graphics::create_render_target`](crate::gfx::Graphics::create_render_target);
-/// other textures are skipped. Its whole contents are replaced each frame. The
+/// **Resources.** `target` is a [`RenderTarget`](crate::render::RenderTarget), made by
+/// [`Graphics::create_render_target`](crate::gfx::Graphics::create_render_target). Its whole contents are replaced each frame. The
 /// game owns it and keeps it until it stops using it; the engine only writes
 /// it. These entries can't run, and are skipped with a warning naming the
 /// entry and the render target: one whose material samples its own `target`
@@ -118,7 +119,7 @@ pub struct TargetEffect {
     /// The shader, made like a screen effect's.
     pub effect: Effect,
     /// What it writes: made by [`Graphics::create_render_target`](crate::gfx::Graphics::create_render_target).
-    pub target: Texture,
+    pub target: RenderTarget,
     /// Where its values and textures come from. `None`: the default
     /// material (all custom values 0).
     pub material: Option<Material>,
@@ -129,12 +130,12 @@ impl TargetEffect {
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
-    /// # fn f(ctx: &mut Ctx, e: ponko::render::Effect, t: Texture) {
+    /// # fn f(ctx: &mut Ctx, e: ponko::render::Effect, t: ponko::render::RenderTarget) {
     /// ctx.scene3d.passes.target_effects.push(ponko::render::TargetEffect::new(e, t));
     /// # }
     /// ```
     #[must_use]
-    pub fn new(effect: Effect, target: Texture) -> Self {
+    pub fn new(effect: Effect, target: RenderTarget) -> Self {
         Self {
             effect,
             target,
@@ -146,7 +147,7 @@ impl TargetEffect {
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
-    /// # fn f(e: ponko::render::Effect, t: Texture, m: ponko::render::Material) {
+    /// # fn f(e: ponko::render::Effect, t: ponko::render::RenderTarget, m: ponko::render::Material) {
     /// let pass = ponko::render::TargetEffect::new(e, t).with_material(m);
     /// # }
     /// ```
@@ -223,9 +224,11 @@ impl Graphics {
             Err(e) if self.keeps_failed_load(&origin) => {
                 let e = e.with_path(path);
                 Self::report_stand_in(path, &e);
-                let id = self.assets3d.effects;
-                self.compile_effect(path, super::EFFECT_STAND_IN, None).map_err(|_| e)?;
-                self.assets3d.effects += 1;
+                let id = self.assets3d.effect_ids.next("effect");
+                self.compile_effect(path, super::EFFECT_STAND_IN, id, false)
+                    .map_err(|_| e)?;
+                let id = self.assets3d.effect_ids.make("effect");
+                self.keep_shader_name(super::ShaderKind::Effect, id, path);
                 self.assets3d.effects_live.insert(id);
                 self.asset_ledger.made(crate::inventory::AssetClass::Effect, id);
                 Effect { id }
@@ -278,10 +281,11 @@ impl Graphics {
     /// });
     /// ```
     pub fn try_create_effect(&mut self, name: &str, source: &str) -> Result<Effect, crate::error::Error> {
-        let id = self.assets3d.effects;
-        let compiled = self.compile_effect(name, source, None);
+        let id = self.assets3d.effect_ids.next("effect");
+        let compiled = self.compile_effect(name, source, id, false);
         self.record_shader(name, super::ShaderKind::Effect, false, compiled)?;
-        self.assets3d.effects += 1;
+        let id = self.assets3d.effect_ids.make("effect");
+        self.keep_shader_name(super::ShaderKind::Effect, id, name);
         self.assets3d.effects_live.insert(id);
         self.asset_ledger.made(crate::inventory::AssetClass::Effect, id);
         Ok(Effect { id })
@@ -292,7 +296,8 @@ impl Graphics {
         &mut self,
         name: &str,
         source: &str,
-        replace: Option<u32>,
+        id: u32,
+        replace: bool,
     ) -> Result<(), Box<super::ShaderDiagnostic>> {
         #[cfg(feature = "window")]
         crate::render::diagnose(
@@ -304,15 +309,14 @@ impl Graphics {
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
         {
-            let built = match replace {
-                Some(id) => renderer.replace_effect(id, name, source),
-                None => renderer
-                    .create_effect(name, source)
-                    .map(|gpu_id| debug_assert_eq!(gpu_id, self.assets3d.effects)),
-            };
-            built?;
+            let slot = id & INDEX_MASK;
+            if replace {
+                renderer.replace_effect(slot, name, source)?;
+            } else {
+                renderer.create_effect(slot, name, source)?;
+            }
         }
-        let _ = (name, source, replace);
+        let _ = (name, source, id, replace);
         Ok(())
     }
 
@@ -321,7 +325,7 @@ impl Graphics {
         if !self.assets3d.effects_live.contains(id) {
             return Ok(());
         }
-        let compiled = self.compile_effect(name, source, Some(id));
+        let compiled = self.compile_effect(name, source, id, true);
         Ok(self.record_shader(name, super::ShaderKind::Effect, true, compiled)?)
     }
 
@@ -331,9 +335,16 @@ impl Graphics {
         if !self.assets3d.effects_live.remove(id) {
             return;
         }
+        self.assets3d.effect_ids.release(id);
+        self.forget_shader_name(super::ShaderKind::Effect, id);
         self.asset_ledger.freed(crate::inventory::AssetClass::Effect, id);
         self.assets3d.loaded_effects.retain(|_, e| e.id != id);
         self.watcher
             .forget(|a| matches!(a, crate::hot_reload::Asset::Effect(e) if *e == id));
+        if let Some(renderer) = self.renderer.as_mut()
+            && !self.headless
+        {
+            renderer.free_effect(id & INDEX_MASK);
+        }
     }
 }

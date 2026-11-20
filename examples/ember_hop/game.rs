@@ -8,8 +8,9 @@
 //! 2. [`Rules`]: `rules` (sim system, after the physics step) is the whole
 //!    game. It reads only the `Intent`, the world and the physics results, so
 //!    a test can write the `Intent` itself and get the same game every run.
-//! 3. [`Presentation`]: the camera that follows the hero, the glows, the
-//!    fade between levels and the text. None of it changes the game.
+//! 3. [`Presentation`]: the glows, the fade between levels and the text.
+//!    None of it changes the game. The camera that follows the hero is the
+//!    engine's: a `FollowCamera` resource and a `CameraTarget` on the hero.
 //! 4. [`Music`]: the music, started once.
 //!
 //! What the engine does for it: levels are Tiled maps (`assets/ember_hop/levels`)
@@ -45,6 +46,7 @@ use ponko::sheet::Animation;
 use ponko::state::State;
 use ponko::storage::Storage;
 use ponko::tilemap::{AutoTile, LevelLayer, LevelObject, LevelOptions, LevelRoot, TileMap};
+use ponko::ui::UiTransition;
 use serde::{Deserialize, Serialize};
 
 // ---- tuning ---------------------------------------------------------------------
@@ -400,11 +402,25 @@ pub fn bindings() -> ActionMap {
         ),
     );
     map.set("pause", with_pad(keys(&[Key::Escape, Key::P]), &[GamepadButton::Start]));
+    // On a touch screen: a tap starts a run (and resumes), a long press
+    // continues the saved one.
+    let touch = |mut action: Action, gesture| {
+        if let Action::Button(list) = &mut action {
+            list.push(ButtonBinding::Gesture(gesture));
+        }
+        action
+    };
     map.set(
         "confirm",
-        with_pad(keys(&[Key::Enter, Key::Space]), &[GamepadButton::South]),
+        touch(
+            with_pad(keys(&[Key::Enter, Key::Space]), &[GamepadButton::South]),
+            Gesture::Tap,
+        ),
     );
-    map.set("continue", with_pad(keys(&[Key::C]), &[GamepadButton::North]));
+    map.set(
+        "continue",
+        touch(with_pad(keys(&[Key::C]), &[GamepadButton::North]), Gesture::LongPress),
+    );
     map.set(
         "back",
         with_pad(keys(&[Key::Q]), &[GamepadButton::East, GamepadButton::Select]),
@@ -424,12 +440,28 @@ impl Plugin for Controls {
         ctx.input.set_actions(bindings());
         ctx.world.insert_resource(Act::resolve(ctx));
         ctx.world.insert_resource(Intent::default());
+        ctx.input.set_touch_controls(touch_controls());
     }
 }
+
+// ANCHOR: touch
+/// The on-screen controls, shown on touch screens only: a stick to run,
+/// jump and flare buttons, and pause in the corner while a run is on.
+pub fn touch_controls() -> ponko::ui::touch::TouchControls {
+    ponko::ui::touch::TouchControls::new()
+        .stick("move")
+        .button("jump", "Jump")
+        .button("flare", "Flare")
+        .corner_button("pause", "II")
+}
+// ANCHOR_END: touch
 
 // ANCHOR: read_input
 /// Frame system: named actions to [`Intent`].
 pub fn read_input(ctx: &mut Ctx) {
+    // Pause on the title would quit: the touch button is there in a run only.
+    let in_run = matches!(screen(&ctx.world), Screen::Playing | Screen::Paused);
+    ctx.input.set_touch_control_shown("pause", in_run);
     let act = *ctx.world.resource::<Act>();
     let input = &ctx.input;
     let dpad =
@@ -490,8 +522,15 @@ impl Plugin for Rules {
         let (progress, status) = Progress::load(&mut ctx.storage);
         ctx.world.insert_resource(progress);
         ctx.world.insert_resource(status);
+        // ANCHOR: camera
+        // The camera: a `FollowCamera` resource the engine moves every frame
+        // toward a point ahead of the `CameraTarget` (the hero, see
+        // `spawn_hero`), inside the level (`spawn_level` sets the bounds),
+        // on the pixel grid. No camera system.
         let look = FollowCamera::default().with_look_ahead(vec2(24.0, 0.0));
-        ctx.world.insert_resource(look.with_offset(vec2(0.0, -12.0)));
+        ctx.world
+            .insert_resource(look.with_offset(vec2(0.0, -12.0)).with_pixel_perfect(PIXELS));
+        // ANCHOR_END: camera
         // The game starts on the title screen (`Game::state`): only its scene.
         show_title(ctx);
     }
@@ -644,8 +683,7 @@ pub fn enter_level(ctx: &mut Ctx, index: usize) {
         .iter()
         .find(|o| o.class == "Spawn")
         .map_or(vec2(40.0, 40.0), |o| o.position);
-    spawn_hero(ctx, start);
-    snap_camera(ctx);
+    spawn_hero(ctx, start); // a new hero: the camera cuts to it
 }
 
 /// The hero at `at`.
@@ -662,6 +700,7 @@ pub fn spawn_hero(ctx: &mut Ctx, at: Vec2) -> Entity {
         Collider::rect(HERO_SIZE).offset(HERO_OFFSET).friction(0.0),
         Velocity::default(),
         Player::default(),
+        CameraTarget,
         ParticleEmitter::new(trail(art.ember)),
     ))
 }
@@ -731,6 +770,10 @@ pub fn spawn_level(ctx: &mut Ctx, index: usize, loaded: bool) -> Result<Entity, 
         size,
         title,
     };
+    // The camera never shows outside the level.
+    if let Some(follow) = ctx.world.get_resource_mut::<FollowCamera>() {
+        follow.bounds = Some(Rect::new(0.0, 0.0, size.x, size.y));
+    }
     Ok(root)
 }
 
@@ -746,8 +789,8 @@ pub fn rehydrate(ctx: &mut Ctx) {
     let heroes: Vec<Entity> = ctx.world.query::<(Entity, &Player)>().iter().map(|(e, _)| e).collect();
     for e in heroes {
         ctx.world.insert(e, Velocity::default());
+        ctx.world.insert(e, CameraTarget); // saves from before it was saved
     }
-    snap_camera(ctx);
 }
 
 /// Saves the run in its slot. A failed write is shown, and play goes on.
@@ -1230,51 +1273,21 @@ fn tick_bursts(ctx: &mut Ctx, dt: f32) {
 
 // ---- layer 3: presentation ----------------------------------------------------------
 
-/// The camera, the glows, the fade and the text.
+/// The glows, the fade and the text.
 pub struct Presentation;
 
 impl Plugin for Presentation {
     fn build(&self, game: Game) -> Game {
-        game.add(Phase::Late, follow_camera).add(Phase::Draw, draw_overlay)
+        game.add(Phase::Draw, draw_overlay)
     }
     fn setup(&self, ctx: &mut Ctx) {
         ctx.gfx.clear(Color::hex(0x0d0b12));
+        ctx.world.insert_resource(MenuFade::default());
     }
 }
 
 /// The camera's pixel grid: 320 x 180 art pixels at a whole zoom.
 const PIXELS: PixelPerfect = PixelPerfect::new(WINDOW.x / ZOOM, WINDOW.y / ZOOM);
-
-/// Puts the camera on the hero at once (a new level, a respawn).
-fn snap_camera(ctx: &mut Ctx) {
-    aim_camera(ctx, true);
-}
-
-// ANCHOR: camera
-/// Frame system: the camera eases toward a point ahead of the hero (a
-/// `FollowCamera` resource), inside the level, on the pixel grid.
-pub fn follow_camera(ctx: &mut Ctx) {
-    aim_camera(ctx, false);
-}
-
-fn aim_camera(ctx: &mut Ctx, snap: bool) {
-    let mut heroes = ctx.world.query::<(&Transform, &Player)>();
-    let Some((at, facing)) = heroes.iter().next().map(|(t, p)| (t.position, p.facing)) else {
-        return;
-    };
-    let (size, dt) = (ctx.world.resource::<CurrentLevel>().size, ctx.time.frame_dt());
-    PIXELS.apply(&mut ctx.camera); // the zoom first: the bounds depend on it
-    let follow = ctx.world.resource_mut::<FollowCamera>();
-    follow.bounds = Some(Rect::new(0.0, 0.0, size.x, size.y));
-    follow.facing.x = facing; // look the way the hero faces
-    if snap {
-        follow.snap(&mut ctx.camera, at);
-    } else {
-        follow.update(&mut ctx.camera, at, dt);
-    }
-    PIXELS.apply(&mut ctx.camera);
-}
-// ANCHOR_END: camera
 
 /// Frame system: additive glows, the fade between levels and the text.
 pub fn draw_overlay(ctx: &mut Ctx) {
@@ -1403,7 +1416,42 @@ pub fn screen_lines(world: &World, storage: &Storage) -> Vec<Line> {
     }
 }
 
+/// How the text of a screen comes in: it fades in and rises into place, on
+/// the UI clock, which runs on while the game is paused.
+pub const MENU_IN: UiTransition = UiTransition::new(0.3);
+/// How far the text rises as it comes in, in window pixels.
+const MENU_RISE: f32 = 14.0;
+
+/// The text of which screen is shown, since when on the UI clock
+/// ([`Ui::clock`](ponko::ui::Ui::clock)), and how far it has come in.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MenuFade {
+    pub screen: Option<Screen>,
+    pub since: f64,
+    /// 0 when the screen has just changed, 1 once its text is in.
+    pub shown: f32,
+}
+
+/// How far the current screen's text has come in, 0 to 1.
+fn menu_fade(ctx: &mut Ctx) -> f32 {
+    let now = ctx.ui.clock();
+    let reduced = ctx.ui.reduced_motion();
+    let current = screen(&ctx.world);
+    let fade = ctx.world.resource_mut::<MenuFade>();
+    if fade.screen != Some(current) {
+        fade.screen = Some(current);
+        fade.since = now;
+    }
+    fade.shown = if reduced {
+        1.0
+    } else {
+        MENU_IN.progress((now - fade.since) as f32)
+    };
+    fade.shown
+}
+
 fn hud(ctx: &mut Ctx) {
+    let shown = menu_fade(ctx);
     let screen = screen(&ctx.world);
     if matches!(
         screen,
@@ -1435,11 +1483,12 @@ fn hud(ctx: &mut Ctx) {
     }
     let lines = screen_lines(&ctx.world, &ctx.storage);
     let height: f32 = lines.iter().map(|l| l.size * 1.4).sum();
-    let mut y = (WINDOW.y - height) / 2.0 - 40.0;
+    let mut y = (WINDOW.y - height) / 2.0 - 40.0 + MENU_RISE * (1.0 - shown);
     for l in lines {
         let width = ctx.gfx.measure_text(&l.text, l.size).x;
+        let color = l.color.with_alpha(l.color.a * shown);
         ctx.gfx
-            .draw_text(&l.text, vec2((WINDOW.x - width) / 2.0, y), l.size, l.color);
+            .draw_text(&l.text, vec2((WINDOW.x - width) / 2.0, y), l.size, color);
         y += l.size * 1.4;
     }
 }

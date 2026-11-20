@@ -186,6 +186,74 @@ impl Interpolate for Pose {
     }
 }
 
+/// The shortest turn from angle `a` to `b`, in radians (-π..π).
+fn turn(a: f32, b: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    (b - a + PI).rem_euclid(TAU) - PI
+}
+
+/// Position and scale move in straight lines, the rotation the short way
+/// round; extrapolation keeps the last speed and spin.
+/// ```
+/// use ponko::net::Interpolate;
+/// use ponko::prelude::*;
+/// let a = ponko::d2::Transform::at(vec2(0.0, 0.0)).rotated(3.0);
+/// let b = ponko::d2::Transform::at(vec2(10.0, 0.0)).rotated(-3.0);
+/// let mid = ponko::d2::Transform::interpolate(&a, &b, 1.0, 0.5);
+/// assert_eq!(mid.position, vec2(5.0, 0.0));
+/// assert!((mid.rotation - std::f32::consts::PI).abs() < 1e-5, "through π, not through 0");
+/// ```
+impl Interpolate for crate::d2::Transform {
+    fn interpolate(a: &Self, b: &Self, _span: f32, t: f32) -> Self {
+        Self {
+            position: a.position.lerp(b.position, t),
+            rotation: a.rotation + turn(a.rotation, b.rotation) * t,
+            scale: a.scale.lerp(b.scale, t),
+        }
+    }
+
+    fn extrapolate(prev: &Self, last: &Self, span: f32, ahead: f32) -> Self {
+        if span <= 0.0 {
+            return *last;
+        }
+        Self {
+            position: last.position + (last.position - prev.position) / span * ahead,
+            rotation: last.rotation + turn(prev.rotation, last.rotation) / span * ahead,
+            scale: last.scale,
+        }
+    }
+}
+
+/// Position and scale move in straight lines, the rotation along the
+/// shortest arc; extrapolation keeps the last speed (not the spin).
+/// ```
+/// use ponko::net::Interpolate;
+/// use ponko::prelude::*;
+/// let a = ponko::d3::Transform::at(vec3(0.0, 0.0, 0.0));
+/// let b = ponko::d3::Transform::at(vec3(0.0, 4.0, 0.0));
+/// assert_eq!(ponko::d3::Transform::interpolate(&a, &b, 1.0, 0.25).position, vec3(0.0, 1.0, 0.0));
+/// ```
+#[cfg(feature = "3d")]
+impl Interpolate for crate::d3::Transform {
+    fn interpolate(a: &Self, b: &Self, _span: f32, t: f32) -> Self {
+        Self {
+            position: a.position.lerp(b.position, t),
+            rotation: a.rotation.slerp(b.rotation, t).normalize(),
+            scale: a.scale.lerp(b.scale, t),
+        }
+    }
+
+    fn extrapolate(prev: &Self, last: &Self, span: f32, ahead: f32) -> Self {
+        if span <= 0.0 {
+            return *last;
+        }
+        Self {
+            position: last.position + (last.position - prev.position) / span * ahead,
+            ..*last
+        }
+    }
+}
+
 /// How a [`SnapshotSample`] was produced.
 /// ```
 /// assert_ne!(ponko::net::SnapshotState::Interpolated, ponko::net::SnapshotState::Held);

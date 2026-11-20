@@ -111,14 +111,14 @@ pub struct PonkoMessageStats {
     pub bytes_received: u64,
 }
 
-fn wrap(net: NetMessages) -> *mut PonkoNetMessages {
+pub(crate) fn wrap(net: NetMessages) -> *mut PonkoNetMessages {
     Box::into_raw(Box::new(PonkoNetMessages {
         net,
         current: None,
         reason: CString::default(),
     }))
 }
-fn live<'a>(m: *mut PonkoNetMessages) -> Result<&'a mut PonkoNetMessages, Failure> {
+pub(crate) fn live<'a>(m: *mut PonkoNetMessages) -> Result<&'a mut PonkoNetMessages, Failure> {
     // SAFETY: callers pass null or a live endpoint.
     unsafe { m.as_mut() }.ok_or_else(|| invalid("endpoint is null"))
 }

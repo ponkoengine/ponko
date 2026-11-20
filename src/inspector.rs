@@ -17,9 +17,7 @@
 
 use std::collections::HashSet;
 
-use egui::{
-    Button, CollapsingHeader, Color32, DragValue, Key, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, vec2,
-};
+use egui::{Button, CollapsingHeader, Color32, DragValue, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, vec2};
 use glam::Vec2;
 use ponko_ecs::{ComponentId, Entity, World};
 use serde_json::Value;
@@ -29,8 +27,28 @@ use crate::d2::Transform as Transform2D;
 use crate::reflect::short_name;
 use crate::{camera::Rect, ctx::Ctx, reflect::WorldReflect};
 
+#[cfg(feature = "editor")]
+#[path = "inspector_app.rs"]
+pub(crate) mod app;
+#[cfg(feature = "editor")]
+#[path = "inspector_assets.rs"]
+mod assets_panel;
+#[path = "inspector_keys.rs"]
+pub(crate) mod keys;
+#[cfg(feature = "editor")]
+#[path = "inspector_play.rs"]
+mod play;
+#[cfg(feature = "editor")]
+#[path = "inspector_prefab.rs"]
+mod prefab_panel;
+#[cfg(feature = "editor")]
+#[path = "inspector_prefs.rs"]
+mod prefs;
 #[path = "inspector_scene.rs"]
 mod scene;
+#[cfg(feature = "editor")]
+#[path = "inspector_settings.rs"]
+pub(crate) mod settings;
 
 /// Environment variable that turns the inspector on (`1`) or off (`0`),
 /// overriding [`Game::inspector`](crate::game::Game::inspector).
@@ -118,8 +136,6 @@ pub(crate) struct Panels {
     /// Paused with the panels open: clicks and shortcut keys in the world
     /// go to the editor, not the game.
     pub editing: bool,
-    /// The entity being dragged in the world.
-    drag: Option<Drag>,
     /// A prefab the next click in the world places.
     placing: Option<String>,
     /// Prefab files in `assets/prefabs/`; `None` until listed.
@@ -131,43 +147,23 @@ pub(crate) struct Panels {
     /// `Ctx::scene_loads` when the panels last ran: a load since then
     /// replaced the entities, so the selection may name another one.
     scene_loads: u64,
-}
-
-/// An entity being moved with the mouse.
-struct Drag {
-    e: Entity,
-    /// Its transform before, for undo.
-    before: Value,
-    /// From the mouse to its position, so it doesn't jump to the cursor.
-    grab: Vec2,
-    moved: bool,
+    /// The editor's shortcuts (rebindable in the editor app).
+    pub keys: keys::Keymap,
+    /// Edit mode: the panels are the editor's whole window (see
+    /// `inspector_app.rs`), not an overlay on the game.
+    #[cfg(feature = "editor")]
+    pub app: Option<app::App>,
 }
 
 impl Panels {
     /// Draws the inspector into `ui` and applies what was changed in it to `ctx`.
     pub fn show(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
-        self.editing = ctx.time.is_paused();
-        self.record_frame(ctx.time.dt() * 1000.0);
-        self.reflected.clear();
-        self.reflected
-            .extend(ctx.world.reflected_components().into_iter().map(str::to_owned));
-        if self.scene_loads != ctx.scene_loads {
-            self.scene_loads = ctx.scene_loads;
-            self.select(None, false);
-            self.drag = None;
-            self.scene.forget_drag();
+        #[cfg(feature = "editor")]
+        if self.app.is_some() {
+            self.show_app(ui, ctx);
+            return;
         }
-        if self.selected.is_some_and(|e| !ctx.world.is_alive(e)) {
-            self.selected = None;
-        }
-        self.scene_frame(ctx);
-        if let Some(at) = self.pick_at.take() {
-            self.picking = false;
-            if let Some(e) = self.pick_any(ctx, at) {
-                self.select(Some(e), false);
-            }
-        }
-
+        self.begin_frame(ui, ctx);
         egui::Panel::right("ponko-inspector")
             .default_size(360.0)
             .resizable(true)
@@ -205,17 +201,23 @@ impl Panels {
                         .show(ui, |ui| systems(ui, ctx));
                 });
             });
+        self.world_and_keys(ui, ctx);
+    }
+
+    /// The mouse and keys in the world (while editing), and the selection
+    /// and gizmo drawn over it.
+    pub(crate) fn world_and_keys(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
         if self.editing {
             if self.scene.active3d {
                 self.world_input_3d(ui, ctx);
             } else {
                 self.world_input(ui, ctx);
             }
-            self.shortcuts(ui, ctx);
-        } else {
-            if let Some(drag) = self.drag.take() {
-                Self::end_drag(ctx, drag);
+            if !self.capturing_key() {
+                self.shortcuts(ui, ctx);
             }
+        } else {
+            self.end_gizmo_drag2(ctx);
             self.end_gizmo_drag(ctx);
         }
         if self.scene.active3d {
@@ -223,6 +225,56 @@ impl Panels {
         } else {
             self.highlight(ui, ctx);
         }
+    }
+
+    /// What every frame of the panels starts with: the frame time, the
+    /// reflected names, and a selection that still names live entities of
+    /// this world.
+    pub(crate) fn begin_frame(&mut self, ui: &Ui, ctx: &mut Ctx) {
+        self.editing = ctx.time.is_paused();
+        self.record_frame(ctx.time.dt() * 1000.0);
+        // A number dragged in the panels is one undo step until the button
+        // goes up.
+        if !ui.input(|i| i.pointer.any_down()) {
+            ctx.editor.end_merge();
+        }
+        self.reflected.clear();
+        self.reflected
+            .extend(ctx.world.reflected_components().into_iter().map(str::to_owned));
+        if self.scene_loads != ctx.scene_loads {
+            self.scene_loads = ctx.scene_loads;
+            self.select(None, false);
+            self.scene.forget_drag();
+            self.scene.renaming = None;
+        }
+        if self.selected.is_some_and(|e| !ctx.world.is_alive(e)) {
+            self.selected = None;
+        }
+        self.scene_frame(ctx);
+        if let Some(at) = self.pick_at.take() {
+            self.picking = false;
+            if let Some(e) = self.pick_any(ctx, at) {
+                self.select(Some(e), false);
+            }
+        }
+    }
+
+    /// Whether the panels are the editor's window (edit mode).
+    pub(crate) fn is_app(&self) -> bool {
+        #[cfg(feature = "editor")]
+        {
+            self.app.is_some()
+        }
+        #[cfg(not(feature = "editor"))]
+        {
+            false
+        }
+    }
+
+    /// The Shortcuts window is waiting for a key (never in the overlay).
+    #[cfg(not(feature = "editor"))]
+    fn capturing_key(&self) -> bool {
+        false
     }
 
     /// Shows an edit's error, or forgets the last one.
@@ -239,8 +291,9 @@ impl Panels {
         }
     }
 
-    /// Mouse in the world while paused: click selects (or places the armed
-    /// prefab), drag moves, right or middle drag pans, the wheel zooms.
+    /// Mouse in the world while paused: a gizmo handle drags, a click
+    /// selects (or places the armed prefab) and dragging what was clicked
+    /// moves the selection, right or middle drag pans, the wheel zooms.
     fn world_input(&mut self, ui: &Ui, ctx: &mut Ctx) {
         let (pos, pressed, down, pan, scroll, shift) = ui.input(|i| {
             let p = &i.pointer;
@@ -263,37 +316,47 @@ impl Panels {
         if self.drop_asset(ui, ctx, pos) {
             return;
         }
-        if !ui.ctx().is_pointer_over_egui() {
+        let over_ui = ui.ctx().is_pointer_over_egui();
+        if !over_ui {
             if pan != egui::Vec2::ZERO {
                 ctx.camera.position -= Vec2::new(pan.x, pan.y) / ctx.camera.zoom;
             }
             if scroll != 0.0 {
                 ctx.camera.zoom_at(pos, 1.1f32.powf(scroll / 50.0));
             }
-            if pressed {
-                let add = ui.input(|i| i.modifiers.command);
-                self.click(ctx, pos, shift, add);
-            }
         }
-        if let Some(drag) = &mut self.drag {
-            if down && ctx.world.is_alive(drag.e) {
-                let to = crate::d2::View::camera_at(&ctx.camera, &ctx.views2d, pos).screen_to_world(pos) + drag.grab;
-                if let Some(t) = ctx.world.get_mut::<Transform2D>(drag.e)
-                    && t.position != to
-                {
-                    t.position = to;
-                    drag.moved = true;
-                }
-            } else if let Some(drag) = self.drag.take() {
-                Self::end_drag(ctx, drag);
+        // A drag in progress follows the mouse until the button goes up.
+        if self.scene.gizmo2.drag.is_some() {
+            if down {
+                self.update_gizmo_drag2(ctx, pos);
+                return;
             }
+            self.end_gizmo_drag2(ctx);
         }
+        self.scene.gizmo2.hover = if over_ui { None } else { self.gizmo_hit2(ctx, pos) };
+        if !pressed || over_ui {
+            return;
+        }
+        if let Some(handle) = self.scene.gizmo2.hover {
+            let mode = self.scene.gizmo2.mode;
+            self.begin_gizmo_drag2(ctx, mode, handle, pos);
+            return;
+        }
+        let add = ui.input(|i| i.modifiers.command);
+        self.click(ctx, pos, shift, add);
     }
 
-    /// A click in the world at window point `at`.
+    /// A click in the world at window point `at`: places the armed prefab,
+    /// or selects what's there and starts moving the selection with it.
     fn click(&mut self, ctx: &mut Ctx, at: Vec2, keep_placing: bool, add: bool) {
         let world_at = crate::d2::View::camera_at(&ctx.camera, &ctx.views2d, at).screen_to_world(at);
         if let Some(path) = self.placing.clone() {
+            let world_at = if self.scene.gizmo2.snap.on {
+                let step = self.scene.gizmo2.snap.step;
+                world_at.map(|v| crate::edit2d::snap(v, step))
+            } else {
+                world_at
+            };
             let placed = ctx.edit(|ed, ctx| ed.spawn_prefab(ctx, &path, world_at));
             if let Some(e) = self.report(placed) {
                 self.select(Some(e), false);
@@ -307,32 +370,15 @@ impl Panels {
         // Ctrl-click (or Shift-click on an entity) adds to the selection.
         let add = add || (keep_placing && picked.is_some());
         self.select(picked, add);
-        if add {
+        if add || picked.is_none() {
             return;
         }
-        if let Some(e) = self.selected
-            && let Some(t) = ctx.world.get::<Transform2D>(e)
-        {
-            let grab = t.position - world_at;
-            if let Ok(before) = ctx.world.get_json(e, "Transform2D") {
-                self.drag = Some(Drag {
-                    e,
-                    before,
-                    grab,
-                    moved: false,
-                });
-            }
-        }
+        self.begin_gizmo_drag2(ctx, crate::edit2d::Mode::Translate, crate::edit2d::Handle::Center, at);
     }
 
-    fn end_drag(ctx: &mut Ctx, drag: Drag) {
-        if drag.moved {
-            ctx.edit(|ed, _| ed.moved(drag.e, drag.before));
-        }
-    }
-
-    /// Keys while paused: Delete, Ctrl+D (duplicate), Ctrl+Z (undo),
-    /// Ctrl+Shift+Z or Ctrl+Y (redo), Esc; in 3D also W, E, R and F.
+    /// Keys while paused (by default): Delete, Ctrl+D (duplicate), Ctrl+Z
+    /// (undo), Ctrl+Shift+Z or Ctrl+Y (redo), Esc; W, E, R, and in 3D F.
+    /// See [`keys::Keymap`].
     fn shortcuts(&mut self, ui: &Ui, ctx: &mut Ctx) {
         if ui.ctx().egui_wants_keyboard_input() {
             return;
@@ -344,11 +390,12 @@ impl Panels {
             self.keys_3d(ui, ctx);
         }
         let (delete, duplicate, undo, escape) = ui.input(|i| {
+            use keys::Action;
             (
-                i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
-                i.modifiers.command && i.key_pressed(Key::D),
-                i.modifiers.command && !i.modifiers.shift && i.key_pressed(Key::Z),
-                i.key_pressed(Key::Escape),
+                self.keys.pressed(i, Action::Delete),
+                self.keys.pressed(i, Action::Duplicate),
+                self.keys.pressed(i, Action::Undo),
+                self.keys.pressed(i, Action::Cancel),
             )
         });
         if escape {
@@ -356,6 +403,9 @@ impl Panels {
         }
         if undo {
             self.undo(ctx);
+        }
+        if !self.scene.active3d {
+            self.keys_2d(ui);
         }
         let Some(e) = self.selected else { return };
         if delete {
@@ -425,11 +475,7 @@ impl Panels {
                 .on_hover_text("Replaces the world; clears undo")
                 .clicked()
             {
-                let loaded = ctx.load_scene(&path).map(|()| format!("loaded {path}"));
-                if let Some(done) = self.report(loaded) {
-                    self.status = Some(done);
-                    self.select(None, false);
-                }
+                self.open_file(ctx, &path);
             }
         });
 
@@ -515,7 +561,7 @@ impl Panels {
                 if stop.clicked() {
                     let stopped = ctx.edit(|ed, ctx| ed.stop(ctx));
                     self.report(stopped);
-                    self.drag = None;
+                    self.scene.forget_drag();
                 }
                 if ui
                     .button("Keep")
@@ -599,7 +645,8 @@ impl Panels {
                 .id_salt(("resource", &name))
                 .show(ui, |ui| {
                     if edit_value(ui, &mut value) {
-                        self.error = ctx.world.set_resource_json(&name, value).err().map(|e| e.to_string());
+                        let set = ctx.edit(|ed, ctx| ed.set_resource_merged(ctx, &name, value));
+                        self.report(set);
                     }
                 });
         }
@@ -695,7 +742,7 @@ impl Panels {
                 .default_open(true)
                 .show(ui, |ui| {
                     if edit_value(ui, &mut value) {
-                        let set = ctx.edit(|ed, ctx| ed.set(ctx, e, &name, value));
+                        let set = ctx.edit(|ed, ctx| ed.set_merged(ctx, e, &name, value));
                         self.report(set);
                     }
                     remove = ui.small_button("Remove").clicked();
@@ -721,15 +768,20 @@ impl Panels {
             let added = ctx.edit(|ed, ctx| ed.add(ctx, e, &name));
             self.report(added);
         }
+        crate::ai::debug_view::show(ui, &ctx.world, e);
     }
 
     /// A ring around each selected entity, in the world (the primary one
     /// stronger).
     fn highlight(&self, ui: &Ui, ctx: &Ctx) {
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(
-            egui::Order::Background,
-            egui::Id::unique("inspector-highlight"),
-        ));
+        let painter = ui
+            .ctx()
+            .layer_painter(egui::LayerId::new(
+                egui::Order::Background,
+                egui::Id::unique("inspector-highlight"),
+            ))
+            // Only over the world: never over the panels around it.
+            .with_clip_rect(ui.available_rect_before_wrap());
         for (i, e) in self.selection().into_iter().enumerate() {
             let Some(t) = ctx.world.get::<Transform2D>(e) else {
                 continue;
@@ -739,6 +791,9 @@ impl Panels {
             let width = if i == 0 { 2.0 } else { 1.0 };
             painter.circle_stroke(center, 14.0, Stroke::new(width, Color32::from_rgb(255, 200, 40)));
             painter.circle_stroke(center, 16.0, Stroke::new(1.0, Color32::from_black_alpha(160)));
+        }
+        if self.editing {
+            self.draw_gizmo2(&painter, ctx);
         }
     }
 }
@@ -986,9 +1041,10 @@ impl Inspector {
             WindowEvent::KeyboardInput { .. } | WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. }
         );
         if self.panels.editing && input {
-            // Paused: the editor has the mouse in the world, and its keys.
+            // Paused: the editor has the mouse in the world, and its keys
+            // (in edit mode every key: the game waits for Play).
             let mouse = !matches!(event, WindowEvent::KeyboardInput { .. });
-            return consumed || mouse || self.is_editor_key(event);
+            return consumed || mouse || self.panels.is_app() || self.is_editor_key(event);
         }
         consumed && input
     }
@@ -1035,6 +1091,7 @@ impl Inspector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::Key;
     use ponko_ecs::Component;
     use serde::{Deserialize, Serialize};
     use serde_json::json;

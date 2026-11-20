@@ -32,6 +32,12 @@ pub(super) struct Network {
     pub(super) delay: u64,
     /// Drop every nth submitted datagram (zero: none).
     pub(super) drop_every: u64,
+    /// Drop this many of every 1000 submitted datagrams, picked by a hash
+    /// of their number (the same script loses the same ones).
+    pub(super) loss_per_mille: u64,
+    /// Extra ticks of delay, 0 to this many per datagram, picked by a hash
+    /// of its number: datagrams overtake each other.
+    pub(super) jitter: u64,
     /// Deliver each datagram twice.
     pub(super) duplicate: bool,
     /// Deliver the newest ready datagram first.
@@ -84,14 +90,21 @@ impl PacketTransport for Port {
         }
         n.submitted += 1;
         n.largest = n.largest.max(bytes.len());
+        let roll = mix(n.submitted);
+        let jitter = if n.jitter == 0 {
+            0
+        } else {
+            (roll >> 32) % (n.jitter + 1)
+        };
         let datagram = Datagram {
             from: self.me,
             to,
             bytes: bytes.to_vec(),
-            due: n.tick + n.delay,
+            due: n.tick + n.delay + jitter,
         };
         n.log.push(datagram.clone());
-        if n.cut || (n.drop_every != 0 && n.submitted.is_multiple_of(n.drop_every)) {
+        let lost = n.loss_per_mille != 0 && roll % 1000 < n.loss_per_mille;
+        if n.cut || lost || (n.drop_every != 0 && n.submitted.is_multiple_of(n.drop_every)) {
             return Ok(true);
         }
         if n.duplicate {
@@ -152,6 +165,14 @@ impl Transport for Port {
     fn error(&mut self) -> Option<String> {
         self.net.lock().unwrap().fail_transport.remove(&self.me)
     }
+}
+
+/// A fixed scramble of `n` (splitmix64): the scripted network's dice.
+fn mix(n: u64) -> u64 {
+    let mut z = n.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
 }
 
 pub(super) fn addr(i: usize) -> SocketAddr {

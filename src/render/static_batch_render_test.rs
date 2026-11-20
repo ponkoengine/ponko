@@ -60,7 +60,7 @@ pub(super) struct BatchRig {
     pub gpu: TestGpu,
     output: wgpu::Texture,
     target: wgpu::TextureView,
-    textures: Vec<GpuTexture>,
+    pub textures: Vec<GpuTexture>,
     pub renderer: Box<Renderer3D>,
     pub ctx: Box<Ctx>,
     frame: Frame3D,
@@ -78,6 +78,9 @@ pub(super) struct BatchRig {
     /// the whole `Renderer3D::prepare`, times the batch preparation ran,
     /// allocations the batch preparation made].
     pub prepared_allocations: [usize; 3],
+    /// Collect the skinned models of the world each frame (the crowd tests
+    /// compare crowds with them).
+    pub skins: bool,
 }
 
 impl BatchRig {
@@ -138,6 +141,7 @@ impl BatchRig {
             frames: 0,
             keep_order: false,
             prepared_allocations: [0; 3],
+            skins: false,
         })
     }
 
@@ -255,7 +259,7 @@ impl BatchRig {
         // The test owns the offscreen renderer separately from the context.
         self.ctx.set_headless(true);
         let handle = self.ctx.gfx.create_render_target(self.size.0, self.size.1);
-        self.renderer.add_render_target(handle.id, &texture);
+        self.renderer.add_render_target(handle.texture.id, &texture);
         self.ctx
             .scene3d
             .passes
@@ -283,17 +287,24 @@ impl BatchRig {
         frame.lod = ctx.scene3d.lod;
         frame.occlusion = self.grid.take();
         frame.motion.enabled = ctx.scene3d.post.anti_aliasing == AntiAliasing::Taa;
+        let mut skins = SkinFrame::default();
+        if self.skins {
+            skins.collect(&mut ctx.world, &ctx.gfx.assets3d);
+        }
         frame.collect(
             &mut ctx.world,
             &ctx.gfx.assets3d,
-            &SkinFrame::default(),
+            &skins,
             &ctx.scene3d.camera,
             &ctx.scene3d.lighting,
         );
         ctx.gfx.frame3d.views = std::mem::take(&mut frame.views);
-        ctx.collect_views(&SkinFrame::default());
+        ctx.collect_views(&skins);
         frame.views = std::mem::take(&mut ctx.gfx.frame3d.views);
-        let time = self.frames as f32 / 60.0;
+        if self.skins {
+            frame.skins = skins;
+        }
+        let time = self.frames as f64 / 60.0;
         self.frames += 1;
         let scene = Scene3D {
             frame: &frame,
@@ -395,6 +406,20 @@ impl BatchRig {
                     .draw(&self.gpu.device, &self.target, wgpu::Color::BLACK, &self.textures, None)
             })
             .1
+        })
+    }
+
+    /// Records the frame last prepared once more in `pool` (not
+    /// submitted) and returns how long that took, in ms.
+    pub fn recording_ms(&mut self, pool: &rayon::ThreadPool) -> f64 {
+        pool.install(|| {
+            let start = std::time::Instant::now();
+            let buffers = self
+                .renderer
+                .draw(&self.gpu.device, &self.target, wgpu::Color::BLACK, &self.textures, None);
+            let ms = start.elapsed().as_secs_f64() * 1e3;
+            drop(buffers);
+            ms
         })
     }
 

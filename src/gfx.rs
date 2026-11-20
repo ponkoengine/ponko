@@ -148,6 +148,8 @@ pub struct Graphics {
     pub(crate) watcher: crate::hot_reload::SharedWatcher,
     /// Textures loaded from files, by where they came from.
     pub(crate) loaded_textures: AssetCache<Texture>,
+    /// Aseprite atlases and timelines shared by the game and hot reload.
+    pub(crate) aseprite: std::collections::HashMap<(String, bool), crate::aseprite::Aseprite>,
     /// Fonts loaded from files, by where they came from.
     pub(crate) loaded_fonts: AssetCache<Font>,
     /// Texture file names for scene saves, shared with the world's copy.
@@ -215,6 +217,7 @@ impl Graphics {
             asset_sources,
             watcher,
             loaded_textures: AssetCache::default(),
+            aseprite: Default::default(),
             loaded_fonts: AssetCache::default(),
             texture_names,
             #[cfg(feature = "3d")]
@@ -956,22 +959,58 @@ impl Graphics {
     /// ```
     ///
     /// # Panics
-    /// If `rgba` isn't `width * height * 4` bytes.
+    /// If `rgba` isn't `width * height * 4` bytes, or `texture` is a render
+    /// target's; [`try_update_texture`](Self::try_update_texture) returns
+    /// those as errors.
     #[track_caller]
     pub fn update_texture(&mut self, texture: Texture, rgba: &[u8]) {
+        if let Err(e) = self.try_update_texture(texture, rgba) {
+            panic!("{e}");
+        }
+    }
+
+    /// [`update_texture`](Self::update_texture) with errors as values, for
+    /// pixels and textures that come from outside the game's own code (a
+    /// tool, a script, the C API).
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) if `rgba`
+    /// isn't `width * height * 4` bytes, or if `texture` is a render
+    /// target's (its target camera draws it). Nothing changes then.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let t = ctx.gfx.create_texture(2, 2, &[255; 16]);
+    ///     assert!(ctx.gfx.try_update_texture(t, &[0; 16]).is_ok());
+    ///     let err = ctx.gfx.try_update_texture(t, &[0; 4]).unwrap_err();
+    ///     assert_eq!(err.kind(), ErrorKind::Invalid);
+    /// });
+    /// ```
+    pub fn try_update_texture(&mut self, texture: Texture, rgba: &[u8]) -> Result<(), crate::error::Error> {
         let (w, h) = (texture.width(), texture.height());
         let expected = w as usize * h as usize * 4;
-        assert_eq!(
-            rgba.len(),
-            expected,
-            "ponko: a {w} x {h} texture needs {expected} bytes of RGBA, got {}",
-            rgba.len()
-        );
+        if rgba.len() != expected {
+            return Err(crate::error::Error::new(
+                crate::error::ErrorKind::Invalid,
+                format!("a {w} x {h} texture needs {expected} bytes of RGBA, got {}", rgba.len()),
+            ));
+        }
         #[cfg(feature = "3d")]
-        assert!(
-            !self.is_render_target(texture),
-            "ponko: a render target is drawn by its target camera, not updated with pixels"
-        );
+        if self.is_render_target(texture) {
+            return Err(crate::error::Error::new(
+                crate::error::ErrorKind::Invalid,
+                "a render target is drawn by its target camera, not updated with pixels",
+            ));
+        }
+        self.write_texture_pixels(texture, rgba);
+        Ok(())
+    }
+
+    /// Writes checked pixels into `texture` (see [`update_texture`](Self::update_texture)).
+    fn write_texture_pixels(&mut self, texture: Texture, rgba: &[u8]) {
+        let (w, h) = (texture.width(), texture.height());
         // A freed texture (or `Texture::NONE`) has no pixels of its own.
         if !self.textures_live.contains(texture.id) {
             return;
@@ -1099,6 +1138,15 @@ impl Graphics {
     pub(crate) fn stand_in_textures(&mut self) {
         self.white = Some(crate::texture::Texture::new(0, 1, 1));
         self.font_atlas = Some(crate::texture::Texture::new(1, Text::ATLAS_SIZE, Text::ATLAS_SIZE));
+        self.circle = Some(crate::texture::Texture::new(2, CIRCLE, CIRCLE));
+    }
+
+    /// The pixels of the circle texture (id 2 of [`Self::stand_in_textures`]),
+    /// for a test rig to upload: a white disc with a one-pixel soft edge,
+    /// `side` pixels square.
+    #[cfg(all(test, feature = "window", feature = "3d"))]
+    pub(crate) fn circle_pixels() -> (u32, Vec<u8>) {
+        (CIRCLE, circle_rgba())
     }
 
     pub(crate) fn white_texture(&mut self) -> crate::texture::Texture {
@@ -1114,16 +1162,7 @@ impl Graphics {
         if let Some(t) = self.circle {
             return t;
         }
-        let r = CIRCLE as f32 / 2.0;
-        let mut rgba = Vec::with_capacity((CIRCLE * CIRCLE * 4) as usize);
-        for y in 0..CIRCLE {
-            for x in 0..CIRCLE {
-                let d = Vec2::new(x as f32 + 0.5 - r, y as f32 + 0.5 - r).length();
-                let alpha = (r - d).clamp(0.0, 1.0); // one pixel of antialiasing
-                rgba.extend_from_slice(&[255, 255, 255, (alpha * 255.0) as u8]);
-            }
-        }
-        let t = self.make_texture(CIRCLE, CIRCLE, &rgba);
+        let t = self.make_texture(CIRCLE, CIRCLE, &circle_rgba());
         self.circle = Some(t);
         t
     }
@@ -1210,6 +1249,77 @@ impl Graphics {
         let white = self.white_texture().id;
         self.shape(Layer::Screen, white, rect.min, rect.size(), 0.0, Vec2::ZERO, color, z);
     }
+
+    /// A filled screen-space rectangle with corners `radius` round: the
+    /// circle texture in nine patches (quarter circles in the corners, its
+    /// opaque middle stretched between them). Square below half a pixel.
+    pub(crate) fn ui_fill_rounded(&mut self, rect: Rect, color: Color, z: f32, radius: f32) {
+        let size = rect.size();
+        let r = radius.min(size.x * 0.5).min(size.y * 0.5);
+        if r < 0.5 || size.cmple(Vec2::ZERO).any() {
+            self.ui_fill(rect, color, z);
+            return;
+        }
+        let circle = self.circle_texture().id;
+        let xs = [0.0, r, size.x - r, size.x];
+        let ys = [0.0, r, size.y - r, size.y];
+        let uv = [0.0, 0.5, 0.5, 1.0];
+        for y in 0..3 {
+            for x in 0..3 {
+                let part = Vec2::new(xs[x + 1] - xs[x], ys[y + 1] - ys[y]);
+                if part.cmpgt(Vec2::ZERO).all() {
+                    self.ui_list.push(
+                        circle,
+                        z,
+                        SpriteInstance::new(
+                            (rect.min + Vec2::new(xs[x], ys[y])).into(),
+                            part.into(),
+                            [0.0, 0.0],
+                            0.0,
+                            color.to_rgba8(),
+                        )
+                        .with_uv(crate::render::batch::uv_region(
+                            [uv[x], uv[y]],
+                            [uv[x + 1] - uv[x], uv[y + 1] - uv[y]],
+                        )),
+                    );
+                }
+            }
+        }
+    }
+
+    /// A filled screen-space circle (UI building block).
+    pub(crate) fn ui_circle(&mut self, center: Vec2, radius: f32, color: Color, z: f32) {
+        if radius <= 0.0 {
+            return;
+        }
+        let circle = self.circle_texture().id;
+        self.shape(
+            Layer::Screen,
+            circle,
+            center,
+            Vec2::splat(radius * 2.0),
+            0.0,
+            Vec2::splat(0.5),
+            color,
+            z,
+        );
+    }
+}
+
+/// The circle texture's pixels: a white disc with one pixel of
+/// antialiasing, `CIRCLE` pixels square.
+fn circle_rgba() -> Vec<u8> {
+    let r = CIRCLE as f32 / 2.0;
+    let mut rgba = Vec::with_capacity((CIRCLE * CIRCLE * 4) as usize);
+    for y in 0..CIRCLE {
+        for x in 0..CIRCLE {
+            let d = Vec2::new(x as f32 + 0.5 - r, y as f32 + 0.5 - r).length();
+            let alpha = (r - d).clamp(0.0, 1.0); // one pixel of antialiasing
+            rgba.extend_from_slice(&[255, 255, 255, (alpha * 255.0) as u8]);
+        }
+    }
+    rgba
 }
 
 #[allow(clippy::too_many_arguments)]

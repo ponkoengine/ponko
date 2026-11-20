@@ -51,13 +51,20 @@ Options:
   --target <triple>               Build for another platform (cross-compiling)
   --web                           Build for browsers (wasm32-unknown-unknown;
                                   needs wasm-bindgen, see the guide)
+  --threads                       With --web: build with worker threads
+                                  (nightly with rust-src, or the toolchain
+                                  PONKO_WEB_TOOLCHAIN names). Adds
+                                  ponko-worker.js and files that send the
+                                  cross-origin isolation headers on Netlify,
+                                  Cloudflare Pages, Vercel and Apache; the
+                                  guide's \"Threads on the web\" has the rest
   --features <list>, --no-default-features   As for cargo build
   --profile <name>                The Cargo profile (default: release)
   --locked                        As for cargo build
   --no-build                      Package the program as already built
   --no-pack                       Ship the assets as loose files in assets/
-                                  instead of one assets.pack (not cooked)
-  --no-cook                       Pack the source files as they are
+                                  instead of one assets.pack (cooked too)
+  --no-cook                       Ship the source files as they are
   --format <list>                 folder, zip, tar.gz, dmg (comma-separated);
                                   `folder` alone: the plain folder, no archive
                                   and no app bundle
@@ -92,6 +99,8 @@ pub struct Options {
     pub manifest_path: Option<PathBuf>,
     pub target: Option<String>,
     pub web: bool,
+    /// `--threads`: a web build with worker threads.
+    pub threads: bool,
     pub features: Option<String>,
     pub no_default_features: bool,
     pub profile: Option<String>,
@@ -136,6 +145,7 @@ impl Options {
                 "--manifest-path" => o.manifest_path = Some(value()?.into()),
                 "--target" => o.target = Some(value()?),
                 "--web" => o.web = true,
+                "--threads" => o.threads = true,
                 "--features" | "-F" => o.features = Some(value()?),
                 "--no-default-features" => o.no_default_features = true,
                 "--profile" => o.profile = Some(value()?),
@@ -160,11 +170,69 @@ impl Options {
         if o.web && o.target.as_deref().is_some_and(|t| t != WASM) {
             return Err(format!("--web builds for {WASM}; leave out --target"));
         }
+        if o.threads && !o.web {
+            return Err("--threads is for web builds (desktop builds always have threads): add --web".into());
+        }
         Ok(o)
     }
 }
 
 const WASM: &str = "wasm32-unknown-unknown";
+
+/// What a web build with threads compiles with (each after `-C`): atomics
+/// in every crate, and a shared, imported memory (at most 1 GiB) with the
+/// thread-local symbols wasm-bindgen needs, which the linker doesn't add by
+/// itself. As in `web/build.sh --threads`.
+const WEB_THREAD_CODEGEN: [&str; 8] = [
+    "target-feature=+atomics,+bulk-memory,+mutable-globals",
+    "link-arg=--shared-memory",
+    "link-arg=--max-memory=1073741824",
+    "link-arg=--import-memory",
+    "link-arg=--export=__wasm_init_tls",
+    "link-arg=--export=__tls_size",
+    "link-arg=--export=__tls_align",
+    "link-arg=--export=__tls_base",
+];
+
+/// [`WEB_THREAD_CODEGEN`] as rustc arguments, `-C <option>` each: the same
+/// words as `web/build.sh` passes, so the two builds share cargo's cache.
+fn web_thread_flags() -> Vec<&'static str> {
+    WEB_THREAD_CODEGEN.iter().flat_map(|o| ["-C", *o]).collect()
+}
+
+/// The toolchain a web build with threads uses (it rebuilds the standard
+/// library with `-Zbuild-std`): `PONKO_WEB_TOOLCHAIN`, else `nightly`.
+fn web_threads_toolchain(env: impl Fn(&str) -> Option<String>) -> String {
+    env("PONKO_WEB_TOOLCHAIN")
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| "nightly".into())
+}
+
+/// The environment of a web build with threads: the toolchain for rustup's
+/// `cargo`, and [`web_thread_flags`] added where cargo reads them. Cargo
+/// uses the first of `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS` and the
+/// target's flags that is set, so the flags go into that one and keep what
+/// it had.
+fn web_threads_env(env: impl Fn(&str) -> Option<String>) -> Vec<(String, String)> {
+    let mut out = vec![("RUSTUP_TOOLCHAIN".to_string(), web_threads_toolchain(&env))];
+    let flags = web_thread_flags().join(" ");
+    let set = |name: &str| env(name).filter(|v| !v.is_empty());
+    if let Some(encoded) = set("CARGO_ENCODED_RUSTFLAGS") {
+        let mut all = web_thread_flags();
+        all.extend(encoded.split('\x1f'));
+        out.push(("CARGO_ENCODED_RUSTFLAGS".into(), all.join("\x1f")));
+    } else if let Some(plain) = set("RUSTFLAGS") {
+        out.push(("RUSTFLAGS".into(), format!("{flags} {plain}")));
+    } else {
+        let name = "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS";
+        let value = match set(name) {
+            Some(own) => format!("{flags} {own}"),
+            None => flags,
+        };
+        out.push((name.into(), value));
+    }
+    out
+}
 
 fn cargo() -> OsString {
     std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into())
@@ -434,19 +502,7 @@ fn pack_assets(
     meta: &PackMeta,
     cook: Option<crate::cook::Settings>,
 ) -> Result<Option<(Vec<u8>, String)>, String> {
-    let files: Vec<(String, PathBuf)> = game
-        .assets
-        .iter()
-        .filter_map(|a| {
-            let inside = a.to.strip_prefix("assets").ok()?;
-            let name = inside
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
-                .join("/");
-            Some((name, a.from.clone()))
-        })
-        .collect();
+    let files = files_under_assets(game);
     if files.is_empty() {
         return Ok(None);
     }
@@ -473,6 +529,51 @@ fn pack_assets(
         None => line.push_str(", not cooked"),
     }
     Ok(Some((packed.bytes, line)))
+}
+
+/// The game's files under `assets/`: (name inside it, `/`-separated; file).
+fn files_under_assets(game: &Game) -> Vec<(String, PathBuf)> {
+    game.assets
+        .iter()
+        .filter_map(|a| {
+            let inside = a.to.strip_prefix("assets").ok()?;
+            let name = inside
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            Some((name, a.from.clone()))
+        })
+        .collect()
+}
+
+/// Cooks the game's files under `assets/` into `out` (emptied first) and
+/// points the game's asset list at the cooked files, for a package of
+/// loose files (`--no-pack`, `pack = false`): the same names, the same
+/// cooking as in a pack. Returns the line for the report.
+fn cook_loose(game: &mut Game, out: &Path, cook: &crate::cook::Settings) -> Result<Option<String>, String> {
+    let files = files_under_assets(game);
+    if files.is_empty() {
+        return Ok(None);
+    }
+    let read: Vec<(String, Vec<u8>)> = files
+        .into_iter()
+        .map(|(name, path)| {
+            std::fs::read(&path)
+                .map(|bytes| (name, bytes))
+                .map_err(|e| format!("can't read {}: {e}", path.display()))
+        })
+        .collect::<Result<_, _>>()?;
+    let config = crate::cook::config_of(&read)?;
+    let cooked = crate::cook::cook_files(read, &config, cook)?;
+    crate::cook::write_folder(out, &cooked.files)?;
+    game.assets.retain(|a| !a.to.starts_with("assets"));
+    game.assets.extend(cooked.files.iter().map(|(name, _)| FileCopy {
+        from: out.join(name),
+        to: Path::new("assets").join(name),
+    }));
+    game.assets.sort_by(|a, b| a.to.cmp(&b.to));
+    Ok(Some(format!("assets: loose files, {}", cooked.summary())))
 }
 
 /// `--features` and `--no-default-features`, for build and tree alike.
@@ -524,8 +625,19 @@ fn build(
             ))
         };
     }
-    println!("ponko package: building {kind} `{target}` ({profile}, {triple})");
-    let mut cmd = Command::new(cargo());
+    let threads = if options.threads { ", with threads" } else { "" };
+    println!("ponko package: building {kind} `{target}` ({profile}, {triple}{threads})");
+    let mut cmd = if options.threads {
+        // rustup's `cargo`, which picks the toolchain from RUSTUP_TOOLCHAIN
+        // (`$CARGO` is the current toolchain's own); its rustc, not ours.
+        let mut cmd = Command::new("cargo");
+        cmd.env_remove("RUSTC")
+            .envs(web_threads_env(|k| std::env::var(k).ok()))
+            .arg("-Zbuild-std=panic_abort,std");
+        cmd
+    } else {
+        Command::new(cargo())
+    };
     cmd.args([
         "build",
         "--message-format",
@@ -887,7 +999,7 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
         return Err("a dmg needs hdiutil, so a Mac: use --format zip".into());
     }
     let mut notes = Vec::new();
-    let (game, icon, pack_meta) = game(&project, &target, example, &mut notes)?;
+    let (mut game, icon, pack_meta) = game(&project, &target, example, &mut notes)?;
     let out = cwd.join(
         options
             .out
@@ -896,16 +1008,23 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
     );
 
     let (built, engine) = build(options, &project, &target, example, &triple, explicit)?;
-    // Packed after the build: the cook asks what the engine was built to read.
+    // Packed or cooked after the build: the cook asks what the engine was
+    // built to read.
+    let cook =
+        (pack_meta.cook && !options.no_cook).then(|| cook_settings(&platform, engine.as_deref(), &project.target_dir));
+    if cook.is_some() && engine.is_none() {
+        notes.push("textures are kept as they are: with --no-build the engine's features aren't known".into());
+    }
+    let mut loose_line = None;
     let pack = if pack_meta.enabled && !options.no_pack {
         let dir = project.manifest.parent().unwrap_or(Path::new("."));
-        let cook = (pack_meta.cook && !options.no_cook)
-            .then(|| cook_settings(&platform, engine.as_deref(), &project.target_dir));
-        if cook.is_some() && engine.is_none() {
-            notes.push("textures are packed as they are: with --no-build the engine's features aren't known".into());
-        }
         pack_assets(&game, dir, &pack_meta, cook)?
     } else {
+        if let Some(cook) = &cook {
+            let folder = format!("{}-{}", game.slug, platform.label());
+            let cooked = project.target_dir.join("package-cooked").join(folder);
+            loose_line = cook_loose(&mut game, &cooked, cook)?;
+        }
         None
     };
     // An example also links its package's dev-dependencies; a binary is the game itself.
@@ -928,7 +1047,10 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
             &game,
             &platform,
             false,
-            Built::Web(&web_dir),
+            Built::Web {
+                dir: &web_dir,
+                threads: options.threads,
+            },
             &notices,
             icon.as_deref(),
             pack.as_ref().map(|p| p.0.as_slice()),
@@ -955,7 +1077,8 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
     )];
     match &pack {
         Some((_, line)) => report.push(line.clone()),
-        None if !game.assets.is_empty() => report.push("assets: loose files".into()),
+        None if loose_line.is_some() => report.extend(loose_line.clone()),
+        None if !game.assets.is_empty() => report.push("assets: loose files, not cooked".into()),
         None => {}
     }
 
@@ -1014,7 +1137,19 @@ pub fn package_command(options: &Options, cwd: &Path) -> Result<String, String> 
         let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
         report.push(format!("archive: {} ({:.1} MB)", file.display(), size as f64 / 1e6));
     }
-    if platform.os == Os::Web {
+    if platform.os == Os::Web && options.threads {
+        let headers: Vec<String> = layout::ISOLATION_HEADERS
+            .iter()
+            .map(|(k, v)| format!("{k}: {v}"))
+            .collect();
+        report.push(format!(
+            "threads: the workers start only where the page comes with the headers `{}`; \
+             _headers, vercel.json and .htaccess in the folder send them on Netlify, Cloudflare Pages, \
+             Vercel and Apache; elsewhere set them yourself (see the guide's \"Threads on the web\"). \
+             Without them the game runs on one thread",
+            headers.join("` and `")
+        ));
+    } else if platform.os == Os::Web {
         report.push(format!(
             "serve it with any static web server, e.g. `python3 -m http.server -d \"{}\" 8000`",
             dir.display()
@@ -1030,6 +1165,64 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Options, String> {
         Options::parse(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>(), USAGE)
+    }
+
+    #[test]
+    fn loose_assets_are_cooked_under_their_names() {
+        let dir = std::env::temp_dir().join(format!("ponko-loose-cook-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("game/assets/sounds")).unwrap();
+        let tone = crate::cook::flac::tests::tone(2_000, 1, 16);
+        let wav = crate::cook::flac::tests::wav(22_050, 1, 16, &tone);
+        std::fs::write(dir.join("game/assets/sounds/jump.wav"), &wav).unwrap();
+        std::fs::write(dir.join("game/assets/rules.json"), b"{}").unwrap();
+        std::fs::write(
+            dir.join("game/assets/cook.json"),
+            br#"{"assets": {"rules.json": "skip"}}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("game/LICENSE"), b"MIT").unwrap();
+        let copy = |rel: &str| FileCopy {
+            from: dir.join("game").join(rel),
+            to: rel.into(),
+        };
+        let mut game = Game {
+            name: "Loose".into(),
+            slug: "loose".into(),
+            id: "local.loose".into(),
+            version: "0.1.0".into(),
+            target: "loose".into(),
+            icon: None,
+            assets: vec![
+                copy("assets/cook.json"),
+                copy("assets/rules.json"),
+                copy("assets/sounds/jump.wav"),
+                copy("LICENSE"),
+            ],
+            files: Vec::new(),
+        };
+        let settings = crate::cook::Settings {
+            platform: crate::cook::Platform::Desktop,
+            reads: crate::cook::Reads::ALL,
+            cache: None,
+        };
+        let out = dir.join("cooked");
+        let line = cook_loose(&mut game, &out, &settings).unwrap().unwrap();
+        assert!(line.starts_with("assets: loose files, cooked 1 files"), "{line}");
+        let to: Vec<String> = game
+            .assets
+            .iter()
+            .map(|a| a.to.to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert_eq!(
+            to,
+            ["LICENSE", "assets/sounds/jump.wav"],
+            "skipped and settings files left out"
+        );
+        let jump = game.assets.iter().find(|a| a.to.ends_with("jump.wav")).unwrap();
+        assert!(jump.from.starts_with(&out));
+        assert!(std::fs::read(&jump.from).unwrap().starts_with(b"fLaC"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -1060,12 +1253,62 @@ mod tests {
         for (args, needle) in [
             (&["--bin", "a", "--example", "b"][..], "not both"),
             (&["--web", "--target", "x86_64-pc-windows-msvc"], "--web builds for"),
+            (&["--threads"], "--threads is for web builds"),
             (&["--out"], "--out needs a value"),
             (&["--smoke-ticks", "many"], "takes a number"),
             (&["--zip"], "unknown argument `--zip`"),
         ] {
             let err = parse(args).unwrap_err();
             assert!(err.contains(needle), "{args:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn web_threads_build_with_nightly_unless_the_variable_names_another() {
+        assert!(parse(&["--web", "--threads"]).unwrap().threads);
+        assert_eq!(web_threads_toolchain(|_| None), "nightly");
+        let dated = |k: &str| (k == "PONKO_WEB_TOOLCHAIN").then(|| "nightly-2026-11-01".to_string());
+        assert_eq!(web_threads_toolchain(dated), "nightly-2026-11-01");
+        assert_eq!(
+            web_threads_env(dated)[0],
+            ("RUSTUP_TOOLCHAIN".into(), "nightly-2026-11-01".into())
+        );
+    }
+
+    #[test]
+    fn web_threads_flags_go_where_cargo_reads_them_and_keep_the_users() {
+        let target = "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS";
+        let flags = web_thread_flags().join(" ");
+        // Nothing set: the target's flags, which only the wasm build reads.
+        assert_eq!(web_threads_env(|_| None)[1], (target.into(), flags.clone()));
+        // The user's own flags stay, after ours, in the variable cargo reads.
+        let cases = [
+            (target, "--cfg x", target, format!("{flags} --cfg x")),
+            ("RUSTFLAGS", "--cfg x", "RUSTFLAGS", format!("{flags} --cfg x")),
+            (
+                "CARGO_ENCODED_RUSTFLAGS",
+                "--cfg\x1fx",
+                "CARGO_ENCODED_RUSTFLAGS",
+                format!("{}\x1f--cfg\x1fx", web_thread_flags().join("\x1f")),
+            ),
+        ];
+        for (set, value, want_name, want) in cases {
+            let env = |k: &str| (k == set).then(|| value.to_string());
+            assert_eq!(web_threads_env(env)[1], (want_name.to_string(), want), "{set}");
+        }
+        assert!(flags.contains("+atomics") && flags.contains("--shared-memory") && flags.contains("--import-memory"));
+    }
+
+    #[test]
+    fn the_package_builds_threads_with_the_flags_of_the_build_script() {
+        // web/build.sh --threads and `ponko package --web --threads` must agree.
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/build.sh");
+        if let Ok(text) = std::fs::read_to_string(script) {
+            for option in WEB_THREAD_CODEGEN {
+                let flag = format!("-C {option}");
+                assert!(text.contains(&flag), "web/build.sh lacks `{flag}`");
+            }
+            assert!(text.contains("-Zbuild-std=panic_abort,std"));
         }
     }
 

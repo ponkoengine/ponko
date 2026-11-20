@@ -57,6 +57,38 @@ pub enum UiRole {
     CheckBox,
     /// A value from 0 to 1.
     Slider,
+    /// A dropdown: shows its chosen option, expands to a list of options.
+    ComboBox,
+    /// The bar of a tab strip, holding its tabs.
+    TabList,
+    /// One tab; `selected` while its page shows.
+    Tab,
+    /// The page of a tab.
+    TabPanel,
+    /// A group of radio buttons.
+    RadioGroup,
+    /// One radio button; checked while chosen.
+    RadioButton,
+    /// How far something has come, from 0 to 1.
+    ProgressBar,
+    /// Something is busy (a progress indicator with no value).
+    Spinner,
+    /// A number field: a number with a range and a step.
+    SpinButton,
+    /// A list of items (or a dropdown's open options).
+    List,
+    /// One item of a list; `selected` while chosen.
+    ListItem,
+    /// A grid of items: a list with several columns.
+    Grid,
+    /// One cell of a grid.
+    GridCell,
+    /// A context menu, open.
+    Menu,
+    /// One entry of a menu.
+    MenuItem,
+    /// The divider between split panes; its value is the first pane's share of the length it leaves.
+    Splitter,
 }
 
 impl UiRole {
@@ -75,6 +107,21 @@ impl UiRole {
             UiWidget::TextInput => Self::TextInput,
             UiWidget::Toggle => Self::CheckBox,
             UiWidget::Slider => Self::Slider,
+            UiWidget::Dropdown => Self::ComboBox,
+            UiWidget::Tabs | UiWidget::Split => Self::Group,
+            UiWidget::Tab => Self::Tab,
+            UiWidget::RadioGroup => Self::RadioGroup,
+            UiWidget::Radio => Self::RadioButton,
+            UiWidget::Progress => Self::ProgressBar,
+            UiWidget::Spinner => Self::Spinner,
+            UiWidget::NumberField => Self::SpinButton,
+            UiWidget::List => Self::List,
+            UiWidget::ListItem => Self::ListItem,
+            UiWidget::Menu => Self::Menu,
+            UiWidget::MenuItem => Self::MenuItem,
+            UiWidget::Splitter => Self::Splitter,
+            // A button whose value is the binding.
+            UiWidget::KeyBinding => Self::Button,
         }
     }
     /// Lower-case name used by the snapshot text.
@@ -93,6 +140,22 @@ impl UiRole {
             Self::TextInput => "text-input",
             Self::CheckBox => "checkbox",
             Self::Slider => "slider",
+            Self::ComboBox => "combo-box",
+            Self::TabList => "tab-list",
+            Self::Tab => "tab",
+            Self::TabPanel => "tab-panel",
+            Self::RadioGroup => "radio-group",
+            Self::RadioButton => "radio-button",
+            Self::ProgressBar => "progress-bar",
+            Self::Spinner => "spinner",
+            Self::SpinButton => "spin-button",
+            Self::List => "list",
+            Self::ListItem => "list-item",
+            Self::Grid => "grid",
+            Self::GridCell => "grid-cell",
+            Self::Menu => "menu",
+            Self::MenuItem => "menu-item",
+            Self::Splitter => "splitter",
         }
     }
 }
@@ -119,8 +182,20 @@ pub enum UiAccessValue {
     Text(String),
     /// A toggle's state.
     Checked(bool),
-    /// A slider's value, from 0 to 1; keyboard and gamepad steps are 0.05.
+    /// A slider's, progress bar's or split divider's value, from 0 to 1;
+    /// keyboard and gamepad steps are 0.05.
     Range(f32),
+    /// A number field's number, its range and its step.
+    Number {
+        /// The number.
+        value: f64,
+        /// The smallest it can be.
+        min: f64,
+        /// The largest it can be.
+        max: f64,
+        /// What one increment adds.
+        step: f64,
+    },
 }
 
 /// Whether a node's changes are announced while something else has focus:
@@ -207,6 +282,14 @@ pub struct UiAccessNode {
     pub inert: bool,
     /// It is the root of a modal screen.
     pub modal: bool,
+    /// It is the chosen tab, list item or dropdown option.
+    pub selected: bool,
+    /// A dropdown: whether its options are open. `None` for other nodes.
+    pub expanded: Option<bool>,
+    /// Where it is in its set, from 1, and how many the set has: a list
+    /// item's place among all the list's items (not only those on screen),
+    /// a tab's, a radio button's, a menu entry's. `None` for other nodes.
+    pub position: Option<(usize, usize)>,
 }
 
 /// A deterministic snapshot of the UI's accessibility semantics.
@@ -288,6 +371,15 @@ impl fmt::Display for UiAccessTree {
                 UiAccessValue::Checked(true) => f.write_str(" checked")?,
                 UiAccessValue::Checked(false) => f.write_str(" unchecked")?,
                 UiAccessValue::Range(v) => write!(f, " value={v:.2}")?,
+                UiAccessValue::Number { value, min, max, .. } => write!(f, " value={value} range={min}..{max}")?,
+            }
+            if let Some((at, of)) = n.position {
+                write!(f, " {at}/{of}")?;
+            }
+            match n.expanded {
+                Some(true) => f.write_str(" expanded")?,
+                Some(false) => f.write_str(" collapsed")?,
+                None => {}
             }
             if !n.description.is_empty() {
                 write!(f, " description={:?}", n.description)?;
@@ -304,6 +396,7 @@ impl fmt::Display for UiAccessTree {
                 write!(f, " live={}", n.live.as_str())?;
             }
             for (on, flag) in [
+                (n.selected, "selected"),
                 (n.modal, "modal"),
                 (n.disabled, "disabled"),
                 (n.inert, "inert"),
@@ -353,7 +446,11 @@ impl Ui {
         let n = self.node(id)?;
         Some(if !n.access_name.is_empty() {
             &n.access_name
-        } else if n.widget == UiWidget::TextInput {
+        } else if matches!(
+            n.widget,
+            UiWidget::TextInput | UiWidget::NumberField | UiWidget::Dropdown | UiWidget::KeyBinding
+        ) {
+            // Their text is their value: name them with an accessible name.
             ""
         } else if let Some(rich) = n.rich() {
             // Without its markup; images as their alternative text.
@@ -495,19 +592,38 @@ impl Ui {
             return;
         }
         let disabled = disabled || !n.enabled;
+        let state = self.access_state(id);
         visit(&Seen {
             id,
             parent,
             depth,
-            role: if modal { UiRole::Dialog } else { UiRole::of(n.widget) },
+            role: if modal { UiRole::Dialog } else { state.role },
             name: self.accessible_name(id).unwrap_or_default(),
-            description: &n.access_description,
+            description: if n.access_description.is_empty() {
+                self.tooltip(id).unwrap_or_default()
+            } else {
+                &n.access_description
+            },
             value: match n.widget {
-                UiWidget::TextInput => SeenValue::Text(&n.text),
-                UiWidget::Toggle => SeenValue::Checked(n.value >= 0.5),
-                UiWidget::Slider => SeenValue::Range(n.value),
+                UiWidget::TextInput | UiWidget::Dropdown | UiWidget::KeyBinding => SeenValue::Text(&n.text),
+                UiWidget::Toggle | UiWidget::Radio => SeenValue::Checked(n.value >= 0.5),
+                UiWidget::Slider | UiWidget::Progress => SeenValue::Range(n.value),
+                UiWidget::Splitter => SeenValue::Range(
+                    n.extra
+                        .as_ref()
+                        .and_then(|e| e.owner)
+                        .and_then(|s| self.value(s))
+                        .unwrap_or(0.5),
+                ),
+                UiWidget::NumberField => match self.number_range(id) {
+                    Some((min, max, step)) => SeenValue::Number(self.number(id).unwrap_or_default(), min, max, step),
+                    None => SeenValue::None,
+                },
                 _ => SeenValue::None,
             },
+            selected: state.selected,
+            expanded: state.expanded,
+            position: state.position,
             selection: (n.widget == UiWidget::TextInput).then_some((n.anchor, n.caret)),
             live: n.access_live,
             rect: n.rect,
@@ -560,13 +676,14 @@ impl Ui {
                 UiAccessAction::Focus(_) => self.focus = Some(id),
                 UiAccessAction::Activate(_) => {
                     self.focus = Some(id);
-                    self.activate(id);
+                    self.confirm(id);
                 }
                 UiAccessAction::SetValue(_, value) => match widget {
                     UiWidget::Slider if value.is_finite() => self.change_value(id, value.clamp(0.0, 1.0)),
                     UiWidget::Toggle if value.is_finite() => {
                         self.change_value(id, if value >= 0.5 { 1.0 } else { 0.0 })
                     }
+                    _ if value.is_finite() => self.access_set_value(id, value),
                     _ => {}
                 },
                 UiAccessAction::Increment(_) | UiAccessAction::Decrement(_) => {
@@ -578,6 +695,8 @@ impl Ui {
                         };
                         let value = self.value(id).unwrap() + step;
                         self.change_value(id, value.clamp(0.0, 1.0));
+                    } else {
+                        self.access_step(id, matches!(action, UiAccessAction::Increment(_)));
                     }
                 }
                 UiAccessAction::SetText(_, text) => {
@@ -664,6 +783,7 @@ enum SeenValue<'a> {
     Text(&'a str),
     Checked(bool),
     Range(f32),
+    Number(f64, f64, f64, f64),
 }
 
 /// One exposed node as the walk sees it: everything [`UiAccessNode`] holds
@@ -684,6 +804,9 @@ struct Seen<'a> {
     disabled: bool,
     inert: bool,
     modal: bool,
+    selected: bool,
+    expanded: Option<bool>,
+    position: Option<(usize, usize)>,
 }
 
 impl Seen<'_> {
@@ -701,6 +824,7 @@ impl Seen<'_> {
                 SeenValue::Text(text) => UiAccessValue::Text(text.to_owned()),
                 SeenValue::Checked(on) => UiAccessValue::Checked(on),
                 SeenValue::Range(v) => UiAccessValue::Range(v),
+                SeenValue::Number(value, min, max, step) => UiAccessValue::Number { value, min, max, step },
             },
             selection: self.selection,
             live: self.live,
@@ -710,6 +834,9 @@ impl Seen<'_> {
             disabled: self.disabled,
             inert: self.inert,
             modal: self.modal,
+            selected: self.selected,
+            expanded: self.expanded,
+            position: self.position,
         }
     }
     /// Everything about the node but its children (their order is the order
@@ -726,7 +853,11 @@ impl Seen<'_> {
             SeenValue::Text(text) => (1u8, text).hash(&mut h),
             SeenValue::Checked(on) => (2u8, on).hash(&mut h),
             SeenValue::Range(v) => (3u8, v.to_bits()).hash(&mut h),
+            SeenValue::Number(value, min, max, step) => {
+                (4u8, value.to_bits(), min.to_bits(), max.to_bits(), step.to_bits()).hash(&mut h)
+            }
         }
+        (self.selected, self.expanded, self.position).hash(&mut h);
         self.selection.hash(&mut h);
         self.live.hash(&mut h);
         for v in [self.rect.min.x, self.rect.min.y, self.rect.max.x, self.rect.max.y] {

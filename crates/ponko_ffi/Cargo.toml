@@ -30,6 +30,9 @@ window = ["ponko/window"]
 audio = ["ponko/audio"]
 # The runtime inspector overlay (backquote key); see ponko_game_inspector.
 inspector = ["ponko/inspector"]
+# Edit mode: with PONKO_EDITOR set, the game opens as the editor (see the
+# guide's "The editor" chapter). Off by default: never in a shipped game.
+editor = ["inspector", "ponko/editor"]
 # Gamepads (ponko_ctx_gamepad_*). Off: no pads are ever connected.
 gamepad = ["ponko/gamepad"]
 # Screen readers read and operate the retained UI of the game's window
@@ -66,6 +69,16 @@ control-env = ["ponko/control-env"]
 # links libsteam_api, which then ships next to the game. Off: those calls
 # fail with an error.
 steam = ["ponko/steam"]
+# Peer-to-peer message endpoints over WebRTC, signaled through a lobby
+# client (ponko_net_messages_rtc_host, _rtc_join): browser players join a
+# native host directly. Off by default: it adds str0m and aws-lc (a C
+# library) to the build. Off: those calls fail with an error.
+webrtc = ["ponko/webrtc"]
+
+# The WebRTC test needs the feature (C calls against a lobby server).
+[[test]]
+name = "rtc"
+required-features = ["webrtc"]
 
 [dependencies]
 # The C API exports its 3D and navigation functions unconditionally, so the
@@ -73,10 +86,12 @@ steam = ["ponko/steam"]
 # --no-default-features (glTF and Recast stay in every C build). Making them
 # optional would change the native interface; scripts/feature-deps.sh checks
 # that nothing else optional is forced on.
-ponko = { path = "../..", version = "0.1.0", default-features = false, features = ["3d", "navmesh"] }
+ponko = { path = "../..", version = "0.1.0", default-features = false, features = ["3d", "navmesh", "lobby"] }
 ponko_ecs = { path = "../ponko_ecs", version = "0.1.0" }
 rayon = "1.12.0"
 serde_json = "1.0.154"
 
 [dev-dependencies]
 cbindgen = { version = "0.29.2", default-features = false }
+# A lobby server for the lobby client's tests (tests/lobby.rs).
+ponko_lobby = { path = "../ponko_lobby" }

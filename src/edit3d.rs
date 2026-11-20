@@ -141,51 +141,7 @@ pub(crate) fn pixel_size(camera: &Camera, p: Vec3) -> f32 {
     2.0 * depth * (camera.fov_y * 0.5).tan() / camera.viewport().y.max(1.0)
 }
 
-/// Snapping for gizmo drags and numeric edits.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Snap {
-    pub on: bool,
-    /// Grid step for moves, in world units.
-    pub step: f32,
-    /// Angle step for turns, in radians.
-    pub angle: f32,
-    /// Step for scale factors (0.1: 1.0, 1.1, 1.2, ...).
-    pub scale: f32,
-}
-
-impl Default for Snap {
-    fn default() -> Self {
-        Self {
-            on: false,
-            step: 0.5,
-            angle: 15f32.to_radians(),
-            scale: 0.1,
-        }
-    }
-}
-
-/// `v` to the nearest multiple of `step` (unchanged for a step of 0 or less).
-pub(crate) fn snap(v: f32, step: f32) -> f32 {
-    if step > 0.0 { (v / step).round() * step } else { v }
-}
-
-/// What the gizmo does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum Mode {
-    #[default]
-    Translate,
-    Rotate,
-    Scale,
-}
-
-/// Which axes the gizmo uses: the world's, or the selected entity's own.
-/// Scaling always uses the entity's own axes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum Space {
-    #[default]
-    World,
-    Local,
-}
+pub(crate) use crate::edit2d::{Mode, Snap, Space, snap};
 
 /// The part of the gizmo being dragged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

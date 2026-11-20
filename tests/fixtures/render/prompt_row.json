@@ -1,0 +1,17 @@
+{
+  "name": "prompt_row",
+  "scene": "five prompt rows on #1f2129, 256x152, glyphs 20 px (atlas cells 32 px) from x 8, rows 28 px apart from y 8, each \"Jump\", \"Fire\", \"Move\" in white 12 px text with 10 px between prompts: keyboard and mouse (Space, left mouse button, W A S D keycaps), then pads labelled Xbox, PlayStation, Nintendo and generic (south face button, right trigger, left stick); drawn with the window's sprite pipeline into an sRGB target",
+  "width": 256,
+  "height": 152,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 24,
+    "outliers": 0.004,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "1f5a0d072f8985c8",
+  "reason": "new prompt row reference"
+}

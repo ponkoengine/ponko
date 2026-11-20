@@ -187,47 +187,63 @@ impl<Q: QueryData, R: ResourceSet> Drop for QueryResources<'_, Q, R> {
 // ---- other entities while a query runs ----------------------------------------------
 
 /// Query data that only reads: `&T`, `Option<&T>`, [`Entity`], or a tuple of
-/// those. [`Lookup::get`] needs it to hand out several items at once.
+/// those. [`Lookup::get`] needs it to hand out several items at once, and
+/// [`World::query_ref`] to query a shared world.
 /// Implemented by this crate only: the trait is sealed.
 ///
 /// # Safety
-/// `fetch` must create no mutable reference.
+/// `fetch` must create no mutable reference. `ids_ref` reports an id no
+/// archetype has for a component the world never registered.
 pub unsafe trait ReadOnlyQueryData: QueryData {
     #[doc(hidden)]
     const READ_ONLY_SEAL: Seal;
+    /// The ids without registering anything: a component the world doesn't
+    /// know yet gets an id no archetype has.
+    #[doc(hidden)]
+    fn ids_ref(world: &World) -> Self::Ids;
 }
 
 // SAFETY: these fetch `&T`, `Option<&T>` and a copy of the entity id.
 unsafe impl<T: crate::Component> ReadOnlyQueryData for &T {
     const READ_ONLY_SEAL: Seal = Seal;
+    fn ids_ref(world: &World) -> ComponentId {
+        world.component_id::<T>().unwrap_or(ComponentId::UNKNOWN)
+    }
 }
 unsafe impl<T: crate::Component> ReadOnlyQueryData for Option<&T> {
     const READ_ONLY_SEAL: Seal = Seal;
+    fn ids_ref(world: &World) -> ComponentId {
+        world.component_id::<T>().unwrap_or(ComponentId::UNKNOWN)
+    }
 }
 unsafe impl ReadOnlyQueryData for Entity {
     const READ_ONLY_SEAL: Seal = Seal;
+    fn ids_ref(_: &World) {}
 }
 
 macro_rules! read_only_tuple {
-    ($($t:ident),*) => {
+    ($($t:ident $i:tt),*) => {
         // SAFETY: a tuple fetches what its elements fetch.
         unsafe impl<$($t: ReadOnlyQueryData),*> ReadOnlyQueryData for ($($t,)*) {
             const READ_ONLY_SEAL: Seal = Seal;
+            fn ids_ref(world: &World) -> Self::Ids {
+                ($($t::ids_ref(world),)*)
+            }
         }
     };
 }
-read_only_tuple!(A);
-read_only_tuple!(A, B);
-read_only_tuple!(A, B, C);
-read_only_tuple!(A, B, C, D);
-read_only_tuple!(A, B, C, D, E);
-read_only_tuple!(A, B, C, D, E, F);
-read_only_tuple!(A, B, C, D, E, F, G);
-read_only_tuple!(A, B, C, D, E, F, G, H);
-read_only_tuple!(A, B, C, D, E, F, G, H, I);
-read_only_tuple!(A, B, C, D, E, F, G, H, I, J);
-read_only_tuple!(A, B, C, D, E, F, G, H, I, J, K);
-read_only_tuple!(A, B, C, D, E, F, G, H, I, J, K, L);
+read_only_tuple!(A 0);
+read_only_tuple!(A 0, B 1);
+read_only_tuple!(A 0, B 1, C 2);
+read_only_tuple!(A 0, B 1, C 2, D 3);
+read_only_tuple!(A 0, B 1, C 2, D 3, E 4);
+read_only_tuple!(A 0, B 1, C 2, D 3, E 4, F 5);
+read_only_tuple!(A 0, B 1, C 2, D 3, E 4, F 5, G 6);
+read_only_tuple!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7);
+read_only_tuple!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8);
+read_only_tuple!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9);
+read_only_tuple!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9, K 10);
+read_only_tuple!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9, K 10, L 11);
 
 /// Panics if `Q` and the lookup `L` would alias: both touch a component and
 /// at least one of them mutably.

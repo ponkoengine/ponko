@@ -268,6 +268,50 @@ fn the_first_person_camera_looks_from_the_eye() {
 }
 
 #[test]
+fn flat_forward_and_right_follow_the_rigs_yaw_and_match_rust() {
+    unsafe {
+        let mut f = desc!(PonkoFirstPersonCamera, PONKO_FIRST_PERSON_CAMERA_VERSION);
+        assert_eq!(ponko_first_person_camera_defaults(&mut f), PONKO_OK);
+        let mut t = desc!(PonkoThirdPersonCamera, PONKO_THIRD_PERSON_CAMERA_VERSION);
+        assert_eq!(ponko_third_person_camera_defaults(&mut t), PONKO_OK);
+        for yaw in [0.0f32, 0.7, -2.0, 3.1] {
+            f.yaw = yaw;
+            t.yaw = yaw;
+            let mut rust = ponko::d3::FirstPersonCamera::default();
+            rust.yaw = yaw;
+            let (mut forward, mut right) = (v3(9.0, 9.0, 9.0), v3(9.0, 9.0, 9.0));
+            assert_eq!(ponko_first_person_camera_flat_forward(&f, &mut forward), PONKO_OK);
+            assert_eq!(ponko_first_person_camera_flat_right(&f, &mut right), PONKO_OK);
+            let want = (rust.flat_forward(), rust.flat_right());
+            assert!(dist3(forward, v3(want.0.x, want.0.y, want.0.z)) < 1e-6, "{forward:?}");
+            assert!(dist3(right, v3(want.1.x, want.1.y, want.1.z)) < 1e-6, "{right:?}");
+            assert_eq!(forward.y, 0.0, "level");
+            let (mut chase_forward, mut chase_right) = (v3(9.0, 9.0, 9.0), v3(9.0, 9.0, 9.0));
+            assert_eq!(ponko_third_person_camera_flat_forward(&t, &mut chase_forward), PONKO_OK);
+            assert_eq!(ponko_third_person_camera_flat_right(&t, &mut chase_right), PONKO_OK);
+            assert!(dist3(chase_forward, forward) < 1e-6 && dist3(chase_right, right) < 1e-6);
+        }
+        // A bad descriptor or no output: refused, nothing written.
+        let mut out = v3(9.0, 9.0, 9.0);
+        assert_eq!(
+            ponko_first_person_camera_flat_forward(null(), &mut out),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            ponko_third_person_camera_flat_right(&t, null_mut()),
+            PONKO_INVALID_ARGUMENT
+        );
+        let mut bad = t;
+        bad.version = 0;
+        assert_eq!(
+            ponko_third_person_camera_flat_forward(&bad, &mut out),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(out.x, 9.0);
+    }
+}
+
+#[test]
 fn the_third_person_camera_stays_behind_the_target_with_or_without_physics() {
     with_ctx(
         |game| unsafe {

@@ -650,6 +650,16 @@ impl GpuLimits {
     pub(crate) fn gi(&self) -> bool {
         self.compute() && self.max_sampled_textures_per_shader_stage > DECAL_SAMPLED_TEXTURES
     }
+
+    /// Whether the opaque pass has a texture slot past the decals' and
+    /// global illumination's for the screen-space reflections' half-size
+    /// spread image (the 18th, or the 19th with global illumination).
+    /// Without one, a full-size pass copies it into the image the opaque
+    /// pass reads the reflections from (see `ssr.rs`).
+    #[cfg(feature = "3d")]
+    pub(crate) fn reflection_spread(&self) -> bool {
+        self.max_sampled_textures_per_shader_stage > DECAL_SAMPLED_TEXTURES + u32::from(self.gi())
+    }
 }
 
 /// Builds the report from what the device has: the inputs a GPU gives
@@ -691,7 +701,7 @@ pub(crate) fn report(
                     ),
                     GpuFeature::ComputeCulling => (
                         limits.compute_culling(),
-                        "instance batches are culled on the CPU, cell by cell, and drawn with direct draws (the same picture)".into(),
+                        "instance batches are culled on the CPU, cell by cell, and drawn with direct draws (the same picture); crowds are culled on the CPU and drawn from frames posed when they are made".into(),
                         storage_reason(&limits, CULLING_STORAGE_BUFFERS, no_compute),
                     ),
                     GpuFeature::GpuSkinning => (

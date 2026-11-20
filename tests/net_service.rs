@@ -280,3 +280,29 @@ fn snapshots_and_interest_live_on_ctx_net() {
     // Shown 100 ms (two snapshots) in the past.
     assert!((world.resource::<f32>() - 17.0).abs() < 0.01);
 }
+
+#[test]
+fn an_endpoint_on_the_game_clock_counts_game_time_not_wall_time() {
+    // The host is never polled, so the guest hears nothing. On the game
+    // clock it gives up after its timeout in game time (10 s: 600 ticks at
+    // 60 Hz), though the headless run takes a tiny fraction of that.
+    let mut ends = NetMessages::loopback(2);
+    let guest = ends.pop().unwrap().game_clock();
+    let _host = ends.pop();
+    let world = Game::new("guest", 1, 1)
+        .messages(guest)
+        .sim_system(|ctx: &mut Ctx| {
+            let tick = ctx.time.sim_tick();
+            let gone = ctx
+                .net
+                .messages
+                .as_mut()
+                .is_some_and(|m| m.events().any(|e| matches!(e, MessageEvent::Disconnected(..))));
+            if gone && ctx.world.get_resource::<u64>().is_none() {
+                ctx.world.insert_resource(tick);
+            }
+        })
+        .run_headless(700, |_| {});
+    let at = *world.resource::<u64>();
+    assert!((595..=605).contains(&at), "timed out at tick {at}");
+}

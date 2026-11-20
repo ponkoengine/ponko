@@ -27,10 +27,22 @@ pub(super) struct GpuTexture {
     pub(super) mips: Option<bool>,
 }
 
-pub(crate) struct Renderer {
+struct WindowSurface {
     window: Arc<Window>,
     instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
+}
+
+#[cfg(feature = "3d")]
+struct Render3DSettings {
+    msaa: u32,
+    requested_msaa: u32,
+    supports_msaa2: bool,
+    tiled: bool,
+}
+
+pub(crate) struct Renderer {
+    window_surface: Option<WindowSurface>,
     lifecycle: super::surface_lifecycle::SurfaceLifecycle,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -567,6 +579,79 @@ impl Renderer {
         config.desired_maximum_frame_latency = 2;
         surface.configure(&device, &config);
 
+        let image_view_formats: &'static [wgpu::TextureFormat] = if adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::VIEW_FORMATS)
+        {
+            &[wgpu::TextureFormat::Rgba8Unorm]
+        } else {
+            &[]
+        };
+
+        Ok(Self::from_device(
+            Some(WindowSurface {
+                window,
+                instance,
+                surface,
+            }),
+            (device, queue),
+            config,
+            capabilities,
+            image_view_formats,
+            #[cfg(feature = "3d")]
+            Render3DSettings {
+                msaa,
+                requested_msaa,
+                supports_msaa2: msaa != 1
+                    && required_features.contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
+                    && super::gpu3d::multisamples(&adapter, 2),
+                tiled,
+            },
+        ))
+    }
+
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn offscreen(gpu: super::render_test_support::TestGpu, size: (u32, u32)) -> Self {
+        let msaa = 4;
+        let capabilities = super::capabilities::of_device(&gpu.info, &gpu.device, (msaa, msaa));
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            width: size.0,
+            height: size.1,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: Vec::new(),
+        };
+        let mut renderer = Self::from_device(
+            None,
+            (gpu.device, gpu.queue),
+            config,
+            capabilities,
+            &[],
+            Render3DSettings {
+                msaa,
+                requested_msaa: msaa,
+                supports_msaa2: false,
+                tiled: gpu.info.backend == wgpu::Backend::Metal,
+            },
+        );
+        renderer.set_draw_hidden(true, true);
+        renderer
+    }
+
+    fn from_device(
+        window_surface: Option<WindowSurface>,
+        (device, queue): (wgpu::Device, wgpu::Queue),
+        config: wgpu::SurfaceConfiguration,
+        capabilities: super::GpuCapabilities,
+        image_view_formats: &'static [wgpu::TextureFormat],
+        #[cfg(feature = "3d")] settings: Render3DSettings,
+    ) -> Self {
+        let view_format = config.format.add_srgb_suffix();
         // --- pipeline ---
         let shader = device.create_shader_module(wgpu::include_wgsl!("sprite.wgsl"));
 
@@ -654,20 +739,9 @@ impl Renderer {
         });
         let instance_buffer = Self::create_instance_buffer(&device, INITIAL_INSTANCE_CAPACITY);
         let timer = GpuTimer::new(&device, &queue);
-        let image_view_formats: &'static [wgpu::TextureFormat] = if adapter
-            .get_downlevel_capabilities()
-            .flags
-            .contains(wgpu::DownlevelFlags::VIEW_FORMATS)
-        {
-            &[wgpu::TextureFormat::Rgba8Unorm]
-        } else {
-            &[]
-        };
 
-        Ok(Self {
-            window,
-            instance,
-            surface,
+        Self {
+            window_surface,
             lifecycle: Default::default(),
             device,
             queue,
@@ -709,15 +783,13 @@ impl Renderer {
             #[cfg(feature = "3d")]
             three: None,
             #[cfg(feature = "3d")]
-            msaa,
+            msaa: settings.msaa,
             #[cfg(feature = "3d")]
-            msaa_requested: requested_msaa,
+            msaa_requested: settings.requested_msaa,
             #[cfg(feature = "3d")]
-            supports_msaa2: msaa != 1
-                && required_features.contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
-                && super::gpu3d::multisamples(&adapter, 2),
+            supports_msaa2: settings.supports_msaa2,
             #[cfg(feature = "3d")]
-            tiled,
+            tiled: settings.tiled,
             #[cfg(feature = "3d")]
             mips: None,
             display_wait_ms: 0.0,
@@ -735,7 +807,7 @@ impl Renderer {
             egui: None,
             #[cfg(feature = "inspector")]
             egui_free: Vec::new(),
-        })
+        }
     }
 
     fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
@@ -834,12 +906,12 @@ impl Renderer {
     }
 
     #[cfg(feature = "3d")]
-    pub fn create_material(&mut self, desc: &crate::three::GpuMaterialDesc) -> u32 {
+    pub fn create_material(&mut self, id: u32, desc: &crate::three::GpuMaterialDesc) {
         self.material_mips(desc);
         let device = self.device.clone();
         self.three();
         let three = self.three.as_mut().expect("just made");
-        three.create_material(&device, desc, &self.textures)
+        three.create_material_at(&device, id, desc, &self.textures);
     }
 
     #[cfg(feature = "3d")]
@@ -886,9 +958,9 @@ impl Renderer {
     /// Uploads a texture array (RGBA8, one image per layer, sRGB unless
     /// `linear`) with mipmaps; returns its id among the 3D arrays.
     #[cfg(feature = "3d")]
-    pub fn create_texture_array(&mut self, width: u32, height: u32, layers: &[&[u8]], linear: bool) -> u32 {
+    pub fn create_texture_array(&mut self, slot: u32, width: u32, height: u32, layers: &[&[u8]], linear: bool) {
         let texture = self.upload_texture_array(width, height, layers, linear);
-        self.three().add_texture_array(&texture)
+        self.three().add_texture_array_at(slot, &texture);
     }
 
     #[cfg(feature = "3d")]
@@ -985,14 +1057,24 @@ impl Renderer {
         self.three().set_instance_batch(&device, &queue, id, batch);
     }
     #[cfg(feature = "3d")]
+    pub fn set_crowd(&mut self, id: u32, crowd: Option<&crate::three::crowd::CrowdData>) {
+        let (device, queue) = (self.device.clone(), self.queue.clone());
+        self.three().set_crowd(&device, &queue, id, crowd);
+    }
+    #[cfg(feature = "3d")]
     pub fn set_mesh_gpu_buffer(&mut self, mesh: u32, b: u32, count: u32) {
         self.three().set_mesh_gpu_buffer(mesh, b, count);
     }
     /// Compiles a compute pass; its id, or the compiler's message.
     #[cfg(feature = "3d")]
-    pub fn create_compute(&mut self, name: &str, source: &str) -> Result<u32, Box<crate::render::ShaderDiagnostic>> {
+    pub fn create_compute(
+        &mut self,
+        slot: u32,
+        name: &str,
+        source: &str,
+    ) -> Result<(), Box<crate::render::ShaderDiagnostic>> {
         let device = self.device.clone();
-        self.three().create_compute(&device, name, source)
+        self.three().create_compute_at(&device, slot, name, source)
     }
 
     /// Recompiles compute pass `id` in place (hot reload).
@@ -1028,9 +1110,14 @@ impl Renderer {
 
     /// Compiles a screen effect; its id, or the compiler's message.
     #[cfg(feature = "3d")]
-    pub fn create_effect(&mut self, name: &str, source: &str) -> Result<u32, Box<crate::render::ShaderDiagnostic>> {
+    pub fn create_effect(
+        &mut self,
+        slot: u32,
+        name: &str,
+        source: &str,
+    ) -> Result<(), Box<crate::render::ShaderDiagnostic>> {
         let device = self.device.clone();
-        self.three().create_effect(&device, name, source)
+        self.three().create_effect_at(&device, slot, name, source)
     }
 
     /// Recompiles screen effect `id` (hot reload).
@@ -1057,9 +1144,14 @@ impl Renderer {
 
     /// Compiles a material shader; its index, or the compiler's message.
     #[cfg(feature = "3d")]
-    pub fn create_shader(&mut self, name: &str, source: &str) -> Result<u32, Box<crate::render::ShaderDiagnostic>> {
+    pub fn create_shader(
+        &mut self,
+        slot: u32,
+        name: &str,
+        source: &str,
+    ) -> Result<(), Box<crate::render::ShaderDiagnostic>> {
         let device = self.device.clone();
-        self.three().create_shader(&device, name, source)
+        self.three().create_shader_at(&device, slot, name, source)
     }
 
     #[cfg(feature = "3d")]
@@ -1093,14 +1185,17 @@ impl Renderer {
         self.three().free_mesh(id);
     }
 
-    /// Uploads the frame's 3D models, camera and light for the next `render`.
-    /// `collect_ms`: how long collecting the models took, counted in `cpu_ms`.
-    /// The newest depth grid for occlusion culling, if one came back.
+    /// Puts the newest depth grid for occlusion culling, if one came back,
+    /// into `slot`, keeping the one it held to build a later one in.
     #[cfg(feature = "3d")]
-    pub fn take_occlusion(&mut self) -> Option<crate::three::occlusion::OcclusionGrid> {
-        self.three.as_mut()?.take_occlusion()
+    pub fn replace_occlusion(&mut self, slot: &mut Option<crate::three::occlusion::OcclusionGrid>) {
+        if let Some(three) = self.three.as_mut() {
+            three.replace_occlusion(slot);
+        }
     }
 
+    /// Uploads the frame's 3D models, camera and light for the next `render`.
+    /// `collect_ms`: how long collecting the models took, counted in `cpu_ms`.
     #[cfg(feature = "3d")]
     pub fn prepare_3d(&mut self, scene: &crate::three::Scene3D<'_>, collect_ms: f32) {
         let start = web_time::Instant::now();
@@ -1386,9 +1481,9 @@ impl Renderer {
     /// Uploads a texture array of block-compressed layers (one size and
     /// format) with their mipmaps; returns its id among the 3D arrays.
     #[cfg(all(feature = "3d", feature = "compressed-textures"))]
-    pub fn create_compressed_texture_array(&mut self, layers: &[&crate::compressed::CompressedImage]) -> u32 {
+    pub fn create_compressed_texture_array(&mut self, slot: u32, layers: &[&crate::compressed::CompressedImage]) {
         let texture = super::blocks::upload(&self.device, &self.queue, "3d compressed texture array", layers);
-        self.three().add_texture_array(&texture)
+        self.three().add_texture_array_at(slot, &texture);
     }
 
     /// Replaces texture `id` with `rgba` at a new size (resolution
@@ -1469,11 +1564,36 @@ impl Renderer {
         }
     }
 
+    /// Sky shader `id` was freed (see `Renderer3D::free_sky_shader`).
+    #[cfg(feature = "3d")]
+    pub fn free_sky_shader(&mut self, id: u32) {
+        if let Some(three) = &mut self.three {
+            three.free_sky_shader(id);
+        }
+    }
+
     /// Compute pass `id` was freed (see `Renderer3D::free_compute`).
     #[cfg(feature = "3d")]
     pub fn free_compute(&mut self, id: u32) {
         if let Some(three) = &mut self.three {
             three.free_compute(id);
+        }
+    }
+
+    /// Drops a freed effect's shader module and its pipelines.
+    #[cfg(feature = "3d")]
+    pub fn free_effect(&mut self, slot: u32) {
+        if let Some(three) = self.three.as_mut() {
+            three.free_effect(slot);
+        }
+    }
+
+    /// Draws with baked lighting (`BakedLighting::gpu_layers`), or without.
+    #[cfg(feature = "3d")]
+    pub fn set_baked_lighting(&mut self, layers: Option<(u32, &[Vec<u16>])>) {
+        self.three();
+        if let Some(three) = &mut self.three {
+            three.set_baked_lighting(&self.device, &self.queue, layers, &self.textures);
         }
     }
 
@@ -1756,7 +1876,13 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         if !self.lifecycle.suspended() {
-            self.surface.configure(&self.device, &self.config);
+            self.configure_surface();
+        }
+    }
+
+    fn configure_surface(&self) {
+        if let Some(window_surface) = &self.window_surface {
+            window_surface.surface.configure(&self.device, &self.config);
         }
     }
 
@@ -1784,7 +1910,11 @@ impl Renderer {
         let acquired = if self.only_hidden || self.lifecycle.suspended() {
             wgpu::CurrentSurfaceTexture::Occluded
         } else {
-            self.surface.get_current_texture()
+            self.window_surface
+                .as_ref()
+                .map_or(wgpu::CurrentSurfaceTexture::Occluded, |surface| {
+                    surface.surface.get_current_texture()
+                })
         };
         self.display_wait_ms = acquire_start.elapsed().as_secs_f32() * 1000.0;
         let (frame, status) = match acquired {
@@ -1795,7 +1925,7 @@ impl Renderer {
             wgpu::CurrentSurfaceTexture::Suboptimal(t) => {
                 // Draw this one, reconfigure for the next.
                 self.surface_event(super::surface_lifecycle::SurfaceEvent::Recreated);
-                self.surface.configure(&self.device, &self.config);
+                self.configure_surface();
                 (Some(t), FrameStatus::Presented)
             }
             wgpu::CurrentSurfaceTexture::Occluded => {
@@ -1807,16 +1937,18 @@ impl Renderer {
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface_event(super::surface_lifecycle::SurfaceEvent::Recreated);
-                self.surface.configure(&self.device, &self.config);
+                self.configure_surface();
                 (None, FrameStatus::Skipped)
             }
             wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface_event(super::surface_lifecycle::SurfaceEvent::Recreated);
-                self.surface = self
-                    .instance
-                    .create_surface(self.window.clone())
-                    .unwrap_or_else(|e| panic!("ponko: lost the GPU surface: {e}"));
-                self.surface.configure(&self.device, &self.config);
+                if let Some(window_surface) = &mut self.window_surface {
+                    window_surface.surface = window_surface
+                        .instance
+                        .create_surface(window_surface.window.clone())
+                        .unwrap_or_else(|e| panic!("ponko: lost the GPU surface: {e}"));
+                }
+                self.configure_surface();
                 (None, FrameStatus::Skipped)
             }
         };
@@ -2049,7 +2181,10 @@ impl Renderer {
         ];
         let pass = SpritePass {
             viewport: [self.config.width, self.config.height],
-            scale: self.window.scale_factor() as f32,
+            scale: self
+                .window_surface
+                .as_ref()
+                .map_or(1.0, |s| s.window.scale_factor() as f32),
             pipeline: &self.pipeline,
             instances: &self.instance_buffer,
             textures: &self.textures,
@@ -2183,7 +2318,9 @@ impl Renderer {
             self.stats.cpu_ms += self.last_prepare_3d_ms;
         }
         if let Some(frame) = frame {
-            self.window.pre_present_notify();
+            if let Some(window_surface) = &self.window_surface {
+                window_surface.window.pre_present_notify();
+            }
             self.queue.present(frame);
         }
         if let Some(capture) = capture {

@@ -18,11 +18,13 @@ use serde_json::{Value, json};
 
 mod animation;
 mod builtin_schemas;
+mod hash;
 mod migrate;
 mod particles;
 mod save_format;
 mod skeleton2d;
 pub(crate) use animation::reflect_animation;
+pub use hash::world_hash;
 pub(crate) use migrate::migrate as migrate_save;
 pub use migrate::{Migration, SaveMigrations};
 pub(crate) use particles::reflect_particle_emitter2d;
@@ -244,6 +246,11 @@ struct Registry {
     schemas: HashMap<String, (ValueSchema, SchemaSource)>,
     /// Known schemas of reflected resources, by name.
     resource_schemas: HashMap<String, (ValueSchema, SchemaSource)>,
+    /// How [`world_hash`] reads a reflected component without making JSON,
+    /// by name. A component without one is hashed through its JSON.
+    hashers: HashMap<String, hash::HashFn>,
+    /// The same for reflected resources.
+    resource_hashers: HashMap<String, hash::HashFn>,
 }
 
 /// The name of foreign component `id`, if it's described with `reflect_fields`.
@@ -1029,6 +1036,8 @@ impl WorldReflect for World {
             check: Arc::new(check::<T>),
             remove: Arc::new(remove::<T>),
         });
+        reg.hashers
+            .insert(reg.list[reg.list.len() - 1].name.clone(), hash::of::<T>());
     }
 
     #[track_caller]
@@ -1196,6 +1205,7 @@ impl WorldReflect for World {
             return;
         }
         reg.resource_by_name.insert(name.clone(), reg.resources.len());
+        reg.resource_hashers.insert(name.clone(), hash::of_resource::<R>());
         reg.resources.push(ReflectedResource {
             name,
             type_name: type_name.to_string(),
@@ -1628,6 +1638,7 @@ pub(crate) fn reflect_sprite(world: &mut World) {
         check: Arc::new(check::<SpriteJson>),
         remove: Arc::new(remove::<crate::d2::Sprite>),
     });
+    reg.hashers.insert("Sprite".into(), hash::of_sprites());
 }
 
 // ---- Models ------------------------------------------------------------------------

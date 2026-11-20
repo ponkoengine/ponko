@@ -73,30 +73,134 @@ fn tilesets(defs: &Value, path: &str) -> (Vec<Tileset>, Vec<i64>) {
     (sets, uids)
 }
 
-/// Every level of the project, also inside its worlds.
-fn levels(project: &Value) -> Vec<&Value> {
-    let mut out: Vec<&Value> = list(project, "levels").iter().collect();
-    for w in list(project, "worlds") {
-        out.extend(list(w, "levels"));
+/// An LDtk world's layout as saved by the editor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LdtkLayout {
+    /// Levels use their explicit pixel positions.
+    Free,
+    /// Levels use explicit positions aligned to a world grid.
+    GridVania,
+    /// Levels are laid out left to right in project order.
+    LinearHorizontal,
+    /// Levels are laid out top to bottom in project order.
+    LinearVertical,
+}
+
+/// A level's placement in an LDtk world.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LdtkLevel {
+    /// Name shown in the editor.
+    pub identifier: String,
+    /// Stable instance id, accepted by [`super::LevelOptions::level`].
+    pub iid: String,
+    /// Top-left position in world pixels.
+    pub position: Vec2,
+    /// Width and height in pixels.
+    pub size: UVec2,
+    /// LDtk world depth, for games that organize levels in floors.
+    pub depth: i32,
+}
+
+/// An LDtk project's world and the placements of its levels.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LdtkWorld {
+    /// Name shown in the editor. Empty for legacy single-world projects.
+    pub identifier: String,
+    /// Stable instance id, if saved by the editor.
+    pub iid: String,
+    /// How levels are placed in this world.
+    pub layout: LdtkLayout,
+    /// World grid cell dimensions in pixels, when provided.
+    pub grid_size: UVec2,
+    /// Level placements in editor order.
+    pub levels: Vec<LdtkLevel>,
+}
+
+fn project(input: &str) -> Result<Value, Error> {
+    let project: Value = serde_json::from_str(input)?;
+    if project.get("jsonVersion").is_none() {
+        return Err(decode_error("expected an LDtk project with jsonVersion"));
     }
-    out
+    Ok(project)
+}
+
+fn pixels(v: &Value, w: &str, h: &str) -> UVec2 {
+    UVec2::new(num_or(v, w, 0.0) as u32, num_or(v, h, 0.0) as u32)
+}
+
+fn world(world: &Value) -> LdtkWorld {
+    let layout = match text(world, "worldLayout") {
+        "GridVania" => LdtkLayout::GridVania,
+        "LinearHorizontal" => LdtkLayout::LinearHorizontal,
+        "LinearVertical" => LdtkLayout::LinearVertical,
+        _ => LdtkLayout::Free,
+    };
+    let mut next = Vec2::ZERO;
+    let levels = list(world, "levels")
+        .iter()
+        .map(|level| {
+            let size = pixels(level, "pxWid", "pxHei");
+            let position = match layout {
+                LdtkLayout::LinearHorizontal => {
+                    let at = next;
+                    next.x += size.x as f32;
+                    at
+                }
+                LdtkLayout::LinearVertical => {
+                    let at = next;
+                    next.y += size.y as f32;
+                    at
+                }
+                _ => Vec2::new(num_or(level, "worldX", 0.0) as f32, num_or(level, "worldY", 0.0) as f32),
+            };
+            LdtkLevel {
+                identifier: text(level, "identifier").to_owned(),
+                iid: text(level, "iid").to_owned(),
+                position,
+                size,
+                depth: num_or(level, "worldDepth", 0.0) as i32,
+            }
+        })
+        .collect();
+    let iid = world.get("iid").or_else(|| world.get("dummyWorldIid"));
+    LdtkWorld {
+        identifier: text(world, "identifier").to_owned(),
+        iid: iid.and_then(Value::as_str).unwrap_or_default().to_owned(),
+        layout,
+        grid_size: pixels(world, "worldGridWidth", "worldGridHeight"),
+        levels,
+    }
+}
+
+fn worlds(project: &Value) -> impl Iterator<Item = &Value> {
+    let nested = list(project, "worlds");
+    std::iter::once(project)
+        .filter(move |p| !list(p, "levels").is_empty() || nested.is_empty())
+        .chain(nested)
+}
+
+pub(super) fn read_worlds(input: &str) -> Result<Vec<LdtkWorld>, Error> {
+    Ok(worlds(&project(input)?).map(world).collect())
 }
 
 pub(super) fn read(text_: &str, path: &str, wanted: Option<&str>, reader: &mut Reader) -> Result<Level, Error> {
-    let project: Value = serde_json::from_str(text_)?;
-    if project.get("jsonVersion").is_none() {
-        return Err(decode_error(format!("{path} is not an LDtk project")));
-    }
-    let defs = project.get("defs").cloned().unwrap_or(Value::Null);
-    let (tilesets, uids) = tilesets(&defs, path);
+    let project = project(text_)?;
+    let defs = project.get("defs").unwrap_or(&Value::Null);
+    let (tilesets, uids) = tilesets(defs, path);
     let set_of = |uid: f64| uids.iter().position(|&u| u == uid as i64).map(|i| i as u16);
-    let all = levels(&project);
-    let level = match wanted {
+    let all: Vec<_> = worlds(&project)
+        .flat_map(|w| list(w, "levels").iter().zip(world(w).levels))
+        .collect();
+    let (level, placement) = match wanted {
         Some(name) => all
             .iter()
-            .find(|l| text(l, "identifier") == name || text(l, "iid") == name)
+            .find(|(_, l)| l.iid == name)
+            .or_else(|| all.iter().find(|(_, l)| l.identifier == name))
             .ok_or_else(|| {
-                let names: Vec<&str> = all.iter().map(|l| text(l, "identifier")).collect();
+                let names: Vec<_> = all.iter().map(|(_, l)| l.identifier.as_str()).collect();
                 Error::new(
                     ErrorKind::NotFound,
                     format!("{path} has no level {name:?}; it has {}", names.join(", ")),
@@ -117,7 +221,7 @@ pub(super) fn read(text_: &str, path: &str, wanted: Option<&str>, reader: &mut R
         }
         None => *level,
     };
-    let layer_defs = list(&defs, "layers");
+    let layer_defs = list(defs, "layers");
     let def_of = |uid: f64| layer_defs.iter().find(|d| num(d, "uid") == Some(uid));
     let mut layers = Vec::new();
     // LDtk lists the top layer first.
@@ -207,7 +311,8 @@ pub(super) fn read(text_: &str, path: &str, wanted: Option<&str>, reader: &mut R
     let px = Vec2::new(num_or(level, "pxWid", 0.0) as f32, num_or(level, "pxHei", 0.0) as f32);
     let cell = num_or(&project, "defaultGridSize", 16.0).max(1.0) as f32;
     Ok(Level {
-        name: text(level, "identifier").to_string(),
+        name: placement.identifier.clone(),
+        ldtk: Some(placement.clone()),
         size: (px / cell).ceil().as_uvec2(),
         cell_size: Vec2::splat(cell),
         background: level

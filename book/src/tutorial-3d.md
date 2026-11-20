@@ -84,10 +84,15 @@ The yard:
   `Mesh`, drawn wherever an entity with a `Model` of it stands
   ([Meshes and materials](3d.md#meshes-and-materials)).
 - **To make it solid**, `ctx.load_collision_mesh` makes a collision mesh of
-  the same file's triangles. The entity gets a fixed `RigidBody` and a
-  `Collider` of that mesh, so what you walk on is exactly what you see
+  the same file's triangles. The entity gets a `Collider` of that mesh, so
+  what you walk on is exactly what you see
   ([3D physics](physics3d.md#bodies-colliders-and-terrain)). A triangle mesh
   suits level geometry that never moves.
+- **A collider brings what it needs.** A `Collider` requires a
+  `RigidBody`, fixed unless the spawn gives another, and a body requires a
+  `Transform` (here the origin) and a `Velocity`: the entity gets them with
+  the collider ([Required components](ecs.md#required-components)). Name
+  them only where they differ.
 - **`.physics3d(vec3(0.0, -9.81, 0.0))`** turns 3D physics on, in meters,
   with +Y up. The game then ticks 50 times a second, the physics' rate.
 - **The sun**: `sun_direction` is which way the light travels; a low sun
@@ -120,12 +125,15 @@ Then the walker:
   ([A walking character](physics3d.md#a-walking-character)).
 - Its look is a sphere from `MeshData::sphere`, stretched into a capsule
   shape with its bottom at the origin, so it stands where the feet are.
-- `control` is a frame system: it turns the facing by the `turn` axis,
-  walks the way the walker faces (`Quat::from_rotation_y(yaw)` turns the
-  input), and jumps only from the ground. The physics owns the position; the
-  rotation is ours to set.
-- `follow` puts the camera behind and above the walker and turns it to look
-  at its head ([Camera](3d.md#camera)).
+- **The camera** is a `ThirdPersonCamera` rig kept as a resource, and the
+  walker has a `CameraTarget`: every frame the engine puts the camera
+  behind and above the walker, looking at its head, and brings it in front
+  of any wall between them ([Camera rigs](3d.md#camera-rigs)). There is no
+  camera system.
+- `control` is a frame system: it turns the rig by the `turn` axis, walks
+  the way the camera faces on the ground (the rig's `flat_forward` and
+  `flat_right`), and jumps only from the ground. The physics owns the
+  position; the rotation is ours to set.
 
 Add `.plugin(Walker)`. Walk up the ramp onto the platform and up the stairs;
 the walls and the pillar stop you.
@@ -160,10 +168,12 @@ that lights it when the walker steps in:
 {{#include ../../examples/tutorial_3d/game.rs:bodies}}
 ```
 
-- A dynamic `RigidBody` with a box `Collider` falls, stacks and tumbles; the
-  `Velocity` component lets you read or set its speed. The walker pushes
+- A dynamic `RigidBody` with a box `Collider` falls, stacks and tumbles.
+  The body brings a `Velocity` component, which lets you read or set its
+  speed. The walker pushes
   crates as it walks into them (light ones: `density` is in kg/m³).
 - `.sensor()` makes a collider that reports overlaps and blocks nothing.
+  Inserted alone, it makes the post a fixed body.
   The walker sets off sensors, and the physics step sends a
   `CollisionStarted` event with `sensor` set
   ([Collisions](physics.md#collisions); 3D sends the same events).

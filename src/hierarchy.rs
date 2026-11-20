@@ -64,7 +64,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
 use glam::Vec2;
-use ponko_ecs::{Changed, Commands, Component, ComponentId, Entity, Tick, Without, World};
+use ponko_ecs::{Changed, Commands, Component, ComponentId, Entity, HookWorld, Tick, Without, World};
 use smallvec::SmallVec;
 
 use crate::attach::Attached;
@@ -74,6 +74,72 @@ use crate::d2::Transform as T2;
 #[cfg(feature = "3d")]
 use crate::d3::Transform as T3;
 use crate::error::{Error, ErrorKind};
+
+/// A name for an entity, for people: the editor's hierarchy shows it and
+/// renames it, and scenes and prefabs save it (it is reflected as
+/// `EntityName`, a string). The engine never looks entities up by it, and
+/// names needn't be unique.
+///
+/// ```
+/// use ponko::hierarchy::EntityName;
+/// use ponko::prelude::*;
+///
+/// let mut world = World::new();
+/// let door = world.spawn((d2::Transform::default(), EntityName::new("Front door")));
+/// assert_eq!(world.get::<EntityName>(door).unwrap().as_str(), "Front door");
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Component, serde::Serialize, serde::Deserialize)]
+pub struct EntityName(pub String);
+
+impl EntityName {
+    /// The name `name`.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    /// The name as text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for EntityName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The prefab file an entity was placed from: the editor puts it on the
+/// root of every prefab it places (with
+/// [`PrefabParts`](crate::scene::PrefabParts) listing the rest), and scenes
+/// save it (reflected as `PrefabInstance`), so the editor can show where the
+/// instance differs from its prefab, put those differences back, or write
+/// them into the prefab for every instance. The game never needs it;
+/// [`Ctx::spawn_prefab`](crate::ctx::Ctx::spawn_prefab) doesn't add it.
+///
+/// ```
+/// use ponko::hierarchy::PrefabInstance;
+/// use ponko::prelude::*;
+///
+/// let mut world = World::new();
+/// let cart = world.spawn((d2::Transform::default(), PrefabInstance::new("prefabs/cart.json")));
+/// assert_eq!(world.get::<PrefabInstance>(cart).unwrap().path, "prefabs/cart.json");
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Component, serde::Serialize, serde::Deserialize)]
+pub struct PrefabInstance {
+    /// The prefab file, as `spawn_prefab` names it (relative to `assets/`).
+    pub path: String,
+}
+
+impl PrefabInstance {
+    /// An instance of prefab file `path`.
+    #[must_use]
+    pub fn new(path: impl Into<String>) -> Self {
+        Self { path: path.into() }
+    }
+}
 
 /// A parent's children, in order: kept by the engine (see the
 /// [module](self)). Read it through [`WorldHierarchy::children`]; change it
@@ -546,8 +612,6 @@ struct State {
     up: Vec<Option<(Entity, Entity)>>,
     /// `(old parent, child)` entries to take out of children lists.
     unlink: Vec<(Entity, Entity)>,
-    /// Parents despawned (or that lost their `Children`) since the last update.
-    lost: Vec<Entity>,
     /// `(parent, child)` links to list again: their parent lost its list.
     relist: Vec<(Entity, Entity)>,
     /// Scratch set for big children lists.
@@ -598,6 +662,8 @@ fn update_with(world: &mut World, s: &mut State, mode: Mode) {
         #[cfg(feature = "3d")]
         world.track_changes::<Attached3D>();
         world.track_changes::<Children>();
+        world.insert_resource(LostLinks::default());
+        world.on_remove::<Children>(children_leaving);
         s.tracking = true;
     }
     let since = s.seen;
@@ -607,7 +673,7 @@ fn update_with(world: &mut World, s: &mut State, mode: Mode) {
 
     // Links removed and parents despawned: only the entities involved.
     unlink_removed(world, s, since);
-    find_lost_parents(world, s, since);
+    find_lost_parents(world, s);
 
     // New and edited links join their parents' children.
     s.changed.clear();
@@ -682,15 +748,14 @@ fn update_with(world: &mut World, s: &mut State, mode: Mode) {
     s.stale.sort_unstable();
     s.stale.dedup();
 
-    for i in 0..s.stale.len() {
-        let parent = s.stale[i];
+    for &parent in &s.stale {
         prune(world, parent);
     }
     if mode == Mode::Tick {
         s.broken.sort_unstable();
         s.broken.dedup();
-        for i in 0..s.broken.len() {
-            world.despawn_recursive(s.broken[i]);
+        for &broken in &s.broken {
+            world.despawn_recursive(broken);
         }
         s.seen = world.advance_change_tick();
     }
@@ -725,37 +790,69 @@ fn unlink_removed(world: &World, s: &mut State, since: Tick) {
     }
 }
 
-/// Finds the children of parents despawned (or that lost their
-/// `Children`) since the last update: they are broken if the parent is
-/// dead, and listed again if it is alive. One pass over `s.up`, only when
-/// such a parent exists.
-fn find_lost_parents(world: &World, s: &mut State, since: Tick) {
-    s.lost.clear();
-    s.relist.clear();
-    s.lost.extend(
-        world
-            .removed_since::<Children>(since)
-            .iter()
-            .copied()
-            .filter(|&p| world.get::<Children>(p).is_none()),
-    );
-    if s.lost.is_empty() {
+/// The children lists of parents despawned (or that lost their
+/// `Children`) since the last update, as `(parent, child)` pairs: filled by
+/// [`children_leaving`], an `on_remove` hook of [`Children`], and emptied
+/// by [`find_lost_parents`]. A resource of its own (not in [`State`]), so
+/// the hook finds it while an update holds the state.
+#[derive(Default)]
+struct LostLinks(Vec<(Entity, Entity)>);
+
+/// `on_remove` hook of [`Children`]: notes the list that goes, so the next
+/// update finds the children of a despawned parent without looking at
+/// every link.
+fn children_leaving(world: &mut HookWorld, parent: Entity) {
+    if world.get_resource::<LostLinks>().is_none() {
         return;
     }
-    s.lost.sort_unstable();
-    s.lost.dedup();
-    for slot in &mut s.up {
-        let Some((child, parent)) = *slot else { continue };
-        if s.lost.binary_search(&parent).is_err() {
+    world.resource_scope::<LostLinks, _>(|world, lost| {
+        if let Some(c) = world.get::<Children>(parent) {
+            lost.0.extend(c.list.iter().map(|&child| (parent, child)));
+        }
+    });
+}
+
+/// Finds the children of parents despawned (or that lost their
+/// `Children`) since the last update: they are broken if the parent is
+/// dead, and listed again if it is alive. Looks only at the lists those
+/// parents had ([`LostLinks`]), not at every link. Not inlined: it runs
+/// once an update, and inlined it changed how the placement loops of
+/// `update_with` compiled (a deep chain placed measurably slower).
+#[inline(never)]
+fn find_lost_parents(world: &mut World, s: &mut State) {
+    s.relist.clear();
+    let Some(lost) = world.get_resource_mut::<LostLinks>() else {
+        return;
+    };
+    if lost.0.is_empty() {
+        return;
+    }
+    let mut links = std::mem::take(&mut lost.0);
+    links.sort_unstable();
+    links.dedup();
+    for &(parent, child) in &links {
+        if child == parent || world.get::<Children>(parent).is_some() {
+            // Not a link, or the parent has a list again (nothing was lost).
             continue;
         }
         if !world.is_alive(child) || link_to(world, child) != Some(parent) {
-            *slot = None;
+            if let Some(slot) = s.up.get_mut(child.index() as usize)
+                && *slot == Some((child, parent))
+            {
+                *slot = None;
+            }
         } else if world.is_alive(parent) {
             s.relist.push((parent, child));
         } else {
             s.broken.push(child);
         }
+    }
+    links.clear();
+    // Back with its capacity, after anything hooks noted meanwhile (none:
+    // nothing above despawns), so a steady state allocates nothing.
+    if let Some(lost) = world.get_resource_mut::<LostLinks>() {
+        links.append(&mut lost.0);
+        lost.0 = links;
     }
 }
 

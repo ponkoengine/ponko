@@ -156,15 +156,14 @@ impl Renderer3D {
     /// The material a run draws mesh part `part` with: the part's own, or
     /// the run's override (a per-part one first, then the whole mesh's).
     pub(super) fn part_material(&self, run_mesh: u32, part: usize, own: u32) -> u32 {
-        match self.run_override(run_mesh) {
-            Some(o) => MaterialOverride::resolve(
-                o.material,
-                self.override_parts(o),
-                part,
-                own,
-                self.resources.materials.len() as u32,
-            ),
+        let id = match self.run_override(run_mesh) {
+            Some(o) => MaterialOverride::resolve(o.material, self.override_parts(o), part, own, |id| {
+                self.resources.material_ids.was_made(id)
+            }),
             None => own,
-        }
+        };
+        self.resources
+            .material_slot(id)
+            .unwrap_or(super::FALLBACK_MATERIAL_SLOT)
     }
 }

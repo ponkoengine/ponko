@@ -198,9 +198,13 @@ pub(crate) struct Uploading<'a, T: ?Sized> {
 }
 
 impl Uploading<'_, wgpu::Queue> {
-    /// `Queue::write_buffer`, counted.
+    /// `Queue::write_buffer`, counted. While a [`WriteBatch`] gathers this
+    /// thread's writes (see [`begin_batch`]), a small one joins it instead.
     pub fn write_buffer(&self, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
         add(self.kind, data.len() as u64);
+        if batched(self.kind, buffer, offset, data) {
+            return;
+        }
         // wgpu's own allocations (a staging buffer a write) aren't the
         // caller's: tests that count a module's allocations leave them out.
         #[cfg(all(test, feature = "3d"))]
@@ -217,6 +221,177 @@ impl Uploading<'_, wgpu::Queue> {
     ) {
         add(self.kind, data.len() as u64);
         self.to.write_texture(texture, data, layout, size);
+    }
+}
+
+/// The largest write a [`WriteBatch`] takes. A larger one is written on
+/// its own (one staging buffer for it costs little next to its bytes, and
+/// they aren't copied twice), unless its buffer already has batched writes
+/// this frame: it then joins them, to land after them.
+pub(crate) const BATCHED_WRITE_BYTES: usize = 64 * 1024;
+
+/// A frame's small buffer writes, gathered into one upload.
+///
+/// `wgpu` makes, maps and frees a staging buffer for every
+/// `Queue::write_buffer` (`wgpu-core`'s `Queue::write_buffer` makes a
+/// `StagingBuffer` each call), with a few heap allocations each. While a
+/// batch is active on a thread (see [`begin_batch`]), the writes made
+/// there go into one byte list instead, and [`upload`](Self::upload)
+/// writes it into one staging buffer kept from frame to frame;
+/// [`record`](Self::record) then records a copy from it into each
+/// destination, at the start of the frame's first command buffer (before
+/// anything that reads those buffers). Nothing changes
+/// on the GPU: the same bytes land in the same places, in the order they
+/// were written, before the frame's passes run.
+///
+/// Persistent instance batches (`Upload::StaticBatches`) are written on
+/// their own as before. A write too big for the batch
+/// ([`BATCHED_WRITE_BYTES`]), unaligned, or made on another thread goes
+/// straight to `wgpu` too: it lands ahead of the batch's copies, which is
+/// the order it was made in unless its buffer already had a batched write,
+/// in which case it joins the batch.
+#[derive(Default)]
+#[cfg_attr(not(feature = "3d"), allow(dead_code))]
+pub(crate) struct WriteBatch {
+    bytes: Vec<u8>,
+    copies: Vec<BatchedCopy>,
+    staging: Option<wgpu::Buffer>,
+}
+
+/// One batched write: `size` bytes from `from` in the staging buffer to
+/// `offset` in `to`.
+struct BatchedCopy {
+    to: wgpu::Buffer,
+    offset: u64,
+    from: u64,
+    size: u64,
+}
+
+thread_local! {
+    static BATCH: std::cell::RefCell<Option<WriteBatch>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Gathers this thread's buffer writes into `batch` until [`end_batch`].
+/// `false` (and `batch` dropped) when a batch is already gathering here:
+/// the outer one takes the writes.
+#[cfg_attr(not(feature = "3d"), allow(dead_code))]
+pub(crate) fn begin_batch(batch: WriteBatch) -> bool {
+    BATCH.with(|b| {
+        let mut b = b.borrow_mut();
+        if b.is_some() {
+            return false;
+        }
+        *b = Some(batch);
+        true
+    })
+}
+
+/// Stops gathering this thread's writes and gives the batch back.
+#[cfg_attr(not(feature = "3d"), allow(dead_code))]
+pub(crate) fn end_batch() -> WriteBatch {
+    BATCH.with(|b| b.borrow_mut().take()).unwrap_or_default()
+}
+
+/// The unchanged bytes a uniform's [`Mirror::upload`] writes along between
+/// two changed runs rather than starting another write, while a
+/// [`WriteBatch`] gathers this thread's writes: there a write costs a copy
+/// command (and `wgpu` a heap allocation for its barriers), and a few
+/// kilobytes more of a uniform cost next to nothing. Records written per
+/// model (instances, motion) keep uploading only what changed.
+pub(crate) const BATCHED_BRIDGE_BYTES: usize = 4096;
+
+/// [`BATCHED_BRIDGE_BYTES`] in pages of `page` bytes while a batch gathers
+/// this thread's writes, otherwise 0.
+fn batched_bridge(page: usize) -> usize {
+    let gathering = BATCH.with(|b| b.try_borrow().is_ok_and(|b| b.is_some()));
+    if gathering {
+        BATCHED_BRIDGE_BYTES / page.max(1)
+    } else {
+        0
+    }
+}
+
+/// Puts a write into this thread's batch, if one is gathering and the
+/// write belongs there (see [`WriteBatch`]).
+fn batched(kind: Upload, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> bool {
+    let aligned = data.len().is_multiple_of(4) && offset.is_multiple_of(4) && !data.is_empty();
+    BATCH.with(|b| {
+        let Ok(mut b) = b.try_borrow_mut() else {
+            return false;
+        };
+        let Some(batch) = b.as_mut() else {
+            return false;
+        };
+        let joins = || batch.copies.iter().any(|c| c.to == *buffer);
+        if !aligned || (kind == Upload::StaticBatches || data.len() > BATCHED_WRITE_BYTES) && !joins() {
+            return false;
+        }
+        batch.push(buffer, offset, data);
+        true
+    })
+}
+
+#[cfg_attr(not(feature = "3d"), allow(dead_code))]
+impl WriteBatch {
+    fn push(&mut self, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
+        let from = self.bytes.len() as u64;
+        let size = data.len() as u64;
+        self.bytes.extend_from_slice(data);
+        // A write right after the last one, into the same buffer: one copy.
+        if let Some(last) = self.copies.last_mut()
+            && last.to == *buffer
+            && last.offset + last.size == offset
+            && last.from + last.size == from
+        {
+            last.size += size;
+            return;
+        }
+        self.copies.push(BatchedCopy {
+            to: buffer.clone(),
+            offset,
+            from,
+            size,
+        });
+    }
+
+    /// Uploads the gathered bytes in one write into the staging buffer
+    /// (made, or made bigger, when they don't fit). Their copies into place
+    /// wait for [`record`](Self::record), which must come before anything
+    /// reads those buffers and before the next `upload`.
+    pub(crate) fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        if self.copies.is_empty() {
+            self.bytes.clear();
+            return;
+        }
+        let needed = self.bytes.len() as u64;
+        if self.staging.as_ref().is_none_or(|s| s.size() < needed) {
+            self.staging = Some(device.new_buffer(&wgpu::BufferDescriptor {
+                label: Some("frame writes"),
+                size: needed.next_power_of_two().max(4096),
+                usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        if let Some(staging) = &self.staging {
+            // Counted when each write was gathered.
+            queue.write_buffer(staging, 0, &self.bytes);
+        }
+        self.bytes.clear();
+    }
+
+    /// Whether uploaded writes wait for [`record`](Self::record).
+    pub(crate) fn has_copies(&self) -> bool {
+        !self.copies.is_empty()
+    }
+
+    /// Records the uploaded writes' copies into place, first in `encoder`.
+    pub(crate) fn record(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(staging) = &self.staging {
+            for copy in &self.copies {
+                encoder.copy_buffer_to_buffer(staging, copy.from, &copy.to, copy.offset, copy.size);
+            }
+        }
+        self.copies.clear();
     }
 }
 
@@ -287,10 +462,14 @@ impl Mirror {
     /// Brings `buffer`'s bytes `at..at + data.len()` (whose contents this
     /// mirrors) up to `data`, counted as `kind`: a uniform, compared a vec4
     /// at a time, so a frame uploads only the values that changed (with
-    /// up to eight unchanged vec4s between two changed ones along).
+    /// up to eight unchanged vec4s between two changed ones along, or up to
+    /// [`BATCHED_BRIDGE_BYTES`] while a [`WriteBatch`] gathers the writes).
     pub fn upload(&mut self, queue: &wgpu::Queue, kind: Upload, buffer: &wgpu::Buffer, at: u64, data: &[u8]) {
         let uploads = queue.uploading(kind);
-        self.sync_bridged(0, data, 16, 8, |offset, bytes| {
+        // While writes are batched, a write costs a copy command: a few
+        // kilobytes of a uniform along cost less than another one.
+        let bridge = 8.max(batched_bridge(16));
+        self.sync_bridged(0, data, 16, bridge, |offset, bytes| {
             uploads.write_buffer(buffer, at + offset as u64, bytes);
         });
     }

@@ -159,7 +159,10 @@ pub(crate) struct Batch {
     pub max: Vec3,
     pub options: InstanceBatchOptions,
     pub instances: Vec<Instance3D>,
-    pub spheres: Vec<[f32; 4]>,
+    /// Each instance's bounding sphere in the world. Shared with the
+    /// renderer's copy of a batch of distance levels on the CPU path, which
+    /// reads it only while global illumination is on (nothing is copied).
+    pub spheres: std::sync::Arc<Vec<[f32; 4]>>,
     pub cells: Vec<Cell>,
     /// Withdrawn from the renderer because a level's mesh was freed (see
     /// `Assets3D::validate_instance_batches`).
@@ -244,7 +247,7 @@ impl Batch {
             max: Vec3::splat(f32::NEG_INFINITY),
             options,
             instances: Vec::with_capacity(sorted.len()),
-            spheres: Vec::with_capacity(sorted.len()),
+            spheres: Default::default(),
             cells: Vec::new(),
             suspended: false,
             bounds,
@@ -252,6 +255,7 @@ impl Batch {
             parent: None,
             members: Vec::new(),
         };
+        let mut spheres = Vec::with_capacity(sorted.len());
         let mut previous = None;
         for (key, matrix, center, radius, color) in sorted {
             if previous != Some(key) || batch.cells.last().is_some_and(|c| c.count == 256) {
@@ -281,8 +285,9 @@ impl Batch {
                 model,
                 color: super::linear(color),
             });
-            batch.spheres.push(center.extend(radius).to_array());
+            spheres.push(center.extend(radius).to_array());
         }
+        batch.spheres = std::sync::Arc::new(spheres);
         batch
     }
 }

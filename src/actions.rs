@@ -6,6 +6,7 @@ use crate::input::Gamepad;
 use crate::input::GamepadAxis;
 use crate::input::GamepadButton;
 use crate::input::GamepadStick;
+use crate::input::touch::{Gesture, GestureAxis, TouchState, ZoneKind};
 use crate::input::{ButtonStates, PadState};
 use crate::input::{Key, MAX_GAMEPADS, MouseButton};
 use glam::Vec2;
@@ -39,6 +40,13 @@ pub enum ButtonBinding {
         /// Button to read.
         button: GamepadButton,
     },
+    /// A touch gesture: down while it holds (drag, long press, pinch,
+    /// rotate) or for the frame it happens in (tap, double tap, swipes).
+    /// ```
+    /// use ponko::prelude::*;
+    /// let jump = Action::Button(vec![ButtonBinding::Key(Key::Space), ButtonBinding::Gesture(Gesture::SwipeUp)]);
+    /// ```
+    Gesture(Gesture),
 }
 
 /// A scalar source. Gamepad values inside the deadzone read zero; outside
@@ -73,6 +81,21 @@ pub enum AxisBinding {
         axis: GamepadAxis,
         /// Deadzone in `0..1`.
         deadzone: f32,
+    },
+    /// A touch gesture's change this frame (pinch, rotation or drag),
+    /// times `scale`. Not clamped: like the mouse wheel, it is an amount
+    /// per frame, zero in a frame where the fingers didn't move.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::input::GestureAxis;
+    /// // Spreading two fingers by 10 % zooms in by one step.
+    /// let zoom = Action::Axis(vec![AxisBinding::Gesture { axis: GestureAxis::Pinch, scale: 10.0 }]);
+    /// ```
+    Gesture {
+        /// Which amount.
+        axis: GestureAxis,
+        /// What it is multiplied by.
+        scale: f32,
     },
 }
 
@@ -112,6 +135,18 @@ pub enum Axis2Binding {
         stick: GamepadStick,
         /// Deadzone in `0..1`.
         deadzone: f32,
+    },
+    /// A one-finger touch drag's movement this frame, in window pixels,
+    /// times `scale` (y down). Not clamped: an amount per frame, like
+    /// [`Input::mouse_delta`](crate::input::Input::mouse_delta), for
+    /// turning a camera.
+    /// ```
+    /// use ponko::prelude::*;
+    /// let look = Action::Axis2(vec![Axis2Binding::Drag { scale: 0.01 }]);
+    /// ```
+    Drag {
+        /// What the movement is multiplied by.
+        scale: f32,
     },
 }
 
@@ -209,6 +244,45 @@ impl Action {
             Action::Button(b) => b,
             _ => &[],
         }
+    }
+    /// The same action with every gamepad binding moved to `pad`: write the
+    /// bindings once for player one, then install a copy per player
+    /// (`"jump.p2"` from `jump.for_pad(pad)`). Keyboard and mouse bindings
+    /// stay as they are.
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let p1 = Gamepad::from_slot(0).unwrap();
+    /// let p2 = Gamepad::from_slot(1).unwrap();
+    /// let jump = Action::Button(vec![ButtonBinding::Gamepad { pad: p1, button: GamepadButton::South }]);
+    /// assert_eq!(jump.for_pad(p2).buttons(), [ButtonBinding::Gamepad { pad: p2, button: GamepadButton::South }]);
+    /// ```
+    #[must_use]
+    pub fn for_pad(&self, pad: Gamepad) -> Action {
+        let mut out = self.clone();
+        match &mut out {
+            Action::Button(bindings) => {
+                for b in bindings {
+                    if let ButtonBinding::Gamepad { pad: p, .. } = b {
+                        *p = pad;
+                    }
+                }
+            }
+            Action::Axis(bindings) => {
+                for b in bindings {
+                    if let AxisBinding::Gamepad { pad: p, .. } = b {
+                        *p = pad;
+                    }
+                }
+            }
+            Action::Axis2(bindings) => {
+                for b in bindings {
+                    if let Axis2Binding::Gamepad { pad: p, .. } = b {
+                        *p = pad;
+                    }
+                }
+            }
+        }
+        out
     }
     /// The sources of a scalar axis action; empty for the other kinds.
     /// ```
@@ -514,6 +588,13 @@ impl ActionMap {
     pub fn is_empty(&self) -> bool {
         self.bindings.is_empty()
     }
+    /// The state slot of an action the map has.
+    pub(crate) fn slot_of(&self, name: &str) -> Option<u32> {
+        self.bindings
+            .contains_key(name)
+            .then(|| self.slots.get(name).copied())
+            .flatten()
+    }
     /// Resolves an action name once, for the id-based queries. An unknown
     /// name is an error that lists the known actions.
     ///
@@ -581,6 +662,11 @@ impl ActionMap {
         self.states = vec![State::default(); old.states.len()];
         self.sync();
     }
+    /// The bindings of the action in state slot `slot` (an `ActionId`).
+    pub(crate) fn binding_at(&self, slot: usize) -> Option<&Action> {
+        let i = self.order.iter().position(|&o| o as usize == slot)?;
+        self.bindings.values().nth(i)
+    }
     /// Clears one action's edges, so changing its bindings fires none.
     pub(crate) fn clear_edges(&mut self, name: &str) {
         if let Some(&slot) = self.slots.get(name) {
@@ -620,6 +706,7 @@ impl ActionMap {
         keys: &ButtonStates<{ Key::COUNT }>,
         mouse: &ButtonStates<{ MouseButton::COUNT }>,
         pads: &[PadState; MAX_GAMEPADS],
+        touch: &TouchState,
     ) {
         let key = |k: Key| f32::from(keys.down[k as usize]);
         let pad_axis = |p: Gamepad, a: GamepadAxis| pads.get(p.slot()).map_or(0.0, |s| s.axes[a as usize]);
@@ -633,7 +720,8 @@ impl ActionMap {
                         ButtonBinding::Gamepad { pad, button } => {
                             pads.get(pad.slot()).is_some_and(|s| s.buttons.down[button as usize])
                         }
-                    });
+                        ButtonBinding::Gesture(g) => touch.down(g),
+                    }) || touch.zones_for(slot).any(|z| z.held());
                     s.pressed |= !s.down && down;
                     s.released |= s.down && !down;
                     s.down = down;
@@ -646,6 +734,17 @@ impl ActionMap {
                             AxisBinding::Gamepad { pad, axis, deadzone } => {
                                 deadzone_value(pad_axis(pad, axis), deadzone)
                             }
+                            AxisBinding::Gesture { axis, scale } => finite(touch.axis(axis) * scale),
+                        };
+                        if v.abs() > s.axis.abs() {
+                            s.axis = v;
+                        }
+                    }
+                    // An on-screen stick across, a button as 1.
+                    for zone in touch.zones_for(slot) {
+                        let v = match zone.kind {
+                            ZoneKind::Stick => zone.value.x,
+                            ZoneKind::Button => f32::from(zone.held()),
                         };
                         if v.abs() > s.axis.abs() {
                             s.axis = v;
@@ -672,15 +771,27 @@ impl ActionMap {
                                     Vec2::ZERO
                                 }
                             }
+                            Axis2Binding::Drag { scale } => {
+                                let v = touch.drag_delta() * scale;
+                                if v.is_finite() { v } else { Vec2::ZERO }
+                            }
                         };
                         if v.length_squared() > s.axis2.length_squared() {
                             s.axis2 = v;
+                        }
+                    }
+                    for zone in touch.zones_for(slot).filter(|z| z.kind == ZoneKind::Stick) {
+                        if zone.value.length_squared() > s.axis2.length_squared() {
+                            s.axis2 = zone.value;
                         }
                     }
                 }
             }
         }
     }
+}
+fn finite(v: f32) -> f32 {
+    if v.is_finite() { v } else { 0.0 }
 }
 fn deadzone_value(value: f32, deadzone: f32) -> f32 {
     if !value.is_finite() || !(0.0..1.0).contains(&deadzone) {
@@ -713,7 +824,7 @@ pub enum ButtonState {
 /// ```compile_fail,E0004
 /// use ponko::actions::InputEvent;
 /// fn exhaustive(value: InputEvent) {
-///     match value { InputEvent::Key(..) => (), InputEvent::Mouse(..) => (), InputEvent::GamepadButton(..) => (), InputEvent::GamepadAxis(..) => (), InputEvent::FocusLost => (), InputEvent::GamepadDisconnected(_) => (), InputEvent::MouseMove(_) => (), InputEvent::MouseWheel(_) => () }
+///     match value { InputEvent::Key(..) => (), InputEvent::Mouse(..) => (), InputEvent::GamepadButton(..) => (), InputEvent::GamepadAxis(..) => (), InputEvent::FocusLost => (), InputEvent::GamepadDisconnected(_) => (), InputEvent::MouseMove(_) => (), InputEvent::MouseWheel(_) => (), InputEvent::GamepadConnected(_) => (), InputEvent::GamepadMotion(..) => () }
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -739,6 +850,33 @@ pub enum InputEvent {
     /// is away from the user (`ctx.input.mouse_wheel()`). Several in one
     /// frame add up.
     MouseWheel(Vec2),
+    /// A gamepad connects into this slot (no name, generic family): what
+    /// makes it listed by `ctx.input.gamepads()` in a replay or a test
+    /// without a backend. Connecting a connected slot does nothing.
+    GamepadConnected(Gamepad),
+    /// A gyro and accelerometer reading of a gamepad
+    /// (`ctx.input.gamepad_motion(pad)`).
+    GamepadMotion(Gamepad, crate::input::GamepadMotion),
+    /// A finger went down, moved, lifted or was cancelled, at `position`
+    /// in window pixels (`ctx.input.touches()`). `id` tells fingers apart
+    /// and stays the same from a touch's start to its end. Touches make
+    /// gestures and press on-screen controls as the window's touches do.
+    /// Non-finite positions are ignored.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::actions::InputEvent;
+    /// use ponko::input::TouchPhase;
+    /// let down = InputEvent::Touch { id: 1, phase: TouchPhase::Started, position: vec2(10.0, 20.0) };
+    /// assert_eq!(down, InputEvent::touch_start(1, vec2(10.0, 20.0)));
+    /// ```
+    Touch {
+        /// Which finger.
+        id: u64,
+        /// What it did.
+        phase: crate::input::TouchPhase,
+        /// Where, in window pixels.
+        position: Vec2,
+    },
 }
 
 impl InputEvent {
@@ -763,6 +901,48 @@ impl InputEvent {
     /// ```
     pub const fn mouse(button: MouseButton, state: ButtonState) -> Self {
         Self::Mouse(button, matches!(state, ButtonState::Held))
+    }
+    /// Finger `id` goes down at `position` (window pixels).
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::actions::InputEvent;
+    /// Game::new("t", 320, 240).run_headless(0, |ctx| {
+    ///     ctx.input.feed(InputEvent::touch_start(1, vec2(5.0, 5.0)));
+    ///     assert_eq!(ctx.input.touches().len(), 1);
+    /// });
+    /// ```
+    pub const fn touch_start(id: u64, position: Vec2) -> Self {
+        Self::Touch {
+            id,
+            phase: crate::input::TouchPhase::Started,
+            position,
+        }
+    }
+    /// Finger `id` moves to `position`.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::actions::InputEvent;
+    /// let to = InputEvent::touch_move(1, vec2(6.0, 5.0));
+    /// ```
+    pub const fn touch_move(id: u64, position: Vec2) -> Self {
+        Self::Touch {
+            id,
+            phase: crate::input::TouchPhase::Moved,
+            position,
+        }
+    }
+    /// Finger `id` lifts at `position`.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::actions::InputEvent;
+    /// let up = InputEvent::touch_end(1, vec2(6.0, 5.0));
+    /// ```
+    pub const fn touch_end(id: u64, position: Vec2) -> Self {
+        Self::Touch {
+            id,
+            phase: crate::input::TouchPhase::Ended,
+            position,
+        }
     }
     /// Set a gamepad button's held state, with the same edge rules as [`Self::key`].
     pub const fn gamepad_button(pad: Gamepad, button: GamepadButton, state: ButtonState) -> Self {

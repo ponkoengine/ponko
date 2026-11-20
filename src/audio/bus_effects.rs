@@ -30,6 +30,8 @@ pub enum BusEffect {
     Compressor(CompressorEffect),
     /// Echoes. Its delay time is fixed when the bus is built.
     Delay(DelayEffect),
+    /// Raises or lowers the pitch without changing the speed.
+    PitchShift(PitchShiftEffect),
 }
 
 /// Which frequencies a [`FilterEffect`] lets through.
@@ -176,6 +178,59 @@ impl Default for DelayEffect {
     }
 }
 
+/// A pitch shift on a bus: everything on it sounds higher or lower at the
+/// same speed. With a sound's speed ([`Audio::set_speed`](super::Audio::set_speed),
+/// [`Audio::set_music_speed`](super::Audio::set_music_speed)) it changes the
+/// tempo without the pitch: see [`undo_speed`](Self::undo_speed). It
+/// reads the sound through two overlapping 40 ms windows, so large shifts
+/// sound grainy; within an octave either way it suits music and voices.
+/// `ratio` is clamped to 0.25–4 (two octaves), `mix` to 0–1.
+///
+/// ```
+/// use ponko::audio::{BusEffect, PitchShiftEffect};
+/// let up = PitchShiftEffect::semitones(12.0);
+/// assert!((up.ratio - 2.0).abs() < 1e-6);
+/// assert_eq!(BusEffect::PitchShift(up), serde_json::from_str(r#"{"pitch_shift": {"ratio": 2}}"#).unwrap());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PitchShiftEffect {
+    /// The frequency ratio: 2 is an octave up, 0.5 an octave down. Default 1.
+    pub ratio: f32,
+    /// The shifted share of the output, 0–1. Default 1.
+    pub mix: f32,
+}
+impl Default for PitchShiftEffect {
+    fn default() -> Self {
+        Self { ratio: 1.0, mix: 1.0 }
+    }
+}
+impl PitchShiftEffect {
+    /// A shift of `semitones` (12 to an octave; negative: down).
+    #[must_use]
+    pub fn semitones(semitones: f32) -> Self {
+        Self {
+            ratio: 2f32.powf(finite(semitones, 0.0) / 12.0),
+            ..Default::default()
+        }
+    }
+    /// The shift that brings sound played at `speed` back to its own pitch:
+    /// on the bus of a sound sped up 10 %, it keeps the faster tempo and the
+    /// recorded pitch.
+    ///
+    /// ```
+    /// use ponko::audio::PitchShiftEffect;
+    /// assert!((PitchShiftEffect::undo_speed(2.0).ratio - 0.5).abs() < 1e-6);
+    /// ```
+    #[must_use]
+    pub fn undo_speed(speed: f32) -> Self {
+        Self {
+            ratio: 1.0 / finite(speed, 1.0).max(0.01),
+            ..Default::default()
+        }
+    }
+}
+
 /// Sidechain ducking: while `key` (dialogue, say) is louder than
 /// `threshold`, the bus it is set on (music) drops to `gain`, ramping down
 /// over `attack` seconds and back up over `release` seconds. It follows the
@@ -282,6 +337,10 @@ impl BusEffect {
                     mix: finite(e.mix, d.mix).clamp(0.0, 1.0),
                 })
             }
+            Self::PitchShift(p) => Self::PitchShift(PitchShiftEffect {
+                ratio: finite(p.ratio, 1.0).clamp(0.25, 4.0),
+                mix: finite(p.mix, 1.0).clamp(0.0, 1.0),
+            }),
         }
     }
 
@@ -293,6 +352,7 @@ impl BusEffect {
             Self::Reverb(_) => (1, 0),
             Self::Compressor(_) => (2, 0),
             Self::Delay(d) => (3, d.delay.to_bits()),
+            Self::PitchShift(_) => (4, 0),
         }
     }
 
@@ -331,6 +391,15 @@ impl BusEffect {
             (Self::Delay(a), Self::Delay(b)) => Self::Delay(DelayEffect {
                 delay: a.delay,
                 feedback_db: mix(a.feedback_db, b.feedback_db),
+                mix: mix(a.mix, b.mix),
+            }),
+            (Self::PitchShift(a), Self::PitchShift(b)) => Self::PitchShift(PitchShiftEffect {
+                // Evenly in pitch, like a filter's cutoff.
+                ratio: match t {
+                    0.0 => a.ratio,
+                    1.0 => b.ratio,
+                    _ => (a.ratio.max(0.01).ln() + (b.ratio.max(0.01).ln() - a.ratio.max(0.01).ln()) * t).exp(),
+                },
                 mix: mix(a.mix, b.mix),
             }),
             _ => *self,

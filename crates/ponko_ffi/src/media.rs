@@ -495,7 +495,7 @@ pub unsafe extern "C" fn ponko_ctx_measure_text_ex(
 
 // ---- sound --------------------------------------------------------------------------
 
-/// Loads a sound (WAV, OGG, MP3 or FLAC) from the assets folder.
+/// Loads a sound (OGG Vorbis, MP3, FLAC, WAV with PCM or IMA ADPCM, AIFF) from the assets folder.
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_load_sound(std::ptr::null_mut(), c"a.ogg".as_ptr(), std::ptr::null_mut()) } as u32, 1);
 /// ```

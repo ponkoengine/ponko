@@ -126,7 +126,10 @@ on the tree; C:
 
 `UiPaint` supplies background colors for normal/hover/pressed/disabled states,
 borders, font, line height, text color, wrapping and horizontal alignment.
-Set `texture` for an image or textured panel, and `slice` to the source border
+Controls (buttons, checkboxes, text fields, ...) draw their text in the
+middle of their height, at least ¾ of the theme's `spacing` in from their
+sides; buttons centre it across too (`align` is `Center` in their default
+paint, `Start` for the rest). Set `texture` for an image or textured panel, and `slice` to the source border
 size in texture pixels for nine-slice backgrounds. `UiWidget::Toggle` uses
 zero/one values; `Slider` uses normalized 0..1 values. Read them with `value`
 after a `Changed` event. Changes made with setters do not emit user events.

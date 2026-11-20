@@ -134,6 +134,15 @@ impl StencilPipelines {
         }
     }
 
+    /// A freed shader's materials keep their stencil state with the built-in shader.
+    pub(super) fn use_builtin_shader(&mut self, shaders: &Shaders, material: usize) {
+        if let Some(Some(set)) = self.by_material.get_mut(material) {
+            set.slot = 0;
+            set.shader = shaders.sets[0].clone();
+            set.pipelines = std::array::from_fn(|_| OnceLock::new());
+        }
+    }
+
     /// Whether material `id` has a stencil state.
     pub(super) fn has(&self, id: u32) -> bool {
         self.by_material.get(id as usize).is_some_and(Option::is_some)

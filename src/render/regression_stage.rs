@@ -35,6 +35,8 @@ pub(super) struct Setup {
     /// forced on the whole run by the environment still applies on top.
     pub tier: Option<GpuTier>,
     pub samples: u32,
+    /// Asks for GPU timestamps where the adapter has them (timing tests).
+    pub timestamps: bool,
 }
 
 impl Default for Setup {
@@ -45,6 +47,7 @@ impl Default for Setup {
             view_format: None,
             tier: None,
             samples: 4,
+            timestamps: false,
         }
     }
 }
@@ -81,8 +84,14 @@ impl Stage {
                     .clamp(16, 24),
                 ..wgpu::Limits::default()
             };
+            let timestamps = if setup.timestamps {
+                adapter.features() & wgpu::Features::TIMESTAMP_QUERY
+            } else {
+                wgpu::Features::empty()
+            };
             Ok(wgpu::DeviceDescriptor {
                 required_limits: setup.tier.map_or(engine.clone(), |tier| tier.device_limits(engine)),
+                required_features: timestamps,
                 ..Default::default()
             })
         })?;
@@ -236,6 +245,15 @@ impl Stage {
 
     /// Collects and draws one frame into `output`.
     pub fn render(&mut self) {
+        self.render_timed(None);
+    }
+
+    /// [`render`](Self::render), timing the GPU passes with `timer`.
+    pub fn render_timed(&mut self, mut timer: Option<&mut super::timer::GpuTimer>) {
+        if let Some(t) = &mut timer {
+            t.collect(&self.device);
+            t.begin_frame();
+        }
         let ctx = &mut self.ctx;
         let post = &ctx.scene3d.post;
         ctx.gfx.frame3d.motion.enabled = post.anti_aliasing == crate::render::AntiAliasing::Taa
@@ -244,28 +262,46 @@ impl Stage {
         let mut skins = std::mem::take(&mut ctx.gfx.frame3d.skins);
         skins.motion = ctx.gfx.frame3d.motion.enabled;
         skins.collect(&mut ctx.world, &ctx.gfx.assets3d);
+        // As the game does (`three/api.rs`): held items in front of the
+        // camera, kept out of its view while a view model draws them.
+        let view_model = ctx.scene3d.view_model;
+        crate::three::view_model::place_held_items(&mut ctx.world, &ctx.scene3d.camera, view_model.as_ref());
         ctx.gfx.frame3d.collect(
             &mut ctx.world,
             &ctx.gfx.assets3d,
             &skins,
-            &ctx.scene3d.camera,
+            &crate::three::view_model::without_view_model(&ctx.scene3d.camera, view_model.as_ref()),
             &ctx.scene3d.lighting,
+        );
+        crate::three::view_model::collect_view_model(
+            &mut ctx.world,
+            &ctx.gfx.assets3d,
+            &mut ctx.gfx.frame3d,
+            &ctx.scene3d,
+            &skins,
         );
         ctx.gfx.frame3d.skins = skins;
         let rgb = |c| {
             let [r, g, b, _] = linear(c);
             Vec3::new(r, g, b)
         };
-        // The light as a game without an atmosphere gets it.
+        // The light as a game without an atmosphere gets it; with the sky
+        // kit, as the game works it out (`three/api.rs`).
+        let sky = &ctx.scene3d.sky;
+        let light = if sky.kit.is_some() && sky.shader.is_none() {
+            SkyLight::new(&ctx.scene3d.lighting, sky)
+        } else {
+            SkyLight {
+                sun: rgb(ctx.scene3d.lighting.sun_color) * ctx.scene3d.lighting.sun_intensity,
+                sky: rgb(sky.sky_color),
+                ground: rgb(sky.ground_color),
+            }
+        };
         let scene = Scene3D {
             frame: &ctx.gfx.frame3d,
             lighting: &ctx.scene3d.lighting,
             sky: &ctx.scene3d.sky,
-            light: SkyLight {
-                sun: rgb(ctx.scene3d.lighting.sun_color) * ctx.scene3d.lighting.sun_intensity,
-                sky: rgb(ctx.scene3d.sky.sky_color),
-                ground: rgb(ctx.scene3d.sky.ground_color),
-            },
+            light,
             camera: ctx.scene3d.camera.position,
             post: &ctx.scene3d.post,
             time: (0.0, 1.0 / 60.0),
@@ -285,10 +321,20 @@ impl Stage {
             format: self.view_format,
             ..Default::default()
         });
-        let buffers = self
-            .renderer
-            .draw(&self.device, &view, wgpu::Color::BLACK, &self.textures, None);
+        let buffers = self.renderer.draw(
+            &self.device,
+            &view,
+            wgpu::Color::BLACK,
+            &self.textures,
+            timer.as_deref(),
+        );
         self.queue.submit(buffers);
+        if let Some(t) = &mut timer {
+            let mut encoder = self.device.create_command_encoder(&Default::default());
+            t.resolve(&mut encoder);
+            self.queue.submit([encoder.finish()]);
+            t.submitted();
+        }
     }
 
     /// Draws a frame and reads it back (RGBA8, as the target stores it).

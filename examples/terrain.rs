@@ -292,7 +292,7 @@ fn main() {
                 MaterialDesc::color(Color::hex(0x1E4D6B))
                     .with_shader(water)
                     .with_blend(Blend::Transparent)
-                    .with_custom_textures([Some(mirror), None])
+                    .with_custom_textures([Some(mirror.texture()), None])
                     .with_custom([vec4(0.06, 1.5, 1.2, 1.2), Vec4::ZERO, Vec4::ZERO, Vec4::ZERO]),
             );
             let surface = ctx.gfx.create_mesh(&MeshData::plane(TILES as f32 * TILE), lake);

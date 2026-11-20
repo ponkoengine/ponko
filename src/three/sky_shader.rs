@@ -70,11 +70,7 @@ impl Graphics {
                 let e = e.with_path(path);
                 Self::report_stand_in(path, &e);
                 self.compile_sky_shader(path, SKY_STAND_IN, None).map_err(|_| e)?;
-                let shader = SkyShader {
-                    id: self.assets3d.sky_shaders,
-                };
-                self.assets3d.sky_shaders += 1;
-                shader
+                self.next_sky_shader()
             }
             Err(e) => return Err(e.with_path(path)),
         };
@@ -125,11 +121,32 @@ impl Graphics {
     pub fn try_create_sky_shader(&mut self, name: &str, source: &str) -> Result<SkyShader, crate::error::Error> {
         let compiled = self.compile_sky_shader(name, source, None);
         self.record_shader(name, crate::render::ShaderKind::Sky, false, compiled)?;
-        let shader = SkyShader {
-            id: self.assets3d.sky_shaders,
-        };
+        Ok(self.next_sky_shader())
+    }
+
+    /// The handle of the sky shader just compiled.
+    fn next_sky_shader(&mut self) -> SkyShader {
+        let id = self.assets3d.sky_shaders;
         self.assets3d.sky_shaders += 1;
-        Ok(shader)
+        self.assets3d.sky_shaders_live.insert(id);
+        SkyShader { id }
+    }
+
+    /// Frees sky shader `id` (see [`Ctx::free`](crate::ctx::Ctx::free)): a
+    /// sky still set to it shows the built-in atmosphere, and its file is
+    /// no longer watched; loading the file again makes a new one.
+    pub(crate) fn free_sky_shader_id(&mut self, id: u32) {
+        if !self.assets3d.sky_shaders_live.remove(id) {
+            return;
+        }
+        self.assets3d.loaded_sky_shaders.retain(|_, s| s.id != id);
+        self.watcher
+            .forget(|a| matches!(a, crate::hot_reload::Asset::SkyShader(s) if *s == id));
+        if let Some(renderer) = self.renderer.as_mut()
+            && !self.headless
+        {
+            renderer.free_sky_shader(id);
+        }
     }
 
     /// Checks sky shader `source` and builds its pipelines, as `replace` or
@@ -167,7 +184,7 @@ impl Graphics {
     /// Recompiles a sky shader whose file changed (hot reload). On an error
     /// the last good version stays in use.
     pub(crate) fn reload_sky_shader(&mut self, id: u32, name: &str, source: &str) -> Result<(), String> {
-        if id >= self.assets3d.sky_shaders {
+        if !self.assets3d.sky_shaders_live.contains(id) {
             return Ok(());
         }
         let compiled = self.compile_sky_shader(name, source, Some(id));

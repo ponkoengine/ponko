@@ -154,8 +154,9 @@ impl Ctx {
         let mut replaced = Vec::new();
         for (name, mut data) in pending {
             for a in &mut data.attachments {
-                let (image, texture) = a.attachment.texture_mut();
-                if !image.is_empty() {
+                if let Some((image, texture)) = a.attachment.texture_mut()
+                    && !image.is_empty()
+                {
                     *texture = self.gfx.try_load_texture(image)?;
                 }
             }
@@ -211,6 +212,35 @@ impl Ctx {
                 s.update(dt);
             }
         });
+    }
+
+    /// Advances every skeleton by `dt` on all cores, as the built-in
+    /// update does, for `ponko_bench`. Unstable (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(feature = "bench-internals")]
+    pub fn bench_skeleton2d_update(&mut self, dt: f32) {
+        self.world.query::<&mut Skeleton>().par_for_each(|s| s.update(dt));
+    }
+
+    /// Draws every skeleton into the sprite draw list as the sprite pass
+    /// does (the vertex building only), for `ponko_bench`; then
+    /// [`bench_skeleton2d_finish`](Self::bench_skeleton2d_finish) orders,
+    /// batches and forgets it. Unstable (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(feature = "bench-internals")]
+    pub fn bench_skeleton2d_draw(&mut self) {
+        super::draw_skeletons(self);
+    }
+
+    /// Orders and batches the draw list as the renderer does, forgets it,
+    /// and returns its vertices and batches. Unstable (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(feature = "bench-internals")]
+    pub fn bench_skeleton2d_finish(&mut self) -> (usize, usize) {
+        let (vertices, batches) = self.gfx.draw_list.finish();
+        let counts = (vertices.len(), batches.len());
+        self.gfx.draw_list.clear();
+        counts
     }
 
     /// One frame of 2D skeletons without a GPU, for `ponko_bench`: advances

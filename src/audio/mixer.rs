@@ -77,11 +77,21 @@ pub(super) struct BusState {
     /// Changes when the parent or the effects' kinds change, which needs
     /// the bus's tracks built again.
     pub(super) shape: u32,
+    /// Paused by [`Audio::pause_bus`].
+    pub(super) paused: bool,
+    /// Game states on the stack that pause it ([`Game::pause_audio_in`](crate::game::Game::pause_audio_in)).
+    pub(super) state_pauses: u32,
+    /// At most this many real voices play on it at once ([`Audio::set_bus_voice_limit`]).
+    pub(super) voice_limit: Option<u32>,
 }
 impl BusState {
     /// Its own gain as heard: zero while muted.
     pub(super) fn gain(&self) -> f32 {
         if self.muted { 0.0 } else { self.heard_volume }
+    }
+    /// Paused by the game or by a game state (not counting its parents).
+    pub(super) fn own_pause(&self) -> bool {
+        self.paused || self.state_pauses > 0
     }
 }
 #[derive(Default)]
@@ -110,6 +120,9 @@ impl BusRegistry {
             heard_volume: 1.0,
             heard_effects: Vec::new(),
             shape: 0,
+            paused: false,
+            state_pauses: 0,
+            voice_limit: None,
         });
         id
     }
@@ -152,6 +165,20 @@ impl BusRegistry {
             at = state.parent;
         }
         gain
+    }
+    /// Whether `bus` or one of its parents is paused.
+    pub(super) fn paused(&self, bus: AudioBus) -> bool {
+        let mut at = Some(bus);
+        for _ in 0..=self.entries.len() {
+            let Some(state) = at.and_then(|b| self.entries.get(b.0)) else {
+                break;
+            };
+            if state.own_pause() {
+                return true;
+            }
+            at = state.parent;
+        }
+        false
     }
     pub(super) fn set_parent(&mut self, bus: AudioBus, parent: Option<AudioBus>) -> Result<(), Error> {
         self.ensure_default();
@@ -481,7 +508,7 @@ impl Audio {
     /// # }
     /// ```
     pub fn play_on(&mut self, sound: Sound, params: SoundParams, bus: AudioBus, effects: AudioEffects) -> Playing {
-        let playing = if self.headless {
+        let playing = if self.silent_output() {
             self.silent += 1;
             Playing(self.silent)
         } else {

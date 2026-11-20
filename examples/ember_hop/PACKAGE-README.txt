@@ -21,6 +21,9 @@ Controls
   Continue        C, or North (Y / Triangle), on the title screen
   To the title    Q, or East (B / Circle), while paused
 
+On a touch screen a stick, Jump and Flare buttons and a pause button appear;
+a tap starts a new run and a long press continues one.
+
 A lit brazier keeps your progress: losing the ember (spikes, water, a fall or
 a drip) starts you again at the last brazier, or at the start of the cave.
 

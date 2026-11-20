@@ -38,9 +38,12 @@ struct Full { @builtin(position) at: vec4<f32> };
     return out;
 }
 
-// Linear steps along the ray, then halvings of the step that crossed.
+// Steps along the ray, then halvings of the step that crossed.
 const STEPS: i32 = 32;
 const REFINE: i32 = 6;
+// How fast the steps grow on screen: each is e^(GROWTH / STEPS) times
+// (about 1.1 times) the one before.
+const GROWTH: f32 = 3.0;
 
 fn coordinate(p: vec2<i32>) -> vec2<i32> {
     return clamp(p, vec2<i32>(0), vec2<i32>(textureDimensions(depth)) - 1);
@@ -100,6 +103,32 @@ fn cone_spread(center: vec3<f32>, view: vec3<f32>, travel: f32) -> f32 {
     return 2.0 * travel * pixels;
 }
 
+// Where step `k` (0 to 1) of the march falls along the ray, as a fraction
+// `f` of it, for a ray whose ends are `w0` and `w1` in front of the camera:
+// on screen, from `first` on, each step a little longer than the one
+// before (see GROWTH). Short steps near the surface, where contact
+// reflections are, and as many pixels apart however far the ray goes into
+// the scene. Clip space is linear along the ray, and its fraction `f`
+// covers `s = f w1 / (w0 + f (w1 - w0))` of the line on screen.
+fn march_at(k: f32, first: f32, w0: f32, w1: f32) -> f32 {
+    let s = first + (1.0 - first) * (exp(GROWTH * k) - 1.0) / (exp(GROWTH) - 1.0);
+    return s * w0 / (s * w0 + (1.0 - s) * w1);
+}
+// How far behind the depth buffer the point at step `k` of the march, `w`
+// in front of the camera, still counts as a hit: what's on screen is
+// assumed to be that thick, and the ray may have gone that far behind its
+// front within a step. The step is `march_at`'s slope there (one step's
+// share of the ray), so where a reflection ends doesn't depend on where
+// each pixel's jittered steps fell.
+fn thickness(k: f32, w: f32, first: f32, w0: f32, w1: f32) -> f32 {
+    let grown = exp(GROWTH * k);
+    let scale = (1.0 - first) / (exp(GROWTH) - 1.0);
+    let s = first + scale * (grown - 1.0);
+    let d = s * w0 + (1.0 - s) * w1;
+    let step = scale * GROWTH * grown * w0 * w1 / (d * d) / f32(STEPS);
+    return 0.1 + 0.02 * w + 2.0 * step * abs(w1 - w0);
+}
+
 // The trace's two targets: what the pixel reflects (rgb the color times
 // alpha, alpha how much it counts; 0: the ray found nothing on screen, the
 // environment stands in) and, where the ray found something, the cone's
@@ -121,7 +150,9 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
     let down = position(p + vec2<i32>(0, 1)) - center;
     let dx = select(left, right, dot(right, right) < dot(left, left));
     let dy = select(up, down, dot(down, down) < dot(up, up));
-    var normal = safe_normalize(cross(dx, dy), view);
+    // Normalized first: a pixel's step across a far floor is short, and the
+    // product of two short steps would fall under `safe_normalize`'s floor.
+    var normal = safe_normalize(cross(safe_normalize(dx, view), safe_normalize(dy, view)), view);
     normal *= select(-1.0, 1.0, dot(normal, view) >= 0.0);
     let ray = reflect(-view, normal);
     // Off the surface a little, so the ray doesn't find where it starts; the
@@ -144,35 +175,57 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
     let noise = vec2<f32>(p) + 5.588238 * f32(u32(settings.params.z) % 64u);
     let jitter = fract(52.9829189 * fract(dot(noise, vec2<f32>(0.06711056, 0.00583715))));
     let size = vec2<f32>(textureDimensions(depth));
+    // The first step lands a pixel and a half out: the start's own pixel
+    // can't tell the surface from what's behind it at a grazing angle.
+    let first = min(1.5 / max(length((to_uv(end) - to_uv(start)) * size), 0.0001), 1.0);
     var before = 0.0;
-    var before_w = start.w;
+    var was_behind = false;
     var hit = -1.0;
     for (var i = 0; i < STEPS; i++) {
-        // Squared: short steps near the surface, where contact matters most.
         let k = (f32(i) + jitter) / f32(STEPS);
-        let f = k * k;
+        let f = march_at(k, first, start.w, end.w);
         let c = mix(start, end, f);
         let uv = to_uv(c);
         if !on_screen(uv) { break; }
         let q = vec2<i32>(uv * size);
         let z = z_at(q);
-        if !is_sky(z) && c.z / c.w < z {
-            // Behind it, by less than its assumed thickness (or the step):
-            // a hit. Further behind, the ray passed behind it; go on.
-            let gap = c.w - scene_w(q, z);
-            if gap < 0.1 + 0.02 * c.w + 2.0 * abs(c.w - before_w) {
-                var lo = before;
-                var hi = f;
+        let is_behind = !is_sky(z) && c.z / c.w < z;
+        if is_behind {
+            var lo = before;
+            var hi = f;
+            var found = false;
+            if !was_behind {
+                // It went behind something: where it crossed, and whether
+                // it was behind by less than the thickness there. Testing
+                // where it crossed rather than where the step fell keeps
+                // the reflection's edges where the scene puts them.
                 for (var j = 0; j < REFINE; j++) {
                     let mid = (lo + hi) * 0.5;
                     if behind(mix(start, end, mid)) { hi = mid; } else { lo = mid; }
                 }
+                let crossed = mix(start, end, hi);
+                let at = vec2<i32>(to_uv(crossed) * size);
+                // Its step: between this one's and the last's.
+                let within = (hi - before) / max(f - before, 0.000001);
+                let k_crossed = max(k - (1.0 - within) / f32(STEPS), 0.0);
+                found = crossed.w - scene_w(at, z_at(at)) < thickness(k_crossed, crossed.w, first, start.w, end.w);
+            } else if c.w - scene_w(q, z) < thickness(k, c.w, first, start.w, end.w) {
+                // Still behind, now by less than the thickness: in front
+                // of something new, which it hit within the step.
+                for (var j = 0; j < REFINE; j++) {
+                    let mid = (lo + hi) * 0.5;
+                    if behind(mix(start, end, mid)) { hi = mid; } else { lo = mid; }
+                }
+                found = true;
+            }
+            // Further behind, the ray passed behind it; go on.
+            if found {
                 hit = hi;
                 break;
             }
         }
+        was_behind = is_behind;
         before = f;
-        before_w = c.w;
     }
     if hit < 0.0 { return missed; }
     let uv = to_uv(mix(start, end, hit));
@@ -194,32 +247,45 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
 // half size. The light the filtered levels spread over a miss is what those
 // neighbors found, so it blurs as theirs does: a miss beside a contact
 // reflection stays sharp, one beside a distant reflection takes its wide
-// glow. Rings of eight taps 1, 2, 4, 8 and 16 pixels out (to a coarsest
-// level's footprint), each tap filtered over four pixels; the first ring
-// with hits gives their mean. None: 0, and the miss shows the environment
-// (its filtered levels would only spread faraway light over it). Most
-// misses have no hit anywhere near (a floor that reflects the sky): one
-// look at a coarse filtered level (`coarse`, level 4, whose pixels are 16
-// full-size ones; without filtered levels the trace's own) says so, and
-// they skip the search.
-@group(0) @binding(8) var coarse: texture_2d<f32>;
+// glow. The neighbors are read from two small images of the hits that the
+// filtered levels' dispatch makes beside level 2 (see `cs_blur` and
+// `hit_area`): blocks, the mean spread and share of hits over each 4x4 of
+// the trace's pixels, and regions, the same over 16x16. One filtered read
+// of the blocks finds the hits within about six of the trace's pixels;
+// failing that, one of the regions those within 16 to 32, past where the
+// coarsest level's glow fades out. Every miss within that reach finds
+// them, with no gaps between search directions, and the spread changes
+// smoothly across the misses, so a wide blurred reflection fades out
+// instead of ending in a ragged edge. None: 0, and the miss shows the
+// environment. (Without the filtered levels, on tiny screens, a blank
+// stand-in: only hits have a spread.)
+@group(0) @binding(8) var levels: texture_2d<f32>;
+
+// Where the hits' blocks (`over` 4) or regions (16) are in the filtered
+// levels' first image, for a trace of `traced` pixels: right of level 2,
+// blocks first. The image's x of its first column, and its size.
+struct HitArea { x: f32, size: vec2<f32> };
+fn hit_area(traced: vec2<u32>, over: u32) -> HitArea {
+    let level2 = max(traced.x >> 1u, 1u);
+    let blocks = (traced + 3u) / 4u;
+    let size = (traced + over - 1u) / over;
+    return HitArea(f32(level2 + select(blocks.x, 0u, over == 4u)), vec2<f32>(size));
+}
+// The hits' mean in `area` at `at` (in its pixels), filtered, clamped to
+// its edges.
+fn hits_near(area: HitArea, at: vec2<f32>) -> vec2<f32> {
+    let inside = clamp(at, vec2<f32>(0.5), area.size - 0.5) + vec2<f32>(area.x, 0.0);
+    return textureSampleLevel(levels, image_sampler, inside / vec2<f32>(textureDimensions(levels)), 0.0).rg;
+}
 
 @fragment fn fs_fill(in: Full) -> @location(0) vec4<f32> {
     let own = textureLoad(image, vec2<i32>(in.at.xy), 0).rg;
     if own.y > 0.0 { return vec4<f32>(own.x); }
-    let texel = 1.0 / vec2<f32>(textureDimensions(image));
-    if textureSampleLevel(coarse, image_sampler, in.at.xy * texel, 0.0).a <= 0.0 { return vec4<f32>(0.0); }
-    for (var ring = 0u; ring < 5u; ring++) {
-        // Between four pixels, so each tap averages them.
-        let r = f32(1u << ring) + 0.5;
-        var sum = vec2<f32>(0.0);
-        for (var k = 0; k < 8; k++) {
-            let angle = f32(k) * 0.7853982;
-            let at = in.at.xy + vec2<f32>(cos(angle), sin(angle)) * r;
-            sum += textureSampleLevel(image, image_sampler, at * texel, 0.0).rg;
-        }
-        if sum.y > 0.0 { return vec4<f32>(sum.x / sum.y); }
-    }
+    let traced = textureDimensions(image);
+    let near = hits_near(hit_area(traced, 4u), in.at.xy / 4.0);
+    if near.y > 0.0 { return vec4<f32>(near.x / near.y); }
+    let far = hits_near(hit_area(traced, 16u), in.at.xy / 16.0);
+    if far.y > 0.0 { return vec4<f32>(far.x / far.y); }
     return vec4<f32>(0.0);
 }
 
@@ -253,6 +319,11 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
 @group(0) @binding(5) var level3: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(6) var level4: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(7) var level5: texture_storage_2d<rgba16float, write>;
+// The trace's hits (spread and 1 where it found something). Their mean over
+// each 4x4 and 16x16 of its pixels goes beside level 2, for the spread's
+// fill (see `fs_fill`): each thread sums the 2x2 under its pixel of level
+// 2, four threads make a block, and sixteen blocks the workgroup's region.
+@group(0) @binding(10) var hits: texture_2d<f32>;
 
 const TILE: i32 = 8;
 // Each step's results, and each pixel's plane: a point on it (w 0: sky) and
@@ -260,6 +331,7 @@ const TILE: i32 = 8;
 var<workgroup> filtered: array<vec4<f32>, 64>;
 var<workgroup> centers: array<vec4<f32>, 64>;
 var<workgroup> normals: array<vec3<f32>, 64>;
+var<workgroup> hit_sums: array<vec2<f32>, 64>;
 
 fn slot(x: vec2<i32>) -> i32 { return x.y * TILE + x.x; }
 fn level_size(top: vec2<i32>, steps: u32) -> vec2<i32> {
@@ -338,18 +410,45 @@ fn cs_blur(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id
         }
     }
     centers[slot(local)] = c;
+    let traced = vec2<i32>(textureDimensions(hits));
+    var hit_sum = vec2<f32>(0.0);
+    for (var k = 0; k < 4; k++) {
+        let at = x * 2 + vec2<i32>(k & 1, k >> 1u);
+        if all(at < traced) { hit_sum += textureLoad(hits, at, 0).rg; }
+    }
+    hit_sums[slot(local)] = hit_sum;
     workgroupBarrier();
+    // A block's sum goes to its first thread's slot (no other block reads
+    // that one), for the region after the next barrier.
+    if all((local & vec2<i32>(1)) == vec2<i32>(0)) {
+        let block = hit_sums[slot(local)] + hit_sums[slot(local + vec2<i32>(1, 0))]
+            + hit_sums[slot(local + vec2<i32>(0, 1))] + hit_sums[slot(local + vec2<i32>(1, 1))];
+        hit_sums[slot(local)] = block;
+        let blocks = hit_area(vec2<u32>(traced), 4u);
+        if all(vec2<f32>(x / 2) < blocks.size) {
+            textureStore(level2, x / 2 + vec2<i32>(i32(blocks.x), 0), vec4<f32>(block / 16.0, 0.0, 0.0));
+        }
+    }
     var normal = vec3<f32>(0.0, 1.0, 0.0);
     if c.w > 0.0 {
         let dx = neighbor_step(x, local, size, vec2<i32>(1, 0), c.xyz);
         let dy = neighbor_step(x, local, size, vec2<i32>(0, 1), c.xyz);
-        normal = safe_normalize(cross(dx, dy), normal);
+        normal = safe_normalize(cross(safe_normalize(dx, normal), safe_normalize(dy, normal)), normal);
     }
     var color = reduce(c, normal, colors, taps);
     store(2u, x, size, color);
     filtered[slot(local)] = color;
     normals[slot(local)] = normal;
     workgroupBarrier();
+    let regions = hit_area(vec2<u32>(traced), 16u);
+    if all(local == vec2<i32>(0)) && all(vec2<f32>(group.xy) < regions.size) {
+        var region = vec2<f32>(0.0);
+        for (var k = 0; k < 16; k++) {
+            region += hit_sums[slot(vec2<i32>(k & 3, k >> 2u) * 2)];
+        }
+        let at = vec2<i32>(group.xy) + vec2<i32>(i32(regions.x), 0);
+        textureStore(level2, at, vec4<f32>(region / 256.0, 0.0, 0.0));
+    }
     // Levels 3 to 5 from the one before: 4x4, 2x2 and 1 thread. Each
     // pixel takes the plane of one of its four (alternating corners, so the
     // chosen point stays near the middle), or of any that isn't sky.

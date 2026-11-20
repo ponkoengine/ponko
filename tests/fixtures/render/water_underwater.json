@@ -1,0 +1,17 @@
+{
+  "name": "water_underwater",
+  "scene": "Water kit lake (High, screen-space reflection) seen from 1.2 m under its surface with the underwater effect: a sand bed, a red glowing post rising out of the water, a grass block on the bed; sky-coloured background, flat sky light (0.55, 0.7, 0.95), sun (-0.45, -0.6, -0.65) at 2.5, ambient 1, no tonemapping; camera at (0, -1.2, 2) looking at (0, -0.6, -6); 160x160, 4x multisampling; frame 3 at 60 fps.",
+  "width": 160,
+  "height": 160,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.0075,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "c9024abf5e5e554c",
+  "reason": "New water kit scenes: lake, river, sea, underwater"
+}

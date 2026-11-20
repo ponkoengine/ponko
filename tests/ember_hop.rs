@@ -614,6 +614,48 @@ fn continue_picks_up_the_saved_run_from_the_title() {
 }
 
 #[test]
+fn the_title_and_pause_text_fade_in_on_the_ui_clock() {
+    let dir = data_dir("menu-motion");
+    // Each tick: the screen whose text was drawn last frame, and how far
+    // that text had come in.
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = seen.clone();
+    scripted(&dir, move |ctx| {
+        match ctx.time.sim_tick() {
+            25 => new_run(ctx),
+            50 => intent(ctx).pause = true,
+            _ => {}
+        }
+        let fade = *ctx.world.resource::<MenuFade>();
+        log.borrow_mut().push((fade.screen, fade.shown));
+    })
+    .headless_frames(true)
+    .run_headless(90, |_| {});
+    let seen = seen.borrow();
+    let text_of = |screen: Screen| -> Vec<f32> {
+        let on = seen
+            .iter()
+            .filter(|s| s.0 == Some(screen))
+            .map(|s| s.1)
+            .collect::<Vec<_>>();
+        assert!(!on.is_empty(), "{screen:?} was drawn");
+        on
+    };
+    for screen in [Screen::Title, Screen::Paused] {
+        let shown = text_of(screen);
+        assert!(
+            shown[0] < 1.0 && shown.iter().any(|&v| v > 0.0 && v < 1.0),
+            "{screen:?}: {shown:?}"
+        );
+        assert!(
+            shown.windows(2).all(|w| w[1] >= w[0]),
+            "{screen:?} only comes in: {shown:?}"
+        );
+        assert_eq!(*shown.last().unwrap(), 1.0, "{screen:?} ends in place");
+    }
+}
+
+#[test]
 fn pausing_holds_the_physics_step() {
     let dir = data_dir("pause");
     let mut world = scripted(&dir, |ctx| {
@@ -720,6 +762,64 @@ fn keys_and_gamepad_drive_the_hero_through_headless_frames() {
     let _ = std::fs::remove_dir_all(dir);
 }
 // ANCHOR_END: input_test
+
+/// The same run by touch alone, as in a phone's browser: a tap on the
+/// title starts, the on-screen stick runs, its buttons jump and pause.
+#[test]
+fn the_onscreen_controls_drive_the_hero_by_touch() {
+    let dir = data_dir("touch");
+    let track = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = track.clone();
+    let world = Game::new("ember hop touch", 960, 540)
+        .data_dir(&dir)
+        .seed(SEED)
+        .headless_frames(true)
+        // The fingers, before the game reads its input.
+        .add(Phase::Input, |ctx: &mut Ctx| {
+            let stick = ctx.input.touch_control_center("move").expect("a stick");
+            let jump = ctx.input.touch_control_center("jump").expect("a jump button");
+            let pause = ctx.input.touch_control_center("pause").expect("a pause button");
+            let feed = |ctx: &mut Ctx, event| ctx.input.feed(event);
+            match ctx.time.sim_tick() {
+                5 => {
+                    // A tap on the title (not on a control) starts a run.
+                    feed(ctx, InputEvent::touch_start(9, vec2(480.0, 200.0)));
+                    feed(ctx, InputEvent::touch_end(9, vec2(480.0, 200.0)));
+                }
+                20 => feed(ctx, InputEvent::touch_start(1, stick)),
+                21 => feed(ctx, InputEvent::touch_move(1, stick + vec2(200.0, 0.0))), // run right
+                60 => feed(ctx, InputEvent::touch_end(1, stick + vec2(200.0, 0.0))),
+                70 => feed(ctx, InputEvent::touch_start(2, jump)), // jump, held for height
+                90 => feed(ctx, InputEvent::touch_end(2, jump)),
+                130 => feed(ctx, InputEvent::touch_start(3, stick + vec2(-200.0, 10.0))), // off the stick: no run
+                131 => feed(ctx, InputEvent::touch_end(3, stick + vec2(-200.0, 10.0))),
+                132 => feed(ctx, InputEvent::touch_start(4, stick)),
+                133 => feed(ctx, InputEvent::touch_move(4, stick + vec2(-200.0, 0.0))), // run left...
+                170 => feed(ctx, InputEvent::touch_start(5, jump)),                     // ...and jump while running
+                175 => feed(ctx, InputEvent::touch_end(5, jump)),
+                178 => feed(ctx, InputEvent::touch_end(4, stick + vec2(-200.0, 0.0))),
+                220 => feed(ctx, InputEvent::touch_start(6, pause)),
+                221 => feed(ctx, InputEvent::touch_end(6, pause)),
+                _ => {}
+            }
+        })
+        .plugin(EmberHop)
+        .sim_system(move |ctx: &mut Ctx| {
+            if let Some((_, at)) = hero(ctx) {
+                log.borrow_mut().push((ctx.time.sim_tick(), at));
+            }
+        })
+        .run_headless(230, |_| {});
+    let track = track.borrow();
+    let at = |tick: u64| track.iter().find(|(t, _)| *t == tick).map(|(_, p)| *p).unwrap();
+    assert!(at(60).x > at(20).x + 40.0, "the stick ran right");
+    assert!(at(80).y < at(69).y - 30.0, "the jump button jumped");
+    assert!(at(170).x < at(133).x - 30.0, "the stick ran left");
+    assert!(at(185).y < at(169).y - 20.0, "jumped while running");
+    assert_eq!(world.resource::<Tally>().jumps, 2);
+    assert_eq!(screen(&world), Screen::Paused, "the corner button paused");
+    let _ = std::fs::remove_dir_all(dir);
+}
 
 #[test]
 fn the_camera_follows_the_hero_and_stays_inside_the_level() {

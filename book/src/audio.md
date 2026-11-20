@@ -4,7 +4,7 @@
 <div>
 
 ```rust
-let hit = ctx.audio.load("hit.ogg");   // OGG Vorbis, WAV, MP3 or FLAC from assets/
+let hit = ctx.audio.load("hit.ogg");   // OGG, MP3, FLAC, WAV or AIFF from assets/
 ctx.audio.play(hit);
 
 let music = ctx.audio.load("theme.ogg");
@@ -49,6 +49,11 @@ let click = ctx.audio.create(44100, &samples);
 </div>
 - `Sound` is a cheap `Copy` handle, like `Texture` (C++: `ponko::sound`,
   with `play_sound(s, params)` for `play_sound_ex`).
+- File formats, told apart by their first bytes: OGG Vorbis, MP3, FLAC,
+  WAV (integer or float PCM, and IMA ADPCM, the compressed WAV many sound
+  tools export) and AIFF. Opus and AAC (`.m4a`) don't decode: no light,
+  pure-Rust Opus decoder exists, and AAC needs an MP4 reader several times
+  the size of the other decoders. Convert them to OGG Vorbis.
 
 The audio device opens the first time a sound plays (in a browser, at the
 player's first click or key press: see [In a browser](#in-a-browser)). Headless runs, and
@@ -120,8 +125,8 @@ not an HRTF simulation. Prefer mono source clips for localized effects.
 `ctx.audio.play_at` starts a voice at a fixed world position. Save its handle
 to stop it; removing an entity source stops its voice on the next audio update.
 Headless execution never opens an audio device, and disabling `audio` keeps
-the same APIs silent. No allocation occurs during updates unless a new voice
-starts. `load_sound` decodes clips into memory; `load_stream` keeps long files streamed.
+the same APIs silent. No allocation occurs during updates unless a voice
+starts or moves between heard and [virtual](#voice-limits). `load_sound` decodes clips into memory; `load_stream` keeps long files streamed.
 
 ### Buses, low-pass and reverb
 
@@ -344,6 +349,327 @@ packet at a time as they play (see [In a browser](#in-a-browser)).
 stream handles are silent and report zero duration. Headless playback never
 creates tracks, decoder workers or an audio device.
 
+## Loops, fades and speed
+
+A looping sound loops all of itself unless it has loop points: with
+`set_loop(sound, start, end)` a playback plays from the beginning to `end`
+(`None`: the end of the sound), then goes back to `start`, so an intro plays
+once and the rest repeats without a seam. Playing sounds fade with
+`set_volume(playing, volume, seconds)` (1 is the volume it was played at)
+and `fade_out(playing, seconds)`, which stops it at the end; both are
+linear in amplitude, so a crossfade's two halves add up to the whole:
+
+<div class="lang-pair">
+<div>
+
+```rust
+let theme = ctx.audio.load("theme.ogg");
+let night = ctx.audio.load("night.ogg");
+ctx.audio.set_loop(theme, 2.0, None); // two seconds of intro, then the rest loops
+let looping = SoundParams { looping: true, ..Default::default() };
+let day = ctx.audio.play_ex(theme, looping);
+// Later: hand over to the night theme over two seconds.
+ctx.audio.fade_out(day, 2.0);
+let next = ctx.audio.play_ex(night, looping);
+ctx.audio.set_volume(next, 0.0, 0.0);
+ctx.audio.set_volume(next, 1.0, 2.0);
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:audio_loops}}
+```
+
+</div>
+</div>
+
+`set_speed(playing, speed, seconds)` changes speed and pitch together, as a
+tape does: an engine revving, a slow-motion moment. For pitch without
+tempo, put a `BusEffect::PitchShift` on the bus (a voice's own bus, if it
+should apply to one sound): it plays the bus `ratio` higher (2 is an
+octave; `PitchShiftEffect::semitones(n)` makes one) at the same speed, with
+a slight chorus-like smear on sustained notes, the usual price of a
+real-time shifter. `PitchShiftEffect::undo_speed(speed)` cancels the pitch
+change of `set_speed`, so time can slow without everything dropping in
+pitch:
+
+<div class="lang-pair">
+<div>
+
+```rust
+# use ponko::audio::{BusEffect, PitchShiftEffect};
+let voices = ctx.audio.bus("voices");
+ctx.audio.set_bus_effects(voices, &[BusEffect::PitchShift(PitchShiftEffect::semitones(3.0))]);
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:audio_pitch}}
+```
+
+</div>
+</div>
+
+## Music
+
+`play_music` plays a `Song`: one or more layers (stems of the same length)
+that start together and stay in sync sample for sample, each at its own
+volume. Give the song a tempo and changes can wait for the music: the
+layers come in or out (`set_music_layer`), a new song takes over
+(`play_music` again, crossfading the old one out) or a stinger plays over
+it (`play_stinger`) on the next beat (`Quantize::Beat`) or bar line
+(`Quantize::Bar`) instead of at once (`Quantize::Now`). The changes are
+scheduled on the audio thread's clock, so they land on the same sample in
+every layer, whatever the frame rate.
+
+<div class="lang-pair">
+<div>
+
+```rust
+# use ponko::audio::{Quantize, Song};
+let (pads, drums, sting) = (ctx.audio.load("pads.ogg"), ctx.audio.load("drums.ogg"), ctx.audio.load("sting.ogg"));
+// The drums wait silent, in sync.
+ctx.audio.play_music(Song::new(pads).layer(drums, 0.0).tempo(120.0, 4), 0.0, Quantize::Now);
+// Combat starts: the drums come in on the next bar line, over half a second.
+ctx.audio.set_music_layer(1, 1.0, 0.5, Quantize::Bar);
+ctx.audio.play_stinger(sting, Quantize::Beat);
+ctx.audio.set_music_speed(1.1, 4.0); // faster as the timer runs out
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:audio_music}}
+```
+
+</div>
+</div>
+
+- Music plays on the `music` bus unless `set_music_bus` says otherwise, so
+  the mixer's volume, ducking and snapshots apply to it.
+- `set_music_speed` changes tempo and pitch together, and the beat grid
+  moves with it; a new song's tempo starts at its first beat.
+- `music_beat()` is the beats played since the song started (it stops
+  while the music's bus is paused), for gameplay on the beat;
+  `music_layer_volume(i)` is a layer's volume once its change came.
+- Layers loop, and their loop points (set on each layer's sound with
+  `set_loop`) give a song an intro.
+- Music voices never go virtual and don't count against the voice limits.
+
+## Pausing sound with the game
+
+`pause_bus(bus, true)` holds every sound on a bus, and on the buses under
+it, where it is; `pause_bus(bus, false)` carries on from there, and sounds
+started meanwhile wait. Put the world's sounds on one bus and the menu's on
+another, and a pause menu can stop one while the other plays.
+`Game::pause_audio_in(state, buses)` does it for a [game state](states.md):
+the buses are paused from entering the state to leaving it, including while
+other states are pushed over it.
+
+<div class="lang-pair">
+<div>
+
+```rust
+# use ponko::prelude::*;
+# use serde::{Deserialize, Serialize};
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+enum Mode { Playing, Paused }
+
+# fn main() {
+// While the pause menu is up, the world's sound and the music hold where they are.
+Game::new("game", 1280, 720)
+    .state(Mode::Playing)
+    .pause_audio_in(Mode::Paused, &["world", "music"])
+    .run(|_| {});
+# }
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:audio_pause}}
+```
+
+</div>
+</div>
+
+A paused positional sound keeps its place in a one-shot too: it doesn't
+end while it is held.
+
+## Voice limits
+
+At most 64 sounds are heard at once unless `set_voice_limit` says otherwise
+(1 to 256), and a bus can have a limit of its own
+(`set_bus_voice_limit(bus, Some(8))`: eight footsteps at most). Past the
+limits, sounds are ranked by priority (`set_priority`, 0–255, 128 unless
+set; `d3::AudioSource::with_priority` for one on an entity), then by how
+loud they are heard (their volume, distance and buses), then by age. The
+ones ranked out are **virtual**: not mixed, but followed, so when a slot
+frees up (a louder sound ends, the player walks closer) they are heard
+again from where they would be by then. A sound nobody can hear (beyond its
+maximum distance, on a muted bus, at volume 0) is always virtual. A heard
+sound keeps its place until a virtual one is clearly louder, so two sounds
+of about the same loudness don't take turns.
+
+A positional source's `priority` can change while it plays: the frame's
+positional update passes the new value on, so a sound that becomes
+important (an enemy that starts chasing the player) can take a voice from a
+less important one without restarting.
+
+```rust
+# use ponko::d3::AudioSource;
+# #[derive(Component)]
+# struct Chasing;
+fn raise_chasers(ctx: &mut Ctx) {
+    ctx.world
+        .query::<&mut AudioSource>()
+        .filter::<With<Chasing>>()
+        .for_each(|source| source.priority = 220);
+}
+```
+
+<div class="lang-pair">
+<div>
+
+```rust
+let line = ctx.audio.load("line.ogg");
+ctx.audio.set_voice_limit(48);
+let steps = ctx.audio.bus("footsteps");
+ctx.audio.set_bus_voice_limit(steps, Some(8));
+let dialogue = ctx.audio.play(line);
+ctx.audio.set_priority(dialogue, 250); // never lost in a crowd
+let count = ctx.audio.voice_count();
+println!("{} heard, {} virtual", count.real, count.virtualized);
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:audio_voices}}
+```
+
+</div>
+</div>
+
+So a level can scatter a thousand looping sources (torches, machines,
+water) and pay for the few near the player. Measured with `cargo run
+--release -p ponko_bench --features audio -- audio3d`: 1,000 looping
+positional sources over a 200 m square, 30 m audible range, a listener
+walking through them, mixed offline at 48 kHz. On an Apple M4 Max, three
+runs while the machine was busy with other builds (load average about 160):
+
+| Limit | Heard / virtual | Game side of a frame (median) | Mixing a frame's 1/60 s (median) |
+|---|---|---|---|
+| 64 (default) | 64 / 936 | 0.088–0.095 ms | 1.08 ms (6.5% of the frame) |
+| 256 | 88 / 912 | 0.098–0.113 ms | 1.52–1.53 ms (9%) |
+
+The game side is moving every source to the listener and ranking the
+voices; the mix runs on the audio thread. The busy machine put the 95th
+percentiles far above the medians (up to 2 ms and 54 ms), so read only the
+medians from this run.
+
+## Output devices
+
+The engine plays on the system's default output unless the game chooses
+another: `output_devices()` lists them (`AudioDevice { id, name, default }`)
+for a settings menu, and `set_output_device(Some(id))` plays on one from
+then on; save the id with the settings. When the device playing goes away
+(headphones unplugged, a USB headset off), the output opens again on the
+default device and every sound carries on from where it was, music on its
+beat; when a device the player chose comes back, sound goes back to it.
+Without any device, the engine tries again every two seconds.
+`device_events()` says what happened this frame (`Lost(name)`, then
+`Switched(name)`), for a message to the player:
+
+<div class="lang-pair">
+<div>
+
+```rust
+# use ponko::audio::AudioDeviceEvent;
+# let saved: Option<String> = None;
+let devices = ctx.audio.output_devices(); // for the settings menu
+if let Some(id) = &saved
+    && ctx.audio.set_output_device(Some(id.as_str())).is_err()
+{
+    ctx.audio.set_output_device(None)?; // gone: follow the system's default
+}
+for event in ctx.audio.device_events() {
+    if let AudioDeviceEvent::Switched(name) = event {
+        println!("sound now plays on {name}");
+    }
+}
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:audio_devices}}
+```
+
+</div>
+</div>
+
+## Testing the mix
+
+A headless run plays nothing, but `open_offline(sample_rate)` gives it an
+output that mixes into memory: `render_offline(seconds)` returns the next
+stretch of the mix as (left, right) frames, so a test can check what the
+game sounds like (that the music ducks under dialogue, that a layer comes
+in on the bar) without a sound card or a speaker. The engine's own tests do
+exactly this, and test device loss and return through a fake set of
+devices.
+
+<div class="lang-pair">
+<div>
+
+```rust
+# use ponko::prelude::*;
+# fn main() {
+Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ctx.audio.open_offline(48_000);
+    let tone: Vec<f32> = (0..48_000).map(|i| (i as f32 * 0.0576).sin() * 0.4).collect();
+    let tone = ctx.audio.create(48_000, &tone);
+    ctx.audio.play(tone);
+    let mix = ctx.audio.render_offline(0.1); // 4,800 frames
+    assert!(mix.iter().any(|[left, _]| left.abs() > 0.1));
+});
+# }
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:audio_offline}}
+```
+
+</div>
+</div>
+
+The engine moves fades, music and voice limits once a frame; render a
+frame's time between frames, as a game's frames would.
+
+From C, all of the above is in `ponko.h` under the same names:
+`ponko_ctx_set_sound_loop`, `ponko_ctx_set_sound_volume`,
+`ponko_ctx_set_sound_speed`, `ponko_ctx_fade_out_sound`,
+`PONKO_BUS_EFFECT_PITCH_SHIFT` (its `ratio` and `mix`),
+`ponko_ctx_play_music` (layers and their volumes as two arrays),
+`ponko_ctx_set_music_layer`, `ponko_ctx_play_stinger` (`PonkoQuantize`),
+`ponko_ctx_pause_audio_bus`, `ponko_game_pause_audio_in_state`,
+`ponko_ctx_set_audio_voice_limit`, `ponko_ctx_set_audio_bus_voice_limit` (0
+for none), `ponko_ctx_set_sound_priority`, `ponko_ctx_audio_output_devices`
+and `ponko_ctx_audio_device_events` (JSON, two-call buffer convention),
+`ponko_ctx_set_audio_output_device`, `ponko_ctx_open_audio_offline` and
+`ponko_ctx_render_audio_offline` (interleaved floats).
+
 ## In a browser
 
 Browsers let a page make sound only after the player has clicked, tapped or
@@ -376,6 +702,18 @@ track at 44.1 kHz takes about 64 MB decoded whole, as `load_sound` holds it
 size (3.6 MB as a 160 kbit/s MP3) and at most 1.6 MB more while it plays.
 Use `load_stream` for music and long ambience, and `load_sound` for short
 effects, which start without any decoding work.
+
+Everything above works in a browser, with these differences:
+
+- There is one output device, `Browser`: the browser picks the speakers,
+  so `set_output_device` can only choose it, and `device_events` stays
+  empty.
+- Streamed sounds honour loop points, start positions, fades and music's
+  beat and bar timing as on the desktop; a change waits for the audio
+  block it falls in (128 frames, under 3 ms at 48 kHz). Going back to a
+  loop point seeks in the file where its format allows (WAV, FLAC, OGG)
+  and otherwise decodes from the start up to it.
+- `open_offline` works as on the desktop, for tests compiled to the web.
 
 From C, `ponko_ctx_audio_unlocked` answers the same (C++:
 `ctx.audio_unlocked()`); native games run on the desktop, where it is

@@ -139,27 +139,50 @@ pub struct SoundStarted {
 }
 
 mod bus_effects;
+mod device;
 mod mixer;
 mod mixer_file;
+pub(crate) mod music;
+mod pause;
 mod snapshots;
-pub use bus_effects::{BusEffect, CompressorEffect, DelayEffect, Ducking, FilterEffect, FilterMode, ReverbEffect};
+mod voices;
+#[cfg(feature = "audio")]
+use backend::MAX_VOICE_LIMIT;
+pub use bus_effects::{
+    BusEffect, CompressorEffect, DelayEffect, Ducking, FilterEffect, FilterMode, PitchShiftEffect, ReverbEffect,
+};
+pub use device::{AudioDevice, AudioDeviceEvent};
 use mixer::BusRegistry;
 pub use mixer::{AudioBus, AudioEffects};
+pub use music::{Quantize, Song};
 pub use snapshots::{BusSnapshot, EffectOverride, MixerSnapshot, MixerState, SavedBus, SavedSnapshot};
+pub use voices::{DEFAULT_PRIORITY, VoiceCount};
+#[cfg(all(test, feature = "audio"))]
+mod completeness_render_tests;
 #[cfg(feature = "audio")]
 mod dsp;
 #[cfg(all(test, feature = "audio"))]
 mod mixer_render_tests;
 #[cfg(feature = "audio")]
 mod tracks;
-// Streams decoded a packet at a time, for the web (tested natively).
-#[cfg(all(feature = "audio", any(target_arch = "wasm32", test)))]
+// Streams decoded a packet at a time, for the web (tested natively), and
+// for a video's soundtrack (feature `video`).
+#[cfg(all(feature = "audio", any(target_arch = "wasm32", test, feature = "video")))]
 mod chunked;
 #[cfg(feature = "audio")]
 mod unlock;
 
 #[cfg(feature = "audio")]
 mod backend {
+    // Voice limits and virtual voices, the music clock, and the output
+    // device (choosing it, and opening it again when it goes away).
+    mod limits;
+    mod music_out;
+    mod output;
+    // A video's soundtrack (feature `video`).
+    #[cfg(feature = "video")]
+    mod soundtrack;
+
     use super::mixer::{finite, volume_db};
     use super::tracks::{BusTracks, Manager};
     use super::unlock::{Gate, Waiting};
@@ -173,8 +196,9 @@ mod backend {
         static_sound::{StaticSoundData, StaticSoundHandle},
     };
     // Kira streams on a decoder thread, which the web doesn't have: there
-    // a stream is decoded a packet at a time as it plays (`chunked`).
-    #[cfg(target_arch = "wasm32")]
+    // a stream is decoded a packet at a time as it plays (`chunked`), as is
+    // a video's soundtrack everywhere.
+    #[cfg(any(target_arch = "wasm32", feature = "video"))]
     use super::chunked::{ChunkedData, ChunkedHandle};
     #[cfg(not(target_arch = "wasm32"))]
     use kira::sound::{
@@ -182,46 +206,113 @@ mod backend {
         streaming::{StreamingSoundData, StreamingSoundHandle},
     };
     use kira::track::{SendTrackBuilder, SendTrackHandle, TrackBuilder, TrackHandle};
-    use kira::{Frame, Tween};
+    use kira::{Frame, StartTime, Tween};
     use std::{collections::HashMap, path::PathBuf, sync::Arc};
+
+    pub(crate) use limits::{Fade, MAX_VOICE_LIMIT};
+    #[cfg(test)]
+    pub(in crate::audio) use output::fake;
+    #[cfg(test)]
+    pub(in crate::audio) use output::{DeviceIssue, Outputs};
 
     enum Clip {
         Static(Box<StaticSoundData>),
         Stream(StreamFrom),
+        /// A video's soundtrack: encoded bytes decoded a packet at a time
+        /// as it plays, on the mixing thread. Kira's own streams need the
+        /// track's length in samples, which a WebM file doesn't give.
+        #[cfg(feature = "video")]
+        Chunked(Arc<[u8]>),
         /// Freed: plays nothing, and its id is never reused.
         Freed,
+    }
+    /// What a sound is besides its samples: its length and loop points.
+    #[derive(Clone, Copy, Default)]
+    struct Meta {
+        seconds: f64,
+        /// Where a looping playback goes back to, and where it turns
+        /// around (`None`: the end).
+        loop_points: (f64, Option<f64>),
     }
     enum Handle {
         Static(StaticSoundHandle),
         #[cfg(not(target_arch = "wasm32"))]
         Stream(StreamingSoundHandle<FromFileError>),
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(any(target_arch = "wasm32", feature = "video"))]
         Chunked(ChunkedHandle),
+    }
+    /// A voice that is heard: its Kira sound and the track it plays on.
+    struct Real {
+        handle: Handle,
+        track: TrackHandle,
+        filter: FilterHandle,
     }
     struct Voice {
         /// The sound it plays.
         sound: u32,
-        handle: Handle,
-        track: TrackHandle,
-        filter: FilterHandle,
+        /// `None` while virtual: not heard, its place kept in `position`.
+        real: Option<Real>,
         bus: AudioBus,
         effects: AudioEffects,
         params: SoundParams,
-        /// The last positional volume, pan and speed, kept for a restart.
+        /// The last positional volume, pan and speed.
         #[cfg(feature = "3d")]
         spatial: Option<[f32; 3]>,
         /// The reverb send's gain as last set.
         send_gain: f32,
+        /// `set_volume` and `set_speed` (1: as played), moved each frame.
+        gain: Fade,
+        rate: Fade,
+        priority: u8,
+        /// Music: never virtual and not counted against the limits.
+        exempt: bool,
+        /// Seconds into the sound, as followed on the game side.
+        position: f64,
+        /// Stopping with a fade: it ends when Kira's fade does.
+        stopping: bool,
+    }
+    impl Voice {
+        fn new(sound: u32, params: SoundParams, bus: AudioBus, effects: AudioEffects) -> Self {
+            Self {
+                sound,
+                real: None,
+                bus,
+                effects,
+                params,
+                #[cfg(feature = "3d")]
+                spatial: None,
+                send_gain: 1.0,
+                gain: Fade::new(1.0),
+                rate: Fade::new(1.0),
+                priority: super::DEFAULT_PRIORITY,
+                exempt: false,
+                position: 0.0,
+                stopping: false,
+            }
+        }
+        /// The volume, pan and speed to play at now.
+        fn heard(&self) -> (f32, f32, f32) {
+            #[cfg(feature = "3d")]
+            if let Some([volume, pan, speed]) = self.spatial {
+                return (volume * self.gain.value, pan, speed * self.rate.value);
+            }
+            (
+                self.params.volume * self.gain.value,
+                0.0,
+                finite(self.params.speed, 1.0) * self.rate.value,
+            )
+        }
     }
     impl Handle {
-        /// Seconds into the sound (from the start on the web, which can't tell).
-        fn position(&self) -> f64 {
+        /// Seconds into the sound; `None` for a sound decoded a packet at
+        /// a time (on the web, and a video's soundtrack), which can't tell.
+        fn position(&self) -> Option<f64> {
             match self {
-                Self::Static(h) => h.position(),
+                Self::Static(h) => Some(h.position()),
                 #[cfg(not(target_arch = "wasm32"))]
-                Self::Stream(h) => h.position(),
-                #[cfg(target_arch = "wasm32")]
-                Self::Chunked(_) => 0.0,
+                Self::Stream(h) => Some(h.position()),
+                #[cfg(any(target_arch = "wasm32", feature = "video"))]
+                Self::Chunked(_) => None,
             }
         }
         fn state(&self) -> PlaybackState {
@@ -229,38 +320,48 @@ mod backend {
                 Self::Static(h) => h.state(),
                 #[cfg(not(target_arch = "wasm32"))]
                 Self::Stream(h) => h.state(),
-                #[cfg(target_arch = "wasm32")]
+                #[cfg(any(target_arch = "wasm32", feature = "video"))]
                 Self::Chunked(h) => h.state(),
             }
         }
-        fn stop(&mut self) {
+        fn stop(&mut self, tween: Tween) {
             match self {
-                Self::Static(h) => h.stop(Tween::default()),
+                Self::Static(h) => h.stop(tween),
                 #[cfg(not(target_arch = "wasm32"))]
-                Self::Stream(h) => h.stop(Tween::default()),
-                #[cfg(target_arch = "wasm32")]
-                Self::Chunked(h) => h.stop(),
+                Self::Stream(h) => h.stop(tween),
+                #[cfg(any(target_arch = "wasm32", feature = "video"))]
+                Self::Chunked(h) => h.stop_with(tween),
             }
         }
-        #[cfg(feature = "3d")]
-        fn spatialize(&mut self, volume: f32, pan: f32, speed: f32) {
-            macro_rules! apply {
-                ($h:expr) => {{
-                    $h.set_volume(volume_db(volume), Tween::default());
-                    $h.set_panning(pan, Tween::default());
-                    $h.set_playback_rate(f64::from(finite(speed, 1.0).max(0.01)), Tween::default());
-                }};
-            }
+        fn set_volume(&mut self, volume: f32, tween: Tween) {
             match self {
-                Self::Static(h) => apply!(h),
+                Self::Static(h) => h.set_volume(volume_db(volume), tween),
                 #[cfg(not(target_arch = "wasm32"))]
-                Self::Stream(h) => apply!(h),
-                #[cfg(target_arch = "wasm32")]
-                Self::Chunked(h) => {
-                    h.set_volume(volume);
-                    h.set_panning(pan);
-                    h.set_playback_rate(f64::from(finite(speed, 1.0)));
-                }
+                Self::Stream(h) => h.set_volume(volume_db(volume), tween),
+                #[cfg(any(target_arch = "wasm32", feature = "video"))]
+                Self::Chunked(h) => h.set_volume_with(volume, tween),
+            }
+        }
+        fn set_speed(&mut self, speed: f32, tween: Tween) {
+            let rate = f64::from(finite(speed, 1.0).max(0.01));
+            match self {
+                Self::Static(h) => h.set_playback_rate(rate, tween),
+                #[cfg(not(target_arch = "wasm32"))]
+                Self::Stream(h) => h.set_playback_rate(rate, tween),
+                #[cfg(any(target_arch = "wasm32", feature = "video"))]
+                Self::Chunked(h) => h.set_playback_rate(rate),
+            }
+        }
+        /// Volume, panning and speed, smoothed over Kira's default 10 ms.
+        fn apply(&mut self, volume: f32, pan: f32, speed: f32) {
+            self.set_volume(volume, Tween::default());
+            self.set_speed(speed, Tween::default());
+            match self {
+                Self::Static(h) => h.set_panning(pan, Tween::default()),
+                #[cfg(not(target_arch = "wasm32"))]
+                Self::Stream(h) => h.set_panning(pan, Tween::default()),
+                #[cfg(any(target_arch = "wasm32", feature = "video"))]
+                Self::Chunked(h) => h.set_panning(pan),
             }
         }
     }
@@ -290,6 +391,8 @@ mod backend {
         /// Sounds by slot; a freed sound's slot goes to the next one made,
         /// under a new id (`ids`).
         sounds: Vec<Clip>,
+        /// Each slot's length and loop points.
+        meta: Vec<Meta>,
         ids: crate::handle::SlotIds,
         playing: HashMap<u64, Voice>,
         next: u64,
@@ -300,6 +403,12 @@ mod backend {
         /// On the web: closed until the player's first gesture, holding
         /// the looping voices asked for before it.
         gate: Gate,
+        /// How many voices are heard at once, and the frame's ranking.
+        limits: limits::Limits,
+        /// The music player's clock and layers.
+        music: music_out::MusicOut,
+        /// The output device: which one, what happened to it.
+        pub(super) output: output::OutputState,
         #[cfg(feature = "3d")]
         pub(crate) spatial: super::spatial::SpatialState,
     }
@@ -319,11 +428,14 @@ mod backend {
             // Opened here, inside the gesture, so the browser lets it play.
             self.manager();
             for voice in waiting {
-                self.start(voice.id, voice.sound, voice.params, voice.bus, voice.effects, 0.0);
+                #[cfg_attr(not(feature = "3d"), allow(unused_mut))]
+                let mut v = Voice::new(voice.sound, voice.params, voice.bus, voice.effects);
                 #[cfg(feature = "3d")]
-                if let Some([volume, pan, speed]) = voice.spatial {
-                    self.spatialize(voice.id, volume, pan, speed);
+                {
+                    v.spatial = voice.spatial;
                 }
+                self.playing.insert(voice.id, v);
+                self.admit(voice.id);
             }
         }
         /// For tools: whether the output device was opened (it opens on first use).
@@ -335,12 +447,16 @@ mod backend {
             }
         }
         fn manager(&mut self) -> Option<&mut Manager> {
-            self.manager.get_or_insert_with(Manager::open).as_mut()
+            if self.manager.is_none() {
+                let opened = self.output.open_chosen();
+                self.manager = Some(opened);
+            }
+            self.manager.as_mut()?.as_mut()
         }
         /// For tests: the backend playing into a buffer the test renders.
         #[cfg(test)]
         pub(crate) fn with_buffer_output(sample_rate: u32) -> (Self, super::dsp::buffer::Output) {
-            let (manager, output) = Manager::buffer(sample_rate);
+            let (manager, output) = Manager::buffer(sample_rate).expect("the buffer backend opens");
             (
                 Self {
                     manager: Some(Some(manager)),
@@ -369,15 +485,22 @@ mod backend {
                 #[cfg(not(target_arch = "wasm32"))]
                 Clip::Stream(StreamFrom::File(_)) => 0,
                 Clip::Stream(StreamFrom::Memory(bytes)) => bytes.len() as u64,
+                #[cfg(feature = "video")]
+                Clip::Chunked(bytes) => bytes.len() as u64,
                 Clip::Freed => 0,
             }
         }
         pub fn replace(&mut self, id: u32, bytes: Vec<u8>) -> Result<(), String> {
             let data = decode(bytes)?;
+            let seconds = data.duration().as_secs_f64();
+            let slot = self.ids.slot(id);
             if let Some(clip) = self.clip_mut(id)
                 && !matches!(clip, Clip::Freed)
             {
                 *clip = Clip::Static(Box::new(data));
+                if let Some(meta) = slot.and_then(|s| self.meta.get_mut(s)) {
+                    meta.seconds = seconds;
+                }
             }
             Ok(())
         }
@@ -390,7 +513,9 @@ mod backend {
                 self.ids.release(id);
             }
             for voice in self.playing.values_mut().filter(|v| v.sound == id) {
-                voice.handle.stop();
+                if let Some(real) = &mut voice.real {
+                    real.handle.stop(Tween::default());
+                }
             }
             self.playing.retain(|_, v| v.sound != id);
             self.gate.forget_sound(id);
@@ -410,7 +535,7 @@ mod backend {
             }
             let data = StreamingSoundData::from_file(&path).map_err(|e| e.to_string())?;
             let seconds = data.duration().as_secs_f32();
-            Ok((self.push(Clip::Stream(StreamFrom::File(path))), seconds))
+            Ok((self.push(Clip::Stream(StreamFrom::File(path)), seconds), seconds))
         }
         /// A sound streamed from encoded `bytes` held in memory (an asset
         /// source's): only the header is decoded now, the samples as it plays.
@@ -422,7 +547,7 @@ mod backend {
                 .map_err(|e| format!("could not decode the sound: {e}"))?
                 .duration()
                 .as_secs_f32();
-            Ok((self.push(Clip::Stream(from)), seconds))
+            Ok((self.push(Clip::Stream(from), seconds), seconds))
         }
         /// The web has no files to stream from: stream the fetched copy.
         #[cfg(target_arch = "wasm32")]
@@ -437,7 +562,7 @@ mod backend {
             let seconds = super::chunked::header(&bytes)
                 .map_err(|e| format!("could not decode the sound: {e}"))?
                 .seconds();
-            Ok((self.push(Clip::Stream(StreamFrom::Memory(bytes))), seconds))
+            Ok((self.push(Clip::Stream(StreamFrom::Memory(bytes)), seconds), seconds))
         }
         pub fn create(&mut self, sample_rate: u32, samples: &[f32]) -> (u32, f32) {
             let frames: Arc<[Frame]> = samples.iter().map(|&s| Frame::from_mono(s)).collect();
@@ -450,14 +575,29 @@ mod backend {
         }
         fn add(&mut self, data: StaticSoundData) -> (u32, f32) {
             let seconds = data.duration().as_secs_f32();
-            (self.push(Clip::Static(Box::new(data))), seconds)
+            (self.push(Clip::Static(Box::new(data)), seconds), seconds)
+        }
+        /// A sound [decoded](decode_detached) on another thread, added.
+        pub fn load_decoded(&mut self, data: Decoded) -> (u32, f32) {
+            self.add(*data)
         }
         /// Puts `clip` in a freed slot or a new one; returns its id.
-        fn push(&mut self, clip: Clip) -> u32 {
+        fn push(&mut self, clip: Clip, seconds: f32) -> u32 {
             let id = self.ids.make(self.sounds.len(), "sound");
-            match self.sounds.get_mut((id & crate::handle::INDEX_MASK) as usize) {
-                Some(slot) => *slot = clip,
-                None => self.sounds.push(clip),
+            let slot = (id & crate::handle::INDEX_MASK) as usize;
+            let meta = Meta {
+                seconds: f64::from(seconds),
+                loop_points: (0.0, None),
+            };
+            match self.sounds.get_mut(slot) {
+                Some(s) => {
+                    *s = clip;
+                    self.meta[slot] = meta;
+                }
+                None => {
+                    self.sounds.push(clip);
+                    self.meta.push(meta);
+                }
             }
             id
         }
@@ -472,6 +612,19 @@ mod backend {
         }
         fn clip_mut(&mut self, id: u32) -> Option<&mut Clip> {
             self.sounds.get_mut(self.ids.slot(id)?)
+        }
+        fn meta(&self, id: u32) -> Meta {
+            self.ids
+                .slot(id)
+                .and_then(|s| self.meta.get(s))
+                .copied()
+                .unwrap_or_default()
+        }
+        /// Where looping playbacks of sound `id` go back to and turn around.
+        pub fn set_loop(&mut self, id: u32, start: f64, end: Option<f64>) {
+            if let Some(meta) = self.ids.slot(id).and_then(|s| self.meta.get_mut(s)) {
+                meta.loop_points = (start, end);
+            }
         }
         fn prepare(&mut self, bus: AudioBus) -> Option<()> {
             self.buses.ensure_default();
@@ -491,124 +644,183 @@ mod backend {
             self.play_on(sound, p, AudioBus::default(), AudioEffects::default())
         }
         pub fn play_on(&mut self, sound: u32, p: SoundParams, bus: AudioBus, effects: AudioEffects) -> u64 {
-            self.playing
-                .retain(|_, voice| voice.handle.state() != PlaybackState::Stopped);
+            self.playing.retain(|_, voice| {
+                voice
+                    .real
+                    .as_ref()
+                    .is_none_or(|r| r.handle.state() != PlaybackState::Stopped)
+            });
             self.next += 1;
             let id = self.next;
             if self.gate.is_locked() {
                 self.gate.hold(Waiting::new(id, sound, p, bus, effects));
             } else {
-                self.start(id, sound, p, bus, effects, 0.0);
+                self.playing.insert(id, Voice::new(sound, p, bus, effects));
+                self.admit(id);
             }
             id
         }
-        /// Starts voice `id` now, `from` seconds in.
-        fn start(&mut self, id: u64, sound: u32, p: SoundParams, bus: AudioBus, effects: AudioEffects, from: f64) {
-            if self.prepare(bus).is_none() {
-                return;
+        /// Makes voice `id` heard now, from where it is, starting at
+        /// `when`. Whether it is real afterwards.
+        fn realize(&mut self, id: u64, when: StartTime, fade_in: Option<Tween>) -> bool {
+            let Some(v) = self.playing.get(&id) else {
+                return false;
+            };
+            if v.real.is_some() {
+                return true;
             }
-            let effects = effects.validated();
-            let send = self.reverb.as_ref().unwrap().id();
+            let (sound, bus, effects, looping) = (v.sound, v.bus, v.effects, v.params.looping);
+            let (volume, pan, speed) = v.heard();
+            let meta = self.meta(sound);
+            let from = wrap(v.position, meta, looping);
+            if self.prepare(bus).is_none() {
+                return false;
+            }
+            let send = self.reverb.as_ref().map(|r| r.id());
             let gain = self.buses.chain_gain(bus);
-            let mut builder = TrackBuilder::new().with_send(send, volume_db(effects.reverb * gain));
+            let mut builder = TrackBuilder::new().sound_capacity(2).sub_track_capacity(1);
+            if let Some(send) = send {
+                builder = builder.with_send(send, volume_db(effects.reverb * gain));
+            }
             let filter = builder.add_effect(FilterBuilder::new().cutoff(f64::from(effects.low_pass_hz)));
             let Some(Ok(mut track)) = self.tracks.track(bus).map(|t| t.add_sub_track(builder)) else {
-                return;
+                return false;
             };
-            let volume = volume_db(p.volume);
-            let speed = f64::from(finite(p.speed, 1.0).max(0.01));
+            let volume_db = volume_db(volume);
+            let rate = f64::from(finite(speed, 1.0).max(0.01));
+            let (start, end) = meta.loop_points;
             let Some(clip) = self.clip(sound) else {
-                return;
+                return false;
             };
             let handle = match clip {
-                Clip::Freed => return,
+                Clip::Freed => return false,
                 Clip::Static(data) => {
-                    let mut data = (**data).clone().volume(volume).playback_rate(speed);
+                    let mut data = (**data)
+                        .clone()
+                        .volume(volume_db)
+                        .playback_rate(rate)
+                        .panning(pan)
+                        .start_time(when)
+                        .fade_in_tween(fade_in);
                     if from > 0.0 {
                         data = data.start_position(from);
                     }
-                    if p.looping {
-                        data = data.loop_region(..);
+                    if looping {
+                        data = match end {
+                            Some(end) => data.loop_region(start..end),
+                            None => data.loop_region(start..),
+                        };
                     }
                     track.play(data).ok().map(Handle::Static)
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 Clip::Stream(stream) => {
                     let Ok(data) = stream.open() else {
-                        return;
+                        return false;
                     };
-                    let mut data = data.volume(volume).playback_rate(speed);
+                    let mut data = data
+                        .volume(volume_db)
+                        .playback_rate(rate)
+                        .panning(pan)
+                        .start_time(when)
+                        .fade_in_tween(fade_in);
                     if from > 0.0 {
                         data = data.start_position(from);
                     }
-                    if p.looping {
-                        data = data.loop_region(..);
+                    if looping {
+                        data = match end {
+                            Some(end) => data.loop_region(start..end),
+                            None => data.loop_region(start..),
+                        };
                     }
                     track.play(data).ok().map(Handle::Stream)
                 }
                 #[cfg(target_arch = "wasm32")]
                 Clip::Stream(StreamFrom::Memory(bytes)) => track
-                    .play(ChunkedData::new(bytes.clone(), p.volume, speed, p.looping))
+                    .play(
+                        ChunkedData::new(bytes.clone(), volume, rate, looping)
+                            .panning(pan)
+                            .start_time(when)
+                            .start_position(from)
+                            .loop_points(start, end)
+                            .fade_in(fade_in),
+                    )
+                    .ok()
+                    .map(Handle::Chunked),
+                #[cfg(feature = "video")]
+                Clip::Chunked(bytes) => track
+                    .play(
+                        ChunkedData::new(bytes.clone(), volume, rate, looping)
+                            .panning(pan)
+                            .start_time(when)
+                            .start_position(from)
+                            .loop_points(start, end)
+                            .fade_in(fade_in),
+                    )
                     .ok()
                     .map(Handle::Chunked),
             };
-            if let Some(handle) = handle {
-                self.playing.insert(
-                    id,
-                    Voice {
-                        sound,
-                        handle,
-                        track,
-                        filter,
-                        bus,
-                        effects,
-                        params: p,
-                        #[cfg(feature = "3d")]
-                        spatial: None,
-                        send_gain: gain,
-                    },
-                );
+            let Some(mut handle) = handle else {
+                return false;
+            };
+            let Some(v) = self.playing.get_mut(&id) else {
+                handle.stop(Tween::default());
+                return false;
+            };
+            v.send_gain = gain;
+            v.position = from;
+            v.real = Some(Real { handle, track, filter });
+            true
+        }
+        /// Stops voice `id` being heard and keeps its place: it goes on
+        /// virtually and can be heard again from there.
+        fn virtualize(&mut self, id: u64) {
+            if let Some(v) = self.playing.get_mut(&id)
+                && let Some(mut real) = v.real.take()
+            {
+                if let Some(at) = real.handle.position() {
+                    v.position = at;
+                }
+                real.handle.stop(Tween::default());
             }
         }
         /// Brings the Kira tracks in line with the bus model: rebuilds
         /// buses whose parent or chain changed (their voices carry on from
-        /// where they were), then sends volumes, effect settings, ducking
-        /// and reverb sends that changed.
+        /// where they were), then sends volumes, effect settings, pauses,
+        /// ducking and reverb sends that changed.
         pub fn sync_buses(&mut self) {
             if self.tracks.drop_stale(&self.buses) {
                 let mut moved: Vec<u64> = self
                     .playing
                     .iter()
-                    .filter(|(_, v)| !self.tracks.has_track(v.bus))
+                    .filter(|(_, v)| v.real.is_some() && !self.tracks.has_track(v.bus))
                     .map(|(&id, _)| id)
                     .collect();
                 moved.sort_unstable();
                 for id in moved {
-                    let Some(mut v) = self.playing.remove(&id) else {
-                        continue;
-                    };
-                    if v.handle.state() == PlaybackState::Stopped {
+                    let ended = self
+                        .playing
+                        .get(&id)
+                        .and_then(|v| v.real.as_ref())
+                        .is_some_and(|r| r.handle.state() == PlaybackState::Stopped);
+                    if ended {
+                        self.playing.remove(&id);
                         continue;
                     }
-                    let from = v.handle.position();
-                    v.handle.stop();
-                    drop(v.track);
-                    self.start(id, v.sound, v.params, v.bus, v.effects, from);
-                    #[cfg(feature = "3d")]
-                    if let Some([volume, pan, speed]) = v.spatial {
-                        self.spatialize(id, volume, pan, speed);
-                    }
+                    self.virtualize(id);
+                    self.realize(id, StartTime::Immediate, None);
                 }
             }
             self.tracks.push(&self.buses);
             if let Some(send) = &self.reverb {
                 for voice in self.playing.values_mut() {
                     let gain = self.buses.chain_gain(voice.bus);
-                    if gain != voice.send_gain {
+                    if gain != voice.send_gain
+                        && let Some(real) = &mut voice.real
+                    {
                         voice.send_gain = gain;
                         let _ =
-                            voice
-                                .track
+                            real.track
                                 .set_send(send.id(), volume_db(voice.effects.reverb * gain), Tween::default());
                     }
                 }
@@ -617,7 +829,8 @@ mod backend {
         /// For tests: seconds into voice `id`.
         #[cfg(test)]
         pub(crate) fn voice_position(&self, id: u64) -> Option<f64> {
-            self.playing.get(&id).map(|v| v.handle.position())
+            let v = self.playing.get(&id)?;
+            Some(v.real.as_ref().and_then(|r| r.handle.position()).unwrap_or(v.position))
         }
         pub fn effects(&mut self, id: u64, effects: AudioEffects) {
             if self.gate.set_effects(id, effects) {
@@ -625,16 +838,17 @@ mod backend {
             }
             if let Some(voice) = self.playing.get_mut(&id) {
                 let effects = effects.validated();
-                voice
-                    .filter
-                    .set_cutoff(f64::from(effects.low_pass_hz), Tween::default());
+                voice.effects = effects;
+                let Some(real) = &mut voice.real else {
+                    return;
+                };
+                real.filter.set_cutoff(f64::from(effects.low_pass_hz), Tween::default());
                 if let Some(send) = &self.reverb {
                     let gain = self.buses.chain_gain(voice.bus);
-                    let _ = voice
+                    let _ = real
                         .track
                         .set_send(send.id(), volume_db(effects.reverb * gain), Tween::default());
                 }
-                voice.effects = effects;
             }
         }
         #[cfg(feature = "3d")]
@@ -643,22 +857,51 @@ mod backend {
                 return;
             }
             if let Some(v) = self.playing.get_mut(&id) {
-                v.handle.spatialize(volume, pan, speed);
                 v.spatial = Some([volume, pan, speed]);
+                let (volume, pan, speed) = v.heard();
+                if let Some(real) = &mut v.real {
+                    real.handle.apply(volume, pan, speed);
+                }
             }
         }
         pub fn stop(&mut self, id: u64) {
             if self.gate.cancel(id) {
                 return;
             }
-            if let Some(mut v) = self.playing.remove(&id) {
-                v.handle.stop();
+            if let Some(mut v) = self.playing.remove(&id)
+                && let Some(real) = &mut v.real
+            {
+                real.handle.stop(Tween::default());
             }
         }
+    }
+    /// `position` brought inside the sound: a looping one back into its
+    /// loop, a finished one-shot to its end.
+    fn wrap(position: f64, meta: Meta, looping: bool) -> f64 {
+        let position = position.max(0.0);
+        if meta.seconds <= 0.0 {
+            return 0.0;
+        }
+        if !looping {
+            return position.min(meta.seconds);
+        }
+        let (start, end) = meta.loop_points;
+        let end = end.unwrap_or(meta.seconds).min(meta.seconds);
+        let start = start.clamp(0.0, end);
+        if position < end || end - start <= 1e-9 {
+            return position.min(end);
+        }
+        start + (position - start) % (end - start)
     }
     fn decode(bytes: Vec<u8>) -> Result<StaticSoundData, String> {
         StaticSoundData::from_cursor(std::io::Cursor::new(bytes))
             .map_err(|e| format!("could not decode the sound: {e}"))
+    }
+    /// A decoded sound, made on any thread (asset groups decode on workers).
+    pub type Decoded = Box<StaticSoundData>;
+    /// Decodes `bytes` as `Audio::load` does, on any thread.
+    pub fn decode_detached(bytes: Vec<u8>) -> Result<Decoded, String> {
+        decode(bytes).map(Box::new)
     }
 
     #[cfg(test)]
@@ -778,6 +1021,13 @@ mod backend {
 #[cfg(not(feature = "audio"))]
 mod backend {
     use super::{AudioBus, AudioEffects, BusRegistry, SoundParams};
+    /// Nothing is decoded without the `audio` feature.
+    /// A sound decoded on a worker: nothing without the `audio` feature.
+    pub struct Decoded;
+    /// Nothing to decode: the file only has to exist.
+    pub fn decode_detached(_bytes: Vec<u8>) -> Result<Decoded, String> {
+        Ok(Decoded)
+    }
     #[derive(Default)]
     pub struct Audio {
         /// Sound ids: a freed sound's slot goes to the next one made.
@@ -786,6 +1036,7 @@ mod backend {
         live: u32,
         next: u64,
         pub(super) buses: BusRegistry,
+        voice_limit: Option<u32>,
         #[cfg(feature = "3d")]
         pub(crate) spatial: super::spatial::SpatialState,
     }
@@ -801,6 +1052,10 @@ mod backend {
         pub fn user_gesture(&mut self) {}
         pub fn load(&mut self, _bytes: Vec<u8>) -> Result<(u32, f32), String> {
             Ok((self.make(), 0.0))
+        }
+        /// Nothing decoded: see `load`.
+        pub fn load_decoded(&mut self, _data: Decoded) -> (u32, f32) {
+            (self.make(), 0.0)
         }
         fn make(&mut self) -> u32 {
             self.live += 1;
@@ -839,11 +1094,87 @@ mod backend {
             self.next += 1;
             self.next
         }
+        /// A video's soundtrack: kept as a silent sound.
+        #[cfg(feature = "video")]
+        pub fn soundtrack(&mut self, _bytes: std::sync::Arc<[u8]>, _seconds: f32) -> Result<u32, String> {
+            Ok(self.make())
+        }
+        #[cfg(feature = "video")]
+        pub fn play_soundtrack(&mut self, _sound: u32, _bus: AudioBus, _from: f64) -> u64 {
+            self.next += 1;
+            self.next
+        }
         pub fn sync_buses(&mut self) {}
         pub fn effects(&mut self, _id: u64, _effects: AudioEffects) {}
         #[cfg(feature = "3d")]
         pub fn spatialize(&mut self, _id: u64, _volume: f32, _pan: f32, _speed: f32) {}
         pub fn stop(&mut self, _id: u64) {}
+        pub fn set_loop(&mut self, _id: u32, _start: f64, _end: Option<f64>) {}
+        pub fn update(&mut self, _dt: f32) {}
+        pub fn set_volume(&mut self, _id: u64, _volume: f32, _seconds: f32) {}
+        pub fn set_speed(&mut self, _id: u64, _speed: f32, _seconds: f32) {}
+        pub fn fade_out(&mut self, _id: u64, _seconds: f32) {}
+        pub fn set_priority(&mut self, _id: u64, _priority: u8) {}
+        pub fn is_virtual(&self, _id: u64) -> Option<bool> {
+            None
+        }
+        pub fn voice_count(&self) -> (u32, u32) {
+            (0, 0)
+        }
+        pub fn set_voice_limit(&mut self, limit: u32) {
+            self.voice_limit = Some(limit.min(256));
+        }
+        pub fn voice_limit(&self) -> u32 {
+            self.voice_limit.unwrap_or(64)
+        }
+        #[allow(clippy::too_many_arguments)] // mirrors the kira backend
+        pub fn music_play(
+            &mut self,
+            layers: &[(u32, f32)],
+            _bpm: f32,
+            _beats_per_bar: u32,
+            _volume: f32,
+            _bus: AudioBus,
+            _fade: f32,
+            _at: super::Quantize,
+        ) -> Vec<u64> {
+            layers
+                .iter()
+                .map(|_| {
+                    self.next += 1;
+                    self.next
+                })
+                .collect()
+        }
+        pub fn music_stop(&mut self, _fade: f32, _at: super::Quantize) {}
+        pub fn music_layer(&mut self, _layer: usize, _volume: f32, _fade: f32, _at: super::Quantize) {}
+        pub fn music_stinger(&mut self, _sound: u32, _bus: AudioBus, _at: super::Quantize) -> u64 {
+            self.next += 1;
+            self.next
+        }
+        pub fn music_speed(&mut self, _speed: f32, _fade: f32) {}
+        pub fn output_devices(&mut self) -> Vec<super::AudioDevice> {
+            Vec::new()
+        }
+        pub fn set_output_device(&mut self, device: Option<&str>) -> Result<(), String> {
+            match device {
+                Some(wanted) => Err(format!(
+                    "no audio output device \"{wanted}\" (built without the `audio` feature)"
+                )),
+                None => Ok(()),
+            }
+        }
+        pub fn output_device(&self) -> Option<&super::AudioDevice> {
+            None
+        }
+        pub fn device_events(&self) -> &[super::AudioDeviceEvent] {
+            &[]
+        }
+        pub fn open_offline(&mut self, _sample_rate: u32) {}
+        /// Silence: nothing is mixed without the `audio` feature.
+        pub fn render_offline(&mut self, seconds: f32, sample_rate: u32) -> Vec<[f32; 2]> {
+            vec![[0.0; 2]; (seconds.max(0.0) * sample_rate as f32).round() as usize]
+        }
     }
 }
 
@@ -898,11 +1229,30 @@ pub struct Audio {
     pub(crate) started: Vec<SoundStarted>,
     /// When each live sound was made and which file it came from.
     pub(crate) ledger: crate::inventory::Ledger,
+    /// The music as the game side follows it.
+    pub(crate) music: music::MusicModel,
+    /// Mixing into memory ([`Audio::open_offline`]): played even when headless.
+    pub(crate) offline: bool,
+    pub(crate) offline_rate: u32,
+    /// The device asked for ([`Audio::set_output_device`]).
+    pub(crate) chosen_device: Option<String>,
+    /// Loop points by sound id ([`Audio::set_loop`]).
+    pub(crate) loops: std::collections::HashMap<u32, (f32, Option<f32>)>,
+}
+
+/// A sound decoded on a worker thread, for [`Audio::adopt_decoded`].
+pub(crate) type DecodedSound = backend::Decoded;
+
+/// Decodes a sound file's bytes on any thread, as [`Audio::load`] does
+/// (nothing without the `audio` feature).
+pub(crate) fn decode_sound(bytes: Vec<u8>) -> Result<DecodedSound, String> {
+    backend::decode_detached(bytes)
 }
 
 impl Audio {
     /// Loads a sound from an [added asset source](crate::assets::Assets::add_source) or the
-    /// `assets/` folder: OGG Vorbis, WAV, MP3 or FLAC. Loading the same file
+    /// `assets/` folder: OGG Vorbis, MP3, FLAC, WAV (PCM, float or IMA
+    /// ADPCM) or AIFF, told apart by their first bytes. Loading the same file
     /// again returns the same handle. Only a file from `assets/` is hot reloaded.
     ///
     /// Without the `audio` feature nothing is decoded: the file only has to
@@ -964,6 +1314,26 @@ impl Audio {
             self.watcher.watch(path, file, crate::hot_reload::Asset::Sound(id));
         }
         Ok(sound)
+    }
+
+    /// Adds a sound an asset group read and [decoded](decode_sound)
+    /// on a worker, as [`try_load`](Self::try_load) would have: cached by
+    /// where it came from (one loaded meanwhile is kept instead), and
+    /// watched if it came from `assets/`.
+    pub(crate) fn adopt_decoded(&mut self, path: &str, origin: crate::assets::Origin, data: DecodedSound) -> Sound {
+        if let Some(sound) = self.loaded.get(&origin, crate::asset_cache::AssetKind::Sound) {
+            return sound;
+        }
+        let (id, seconds) = self.backend.load_decoded(data);
+        let sound = Sound { id, seconds };
+        self.sounds_live.insert(id);
+        self.ledger.own(crate::inventory::AssetClass::Sound, id, path);
+        self.loaded
+            .insert(origin.clone(), crate::asset_cache::AssetKind::Sound, sound);
+        if let crate::assets::Origin::File(file) = origin {
+            self.watcher.watch(path, file, crate::hot_reload::Asset::Sound(id));
+        }
+        sound
     }
 
     /// Makes a sound from mono samples in -1..1 at `sample_rate` Hz, for
@@ -1084,11 +1454,17 @@ impl Audio {
         self.backend.unlocked()
     }
 
+    /// Whether nothing is mixed: a headless run without an offline output.
+    pub(crate) fn silent_output(&self) -> bool {
+        self.headless && !self.offline
+    }
+
     /// Frees sound `id` (see [`Ctx::free`]).
     pub(crate) fn free_id(&mut self, id: u32) {
         if !self.sounds_live.remove(id) {
             return;
         }
+        self.loops.remove(&id);
         self.ledger.freed(crate::inventory::AssetClass::Sound, id);
         {
             use crate::asset_cache::AssetKind::{Sound, Stream};

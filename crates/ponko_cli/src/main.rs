@@ -6,12 +6,13 @@
 //! notices ([`package`]); `ponko pack` packs a folder of assets into one
 //! asset pack ([`pack`]); `ponko textures` compresses a folder's images
 //! into KTX2 textures ([`textures`], feature `textures`); `ponko cook`
-//! turns source assets into runtime-ready ones ([`cook`]). Arguments are
-//! parsed by hand.
+//! turns source assets into runtime-ready ones ([`cook`]); `ponko editor`
+//! runs a game in edit mode ([`editor`]). Arguments are parsed by hand.
 
 #![deny(missing_docs)]
 
 mod cook;
+mod editor;
 mod image_diff;
 mod new;
 mod pack;
@@ -28,7 +29,8 @@ ponko: the command-line tool for Ponko games
 
 Usage:
   ponko new <path> [--2d | --3d | --headless | --server] [--path <engine> | --git <url>]
-  ponko package [--bin <name> | --example <name>] [--web] [--format <list>] [...]
+  ponko editor [<project>] [--open <file>] [--bin <name> | --example <name>] [...]
+  ponko package [--bin <name> | --example <name>] [--web [--threads]] [--format <list>] [...]
   ponko notices --out <file> [-p <package>] [...]
   ponko pack [<folder>] [--out <file>] [--exclude <pattern>]... [--textures] [--cook]
   ponko cook [<folder>] [--out <folder> | --pack <file>] [--platform <name>]
@@ -40,6 +42,7 @@ Usage:
 
 Commands:
   new      Make a new game project from a template
+  editor   Open a game in the editor (scene tree, inspector, gizmos, undo, save)
   package  Build the game and package it for players (zip, app, dmg, tar.gz, web)
   notices  Write THIRD-PARTY-NOTICES.txt for a crate
   pack     Pack a folder of assets into one asset pack (what games ship)
@@ -98,6 +101,18 @@ fn run(args: &[String]) -> Result<String, String> {
                 package::notices_command(&options, &dir)
             }
         }
+        "editor" => {
+            if rest
+                .iter()
+                .take_while(|a| *a != "--")
+                .any(|a| a == "-h" || a == "--help")
+            {
+                return Ok(editor::USAGE.to_string());
+            }
+            let options = editor::Options::parse(rest)?;
+            let dir = std::env::current_dir().map_err(|e| format!("can't read the current folder: {e}"))?;
+            editor::editor_command(&options, &dir, editor::settings_path().as_deref())
+        }
         "pack" => {
             if rest.iter().any(|a| a == "-h" || a == "--help") {
                 return Ok(pack::USAGE.to_string());
@@ -143,6 +158,7 @@ fn run(args: &[String]) -> Result<String, String> {
             None => Ok(USAGE.to_string()),
             Some("image-diff") => Ok(image_diff::USAGE.to_string()),
             Some("new") => Ok(new::USAGE.to_string()),
+            Some("editor") => Ok(editor::USAGE.to_string()),
             Some("package") => Ok(package::USAGE.to_string()),
             Some("notices") => Ok(package::NOTICES_USAGE.to_string()),
             Some("pack") => Ok(pack::USAGE.to_string()),
@@ -208,6 +224,15 @@ mod tests {
             );
         }
         assert!(run_str(&[]).unwrap().contains("ponko cook"));
+    }
+
+    #[test]
+    fn help_for_editor_names_its_file_option_and_feature() {
+        for args in [&["help", "editor"][..], &["editor", "--help"]] {
+            let out = run_str(args).unwrap();
+            assert!(out.contains("--open <file>") && out.contains("PONKO_EDITOR"), "{out}");
+        }
+        assert!(run_str(&[]).unwrap().contains("ponko editor"));
     }
 
     #[test]

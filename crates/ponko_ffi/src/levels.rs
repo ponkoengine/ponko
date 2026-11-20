@@ -37,6 +37,25 @@ pub struct PonkoLevelOptions {
     pub z: f32,
 }
 
+/// Placement and reflection options for `ponko_ctx_spawn_ldtk_level`.
+/// All zero selects the regular level defaults.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PonkoLdtkOptions {
+    /// An optional set of ordinary level options.
+    pub level: *const PonkoLevelOptions,
+    /// Add the level's authored world position to the spawn origin.
+    pub at_world_position: bool,
+    /// Skip prefab instances restored by a world save.
+    pub without_saved_objects: bool,
+    /// LDtk entity classes, one per component mapping.
+    pub classes: *const *const c_char,
+    /// Registered reflected component names, parallel to `classes`.
+    pub components: *const *const c_char,
+    /// Length of each mapping array. Both arrays may be null if zero.
+    pub mapping_count: usize,
+}
+
 /// What `ponko_level_object_get` reads from a spawned level object
 /// (`LevelObject` in Rust). Its name, class and layer come from
 /// `ponko_level_object_name` / `_class` / `_layer`.
@@ -164,6 +183,57 @@ pub unsafe extern "C" fn ponko_ctx_spawn_level(
             let path = text(path)?;
             ctx_access(ctx, |c| {
                 let root = c.spawn_level_with(path, vec(at), options).map_err(engine_error)?;
+                out(out_root, root.to_bits())
+            })
+        }
+    })
+}
+
+/// Spawns a selected LDtk level with optional authored world placement and
+/// fields mapped to reflected components. With `at_world_position`, `at`
+/// is the world origin. Otherwise it is the level's top-left corner.
+///
+/// # Safety
+/// Live ctx, NUL-terminated `path`, writable `out_root`, and `ldtk` null or
+/// readable with its level options, arrays and strings valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_spawn_ldtk_level(
+    ctx: *mut PonkoCtx,
+    path: *const c_char,
+    at: PonkoVec2,
+    ldtk: *const PonkoLdtkOptions,
+    out_root: *mut u64,
+) -> PonkoStatus {
+    boundary(|| {
+        if out_root.is_null() {
+            return Err(invalid("output is null"));
+        }
+        // SAFETY: forwarded caller contract.
+        unsafe {
+            let path = text(path)?;
+            if !path
+                .rsplit_once('.')
+                .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("ldtk"))
+            {
+                return Err(invalid("expected an .ldtk project"));
+            }
+            let mut level = LevelOptions::default();
+            if let Some(ldtk) = ldtk.as_ref() {
+                level = options(ldtk.level)?;
+                if ldtk.at_world_position {
+                    level = level.at_ldtk_position();
+                }
+                if ldtk.without_saved_objects {
+                    level = level.without_saved_objects();
+                }
+                let classes = strings(ldtk.classes, ldtk.mapping_count)?;
+                let components = strings(ldtk.components, ldtk.mapping_count)?;
+                for (class, component) in classes.into_iter().zip(components) {
+                    level = level.reflect_entity(class, component);
+                }
+            }
+            ctx_access(ctx, |c| {
+                let root = c.spawn_level_with(path, vec(at), level).map_err(engine_error)?;
                 out(out_root, root.to_bits())
             })
         }

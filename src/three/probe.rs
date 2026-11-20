@@ -606,7 +606,11 @@ impl Graphics {
                 "four reflection environments are already allocated",
             ));
         }
-        let faces = std::array::from_fn(|_| self.make_render_target(128, 128).unwrap_or_else(|e| panic!("{e}")));
+        let faces = std::array::from_fn(|_| {
+            self.make_render_target(128, 128)
+                .unwrap_or_else(|e| panic!("{e}"))
+                .texture
+        });
         self.assets3d.probes.captures.push(faces);
         let slot = self.assets3d.probes.captures.len() as u32;
         world.get_mut::<ReflectionProbe3D>(entity).unwrap().content = slot;

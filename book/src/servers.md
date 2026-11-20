@@ -33,8 +33,9 @@ cargo run --example client    # a bot that joins it (another terminal)
 
 The server owns the world: clients only say what they want to do, and every
 client sees the server's result. The engine's messages are plain UDP with
-reliable and unreliable lanes; [snapshots and interest](networking.md) build
-on them for larger worlds.
+reliable and unreliable lanes. The template writes its own small protocol
+on them; a game that grows past a few values replicates instead
+([below](#a-replicated-game)).
 
 ### What it is built with
 
@@ -151,6 +152,22 @@ For more detail on a running server, profile the same game with
 [`profile_headless`](profiling.md) or a [trace](profiling.md) on a
 development machine.
 
+## A replicated game
+
+With [replication](replication.md) there is no protocol to write: the
+server is the same game as the client, hosting instead of joining, and
+`run_server` is all a dedicated server adds. This is the one in the
+[Orb Arena](replication.md#orb-arena-the-reference-game) example:
+
+```rust,no_run
+{{#include ../../examples/net_arena/main.rs:dedicated}}
+```
+
+`cargo run --example net_arena -- server` runs it; `-- join <address>`
+plays against it. The tick-rate report's `peers` counts the joined
+clients, and `ctx.net.replication.peer_stats(peer)` has the bytes and
+packets each one was sent, for your own log lines.
+
 ## The container image
 
 The template's `Dockerfile` has two stages:
@@ -220,7 +237,8 @@ with its world: measure them with the tick report under a realistic load.
   reach a UDP server; check the process, or run the bot client as the probe
   (`examples/client.rs` exits non-zero when it can't play).
 - **One match per process.** A server process is one world. Run several
-  containers for several matches and give each its own port.
+  containers for several matches and give each its own port. Players find
+  them through a lobby: [`ponko-lobby`](lobby.md) runs in the same recipe.
 - **Limits.** Give the container a CPU and memory limit
   (`docker run --cpus 1 --memory 128m`). A tick runs on one thread; a
   server that falls behind shows it in `hz` and `skipped_ticks` before

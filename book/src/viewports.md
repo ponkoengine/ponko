@@ -231,23 +231,29 @@ the list. 2D views cost one more pass over the frame's sprite batches each,
 skipping batches off their layers. With no views and the main camera on the
 whole window, nothing of this runs.
 
-The scene benchmark measures it (`PONKO_RENDER_VIEWS=2` or `4`, see
-`crates/ponko_bench/RENDER_SCENES.md`). On an Apple M4 Max at 1280 x 720,
-high quality, its town scene took these times per frame (300 frames after
-60 of warm-up, two runs each, on a busy machine with a load average of
-62 to 78, so the ranges are wide):
+The scene benchmark measures it (`PONKO_RENDER_VIEWS=2`, `4` or `minimap`,
+see `crates/ponko_bench/RENDER_SCENES.md`). On an Apple M4 Max at
+1280 x 720, high quality, its town scene made these heap allocations per
+frame (whole process, exact from run to run):
 
-| Cameras | GPU time (median) | CPU time (median) | Allocations |
-|---|---|---|---|
-| 1 | 3.1–3.5 ms | 1.2–1.5 ms | 1222 |
-| 2 (halves) | 2.3–3.7 ms | 1.9 ms | 1843 |
-| 4 (quarters) | 3.4–3.9 ms | 3.1–3.3 ms | 2791 |
+| Cameras | Allocations | Each view adds |
+|---|---|---|
+| 1 | 745 | |
+| 2 (halves) | 1255 | 510 |
+| 4 (quarters) | 2113 | 456 |
+| 1 and a minimap (a quarter-sized corner view with bloom, ambient occlusion and screen-space reflections off, FXAA) | 931 | 186 |
 
-The CPU's share grows by about 0.6 ms for each view, mostly collecting and
-recording what that camera sees. Collecting a view allocates nothing once
-its buffers have grown; the allocations each view adds (about 520 to 620 a
-frame) are made inside wgpu while it records the view's render passes, as
-it does for the main camera's.
+Collecting a view allocates nothing once its buffers have grown, and the
+renderer's own code makes a handful of allocations a frame. The rest are
+made inside wgpu: about a dozen for each render pass a view records, a
+few dozen for each command encoder and each submit. A view with fewer
+effects records fewer passes, which is why the minimap costs much less
+than a split-screen view: give a small view its own post settings
+(`d3::View::with_post`) with what it doesn't need turned off.
+
+CPU time grows by roughly what the main camera's collecting and recording
+cost at the view's size. Times measured on a busy machine vary too much to
+quote; measure your own scene with the benchmark.
 
 The `split_screen` example (`cargo run --release --example split_screen
 --features 3d`) has two or four players, a minimap and picking.

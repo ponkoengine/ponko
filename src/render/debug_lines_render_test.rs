@@ -129,6 +129,59 @@ fn depth_tested_lines_hide_behind_surfaces_and_lines_on_top_do_not() {
 }
 
 #[test]
+fn see_through_lines_blend_over_the_scene_and_opaque_lines_cover_it() {
+    let Some(mut stage) = Stage::new() else {
+        return;
+    };
+    let grey = stage.cube(Color::rgb(0.5, 0.5, 0.5));
+    stage.block(grey, vec3(-2.0, 0.0, -1.0), vec3(2.0, 1.4, -0.6));
+    let debug = &mut stage.ctx.debug;
+    debug.set_enabled(true);
+    let (opaque, half) = (vec3(-1.0, 0.4, 0.0), vec3(1.0, 0.4, 0.0));
+    debug
+        .line(opaque - Vec3::Y * 0.3, opaque + Vec3::Y * 0.3, Color::GREEN)
+        .width(8.0);
+    debug
+        .line(half - Vec3::Y * 0.3, half + Vec3::Y * 0.3, Color::GREEN.with_alpha(0.5))
+        .width(8.0);
+    // On top: one of each kind again, beside the others.
+    debug
+        .line(opaque + Vec3::X * 0.5, opaque + vec3(0.5, 0.6, 0.0), Color::BLUE)
+        .width(8.0)
+        .on_top();
+    debug
+        .line(
+            half - Vec3::X * 0.5,
+            half + vec3(-0.5, 0.6, 0.0),
+            Color::BLUE.with_alpha(0.5),
+        )
+        .width(8.0)
+        .on_top();
+    let drawn = image(&mut stage);
+    let at = |p: Vec3| stage.color_at(&drawn, p);
+    let (full, mixed) = (at(opaque), at(half));
+    assert!(green(full), "opaque: {full:?}");
+    // Half green over the grey box: greener than grey, less than full green,
+    // and the grey shows through in red and blue.
+    assert!(
+        mixed[1] > mixed[0] + 20.0 && mixed[1] < full[1] - 20.0 && mixed[0] > full[0] + 20.0,
+        "see-through: {mixed:?} vs {full:?}"
+    );
+    let (top, top_mixed) = (at(opaque + vec3(0.5, 0.3, 0.0)), at(half + vec3(-0.5, 0.3, 0.0)));
+    assert!(blue(top), "opaque on top: {top:?}");
+    assert!(
+        top_mixed[2] < top[2] - 20.0 && top_mixed[0] > top[0] + 20.0,
+        "{top_mixed:?} vs {top:?}"
+    );
+    // A draw call for each of the four kinds.
+    let with_lines = stage.renderer.draw_calls();
+    stage.ctx.debug.set_enabled(false);
+    let _ = image(&mut stage);
+    assert_eq!(with_lines - stage.renderer.draw_calls(), 4);
+    stage.finish();
+}
+
+#[test]
 fn lines_alone_draw_without_any_model() {
     let Some(mut stage) = Stage::new() else {
         return;
@@ -141,17 +194,77 @@ fn lines_alone_draw_without_any_model() {
     stage.finish();
 }
 
-/// The GPU side of 100,000 debug lines at 1280x720 with 4 samples: the
-/// median wall time of a frame (prepare, record, submit and wait for the
-/// GPU) with and without them, over a floor and a few boxes. Ignored by
-/// default; `ponko_bench -- debug/` measures the CPU side.
+/// What one case of [`hundred_thousand_lines_gpu_time`] draws.
+#[derive(Clone, Copy, PartialEq)]
+enum Lines {
+    /// Nothing: the frame without debug lines.
+    None,
+    /// 100,000 upright lines a meter tall in a block in front of the
+    /// camera, half of them on top (the benchmark's lines).
+    Upright,
+    /// The same lines behind the camera: every one dropped by the vertex
+    /// shader, so only uploading and vertex work is left.
+    Behind,
+    /// 100,000 lines a millimeter long where the upright ones stand: about
+    /// a pixel each, rasterizing without filling.
+    Dots,
+    /// The upright lines, all depth-tested.
+    Tested,
+    /// The upright lines, all on top.
+    Top,
+}
+
+fn draw_lines(debug: &mut crate::debug::DebugDraw, lines: Lines) {
+    if lines == Lines::None {
+        return;
+    }
+    let (behind, tall) = match lines {
+        Lines::Behind => (20.0, 1.0),
+        Lines::Dots => (0.0, 0.001),
+        _ => (0.0, 1.0),
+    };
+    for i in 0..100_000 {
+        let x = (i % 1000) as f32 * 0.008 - 4.0;
+        let z = (i / 1000) as f32 * 0.04 - 2.0 + behind;
+        let shape = debug.line(vec3(x, 0.0, z), vec3(x, tall, z), Color::GREEN);
+        let top = match lines {
+            Lines::Tested => false,
+            Lines::Top => true,
+            _ => i % 2 == 0,
+        };
+        if top {
+            shape.on_top();
+        }
+    }
+}
+
+/// The GPU side of 100,000 debug lines at 1280x720, over a floor and a few
+/// boxes, measured with GPU timestamps: the opaque pass (where the lines
+/// are drawn) and the whole frame, for each kind of [`Lines`], with 4
+/// samples a pixel and with 1. The cases take turns, 20 frames at a time
+/// for 8 rounds, so a busy GPU slows them alike; the median and the spread
+/// (min, p90) of the timed frames are printed. Ignored by default (a
+/// timing); `ponko_bench -- debug/` measures the CPU side. Run it with
+/// `cargo test -p ponko --lib --features 3d hundred_thousand_lines_gpu_time -- --ignored --nocapture`.
 #[test]
 #[ignore = "a timing: run on purpose, on a quiet machine"]
 fn hundred_thousand_lines_gpu_time() {
+    for samples in [4, 1] {
+        time_lines(samples);
+    }
+}
+
+fn time_lines(samples: u32) {
     let Some(mut stage) = Stage::with(Setup {
         size: (1280, 720),
+        samples,
+        timestamps: true,
         ..Default::default()
     }) else {
+        return;
+    };
+    let Some(mut timer) = super::timer::GpuTimer::new(&stage.device, &stage.queue) else {
+        println!("no GPU timestamps on {}: nothing measured", stage.info.name);
         return;
     };
     stage.floor();
@@ -161,38 +274,64 @@ fn hundred_thousand_lines_gpu_time() {
         stage.block(grey, vec3(x - 0.4, 0.0, -0.4), vec3(x + 0.4, 1.5, 0.4));
     }
     stage.ctx.debug.set_enabled(true);
-    let median = |stage: &mut Stage, lines: bool| {
-        let mut times = Vec::new();
-        for frame in 0..60 {
+    println!(
+        "adapter: {} ({:?}), {samples} sample(s) a pixel",
+        stage.info.name, stage.info.backend
+    );
+    let cases = [
+        ("none", Lines::None),
+        ("upright", Lines::Upright),
+        ("behind", Lines::Behind),
+        ("dots", Lines::Dots),
+        ("tested", Lines::Tested),
+        ("top", Lines::Top),
+    ];
+    let mut times = vec![(Vec::new(), Vec::new()); cases.len()];
+    for _round in 0..8 {
+        for (case, &(_, lines)) in cases.iter().enumerate() {
             stage.ctx.debug.clear();
-            if lines {
-                for i in 0..100_000 {
-                    let x = (i % 1000) as f32 * 0.008 - 4.0;
-                    let z = (i / 1000) as f32 * 0.04 - 2.0;
-                    let shape = stage.ctx.debug.line(vec3(x, 0.0, z), vec3(x, 1.0, z), Color::GREEN);
-                    if i % 2 == 0 {
-                        shape.on_top();
-                    }
-                }
-            }
+            draw_lines(&mut stage.ctx.debug, lines);
             stage.ctx.gfx.frame3d.debug_lines.clear();
             stage.ctx.hand_over_debug_draw();
-            let start = std::time::Instant::now();
-            stage.render();
-            stage.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-            if frame >= 10 {
-                times.push(start.elapsed().as_secs_f64() * 1000.0);
+            let mut read = timer.frames_read;
+            for n in 0..25 {
+                timer.collect(&stage.device);
+                timer.begin_frame();
+                stage.render_timed(Some(&mut timer));
+                stage.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                timer.collect(&stage.device);
+                // The first frames of a case warm up (and may be the last case's).
+                if timer.frames_read != read && n >= 5 {
+                    let spans = &timer.last_frame;
+                    let opaque: f32 = spans.iter().filter(|p| p.name == "opaque").map(|p| p.ms).sum();
+                    let frame = spans.iter().map(|p| p.start_ms + p.ms).fold(0.0, f32::max);
+                    // Some adapters report a pass of zero now and then: not a time.
+                    if opaque > 0.0 {
+                        times[case].0.push(opaque);
+                        times[case].1.push(frame);
+                    }
+                }
+                read = timer.frames_read;
             }
         }
-        times.sort_by(f64::total_cmp);
-        (times[times.len() / 2], times[0])
+    }
+    let spread = |v: &mut Vec<f32>| {
+        v.sort_by(f32::total_cmp);
+        (v[v.len() / 2], v[0], v[v.len() * 9 / 10])
     };
-    let without = median(&mut stage, false);
-    let with = median(&mut stage, true);
-    let again = median(&mut stage, false);
-    println!(
-        "frame without lines: median {:.3} ms (min {:.3}); with 100k lines: median {:.3} ms (min {:.3}); without again: median {:.3} ms",
-        without.0, without.1, with.0, with.1, again.0
-    );
+    for ((name, _), (opaque, frame)) in cases.iter().zip(&mut times) {
+        assert!(opaque.len() >= 40, "{name}: only {} frames timed", opaque.len());
+        let (o, f) = (spread(opaque), spread(frame));
+        println!(
+            "{name:>8}: opaque pass median {:.3} ms (min {:.3}, p90 {:.3}); frame median {:.3} ms (min {:.3}, p90 {:.3}); {} frames",
+            o.0,
+            o.1,
+            o.2,
+            f.0,
+            f.1,
+            f.2,
+            opaque.len()
+        );
+    }
     stage.finish();
 }

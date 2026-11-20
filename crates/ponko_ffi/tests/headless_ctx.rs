@@ -483,6 +483,29 @@ fn texture_pixels_are_checked_against_the_size_and_filters_accept_any_handle() {
 }
 
 #[test]
+fn updating_a_render_targets_pixels_is_an_error_not_a_panic() {
+    with_ctx(
+        |_| {},
+        |ctx| unsafe {
+            let mut target = PonkoTexture {
+                id: 0,
+                width: 0,
+                height: 0,
+            };
+            assert_eq!(ponko_ctx_create_render_target(ctx, 2, 2, &mut target), PONKO_OK);
+            let pixels = [9u8; 2 * 2 * 4];
+            assert_eq!(
+                ponko_ctx_update_texture(ctx, target, pixels.as_ptr(), pixels.len()),
+                BAD,
+                "drawn by its camera, not updated"
+            );
+            let message = std::ffi::CStr::from_ptr(ponko_last_error()).to_string_lossy();
+            assert!(message.contains("render target"), "{message}");
+        },
+    );
+}
+
+#[test]
 fn a_shadow_mesh_goes_on_live_entities_only() {
     with_ctx(
         |_| {},

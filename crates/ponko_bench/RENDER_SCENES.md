@@ -127,7 +127,7 @@ Nothing is left out silently, and nothing unavailable is written as 0:
 | `PONKO_RENDER_SHADOW_FILTER` | the preset's | The sun shadow filter instead of the preset's (and the scene's): 1 `Sharp`, 2 `Soft`, 3 `Softest`, 4 `ContactHardening` |
 | `PONKO_RENDER_WIND` | 0 | 1: `game-like`'s tree crowns sway in a material `vertex` function, and 4,096 cubes are placed from a GPU buffer of 262,144 elements that keeps its last frame (what motion vectors of `vertex` functions and buffers cost) |
 | `PONKO_RENDER_VERTEX_MOTION` | 1 | 0: the motion pass ignores what `vertex` functions do (the control for `PONKO_RENDER_WIND` with TAA) |
-| `PONKO_RENDER_VIEWS` | 1 | 2 or 4: split screen, the main camera and one or three views (`ctx.scene3d.views`), each circling the scene from its own side, drawn into their parts of the target as a game's window draws them. Preparing and encoding interleave there, so `prepare` is 0 and `encode` holds both; `submit` is the copy into the target |
+| `PONKO_RENDER_VIEWS` | 1 | 2 or 4: split screen, the main camera and one or three views (`ctx.scene3d.views`), each circling the scene from its own side, drawn into their parts of the target as a game's window draws them. `minimap`: the main camera on the whole target and a quarter-sized view in its top right corner with bloom, ambient occlusion, contact shadows and screen-space reflections off and FXAA (`View3D::with_post`), as a game's minimap. Preparing and encoding interleave there, so `prepare` is 0 and `encode` holds both; `submit` is the copy into the target |
 | `PONKO_GPU_TIER` | unset | Opens the device as a weaker GPU (`webgl2`, `baseline`), as the engine's tests do |
 
 A value that doesn't parse stops the run and names the variable.
@@ -143,6 +143,7 @@ The filter picks scenes: `-- 'render/scene shadow-heavy'`, or several with
 | `PONKO_RENDER_CSV=file.csv` | One row per scene and metric: `scene,group,metric,unit,samples,min,p50,p95,p99,max,mean,note` |
 | `PONKO_RENDER_FRAMES_CSV=file.csv` | One row per measured frame: every step, GPU total and span, the counts |
 | `PONKO_RENDER_PNG=dir` | The last frame of each scene as `dir/<scene>.png`, to look at what was measured |
+| `PONKO_ALLOC_SITES=n` | After the measured frames, `n` more frames with the call stack of every allocation taken, printed to stdout grouped by site: the innermost engine function, the outermost `wgpu` call under it and the innermost function that allocated, with the count a frame. `PONKO_ALLOC_SITES_DUMP=1` also prints the whole stacks of allocations outside the engine. Slow (a stack per allocation): use a few frames |
 
 The JSON document:
 

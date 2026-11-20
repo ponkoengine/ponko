@@ -3,6 +3,7 @@
 
 use crate::assets;
 use crate::gfx::Graphics;
+use crate::handle::{INDEX_MASK, write_slot};
 
 /// What a [`TextureArray`]'s pixels hold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -144,7 +145,8 @@ impl Graphics {
                 layer.len()
             )));
         }
-        let id = self.assets3d.arrays.len() as u32;
+        let id = self.assets3d.array_ids.next("texture array");
+        let slot = id & INDEX_MASK;
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
         {
@@ -159,17 +161,17 @@ impl Graphics {
                     ),
                 ));
             }
-            let gpu_id = renderer.create_texture_array(width, height, layers, kind == TextureKind::Data);
-            debug_assert_eq!(gpu_id, id);
+            renderer.create_texture_array(slot, width, height, layers, kind == TextureKind::Data);
         }
+        let id = self.assets3d.array_ids.make("texture array");
         let array = TextureArray {
             id,
             width,
             height,
             layers: layers.len() as u32,
         };
-        self.assets3d.arrays.push(array);
-        self.assets3d.array_data.push(kind == TextureKind::Data);
+        write_slot(&mut self.assets3d.arrays, slot, array);
+        write_slot(&mut self.assets3d.array_data, slot, kind == TextureKind::Data);
         self.assets3d.arrays_live.insert(id);
         self.asset_ledger.made(crate::inventory::AssetClass::TextureArray, id);
         Ok(array)
@@ -313,7 +315,8 @@ impl Graphics {
             layer.srgb = srgb;
             layer.levels.truncate(levels);
         }
-        let id = self.assets3d.arrays.len() as u32;
+        let id = self.assets3d.array_ids.next("texture array");
+        let slot = id & INDEX_MASK;
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
         {
@@ -329,17 +332,17 @@ impl Graphics {
                 ));
             }
             let refs: Vec<&crate::compressed::CompressedImage> = layers.iter().map(|(_, l)| l).collect();
-            let gpu_id = renderer.create_compressed_texture_array(&refs);
-            debug_assert_eq!(gpu_id, id);
+            renderer.create_compressed_texture_array(slot, &refs);
         }
+        let id = self.assets3d.array_ids.make("texture array");
         let array = TextureArray {
             id,
             width,
             height,
             layers: layers.len() as u32,
         };
-        self.assets3d.arrays.push(array);
-        self.assets3d.array_data.push(kind == TextureKind::Data);
+        write_slot(&mut self.assets3d.arrays, slot, array);
+        write_slot(&mut self.assets3d.array_data, slot, kind == TextureKind::Data);
         self.assets3d.arrays_live.insert(id);
         self.asset_ledger.made(crate::inventory::AssetClass::TextureArray, id);
         Ok(Some(array))
@@ -348,7 +351,7 @@ impl Graphics {
     #[doc(hidden)]
     #[must_use]
     pub fn has_texture_array(&self, array: TextureArray) -> bool {
-        self.assets3d.arrays_live.contains(array.id) && self.assets3d.arrays.get(array.id as usize) == Some(&array)
+        self.assets3d.arrays_live.contains(array.id) && self.assets3d.knows_array(array)
     }
 
     /// Frees texture array `id` (see [`Ctx::free`](crate::ctx::Ctx::free)): materials reading it
@@ -357,6 +360,7 @@ impl Graphics {
         if !self.assets3d.arrays_live.remove(id) {
             return;
         }
+        self.assets3d.array_ids.release(id);
         self.asset_ledger.freed(crate::inventory::AssetClass::TextureArray, id);
         if self.assets3d.decal_array.is_some_and(|a| a.id == id) {
             self.assets3d.decal_array = None;
@@ -364,7 +368,7 @@ impl Graphics {
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
         {
-            renderer.free_texture_array(id);
+            renderer.free_texture_array(id & INDEX_MASK);
         }
     }
 
@@ -425,7 +429,13 @@ impl Graphics {
                     "decal textures: that texture array wasn't made by this game; create or load it in this game",
                 ));
             }
-            if !self.assets3d.array_data.get(a.id as usize).copied().unwrap_or(false) {
+            if !self
+                .assets3d
+                .array_data
+                .get((a.id & INDEX_MASK) as usize)
+                .copied()
+                .unwrap_or(false)
+            {
                 return Err(crate::error::Error::new(
                     crate::error::ErrorKind::Invalid,
                     "decal textures: make the array with TextureKind::Data (decals decode colors themselves)",

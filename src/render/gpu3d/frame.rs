@@ -32,6 +32,10 @@ pub(super) struct FrameUniform {
     pub(super) cascade_texel: [f32; 4],
     /// x: seconds since the game started, y: seconds since the last frame.
     pub(super) time: [f32; 4],
+    /// Whole and fractional elapsed seconds (current and last drawn frame),
+    /// next to `time` so a clock tick is one contiguous write.
+    pub(super) time_seconds: [u32; 2],
+    pub(super) time_fraction: [f32; 2],
     pub(super) inv_view_proj: [[f32; 4]; 4],
     /// Width and height in pixels, then their inverses.
     pub(super) screen: [f32; 4],
@@ -68,6 +72,14 @@ pub(super) struct FrameUniform {
     pub(super) gi: [[f32; 4]; 3],
     /// A sky shader's values (`Sky::shader_params`); zero without one.
     pub(super) sky_params: [[f32; 4]; 4],
+    /// The sky kit's settings (see `SkyKit::frame_params`); zero without it.
+    pub(super) sky_kit: [[f32; 4]; 6],
+}
+
+/// Splits elapsed time before rounding the subsecond part to shader precision.
+pub(super) fn split_elapsed(current: f64, past: f64) -> ([u32; 2], [f32; 2]) {
+    let elapsed = [current, past];
+    (elapsed.map(|t| t as u32), elapsed.map(|t| t.fract() as f32))
 }
 
 /// Writes a frame uniform at `at` in `buffer`, whose contents there
@@ -91,4 +103,26 @@ pub(super) fn cluster_depth(frame: &Frame3D) -> [f32; 4] {
     depth[2] = frame.decals.records.len() as f32;
     depth[3] = frame.lights.lists.len() as f32;
     depth
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_elapsed;
+
+    #[test]
+    fn shader_time_preserves_submilliseconds_at_ten_hours_and_after_days() {
+        for seconds in [36_000, 3 * 86_400] {
+            let past = f64::from(seconds) + 0.25;
+            let now = past + 0.000_1;
+            assert_eq!(now as f32, past as f32, "legacy absolute time rounds both together");
+            let (whole, fraction) = split_elapsed(now, past);
+            assert_eq!(whole, [seconds; 2]);
+            assert!((f64::from(fraction[0] - fraction[1]) - (now - past)).abs() < 3e-8);
+
+            let (whole, fraction) = split_elapsed(f64::from(seconds), f64::from(seconds) - 0.000_1);
+            assert_eq!(whole, [seconds, seconds - 1]);
+            assert_eq!(fraction[0], 0.0);
+            assert!((fraction[1] - 0.9999).abs() < 3e-8);
+        }
+    }
 }

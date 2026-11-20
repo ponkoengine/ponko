@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 
 use super::{entity_param, param, str_param};
 use crate::ctx::Ctx;
-#[cfg(feature = "3d")]
+use crate::edit2d::{Mode, Snap, Space};
+use crate::editor::DocKind;
 use crate::reflect::WorldReflect;
 use ponko_ecs::Entity;
 
@@ -54,9 +55,14 @@ fn floats<const N: usize>(params: &Value, name: &str) -> Result<Option<[f32; N]>
     }
 }
 
-/// What the history can do now, for every editing reply.
+/// What the history can do now, and whether there are unsaved changes,
+/// for every editing reply.
 fn history(ctx: &Ctx) -> Value {
-    json!({ "can_undo": ctx.editor.can_undo(), "can_redo": ctx.editor.can_redo() })
+    json!({
+        "can_undo": ctx.editor.can_undo(),
+        "can_redo": ctx.editor.can_redo(),
+        "dirty": ctx.editor.dirty(),
+    })
 }
 
 pub(super) fn undo(ctx: &mut Ctx, redo: bool) -> Result<Value, String> {
@@ -163,17 +169,65 @@ pub(super) fn assets(ctx: &Ctx) -> Value {
     })
 }
 
+/// The `as` param: what to save the document as.
+fn kind_param(params: &Value) -> Result<Option<DocKind>, String> {
+    match params.get("as") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => match v.as_str() {
+            Some("scene") => Ok(Some(DocKind::Scene)),
+            Some("prefab") => Ok(Some(DocKind::Prefab)),
+            _ => Err(format!("`as` must be \"scene\" or \"prefab\" (got {v})")),
+        },
+    }
+}
+
+/// The document's file, kind and whether it has unsaved changes.
+fn document_json(ctx: &mut Ctx) -> Value {
+    // Takes in a load made since the last edit (see `Ctx::edit`).
+    ctx.edit(|_, _| ());
+    let doc = &ctx.editor.doc;
+    let mut out = history(ctx);
+    out["path"] = json!(doc.path);
+    out["kind"] = json!(doc.kind.name());
+    out["changed_on_disk"] = json!(doc.conflict);
+    out["entities"] = json!(ctx.world.len());
+    out
+}
+
 pub(super) fn save(ctx: &mut Ctx, params: &Value) -> Result<Value, String> {
-    let path = match params.get("path") {
-        None | Some(Value::Null) => ctx
-            .scene_file
-            .clone()
-            .ok_or("missing param `path` (no scene was loaded or saved yet, so there is no file to save back to)")?,
-        Some(_) => super::asset_path_param(params)?.to_string(),
-    };
-    ctx.assets.save_scene(&ctx.world, &path)?;
-    ctx.scene_file = Some(path.clone());
-    Ok(json!({ "path": path, "entities": ctx.world.len() }))
+    // A load since the last edit makes that file the document.
+    ctx.edit(|_, _| ());
+    let path =
+        match params.get("path") {
+            None | Some(Value::Null) => ctx.editor.doc.path.clone().ok_or(
+                "missing param `path` (no scene was loaded or saved yet, so there is no file to save back to)",
+            )?,
+            Some(_) => super::asset_path_param(params)?.to_string(),
+        };
+    let kind = kind_param(params)?.unwrap_or(ctx.editor.doc.kind);
+    ctx.edit(|ed, ctx| ed.save_as(ctx, &path, kind))?;
+    Ok(document_json(ctx))
+}
+
+/// `editor.document`: the document's state; with `new: true` an empty
+/// untitled scene, with `open` a scene or prefab file, with `reload: true`
+/// the file again (dropping unsaved changes).
+pub(super) fn document(ctx: &mut Ctx, params: &Value) -> Result<Value, String> {
+    let flag = |name: &str| params.get(name).and_then(Value::as_bool).unwrap_or(false);
+    let opening = !matches!(params.get("open"), None | Some(Value::Null));
+    if [flag("new"), opening, flag("reload")].iter().filter(|&&b| b).count() > 1 {
+        return Err("give at most one of `new`, `open` and `reload`".into());
+    }
+    if flag("new") {
+        ctx.edit(|ed, ctx| ed.new_scene(ctx))?;
+    } else if opening {
+        let path = str_param(params, "open")?;
+        super::check_tool_path(path, "json")?;
+        ctx.edit(|ed, ctx| ed.open(ctx, path))?;
+    } else if flag("reload") {
+        ctx.edit(|ed, ctx| ed.reload(ctx))?;
+    }
+    Ok(document_json(ctx))
 }
 
 /// Checks a mesh or prefab path a tool sent, like other asset paths.
@@ -201,10 +255,10 @@ fn placeable_path(params: &Value) -> Result<String, String> {
     }
 }
 
-/// The `snap` param: `true`, `false`, or `{ "step", "angle" (degrees), "scale" }`.
-#[cfg(feature = "3d")]
-fn snap_param(params: &Value) -> Result<crate::edit3d::Snap, String> {
-    let mut snap = crate::edit3d::Snap::default();
+/// The `snap` param: `true`, `false`, or `{ "step", "angle" (degrees), "scale" }`,
+/// from `default`'s steps.
+fn snap_with(params: &Value, default: Snap) -> Result<Snap, String> {
+    let mut snap = default;
     match params.get("snap") {
         None | Some(Value::Null) | Some(Value::Bool(false)) => {}
         Some(Value::Bool(true)) => snap.on = true,
@@ -229,11 +283,16 @@ fn snap_param(params: &Value) -> Result<crate::edit3d::Snap, String> {
     Ok(snap)
 }
 
+/// The `snap` param for 3D edits (a grid of half a unit by default).
 #[cfg(feature = "3d")]
-fn space_param(params: &Value) -> Result<crate::edit3d::Space, String> {
+fn snap_param(params: &Value) -> Result<Snap, String> {
+    snap_with(params, Snap::default())
+}
+
+fn space_param(params: &Value) -> Result<Space, String> {
     match params.get("space").and_then(Value::as_str) {
-        None | Some("world") => Ok(crate::edit3d::Space::World),
-        Some("local") => Ok(crate::edit3d::Space::Local),
+        None | Some("world") => Ok(Space::World),
+        Some("local") => Ok(Space::Local),
         Some(other) => Err(format!("`space` must be \"world\" or \"local\" (got {other:?})")),
     }
 }
@@ -342,9 +401,115 @@ pub(super) fn pick(ctx: &mut Ctx, params: &Value) -> Result<Value, String> {
     })
 }
 
-#[cfg(feature = "3d")]
+/// Whether `entities` are edited in 2D: the first has a 2D transform and
+/// no 3D one.
+fn is_2d(ctx: &Ctx, entities: &[Entity]) -> bool {
+    let e = entities[0];
+    #[cfg(feature = "3d")]
+    if ctx.world.get::<crate::d3::Transform>(e).is_some() {
+        return false;
+    }
+    ctx.world.get::<crate::d2::Transform>(e).is_some()
+}
+
+/// The 2D world transforms of `entities`.
+fn starts2d(ctx: &Ctx, entities: &[Entity]) -> Result<Vec<(Entity, crate::d2::Transform)>, String> {
+    entities
+        .iter()
+        .map(|&e| {
+            ctx.world
+                .get::<crate::d2::Transform>(e)
+                .map(|t| (e, *t))
+                .ok_or_else(|| format!("entity {} has no Transform2D", e.to_bits()))
+        })
+        .collect()
+}
+
+/// [`commit`] for 2D entities.
+fn commit2d(ctx: &mut Ctx, to: Vec<(Entity, crate::d2::Transform)>) -> Value {
+    ctx.edit(|ed, ctx| ed.set_transforms2d(ctx, &to));
+    let mut out = history(ctx);
+    out["entities"] = to
+        .iter()
+        .map(|&(e, _)| json!({ "entity": e.to_bits(), "Transform2D": ctx.world.get_json(e, "Transform2D").ok() }))
+        .collect();
+    out
+}
+
+/// The `mode` param of `editor.drag`.
+fn mode_param(params: &Value) -> Result<Mode, String> {
+    match str_param(params, "mode")? {
+        "translate" | "move" => Ok(Mode::Translate),
+        "rotate" => Ok(Mode::Rotate),
+        "scale" => Ok(Mode::Scale),
+        other => Err(format!("`mode` must be translate, rotate or scale (got {other:?})")),
+    }
+}
+
 pub(super) fn transform(ctx: &mut Ctx, params: &Value) -> Result<Value, String> {
-    use crate::edit3d::{Space, axes, rotate, scale, translate};
+    let entities = entities_param(ctx, params)?;
+    if !is_2d(ctx, &entities) {
+        return transform3d(ctx, params);
+    }
+    use crate::edit2d::{axes, rotate, scale, translate};
+    let mut now = starts2d(ctx, &entities)?;
+    let space = space_param(params)?;
+    let snap = snap_with(params, Snap::pixels())?;
+    let frame = axes(space, now[0].1.rotation);
+    if let Some([x, y]) = floats::<2>(params, "translate")? {
+        // In local space the numbers are along the first entity's own axes.
+        now = translate(&now, frame[0] * x + frame[1] * y, space, frame, [true; 2], snap);
+    }
+    match params.get("rotate") {
+        None | Some(Value::Null) => {}
+        Some(v) => {
+            let degrees = v.as_f64().ok_or("in 2D `rotate` is a number of degrees")? as f32;
+            let pivot = now.iter().map(|(_, t)| t.position).sum::<glam::Vec2>() / now.len() as f32;
+            now = rotate(&now, pivot, degrees.to_radians(), snap);
+        }
+    }
+    match params.get("scale") {
+        None | Some(Value::Null) => {}
+        Some(Value::Number(n)) => {
+            let f = n.as_f64().unwrap_or(1.0) as f32;
+            now = scale(&now, glam::Vec2::splat(f), snap);
+        }
+        Some(_) => {
+            let f = floats::<2>(params, "scale")?.unwrap_or([1.0; 2]);
+            now = scale(&now, glam::Vec2::from(f), snap);
+        }
+    }
+    Ok(commit2d(ctx, now))
+}
+
+pub(super) fn drag(ctx: &mut Ctx, params: &Value) -> Result<Value, String> {
+    let entities = entities_param(ctx, params)?;
+    if !is_2d(ctx, &entities) {
+        return drag3d(ctx, params);
+    }
+    use crate::edit2d::{Drag, GIZMO_PIXELS, Handle};
+    let mode = mode_param(params)?;
+    let handle = match (mode, str_param(params, "handle")?) {
+        (Mode::Rotate, _) => Handle::Ring,
+        (_, "x") => Handle::Axis(0),
+        (_, "y") => Handle::Axis(1),
+        (_, "center") => Handle::Center,
+        (_, other) => return Err(format!("in 2D `handle` must be x, y or center (got {other:?})")),
+    };
+    let from = floats::<2>(params, "from")?.ok_or("missing param `from`")?;
+    let to = floats::<2>(params, "to")?.ok_or("missing param `to`")?;
+    let camera = *crate::d2::View::camera_at(&ctx.camera, &ctx.views2d, glam::Vec2::from(from));
+    let world = |p: [f32; 2]| camera.screen_to_world(glam::Vec2::from(p));
+    let starts = starts2d(ctx, &entities)?;
+    let size = GIZMO_PIXELS / camera.zoom.max(1e-6);
+    let drag = Drag::begin(mode, handle, space_param(params)?, starts, world(from), size).ok_or("nothing to drag")?;
+    let moved = drag.update(world(to), snap_with(params, Snap::pixels())?);
+    Ok(commit2d(ctx, moved))
+}
+
+#[cfg(feature = "3d")]
+fn transform3d(ctx: &mut Ctx, params: &Value) -> Result<Value, String> {
+    use crate::edit3d::{axes, rotate, scale, translate};
     let entities = entities_param(ctx, params)?;
     let mut now = starts(ctx, &entities)?;
     let space = space_param(params)?;
@@ -381,15 +546,10 @@ pub(super) fn transform(ctx: &mut Ctx, params: &Value) -> Result<Value, String> 
 }
 
 #[cfg(feature = "3d")]
-pub(super) fn drag(ctx: &mut Ctx, params: &Value) -> Result<Value, String> {
-    use crate::edit3d::{Drag, Handle, Mode, Ray};
+fn drag3d(ctx: &mut Ctx, params: &Value) -> Result<Value, String> {
+    use crate::edit3d::{Drag, Handle, Ray};
     let entities = entities_param(ctx, params)?;
-    let mode = match str_param(params, "mode")? {
-        "translate" | "move" => Mode::Translate,
-        "rotate" => Mode::Rotate,
-        "scale" => Mode::Scale,
-        other => return Err(format!("`mode` must be translate, rotate or scale (got {other:?})")),
-    };
+    let mode = mode_param(params)?;
     let handle = match str_param(params, "handle")? {
         "x" => Handle::Axis(0),
         "y" => Handle::Axis(1),
@@ -485,11 +645,11 @@ pub(super) fn pick(_: &mut Ctx, _: &Value) -> Result<Value, String> {
     Err(NO_3D.into())
 }
 #[cfg(not(feature = "3d"))]
-pub(super) fn transform(_: &mut Ctx, _: &Value) -> Result<Value, String> {
+fn transform3d(_: &mut Ctx, _: &Value) -> Result<Value, String> {
     Err(NO_3D.into())
 }
 #[cfg(not(feature = "3d"))]
-pub(super) fn drag(_: &mut Ctx, _: &Value) -> Result<Value, String> {
+fn drag3d(_: &mut Ctx, _: &Value) -> Result<Value, String> {
     Err(NO_3D.into())
 }
 #[cfg(not(feature = "3d"))]
@@ -516,7 +676,6 @@ mod tests {
     }
 
     /// A file name in the engine's assets/ unique to this test run.
-    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     fn temp_asset(name: &str) -> (String, std::path::PathBuf) {
         let path = format!("ponko-test-{name}-{}.json", std::process::id());
         let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -556,6 +715,93 @@ mod tests {
     }
 
     #[test]
+    fn two_dimensional_gizmo_edits_snap_and_undo_as_one_step_through_the_endpoint() {
+        let mut ctx = Ctx::new(1.0 / 60.0, glam::Vec2::new(800.0, 600.0));
+        let a = ctx.world.spawn((Transform2D::at(glam::vec2(3.0, 5.0)),)).to_bits();
+        let b = ctx.world.spawn((Transform2D::at(glam::vec2(13.0, 5.0)),)).to_bits();
+        let pos = |ctx: &Ctx, e: u64| ctx.world.get::<Transform2D>(Entity::from_bits(e)).unwrap().position;
+        let out = call(
+            &mut ctx,
+            "editor.transform",
+            json!({ "entities": [a, b], "translate": [11, 4], "snap": true }),
+        );
+        assert_eq!(out["dirty"], true);
+        assert_eq!(out["entities"][0]["Transform2D"]["position"], json!([16.0, 8.0]));
+        assert_eq!(pos(&ctx, b), glam::vec2(26.0, 8.0), "moved with the first");
+        call(
+            &mut ctx,
+            "editor.transform",
+            json!({ "entities": [a], "rotate": 90, "scale": 2 }),
+        );
+        let t = *ctx.world.get::<Transform2D>(Entity::from_bits(a)).unwrap();
+        assert!((t.rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+        assert_eq!(t.scale, glam::vec2(2.0, 2.0));
+
+        // Drag the x arrow 37 pixels right at zoom 1, snapped to 8.
+        let from = ctx.camera.world_to_screen(pos(&ctx, a));
+        let to = from + glam::vec2(37.0, 9.0);
+        call(
+            &mut ctx,
+            "editor.drag",
+            json!({ "entities": [a], "mode": "move", "handle": "x", "from": from.to_array(), "to": to.to_array(), "snap": true }),
+        );
+        assert_eq!(pos(&ctx, a), glam::vec2(56.0, 8.0));
+        call(&mut ctx, "editor.undo", json!({}));
+        call(&mut ctx, "editor.undo", json!({}));
+        call(&mut ctx, "editor.undo", json!({}));
+        assert_eq!(pos(&ctx, a), glam::vec2(3.0, 5.0));
+        assert_eq!(call(&mut ctx, "editor.document", json!({}))["dirty"], false);
+        assert!(
+            err(
+                &mut ctx,
+                "editor.drag",
+                json!({ "entities": [a], "mode": "move", "handle": "xz", "from": [0, 0], "to": [1, 1] })
+            )
+            .contains("x, y or center")
+        );
+    }
+
+    #[test]
+    fn the_document_method_opens_saves_as_and_reports_unsaved_changes() {
+        let (scene, scene_file) = temp_asset("endpoint-doc-scene");
+        let (prefab, prefab_file) = temp_asset("endpoint-doc-prefab");
+        let mut ctx = Ctx::new(1.0 / 60.0, glam::Vec2::new(800.0, 600.0));
+        let doc = call(&mut ctx, "editor.document", json!({}));
+        assert_eq!(doc["path"], Value::Null);
+        assert_eq!(doc["kind"], "scene");
+        let root = ctx.world.spawn((Transform2D::at(glam::vec2(5.0, 5.0)),)).to_bits();
+        call(&mut ctx, "editor.duplicate", json!({ "entities": [root] }));
+        assert_eq!(call(&mut ctx, "editor.document", json!({}))["dirty"], true);
+        let saved = call(&mut ctx, "editor.save", json!({ "path": scene }));
+        assert_eq!(
+            (saved["path"].as_str(), saved["dirty"].as_bool()),
+            (Some(scene.as_str()), Some(false))
+        );
+        let refused = err(&mut ctx, "editor.save", json!({ "path": prefab, "as": "prefab" }));
+        assert!(refused.contains("one root"), "{refused}");
+        call(&mut ctx, "editor.delete", json!({ "entities": [root] }));
+        let saved = call(&mut ctx, "editor.save", json!({ "path": prefab, "as": "prefab" }));
+        assert_eq!(saved["kind"], "prefab");
+        let opened = call(&mut ctx, "editor.document", json!({ "open": scene }));
+        assert_eq!(
+            (opened["kind"].as_str(), opened["entities"].as_u64()),
+            (Some("scene"), Some(2))
+        );
+        let opened = call(&mut ctx, "editor.document", json!({ "open": prefab }));
+        assert_eq!(
+            (opened["kind"].as_str(), opened["entities"].as_u64()),
+            (Some("prefab"), Some(1))
+        );
+        let new = call(&mut ctx, "editor.document", json!({ "new": true }));
+        assert_eq!((new["path"].clone(), new["entities"].as_u64()), (Value::Null, Some(0)));
+        assert!(err(&mut ctx, "editor.document", json!({ "new": true, "reload": true })).contains("at most one"));
+        assert!(err(&mut ctx, "editor.document", json!({ "open": "../x.json" })).contains("relative"));
+        assert!(err(&mut ctx, "editor.save", json!({ "path": scene, "as": "level" })).contains("`as`"));
+        let _ = std::fs::remove_file(&scene_file);
+        let _ = std::fs::remove_file(&prefab_file);
+    }
+
+    #[test]
     fn editor_methods_say_what_is_wrong_with_their_params() {
         let mut ctx = Ctx::new(1.0 / 60.0, glam::Vec2::new(800.0, 600.0));
         let e = ctx.world.spawn((Transform2D::default(),)).to_bits();
@@ -567,7 +813,10 @@ mod tests {
         assert!(err(&mut ctx, "editor.place", json!({ "path": "a.png" })).contains("prefab"));
         assert!(err(&mut ctx, "editor.parent", json!({ "entity": e, "parent": "x" })).contains("entity id"));
         let nothing = call(&mut ctx, "editor.undo", json!({}));
-        assert_eq!(nothing, json!({ "done": false, "can_undo": false, "can_redo": false }));
+        assert_eq!(
+            nothing,
+            json!({ "done": false, "can_undo": false, "can_redo": false, "dirty": false })
+        );
     }
 
     #[cfg(feature = "3d")]

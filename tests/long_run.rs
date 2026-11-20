@@ -345,18 +345,25 @@ impl Churn {
 /// every tick.
 #[cfg(feature = "3d")]
 mod three {
+    use ponko::inventory::AssetClass;
     use ponko::prelude::*;
-    use ponko::render::{InstanceBatch, InstanceCell, Mesh, MeshData};
+    use ponko::render::{Compute, Effect, InstanceBatch, InstanceCell, Material, MaterialDesc, Mesh, MeshData, Shader};
+    use ponko::terrain::{TextureArray, TextureKind};
 
     #[derive(Default)]
     pub struct Churn3D {
         batch: Option<InstanceBatch>,
         mesh: Option<Mesh>,
         cell: Option<InstanceCell>,
+        resources: Option<(Material, Shader, Compute, Effect, TextureArray)>,
+        first_slots: Option<[u32; 5]>,
     }
 
     impl Churn3D {
         pub fn tick(&mut self, ctx: &mut Ctx) {
+            if ctx.time.sim_tick().is_multiple_of(200) {
+                self.resources(ctx);
+            }
             let material = ctx.gfx.default_material();
             if let Some(old) = self.mesh.take() {
                 ctx.gfx.free(old);
@@ -373,6 +380,63 @@ mod three {
                 ctx.gfx
                     .add_instance_cell(batch, &[Mat4::IDENTITY; 8], &[Color::WHITE; 8]),
             );
+        }
+        fn resources(&mut self, ctx: &mut Ctx) {
+            let old = self.resources.take();
+            if let Some((material, shader, compute, effect, array)) = old {
+                ctx.free(material);
+                ctx.free(shader);
+                ctx.free(compute);
+                ctx.free(effect);
+                ctx.free(array);
+            }
+            let name = format!("churn {}", ctx.time.sim_tick());
+            let shader = ctx.gfx.create_shader(&name, "");
+            let compute = ctx.gfx.create_compute(&name, "fn update(i: u32) {}");
+            let effect = ctx
+                .gfx
+                .create_effect(&name, "fn effect(p: Pixel) -> vec3<f32> { return p.color; }");
+            let pixel: &[u8] = &[255; 4];
+            let array = ctx.gfx.create_texture_array(1, 1, &[pixel], TextureKind::Color);
+            let material = ctx.gfx.create_material(MaterialDesc::default().with_shader(shader));
+            if let Some((m, s, c, e, a)) = old {
+                assert_ne!((m, s, c, e, a), (material, shader, compute, effect, array));
+                assert!(!ctx.is_live(m) && !ctx.is_live(s) && !ctx.is_live(c) && !ctx.is_live(e) && !ctx.is_live(a));
+                ctx.free(m);
+                ctx.free(s);
+                ctx.free(c);
+                ctx.free(e);
+                ctx.free(a);
+                assert!(
+                    ctx.is_live(material)
+                        && ctx.is_live(shader)
+                        && ctx.is_live(compute)
+                        && ctx.is_live(effect)
+                        && ctx.is_live(array)
+                );
+            }
+            let slots = [
+                AssetClass::Material,
+                AssetClass::Shader,
+                AssetClass::Compute,
+                AssetClass::Effect,
+                AssetClass::TextureArray,
+            ]
+            .map(|class| {
+                ctx.gfx
+                    .asset_handles(class)
+                    .iter()
+                    .map(|record| record.id & 0xF_FFFF)
+                    .max()
+                    .unwrap()
+            });
+            let first = self.first_slots.get_or_insert(slots);
+            for (slot, first) in slots.into_iter().zip(*first) {
+                // 1000 makes fit one generation table slot. The default
+                // material is also made after the first reading.
+                assert!(slot <= first + 1, "resource slot grew from {first} to {slot}");
+            }
+            self.resources = Some((material, shader, compute, effect, array));
         }
     }
 }

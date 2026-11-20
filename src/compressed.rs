@@ -378,6 +378,25 @@ fn read_ktx2(bytes: &[u8], path: &str, what: &str) -> Result<File, Error> {
     Ok(file)
 }
 
+/// The KTX2 key `ponko cook` writes into an image file of a glTF model
+/// that already holds the ORM image the engine would merge from the
+/// model's metallic-roughness and occlusion images: its value names those
+/// two files, relative to the image's folder, `metal-rough|occlusion`
+/// (either empty when the material has none). The engine then uploads the
+/// file as it is instead of decoding both and merging them to RGBA8.
+pub(crate) const ORM_KEY: &str = "ponkoOrm";
+
+/// The value of [`ORM_KEY`] in a KTX2 file, if it has one.
+pub(crate) fn orm_note(bytes: &[u8]) -> Option<String> {
+    if !is_ktx2(bytes) {
+        return None;
+    }
+    let reader = ktx2::Reader::new(bytes).ok()?;
+    let (_, value) = reader.key_value_data().find(|(key, _)| *key == ORM_KEY)?;
+    let value = value.strip_suffix(&[0]).unwrap_or(value);
+    String::from_utf8(value.to_vec()).ok()
+}
+
 /// The block format of a Vulkan format, if it is one ponko reads.
 fn block_format(format: ktx2::Format) -> Option<BlockFormat> {
     use ktx2::Format as F;
@@ -717,6 +736,28 @@ pub(crate) mod tests {
         levels: &[Vec<u8>],
         zstd: bool,
     ) -> Vec<u8> {
+        ktx2_file_with(format, width, height, levels, zstd, &[])
+    }
+
+    /// [`ktx2_file`] with key/value entries (sorted by key, as KTX2 wants).
+    pub(crate) fn ktx2_file_with(
+        format: Option<ktx2::Format>,
+        width: u32,
+        height: u32,
+        levels: &[Vec<u8>],
+        zstd: bool,
+        key_values: &[(&str, &str)],
+    ) -> Vec<u8> {
+        let mut kvd = Vec::new();
+        for (key, value) in key_values {
+            let len = key.len() + 1 + value.len() + 1;
+            kvd.extend_from_slice(&(len as u32).to_le_bytes());
+            kvd.extend_from_slice(key.as_bytes());
+            kvd.push(0);
+            kvd.extend_from_slice(value.as_bytes());
+            kvd.push(0);
+            kvd.resize(kvd.len().next_multiple_of(4), 0);
+        }
         let dfd = match format {
             Some(f) => ktx2::dfd::Block::Basic(ktx2::dfd::Basic::from_format(f).expect("a DFD").0),
             None => ktx2::dfd::Block::Basic(uastc_dfd()),
@@ -735,7 +776,8 @@ pub(crate) mod tests {
                 }
             })
             .collect();
-        let mut data_at = (dfd_at + dfd_len).next_multiple_of(16);
+        let kvd_at = dfd_at + dfd_len;
+        let mut data_at = (kvd_at + kvd.len()).next_multiple_of(16);
         let mut offsets = Vec::new();
         for l in &packed {
             offsets.push(data_at);
@@ -754,8 +796,8 @@ pub(crate) mod tests {
             index: ktx2::Index {
                 dfd_byte_offset: dfd_at as u32,
                 dfd_byte_length: dfd_len as u32,
-                kvd_byte_offset: 0,
-                kvd_byte_length: 0,
+                kvd_byte_offset: if kvd.is_empty() { 0 } else { kvd_at as u32 },
+                kvd_byte_length: kvd.len() as u32,
                 sgd_byte_offset: 0,
                 sgd_byte_length: 0,
             },
@@ -773,6 +815,7 @@ pub(crate) mod tests {
         }
         out.extend_from_slice(&(dfd_len as u32).to_le_bytes());
         out.extend_from_slice(&dfd);
+        out.extend_from_slice(&kvd);
         for (p, at) in packed.iter().zip(&offsets) {
             out.resize(*at, 0);
             out.extend_from_slice(p);

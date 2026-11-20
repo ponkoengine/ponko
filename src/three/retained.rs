@@ -542,6 +542,9 @@ struct Source<'a> {
     model: &'a Model,
     /// The decal layers it takes (see `projected::receiver_mask`).
     receives: f32,
+    /// Its [`Lightmapped`](super::Lightmapped) entry plus one, 0 without
+    /// (the shader reads it from the model matrix's spare third slot).
+    lightmap: f32,
     /// Its [`ShadowMesh`]: [`OWN_SHADOW`] without one, [`NO_SHADOW`] for
     /// `ShadowMesh(None)`.
     shadow: u32,
@@ -559,7 +562,7 @@ struct Source<'a> {
 
 /// What a model's instance is made from: rotation, position, scale, tint,
 /// decal layers.
-const KEPT: usize = 15;
+const KEPT: usize = 16;
 
 const OWN_SHADOW: u32 = u32::MAX;
 const NO_SHADOW: u32 = u32::MAX - 1;
@@ -575,6 +578,7 @@ type ModelItem<'a> = (
     Option<&'a ModelMaterials>,
     Option<&'a ShadowOnly>,
     Option<&'a crate::camera::RenderLayers>,
+    Option<&'a super::Lightmapped>,
 );
 
 impl<'a> Source<'a> {
@@ -590,11 +594,13 @@ impl<'a> Source<'a> {
         parts: Option<&'a ModelMaterials>,
         shadow_only: Option<&ShadowOnly>,
         (layers, mask): (Option<&crate::camera::RenderLayers>, u32),
+        lightmap: Option<&super::Lightmapped>,
     ) -> Self {
         Self {
             transform,
             model,
             receives: super::projected::receiver_mask(receives),
+            lightmap: lightmap_slot(lightmap),
             shadow: match shadow {
                 None => OWN_SHADOW,
                 Some(ShadowMesh(None)) => NO_SHADOW,
@@ -647,6 +653,7 @@ impl<'a> Source<'a> {
             c.b,
             c.a,
             self.receives,
+            self.lightmap,
         ]
     }
 
@@ -671,7 +678,7 @@ impl<'a> Source<'a> {
         ];
         let join = |a: u32, b: u32| u64::from(a) | u64::from(b) << 32;
         let pair = |a: f32, b: f32| join(a.to_bits(), b.to_bits());
-        let [qx, qy, qz, qw, px, py, pz, sx, sy, sz, r, g, b, a, receives] = self.kept();
+        let [qx, qy, qz, qw, px, py, pz, sx, sy, sz, r, g, b, a, receives, lightmap] = self.kept();
         let words = [
             pair(qx, qy),
             pair(qz, qw),
@@ -681,7 +688,7 @@ impl<'a> Source<'a> {
             pair(r, g),
             pair(b, a),
             join(receives.to_bits(), self.mesh()),
-            join(self.shadow, self.material),
+            join(self.shadow, self.material) ^ u64::from(lightmap.to_bits()).rotate_left(23),
             // The part list by its content (most models have none).
             u64::from(self.skeleton)
                 | u64::from(self.shadow_only) << 1
@@ -705,6 +712,7 @@ impl<'a> Source<'a> {
     fn instance(&self) -> Instance3D {
         let mut model = self.transform.matrix().to_cols_array_2d();
         model[0][3] = self.receives;
+        model[2][3] = self.lightmap;
         Instance3D {
             model,
             color: linear(self.model.color),
@@ -712,11 +720,17 @@ impl<'a> Source<'a> {
     }
 }
 
+/// What a model's instance carries for its [`Lightmapped`](super::Lightmapped)
+/// component: its entry plus one (exact in a float up to 2^24), 0 without.
+fn lightmap_slot(lightmap: Option<&super::Lightmapped>) -> f32 {
+    lightmap.map_or(0.0, |l| (l.0.min((1 << 24) - 2) + 1) as f32)
+}
+
 /// The model as the GPU reads it, from what was kept to make its instance
 /// (see [`Source::kept`]). The matrix's fourth row is always (0, 0, 0, 1): its first
 /// slot holds the decal layers the model takes.
 fn instance_of(kept: [f32; KEPT]) -> Instance3D {
-    let [qx, qy, qz, qw, px, py, pz, sx, sy, sz, r, g, b, a, receives] = kept;
+    let [qx, qy, qz, qw, px, py, pz, sx, sy, sz, r, g, b, a, receives, lightmap] = kept;
     let transform = Transform3D {
         rotation: Quat::from_xyzw(qx, qy, qz, qw),
         position: Vec3::new(px, py, pz),
@@ -724,6 +738,7 @@ fn instance_of(kept: [f32; KEPT]) -> Instance3D {
     };
     let mut model = transform.matrix().to_cols_array_2d();
     model[0][3] = receives;
+    model[2][3] = lightmap;
     Instance3D {
         model,
         color: linear(crate::color::Color { r, g, b, a }),
@@ -1056,7 +1071,7 @@ impl Pass<'_> {
     /// `Tracked::results`.
     fn check(
         &self,
-        (entity, t, m, shadow, skeleton, receives, material, parts, shadow_only, layers): ModelItem<'_>,
+        (entity, t, m, shadow, skeleton, receives, material, parts, shadow_only, layers, lightmap): ModelItem<'_>,
     ) -> u32 {
         let source = Source::of(
             t,
@@ -1068,6 +1083,7 @@ impl Pass<'_> {
             parts,
             shadow_only,
             (layers, self.culler.layers()),
+            lightmap,
         );
         let find = || {
             let bits = entity.to_bits();
@@ -1275,7 +1291,7 @@ impl Tracked {
         let mut models = world.query::<ModelItem<'_>>().filter::<Without<SkinOf>>();
         if !rush {
             models.for_each(
-                |(entity, t, m, shadow, skeleton, receives, material, parts, shadow_only, layers)| {
+                |(entity, t, m, shadow, skeleton, receives, material, parts, shadow_only, layers, lightmap)| {
                     let k = match self.find(entity) {
                         Some(k) => {
                             found += 1;
@@ -1296,6 +1312,7 @@ impl Tracked {
                         parts,
                         shadow_only,
                         (layers, culler.layers()),
+                        lightmap,
                     );
                     self.settle(k, source, &frame, &mut tally, lists, arena, motion);
                 },
@@ -1312,7 +1329,7 @@ impl Tracked {
         let mut now = std::mem::take(&mut self.fresh_drawn);
         now.clear();
         models.for_each(
-            |(entity, t, m, shadow, skeleton, receives, material, parts, shadow_only, layers)| {
+            |(entity, t, m, shadow, skeleton, receives, material, parts, shadow_only, layers, lightmap)| {
                 let source = Source::of(
                     t,
                     m,
@@ -1323,6 +1340,7 @@ impl Tracked {
                     parts,
                     shadow_only,
                     (layers, culler.layers()),
+                    lightmap,
                 );
                 if sampled(entity) {
                     new += self.rush_sampled(entity, source, &frame, &mut tally, &mut now, lists, arena, motion);

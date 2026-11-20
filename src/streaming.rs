@@ -354,6 +354,9 @@ pub(crate) struct Streaming {
     /// Streamed LOD groups this frame: reused, so it doesn't allocate.
     #[cfg(feature = "3d")]
     pub lod_scratch: Vec<(ponko_ecs::Entity, std::sync::Arc<[String]>, u64)>,
+    /// Bytes and uploads asset groups made this frame, before the upload
+    /// step: they count against its budget.
+    pub group_uploads: (u64, u32),
 }
 
 impl Default for Streaming {
@@ -373,6 +376,7 @@ impl Default for Streaming {
             },
             #[cfg(feature = "3d")]
             lod_scratch: Vec::new(),
+            group_uploads: (0, 0),
         }
     }
 }
@@ -385,6 +389,11 @@ fn kind_key(kind: ResidencyKind) -> u8 {
 }
 
 impl Streaming {
+    /// The per-frame upload budget in bytes (`None`: no limit).
+    pub(crate) fn budget(&self) -> Option<u64> {
+        self.budget
+    }
+
     fn pending(&self) -> usize {
         self.queue.len()
     }
@@ -443,17 +452,23 @@ impl Ctx {
         if !self.gfx.streaming.queue.is_empty() {
             self.gfx.upload_step(&mut self.world);
         } else {
-            self.gfx.streaming.stats.frame_bytes = 0;
-            self.gfx.streaming.stats.frame_uploads = 0;
+            let (bytes, uploads) = std::mem::take(&mut self.gfx.streaming.group_uploads);
+            let stats = &mut self.gfx.streaming.stats;
+            stats.frame_bytes = bytes;
+            stats.frame_uploads = uploads;
+            stats.total_bytes += bytes;
+            stats.total_uploads += u64::from(uploads);
         }
     }
 
     /// Waits until every streamed asset asked for so far is loaded (or
-    /// failed, or held by its residency budget), uploading without the
-    /// per-frame budget, and evicting what the residency budgets need gone
-    /// as the frame's streaming step does. For loading screens and tests; it
-    /// blocks the game thread. On `Ctx` because eviction looks at what the
-    /// game's world shows.
+    /// failed, or held by its residency budget), and every
+    /// [asset group](crate::assets::AssetGroup) is ready, failed or
+    /// cancelled, uploading without the per-frame budgets, and evicting
+    /// what the residency budgets need gone as the frame's streaming step
+    /// does. For tests and tools; it blocks the game thread, which a
+    /// loading screen that keeps drawing avoids. On `Ctx` because eviction
+    /// looks at what the game's world shows.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -465,6 +480,7 @@ impl Ctx {
     /// });
     /// ```
     pub fn finish_uploads(&mut self) {
+        self.finish_groups();
         self.gfx.finish_uploads(&mut self.world);
     }
 }
@@ -483,9 +499,11 @@ impl crate::gfx::Graphics {
     /// eviction, keeps the stand-in), with [`AssetState::Failed`] and the
     /// error in [`asset_error`](crate::gfx::Graphics::asset_error). Asking again doesn't
     /// retry, so a missing file costs nothing each frame;
-    /// [`resident_texture`](Self::resident_texture) loads it again. Files from added [asset sources](crate::assets::Assets::add_source)
-    /// are read on the game thread (their trait runs there) and decoded on
-    /// a worker. In a browser, decoding runs when the load starts.
+    /// [`resident_texture`](Self::resident_texture) loads it again. Files from [asset sources](crate::assets::Assets::add_source)
+    /// added with `add_source` are read on the game thread (their trait runs
+    /// there), and decoded on a worker; ones added with
+    /// [`add_background_source`](crate::assets::Assets::add_background_source)
+    /// are read on the worker too. In a browser, decoding runs when the load starts.
     ///
     /// ```
     /// use ponko::assets::MemorySource;
@@ -665,7 +683,8 @@ impl crate::gfx::Graphics {
     pub(crate) fn upload_step(&mut self, world: &mut World) {
         let start = crate::perf::Instant::now();
         let budget = self.streaming.budget.unwrap_or(u64::MAX);
-        let (mut spent, mut uploads) = (0u64, 0u32);
+        // What asset groups uploaded this frame counts against the budget.
+        let (mut spent, mut uploads) = std::mem::take(&mut self.streaming.group_uploads);
         let mut later = Vec::new();
         while let Some(request) = self.streaming.queue.pop_front() {
             if uploads > 0 && spent >= budget {
@@ -1040,29 +1059,32 @@ impl crate::gfx::Graphics {
     }
 
     /// Starts decoding texture `name` on a worker, and queues its uploads.
+    /// Sources only the game thread may read are read here; the rest of
+    /// the search runs on the worker.
     fn start_texture_decode(&mut self, name: &str) {
+        match self.asset_sources.plan(name) {
+            assets::ReadPlan::Now(read) => self.start_texture_decode_from(name, move || read),
+            assets::ReadPlan::Later(read) => self.start_texture_decode_from(name, move || read.read()),
+        }
+    }
+
+    /// Starts decoding texture `name` from what `read` gives, on a worker,
+    /// and queues its uploads.
+    pub(crate) fn start_texture_decode_from(
+        &mut self,
+        name: &str,
+        read: impl FnOnce() -> Result<(Origin, Vec<u8>), crate::error::Error> + Send + 'static,
+    ) {
         self.streaming
             .errors
             .remove(&(kind_key(ResidencyKind::Texture), name.to_string()));
         let max = self.max_texture_side();
         let gpu = self.texture_formats();
-        // Find it here: added sources are read on the game thread.
-        let job = match self.asset_sources.find(name) {
-            Ok(found) => {
-                let origin = found.origin.clone();
-                let name_owned = name.to_string();
-                match origin {
-                    Origin::File(_) => {
-                        Job::spawn(move || decode_texture(&name_owned, origin, found.into_bytes(), max, gpu))
-                    }
-                    Origin::Source { .. } => {
-                        let bytes = found.into_bytes();
-                        Job::spawn(move || decode_texture(&name_owned, origin, bytes, max, gpu))
-                    }
-                }
-            }
-            Err(e) => Job::spawn(move || Err(e)),
-        };
+        let name_owned = name.to_string();
+        let job = Job::spawn(move || {
+            let (origin, bytes) = read()?;
+            decode_texture(&name_owned, origin, Ok(bytes), max, gpu)
+        });
         let entry = self.texture_entry(name);
         entry.job = Some(job);
         entry.held = None;
@@ -1073,6 +1095,57 @@ impl crate::gfx::Graphics {
         if !entry.queued {
             entry.queued = true;
             self.streaming.queue.push_back(Request::Texture(name.to_string()));
+        }
+    }
+
+    /// Streams texture `name` for an asset group: from `read` if it isn't
+    /// streamed yet (or failed), else asked for as
+    /// [`stream_texture`](Self::stream_texture) asks.
+    pub(crate) fn stream_texture_from(
+        &mut self,
+        name: &str,
+        read: impl FnOnce() -> Result<(Origin, Vec<u8>), crate::error::Error> + Send + 'static,
+    ) {
+        self.forget_freed_texture(name);
+        match self.streaming.textures.get(name).map(|t| t.state) {
+            None | Some(AssetState::Failed) => self.start_texture_decode_from(name, read),
+            Some(_) => {
+                self.stream_texture(name);
+            }
+        }
+    }
+
+    /// Whether streamed texture `name` is as loaded as it will get for now:
+    /// `None` while it loads or uploads; its error if it failed; `Ok` once
+    /// it is resident, held at a lower resolution by its budget, evicted
+    /// since, or gone (freed, or never streamed).
+    pub(crate) fn streamed_texture_settled(&self, name: &str) -> Option<Result<(), crate::error::Error>> {
+        let Some(t) = self.streaming.textures.get(name) else {
+            return Some(Ok(()));
+        };
+        match t.state {
+            AssetState::Failed => Some(Err(self
+                .streaming
+                .errors
+                .get(&(kind_key(ResidencyKind::Texture), name.to_string()))
+                .cloned()
+                .unwrap_or_else(|| {
+                    crate::error::Error::new(crate::error::ErrorKind::Io, format!("could not stream \"{name}\""))
+                        .with_path(name)
+                }))),
+            AssetState::Resident | AssetState::Evicted | AssetState::Unknown => Some(Ok(())),
+            AssetState::Streaming if !t.queued => Some(Ok(())),
+            AssetState::Streaming | AssetState::Loading | AssetState::Uploading => None,
+        }
+    }
+
+    /// Stops streaming texture `name` if nothing of it is on the GPU yet
+    /// (a cancelled asset group); one with a stand-in up streams on.
+    pub(crate) fn cancel_texture_stream(&mut self, name: &str) {
+        if let Some(t) = self.streaming.textures.get(name)
+            && t.texture.is_none()
+        {
+            self.streaming.textures.remove(name);
         }
     }
 
@@ -1173,12 +1246,20 @@ impl crate::gfx::Graphics {
     /// ```
     pub fn streamed_assets_into(&self, out: &mut Vec<StreamedAsset>) {
         let mut at = 0;
+        self.visit_streamed_assets(|kind, name, state, id, size| {
+            write_streamed(out, &mut at, kind, name, state, id, size);
+        });
+        out.truncate(at);
+    }
+
+    /// Visits the streamed and resident assets in the same order as
+    /// [`streamed_assets`](Self::streamed_assets), without allocating.
+    /// The visitor receives kind, name, state, optional handle id and GPU resolution.
+    pub fn visit_streamed_assets(&self, mut visit: impl FnMut(ResidencyKind, &str, AssetState, Option<u32>, [u32; 2])) {
         #[cfg(feature = "3d")]
-        self.list_streamed_meshes(out, &mut at);
+        self.visit_streamed_meshes(&mut visit);
         for (name, t) in &self.streaming.textures {
-            write_streamed(
-                out,
-                &mut at,
+            visit(
                 ResidencyKind::Texture,
                 name,
                 self.asset_state(ResidencyKind::Texture, name),
@@ -1186,7 +1267,6 @@ impl crate::gfx::Graphics {
                 t.size,
             );
         }
-        out.truncate(at);
     }
 
     /// Sets how many bytes the upload step may send to the GPU each frame;
@@ -1328,7 +1408,7 @@ fn decode_texture(
 }
 
 // Replace a slot without dropping its owned name buffer.
-pub(crate) fn write_streamed(
+fn write_streamed(
     out: &mut Vec<StreamedAsset>,
     at: &mut usize,
     kind: ResidencyKind,

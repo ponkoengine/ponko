@@ -1,19 +1,33 @@
-//! Reading gamepads with gilrs, into [`Input`] (the `gamepad` feature).
+//! The built-in gamepad backend: gilrs (the `gamepad` feature), installed
+//! by the window before setup.
+//!
+//! What gilrs 0.11 can do differs per platform (see the guide's table):
+//! rumble of the two body motors through its force-feedback API on Linux
+//! (evdev) and Windows; nothing on macOS and the web. It reads no gyro or
+//! accelerometer and drives no trigger motors anywhere, so those
+//! capabilities are reported `false`.
 
+use gilrs::ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder, Replay, Ticks};
 use gilrs::{Axis, Button, EventType, GamepadId, Gilrs};
 
-use crate::input::{Gamepad, GamepadAxis, GamepadButton, Input, MAX_GAMEPADS};
+use crate::input::{
+    ControllerFamily, DeviceKey, GamepadAxis, GamepadBackend, GamepadButton, GamepadCapabilities, GamepadEvents,
+    GamepadInfo, MotorLevels,
+};
 
-/// Connects gilrs's pads to the engine's slots.
-pub(crate) struct Gamepads {
+/// Reads gilrs's pads and plays rumble on them.
+pub(crate) struct GilrsBackend {
     gilrs: Option<Gilrs>,
-    slots: [Option<GamepadId>; MAX_GAMEPADS],
+    /// The rumble effect playing on each pad, by gilrs id. Dropping one stops it.
+    effects: Vec<(GamepadId, Effect)>,
+    /// The pads already there when it opened, reported on the first poll.
+    initial: Vec<GamepadId>,
 }
 
-impl Gamepads {
-    /// Opens the gamepad system and connects the pads already plugged in.
-    /// Without it (no permission, unsupported system), there are no pads.
-    pub(crate) fn new(input: &mut Input) -> Self {
+impl GilrsBackend {
+    /// Opens the gamepad system. Without it (no permission, unsupported
+    /// system), there are no pads.
+    pub(crate) fn new() -> Self {
         let gilrs = match Gilrs::new() {
             Ok(gilrs) => Some(gilrs),
             Err(gilrs::Error::NotImplemented(gilrs)) => Some(gilrs),
@@ -22,68 +36,115 @@ impl Gamepads {
                 None
             }
         };
-        let mut pads = Self {
+        let initial = gilrs.iter().flat_map(|g| g.gamepads().map(|(id, _)| id)).collect();
+        Self {
             gilrs,
-            slots: [None; MAX_GAMEPADS],
-        };
-        let ids: Vec<GamepadId> = pads.gilrs.iter().flat_map(|g| g.gamepads().map(|(id, _)| id)).collect();
-        for id in ids {
-            pads.connect(id, input);
-        }
-        pads
-    }
-
-    fn connect(&mut self, id: GamepadId, input: &mut Input) {
-        if self.slot_of(id).is_some() {
-            return;
-        }
-        if let Some(pad) = input.connect_gamepad() {
-            self.slots[pad.slot()] = Some(id);
+            effects: Vec::new(),
+            initial,
         }
     }
 
-    fn slot_of(&self, id: GamepadId) -> Option<Gamepad> {
-        let slot = self.slots.iter().position(|&s| s == Some(id))?;
-        Some(Gamepad(slot as u8))
+    fn key(id: GamepadId) -> DeviceKey {
+        DeviceKey(usize::from(id) as u64)
     }
 
-    /// Applies everything the pads did since the last frame.
-    pub(crate) fn poll(&mut self, input: &mut Input) {
-        while let Some(event) = self.gilrs.as_mut().and_then(Gilrs::next_event) {
-            if let EventType::Connected = event.event {
-                self.connect(event.id, input);
-                continue;
-            }
-            let Some(pad) = self.slot_of(event.id) else {
-                continue;
-            };
+    fn info(gilrs: &Gilrs, id: GamepadId) -> GamepadInfo {
+        let pad = gilrs.gamepad(id);
+        GamepadInfo {
+            name: pad.name().to_string(),
+            family: ControllerFamily::detect(pad.vendor_id(), pad.product_id(), pad.name()),
+            vendor_id: pad.vendor_id(),
+            product_id: pad.product_id(),
+            capabilities: GamepadCapabilities {
+                rumble: pad.is_ff_supported(),
+                trigger_rumble: false,
+                motion: false,
+            },
+        }
+    }
+}
+
+impl GamepadBackend for GilrsBackend {
+    fn poll(&mut self, events: &mut GamepadEvents<'_>) {
+        let Some(gilrs) = self.gilrs.as_mut() else { return };
+        for id in std::mem::take(&mut self.initial) {
+            events.connected(Self::key(id), Self::info(gilrs, id));
+        }
+        while let Some(event) = gilrs.next_event() {
+            let device = Self::key(event.id);
             match event.event {
+                EventType::Connected => {
+                    events.connected(device, Self::info(gilrs, event.id));
+                }
                 EventType::Disconnected => {
-                    input.disconnect_gamepad(pad);
-                    self.slots[pad.slot()] = None;
+                    self.effects.retain(|(id, _)| *id != event.id);
+                    events.disconnected(device);
                 }
                 EventType::ButtonPressed(b, _) => {
                     if let Some(b) = button(b) {
-                        input.set_gamepad_button(pad, b, true);
+                        events.button(device, b, true);
                     }
                 }
                 EventType::ButtonReleased(b, _) => {
                     if let Some(b) = button(b) {
-                        input.set_gamepad_button(pad, b, false);
+                        events.button(device, b, false);
                     }
                 }
                 EventType::ButtonChanged(b, value, _) => match b {
-                    Button::LeftTrigger2 => input.set_gamepad_axis(pad, GamepadAxis::LeftTrigger, value),
-                    Button::RightTrigger2 => input.set_gamepad_axis(pad, GamepadAxis::RightTrigger, value),
+                    Button::LeftTrigger2 => events.axis(device, GamepadAxis::LeftTrigger, value),
+                    Button::RightTrigger2 => events.axis(device, GamepadAxis::RightTrigger, value),
                     _ => {}
                 },
                 EventType::AxisChanged(a, value, _) => {
                     if let Some((axis, sign)) = axis(a) {
-                        input.set_gamepad_axis(pad, axis, value * sign);
+                        events.axis(device, axis, value * sign);
                     }
                 }
                 _ => {}
             }
+        }
+    }
+
+    fn set_rumble(&mut self, device: DeviceKey, levels: MotorLevels) {
+        let Some(gilrs) = self.gilrs.as_mut() else { return };
+        let Some(id) = gilrs.gamepads().map(|(id, _)| id).find(|&id| Self::key(id) == device) else {
+            return;
+        };
+        // A new effect replaces the old one (dropping it stops it).
+        self.effects.retain(|(i, _)| *i != id);
+        if levels.is_off() || !gilrs.gamepad(id).is_ff_supported() {
+            return;
+        }
+        let magnitude = |v: f32| (v.clamp(0.0, 1.0) * f32::from(u16::MAX)) as u16;
+        // Plays until replaced: the engine times the rumble and sends OFF.
+        let scheduling = Replay {
+            play_for: Ticks::from_ms(u32::MAX / 2),
+            ..Replay::default()
+        };
+        let effect = EffectBuilder::new()
+            .add_effect(BaseEffect {
+                kind: BaseEffectType::Strong {
+                    magnitude: magnitude(levels.strong),
+                },
+                scheduling,
+                ..BaseEffect::default()
+            })
+            .add_effect(BaseEffect {
+                kind: BaseEffectType::Weak {
+                    magnitude: magnitude(levels.weak),
+                },
+                scheduling,
+                ..BaseEffect::default()
+            })
+            .gamepads(&[id])
+            .finish(gilrs);
+        match effect {
+            Ok(effect) => {
+                if effect.play().is_ok() {
+                    self.effects.push((id, effect));
+                }
+            }
+            Err(e) => eprintln!("ponko: rumble failed on a gamepad ({e})"),
         }
     }
 }

@@ -1,9 +1,10 @@
 //! The Kira side of the mixer: one track per bus, nested as the buses are,
 //! each running the bus's effect chain, then the ducker and the meter.
 
-use super::dsp::{BusLevel, DuckShared, DuckSlot, DuckerBuilder, MeterBuilder};
+use super::dsp::{BusLevel, DuckShared, DuckSlot, DuckerBuilder, MeterBuilder, PitchShared, PitchShiftBuilder};
 use super::mixer::{BusRegistry, volume_db};
 use super::{AudioBus, BusEffect, Ducking, FilterMode};
+use kira::clock::{ClockHandle, ClockSpeed};
 use kira::effect::{
     compressor::{CompressorBuilder, CompressorHandle},
     delay::{DelayBuilder, DelayHandle},
@@ -15,21 +16,14 @@ use kira::{AudioManager, AudioManagerSettings, Decibels, DefaultBackend, Mix, Re
 use std::sync::Arc;
 use std::time::Duration;
 
-/// The output: the device, or in tests a buffer the test reads.
+/// The output: a device, or a buffer that offline mixing and tests read.
 pub(super) enum Manager {
     Device(AudioManager<DefaultBackend>),
-    #[cfg(test)]
     Buffer(AudioManager<super::dsp::buffer::BufferBackend>),
 }
 impl Manager {
-    /// The default output device, if there is one.
-    pub(super) fn open() -> Option<Self> {
-        AudioManager::new(AudioManagerSettings::default())
-            .ok()
-            .map(Self::Device)
-    }
-    #[cfg(test)]
-    pub(super) fn buffer(sample_rate: u32) -> (Self, super::dsp::buffer::Output) {
+    /// A manager mixing into memory; `None` if Kira can't make one.
+    pub(super) fn buffer(sample_rate: u32) -> Option<(Self, super::dsp::buffer::Output)> {
         use super::dsp::buffer::{BufferSettings, Output};
         let renderer = super::dsp::buffer::Shared::default();
         let settings = AudioManagerSettings {
@@ -41,14 +35,19 @@ impl Manager {
             main_track_builder: Default::default(),
             internal_buffer_size: 128,
         };
-        let manager = AudioManager::new(settings).expect("a buffer always opens");
-        (Self::Buffer(manager), Output { renderer, sample_rate })
+        let manager = AudioManager::new(settings).ok()?;
+        Some((Self::Buffer(manager), Output { renderer, sample_rate }))
     }
     pub(super) fn add_sub_track(&mut self, builder: TrackBuilder) -> Result<TrackHandle, ResourceLimitReached> {
         match self {
             Self::Device(m) => m.add_sub_track(builder),
-            #[cfg(test)]
             Self::Buffer(m) => m.add_sub_track(builder),
+        }
+    }
+    pub(super) fn add_clock(&mut self, speed: ClockSpeed) -> Result<ClockHandle, ResourceLimitReached> {
+        match self {
+            Self::Device(m) => m.add_clock(speed),
+            Self::Buffer(m) => m.add_clock(speed),
         }
     }
     pub(super) fn add_send_track(
@@ -57,7 +56,6 @@ impl Manager {
     ) -> Result<SendTrackHandle, ResourceLimitReached> {
         match self {
             Self::Device(m) => m.add_send_track(builder),
-            #[cfg(test)]
             Self::Buffer(m) => m.add_send_track(builder),
         }
     }
@@ -68,6 +66,7 @@ enum EffectHandle {
     Reverb(ReverbHandle),
     Compressor(CompressorHandle),
     Delay(DelayHandle),
+    PitchShift(Arc<PitchShared>),
 }
 
 fn kira_mode(mode: FilterMode) -> filter::FilterMode {
@@ -121,6 +120,11 @@ fn add_effect(builder: &mut TrackBuilder, effect: &BusEffect) -> EffectHandle {
                     .mix(Mix(d.mix)),
             ),
         ),
+        BusEffect::PitchShift(p) => {
+            let shared = PitchShared::new(p.ratio, p.mix);
+            builder.add_effect(PitchShiftBuilder(shared.clone()));
+            EffectHandle::PitchShift(shared)
+        }
     }
 }
 
@@ -152,6 +156,7 @@ fn set_effect(handle: &mut EffectHandle, effect: &BusEffect) {
             h.set_feedback(Decibels(d.feedback_db), t);
             h.set_mix(Mix(d.mix), t);
         }
+        (EffectHandle::PitchShift(shared), BusEffect::PitchShift(p)) => shared.set(p.ratio, p.mix),
         _ => {}
     }
 }
@@ -164,6 +169,8 @@ struct BusTrack {
     /// What was last sent: the own gain and the effects' settings.
     gain: f32,
     sent: Vec<BusEffect>,
+    /// Whether it was last paused.
+    paused: bool,
 }
 
 /// Per bus: its track once something played on it, and what its meter and
@@ -207,7 +214,10 @@ impl BusTracks {
         if self.slots[bus.0].track.is_some() {
             return Some(());
         }
-        let mut builder = TrackBuilder::new().volume(volume_db(state.gain()));
+        // Room for every voice the limits allow, and the child buses.
+        let mut builder = TrackBuilder::new()
+            .volume(volume_db(state.gain()))
+            .sub_track_capacity(super::MAX_VOICE_LIMIT as usize + 32);
         let effects = state
             .heard_effects
             .iter()
@@ -222,12 +232,17 @@ impl BusTracks {
             }
             _ => manager.add_sub_track(builder).ok()?,
         };
+        let mut track = track;
+        if state.own_pause() {
+            track.pause(Tween::default());
+        }
         self.slots[bus.0].track = Some(BusTrack {
             track,
             effects,
             shape: state.shape,
             gain: state.gain(),
             sent: state.heard_effects.clone(),
+            paused: state.own_pause(),
         });
         Some(())
     }
@@ -273,6 +288,14 @@ impl BusTracks {
                 if gain != t.gain {
                     t.track.set_volume(volume_db(gain), Tween::default());
                     t.gain = gain;
+                }
+                if state.own_pause() != t.paused {
+                    t.paused = state.own_pause();
+                    if t.paused {
+                        t.track.pause(Tween::default());
+                    } else {
+                        t.track.resume(Tween::default());
+                    }
                 }
                 for ((handle, sent), now) in t.effects.iter_mut().zip(&mut t.sent).zip(&state.heard_effects) {
                     if sent != now {

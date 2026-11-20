@@ -401,9 +401,6 @@ fn every_spine_feature_not_read_warns_naming_it_and_the_file() {
     type Patch = fn(&mut serde_json::Value);
     let cases: &[(&str, Patch)] = &[
         // Whole-file features.
-        ("transform constraints", |v| {
-            v["transform"] = json!([{ "name": "t", "bones": ["arm"], "target": "root" }])
-        }),
         ("path constraints", |v| {
             v["path"] = json!([{ "name": "p", "bones": ["arm"], "target": "arm" }])
         }),
@@ -415,7 +412,6 @@ fn every_spine_feature_not_read_warns_naming_it_and_the_file() {
         }),
         ("field \"audio2\" (the file)", |v| v["audio2"] = json!({})),
         // Bones.
-        ("shear (bone \"arm\")", |v| v["bones"][1]["shearX"] = json!(10)),
         ("inherit mode \"noScale\" (bone \"arm\")", |v| {
             v["bones"][1]["inherit"] = json!("noScale")
         }),
@@ -455,9 +451,6 @@ fn every_spine_feature_not_read_warns_naming_it_and_the_file() {
         ("point attachment (attachment \"it\"", |v| {
             v["skins"][0]["attachments"]["arm"]["it"] = json!({ "type": "point" })
         }),
-        ("clipping (attachment \"it\"", |v| {
-            v["skins"][0]["attachments"]["arm"]["it"] = json!({ "type": "clipping", "end": "arm" })
-        }),
         ("attachment type \"hologram\" (attachment \"it\"", |v| {
             v["skins"][0]["attachments"]["arm"]["it"] = json!({ "type": "hologram" })
         }),
@@ -493,14 +486,15 @@ fn every_spine_feature_not_read_warns_naming_it_and_the_file() {
         ("physics constraint timelines (animation \"wave\")", |v| {
             v["animations"]["wave"]["physics"] = json!({ "p": {} })
         }),
-        ("deform timelines (animation \"wave\")", |v| {
-            v["animations"]["wave"]["deform"] = json!({ "default": {} })
+        ("sequence timelines (animation \"wave\")", |v| {
+            v["animations"]["wave"]["attachments"] = json!({ "default": { "arm": { "it": { "sequence": [{}] } } } })
         }),
-        ("deform and sequence timelines (animation \"wave\")", |v| {
-            v["animations"]["wave"]["attachments"] = json!({ "default": {} })
+        ("deform of an attachment that isn't a mesh (animation \"wave\"", |v| {
+            v["skins"][0]["attachments"]["arm"]["it"] = json!({ "width": 1, "height": 1 });
+            v["animations"]["wave"]["attachments"] = json!({ "default": { "arm": { "it": { "deform": [{}] } } } })
         }),
-        ("\"shear\" timeline (animation \"wave\", bone \"arm\")", |v| {
-            v["animations"]["wave"]["bones"]["arm"]["shear"] = json!([{ "x": 5 }])
+        ("\"inherit\" timeline (animation \"wave\", bone \"arm\")", |v| {
+            v["animations"]["wave"]["bones"]["arm"]["inherit"] = json!([{ "inherit": "noScale" }])
         }),
         ("\"rgba2\" timeline (animation \"wave\", slot \"arm\")", |v| {
             v["animations"]["wave"]["slots"] =
@@ -532,12 +526,295 @@ fn every_spine_feature_not_read_warns_naming_it_and_the_file() {
 #[test]
 fn spine_warnings_are_listed_once_each() {
     let text = BASE.replace(
-        r#"{ "name": "arm", "parent": "root", "length": 10 }"#,
-        r#"{ "name": "arm", "parent": "root", "length": 10, "shearX": 1, "shearY": 2 }"#,
+        r#""animations": { "wave": {"#,
+        r#""animations": { "wave": { "events": [{ "name": "step", "int": 1 }, { "time": 1, "name": "step", "int": 2 }],"#,
     );
     let data = SkeletonData::from_spine_json(&text, "a.json").unwrap();
     assert_eq!(
         data.warnings(),
-        ["a.json: Spine shear (bone \"arm\") isn't read; the bone is posed without it"]
+        ["a.json: Spine event values (animation \"wave\") isn't read; the event fires by name only"]
     );
+}
+
+#[test]
+fn path_and_physics_constraints_warn_with_the_reason_they_are_left_out() {
+    use serde_json::json;
+    let mut v: serde_json::Value = serde_json::from_str(BASE).unwrap();
+    v["path"] = json!([{ "name": "p", "bones": ["arm"], "target": "arm" }]);
+    v["physics"] = json!([{ "name": "p", "bone": "arm" }]);
+    let data = SkeletonData::from_spine_json(&v.to_string(), "a.json").unwrap();
+    let w = data.warnings();
+    assert!(
+        w.iter()
+            .any(|w| w.starts_with("a.json: Spine path constraints isn't read") && w.contains("path attachments"))
+    );
+    assert!(
+        w.iter()
+            .any(|w| w.starts_with("a.json: Spine physics constraints isn't read") && w.contains("simulation"))
+    );
+}
+
+// ---- Shear, one-axis timelines, transform constraints --------------------
+//
+// Spine is y-up with counter-clockwise degrees; Ponko is y-down with
+// clockwise radians, so Spine's (x, y) is Ponko's (x, -y) and its angle a
+// is Ponko's -a. Every expected value below is worked out by hand in
+// Spine's terms first, then mirrored.
+
+fn load(text: &str) -> Skeleton {
+    let data = SkeletonData::from_spine_json(text, "features.json").unwrap();
+    assert_eq!(data.warnings(), [] as [String; 0]);
+    let mut s = Skeleton::new(Arc::new(data));
+    if !s.data().clips().is_empty() {
+        s.play(&s.data().clips()[0].name.clone());
+    }
+    s.update(0.0);
+    s
+}
+
+fn bone(s: &Skeleton, name: &str) -> usize {
+    s.bone(name).unwrap_or_else(|| panic!("no bone {name}"))
+}
+
+#[test]
+fn shear_turns_each_axis_of_a_bone_on_its_own() {
+    // shearX 90: the x axis turns a quarter (Spine: from (1, 0) to (0, 1));
+    // shearY 30: the y axis turns from 90 to 120 degrees, (-0.5, 0.866).
+    let s = load(
+        r#"{ "skeleton": { "spine": "4.2.0" },
+             "bones": [{ "name": "root" }, { "name": "b", "parent": "root", "shearX": 90, "shearY": 30 }] }"#,
+    );
+    let b = bone(&s, "b");
+    // Spine (10, 0) local lands at (0, 10); Ponko's (10, 0) at (0, -10).
+    near2(s.bone_point(b, vec2(10.0, 0.0)), vec2(0.0, -10.0));
+    // Spine (0, 10) local lands at 10 (-0.5, 0.866) = (-5, 8.66); Ponko's
+    // (0, -10) at (-5, -8.66).
+    near2(s.bone_point(b, vec2(0.0, -10.0)), vec2(-5.0, -8.660_254));
+    near2(
+        s.bone_pose(b).shear,
+        vec2(-std::f32::consts::FRAC_PI_2, -std::f32::consts::FRAC_PI_6),
+    );
+}
+
+#[test]
+fn shear_timelines_key_both_axes_or_one() {
+    // `shear` keys y from 0 to 60 over a second; `shearx` keys x from 0 to
+    // -20 over two: at 0.5 s y is 30 and x is -5 degrees.
+    let mut s = load(
+        r#"{ "skeleton": { "spine": "4.2.0" },
+             "bones": [{ "name": "root" }, { "name": "b", "parent": "root" }],
+             "animations": { "a": { "bones": { "b": {
+               "shear": [{ "time": 0, "x": 0, "y": 0 }, { "time": 1, "x": 0, "y": 60 }],
+               "shearx": [{ "time": 0, "value": 0 }, { "time": 2, "value": -20 }] } } } } }"#,
+    );
+    let b = bone(&s, "b");
+    at(&mut s, 0.5);
+    near(s.bone_pose(b).shear.y, -30f32.to_radians());
+    near(s.bone_pose(b).shear.x, 5f32.to_radians());
+}
+
+#[test]
+fn one_axis_timelines_keep_their_own_key_times() {
+    // translatex: 0 -> 10 over 1 s. translatey: 0 -> 20 -> 0, peaking at
+    // 0.5 s. scalex: 1 -> 3 over 1 s; scaley stays at the rest scale 2.
+    let mut s = load(
+        r#"{ "skeleton": { "spine": "4.2.0" },
+             "bones": [{ "name": "root" }, { "name": "b", "parent": "root", "x": 1, "scaleY": 2 }],
+             "animations": { "a": { "bones": { "b": {
+               "translatex": [{ "time": 0, "value": 0 }, { "time": 1, "value": 10 }],
+               "translatey": [{ "time": 0, "value": 0 }, { "time": 0.5, "value": 20 }, { "time": 1, "value": 0 }],
+               "scalex": [{ "time": 0, "value": 1 }, { "time": 1, "value": 3 }] } } } } }"#,
+    );
+    let b = bone(&s, "b");
+    at(&mut s, 0.25);
+    let p = s.bone_pose(b);
+    // x: rest 1 plus 2.5; y: 10 up, so -10; scale x: rest 1 times 1.5.
+    near2(p.translation, vec2(3.5, -10.0));
+    near2(p.scale, vec2(1.5, 2.0));
+    at(&mut s, 0.75);
+    let p = s.bone_pose(b);
+    near2(p.translation, vec2(8.5, -10.0));
+    near(p.scale.x, 2.5);
+}
+
+/// A root, a `target` and a `follower` (both on the root) and transform
+/// constraint `constraint` (a JSON object) moving the follower.
+fn constrained(target: &str, follower: &str, constraint: &str) -> Skeleton {
+    load(&format!(
+        r#"{{ "skeleton": {{ "spine": "4.2.0" }},
+             "bones": [{{ "name": "root" }}, {{ "name": "target", "parent": "root", {target} }},
+                       {{ "name": "follower", "parent": "root", {follower} }}],
+             "transform": [{{ "name": "t", "bones": ["follower"], "target": "target", {constraint} }}] }}"#
+    ))
+}
+
+/// Where bone `name`'s +x axis points and how long it is.
+fn x_axis(s: &Skeleton, name: &str) -> Vec2 {
+    let b = bone(s, name);
+    s.bone_point(b, vec2(1.0, 0.0)) - s.bone_position(b)
+}
+
+#[test]
+fn transform_constraints_move_bones_onto_their_target_in_world_space() {
+    use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
+    // The target at (10, 0) points up (90 degrees). Fully: the follower
+    // takes its place and its turn, (10, 0) and -pi/2 in Ponko.
+    let full = r#""mixScaleX": 0, "mixShearY": 0"#;
+    let s = constrained(r#""x": 10, "rotation": 90"#, r#""x": 0"#, full);
+    near2(s.bone_position(bone(&s, "follower")), vec2(10.0, 0.0));
+    near(s.bone_rotation(bone(&s, "follower")), -FRAC_PI_2);
+    // Half way: (5, 0) and an eighth of a turn.
+    let s = constrained(
+        r#""x": 10, "rotation": 90"#,
+        r#""x": 0"#,
+        r#""mixRotate": 0.5, "mixX": 0.5, "mixScaleX": 0, "mixShearY": 0"#,
+    );
+    near2(s.bone_position(bone(&s, "follower")), vec2(5.0, 0.0));
+    near(s.bone_rotation(bone(&s, "follower")), -FRAC_PI_4);
+    // An offset of (5, 0) in the target's space is 5 up from it: Spine
+    // (10, 5), Ponko (10, -5); an offset rotation of -90 cancels its turn.
+    let s = constrained(
+        r#""x": 10, "rotation": 90"#,
+        r#""x": 0"#,
+        r#""x": 5, "rotation": -90, "mixScaleX": 0, "mixShearY": 0"#,
+    );
+    near2(s.bone_position(bone(&s, "follower")), vec2(10.0, -5.0));
+    near(s.bone_rotation(bone(&s, "follower")), 0.0);
+    // Scale: target 2 wide, follower 1, half way: 1.5; an offset adds.
+    let s = constrained(
+        r#""scaleX": 2"#,
+        r#""x": 0"#,
+        r#""mixRotate": 0, "mixX": 0, "mixScaleX": 0.5, "mixScaleY": 0, "mixShearY": 0"#,
+    );
+    near(x_axis(&s, "follower").length(), 1.5);
+    let s = constrained(
+        r#""scaleX": 2"#,
+        r#""x": 0"#,
+        r#""mixRotate": 0, "mixX": 0, "scaleX": 1, "mixScaleY": 0, "mixShearY": 0"#,
+    );
+    near(x_axis(&s, "follower").length(), 3.0);
+    // Shear: the target's y axis leans 30 degrees (Spine (-0.5, 0.866),
+    // Ponko (0.5, 0.866) for its +y); the follower's leans the same.
+    let s = constrained(
+        r#""shearY": 30"#,
+        r#""x": 0"#,
+        r#""mixRotate": 0, "mixX": 0, "mixScaleX": 0"#,
+    );
+    let f = bone(&s, "follower");
+    near2(
+        s.bone_point(f, vec2(0.0, 1.0)) - s.bone_position(f),
+        vec2(0.5, 0.866_025_4),
+    );
+}
+
+#[test]
+fn relative_world_transform_constraints_add_the_targets_transform() {
+    // Follower turned 10 degrees, target 90: the follower turns another 90
+    // (100 in all, -100 in Ponko) and moves by the target's position.
+    let s = constrained(
+        r#""x": 10, "y": 4, "rotation": 90"#,
+        r#""x": 1, "rotation": 10"#,
+        r#""relative": true, "mixScaleX": 0, "mixShearY": 0"#,
+    );
+    let f = bone(&s, "follower");
+    near(s.bone_rotation(f), -100f32.to_radians());
+    // (1, 0) plus the target's (10, 4): Spine (11, 4), Ponko (11, -4).
+    near2(s.bone_position(f), vec2(11.0, -4.0));
+    // Scale: the target's 2 adds (2 - 1) x mix 1: twice as wide.
+    let s = constrained(
+        r#""scaleX": 2"#,
+        r#""x": 0"#,
+        r#""relative": true, "mixRotate": 0, "mixX": 0, "mixScaleY": 0, "mixShearY": 0"#,
+    );
+    near(x_axis(&s, "follower").length(), 2.0);
+}
+
+#[test]
+fn local_transform_constraints_mix_the_poses_relative_to_parents() {
+    // Absolute: the follower's local pose moves toward the target's: at
+    // mix 0.5, rotation 0 -> 30 is 15 and (0, 0) -> (10, 20) is (5, 10).
+    let s = constrained(
+        r#""x": 10, "y": 20, "rotation": 30, "scaleX": 3"#,
+        r#""x": 0"#,
+        r#""local": true, "mixRotate": 0.5, "mixX": 0.5, "mixScaleX": 0.5, "mixScaleY": 0, "mixShearY": 0"#,
+    );
+    let f = bone(&s, "follower");
+    let p = s.bone_pose(f);
+    near(p.rotation, -15f32.to_radians());
+    near2(p.translation, vec2(5.0, -10.0));
+    // Scale 1 -> 3 half way: 2.
+    near(p.scale.x, 2.0);
+    // Relative: the target's local pose is added: rotation 10 + 30, (1, 0)
+    // + (10, 20), scale 1 x (3 - 1 + 1).
+    let s = constrained(
+        r#""x": 10, "y": 20, "rotation": 30, "scaleX": 3"#,
+        r#""x": 1, "rotation": 10"#,
+        r#""local": true, "relative": true, "mixScaleY": 0, "mixShearY": 0"#,
+    );
+    let p = s.bone_pose(bone(&s, "follower"));
+    near(p.rotation, -40f32.to_radians());
+    near2(p.translation, vec2(11.0, -20.0));
+    near(p.scale.x, 3.0);
+}
+
+#[test]
+fn ik_and_transform_constraints_apply_in_their_order() {
+    // A transform constraint (order 0) moves the IK goal from (20, 0) to
+    // the mover at (0, 20) up; the IK (order 1) then reaches the goal
+    // there: the tip of `lower` at Ponko (0, -20). Had the IK gone first,
+    // the tip would be at (20, 0).
+    let text = r#"{ "skeleton": { "spine": "4.2.0" },
+        "bones": [{ "name": "root" }, { "name": "upper", "parent": "root", "length": 10 },
+                  { "name": "lower", "parent": "upper", "x": 10, "length": 10 },
+                  { "name": "goal", "parent": "root", "x": 20 }, { "name": "mover", "parent": "root", "y": 20 }],
+        "ik": [{ "name": "reach", "order": 1, "bones": ["upper", "lower"], "target": "goal" }],
+        "transform": [{ "name": "move", "order": 0, "bones": ["goal"], "target": "mover",
+                        "mixRotate": 0, "mixScaleX": 0, "mixShearY": 0 }] }"#;
+    let s = load(text);
+    let lower = bone(&s, "lower");
+    near2(s.bone_point(lower, vec2(10.0, 0.0)), vec2(0.0, -20.0));
+    // The other order: the IK reaches (20, 0) first.
+    let s = load(
+        &text
+            .replace(r#""order": 1"#, r#""order": 2"#)
+            .replace(r#""order": 0"#, r#""order": 3"#),
+    );
+    near2(s.bone_point(lower, vec2(10.0, 0.0)), vec2(20.0, 0.0));
+    assert_eq!(s.data().transform_constraints()[0].name.as_ref(), "move");
+}
+
+#[test]
+fn spine_3_transform_constraints_read_their_mix_names() {
+    // 3.x: one translate mix for both axes, one scale mix.
+    let s = load(
+        r#"{ "skeleton": { "spine": "3.8.99" },
+             "bones": [{ "name": "root" }, { "name": "target", "parent": "root", "x": 10, "y": 10, "scaleX": 3 },
+                       { "name": "follower", "parent": "root" }],
+             "transform": [{ "name": "t", "bones": ["follower"], "target": "target",
+                             "rotateMix": 0, "translateMix": 0.5, "scaleMix": 0.5, "shearMix": 0 }] }"#,
+    );
+    let f = bone(&s, "follower");
+    near2(s.bone_position(f), vec2(5.0, -5.0));
+    near(x_axis(&s, "follower").length(), 2.0);
+}
+
+#[test]
+fn transform_constraints_built_in_code_check_their_bones() {
+    use ponko::skeleton2d::{BonePose, TransformConstraint};
+    let mut data = SkeletonData::new();
+    let root = data.add_bone("root", None, BonePose::IDENTITY, 0.0);
+    let leader = data.add_bone("leader", Some(root), BonePose::at(vec2(10.0, 0.0)), 0.0);
+    let follower = data.add_bone("follower", Some(root), BonePose::IDENTITY, 0.0);
+    let mut follow = TransformConstraint::new("follow", &[follower], leader);
+    follow.mix_translate = vec2(0.5, 0.5);
+    assert_eq!(data.add_transform_constraint(follow), 0);
+    let mut s = Skeleton::new(Arc::new(data));
+    s.update(0.0);
+    near2(s.bone_position(follower), vec2(5.0, 0.0));
+    let r = std::panic::catch_unwind(|| {
+        let mut data = SkeletonData::new();
+        let root = data.add_bone("root", None, BonePose::IDENTITY, 0.0);
+        data.add_transform_constraint(TransformConstraint::new("self", &[root], root));
+    });
+    assert!(r.is_err(), "a bone can't follow itself");
 }

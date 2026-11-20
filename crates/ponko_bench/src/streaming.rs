@@ -1,8 +1,10 @@
 //! Asset streaming without gameplay-thread stalls: a game that needs 16
 //! new assets at once (a cell coming into view), loaded on the game thread
-//! (`load_texture`, `load_mesh`) or streamed (`stream_texture`,
+//! (`load_texture`, `load_mesh`), streamed (`stream_texture`,
 //! `stream_mesh`: read and decoded on job threads, uploaded within the
-//! per-frame budget). The assets are 16 PNGs of 1024 × 1024 noise, or 16
+//! per-frame budget), or loaded as one asset group (`AssetGroup` of
+//! textures: read and decoded on job threads, made on the game thread
+//! within the group step's time budget and the upload budget). The assets are 16 PNGs of 1024 × 1024 noise, or 16
 //! glTF binaries of a 256 × 256 vertex grid (65 536 vertices, 130 050
 //! triangles, about 3 MiB each).
 //!
@@ -158,16 +160,34 @@ enum Load {
     StreamTexture,
     Mesh,
     StreamMesh,
+    /// An asset group of the textures, as `load_texture` loads them.
+    GroupTextures,
 }
 
 impl Load {
     fn streamed(self) -> bool {
-        matches!(self, Load::StreamTexture | Load::StreamMesh)
+        matches!(self, Load::StreamTexture | Load::StreamMesh | Load::GroupTextures)
     }
 
     /// Loads or streams `path`; whether it is usable now.
     fn ask(self, ctx: &mut Ctx, path: &str) -> bool {
         match self {
+            Load::GroupTextures => {
+                let id = match ctx.assets.group("bench") {
+                    Some(id) => id,
+                    // The first ask starts the group of every texture.
+                    None => {
+                        let paths: Vec<String> = (0..ASSETS)
+                            .map(|i| path.replace("t0.png", &format!("t{i}.png")))
+                            .collect();
+                        let group = paths
+                            .iter()
+                            .fold(ponko::assets::AssetGroup::new("bench"), |g, p| g.texture(p));
+                        ctx.assets.start_group(group)
+                    }
+                };
+                ctx.assets.group_state(id) == ponko::assets::GroupState::Ready
+            }
             Load::Texture => {
                 ctx.gfx.load_texture(path);
                 true
@@ -244,13 +264,14 @@ pub fn run(b: &mut Bench) {
         ("streaming/stream-16x1k", Load::StreamTexture),
         ("streaming/sync-load-16-meshes", Load::Mesh),
         ("streaming/stream-16-meshes", Load::StreamMesh),
+        ("streaming/group-16x1k", Load::GroupTextures),
     ];
     for (name, load) in cases {
         if b.skips(name) {
             continue;
         }
         let paths = match load {
-            Load::Texture | Load::StreamTexture => pngs.get_or_insert_with(|| noise_pngs(&dir)),
+            Load::Texture | Load::StreamTexture | Load::GroupTextures => pngs.get_or_insert_with(|| noise_pngs(&dir)),
             Load::Mesh | Load::StreamMesh => glbs.get_or_insert_with(|| grid_meshes(&dir)),
         };
         let (mut times, ready, wall) = frames(paths, load);

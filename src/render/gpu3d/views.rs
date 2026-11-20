@@ -110,7 +110,7 @@ impl Renderer3D {
     ) {
         self.swap_view(index);
         self.extra = true;
-        self.prepare_extra(device, queue, input, main);
+        self.batch_writes(device, queue, |r| r.prepare_extra(device, queue, input, main));
         self.extra = false;
         self.swap_view(index);
     }

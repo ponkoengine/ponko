@@ -1026,6 +1026,8 @@ pub unsafe extern "C" fn ponko_ctx_create_texture(
     })
 }
 /// Replaces a texture's pixels (same size, `width * height * 4` bytes).
+/// A render target's texture is drawn by its camera, not updated:
+/// `PONKO_INVALID_ARGUMENT`, and nothing changes.
 /// ```
 /// use ponko_ffi::*;
 /// let t = PonkoTexture { id: 0, width: 1, height: 1 };
@@ -1044,8 +1046,9 @@ pub unsafe extern "C" fn ponko_ctx_update_texture(
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
             let pixels = pixels(texture.width, texture.height, rgba, len)?;
-            c.gfx.update_texture(texture_from_c(texture), pixels);
-            Ok(())
+            c.gfx
+                .try_update_texture(texture_from_c(texture), pixels)
+                .map_err(crate::invalid_owned)
         })
     })
 }

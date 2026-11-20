@@ -467,7 +467,7 @@ fn focusing_text_by_pointer_does_not_submit_and_hidden_nodes_do_not_hit() {
         },
     );
     assert_eq!(ui.focus(), Some(field));
-    assert_eq!(ui.events().count(), 0);
+    assert_eq!(ui.events().collect::<Vec<_>>(), []);
     assert_ne!(ui.hit_test(Vec2::ZERO), Some(hidden));
 }
 #[test]

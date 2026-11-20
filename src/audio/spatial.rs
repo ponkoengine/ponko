@@ -98,6 +98,11 @@ pub struct AudioSource3D {
     pub sound: Sound,
     /// Live volume, pitch, attenuation, effects and looping settings (looping applies at start).
     pub settings: AudioSettings3D,
+    /// How important it is against the voice limits, 0–255 (see
+    /// [`Audio::set_priority`]). A change applies while it plays, at the
+    /// frame's positional update: raise a sound that becomes important (an
+    /// enemy that starts chasing) so the limits keep it.
+    pub priority: u8,
     playing: Option<Playing>,
 }
 impl AudioSource3D {
@@ -112,8 +117,24 @@ impl AudioSource3D {
         Self {
             sound,
             settings,
+            priority: crate::audio::DEFAULT_PRIORITY,
             playing: None,
         }
+    }
+
+    /// The same source at `priority` against the voice limits (0–255,
+    /// higher first): the player's own sounds over a crowd's.
+    /// ```
+    /// use ponko::prelude::*;
+    /// # fn f(sound: Sound) {
+    /// let steps = ponko::d3::AudioSource::new(sound, ponko::d3::AudioSettings::default()).with_priority(200);
+    /// assert_eq!(steps.priority, 200);
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_priority(mut self, priority: u8) -> Self {
+        self.priority = priority;
+        self
     }
 
     /// Whether the positional update has started this source, for tests of
@@ -131,6 +152,8 @@ struct Voice {
     settings: AudioSettings3D,
     fresh: bool,
     remaining: f32,
+    /// The priority the backend has for it, so a change is sent once.
+    priority: u8,
 }
 #[derive(Default)]
 pub(crate) struct SpatialState {
@@ -222,6 +245,7 @@ impl Audio {
             settings,
             fresh: true,
             remaining: sound.seconds(),
+            priority: crate::audio::DEFAULT_PRIORITY,
         });
         id
     }
@@ -278,6 +302,9 @@ pub(crate) fn update_audio3d(ctx: &mut Ctx) {
             let id = ctx
                 .audio
                 .play_on(source.sound, params, source.settings.bus, source.settings.effects);
+            if source.priority != crate::audio::DEFAULT_PRIORITY {
+                ctx.audio.backend.set_priority(id.0, source.priority);
+            }
             source.playing = Some(id);
             ctx.audio.backend.spatial.voices.push(Voice {
                 id,
@@ -286,6 +313,7 @@ pub(crate) fn update_audio3d(ctx: &mut Ctx) {
                 settings: source.settings,
                 fresh: true,
                 remaining: source.sound.seconds(),
+                priority: source.priority,
             });
         }
     }
@@ -294,6 +322,7 @@ pub(crate) fn update_audio3d(ctx: &mut Ctx) {
         let voice = &mut ctx.audio.backend.spatial.voices[i];
         let mut position = voice.position;
         let mut changed_effects = None;
+        let mut changed_priority = None;
         if let Some(entity) = voice.entity {
             match (
                 ctx.world.get::<Transform3D>(entity),
@@ -307,6 +336,10 @@ pub(crate) fn update_audio3d(ctx: &mut Ctx) {
                     }
                     voice.settings = source.settings;
                     voice.settings.sound.looping = looping;
+                    if source.priority != voice.priority {
+                        voice.priority = source.priority;
+                        changed_priority = Some(source.priority);
+                    }
                 }
                 _ => {
                     let id = voice.id;
@@ -325,7 +358,10 @@ pub(crate) fn update_audio3d(ctx: &mut Ctx) {
         let settings = voice.settings;
         let speed = settings.sound.speed.max(0.01)
             * doppler(offset.normalize_or_zero(), emitter_velocity, velocity, settings.doppler);
-        voice.remaining -= dt.max(0.0) * speed;
+        // A paused bus holds the sound where it is.
+        if !ctx.audio.backend.buses.paused(settings.bus) {
+            voice.remaining -= dt.max(0.0) * speed;
+        }
         voice.position = position;
         voice.fresh = false;
         let (id, volume, panning) = (
@@ -338,6 +374,9 @@ pub(crate) fn update_audio3d(ctx: &mut Ctx) {
             // Kira smooths the change, so a filter can follow the game (a
             // door closing, the camera moving inside).
             ctx.audio.backend.effects(id.0, effects);
+        }
+        if let Some(priority) = changed_priority {
+            ctx.audio.backend.set_priority(id.0, priority);
         }
         ctx.audio.backend.spatialize(id.0, volume, panning, speed);
         if finished {
@@ -398,6 +437,57 @@ mod tests {
                 update_audio3d(ctx);
                 assert!(ctx.audio.backend.spatial.voices.is_empty());
             });
+    }
+    #[cfg(feature = "audio")]
+    #[test]
+    fn a_positional_sounds_priority_change_applies_while_it_plays() {
+        crate::game::Game::new("audio test", 1, 1).run_headless(0, |ctx| {
+            const RATE: u32 = 48_000;
+            let (backend, out) = super::super::Backend::with_buffer_output(RATE);
+            ctx.audio = crate::audio::Audio {
+                backend,
+                ..Default::default()
+            };
+            ctx.audio.set_voice_limit(1);
+            let looping = AudioSettings3D {
+                sound: crate::audio::SoundParams {
+                    looping: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let source = |ctx: &mut Ctx, hz: f32, priority: u8| {
+                let samples: Vec<f32> = (0..RATE as usize)
+                    .map(|i| (i as f32 * hz * std::f32::consts::TAU / RATE as f32).sin() * 0.3)
+                    .collect();
+                let sound = ctx.audio.create(RATE, &samples);
+                ctx.world.spawn((
+                    Transform3D::default(),
+                    AudioSource3D::new(sound, looping).with_priority(priority),
+                ))
+            };
+            let (guard, chaser) = (source(ctx, 300.0, 200), source(ctx, 500.0, 100));
+            let frame = |ctx: &mut Ctx| {
+                update_audio3d(ctx);
+                ctx.audio.advance_mixer(1.0 / 60.0);
+                out.render(1.0 / 60.0);
+            };
+            let playing = |ctx: &Ctx, e| ctx.world.get::<AudioSource3D>(e).unwrap().playing.unwrap();
+            frame(ctx);
+            let (g, c) = (playing(ctx, guard), playing(ctx, chaser));
+            assert!(
+                !ctx.audio.is_virtual(g) && ctx.audio.is_virtual(c),
+                "the higher priority is heard"
+            );
+            // The chaser becomes the important one while both play.
+            ctx.world.get_mut::<AudioSource3D>(chaser).unwrap().priority = 250;
+            frame(ctx);
+            assert!(
+                ctx.audio.is_virtual(g) && !ctx.audio.is_virtual(c),
+                "the raised one takes the voice"
+            );
+            assert_eq!(playing(ctx, chaser), c, "the same voice, not a restart");
+        });
     }
     #[test]
     fn a_scene_load_stops_voices_of_replaced_entities_only() {

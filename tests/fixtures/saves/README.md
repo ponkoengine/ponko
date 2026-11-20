@@ -13,6 +13,9 @@ game-facing loaders, `Ctx::load_scene` and `Ctx::spawn_prefab`.
 | `world_v1.json` | `ponko-world` | 1 | `51323ef` (ponko 0.0.1) | `world_v1.provenance.json` |
 | `prefab_v1.json` | `ponko-prefab` | 1 | `b3799f6` (ponko 0.0.1) | `prefab_v1.provenance.json` |
 | `world_v1.save` | `ponko-world`, binary layout 1 | 1 | see provenance (ponko 0.1.0) | `world_v1.save.provenance.json` |
+| `handles_v1.json` | `ponko-world` | 1 | `415158e2` (dev, before 0.2.0) | `handles_v1.provenance.json` |
+| `handles3d_v1.json` | `ponko-world` | 1 | `415158e2` (dev, before 0.2.0) | `handles3d_v1.provenance.json` |
+| `gltf_instances_v1.json` | `ponko-world` | 1 | `9aee05ca` (dev, before 0.2.0) | `gltf_instances_v1.provenance.json` |
 
 The `format` identifiers in these files were renamed from the pre-0.1.0
 `crabby-world` / `crabby-prefab` spellings (which no release ever wrote) to the
@@ -26,6 +29,24 @@ wrote, not that any earlier binary release is covered.
 (`SaveFormat::Binary`) by `write_v1_binary_fixture`: it holds later revisions
 to reading the first binary layout, and must decode to exactly the JSON
 fixture.
+
+`handles_v1.json` and `handles3d_v1.json` hold the components that keep a
+handle: `Sprite`, `Animation` and `ParticleEmitter2D` (a texture), and with
+`3d`, `Model`, `ShadowMesh` (a mesh) and `ModelMaterial` (a material). They
+were written just before render targets got their own handle type
+(`RenderTarget`); `tests/handle_compat.rs` loads them as scenes and checks
+that each field comes back as the same typed handle, and saves the same
+way. Handles are saved by asset name, never by number, so a change to a
+handle's Rust type must not change these files.
+
+`gltf_instances_v1.json` holds the prefab instances of a glTF scene (three
+barrel nodes: one moved and emptied, one despawned, one untouched) saved
+before saves linked instances to their scene: no record of the scene, and
+`GltfNode` counted under `not_saved`. `tests/gltf_scenes.rs` loads it and
+spawns the level again (`an_old_save_loads_without_doubling_its_prefab_instances`):
+nothing is doubled and the despawned barrel stays gone. Its generator is
+the `#[ignore]`d `write_gltf_instances_v1_fixture` there, with the level
+`barrel_level` it was played on.
 
 ## What a fixture covers
 

@@ -51,6 +51,38 @@ pub enum PonkoUiRole {
     PONKO_UI_ROLE_CHECKBOX,
     /// A value from 0 to 1.
     PONKO_UI_ROLE_SLIDER,
+    /// A dropdown: shows its choice, opens a list of options.
+    PONKO_UI_ROLE_COMBO_BOX,
+    /// The bar of a tab strip.
+    PONKO_UI_ROLE_TAB_LIST,
+    /// One tab; `selected` when its page is shown.
+    PONKO_UI_ROLE_TAB,
+    /// A tab's page.
+    PONKO_UI_ROLE_TAB_PANEL,
+    /// A group of radio buttons, one checked.
+    PONKO_UI_ROLE_RADIO_GROUP,
+    /// One radio button; checked or not.
+    PONKO_UI_ROLE_RADIO_BUTTON,
+    /// How far something is, 0 to 1; takes no input.
+    PONKO_UI_ROLE_PROGRESS_BAR,
+    /// A busy indicator; takes no input.
+    PONKO_UI_ROLE_SPINNER,
+    /// A number field stepped up and down (`PONKO_UI_ACCESS_VALUE_NUMBER`).
+    PONKO_UI_ROLE_SPIN_BUTTON,
+    /// A list of items to choose from.
+    PONKO_UI_ROLE_LIST,
+    /// One item of a list or of a dropdown's options.
+    PONKO_UI_ROLE_LIST_ITEM,
+    /// A list in columns.
+    PONKO_UI_ROLE_GRID,
+    /// One cell of a grid.
+    PONKO_UI_ROLE_GRID_CELL,
+    /// A context menu.
+    PONKO_UI_ROLE_MENU,
+    /// One entry of a context menu.
+    PONKO_UI_ROLE_MENU_ITEM,
+    /// The divider of split panes; its value is where it is, 0 to 1.
+    PONKO_UI_ROLE_SPLITTER,
 }
 
 /// Which kind of value a node has (`PonkoUiAccessNode::value_kind`). A kind
@@ -70,8 +102,11 @@ pub enum PonkoUiAccessValueKind {
     PONKO_UI_ACCESS_VALUE_TEXT,
     /// A toggle: `value` is 1 when on, 0 when off.
     PONKO_UI_ACCESS_VALUE_CHECKED,
-    /// A slider: `value` is 0 to 1.
+    /// A slider, progress bar or splitter: `value` is 0 to 1.
     PONKO_UI_ACCESS_VALUE_RANGE,
+    /// A number field: `value` is the number (as a float); its range and
+    /// step are in `ponko_ui_access_state_ex`.
+    PONKO_UI_ACCESS_VALUE_NUMBER,
 }
 
 /// Whether a node's changes are announced while something else has focus.
@@ -205,6 +240,22 @@ fn role_to_c(role: UiRole) -> PonkoUiRole {
         UiRole::TextInput => PonkoUiRole::PONKO_UI_ROLE_TEXT_INPUT,
         UiRole::CheckBox => PonkoUiRole::PONKO_UI_ROLE_CHECKBOX,
         UiRole::Slider => PonkoUiRole::PONKO_UI_ROLE_SLIDER,
+        UiRole::ComboBox => PonkoUiRole::PONKO_UI_ROLE_COMBO_BOX,
+        UiRole::TabList => PonkoUiRole::PONKO_UI_ROLE_TAB_LIST,
+        UiRole::Tab => PonkoUiRole::PONKO_UI_ROLE_TAB,
+        UiRole::TabPanel => PonkoUiRole::PONKO_UI_ROLE_TAB_PANEL,
+        UiRole::RadioGroup => PonkoUiRole::PONKO_UI_ROLE_RADIO_GROUP,
+        UiRole::RadioButton => PonkoUiRole::PONKO_UI_ROLE_RADIO_BUTTON,
+        UiRole::ProgressBar => PonkoUiRole::PONKO_UI_ROLE_PROGRESS_BAR,
+        UiRole::Spinner => PonkoUiRole::PONKO_UI_ROLE_SPINNER,
+        UiRole::SpinButton => PonkoUiRole::PONKO_UI_ROLE_SPIN_BUTTON,
+        UiRole::List => PonkoUiRole::PONKO_UI_ROLE_LIST,
+        UiRole::ListItem => PonkoUiRole::PONKO_UI_ROLE_LIST_ITEM,
+        UiRole::Grid => PonkoUiRole::PONKO_UI_ROLE_GRID,
+        UiRole::GridCell => PonkoUiRole::PONKO_UI_ROLE_GRID_CELL,
+        UiRole::Menu => PonkoUiRole::PONKO_UI_ROLE_MENU,
+        UiRole::MenuItem => PonkoUiRole::PONKO_UI_ROLE_MENU_ITEM,
+        UiRole::Splitter => PonkoUiRole::PONKO_UI_ROLE_SPLITTER,
         // A role added in Rust before it has a constant here: the generic
         // container is the closest safe description.
         _ => PonkoUiRole::PONKO_UI_ROLE_GROUP,
@@ -228,6 +279,7 @@ fn node_to_c(n: &UiAccessNode) -> PonkoUiAccessNode {
             f32::from(u8::from(*on)),
         ),
         UiAccessValue::Range(v) => (PonkoUiAccessValueKind::PONKO_UI_ACCESS_VALUE_RANGE, *v),
+        UiAccessValue::Number { value, .. } => (PonkoUiAccessValueKind::PONKO_UI_ACCESS_VALUE_NUMBER, *value as f32),
         // A kind of value added in Rust before it has a constant here.
         _ => (PonkoUiAccessValueKind::PONKO_UI_ACCESS_VALUE_NONE, 0.0),
     };
@@ -814,5 +866,120 @@ pub unsafe extern "C" fn ponko_ui_access_removed(
             .get(index)
             .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "no removed node at that index"))?;
         out(out_id, id.bits())
+    })
+}
+
+// ---- choices, open state and place in a set -------------------------------
+
+/// The version of `PonkoUiAccessStateEx` this header describes.
+pub const PONKO_UI_ACCESS_STATE_EX_VERSION: u32 = 1;
+
+/// Whether a node's open state is known (`PonkoUiAccessStateEx::expanded`).
+/// ```
+/// assert_eq!(ponko_ffi::PonkoUiExpanded::PONKO_UI_EXPANDED_OPEN as u32, 2);
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum PonkoUiExpanded {
+    /// It doesn't open (most nodes).
+    #[default]
+    PONKO_UI_EXPANDED_NONE,
+    /// A dropdown that is closed.
+    PONKO_UI_EXPANDED_CLOSED,
+    /// A dropdown showing its options.
+    PONKO_UI_EXPANDED_OPEN,
+}
+
+/// What `PonkoUiAccessNode` (whose layout is fixed) leaves out of an
+/// exposed node, in a layout that can grow: whether it is the chosen one
+/// of its set, whether it is open, where it is in its set and a number
+/// field's range. Set `struct_size` and `version` before the call.
+///
+/// Version 1: `selected`, `expanded`, `position`, `set_size`, `min`,
+/// `max`, `step`.
+/// ```
+/// use ponko_ffi::*;
+/// let mut s: PonkoUiAccessStateEx = unsafe { std::mem::zeroed() };
+/// (s.struct_size, s.version) = (size_of::<PonkoUiAccessStateEx>() as u32, PONKO_UI_ACCESS_STATE_EX_VERSION);
+/// assert_eq!(unsafe { ponko_ui_access_state_ex(std::ptr::null_mut(), 0, &mut s) } as u32, 1);
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PonkoUiAccessStateEx {
+    /// `sizeof(PonkoUiAccessStateEx)` as the caller compiled it.
+    pub struct_size: u32,
+    /// `PONKO_UI_ACCESS_STATE_EX_VERSION` as the caller compiled it.
+    pub version: u32,
+    /// The chosen item of a list, dropdown or menu, or the shown tab.
+    pub selected: bool,
+    /// A dropdown's open state.
+    pub expanded: PonkoUiExpanded,
+    /// Its place in its set, from 1 (list items, tabs, radio buttons,
+    /// options); 0 when it has none.
+    pub position: u32,
+    /// How many items its set has; 0 when it has none.
+    pub set_size: u32,
+    /// A number field's smallest value; 0 for other nodes.
+    pub min: f64,
+    /// A number field's largest value.
+    pub max: f64,
+    /// A number field's step.
+    pub step: f64,
+}
+const _: () = assert!(
+    std::mem::offset_of!(PonkoUiAccessStateEx, struct_size) == 0
+        && std::mem::offset_of!(PonkoUiAccessStateEx, version) == 4
+);
+
+impl crate::descriptors::Versioned for PonkoUiAccessStateEx {
+    const NAME: &'static str = "PonkoUiAccessStateEx";
+    const VERSION: u32 = PONKO_UI_ACCESS_STATE_EX_VERSION;
+    fn len_of(version: u32) -> Option<usize> {
+        match version {
+            1 => Some(std::mem::offset_of!(Self, step) + std::mem::size_of::<f64>()),
+            _ => None,
+        }
+    }
+}
+
+/// Writes the choice, open state, place in its set and number range of the
+/// exposed node `id` into the fields of `out_state`'s version.
+/// # Safety
+/// `access` null or live; `out_state` null or a writable descriptor with
+/// its header set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ui_access_state_ex(
+    access: *mut PonkoUiAccess,
+    id: u64,
+    out_state: *mut PonkoUiAccessStateEx,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        if out_state.is_null() {
+            return Err(invalid("output is null"));
+        }
+        let node = exposed(handle(access)?, id)?;
+        let (min, max, step) = match node.value {
+            UiAccessValue::Number { min, max, step, .. } => (min, max, step),
+            _ => (0.0, 0.0, 0.0),
+        };
+        let (position, set_size) = node.position.map_or((0, 0), |(at, of)| (at as u32, of as u32));
+        let state = PonkoUiAccessStateEx {
+            struct_size: std::mem::size_of::<PonkoUiAccessStateEx>() as u32,
+            version: PONKO_UI_ACCESS_STATE_EX_VERSION,
+            selected: node.selected,
+            expanded: match node.expanded {
+                None => PonkoUiExpanded::PONKO_UI_EXPANDED_NONE,
+                Some(false) => PonkoUiExpanded::PONKO_UI_EXPANDED_CLOSED,
+                Some(true) => PonkoUiExpanded::PONKO_UI_EXPANDED_OPEN,
+            },
+            position,
+            set_size,
+            min,
+            max,
+            step,
+        };
+        crate::descriptors::write_desc(out_state, &state)
     })
 }

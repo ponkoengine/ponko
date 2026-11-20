@@ -398,6 +398,10 @@ impl AssetSource for PackSource {
         self.entry(name).is_some()
     }
 
+    fn size(&self, name: &str) -> Option<u64> {
+        self.entry(name).map(|e| e.size)
+    }
+
     fn read(&self, name: &str) -> std::io::Result<Vec<u8>> {
         let Some(entry) = self.entry(name) else {
             return Err(std::io::Error::new(

@@ -1,14 +1,19 @@
 //! Debug drawing without a window (`debug/...`): 100,000 lines drawn with
 //! `ctx.debug` every frame, then handed over as a drawn frame does. The
 //! time is the CPU side of one frame: the drawing calls, and turning them
-//! into the GPU's line list (3D) or ordered, batched sprites (2D). The GPU
-//! side is measured by the offscreen test
+//! into the GPU's line list (3D) or ordered, batched sprites (2D). Each case
+//! prints its heap allocations per frame, which must be 0 once the buffers
+//! have grown (`tests/debug_draw_alloc.rs` asserts it). The GPU side is
+//! measured with GPU timestamps by the offscreen test
 //! `debug_lines_render_test::hundred_thousand_lines_gpu_time` (ignored by
 //! default).
 //!
 //! - `debug/100k-lines-3d`: 100,000 3D lines, half of them on top.
 //! - `debug/100k-lines-2d`: 100,000 2D lines in the world (sprites).
 //! - `debug/100k-lines-off`: the same 100,000 calls with debug drawing off.
+//! - `debug/shapes-and-labels`: 2,000 spheres, boxes and capsules in 3D,
+//!   2,000 circles in 2D, and 500 labels of each kind (2D, 3D on top, 3D
+//!   depth-tested).
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
@@ -43,16 +48,35 @@ fn lines_2d(d: &mut DebugDraw) {
     }
 }
 
-/// A case: its name, whether drawing is on, and what a frame draws.
-type Case = (&'static str, bool, fn(&mut DebugDraw));
+fn shapes_and_labels(d: &mut DebugDraw) {
+    for i in 0..500 {
+        let at = vec3((i % 25) as f32, 0.0, (i / 25) as f32);
+        d.sphere(at, 0.4, Color::GREEN);
+        d.aabb(at, Vec3::splat(0.5), Color::RED);
+        d.obb(at, Vec3::splat(0.6), Quat::from_rotation_y(0.4), Color::BLUE);
+        d.capsule(at, at + Vec3::Y, 0.2, Color::YELLOW).on_top();
+        let flat = vec2(at.x * 30.0, at.z * 30.0);
+        for k in 0..4 {
+            d.circle(flat + vec2(k as f32 * 5.0, 0.0), 10.0, Color::WHITE);
+        }
+        d.text(flat, "2D", Color::WHITE);
+        d.text(at, "on top", Color::WHITE);
+        d.text(at + Vec3::Y, "depth-tested", Color::WHITE).depth_tested();
+    }
+}
+
+/// A case: its name, whether drawing is on, what a frame draws, and
+/// whether it is the 100,000 lines.
+type Case = (&'static str, bool, fn(&mut DebugDraw), bool);
 
 pub fn run(b: &mut Bench) {
-    let cases: [Case; 3] = [
-        ("debug/100k-lines-3d", true, lines_3d),
-        ("debug/100k-lines-2d", true, lines_2d),
-        ("debug/100k-lines-off", false, lines_3d),
+    let cases: [Case; 4] = [
+        ("debug/100k-lines-3d", true, lines_3d, true),
+        ("debug/100k-lines-2d", true, lines_2d, true),
+        ("debug/100k-lines-off", false, lines_3d, true),
+        ("debug/shapes-and-labels", true, shapes_and_labels, false),
     ];
-    for (name, on, draw) in cases {
+    for (name, on, draw, all_lines) in cases {
         if b.skips(name) {
             continue;
         }
@@ -79,12 +103,18 @@ pub fn run(b: &mut Bench) {
                 ctx.world.insert_resource(Times(times, allocs, last));
             });
         let Times(mut times, allocs, (lines, sprites, batches)) = world.remove_resource::<Times>().expect("the times");
-        if on {
-            assert_eq!(lines + sprites, LINES, "{name}: every line handed over");
-        } else {
-            assert_eq!(lines + sprites, 0, "{name}: nothing while off");
+        if all_lines {
+            if on {
+                assert_eq!(lines + sprites, LINES, "{name}: every line handed over");
+            } else {
+                assert_eq!(lines + sprites, 0, "{name}: nothing while off");
+            }
         }
-        eprintln!("{name}: {lines} 3D lines, {sprites} sprites in {batches} batches");
+        eprintln!(
+            "{name}: {lines} 3D lines, {sprites} sprites in {batches} batches; {:.2} allocations ({:.0} bytes) per frame",
+            allocs.count as f64 / FRAMES as f64,
+            allocs.bytes as f64 / FRAMES as f64
+        );
         let mut record = report::Record::new(name, report::Kind::Steady, WARMUP, &mut times);
         record.set_allocs(allocs, FRAMES);
         b.report(record);

@@ -1,0 +1,17 @@
+{
+  "name": "ui_widgets_choices_dark",
+  "scene": "UiTheme::dark(), 256x160, a column with 10 unit padding: three radio buttons Off, Low, High with Low checked; a checked \"Music\" checkbox and a spinner; a progress bar 60 % filled in the accent; equal split panes \"Left\" and \"Right\" with the divider's grip between. Circles, box and text centred on their rows; UI scale 1, drawn with the window's sprite pipeline into an sRGB target",
+  "width": 256,
+  "height": 160,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 24,
+    "outliers": 0.004,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "a8f87d24722f0271",
+  "reason": "Widget references drawn at UI scale 1 on smaller sheets, control text centred and checked for contrast"
+}

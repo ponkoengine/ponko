@@ -339,7 +339,9 @@ So:
   is not shared: the mixed simulation gains 1.5×, not 4×.
 - **Memory-bound systems gain less** than compute-bound ones (2.8× against
   7.5× with eight systems).
-- **On the web** there are no threads to use: batches run in order.
+- **On the web** an ordinary build has no threads to use: batches run in
+  order. A build with threads runs them on Web Workers where the page
+  allows it ([Threads on the web](web-threads.md)).
 
 It pays off for simulations with several independent, heavy systems per
 tick (thousands of entities each, or expensive per-entity work), written
@@ -361,6 +363,19 @@ Record names reuse their string buffers where possible. New records, longer name
 or changed owner kinds may allocate; removing records drops their strings. Do
 not clear the vector yourself before refreshing. Mesh costs are largest triangle
 total first, streamed assets are kind/name ordered, handles are oldest first.
-Native material and handle listings already accept caller-owned arrays, but may
-allocate internally; mesh-cost and streamed-asset inspection, and the borrowed
-iterators, have no native binding yet (a gap for the maintainers to close).
+Use `Graphics::visit_asset_handles` or `Audio::visit_asset_handles` to
+read borrowed records without allocating when handle order does not matter.
+Native games can fill caller-owned arrays with `ponko_ctx_asset_handles`,
+`ponko_ctx_streamed_assets` and `ponko_ctx_mesh_costs`. The C++ methods are
+`ctx.asset_handles_into`, `ctx.streamed_assets_into` and `ctx.mesh_costs_into`.
+Each writes the prefix that fits and reports the total count. Pass zero record
+capacity to query that count. Handle and streamed-asset listings allocate
+nothing on successful calls. Mesh costs reuse per-thread aggregation storage
+that can grow when records or names are added.
+
+The streamed-asset and mesh-cost listings put names in a separate caller-owned
+byte buffer. Pass zero name capacity with a record array to get the required
+bytes for that prefix, including the NUL terminators. Each record's
+`name_offset` and `name_len` locate its UTF-8 name. Read it only when that
+range and its terminator fit the name buffer. In mesh costs, zero name length
+means the mesh is unnamed. A headless run reports no mesh costs.

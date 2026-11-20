@@ -1901,3 +1901,75 @@ fn the_content_notice_uses_the_license_files_copyright_holder() {
         );
     }
 }
+
+// ANCHOR: touch_test
+/// The whole loop by touch alone, as on a phone: a tap starts, the
+/// on-screen stick chases the coins, the corner button pauses and resumes,
+/// and a tap plays again. Frames run too, so the controls show, follow the
+/// window and press their actions as they do in the browser.
+#[test]
+fn a_round_can_be_played_by_touch_alone() {
+    let dir = temp_dir("touch");
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let middle = vec2(400.0, 300.0);
+    let world = Game::new("coin dash touch", 800, 600)
+        .seed(SEED)
+        .data_dir(&dir)
+        .headless_frames(true)
+        // The player's fingers, before the game reads its input.
+        .add(Phase::Input, move |ctx: &mut Ctx| {
+            let tick = ctx.time.sim_tick();
+            let on = screen(&ctx.world);
+            let stick = ctx.input.touch_control_center("move").expect("a stick");
+            let pause = ctx.input.touch_control_center("pause").expect("a pause button");
+            let tap = |ctx: &mut Ctx, id: u64, at: Vec2| {
+                ctx.input.feed(InputEvent::touch_start(id, at));
+                ctx.input.feed(InputEvent::touch_end(id, at));
+            };
+            match tick {
+                5 => tap(ctx, 10, middle), // the title: start
+                30 => tap(ctx, 11, pause), // pause, the stick finger still down
+                60 => tap(ctx, 12, pause), // resume
+                _ => {}
+            }
+            // One finger on the stick while a round runs, pushed to the
+            // nearest coin; lifted otherwise.
+            let held = ctx.input.touches().iter().any(|t| t.id() == 1);
+            if on == Screen::Playing && tick > 8 {
+                let (player, coins) = player_and_coins(ctx);
+                let nearest = coins
+                    .into_iter()
+                    .min_by(|a, b| a.distance(player).total_cmp(&b.distance(player)));
+                let push = nearest.map_or(Vec2::ZERO, |c| (c - player).normalize_or_zero()) * 200.0;
+                if held {
+                    ctx.input.feed(InputEvent::touch_move(1, stick + push));
+                } else {
+                    ctx.input.feed(InputEvent::touch_start(1, stick));
+                }
+            } else if held && on != Screen::Paused {
+                ctx.input.feed(InputEvent::touch_end(1, stick));
+            }
+            if matches!(on, Screen::Result(_)) && !log.borrow().iter().any(|&(_, s)| matches!(s, Screen::Result(_))) {
+                tap(ctx, 13, middle); // play again
+            }
+            log.borrow_mut().push((tick, on));
+        })
+        .plugin(CoinDash)
+        .run_headless(1600, |_| {});
+    let seen = seen.borrow();
+    let at = |tick: u64| seen.iter().find(|(t, _)| *t == tick).unwrap().1;
+    assert_eq!(at(4), Screen::Title);
+    assert_eq!(at(10), Screen::Playing, "a tap started round 1");
+    assert_eq!(at(40), Screen::Paused, "the corner button paused");
+    assert_eq!(at(70), Screen::Playing, "and resumed");
+    let won = seen
+        .iter()
+        .position(|&(_, s)| s == Screen::Result(Outcome::Won))
+        .expect("the stick chased down every coin");
+    assert_eq!(seen[won + 3].1, Screen::Playing, "a tap played again");
+    assert_eq!(world.resource::<Round>().number, 2);
+    assert!(world.resource::<Progress>().rounds_won >= 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+// ANCHOR_END: touch_test

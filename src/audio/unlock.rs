@@ -86,6 +86,11 @@ impl Gate {
         self.waiting.len() != before
     }
 
+    /// Whether voice `id` waits for the gesture.
+    pub fn is_waiting(&self, id: u64) -> bool {
+        self.waiting.iter().any(|voice| voice.id == id)
+    }
+
     /// New effects for a waiting voice. Returns whether it was waiting.
     pub fn set_effects(&mut self, id: u64, effects: AudioEffects) -> bool {
         self.find(id).map(|voice| voice.effects = effects).is_some()

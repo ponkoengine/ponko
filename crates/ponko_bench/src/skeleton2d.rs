@@ -11,6 +11,10 @@
 //! - `1k`: skeletons advance on all cores.
 //! - `1k-z`: the same, with every other skeleton one layer up, so the
 //!   frame's vertices are sorted by draw order.
+//! - `update-1k`, `update-10k`: only advancing and posing (clips, blend,
+//!   IK) 1,000 or 10,000 skeletons.
+//! - `draw-1k`, `draw-10k`: only building their vertices into the draw
+//!   list (skinning the meshes, placing the parts), after one update.
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,6 +30,7 @@ use ponko::skeleton2d::{
 use crate::{Bench, report};
 
 const SKELETONS: usize = 1_000;
+const MANY: usize = 10_000;
 const WARMUP: usize = 30;
 const FRAMES: usize = 200;
 const DT: f32 = 1.0 / 60.0;
@@ -127,23 +132,81 @@ fn rig(texture: Texture) -> Arc<SkeletonData> {
     Arc::new(data)
 }
 
+/// Spawns `count` skeletons in a grid, each at its own point of the clip.
+fn spawn(ctx: &mut Ctx, count: usize, layered: bool) {
+    let texture = ctx.gfx.create_texture(1, 1, &[255; 4]);
+    let data = rig(texture);
+    for i in 0..count {
+        let mut s = Skeleton::new(data.clone());
+        let speed = s.parameter_id("speed").expect("the parameter");
+        s.set_float(speed, (i % 10) as f32 / 9.0);
+        s.set_normalized_time(i as f32 / count as f32);
+        s.z = if layered { (i % 2) as f32 } else { 0.0 };
+        let at = vec2((i % 40) as f32 * 32.0, (i / 40) as f32 * 28.0 + 60.0);
+        ctx.world.spawn((Transform::at(at), s));
+    }
+}
+
+/// Times the update alone and the vertex building alone, separately.
+fn run_split(b: &mut Bench) {
+    for (count, label) in [(SKELETONS, "1k"), (MANY, "10k")] {
+        let update = format!("skeleton2d/update-{label}");
+        let draw = format!("skeleton2d/draw-{label}");
+        let (want_update, want_draw) = (!b.skips(&update), !b.skips(&draw));
+        if !want_update && !want_draw {
+            continue;
+        }
+        // Fewer frames for 10k: the same total work, a trustworthy median.
+        let frames = if count == MANY { FRAMES / 2 } else { FRAMES };
+        let mut world = Game::new("skeleton bench", 1280, 720).run_headless(0, move |ctx| {
+            spawn(ctx, count, false);
+            let (mut updates, mut draws) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
+            let mut drawn = 0;
+            for frame in 0..WARMUP + frames {
+                let start = Instant::now();
+                ctx.bench_skeleton2d_update(DT);
+                let updated = start.elapsed();
+                let start = Instant::now();
+                ctx.bench_skeleton2d_draw();
+                let built = start.elapsed();
+                let counts = ctx.bench_skeleton2d_finish();
+                black_box(counts);
+                ctx.world
+                    .query::<&mut Skeleton>()
+                    .for_each(|s| s.drain_events().for_each(drop));
+                if frame >= WARMUP {
+                    updates.push(updated);
+                    draws.push(built);
+                    drawn = counts.0;
+                }
+            }
+            ctx.world.insert_resource(Times(updates, drawn, 0));
+            ctx.world.insert_resource(DrawTimes(draws));
+        });
+        let Times(mut updates, drawn, _) = world.remove_resource::<Times>().expect("the times");
+        let DrawTimes(mut draws) = world.remove_resource::<DrawTimes>().expect("the times");
+        assert_eq!(drawn, count * (15 * 6 + 2 * 24 * 3), "every part drawn");
+        if want_update {
+            b.report(report::Record::new(&update, report::Kind::Steady, WARMUP, &mut updates));
+        }
+        if want_draw {
+            eprintln!("{draw}: {drawn} vertices");
+            b.report(report::Record::new(&draw, report::Kind::Steady, WARMUP, &mut draws));
+        }
+    }
+}
+
+/// The vertex-building times of [`run_split`].
+struct DrawTimes(Vec<Duration>);
+
 pub fn run(b: &mut Bench) {
+    run_split(b);
     for (name, layered) in [("skeleton2d/1k", false), ("skeleton2d/1k-z", true)] {
         if b.skips(name) {
             continue;
         }
         let mut world = Game::new("skeleton bench", 1280, 720).run_headless(0, move |ctx| {
-            let texture = ctx.gfx.create_texture(1, 1, &[255; 4]);
-            let data = rig(texture);
-            for i in 0..SKELETONS {
-                let mut s = Skeleton::new(data.clone());
-                let speed = s.parameter_id("speed").expect("the parameter");
-                s.set_float(speed, (i % 10) as f32 / 9.0);
-                s.set_normalized_time(i as f32 / SKELETONS as f32);
-                s.z = if layered { (i % 2) as f32 } else { 0.0 };
-                let at = vec2((i % 40) as f32 * 32.0, (i / 40) as f32 * 28.0 + 60.0);
-                ctx.world.spawn((Transform::at(at), s));
-            }
+            spawn(ctx, SKELETONS, layered);
             let mut times = Vec::with_capacity(FRAMES);
             let (mut drawn, mut batches) = (0, 0);
             for frame in 0..WARMUP + FRAMES {

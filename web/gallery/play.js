@@ -63,7 +63,7 @@ async function start() {
   window.addEventListener("error", (e) => {
     show("error", `The demo stopped: ${e.message} (see the browser console)`);
   });
-  const { default: init } = await import(new URL("game.js", location.href));
+  const { default: init, onPonkoStartup } = await import(new URL("game.js", location.href));
   try {
     await init();
   } catch (e) {
@@ -73,11 +73,17 @@ async function start() {
       throw e;
     }
   }
-  if (root.dataset.gallery === "loading") {
-    root.dataset.gallery = "running";
-    status.hidden = true;
+  function started(error) {
+    if (error) {
+      show("error", `Could not start the demo: ${error.message}`);
+    } else if (root.dataset.gallery === "loading") {
+      root.dataset.gallery = "running";
+      status.hidden = true;
+      canvas.focus();
+    }
   }
-  canvas.focus();
+  if (onPonkoStartup) onPonkoStartup(started);
+  else started(null);
 }
 
 start().catch((e) => {

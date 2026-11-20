@@ -44,7 +44,7 @@ runner needs to know about each one, so `--fixture <name>` is all a run takes:
 
 | Fixture | Example | Features | Checks |
 |---|---|---|---|
-| `web_smoke` | `examples/web_smoke.rs` | none | `crab.png` fetched and decoded 32x32; an image and streamed music loaded from an in-memory asset source; the music, started at setup, heard after the first click; sprites drawn |
+| `web_smoke` | `examples/web_smoke.rs` | none | `crab.png` fetched and decoded 32x32; an image and streamed music loaded from an in-memory asset source; an asset group of the fetched image and a file from the source, ready (`group_ready` at least 1); the music, started at setup, heard after the first click; sprites drawn |
 | `web_smoke_3d` | `examples/web_smoke_3d.rs` | `3d` | `models/house.glb` fetched and parsed; a sun with shadows; at least 1 model and 100 triangles drawn |
 | `coin_dash` | `examples/coin_dash` | none | the complete game: its picture, keys and the screens they reach (see [A complete game, packaged](../../book/src/packaging.md#the-web-build)); after a reload, the settings it saved come back from the browser's storage |
 | `lights2d` | `examples/lights2d.rs` | none | `crab.png` fetched and decoded 32x32; 2D lights with stencil shadows and normal maps drawing on the page's backend (WebGL2 in CI); at least 7 lights
@@ -55,6 +55,21 @@ or none, `assetSource` or none, `presses`, `min`, `afterReload`, `engineGpu`,
 `music`), and name it in the CI job. Every
 fixture needs `?smoke_case=panic` and `?smoke_case=stall` handled if it is to
 run the self-tests; the helper does that.
+
+## Startup failures
+
+Build `web/build.sh web_smoke` once, then run these cases on the same build:
+
+```sh
+for case in missing-asset no-graphics context-lost; do
+  node web/smoke/smoke.mjs --fixture web_smoke --backend webgl2 --case "$case"
+done
+```
+
+The runner returns HTTP 404 for the required texture, blocks both graphics
+backends, or loses the real WebGL2 context before setup, respectively. Each
+case checks the error from the generated callback and the visible text in
+the template. The runner records both in `report.json`.
 
 ## Multiplayer
 
@@ -93,6 +108,46 @@ keep drawing, survive a click and show a canvas that isn't blank, or, for a
 demo that needs WebGPU on a page without it, say so instead of starting. The
 gallery's README has how to run it; `gallery-lib.test.mjs` tests its
 decisions.
+
+## Threads
+
+`threads.mjs` checks a web build with threads (the guide's "Threads on the
+web"): the fixture `examples/web_threads.rs`, built with
+`web/build.sh --threads web_threads` (`--build` builds it first). It serves
+the build twice and opens each in a new browser context:
+
+- **With** the cross-origin isolation headers
+  (`Cross-Origin-Opener-Policy: same-origin`,
+  `Cross-Origin-Embedder-Policy: require-corp`):
+  - the engine must start two or more workers;
+  - a parallel query, a batch of four view systems (threshold zero), two
+    jobs and an asset group (a texture and a `with` file from `assets/`)
+    must each run on two or more of them, and never on the page's thread.
+- **Without** the headers: everything runs on the page's thread, and the
+  console says why (`it runs on the page's thread alone`).
+
+Both runs must reach the same checksum at tick 120 and read the same file.
+Two more modes:
+- `--case worker-panic` panics inside the parallel query on a worker. The
+  console must say `the game stops`, the page must still answer, and the
+  ticks must stop.
+- `--bench` times the fixture's workloads (`par`, `sweep`, `interleaved`,
+  `jobs`: those of `crates/ponko_bench`) with `?threads=1` and with the
+  default, three page loads each (`--repeat`). It prints the medians, their
+  spread, and each speed-up, saying whether it is beyond the noise.
+  `--dir <an ordinary build> --threads 1` times a build without threads.
+
+```sh
+node web/smoke/threads.mjs --build
+node web/smoke/threads.mjs --case worker-panic
+node web/smoke/threads.mjs --bench --workloads par,sweep --repeat 3
+```
+
+Exit codes and `report.json` (in `--out`, default
+`target/web-smoke/threads`) are as for `smoke.mjs`. `threads.test.mjs`
+tests its checks and its summary without a browser. Checked so far in
+Chromium 156 (headless shell) on an Apple Silicon Mac; Firefox and WebKit
+are not tried yet.
 
 ## Running it
 
@@ -216,6 +271,7 @@ table (and appends it to a GitHub job summary).
 | Apple Silicon Mac, Chromium headless shell | same | Passes (ANGLE on SwiftShader) | Unsupported: a SwiftShader fallback adapter exists, but a WebGPU canvas can't be shown |
 | Apple Silicon Mac, `multiplayer.mjs` | Chromium 156 headless shell | Passes: two tabs, a native host and a native UDP client agree on the world at tick 300 | Not tried (WebGPU is hidden) |
 | Apple Silicon Mac, WebKit (Playwright build) | WebKit 27 | Passes | Passes on its own adapter |
+| Apple Silicon Mac, `threads.mjs` | Chromium 156 headless shell | Passes on whichever backend the page picks (the check is about threads, not drawing): workers on the isolated page, one thread without the headers, the same world; a worker's panic stops the game | Not tried on its own |
 
 Not covered yet: Firefox on a Mac with its Playwright build here (it would
 not start on the development machine, and on CI's Linux runner it has no

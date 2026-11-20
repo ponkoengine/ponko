@@ -29,9 +29,10 @@ pub(crate) const MAX_SHADOW_VIEWS: usize = MAX_CASCADES + super::lights::MAX_LIG
 /// tint in linear color.
 ///
 /// The model matrix is affine, so its fourth row is always (0, 0, 0, 1):
-/// its first slot holds the decal layers the model takes, and its second
-/// the instance's crossfade (see [`Instance3D::with_fade`]), which costs no
-/// more instance data.
+/// its first slot holds the decal layers the model takes, its second
+/// the instance's crossfade (see [`Instance3D::with_fade`]) and its third
+/// the model's [`Lightmapped`](super::Lightmapped) entry plus one (0: none),
+/// which costs no more instance data.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Instance3D {
@@ -175,6 +176,10 @@ pub(crate) struct Frame3D {
     /// frame of its own camera, kept between frames as this one is (only
     /// the main frame has these).
     pub window_views: Vec<Frame3D>,
+    /// What the view-model camera draws (`SceneSettings::view_model`):
+    /// the held items, without shadow casters. `None` without a view model
+    /// (only the main frame has this).
+    pub view_model: Option<Box<Frame3D>>,
     /// The light the sky gave last, and what it was worked out from.
     pub sky_light: Option<(Lighting, super::Sky, super::SkyLight)>,
     /// This frame's skinned models (only the main frame has these; target
@@ -235,8 +240,8 @@ impl MaterialOverride {
     /// The material `part` is drawn with: its entry in `parts` (this
     /// override's slice of the per-part list, sorted by part), else the
     /// whole-mesh `material`, else its `own`. An id that isn't one of the
-    /// `materials` made falls through the same way.
-    pub fn resolve(material: u32, parts: &[(u32, u32)], part: usize, own: u32, materials: u32) -> u32 {
+    /// game made falls through the same way.
+    pub fn resolve(material: u32, parts: &[(u32, u32)], part: usize, own: u32, was_made: impl Fn(u32) -> bool) -> u32 {
         let listed = parts
             .binary_search_by_key(&(part as u32), |&(p, _)| p)
             .ok()
@@ -244,7 +249,7 @@ impl MaterialOverride {
         [listed, Some(material)]
             .into_iter()
             .flatten()
-            .find(|&m| m < materials)
+            .find(|&m| was_made(m))
             .unwrap_or(own)
     }
 }
@@ -427,7 +432,7 @@ impl Frame3D {
         );
         self.decals.records.clear();
         self.decals.lists.clear();
-        self.decal_array = assets.decal_array.map(|a| a.id);
+        self.decal_array = assets.decal_array.map(|a| a.id & crate::handle::INDEX_MASK);
         if assets.decals_supported {
             self.decals.collect(
                 world,
@@ -1634,7 +1639,7 @@ mod tests {
     #[test]
     fn a_part_resolves_to_its_listed_material_then_the_whole_mesh_one_then_its_own() {
         let parts = [(1, 5), (3, 99)];
-        let r = |material, part| MaterialOverride::resolve(material, &parts, part, 2, 10);
+        let r = |material, part| MaterialOverride::resolve(material, &parts, part, 2, |id| id < 10);
         assert_eq!(r(u32::MAX, 0), 2); // not listed, no whole-mesh material
         assert_eq!(r(7, 0), 7); // the whole-mesh material
         assert_eq!(r(7, 1), 5); // listed

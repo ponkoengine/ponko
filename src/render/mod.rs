@@ -13,6 +13,8 @@ pub(crate) mod batch;
 pub(crate) mod blocks;
 pub(crate) mod capabilities;
 #[cfg(all(feature = "window", feature = "3d"))]
+mod clouds;
+#[cfg(all(feature = "window", feature = "3d"))]
 mod debug_lines;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod gi;
@@ -47,6 +49,8 @@ mod pipeline_stats;
 mod screen;
 #[cfg(feature = "window")]
 mod shader_diagnostics;
+#[cfg(feature = "window")]
+mod shader_rules;
 mod shader_status;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod smaa;
@@ -392,6 +396,8 @@ pub(crate) struct Screenshot {
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod atlas_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod baked_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod buffer_render_test;
 #[cfg(all(test, feature = "window", feature = "3d", feature = "compressed-textures"))]
 mod compressed_bench;
@@ -401,6 +407,10 @@ mod compressed_render_test;
 mod contact_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod coverage_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod crowd_bench;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod crowd_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod debug_lines_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -417,6 +427,8 @@ mod gi_render_test;
 mod gpu_memory_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod handle_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod legions_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod light_shadow_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -435,6 +447,8 @@ mod mesh_shader_proto;
 mod mesh_shader_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod model_material_render_test;
+#[cfg(all(test, feature = "window", feature = "3d", feature = "compressed-textures"))]
+mod model_textures_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod occlusion_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -445,17 +459,25 @@ mod regression_sequence_render_test;
 mod regression_stage;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod reverse_z_render_test;
+#[cfg(all(test, feature = "window", feature = "3d", feature = "video"))]
+mod video_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod view_model_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod views2d_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod views_render_test;
 
+#[cfg(all(test, feature = "window", feature = "3d", feature = "editor"))]
+mod editor_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod gltf_extensions_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod instance_cells_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod instance_cells_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod prompt_row_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 pub(crate) mod render_test_support;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -487,17 +509,27 @@ mod text3d_render_test;
 #[cfg(all(test, feature = "window", feature = "3d", feature = "text-shaping"))]
 mod text_shaping_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod touch_controls_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod transparency_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod transparency_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod ui_animation_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod ui_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod ui_widgets_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod upload_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod upload_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod variant_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod water_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod write_batch_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod ao_aa_render_test;
@@ -506,6 +538,8 @@ mod taa_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod environment_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod sky_kit_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod decal_render_test;
@@ -535,14 +569,22 @@ mod ray_tracing_probe_render_test;
 
 #[cfg(feature = "3d")]
 pub use crate::three::{
-    AmbientOcclusion, AntiAliasing, BatchCulling, Blend, Compute, ComputePass, DepthOfField, Effect,
-    GlobalIllumination, GpuBuffer, GraphicsQuality, InstanceBatch, InstanceBatchOptions, InstanceLevel, Lighting,
-    LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow, Material, MaterialDesc, Mesh,
-    MeshCost, MeshData, Model, ModelCamera, ModelLight, ModelLightKind, ModelMaterial, ModelMaterials, ModelProjection,
-    Post, PostVolume, ReceivesDecals, RenderPasses, SceneSettings, ScreenEffect, Shader, ShadowFilter, ShadowMesh,
-    ShadowOnly, Sky, SkyShader, SplitToning, Stencil, StencilCompare, StencilFace, StencilOp, StreamedLod,
+    AmbientOcclusion, AntiAliasing, BatchCulling, Blend, Compute, ComputePass, Crowd, CrowdAnimation, CrowdClip,
+    CrowdInstance, CrowdLevel, CrowdOptions, DepthOfField, Effect, GlobalIllumination, GpuBuffer, GraphicsQuality,
+    InstanceBatch, InstanceBatchOptions, InstanceLevel, Lighting, LodGroup, LodHysteresis, LodLevel, LodPick,
+    LodRenderer, LodSettings, LodShadow, MAX_CROWD_INSTANCES, MAX_CROWD_LEVELS, Material, MaterialDesc, Mesh, MeshCost,
+    MeshData, Model, ModelCamera, ModelLight, ModelLightKind, ModelMaterial, ModelMaterials, ModelProjection, Post,
+    PostVolume, ReceivesDecals, RenderPasses, RenderTarget, SceneSettings, ScreenEffect, Shader, ShadowFilter,
+    ShadowMesh, ShadowOnly, Sky, SkyShader, SplitToning, Stencil, StencilCompare, StencilFace, StencilOp, StreamedLod,
     TargetCamera, TargetEffect, Tonemap,
 };
+#[cfg(feature = "3d")]
+pub use crate::three::{
+    BakeModel, BakeStats, BakedLighting, LightBakeScene, LightBakeSettings, LightmapRect, Lightmapped,
+    MAX_LIGHTMAP_PAGES, bake_lighting,
+};
+#[cfg(feature = "3d")]
+pub use crate::three::{CloudQuality, Clouds, DayNight, Moon, SkyKit};
 /// Unstable extraction benchmark driver for `ponko_bench` (feature `bench-internals`).
 #[doc(hidden)]
 #[cfg(all(feature = "3d", any(test, feature = "bench-internals")))]

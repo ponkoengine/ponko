@@ -208,6 +208,16 @@ pub(super) fn gpu_adjusted(
     Some(TestGpu { info, device, queue })
 }
 
+/// Game context with the production renderer drawing to a texture, no window.
+#[cfg(feature = "3d")]
+pub(super) fn offscreen_ctx(size: (u32, u32)) -> Option<crate::ctx::Ctx> {
+    let gpu = gpu()?;
+    let mut ctx = crate::ctx::Ctx::new(1.0 / 60.0, glam::Vec2::new(size.0 as f32, size.1 as f32));
+    ctx.audio.headless = true;
+    ctx.gfx.renderer = Some(super::gpu::Renderer::offscreen(gpu, size));
+    Some(ctx)
+}
+
 /// An adapter's name, backend, type and driver, for logs and metadata.
 pub(super) fn describe_adapter(info: &wgpu::AdapterInfo) -> String {
     format!(
@@ -323,7 +333,7 @@ pub(super) fn target(device: &wgpu::Device, size: (u32, u32), format: wgpu::Text
 
 /// The first mip and layer of `texture` (made with `COPY_SRC`), row by row
 /// from the top with no padding. Waits for the GPU.
-pub(super) fn read_texture(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
+pub(crate) fn read_texture(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
     let (width, height) = (texture.width(), texture.height());
     let texel = texture
         .format()

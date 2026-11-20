@@ -7,6 +7,7 @@
 //! Layout uses logical window units; the window handles DPI and `Ui::set_scale`
 //! adds an accessibility/user scale. Nodes persist until explicitly removed.
 
+use super::anim::Xf;
 use super::build::UiLayout;
 use crate::{camera::Rect, color::Color, text::Font, texture::Texture};
 use glam::{Vec2, vec2};
@@ -126,6 +127,41 @@ pub enum UiWidget {
     /// let _ = ponko::ui::UiWidget::Slider;
     /// ```
     Slider,
+    /// A select box: shows its chosen option and opens a list of options
+    /// ([`Ui::dropdown`]).
+    Dropdown,
+    /// A tab strip with one page per tab ([`Ui::tabs`], [`Ui::tab`]).
+    Tabs,
+    /// One tab of a [`Tabs`](Self::Tabs) strip; activating it shows its page.
+    Tab,
+    /// A group of radio buttons, one of which is chosen ([`Ui::radio_group`]).
+    RadioGroup,
+    /// One option of a [`RadioGroup`](Self::RadioGroup) ([`Ui::radio`]).
+    Radio,
+    /// A bar filled to its value, 0 to 1 ([`Ui::progress_bar`]).
+    Progress,
+    /// A busy indicator that turns while shown ([`Ui::spinner`]).
+    Spinner,
+    /// A number between a minimum and a maximum, stepped with the arrows or
+    /// its `-` and `+` ends, or typed ([`Ui::number_field`]).
+    NumberField,
+    /// A scrolling list or grid of any number of items that keeps only the
+    /// rows on screen as nodes ([`Ui::list`], [`Ui::grid_view`]).
+    List,
+    /// One shown row (or cell) of a [`List`](Self::List); the list reuses it
+    /// for the items scrolled into view ([`Ui::list_item`]).
+    ListItem,
+    /// The pop-up list of a dropdown or a context menu, open as the top screen.
+    Menu,
+    /// One entry of a [`Menu`](Self::Menu).
+    MenuItem,
+    /// Two panes split by a divider the player drags ([`Ui::split`]).
+    Split,
+    /// The divider between a [`Split`](Self::Split)'s panes.
+    Splitter,
+    /// A field that shows a key, mouse button or gamepad button and records
+    /// the next one pressed after it is activated ([`Ui::key_binding`]).
+    KeyBinding,
 }
 
 /// Text alignment within a node's content box.
@@ -327,6 +363,69 @@ pub enum UiEvent {
     /// assert_eq!(ui.link(line, 0), Some("rules"));
     /// ```
     LinkClicked(UiId, u32),
+    /// An entry of a node's context menu ([`Ui::set_context_menu`]) was
+    /// chosen: the node, and which entry, counted from 0.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::ui::{Ui, UiEvent, UiInput, UiLayout};
+    /// let mut ui = Ui::default();
+    /// let root = ui.root().layout(UiLayout::fill()).id();
+    /// let slot = ui.button(root, "Potion").context_menu(["Use", "Drop"]).id();
+    /// ui.push_modeless(root);
+    /// ui.open_context_menu(slot);
+    /// ui.frame(vec2(320.0, 240.0), &UiInput { direction: vec2(0.0, 1.0), ..Default::default() });
+    /// ui.frame(vec2(320.0, 240.0), &UiInput { confirm: true, ..Default::default() });
+    /// assert!(ui.events().any(|e| e == UiEvent::Chosen(slot, 1)));
+    /// ```
+    Chosen(UiId, u32),
+    /// A draggable node ([`Ui::set_draggable`]) was dropped on a drop target
+    /// ([`Ui::set_drop_target`]): the item, then the target. Nothing moves
+    /// on its own; [`Ui::set_parent`] moves the item if the game accepts.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::ui::{Ui, UiEvent, UiInput, UiLayout};
+    /// let mut ui = Ui::default();
+    /// let root = ui.root().layout(UiLayout::fill()).id();
+    /// let bag = ui.panel(root).layout(UiLayout::fixed(100.0, 100.0)).drop_target().id();
+    /// let chest = ui.panel(root).layout(UiLayout::fixed(100.0, 100.0)).drop_target().id();
+    /// let gem = ui.label(bag, "Gem").draggable().id();
+    /// ui.push_modeless(root);
+    /// ui.set_focus(gem);
+    /// ui.frame(vec2(320.0, 240.0), &UiInput { confirm: true, ..Default::default() }); // pick up
+    /// ui.set_focus(chest);
+    /// ui.frame(vec2(320.0, 240.0), &UiInput { confirm: true, ..Default::default() }); // drop
+    /// assert!(ui.events().any(|e| e == UiEvent::Dropped(gem, chest)));
+    /// ```
+    Dropped(UiId, UiId),
+    /// A list ([`Ui::list`]) shows other items than before: it scrolled, was
+    /// resized or its length changed. Refill the rows [`Ui::list_rows`]
+    /// gives when they show more than their text.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::ui::{Ui, UiEvent, UiInput, UiLayout};
+    /// let mut ui = Ui::default();
+    /// let root = ui.root().layout(UiLayout::fill()).id();
+    /// let list = ui.list(root, 20.0).layout(UiLayout::fixed(200.0, 100.0)).id();
+    /// ui.set_list_len(list, 1000);
+    /// ui.push_modeless(root);
+    /// ui.frame(vec2(320.0, 240.0), &UiInput::default());
+    /// assert!(ui.events().any(|e| e == UiEvent::RowsShown(list)));
+    /// ```
+    RowsShown(UiId),
+    /// A tween ([`Ui::animate`]) or a timeline ([`Ui::play`]) on the node
+    /// ended: its values are where they stay. Not sent for a timeline
+    /// that loops, was stopped or had a property taken over.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::ui::{Ui, UiEvent, UiInput, UiTween};
+    /// let mut ui = Ui::default();
+    /// let root = ui.root().id();
+    /// ui.push_modeless(root);
+    /// ui.animate(root, UiTween::opacity(0.5).seconds(0.1));
+    /// ui.frame(vec2(320.0, 240.0), &UiInput { dt: 0.2, ..Default::default() });
+    /// assert!(ui.events().any(|e| e == UiEvent::AnimationDone(root)));
+    /// ```
+    AnimationDone(UiId),
 }
 
 impl UiEvent {
@@ -481,6 +580,31 @@ pub struct UiInput {
     /// let _ = ponko::ui::UiInput::default().composing;
     /// ```
     pub composing: bool,
+    /// Seconds since the last frame: tooltips wait for it
+    /// ([`UiTheme::tooltip_delay`](super::UiTheme::tooltip_delay)) and
+    /// spinners turn with it. Zero: time stands still.
+    /// ```
+    /// let _ = ponko::ui::UiInput::default().dt;
+    /// ```
+    pub dt: f32,
+    /// The secondary pointer button (the right mouse button) was pressed
+    /// this frame: opens the context menu of the node under the pointer.
+    /// ```
+    /// let _ = ponko::ui::UiInput::default().secondary;
+    /// ```
+    pub secondary: bool,
+    /// The menu input (Shift+F10, a gamepad's North button) was pressed this
+    /// frame: opens the context menu of the focused node.
+    /// ```
+    /// let _ = ponko::ui::UiInput::default().menu;
+    /// ```
+    pub menu: bool,
+    /// The first key, mouse button or gamepad button pressed this frame, for
+    /// a listening key-binding field ([`Ui::key_binding`]).
+    /// ```
+    /// let _ = ponko::ui::UiInput::default().captured;
+    /// ```
+    pub captured: Option<crate::actions::ButtonBinding>,
 }
 
 pub(super) struct Node {
@@ -525,6 +649,12 @@ pub(super) struct Node {
     pub key: Option<Box<super::retained_locale::TextKey>>,
     /// Its text is markup ([`Ui::set_rich`]), parsed.
     pub rich: Option<Box<super::rich::RichText>>,
+    /// What the widget set keeps for the widgets that need more than text
+    /// and a value (items, a choice, a number, a binding, a tooltip, ...).
+    pub extra: Option<Box<super::widgets::Extra>>,
+    /// Its animation: drawn properties, state and screen transitions,
+    /// where it is drawn.
+    pub motion: super::anim::NodeMotion,
 }
 /// How a screen pushed on the [`Ui`]'s stack treats the screens below it
 /// ([`Ui::push_screen_with_mode`]). Either way only the top screen takes
@@ -554,13 +684,17 @@ pub enum ScreenMode {
 pub(super) struct Screen {
     pub root: UiId,
     pub modal: bool,
-    saved_focus: Option<UiId>,
+    pub(super) saved_focus: Option<UiId>,
 }
 #[derive(Clone, Copy)]
-enum Drag {
+pub(super) enum Drag {
     Scroll(UiId, Vec2, Vec2),
     Bar(UiId, f32, f32),
     Text(UiId),
+    /// A split's divider, held.
+    Split(UiId),
+    /// A draggable node pressed at a point, not yet moved far enough to drag.
+    Item(UiId, Vec2),
 }
 
 /// The screen's UI: `ctx.ui`. An owned widget tree and screen stack: build
@@ -599,7 +733,7 @@ pub struct Ui {
     /// The HUD roots ([`Ui::show_hud`]), drawn below every screen, bottom first.
     pub(super) huds: Vec<UiId>,
     pub(super) visible: Vec<UiId>,
-    events: std::collections::VecDeque<UiEvent>,
+    pub(super) events: std::collections::VecDeque<UiEvent>,
     /// The screens the player closed in this frame (each also sent a
     /// `ScreenPopped`), kept apart from `events`, which systems drain.
     closed: Vec<UiId>,
@@ -610,18 +744,23 @@ pub struct Ui {
     pub(super) focus: Option<UiId>,
     pub(super) hovered: Option<UiId>,
     pub(super) pressed: Option<UiId>,
-    drag: Option<Drag>,
+    pub(super) drag: Option<Drag>,
+    /// The widget set's state: the open pop-up, the item being dragged, the
+    /// key-binding field listening, the tooltip, the clock.
+    pub(super) widgets: super::widgets::WidgetState,
+    /// The animations: the UI clock, playing tracks, screens going off.
+    pub(super) motion: super::anim::Motion,
     pub(super) scale: f32,
     /// Physical pixels per window pixel where the tree is drawn (the
     /// window's scale factor; 1 for a world panel). Text is measured at
     /// the size it is drawn, in physical pixels, so glyph widths rounded
     /// to whole pixels add up the same in layout and drawing.
     pub(super) pixels: f32,
-    viewport: Vec2,
-    pointer: Vec2,
+    pub(super) viewport: Vec2,
+    pub(super) pointer: Vec2,
     pub(super) measure: crate::text::Text,
     pub(super) external_fonts: bool,
-    consumed: bool,
+    pub(super) consumed: bool,
     /// Requests from assistive technology, applied by the next [`Ui::frame`].
     pub(super) access_actions: Vec<super::UiAccessAction>,
     pub(super) theme: super::UiTheme,
@@ -665,6 +804,8 @@ impl Default for Ui {
             hovered: None,
             pressed: None,
             drag: None,
+            widgets: Default::default(),
+            motion: Default::default(),
             scale: 1.0,
             pixels: 1.0,
             viewport: Vec2::ZERO,
@@ -748,6 +889,8 @@ impl Ui {
             preedit_cursor: None,
             key: None,
             rich: None,
+            extra: None,
+            motion: Default::default(),
         });
         id
     }
@@ -804,7 +947,7 @@ impl Ui {
         self.huds.retain(|&h| h != id);
         self.visible.retain(|&n| n != id);
         if self.drag.is_some_and(|d| match d {
-            Drag::Scroll(n, _, _) | Drag::Bar(n, _, _) | Drag::Text(n) => n == id,
+            Drag::Scroll(n, _, _) | Drag::Bar(n, _, _) | Drag::Text(n) | Drag::Split(n) | Drag::Item(n, _) => n == id,
         }) {
             self.drag = None;
         }
@@ -820,8 +963,14 @@ impl Ui {
             | UiEvent::Changed(n)
             | UiEvent::Submitted(n)
             | UiEvent::ScreenPopped(n)
-            | UiEvent::LinkClicked(n, _) => *n != id,
+            | UiEvent::LinkClicked(n, _)
+            | UiEvent::Chosen(n, _)
+            | UiEvent::RowsShown(n)
+            | UiEvent::AnimationDone(n) => *n != id,
+            UiEvent::Dropped(a, b) => *a != id && *b != id,
         });
+        self.widget_removed(id);
+        self.motion_removed(id);
     }
     /// Replace the node's layout (flex, grid, absolute positioning and
     /// constraints). [`Ui::node_layout`] reads it back.
@@ -983,6 +1132,7 @@ impl Ui {
         self.drag = None;
         self.hovered = None;
         self.focus = self.initial_focus_in(root);
+        self.screen_entered(root);
     }
     /// Push `root` as a [modal](ScreenMode::Modal) screen: a dialog that
     /// dims what is below it and keeps the input to itself. Short for
@@ -1166,15 +1316,8 @@ impl Ui {
         self.node(id).is_some_and(|n| n.closes_screen)
     }
     /// Whether `id` may take the focus now, before layout gives it a size.
-    fn can_focus(&self, id: UiId) -> bool {
-        self.interactive(id)
-            && self.is_shown(id)
-            && self.node(id).is_some_and(|n| {
-                matches!(
-                    n.widget,
-                    UiWidget::Button | UiWidget::TextInput | UiWidget::Toggle | UiWidget::Slider
-                )
-            })
+    pub(super) fn can_focus(&self, id: UiId) -> bool {
+        self.interactive(id) && self.is_shown(id) && self.node(id).is_some_and(|n| self.takes_focus(n))
     }
     /// Shows the tree under a detached `root` as a HUD: display-only UI,
     /// such as a score or a health bar, drawn below every screen and kept
@@ -1214,6 +1357,8 @@ impl Ui {
         if !self.huds.contains(&root) {
             self.huds.push(root);
         }
+        // A screen still going off stops going: it is the HUD now.
+        self.screen_shown_as_hud(root);
     }
     /// Takes a HUD ([`show_hud`](Self::show_hud)) off the screen. Its nodes
     /// stay, so it can be shown again. Does nothing for a node that isn't a
@@ -1254,6 +1399,7 @@ impl Ui {
         self.pressed = None;
         self.drag = None;
         self.hovered = None;
+        self.screen_left(screen.root, screen.modal);
         Some(screen.root)
     }
     /// The node's parent, or `None` for a detached root and for stale IDs.
@@ -1451,7 +1597,7 @@ impl Ui {
     pub fn wants_keyboard(&self) -> bool {
         self.consumed || !self.screens.is_empty()
     }
-    fn interactive(&self, id: UiId) -> bool {
+    pub(super) fn interactive(&self, id: UiId) -> bool {
         let mut at = Some(id);
         while let Some(id) = at {
             let Some(n) = self.node(id) else { return false };
@@ -1467,12 +1613,9 @@ impl Ui {
     }
     pub(super) fn focusable(&self, id: UiId) -> bool {
         self.interactive(id)
-            && self.node(id).is_some_and(|n| {
-                matches!(
-                    n.widget,
-                    UiWidget::Button | UiWidget::TextInput | UiWidget::Toggle | UiWidget::Slider
-                ) && n.rect.size().cmpgt(Vec2::ZERO).all()
-            })
+            && self
+                .node(id)
+                .is_some_and(|n| self.takes_focus(n) && n.rect.size().cmpgt(Vec2::ZERO).all())
     }
     /// Hit test the top screen, respecting ancestor clips and disabled nodes.
     /// ```
@@ -1498,6 +1641,21 @@ impl Ui {
     /// ```
     pub fn layout(&mut self, viewport: Vec2) {
         self.viewport = viewport.max(Vec2::ZERO);
+        // State transitions start from what was shown when a state changed.
+        self.update_states();
+        // Split panes take their divider's place before Taffy runs.
+        self.sync_splits();
+        self.compute_layout(viewport);
+        // A list that shows other items than its rows held is laid out again.
+        if self.sync_lists() {
+            self.compute_layout(viewport);
+        }
+        if self.focus.is_some_and(|id| !self.focusable(id)) {
+            self.focus = None;
+        }
+    }
+    /// Taffy's layout of every root, then each node's rectangle and clip.
+    fn compute_layout(&mut self, viewport: Vec2) {
         self.visible.clear();
         // Intrinsic text measurement uses the engine's font layout, headlessly.
         for n in self.nodes.iter().flatten() {
@@ -1511,6 +1669,8 @@ impl Ui {
         // Physical pixels per layout unit: text is measured at the size
         // it is drawn.
         let k = self.scale * self.pixels;
+        // A screen going off keeps the layout it had on the stack: it costs
+        // no layout work while it goes.
         let roots = self.huds.iter().chain(self.screens.iter().map(|s| &s.root));
         for root in roots {
             let layout = nodes[root.slot()].as_ref().unwrap().layout;
@@ -1562,9 +1722,7 @@ impl Ui {
                                     rest = rest[end..].trim_start();
                                 }
                             }
-                            if n.text.is_empty()
-                                && !matches!(n.widget, UiWidget::TextInput | UiWidget::Button | UiWidget::Toggle)
-                            {
+                            if n.text.is_empty() && !super::widgets::keeps_line(n.widget) {
                                 height = 0.0;
                             }
                             Size {
@@ -1576,20 +1734,26 @@ impl Ui {
                 },
             );
         }
-        // HUDs first: `visible` is drawing order, so they are under the screens.
-        for i in 0..self.huds.len() + self.screens.len() {
-            let root = match i.checked_sub(self.huds.len()) {
-                None => self.huds[i],
-                Some(s) => self.screens[s].root,
-            };
-            self.place(
-                root,
-                self.root_offset(root),
-                Rect::new(0.0, 0.0, viewport.x, viewport.y),
-            );
+        // HUDs first: `visible` is drawing order, so they are under the
+        // screens. A screen going off is drawn where it was on the stack.
+        let window = Rect::new(0.0, 0.0, viewport.x, viewport.y);
+        for i in 0..self.huds.len() {
+            let root = self.huds[i];
+            self.place(root, self.root_offset(root), window, (Xf::IDENTITY, window));
         }
-        if self.focus.is_some_and(|id| !self.focusable(id)) {
-            self.focus = None;
+        let screens = self.screens.len();
+        for depth in 0..=screens {
+            for e in 0..self.motion.exiting.len() {
+                let going = self.motion.exiting[e];
+                if going.depth.min(screens) == depth {
+                    let root = going.root;
+                    self.place(root, self.root_offset(root), window, (Xf::IDENTITY, window));
+                }
+            }
+            if depth < screens {
+                let root = self.screens[depth].root;
+                self.place(root, self.root_offset(root), window, (Xf::IDENTITY, window));
+            }
         }
     }
     /// Where a screen root's `auto` margins move it: they take the window's
@@ -1622,7 +1786,9 @@ impl Ui {
             share(margin.top.is_auto(), margin.bottom.is_auto(), free.y),
         ) * self.scale
     }
-    fn place(&mut self, id: UiId, origin: Vec2, clip: Rect) {
+    /// Places node `id` at `origin` inside `clip`, and its subtree;
+    /// `shown` is its parent's map to the screen and its clip there.
+    fn place(&mut self, id: UiId, origin: Vec2, clip: Rect, shown: (Xf, Rect)) {
         let layout = *self.tree.layout(self.node(id).unwrap().layout).unwrap();
         let scale = self.scale;
         let pos = origin + vec2(layout.location.x, layout.location.y) * scale;
@@ -1631,31 +1797,37 @@ impl Ui {
             min: pos,
             max: pos + size,
         };
+        let xf = self.node_xf(id, shown.0, rect);
         let n = self.node_mut(id).unwrap();
         n.rect = rect;
         n.clip = clip;
-        let scrollable = n.widget == UiWidget::Scroll;
-        n.max_scroll = if scrollable {
+        n.motion.xf = xf;
+        n.motion.shown_clip = shown.1;
+        let scrollable = super::widgets::scrolls(n.widget);
+        n.max_scroll = if n.widget == UiWidget::Scroll {
             vec2(layout.scroll_width(), layout.scroll_height())
+        } else if scrollable {
+            // A list scrolls over all its items, not over the rows it keeps.
+            super::widgets::list_max_scroll(n, size / scale)
         } else {
             Vec2::ZERO
         };
         n.scroll = n.scroll.clamp(Vec2::ZERO, n.max_scroll);
         let scroll = n.scroll * scale;
         self.visible.push(id);
-        let child_clip = if scrollable {
+        let (child_clip, child_shown) = if scrollable {
             let mut inner = rect;
             if self.node(id).unwrap().max_scroll.y > 0.0 {
                 inner.max.x = (inner.max.x - 12.0 * scale).max(inner.min.x);
             }
-            intersect(clip, inner)
+            (intersect(clip, inner), intersect(shown.1, xf.map_rect(inner)))
         } else {
-            clip
+            (clip, shown.1)
         };
         let count = self.node(id).unwrap().children.len();
         for i in 0..count {
             let child = self.node(id).unwrap().children[i];
-            self.place(child, pos - scroll, child_clip);
+            self.place(child, pos - scroll, child_clip, (xf, child_shown));
         }
     }
     /// Layout and process one input snapshot. Call once per frame, before game
@@ -1669,22 +1841,38 @@ impl Ui {
         self.closed.clear();
         self.consumed = false;
         self.pointer = input.pointer;
+        self.widgets.advance(input.dt);
+        self.advance_motion(self.widgets.dt);
         self.layout(viewport);
         let access_moved_focus = self.apply_access_actions();
         // Mid-composition, Enter, Escape and the arrows belong to the IME.
         let ime_keys = self.ime_owns_keys(input);
+        // A key-binding field that listens takes the whole frame's input.
+        if self.capture_input(input) {
+            self.end_frame(viewport, input);
+            return;
+        }
         if input.cancel && !ime_keys {
-            if let Some(root) = self.pop_screen() {
+            // Escape closes a pop-up, puts back a carried item or undoes a
+            // number being typed before it closes a screen.
+            if self.cancel_widget() {
+                self.consumed = true;
+            } else if let Some(root) = self.pop_screen() {
                 self.screen_closed(root);
             }
-            self.layout(viewport);
-            self.apply_composition(input);
+            self.end_frame(viewport, input);
+            return;
+        }
+        // A press outside an open pop-up closes it and goes no further.
+        if input.pressed && self.close_popup_outside(input.pointer) {
+            self.end_frame(viewport, input);
             return;
         }
         let direction = if ime_keys { Vec2::ZERO } else { input.direction };
         self.hovered = self.hit_test(input.pointer);
         if input.next || input.previous {
-            self.tab(input.previous);
+            self.tab_focus(input.previous);
+            self.widgets.focus_by_keys = true;
         }
         if self.focus.is_some_and(|id| !self.focusable(id)) {
             self.focus = None;
@@ -1692,6 +1880,7 @@ impl Ui {
         if input.pressed {
             self.pressed = self.hovered;
             self.drag = None;
+            self.widgets.focus_by_keys = false;
             if let Some(id) = self.hovered {
                 self.focus = self.focusable(id).then_some(id);
                 let n = self.node(id).unwrap();
@@ -1703,11 +1892,13 @@ impl Ui {
                         n.anchor = caret;
                     }
                     self.drag = Some(Drag::Text(id));
+                } else if let Some(drag) = self.widget_press(id, input.pointer) {
+                    self.drag = Some(drag);
                 } else if n.widget != UiWidget::Slider {
                     let mut at = Some(id);
                     while let Some(id) = at {
                         let n = self.node(id).unwrap();
-                        if n.widget == UiWidget::Scroll {
+                        if super::widgets::scrolls(n.widget) {
                             self.drag = Some(if input.pointer.x >= n.rect.max.x - 12.0 * self.scale {
                                 Drag::Bar(id, input.pointer.y, n.scroll.y)
                             } else {
@@ -1722,10 +1913,13 @@ impl Ui {
                 self.focus = None;
             }
         }
+        if input.secondary || input.menu {
+            self.context_input(input);
+        }
         let mut at = self.hovered;
         while let Some(id) = at {
             let n = self.node(id).unwrap();
-            if n.widget == UiWidget::Scroll {
+            if super::widgets::scrolls(n.widget) {
                 let next = n.scroll + input.wheel / self.scale;
                 self.node_mut(id).unwrap().scroll = next;
                 break;
@@ -1759,6 +1953,13 @@ impl Ui {
                         let caret = self.caret_at(id, input.pointer);
                         self.node_mut(id).unwrap().caret = caret;
                     }
+                    Drag::Split(id) => self.drag_split(id, input.pointer),
+                    Drag::Item(id, start) => {
+                        if (input.pointer - start).length() > 6.0 * self.scale {
+                            self.widgets.dragging = Some(id);
+                            self.pressed = None;
+                        }
+                    }
                 }
             }
             if let Some(id) = self
@@ -1771,40 +1972,41 @@ impl Ui {
             }
         }
         if input.released {
+            if let Some(item) = self.widgets.dragging.take() {
+                self.drop_at(item, input.pointer);
+                self.pressed = None;
+            }
             let released = self.pressed.take().filter(|id| Some(*id) == self.hovered);
             // A link in rich text takes the click (a button's too).
             let link = released.and_then(|id| Some((id, self.link_under(id, input.pointer)?)));
             if let Some((id, link)) = link {
                 self.events.push_back(UiEvent::LinkClicked(id, link));
-            } else if let Some(id) = released
-                && self
-                    .node(id)
-                    .is_some_and(|n| matches!(n.widget, UiWidget::Button | UiWidget::Toggle))
-            {
-                self.activate(id);
+            } else if let Some(id) = released {
+                self.release_on(id, input.pointer);
             }
             self.drag = None;
         }
-        let editing = self
-            .focus
-            .is_some_and(|id| self.node(id).unwrap().widget == UiWidget::TextInput);
+        let focused = self.focus.and_then(|id| Some((id, self.node(id)?.widget)));
+        let editing = focused.is_some_and(|(_, w)| w == UiWidget::TextInput);
         if editing && direction.y == 0.0 {
             self.edit(input, ime_keys);
-        } else if let Some(id) = self
-            .focus
-            .filter(|&id| self.node(id).unwrap().widget == UiWidget::Slider)
-            && direction.x != 0.0
+        } else if let Some((id, UiWidget::NumberField)) = focused
+            && !ime_keys
+            && self.type_number(id, input)
         {
-            let value = self.value(id).unwrap() + direction.x * super::access::SLIDER_STEP;
-            self.change_value(id, value.clamp(0.0, 1.0));
+        } else if let Some((id, _)) = focused
+            && direction != Vec2::ZERO
+            && self.widget_direction(id, direction)
+        {
         } else if direction != Vec2::ZERO {
             self.navigate(direction);
+            self.widgets.focus_by_keys = true;
         }
         if input.confirm
             && !ime_keys
             && let Some(id) = self.focus
         {
-            self.activate(id);
+            self.confirm(id);
         }
         self.layout(viewport);
         if input.next || input.previous || direction != Vec2::ZERO || access_moved_focus {
@@ -1812,6 +2014,14 @@ impl Ui {
             self.layout(viewport);
         }
         self.apply_composition(input);
+        self.frame_widgets();
+    }
+    /// The end of a frame cut short (a cancel, a listening field, a press
+    /// outside a pop-up): fresh layout, the IME, the widgets' bookkeeping.
+    fn end_frame(&mut self, viewport: Vec2, input: &UiInput) {
+        self.layout(viewport);
+        self.apply_composition(input);
+        self.frame_widgets();
     }
     fn reveal_focus(&mut self) {
         let Some(id) = self.focus else { return };
@@ -1831,7 +2041,7 @@ impl Ui {
             at = n.parent;
         }
     }
-    fn tab(&mut self, back: bool) {
+    fn tab_focus(&mut self, back: bool) {
         let current = self.focus.and_then(|id| self.visible.iter().position(|&n| n == id));
         let len = self.visible.len();
         for step in 1..=len {
@@ -1849,7 +2059,7 @@ impl Ui {
     }
     fn navigate(&mut self, direction: Vec2) {
         let Some(from) = self.focus.and_then(|id| self.rect(id)) else {
-            self.tab(false);
+            self.tab_focus(false);
             return;
         };
         let mut best = None;
@@ -1897,11 +2107,11 @@ impl Ui {
                 self.change_value(id, v);
             }
             UiWidget::TextInput => self.events.push_back(UiEvent::Submitted(id)),
-            _ => {}
+            _ => self.activate_widget(id),
         }
     }
     /// The player closed screen `root` (it was popped).
-    fn screen_closed(&mut self, root: UiId) {
+    pub(super) fn screen_closed(&mut self, root: UiId) {
         self.events.push_back(UiEvent::ScreenPopped(root));
         self.closed.push(root);
     }
@@ -2063,7 +2273,7 @@ fn rich_size(
     } else {
         natural.y
     };
-    if rich.text.is_empty() && !matches!(n.widget, UiWidget::TextInput | UiWidget::Button | UiWidget::Toggle) {
+    if rich.text.is_empty() && !super::widgets::keeps_line(n.widget) {
         height = 0.0;
     }
     Size {

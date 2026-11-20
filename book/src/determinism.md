@@ -83,7 +83,58 @@ Things that break determinism, and what to do instead:
 
 Floating point is deterministic on one machine and build. Across CPU
 architectures, transcendental functions (`sin`, `exp`) can differ in the
-last bit.
+last bit. `Rng::unit_vec2()` uses none: it picks a point in a disk with
+integers and divides by its length, so it gives the same bits everywhere
+(Rust and the C++ header alike). `angle()` is a plain number in
+`0..TAU`; turning it into a direction with `sin` and `cos` is where
+platforms can differ.
+
+## One number for the state
+
+`ponko::reflect::world_hash(&world)` is one `u64` for everything
+[reflected](reflection.md) in the world: every reflected component of every
+entity and every reflected resource. Compare it between two runs, between
+lockstep peers, or between a game and its [recorded
+input](actions.md#recording-live-input) replayed, to find out whether they
+are still in the same state:
+
+```rust
+use ponko::reflect::world_hash;
+# #[derive(Component, serde::Serialize, serde::Deserialize)]
+# struct Health(f32);
+
+world.reflect::<Health>();
+world.spawn((Health(10.0),));
+let before = world_hash(world);
+world.query::<&mut Health>().for_each(|h| h.0 -= 1.0);
+assert_ne!(world_hash(world), before);
+```
+
+- **Bit for bit.** Floats are hashed by their bits, so `-0.0` and `0.0`
+  differ.
+- **Not order.** Each entity's component is hashed with the entity and the
+  results are added up, so where entities sit in memory, the order
+  components were added in and the order types were reflected in don't
+  matter. Entity ids do: the same spawns in the same order give the same ids.
+- **Only reflected state.** Components and resources that aren't reflected
+  are left out, so reflect what the game state is made of. Sprites are
+  hashed, so a view-only difference (a tint) shows up; hash a world
+  without the view's components, or keep your own hash of the rules' state,
+  when that matters.
+- **Fast.** It reads components in place, word by word, without making
+  JSON: Rust components through their `Serialize`, components described
+  with `reflect_fields` (C) through their fields. Only components with a
+  custom reflection (models, animations) go through their JSON.
+- **Everywhere the same,** on every platform and thread count. The value can
+  change between engine versions: compare hashes made by the same build.
+
+C++: `world.hash()`; C: `ponko_world_hash(world, &hash)`. Components and
+resources described from C (`reflect<T>({...})`) are hashed through their
+fields.
+
+It reads `&World`, so it runs inside a system without taking the world
+away: [`world.query_ref`](ecs.md#read-only-queries-on-a-shared-world) is the
+read-only query it is built on.
 
 ## Saving and loading the world
 

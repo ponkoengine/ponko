@@ -14,7 +14,10 @@ const MAIN_ONLY: Features = Features::SKINNING
     .with(Features::SKY_BRDF)
     .with(Features::SKY_MAPS)
     .with(Features::BUFFER_PAST)
-    .with(Features::OCCLUSION);
+    .with(Features::OCCLUSION)
+    .with(Features::CLOUD_SHADOWS)
+    .with(Features::CLOUDS)
+    .with(Features::KIT_SKY);
 
 /// What a frame's parts are recorded against: the frame's features. Empty
 /// in release builds.
@@ -87,7 +90,7 @@ impl FrameChecks {
 fn part_features(part: Part, features: Features) -> Features {
     match part {
         Part::Shadow { cascade, .. } if cascade < MAX_CASCADES => features.without(Features::LIGHT_SHADOWS),
-        Part::Shadow { .. } => features.without(Features::SUN_SHADOWS),
+        Part::Shadow { .. } | Part::LightViews { .. } => features.without(Features::SUN_SHADOWS),
         _ => features,
     }
 }
@@ -152,14 +155,18 @@ impl Renderer3D {
                 .parts
                 .iter()
                 .enumerate()
-                .any(|(part, &(_, m))| self.resources.materials[self.part_material(mesh, part, m) as usize].cutout)
+                .any(|(part, &(_, m))| self.resources.material(self.part_material(mesh, part, m)).cutout)
         }) || (batches
             && self.static_batches.iter().flatten().any(|b| {
                 b.levels.iter().any(|l| {
                     self.resources.meshes[l.mesh.slot() as usize]
                         .parts
                         .iter()
-                        .any(|(_, m)| self.resources.materials[*m as usize].cutout)
+                        .any(|(_, m)| {
+                            self.resources
+                                .material_slot(*m)
+                                .is_some_and(|slot| self.resources.material(slot).cutout)
+                        })
                 })
             }))
     }
@@ -168,7 +175,10 @@ impl Renderer3D {
     fn frame_features(&self, parts: &[Part], targets: &Targets) -> Features {
         let has = |f: fn(&Part) -> bool| parts.iter().any(f);
         let sun = has(|p| matches!(p, Part::Shadow { cascade, .. } if *cascade < MAX_CASCADES));
-        let lights = has(|p| matches!(p, Part::Shadow { cascade, .. } if *cascade >= MAX_CASCADES));
+        let lights = has(|p| {
+            matches!(p, Part::Shadow { cascade, .. } if *cascade >= MAX_CASCADES)
+                || matches!(p, Part::LightViews { .. })
+        });
         let buffer = |&(_, state, _): &(u32, usize, u32)| state & (1 << 31) != 0;
         let effects = self.effects.frame.len();
         let cameras = !self.lists.views.is_empty();
@@ -177,9 +187,10 @@ impl Renderer3D {
         let probes = self.environment.records_probes();
         let gi = has(|p| matches!(p, Part::Gi)) && self.gi.is_some();
         let sky = self.environment.needs_sky();
+        let (cloud_shadows, clouds) = self.kit_passes();
         [
             Features::MSAA.only_if(self.samples > 1),
-            Features::STATIC_CULL.only_if(self.static_culling.is_some()),
+            Features::STATIC_CULL.only_if(self.static_culling.is_some() || (!self.extra && self.crowds.culls())),
             Features::SKINNING.only_if(self.skinning.has_work()),
             Features::BUFFER_COMPUTE.only_if(self.lists.computes.iter().any(buffer)),
             Features::TEXTURE_COMPUTE.only_if(self.lists.computes.iter().any(|c| !buffer(c))),
@@ -189,6 +200,9 @@ impl Renderer3D {
             Features::SKY_TEXTURE.only_if(self.atmosphere && sky),
             Features::SKY_BRDF.only_if(self.environment.needs_lookup()),
             Features::SKY_MAPS.only_if(sky),
+            Features::CLOUD_SHADOWS.only_if(cloud_shadows),
+            Features::CLOUDS.only_if(clouds),
+            Features::KIT_SKY.only_if(self.atmosphere && sky && self.kit_air().is_some()),
             Features::SHADOWS.only_if(sun || lights),
             Features::SUN_SHADOWS.only_if(sun),
             Features::LIGHT_SHADOWS.only_if(lights && self.shadows.light_atlas.is_some()),
@@ -207,6 +221,8 @@ impl Renderer3D {
             Features::VELOCITY.only_if(self.screen.velocity_on && targets.velocity.is_some()),
             Features::AO.only_if(self.screen.ao_enabled),
             Features::SSR.only_if(self.screen.ssr.is_some() && targets.ssr.is_some()),
+            Features::SSR_SPREAD
+                .only_if(self.screen.ssr.is_some() && targets.ssr.is_some() && self.no_spread.is_some()),
             Features::SPLIT.only_if(has(|p| matches!(p, Part::Transparent))),
             Features::DEPTH_COPY.only_if(targets.depth_copy.is_some()),
             Features::TAA.only_if(self.screen.taa_on && self.screen.taa.is_some() && targets.taa.is_some()),
@@ -315,7 +331,19 @@ impl Renderer3D {
             .environment
             .images()
             .map(|texture| (Resource::Environment, texture));
-        frame.into_iter().flatten().chain(gi).chain(cameras).chain(environment)
+        let clouds = self
+            .clouds
+            .as_deref()
+            .and_then(|c| c.images())
+            .into_iter()
+            .flat_map(|(trace, history)| [(Resource::CloudTrace, trace), (Resource::CloudHistory, history)]);
+        frame
+            .into_iter()
+            .flatten()
+            .chain(gi)
+            .chain(cameras)
+            .chain(environment)
+            .chain(clouds)
     }
 
     /// Checks the frame `draw` is about to record (its `parts`, into
@@ -594,7 +622,7 @@ mod render_tests {
         });
         rig.ctx.set_headless(true);
         let handle = rig.ctx.gfx.create_render_target(64, 64);
-        rig.renderer.add_render_target(handle.id, &texture);
+        rig.renderer.add_render_target(handle.texture.id, &texture);
         let camera = rig.ctx.scene3d.camera;
         rig.ctx
             .scene3d

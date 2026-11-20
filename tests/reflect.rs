@@ -190,11 +190,14 @@ fn games_reflect_the_builtin_components_by_default() {
     let mut expected = vec![
         "Animation",
         "Attached",
+        "CameraTarget",
         "Children",
         "DirectionalLight2D",
+        "EntityName",
         "Occluder2D",
         "ParticleEmitter2D",
         "PointLight2D",
+        "PrefabInstance",
         "PrefabParts",
         "RenderLayers",
         "Skeleton2D",
@@ -219,6 +222,7 @@ fn games_reflect_the_builtin_components_by_default() {
             "ShadowMesh",
             "ShadowOnly",
             "SpotLight3D",
+            "HeldItem",
         ]);
         expected.sort();
     }

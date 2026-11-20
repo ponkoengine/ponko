@@ -976,3 +976,50 @@ fn skinned_meshes_validate_their_triangles() {
     let bad = std::panic::catch_unwind(|| SkinnedMesh::new(tex, vec![v; 3], vec![0, 1, 3]));
     assert!(bad.is_err());
 }
+
+#[test]
+#[should_panic(expected = "isn't a mesh or clipping mask there")]
+fn deform_tracks_need_a_mesh_to_move() {
+    use ponko::skeleton2d::DeformTrack;
+    let mut data = arm();
+    let mut bend = DeformTrack::new(0, 0, "arm");
+    bend.keys = vec![Key::new(0.0, Arc::from([Vec2::ZERO; 4]))];
+    data.add_clip(Clip::new("bend", 1.0).with_deform_track(bend));
+}
+
+#[test]
+#[should_panic(expected = "needs 8 offsets (four per vertex)")]
+fn deform_keys_carry_four_offsets_per_vertex() {
+    use ponko::skeleton2d::{ClippingMask, DeformTrack};
+    let mut data = arm();
+    let corner = |p: Vec2| MeshVertex::new(p, Vec2::ZERO, &[(1, 1.0)]);
+    data.add_attachment(
+        0,
+        "mask",
+        ClippingMask::new(vec![corner(Vec2::ZERO), corner(Vec2::X)], None),
+    );
+    let mut bend = DeformTrack::new(0, 0, "mask");
+    bend.keys = vec![Key::new(0.0, Arc::from([Vec2::ZERO; 2]))];
+    data.add_clip(Clip::new("bend", 1.0).with_deform_track(bend));
+}
+
+#[test]
+#[should_panic(expected = "ends at a slot that isn't in the skeleton")]
+fn clipping_masks_end_at_a_slot_of_the_skeleton() {
+    use ponko::skeleton2d::ClippingMask;
+    let mut data = arm();
+    let corner = |p: Vec2| MeshVertex::new(p, Vec2::ZERO, &[(1, 1.0)]);
+    data.add_attachment(
+        0,
+        "mask",
+        ClippingMask::new(vec![corner(Vec2::ZERO), corner(Vec2::X), corner(Vec2::Y)], Some(5)),
+    );
+}
+
+#[test]
+#[should_panic(expected = "can't move its own target")]
+fn transform_constraints_cant_follow_their_own_bone() {
+    use ponko::skeleton2d::TransformConstraint;
+    let mut data = arm();
+    data.add_transform_constraint(TransformConstraint::new("self", &[1], 1));
+}

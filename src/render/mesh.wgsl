@@ -23,6 +23,8 @@ struct Frame {
     shadow: vec4<f32>,     // cascades (0: no shadows), texel size in uv, normal offset in texels, fade distance
     cascade_texel: vec4<f32>, // each cascade's texel size, in world units
     time: vec4<f32>,       // x: seconds since the game started, y: seconds since the last frame; zw: the last drawn frame's xy
+    time_seconds: vec2<u32>, // whole elapsed seconds: current and last drawn frame
+    time_fraction: vec2<f32>, // fractional elapsed seconds: current and last drawn frame
     inv_view_proj: mat4x4<f32>, // clip space back to the world
     screen: vec4<f32>,     // width and height in pixels, then their inverses
     atmosphere: vec4<f32>, // x: a physical sky (1) or not (0), y: haze, z: cos of the sun's radius, w: stars
@@ -46,6 +48,7 @@ struct Frame {
     jitter: vec4<f32>,     // xy: this frame's jitter in pixels (0 without TAA)
     gi: array<vec4<f32>, 3>, // global illumination's probe grid (see gi.wgsl)
     sky_params: array<vec4<f32>, 4>, // a sky shader's values (`Sky::shader_params`)
+    sky_kit: array<vec4<f32>, 6>, // the sky kit's clouds, moon and cloud shadows (zero without it)
 };
 
 struct MaterialData {
@@ -141,6 +144,13 @@ fn motion_frame_time() -> vec4<f32> {
     return frame.time;
 }
 
+// Elapsed seconds within a whole-second period. Reduce the integer part
+// before converting it to f32 so small phases stay smooth for days.
+fn ponko_elapsed_time_wrapped(period_seconds: u32) -> f32 {
+    let i = select(0u, 1u, drawing_last_frame());
+    return f32(frame.time_seconds[i] % max(period_seconds, 1u)) + frame.time_fraction[i];
+}
+
 // The unit direction from `p` towards whoever is looking: the camera, or
 // the sun when drawing shadow maps. Billboards face it in their `vertex`
 // function, so their shadows are cast by the side the sun sees.
@@ -234,7 +244,8 @@ fn fog_along(color: vec3<f32>, world: vec3<f32>, distance: bool) -> vec3<f32> {
     let g = frame.fog_far.w;
     let mu = dot(dir, frame.sun_dir.xyz);
     let phase = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * mu, 1e-4), 1.5);
-    var glow = frame.fog_far.z;
+    // Clouds over the sun (the sky kit's) dim the fog's glow.
+    var glow = frame.fog_far.z * cloud_light(frame.camera.xyz);
     // The shafts can only darken this pixel's glow, by at most what the glow
     // adds; where that is below what a display shows (looking away from the
     // sun, or through little fog), skip the march.
@@ -715,8 +726,9 @@ fn sunlight(world: vec3<f32>, n: vec3<f32>) -> f32 {
     let count = i32(frame.shadow.x);
     // Towards the shadow distance, shadows fade out.
     let fade = smoothstep(0.85, 1.0, distance(world, frame.camera.xyz) / frame.shadow.w);
+    let clouds = cloud_light(world);
     if count == 0 || fade >= 1.0 {
-        return 1.0;
+        return clouds;
     }
     let contact = contact_hardening();
     var turn = 0.0;
@@ -742,5 +754,34 @@ fn sunlight(world: vec3<f32>, n: vec3<f32>) -> f32 {
             break;
         }
     }
-    return mix(lit, 1.0, fade);
+    return mix(lit, 1.0, fade) * clouds;
+}
+
+// Where the sky kit's cloud shadow map is in the IBL atlas (`sky_texture`):
+// a 128 x 128 square at the start of the rows below the probes' maps.
+const CLOUD_SHADOW_ORIGIN: vec2<f32> = vec2<f32>(0.0, 1408.0);
+const CLOUD_SHADOW_SIZE: f32 = 128.0;
+
+// How much sunlight the sky kit's clouds let through to `world`: 1 without
+// the kit or its cloud shadows, less under a cloud. The map holds what gets
+// through each point of the cloud layer's base along the sun; `world` is
+// carried up to that base along the sun to look it up. Outside the map
+// (kilometers away) the shadows fade out.
+fn cloud_light(world: vec3<f32>) -> f32 {
+    let strength = frame.sky_kit[4].w;
+    let up = frame.sun_dir.y;
+    if strength <= 0.0 || up <= 0.02 || frame.camera.w == 0.0 {
+        return 1.0;
+    }
+    let base = frame.sky_kit[2].x;
+    let at = world.xz + frame.sun_dir.xz * (max(base - world.y, 0.0) / up);
+    let uv = (at - frame.sky_kit[4].xy) * frame.sky_kit[4].z + 0.5;
+    let edge = max(abs(uv.x - 0.5), abs(uv.y - 0.5));
+    let texel = clamp(uv * CLOUD_SHADOW_SIZE, vec2<f32>(0.5), vec2<f32>(CLOUD_SHADOW_SIZE - 0.5));
+    let through = textureSampleLevel(sky_texture, sky_sampler, (CLOUD_SHADOW_ORIGIN + texel) / vec2<f32>(1024.0, 1536.0), 0.0).r;
+    let reach = 1.0 - smoothstep(0.4, 0.5, edge);
+    // Toward the horizon the sun's light comes through more air than
+    // cloud: the shadows soften away as it sets.
+    let low = smoothstep(0.02, 0.15, up);
+    return mix(1.0, clamp(through, 0.0, 1.0), strength * reach * low);
 }

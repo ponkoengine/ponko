@@ -1,0 +1,31 @@
+Legions: content notices
+========================
+
+Legions is a showcase game for the Ponko engine, built only from content
+made for it. Nothing in it is taken from another work.
+
+Pictures
+--------
+The game ships no picture files. Its soldiers, archers, arrows and the
+fallen are drawn into a sprite sheet by the game's own code when it starts,
+and the ground is painted from the map. Both are part of the program, which
+is Copyright (c) 2026 Leon Mamić and Ponko contributors, licensed under the
+MIT license or the Apache License 2.0, at your option (see LICENSE-MIT and
+LICENSE-APACHE in this package).
+
+Replays
+-------
+skirmish.json            a short recorded battle of 2,000 units, made by the
+                         game's own recorder
+
+Text and fonts
+--------------
+The game ships no font file. Its text is drawn with the default fonts bundled
+into the engine by the `epaint_default_fonts` crate; their licenses are
+included in THIRD-PARTY-NOTICES.txt together with every other library that is
+linked into the game.
+
+The engine
+----------
+Ponko is Copyright (c) 2026 Leon Mamić and Ponko contributors, under the MIT
+license or the Apache License 2.0, at your option. See NOTICE.

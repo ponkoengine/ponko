@@ -5,7 +5,8 @@
 //! meshes) and on [`Ctx`] for any kind.
 //!
 //! A handle is a small `Copy` value naming something the engine holds for
-//! the game: a texture, a mesh, a sound. Pass it by value. Only the engine
+//! the game: a texture, a mesh, a sound. Pass it by value. Every kind is
+//! its own type, so a mesh can't be passed where a texture is wanted. Only the engine
 //! makes handles: there is no way to turn a number into one, so a handle
 //! always names something this game made. Each kind answers the same three
 //! questions the same way:
@@ -48,12 +49,18 @@ mod sealed {
 /// A handle to a resource the engine holds for the game: [`Texture`](crate::texture::Texture),
 /// [`Sound`](crate::audio::Sound), [`Font`](crate::text::Font),
 /// [`SpriteShader`](crate::render::SpriteShader), [`SpriteMaterial`](crate::render::SpriteMaterial), and with the `3d` feature `Mesh`,
-/// `Material`, `Shader`,
+/// `Material`, `Shader`, `RenderTarget`,
 /// `Compute`, `Effect`,
 /// `GpuBuffer`, `InstanceBatch`,
 /// `TextureArray` and `TerrainTile`
 /// (with `physics3d`, `CollisionMesh` too).
-/// Render targets are textures.
+///
+/// Each kind is its own type, so passing one kind where another is wanted
+/// doesn't compile: a mesh is not a texture, and a texture is not a render
+/// target (a render target is read as a texture through
+/// `RenderTarget::texture`). A handle is its id and nothing more (a
+/// texture's and a render target's also carry their size), so they cost
+/// what a `u32` costs to copy and compare.
 ///
 /// Check one with [`Ctx::is_live`] and release it with [`Ctx::free`].
 /// Implemented by the engine's handle types only.
@@ -87,6 +94,19 @@ mod sealed {
 /// ```compile_fail,E0603
 /// // The engine's own raw-id trait is private to it.
 /// use ponko::handle::raw::RawHandle;
+/// ```
+///
+/// One kind is not another:
+///
+/// ```compile_fail,E0308
+/// # use ponko::prelude::*;
+/// fn show(ctx: &mut Ctx, image: Texture) {
+///     ctx.gfx.draw(image, Vec2::ZERO);
+/// }
+/// fn f(ctx: &mut Ctx) {
+///     let beep = ctx.audio.create(8_000, &[0.0; 80]);
+///     show(ctx, beep); // a sound is not a texture
+/// }
 /// ```
 pub trait Handle: Copy + Eq + Hash + std::fmt::Debug + sealed::Sealed {
     /// No resource: never live, and freeing it does nothing. Whatever shows
@@ -162,6 +182,8 @@ pub struct LiveCounts {
     /// Instance cells (parts of instance batches, see
     /// `InstanceCell`).
     pub instance_cells: usize,
+    /// Crowds of skinned characters (`Crowd`).
+    pub crowds: usize,
     /// Texture arrays.
     pub texture_arrays: usize,
     /// Sounds, streams included.
@@ -174,6 +196,8 @@ pub struct LiveCounts {
     pub sprite_shaders: usize,
     /// Sprite materials.
     pub sprite_materials: usize,
+    /// Sky shaders.
+    pub sky_shaders: usize,
 }
 
 impl Ctx {
@@ -270,7 +294,7 @@ impl Ctx {
 
 impl Graphics {
     /// Whether `handle` names something this game made and hasn't freed:
-    /// a texture (render targets included), font, mesh, material, shader,
+    /// a texture, render target, font, mesh, material, shader,
     /// compute pass, effect, GPU buffer, instance batch, texture array or
     /// terrain tile (live while all its meshes are).
     /// False for [`Handle::NONE`] and for handles from another game.
@@ -389,7 +413,7 @@ impl LiveSet {
     }
 
     /// Whether `id` was made, freed or not.
-    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn was_made(&self, id: u32) -> bool {
         self.state.get(id as usize).is_some_and(|&s| s != 0)
     }
@@ -409,16 +433,6 @@ impl LiveSet {
     /// How many are live.
     pub(crate) fn len(&self) -> usize {
         self.live
-    }
-
-    /// The live ids, in order.
-    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
-    pub(crate) fn ids(&self) -> impl Iterator<Item = u32> + '_ {
-        self.state
-            .iter()
-            .enumerate()
-            .filter(|&(_, &s)| s == MADE)
-            .map(|(id, _)| id as u32)
     }
 }
 
@@ -530,6 +544,12 @@ impl SlotCounter {
         id
     }
 
+    /// The next id without consuming it.
+    #[cfg(feature = "3d")]
+    pub(crate) fn next(&self, what: &str) -> u32 {
+        self.ids.next(self.slots, what)
+    }
+
     /// Lets freed `id`'s slot be given out again (see [`SlotIds::release`]).
     pub(crate) fn release(&mut self, id: u32) {
         self.ids.release(id);
@@ -557,6 +577,17 @@ impl Default for SlotCounter {
 pub(crate) const INDEX_BITS: u32 = 20;
 /// The slot bits of a [`SlotIds`] id (see [`INDEX_BITS`]).
 pub(crate) const INDEX_MASK: u32 = (1 << INDEX_BITS) - 1;
+/// Writes a slot already in the table or appends the next one.
+#[cfg(feature = "3d")]
+pub(crate) fn write_slot<T>(table: &mut Vec<T>, slot: u32, value: T) {
+    let index = slot as usize;
+    if index == table.len() {
+        table.push(value);
+    } else {
+        table[index] = value;
+    }
+}
+
 /// The last generation, never given out: `NONE` (`u32::MAX`) and the
 /// engine's other sentinel ids (`u32::MAX - 1`, ...) have it.
 const LAST_GENERATION: u32 = u32::MAX >> INDEX_BITS;
@@ -588,8 +619,17 @@ impl SlotIds {
     /// slot is never given out: it is `NONE`'s, so code that reads a
     /// handle's slot without checking it never lands on a real resource.
     pub(crate) fn make(&mut self, len: usize, what: &str) -> u32 {
-        let id = match self.free.pop() {
-            Some(freed) => freed + (1 << INDEX_BITS),
+        let id = self.next(len, what);
+        self.free.pop();
+        self.set(id);
+        id
+    }
+
+    /// The next id, without taking its slot. A fallible creation reserves
+    /// the id only after the resource was built successfully.
+    fn next(&self, len: usize, what: &str) -> u32 {
+        match self.free.last() {
+            Some(&freed) => freed + (1 << INDEX_BITS),
             None => {
                 assert!(
                     len < INDEX_MASK as usize,
@@ -598,9 +638,7 @@ impl SlotIds {
                 );
                 len as u32
             }
-        };
-        self.set(id);
-        id
+        }
     }
 
     /// Gives `id` out again as it is (a resident mesh reloaded under the
@@ -779,14 +817,48 @@ id_handle!(
 mod three {
     use super::*;
     use crate::render::Compute;
+    use crate::render::Crowd;
     use crate::render::Effect;
     use crate::render::GpuBuffer;
     use crate::render::InstanceBatch;
     use crate::render::InstanceCell;
     use crate::render::Material;
     use crate::render::Mesh;
+    use crate::render::RenderTarget;
     use crate::render::Shader;
     use crate::terrain::{TerrainTile, TextureArray};
+
+    // A render target is a texture the game can only draw into through
+    // passes: live while its texture is a live render target, freed as its
+    // texture is.
+    impl sealed::Sealed for RenderTarget {}
+    impl raw::RawHandle for RenderTarget {
+        fn raw_id(self) -> u32 {
+            self.texture.id
+        }
+        fn from_raw_id(id: u32) -> Self {
+            RenderTarget::from_texture(crate::texture::Texture::new(id, 0, 0))
+        }
+    }
+    impl Handle for RenderTarget {
+        const NONE: Self = RenderTarget::from_texture(<crate::texture::Texture as Handle>::NONE);
+        fn live_in(self, ctx: &Ctx) -> bool {
+            ctx.gfx.is_live(self)
+        }
+        fn free_in(self, ctx: &mut Ctx) {
+            ctx.gfx.free(self);
+        }
+    }
+    impl GfxHandle for RenderTarget {
+        fn live_in_gfx(self, gfx: &Graphics) -> bool {
+            gfx.textures_live.contains(self.texture.id) && gfx.is_render_target(self.texture)
+        }
+        fn free_in_gfx(self, gfx: &mut Graphics) {
+            if gfx.is_render_target(self.texture) {
+                gfx.free_texture_id(self.texture.id);
+            }
+        }
+    }
 
     id_handle!(
         Mesh,
@@ -802,6 +874,11 @@ mod three {
         Shader,
         |g: &Graphics, h: Shader| g.assets3d.shaders_live.contains(h.id),
         |g: &mut Graphics, h: Shader| g.free_shader_id(h.id)
+    );
+    id_handle!(
+        crate::render::SkyShader,
+        |g: &Graphics, h: crate::render::SkyShader| g.assets3d.sky_shaders_live.contains(h.id),
+        |g: &mut Graphics, h: crate::render::SkyShader| g.free_sky_shader_id(h.id)
     );
     id_handle!(
         Compute,
@@ -824,6 +901,11 @@ mod three {
         InstanceBatch,
         |g: &Graphics, h: InstanceBatch| g.instance_batch_len(h).is_some(),
         |g: &mut Graphics, h: InstanceBatch| g.free_instance_batch_id(h.id)
+    );
+    id_handle!(
+        Crowd,
+        |g: &Graphics, h: Crowd| g.crowd_len(h).is_some(),
+        |g: &mut Graphics, h: Crowd| g.free_crowd_id(h.id)
     );
     // A cell's slot goes to the next cell, under a new handle.
     id_handle!(

@@ -1,0 +1,27 @@
+{
+  "format": "ponko-legions-replay",
+  "version": 1,
+  "seed": 1,
+  "units": 2000,
+  "ticks": 600,
+  "orders": [
+    {
+      "tick": 61,
+      "order": "Hold"
+    },
+    {
+      "tick": 152,
+      "order": {
+        "Rally": {
+          "x": 700.0,
+          "y": 375.0
+        }
+      }
+    },
+    {
+      "tick": 301,
+      "order": "Attack"
+    }
+  ],
+  "hash": "99f77617dad68647"
+}

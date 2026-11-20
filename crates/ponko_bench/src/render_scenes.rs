@@ -15,6 +15,8 @@
 //! `PONKO_RENDER_VIEWS`,
 //! and the outputs `PONKO_RENDER_CSV`, `PONKO_RENDER_FRAMES_CSV` and
 //! `PONKO_RENDER_PNG`. `PONKO_GPU_TIER` opens the device as a weaker GPU.
+//! `PONKO_ALLOC_SITES=n` draws `n` more frames and prints where their
+//! allocations were made, grouped by call site.
 
 use std::time::Duration;
 
@@ -194,6 +196,23 @@ fn measure(kind: SceneKind, settings: &Settings) -> Result<(SceneReport, SceneBe
     }
     // The rows above are reserved up front, so this counts the frames' own.
     let allocs = alloc::Counts::now().since(before);
+    // `PONKO_ALLOC_SITES=n`: n more frames, every allocation's call stack
+    // kept and grouped by where it came from (slow; not measured).
+    if let Some(n) = env("PONKO_ALLOC_SITES").and_then(|v| v.trim().parse::<usize>().ok()) {
+        alloc::sites::start();
+        for _ in 0..n {
+            bench.frame();
+        }
+        let sites = alloc::sites::stop();
+        let total: usize = sites.iter().map(|(_, c)| c).sum();
+        println!(
+            "    allocation sites over {n} frames ({:.1} a frame):",
+            total as f64 / n.max(1) as f64
+        );
+        for (site, count) in sites {
+            println!("    {:>9.1}  {site}", count as f64 / n.max(1) as f64);
+        }
+    }
     let count = settings.frames as f64;
     let timed: Vec<&FrameRow> = frames.iter().filter(|f| f.gpu_ms.is_some()).collect();
     let gpu = GpuTimes {

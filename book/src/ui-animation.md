@@ -1,0 +1,180 @@
+# UI animation
+
+The retained UI ([Retained game UI](ui.md)) animates in three ways, all
+optional and all off until you ask for them:
+
+- **State transitions.** A control's fill eases between its states (idle,
+  hovered, focused, pressed, disabled) instead of jumping, and a pressed
+  control can shrink a little. One theme token turns it on for the whole
+  tree.
+- **Screen transitions.** A screen fades, slides or scales in when it is
+  pushed and out when it is popped (by your code, Escape or a closing
+  button).
+- **Tweens and timelines.** Any node's opacity, scale, offset, background,
+  text color, width or height goes to a value over time; several tweens
+  placed in time make a timeline that can repeat.
+
+The easing curves are CSS-style cubic beziers (`ponko::skeleton2d::Bezier`): `Bezier::EASE_OUT` for things arriving (the default),
+`EASE_IN` for things leaving, `EASE_IN_OUT`, `EASE`, `LINEAR` and
+`BACK_OUT`, which overshoots a little and settles. They are the same curves
+the 2D skeleton clips use.
+
+## Smooth states and a menu that slides in
+
+<div class="lang-pair">
+<div>
+
+```rust
+use ponko::ui::{UiLayout, UiScreenTransition, UiTheme, UiTransition};
+
+// Controls ease between their states; a press pushes them in a little.
+ctx.ui.set_theme(UiTheme {
+    transition: UiTransition::new(0.12),
+    press_scale: 0.96,
+    ..UiTheme::dark()
+});
+
+// The pause menu fades and rises in, and fades out.
+let menu = ctx.ui.root().layout(UiLayout::centered(320.0, 220.0)).id();
+let resume = ctx.ui.button(menu, "Resume").layout(UiLayout::row(44.0)).focused().id();
+ctx.ui.set_screen_transition(
+    menu,
+    UiScreenTransition::fade(0.2).with_offset(vec2(0.0, 24.0)),
+    UiScreenTransition::fade(0.15),
+);
+ctx.ui.push_modal(menu);
+# let _ = resume;
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:ui_animation}}
+```
+
+</div>
+</div>
+
+Every built-in theme has `transition: UiTransition::NONE` and
+`press_scale: 1.0`, so a game that sets neither looks exactly as before.
+
+A screen that is popped is gone from the stack at once: it is not
+[shown](ui.md#screen-stack-and-modal-dialogs), takes no input, and the
+screen under it has the focus and the pointer. It is still drawn while its
+exit transition runs, where it was on the stack, so a menu swapped for
+another fades out under the new one. Pushing it again while it goes turns it
+round from where it is. While a screen comes on, it takes input in its
+place at once.
+
+## Tweens and timelines
+
+`ui.animate(node, tween)` moves one property from where it is now to a
+value. A second tween on the same property takes over from where the first
+one got to, so changing your mind half way never jumps. `UiTween::from`
+gives a start value instead.
+
+A `UiTimeline` places tweens in time: `then` starts one when everything
+before it has ended, `with` starts it with the one added last, and `at`
+starts it at a time of its own. `repeat` plays it several times, in a loop,
+or back and forth. Build it once and play it with `ui.play(node, &timeline)`
+as often as you like.
+
+```rust
+use ponko::skeleton2d::Bezier;
+use ponko::ui::{UiEvent, UiLayout, UiRepeat, UiTimeline, UiTween};
+
+let root = ctx.ui.root().layout(UiLayout::fill()).id();
+let badge = ctx.ui.label(root, "New!").id();
+let reward = ctx.ui.panel(root).layout(UiLayout::fixed(200.0, 0.0)).id();
+ctx.ui.push_modeless(root);
+
+// The badge pops in after a short wait: it stays invisible until then,
+// because its first tween has a start value.
+let pop_in = UiTimeline::new()
+    .at(0.3, UiTween::opacity(1.0).from(0.0).seconds(0.15))
+    .with(UiTween::scale(1.2).from(0.5).seconds(0.15).with_ease(Bezier::BACK_OUT))
+    .then(UiTween::scale(1.0).seconds(0.1));
+ctx.ui.play(badge, &pop_in);
+
+// A gentle pulse until stopped.
+let pulse = UiTimeline::new()
+    .then(UiTween::scale(1.05).seconds(0.6).with_ease(Bezier::EASE_IN_OUT))
+    .repeat(UiRepeat::PingPong);
+ctx.ui.play(badge, &pulse); // takes over the scale; the fade goes on
+
+// A layout property: the panel opens, and the nodes after it make room.
+ctx.ui.animate(reward, UiTween::height(120.0).seconds(0.25));
+
+// Later, in a system: the end of a tween or timeline is an event.
+for event in ctx.ui.events() {
+    if event == UiEvent::AnimationDone(reward) {
+        // fill the panel
+    }
+}
+```
+
+Opacity, scale and offset are drawn, not laid out: the node and its children
+fade, scale (around the node's centre) and move together, and input and
+layout keep using its place (`ui.rect`). Background and text color change the
+node's paint; width and height change its layout, so its neighbours move.
+Opacity fades each piece of a node and its children on its own, not the
+group as one picture: half way, a child lets a little of its parent show
+through it. A screen fading over the window looks as expected; for a faded
+card over a busy background, keep fades short.
+`ui.drawn(node)` says how a node is drawn now (its rectangle after
+animation, its opacity and scale, its fill), which is what a headless test
+reads. `ui.stop_animations(node)` stops a node's tweens where they are, and
+`ui.is_animating(node)` tells whether anything moves it.
+
+## The UI clock
+
+Every animation runs on the UI clock: the [`UiInput::dt`](ui.md) of each
+frame, which the engine fills with the frame time. It keeps running while
+the simulation is paused (`ctx.time.pause()`) or slowed down, so a pause
+menu still animates, and it stands still when `dt` is zero. Values depend on
+the time since an animation started, not on the number of frames: the same
+at 30, 60 or 144 frames a second. `ui.clock()` reads it, and
+`UiTransition::progress(elapsed)` gives the eased fraction of a transition,
+for text or sprites you draw yourself next to the UI. The two 2D reference
+games draw their title and pause text that way.
+
+Animating adds no allocation to a frame: playing a timeline copies its
+tweens into a list the UI reuses, the rest is plain data on each node, and a
+screen going off keeps the layout it had. `tests/ui_animation_alloc.rs`
+plays five seconds of a menu with every kind of animation going and checks
+it allocates exactly as often as the same frames without animation.
+(Animating the width or height of a grid container copies its track lists
+each frame; flex layouts copy nothing.)
+
+## Reduced motion
+
+`ui.set_reduced_motion(true)` makes state and screen transitions happen at
+once, for players who ask for less movement; a settings screen can offer
+it. Tweens and timelines the game plays still run: check
+`ui.reduced_motion()` before playing decoration.
+
+## In tests
+
+`tests/ui_animation.rs` drives all of it headless and checks the values over
+time: a state transition ends exactly on the state's fill, an interrupted
+one turns round without a jump, a screen's pose at each moment, timelines
+that hold, loop, ping-pong and report their end, and the same values at
+different frame rates. `src/render/ui_animation_render_test.rs` draws a
+faded, moved and scaled screen offscreen and checks where its pixels land.
+
+## From C
+
+`PonkoUiThemeEx` (version 2) has the `transition` and `press_scale` tokens.
+`ponko_ctx_ui_set_screen_transition` takes two `PonkoUiScreenTransition`s
+(`ponko_ui_screen_fade`, `_slide`, `_zoom` make them; null is none).
+`ponko_ctx_ui_animate` plays one `PonkoUiTween` (`ponko_ui_tween_defaults`
+fills one; its `start` is a delay) and `ponko_ctx_ui_play` an array of them
+as a timeline with a `PonkoUiRepeat`. `ponko_ctx_ui_stop_animations`,
+`ponko_ctx_ui_is_animating`, `ponko_ctx_ui_drawn`, `ponko_ctx_ui_clock`,
+`ponko_ctx_ui_set_reduced_motion` and `ponko_ui_transition_progress` do the
+rest, `ponko_ui_ease` names the curves, and `PONKO_UI_EVENT_ANIMATION_DONE`
+arrives through `ponko_ctx_ui_next_event_ex`. In C++ they are
+`ui::tree::animate`, `play`, `set_screen_transition`, `drawn` and the rest,
+with `ui::make_transition`, `ui::screen_fade`, `ui::tween_to` and
+`ui::named_ease`.

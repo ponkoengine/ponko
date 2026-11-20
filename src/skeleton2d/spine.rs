@@ -2,14 +2,18 @@
 //! differ). What is and isn't read is listed on
 //! [`SkeletonData::from_spine_json`].
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use glam::Vec2;
 use serde_json::{Map, Value};
 
 use super::atlas::SpineAtlas;
-use super::clip::{Bezier, BoneTrack, Clip, Curve, Key, SlotTrack};
-use super::data::{BonePose, IkConstraint, MeshVertex, SkeletonData, SkeletonError, SkinnedMesh, SpritePart, err};
+use super::clip::{Bezier, BoneChannel, BoneTrack, ChannelTrack, Clip, Curve, DeformTrack, Key, SlotTrack};
+use super::data::{
+    BonePose, ClippingMask, IkConstraint, MeshVertex, SkeletonData, SkeletonError, SkinnedMesh, SpritePart,
+    TransformConstraint, err,
+};
 use super::json::beside;
 use crate::color::Color;
 use crate::texture::Texture;
@@ -65,6 +69,11 @@ struct Import<'a> {
     major: u32,
     atlas: Option<&'a SpineAtlas>,
     warnings: Vec<String>,
+    /// Per mesh or clipping mask (skin, slot, name): for each of Spine's
+    /// vertex influences, in file order, the index of Ponko's bind it
+    /// became (`4 * vertex + k`), or `None` if it was dropped (a fifth
+    /// influence). How deform keys find their vertices.
+    influences: HashMap<(usize, usize, String), Vec<Option<usize>>>,
 }
 
 impl Import<'_> {
@@ -98,38 +107,41 @@ impl SkeletonData {
     /// ([`Ctx::load_skeleton2d`](crate::ctx::Ctx::load_skeleton2d) finds
     /// the atlas by itself).
     ///
-    /// Read: bones (position, rotation, scale, length), slots (rest
-    /// attachment and color), every skin's region and mesh attachments
-    /// (weighted meshes keep each vertex's four strongest bones), IK
-    /// constraints (two bones, or one as a look-at), and animations'
-    /// bone rotate/translate/scale timelines, slot attachment and color
-    /// timelines, draw order and events. Curves are exact: stepped,
+    /// Read: bones (position, rotation, scale, shear, length), slots (rest
+    /// attachment and color), every skin's region, mesh and clipping
+    /// attachments (weighted meshes keep each vertex's four strongest
+    /// bones), IK constraints (two bones, or one as a look-at) and
+    /// transform constraints (world or local, absolute or relative; 4.x
+    /// and 3.x mix names), applied in their `order`, and animations' bone
+    /// rotate, translate, scale and shear timelines and the one-axis ones
+    /// (`translatex`, `scaley`...), deform timelines, slot attachment and
+    /// color timelines, draw order and events. Curves are exact: stepped,
     /// linear, and bezier (4.x handles in seconds and values; 3.x
     /// normalized ones), per channel; 3.x rotations keep turning the
     /// shorter way, as 3.x plays them.
     ///
     /// Not read, each reported in [`warnings`](Self::warnings) with the
-    /// file and where (the file still loads, without it): shear, bone
-    /// inherit modes other than `normal`, skin-required bones, slot blend
-    /// modes and dark colors, linked meshes, sequences, bounding boxes,
-    /// paths, points, clipping, transform/path/physics constraints, skin
-    /// constraints, IK softness/compress/stretch, deform timelines,
-    /// separate x/y timelines, shear and inherit timelines, `rgb`,
-    /// `alpha` and two-color timelines, IK and other constraint timelines,
-    /// event values (events fire by name), and any field this importer
-    /// doesn't know.
+    /// file and where (the file still loads, without it): bone inherit
+    /// modes other than `normal`, skin-required bones, slot blend modes,
+    /// dark colors and hidden slots, linked meshes, sequences, bounding
+    /// boxes, paths, points, path constraints (Ponko has no path
+    /// attachments to follow) and physics constraints (a simulation of
+    /// Spine's own), skin constraints, IK softness/compress/stretch,
+    /// inherit timelines, `rgb`, `alpha` and two-color timelines, IK and
+    /// other constraint timelines, event values (events fire by name), and
+    /// any field this importer doesn't know.
     ///
     /// ```
     /// use ponko::skeleton2d::SkeletonData;
     /// let data = SkeletonData::from_spine_json(
     ///     r#"{ "skeleton": { "spine": "4.2.0" },
-    ///          "bones": [{ "name": "root" }, { "name": "head", "parent": "root", "y": 40, "shearX": 5 }] }"#,
+    ///          "bones": [{ "name": "root" }, { "name": "head", "parent": "root", "y": 40, "inherit": "noScale" }] }"#,
     ///     "hero.json",
     /// )
     /// .unwrap();
     /// // Spine's y-up becomes Ponko's y-down.
     /// assert_eq!(data.bones()[1].rest.translation.y, -40.0);
-    /// assert!(data.warnings()[0].starts_with("hero.json: Spine shear"));
+    /// assert!(data.warnings()[0].starts_with("hero.json: Spine inherit mode"));
     /// ```
     ///
     /// # Errors
@@ -174,6 +186,7 @@ impl SkeletonData {
             major,
             atlas,
             warnings: Vec::new(),
+            influences: HashMap::new(),
         };
         let mut data = read(v, &mut import)?;
         data.warnings = import.warnings;
@@ -199,13 +212,20 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
         ],
         "the file",
     );
-    for (key, kind) in [("transform", "transform"), ("path", "path"), ("physics", "physics")] {
-        if present(v, key) {
-            import.warn(
-                &format!("{kind} constraints"),
-                "the bones they would move keep their animated pose",
-            );
-        }
+    if present(v, "path") {
+        import.warn(
+            "path constraints",
+            "the bones they would move keep their animated pose: they follow path attachments (bezier \
+             splines measured along their length), which Ponko has no shape for",
+        );
+    }
+    if present(v, "physics") {
+        import.warn(
+            "physics constraints",
+            "the bones they would move keep their animated pose: Spine's physics is a spring \
+             simulation stepped at its own fixed rate with its own state per skeleton, which a pose \
+             sampled from clips can't reproduce",
+        );
     }
     for (name, e) in v.get("events").and_then(Value::as_object).into_iter().flatten() {
         if ["int", "float", "string", "audio"].iter().any(|k| present(e, k)) {
@@ -252,9 +272,6 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
             ],
             &format!("bone \"{name}\""),
         );
-        if present(b, "shearX") || present(b, "shearY") {
-            import.warn(&format!("shear (bone \"{name}\")"), "the bone is posed without it");
-        }
         if let Some(mode) = text(b, "inherit").or(text(b, "transform"))
             && mode != "normal"
         {
@@ -276,11 +293,12 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
         if data.bone(name).is_some() {
             return Err(err(format!("two bones are named \"{name}\"")));
         }
-        let rest = BonePose {
-            translation: point(num(b, "x", 0.0), num(b, "y", 0.0)),
-            rotation: angle(num(b, "rotation", 0.0)),
-            scale: Vec2::new(num(b, "scaleX", 1.0), num(b, "scaleY", 1.0)),
-        };
+        let rest = BonePose::new(
+            point(num(b, "x", 0.0), num(b, "y", 0.0)),
+            angle(num(b, "rotation", 0.0)),
+            Vec2::new(num(b, "scaleX", 1.0), num(b, "scaleY", 1.0)),
+        )
+        .with_shear(Vec2::new(angle(num(b, "shearX", 0.0)), angle(num(b, "shearY", 0.0))));
         data.add_bone(name, parent, rest, num(b, "length", 0.0));
     }
     let mut rest_attachments = Vec::new();
@@ -399,11 +417,11 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
                         let size = Vec2::new(num(a, "width", 0.0), num(a, "height", 0.0));
                         let mut part = SpritePart::new(Texture::new(u32::MAX, 0, 0))
                             .with_size(size)
-                            .with_offset(BonePose {
-                                translation: point(num(a, "x", 0.0), num(a, "y", 0.0)),
-                                rotation: angle(num(a, "rotation", 0.0)),
-                                scale: Vec2::new(num(a, "scaleX", 1.0), num(a, "scaleY", 1.0)),
-                            });
+                            .with_offset(BonePose::new(
+                                point(num(a, "x", 0.0), num(a, "y", 0.0)),
+                                angle(num(a, "rotation", 0.0)),
+                                Vec2::new(num(a, "scaleX", 1.0), num(a, "scaleY", 1.0)),
+                            ));
                         match import.atlas {
                             Some(atlas) => {
                                 let r = region(atlas, source, &place)?;
@@ -444,7 +462,8 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
                             ],
                             &place,
                         );
-                        let mut mesh = spine_mesh(&data, slot, name, a)?;
+                        let (mut mesh, influences) = spine_mesh(&data, slot, name, a)?;
+                        import.influences.insert((skin, slot, name.clone()), influences);
                         match import.atlas {
                             Some(atlas) => {
                                 let r = region(atlas, source, &place)?;
@@ -473,7 +492,21 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
                     "boundingbox" => import.warn(&format!("bounding box ({place})"), "it has no shape in Ponko"),
                     "path" => import.warn(&format!("path attachment ({place})"), "it has no shape in Ponko"),
                     "point" => import.warn(&format!("point attachment ({place})"), "it has no position in Ponko"),
-                    "clipping" => import.warn(&format!("clipping ({place})"), "the slots it would clip draw whole"),
+                    "clipping" => {
+                        import.unknown(a, &["type", "name", "end", "vertexCount", "vertices", "color"], &place);
+                        let count = a.get("vertexCount").and_then(Value::as_u64).unwrap_or(0) as usize;
+                        let raw = floats(a, "vertices");
+                        let (vertices, influences) = spine_vertices(&data, slot, name, &raw, count, None)?;
+                        let end = match text(a, "end") {
+                            Some(e) => Some(
+                                data.slot(e)
+                                    .ok_or_else(|| err(format!("{place} ends at slot \"{e}\", which isn't there")))?,
+                            ),
+                            None => None,
+                        };
+                        import.influences.insert((skin, slot, name.clone()), influences);
+                        data.add_skin_attachment(skin, slot, name, ClippingMask::new(vertices, end));
+                    }
                     other => import.warn(
                         &format!("attachment type \"{other}\" ({place})"),
                         "the slot shows nothing for this attachment",
@@ -485,9 +518,21 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
     for (slot, name) in rest_attachments.into_iter().enumerate() {
         data.slots[slot].attachment = name.filter(|n| data.find(0, slot, n).is_some()).map(Arc::from);
     }
-    let mut constraints: Vec<&Value> = array(v, "ik").iter().collect();
-    constraints.sort_by_key(|ik| ik.get("order").and_then(Value::as_i64).unwrap_or(0));
-    for ik in constraints {
+    // IK and transform constraints apply in their `order` (a stable sort:
+    // equal orders keep IK first, each kind in file order).
+    let mut constraints: Vec<(bool, &Value)> = array(v, "ik")
+        .iter()
+        .map(|c| (true, c))
+        .chain(array(v, "transform").iter().map(|c| (false, c)))
+        .collect();
+    constraints.sort_by_key(|(_, c)| c.get("order").and_then(Value::as_i64).unwrap_or(0));
+    for (is_ik, ik) in constraints {
+        if !is_ik {
+            let constraint = spine_transform(&data, ik, import)?;
+            data.check_transform(&constraint)?;
+            data.push_transform(constraint);
+            continue;
+        }
         let name = text(ik, "name").unwrap_or("ik");
         let place = format!("IK constraint \"{name}\"");
         import.unknown(
@@ -539,12 +584,13 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
         // negative way on a y-down screen.
         constraint.bend_positive = !ik.get("bendPositive").and_then(Value::as_bool).unwrap_or(true);
         data.check_ik(&constraint)?;
-        data.ik.push(constraint);
+        data.push_ik(constraint);
     }
     if let Some(animations) = object(v, "animations") {
         for (name, a) in animations {
             let clip = spine_clip(&data, name, a, import)?;
             clip.check(data.bones.len(), data.slots.len())?;
+            data.check_deform(&clip)?;
             data.clips.push(clip);
         }
     }
@@ -568,35 +614,40 @@ fn region<'a>(atlas: &'a SpineAtlas, name: &str, place: &str) -> Result<&'a supe
         .ok_or_else(|| err(format!("{} has no region \"{name}\" for {place}", atlas.path())))
 }
 
-fn spine_mesh(data: &SkeletonData, slot: usize, name: &str, a: &Value) -> Result<SkinnedMesh, SkeletonError> {
-    let floats = |key: &str| -> Vec<f32> {
-        array(a, key)
-            .iter()
-            .filter_map(Value::as_f64)
-            .map(|n| n as f32)
-            .collect()
-    };
-    let uvs = floats("uvs");
-    let raw = floats("vertices");
-    let triangles: Vec<u16> = array(a, "triangles")
+fn floats(a: &Value, key: &str) -> Vec<f32> {
+    array(a, key)
         .iter()
-        .filter_map(Value::as_u64)
-        .map(|n| n as u16)
-        .collect();
-    let count = uvs.len() / 2;
-    let bad = || err(format!("mesh \"{name}\" has vertices that don't match its uvs"));
+        .filter_map(Value::as_f64)
+        .map(|n| n as f32)
+        .collect()
+}
+
+/// A mesh's or clipping mask's `count` vertices from Spine's `raw` list:
+/// unweighted (two numbers per vertex, in the slot's bone's space) or
+/// weighted (per vertex a bone count, then bone, x, y, weight each); `uvs`
+/// gives their image positions. Also where each of Spine's influences went
+/// (see `Import::influences`).
+#[allow(clippy::type_complexity)]
+fn spine_vertices(
+    data: &SkeletonData,
+    slot: usize,
+    name: &str,
+    raw: &[f32],
+    count: usize,
+    uvs: Option<&[f32]>,
+) -> Result<(Vec<MeshVertex>, Vec<Option<usize>>), SkeletonError> {
+    let bad = || err(format!("\"{name}\" has vertices that don't match its count"));
+    let uv = |i: usize| uvs.map_or(Vec2::ZERO, |u| Vec2::new(u[2 * i], u[2 * i + 1]));
     let mut vertices = Vec::with_capacity(count);
-    if raw.len() == uvs.len() {
+    let mut influences = Vec::new();
+    if raw.len() == 2 * count {
         // Unweighted: positions in the slot's bone's space.
         let bone = data.slots[slot].bone;
         let rest = data.rest_world[bone].0;
         for i in 0..count {
             let at = rest.transform_point2(point(raw[2 * i], raw[2 * i + 1]));
-            vertices.push(MeshVertex::new(
-                at,
-                Vec2::new(uvs[2 * i], uvs[2 * i + 1]),
-                &[(bone, 1.0)],
-            ));
+            vertices.push(MeshVertex::new(at, uv(i), &[(bone, 1.0)]));
+            influences.push(Some(4 * i));
         }
     } else {
         // Weighted: per vertex, a bone count, then (bone, x, y, weight).
@@ -605,7 +656,7 @@ fn spine_mesh(data: &SkeletonData, slot: usize, name: &str, a: &Value) -> Result
             let n = *raw.get(at).ok_or_else(bad)? as usize;
             at += 1;
             let mut position = Vec2::ZERO;
-            let mut influences = Vec::with_capacity(n);
+            let mut weighted = Vec::with_capacity(n);
             for _ in 0..n {
                 let entry = raw.get(at..at + 4).ok_or_else(bad)?;
                 at += 4;
@@ -614,22 +665,124 @@ fn spine_mesh(data: &SkeletonData, slot: usize, name: &str, a: &Value) -> Result
                     return Err(bad());
                 }
                 position += data.rest_world[bone].0.transform_point2(point(entry[1], entry[2])) * entry[3];
-                influences.push((bone, entry[3]));
+                weighted.push((bone, entry[3]));
             }
-            if !influences.iter().any(|(_, w)| *w > 0.0) {
+            if !weighted.iter().any(|(_, w)| *w > 0.0) {
                 return Err(bad());
             }
-            vertices.push(MeshVertex::new(
-                position,
-                Vec2::new(uvs[2 * i], uvs[2 * i + 1]),
-                &influences,
-            ));
+            // Where `MeshVertex::new` puts each influence: the positive
+            // ones, strongest first (a stable sort), the first four.
+            let mut order: Vec<usize> = (0..n).filter(|&j| weighted[j].1 > 0.0).collect();
+            order.sort_by(|&a, &b| weighted[b].1.total_cmp(&weighted[a].1));
+            order.truncate(4);
+            let first = influences.len();
+            influences.resize(first + n, None);
+            for (k, j) in order.into_iter().enumerate() {
+                influences[first + j] = Some(4 * i + k);
+            }
+            vertices.push(MeshVertex::new(position, uv(i), &weighted));
+        }
+        if at != raw.len() {
+            return Err(bad());
         }
     }
+    Ok((vertices, influences))
+}
+
+fn spine_mesh(
+    data: &SkeletonData,
+    slot: usize,
+    name: &str,
+    a: &Value,
+) -> Result<(SkinnedMesh, Vec<Option<usize>>), SkeletonError> {
+    let uvs = floats(a, "uvs");
+    let raw = floats(a, "vertices");
+    let triangles: Vec<u16> = array(a, "triangles")
+        .iter()
+        .filter_map(Value::as_u64)
+        .map(|n| n as u16)
+        .collect();
+    let count = uvs.len() / 2;
+    let (vertices, influences) = spine_vertices(data, slot, name, &raw, count, Some(&uvs))
+        .map_err(|_| err(format!("mesh \"{name}\" has vertices that don't match its uvs")))?;
     if !triangles.len().is_multiple_of(3) || triangles.iter().any(|&t| usize::from(t) >= vertices.len()) {
         return Err(err(format!("mesh \"{name}\"'s triangles don't match its vertices")));
     }
-    Ok(SkinnedMesh::new(Texture::new(u32::MAX, 0, 0), vertices, triangles))
+    Ok((
+        SkinnedMesh::new(Texture::new(u32::MAX, 0, 0), vertices, triangles),
+        influences,
+    ))
+}
+
+/// A Spine transform constraint (4.0 to 4.2 names, and 3.x's mixes).
+fn spine_transform(data: &SkeletonData, c: &Value, import: &mut Import) -> Result<TransformConstraint, SkeletonError> {
+    let name = text(c, "name").unwrap_or("transform");
+    let place = format!("transform constraint \"{name}\"");
+    import.unknown(
+        c,
+        &[
+            "name",
+            "order",
+            "skin",
+            "bones",
+            "target",
+            "rotation",
+            "x",
+            "y",
+            "scaleX",
+            "scaleY",
+            "shearY",
+            "mixRotate",
+            "mixX",
+            "mixY",
+            "mixScaleX",
+            "mixScaleY",
+            "mixShearY",
+            "rotateMix",
+            "translateMix",
+            "scaleMix",
+            "shearMix",
+            "local",
+            "relative",
+        ],
+        &place,
+    );
+    if present(c, "skin") {
+        import.warn(
+            &format!("skin-required constraints ({place})"),
+            "it applies in every skin",
+        );
+    }
+    let bone = |b: &str| {
+        data.bone(b)
+            .ok_or_else(|| err(format!("{place}: no bone named \"{b}\"")))
+    };
+    let bones = array(c, "bones")
+        .iter()
+        .map(|b| bone(b.as_str().unwrap_or("")))
+        .collect::<Result<Vec<_>, _>>()?;
+    let target = bone(text(c, "target").unwrap_or(""))?;
+    let mut t = TransformConstraint::new(name, &bones, target);
+    if import.major < 4 {
+        t.mix_rotate = num(c, "rotateMix", 1.0);
+        t.mix_translate = Vec2::splat(num(c, "translateMix", 1.0));
+        t.mix_scale = Vec2::splat(num(c, "scaleMix", 1.0));
+        t.mix_shear_y = num(c, "shearMix", 1.0);
+    } else {
+        t.mix_rotate = num(c, "mixRotate", 1.0);
+        let x = num(c, "mixX", 1.0);
+        t.mix_translate = Vec2::new(x, num(c, "mixY", x));
+        let sx = num(c, "mixScaleX", 1.0);
+        t.mix_scale = Vec2::new(sx, num(c, "mixScaleY", sx));
+        t.mix_shear_y = num(c, "mixShearY", 1.0);
+    }
+    t.offset_rotation = angle(num(c, "rotation", 0.0));
+    t.offset_translation = point(num(c, "x", 0.0), num(c, "y", 0.0));
+    t.offset_scale = Vec2::new(num(c, "scaleX", 0.0), num(c, "scaleY", 0.0));
+    t.offset_shear_y = angle(num(c, "shearY", 0.0));
+    t.local = c.get("local").and_then(Value::as_bool).unwrap_or(false);
+    t.relative = c.get("relative").and_then(Value::as_bool).unwrap_or(false);
+    Ok(t)
 }
 
 // ---- curves ---------------------------------------------------------------------
@@ -889,6 +1042,108 @@ fn rgba(k: &Value) -> Result<[f64; 4], SkeletonError> {
 
 // ---- animations -----------------------------------------------------------------
 
+/// One axis's timeline as a channel track: `value` keys (default
+/// `default`), mapped from Spine's units by `map`.
+fn channel_track(
+    keys_of: &[Value],
+    channel: BoneChannel,
+    default: f32,
+    map: impl Fn(f32) -> f32,
+    import: &mut Import,
+    place: &str,
+) -> Result<ChannelTrack, SkeletonError> {
+    let f = frames::<1>(keys_of, import.major, |k| Ok([channel_value(k, default)]))?;
+    Ok(ChannelTrack::new(channel, keys(f, import, place, |[v]| map(v as f32))))
+}
+
+fn channel_value(k: &Value, default: f32) -> f64 {
+    f64::from(num(k, "value", default))
+}
+
+/// A deform key's curve: stepped, 4.x's handles (time in seconds, value
+/// as the fraction 0..1 of the way to the next key), or 3.x's normalized
+/// curve.
+fn deform_curve(k: &Value, next: Option<&Value>, major: u32) -> Result<Curve, SkeletonError> {
+    let bad = || err("a deform curve needs 4 numbers");
+    Ok(match k.get("curve") {
+        None | Some(Value::Null) => Curve::Linear,
+        Some(Value::String(s)) if s == "stepped" => Curve::Stepped,
+        Some(Value::String(s)) if s == "linear" => Curve::Linear,
+        Some(Value::Number(n)) => Curve::Bezier(Bezier::new(
+            n.as_f64().unwrap_or(0.0) as f32,
+            num(k, "c2", 0.0),
+            num(k, "c3", 1.0),
+            num(k, "c4", 1.0),
+        )),
+        Some(Value::Array(list)) => {
+            let n: Vec<f32> = list.iter().filter_map(Value::as_f64).map(|n| n as f32).collect();
+            if n.len() != 4 {
+                return Err(bad());
+            }
+            if major < 4 {
+                Curve::Bezier(Bezier::new(n[0], n[1], n[2], n[3]))
+            } else {
+                let (t0, t1) = (num(k, "time", 0.0), next.map_or(0.0, |n| num(n, "time", 0.0)));
+                let span = t1 - t0;
+                if span <= 0.0 {
+                    Curve::Linear
+                } else {
+                    let x = |t: f32| ((t - t0) / span).clamp(0.0, 1.0);
+                    Curve::Bezier(Bezier::new(x(n[0]), n[1], x(n[2]), n[3]))
+                }
+            }
+        }
+        Some(_) => return Err(bad()),
+    })
+}
+
+/// A Spine deform timeline of mesh `attachment` in slot `slot` of skin
+/// `skin`: each key's `vertices` (from float `offset` on; the rest 0) are
+/// offsets, x then y, one pair per vertex (unweighted) or per influence
+/// (weighted), moved to Ponko's binds.
+fn deform_track(
+    data: &SkeletonData,
+    (skin, slot, attachment): (usize, usize, &str),
+    keys_of: &[Value],
+    import: &mut Import,
+    place: &str,
+) -> Result<Option<DeformTrack>, SkeletonError> {
+    let Some(influences) = import.influences.get(&(skin, slot, attachment.to_string())) else {
+        import.warn(
+            &format!("deform of an attachment that isn't a mesh ({place})"),
+            "it keeps its shape",
+        );
+        return Ok(None);
+    };
+    let binds = data
+        .find(skin, slot, attachment)
+        .map_or(0, |i| data.attachments[i].binds.len());
+    let floats_needed = influences.len() * 2;
+    let mut track = DeformTrack::new(slot, skin, attachment);
+    for (i, k) in keys_of.iter().enumerate() {
+        let mut flat = vec![0.0f32; floats_needed];
+        let offset = k.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let values = floats(k, "vertices");
+        if offset + values.len() > floats_needed {
+            return Err(err(format!(
+                "{place}: a deform key has more values than the mesh has vertices"
+            )));
+        }
+        flat[offset..offset + values.len()].copy_from_slice(&values);
+        let mut offsets = vec![Vec2::ZERO; binds];
+        for (j, bind) in influences.iter().enumerate() {
+            if let Some(b) = bind {
+                offsets[*b] = point(flat[2 * j], flat[2 * j + 1]);
+            }
+        }
+        let curve = deform_curve(k, keys_of.get(i + 1), import.major)?;
+        track
+            .keys
+            .push(Key::new(num(k, "time", 0.0), Arc::from(offsets)).with_curve(curve));
+    }
+    Ok(Some(track))
+}
+
 fn spine_clip(data: &SkeletonData, name: &str, a: &Value, import: &mut Import) -> Result<Clip, SkeletonError> {
     let major = import.major;
     let mut clip = Clip::new(name, 0.0);
@@ -912,15 +1167,13 @@ fn spine_clip(data: &SkeletonData, name: &str, a: &Value, import: &mut Import) -
     );
     for (key, what, instead) in [
         ("ik", "IK timelines", "the constraints keep their mix"),
-        ("transform", "transform constraint timelines", "they are left out"),
+        (
+            "transform",
+            "transform constraint timelines",
+            "the constraints keep their mixes",
+        ),
         ("path", "path constraint timelines", "they are left out"),
         ("physics", "physics constraint timelines", "they are left out"),
-        ("deform", "deform timelines", "meshes keep their bound shape"),
-        (
-            "attachments",
-            "deform and sequence timelines",
-            "meshes keep their bound shape and sequences their first image",
-        ),
     ] {
         if present(a, key) {
             import.warn(&format!("{what} ({anim})"), instead);
@@ -939,8 +1192,20 @@ fn spine_clip(data: &SkeletonData, name: &str, a: &Value, import: &mut Import) -
                 .bone(bone)
                 .ok_or_else(|| err(format!("{anim}: no bone named \"{bone}\"")))?;
             let place = format!("{anim}, bone \"{bone}\"");
+            const READ: [&str; 10] = [
+                "rotate",
+                "translate",
+                "translatex",
+                "translatey",
+                "scale",
+                "scalex",
+                "scaley",
+                "shear",
+                "shearx",
+                "sheary",
+            ];
             for (key, _) in timelines.as_object().into_iter().flatten() {
-                if !["rotate", "translate", "scale"].contains(&key.as_str()) {
+                if !READ.contains(&key.as_str()) {
                     import.warn(
                         &format!("\"{key}\" timeline ({place})"),
                         "the bone isn't animated by it",
@@ -974,6 +1239,29 @@ fn spine_clip(data: &SkeletonData, name: &str, a: &Value, import: &mut Import) -
             times(scale);
             let f = frames::<2>(scale, major, |k| Ok([channel(k, "x", 1.0), channel(k, "y", 1.0)]))?;
             track.scale = keys(f, import, &place, |[x, y]| Vec2::new(x as f32, y as f32));
+            let shear = array(timelines, "shear");
+            times(shear);
+            let f = frames::<2>(shear, major, |k| Ok([channel(k, "x", 0.0), channel(k, "y", 0.0)]))?;
+            track.shear = keys(f, import, &place, |[x, y]| Vec2::new(angle(x as f32), angle(y as f32)));
+            // Spine 4's one-axis timelines, each with its own key times.
+            type Axis = (&'static str, BoneChannel, f32, fn(f32) -> f32);
+            let axes: [Axis; 6] = [
+                ("translatex", BoneChannel::TranslateX, 0.0, |v| v),
+                ("translatey", BoneChannel::TranslateY, 0.0, |v| -v),
+                ("scalex", BoneChannel::ScaleX, 1.0, |v| v),
+                ("scaley", BoneChannel::ScaleY, 1.0, |v| v),
+                ("shearx", BoneChannel::ShearX, 0.0, angle),
+                ("sheary", BoneChannel::ShearY, 0.0, angle),
+            ];
+            for (key, axis, default, map) in axes {
+                let list = array(timelines, key);
+                if list.is_empty() {
+                    continue;
+                }
+                times(list);
+                let c = channel_track(list, axis, default, map, import, &place)?;
+                track.channels.push(c);
+            }
             clip.bones.push(track);
         }
     }
@@ -1011,6 +1299,48 @@ fn spine_clip(data: &SkeletonData, name: &str, a: &Value, import: &mut Import) -
                 Color::rgba(r as f32, g as f32, b as f32, a as f32)
             });
             clip.slots.push(track);
+        }
+    }
+    // Deform timelines: 4.x under `attachments` (skin, slot, attachment,
+    // then `deform`), 3.x under `deform` (skin, slot, attachment).
+    let mut deforms: Vec<(&str, &str, &str, &[Value])> = Vec::new();
+    for (skin, slots) in object(a, "attachments").into_iter().flatten() {
+        for (slot, attachments) in slots.as_object().into_iter().flatten() {
+            for (attachment, timelines) in attachments.as_object().into_iter().flatten() {
+                for (kind, list) in timelines.as_object().into_iter().flatten() {
+                    match kind.as_str() {
+                        "deform" => deforms.push((skin, slot, attachment, list.as_array().map_or(&[], Vec::as_slice))),
+                        "sequence" => import.warn(
+                            &format!("sequence timelines ({anim})"),
+                            "sequences show their first image",
+                        ),
+                        other => import.warn(
+                            &format!("\"{other}\" attachment timeline ({anim})"),
+                            "the attachment isn't animated by it",
+                        ),
+                    }
+                }
+            }
+        }
+    }
+    for (skin, slots) in object(a, "deform").into_iter().flatten() {
+        for (slot, attachments) in slots.as_object().into_iter().flatten() {
+            for (attachment, list) in attachments.as_object().into_iter().flatten() {
+                deforms.push((skin, slot, attachment, list.as_array().map_or(&[], Vec::as_slice)));
+            }
+        }
+    }
+    for (skin, slot, attachment, list) in deforms {
+        let place = format!("{anim}, deform of \"{attachment}\" in slot \"{slot}\"");
+        let skin_index = data
+            .skin(skin)
+            .ok_or_else(|| err(format!("{place}: no skin named \"{skin}\"")))?;
+        let slot_index = data
+            .slot(slot)
+            .ok_or_else(|| err(format!("{place}: no slot named \"{slot}\"")))?;
+        times(list);
+        if let Some(track) = deform_track(data, (skin_index, slot_index, attachment), list, import, &place)? {
+            clip.deform.push(track);
         }
     }
     for k in array(a, "drawOrder").iter().chain(array(a, "draworder")) {
@@ -1078,4 +1408,163 @@ fn draw_order(data: &SkeletonData, offsets: &[Value]) -> Result<Arc<[u16]>, Skel
         .into_iter()
         .map(|s| s.map(|s| s as u16).ok_or_else(|| err("draw order offsets overlap")))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    //! Imported deform timelines and clipping attachments, checked where
+    //! they land: the vertices drawn. Expected values are worked out in
+    //! Spine's y-up space, then mirrored to Ponko's (x, -y).
+    use std::sync::Arc;
+
+    use glam::{Vec2, vec2};
+
+    use crate::ecs::Transform2D;
+    use crate::render::batch::DrawList;
+    use crate::skeleton2d::draw::{Scratch, draw};
+    use crate::skeleton2d::{Skeleton, SkeletonData};
+
+    fn load(text: &str) -> Skeleton {
+        let data = SkeletonData::from_spine_json(text, "deform.json").unwrap();
+        assert_eq!(data.warnings(), [] as [String; 0]);
+        let mut s = Skeleton::new(Arc::new(data));
+        s.play("a");
+        s.update(0.0);
+        s
+    }
+
+    /// The positions drawn for `s` at `seconds` into its clip.
+    fn drawn(s: &mut Skeleton, seconds: f32) -> Vec<Vec2> {
+        s.set_normalized_time(seconds / s.data().clips()[0].duration);
+        s.update(0.0);
+        let mut list = DrawList::default();
+        draw(&mut list, &mut Scratch::default(), &Transform2D::default(), s, 0);
+        list.finish().0.iter().map(|v| Vec2::from(v.pos)).collect()
+    }
+
+    fn near(a: &[Vec2], b: &[Vec2]) {
+        assert_eq!(a.len(), b.len(), "{a:?} != {b:?}");
+        for (x, y) in a.iter().zip(b) {
+            assert!(x.distance(*y) < 1e-4, "{a:?} != {b:?}");
+        }
+    }
+
+    /// Bone `b` at (10, 0) on the root; slot `s` on it showing mesh `m`:
+    /// three vertices, (0, 0), (10, 0) and (0, 10) in b's space.
+    const MESH: &str = r#""bones": [{ "name": "root" }, { "name": "b", "parent": "root", "x": 10 }],
+        "slots": [{ "name": "s", "bone": "b", "attachment": "m" }],
+        "skins": [{ "name": "default", "attachments": { "s": { "m": { "type": "mesh",
+            "uvs": [0, 0, 1, 0, 0, 1], "triangles": [0, 1, 2], "vertices": [0, 0, 10, 0, 0, 10] } } } }]"#;
+
+    #[test]
+    fn spine_4_deform_keys_move_mesh_vertices_by_their_offsets() {
+        // Key 0: from float 2 on, (5, 5): vertex 1 moves 5 right and 5 up.
+        // Key 1 s: no vertices, back to rest. Half way: (2.5, 2.5).
+        let mut s = load(&format!(
+            r#"{{ "skeleton": {{ "spine": "4.2.0" }}, {MESH},
+               "animations": {{ "a": {{ "attachments": {{ "default": {{ "s": {{ "m": {{ "deform": [
+                 {{ "time": 0, "offset": 2, "vertices": [5, 5] }}, {{ "time": 1 }} ] }} }} }} }} }} }} }}"#
+        ));
+        // At rest the mesh is at (10, 0), (20, 0), (10, -10).
+        near(
+            &drawn(&mut s, 0.0),
+            &[vec2(10.0, 0.0), vec2(25.0, -5.0), vec2(10.0, -10.0)],
+        );
+        near(
+            &drawn(&mut s, 0.5),
+            &[vec2(10.0, 0.0), vec2(22.5, -2.5), vec2(10.0, -10.0)],
+        );
+        near(
+            &drawn(&mut s, 0.75),
+            &[vec2(10.0, 0.0), vec2(21.25, -1.25), vec2(10.0, -10.0)],
+        );
+    }
+
+    #[test]
+    fn deform_curves_and_odd_offsets_import_as_spine_reads_them() {
+        // Offset 3 starts at vertex 1's y: (0, 4). The 4.x curve's values
+        // are fractions of the way: handles (0.25 s, 0) and (0.75 s, 0)
+        // hold it until late, so at 0.5 s (x(s) = 0.5 at s = 0.5) it is
+        // y(0.5) = 0.5^3 = 0.125 of the way back: 4 x 0.875 = 3.5 up.
+        let mut s = load(&format!(
+            r#"{{ "skeleton": {{ "spine": "4.2.0" }}, {MESH},
+               "animations": {{ "a": {{ "attachments": {{ "default": {{ "s": {{ "m": {{ "deform": [
+                 {{ "time": 0, "offset": 3, "vertices": [4], "curve": [0.25, 0, 0.75, 0] }},
+                 {{ "time": 1 }} ] }} }} }} }} }} }} }}"#
+        ));
+        near(&drawn(&mut s, 0.0)[1..2], &[vec2(20.0, -4.0)]);
+        near(&drawn(&mut s, 0.5)[1..2], &[vec2(20.0, -3.5)]);
+        // Spine 3.x: `deform` by skin, slot and attachment; stepped holds.
+        let mut s = load(&format!(
+            r#"{{ "skeleton": {{ "spine": "3.8.99" }}, {MESH},
+               "animations": {{ "a": {{ "deform": {{ "default": {{ "s": {{ "m": [
+                 {{ "time": 0, "vertices": [0, 0, 0, 0, 6, 0], "curve": "stepped" }},
+                 {{ "time": 1 }} ] }} }} }} }} }} }}"#
+        ));
+        near(&drawn(&mut s, 0.9)[2..3], &[vec2(16.0, -10.0)]);
+    }
+
+    #[test]
+    fn weighted_deform_offsets_follow_their_influences_in_any_order() {
+        // One vertex on `root` (weight 0.25) and `b` (0.75), at (0, 10)
+        // through both. Ponko keeps the stronger first; the deform's pairs
+        // are in Spine's order: (4, 0) for root's influence, (0, 0) for
+        // b's. Root is unturned, so the vertex moves 0.25 x 4 = 1 right.
+        // (Swapped, it would move 3.)
+        let text = r#"{ "skeleton": { "spine": "4.2.0" },
+            "bones": [{ "name": "root" }, { "name": "b", "parent": "root", "x": 10 }],
+            "slots": [{ "name": "s", "bone": "root", "attachment": "m" }],
+            "skins": [{ "name": "default", "attachments": { "s": { "m": { "type": "mesh",
+                "uvs": [0, 0, 1, 0, 0, 1], "triangles": [0, 1, 2],
+                "vertices": [2, 0, 0, 10, 0.25, 1, -10, 10, 0.75,  1, 0, 0, 0, 1,  1, 1, 0, 0, 1] } } } }],
+            "animations": { "a": { "attachments": { "default": { "s": { "m": { "deform": [
+                { "time": 0, "vertices": [4, 0, 0, 0] }, { "time": 1, "vertices": [4, 0, 0, 0] } ] } } } } } } }"#;
+        let mut s = load(text);
+        near(
+            &drawn(&mut s, 0.5),
+            &[vec2(1.0, -10.0), vec2(0.0, 0.0), vec2(10.0, 0.0)],
+        );
+    }
+
+    #[test]
+    fn clipping_attachments_clip_the_slots_up_to_their_end() {
+        // A mask on the root covering x 0..5 (Spine y 0..10); slot `in`
+        // shows a 10 x 10 square centered at (5, 5) up, so half of it is
+        // inside. Slot `out` comes after the end slot and draws whole.
+        let text = r#"{ "skeleton": { "spine": "4.2.0" },
+            "bones": [{ "name": "root" }],
+            "slots": [{ "name": "mask", "bone": "root", "attachment": "mask" },
+                      { "name": "in", "bone": "root", "attachment": "sq" },
+                      { "name": "out", "bone": "root", "attachment": "sq" }],
+            "skins": [{ "name": "default", "attachments": {
+                "mask": { "mask": { "type": "clipping", "end": "in", "vertexCount": 4,
+                                    "vertices": [0, 0, 5, 0, 5, 10, 0, 10], "color": "ce3a3aff" } },
+                "in": { "sq": { "x": 5, "y": 5, "width": 10, "height": 10 } },
+                "out": { "sq": { "x": 5, "y": 5, "width": 10, "height": 10 } } } }] }"#;
+        let data = SkeletonData::from_spine_json(text, "clip.json").unwrap();
+        assert_eq!(data.warnings(), [] as [String; 0]);
+        let mask = data.attachment(0, 0, "mask").unwrap();
+        let crate::skeleton2d::Attachment::Clipping(mask) = mask else {
+            panic!("a clipping mask");
+        };
+        assert_eq!((mask.vertices.len(), mask.end), (4, Some(1)));
+        let mut s = Skeleton::new(Arc::new(data));
+        s.update(0.0);
+        let mut list = DrawList::default();
+        draw(&mut list, &mut Scratch::default(), &Transform2D::default(), &s, 0);
+        let v: Vec<Vec2> = list.finish().0.iter().map(|v| Vec2::from(v.pos)).collect();
+        let area = |v: &[Vec2]| -> f32 {
+            v.chunks(3)
+                .map(|t| (t[1] - t[0]).perp_dot(t[2] - t[0]).abs() / 2.0)
+                .sum()
+        };
+        let clipped = &v[..v.len() - 6];
+        assert!((area(clipped) - 50.0).abs() < 1e-3, "{}", area(clipped));
+        assert!(
+            clipped
+                .iter()
+                .all(|p| p.x <= 5.0 + 1e-4 && p.y <= 1e-4 && p.y >= -10.0 - 1e-4)
+        );
+        assert!((area(&v[v.len() - 6..]) - 100.0).abs() < 1e-3);
+    }
 }

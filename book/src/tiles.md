@@ -274,6 +274,62 @@ let options = LevelOptions::default()
   for tools or your own spawning: its tilesets, layers, objects and
   properties as plain data (`Level`).
 
+### LDtk worlds and reflected entity fields
+
+Use a level's identifier or iid with `LevelOptions::level`. Use
+`ctx.assets.load_ldtk_worlds("world.ldtk")` to list worlds and their
+levels by iid. The descriptors include pixel positions and sizes and the
+LDtk depth. Free and GridVania layouts use the editor's pixel offsets.
+Linear layouts place levels in editor order, using their widths or heights
+along the layout axis. Each world has its own coordinate origin. This
+enumeration is available in Rust.
+
+Pass `at_ldtk_position()` to add the selected level's offset when spawning
+it. To spawn more than one level in the same world, give them the same world
+origin and select each by iid. External `.ldtkl` files load on demand.
+Register your component with reflection and match LDtk field identifiers to
+its JSON keys. A mapping applies the fields to both prefab and plain
+entities of that class. The synthetic `iid` and `tags` entries stay on
+`LevelObject` along with the original data.
+
+<div class="lang-pair">
+<div>
+
+```rust
+# use ponko::reflect::WorldReflect;
+# use ponko::tilemap::LevelOptions;
+#[derive(Component, serde::Serialize, serde::Deserialize)]
+struct PickupStats {
+    value: u32,
+}
+# fn places(ctx: &mut Ctx) -> Result<(), Error> {
+ctx.world.reflect::<PickupStats>();
+let options = LevelOptions::default()
+    .level("Cavern")
+    .at_ldtk_position()
+    .solid("Wall")
+    .reflect_entity("Pickup", "PickupStats");
+ctx.spawn_level_with("levels/world.ldtk", Vec2::ZERO, options)?;
+# Ok(())
+# }
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:ldtk_world_import}}
+```
+
+</div>
+</div>
+
+In C, `ponko_ctx_spawn_ldtk_level` takes the same placement and reflection
+options in `PonkoLdtkOptions`. C and C++ register field-described
+components as in [C and C++](c-cpp.md). Hot reload applies changes to
+the level's placement and mapped fields. A failed parse or component
+conversion leaves the previous level running.
+
 ### Levels and saves
 
 The level file can rebuild its tiles, colliders and plain objects, so world

@@ -1,0 +1,17 @@
+{
+  "name": "ui_widgets_tooltip",
+  "scene": "the ui_widgets_choices_dark sheet, the pointer on the \"Music\" checkbox (hovered) and its tooltip \"Plays the soundtrack\" in a box with an accent border below the pointer, kept on the screen; UI scale 1, drawn with the window's sprite pipeline into an sRGB target",
+  "width": 256,
+  "height": 160,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 24,
+    "outliers": 0.004,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "b5a1063ae8966615",
+  "reason": "Widget references drawn at UI scale 1 on smaller sheets, control text centred and checked for contrast"
+}

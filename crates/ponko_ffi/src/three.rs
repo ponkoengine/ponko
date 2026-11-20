@@ -31,6 +31,7 @@ use ponko::render::Mesh;
 use ponko::render::MeshData;
 use ponko::render::Model;
 use ponko::render::ReceivesDecals;
+use ponko::render::RenderTarget;
 use ponko::render::SceneSettings;
 use ponko::render::ScreenEffect;
 use ponko::render::Shader;
@@ -1610,6 +1611,18 @@ pub unsafe extern "C" fn ponko_ctx_create_compute(
     })
 }
 
+/// The render target `t` names, checked at run time: C passes render targets
+/// as plain `PonkoTexture`s, so the kind Rust's `RenderTarget` type checks
+/// when compiling is checked here. A texture that isn't a live render
+/// target of this game is an invalid argument.
+pub(crate) fn render_target_from_c(c: &ponko::prelude::Ctx, t: PonkoTexture) -> Result<RenderTarget, crate::Failure> {
+    let texture = texture_from_c(t);
+    if !c.gfx.is_render_target(texture) {
+        return Err(invalid("that texture isn't a render target of this game"));
+    }
+    Ok(__ffi::render_target(texture))
+}
+
 /// `count` C compute passes as Rust `ComputePass`es, each checked against
 /// this game's handles.
 /// # Safety
@@ -1634,14 +1647,15 @@ pub(crate) unsafe fn compute_passes_from_c(
         if !c.gfx.is_live(compute) {
             return Err(invalid("that compute pass wasn't made by this game"));
         }
-        let target = texture_from_c(p.target);
         let buffer = p.has_buffer.then(|| __ffi::from_id::<GpuBuffer>(p.buffer.id));
         if buffer.is_some_and(|b| c.gfx.gpu_buffer_len(b).is_none()) {
             return Err(invalid("invalid GPU buffer"));
         }
-        if buffer.is_none() && !c.gfx.is_render_target(target) {
-            return Err(invalid("that texture isn't a render target of this game"));
-        }
+        // A buffer pass doesn't use its target: keep what C gave.
+        let target = match buffer {
+            Some(_) => __ffi::render_target(texture_from_c(p.target)),
+            None => render_target_from_c(c, p.target)?,
+        };
         let material = p.has_material.then(|| to_c(p.material));
         if material.is_some_and(|m| !c.gfx.is_live(m)) {
             return Err(invalid("that material wasn't made by this game"));
@@ -1666,7 +1680,7 @@ pub(crate) fn compute_pass_to_c(p: &ComputePass) -> PonkoComputePass {
         compute: PonkoCompute {
             id: __ffi::id(p.compute),
         },
-        target: texture_to_c(p.target),
+        target: texture_to_c(p.target.texture()),
         has_material: p.material.is_some(),
         material: p.material.map(to_c).unwrap_or_default(),
     }
@@ -2052,7 +2066,7 @@ pub(crate) fn camera_from_c(base: Camera3D, cam: &PonkoCamera3D) -> Result<Camer
 pub(crate) fn target_camera_to_c(t: &TargetCamera) -> PonkoTargetCamera {
     PonkoTargetCamera {
         camera: camera_to_c(&t.camera),
-        target: texture_to_c(t.target),
+        target: texture_to_c(t.target.texture()),
         has_clip_plane: t.clip_plane.is_some(),
         clip_plane: t.clip_plane.unwrap_or(Vec4::ZERO).to_array(),
     }
@@ -2079,8 +2093,8 @@ pub unsafe extern "C" fn ponko_ctx_create_render_target(
             if out_texture.is_null() {
                 return Err(invalid("output is null"));
             }
-            let texture = c.gfx.try_create_render_target(width, height).map_err(invalid_owned)?;
-            out(out_texture, texture_to_c(texture))
+            let target = c.gfx.try_create_render_target(width, height).map_err(invalid_owned)?;
+            out(out_texture, texture_to_c(target.texture()))
         })
     })
 }
@@ -2115,7 +2129,7 @@ pub unsafe extern "C" fn ponko_ctx_reflection_camera(
                 return Err(invalid("level must be finite"));
             }
             let eye = camera_from_c(c.scene3d.camera, cam)?;
-            let reflection = TargetCamera::reflection(eye, texture_from_c(target), level);
+            let reflection = TargetCamera::reflection(eye, render_target_from_c(c, target)?, level);
             out(out_camera, target_camera_to_c(&reflection))
         })
     })
@@ -2148,10 +2162,7 @@ pub unsafe extern "C" fn ponko_ctx_set_target_cameras(
             };
             let mut list = Vec::with_capacity(count);
             for t in given {
-                let target = texture_from_c(t.target);
-                if !c.gfx.is_render_target(target) {
-                    return Err(invalid("that texture isn't a render target of this game"));
-                }
+                let target = render_target_from_c(c, t.target)?;
                 let plane = Vec4::from_array(t.clip_plane);
                 if t.has_clip_plane && !(plane.is_finite() && plane.truncate().length_squared() > 0.0) {
                     return Err(invalid("the clip plane needs a finite, nonzero normal"));

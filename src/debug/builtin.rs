@@ -17,8 +17,10 @@ use ponko_ecs::{Entity, World};
 #[non_exhaustive]
 pub enum DebugView {
     /// Physics colliders, 2D (feature `physics`) and 3D (feature
-    /// `physics3d`): green, sensors yellow. 3D collision meshes show their
-    /// bounding box.
+    /// `physics3d`): green, sensors yellow. 3D collision meshes and terrain
+    /// (`TerrainCollider`, feature `physics3d`) show their
+    /// triangles within [`collider_distance`](DebugDraw::collider_distance)
+    /// of the 3D camera; convex hulls show all their edges.
     Colliders,
     /// The 3D navigation mesh's polygon edges (feature `navmesh`), blue.
     NavMesh,
@@ -171,6 +173,7 @@ fn colliders(ctx: &mut Ctx) {
     {
         use crate::physics3d::Shape3D;
         let (debug, physics) = (&mut ctx.debug, &ctx.physics3d);
+        let eye = (ctx.scene3d.camera.position, debug.collider_distance());
         ctx.world
             .query::<(&crate::d3::Transform, &crate::d3::Collider)>()
             .for_each(|(t, c)| {
@@ -188,15 +191,35 @@ fn colliders(ctx: &mut Ctx) {
                         debug.capsule(center - up, center + up, radius, color);
                     }
                     Shape3D::Mesh(mesh) => {
-                        if let Some((min, max)) = physics.mesh_bounds(mesh) {
-                            let middle = center + t.rotation * ((min + max) * 0.5);
-                            debug.obb(middle, max - min, t.rotation, color);
-                        }
+                        mesh_edges(debug, physics, (center, t.rotation, Vec3::ONE), mesh, eye, color);
                     }
                 }
             });
+        // Terrain: scaled with its tile, placed by its corner.
+        ctx.world
+            .query::<(&crate::d3::Transform, &crate::d3::TerrainCollider)>()
+            .for_each(|(t, c)| {
+                mesh_edges(debug, physics, (t.position, t.rotation, t.scale), c.mesh, eye, COLLIDER);
+            });
     }
     let _ = ctx;
+}
+
+/// The triangles of a collision mesh placed at `at` (position, rotation,
+/// scale) within `reach` of `eye`, as lines.
+#[cfg(feature = "physics3d")]
+fn mesh_edges(
+    debug: &mut DebugDraw,
+    physics: &crate::physics3d::Physics3D,
+    (at, rotation, scale): (Vec3, Quat, Vec3),
+    mesh: crate::physics3d::CollisionMesh,
+    (eye, reach): (Vec3, f32),
+    color: Color,
+) {
+    let near = rotation.inverse() * (eye - at);
+    physics.mesh_edges_near(mesh, scale, (near, reach), |a, b| {
+        debug.line(at + rotation * a, at + rotation * b, color);
+    });
 }
 
 fn navmesh(ctx: &mut Ctx) {

@@ -8,7 +8,7 @@ use ponko_ecs::Entity;
 use super::{LodGroup, LodPick, Mesh, Transform3D, gltf};
 use crate::assets::{self, Origin};
 use crate::streaming::ResidencyKind;
-use crate::streaming::{AssetState, StreamedAsset, StreamedMesh};
+use crate::streaming::{AssetState, StreamedMesh};
 use crate::{ctx::Ctx, streaming::Job};
 use ponko_ecs::Component;
 use ponko_ecs::World;
@@ -120,13 +120,16 @@ impl crate::gfx::Graphics {
                 let origin = found.origin.clone();
                 let name = path.to_string();
                 match origin {
-                    Origin::File(_) if self.asset_sources.is_empty() => Job::spawn(move || {
-                        let bytes = found.into_bytes().map_err(|e| e.with_path(&name))?;
-                        let mut read = |file: &str| assets::Sources::default().read(file);
-                        let loaded = gltf::load(&name, &bytes, &mut read, &|_| false)
-                            .map_err(|e| crate::error::Error::decode(&name, e))?;
-                        Ok((origin, LoadedFile::Parsed(Box::new(loaded))))
-                    }),
+                    Origin::File(_) if self.asset_sources.is_empty() => {
+                        let gpu = self.model_formats();
+                        Job::spawn(move || {
+                            let bytes = found.into_bytes().map_err(|e| e.with_path(&name))?;
+                            let mut read = |file: &str| assets::Sources::default().read(file);
+                            let loaded = gltf::load_for(&name, &bytes, &mut read, &|_| false, gpu)
+                                .map_err(|e| crate::error::Error::decode(&name, e))?;
+                            Ok((origin, LoadedFile::Parsed(Box::new(loaded))))
+                        })
+                    }
                     _ => {
                         let bytes = found.into_bytes().map_err(|e| e.with_path(path));
                         Job::spawn(move || Ok((origin, LoadedFile::Bytes(bytes?))))
@@ -145,6 +148,76 @@ impl crate::gfx::Graphics {
         );
         self.streaming.queue_mesh(path);
         None
+    }
+
+    /// Streams mesh `path` for an asset group, unless it is resident or
+    /// streaming already: `read` gives its bytes on a worker, and with them
+    /// a way to read the files it refers to there too (when every source
+    /// may be read by workers), so it is parsed on the worker; without one
+    /// it is parsed on the game thread when uploaded.
+    pub(crate) fn stream_mesh_from(
+        &mut self,
+        path: &str,
+        read: impl FnOnce() -> Result<(Origin, Vec<u8>, Option<assets::BackgroundRead>), crate::error::Error>
+        + Send
+        + 'static,
+    ) {
+        if self.live_resident_mesh(path).is_some() || self.streaming.meshes.contains_key(path) {
+            self.stream_mesh(path);
+            return;
+        }
+        self.residency.set_mut(ResidencyKind::Mesh).forget(path);
+        let name = path.to_string();
+        let job = Job::spawn(move || {
+            let (origin, bytes, others) = read()?;
+            Ok(match others {
+                Some(others) => {
+                    let mut read = |file: &str| others.read_other(file);
+                    let loaded = gltf::load(&name, &bytes, &mut read, &|_| false)
+                        .map_err(|e| crate::error::Error::decode(&name, e))?;
+                    (origin, LoadedFile::Parsed(Box::new(loaded)))
+                }
+                None => (origin, LoadedFile::Bytes(bytes)),
+            })
+        });
+        self.streaming.meshes.insert(
+            path.to_string(),
+            StreamedMesh {
+                job: Some(job),
+                ready: None,
+                state: AssetState::Loading,
+            },
+        );
+        self.streaming.queue_mesh(path);
+    }
+
+    /// Whether streamed mesh `path` is loaded: `None` while it loads or
+    /// uploads, its error if it failed, `Ok` once resident (or gone).
+    pub(crate) fn streamed_mesh_settled(&self, path: &str) -> Option<Result<(), crate::error::Error>> {
+        match self.asset_state(ResidencyKind::Mesh, path) {
+            AssetState::Failed => Some(Err(self
+                .asset_error(ResidencyKind::Mesh, path)
+                .cloned()
+                .unwrap_or_else(|| {
+                    crate::error::Error::new(crate::error::ErrorKind::Io, format!("could not stream \"{path}\""))
+                        .with_path(path)
+                }))),
+            AssetState::Loading | AssetState::Uploading => None,
+            _ => Some(Ok(())),
+        }
+    }
+
+    /// Stops streaming mesh `path` if it isn't uploaded yet (a cancelled
+    /// asset group).
+    pub(crate) fn cancel_mesh_stream(&mut self, path: &str) {
+        if self
+            .streaming
+            .meshes
+            .get(path)
+            .is_some_and(|m| m.state != AssetState::Failed)
+        {
+            self.streaming.meshes.remove(path);
+        }
     }
 
     /// One upload of streamed mesh `name`: making it on the GPU.
@@ -316,8 +389,11 @@ impl crate::gfx::Graphics {
         AssetState::Unknown
     }
 
-    /// Adds the streamed and resident meshes to `out` (`streamed_assets`).
-    pub(crate) fn list_streamed_meshes(&self, out: &mut Vec<StreamedAsset>, at: &mut usize) {
+    /// Visits the streamed and resident meshes in name order.
+    pub(crate) fn visit_streamed_meshes(
+        &self,
+        mut visit: impl FnMut(ResidencyKind, &str, AssetState, Option<u32>, [u32; 2]),
+    ) {
         // Ordered merge of three name sets, without a temporary collection.
         let mut streamed = self.streaming.meshes.keys().peekable();
         let mut reserved = self.residency.reserved_meshes.keys().peekable();
@@ -345,7 +421,7 @@ impl crate::gfx::Graphics {
                 .live_resident_mesh(name)
                 .map(|m| m.id)
                 .or_else(|| self.residency.reserved_meshes.get(name).copied());
-            crate::streaming::write_streamed(out, at, ResidencyKind::Mesh, name, self.mesh_state(name), id, [0, 0]);
+            visit(ResidencyKind::Mesh, name, self.mesh_state(name), id, [0, 0]);
         }
     }
 }

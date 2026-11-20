@@ -44,6 +44,11 @@ fn clamp_range(v: f32, lo: f32, hi: f32) -> f32 {
 /// [`mouse_controls`](Self::mouse_controls), then call
 /// [`update`](Self::update) once a frame.
 ///
+/// Kept as a resource while an entity has a
+/// [`CameraTarget`](crate::camera::CameraTarget), it is updated by the
+/// engine every frame, after everything moved: it circles the entity. Otherwise call
+/// [`update`](Self::update) yourself.
+///
 /// ```
 /// use ponko::prelude::*;
 /// use ponko::d3::OrbitCamera;
@@ -255,6 +260,11 @@ impl OrbitCamera {
 /// [`flat_forward`](Self::flat_forward) and
 /// [`flat_right`](Self::flat_right).
 ///
+/// Kept as a resource while an entity has a
+/// [`CameraTarget`](crate::camera::CameraTarget), it is updated by the
+/// engine every frame, after everything moved: the eye is [`height`](Self::height) above the entity. Otherwise call
+/// [`update`](Self::update) yourself.
+///
 /// ```
 /// use ponko::prelude::*;
 /// use ponko::d3::FirstPersonCamera;
@@ -285,6 +295,11 @@ pub struct FirstPersonCamera {
     /// [`damp`](crate::camera::damp)). Default 0: the view turns exactly
     /// with the mouse, as most players expect.
     pub smoothing: f32,
+    /// How high above the followed entity's position the eye is, when the
+    /// engine feeds the rig (a resource following a
+    /// [`CameraTarget`](crate::camera::CameraTarget)). Default 1.6.
+    /// [`update`](Self::update) takes the eye itself.
+    pub height: f32,
     /// State: the yaw and pitch the camera is at now.
     pub current: Vec2,
     /// State: the yaw and pitch wanted at the last update.
@@ -302,6 +317,7 @@ impl Default for FirstPersonCamera {
             max_pitch: PITCH_LIMIT,
             sensitivity: 0.0025,
             smoothing: 0.0,
+            height: 1.6,
             current: Vec2::ZERO,
             last_goal: Vec2::ZERO,
             started: false,
@@ -398,6 +414,11 @@ impl FirstPersonCamera {
 /// [`update_with`](Self::update_with) (your own obstacle test), or
 /// `update_with_physics` (feature `physics3d`: a sphere cast against
 /// the 3D physics colliders).
+///
+/// Kept as a resource while an entity has a
+/// [`CameraTarget`](crate::camera::CameraTarget), it is updated by the
+/// engine every frame, after everything moved: it follows the entity, kept out of the 3D physics' walls (feature `physics3d`). Otherwise call
+/// [`update`](Self::update) yourself.
 ///
 /// ```
 /// use ponko::prelude::*;

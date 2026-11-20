@@ -18,6 +18,7 @@ Assets::scene_asset_field        asset-sources.md  # C components have no text f
 PackSource                       asset-sources.md  # C and C++ games read the default assets.pack; a pack of their own goes through ponko_ctx_add_asset_source
 Query::with_lookup               ecs.md            # generic borrows; component pointers from get don't borrow
 World::get_many_mut              ecs.md            # same
+World::query_ref                 ecs.md            # C and C++ queries read through component pointers and need no exclusive borrow
 SystemView                       system-access.md  # C and C++ systems take the whole ctx and declare access by name
 Storage::write_json              storage.md        # generic over Rust types; serialize yourself and storage_write the bytes
 Storage::read_json               storage.md        # storage_read the bytes and parse them yourself
@@ -26,6 +27,8 @@ Storage::save_world_in_background  storage.md      # C and C++ save slots on the
 UiAccessAdapter::for_ns_view     ui.md             # needs a Rust Ui; the engine's window gets the adapter; ponko_ui_access_* give a snapshot
 NavObstacleShape                 navigation3d.md   # C and C++ obstacles are unturned boxes; ponko_ctx_set_nav_obstacle and its carve variant
 SkyShader                        3d.md             # C and C++ games use the built-in atmosphere or the flat sky
+SkyKit                           3d.md             # C and C++ games use the built-in atmosphere (PonkoSky) without clouds or a moon
+DayNight                         3d.md             # move the sun with ponko_sun_direction_at each frame
 Graphics::stream_instance_cell   3d.md             # Job is Rust's; C and C++ games build a cell's matrices on their own threads and call ponko_ctx_add_instance_cell
 InstanceCellData                 3d.md             # same: the matrices and colours go straight to ponko_ctx_add_instance_cell
 Graphics::instance_cell_state    3d.md             # same: a cell added from C is on the GPU at once
@@ -42,12 +45,24 @@ Net::web_addr                    networking.md     # same
 NetMessages::accept_web          networking.md     # same
 NetMessages::join_web            networking.md     # same
 NetMessages::web_addr            networking.md     # same
+Replication::input               replication.md    # not bound yet; C and C++ games send controls as application messages and move their entities on the server
+Replication::predicted           replication.md    # same; a C client shows its own entity as the server sends it
+Replication::event               replication.md    # not bound yet; events go as application messages on the reliable lane
+Replication::interpolated        replication.md    # generic over Interpolate; C components are set when their update arrives
+Replication::position            replication.md    # a Rust closure; interest uses the entities' transforms
+GltfScene::nav_source            blender.md        # read the nodes and their places with ponko_gltf_scene_load, and bake from mesh data of your own (ponko_nav_sources_add_mesh)
+LobbyClient::join_web            lobby.md          # C and C++ games don't build for the web yet; their lobby clients join over UDP
+Signaling                        webrtc.md         # C and C++ WebRTC endpoints are signaled through a lobby client (ponko_net_messages_rtc_host, _rtc_join)
+RtcConfig::turn                  webrtc.md         # TURN works in browsers only, and C and C++ games don't build for the web yet
 Graphics::load_lights            3d.md             # glTF lights and cameras: read the file's KHR_lights_punctual and cameras yourself; models load with the same extensions
 Graphics::load_cameras           3d.md             # same
 SkeletonData::add_bone           skeleton2d.md     # C and C++ skeletons come from files (Ponko's format or a Spine export) through the assets
 SpineAtlas                       skeleton2d.md     # load the export, its .atlas and pages through the assets (a memory source for files in memory)
-GltfScene::load                  blender.md        # C and C++ spawn the file (ponko_ctx_spawn_gltf) and read its nodes from the entities
-gltf_properties_schema           blender.md        # PONKO_SCHEMA=<file> (ponko schema) writes it for C and C++ games too
 perf::net_alloc_bytes            profiling.md      # C and C++ games count no frees of their own memory here; ponko_ctx_live_counts and the asset inventory are their leak checks
-Animator::normalized_time_f64    sim-clock.md      # the C API reads the f32 normalized time
-Skeleton::normalized_time_f64    sim-clock.md      # same
+Plugin::dependencies             plugins.md        # C plugins (ponko_game_plugin) have no names or dependencies and are never duplicates
+Game::debug_toggle               plugins.md        # draw behind a flag of the game's own; debug.draw turns the engine's views on and off
+Game::control_method             plugins.md        # the control endpoint's built-in methods only; a native game's tools read its reflected resources
+Video                            video.md          # not bound yet: decode with a library of the game's own and show the frames with ponko_ctx_update_texture
+GamepadBackend                   controllers.md    # native games use the built-in gamepad backend
+FakeGamepads                     controllers.md    # native tests feed ponko_ctx_feed_input (kind 8 connects a pad) and ponko_ctx_feed_gamepad_motion
+Buoyancy::points                 water.md          # C floats boxes and spheres (ponko_ctx_set_buoyancy_box, _sphere) in fresh water, rippling as they cross
