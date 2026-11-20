@@ -511,9 +511,12 @@ pub(crate) fn load_nodes(
             .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok());
         let mut mesh = None;
         let mut same_mesh_as = None;
-        let key = node
-            .mesh()
-            .map(|m| (m.index(), node.weights().map(|w| w.iter().map(|x| x.to_bits()).collect())));
+        let key = node.mesh().map(|m| {
+            (
+                m.index(),
+                node.weights().map(|w| w.iter().map(|x| x.to_bits()).collect()),
+            )
+        });
         if let Some(&first) = key.as_ref().and_then(|k| first_of_mesh.get(k)) {
             mesh = nodes[first].mesh.as_ref().map(|m| NodeMesh {
                 data: m.data.clone(),

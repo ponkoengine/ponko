@@ -103,7 +103,11 @@ fn spawned(file: &str) -> Option<(usize, u64, Vec<usize>, usize)> {
     ctx.scene3d.camera.position = vec3(0.0, 0.0, 9.0);
     ctx.scene3d.camera.look_at(Vec3::ZERO);
     assert_eq!(ctx.render_frame(), FrameStatus::Offscreen);
-    let gpu = |ctx: &Ctx| ctx.asset_inventory().gpu.expect("an offscreen renderer reports its GPU memory");
+    let gpu = |ctx: &Ctx| {
+        ctx.asset_inventory()
+            .gpu
+            .expect("an offscreen renderer reports its GPU memory")
+    };
     let empty = gpu(&ctx);
     let root = GltfRoot::spawn(&mut ctx, file, Transform3D::default(), GltfOptions::default()).unwrap();
     assert_eq!(ctx.render_frame(), FrameStatus::Offscreen);

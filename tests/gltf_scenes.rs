@@ -819,7 +819,10 @@ fn a_read_scene_gives_every_node_of_a_shared_mesh_its_triangles() {
     game().run_headless(0, |ctx| {
         let scene = GltfScene::load(ctx, file.name()).unwrap();
         for node in &scene.nodes {
-            let mesh = node.mesh.as_ref().unwrap_or_else(|| panic!("{} has its mesh", node.path));
+            let mesh = node
+                .mesh
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} has its mesh", node.path));
             assert_eq!((mesh.positions.len(), mesh.indices.len()), (8, 36), "{}", node.path);
         }
     });
@@ -906,7 +909,11 @@ fn spawning_a_scene_again_reuses_its_collision_shapes_until_the_last_one_goes() 
         }
         assert_eq!(ctx.live_counts().collision_meshes, 3, "a hundred spawns share them");
         for path in ["A", "B", "Big", "Hull"] {
-            assert_eq!(collision_mesh(ctx, roots[99], path), collision_mesh(ctx, first, path), "{path}");
+            assert_eq!(
+                collision_mesh(ctx, roots[99], path),
+                collision_mesh(ctx, first, path),
+                "{path}"
+            );
         }
         let hull = collision_mesh(ctx, first, "Hull");
 
@@ -952,7 +959,10 @@ fn shared_collision_shapes_collide_in_every_scene() {
         .collect();
     assert_eq!(balls.len(), 2);
     for y in balls {
-        assert!((0.6..1.0).contains(&y), "the ball rests on the rock's top (0.5 + 0.25): {y}");
+        assert!(
+            (0.6..1.0).contains(&y),
+            "the ball rests on the rock's top (0.5 + 0.25): {y}"
+        );
     }
 }
 
@@ -977,10 +987,17 @@ fn reexporting_frees_the_old_collision_shapes_and_shares_the_new_ones() {
         .physics3d(Vec3::ZERO)
         .sim_system(move |ctx: &mut Ctx| {
             let tick = ctx.time.sim_tick();
-            let roots: Vec<Entity> = ctx.world.query::<(Entity, &GltfRoot)>().iter().map(|(e, _)| e).collect();
+            let roots: Vec<Entity> = ctx
+                .world
+                .query::<(Entity, &GltfRoot)>()
+                .iter()
+                .map(|(e, _)| e)
+                .collect();
             if tick == 2 {
                 let old: Vec<_> = roots.iter().map(|&r| collision_mesh(ctx, r, "A")).collect();
-                log.lock().unwrap().push((ctx.live_counts().collision_meshes, old, false));
+                log.lock()
+                    .unwrap()
+                    .push((ctx.live_counts().collision_meshes, old, false));
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 std::fs::write(&path, &after).unwrap();
                 std::thread::sleep(std::time::Duration::from_millis(400));
@@ -988,7 +1005,9 @@ fn reexporting_frees_the_old_collision_shapes_and_shares_the_new_ones() {
             if tick == 4 {
                 let new: Vec<_> = roots.iter().map(|&r| collision_mesh(ctx, r, "B")).collect();
                 let old_live = log.lock().unwrap()[0].1.iter().any(|&m| ctx.is_live(m));
-                log.lock().unwrap().push((ctx.live_counts().collision_meshes, new, old_live));
+                log.lock()
+                    .unwrap()
+                    .push((ctx.live_counts().collision_meshes, new, old_live));
             }
         })
         .run_headless(5, move |ctx| {

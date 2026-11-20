@@ -1320,7 +1320,12 @@ impl Ctx {
     /// (a hull and a triangle mesh make a collision mesh), or why it can't
     /// be.
     #[cfg(feature = "physics3d")]
-    fn fit_collider(&mut self, kind: NodeCollider, mesh: &MeshData, to_node: Mat4) -> Result<crate::d3::Collider, &'static str> {
+    fn fit_collider(
+        &mut self,
+        kind: NodeCollider,
+        mesh: &MeshData,
+        to_node: Mat4,
+    ) -> Result<crate::d3::Collider, &'static str> {
         use crate::d3::Collider;
         let corners: Vec<Vec3> = mesh.positions.iter().map(|&p| to_node.transform_point3(p)).collect();
         let (center, size) = bounds(&corners);
