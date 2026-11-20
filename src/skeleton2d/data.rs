@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use glam::{Affine2, Vec2};
 
-use super::{Clip, SkeletonGraph};
+use super::path::PathShape;
+use super::{Clip, PathConstraint, PhysicsConstraint, SkeletonGraph};
 use crate::camera::Rect;
 use crate::color::Color;
 use crate::texture::Texture;
@@ -438,6 +439,8 @@ pub enum Attachment {
     Mesh(SkinnedMesh),
     /// Nothing itself: clips what the next slots draw.
     Clipping(ClippingMask),
+    /// Nothing itself: a curve that [`PathConstraint`]s place bones along.
+    Path(PathShape),
 }
 
 /// The texture of attachments that show no image.
@@ -451,7 +454,7 @@ impl Attachment {
         match self {
             Self::Sprite(s) => s.texture,
             Self::Mesh(m) => m.texture,
-            Self::Clipping(_) => NO_TEXTURE,
+            Self::Clipping(_) | Self::Path(_) => NO_TEXTURE,
         }
     }
 
@@ -460,7 +463,7 @@ impl Attachment {
         match self {
             Self::Sprite(s) => &s.image,
             Self::Mesh(m) => &m.image,
-            Self::Clipping(_) => "",
+            Self::Clipping(_) | Self::Path(_) => "",
         }
     }
 
@@ -469,17 +472,18 @@ impl Attachment {
         match self {
             Self::Sprite(s) => Some((&s.image, &mut s.texture)),
             Self::Mesh(m) => Some((&m.image, &mut m.texture)),
-            Self::Clipping(_) => None,
+            Self::Clipping(_) | Self::Path(_) => None,
         }
     }
 
-    /// The vertices that follow bones by weight: a mesh's, or a clipping
-    /// mask's corners.
-    fn weighted(&self) -> Option<&[MeshVertex]> {
+    /// The vertices that follow bones by weight: a mesh's, a clipping
+    /// mask's corners or a path's points and handles.
+    pub(crate) fn weighted(&self) -> Option<&[MeshVertex]> {
         match self {
             Self::Sprite(_) => None,
             Self::Mesh(m) => Some(&m.vertices),
             Self::Clipping(c) => Some(&c.vertices),
+            Self::Path(p) => Some(&p.vertices),
         }
     }
 }
@@ -617,6 +621,8 @@ impl TransformConstraint {
 pub(crate) enum Constraint {
     Ik(usize),
     Transform(usize),
+    Path(usize),
+    Physics(usize),
 }
 
 /// An attachment under a name in a slot of a skin.
@@ -691,6 +697,8 @@ pub struct SkeletonData {
     pub(crate) clips: Vec<Clip>,
     pub(crate) ik: Vec<IkConstraint>,
     pub(crate) transforms: Vec<TransformConstraint>,
+    pub(crate) paths: Vec<PathConstraint>,
+    pub(crate) physics: Vec<PhysicsConstraint>,
     /// Every constraint, in the order they apply.
     pub(crate) constraints: Vec<Constraint>,
     pub(crate) graph: Option<Arc<SkeletonGraph>>,
@@ -855,6 +863,11 @@ impl SkeletonData {
         let attachment = attachment.into();
         let mut binds = Vec::new();
         let mut bounds = (Vec2::ZERO, Vec2::ONE);
+        if let Attachment::Path(path) = &attachment
+            && let Err(e) = path.check()
+        {
+            panic!("ponko: path \"{name}\": {e}");
+        }
         if let Attachment::Clipping(mask) = &attachment {
             assert!(
                 mask.end.is_none_or(|e| e < self.slots.len()),
@@ -911,10 +924,7 @@ impl SkeletonData {
             "ponko: the skeleton has a clip named \"{}\" already; use a unique name",
             clip.name
         );
-        if let Err(e) = clip
-            .check(self.bones.len(), self.slots.len())
-            .and_then(|()| self.check_deform(&clip))
-        {
+        if let Err(e) = self.check_clip(&clip) {
             panic!("ponko: {e}");
         }
         self.clips.push(clip);
@@ -959,6 +969,114 @@ impl SkeletonData {
         self.transforms.len() - 1
     }
 
+    /// Adds a path constraint and returns its index. Constraints apply in
+    /// the order they were added.
+    ///
+    /// # Panics
+    /// If the name is taken, a bone or the target slot isn't there, or a
+    /// value isn't a number.
+    pub fn add_path_constraint(&mut self, constraint: PathConstraint) -> usize {
+        if let Err(e) = self.check_path(&constraint) {
+            panic!("ponko: {e}");
+        }
+        self.push_path(constraint)
+    }
+
+    pub(crate) fn push_path(&mut self, constraint: PathConstraint) -> usize {
+        self.paths.push(constraint);
+        self.constraints.push(Constraint::Path(self.paths.len() - 1));
+        self.paths.len() - 1
+    }
+
+    /// Adds a physics constraint and returns its index. Constraints apply
+    /// in the order they were added.
+    ///
+    /// # Panics
+    /// If the name is taken, the bone isn't there, `step` or `mass` isn't
+    /// above 0, or a value isn't a number.
+    pub fn add_physics_constraint(&mut self, constraint: PhysicsConstraint) -> usize {
+        if let Err(e) = self.check_physics(&constraint) {
+            panic!("ponko: {e}");
+        }
+        self.push_physics(constraint)
+    }
+
+    pub(crate) fn push_physics(&mut self, constraint: PhysicsConstraint) -> usize {
+        self.physics.push(constraint);
+        self.constraints.push(Constraint::Physics(self.physics.len() - 1));
+        self.physics.len() - 1
+    }
+
+    pub(crate) fn check_path(&self, c: &PathConstraint) -> Result<(), SkeletonError> {
+        if self.path_constraint(&c.name).is_some() {
+            return Err(err(format!(
+                "the skeleton has a path constraint named \"{}\" already; use a unique name",
+                c.name
+            )));
+        }
+        if c.target >= self.slots.len() || c.bones.is_empty() || c.bones.iter().any(|&b| b >= self.bones.len()) {
+            return Err(err(format!(
+                "path constraint \"{}\" needs bones and a target slot that are in the skeleton",
+                c.name
+            )));
+        }
+        let numbers = [
+            c.offset_rotation,
+            c.position,
+            c.spacing,
+            c.mix_rotate,
+            c.mix_translate.x,
+            c.mix_translate.y,
+        ];
+        if !numbers.iter().all(|v| v.is_finite()) {
+            return Err(err(format!(
+                "path constraint \"{}\"'s position, spacing, mixes and offset must be numbers",
+                c.name
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_physics(&self, c: &PhysicsConstraint) -> Result<(), SkeletonError> {
+        if self.physics_constraint(&c.name).is_some() {
+            return Err(err(format!(
+                "the skeleton has a physics constraint named \"{}\" already; use a unique name",
+                c.name
+            )));
+        }
+        if c.bone >= self.bones.len() {
+            return Err(err(format!(
+                "physics constraint \"{}\" needs a bone that is in the skeleton",
+                c.name
+            )));
+        }
+        let numbers = [
+            c.x,
+            c.y,
+            c.rotate,
+            c.scale_x,
+            c.shear_x,
+            c.limit,
+            c.inertia,
+            c.strength,
+            c.damping,
+            c.wind,
+            c.gravity,
+            c.mix,
+        ];
+        if !numbers.iter().all(|v| v.is_finite())
+            || !(c.step > 0.0 && c.step.is_finite())
+            || !(c.mass > 0.0 && c.mass.is_finite())
+            || !(c.reference_scale > 0.0 && c.reference_scale.is_finite())
+        {
+            return Err(err(format!(
+                "physics constraint \"{}\" needs numbers, with step, mass and reference scale above 0",
+                c.name
+            )));
+        }
+        Ok(())
+    }
+
     pub(crate) fn check_transform(&self, c: &TransformConstraint) -> Result<(), SkeletonError> {
         let n = self.bones.len();
         if self.transform_constraint(&c.name).is_some() {
@@ -1000,6 +1118,42 @@ impl SkeletonData {
             )));
         }
         Ok(())
+    }
+
+    /// `Ok` if `clip` names only this skeleton's bones, slots, meshes and
+    /// constraints, with numbers in time order.
+    pub(crate) fn check_clip(&self, clip: &super::Clip) -> Result<(), SkeletonError> {
+        clip.check(self.bones.len(), self.slots.len())?;
+        self.check_deform(clip)?;
+        clip.check_constraints([self.ik.len(), self.transforms.len(), self.paths.len(), self.physics.len()])
+    }
+
+    /// Where each constraint's keyable values sit in a skeleton's list.
+    pub(crate) fn constraint_layout(&self) -> super::clip::ConstraintLayout {
+        super::clip::ConstraintLayout::new(self.ik.len(), self.transforms.len(), self.paths.len(), self.physics.len())
+    }
+
+    /// Every constraint's own keyable values, laid out as
+    /// [`constraint_layout`](Self::constraint_layout) says.
+    pub(crate) fn constraint_values(&self, out: &mut Vec<f32>) {
+        out.clear();
+        out.extend(self.ik.iter().map(|c| c.mix));
+        for c in &self.transforms {
+            out.extend_from_slice(&[
+                c.mix_rotate,
+                c.mix_translate.x,
+                c.mix_translate.y,
+                c.mix_scale.x,
+                c.mix_scale.y,
+                c.mix_shear_y,
+            ]);
+        }
+        for c in &self.paths {
+            out.extend_from_slice(&c.values());
+        }
+        for c in &self.physics {
+            out.extend_from_slice(&c.values());
+        }
     }
 
     /// `Ok` if every deform track of `clip` names a mesh of this skeleton
@@ -1094,6 +1248,18 @@ impl SkeletonData {
         &self.transforms
     }
 
+    /// Its path constraints.
+    #[must_use]
+    pub fn path_constraints(&self) -> &[PathConstraint] {
+        &self.paths
+    }
+
+    /// Its physics constraints.
+    #[must_use]
+    pub fn physics_constraints(&self) -> &[PhysicsConstraint] {
+        &self.physics
+    }
+
     /// Its skins' names; `"default"` is the first.
     #[must_use]
     pub fn skins(&self) -> &[Arc<str>] {
@@ -1142,6 +1308,18 @@ impl SkeletonData {
         self.transforms.iter().position(|c| &*c.name == name)
     }
 
+    /// The index of the path constraint named `name`.
+    #[must_use]
+    pub fn path_constraint(&self, name: &str) -> Option<usize> {
+        self.paths.iter().position(|c| &*c.name == name)
+    }
+
+    /// The index of the physics constraint named `name`.
+    #[must_use]
+    pub fn physics_constraint(&self, name: &str) -> Option<usize> {
+        self.physics.iter().position(|c| &*c.name == name)
+    }
+
     /// The attachment slot `slot` shows under `name` with skin `skin`: the
     /// skin's own, else the default skin's.
     #[must_use]
@@ -1182,6 +1360,12 @@ impl From<SpritePart> for Attachment {
 impl From<SkinnedMesh> for Attachment {
     fn from(mesh: SkinnedMesh) -> Self {
         Self::Mesh(mesh)
+    }
+}
+
+impl From<PathShape> for Attachment {
+    fn from(path: PathShape) -> Self {
+        Self::Path(path)
     }
 }
 

@@ -21,9 +21,15 @@
 //! - Clips key bone translation, rotation, scale and shear (relative to the
 //!   rest pose, both axes at once or one at a time), mesh vertex offsets
 //!   (deforms), slot attachments (sprite swaps), visibility and color, draw
-//!   order, and events. [`TransformConstraint`]s and [`IkConstraint`]s adjust
-//!   the pose, and a [`ClippingMask`] hides what lies outside it. The state machine reuses
-//!   [`anim`](crate::anim)'s parameters, conditions and transitions.
+//!   order, constraint mixes and settings, and events. [`IkConstraint`]s,
+//!   [`TransformConstraint`]s, [`PathConstraint`]s (bones along a
+//!   [`PathShape`]) and [`PhysicsConstraint`]s (springs that lag and sway)
+//!   adjust the pose, and a [`ClippingMask`] hides what lies outside it.
+//!   Crossfades and 1D blends mix bone poses, deforms and constraint values
+//!   alike. The state machine reuses [`anim`](crate::anim)'s parameters,
+//!   conditions and transitions.
+//! - [`SkeletonData::to_json`] writes a skeleton (an imported Spine export,
+//!   say) in Ponko's own format, which holds everything it can hold.
 //!
 //! A game with no skeleton pays nothing: no system work beyond an empty
 //! query, no draw calls, no GPU memory. Saves, scenes, prefabs and the
@@ -66,16 +72,23 @@ pub(crate) mod draw;
 mod graph;
 mod json;
 mod library;
+mod path;
+mod physics;
 mod skeleton;
 mod spine;
 
 pub use atlas::SpineAtlas;
-pub use clip::{Bezier, BoneChannel, BoneTrack, ChannelTrack, Clip, Curve, DeformTrack, Key, SlotTrack};
+pub use clip::{
+    Bezier, BoneChannel, BoneTrack, ChannelTrack, Clip, Curve, DeformTrack, IkTrack, Key, PathTrack, PhysicsTrack,
+    SlotTrack, TransformTrack,
+};
 pub use data::{
     Attachment, Bone, BonePose, ClippingMask, IkConstraint, MeshVertex, SkeletonData, SkeletonError, SkinnedMesh, Slot,
     SpritePart, TransformConstraint,
 };
 pub(crate) use draw::draw_skeletons;
 pub use graph::{SkeletonGraph, SkeletonMotion, SkeletonState};
+pub use path::{PathConstraint, PathPosition, PathRotate, PathShape, PathSpacing};
+pub use physics::PhysicsConstraint;
 pub(crate) use library::{SkeletonLibrary, library};
 pub use skeleton::Skeleton;

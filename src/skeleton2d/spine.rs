@@ -9,7 +9,12 @@ use glam::Vec2;
 use serde_json::{Map, Value};
 
 use super::atlas::SpineAtlas;
-use super::clip::{Bezier, BoneChannel, BoneTrack, ChannelTrack, Clip, Curve, DeformTrack, Key, SlotTrack};
+use super::clip::{
+    Bezier, BoneChannel, BoneTrack, ChannelTrack, Clip, Curve, DeformTrack, IkTrack, Key, PathTrack, PhysicsTrack,
+    SlotTrack, TransformTrack,
+};
+use super::path::{PathConstraint, PathPosition, PathRotate, PathShape, PathSpacing};
+use super::physics::PhysicsConstraint;
 use super::data::{
     BonePose, ClippingMask, IkConstraint, MeshVertex, SkeletonData, SkeletonError, SkinnedMesh, SpritePart,
     TransformConstraint, err,
@@ -108,28 +113,30 @@ impl SkeletonData {
     /// the atlas by itself).
     ///
     /// Read: bones (position, rotation, scale, shear, length), slots (rest
-    /// attachment and color), every skin's region, mesh and clipping
+    /// attachment and color), every skin's region, mesh, clipping and path
     /// attachments (weighted meshes keep each vertex's four strongest
-    /// bones), IK constraints (two bones, or one as a look-at) and
-    /// transform constraints (world or local, absolute or relative; 4.x
-    /// and 3.x mix names), applied in their `order`, and animations' bone
-    /// rotate, translate, scale and shear timelines and the one-axis ones
-    /// (`translatex`, `scaley`...), deform timelines, slot attachment and
-    /// color timelines, draw order and events. Curves are exact: stepped,
-    /// linear, and bezier (4.x handles in seconds and values; 3.x
-    /// normalized ones), per channel; 3.x rotations keep turning the
-    /// shorter way, as 3.x plays them.
+    /// bones), IK constraints (two bones, or one as a look-at), transform
+    /// constraints (world or local, absolute or relative; 4.x and 3.x mix
+    /// names), path constraints (every position, spacing and rotate mode)
+    /// and physics constraints (4.2's springs, stepped at their own rate),
+    /// applied in their `order`, and animations' bone rotate, translate,
+    /// scale and shear timelines and the one-axis ones (`translatex`,
+    /// `scaley`...), deform timelines, slot attachment and color
+    /// timelines, IK, transform, path and physics timelines (mixes,
+    /// positions, spacings, settings and resets), draw order and events.
+    /// Curves are exact: stepped, linear, and bezier (4.x handles in seconds
+    /// and values; 3.x normalized ones), per channel; 3.x rotations keep
+    /// turning the shorter way, as 3.x plays them.
     ///
     /// Not read, each reported in [`warnings`](Self::warnings) with the
     /// file and where (the file still loads, without it): bone inherit
-    /// modes other than `normal`, skin-required bones, slot blend modes,
-    /// dark colors and hidden slots, linked meshes, sequences, bounding
-    /// boxes, paths, points, path constraints (Ponko has no path
-    /// attachments to follow) and physics constraints (a simulation of
-    /// Spine's own), skin constraints, IK softness/compress/stretch,
-    /// inherit timelines, `rgb`, `alpha` and two-color timelines, IK and
-    /// other constraint timelines, event values (events fire by name), and
-    /// any field this importer doesn't know.
+    /// modes other than `normal`, skin-required bones and constraints, slot
+    /// blend modes, dark colors and hidden slots, linked meshes, sequences,
+    /// bounding boxes, points, IK softness/compress/stretch (and their
+    /// keys), physics settings marked global (an animation's keys for every
+    /// physics constraint key them all), inherit timelines, `rgb`, `alpha`
+    /// and two-color timelines, event values (events fire by name), and any
+    /// field this importer doesn't know.
     ///
     /// ```
     /// use ponko::skeleton2d::SkeletonData;
@@ -212,21 +219,9 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
         ],
         "the file",
     );
-    if present(v, "path") {
-        import.warn(
-            "path constraints",
-            "the bones they would move keep their animated pose: they follow path attachments (bezier \
-             splines measured along their length), which Ponko has no shape for",
-        );
-    }
-    if present(v, "physics") {
-        import.warn(
-            "physics constraints",
-            "the bones they would move keep their animated pose: Spine's physics is a spring \
-             simulation stepped at its own fixed rate with its own state per skeleton, which a pose \
-             sampled from clips can't reproduce",
-        );
-    }
+    let reference_scale = v
+        .get("skeleton")
+        .map_or(100.0, |s| num(s, "referenceScale", 100.0));
     for (name, e) in v.get("events").and_then(Value::as_object).into_iter().flatten() {
         if ["int", "float", "string", "audio"].iter().any(|k| present(e, k)) {
             import.warn(
@@ -490,7 +485,26 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
                         "the slot shows nothing for this attachment",
                     ),
                     "boundingbox" => import.warn(&format!("bounding box ({place})"), "it has no shape in Ponko"),
-                    "path" => import.warn(&format!("path attachment ({place})"), "it has no shape in Ponko"),
+                    "path" => {
+                        import.unknown(
+                            a,
+                            &["type", "name", "closed", "constantSpeed", "vertexCount", "vertices", "lengths", "color"],
+                            &place,
+                        );
+                        let count = a.get("vertexCount").and_then(Value::as_u64).unwrap_or(0) as usize;
+                        let raw = floats(a, "vertices");
+                        let (vertices, influences) = spine_vertices(&data, slot, name, &raw, count, None)?;
+                        let mut path = PathShape::new(vertices);
+                        path.closed = a.get("closed").and_then(Value::as_bool).unwrap_or(false);
+                        path.constant_speed = a.get("constantSpeed").and_then(Value::as_bool).unwrap_or(true);
+                        // Spine lists one length per point; an open path's
+                        // last is unused.
+                        path.lengths = floats(a, "lengths");
+                        path.lengths.truncate(path.curves());
+                        path.check().map_err(|e| err(format!("{place}: {e}")))?;
+                        import.influences.insert((skin, slot, name.clone()), influences);
+                        data.add_skin_attachment(skin, slot, name, path);
+                    }
                     "point" => import.warn(&format!("point attachment ({place})"), "it has no position in Ponko"),
                     "clipping" => {
                         import.unknown(a, &["type", "name", "end", "vertexCount", "vertices", "color"], &place);
@@ -518,20 +532,37 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
     for (slot, name) in rest_attachments.into_iter().enumerate() {
         data.slots[slot].attachment = name.filter(|n| data.find(0, slot, n).is_some()).map(Arc::from);
     }
-    // IK and transform constraints apply in their `order` (a stable sort:
-    // equal orders keep IK first, each kind in file order).
-    let mut constraints: Vec<(bool, &Value)> = array(v, "ik")
+    // Constraints apply in their `order` (a stable sort: equal orders keep
+    // IK, transform, path, physics, each kind in file order).
+    let mut constraints: Vec<(u8, &Value)> = array(v, "ik")
         .iter()
-        .map(|c| (true, c))
-        .chain(array(v, "transform").iter().map(|c| (false, c)))
+        .map(|c| (0, c))
+        .chain(array(v, "transform").iter().map(|c| (1, c)))
+        .chain(array(v, "path").iter().map(|c| (2, c)))
+        .chain(array(v, "physics").iter().map(|c| (3, c)))
         .collect();
     constraints.sort_by_key(|(_, c)| c.get("order").and_then(Value::as_i64).unwrap_or(0));
-    for (is_ik, ik) in constraints {
-        if !is_ik {
-            let constraint = spine_transform(&data, ik, import)?;
-            data.check_transform(&constraint)?;
-            data.push_transform(constraint);
-            continue;
+    for (kind, ik) in constraints {
+        match kind {
+            1 => {
+                let constraint = spine_transform(&data, ik, import)?;
+                data.check_transform(&constraint)?;
+                data.push_transform(constraint);
+                continue;
+            }
+            2 => {
+                let constraint = spine_path(&data, ik, import)?;
+                data.check_path(&constraint)?;
+                data.push_path(constraint);
+                continue;
+            }
+            3 => {
+                let constraint = spine_physics(&data, ik, reference_scale, import)?;
+                data.check_physics(&constraint)?;
+                data.push_physics(constraint);
+                continue;
+            }
+            _ => {}
         }
         let name = text(ik, "name").unwrap_or("ik");
         let place = format!("IK constraint \"{name}\"");
@@ -589,8 +620,7 @@ fn read(v: &Value, import: &mut Import) -> Result<SkeletonData, SkeletonError> {
     if let Some(animations) = object(v, "animations") {
         for (name, a) in animations {
             let clip = spine_clip(&data, name, a, import)?;
-            clip.check(data.bones.len(), data.slots.len())?;
-            data.check_deform(&clip)?;
+            data.check_clip(&clip)?;
             data.clips.push(clip);
         }
     }
@@ -783,6 +813,321 @@ fn spine_transform(data: &SkeletonData, c: &Value, import: &mut Import) -> Resul
     t.local = c.get("local").and_then(Value::as_bool).unwrap_or(false);
     t.relative = c.get("relative").and_then(Value::as_bool).unwrap_or(false);
     Ok(t)
+}
+
+/// A Spine path constraint (4.x names, and 3.x's mixes).
+fn spine_path(data: &SkeletonData, c: &Value, import: &mut Import) -> Result<PathConstraint, SkeletonError> {
+    let name = text(c, "name").unwrap_or("path");
+    let place = format!("path constraint \"{name}\"");
+    import.unknown(
+        c,
+        &[
+            "name",
+            "order",
+            "skin",
+            "bones",
+            "target",
+            "positionMode",
+            "spacingMode",
+            "rotateMode",
+            "rotation",
+            "position",
+            "spacing",
+            "mixRotate",
+            "mixX",
+            "mixY",
+            "rotateMix",
+            "translateMix",
+        ],
+        &place,
+    );
+    if present(c, "skin") {
+        import.warn(
+            &format!("skin-required constraints ({place})"),
+            "it applies in every skin",
+        );
+    }
+    let bones = array(c, "bones")
+        .iter()
+        .map(|b| {
+            let b = b.as_str().unwrap_or("");
+            data.bone(b)
+                .ok_or_else(|| err(format!("{place}: no bone named \"{b}\"")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let target = text(c, "target").unwrap_or("");
+    let target = data
+        .slot(target)
+        .ok_or_else(|| err(format!("{place}: no slot named \"{target}\"")))?;
+    let mut p = PathConstraint::new(name, &bones, target);
+    p.position_mode = match text(c, "positionMode").unwrap_or("percent") {
+        "fixed" => PathPosition::Fixed,
+        "percent" => PathPosition::Percent,
+        other => return Err(err(format!("{place}: unknown position mode \"{other}\""))),
+    };
+    p.spacing_mode = match text(c, "spacingMode").unwrap_or("length") {
+        "length" => PathSpacing::Length,
+        "fixed" => PathSpacing::Fixed,
+        "percent" => PathSpacing::Percent,
+        "proportional" => PathSpacing::Proportional,
+        other => return Err(err(format!("{place}: unknown spacing mode \"{other}\""))),
+    };
+    p.rotate_mode = match text(c, "rotateMode").unwrap_or("tangent") {
+        "tangent" => PathRotate::Tangent,
+        "chain" => PathRotate::Chain,
+        "chainScale" => PathRotate::ChainScale,
+        other => return Err(err(format!("{place}: unknown rotate mode \"{other}\""))),
+    };
+    p.offset_rotation = angle(num(c, "rotation", 0.0));
+    p.position = num(c, "position", 0.0);
+    p.spacing = num(c, "spacing", 0.0);
+    if import.major < 4 {
+        p.mix_rotate = num(c, "rotateMix", 1.0);
+        p.mix_translate = Vec2::splat(num(c, "translateMix", 1.0));
+    } else {
+        p.mix_rotate = num(c, "mixRotate", 1.0);
+        let x = num(c, "mixX", 1.0);
+        p.mix_translate = Vec2::new(x, num(c, "mixY", x));
+    }
+    Ok(p)
+}
+
+/// A Spine 4.2 physics constraint.
+fn spine_physics(
+    data: &SkeletonData,
+    c: &Value,
+    reference_scale: f32,
+    import: &mut Import,
+) -> Result<PhysicsConstraint, SkeletonError> {
+    let name = text(c, "name").unwrap_or("physics");
+    let place = format!("physics constraint \"{name}\"");
+    const GLOBALS: [&str; 7] = [
+        "inertiaGlobal",
+        "strengthGlobal",
+        "dampingGlobal",
+        "massGlobal",
+        "windGlobal",
+        "gravityGlobal",
+        "mixGlobal",
+    ];
+    let mut known = vec![
+        "name", "order", "skin", "bone", "x", "y", "rotate", "scaleX", "shearX", "limit", "fps", "inertia", "strength",
+        "damping", "mass", "wind", "gravity", "mix",
+    ];
+    known.extend(GLOBALS);
+    import.unknown(c, &known, &place);
+    if present(c, "skin") {
+        import.warn(
+            &format!("skin-required constraints ({place})"),
+            "it applies in every skin",
+        );
+    }
+    if GLOBALS.iter().any(|g| present(c, g)) {
+        import.warn(
+            &format!("global physics settings ({place})"),
+            "an animation's physics keys for every constraint key this one too, and its own keys too",
+        );
+    }
+    let bone = text(c, "bone").unwrap_or("");
+    let bone = data
+        .bone(bone)
+        .ok_or_else(|| err(format!("{place}: no bone named \"{bone}\"")))?;
+    let mut p = PhysicsConstraint::new(name, bone);
+    p.x = num(c, "x", 0.0);
+    p.y = num(c, "y", 0.0);
+    p.rotate = num(c, "rotate", 0.0);
+    p.scale_x = num(c, "scaleX", 0.0);
+    p.shear_x = num(c, "shearX", 0.0);
+    p.limit = num(c, "limit", 5000.0);
+    let fps = num(c, "fps", 60.0);
+    p.step = if fps > 0.0 { 1.0 / fps } else { 1.0 / 60.0 };
+    p.inertia = num(c, "inertia", 1.0);
+    p.strength = num(c, "strength", 100.0);
+    p.damping = num(c, "damping", 1.0);
+    p.mass = num(c, "mass", 1.0);
+    p.wind = num(c, "wind", 0.0);
+    p.gravity = num(c, "gravity", 0.0);
+    p.mix = num(c, "mix", 1.0);
+    p.reference_scale = reference_scale;
+    Ok(p)
+}
+
+/// Channels `channels` of `frames`, as frames of their own (curves kept).
+fn split<const N: usize, const M: usize>(frames: &[Frame<N>], channels: [usize; M]) -> Vec<Frame<M>> {
+    frames
+        .iter()
+        .map(|f| Frame {
+            time: f.time,
+            values: channels.map(|c| f.values[c]),
+            segment: match f.segment {
+                Segment::Linear => Segment::Linear,
+                Segment::Stepped => Segment::Stepped,
+                Segment::Normalized(n) => Segment::Normalized(n),
+                Segment::Absolute(h) => Segment::Absolute(channels.map(|c| h[c])),
+            },
+        })
+        .collect()
+}
+
+/// One-value keys from `list` (each key's `field`, default `default`).
+fn value_keys(
+    list: &[Value],
+    field: &str,
+    default: f32,
+    import: &mut Import,
+    place: &str,
+) -> Result<Vec<Key<f32>>, SkeletonError> {
+    let f = frames::<1>(list, import.major, |k| Ok([channel(k, field, default)]))?;
+    Ok(keys(f, import, place, |[v]| v as f32))
+}
+
+/// The IK, transform, path and physics timelines of animation `a` into
+/// `clip`; `times` sees every key list (for the clip's length).
+fn constraint_timelines(
+    data: &SkeletonData,
+    a: &Value,
+    anim: &str,
+    clip: &mut Clip,
+    times: &mut impl FnMut(&[Value]),
+    import: &mut Import,
+) -> Result<(), SkeletonError> {
+    let major = import.major;
+    for (name, list) in object(a, "ik").into_iter().flatten() {
+        let place = format!("{anim}, IK constraint \"{name}\"");
+        let constraint = data
+            .ik_constraint(name)
+            .ok_or_else(|| err(format!("{place}: no IK constraint named \"{name}\"")))?;
+        let list = list.as_array().map_or(&[][..], Vec::as_slice);
+        times(list);
+        for k in list {
+            for (key, what) in [("softness", "softness"), ("compress", "compress"), ("stretch", "stretch")] {
+                if present(k, key) {
+                    import.warn(&format!("IK {what} keys ({place})"), "the chain bends without it");
+                }
+            }
+        }
+        let mut track = IkTrack::new(constraint);
+        let f = frames::<2>(list, major, |k| Ok([channel(k, "mix", 1.0), channel(k, "softness", 0.0)]))?;
+        track.mix = keys(split(&f, [0]), import, &place, |[v]| v as f32);
+        // Spine's positive bend is the negative way on a y-down screen.
+        track.bend_positive = list
+            .iter()
+            .map(|k| {
+                let spine = k.get("bendPositive").and_then(Value::as_bool).unwrap_or(true);
+                Key::new(num(k, "time", 0.0), !spine).with_curve(Curve::Stepped)
+            })
+            .collect();
+        clip.ik.push(track);
+    }
+    for (name, list) in object(a, "transform").into_iter().flatten() {
+        let place = format!("{anim}, transform constraint \"{name}\"");
+        let constraint = data
+            .transform_constraint(name)
+            .ok_or_else(|| err(format!("{place}: no transform constraint named \"{name}\"")))?;
+        let list = list.as_array().map_or(&[][..], Vec::as_slice);
+        times(list);
+        let f = if major < 4 {
+            frames::<6>(list, major, |k| {
+                let t = channel(k, "translateMix", 1.0);
+                let s = channel(k, "scaleMix", 1.0);
+                Ok([channel(k, "rotateMix", 1.0), t, t, s, s, channel(k, "shearMix", 1.0)])
+            })?
+        } else {
+            frames::<6>(list, major, |k| {
+                let x = channel(k, "mixX", 1.0);
+                let sx = channel(k, "mixScaleX", 1.0);
+                Ok([
+                    channel(k, "mixRotate", 1.0),
+                    x,
+                    k.get("mixY").and_then(Value::as_f64).unwrap_or(x),
+                    sx,
+                    k.get("mixScaleY").and_then(Value::as_f64).unwrap_or(sx),
+                    channel(k, "mixShearY", 1.0),
+                ])
+            })?
+        };
+        let mut track = TransformTrack::new(constraint);
+        track.mix_rotate = keys(split(&f, [0]), import, &place, |[v]| v as f32);
+        track.mix_translate = keys(split(&f, [1, 2]), import, &place, |[x, y]| Vec2::new(x as f32, y as f32));
+        track.mix_scale = keys(split(&f, [3, 4]), import, &place, |[x, y]| Vec2::new(x as f32, y as f32));
+        track.mix_shear_y = keys(split(&f, [5]), import, &place, |[v]| v as f32);
+        clip.transforms.push(track);
+    }
+    for (name, timelines) in object(a, "path").into_iter().flatten() {
+        let place = format!("{anim}, path constraint \"{name}\"");
+        let constraint = data
+            .path_constraint(name)
+            .ok_or_else(|| err(format!("{place}: no path constraint named \"{name}\"")))?;
+        for (key, _) in timelines.as_object().into_iter().flatten() {
+            if !["position", "spacing", "mix"].contains(&key.as_str()) {
+                import.warn(&format!("\"{key}\" timeline ({place})"), "the constraint isn't animated by it");
+            }
+        }
+        let mut track = PathTrack::new(constraint);
+        let position = array(timelines, "position");
+        times(position);
+        track.position = value_keys(position, "value", 0.0, import, &place)?;
+        let spacing = array(timelines, "spacing");
+        times(spacing);
+        track.spacing = value_keys(spacing, "value", 0.0, import, &place)?;
+        let mix = array(timelines, "mix");
+        times(mix);
+        let f = if major < 4 {
+            frames::<3>(mix, major, |k| {
+                let t = channel(k, "translateMix", 1.0);
+                Ok([channel(k, "rotateMix", 1.0), t, t])
+            })?
+        } else {
+            frames::<3>(mix, major, |k| {
+                let x = channel(k, "mixX", 1.0);
+                Ok([
+                    channel(k, "mixRotate", 1.0),
+                    x,
+                    k.get("mixY").and_then(Value::as_f64).unwrap_or(x),
+                ])
+            })?
+        };
+        track.mix_rotate = keys(split(&f, [0]), import, &place, |[v]| v as f32);
+        track.mix_translate = keys(split(&f, [1, 2]), import, &place, |[x, y]| Vec2::new(x as f32, y as f32));
+        clip.paths.push(track);
+    }
+    for (name, timelines) in object(a, "physics").into_iter().flatten() {
+        let place = format!("{anim}, physics constraint \"{name}\"");
+        let constraint = if name.is_empty() {
+            None
+        } else {
+            Some(
+                data.physics_constraint(name)
+                    .ok_or_else(|| err(format!("{place}: no physics constraint named \"{name}\"")))?,
+            )
+        };
+        let mut track = PhysicsTrack::new(constraint);
+        for (key, list) in timelines.as_object().into_iter().flatten() {
+            let list = list.as_array().map_or(&[][..], Vec::as_slice);
+            times(list);
+            let default = if key == "mass" { 1.0 } else { 0.0 };
+            let target = match key.as_str() {
+                "inertia" => &mut track.inertia,
+                "strength" => &mut track.strength,
+                "damping" => &mut track.damping,
+                "mass" => &mut track.mass,
+                "wind" => &mut track.wind,
+                "gravity" => &mut track.gravity,
+                "mix" => &mut track.mix,
+                "reset" => {
+                    track.reset = list.iter().map(|k| num(k, "time", 0.0)).collect();
+                    continue;
+                }
+                other => {
+                    import.warn(&format!("\"{other}\" timeline ({place})"), "the constraint isn't animated by it");
+                    continue;
+                }
+            };
+            *target = value_keys(list, "value", default, import, &place)?;
+        }
+        clip.physics.push(track);
+    }
+    Ok(())
 }
 
 // ---- curves ---------------------------------------------------------------------
@@ -1165,20 +1510,6 @@ fn spine_clip(data: &SkeletonData, name: &str, a: &Value, import: &mut Import) -
         ],
         &anim,
     );
-    for (key, what, instead) in [
-        ("ik", "IK timelines", "the constraints keep their mix"),
-        (
-            "transform",
-            "transform constraint timelines",
-            "the constraints keep their mixes",
-        ),
-        ("path", "path constraint timelines", "they are left out"),
-        ("physics", "physics constraint timelines", "they are left out"),
-    ] {
-        if present(a, key) {
-            import.warn(&format!("{what} ({anim})"), instead);
-        }
-    }
     // The clip lasts until its last key, whatever its kind.
     let mut last = 0.0f32;
     let mut times = |keys: &[Value]| {
@@ -1343,6 +1674,7 @@ fn spine_clip(data: &SkeletonData, name: &str, a: &Value, import: &mut Import) -
             clip.deform.push(track);
         }
     }
+    constraint_timelines(data, a, &anim, &mut clip, &mut times, import)?;
     for k in array(a, "drawOrder").iter().chain(array(a, "draworder")) {
         last = last.max(num(k, "time", 0.0));
         let offsets = array(k, "offsets");

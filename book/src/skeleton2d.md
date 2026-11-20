@@ -18,14 +18,17 @@ C and C++ games use them too (see [From C and C++](#from-c-and-c) below).
 
 | Type | What it is |
 |---|---|
-| `SkeletonData` | The shared description, loaded once: bones and their rest pose, slots, skins and attachments, clips, IK and transform constraints, an optional state machine. |
+| `SkeletonData` | The shared description, loaded once: bones and their rest pose, slots, skins and attachments, clips, IK, transform, path and physics constraints, an optional state machine. |
 | `Bone` | A name, a parent and a rest `BonePose` (translation, rotation, scale, shear) relative to the parent. |
 | `Slot` | A place on a bone that shows one attachment at a time, in draw order. |
 | `SpritePart` | A rigid attachment: a texture (or a region of one) with a size, pivot and offset from its bone. |
 | `SkinnedMesh` | A bending attachment: vertices with UVs and up to four weighted bones each, and triangles. |
 | `ClippingMask` | A polygon on bones that clips what the next slots draw, up to an end slot. |
-| `Clip` | Keys for bones (translate, rotate, scale, shear, or one axis at a time), slots (attachment, visibility, color), mesh deforms, draw order and events. |
+| `PathShape` | A chain of cubic beziers on bones that draws nothing: path constraints place bones along it. |
+| `Clip` | Keys for bones (translate, rotate, scale, shear, or one axis at a time), slots (attachment, visibility, color), mesh deforms, constraint mixes and settings, draw order and events. |
 | `TransformConstraint` | Bones that take on some of a target bone's rotation, position, scale and shear. |
+| `PathConstraint` | Bones placed one after another along a `PathShape` and turned along it (a snake, a tentacle, a chain on a track). |
+| `PhysicsConstraint` | A bone that lags behind its pose and springs back (hair, a tail, a feather), stepped at a fixed rate. |
 | `SkeletonGraph` | The state machine: states that play a clip or a 1D blend, with the same parameters, conditions and transitions as the 3D animator (`ponko::anim`). |
 | `Skeleton` | The component: what plays, its clock and its pose. |
 
@@ -143,6 +146,14 @@ The graph only plays what the data says; `play`, `play_once` and
 `crossfade` still work and take over until `crossfade_state` (or a new
 skeleton) hands control back to the graph.
 
+Crossfades and 1D blends mix everything that comes in amounts: bone
+poses, mesh deforms (a clip that doesn't deform a mesh counts as no
+offset, so a deform fades in and out rather than snapping), and the
+constraint mixes and settings clips key (a side that doesn't key one uses
+the constraint's own value). What can't be mixed comes from the stronger
+side: attachments, visibility, colors, draw order, an IK chain's bend
+direction, events and physics resets.
+
 ## Slots, skins and sprite swaps
 
 Each slot shows one attachment, named. Clips swap them (an open hand for a
@@ -210,6 +221,69 @@ if let (Some(head), Some(upper), Some(lower)) = (puppet.bone("head"), puppet.bon
 
 </div>
 </div>
+
+Clips can key the constraints too: an `IkTrack` keys an IK constraint's
+mix and bend direction, a `TransformTrack` its mixes, a `PathTrack` a path
+constraint's position, spacing and mixes, and a `PhysicsTrack` a physics
+constraint's settings (or every one's) and when its springs start over.
+While a clip keys a mix it replaces the constraint's own; `set_ik_mix`
+sets the mix used while no clip keys it.
+
+## Paths and physics
+
+A `PathShape` is an attachment like a mesh, but it draws nothing: three
+vertices per point (the handle before it, the point, the handle after it)
+make a chain of cubic beziers that bends with its bones. A
+`PathConstraint` places its bones along the path that a slot shows: the
+first at `position` (units, or a fraction of the path with
+`PathPosition::Percent`), the next ones `spacing` apart (each bone's
+length plus `spacing` by default; `PathSpacing` has fixed, percent and
+proportional gaps too), turned along the path (`PathRotate::Tangent`), or
+each pointing at the next place with the chain keeping its lengths
+(`Chain`) or stretching to reach it (`ChainScale`). Positions are measured
+by distance along the curves unless the path says otherwise.
+
+A `PhysicsConstraint` makes a bone lag and spring back as the skeleton
+moves: its position (`x`, `y`), its turn (`rotate`, `shear_x`) and its
+stretch (`scale_x`) each follow a damped spring stepped `1 / step` times a
+second whatever the frame rate, pushed by `wind` (+x) and `gravity` (down
+the screen), with Spine's `inertia`, `strength`, `damping` and `mass`.
+Each `Skeleton` keeps its own springs; `reset_physics()` starts them over
+where the bones are (after a teleport, say).
+
+```rust
+use ponko::skeleton2d::{BonePose, MeshVertex, PathConstraint, PathRotate, PathShape, PhysicsConstraint, SkeletonData};
+
+let mut data = SkeletonData::new();
+let root = data.add_bone("root", None, BonePose::IDENTITY, 0.0);
+let mut tail = Vec::new();
+let mut last = root;
+for i in 0..4 {
+    let at = if i == 0 { Vec2::ZERO } else { vec2(8.0, 0.0) };
+    last = data.add_bone(&format!("tail{i}"), Some(last), BonePose::at(at), 8.0);
+    tail.push(last);
+}
+// A wavy track on the root: two points, each with a handle on either side.
+let on = |x: f32, y: f32| MeshVertex::new(vec2(x, y), Vec2::ZERO, &[(root, 1.0)]);
+let wave = PathShape::new(vec![
+    on(-10.0, 0.0), on(0.0, 0.0), on(10.0, -10.0),
+    on(30.0, 10.0), on(40.0, 0.0), on(50.0, -10.0),
+]);
+let track = data.add_slot("track", root);
+data.add_attachment(track, "track", wave);
+let mut slither = PathConstraint::new("slither", &tail, track);
+slither.rotate_mode = PathRotate::Chain;
+data.add_path_constraint(slither);
+// A feather at the tip that swings behind as the tail moves.
+let feather = data.add_bone("feather", Some(last), BonePose::at(vec2(8.0, 0.0)), 6.0);
+let mut sway = PhysicsConstraint::new("sway", feather);
+sway.rotate = 1.0;
+sway.gravity = 40.0;
+data.add_physics_constraint(sway);
+```
+
+Constraints of every kind apply after the clips, in the order they were
+added (a file's `order`), each seeing what the ones before it did.
 
 ## Building one in code
 
@@ -284,7 +358,10 @@ refer to things by name; angles are degrees (clockwise, y down), and the
 engine turns them into radians.
 
 **Top level.** `format`, `version` (1) and `bones` are required; `slots`,
-`skins`, `ik`, `clips` and `graph` are optional.
+`skins`, `ik`, `transform`, `path`, `physics`, `clips` and `graph` are
+optional, and so are `premultiplied` (`true`: the images' colors are
+premultiplied by alpha, as a `pma` atlas page's) and `nearest` (images,
+relative to the file, sampled without smoothing).
 
 **`bones`**, parents before children:
 
@@ -295,7 +372,8 @@ engine turns them into radians.
 | `x`, `y` | 0 | Rest translation, in the parent's space. |
 | `rotation` | 0 | Rest rotation, degrees. |
 | `scale` | `[1, 1]` | Rest scale. |
-| `length` | 0 | Its length along +x, for tools and IK. |
+| `shear` | `[0, 0]` | Rest shear of its x and y axes, degrees. |
+| `length` | 0 | Its length along +x, for tools, IK, paths and physics. |
 
 **`slots`**, in draw order (first drawn first):
 
@@ -304,7 +382,7 @@ engine turns them into radians.
 | `name` | required | Unique. |
 | `bone` | required | The bone it follows. |
 | `attachment` | none | What it shows at rest, from the default skin. |
-| `color` | white | Tint, `#rrggbb` or `#rrggbbaa`. |
+| `color` | white | Tint, `#rrggbb` or `#rrggbbaa` (or `[r, g, b, a]`, 0 to 1 each, for a color those can't hold). |
 
 **`skins`**: `name` (the first skin is the default one; call it `default`)
 and `attachments`, each:
@@ -312,26 +390,69 @@ and `attachments`, each:
 | Field | Default | Meaning |
 |---|---|---|
 | `slot`, `name` | required | Where it goes and what it is called. |
-| `type` | `"sprite"` | `"sprite"` (rigid) or `"mesh"` (skinned). |
-| `image` | required | The image, relative to the file's folder. |
+| `type` | `"sprite"` | `"sprite"` (rigid), `"mesh"` (skinned), `"clipping"` (a mask) or `"path"`. |
+| `image` | required for sprites and meshes | The image, relative to the file's folder. |
 | `color` | white | Tint. |
 | `region` | the whole image | Sprites: `[x, y, width, height]` in image pixels. |
 | `size` | the region's size | Sprites: size in world units (one of `size` or `region` is required). |
 | `pivot` | `[0.5, 0.5]` | Sprites: which point of the part (0..1 across it) sits at its offset from the bone. |
 | `x`, `y`, `rotation`, `scale` | 0, 0, 0, `[1, 1]` | Sprites: offset from the bone. |
-| `vertices` | required for meshes | Meshes: `position` (in the skeleton's rest space), `uv` (0..1), `bones` (names) and `weights` (one per bone; optional with one bone). The four strongest bones are kept; weights are normalized. |
+| `vertices` | required for meshes, masks and paths | `position` (in the skeleton's rest space), `uv` (0..1, meshes only), `bones` (names) and `weights` (one per bone; optional with one bone). The four strongest bones are kept; weights are normalized. |
 | `triangles` | required for meshes | Meshes: three vertex indices per triangle. |
+| `end` | none (every slot after it) | Clipping masks: the last slot it clips. |
+| `closed` | `false` | Paths: it also runs from its last point back to the first. |
+| `constant_speed` | `true` | Paths: positions along it are measured by distance; `false` uses `lengths`. |
+| `lengths` | none | Paths not measured by distance: the length from the start to the end of each curve. |
+
+A path's vertices come three per point: the handle before it, the point,
+the handle after it.
 
 **`ik`**: `name`, `bones` (one, or two where the second is a child of the
 first), `target` (a bone), `bend_positive` (default `true`: the joint turns
 clockwise from the line to the target) and `mix` (default 1).
 
+**`transform`**: `name`, `bones`, `target` (a bone), the mixes
+`mix_rotate`, `mix_translate` (`[x, y]`), `mix_scale` (`[x, y]`) and
+`mix_shear_y` (each default 1), the offsets `rotation` (degrees), `x`, `y`,
+`scale` (`[x, y]`, added) and `shear_y` (degrees), all default 0, and
+`local` and `relative` (default `false`).
+
+**`path`**: `name`, `bones`, `target` (the slot showing the path),
+`position_mode` (`"percent"`, the default, or `"fixed"`), `spacing_mode`
+(`"length"`, the default, `"fixed"`, `"percent"` or `"proportional"`),
+`rotate_mode` (`"tangent"`, the default, `"chain"` or `"chain_scale"`),
+`rotation` (degrees added), `position`, `spacing` (default 0),
+`mix_rotate` (default 1) and `mix_translate` (default `[1, 1]`).
+
+**`physics`**: `name`, `bone`, how much each part follows its spring
+(`x`, `y`, `rotate`, `scale_x`, `shear_x`, default 0), `limit` (default
+5000), `step` (seconds per step, default 1/60), `inertia` (1), `strength`
+(100), `damping` (1), `mass` (1), `wind` (0), `gravity` (0), `mix` (1) and
+`reference_scale` (100).
+
+Constraints apply in the order of their `order` field (default 0), then IK,
+transform, path and physics constraints, each in file order.
+
 **`clips`**: `name`, `duration` (default: the last key's time), and:
 
-- `bones`: `bone` and key lists `translate` (`[x, y]`), `rotate` (degrees)
-  and `scale` (`[x, y]`).
+- `bones`: `bone` and key lists `translate` (`[x, y]`), `rotate` (degrees),
+  `scale` (`[x, y]`) and `shear` (`[x, y]`, degrees), and one axis at a
+  time with its own key times: `translate_x`, `translate_y`, `scale_x`,
+  `scale_y`, `shear_x` and `shear_y` (degrees), which replace that axis.
 - `slots`: `slot` and key lists `attachment` (a name, or `null` to hide it),
   `visible` (`true`/`false`) and `color` (`#rrggbbaa`).
+- `deform`: `slot`, `skin` (default `"default"`), `attachment` (a mesh, mask
+  or path) and `keys`, each value a list of `[x, y]` offsets: one per
+  vertex and bone, in the order the attachment lists its vertices and each
+  vertex's bones, in that bone's space at rest.
+- `ik`: `constraint` and key lists `mix` and `bend_positive`.
+- `transform`: `constraint` and key lists `mix_rotate`, `mix_translate`
+  (`[x, y]`), `mix_scale` (`[x, y]`) and `mix_shear_y`.
+- `path`: `constraint` and key lists `position`, `spacing`, `mix_rotate`
+  and `mix_translate` (`[x, y]`).
+- `physics`: `constraint` (default: every physics constraint), key lists
+  `inertia`, `strength`, `damping`, `mass`, `wind`, `gravity` and `mix`,
+  and `reset`, a list of times at which the springs start over.
 - `draw_order`: `{ "time", "order" }` where `order` names every slot once,
   or is `null` for the rest order.
 - `events`: `{ "time", "name" }`.
@@ -364,10 +485,12 @@ which must hold), `exit_time` (the source's normalized time it waits for),
 `duration` (crossfade seconds) and `offset` (the next state's starting
 normalized time).
 
-Shear, transform constraints, clipping masks and deform keys are not in
-this format yet: build them in code (`BonePose::with_shear`,
-`add_transform_constraint`, a `ClippingMask` attachment, a clip's
-`with_deform_track`) or import them from Spine.
+`SkeletonData::to_json(path)` writes a skeleton in this format, to be
+saved as asset `path` (images are written relative to its folder). It
+writes everything a skeleton holds, so an imported Spine export can be
+kept in Ponko's format without losing anything: read back, it is the same
+skeleton, every number bit for bit, and it plays the same. An attachment
+showing an image made in code (with no file) can't be written.
 
 ### Importing Spine JSON
 
@@ -389,36 +512,34 @@ reloads every skeleton playing it. To read an export from memory, use
 `SpineAtlas::parse` and `SkeletonData::from_spine_json_with_atlas`.
 
 Read: bones (position, rotation, scale, shear, length), slots (rest
-attachment, color), every skin's region, mesh and clipping attachments
-(weighted meshes keep each vertex's four strongest bones), IK constraints
-(with their mix and bend direction), transform constraints (world or
-local, absolute or relative, every mix and offset; 4.x and 3.x names),
-applied in their `order` with the IK constraints, and animations' bone
-timelines (rotate, translate, scale and shear, and 4.x's one-axis
+attachment, color), every skin's region, mesh, clipping and path
+attachments (weighted meshes keep each vertex's four strongest bones), IK
+constraints (with their mix and bend direction), transform constraints
+(world or local, absolute or relative, every mix and offset; 4.x and 3.x
+names), path constraints (every position, spacing and rotate mode) and
+physics constraints (Spine 4.2's springs, with their own step rate),
+applied in their `order`, and animations' bone timelines (rotate, translate, scale and shear, and 4.x's one-axis
 `translatex`, `translatey`, `scalex`, `scaley`, `shearx` and `sheary`,
 each with its own key times), deform timelines (4.x under `attachments`,
 3.x under `deform`; offsets of weighted meshes stay with their bones),
-slot attachment and color timelines, draw order and events, with their
-curves: linear, stepped and bezier, exactly as Spine evaluates them. 3.x
+slot attachment and color timelines, IK, transform, path and physics
+timelines (mixes, bend directions, positions, spacings, physics settings
+and resets), draw order and events, with their curves: linear, stepped and bezier, exactly as Spine evaluates them. 3.x
 rotations turn the shorter way between keys, as 3.x does.
 
 A clipping attachment clips the slots after its own up to its `end` slot,
-regions and meshes alike, to any simple polygon. Deforms, like slot keys,
-come from the stronger side of a crossfade or blend: they switch at the
-half-way point rather than blending.
+regions and meshes alike, to any simple polygon. Deforms and constraint
+mixes blend across crossfades and 1D blends like bone poses do. Physics
+runs as Spine's does, mirrored to y-down: gravity pulls down the screen.
 
 Not read: inherit modes other than normal, skin-specific bones and
 constraints, dark colors, slot blend modes, hidden slots, sequences,
-linked meshes, bounding boxes, paths, points, IK softness, compress,
-stretch and uniform scale, event values, and timelines for inherit,
-`rgb`, `alpha` and two-color tints, IK and constraint mixes and
-sequences. Path and physics constraints are not evaluated either: path
-constraints follow path attachments (bezier splines measured along their
-length) that Ponko has no shape for, and Spine's physics is a spring
-simulation stepped at its own fixed rate with state of its own per
-skeleton, which a pose sampled from clips can't reproduce; their bones keep
-their animated pose. A file using any of them still loads, and each one
-it uses is a warning naming the feature, where it is and the file:
+linked meshes, bounding boxes, points, IK softness, compress, stretch and
+uniform scale (and their keys), physics settings marked global (an
+animation's physics keys for all constraints key every one), event
+values, and timelines for inherit, `rgb`, `alpha` and two-color tints and
+sequences. A file using any of them still loads, and each one it uses is
+a warning naming the feature, where it is and the file:
 
 ```text
 hero/hero.json: Spine inherit mode "noScale" (bone "arm") isn't read; the bone inherits its parent's rotation and scale as "normal" does

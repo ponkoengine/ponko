@@ -344,6 +344,162 @@ impl DeformTrack {
     }
 }
 
+/// Keys of an [`IkConstraint`](super::IkConstraint)'s mix and bend
+/// direction (Spine's IK timeline). While a clip keys them they replace
+/// the constraint's own; crossfades and blends mix the mix.
+///
+/// ```
+/// use ponko::skeleton2d::{IkTrack, Key};
+/// let mut reach = IkTrack::new(0);
+/// reach.mix = vec![Key::new(0.0, 0.0), Key::new(0.5, 1.0)]; // IK fades in
+/// ```
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct IkTrack {
+    /// The IK constraint, by index.
+    pub constraint: usize,
+    /// How much it applies, 0 to 1.
+    pub mix: Vec<Key<f32>>,
+    /// Which way two bones bend, from each key on (from the stronger side
+    /// of a crossfade).
+    pub bend_positive: Vec<Key<bool>>,
+}
+
+impl IkTrack {
+    /// A track for IK constraint `constraint` with no keys.
+    #[must_use]
+    pub fn new(constraint: usize) -> Self {
+        Self {
+            constraint,
+            ..Default::default()
+        }
+    }
+}
+
+/// Keys of a [`TransformConstraint`](super::TransformConstraint)'s mixes
+/// (Spine's transform constraint timeline). Keyed mixes replace the
+/// constraint's own; crossfades and blends mix them.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct TransformTrack {
+    /// The transform constraint, by index.
+    pub constraint: usize,
+    /// Its rotate mix.
+    pub mix_rotate: Vec<Key<f32>>,
+    /// Its x and y translate mixes.
+    pub mix_translate: Vec<Key<Vec2>>,
+    /// Its x and y scale mixes.
+    pub mix_scale: Vec<Key<Vec2>>,
+    /// Its y shear mix.
+    pub mix_shear_y: Vec<Key<f32>>,
+}
+
+impl TransformTrack {
+    /// A track for transform constraint `constraint` with no keys.
+    #[must_use]
+    pub fn new(constraint: usize) -> Self {
+        Self {
+            constraint,
+            ..Default::default()
+        }
+    }
+}
+
+/// Keys of a [`PathConstraint`](super::PathConstraint)'s position, spacing
+/// and mixes (Spine's path constraint timelines). Keyed values replace the
+/// constraint's own; crossfades and blends mix them.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct PathTrack {
+    /// The path constraint, by index.
+    pub constraint: usize,
+    /// Where the first bone goes along the path.
+    pub position: Vec<Key<f32>>,
+    /// The gap between bones.
+    pub spacing: Vec<Key<f32>>,
+    /// Its rotate mix.
+    pub mix_rotate: Vec<Key<f32>>,
+    /// Its x and y translate mixes.
+    pub mix_translate: Vec<Key<Vec2>>,
+}
+
+impl PathTrack {
+    /// A track for path constraint `constraint` with no keys.
+    #[must_use]
+    pub fn new(constraint: usize) -> Self {
+        Self {
+            constraint,
+            ..Default::default()
+        }
+    }
+}
+
+/// Keys of a [`PhysicsConstraint`](super::PhysicsConstraint)'s settings
+/// (Spine's physics timelines), and times its springs start over. Keyed
+/// values replace the constraint's own; crossfades and blends mix them.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct PhysicsTrack {
+    /// The physics constraint, by index; `None`: every one.
+    pub constraint: Option<usize>,
+    /// Its inertia.
+    pub inertia: Vec<Key<f32>>,
+    /// Its strength.
+    pub strength: Vec<Key<f32>>,
+    /// Its damping.
+    pub damping: Vec<Key<f32>>,
+    /// Its mass.
+    pub mass: Vec<Key<f32>>,
+    /// Its wind.
+    pub wind: Vec<Key<f32>>,
+    /// Its gravity.
+    pub gravity: Vec<Key<f32>>,
+    /// Its mix.
+    pub mix: Vec<Key<f32>>,
+    /// Seconds from the clip's start at which its springs start over from
+    /// where the bone is (in time order).
+    pub reset: Vec<f32>,
+}
+
+impl PhysicsTrack {
+    /// A track for physics constraint `constraint` (`None`: all of them)
+    /// with no keys.
+    #[must_use]
+    pub fn new(constraint: Option<usize>) -> Self {
+        Self {
+            constraint,
+            ..Default::default()
+        }
+    }
+}
+
+/// Where each constraint's keyable values sit in one flat list: IK mixes,
+/// then six per transform constraint, five per path constraint, seven per
+/// physics constraint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct ConstraintLayout {
+    pub(crate) transforms: usize,
+    pub(crate) paths: usize,
+    pub(crate) physics: usize,
+    pub(crate) physics_count: usize,
+    pub(crate) len: usize,
+}
+
+impl ConstraintLayout {
+    pub(crate) fn new(ik: usize, transforms: usize, paths: usize, physics: usize) -> Self {
+        let t = ik;
+        let p = t + 6 * transforms;
+        let ph = p + super::path::PATH_VALUES * paths;
+        Self {
+            transforms: t,
+            paths: p,
+            physics: ph,
+            physics_count: physics,
+            len: ph + super::physics::PHYSICS_VALUES * physics,
+        }
+    }
+}
+
 impl BoneTrack {
     /// A track for bone `bone` with no keys.
     #[must_use]
@@ -408,6 +564,14 @@ pub struct Clip {
     pub draw_order: Vec<Key<Option<Arc<[u16]>>>>,
     /// Mesh deforms, at most one per mesh.
     pub deform: Vec<DeformTrack>,
+    /// IK constraint keys, at most one track per constraint.
+    pub ik: Vec<IkTrack>,
+    /// Transform constraint keys, at most one track per constraint.
+    pub transforms: Vec<TransformTrack>,
+    /// Path constraint keys, at most one track per constraint.
+    pub paths: Vec<PathTrack>,
+    /// Physics constraint keys.
+    pub physics: Vec<PhysicsTrack>,
     /// Events, on the clip's normalized clock (0..1), in time order.
     pub events: Vec<AnimationEvent>,
 }
@@ -423,8 +587,40 @@ impl Clip {
             slots: Vec::new(),
             draw_order: Vec::new(),
             deform: Vec::new(),
+            ik: Vec::new(),
+            transforms: Vec::new(),
+            paths: Vec::new(),
+            physics: Vec::new(),
             events: Vec::new(),
         }
+    }
+
+    /// The same clip with IK track `track`.
+    #[must_use]
+    pub fn with_ik_track(mut self, track: IkTrack) -> Self {
+        self.ik.push(track);
+        self
+    }
+
+    /// The same clip with transform constraint track `track`.
+    #[must_use]
+    pub fn with_transform_track(mut self, track: TransformTrack) -> Self {
+        self.transforms.push(track);
+        self
+    }
+
+    /// The same clip with path constraint track `track`.
+    #[must_use]
+    pub fn with_path_track(mut self, track: PathTrack) -> Self {
+        self.paths.push(track);
+        self
+    }
+
+    /// The same clip with physics track `track`.
+    #[must_use]
+    pub fn with_physics_track(mut self, track: PhysicsTrack) -> Self {
+        self.physics.push(track);
+        self
     }
 
     /// The same clip with deform track `track`.
@@ -603,6 +799,113 @@ impl Clip {
             }
             pose[track.bone] = p;
         }
+    }
+}
+
+impl Clip {
+    /// Writes the constraint values it keys at `seconds` over `out` (laid
+    /// out as `layout` says).
+    pub(crate) fn sample_constraints(&self, seconds: f32, layout: &ConstraintLayout, out: &mut [f32]) {
+        let mut put = |at: usize, keys: &[Key<f32>]| {
+            if let Some(v) = sample(keys, seconds) {
+                out[at] = v;
+            }
+        };
+        for t in &self.ik {
+            put(t.constraint, &t.mix);
+        }
+        for t in &self.transforms {
+            let o = layout.transforms + 6 * t.constraint;
+            put(o, &t.mix_rotate);
+            put(o + 5, &t.mix_shear_y);
+        }
+        for t in &self.paths {
+            let o = layout.paths + super::path::PATH_VALUES * t.constraint;
+            put(o, &t.position);
+            put(o + 1, &t.spacing);
+            put(o + 2, &t.mix_rotate);
+        }
+        for t in &self.physics {
+            let range = match t.constraint {
+                Some(c) => c..c + 1,
+                None => 0..layout.physics_count,
+            };
+            for c in range {
+                let o = layout.physics + super::physics::PHYSICS_VALUES * c;
+                for (k, keys) in [&t.inertia, &t.strength, &t.damping, &t.mass, &t.wind, &t.gravity, &t.mix]
+                    .into_iter()
+                    .enumerate()
+                {
+                    put(o + k, keys);
+                }
+            }
+        }
+        let mut pair = |at: usize, keys: &[Key<Vec2>]| {
+            if let Some(v) = sample(keys, seconds) {
+                out[at] = v.x;
+                out[at + 1] = v.y;
+            }
+        };
+        for t in &self.transforms {
+            let o = layout.transforms + 6 * t.constraint;
+            pair(o + 1, &t.mix_translate);
+            pair(o + 3, &t.mix_scale);
+        }
+        for t in &self.paths {
+            pair(layout.paths + super::path::PATH_VALUES * t.constraint + 3, &t.mix_translate);
+        }
+    }
+
+    /// `Ok` if every constraint track names a constraint of the counts
+    /// given (IK, transform, path, physics) and has numbers in time order.
+    pub(crate) fn check_constraints(&self, counts: [usize; 4]) -> Result<(), SkeletonError> {
+        let name = &self.name;
+        let ok1 = |keys: &[Key<f32>]| {
+            keys.iter().all(|k| k.value.is_finite() && k.curve.is_valid()) && in_order(keys.iter().map(|k| k.time))
+        };
+        let ok2 = |keys: &[Key<Vec2>]| {
+            keys.iter().all(|k| k.value.is_finite() && k.curve.is_valid()) && in_order(keys.iter().map(|k| k.time))
+        };
+        let bad = |what: &str, i: usize| {
+            err(format!(
+                "clip \"{name}\": the keys of {what} constraint {i} need a constraint that is there, numbers, valid curves and time order"
+            ))
+        };
+        for t in &self.ik {
+            if t.constraint >= counts[0] || !ok1(&t.mix) || !in_order(t.bend_positive.iter().map(|k| k.time)) {
+                return Err(bad("IK", t.constraint));
+            }
+        }
+        for t in &self.transforms {
+            if t.constraint >= counts[1]
+                || !ok1(&t.mix_rotate)
+                || !ok2(&t.mix_translate)
+                || !ok2(&t.mix_scale)
+                || !ok1(&t.mix_shear_y)
+            {
+                return Err(bad("transform", t.constraint));
+            }
+        }
+        for t in &self.paths {
+            if t.constraint >= counts[2]
+                || !ok1(&t.position)
+                || !ok1(&t.spacing)
+                || !ok1(&t.mix_rotate)
+                || !ok2(&t.mix_translate)
+            {
+                return Err(bad("path", t.constraint));
+            }
+        }
+        for t in &self.physics {
+            let lists = [&t.inertia, &t.strength, &t.damping, &t.mass, &t.wind, &t.gravity, &t.mix];
+            if t.constraint.is_some_and(|c| c >= counts[3])
+                || !lists.iter().all(|k| ok1(k))
+                || !in_order(t.reset.iter().copied())
+            {
+                return Err(bad("physics", t.constraint.unwrap_or(0)));
+            }
+        }
+        Ok(())
     }
 }
 
