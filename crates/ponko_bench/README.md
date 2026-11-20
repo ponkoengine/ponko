@@ -138,12 +138,16 @@ everything, so every release also records a wall-clock baseline in
 maintainer's checklist in CONTRIBUTING.md, "Releasing", has the command),
 and the release notes link it. Compare two releases with
 `bench_track compare releases/<old>/<machine> releases/<new>/<machine>`.
-0.1.0 predates the folder: its record is [`baselines/ecs.json`](baselines/ecs.json),
-one run of the ECS matrix on an Apple M4 Max at commit `90bfe8ec`, the last
+0.1.0 predates the folder: its record is `baselines/ecs.json` as the `v0.1.0`
+tag has it (`git show v0.1.0:crates/ponko_bench/baselines/ecs.json`), one run
+of the ECS matrix on an Apple M4 Max at commit `90bfe8ec`, the last
 re-recording before the 0.1.0 tag (six engine commits came between; the
 ones in `crates/ponko_ecs` are listed by
-`git log 90bfe8ec..v0.1.0 -- crates/ponko_ecs`). Compare 0.2.0 with it as
-`bench_track compare baselines/ecs.json releases/0.2.0/macos-aarch64-apple-m4-max/`,
+`git log 90bfe8ec..v0.1.0 -- crates/ponko_ecs`). The file in the working tree
+has since been recorded again (2026-11-20). Compare 0.2.0 with the 0.1.0 record
+by saving it first:
+`git show v0.1.0:crates/ponko_bench/baselines/ecs.json > ecs-0.1.0.json`, then
+`bench_track compare ecs-0.1.0.json releases/0.2.0/macos-aarch64-apple-m4-max/`,
 and mind the note about its single run.
 
 ## Results (2026-11-02, Apple M4 Max, release, single thread)
@@ -245,20 +249,20 @@ ray-query reflection prototype's cost and memory, and the decision (defer):
 [RAY_TRACING.md](RAY_TRACING.md) (offscreen tests:
 `cargo test --release --lib --features 3d -- --ignored --nocapture --test-threads=1 ray_query_reflection_cost`).
 
-## Many small archetypes and query construction (2026-11-09)
+## Many small archetypes and query construction (2026-11-20)
 
-`ponko_ecs` vs `bevy_ecs` 0.20.1, M4 Max, release, single thread, rustc 1.99.1. The world: 1024 archetypes of 16 entities (16,384 total), each `(Pos, Vel, Spr)` plus a different subset of 10 zero-sized markers. `cargo run --release -p ponko_bench -- archetypes-1024` and `-- query-build`. Medians of 200 runs (iteration) or 100 runs (queries); the machine was shared with other work (load average around 40), so treat these as indicative and rerun before comparing.
+`ponko_ecs` vs `bevy_ecs` 0.20.1 and `hecs` 0.11.2, M4 Max, release, single thread, rustc 1.100.0, revision `e60e15a8`, on an idle machine (the rows of [ECS.md](ECS.md)'s baselines). The world: 1024 archetypes of 16 entities (16,384 total), each `(Pos, Vel, Spr)` plus a different subset of 10 zero-sized markers. `cargo run --release -p ponko_bench -- archetypes-1024` and `-- query-build`. Medians of 200 runs (iteration) or 100 runs (queries).
 
-| Benchmark | ponko_ecs | bevy_ecs |
-|---|---:|---:|
-| iterate `pos += vel*dt` over 1024 archetypes | 0.006–0.008 ms | 0.011–0.014 ms |
-| build the `(&mut Pos, &Vel)` query, ×1000 | 0.014 ms | 8.3–8.4 ms |
-| build the query and count its matches, ×1000 | 1.5 ms | 9.0–9.3 ms |
-| ECS storage for this world (`world_bytes`) | 1056 KiB | not reported |
+| Benchmark | ponko_ecs | bevy_ecs | hecs |
+|---|---:|---:|---:|
+| iterate `pos += vel*dt` over 1024 archetypes | 0.005 ms | 0.010 ms | 0.006 ms |
+| build the `(&mut Pos, &Vel)` query, ×1000 | 0.019 ms | 8.4 ms | 0.0003 ms |
+| build the query and count its matches, ×1000 | 2.4 ms | 9.1 ms | 0.22 ms (cache hit) |
+| ECS storage for this world (`world_bytes`) | 1056 KiB | not reported | not reported |
 
-- The two "build" rows measure different work: building a bevy `QueryState` matches it against every archetype, while a ponko `Query` only resolves component ids and matches while it runs. The "build and count" row does the same work in both (resolve, match all 1024 archetypes, sum lengths), so compare that one. bevy systems normally keep their `QueryState` and update it incrementally, which this benchmark does not measure.
+- The "build" rows measure different work: building a bevy `QueryState` matches it against every archetype, while a ponko `Query` only resolves component ids and matches while it runs, and hecs only borrows the world (it keeps a per-world cache of each query type's matching archetypes). The "build and count" row does the same work in ponko and bevy (resolve, match all 1024 archetypes, sum lengths), so compare those two; hecs hits its cache. bevy systems normally keep their `QueryState` and update it incrementally, which this benchmark does not measure.
 - The iteration row builds the query once for bevy (a kept `QueryState`) and once per run for ponko, as each library's systems use them.
-- These rows predate hecs in these cases. hecs is in [ECS.md](ECS.md), whose baselines were also recorded under load (load average 12.5 before and 24.5 after the main run; 36.2 before the second run), not on an idle machine. Re-record them with `PONKO_BENCH_JSON=crates/ponko_bench/baselines/ecs.json cargo run --release -p ponko_bench -- 'ecs/|archetypes-1024|query-build'`.
+- ponko's "build and count" is 2.4 ms here, against 1.5 ms in the recording of 2026-11-09 (taken while the machine was shared with other work). [ECS.md](ECS.md) has the p95 and the cold-world row.
 
 ## Caveats
 

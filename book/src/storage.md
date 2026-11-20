@@ -153,20 +153,19 @@ if let Some(written) = saving.take() {
 
 A world of 1,000,000 entities (each with a `Transform2D` and a two-field
 component, half with a third), measured with
-`cargo run --release -p ponko_bench --bin saves` on a 14-core laptop that was
-busy with other builds at the time (fastest of four runs; single runs varied
-by 2x or more):
+`cargo run --release -p ponko_bench --bin saves` on a 14-core laptop, idle
+(2026-11-20; the median of three runs):
 
 | | Before: JSON, `save_world` | After: binary, `save_world_in_background` |
 |---|---|---|
 | File | 400.6 MiB | 26.9 MiB |
-| Game thread stopped while saving | 6.1 s | 1.3 s (the snapshot) |
-| Until the file is written | 6.1 s | 2.4 s |
-| Loading the slot (read, decode, `World::load`) | 2.9 s | 2.1 s |
+| Game thread stopped while saving | 2.9 s | 1.0 s (the snapshot) |
+| Until the file is written | 2.9 s | 1.8 s |
+| Loading the slot (read, decode, `World::load`) | 1.9 s | 1.7 s |
 
 Most of what is left is the snapshot itself (building the save) and
 `World::load`, which are the same for both formats: decoding alone takes
-1.3 s for the JSON and 0.7 s for the binary file.
+0.85 s for the JSON and 0.53 s for the binary file.
 
 C and C++ games save slots as JSON on the game's thread for now: the binary
 format and background saves are Rust-only.

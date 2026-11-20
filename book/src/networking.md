@@ -374,39 +374,37 @@ Everything a tick reads that an earlier tick wrote. In this engine:
 ### What it costs
 
 `cargo run --release -p ponko_bench -- rollback/` on an Apple M4 Max
-(14 cores), three runs while other builds kept it busy (load average
-60–150): the fastest run, with the range of medians where they differ
-much. A "tick" is the test's game (players pushing a crowd); physics is a
-pile of 10 px boxes in rapier that has settled for a second.
+(14 cores), one run on an idle machine (2026-11-20): medians. A "tick" is the
+test's game (players pushing a crowd); physics is a pile of 10 px boxes in
+rapier that has settled for a second.
 
 | Per operation (ms) | 100 | 1,000 | 10,000 |
 |---|---|---|---|
-| Typed copy, save | < 0.001 | 0.001 | 0.016 |
-| Typed copy, load | 0.001 | 0.006 | 0.058 |
-| `World::save` (JSON) | 0.08 | 0.66 (5–29) | 7.9 (33–42) |
-| `World::load` (JSON) | 0.03 | 0.29 | 3.4 |
+| Typed copy, save | < 0.001 | 0.002 | 0.054 |
+| Typed copy, load | < 0.001 | 0.005 | 0.052 |
+| `World::save` (JSON) | 0.44 | 3.7 | 34 |
+| `World::load` (JSON) | 0.028 | 0.27 | 2.8 |
 | One tick of the game | < 0.001 | 0.001 | 0.010 |
-| Rapier state, save (clone) | 0.039 | 0.43 | 17 (33–82) |
-| Rapier state, load | 0.038 | 0.42 | 7.3 (7.5–16) |
-| One rapier step | 0.020 | 0.21 | 9.8 (12–36) |
+| Rapier state, save (clone) | 0.038 | 0.40 | 15 |
+| Rapier state, load | 0.037 | 0.37 | 6.2 |
+| One rapier step | 0.019 | 0.20 | 8.2 |
 
 The worst tick is one load plus `max_prediction + 1` saves and ticks;
 with the default window of 8:
 
-- **Without physics, typed copies:** 10,000 entities, about 0.3 ms. A
+- **Without physics, typed copies:** 10,000 entities, about 0.6 ms. A
   whole two-peer session of 300 ticks with 1,000 entities over a 4–8 tick,
-  10%-loss link took 4.9 ms for both peers (about 2.5 ms each) against
-  0.38 ms for one offline run: 475 ticks re-simulated across both peers,
+  10%-loss link took 4.3 ms for both peers (about 2.1 ms each) against
+  0.32 ms for one offline run: 475 ticks re-simulated across both peers,
   and a save every tick.
-- **`World::save` and `World::load`:** 1,000 entities already take 6 ms in
-  the best case (9 saves of 0.66 ms) and far more at the median, and
-  allocate about 21,000 times per save; one save of 10,000 entities takes
-  8 to 40 ms. Too slow for every tick, and they don't restore entity ids
+- **`World::save` and `World::load`:** 1,000 entities already take about 33 ms
+  (9 saves of 3.7 ms), and allocate about 22,000 times per save; one save
+  of 10,000 entities takes 34 ms. Too slow for every tick, and they don't restore entity ids
   (above).
 - **With 2D physics:** 1,000 bodies, about 6 ms (a third of a 60 Hz
-  frame); 100 bodies, under 1 ms. At 10,000 bodies one step takes at
-  least 10 ms and one save at least 17 ms, so a single tick fills a 60 Hz
-  frame and there is no time to re-simulate.
+  frame); 100 bodies, under 1 ms. At 10,000 bodies one step takes 8 ms
+  and one save 15 ms, together more than a 60 Hz frame, so there is no time
+  to re-simulate.
 
 ### The decision
 
