@@ -1,4 +1,4 @@
-//! The rendering baseline: seven offscreen 3D scenes drawn with the real
+//! The rendering baseline: eight offscreen 3D scenes drawn with the real
 //! renderer, each frame split into collect, prepare, encode, submit and the
 //! GPU's passes, with draw calls, uploads and memory. Needs a GPU and the
 //! `render` feature; opens no window:

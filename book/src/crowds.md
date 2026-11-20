@@ -172,31 +172,27 @@ cargo test --release --lib --features 3d crowd_benchmark -- --ignored --nocaptur
 
 Measured on an Apple M4 Max (Metal), 1280x720 with 4x MSAA and a depth
 prepass, three runs each, the median of the runs' medians (and their
-range). **The machine was busy** (a load average of 90 to 140 from other
-builds) **while these were taken: they are to be repeated on a quiet
-machine.** "Prepare + record, 1 thread" is the CPU work of the frame
-measured on one thread, apart from waits for worker threads that a busy
-machine adds to the parallel recording (those also take about 11 ms a
-frame of an empty scene here).
+range), on 2026-11-20 on an idle machine (nothing else was running). "Prepare
++ record, 1 thread" is the CPU work of the frame measured on one thread.
 
 | Scene | GPU ms | Prepare + record ms, 1 thread | Draws | Posing ms (CPU) |
 |---|---|---|---|---|
-| Ground only | 0.79 (0.79–0.79) | 0.72 (0.44–0.73) | 2 | – |
-| Crowd | 6.68 (6.27–7.26) | 1.07 (1.02–1.08) | 4 | – |
-| Crowd, sun shadows | 7.40 (7.39–7.40) | 1.29 (0.92–1.33) | 12 | – |
-| Crowd, two levels (36 triangles past 40 m), sun shadows | 4.07 (4.07–4.08) | 1.44 (1.41–1.53) | 18 | – |
-| Crowd, CPU path (WebGL2's limits) | 4.76 (4.70–5.95) | 1.58 (1.17–1.86) | 126 | – |
-| Skinned models | 27.57 (27.42–27.58) | 48.74 (34.10–59.23) | 19,246 | 1.41 |
-| Skinned models, sun shadows | 36.20 (28.66–37.55) | 47.72 (44.68–53.80) | 20,310 | 1.41 |
+| Ground only | 0.24 (0.23–0.25) | 0.13 (0.13–0.13) | 2 | – |
+| Crowd | 7.01 (6.91–7.02) | 0.17 (0.17–0.17) | 4 | – |
+| Crowd, sun shadows | 8.42 (8.34–8.43) | 0.25 (0.25–0.25) | 12 | – |
+| Crowd, two levels (36 triangles past 40 m), sun shadows | 1.06 (1.06–1.06) | 0.25 (0.24–0.25) | 18 | – |
+| Crowd, CPU path (WebGL2's limits) | 3.51 (3.51–3.51) | 0.44 (0.44–0.44) | 126 | – |
+| Skinned models | 27.89 (27.84–27.92) | 9.39 (9.39–9.42) | 19,246 | 0.33 |
+| Skinned models, sun shadows | 28.89 (28.88–28.97) | 9.96 (9.94–10.02) | 20,310 | 0.34 |
 
 So on this machine 10,000 animated characters as a crowd **meet 60 fps by
-their measured cost**: 4 to 7.4 ms of GPU time and 1.1 to 1.6 ms of CPU
+their measured cost**: 1.1 to 8.4 ms of GPU time and 0.17 to 0.44 ms of CPU
 work, together under 9 ms of the 16.7 ms a frame has. As skinned models the
-same characters don't (28 to 36 ms of GPU time and about 48 ms of CPU work
-a frame). The frame times this benchmark also prints (17 to 21 ms for the
-crowds) wait for the GPU after the CPU work and for workers the busy
-machine kept from running, so they are not the frame rate a game would
-reach; a quiet run gives a cleaner number.
+same characters don't (28 to 29 ms of GPU time and about 9.4 to 10 ms of CPU
+work a frame, with 0.3 ms more to pose them). The frame times this benchmark
+also prints (1.7 to 9.1 ms for the crowds, 37 ms for the skinned models)
+wait for the GPU after the CPU work, so they are not the frame rate a game
+would reach.
 
 The CPU path's GPU time is lower than the GPU path's here because its
 corners are posed in advance: it trades blending between frames and clips

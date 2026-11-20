@@ -14,6 +14,8 @@ cargo run --release -p ponko_bench --bin bench_track -- \
   compare crates/ponko_bench/releases/<old>/<machine> crates/ponko_bench/releases/<new>/<machine>
 ```
 
-0.1.0 has no folder: its record is `../baselines/ecs.json` (see the crate
-README, "Tracking results over time"). The instruction counts of every
+0.1.0 has no folder: its record is `baselines/ecs.json` as the `v0.1.0` tag has
+it (`git show v0.1.0:crates/ponko_bench/baselines/ecs.json`; the file in the
+working tree has been recorded again since; see the crate README, "Tracking
+results over time"). The instruction counts of every
 release are on the `bench-history` branch, under `releases/<tag>/`.

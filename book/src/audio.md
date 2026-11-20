@@ -562,18 +562,17 @@ So a level can scatter a thousand looping sources (torches, machines,
 water) and pay for the few near the player. Measured with `cargo run
 --release -p ponko_bench --features audio -- audio3d`: 1,000 looping
 positional sources over a 200 m square, 30 m audible range, a listener
-walking through them, mixed offline at 48 kHz. On an Apple M4 Max, three
-runs while the machine was busy with other builds (load average about 160):
+walking through them, mixed offline at 48 kHz. On an Apple M4 Max, one run
+on an idle machine (2026-11-20), medians:
 
 | Limit | Heard / virtual | Game side of a frame (median) | Mixing a frame's 1/60 s (median) |
 |---|---|---|---|
-| 64 (default) | 64 / 936 | 0.088–0.095 ms | 1.08 ms (6.5% of the frame) |
-| 256 | 88 / 912 | 0.098–0.113 ms | 1.52–1.53 ms (9%) |
+| 64 (default) | 64 / 936 | 0.062 ms | 0.92 ms (5.5% of the frame) |
+| 256 | 88 / 912 | 0.062 ms | 1.29 ms (7.7%) |
 
 The game side is moving every source to the listener and ranking the
-voices; the mix runs on the audio thread. The busy machine put the 95th
-percentiles far above the medians (up to 2 ms and 54 ms), so read only the
-medians from this run.
+voices; the mix runs on the audio thread. The 95th percentiles are close to
+the medians (0.93 and 1.36 ms for the mix).
 
 ## Output devices
 
