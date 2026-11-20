@@ -51,6 +51,9 @@ allow = [
     # Boost Software License (permissive), used by arboard's Windows
     # clipboard-win/error-code text backend; not the Business Source License.
     "BSL-1.0",
+    # Public-domain dedication (no conditions), declared by to_method, a
+    # small helper of rav1d (the AV1 decoder of the optional `video` feature).
+    "CC0-1.0",
     "ISC",
     "MIT",
     # symphonia (kira's audio decoders) and triple_buffer.
@@ -122,6 +125,17 @@ skip = [
     { crate = "foldhash@0.1.5", reason = "follows hashbrown 0.15" },
     { crate = "rustc-hash@1.1.0", reason = "naga and wgpu-core; dioxus (hot patching) and type-map use 2.x" },
     { crate = "itertools@0.14.0", reason = "puffin (the optional `profiling` feature); egui uses 0.15" },
+
+    # -- Hashes, ciphers and random numbers: the WebRTC stack (str0m's dimpl,
+    #    the optional `webrtc` feature) is on the newer RustCrypto and rand
+    #    releases; the WebSocket library and the hash crates are on the older.
+    { crate = "block-buffer@0.10.4", reason = "digest 0.10 (sha1 of tungstenite 0.28, sha2 of navmesh-rs and the CLI); dimpl's cipher 0.5 uses 0.12. tungstenite stays on 0.28 while dioxus-devtools (hot patching) needs it" },
+    { crate = "crypto-common@0.1.7", reason = "follows digest 0.10" },
+    { crate = "cpufeatures@0.2.17", reason = "sha1 0.10 and sha2 0.10; dimpl's aes 0.9 uses 0.3" },
+    { crate = "rand@0.9.5", reason = "tungstenite 0.28 and sctp-proto (str0m); dimpl uses 0.10" },
+    { crate = "rand_core@0.9.5", reason = "follows rand 0.9" },
+    { crate = "zerocopy@0.7.35", reason = "rav1d 1.1 (the optional `video` feature); ahash and the rest are on 0.8" },
+    { crate = "zerocopy-derive@0.7.35", reason = "follows zerocopy 0.7" },
 
     # -- Image, build tools and the std-adjacent crates.
     { crate = "miniz_oxide@0.8.9", reason = "png and exr (through `image`); flate2 uses 0.9" },
