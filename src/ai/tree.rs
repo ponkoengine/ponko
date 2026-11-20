@@ -1,4 +1,5 @@
 //! Behaviour trees: the JSON format, its compiled form and one think.
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Map, Value as Json};
@@ -6,11 +7,25 @@ use serde_json::{Map, Value as Json};
 use super::utility::{Consideration, Curve, combine_n};
 use super::{Blackboard, Key, Status, Value};
 use crate::error::{Error, ErrorKind};
+use crate::random::{Random, Rng};
 
 /// The most nodes a tree may have.
 pub(crate) const MAX_NODES: usize = u16::MAX as usize;
 /// The most children a `utility` node may have.
 pub(crate) const MAX_UTILITY_CHILDREN: usize = 64;
+/// The most children a `parallel` or `random` node may have (their memory
+/// is a 64-bit set).
+pub(crate) const MAX_SET_CHILDREN: usize = 64;
+
+/// Node kinds before `parallel`, `random`, `chance`, `wait_for` and
+/// `subtree`: a `do` node may use the newer names as parameters.
+const OLD_KINDS: [&str; 10] = [
+    "sequence", "selector", "utility", "invert", "succeed", "check", "set", "do", "wait", "cooldown",
+];
+const KINDS: [&str; 15] = [
+    "sequence", "selector", "utility", "parallel", "random", "invert", "succeed", "check", "set", "do", "wait",
+    "wait_for", "cooldown", "chance", "subtree",
+];
 
 /// A behaviour tree, compiled from JSON: what an agent does, decided from
 /// its [`Blackboard`] only. Shared by every [`Brain`](super::Brain) that
@@ -37,6 +52,17 @@ pub struct BehaviorTree {
     params: Vec<(Key, Value)>,
     terms: Vec<Term>,
     pub(crate) defaults: Vec<(Key, Value)>,
+    /// The JSON it was compiled from, to link its subtrees again when one
+    /// of them changes.
+    source: Arc<Json>,
+    /// The trees its `subtree` nodes name, each once: the ones it names
+    /// itself, and once linked, the ones those name too.
+    subtrees: Vec<&'static str>,
+    /// The signals its `wait_for` nodes wait for, each once.
+    listens: Vec<Key>,
+    /// A hash of its shape, so a saved brain's memory is used only with the
+    /// tree it was saved with.
+    fingerprint: u64,
 }
 
 #[derive(Debug)]
@@ -48,6 +74,10 @@ pub(crate) struct Node {
     /// What the debug view shows for it.
     pub(crate) label: String,
     pub(crate) depth: u16,
+    /// One past its last descendant: its subtree is `index..end`.
+    end: u16,
+    /// A `do` node is in its subtree.
+    acts: bool,
     /// Children: a range of `kids`.
     kids: (u32, u16),
     /// Score terms under a `utility` node: a range of `terms`.
@@ -58,14 +88,51 @@ pub(crate) struct Node {
 pub(crate) enum Kind {
     Sequence,
     Selector,
-    Utility { stick: f32 },
+    Utility {
+        stick: f32,
+    },
     Invert,
     Succeed,
-    Check { key: Key, test: Test },
-    Set { key: Key, value: Value },
-    Do { action: Key, params: (u32, u16) },
-    Wait { seconds: f32 },
-    Cooldown { seconds: f32 },
+    Check {
+        key: Key,
+        test: Test,
+    },
+    Set {
+        key: Key,
+        value: Value,
+    },
+    Do {
+        action: Key,
+        params: (u32, u16),
+    },
+    Wait {
+        seconds: f32,
+    },
+    Cooldown {
+        seconds: f32,
+    },
+    /// Runs its child, the root of another tree; without a child the tree
+    /// wasn't loaded, and it fails.
+    Subtree,
+    /// Every child at once; done when `success` children succeeded or
+    /// `failure` children failed.
+    Parallel {
+        success: u8,
+        failure: u8,
+    },
+    /// Its children in a random order until one doesn't fail.
+    Random,
+    /// Succeeds with probability `p`.
+    Chance {
+        p: f32,
+    },
+    /// Running until the brain hears `signal`; fails after `timeout`
+    /// seconds if that is 0 or more.
+    WaitFor {
+        signal: Key,
+        timeout: f32,
+        store: Option<Key>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -91,7 +158,9 @@ enum Term {
 /// One brain's memory of one node.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NodeState {
-    /// A wait's start tick; a cooldown's ready tick.
+    /// A wait's start tick; a cooldown's ready tick; the children a
+    /// `parallel` finished (a bit set); the child a `sequence` or `random`
+    /// was running.
     pub(crate) at: u64,
     /// The think it was last ticked in.
     pub(crate) seen: u32,
@@ -125,9 +194,21 @@ pub(crate) struct Tick<'a> {
     /// The action running after it, and whether it started now.
     pub(crate) action: Option<u16>,
     pub(crate) started: bool,
+    /// The signals the brain heard since its last think.
+    pub(crate) signals: &'a [(Key, Option<Value>)],
+    /// Where `random` and `chance` draw from: this think's stream.
+    pub(crate) random: Random,
+    pub(crate) who: u64,
+    pub(crate) rng: Option<Rng>,
 }
 
 impl Tick<'_> {
+    /// This think's random numbers, made when first needed.
+    fn rng(&mut self) -> &mut Rng {
+        let (random, who) = (self.random, self.who);
+        self.rng.get_or_insert_with(|| random.stream(who))
+    }
+
     /// Ticked at the previous think and still running then.
     fn continuing(&self, i: usize) -> bool {
         let s = &self.states[i];
@@ -140,6 +221,15 @@ impl Tick<'_> {
         }
         (seconds / self.dt - 1e-4).ceil().max(0.0) as u64
     }
+}
+
+/// How `subtree` nodes are linked while a tree compiles.
+pub(crate) struct Linker<'a> {
+    /// Finds a tree by name; `None` while compiling a tree on its own.
+    resolve: Option<&'a dyn Fn(&str) -> Option<Arc<BehaviorTree>>>,
+    /// The trees being compiled, outermost first: a name already here is a
+    /// cycle.
+    stack: Vec<&'static str>,
 }
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -163,6 +253,38 @@ impl BehaviorTree {
     /// # Errors
     /// As [`from_json`](Self::from_json).
     pub fn from_value(json: &Json) -> Result<BehaviorTree, Error> {
+        BehaviorTree::compile(
+            json,
+            &mut Linker {
+                resolve: None,
+                stack: Vec::new(),
+            },
+        )
+    }
+
+    /// Compiles `src` again with its `subtree` nodes replaced by the trees
+    /// `resolve` finds (a name it doesn't find stays a failing node).
+    /// `name` is `src`'s own name, for cycles.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Invalid`] for a cycle (a tree that is, through its
+    /// subtrees, part of itself), naming every tree on it;
+    /// [`ErrorKind::Limit`] if the linked tree has too many nodes.
+    pub(crate) fn link(
+        name: &'static str,
+        src: &BehaviorTree,
+        resolve: &dyn Fn(&str) -> Option<Arc<BehaviorTree>>,
+    ) -> Result<BehaviorTree, Error> {
+        BehaviorTree::compile(
+            &src.source,
+            &mut Linker {
+                resolve: Some(resolve),
+                stack: vec![name],
+            },
+        )
+    }
+
+    fn compile(json: &Json, link: &mut Linker<'_>) -> Result<BehaviorTree, Error> {
         let top = json
             .as_object()
             .ok_or_else(|| bad("the tree", "must be an object with a \"root\" node"))?;
@@ -181,6 +303,10 @@ impl BehaviorTree {
             params: Vec::new(),
             terms: Vec::new(),
             defaults: Vec::new(),
+            source: Arc::new(json.clone()),
+            subtrees: Vec::new(),
+            listens: Vec::new(),
+            fingerprint: 0,
         };
         if let Some(defaults) = top.get("blackboard") {
             let defaults = defaults
@@ -192,8 +318,54 @@ impl BehaviorTree {
             }
         }
         let root = top.get("root").ok_or_else(|| bad("the tree", "has no \"root\" node"))?;
-        tree.node(root, "root", 0, false)?;
+        tree.node(root, "root", 0, false, link)?;
+        tree.fingerprint = tree.shape_hash();
         Ok(tree)
+    }
+
+    /// FNV-1a over every node's depth and label (which spell out its kind
+    /// and fields).
+    fn shape_hash(&self) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |bytes: &[u8]| {
+            for &b in bytes {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        for node in &self.nodes {
+            eat(&node.depth.to_le_bytes());
+            eat(node.label.as_bytes());
+            eat(&[0xff]);
+        }
+        h
+    }
+
+    /// The names of the trees its `subtree` nodes run, each once. A tree
+    /// from [`BehaviorTrees`](super::BehaviorTrees) lists the subtrees of
+    /// its subtrees too.
+    ///
+    /// ```
+    /// use ponko::ai::BehaviorTree;
+    /// let tree = BehaviorTree::from_json(r#"{"root": {"selector": [
+    ///     {"subtree": "ai/fight.json"}, {"subtree": "ai/patrol.json"}
+    /// ]}}"#).unwrap();
+    /// assert_eq!(tree.subtrees(), ["ai/fight.json", "ai/patrol.json"]);
+    /// ```
+    pub fn subtrees(&self) -> &[&'static str] {
+        &self.subtrees
+    }
+
+    /// The signals its `wait_for` nodes wait for, each once: [`think`](super::think)
+    /// delivers only these to its brains.
+    pub fn signals(&self) -> &[Key] {
+        &self.listens
+    }
+
+    /// A hash of its shape (its nodes, their kinds and fields): equal for
+    /// two trees compiled from the same JSON. A saved brain keeps its
+    /// memory only if its tree's fingerprint is still the same.
+    pub fn fingerprint(&self) -> u64 {
+        self.fingerprint
     }
 
     /// How many nodes it has.
@@ -223,6 +395,11 @@ impl BehaviorTree {
             }
         }
         out
+    }
+
+    /// Whether `other` was compiled from the same JSON.
+    pub(crate) fn same_source(&self, other: &BehaviorTree) -> bool {
+        self.source == other.source
     }
 
     pub(crate) fn id(&self) -> u64 {
@@ -255,7 +432,7 @@ impl BehaviorTree {
 
     /// Compiles `json` as a node at `path`, returning its index.
     /// `scored`: it is a child of a `utility` node, so it has a `score`.
-    fn node(&mut self, json: &Json, path: &str, depth: u16, scored: bool) -> Result<u16, Error> {
+    fn node(&mut self, json: &Json, path: &str, depth: u16, scored: bool, link: &mut Linker<'_>) -> Result<u16, Error> {
         if self.nodes.len() >= MAX_NODES {
             return Err(Error::new(
                 ErrorKind::Limit,
@@ -265,10 +442,10 @@ impl BehaviorTree {
         let obj = json
             .as_object()
             .ok_or_else(|| bad(path, "a node must be an object such as {\"do\": \"patrol\"}"))?;
-        const KINDS: [&str; 10] = [
-            "sequence", "selector", "utility", "invert", "succeed", "check", "set", "do", "wait", "cooldown",
-        ];
-        let mut kinds = KINDS.iter().filter(|k| obj.contains_key(**k));
+        // A `do` node's other fields are parameters: the kinds added later
+        // may be parameter names there, as they could before.
+        let kinds_here: &[&str] = if obj.contains_key("do") { &OLD_KINDS } else { &KINDS };
+        let mut kinds = kinds_here.iter().filter(|k| obj.contains_key(**k));
         let kind = *kinds.next().ok_or_else(|| {
             bad(
                 path,
@@ -289,6 +466,8 @@ impl BehaviorTree {
             pure: false,
             label: String::new(),
             depth,
+            end: 0,
+            acts: false,
             kids: (0, 0),
             score: (0, 0),
         });
@@ -296,9 +475,11 @@ impl BehaviorTree {
         // Fields other than the kind: `name`, `score`, and the kind's own.
         let own: &[&str] = match kind {
             "utility" => &["stick"],
+            "parallel" => &["success", "failure"],
             "check" => &["is", "below", "above"],
             "set" => &["to"],
             "cooldown" => &["child"],
+            "wait_for" => &["timeout", "store"],
             _ => &[],
         };
         for key in obj.keys() {
@@ -324,8 +505,11 @@ impl BehaviorTree {
         }
 
         let arg = &obj[kind];
+        // The tree a `subtree` node runs, held while its root compiles.
+        let mut held: Option<Arc<BehaviorTree>> = None;
+        let mut entered: Option<&'static str> = None;
         let (node_kind, label, kids): (Kind, String, Vec<(&Json, String, bool)>) = match kind {
-            "sequence" | "selector" | "utility" => {
+            "sequence" | "selector" | "utility" | "parallel" | "random" => {
                 let list = arg
                     .as_array()
                     .ok_or_else(|| bad(&path, format!("\"{kind}\" takes a list of nodes")))?;
@@ -333,29 +517,51 @@ impl BehaviorTree {
                     return Err(bad(&path, format!("\"{kind}\" needs at least one node")));
                 }
                 let utility = kind == "utility";
-                if utility && list.len() > MAX_UTILITY_CHILDREN {
+                let most = match kind {
+                    "utility" => MAX_UTILITY_CHILDREN,
+                    "parallel" | "random" => MAX_SET_CHILDREN,
+                    _ => usize::MAX,
+                };
+                if list.len() > most {
                     return Err(Error::new(
                         ErrorKind::Limit,
-                        format!("behaviour tree: {path}: more than {MAX_UTILITY_CHILDREN} children"),
+                        format!("behaviour tree: {path}: more than {most} children"),
                     ));
                 }
-                let kind = match kind {
-                    "sequence" => Kind::Sequence,
-                    "selector" => Kind::Selector,
-                    _ => Kind::Utility {
-                        stick: number(obj.get("stick"), &path, "stick")?.unwrap_or(0.0),
-                    },
+                let n = list.len();
+                let (node_kind, label) = match kind {
+                    "sequence" => (Kind::Sequence, kind.to_owned()),
+                    "selector" => (Kind::Selector, kind.to_owned()),
+                    "random" => (Kind::Random, kind.to_owned()),
+                    "parallel" => {
+                        let success = policy(obj.get("success"), n, n, &path, "success")?;
+                        let failure = policy(obj.get("failure"), 1, n, &path, "failure")?;
+                        let shown = |k: u8| match k as usize {
+                            1 => "any".to_owned(),
+                            k if k == n => "all".to_owned(),
+                            k => k.to_string(),
+                        };
+                        (
+                            Kind::Parallel { success, failure },
+                            format!("parallel (success {}, failure {})", shown(success), shown(failure)),
+                        )
+                    }
+                    _ => {
+                        let stick = number(obj.get("stick"), &path, "stick")?.unwrap_or(0.0);
+                        let label = if stick > 0.0 {
+                            format!("utility (stick {stick})")
+                        } else {
+                            "utility".to_owned()
+                        };
+                        (Kind::Utility { stick }, label)
+                    }
                 };
                 let kids = list
                     .iter()
                     .enumerate()
                     .map(|(i, k)| (k, format!("{path}[{i}]"), utility))
                     .collect();
-                let label = match kind {
-                    Kind::Utility { stick } if stick > 0.0 => format!("utility (stick {stick})"),
-                    _ => path.rsplit('/').next().unwrap_or_default().to_owned(),
-                };
-                (kind, label, kids)
+                (node_kind, label, kids)
             }
             "invert" | "succeed" => {
                 let kind_of = if kind == "invert" { Kind::Invert } else { Kind::Succeed };
@@ -375,6 +581,66 @@ impl BehaviorTree {
             "wait" => {
                 let seconds = seconds(arg, &path)?;
                 (Kind::Wait { seconds }, format!("wait {seconds}s"), Vec::new())
+            }
+            "wait_for" => {
+                let signal = key_of(arg, &path)?;
+                let timeout = match obj.get("timeout") {
+                    None => -1.0,
+                    Some(t) => seconds(t, &format!("{path}/timeout"))?,
+                };
+                let store = match obj.get("store") {
+                    None => None,
+                    Some(k) => Some(key_of(k, &format!("{path}/store"))?),
+                };
+                if !self.listens.contains(&signal) {
+                    self.listens.push(signal);
+                }
+                let mut label = format!("wait for {signal}");
+                if timeout >= 0.0 {
+                    label.push_str(&format!(" (timeout {timeout}s)"));
+                }
+                if let Some(store) = store {
+                    label.push_str(&format!(" into {store}"));
+                }
+                (Kind::WaitFor { signal, timeout, store }, label, Vec::new())
+            }
+            "chance" => {
+                let p = match arg.as_f64() {
+                    Some(p) if (0.0..=1.0).contains(&p) => p as f32,
+                    _ => return Err(bad(&path, "takes a probability (a number from 0 to 1)")),
+                };
+                (Kind::Chance { p }, format!("chance {p}"), Vec::new())
+            }
+            "subtree" => {
+                let sub = key_of(arg, &path)?.name();
+                if !self.subtrees.contains(&sub) {
+                    self.subtrees.push(sub);
+                }
+                match link.resolve.and_then(|resolve| resolve(sub)) {
+                    Some(found) => {
+                        if let Some(at) = link.stack.iter().position(|n| *n == sub) {
+                            let mut chain: Vec<&str> = link.stack[at..].to_vec();
+                            chain.push(sub);
+                            return Err(Error::new(
+                                ErrorKind::Invalid,
+                                format!(
+                                    "behaviour tree {}: subtree cycle: {} (a tree can't contain itself)",
+                                    link.stack[0],
+                                    chain.join(" -> ")
+                                ),
+                            ));
+                        }
+                        self.defaults.extend(found.defaults.iter().copied());
+                        entered = Some(sub);
+                        let found = held.insert(found);
+                        (
+                            Kind::Subtree,
+                            format!("subtree {sub}"),
+                            vec![(&found.source["root"], format!("{path}({sub})/root"), false)],
+                        )
+                    }
+                    None => (Kind::Subtree, format!("subtree {sub} (not loaded)"), Vec::new()),
+                }
             }
             "check" => {
                 let key = key_of(arg, &path)?;
@@ -434,22 +700,44 @@ impl BehaviorTree {
             }
         };
 
+        if let Some(sub) = entered {
+            link.stack.push(sub);
+        }
         let mut indices = Vec::with_capacity(kids.len());
         for (json, path, scored) in kids {
-            indices.push(self.node(json, &path, depth + 1, scored)?);
+            indices.push(self.node(json, &path, depth + 1, scored, link)?);
+        }
+        if entered.is_some() {
+            link.stack.pop();
+        }
+        drop(held);
+        let acting: Vec<usize> = (0..indices.len())
+            .filter(|&n| self.nodes[indices[n] as usize].acts)
+            .collect();
+        if let (Kind::Parallel { .. }, [first, second, ..]) = (node_kind, acting.as_slice()) {
+            return Err(bad(
+                &path,
+                format!(
+                    "children [{first}] and [{second}] both have \"do\" nodes; a brain does one action at a time, \
+                     so only one child of a \"parallel\" may (the others check, wait or wait for signals)"
+                ),
+            ));
         }
         let start = self.kids.len() as u32;
         self.kids.extend_from_slice(&indices);
         let pure = match node_kind {
             Kind::Check { .. } => true,
-            Kind::Sequence | Kind::Selector | Kind::Invert | Kind::Succeed => {
-                indices.iter().all(|&k| self.nodes[k as usize].pure)
+            Kind::Sequence | Kind::Selector | Kind::Invert | Kind::Succeed | Kind::Subtree => {
+                !indices.is_empty() && indices.iter().all(|&k| self.nodes[k as usize].pure)
             }
             _ => false,
         };
+        let end = self.nodes.len() as u16;
         let node = &mut self.nodes[index];
         node.kind = node_kind;
         node.pure = pure;
+        node.acts = matches!(node_kind, Kind::Do { .. }) || !acting.is_empty();
+        node.end = end;
         node.kids = (start, indices.len() as u16);
         node.label = match name {
             Some(name) => format!("{name} ({label})"),
@@ -596,6 +884,77 @@ impl BehaviorTree {
                     Status::Running
                 }
             }
+            Kind::Subtree => match self.children(i).first() {
+                Some(&root) => self.tick(root as usize, t),
+                None => Status::Failure,
+            },
+            Kind::Parallel { success, failure } => self.tick_parallel(i, success, failure, t),
+            Kind::Random => {
+                let kids = self.children(i);
+                let mut tried = 0u64;
+                let mut status = Status::Failure;
+                // The child that was running carries on first; the others
+                // follow in a new random order.
+                let mut next = if t.continuing(i) {
+                    Some(t.states[i].at as usize)
+                } else {
+                    None
+                };
+                loop {
+                    let n = match next.take() {
+                        Some(n) if n < kids.len() => n,
+                        _ => {
+                            let left = kids.len() as u32 - tried.count_ones();
+                            if left == 0 {
+                                break;
+                            }
+                            let mut pick = t.rng().below(left);
+                            let mut n = 0;
+                            loop {
+                                if tried & (1 << n) == 0 {
+                                    if pick == 0 {
+                                        break;
+                                    }
+                                    pick -= 1;
+                                }
+                                n += 1;
+                            }
+                            n
+                        }
+                    };
+                    tried |= 1 << n;
+                    status = self.tick(kids[n] as usize, t);
+                    if status != Status::Failure {
+                        if status == Status::Running {
+                            t.states[i].at = n as u64;
+                        }
+                        break;
+                    }
+                }
+                status
+            }
+            Kind::Chance { p } => {
+                if t.rng().chance(p) {
+                    Status::Success
+                } else {
+                    Status::Failure
+                }
+            }
+            Kind::WaitFor { signal, timeout, store } => {
+                if !t.continuing(i) {
+                    t.states[i].at = t.now;
+                }
+                if let Some(&(_, value)) = t.signals.iter().find(|(k, _)| *k == signal) {
+                    if let (Some(key), Some(value)) = (store, value) {
+                        t.bb.set(key, value);
+                    }
+                    Status::Success
+                } else if timeout >= 0.0 && t.now.saturating_sub(t.states[i].at) >= t.ticks_for(timeout) {
+                    Status::Failure
+                } else {
+                    Status::Running
+                }
+            }
             Kind::Check { key, test } => {
                 let pass = t.bb.get(key).is_some_and(|v| match test {
                     Test::Truthy => v.truthy(),
@@ -626,6 +985,77 @@ impl BehaviorTree {
         state.seen = t.thinks;
         state.status = status;
         status
+    }
+}
+
+impl BehaviorTree {
+    /// A `parallel` node: ticks its unfinished children in order until its
+    /// policy decides, then stops the ones still running.
+    fn tick_parallel(&self, i: usize, success: u8, failure: u8, t: &mut Tick<'_>) -> Status {
+        let kids = self.children(i);
+        let mut done = if t.continuing(i) { t.states[i].at } else { 0 };
+        let (action, started) = (t.action, t.started);
+        let (mut ok, mut bad, mut finished) = (0u8, 0u8, 0usize);
+        let mut status = Status::Running;
+        for (n, &k) in kids.iter().enumerate() {
+            let k = k as usize;
+            // A finished child keeps its result, but checks are asked
+            // again, so a `parallel` can watch a condition.
+            let result = if done & (1 << n) != 0 && !self.nodes[k].pure {
+                t.states[k].status
+            } else {
+                let result = self.tick(k, t);
+                if result != Status::Running {
+                    done |= 1 << n;
+                }
+                result
+            };
+            match result {
+                Status::Success => ok += 1,
+                Status::Failure => bad += 1,
+                Status::Running => {}
+            }
+            if result != Status::Running {
+                finished += 1;
+            }
+            if ok >= success {
+                status = Status::Success;
+                break;
+            }
+            if bad >= failure {
+                status = Status::Failure;
+                break;
+            }
+        }
+        if status == Status::Running && finished == kids.len() {
+            // Everyone finished and neither count was reached.
+            status = Status::Failure;
+        }
+        t.states[i].at = done;
+        if status != Status::Running {
+            // Stop what still runs below it: an action it started is
+            // dropped, and a running node starts over when next reached.
+            for (n, &k) in kids.iter().enumerate() {
+                if done & (1 << n) == 0 {
+                    self.halt(k as usize, t);
+                }
+            }
+            if t.action != action {
+                t.action = action;
+                t.started = started;
+            }
+        }
+        status
+    }
+
+    /// Marks every node below and at `k` that is running in this think as
+    /// stopped (failed), so it doesn't carry on at the next one.
+    fn halt(&self, k: usize, t: &mut Tick<'_>) {
+        for state in &mut t.states[k..self.nodes[k].end as usize] {
+            if state.seen == t.thinks && state.status == Status::Running {
+                state.status = Status::Failure;
+            }
+        }
     }
 }
 
@@ -669,6 +1099,31 @@ fn number(json: Option<&Json>, path: &str, field: &str) -> Result<Option<f32>, E
         Some(Json::Number(n)) => Ok(Some(n.as_f64().unwrap_or(0.0) as f32)),
         Some(_) => Err(bad(path, format!("\"{field}\" must be a number"))),
     }
+}
+
+/// A `parallel` policy: `"all"`, `"any"` or a count from 1 to `n`.
+fn policy(json: Option<&Json>, default: usize, n: usize, path: &str, field: &str) -> Result<u8, Error> {
+    let k = match json {
+        None => default,
+        Some(Json::String(s)) if s == "all" => n,
+        Some(Json::String(s)) if s == "any" => 1,
+        Some(Json::Number(k)) => match k.as_u64() {
+            Some(k) if (1..=n as u64).contains(&k) => k as usize,
+            _ => {
+                return Err(bad(
+                    path,
+                    format!("\"{field}\" counts children: from 1 to {n}, or \"any\" or \"all\""),
+                ));
+            }
+        },
+        Some(_) => {
+            return Err(bad(
+                path,
+                format!("\"{field}\" is \"all\", \"any\" or a number of children"),
+            ));
+        }
+    };
+    Ok(k as u8)
 }
 
 fn seconds(json: &Json, path: &str) -> Result<f32, Error> {

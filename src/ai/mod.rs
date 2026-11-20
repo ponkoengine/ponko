@@ -134,8 +134,13 @@ pub use tree::BehaviorTree;
 pub use utility::{Consideration, Curve, best, combine, normalize};
 
 use crate::ctx::Ctx;
+use crate::random::Random;
 use crate::reflect::WorldReflect;
 use tree::{NodeState, Tick};
+
+/// The stream number brains draw random numbers from (with the seed and
+/// the brain's tick), apart from every system's own.
+const AI_STREAM: usize = 0x4149_5f42;
 
 /// What a node, or an action, did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -153,24 +158,101 @@ pub enum Status {
 /// The trees the game has loaded, by name: a resource, added by
 /// [`add_tree`] and
 /// [`Assets::load_behavior_tree`](crate::assets::Assets::load_behavior_tree).
+///
+/// Trees here may run each other as subtrees (`{"subtree": "name"}`): each
+/// is kept as given and linked, with the trees it names put in place of
+/// those nodes. Adding or replacing a tree links again every tree that uses
+/// it, so a changed subtree reaches every tree that runs it.
 #[derive(Default)]
 pub struct BehaviorTrees {
+    /// Linked: what brains run.
     trees: HashMap<&'static str, Arc<BehaviorTree>>,
+    /// As given, to link again.
+    sources: HashMap<&'static str, Arc<BehaviorTree>>,
     /// Bumped on every change, so brains look their tree up again only then.
     generation: u64,
+    /// Trees whose file `Assets` reloads.
+    pub(crate) files: std::collections::HashSet<&'static str>,
 }
 
 impl BehaviorTrees {
     /// Adds a tree under `name`, or replaces the one there: brains running
-    /// it start the new one at their next think.
+    /// it, or a tree that uses it as a subtree, start the new one at their
+    /// next think. A subtree that isn't here yet is a node that fails until
+    /// it is added.
+    ///
+    /// # Panics
+    /// If the tree is, through its subtrees, part of itself (a cycle), with
+    /// the names on the cycle; [`try_insert`](Self::try_insert) returns the
+    /// error instead.
     pub fn insert(&mut self, name: &str, tree: BehaviorTree) {
-        self.trees.insert(Key::named(name).name(), Arc::new(tree));
-        self.generation += 1;
+        self.try_insert(name, tree).unwrap_or_else(|e| panic!("{e}"));
     }
 
-    /// The tree called `name`.
+    /// [`insert`](Self::insert), returning the error instead of panicking.
+    /// On an error nothing changes.
+    ///
+    /// ```
+    /// use ponko::ai::{BehaviorTree, BehaviorTrees};
+    /// let mut trees = BehaviorTrees::default();
+    /// let tree = |json: &str| BehaviorTree::from_json(json).unwrap();
+    /// trees.try_insert("patrol", tree(r#"{"root": {"do": "walk"}}"#)).unwrap();
+    /// trees.try_insert("guard", tree(r#"{"root": {"subtree": "patrol"}}"#)).unwrap();
+    /// assert_eq!(trees.get("guard").unwrap().actions()[0].name(), "walk");
+    ///
+    /// // A tree that runs itself, through another:
+    /// let error = trees
+    ///     .try_insert("patrol", tree(r#"{"root": {"subtree": "guard"}}"#))
+    ///     .unwrap_err();
+    /// assert!(error.to_string().contains("patrol -> guard -> patrol"), "{error}");
+    /// ```
+    ///
+    /// # Errors
+    /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) for a
+    /// cycle, naming every tree on it;
+    /// [`Limit`](crate::error::ErrorKind::Limit) if a linked tree would have
+    /// more than 65,535 nodes.
+    pub fn try_insert(&mut self, name: &str, tree: BehaviorTree) -> Result<(), crate::error::Error> {
+        let name = Key::named(name).name();
+        let tree = Arc::new(tree);
+        let mut sources = self.sources.clone();
+        sources.insert(name, tree);
+        // This tree, and every tree that uses it (its linked form names
+        // every subtree below it, loaded or not).
+        let mut relink: Vec<&'static str> = self
+            .trees
+            .iter()
+            .filter(|(_, t)| t.subtrees().contains(&name))
+            .map(|(&n, _)| n)
+            .collect();
+        relink.push(name);
+        relink.sort_unstable();
+        relink.dedup();
+        let resolve = |n: &str| sources.get(n).cloned();
+        let mut linked = Vec::with_capacity(relink.len());
+        for n in relink {
+            let source = &sources[n];
+            let tree = if source.subtrees().is_empty() {
+                source.clone()
+            } else {
+                Arc::new(BehaviorTree::link(n, source, &resolve)?)
+            };
+            linked.push((n, tree));
+        }
+        self.trees.extend(linked);
+        self.sources = sources;
+        self.generation += 1;
+        Ok(())
+    }
+
+    /// The tree called `name`, with its subtrees linked in.
     pub fn get(&self, name: &str) -> Option<&Arc<BehaviorTree>> {
         self.trees.get(name)
+    }
+
+    /// Whether `name` holds a tree compiled from the same JSON as `tree`.
+    fn holds(&self, name: &str, tree: &BehaviorTree) -> bool {
+        self.sources.get(name).is_some_and(|t| t.same_source(tree))
     }
 
     /// The names of every tree, sorted.
@@ -254,15 +336,96 @@ impl crate::assets::Assets {
     /// nothing and doesn't watch the file.
     pub fn try_load_behavior_tree(&mut self, world: &mut World, path: &str) -> Result<(), crate::error::Error> {
         let name = Key::named(path).name();
+        let sources = self.asset_sources.clone();
         self.load_data(
             world,
             path,
             Box::new(move |world: &mut World, text: &str| {
-                add_tree(world, name, BehaviorTree::from_json(text)?);
-                Ok(())
+                let tree = BehaviorTree::from_json(text)?;
+                let mut found = Vec::new();
+                read_subtrees(world, &sources, &tree, &mut vec![name], &mut found)?;
+                for (sub, tree) in found {
+                    try_add_tree(world, sub, tree)?;
+                }
+                try_add_tree(world, name, tree)
             }),
-        )
+        )?;
+        // Watch the subtrees' files too, so editing one reloads it (and
+        // every tree that runs it).
+        let trees = world.resource_mut::<BehaviorTrees>();
+        trees.files.insert(name);
+        let subtrees: Vec<&'static str> = trees
+            .get(name)
+            .map(|t| t.subtrees().to_vec())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| !trees.files.contains(s) && trees.sources.contains_key(s))
+            .collect();
+        for sub in subtrees {
+            if !world.resource::<BehaviorTrees>().files.contains(sub) {
+                self.try_load_behavior_tree(world, sub)?;
+            }
+        }
+        Ok(())
     }
+}
+
+/// Reads the files of `tree`'s subtrees that aren't loaded yet, and theirs,
+/// into `found`, deepest first. `stack`: the files being read, for cycles.
+fn read_subtrees(
+    world: &World,
+    sources: &crate::assets::SharedSources,
+    tree: &BehaviorTree,
+    stack: &mut Vec<&'static str>,
+    found: &mut Vec<(&'static str, BehaviorTree)>,
+) -> Result<(), crate::error::Error> {
+    for &sub in tree.subtrees() {
+        if let Some(at) = stack.iter().position(|n| *n == sub) {
+            let mut chain = stack[at..].to_vec();
+            chain.push(sub);
+            return Err(crate::error::Error::new(
+                crate::error::ErrorKind::Invalid,
+                format!(
+                    "behaviour tree {}: subtree cycle: {} (a tree can't contain itself)",
+                    stack[0],
+                    chain.join(" -> ")
+                ),
+            ));
+        }
+        let loaded = world
+            .get_resource::<BehaviorTrees>()
+            .is_some_and(|t| t.sources.contains_key(sub));
+        if loaded || found.iter().any(|(n, _)| *n == sub) {
+            continue;
+        }
+        let text = sources
+            .find(sub)
+            .and_then(|f| f.into_text(sub))
+            .map_err(|e| e.context(&format!("subtree of {}", stack[stack.len() - 1])))?;
+        let subtree = BehaviorTree::from_json(&text).map_err(|e| e.context(sub).with_path(sub))?;
+        stack.push(sub);
+        read_subtrees(world, sources, &subtree, stack, found)?;
+        stack.pop();
+        found.push((sub, subtree));
+    }
+    Ok(())
+}
+
+/// [`add_tree`], returning the error; a tree compiled from the same JSON as
+/// the one there changes nothing (brains running it carry on).
+fn try_add_tree(world: &mut World, name: &'static str, tree: BehaviorTree) -> Result<(), crate::error::Error> {
+    if world
+        .get_resource::<BehaviorTrees>()
+        .is_some_and(|t| t.holds(name, &tree))
+    {
+        return Ok(());
+    }
+    world.reflect::<Brain>();
+    world.reflect::<Blackboard>();
+    if world.get_resource::<BehaviorTrees>().is_none() {
+        world.insert_resource(BehaviorTrees::default());
+    }
+    world.resource_mut::<BehaviorTrees>().try_insert(name, tree)
 }
 
 /// An agent's mind: which [tree](BehaviorTree) it runs, how often it
@@ -288,6 +451,23 @@ pub struct Brain {
     report: Status,
     started: bool,
     wake: bool,
+    /// Added to the sim tick to give the brain's own tick, which waits,
+    /// cooldowns, think periods and random numbers count in: 0, unless the
+    /// brain was read back from a save.
+    offset: u64,
+    /// The brain's tick at the last think pass, for saves.
+    clock: u64,
+    /// Read back from a save: the brain's tick at its next think pass.
+    resume_at: Option<u64>,
+    /// Read back from a save: its tree's memory, used when it finds that
+    /// tree.
+    restore: Option<Box<Memory>>,
+    /// Signals heard since the last think.
+    signals: Vec<(Key, Option<Value>)>,
+    /// The seed for `random` and `chance` nodes when the game runs the
+    /// brain itself ([`think`](Self::think)); [`think`](think) uses the
+    /// game's.
+    seed: u64,
 }
 
 impl Brain {
@@ -305,7 +485,54 @@ impl Brain {
             report: Status::Running,
             started: false,
             wake: false,
+            offset: 0,
+            clock: 0,
+            resume_at: None,
+            restore: None,
+            signals: Vec::new(),
+            seed: crate::random::DEFAULT_SEED,
         }
+    }
+
+    /// This brain, drawing the random numbers of `random` and `chance`
+    /// nodes from `seed` when you run it yourself ([`think`](Self::think)):
+    /// give each agent its own. The [`think`](think) system ignores it and
+    /// uses the game's [seed](crate::game::Game::seed) and the entity.
+    pub fn with_seed(mut self, seed: u64) -> Brain {
+        self.seed = seed;
+        self
+    }
+
+    /// Hears `signal`: a `wait_for` node waiting for it succeeds at the
+    /// next think, which comes at the next tick whatever the period. A
+    /// signal its tree doesn't wait for wakes it all the same. Signals
+    /// heard are forgotten after that think; the same signal twice before
+    /// it counts once. [`think`](think) delivers the [`Signal`] events
+    /// sent to a brain this way.
+    ///
+    /// ```
+    /// use ponko::ai::{BehaviorTree, Blackboard, Brain, Key};
+    /// use std::sync::Arc;
+    /// let tree = Arc::new(BehaviorTree::from_json(r#"{"root": {"sequence": [
+    ///     {"wait_for": "door_opened"}, {"do": "enter"}
+    /// ]}}"#).unwrap());
+    /// let (mut brain, mut bb) = (Brain::new("guest"), Blackboard::new());
+    /// brain.think(&tree, &mut bb, 0, 0.1);
+    /// assert_eq!(brain.action(), None); // waiting
+    /// brain.signal(Key::new("door_opened"));
+    /// brain.think(&tree, &mut bb, 1, 0.1);
+    /// assert!(brain.doing(Key::new("enter")));
+    /// ```
+    pub fn signal(&mut self, signal: Key) {
+        hear(&mut self.signals, signal, None);
+        self.wake = true;
+    }
+
+    /// [`signal`](Self::signal) with a value, which a `wait_for` node with
+    /// `"store": "key"` writes to the blackboard (who shouted, where).
+    pub fn signal_with(&mut self, signal: Key, value: impl Into<Value>) {
+        hear(&mut self.signals, signal, Some(value.into()));
+        self.wake = true;
     }
 
     /// This brain, thinking every `period` ticks (see [`set_period`](Self::set_period)).
@@ -426,7 +653,23 @@ impl Brain {
         self.wake
             || self.bound.is_none()
             || self.period <= 1
-            || (tick + u64::from(index)).is_multiple_of(u64::from(self.period))
+            || (self.clock_at(tick).wrapping_add(u64::from(index))).is_multiple_of(u64::from(self.period))
+    }
+
+    /// The brain's own tick at sim tick `tick`: the same, unless it was
+    /// read back from a save, where it goes on from the tick it was saved
+    /// at.
+    fn clock_at(&self, tick: u64) -> u64 {
+        self.resume_at.unwrap_or(tick.wrapping_add(self.offset))
+    }
+
+    /// Starts a think pass at sim tick `tick`: takes up a saved clock.
+    fn pass(&mut self, tick: u64) -> u64 {
+        if let Some(at) = self.resume_at.take() {
+            self.offset = at.wrapping_sub(tick);
+        }
+        self.clock = tick.wrapping_add(self.offset);
+        self.clock
     }
 
     /// Thinks once with `tree`: runs it from the root over `bb`, at sim tick
@@ -449,31 +692,38 @@ impl Brain {
     /// assert!(brain.doing(Key::new("fire")));
     /// ```
     pub fn think(&mut self, tree: &Arc<BehaviorTree>, bb: &mut Blackboard, tick: u64, dt: f32) {
+        let now = self.pass(tick);
         if self.bound.as_ref().is_none_or(|b| b.id() != tree.id()) {
             self.bind(tree.clone(), bb);
         }
-        self.run(tree, bb, tick, dt);
+        let random = Random::new(self.seed, now, AI_STREAM);
+        self.run(tree, bb, now, dt, random, 0);
     }
 
-    /// One think with the tree it is bound to.
-    fn run(&mut self, tree: &BehaviorTree, bb: &mut Blackboard, tick: u64, dt: f32) {
+    /// One think with the tree it is bound to, at the brain's tick `now`.
+    fn run(&mut self, tree: &BehaviorTree, bb: &mut Blackboard, now: u64, dt: f32, random: Random, who: u64) {
         self.thinks = self.thinks.wrapping_add(1);
         self.wake = false;
         let mut t = Tick {
             states: &mut self.states,
             bb,
             thinks: self.thinks,
-            now: tick,
+            now,
             dt,
             prev_action: self.action.take(),
             report: self.report,
             action: None,
             started: false,
+            signals: &self.signals,
+            random,
+            who,
+            rng: None,
         };
         tree.tick(0, &mut t);
         let (action, started) = (t.action, t.started);
         self.action = action;
         self.started = started;
+        self.signals.clear();
         if started || action.is_none() {
             self.report = Status::Running;
         }
@@ -490,7 +740,48 @@ impl Brain {
         self.started = false;
         // A new tree: think at once, not at the next period.
         self.wake = true;
+        if let Some(memory) = self.restore.take()
+            && memory.fits(&tree)
+        {
+            // The tree it was saved with: carry on where it was.
+            for &(node, seen, status, at) in &memory.nodes {
+                self.states[node as usize] = NodeState {
+                    at,
+                    seen,
+                    status,
+                    ..NodeState::NEW
+                };
+            }
+            self.thinks = memory.thinks;
+            self.action = memory.running;
+            self.report = memory.status;
+            self.wake = memory.wake;
+        }
         self.bound = Some(tree);
+    }
+
+    /// What it would need to carry on after a save: `None` before it has
+    /// found its tree (unless it still holds a save's).
+    fn memory(&self) -> Option<Memory> {
+        let Some(tree) = &self.bound else {
+            return self.restore.as_deref().cloned();
+        };
+        let nodes = self
+            .states
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.seen != NodeState::NEW.seen || s.at != 0)
+            .map(|(i, s)| (i as u16, s.seen, s.status, s.at))
+            .collect();
+        Some(Memory {
+            tree: format!("{:016x}", tree.fingerprint()),
+            clock: self.clock,
+            thinks: self.thinks,
+            running: self.action,
+            status: self.report,
+            wake: self.wake,
+            nodes,
+        })
     }
 
     fn unbind(&mut self) {
@@ -558,6 +849,7 @@ impl Serialize for Brain {
             period: self.period,
             action: self.action().map(|k| k.name().to_owned()),
             status: self.report,
+            memory: self.memory(),
         }
         .serialize(s)
     }
@@ -566,7 +858,13 @@ impl Serialize for Brain {
 impl<'de> Deserialize<'de> for Brain {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Brain, D::Error> {
         let json = BrainJson::deserialize(d)?;
-        Ok(Brain::new(&json.tree).with_period(json.period))
+        let mut brain = Brain::new(&json.tree).with_period(json.period);
+        if let Some(memory) = json.memory {
+            // It goes on at the tick after the one it was saved at.
+            brain.resume_at = Some(memory.clock.wrapping_add(1));
+            brain.restore = Some(Box::new(memory));
+        }
+        Ok(brain)
     }
 }
 
@@ -579,6 +877,141 @@ struct BrainJson {
     action: Option<String>,
     #[serde(default)]
     status: Status,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    memory: Option<Memory>,
+}
+
+/// A brain's memory in a save: enough to carry on at the same running
+/// node, at the same point of its waits and cooldowns.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Memory {
+    /// The tree's [fingerprint](BehaviorTree::fingerprint), in hex: the
+    /// memory is used only with the same tree.
+    tree: String,
+    /// The brain's tick at the save.
+    clock: u64,
+    thinks: u32,
+    /// The running `do` node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    running: Option<u16>,
+    /// What the game reported for it.
+    #[serde(default)]
+    status: Status,
+    #[serde(default)]
+    wake: bool,
+    /// `[node, think last ticked in, status, tick or bits]` for every node
+    /// with something to remember.
+    nodes: Vec<(u16, u32, Status, u64)>,
+}
+
+impl Memory {
+    fn fits(&self, tree: &BehaviorTree) -> bool {
+        self.tree == format!("{:016x}", tree.fingerprint())
+            && self.running.is_none_or(|n| tree.action_of(n as usize).is_some())
+            && self.nodes.iter().all(|&(n, ..)| (n as usize) < tree.len())
+    }
+}
+
+/// Adds `signal` to what a brain heard, once (the latest value wins).
+fn hear(heard: &mut Vec<(Key, Option<Value>)>, signal: Key, value: Option<Value>) {
+    match heard.iter_mut().find(|(k, _)| *k == signal) {
+        Some(entry) => entry.1 = value.or(entry.1),
+        None => heard.push((signal, value)),
+    }
+}
+
+/// An event that wakes brains and ends their `wait_for` nodes: send it with
+/// `ctx.events.send(Signal::to(guard, NOISE))` (or
+/// [`broadcast`](Self::broadcast) for every brain) from a system before
+/// [`think`], or turn the engine's own events into signals with
+/// [`forward`]. Brains whose tree doesn't wait for it don't hear it.
+///
+/// ```
+/// use ponko::ai::{self, Blackboard, Brain, Key, Signal};
+/// use ponko::assets::MemorySource;
+/// use ponko::prelude::*;
+///
+/// const ALARM: Key = Key::new("alarm");
+/// let mut world = Game::new("t", 1, 1)
+///     .sim_system(|ctx: &mut Ctx| {
+///         if ctx.time.sim_tick() == 5 {
+///             ctx.events.send(Signal::broadcast(ALARM));
+///         }
+///     })
+///     .sim_system(ai::think)
+///     .run_headless(6, |ctx| {
+///         ctx.assets.add_source(MemorySource::new("m").with("ai/guard.json",
+///             r#"{"root": {"selector": [
+///                 {"sequence": [{"wait_for": "alarm"}, {"set": "alerted", "to": true}]},
+///                 {"do": "sleep"}
+///             ]}}"#));
+///         ctx.assets.load_behavior_tree(&mut ctx.world, "ai/guard.json");
+///         // Thinks every 100 ticks, but the alarm wakes it at once.
+///         ctx.world.spawn((Brain::new("ai/guard.json").with_period(100), Blackboard::new()));
+///     });
+/// let bb = world.query::<&Blackboard>().single().unwrap();
+/// assert!(bb.flag(Key::new("alerted")));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Signal {
+    /// The brain's entity; `None` for every brain.
+    pub target: Option<Entity>,
+    /// What happened.
+    pub name: Key,
+    /// A value a `wait_for` node with `"store"` writes to the blackboard.
+    pub value: Option<Value>,
+}
+
+impl Signal {
+    /// `name`, for the brain of entity `target`.
+    pub fn to(target: Entity, name: Key) -> Signal {
+        Signal {
+            target: Some(target),
+            name,
+            value: None,
+        }
+    }
+
+    /// `name`, for every brain that waits for it.
+    pub fn broadcast(name: Key) -> Signal {
+        Signal {
+            target: None,
+            name,
+            value: None,
+        }
+    }
+
+    /// This signal, carrying `value` (who made the noise, where).
+    pub fn with(mut self, value: impl Into<Value>) -> Signal {
+        self.value = Some(value.into());
+        self
+    }
+}
+
+/// A sim system that turns each `T` event into a [`Signal`] with `map`
+/// (or none, for `None`): engine events (a hit, a trigger entered, a sound
+/// heard) end `wait_for` nodes without a system of your own. Add it before
+/// [`think`].
+///
+/// ```
+/// use ponko::ai::{self, Key, Signal};
+/// use ponko::prelude::*;
+///
+/// struct Shot { by: Entity, at: Entity }
+/// const SHOT_AT: Key = Key::new("shot_at");
+/// Game::new("t", 1, 1)
+///     .sim_system(ai::forward(|shot: &Shot| Some(Signal::to(shot.at, SHOT_AT).with(shot.by))))
+///     .sim_system(ai::think)
+///     .run_headless(1, |_| {});
+/// ```
+pub fn forward<T: 'static>(map: impl Fn(&T) -> Option<Signal> + 'static) -> impl FnMut(&mut Ctx) + 'static {
+    let mut out = Vec::new();
+    move |ctx: &mut Ctx| {
+        out.extend(ctx.events.read::<T>().iter().filter_map(&map));
+        for signal in out.drain(..) {
+            ctx.events.send(signal);
+        }
+    }
 }
 
 fn one() -> u32 {
@@ -598,7 +1031,8 @@ pub fn think(ctx: &mut Ctx) {
     if ctx.world.get_resource::<BehaviorTrees>().is_none() {
         return;
     }
-    let (tick, dt) = (ctx.time.sim_tick(), ctx.time.dt());
+    let (tick, dt, seed) = (ctx.time.sim_tick(), ctx.time.dt(), ctx.seed);
+    let signals: &[Signal] = ctx.events.read::<Signal>();
     let mut bare = Vec::new();
     ctx.world
         .query::<Entity>()
@@ -612,6 +1046,7 @@ pub fn think(ctx: &mut Ctx) {
             .query::<(Entity, &mut Brain, &mut Blackboard)>()
             .par_for_each(|(e, brain, bb)| {
                 brain.started = false;
+                let now = brain.pass(tick);
                 if brain.generation != trees.generation {
                     brain.generation = trees.generation;
                     match trees.get(brain.tree_name) {
@@ -623,13 +1058,22 @@ pub fn think(ctx: &mut Ctx) {
                         None => brain.unbind(),
                     }
                 }
+                if let Some(tree) = &brain.bound {
+                    for s in signals {
+                        if s.target.is_none_or(|t| t == e) && tree.signals().contains(&s.name) {
+                            hear(&mut brain.signals, s.name, s.value);
+                            brain.wake = true;
+                        }
+                    }
+                }
                 if !brain.due(e.index(), tick) {
                     return;
                 }
                 // Taken out and put back: no reference count traffic
                 // between cores.
                 if let Some(tree) = brain.bound.take() {
-                    brain.run(&tree, bb, tick, dt);
+                    let random = Random::new(seed, now, AI_STREAM);
+                    brain.run(&tree, bb, now, dt, random, e.to_bits());
                     brain.bound = Some(tree);
                 }
             });
