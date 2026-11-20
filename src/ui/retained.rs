@@ -1645,7 +1645,10 @@ impl Ui {
         })
     }
     /// Resolve all screens against the logical window size. Percent sizes,
-    /// min/max, flex/grid and absolute offsets are Taffy styles.
+    /// min/max, flex/grid and absolute offsets are Taffy styles. Only what
+    /// changed since the last layout is laid out again; with nothing
+    /// changed, nodes are only placed where scrolling and animations put
+    /// them ([`Ui::layout_passes`]).
     /// ```
     /// use ponko::prelude::*;
     /// let mut ui = ponko::ui::Ui::default(); ui.layout(vec2(800.0,600.0));

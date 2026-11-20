@@ -563,6 +563,46 @@ input. Standalone `Ui` measurements use the built-in font; context-owned UI also
 measures loaded custom fonts. The engine keeps existing sprite batching and adds
 per-batch scissor rectangles; world sprites and immediate UI remain unclipped.
 
+### When layout runs
+
+The engine asks for a layout before the frame's systems and again before
+drawing, but the tree is laid out only when something changed since the last
+layout: the window size, the scale or the fonts, or a node's layout, text,
+font or size, or a node added, removed, shown or hidden. A frame where nothing
+changed costs no layout, so a HUD system may write its labels every frame:
+`set_text` with the text a label already shows changes nothing, and neither
+does `set_layout` with the layout a node already has. When one label's text
+changes, only that label is measured again, and only the nodes it moves are
+laid out. Scrolling and animations of drawn properties (opacity, scale,
+offset, color) move what was laid out without a layout; width and height
+tweens lay out each frame they play.
+
+`Ui::layout_passes` counts the layouts, so a test can check that a screen
+which should be still is not laid out every frame:
+
+```rust
+# use ponko::prelude::*;
+# use ponko::ui::{Ui, UiInput, UiLayout};
+let mut ui = Ui::default();
+let hud = ui.root().layout(UiLayout::fill().padding(16.0)).id();
+let coins = ui.label(hud, "Coins: 0").id();
+ui.show_hud(hud);
+ui.frame(vec2(800.0, 600.0), &UiInput::default());
+let laid_out = ui.layout_passes();
+for _ in 0..60 {
+    ui.set_text(coins, "Coins: 0"); // what the label already shows
+    ui.frame(vec2(800.0, 600.0), &UiInput::default());
+}
+assert_eq!(ui.layout_passes(), laid_out);
+```
+
+The `frame2d/...` benchmarks of `ponko_bench` time a whole 2D frame without a
+window (2,000 sprites under a HUD and a settings screen of about 150 nodes):
+the UI's input, layout and draw list, the game's systems and the sprite
+batching. With layout skipped, a frame where the UI is still went from about
+1.07 ms to 0.11 ms of CPU, and one where the score's text changes every frame
+from about 1.08 ms to 0.11 ms.
+
 ## Accessibility semantics
 
 `ui.accessibility_tree()` returns a deterministic snapshot of what assistive
