@@ -4,6 +4,7 @@
     "asset": "crab.png",
     "assetSize": "32x32",
     "assetSource": "4x2",
+    "min": { "group_ready": 1 },
     "engineGpu": true,
     "music": true
   },

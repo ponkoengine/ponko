@@ -54,6 +54,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
+use crate::borrow::ReadOnlyQueryData;
 use crate::bundle::Component;
 use crate::change::{self, Clock, Tick};
 use crate::entity::Entity;
@@ -554,7 +555,9 @@ fn undeclared<T>(label: &str, what: &str, write: bool) -> ! {
 pub struct SharedFilters<'a> {
     pub(crate) world: &'a World,
     label: &'static str,
-    decl: &'a [(ComponentId, bool)],
+    /// The view's declared components; `None` for a read-only query on the
+    /// whole world ([`World::query_ref`]), which may read any of them.
+    decl: Option<&'a [(ComponentId, bool)]>,
     filters: Filters,
     /// A filter can never hold: a `with` component no entity ever had.
     empty: bool,
@@ -579,9 +582,15 @@ impl SharedFilters<'_> {
     #[track_caller]
     fn tracked<T: Component>(&self, filter: &str) -> ComponentId {
         let Some(id) = self.world.component_id::<T>() else {
-            undeclared::<T>(self.label, "component", false)
+            match self.decl {
+                Some(_) => undeclared::<T>(self.label, "component", false),
+                // Never registered, so never tracked.
+                None => change::untracked_filter(Some(self.label), filter, std::any::type_name::<T>()),
+            }
         };
-        check_declared(self.world, self.label, self.decl, id, false);
+        if let Some(decl) = self.decl {
+            check_declared(self.world, self.label, decl, id, false);
+        }
         if !self.world.component_info(id).tracks_changes() {
             change::untracked_filter(Some(self.label), filter, std::any::type_name::<T>());
         }
@@ -661,7 +670,7 @@ impl<'w> WorldView<'w> {
         ViewQuery {
             world: self.world,
             label: self.label,
-            decl: self.ids,
+            decl: Some(self.ids),
             ids,
             filters: Filters::default(),
             empty: false,
@@ -866,8 +875,9 @@ impl<'w> WorldView<'w> {
 pub struct ViewQuery<'v, Q: QueryData> {
     world: &'v World,
     label: &'static str,
-    /// The view's declared components (with `write`), for change filters.
-    decl: &'v [(ComponentId, bool)],
+    /// The view's declared components (with `write`), for change filters;
+    /// `None` in a [`QueryRef`], which may read every component.
+    decl: Option<&'v [(ComponentId, bool)]>,
     ids: Q::Ids,
     filters: Filters,
     /// A filter can never hold: it names a component no entity ever had.
@@ -1002,7 +1012,20 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
     /// entity visited counts as changed for the tracked components `Q`
     /// fetches mutably (only the rows a change filter lets through).
     #[inline]
-    pub fn for_each(&mut self, mut f: impl FnMut(Q::Item<'_>)) {
+    pub fn for_each(&mut self, f: impl FnMut(Q::Item<'_>)) {
+        // SAFETY: `&mut self` keeps the items from outliving this call
+        // alongside another query of this view.
+        unsafe { self.visit(f) }
+    }
+
+    /// [`for_each`](Self::for_each) from a shared borrow, with items that
+    /// live as long as the world.
+    ///
+    /// # Safety
+    /// The caller holds this query mutably (one item set at a time), or `Q`
+    /// only reads, so items handed out by several calls can coexist.
+    #[inline]
+    unsafe fn visit(&self, mut f: impl FnMut(Q::Item<'v>)) {
         let filters = self.filters;
         let tracking = self.world.tracks_changes();
         let clock = self.clock();
@@ -1034,7 +1057,7 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
                 for row in start..end {
                     // SAFETY: `row` is in bounds; the view checked that `Q`
                     // only touches declared components, with declared
-                    // mutability.
+                    // mutability (a `QueryRef`'s `Q` only reads).
                     f(unsafe { Q::fetch(state, row) });
                 }
                 if runs.is_none() {
@@ -1046,6 +1069,15 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
 
     /// An iterator over the matching entities.
     pub fn iter(&mut self) -> QueryIter<'_, Q> {
+        // SAFETY: as in `for_each`.
+        unsafe { self.iter_shared() }
+    }
+
+    /// [`iter`](Self::iter) from a shared borrow.
+    ///
+    /// # Safety
+    /// As [`visit`](Self::visit).
+    unsafe fn iter_shared(&self) -> QueryIter<'v, Q> {
         QueryIter {
             archetypes: self.archetypes(),
             ids: self.ids,
@@ -1062,6 +1094,10 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
 
     /// Number of matching entities. Doesn't count as a change to anything.
     pub fn count(&mut self) -> usize {
+        self.count_shared()
+    }
+
+    fn count_shared(&self) -> usize {
         let filters = self.filters;
         let tracking = self.world.tracks_changes();
         let clock = self.clock();
@@ -1079,6 +1115,15 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
 
     /// The item for `e`, or `None` if it's dead or doesn't match.
     pub fn get(&mut self, e: Entity) -> Option<Q::Item<'_>> {
+        // SAFETY: as in `for_each`.
+        unsafe { self.get_shared(e) }
+    }
+
+    /// [`get`](Self::get) from a shared borrow.
+    ///
+    /// # Safety
+    /// As [`visit`](Self::visit).
+    unsafe fn get_shared(&self, e: Entity) -> Option<Q::Item<'v>> {
         if self.empty {
             return None;
         }
@@ -1105,6 +1150,18 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
     where
         Q: 'v,
     {
+        // SAFETY: the query is consumed, so its item is the only one.
+        unsafe { self.single_shared() }
+    }
+
+    /// [`single`](Self::single) from a shared borrow.
+    ///
+    /// # Safety
+    /// As [`visit`](Self::visit).
+    unsafe fn single_shared(&self) -> Result<Q::Item<'v>, SingleError>
+    where
+        Q: 'v,
+    {
         let clock = self.clock();
         let tracking = self.world.tracks_changes();
         // One pass, through the world's index where it applies, stopping at
@@ -1127,6 +1184,147 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
             _q: PhantomData,
         };
         matches.next().ok_or(SingleError::NoEntities)
+    }
+}
+
+/// A read-only query on a shared [`World`], from [`World::query_ref`]:
+/// [`for_each`](Self::for_each), [`iter`](Self::iter),
+/// [`count`](Self::count), [`get`](Self::get) and [`single`](Self::single),
+/// with the typed [`filter`](Self::filter)s of a world query.
+///
+/// It only reads, so it takes `&self` and its items live as long as the
+/// world's borrow: several can be held at once, and a query can loop over
+/// itself.
+///
+/// ```
+/// use ponko_ecs::*;
+/// #[derive(Component)]
+/// struct Pos(f32);
+///
+/// let mut world = World::new();
+/// for x in [0.0, 1.0, 5.0] {
+///     world.spawn((Pos(x),));
+/// }
+/// let world = &world; // shared from here on
+/// let near = world.query_ref::<(Entity, &Pos)>();
+/// let pairs = near
+///     .iter()
+///     .flat_map(|(a, pa)| near.iter().filter(move |&(b, pb)| a < b && (pa.0 - pb.0).abs() < 2.0))
+///     .count();
+/// assert_eq!(pairs, 1);
+/// ```
+#[must_use = "a query does nothing until iterated"]
+pub struct QueryRef<'w, Q: ReadOnlyQueryData> {
+    query: ViewQuery<'w, Q>,
+}
+
+impl<'w, Q: ReadOnlyQueryData> QueryRef<'w, Q> {
+    pub(crate) fn new(world: &'w World) -> Self {
+        let ids = Q::ids_ref(world);
+        // A component no entity ever had: nothing matches, and the index
+        // isn't asked about a signature that never can.
+        let mut empty = false;
+        Q::access(&ids, &mut |id, _, required| {
+            empty |= required && id == ComponentId::UNKNOWN
+        });
+        world
+            .recorder
+            .note(|l| Q::access(&ids, &mut |id, _, _| l.component(id, false)));
+        QueryRef {
+            query: ViewQuery {
+                world,
+                label: "World::query_ref",
+                decl: None,
+                ids,
+                filters: Filters::default(),
+                empty,
+                cache: QueryCache::Auto,
+                since: None,
+                default_since: world.changes_since(),
+                now: world.change_tick(),
+                _borrow: PhantomData,
+            },
+        }
+    }
+
+    /// Only entities that pass the typed filter `F`, as
+    /// [`Query::filter`](crate::Query::filter): [`With`](crate::With),
+    /// [`Without`](crate::Without), [`Or`](crate::Or),
+    /// [`Added`](crate::Added), [`Changed`](crate::Changed), or a tuple of
+    /// them that must all hold. `Added<T>` and `Changed<T>` report what
+    /// changed since the world's [`changes_since`](World::changes_since)
+    /// unless [`since`](Self::since) says otherwise.
+    ///
+    /// # Panics
+    /// If `Added<T>`/`Changed<T>` names a `T` whose changes aren't tracked,
+    /// and on the same limits as [`Query::filter`](crate::Query::filter).
+    #[track_caller]
+    pub fn filter<F: QueryFilter>(self) -> Self {
+        Self {
+            query: self.query.filter::<F>(),
+        }
+    }
+
+    /// Makes [`Added`](crate::Added) and [`Changed`](crate::Changed)
+    /// filters report what happened after `tick` (see
+    /// [`Query::since`](crate::Query::since)).
+    pub fn since(self, tick: Tick) -> Self {
+        Self {
+            query: self.query.since(tick),
+        }
+    }
+
+    /// Use the world's archetype index for this query if it already holds
+    /// it, as [`ViewQuery::cached`] does: a shared world can't build it.
+    pub fn cached(self) -> Self {
+        Self {
+            query: self.query.cached(),
+        }
+    }
+
+    /// Never use the world's archetype index for this query.
+    pub fn uncached(self) -> Self {
+        Self {
+            query: self.query.uncached(),
+        }
+    }
+
+    /// Runs `f` for every matching entity.
+    #[inline]
+    pub fn for_each(&self, f: impl FnMut(Q::Item<'w>)) {
+        // SAFETY: `Q` only reads.
+        unsafe { self.query.visit(f) }
+    }
+
+    /// An iterator over the matching entities.
+    pub fn iter(&self) -> QueryIter<'w, Q> {
+        // SAFETY: `Q` only reads.
+        unsafe { self.query.iter_shared() }
+    }
+
+    /// Number of matching entities.
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.query.count_shared()
+    }
+
+    /// The item for `e`, or `None` if it's dead or doesn't match.
+    #[must_use]
+    pub fn get(&self, e: Entity) -> Option<Q::Item<'w>> {
+        // SAFETY: `Q` only reads.
+        unsafe { self.query.get_shared(e) }
+    }
+
+    /// The item of the only matching entity.
+    ///
+    /// # Errors
+    /// If no entity matches, or more than one does.
+    pub fn single(&self) -> Result<Q::Item<'w>, SingleError>
+    where
+        Q: 'w,
+    {
+        // SAFETY: `Q` only reads.
+        unsafe { self.query.single_shared() }
     }
 }
 
@@ -1320,7 +1518,8 @@ impl ViewGroup {
             #[cfg(feature = "parallel")]
             {
                 use rayon::prelude::*;
-                guard.items.par_iter_mut().enumerate().for_each(one);
+                let items = &mut *guard.items;
+                crate::par::run(|| items.par_iter_mut().enumerate().for_each(one));
             }
         } else {
             guard.items.iter_mut().enumerate().for_each(one);

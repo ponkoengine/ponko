@@ -50,6 +50,35 @@ is a default feature, and `3d` turns on `image-jpeg`, `image-hdr` and
 `image-exr`. PNG is always built in. A new format arrives as a new feature,
 never as a change to what the existing ones turn on.
 
+## Plugins
+
+The `Plugin` trait is the extension point for other people's crates, and
+it is covered like every public item: `build`, `setup`, `try_setup`,
+`name` and `dependencies` keep their meaning, and a method added to it
+comes with a default, so a plugin written for a minor release keeps
+compiling in its patch releases. So do what a plugin adds through:
+`Game::add` and the other builder calls, `Game::has_plugin`,
+`Game::debug_toggle`, `Game::control_method`, and the `Ctx` services.
+
+- **The simple path stays.** A game that adds no plugin is written as
+  before (`Game::new`, systems, `run`): plugins need no registration step,
+  no feature and no cost when unused.
+- **The rules are part of the promise**: a plugin's name is its type's
+  path unless it says otherwise; adding a name twice, or before a
+  dependency it lists, fails startup with `ErrorKind::Invalid` before any
+  setup runs; a dependency's setup runs before its dependent's, and its
+  systems first in every phase they share. Error message text is not
+  covered ([Unstable](#unstable)).
+- **Control methods a game adds** are its own contract, not Ponko's: the
+  endpoint lists them as `"added": true`, and their names never use the
+  engine's namespaces, so an engine release adds methods without
+  colliding with them. ponko-mcp's `call_game_method` tool and its
+  parameters are covered like its other tools.
+- **For plugin crates**: depending on `ponko = "0.y"` is compatible across
+  that minor's patch releases; a new minor may break them, as it may any
+  code. The guide's "Plugins for other crates" has the naming and
+  versioning rules.
+
 ## Releases
 
 | Release | When | Contains |
@@ -160,15 +189,18 @@ unrelated programmer invariants. Available methods depend on cargo features.
 | `Graphics::load_effect` | `Effect` | Panics; `try_load_effect` returns `Result<Effect, Error>` |
 | `Graphics::load_compute` | `Compute` | Panics; `try_load_compute` returns `Result<Compute, Error>` |
 | `Graphics::load_texture_array` | `TextureArray` | Panics; `try_load_texture_array` returns `Result<TextureArray, Error>` |
+| `Graphics::load_baked_lighting` | `BakedLighting` | Panics; `try_load_baked_lighting` returns `Result<BakedLighting, Error>` |
 | `Graphics::load_reflection_probe` | `()` | Panics; `try_load_reflection_probe` returns `Result<(), Error>` |
 | `Ctx::load_skeleton2d` | `Arc<SkeletonData>` | Panics; `try_load_skeleton2d` returns `Result<Arc<SkeletonData>, Error>` |
 | `Audio::load_mixer` | `()` | Panics; `try_load_mixer` returns `Result<(), Error>` |
 | `Audio::load_stream` | `Sound` | Panics; `try_load_stream` returns `Result<Sound, Error>` |
 | `Assets::load_resource` | `()` | Panics; `try_load_resource` returns `Result<(), Error>`; replaces the whole resource |
 | `Assets::load_strings` | `()` | Panics; `try_load_strings` returns `Result<(), Error>` |
+| `Assets::load_behavior_tree` | `()` | Panics; `try_load_behavior_tree` returns `Result<(), Error>` |
 | `Assets::load_reflected_resource_json`, `load_reflected_component_json` | `Result<(), Error>` | Reflection edits; no panic on load failure; object fields merge |
 | `Assets::load_with` | `Result<T, Error>` | Custom decoder operation; propagates source/decoder errors (a user decoder can panic) |
-| `Assets::load_level` | `Result<Level, Error>` | Runtime level operation; no panic on load failure |
+| `Graphics::load_aseprite` / `try_load_aseprite` | `Aseprite` / `Result<Aseprite, Error>` | Named sprite atlas and timeline, cached and hot reloaded |
+| `Assets::load_level`, `Assets::load_ldtk_worlds` | `Result<Level, Error>`, `Result<Vec<LdtkWorld>, Error>` | Runtime level operations; no panic on load failure |
 | `Ctx::load_scene`, `load_scene_lockstep`, `load_world` | `Result<(), Error>` | Runtime world operations; no panic on load failure |
 | `Ctx::load_collision_mesh`, `load_collision_mesh_with` | `CollisionMesh` | Panics; matching `try_load_*` returns `Result<CollisionMesh, Error>` |
 | `Ctx::load_texture`, `load_sound` | `Texture`, `Sound` | Deprecated forwarding shortcuts, removed in the next minor; panic; use `gfx.load_texture` / `audio.load` (fallible: `gfx.try_load_texture` / `audio.try_load`) |

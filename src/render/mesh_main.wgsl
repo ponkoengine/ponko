@@ -29,6 +29,8 @@ struct VertexOut {
     @location(6) @interpolate(flat) decal_layers: u32,
     // The crossfade dither (see `fade_keeps`), else 0.
     @location(7) @interpolate(flat) fade: f32,
+    // The model's baked lightmap entry plus one, 0 without (see baked.wgsl).
+    @location(8) @interpolate(flat) lightmap: f32,
 };
 
 // The vertex in world space, after the shader's `vertex` function.
@@ -58,6 +60,12 @@ fn instance_decal_layers(in: VertexIn) -> u32 {
     return u32(static_instance(in).m0.w + 0.5);
 }
 
+// The model's lightmap entry plus one (0: none), from the matrix's spare
+// third slot of its last row.
+fn instance_lightmap(in: VertexIn) -> f32 {
+    return static_instance(in).m2.w;
+}
+
 @vertex
 fn vs_main(in: VertexIn) -> VertexOut {
     let v = world_vertex(in);
@@ -71,6 +79,7 @@ fn vs_main(in: VertexIn) -> VertexOut {
     out.uv1 = v.uv1;
     out.origin = v.origin;
     out.fade = in.m1.w;
+    out.lightmap = instance_lightmap(in);
     return out;
 }
 
@@ -88,6 +97,7 @@ fn vs_shadow(in: VertexIn) -> VertexOut {
     out.uv1 = v.uv1;
     out.origin = v.origin;
     out.fade = in.m1.w;
+    out.lightmap = 0.0;
     return out;
 }
 
@@ -258,6 +268,12 @@ fn shade(s: Surface) -> vec3<f32> {
     let direct = direct_light(s, frame.sun_dir.xyz, frame.sun_color.rgb * sun) + punctual_light(s);
 
     bounced_light = gi_light(s.world, n, s.view);
+    // Baked light: a lightmap always, the probes where the real-time
+    // probes don't reach.
+    let baked = baked_light(s.world, n, s.uv1);
+    if baked.a > 0.0 && (baked_entry > 0.5 || bounced_light.a <= 0.0) {
+        bounced_light = baked;
+    }
     let ambient = environment_light(s, f0);
 
     // Linear HDR light; the post pass maps it to the screen.
@@ -289,6 +305,8 @@ fn opaque_color(in: VertexOut, front: bool, dp_x: vec3<f32>, dp_y: vec3<f32>) ->
         geometric = -geometric;
     }
     s = apply_decals(s, geometric, in.decal_layers, dp_x, dp_y);
+    baked_entry = in.lightmap;
+    baked_face = geometric;
     s.roughness = clamp(s.roughness, 0.03, 1.0);
     s.metallic = clamp(s.metallic, 0.0, 1.0);
     // The opaque pass uses the otherwise unused scene-color slot for GTAO
@@ -300,9 +318,10 @@ fn opaque_color(in: VertexOut, front: bool, dp_x: vec3<f32>, dp_y: vec3<f32>) ->
     s.occlusion *= 1.0 - screen.r;
     contact_shadow = screen.g;
     // Blue marks screen-space reflections in a second level, at half size;
-    // alpha is their cone's spread (see ssr.wgsl).
+    // alpha is their cone's spread (see ssr.wgsl), unless the spread image
+    // has a slot of its own.
     if screen.b > 0.5 && s.roughness < 0.7 {
-        let filtered = reflection_at(s.screen, s.roughness, screen.a);
+        let filtered = reflection_at(s.screen, s.roughness, reflection_spread(s.screen, screen.a));
         screen_reflection = vec4<f32>(filtered.rgb / max(filtered.a, 0.00001), filtered.a);
     }
     return vec4<f32>(fog(shade(s), s.world), 1.0);
@@ -324,6 +343,8 @@ fn fs_transparent_fade(in: VertexOut, @builtin(front_facing) front: bool) -> @lo
 
 fn transparent_color(in: VertexOut, front: bool) -> vec4<f32> {
     let s = surface_at(in, front);
+    baked_entry = in.lightmap;
+    baked_face = select(-1.0, 1.0, front) * normalize(in.normal);
     return vec4<f32>(fog(shade(s), s.world) * s.alpha, s.alpha);
 }
 
@@ -441,6 +462,18 @@ fn reflection_cone(roughness: f32) -> f32 {
     let c = pow(0.244, 1.0 / (power + 1.0));
     return sqrt(max(1.0 - c * c, 0.0)) / c;
 }
+
+// The reflection cone's spread at full-size pixel `pixel`: read from the
+// half-size spread image (see ssr.wgsl), where the device has a texture
+// slot for it. Without one, the engine replaces these lines with a function
+// that returns `copied`, the copy in the screen image's first level.
+// ---- reflection spread image: begin ----
+@group(2) @binding(3) var reflection_spread_texture: texture_2d<f32>;
+fn reflection_spread(pixel: vec2<f32>, copied: f32) -> f32 {
+    let size = vec2<i32>(textureDimensions(reflection_spread_texture));
+    return textureLoad(reflection_spread_texture, min(vec2<i32>(pixel) / 2, size - 1), 0).r;
+}
+// ---- reflection spread image: end ----
 
 // The screen-space reflections at full-size pixel `pixel` of a surface of
 // `roughness` whose ray's cone spreads by `spread` (see ssr.wgsl):

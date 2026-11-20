@@ -78,6 +78,38 @@ pub struct Bezier {
 impl Bezier {
     /// A straight line, as a bezier.
     pub const LINEAR: Self = Self::new(1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0);
+    /// CSS's `ease`: a quick start that settles slowly.
+    /// ```
+    /// use ponko::skeleton2d::Bezier;
+    /// assert!(Bezier::EASE.ease(0.5) > 0.75);
+    /// ```
+    pub const EASE: Self = Self::new(0.25, 0.1, 0.25, 1.0);
+    /// CSS's `ease-in`: starts slowly, ends at full speed (things leaving).
+    /// ```
+    /// use ponko::skeleton2d::Bezier;
+    /// assert!(Bezier::EASE_IN.ease(0.5) < 0.5);
+    /// ```
+    pub const EASE_IN: Self = Self::new(0.42, 0.0, 1.0, 1.0);
+    /// CSS's `ease-out`: starts at full speed, settles slowly (things
+    /// arriving, and most UI changes).
+    /// ```
+    /// use ponko::skeleton2d::Bezier;
+    /// assert!(Bezier::EASE_OUT.ease(0.5) > 0.5);
+    /// ```
+    pub const EASE_OUT: Self = Self::new(0.0, 0.0, 0.58, 1.0);
+    /// CSS's `ease-in-out`: slow at both ends.
+    /// ```
+    /// use ponko::skeleton2d::Bezier;
+    /// assert!((Bezier::EASE_IN_OUT.ease(0.5) - 0.5).abs() < 1e-5);
+    /// ```
+    pub const EASE_IN_OUT: Self = Self::new(0.42, 0.0, 0.58, 1.0);
+    /// Overshoots a little past the end, then settles back: a pop.
+    /// ```
+    /// use ponko::skeleton2d::Bezier;
+    /// let most = (1..100).map(|i| Bezier::BACK_OUT.ease(i as f32 / 100.0)).fold(0.0, f32::max);
+    /// assert!(most > 1.05 && Bezier::BACK_OUT.ease(1.0) == 1.0);
+    /// ```
+    pub const BACK_OUT: Self = Self::new(0.34, 1.56, 0.64, 1.0);
 
     /// A curve through handles (`x1`, `y1`) and (`x2`, `y2`).
     #[must_use]
@@ -204,7 +236,7 @@ impl<T> Key<T> {
 }
 
 /// A bone's keys. Values are relative to the bone's rest pose: translation
-/// is added to it, rotation (radians) added, scale multiplied.
+/// is added to it, rotation (radians) added, scale multiplied, shear added.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[non_exhaustive]
 pub struct BoneTrack {
@@ -217,6 +249,99 @@ pub struct BoneTrack {
     pub rotate: Vec<Key<f32>>,
     /// Multiplies the rest scale.
     pub scale: Vec<Key<Vec2>>,
+    /// Added to the rest shear, in radians (see
+    /// [`BonePose::shear`](super::BonePose::shear)).
+    pub shear: Vec<Key<Vec2>>,
+    /// One axis of the translation, scale or shear keyed on its own, with
+    /// its own key times (Spine's `translatex`, `scaley`... timelines).
+    /// Applied after the tracks above: a channel replaces that axis of
+    /// theirs.
+    pub channels: Vec<ChannelTrack>,
+}
+
+/// Which axis of a bone's pose a [`ChannelTrack`] keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BoneChannel {
+    /// Added to the rest translation's x.
+    TranslateX,
+    /// Added to the rest translation's y.
+    TranslateY,
+    /// Multiplies the rest scale's x.
+    ScaleX,
+    /// Multiplies the rest scale's y.
+    ScaleY,
+    /// Added to the rest shear's x (radians).
+    ShearX,
+    /// Added to the rest shear's y (radians).
+    ShearY,
+}
+
+/// Keys of one axis of a bone's pose.
+///
+/// ```
+/// use ponko::skeleton2d::{BoneChannel, BoneTrack, ChannelTrack, Key};
+/// let mut hop = BoneTrack::new(1);
+/// // Up and down twice while x is keyed once: y alone, its own times.
+/// hop.channels.push(ChannelTrack::new(
+///     BoneChannel::TranslateY,
+///     vec![Key::new(0.0, 0.0), Key::new(0.25, -8.0), Key::new(0.5, 0.0), Key::new(0.75, -8.0), Key::new(1.0, 0.0)],
+/// ));
+/// hop.channels.push(ChannelTrack::new(BoneChannel::TranslateX, vec![Key::new(0.0, 0.0), Key::new(1.0, 40.0)]));
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct ChannelTrack {
+    /// The axis it keys.
+    pub channel: BoneChannel,
+    /// Its keys.
+    pub keys: Vec<Key<f32>>,
+}
+
+impl ChannelTrack {
+    /// Keys `keys` of axis `channel`.
+    #[must_use]
+    pub fn new(channel: BoneChannel, keys: Vec<Key<f32>>) -> Self {
+        Self { channel, keys }
+    }
+}
+
+/// Keys that move a [`SkinnedMesh`](super::SkinnedMesh)'s vertices, or a
+/// [`ClippingMask`](super::ClippingMask)'s corners (Spine's deform
+/// timelines): while slot `slot` shows mesh `attachment` of skin `skin`,
+/// each key's offsets are added to the mesh's bound vertices.
+///
+/// A key holds one offset per vertex and influence, four per vertex in the
+/// order of [`MeshVertex::bones`](super::MeshVertex::bones): offset
+/// `4 * v + k` moves vertex `v` where influence `k`'s bone sees it, in
+/// that bone's space at rest (unused influences take any value). For a
+/// vertex on one bone only offset `4 * v` counts. Keys blend linearly
+/// (through their curve) from one to the next.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct DeformTrack {
+    /// The slot.
+    pub slot: usize,
+    /// The skin the mesh is in (0 is `"default"`).
+    pub skin: usize,
+    /// The mesh's name in the slot.
+    pub attachment: Arc<str>,
+    /// The offsets from each key on.
+    pub keys: Vec<Key<Arc<[Vec2]>>>,
+}
+
+impl DeformTrack {
+    /// A track for mesh `attachment` of skin `skin` in slot `slot`, with
+    /// no keys.
+    #[must_use]
+    pub fn new(slot: usize, skin: usize, attachment: &str) -> Self {
+        Self {
+            slot,
+            skin,
+            attachment: attachment.into(),
+            keys: Vec::new(),
+        }
+    }
 }
 
 impl BoneTrack {
@@ -281,6 +406,8 @@ pub struct Clip {
     /// Draw orders: from each key on, the slots drawn bottom to top (every
     /// slot once); `None` goes back to the rest order.
     pub draw_order: Vec<Key<Option<Arc<[u16]>>>>,
+    /// Mesh deforms, at most one per mesh.
+    pub deform: Vec<DeformTrack>,
     /// Events, on the clip's normalized clock (0..1), in time order.
     pub events: Vec<AnimationEvent>,
 }
@@ -295,8 +422,16 @@ impl Clip {
             bones: Vec::new(),
             slots: Vec::new(),
             draw_order: Vec::new(),
+            deform: Vec::new(),
             events: Vec::new(),
         }
+    }
+
+    /// The same clip with deform track `track`.
+    #[must_use]
+    pub fn with_deform_track(mut self, track: DeformTrack) -> Self {
+        self.deform.push(track);
+        self
     }
 
     /// The same clip with bone track `track`.
@@ -340,12 +475,15 @@ impl Clip {
                     t.bone
                 )));
             }
+            let channels = t.channels.iter().flat_map(|c| &c.keys);
             let curves = t
                 .translate
                 .iter()
                 .map(|k| &k.curve)
                 .chain(t.rotate.iter().map(|k| &k.curve))
                 .chain(t.scale.iter().map(|k| &k.curve))
+                .chain(t.shear.iter().map(|k| &k.curve))
+                .chain(channels.clone().map(|k| &k.curve))
                 .all(Curve::is_valid);
             if !curves {
                 return Err(err(format!(
@@ -355,11 +493,15 @@ impl Clip {
             }
             let finite = t.translate.iter().all(|k| k.value.is_finite())
                 && t.rotate.iter().all(|k| k.value.is_finite())
-                && t.scale.iter().all(|k| k.value.is_finite());
+                && t.scale.iter().all(|k| k.value.is_finite())
+                && t.shear.iter().all(|k| k.value.is_finite())
+                && channels.clone().all(|k| k.value.is_finite());
             if !finite
                 || !in_order(t.translate.iter().map(|k| k.time))
                 || !in_order(t.rotate.iter().map(|k| k.time))
                 || !in_order(t.scale.iter().map(|k| k.time))
+                || !in_order(t.shear.iter().map(|k| k.time))
+                || !t.channels.iter().all(|c| in_order(c.keys.iter().map(|k| k.time)))
             {
                 return Err(err(format!(
                     "clip \"{name}\": bone {}'s keys need numbers, in time order",
@@ -387,6 +529,21 @@ impl Clip {
                 return Err(err(format!(
                     "clip \"{name}\": slot {}'s keys need to be in time order",
                     t.slot
+                )));
+            }
+        }
+        for t in &self.deform {
+            if t.slot >= slots {
+                return Err(err(format!(
+                    "clip \"{name}\" deforms a mesh in slot {}, which isn't there",
+                    t.slot
+                )));
+            }
+            let finite = t.keys.iter().all(|k| k.value.iter().all(|v| v.is_finite()));
+            if !finite || !in_order(t.keys.iter().map(|k| k.time)) || !t.keys.iter().all(|k| k.curve.is_valid()) {
+                return Err(err(format!(
+                    "clip \"{name}\": the deform keys of \"{}\" need numbers, valid curves and time order",
+                    t.attachment
                 )));
             }
         }
@@ -428,6 +585,22 @@ impl Clip {
             if let Some(v) = sample(&track.scale, seconds) {
                 p.scale = rest.scale * v;
             }
+            if let Some(v) = sample(&track.shear, seconds) {
+                p.shear = rest.shear + v;
+            }
+            for c in &track.channels {
+                let Some(v) = sample(&c.keys, seconds) else {
+                    continue;
+                };
+                match c.channel {
+                    BoneChannel::TranslateX => p.translation.x = rest.translation.x + v,
+                    BoneChannel::TranslateY => p.translation.y = rest.translation.y + v,
+                    BoneChannel::ScaleX => p.scale.x = rest.scale.x * v,
+                    BoneChannel::ScaleY => p.scale.y = rest.scale.y * v,
+                    BoneChannel::ShearX => p.shear.x = rest.shear.x + v,
+                    BoneChannel::ShearY => p.shear.y = rest.shear.y + v,
+                }
+            }
             pose[track.bone] = p;
         }
     }
@@ -463,6 +636,26 @@ pub(crate) fn sample<T: Channels>(keys: &[Key<T>], time: f32) -> Option<T> {
     let t = if span > 0.0 { (time - a.time) / span } else { 1.0 };
     let eased = [0, 1, 2, 3].map(|c| a.curve.ease(t, c));
     Some(T::mix(&a.value, &b.value, eased))
+}
+
+/// Writes the offsets of deform `keys` at `time` into `out` (resized to
+/// them). `false` without keys.
+pub(crate) fn sample_deform(keys: &[Key<Arc<[Vec2]>>], time: f32, out: &mut Vec<Vec2>) -> bool {
+    if keys.is_empty() {
+        return false;
+    }
+    let next = keys.partition_point(|k| k.time <= time);
+    let a = &keys[next.saturating_sub(1)];
+    out.clear();
+    match keys.get(next) {
+        Some(b) if next > 0 && a.curve != Curve::Stepped => {
+            let span = b.time - a.time;
+            let t = a.curve.ease(if span > 0.0 { (time - a.time) / span } else { 1.0 }, 0);
+            out.extend(a.value.iter().zip(b.value.iter()).map(|(x, y)| *x + (*y - *x) * t));
+        }
+        _ => out.extend_from_slice(&a.value),
+    }
+    true
 }
 
 /// The key of `keys` in effect at `time` (the last at or before it).

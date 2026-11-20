@@ -6,8 +6,11 @@
 
 #![deny(missing_docs)]
 
+use std::collections::{BTreeMap, HashMap, HashSet};
+
 use glam::{Mat4, Vec3};
 use ponko_ecs::{Component, Entity};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::gltf::{LoadedNode, load_nodes};
@@ -30,14 +33,19 @@ use crate::reflect::{JsonMap, NotSaved, WorldReflect};
 #[derive(Debug, Clone, Default, PartialEq)]
 #[non_exhaustive]
 pub struct GltfOptions {
-    /// Leave out the prefab nodes (`ponko:prefab`): after loading a world
-    /// save, which holds them already, spawn the file again with this.
+    /// Spawn no prefab node (`ponko:prefab`) that has no instance in a
+    /// loaded world save. Not needed to load a save: a scene spawned again
+    /// after a load adopts the instances the save holds by itself (see
+    /// [`GltfRoot::spawn`]); with this, nodes the save has no instance
+    /// for stay empty too. Also set on a scene spawned after loading a
+    /// save from before saves linked instances to their scene, whose
+    /// instances can't be told apart.
     pub no_saved_objects: bool,
 }
 
 impl GltfOptions {
-    /// The same options, leaving out the prefab nodes (see
-    /// [`no_saved_objects`](Self::no_saved_objects)).
+    /// The same options, spawning no prefab node a loaded save has no
+    /// instance for (see [`no_saved_objects`](Self::no_saved_objects)).
     #[must_use]
     pub fn without_saved_objects(self) -> Self {
         Self { no_saved_objects: true }
@@ -74,7 +82,8 @@ pub struct GltfRoot {
     /// The options it was spawned with.
     pub options: GltfOptions,
     nodes: Vec<SpawnedNode>,
-    /// The meshes made for its nodes, freed with it.
+    /// The meshes of its nodes: shared by every scene spawned from the
+    /// same file, freed with the last of them.
     meshes: Vec<Mesh>,
     /// The collision shapes made for its nodes, freed with it.
     #[cfg(feature = "physics3d")]
@@ -143,6 +152,61 @@ pub struct GltfNode {
 pub struct SpawnPoint {
     /// Its name: the value of `ponko:spawn`, or the node's name.
     pub name: String,
+}
+
+/// The meshes made for each glTF file spawned as a scene, one per node
+/// (`None` for a node without triangles), shared by every scene spawned
+/// from the file: a world resource the game doesn't see, kept across
+/// world loads so the meshes of scenes a load replaced can be freed.
+#[derive(Default)]
+pub(crate) struct GltfMeshes(HashMap<String, Vec<Option<Mesh>>>);
+
+/// The glTF scenes in the world and their prefab instances: a reflected
+/// resource, so world saves hold it. A scene spawned again after a load
+/// adopts the instances its saved record lists (see [`GltfRoot::spawn`]).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct GltfSceneSaves {
+    scenes: Vec<SavedScene>,
+}
+
+/// One scene of [`GltfSceneSaves`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SavedScene {
+    /// The file.
+    path: String,
+    /// Where its root was spawned: of several scenes of one file, a spawn
+    /// adopts the nearest.
+    at: Transform3D,
+    /// Its root while it is spawned. Roots aren't saved: `None` after a
+    /// load, until a spawn of the file adopts the record.
+    #[serde(skip)]
+    root: Option<Entity>,
+    /// Each prefab node's instance, by node path: the entity (dead once the
+    /// game despawned it), or none when the node was left out.
+    instances: BTreeMap<String, SavedInstance>,
+}
+
+/// A prefab node's instance in [`SavedScene`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct SavedInstance {
+    /// The prefab the node names.
+    prefab: String,
+    /// Its instance; `None` when the node was left out.
+    entity: Option<Entity>,
+}
+
+/// Present after loading a save written before saves linked glTF prefab
+/// instances to their scene (it has unlinked `GltfNode`s under
+/// `not_saved` and no [`GltfSceneSaves`]): its instances can't be told
+/// apart, so scenes spawned then leave their prefab nodes to the save, as
+/// [`GltfOptions::without_saved_objects`] did.
+pub(crate) struct UnlinkedGltfSave;
+
+/// Reflects [`GltfSceneSaves`] in `world`, so world saves hold it. Done
+/// by the first glTF scene spawned, or the first load of a save that holds
+/// it: games without glTF scenes don't list it among their resources.
+fn reflect_gltf_saves(world: &mut ponko_ecs::World) {
+    crate::reflect::WorldReflect::reflect_resource::<GltfSceneSaves>(world);
 }
 
 /// One node of a [`GltfScene`].
@@ -407,11 +471,17 @@ impl GltfRoot {
     ///   groups and render layers. The guide's "From Blender to the game"
     ///   lists them.
     ///
+    /// Every spawn of one file shares its meshes and materials: a hundred
+    /// spawns hold one copy, freed when the last of them is despawned.
+    ///
     /// Everything but the prefab instances carries
     /// [`NotSaved`]: world saves hold the prefab instances (the game's
-    /// state), the file rebuilds the rest. To load such a save, load it,
-    /// then spawn the file again with
-    /// [`GltfOptions::without_saved_objects`].
+    /// state) and a record of the scene, the file rebuilds the rest. To
+    /// load such a save, load it, then spawn the file again: the scene
+    /// adopts the saved instances (their entities, with what the game
+    /// changed) as its prefab nodes, and doesn't spawn again the ones the
+    /// game had despawned. Of several scenes of one file in a save, a
+    /// spawn adopts the one saved nearest to `at`.
     ///
     /// With [hot reload](crate::game::Game::hot_reload) on, exporting the
     /// file again updates the scene in place: nodes whose path is still in
@@ -472,8 +542,14 @@ impl GltfScene {
         let found = ctx.assets.asset_sources.find(path)?;
         let bytes = found.into_bytes().map_err(|e| e.with_path(path))?;
         let sources = &ctx.assets.asset_sources;
-        let loaded =
-            load_nodes(path, &bytes, &mut |name| sources.read(name), &|_| true).map_err(|e| Error::decode(path, e))?;
+        let loaded = load_nodes(
+            path,
+            &bytes,
+            &mut |name| sources.read(name),
+            &|_| true,
+            super::gltf::GpuFormats::default(),
+        )
+        .map_err(|e| Error::decode(path, e))?;
         let components = ctx.world.reflected_components();
         let plan = Plan::of(path, &loaded.nodes, &components)?;
         let nodes = plan
@@ -499,7 +575,11 @@ impl GltfScene {
 impl Ctx {
     /// [`GltfRoot::spawn`].
     pub(crate) fn spawn_gltf(&mut self, path: &str, at: Transform3D, options: GltfOptions) -> Result<Entity, Error> {
-        let (loaded, meshes, file) = self.gfx.load_node_meshes(path, false)?;
+        let shared = self
+            .world
+            .get_resource::<GltfMeshes>()
+            .and_then(|t| t.0.get(path).cloned());
+        let (loaded, meshes, file) = self.gfx.load_node_meshes(path, false, shared.as_deref())?;
         let root = self.world.spawn((
             at,
             GltfRoot {
@@ -512,9 +592,17 @@ impl Ctx {
             },
             NotSaved,
         ));
-        if let Err(e) = self.apply_gltf(root, path, &loaded.nodes, meshes) {
+        let adopt = self.claim_saved_scene(path, at, root);
+        if let Err(e) = self.apply_gltf(root, path, &loaded.nodes, meshes.clone(), adopt) {
             self.world.despawn(root);
+            self.forget_saved_scene(root);
             return Err(e);
+        }
+        let old = self.gltf_meshes().0.insert(path.to_string(), meshes);
+        if let Some(old) = old {
+            // A file that changed without hot reload: the scenes spawned
+            // before keep their meshes until they go.
+            self.release_gltf_meshes(path, old.into_iter().flatten().collect(), None);
         }
         if let Some(file) = file
             && !self.assets.watcher.watching(&file, |a| matches!(a, Asset::GltfScene))
@@ -539,7 +627,9 @@ impl Ctx {
             }
         }
         n += usize::from(self.world.despawn(root));
-        self.free_gltf_assets(&scene);
+        self.free_gltf_shapes(&scene);
+        self.release_gltf_meshes(&scene.path, scene.meshes.clone(), None);
+        self.forget_saved_scene(root);
         Some(n)
     }
 
@@ -553,46 +643,245 @@ impl Ctx {
             .filter(|(_, r)| r.path == path)
             .map(|(e, _)| e)
             .collect();
-        let mut refresh = true;
+        // The first scene reads the file again and makes new meshes, the
+        // others share them; the old ones go once no scene holds them.
+        let mut fresh: Option<Vec<Option<Mesh>>> = None;
+        let mut result = Ok(());
         for root in roots {
-            let (loaded, meshes, _) = self.gfx.load_node_meshes(path, refresh).map_err(|e| e.to_string())?;
-            refresh = false;
-            self.apply_gltf(root, path, &loaded.nodes, meshes)
-                .map_err(|e| e.to_string())?;
+            let loaded = self.gfx.load_node_meshes(path, fresh.is_none(), fresh.as_deref());
+            let applied = loaded.and_then(|(loaded, meshes, _)| {
+                self.apply_gltf(root, path, &loaded.nodes, meshes.clone(), false)
+                    .map(|()| meshes)
+            });
+            match applied {
+                Ok(meshes) => {
+                    fresh.get_or_insert(meshes);
+                }
+                Err(e) => {
+                    result = Err(e.to_string());
+                    break;
+                }
+            }
         }
-        Ok(())
+        if let Some(fresh) = fresh
+            && let Some(old) = self.gltf_meshes().0.insert(path.to_string(), fresh)
+        {
+            self.release_gltf_meshes(path, old.into_iter().flatten().collect(), None);
+        }
+        result
     }
 
-    /// Frees the meshes and collision shapes made for `scene`.
-    fn free_gltf_assets(&mut self, scene: &GltfRoot) {
-        for &mesh in &scene.meshes {
-            self.free(mesh);
+    /// The shared meshes of every spawned file.
+    fn gltf_meshes(&mut self) -> &mut GltfMeshes {
+        if self.world.get_resource::<GltfMeshes>().is_none() {
+            self.world.insert_resource(GltfMeshes::default());
         }
+        self.world.resource_mut::<GltfMeshes>()
+    }
+
+    /// Frees those of `candidates` (meshes made for file `path`) that no
+    /// scene holds any more, but `except`'s (a root being taken down).
+    /// When no scene of `path` is left, frees its shared meshes and the
+    /// materials and textures it made too.
+    fn release_gltf_meshes(&mut self, path: &str, mut candidates: Vec<Mesh>, except: Option<Entity>) {
+        let mut held: HashSet<u32> = HashSet::new();
+        let mut path_alive = false;
+        for (e, r) in self.world.query::<(Entity, &GltfRoot)>().iter() {
+            if Some(e) == except {
+                continue;
+            }
+            held.extend(r.meshes.iter().map(|m| m.id));
+            path_alive |= r.path == path;
+        }
+        if path_alive {
+            if let Some(current) = self.world.get_resource::<GltfMeshes>().and_then(|t| t.0.get(path)) {
+                held.extend(current.iter().flatten().map(|m| m.id));
+            }
+        } else if let Some(old) = self
+            .world
+            .get_resource_mut::<GltfMeshes>()
+            .and_then(|t| t.0.remove(path))
+        {
+            candidates.extend(old.into_iter().flatten());
+        }
+        for mesh in candidates {
+            // `insert` also skips a mesh listed twice.
+            if held.insert(mesh.id) {
+                self.free(mesh);
+            }
+        }
+        if !path_alive {
+            self.gfx.release_file_materials(path);
+        }
+    }
+
+    /// Frees the collision shapes made for `scene`.
+    #[allow(clippy::unused_self)]
+    fn free_gltf_shapes(&mut self, scene: &GltfRoot) {
         #[cfg(feature = "physics3d")]
         for &shape in &scene.shapes {
             self.free(shape);
+        }
+        #[cfg(not(feature = "physics3d"))]
+        let _ = scene;
+    }
+
+    /// Finds the saved record a scene of `path` spawned at `at` with root
+    /// `root` takes over: one whose root is gone (after a world load),
+    /// the nearest to `at`. Returns whether there was one, whose instances
+    /// the scene adopts. Otherwise records a new scene; after loading a
+    /// save that holds unlinked instances, it leaves its prefab nodes out.
+    fn claim_saved_scene(&mut self, path: &str, at: Transform3D, root: Entity) -> bool {
+        reflect_gltf_saves(&mut self.world);
+        if self.world.get_resource::<GltfSceneSaves>().is_none() {
+            self.world.insert_resource(GltfSceneSaves::default());
+        }
+        let alive: Vec<bool> = {
+            let saves = self.world.resource::<GltfSceneSaves>();
+            saves
+                .scenes
+                .iter()
+                .map(|s| s.root.is_some_and(|r| self.world.is_alive(r)))
+                .collect()
+        };
+        let unlinked = self.world.get_resource::<UnlinkedGltfSave>().is_some();
+        let saves = self.world.resource_mut::<GltfSceneSaves>();
+        let nearest = saves
+            .scenes
+            .iter()
+            .enumerate()
+            .filter(|(i, s)| s.path == path && !alive[*i])
+            .min_by(|(_, a), (_, b)| {
+                let (da, db) = (a.at.position.distance(at.position), b.at.position.distance(at.position));
+                da.total_cmp(&db)
+            })
+            .map(|(i, _)| i);
+        if let Some(i) = nearest {
+            let scene = &mut saves.scenes[i];
+            scene.root = Some(root);
+            scene.at = at;
+            return true;
+        }
+        saves.scenes.push(SavedScene {
+            path: path.to_string(),
+            at,
+            root: Some(root),
+            instances: BTreeMap::new(),
+        });
+        if unlinked {
+            eprintln!(
+                "ponko: {path}: the loaded save is from before saves linked glTF prefab instances to their scene: \
+                 its prefab nodes are left to the save (save again to link them from now on)"
+            );
+            if let Some(r) = self.world.get_mut::<GltfRoot>(root) {
+                r.options.no_saved_objects = true;
+            }
+        }
+        false
+    }
+
+    /// Drops the saved record of the scene whose root was `root`.
+    fn forget_saved_scene(&mut self, root: Entity) {
+        if let Some(saves) = self.world.get_resource_mut::<GltfSceneSaves>() {
+            saves.scenes.retain(|s| s.root != Some(root));
+        }
+    }
+
+    /// Before the world is replaced by `save`: a save that holds glTF scene
+    /// records needs them reflected to load.
+    pub(crate) fn gltf_before_world_load(&mut self, save: &Value) {
+        if save["resources"].get("GltfSceneSaves").is_some() {
+            reflect_gltf_saves(&mut self.world);
+        }
+    }
+
+    /// After the world was replaced by `save` (a world save or scene):
+    /// the saved scene records come from the save (a save without them
+    /// has none), a save from before they existed that holds glTF prefab
+    /// instances is noted ([`UnlinkedGltfSave`]), and the meshes of the
+    /// scenes that went with the old world are freed.
+    pub(crate) fn gltf_after_world_load(&mut self, save: &Value) {
+        let named = save["resources"].get("GltfSceneSaves").is_some();
+        if named {
+            if let Some(saves) = self.world.get_resource_mut::<GltfSceneSaves>() {
+                saves.scenes.iter_mut().for_each(|s| s.root = None);
+            }
+        } else {
+            self.world.remove_resource::<GltfSceneSaves>();
+        }
+        let unlinked = save["not_saved"]["GltfNode"].as_u64().unwrap_or(0) > 0;
+        if unlinked && !named {
+            self.world.insert_resource(UnlinkedGltfSave);
+        } else {
+            self.world.remove_resource::<UnlinkedGltfSave>();
+        }
+        let files: Vec<String> = self
+            .world
+            .get_resource::<GltfMeshes>()
+            .map(|t| t.0.keys().cloned().collect())
+            .unwrap_or_default();
+        for path in files {
+            self.release_gltf_meshes(&path, Vec::new(), None);
         }
     }
 
     /// Brings the scene of `root` to `nodes` (with a mesh made for each
     /// node that has one): checks everything that can fail first, then
     /// changes the world, keeping the entities of nodes whose path stays.
-    /// On an error nothing changed and `meshes` are freed.
+    /// On an error nothing changed and `meshes` are freed, unless another
+    /// scene holds them. `adopt`: the first spawn after a world load, with
+    /// the scene's saved record ([`GltfSceneSaves`]): its live instances
+    /// become its prefab nodes where they are, and nodes whose instance is
+    /// gone aren't spawned.
     fn apply_gltf(
         &mut self,
         root: Entity,
         path: &str,
         nodes: &[LoadedNode],
         meshes: Vec<Option<Mesh>>,
+        adopt: bool,
     ) -> Result<(), Error> {
         let made: Vec<Mesh> = meshes.iter().flatten().copied().collect();
         let checked = self.check_gltf(root, path, nodes);
-        let (plan, old, at) = match checked {
+        let (plan, mut old, at) = match checked {
             Ok(c) => c,
             Err(e) => {
-                made.iter().for_each(|&m| self.free(m));
+                self.release_gltf_meshes(path, made, Some(root));
                 return Err(e);
             }
+        };
+        // Prefab nodes the saved record says to leave out, and instances
+        // adopted from a save (which keep where the game left them).
+        let mut left_out: HashSet<String> = HashSet::new();
+        let mut adopted: HashSet<Entity> = HashSet::new();
+        let saved = self
+            .world
+            .get_resource::<GltfSceneSaves>()
+            .and_then(|s| s.scenes.iter().find(|s| s.root == Some(root)))
+            .map(|s| s.instances.clone())
+            .unwrap_or_default();
+        for (node_path, instance) in saved {
+            match instance.entity {
+                None => {
+                    left_out.insert(node_path);
+                }
+                Some(e) if adopt && self.world.is_alive(e) => {
+                    adopted.insert(e);
+                    old.nodes.push(SpawnedNode {
+                        path: node_path,
+                        entity: e,
+                        prefab: Some(instance.prefab),
+                        components: Vec::new(),
+                    });
+                }
+                Some(_) if adopt => {
+                    left_out.insert(node_path);
+                }
+                Some(_) => {}
+            }
+        }
+        let leave_out = |node: &Planned| {
+            node.props.prefab.is_some() && (old.options.no_saved_objects || left_out.contains(&node.path))
         };
         for (node, planned) in nodes.iter().zip(&plan.nodes) {
             if node.skinned && node.mesh.is_some() {
@@ -606,7 +895,7 @@ impl Ctx {
         let colliders = match self.gltf_colliders(path, &plan, nodes) {
             Ok(c) => c,
             Err(e) => {
-                made.iter().for_each(|&m| self.free(m));
+                self.release_gltf_meshes(path, made, Some(root));
                 return Err(e);
             }
         };
@@ -622,7 +911,14 @@ impl Ctx {
         let mut fresh_prefabs: Vec<(usize, Entity)> = Vec::new();
         for (i, node) in plan.nodes.iter().enumerate() {
             let Some(prefab) = &node.props.prefab else { continue };
-            if old.options.no_saved_objects || node.is_level {
+            if node.is_level {
+                continue;
+            }
+            let kept_adopted = old
+                .nodes
+                .iter()
+                .any(|o| o.path == node.path && o.prefab.as_ref() == Some(prefab) && adopted.contains(&o.entity));
+            if leave_out(node) && !kept_adopted {
                 continue;
             }
             let kept = old
@@ -638,7 +934,7 @@ impl Ctx {
                     for (_, e) in fresh_prefabs {
                         self.despawn_prefab(e);
                     }
-                    made.iter().for_each(|&m| self.free(m));
+                    self.release_gltf_meshes(path, made, Some(root));
                     #[cfg(feature = "physics3d")]
                     for c in &colliders {
                         if let crate::d3::Shape::Mesh(shape) = c.collider.shape {
@@ -667,7 +963,11 @@ impl Ctx {
                 Some(p) => (placed[p].0, compose3d(&placed[p].1, &node.local)),
                 None => (root, node.local),
             };
-            if node.is_level || (node.props.prefab.is_some() && old.options.no_saved_objects) {
+            let kept_adopted = old
+                .nodes
+                .iter()
+                .any(|o| o.path == node.path && adopted.contains(&o.entity));
+            if node.is_level || (leave_out(node) && !kept_adopted) {
                 placed.push((parent, offset));
                 continue;
             }
@@ -686,7 +986,9 @@ impl Ctx {
                     }
                     None => {
                         let e = before.map(|b| b.entity).expect("a kept prefab instance");
-                        self.world.insert(e, world_at);
+                        if !adopted.contains(&e) {
+                            self.world.insert(e, world_at);
+                        }
                         e
                     }
                 };
@@ -748,7 +1050,23 @@ impl Ctx {
             self.world.insert(e, c.body);
             self.world.insert(e, c.collider);
         }
-        self.free_gltf_assets(&old);
+        self.free_gltf_shapes(&old);
+        // The saved record: each prefab node's instance, or none.
+        let instances: BTreeMap<String, SavedInstance> = plan
+            .nodes
+            .iter()
+            .filter(|n| !n.is_level)
+            .filter_map(|n| {
+                let prefab = n.props.prefab.clone()?;
+                let entity = spawned.iter().find(|s| s.path == n.path).map(|s| s.entity);
+                Some((n.path.clone(), SavedInstance { prefab, entity }))
+            })
+            .collect();
+        if let Some(saves) = self.world.get_resource_mut::<GltfSceneSaves>()
+            && let Some(scene) = saves.scenes.iter_mut().find(|s| s.root == Some(root))
+        {
+            scene.instances = instances;
+        }
         if let Some(r) = self.world.get_mut::<GltfRoot>(root) {
             r.nodes = spawned;
             r.meshes = made;

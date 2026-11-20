@@ -1,0 +1,23 @@
+{
+  "frames": [
+    {"filename":"0:Body","frame":{"x":0,"y":0,"w":1,"h":1},"trimmed":true,"spriteSourceSize":{"x":1,"y":0,"w":1,"h":1},"sourceSize":{"w":2,"h":2},"duration":60},
+    {"filename":"1:Body","frame":{"x":1,"y":0,"w":1,"h":1},"trimmed":true,"spriteSourceSize":{"x":0,"y":1,"w":1,"h":1},"sourceSize":{"w":2,"h":2},"duration":140},
+    {"filename":"2:Body","frame":{"x":0,"y":1,"w":1,"h":1},"trimmed":true,"spriteSourceSize":{"x":0,"y":0,"w":1,"h":1},"sourceSize":{"w":2,"h":2},"duration":200},
+    {"filename":"0:Hat","frame":{"x":1,"y":1,"w":1,"h":1},"trimmed":true,"spriteSourceSize":{"x":1,"y":1,"w":1,"h":1},"sourceSize":{"w":2,"h":2},"duration":60}
+  ],
+  "meta": {
+    "image":"layers.png",
+    "layers":[{"name":"Body"},{"name":"Hat"}],
+    "frameTags":[
+      {"name":"Bounce","from":0,"to":2,"direction":"pingpong","repeat":"2"},
+      {"name":"BounceOnce","from":0,"to":2,"direction":"pingpong","repeat":1},
+      {"name":"Back","from":0,"to":2,"direction":"reverse"},
+      {"name":"Forward","from":0,"to":2,"direction":"forward"},
+      {"name":"ReverseBounce","from":0,"to":2,"direction":"pingpong_reverse"}
+    ],
+    "slices":[{"name":"Hitbox","keys":[
+      {"frame":0,"bounds":{"x":0,"y":0,"w":1,"h":2},"pivot":{"x":0,"y":1}},
+      {"frame":2,"bounds":{"x":0,"y":1,"w":2,"h":1},"center":{"x":0,"y":0,"w":1,"h":1}}
+    ]}]
+  }
+}

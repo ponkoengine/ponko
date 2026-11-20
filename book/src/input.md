@@ -44,13 +44,21 @@ For a first-person or orbit camera, lock the cursor and read raw motion:
 C++: `ctx.input.set_cursor_locked(true)`, `ctx.input.mouse_motion()`. See
 [3D physics](physics3d.md) for a walker that uses both.
 
+## Touch
+
+Fingers on a touch screen, the gestures they make (taps, swipes, pinches)
+and on-screen sticks and buttons have their own chapter:
+[Touch: gestures and on-screen controls](touch.md).
+
 ## Gamepads
 
 Xbox, PlayStation, Switch and most other controllers work, plugged in or
 over Bluetooth, and can come and go while the game runs.
 `ctx.input.gamepads()` lists the connected ones. Each keeps its **slot** while
-connected (`pad.slot()`: 0 is player one), and a pad plugged in later takes
-the lowest free slot.
+connected (`pad.slot()`: 0 is player one). A pad that is unplugged gets the
+same slot back when it returns, and a new pad takes the lowest free slot
+nobody is waiting for. Rumble, button prompts, gyro and assigning players
+are in [Controllers](controllers.md).
 
 <div class="lang-pair">
 <div>
@@ -97,7 +105,8 @@ Sticks and triggers are axes:
 `cargo run --example gamepad`.
 
 Gamepads need the `gamepad` cargo feature, on by default. Without it, or in
-[headless runs](headless.md), `ctx.input.gamepads()` is empty. On Linux, building
+[headless runs](headless.md), `ctx.input.gamepads()` is empty unless a test
+installs a backend such as `FakeGamepads` ([Controllers](controllers.md)). On Linux, building
 it needs the udev headers (`sudo apt-get install libudev-dev`).
 
 ## What was just pressed

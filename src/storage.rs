@@ -508,8 +508,9 @@ impl Storage {
     /// until the file is written, [`finish_saves`](Self::finish_saves) waits
     /// for every one, and so does dropping the storage when the game ends.
     /// The returned job says how the write went (keep it to find out; the
-    /// save is written either way). On the web, which has no threads here,
-    /// the save is written before this returns.
+    /// save is written either way). On the web the save is written before
+    /// this returns, on the page's thread, which the browser's storage
+    /// belongs to (in a build with threads too).
     ///
     /// ```
     /// use ponko::prelude::*;
@@ -542,7 +543,9 @@ impl Storage {
         let save = crate::reflect::WorldReflect::save(world);
         let (format, backend) = (self.format, self.backend.clone());
         let ticket = self.queue.ticket(vec![file.clone(), other.clone()]);
-        Ok(Job::spawn(move || {
+        // In a browser the database belongs to the page's thread, so the
+        // save runs there, at once, even when the game has threads.
+        Ok(Job::spawn_on_web_page(move || {
             let bytes = format.encode(&save);
             // The save is freed here too, not on the game's thread.
             drop(save);

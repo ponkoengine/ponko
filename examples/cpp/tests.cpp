@@ -1,9 +1,11 @@
 #include "ponko.hpp"
+#include <string_view>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <atomic>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <future>
 #include <fstream>
@@ -130,9 +132,12 @@ static void resources() {
     w.reflect_resource<game::Score>({ponko::field("red", &game::Score::red), ponko::field("blue", &game::Score::blue)});
     const std::string saved = w.save();
     CHECK(saved.find("\"game::Score\":{\"blue\":2,\"red\":3}") != std::string::npos);
+    const std::uint64_t hash = w.hash();
     w.set_resource(game::Score{0, 0});
+    CHECK(w.hash() != hash);
     w.load(saved);
     CHECK(w.resource<game::Score>().red == 3);
+    CHECK(w.hash() == hash);
     CHECK(w.remove_resource<game::Score>());
     CHECK(!w.remove_resource<game::Score>());
     CHECK(!w.try_resource<game::Score>());
@@ -316,7 +321,16 @@ static void three_d() {
         CHECK(ctx.target_cameras().size() == 2 && !ctx.target_cameras()[1].has_clip_plane);
         const std::uint8_t px[4] = {255, 255, 255, 255};
         auto plain = ctx.create_texture(1, 1, px, sizeof px);
-        throws([&] { ctx.set_target_cameras({ponko::target_camera_of(eye, plain)}); });
+        // A texture is not a render target: the typed helpers don't compile
+        // with one, and a C struct holding one is refused at run time.
+        static_assert(!std::is_convertible<ponko::texture, ponko::render_target>::value, "a texture is not a render target");
+        static_assert(std::is_convertible<ponko::render_target, ponko::texture>::value, "a render target is read as a texture");
+        static_assert(sizeof(ponko::render_target) == sizeof(ponko::texture), "same layout");
+        ponko::target_camera raw{eye, plain, false, {0, 0, 0, 0}};
+        throws([&] { ctx.set_target_cameras({raw}); });
+        throws([&] { (void)ctx.render_target_of(plain); });
+        CHECK(ctx.render_target_of(mirror).id == mirror.id && ctx.render_target_of(mirror).width == 32);
+        CHECK(mirror.texture().id == mirror.id && ctx.is_live(mirror) && ctx.is_live(mirror.texture()));
         throws([&] { ctx.create_render_target(0, 4); });
         ctx.set_target_cameras({});
         auto batch_material = ctx.create_material(ponko::material_of(ponko::colors::white));
@@ -363,7 +377,8 @@ static void three_d() {
         ctx.set_compute_passes({ponko::compute_pass_of(fade, mirror), ponko::compute_pass_of(fade, mirror, stone)});
         CHECK(ctx.compute_passes().size() == 2 && ctx.compute_passes()[1].material.id == stone.id);
         throws([&] { ctx.create_compute("bad", "fn compute(c: Cell) -> f32 { return 1.0; }"); });
-        throws([&] { ctx.set_compute_passes({ponko::compute_pass_of(fade, plain)}); });
+        ponko::compute_pass raw_pass{false, {}, fade, plain, false, {}};  // a texture: refused at run time
+        throws([&] { ctx.set_compute_passes({raw_pass}); });
         throws([&] { ctx.set_compute_passes({ponko::compute_pass_of(ponko::compute{9}, mirror)}); });
         ctx.set_compute_passes({});
 
@@ -582,6 +597,28 @@ static void parallel_queries() {
 
 struct Fuel { int value; };
 struct Heat { int value; };
+
+struct Tank {};
+struct Armor { int value; };
+
+static void required_components() {
+    ponko::world w;
+    w.require<Tank>(Fuel{50});
+    w.require<Fuel>(Heat{7});      // through: a tank gets heat too
+    const auto t = w.spawn(Tank{});
+    CHECK(w.get<Fuel>(t).value == 50 && w.get<Heat>(t).value == 7);
+    const auto given = w.spawn(Tank{}, Fuel{1});   // given values win
+    CHECK(w.get<Fuel>(given).value == 1 && w.get<Heat>(given).value == 7);
+    const auto later = w.spawn(Armor{3});
+    w.set(later, Tank{});          // a set that gives a Tank brings the rest
+    CHECK(w.get<Fuel>(later).value == 50 && w.get<Armor>(later).value == 3);
+    w.require<Tank>(Fuel{60});     // again: replaces the value
+    CHECK(w.get<Fuel>(w.spawn(Tank{})).value == 60);
+    // Converted built-ins can't be copied from bytes.
+    bool threw = false;
+    try { w.require<Tank>(ponko::sprite{}); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+}
 
 static void change_detection() {
     using list = std::vector<ponko::entity>;
@@ -1107,6 +1144,17 @@ static void rng_matches_rust() {
     CHECK(ponko::random(7).stream(3).u64() == 0x6045c0e00af2e148ull);
     ponko::rng f(1);
     for (int i = 0; i < 1000; ++i) { float x = f.f32(); CHECK(x >= 0 && x < 1); CHECK(f.below(10) < 10); }
+    // unit_vec2: the same bits as Rust's (pinned in src/random.rs), no sin or cos involved.
+    ponko::rng d(42);
+    const std::uint32_t expected[4][2] = {
+        {0xbf7ffc9fu, 0xbc266865u}, {0x3f2e9265u, 0xbf3b3eb5u}, {0xbf70cf38u, 0x3eadbea9u}, {0xbd82aa6bu, 0xbf7f7a7au}};
+    for (const auto& want : expected) {
+        const ponko::vec2 v = d.unit_vec2();
+        std::uint32_t got[2];
+        std::memcpy(&got[0], &v.x, 4);
+        std::memcpy(&got[1], &v.y, 4);
+        CHECK(got[0] == want[0] && got[1] == want[1]);
+    }
 }
 
 static void attachments() {
@@ -1511,6 +1559,25 @@ static void asset_streaming() {
         CHECK(ctx.asset_state(ponko::residency_kind::mesh, "models/nope.glb") == ponko::asset_state::failed);
         CHECK(ctx.asset_error(ponko::residency_kind::mesh, "models/nope.glb").find("nope.glb") != std::string::npos);
         CHECK(ctx.asset_error(ponko::residency_kind::mesh, "models/house.glb").empty());
+        ponko::streamed_asset assets[3]{};
+        char names[128]{};
+        std::size_t name_bytes = 0;
+        CHECK(ctx.streamed_assets_into(assets, 3, names, sizeof names, name_bytes) == 3);
+        CHECK(name_bytes <= sizeof names);
+        CHECK(std::string_view(names + assets[0].name_offset, assets[0].name_len) == "models/house.glb");
+        CHECK(assets[0].has_handle && assets[0].id == house.id);
+        CHECK(std::string_view(names + assets[2].name_offset, assets[2].name_len) == "crab.png");
+        CHECK(assets[2].has_handle && assets[2].id == crab->id);
+        ponko::mesh_cost cost{};
+        CHECK(ctx.mesh_costs_into(&cost, 1, names, sizeof names, name_bytes) == 0 && name_bytes == 0);
+
+        auto debug = ctx.debug();
+        debug.set_enabled(true);
+        auto style = ponko::debug_draw::style_ex(ponko::draw_space::screen);
+        CHECK(style.space == PONKO_DRAW_SPACE_SCREEN);
+        debug.line_ex({0, 0}, {10, 10}, ponko::colors::white, style);
+        CHECK(debug.stats().lines_2d == 1);
+
         auto e = ctx.world().spawn(ponko::transform3d_at({0, 0, 0}));
         ctx.set_lod_group(e, 4, {ponko::lod_level{0.0f, 0, {ponko::lod_renderer_of(ponko::mesh_none)}, false, {}}});
         ctx.set_streamed_lod(e, {"models/house.glb"});
@@ -1552,6 +1619,8 @@ static void handle_lifecycle() {
         auto pixel = ctx.create_texture(1, 1, px, sizeof px);
         CHECK(ctx.asset_count(ponko::asset_class::texture).live == textures.live + 1);
         CHECK(ctx.asset_count(ponko::asset_class::texture).bytes == textures.bytes + 4);
+        ponko::asset_record oldest{};
+        CHECK(ctx.asset_handles_into(ponko::asset_class::texture, &oldest, 1) == textures.live + 1);
         bool listed = false;
         for (const auto& r : ctx.asset_handles(ponko::asset_class::texture)) {
             if (r.id == pixel.id) listed = r.owner == static_cast<std::uint32_t>(ponko::asset_owner::code) && r.bytes == 4;
@@ -1811,6 +1880,7 @@ static void animators() {
         ctx.animator_update(e, 0.75f);
         CHECK(std::fabs(ctx.joint_pose(e, arm).position.y - 1.5f) < 1e-4f);
         CHECK(ctx.animator_normalized_time(e) == 0.75f);
+        CHECK(ctx.animator_normalized_time_f64(e) == 0.75);
         CHECK(ctx.animator_next_event(e) == std::optional<std::string>("half"));
         CHECK(!ctx.animator_next_event(e));
         throws_invalid([&] { ctx.animator_set_bool(e, speed, true); }, "not a bool"); // speed is a float
@@ -1835,6 +1905,50 @@ static void animators() {
         ctx.animator_update(e, 0.1f);
         auto [moved, turned] = ctx.animator_root_motion(e);
         CHECK(moved.x == 0 && moved.z == 0 && turned.w == 1); // rising isn't horizontal
+    });
+    std::filesystem::remove(file);
+}
+
+// Crowds: "rise" baked on a two-joint skeleton, a skinned post as the level,
+// characters made, counted, replaced, rejected and freed.
+static void crowds() {
+    const auto file = write_rise_gltf("ponko-cpp-crowd.gltf");
+    const std::string path = file.string();
+    ponko::game("crowds", 1, 1).run_headless(0, [&](ponko::ctx& ctx) {
+        auto rise = ctx.load_clip(path.c_str(), "rise");
+        auto figure = ctx.world().spawn(ponko::transform3d_at({0, 0, 0}));
+        ctx.set_skeleton(figure, {ponko::joint{"root"}, ponko::joint{"arm", 0, ponko::transform3d_at({0, 1, 0})}});
+        auto post = ponko::mesh_data::cube(0.2f);
+        std::vector<std::array<std::uint16_t, 4>> joints;
+        std::vector<std::array<float, 4>> weights;
+        auto view = post.view();
+        for (std::size_t i = 0; i < view.vertex_count; ++i) {
+            joints.push_back({std::uint16_t(view.positions[i].y > 0 ? 1 : 0), 0, 0, 0});
+            weights.push_back({1, 0, 0, 0});
+        }
+        post.set_skin(joints, weights);
+        auto mesh = ctx.create_skinned_mesh(post, ctx.default_material(), figure);
+        auto animation = ctx.bake_crowd_animation(figure, {ponko::crowd_clip_of(rise)});
+        CHECK(animation.clip("rise") == std::optional<std::uint16_t>(0));
+        CHECK(!animation.clip("walk"));
+        throws([&] { ctx.bake_crowd_animation(figure, {ponko::crowd_clip_of(rise)}, 0); });
+        std::vector<ponko::crowd_instance> people;
+        for (int i = 0; i < 4; ++i) people.push_back(ponko::crowd_instance_at({float(i), 0, 0}));
+        people[1].time = 0.5f;
+        const float far = std::numeric_limits<float>::infinity();
+        auto crowd = ctx.create_crowd(animation, {{mesh, 0, far, true, true, 4}}, people);
+        CHECK(ctx.crowd_len(crowd) == std::optional<std::size_t>(4));
+        throws([&] { ctx.create_crowd(animation, {{mesh, 0, far, true, true, 5}}, people); });
+        people[3].clip = 2;
+        throws([&] { ctx.update_crowd(crowd, people); });
+        CHECK(ctx.crowd_len(crowd) == std::optional<std::size_t>(4));
+        people.pop_back();
+        ctx.update_crowd(crowd, people);
+        CHECK(ctx.crowd_len(crowd) == std::optional<std::size_t>(3));
+        ctx.free_crowd(crowd);
+        CHECK(!ctx.crowd_len(crowd));
+        throws([&] { ctx.update_crowd(crowd, people); });
+        ctx.free_crowd(crowd);
     });
     std::filesystem::remove(file);
 }
@@ -2141,6 +2255,34 @@ static void contacts3d() {
     CHECK(plain.get<ponko::contact_modifier3d>(e).hook);
     m.one_way_angle = -1;
     throws([&] { plain.set(e, m); });
+}
+
+// A lobby client with no server behind it (the full flow runs against a real
+// server in crates/ponko_ffi/tests/lobby.rs).
+static void lobby_client() {
+    throws([] { ponko::lobby::join("not an address"); });
+    auto lobby = ponko::lobby::join("127.0.0.1:9");
+    lobby.poll();
+    lobby.create_room(4); // waits for the server's answer
+    lobby.join_room("KQ7X2M");
+    lobby.leave_room();
+    lobby.queue("duel", 2, 1500);
+    lobby.cancel_queue();
+    lobby.set_meta("mode=duel");
+    throws([&] { lobby.relay(0, PONKO_LANE_RELIABLE, std::string("not in a room")); });
+    throws([&] { lobby.disconnect(); });
+    CHECK(!lobby.next_event());
+    auto state = lobby.state();
+    CHECK(!state.connected && state.me == 0 && !state.in_room);
+    CHECK(lobby.members().empty());
+    CHECK(lobby.room_meta().empty());
+    ponko::lobby moved = std::move(lobby);
+    CHECK(!moved.state().connected);
+    // WebRTC endpoints through the lobby: member ids start at 1, and this
+    // build has no `webrtc` feature (crates/ponko_ffi/tests/rtc.rs has the flow).
+    throws([&] { moved.rtc_join(0, nullptr); });
+    auto pair = ponko::net_messages::loopback(2);
+    CHECK(pair[0].rtc_peer(1) == 0);
 }
 
 // Two endpoints in memory: connect, then a reliable message and a broadcast.
@@ -3289,6 +3431,21 @@ static void native_coverage() {
         })
         .run_headless(3);
     CHECK(started && cancelled);
+    // Live input recorded from a system: it starts on the next tick.
+    std::optional<ponko::input_scenario> recorded;
+    bool none_after = false;
+    ponko::game("record", 1, 1)
+        .sim_system([&](ponko::ctx& ctx) {
+            if (ctx.sim_tick() == 0) ctx.start_input_recording();
+            if (ctx.sim_tick() == 2) ctx.feed_input(ponko::input_event::key(PONKO_KEY_SPACE, true));
+            if (ctx.sim_tick() == 4) {
+                recorded = ctx.stop_input_recording();
+                none_after = !ctx.stop_input_recording();
+            }
+        })
+        .run_headless(5);
+    CHECK(recorded && none_after && recorded->ticks() == 4 && recorded->step_count() == 1);
+    CHECK(recorded->to_json().find("\"tick\":1") != std::string::npos);
 }
 
 // The small wrappers added for full C coverage: defaults, math and mesh data.
@@ -3701,6 +3858,64 @@ static void ime_composition() {
     });
 }
 
+static void touch_input() {
+    ponko::game("c++ touch", 960, 540).run_headless(0, [](ponko::ctx& ctx) {
+        using ponko::action;
+        using ponko::action_binding;
+        ctx.set_action("fire", action::button({action_binding::gesture(ponko::gesture::tap)}));
+        ctx.set_action("zoom", action::axis({action_binding::gesture_axis(ponko::gesture_axis::pinch)}));
+        ctx.set_action("pan", action::axis2({action_binding::drag(2.0f)}));
+        ctx.set_action("move", action::axis2({action_binding::keys2(PONKO_KEY_A, PONKO_KEY_D, PONKO_KEY_W, PONKO_KEY_S)}));
+        ctx.set_action("jump", action::button({action_binding::key(PONKO_KEY_SPACE)}));
+
+        // A tap presses "fire" and is a gesture event and a press a rebinding screen can bind.
+        ctx.feed_touch(1, ponko::touch_phase::started, {100, 80});
+        ctx.feed_touch(1, ponko::touch_phase::ended, {101, 80});
+        CHECK(ctx.action_pressed("fire"));
+        const auto events = ctx.gesture_events();
+        CHECK(events.size() == 1 && events[0].gesture == static_cast<std::uint32_t>(ponko::gesture::tap));
+        const auto pressed = ctx.pressed_this_frame();
+        CHECK(pressed.size() == 1 && pressed[0].is_gesture() && pressed[0].gesture() == ponko::gesture::tap);
+
+        // A finger moving is a drag: listed, its movement on "pan" (scaled by 2).
+        ctx.feed_touch(2, ponko::touch_phase::started, {300, 300});
+        ctx.feed_touch(2, ponko::touch_phase::moved, {340, 290});
+        const auto fingers = ctx.touches();
+        CHECK(fingers.size() == 1 && fingers[0].id == 2 && !fingers[0].claimed);
+        CHECK(ctx.drag_delta().x == 40 && ctx.pinch_scale() == 1 && ctx.rotation_delta() == 0);
+        CHECK(ctx.action_axis2("pan").x == 80);
+        ctx.feed_touch(2, ponko::touch_phase::cancelled, {340, 290});
+
+        auto settings = ctx.gesture_settings();
+        CHECK(settings.long_press_time == 0.5f);
+        settings.long_press_time = 0.8f;
+        ctx.set_gesture_settings(settings);
+        CHECK(ctx.gesture_settings().long_press_time == 0.8f);
+
+        // On-screen controls: a finger on the button holds "jump"; the stick walks.
+        ctx.set_touch_device(true);
+        CHECK(ctx.touch_device());
+        ctx.set_touch_controls(ponko::touch_controls().stick("move").button("jump", "A").corner_button("pause", "II"));
+        const auto stick = ctx.touch_control_center("move");
+        const auto jump = ctx.touch_control_center("jump");
+        CHECK(stick && jump && stick->x < 480 && jump->x > 480);
+        CHECK(!ctx.touch_control_center("nope") && !ctx.set_touch_control_shown("nope", false));
+        ctx.feed_touch(3, ponko::touch_phase::started, *jump);
+        ctx.feed_touch(4, ponko::touch_phase::started, *stick);
+        ctx.feed_touch(4, ponko::touch_phase::moved, {stick->x + 300, stick->y});
+        CHECK(ctx.action_down("jump") && ctx.action_axis2("move").x > 0.99f);
+        CHECK(ctx.set_touch_control_shown("pause", false));
+        ctx.set_touch_controls_show(ponko::touch_show::never);
+        ctx.remove_touch_controls();
+        CHECK(!ctx.touch_control_center("move"));
+    });
+
+    // A scenario's touch step.
+    ponko::input_scenario scenario;
+    scenario.touch(2, 1, ponko::touch_phase::started, {40, 50});
+    CHECK(scenario.to_json().find("\"touch\"") != std::string::npos);
+}
+
 static void localization() {
     CHECK(ponko::plural("en", 1) == ponko::plural_category::one);
     CHECK(ponko::plural("ar", 11) == ponko::plural_category::many);
@@ -3756,13 +3971,13 @@ static void skeletons2d() {
       "graph": { "parameters": [{ "name": "speed", "float": 0 }, { "name": "jump", "trigger": false }],
         "states": [{ "name": "idle", "clip": "idle" }, { "name": "wave", "clip": "wave", "loop": false }],
         "transitions": [{ "from": "idle", "to": "wave", "when": [{ "trigger": "jump" }] }] } })";
-    const std::string sheared = R"({ "skeleton": { "spine": "4.2.11" },
-      "bones": [{ "name": "root" }, { "name": "arm", "parent": "root", "shearX": 4 }] })";
+    const std::string no_scale = R"({ "skeleton": { "spine": "4.2.11" },
+      "bones": [{ "name": "root" }, { "name": "arm", "parent": "root", "inherit": "noScale" }] })";
     ponko::game("skeletons2d", 1, 1).hot_reload(false).run_headless(0, [&](ponko::ctx& ctx) {
-        ctx.add_asset_source(ponko::memory_source("skeletons").with("rig.json", rig).with("sheared.json", sheared));
+        ctx.add_asset_source(ponko::memory_source("skeletons").with("rig.json", rig).with("no-scale.json", no_scale));
         CHECK(ctx.load_skeleton2d("rig.json").empty());
-        auto warnings = ctx.load_skeleton2d("sheared.json");
-        CHECK(warnings.size() == 1 && warnings[0].find("sheared.json: Spine shear") == 0);
+        auto warnings = ctx.load_skeleton2d("no-scale.json");
+        CHECK(warnings.size() == 1 && warnings[0].find("no-scale.json: Spine inherit mode") == 0);
         throws_kind([&] { ctx.load_skeleton2d("missing.json"); }, PONKO_ERROR_NOT_FOUND);
 
         ponko::entity e = ctx.world().spawn(ponko::transform_at({0, 0}));
@@ -3783,6 +3998,7 @@ static void skeletons2d() {
         CHECK(ctx.skeleton2d_state(e) == std::optional<std::size_t>(wave));
         CHECK(std::fabs(ctx.skeleton2d_normalized_time(e) - 0.5f) < 1e-4f && !ctx.skeleton2d_finished(e));
         CHECK(std::fabs(ctx.skeleton2d_bone_position(e, 0).x - 5) < 1e-4f);
+        CHECK(ctx.skeleton2d_normalized_time_f64(e) == 0.5);
 
         ctx.skeleton2d_play(e, "wave", false);
         ctx.skeleton2d_update(e, 1.5f);
@@ -3800,6 +4016,21 @@ static void skeletons2d() {
         ctx.skeleton2d_update(e, 0);
         CHECK(std::fabs(ctx.skeleton2d_bone_rotation(e, upper) - 1.5707964f) < 1e-4f);
         ctx.skeleton2d_clear_ik_target(e, reach);
+
+        // One-off posing after the update: look-at, then two-bone IK.
+        std::size_t lower = ctx.skeleton2d_bone_index(e, "lower");
+        ctx.skeleton2d_set_ik_mix(e, reach, 0);
+        ctx.skeleton2d_update(e, 0);
+        ctx.skeleton2d_look_at(e, upper, {0, 10});
+        CHECK(std::fabs(ctx.skeleton2d_bone_rotation(e, upper) - 1.5707964f) < 1e-4f);
+        ctx.skeleton2d_two_bone_ik(e, upper, lower, {10, 10});
+        CHECK(std::fabs(ctx.skeleton2d_bone_rotation(e, upper)) < 1e-4f);
+        CHECK(std::fabs(ctx.skeleton2d_bone_rotation(e, lower) - 1.5707964f) < 1e-4f);
+        CHECK(std::fabs(ctx.skeleton2d_bone_position(e, lower).x - 10) < 1e-4f);
+        ctx.skeleton2d_two_bone_ik(e, upper, lower, {10, 10}, false);
+        CHECK(std::fabs(ctx.skeleton2d_bone_position(e, lower).y - 10) < 1e-4f);
+        throws_invalid([&] { ctx.skeleton2d_two_bone_ik(e, lower, upper, {10, 10}); },
+                       "the lower bone must be a child of the upper one");
 
         std::size_t body = ctx.skeleton2d_slot_index(e, "body");
         ctx.skeleton2d_set_attachment(e, body, "fist");
@@ -4222,6 +4453,43 @@ static void draw_space_names_the_coordinates() {
     CHECK(!ponko::with_space(screen, ponko::draw_space::world).screen);
 }
 
+// Behaviour trees and brains: errors, the blackboard, parameters, reports, the trace, utility helpers.
+static void behavior_trees() {
+    bool threw = false;
+    try {
+        ponko::ai::behavior_tree bad(R"({"root": {"sequense": []}})");
+    } catch (const ponko::error& e) {
+        threw = std::string(e.what()).find("root: no node kind") != std::string::npos;
+    }
+    if (!threw) std::abort();
+    ponko::ai::behavior_tree tree(R"({"root": {"sequence": [{"do": "aim", "time": 0.5}, {"do": "fire"}]}})");
+    if (tree.size() != 3) std::abort();
+    ponko::ai::brain b;
+    const auto aim = ponko::ai::key("aim"), fire = ponko::ai::key("fire"), time = ponko::ai::key("time");
+    const auto ammo = ponko::ai::key("ammo"), loaded = ponko::ai::key("loaded");
+    b.set_num(ammo, 3);
+    b.set_flag(loaded, true);
+    if (b.num(ammo).value_or(0) != 3 || !b.flag(loaded).value_or(false) || b.num(loaded)) std::abort();
+    if (b.action() != 0) std::abort();
+    b.think(tree, 0, 0.1f);
+    if (!b.doing(aim) || !b.started() || b.param(time).value_or(0) != 0.5f) std::abort();
+    if (ponko::ai::key_name(aim) != "aim") std::abort();
+    b.succeed();
+    if (b.status() != ponko::ai::status::success) std::abort();
+    b.think(tree, 1, 0.1f);
+    if (!b.doing(fire)) std::abort();
+    if (b.trace() != "> sequence\n  + do aim (time: 0.5)\n  > do fire\n") {
+        std::fprintf(stderr, "trace: %s", b.trace().c_str());
+        std::abort();
+    }
+    if (b.blackboard_json() != R"({"ammo":3.0,"loaded":true})") {
+        std::fprintf(stderr, "blackboard: %s\n", b.blackboard_json().c_str());
+        std::abort();
+    }
+    if (ponko::ai::curve(PONKO_AI_CURVE_QUADRATIC, 0.5f) != 0.25f) std::abort();
+    if (ponko::ai::combine({0.5f, 0.5f}) != 0.390625f) std::abort();
+}
+
 // The pointer, the wheel, the sounds started, quitting and zoom_at, headless; a button that closes its screen.
 static void headless_play() {
     ponko::game("headless play", 800, 600).run_headless(0, [](ponko::ctx& ctx) {
@@ -4270,7 +4538,59 @@ static void headless_play() {
     });
 }
 
+// Controllers: hot-plug edges, rumble, motion, the last used device, players and prompts.
+static void controllers() {
+    ponko::game("controllers", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        ponko::action_map map;
+        map.set("jump", ponko::action::button({ponko::action_binding::key(PONKO_KEY_SPACE),
+                                               ponko::action_binding::button(ponko::gamepad{0}, PONKO_GAMEPAD_SOUTH)}));
+        ctx.set_actions(map);
+        CHECK(ctx.last_device() == ponko::input_device::keyboard_mouse());
+        CHECK(ctx.action_glyphs("jump").label() == "Space");
+
+        ctx.feed_input(ponko::input_event::connected(ponko::gamepad{0}));
+        CHECK(ctx.gamepads_connected().size() == 1 && ctx.gamepads_disconnected().empty());
+        CHECK(ctx.gamepad_info(ponko::gamepad{0}).has_value() && !ctx.gamepad_info(ponko::gamepad{3}));
+        CHECK(ctx.gamepad_name(ponko::gamepad{0}).empty());
+        ctx.set_gamepad_family(ponko::gamepad{0}, ponko::controller_family::playstation);
+        ctx.feed_input(ponko::input_event::button(ponko::gamepad{0}, PONKO_GAMEPAD_START, true));
+        CHECK(ctx.last_device() == ponko::input_device::of(ponko::gamepad{0}) && ctx.last_device_changed());
+        CHECK(ctx.action_glyphs("jump").label() == "Cross");
+        CHECK(ctx.action_glyphs_for("jump", ponko::input_device::keyboard_mouse()).label() == "Space");
+
+        ctx.rumble(ponko::gamepad{0}, {1.0f, 0.5f, 0, 0, 1.0f});
+        CHECK(ctx.rumble_levels(ponko::gamepad{0}).strong == 1.0f);
+        ctx.stop_rumble(ponko::gamepad{0});
+        CHECK(ctx.rumble_levels(ponko::gamepad{0}).strong == 0.0f);
+
+        CHECK(!ctx.gamepad_motion(ponko::gamepad{0}));
+        ctx.feed_gamepad_motion(ponko::gamepad{0}, {{0, 1, 0}, {0, 9.81f, 0}});
+        CHECK(ctx.gamepad_motion(ponko::gamepad{0})->gyro.y == 1.0f);
+
+        auto pad = ctx.join_pressed(PONKO_GAMEPAD_START);
+        CHECK(pad && pad->slot == 0);
+        auto player = ctx.free_player();
+        CHECK(player && *player == 0);
+        ctx.assign_player(*player, ponko::input_device::of(*pad));
+        CHECK(ctx.player_connected(0) && ctx.player_device(0) == ponko::input_device::of(*pad));
+        CHECK(!ctx.join_pressed(PONKO_GAMEPAD_START));
+        ctx.unassign_player(0);
+        CHECK(!ctx.player_device(0));
+
+        ponko::glyph_atlas atlas(32);
+        std::uint32_t w = 0, h = 0;
+        CHECK(atlas.pixels(w, h) != nullptr && w == 32 * 16);
+        auto jump = ctx.action_glyphs("jump");
+        CHECK(atlas.region(*jump.begin()).max.x - atlas.region(*jump.begin()).min.x == 32);
+        CHECK(ctx.glyph_texture(atlas).width == w);
+        CHECK(ctx.draw_prompt(atlas, {8, 8}, 32, jump, nullptr) >= 32);
+        CHECK(ponko::glyph_label(*jump.begin()) == "Cross");
+    });
+}
+
 int main() {
+    controllers();
+    required_components();
     game_states();
     draw_space_names_the_coordinates();
     localization();
@@ -4290,6 +4610,7 @@ int main() {
     world_text();
     three_d();
     skeletons();
+    crowds();
     skeletons2d();
     lod_groups();
     morph_targets();
@@ -4325,6 +4646,7 @@ int main() {
     plugins_setups_and_system_ids();
     lockstep();
     messages();
+    lobby_client();
     replication();
     navigation();
     navigation_carving();
@@ -4347,9 +4669,11 @@ int main() {
     remaining_bindings();
     focus_huds_and_collision_files();
     ime_composition();
+    touch_input();
     versioned_descriptors_retargeting_and_prediction();
     versioned_render_descriptors();
     camera_rigs();
     headless_play();
+    behavior_trees();
     std::cout << "C++ wrapper tests passed\n";
 }

@@ -1,0 +1,138 @@
+{
+  "frames": [
+    {
+      "duration": 100,
+      "filename": "0",
+      "frame": {
+        "h": 5,
+        "w": 7,
+        "x": 0,
+        "y": 0
+      },
+      "rotated": false,
+      "sourceSize": {
+        "h": 5,
+        "w": 7
+      },
+      "spriteSourceSize": {
+        "h": 5,
+        "w": 7,
+        "x": 0,
+        "y": 0
+      },
+      "trimmed": false
+    },
+    {
+      "duration": 150,
+      "filename": "1",
+      "frame": {
+        "h": 5,
+        "w": 7,
+        "x": 7,
+        "y": 0
+      },
+      "rotated": false,
+      "sourceSize": {
+        "h": 5,
+        "w": 7
+      },
+      "spriteSourceSize": {
+        "h": 5,
+        "w": 7,
+        "x": 0,
+        "y": 0
+      },
+      "trimmed": false
+    },
+    {
+      "duration": 200,
+      "filename": "2",
+      "frame": {
+        "h": 5,
+        "w": 7,
+        "x": 0,
+        "y": 5
+      },
+      "rotated": false,
+      "sourceSize": {
+        "h": 5,
+        "w": 7
+      },
+      "spriteSourceSize": {
+        "h": 5,
+        "w": 7,
+        "x": 0,
+        "y": 0
+      },
+      "trimmed": false
+    }
+  ],
+  "meta": {
+    "app": "ponko cook",
+    "format": "RGBA8888",
+    "frameTags": [
+      {
+        "direction": "forward",
+        "from": 0,
+        "name": "Walk",
+        "to": 2
+      },
+      {
+        "direction": "pingpong",
+        "from": 1,
+        "name": "Wave",
+        "repeat": "3",
+        "to": 2
+      }
+    ],
+    "image": "hero.png",
+    "scale": "1",
+    "size": {
+      "h": 10,
+      "w": 14
+    },
+    "slices": [
+      {
+        "color": "#0000ffff",
+        "keys": [
+          {
+            "bounds": {
+              "h": 5,
+              "w": 5,
+              "x": 1,
+              "y": 0
+            },
+            "frame": 0,
+            "pivot": {
+              "x": 2,
+              "y": 4
+            }
+          }
+        ],
+        "name": "Hitbox"
+      },
+      {
+        "color": "#0000ffff",
+        "keys": [
+          {
+            "bounds": {
+              "h": 5,
+              "w": 7,
+              "x": 0,
+              "y": 0
+            },
+            "center": {
+              "h": 3,
+              "w": 5,
+              "x": 1,
+              "y": 1
+            },
+            "frame": 0
+          }
+        ],
+        "name": "Panel"
+      }
+    ],
+    "version": "0.1.0"
+  }
+}

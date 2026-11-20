@@ -58,6 +58,8 @@ pub(crate) enum Asset {
     SkyShader(u32),
     /// A file of a level (`Ctx::spawn_level`); the watched name is the level's path.
     Level,
+    /// An Aseprite export or sheet, keyed by the JSON name and split mode.
+    Aseprite(bool),
     /// A glTF file spawned as a scene (`GltfRoot::spawn`); the watched name is its path.
     #[cfg(feature = "3d")]
     GltfScene,
@@ -117,12 +119,18 @@ impl SharedWatcher {
     }
 
     /// Whether `path` is watched for an asset `matches` picks.
+    #[cfg(feature = "3d")]
     pub(crate) fn watching(&self, path: &Path, matches: impl Fn(&Asset) -> bool) -> bool {
         self.0
             .borrow()
             .files
             .iter()
             .any(|f| f.path == path && matches(&f.asset))
+    }
+
+    /// Stops watching the previous dependencies of this named asset.
+    pub(crate) fn forget_named(&self, name: &str, asset: Asset) {
+        self.0.borrow_mut().files.retain(|f| f.name != name || f.asset != asset);
     }
 
     /// As [`Watcher::forget`].
@@ -158,7 +166,12 @@ impl Watcher {
 
     /// Remembers that `asset` came from `path`.
     pub(crate) fn watch(&mut self, name: &str, path: PathBuf, asset: Asset) {
-        if !self.on {
+        if !self.on
+            || self
+                .files
+                .iter()
+                .any(|f| f.path == path && f.asset == asset && f.name == name)
+        {
             return;
         }
         let stamp = Stamp::of(&path);

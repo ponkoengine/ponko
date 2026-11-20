@@ -56,12 +56,15 @@ pub struct Level;
 impl Plugin for Level {
     fn build(&self, game: Game) -> Game {
         game.physics(vec2(0.0, 900.0)) // gravity: 900 pixels/s², y is down
-            .system(follow_crab)
     }
 
     fn setup(&self, ctx: &mut Ctx) {
         ctx.gfx.clear(Color::hex(0x8ec8f0)); // the sky
         ctx.camera.zoom = 2.0; // 16-pixel tiles, drawn twice as big
+        // A camera rig: it follows the entity with a `CameraTarget` (the
+        // crab), without showing past the level's edges.
+        let level = Rect::new(0.0, 0.0, LEVEL_SIZE.x, LEVEL_SIZE.y);
+        ctx.world.insert_resource(FollowCamera::default().with_bounds(level));
         start_level(ctx);
     }
 }
@@ -92,21 +95,10 @@ pub fn start_level(ctx: &mut Ctx) {
             ..RigidBody::dynamic()
         },
         Collider::rect(vec2(12.0, 10.0)).offset(vec2(0.0, 2.0)).friction(0.0),
-        Velocity::default(),
         Crab,
+        CameraTarget, // the camera rig follows it
     ));
     ctx.world.insert_resource(Stage { level, crab });
-}
-
-/// Frame system: the camera follows the crab, without showing past the
-/// level's ends.
-fn follow_crab(ctx: &mut Ctx) {
-    let crab = ctx.world.resource::<Stage>().crab;
-    if let Some(t) = ctx.world.get::<Transform>(crab) {
-        let half_view = ctx.camera.visible_rect().size() / 2.0;
-        let x = t.position.x.clamp(half_view.x, LEVEL_SIZE.x - half_view.x);
-        ctx.camera.look_at(vec2(x, LEVEL_SIZE.y - half_view.y));
-    }
 }
 // ANCHOR_END: level
 
@@ -267,7 +259,6 @@ fn make_sensors(ctx: &mut Ctx) {
         .map(|(e, _)| e)
         .collect();
     for e in new {
-        ctx.world.insert(e, RigidBody::fixed());
         ctx.world.insert(e, Collider::circle(6.0).sensor());
     }
 }

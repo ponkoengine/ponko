@@ -1,0 +1,34 @@
+{
+  "jsonVersion": "1.5.3",
+  "defaultGridSize": 16,
+  "worlds": [
+    {
+      "identifier": "Hub", "iid": "hub", "worldLayout": "Free",
+      "levels": [
+        {
+          "identifier": "Room", "iid": "hub-room",
+          "worldX": -48, "worldY": 80, "worldDepth": 2, "pxWid": 64, "pxHei": 32,
+          "layerInstances": [{
+            "__type": "Entities", "__identifier": "Entities",
+            "__pxTotalOffsetX": 2, "__pxTotalOffsetY": 4,
+            "entityInstances": [{
+              "__identifier": "Pickup", "iid": "pickup-1", "__pivot": [0, 0],
+              "px": [8, 8], "width": 8, "height": 8,
+              "fieldInstances": [
+                {"__identifier": "value", "__value": 7},
+                {"__identifier": "labels", "__value": ["red", "small"]}
+              ]
+            }]
+          }]
+        }
+      ]
+    },
+    {
+      "identifier": "Trail", "iid": "trail", "worldLayout": "LinearVertical",
+      "levels": [
+        {"identifier": "Room", "iid": "trail-start", "worldX": -1, "worldY": -1, "pxWid": 32, "pxHei": 48, "layerInstances": []},
+        {"identifier": "End", "iid": "trail-end", "worldX": -1, "worldY": -1, "pxWid": 16, "pxHei": 16, "layerInstances": []}
+      ]
+    }
+  ]
+}

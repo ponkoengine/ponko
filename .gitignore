@@ -41,3 +41,6 @@ rustc-ice-*.txt
 
 # Python bytecode (scripts/)
 __pycache__/
+
+# tests/plugin_crate.rs copies the workspace's lock file there while it builds
+/tests/plugin-crate/Cargo.lock

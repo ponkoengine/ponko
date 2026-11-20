@@ -23,6 +23,11 @@
 //! The engine drives what is there (see the table on [`Networking`]); a
 //! single-player game has an offline lockstep session and nothing else.
 //! Feature `steam` adds Steam relays and lobbies for both transports.
+//! Feature `lobby` adds a client for a lobby server (the `lobby` module): rooms with
+//! codes, matchmaking, host migration and a relay, on any platform.
+//! Feature `webrtc` adds peer-to-peer message endpoints over WebRTC data
+//! channels (module `rtc`): browser to browser and browser to desktop, through
+//! NATs with STUN.
 //!
 //! Browser players (a web build can't open UDP sockets) connect over
 //! WebSocket: the host adds a listener with [`Net::accept_web`] or
@@ -69,15 +74,30 @@ mod lockstep_conformance;
 mod message_conformance;
 mod messages;
 #[cfg(test)]
+mod replication_conformance;
+#[cfg(test)]
 mod scripted;
 pub use messages::{Lane, MAX_MESSAGE_BYTES, MessageEvent, MessageStats, NetMessages, PeerId};
 
 mod interest;
+#[cfg(feature = "lobby")]
+pub mod lobby;
 mod prediction;
+mod replicate;
 mod rollback;
+#[cfg(feature = "webrtc")]
+pub mod rtc;
+#[cfg(all(feature = "webrtc", target_arch = "wasm32"))]
+mod rtc_browser;
+#[cfg(all(feature = "webrtc", not(target_arch = "wasm32")))]
+mod rtc_native;
+#[cfg(all(test, feature = "webrtc", not(target_arch = "wasm32")))]
+mod rtc_tests;
 mod sequence;
 mod service;
 pub(crate) mod snapshots;
+#[cfg(any(feature = "lobby", feature = "webrtc"))]
+pub mod stun;
 mod websocket;
 #[cfg(target_arch = "wasm32")]
 mod websocket_browser;
@@ -86,6 +106,10 @@ pub use interest::{
     InterestViewer, MAX_INTEREST_TIERS,
 };
 pub use prediction::{InputPush, InputQueue, InputStats, Prediction, PredictionStats, Reconciled, Smooth, Smoothing};
+pub use replicate::{
+    ClientStats, DEFAULT_BUDGET, Fields, NetEvent, NetId, PeerStats, Quantize, RawField, RawType, Replica, Replicate,
+    ReplicateField, Replicated, Replication, ReplicationRole, replicated_bits,
+};
 pub use rollback::{Advance, Rollback, RollbackDesync, RollbackGame, RollbackStats};
 pub use sequence::{Authority, AuthorityCheck, LatestWins, UpdateStamp, seq_diff, seq_newer};
 pub use service::{NetSnapshots, Networking};

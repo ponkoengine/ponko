@@ -78,10 +78,13 @@ ctx.camera.look_at(bounds / 2.0);
 Most games want more than `look_at(hero)`: a camera that eases after the
 hero, lets it move a little without scrolling, shows more of where it is
 heading and stops at the level's edges. The rigs do that. Each is a plain
-struct you keep (a resource is a good home, as it holds the camera's state)
-and update once a frame, after the thing it follows moved. They move the
-camera the same way at 30, 60 and 144 frames a second: their smoothing is
-solved exactly, not stepped. Leave them out and nothing changes.
+struct that holds the camera's state. Keep it as a resource and put a
+[`CameraTarget`](https://docs.rs/ponko/latest/ponko/camera/struct.CameraTarget.html)
+on the entity it follows, and the engine updates it every frame, after
+everything moved: no camera code. Or keep it anywhere and update it
+yourself. They move the camera the same way at 30, 60 and 144 frames a
+second: their smoothing is solved exactly, not stepped. Leave them out and
+nothing changes.
 
 | Rig | For |
 |---|---|
@@ -92,23 +95,41 @@ solved exactly, not stepped. Leave them out and nothing changes.
 
 ### Following something
 
+```rust
+use ponko::d2::FollowCamera;
+# let hero = ctx.world.spawn((d2::Transform::at(vec2(400.0, 300.0)),));
+
+// Once, in setup: the rig as a resource...
+let follow = FollowCamera::default()
+    .with_dead_zone(vec2(32.0, 48.0)) // move this much without scrolling
+    .with_look_ahead(vec2(48.0, 0.0)) // show more of where it's heading
+    .with_bounds(Rect::new(0.0, 0.0, 4000.0, 720.0)); // never past the level
+ctx.world.insert_resource(follow);
+// ...and the entity it follows.
+ctx.world.insert(hero, CameraTarget);
+```
+
+The engine's `update_camera_rigs` (at the end of `Phase::Animate`, after the
+frame systems and the animation moved things, before `Phase::Late`) reads
+the target's `Transform` and moves `ctx.camera`. The first frame with a
+target, and whenever another entity becomes the target (a respawn, a new
+level), the camera cuts to it. With no target (a title screen) the rig
+leaves the camera alone, so the game can move it. The same works in 3D with
+the [3D rigs](3d.md#camera-rigs).
+
+A rig you keep elsewhere (a second camera, a split screen) you update
+yourself, once a frame, after the thing it follows moved:
+
 <div class="lang-pair">
 <div>
 
 ```rust
 use ponko::d2::FollowCamera;
 # let hero = vec2(400.0, 300.0);
+# let mut follow = FollowCamera::default();
 
-// Once, in setup:
-let follow = FollowCamera::default()
-    .with_dead_zone(vec2(32.0, 48.0)) // move this much without scrolling
-    .with_look_ahead(vec2(48.0, 0.0)) // show more of where it's heading
-    .with_bounds(Rect::new(0.0, 0.0, 4000.0, 720.0)); // never past the level
-ctx.world.insert_resource(follow);
-
-// Every frame, after the hero moved:
 let dt = ctx.time.frame_dt();
-ctx.world.resource_mut::<FollowCamera>().update(&mut ctx.camera, hero, dt);
+follow.update(&mut ctx.camera, hero, dt);
 ```
 
 </div>
@@ -125,8 +146,8 @@ The first update puts the camera on the target at once; so does `snap` (a
 respawn, a new level). `smooth_time` (0.15 s by default) is how long it
 takes to catch up, and 0 sticks to the target. The look-ahead turns the way
 the target moves; a game that knows which way its hero faces can set
-`facing` itself, as [Ember Hop](ember-hop.md#camera-particles-and-sound)
-does.
+`facing` itself. [Ember Hop](ember-hop.md#camera-particles-and-sound)
+follows its hero with the engine's rig and no camera code.
 
 Give the rig a world position. An entity's `Transform` is already in the
 world when it has a parent (see [the hierarchy](hierarchy.md)), so a rig can
@@ -137,7 +158,9 @@ follow a child, a rider's head or a turret, the same way.
 `PixelPerfect` sets the zoom to the largest whole number of window pixels
 per art pixel that fits the window, and moves the camera in whole art
 pixels, so art pixels never come out unevenly sized or shimmer as the
-camera scrolls. Apply it after whatever placed the camera:
+camera scrolls. Apply it after whatever placed the camera, or give it to the
+`FollowCamera` (`with_pixel_perfect`), which then keeps the camera on the
+grid itself:
 
 <div class="lang-pair">
 <div>

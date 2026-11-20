@@ -360,7 +360,17 @@ impl<T: Copy + Send + Sync> SpatialGrid<T> {
     }
 
     /// The closest entity to `center` within `max_radius` for which `accept`
-    /// returns `true` (use it to skip yourself or pick a team), if any.
+    /// returns `true` (use it to skip yourself or pick a team), if any. Of
+    /// entities at the same distance, the one with the lowest
+    /// [`Entity::to_bits`] wins, so the answer doesn't depend on how the
+    /// grid is laid out.
+    ///
+    /// It looks outward ring by ring of cells from `center`'s cell and stops
+    /// as soon as no cell further out can hold anything closer, so a target
+    /// near `center` is found fast however large `max_radius` is. Where the
+    /// rings would visit more cells than there are entries, it checks the
+    /// remaining entries directly. `accept` is called at most once per
+    /// entity, only for one closer than the best so far.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -374,13 +384,80 @@ impl<T: Copy + Send + Sync> SpatialGrid<T> {
         max_radius: f32,
         mut accept: impl FnMut(&GridEntry<T>) -> bool,
     ) -> Option<GridEntry<T>> {
+        if self.entries.is_empty() || max_radius.is_nan() || max_radius < 0.0 {
+            return None;
+        }
+        let r2 = max_radius * max_radius;
+        let (x0, y0) = cell_of(center - Vec2::splat(max_radius), self.inv_cell);
+        let (x1, y1) = cell_of(center + Vec2::splat(max_radius), self.inv_cell);
+        let (cx, cy) = cell_of(center, self.inv_cell);
+        let (x0, y0, x1, y1, cx, cy) = (
+            i64::from(x0),
+            i64::from(y0),
+            i64::from(x1),
+            i64::from(y1),
+            i64::from(cx),
+            i64::from(cy),
+        );
         let mut best: Option<(f32, GridEntry<T>)> = None;
-        self.for_each_in_radius(center, max_radius, |e| {
+        let mut consider = |e: &GridEntry<T>, best: &mut Option<(f32, GridEntry<T>)>| {
             let d = e.position.distance_squared(center);
-            if best.is_none_or(|(bd, _)| d < bd) && accept(e) {
-                best = Some((d, *e));
+            let closer = best.is_none_or(|(bd, b)| d < bd || (d == bd && e.entity.to_bits() < b.entity.to_bits()));
+            if d <= r2 && closer && accept(e) {
+                *best = Some((d, *e));
             }
-        });
+        };
+        // Cells of the radius box within `k` rings of the center's cell.
+        let cells_within = |k: i64| {
+            let w = ((cx + k).min(x1) - (cx - k).max(x0) + 1).max(0);
+            let h = ((cy + k).min(y1) - (cy - k).max(y0) + 1).max(0);
+            w * h
+        };
+        let rings = (cx - x0).max(x1 - cx).max(cy - y0).max(y1 - cy).max(0);
+        // A point's cell comes from `floor(p * inv_cell)`, which rounds: keep
+        // a quarter cell (and more far from the origin) of slack.
+        let slack = 0.25 + (cx.abs().max(cy.abs()) as f32) * f32::EPSILON * 4.0;
+        let budget = self.entries.len() as i64;
+        let mut visited = 0;
+        for k in 0..=rings {
+            // Every cell within `k - 1` rings is done: anything left is at
+            // least `k - 1` cells away.
+            if let Some((d, _)) = best {
+                let reach = ((k - 1) as f32 - slack).max(0.0) * self.cell_size;
+                if d < reach * reach {
+                    break;
+                }
+            }
+            let ring = cells_within(k) - cells_within(k - 1);
+            if visited + ring > budget {
+                // Cheaper to check the entries the rings haven't reached.
+                let inner = k - 1;
+                for (e, &cell) in self.entries.iter().zip(&self.cells) {
+                    let (ex, ey) = unpack(cell);
+                    if (i64::from(ex) - cx).abs() > inner || (i64::from(ey) - cy).abs() > inner {
+                        consider(e, &mut best);
+                    }
+                }
+                break;
+            }
+            visited += ring;
+            for y in (cy - k).max(y0)..=(cy + k).min(y1) {
+                let edge = (y - cy).abs() == k;
+                let mut x = (cx - k).max(x0);
+                let last = (cx + k).min(x1);
+                while x <= last {
+                    // Within the ring: whole rows at its top and bottom, the
+                    // two side cells in between.
+                    if edge || (x - cx).abs() == k {
+                        // In i32 range: inside the radius box, which came from i32 cells.
+                        self.for_each_in_cell(x as i32, y as i32, |e| consider(e, &mut best));
+                        x += 1;
+                    } else {
+                        x = cx + k;
+                    }
+                }
+            }
+        }
         best.map(|(_, e)| e)
     }
 }
@@ -438,6 +515,12 @@ fn map_into<A: Sync, B: Send>(input: &[A], out: &mut Vec<B>, parallel: bool, f: 
 #[inline(always)]
 fn pack(cx: i32, cy: i32) -> u64 {
     (cx as u32 as u64) << 32 | cy as u32 as u64
+}
+
+/// The cell `pack` packed.
+#[inline(always)]
+fn unpack(cell: u64) -> (i32, i32) {
+    ((cell >> 32) as u32 as i32, cell as u32 as i32)
 }
 
 /// How cells map to buckets. Neighboring cells get neighboring buckets, so

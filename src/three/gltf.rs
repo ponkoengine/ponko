@@ -21,8 +21,12 @@ pub(crate) struct Loaded {
     /// Index ranges of `data`, each with its material (an index into `materials`).
     pub parts: Vec<(Range<u32>, usize)>,
     pub materials: Vec<LoadedMaterial>,
-    /// The materials' images: width, height, RGBA8 pixels.
+    /// The materials' images: width, height, RGBA8 pixels (none when the
+    /// image is in `blocks`).
     pub images: Vec<Image>,
+    /// Each image that stays in a GPU block format (a KTX2 image the GPU
+    /// samples), uploaded as it is instead of its RGBA8.
+    pub blocks: Vec<Option<Blocks>>,
     /// Where each image came from, when that's files (asset names, or
     /// `orm:` plus two of them for a merged image), so files sharing an
     /// image upload it once. One the caller said it has is left empty.
@@ -125,6 +129,27 @@ enum Binding {
 /// Width, height and RGBA8 pixels.
 pub(crate) type Image = (u32, u32, Vec<u8>);
 
+/// The GPU block formats a model's KTX2 images (`KHR_texture_basisu`) stay
+/// in, so they upload as they are, with their mipmaps, never decoded to
+/// RGBA8: the GPU's (`Graphics::compressed_formats`). The default (none)
+/// decodes every image.
+#[cfg(feature = "compressed-textures")]
+pub(crate) use crate::compressed::GpuFormats;
+
+/// Without `compressed-textures` every image is decoded.
+#[cfg(not(feature = "compressed-textures"))]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct GpuFormats {}
+
+/// An image kept in a GPU block format.
+#[cfg(feature = "compressed-textures")]
+pub(crate) type Blocks = crate::compressed::CompressedImage;
+
+/// Without `compressed-textures` there are none.
+#[cfg(not(feature = "compressed-textures"))]
+#[derive(Debug)]
+pub(crate) enum Blocks {}
+
 pub(crate) struct LoadedMaterial {
     /// Its name in the file (empty without one).
     pub name: String,
@@ -165,12 +190,25 @@ impl LoadedMaterial {
 
 /// Parses glTF `bytes`; `read` fetches files it refers to, by asset name.
 /// Images from files that `have` says are loaded already aren't read (they
-/// come back 0×0, with their source).
+/// come back 0×0, with their source). Every image is decoded to RGBA8;
+/// [`load_for`] keeps the ones a GPU samples as they are.
 pub(crate) fn load(
     name: &str,
     bytes: &[u8],
     read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
     have: &dyn Fn(&str) -> bool,
+) -> Result<Loaded, String> {
+    load_for(name, bytes, read, have, GpuFormats::default())
+}
+
+/// [`load`], with KTX2 images in a block format of `gpu` kept as they are
+/// (in [`Loaded::blocks`]).
+pub(crate) fn load_for(
+    name: &str,
+    bytes: &[u8],
+    read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+    have: &dyn Fn(&str) -> bool,
+    gpu: GpuFormats,
 ) -> Result<Loaded, String> {
     check_glb_length(name, bytes)?;
     let gltf_ext::Prepared {
@@ -178,6 +216,7 @@ pub(crate) fn load(
         buffers,
         json,
         preferred_image,
+        dequantize,
         mut warnings,
     } = gltf_ext::prepare(name, bytes, read)?;
     check_accessors(&gltf).map_err(|e| format!("{name}: {e}"))?;
@@ -186,6 +225,7 @@ pub(crate) fn load(
         mut materials,
         mappings,
         images,
+        blocks,
         image_sources,
     } = read_materials(
         &gltf,
@@ -193,7 +233,7 @@ pub(crate) fn load(
         &json,
         &preferred_image,
         name,
-        have,
+        (have, gpu),
         read,
         &mut warnings,
     )?;
@@ -265,6 +305,8 @@ pub(crate) fn load(
                 if primitive.mode() != gltf::mesh::Mode::Triangles {
                     continue; // lines and points aren't drawn
                 }
+                // Positions `ponko cook` quantized: back to their size first.
+                let matrix = matrix * dequantization(&dequantize, &mesh, &primitive);
                 let material = primitive.material().index().unwrap_or(default_material);
                 let at = match by_material.iter().position(|(m, _)| *m == material) {
                     Some(i) => i,
@@ -347,6 +389,7 @@ pub(crate) fn load(
         parts,
         materials,
         images,
+        blocks,
         image_sources,
         skin,
         clips,
@@ -394,18 +437,21 @@ pub(crate) struct LoadedNodes {
     pub nodes: Vec<LoadedNode>,
     pub materials: Vec<LoadedMaterial>,
     pub images: Vec<Image>,
+    pub blocks: Vec<Option<Blocks>>,
     pub image_sources: Vec<Option<String>>,
 }
 
 /// Parses glTF `bytes` as [`load`] does, but keeps every node of the
 /// default scene apart: its place in the tree, its transform, its extras
 /// and its own mesh in its own space, instead of one merged mesh.
-/// Skinned meshes are read in their bind pose, without joints.
+/// Skinned meshes are read in their bind pose, without joints. KTX2 images
+/// in a block format of `gpu` are kept as they are, as in [`load_for`].
 pub(crate) fn load_nodes(
     name: &str,
     bytes: &[u8],
     read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
     have: &dyn Fn(&str) -> bool,
+    gpu: GpuFormats,
 ) -> Result<LoadedNodes, String> {
     check_glb_length(name, bytes)?;
     let gltf_ext::Prepared {
@@ -413,6 +459,7 @@ pub(crate) fn load_nodes(
         buffers,
         json,
         preferred_image,
+        dequantize,
         mut warnings,
     } = gltf_ext::prepare(name, bytes, read)?;
     check_accessors(&gltf).map_err(|e| format!("{name}: {e}"))?;
@@ -421,6 +468,7 @@ pub(crate) fn load_nodes(
         mut materials,
         mappings,
         images,
+        blocks,
         image_sources,
     } = read_materials(
         &gltf,
@@ -428,7 +476,7 @@ pub(crate) fn load_nodes(
         &json,
         &preferred_image,
         name,
-        have,
+        (have, gpu),
         read,
         &mut warnings,
     )?;
@@ -470,7 +518,7 @@ pub(crate) fn load_nodes(
                     }
                 };
                 let part = Part {
-                    matrix: Mat4::IDENTITY,
+                    matrix: dequantization(&dequantize, &m, &primitive),
                     binding: &Binding::None,
                     targets: &targets,
                     mapping: mappings.get(material).copied().unwrap_or(UvMapping::PLAIN),
@@ -520,6 +568,7 @@ pub(crate) fn load_nodes(
         nodes,
         materials,
         images,
+        blocks,
         image_sources,
     })
 }
@@ -558,10 +607,12 @@ struct FileMaterials {
     /// How each material's textures lie on its meshes (`KHR_texture_transform`).
     mappings: Vec<UvMapping>,
     images: Vec<Image>,
+    blocks: Vec<Option<Blocks>>,
     image_sources: Vec<Option<String>>,
 }
 
-/// Reads every material of `gltf`, decoding each image it uses once.
+/// Reads every material of `gltf`, decoding each image it uses once (or
+/// keeping it in its block format, when `gpu` samples that).
 #[allow(clippy::too_many_arguments)]
 fn read_materials(
     gltf: &gltf::Document,
@@ -569,7 +620,7 @@ fn read_materials(
     json: &serde_json::Value,
     preferred_image: &[Option<usize>],
     name: &str,
-    have: &dyn Fn(&str) -> bool,
+    (have, gpu): (&dyn Fn(&str) -> bool, GpuFormats),
     read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
     warnings: &mut Vec<String>,
 ) -> Result<FileMaterials, String> {
@@ -578,6 +629,8 @@ fn read_materials(
     // Materials, with each image decoded once.
     let mut images = Images {
         decoded: Vec::new(),
+        blocks: Vec::new(),
+        gpu,
         keys: Vec::new(),
         sources: Vec::new(),
         have,
@@ -646,6 +699,7 @@ fn read_materials(
         mappings,
         image_sources: images.sources,
         images: images.decoded,
+        blocks: images.blocks,
     })
 }
 
@@ -988,9 +1042,24 @@ fn append(
     Ok(())
 }
 
+/// The matrix that takes a primitive's positions back to the size they had
+/// before `ponko cook` quantized them (see
+/// [`gltf_ext::fold_quantized_positions`]).
+fn dequantization(dequantize: &[Vec<Mat4>], mesh: &gltf::Mesh, primitive: &gltf::Primitive) -> Mat4 {
+    dequantize
+        .get(mesh.index())
+        .and_then(|list| list.get(primitive.index()))
+        .copied()
+        .unwrap_or(Mat4::IDENTITY)
+}
+
 /// The file's images, decoded on first use.
 struct Images<'a> {
     decoded: Vec<Image>,
+    /// Images kept in their block format (`decoded` holds only their size).
+    blocks: Vec<Option<Blocks>>,
+    /// The block formats images may stay in.
+    gpu: GpuFormats,
     /// What each of `decoded` is, so each is decoded or merged once.
     keys: Vec<Key>,
     /// Which files each of `decoded` came from (see `Loaded::image_sources`).
@@ -1011,6 +1080,11 @@ enum Key {
 }
 
 type Read<'r> = &'r mut dyn FnMut(&str) -> Result<Vec<u8>, String>;
+
+/// What [`Images::cooked_orm`] found: the cooked ORM image, or the file it
+/// read to find out (its name and bytes), if it read one.
+#[cfg(feature = "compressed-textures")]
+type Orm = Result<(Image, Option<Blocks>), Option<(String, Vec<u8>)>>;
 
 impl Images<'_> {
     /// Texture `texture`'s image, decoded: its index in `decoded`. An image
@@ -1038,11 +1112,11 @@ impl Images<'_> {
             return Ok(at);
         }
         let source = self.source(index);
-        let image = match &source {
-            Some(s) if (self.have)(s) => (0, 0, Vec::new()),
-            _ => self.decode(index, read)?,
+        let (image, blocks) = match &source {
+            Some(s) if (self.have)(s) => ((0, 0, Vec::new()), None),
+            _ => self.decode(index, self.gpu, read)?,
         };
-        Ok(self.add(Key::Image(index), image, source))
+        Ok(self.add(Key::Image(index), image, blocks, source))
     }
 
     /// The asset name of image `index`, if it's a file of its own.
@@ -1070,11 +1144,26 @@ impl Images<'_> {
         if let Some(s) = &source
             && (self.have)(s)
         {
-            return Ok(self.add(key, (0, 0, Vec::new()), source));
+            return Ok(self.add(key, (0, 0, Vec::new()), None, source));
         }
-        let occlusion = occlusion.map(|o| self.decode(o, read)).transpose()?;
+        // An image file `ponko cook` merged them into: as it is. Otherwise
+        // the file it read is decoded below without reading it again.
+        #[cfg(feature = "compressed-textures")]
+        let mut spare = match self.cooked_orm(metal_rough, occlusion, read)? {
+            Ok((image, blocks)) => return Ok(self.add(key, image, blocks, source)),
+            Err(read_file) => read_file,
+        };
+        #[cfg(not(feature = "compressed-textures"))]
+        let mut spare: Option<(String, Vec<u8>)> = None;
+        let read: Read = &mut |file: &str| match spare.take_if(|(f, _)| f == file) {
+            Some((_, bytes)) => Ok(bytes),
+            None => read(file),
+        };
+        // Merged on the CPU: both as RGBA8.
+        let rgba = GpuFormats::default();
+        let occlusion = occlusion.map(|o| self.decode(o, rgba, read).map(|d| d.0)).transpose()?;
         let mut orm = match metal_rough {
-            Some(m) => self.decode(m, read)?,
+            Some(m) => self.decode(m, rgba, read)?.0,
             None => {
                 let (w, h, _) = occlusion.as_ref().expect("one of the two is there");
                 (*w, *h, vec![255; (*w * *h * 4) as usize])
@@ -1090,29 +1179,80 @@ impl Images<'_> {
             }
             _ => pixels.iter_mut().for_each(|px| px[0] = 255),
         }
-        Ok(self.add(key, orm, source))
+        Ok(self.add(key, orm, None, source))
     }
 
-    fn add(&mut self, key: Key, image: Image, source: Option<String>) -> usize {
+    /// The ORM image of a metallic-roughness and an occlusion image, when
+    /// `ponko cook` already merged them into the first's file (the second's
+    /// without one): a KTX2 file whose [`ORM_KEY`](crate::compressed::ORM_KEY)
+    /// names these two files. Kept in its block format, as any image; so a
+    /// model that isn't cooked itself keeps its merged occlusion compressed.
+    /// When it isn't one: the file it read (its name and bytes), if any.
+    #[cfg(feature = "compressed-textures")]
+    fn cooked_orm(&self, metal_rough: Option<usize>, occlusion: Option<usize>, read: Read) -> Result<Orm, String> {
+        let Some(holder) = metal_rough.or(occlusion) else {
+            return Ok(Err(None));
+        };
+        let name = |i: Option<usize>| match i {
+            Some(i) => self.source(i).map(|s| normalize(&s)),
+            None => Some(String::new()),
+        };
+        let (Some(file), Some(m), Some(o)) = (self.source(holder), name(metal_rough), name(occlusion)) else {
+            return Ok(Err(None));
+        };
+        let Ok(bytes) = read(&file) else {
+            return Ok(Err(None));
+        };
+        let Some(note) = crate::compressed::orm_note(&bytes) else {
+            return Ok(Err(Some((file, bytes))));
+        };
+        let folder = folder_of(&file);
+        let resolve = |part: &str| {
+            if part.is_empty() {
+                String::new()
+            } else {
+                normalize(&format!("{folder}{part}"))
+            }
+        };
+        match note.split_once('|') {
+            Some((a, b)) if resolve(a) == m && resolve(b) == o => {
+                let what = format!("image {holder} of {}", self.name);
+                decode_bytes(bytes, self.name, &what, self.gpu).map(Ok)
+            }
+            _ => Ok(Err(Some((file, bytes)))),
+        }
+    }
+
+    fn add(&mut self, key: Key, image: Image, blocks: Option<Blocks>, source: Option<String>) -> usize {
         self.keys.push(key);
         self.sources.push(source);
         self.decoded.push(image);
+        self.blocks.push(blocks);
         self.decoded.len() - 1
     }
 
-    /// Decodes image `index` of the file to RGBA8.
-    fn decode(&self, index: usize, read: Read) -> Result<Image, String> {
+    /// Decodes image `index` of the file to RGBA8, or keeps it in a block
+    /// format of `gpu`.
+    fn decode(&self, index: usize, gpu: GpuFormats, read: Read) -> Result<(Image, Option<Blocks>), String> {
         let image = self
             .document
             .images()
             .nth(index)
             .ok_or_else(|| format!("{}: image {index} isn't in the file", self.name))?;
-        decode(&image, self.buffers, self.folder, read, self.name)
+        decode(&image, self.buffers, self.folder, read, self.name, gpu)
     }
 }
 
-/// Decodes an image of the file to RGBA8.
-fn decode(image: &gltf::Image, buffers: &[Vec<u8>], folder: &str, read: Read, name: &str) -> Result<Image, String> {
+/// Decodes an image of the file to RGBA8; a KTX2 image in a block format
+/// `gpu` samples stays as it is (its size and blocks).
+fn decode(
+    image: &gltf::Image,
+    buffers: &[Vec<u8>],
+    folder: &str,
+    read: Read,
+    name: &str,
+    gpu: GpuFormats,
+) -> Result<(Image, Option<Blocks>), String> {
     let bytes = match image.source() {
         gltf::image::Source::View { view, .. } => {
             let buffer = &buffers[view.buffer().index()];
@@ -1123,12 +1263,25 @@ fn decode(image: &gltf::Image, buffers: &[Vec<u8>], folder: &str, read: Read, na
         }
         gltf::image::Source::Uri { uri, .. } => fetch(uri, folder, read)?,
     };
+    decode_bytes(bytes, name, &format!("image {} of {name}", image.index()), gpu)
+}
+
+/// [`decode`] of an image's bytes.
+fn decode_bytes(bytes: Vec<u8>, name: &str, what: &str, gpu: GpuFormats) -> Result<(Image, Option<Blocks>), String> {
     // Any format the build reads: KTX2 (`KHR_texture_basisu`) and WebP
     // (`EXT_texture_webp`) too, with their features.
-    let what = format!("image {} of {name}", image.index());
-    let decoded =
-        crate::assets::decode_image(&bytes, name, &what).map_err(|e| format!("{name}: an image can't be read: {e}"))?;
-    Ok((decoded.width, decoded.height, decoded.rgba))
+    let broken = |e: crate::error::Error| format!("{name}: an image can't be read: {e}");
+    #[cfg(feature = "compressed-textures")]
+    if let Some(decoded) = crate::compressed::decode(&bytes, name, what, gpu) {
+        return Ok(match decoded.map_err(broken)? {
+            crate::compressed::Decoded::Rgba(i) => ((i.width, i.height, i.rgba), None),
+            crate::compressed::Decoded::Blocks(b) => ((b.width, b.height, Vec::new()), Some(b)),
+        });
+    }
+    #[cfg(not(feature = "compressed-textures"))]
+    let _ = gpu;
+    let decoded = crate::assets::decode_image(&bytes, name, what).map_err(broken)?;
+    Ok(((decoded.width, decoded.height, decoded.rgba), None))
 }
 
 /// The bytes a URI names: inline base64 data, or a file next to the glTF.
@@ -1152,6 +1305,22 @@ pub(super) fn fetch(
 /// absolute Windows path.
 pub(super) fn folder_of(name: &str) -> &str {
     name.rfind(['/', '\\']).map_or("", |i| &name[..=i])
+}
+
+/// `a/./b/../c` to `a/c`: asset names compared as the same file.
+#[cfg(feature = "compressed-textures")]
+fn normalize(name: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in name.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." if parts.last().is_some_and(|p| *p != "..") => {
+                parts.pop();
+            }
+            p => parts.push(p),
+        }
+    }
+    parts.join("/")
 }
 
 /// `%20` and friends in file names.
@@ -1585,6 +1754,70 @@ mod tests {
         );
         assert_eq!(loaded.images[m.image.unwrap()].0, 0, "left empty");
         assert_eq!(loaded.images[m.normal_map.unwrap()].2, [1, 2, 3, 4]);
+    }
+
+    /// A model's metallic-roughness and occlusion images in files of their
+    /// own, which `ponko cook` merged into the first's file (a KTX2 file
+    /// whose `ponkoOrm` names both): the model, uncooked itself, gets that
+    /// file in its block format, and the occlusion file isn't read. A note
+    /// naming other files is ignored: the merge happens as before.
+    #[cfg(feature = "compressed-textures")]
+    #[test]
+    fn a_cooked_orm_file_stays_compressed_for_an_uncooked_model() {
+        use crate::compressed::tests::ktx2_file_with;
+        let gltf = triangle_gltf(None).replace(
+            r#""materials": [{ "pbrMetallicRoughness": { "baseColorFactor": [1, 0, 0, 1], "roughnessFactor": 0.25 } }],"#,
+            r#""materials": [{ "pbrMetallicRoughness": { "metallicRoughnessTexture": { "index": 0 } },
+                              "occlusionTexture": { "index": 1 } }],
+            "textures": [{ "source": 0 }, { "source": 1 }],
+            "images": [{ "uri": "textures/rock_mr.png" }, { "uri": "./textures/rock_ao.png" }],"#,
+        );
+        let ao = {
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::RgbaImage::from_pixel(4, 4, image::Rgba([77, 0, 0, 255]))
+                .write_to(&mut png, image::ImageFormat::Png)
+                .unwrap();
+            png.into_inner()
+        };
+        let load_with = |note: &str| {
+            let block = vec![0u8; 16];
+            let mr = ktx2_file_with(
+                Some(ktx2::Format::BC7_UNORM_BLOCK),
+                4,
+                4,
+                &[block],
+                false,
+                &[("ponkoOrm", note)],
+            );
+            let mut reads = Vec::new();
+            let loaded = load_for(
+                "models/rock.gltf",
+                gltf.as_bytes(),
+                &mut |f| {
+                    reads.push(f.to_string());
+                    match f {
+                        "models/textures/rock_mr.png" => Ok(mr.clone()),
+                        "models/./textures/rock_ao.png" => Ok(ao.clone()),
+                        other => Err(format!("no {other}")),
+                    }
+                },
+                &|_| false,
+                GpuFormats::ALL,
+            )
+            .unwrap();
+            let orm = loaded.materials[0].orm_map.unwrap();
+            (loaded.blocks[orm].is_some(), reads)
+        };
+        let (compressed, reads) = load_with("rock_mr.png|rock_ao.png");
+        assert!(compressed, "the cooked file, in its blocks");
+        assert_eq!(reads, ["models/textures/rock_mr.png"], "the occlusion isn't read");
+        let (compressed, reads) = load_with("rock_mr.png|other_ao.png");
+        assert!(!compressed, "merged on the CPU");
+        assert_eq!(
+            reads,
+            ["models/textures/rock_mr.png", "models/./textures/rock_ao.png"],
+            "each file read once"
+        );
     }
 
     #[test]

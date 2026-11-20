@@ -322,3 +322,11 @@ image comparison fails in any lane, the job uploads
 frame and the difference image. Every lane that runs tests also prints the
 comparisons' measured differences in its "Margins of the image comparisons"
 step, passed or failed.
+
+### Testing a renderer-backed context
+
+Use `render_test_support::offscreen_ctx` in 3D tests that need `Ctx` and its
+`Graphics` to use the regular renderer. It opens a device through the shared
+test helpers and draws `Ctx::render_frame` to a texture. The mesh cost test
+uses this path to check aggregation across material runs, reuse of loaded
+mesh names and the removal of freed meshes from the next frame's listing.

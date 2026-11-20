@@ -40,6 +40,7 @@ HEADER = ROOT / 'include' / 'ponko.h'
 NOT_FEATURES = {
     'contributing.md': 'contribution policy',
     'ember-hop.md': 'the second reference game is written in Rust',
+    'legions.md': 'the showcase is written in Rust and adds no engine API',
     'packaging.md': 'the reference game is written in Rust',
     'render-tests.md': 'the GPU tests are written in Rust',
     'shard-grove.md': 'the 3D reference game is written in Rust',
@@ -150,6 +151,29 @@ def rust_sources():
     return '\n'.join(f.read_text() for f in files)
 
 
+def c_function_for(name, header):
+    """The C function of ponko.h named for Rust item `name`, or None.
+
+    Only names of two or more words count (`font` or `get` would match
+    unrelated functions). A method, `Type::method`, counts only a function of
+    its type's C family (one whose name holds the type's words, as
+    `ponko_ctx_skeleton2d_look_at` does for `Skeleton::look_at`) when the
+    header has such a family: other types' functions of the same name are
+    not its binding (`ponko_ctx_two_bone_ik` is the 3D skeleton's).
+    """
+    *owner, last = name.split('::')
+    words = snake(last)
+    if '_' not in words:
+        return None
+    functions = re.findall(rf'\bponko_(?:\w*_)?{words}(?:_\w*)?\b', header, re.IGNORECASE)
+    if owner:
+        family = snake(owner[-1])
+        own = [f for f in functions if family in f.lower()]
+        if own or re.search(rf'\bponko_\w*{family}\w*\s*\(', header, re.IGNORECASE):
+            functions = own
+    return functions[0] if functions else None
+
+
 def rust_only_problems():
     entries, problems = rust_only_entries()
     table = rust_only_table()
@@ -172,10 +196,10 @@ def rust_only_problems():
             problems.append(f'{name}: {chapter} does not exist.')
         elif not re.search(rf'\b{last}\b', chapter_path.read_text()):
             problems.append(f'{name}: {chapter} never mentions {last}.')
-        words = snake(last)
-        if '_' in words and re.search(rf'\bponko_(?:\w*_)?{words}(?:_\w*)?\b', header, re.IGNORECASE):
-            problems.append(f'{name}: ponko.h has a function named for it now. Bind it in C++ too, then remove '
-                            f'the entry and its table row.')
+        bound = c_function_for(name, header)
+        if bound:
+            problems.append(f'{name}: ponko.h has a function named for it now ({bound}). Bind it in C++ too, then '
+                            f'remove the entry and its table row.')
     covered = set(entries.values()) | set(NOT_FEATURES)
     for chapter in sorted(BOOK.glob('*.md')):
         if chapter.name != GUIDE.name and chapter.name not in covered and re.search(r'rust[- ]only', chapter.read_text(), re.I):

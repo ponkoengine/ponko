@@ -1,5 +1,7 @@
 //! One handle lifecycle through the C API: `ponko_ctx_handle_is_live`,
 //! `ponko_ctx_handle_free` and `ponko_ctx_live_counts` for every kind.
+mod common;
+
 use ponko_ffi::*;
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -69,7 +71,7 @@ unsafe extern "C" fn lifecycle(ctx: *mut PonkoCtx, user: *mut c_void) {
         errors.push(ponko_ctx_create_mesh(ctx, data, material, &mut mesh));
         ponko_mesh_data_free(data);
         // No handle of any kind has the NONE id.
-        for kind in 0..=12 {
+        for kind in 0..=13 {
             let mut live = true;
             assert_eq!(
                 ponko_ctx_handle_is_live(ctx, kind, PONKO_HANDLE_NONE, &mut live),
@@ -83,7 +85,7 @@ unsafe extern "C" fn lifecycle(ctx: *mut PonkoCtx, user: *mut c_void) {
         assert_eq!(ponko_ctx_handle_free(ctx, PONKO_HANDLE_FONT as u32, 0), PONKO_OK);
         assert!(is_live(ctx, PONKO_HANDLE_FONT, 0));
         // Errors.
-        errors.push(ponko_ctx_handle_free(ctx, 13, 0));
+        errors.push(ponko_ctx_handle_free(ctx, 14, 0));
         errors.push(ponko_ctx_handle_is_live(ctx, 0, 0, null_mut()));
         errors.push(ponko_ctx_live_counts(ctx, null_mut()));
     }
@@ -103,6 +105,72 @@ fn every_kind_frees_through_one_pair_of_calls() {
         ponko_world_free(world);
     }
     assert_eq!(errors, vec![PONKO_INVALID_ARGUMENT; 4]);
+}
+
+/// C passes render targets as plain `PonkoTexture`s; the kind Rust's
+/// `RenderTarget` type checks when compiling is checked at run time.
+unsafe extern "C" fn render_target_kind(ctx: *mut PonkoCtx, _: *mut c_void) {
+    unsafe {
+        let mut target = std::mem::zeroed::<PonkoTexture>();
+        assert_eq!(ponko_ctx_create_render_target(ctx, 8, 8, &mut target), PONKO_OK);
+        let mut plain = std::mem::zeroed::<PonkoTexture>();
+        assert_eq!(
+            ponko_ctx_create_texture(ctx, 1, 1, [255u8; 4].as_ptr(), 4, &mut plain),
+            PONKO_OK
+        );
+        // A render target is a texture, and a render target.
+        assert!(is_live(ctx, PONKO_HANDLE_TEXTURE, target.id));
+        assert!(is_live(ctx, PONKO_HANDLE_RENDER_TARGET, target.id));
+        // A texture is not a render target.
+        assert!(is_live(ctx, PONKO_HANDLE_TEXTURE, plain.id));
+        assert!(!is_live(ctx, PONKO_HANDLE_RENDER_TARGET, plain.id));
+        assert_eq!(
+            ponko_ctx_handle_free(ctx, PONKO_HANDLE_RENDER_TARGET as u32, plain.id),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert!(is_live(ctx, PONKO_HANDLE_TEXTURE, plain.id), "refused: still live");
+        // Nor is it one where a pass writes.
+        let camera = {
+            let mut c = std::mem::zeroed::<PonkoCamera3D>();
+            assert_eq!(ponko_ctx_camera3d(ctx, &mut c), PONKO_OK);
+            c
+        };
+        let mut reflected = std::mem::zeroed::<PonkoTargetCamera>();
+        assert_eq!(
+            ponko_ctx_reflection_camera(ctx, &camera, plain, 0.0, &mut reflected),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            ponko_ctx_reflection_camera(ctx, &camera, target, 0.0, &mut reflected),
+            PONKO_OK
+        );
+        assert_eq!(reflected.target.id, target.id);
+        // Freed as a render target, it is gone under both kinds.
+        assert_eq!(
+            ponko_ctx_handle_free(ctx, PONKO_HANDLE_RENDER_TARGET as u32, target.id),
+            PONKO_OK
+        );
+        assert!(!is_live(ctx, PONKO_HANDLE_TEXTURE, target.id));
+        assert!(!is_live(ctx, PONKO_HANDLE_RENDER_TARGET, target.id));
+        assert_eq!(
+            ponko_ctx_handle_free(ctx, PONKO_HANDLE_RENDER_TARGET as u32, target.id),
+            PONKO_OK,
+            "again: nothing"
+        );
+    }
+}
+
+#[test]
+fn render_targets_have_a_kind_checked_at_run_time() {
+    unsafe {
+        let g = ponko_game_new(c"render target kind".as_ptr(), 64, 64);
+        let mut world = null_mut();
+        assert_eq!(
+            ponko_game_run_headless(g, 0, Some(render_target_kind), null_mut(), &mut world),
+            PONKO_OK
+        );
+        ponko_world_free(world);
+    }
 }
 
 unsafe extern "C" fn accounting(ctx: *mut PonkoCtx, user: *mut c_void) {
@@ -128,10 +196,13 @@ unsafe extern "C" fn accounting(ctx: *mut PonkoCtx, user: *mut c_void) {
         assert_eq!(ponko_ctx_asset_handles(ctx, class, null_mut(), 0, &mut n), PONKO_OK);
         assert_eq!(n, after.live);
         let mut records = vec![PonkoAssetRecord::default(); n];
-        assert_eq!(
-            ponko_ctx_asset_handles(ctx, class, records.as_mut_ptr(), n, &mut n),
-            PONKO_OK
-        );
+        let status = ponko_ctx_asset_handles(ctx, class, records.as_mut_ptr(), n, &mut n);
+        assert_eq!(status, PONKO_OK);
+        let mut oldest = PonkoAssetRecord::default();
+        let status = ponko_ctx_asset_handles(ctx, class, &mut oldest, 1, &mut n);
+        assert_eq!(status, PONKO_OK);
+        assert_eq!(n, after.live);
+        assert_eq!(oldest, records[0]);
         let made = records.iter().find(|r| r.id == texture.id).expect("listed");
         assert_eq!(made.owner, PonkoAssetOwner::PONKO_ASSET_OWNER_CODE as u32);
         assert_eq!((made.bytes, made.age_frames), (16, 0));
@@ -173,4 +244,36 @@ fn asset_counts_records_owners_and_unloading_work_from_c() {
         ponko_world_free(world);
     }
     assert_eq!(errors, vec![PONKO_INVALID_ARGUMENT; 4]);
+}
+
+#[test]
+fn native_mesh_cost_listing_is_empty_headless() {
+    common::run_ctx(|ctx| unsafe {
+        let mut record = PonkoMeshCost {
+            models: 77,
+            ..Default::default()
+        };
+        let mut names = [1; 8];
+        let mut len = 9;
+        let mut bytes = 9;
+        assert_eq!(
+            ponko_ctx_mesh_costs(
+                ctx,
+                &mut record,
+                1,
+                names.as_mut_ptr(),
+                names.len(),
+                &mut len,
+                &mut bytes
+            ),
+            PONKO_OK
+        );
+        assert_eq!((len, bytes), (0, 0));
+        assert_eq!(record.models, 77, "empty listing leaves caller storage alone");
+        assert_eq!(names, [1; 8]);
+        assert_eq!(
+            ponko_ctx_mesh_costs(ctx, null_mut(), 1, null_mut(), 0, &mut len, &mut bytes),
+            PONKO_INVALID_ARGUMENT
+        );
+    });
 }

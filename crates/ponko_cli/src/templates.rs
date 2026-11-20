@@ -17,11 +17,14 @@ pub enum Kind {
     /// A dedicated game server: headless, `run_server`, a bot client and a
     /// container image recipe.
     Server,
+    /// A plugin crate for other people's games: a library with a `Plugin`,
+    /// headless tests, the engine without default features.
+    Plugin,
 }
 
 impl Kind {
     #[cfg(test)]
-    pub const ALL: [Kind; 4] = [Kind::TwoD, Kind::ThreeD, Kind::Headless, Kind::Server];
+    pub const ALL: [Kind; 5] = [Kind::TwoD, Kind::ThreeD, Kind::Headless, Kind::Server, Kind::Plugin];
 
     /// The template's folder under `templates/`.
     #[cfg(test)]
@@ -31,6 +34,7 @@ impl Kind {
             Kind::ThreeD => "3d",
             Kind::Headless => "headless",
             Kind::Server => "server",
+            Kind::Plugin => "plugin",
         }
     }
 
@@ -41,6 +45,7 @@ impl Kind {
             Kind::ThreeD => THREE_D,
             Kind::Headless => HEADLESS,
             Kind::Server => SERVER,
+            Kind::Plugin => PLUGIN,
         }
     }
 }
@@ -90,6 +95,17 @@ const SERVER: &[(&str, &str)] = template!(
     "Dockerfile",
     ".dockerignore"
 );
+
+/// A library, not a game: no `main`, assets or MCP config.
+const PLUGIN: &[(&str, &str)] = &[
+    ("Cargo.toml", include_str!("../templates/plugin/Cargo.toml.liquid")),
+    (".gitignore", include_str!("../templates/plugin/.gitignore")),
+    ("AGENTS.md", include_str!("../templates/plugin/AGENTS.md")),
+    ("CLAUDE.md", include_str!("../templates/plugin/CLAUDE.md")),
+    ("README.md", include_str!("../templates/plugin/README.md")),
+    ("src/lib.rs", include_str!("../templates/plugin/src/lib.rs")),
+    ("tests/plugin.rs", include_str!("../templates/plugin/tests/plugin.rs")),
+];
 
 #[cfg(test)]
 mod tests {
@@ -189,6 +205,55 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The plugin template's dependency contract: no engine default
+    /// features, so a plugin never turns on a window, sound or a GPU for
+    /// the games that use it.
+    #[test]
+    fn the_plugin_template_builds_the_engine_without_default_features() {
+        let manifest = Kind::Plugin.files()[0].1;
+        let line = manifest.lines().find(|l| l.starts_with("ponko = ")).unwrap();
+        assert!(line.contains("default-features = false"), "{line}");
+        let lib = Kind::Plugin.files().iter().find(|(n, _)| *n == "src/lib.rs").unwrap().1;
+        assert!(lib.contains("impl Plugin for"), "the template is a plugin");
+        for (name, text) in Kind::Plugin.files().iter().filter(|(n, _)| n.ends_with(".rs")) {
+            assert!(!text.contains("ponko::__"), "{name} uses only the public API");
+        }
+    }
+
+    /// What `tests/plugin-crate/Cargo.toml` has after the template's text.
+    const PLUGIN_CRATE_WORKSPACE: &str =
+        "\n# Only in the engine's copy: its own workspace, outside the engine's.\n[workspace]\n";
+
+    /// `tests/plugin-crate` in the engine is this template, generated as
+    /// `plugin-crate` against the checkout (`path = "../.."`); the engine's
+    /// `tests/plugin_crate.rs` builds it outside the workspace and runs its
+    /// tests. `PONKO_UPDATE_PLUGIN_CRATE=1` rewrites it after a template change.
+    #[test]
+    fn the_engines_outside_plugin_crate_is_this_template() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/plugin-crate");
+        let update = std::env::var_os("PONKO_UPDATE_PLUGIN_CRATE").is_some();
+        for (name, text) in Kind::Plugin.files() {
+            let mut wanted = crate::new::fill(text, "plugin-crate", "plugin_crate");
+            if *name == "Cargo.toml" {
+                wanted = crate::new::set_engine(&wanted, &crate::new::Engine::Path("../..".into())).unwrap();
+                // A workspace of its own: inside the engine's folder, Cargo
+                // would take it for a member (`"."` is one, and every
+                // folder below it with it), so `exclude` can't keep it out.
+                wanted.push_str(PLUGIN_CRATE_WORKSPACE);
+            }
+            let path = dir.join(name);
+            if update {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, &wanted).unwrap();
+            }
+            let found = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
+            assert!(
+                found == wanted,
+                "tests/plugin-crate/{name} differs from templates/plugin: run this test with PONKO_UPDATE_PLUGIN_CRATE=1"
+            );
         }
     }
 

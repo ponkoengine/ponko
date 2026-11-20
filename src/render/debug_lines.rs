@@ -1,7 +1,11 @@
 //! Debug lines (`ctx.debug`) in the lit 3D frame: one instance per line,
 //! expanded on the GPU into a quad of the line's width in pixels. All of a
-//! frame's lines are one buffer and two draw calls: the depth-tested ones
-//! (behind nearer surfaces), then the ones on top. They are drawn last in
+//! frame's lines are one buffer and a draw call for each kind there is:
+//! the depth-tested ones (behind nearer surfaces), then the ones on top,
+//! each opaque first, then see-through. Opaque lines are drawn without
+//! blending: thin quads with several samples a pixel cost about three
+//! times as much blended (100,000 lines at 1280x720 with 4 samples, see
+//! `hundred_thousand_lines_gpu_time`). They are drawn last in
 //! the pass that draws the particles (the opaque pass, or the transparent
 //! one when it has a pass of its own), against the scene's depth, which
 //! they never write. Made the first time a frame has a line.
@@ -19,16 +23,17 @@ struct Camera {
     viewport: [f32; 4],
 }
 
-/// The two pipelines, the camera and this frame's lines.
+/// The four pipelines (as `GpuLines::lists`: depth-tested opaque and
+/// see-through, on top opaque and see-through), the camera and this
+/// frame's lines.
 pub(super) struct DebugLines {
-    tested: wgpu::RenderPipeline,
-    top: wgpu::RenderPipeline,
+    pipelines: [wgpu::RenderPipeline; 4],
     camera: Synced,
     layout: wgpu::BindGroupLayout,
     group: wgpu::BindGroup,
     lines: Synced,
-    /// Lines drawn depth-tested, then on top, this frame (what fits).
-    counts: (u32, u32),
+    /// Lines of each kind this frame (what fits), in the order of `pipelines`.
+    counts: [u32; 4],
     /// The sample count and depth format the pipelines are for.
     pub(super) made_for: (u32, wgpu::TextureFormat),
 }
@@ -63,7 +68,7 @@ impl DebugLines {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3, 3 => Unorm8x4],
         };
-        let pipeline = |label, compare| {
+        let pipeline = |label, compare, blend| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -91,7 +96,7 @@ impl DebugLines {
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: super::gpu3d::HDR_FORMAT,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -116,15 +121,21 @@ impl DebugLines {
             Upload::Other,
             (4096, 4, MAX_WRITES),
         );
+        // Reverse-Z: nearer is greater.
+        let (tested, top) = (wgpu::CompareFunction::GreaterEqual, wgpu::CompareFunction::Always);
+        let blended = Some(wgpu::BlendState::ALPHA_BLENDING);
         Self {
-            // Reverse-Z: nearer is greater.
-            tested: pipeline("debug lines", wgpu::CompareFunction::GreaterEqual),
-            top: pipeline("debug lines on top", wgpu::CompareFunction::Always),
+            pipelines: [
+                pipeline("debug lines", tested, None),
+                pipeline("debug lines see-through", tested, blended),
+                pipeline("debug lines on top", top, None),
+                pipeline("debug lines on top see-through", top, blended),
+            ],
             camera,
             layout,
             group,
             lines,
-            counts: (0, 0),
+            counts: [0; 4],
             made_for: (samples, depth),
         }
     }
@@ -159,43 +170,41 @@ impl DebugLines {
         }
         self.camera.write(queue, 0, bytemuck::bytes_of(&camera));
         let stride = size_of::<LineInstance>();
-        let total = lines.tested.len() + lines.top.len();
-        self.lines.reserve(device, total * stride);
-        let fits = self.lines.fits() / stride;
-        let tested = lines.tested.len().min(fits);
-        let top = lines.top.len().min(fits - tested);
-        self.lines
-            .write(queue, 0, bytemuck::cast_slice(&lines.tested[..tested]));
-        self.lines
-            .write(queue, tested * stride, bytemuck::cast_slice(&lines.top[..top]));
-        self.counts = (tested as u32, top as u32);
+        self.lines.reserve(device, lines.line_count() * stride);
+        let mut room = self.lines.fits() / stride;
+        let mut at = 0;
+        for (count, list) in self.counts.iter_mut().zip(lines.lists()) {
+            let n = list.len().min(room);
+            self.lines.write(queue, at * stride, bytemuck::cast_slice(&list[..n]));
+            (at, room) = (at + n, room - n);
+            *count = n as u32;
+        }
     }
 
     /// Lines to draw this frame.
     pub(super) fn count(&self) -> u32 {
-        self.counts.0 + self.counts.1
+        self.counts.iter().sum()
     }
 
     /// Draw calls this frame: one per kind with lines.
     pub(super) fn draw_count(&self) -> usize {
-        usize::from(self.counts.0 > 0) + usize::from(self.counts.1 > 0)
+        self.counts.iter().filter(|&&n| n > 0).count()
     }
 
     /// Draws the lines into `pass` (the HDR frame over the scene's depth).
     pub(super) fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
-        let (tested, top) = self.counts;
-        if tested + top == 0 {
+        if self.count() == 0 {
             return;
         }
         pass.set_bind_group(0, &self.group, &[]);
         pass.set_vertex_buffer(0, self.lines.buffer().slice(..));
-        if tested > 0 {
-            pass.set_pipeline(&self.tested);
-            pass.draw(0..6, 0..tested);
-        }
-        if top > 0 {
-            pass.set_pipeline(&self.top);
-            pass.draw(0..6, tested..tested + top);
+        let mut first = 0;
+        for (pipeline, &n) in self.pipelines.iter().zip(&self.counts) {
+            if n > 0 {
+                pass.set_pipeline(pipeline);
+                pass.draw(0..6, first..first + n);
+            }
+            first += n;
         }
     }
 

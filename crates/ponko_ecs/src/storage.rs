@@ -16,6 +16,10 @@ use crate::entity::Entity;
 pub struct ComponentId(pub(crate) u32);
 
 impl ComponentId {
+    /// A component the world never registered, which no archetype has: what
+    /// a read-only query on a shared world looks for when it names one.
+    pub(crate) const UNKNOWN: ComponentId = ComponentId(u32::MAX);
+
     /// The id as a plain number (stable for the lifetime of the world).
     ///
     /// ```

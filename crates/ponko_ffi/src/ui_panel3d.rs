@@ -54,7 +54,7 @@ pub unsafe extern "C" fn ponko_ctx_create_ui_panel(
             let size: ponko::prelude::Vec2 = to_c(size);
             let (panel, model): (UiPanel3D, Model) =
                 c.gfx.try_create_ui_panel(width, height, size).map_err(invalid_owned)?;
-            let texture = panel.texture;
+            let texture = panel.target.texture();
             c.world.insert(e, panel);
             c.world.insert(e, model);
             if out_texture.is_null() {

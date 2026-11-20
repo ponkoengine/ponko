@@ -151,7 +151,12 @@ changed attachments skips chunks nobody wrote to (see [change
 detection](ecs.md#change-detection)). Removing a child and attaching a
 new one under a still 100,000-wide root costs 0.04–0.12 ms: the update
 takes removed links out of their old parent's list directly, without
-walking the tree.
+walking the tree. A despawned parent costs the links of its own children:
+the hierarchy notes its children list as it goes, with an `on_remove`
+hook on `Children` (see [component hooks](ecs.md#component-hooks)), and
+the update looks at those links only. With 100,000 root and child pairs
+and one root despawned per update, an update takes 0.41 ms at best, where
+scanning every link took 0.51 ms.
 
 A level with many children (a wide tree, many moving roots) is placed in
 one pass over the attached entities on all cores, each finding its

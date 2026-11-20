@@ -176,7 +176,8 @@ impl Game {
             }
 
             // Wait for the tick's time; tools and packets are served first.
-            ctx.net.begin_frame();
+            let now = ctx.time.elapsed();
+            ctx.net.begin_frame(now);
             if let Some(control) = &control {
                 control.poll(&mut ctx);
                 if ctx.quit_requested() {
@@ -198,7 +199,8 @@ impl Game {
             if next_tick > now {
                 std::thread::sleep(next_tick - now);
                 // Packets that came in while sleeping reach this tick.
-                ctx.net.begin_frame();
+                let now = ctx.time.elapsed();
+                ctx.net.begin_frame(now);
             }
 
             let tick_start = Instant::now();

@@ -1,0 +1,17 @@
+{
+  "name": "view_model",
+  "scene": "a red 8 cm box held half a metre ahead (below and right of the centre) over a grey wall 0.3 m ahead",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.01,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "94aae2865dd7cf97",
+  "reason": "New view-model pass: a held item drawn over a wall"
+}

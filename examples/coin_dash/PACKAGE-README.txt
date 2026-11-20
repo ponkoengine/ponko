@@ -19,6 +19,9 @@ Controls (change them in Settings, press O or the gamepad's North button)
   Back to title   Q, or East
   Settings        O, or North
 
+On a touch screen a stick appears at the bottom left and a pause button in
+the top right corner (a settings button on the title); a tap confirms.
+
 Languages
 ---------
 English and Arabic: the Language button in Settings switches between them,

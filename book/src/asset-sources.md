@@ -43,12 +43,21 @@ short name, unique among the sources you add) and `read(name)` (the bytes, or
 an error of kind `NotFound` when the source doesn't have that name). Use it
 for a pack file or a download cache.
 
+Sources are read on the game thread, since a source need not be safe to use
+from another one. A source that is (`Send + Sync`, as `MemorySource` and
+`PackSource` are) can be added with `ctx.assets.add_background_source(source)`
+instead: [asset groups](loading.md) and [streams](streaming.md) then read it
+on worker threads, and it can say a file's size without reading it
+(`AssetSource::size`) so a loading bar knows the total up front. It is asked
+in the same order as the others.
+
 From C++, `ctx.add_asset_source(ponko::memory_source(id).with(name, bytes))`
 adds a copy of a memory source, and `ctx.add_asset_source(id, read)` takes a
 function from a name to `std::optional<std::vector<std::uint8_t>>` (`nullopt`
 when the source doesn't have it; an exception is reported as an I/O error).
 From C, `ponko_memory_source_new`, `ponko_memory_source_insert` and
-`ponko_ctx_add_memory_source`, or `ponko_ctx_add_asset_source` with a read
+`ponko_ctx_add_memory_source` (`ponko_ctx_add_background_memory_source` to
+read it on workers), or `ponko_ctx_add_asset_source` with a read
 callback: it returns `PONKO_OK` with the bytes (which stay valid until the
 next call to it), `PONKO_NOT_FOUND` to let the next source answer, or another
 status for an I/O error. It runs inside the load that needs it and must not

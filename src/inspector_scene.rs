@@ -8,7 +8,7 @@
 //! be undone and redone, and the control endpoint's `editor.*` methods make
 //! the same ones. The math lives in `crate::edit3d`, tested without egui.
 
-use egui::{Color32, Key, RichText, ScrollArea, Sense, Stroke, Ui};
+use egui::{Color32, Key, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui};
 use glam::Vec2;
 use ponko_ecs::Entity;
 
@@ -38,6 +38,21 @@ pub(crate) enum AssetDrag {
     Prefab(String),
     /// A material of a loaded mesh file: dropped on a model, it paints it.
     Material { mesh: String, index: usize },
+    /// An image: dropped in the 2D view, it becomes a sprite.
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    Texture(String),
+}
+
+/// What a hierarchy row asks for.
+#[derive(Debug, Clone, PartialEq)]
+enum RowAction {
+    StartRename(Entity),
+    CancelRename,
+    Rename(Entity, String),
+    Duplicate(Entity),
+    Delete(Entity),
+    NewChild(Entity),
+    Detach(Entity),
 }
 
 /// An entity dragged in the hierarchy, to be dropped on its new parent.
@@ -57,8 +72,35 @@ pub(crate) struct SceneEdit {
     pub flying: bool,
     #[cfg(feature = "3d")]
     pub gizmo: Gizmo,
+    /// The 2D gizmo.
+    pub gizmo2: Gizmo2,
+    /// The entity being renamed in the hierarchy, and the name typed so far.
+    pub renaming: Option<(Entity, String)>,
     /// The asset browser's list, until refreshed.
-    assets: Option<AssetList>,
+    pub(super) assets: Option<AssetList>,
+}
+
+/// The 2D gizmo's settings and the drag in progress (a handle, or the
+/// selection dragged by what was clicked).
+pub(crate) struct Gizmo2 {
+    pub mode: crate::edit2d::Mode,
+    pub space: crate::edit2d::Space,
+    pub snap: crate::edit2d::Snap,
+    pub drag: Option<(crate::edit2d::Drag, editor::Before)>,
+    /// The handle under the mouse, drawn highlighted.
+    pub hover: Option<crate::edit2d::Handle>,
+}
+
+impl Default for Gizmo2 {
+    fn default() -> Self {
+        Self {
+            mode: Default::default(),
+            space: Default::default(),
+            snap: crate::edit2d::Snap::pixels(),
+            drag: None,
+            hover: None,
+        }
+    }
 }
 
 /// The 3D gizmo's settings and the drag in progress.
@@ -77,10 +119,17 @@ impl SceneEdit {
     /// Drops a gizmo drag in progress without recording it (a scene load
     /// replaced the entities it moves).
     pub fn forget_drag(&mut self) {
+        self.gizmo2.drag = None;
         #[cfg(feature = "3d")]
         {
             self.gizmo.drag = None;
         }
+    }
+
+    /// The asset browser's list, read once until [`forget_assets`](Self::forget_assets).
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub fn asset_list(&mut self, ctx: &Ctx) -> AssetList {
+        self.assets.get_or_insert_with(|| editor::browse(ctx)).clone()
     }
 
     /// Lists the assets again next time the browser is drawn.
@@ -94,10 +143,8 @@ impl SceneEdit {
         use winit::keyboard::KeyCode;
         match code {
             KeyCode::KeyY => command,
-            KeyCode::KeyW
-            | KeyCode::KeyE
-            | KeyCode::KeyR
-            | KeyCode::KeyF
+            KeyCode::KeyW | KeyCode::KeyE | KeyCode::KeyR => !command,
+            KeyCode::KeyF
             | KeyCode::KeyA
             | KeyCode::KeyS
             | KeyCode::KeyD
@@ -131,7 +178,16 @@ fn world_is_3d(ctx: &Ctx) -> bool {
 
 /// A short name for `e` in the hierarchy: its mesh file, else its
 /// components (without the transform and links).
-fn label(ctx: &Ctx, e: Entity) -> String {
+/// What the hierarchy puts before a prefab instance's name (a glyph egui's
+/// built-in fonts have).
+const PREFAB_MARK: char = '◊';
+
+pub(super) fn label(ctx: &Ctx, e: Entity) -> String {
+    if let Some(name) = ctx.world.get::<crate::hierarchy::EntityName>(e)
+        && !name.0.is_empty()
+    {
+        return name.0.clone();
+    }
     if let Ok(model) = ctx.world.get_json(e, "Model")
         && let Some(mesh) = model["mesh"].as_str()
     {
@@ -147,7 +203,14 @@ fn label(ctx: &Ctx, e: Entity) -> String {
                 .filter(|n| {
                     !matches!(
                         n.as_str(),
-                        "Transform2D" | "Transform3D" | "Attached" | "Attached3D" | "PrefabParts" | "Children"
+                        "Transform2D"
+                            | "Transform3D"
+                            | "Attached"
+                            | "Attached3D"
+                            | "PrefabParts"
+                            | "PrefabInstance"
+                            | "Children"
+                            | "EntityName"
                     )
                 })
                 .take(3)
@@ -176,15 +239,34 @@ impl Panels {
     /// Saves the world to scene file `path`, which becomes the one Save
     /// writes by default.
     pub(super) fn save_scene(&mut self, ctx: &mut Ctx, path: &str) {
+        self.save_as(ctx, path, editor::DocKind::Scene);
+    }
+
+    /// Saves the world as `kind` to `path`, which becomes the document's
+    /// file (see `crate::editor`'s document).
+    pub(crate) fn save_as(&mut self, ctx: &mut Ctx, path: &str, kind: editor::DocKind) {
         let saved = ctx
-            .assets
-            .save_scene(&ctx.world, path)
+            .edit(|ed, ctx| ed.save_as(ctx, path, kind))
             .map_err(String::from)
             .map(|()| format!("saved {path}"));
         if let Some(done) = self.report(saved) {
-            ctx.scene_file = Some(path.to_owned());
             self.status = Some(done);
             self.scene.assets = None;
+            self.prefabs = None;
+        }
+    }
+
+    /// Opens scene or prefab file `path` as the document.
+    pub(crate) fn open_file(&mut self, ctx: &mut Ctx, path: &str) {
+        let opened = ctx
+            .edit(|ed, ctx| ed.open(ctx, path))
+            .map_err(String::from)
+            .map(|kind| format!("opened {} {path}", kind.name()));
+        if let Some(done) = self.report(opened) {
+            self.status = Some(done);
+            self.scene_path = path.to_string();
+            self.select(None, false);
+            self.scene.forget_drag();
         }
     }
 
@@ -242,40 +324,53 @@ impl Panels {
                 let redone = ctx.edit(|ed, ctx| ed.redo(ctx));
                 self.report(redone);
             }
-            ui.label("View");
-            let mut three = self.scene.active3d;
-            ui.selectable_value(&mut three, false, "2D");
-            ui.add_enabled_ui(cfg!(feature = "3d"), |ui| ui.selectable_value(&mut three, true, "3D"));
-            if three != self.scene.active3d {
-                self.scene.view3d = Some(three);
-                self.scene.active3d = three;
-            }
+            self.view_toggle(ui);
         });
-        #[cfg(feature = "3d")]
-        if self.scene.active3d {
-            use crate::edit3d::{Mode, Space};
-            let g = &mut self.scene.gizmo;
+        self.gizmo_tools(ui);
+        let help = if self.scene.active3d {
+            "Click picks (Shift adds), drag a handle, right-drag looks, WASD/QE fly, wheel moves, F frames."
+        } else {
+            "W, E, R: move, rotate, scale gizmo. Drag a handle, or what you clicked."
+        };
+        ui.label(RichText::new(help).weak());
+    }
+
+    /// The 2D / 3D view switch.
+    pub(crate) fn view_toggle(&mut self, ui: &mut Ui) {
+        ui.label("View");
+        let mut three = self.scene.active3d;
+        ui.selectable_value(&mut three, false, "2D");
+        ui.add_enabled_ui(cfg!(feature = "3d"), |ui| ui.selectable_value(&mut three, true, "3D"));
+        if three != self.scene.active3d {
+            self.scene.view3d = Some(three);
+            self.scene.active3d = three;
+        }
+    }
+
+    /// The gizmo's mode, space and snapping, for the view in use.
+    pub(crate) fn gizmo_tools(&mut self, ui: &mut Ui) {
+        use crate::edit2d::{Mode, Snap, Space};
+        /// The mode, space and snap rows, with the move step's unit.
+        fn rows(ui: &mut Ui, mode: &mut Mode, space: &mut Space, snap: &mut Snap, step_max: f32, unit: &str) {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut g.mode, Mode::Translate, "Move")
-                    .on_hover_text("W");
-                ui.selectable_value(&mut g.mode, Mode::Rotate, "Rotate")
-                    .on_hover_text("E");
-                ui.selectable_value(&mut g.mode, Mode::Scale, "Scale")
-                    .on_hover_text("R");
+                ui.selectable_value(mode, Mode::Translate, "Move").on_hover_text("W");
+                ui.selectable_value(mode, Mode::Rotate, "Rotate").on_hover_text("E");
+                ui.selectable_value(mode, Mode::Scale, "Scale").on_hover_text("R");
                 ui.separator();
-                ui.selectable_value(&mut g.space, Space::World, "World");
-                ui.selectable_value(&mut g.space, Space::Local, "Local")
+                ui.selectable_value(space, Space::World, "World");
+                ui.selectable_value(space, Space::Local, "Local")
                     .on_hover_text("The selected entity's own axes (scaling always uses them)");
             });
             ui.horizontal(|ui| {
-                ui.checkbox(&mut g.snap.on, "Snap");
+                ui.checkbox(&mut snap.on, "Snap");
                 ui.add(
-                    egui::DragValue::new(&mut g.snap.step)
-                        .range(0.01..=100.0)
-                        .speed(0.05)
-                        .prefix("move "),
+                    egui::DragValue::new(&mut snap.step)
+                        .range(0.01..=step_max)
+                        .speed(step_max * 0.0005)
+                        .prefix("move ")
+                        .suffix(unit),
                 );
-                let mut degrees = g.snap.angle.to_degrees();
+                let mut degrees = snap.angle.to_degrees();
                 if ui
                     .add(
                         egui::DragValue::new(&mut degrees)
@@ -285,54 +380,90 @@ impl Panels {
                     )
                     .changed()
                 {
-                    g.snap.angle = degrees.to_radians();
+                    snap.angle = degrees.to_radians();
                 }
                 ui.add(
-                    egui::DragValue::new(&mut g.snap.scale)
+                    egui::DragValue::new(&mut snap.scale)
                         .range(0.01..=10.0)
                         .speed(0.01)
                         .prefix("scale "),
                 );
             });
-            ui.label(
-                RichText::new(
-                    "Click picks (Shift adds), drag a handle, right-drag looks, WASD/QE fly, wheel moves, F frames.",
-                )
-                .weak(),
-            );
         }
+        #[cfg(feature = "3d")]
+        if self.scene.active3d {
+            let g = &mut self.scene.gizmo;
+            rows(ui, &mut g.mode, &mut g.space, &mut g.snap, 100.0, "");
+            return;
+        }
+        let g = &mut self.scene.gizmo2;
+        rows(ui, &mut g.mode, &mut g.space, &mut g.snap, 1000.0, " px");
     }
 
     /// The hierarchy: every entity under what it hangs off. Drag a row onto
     /// another to make it follow that one, or onto the top line to detach it.
     pub(crate) fn hierarchy_panel(&mut self, ui: &mut Ui, ctx: &mut Ctx) {
+        self.hierarchy_rows(ui, ctx, 260.0);
+    }
+
+    /// The hierarchy's rows, at most `max_height` tall (they scroll). Click
+    /// selects (Shift or Ctrl adds), double-click or F2 renames, a drag
+    /// onto another row parents (the whole selection, if the dragged row
+    /// is in it), and the right button opens a menu.
+    pub(crate) fn hierarchy_rows(&mut self, ui: &mut Ui, ctx: &mut Ctx, max_height: f32) {
         let nodes = editor::hierarchy(&ctx.world);
         let detach = ui
-            .add(egui::Label::new(RichText::new("⤒ drop here to detach").weak()).sense(Sense::hover()))
+            .add(egui::Label::new(RichText::new("drop here to detach").weak()).sense(Sense::hover()))
             .on_hover_text("Drag an entity from the list here to make it follow nothing");
         if let Some(dragged) = detach.dnd_release_payload::<HierarchyDrag>() {
-            self.reparent(ctx, dragged.0, None);
+            let moved = self.dragged_with_selection(dragged.0);
+            self.reparent_many(ctx, &moved, None);
         }
         let mut depth: std::collections::HashMap<Entity, usize> = std::collections::HashMap::new();
         for n in &nodes {
             let d = n.parent.and_then(|(p, _)| depth.get(&p)).map_or(0, |d| d + 1);
             depth.insert(n.entity, d);
         }
+        if self.scene.renaming.is_none()
+            && let Some(e) = self.selected
+            && !ui.ctx().egui_wants_keyboard_input()
+            && ui.input(|i| self.keys.pressed(i, super::keys::Action::Rename))
+        {
+            self.start_rename(ctx, e);
+        }
         let mut clicked = None;
         let mut dropped = None;
+        let mut action = None;
         let shift = ui.input(|i| i.modifiers.shift || i.modifiers.command);
         let selection = self.selection();
         ScrollArea::vertical()
             .id_salt("inspector-hierarchy")
-            .max_height(260.0)
+            .max_height(max_height)
             .auto_shrink([false, true])
             .show_rows(ui, ROW_HEIGHT, nodes.len(), |ui, range| {
                 for n in &nodes[range] {
                     let e = n.entity;
                     let indent = depth[&e] as f32 * 14.0;
+                    if let Some((renamed, text)) = &mut self.scene.renaming
+                        && *renamed == e
+                    {
+                        ui.horizontal(|ui| {
+                            ui.add_space(indent);
+                            let field = ui.add(TextEdit::singleline(text).desired_width(160.0));
+                            if !field.has_focus() && !field.lost_focus() {
+                                field.request_focus();
+                            }
+                            if ui.input(|i| i.key_pressed(Key::Escape)) {
+                                action = Some(RowAction::CancelRename);
+                            } else if field.lost_focus() {
+                                action = Some(RowAction::Rename(e, text.clone()));
+                            }
+                        });
+                        continue;
+                    }
                     let mut text = label(ctx, e);
                     if n.prefab {
-                        text = format!("▣ {text}");
+                        text = format!("{PREFAB_MARK} {text}");
                     }
                     if let Some((_, link)) = n.parent
                         && link != editor::Link::Attached
@@ -348,7 +479,9 @@ impl Panels {
                                 ui.selectable_label(selected, format!("{text}  #{}", e.to_bits()))
                             })
                             .inner;
-                        if row.clicked() {
+                        if row.double_clicked() {
+                            action = Some(RowAction::StartRename(e));
+                        } else if row.clicked() {
                             clicked = Some(e);
                         }
                         if let Some(dragged) = row.dnd_release_payload::<HierarchyDrag>() {
@@ -362,6 +495,21 @@ impl Panels {
                                 egui::StrokeKind::Outside,
                             );
                         }
+                        row.context_menu(|ui| {
+                            let mut pick = |ui: &mut Ui, text: &str, a: RowAction| {
+                                if ui.button(text).clicked() {
+                                    action = Some(a);
+                                    ui.close();
+                                }
+                            };
+                            pick(ui, "Rename (F2)", RowAction::StartRename(e));
+                            pick(ui, "Duplicate (Ctrl+D)", RowAction::Duplicate(e));
+                            pick(ui, "Delete (Del)", RowAction::Delete(e));
+                            pick(ui, "New child", RowAction::NewChild(e));
+                            if n.parent.is_some() {
+                                pick(ui, "Detach", RowAction::Detach(e));
+                            }
+                        });
                     });
                 }
             });
@@ -371,13 +519,76 @@ impl Panels {
         if let Some((child, parent)) = dropped
             && child != parent
         {
-            self.reparent(ctx, child, Some(parent));
+            let moved: Vec<Entity> = self
+                .dragged_with_selection(child)
+                .into_iter()
+                .filter(|&c| c != parent)
+                .collect();
+            self.reparent_many(ctx, &moved, Some(parent));
+        }
+        if let Some(action) = action {
+            self.row_action(ctx, action);
+        }
+    }
+
+    /// What a drag of `e` in the hierarchy moves: the selection if `e` is
+    /// in it, else `e` alone.
+    fn dragged_with_selection(&self, e: Entity) -> Vec<Entity> {
+        let selection = self.selection();
+        if selection.contains(&e) { selection } else { vec![e] }
+    }
+
+    /// Starts renaming `e` in its hierarchy row.
+    pub(crate) fn start_rename(&mut self, ctx: &Ctx, e: Entity) {
+        let name = ctx
+            .world
+            .get::<crate::hierarchy::EntityName>(e)
+            .map(|n| n.0.clone())
+            .unwrap_or_default();
+        self.scene.renaming = Some((e, name));
+    }
+
+    /// Does what a hierarchy row asked for.
+    fn row_action(&mut self, ctx: &mut Ctx, action: RowAction) {
+        match action {
+            RowAction::StartRename(e) => self.start_rename(ctx, e),
+            RowAction::CancelRename => self.scene.renaming = None,
+            RowAction::Rename(e, name) => {
+                self.scene.renaming = None;
+                let renamed = ctx.edit(|ed, ctx| ed.rename(ctx, e, &name));
+                self.report(renamed);
+            }
+            RowAction::Duplicate(e) => {
+                let copies =
+                    ctx.edit(|ed, ctx| ed.duplicate_many(ctx, &[e], super::DUPLICATE_OFFSET, editor::Offset3::ZERO));
+                if let Some(copies) = self.report(copies) {
+                    self.select(copies.first().copied(), false);
+                }
+            }
+            RowAction::Delete(e) => {
+                let deleted = ctx.edit(|ed, ctx| ed.delete_many(ctx, &[e]));
+                self.report(deleted);
+                self.select(None, false);
+            }
+            RowAction::NewChild(parent) => {
+                let child = ctx.edit(|ed, ctx| ed.spawn_child(ctx, parent));
+                if let Some(child) = self.report(child) {
+                    self.select(Some(child), false);
+                }
+            }
+            RowAction::Detach(e) => self.reparent(ctx, e, None),
         }
     }
 
     /// Makes `child` follow `parent` (or nothing), with undo.
     pub(crate) fn reparent(&mut self, ctx: &mut Ctx, child: Entity, parent: Option<Entity>) {
         let linked = ctx.edit(|ed, ctx| ed.set_parent(ctx, child, parent));
+        self.report(linked);
+    }
+
+    /// Makes `children` follow `parent` (or nothing), as one undo step.
+    pub(crate) fn reparent_many(&mut self, ctx: &mut Ctx, children: &[Entity], parent: Option<Entity>) {
+        let linked = ctx.edit(|ed, ctx| ed.set_parents(ctx, children, parent));
         self.report(linked);
     }
 
@@ -447,12 +658,7 @@ impl Panels {
             }
         });
         if let Some(path) = open {
-            let loaded = ctx.load_scene(&path).map(|()| format!("loaded {path}"));
-            if let Some(done) = self.report(loaded) {
-                self.status = Some(done);
-                self.scene_path = path;
-                self.select(None, false);
-            }
+            self.open_file(ctx, &path);
         }
     }
 
@@ -483,7 +689,9 @@ impl Panels {
         at: Vec2,
     ) -> Result<Entity, crate::error::Error> {
         #[cfg(feature = "3d")]
-        if self.scene.active3d || matches!(asset, AssetDrag::Mesh(_) | AssetDrag::Material { .. }) {
+        if (self.scene.active3d || matches!(asset, AssetDrag::Mesh(_) | AssetDrag::Material { .. }))
+            && !matches!(asset, AssetDrag::Texture(_))
+        {
             use crate::edit3d::{Ray, ground_point, pick, snap};
             let ray = Ray::from_screen(&ctx.scene3d.camera, at);
             let mut point = ground_point(&ray, 0.0, 10.0);
@@ -508,12 +716,23 @@ impl Panels {
                     ctx.edit(|ed, ctx| ed.set(ctx, target, "ModelMaterial", value))?;
                     Ok(target)
                 }
+                AssetDrag::Texture(_) => unreachable!("textures are placed in 2D below"),
             };
         }
         match asset {
             AssetDrag::Prefab(path) => {
                 let world_at = ctx.camera.screen_to_world(at);
                 ctx.edit(|ed, ctx| ed.spawn_prefab(ctx, path, world_at))
+            }
+            #[cfg(feature = "editor")]
+            AssetDrag::Texture(_) if self.scene.active3d => Err(crate::error::Error::new(
+                crate::error::ErrorKind::Unsupported,
+                "an image becomes a sprite: drop it in the 2D view",
+            )),
+            #[cfg(feature = "editor")]
+            AssetDrag::Texture(path) => {
+                let world_at = ctx.camera.screen_to_world(at);
+                ctx.edit(|ed, ctx| ed.spawn_sprite(ctx, path, world_at))
             }
             _ => Err(crate::error::Error::new(
                 crate::error::ErrorKind::Unsupported,
@@ -525,10 +744,11 @@ impl Panels {
     /// Delete and duplicate for the whole selection; redo.
     pub(crate) fn selection_keys(&mut self, ui: &Ui, ctx: &mut Ctx) -> bool {
         let (redo, delete, duplicate) = ui.input(|i| {
+            use super::keys::Action;
             (
-                i.modifiers.command && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z))),
-                i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
-                i.modifiers.command && i.key_pressed(Key::D),
+                self.keys.pressed(i, Action::Redo),
+                self.keys.pressed(i, Action::Delete),
+                self.keys.pressed(i, Action::Duplicate),
             )
         });
         if redo {
@@ -547,20 +767,172 @@ impl Panels {
             return true;
         }
         if duplicate {
-            #[cfg(feature = "3d")]
-            let offset3 = editor::Offset3(DUPLICATE_OFFSET3);
-            #[cfg(not(feature = "3d"))]
-            let offset3 = editor::Offset3::ZERO;
-            let copies = ctx.edit(|ed, ctx| ed.duplicate_many(ctx, &selection, super::DUPLICATE_OFFSET, offset3));
-            if let Some(copies) = self.report(copies) {
-                self.select(None, false);
-                for c in copies {
-                    self.select(Some(c), true);
-                }
-            }
+            self.duplicate_selection(ctx);
             return true;
         }
         false
+    }
+
+    /// Copies the selection (with what hangs off it) a little to the side,
+    /// as one undo step, and selects the copies.
+    pub(crate) fn duplicate_selection(&mut self, ctx: &mut Ctx) {
+        let selection = self.selection();
+        #[cfg(feature = "3d")]
+        let offset3 = editor::Offset3(DUPLICATE_OFFSET3);
+        #[cfg(not(feature = "3d"))]
+        let offset3 = editor::Offset3::ZERO;
+        let copies = ctx.edit(|ed, ctx| ed.duplicate_many(ctx, &selection, super::DUPLICATE_OFFSET, offset3));
+        if let Some(copies) = self.report(copies) {
+            self.select(None, false);
+            for c in copies {
+                self.select(Some(c), true);
+            }
+        }
+    }
+}
+
+/// The 2D gizmo.
+impl Panels {
+    /// The 2D camera under window point `at`, as the world is drawn there.
+    fn camera2d_at(ctx: &Ctx, at: Vec2) -> crate::camera2d::Camera2D {
+        *crate::d2::View::camera_at(&ctx.camera, &ctx.views2d, at)
+    }
+
+    /// The selected entities the 2D gizmo moves: those with a 2D
+    /// transform, without any whose parent is selected too (it carries
+    /// them), with their world transforms, the primary one first.
+    fn gizmo_targets2(&self, ctx: &Ctx) -> Vec<(Entity, crate::d2::Transform)> {
+        let selection = self.selection();
+        selection
+            .iter()
+            .filter(|&&e| !editor::ancestors(&ctx.world, e).iter().any(|a| selection.contains(a)))
+            .filter_map(|&e| ctx.world.get::<crate::d2::Transform>(e).map(|t| (e, *t)))
+            .collect()
+    }
+
+    /// The 2D gizmo's middle (in the world) and axes for the selection.
+    fn gizmo_frame2(&self, ctx: &Ctx) -> Option<(Vec2, [Vec2; 2])> {
+        use crate::edit2d::{Mode, Space, axes};
+        let targets = self.gizmo_targets2(ctx);
+        let first = targets.first()?.1;
+        let pivot = targets.iter().map(|(_, t)| t.position).sum::<Vec2>() / targets.len() as f32;
+        let g = &self.scene.gizmo2;
+        let space = if g.mode == Mode::Scale { Space::Local } else { g.space };
+        Some((pivot, axes(space, first.rotation)))
+    }
+
+    /// The 2D gizmo laid out on screen.
+    fn gizmo_layout2(&self, ctx: &Ctx) -> Option<crate::edit2d::Layout> {
+        let (pivot, axes) = self.gizmo_frame2(ctx)?;
+        let center = ctx.camera.world_to_screen(pivot);
+        Some(crate::edit2d::layout(center, axes))
+    }
+
+    /// The 2D gizmo's handle under window point `at`.
+    pub(super) fn gizmo_hit2(&self, ctx: &Ctx, at: Vec2) -> Option<crate::edit2d::Handle> {
+        let layout = self.gizmo_layout2(ctx)?;
+        crate::edit2d::hit(&layout, self.scene.gizmo2.mode, at)
+    }
+
+    /// Starts dragging `handle` of the selection's gizmo in `mode`, grabbed
+    /// at window point `at`.
+    pub(super) fn begin_gizmo_drag2(
+        &mut self,
+        ctx: &mut Ctx,
+        mode: crate::edit2d::Mode,
+        handle: crate::edit2d::Handle,
+        at: Vec2,
+    ) {
+        let targets = self.gizmo_targets2(ctx);
+        let entities: Vec<Entity> = targets.iter().map(|&(e, _)| e).collect();
+        let camera = Self::camera2d_at(ctx, at);
+        let size = crate::edit2d::GIZMO_PIXELS / camera.zoom.max(1e-6);
+        let g = &self.scene.gizmo2;
+        if let Some(drag) = crate::edit2d::Drag::begin(mode, handle, g.space, targets, camera.screen_to_world(at), size)
+        {
+            let before = editor::Before::of2d(&ctx.world, &entities);
+            self.scene.gizmo2.drag = Some((drag, before));
+        }
+    }
+
+    /// Moves what the drag holds to follow the mouse at window point `at`.
+    pub(super) fn update_gizmo_drag2(&mut self, ctx: &mut Ctx, at: Vec2) {
+        let Some((drag, _)) = &self.scene.gizmo2.drag else {
+            return;
+        };
+        let world_at = Self::camera2d_at(ctx, at).screen_to_world(at);
+        for (e, t) in drag.update(world_at, self.scene.gizmo2.snap) {
+            editor::place_world2d(&mut ctx.world, e, t);
+        }
+        editor::settle(&mut ctx.world);
+    }
+
+    /// Ends a 2D drag: one undo step for everything it changed (none if
+    /// nothing moved).
+    pub(super) fn end_gizmo_drag2(&mut self, ctx: &mut Ctx) {
+        if let Some((_, before)) = self.scene.gizmo2.drag.take() {
+            ctx.edit(|ed, ctx| ed.changed(&ctx.world, before));
+        }
+    }
+
+    /// Move, Rotate and Scale (W, E, R) pick the 2D gizmo.
+    pub(super) fn keys_2d(&mut self, ui: &Ui) {
+        use crate::edit2d::Mode;
+        if ui.ctx().egui_wants_keyboard_input() {
+            return;
+        }
+        let (w, e, r) = ui.input(|i| {
+            use super::keys::Action;
+            (
+                self.keys.pressed(i, Action::Move),
+                self.keys.pressed(i, Action::Rotate),
+                self.keys.pressed(i, Action::Scale),
+            )
+        });
+        let g = &mut self.scene.gizmo2;
+        if w {
+            g.mode = Mode::Translate;
+        } else if e {
+            g.mode = Mode::Rotate;
+        } else if r {
+            g.mode = Mode::Scale;
+        }
+    }
+
+    /// The 2D gizmo, over the world.
+    pub(super) fn draw_gizmo2(&self, painter: &egui::Painter, ctx: &Ctx) {
+        use crate::edit2d::{Handle, Mode};
+        let Some(l) = self.gizmo_layout2(ctx) else {
+            return;
+        };
+        let g = &self.scene.gizmo2;
+        let active = g.drag.as_ref().map(|(d, _)| d.handle).or(g.hover);
+        let mode = g.drag.as_ref().map_or(g.mode, |(d, _)| d.mode);
+        let tint = |handle: Handle, base: Color32| {
+            if active == Some(handle) { Color32::YELLOW } else { base }
+        };
+        let pos = |p: Vec2| egui::pos2(p.x, p.y);
+        let center = pos(l.center);
+        if mode == Mode::Rotate {
+            painter.circle_stroke(
+                center,
+                l.radius,
+                Stroke::new(2.5, tint(Handle::Ring, Color32::from_rgb(80, 130, 240))),
+            );
+            return;
+        }
+        let colors = [Color32::from_rgb(230, 70, 70), Color32::from_rgb(90, 200, 90)];
+        for (i, &base) in colors.iter().enumerate() {
+            let color = tint(Handle::Axis(i), base);
+            let tip = pos(l.tips[i]);
+            painter.line_segment([center, tip], Stroke::new(2.5, color));
+            if mode == Mode::Translate {
+                painter.circle_filled(tip, 5.0, color);
+            } else {
+                painter.rect_filled(egui::Rect::from_center_size(tip, egui::vec2(9.0, 9.0)), 0.0, color);
+            }
+        }
+        painter.circle_filled(center, 6.0, tint(Handle::Center, Color32::WHITE));
     }
 }
 
@@ -693,24 +1065,22 @@ impl Panels {
         }
     }
 
-    /// W, E, R pick the gizmo; F frames the selection.
+    /// Move, Rotate and Scale (W, E, R) pick the gizmo; Frame (F) frames
+    /// the selection.
     pub(super) fn keys_3d(&mut self, ui: &Ui, ctx: &mut Ctx) {
         use crate::edit3d::Mode;
         if self.scene.flying || ui.ctx().egui_wants_keyboard_input() {
             return;
         }
-        let (w, e, r, f, command) = ui.input(|i| {
+        let (w, e, r, f) = ui.input(|i| {
+            use super::keys::Action;
             (
-                i.key_pressed(Key::W),
-                i.key_pressed(Key::E),
-                i.key_pressed(Key::R),
-                i.key_pressed(Key::F),
-                i.modifiers.command,
+                self.keys.pressed(i, Action::Move),
+                self.keys.pressed(i, Action::Rotate),
+                self.keys.pressed(i, Action::Scale),
+                self.keys.pressed(i, Action::Frame),
             )
         });
-        if command {
-            return;
-        }
         let g = &mut self.scene.gizmo;
         if w {
             g.mode = Mode::Translate;
@@ -742,10 +1112,14 @@ impl Panels {
     pub(super) fn highlight_3d(&self, ui: &Ui, ctx: &Ctx) {
         use crate::edit3d::{Handle, Mode, layout, pixel_size, world_sphere, world_to_screen};
         let camera = &ctx.scene3d.camera;
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(
-            egui::Order::Background,
-            egui::Id::unique("inspector-gizmo"),
-        ));
+        let painter = ui
+            .ctx()
+            .layer_painter(egui::LayerId::new(
+                egui::Order::Background,
+                egui::Id::unique("inspector-gizmo"),
+            ))
+            // Only over the world: never over the panels around it.
+            .with_clip_rect(ui.available_rect_before_wrap());
         let pos = |p: Vec2| egui::pos2(p.x, p.y);
         for (i, e) in self.selection().into_iter().enumerate() {
             let Some((center, radius)) = world_sphere(&ctx.world, &ctx.gfx.assets3d, e) else {
@@ -822,6 +1196,18 @@ impl Panels {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_prefab_mark_is_a_glyph_the_built_in_fonts_have() {
+        let egui = egui::Context::default();
+        egui.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        let font = egui::FontId::proportional(14.0);
+        assert!(egui.fonts_mut(|f| f.has_glyph(&font, PREFAB_MARK)));
+        assert!(
+            !egui.fonts_mut(|f| f.has_glyph(&font, '▣')),
+            "the control: a box the fonts lack"
+        );
+    }
 
     /// Runs one frame of `p` on a lasting egui context with these events.
     /// Held Ctrl/Shift come from the key events, as egui wants them.

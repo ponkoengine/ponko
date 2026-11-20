@@ -1,0 +1,8 @@
+{
+  "layout": { "left": 360, "right": 300, "bottom": 220, "assets": true },
+  "keys": { "duplicate": ["Ctrl+J"] },
+  "projects": [
+    { "path": "/home/me/games/space", "files": ["levels/one.json", "prefabs/ship.json"] },
+    { "path": "/home/me/games/farm", "files": [] }
+  ]
+}

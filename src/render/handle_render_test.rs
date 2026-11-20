@@ -480,3 +480,62 @@ fn mesh_cost_visits_count_drawn_models_and_stop_counting_freed_meshes() {
         assert_eq!((n, t), (0, 0));
     });
 }
+
+#[test]
+fn mesh_costs_into_aggregates_runs_reuses_names_and_drops_freed_meshes() {
+    let Some(mut ctx) = super::render_test_support::offscreen_ctx((SIZE, SIZE)) else {
+        return;
+    };
+    ctx.scene3d.sky.atmosphere = false;
+    ctx.scene3d.camera.position = vec3(0.0, 0.0, 8.0);
+    ctx.scene3d.camera.look_at(Vec3::ZERO);
+    let named = ctx.gfx.load_mesh("models/house.glb");
+    let cube = ctx.gfx.create_plain_mesh(&MeshData::cube(1.0));
+    let material = ctx.gfx.create_material(MaterialDesc::default());
+
+    ctx.world.spawn((Transform3D::default(), Model::new(named)));
+    ctx.world.spawn((
+        Transform3D::default(),
+        Model::new(named),
+        crate::render::ModelMaterial(material),
+    ));
+    ctx.world.spawn((Transform3D::default(), Model::new(cube)));
+
+    let mut costs = Vec::new();
+    ctx.gfx.mesh_costs_into(&mut costs);
+    assert!(costs.is_empty());
+    assert_eq!(ctx.render_frame(), crate::render::FrameStatus::Offscreen);
+    ctx.gfx.mesh_costs_into(&mut costs);
+    assert_eq!(costs.len(), 2);
+    let house = costs
+        .iter()
+        .find(|cost| cost.mesh == named)
+        .expect("named model was drawn");
+    let cube_cost = costs.iter().find(|cost| cost.mesh == cube).expect("cube was drawn");
+    assert_eq!((cube_cost.models, cube_cost.triangles, &cube_cost.name), (1, 12, &None));
+    assert_eq!(house.models, 2, "default and override runs aggregate under one handle");
+    assert!(house.triangles > 0);
+    let house = costs.iter_mut().find(|cost| cost.mesh == named).unwrap();
+    let name = house.name.as_mut().expect("loaded mesh has a name");
+    assert!(name.ends_with("models/house.glb"), "{name}");
+    // A newly allocated name could reuse the address. Its extra capacity
+    // must survive the refresh as well.
+    name.reserve(128);
+    let name_capacity = name.capacity();
+    let name_storage = name.as_ptr();
+    let vector_storage = costs.as_ptr();
+    for _ in 0..2 {
+        ctx.gfx.mesh_costs_into(&mut costs);
+        let house = costs.iter().find(|cost| cost.mesh == named).unwrap();
+        let name = house.name.as_ref().unwrap();
+        assert_eq!((name.as_ptr(), name.capacity()), (name_storage, name_capacity));
+        assert_eq!(costs.as_ptr(), vector_storage);
+    }
+
+    assert!(ctx.gfx.unload_mesh("models/house.glb"));
+    assert_eq!(ctx.render_frame(), crate::render::FrameStatus::Offscreen);
+    ctx.gfx.mesh_costs_into(&mut costs);
+    assert_eq!(costs.len(), 1);
+    assert_eq!(costs[0].mesh, cube);
+    assert_eq!(costs.as_ptr(), vector_storage);
+}

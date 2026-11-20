@@ -15,8 +15,10 @@ use glam::{Vec2, Vec3};
 /// Start it with [`Job::spawn`], then check [`Job::take`] each frame: the
 /// game keeps running meanwhile. GPU work (making meshes, textures) belongs
 /// on the game's thread, after the job; building the data for it (heights,
-/// `MeshData`, decoded images) belongs in the job. In a
-/// browser, which has no threads here, the work runs when it's spawned.
+/// `MeshData`, decoded images) belongs in the job. In a browser the
+/// work runs on a worker thread when the build has threads and the page
+/// allows them (see the guide's "Threads on the web"); otherwise it runs
+/// when it's spawned.
 ///
 /// ```
 /// # use ponko::prelude::*;
@@ -54,6 +56,20 @@ impl<T: Send + 'static> Job<T> {
     /// assert_eq!(heights.wait().len(), 129 * 129);
     /// ```
     pub fn spawn(work: impl FnOnce() -> T + Send + 'static) -> Self {
+        Self::start(work, true)
+    }
+
+    /// [`spawn`](Self::spawn), except that in a browser the work runs at
+    /// once on the page's thread even when the game has threads: for the
+    /// engine's own jobs that use what only the page's thread has, such as
+    /// the browser storage's database.
+    pub(crate) fn spawn_on_web_page(work: impl FnOnce() -> T + Send + 'static) -> Self {
+        Self::start(work, false)
+    }
+
+    /// Starts `work`; `web_workers`: on a worker in a browser, if the game
+    /// has threads.
+    fn start(work: impl FnOnce() -> T + Send + 'static, web_workers: bool) -> Self {
         let (send, result) = mpsc::sync_channel(1);
         let run = move || {
             // A panic drops `send` unsent: taking the result then panics on
@@ -64,12 +80,31 @@ impl<T: Send + 'static> Job<T> {
             }
         };
         #[cfg(not(target_arch = "wasm32"))]
-        match job_pool() {
-            Some(pool) => pool.spawn(run),
-            None => rayon::spawn(run),
+        {
+            let _ = web_workers;
+            match job_pool() {
+                Some(pool) => pool.spawn(run),
+                None => rayon::spawn(run),
+            }
         }
-        #[cfg(target_arch = "wasm32")]
-        run();
+        // The web: on a worker of the job pool when the game has threads.
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        {
+            let run: Box<dyn FnOnce() + Send> = Box::new(run);
+            let here = if web_workers {
+                crate::web_threads::spawn_job(run).err()
+            } else {
+                Some(run)
+            };
+            if let Some(run) = here {
+                run();
+            }
+        }
+        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+        {
+            let _ = web_workers;
+            run();
+        }
         Self {
             result,
             done: None,
@@ -87,12 +122,34 @@ fn job_pool() -> Option<&'static rayon::ThreadPool> {
     POOL.get_or_init(|| {
         let cores = std::thread::available_parallelism().map_or(2, std::num::NonZero::get);
         rayon::ThreadPoolBuilder::new()
-            .num_threads((cores / 2).max(1))
+            .num_threads(job_threads(cores))
             .thread_name(|i| format!("ponko-job-{i}"))
             .build()
             .ok()
     })
     .as_ref()
+}
+
+/// The job pool's threads next to `threads` others (the cores natively,
+/// the frame threads on the web): half, at least one.
+#[cfg_attr(all(target_arch = "wasm32", not(target_feature = "atomics")), allow(dead_code))]
+pub(crate) fn job_threads(threads: usize) -> usize {
+    (threads / 2).max(1)
+}
+
+/// The most frame threads a web build starts when the game doesn't say
+/// ([`Game::web_threads`](crate::Game::web_threads)): every worker holds
+/// its own instance of the module and a stack.
+pub(crate) const WEB_DEFAULT_MAX_THREADS: usize = 16;
+
+/// The frame threads a web build with threads starts: what the game asked
+/// for, else one fewer than the browser's logical `cores` (the page's
+/// thread waits while they work), at most [`WEB_DEFAULT_MAX_THREADS`].
+/// Fewer than 2 means none: the game stays on the page's thread.
+#[cfg_attr(not(all(target_arch = "wasm32", target_feature = "atomics")), allow(dead_code))]
+pub(crate) fn web_thread_count(requested: Option<usize>, cores: usize) -> usize {
+    let threads = requested.unwrap_or_else(|| cores.saturating_sub(1).min(WEB_DEFAULT_MAX_THREADS));
+    if threads < 2 { 0 } else { threads }
 }
 
 impl<T> Job<T> {
@@ -151,7 +208,7 @@ impl<T> Job<T> {
             !self.taken,
             "ponko: Job::wait: the result was already taken; consume each job result only once"
         );
-        self.result.recv().unwrap_or_else(|_| {
+        recv(&self.result).unwrap_or_else(|_| {
             panic!("ponko: a job's work panicked; fix the panic in the closure passed to Job::spawn")
         })
     }
@@ -168,6 +225,28 @@ impl<T> Job<T> {
             }
         }
     }
+}
+
+/// Waits for a job's result. The browser's own thread may not block, so
+/// with threads it spins there instead.
+fn recv<T>(result: &mpsc::Receiver<T>) -> Result<T, mpsc::RecvError> {
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    if crate::web_threads::sends_to_workers() {
+        let mut got = None;
+        crate::web_threads::spin_until(|| match result.try_recv() {
+            Ok(r) => {
+                got = Some(Ok(r));
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => false,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                got = Some(Err(mpsc::RecvError));
+                true
+            }
+        });
+        return got.unwrap_or(Err(mpsc::RecvError));
+    }
+    result.recv()
 }
 
 /// Which cells of a square grid on the ground (X and Z) to have loaded
@@ -384,5 +463,28 @@ impl CellStreamer {
         self.loaded.clear();
         self.to_load.clear();
         self.to_drop.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_threads_leave_one_core_to_the_page_and_two_cores_get_none() {
+        assert_eq!(web_thread_count(None, 8), 7);
+        assert_eq!(web_thread_count(None, 64), WEB_DEFAULT_MAX_THREADS);
+        assert_eq!(web_thread_count(None, 2), 0);
+        assert_eq!(web_thread_count(None, 0), 0);
+        assert_eq!(web_thread_count(Some(1), 8), 0);
+        assert_eq!(web_thread_count(Some(4), 2), 4);
+    }
+
+    #[test]
+    fn the_job_pool_has_half_the_threads_and_at_least_one() {
+        assert_eq!(job_threads(14), 7);
+        assert_eq!(job_threads(7), 3);
+        assert_eq!(job_threads(1), 1);
+        assert_eq!(job_threads(0), 1);
     }
 }

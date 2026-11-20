@@ -245,7 +245,7 @@ impl RecordBench {
             },
             camera: ctx.scene3d.camera.position,
             post: &ctx.scene3d.post,
-            time: (self.frames as f32 / 60.0, 1.0 / 60.0),
+            time: (self.frames as f64 / 60.0, 1.0 / 60.0),
             occlusion: ctx.scene3d.camera.occlusion_culling,
         };
         self.renderer.prepare(

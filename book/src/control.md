@@ -187,11 +187,12 @@ The `editor.*` methods make the same changes as the
 [inspector's editor](inspector.md#editing-in-3d), through the same undo
 history: an agent can build a level, a person can undo its last step in
 the inspector, and the other way round. Each change is one undo step and
-returns `can_undo` and `can_redo`. Most of them work in 3D (they need the
-`3d` feature; `capabilities` says so otherwise); `editor.parent`,
-`editor.hierarchy`, `editor.assets`, `editor.place` (of a prefab),
-`editor.delete`, `editor.duplicate`, `editor.undo`, `editor.redo` and
-`editor.save` work in 2D games too.
+returns `can_undo`, `can_redo` and `dirty` (whether the document has
+unsaved changes; see [the editor](editor.md#undo-and-what-counts-as-unsaved)).
+`editor.pick`, `editor.material` and `editor.camera` need the `3d` feature
+(`capabilities` says so otherwise); the rest work in 2D games too, where
+`editor.transform` and `editor.drag` take [x, y] and the handles `x`, `y`
+and `center`, and `rotate` is one angle in degrees.
 
 | Method | Params | Does |
 |---|---|---|
@@ -206,12 +207,23 @@ returns `can_undo` and `can_redo`. Most of them work in 3D (they need the
 | `editor.delete` | `entities` | despawns them with everything that hangs off them |
 | `editor.duplicate` | `entities`, `offset?` | copies them with everything that hangs off them; returns the copies |
 | `editor.undo` / `editor.redo` | | steps back or forward through the history; a new change drops what was undone |
-| `editor.save` | `path?` | saves the world as a scene, by default to the file it was loaded from or last saved to |
+| `editor.save` | `path?`, `as?` (`scene` or `prefab`) | saves the world as a scene (or its one root as a prefab), by default to the document's file; the document becomes that file |
+| `editor.document` | `new?` (true), `open?` (a scene or prefab path), `reload?` (true): at most one | starts an empty scene, opens a file or reads the document's file again, dropping unsaved changes; with none, just answers. Returns the document: `path`, `kind`, `dirty`, `changed_on_disk` (changed on disk while unsaved), `entities`, `can_undo`, `can_redo` |
 | `editor.camera` | `position?`, `look_at?`, `fov?`, `turn?` [dx, dy], `fly?` [right, up, forward], `focus?` (an entity) | moves the 3D camera as the editor's fly camera does; returns where it is |
 
 Loading a scene or a save (by any means) forgets the history: its entity
-ids no longer mean what they did. The inspector's **Stop** puts the world
+ids no longer mean what they did. The loaded scene becomes the document. The inspector's **Stop** puts the world
 back and keeps the history.
+
+## Methods a game adds
+
+A game or one of its plugins adds methods of its own with
+`Game::control_method("weather.set_rain", about, f)`: `f` gets the `Ctx`
+and the request's params and returns the answer. `methods` and
+`capabilities` list them after the engine's, marked `"added": true`, and
+`capabilities` names the game's plugins. ponko-mcp's `call_game_method`
+tool calls them. Names are `namespace.method`, and the engine's
+namespaces are taken ([Plugins for other crates](plugins.md#control-methods)).
 
 ## Capabilities
 

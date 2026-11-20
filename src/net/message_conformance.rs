@@ -27,6 +27,7 @@
 //! | Disconnect | none; protocol `BYE` + silence timeout | same | same (lobby leave is separate) | link cut on request |
 //! | `local_addr()` | `Some` | `None` | `None` | `None` |
 //! | Covered on CI by | `tests/net_messages.rs` (localhost) | `tests/net_messages.rs` | fake Steam API (`--features steam`) | this module |
+//! | Replication on top, covered by | `net/replication_conformance.rs` (with WebSocket) | `net/replication_conformance.rs` | `net/steam_messages.rs` (`--features steam`) | `net/replication_conformance.rs` |
 //!
 //! Protocol guarantees pinned here, given any transport that keeps the
 //! contract above:
@@ -38,6 +39,8 @@
 //! | Transport refusal (`Ok(false)`) is loss: not counted as sent, recovered by resends | `refused_sends_count_as_loss_and_recover` |
 //! | Transport errors surface from `poll` once and keep the session | `transport_errors_surface_once_and_keep_the_session` |
 //! | `disconnect` is reported once on both sides, even when sending fails | `explicit_disconnect_is_reported_once_on_each_side`, `disconnect_reports_locally_even_when_the_transport_fails` |
+//! | Hello retries keep the same link alive while the welcome is lost | `hello_retries_keep_the_host_link_alive_until_welcome_arrives` |
+//! | Rejoining from the same address gets a fresh clock and peer ID | `a_rejoining_client_gets_a_fresh_clock_and_peer_id` |
 //! | Silence times out after the configured timeout, in simulated time | `silent_link_times_out_both_sides_in_simulated_time` |
 //! | Short, foreign, stale and unknown datagrams are ignored | `malformed_and_foreign_datagrams_are_ignored` |
 //! | An undecodable payload inside a session ends only that session | `undecodable_session_payload_disconnects_only_that_peer` |
@@ -57,7 +60,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use super::scripted::{MTU, Network, Port, Shared, addr};
+use super::scripted::{MTU, Network, Port, Shared, addr, port};
 use crate::net::{Lane, MAX_MESSAGE_BYTES, MessageEvent, NetMessages, PeerId};
 
 /// One scripted step: the network advances one tick, then every endpoint polls.
@@ -308,6 +311,53 @@ fn disconnect_reports_locally_even_when_the_transport_fails() {
         s.nets[1].disconnect(PeerId::HOST).unwrap_err().kind(),
         io::ErrorKind::NotConnected
     );
+}
+
+#[test]
+fn hello_retries_keep_the_host_link_alive_until_welcome_arrives() {
+    let net: Shared = Default::default();
+    let mut s = Session {
+        nets: vec![
+            NetMessages::transported(port(&net, 0), None, 1).timeout(Duration::from_millis(250)),
+            NetMessages::transported(port(&net, 1), Some(addr(0)), 1),
+        ],
+        logs: vec![Vec::new(), Vec::new()],
+        net,
+    };
+    s.script(|n| {
+        n.refuse.insert(addr(0), u32::MAX);
+    });
+    s.step(50);
+    assert_eq!(s.take(0), vec![MessageEvent::Connected(PeerId::from_bits(1))]);
+    assert!(s.take(1).is_empty());
+
+    s.script(|n| {
+        n.refuse.remove(&addr(0));
+    });
+    s.step(15);
+    assert!(s.take(0).is_empty());
+    assert_eq!(s.take(1), vec![MessageEvent::Connected(PeerId::HOST)]);
+}
+
+#[test]
+fn a_rejoining_client_gets_a_fresh_clock_and_peer_id() {
+    let mut s = Session::new(1, 1, |_| {});
+    s.connect();
+    assert_eq!(s.take(0), vec![MessageEvent::Connected(PeerId::from_bits(1))]);
+    s.take(1);
+
+    s.nets[1].disconnect(PeerId::HOST).unwrap();
+    s.step(1);
+    assert_eq!(disconnects(&s.take(0)).len(), 1);
+    s.take(1);
+
+    let mut client = NetMessages::transported(port(&s.net, 1), Some(addr(0)), 1);
+    client.poll_elapsed(Duration::from_secs(30)).unwrap();
+    s.nets[1] = client;
+    s.step(2);
+
+    assert_eq!(s.take(0), vec![MessageEvent::Connected(PeerId::from_bits(2))]);
+    assert_eq!(s.take(1), vec![MessageEvent::Connected(PeerId::HOST)]);
 }
 
 #[test]

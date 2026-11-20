@@ -35,6 +35,9 @@ pub(super) struct Rig {
     /// Environment probe bakes the next draws ask for, as a game's frame
     /// lists them: (probe slot, the render targets of its six faces).
     pub probe_bakes: Vec<(u32, [u32; 6])>,
+    /// The next draws are prepared and not drawn (a frame a game skips):
+    /// they give no pixels.
+    pub prepare_only: bool,
 }
 
 impl Rig {
@@ -163,6 +166,7 @@ impl Rig {
             time: (0.0, 1.0 / 60.0),
             prepare_ms: 0.0,
             probe_bakes: Vec::new(),
+            prepare_only: false,
         })
     }
 
@@ -234,7 +238,7 @@ impl Rig {
             },
             camera: ctx.scene3d.camera.position,
             post: &ctx.scene3d.post,
-            time: self.time,
+            time: (f64::from(self.time.0), self.time.1),
             occlusion: ctx.scene3d.camera.occlusion_culling,
         };
         let start = std::time::Instant::now();
@@ -248,6 +252,10 @@ impl Rig {
             },
         );
         self.prepare_ms = start.elapsed().as_secs_f64() * 1e3;
+        if self.prepare_only {
+            self.frame = frame;
+            return Vec::new();
+        }
         let buffers = self
             .renderer
             .draw(&self.device, &self.target, wgpu::Color::BLACK, &self.textures, None);
@@ -708,7 +716,7 @@ fn batch_target_levels(compute: bool, reflection: bool, levels: bool) {
     // The test owns the offscreen renderer separately from the context.
     rig.ctx.set_headless(true);
     let handle = rig.ctx.gfx.create_render_target(SIZE, SIZE);
-    rig.renderer.add_render_target(handle.id, &texture);
+    rig.renderer.add_render_target(handle.texture.id, &texture);
     let mut camera = rig.ctx.scene3d.camera;
     camera.position = vec3(0.0, 1.0, 4.0);
     camera.look_at(vec3(0.0, 1.0, 0.0));

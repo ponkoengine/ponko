@@ -88,7 +88,9 @@ pub(super) enum Swap {
 
 /// Pipelines in use whose GPU check hasn't come back.
 pub(super) struct PendingCheck {
-    pub id: u32,
+    /// The owning pipeline slot, or none after it was freed while another
+    /// slot still shares the pipelines awaiting this verdict.
+    pub id: Option<u32>,
     /// Which time this shader's pipelines were put in use (`installed`).
     pub version: u64,
     pub name: String,
@@ -111,7 +113,7 @@ impl PendingCheck {
     }
 
     fn same_shader(&self, other: &PendingCheck) -> bool {
-        self.id == other.id && self.kind() == other.kind()
+        self.id.is_some() && self.id == other.id && self.kind() == other.kind()
     }
 }
 
@@ -162,12 +164,19 @@ impl Renderer3D {
             };
             let check = self.shader_checks.remove(at);
             let Some(error) = error else { continue };
+            let Some(id) = check.id else {
+                if let Swap::Material { new, .. } = check.swap {
+                    self.drop_shared(&new, None);
+                    self.history.content_changed = true;
+                }
+                continue;
+            };
             let (kind, reload) = (check.kind(), check.reload());
             // A rejected shader may already have drawn on asynchronous
             // backends. Its pixels must not survive the rollback.
             self.history.content_changed = true;
             let diagnostic = rejected(&check.name, kind, &check.variant, &error);
-            let superseded = self.shader_versions.get(&(kind, check.id)) != Some(&check.version);
+            let superseded = self.shader_versions.get(&(kind, id)) != Some(&check.version);
             // A newer version of the same shader is in use and waiting too:
             // if that one fails, it goes back to what was good before this.
             if let Some(newer) = self.shader_checks[at..].iter().position(|c| c.same_shader(&check)) {
@@ -178,7 +187,7 @@ impl Renderer3D {
                 }
                 hand_down(check.swap, &mut self.shader_checks[at + newer].swap);
             } else {
-                self.put_back(device, check.id, check.swap);
+                self.put_back(device, id, check.swap);
             }
             out.push(LateShaderError {
                 reload,
@@ -197,7 +206,7 @@ impl Renderer3D {
                 self.drop_shared(&new, Some((id, back)));
             }
             Swap::Effect { new, old } => {
-                if self.effects.pipelines.get(id) != Some(&new) {
+                if self.effects.pipelines.get(id) != Some(&Some(new)) {
                     return;
                 }
                 let (module, pipeline) = old.unwrap_or_else(|| {
@@ -208,8 +217,8 @@ impl Renderer3D {
                         &for_samples(&compose_effect(EFFECT_STAND_IN), self.samples, self.float_depth),
                     )
                 });
-                self.effects.pipelines[id] = pipeline;
-                self.effects.modules[id] = module;
+                self.effects.pipelines[id] = Some(pipeline);
+                self.effects.modules[id] = Some(module);
                 self.effects.target_pipelines[id] = None;
             }
             Swap::Compute { new, old } => {
@@ -248,11 +257,31 @@ impl Renderer3D {
         *self.shader_versions.entry((kind, id)).or_default() += 1;
     }
 
+    /// Drops checks owned by the freed slot. A material verdict still
+    /// needed by another shader becomes detached from the reused slot.
+    pub(super) fn forget_shader_checks(&mut self, kind: ShaderKind, slot: u32) {
+        let sets = &self.shaders.sets;
+        self.shader_checks.retain_mut(|check| {
+            if check.kind() != kind || check.id.is_some_and(|id| id != slot) {
+                return true;
+            }
+            if let Swap::Material { new, old } = &mut check.swap
+                && sets.iter().any(|set| Arc::ptr_eq(set, new))
+            {
+                check.id = None;
+                *old = None;
+                return true;
+            }
+            false
+        });
+        self.shader_versions.remove(&(kind, slot));
+    }
+
     /// Records pipelines put in use before the GPU's verdict on them.
     pub(super) fn wait_for_verdict(&mut self, id: u32, name: &str, variant: &str, swap: Swap, verdict: Verdict) {
         let version = self.shader_versions.get(&(swap_kind(&swap), id)).copied().unwrap_or(0);
         self.shader_checks.push(PendingCheck {
-            id,
+            id: Some(id),
             version,
             name: name.to_string(),
             variant: variant.to_string(),

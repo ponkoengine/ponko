@@ -9,6 +9,7 @@ use glam::Vec2;
 use ponko_ecs::World;
 
 mod batch;
+mod plugin;
 mod server;
 mod system;
 #[cfg(feature = "window")]
@@ -69,6 +70,8 @@ pub enum Phase {
     /// after your systems in it; the 2D skeletons
     /// ([`Systems::UPDATE_SKELETONS2D`]) run just before it, and with the
     /// `3d` feature the animators ([`Systems::UPDATE_ANIMATORS`]) before those.
+    /// Last of all, the camera rigs follow their target
+    /// ([`Systems::UPDATE_CAMERA_RIGS`]).
     Animate,
     /// Per-frame work after animation and before drawing.
     Late,
@@ -79,13 +82,34 @@ pub enum Phase {
     Draw,
 }
 
-/// A reusable module of systems and startup work.
+/// A reusable module of systems and startup work: the extension point for
+/// a game's own modules and for other people's crates.
 ///
 /// `build` runs immediately during registration; `setup` runs once after runtime
 /// initialization, interleaved with explicit setup callbacks in registration order.
-/// Plugins need no registry, dependency graph, or additional runtime feature.
 /// Each system names its [`Phase`], so the order in which plugins are added
 /// only matters between systems of the same phase.
+///
+/// What a plugin can add, and where:
+///
+/// | What | Where |
+/// |---|---|
+/// | Systems, in phases, with ids for [`Game::order`] | `build`: [`Game::add`], [`Game::add_system`] |
+/// | Components, resources and their reflection | `setup`: `ctx.world.register`, [`WorldReflect`](crate::reflect::WorldReflect) |
+/// | Asset sources and decoders | `setup`: [`Assets::add_source`](crate::assets::Assets::add_source); a decoder function over [`Assets::load_with`](crate::assets::Assets::load_with) |
+/// | UI widgets | a function that builds them with `ctx.ui`, and a system that reads their [events](crate::ui::Ui::events) |
+/// | Debug toggles | `build`: [`Game::debug_toggle`] |
+/// | Control endpoint methods (tools) | `build`: [`Game::control_method`] |
+///
+/// A plugin is known by its [`name`](Self::name), its type's path unless it
+/// says otherwise. Adding a second plugin of the same name is an error, and
+/// so is adding one before the plugins its
+/// [`dependencies`](Self::dependencies) name: the game then fails to start
+/// ([`Game::try_run`] and [`Game::try_run_headless`] return the error,
+/// [`Game::run`] and [`Game::run_headless`] panic with it) and the plugin's
+/// `build` never runs. A dependency's systems run before the dependent's in
+/// every phase they share, and its setup runs first, because it was added
+/// first.
 ///
 /// ```
 /// use ponko::prelude::{Ctx, Game, Phase, Plugin};
@@ -118,6 +142,64 @@ pub trait Plugin {
     fn try_setup(&self, ctx: &mut Ctx) -> Result<(), crate::error::Error> {
         self.setup(ctx);
         Ok(())
+    }
+
+    /// What this plugin is called: the path of its type
+    /// (`acme_weather::Weather`) unless it says otherwise. A game adds each
+    /// name once, and [`dependencies`](Self::dependencies) and
+    /// [`Game::has_plugin`] refer to plugins by it. A plugin type that a game
+    /// may add several times, configured differently, gives each instance
+    /// its own name.
+    ///
+    /// ```
+    /// use ponko::prelude::{Game, Plugin};
+    /// struct Level(&'static str);
+    /// impl Plugin for Level {
+    ///     fn build(&self, game: Game) -> Game {
+    ///         game
+    ///     }
+    ///     fn name(&self) -> &str {
+    ///         self.0
+    ///     }
+    /// }
+    /// let game = Game::new("levels", 1, 1).plugin(Level("cave")).plugin(Level("tower"));
+    /// assert!(game.has_plugin("cave") && game.has_plugin("tower"));
+    /// ```
+    fn name(&self) -> &str {
+        std::any::type_name::<Self>()
+    }
+
+    /// The names of the plugins that must be added before this one (none by
+    /// default). A plugin whose dependency is missing doesn't build, and the
+    /// game fails to start with an error naming both. The default name of a
+    /// plugin type `P` is `std::any::type_name::<P>()`.
+    ///
+    /// ```
+    /// use ponko::prelude::{Ctx, ErrorKind, Game, Phase, Plugin};
+    /// struct Physics;
+    /// impl Plugin for Physics {
+    ///     fn build(&self, game: Game) -> Game {
+    ///         game
+    ///     }
+    /// }
+    /// struct Vehicles;
+    /// impl Plugin for Vehicles {
+    ///     fn build(&self, game: Game) -> Game {
+    ///         game
+    ///     }
+    ///     fn dependencies(&self) -> Vec<&str> {
+    ///         vec![std::any::type_name::<Physics>()]
+    ///     }
+    /// }
+    /// // In order: starts.
+    /// Game::new("ok", 1, 1).plugin(Physics).plugin(Vehicles).try_run_headless(0, |_| {}).unwrap();
+    /// // Vehicles first: an error that names what to add.
+    /// let error = Game::new("bad", 1, 1).plugin(Vehicles).try_run_headless(0, |_| {}).err().unwrap();
+    /// assert_eq!(error.kind(), ErrorKind::Invalid);
+    /// assert!(error.message().contains("Physics"));
+    /// ```
+    fn dependencies(&self) -> Vec<&str> {
+        Vec::new()
     }
 }
 
@@ -168,6 +250,10 @@ impl Systems {
     /// the end of [`Phase::Animate`], after the 3D animators and before the
     /// particles.
     pub const UPDATE_SKELETONS2D: SystemId = SystemId(14);
+    /// Updates the camera rigs kept as resources with the entity that has a
+    /// [`CameraTarget`](crate::camera::CameraTarget). Stays at the end of
+    /// [`Phase::Animate`], after the particles.
+    pub const UPDATE_CAMERA_RIGS: SystemId = SystemId(15);
 }
 
 impl SystemId {
@@ -213,6 +299,7 @@ fn builtin_id(name: &str) -> Option<(SystemId, &'static str)> {
         (builtin!(draw_particles), Systems::DRAW_PARTICLES),
         (builtin!(update_particles), Systems::UPDATE_PARTICLES),
         (builtin!(update_skeletons2d), Systems::UPDATE_SKELETONS2D),
+        (builtin!(update_camera_rigs), Systems::UPDATE_CAMERA_RIGS),
         (builtin!(spatial::rebuild_spatial_grid), Systems::REBUILD_SPATIAL_GRID),
         (builtin!(attach::follow_attachments), Systems::FOLLOW_ATTACHMENTS),
         #[cfg(feature = "physics")]
@@ -305,6 +392,7 @@ pub struct Game {
     net: Option<crate::net::Net>,
     /// The message endpoint from `messages`, moved into `ctx.net` at start.
     messages: Option<crate::net::NetMessages>,
+    replication: Option<crate::net::Replication>,
     /// Open the control endpoint (also on with `PONKO_CONTROL=1` where the
     /// build honors it, see `control_endpoint`).
     control: bool,
@@ -325,6 +413,9 @@ pub struct Game {
     parallel_threshold: Option<Duration>,
     /// `PONKO_PARALLEL_SYSTEMS` may override the two above.
     parallel_env: bool,
+    /// From `web_threads`: the frame threads a web build with threads starts.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    web_threads: Option<usize>,
     /// Phases where `barrier` was called and no system was added since.
     pending_barriers: Vec<Phase>,
     /// From `order`: the second system must see the first's work.
@@ -338,6 +429,10 @@ pub struct Game {
     /// From `state`: each state type's on-enter and on-exit work (a
     /// `state::Shared<S>`), in registration order.
     states: Vec<(std::any::TypeId, Box<dyn std::any::Any>)>,
+    /// The plugins added, their debug toggles and control methods.
+    ext: plugin::Extensions,
+    /// From `gamepad_backend`: where pads come from instead of the default.
+    gamepad_backend: Option<Box<dyn crate::input::GamepadBackend>>,
 }
 
 type SetupFn = Box<dyn FnOnce(&mut Ctx) -> Result<(), crate::error::Error>>;
@@ -391,6 +486,12 @@ impl ConfiguredGame {
     /// See [`Game::parallel_systems_env`].
     pub fn parallel_systems_env(mut self, obeyed: bool) -> Self {
         self.game = self.game.parallel_systems_env(obeyed);
+        self
+    }
+
+    /// See [`Game::web_threads`].
+    pub fn web_threads(mut self, threads: usize) -> Self {
+        self.game = self.game.web_threads(threads);
         self
     }
 
@@ -454,6 +555,12 @@ impl ConfiguredGame {
     /// See [`Game::messages`].
     pub fn messages(mut self, net: crate::net::NetMessages) -> Self {
         self.game = self.game.messages(net);
+        self
+    }
+
+    /// See [`Game::replication`].
+    pub fn replication(mut self, replication: crate::net::Replication) -> Self {
+        self.game = self.game.replication(replication);
         self
     }
 
@@ -599,6 +706,30 @@ impl ConfiguredGame {
         self
     }
 
+    /// See [`Game::has_plugin`].
+    #[must_use]
+    pub fn has_plugin(&self, name: &str) -> bool {
+        self.game.has_plugin(name)
+    }
+
+    /// See [`Game::debug_toggle`].
+    pub fn debug_toggle(mut self, name: impl Into<String>, on: bool) -> Self {
+        self.game = self.game.debug_toggle(name, on);
+        self
+    }
+
+    /// See [`Game::control_method`].
+    pub fn control_method(
+        mut self,
+        name: impl Into<String>,
+        about: impl Into<String>,
+        run: impl FnMut(&mut Ctx, &crate::reflect::JsonValue) -> Result<crate::reflect::JsonValue, crate::error::Error>
+        + 'static,
+    ) -> Self {
+        self.game = self.game.control_method(name, about, run);
+        self
+    }
+
     /// Opens the window and runs with the stored setup callbacks.
     /// Has the same platform requirements and panics as [`Game::run`].
     ///
@@ -715,6 +846,13 @@ impl ConfiguredGame {
     /// ```
     pub fn seed(mut self, seed: u64) -> Self {
         self.game = self.game.seed(seed);
+        self
+    }
+
+    /// Reads gamepads from `backend`, such as a test's
+    /// [`FakeGamepads`](crate::input::FakeGamepads): [`Game::gamepad_backend`].
+    pub fn gamepad_backend(mut self, backend: impl crate::input::GamepadBackend) -> Self {
+        self.game = self.game.gamepad_backend(backend);
         self
     }
 
@@ -1118,6 +1256,7 @@ impl Game {
             gravity3d: None,
             net: None,
             messages: None,
+            replication: None,
             control: control::env_control(),
             hot_reload: cfg!(debug_assertions),
             inspector: cfg!(debug_assertions),
@@ -1128,17 +1267,21 @@ impl Game {
             parallel: false,
             parallel_threshold: None,
             parallel_env: true,
+            web_threads: None,
             pending_barriers: Vec::new(),
             order: Vec::new(),
             exec: batch::Exec::default(),
             app_id: None,
             data_dir: None,
             states: Vec::new(),
+            ext: plugin::Extensions::default(),
+            gamepad_backend: None,
         };
         #[cfg(feature = "3d")]
         game.insert_system(Phase::Animate, System::last(crate::systems::update_animators));
         game.insert_system(Phase::Animate, System::last(crate::systems::update_skeletons2d));
         game.insert_system(Phase::Animate, System::last(crate::systems::update_particles));
+        game.insert_system(Phase::Animate, System::last(crate::systems::update_camera_rigs));
         #[cfg(feature = "3d")]
         game.insert_system(Phase::Draw, System::last(crate::systems::update_audio3d));
         game
@@ -1358,6 +1501,28 @@ impl Game {
     pub fn parallel_systems_env(mut self, obeyed: bool) -> Self {
         self.parallel_env = obeyed;
         self.exec.invalidate();
+        self
+    }
+
+    /// How many worker threads a web build with threads starts for the
+    /// frame's parallel work: parallel queries and the batches of
+    /// [`parallel_systems`](Self::parallel_systems) (jobs get half as many
+    /// of their own). By default one fewer than the browser's logical cores
+    /// (the page's own thread waits while they work), at most 16; `1` keeps
+    /// the game on the page's thread, as a build without threads runs.
+    ///
+    /// Only a web build compiled with threads, on a cross-origin isolated
+    /// page, starts workers (the guide's "Threads on the web"); anywhere
+    /// else this does nothing. Desktop builds use every core, through
+    /// rayon (`RAYON_NUM_THREADS` limits them).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// let game = Game::new("t", 1, 1).web_threads(4);
+    /// # let _ = game;
+    /// ```
+    pub fn web_threads(mut self, threads: usize) -> Self {
+        self.web_threads = Some(threads);
         self
     }
 
@@ -1627,10 +1792,137 @@ impl Game {
     /// let world = Game::new("t", 1, 1).plugin(Counter).run_headless(5, |_| {});
     /// assert_eq!(*world.resource::<u32>(), 5);
     /// ```
-    pub fn plugin(self, plugin: impl Plugin + 'static) -> Self {
+    ///
+    /// # Errors at startup
+    /// A plugin whose [`name`](Plugin::name) was added already, or whose
+    /// [`dependencies`](Plugin::dependencies) weren't all added before it,
+    /// isn't built, and the game fails to start with an
+    /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) error that
+    /// says which: [`try_run`](Self::try_run) and
+    /// [`try_run_headless`](Self::try_run_headless) return it, the other
+    /// runners panic with it.
+    pub fn plugin(mut self, plugin: impl Plugin + 'static) -> Self {
+        if let Err(error) = self.ext.check_plugin(plugin.name(), &plugin.dependencies()) {
+            return self.fail_startup(error);
+        }
+        self.ext.added.plugins.push(plugin.name().to_string());
         let mut game = plugin.build(self);
         game.setups.push(Box::new(move |ctx| plugin.try_setup(ctx)));
         game
+    }
+
+    /// Whether a plugin of this [`name`](Plugin::name) was added, for a
+    /// plugin that adds another only when the game hasn't (adding it twice
+    /// is an error) or works with it when it is there.
+    ///
+    /// ```
+    /// use ponko::prelude::{Game, Plugin};
+    /// struct Ui;
+    /// impl Plugin for Ui {
+    ///     fn build(&self, game: Game) -> Game {
+    ///         game
+    ///     }
+    /// }
+    /// struct Hud;
+    /// impl Plugin for Hud {
+    ///     fn build(&self, game: Game) -> Game {
+    ///         // Brings its dependency along unless the game added it.
+    ///         if game.has_plugin(std::any::type_name::<Ui>()) { game } else { game.plugin(Ui) }
+    ///     }
+    /// }
+    /// let game = Game::new("t", 1, 1).plugin(Ui).plugin(Hud);
+    /// assert!(game.has_plugin(std::any::type_name::<Hud>()));
+    /// game.try_run_headless(0, |_| {}).unwrap();
+    /// ```
+    #[must_use]
+    pub fn has_plugin(&self, name: &str) -> bool {
+        self.ext.has_plugin(name)
+    }
+
+    /// Adds a named switch for the game's or a plugin's own debug drawing,
+    /// on or off at the start. Systems ask
+    /// [`ctx.debug.toggled(name)`](crate::debug::DebugDraw::toggled) before
+    /// drawing; tools turn it on and off with the control endpoint's
+    /// `debug.draw` method (`{"toggles": {"ai.paths": true}}`), which also
+    /// lists every toggle, and code with
+    /// [`DebugDraw::set_toggle`](crate::debug::DebugDraw::set_toggle).
+    /// Name a plugin's toggles after the plugin (`ai.paths`).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// Game::new("t", 1, 1).debug_draw(true).debug_toggle("ai.paths", true).run_headless(0, |ctx| {
+    ///     assert!(ctx.debug.toggled("ai.paths"));
+    /// });
+    /// ```
+    ///
+    /// # Errors at startup
+    /// An empty name, a name added already ([`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid))
+    /// or more than 64 toggles ([`ErrorKind::Limit`](crate::error::ErrorKind::Limit)):
+    /// the game fails to start, as for a duplicate [`plugin`](Self::plugin).
+    pub fn debug_toggle(mut self, name: impl Into<String>, on: bool) -> Self {
+        let name = name.into();
+        if let Err(error) = self.ext.check_toggle(&name) {
+            return self.fail_startup(error);
+        }
+        self.ext.toggles.push((name, on));
+        self
+    }
+
+    /// Adds method `name` to the game's control endpoint, as a tool for
+    /// agents and scripts: `run` gets the game's [`Ctx`] and the request's
+    /// `params`, between frames (or ticks), and returns the answer, or an
+    /// error that becomes the reply's error. The endpoint's `methods` and
+    /// `capabilities` list it with `about`, marked `"added": true`; ponko-mcp
+    /// calls it with its `call_game_method` tool. It costs nothing while
+    /// the endpoint is off.
+    ///
+    /// The name is `namespace.method` in lowercase letters, digits and `_`,
+    /// with a namespace of the game's or plugin's own (`weather.set_rain`):
+    /// the engine's namespaces (`entity`, `debug`, `perf`, ...) are taken.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::reflect::{JsonValue, json};
+    /// struct Rain(f64);
+    /// let game = Game::new("t", 1, 1).control_method(
+    ///     "weather.set_rain",
+    ///     "sets the rain, 0 to 1: params {\"amount\": number}",
+    ///     |ctx: &mut Ctx, params: &JsonValue| {
+    ///         let amount = params["amount"]
+    ///             .as_f64()
+    ///             .ok_or_else(|| Error::new(ErrorKind::Invalid, "`amount` must be a number"))?;
+    ///         ctx.world.insert_resource(Rain(amount));
+    ///         Ok(json!({ "rain": amount }))
+    ///     },
+    /// );
+    /// ```
+    ///
+    /// # Errors at startup
+    /// A name of the wrong shape, in one of the engine's namespaces, or
+    /// added already: the game fails to start with an
+    /// [`ErrorKind::Invalid`](crate::error::ErrorKind::Invalid) error, as
+    /// for a duplicate [`plugin`](Self::plugin).
+    pub fn control_method(
+        mut self,
+        name: impl Into<String>,
+        about: impl Into<String>,
+        run: impl FnMut(&mut Ctx, &crate::reflect::JsonValue) -> Result<crate::reflect::JsonValue, crate::error::Error>
+        + 'static,
+    ) -> Self {
+        let name = name.into();
+        if let Err(error) = self.ext.added.check_name(&name) {
+            return self.fail_startup(error);
+        }
+        self.ext.added.add(name, about.into(), Box::new(run));
+        self
+    }
+
+    /// Makes the game fail to start with `error`, before any setup runs
+    /// (after the errors queued earlier, so the first one is reported).
+    fn fail_startup(mut self, error: crate::error::Error) -> Self {
+        self.setups.insert(self.ext.errors, Box::new(move |_| Err(error)));
+        self.ext.errors += 1;
+        self
     }
 
     /// Removes all registrations with this ID, including built-ins. An absent
@@ -1730,6 +2022,36 @@ impl Game {
     /// ```
     pub fn messages(mut self, net: crate::net::NetMessages) -> Self {
         self.messages = Some(net);
+        self
+    }
+
+    /// Gives the game declared replication: it becomes
+    /// [`ctx.net.replication`](crate::net::Networking::replication). With a
+    /// hosting [`messages`](Self::messages) endpoint (or none: offline) the
+    /// game is the server and sends its [`Replicated`](crate::net::Replicated)
+    /// entities; with a joining one it is a client and receives them as
+    /// [`Replica`](crate::net::Replica)s. The engine drives it every
+    /// simulation tick: what arrived is taken before the systems run, and
+    /// state, inputs and events are sent after them. See
+    /// [`Replication`](crate::net::Replication).
+    ///
+    /// ```
+    /// use ponko::net::{Replicate, Replicated, Replication};
+    /// use ponko::prelude::*;
+    ///
+    /// #[derive(Component, Replicate, Clone, Default)]
+    /// struct Score(#[replicate(bits = 16)] u32);
+    ///
+    /// let mut world = Game::new("t", 1, 1)
+    ///     .replication(Replication::new().component::<Score>())
+    ///     .run_headless(2, |ctx| {
+    ///         ctx.world.spawn((Score(3), Replicated::new()));
+    ///     });
+    /// let ids: Vec<_> = world.query::<&Replicated>().iter().map(|r| r.net_id()).collect();
+    /// assert_eq!(ids, [Some(ponko::net::NetId::from_index(0))]);
+    /// ```
+    pub fn replication(mut self, replication: crate::net::Replication) -> Self {
+        self.replication = Some(replication);
         self
     }
 
@@ -1958,6 +2280,9 @@ impl Game {
         }
         if let Some(messages) = self.messages.take() {
             ctx.net.messages = Some(messages);
+        }
+        if let Some(replication) = self.replication.take() {
+            ctx.net.replication = replication;
         }
         ctx.net.lockstep.begin(ctx.seed);
     }
@@ -2407,6 +2732,10 @@ impl Game {
         }
         self.start_networking(&mut ctx);
         ctx.storage = crate::storage::Storage::for_game(self.app_id.as_deref(), self.data_dir.clone());
+        self.ext.install(&mut ctx);
+        if let Some(backend) = self.gamepad_backend.take() {
+            ctx.gamepad_driver.install(&mut ctx.input, backend);
+        }
         ctx
     }
 
@@ -2482,6 +2811,26 @@ impl Game {
         self
     }
 
+    /// Reads gamepads from `backend` instead of the default: in a window the
+    /// engine reads them with gilrs (feature `gamepad`), and a headless run
+    /// has none. The backend is polled once before setup, so its pads are
+    /// connected there. [`FakeGamepads`](crate::input::FakeGamepads) is a
+    /// scripted one for tests.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::input::{FakeGamepads, GamepadInfo};
+    /// let fake = FakeGamepads::new();
+    /// fake.connect(GamepadInfo::new("Pad"));
+    /// Game::new("t", 1, 1).gamepad_backend(fake.clone()).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.input.gamepads().len(), 1);
+    /// });
+    /// ```
+    pub fn gamepad_backend(mut self, backend: impl crate::input::GamepadBackend) -> Self {
+        self.gamepad_backend = Some(Box::new(backend));
+        self
+    }
+
     /// Sets the seed for [`Ctx::random`]. Same seed, same simulation: runs
     /// are reproducible by default ([`DEFAULT_SEED`](crate::random::DEFAULT_SEED)).
     /// For a different world each run, seed from the clock.
@@ -2548,7 +2897,8 @@ impl Game {
     /// with `parallel_systems`).
     fn run_systems(&mut self, ctx: &mut Ctx, fixed_steps: u32) {
         self.ensure_schedule();
-        ctx.net.begin_frame();
+        let now = ctx.time.elapsed();
+        ctx.net.begin_frame(now);
         ctx.frame_begin_services();
         self.begin_timings(ctx);
         ctx.set_in_sim(true);
@@ -2560,6 +2910,8 @@ impl Game {
             self.run_sim_tick(ctx);
         }
         ctx.set_in_sim(false);
+        ctx.net
+            .replication_frame(&mut ctx.world, f64::from(ctx.time.fixed_alpha()));
         let n_sim = self.sim_systems.len();
         let n_frame = self.systems.len();
         let n_late = self.late_systems.len();
@@ -2579,9 +2931,13 @@ impl Game {
         let tick = ctx.time.sim_tick();
         self.install_input_scenario(ctx);
         ctx.scenario_begin_tick();
+        let hz = f64::from(self.fixed_hz);
+        ctx.net
+            .replication_begin_tick(&mut ctx.world, &mut ctx.events, tick, hz);
         self.exec.run_list(&mut self.sim_systems, 0, ctx, 0, Some(tick));
         ctx.set_sim_steps(1);
         ctx.scenario_end_tick(tick);
+        ctx.net.replication_end_tick(&mut ctx.world);
         ctx.net.lockstep.end_tick(&ctx.world, tick);
         ctx.advance_tick();
     }
@@ -2612,8 +2968,12 @@ impl Game {
         ctx.frame_begin_services();
         self.begin_timings(ctx);
         ctx.set_in_sim(true);
+        let hz = f64::from(self.fixed_hz);
+        ctx.net
+            .replication_begin_tick(&mut ctx.world, &mut ctx.events, tick, hz);
         self.exec.run_list(&mut self.sim_systems, 0, ctx, 0, Some(tick));
         ctx.set_sim_steps(1);
+        ctx.net.replication_end_tick(&mut ctx.world);
         ctx.net.lockstep.end_tick(&ctx.world, tick);
         ctx.advance_tick();
         ctx.set_in_sim(false);
@@ -2946,7 +3306,8 @@ impl Game {
         while ran < total && !ctx.quit_requested() {
             // Messages are polled every pass: while paused, and while
             // lockstep waits for inputs.
-            ctx.net.begin_frame();
+            let now = ctx.time.elapsed();
+            ctx.net.begin_frame(now);
             if let Some(control) = &control {
                 control.poll(&mut ctx);
                 if ctx.quit_requested() {
@@ -3061,9 +3422,10 @@ impl Game {
     /// In browsers, only event-loop construction errors can return here. Once
     /// submitted, winit transfers control to the browser using a JavaScript
     /// control-flow exception: this call does not return, even on normal exit.
-    /// Window/GPU initialization and setup complete asynchronously; their errors
-    /// are logged to the console as error diagnostics without invoking the panic
-    /// hook and stop startup, not returned to this caller.
+    /// Window/GPU initialization and setup complete asynchronously. A failure
+    /// stops startup and is logged to the browser console without invoking the
+    /// panic hook. Use `ponko::web::on_startup` in Rust or `onPonkoStartup` in the
+    /// generated JavaScript to receive the result.
     ///
     /// # Errors
     /// Event-loop, window, surface, adapter or device initialization fails
@@ -3206,6 +3568,7 @@ mod tests {
             .remove(Systems::UPDATE_ANIMATORS)
             .remove(Systems::UPDATE_PARTICLES)
             .remove(Systems::UPDATE_SKELETONS2D)
+            .remove(Systems::UPDATE_CAMERA_RIGS)
             .remove(Systems::UPDATE_AUDIO3D)
     }
     fn frame_b(ctx: &mut Ctx) {
@@ -3453,7 +3816,8 @@ mod tests {
         assert!(user_animate < at("update_animators"));
         assert!(at("update_animators") < at("update_skeletons2d"));
         assert!(at("update_skeletons2d") < at("update_particles"));
-        assert!(at("update_particles") < at("late"), "{listed:?}");
+        assert!(at("update_particles") < at("update_camera_rigs"));
+        assert!(at("update_camera_rigs") < at("late"), "{listed:?}");
         // Positional audio follows the late and the drawing systems.
         assert!(at("late") < at("update_audio3d"), "{listed:?}");
         assert!(at("draw_sprites") < at("update_audio3d"), "{listed:?}");
@@ -3466,6 +3830,7 @@ mod tests {
             phases,
             [
                 (Phase::Animate, false),
+                (Phase::Animate, true),
                 (Phase::Animate, true),
                 (Phase::Animate, true),
                 (Phase::Animate, true),
@@ -3576,3 +3941,16 @@ mod batch_tests;
 mod phase_order_tests;
 #[cfg(test)]
 mod scenario_tests;
+
+/// A game built without the `editor` feature was started with
+/// `PONKO_EDITOR`: says once why it runs as a game.
+#[cfg(all(feature = "window", not(feature = "editor")))]
+pub(crate) fn warn_without_editor() {
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var_os("PONKO_EDITOR").is_some_and(|v| !v.is_empty() && v != "0") {
+        eprintln!(
+            "ponko: PONKO_EDITOR is set, but this build has no `editor` feature: running as a game \
+             (start it with `ponko editor`, or build with `--features ponko/editor`)"
+        );
+    }
+}

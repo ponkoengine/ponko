@@ -4,13 +4,22 @@
 //! Each file is cooked by its kind (see [`cook_files`]):
 //! - images (PNG, JPEG): GPU-compressed KTX2 with mipmaps (BC7, BC5 or BC4
 //!   for desktop and the web, Basis Universal UASTC for mobile), through the
-//!   encoder of `ponko textures`;
+//!   encoder of `ponko textures`; those glTF models read for what their
+//!   materials use them as, a metallic-roughness image with its occlusion
+//!   merged in ([`model_images`]);
 //! - glTF and GLB models: meshes reordered for the vertex cache, overdraw
-//!   and vertex fetch, normals and texture coordinates quantized
-//!   (`KHR_mesh_quantization`), written as one GLB ([`gltf`]);
-//! - PCM WAV sounds: FLAC, lossless ([`flac`]);
-//! - WGSL shaders: validated as the engine composes them, written as they are
+//!   and vertex fetch, normals, texture coordinates and positions quantized
+//!   (`KHR_mesh_quantization`), the images they hold as KTX2
+//!   (`KHR_texture_basisu`), written as one GLB ([`gltf`]); a `.gltf`'s
+//!   `.bin` buffers are left out;
+//! - PCM WAV sounds: FLAC, lossless ([`flac`]), short ones too (see
+//!   "Cooking assets" in the book for the measurement);
+//! - WGSL shaders: checked with the engine's rules for their kind and
+//!   validated as the engine composes them, written as they are
 //!   ([`shaders`]);
+//! - Aseprite files: the JSON Array sheet and PNG Aseprite's export makes,
+//!   beside them (`hero.aseprite` -> `hero.json`, `hero.png`; [`aseprite`]),
+//!   the PNG then cooked as any image;
 //! - anything else: copied.
 //!
 //! The engine finds a texture's, model's and sound's format from its first
@@ -22,9 +31,12 @@
 
 #![deny(missing_docs)]
 
+#[cfg(feature = "aseprite")]
+pub mod aseprite;
 pub mod flac;
 #[cfg(feature = "meshes")]
 pub mod gltf;
+pub mod model_images;
 #[cfg(feature = "shaders")]
 pub mod shaders;
 
@@ -46,11 +58,18 @@ Cooks every file in <folder> (default: assets) into --out (default:
 target/cooked/<platform>), under the same names, so the game loads the
 cooked files with the same calls (`load_texture(\"bricks.png\")`):
   images (PNG, JPEG)  GPU-compressed KTX2 with mipmaps (needs the engine's
-                      `compressed-textures` feature to load)
+                      `compressed-textures` feature to load); a glTF
+                      model's image files for their use, its occlusion
+                      merged into its metallic-roughness file
   glTF, GLB           meshes optimized (vertex cache, overdraw, vertex
-                      fetch), normals and UVs quantized, one GLB file
+                      fetch), normals, UVs and positions (within 0.1 mm)
+                      quantized, the images it holds as KTX2, one GLB
+                      file (a .gltf's .bin buffers are left out)
   WAV (PCM)           FLAC: lossless, about half the size
-  WGSL                validated as the engine compiles it; kept as it is
+  WGSL                checked with the engine's rules for its kind and
+                      validated as the engine compiles it; kept as it is
+  Aseprite            hero.aseprite -> hero.json and hero.png, the JSON
+                      Array sheet load_aseprite reads (no export step)
   anything else       copied
 Results are cached by content (--cache, default target/cook-cache): a second
 cook of unchanged files reads them back. The same input always gives the
@@ -77,6 +96,7 @@ path wins, then the longest pattern):
       \"heights.png\": { \"texture\": \"keep\" },
       \"music/*.wav\": { \"audio\": \"keep\" },
       \"props/*.glb\": { \"quantize\": false },
+      \"sprites/hero.aseprite\": { \"layers\": true },
       \"fx/glow.wgsl\": { \"shader\": \"effect\" }
     }
   }
@@ -85,15 +105,18 @@ path wins, then the longest pattern):
              \"basis\": true|false and \"mipmaps\": true|false
   audio      flac (default) or keep
   optimize   reorder meshes (default true);  quantize: (default true)
+  layers     an Aseprite file's frames split by layer (default false)
   shader     material, sprite, sky, effect, compute or module (default:
              found from the hooks it defines), or keep (not validated)
-Images that a glTF file uses, 16-bit images, and images whose sides aren't
-multiples of 4 are kept: the engine reads those as RGBA8 anyway. A
-textures.json (see `ponko textures`) gives image kinds too.";
+Image files a glTF file uses are compressed for that use (color, normal
+map, or metallic-roughness with the occlusion merged in); 16-bit images and
+images whose sides aren't multiples of 4 are kept: the engine reads those
+as RGBA8 anyway. A textures.json (see `ponko textures`) gives image kinds
+too.";
 
 /// The cooker's version, part of every cache key: bump it whenever a cooked
 /// file's bytes would change for the same input and settings.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 3;
 
 /// The settings file's name.
 pub const CONFIG: &str = "cook.json";
@@ -312,6 +335,8 @@ pub struct Rule {
     pub quantize: Option<bool>,
     /// A shader's kind.
     pub shader: Option<ShaderKind>,
+    /// An Aseprite file's frames split by layer.
+    pub layers: Option<bool>,
 }
 
 impl Rule {
@@ -356,9 +381,10 @@ impl Rule {
                 "optimize" => rule.optimize = Some(flag(v, key)?),
                 "quantize" => rule.quantize = Some(flag(v, key)?),
                 "shader" => rule.shader = Some(ShaderKind::parse(v.as_str().unwrap_or_default())?),
+                "layers" => rule.layers = Some(flag(v, key)?),
                 other => {
                     return Err(format!(
-                        "unknown setting \"{other}\" (the settings are texture, basis, mipmaps, audio, optimize, quantize and shader)"
+                        "unknown setting \"{other}\" (the settings are texture, basis, mipmaps, audio, optimize, quantize, shader and layers)"
                     ));
                 }
             }
@@ -453,6 +479,13 @@ pub enum Outcome {
     Kept(Option<String>),
     /// Left out (`"skip"`).
     Skipped,
+    /// Left out: a `.gltf` file's buffer, whose bytes are inside the GLB
+    /// every model that reads it was cooked into; the first such model.
+    Embedded(String),
+    /// Made into other files (an Aseprite file's sheet and JSON), which
+    /// have entries of their own.
+    #[cfg_attr(not(feature = "aseprite"), allow(dead_code))]
+    Converted(Vec<String>),
 }
 
 /// One file of a cook.
@@ -489,7 +522,12 @@ impl Cooked {
     /// Files cooked now and read from the cache.
     pub fn counts(&self) -> (usize, usize) {
         let count = |o: &Outcome| self.entries.iter().filter(|e| e.outcome == *o).count();
-        (count(&Outcome::Cooked), count(&Outcome::Cached))
+        let converted = self
+            .entries
+            .iter()
+            .filter(|e| matches!(e.outcome, Outcome::Converted(_)))
+            .count();
+        (count(&Outcome::Cooked) + converted, count(&Outcome::Cached))
     }
 
     /// One line on what the cook did.
@@ -500,7 +538,11 @@ impl Cooked {
             .iter()
             .filter(|e| matches!(e.outcome, Outcome::Kept(_)))
             .count();
-        let skipped = self.entries.iter().filter(|e| e.outcome == Outcome::Skipped).count();
+        let skipped = self
+            .entries
+            .iter()
+            .filter(|e| matches!(e.outcome, Outcome::Skipped | Outcome::Embedded(_)))
+            .count();
         let before: u64 = self.entries.iter().map(|e| e.source_bytes).sum();
         let after: u64 = self.entries.iter().map(|e| e.cooked_bytes).sum();
         let mut line = format!(
@@ -531,6 +573,10 @@ impl Cooked {
                     Outcome::Cooked => "cooked",
                     Outcome::Cached => "cached",
                     Outcome::Kept(Some(why)) => return Some(format!("{}: kept, {why}", e.name)),
+                    Outcome::Embedded(model) => return Some(format!("{}: left out, inside {model}", e.name)),
+                    Outcome::Converted(files) => {
+                        return Some(format!("{}: made into {}, {}", e.name, files.join(" and "), e.note));
+                    }
                     Outcome::Kept(None) | Outcome::Skipped => return None,
                 };
                 Some(format!(
@@ -622,24 +668,47 @@ fn key(kind: Kind, how: &str, bytes: &[u8], deps: &[(String, Vec<u8>)]) -> Strin
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The names (relative to the cooked folder) of the images glTF files in
-/// `files` use by URI: those stay as they are, since the engine decodes a
-/// model's images to RGBA8 anyway.
-fn images_used_by_models(files: &[(String, Vec<u8>)]) -> BTreeSet<String> {
-    let mut used = BTreeSet::new();
-    for (name, bytes) in files {
-        if Kind::of(name) != Kind::Mesh {
+/// The files (relative to the cooked folder) glTF file `name` reads its
+/// buffers from, by URI.
+fn buffer_files(name: &str, bytes: &[u8]) -> Vec<String> {
+    let Some(json) = gltf_json(bytes) else {
+        return Vec::new();
+    };
+    let folder = name.rfind('/').map_or("", |i| &name[..=i]);
+    json["buffers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|b| b["uri"].as_str().filter(|u| !u.starts_with("data:")))
+        .map(|uri| normalize(&format!("{folder}{}", percent_decode(uri))))
+        .collect()
+}
+
+/// The buffer files no output needs: those every model that reads them
+/// (and isn't left out) was cooked into one self-contained GLB, unless a
+/// rule keeps them. Each with the first such model.
+fn embedded_buffers(jobs: &[Job], slots: &[Slot]) -> BTreeMap<String, String> {
+    let mut readers: BTreeMap<String, (String, bool)> = BTreeMap::new();
+    for (job, slot) in jobs.iter().zip(slots) {
+        let cooked = match slot {
+            Some(Ok((Outcome::Cooked | Outcome::Cached, _))) => true,
+            Some(Ok((Outcome::Skipped, _))) => continue,
+            _ => false,
+        };
+        if Kind::of(job.name) != Kind::Mesh {
             continue;
         }
-        let Some(json) = gltf_json(bytes) else { continue };
-        let folder = name.rfind('/').map_or("", |i| &name[..=i]);
-        for image in json["images"].as_array().into_iter().flatten() {
-            if let Some(uri) = image["uri"].as_str().filter(|u| !u.starts_with("data:")) {
-                used.insert(normalize(&format!("{folder}{}", percent_decode(uri))));
-            }
+        for buffer in buffer_files(job.name, job.bytes) {
+            let entry = readers.entry(buffer).or_insert_with(|| (job.name.to_string(), true));
+            entry.1 &= cooked;
         }
     }
-    used
+    let kept_by_rule: BTreeSet<&str> = jobs.iter().filter(|j| j.rule.keep).map(|j| j.name).collect();
+    readers
+        .into_iter()
+        .filter(|(buffer, (_, all_cooked))| *all_cooked && !kept_by_rule.contains(buffer.as_str()))
+        .map(|(buffer, (model, _))| (buffer, model))
+        .collect()
 }
 
 /// A glTF or GLB file's JSON.
@@ -709,7 +778,7 @@ type Work = Result<Result<Result3, Option<String>>, String>;
 fn cook_one(
     job: &Job,
     all: &BTreeMap<String, Vec<u8>>,
-    used_by_models: &BTreeSet<String>,
+    model_plans: &BTreeMap<String, model_images::Plan>,
     settings: &Settings,
 ) -> Work {
     let (name, bytes, rule) = (job.name, job.bytes, job.rule);
@@ -719,15 +788,29 @@ fn cook_one(
             if kind == TextureKind::Keep {
                 return Ok(Err(None));
             }
-            if used_by_models.contains(name) {
-                return Ok(Err(Some("a glTF model's image (models decode their images)".into())));
+            let plan = model_plans.get(name);
+            if let Some(model_images::Plan::Keep(why)) = plan {
+                return Ok(Err(Some(why.clone())));
             }
             if !settings.reads.ktx2 {
                 return Ok(Err(Some(
                     "the game reads no KTX2 (`compressed-textures` is off)".into(),
                 )));
             }
-            texture(bytes, kind, rule, settings).map(|r| r.map_err(Some))
+            match plan {
+                // A model's image: compressed for what the model uses it as.
+                Some(model_images::Plan::Encode(kind)) => texture(bytes, *kind, rule, settings),
+                Some(model_images::Plan::Orm { metal_rough, occlusion }) => orm_texture(
+                    name,
+                    bytes,
+                    (metal_rough.as_deref(), occlusion.as_deref()),
+                    all,
+                    rule,
+                    settings,
+                ),
+                _ => texture(bytes, kind, rule, settings),
+            }
+            .map(|r| r.map_err(Some))
         }
         Kind::Mesh => {
             #[cfg(feature = "meshes")]
@@ -736,11 +819,12 @@ fn cook_one(
                 let options = gltf::Options {
                     optimize: rule.optimize.unwrap_or(true),
                     quantize: rule.quantize.unwrap_or(true),
+                    images: model_images(rule, settings),
                 };
-                if !options.optimize && !options.quantize {
+                if !options.optimize && !options.quantize && options.images.is_none() {
                     return Ok(Err(None));
                 }
-                gltf::cook(name, bytes, &deps, options).map(|r| r.map(|(b, note)| (b, note, None)).map_err(Some))
+                gltf::cook(name, bytes, &deps, options).map(|r| r.map_err(Some))
             }
             #[cfg(not(feature = "meshes"))]
             {
@@ -774,6 +858,18 @@ fn cook_one(
     }
 }
 
+/// How a model's own images are compressed: as images are (`"texture":
+/// "keep"` on the model keeps them, `"basis"` picks UASTC), when the game
+/// reads KTX2.
+#[cfg(feature = "meshes")]
+fn model_images(rule: Rule, settings: &Settings) -> Option<gltf::Images> {
+    (settings.reads.ktx2 && rule.texture != Some(TextureKind::Keep)).then(|| gltf::Images {
+        basis: rule.basis.unwrap_or(settings.platform == Platform::Mobile)
+            && settings.reads.uastc
+            && settings.platform != Platform::Web,
+    })
+}
+
 /// An image to a KTX2 texture per `kind` and `rule`.
 #[cfg(feature = "textures")]
 fn texture(
@@ -782,6 +878,21 @@ fn texture(
     rule: Rule,
     settings: &Settings,
 ) -> Result<Result<Result3, String>, String> {
+    let (rgba, width, height) = match rgba8(bytes)? {
+        Ok(image) => image,
+        Err(why) => return Ok(Err(why)),
+    };
+    encode_texture(&rgba, (width, height), kind, rule, settings, &[]).map(Ok)
+}
+
+/// An image file as RGBA8 with its size; `Ok(Err(reason))` for one that
+/// stays as it is (16 bits a channel, sides not multiples of 4).
+/// RGBA8 pixels, width and height.
+#[cfg(feature = "textures")]
+type Rgba8 = (Vec<u8>, u32, u32);
+
+#[cfg(feature = "textures")]
+fn rgba8(bytes: &[u8]) -> Result<Result<Rgba8, String>, String> {
     let image = image::load_from_memory(bytes).map_err(|e| format!("not a readable image: {e}"))?;
     use image::ColorType as C;
     if matches!(
@@ -799,6 +910,20 @@ fn texture(
             "{width} x {height} is not a multiple of 4 (GPUs sample it as RGBA8)"
         )));
     }
+    Ok(Ok((image.into_raw(), width, height)))
+}
+
+/// RGBA8 pixels to a KTX2 texture per `kind` and `rule`, with
+/// `key_values` in the file.
+#[cfg(feature = "textures")]
+fn encode_texture(
+    rgba: &[u8],
+    (width, height): (u32, u32),
+    kind: TextureKind,
+    rule: Rule,
+    settings: &Settings,
+    key_values: &[(&str, &str)],
+) -> Result<Result3, String> {
     let basis = rule.basis.unwrap_or(settings.platform == Platform::Mobile)
         && settings.reads.uastc
         && settings.platform != Platform::Web;
@@ -814,13 +939,85 @@ fn texture(
         basis,
         mipmaps,
     };
-    let encoded = crate::textures::encode(image.as_raw(), width, height, texture_rule)?;
+    let encoded = crate::textures::encode_with(rgba, width, height, texture_rule, key_values)?;
     let before = rgba8_with_mips(width, height, true);
-    Ok(Ok((
+    Ok((
         encoded.file,
         format!("{} {width} x {height}, {} levels", encoded.format, encoded.levels),
         Some((before, encoded.gpu_bytes)),
-    )))
+    ))
+}
+
+/// The ORM image a model's material makes of metallic-roughness image
+/// `metal_rough` and occlusion image `occlusion` (asset names, either
+/// `None`), merged as the engine merges them, into file `name` (one of the
+/// two), compressed as linear data with the KTX2 key that tells the engine
+/// it holds them ([`model_images`]). Kept as it is when the other image
+/// isn't among the assets or can't be read.
+#[cfg(feature = "textures")]
+fn orm_texture(
+    name: &str,
+    bytes: &[u8],
+    (metal_rough, occlusion): (Option<&str>, Option<&str>),
+    all: &BTreeMap<String, Vec<u8>>,
+    rule: Rule,
+    settings: &Settings,
+) -> Result<Result<Result3, String>, String> {
+    let (mut rgba, width, height) = match rgba8(bytes)? {
+        Ok(image) => image,
+        Err(why) => return Ok(Err(why)),
+    };
+    let pixels = rgba.as_chunks_mut::<4>().0;
+    match (metal_rough, occlusion) {
+        // One image for both: as it is.
+        (Some(m), Some(o)) if m == o => {}
+        (Some(_), Some(o)) => {
+            let Some(ao) = all.get(o).and_then(|b| image::load_from_memory(b).ok()) else {
+                return Ok(Err(format!(
+                    "its occlusion image {o} isn't an image the cook reads, so the engine merges them"
+                )));
+            };
+            let ao = ao.into_rgba8();
+            if ao.dimensions() == (width, height) {
+                for (p, a) in pixels.iter_mut().zip(ao.as_raw().as_chunks::<4>().0) {
+                    p[0] = a[0];
+                }
+            } else {
+                // The engine's merge: no occlusion where it doesn't line up.
+                pixels.iter_mut().for_each(|p| p[0] = 255);
+            }
+        }
+        // No occlusion: red 255.
+        (Some(_), None) => pixels.iter_mut().for_each(|p| p[0] = 255),
+        // Occlusion only: roughness, metalness and alpha 255.
+        (None, Some(_)) => pixels.iter_mut().for_each(|p| *p = [p[0], 255, 255, 255]),
+        (None, None) => {}
+    }
+    let folder = name.rfind('/').map_or("", |i| &name[..=i]);
+    let rel = |file: Option<&str>| file.map_or(String::new(), |f| model_images::relative(folder, f));
+    let note = format!("{}|{}", rel(metal_rough), rel(occlusion));
+    let mut made = encode_texture(
+        &rgba,
+        (width, height),
+        TextureKind::Linear,
+        rule,
+        settings,
+        &[("ponkoOrm", &note)],
+    )?;
+    made.1 = format!("{}, a model's ORM image ({note})", made.1);
+    Ok(Ok(made))
+}
+
+#[cfg(not(feature = "textures"))]
+fn orm_texture(
+    _: &str,
+    _: &[u8],
+    _: (Option<&str>, Option<&str>),
+    _: &BTreeMap<String, Vec<u8>>,
+    _: Rule,
+    _: &Settings,
+) -> Result<Result<Result3, String>, String> {
+    Ok(Err("this ponko was built without the `textures` feature".into()))
 }
 
 #[cfg(not(feature = "textures"))]
@@ -831,7 +1028,7 @@ fn texture(_: &[u8], _: TextureKind, _: Rule, _: &Settings) -> Result<Result<Res
 /// RGBA8's video memory for a `width` x `height` image with its mipmaps:
 /// what the engine gives a PNG drawn by a 3D material.
 #[cfg(feature = "textures")]
-fn rgba8_with_mips(width: u32, height: u32, mipmaps: bool) -> u64 {
+pub(crate) fn rgba8_with_mips(width: u32, height: u32, mipmaps: bool) -> u64 {
     let (mut w, mut h, mut total) = (u64::from(width), u64::from(height), 0);
     loop {
         total += w * h * 4;
@@ -854,7 +1051,10 @@ fn how(rule: &Rule, texture_json: Option<TextureKind>, settings: &Settings, kind
             settings.platform,
             settings.reads
         ),
-        Kind::Mesh => format!("{:?} {:?}", rule.optimize, rule.quantize),
+        Kind::Mesh => format!(
+            "{:?} {:?} {:?} {:?} {:?} {:?}",
+            rule.optimize, rule.quantize, rule.texture, rule.basis, settings.platform, settings.reads
+        ),
         Kind::Sound => String::new(),
         Kind::Shader => format!("{:?}", rule.shader),
         Kind::Other => String::new(),
@@ -909,10 +1109,11 @@ fn texture_json_kinds(_: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap<String, 
 /// fails the cook, naming every such file.
 pub fn cook_files(files: Vec<(String, Vec<u8>)>, config: &Config, settings: &Settings) -> Result<Cooked, String> {
     let start = Instant::now();
-    let all: BTreeMap<String, Vec<u8>> = files.into_iter().collect();
-    let as_list: Vec<(String, Vec<u8>)> = all.iter().map(|(n, b)| (n.clone(), b.clone())).collect();
-    let used_by_models = images_used_by_models(&as_list);
-    drop(as_list);
+    let mut all: BTreeMap<String, Vec<u8>> = files.into_iter().collect();
+    // Aseprite files become the sheet and JSON beside them, cooked from
+    // there on as if they had been exported.
+    let (converted, made_from) = convert_aseprite(&mut all, config)?;
+    let model_plans = model_images::plans(&all);
     let texture_json = texture_json_kinds(&all)?;
     let cache = settings.cache.as_ref().map(|dir| Cache {
         dir: dir.join(format!("v{VERSION}")),
@@ -942,26 +1143,35 @@ pub fn cook_files(files: Vec<(String, Vec<u8>)>, config: &Config, settings: &Set
                 loop {
                     let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let Some(job) = jobs.get(i) else { break };
-                    let result = run_job(job, &all, &used_by_models, settings, cache.as_ref());
+                    let result = run_job(job, &all, &model_plans, settings, cache.as_ref());
                     results.lock().expect("no panics while holding it")[i] = Some(result);
                 }
             });
         }
     });
 
+    // A `.gltf` file's `.bin` buffers are inside the GLB it was cooked into.
+    let mut embedded = embedded_buffers(&jobs, &slots);
     let mut cooked = Cooked::default();
     let mut errors = Vec::new();
     for (job, slot) in jobs.iter().zip(slots) {
-        let (outcome, made) = match slot.expect("every job ran") {
+        let (mut outcome, made) = match slot.expect("every job ran") {
             Ok(r) => r,
             Err(e) => {
                 errors.push(e);
                 continue;
             }
         };
-        let source_bytes = job.bytes.len() as u64;
+        if outcome == Outcome::Kept(None)
+            && let Some(model) = embedded.remove(job.name)
+        {
+            outcome = Outcome::Embedded(model);
+        }
+        // A file an Aseprite file was made into wasn't among the sources.
+        let from = made_from.get(job.name);
+        let source_bytes = if from.is_some() { 0 } else { job.bytes.len() as u64 };
         let (bytes, note, gpu) = match (&outcome, made) {
-            (Outcome::Skipped, _) => {
+            (Outcome::Skipped | Outcome::Embedded(_), _) => {
                 cooked.entries.push(Entry {
                     name: job.name.to_string(),
                     kind: Kind::of(job.name),
@@ -976,6 +1186,11 @@ pub fn cook_files(files: Vec<(String, Vec<u8>)>, config: &Config, settings: &Set
             (_, Some(made)) => made,
             (_, None) => (job.bytes.to_vec(), String::new(), None),
         };
+        let note = match from {
+            Some(from) if note.is_empty() => format!("made from {from}"),
+            Some(from) => format!("made from {from}, {note}"),
+            None => note,
+        };
         cooked.entries.push(Entry {
             name: job.name.to_string(),
             kind: Kind::of(job.name),
@@ -987,6 +1202,8 @@ pub fn cook_files(files: Vec<(String, Vec<u8>)>, config: &Config, settings: &Set
         });
         cooked.files.push((job.name.to_string(), bytes));
     }
+    cooked.entries.extend(converted);
+    cooked.entries.sort_by(|a, b| a.name.cmp(&b.name));
     if !errors.is_empty() {
         return Err(format!(
             "{} asset{} can't be cooked:\n{}",
@@ -999,11 +1216,79 @@ pub fn cook_files(files: Vec<(String, Vec<u8>)>, config: &Config, settings: &Set
     Ok(cooked)
 }
 
+/// Makes each Aseprite file of `all` (unless its rule keeps or skips it)
+/// into its sheet and JSON ([`aseprite::export`]): they take its place in
+/// `all`. Returns its entries and, for each file made, the Aseprite file it
+/// was made from. An export already beside an Aseprite file (from
+/// Aseprite, for hot reload while developing) is replaced, so the cooked
+/// files are never older than their source. A file that can't be read is
+/// an error.
+#[cfg(feature = "aseprite")]
+fn convert_aseprite(
+    all: &mut BTreeMap<String, Vec<u8>>,
+    config: &Config,
+) -> Result<(Vec<Entry>, BTreeMap<String, String>), String> {
+    let names: Vec<String> = all.keys().filter(|n| aseprite::is_aseprite(n)).cloned().collect();
+    let (mut entries, mut made, mut errors) = (Vec::new(), BTreeMap::new(), Vec::new());
+    for name in names {
+        let rule = config.rule_for(&name);
+        if rule.keep || rule.skip {
+            continue;
+        }
+        let (json, png) = aseprite::outputs(&name);
+        let beside: Vec<&str> = [&json, &png]
+            .into_iter()
+            .filter(|o| all.contains_key(*o))
+            .map(String::as_str)
+            .collect();
+        let bytes = all.remove(&name).unwrap_or_default();
+        match aseprite::export(&name, &bytes, rule.layers.unwrap_or(false)) {
+            Ok(mut sheet) => {
+                if !beside.is_empty() {
+                    sheet.note = format!("{}, replacing the {} beside it", sheet.note, beside.join(" and "));
+                }
+                entries.push(Entry {
+                    name: name.clone(),
+                    kind: Kind::Other,
+                    outcome: Outcome::Converted(vec![json.clone(), png.clone()]),
+                    source_bytes: bytes.len() as u64,
+                    cooked_bytes: 0,
+                    gpu: None,
+                    note: sheet.note,
+                });
+                all.insert(json.clone(), sheet.json);
+                all.insert(png.clone(), sheet.png);
+                made.insert(json, name.clone());
+                made.insert(png, name);
+            }
+            Err(e) => errors.push(e),
+        }
+    }
+    if !errors.is_empty() {
+        return Err(format!(
+            "{} asset{} can't be cooked:\n{}",
+            errors.len(),
+            if errors.len() == 1 { "" } else { "s" },
+            errors.join("\n")
+        ));
+    }
+    Ok((entries, made))
+}
+
+/// Without the `aseprite` feature, Aseprite files are copied.
+#[cfg(not(feature = "aseprite"))]
+fn convert_aseprite(
+    _: &mut BTreeMap<String, Vec<u8>>,
+    _: &Config,
+) -> Result<(Vec<Entry>, BTreeMap<String, String>), String> {
+    Ok((Vec::new(), BTreeMap::new()))
+}
+
 /// Runs one job, through the cache.
 fn run_job(
     job: &Job,
     all: &BTreeMap<String, Vec<u8>>,
-    used_by_models: &BTreeSet<String>,
+    model_plans: &BTreeMap<String, model_images::Plan>,
     settings: &Settings,
     cache: Option<&Cache>,
 ) -> Result<(Outcome, Option<Result3>), String> {
@@ -1022,10 +1307,16 @@ fn run_job(
     let deps: Vec<(String, Vec<u8>)> = match kind {
         #[cfg(feature = "meshes")]
         Kind::Mesh => gltf::dependencies(job.name, job.bytes, all).unwrap_or_default(),
-        Kind::Texture => vec![(
-            format!("used by a model: {}", used_by_models.contains(job.name)),
-            Vec::new(),
-        )],
+        Kind::Texture => {
+            let plan = model_plans.get(job.name);
+            let mut deps = vec![(format!("a model's image: {plan:?}"), Vec::new())];
+            if let Some(model_images::Plan::Orm { occlusion: Some(o), .. }) = plan
+                && o != job.name
+            {
+                deps.push((o.clone(), all.get(o).cloned().unwrap_or_default()));
+            }
+            deps
+        }
         _ => Vec::new(),
     };
     let key = key(
@@ -1037,7 +1328,7 @@ fn run_job(
     if let Some(hit) = cache.and_then(|c| c.get(&key)) {
         return Ok((Outcome::Cached, Some(hit)));
     }
-    match cook_one(job, all, used_by_models, settings).map_err(|e| {
+    match cook_one(job, all, model_plans, settings).map_err(|e| {
         if e.starts_with(job.name) {
             e
         } else {
@@ -1133,7 +1424,7 @@ pub fn cook_command(options: &Options, dir: &Path) -> Result<String, String> {
 }
 
 /// Writes `files` into `out`, emptied first when `ponko cook` made it.
-fn write_folder(out: &Path, files: &[(String, Vec<u8>)]) -> Result<(), String> {
+pub(crate) fn write_folder(out: &Path, files: &[(String, Vec<u8>)]) -> Result<(), String> {
     if out.exists() {
         let empty = std::fs::read_dir(out)
             .map_err(|e| format!("can't read {}: {e}", out.display()))?

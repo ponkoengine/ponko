@@ -94,8 +94,11 @@ The warden is a [`Character`](physics3d.md) controller: the rules set its
 velocity from the stick, turned by the view's yaw so that "forward" is
 where the camera looks, and the physics step moves it along the walls and up
 the ramp. The camera follows from behind and above: a
-[`ThirdPersonCamera`](3d.md#camera-rigs) that comes in front of the walls
-between it and the warden. On the title an `OrbitCamera` circles the grove.
+[`ThirdPersonCamera`](3d.md#camera-rigs) kept as a resource, with a
+`CameraTarget` on the warden, so the engine moves it every frame and brings
+it in front of the walls between it and the warden; the game only sets its
+`yaw` to the view's. On the title, with no warden, an `OrbitCamera` circles
+the grove.
 
 The crawlers are `NavAgent`s. Each walks between two points of its route
 until the warden comes within 8 m, then chases (re-planning only when the

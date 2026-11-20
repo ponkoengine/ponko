@@ -101,6 +101,80 @@ fn nearest_matches_brute_force_and_respects_accept() {
     assert_eq!(g.nearest(vec2(10_000.0, 10_000.0), 5.0, |_| true), None);
 }
 
+/// The nearest of `pts` to `center` within `radius` that `accept` takes;
+/// ties go to the lowest entity bits.
+fn brute_nearest(pts: &[(Entity, Vec2)], center: Vec2, radius: f32, accept: impl Fn(Entity) -> bool) -> Option<Entity> {
+    pts.iter()
+        .filter(|(e, p)| p.distance_squared(center) <= radius * radius && accept(*e))
+        .min_by(|a, b| {
+            a.1.distance_squared(center)
+                .total_cmp(&b.1.distance_squared(center))
+                .then(a.0.to_bits().cmp(&b.0.to_bits()))
+        })
+        .map(|(e, _)| *e)
+}
+
+#[test]
+fn nearest_goes_ring_by_ring_and_still_matches_brute_force() {
+    // Dense and sparse grids, cells smaller and larger than the gaps,
+    // radii from nothing to everything, centres inside and far outside,
+    // and a filter that rejects most entities.
+    for (n, span, cell, seed) in [
+        (3000, 500.0, 8.0, 1),
+        (200, 2000.0, 16.0, 2),
+        (5000, 100.0, 50.0, 3),
+        (40, 50.0, 1.0, 4),
+    ] {
+        let pts = points(n, span, seed);
+        let g = grid(cell, &pts);
+        let mut s = seed * 77 + 5;
+        let mut next = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (s >> 40) as f32 / (1u64 << 24) as f32
+        };
+        for _ in 0..300 {
+            let center = vec2(next() * 3.0 - 1.5, next() * 3.0 - 1.5) * span;
+            let radius = match (next() * 4.0) as u32 {
+                0 => next() * cell,
+                1 => next() * span * 0.25,
+                2 => next() * span * 4.0,
+                _ => f32::INFINITY,
+            };
+            let odd = |e: Entity| e.to_bits() % 7 == 3;
+            assert_eq!(
+                g.nearest(center, radius, |_| true).map(|e| e.entity),
+                brute_nearest(&pts, center, radius, |_| true),
+                "{center} r {radius}"
+            );
+            assert_eq!(
+                g.nearest(center, radius, |e| odd(e.entity)).map(|e| e.entity),
+                brute_nearest(&pts, center, radius, odd),
+                "{center} r {radius}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nearest_breaks_ties_by_entity_and_asks_accept_once_per_entity() {
+    // Four entities at the same distance in four different cells.
+    let mut world = World::new();
+    let pts: Vec<(Entity, Vec2)> = [vec2(5.0, 0.0), vec2(-5.0, 0.0), vec2(0.0, 5.0), vec2(0.0, -5.0)]
+        .into_iter()
+        .map(|p| (world.spawn((Transform2D::at(p),)), p))
+        .collect();
+    let lowest = pts.iter().map(|p| p.0).min_by_key(|e| e.to_bits()).unwrap();
+    let g = grid(2.0, &pts);
+    assert_eq!(g.nearest(Vec2::ZERO, 100.0, |_| true).map(|e| e.entity), Some(lowest));
+    let mut asked = Vec::new();
+    let none = g.nearest(Vec2::ZERO, f32::INFINITY, |e| {
+        asked.push(e.entity);
+        false
+    });
+    assert_eq!(none, None);
+    assert_eq!(sorted(asked), sorted(pts.iter().map(|p| p.0).collect()));
+}
+
 #[test]
 fn every_entry_is_found_once_despite_hash_collisions() {
     // Few entries → few buckets, spread over many cells: buckets hold several cells.

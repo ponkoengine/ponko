@@ -51,8 +51,8 @@ pub(super) struct Delta {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct Influence {
-    joints: [u16; 4],
-    weights: [f32; 4],
+    pub(super) joints: [u16; 4],
+    pub(super) weights: [f32; 4],
 }
 
 /// Where a skinned model's posed corners go.
@@ -278,7 +278,8 @@ impl Skinning {
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("3d skin influences"),
                 contents: bytemuck::cast_slice(&influences),
-                usage: wgpu::BufferUsages::STORAGE,
+                // Crowds read them as a vertex buffer (see `crowds.rs`).
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
             });
         let targets = deltas.len().checked_div(vertices.len()).unwrap_or(0) as u32;
         // As `blend_skin` reads them: a joint counts where its weight is
@@ -695,6 +696,18 @@ fn slot_buffer(device: &wgpu::Device, corners: u32, storage: wgpu::BufferUsages)
 }
 
 impl GpuSkin {
+    /// Per corner its 4 joints (`Uint16x4`) and weights (`Float32x4`), 24
+    /// bytes a corner: what crowds skin each corner from (see `crowds.rs`).
+    pub fn influences(&self) -> &wgpu::Buffer {
+        &self.influences
+    }
+
+    /// Without compute shaders: the rest-pose corners and their influences,
+    /// on the CPU (crowds pose them there; see `crowds.rs`).
+    pub fn rest_on_cpu(&self) -> Option<(&[Vertex], &[Influence])> {
+        self.cpu.as_ref().map(|(v, i, _)| (&v[..], &i[..]))
+    }
+
     /// Counts a mesh's influences and morph deltas as skinning (see `memory.rs`).
     pub fn tally_memory(&self, t: &mut crate::render::memory::MemoryTally) {
         use crate::render::memory::MemoryClass as C;

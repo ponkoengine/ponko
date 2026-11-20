@@ -6,11 +6,16 @@
 //! the median and minimum over several runs.
 
 mod actions;
+mod ai;
 mod alloc;
 mod archetypes;
+#[cfg(feature = "audio")]
+mod audio3d;
 mod debug_draw;
+mod determinism;
 mod ecs_suite;
 mod extraction;
+mod hooks;
 #[cfg(feature = "render")]
 mod lights2d;
 #[cfg(feature = "render")]
@@ -34,6 +39,7 @@ mod render_report;
 #[cfg(feature = "render")]
 mod render_scenes;
 mod report;
+mod required;
 mod rollback;
 mod schedule;
 mod skeleton2d;
@@ -42,6 +48,9 @@ mod sprites;
 mod streaming;
 mod text;
 mod tilemap;
+mod ui_list;
+#[cfg(feature = "video")]
+mod video;
 
 use bevy_ecs::component::Component;
 use std::hint::black_box;
@@ -230,6 +239,7 @@ fn main() {
     net::run(&mut b);
     rollback::run(&mut b);
     actions::run(&mut b);
+    determinism::run(&mut b);
     query_cache::run(&mut b);
     query_filters::run(&mut b);
     query_policy::run(&mut b);
@@ -248,11 +258,17 @@ fn main() {
     streaming::run(&mut b);
     tilemap::run(&mut b);
     text::run(&mut b);
+    ui_list::run(&mut b);
     sparse_set::run(&mut b);
     sprites::run(&mut b);
     particles2d::run(&mut b);
     debug_draw::run(&mut b);
     skeleton2d::run(&mut b);
+    #[cfg(feature = "audio")]
+    audio3d::run(&mut b);
+    ai::run(&mut b);
+    #[cfg(feature = "video")]
+    video::run(&mut b);
 
     // Resource scoping versus the previous public take/put workaround.
     for scoped in [false, true] {
@@ -1311,6 +1327,8 @@ fn main() {
 
     archetypes::run(&mut b);
     ecs_suite::run(&mut b);
+    hooks::run(&mut b);
+    required::run(&mut b);
     flow_benches(&mut b);
 
     if let Some(path) = std::env::var_os("PONKO_BENCH_JSON") {
@@ -1491,6 +1509,32 @@ fn flow_benches(b: &mut Bench) {
                     world.despawn(old);
                 }
                 kids.push_back(world.spawn((Transform2D::default(), ponko::attach::Attached::to(*root))));
+                world.update_hierarchy();
+            },
+        );
+        // 100k pairs: each update one root is despawned (its child goes
+        // with it at that update) and a new pair spawned, so every update
+        // has a parent that lost its children list.
+        b.steady(
+            "hierarchy/100k-pairs-parent-churn",
+            20,
+            || {
+                let mut world = pairs();
+                world.update_hierarchy();
+                let roots: std::collections::VecDeque<_> = world
+                    .query::<ponko::prelude::Entity>()
+                    .filter::<ponko::prelude::Without<ponko::attach::Attached>>()
+                    .iter()
+                    .collect();
+                (world, roots)
+            },
+            |(world, roots)| {
+                if let Some(old) = roots.pop_front() {
+                    world.despawn(old);
+                }
+                let base = world.spawn((Transform2D::default(),));
+                world.spawn((Transform2D::default(), ponko::attach::Attached::to(base)));
+                roots.push_back(base);
                 world.update_hierarchy();
             },
         );

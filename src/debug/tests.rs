@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(feature = "physics3d")]
+use glam::{Vec3Swizzles, vec3};
 
 fn draw() -> DebugDraw {
     DebugDraw::new(true)
@@ -267,6 +269,56 @@ fn screen_space_applies_to_2d_shapes_only() {
 }
 
 #[test]
+fn draw_space_is_one_type_for_sprites_and_debug_drawing() {
+    // The prelude's and the debug path name the same type: a value of
+    // one is a value of the other, with no conversion.
+    let space: crate::prelude::DrawSpace = crate::debug::DrawSpace::Screen;
+    let same: crate::prelude::DrawSpace = space;
+    assert_eq!(
+        std::any::TypeId::of::<crate::prelude::DrawSpace>(),
+        std::any::TypeId::of::<crate::debug::DrawSpace>()
+    );
+    let params = crate::texture::DrawParams::default().with_space(same);
+    assert!(params.screen);
+    let mut d = draw();
+    d.line(Vec2::ZERO, Vec2::X, Color::RED).space(space);
+    assert_ne!(visible_lines(&d)[0].flags & SCREEN, 0);
+}
+
+fn labels(d: &DebugDraw) -> Vec<DebugLabel> {
+    d.visible().iter().flat_map(|b| b.labels.iter().cloned()).collect()
+}
+
+#[test]
+fn depth_tested_applies_to_3d_labels_and_the_last_of_it_and_on_top_wins() {
+    let mut d = draw();
+    d.text(Vec3::ZERO, "a", Color::WHITE).depth_tested();
+    d.text(Vec3::ZERO, "b", Color::WHITE).depth_tested().on_top();
+    d.text(Vec3::ZERO, "c", Color::WHITE).on_top().depth_tested();
+    d.text(Vec2::ZERO, "d", Color::WHITE).depth_tested();
+    d.text(Vec3::ZERO, "e", Color::WHITE);
+    d.line(Vec3::ZERO, Vec3::X, Color::RED).depth_tested();
+    let l = labels(&d);
+    let tested: Vec<bool> = l.iter().map(|l| l.flags & TESTED != 0).collect();
+    assert_eq!(tested, [true, false, true, false, false]);
+    assert_ne!(l[1].flags & ON_TOP, 0);
+    assert_eq!(l[2].flags & ON_TOP, 0);
+    assert_eq!(visible_lines(&d)[0].flags & (ON_TOP | TESTED), 0, "lines don't change");
+}
+
+#[test]
+fn the_collider_distance_defaults_to_fifty_and_is_never_negative() {
+    let mut d = draw();
+    assert_eq!(d.collider_distance(), 50.0);
+    d.set_collider_distance(12.0);
+    assert_eq!(d.collider_distance(), 12.0);
+    d.set_collider_distance(-1.0);
+    assert_eq!(d.collider_distance(), 0.0);
+    d.set_collider_distance(f32::NAN);
+    assert_eq!(d.collider_distance(), 0.0);
+}
+
+#[test]
 fn a_view_systems_buffer_draws_like_the_main_one_and_is_added_to_it() {
     let mut main = draw();
     main.begin_frame(2.0);
@@ -366,7 +418,7 @@ fn the_collider_view_draws_2d_colliders() {
 
 #[cfg(feature = "physics3d")]
 #[test]
-fn the_collider_view_draws_3d_colliders_and_mesh_bounds() {
+fn the_collider_view_draws_3d_colliders_and_hull_edges() {
     let mut c = ctx();
     let t = crate::d3::Transform::default();
     c.world.spawn((t, crate::d3::Collider::cuboid(Vec3::ONE)));
@@ -375,18 +427,120 @@ fn the_collider_view_draws_3d_colliders_and_mesh_bounds() {
         .physics3d
         .convex_hull(&[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z])
         .expect("a hull");
-    c.world.spawn((t, crate::d3::Collider::mesh(hull)));
-    assert_eq!(
-        view_lines(&mut c, DebugView::Colliders).1,
-        12 + 3 * CIRCLE_SEGMENTS + 12
-    );
+    let at = crate::d3::Transform::at(vec3(5.0, 0.0, 0.0));
+    c.world.spawn((at, crate::d3::Collider::mesh(hull)));
+    // A tetrahedron is six edges, not its bounding box's twelve.
+    assert_eq!(view_lines(&mut c, DebugView::Colliders).1, 12 + 3 * CIRCLE_SEGMENTS + 6);
     let lines = visible_lines(&c.debug);
-    let hull_box = &lines[12 + 3 * CIRCLE_SEGMENTS..];
-    let max = hull_box.iter().flat_map(|l| [l.a, l.b]).fold(Vec3::MIN, Vec3::max);
+    let edges = &lines[12 + 3 * CIRCLE_SEGMENTS..];
+    let ends = || edges.iter().flat_map(|l| [l.a, l.b]);
+    let max = ends().fold(Vec3::MIN, Vec3::max);
+    let min = ends().fold(Vec3::MAX, Vec3::min);
     assert!(
-        max.abs_diff_eq(Vec3::ONE, 1e-4),
-        "the hull's box reaches (1, 1, 1): {max}"
+        max.abs_diff_eq(vec3(6.0, 1.0, 1.0), 1e-4) && min.abs_diff_eq(vec3(5.0, 0.0, 0.0), 1e-4),
+        "the hull's corners, at its entity: {min} {max}"
     );
+}
+
+/// A flat square triangle mesh `n` cells of 1 a side, from (0, 0, 0) along +X and +Z.
+#[cfg(feature = "physics3d")]
+fn flat_grid(c: &mut crate::ctx::Ctx, n: u32) -> crate::d3::CollisionMesh {
+    let (mut vertices, mut indices) = (Vec::new(), Vec::new());
+    for z in 0..=n {
+        for x in 0..=n {
+            vertices.push(vec3(x as f32, 0.0, z as f32));
+        }
+    }
+    let row = n + 1;
+    for z in 0..n {
+        for x in 0..n {
+            let i = z * row + x;
+            indices.push([i, i + row, i + 1]);
+            indices.push([i + 1, i + row, i + row + 1]);
+        }
+    }
+    c.physics3d.trimesh(&vertices, &indices).expect("a mesh")
+}
+
+/// The 3D lines the colliders view draws, with the camera at `eye`.
+#[cfg(feature = "physics3d")]
+fn collider_lines(c: &mut crate::ctx::Ctx, eye: Vec3, distance: f32) -> Vec<DebugLine> {
+    c.scene3d.camera.position = eye;
+    c.debug = DebugDraw::new(true);
+    c.debug.set_collider_distance(distance);
+    c.debug.show(DebugView::Colliders, true);
+    builtin::draw(c);
+    visible_lines(&c.debug)
+}
+
+#[cfg(feature = "physics3d")]
+#[test]
+fn the_collider_view_draws_mesh_triangles_near_the_camera_only() {
+    let mut c = ctx();
+    let mesh = flat_grid(&mut c, 100);
+    // Turned a quarter around Y and moved: the triangles follow the entity.
+    let at =
+        crate::d3::Transform::at(vec3(-50.0, 0.0, 50.0)).rotated(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
+    c.world.spawn((at, crate::d3::Collider::mesh(mesh)));
+    let eye = vec3(0.0, 2.0, 0.0);
+    let near = collider_lines(&mut c, eye, 5.0);
+    // 20,000 triangles in all; around the camera, within 5 of it (2 up):
+    // a disc of radius about 4.6 on the ground, about 66 cells.
+    assert!(near.len() > 3 * 100 && near.len() < 3 * 400, "{}", near.len());
+    for l in &near {
+        assert!(l.a.y.abs() < 1e-4 && l.b.y.abs() < 1e-4, "on the ground: {l:?}");
+        // Each line is an edge of a triangle that comes within 5 of the eye.
+        assert!(l.a.distance(eye) < 5.0 + 1.5 && l.b.distance(eye) < 5.0 + 1.5, "{l:?}");
+        assert_eq!(l.flags & THREE_D, THREE_D);
+    }
+    // Twice as far, about four times the triangles.
+    let far = collider_lines(&mut c, eye, 10.0);
+    assert!(far.len() > 3 * near.len(), "{} vs {}", far.len(), near.len());
+    // Far from the mesh, nothing.
+    assert!(collider_lines(&mut c, vec3(0.0, 100.0, 0.0), 10.0).is_empty());
+    // On the mesh, inside one triangle, at a distance of 0.01: that triangle alone.
+    let under = collider_lines(&mut c, vec3(0.2, 0.0, 0.3), 0.01);
+    assert_eq!(under.len(), 3);
+}
+
+#[cfg(feature = "physics3d")]
+#[test]
+fn the_collider_view_draws_terrain_triangles_scaled_with_its_tile() {
+    let mut c = ctx();
+    // 33 x 33 heights over 64 m: cells 2 m across, sloping up along +X.
+    let heights: Vec<f32> = (0..33 * 33).map(|i| (i % 33) as f32 * 0.05).collect();
+    let ground = c.physics3d.heightfield(&heights, 64.0);
+    let corner = vec3(-32.0, -1.0, -32.0);
+    let tile = crate::d3::Transform::at(corner);
+    c.world.spawn((tile, crate::d3::TerrainCollider::new(ground)));
+    let eye = vec3(0.0, 0.0, 0.0);
+    let lines = collider_lines(&mut c, eye, 6.0);
+    assert!(!lines.is_empty());
+    for l in &lines {
+        for p in [l.a, l.b] {
+            // On the heightfield: height 0.5 per column of 2 m from the corner.
+            let column = (p.x - corner.x) / 2.0;
+            assert!((p.y - (corner.y + column * 0.05)).abs() < 1e-3, "{p}");
+            assert!(p.xz().length() < 6.0 + 3.0, "near the camera: {p}");
+        }
+    }
+    // Scaled twice as wide: the same view reaches the same distance, in
+    // half as many (bigger) cells.
+    c.world.clear();
+    let wide = crate::d3::Transform {
+        scale: vec3(2.0, 1.0, 2.0),
+        ..crate::d3::Transform::at(vec3(-64.0, -1.0, -64.0))
+    };
+    c.world.spawn((wide, crate::d3::TerrainCollider::new(ground)));
+    let scaled = collider_lines(&mut c, eye, 6.0);
+    assert!(
+        !scaled.is_empty() && scaled.len() < lines.len(),
+        "{} vs {}",
+        scaled.len(),
+        lines.len()
+    );
+    let reach = scaled.iter().flat_map(|l| [l.a.x, l.b.x]).fold(f32::MIN, f32::max);
+    assert!(reach > 5.0 && reach < 6.0 + 5.0, "{reach}");
 }
 
 #[cfg(feature = "navmesh")]

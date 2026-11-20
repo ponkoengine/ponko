@@ -1,5 +1,6 @@
 //! The 3D methods on [`Ctx`]: making meshes and materials, loading models.
 
+use crate::handle::INDEX_MASK;
 use std::ops::Range;
 
 use glam::Vec3;
@@ -74,7 +75,7 @@ impl GpuMaterialDesc {
                 id(desc.custom_textures[1]),
             ],
             arrays: desc.custom_arrays.map(|a| a.map(|a| a.id)),
-            shader: desc.shader.map_or(0, |s| s.id + 1),
+            shader: desc.shader.map_or(0, |s| (s.id & INDEX_MASK) + 1),
             transparent: desc.blend == Blend::Transparent,
             cutout: desc.blend == Blend::Cutout,
             double_sided: desc.double_sided,
@@ -125,16 +126,14 @@ impl Graphics {
     /// ```
     pub fn try_create_material(&mut self, desc: MaterialDesc) -> Result<Material, crate::error::Error> {
         self.check_material(&desc)?;
-        let id = self.assets3d.materials;
-        self.assets3d.materials += 1;
+        let id = self.assets3d.material_ids.make("material");
         self.assets3d.materials_live.insert(id);
         self.asset_ledger.made(crate::inventory::AssetClass::Material, id);
         let gpu = self.gpu_material(&desc);
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
         {
-            let gpu_id = renderer.create_material(&gpu);
-            debug_assert_eq!(gpu_id, id);
+            renderer.create_material(id, &gpu);
         }
         Ok(Material { id })
     }
@@ -156,7 +155,7 @@ impl Graphics {
     /// game. Updating a freed material does nothing: it stays freed.
     pub fn update_material(&mut self, material: Material, desc: MaterialDesc) {
         assert!(
-            material.id < self.assets3d.materials,
+            self.assets3d.materials_live.was_made(material.id),
             "ponko: update_material: that material wasn't made by this game; update a material this game created"
         );
         self.check_material(&desc).unwrap_or_else(|e| panic!("{e}"));
@@ -173,7 +172,7 @@ impl Graphics {
 
     /// What the GPU makes of `desc`: freed shaders, textures and arrays
     /// are left out, so it looks as it would without them.
-    fn gpu_material(&self, desc: &MaterialDesc) -> GpuMaterialDesc {
+    pub(crate) fn gpu_material(&self, desc: &MaterialDesc) -> GpuMaterialDesc {
         let mut gpu = GpuMaterialDesc::new(desc);
         if desc.shader.is_some_and(|s| !self.assets3d.shaders_live.contains(s.id)) {
             gpu.shader = 0;
@@ -189,9 +188,9 @@ impl Graphics {
             }
         }
         for array in &mut gpu.arrays {
-            if array.is_some_and(|a| !self.assets3d.arrays_live.contains(a)) {
-                *array = None;
-            }
+            *array = array
+                .filter(|&id| self.assets3d.arrays_live.contains(id))
+                .map(|id| id & INDEX_MASK);
         }
         #[cfg(feature = "compressed-textures")]
         if let Some(normal) = gpu.textures[1] {
@@ -225,7 +224,9 @@ impl Graphics {
             .filter(|b| b.parent.is_none())
             .count();
         counts.instance_cells = a.instance_cells.live();
+        counts.crowds = a.crowds.iter().flatten().count();
         counts.texture_arrays = a.arrays_live.len();
+        counts.sky_shaders = a.sky_shaders_live.len();
     }
 
     /// Frees material `id` (see [`Ctx::free`]): mesh parts made with it
@@ -234,6 +235,7 @@ impl Graphics {
         if !self.assets3d.materials_live.remove(id) {
             return;
         }
+        self.assets3d.material_ids.release(id);
         self.asset_ledger.freed(crate::inventory::AssetClass::Material, id);
         if self.assets3d.default_material == Some(Material { id }) {
             self.assets3d.default_material = None;
@@ -258,6 +260,8 @@ impl Graphics {
         if !self.assets3d.shaders_live.remove(id) {
             return;
         }
+        self.assets3d.shader_ids.release(id);
+        self.forget_shader_name(super::ShaderKind::Material, id);
         self.asset_ledger.freed(crate::inventory::AssetClass::Shader, id);
         self.assets3d.loaded_shaders.retain(|_, s| s.id != id);
         if self.assets3d.terrain_shader == Some(Shader { id }) {
@@ -268,7 +272,7 @@ impl Graphics {
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
         {
-            renderer.free_shader(id + 1);
+            renderer.free_shader((id & INDEX_MASK) + 1);
         }
     }
 
@@ -310,7 +314,7 @@ impl Graphics {
         }
         // Freed handles are allowed: they draw as the default.
         if let Some(shader) = desc.shader
-            && shader.id >= self.assets3d.shaders
+            && !self.assets3d.shaders_live.was_made(shader.id)
         {
             return Err(Error::new(
                 ErrorKind::BadHandle,
@@ -318,7 +322,7 @@ impl Graphics {
             ));
         }
         for array in desc.custom_arrays.into_iter().flatten() {
-            if self.assets3d.arrays.get(array.id as usize) != Some(&array) {
+            if !self.assets3d.knows_array(array) {
                 return Err(Error::new(
                     ErrorKind::BadHandle,
                     "that texture array wasn't made by this game; create or load it in this game",
@@ -396,9 +400,10 @@ impl Graphics {
             Err(e) if self.keeps_failed_load(&origin) => {
                 let e = e.with_path(path);
                 Self::report_stand_in(path, &e);
-                let id = self.assets3d.shaders;
-                self.compile_shader(path, "", None).map_err(|_| e)?;
-                self.assets3d.shaders += 1;
+                let id = self.assets3d.shader_ids.next("shader");
+                self.compile_shader(path, "", id, false).map_err(|_| e)?;
+                let id = self.assets3d.shader_ids.make("shader");
+                self.keep_shader_name(super::ShaderKind::Material, id, path);
                 self.assets3d.shaders_live.insert(id);
                 self.asset_ledger.made(crate::inventory::AssetClass::Shader, id);
                 Shader { id }
@@ -452,10 +457,11 @@ impl Graphics {
     /// });
     /// ```
     pub fn try_create_shader(&mut self, name: &str, source: &str) -> Result<Shader, crate::error::Error> {
-        let id = self.assets3d.shaders;
-        let compiled = self.compile_shader(name, source, None);
+        let id = self.assets3d.shader_ids.next("shader");
+        let compiled = self.compile_shader(name, source, id, false);
         self.record_shader(name, super::ShaderKind::Material, false, compiled)?;
-        self.assets3d.shaders += 1;
+        let id = self.assets3d.shader_ids.make("shader");
+        self.keep_shader_name(super::ShaderKind::Material, id, name);
         self.assets3d.shaders_live.insert(id);
         self.asset_ledger.made(crate::inventory::AssetClass::Shader, id);
         Ok(Shader { id })
@@ -467,7 +473,7 @@ impl Graphics {
         if !self.assets3d.shaders_live.contains(id) {
             return Ok(());
         }
-        let compiled = self.compile_shader(name, source, Some(id));
+        let compiled = self.compile_shader(name, source, id, true);
         Ok(self.record_shader(name, super::ShaderKind::Material, true, compiled)?)
     }
 
@@ -477,7 +483,8 @@ impl Graphics {
         &mut self,
         name: &str,
         source: &str,
-        replace: Option<u32>,
+        id: u32,
+        replace: bool,
     ) -> Result<(), Box<super::ShaderDiagnostic>> {
         #[cfg(feature = "window")]
         crate::render::diagnose(
@@ -489,15 +496,14 @@ impl Graphics {
         if let Some(renderer) = self.renderer.as_mut()
             && !self.headless
         {
-            match replace {
-                Some(id) => renderer.replace_shader(id + 1, name, source)?,
-                None => {
-                    let gpu_id = renderer.create_shader(name, source)?;
-                    debug_assert_eq!(gpu_id, self.assets3d.shaders + 1);
-                }
+            let slot = (id & INDEX_MASK) + 1;
+            if replace {
+                renderer.replace_shader(slot, name, source)?;
+            } else {
+                renderer.create_shader(slot, name, source)?;
             }
         }
-        let _ = (name, source, replace);
+        let _ = (name, source, id, replace);
         Ok(())
     }
 
@@ -560,7 +566,7 @@ impl Graphics {
         use crate::error::{Error, ErrorKind};
         data.problem()
             .map_err(|e| Error::new(ErrorKind::Invalid, format!("create_mesh: {e}")))?;
-        if material.id >= self.assets3d.materials {
+        if !self.assets3d.materials_live.was_made(material.id) {
             return Err(Error::new(
                 ErrorKind::BadHandle,
                 "create_mesh: that material wasn't made by this game; create it with create_material in this game",
@@ -659,7 +665,7 @@ impl Graphics {
             panic!("ponko: create_skinned_mesh: joint {bad} is past the skeleton's {n} joints");
         }
         assert!(
-            material.id < self.assets3d.materials,
+            self.assets3d.materials_live.was_made(material.id),
             "ponko: create_skinned_mesh: that material wasn't made by this game; create it with create_material in this game"
         );
         let rest = Skeleton::from_shared(skeleton.shared_joints().clone());
@@ -992,9 +998,14 @@ impl Graphics {
                 .or_insert_with(|| SharedImage::of(sources, source))
                 .clone()
         };
-        let loaded = gltf::load(path, bytes, &mut |name| sources.read(name), &|source| {
-            key_of(source).is_some_and(|key| shared.contains_key(&key))
-        })
+        let gpu = self.model_formats();
+        let loaded = gltf::load_for(
+            path,
+            bytes,
+            &mut |name| sources.read(name),
+            &|source| key_of(source).is_some_and(|key| shared.contains_key(&key)),
+            gpu,
+        )
         .map_err(|e| crate::error::Error::decode(path, e))?;
         let image_keys = loaded
             .image_sources
@@ -1007,10 +1018,19 @@ impl Graphics {
     /// Reads glTF file `path` node by node (`gltf::load_nodes`) and makes a
     /// mesh of each node that has triangles, in the node's own space, with
     /// the file's materials (shared with [`load_mesh`](Self::load_mesh)).
-    /// Each call makes new meshes; the caller frees them. `refresh` (the
-    /// file changed) reads its images again and updates its materials in
-    /// place. Also returns where the file is on disk, when it is a file.
-    pub(crate) fn load_node_meshes(&mut self, path: &str, refresh: bool) -> Result<NodeMeshes, crate::error::Error> {
+    /// Each call makes new meshes; the caller frees them, unless `reuse`
+    /// holds meshes made for the same file before (another spawn's), all
+    /// live and one for each node that has triangles: then those are
+    /// returned again, and the file's images aren't decoded. `refresh` (the
+    /// file changed) never reuses, reads its images again and updates its
+    /// materials in place. Also returns where the file is on disk, when it
+    /// is a file.
+    pub(crate) fn load_node_meshes(
+        &mut self,
+        path: &str,
+        refresh: bool,
+        reuse: Option<&[Option<Mesh>]>,
+    ) -> Result<NodeMeshes, crate::error::Error> {
         let found = self.asset_sources.find(path)?;
         let file = found.origin.clone();
         let on_disk = match &file {
@@ -1018,18 +1038,42 @@ impl Graphics {
             assets::Origin::Source { .. } => None,
         };
         let bytes = found.into_bytes().map_err(|e| e.with_path(path))?;
+        let reuse = reuse.filter(|meshes| !refresh && meshes.iter().flatten().all(|&m| self.is_live(m)));
         let shared = &self.assets3d.shared_images;
         let sources = &self.asset_sources;
-        let loaded = gltf::load_nodes(path, &bytes, &mut |name| sources.read(name), &|source| {
-            !refresh && SharedImage::of(sources, source).is_some_and(|key| shared.contains_key(&key))
-        })
+        let gpu = self.model_formats();
+        let loaded = gltf::load_nodes(
+            path,
+            &bytes,
+            &mut |name| sources.read(name),
+            &|source| {
+                reuse.is_some()
+                    || (!refresh && SharedImage::of(sources, source).is_some_and(|key| shared.contains_key(&key)))
+            },
+            gpu,
+        )
         .map_err(|e| crate::error::Error::decode(path, e))?;
+        if let Some(meshes) = reuse
+            && meshes.len() == loaded.nodes.len()
+            && meshes
+                .iter()
+                .zip(&loaded.nodes)
+                .all(|(m, n)| m.is_some() == n.mesh.is_some())
+        {
+            return Ok((loaded, meshes.to_vec(), on_disk));
+        }
+        if reuse.is_some() {
+            // The file no longer matches the meshes (changed on disk, with
+            // hot reload off): read it whole.
+            return self.load_node_meshes(path, refresh, None);
+        }
         let image_keys = loaded
             .image_sources
             .iter()
             .map(|source| source.as_deref().and_then(|s| SharedImage::of(sources, s)))
             .collect();
-        let materials = self.file_materials(path, &file, &loaded.materials, &loaded.images, image_keys, refresh);
+        let images = (&loaded.images[..], &loaded.blocks[..]);
+        let materials = self.file_materials(path, &file, &loaded.materials, images, image_keys, refresh);
         let meshes = loaded
             .nodes
             .iter()
@@ -1047,6 +1091,45 @@ impl Graphics {
             })
             .collect();
         Ok((loaded, meshes, on_disk))
+    }
+
+    /// The block formats a model's KTX2 images stay in (see
+    /// [`gltf::GpuFormats`]): the GPU's.
+    pub(crate) fn model_formats(&self) -> gltf::GpuFormats {
+        #[cfg(feature = "compressed-textures")]
+        return self.compressed_formats();
+        #[cfg(not(feature = "compressed-textures"))]
+        gltf::GpuFormats {}
+    }
+
+    /// A texture of a model's image: its blocks uploaded as they are, else
+    /// its RGBA8.
+    fn model_texture(&mut self, image: &gltf::Image, blocks: Option<&gltf::Blocks>) -> crate::texture::Texture {
+        #[cfg(feature = "compressed-textures")]
+        if let Some(blocks) = blocks {
+            let texture = self.make_compressed_texture(blocks);
+            self.textures_live.insert(texture.id);
+            return texture;
+        }
+        #[cfg(not(feature = "compressed-textures"))]
+        if let Some(never) = blocks {
+            match *never {}
+        }
+        self.create_texture(image.0, image.1, &image.2)
+    }
+
+    /// Frees the materials and textures glTF file `path` made, as
+    /// [`unload_mesh`](Self::unload_mesh) does, unless
+    /// [`load_mesh`](Self::load_mesh) holds a mesh of the same file (which
+    /// draws with them): the last scene spawned from the file is gone.
+    pub(crate) fn release_file_materials(&mut self, path: &str) {
+        let held = self
+            .asset_sources
+            .locate(path)
+            .is_some_and(|file| self.assets3d.loaded.contains_key(&file));
+        if !held {
+            self.unload_mesh(path);
+        }
     }
 
     /// The shared-image key of each image of a decoded glTF file (a file
@@ -1074,7 +1157,8 @@ impl Graphics {
         loaded: gltf::Loaded,
         image_keys: Vec<Option<SharedImage>>,
     ) -> Mesh {
-        let materials = self.file_materials(path, &file, &loaded.materials, &loaded.images, image_keys, false);
+        let images = (&loaded.images[..], &loaded.blocks[..]);
+        let materials = self.file_materials(path, &file, &loaded.materials, images, image_keys, false);
         let parts: Vec<(Range<u32>, Material)> = loaded
             .parts
             .iter()
@@ -1116,13 +1200,14 @@ impl Graphics {
     ///
     /// `refresh` (a file that changed on disk) makes its textures again from
     /// `images` and updates its live materials in place, so what shows them
-    /// shows the new file; textures no other file uses are freed.
+    /// shows the new file; textures no other file uses are freed. An image
+    /// with blocks (a KTX2 image the GPU samples) uploads as it is.
     fn file_materials(
         &mut self,
         path: &str,
         file: &assets::Origin,
         loaded_materials: &[gltf::LoadedMaterial],
-        images: &[gltf::Image],
+        (images, blocks): (&[gltf::Image], &[Option<gltf::Blocks>]),
         image_keys: Vec<Option<SharedImage>>,
         refresh: bool,
     ) -> Vec<Material> {
@@ -1136,7 +1221,8 @@ impl Graphics {
             .iter()
             .zip(image_keys)
             .enumerate()
-            .map(|(i, ((w, h, rgba), key))| {
+            .map(|(i, (image, key))| {
+                let blocks = blocks.get(i).and_then(Option::as_ref);
                 if let Some(&t) = old_textures
                     .get(i)
                     .filter(|t| !refresh && self.textures_live.contains(t.id))
@@ -1147,12 +1233,12 @@ impl Graphics {
                     Some(key) => match self.assets3d.shared_images.get(&key).filter(|_| !refresh) {
                         Some(&t) => t,
                         None => {
-                            let t = self.create_texture(*w, *h, rgba);
+                            let t = self.model_texture(image, blocks);
                             self.assets3d.shared_images.insert(key, t);
                             t
                         }
                     },
-                    None => self.create_texture(*w, *h, rgba),
+                    None => self.model_texture(image, blocks),
                 }
             })
             .collect();
@@ -1791,8 +1877,11 @@ impl Ctx {
             for (face, target) in faces.into_iter().enumerate() {
                 // Probes keep the scene, not what passes through it.
                 capture_cameras.push(
-                    super::TargetCamera::new(face_camera(self.scene3d.camera, center, face), target)
-                        .with_particles(false),
+                    super::TargetCamera::new(
+                        face_camera(self.scene3d.camera, center, face),
+                        super::RenderTarget::from_texture(target),
+                    )
+                    .with_particles(false),
                 );
             }
         }
@@ -1806,8 +1895,11 @@ impl Ctx {
                 let state = &self.gfx.assets3d.probes.refresh.slots[slot as usize - 1];
                 let target = self.gfx.assets3d.probes.captures[slot as usize - 1][face as usize];
                 capture_cameras.push(
-                    super::TargetCamera::new(face_camera(self.scene3d.camera, state.center, face as usize), target)
-                        .with_particles(false),
+                    super::TargetCamera::new(
+                        face_camera(self.scene3d.camera, state.center, face as usize),
+                        super::RenderTarget::from_texture(target),
+                    )
+                    .with_particles(false),
                 );
             }
         }
@@ -1833,7 +1925,7 @@ impl Ctx {
             .target_cameras
             .iter()
             .chain(capture_cameras.iter())
-            .filter(|c| targets.iter().any(|t| t.id == c.target.id));
+            .filter(|c| targets.iter().any(|t| t.id == c.target.texture.id));
         let count = cameras.clone().count();
         let views = &mut self.gfx.frame3d.views;
         views.resize_with(count, Default::default);
@@ -1852,7 +1944,7 @@ impl Ctx {
             view.frame.lod = self.scene3d.lod;
             view.frame
                 .collect(&mut self.world, &self.gfx.assets3d, skins, &eye, &lighting);
-            view.target = camera.target.id;
+            view.target = camera.target.texture.id;
             view.size = size;
             view.camera = eye.position;
             view.particles = eye.particles;
@@ -1971,10 +2063,11 @@ impl Ctx {
                     return None;
                 }
                 let material = e.material.or(fallback)?;
-                targets
-                    .iter()
-                    .any(|t| t.id == e.target.id)
-                    .then_some((e.effect.id, e.target.id, material.id))
+                targets.iter().any(|t| t.id == e.target.texture.id).then_some((
+                    e.effect.id,
+                    e.target.texture.id,
+                    material.id,
+                ))
             }));
         let mut computes = std::mem::take(&mut self.gfx.frame3d.computes);
         self.list_computes(&mut computes, false, fallback);
@@ -2009,11 +2102,11 @@ impl Ctx {
                     .filter(|&slot| assets.gpu_buffers[slot] > 0)?;
                 Some((c.compute.id, b.slot() | (1 << 31), material.id))
             } else {
-                assets.render_targets.iter().any(|t| t.id == c.target.id).then_some((
-                    c.compute.id,
-                    c.target.id,
-                    material.id,
-                ))
+                assets
+                    .render_targets
+                    .iter()
+                    .any(|t| t.id == c.target.texture.id)
+                    .then_some((c.compute.id, c.target.texture.id, material.id))
             }
         }));
     }
@@ -2034,9 +2127,12 @@ impl Ctx {
         {
             return; // no drawable 3D scene
         }
-        let time = (self.time.elapsed() as f32, self.time.dt());
+        let time = (self.time.elapsed(), self.time.dt());
         self.gfx.assets3d.decals_supported = self.gfx.supports_decals();
         self.gfx.assets3d.gi_supported = self.gfx.renderer.as_ref().is_some_and(|r| r.supports_gi());
+        if self.gfx.assets3d.baked_upload.is_some() {
+            self.gfx.upload_baked_lighting();
+        }
         let fallback = if self.scene3d.passes.effects.iter().any(|e| e.material.is_none())
             || self.scene3d.passes.target_effects.iter().any(|e| e.material.is_none())
             || self.scene3d.passes.compute.iter().any(|c| c.material.is_none())
@@ -2048,9 +2144,13 @@ impl Ctx {
         };
         self.collect_passes(fallback);
         self.gfx.validate_instance_batches();
+        self.gfx.validate_crowds();
         let start = web_time::Instant::now();
         let motion = self.scene3d.post.anti_aliasing == super::AntiAliasing::Taa
             || (self.scene3d.post.ao_temporal && self.scene3d.post.ambient_occlusion.enabled);
+        // Held items in front of the camera as it is now, after every system.
+        let view_model = self.scene3d.view_model;
+        super::view_model::place_held_items(&mut self.world, &self.scene3d.camera, view_model.as_ref());
         let mut skins = std::mem::take(&mut self.gfx.frame3d.skins);
         // The last frame's poses are kept only while something reads motion.
         skins.motion = motion;
@@ -2065,8 +2165,8 @@ impl Ctx {
         self.gfx.frame3d.motion.enabled = motion;
         if !self.scene3d.camera.occlusion_culling {
             self.gfx.frame3d.occlusion = None;
-        } else if let Some(grid) = renderer.take_occlusion() {
-            self.gfx.frame3d.occlusion = Some(grid);
+        } else {
+            renderer.replace_occlusion(&mut self.gfx.frame3d.occlusion);
         }
         // Several cameras: the sun's cascades cover every view.
         let views_on = !self.scene3d.views.is_empty() || !self.scene3d.camera.rect.is_full();
@@ -2079,8 +2179,15 @@ impl Ctx {
             &mut self.world,
             &self.gfx.assets3d,
             &skins,
-            &self.scene3d.camera,
+            &super::view_model::without_view_model(&self.scene3d.camera, view_model.as_ref()),
             &self.scene3d.lighting,
+        );
+        super::view_model::collect_view_model(
+            &mut self.world,
+            &self.gfx.assets3d,
+            &mut self.gfx.frame3d,
+            &self.scene3d,
+            &skins,
         );
         if views_on {
             collect_window_views(
@@ -2103,7 +2210,10 @@ impl Ctx {
             self.gfx.frame3d.debug_lines.clear();
         }
         self.gfx.frame3d.skins = skins;
-        let light = if self.scene3d.sky.atmosphere && self.scene3d.sky.shader.is_none() {
+        // The atmosphere, and the sky kit (which reddens and sets the sun as it
+        // does), light the scene through the air.
+        let sky = &self.scene3d.sky;
+        let light = if (sky.atmosphere || sky.kit.is_some()) && sky.shader.is_none() {
             match self.gfx.frame3d.sky_light {
                 Some((lighting, sky, light)) if lighting == self.scene3d.lighting && sky == self.scene3d.sky => light,
                 _ => {
@@ -2185,7 +2295,8 @@ pub(crate) fn collect_window_views(
         frame.occlusion = None;
         // The main frame's local light shadows (planned for every camera).
         frame.lights.share_shadows(&main.lights);
-        frame.collect(world, assets, skins, &view.camera, &lighting);
+        let camera = super::view_model::without_view_model(&view.camera, settings.view_model.as_ref());
+        frame.collect(world, assets, skins, &camera, &lighting);
         frame.lights.share_with_view(&main.lights);
         frame.light_views = main.light_views;
         // The main frame's shadow maps, which cover this view too.
@@ -2199,8 +2310,7 @@ pub(crate) fn collect_window_views(
         let lines = &mut frame.debug_lines;
         lines.clear();
         if view.camera.layers.intersects(crate::camera::RenderLayers::DEFAULT) {
-            lines.tested.extend_from_slice(&main.debug_lines.tested);
-            lines.top.extend_from_slice(&main.debug_lines.top);
+            lines.extend_lines(&main.debug_lines);
         }
     }
     main.window_views = frames;

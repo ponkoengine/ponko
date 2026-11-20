@@ -133,7 +133,8 @@ keep next to their fixtures (`InputScenario::from_json`, `to_json`; C++
 ```
 
 Input steps are `key`, `mouse`, `gamepad_button`, `gamepad_axis`, `focus_lost`,
-`gamepad_disconnected`, `mouse_move` (`position`, window pixels as `[x, y]`)
+`gamepad_connected`, `gamepad_disconnected`, `gamepad_motion` (`gyro` and
+`accel`, `[x, y, z]` each), `mouse_move` (`position`, window pixels as `[x, y]`)
 and `mouse_wheel` (`delta`, in notches); check steps are `expect_action`, `expect_resource`
 and `expect_count`. Steps may come in any order, and a step's number in a
 failure report is its position in the file. Unknown fields, a `version` this
@@ -146,6 +147,65 @@ With [headless frames](headless.md#menus-and-the-ui-headless-frames),
 scenarios also click and type into the retained UI by node name and check
 its tree: `ui_click`, `ui_type` and `expect_ui` steps (`InputScenario::click`,
 `type_text`, `ScenarioCheck::ui`).
+
+### Recording live input
+
+`ctx.input.start_recording()` records the input as it arrives, from the
+window or fed by code, into a scenario that `ctx.input.stop_recording()`
+returns: keys, mouse buttons, the pointer, the wheel, gamepad buttons and
+axes, focus loss, gamepad disconnects and IME events. Each event is stamped
+with the simulation tick that first sees it, so replaying the scenario feeds
+the same events before the same ticks and a deterministic game plays the
+same game again. Compare the two worlds with
+[`world_hash`](determinism.md#one-number-for-the-state):
+
+```rust
+use ponko::scenario::InputScenario;
+
+struct Recorded(Option<InputScenario>);
+
+/// Simulation system: F9 starts recording, F10 stops and keeps the scenario.
+fn recorder(ctx: &mut Ctx) {
+    if ctx.input.key_pressed(Key::F9) {
+        ctx.input.start_recording(); // its tick 0 is the next tick
+    }
+    if ctx.input.key_pressed(Key::F10) && ctx.input.is_recording() {
+        let scenario = ctx.input.stop_recording();
+        if let Some(scenario) = &scenario {
+            // Keep it next to the bug report.
+            let _ = std::fs::write("bug.scenario.json", scenario.to_json().to_string());
+        }
+        ctx.world.insert_resource(Recorded(scenario));
+    }
+}
+```
+
+- **Its tick 0** is the next simulation tick (from a system, the tick after
+  this one). What is held when it starts (keys, buttons, the pointer, stick
+  positions) is recorded at tick 0, and the scenario lasts the ticks it
+  recorded.
+- **Smaller than the events.** Pointer moves and stick readings between two
+  ticks keep only the last one, the value the next tick reads.
+- **Not recorded:** text typed without an IME (the window turns key events
+  into it, and the keys are recorded), raw mouse motion for mouse-look, and
+  gamepads being plugged in: a replay that reads a pad needs it connected as
+  it was.
+- **Edges last a frame.** A key pressed in a frame that runs no simulation
+  tick reaches the next tick as held, and `key_pressed` is false there; the
+  replay feeds it before that tick, where it reads as a fresh press. Games
+  that read edges in simulation systems at high frame rates can see that
+  difference; held keys and positions replay exactly.
+- **While recording** costs a push per event; off, a branch per event. A
+  scenario played while recording is recorded too.
+
+C++: `ctx.start_input_recording()` and `ctx.stop_input_recording()`, which
+returns a `std::optional<ponko::input_scenario>`; C:
+`ponko_ctx_start_input_recording` and `ponko_ctx_stop_input_recording`
+(a scenario to free, or null).
+
+`tests/input_recording.rs` records a game played through fed events,
+replays the recording on a fresh game and checks the two worlds hash alike,
+and that each event lands on the tick that first saw it.
 
 ### From tools
 
@@ -170,9 +230,9 @@ another client asked for with `sim.step`.
 
 | Action | Rust sources | C++ sources |
 | --- | --- | --- |
-| `Action::Button` / `action::button` | `ButtonBinding::Key`, `Mouse`, `Gamepad` | `action_binding::key`, `mouse`, `button` |
-| `Action::Axis` / `action::axis` | `AxisBinding::Keys`, `Gamepad` | `action_binding::keys`, `axis` |
-| `Action::Axis2` / `action::axis2` | `Axis2Binding::Keys`, `Gamepad` | `action_binding::keys2`, `stick` |
+| `Action::Button` / `action::button` | `ButtonBinding::Key`, `Mouse`, `Gamepad`, `Gesture` | `action_binding::key`, `mouse`, `button`, `gesture` |
+| `Action::Axis` / `action::axis` | `AxisBinding::Keys`, `Gamepad`, `Gesture` | `action_binding::keys`, `axis`, `gesture_axis` |
+| `Action::Axis2` / `action::axis2` | `Axis2Binding::Keys`, `Gamepad`, `Drag` | `action_binding::keys2`, `stick`, `drag` |
 
 For example, add `ButtonBinding::Mouse(MouseButton::Left)` or
 `action_binding::mouse(PONKO_MOUSE_LEFT)` to a button action. A scalar key pair

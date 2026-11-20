@@ -12,18 +12,23 @@ use ponko::prelude::*;
 #[allow(unused_imports)]
 #[cfg(feature = "3d")]
 use ponko::render::Blend;
+use ponko::render::RenderTarget;
 #[allow(unused_imports)]
 #[cfg(feature = "3d")]
 use ponko::render::{
-    AmbientOcclusion, AntiAliasing, ComputePass, GlobalIllumination, GpuBuffer, GraphicsQuality, InstanceBatchOptions,
-    InstanceLevel, LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodShadow, Material, MaterialDesc, Mesh,
-    MeshData, Model, ModelMaterial, Post, ScreenEffect, Sky, TargetCamera, TargetEffect, Tonemap,
+    AmbientOcclusion, AntiAliasing, BakeModel, BakedLighting, CloudQuality, ComputePass, DayNight, GlobalIllumination,
+    GpuBuffer, GraphicsQuality, InstanceBatchOptions, InstanceLevel, LodGroup, LodHysteresis, LodLevel, LodPick,
+    LodRenderer, LodShadow, Material, MaterialDesc, Mesh, MeshData, Model, ModelMaterial, Post, ScreenEffect, Sky,
+    SkyKit, TargetCamera, TargetEffect, Tonemap,
 };
 #[allow(unused_imports)]
 #[cfg(feature = "3d")]
 use ponko::render::{DepthOfField, PostVolume};
 #[allow(unused_imports)]
 use ponko::render::{GpuFeature, GpuTier};
+#[allow(unused_imports)]
+#[cfg(feature = "3d")]
+use ponko::render::{LightBakeScene, LightBakeSettings, bake_lighting};
 #[allow(unused_imports)]
 #[cfg(feature = "3d")]
 use ponko::terrain::{FarTerrain, Heightfield, TerrainMaterialDesc, TerrainTile, TerrainTileData, TextureKind};
@@ -241,6 +246,71 @@ fn a_sky_shader_is_checked_and_kept_in_the_sky_settings() {
             .gfx
             .create_sky_shader("plain", "fn sky(d: vec3<f32>) -> vec3<f32> { return vec3<f32>(0.5); }");
         assert_ne!(Some(other), ctx.scene3d.sky.shader, "each shader is its own handle");
+    });
+}
+
+#[test]
+fn a_sky_shader_is_a_handle_that_is_live_until_freed() {
+    let file = TempAsset::with_contents(
+        "sky.wgsl",
+        "fn sky(d: vec3<f32>) -> vec3<f32> { return vec3<f32>(d.y); }",
+    );
+    Game::new("t", 1, 1).run_headless(0, |ctx| {
+        let before = ctx.live_counts().sky_shaders;
+        let made = ctx
+            .gfx
+            .create_sky_shader("plain", "fn sky(d: vec3<f32>) -> vec3<f32> { return vec3<f32>(0.5); }");
+        let loaded = ctx.gfx.load_sky_shader(file.name());
+        assert!(ctx.is_live(made) && ctx.is_live(loaded));
+        assert!(!ctx.is_live(<ponko::render::SkyShader as ponko::handle::Handle>::NONE));
+        assert_eq!(ctx.live_counts().sky_shaders, before + 2);
+        ctx.scene3d.sky.shader = Some(loaded);
+        ctx.free(loaded);
+        ctx.free(loaded); // freeing again does nothing
+        assert!(!ctx.is_live(loaded) && ctx.is_live(made));
+        assert_eq!(ctx.live_counts().sky_shaders, before + 1);
+        // The file is loaded again as a new shader, never the freed handle.
+        let again = ctx.gfx.load_sky_shader(file.name());
+        assert_ne!(again, loaded);
+        assert!(ctx.is_live(again));
+    });
+}
+
+// ANCHOR: sky_kit
+/// A changeable summer sky: heaped clouds blowing in from the west over a
+/// day that passes in four minutes, with the moon and stars at night.
+fn summer_sky(ctx: &mut Ctx) -> DayNight {
+    let mut kit = SkyKit::default();
+    kit.clouds.coverage = 0.45; // about half the sky clouded
+    kit.clouds.kind = 0.8; // heaps rather than sheets
+    kit.clouds.wind = vec2(8.0, 1.0); // m/s, toward +X
+    kit.quality = CloudQuality::Medium; // the default; Flat is a 2D layer
+    ctx.scene3d.sky.kit = Some(kit);
+    ctx.scene3d.lighting.shadow_sun_step = 0.01; // steady shadows as the sun moves
+    let mut day = DayNight::new(7.0); // seven in the morning
+    day.hours_per_second = 0.1; // call day.update(ctx) every frame
+    day
+}
+// ANCHOR_END: sky_kit
+
+#[test]
+fn the_sky_kit_is_off_by_default_and_the_day_moves_the_sun_and_moon() {
+    Game::new("t", 1, 1).run_headless(1, |ctx| {
+        assert_eq!(ctx.scene3d.sky.kit, None, "the built-in atmosphere by default");
+        let mut day = summer_sky(ctx);
+        day.update(ctx);
+        let kit = ctx.scene3d.sky.kit.expect("the kit stays on");
+        assert_eq!(kit.clouds.coverage, 0.45, "the day keeps the game's clouds");
+        assert!(ctx.scene3d.lighting.sun_direction.y < 0.0, "at seven the sun is up");
+        // Half a day later the sun is down and the moon has moved on.
+        let phase = kit.moon.phase;
+        day.advance(12.0 / day.hours_per_second);
+        day.apply(&mut ctx.scene3d);
+        assert!(
+            ctx.scene3d.lighting.sun_direction.y > 0.0,
+            "at seven in the evening the sun is down"
+        );
+        assert!(ctx.scene3d.sky.kit.unwrap().moon.phase > phase);
     });
 }
 
@@ -814,7 +884,7 @@ fn pond(ctx: &mut Ctx) {
     let water = ctx.gfx.create_material(
         MaterialDesc::default()
             .with_shader(mirror)
-            .with_custom_textures([Some(reflection), None]),
+            .with_custom_textures([Some(reflection.texture()), None]),
     );
     let surface = ctx.gfx.create_mesh(&MeshData::plane(20.0), water);
     ctx.world.spawn((Transform::default(), Model::new(surface)));
@@ -850,7 +920,7 @@ fn compute(c: Cell) -> vec4<f32> {
 
 /// The simulated heights, for a water material to read, and the material
 /// that drops stones into them.
-fn ripples(ctx: &mut Ctx) -> (Texture, Material) {
+fn ripples(ctx: &mut Ctx) -> (RenderTarget, Material) {
     let heights = ctx.gfx.create_render_target(256, 256);
     let ripples = ctx.gfx.create_compute("ripples", RIPPLES);
     let stones = ctx.gfx.create_material(MaterialDesc::default());
@@ -877,7 +947,7 @@ fn the_guide_ripples_run_on_a_render_target() {
     Game::new("ripples", 64, 64).run_headless(1, |ctx| {
         let (heights, stones) = ripples(ctx);
         drop_stone(ctx, stones, vec2(0.5, 0.5), 1.0);
-        assert!(ctx.gfx.is_render_target(heights));
+        assert!(ctx.is_live(heights));
         assert_eq!(ctx.scene3d.passes.compute.len(), 1);
         assert_eq!(ctx.scene3d.passes.compute[0].material, Some(stones));
     });
@@ -899,7 +969,7 @@ fn the_guide_pond_mirrors_the_camera() {
         ctx.scene3d.camera.position = vec3(3.0, 5.0, 1.0);
         follow_reflections(ctx);
         let below = ctx.scene3d.passes.target_cameras[0];
-        assert!(ctx.gfx.is_render_target(below.target));
+        assert!(ctx.is_live(below.target));
         assert_eq!(below.target.width(), 32);
         assert_eq!(below.camera.position, vec3(3.0, -5.0, 1.0));
         assert_eq!(below.clip_plane, Some(vec4(0.0, 1.0, 0.0, 0.0)));
@@ -919,7 +989,7 @@ fn render_targets_need_a_size() {
 fn render_targets_take_no_pixels() {
     Game::new("t", 1, 1).run_headless(0, |ctx| {
         let target = ctx.gfx.create_render_target(1, 1);
-        ctx.gfx.update_texture(target, &[0; 4]);
+        ctx.gfx.update_texture(target.texture(), &[0; 4]);
     });
 }
 
@@ -1640,6 +1710,61 @@ fn global_illumination_is_off_until_turned_on() {
 }
 
 #[test]
+fn baked_lighting_lights_the_models_it_was_baked_for() {
+    Game::new("baked lighting", 64, 64).run_headless(0, |ctx| {
+        bake_a_wall(ctx).expect("bakes");
+    });
+}
+
+fn bake_a_wall(ctx: &mut Ctx) -> Result<(), Error> {
+    ctx.scene3d.lighting.sun_direction = vec3(-1.0, -1.0, 0.2);
+    // ANCHOR: baked
+    // Offline (a tool, a build step): the static models and the lights.
+    let mut floor = MeshData::plane(8.0);
+    let mut wall = MeshData::cube(1.0);
+    for p in &mut wall.positions {
+        *p *= vec3(0.3, 3.0, 8.0); // a wall 0.3 thick, 3 high, 8 long
+    }
+    for mesh in [&mut floor, &mut wall] {
+        mesh.generate_lightmap_uvs(4.0); // or a glTF file's second UV set
+    }
+    let red = MaterialDesc::color(Color::rgb(0.9, 0.1, 0.1));
+    let mut scene = LightBakeScene::new(&ctx.scene3d.lighting, &ctx.scene3d.sky);
+    scene.add(BakeModel::new(&floor, Mat4::IDENTITY)); // entry 0
+    let at = Mat4::from_translation(vec3(-2.0, 1.5, 0.0));
+    scene.add(BakeModel::new(&wall, at).with_material(&red)); // entry 1
+    scene.add_lights_from(&mut ctx.world);
+    let settings = LightBakeSettings::default().with_texels_per_unit(4.0);
+    let baked = bake_lighting(&scene, &settings.with_samples(32))?;
+    let bytes = baked.to_bytes(); // save them with the level
+
+    // In the game: the same models, each with its entry's lightmap.
+    let baked = BakedLighting::from_bytes(&bytes)?;
+    let floor_material = ctx.gfx.create_material(MaterialDesc::default());
+    let floor_mesh = ctx.gfx.create_mesh(&floor, floor_material);
+    let floor_lightmap = baked.lightmap(0).expect("entry 0 is lightmapped");
+    ctx.world
+        .spawn((Transform::default(), Model::new(floor_mesh), floor_lightmap));
+    let wall_material = ctx.gfx.create_material(red);
+    let wall_mesh = ctx.gfx.create_mesh(&wall, wall_material);
+    let wall_lightmap = baked.lightmap(1).expect("entry 1 is lightmapped");
+    ctx.world.spawn((
+        Transform::at(vec3(-2.0, 1.5, 0.0)),
+        Model::new(wall_mesh),
+        wall_lightmap,
+    ));
+    ctx.gfx.set_baked_lighting(Some(&baked))?; // None turns it off
+    // ANCHOR_END: baked
+    assert_eq!(baked.pages(), 1);
+    assert!(
+        baked.probe_light(vec3(1.0, 1.0, 0.0), Vec3::Y).is_some(),
+        "moving models get probes"
+    );
+    ctx.gfx.set_baked_lighting(None)?;
+    Ok(())
+}
+
+#[test]
 fn quality_presets_switch_at_run_time() {
     Game::new("quality", 64, 64).run_headless(0, |ctx| {
         // ANCHOR: quality
@@ -1891,10 +2016,12 @@ fn target_effects_run_headless_and_keep_their_settings() {
                 .gfx
                 .create_effect("copy", "fn effect(p: Pixel) -> vec3<f32> { return p.color; }");
             let target = ctx.gfx.create_render_target(16, 16);
-            let image = ctx.gfx.create_texture(1, 1, &[255; 4]);
+            let gone = ctx.gfx.create_render_target(16, 16);
+            ctx.free(gone);
             ctx.scene3d.passes.target_effects.push(TargetEffect::new(copy, target));
-            // Not a render target: skipped, not an error.
-            ctx.scene3d.passes.target_effects.push(TargetEffect::new(copy, image));
+            // A freed render target: skipped, not an error. (A texture that
+            // isn't a render target doesn't compile.)
+            ctx.scene3d.passes.target_effects.push(TargetEffect::new(copy, gone));
         }
         kept = ctx.scene3d.passes.target_effects.clone();
     });

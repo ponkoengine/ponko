@@ -11,5 +11,6 @@ fn fs_lut_shader(in: FullScreen) -> @location(0) vec4<f32> {
 @fragment
 fn fs_sky_shader(in: FullScreen) -> @location(0) vec4<f32> {
     let dir = far_dir(in.uv);
+    sky_background = true;
     return background(dir, max(sky(dir), vec3<f32>(0.0)));
 }

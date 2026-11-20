@@ -406,9 +406,17 @@ What to rely on:
   added; the setup passed to `run` comes last.
 - **Commands recorded in any setup** are applied before the first system
   runs, so one plugin's systems can count on what another's setup spawned.
-- A plugin is plain data: there is no registry, no dependency list and
-  nothing to enable. A plugin that needs another one says so in its docs,
-  or adds it itself in `build` with `game.plugin(Other)`.
+- **Each plugin is added once.** A plugin is known by its name (its type's
+  path unless `Plugin::name` says otherwise); adding a name twice, or
+  adding a plugin before the ones its `Plugin::dependencies` lists, makes
+  the game fail to start with an error that says which. A plugin that
+  needs another one lists it, or adds it itself in `build` when
+  `game.has_plugin(...)` says the game hasn't.
+- Nothing else to enable: no registry and no cost for a game without
+  plugins. [Plugins for other crates](plugins.md) has the rest: what a
+  plugin can add (reflected types, asset decoders, widgets, debug toggles,
+  control methods), `ponko new --plugin`, and how to name and version a
+  plugin crate.
 
 A game built from several files usually ends up as one plugin per file
 and a `main` that lists them; `examples/coin_dash` is built this way.

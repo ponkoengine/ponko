@@ -7,9 +7,11 @@
 //! unused vertices are dropped). Normals become 16-bit normalized integers
 //! and texture coordinates in 0..1 16-bit unsigned normalized ones
 //! (`KHR_mesh_quantization`, which the engine always reads): an error under
-//! 2e-5, far below what a texel or a lighting gradient shows. Positions stay
-//! 32-bit floats, so node transforms, colliders and navigation meshes read
-//! the same numbers.
+//! 2e-5, far below what a texel or a lighting gradient shows. Positions
+//! become 16-bit integers under a node scale where that keeps them within
+//! [`POSITION_ERROR`] (see `quantize_positions`); the engine folds the
+//! scale back, so node transforms, colliders and navigation meshes read the
+//! source's numbers.
 //!
 //! Only the mesh data changes: nodes, materials, animations, skins and the
 //! `extras` of every object are written back as they were read. An
@@ -23,6 +25,9 @@
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
+#[cfg(feature = "textures")]
+mod textures;
+
 /// What [`cook`] does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Options {
@@ -30,6 +35,16 @@ pub struct Options {
     pub optimize: bool,
     /// Quantize normals and texture coordinates.
     pub quantize: bool,
+    /// Compress the images the file holds (needs the `textures` feature;
+    /// without it they stay as they are).
+    pub images: Option<Images>,
+}
+
+/// How [`cook`] compresses a model's images.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Images {
+    /// Basis Universal UASTC (mobile) instead of BC blocks.
+    pub basis: bool,
 }
 
 /// Extensions whose data never points into buffers, or does so only in the
@@ -52,7 +67,18 @@ const KNOWN: &[&str] = &[
     "KHR_texture_basisu",
     "EXT_texture_webp",
     "EXT_mesh_gpu_instancing",
+    POSITIONS_EXTENSION,
 ];
+
+/// The extension that marks the node a quantized mesh hangs from (see
+/// [`quantize_positions`]).
+pub const POSITIONS_EXTENSION: &str = "PONKO_quantized_positions";
+
+/// The most a quantized position may be off, in the file's units (meters):
+/// a tenth of a millimeter. A mesh whose 16-bit steps would be coarser (one
+/// more than 13.1 m across) gets a range per primitive, and a primitive
+/// that big keeps its float positions.
+pub const POSITION_ERROR: f32 = 1e-4;
 
 /// The files a glTF file reads by URI that `all` holds (buffers and
 /// images), named as in `all`: what its cache key covers.
@@ -254,6 +280,10 @@ fn accessor_uses(json: &Value) -> Vec<usize> {
     uses
 }
 
+/// A cooked model: its bytes, the note for the report, and its images'
+/// video memory before and after, when it compressed any.
+pub type Cooked = (Vec<u8>, String, Option<(u64, u64)>);
+
 /// Cooks one glTF or GLB file. `Ok(Err(reason))` keeps it as it is;
 /// `Err` is a broken file.
 pub fn cook(
@@ -261,7 +291,7 @@ pub fn cook(
     bytes: &[u8],
     deps: &[(String, Vec<u8>)],
     options: Options,
-) -> Result<Result<(Vec<u8>, String), String>, String> {
+) -> Result<Result<Cooked, String>, String> {
     let fail = |e: String| format!("{name}: {e}");
     let (json, blob) = if bytes.starts_with(b"glTF") {
         split_glb(bytes).map_err(fail)?
@@ -306,8 +336,22 @@ pub fn cook(
     if !doc.json["bufferViews"].is_array() {
         doc.json["bufferViews"] = json!([]);
     }
-    let stats = optimize(&mut doc, options).map_err(fail)?;
-    if stats.primitives == 0 {
+    let mut stats = optimize(&mut doc, options).map_err(fail)?;
+    if options.quantize {
+        let q = quantize_positions(&mut doc).map_err(fail)?;
+        stats.positions = q.meshes;
+        stats.split = q.split;
+        stats.position_primitives = q.primitives;
+        stats.position_error = q.error;
+    }
+    #[cfg(feature = "textures")]
+    let images = match options.images {
+        Some(settings) => textures::compress(&mut doc, settings).map_err(fail)?,
+        None => textures::Report::default(),
+    };
+    #[cfg(not(feature = "textures"))]
+    let images = NoImages::default();
+    if stats.primitives == 0 && images.images == 0 {
         return Ok(Err("it has no indexed triangle meshes to optimize".into()));
     }
     let out = write_glb(doc).map_err(fail)?;
@@ -322,7 +366,33 @@ pub fn cook(
     if stats.quantized > 0 {
         note.push_str(&format!(", {} attributes quantized", stats.quantized));
     }
-    Ok(Ok((out, note)))
+    if stats.positions > 0 {
+        note.push_str(&format!(
+            ", positions of {} meshes 16-bit (off by up to {:.3} mm)",
+            stats.positions,
+            stats.position_error * 1000.0
+        ));
+        if stats.split > 0 {
+            note.push_str(&format!(
+                ", {} of them a range per primitive ({} primitives)",
+                stats.split, stats.position_primitives
+            ));
+        }
+    }
+    let gpu = (images.images > 0).then(|| {
+        note.push_str(&format!(", {} images compressed", images.images));
+        (images.before, images.after)
+    });
+    Ok(Ok((out, note, gpu)))
+}
+
+/// Without the `textures` feature no image is compressed.
+#[cfg(not(feature = "textures"))]
+#[derive(Default)]
+struct NoImages {
+    images: usize,
+    before: u64,
+    after: u64,
 }
 
 /// What [`optimize`] did.
@@ -334,6 +404,12 @@ struct Stats {
     acmr_after: f64,
     indices: usize,
     quantized: usize,
+    /// Meshes whose positions are quantized, of them split by primitive,
+    /// primitives quantized, and the largest error.
+    positions: usize,
+    split: usize,
+    position_primitives: usize,
+    position_error: f32,
 }
 
 fn optimize(doc: &mut Doc, options: Options) -> Result<Stats, String> {
@@ -506,6 +582,302 @@ fn optimize(doc: &mut Doc, options: Options) -> Result<Stats, String> {
         }
     }
     Ok(stats)
+}
+
+/// Positions as 16-bit unsigned integers with a node scale
+/// (`KHR_mesh_quantization`), where that is off by at most
+/// [`POSITION_ERROR`]: positions become steps of one 65535th of their
+/// largest side from their least corner, and each node that shows the mesh
+/// gets a child node that shows it instead, moved to that corner and scaled
+/// by that step (the same on every axis, so normals stay as they are). Any
+/// glTF reader draws the same shape. The engine folds such a child (marked
+/// [`POSITIONS_EXTENSION`]) back into its parent as it loads the file, so
+/// game code sees the node tree, transforms and extras of the source, and
+/// positions within the bound.
+///
+/// One range for the whole mesh when that keeps the bound. A mesh too big
+/// for one (a level) gets a range per primitive: the mesh is split into one
+/// mesh per primitive that fits the bound, each shown by a child node of its
+/// own scale, and one more for the primitives that don't (their positions
+/// stay floats, under a child without a transform). The children's
+/// extension names the source mesh and the primitives each holds, so the
+/// engine puts the mesh back together as it was, primitive by primitive.
+///
+/// Left as floats: meshes with morph targets, meshes a skinned or
+/// instanced node shows (their node's transform doesn't apply), meshes no
+/// node shows, positions another primitive shares, and primitives past the
+/// bound. Returns what it quantized.
+fn quantize_positions(doc: &mut Doc) -> Result<Quantized, String> {
+    let uses = accessor_uses(&doc.json);
+    let meshes = doc.json["meshes"].as_array().map_or(0, Vec::len);
+    let nodes = doc.json["nodes"].as_array().cloned().unwrap_or_default();
+    let mut out = Quantized::default();
+    for m in 0..meshes {
+        let showing: Vec<usize> = nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n["mesh"].as_u64() == Some(m as u64))
+            .map(|(i, _)| i)
+            .collect();
+        let movable = |n: &usize| {
+            let node = &nodes[*n];
+            node.get("skin").is_none() && node["extensions"].get("EXT_mesh_gpu_instancing").is_none()
+        };
+        if showing.is_empty() || !showing.iter().all(movable) {
+            continue;
+        }
+        let primitives = doc.json["meshes"][m]["primitives"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if primitives.is_empty() || primitives.iter().any(|p| p.get("targets").is_some()) {
+            continue;
+        }
+        // Each primitive's float positions, when only it uses them.
+        let mut candidates: Vec<Option<(usize, Vec<f32>)>> = Vec::with_capacity(primitives.len());
+        for p in &primitives {
+            let accessor = p["attributes"]["POSITION"].as_u64().map(|a| a as usize);
+            let layout = match accessor {
+                Some(a) => doc.layout(a)?,
+                None => None,
+            };
+            candidates.push(match (accessor, layout) {
+                (Some(a), Some(l)) if l.component == 5126 && l.components == 3 && uses.get(a) == Some(&1) => {
+                    let data: Vec<f32> = doc
+                        .elements(&l)?
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| f32::from_le_bytes(*c))
+                        .collect();
+                    Some((a, data))
+                }
+                _ => None,
+            });
+        }
+        // One range for the mesh, when every primitive can move and it
+        // keeps the bound.
+        if candidates.iter().all(Option::is_some) {
+            let all: Vec<&[f32]> = candidates.iter().flatten().map(|(_, d)| d.as_slice()).collect();
+            if let Some(range) = Range::of(&all)
+                && range.error <= POSITION_ERROR
+            {
+                for (accessor, data) in candidates.iter().flatten() {
+                    write_quantized(doc, *accessor, &range.quantize(data))?;
+                }
+                for &n in &showing {
+                    let child = json!({
+                        "mesh": m,
+                        "translation": range.corner,
+                        "scale": [range.step, range.step, range.step],
+                        "extensions": { POSITIONS_EXTENSION: {} },
+                    });
+                    hang(doc, n, vec![child])?;
+                }
+                out.meshes += 1;
+                out.primitives += primitives.len();
+                out.error = out.error.max(range.error);
+                continue;
+            }
+        }
+        // Else a range per primitive: those that keep the bound.
+        let ranges: Vec<Option<Range>> = candidates
+            .iter()
+            .map(|c| {
+                c.as_ref()
+                    .and_then(|(_, d)| Range::of(&[d.as_slice()]))
+                    .filter(|r| r.error <= POSITION_ERROR)
+            })
+            .collect();
+        let fitting = ranges.iter().flatten().count();
+        if fitting == 0 || primitives.len() == 1 {
+            continue;
+        }
+        for (candidate, range) in candidates.iter().zip(&ranges) {
+            if let (Some((accessor, data)), Some(range)) = (candidate, range) {
+                write_quantized(doc, *accessor, &range.quantize(data))?;
+                out.error = out.error.max(range.error);
+            }
+        }
+        // The pieces, by their first primitive: each quantized primitive
+        // alone, the float ones together.
+        let mut pieces: Vec<(Vec<usize>, Option<&Range>)> = Vec::new();
+        let mut floats: Option<usize> = None;
+        for (p, range) in ranges.iter().enumerate() {
+            match range {
+                Some(r) => pieces.push((vec![p], Some(r))),
+                None => match floats {
+                    Some(at) => pieces[at].0.push(p),
+                    None => {
+                        floats = Some(pieces.len());
+                        pieces.push((vec![p], None));
+                    }
+                },
+            }
+        }
+        let name = doc.json["meshes"][m].get("name").cloned();
+        let mut piece_meshes = Vec::with_capacity(pieces.len());
+        for (k, (list, _)) in pieces.iter().enumerate() {
+            let prims: Vec<Value> = list.iter().map(|&p| primitives[p].clone()).collect();
+            if k == 0 {
+                doc.json["meshes"][m]["primitives"] = Value::Array(prims);
+                piece_meshes.push(m);
+            } else {
+                let mut mesh = json!({ "primitives": prims });
+                if let Some(name) = &name {
+                    mesh["name"] = name.clone();
+                }
+                let list = doc.json["meshes"].as_array_mut().ok_or("no meshes")?;
+                list.push(mesh);
+                piece_meshes.push(list.len() - 1);
+            }
+        }
+        for &n in &showing {
+            let children = pieces
+                .iter()
+                .zip(&piece_meshes)
+                .map(|((list, range), &piece)| {
+                    let mut child = json!({
+                        "mesh": piece,
+                        "extensions": { POSITIONS_EXTENSION: { "mesh": m, "primitives": list } },
+                    });
+                    if let Some(r) = range {
+                        child["translation"] = json!(r.corner);
+                        child["scale"] = json!([r.step, r.step, r.step]);
+                    }
+                    child
+                })
+                .collect();
+            hang(doc, n, children)?;
+        }
+        out.meshes += 1;
+        out.split += 1;
+        out.primitives += fitting;
+    }
+    if out.meshes > 0 {
+        for (key, extension) in [
+            ("extensionsUsed", "KHR_mesh_quantization"),
+            ("extensionsRequired", "KHR_mesh_quantization"),
+            ("extensionsUsed", POSITIONS_EXTENSION),
+        ] {
+            let mut list = doc.json[key].as_array().cloned().unwrap_or_default();
+            if !list.iter().any(|e| e == extension) {
+                list.push(json!(extension));
+                doc.json[key] = Value::Array(list);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// What [`quantize_positions`] did.
+#[derive(Default)]
+struct Quantized {
+    /// Meshes with quantized positions.
+    meshes: usize,
+    /// Of those, meshes split into a range per primitive.
+    split: usize,
+    /// Primitives with quantized positions.
+    primitives: usize,
+    /// The largest error.
+    error: f32,
+}
+
+/// The 16-bit grid some positions are put on: its least corner, its step
+/// and how far it moves them (measured, as the engine reads them back:
+/// `q * step + corner`, in f32).
+struct Range {
+    corner: [f32; 3],
+    step: f32,
+    error: f32,
+}
+
+impl Range {
+    /// The grid over every position (x, y, z) of `lists`; `None` when one
+    /// isn't finite.
+    fn of(lists: &[&[f32]]) -> Option<Range> {
+        let (mut min, mut max) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+        for p in lists.iter().flat_map(|d| d.as_chunks::<3>().0) {
+            for k in 0..3 {
+                min[k] = min[k].min(p[k]);
+                max[k] = max[k].max(p[k]);
+            }
+        }
+        if !min.iter().chain(&max).all(|v| v.is_finite()) {
+            return None;
+        }
+        let side = (0..3).map(|k| max[k] - min[k]).fold(0.0f32, f32::max);
+        let step = if side > 0.0 { side / 65535.0 } else { 1.0 };
+        let mut range = Range {
+            corner: min,
+            step,
+            error: 0.0,
+        };
+        for d in lists {
+            for p in d.as_chunks::<3>().0 {
+                for k in 0..3 {
+                    let q = range.step_of(p[k], k);
+                    range.error = range.error.max((f32::from(q) * step + min[k] - p[k]).abs());
+                }
+            }
+        }
+        Some(range)
+    }
+
+    fn step_of(&self, v: f32, axis: usize) -> u16 {
+        ((v - self.corner[axis]) / self.step).round().clamp(0.0, 65535.0) as u16
+    }
+
+    /// Positions as steps, three a position.
+    fn quantize(&self, data: &[f32]) -> Vec<u16> {
+        data.as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|p| [0, 1, 2].map(|k| self.step_of(p[k], k)))
+            .collect()
+    }
+}
+
+/// Points position accessor `accessor` at `q` (three steps a position),
+/// 8 bytes a position.
+fn write_quantized(doc: &mut Doc, accessor: usize, q: &[u16]) -> Result<(), String> {
+    let mut bytes = Vec::with_capacity(q.len() / 3 * 8);
+    let (mut lo, mut hi) = ([u16::MAX; 3], [0u16; 3]);
+    for p in q.as_chunks::<3>().0 {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+            bytes.extend_from_slice(&p[k].to_le_bytes());
+        }
+        bytes.extend_from_slice(&[0, 0]);
+    }
+    let view = doc.add_view(bytes, Some(8), 34962);
+    let a = doc.json["accessors"][accessor]
+        .as_object_mut()
+        .ok_or("an accessor isn't an object")?;
+    a.remove("byteOffset");
+    a.remove("normalized");
+    a.insert("bufferView".into(), json!(view));
+    a.insert("componentType".into(), json!(5123));
+    a.insert("min".into(), json!(lo));
+    a.insert("max".into(), json!(hi));
+    Ok(())
+}
+
+/// Takes node `n`'s mesh off it and gives it `children` (the nodes that
+/// show the mesh instead).
+fn hang(doc: &mut Doc, n: usize, children: Vec<Value>) -> Result<(), String> {
+    let list = doc.json["nodes"].as_array_mut().ok_or("no nodes")?;
+    let first = list.len();
+    let count = children.len();
+    list.extend(children);
+    let node = doc.json["nodes"][n].as_object_mut().ok_or("a node isn't an object")?;
+    node.remove("mesh");
+    let at = node.entry("children").or_insert_with(|| json!([]));
+    at.as_array_mut()
+        .ok_or("a node's children aren't a list")?
+        .extend((first..first + count).map(|i| json!(i)));
+    Ok(())
 }
 
 /// Unit normals as 16-bit normalized integers.

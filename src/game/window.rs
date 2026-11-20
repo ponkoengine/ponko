@@ -28,9 +28,12 @@ where
     #[cfg(target_arch = "wasm32")]
     crate::web::show_panics_in_console();
     connect_hotpatch();
-    let event_loop = EventLoop::<Ready>::with_user_event()
-        .build()
-        .map_err(|e| Error::new(ErrorKind::Unsupported, format!("could not start the event loop: {e}")))?;
+    let event_loop = EventLoop::<Ready>::with_user_event().build().map_err(|e| {
+        let error = Error::new(ErrorKind::Unsupported, format!("could not start the event loop: {e}"));
+        #[cfg(target_arch = "wasm32")]
+        crate::web::finish_startup(Err(error.clone()));
+        error
+    })?;
 
     let clock = Clock::new(game.fixed_hz);
     let mut ctx = game.build_ctx(false);
@@ -48,6 +51,8 @@ where
     let mut app = App {
         #[cfg(target_arch = "wasm32")]
         proxy: Some(event_loop.create_proxy()),
+        #[cfg(target_arch = "wasm32")]
+        startup_context: None,
         control,
         config: game,
         setup: Some(setup),
@@ -65,8 +70,6 @@ where
         access: None,
         #[cfg(feature = "accessibility")]
         access_gap_until: None,
-        #[cfg(feature = "gamepad")]
-        gamepads: None,
     };
 
     event_loop.run_app(&mut app).map_err(|e| {
@@ -139,6 +142,8 @@ struct App<S> {
     /// Delivers [`Ready`] from the task that opens the GPU (web builds).
     #[cfg(target_arch = "wasm32")]
     proxy: Option<winit::event_loop::EventLoopProxy<Ready>>,
+    #[cfg(target_arch = "wasm32")]
+    startup_context: Option<crate::web::StartupContextListener>,
     config: Game,
     setup: Option<S>,
     /// Setup has run; frames may run.
@@ -161,9 +166,6 @@ struct App<S> {
     /// frame may start (see [`ACCESS_GAP`]).
     #[cfg(feature = "accessibility")]
     access_gap_until: Option<Instant>,
-    /// Connected controllers, read at the start of every frame.
-    #[cfg(feature = "gamepad")]
-    gamepads: Option<crate::gamepad::Gamepads>,
     /// Kept for the whole run: dropping it closes the endpoint. The last
     /// field, so it is dropped after `ctx`: a reply `ctx` still holds (a
     /// screenshot waiting for its frame) is let go first, its client is told
@@ -209,10 +211,6 @@ where
         // In a browser, what the hidden IME text box saw since the last frame.
         #[cfg(target_arch = "wasm32")]
         crate::web::ime::drain(&mut self.ctx.input);
-        #[cfg(feature = "gamepad")]
-        if let Some(pads) = &mut self.gamepads {
-            pads.poll(&mut self.ctx.input);
-        }
         self.ctx.frame_prepare_services();
         #[cfg(feature = "3d")]
         self.ctx.gfx.apply_shader_checks();
@@ -356,17 +354,40 @@ where
         self.ctx.gfx.renderer = Some(renderer);
         self.ctx.set_window_size(Self::logical_window_size(&window));
         self.ctx.set_scale_factor(window.scale_factor() as f32);
+        // Edit mode (`ponko editor`): the inspector's panels are the window.
+        #[cfg(feature = "editor")]
+        let edit_mode = crate::inspector::app::requested();
+        #[cfg(not(feature = "editor"))]
+        crate::game::warn_without_editor();
         #[cfg(feature = "inspector")]
-        if let (true, open) = crate::inspector::enabled(self.config.inspector) {
-            let max_side = self.ctx.gfx.renderer.as_ref().map_or(2048, Renderer::max_texture_size);
-            let mut inspector = crate::inspector::Inspector::new(&window, max_side as usize);
-            inspector.open = open;
-            self.inspector = Some(inspector);
+        {
+            #[cfg(feature = "editor")]
+            let (on, open) = if edit_mode.is_some() {
+                (true, true)
+            } else {
+                crate::inspector::enabled(self.config.inspector)
+            };
+            #[cfg(not(feature = "editor"))]
+            let (on, open) = crate::inspector::enabled(self.config.inspector);
+            if on {
+                let max_side = self.ctx.gfx.renderer.as_ref().map_or(2048, Renderer::max_texture_size);
+                let mut inspector = crate::inspector::Inspector::new(&window, max_side as usize);
+                inspector.open = open;
+                #[cfg(feature = "editor")]
+                if let Some(start) = edit_mode {
+                    inspector.panels.app = Some(crate::inspector::app::App::new(start));
+                    // Setup runs paused: the editor shows the world it made.
+                    self.ctx.time.pause();
+                }
+                self.inspector = Some(inspector);
+            }
         }
 
+        // The built-in controllers, unless the game brought its own backend
+        // (setup can still replace them with `set_gamepad_backend`).
         #[cfg(feature = "gamepad")]
-        {
-            self.gamepads = Some(crate::gamepad::Gamepads::new(&mut self.ctx.input));
+        if !self.ctx.has_gamepad_backend() {
+            self.ctx.set_gamepad_backend(crate::gamepad::GilrsBackend::new());
         }
 
         if let Some(setup) = self.setup.take() {
@@ -432,12 +453,10 @@ where
         let window = match event_loop.create_window(attributes) {
             Ok(window) => window,
             Err(e) => {
-                self.error = Some(Error::new(
-                    ErrorKind::Unsupported,
-                    format!("could not create the window: {e}"),
-                ));
+                let error = Error::new(ErrorKind::Unsupported, format!("could not create the window: {e}"));
                 #[cfg(target_arch = "wasm32")]
-                eprintln!("{}", self.error.as_ref().expect("just set"));
+                crate::web::finish_startup(Err(error.clone()));
+                self.error = Some(error);
                 event_loop.exit();
                 return;
             }
@@ -463,6 +482,11 @@ where
             },
         );
         self.window = Some(window.clone());
+        self.ctx
+            .input
+            .set_platform_touch(crate::input::touch::platform_has_touch());
+        #[cfg(target_arch = "wasm32")]
+        crate::input::touch::prepare_canvas(&window);
         let display = event_loop.owned_display_handle();
         let vsync = self.config.vsync;
         // The 3D frame's samples per pixel so far (setup hasn't run yet: the
@@ -488,10 +512,30 @@ where
         // in a task, which sends `Ready` when done.
         #[cfg(target_arch = "wasm32")]
         if let Some(proxy) = self.proxy.take() {
+            let context_proxy = proxy.clone();
+            let context_lost = std::rc::Rc::new(std::cell::Cell::new(false));
+            let listener_lost = context_lost.clone();
+            self.startup_context = crate::web::StartupContextListener::new(&window, move || {
+                listener_lost.set(true);
+                let _ = context_proxy.send_event(Ready(Err(crate::web::context_lost())));
+            });
+            #[cfg(target_feature = "atomics")]
+            let threads = self.config.web_threads;
             wasm_bindgen_futures::spawn_local(async move {
+                // Worker threads first: setup and every frame after it may
+                // use them, and none may run before they are up (the
+                // page's thread can't wait for a worker to start).
+                #[cfg(target_feature = "atomics")]
+                crate::web_threads::start(threads).await;
                 crate::web::fetch_assets().await;
                 crate::storage::preload_web().await;
-                let renderer = Renderer::new_async(window, display, vsync, msaa).await;
+                // A context-loss event can stop startup while assets are loading.
+                if context_lost.get() {
+                    return;
+                }
+                let renderer = Renderer::new_async(window, display, vsync, msaa)
+                    .await
+                    .map_err(|error| error.context("Could not initialize WebGPU or WebGL2"));
                 let _ = proxy.send_event(Ready(renderer));
             });
         }
@@ -504,12 +548,23 @@ where
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, Ready(renderer): Ready) {
+        if self.started || self.error.is_some() {
+            return;
+        }
         match renderer {
             Ok(renderer) => self.start(renderer),
             Err(error) => self.error = Some(error),
         }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.startup_context = None;
+            crate::web::finish_startup(self.error.clone().map_or(Ok(()), Err));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(error) = &self.error {
             eprintln!("{error}");
+        }
+        if self.error.is_some() {
             event_loop.exit();
         }
     }
@@ -632,6 +687,18 @@ where
             WindowEvent::CursorMoved { position, .. } => {
                 let pos = position.to_logical::<f32>(window.scale_factor());
                 self.ctx.input.set_mouse_pos(Vec2::new(pos.x, pos.y));
+            }
+
+            WindowEvent::Touch(touch) => {
+                use winit::event::TouchPhase as W;
+                let phase = match touch.phase {
+                    W::Started => crate::input::TouchPhase::Started,
+                    W::Moved => crate::input::TouchPhase::Moved,
+                    W::Ended => crate::input::TouchPhase::Ended,
+                    W::Cancelled => crate::input::TouchPhase::Cancelled,
+                };
+                let pos = touch.location.to_logical::<f32>(window.scale_factor());
+                self.ctx.input.feed_touch(touch.id, phase, Vec2::new(pos.x, pos.y));
             }
 
             WindowEvent::MouseWheel { delta, .. } => {

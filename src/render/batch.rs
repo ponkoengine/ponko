@@ -381,6 +381,19 @@ impl DrawList {
         self.instances.len()
     }
 
+    /// Moves the sprites pushed from index `start` on: each position goes
+    /// to `pos * scale + shift` and each size is scaled by `scale` (an
+    /// animated UI node's offset and size), and their alpha is multiplied
+    /// by `alpha` (its opacity). Their clips are left as they were pushed.
+    pub fn transform_from(&mut self, start: usize, scale: f32, shift: [f32; 2], alpha: f32) {
+        let alpha = alpha.clamp(0.0, 1.0);
+        for s in self.instances.iter_mut().skip(start) {
+            s.pos = [s.pos[0] * scale + shift[0], s.pos[1] * scale + shift[1]];
+            s.size = [s.size[0] * scale, s.size[1] * scale];
+            s.color[3] = (f32::from(s.color[3]) * alpha).round() as u8;
+        }
+    }
+
     pub fn clear(&mut self) {
         self.instances.clear();
         self.textures.clear();

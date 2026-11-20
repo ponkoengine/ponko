@@ -12,8 +12,9 @@ use ponko::debug::{DebugDraw, DebugShape, DebugView};
 use ponko::prelude::{Color, Ctx, Quat, Vec2, Vec3};
 
 use crate::ctx::{ctx_access, debug_draw, out, text};
+use crate::descriptors::{Versioned, read_desc, write_desc};
 use crate::three::{PonkoCamera3D, PonkoQuat, PonkoVec3, camera_from_c, quat_from_c};
-use crate::types::{PonkoColor, PonkoVec2, to_c};
+use crate::types::{PonkoColor, PonkoDrawSpace, PonkoVec2, to_c};
 use crate::{Failure, PonkoCtx, PonkoStatus, boundary, invalid};
 
 /// How a shape is drawn (Rust `DebugShape`'s settings). Start from
@@ -50,6 +51,103 @@ pub extern "C" fn ponko_debug_style_default() -> PonkoDebugStyle {
         on_top: false,
         screen: false,
     }
+}
+
+/// Current version of [`PonkoDebugStyleEx`].
+pub const PONKO_DEBUG_STYLE_EX_VERSION: u32 = 1;
+
+/// Versioned style for 2D debug drawing. Set the header and call
+/// `ponko_debug_style_ex_defaults` before customizing its fields.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PonkoDebugStyleEx {
+    /// Caller allocation size in bytes.
+    pub struct_size: u32,
+    /// Set to `PONKO_DEBUG_STYLE_EX_VERSION`.
+    pub version: u32,
+    /// Lifetime in frame seconds. Zero keeps the shape until its system runs again.
+    pub seconds: f32,
+    /// Line width in pixels.
+    pub width: f32,
+    /// Label height in pixels.
+    pub size: f32,
+    /// Draw over the UI.
+    pub on_top: bool,
+    /// Coordinate space (a `PonkoDrawSpace` value).
+    pub space: u32,
+}
+
+impl Default for PonkoDebugStyleEx {
+    fn default() -> Self {
+        let style = ponko_debug_style_default();
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            version: PONKO_DEBUG_STYLE_EX_VERSION,
+            seconds: style.seconds,
+            width: style.width,
+            size: style.size,
+            on_top: style.on_top,
+            space: PonkoDrawSpace::PONKO_DRAW_SPACE_WORLD as u32,
+        }
+    }
+}
+
+impl Versioned for PonkoDebugStyleEx {
+    const NAME: &'static str = "PonkoDebugStyleEx";
+    const VERSION: u32 = PONKO_DEBUG_STYLE_EX_VERSION;
+
+    fn len_of(version: u32) -> Option<usize> {
+        (version == 1).then_some(std::mem::offset_of!(Self, space) + size_of::<u32>())
+    }
+}
+
+/// Writes the default 2D style, preserving the caller's header and trailing bytes.
+/// # Safety
+/// `style` null or writable for its initialized header's stated size.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_debug_style_ex_defaults(style: *mut PonkoDebugStyleEx) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { write_desc(style, &PonkoDebugStyleEx::default()) })
+}
+
+unsafe fn with_style_ex(
+    style: *const PonkoDebugStyleEx,
+    draw: impl FnOnce(&PonkoDebugStyle) -> PonkoStatus,
+) -> PonkoStatus {
+    // SAFETY: the caller passes null or a readable descriptor.
+    let style = match unsafe { read_desc(style, PonkoDebugStyleEx::default()) } {
+        Ok(style) => style,
+        Err(err) => return boundary(|| Err(err)),
+    };
+    let space = match style.space {
+        n if n == PonkoDrawSpace::PONKO_DRAW_SPACE_WORLD as u32 => PonkoDrawSpace::PONKO_DRAW_SPACE_WORLD,
+        n if n == PonkoDrawSpace::PONKO_DRAW_SPACE_SCREEN as u32 => PonkoDrawSpace::PONKO_DRAW_SPACE_SCREEN,
+        _ => return boundary(|| Err(invalid("space is not a PonkoDrawSpace"))),
+    };
+    draw(&ponko_debug_style_with_space(
+        PonkoDebugStyle {
+            seconds: style.seconds,
+            width: style.width,
+            size: style.size,
+            on_top: style.on_top,
+            screen: false,
+        },
+        space,
+    ))
+}
+
+/// Returns `style` with its 2D points in `space` (Rust `DebugShape::space`),
+/// every other setting as it was: the same `PonkoDrawSpace` sprite draws
+/// take (`ponko_draw_params_with_space`). 3D shapes stay in the 3D world.
+/// ```
+/// use ponko_ffi::*;
+/// let s = ponko_debug_style_with_space(ponko_debug_style_default(), PonkoDrawSpace::PONKO_DRAW_SPACE_SCREEN);
+/// assert!(s.screen);
+/// ```
+#[unsafe(no_mangle)]
+pub extern "C" fn ponko_debug_style_with_space(mut style: PonkoDebugStyle, space: PonkoDrawSpace) -> PonkoDebugStyle {
+    style.screen = space == PonkoDrawSpace::PONKO_DRAW_SPACE_SCREEN;
+    style
 }
 
 /// The built-in views of `ponko_ctx_debug_show` (Rust `DebugView`).
@@ -209,6 +307,32 @@ pub unsafe extern "C" fn ponko_ctx_debug_show(ctx: *mut PonkoCtx, view: u32, on:
 pub unsafe extern "C" fn ponko_ctx_debug_showing(ctx: *mut PonkoCtx, view: u32, out_on: *mut bool) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe { ctx_access(ctx, |c| out(out_on, c.debug.showing(view_from_c(view)?))) })
+}
+
+/// Sets how far from the 3D camera (world units) the colliders view draws
+/// the triangles of collision meshes and terrain (Rust
+/// `DebugDraw::set_collider_distance`; default 50). Below 0 or not finite
+/// is taken as 0.
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_set_collider_distance(ctx: *mut PonkoCtx, distance: f32) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            c.debug.set_collider_distance(distance);
+            Ok(())
+        })
+    })
+}
+
+/// How far from the 3D camera the colliders view draws mesh triangles.
+/// # Safety
+/// `ctx` null or live; `out_distance` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_collider_distance(ctx: *mut PonkoCtx, out_distance: *mut f32) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { ctx_access(ctx, |c| out(out_distance, c.debug.collider_distance())) })
 }
 
 /// How many lines and labels are drawn now (Rust `DebugDraw::stats`).
@@ -382,6 +506,148 @@ pub unsafe extern "C" fn ponko_ctx_debug_text2d(
         Err(e) => return boundary(|| Err(e)),
     };
     shape!(ctx, style, |d| d.text(v2(at), label, rgba(color)))
+}
+
+/// Like `ponko_ctx_debug_line2d`, with a versioned 2D style.
+/// # Safety
+/// `ctx` null or live; `style` null or readable for its initialized header's stated size.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_line2d_ex(
+    ctx: *mut PonkoCtx,
+    a: PonkoVec2,
+    b: PonkoVec2,
+    color: PonkoColor,
+    style: *const PonkoDebugStyleEx,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { with_style_ex(style, |s| ponko_ctx_debug_line2d(ctx, a, b, color, s)) }
+}
+
+/// Like `ponko_ctx_debug_ray2d`, with a versioned 2D style.
+/// # Safety
+/// `ctx` null or live; `style` null or readable for its initialized header's stated size.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_ray2d_ex(
+    ctx: *mut PonkoCtx,
+    origin: PonkoVec2,
+    direction: PonkoVec2,
+    color: PonkoColor,
+    style: *const PonkoDebugStyleEx,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { with_style_ex(style, |s| ponko_ctx_debug_ray2d(ctx, origin, direction, color, s)) }
+}
+
+/// Like `ponko_ctx_debug_arrow2d`, with a versioned 2D style.
+/// # Safety
+/// `ctx` null or live; `style` null or readable for its initialized header's stated size.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_arrow2d_ex(
+    ctx: *mut PonkoCtx,
+    from: PonkoVec2,
+    to: PonkoVec2,
+    color: PonkoColor,
+    style: *const PonkoDebugStyleEx,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { with_style_ex(style, |s| ponko_ctx_debug_arrow2d(ctx, from, to, color, s)) }
+}
+
+/// Like `ponko_ctx_debug_box2d`, with a versioned 2D style.
+/// # Safety
+/// `ctx` null or live; `style` null or readable for its initialized header's stated size.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_box2d_ex(
+    ctx: *mut PonkoCtx,
+    center: PonkoVec2,
+    size: PonkoVec2,
+    color: PonkoColor,
+    style: *const PonkoDebugStyleEx,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { with_style_ex(style, |s| ponko_ctx_debug_box2d(ctx, center, size, color, s)) }
+}
+
+/// Like `ponko_ctx_debug_circle2d`, with a versioned 2D style.
+/// # Safety
+/// `ctx` null or live; `style` null or readable for its initialized header's stated size.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_circle2d_ex(
+    ctx: *mut PonkoCtx,
+    center: PonkoVec2,
+    radius: f32,
+    color: PonkoColor,
+    style: *const PonkoDebugStyleEx,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { with_style_ex(style, |s| ponko_ctx_debug_circle2d(ctx, center, radius, color, s)) }
+}
+
+/// Like `ponko_ctx_debug_capsule2d`, with a versioned 2D style.
+/// # Safety
+/// `ctx` null or live; `style` null or readable for its initialized header's stated size.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_capsule2d_ex(
+    ctx: *mut PonkoCtx,
+    a: PonkoVec2,
+    b: PonkoVec2,
+    radius: f32,
+    color: PonkoColor,
+    style: *const PonkoDebugStyleEx,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { with_style_ex(style, |s| ponko_ctx_debug_capsule2d(ctx, a, b, radius, color, s)) }
+}
+
+/// Like `ponko_ctx_debug_polyline2d`, with a versioned 2D style.
+/// # Safety
+/// `ctx` null or live; `style` null or readable for its initialized header's stated size. `points` holds `count` values (null when 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_polyline2d_ex(
+    ctx: *mut PonkoCtx,
+    points: *const PonkoVec2,
+    count: usize,
+    closed: bool,
+    color: PonkoColor,
+    style: *const PonkoDebugStyleEx,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe {
+        with_style_ex(style, |s| {
+            ponko_ctx_debug_polyline2d(ctx, points, count, closed, color, s)
+        })
+    }
+}
+
+/// Like `ponko_ctx_debug_grid2d`, with a versioned 2D style.
+/// # Safety
+/// `ctx` null or live; `style` null or readable for its initialized header's stated size.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_grid2d_ex(
+    ctx: *mut PonkoCtx,
+    center: PonkoVec2,
+    cell: f32,
+    cells: u32,
+    color: PonkoColor,
+    style: *const PonkoDebugStyleEx,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { with_style_ex(style, |s| ponko_ctx_debug_grid2d(ctx, center, cell, cells, color, s)) }
+}
+
+/// Like `ponko_ctx_debug_text2d`, with a versioned 2D style.
+/// # Safety
+/// `ctx` null or live; `style` null or readable for its initialized header's stated size. `label` is NUL-terminated UTF-8.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_text2d_ex(
+    ctx: *mut PonkoCtx,
+    at: PonkoVec2,
+    label: *const c_char,
+    color: PonkoColor,
+    style: *const PonkoDebugStyleEx,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { with_style_ex(style, |s| ponko_ctx_debug_text2d(ctx, at, label, color, s)) }
 }
 
 /// A 3D line from `a` to `b`.
@@ -562,6 +828,39 @@ pub unsafe extern "C" fn ponko_ctx_debug_text3d(
     shape!(ctx, style, |d| d.text(v3(at), label, rgba(color)))
 }
 
+/// A text label at the 3D point `at` hidden behind nearer 3D surfaces
+/// (Rust `DebugShape::depth_tested`): drawn in the 3D frame facing the
+/// camera, `style->size` pixels high, its top-left corner at `at`. Uses
+/// `style`'s size and seconds; it is depth-tested whatever `style->on_top` says.
+/// # Safety
+/// `ctx` null or live; `label` NUL-terminated UTF-8; `style` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_debug_text3d_depth_tested(
+    ctx: *mut PonkoCtx,
+    at: PonkoVec3,
+    label: *const c_char,
+    color: PonkoColor,
+    style: *const PonkoDebugStyle,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    let label = match unsafe { text(label) } {
+        Ok(label) => label,
+        Err(e) => return boundary(|| Err(e)),
+    };
+    // SAFETY: forwarded caller contract (style null or live).
+    let s = unsafe { style_from_c(style) };
+    // SAFETY: forwarded caller contract (ctx null or live).
+    boundary(|| unsafe {
+        debug_draw(ctx, |d: &mut DebugDraw| {
+            d.text(v3(at), label, rgba(color))
+                .size(s.size)
+                .seconds(s.seconds)
+                .depth_tested();
+            Ok(())
+        })
+    })
+}
+
 /// The axes of a transform: x red, y green, z blue, each `length` long.
 /// # Safety
 /// `ctx` null or live; `style` null or live.
@@ -575,4 +874,37 @@ pub unsafe extern "C" fn ponko_ctx_debug_axes3d(
 ) -> PonkoStatus {
     let rotation: Quat = quat_from_c(rotation);
     shape!(ctx, style, |d| d.axes(v3(at), rotation, length))
+}
+
+#[cfg(test)]
+mod style_ex_tests {
+    use super::*;
+
+    #[test]
+    fn descriptor_space_reaches_the_legacy_draw_path() {
+        let mut style = PonkoDebugStyleEx {
+            seconds: 0.2,
+            width: 2.0,
+            size: 17.0,
+            on_top: true,
+            ..Default::default()
+        };
+        for space in [
+            PonkoDrawSpace::PONKO_DRAW_SPACE_WORLD,
+            PonkoDrawSpace::PONKO_DRAW_SPACE_SCREEN,
+        ] {
+            style.space = space as u32;
+            let status = unsafe {
+                with_style_ex(&style, |draw| {
+                    assert_eq!(draw.screen, space == PonkoDrawSpace::PONKO_DRAW_SPACE_SCREEN);
+                    assert_eq!(
+                        (draw.seconds, draw.width, draw.size, draw.on_top),
+                        (0.2, 2.0, 17.0, true)
+                    );
+                    PonkoStatus::PONKO_OK
+                })
+            };
+            assert_eq!(status, PonkoStatus::PONKO_OK);
+        }
+    }
 }

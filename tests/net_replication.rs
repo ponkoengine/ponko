@@ -464,3 +464,117 @@ fn net_pose_moves_a_transform_from_buffered_snapshots() {
     assert_eq!(t.scale, vec3(2.0, 2.0, 2.0), "scale is left alone");
     assert!(t.rotation.angle_between(Quat::from_rotation_y(1.0)) < 1e-4);
 }
+
+/// Declared replication refuses misuse with a message that names the fix.
+mod declared_replication_misuse {
+    use std::collections::HashMap;
+
+    use ponko::net::{InterestConfig, PeerId, Quantize, RawField, RawType, Replicate, Replication, SnapshotConfig};
+    use ponko::prelude::*;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Component, Replicate, Clone, Copy, Default, PartialEq, Debug)]
+    struct Health(#[replicate(bits = 7)] u8);
+
+    #[derive(Replicate, Clone, Copy, Default)]
+    struct Stick(#[replicate(min = -1.0, max = 1.0, step = 0.01)] f32);
+
+    #[derive(Replicate, Clone, Copy, Default)]
+    struct Pedals(bool);
+
+    #[derive(Serialize, Deserialize)]
+    struct Hello;
+
+    /// JSON maps need string keys: this one can't be sent.
+    #[derive(Serialize, Deserialize)]
+    struct Grid(HashMap<(u8, u8), u8>);
+
+    #[derive(Component, Clone, Copy)]
+    struct Blob(#[allow(dead_code)] u32);
+
+    fn blob_id() -> ponko::ecs_core::ComponentId {
+        let mut world = World::new();
+        world.spawn((Blob(0),));
+        world.component_id::<Blob>().unwrap()
+    }
+
+    #[test]
+    #[should_panic(expected = "`Health` is declared twice; declare each component once")]
+    fn a_component_declared_twice_is_refused() {
+        let _ = Replication::new().component::<Health>().component::<Health>();
+    }
+
+    #[test]
+    #[should_panic(expected = "at most 64 component types can be replicated; put fields that change together")]
+    fn more_than_64_component_types_are_refused() {
+        let id = blob_id();
+        let mut r = Replication::new();
+        for i in 0..65 {
+            let field = RawField::new("v", 0, RawType::U32, Quantize::Exact);
+            r = r.raw_component(&format!("blob{i}"), id, 4, vec![field]);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "lies outside its 4 bytes")]
+    fn a_raw_field_outside_its_component_is_refused() {
+        let field = RawField::new("v", 2, RawType::U32, Quantize::Exact);
+        let _ = Replication::new().raw_component("blob", blob_id(), 4, vec![field]);
+    }
+
+    #[test]
+    #[should_panic(expected = "a game has one input type (put every control in it)")]
+    fn a_second_input_type_is_refused() {
+        let _ = Replication::new().input::<Stick>().input::<Pedals>();
+    }
+
+    #[test]
+    #[should_panic(expected = "no input type was declared; add `.input::<Stick>()`")]
+    fn an_input_without_a_declared_input_type_is_refused() {
+        Replication::new().component::<Health>().set_input(Stick(0.5));
+    }
+
+    #[test]
+    #[should_panic(expected = "read it with the declared input type")]
+    fn reading_an_input_as_another_type_is_refused() {
+        let r = Replication::new().input::<Stick>();
+        let _ = r.input_of::<Pedals>(PeerId::HOST);
+    }
+
+    #[test]
+    #[should_panic(expected = "`Hello` isn't a declared event; add `.event::<Hello>()`")]
+    fn an_undeclared_event_is_refused() {
+        Replication::new().component::<Health>().to_server(&Hello);
+    }
+
+    #[test]
+    #[should_panic(expected = "event `Hello` is declared twice; declare each event once")]
+    fn an_event_declared_twice_is_refused() {
+        let _ = Replication::new().event::<Hello>().event::<Hello>();
+    }
+
+    #[test]
+    #[should_panic(expected = "doesn't serialize")]
+    fn an_event_that_does_not_serialize_is_refused() {
+        let mut r = Replication::new().event::<Grid>();
+        r.to_clients(&Grid(HashMap::from([((1, 2), 3)])));
+    }
+
+    #[test]
+    #[should_panic(expected = "Replication::interest: InterestConfig: needs 1 to 8 tiers")]
+    fn an_invalid_interest_config_is_refused() {
+        let _ = Replication::new().interest(InterestConfig {
+            tiers: Vec::new(),
+            ..InterestConfig::default()
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Replication::interpolated_with: SnapshotConfig: capacity must be at least 2")]
+    fn an_invalid_interpolation_config_is_refused() {
+        let _ = Replication::new().interpolated_with::<ponko::d2::Transform>(SnapshotConfig {
+            capacity: 1,
+            ..SnapshotConfig::default()
+        });
+    }
+}

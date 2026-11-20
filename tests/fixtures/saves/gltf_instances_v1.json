@@ -1,0 +1,88 @@
+{
+  "entities": [
+    {
+      "components": {
+        "Barrel": {
+          "full": false
+        },
+        "Transform3D": {
+          "position": [
+            2.0,
+            0.0,
+            5.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "entity": 1
+    },
+    {
+      "components": {
+        "Barrel": {
+          "full": true
+        },
+        "Transform3D": {
+          "position": [
+            0.0,
+            -3.0,
+            -2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "entity": 3
+    },
+    {
+      "components": {
+        "Health": {
+          "hp": 3.0
+        },
+        "Transform3D": {
+          "position": [
+            0.0,
+            0.0,
+            8.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "entity": 4294967298
+    }
+  ],
+  "format": "ponko-world",
+  "not_saved": {
+    "GltfNode": 2
+  },
+  "resources": {},
+  "version": 1
+}

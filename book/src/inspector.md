@@ -29,13 +29,17 @@ is what agents and save files use, so one `reflect` call covers all three.
 To try it: `cargo run --example editor`, press `` ` ``, then **Pause**.
 
 Pause, and the inspector is an editor. Clicks and the editor's keys in the
-world go to it, not to the game:
+world go to it, not to the game. (For a whole window laid out as an
+editor, with a File menu, scenes and prefabs as documents and a warning
+before unsaved changes are lost, open the game in
+[the editor](editor.md).)
 
 | Do | To |
 |---|---|
 | Click | Select the sprite under the mouse (the top one), or the nearest entity |
 | Ctrl+click (⌘-click) | Add it to the selection, or take it out |
-| Drag | Move the selected entity |
+| Drag | Move the selected entity, or a handle of its gizmo |
+| W, E, R | The move, rotate and scale gizmo |
 | Right or middle drag, wheel | Pan and zoom the camera |
 | Delete (or Backspace) | Despawn the selection, with what hangs off it |
 | Ctrl+D (⌘D) | Duplicate it, a little down and to the right |
@@ -55,6 +59,13 @@ middle of the screen), **Redo**, the **View** (2D or 3D, see
   (with its [children](scenes.md#prefabs-with-children), if it has any).
   Prefabs in `assets/prefabs/` are listed below: click one, then click in
   the world to place it (hold Shift to place several).
+
+In 2D the selection gets a gizmo: an arrow per axis and a dot to move, a
+ring to turn, a box per axis and a dot to scale, on the world's axes or the
+entity's own. With **Snap** on, moves land on a grid (8 pixels by default),
+turns go in 15° steps and scales in steps of 0.1. Placed prefabs land on
+the grid too. A drag is one undo step, and so is dragging a number in the
+panel.
 
 Below a selected entity's components, **Add component** lists the
 reflected components it doesn't have. A component is added with its
@@ -77,8 +88,11 @@ new one, but other components that pointed at it still point at nothing.
 [attached](attachments.md) to, the prefab it is a part of (▣ marks a
 prefab instance), or the skeleton it is on (a joint or a skin). Click a row
 to select it (Shift or Ctrl adds to the selection). Drag a row onto another
-to make it follow that one, or onto the *drop here to detach* line to make
-it follow nothing; it stays where it is either way, and loops are refused.
+to make it follow that one (with the rest of the selection, if the row is
+selected), or onto the *drop here to detach* line to make it follow
+nothing; it stays where it is either way, and loops are refused.
+Double-click a row or press F2 to rename it (an `EntityName` component);
+right-click it to rename, duplicate, add a child, detach or delete it.
 In 3D the link is an `Attached3D`, in 2D an `Attached`.
 
 **Assets** lists what is in `assets/`: glTF meshes (`.glb`, `.gltf`),

@@ -63,3 +63,4 @@ ponko_ctx_penetrations3d_ex     # ctx's query of the same name with a filter2d/f
 ponko_ctx_set_particle_emitter3d  # ctx::set_particle_emitter3d calls ponko_ctx_set_particle_emitter3d_ex, which also takes the softness
 
 ponko_ctx_ui_push_screen # ui::push_screen uses ponko_ctx_ui_push_screen_with_mode, including its deprecated bool overload
+ponko_ctx_ui_next_event # ui::tree::next_event calls ponko_ctx_ui_next_event_ex, which also gives the widget set's events

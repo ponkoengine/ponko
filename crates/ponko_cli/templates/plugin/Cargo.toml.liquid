@@ -1,0 +1,25 @@
+[package]
+name = "{{project-name}}"
+version = "0.1.0"
+edition = "2024"
+description = "A plugin for the Ponko game engine"
+license = "MIT OR Apache-2.0"
+keywords = ["ponko", "gamedev", "plugin"]
+categories = ["game-development"]
+
+[dependencies]
+# The engine without its default features: a plugin never turns on a
+# window, sound or a GPU for the games that use it. Name only the features
+# your code needs (`features = ["3d"]`, ...); the game picks the rest.
+# Naming and versioning: https://ponko.dev/guide/plugins.html
+ponko = { version = "0.1", default-features = false }
+serde = { version = "1", features = ["derive"] }
+
+# Quick tests while you work on the plugin: your code with light
+# optimization, the engine fully optimized. A game that uses the plugin
+# builds it with the game's own profile; these settings don't reach it.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

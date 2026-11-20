@@ -1,6 +1,9 @@
-//! A playground for the editor in the inspector.
+//! A playground for the editor, in the inspector or as an app.
 //!
 //!   `cargo run --example editor`
+//!   `ponko editor --example editor` (the editor app: hierarchy, inspector,
+//!   gizmos, File menu; the same as
+//!   `PONKO_EDITOR=1 cargo run --example editor --features editor`)
 //!
 //! Crabs walk around and bounce off the edges (in a sim system, so pausing
 //! stops them). Press ` (backquote, left of 1) to open the inspector, then

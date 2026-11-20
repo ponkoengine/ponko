@@ -6,8 +6,8 @@ use std::sync::Arc;
 use glam::{Affine2, Vec2};
 use ponko_ecs::Component;
 
-use super::clip::{sample, step};
-use super::data::{BonePose, SkeletonData, angle_delta};
+use super::clip::{sample, sample_deform, step};
+use super::data::{BonePose, Constraint, SkeletonData, TransformConstraint, angle_delta};
 use super::graph::{SkeletonGraph, SkeletonMotion};
 use crate::anim::graph::{check_command, consume_triggers, select_transition, set_bool, set_float, set_trigger};
 use crate::anim::{AnimationGraphError, AnimationParameter, ParamId, StateId};
@@ -92,8 +92,9 @@ pub struct Skeleton {
     draw_order: Vec<u16>,
     ik_targets: Vec<Option<Vec2>>,
     ik_mix: Vec<f32>,
-    /// Mesh vertices posed for drawing, reused every frame.
-    pub(crate) deformed: Vec<Vec2>,
+    /// Per slot: the attachment a deform track moves now (its data index)
+    /// and the offsets, one per vertex and influence. Kept between frames.
+    deform: Vec<(Option<usize>, Vec<Vec2>)>,
     /// Multiplies every clip's and state's speed. Default 1.
     pub speed: f32,
     /// Draw order among sprites: higher is on top. Default 0.
@@ -128,7 +129,7 @@ impl Skeleton {
             draw_order: Vec::new(),
             ik_targets: Vec::new(),
             ik_mix: Vec::new(),
-            deformed: Vec::new(),
+            deform: Vec::new(),
             speed: 1.0,
             z: 0.0,
             color: Color::WHITE,
@@ -150,6 +151,7 @@ impl Skeleton {
         self.overrides = vec![None; d.slots.len()];
         self.visible = vec![true; d.slots.len()];
         self.colors = d.slots.iter().map(|s| s.color).collect();
+        self.deform = vec![(None, Vec::new()); d.slots.len()];
         self.draw_order = (0..d.slots.len() as u16).collect();
         self.ik_targets = vec![None; d.ik.len()];
         self.ik_mix = d.ik.iter().map(|c| c.mix).collect();
@@ -619,6 +621,13 @@ impl Skeleton {
         if self.visible[slot] { self.shown[slot].1 } else { None }
     }
 
+    /// The deform offsets of the mesh slot `slot` shows (data index
+    /// `attachment`), if a clip deforms it now.
+    pub(crate) fn deform(&self, slot: usize, attachment: usize) -> Option<&[Vec2]> {
+        let (on, offsets) = &self.deform[slot];
+        (*on == Some(attachment)).then_some(offsets.as_slice())
+    }
+
     /// Makes IK constraint `ik` reach for `target` (in the skeleton's
     /// space) instead of its target bone; `None` goes back to the bone.
     ///
@@ -991,6 +1000,23 @@ impl Skeleton {
             self.visible[i] = visible;
             self.colors[i] = color;
         }
+        for d in &mut self.deform {
+            d.0 = None;
+        }
+        if let Some((c, seconds)) = clip {
+            for track in &data.clips[c].deform {
+                let Some(a) = self.shown[track.slot].1 else {
+                    continue;
+                };
+                let named = &data.attachments[a];
+                if named.skin == track.skin && named.name == track.attachment {
+                    let deform = &mut self.deform[track.slot];
+                    if sample_deform(&track.keys, seconds, &mut deform.1) {
+                        deform.0 = Some(a);
+                    }
+                }
+            }
+        }
         let order = clip.and_then(|(c, seconds)| step(&data.clips[c].draw_order, seconds).cloned().flatten());
         match order {
             Some(order) => self.draw_order.copy_from_slice(&order),
@@ -1002,19 +1028,129 @@ impl Skeleton {
         }
     }
 
-    /// Skeleton-space matrices from the pose, then the IK constraints.
+    /// Skeleton-space matrices from the pose, then the IK and transform
+    /// constraints in their order.
     fn solve(&mut self) {
         self.update_world(0);
         let data = self.data.clone();
-        for (i, ik) in data.ik.iter().enumerate() {
-            let target = self.ik_targets[i].unwrap_or(self.world[ik.target].translation);
-            match ik.bones[..] {
-                [bone] => self.look_at(bone, target, self.ik_mix[i]),
-                [upper, lower] => self.two_bone_ik(upper, lower, target, ik.bend_positive, self.ik_mix[i]),
-                _ => {}
+        for &c in &data.constraints {
+            match c {
+                Constraint::Ik(i) => {
+                    let ik = &data.ik[i];
+                    let target = self.ik_targets[i].unwrap_or(self.world[ik.target].translation);
+                    match ik.bones[..] {
+                        [bone] => self.look_at(bone, target, self.ik_mix[i]),
+                        [upper, lower] => {
+                            self.two_bone_ik(upper, lower, target, ik.bend_positive, self.ik_mix[i]);
+                        }
+                        _ => {}
+                    }
+                }
+                Constraint::Transform(i) => self.apply_transform(&data.transforms[i]),
             }
         }
     }
+
+    /// Moves `c`'s bones toward (or by) its target's transform, as Spine's
+    /// transform constraints do, and updates the bones below each.
+    fn apply_transform(&mut self, c: &TransformConstraint) {
+        let target = self.world[c.target];
+        let target_pose = self.pose[c.target];
+        for &bone in &c.bones {
+            let pose = if c.local {
+                local_transform(c, self.pose[bone], target_pose)
+            } else {
+                let world = world_transform(c, self.world[bone], target);
+                let parent = self.data.bones[bone]
+                    .parent
+                    .map_or(Affine2::IDENTITY, |p| self.world[p]);
+                BonePose::of_matrix(parent.inverse() * world)
+            };
+            self.pose[bone] = pose;
+            self.update_world(bone);
+        }
+    }
+}
+
+/// An angle wrapped into `-pi..pi`.
+fn wrap(angle: f32) -> f32 {
+    angle_delta(0.0, angle)
+}
+
+/// The direction of `v`, radians.
+fn direction(v: Vec2) -> f32 {
+    v.y.atan2(v.x)
+}
+
+/// Bone matrix `m` moved by transform constraint `c` in skeleton space,
+/// toward (absolute) or by (relative) the target's matrix `t`.
+fn world_transform(c: &TransformConstraint, mut m: Affine2, t: Affine2) -> Affine2 {
+    let (tx, ty) = (t.matrix2.x_axis, t.matrix2.y_axis);
+    // A mirrored target turns the offsets the mirrored way.
+    let reflect = if t.matrix2.determinant() > 0.0 { 1.0 } else { -1.0 };
+    let offset_rotation = c.offset_rotation * reflect;
+    let offset_shear = c.offset_shear_y * reflect;
+    if c.mix_rotate != 0.0 {
+        let mut r = direction(tx) + offset_rotation;
+        if !c.relative {
+            r -= direction(m.matrix2.x_axis);
+        }
+        m.matrix2 = glam::Mat2::from_angle(wrap(r) * c.mix_rotate) * m.matrix2;
+    }
+    if c.mix_translate != Vec2::ZERO {
+        let to = t.transform_point2(c.offset_translation);
+        m.translation += if c.relative { to } else { to - m.translation } * c.mix_translate;
+    }
+    let mut axes = [m.matrix2.x_axis, m.matrix2.y_axis];
+    for (axis, (target_axis, offset, mix)) in axes.iter_mut().zip([
+        (tx, c.offset_scale.x, c.mix_scale.x),
+        (ty, c.offset_scale.y, c.mix_scale.y),
+    ]) {
+        if mix == 0.0 {
+            continue;
+        }
+        let s = axis.length();
+        let k = if c.relative {
+            (target_axis.length() - 1.0 + offset) * mix + 1.0
+        } else if s != 0.0 {
+            (s + (target_axis.length() - s + offset) * mix) / s
+        } else {
+            1.0
+        };
+        *axis *= k;
+    }
+    m.matrix2 = glam::Mat2::from_cols(axes[0], axes[1]);
+    if c.mix_shear_y != 0.0 {
+        let (bx, by) = (m.matrix2.x_axis, m.matrix2.y_axis);
+        // The target's y axis's angle from its x axis, a quarter turn
+        // without shear; the bone's y axis turns toward the same.
+        let target_shear = wrap(direction(ty) - direction(tx));
+        let r = if c.relative {
+            direction(by) + (target_shear - std::f32::consts::FRAC_PI_2 + offset_shear) * c.mix_shear_y
+        } else {
+            let own = wrap(direction(by) - direction(bx));
+            direction(by) + (wrap(target_shear - own) + offset_shear) * c.mix_shear_y
+        };
+        m.matrix2.y_axis = Vec2::from_angle(r) * by.length();
+    }
+    m
+}
+
+/// Bone pose `pose` moved by transform constraint `c` relative to its
+/// parent, toward (absolute) or by (relative) the target's pose `t`.
+fn local_transform(c: &TransformConstraint, mut pose: BonePose, t: BonePose) -> BonePose {
+    if c.relative {
+        pose.rotation += (t.rotation + c.offset_rotation) * c.mix_rotate;
+        pose.translation += (t.translation + c.offset_translation) * c.mix_translate;
+        pose.scale *= (t.scale - Vec2::ONE + c.offset_scale) * c.mix_scale + Vec2::ONE;
+        pose.shear.y += (t.shear.y + c.offset_shear_y) * c.mix_shear_y;
+    } else {
+        pose.rotation += wrap(t.rotation - pose.rotation + c.offset_rotation) * c.mix_rotate;
+        pose.translation += (t.translation - pose.translation + c.offset_translation) * c.mix_translate;
+        pose.scale += (t.scale - pose.scale + c.offset_scale) * c.mix_scale;
+        pose.shear.y += wrap(t.shear.y - pose.shear.y + c.offset_shear_y) * c.mix_shear_y;
+    }
+    pose
 }
 
 fn clamp_mix(mix: f32) -> f32 {

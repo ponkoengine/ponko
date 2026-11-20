@@ -9,7 +9,7 @@ use naga::back::glsl;
 
 /// What a WebGL2 device builds: no decals, global illumination or instance
 /// storage, one sample per pixel, the scene depth read as a float texture.
-fn webgl2_material(user: &str) -> String {
+pub(super) fn webgl2_material(user: &str) -> String {
     for_samples(&compose_shader_storage(user, false, false, false), 1, true).into_owned()
 }
 
@@ -47,7 +47,7 @@ fn effect(p: Pixel) -> vec3<f32> {
 
 /// `source` as GLSL `version` for each of its vertex and fragment entry
 /// points, as wgpu's GL backend writes it, or the first error.
-fn translate(name: &str, source: &str, version: glsl::Version) -> Result<Vec<String>, String> {
+pub(super) fn translate(name: &str, source: &str, version: glsl::Version) -> Result<Vec<String>, String> {
     let module = naga::front::wgsl::parse_str(source).map_err(|e| e.emit_to_string_with_path(source, name))?;
     let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty())
         .validate(&module)
@@ -80,7 +80,7 @@ fn translate(name: &str, source: &str, version: glsl::Version) -> Result<Vec<Str
     Ok(written)
 }
 
-const WEBGL2: glsl::Version = glsl::Version::Embedded {
+pub(super) const WEBGL2: glsl::Version = glsl::Version::Embedded {
     version: 300,
     is_webgl: true,
 };
@@ -112,6 +112,22 @@ fn webgl2_shaders() -> Vec<(&'static str, String)> {
                 true,
             )
             .into_owned(),
+        ),
+        (
+            "sky kit",
+            for_samples(
+                &(compose_sky(&crate::render::clouds::sky_source()) + crate::render::clouds::AIR_MAIN),
+                1,
+                true,
+            )
+            .into_owned(),
+        ),
+        ("sky kit cloud shadows", crate::render::clouds::shadow_source()),
+        // WebGL2 draws the flat layer and never builds these; checked all
+        // the same, so a GL device that does build them can.
+        (
+            "sky kit volumetric clouds",
+            for_samples(&compose_sky(&crate::render::clouds::clouds_source()), 1, true).into_owned(),
         ),
         ("depth copy", depth_copy::shader(1)),
         ("array mipmaps", crate::render::mips::ARRAY_SHADER.to_string()),
@@ -255,4 +271,35 @@ fn backends_other_than_gl_keep_the_depth_binding() {
     assert!(samples_scene_depth(true, 1));
     assert!(!samples_scene_depth(true, 4), "multisampled: loaded per sample");
     assert!(!samples_scene_depth(false, 1));
+}
+
+/// The texture units a translated stage samples with: one per texture and
+/// sampler pair it reads (`uniform ... sampler...` lines).
+fn texture_units(glsl: &str) -> usize {
+    glsl.lines()
+        .filter(|l| l.trim_start().starts_with("uniform") && l.contains("sampler"))
+        .count()
+}
+
+#[test]
+fn baked_lighting_fits_in_webgl2s_sixteen_texture_units() {
+    // The built-in material reads the baked lighting; one that reads its
+    // own third texture array reads that instead (the negative control:
+    // the same material without the bake's lookups).
+    let own = "fn surface(s: Surface) -> Surface {
+    var o = s;
+    o.albedo *= textureSample(custom_array2, material_sampler, s.uv, 0).rgb;
+    return o;
+}";
+    let baked = translate("built-in material", &webgl2_material(""), WEBGL2).unwrap();
+    let plain = translate("own third array", &webgl2_material(own), WEBGL2).unwrap();
+    let units = |stages: &[String]| stages.iter().map(|s| texture_units(s)).max().unwrap_or(0);
+    let (with, without) = (units(&baked), units(&plain));
+    eprintln!("texture units on WebGL2: {with} with baked lighting, {without} with the material's own array");
+    assert!(
+        baked
+            .iter()
+            .any(|s| s.contains("custom_array2") || s.contains("_group_1_binding_10"))
+    );
+    assert!(with <= 16, "WebGL2 has 16 texture units in a fragment shader: {with}");
 }

@@ -1315,7 +1315,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         // search) uses every core even for a few thousand entities, but at
         // least `PAR_MIN_CHUNK` rows so cheap loops stay vectorized and
         // scheduling stays negligible.
-        let threads = rayon::current_num_threads().max(1);
+        let threads = crate::par::threads().max(1);
         let chunk = (total / (threads * 4)).clamp(PAR_MIN_CHUNK, PAR_MAX_CHUNK);
         // Rows of small archetypes only (none bigger than `PAR_MIN_CHUNK`)
         // used to run on the calling thread: time the first ones to decide
@@ -1346,12 +1346,14 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         // access was validated; the serial part runs before the parallel one.
         let parallel = plan.run_serial_part(|lo, hi| unsafe { work.visit(lo, hi, |i, item| f(i, item)) });
         if let Some((from, chunk)) = parallel {
-            (0..(total - from).div_ceil(chunk)).into_par_iter().for_each(|c| {
+            let chunks = (total - from).div_ceil(chunk);
+            let one = |c: usize| {
                 let lo = from + c * chunk;
                 // SAFETY: as above; chunks are disjoint ranges of positions,
                 // and every position is one row of one archetype.
                 unsafe { work.visit(lo, (lo + chunk).min(total), |i, item| f(i, item)) };
-            });
+            };
+            crate::par::run(|| (0..chunks).into_par_iter().for_each(one));
         }
         self.world.par_plan.give_back(plan.tasks);
     }
@@ -1485,7 +1487,7 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                     slots: Slots(slots.at(from)),
                     len: 0,
                 };
-                let mut rest = fill(rest, from, n - from, chunk, &leaf);
+                let mut rest = crate::par::run(|| fill(rest, from, n - from, chunk, &leaf));
                 initialized.len += rest.len;
                 rest.len = 0;
             }

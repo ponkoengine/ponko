@@ -1,0 +1,17 @@
+{
+  "name": "crowd_shadows",
+  "scene": "25 skinned figures of a crowd (two clips held at different times) on a grey ground under the sun, 192x128, sun shadows on",
+  "width": 192,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 24,
+    "outliers": 0.01,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "6132d29e68cc5827",
+  "reason": "New: a crowd of skinned figures casting sun shadows"
+}

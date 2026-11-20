@@ -122,6 +122,18 @@ pub struct SceneSettings {
     /// # }
     /// ```
     pub views: Vec<crate::d3::View>,
+    /// First-person held items drawn with their own camera over the world,
+    /// so they never clip into walls: see [`ViewModel`](crate::d3::ViewModel)
+    /// and [`HeldItem`](crate::d3::HeldItem). `None` by default, which
+    /// costs nothing.
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// ctx.scene3d.view_model = Some(d3::ViewModel::default());
+    /// # }
+    /// ```
+    pub view_model: Option<crate::d3::ViewModel>,
     /// Automatic quality's policy, freeze and pins (the running controller
     /// lives on the context).
     pub(crate) autotune: AutotuneSettings,
@@ -145,6 +157,7 @@ impl SceneSettings {
             lod: LodSettings::default(),
             passes: RenderPasses::default(),
             views: Vec::new(),
+            view_model: None,
             autotune: AutotuneSettings::default(),
         }
     }

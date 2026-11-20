@@ -47,6 +47,63 @@
 //! The main types: [`World`] (entities, components, resources), the query
 //! builder from [`World::query`], [`Commands`] for deferred changes, and
 //! [`Component`] with its derive.
+//!
+//! # Component hooks
+//!
+//! Functions a world calls when a component arrives on an entity, is
+//! replaced, or leaves it, registered per component type with
+//! [`World::on_add`], [`World::on_replace`] and [`World::on_remove`]. A
+//! hook runs inside the operation that caused it, so a lookup table kept
+//! next to the world (an index by name, a registry of tagged entities) is
+//! never out of date, not even between two systems.
+//!
+//! | Hook | Runs | Where the value is |
+//! |---|---|---|
+//! | [`on_add`](World::on_add) | after `T` arrived on an entity that didn't have one: `spawn` (every form), `insert` | in the world: [`HookWorld::get`] |
+//! | [`on_replace`](World::on_replace) | before `insert` overwrites the entity's `T` | the old one in the world, the new one passed to the hook |
+//! | [`on_remove`](World::on_remove) | before `T` leaves: `remove`, `despawn`, `clear`, `reset` | still in the world |
+//!
+//! ## What a hook may do
+//!
+//! A hook gets a [`HookWorld`]: the world without structural changes. It
+//! reads and writes components and resources and runs queries, but it can't
+//! spawn, despawn, insert or remove right away: those go to
+//! [`HookWorld::commands`], which the world applies when the call that ran
+//! the hook is done (a `spawn`, a `despawn`, a whole `apply`, `spawn_batch`
+//! or `clear`), before that call returns. Commands that run more hooks are
+//! applied after them, first recorded first, until none are left: a hook
+//! that keeps recording commands that run it again never ends.
+//!
+//! So nothing a hook does can move or drop the entity it is called for
+//! while the world is in the middle of changing it. Hooks never run on two
+//! threads at once: structural changes need the world exclusively (`&mut
+//! World`), which parallel queries and view systems don't have; their
+//! commands are applied later, one buffer after another.
+//!
+//! ## Order
+//!
+//! Hooks run in an order that depends only on what the program did: those
+//! of one operation in the order of the components' ids (the order this
+//! world first saw each component type), several hooks of one component in
+//! the order they were registered. A spawn runs `on_add` hooks after the
+//! entity is complete; a despawn runs `on_remove` hooks while it still is.
+//!
+//! ## Cost
+//!
+//! Hooks are looked up when a structural change starts, never in queries.
+//! A typed spawn checks nothing: the bundles whose archetype has `on_add`
+//! hooks are marked where the world caches each bundle's archetype, and
+//! every other bundle spawns through the same code as in a world without
+//! hooks. A despawn, `insert` or `remove` checks one flag of the world;
+//! once a hook is registered it also looks at one byte per archetype or
+//! one entry per component, so components without hooks keep their speed.
+//! A hook call costs a few nanoseconds besides the hook's own work.
+//! Measurements: `crates/ponko_bench/HOOKS.md`.
+//!
+//! Dropping a world runs no hooks. Change detection is separate and still
+//! works the same: hooks are for work that must happen at once, change
+//! detection ([`World::track_changes`]) for work done once per tick over
+//! everything that changed.
 
 #![deny(missing_docs)]
 // docs.rs: "Available on crate feature X only" on feature-gated items.
@@ -97,7 +154,11 @@ mod bundle;
 mod change;
 mod commands;
 mod entity;
+mod hooks;
+#[cfg(feature = "parallel")]
+mod par;
 mod query;
+mod required;
 mod slots;
 mod storage;
 mod view;
@@ -109,6 +170,11 @@ pub use bundle::{Bundle, Component};
 pub use change::{Added, Changed, ChunkQuery, Tick};
 pub use commands::Commands;
 pub use entity::Entity;
+pub use hooks::{Hook, HookWorld, ReplaceHook};
+// Web builds with threads only: how the engine runs parallel loops started
+// on the page's own thread, which may not block (see `par`).
+#[cfg(all(feature = "parallel", target_family = "wasm", target_feature = "atomics"))]
+pub use par::{WebRunner, set_web_runner};
 /// `#[derive(Component)]`: `impl Component for Type {}`. See [`Component`](trait@Component).
 #[cfg(feature = "derive")]
 pub use ponko_macros::Component;
@@ -117,6 +183,7 @@ pub use query::{
     QueryCache, QueryCachePolicy, QueryCacheStats, QueryData, QueryFilter, QueryIter, SingleError, With, Without,
     compile_tree,
 };
+pub use required::Requires;
 pub use storage::{Archetype, ComponentId, ComponentInfo, DropFn};
-pub use view::{ViewGroup, ViewQuery, ViewState, WorldView};
+pub use view::{QueryRef, ViewGroup, ViewQuery, ViewState, WorldView};
 pub use world::{Chunk, World};

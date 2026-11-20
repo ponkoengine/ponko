@@ -18,8 +18,9 @@ upload budget and their residency budgets. Which loader do I use?
 None of these calls evicts anything: the engine checks the budgets at the
 start of every frame, before your systems, with the world your entities are
 in (see [Budgets](#budgets-staying-in-memory)). The one exception is
-`ctx.finish_uploads()`, for loading screens, which uploads everything asked
-for and evicts as that check would. The two budgets
+`ctx.finish_uploads()`, which uploads everything asked
+for and evicts as that check would. For a loading screen that keeps drawing,
+see [asset groups](loading.md). The two budgets
 are separate: `set_upload_budget` limits the bytes sent to the GPU per frame,
 `set_residency_budget` the bytes kept on it. The same module
 also holds tools that hold no assets: [`Job`](https://docs.rs/ponko/latest/ponko/streaming/struct.Job.html) runs your own work on a
@@ -79,8 +80,11 @@ their ids in) depends on how fast the workers are. With
 so every state changes in a frame that depends only on the order of
 requests and the budget: replays, lockstep games and tests see the same
 frames every run. States are fixed per frame, not per simulation tick: a
-frame can run several ticks or none, so replays need the same frames too. `finish_uploads(&mut ctx.world)` waits for everything asked for so far,
-for loading screens and tests.
+frame can run several ticks or none, so replays need the same frames too. `ctx.finish_uploads()` waits for everything asked for so far,
+for tests and checkpoints. It also waits for every [asset group](loading.md)
+still loading, reading and decoding the rest of it on the spot: with a
+loading screen's group under way, a checkpoint that calls it stalls until
+that group is done.
 
 ## Budgets: staying in memory
 
@@ -211,11 +215,15 @@ Read the numbers with these caveats:
 
 ## Browsers and asset sources
 
-Browsers have no worker threads here, so on the web a stream's decode runs
-when it is asked for. [Asset sources](asset-sources.md) are read on the
-game thread (their trait runs there). Images from them are still decoded
-on workers; meshes, whose files can refer to other files only those sources
-can read, are decoded on the game thread while any source is added.
+An ordinary web build has no worker threads, so there a stream's decode
+runs when it is asked for. A build with threads runs it on a job worker
+where the page allows it ([Threads on the web](web-threads.md)). [Asset sources](asset-sources.md) added with
+`add_source` are read on the game thread (their trait runs there); ones
+added with `add_background_source` (`Send + Sync`, such as `MemorySource`
+and `PackSource`) are read on workers, like `assets/`. Images are decoded
+on workers either way; meshes, whose files can refer to other files only
+those sources can read, are decoded on the game thread while any
+game-thread source is added.
 
 ## C and C++
 

@@ -1,12 +1,110 @@
 //! Render targets: textures a [`TargetCamera`] draws the 3D world into,
 //! read by materials (mirrors, water reflections, security cameras,
-//! portals).
+//! portals). A [`RenderTarget`] is its own handle type, so a plain texture
+//! can't be handed to what writes one.
 
 use glam::{Mat4, Vec3, Vec4};
 
 use super::Camera3D;
 use crate::gfx::Graphics;
 use crate::texture::Texture;
+
+/// A texture the GPU draws into (feature `3d`): made by
+/// [`Graphics::create_render_target`](crate::gfx::Graphics::create_render_target),
+/// written by [`TargetCamera`]s, [`ComputePass`](crate::render::ComputePass)es,
+/// [`TargetEffect`](crate::render::TargetEffect)s and 3D UI panels, and read
+/// like any texture through [`texture`](Self::texture).
+///
+/// It is its own handle type: what writes a render target takes a
+/// `RenderTarget`, so handing it a texture loaded from a file is a compile
+/// error, not a pass skipped at run time. It is the [`Texture`] it wraps
+/// and nothing more: the same size and layout, and
+/// [`texture`](Self::texture) costs nothing. Check it with
+/// [`Ctx::is_live`](crate::ctx::Ctx::is_live) and release it with
+/// [`Ctx::free`](crate::ctx::Ctx::free), like every handle.
+///
+/// ```
+/// # use ponko::prelude::*;
+/// Game::new("t", 1, 1).run_headless(0, |ctx| {
+///     let mirror = ctx.gfx.create_render_target(256, 128);
+///     ctx.scene3d.passes.target_cameras.push(ponko::render::TargetCamera::new(ctx.scene3d.camera, mirror));
+///     // A material shows it as a texture.
+///     let glass = ctx.gfx.create_material(ponko::render::MaterialDesc::default().with_texture(mirror.texture()));
+///     assert_eq!(mirror.texture().size(), mirror.size());
+///     assert!(ctx.is_live(mirror) && ctx.is_live(glass));
+///     ctx.free(mirror);
+///     assert!(!ctx.is_live(mirror));
+/// });
+/// ```
+///
+/// A texture is not a render target:
+///
+/// ```compile_fail,E0308
+/// # use ponko::prelude::*;
+/// # fn f(ctx: &mut Ctx) {
+/// let crab = ctx.gfx.load_texture("crab.png");
+/// let camera = ponko::render::TargetCamera::new(ctx.scene3d.camera, crab);
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct RenderTarget {
+    pub(crate) texture: Texture,
+}
+
+impl RenderTarget {
+    /// The engine's own targets and the C API's: `texture` must be a render
+    /// target (or the engine's placeholder for a buffer pass).
+    pub(crate) const fn from_texture(texture: Texture) -> Self {
+        Self { texture }
+    }
+
+    /// The target as a texture, for whatever reads it: a material, a
+    /// sprite, `ctx.gfx.draw`. Free: it is the same handle.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let screen = ctx.gfx.create_render_target(64, 32);
+    ///     let monitor = ponko::render::MaterialDesc::color(Color::BLACK).with_emissive_map(screen.texture());
+    ///     assert_eq!(monitor.emissive_map, Some(screen.texture()));
+    /// });
+    /// ```
+    #[must_use]
+    #[inline]
+    pub const fn texture(self) -> Texture {
+        self.texture
+    }
+
+    /// Width in pixels.
+    #[must_use]
+    #[inline]
+    pub fn width(&self) -> u32 {
+        self.texture.width()
+    }
+
+    /// Height in pixels.
+    #[must_use]
+    #[inline]
+    pub fn height(&self) -> u32 {
+        self.texture.height()
+    }
+
+    /// Size in pixels as a vector.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     let target = ctx.gfx.create_render_target(64, 32);
+    ///     assert_eq!(target.size(), vec2(64.0, 32.0));
+    /// });
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn size(&self) -> glam::Vec2 {
+        self.texture.size()
+    }
+}
 
 /// A camera drawing the 3D world into a render target each frame, before
 /// the main view: one entry of [`RenderPasses::target_cameras`](crate::render::RenderPasses::target_cameras).
@@ -32,7 +130,7 @@ use crate::texture::Texture;
 /// ctx.scene3d.passes.target_cameras.push(ponko::render::TargetCamera::new(camera, screen));
 /// // A monitor showing it: a material with the target as its texture.
 /// let monitor = ctx.gfx.create_material(
-///     ponko::render::MaterialDesc::color(Color::BLACK).with_emissive_map(screen).with_emissive(Color::WHITE),
+///     ponko::render::MaterialDesc::color(Color::BLACK).with_emissive_map(screen.texture()).with_emissive(Color::WHITE),
 /// );
 /// # }
 /// ```
@@ -40,8 +138,8 @@ use crate::texture::Texture;
 pub struct TargetCamera {
     /// Where it looks from. Its aspect ratio follows the target's size.
     pub camera: Camera3D,
-    /// Made by [`Graphics::create_render_target`](crate::gfx::Graphics::create_render_target); other textures are skipped.
-    pub target: Texture,
+    /// Made by [`Graphics::create_render_target`](crate::gfx::Graphics::create_render_target).
+    pub target: RenderTarget,
     /// Only what lies on the front of this plane is drawn: `(normal, d)`,
     /// keeping points where `normal.dot(p) + d >= 0`. For reflections,
     /// which mustn't show what's below the mirror. It costs nothing: the
@@ -60,7 +158,7 @@ impl TargetCamera {
     /// # }
     /// ```
     #[must_use]
-    pub fn new(camera: Camera3D, target: Texture) -> Self {
+    pub fn new(camera: Camera3D, target: RenderTarget) -> Self {
         Self {
             camera,
             target,
@@ -103,7 +201,7 @@ impl TargetCamera {
     /// });
     /// ```
     #[must_use]
-    pub fn reflection(camera: Camera3D, target: Texture, level: f32) -> Self {
+    pub fn reflection(camera: Camera3D, target: RenderTarget, level: f32) -> Self {
         let mut mirrored = camera;
         mirrored.position.y = 2.0 * level - camera.position.y;
         // Forward and up mirror in y; the image comes out upside down,
@@ -152,9 +250,9 @@ fn kept(plane: Vec4, p: Vec3) -> bool {
 }
 
 impl Graphics {
-    /// A texture of `width` x `height` pixels that a [`TargetCamera`] in
+    /// A [`RenderTarget`] of `width` x `height` pixels that a [`TargetCamera`] in
     /// [`RenderPasses::target_cameras`](crate::render::RenderPasses::target_cameras) draws the 3D world into (feature `3d`).
-    /// Use it in a material like any texture; it holds linear HDR light.
+    /// Use it in a material like any texture ([`RenderTarget::texture`]); it holds linear HDR light.
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
@@ -167,7 +265,7 @@ impl Graphics {
     /// # Panics
     ///
     /// If the size is zero or larger than the GPU takes.
-    pub fn create_render_target(&mut self, width: u32, height: u32) -> Texture {
+    pub fn create_render_target(&mut self, width: u32, height: u32) -> RenderTarget {
         self.try_create_render_target(width, height)
             .unwrap_or_else(|e| panic!("{e}"))
     }
@@ -188,17 +286,17 @@ impl Graphics {
     ///     assert_eq!(err.kind(), ErrorKind::Invalid);
     /// });
     /// ```
-    pub fn try_create_render_target(&mut self, width: u32, height: u32) -> Result<Texture, crate::error::Error> {
-        let texture = self.make_render_target(width, height)?;
-        self.textures_live.insert(texture.id);
+    pub fn try_create_render_target(&mut self, width: u32, height: u32) -> Result<RenderTarget, crate::error::Error> {
+        let target = self.make_render_target(width, height)?;
+        self.textures_live.insert(target.texture.id);
         self.asset_ledger
-            .made(crate::inventory::AssetClass::RenderTarget, texture.id);
-        Ok(texture)
+            .made(crate::inventory::AssetClass::RenderTarget, target.texture.id);
+        Ok(target)
     }
 
     /// [`Graphics::try_create_render_target`](crate::gfx::Graphics::try_create_render_target) for the engine's own targets
     /// (reflection probe faces): not the game's to free or count.
-    pub(crate) fn make_render_target(&mut self, width: u32, height: u32) -> Result<Texture, crate::error::Error> {
+    pub(crate) fn make_render_target(&mut self, width: u32, height: u32) -> Result<RenderTarget, crate::error::Error> {
         if width == 0 || height == 0 {
             return Err(crate::error::Error::new(
                 crate::error::ErrorKind::Invalid,
@@ -219,17 +317,17 @@ impl Graphics {
             Texture::new(renderer.create_render_target(width, height), width, height)
         };
         self.assets3d.render_targets.push(texture);
-        Ok(texture)
+        Ok(RenderTarget::from_texture(texture))
     }
 
-    /// Whether `texture` is a render target made by this game and not freed.
-    /// Only its id is compared.
+    /// Whether `texture` is a render target made by this game and not freed
+    /// (a [`RenderTarget`]'s [`texture`](RenderTarget::texture)). Only its id is compared.
     ///
     /// ```
     /// # use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
     ///     let target = ctx.gfx.create_render_target(64, 64);
-    ///     assert!(ctx.gfx.is_render_target(target));
+    ///     assert!(ctx.gfx.is_render_target(target.texture()));
     ///     let image = ctx.gfx.create_texture(1, 1, &[255; 4]);
     ///     assert!(!ctx.gfx.is_render_target(image));
     /// });
@@ -294,7 +392,7 @@ mod tests {
         let mut c = Camera3D::new(Vec2::new(800.0, 600.0));
         c.position = Vec3::new(1.0, 6.0, 2.0);
         c.rotation = Quat::from_rotation_y(0.7) * Quat::from_rotation_x(-0.4);
-        let target = Texture::new(1, 8, 8);
+        let target = RenderTarget::from_texture(Texture::new(1, 8, 8));
         let r = TargetCamera::reflection(c, target, 2.0);
         assert_eq!(r.camera.position, Vec3::new(1.0, -2.0, 2.0));
         let (f, g) = (c.forward(), r.camera.forward());

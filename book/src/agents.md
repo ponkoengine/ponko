@@ -65,7 +65,8 @@ ctx.world.reflect::<Health>();
 | `shader_status` | | did a shader edit take effect? Each custom shader's last compile or hot reload result, and its errors with line and column in your `.wgsl` file ([details](3d.md)) |
 | `record_trace` | | the next N frames as a Perfetto trace, to find hitches |
 | `perf_hud` | | show the performance overlay, e.g. before a screenshot |
-| `debug_draw` | | turn [debug drawing](debug-draw.md) and the engine's debug views (colliders, navmesh, bounds, lights, hierarchy) on or off, e.g. before a screenshot |
+| `debug_draw` | | turn [debug drawing](debug-draw.md), the engine's debug views (colliders, navmesh, bounds, lights, hierarchy) and the game's own toggles on or off, e.g. before a screenshot |
+| `call_game_method` | ✓ | call a method the game or a plugin added to its control endpoint ([plugins](plugins.md#control-methods)); `instance_capabilities` lists them, marked `added` |
 | `list_events` | | event types the game shows tools, and how many are in flight |
 | `subscribe_events` / `take_events` | | collect [events](events.md) while ticks run, then see what happened (each with its tick) |
 | `read_logs` | | recent stdout/stderr of any running game, also one you started yourself ([logs](control.md#logs)); pass `next` back as `since` for only new lines |
@@ -94,7 +95,8 @@ ctx.world.reflect::<Health>();
 | `paint_material` | ✓ | paint a model with a material of a loaded mesh file |
 | `duplicate_entities` / `delete_entities` | ✓ | copy or remove entities with everything that hangs off them, as one undo step |
 | `undo_edit` / `redo_edit` | ✓ | step through the editor's history, shared with the [inspector](inspector.md#editing-in-3d) |
-| `save_edited_scene` | ✓ | save the world back to the scene file it came from (or a new one) |
+| `save_edited_scene` | ✓ | save the world back to the scene file it came from (or a new one), as a scene or as a prefab |
+| `editor_document` | ✓ | start an empty scene, open a scene or prefab, or reload the file; reports the document and whether it has unsaved changes |
 | `set_camera_3d` | | move, turn, fly or frame the 3D camera, e.g. before `pick_entity` or a screenshot |
 | `quit_instance` | ✓ | |
 

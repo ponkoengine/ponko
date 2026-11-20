@@ -124,7 +124,8 @@ impl Rig {
     fn draw(&mut self, skeleton: &mut Skeleton, at: Vec2) -> Image {
         use wgpu::util::DeviceExt;
         let mut list = DrawList::default();
-        crate::skeleton2d::draw::draw(&mut list, &Transform2D::at(at), skeleton, 0);
+        let mut scratch = crate::skeleton2d::draw::Scratch::default();
+        crate::skeleton2d::draw::draw(&mut list, &mut scratch, &Transform2D::at(at), skeleton, 0);
         let (instances, batches) = list.finish();
         self.looks.prepare(&self.device, &self.textures, batches, FORMAT);
         let device = &self.device;

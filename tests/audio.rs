@@ -69,6 +69,89 @@ fn wav_files_load() {
     });
 }
 
+/// A mono 16-bit AIFF file (big-endian samples, an 80-bit float rate).
+#[cfg(feature = "audio")]
+fn aiff(sample_rate: u32, samples: &[i16]) -> Vec<u8> {
+    let data_len = (samples.len() * 2) as u32;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"FORM");
+    out.extend_from_slice(&(4 + 26 + 16 + data_len).to_be_bytes());
+    out.extend_from_slice(b"AIFFCOMM");
+    out.extend_from_slice(&18u32.to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes()); // mono
+    out.extend_from_slice(&(samples.len() as u32).to_be_bytes());
+    out.extend_from_slice(&16u16.to_be_bytes());
+    let exponent = 31 - sample_rate.leading_zeros();
+    out.extend_from_slice(&(16_383 + exponent as u16).to_be_bytes());
+    out.extend_from_slice(&(u64::from(sample_rate) << (63 - exponent)).to_be_bytes());
+    out.extend_from_slice(b"SSND");
+    out.extend_from_slice(&(8 + data_len).to_be_bytes());
+    out.extend_from_slice(&[0; 8]); // offset, block size
+    for s in samples {
+        out.extend_from_slice(&s.to_be_bytes());
+    }
+    out
+}
+
+/// A mono IMA ADPCM WAV file of `blocks` 256-byte blocks (505 samples
+/// each), every one starting at `first` and holding still.
+#[cfg(feature = "audio")]
+fn ima_adpcm(sample_rate: u32, blocks: u32, first: i16) -> Vec<u8> {
+    let data_len = blocks * 256;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(4 + 28 + 12 + 8 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&20u32.to_le_bytes());
+    out.extend_from_slice(&0x11u16.to_le_bytes()); // IMA ADPCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    out.extend_from_slice(&(sample_rate * 256 / 505).to_le_bytes());
+    out.extend_from_slice(&256u16.to_le_bytes()); // block align
+    out.extend_from_slice(&4u16.to_le_bytes()); // bits per sample
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&505u16.to_le_bytes()); // samples per block
+    out.extend_from_slice(b"fact");
+    out.extend_from_slice(&4u32.to_le_bytes());
+    out.extend_from_slice(&(blocks * 505).to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for _ in 0..blocks {
+        out.extend_from_slice(&first.to_le_bytes());
+        out.extend_from_slice(&[0, 0]); // step index, reserved
+        out.extend_from_slice(&[0; 252]); // nibbles of 0: no change
+    }
+    out
+}
+
+#[cfg(feature = "audio")]
+#[test]
+fn aiff_files_load_and_play() {
+    let path = temp_file("tone.aiff", &aiff(22_050, &vec![16_384; 22_050 / 4]));
+    Game::new("audio", 1, 1).run_headless(0, move |ctx| {
+        let tone = ctx.audio.load(&path);
+        assert!((tone.seconds() - 0.25).abs() < 0.01, "{}", tone.seconds());
+        ctx.audio.open_offline(22_050);
+        ctx.audio.play(tone);
+        let mix = ctx.audio.render_offline(0.1);
+        assert!((mix[1000][0] - 0.5).abs() < 0.01, "{:?}", mix[1000]);
+    });
+}
+
+#[cfg(feature = "audio")]
+#[test]
+fn ima_adpcm_wav_files_load_and_play() {
+    let path = temp_file("tone-adpcm.wav", &ima_adpcm(22_050, 11, 16_384));
+    Game::new("audio", 1, 1).run_headless(0, move |ctx| {
+        let tone = ctx.audio.load(&path);
+        assert!((tone.seconds() - 5555.0 / 22_050.0).abs() < 0.01, "{}", tone.seconds());
+        ctx.audio.open_offline(22_050);
+        ctx.audio.play(tone);
+        let mix = ctx.audio.render_offline(0.1);
+        assert!(mix[1000][0] > 0.3, "{:?}", mix[1000]);
+    });
+}
+
 #[cfg(feature = "audio")]
 #[test]
 #[should_panic(expected = "could not decode the sound")]

@@ -184,7 +184,7 @@ impl Rig {
             },
             camera: ctx.scene3d.camera.position,
             post: &ctx.scene3d.post,
-            time: (self.time, 1.0 / 60.0),
+            time: (f64::from(self.time), 1.0 / 60.0),
             occlusion: false,
         };
         self.renderer.prepare(

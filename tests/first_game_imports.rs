@@ -70,6 +70,13 @@ const EXTRA: &[(&str, &str, &[&str], &str)] = &[
     ("coin_dash", "ponko::locale", &["Arg", "Strings"], LOCALE),
     ("coin_dash", "ponko::state", &["State"], STATE),
     ("coin_dash", "ponko::storage", &["Storage"], STORAGE),
+    ("coin_dash", "ponko::ui::touch", &["TouchControls"], TOUCH),
+    (
+        "coin_dash",
+        "ponko::ui",
+        &["UiScreenTransition", "UiTheme", "UiTransition"],
+        UI_POLISH,
+    ),
     (
         "ember_hop",
         "ponko::particles",
@@ -80,6 +87,7 @@ const EXTRA: &[(&str, &str, &[&str], &str)] = &[
     ("ember_hop", "ponko::sheet", &["Animation"], SHEET),
     ("ember_hop", "ponko::state", &["State"], STATE),
     ("ember_hop", "ponko::storage", &["Storage"], STORAGE),
+    ("ember_hop", "ponko::ui::touch", &["TouchControls"], TOUCH),
     (
         "ember_hop",
         "ponko::tilemap",
@@ -93,6 +101,7 @@ const EXTRA: &[(&str, &str, &[&str], &str)] = &[
         ],
         LEVEL,
     ),
+    ("ember_hop", "ponko::ui", &["UiTransition"], UI_POLISH),
     (
         "shard_grove",
         "ponko::anim",
@@ -127,6 +136,13 @@ const EXTRA: &[(&str, &str, &[&str], &str)] = &[
         MESH,
     ),
     ("shard_grove", "ponko::storage", &["Storage"], STORAGE),
+    ("shard_grove", "ponko::ui::touch", &["TouchControls"], TOUCH),
+    (
+        "shard_grove",
+        "ponko::ui",
+        &["UiScreenTransition", "UiTheme", "UiTransition"],
+        UI_POLISH,
+    ),
 ];
 
 const LEVEL: &str = "Level-file loading is one topic with many types (`TileMap`, `LevelRoot`, layers, objects); its module is its home, and only levels made in an editor need it.";
@@ -137,7 +153,9 @@ const STORAGE: &str = "`Storage` is a common game name (chests, warehouses), and
 const PARTICLES: &str = "Particle curves and gradients tune an effect beyond its preset settings; the emitters themselves are in the dimension module.";
 const BLEND: &str = "Blend modes are a rendering detail most sprites never set.";
 const SHEET: &str = "Games often call their own type `Animation`; `SpriteSheet` itself is in the prelude.";
+const UI_POLISH: &str = "Themes and transitions polish the retained UI and a game that sets neither draws the same; the prelude keeps the UI's everyday names (`Ui`, `UiEvent`, `UiId`, `UiLayout`).";
 const ANIM: &str = "Skeletal animation graphs are a topic with many types and short generic names (`Motion`, `StateId`, `Skeleton`); the module is their home.";
+const TOUCH: &str = "On-screen controls are set up once, in one place, and only games that run on touch screens need them; the touch module is their home, next to the rest of the UI.";
 const AUDIO: &str =
     "Effects and roll-off curves tune sound beyond `ctx.audio.play`; the everyday sound types are in the prelude.";
 const NAV: &str = "Baking navigation meshes is an advanced 3D topic, with its own module.";

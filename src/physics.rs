@@ -23,8 +23,10 @@ use ponko_ecs::{Component, Entity, With, World};
 mod query;
 pub use query::{Penetration, PointHit, QueryFilter, RayHit};
 
-/// Makes an entity a physics body. It also needs a [`Collider`] and a
-/// [`d2::Transform`](crate::d2::Transform).
+/// Makes an entity a physics body. It also needs a [`Collider`]. It
+/// requires a [`d2::Transform`](crate::d2::Transform) and a [`Velocity`]:
+/// an entity that lacks them gets them (at the origin, at rest) when the
+/// body arrives, so a spawn names only what differs.
 ///
 /// ```
 /// use ponko::prelude::*;
@@ -34,6 +36,7 @@ pub use query::{Penetration, PointHit, QueryFilter, RayHit};
 /// assert_eq!(wall.kind, ponko::collision::BodyKind::Fixed);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Component)]
+#[component(requires(Transform2D, Velocity))]
 #[serde(default)]
 pub struct RigidBody {
     /// Dynamic, fixed or kinematic.
@@ -168,7 +171,11 @@ impl Shape {
     }
 }
 
-/// The solid shape of a body, and how it touches others.
+/// The solid shape of a body, and how it touches others. It requires a
+/// [`RigidBody`]: an entity that gets a collider without one gets
+/// [`RigidBody::fixed`] (a wall, a floor, a sensor that stays put), and
+/// with it a [`d2::Transform`](crate::d2::Transform) and a [`Velocity`].
+/// Give a body in the same spawn, or insert one, to make it move.
 ///
 /// ```
 /// use ponko::prelude::*;
@@ -178,6 +185,7 @@ impl Shape {
 /// assert_eq!(ball.restitution, 0.9);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Component)]
+#[component(requires(RigidBody = RigidBody::fixed()))]
 pub struct Collider {
     /// Circle, rectangle, capsule or convex polygon.
     pub shape: Shape,

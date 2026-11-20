@@ -10,7 +10,7 @@
 //!    `Intent`, the world and the physics results, so a test can write the
 //!    `Intent` itself. `step_crawlers` moves the enemies on the navigation
 //!    mesh while the game is being played.
-//! 3. [`Presentation`]: the camera, the spinning shards, the gate, the
+//! 3. [`Presentation`]: the cameras, the spinning shards, the gate, the
 //!    enemies' hum and the pulse's sparks. None of it changes the game.
 //! 4. [`Screens`]: the title, pause, settings and end menus and the HUD
 //!    (`ctx.ui`), and the panel over the gate (a `UiPanel` in the world).
@@ -46,6 +46,7 @@ use ponko::particles::{ParticleCurve, ParticleGradient};
 use ponko::prelude::*;
 use ponko::render::{GraphicsQuality, MaterialDesc, Mesh, MeshData};
 use ponko::storage::Storage;
+use ponko::ui::{UiScreenTransition, UiTheme, UiTransition};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -600,7 +601,20 @@ impl Plugin for Controls {
         let act = Act::resolve(ctx);
         ctx.world.insert_resource(act);
         ctx.world.insert_resource(Intent::default());
+        ctx.input.set_touch_controls(touch_controls());
     }
+}
+
+/// The on-screen controls, shown on touch screens only (and stepping
+/// aside while a menu is open, whose buttons take taps): a stick to walk,
+/// one to turn, jump and pulse buttons, and pause in the corner.
+pub fn touch_controls() -> ponko::ui::touch::TouchControls {
+    ponko::ui::touch::TouchControls::new()
+        .stick("move")
+        .right_stick("turn")
+        .button("jump", "Jump")
+        .button("pulse", "Pulse")
+        .corner_button("pause", "II")
 }
 
 /// Frame system: the actions into the [`Intent`]. The pause key only
@@ -866,6 +880,7 @@ pub fn start_run(ctx: &mut Ctx, run: Run, at: Vec3) {
         assets.warden_skeleton.clone(),
         Animator::new(assets.warden_graph.clone()),
         Warden::default(),
+        CameraTarget, // the engine's chase camera follows it
         RunEntity,
     ));
     ctx.world
@@ -1310,29 +1325,34 @@ impl Plugin for Presentation {
         lighting.ambient_intensity = 0.35;
         ctx.scene3d.camera.position = vec3(0.0, 20.0, 34.0);
         ctx.scene3d.camera.look_at(Vec3::ZERO);
-        ctx.world.insert_resource(Cameras::default());
+        // The engine moves this rig behind the warden (its `CameraTarget`)
+        // every frame, in front of the walls between them.
+        ctx.world.insert_resource(chase_camera());
+        ctx.world.insert_resource(TitleCamera::default());
     }
 }
 
-/// The camera rigs: one behind the warden, one circling the grove on the
-/// title.
-#[derive(Debug, Clone, Copy)]
-pub struct Cameras {
-    pub chase: ThirdPersonCamera,
-    pub title: OrbitCamera,
+/// The camera behind the warden: a resource the engine updates.
+pub fn chase_camera() -> ThirdPersonCamera {
+    let mut chase = ThirdPersonCamera::default();
+    chase.height = 1.4;
+    chase.distance = 7.3;
+    chase.pitch = -0.28; // looking down a little
+    chase.follow_smoothing = 0.07;
+    chase
 }
 
-impl Default for Cameras {
+/// The camera circling the grove on the title. Not a rig resource of its
+/// own: the engine would also move that one to the warden.
+#[derive(Debug, Clone, Copy)]
+pub struct TitleCamera(pub OrbitCamera);
+
+impl Default for TitleCamera {
     fn default() -> Self {
-        let mut chase = ThirdPersonCamera::default();
-        chase.height = 1.4;
-        chase.distance = 7.3;
-        chase.pitch = -0.28; // looking down a little
-        chase.follow_smoothing = 0.07;
         let mut title = OrbitCamera::new(Vec3::ZERO, 35.0);
         title.pitch = -0.54;
         title.smoothing = 0.0;
-        Self { chase, title }
+        Self(title)
     }
 }
 
@@ -1343,22 +1363,14 @@ pub fn present(ctx: &mut Ctx) {
     let dt = ctx.time.dt();
     let view = *ctx.world.resource::<View>();
 
-    // The camera: behind the warden, or circling the grove on the title.
-    match warden(&mut ctx.world) {
-        Some((who, at)) => {
-            // Behind the warden, coming in front of walls between them.
-            let rigs = ctx.world.resource_mut::<Cameras>();
-            rigs.chase.yaw = view.yaw;
-            let filter = QueryFilter::default().exclude(who);
-            rigs.chase
-                .update_with_physics(&mut ctx.scene3d.camera, at, &ctx.physics3d, filter, dt);
-        }
-        None => {
-            let rigs = ctx.world.resource_mut::<Cameras>();
-            rigs.chase.snap(); // straight behind the warden when play starts
-            rigs.title.yaw = time * 0.05;
-            rigs.title.update(&mut ctx.scene3d.camera, dt);
-        }
+    // The camera: the engine keeps it behind the warden, looking the
+    // view's way; with no warden (the title) it circles the grove.
+    if warden(&mut ctx.world).is_some() {
+        ctx.world.resource_mut::<ThirdPersonCamera>().yaw = view.yaw;
+    } else {
+        let title = &mut ctx.world.resource_mut::<TitleCamera>().0;
+        title.yaw = time * 0.05;
+        title.update(&mut ctx.scene3d.camera, dt);
     }
     // Shards spin and bob.
     ctx.world.query::<(&mut Transform, &Shard)>().for_each(|(t, s)| {
@@ -1447,8 +1459,19 @@ impl Plugin for Screens {
     }
 }
 
+/// How a menu comes on: it fades in and rises a little into place.
+const MENU_IN: UiScreenTransition = UiScreenTransition::fade(0.18).with_offset(Vec2::new(0.0, 16.0));
+/// How a menu goes off.
+const MENU_OUT: UiScreenTransition = UiScreenTransition::fade(0.12);
+
 fn build_screens(ctx: &mut Ctx) -> ScreenUi {
     let ui = &mut ctx.ui;
+    // Buttons ease between their states and give a little when pressed.
+    ui.set_theme(UiTheme {
+        transition: UiTransition::new(0.12),
+        press_scale: 0.97,
+        ..*ui.theme()
+    });
     let menu = |ui: &mut Ui, name: &str, title: &str, height: f32| {
         let root = ui
             .root()
@@ -1456,6 +1479,8 @@ fn build_screens(ctx: &mut Ctx) -> ScreenUi {
             .name(name)
             .id();
         ui.title(root, title).layout(UiLayout::row(44.0));
+        // Menus fade and rise in, and fade out under the next one.
+        ui.set_screen_transition(root, MENU_IN, MENU_OUT);
         root
     };
     let title = menu(ui, "title", TITLE, 420.0);

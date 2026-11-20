@@ -224,6 +224,7 @@ pub(crate) fn animate_sprites(ctx: &mut Ctx) {
             s.texture = a.sheet.texture;
             s.region = Some(a.sheet.frame(a.current_frame()));
         });
+    crate::aseprite::animate(ctx, dt);
 }
 
 #[cfg(test)]

@@ -16,27 +16,56 @@
 </head>
 <body>
   <canvas id="ponko" tabindex="0"></canvas>
-  <div id="status">Loading…</div>
+  <div id="status" role="status">Loading…</div>
   <script type="module">
-    import init from "./game.js";
+    import init, * as game from "./game.js";
     const status = document.getElementById("status");
     const canvas = document.getElementById("ponko");
-    window.addEventListener("error", (e) => {
+
+    function showError(message) {
       status.className = "error";
-      status.textContent = "The game stopped: " + e.message + " (see the browser console)";
-    });
-    try {
-      await init();
-    } catch (e) {
-      // winit leaves its startup function by throwing; that's not an error.
-      if (!String(e).includes("Using exceptions for control flow")) {
-        status.className = "error";
-        status.textContent = "Could not start the game: " + e + ". It needs a browser with WebGPU or WebGL2.";
-        throw e;
+      status.textContent = message;
+    }
+
+    function started(error) {
+      if (error) {
+        showError("Could not start the game: " + (error.message ?? String(error)));
+      } else if (status.className !== "error") {
+        status.remove();
+        canvas.focus();
       }
     }
-    status.remove();
-    canvas.focus();
+
+    window.addEventListener("error", (e) => {
+      showError("The game stopped: " + e.message + " (see the browser console)");
+    });
+
+    async function start() {
+      try {
+        await init();
+      } catch (e) {
+        // winit transfers control to the browser with this exception.
+        if (!String(e).includes("Using exceptions for control flow")) {
+          // A synchronous engine error may have been reported before init threw.
+          let engineError;
+          try {
+            game.onPonkoStartup?.((error) => { engineError = error; });
+          } catch {
+            // The Wasm module could not be loaded.
+          }
+          started(engineError ?? e);
+          console.error(e);
+          return;
+        }
+      }
+      // Packages can also use game.js from older engine versions.
+      if (game.onPonkoStartup) game.onPonkoStartup(started);
+      else started(null);
+    }
+    start().catch((e) => {
+      started(e);
+      console.error(e);
+    });
   </script>
 </body>
 </html>

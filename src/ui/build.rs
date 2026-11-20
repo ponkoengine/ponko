@@ -561,6 +561,47 @@ pub struct UiTheme {
     /// let _ = ponko::ui::UiTheme::default().border_width;
     /// ```
     pub border_width: f32,
+    /// The spacing token, in UI units: the space the widget set leaves
+    /// around a pop-up's entries, a tooltip's text and between tabs. Use it
+    /// for gaps and padding of your own (`UiLayout::gap(theme.spacing)`) so
+    /// one number spaces the whole screen.
+    /// ```
+    /// assert_eq!(ponko::ui::UiTheme::default().spacing, 8.0);
+    /// ```
+    pub spacing: f32,
+    /// The corner radius token, in UI units: controls, panels, pop-ups and
+    /// tooltips are drawn with corners this round. Zero: square corners
+    /// (the default theme's).
+    /// ```
+    /// assert_eq!(ponko::ui::UiTheme::default().radius, 0.0);
+    /// assert!(ponko::ui::UiTheme::light().radius > 0.0);
+    /// ```
+    pub radius: f32,
+    /// Seconds the pointer rests on a node before its tooltip shows
+    /// ([`Ui::set_tooltip`]). Keyboard and gamepad focus shows it at once.
+    /// ```
+    /// assert_eq!(ponko::ui::UiTheme::default().tooltip_delay, 0.5);
+    /// ```
+    pub tooltip_delay: f32,
+    /// How a control's look follows its state (idle, hovered, focused,
+    /// pressed, disabled): its fill and its [`press_scale`](Self::press_scale)
+    /// ease over this, starting from what is shown when the state changes,
+    /// on the UI clock. [`UiTransition::NONE`](super::UiTransition::NONE) (every built-in theme's):
+    /// at once. [`Ui::set_reduced_motion`] turns it off too.
+    /// ```
+    /// use ponko::ui::{UiTheme, UiTransition};
+    /// assert_eq!(UiTheme::default().transition, UiTransition::NONE);
+    /// let smooth = UiTheme { transition: UiTransition::new(0.12), ..UiTheme::dark() };
+    /// assert!(!smooth.transition.is_instant());
+    /// ```
+    pub transition: super::UiTransition,
+    /// The size a control is drawn at while pressed, around its centre (1:
+    /// unchanged, the default; 0.96 gives a slight push). Drawn only:
+    /// layout and input keep its place.
+    /// ```
+    /// assert_eq!(ponko::ui::UiTheme::default().press_scale, 1.0);
+    /// ```
+    pub press_scale: f32,
 }
 
 impl Default for UiTheme {
@@ -581,11 +622,57 @@ impl Default for UiTheme {
             text_size: paint.font_size,
             title_size: paint.font_size * 1.5,
             border_width: paint.border_width,
+            spacing: 8.0,
+            radius: 0.0,
+            tooltip_delay: 0.5,
+            transition: super::UiTransition::NONE,
+            press_scale: 1.0,
         }
     }
 }
 
 impl UiTheme {
+    /// The dark theme: the engine's default colors ([`UiTheme::default`])
+    /// with controls a shade lighter than the panels they sit on and
+    /// rounded corners. Every token can be
+    /// changed after: `UiTheme { accent: .., ..UiTheme::dark() }`.
+    /// ```
+    /// let (dark, plain) = (ponko::ui::UiTheme::dark(), ponko::ui::UiTheme::default());
+    /// assert_eq!((dark.panel, dark.accent, dark.text), (plain.panel, plain.accent, plain.text));
+    /// assert!(dark.control.r > dark.panel.r);
+    /// assert_eq!(dark.radius, 4.0);
+    /// ```
+    pub fn dark() -> Self {
+        Self {
+            control: Color::rgb(0.19, 0.22, 0.28),
+            hover: Color::rgb(0.27, 0.32, 0.42),
+            pressed: Color::rgb(0.10, 0.12, 0.17),
+            radius: 4.0,
+            ..Self::default()
+        }
+    }
+    /// The light theme: light grey panels, white controls, dark text, a
+    /// blue accent and rounded corners. Every token can be changed after:
+    /// `UiTheme { accent: .., ..UiTheme::light() }`.
+    /// ```
+    /// let light = ponko::ui::UiTheme::light();
+    /// assert!(light.text.r < 0.2 && light.panel.r > 0.8);
+    /// ```
+    pub fn light() -> Self {
+        Self {
+            panel: Color::rgb(0.92, 0.93, 0.95),
+            control: Color::rgb(1.0, 1.0, 1.0),
+            hover: Color::rgb(0.85, 0.90, 0.98),
+            pressed: Color::rgb(0.74, 0.81, 0.93),
+            disabled: Color::rgba(0.85, 0.85, 0.87, 0.6),
+            accent: Color::hex(0x2f6fdb),
+            text: Color::rgb(0.10, 0.11, 0.14),
+            title: Color::rgb(0.05, 0.06, 0.09),
+            border_width: 1.0,
+            radius: 4.0,
+            ..Self::default()
+        }
+    }
     /// The style the [immediate widgets](Ui::immediate) get from this theme:
     /// one theme for the retained tree and the debug widgets. A field this
     /// theme leaves at its default keeps the immediate widgets' own default
@@ -615,12 +702,16 @@ impl UiTheme {
     }
 
     /// The paint a new node of this widget gets. Labels and images have a
-    /// clear background.
+    /// clear background; a button's, a number field's and a key-binding
+    /// field's text is centred.
     /// ```
     /// use ponko::prelude::*;
+    /// use ponko::ui::{UiTextAlign, UiWidget};
     /// let theme = ponko::ui::UiTheme::default();
-    /// assert_eq!(theme.paint(ponko::ui::UiWidget::Label).background.a, 0.0);
-    /// assert_eq!(theme.paint(ponko::ui::UiWidget::Button).background, theme.control);
+    /// assert_eq!(theme.paint(UiWidget::Label).background.a, 0.0);
+    /// assert_eq!(theme.paint(UiWidget::Button).background, theme.control);
+    /// assert_eq!(theme.paint(UiWidget::Button).align, UiTextAlign::Center);
+    /// assert_eq!(theme.paint(UiWidget::Label).align, UiTextAlign::Start);
     /// ```
     pub fn paint(&self, widget: UiWidget) -> UiPaint {
         let (background, border_width) = match widget {
@@ -629,6 +720,29 @@ impl UiTheme {
             UiWidget::Button | UiWidget::TextInput | UiWidget::Toggle | UiWidget::Slider => {
                 (self.control, self.border_width)
             }
+            // The widget set's containers are see-through; a list and a
+            // pop-up are panels.
+            UiWidget::Tabs | UiWidget::RadioGroup | UiWidget::Split | UiWidget::Spinner => {
+                (Color::rgba(0.0, 0.0, 0.0, 0.0), 0.0)
+            }
+            UiWidget::List => (self.panel, self.border_width),
+            // A pop-up floats over panels: a control's color and at least a
+            // one unit border.
+            UiWidget::Menu => (self.control, self.border_width.max(1.0)),
+            // Rows, options and tabs are drawn on their container.
+            UiWidget::ListItem | UiWidget::MenuItem | UiWidget::Tab => (Color::rgba(0.0, 0.0, 0.0, 0.0), 0.0),
+            UiWidget::Splitter => (self.control, 0.0),
+            UiWidget::Dropdown
+            | UiWidget::Radio
+            | UiWidget::Progress
+            | UiWidget::NumberField
+            | UiWidget::KeyBinding => (self.control, self.border_width),
+        };
+        // A button's, a number field's and a key-binding field's text is
+        // centred; the rest start at their left.
+        let align = match widget {
+            UiWidget::Button | UiWidget::NumberField | UiWidget::KeyBinding => UiTextAlign::Center,
+            _ => UiTextAlign::Start,
         };
         UiPaint {
             background,
@@ -640,6 +754,7 @@ impl UiTheme {
             color: self.text,
             font: self.font,
             font_size: self.text_size,
+            align,
             ..UiPaint::default()
         }
     }
@@ -674,8 +789,8 @@ impl UiTheme {
 /// assert_eq!(ui.paint(title).unwrap().font_size, 13.0);
 /// ```
 pub struct UiBuilder<'a> {
-    ui: &'a mut Ui,
-    id: UiId,
+    pub(super) ui: &'a mut Ui,
+    pub(super) id: UiId,
 }
 
 impl UiBuilder<'_> {
@@ -978,7 +1093,7 @@ impl UiBuilder<'_> {
 }
 
 impl Ui {
-    fn build(&mut self, parent: UiId, widget: UiWidget) -> UiBuilder<'_> {
+    pub(super) fn build(&mut self, parent: UiId, widget: UiWidget) -> UiBuilder<'_> {
         let id = self.add_child(parent, widget, UiLayout::auto());
         UiBuilder { ui: self, id }
     }

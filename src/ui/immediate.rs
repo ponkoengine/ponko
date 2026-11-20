@@ -1,5 +1,6 @@
-//! Immediate widgets: a panel, a label and a button drawn the frame they are
-//! called, for debug overlays and quick tools. Game UI that stays on screen
+//! Immediate widgets: a panel, a label, a button, a toggle, a slider and a
+//! progress bar drawn the frame they are called, for debug overlays and
+//! quick tools. They have the names of the retained widgets they look like. Game UI that stays on screen
 //! belongs in the retained tree ([`Ui`](super::Ui)).
 
 use glam::Vec2;
@@ -169,10 +170,8 @@ impl UiImmediate {
         gfx.measure_text_ex(text, self.font, size) / scale
     }
 
-    /// The implementation behind [`UiImmediateFrame::button`].
-    pub(crate) fn button_on(&mut self, gfx: &mut Graphics, input: &Input, rect: Rect, label: &str) -> bool {
-        let (style, scale) = (self.style, self.scale);
-        let rect = self.px(rect);
+    /// The mouse on `rect` (window pixels): hovered, held, clicked.
+    fn pointer_on(&mut self, input: &Input, rect: Rect) -> (bool, bool, bool) {
         let mouse = input.mouse_pos();
         if input.mouse_pressed(MouseButton::Left) {
             self.press_at = mouse;
@@ -180,6 +179,14 @@ impl UiImmediate {
         let hovered = rect.contains(mouse);
         let held = hovered && input.mouse_down(MouseButton::Left);
         let clicked = hovered && input.mouse_released(MouseButton::Left) && rect.contains(self.press_at);
+        (hovered, held, clicked)
+    }
+
+    /// The implementation behind [`UiImmediateFrame::button`].
+    pub(crate) fn button_on(&mut self, gfx: &mut Graphics, input: &Input, rect: Rect, label: &str) -> bool {
+        let (style, scale) = (self.style, self.scale);
+        let rect = self.px(rect);
+        let (hovered, held, clicked) = self.pointer_on(input, rect);
         let fill = if held {
             style.button_pressed
         } else if hovered {
@@ -210,6 +217,84 @@ impl UiImmediate {
         );
         self.this_frame.push(rect);
         clicked
+    }
+
+    /// The implementation behind [`UiImmediateFrame::toggle`].
+    pub(crate) fn toggle_on(
+        &mut self,
+        gfx: &mut Graphics,
+        input: &Input,
+        rect: Rect,
+        label: &str,
+        on: &mut bool,
+    ) -> bool {
+        let (style, scale) = (self.style, self.scale);
+        let rect = self.px(rect);
+        let (hovered, _, clicked) = self.pointer_on(input, rect);
+        if clicked {
+            *on = !*on;
+        }
+        // A box as tall as the row, filled with the accent when on.
+        let side = rect.size().y;
+        let check = Rect::new(rect.min.x, rect.min.y, side, side);
+        gfx.ui_fill(check, style.accent, -0.25);
+        let inner = check.expand(-2.0 * scale);
+        gfx.ui_fill(inner, if hovered { style.button_hovered } else { style.button }, 0.0);
+        if *on {
+            gfx.ui_fill(inner.expand(-3.0 * scale), style.accent, 0.25);
+        }
+        let text_size = style.text_size * scale;
+        let size = gfx.measure_text_ex(label, self.font, text_size);
+        let at = Vec2::new(check.max.x + style.padding * scale, rect.center().y - size.y / 2.0).round();
+        gfx.draw_text_ex(
+            label,
+            at,
+            TextParams {
+                font: self.font,
+                size: text_size,
+                color: style.text,
+                z: 1.0,
+            },
+        );
+        self.this_frame.push(rect);
+        clicked
+    }
+
+    /// The implementation behind [`UiImmediateFrame::slider`].
+    pub(crate) fn slider_on(&mut self, gfx: &mut Graphics, input: &Input, rect: Rect, value: &mut f32) -> bool {
+        let style = self.style;
+        let rect = self.px(rect);
+        let (hovered, _, _) = self.pointer_on(input, rect);
+        let dragging = input.mouse_down(MouseButton::Left) && rect.contains(self.press_at);
+        let before = *value;
+        if dragging {
+            *value = ((input.mouse_pos().x - rect.min.x) / rect.size().x.max(1.0)).clamp(0.0, 1.0);
+        }
+        let shown = value.clamp(0.0, 1.0);
+        gfx.ui_fill(
+            rect,
+            if hovered || dragging {
+                style.button_hovered
+            } else {
+                style.button
+            },
+            0.0,
+        );
+        let fill = Rect::new(rect.min.x, rect.min.y, rect.size().x * shown, rect.size().y);
+        gfx.ui_fill(fill, style.accent, 0.25);
+        self.this_frame.push(rect);
+        *value != before
+    }
+
+    /// The implementation behind [`UiImmediateFrame::progress_bar`].
+    pub(crate) fn progress_bar_on(&mut self, gfx: &mut Graphics, rect: Rect, value: f32) {
+        let style = self.style;
+        let rect = self.px(rect);
+        gfx.ui_fill(rect, style.button, 0.0);
+        let shown = if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.0 };
+        let fill = Rect::new(rect.min.x, rect.min.y, rect.size().x * shown, rect.size().y);
+        gfx.ui_fill(fill, style.accent, 0.25);
+        self.this_frame.push(rect);
     }
 
     /// Deprecated: use [`ctx.immediate_ui()`](crate::ctx::Ctx::immediate_ui)`.panel(rect)`,
@@ -314,6 +399,51 @@ impl UiImmediateFrame<'_> {
         self.widgets.button_on(self.gfx, self.input, rect, label)
     }
 
+    /// A checkbox at `rect` (UI units): a box as tall as `rect`, then
+    /// `label`. A click flips `on`; returns `true` on that frame. The
+    /// retained tree's [`Ui::toggle`](super::Ui::toggle) has the same name.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn debug(ctx: &mut Ctx, show_paths: &mut bool) {
+    /// ctx.immediate_ui().toggle(Rect::new(20.0, 60.0, 160.0, 24.0), "Paths", show_paths);
+    /// # }
+    /// ```
+    pub fn toggle(&mut self, rect: Rect, label: &str, on: &mut bool) -> bool {
+        self.widgets.toggle_on(self.gfx, self.input, rect, label, on)
+    }
+
+    /// A slider at `rect` (UI units) for `value` from 0 to 1: pressing on
+    /// it and dragging sets the value under the mouse. Returns `true` on
+    /// the frames it changes. The retained tree's
+    /// [`Ui::slider`](super::Ui::slider) has the same name.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn debug(ctx: &mut Ctx, volume: &mut f32) {
+    /// if ctx.immediate_ui().slider(Rect::new(20.0, 90.0, 160.0, 16.0), volume) {
+    ///     println!("volume {volume:.2}");
+    /// }
+    /// # }
+    /// ```
+    pub fn slider(&mut self, rect: Rect, value: &mut f32) -> bool {
+        self.widgets.slider_on(self.gfx, self.input, rect, value)
+    }
+
+    /// A progress bar at `rect` (UI units) filled to `value`, from 0 to 1.
+    /// The retained tree's [`Ui::progress_bar`](super::Ui::progress_bar)
+    /// has the same name.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn loading(ctx: &mut Ctx, done: usize, total: usize) {
+    /// ctx.immediate_ui().progress_bar(Rect::new(20.0, 120.0, 200.0, 8.0), done as f32 / total as f32);
+    /// # }
+    /// ```
+    pub fn progress_bar(&mut self, rect: Rect, value: f32) {
+        self.widgets.progress_bar_on(self.gfx, rect, value);
+    }
+
     /// Whether `point` (window pixels) is on a widget drawn this frame or
     /// the previous one ([`UiImmediate::covers`]).
     #[must_use]
@@ -323,7 +453,8 @@ impl UiImmediateFrame<'_> {
 }
 
 impl crate::ctx::Ctx {
-    /// The immediate widgets (panel, label, button) for debug overlays and
+    /// The immediate widgets (panel, label, button, toggle, slider, progress
+    /// bar) for debug overlays and
     /// quick tools, drawn the frame they are called. Their look is
     /// [`ctx.ui.immediate`](crate::ui::UiImmediate) (style, font, border);
     /// game UI that stays on screen belongs in the retained tree
@@ -465,6 +596,51 @@ mod tests {
         ctx.ui.set_theme(UiTheme::default());
         assert_eq!(ctx.ui.immediate.font, Font::DEFAULT);
         assert_eq!(ctx.ui.immediate.border_width, 0.0);
+    }
+
+    #[test]
+    fn the_toggle_slider_and_progress_bar_answer_the_mouse_like_the_button() {
+        let mut ctx = Ctx::new(1.0 / 60.0, vec2(800.0, 600.0));
+        ctx.set_headless(true);
+        let row = Rect::new(20.0, 20.0, 160.0, 24.0);
+        let mut on = false;
+        // Pressed and released on it: flipped once.
+        ctx.input.set_mouse_pos(vec2(30.0, 30.0));
+        ctx.input.set_mouse_button(MouseButton::Left, true);
+        assert!(!ctx.immediate_ui().toggle(row, "Paths", &mut on));
+        ctx.input.end_frame();
+        ctx.input.set_mouse_button(MouseButton::Left, false);
+        assert!(ctx.immediate_ui().toggle(row, "Paths", &mut on));
+        assert!(on);
+        ctx.input.end_frame();
+        // A slider follows the mouse while held from a press on it.
+        let bar = Rect::new(20.0, 100.0, 200.0, 16.0);
+        let mut value = 0.0;
+        ctx.input.set_mouse_pos(vec2(70.0, 108.0));
+        ctx.input.set_mouse_button(MouseButton::Left, true);
+        assert!(ctx.immediate_ui().slider(bar, &mut value));
+        assert!((value - 0.25).abs() < 1e-4, "{value}");
+        ctx.input.end_frame();
+        // Dragged past the end, it stops at 1; still, it reports no change.
+        ctx.input.set_mouse_pos(vec2(400.0, 300.0));
+        assert!(ctx.immediate_ui().slider(bar, &mut value));
+        assert_eq!(value, 1.0);
+        assert!(!ctx.immediate_ui().slider(bar, &mut value));
+        ctx.input.end_frame();
+        ctx.input.set_mouse_button(MouseButton::Left, false);
+        ctx.input.end_frame();
+        // A press elsewhere doesn't move it.
+        ctx.input.set_mouse_pos(vec2(500.0, 500.0));
+        ctx.input.set_mouse_button(MouseButton::Left, true);
+        assert!(!ctx.immediate_ui().slider(bar, &mut value));
+        ctx.input.end_frame();
+        ctx.input.set_mouse_pos(vec2(30.0, 108.0));
+        assert!(!ctx.immediate_ui().slider(bar, &mut value));
+        // The progress bar draws and covers its rectangle.
+        let draws = ctx.gfx.ui_list.len();
+        ctx.immediate_ui().progress_bar(Rect::new(20.0, 200.0, 200.0, 8.0), 0.5);
+        assert_eq!(ctx.gfx.ui_list.len(), draws + 2, "the track and the fill");
+        assert!(ctx.ui.immediate.covers(vec2(25.0, 204.0)));
     }
 
     #[test]

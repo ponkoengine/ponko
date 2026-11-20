@@ -18,10 +18,13 @@ use crate::input::Gamepad;
 use crate::input::GamepadAxis;
 use crate::input::GamepadButton;
 use crate::input::ImeEvent;
+use crate::input::TouchPhase;
 use crate::input::{Key, MouseButton};
 use crate::reflect::WorldReflect;
 use crate::time::Time;
 use ponko_ecs::World;
+
+mod record;
 
 /// The scenario file format this engine reads and writes.
 pub const SCENARIO_VERSION: u32 = 1;
@@ -324,6 +327,71 @@ impl InputScenario {
         self
     }
 
+    /// A tap at `at` (window pixels) on tick `tick`: a finger goes down and
+    /// lifts there within the tick, so it is a [`Gesture::Tap`](crate::input::Gesture::Tap),
+    /// or a press of the on-screen button under it. Each finger a helper
+    /// adds gets an id of its own.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::scenario::{InputScenario, ScenarioCheck};
+    /// let scenario = InputScenario::new()
+    ///     .tap(3, vec2(100.0, 200.0))
+    ///     .expect(3, ScenarioCheck::action("fire").pressed(true));
+    /// assert_eq!(scenario.step_count(), 3);
+    /// ```
+    pub fn tap(self, tick: u64, at: glam::Vec2) -> Self {
+        let id = self.finger();
+        self.at(tick, InputEvent::touch_start(id, at))
+            .at(tick, InputEvent::touch_end(id, at))
+    }
+
+    /// A finger held still at `at` from tick `from` until it lifts on tick
+    /// `to`: a held on-screen button, or a long press when it lasts long
+    /// enough.
+    /// ```
+    /// use ponko::prelude::*;
+    /// let scenario = ponko::scenario::InputScenario::new().touch_hold(10, 50, vec2(700.0, 500.0));
+    /// assert_eq!(scenario.ticks(), 51);
+    /// ```
+    pub fn touch_hold(self, from: u64, to: u64, at: glam::Vec2) -> Self {
+        let id = self.finger();
+        self.at(from, InputEvent::touch_start(id, at))
+            .at(to.max(from), InputEvent::touch_end(id, at))
+    }
+
+    /// A finger that goes down at `start` on tick `from`, moves in a
+    /// straight line, one step each tick, and lifts at `end` on tick `to`:
+    /// a drag or a swipe, or an on-screen stick pushed and let go.
+    /// ```
+    /// use ponko::prelude::*;
+    /// let scenario = ponko::scenario::InputScenario::new()
+    ///     .touch_drag(5, 25, vec2(100.0, 400.0), vec2(160.0, 400.0));
+    /// assert_eq!(scenario.step_count(), 21, "a start, 19 moves and an end");
+    /// ```
+    pub fn touch_drag(mut self, from: u64, to: u64, start: glam::Vec2, end: glam::Vec2) -> Self {
+        let id = self.finger();
+        let to = to.max(from);
+        self = self.at(from, InputEvent::touch_start(id, start));
+        for tick in from + 1..to {
+            let t = (tick - from) as f32 / (to - from) as f32;
+            self = self.at(tick, InputEvent::touch_move(id, start.lerp(end, t)));
+        }
+        self.at(to, InputEvent::touch_end(id, end))
+    }
+
+    /// An id for a finger no step of this scenario uses yet.
+    fn finger(&self) -> u64 {
+        let used = self
+            .inputs
+            .iter()
+            .filter_map(|(_, _, e)| match e {
+                InputEvent::Touch { id, .. } => Some(*id),
+                _ => None,
+            })
+            .max();
+        used.map_or(1, |id| id.saturating_add(1))
+    }
+
     /// Clicks the retained UI's node named `node` on tick `tick`: the
     /// pointer goes to the node's centre and presses and releases there in
     /// one frame, through the UI's own hit testing, so a button behind a
@@ -486,8 +554,10 @@ impl InputScenario {
     /// ponko::input::Input steps are `key` (`key`, `down`), `mouse` (`button`, `down`),
     /// `gamepad_button` (`pad`, `button`, `down`), `gamepad_axis` (`pad`,
     /// `axis`, `value`), `focus_lost`, `gamepad_disconnected` (`pad`),
-    /// `mouse_move` (`position`, window pixels as `[x, y]`) and `mouse_wheel`
-    /// (`delta`, lines as `[x, y]`).
+    /// `gamepad_connected` (`pad`), `gamepad_motion` (`pad`, `gyro` and
+    /// `accel` as `[x, y, z]`), `mouse_move` (`position`, window pixels as `[x, y]`), `mouse_wheel`
+    /// (`delta`, lines as `[x, y]`) and `touch` (`id`, `phase` one of
+    /// `started`, `moved`, `ended`, `cancelled`, and `position`).
     /// UI steps are `ui_click` (`node`) and `ui_type` (`node`, `text`), see
     /// [`click`](Self::click) and [`type_text`](Self::type_text).
     /// IME steps ([`ime`](Self::ime)) are `ime_enabled`, `ime_preedit`
@@ -810,6 +880,8 @@ pub(crate) struct Scenarios {
     pub(crate) leftover: Option<Leftover>,
     /// Whether tools may load scenarios through the control endpoint.
     pub(crate) injection: bool,
+    /// Live input being recorded ([`Input::start_recording`](crate::input::Input::start_recording)).
+    pub(crate) recording: Option<Box<record::Recording>>,
 }
 
 impl crate::input::Input {
@@ -995,6 +1067,7 @@ impl Ctx {
 impl Ctx {
     /// Before a tick's simulation systems: feeds the input steps due.
     pub(crate) fn scenario_begin_tick(&mut self) {
+        self.input.recording_tick_begins(self.time.sim_tick());
         let Some(mut run) = self.input.scenarios.run.take() else {
             return;
         };
@@ -1053,6 +1126,7 @@ impl Ctx {
     /// frames, after its whole frame): runs the checks due, and ends the run
     /// on a failure or when its duration is over.
     pub(crate) fn scenario_end_tick(&mut self, sim_tick: u64) {
+        self.input.recording_tick_ends(sim_tick);
         let Some(mut run) = self.input.scenarios.run.take() else {
             return;
         };
@@ -1142,12 +1216,18 @@ fn held_inputs(applied: &[(u64, usize, InputEvent)]) -> Vec<InputEvent> {
         (InputEvent::Mouse(x, _), InputEvent::Mouse(y, _)) => x == y,
         (InputEvent::GamepadButton(p, x, _), InputEvent::GamepadButton(q, y, _)) => p == q && x == y,
         (InputEvent::GamepadAxis(p, x, _), InputEvent::GamepadAxis(q, y, _)) => p == q && x == y,
+        (InputEvent::Touch { id: a, .. }, InputEvent::Touch { id: b, .. }) => a == b,
         _ => false,
     };
     for &(_, _, event) in applied {
         match event {
             InputEvent::FocusLost => {
-                held.retain(|h| !matches!(h, InputEvent::Key(..) | InputEvent::Mouse(..)));
+                held.retain(|h| {
+                    !matches!(
+                        h,
+                        InputEvent::Key(..) | InputEvent::Mouse(..) | InputEvent::Touch { .. }
+                    )
+                });
             }
             InputEvent::GamepadDisconnected(pad) => held.retain(|h| match h {
                 InputEvent::GamepadButton(p, ..) | InputEvent::GamepadAxis(p, ..) => *p != pad,
@@ -1160,6 +1240,17 @@ fn held_inputs(applied: &[(u64, usize, InputEvent)]) -> Vec<InputEvent> {
                     InputEvent::Mouse(b, true) => held.push(InputEvent::Mouse(b, false)),
                     InputEvent::GamepadButton(p, b, true) => held.push(InputEvent::GamepadButton(p, b, false)),
                     InputEvent::GamepadAxis(p, a, v) if v != 0.0 => held.push(InputEvent::GamepadAxis(p, a, 0.0)),
+                    // A finger still down is lifted where it is, cancelled
+                    // so that releasing it makes no tap or swipe.
+                    InputEvent::Touch {
+                        id,
+                        phase: TouchPhase::Started | TouchPhase::Moved,
+                        position,
+                    } => held.push(InputEvent::Touch {
+                        id,
+                        phase: TouchPhase::Cancelled,
+                        position,
+                    }),
                     _ => {}
                 }
             }
@@ -1416,6 +1507,16 @@ enum StepWire {
         tick: u64,
         pad: Gamepad,
     },
+    GamepadConnected {
+        tick: u64,
+        pad: Gamepad,
+    },
+    GamepadMotion {
+        tick: u64,
+        pad: Gamepad,
+        gyro: [f32; 3],
+        accel: [f32; 3],
+    },
     MouseMove {
         tick: u64,
         position: [f32; 2],
@@ -1423,6 +1524,12 @@ enum StepWire {
     MouseWheel {
         tick: u64,
         delta: [f32; 2],
+    },
+    Touch {
+        tick: u64,
+        id: u64,
+        phase: TouchPhase,
+        position: [f32; 2],
     },
     ExpectAction {
         tick: u64,
@@ -1494,8 +1601,11 @@ impl StepWire {
             | Self::GamepadAxis { tick, .. }
             | Self::FocusLost { tick }
             | Self::GamepadDisconnected { tick, .. }
+            | Self::GamepadConnected { tick, .. }
+            | Self::GamepadMotion { tick, .. }
             | Self::MouseMove { tick, .. }
             | Self::MouseWheel { tick, .. }
+            | Self::Touch { tick, .. }
             | Self::ExpectAction { tick, .. }
             | Self::ExpectResource { tick, .. }
             | Self::ExpectCount { tick, .. }
@@ -1517,8 +1627,23 @@ impl StepWire {
             Self::GamepadAxis { pad, axis, value, .. } => Step::Input(InputEvent::GamepadAxis(pad, axis, value)),
             Self::FocusLost { .. } => Step::Input(InputEvent::FocusLost),
             Self::GamepadDisconnected { pad, .. } => Step::Input(InputEvent::GamepadDisconnected(pad)),
+            Self::GamepadConnected { pad, .. } => Step::Input(InputEvent::GamepadConnected(pad)),
+            Self::GamepadMotion { pad, gyro, accel, .. } => Step::Input(InputEvent::GamepadMotion(
+                pad,
+                crate::input::GamepadMotion {
+                    gyro: gyro.into(),
+                    accel: accel.into(),
+                },
+            )),
             Self::MouseMove { position, .. } => Step::Input(InputEvent::MouseMove(position.into())),
             Self::MouseWheel { delta, .. } => Step::Input(InputEvent::MouseWheel(delta.into())),
+            Self::Touch {
+                id, phase, position, ..
+            } => Step::Input(InputEvent::Touch {
+                id,
+                phase,
+                position: position.into(),
+            }),
             Self::ExpectAction {
                 action,
                 pressed,
@@ -1581,6 +1706,13 @@ impl StepWire {
             InputEvent::GamepadAxis(pad, axis, value) => Self::GamepadAxis { tick, pad, axis, value },
             InputEvent::FocusLost => Self::FocusLost { tick },
             InputEvent::GamepadDisconnected(pad) => Self::GamepadDisconnected { tick, pad },
+            InputEvent::GamepadConnected(pad) => Self::GamepadConnected { tick, pad },
+            InputEvent::GamepadMotion(pad, motion) => Self::GamepadMotion {
+                tick,
+                pad,
+                gyro: motion.gyro.into(),
+                accel: motion.accel.into(),
+            },
             InputEvent::MouseMove(at) => Self::MouseMove {
                 tick,
                 position: at.into(),
@@ -1588,6 +1720,12 @@ impl StepWire {
             InputEvent::MouseWheel(lines) => Self::MouseWheel {
                 tick,
                 delta: lines.into(),
+            },
+            InputEvent::Touch { id, phase, position } => Self::Touch {
+                tick,
+                id,
+                phase,
+                position: position.into(),
             },
         }
     }

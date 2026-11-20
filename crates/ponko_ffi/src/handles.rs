@@ -1,12 +1,20 @@
 //! One handle lifecycle (Rust `Handle`, `Ctx::is_live`, `Ctx::free`,
 //! `Ctx::live_counts`): every handle struct starts with its `uint32_t id`,
 //! so one pair of calls takes a kind and an id for all of them.
+//!
+//! Rust gives each kind its own type, so a wrong kind doesn't compile. C
+//! keeps integer ids and checks the kind at run time: the kind argument
+//! says which table the id is looked up in, an unknown kind is an invalid
+//! argument, and so is freeing a texture that isn't a render target as
+//! `PONKO_HANDLE_RENDER_TARGET`. Ids of different kinds can be equal, so
+//! an id passed with another kind's value names nothing or something else
+//! of that kind.
 
 use std::ffi::c_char;
 
 use ponko::__ffi;
 use ponko::handle::LiveCounts;
-use ponko::inventory::{AssetClass, AssetOwner};
+use ponko::inventory::{AssetClass, AssetOwner, AssetOwnerRef, AssetRecordRef};
 use ponko::prelude::{Font, Sound, Texture};
 use ponko::render::Compute;
 use ponko::render::Effect;
@@ -14,6 +22,7 @@ use ponko::render::GpuBuffer;
 use ponko::render::InstanceBatch;
 use ponko::render::Material;
 use ponko::render::Mesh;
+use ponko::render::RenderTarget;
 use ponko::render::Shader;
 use ponko::render::{SpriteMaterial, SpriteShader};
 use ponko::terrain::TextureArray;
@@ -29,10 +38,12 @@ use crate::{PonkoCtx, PonkoStatus, boundary, invalid};
 pub const PONKO_HANDLE_NONE: u32 = u32::MAX;
 
 /// Which kind of handle `ponko_ctx_handle_is_live` and
-/// `ponko_ctx_handle_free` take (pass it as a `uint32_t`). Render targets
-/// are textures.
+/// `ponko_ctx_handle_free` take (pass it as a `uint32_t`). A render target
+/// is a texture (a `PonkoTexture`): `PONKO_HANDLE_TEXTURE` covers it too,
+/// and `PONKO_HANDLE_RENDER_TARGET` also checks that it is one.
 /// ```
 /// assert_eq!(ponko_ffi::PonkoHandleKind::PONKO_HANDLE_TEXTURE_ARRAY as u32, 10);
+/// assert_eq!(ponko_ffi::PonkoHandleKind::PONKO_HANDLE_RENDER_TARGET as u32, 13);
 /// ```
 #[repr(C)]
 #[allow(non_camel_case_types)]
@@ -64,7 +75,14 @@ pub enum PonkoHandleKind {
     PONKO_HANDLE_SPRITE_SHADER = 11,
     /// `PonkoSpriteMaterial`.
     PONKO_HANDLE_SPRITE_MATERIAL = 12,
+    /// A `PonkoTexture` from `ponko_ctx_create_render_target` (Rust
+    /// `RenderTarget`): live only while it is a live render target, and
+    /// freeing a texture that isn't one is an invalid argument.
+    PONKO_HANDLE_RENDER_TARGET = 13,
 }
+
+/// The value of `PonkoHandleKind::PONKO_HANDLE_RENDER_TARGET`, for matching on a `uint32_t`.
+const RENDER_TARGET: u32 = PonkoHandleKind::PONKO_HANDLE_RENDER_TARGET as u32;
 
 /// How many handles of each kind are live (Rust `LiveCounts`), from
 /// `ponko_ctx_live_counts`.
@@ -175,6 +193,10 @@ macro_rules! with_handle {
                 let $h = __ffi::from_id::<SpriteMaterial>($id);
                 Ok($body)
             }
+            RENDER_TARGET => {
+                let $h = __ffi::from_id::<RenderTarget>($id);
+                Ok($body)
+            }
             _ => Err(invalid("unknown handle kind")),
         }
     };
@@ -210,7 +232,9 @@ pub unsafe extern "C" fn ponko_ctx_handle_is_live(
 /// meshes and GPU buffers, whose next one made takes it). Whatever still uses it draws the default: nothing for a
 /// mesh, white for a texture, the default material, the built-in shader,
 /// sprite look or font; effects and compute passes are skipped and sounds stop. Freeing it
-/// again, or `PONKO_HANDLE_NONE`, does nothing.
+/// again, or `PONKO_HANDLE_NONE`, does nothing. A live texture that isn't a
+/// render target, freed as `PONKO_HANDLE_RENDER_TARGET`, is an invalid
+/// argument and stays live.
 /// # Safety
 /// `ctx` null or live.
 /// ```
@@ -219,7 +243,19 @@ pub unsafe extern "C" fn ponko_ctx_handle_is_live(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ponko_ctx_handle_free(ctx: *mut PonkoCtx, kind: u32, id: u32) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
-    boundary(|| unsafe { ctx_access(ctx, |c| with_handle!(kind, id, |h| c.free(h))) })
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            if kind == RENDER_TARGET {
+                let texture = __ffi::from_id::<Texture>(id);
+                if c.is_live(texture) && !c.gfx.is_render_target(texture) {
+                    return Err(invalid(
+                        "that texture isn't a render target: free it as PONKO_HANDLE_TEXTURE",
+                    ));
+                }
+            }
+            with_handle!(kind, id, |h| c.free(h))
+        })
+    })
 }
 
 /// How many handles of each kind are live now (Rust `Ctx::live_counts`).
@@ -318,6 +354,49 @@ pub struct PonkoAssetRecord {
     pub age_frames: u64,
 }
 
+impl From<AssetRecordRef<'_>> for PonkoAssetRecord {
+    fn from(record: AssetRecordRef<'_>) -> Self {
+        Self {
+            id: record.id,
+            owner: match record.owner {
+                AssetOwnerRef::File(_) => PonkoAssetOwner::PONKO_ASSET_OWNER_FILE,
+                AssetOwnerRef::Engine => PonkoAssetOwner::PONKO_ASSET_OWNER_ENGINE,
+                _ => PonkoAssetOwner::PONKO_ASSET_OWNER_CODE,
+            } as u32,
+            bytes: record.bytes,
+            made_frame: record.made_frame,
+            age_frames: record.age_frames,
+        }
+    }
+}
+
+fn asset_order(record: &PonkoAssetRecord) -> (u64, u32) {
+    (record.made_frame, record.id)
+}
+
+// Replace the newest record in a full max heap, then restore its order.
+fn keep_older(heap: &mut [PonkoAssetRecord], record: PonkoAssetRecord) {
+    if asset_order(&record) >= asset_order(&heap[0]) {
+        return;
+    }
+    let mut at = 0;
+    while at < heap.len() / 2 {
+        let left = 2 * at + 1;
+        let right = left + 1;
+        let next = if right < heap.len() && asset_order(&heap[right]) > asset_order(&heap[left]) {
+            right
+        } else {
+            left
+        };
+        if asset_order(&record) >= asset_order(&heap[next]) {
+            break;
+        }
+        heap[at] = heap[next];
+        at = next;
+    }
+    heap[at] = record;
+}
+
 fn asset_class(class: u32) -> Result<AssetClass, crate::Failure> {
     Ok(match class {
         0 => AssetClass::Texture,
@@ -374,11 +453,11 @@ pub unsafe extern "C" fn ponko_ctx_asset_count(
 /// Every live handle of class `asset_class_id` (a `PonkoAssetClass`), oldest first, with
 /// its bytes, age and owner (Rust `Graphics::asset_handles` and
 /// `Audio::asset_handles`): up to `capacity`
-/// copied into `records`; `*out_len` is how many there are. Call with
-/// `capacity` 0 to size the array.
+/// copied into `records` without allocating; `*out_len` is how many there are.
+/// Call with `capacity` 0 to size the array.
 /// # Safety
 /// `ctx` null or live; `records` null (with `capacity` 0) or `capacity`
-/// writable records; output writable.
+/// writable records; `out_len` writable and disjoint from `records`.
 /// ```
 /// let mut n = 0;
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_asset_handles(std::ptr::null_mut(), 0, std::ptr::null_mut(), 0, &mut n) } as u32, 1);
@@ -397,21 +476,33 @@ pub unsafe extern "C" fn ponko_ctx_asset_handles(
             if records.is_null() && capacity > 0 {
                 return Err(invalid("records is null"));
             }
-            let all = records_of(c, asset_class(asset_class_id)?);
-            for (i, r) in all.iter().take(capacity).enumerate() {
-                records.add(i).write(PonkoAssetRecord {
-                    id: r.id,
-                    owner: match r.owner {
-                        AssetOwner::File(_) => PonkoAssetOwner::PONKO_ASSET_OWNER_FILE as u32,
-                        AssetOwner::Engine => PonkoAssetOwner::PONKO_ASSET_OWNER_ENGINE as u32,
-                        _ => PonkoAssetOwner::PONKO_ASSET_OWNER_CODE as u32,
-                    },
-                    bytes: r.bytes,
-                    made_frame: r.made_frame,
-                    age_frames: r.age_frames,
-                });
+            if out_len.is_null() {
+                return Err(invalid("out_len is null"));
             }
-            out(out_len, all.len())
+            let mut len = 0;
+            let visit = |record: AssetRecordRef<'_>| {
+                if len < capacity {
+                    records.add(len).write(record.into());
+                } else if capacity > 0 {
+                    // The prefix is initialized. Its descending sort is a max
+                    // heap, so later records can replace the latest kept one.
+                    let heap = std::slice::from_raw_parts_mut(records, capacity);
+                    if len == capacity {
+                        heap.sort_unstable_by_key(|r| std::cmp::Reverse(asset_order(r)));
+                    }
+                    keep_older(heap, record.into());
+                }
+                len += 1;
+            };
+            match asset_class(asset_class_id)? {
+                AssetClass::Sound => c.audio.visit_asset_handles(visit),
+                class => c.gfx.visit_asset_handles(class, visit),
+            }
+            let written = len.min(capacity);
+            if written > 0 {
+                std::slice::from_raw_parts_mut(records, written).sort_unstable_by_key(asset_order);
+            }
+            out(out_len, len)
         })
     })
 }
@@ -480,6 +571,208 @@ pub unsafe extern "C" fn ponko_ctx_unload_mesh(
         ctx_access(ctx, |c| {
             let path = text(path)?;
             out(out_unloaded, c.gfx.unload_mesh(path))
+        })
+    })
+}
+
+/// The cost of the last drawn frame for one mesh (Rust `MeshCost`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PonkoMeshCost {
+    /// The mesh that drew.
+    pub mesh: crate::three::PonkoMesh,
+    /// Models drawn by the camera.
+    pub models: usize,
+    /// Triangles drawn by the camera.
+    pub triangles: usize,
+    /// Models drawn into the shadow maps, summed across maps.
+    pub shadow_models: usize,
+    /// Triangles drawn into the shadow maps, summed across maps.
+    pub shadow_triangles: usize,
+    /// Byte offset of the name in the caller's names buffer.
+    pub name_offset: usize,
+    /// UTF-8 bytes in the name, excluding the NUL. Zero for unnamed meshes.
+    pub name_len: usize,
+}
+
+/// One streamed or resident asset (Rust `StreamedAsset`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PonkoStreamedAsset {
+    /// A `PonkoResidencyKind`.
+    pub kind: u32,
+    /// A `PonkoAssetState`.
+    pub state: u32,
+    /// Whether the asset has a handle.
+    pub has_handle: bool,
+    /// Its mesh or texture id, zero when `has_handle` is false.
+    pub id: u32,
+    /// GPU width, or zero for a mesh.
+    pub width: u32,
+    /// GPU height, or zero for a mesh.
+    pub height: u32,
+    /// Byte offset of the name in the caller's names buffer.
+    pub name_offset: usize,
+    /// UTF-8 bytes in the name, excluding the NUL.
+    pub name_len: usize,
+}
+
+/// Validated outputs for a listing with a packed names buffer.
+struct Listing<T> {
+    records: *mut T,
+    capacity: usize,
+    names: *mut c_char,
+    name_capacity: usize,
+    len: usize,
+    name_len: usize,
+}
+
+impl<T> Listing<T> {
+    fn new(
+        records: *mut T,
+        capacity: usize,
+        names: *mut c_char,
+        name_capacity: usize,
+        out_len: *mut usize,
+        out_names_len: *mut usize,
+    ) -> Result<Self, crate::Failure> {
+        if records.is_null() && capacity != 0 {
+            return Err(invalid("records is null"));
+        }
+        if names.is_null() && name_capacity != 0 {
+            return Err(invalid("names is null"));
+        }
+        if out_len.is_null() || out_names_len.is_null() {
+            return Err(invalid("listing length outputs must both be writable"));
+        }
+        Ok(Self {
+            records,
+            capacity,
+            names,
+            name_capacity,
+            len: 0,
+            name_len: 0,
+        })
+    }
+
+    /// Counts the record, writing it and any complete name that fits.
+    /// The caller supplies disjoint writable arrays of the stated sizes.
+    unsafe fn push(&mut self, name: Option<&str>, record: impl FnOnce(usize, usize) -> T) {
+        if self.len < self.capacity {
+            let offset = self.name_len;
+            let mut len = 0;
+            if let Some(name) = name {
+                len = name.len();
+                self.name_len += len + 1;
+                if self.name_len <= self.name_capacity {
+                    // SAFETY: this complete NUL-terminated name fits, and the buffers are disjoint.
+                    unsafe {
+                        let start = self.names.add(offset);
+                        std::ptr::copy_nonoverlapping(name.as_ptr(), start.cast(), len);
+                        start.add(len).write(0);
+                    }
+                }
+            }
+            // SAFETY: this index is in the caller's writable array.
+            unsafe { self.records.add(self.len).write(record(offset, len)) };
+        }
+        self.len += 1;
+    }
+}
+
+thread_local! {
+    // Keep the aggregation buffers used by the Rust collector between native calls.
+    static MESH_COSTS: std::cell::RefCell<Vec<ponko::render::MeshCost>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Copies up to `capacity` mesh costs, largest total triangles first,
+/// mesh id breaking ties. Empty headless and before a draw. Reuses
+/// per-thread aggregation storage, which can grow as meshes or names are added.
+///
+/// `*out_len` is the total record count. `*out_names_len` is the bytes
+/// needed for the NUL-terminated names of the copied prefix. A name is
+/// written only if `name_offset + name_len + 1 <= name_capacity`; a mesh
+/// with `name_len == 0` is unnamed. To size both buffers, first query the
+/// count with zero capacities, then pass the record array and zero name
+/// capacity to size the name buffer.
+///
+/// # Safety
+/// `ctx` null or live. The four outputs must be disjoint and writable for
+/// their stated lengths. `records` and `names` may be null at zero capacity.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_mesh_costs(
+    ctx: *mut PonkoCtx,
+    records: *mut PonkoMeshCost,
+    capacity: usize,
+    names: *mut c_char,
+    name_capacity: usize,
+    out_len: *mut usize,
+    out_names_len: *mut usize,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let mut listing = Listing::new(records, capacity, names, name_capacity, out_len, out_names_len)?;
+            MESH_COSTS.with_borrow_mut(|costs| {
+                c.gfx.mesh_costs_into(costs);
+                for cost in costs {
+                    listing.push(cost.name.as_deref(), |name_offset, name_len| PonkoMeshCost {
+                        mesh: crate::types::to_c(cost.mesh),
+                        models: cost.models,
+                        triangles: cost.triangles,
+                        shadow_models: cost.shadow_models,
+                        shadow_triangles: cost.shadow_triangles,
+                        name_offset,
+                        name_len,
+                    });
+                }
+            });
+            out(out_len, listing.len)?;
+            out(out_names_len, listing.name_len)
+        })
+    })
+}
+
+/// Copies up to `capacity` streamed and resident assets in kind/name order,
+/// without allocating. Count and names buffers work as in `ponko_ctx_mesh_costs`.
+///
+/// # Safety
+/// `ctx` null or live. The four outputs must be disjoint and writable for
+/// their stated lengths. `records` and `names` may be null at zero capacity.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_streamed_assets(
+    ctx: *mut PonkoCtx,
+    records: *mut PonkoStreamedAsset,
+    capacity: usize,
+    names: *mut c_char,
+    name_capacity: usize,
+    out_len: *mut usize,
+    out_names_len: *mut usize,
+) -> PonkoStatus {
+    use crate::residency::{PonkoResidencyKind, state_to_c};
+    use ponko::streaming::ResidencyKind;
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            let mut listing = Listing::new(records, capacity, names, name_capacity, out_len, out_names_len)?;
+            c.gfx.visit_streamed_assets(|kind, name, state, id, [width, height]| {
+                listing.push(Some(name), |name_offset, name_len| PonkoStreamedAsset {
+                    kind: match kind {
+                        ResidencyKind::Mesh => PonkoResidencyKind::PONKO_RESIDENCY_MESH as u32,
+                        ResidencyKind::Texture => PonkoResidencyKind::PONKO_RESIDENCY_TEXTURE as u32,
+                        _ => unreachable!("new residency kind needs a C representation"),
+                    },
+                    state: state_to_c(state),
+                    has_handle: id.is_some(),
+                    id: id.unwrap_or_default(),
+                    width,
+                    height,
+                    name_offset,
+                    name_len,
+                });
+            });
+            out(out_len, listing.len)?;
+            out(out_names_len, listing.name_len)
         })
     })
 }

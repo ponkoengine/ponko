@@ -26,8 +26,18 @@ use glam::Vec2;
 #[cfg(feature = "window")]
 use winit::keyboard::KeyCode;
 
+pub(crate) mod backend;
+pub(crate) mod controller;
+pub(crate) mod glyphs;
 pub(crate) mod ime;
+pub use backend::{DeviceKey, FakeGamepads, GamepadBackend, GamepadEvents};
+pub use controller::{
+    ControllerFamily, GamepadCapabilities, GamepadInfo, GamepadMotion, InputDevice, MAX_PLAYERS, MotorLevels, Rumble,
+};
+pub use glyphs::{Glyph, GlyphAtlas, Glyphs};
 pub use ime::ImeEvent;
+pub(crate) mod touch;
+pub use touch::{Gesture, GestureAxis, GestureEvent, GestureSettings, Touch, TouchPhase};
 
 macro_rules! define_keys {
     ($($(#[$meta:meta])* $name:ident => $code:ident),* $(,)?) => {
@@ -315,7 +325,8 @@ pub enum GamepadStick {
 
 /// A connected gamepad, from [`Input::gamepads`](crate::input::Input::gamepads). It
 /// keeps its slot while connected, so `pads[0]` stays player one; a pad that
-/// reconnects takes the lowest free slot.
+/// reconnects gets its old slot back if it is free, and a new pad takes the
+/// lowest slot no unplugged pad is waiting for.
 ///
 /// ```
 /// use ponko::prelude::*;
@@ -379,6 +390,10 @@ impl Gamepad {
 
 /// How many gamepads the engine tracks at once.
 pub const MAX_GAMEPADS: usize = 8;
+
+/// How far the mouse must move in one event to count as using it, for
+/// [`Input::last_device`]: a nudged desk doesn't flip the prompts.
+const MOUSE_USE_DISTANCE: f32 = 4.0;
 
 /// One gamepad's buttons and axes.
 #[derive(Debug, Clone)]
@@ -496,6 +511,10 @@ pub struct Input {
     pub(crate) scenarios: crate::scenario::Scenarios,
     /// IME composition and the requests for the window system.
     pub(crate) ime: ime::ImeState,
+    /// Controller identity, rumble, motion, last used device, players.
+    pub(crate) controllers: controller::Controllers,
+    /// Touches, gestures and the on-screen controls' zones.
+    pub(crate) touch: touch::TouchState,
 }
 
 impl Input {
@@ -515,22 +534,40 @@ impl Input {
             cursor_lock_changed: false,
             scenarios: Default::default(),
             ime: Default::default(),
+            controllers: Default::default(),
+            touch: Default::default(),
         }
     }
 
     // --- event recording (engine side) ---
 
     pub(crate) fn set_key(&mut self, key: Key, is_down: bool) {
+        self.record(crate::actions::InputEvent::Key(key, is_down));
+        if is_down && !self.keys.down[key as usize] {
+            self.controllers.used(InputDevice::KeyboardMouse);
+        }
         self.keys.set(key as usize, is_down);
         self.refresh_actions();
     }
 
     pub(crate) fn set_mouse_button(&mut self, button: MouseButton, is_down: bool) {
+        self.record(crate::actions::InputEvent::Mouse(button, is_down));
+        if is_down {
+            self.controllers.used(InputDevice::KeyboardMouse);
+        }
+        self.touch.pointer_is_touch = false;
         self.mouse.set(button as usize, is_down);
         self.refresh_actions();
     }
 
     pub(crate) fn set_mouse_pos(&mut self, pos: Vec2) {
+        if pos != self.mouse_pos {
+            self.touch.pointer_is_touch = false;
+        }
+        self.record(crate::actions::InputEvent::MouseMove(pos));
+        if pos.distance_squared(self.mouse_pos) >= MOUSE_USE_DISTANCE * MOUSE_USE_DISTANCE {
+            self.controllers.used(InputDevice::KeyboardMouse);
+        }
         self.mouse_pos = pos;
     }
 
@@ -555,29 +592,36 @@ impl Input {
     }
 
     pub(crate) fn add_mouse_wheel(&mut self, delta: Vec2) {
+        self.record(crate::actions::InputEvent::MouseWheel(delta));
+        if delta != Vec2::ZERO {
+            self.controllers.used(InputDevice::KeyboardMouse);
+        }
         self.mouse_wheel += delta;
     }
 
     pub(crate) fn add_mouse_motion(&mut self, delta: Vec2) {
+        if delta.length_squared() >= MOUSE_USE_DISTANCE * MOUSE_USE_DISTANCE {
+            self.controllers.used(InputDevice::KeyboardMouse);
+        }
         self.mouse_motion += delta;
     }
 
     /// A pad was plugged in: it takes the lowest free slot. `None` when all
     /// [`MAX_GAMEPADS`] slots are taken.
-    // Only the gilrs backend plugs pads in (and the unit tests).
-    #[cfg_attr(not(feature = "gamepad"), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn connect_gamepad(&mut self) -> Option<Gamepad> {
         let slot = (0..MAX_GAMEPADS as u8).find(|&s| !self.connected.contains(&Gamepad(s)))?;
         let pad = Gamepad(slot);
-        self.pads[usize::from(slot)] = PadState::new();
-        let at = self.connected.partition_point(|p| p.0 < slot);
-        self.connected.insert(at, pad);
-        self.refresh_actions();
+        self.connect_gamepad_at(pad, GamepadInfo::default());
         Some(pad)
     }
 
     /// A pad was unplugged: its held buttons count as released this frame.
     pub(crate) fn disconnect_gamepad(&mut self, pad: Gamepad) {
+        self.record(crate::actions::InputEvent::GamepadDisconnected(pad));
+        if self.connected.contains(&pad) {
+            self.controllers.disconnected(pad);
+        }
         self.connected.retain(|&p| p != pad);
         let state = &mut self.pads[pad.slot()];
         state.buttons.release_all();
@@ -587,11 +631,19 @@ impl Input {
     }
 
     pub(crate) fn set_gamepad_button(&mut self, pad: Gamepad, button: GamepadButton, is_down: bool) {
+        self.record(crate::actions::InputEvent::GamepadButton(pad, button, is_down));
+        if is_down && !self.pads[pad.slot()].buttons.down[button as usize] {
+            self.controllers.used(InputDevice::Gamepad(pad));
+        }
         self.pads[pad.slot()].buttons.set(button as usize, is_down);
         self.refresh_actions();
     }
 
     pub(crate) fn set_gamepad_axis(&mut self, pad: Gamepad, axis: GamepadAxis, value: f32) {
+        self.record(crate::actions::InputEvent::GamepadAxis(pad, axis, value));
+        if controller::axis_crossed(self.axis_before(pad, axis), value) {
+            self.controllers.used(InputDevice::Gamepad(pad));
+        }
         let state = &mut self.pads[pad.slot()];
         state.axes[axis as usize] = value;
         if value.abs() > state.axes_peak[axis as usize].abs() {
@@ -603,9 +655,58 @@ impl Input {
     /// Called when the window loses focus: we will never see the matching
     /// key-up events, so treat everything as released to avoid stuck keys.
     pub(crate) fn release_all(&mut self) {
+        self.record(crate::actions::InputEvent::FocusLost);
         self.keys.release_all();
         self.mouse.release_all();
+        self.controllers.stop_all_rumble();
+        self.touch.cancel_all();
         self.refresh_actions();
+    }
+
+    /// The frame starts at game time `now` (seconds): touches held still
+    /// long enough become long presses.
+    pub(crate) fn begin_frame(&mut self, now: f64) {
+        if self.touch.begin_frame(now) {
+            self.refresh_actions();
+        }
+    }
+
+    /// What is held now, as the events that hold it again (an input
+    /// recording's tick 0).
+    pub(crate) fn held_as_events(&self) -> Vec<crate::actions::InputEvent> {
+        use crate::actions::InputEvent;
+        let mut held = Vec::new();
+        if self.mouse_pos != Vec2::ZERO {
+            held.push(InputEvent::MouseMove(self.mouse_pos));
+        }
+        held.extend(
+            Key::ALL
+                .into_iter()
+                .filter(|&k| self.keys.down[k as usize])
+                .map(|k| InputEvent::Key(k, true)),
+        );
+        held.extend(
+            MouseButton::ALL
+                .into_iter()
+                .filter(|&b| self.mouse.down[b as usize])
+                .map(|b| InputEvent::Mouse(b, true)),
+        );
+        for &pad in &self.connected {
+            let state = &self.pads[pad.slot()];
+            held.extend(
+                GamepadButton::ALL
+                    .into_iter()
+                    .filter(|&b| state.buttons.down[b as usize])
+                    .map(|b| InputEvent::GamepadButton(pad, b, true)),
+            );
+            held.extend(
+                GamepadAxis::ALL
+                    .into_iter()
+                    .filter(|&a| state.axes[a as usize] != 0.0)
+                    .map(|a| InputEvent::GamepadAxis(pad, a, state.axes[a as usize])),
+            );
+        }
+        held
     }
 
     /// Clears per-frame state. Called after the game's update for the frame.
@@ -618,13 +719,18 @@ impl Input {
         }
         self.typed_text.clear();
         self.ime.end_frame();
+        self.controllers.end_frame();
         self.mouse_wheel = Vec2::ZERO;
         self.mouse_motion = Vec2::ZERO;
         self.mouse_pos_at_frame_start = self.mouse_pos;
+        // One-frame gestures are over: their actions see the release next frame.
+        self.touch.end_frame();
+        self.refresh_actions();
     }
 
     pub(crate) fn refresh_actions(&mut self) {
-        self.actions.refresh(&self.keys, &self.mouse, &self.pads);
+        self.touch.resolve_slots(&self.actions);
+        self.actions.refresh(&self.keys, &self.mouse, &self.pads, &self.touch);
     }
 
     // --- queries (exposed through Ctx) ---
@@ -891,7 +997,8 @@ impl Input {
     ///   was below the threshold when the frame started and reached it during
     ///   the frame.
     /// - **Order.** Keys, then mouse buttons, then each gamepad slot's
-    ///   buttons, then axes: the same order every run, so the first item is
+    ///   buttons, then axes, then touch gestures that happened this frame
+    ///   ([`ButtonBinding::Gesture`](crate::actions::ButtonBinding::Gesture)): the same order every run, so the first item is
     ///   a stable answer. Within a kind it is the order of the enum.
     /// - **Bindable as is.** Items are [`PressedInput::Button`](crate::actions::PressedInput::Button) (put it in an
     ///   `Action::Button`) or [`PressedInput::Axis`](crate::actions::PressedInput::Axis) (an `Action::Axis`, with
@@ -976,7 +1083,11 @@ impl Input {
                     })
                 })
         });
-        keys.chain(mouse).chain(pad_buttons).chain(pad_axes)
+        let gestures = touch::Gesture::ALL
+            .into_iter()
+            .filter(|&g| self.touch.fired(g))
+            .map(|g| PressedInput::Button(ButtonBinding::Gesture(g)));
+        keys.chain(mouse).chain(pad_buttons).chain(pad_axes).chain(gestures)
     }
 }
 
@@ -1186,8 +1297,11 @@ impl Input {
             InputEvent::GamepadAxis(p, a, value) => self.set_gamepad_axis(p, a, value),
             InputEvent::FocusLost => self.release_all(),
             InputEvent::GamepadDisconnected(p) => self.disconnect_gamepad(p),
+            InputEvent::GamepadConnected(p) => self.connect_gamepad_at(p, GamepadInfo::default()),
+            InputEvent::GamepadMotion(p, motion) => self.set_gamepad_motion(p, motion),
             InputEvent::MouseMove(at) => self.set_mouse_pos(at),
             InputEvent::MouseWheel(lines) => self.add_mouse_wheel(lines),
+            InputEvent::Touch { id, phase, position } => self.feed_touch(id, phase, position),
         }
     }
 

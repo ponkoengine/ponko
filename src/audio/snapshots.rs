@@ -226,12 +226,15 @@ impl Audio {
         true
     }
 
-    /// Engine side, once a frame: moves snapshot fades along by `dt`
-    /// seconds of frame time.
+    /// Engine side, once a frame: moves snapshot fades, voice fades, the
+    /// music and the voice limits along by `dt` seconds of frame time, and
+    /// looks after the output device.
     pub(crate) fn advance_mixer(&mut self, dt: f32) {
         if self.backend.buses.advance(dt) {
             self.backend.sync_buses();
         }
+        self.advance_music(dt);
+        self.backend.update(dt);
     }
 
     /// The mixer's state to save with the settings: see [`MixerState`].

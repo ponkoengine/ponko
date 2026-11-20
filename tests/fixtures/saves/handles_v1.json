@@ -1,0 +1,149 @@
+{
+  "entities": [
+    {
+      "components": {
+        "Sprite": {
+          "color": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+          },
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "region": null,
+          "texture": "crab.png",
+          "z": 2.0
+        },
+        "Transform2D": {
+          "position": [
+            10.0,
+            20.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "entity": 0
+    },
+    {
+      "components": {
+        "Animation": {
+          "columns": 16,
+          "first": 0,
+          "fps": 8.0,
+          "frame_size": [
+            2.0,
+            2.0
+          ],
+          "frames": 2,
+          "len": 256,
+          "looping": true,
+          "texture": "crab.png",
+          "time": 0.0
+        },
+        "Transform2D": {
+          "position": [
+            -5.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "entity": 1
+    },
+    {
+      "components": {
+        "ParticleEmitter2D": {
+          "blend": "alpha",
+          "burst": 0,
+          "color_over_life": [
+            [
+              0.0,
+              {
+                "a": 1.0,
+                "b": 1.0,
+                "g": 1.0,
+                "r": 1.0
+              }
+            ],
+            [
+              1.0,
+              {
+                "a": 0.0,
+                "b": 1.0,
+                "g": 1.0,
+                "r": 1.0
+              }
+            ]
+          ],
+          "drag": 0.0,
+          "duration": 1.0,
+          "gravity": [
+            0.0,
+            200.0
+          ],
+          "lifetime": [
+            1.0,
+            2.0
+          ],
+          "looping": true,
+          "max_particles": 1024,
+          "rate": 10.0,
+          "rotation": [
+            0.0,
+            0.0
+          ],
+          "seed": 1,
+          "shape": "point",
+          "sheet": [
+            1,
+            1
+          ],
+          "size": [
+            4.0,
+            8.0
+          ],
+          "size_over_life": [
+            [
+              0.0,
+              1.0
+            ]
+          ],
+          "space": "world",
+          "speed": [
+            50.0,
+            100.0
+          ],
+          "texture": "crab.png",
+          "z": 0.0
+        },
+        "Transform2D": {
+          "position": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "entity": 2
+    }
+  ],
+  "format": "ponko-world",
+  "not_saved": {},
+  "resources": {},
+  "version": 1
+}

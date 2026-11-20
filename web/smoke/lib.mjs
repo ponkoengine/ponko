@@ -12,6 +12,8 @@ export const BROWSERS = ["chromium", "firefox", "webkit"];
 export const CASES = {
   ok: null,
   "missing-asset": "asset",
+  "no-graphics": "startup",
+  "context-lost": "startup",
   panic: "panic",
   stall: "stall",
 };
@@ -29,7 +31,7 @@ export class UsageError extends Error {}
 
 export const USAGE =
   "usage: smoke.mjs (--dir <built site> | --fixture <name> [--build]) [--browser chromium|firefox|webkit]\n" +
-  "                 [--backend auto|webgpu|webgl2] [--case ok|missing-asset|panic|stall]\n" +
+  "                 [--backend auto|webgpu|webgl2] [--case ok|missing-asset|no-graphics|context-lost|panic|stall]\n" +
   "                 [--out <artifacts dir>] [--timeout <startup seconds>] [--run-timeout <seconds>]\n" +
   "                 [--allow-unsupported]\n" +
   "                 [--asset <file under assets/>] [--asset-size <W>x<H>|none]\n" +

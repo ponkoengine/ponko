@@ -223,6 +223,38 @@ pub unsafe extern "C" fn ponko_world_save(
     })
 }
 
+/// One number for everything reflected in the world (Rust
+/// `ponko::reflect::world_hash`): every reflected component of every entity
+/// and every reflected resource, bit for bit, whatever order they sit in.
+/// Compare it between runs, peers or a replay; it is the same on every
+/// platform, and can change between engine versions.
+/// ```
+/// use ponko_ffi::*;
+/// let w = ponko_world_new();
+/// let (mut a, mut b) = (0u64, 1u64);
+/// unsafe {
+///     assert_eq!(ponko_world_hash(w, &mut a), PonkoStatus::PONKO_OK);
+///     assert_eq!(ponko_world_hash(w, &mut b), PonkoStatus::PONKO_OK);
+///     ponko_world_free(w);
+/// }
+/// assert_eq!(a, b);
+/// ```
+/// # Safety
+/// `world` must be null or live; `out_hash` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_world_hash(world: *mut PonkoWorld, out_hash: *mut u64) -> PonkoStatus {
+    boundary(|| {
+        if out_hash.is_null() {
+            return Err(invalid("output is null"));
+        }
+        // SAFETY: access validates null and guards the live handle.
+        let hash = unsafe { access(world, |w, _| Ok(ponko::reflect::world_hash(w)))? };
+        // SAFETY: checked non-null.
+        unsafe { out_hash.write(hash) };
+        Ok(())
+    })
+}
+
 /// Replaces every entity with those in a save from `ponko_world_save`,
 /// with the same ids. Everything is checked first: on error the world is
 /// unchanged and `ponko_last_error()` says what was wrong.

@@ -1,0 +1,17 @@
+{
+  "name": "sky_kit_noon",
+  "scene": "the sky kit at noon, looking north: white clouds on blue, their shadows on the ground",
+  "width": 192,
+  "height": 112,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 16,
+    "outliers": 0.015,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "209a23ce529de99b",
+  "reason": "new: the sky kit at four times of day"
+}

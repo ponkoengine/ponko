@@ -151,6 +151,17 @@ static void ecs(ponko::ctx& ctx) {
             t[i].position.y += hp[i].value;
     });
     // ANCHOR_END: ecs_columns
+
+    // ANCHOR: ecs_required
+    world.require<Enemy>(Health{100});    // an Enemy without Health gets 100
+    world.require<Enemy>(transform_at({0, 0}));
+    ponko::entity grunt = world.spawn(Enemy{});
+    ponko::entity boss = world.spawn(Enemy{}, Health{1000});   // given values win
+    assert(world.get<Health>(grunt).value == 100 && world.has<transform2d>(grunt));
+    assert(world.get<Health>(boss).value == 1000);
+    // ANCHOR_END: ecs_required
+    world.despawn(grunt);
+    world.despawn(boss);
 }
 
 // ANCHOR: ecs_commands
@@ -438,6 +449,15 @@ static void move_players(ponko::ctx& ctx) {
 }
 // ANCHOR_END: gamepad
 
+// ANCHOR: controllers
+[[maybe_unused]] static void prompts(ponko::ctx& ctx, ponko::glyph_atlas& atlas) {
+    ponko::glyphs jump = ctx.action_glyphs("jump");   // follows the device used last
+    ponko::glyphs fire = ctx.action_glyphs("fire");
+    float width = ctx.draw_prompt(atlas, {16, 16}, 32, jump, "Jump");
+    ctx.draw_prompt(atlas, {16 + width + 24, 16}, 32, fire, "Fire");
+}
+// ANCHOR_END: controllers
+
 [[maybe_unused]] static void plan_routes(ponko::ctx&) {}
 [[maybe_unused]] static void grow_food(ponko::ctx&) {}
 [[maybe_unused]] static void every() {
@@ -606,6 +626,25 @@ static void paint(ponko::ctx& ctx, ponko::entity map) {
     if (auto tile = tiles.tile_at(origin, ctx.mouse_world())) tiles.set((*tile)[0], (*tile)[1], STONE);
 }
 // ANCHOR_END: paint
+
+// ANCHOR: aseprite_import
+[[maybe_unused]] static ponko::entity spawn_hero(ponko::ctx& ctx) {
+    auto hero = ctx.world().spawn(ponko::transform_at({120, 80}));
+    ponko::play_aseprite(ctx, hero, "sprites/hero.json", "Idle");
+    return hero;
+}
+// ANCHOR_END: aseprite_import
+
+// ANCHOR: ldtk_world_import
+[[maybe_unused]] static ponko::entity spawn_cavern(ponko::ctx& ctx) {
+    ponko::level_options options;
+    options.level = "Cavern";
+    options.solid = {"Wall"};
+    // PickupStats is a registered, field-described C++ component.
+    return ponko::spawn_ldtk_level(ctx, "levels/world.ldtk", {0, 0}, options,
+                                  {{"Pickup", "PickupStats"}});
+}
+// ANCHOR_END: ldtk_world_import
 
 // ANCHOR: level_spawn
 static ponko::entity spawn_meadow(ponko::ctx& ctx) {
@@ -934,6 +973,50 @@ static bool physics3d_snippets() {
     return saw_ground && world.get<ponko::character3d>(me).grounded;
 }
 
+// ANCHOR: water_scene
+struct Bay { ponko::entity sea, raft; };   // a resource
+
+static void build_bay(ponko::ctx& ctx) {
+    // An open sea at height 0, its swell from the north-west, about 1.2 m
+    // from trough to crest; screen-space reflections on high quality.
+    auto sea = ponko::water_desc::sea(0, {-0.8f, 0.5f}, 1.2f);
+    sea.quality = PONKO_WATER_QUALITY_HIGH;
+    const ponko::entity water = ctx.spawn_water(sea);
+    // A raft half as dense as water: it floats half under and rides the waves.
+    auto planks = ponko::box_collider({2, 0.4f, 2});
+    planks.density = 500;
+    auto world = ctx.world();
+    const ponko::entity raft = world.spawn(ponko::transform3d_at({0, 1, 0}), ponko::dynamic_body3d(), planks);
+    ctx.set_buoyancy_box(raft, {2, 0.4f, 2});
+    world.set_resource(Bay{water, raft});
+}
+
+/// Splashes where the raft is, and tells how high the sea is under it.
+static float splash(ponko::ctx& ctx) {
+    auto world = ctx.world();
+    const Bay bay = world.resource<Bay>();
+    const ponko::vec3 at = world.get<ponko::transform3d>(bay.raft).position;
+    ctx.water_touch(bay.sea, {at.x, at.z}, 1.0f, 0.15f);
+    return ctx.water_height(bay.sea, {at.x, at.z}, float(ctx.sim_time()));
+}
+// ponko::game("Bay", 1280, 720).physics3d({0, -9.81f, 0}).water().run(build_bay);
+// ANCHOR_END: water_scene
+
+static bool water_snippets() {
+    float surface = 100, depth = 100;
+    auto world = ponko::game("water guide", 1, 1)
+        .physics3d({0, -9.81f, 0})
+        .water()
+        .sim_system([&](ponko::ctx& ctx) {
+            surface = splash(ctx);
+            depth = ctx.buoyancy_submerged(ctx.world().resource<Bay>().raft).value_or(-1);
+        }, "test")
+        .run_headless(200, build_bay);
+    const float y = world.get<ponko::transform3d>(world.resource<Bay>().raft).position.y;
+    // Floating within the swell, partly under water.
+    return std::fabs(surface) < 1.2f && std::fabs(y - surface) < 0.6f && depth > 0.1f && depth < 0.95f;
+}
+
 // ANCHOR: collider_streaming
 /// A streamed tile, built on a worker: its meshes and its collider, from
 /// the same heights.
@@ -1243,6 +1326,51 @@ static void steer(ponko::ctx& ctx, const ponko::flow_field& flow) {
 }
 // ANCHOR_END: flow_steer
 
+// ---- Game AI -------------------------------------------------------------------------
+// ANCHOR: ai_native
+// The guard tree from the guide; a native game keeps one brain per agent.
+static const char* guard_tree = R"({"root": {"selector": [
+    {"sequence": [{"check": "alert"}, {"do": "chase", "speed": 120}]},
+    {"do": "patrol"}
+]}})";
+
+struct Guard {
+    ponko::ai::brain brain{4};   // thinks every 4th tick, staggered
+    ponko::vec2 at{0, 0};
+};
+
+static void guards_tick(std::vector<Guard>& guards, const ponko::ai::behavior_tree& tree,
+                        ponko::vec2 intruder, std::uint64_t tick, float dt) {
+    static const std::uint64_t alert = ponko::ai::key("alert");
+    static const std::uint64_t chase = ponko::ai::key("chase");
+    static const std::uint64_t speed = ponko::ai::key("speed");
+    for (std::uint32_t i = 0; i < guards.size(); ++i) {
+        Guard& g = guards[i];
+        const ponko::vec2 to = intruder - g.at;
+        const float d = std::sqrt(to.x * to.x + to.y * to.y);
+        g.brain.set_flag(alert, d < 160);                                // senses
+        if (g.brain.due(i, tick)) g.brain.think(tree, tick, dt);         // think
+        if (g.brain.doing(chase) && d > 0) {                             // act
+            g.at += to * (std::min(d, g.brain.param(speed).value_or(50) * dt) / d);
+            if (d < 1) g.brain.succeed();
+        }
+    }
+}
+// ANCHOR_END: ai_native
+
+static void ai_guide_runs() {
+    const ponko::ai::behavior_tree tree(guard_tree);
+    std::vector<Guard> guards(3);
+    guards[1].at = {100, 0};
+    guards[2].at = {900, 0};
+    for (std::uint64_t tick = 0; tick < 60; ++tick) guards_tick(guards, tree, {120, 0}, tick, 1.0f / 60);
+    const std::uint64_t patrol = ponko::ai::key("patrol");
+    if (guards[1].at.x < 110 || !guards[2].brain.doing(patrol)) {
+        std::fprintf(stderr, "ai guide: %f\n%s", guards[1].at.x, guards[1].brain.trace().c_str());
+        std::abort();
+    }
+}
+
 // ---- Events --------------------------------------------------------------------------
 // ANCHOR: events
 struct Hp { int value; };
@@ -1524,8 +1652,20 @@ static ponko::entity courtyard(ponko::ctx& ctx) {
 }
 // ANCHOR_END: courtyard
 
+// ANCHOR: courtyard_read
+/// Reads the courtyard without spawning it: its nodes and spawn points as
+/// JSON, and the schema of the properties this game reads.
+static void read_courtyard(ponko::ctx& ctx) {
+    const std::string scene = ponko::gltf_scene_json(ctx, "levels/courtyard.gltf");
+    if (scene.find("\"spawn_points\":[{\"name\":\"player\"") == std::string::npos) std::abort();
+    const std::string schema = ponko::gltf_properties_schema(ctx);
+    if (schema.find("\"ponko:collider\"") == std::string::npos) std::abort();
+}
+// ANCHOR_END: courtyard_read
+
 static void the_courtyard_spawns() {
     ponko::game("guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        read_courtyard(ctx);
         const ponko::entity root = courtyard(ctx);
         if (!ponko::gltf_node(ctx, root, "Gate/Door") || ponko::gltf_node(ctx, root, "Nowhere")) std::abort();
         if (!ponko::despawn_gltf(ctx, root) || ponko::despawn_gltf(ctx, root)) std::abort();
@@ -2043,7 +2183,7 @@ fn compute(c: Cell) -> vec4<f32> {
     return vec4<f32>(height, c.value.x, 0.0, 0.0);
 })";
 
-struct ripples_state { ponko::texture heights; ponko::material stones; };
+struct ripples_state { ponko::render_target heights; ponko::material stones; };
 
 /// The simulated heights, for a water material to read, and the material
 /// that drops stones into them.
@@ -2087,7 +2227,7 @@ static void pond(ponko::ctx& ctx) {
     look.has_shader = true;
     look.shader = ctx.create_shader("mirror", mirror_shader);
     look.has_custom_textures[0] = true;
-    look.custom_textures[0] = reflection;
+    look.custom_textures[0] = reflection.texture();
     auto surface = ctx.create_mesh(ponko::mesh_data::plane(20), ctx.create_material(look));
     ctx.world().spawn(ponko::transform3d_at({0, 0, 0}), ponko::model_of(surface));
     ctx.set_target_cameras({ctx.reflection_camera(ctx.camera3d(), reflection, 0)});
@@ -2096,14 +2236,15 @@ static void pond(ponko::ctx& ctx) {
 /// Every frame: the mirrored camera follows the real one.
 static void follow_reflections(ponko::ctx& ctx) {
     auto list = ctx.target_cameras();
-    for (auto& t : list) t = ctx.reflection_camera(ctx.camera3d(), t.target, 0);
+    // A target read back is a plain texture: render_target_of checks it is one.
+    for (auto& t : list) t = ctx.reflection_camera(ctx.camera3d(), ctx.render_target_of(t.target), 0);
     ctx.set_target_cameras(list);
 }
 // ANCHOR_END: mirror
 
 // ANCHOR: monitor
 /// A security monitor shows the room, but not the smoke.
-static void monitor(ponko::ctx& ctx, ponko::texture screen) {
+static void monitor(ponko::ctx& ctx, ponko::render_target screen) {
     auto camera = ponko::target_camera_ex_of(ponko::target_camera_of(ctx.camera3d(), screen));
     camera.particles = false;
     ctx.set_target_cameras_ex({camera});
@@ -2346,7 +2487,7 @@ static void the_pond_mirrors_the_camera() {
         cam.position = {3, 5, 1};
         ctx.set_camera3d(cam);
         follow_reflections(ctx);
-        monitor(ctx, ctx.target_cameras()[0].target);
+        monitor(ctx, ctx.render_target_of(ctx.target_cameras()[0].target));
         if (ctx.target_camera_ex(0).particles) { std::fprintf(stderr, "monitor\n"); std::abort(); }
         follow_reflections(ctx);
         auto list = ctx.target_cameras();
@@ -2769,6 +2910,80 @@ static void load_mixer_settings(ponko::ctx& ctx, const std::string& saved) {
 }
 // ANCHOR_END: audio_stream
 
+// ANCHOR: audio_loops
+static void loops_and_crossfades(ponko::ctx& ctx, ponko::sound theme, ponko::sound night) {
+    ctx.set_sound_loop(theme, 2.0f); // two seconds of intro, then the rest loops
+    auto params = ponko::sound_defaults();
+    params.looping = true;
+    auto day = ctx.play_sound(theme, params);
+    // Later: hand over to the night theme over two seconds.
+    ctx.fade_out_sound(day, 2.0f);
+    auto next = ctx.play_sound(night, params);
+    ctx.set_sound_volume(next, 0.0f);
+    ctx.set_sound_volume(next, 1.0f, 2.0f);
+}
+// ANCHOR_END: audio_loops
+
+// ANCHOR: audio_music
+static void adaptive_music(ponko::ctx& ctx, ponko::sound pads, ponko::sound drums, ponko::sound sting) {
+    ctx.play_music({{pads, 1.0f}, {drums, 0.0f}}, 120, 4); // the drums wait silent, in sync
+    // Combat starts: the drums come in on the next bar line, over half a second.
+    ctx.set_music_layer(1, 1.0f, 0.5f, PONKO_QUANTIZE_BAR);
+    ctx.play_stinger(sting, PONKO_QUANTIZE_BEAT);
+    ctx.set_music_speed(1.1f, 4.0f); // faster as the timer runs out
+}
+// ANCHOR_END: audio_music
+
+// ANCHOR: audio_pitch
+static void pitch_without_tempo(ponko::ctx& ctx) {
+    auto pitch = ponko::bus_effect_defaults(PONKO_BUS_EFFECT_PITCH_SHIFT);
+    pitch.ratio = std::pow(2.0f, 3.0f / 12.0f); // three semitones up
+    ctx.set_audio_bus_effects(ctx.audio_bus("voices"), {pitch});
+}
+// ANCHOR_END: audio_pitch
+
+// ANCHOR: audio_pause
+enum class mode : std::uint32_t { playing, paused };
+static ponko::game& pause_menu_sound(ponko::game& game) {
+    // While the pause menu is up, the world's sound and the music hold where they are.
+    return game.state(mode::playing).pause_audio_in(mode::paused, {"world", "music"});
+}
+// ANCHOR_END: audio_pause
+
+// ANCHOR: audio_voices
+static void voice_limits(ponko::ctx& ctx, ponko::sound line) {
+    ctx.set_audio_voice_limit(48);
+    ctx.set_audio_bus_voice_limit(ctx.audio_bus("footsteps"), 8);
+    auto dialogue = ctx.play_sound(line);
+    ctx.set_sound_priority(dialogue, 250); // never lost in a crowd
+    auto count = ctx.audio_voice_count();
+    std::printf("%u heard, %u virtual\n", count.real, count.virtualized);
+}
+// ANCHOR_END: audio_voices
+
+// ANCHOR: audio_devices
+static void output_devices(ponko::ctx& ctx, const char* saved_choice) {
+    std::string devices = ctx.audio_output_devices(); // JSON: id, name, default
+    if (saved_choice && !ctx.set_audio_output_device(saved_choice)) {
+        ctx.set_audio_output_device(nullptr); // gone: follow the system's default
+    }
+    std::string events = ctx.audio_device_events(); // [{"lost": ...}, {"switched": ...}]
+    (void)devices;
+    (void)events;
+}
+// ANCHOR_END: audio_devices
+
+// ANCHOR: audio_offline
+static void mix_in_a_test(ponko::ctx& ctx, ponko::sound sound) {
+    ctx.open_audio_offline(48000);
+    ctx.play_sound(sound);
+    std::vector<float> mix = ctx.render_audio_offline(0.1f); // left, right, left, ...
+    float loudest = 0;
+    for (float s : mix) loudest = std::max(loudest, std::fabs(s));
+    if (loudest < 0.1f) std::abort();
+}
+// ANCHOR_END: audio_offline
+
 static bool messages_round_trip() {
     // ANCHOR: messages
     // The game owns the endpoint. In a game, poll it and read its events in
@@ -2793,6 +3008,51 @@ static bool messages_round_trip() {
     }
     // ANCHOR_END: messages
     return received;
+}
+
+static void lobby_snippet() {
+    // ANCHOR: lobby
+    // Connect to a lobby server (`ponko-lobby`) and make a room; poll every frame.
+    auto lobby = ponko::lobby::join("127.0.0.1:7700");
+    lobby.create_room(4); // sent once the server answers
+    for (int frame = 0; frame < 3; frame++) {
+        lobby.poll();
+        while (auto e = lobby.next_event()) {
+            switch (e->kind) {
+            case PONKO_LOBBY_JOINED: std::printf("room code: %s\n", e->text.c_str()); break;
+            case PONKO_LOBBY_HOST_CHANGED:
+                if (lobby.state().is_host) std::printf("we host the game now\n");
+                break;
+            case PONKO_LOBBY_RELAYED: /* e->bytes from member e->member */ break;
+            case PONKO_LOBBY_REFUSED: std::printf("refused: %d\n", int(e->error)); break;
+            default: break;
+            }
+        }
+    }
+    // In a room: to every other member (0), unreliable, through the server.
+    if (lobby.state().in_room) lobby.relay(0, PONKO_LANE_UNRELIABLE, std::string("position 3 4"));
+    // ANCHOR_END: lobby
+}
+
+static void webrtc_snippet() {
+    auto lobby = ponko::lobby::join("127.0.0.1:7700");
+    try {
+        // ANCHOR: webrtc
+        // In a lobby room (ponko_ffi built with `--features webrtc`): the room's
+        // host hosts, every other member joins it, peer to peer.
+        const char* stun = "stun:127.0.0.1:3478"; // the lobby's LOBBY_STUN port
+        auto state = lobby.state();
+        auto endpoint = state.is_host ? lobby.rtc_host(stun, 8) : lobby.rtc_join(state.host, stun);
+        // Every frame: poll the lobby (it carries the signaling) and the endpoint.
+        lobby.poll();
+        endpoint.poll();
+        while (auto e = endpoint.next_event()) {
+            if (e->kind == PONKO_MESSAGE_CONNECTED) std::printf("member %u connected\n", unsigned(endpoint.rtc_peer(e->peer)));
+        }
+        // ANCHOR_END: webrtc
+    } catch (const ponko::error&) {
+        // Not in a room here (no lobby server runs), or built without `webrtc`.
+    }
 }
 
 static bool replication_snippets() {
@@ -3152,6 +3412,143 @@ static void shop_guide(ponko::ctx& ctx) {
     if (tree.text(*tree.find("title")) != "Purchase complete!" || tree.top_screen() == tree.find("dialog")) std::abort();
 }
 
+// ---- The widget set -------------------------------------------------------------
+static void ui_animation_guide(ponko::ctx& ctx) {
+    namespace ui = ponko::ui;
+    auto tree = ctx.ui_retained();
+    // ANCHOR: ui_animation
+    // Controls ease between their states; a press pushes them in a little.
+    auto theme = ui::dark_theme();
+    theme.transition = ui::make_transition(0.12f);
+    theme.press_scale = 0.96f;
+    tree.set_theme(theme);
+
+    // The pause menu fades and rises in, and fades out.
+    const ui::id menu = tree.add_panel(ui::none, ui::centered(320, 220));
+    const ui::id resume = tree.add_button(menu, "Resume", ui::row(44));
+    auto enter = ui::screen_fade(0.2f);
+    enter.offset = {0, 24};
+    tree.set_screen_transition(menu, enter, ui::screen_fade(0.15f));
+    tree.push_modal(menu);
+
+    // A badge pops in: grows past its size, then settles, after a short wait.
+    const ui::id badge = tree.add_label(menu, "New!", ui::fixed(60, 24));
+    auto pop = ui::tween_to(ui::property::scale, 1.2f, 0.15f);
+    pop.start = 0.3f;
+    pop.has_from = true;
+    pop.from.number = 0.0f;
+    auto settle = ui::tween_to(ui::property::scale, 1.0f, 0.1f);
+    settle.start = 0.45f;
+    tree.play(badge, {pop, settle});
+    // ANCHOR_END: ui_animation
+
+    auto in = ui::default_input_ex();
+    in.dt = 0.1f;
+    tree.frame({900, 700}, in);
+    const auto shown = tree.drawn(menu);
+    if (!(shown.opacity > 0.0f && shown.opacity < 1.0f)) std::abort();
+    if (tree.drawn(badge).scale != 0.0f) std::abort();
+    bool done = false;
+    for (int i = 0; i < 6; ++i) {
+        tree.frame({900, 700}, in);
+        for (const auto& e : tree.events()) done |= e.kind == ui::event_kind::animation_done && e.node == badge;
+    }
+    if (tree.drawn(menu).opacity != 1.0f || tree.drawn(badge).scale != 1.0f || !done) std::abort();
+    if (ui::progress(ui::make_transition(0.5f, ui::ease_name::linear), 0.25f) != 0.5f) std::abort();
+    (void)resume;
+}
+
+static void widget_gallery(ponko::ctx& ctx) {
+    auto tree = ctx.ui_retained();
+    // ANCHOR: widgets_settings
+    // A settings page: tabs, a dropdown, radio buttons, a number field and a key binding.
+    auto root = tree.add_panel(ui::none, ui::fill().padding(24).gap(12));
+    auto tabs = tree.add_tabs(root);
+    auto video = tree.add_tab(tabs, "Video");
+    auto controls = tree.add_tab(tabs, "Controls");
+    auto quality = tree.add_dropdown(video, {"Low", "Medium", "High"}, ui::fixed(220, 32));
+    tree.set_tooltip(quality, "How detailed the world looks");
+    auto vsync = tree.add_radio_group(video);
+    tree.add_radio(vsync, "Off", ui::fixed(160, 24));
+    tree.add_radio(vsync, "On", ui::fixed(160, 24));
+    auto fov = tree.add_number_field(video, 90, ui::fixed(140, 28));
+    tree.set_number_range(fov, 60, 120, 5);
+    PonkoActionBinding jump{};
+    jump.kind = PONKO_ACTION_KEY;
+    jump.first = PONKO_KEY_SPACE;
+    tree.add_key_binding(controls, jump, ui::fixed(200, 28));
+    tree.push_modeless(root);
+    // ANCHOR_END: widgets_settings
+
+    // ANCHOR: widgets_inventory
+    // An inventory: a virtualized grid (nodes only for the cells on screen),
+    // drag and drop between containers and a context menu.
+    auto split = tree.add_split(root, ui::axis::horizontal, ui::fill().height(ui::points(240)));
+    auto [bag, chest] = tree.split_panes(split);
+    auto items = tree.add_list(bag, 48, 4, ui::fill());
+    tree.set_list_len(items, 10000);
+    auto gem = tree.add_button(chest, "Gem", ui::fixed(48, 48));
+    tree.set_draggable(gem);
+    tree.set_drop_target(bag);
+    tree.set_context_menu(gem, {"Use", "Drop"});
+    // ANCHOR_END: widgets_inventory
+
+    // ANCHOR: widgets_events
+    for (const auto& e : tree.events()) {
+        switch (e.kind) {
+        case ui::event_kind::changed:
+            if (e.node == quality) { auto choice = tree.selected(quality); (void)choice; }
+            break;
+        case ui::event_kind::chosen:  // a context-menu entry: e.index
+            break;
+        case ui::event_kind::dropped:  // e.node was let go on e.other
+            tree.set_parent(e.node, e.other);
+            break;
+        default:
+            break;
+        }
+    }
+    // ANCHOR_END: widgets_events
+
+    // ANCHOR: widgets_theme
+    // A custom theme: the light one with square corners and more room.
+    auto theme = ui::light_theme();
+    theme.radius = 0;
+    theme.spacing = 12;
+    theme.theme.accent = {0.85f, 0.25f, 0.35f, 1.0f};
+    tree.set_theme(theme);
+    // ANCHOR_END: widgets_theme
+
+    // Drive it by hand, as a headless test would.
+    const ponko::vec2 window{900, 700};
+    auto in = ui::default_input_ex();
+    in.dt = 1.0f / 60.0f;
+    tree.frame(window, in);
+    const auto r = tree.rect(quality);
+    in.input.pointer = (r.min + r.max) * 0.5f;
+    in.input.pressed = in.input.held = true;
+    tree.frame(window, in);
+    in.input.pressed = in.input.held = false;
+    in.input.released = true;
+    tree.frame(window, in);
+    if (tree.popup_owner() != quality) std::abort();
+    tree.close_popup();
+    if (tree.selected(quality) != 0u || tree.item(quality, 2) != "High") std::abort();
+    if (tree.number(fov) != 90 || !tree.tab_button(tabs, 1) || tree.selected(vsync)) std::abort();
+    if (tree.theme_ex().spacing != 12) std::abort();
+    ui::access access;
+    access.update(tree);
+    if (access.find(quality)->role != PONKO_UI_ROLE_COMBO_BOX) std::abort();
+    if (access.state_of(quality).expanded != PONKO_UI_EXPANDED_CLOSED) std::abort();
+    // The immediate widgets, drawn this frame.
+    bool paths = false;
+    float volume = 0.5f;
+    ctx.ui_toggle({{10, 10}, {170, 34}}, "Paths", paths);
+    ctx.ui_slider({{10, 40}, {170, 64}}, volume);
+    ctx.ui_progress_bar({{10, 70}, {170, 78}}, 0.5f);
+    (void)controls; (void)items;
+}
+
 // ---- UI on a surface in the world ---------------------------------------------
 static void panel_guide(ponko::ctx& ctx) {
     // ANCHOR: panel_create
@@ -3279,6 +3676,37 @@ void persistent_instances(ponko::ctx& ctx, ponko::mesh mesh) {
 }
 // ANCHOR_END: gpu_instances
 
+// ANCHOR: crowd
+// `skeleton` carries the characters' skeleton; `near` and `far` are skinned
+// meshes made for it, `idle` and `cheer` clips loaded for it.
+ponko::crowd plaza(ponko::ctx& ctx, ponko::entity skeleton, ponko::mesh near, ponko::mesh far,
+                   const ponko::clip& idle, const ponko::clip& cheer) {
+    auto animation = ctx.bake_crowd_animation(skeleton, {ponko::crowd_clip_of(idle), ponko::crowd_clip_of(cheer)}, 30);
+    std::vector<ponko::crowd_instance> people;
+    for (int i = 0; i < 10000; ++i) {
+        auto person = ponko::crowd_instance_at({float(i % 100) * 1.5f, 0, float(i / 100) * 1.5f});
+        person.time = float(i % 50) * 0.02f; // neighbours out of step
+        people.push_back(person);
+    }
+    const float beyond = std::numeric_limits<float>::infinity();
+    auto crowd = ctx.create_crowd(animation, {
+        {near, 0, 40, true, true, 4},       // up to 40 m: every joint of each corner
+        {far, 40, beyond, true, true, 2},   // beyond: a plainer mesh, two joints a corner
+    }, people);
+    // A section starts cheering, a quarter idle mixed in: one update. Between
+    // updates the clips play on by themselves.
+    const auto cheering = *animation.clip("cheer");
+    const auto idling = *animation.clip("idle");
+    for (int i = 0; i < 2000; ++i) {
+        people[i].clip = cheering;
+        people[i].blend_clip = idling;
+        people[i].blend = 0.25f;
+    }
+    ctx.update_crowd(crowd, people);
+    return crowd;
+}
+// ANCHOR_END: crowd
+
 // ANCHOR: instance_cells
 void streamed_cell(ponko::ctx& ctx, ponko::mesh tree) {
     // An empty batch: the world's cells bring its instances.
@@ -3341,6 +3769,27 @@ void stream_out(ponko::ctx& ctx) {
 }
 // ANCHOR_END: handles
 
+// ANCHOR: typed_handles
+void typed_handles(ponko::ctx& ctx) {
+    ponko::render_target screen = ctx.create_render_target(320, 180);
+    ctx.set_target_cameras({ponko::target_camera_of(ctx.camera3d(), screen)});
+    // A material reads it as the texture it draws into.
+    ponko::material_desc desc = ponko::material_of(ponko::colors::black);
+    desc.emissive_map = screen.texture();
+    desc.has_emissive_map = true;
+    auto monitor = ctx.create_material(desc);
+    // An image is not a render target: this doesn't compile.
+    //     ponko::target_camera_of(ctx.camera3d(), ctx.load_texture("crab.png"));
+    // A target read back from the engine is a plain texture: render_target_of
+    // checks that it is a render target (and throws if it isn't).
+    ponko::render_target again = ctx.render_target_of(ctx.target_cameras()[0].target);
+    ctx.set_target_cameras({});
+    ctx.free(monitor);
+    ctx.free(again);
+    if (ctx.is_live(screen) || ctx.is_live(screen.texture())) std::abort();
+}
+// ANCHOR_END: typed_handles
+
 // ANCHOR: asset_leaks
 void find_leaks(ponko::ctx& ctx) {
     const auto before = ctx.asset_count(ponko::asset_class::material);
@@ -3363,6 +3812,69 @@ void find_leaks(ponko::ctx& ctx) {
     if (ctx.asset_count(ponko::asset_class::material).live != before.live) std::abort();
 }
 // ANCHOR_END: asset_leaks
+
+// ANCHOR: loading_screen
+enum class stage : std::uint32_t { loading, playing };
+
+/// Everything the first level needs, read and decoded on worker threads.
+static void first_level(ponko::ctx&, ponko::asset_group& group) {
+    group.texture("crab.png")              // load_texture returns it afterwards
+        .sound("tutorial_2d/coin.wav")     // and load_sound this
+        .bytes("rules.json");              // your own format: take its bytes once loaded
+}
+
+/// The loading screen: a bar that fills as the files arrive, and why it
+/// stopped if one is missing or broken.
+static void loading_bar(ponko::ctx& ctx) {
+    const std::uint32_t id = ctx.find_asset_group("level 1");
+    if (id == 0) return;
+    const float fraction = ctx.asset_group_progress(id).fraction;
+    ctx.draw_rect(ponko::rect_at({100, 280}, {600, 40}), ponko::rgb(0.5f, 0.5f, 0.5f));
+    ctx.draw_rect(ponko::rect_at({100, 280}, {600 * fraction, 40}), ponko::rgb(1, 1, 1));
+    if (auto error = ctx.asset_group_error(id)) ctx.draw_text(error->what(), {100, 340}, 20, ponko::rgb(1, 0, 0));
+}
+
+struct level_rules { float speed; };
+
+static void start_playing(ponko::ctx& ctx) {
+    const std::uint32_t id = ctx.find_asset_group("level 1");
+    // Your own format: the bytes in, your value out (a JSON library would go here).
+    auto rules = ctx.take_asset_group_bytes(id, "rules.json", [](const std::uint8_t* data, std::size_t len) {
+        const std::string text(reinterpret_cast<const char*>(data), len);
+        return level_rules{std::stof(text.substr(text.find(':') + 1))};
+    });
+    ctx.world().set_resource(rules);
+    // Loaded: these return at once, without reading the files again.
+    auto crab = ctx.load_texture("crab.png");
+    auto coin = ctx.load_sound("tutorial_2d/coin.wav");
+    (void)crab; (void)coin;
+}
+
+static void add_level(ponko::game& game) {
+    // Entering loading starts the group; it moves to playing once ready.
+    game.state(stage::loading)
+        .loading_state(stage::loading, "level 1", first_level, stage::playing)
+        .add_in_state(ponko::phase::frame, stage::loading, loading_bar)
+        .on_enter(stage::playing, start_playing);
+}
+// ANCHOR_END: loading_screen
+
+static void loading_screen_guide() {
+    ponko::game game("Loading", 1, 1);
+    add_level(game);
+    // A frame takes a little time, so the workers get to read.
+    game.sim_system([](ponko::ctx&) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); });
+    auto world = game.run_headless(300, [](ponko::ctx& ctx) {
+        ponko::memory_source rules("rules");
+        const char json[] = R"({ "speed": 3.5 })";
+        rules.insert("rules.json", json, sizeof json - 1);
+        ctx.add_background_asset_source(rules);
+    });
+    if (world.resource<level_rules>().speed != 3.5f) {
+        std::fprintf(stderr, "loading screen guide: never reached playing\n");
+        std::abort();
+    }
+}
 
 // ANCHOR: streaming
 void streaming_setup(ponko::ctx& ctx) {
@@ -3718,6 +4230,8 @@ static void debug_draw_guide(ponko::ctx& ctx) {
     debug.ray(eye, aim, ponko::colors::yellow);
     debug.box(hit, {1, 1, 1}, ponko::quat_identity(), ponko::colors::red);
     debug.text(hit, "target", ponko::colors::white);
+    // A label hidden behind nearer surfaces, like the lines.
+    debug.text_depth_tested(hit + ponko::vec3{0, 1, 0}, "behind the wall?", ponko::colors::white);
     // For two seconds, over everything, 3 pixels wide.
     auto marker = ponko::debug_draw::style();
     marker.seconds = 2;
@@ -3725,16 +4239,16 @@ static void debug_draw_guide(ponko::ctx& ctx) {
     marker.width = 3;
     debug.sphere(hit, 0.5f, ponko::colors::green, marker);
     // In window pixels: a frame around the minimap.
-    auto pixels = ponko::debug_draw::style();
-    pixels.screen = true;
+    const auto pixels = ponko::with_space(ponko::debug_draw::style(), ponko::draw_space::screen);
     debug.box(ponko::vec2{110, 110}, ponko::vec2{200, 200}, ponko::colors::white, pixels);
     // ANCHOR_END: debug_draw
     // ANCHOR: debug_draw_views
     debug.show(PONKO_DEBUG_VIEW_COLLIDERS, true);
     debug.show(PONKO_DEBUG_VIEW_HIERARCHY, true);
+    debug.set_collider_distance(30); // mesh and terrain triangles within 30 m of the camera
     // ANCHOR_END: debug_draw_views
     const auto drawn = debug.stats();
-    if (drawn.lines_3d < 13 || drawn.lines_2d != 4 || drawn.labels != 1 || !debug.showing(PONKO_DEBUG_VIEW_COLLIDERS)) {
+    if (drawn.lines_3d < 13 || drawn.lines_2d != 4 || drawn.labels != 2 || !debug.showing(PONKO_DEBUG_VIEW_COLLIDERS) || debug.collider_distance() != 30) {
         std::fprintf(stderr, "debug drawing guide\n");
         std::abort();
     }
@@ -3811,6 +4325,47 @@ static void states_guide() {
     // Playing on ticks 1-5 and 9: six ticks of play.
     const int ticks = world.resource<score>().ticks;
     if (ticks != 6) { std::fprintf(stderr, "states guide: %d\n", ticks); std::abort(); }
+}
+
+// ANCHOR: replication_declare
+struct Fighter {          // a plain struct, the same on the server and clients
+    float x = 0;
+    std::uint8_t hp = 0;
+};
+// What replicates, declared in setup on every side.
+static void declare_replication(ponko::ctx& ctx) {
+    static const std::vector<PonkoReplicatedField> fields = {
+        {"x", offsetof(Fighter, x), PONKO_REPLICATED_F32, PONKO_FIELD_RANGE, -1000, 1000, 0.01f, 0},
+        {"hp", offsetof(Fighter, hp), PONKO_REPLICATED_U8, PONKO_FIELD_BITS, 0, 0, 0, 7},
+    };
+    PonkoReplicatedComponent fighter = ctx.replicated<Fighter>("fighter", fields);
+    ctx.replication(&fighter, 1);
+}
+// ANCHOR_END: replication_declare
+
+static void replication_runs() {
+    auto marked = std::make_shared<ponko::entity>(0);
+    auto id = std::make_shared<std::optional<std::uint32_t>>();
+    // ANCHOR: replication_server
+    ponko::game game("Arena server", 1, 1);
+    // A real server hosts: game.messages(ponko::net_messages::host("0.0.0.0:7777", 16));
+    game.setup([marked](ponko::ctx& ctx) {
+        declare_replication(ctx);
+        ponko::entity e = ctx.world().spawn(Fighter{1.5f, 100});
+        PonkoReplicated how = ponko_replicated_default();
+        how.has_owner = true;
+        how.owner = 1;  // the first client to join controls it
+        ctx.replicate(e, how);
+        *marked = e;
+    });
+    // ANCHOR_END: replication_server
+    game.sim_system([marked, id](ponko::ctx& ctx) {
+        if (ctx.replication_status().role != PONKO_REPLICATION_SERVER) std::abort();
+        *id = ctx.net_id(*marked);
+    });
+    game.run_headless(3);
+    // The net id came at the end of the first tick; it names the entity.
+    if (!*id) { std::fprintf(stderr, "replication guide: no net id\n"); std::abort(); }
 }
 
 // The guide's native prediction (networking chapter): pure data, run below.
@@ -3972,10 +4527,36 @@ static void viewports_guide() {
     });
 }
 
+// ANCHOR: touch
+// Touch: a tap fires, a pinch zooms and a drag pans, next to the keys. On a touch
+// screen a stick walks, a round button fires and a corner button pauses.
+static void touch_setup(ponko::ctx& ctx) {
+    using ponko::action;
+    using ponko::action_binding;
+    ctx.set_action("fire", action::button({action_binding::key(PONKO_KEY_SPACE), action_binding::gesture(ponko::gesture::tap)}));
+    ctx.set_action("zoom", action::axis({action_binding::gesture_axis(ponko::gesture_axis::pinch)}));
+    ctx.set_action("pan", action::axis2({action_binding::drag()}));
+    ctx.set_action("move", action::axis2({action_binding::keys2(PONKO_KEY_A, PONKO_KEY_D, PONKO_KEY_W, PONKO_KEY_S)}));
+    ctx.set_touch_controls(ponko::touch_controls().stick("move").button("fire", "Fire").corner_button("pause", "II"));
+}
+// ANCHOR_END: touch
+
 int main() {
+    ponko::game("touch guide", 960, 540).run_headless(0, [](ponko::ctx& ctx) {
+        touch_setup(ctx);
+        ctx.feed_touch(1, ponko::touch_phase::started, {480, 100});
+        ctx.feed_touch(1, ponko::touch_phase::ended, {480, 100});
+        if (!ctx.action_pressed("fire")) std::abort();
+        ctx.set_touch_device(true);
+        const auto fire = ctx.touch_control_center("fire");
+        if (!fire) std::abort();
+        ctx.feed_touch(2, ponko::touch_phase::started, *fire);
+        if (!ctx.action_down("fire") || ctx.gesture_events().size() != 1) std::abort();  // only the tap
+    });
     viewports_guide();
     camera_rigs_guide();
     builder_setup_runs_headless();
+    replication_runs();
     states_guide();
     state_screen_guide();
     native_prediction_runs();
@@ -4003,9 +4584,12 @@ int main() {
     plugins_run_headless();
     declared_access_guide();
     parallel_systems_guide();
+    ai_guide_runs();
     steering_stays_within_budget();
     navigation_guide();
     ponko::game("shop guide", 900, 700).run_headless(0, shop_guide);
+    ponko::game("widget guide", 900, 700).run_headless(0, widget_gallery);
+    ponko::game("ui animation guide", 900, 700).run_headless(0, ui_animation_guide);
     ponko::game("panel guide", 960, 640).run_headless(0, panel_guide);
     ponko::game("particle guide", 1, 1).run_headless(0, campfire);
     ponko::game("ribbon guide", 1, 1).run_headless(0, ribbons);
@@ -4013,6 +4597,8 @@ int main() {
     ponko::game("2d lights guide", 1, 1).run_headless(0, lights2d);
     ponko::game("debug drawing guide", 1, 1).run_headless(0, debug_draw_guide);
     if (!messages_round_trip()) { std::fprintf(stderr, "no message\n"); std::abort(); }
+    lobby_snippet();
+    webrtc_snippet();
     if (!replication_snippets()) { std::fprintf(stderr, "replication snippets failed\n"); std::abort(); }
     ponko::game("sound guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         sound3d(ctx);
@@ -4035,6 +4621,32 @@ int main() {
         ctx.apply_audio_mixer_json(R"({"buses": [{"name": "voices", "parent": "master"}]})");
         if (ctx.audio_bus_muted(ctx.audio_bus("voices"))) std::abort();
     });
+    ponko::game("audio completeness guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
+        std::vector<float> tone(48000);
+        for (std::size_t i = 0; i < tone.size(); i++) tone[i] = 0.4f * std::sin(i * 440.0f * 6.2831853f / 48000.0f);
+        auto a = ctx.create_sound(48000, tone.data(), tone.size());
+        auto b = ctx.create_sound(48000, tone.data(), tone.size());
+        mix_in_a_test(ctx, a);
+        loops_and_crossfades(ctx, a, b);
+        if (ctx.sound_loop(a).first != 2.0f || ctx.sound_loop(a).second) std::abort();
+        adaptive_music(ctx, a, b, a);
+        if (!ctx.music_beat() || ctx.music_layer_volume(1) != 1.0f) std::abort(); // beat 0 is on a bar line
+        pitch_without_tempo(ctx);
+        voice_limits(ctx, a);
+        if (ctx.audio_voice_limit() != 48 || ctx.audio_bus_voice_limit(ctx.audio_bus("footsteps")) != 8u) std::abort();
+        output_devices(ctx, "offline");
+        if (ctx.audio_output_device() != "offline") std::abort();
+        ctx.stop_music(0.5f, PONKO_QUANTIZE_BAR);
+    });
+    {
+        ponko::game game("pause guide", 1, 1);
+        pause_menu_sound(game);
+        game.run_headless(0, [](ponko::ctx& ctx) {
+            if (ctx.audio_bus_paused(ctx.audio_bus("world"))) std::abort();
+            ctx.pause_audio_bus(ctx.audio_bus("world"), true);
+            if (!ctx.audio_bus_paused(ctx.audio_bus("world"))) std::abort();
+        });
+    }
     ponko::game("shader guide", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         try {
             ctx.create_shader("water.wgsl", "// still\nfn surface(s: Surface) -> Surface {\n    return 1.0;\n}");
@@ -4178,6 +4790,10 @@ int main() {
         std::fprintf(stderr, "3D physics snippets failed\n");
         return 1;
     }
+    if (!water_snippets()) {
+        std::fprintf(stderr, "water snippets failed\n");
+        return 1;
+    }
     if (!vehicle3d_snippets()) {
         std::fprintf(stderr, "vehicle snippets failed\n");
         return 1;
@@ -4189,6 +4805,8 @@ int main() {
     ponko::game("gpu buffers", 1, 1).run_headless(0, gpu_particles);
     ponko::game("handles", 1, 1).run_headless(0, stream_out);
     ponko::game("asset leaks", 1, 1).run_headless(0, find_leaks);
+    ponko::game("typed handles", 1, 1).run_headless(0, typed_handles);
+    loading_screen_guide();
     ponko::game("streaming", 1, 1).run_headless(0, [](ponko::ctx& ctx) {
         streaming_setup(ctx);
         draw_crab(ctx);
@@ -4283,4 +4901,10 @@ int main() {
     ctx.skeleton2d_set_ik_target(puppet, reach, {mouse.x - origin.x, mouse.y - origin.y});
     ctx.skeleton2d_set_ik_mix(puppet, reach, 0.75f); // three quarters of the way
     // ANCHOR_END: skeleton2d_ik
+    // ANCHOR: skeleton2d_one_off
+    ponko::vec2 to{mouse.x - origin.x, mouse.y - origin.y};
+    ctx.skeleton2d_look_at(puppet, ctx.skeleton2d_bone_index(puppet, "head"), to); // the head follows the mouse
+    ctx.skeleton2d_two_bone_ik(puppet, ctx.skeleton2d_bone_index(puppet, "arm"),
+                               ctx.skeleton2d_bone_index(puppet, "hand"), to, true, 0.5f); // the arm half way
+    // ANCHOR_END: skeleton2d_one_off
 }

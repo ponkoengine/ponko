@@ -44,6 +44,9 @@ pub(crate) struct Features {
     pub gi: bool,
     /// Per-model storage buffers (`items` in `vertex`).
     pub storage: bool,
+    /// The opaque pass reads the reflections' spread image itself (see
+    /// `GpuLimits::reflection_spread`).
+    pub spread: bool,
 }
 
 /// Which shader module a set is built from: the game's code and the
@@ -264,6 +267,7 @@ mod tests {
                 decals: true,
                 gi: false,
                 storage: true,
+                spread: false,
             },
         }
     }

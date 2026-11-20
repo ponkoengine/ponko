@@ -172,7 +172,7 @@ fn kind_from(kind: u32) -> Result<ResidencyKind, crate::Failure> {
     }
 }
 
-fn state_to_c(state: AssetState) -> u32 {
+pub(crate) fn state_to_c(state: AssetState) -> u32 {
     (match state {
         AssetState::Loading => PonkoAssetState::PONKO_ASSET_LOADING,
         AssetState::Uploading => PonkoAssetState::PONKO_ASSET_UPLOADING,
@@ -507,7 +507,8 @@ pub unsafe extern "C" fn ponko_ctx_upload_stats(ctx: *mut PonkoCtx, out_stats: *
     boundary(|| unsafe { ctx_access(ctx, |c| out(out_stats, c.gfx.upload_stats().into())) })
 }
 
-/// Waits until everything streamed so far is loaded (loading screens, tests).
+/// Waits until everything streamed so far is loaded and every asset group is
+/// done (tests and tools; it blocks the game thread).
 /// # Safety
 /// `ctx` null or live.
 /// ```

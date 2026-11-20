@@ -1,0 +1,17 @@
+{
+  "name": "water_lake",
+  "scene": "Water kit lake (High, planar reflection, shoreline foam, wind ripples) over a sand bed and a tilted sand beach rising to a grass shore on the left; a red glowing lamp on a dark post standing in the water, a blue post far behind; sky-coloured background; flat sky light (0.55, 0.7, 0.95), sun (-0.45, -0.6, -0.65) at 2.5, ambient 1, no tonemapping; camera at (1, 3.2, 6.5) looking at (-1, 0, -2); 160x160, 4x multisampling; frame 3 at 60 fps.",
+  "width": 160,
+  "height": 160,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 12,
+    "outliers": 0.0075,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "cefffce9bfaebdd4",
+  "reason": "New water kit scenes: lake, river, sea, underwater"
+}

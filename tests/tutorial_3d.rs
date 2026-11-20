@@ -96,9 +96,12 @@ fn the_ramp_leads_up_to_the_platform_and_its_lantern() {
 #[test]
 fn crates_fall_and_rest_on_the_ground() {
     let mut world = play(InputScenario::new().duration(180), START);
+    // The dynamic bodies (every body has a velocity; the ground and the
+    // lantern sensors are fixed).
     let heights: Vec<f32> = world
-        .query::<(&Transform, &ponko::d3::Velocity)>()
+        .query::<(&Transform, &ponko::d3::RigidBody)>()
         .iter()
+        .filter(|(_, body)| body.kind == BodyKind::Dynamic)
         .map(|(t, _)| t.position.y)
         .collect();
     assert_eq!(heights.len(), 3, "three crates");

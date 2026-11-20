@@ -84,7 +84,7 @@ impl Renderer3D {
             .iter()
             .enumerate()
             .map(|(part, &(_, m))| self.part_material(mesh, part, m))
-            .map(|m| (m, &self.resources.materials[m as usize]))
+            .map(|m| (m, self.resources.material(m)))
             .find(|(_, m)| !m.transparent);
         let Some((id, m)) = solid else {
             return (u32::MAX, u32::MAX, mesh);
@@ -153,7 +153,7 @@ impl Renderer3D {
             let mesh = &self.resources.meshes[self.base(run.0) as usize];
             for (part, &(_, own)) in mesh.parts.iter().enumerate() {
                 let material = self.part_material(run.0, part, own);
-                let m = &self.resources.materials[material as usize];
+                let m = self.resources.material(material);
                 if m.transparent {
                     continue;
                 }
@@ -190,7 +190,7 @@ impl Renderer3D {
             .parts
             .iter()
             .enumerate()
-            .any(|(part, &(_, m))| self.resources.materials[self.part_material(mesh, part, m) as usize].transparent)
+            .any(|(part, &(_, m))| self.resources.material(self.part_material(mesh, part, m)).transparent)
     }
 
     /// Fills `blended_runs` in global back-to-front order, each drawing
@@ -273,7 +273,7 @@ impl Renderer3D {
             }
             for (part, &(_, own)) in geometry.parts.iter().enumerate() {
                 let material = self.part_material(mesh, part, own);
-                let m = &self.resources.materials[material as usize];
+                let m = self.resources.material(material);
                 if m.transparent {
                     continue;
                 }

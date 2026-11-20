@@ -5,11 +5,13 @@
 //! two assets from an in-memory [asset source](Assets::add_source) (an
 //! image and streamed music, never fetched), starts the music (a quiet
 //! looping hum) during setup, runs a fixed-step simulation, counts left
-//! clicks and draws something on every frame. In a browser the music waits
+//! clicks and draws something on every frame. It also loads an [asset
+//! group](ponko::assets::AssetGroup) of the fetched image and a file from
+//! the source, as a loading screen would, and reports when it is ready. In a browser the music waits
 //! for the first click, as browsers allow sound only after one. Each frame
 //! it publishes its state for the runner (see `common/web_smoke.rs`):
 //!
-//! `{"fixture":"web_smoke","ticks":120,"frames":118,"clicks":1,"size":[800,600],"asset":[32,32],"source":[4,2],"stream":true,"audio_unlocked":true}`
+//! `{"fixture":"web_smoke","ticks":120,"frames":118,"clicks":1,"size":[800,600],"asset":[32,32],"source":[4,2],"stream":true,"audio_unlocked":true,"group_ready":1,"group":"ready"}`
 //!
 //! Failure cases for the runner's self-tests, chosen with the page's query
 //! string: `?smoke_case=panic` panics during setup, `?smoke_case=stall`
@@ -19,7 +21,7 @@
 //! On the desktop it opens a window like any other example
 //! (`cargo run --example web_smoke`) and prints its state once a second.
 
-use ponko::assets::MemorySource;
+use ponko::assets::{AssetGroup, GroupState, MemorySource};
 use ponko::prelude::*;
 
 use serde_json::json;
@@ -36,16 +38,21 @@ fn main() {
         .fixed_hz(60)
         .sim_system(move |_ctx| sim_ticks.set(sim_ticks.get() + 1))
         .system(frame(ticks))
-        .setup(|ctx| {
+        .try_setup(|ctx| {
             let smoke = smoke::Smoke::new("web_smoke");
-            // The one fetched asset; a missing file panics with its name.
-            let crab = ctx.gfx.load_texture("crab.png");
+            // The one fetched asset; return its error to the page if missing.
+            let crab = ctx.gfx.try_load_texture("crab.png")?;
             // Assets from a source the game adds: found by name, never fetched.
             ctx.assets.add_source(
                 MemorySource::new("embedded")
                     .with("embedded/dot.png", png(4, 2))
-                    .with("embedded/hum.wav", hum_wav(8000)),
+                    .with("embedded/hum.wav", hum_wav(8000))
+                    .with("embedded/level.bin", vec![7; 64]),
             );
+            // A loading screen's group: read and decoded without stalling
+            // a frame (in a browser, within each frame's group budget).
+            ctx.assets
+                .start_group(AssetGroup::new("smoke").texture("crab.png").bytes("embedded/level.bin"));
             let dot = ctx.gfx.load_texture("embedded/dot.png");
             let music = ctx.audio.try_load_stream("embedded/hum.wav");
             let stream = music.is_ok();
@@ -65,6 +72,7 @@ fn main() {
                 dot,
                 stream,
             });
+            Ok(())
         })
         .run();
 }
@@ -83,6 +91,9 @@ fn frame(ticks: Rc<Cell<u64>>) -> impl FnMut(&mut Ctx) {
         // Taken out while it runs, as `Smoke::frame` needs all of `ctx`.
         let mut fixture = ctx.world.remove_resource::<Fixture>().expect("made in setup");
         let (crab, dot) = (fixture.crab, fixture.dot);
+        let group = ctx.assets.group("smoke").expect("started in setup");
+        let group_state = ctx.assets.group_state(group);
+        let group_error = ctx.assets.group_error(group).map(ToString::to_string);
         fixture.smoke.frame(
             ctx,
             ticks.get(),
@@ -91,6 +102,8 @@ fn frame(ticks: Rc<Cell<u64>>) -> impl FnMut(&mut Ctx) {
                 "source": [dot.width(), dot.height()],
                 "stream": fixture.stream,
                 "audio_unlocked": ctx.audio.unlocked(),
+                "group_ready": u32::from(group_state == GroupState::Ready),
+                "group": group_error.unwrap_or_else(|| group_state.name().to_string()),
             }),
         );
         // The background changes with each click, so a click shows.

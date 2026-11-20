@@ -3,7 +3,7 @@
 //! `src/lib.rs`.
 //!
 //! Each step of the tutorial is one plugin: [`Yard`] (a glTF scene you can
-//! stand on), [`Walker`] (a character controller and a camera), [`Lanterns`]
+//! stand on), [`Walker`] (a character controller and a camera rig), [`Lanterns`]
 //! (point lights), [`Bodies`] (physics: crates to push and sensors that light
 //! the lanterns) and [`Hud`] (UI). The tests in `tests/tutorial_3d.rs` walk
 //! the finished game headlessly.
@@ -48,12 +48,8 @@ impl Plugin for Yard {
         let look = ctx.gfx.load_mesh(YARD);
         // What you stand on: the same triangles as a collision mesh.
         let solid = ctx.load_collision_mesh(YARD);
-        ctx.world.spawn((
-            Transform::default(),
-            Model::new(look),
-            RigidBody::fixed(),
-            Collider::mesh(solid),
-        ));
+        // A collider alone is a fixed body at the origin.
+        ctx.world.spawn((Model::new(look), Collider::mesh(solid)));
 
         // A low evening sun with shadows, and a camera to start from.
         let lighting = &mut ctx.scene3d.lighting;
@@ -75,11 +71,10 @@ pub const JUMP_SPEED: f32 = 5.0;
 /// How fast the view turns, in radians per second.
 pub const TURN_SPEED: f32 = 2.5;
 
-/// The walker: its entity and the way it faces (0 looks along -Z).
+/// The walker's entity.
 #[derive(Clone, Copy)]
 pub struct Player {
     pub entity: Entity,
-    pub yaw: f32,
 }
 
 // The walker's actions, looked up by name once.
@@ -152,7 +147,7 @@ pub struct Walker;
 
 impl Plugin for Walker {
     fn build(&self, game: Game) -> Game {
-        game.system(control).system(follow)
+        game.system(control)
     }
 
     fn setup(&self, ctx: &mut Ctx) {
@@ -170,8 +165,18 @@ impl Plugin for Walker {
         body.normals.clear(); // worked out again from the new shape
         let blue = ctx.gfx.create_material(MaterialDesc::color(Color::hex(0x3d7bd9)));
         let mesh = ctx.gfx.create_mesh(&body, blue);
-        let entity = ctx.world.spawn((Transform::at(START), walker, Model::new(mesh)));
-        ctx.world.insert_resource(Player { entity, yaw: 0.0 });
+        // The camera follows the entity with a `CameraTarget`.
+        let entity = ctx
+            .world
+            .spawn((Transform::at(START), walker, Model::new(mesh), CameraTarget));
+        ctx.world.insert_resource(Player { entity });
+
+        // The camera rig: behind the walker and above, looking at its head,
+        // in front of any wall between them. The engine moves it.
+        let mut chase = ThirdPersonCamera::default();
+        chase.distance = 6.7;
+        chase.pitch = -0.23; // looking down a little
+        ctx.world.insert_resource(chase);
     }
 }
 
@@ -182,12 +187,12 @@ fn control(ctx: &mut Ctx) {
     let turn = ctx.input.action_axis(act.turn);
     let jump = ctx.input.action_pressed(act.jump);
     let dt = ctx.time.dt();
-    let player = ctx.world.resource_mut::<Player>();
-    player.yaw -= turn * TURN_SPEED * dt;
-    let Player { entity, yaw } = *player;
-
-    let facing = Quat::from_rotation_y(yaw);
-    let wish = facing * vec3(movement.x, 0.0, movement.y);
+    // Turn the camera, then walk the way it faces, on the ground.
+    let chase = ctx.world.resource_mut::<ThirdPersonCamera>();
+    chase.yaw -= turn * TURN_SPEED * dt;
+    let wish = chase.flat_right() * movement.x - chase.flat_forward() * movement.y;
+    let facing = Quat::from_rotation_y(chase.yaw);
+    let entity = ctx.world.resource::<Player>().entity;
     if let Some(c) = ctx.world.get_mut::<Character>(entity) {
         c.velocity.x = wish.x * WALK_SPEED;
         c.velocity.z = wish.z * WALK_SPEED;
@@ -198,16 +203,6 @@ fn control(ctx: &mut Ctx) {
     // Physics owns the position; the rotation is ours.
     if let Some(t) = ctx.world.get_mut::<Transform>(entity) {
         t.rotation = facing;
-    }
-}
-
-/// Frame system: the camera stays behind the walker and looks at its head.
-fn follow(ctx: &mut Ctx) {
-    let Player { entity, yaw } = *ctx.world.resource::<Player>();
-    if let Some(t) = ctx.world.get::<Transform>(entity) {
-        let behind = Quat::from_rotation_y(yaw) * vec3(0.0, 3.0, 6.5);
-        ctx.scene3d.camera.position = t.position + behind;
-        ctx.scene3d.camera.look_at(t.position + Vec3::Y * 1.5);
     }
 }
 // ANCHOR_END: walker
@@ -327,14 +322,12 @@ impl Plugin for Bodies {
                 Model::new(crate_mesh),
                 RigidBody::dynamic(),
                 Collider::cuboid(Vec3::splat(0.8)).density(150.0).friction(0.7),
-                Velocity::default(),
             ));
         }
 
         // A sensor reports overlaps and pushes nothing.
         let posts: Vec<Entity> = ctx.world.query::<(Entity, &Lantern)>().iter().map(|(e, _)| e).collect();
         for post in posts {
-            ctx.world.insert(post, RigidBody::fixed());
             ctx.world.insert(post, Collider::sphere(0.9).sensor());
         }
     }
@@ -435,9 +428,8 @@ pub fn start_over(ctx: &mut Ctx) {
     for post in posts {
         set_lit(ctx, post, false);
     }
-    let player = ctx.world.resource_mut::<Player>();
-    player.yaw = 0.0;
-    let walker = player.entity;
+    ctx.world.resource_mut::<ThirdPersonCamera>().yaw = 0.0;
+    let walker = ctx.world.resource::<Player>().entity;
     if let Some(t) = ctx.world.get_mut::<Transform>(walker) {
         t.position = START;
     }

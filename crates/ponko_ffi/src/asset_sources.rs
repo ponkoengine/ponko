@@ -203,6 +203,13 @@ pub unsafe extern "C" fn ponko_ctx_add_asset_source(
 /// ```
 pub struct PonkoMemorySource(MemorySource);
 
+impl PonkoMemorySource {
+    /// The source it holds.
+    pub(crate) fn source(&self) -> &MemorySource {
+        &self.0
+    }
+}
+
 /// An empty memory source called `id` (copied; non-empty). Null on bad
 /// arguments (see `ponko_last_error`).
 /// ```

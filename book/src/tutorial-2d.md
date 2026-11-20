@@ -103,13 +103,18 @@ What happens here:
   rectangles. [Levels from Tiled and LDtk](tiles.md#levels-from-tiled-and-ldtk)
   has the whole list.
 - **The crab is a sprite** (`Sprite::new(texture)` at a `Transform`), and a
-  physics body: a dynamic `RigidBody` that gravity pulls down, a `Collider`
-  12 by 10 pixels, and a `Velocity` that the next step sets. `lock_rotation`
-  keeps it upright ([Physics](physics.md)).
+  physics body: a dynamic `RigidBody` that gravity pulls down and a
+  `Collider` 12 by 10 pixels. `lock_rotation` keeps it upright
+  ([Physics](physics.md)). The body brings a `Velocity`, which the next
+  step sets: a component can require others, and a spawn without them gets
+  them ([Required components](ecs.md#required-components)).
 - **`.physics(vec2(0.0, 900.0))`** turns physics on with gravity in pixels
   per second squared. In 2D, y points down.
-- **The camera** shows the world at twice the size (`zoom`) and follows the
-  crab in a frame system ([Camera, text and UI](camera-ui.md)).
+- **The camera** shows the world at twice the size (`zoom`). A
+  `FollowCamera` resource is a camera rig: every frame the engine eases it
+  toward the entity with a `CameraTarget`, here the crab, and its `bounds`
+  keep it from showing past the level's edges. No camera code
+  ([Camera rigs](camera-ui.md#camera-rigs)).
 - `Stage` is a resource that remembers what is on stage, so `start_level`
   can remove it to start over.
 
@@ -163,7 +168,8 @@ when the crab touches one:
 
 - `make_sensors` runs before the physics step
   (`.add(Phase::BeforePhysics, ...)`) and gives every `Coin` or `Goal`
-  object that has no collider yet a fixed body and a sensor. Because it looks
+  object that has no collider yet a sensor. A collider without a body
+  brings a fixed `RigidBody` (it requires one). Because it looks
   for objects without one, it also covers a level that was just spawned
   again.
 - The physics step sends a **`CollisionStarted` event** when two colliders

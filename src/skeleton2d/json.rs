@@ -416,11 +416,7 @@ fn from_file(file: FileJson, path: &str) -> Result<SkeletonData, SkeletonError> 
             Some(p) => Some(index(data.bone(p), "bone (parents come first)", p)?),
             None => None,
         };
-        let rest = BonePose {
-            translation: Vec2::new(b.x, b.y),
-            rotation: b.rotation.to_radians(),
-            scale: Vec2::from(b.scale),
-        };
+        let rest = BonePose::new(Vec2::new(b.x, b.y), b.rotation.to_radians(), Vec2::from(b.scale));
         if !(rest.translation.is_finite() && rest.rotation.is_finite() && rest.scale.is_finite()) {
             return Err(err(format!("bone \"{}\" needs numbers", b.name)));
         }
@@ -486,7 +482,7 @@ fn from_file(file: FileJson, path: &str) -> Result<SkeletonData, SkeletonError> 
             mix: ik.mix,
         };
         data.check_ik(&constraint)?;
-        data.ik.push(constraint);
+        data.push_ik(constraint);
     }
     for c in &file.clips {
         let clip = clip(&data, c)?;
@@ -518,11 +514,7 @@ fn sprite_part(a: &AttachmentJson, image: Arc<str>, color: Color) -> Result<Spri
             a.name
         ))
     })?;
-    let offset = BonePose {
-        translation: Vec2::new(a.x, a.y),
-        rotation: a.rotation.to_radians(),
-        scale: Vec2::from(a.scale),
-    };
+    let offset = BonePose::new(Vec2::new(a.x, a.y), a.rotation.to_radians(), Vec2::from(a.scale));
     Ok(SpritePart {
         image,
         texture: Texture::new(u32::MAX, 0, 0),

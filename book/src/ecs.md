@@ -68,9 +68,78 @@ compile, and the error says to add the derive:
 
 A generic type derives it too: `#[derive(Component)] struct Tagged<T>(T);`
 is a component for every `T` that is `Send + Sync + 'static`.
-`#[component(..)]` options are reserved for later; there are none yet.
+`#[component(requires(..))]` is the derive's one option: see
+[Required components](#required-components).
 Resources (`insert_resource`) and events need no derive. C++ components need
 nothing either: the C API registers them by name and size, not as Rust types.
+
+## Required components
+
+Some components only make sense with others: a body needs a transform and a
+velocity, an enemy needs health. A component can say so, with the values to
+start from, and every spawn or insert that gives an entity the component
+adds the ones it lacks. A spawn then names only what differs:
+
+<div class="lang-pair">
+<div>
+
+```rust
+#[derive(Component)]
+struct Health(f32);
+
+#[derive(Component)]
+#[component(requires(ponko::d2::Transform, Health = Health(100.0)))]
+struct Enemy;
+
+let grunt = ctx.world.spawn((Enemy,));
+let boss = ctx.world.spawn((Enemy, Health(1000.0))); // given values win
+assert_eq!(ctx.world.get::<Health>(grunt).unwrap().0, 100.0);
+assert!(ctx.world.has::<ponko::d2::Transform>(grunt));
+assert_eq!(ctx.world.get::<Health>(boss).unwrap().0, 1000.0);
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:ecs_required}}
+```
+
+</div>
+</div>
+
+A type alone (`ponko::d2::Transform`) starts at its `Default`; `Type =
+expression` at that value, made anew for each entity that needs it.
+
+- **What's given wins.** A component in the bundle, or one the entity has
+  already, keeps its value: requirements only fill gaps. Removing a required
+  component later is allowed; it is a component like any other.
+- **Every way in.** `spawn`, `spawn_batch`, commands, `insert`, loading a
+  save, and the dynamic, C and C++ paths all fill the gaps, in the same
+  structural change: the entity never exists without them, and `on_add`
+  [hooks](#component-hooks) see it complete.
+- **Through.** Required components bring what they require in turn. The
+  nearest requirement's value wins (one the spawned component names itself
+  beats one a required component names); of two at the same depth, the
+  one of the component earlier in the bundle.
+- **The engine's own.** A `RigidBody` (2D or 3D) brings a transform and a
+  `Velocity`; a `Collider` without a body brings `RigidBody::fixed()`. So a
+  wall is a transform and a collider ([Physics](physics.md#bodies-and-colliders)).
+- **By hand, and for types you don't own.** `#[component(requires(..))]`
+  writes `Component::requires`, which you can also write yourself
+  (`r.add(Health::default)`). `world.require::<Enemy, _>(|| Health(5.0))`
+  adds one at run time, for a type from another crate; it applies to that
+  world, from then on (entities that exist keep what they have).
+- **What it costs.** Nothing where it isn't used: a spawn whose bundle
+  lacks nothing runs the same code as in a world without requirements.
+  Filling a gap costs a few nanoseconds per entity more than giving the
+  component in the bundle (4–18 % of a spawn in the benchmarks);
+  `crates/ponko_bench/REQUIRED.md` has the numbers.
+
+From C, `ponko_component_require(world, component, required, &value)`
+copies the value's bytes, so the required component must be a plain value
+(a C component, `PonkoTransform2D`, `PonkoVelocity`, ...), not a converted
+one such as `PonkoSprite`.
 
 ## Reading and changing one entity
 
@@ -342,6 +411,39 @@ Ways to run a query:
 - `iter()`: a normal iterator, for when you need `map`/`filter`/`collect`. It
   is several times slower than `for_each` on big worlds.
 - `count()`, `get(entity)`.
+
+### Read-only queries on a shared world
+
+`world.query` takes `&mut World`, because it may register components and
+count writes for change detection. A query that only reads can run on a
+shared `&World` with `world.query_ref`: several at once, inside each other,
+from code that only has `&World` (a hash, a debug view, another thread):
+
+```rust
+# #[derive(Component)]
+# struct Pos(Vec2);
+# #[derive(Component)]
+# struct Team(u8);
+fn close_enemies(world: &World) -> usize {
+    let units = world.query_ref::<(Entity, &Pos, &Team)>();
+    let mut pairs = 0;
+    for (a, pa, ta) in units.iter() {
+        for (b, pb, tb) in units.iter() {
+            if a < b && ta.0 != tb.0 && pa.0.distance(pb.0) < 2.0 {
+                pairs += 1;
+            }
+        }
+    }
+    pairs
+}
+```
+
+It takes the same filters (`With`, `Without`, `Or`, `Changed`, `Added`), and
+`get`, `single`, `count`, `iter` and `for_each`. Items borrow the world, not
+the query. Only `&T`, `Option<&T>` and `Entity` are allowed; `&mut T` doesn't
+compile. A component the world has never seen matches nothing (and reads as
+`None` in an `Option`) instead of being registered. Change filters need the
+component's changes tracked, as with `query`.
 
 ## Commands: changing the world while you iterate
 
@@ -680,6 +782,104 @@ unchanged, and a `Changed<T>` loop takes 0.02 ms when it finds nothing
 changed, spread out (most chunks then hold one), and 1.0 ms when all
 did. `cargo run --release -p ponko_bench -- changes` prints the numbers
 for your machine.
+
+## Component hooks
+
+Change detection tells a system what changed the next time it runs. Some
+bookkeeping can't wait for that: an index from names to entities that any
+code may read right after a spawn, a count that must match the world at
+every moment. A *hook* is a function the world calls inside the
+operation itself, registered per component type:
+
+| Hook | Runs |
+|---|---|
+| `on_add::<T>` | after a `T` arrived on an entity that had none (every kind of spawn, `insert`) |
+| `on_replace::<T>` | before `insert` overwrites an entity's `T`; the old value is in the world, the new one is passed in |
+| `on_remove::<T>` | before a `T` leaves (`remove`, `despawn`, `clear`), while it is still there |
+
+```rust
+use std::collections::HashMap;
+
+#[derive(Component)]
+struct Name(String);
+
+/// Every named entity, by name: always the same as the world.
+#[derive(Default)]
+struct Names(HashMap<String, Entity>);
+
+fn named(world: &mut HookWorld, e: Entity) {
+    world.resource_scope::<Names, _>(|world, names| {
+        if let Some(n) = world.get::<Name>(e) {
+            names.0.insert(n.0.clone(), e);
+        }
+    });
+}
+
+fn renamed(world: &mut HookWorld, e: Entity, new: &Name) {
+    world.resource_scope::<Names, _>(|world, names| {
+        if let Some(old) = world.get::<Name>(e) {
+            names.0.remove(&old.0);
+        }
+        names.0.insert(new.0.clone(), e);
+    });
+}
+
+fn unnamed(world: &mut HookWorld, e: Entity) {
+    world.resource_scope::<Names, _>(|world, names| {
+        if let Some(n) = world.get::<Name>(e) {
+            names.0.remove(&n.0);
+        }
+    });
+}
+
+fn setup(ctx: &mut Ctx) {
+    ctx.world.insert_resource(Names::default());
+    ctx.world.on_add::<Name>(named);
+    ctx.world.on_replace::<Name>(renamed);
+    ctx.world.on_remove::<Name>(unnamed);
+}
+# setup(ctx);
+let crab = ctx.world.spawn((Name("crab".into()),));
+assert_eq!(ctx.world.resource::<Names>().0.get("crab"), Some(&crab));
+ctx.world.insert(crab, Name("king crab".into()));
+ctx.world.despawn(crab);
+assert!(ctx.world.resource::<Names>().0.is_empty());
+```
+
+- **A hook can't change the world's structure right away.** It gets a
+  `HookWorld`: components, resources and queries, read and write, but
+  spawns, despawns, inserts and removes go to `world.commands()`. They are
+  applied before the call that ran the hook returns (after the whole call
+  for `spawn_batch`, `clear` or applying commands), so nothing a hook does
+  moves or drops the entity the world is busy with.
+- **The order is fixed.** The hooks of one operation run in the order of
+  their components' ids (the order the world first saw each type), several
+  hooks of one component in the order they were registered, and commands
+  from hooks first recorded first. Hooks never run during a parallel query
+  or a view system: only structural changes run them, and those need the
+  whole world.
+- **Loads, resets and dropping.** Loading a save resets the world, which
+  runs `on_remove`, then spawns the saved entities, which runs `on_add`,
+  so an index like `Names` above stays right. Hooks belong to the world they
+  are registered on: a world made with `World::new()` has none. Dropping a
+  world runs no hooks.
+- **What it costs.** Nothing for components without hooks: spawning,
+  despawning, inserting and removing them run the same code as in a world
+  without hooks, and queries never look at hooks. A hook call costs a few
+  nanoseconds besides its own work; `crates/ponko_bench/HOOKS.md` has the
+  numbers.
+
+**Hooks or change detection?** Use a hook when something must be true the
+moment a component arrives or leaves, like the index above. Use change
+detection for work done once per tick over everything that changed:
+resizing health bars, uploading transforms. It runs in a batch, can run in
+parallel and costs nothing at the moment of the change. The engine does
+both: the transform hierarchy notes a despawned parent's children with an
+`on_remove` hook on `Children`, while physics drops the bodies of despawned
+entities once per step, in entity order, which keeps runs deterministic.
+
+Hooks are Rust only for now: C and C++ can't register them yet. Their
+spawns, inserts and removes do run the hooks registered from Rust.
 
 ## Resources
 

@@ -39,6 +39,11 @@ macro_rules! with_fields {
 
 mod animator;
 pub(crate) mod api;
+pub(crate) mod bake;
+pub use bake::{
+    BakeModel, BakeStats, BakedLighting, LightBakeScene, LightBakeSettings, LightmapRect, Lightmapped,
+    MAX_LIGHTMAP_PAGES, bake_lighting,
+};
 mod clip;
 mod collect;
 mod compute;
@@ -48,7 +53,7 @@ mod extraction_bench;
 #[cfg(any(test, feature = "bench-internals"))]
 pub use extraction_bench::{ExtractionBench, ExtractionSample};
 pub(crate) mod gi;
-mod gltf;
+pub(crate) mod gltf;
 mod gltf_ext;
 mod gltf_props;
 mod gltf_scene;
@@ -56,6 +61,10 @@ mod ik;
 pub(crate) mod instances;
 mod retarget;
 pub use instances::{BatchCulling, InstanceBatch, InstanceBatchOptions, InstanceLevel};
+pub(crate) mod crowd;
+pub use crowd::{
+    Crowd, CrowdAnimation, CrowdClip, CrowdInstance, CrowdLevel, CrowdOptions, MAX_CROWD_INSTANCES, MAX_CROWD_LEVELS,
+};
 pub(crate) mod instance_cells;
 pub use instance_cells::{InstanceCell, InstanceCellData};
 mod lod;
@@ -106,11 +115,14 @@ pub(crate) use crate::render::{ShaderDiagnostic, ShaderKind};
 pub(crate) use shader_status::{COMPUTE_STAND_IN, EFFECT_STAND_IN};
 mod settings;
 mod sky;
+mod sky_kit;
 mod sky_shader;
 mod target;
 mod terrain;
 pub use far_terrain::FarTerrain;
 mod texture_array;
+pub(crate) mod view_model;
+pub use view_model::{HeldItem, VIEW_MODEL_LAYER, ViewModel};
 
 pub use animator::{
     AnimationGraph, AnimationLayer, AnimationState, Animator, JointMask, LayerBlend, LayerId, Motion, MotionChild,
@@ -147,7 +159,10 @@ pub(crate) use skin::{MeshMorph, MeshSkin, SkinFrame};
 pub(crate) use skin::{SkinDraw, normalized as normalized_weights};
 pub(crate) use sky::SkyLight;
 pub use sky::{Sky, SkyShader};
-pub use target::TargetCamera;
+#[cfg(feature = "window")]
+pub(crate) use sky_kit::CLOUD_SHADOW_TEXELS;
+pub use sky_kit::{CloudQuality, Clouds, DayNight, Moon, SkyKit};
+pub use target::{RenderTarget, TargetCamera};
 pub use terrain::{Heightfield, TERRAIN_LODS, TerrainMaterialDesc, TerrainTile, TerrainTileData};
 pub use texture_array::{TextureArray, TextureKind};
 
@@ -1256,7 +1271,7 @@ pub(crate) struct Scene3D<'a> {
     pub camera: Vec3,
     pub post: &'a Post,
     /// Seconds since the game started, and since the last frame.
-    pub time: (f32, f32),
+    pub time: (f64, f32),
     /// Whether to make the depth grid occlusion culling reads.
     pub occlusion: bool,
 }
@@ -1303,14 +1318,20 @@ pub(crate) struct Assets3D {
     /// Meshes set to cast no shadow (`Graphics::set_mesh_shadows`), by id;
     /// shorter than `bounds` when the last ones cast.
     pub shadowless: Vec<bool>,
-    pub materials: u32,
+    pub material_ids: crate::handle::SlotCounter,
+    pub shader_ids: crate::handle::SlotCounter,
+    pub compute_ids: crate::handle::SlotCounter,
+    pub effect_ids: crate::handle::SlotCounter,
+    pub array_ids: crate::handle::SlotCounter,
+    /// Names whose status stays visible while a shader, effect or compute is live.
+    pub shader_names: std::collections::HashMap<(ShaderKind, u32), String>,
     /// Which materials, shaders, compute passes, effects and texture
     /// arrays are live (made and not freed), by id.
-    pub materials_live: crate::handle::LiveSet,
-    pub shaders_live: crate::handle::LiveSet,
-    pub computes_live: crate::handle::LiveSet,
-    pub effects_live: crate::handle::LiveSet,
-    pub arrays_live: crate::handle::LiveSet,
+    pub materials_live: crate::handle::SlotLiveSet,
+    pub shaders_live: crate::handle::SlotLiveSet,
+    pub computes_live: crate::handle::SlotLiveSet,
+    pub effects_live: crate::handle::SlotLiveSet,
+    pub arrays_live: crate::handle::SlotLiveSet,
     /// Texture arrays made so far, by id.
     pub arrays: Vec<TextureArray>,
     /// Whether each was made as `TextureKind::Data`, by id.
@@ -1323,12 +1344,11 @@ pub(crate) struct Assets3D {
     /// Whether the renderer can draw global illumination (compute shaders
     /// and a texture slot for the probes); set each frame.
     pub gi_supported: bool,
+    /// Baked lighting set with `Graphics::set_baked_lighting` that the
+    /// renderer hasn't taken yet: `Some(None)` takes it away.
+    pub(crate) baked_upload: Option<Option<bake::BakedLayers>>,
     /// Render targets made so far.
     pub render_targets: Vec<crate::texture::Texture>,
-    /// Screen effects made so far.
-    pub effects: u32,
-    /// Compute passes made so far, and those loaded from files.
-    pub computes: u32,
     /// GPU buffers' lengths, by slot; 0 for a freed one.
     pub gpu_buffers: Vec<u32>,
     /// The id each GPU buffer slot was last given out as, and the freed
@@ -1336,6 +1356,8 @@ pub(crate) struct Assets3D {
     pub gpu_buffer_ids: crate::handle::SlotIds,
     pub instance_batches: Vec<Option<instances::Batch>>,
     pub instance_batch_revision: u64,
+    /// Crowds (`Graphics::create_crowd`), by id; `None` once freed.
+    pub crowds: Vec<Option<crowd::CrowdData>>,
     /// Instance cells: their handles, and which rows of `instance_batches` they have.
     pub instance_cells: instance_cells::InstanceCells,
     /// Freed GPU buffers' ids whose compute passes haven't been removed yet;
@@ -1345,16 +1367,16 @@ pub(crate) struct Assets3D {
     /// grew them), by mesh id.
     pub gpu_mesh_bounds: std::collections::HashMap<u32, (Vec3, f32)>,
     pub loaded_computes: std::collections::HashMap<crate::assets::Origin, Compute>,
-    /// Sky shaders made so far.
+    /// Sky shaders made so far (ids are never reused).
     pub sky_shaders: u32,
+    /// The sky shaders not freed.
+    pub sky_shaders_live: crate::handle::LiveSet,
     /// Sky shaders loaded from files, by where they were found.
     pub loaded_sky_shaders: std::collections::HashMap<crate::assets::Origin, SkyShader>,
     /// Effects loaded from files, by where they were found (file or asset source).
     pub loaded_effects: std::collections::HashMap<crate::assets::Origin, Effect>,
     /// The built-in terrain shader, once a terrain material needs it.
     pub terrain_shader: Option<Shader>,
-    /// Shaders made so far (the built-in one is not counted).
-    pub shaders: u32,
     /// Shaders loaded from files, by where they were found (file or asset source).
     pub loaded_shaders: std::collections::HashMap<crate::assets::Origin, Shader>,
     /// The material handed out for meshes without one.
@@ -1378,6 +1400,15 @@ pub(crate) struct Assets3D {
 }
 
 impl Assets3D {
+    /// A known array retains its white fallback even after its slot is reused.
+    fn knows_array(&self, array: TextureArray) -> bool {
+        self.arrays_live.was_made(array.id)
+            && self
+                .arrays
+                .get((array.id & crate::handle::INDEX_MASK) as usize)
+                .is_some_and(|current| current.id != array.id || *current == array)
+    }
+
     /// Calls `f` with the id and estimated bytes of every live handle of
     /// `class` (`Graphics::asset_handles`); bytes as `inventory` counts them.
     pub(crate) fn records(

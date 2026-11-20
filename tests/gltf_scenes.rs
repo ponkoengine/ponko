@@ -403,6 +403,16 @@ fn colliders_fit_the_node_meshes_with_their_scale() {
 /// Spawns `file` with hot reload and writes `after` over it on tick 2;
 /// returns the ticks that saw the reload and the world.
 fn reexport(file: &TempAsset, after: String, keep: impl Fn(&mut World) + 'static) -> (Vec<u64>, World) {
+    reexport_spawned(file, 1, after, keep)
+}
+
+/// [`reexport`] of `spawns` scenes of `file`, a metre apart.
+fn reexport_spawned(
+    file: &TempAsset,
+    spawns: usize,
+    after: String,
+    keep: impl Fn(&mut World) + 'static,
+) -> (Vec<u64>, World) {
     use std::sync::{Arc, Mutex};
     let seen = Arc::new(Mutex::new(Vec::new()));
     let log = seen.clone();
@@ -425,7 +435,10 @@ fn reexport(file: &TempAsset, after: String, keep: impl Fn(&mut World) + 'static
             let name = file.name().to_string();
             move |ctx| {
                 reflect(ctx);
-                ctx.spawn_prefab(&name, Transform::default()).unwrap();
+                for i in 0..spawns {
+                    ctx.spawn_prefab(&name, Transform::at(vec3(i as f32, 0.0, 0.0)))
+                        .unwrap();
+                }
             }
         });
     let seen = seen.lock().unwrap().clone();
@@ -463,6 +476,37 @@ fn reexporting_updates_the_scene_and_keeps_entities_whose_names_match() {
     assert_ne!(world.get::<Model>(door).unwrap().mesh, old_mesh, "the new geometry");
     assert!(!world.is_alive(window), "a node gone from the file is despawned");
     assert_eq!(world.query::<&GltfNode>().iter().count(), 2);
+}
+
+#[test]
+fn reexporting_a_file_spawned_twice_gives_both_scenes_one_new_set_of_meshes() {
+    use std::sync::{Arc, Mutex};
+    let file = TempAsset::with_contents("live.gltf", &two_boxes(0.0, 5.0, true));
+    let before = Arc::new(Mutex::new(Vec::new()));
+    let record = before.clone();
+    let (seen, mut world) = reexport_spawned(&file, 2, two_boxes(3.0, 9.0, false), move |world| {
+        let doors: Vec<_> = world
+            .query::<(&GltfNode, &Model)>()
+            .iter()
+            .map(|(_, m)| m.mesh)
+            .collect();
+        *record.lock().unwrap() = doors;
+    });
+    assert_eq!(seen, [3]);
+    let old = before.lock().unwrap().clone();
+    assert_eq!(old.len(), 6, "two scenes of three meshes");
+    let roots: Vec<GltfRoot> = world.query::<&GltfRoot>().iter().cloned().collect();
+    let door_mesh = |world: &mut World, root: &GltfRoot| world.get::<Model>(root.entity("Door").unwrap()).unwrap().mesh;
+    let (a, b) = (door_mesh(&mut world, &roots[0]), door_mesh(&mut world, &roots[1]));
+    assert_eq!(a, b, "both scenes share the new mesh");
+    assert!(!old.contains(&a));
+    let mut meshes = Vec::new();
+    for m in world.query::<&Model>().iter().map(|m| m.mesh) {
+        if !meshes.contains(&m) {
+            meshes.push(m);
+        }
+    }
+    assert_eq!(meshes.len(), 2, "Door and Wall, once for both scenes");
 }
 
 #[test]
@@ -570,4 +614,428 @@ fn the_guide_courtyard_spawns_with_its_player_on_the_spawn_point() {
     assert_eq!(world.get::<Transform>(door).unwrap().position, vec3(0.0, 1.0, -6.0));
     let lantern = node(&mut world, "Lantern");
     assert!(world.get::<ponko::d3::PointLight>(lantern).unwrap().shadows);
+}
+
+// ---- saves ----------------------------------------------------------------------
+
+/// A level with three barrel prefabs (`prefab`) on the ground. Part of the
+/// retained fixture `tests/fixtures/saves/gltf_instances_v1.json`: its node
+/// names and places must not change.
+fn barrel_level(prefab: &str) -> String {
+    gltf(
+        json!([
+            { "name": "Ground", "mesh": 0, "scale": [10.0, 1.0, 10.0], "translation": [0.0, -0.5, 0.0] },
+            { "name": "BarrelA", "mesh": 0, "translation": [2.0, 0.0, 2.0], "extras": { "ponko:prefab": prefab } },
+            { "name": "BarrelB", "mesh": 0, "translation": [-2.0, 0.0, 2.0], "extras": { "ponko:prefab": prefab } },
+            { "name": "Cellar", "translation": [0.0, -3.0, 0.0], "children": [4] },
+            { "name": "BarrelC", "mesh": 0, "translation": [0.0, 0.0, -2.0], "extras": { "ponko:prefab": prefab } }
+        ]),
+        json!([]),
+    )
+}
+
+/// What a game does to [`barrel_level`] before saving: barrel A is moved
+/// and emptied, barrel B destroyed, barrel C left alone, and a player
+/// spawned. Returns barrel A's entity.
+fn play_barrel_level(ctx: &mut Ctx, root: Entity) -> Entity {
+    let scene = ctx.world.get::<GltfRoot>(root).unwrap().clone();
+    let a = scene.entity("BarrelA").unwrap();
+    ctx.world.insert(a, Transform::at(vec3(2.0, 0.0, 5.0)));
+    ctx.world.insert(a, Barrel { full: false });
+    let b = scene.entity("BarrelB").unwrap();
+    ctx.despawn_prefab(b);
+    ctx.world
+        .spawn((Transform::at(vec3(0.0, 0.0, 8.0)), Health { hp: 3.0 }));
+    a
+}
+
+/// Writes `tests/fixtures/saves/gltf_instances_v1.json`: a world save, as
+/// `dev` wrote it before glTF prefab instances were linked to their scene,
+/// of [`barrel_level`] spawned, played ([`play_barrel_level`]) and saved.
+/// Run once, at the revision named in its provenance; never regenerated.
+#[test]
+#[ignore = "writes a retained fixture"]
+fn write_gltf_instances_v1_fixture() {
+    let out = std::env::var("PONKO_SAVE_FIXTURE_OUT").expect("set PONKO_SAVE_FIXTURE_OUT to the file to write");
+    let out = std::path::PathBuf::from(out);
+    assert!(
+        !out.exists(),
+        "{} exists; fixtures are never overwritten",
+        out.display()
+    );
+    let prefab = barrel_prefab();
+    let file = TempAsset::with_contents("level.gltf", &barrel_level(prefab.name()));
+    game().run_headless(0, move |ctx| {
+        reflect(ctx);
+        let root = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        play_barrel_level(ctx, root);
+        let text = serde_json::to_string_pretty(&ctx.world.save()).unwrap() + "\n";
+        std::fs::write(&out, text).unwrap();
+    });
+}
+
+// ---- shared meshes ---------------------------------------------------------------
+
+/// A prop of three different meshes (a 1 m cube scaled three ways is one
+/// glTF mesh; these are three nodes of it, so three meshes per spawn
+/// before sharing) and one material.
+fn prop() -> String {
+    gltf(
+        json!([
+            { "name": "Body", "mesh": 0 },
+            { "name": "Lid", "mesh": 0, "translation": [0.0, 0.6, 0.0], "scale": [1.0, 0.2, 1.0] },
+            { "name": "Handle", "mesh": 0, "translation": [0.6, 0.0, 0.0], "scale": [0.2, 0.2, 0.2] }
+        ]),
+        json!([]),
+    )
+}
+
+/// Live meshes and materials, and their estimated bytes, from the engine's
+/// own accounting.
+fn meshes_and_materials(ctx: &Ctx) -> (usize, u64, usize) {
+    use ponko::inventory::AssetClass;
+    let inventory = ctx.asset_inventory();
+    let mesh = inventory.get(AssetClass::Mesh);
+    (mesh.live, mesh.bytes, inventory.get(AssetClass::Material).live)
+}
+
+#[test]
+fn a_hundred_spawns_of_one_file_hold_one_copy_of_its_meshes() {
+    let file = TempAsset::with_contents("prop.gltf", &prop());
+    game().run_headless(0, |ctx| {
+        let empty = meshes_and_materials(ctx);
+        let first = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        let one = meshes_and_materials(ctx);
+        let mut roots = vec![first];
+        for i in 1..100 {
+            roots.push(
+                ctx.spawn_prefab(file.name(), Transform::at(vec3(i as f32 * 3.0, 0.0, 0.0)))
+                    .unwrap(),
+            );
+        }
+        let hundred = meshes_and_materials(ctx);
+        eprintln!("glTF spawns: none {empty:?}, one {one:?}, a hundred {hundred:?} (meshes, mesh bytes, materials)");
+        assert_eq!(empty, (0, 0, 0));
+        assert_eq!(one.0, 3, "one mesh per node with triangles");
+        assert_eq!(
+            hundred, one,
+            "a hundred spawns share the first one's meshes and material"
+        );
+        let lid = |ctx: &mut Ctx, root: Entity| {
+            let e = ctx.world.get::<GltfRoot>(root).unwrap().entity("Lid").unwrap();
+            ctx.world.get::<Model>(e).unwrap().mesh
+        };
+        let shared = lid(ctx, roots[0]);
+        assert_eq!(lid(ctx, roots[99]), shared);
+
+        // Freed with the last one, not before.
+        for &root in &roots[..99] {
+            ctx.despawn_prefab(root);
+        }
+        assert_eq!(meshes_and_materials(ctx), one, "the last spawn still draws them");
+        assert!(ctx.is_live(shared));
+        ctx.despawn_prefab(roots[99]);
+        assert_eq!(
+            meshes_and_materials(ctx),
+            empty,
+            "meshes and material freed with the last spawn"
+        );
+        assert!(!ctx.is_live(shared));
+
+        // Spawned again, the file makes them again.
+        let again = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        assert_eq!(meshes_and_materials(ctx).0, 3);
+        ctx.despawn_prefab(again);
+    });
+}
+
+#[test]
+fn a_mesh_loaded_from_the_same_file_keeps_its_materials_when_the_scenes_go() {
+    let file = TempAsset::with_contents("prop.gltf", &prop());
+    game().run_headless(0, |ctx| {
+        let mesh = ctx.gfx.load_mesh(file.name());
+        let root = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        ctx.despawn_prefab(root);
+        assert!(ctx.is_live(mesh));
+        assert_eq!(
+            meshes_and_materials(ctx).2,
+            1,
+            "load_mesh's mesh still draws with the material"
+        );
+    });
+}
+
+#[test]
+fn loading_a_world_frees_the_meshes_of_the_scenes_it_replaced() {
+    let file = TempAsset::with_contents("prop.gltf", &prop());
+    game().run_headless(0, |ctx| {
+        let empty_world = ctx.world.save();
+        let empty = meshes_and_materials(ctx);
+        for i in 0..3 {
+            ctx.spawn_prefab(file.name(), Transform::at(vec3(i as f32, 0.0, 0.0)))
+                .unwrap();
+        }
+        let scene = TempAsset::with_contents("empty.json", &empty_world.to_string());
+        ctx.load_scene(scene.name()).unwrap();
+        assert_eq!(meshes_and_materials(ctx), empty);
+    });
+}
+
+// ---- saved prefab instances --------------------------------------------------------
+
+/// The barrels in `world`: where each is, whether it is full, and the node
+/// it is the instance of (if any).
+fn barrels(world: &mut World) -> Vec<(Vec3, bool, Option<String>)> {
+    let mut out: Vec<(Vec3, bool, Option<String>)> = world
+        .query::<(&Transform, &Barrel, Option<&GltfNode>)>()
+        .iter()
+        .map(|(t, b, n)| (t.position, b.full, n.map(|n| n.path.clone())))
+        .collect();
+    out.sort_by(|a, b| a.0.x.total_cmp(&b.0.x).then(a.0.z.total_cmp(&b.0.z)));
+    out
+}
+
+// ANCHOR: saved_level
+/// Saves the game in slot `slot`: the barrels, the player, and a record of
+/// the level they belong to.
+fn save_game(ctx: &mut Ctx, slot: &str) -> Result<(), Error> {
+    ctx.storage.save_world(&ctx.world, slot)
+}
+
+/// Loads slot `slot` and spawns the level `level` around what it holds.
+fn load_game(ctx: &mut Ctx, slot: &str, level: &str) -> Result<Entity, Error> {
+    ctx.load_world(slot)?; // the barrels and the player, as they were...
+    ctx.spawn_prefab(level, Transform::default()) // ...and the level, which adopts the barrels
+}
+// ANCHOR_END: saved_level
+
+#[test]
+fn a_reloaded_save_hands_its_prefab_instances_back_to_their_nodes() {
+    let prefab = barrel_prefab();
+    let file = TempAsset::with_contents("level.gltf", &barrel_level(prefab.name()));
+    let dir = std::env::temp_dir().join(format!("ponko-gltf-saves-{}", std::process::id()));
+    let mut world = game().data_dir(&dir).run_headless(0, |ctx| {
+        reflect(ctx);
+        let root = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        let a = play_barrel_level(ctx, root);
+        save_game(ctx, "barrels").unwrap();
+
+        // Later, or in the next run.
+        let root = load_game(ctx, "barrels", file.name()).unwrap();
+        let scene = ctx.world.get::<GltfRoot>(root).unwrap().clone();
+        assert_eq!(scene.entity("BarrelA"), Some(a), "the saved entity is the node's again");
+        assert_eq!(scene.entity("BarrelB"), None, "a despawned instance stays despawned");
+        assert!(scene.entity("Cellar/BarrelC").is_some());
+        assert!(!scene.options.no_saved_objects);
+    });
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(
+        barrels(&mut world),
+        [
+            (vec3(0.0, -3.0, -2.0), true, Some("Cellar/BarrelC".into())),
+            (vec3(2.0, 0.0, 5.0), false, Some("BarrelA".into())),
+        ],
+        "two barrels, as saved: A where the game moved it and empty, C untouched; none doubled"
+    );
+}
+
+#[test]
+fn a_saved_scene_survives_more_than_one_save_and_load() {
+    let prefab = barrel_prefab();
+    let file = TempAsset::with_contents("level.gltf", &barrel_level(prefab.name()));
+    let save = TempAsset::new("save.json");
+    let mut world = game().run_headless(0, |ctx| {
+        reflect(ctx);
+        let root = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        play_barrel_level(ctx, root);
+        for _ in 0..3 {
+            std::fs::write(save.path(), ctx.world.save().to_string()).unwrap();
+            ctx.load_scene(save.name()).unwrap();
+            ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        }
+    });
+    assert_eq!(barrels(&mut world).len(), 2);
+    assert_eq!(world.query::<&GltfRoot>().iter().count(), 1);
+}
+
+#[test]
+fn without_saved_objects_still_loads_a_save_and_now_links_its_instances() {
+    let prefab = barrel_prefab();
+    let file = TempAsset::with_contents("level.gltf", &barrel_level(prefab.name()));
+    let save = TempAsset::new("save.json");
+    let mut world = game().run_headless(0, |ctx| {
+        reflect(ctx);
+        let root = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        play_barrel_level(ctx, root);
+        std::fs::write(save.path(), ctx.world.save().to_string()).unwrap();
+        ctx.load_scene(save.name()).unwrap();
+        let options = ponko::d3::GltfOptions::default().without_saved_objects();
+        GltfRoot::spawn(ctx, file.name(), Transform::default(), options).unwrap();
+    });
+    let found = barrels(&mut world);
+    assert_eq!(found.len(), 2);
+    assert!(found.iter().all(|b| b.2.is_some()), "{found:?}");
+}
+
+#[test]
+fn of_two_saved_scenes_of_one_file_each_spawn_adopts_the_nearest() {
+    let prefab = barrel_prefab();
+    let file = TempAsset::with_contents("level.gltf", &barrel_level(prefab.name()));
+    let save = TempAsset::new("save.json");
+    let mut world = game().run_headless(0, |ctx| {
+        reflect(ctx);
+        let west = ctx
+            .spawn_prefab(file.name(), Transform::at(vec3(-100.0, 0.0, 0.0)))
+            .unwrap();
+        ctx.spawn_prefab(file.name(), Transform::at(vec3(100.0, 0.0, 0.0)))
+            .unwrap();
+        let a = ctx.world.get::<GltfRoot>(west).unwrap().entity("BarrelA").unwrap();
+        ctx.world.insert(a, Barrel { full: false });
+        std::fs::write(save.path(), ctx.world.save().to_string()).unwrap();
+        ctx.load_scene(save.name()).unwrap();
+        // Spawned again in the other order.
+        ctx.spawn_prefab(file.name(), Transform::at(vec3(100.0, 0.0, 0.0)))
+            .unwrap();
+        let west = ctx
+            .spawn_prefab(file.name(), Transform::at(vec3(-100.0, 0.0, 0.0)))
+            .unwrap();
+        assert_eq!(ctx.world.get::<GltfRoot>(west).unwrap().entity("BarrelA"), Some(a));
+    });
+    assert_eq!(barrels(&mut world).len(), 6, "three in each scene, none doubled");
+    assert_eq!(barrels(&mut world).iter().filter(|b| !b.1).count(), 1);
+}
+
+#[test]
+fn a_save_without_scenes_spawns_prefab_nodes_fresh() {
+    let prefab = barrel_prefab();
+    let file = TempAsset::with_contents("level.gltf", &barrel_level(prefab.name()));
+    let save = TempAsset::new("save.json");
+    let mut world = game().run_headless(0, |ctx| {
+        reflect(ctx);
+        ctx.world.spawn((Transform::default(), Health { hp: 1.0 }));
+        std::fs::write(save.path(), ctx.world.save().to_string()).unwrap();
+        ctx.load_scene(save.name()).unwrap();
+        ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+    });
+    assert_eq!(barrels(&mut world).len(), 3);
+}
+
+/// Migration: `gltf_instances_v1.json` was saved by `dev` before saves
+/// linked prefab instances to their scene ([`write_gltf_instances_v1_fixture`]).
+/// Spawning the level after loading it, with the default options, leaves
+/// the prefab nodes to the save, as `without_saved_objects` did: nothing
+/// is doubled and the despawned barrel doesn't come back. Saving again
+/// keeps it that way.
+#[test]
+fn an_old_save_loads_without_doubling_its_prefab_instances() {
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/saves/gltf_instances_v1.json"
+    );
+    let old = TempAsset::with_contents("old-save.json", &std::fs::read_to_string(fixture).unwrap());
+    let prefab = barrel_prefab();
+    let file = TempAsset::with_contents("level.gltf", &barrel_level(prefab.name()));
+    let resaved = TempAsset::new("save.json");
+    let mut world = game().run_headless(0, |ctx| {
+        reflect(ctx);
+        ctx.load_scene(old.name()).unwrap();
+        let root = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        let scene = ctx.world.get::<GltfRoot>(root).unwrap().clone();
+        assert!(scene.options.no_saved_objects, "the old rule, for this scene");
+        assert_eq!(scene.entity("BarrelA"), None, "unlinked: they can't be told apart");
+        assert_eq!(barrels(&mut ctx.world).len(), 2);
+
+        // Saved in the new format and loaded again: still two.
+        std::fs::write(resaved.path(), ctx.world.save().to_string()).unwrap();
+        ctx.load_scene(resaved.name()).unwrap();
+        let root = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        assert!(!ctx.world.get::<GltfRoot>(root).unwrap().options.no_saved_objects);
+    });
+    assert_eq!(
+        barrels(&mut world),
+        [(vec3(0.0, -3.0, -2.0), true, None), (vec3(2.0, 0.0, 5.0), false, None)],
+        "the saved barrels as they were, none spawned again"
+    );
+    let player = world
+        .query::<(&Transform, &Health)>()
+        .iter()
+        .next()
+        .map(|(t, h)| (t.position, *h));
+    assert_eq!(player, Some((vec3(0.0, 0.0, 8.0), Health { hp: 3.0 })));
+}
+
+/// Writes `tools/blender/fixtures/ponko-schema.json`, the schema the
+/// Blender add-on's tests read: what `ponko schema` writes for a game that
+/// reflects `Health` (described: `{"hp": number}`, nothing else) and
+/// `Barrel`. Run again when the convention changes:
+/// `PONKO_SCHEMA_FIXTURE_OUT=$PWD/tools/blender/fixtures/ponko-schema.json
+/// cargo test -p ponko --features 3d --test gltf_scenes -- --ignored --exact write_blender_schema_fixture`.
+#[test]
+#[ignore = "writes the Blender add-on's test schema"]
+fn write_blender_schema_fixture() {
+    use ponko::reflect::ValueSchema;
+    let out = std::env::var("PONKO_SCHEMA_FIXTURE_OUT").expect("set PONKO_SCHEMA_FIXTURE_OUT to the file to write");
+    game().run_headless(0, move |ctx| {
+        reflect(ctx);
+        ctx.world
+            .describe_component("Health", ValueSchema::strict_object([("hp", ValueSchema::Number)]))
+            .unwrap();
+        let schema = ponko::d3::gltf_properties_schema(&ctx.world);
+        std::fs::write(&out, serde_json::to_string_pretty(&schema).unwrap() + "\n").unwrap();
+    });
+}
+
+#[test]
+fn the_blender_add_on_test_schema_matches_what_the_engine_writes() {
+    use ponko::reflect::ValueSchema;
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tools/blender/fixtures/ponko-schema.json");
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(fixture).unwrap()).unwrap();
+    game().run_headless(0, move |ctx| {
+        reflect(ctx);
+        ctx.world
+            .describe_component("Health", ValueSchema::strict_object([("hp", ValueSchema::Number)]))
+            .unwrap();
+        let now = ponko::d3::gltf_properties_schema(&ctx.world);
+        // The convention's keys and the game's components; the engine's own
+        // reflected components may come and go.
+        for key in [
+            "ponko:collider",
+            "ponko:body",
+            "ponko:lod",
+            "ponko:layers",
+            "ponko:Health",
+            "ponko:Barrel",
+        ] {
+            assert_eq!(
+                saved["properties"][key], now["properties"][key],
+                "{key}: regenerate the fixture with write_blender_schema_fixture"
+            );
+        }
+    });
+}
+
+#[test]
+fn a_save_loads_in_a_fresh_game_and_games_without_scenes_have_no_record() {
+    let prefab = barrel_prefab();
+    let file = TempAsset::with_contents("level.gltf", &barrel_level(prefab.name()));
+    let save = TempAsset::new("save.json");
+    let path = save.path();
+    game().run_headless(0, |ctx| {
+        reflect(ctx);
+        assert!(
+            !ctx.world.reflected_resources().contains(&"GltfSceneSaves"),
+            "not listed before a glTF scene is spawned"
+        );
+        let root = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        play_barrel_level(ctx, root);
+        std::fs::write(&path, ctx.world.save().to_string()).unwrap();
+    });
+    // The next run: nothing glTF happened yet when the save loads.
+    let mut world = game().run_headless(0, |ctx| {
+        reflect(ctx);
+        ctx.load_scene(save.name()).unwrap();
+        let root = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        assert!(ctx.world.get::<GltfRoot>(root).unwrap().entity("BarrelA").is_some());
+    });
+    assert_eq!(barrels(&mut world).len(), 2);
 }

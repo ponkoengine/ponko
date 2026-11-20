@@ -438,3 +438,143 @@ fn physics_queries_and_the_camera_rig_work_inside_a_query_callback_but_not_a_par
         );
     });
 }
+
+#[test]
+fn c_aseprite_loads_frames_and_starts_tags_on_live_entities() {
+    // Original 2x2 RGBA PNG (red, green on the first row; blue, yellow below).
+    const PNG: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0, 114, 182,
+        13, 36, 0, 0, 0, 20, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31, 12, 129, 52, 16, 48, 252, 7, 0, 71,
+        202, 8, 248, 139, 78, 67, 133, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+    let dir = std::env::temp_dir().join(format!("ponko-c-aseprite-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("layers.png"), PNG).unwrap();
+    let json = dir.join("hero.json");
+    std::fs::write(&json, include_str!("../../../tests/fixtures/aseprite/composite.json")).unwrap();
+    let path = std::ffi::CString::new(json.to_str().unwrap()).unwrap();
+
+    with_ctx(|ctx| unsafe {
+        let world = ponko_ctx_world(ctx);
+        let mut entity = 0;
+        assert_eq!(ponko_spawn(world, null(), 0, &mut entity), PONKO_OK);
+        let mut first = PonkoSprite::default();
+        assert_eq!(
+            ponko_ctx_aseprite_frame(ctx, path.as_ptr(), false, 0, null(), &mut first),
+            PONKO_OK
+        );
+        assert!(first.has_region);
+        let mut second = first;
+        assert_eq!(
+            ponko_ctx_aseprite_frame(ctx, path.as_ptr(), false, 1, null(), &mut second),
+            PONKO_OK
+        );
+        assert_eq!(first.texture.id, second.texture.id);
+        assert_ne!(first.region.min, second.region.min);
+        assert_eq!(
+            ponko_ctx_aseprite_frame(ctx, path.as_ptr(), false, 2, null(), &mut second),
+            PONKO_NOT_FOUND
+        );
+        assert_eq!(
+            ponko_ctx_play_aseprite(ctx, entity, path.as_ptr(), false, c"Missing".as_ptr(), null()),
+            PONKO_NOT_FOUND
+        );
+        assert_eq!(
+            ponko_ctx_play_aseprite(ctx, entity, path.as_ptr(), false, c"Run".as_ptr(), null()),
+            PONKO_OK
+        );
+        let mut component = 0;
+        assert_eq!(ponko_sprite_component(world, &mut component), PONKO_OK);
+        assert_eq!(
+            ponko_get(
+                world,
+                entity,
+                component,
+                (&raw mut second).cast(),
+                size_of::<PonkoSprite>()
+            ),
+            PONKO_OK
+        );
+        assert_eq!(first.texture.id, second.texture.id);
+        assert_eq!(first.region.min, second.region.min);
+    });
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn c_ldtk_spawns_at_the_world_offset_and_maps_fields_to_native_components() {
+    let dir = std::env::temp_dir().join(format!("ponko-c-ldtk-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let json = dir.join("world.ldtk");
+    let mut layout: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/tilemaps/layout.ldtk")).unwrap();
+    // Native reflected layouts describe scalar fields. This component uses only value.
+    layout["worlds"][0]["levels"][0]["layerInstances"][0]["entityInstances"][0]["fieldInstances"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    std::fs::write(&json, layout.to_string()).unwrap();
+    let path = std::ffi::CString::new(json.to_str().unwrap()).unwrap();
+
+    with_ctx(|ctx| unsafe {
+        let world = ponko_ctx_world(ctx);
+        let mut stats = 0;
+        assert_eq!(
+            ponko_component_register(world, c"PickupStats".as_ptr(), 4, 4, &mut stats),
+            PONKO_OK
+        );
+        let field = PonkoField {
+            name: c"value".as_ptr(),
+            kind: PonkoFieldType::PONKO_FIELD_U32 as u32,
+            offset: 0,
+        };
+        assert_eq!(ponko_component_reflect(world, stats, &field, 1), PONKO_OK);
+        let level = PonkoLevelOptions {
+            prefab_classes: null(),
+            prefab_paths: null(),
+            prefab_count: 0,
+            solid: null(),
+            solid_count: 0,
+            level: c"hub-room".as_ptr(),
+            no_colliders: false,
+            z: 0.,
+        };
+        let classes = [c"Pickup".as_ptr()];
+        let components = [c"PickupStats".as_ptr()];
+        let options = PonkoLdtkOptions {
+            level: &level,
+            at_world_position: true,
+            without_saved_objects: false,
+            classes: classes.as_ptr(),
+            components: components.as_ptr(),
+            mapping_count: 1,
+        };
+        let mut root = 0;
+        assert_eq!(
+            ponko_ctx_spawn_ldtk_level(ctx, path.as_ptr(), v2(10., 20.), &options, &mut root),
+            PONKO_OK
+        );
+        let mut entity = 0;
+        let mut total = 0;
+        assert_eq!(ponko_level_entities(world, root, &mut entity, 1, &mut total), PONKO_OK);
+        assert_eq!(total, 1);
+        let mut value = 0u32;
+        assert_eq!(ponko_get(world, entity, stats, (&raw mut value).cast(), 4), PONKO_OK);
+        assert_eq!(value, 7);
+        let mut transform_id = 0;
+        let mut transform = PonkoTransform2D::default();
+        assert_eq!(ponko_transform_component(world, &mut transform_id), PONKO_OK);
+        assert_eq!(
+            ponko_get(
+                world,
+                root,
+                transform_id,
+                (&raw mut transform).cast(),
+                size_of::<PonkoTransform2D>()
+            ),
+            PONKO_OK
+        );
+        assert_eq!(transform.position, v2(-38., 100.));
+    });
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -55,6 +55,13 @@ pub(super) enum Part {
         first: u32,
         end: u32,
     },
+    /// Light views `first..=last` (shadow view indices), each drawn whole
+    /// into its tile of the atlas, in one pass: small views share a pass
+    /// instead of starting one each. Views whose tiles are kept are skipped.
+    LightViews {
+        first: usize,
+        last: usize,
+    },
     /// Every target camera.
     Views,
     /// Global illumination's probe views and their update.
@@ -73,7 +80,7 @@ impl Part {
     pub(super) fn pass(self) -> usize {
         match self {
             Part::Prelude => passes::PRELUDE,
-            Part::Shadow { .. } => passes::SHADOW,
+            Part::Shadow { .. } | Part::LightViews { .. } => passes::SHADOW,
             Part::Views => passes::VIEWS,
             Part::Gi => passes::GI,
             Part::Prepass => passes::PREPASS,
@@ -105,6 +112,52 @@ pub(super) struct FrameParts<'a, 't> {
 /// map; recording a few hundred draws costs a fraction of a millisecond.
 pub(super) const SHADOW_DRAWS_PER_PASS: usize = 300;
 
+/// What starting a pass costs to record, in draws (see `Renderer3D::part_work`).
+const PASS_WORK: usize = 8;
+
+/// The recording work, in draws, worth a command encoder of its own (see
+/// [`encoder_groups`]). An encoder costs wgpu a command buffer and resource
+/// trackers sized to every resource the device holds (a few dozen heap
+/// allocations each); below this much work, recording on another core
+/// doesn't pay for it.
+pub(super) const ENCODER_WORK: usize = 250;
+
+/// The most encoders a frame records into, on as many cores.
+pub(super) const MAX_ENCODERS: usize = 8;
+
+/// Splits `parts` (recorded in this order) into consecutive groups, each
+/// recorded into one encoder: as many groups as the frame has
+/// [`ENCODER_WORK`] (at least one, at most [`MAX_ENCODERS`] and `cores`),
+/// each with about the same work (`work` estimates a part's). Gives each
+/// group's end in `parts` and the number of groups. A small frame (a
+/// minimap's, a simple scene's) is one encoder.
+pub(super) fn encoder_groups(
+    parts: &[Part],
+    work: impl Fn(&Part) -> usize,
+    cores: usize,
+) -> ([usize; MAX_ENCODERS], usize) {
+    let mut ends = [parts.len(); MAX_ENCODERS];
+    let total: usize = parts.iter().map(&work).sum();
+    let groups = total
+        .div_ceil(ENCODER_WORK)
+        .clamp(1, MAX_ENCODERS.min(cores.max(1)).min(parts.len().max(1)));
+    // Close a group once it holds its share of what is left.
+    let (mut group, mut done, mut held) = (0, 0, 0);
+    for (i, part) in parts.iter().enumerate() {
+        let w = work(part);
+        let left = groups - group;
+        if left > 1 && held > 0 && held + w / 2 > (total - done).div_ceil(left) {
+            ends[group] = i;
+            group += 1;
+            done += held;
+            held = 0;
+        }
+        held += w;
+    }
+    ends[group] = parts.len();
+    (ends, group + 1)
+}
+
 /// GPU timer names of the shadow cascades' passes.
 pub(super) const SHADOW_PASSES: [&str; 8] = [
     "shadows 0",
@@ -134,6 +187,9 @@ pub(super) enum Kind {
     /// Global illumination's probe views: lit, solid surfaces writing
     /// their own depth (cut-outs went through `PrepassCoverage`).
     Capture,
+    /// The view model's held items (`view_model.rs`): lit, solid surfaces
+    /// writing their own depth at the end of the opaque pass.
+    ViewModel,
 }
 
 impl Kind {
@@ -146,6 +202,7 @@ impl Kind {
             Kind::Transparent => Pass::Transparent,
             Kind::Velocity | Kind::VelocityStill => Pass::Velocity,
             Kind::Capture => Pass::Capture,
+            Kind::ViewModel => Pass::Opaque,
         }
     }
 }
@@ -172,6 +229,11 @@ impl Renderer3D {
     /// write their own depth in the opaque pass (see `stencil.rs`).
     pub(super) fn draw_role(&self, kind: Kind, id: u32, m: &GpuMaterial) -> Option<PipelineRole> {
         let stencil_solid = !m.cutout && !m.transparent && self.stencil.has(id);
+        if kind == Kind::ViewModel {
+            // In no prepass: solid surfaces write their own depth; cut-outs
+            // (tested against the prepass's depth) aren't drawn.
+            return (!m.cutout && !m.transparent).then_some(PipelineRole::OpaqueSolid);
+        }
         if stencil_solid && matches!(kind, Kind::Velocity | Kind::VelocityStill) {
             return None;
         }
@@ -253,7 +315,7 @@ impl Renderer3D {
                 });
                 pass.set_pipeline(self.compute_pipelines[compute as usize].as_ref().unwrap());
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
-                pass.set_bind_group(1, &self.resources.materials[material as usize].bind_group, &[]);
+                pass.set_bind_group(1, &self.resources.material(material).bind_group, &[]);
                 pass.set_bind_group(2, scene, &[]);
                 pass.set_bind_group(3, &buffer.write, &[]);
                 pass.dispatch_workgroups(buffer.len.div_ceil(64), 1, 1);
@@ -273,7 +335,7 @@ impl Renderer3D {
                 });
                 pass.set_pipeline(self.compute_pipelines[compute as usize].as_ref().unwrap());
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
-                pass.set_bind_group(1, &self.resources.materials[material as usize].bind_group, &[]);
+                pass.set_bind_group(1, &self.resources.material(material).bind_group, &[]);
                 pass.set_bind_group(2, scene, &[]);
                 pass.set_bind_group(3, &state.group, &[]);
                 let size = state.target.size();
@@ -332,8 +394,66 @@ impl Renderer3D {
         if !self.extra {
             self.shadow_cache.recorded();
         }
+        let parts = self.frame_parts(split);
+        // The frame must keep what its passes declare (see `passes`):
+        // checked in debug builds, so in every render test.
+        let checks = self.check_frame(&parts, targets, view);
+        let frame = FrameParts {
+            view,
+            clear,
+            textures,
+            targets,
+            split,
+            time: &time,
+            checks,
+        };
+        // Consecutive parts share an encoder: each one costs wgpu a command
+        // buffer, its resource trackers and their allocations. A busy
+        // frame still records on several cores, in a few encoders of about
+        // equal work (see `encoder_groups`).
+        let weights = |part: &Part| self.part_work(*part);
+        #[cfg(not(target_arch = "wasm32"))]
+        let most = rayon::current_num_threads();
+        #[cfg(target_arch = "wasm32")]
+        let most = 1;
+        let (ends, groups) = encoder_groups(&parts, weights, most);
+        let record = |group: usize| {
+            let start = if group == 0 { 0 } else { ends[group - 1] };
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some(parts[start].label()),
+            });
+            // The prepared frame's buffer writes land first.
+            if group == 0 {
+                self.record_pending_writes(&mut encoder);
+            }
+            for part in &parts[start..ends[group]] {
+                let outer = checks.begin(part.pass());
+                self.record(*part, &mut encoder, &frame);
+                checks.end(*part, outer);
+            }
+            encoder.finish()
+        };
+        let mut buffers = Vec::with_capacity(groups);
+        #[cfg(not(target_arch = "wasm32"))]
+        if groups > 1 {
+            use rayon::prelude::*;
+            buffers.par_extend((0..groups).into_par_iter().map(record));
+        } else {
+            buffers.push(record(0));
+        }
+        #[cfg(target_arch = "wasm32")]
+        buffers.extend((0..groups).map(record));
+        buffers
+    }
+
+    /// The parts of this frame, in the order they are recorded and
+    /// submitted (see [`draw`](Self::draw)).
+    pub(super) fn frame_parts(&self, split: bool) -> Vec<Part> {
         let mut parts = Vec::with_capacity(8 + self.lists.cascades + self.lists.light_views);
         parts.push(Part::Prelude);
+        // Small light views drawn this frame, waiting to share a pass:
+        // (first, last, draws).
+        let mut lights: Option<(usize, usize, usize)> = None;
         for cascade in shadow_views(self.lists.cascades, self.lists.light_views) {
             if cascade < MAX_CASCADES && self.lists.redrawn & (1 << cascade) == 0 {
                 continue; // kept from an earlier frame: not even cleared
@@ -342,6 +462,24 @@ impl Renderer3D {
                 continue; // its tile already holds this
             }
             let runs = &self.lists.shadow_parts[cascade];
+            if cascade >= MAX_CASCADES && runs.len() < SHADOW_DRAWS_PER_PASS {
+                match &mut lights {
+                    Some((_, last, draws)) if *draws + runs.len() < SHADOW_DRAWS_PER_PASS => {
+                        (*last, *draws) = (cascade, *draws + runs.len());
+                    }
+                    _ => {
+                        if let Some((first, last, _)) = lights {
+                            parts.push(Part::LightViews { first, last });
+                        }
+                        lights = Some((cascade, cascade, runs.len()));
+                    }
+                }
+                continue;
+            }
+            // Views keep their order: the first one may clear the atlas.
+            if let Some((first, last, _)) = lights.take() {
+                parts.push(Part::LightViews { first, last });
+            }
             let mut first = 0;
             let mut draws = 0;
             for i in 0..runs.len() {
@@ -363,6 +501,9 @@ impl Renderer3D {
                 });
             }
         }
+        if let Some((first, last, _)) = lights {
+            parts.push(Part::LightViews { first, last });
+        }
         // A window view (see `views.rs`) draws only its own camera's passes.
         if !self.extra && (!self.lists.views.is_empty() || self.environment.has_probes()) {
             parts.push(Part::Views);
@@ -375,36 +516,20 @@ impl Renderer3D {
             parts.push(Part::Transparent);
         }
         parts.push(Part::Post);
-        // The frame must keep what its passes declare (see `passes`):
-        // checked in debug builds, so in every render test.
-        let checks = self.check_frame(&parts, targets, view);
-        let frame = FrameParts {
-            view,
-            clear,
-            textures,
-            targets,
-            split,
-            time: &time,
-            checks,
-        };
-        let record = |part: &Part| {
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some(part.label()),
-            });
-            let outer = checks.begin(part.pass());
-            self.record(*part, &mut encoder, &frame);
-            checks.end(*part, outer);
-            encoder.finish()
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            use rayon::prelude::*;
-            parts.par_iter().map(record).collect()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            parts.iter().map(record).collect()
-        }
+        parts
+    }
+
+    /// How many passes draw into the light shadow atlas this frame (test hook).
+    #[cfg(test)]
+    pub(crate) fn light_shadow_passes(&self) -> usize {
+        self.frame_parts(self.splits_transparent())
+            .iter()
+            .filter(|p| match p {
+                Part::Shadow { cascade, .. } => *cascade >= MAX_CASCADES,
+                Part::LightViews { .. } => true,
+                _ => false,
+            })
+            .count()
     }
 
     /// Records one part of the frame (see [`draw`](Self::draw)).
@@ -421,6 +546,7 @@ impl Renderer3D {
         match part {
             Part::Prelude => {
                 self.cull_static(encoder, time);
+                self.cull_crowds(encoder, time);
                 if self.extra {
                     return; // the main frame posed, computed and drew the sky
                 }
@@ -436,7 +562,8 @@ impl Renderer3D {
                 }
                 // Compute passes first, so this frame's materials see their results.
                 self.record_computes(encoder, &self.lists.computes, &self.no_scene, time, COMPUTE_STEPS);
-                if self.atmosphere && self.environment.needs_sky() {
+                let redraw_sky = self.atmosphere && self.environment.needs_sky();
+                if redraw_sky {
                     passes::mark("sky texture");
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("3d sky texture"),
@@ -459,6 +586,54 @@ impl Renderer3D {
                     pass.draw(0..3, 0..1);
                 }
                 self.environment.sky(encoder, &self.sky_texture);
+                // The sky kit's air alone, for its background: into the sky
+                // texture (copied into the atlas just above), then beside
+                // the cloud shadow map.
+                if let Some(air) = self.kit_air().filter(|_| redraw_sky) {
+                    passes::mark("sky kit lookup");
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("3d sky kit lookup"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &self.sky_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: time("sky kit lookup"),
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(air);
+                    pass.set_bind_group(0, &self.shadows.bind_group, &[0]);
+                    pass.draw(0..3, 0..1);
+                    drop(pass);
+                    let [x, y] = super::super::clouds::AIR_ORIGIN;
+                    encoder.copy_texture_to_texture(
+                        self.sky_texture.as_image_copy(),
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &self.environment.atlas,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x, y, z: 0 },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        self.sky_texture.size(),
+                    );
+                }
+                // The sky kit's cloud shadows and clouds (see `clouds.rs`).
+                if let Some(clouds) = self.clouds.as_deref() {
+                    let (shadows, volumetric) = self.kit_passes();
+                    if shadows {
+                        passes::mark("cloud shadows");
+                        clouds.record_shadows(encoder, &self.environment.atlas, time("cloud shadows"));
+                    }
+                    if volumetric {
+                        clouds.record_volume(encoder, &self.frame_bind_group, time);
+                    }
+                }
             }
             Part::Shadow { cascade, first, end } => {
                 // Light views share the atlas: the first one clears all of
@@ -472,59 +647,22 @@ impl Renderer3D {
                 } else {
                     return;
                 };
-                passes::mark(if cascade < MAX_CASCADES {
-                    "sun shadows"
-                } else {
-                    "light shadows"
-                });
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("3d shadows"),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: if clear {
-                                wgpu::LoadOp::Clear(1.0)
-                            } else {
-                                wgpu::LoadOp::Load
-                            },
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: time(if cascade < MAX_CASCADES {
-                        SHADOW_PASSES[cascade.min(SHADOW_PASSES.len() - 1)]
-                    } else {
-                        "light shadows"
-                    }),
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                if cascade >= MAX_CASCADES
-                    && let Some(&[x, y, side]) = self.lists.light_tiles.get(cascade - MAX_CASCADES)
-                {
-                    pass.set_viewport(x as f32, y as f32, side as f32, side as f32, 0.0, 1.0);
-                    pass.set_scissor_rect(x, y, side, side);
-                    if !whole
-                        && first == 0
-                        && let Some(tile_clear) = &self.shadows.tile_clear
-                    {
-                        pass.set_pipeline(tile_clear);
-                        pass.draw(0..3, 0..1);
+                let mut pass = self.begin_shadow_pass(encoder, view, clear, cascade < MAX_CASCADES, cascade, time);
+                self.draw_shadow_view(&mut pass, cascade, first, end, whole);
+            }
+            Part::LightViews { first, last } => {
+                let Some(atlas) = &self.shadows.light_atlas else {
+                    return;
+                };
+                let whole = self.shadow_cache.light_kept == 0;
+                let clear = whole && first == MAX_CASCADES;
+                let mut pass = self.begin_shadow_pass(encoder, atlas, clear, false, first, time);
+                for cascade in first..=last {
+                    if self.shadow_cache.light_kept & (1 << (cascade - MAX_CASCADES)) != 0 {
+                        continue; // its tile already holds this
                     }
-                }
-                let offset = (self.shadows.stride * cascade as u64) as u32;
-                pass.set_bind_group(0, &self.shadows.bind_group, &[offset]);
-                pass.set_bind_group(2, &self.no_scene, &[]);
-                let runs = &self.lists.shadow_parts[cascade][first as usize..end as usize];
-                self.record_model_parts(
-                    &mut pass,
-                    runs.iter().map(|p| (p.run, Some(p.part))),
-                    Kind::Shadow(cascade),
-                    &self.instances,
-                );
-                if first == 0 {
-                    self.draw_models(&mut pass, &[], Kind::Shadow(cascade), &self.instances);
+                    let end = self.lists.shadow_parts[cascade].len() as u32;
+                    self.draw_shadow_view(&mut pass, cascade, 0, end, whole);
                 }
             }
             Part::Views => {
@@ -687,6 +825,10 @@ impl Renderer3D {
                         pass.set_pipeline(self.sky_pipelines().1);
                         pass.set_bind_group(0, &self.frame_bind_group, &[]);
                         pass.draw(0..3, 0..1);
+                        // The sky kit's clouds over the sky.
+                        if let Some(clouds) = self.clouds.as_deref().filter(|_| self.kit_passes().1) {
+                            clouds.composite(&mut pass);
+                        }
                         pass.set_bind_group(2, opaque_scene, &[]);
                     }
                     if !split {
@@ -694,6 +836,8 @@ impl Renderer3D {
                         self.particles.draw(&mut pass, textures, self.resources.white);
                         self.draw_debug_lines(&mut pass);
                     }
+                    // Last: the held items, over everything (see `view_model.rs`).
+                    self.draw_view_model(&mut pass, targets.size, true, !split);
                 }
                 if let (Some(ssr), Some(images)) = (&self.screen.ssr, &targets.ssr) {
                     ssr.keep(encoder, images);
@@ -751,9 +895,101 @@ impl Renderer3D {
                     self.draw_models(&mut pass, &self.lists.blended_runs, Kind::Transparent, &self.instances);
                     self.particles.draw(&mut pass, textures, self.resources.white);
                     self.draw_debug_lines(&mut pass);
+                    self.draw_view_model(&mut pass, targets.size, false, true);
                 }
             }
             Part::Post => self.record_post(encoder, frame),
+        }
+    }
+
+    /// Starts a depth-only pass into a shadow map: `view` is a sun cascade's
+    /// layer (`sun`, timed under that cascade's name) or the light atlas,
+    /// cleared first or kept.
+    fn begin_shadow_pass<'e>(
+        &self,
+        encoder: &'e mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        clear: bool,
+        sun: bool,
+        cascade: usize,
+        time: &PassTimer<'_, '_>,
+    ) -> wgpu::RenderPass<'e> {
+        passes::mark(if sun { "sun shadows" } else { "light shadows" });
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("3d shadows"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view,
+                depth_ops: Some(wgpu::Operations {
+                    load: if clear {
+                        wgpu::LoadOp::Clear(1.0)
+                    } else {
+                        wgpu::LoadOp::Load
+                    },
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: time(if sun {
+                SHADOW_PASSES[cascade.min(SHADOW_PASSES.len() - 1)]
+            } else {
+                "light shadows"
+            }),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        })
+    }
+
+    /// Draws shadow view `cascade`'s runs `first..end` into `pass`: a light
+    /// view into its tile of the atlas (cleared first when the atlas isn't
+    /// cleared whole), and with the first runs the view's instance batches.
+    fn draw_shadow_view(&self, pass: &mut wgpu::RenderPass<'_>, cascade: usize, first: u32, end: u32, whole: bool) {
+        if cascade >= MAX_CASCADES
+            && let Some(&[x, y, side]) = self.lists.light_tiles.get(cascade - MAX_CASCADES)
+        {
+            pass.set_viewport(x as f32, y as f32, side as f32, side as f32, 0.0, 1.0);
+            pass.set_scissor_rect(x, y, side, side);
+            if !whole
+                && first == 0
+                && let Some(tile_clear) = &self.shadows.tile_clear
+            {
+                pass.set_pipeline(tile_clear);
+                pass.draw(0..3, 0..1);
+            }
+        }
+        let offset = (self.shadows.stride * cascade as u64) as u32;
+        pass.set_bind_group(0, &self.shadows.bind_group, &[offset]);
+        pass.set_bind_group(2, &self.no_scene, &[]);
+        let runs = &self.lists.shadow_parts[cascade][first as usize..end as usize];
+        self.record_model_parts(
+            pass,
+            runs.iter().map(|p| (p.run, Some(p.part))),
+            Kind::Shadow(cascade),
+            &self.instances,
+        );
+        if first == 0 {
+            self.draw_models(pass, &[], Kind::Shadow(cascade), &self.instances);
+        }
+    }
+
+    /// About how much recording `part` costs, in draws: its draws, and a
+    /// share for each pass it starts (see [`encoder_groups`]).
+    fn part_work(&self, part: Part) -> usize {
+        let l = &self.lists;
+        match part {
+            Part::Prelude => PASS_WORK * (1 + l.computes.len()),
+            Part::Shadow { first, end, .. } => PASS_WORK + (end - first) as usize,
+            Part::LightViews { first, last } => {
+                PASS_WORK + (first..=last).map(|v| l.shadow_parts[v].len()).sum::<usize>()
+            }
+            Part::Views => l.views.iter().map(|(_, runs, _)| 2 * (PASS_WORK + runs.len())).sum(),
+            Part::Gi => 3 * PASS_WORK + l.gi_runs.len() + 2 * l.gi_face_runs.len(),
+            // The depth prepass, and the screen-space passes after it.
+            Part::Prepass => 3 * PASS_WORK + l.solid_runs.len(),
+            Part::Opaque => PASS_WORK + l.solid_runs.len() + l.blended_runs.len(),
+            Part::Transparent => PASS_WORK + l.blended_runs.len(),
+            // Bloom's chain, the effects and tone mapping: many short passes.
+            Part::Post => 12 * PASS_WORK + l.scene_computes.len() * PASS_WORK,
         }
     }
 
@@ -972,7 +1208,7 @@ impl Renderer3D {
                     .iter()
                     .enumerate()
                     .any(|(part, &(_, m))| {
-                        let m = &self.resources.materials[self.part_material(mesh, part, m) as usize];
+                        let m = self.resources.material(self.part_material(mesh, part, m));
                         m.transparent && self.shaders.sets[m.shader as usize].reads_scene
                     })
             })
@@ -1075,6 +1311,7 @@ impl Renderer3D {
         if kind != Kind::Velocity {
             self.draw_static(pass, kind, view);
         }
+        self.draw_crowds(pass, kind, view);
     }
 
     pub(super) fn draw_model_runs(
@@ -1095,6 +1332,7 @@ impl Renderer3D {
             &self.instances,
         );
         self.draw_static(pass, kind, 0);
+        self.draw_crowds(pass, kind, 0);
     }
 
     fn record_model_parts(
@@ -1163,7 +1401,7 @@ impl Renderer3D {
             for (index, (range, material)) in parts.iter().enumerate() {
                 let part = first_part + index;
                 let material = &self.part_material(run_mesh, part, *material);
-                let m = &self.resources.materials[*material as usize];
+                let m = self.resources.material(*material);
                 // The role for the material's blend in this pass (see
                 // `PipelineRole::for_pass`): transparent surfaces are drawn
                 // last and cast no shadows.
@@ -1259,5 +1497,68 @@ impl Renderer3D {
         if let Some(lines) = &self.debug_lines {
             lines.draw(pass);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ENCODER_WORK, MAX_ENCODERS, Part, encoder_groups};
+
+    fn shadows(n: usize) -> Vec<Part> {
+        (0..n)
+            .map(|cascade| Part::Shadow {
+                cascade,
+                first: 0,
+                end: 0,
+            })
+            .collect()
+    }
+
+    /// Each group's parts, as ranges of `parts`.
+    fn groups(parts: &[Part], work: &[usize], cores: usize) -> Vec<std::ops::Range<usize>> {
+        let index = |p: &Part| match p {
+            Part::Shadow { cascade, .. } => *cascade,
+            _ => unreachable!(),
+        };
+        let (ends, n) = encoder_groups(parts, |p| work[index(p)], cores);
+        (0..n).map(|g| if g == 0 { 0 } else { ends[g - 1] }..ends[g]).collect()
+    }
+
+    #[test]
+    fn a_small_frame_is_recorded_into_one_encoder() {
+        let parts = shadows(6);
+        assert_eq!(groups(&parts, &[10; 6], 8), vec![0..6]);
+        assert_eq!(groups(&parts, &[ENCODER_WORK / 6; 6], 8), vec![0..6]);
+    }
+
+    #[test]
+    fn a_busy_frame_is_split_into_groups_of_about_equal_work_in_order() {
+        let parts = shadows(2 * MAX_ENCODERS);
+        let work = [ENCODER_WORK; 2 * MAX_ENCODERS];
+        let g = groups(&parts, &work, 2 * MAX_ENCODERS);
+        assert_eq!(g.len(), MAX_ENCODERS);
+        // Consecutive and covering every part once, in order.
+        assert_eq!(g[0].start, 0);
+        assert_eq!(g[g.len() - 1].end, parts.len());
+        assert!(g.windows(2).all(|w| w[0].end == w[1].start && !w[0].is_empty()));
+        assert!(g.iter().all(|r| r.len() == 2), "{g:?}");
+        // One big part with small ones around it: the big one is a group
+        // of its own, the small ones share.
+        let parts = shadows(8);
+        let work = [20, 20, 3 * ENCODER_WORK, 20, 20, 20, 20, 20];
+        let g = groups(&parts, &work, 16);
+        assert!(
+            g.contains(&(2..3)) || g.iter().any(|r| r.contains(&2) && r.len() <= 2),
+            "{g:?}"
+        );
+        assert!(g.len() <= MAX_ENCODERS);
+    }
+
+    #[test]
+    fn no_more_encoders_than_cores() {
+        let parts = shadows(8);
+        assert_eq!(groups(&parts, &[ENCODER_WORK; 8], 2).len(), 2);
+        assert_eq!(groups(&parts, &[ENCODER_WORK; 8], 1), vec![0..8]);
+        assert_eq!(groups(&parts, &[ENCODER_WORK; 8], 0), vec![0..8]);
     }
 }

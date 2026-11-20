@@ -826,7 +826,7 @@ impl Renderer3D {
         );
         let ctx = EffectPass {
             frame: &self.frame_bind_group,
-            materials: &self.resources.materials,
+            resources: &self.resources,
             storage_dummy: self.resources.storage_dummy.as_ref(),
             targets,
             time,

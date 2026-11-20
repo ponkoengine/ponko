@@ -12,10 +12,13 @@ use crate::camera2d::Camera2D;
 /// in freely, a look-ahead that shows more of where it is heading, and
 /// bounds the camera never shows past (the level's edges).
 ///
-/// Keep one (as a resource), and every frame call
-/// [`update`](Self::update) with the target's position. The first update
-/// (and [`snap`](Self::snap), for a respawn or a new level) puts the
-/// camera on the target at once; later ones ease it there.
+/// Keep one as a resource and put a
+/// [`CameraTarget`](crate::camera::CameraTarget) on the entity it should
+/// follow: the engine updates it every frame, after everything moved. Or
+/// call [`update`](Self::update) yourself every frame with the target's
+/// position. The first update (and [`snap`](Self::snap), for a respawn or
+/// a new level) puts the camera on the target at once; later ones ease it
+/// there.
 ///
 /// The settings are plain fields; the rest is the rig's state, which
 /// `update` keeps (read it, don't write it).
@@ -60,6 +63,11 @@ pub struct FollowCamera2D {
     /// The part of the world the camera may show, if any: it stops at the
     /// edges, and centers on bounds smaller than the view. Default none.
     pub bounds: Option<Rect>,
+    /// Pixel art: [`snap`](Self::snap) and [`update`](Self::update) apply
+    /// it to the camera before placing it (the bounds depend on its zoom)
+    /// and after (so the camera rests on the art's pixel grid). Default
+    /// none.
+    pub pixel_perfect: Option<PixelPerfect2D>,
     /// State: the world point the camera centers on.
     pub center: Vec2,
     /// State: how fast `center` moves (for the smoothing).
@@ -88,6 +96,7 @@ impl Default for FollowCamera2D {
             offset: Vec2::ZERO,
             smooth_time: 0.15,
             bounds: None,
+            pixel_perfect: None,
             center: Vec2::ZERO,
             velocity: Vec2::ZERO,
             focus: Vec2::ZERO,
@@ -171,6 +180,27 @@ impl FollowCamera2D {
         }
     }
 
+    /// The same, keeping the camera on `pixels`' grid (see
+    /// [`pixel_perfect`](Self::pixel_perfect)).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// use ponko::d2::{FollowCamera, PixelPerfect};
+    /// Game::new("Retro", 1280, 720).run_headless(1, |ctx| {
+    ///     let mut follow = FollowCamera::default().with_pixel_perfect(PixelPerfect::new(320.0, 180.0));
+    ///     follow.update(&mut ctx.camera, vec2(100.3, 50.8), ctx.time.frame_dt());
+    ///     assert_eq!(ctx.camera.zoom, 4.0);
+    ///     assert_eq!(ctx.camera.position, ctx.camera.position.round());
+    /// });
+    /// ```
+    #[must_use]
+    pub fn with_pixel_perfect(self, pixels: PixelPerfect2D) -> Self {
+        Self {
+            pixel_perfect: Some(pixels),
+            ..self
+        }
+    }
+
     /// Puts the camera on `target` at once, without easing: for the first
     /// frame, a respawn or a new level. Forgets the dead zone and the
     /// smoothing's speed; keeps the look-ahead direction.
@@ -182,6 +212,9 @@ impl FollowCamera2D {
     /// # }
     /// ```
     pub fn snap(&mut self, camera: &mut Camera2D, target: Vec2) {
+        if let Some(pixels) = self.pixel_perfect {
+            pixels.apply(camera); // the zoom first: the bounds depend on it
+        }
         self.focus = target;
         self.last_target = target;
         self.velocity = Vec2::ZERO;
@@ -189,6 +222,9 @@ impl FollowCamera2D {
         self.center = self.clamp(camera, target + self.facing * self.look_ahead + self.offset);
         self.goal = self.center;
         camera.look_at(self.center);
+        if let Some(pixels) = self.pixel_perfect {
+            pixels.apply(camera);
+        }
     }
 
     /// Moves the camera toward `target` (the followed thing's world
@@ -206,6 +242,9 @@ impl FollowCamera2D {
         if !self.started || !self.center.is_finite() {
             self.snap(camera, target);
             return;
+        }
+        if let Some(pixels) = self.pixel_perfect {
+            pixels.apply(camera); // the zoom first: the bounds depend on it
         }
         if dt > 0.0 {
             let speed = (target - self.last_target) / dt;
@@ -229,6 +268,9 @@ impl FollowCamera2D {
             self.velocity = Vec2::ZERO;
         }
         camera.look_at(self.center);
+        if let Some(pixels) = self.pixel_perfect {
+            pixels.apply(camera);
+        }
     }
 
     /// `center` moved so the view stays within the bounds.

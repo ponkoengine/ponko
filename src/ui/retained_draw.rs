@@ -1,13 +1,7 @@
 use super::retained::*;
-use crate::input::GamepadButton;
+use crate::input::{GamepadButton, MouseButton};
 use crate::render::batch::{SpriteInstance, uv_region};
-use crate::{
-    camera::Rect,
-    color::Color,
-    ctx::Ctx,
-    input::{Key, MouseButton},
-    text::TextParams,
-};
+use crate::{camera::Rect, color::Color, ctx::Ctx, input::Key, text::TextParams};
 use glam::Vec2;
 
 /// A click an input scenario asked for: where, and the text typed after it.
@@ -148,11 +142,13 @@ impl Ctx {
             || self.input.key_down(Key::RightCtrl)
             || self.input.key_down(Key::LeftSuper)
             || self.input.key_down(Key::RightSuper);
+        // The mouse's left button, or the first finger when one was used last.
+        let (pointer, pointer_pressed, held, released) = self.input.ui_pointer();
         crate::ui::UiInput {
-            pointer: self.input.mouse_pos(),
-            pressed: self.input.mouse_pressed(MouseButton::Left),
-            held: self.input.mouse_down(MouseButton::Left),
-            released: self.input.mouse_released(MouseButton::Left),
+            pointer,
+            pressed: pointer_pressed,
+            held,
+            released,
             wheel: -self.input.mouse_wheel() * 40.0,
             next: pressed(Key::Tab) && !shift,
             previous: pressed(Key::Tab) && shift,
@@ -176,6 +172,14 @@ impl Ctx {
             home: pressed(Key::Home),
             end: pressed(Key::End),
             text,
+            dt: self.time.frame_dt(),
+            secondary: self.input.mouse_pressed(MouseButton::Right),
+            menu: (shift && pressed(Key::F10)) || pad(GamepadButton::North),
+            // Only a listening key-binding field reads it.
+            captured: ui
+                .capturing()
+                .then(|| self.input.pressed_this_frame().find_map(|p| p.button().cloned()))
+                .flatten(),
             ..Default::default()
         }
     }
@@ -247,34 +251,37 @@ impl Ctx {
         for (order, &id) in ui.visible.iter().enumerate() {
             let n = ui.node(id).unwrap();
             let z = 100.0 + order as f32 * 4.0;
-            if ui.modal_root(id) {
+            // Where its animation draws it: everything below is drawn in
+            // its place, then moved, scaled and faded together.
+            let xf = n.motion.xf;
+            if xf.opacity <= 0.0 {
+                continue;
+            }
+            if ui.modal_root(id) || ui.exiting_modal(id) {
                 self.gfx.ui_list.set_clip(None);
                 self.gfx.ui_fill(
                     Rect::new(0.0, 0.0, viewport.x, viewport.y),
-                    Color::rgba(0.0, 0.0, 0.0, 0.55),
+                    Color::rgba(0.0, 0.0, 0.0, 0.55 * xf.opacity),
                     z - 1.0,
                 );
             }
-            self.gfx.ui_list.set_clip(Some(n.clip));
-            let fill = if !n.enabled {
-                n.paint.disabled
-            } else if ui.pressed == Some(id) {
-                n.paint.pressed
-            } else if ui.hovered == Some(id) || ui.focus == Some(id) {
-                n.paint.hover
-            } else {
-                n.paint.background
-            };
-            let width = if ui.focus == Some(id) {
+            let sprites = self.gfx.ui_list.len();
+            self.gfx.ui_list.set_clip(Some(n.motion.shown_clip));
+            let fill = ui.shown_fill(id).unwrap_or(n.paint.background);
+            let width = if ui.focus == Some(id) || ui.is_capturing(id) {
                 n.paint.border_width.max(2.0)
             } else {
                 n.paint.border_width
             } * scale;
-            if width > 0.0 {
-                self.gfx.ui_fill(n.rect, n.paint.border, z);
+            let radius = ui.corner_radius(id);
+            if width > 0.0 && fill.a >= 0.999 {
+                self.gfx.ui_fill_rounded(n.rect, n.paint.border, z, radius);
+            } else if width > 0.0 {
+                // A see-through fill would show a solid border under it.
+                super::widgets_draw::outline(&mut self.gfx, n.rect, width, n.paint.border, z);
             }
             let rect = n.rect.expand(-width);
-            self.gfx.ui_fill(rect, fill, z + 0.1);
+            self.gfx.ui_fill_rounded(rect, fill, z + 0.1, (radius - width).max(0.0));
             if let Some(texture) = n.paint.texture {
                 self.retained_image(
                     texture,
@@ -285,33 +292,45 @@ impl Ctx {
                     z + 0.2,
                 );
             }
-            self.gfx.ui_list.set_clip(Some(intersect(n.clip, n.rect)));
+            self.gfx
+                .ui_list
+                .set_clip(Some(intersect(n.motion.shown_clip, xf.map_rect(n.rect))));
             let layout = ui.tree.layout(n.layout).unwrap();
+            // A control keeps what it draws at least three quarters of the theme's
+            // spacing from its left and right edges.
+            let framed = super::widgets_draw::framed(n.widget);
+            let side = |padding: f32| {
+                if framed {
+                    padding.max(ui.theme().spacing * 0.75)
+                } else {
+                    padding
+                }
+            };
             let inset = Vec2::new(
-                layout.padding.left + layout.border.left,
+                side(layout.padding.left) + layout.border.left,
                 layout.padding.top + layout.border.top,
             ) * scale;
             let content = Rect {
                 min: n.rect.min + inset,
                 max: n.rect.max
                     - Vec2::new(
-                        layout.padding.right + layout.border.right,
+                        side(layout.padding.right) + layout.border.right,
                         layout.padding.bottom + layout.border.bottom,
                     ) * scale,
             };
             let mut text_rect = content;
+            self.draw_widget_parts(ui, id, content, &mut text_rect, z);
             if n.widget == crate::ui::UiWidget::Toggle {
+                // The box, centred on the row.
                 let side = content.size().y.min(20.0 * scale);
-                self.gfx.ui_fill(
-                    Rect::new(content.min.x, content.min.y, side, side),
-                    n.paint.border,
-                    z + 0.4,
-                );
+                let top = content.center().y - side * 0.5;
+                self.gfx
+                    .ui_fill(Rect::new(content.min.x, top, side, side), n.paint.border, z + 0.4);
                 if n.value > 0.5 {
                     self.gfx.ui_fill(
                         Rect::new(
                             content.min.x + 4.0 * scale,
-                            content.min.y + 4.0 * scale,
+                            top + 4.0 * scale,
                             (side - 8.0 * scale).max(0.0),
                             (side - 8.0 * scale).max(0.0),
                         ),
@@ -349,7 +368,32 @@ impl Ctx {
             let is_input = n.widget == crate::ui::UiWidget::TextInput;
             let mut shown = std::mem::take(&mut self.ui_state.shown_scratch);
             let at = is_input.then(|| n.shown_text(&mut shown));
-            let text: &str = if is_input { &shown } else { &n.text };
+            let text: &str = if is_input {
+                &shown
+            } else if ui.is_capturing(id) {
+                // A key-binding field listening for a key.
+                LISTENING
+            } else {
+                &n.text
+            };
+            let params = TextParams {
+                font: n.paint.font,
+                size: font_size,
+                color: n.paint.color,
+                z: z + 0.7,
+            };
+            // A text field keeps its text at its left edge, where its caret
+            // and selection are measured from; labels and buttons align
+            // right-to-left paragraphs from the right.
+            let directional = !is_input;
+            let flags = (n.paint.wrap, directional);
+            // A control's text sits in the middle of its height.
+            if framed && n.rich().is_none() {
+                let height = self.retained_text(text, origin, text_rect.size().x, params, flags, n.paint.align, false);
+                if height < text_rect.size().y {
+                    origin.y = text_rect.center().y - height * 0.5;
+                }
+            }
             if let Some(at) = at.filter(|_| ui.focus == Some(id)) {
                 let caret = self
                     .gfx
@@ -407,27 +451,10 @@ impl Ctx {
                     );
                 }
             }
-            let params = TextParams {
-                font: n.paint.font,
-                size: font_size,
-                color: n.paint.color,
-                z: z + 0.7,
-            };
-            // A text field keeps its text at its left edge, where its caret
-            // and selection are measured from; labels and buttons align
-            // right-to-left paragraphs from the right.
-            let directional = !is_input;
             if let Some(rich) = n.rich() {
                 self.retained_rich(rich, &n.paint, text_rect, scale, params.z);
             } else {
-                self.retained_text(
-                    text,
-                    origin,
-                    text_rect.size().x,
-                    params,
-                    (n.paint.wrap, directional),
-                    n.paint.align,
-                );
+                self.retained_text(text, origin, text_rect.size().x, params, flags, n.paint.align, true);
             }
             self.ui_state.shown_scratch = shown;
             if n.widget == crate::ui::UiWidget::Scroll && n.max_scroll.y > 0.0 {
@@ -440,9 +467,19 @@ impl Ctx {
                     z + 0.9,
                 );
             }
+            if !xf.is_identity() {
+                self.gfx
+                    .ui_list
+                    .transform_from(sprites, xf.scale, xf.shift.into(), xf.opacity);
+            }
         }
         self.gfx.ui_list.set_clip(None);
+        let top = 100.0 + ui.visible.len() as f32 * 4.0 + 8.0;
+        self.draw_widget_overlays(ui, top);
     }
+    /// Lays `text` out from `origin` in lines `width` wide and, with `draw`,
+    /// draws it; returns how tall it is.
+    #[allow(clippy::too_many_arguments)]
     fn retained_text(
         &mut self,
         text: &str,
@@ -451,7 +488,8 @@ impl Ctx {
         params: TextParams,
         (wrap, directional): (bool, bool),
         align: crate::ui::UiTextAlign,
-    ) {
+        draw: bool,
+    ) -> f32 {
         let mut y = origin.y;
         for paragraph in text.split('\n') {
             let mut rest = paragraph;
@@ -470,7 +508,16 @@ impl Ctx {
                     rest.len()
                 };
                 let line = &rest[..end];
-                let w = self.gfx.measure_text_ex(line, params.font, params.size).x;
+                let size = self.gfx.measure_text_ex(line, params.font, params.size);
+                if !draw {
+                    y += size.y;
+                    if end == rest.len() {
+                        break;
+                    }
+                    rest = rest[end..].trim_start();
+                    continue;
+                }
+                let w = size.x;
                 // Start and End follow the paragraph's direction: a
                 // right-to-left paragraph starts at the right.
                 let rtl = directional && crate::text::Text::is_rtl(paragraph);
@@ -481,13 +528,14 @@ impl Ctx {
                         (crate::ui::UiTextAlign::End, false) | (crate::ui::UiTextAlign::Start, true) => width - w,
                     };
                 self.gfx.draw_text_ex(line, Vec2::new(x, y), params);
-                y += self.gfx.measure_text_ex(line, params.font, params.size).y;
+                y += size.y;
                 if end == rest.len() {
                     break;
                 }
                 rest = rest[end..].trim_start();
             }
         }
+        y - origin.y
     }
     /// Draws a rich node's text ([`crate::ui::Ui::set_rich`]) in `rect`:
     /// each run in its font, size and color, its images, underlines.
@@ -605,3 +653,6 @@ impl Ctx {
         }
     }
 }
+
+/// What a key-binding field shows while it listens.
+const LISTENING: &str = "Press a key";

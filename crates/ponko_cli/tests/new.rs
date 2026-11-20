@@ -35,7 +35,7 @@ fn every_template_generates_a_project_that_builds_against_this_engine() {
     let _ = std::fs::remove_dir_all(&projects);
     std::fs::create_dir_all(&projects).unwrap();
     let _projects = Remove(projects.clone());
-    // One target folder for all three: the caller's `CARGO_TARGET_DIR` (CI
+    // One target folder for all of them: the caller's `CARGO_TARGET_DIR` (CI
     // caches it), else one inside this workspace's, deleted afterwards.
     let (target, _target) = match std::env::var_os("CARGO_TARGET_DIR") {
         Some(dir) => (PathBuf::from(dir), None),
@@ -50,6 +50,7 @@ fn every_template_generates_a_project_that_builds_against_this_engine() {
         ("--3d", "e2e-3d"),
         ("--headless", "e2e-headless"),
         ("--server", "e2e-server"),
+        ("--plugin", "e2e-plugin"),
     ] {
         let made = Command::new(env!("CARGO_BIN_EXE_ponko"))
             .current_dir(&projects)
@@ -64,14 +65,20 @@ fn every_template_generates_a_project_that_builds_against_this_engine() {
         );
 
         let dir = projects.join(name);
-        for file in [
-            "Cargo.toml",
-            ".mcp.json",
-            "AGENTS.md",
-            "assets/settings.json",
-            "src/lib.rs",
-            "src/main.rs",
-        ] {
+        // A plugin crate is a library: no main, assets or MCP config.
+        let files: &[&str] = if flag == "--plugin" {
+            &["Cargo.toml", "AGENTS.md", "src/lib.rs", "tests/plugin.rs"]
+        } else {
+            &[
+                "Cargo.toml",
+                ".mcp.json",
+                "AGENTS.md",
+                "assets/settings.json",
+                "src/lib.rs",
+                "src/main.rs",
+            ]
+        };
+        for file in files {
             assert!(dir.join(file).is_file(), "{name}/{file}");
         }
         let checked = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))

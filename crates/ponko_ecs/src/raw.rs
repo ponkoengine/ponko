@@ -23,7 +23,7 @@ use std::alloc::Layout;
 /// This borrows the same world; it does not copy storage or change the safety
 /// requirements of dynamic methods. In particular, raw pointers remain subject
 /// to the documented layout, lifetime and structural-mutation requirements.
-pub struct RawWorld<'a>(&'a mut World);
+pub struct RawWorld<'a>(pub(crate) &'a mut World);
 
 /// Shared view of a world's dynamic API: pointers for reading, resource
 /// layouts, component names, removal logs and the archetype tables. What

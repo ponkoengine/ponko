@@ -98,6 +98,8 @@ work it is the new one.
 - A change asked for inside on-enter work waits for the next change
   point: a `Loading` state with nothing to load, entered at the start of
   a tick, moves on at that tick's end.
+  `Game::loading_state` makes a loading state that loads an [asset
+  group](loading.md) and moves on once it is ready.
 
 ## A stack: pause over play
 

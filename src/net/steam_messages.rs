@@ -637,6 +637,12 @@ mod tests {
         assert!(s.lock().unwrap().rooms[&1].members.is_empty());
     }
     #[test]
+    fn replicates_over_the_steam_relay() {
+        use crate::net::replication_conformance::{Session, declarations, exercise};
+        let (nets, _state) = endpoints(3);
+        exercise(Session::over(nets, declarations, false), 400, 200);
+    }
+    #[test]
     fn two_and_three_peers_exchange_all_lanes_and_disconnect() {
         for players in [2, 3] {
             let (mut nets, state) = endpoints(players);

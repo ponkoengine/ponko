@@ -1,0 +1,12 @@
+{
+  "assets": {
+    "ui/**": "keep",
+    "raw/**": "skip",
+    "ui/icons/*.png": { "texture": "mask", "mipmaps": false },
+    "*_normal.png": { "texture": "normal" },
+    "hero.png": { "texture": "linear", "basis": true },
+    "music/*.wav": { "audio": "keep" },
+    "props/*.glb": { "quantize": false, "optimize": true },
+    "fx/glow.wgsl": { "shader": "effect" }
+  }
+}

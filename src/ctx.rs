@@ -211,6 +211,12 @@ pub struct Ctx {
     pub(crate) headless: bool,
     /// Where the control endpoint listens, if it's on.
     pub(crate) control_addr: Option<std::net::SocketAddr>,
+    /// The control methods the game and its plugins added, and the
+    /// plugins' names, from the builder.
+    pub(crate) extensions: crate::control::GameExtensions,
+    /// Where gamepads come from (`Game::gamepad_backend`, or gilrs in a
+    /// window), polled in `begin_frame`.
+    pub(crate) gamepad_driver: crate::input::backend::GamepadDriver,
     /// `true` while the game's setup (and plugins' setups) run.
     in_setup: bool,
     /// Scene loads so far, so tools holding entity ids (the inspector's
@@ -395,6 +401,18 @@ impl Ctx {
         crate::reflect::WorldReflect::reflect::<crate::attach::Attached>(&mut world);
         crate::reflect::WorldReflect::reflect::<crate::scene::PrefabParts>(&mut world);
         crate::reflect::WorldReflect::reflect::<crate::hierarchy::Children>(&mut world);
+        crate::reflect::WorldReflect::reflect::<crate::hierarchy::EntityName>(&mut world);
+        crate::reflect::WorldReflect::reflect::<crate::hierarchy::PrefabInstance>(&mut world);
+        let _ = crate::reflect::WorldReflect::describe_component(
+            &mut world,
+            "EntityName",
+            crate::reflect::ValueSchema::String,
+        );
+        let _ = crate::reflect::WorldReflect::describe_component(
+            &mut world,
+            "PrefabInstance",
+            crate::reflect::ValueSchema::object([("path", crate::reflect::ValueSchema::String)]),
+        );
         #[cfg(feature = "3d")]
         crate::reflect::WorldReflect::reflect::<crate::d3::Transform>(&mut world);
         #[cfg(feature = "3d")]
@@ -410,8 +428,10 @@ impl Ctx {
             crate::reflect::WorldReflect::reflect::<crate::anim::SkinOf>(&mut world);
             crate::reflect::WorldReflect::reflect::<crate::anim::AttachToJoint>(&mut world);
             crate::reflect::WorldReflect::reflect::<crate::attach::Attached3D>(&mut world);
+            crate::reflect::WorldReflect::reflect::<crate::three::HeldItem>(&mut world);
         }
         crate::reflect::WorldReflect::reflect::<RenderLayers>(&mut world);
+        crate::reflect::WorldReflect::reflect::<crate::camera::CameraTarget>(&mut world);
         crate::reflect::reflect_sprite(&mut world);
         crate::reflect::WorldReflect::reflect::<crate::light2d::PointLight2D>(&mut world);
         crate::reflect::WorldReflect::reflect::<crate::light2d::SpotLight2D>(&mut world);
@@ -457,11 +477,13 @@ impl Ctx {
             system_index: 0,
             headless: false,
             control_addr: None,
+            extensions: crate::control::GameExtensions::default(),
             in_setup: false,
             scene_loads: 0,
             scene_file: None,
             editor: crate::editor::Editor::default(),
             input: Input::new(),
+            gamepad_driver: Default::default(),
             time: Time::new(fixed_dt),
             window_size,
             window: crate::window::WindowService::default(),
@@ -476,6 +498,8 @@ impl Ctx {
             debug: crate::debug::DebugDraw::default(),
             storage: crate::storage::Storage::default(),
         };
+        // On-screen controls are placed for the window from the start.
+        ctx.input.touch.view = (window_size, 1.0);
         #[cfg(feature = "3d")]
         ctx.sync_audio_camera();
         ctx
@@ -569,11 +593,12 @@ impl Ctx {
 
     /// Engine side, start of a frame, after `begin_frame` (and, windowed, the
     /// gamepad poll; headless runs have none) and before any system:
-    /// reloads changed asset files, runs the streaming and residency
-    /// step and moves mixer snapshot fades along. Windowed and headless loops both run it.
+    /// reloads changed asset files, runs the asset group step, then the
+    /// streaming and residency step, and moves mixer snapshot fades along. Windowed and headless loops both run it.
     pub(crate) fn frame_prepare_services(&mut self) {
         self.follow_window_size();
         self.reload_changed_assets();
+        self.pump_asset_groups();
         self.pump_streaming();
         self.audio.advance_mixer(self.time.frame_dt());
     }
@@ -644,11 +669,14 @@ impl Ctx {
     #[inline]
     pub(crate) fn frame_begin_services(&mut self) {
         self.update_retained_ui();
+        self.update_touch_controls();
     }
 
     /// Engine side: start a new frame with fresh timing.
     pub(crate) fn begin_frame(&mut self, timing: FrameTiming) {
         self.time.begin_frame(timing);
+        self.poll_gamepads(timing.seconds as f32);
+        self.input.begin_frame(self.time.elapsed());
         // Each camera's part of the window, for this frame's conversions
         // (headless frames too).
         self.place_cameras();
@@ -953,6 +981,17 @@ impl Ctx {
         counts
     }
 
+    /// One frame of positional sound for `ponko_bench`: moves every
+    /// `AudioSource3D` to the listener as the built-in system does, then
+    /// the mixer's frame work (fades, voice limits, music). Unstable
+    /// (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(all(feature = "bench-internals", feature = "3d"))]
+    pub fn bench_audio_frame(&mut self, dt: f32) {
+        crate::audio::update_audio3d(self);
+        self.audio.advance_mixer(dt);
+    }
+
     // ---------------------------------------------------------------- drawing
 
     /// Loads the textures of sprites and meshes of models that `json` (a
@@ -1027,6 +1066,13 @@ impl Ctx {
                     let applied = assets::read_to_string(&file)
                         .and_then(|text| self.audio.apply_mixer_json(&text).map_err(|e| e.message().to_string()));
                     self.assets.report_reload(name, applied);
+                    continue;
+                }
+                Asset::Aseprite(split_layers) => {
+                    let applied = self.gfx.reload_aseprite(&name, split_layers).map(|texture| {
+                        self.assets.reloaded_textures.extend(texture);
+                    });
+                    self.assets.report_reload(name, applied.map_err(String::from));
                     continue;
                 }
                 Asset::Level => {

@@ -37,6 +37,7 @@ fn bare() -> Game {
         .remove(Systems::UPDATE_ANIMATORS)
         .remove(Systems::UPDATE_PARTICLES)
         .remove(Systems::UPDATE_SKELETONS2D)
+        .remove(Systems::UPDATE_CAMERA_RIGS)
         .remove(Systems::UPDATE_AUDIO3D)
 }
 

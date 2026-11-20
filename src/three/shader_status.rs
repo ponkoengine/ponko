@@ -11,6 +11,25 @@ pub(crate) const EFFECT_STAND_IN: &str = "fn effect(p: Pixel) -> vec3<f32> { ret
 pub(crate) const COMPUTE_STAND_IN: &str = "fn compute(c: Cell) -> vec4<f32> { return c.value; }";
 
 impl Graphics {
+    /// Associate the diagnostic with a live owner. Different resources
+    /// can share the same diagnostic name.
+    pub(crate) fn keep_shader_name(&mut self, kind: super::ShaderKind, id: u32, name: &str) {
+        self.assets3d.shader_names.insert((kind, id), name.to_owned());
+    }
+
+    /// Diagnostics for a freed resource don't accumulate during churn.
+    pub(crate) fn forget_shader_name(&mut self, kind: super::ShaderKind, id: u32) {
+        if let Some(name) = self.assets3d.shader_names.remove(&(kind, id))
+            && !self
+                .assets3d
+                .shader_names
+                .iter()
+                .any(|(&(k, _), n)| k == kind && *n == name)
+        {
+            self.shader_statuses.retain(|s| s.kind != kind || s.shader != name);
+        }
+    }
+
     /// Records shaders whose pipelines the GPU rejected after they were
     /// put in use (a browser's WebGPU answers a frame or so later): the
     /// renderer has put the previous ones back.

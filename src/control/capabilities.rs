@@ -19,6 +19,7 @@ pub(super) const FEATURES: &[(&str, bool)] = &[
     ("window", cfg!(feature = "window")),
     ("audio", cfg!(feature = "audio")),
     ("inspector", cfg!(feature = "inspector")),
+    ("editor", cfg!(feature = "editor")),
     ("control-env", cfg!(feature = "control-env")),
     ("gamepad", cfg!(feature = "gamepad")),
     ("profiling", cfg!(feature = "profiling")),
@@ -26,6 +27,8 @@ pub(super) const FEATURES: &[(&str, bool)] = &[
     ("physics", cfg!(feature = "physics")),
     ("physics3d", cfg!(feature = "physics3d")),
     ("physics-determinism", cfg!(feature = "physics-determinism")),
+    ("lobby", cfg!(feature = "lobby")),
+    ("webrtc", cfg!(feature = "webrtc")),
     ("steam", cfg!(feature = "steam")),
     ("3d", cfg!(feature = "3d")),
     ("navmesh", cfg!(feature = "navmesh")),
@@ -49,6 +52,7 @@ pub(super) const FEATURES: &[(&str, bool)] = &[
     ("image-formats", cfg!(feature = "image-formats")),
     ("text-shaping", cfg!(feature = "text-shaping")),
     ("system-fonts", cfg!(feature = "system-fonts")),
+    ("video", cfg!(feature = "video")),
 ];
 
 /// Why `method` would be refused by this instance right now, if it would.
@@ -66,9 +70,7 @@ pub(super) fn unavailable(ctx: &Ctx, method: &str) -> Option<String> {
         #[cfg(not(feature = "3d"))]
         "quality.set" => Some(super::NO_QUALITY.into()),
         #[cfg(not(feature = "3d"))]
-        "editor.pick" | "editor.transform" | "editor.drag" | "editor.material" | "editor.camera" => {
-            Some(super::editor::NO_3D.into())
-        }
+        "editor.pick" | "editor.material" | "editor.camera" => Some(super::editor::NO_3D.into()),
         // Asks for no lines: errors only when output isn't captured.
         "logs.get" => crate::logs::get(None, 0).err(),
         _ => None,
@@ -214,6 +216,10 @@ fn report_with_gpu(ctx: &Ctx, gpu: Option<&crate::render::GpuCapabilities>) -> V
             }
             m
         })
+        .chain(ctx.extensions.listed().map(|mut m| {
+            m["available"] = json!(true);
+            m
+        }))
         .collect();
     let (components, resources) = crate::reflect::reflected_schemas(&ctx.world);
     json!({
@@ -224,6 +230,7 @@ fn report_with_gpu(ctx: &Ctx, gpu: Option<&crate::render::GpuCapabilities>) -> V
         "features": FEATURES.iter().map(|&(f, on)| (f.to_string(), json!(on))).collect::<serde_json::Map<_, _>>(),
         "subsystems": subsystems(ctx, gpu),
         "methods": methods,
+        "plugins": ctx.extensions.plugins,
         "reflection": {
             "components": components,
             "resources": resources,

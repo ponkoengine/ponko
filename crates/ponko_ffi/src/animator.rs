@@ -607,6 +607,30 @@ pub unsafe extern "C" fn ponko_ctx_animator_state(
     })
 }
 
+/// Unwrapped normalized time of the animator, in double precision (1 is one play).
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_animator_normalized_time_f64(std::ptr::null_mut(), 0, std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_time` null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_animator_normalized_time_f64(
+    ctx: *mut PonkoCtx,
+    entity_bits: u64,
+    out_time: *mut f64,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            if out_time.is_null() {
+                return Err(invalid("output is null"));
+            }
+            out_time.write(animator(c, entity_bits)?.normalized_time_f64());
+            Ok(())
+        })
+    })
+}
+
 /// Crossfades `entity`'s animator to `state` over `duration` seconds (0
 /// jumps), starting it at normalized time `offset`, on its next update.
 /// ```

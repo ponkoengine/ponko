@@ -61,6 +61,37 @@ fills a vector instead, which is simpler but slower in hot loops.
 
 Each visit gives a `GridEntry` with `entity` and `position`.
 
+### The nearest one
+
+`nearest` starts at the cell `center` is in and goes outward ring by ring,
+and stops once no farther ring can hold anything closer than what it found.
+Its cost follows how far the nearest match is, not the radius, so a long
+reach (a tower that shoots the closest enemy within 300 m) costs about what
+a short one does:
+
+```rust
+# #[derive(Component)]
+# struct Enemy;
+fn closest_enemy(ctx: &Ctx, tower: Vec2) -> Option<Entity> {
+    ctx.spatial
+        .nearest(tower, 300.0, |e| ctx.world.get::<Enemy>(e.entity).is_some())
+        .map(|e| e.entity)
+}
+```
+
+`accept` is asked about each entry at most once, and only about entries
+closer than the best so far. Of two entries at the same distance, the one
+with the lower entity id wins, so the answer doesn't depend on the order
+the grid was filled in. With `f32::INFINITY` as the radius it searches the
+whole grid; when the rings would visit more cells than there are entries,
+it looks at the remaining entries directly.
+
+Measured with `cargo run --release -p ponko_bench -- nearest/` (100,000
+entities in a 2,000 × 2,000 square, cell size 16, 10,000 searches; Apple M4
+Max, busy machine at load average about 150, medians): 1.79 ms against
+4.27 ms for visiting every cell in a 32 radius, and 1.65 ms against 402 ms
+in a 256 radius.
+
 Every 32 ticks (`SpatialGrid::SORT_EVERY`) the built-in system also reorders
 entities by grid cell (`World::sort_by` with `spatial_key`), so neighbors in
 space are neighbors in memory. With a million boids this cut a tick from

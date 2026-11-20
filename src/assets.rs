@@ -67,7 +67,9 @@ use crate::hot_reload::Asset;
 use crate::reflect::WorldReflect;
 use crate::scene::{PREFAB_FORMAT, PREFAB_VERSION};
 
+mod group;
 mod pack;
+pub use group::{AssetGroup, DEFAULT_GROUP_FRAME_BUDGET_MS, GroupId, GroupProgress, GroupState, GroupStats};
 pub use pack::PackSource;
 #[cfg(all(target_arch = "wasm32", feature = "window"))]
 pub(crate) use pack::{parse_header as parse_pack_header, set_web_pack};
@@ -140,6 +142,22 @@ pub trait AssetSource: 'static {
     /// cheaper to answer (an index lookup).
     fn contains(&self, name: &str) -> bool {
         !matches!(self.read(name), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+    }
+
+    /// The size of asset `name` in bytes, if this source can tell without
+    /// reading it; `None` if it can't (the default) or doesn't have it.
+    /// [Asset groups](crate::assets::AssetGroup) use it to show progress in
+    /// bytes before the files are read.
+    ///
+    /// ```
+    /// use ponko::assets::{AssetSource, MemorySource};
+    /// let source = MemorySource::new("embedded").with("a.txt", "hello");
+    /// assert_eq!(source.size("a.txt"), Some(5));
+    /// assert_eq!(source.size("b.txt"), None);
+    /// ```
+    fn size(&self, name: &str) -> Option<u64> {
+        let _ = name;
+        None
     }
 }
 
@@ -216,6 +234,10 @@ impl AssetSource for MemorySource {
 
     fn contains(&self, name: &str) -> bool {
         self.files.contains_key(name)
+    }
+
+    fn size(&self, name: &str) -> Option<u64> {
+        self.files.get(name).map(|b| b.len() as u64)
     }
 
     fn read(&self, name: &str) -> std::io::Result<Vec<u8>> {
@@ -311,14 +333,51 @@ impl Found {
     }
 }
 
+/// An added source: read on the game thread only, or (added with
+/// [`Assets::add_background_source`]) by worker threads too.
+pub(crate) enum Slot {
+    Game(Box<dyn AssetSource>),
+    Background(Arc<dyn AssetSource + Send + Sync>),
+}
+
+impl Slot {
+    fn get(&self) -> &dyn AssetSource {
+        match self {
+            Slot::Game(source) => source.as_ref(),
+            Slot::Background(source) => source.as_ref(),
+        }
+    }
+}
+
+/// The packs read after the loose files, as a worker can hold them.
+#[derive(Clone)]
+pub(crate) enum Packs {
+    /// `assets.pack` beside the asset folders (the page's pack on the web).
+    Default(&'static [PackSource]),
+    /// Packs a test put in place of the default ones.
+    #[cfg(test)]
+    Owned(Arc<Vec<PackSource>>),
+}
+
+impl std::ops::Deref for Packs {
+    type Target = [PackSource];
+    fn deref(&self) -> &[PackSource] {
+        match self {
+            Packs::Default(packs) => packs,
+            #[cfg(test)]
+            Packs::Owned(packs) => packs,
+        }
+    }
+}
+
 /// The asset sources a game added, asked before the default one.
 #[derive(Default)]
 pub(crate) struct Sources {
-    list: Vec<Box<dyn AssetSource>>,
+    list: Vec<Slot>,
     /// The packs read after the loose files, in place of the default ones
     /// (`assets.pack` beside the asset folders): for tests.
     #[cfg(test)]
-    packs: Option<Vec<PackSource>>,
+    packs: Option<Arc<Vec<PackSource>>>,
 }
 
 impl Sources {
@@ -332,18 +391,27 @@ impl Sources {
         pack::default_packs()
     }
 
+    /// [`packs`](Self::packs), to hand to a worker.
+    fn worker_packs(&self) -> Packs {
+        #[cfg(test)]
+        if let Some(packs) = &self.packs {
+            return Packs::Owned(Arc::clone(packs));
+        }
+        Packs::Default(pack::default_packs())
+    }
+
     /// Reads `packs` instead of the default packs (tests).
     #[cfg(test)]
     pub(crate) fn with_packs(packs: Vec<PackSource>) -> Sources {
         Sources {
             list: Vec::new(),
-            packs: Some(packs),
+            packs: Some(Arc::new(packs)),
         }
     }
 
     /// Whether a source with this id was added.
     pub(crate) fn has(&self, id: &str) -> bool {
-        self.list.iter().any(|s| s.id() == id)
+        self.list.iter().any(|s| s.get().id() == id)
     }
 
     /// Whether no source was added (only the default one is searched).
@@ -356,11 +424,11 @@ impl Sources {
     ///
     /// # Panics
     /// If its id is empty or another source already has it.
-    pub(crate) fn add(&mut self, source: Box<dyn AssetSource>) {
-        let id = source.id();
+    pub(crate) fn add(&mut self, source: Slot) {
+        let id = source.get().id();
         assert!(!id.is_empty(), "ponko: an asset source needs a non-empty id");
         assert!(
-            self.list.iter().all(|s| s.id() != id),
+            self.list.iter().all(|s| s.get().id() != id),
             "ponko: an asset source called \"{id}\" was already added; choose a unique AssetSource::id()"
         );
         self.list.push(source);
@@ -369,7 +437,7 @@ impl Sources {
     /// The cache keys `name` would have in each added source, in order.
     pub(crate) fn origins<'a>(&'a self, name: &'a str) -> impl Iterator<Item = Origin> + 'a {
         self.list.iter().map(move |s| Origin::Source {
-            source: s.id().to_string(),
+            source: s.get().id().to_string(),
             name: name.to_string(),
         })
     }
@@ -426,7 +494,7 @@ impl Sources {
     /// source's file. `None` if nothing has it.
     #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub(crate) fn locate(&self, name: &str) -> Option<Origin> {
-        match self.list.iter().find(|s| s.contains(name)) {
+        match self.list.iter().map(Slot::get).find(|s| s.contains(name)) {
             Some(source) => Some(Origin::Source {
                 source: source.id().to_string(),
                 name: name.to_string(),
@@ -452,64 +520,208 @@ impl Sources {
     /// a source that has it but fails to read it is
     /// [`Io`](crate::error::ErrorKind::Io). The error names `name` as its path.
     pub(crate) fn find(&self, name: &str) -> Result<Found, crate::error::Error> {
-        for source in &self.list {
+        search(name, self.list.iter().map(Slot::get), self.packs(), &|| self.ids())
+    }
+
+    /// The ids of the added sources, quoted, for messages.
+    fn ids(&self) -> Vec<String> {
+        self.list.iter().map(|s| format!("\"{}\"", s.get().id())).collect()
+    }
+
+    /// How to read asset `name` without blocking the game thread where it
+    /// can be helped: the sources only the game thread may read, before the
+    /// first background one, are read now; the rest of the search (the
+    /// background sources, `assets/`, the packs) is handed back to run on a
+    /// worker. With a game-thread source after a background one the whole
+    /// search runs now, so the order sources are asked in never changes.
+    pub(crate) fn plan(&self, name: &str) -> ReadPlan {
+        let first = self
+            .list
+            .iter()
+            .position(|s| matches!(s, Slot::Background(_)))
+            .unwrap_or(self.list.len());
+        if self.list[first..].iter().any(|s| matches!(s, Slot::Game(_))) {
+            return ReadPlan::Now(self.find(name).and_then(|found| {
+                let origin = found.origin.clone();
+                Ok((origin, found.into_bytes().map_err(|e| e.with_path(name))?))
+            }));
+        }
+        for source in self.list[..first].iter().map(Slot::get) {
             match source.read(name) {
                 Ok(bytes) => {
-                    return Ok(Found {
-                        origin: Origin::Source {
-                            source: source.id().to_string(),
-                            name: name.to_string(),
-                        },
-                        bytes: Some(bytes),
-                    });
+                    let origin = Origin::Source {
+                        source: source.id().to_string(),
+                        name: name.to_string(),
+                    };
+                    return ReadPlan::Now(Ok((origin, bytes)));
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => {
                     let message = format!("asset source \"{}\" could not read \"{name}\": {e}", source.id());
-                    return Err(crate::error::Error::new(crate::error::ErrorKind::Io, message).with_path(name));
+                    return ReadPlan::Now(Err(
+                        crate::error::Error::new(crate::error::ErrorKind::Io, message).with_path(name)
+                    ));
                 }
             }
         }
-        let e = match resolve(name) {
-            Ok(path) => {
+        ReadPlan::Later(BackgroundRead {
+            name: name.to_string(),
+            sources: self.list[first..]
+                .iter()
+                .filter_map(|s| match s {
+                    Slot::Background(source) => Some(Arc::clone(source)),
+                    Slot::Game(_) => None,
+                })
+                .collect(),
+            packs: self.worker_packs(),
+            ids: self.ids(),
+        })
+    }
+
+    /// Whether every added source may be read by a worker.
+    pub(crate) fn all_background(&self) -> bool {
+        self.list.iter().all(|s| matches!(s, Slot::Background(_)))
+    }
+}
+
+/// Finds asset `name`: in `sources` in order, then the default source,
+/// then `packs`; `ids` lists the added sources for the message.
+fn search<'a>(
+    name: &str,
+    sources: impl Iterator<Item = &'a dyn AssetSource>,
+    packs: &[PackSource],
+    ids: &dyn Fn() -> Vec<String>,
+) -> Result<Found, crate::error::Error> {
+    for source in sources {
+        match source.read(name) {
+            Ok(bytes) => {
                 return Ok(Found {
-                    origin: Origin::File(path),
-                    bytes: None,
+                    origin: Origin::Source {
+                        source: source.id().to_string(),
+                        name: name.to_string(),
+                    },
+                    bytes: Some(bytes),
                 });
             }
-            Err(e) => e,
-        };
-        // Loose files win over the packs, so a file can be patched (and
-        // hot reloaded) beside a pack.
-        let packs = self.packs();
-        for pack in packs {
-            if pack.contains(name) {
-                return match pack.read(name) {
-                    Ok(bytes) => Ok(Found {
-                        origin: Origin::Source {
-                            source: pack.id().to_string(),
-                            name: name.to_string(),
-                        },
-                        bytes: Some(bytes),
-                    }),
-                    Err(err) => {
-                        let message = format!("asset pack {} could not read \"{name}\": {err}", pack.id());
-                        Err(crate::error::Error::new(crate::error::ErrorKind::Io, message).with_path(name))
-                    }
-                };
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                let message = format!("asset source \"{}\" could not read \"{name}\": {e}", source.id());
+                return Err(crate::error::Error::new(crate::error::ErrorKind::Io, message).with_path(name));
             }
         }
-        let mut message = e;
-        if !packs.is_empty() {
-            let ids: Vec<&str> = packs.iter().map(|p| p.id()).collect();
-            message.push_str(&format!("\nAsset packs searched after them: {}", ids.join(", ")));
-        }
-        if !self.list.is_empty() {
-            let ids: Vec<String> = self.list.iter().map(|s| format!("\"{}\"", s.id())).collect();
-            message.push_str(&format!("\nAsset sources searched first: {}", ids.join(", ")));
-        }
-        Err(crate::error::Error::not_found(name, message))
     }
+    let e = match resolve(name) {
+        Ok(path) => {
+            return Ok(Found {
+                origin: Origin::File(path),
+                bytes: None,
+            });
+        }
+        Err(e) => e,
+    };
+    // Loose files win over the packs, so a file can be patched (and
+    // hot reloaded) beside a pack.
+    for pack in packs {
+        if pack.contains(name) {
+            return match pack.read(name) {
+                Ok(bytes) => Ok(Found {
+                    origin: Origin::Source {
+                        source: pack.id().to_string(),
+                        name: name.to_string(),
+                    },
+                    bytes: Some(bytes),
+                }),
+                Err(err) => {
+                    let message = format!("asset pack {} could not read \"{name}\": {err}", pack.id());
+                    Err(crate::error::Error::new(crate::error::ErrorKind::Io, message).with_path(name))
+                }
+            };
+        }
+    }
+    let mut message = e;
+    if !packs.is_empty() {
+        let ids: Vec<&str> = packs.iter().map(|p| p.id()).collect();
+        message.push_str(&format!("\nAsset packs searched after them: {}", ids.join(", ")));
+    }
+    let ids = ids();
+    if !ids.is_empty() {
+        message.push_str(&format!("\nAsset sources searched first: {}", ids.join(", ")));
+    }
+    Err(crate::error::Error::not_found(name, message))
+}
+
+/// What [`Sources::plan`] found: an asset read now, on the game thread, or
+/// the rest of its search, for a worker.
+pub(crate) enum ReadPlan {
+    /// Read (or failed) on the game thread: where it came from, its bytes.
+    Now(Result<(Origin, Vec<u8>), crate::error::Error>),
+    /// To read on a worker.
+    Later(BackgroundRead),
+}
+
+/// The rest of an asset's search, which any thread may run: the background
+/// sources, the default source and the packs.
+#[derive(Clone)]
+pub(crate) struct BackgroundRead {
+    name: String,
+    sources: Vec<Arc<dyn AssetSource + Send + Sync>>,
+    packs: Packs,
+    /// Every added source's id, for the message when nothing has it.
+    ids: Vec<String>,
+}
+
+impl BackgroundRead {
+    /// Reads the asset: where it came from and its bytes. Errors name it as
+    /// their path, as [`Sources::find`]'s do.
+    pub(crate) fn read(&self) -> Result<(Origin, Vec<u8>), crate::error::Error> {
+        let found = search(
+            &self.name,
+            self.sources.iter().map(|s| s.as_ref() as &dyn AssetSource),
+            &self.packs,
+            &|| self.ids.clone(),
+        )?;
+        let origin = found.origin.clone();
+        Ok((origin, found.into_bytes().map_err(|e| e.with_path(&self.name))?))
+    }
+
+    /// Reads another asset the same way: a file this one refers to.
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
+    pub(crate) fn read_other(&self, name: &str) -> Result<Vec<u8>, String> {
+        let found = search(
+            name,
+            self.sources.iter().map(|s| s.as_ref() as &dyn AssetSource),
+            &self.packs,
+            &|| self.ids.clone(),
+        )?;
+        Ok(found.into_bytes()?)
+    }
+
+    /// The asset's size in bytes, where the place that has it can tell
+    /// without reading it: [`AssetSource::size`], the file's length, the
+    /// pack's index.
+    pub(crate) fn size(&self) -> Option<u64> {
+        let name = self.name.as_str();
+        if let Some(source) = self.sources.iter().find(|s| s.contains(name)) {
+            return source.size(name);
+        }
+        if let Ok(path) = resolve(name) {
+            return file_size(&path);
+        }
+        self.packs.iter().find(|p| p.contains(name)).and_then(|p| p.size(name))
+    }
+}
+
+/// The length of an asset file found by [`resolve`].
+#[cfg(not(target_arch = "wasm32"))]
+fn file_size(path: &Path) -> Option<u64> {
+    std::fs::metadata(path).ok().map(|m| m.len())
+}
+
+/// The length of a fetched asset file (web builds).
+#[cfg(target_arch = "wasm32")]
+fn file_size(path: &Path) -> Option<u64> {
+    let name = path.to_string_lossy();
+    web_files::with(|files| files.get(name.as_ref()).map(|b| b.len() as u64))
 }
 
 /// The asset [`Sources`] of a game, shared by every service that loads
@@ -520,8 +732,18 @@ pub(crate) struct SharedSources(std::rc::Rc<std::cell::RefCell<Sources>>);
 
 impl SharedSources {
     /// As [`Sources::add`].
-    pub(crate) fn add(&self, source: Box<dyn AssetSource>) {
+    pub(crate) fn add(&self, source: Slot) {
         self.0.borrow_mut().add(source);
+    }
+
+    /// As [`Sources::plan`].
+    pub(crate) fn plan(&self, name: &str) -> ReadPlan {
+        self.0.borrow().plan(name)
+    }
+
+    /// As [`Sources::all_background`].
+    pub(crate) fn all_background(&self) -> bool {
+        self.0.borrow().all_background()
     }
 
     /// As [`Sources::lookup`].
@@ -756,20 +978,68 @@ pub(crate) fn read_to_string(path: &Path) -> Result<String, String> {
 // in `assets/index.json` before setup runs (see `crate::web`), and asset
 // loading reads those copies.
 #[cfg(target_arch = "wasm32")]
-thread_local! {
-    static WEB_FILES: std::cell::RefCell<std::collections::HashMap<String, std::rc::Rc<[u8]>>> =
-        Default::default();
+mod web_files {
+    use std::collections::HashMap;
+
+    #[cfg(not(target_feature = "atomics"))]
+    pub(super) type Bytes = std::rc::Rc<[u8]>;
+    #[cfg(target_feature = "atomics")]
+    pub(super) type Bytes = std::sync::Arc<[u8]>;
+
+    #[cfg(not(target_feature = "atomics"))]
+    thread_local! {
+        static FILES: std::cell::RefCell<HashMap<String, Bytes>> = Default::default();
+    }
+
+    /// With threads, jobs read the files on workers too (asset groups,
+    /// streaming). The page's thread writes them all before setup and
+    /// never waits for the lock (it may not block): see [`insert`].
+    #[cfg(target_feature = "atomics")]
+    static FILES: std::sync::RwLock<Option<HashMap<String, Bytes>>> = std::sync::RwLock::new(None);
+
+    /// Runs `f` on the fetched files.
+    pub(super) fn with<R>(f: impl FnOnce(&HashMap<String, Bytes>) -> R) -> R {
+        #[cfg(not(target_feature = "atomics"))]
+        return FILES.with(|files| f(&files.borrow()));
+        #[cfg(target_feature = "atomics")]
+        {
+            let files = FILES.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+            match files.as_ref() {
+                Some(files) => f(files),
+                None => f(&HashMap::new()),
+            }
+        }
+    }
+
+    pub(super) fn insert(name: String, bytes: Vec<u8>) {
+        #[cfg(not(target_feature = "atomics"))]
+        FILES.with(|files| files.borrow_mut().insert(name, bytes.into()));
+        #[cfg(target_feature = "atomics")]
+        {
+            use std::sync::TryLockError;
+            // Spins instead of waiting; a worker holds the lock only to
+            // copy a file.
+            let mut files = loop {
+                match FILES.try_write() {
+                    Ok(files) => break files,
+                    Err(TryLockError::Poisoned(files)) => break files.into_inner(),
+                    Err(TryLockError::WouldBlock) => std::hint::spin_loop(),
+                }
+            };
+            files.get_or_insert_with(HashMap::new).insert(name, bytes.into());
+        }
+    }
 }
 
 /// Stores a fetched asset for later loads (web builds).
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn insert_web_file(name: String, bytes: Vec<u8>) {
-    WEB_FILES.with(|files| files.borrow_mut().insert(name, bytes.into()));
+    web_files::insert(name, bytes);
 }
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn resolve(name: &str) -> Result<PathBuf, String> {
-    if WEB_FILES.with(|files| files.borrow().contains_key(name)) {
+    if web_files::with(|files| files.contains_key(name)) {
         Ok(PathBuf::from(name))
     } else {
         Err(format!(
@@ -782,8 +1052,7 @@ pub(crate) fn resolve(name: &str) -> Result<PathBuf, String> {
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn read(path: &Path) -> std::io::Result<Vec<u8>> {
     let name = path.to_string_lossy();
-    WEB_FILES
-        .with(|files| files.borrow().get(name.as_ref()).map(|b| b.to_vec()))
+    web_files::with(|files| files.get(name.as_ref()).map(|b| b.to_vec()))
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, format!("{name} was not fetched")))
 }
 
@@ -924,6 +1193,8 @@ pub struct Assets {
     /// Fields of reflected components that name assets, and how to load
     /// them before a scene or prefab is spawned (`scene_asset_field`).
     pub(crate) scene_asset_fields: Vec<crate::scene::SceneAssetField>,
+    /// Asset groups started with `start_group`.
+    pub(crate) groups: group::Groups,
 }
 
 impl Assets {
@@ -981,7 +1252,34 @@ impl Assets {
     /// # Panics
     /// If the source's id is empty or a source with that id was already added.
     pub fn add_source(&mut self, source: impl crate::assets::AssetSource) {
-        self.asset_sources.add(Box::new(source));
+        self.asset_sources.add(Slot::Game(Box::new(source)));
+    }
+
+    /// Adds a source worker threads may read too, as
+    /// [`add_source`](Self::add_source) does otherwise (asked in the order
+    /// added, all before `assets/`). [Asset groups](AssetGroup) and
+    /// [`stream_texture`](crate::gfx::Graphics::stream_texture) read assets
+    /// from it on a worker, so a slow source (a big pack, a network cache)
+    /// never holds up a frame; [`MemorySource`] and [`PackSource`] qualify.
+    /// A source from `add_source` is read on the game thread, as its trait
+    /// may need; one added after a background source makes every search
+    /// that reaches it run on the game thread, to keep the order sources
+    /// are asked in.
+    ///
+    /// ```
+    /// use ponko::assets::MemorySource;
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     ctx.assets
+    ///         .add_background_source(MemorySource::new("level-1").with("rules.json", r#"{"speed": 30}"#));
+    ///     assert!(ctx.assets.has_source("level-1"));
+    /// });
+    /// ```
+    ///
+    /// # Panics
+    /// If the source's id is empty or a source with that id was already added.
+    pub fn add_background_source(&mut self, source: impl crate::assets::AssetSource + Send + Sync) {
+        self.asset_sources.add(Slot::Background(Arc::new(source)));
     }
 
     /// Whether a source with id `id` was added with
@@ -1482,10 +1780,10 @@ mod tests {
     #[test]
     fn sources_are_asked_in_order_and_say_not_found() {
         let mut sources = Sources::default();
-        sources.add(Box::new(MemorySource::new("a").with("x", *b"from a")));
-        sources.add(Box::new(
+        sources.add(Slot::Game(Box::new(MemorySource::new("a").with("x", *b"from a"))));
+        sources.add(Slot::Game(Box::new(
             MemorySource::new("b").with("x", *b"from b").with("y", *b"only b"),
-        ));
+        )));
         let x = sources.find("x").unwrap();
         assert_eq!(
             x.origin,
@@ -1524,10 +1822,10 @@ mod tests {
     #[test]
     fn locate_names_the_first_source_that_has_a_name_without_reading_memory() {
         let mut sources = Sources::default();
-        sources.add(Box::new(ReadOnly));
-        sources.add(Box::new(
+        sources.add(Slot::Game(Box::new(ReadOnly)));
+        sources.add(Slot::Game(Box::new(
             MemorySource::new("mem").with("here", *b"y").with("only-mem", *b"z"),
-        ));
+        )));
         let in_source = |source: &str, name: &str| Origin::Source {
             source: source.into(),
             name: name.into(),
@@ -1556,7 +1854,9 @@ mod tests {
         assert_eq!(found.into_bytes().unwrap(), b"hi");
         assert_eq!(sources.locate("only/packed.txt"), Some(in_pack.clone()));
         // Added sources still come first.
-        sources.add(Box::new(MemorySource::new("mem").with("only/packed.txt", *b"mem")));
+        sources.add(Slot::Game(Box::new(
+            MemorySource::new("mem").with("only/packed.txt", *b"mem"),
+        )));
         assert_eq!(sources.find("only/packed.txt").unwrap().into_bytes().unwrap(), b"mem");
         // A missing name says where it looked, packs included.
         let err = sources.find("nowhere.png").err().unwrap();

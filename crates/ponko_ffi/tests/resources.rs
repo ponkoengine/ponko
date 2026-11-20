@@ -160,6 +160,34 @@ fn described_resources_are_saved_and_loaded() {
 }
 
 #[test]
+fn the_world_hash_follows_described_resources() {
+    let w = ponko_world_new();
+    let fields = score_fields();
+    let hash = |w| {
+        let mut h = 0u64;
+        assert_eq!(unsafe { ponko_world_hash(w, &mut h) }, PONKO_OK);
+        h
+    };
+    unsafe {
+        assert_eq!(
+            ponko_resource_reflect(w, c"Score".as_ptr(), SIZE, ALIGN, fields.as_ptr(), fields.len()),
+            PONKO_OK
+        );
+        assert_eq!(set(w, Score { red: 3, blue: 9 }), PONKO_OK);
+        let first = hash(w);
+        assert_eq!(hash(w), first, "reading changes nothing");
+        assert_eq!(set(w, Score { red: 4, blue: 9 }), PONKO_OK);
+        assert_ne!(hash(w), first);
+        assert_eq!(set(w, Score { red: 3, blue: 9 }), PONKO_OK);
+        assert_eq!(hash(w), first);
+        assert_eq!(ponko_world_hash(w, std::ptr::null_mut()), PONKO_INVALID_ARGUMENT);
+        let mut h = 0;
+        assert_eq!(ponko_world_hash(std::ptr::null_mut(), &mut h), PONKO_INVALID_ARGUMENT);
+        ponko_world_free(w);
+    }
+}
+
+#[test]
 fn resource_descriptions_must_fit() {
     let w = ponko_world_new();
     let fields = score_fields();

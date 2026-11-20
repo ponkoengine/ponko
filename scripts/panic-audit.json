@@ -185,6 +185,12 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. if *mask >> i & 1 != 0 {             return;         }         assert!(",
     "site": "crates/ponko_ecs/src/query.rs:384"
   },
+  "crates/ponko_ecs/src/required.rs:ff374175accc7387": {
+    "classification": "caller-contract",
+    "construction": "assert!( !info.needs_drop(), \"require_dynamic: component `{}` has a destructor, so it can't be copied from bytes; use World::require with a constructor\", info.name() )",
+    "reason": "The message names the misuse (bytes of a component with a destructor) and the fix (World::require with a constructor).",
+    "site": "crates/ponko_ecs/src/required.rs:176"
+  },
   "crates/ponko_ecs/src/storage.rs:020d1a4ff6d27862": {
     "classification": "invariant",
     "construction": ".expect(\"just pushed\")",
@@ -425,6 +431,12 @@
     "reason": "Internal invariant: pub fn get_resource<R: Send + Sync + 'static>(&self) -> Option<&R> {         let id = TypeId::of::<R>();         match self.access.resource_decl(id) {             Some(d) if d.write => self.lent(id)?.value.as_ref().map(|v| v.downcast_ref().unwrap()),",
     "site": "crates/ponko_ecs/src/view.rs:786"
   },
+  "crates/ponko_ecs/src/world.rs:04d2dfcd759af351": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: the archetype was made with every component of the bundle\")",
+    "reason": "The archetype was made just above from the bundle's ids plus the missing required ones.",
+    "site": "crates/ponko_ecs/src/world.rs:2064"
+  },
   "crates/ponko_ecs/src/world.rs:0820309baa67ec06": {
     "classification": "caller-contract",
     "construction": "assert!(n < MAX, \"{caller}: at most {MAX} resources\")",
@@ -479,6 +491,12 @@
     "reason": "Internal invariant: #[cold]     #[inline(never)]     fn despawned_last(&mut self, a: usize) {         debug_assert!(self.archetypes[a].is_empty());",
     "site": "crates/ponko_ecs/src/world.rs:455"
   },
+  "crates/ponko_ecs/src/world.rs:79f506d0e27ae4f8": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: the archetype was made with every component given and required\")",
+    "reason": "The archetype was looked up or made from exactly the given ids plus the missing required ones just above.",
+    "site": "crates/ponko_ecs/src/world.rs:1673"
+  },
   "crates/ponko_ecs/src/world.rs:830d485e462591fe": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -503,11 +521,11 @@
     "reason": "Internal invariant: arch.reserve_row(&self.changes, &mut self.slots.buffers);         let row = arch.len();         for &(id, src) in components {             let c = &arch.columns[arch.column_index(id).unwrap()];",
     "site": "crates/ponko_ecs/src/world.rs:1449"
   },
-  "crates/ponko_ecs/src/world.rs:c69a0d26e7547234": {
+  "crates/ponko_ecs/src/world.rs:c35b88ba3ee6b9db": {
     "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: self.slots.pin(a);         let columns = ids             .iter()             .map(|&id| self.archetypes[a].column_index(id).unwrap())",
-    "site": "crates/ponko_ecs/src/world.rs:1692"
+    "construction": ".expect(\"invariant: the archetype was made with every arriving component\")",
+    "reason": "dst was made just above from the entity's ids plus the inserted and missing required ones.",
+    "site": "crates/ponko_ecs/src/world.rs:1807"
   },
   "crates/ponko_ecs/src/world.rs:c78437e8cf16c4b9": {
     "classification": "invariant",
@@ -569,23 +587,29 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. let events = ctx.events.used.get_mut().take().unwrap_or_default();     let problems = access.undeclared(&ctx.world, &used, &events, !ctx.commands.is_empty());     if !problems.is_empty() {         panic!(",
     "site": "src/access.rs:884"
   },
+  "src/ai/mod.rs:e38794b1532eada7": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"{e}\")",
+    "reason": "Preserves setup/runtime policy; displays the checked operation error.",
+    "site": "src/ai/mod.rs:244"
+  },
   "src/anim/graph.rs:cf37b62a716daff9": {
     "classification": "caller-contract",
     "construction": "panic!(\"AnimationGraph: expected float parameter; use a Float parameter in Blend1D\")",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. pub(crate) fn float_parameter(p: &[AnimationParameter], i: ParamId) -> f32 {     match p.get(i.0) {         Some(AnimationParameter::Float(v)) => *v,         _ => panic!(\"AnimationGraph: expected float parameter; use a Float parameter in Blend1D\"),",
     "site": "src/anim/graph.rs:372"
   },
-  "src/assets.rs:0f87ecee0b2630c5": {
-    "classification": "caller-contract",
-    "construction": "assert!( self.list.iter().all(|s| s.id() != id), \"ponko: an asset source called \\\"{id}\\\" was already added; choose a unique AssetSource::id()\" )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. pub(crate) fn add(&mut self, source: Box<dyn AssetSource>) {         let id = source.id();         assert!(!id.is_empty(), \"ponko: an asset source needs a non-empty id\");         assert!(",
-    "site": "src/assets.rs:362"
+  "src/aseprite.rs:b77fbd8243871c9e": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"{e}\")",
+    "reason": "The setup loader displays the checked asset error. Use try_load_aseprite for optional assets.",
+    "site": "src/aseprite.rs:215"
   },
-  "src/assets.rs:9200c72ae4b0f82c": {
+  "src/assets.rs:cf3c88539c06386b": {
     "classification": "caller-contract",
     "construction": "assert!(!id.is_empty(), \"ponko: an asset source needs a non-empty id\")",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// If its id is empty or another source already has it.     pub(crate) fn add(&mut self, source: Box<dyn AssetSource>) {         let id = source.id();         assert!(!id.is_empty(), \"ponko: an asset source needs a non-empty id\");",
-    "site": "src/assets.rs:361"
+    "reason": "An empty source id; the message names the misuse. Moved into Sources::add for background sources.",
+    "site": "src/assets.rs:429"
   },
   "src/assets.rs:d972b08d2c4b24e2": {
     "classification": "forwarded-error",
@@ -598,6 +622,30 @@
     "construction": "panic!(\"{e}\")",
     "reason": "Preserves setup/runtime policy; displays the checked operation error. path: &str,     ) {         self.try_load_resource::<R>(world, path)             .unwrap_or_else(|e| panic!(\"{e}\"));",
     "site": "src/assets.rs:1087"
+  },
+  "src/assets.rs:fec9f7aadae5e2d8": {
+    "classification": "caller-contract",
+    "construction": "assert!( self.list.iter().all(|s| s.get().id() != id), \"ponko: an asset source called \\\"{id}\\\" was already added; choose a unique AssetSource::id()\" )",
+    "reason": "A duplicate source id; the message names the fix (a unique AssetSource::id). Moved into Sources::add.",
+    "site": "src/assets.rs:430"
+  },
+  "src/assets/group.rs:3f366afbaa2bf4dc": {
+    "classification": "caller-contract",
+    "construction": "panic!( \"ponko: asset group {} was not started in this game (it has {n}); use the GroupId start_group returned\", id.0 )",
+    "reason": "A GroupId past this game's groups; the message names the fix (use the id start_group returned).",
+    "site": "src/assets/group.rs:589"
+  },
+  "src/assets/group.rs:60c58fcd4633102f": {
+    "classification": "caller-contract",
+    "construction": "panic!( \"ponko: asset group {} was not started in this game; use the GroupId start_group returned\", id.0 )",
+    "reason": "A GroupId from another game; the message names the fix (use the id start_group returned).",
+    "site": "src/assets/group.rs:578"
+  },
+  "src/assets/group.rs:e409636253f7ab7d": {
+    "classification": "caller-contract",
+    "construction": "assert!( milliseconds.is_finite() && milliseconds >= 0.0, \"ponko: set_group_frame_budget: the budget must be 0 or more milliseconds (got {milliseconds})\" )",
+    "reason": "A negative or non-finite frame budget; the message says the valid range.",
+    "site": "src/assets/group.rs:854"
   },
   "src/assets/pack.rs:03c86357b73f2e46": {
     "classification": "invariant",
@@ -640,12 +688,6 @@
     "construction": ".expect(\"8 bytes\")",
     "reason": "Internal invariant: }     let header = Header {         count: u32::from_le_bytes(bytes[12..16].try_into().expect(\"4 bytes\")),         index_len: u64::from_le_bytes(bytes[16..24].try_into().expect(\"8 bytes\")),",
     "site": "src/assets/pack.rs:106"
-  },
-  "src/audio.rs:16683d4633fafac3": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: return;             }             let effects = effects.validated();             let send = self.reverb.as_ref().unwrap().id();",
-    "site": "src/audio.rs:455"
   },
   "src/audio.rs:422459eea27c3be8": {
     "classification": "caller-contract",
@@ -815,12 +857,6 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// system then goes into a per-frame phase.     #[track_caller]     fn every(self, ticks: u32) -> SystemConfig {         assert!(ticks > 0, \"IntoSystem::every: the interval must be at least 1 tick\");",
     "site": "src/game/system.rs:138"
   },
-  "src/game/window.rs:88abe4a4ad3a7ce0": {
-    "classification": "invariant",
-    "construction": ".expect(\"just set\")",
-    "reason": "Internal invariant: format!(\"could not create the window: {e}\"),                 ));                 #[cfg(target_arch = \"wasm32\")]                 eprintln!(\"{}\", self.error.as_ref().expect(\"just set\"));",
-    "site": "src/game/window.rs:433"
-  },
   "src/game/window_service.rs:d816d667f1139ae6": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -851,11 +887,11 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// # }     /// ```     pub fn load_font(&mut self, path: &str) -> Font {         self.try_load_font(path).unwrap_or_else(|e| panic!(\"{e}\"))",
     "site": "src/gfx.rs:466"
   },
-  "src/gfx.rs:9e749f9a4b0b7aec": {
-    "classification": "caller-contract",
-    "construction": "assert!( !self.is_render_target(texture), \"ponko: a render target is drawn by its target camera, not updated with pixels\" )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. rgba.len()         );         #[cfg(feature = \"3d\")]         assert!(",
-    "site": "src/gfx.rs:942"
+  "src/gfx.rs:99e2a43df74556eb": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"{e}\")",
+    "reason": "update_texture re-raises try_update_texture's Error, whose message names the byte count or the render target",
+    "site": "src/gfx.rs:968"
   },
   "src/gfx.rs:b1fa5250a73609a7": {
     "classification": "forwarded-error",
@@ -868,12 +904,6 @@
     "construction": "assert_eq!( rgba.len(), expected, \"ponko: a {width} x {height} texture needs {expected} bytes of RGBA, got {}\", rgba.len() )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. \"ponko: texture size must not be zero (got {width} x {height})\"         );         let expected = width as usize * height as usize * 4;         assert_eq!(",
     "site": "src/gfx.rs:850"
-  },
-  "src/gfx.rs:c78f1d7e06c60710": {
-    "classification": "caller-contract",
-    "construction": "assert_eq!( rgba.len(), expected, \"ponko: a {w} x {h} texture needs {expected} bytes of RGBA, got {}\", rgba.len() )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. pub fn update_texture(&mut self, texture: Texture, rgba: &[u8]) {         let (w, h) = (texture.width(), texture.height());         let expected = w as usize * h as usize * 4;         assert_eq!(",
-    "site": "src/gfx.rs:935"
   },
   "src/gfx.rs:d4e01bbb2870157c": {
     "classification": "forwarded-error",
@@ -893,11 +923,23 @@
     "reason": "Internal invariant: pub(crate) fn renderer(&mut self) -> &mut Renderer {         self.renderer             .as_mut()             .expect(\"ponko: textures can only be created once the game is running (in setup or update)\")",
     "site": "src/gfx.rs:1037"
   },
-  "src/handle.rs:14b0a558ecad10a2": {
+  "src/handle.rs:75470fd48eb6f87d": {
     "classification": "caller-contract",
     "construction": "assert!( len < INDEX_MASK as usize, \"ponko: no {what} slot left: all {} are live or retired\", INDEX_MASK )",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. let id = match self.free.pop() {             Some(freed) => freed + (1 << INDEX_BITS),             None => {                 assert!(",
-    "site": "src/handle.rs:470"
+    "reason": "The generational table is exhausted after every slot is live or retired. This is the existing SlotIds limit, checked before a GPU build reserves a slot.",
+    "site": "src/handle.rs:632"
+  },
+  "src/input/glyphs.rs:d5a08427d402462f": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: the built-in font is valid\")",
+    "reason": "Parses the font bundled at compile time (epaint's Hack); its bytes are fixed and the UI loads the same font, so no caller can reach it",
+    "site": "src/input/glyphs.rs:568"
+  },
+  "src/jobs.rs:16b9dc620cca7123": {
+    "classification": "caller-contract",
+    "construction": "panic!(\"ponko: a job's work panicked; fix the panic in the closure passed to Job::spawn\")",
+    "reason": "The job's closure panicked; the message names Job::spawn's closure as the fix (unchanged; it now waits through recv, which spins on the browser's page thread with threads).",
+    "site": "src/jobs.rs:212"
   },
   "src/jobs.rs:6d07c3e19d6da4d5": {
     "classification": "caller-contract",
@@ -910,12 +952,6 @@
     "construction": "assert!( cell_size > 0.0 && cell_size.is_finite(), \"ponko: CellStreamer: cell_size must be above 0 (got {cell_size})\" )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// If `cell_size` isn't above 0, or a radius is negative.     #[must_use]     pub fn new(cell_size: f32, load_radius: f32, keep_radius: f32) -> Self {         assert!(",
     "site": "src/jobs.rs:223"
-  },
-  "src/jobs.rs:ea64d064c8fef914": {
-    "classification": "caller-contract",
-    "construction": "panic!(\"ponko: a job's work panicked; fix the panic in the closure passed to Job::spawn\")",
-    "reason": "Caller constraint and remedy are explicit in the message: panic!(\"ponko: a job's work panicked; fix the panic in the closure passed to Job::spawn\")",
-    "site": "src/jobs.rs:155"
   },
   "src/jobs.rs:eecb5ed1df666cd1": {
     "classification": "caller-contract",
@@ -1049,6 +1085,12 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// ```     pub fn new(config: InterestConfig) -> Self {         if let Err(message) = config.validate() {             panic!(\"{message}\");",
     "site": "src/net/interest.rs:258"
   },
+  "src/net/messages.rs:11890ac0dc0afd1b": {
+    "classification": "invariant",
+    "construction": ".expect(\"link\")",
+    "reason": "The host finds the peer ID in this same map immediately before removing it. Nothing changes the map between the two operations.",
+    "site": "src/net/messages.rs:871"
+  },
   "src/net/messages.rs:26af48c2452f30a6": {
     "classification": "caller-contract",
     "construction": "assert!(!timeout.is_zero(), \"timeout must be positive\")",
@@ -1091,18 +1133,6 @@
     "reason": "Internal invariant: return Ok(());         }         let kind = data[4];         let cn = u64::from_le_bytes(data[5..13].try_into().expect(\"nonce\"));",
     "site": "src/net/messages.rs:845"
   },
-  "src/net/messages.rs:aeca0e23629d77e8": {
-    "classification": "invariant",
-    "construction": ".expect(\"link\")",
-    "reason": "Internal invariant: if let Some(link) = self.links.values().find(|l| l.addr == addr) {                 if link.client_nonce == cn {                     let peer = *self.links.iter().find(|(_, l)| l.addr == addr).expect(\"link\").0;                     let link = self.links.remove(&peer).expect(\"link\");",
-    "site": "src/net/messages.rs:851"
-  },
-  "src/net/messages.rs:ce8e36d2aebe45d8": {
-    "classification": "invariant",
-    "construction": ".expect(\"link\")",
-    "reason": "Internal invariant: if self.hosting && kind == HELLO && cn != 0 && sn == 0 {             if let Some(link) = self.links.values().find(|l| l.addr == addr) {                 if link.client_nonce == cn {                     let peer = *self.links.iter().find(|(_, l)| l.addr == addr).expect(\"link\").0;",
-    "site": "src/net/messages.rs:850"
-  },
   "src/net/messages.rs:f999663cc29faf55": {
     "classification": "caller-contract",
     "construction": "assert!((2..=1025).contains(&players), \"players must be 2..=1025\")",
@@ -1132,6 +1162,114 @@
     "construction": ".expect(\"front exists\")",
     "reason": "Internal invariant: if seq_diff(p.seq, ack) > 0 {                 break;             }             let p = self.pending.pop_front().expect(\"front exists\");",
     "site": "src/net/prediction.rs:246"
+  },
+  "src/net/replicate.rs:1d7b1a78c6a37edd": {
+    "classification": "caller-contract",
+    "construction": "assert!( f.offset + f.ty.size() <= size, \"Replication::raw_component: field `{}` of `{name}` lies outside its {size} bytes\", f.name )",
+    "reason": "Declaration time (C bindings validate first): names the field, the component and its size; should_panic test",
+    "site": "src/net/replicate.rs:1071"
+  },
+  "src/net/replicate.rs:3c3243e2a4d3fc78": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"Replication::interest: {e}\")",
+    "reason": "Re-raises InterestConfig::validate's message, which names the bad field; should_panic test",
+    "site": "src/net/replicate.rs:1047"
+  },
+  "src/net/replicate.rs:561f16fe92b073cd": {
+    "classification": "caller-contract",
+    "construction": "panic!( \"Replication::input_of: the input type is `{}`, not `{}`; read it with the declared input type\", inputs.name(), std::any::type_name::<I>() )",
+    "reason": "Names the declared input type and the one asked for, and says to use the declared one; should_panic test",
+    "site": "src/net/replicate.rs:1174"
+  },
+  "src/net/replicate.rs:5fafb3951332d561": {
+    "classification": "caller-contract",
+    "construction": "assert!( !self.kinds.iter().any(|k| k.type_id == Some(type_id)), \"Replication: `{}` is declared twice; declare each component once\", kind.name )",
+    "reason": "Declaration time: names the component declared twice and says to declare it once; should_panic test",
+    "site": "src/net/replicate.rs:505"
+  },
+  "src/net/replicate.rs:698408b41d22e899": {
+    "classification": "forwarded-error",
+    "construction": "panic!( \"Replication: event `{}` doesn't serialize: {e}\", std::any::type_name::<T>() )",
+    "reason": "Re-raises serde_json's error for an event value that can't serialize; should_panic test",
+    "site": "src/net/replicate.rs:821"
+  },
+  "src/net/replicate.rs:792102dfe1e6c387": {
+    "classification": "caller-contract",
+    "construction": "panic!( \"Replication::set_input: no input type was declared; add `.input::<{}>()` to the Replication\", crate::reflect::short_name(std::any::type_name::<I>()) )",
+    "reason": "Says no input type was declared and the declaration to add; should_panic test",
+    "site": "src/net/replicate.rs:1152"
+  },
+  "src/net/replicate.rs:810e61fcac5c46f5": {
+    "classification": "caller-contract",
+    "construction": "panic!( \"Replication: `{0}` isn't a declared event; add `.event::<{0}>()` to the Replication\", crate::reflect::short_name(std::any::type_name::<T>()) )",
+    "reason": "Names the undeclared event type and the declaration to add; should_panic test",
+    "site": "src/net/replicate.rs:807"
+  },
+  "src/net/replicate.rs:a2c48464ca7c71fb": {
+    "classification": "caller-contract",
+    "construction": "assert!( !inner.events.iter().any(|e| e.type_id == TypeId::of::<T>()), \"Replication: event `{name}` is declared twice; declare each event once\" )",
+    "reason": "Declaration time: names the event declared twice and says to declare it once; should_panic test",
+    "site": "src/net/replicate.rs:1013"
+  },
+  "src/net/replicate.rs:b94507bf6f478855": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"Replication::interpolated_with: {e}\")",
+    "reason": "Re-raises SnapshotConfig::validate's message, which names the bad field; should_panic test",
+    "site": "src/net/replicate.rs:952"
+  },
+  "src/net/replicate.rs:bab86d9f6673f03b": {
+    "classification": "caller-contract",
+    "construction": "panic!( \"Replication: the input type is `{found}`, not `{name}`; a game has one input type (put every control in it)\" )",
+    "reason": "Names the declared input type and the one used, and that a game has one; should_panic test",
+    "site": "src/net/replicate.rs:532"
+  },
+  "src/net/replicate.rs:db6757892f2516a4": {
+    "classification": "caller-contract",
+    "construction": "assert!( self.kinds.len() < wire::MAX_KINDS, \"Replication: at most {} component types can be replicated; put fields that change together into one component\", wire::MAX_KINDS )",
+    "reason": "Declaration time: names the 64-type limit and says to merge fields into fewer components; should_panic test",
+    "site": "src/net/replicate.rs:511"
+  },
+  "src/net/replicate/bits.rs:0ed36afc7811b5a2": {
+    "classification": "invariant",
+    "construction": "debug_assert!(bits <= 32)",
+    "reason": "Widths come from declared fields, checked at declaration to be 32 bits or fewer",
+    "site": "src/net/replicate/bits.rs:108"
+  },
+  "src/net/replicate/bits.rs:817a76c802cd9ce0": {
+    "classification": "invariant",
+    "construction": "debug_assert!(bits <= 32)",
+    "reason": "Widths come from declared fields, checked at declaration to be 32 bits or fewer",
+    "site": "src/net/replicate/bits.rs:24"
+  },
+  "src/net/replicate/fields.rs:27e4227c0e99166c": {
+    "classification": "caller-contract",
+    "construction": "panic!( \"replicated field `{name}`: a rotation takes Quantize::Exact or Quantize::Bits(2..=10), not {other:?}\" )",
+    "reason": "Names the field, the quantizations a rotation takes and the one given; should_panic test in fields.rs",
+    "site": "src/net/replicate/fields.rs:296"
+  },
+  "src/net/replicate/fields.rs:5222018ceb268700": {
+    "classification": "caller-contract",
+    "construction": "panic!( \"replicated field `{name}`: a {width}-bit integer takes Quantize::Exact or Bits(1..={width}), not {other:?}\" )",
+    "reason": "Names the field, the quantizations an integer of that width takes and the one given; should_panic test in fields.rs",
+    "site": "src/net/replicate/fields.rs:481"
+  },
+  "src/net/replicate/fields.rs:ca5766e84238c485": {
+    "classification": "caller-contract",
+    "construction": "panic!( \"replicated field `{name}`: Quantize::Range needs finite min < max and a positive step that divides the range into at most 2^32 - 1 steps (got {min}..{max} by {step})\" )",
+    "reason": "Names the field, what a valid range needs and the values given; should_panic test in fields.rs",
+    "site": "src/net/replicate/fields.rs:466"
+  },
+  "src/net/replicate/fields.rs:ddcc7675f1cc44f2": {
+    "classification": "caller-contract",
+    "construction": "panic!( \"replicated field `{name}`: a float takes Quantize::Exact, Range or Angle {{ bits: 2..=32 }}, not {other:?}\" )",
+    "reason": "Names the field, the quantizations a float takes and the one given; should_panic test in fields.rs",
+    "site": "src/net/replicate/fields.rs:471"
+  },
+  "src/net/replicate/inputs.rs:85132d8beed867a5": {
+    "classification": "invariant",
+    "construction": "debug_assert_eq!(got, seq, \"predictions follow the input stream's numbers\")",
+    "reason": "A predicted entity's prediction is created with the input stream and advanced only here, once per input, so their numbers match",
+    "site": "src/net/replicate/inputs.rs:158"
   },
   "src/net/rollback.rs:08e3ef4c00d1bbfd": {
     "classification": "invariant",
@@ -1511,17 +1649,17 @@
     "reason": "Internal invariant: /// Replaces every pixel of texture `id` (same size as created).     pub fn update_texture(&mut self, id: u32, width: u32, height: u32, rgba: &[u8]) {         debug_assert_eq!(rgba.len(), (width * height * 4) as usize);",
     "site": "src/render/gpu.rs:1563"
   },
-  "src/render/gpu.rs:0c7651e9dfa3f9bb": {
-    "classification": "invariant",
-    "construction": "panic!(\"ponko: lost the GPU surface: {e}\")",
-    "reason": "Internal renderer/storage consistency check: self.surface = self                     .instance                     .create_surface(self.window.clone())                     .unwrap_or_else(|e| panic!(\"ponko: lost the GPU surface: {e}\"));",
-    "site": "src/render/gpu.rs:1732"
-  },
   "src/render/gpu.rs:48286aa5add3d98d": {
     "classification": "invariant",
     "construction": ".expect(\"made above\")",
     "reason": "Internal invariant: self.hidden_target             .as_ref()             .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()))             .expect(\"made above\")",
     "site": "src/render/gpu.rs:384"
+  },
+  "src/render/gpu.rs:4a653a39d4e529ae": {
+    "classification": "invariant",
+    "construction": "panic!(\"ponko: lost the GPU surface: {e}\")",
+    "reason": "The window surface recovery path already owns a valid window and GPU instance. Failure to recreate its lost surface remains a fatal renderer error.",
+    "site": "src/render/gpu.rs:1901"
   },
   "src/render/gpu.rs:5d10f1e3685d1eef": {
     "classification": "invariant",
@@ -1571,11 +1709,29 @@
     "reason": "Internal invariant: the texture was looked up live above in the same call, with no free in between.",
     "site": "src/render/gpu.rs:1368"
   },
+  "src/render/gpu3d/crowds.rs:9938224edfd4907d": {
+    "classification": "invariant",
+    "construction": ".expect(\"crowds on the GPU path have their shared state; invariant: made with the first\")",
+    "reason": "make_crowd creates the shared crowd state before it makes the first GPU-path crowd and never drops it, so a GPU-path crowd always has it.",
+    "site": "src/render/gpu3d/crowds.rs:397"
+  },
+  "src/render/gpu3d/crowds.rs:aaee982ef71cfcd6": {
+    "classification": "invariant",
+    "construction": "debug_assert!(source.contains(FIELDS) && source.contains(BINDINGS) && source.contains(helper))",
+    "reason": "Debug check that the engine's own mesh shader still has the text the crowd shader splices into; crowd_shaders_compose_on_the_mesh_shader tests it, callers can't change it.",
+    "site": "src/render/gpu3d/crowds.rs:74"
+  },
   "src/render/gpu3d/custom_passes.rs:96c5b0d2fc4aefbb": {
     "classification": "invariant",
     "construction": "debug_assert!( writers .windows(2) .all(|w| (w[0].stage, w[0].index) < (w[1].stage, w[1].index)), \"writers are in frame order\" )",
     "reason": "Internal invariant: /// `hazards` (cleared first); doesn't allocate once it has the capacity. pub(crate) fn check(writers: &[Writer], samples_own_target: impl Fn(&Writer) -> bool, hazards: &mut Vec<Hazard>) {     hazards.clear();     debug_assert!(",
     "site": "src/render/gpu3d/custom_passes.rs:172"
+  },
+  "src/render/gpu3d/effects.rs:447424f3b1a0a5b1": {
+    "classification": "invariant",
+    "construction": ".expect(\"listed effect has a pipeline\")",
+    "reason": "prepare_lists only includes effect slots with a live pipeline, and they cannot change while recording the frame.",
+    "site": "src/render/gpu3d/effects.rs:169"
   },
   "src/render/gpu3d/effects.rs:ac3235ecc1e2c7ff": {
     "classification": "invariant",
@@ -1714,6 +1870,12 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: fn storage(&self, device: &wgpu::Device, len: u32, past: bool, data: &[glam::Vec4]) -> StorageBuffer {         let (read_layout, (write_layout, _)) = (             self.storage_read.as_ref().unwrap(),             self.storage_write.as_ref().unwrap(),",
     "site": "src/render/gpu3d/resources.rs:79"
+  },
+  "src/render/gpu3d/resources.rs:46e2ee37f50ac0cf": {
+    "classification": "invariant",
+    "construction": ".expect(\"a freed material has a fallback\")",
+    "reason": "A resolved stale slot exists only after free_material installed the shared fallback. Live slots were populated when their ids were allocated.",
+    "site": "src/render/gpu3d/resources.rs:483"
   },
   "src/render/gpu3d/resources.rs:4907cd94cb1cda79": {
     "classification": "invariant",
@@ -1877,18 +2039,6 @@
     "reason": "Internal invariant: return Ok(());     };     let composed = crate::render::compose_shader(user);     let game = game_range(&composed).expect(\"material source marker\");",
     "site": "src/render/shader_diagnostics.rs:323"
   },
-  "src/render/shader_diagnostics.rs:afd29ca80746d09b": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: depth -= 1;                     i += 2;                 } else {                     i += source[i..].chars().next().unwrap().len_utf8();",
-    "site": "src/render/shader_diagnostics.rs:146"
-  },
-  "src/render/shader_diagnostics.rs:c95649d26b8503b8": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: } else if source[i..].starts_with(\"->\") {             i += 2;         } else {             i += source[i..].chars().next().unwrap().len_utf8();",
-    "site": "src/render/shader_diagnostics.rs:160"
-  },
   "src/render/views.rs:2b1d0d387c0209ad": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -1973,17 +2123,17 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// # Panics     /// As `add_attachment`, and if `skin` isn't a skin.     pub fn add_skin_attachment(&mut self, skin: usize, slot: usize, name: &str, attachment: impl Into<Attachment>) {         assert!(",
     "site": "src/skeleton2d/data.rs:620"
   },
-  "src/skeleton2d/data.rs:2f69128832ac1f50": {
-    "classification": "caller-contract",
-    "construction": "panic!(\"ponko: {e}\")",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. clip.name         );         if let Err(e) = clip.check(self.bones.len(), self.slots.len()) {             panic!(\"ponko: {e}\");",
-    "site": "src/skeleton2d/data.rs:688"
-  },
   "src/skeleton2d/data.rs:36ef7e54bce87f98": {
     "classification": "caller-contract",
     "construction": "assert!( self.skin(name).is_none(), \"ponko: the skeleton has a skin named \\\"{name}\\\" already; use a unique name\" )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// # Panics     /// If the name is taken.     pub fn add_skin(&mut self, name: &str) -> usize {         assert!(",
     "site": "src/skeleton2d/data.rs:597"
+  },
+  "src/skeleton2d/data.rs:57fb92cde321e33c": {
+    "classification": "caller-contract",
+    "construction": "assert!( mask.end.is_none_or(|e| e < self.slots.len()), \"ponko: clipping mask \\\"{name}\\\" ends at a slot that isn't in the skeleton; add that slot first or end at None\" )",
+    "reason": "The message names the mask, the missing end slot and the fix.",
+    "site": "src/skeleton2d/data.rs:859"
   },
   "src/skeleton2d/data.rs:5914a178814141c9": {
     "classification": "caller-contract",
@@ -2032,6 +2182,18 @@
     "construction": "assert!( bone < self.bones.len(), \"ponko: slot \\\"{name}\\\"'s bone isn't in the skeleton; add the bone before the slot\" )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. self.slot(name).is_none(),             \"ponko: the skeleton has a slot named \\\"{name}\\\" already; use a unique name\"         );         assert!(",
     "site": "src/skeleton2d/data.rs:568"
+  },
+  "src/skeleton2d/data.rs:ec226c202bed0624": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"ponko: {e}\")",
+    "reason": "Re-raises the SkeletonError from check_transform, whose messages name the constraint and what is wrong; documented under Panics.",
+    "site": "src/skeleton2d/data.rs:951"
+  },
+  "src/skeleton2d/data.rs:f3b97e10b8b62b13": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"ponko: {e}\")",
+    "reason": "Re-raises the SkeletonError from Clip::check / check_deform, whose messages name the clip, track and fix; add_clip documents the panic.",
+    "site": "src/skeleton2d/data.rs:918"
   },
   "src/skeleton2d/data.rs:fba4ee5c72d3c60d": {
     "classification": "caller-contract",
@@ -2357,29 +2519,23 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// If the data doesn't fit together (see [`MeshData::check`]), or the     /// material comes from another game.     pub fn create_mesh(&mut self, data: &MeshData, material: Material) -> Mesh {         self.try_create_mesh(data, material).unwrap_or_else(|e| panic!(\"{e}\"))",
     "site": "src/three/api.rs:534"
   },
-  "src/three/api.rs:60eacb7d5e6d53cb": {
-    "classification": "caller-contract",
-    "construction": "assert!( material.id < self.assets3d.materials, \"ponko: create_skinned_mesh: that material wasn't made by this game; create it with create_material in this game\" )",
-    "reason": "Caller passed a material from another game; the message says to create one with create_material.",
-    "site": "src/three/api.rs:656"
-  },
   "src/three/api.rs:62a6232e776e263f": {
     "classification": "invariant",
     "construction": ".unwrap()",
     "reason": "Internal invariant: }         });         for e in entities.iter().copied() {             let mesh = world.get::<super::Model>(e).unwrap().mesh;",
     "site": "src/three/api.rs:1643"
   },
+  "src/three/api.rs:767a6d4556d7c2b8": {
+    "classification": "caller-contract",
+    "construction": "assert!( self.assets3d.materials_live.was_made(material.id), \"ponko: create_skinned_mesh: that material wasn't made by this game; create it with create_material in this game\" )",
+    "reason": "A skinned mesh requires a material this game created. Freed handles stay recognizable and draw with the fallback.",
+    "site": "src/three/api.rs:665"
+  },
   "src/three/api.rs:7ea0b417650e4941": {
     "classification": "forwarded-error",
     "construction": "panic!(\"{e}\")",
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// # }     /// ```     pub fn load_clips(&mut self, path: &str) -> Vec<AnimationClip> {         self.try_load_clips(path).unwrap_or_else(|e| panic!(\"{e}\"))",
     "site": "src/three/api.rs:743"
-  },
-  "src/three/api.rs:897e16cedaa0e7f1": {
-    "classification": "invariant",
-    "construction": "debug_assert_eq!(gpu_id, self.assets3d.shaders + 1)",
-    "reason": "Internal invariant: Some(id) => renderer.replace_shader(id + 1, name, source)?,                 None => {                     let gpu_id = renderer.create_shader(name, source)?;                     debug_assert_eq!(gpu_id, self.assets3d.shaders + 1);",
-    "site": "src/three/api.rs:491"
   },
   "src/three/api.rs:8f7df11b45c0695b": {
     "classification": "forwarded-error",
@@ -2405,23 +2561,11 @@
     "reason": "Re-raises the material check's Error message, which names the bad value.",
     "site": "src/three/api.rs:157"
   },
-  "src/three/api.rs:afecd264279b24d5": {
-    "classification": "invariant",
-    "construction": "debug_assert_eq!(gpu_id, id)",
-    "reason": "Internal invariant: && !self.headless         {             let gpu_id = renderer.create_material(&gpu);             debug_assert_eq!(gpu_id, id);",
-    "site": "src/three/api.rs:132"
-  },
   "src/three/api.rs:b4616a5740e935ae": {
     "classification": "forwarded-error",
     "construction": "panic!(\"{e}\")",
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// gets a stand-in and stays watched until a saved fix compiles     /// ([`ShaderOutcome::Failed`](crate::render::ShaderOutcome::Failed), [`Graphics::shader_status`](crate::gfx::Graphics::shader_status)).     pub fn load_shader(&mut self, path: &str) -> Shader {         self.try_load_shader(path).unwrap_or_else(|e| panic!(\"{e}\"))",
     "site": "src/three/api.rs:356"
-  },
-  "src/three/api.rs:b499dcbb8804d496": {
-    "classification": "caller-contract",
-    "construction": "assert!( material.id < self.assets3d.materials, \"ponko: update_material: that material wasn't made by this game; update a material this game created\" )",
-    "reason": "Caller passed a material from another game; the message says to update one this game created.",
-    "site": "src/three/api.rs:153"
   },
   "src/three/api.rs:c2c39764d07894e8": {
     "classification": "forwarded-error",
@@ -2434,6 +2578,12 @@
     "construction": "panic!(\"{e}\")",
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// If the file is missing or isn't a glTF file with triangles; use     /// [`try_load_mesh_data`](Self::try_load_mesh_data) to handle that.     pub fn load_mesh_data(&self, path: &str) -> MeshData {         self.try_load_mesh_data(path).unwrap_or_else(|e| panic!(\"{e}\"))",
     "site": "src/three/api.rs:1209"
+  },
+  "src/three/api.rs:ca44d1eb84ec1cf1": {
+    "classification": "caller-contract",
+    "construction": "assert!( self.assets3d.materials_live.was_made(material.id), \"ponko: update_material: that material wasn't made by this game; update a material this game created\" )",
+    "reason": "Only materials created by this game may be updated. The generational check still recognizes old freed handles, whose updates do nothing.",
+    "site": "src/three/api.rs:157"
   },
   "src/three/api.rs:d2ac0b2bdb064f98": {
     "classification": "caller-contract",
@@ -2476,6 +2626,12 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: };             return;         }         let s = sample.unwrap();",
     "site": "src/three/autotune.rs:223"
+  },
+  "src/three/bake/mod.rs:7c9483706dd71301": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"{e}\")",
+    "reason": "Setup loader convention: re-raises try_load_baked_lighting's Error, whose message names the file and the problem.",
+    "site": "src/three/bake/mod.rs:834"
   },
   "src/three/clip.rs:089267119cd6f1ed": {
     "classification": "forwarded-error",
@@ -2573,12 +2729,6 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// });     /// ```     pub fn write_gpu_buffer(&mut self, b: GpuBuffer, offset: u32, data: &[glam::Vec4]) {         let len = self.gpu_buffer_len(b).expect(",
     "site": "src/three/compute.rs:459"
   },
-  "src/three/compute.rs:c72826d39377c7b9": {
-    "classification": "invariant",
-    "construction": "debug_assert_eq!(gpu_id, self.assets3d.computes)",
-    "reason": "Internal invariant: Some(id) => renderer.replace_compute(id, name, source),                 None => renderer                     .create_compute(name, source)                     .map(|gpu_id| debug_assert_eq!(gpu_id, self.assets3d.computes)),",
-    "site": "src/three/compute.rs:309"
-  },
   "src/three/compute.rs:d255731c3372ccb9": {
     "classification": "caller-contract",
     "construction": ".expect(\"ponko: GPU buffer was freed or belongs to another game; create a live buffer with create_gpu_buffer\")",
@@ -2609,11 +2759,23 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// });     /// ```     pub fn set_mesh_gpu_bounds(&mut self, mesh: super::Mesh, center: Vec3, radius: f32) {         assert!(",
     "site": "src/three/compute.rs:578"
   },
-  "src/three/effect.rs:0e0e23bae0c80eac": {
-    "classification": "invariant",
-    "construction": "debug_assert_eq!(gpu_id, self.assets3d.effects)",
-    "reason": "Internal invariant: Some(id) => renderer.replace_effect(id, name, source),                 None => renderer                     .create_effect(name, source)                     .map(|gpu_id| debug_assert_eq!(gpu_id, self.assets3d.effects)),",
-    "site": "src/three/effect.rs:311"
+  "src/three/crowd.rs:854db27c15778911": {
+    "classification": "caller-contract",
+    "construction": "assert!( fps.is_finite() && fps > 0.0, \"CrowdAnimation::bake: fps must be finite and > 0; 30 suits most clips\" )",
+    "reason": "The message names the bad fps and a value to use; tested by baking_needs_a_positive_rate.",
+    "site": "src/three/crowd.rs:135"
+  },
+  "src/three/crowd.rs:9e0edd121e3a8f90": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"{e}\")",
+    "reason": "create_crowd keeps the panicking setup form; it displays try_create_crowd's checked error, which names the misuse and fix.",
+    "site": "src/three/crowd.rs:576"
+  },
+  "src/three/crowd.rs:badf39a73656a4d7": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"{e}\")",
+    "reason": "update_crowd keeps the panicking form; it displays try_update_crowd's checked error, which names the misuse and fix.",
+    "site": "src/three/crowd.rs:744"
   },
   "src/three/effect.rs:19b018392fa5dded": {
     "classification": "forwarded-error",
@@ -2639,11 +2801,11 @@
     "reason": "Internal invariant: }         }         while total(&counts) > MAX_GI_PROBES {             let largest = (0..3).max_by_key(|&i| counts[i]).unwrap();",
     "site": "src/three/gi.rs:145"
   },
-  "src/three/gltf.rs:5410d1342541d8c6": {
+  "src/three/gltf.rs:7213e8b64dc431af": {
     "classification": "invariant",
     "construction": ".expect(\"one of the two is there\")",
-    "reason": "Internal invariant: let mut orm = match metal_rough {             Some(m) => self.decode(m, read)?,             None => {                 let (w, h, _) = occlusion.as_ref().expect(\"one of the two is there\");",
-    "site": "src/three/gltf.rs:862"
+    "reason": "Internal invariant: orm() is called only when the metallic-roughness or the occlusion image is there (both None gives no ORM map), so with no metallic-roughness image the occlusion one is there.",
+    "site": "src/three/gltf.rs:1141"
   },
   "src/three/gltf.rs:7fc7fdcf543dc0dd": {
     "classification": "invariant",
@@ -2819,17 +2981,11 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. #[must_use]     pub fn heightfield(heights: &[f32], size: f32, step: usize) -> Self {         let n = (heights.len() as f64).sqrt() as usize;         assert!(",
     "site": "src/three/mesh.rs:258"
   },
-  "src/three/occlusion.rs:339d89d04594d738": {
-    "classification": "invariant",
-    "construction": ".expect(\"level 0\")",
-    "reason": "Internal invariant: assert_eq!(depth.len(), (width * height) as usize);         let mut levels = vec![(width, height, depth)];         loop {             let (w, h, below) = levels.last().expect(\"level 0\");",
-    "site": "src/three/occlusion.rs:44"
-  },
-  "src/three/occlusion.rs:8c8865518a3f5b9d": {
+  "src/three/occlusion.rs:df925eaea597bda2": {
     "classification": "invariant",
     "construction": "assert_eq!(depth.len(), (width * height) as usize)",
-    "reason": "Internal renderer/storage consistency check: }     /// A grid of `width` x `height` farthest depths, row by row from the top.     pub fn new(view_proj: Mat4, camera: Vec3, width: u32, height: u32, depth: Vec<f32>) -> Self {         assert_eq!(depth.len(), (width * height) as usize);",
-    "site": "src/three/occlusion.rs:41"
+    "reason": "The renderer's read-back, its only caller, passes exactly w * h depths (view[..w*h*4] cast to f32); moved here from new() unchanged.",
+    "site": "src/three/occlusion.rs:51"
   },
   "src/three/particles.rs:124d497a4c0592ac": {
     "classification": "caller-contract",
@@ -2861,6 +3017,12 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. ///     /// If `n` is not between 2 and 64.     pub fn neutral_lut(n: u32) -> (u32, u32, Vec<u8>) {         assert!(",
     "site": "src/three/post.rs:497"
   },
+  "src/three/probe.rs:4733fff3ce036d17": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"{e}\")",
+    "reason": "Preserves setup/runtime policy; displays the checked operation error (make_render_target's message); the faces keep the target's texture.",
+    "site": "src/three/probe.rs:611"
+  },
   "src/three/probe.rs:55dabbee8bfaf9db": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -2878,12 +3040,6 @@
     "construction": "panic!(\"{e}\")",
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// to handle that.     pub fn load_reflection_probe(&mut self, world: &mut World, entity: Entity, name: &str) {         self.try_load_reflection_probe(world, entity, name)             .unwrap_or_else(|e| panic!(\"{e}\"));",
     "site": "src/three/probe.rs:704"
-  },
-  "src/three/probe.rs:cbe8d396b6689ef7": {
-    "classification": "forwarded-error",
-    "construction": "panic!(\"{e}\")",
-    "reason": "Preserves setup/runtime policy; displays the checked operation error. \"four reflection environments are already allocated\",             ));         }         let faces = std::array::from_fn(|_| self.make_render_target(128, 128).unwrap_or_else(|e| panic!(\"{e}\")));",
-    "site": "src/three/probe.rs:609"
   },
   "src/three/projected.rs:a80e750dad034475": {
     "classification": "invariant",
@@ -3017,11 +3173,11 @@
     "reason": "Internal invariant: }             }         }         let m = self.streaming.meshes.get(name).expect(\"still there\");",
     "site": "src/three/streamed.rs:180"
   },
-  "src/three/target.rs:18b9b8dda56af92a": {
+  "src/three/target.rs:4fd850dc2a8bbafc": {
     "classification": "forwarded-error",
     "construction": "panic!(\"{e}\")",
-    "reason": "Preserves setup/runtime policy; displays the checked operation error. /// If the size is zero or larger than the GPU takes.     pub fn create_render_target(&mut self, width: u32, height: u32) -> Texture {         self.try_create_render_target(width, height)             .unwrap_or_else(|e| panic!(\"{e}\"))",
-    "site": "src/three/target.rs:172"
+    "reason": "Preserves setup/runtime policy; displays the checked operation error (try_create_render_target's message); only the return type became RenderTarget.",
+    "site": "src/three/target.rs:270"
   },
   "src/three/terrain.rs:37902fbeda39796f": {
     "classification": "caller-contract",
@@ -3059,12 +3215,6 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// sizes differ.     pub fn load_texture_array(&mut self, paths: &[&str], kind: TextureKind) -> TextureArray {         self.try_load_texture_array(paths, kind)             .unwrap_or_else(|e| panic!(\"{e}\"))",
     "site": "src/three/texture_array.rs:196"
   },
-  "src/three/texture_array.rs:5a71fb394247d862": {
-    "classification": "invariant",
-    "construction": "debug_assert_eq!(gpu_id, id)",
-    "reason": "Internal invariant: }             let refs: Vec<&crate::compressed::CompressedImage> = layers.iter().map(|(_, l)| l).collect();             let gpu_id = renderer.create_compressed_texture_array(&refs);             debug_assert_eq!(gpu_id, id);",
-    "site": "src/three/texture_array.rs:333"
-  },
   "src/three/texture_array.rs:64975e5cfee28d4f": {
     "classification": "forwarded-error",
     "construction": "panic!(\"{e}\")",
@@ -3076,12 +3226,6 @@
     "construction": "panic!(\"{e}\")",
     "reason": "Preserves setup/runtime policy; displays the checked operation error. kind: TextureKind,     ) -> TextureArray {         self.try_create_texture_array(width, height, layers, kind)             .unwrap_or_else(|e| panic!(\"{e}\"))",
     "site": "src/three/texture_array.rs:104"
-  },
-  "src/three/texture_array.rs:d4ee1f9a26d4781c": {
-    "classification": "invariant",
-    "construction": "debug_assert_eq!(gpu_id, id)",
-    "reason": "Internal invariant: ));             }             let gpu_id = renderer.create_texture_array(width, height, layers, kind == TextureKind::Data);             debug_assert_eq!(gpu_id, id);",
-    "site": "src/three/texture_array.rs:163"
   },
   "src/time.rs:2c5ad1bad685f0ed": {
     "classification": "caller-contract",
@@ -3118,6 +3262,18 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: }                 UiAccessAction::SetText(_, text) => {                     if widget == UiWidget::TextInput {                         let n = self.node_mut(id).unwrap();",
     "site": "src/ui/access.rs:585"
+  },
+  "src/ui/anim.rs:0a21e28ef0ca65b6": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "rest_xf: the node was found by node_mut just above and nothing removes it while its subtree is reset",
+    "site": "src/ui/anim.rs:936"
+  },
+  "src/ui/anim.rs:b8c7c23ec972f086": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "update_states: the slot was Some a line above, read from the same nodes list",
+    "site": "src/ui/anim.rs:1368"
   },
   "src/ui/clipboard.rs:ca7c77f80c5bf297": {
     "classification": "invariant",
@@ -3257,11 +3413,23 @@
     "reason": "Internal invariant: .expect(\"UI parent is freed or absent; add a live parent in this UI first\")             .layout;         let id = self.add(widget, layout);         let node = self.node_mut(id).unwrap();",
     "site": "src/ui/retained.rs:727"
   },
+  "src/ui/retained.rs:58446d599b61e07b": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "place: ids come from the screen stack or a placed parent's children, all live nodes with Taffy nodes",
+    "site": "src/ui/retained.rs:1792"
+  },
   "src/ui/retained.rs:5c64cb4ca657c5f2": {
     "classification": "invariant",
     "construction": ".unwrap()",
     "reason": "Internal invariant: } else {             clip         };         let count = self.node(id).unwrap().children.len();",
     "site": "src/ui/retained.rs:1569"
+  },
+  "src/ui/retained.rs:5e9eec72fe6b3ad0": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "place: the node was read at the top of place and is still live",
+    "site": "src/ui/retained.rs:1820"
   },
   "src/ui/retained.rs:6cfa692536f31f16": {
     "classification": "invariant",
@@ -3305,6 +3473,12 @@
     "reason": "Internal invariant: }                     Drag::Text(id) => {                         let caret = self.caret_at(id, input.pointer);                         self.node_mut(id).unwrap().caret = caret;",
     "site": "src/ui/retained.rs:1673"
   },
+  "src/ui/retained.rs:9f17f6e6e89425c0": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "place: ids come from the screen stack or a placed parent's children, all live nodes with Taffy nodes",
+    "site": "src/ui/retained.rs:1792"
+  },
   "src/ui/retained.rs:aa36bfda123dd231": {
     "classification": "caller-contract",
     "construction": "assert!( self.node(root).is_some_and(|n| n.parent.is_none()), \"UI HUD must be a detached root; add a root node or detach it first\" )",
@@ -3335,6 +3509,18 @@
     "reason": "Internal invariant: /// Applies this frame's editing to the focused text input. With     /// `ime_keys`, a composition owns the keys: only committed text goes in.     fn edit(&mut self, input: &UiInput, ime_keys: bool) {         let id = self.focus.unwrap();",
     "site": "src/ui/retained.rs:1831"
   },
+  "src/ui/retained.rs:c3dbf7b74d6b2dfb": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "place: the node was read at the top of place and is still live",
+    "site": "src/ui/retained.rs:1801"
+  },
+  "src/ui/retained.rs:c47b9caa898e0f1b": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "Internal invariant: HUD and screen roots are live nodes (free detaches them first).",
+    "site": "src/ui/retained.rs:1644"
+  },
   "src/ui/retained.rs:d0cf129464f51abd": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -3346,6 +3532,12 @@
     "construction": "assert!( self.nodes.len() < SLOT_MASK, \"ponko: more than {SLOT_MASK} UI nodes; remove nodes you no longer show\" )",
     "reason": "Caller made more UI nodes than ids can address; the message says to remove nodes no longer shown.",
     "site": "src/ui/retained.rs:710"
+  },
+  "src/ui/retained.rs:d6cb19f887a095dd": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "place: the node was read at the top of place and is still live",
+    "site": "src/ui/retained.rs:1827"
   },
   "src/ui/retained.rs:dc49412b7d43171a": {
     "classification": "caller-contract",
@@ -3383,6 +3575,12 @@
     "reason": "Internal invariant: a Toggle widget always has a value.",
     "site": "src/ui/retained.rs:1896"
   },
+  "src/ui/retained_draw.rs:29736f7f9ee016b3": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "draw: every visible node was laid out this frame and has a Taffy node",
+    "site": "src/ui/retained_draw.rs:302"
+  },
   "src/ui/retained_draw.rs:314c05a3248d3d28": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -3412,5 +3610,41 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: if let Some(id) = target             && !self.ime.interrupted         {             let n = self.node_mut(id).unwrap();",
     "site": "src/ui/retained_ime.rs:169"
+  },
+  "src/ui/widgets.rs:27512f4b57cf38e5": {
+    "classification": "caller-contract",
+    "construction": ".expect(\"ponko: Ui::tab needs a tab strip made with Ui::tabs\")",
+    "reason": "Caller constraint and remedy are explicit in the message: Ui::tab needs a tab strip made with Ui::tabs (documented under Panics).",
+    "site": "src/ui/widgets.rs:501"
+  },
+  "src/ui/widgets.rs:f6c868c1ece752af": {
+    "classification": "caller-contract",
+    "construction": "assert!( self.widget(group) == Some(UiWidget::RadioGroup), \"ponko: Ui::radio needs a group made with Ui::radio_group\" )",
+    "reason": "Caller constraint and remedy are explicit in the message: Ui::radio needs a group made with Ui::radio_group (documented under Panics).",
+    "site": "src/ui/widgets.rs:621"
+  },
+  "src/video/yuv.rs:f001031987581089": {
+    "classification": "invariant",
+    "construction": "debug_assert_eq!(rgba.len(), row_bytes * planes.height)",
+    "reason": "to_rgba's only caller sizes the buffer from the same picture's width and height and checks it first",
+    "site": "src/video/yuv.rs:86"
+  },
+  "src/water/mod.rs:0bfd19ece8a997d5": {
+    "classification": "caller-contract",
+    "construction": "assert!( width > 0 && height > 0 && max_speed > 0.0, \"ponko: FlowMap needs a size above zero and a positive max_speed\" )",
+    "reason": "FlowMap::from_fn with an empty size or no top speed; documented under Panics, the message names the valid values.",
+    "site": "src/water/mod.rs:171"
+  },
+  "src/water/mod.rs:2dbba7352b376435": {
+    "classification": "caller-contract",
+    "construction": "assert!( rgba.len() == (width * height * 4) as usize && max_speed > 0.0 && width > 0 && height > 0, \"ponko: FlowMap::from_rgba needs width * height * 4 bytes and a positive max_speed\" )",
+    "reason": "FlowMap::from_rgba with the wrong byte count, an empty size or no top speed; documented under Panics, the message names what it needs.",
+    "site": "src/water/mod.rs:202"
+  },
+  "src/water/mod.rs:a331de31c929ba0c": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"{e}\")",
+    "reason": "Water::spawn displays the checked GPU error; Water::try_spawn returns it instead.",
+    "site": "src/water/mod.rs:516"
   }
 }

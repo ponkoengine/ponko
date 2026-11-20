@@ -106,7 +106,7 @@ fn main() {
             let water = ctx.gfx.create_material(
                 MaterialDesc::color(Color::hex(0x2A5A75))
                     .with_shader(shader)
-                    .with_custom_textures([Some(heights), None]),
+                    .with_custom_textures([Some(heights.texture()), None]),
             );
             let surface = ctx.gfx.create_mesh(&MeshData::plane(SIZE), water);
             ctx.world.spawn((Transform::default(), Model::new(surface)));

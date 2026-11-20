@@ -2,6 +2,7 @@
 
 use std::mem::ManuallyDrop;
 
+use crate::required::Requires;
 use crate::seal::Seal;
 use crate::storage::ComponentId;
 use crate::world::World;
@@ -68,8 +69,38 @@ use crate::world::World;
 /// world.query::<&Pos>().for_each(|_| {}); // `Pos` is not a component
 /// ```
 ///
-/// The derive takes no options yet; `#[component(..)]` is reserved for them
-/// and rejected:
+/// # Required components
+///
+/// A component can name components an entity with it needs, with the
+/// values they start with: spawn the thing and get what it needs. Every
+/// spawn and insert that gives an entity the component adds those it
+/// lacks (and what they require in turn); values given in the bundle win.
+///
+/// ```
+/// use ponko_ecs::{Component, World};
+///
+/// #[derive(Component, Default, Debug, PartialEq)]
+/// struct Position(f32, f32);
+/// #[derive(Component, Debug, PartialEq)]
+/// struct Health(u32);
+///
+/// #[derive(Component)]
+/// #[component(requires(Position, Health = Health(100)))]
+/// struct Enemy;
+///
+/// let mut world = World::new();
+/// let e = world.spawn((Enemy,));
+/// assert_eq!(world.get::<Position>(e), Some(&Position(0.0, 0.0))); // `Default`
+/// assert_eq!(world.get::<Health>(e), Some(&Health(100)));
+/// let tough = world.spawn((Enemy, Health(500))); // the bundle's value wins
+/// assert_eq!(world.get::<Health>(tough), Some(&Health(500)));
+/// ```
+///
+/// By hand, [`requires`](Component::requires) says the same. See
+/// [`Requires`] for the rules, and [`World::require`] to add a
+/// requirement to a type you don't own.
+///
+/// The derive takes no other options; unknown ones are rejected:
 ///
 /// ```compile_fail
 /// #[derive(ponko_ecs::Component)]
@@ -81,11 +112,35 @@ use crate::world::World;
 ///
 /// [`Entity`]: crate::Entity
 /// [`World::insert_resource`]: crate::World::insert_resource
+/// [`World::require`]: crate::World::require
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a component",
     note = "add `#[derive(Component)]` to the type, or `impl Component for {Self} {{}}`"
 )]
-pub trait Component: Send + Sync + 'static {}
+pub trait Component: Send + Sync + 'static {
+    /// The components an entity with this one needs, and how to make each
+    /// one's value: called once per world, when the world first sees this
+    /// type. The default requires nothing. `#[component(requires(..))]`
+    /// writes it for the derive.
+    ///
+    /// ```
+    /// use ponko_ecs::{Component, Requires, World};
+    ///
+    /// #[derive(Component, Default)]
+    /// struct Velocity(f32, f32);
+    /// struct Body;
+    /// impl Component for Body {
+    ///     fn requires(r: &mut Requires<'_>) {
+    ///         r.add(Velocity::default);
+    ///     }
+    /// }
+    ///
+    /// let mut world = World::new();
+    /// let e = world.spawn((Body,));
+    /// assert!(world.has::<Velocity>(e));
+    /// ```
+    fn requires(_required: &mut Requires<'_>) {}
+}
 
 /// A tuple of components that are spawned together: `(Pos, Vel)`, `(Pos,)`.
 ///

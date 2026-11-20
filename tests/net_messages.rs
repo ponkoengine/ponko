@@ -115,8 +115,15 @@ fn disconnect_and_silent_timeout_are_reported_once() {
     );
     let mut nets = NetMessages::loopback(2);
     connected(&mut nets);
-    nets[1].poll_elapsed(Duration::from_secs(11)).unwrap();
-    assert!(nets[1].events().any(|e| matches!(e, MessageEvent::Disconnected(..))));
+    for _ in 0..10 {
+        nets[1].poll_elapsed(Duration::from_secs(1)).unwrap();
+    }
+    assert_eq!(
+        nets[1].next_event(),
+        Some(MessageEvent::Disconnected(PeerId::HOST, "peer timed out".into()))
+    );
+    nets[1].poll_elapsed(Duration::from_secs(1)).unwrap();
+    assert_eq!(nets[1].next_event(), None);
 }
 
 #[test]
@@ -307,10 +314,24 @@ fn full_host_refuses_extra_clients_and_broadcast_reaches_every_client() {
 }
 
 #[test]
-fn silent_join_times_out_and_full_send_queue_returns_backpressure() {
-    let mut nets = NetMessages::loopback_lossy(2, 1);
-    nets[1].poll_elapsed(Duration::from_secs(11)).unwrap();
-    assert!(nets[1].events().any(|e| matches!(e, MessageEvent::Disconnected(..))));
+fn silent_join_times_out_after_its_first_poll() {
+    let mut client = NetMessages::loopback_lossy(2, 1).remove(1);
+    client.poll_elapsed(Duration::from_secs(30)).unwrap();
+    for _ in 0..9 {
+        client.poll_elapsed(Duration::from_secs(1)).unwrap();
+        assert_eq!(client.next_event(), None);
+    }
+    client.poll_elapsed(Duration::from_secs(1)).unwrap();
+    assert_eq!(
+        client.next_event(),
+        Some(MessageEvent::Disconnected(PeerId::HOST, "peer timed out".into()))
+    );
+    client.poll_elapsed(Duration::from_secs(1)).unwrap();
+    assert_eq!(client.next_event(), None);
+}
+
+#[test]
+fn full_send_queue_returns_backpressure() {
     let mut nets = NetMessages::loopback(2);
     let peer = connected(&mut nets);
     let payload = vec![1; MAX_MESSAGE_BYTES];

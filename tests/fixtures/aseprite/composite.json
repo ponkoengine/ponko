@@ -1,0 +1,10 @@
+{
+  "frames": [
+    {"filename":"run 0","frame":{"x":0,"y":0,"w":1,"h":1},"sourceSize":{"w":1,"h":1},"duration":100},
+    {"filename":"run 1","frame":{"x":1,"y":0,"w":1,"h":1},"sourceSize":{"w":1,"h":1},"duration":200}
+  ],
+  "meta": {
+    "image":"layers.png",
+    "frameTags":[{"name":"Run","from":0,"to":1,"direction":"forward"}]
+  }
+}

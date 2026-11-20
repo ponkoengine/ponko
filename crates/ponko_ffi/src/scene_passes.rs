@@ -4,7 +4,7 @@
 use crate::PonkoMaterial;
 use crate::ctx::{ctx_access, out};
 use crate::three::{PonkoComputePass, PonkoEffect, compute_pass_to_c, compute_passes_from_c};
-use crate::types::{PonkoTexture, texture_from_c, texture_to_c, to_c};
+use crate::types::{PonkoTexture, texture_to_c, to_c};
 use crate::{PonkoCtx, PonkoStatus, boundary, invalid};
 use ponko::__ffi;
 use ponko::render::{Effect, TargetEffect};
@@ -125,10 +125,7 @@ pub unsafe extern "C" fn ponko_ctx_set_target_effects(
                 if !c.gfx.is_live(effect) {
                     return Err(invalid("that effect wasn't made by this game"));
                 }
-                let target = texture_from_c(e.target);
-                if !c.gfx.is_render_target(target) {
-                    return Err(invalid("that texture isn't a render target of this game"));
-                }
+                let target = crate::three::render_target_from_c(c, e.target)?;
                 let pass = TargetEffect::new(effect, target);
                 list.push(if e.has_material {
                     let material = to_c(e.material);
@@ -173,7 +170,7 @@ pub unsafe extern "C" fn ponko_ctx_target_effects(
                     effect: PonkoEffect {
                         id: __ffi::id(e.effect),
                     },
-                    target: texture_to_c(e.target),
+                    target: texture_to_c(e.target.texture()),
                     has_material: e.material.is_some(),
                     material: e.material.map(to_c).unwrap_or_default(),
                 });

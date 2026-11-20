@@ -485,6 +485,11 @@ impl Renderer3D {
         // Static batches cull the cascades' casters by distance from the camera.
         let by_distance = self.static_batches.iter().flatten().any(|b| b.shadow_distance());
         for v in shadow_views(self.lists.cascades, self.lists.light_views) {
+            // A crowd moves: the views it reaches are drawn anew.
+            if self.crowds.reaches_shadow_view(v) {
+                self.shadow_cache.forget(v);
+                continue;
+            }
             let generation = frame.shadow_generations[v];
             let key = if v < MAX_CASCADES {
                 ViewKey {

@@ -6,7 +6,9 @@
 //! about optional ones it ignores, decompresses meshopt buffer views
 //! (`EXT_meshopt_compression`, feature `gltf-meshopt`) into a buffer of
 //! their own and points textures at their KTX2 or WebP images when the
-//! build reads those. The rest reads extension data while
+//! build reads those, and folds the nodes `ponko cook` adds for quantized
+//! positions back into their parents ([`fold_quantized_positions`]). The
+//! rest reads extension data while
 //! [`load`](super::gltf::load) walks the file: quantized attributes
 //! (`KHR_mesh_quantization`), texture transforms, emissive strength,
 //! transmission, lights and cameras.
@@ -38,12 +40,13 @@ fn support(extension: &str) -> Option<Support> {
         | "KHR_texture_transform"
         | "KHR_materials_emissive_strength"
         | "KHR_mesh_quantization"
-        | "KHR_materials_transmission" => Support::Always,
+        | "KHR_materials_transmission"
+        | QUANTIZED_POSITIONS => Support::Always,
         "EXT_meshopt_compression" | "KHR_meshopt_compression" => Support::Feature("gltf-meshopt", MESHOPT),
-        "KHR_texture_basisu" => Support::Feature(
-            "basis-universal",
-            cfg!(all(feature = "basis-universal", not(target_arch = "wasm32"))),
-        ),
+        // KTX2 images: block formats upload as they are; Basis Universal
+        // UASTC ones also need `basis-universal` (they fail to read without
+        // it, and the texture's core image loads instead if it has one).
+        "KHR_texture_basisu" => Support::Feature("compressed-textures", cfg!(feature = "compressed-textures")),
         "EXT_texture_webp" => Support::Feature("image-webp", cfg!(feature = "image-webp")),
         _ => return None,
     })
@@ -85,6 +88,10 @@ pub(super) struct Prepared {
     /// For textures with both a core image and one the build reads through
     /// an extension (KTX2, WebP): the extension's image, tried first.
     pub preferred_image: Vec<Option<usize>>,
+    /// Each mesh's dequantization, by primitive, for a mesh whose
+    /// quantization nodes were folded into its parent: a primitive's
+    /// positions go through its matrix first. Empty for other meshes.
+    pub dequantize: Vec<Vec<Mat4>>,
     pub warnings: Vec<String>,
 }
 
@@ -183,6 +190,7 @@ pub(super) fn prepare(
     }
     decompress_views(name, &mut json, &mut buffers)?;
     let preferred_image = texture_sources(name, &mut json)?;
+    let dequantize = fold_quantized_positions(&mut json);
 
     // The `gltf` crate checks required extensions against its own list,
     // which doesn't know these; they were checked above.
@@ -196,8 +204,198 @@ pub(super) fn prepare(
         buffers,
         json,
         preferred_image,
+        dequantize,
         warnings,
     })
+}
+
+/// The extension `ponko cook` marks the node a quantized mesh hangs from
+/// with: a child that only moves and scales the mesh's 16-bit positions
+/// back to the size they were.
+pub(super) const QUANTIZED_POSITIONS: &str = "PONKO_quantized_positions";
+
+/// Folds each node marked [`QUANTIZED_POSITIONS`] back into its parent: the
+/// parent shows the mesh again and the marked node leaves the tree (it
+/// stays in the list, empty, so no index changes), and the mesh's positions
+/// go through the marked node's transform as they are read (the returned
+/// matrices, by mesh and primitive). So the node tree, transforms and
+/// extras are the source's, and so are positions, within the cook's bound.
+///
+/// A marked node shows its parent's whole mesh (an empty extension), or,
+/// for a mesh the cook gave a range per primitive, some of its primitives:
+/// the extension names the source mesh and where each of the node's mesh's
+/// primitives was in it (`{"mesh": 3, "primitives": [0, 2]}`). Those pieces
+/// are put back together into the source mesh, in its order.
+///
+/// A mesh is folded only when every node showing it or one of its pieces
+/// is such a node with one parent that shows nothing itself, every parent
+/// has the same pieces with the same transforms, and they hold each
+/// primitive once; otherwise the file is read as it is (and still draws
+/// right).
+pub(super) fn fold_quantized_positions(json: &mut Value) -> Vec<Vec<Mat4>> {
+    let meshes = json["meshes"].as_array().map_or(0, Vec::len);
+    let mut out = vec![Vec::new(); meshes];
+    let primitive_count = |json: &Value, m: usize| json["meshes"][m]["primitives"].as_array().map_or(0, Vec::len);
+    let counts: Vec<usize> = (0..meshes).map(|m| primitive_count(json, m)).collect();
+    let Some(nodes) = json.get_mut("nodes").and_then(Value::as_array_mut) else {
+        return out;
+    };
+    let mut parents: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+    for (p, node) in nodes.iter().enumerate() {
+        for c in node["children"].as_array().into_iter().flatten() {
+            if let Some(list) = c.as_u64().and_then(|c| parents.get_mut(c as usize)) {
+                list.push(p);
+            }
+        }
+    }
+    let floats = |v: &Value, default: &[f32]| -> Option<[f32; 3]> {
+        match v.as_array() {
+            Some(a) => a
+                .iter()
+                .map(|x| x.as_f64().map(|f| f as f32))
+                .collect::<Option<Vec<f32>>>()?
+                .try_into()
+                .ok(),
+            None => default.try_into().ok(),
+        }
+    };
+    // One marked node: the source mesh, the mesh it shows, where that
+    // mesh's primitives were in the source, its matrix and its parent.
+    struct Piece {
+        mesh: usize,
+        primitives: Vec<usize>,
+        matrix: Mat4,
+        node: usize,
+        parent: usize,
+    }
+    // Per source mesh: its pieces, or `None` once something rules folding out.
+    let mut plans: Vec<Option<Vec<Piece>>> = (0..meshes).map(|_| Some(Vec::new())).collect();
+    // The source each mesh is a piece of (itself by default), to find
+    // nodes that show a piece without being marked.
+    let mut source_of: Vec<usize> = (0..meshes).collect();
+    for node in nodes.iter() {
+        if let (Some(mesh), Some(ext)) = (node["mesh"].as_u64(), extension(node, QUANTIZED_POSITIONS))
+            && let Some(source) = ext["mesh"].as_u64().map(|m| m as usize).filter(|m| *m < meshes)
+            && let Some(slot) = source_of.get_mut(mesh as usize)
+        {
+            *slot = source;
+        }
+    }
+    for (n, node) in nodes.iter().enumerate() {
+        let Some(mesh) = node["mesh"].as_u64().map(|m| m as usize).filter(|m| *m < meshes) else {
+            continue;
+        };
+        let source = source_of[mesh];
+        let Some(list) = plans[source].as_mut() else {
+            continue;
+        };
+        let ext = extension(node, QUANTIZED_POSITIONS);
+        let foldable = ext.is_some()
+            && node.get("children").is_none()
+            && node.get("matrix").is_none()
+            && node.get("rotation").is_none()
+            && parents[n].len() == 1
+            && nodes[parents[n][0]].get("mesh").is_none();
+        let primitives: Option<Vec<usize>> = match ext.map(|e| &e["primitives"]) {
+            Some(Value::Array(a)) => a.iter().map(|v| v.as_u64().map(|i| i as usize)).collect(),
+            _ => Some((0..counts[mesh]).collect()),
+        };
+        let (t, s) = (
+            floats(&node["translation"], &[0.0; 3]),
+            floats(&node["scale"], &[1.0; 3]),
+        );
+        let (true, Some(primitives), Some(t), Some(s)) = (foldable, primitives, t, s) else {
+            plans[source] = None;
+            continue;
+        };
+        if primitives.len() != counts[mesh] {
+            plans[source] = None;
+            continue;
+        }
+        list.push(Piece {
+            mesh,
+            primitives,
+            matrix: Mat4::from_scale_rotation_translation(Vec3::from(s), glam::Quat::IDENTITY, Vec3::from(t)),
+            node: n,
+            parent: parents[n][0],
+        });
+    }
+    // Each source mesh's primitives, back in their order: (piece mesh,
+    // index in it, matrix) for each.
+    type Order = Vec<(usize, usize, Mat4)>;
+    let mut rebuilt: Vec<(usize, Order)> = Vec::new();
+    for (source, plan) in plans.iter().enumerate() {
+        let Some(pieces) = plan.as_ref().filter(|p| !p.is_empty()) else {
+            continue;
+        };
+        // Every parent has the same pieces: compare each parent's layout
+        // with the first's.
+        let layout_of = |parent: usize| {
+            let mut l: Vec<(usize, &[usize], [f32; 16])> = pieces
+                .iter()
+                .filter(|p| p.parent == parent)
+                .map(|p| (p.mesh, p.primitives.as_slice(), p.matrix.to_cols_array()))
+                .collect();
+            l.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+            l
+        };
+        let first = layout_of(pieces[0].parent);
+        if pieces.iter().any(|p| layout_of(p.parent) != first) {
+            continue;
+        }
+        let total: usize = first.iter().map(|(_, list, _)| list.len()).sum();
+        let mut slots: Vec<Option<(usize, usize, Mat4)>> = vec![None; total];
+        let mut whole = true;
+        for (mesh, list, matrix) in &first {
+            for (k, &at) in list.iter().enumerate() {
+                match slots.get_mut(at) {
+                    Some(slot @ None) => *slot = Some((*mesh, k, Mat4::from_cols_array(matrix))),
+                    _ => whole = false,
+                }
+            }
+        }
+        let Some(order) = whole.then(|| slots.into_iter().collect::<Option<Vec<_>>>()).flatten() else {
+            continue;
+        };
+        rebuilt.push((source, order));
+    }
+    let mut folded = Vec::new();
+    for (source, order) in rebuilt {
+        out[source] = order.iter().map(|(_, _, m)| *m).collect();
+        if let Some(pieces) = plans[source].take() {
+            folded.push((source, pieces));
+        }
+        // The source mesh holds its primitives again; the other pieces'
+        // meshes stay in the list, shown by no node.
+        if order.iter().any(|(mesh, _, _)| *mesh != source) {
+            let primitives: Vec<Value> = order
+                .iter()
+                .map(|(mesh, k, _)| json["meshes"][*mesh]["primitives"][*k].clone())
+                .collect();
+            json["meshes"][source]["primitives"] = Value::Array(primitives);
+        }
+    }
+    let Some(nodes) = json.get_mut("nodes").and_then(Value::as_array_mut) else {
+        return out;
+    };
+    for (source, pieces) in folded {
+        for piece in pieces {
+            if let Some(node) = nodes[piece.node].as_object_mut() {
+                node.remove("mesh");
+            }
+            let parent = &mut nodes[piece.parent];
+            parent["mesh"] = Value::from(source);
+            if let Some(children) = parent.get_mut("children").and_then(Value::as_array_mut) {
+                children.retain(|c| c.as_u64() != Some(piece.node as u64));
+                if children.is_empty()
+                    && let Some(o) = parent.as_object_mut()
+                {
+                    o.remove("children");
+                }
+            }
+        }
+    }
+    out
 }
 
 /// A buffer's or buffer view's meshopt extension object, by either name.
@@ -962,6 +1160,100 @@ mod tests {
     }
 
     #[test]
+    fn a_mesh_cooked_with_a_range_per_primitive_folds_back_whole_in_its_order() {
+        let mut file = File::default();
+        // Primitive 1 of the source, quantized: steps of 1 mm from x = 10.
+        let steps: Vec<u8> = [[0u16, 0, 0], [1000, 0, 0], [0, 1000, 0]]
+            .iter()
+            .flat_map(|p| p.iter().flat_map(|c| c.to_le_bytes()).chain([0, 0]))
+            .collect();
+        let view = file.view(&steps, Some(8));
+        let quantized = file.accessor(
+            Some(view),
+            5123,
+            false,
+            3,
+            "VEC3",
+            json!({ "min": [0, 0, 0], "max": [1000, 1000, 0] }),
+        );
+        // Primitive 0, past the bound: floats, under a child with no transform.
+        let floats = file.floats(&[-50.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 0.0, 50.0], 3);
+        let text = file.gltf(json!({
+            "extensionsUsed": ["KHR_mesh_quantization", QUANTIZED_POSITIONS],
+            "extensionsRequired": ["KHR_mesh_quantization"],
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [
+                { "name": "level", "children": [1, 2], "extras": { "area": 1 } },
+                { "mesh": 0, "translation": [10.0, 0.0, 0.0], "scale": [0.001, 0.001, 0.001],
+                  "extensions": { QUANTIZED_POSITIONS: { "mesh": 0, "primitives": [1] } } },
+                { "mesh": 1, "extensions": { QUANTIZED_POSITIONS: { "mesh": 0, "primitives": [0] } } }
+            ],
+            "materials": [{ "name": "far" }, { "name": "near" }],
+            "meshes": [
+                { "name": "level", "primitives": [{ "attributes": { "POSITION": quantized }, "material": 1 }] },
+                { "name": "level", "primitives": [{ "attributes": { "POSITION": floats }, "material": 0 }] }
+            ],
+        }));
+        let mut json: Value = serde_json::from_str(&text).unwrap();
+        let matrices = fold_quantized_positions(&mut json);
+        assert_eq!(json["nodes"][0]["mesh"], 0, "the level shows its mesh again");
+        assert!(json["nodes"][0].get("children").is_none(), "{}", json["nodes"][0]);
+        let order: Vec<&Value> = json["meshes"][0]["primitives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| &p["material"])
+            .collect();
+        assert_eq!(order, [&json!(0), &json!(1)], "the source's order");
+        assert_eq!(matrices[0].len(), 2);
+        assert_eq!(matrices[0][0], Mat4::IDENTITY);
+        assert!(
+            (matrices[0][1].transform_point3(Vec3::new(1000.0, 0.0, 0.0)) - Vec3::new(11.0, 0.0, 0.0)).length() < 1e-5
+        );
+        assert!(matrices[1].is_empty());
+
+        let loaded = load_str("level.gltf", &text).unwrap();
+        let p = &loaded.data.positions;
+        assert_eq!(p.len(), 6);
+        assert!(
+            p.iter().any(|v| (*v - Vec3::new(11.0, 0.0, 0.0)).length() < 1e-5),
+            "{p:?}"
+        );
+        assert!(
+            p.iter().any(|v| (*v - Vec3::new(50.0, 0.0, 0.0)).length() < 1e-5),
+            "{p:?}"
+        );
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn pieces_that_dont_cover_the_mesh_once_are_read_as_they_are() {
+        let mut file = File::default();
+        let a = file.floats(&TRIANGLE, 3);
+        let b = file.floats(&TRIANGLE, 3);
+        // Both pieces claim primitive 0: nothing is folded, the file draws as it is.
+        let text = file.gltf(json!({
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [
+                { "children": [1, 2] },
+                { "mesh": 0, "extensions": { QUANTIZED_POSITIONS: { "mesh": 0, "primitives": [0] } } },
+                { "mesh": 1, "extensions": { QUANTIZED_POSITIONS: { "mesh": 0, "primitives": [0] } } }
+            ],
+            "meshes": [
+                { "primitives": [{ "attributes": { "POSITION": a } }] },
+                { "primitives": [{ "attributes": { "POSITION": b } }] }
+            ],
+        }));
+        let mut json: Value = serde_json::from_str(&text).unwrap();
+        let matrices = fold_quantized_positions(&mut json);
+        assert!(matrices.iter().all(Vec::is_empty));
+        assert!(json["nodes"][0].get("mesh").is_none());
+        assert_eq!(json["nodes"][1]["mesh"], 0);
+    }
+
+    #[test]
     fn quantized_positions_normals_and_texture_coordinates_read_as_floats() {
         let mut file = File::default();
         // Positions as unsigned shorts scaled down by the node, as gltfpack
@@ -1427,7 +1719,7 @@ mod tests {
         assert_eq!(&image.2[..4], &[9, 8, 7, 255]);
     }
 
-    #[cfg(not(feature = "basis-universal"))]
+    #[cfg(not(feature = "compressed-textures"))]
     #[test]
     fn a_texture_with_only_a_ktx2_image_needs_its_feature() {
         let mut file = File::default();
@@ -1443,7 +1735,7 @@ mod tests {
         );
         let error = load_str("basis.gltf", &text).err().unwrap();
         assert!(
-            error.contains("KHR_texture_basisu") && error.contains("`basis-universal`"),
+            error.contains("KHR_texture_basisu") && error.contains("`compressed-textures`"),
             "{error}"
         );
         let required = text.replace(
@@ -1453,7 +1745,7 @@ mod tests {
         assert_ne!(required, text);
         let error = load_str("basis.gltf", &required).err().unwrap();
         assert!(
-            error.contains("needs the glTF extension KHR_texture_basisu") && error.contains("`basis-universal`"),
+            error.contains("needs the glTF extension KHR_texture_basisu") && error.contains("`compressed-textures`"),
             "{error}"
         );
     }

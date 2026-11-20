@@ -1,0 +1,7 @@
+# The build context is the engine's repository: its sources go in, never
+# local build output, Git data or the built guide.
+target/
+**/target/
+.git/
+book/book/
+!package/

@@ -1,6 +1,7 @@
 //! Named actions and their serializable binding configuration.
 use crate::ctx::{ctx_access, out};
 use crate::keys::{button_from_c, gamepad_axis_from_c, gamepad_button_from_c, key_from_c};
+use crate::touch::{gesture_axis_from_c, gesture_from_c, scale_from_c};
 use crate::types::{PonkoVec2, to_c};
 use crate::{Failure, PonkoCtx, PonkoStatus, boundary, engine_error, invalid, invalid_owned};
 use ponko::actions::InputEvent;
@@ -44,6 +45,12 @@ pub enum PonkoActionSource {
     PONKO_ACTION_KEYS2 = 5,
     /// Vector gamepad stick (`first` = 0 left, 1 right).
     PONKO_ACTION_GAMEPAD_STICK = 6,
+    /// Digital touch gesture (`first` = PonkoGesture).
+    PONKO_ACTION_GESTURE = 7,
+    /// Scalar gesture amount (`first` = PonkoGestureAxis, `deadzone` = scale, 0 means 1).
+    PONKO_ACTION_GESTURE_AXIS = 8,
+    /// Vector one-finger drag in window pixels (`deadzone` = scale, 0 means 1).
+    PONKO_ACTION_DRAG = 9,
 }
 
 /// One source: initialize unused fields to zero. `pad` is a controller slot.
@@ -66,7 +73,7 @@ pub struct PonkoActionBinding {
     pub third: u32,
     /// Fourth source parameter.
     pub fourth: u32,
-    /// Gamepad deadzone in `0..1`.
+    /// Gamepad deadzone in `0..1`; for gesture amounts and drags, the scale.
     pub deadzone: f32,
 }
 
@@ -85,16 +92,16 @@ pub(crate) unsafe fn map_mut<'a>(map: *mut PonkoActionMap) -> Result<&'a mut Act
         .map(|m| &mut m.0)
         .ok_or_else(|| invalid("action map is null"))
 }
-fn pad(slot: u32) -> Result<Gamepad, Failure> {
+pub(crate) fn pad(slot: u32) -> Result<Gamepad, Failure> {
     Gamepad::from_slot(slot as usize).ok_or_else(|| invalid("gamepad slot out of range"))
 }
-fn key(value: u32) -> Result<ponko::prelude::Key, Failure> {
+pub(crate) fn key(value: u32) -> Result<ponko::prelude::Key, Failure> {
     key_from_c(value).ok_or_else(|| invalid("unknown key"))
 }
-fn mouse(value: u32) -> Result<ponko::prelude::MouseButton, Failure> {
+pub(crate) fn mouse(value: u32) -> Result<ponko::prelude::MouseButton, Failure> {
     button_from_c(value).ok_or_else(|| invalid("unknown mouse button"))
 }
-fn button(value: u32) -> Result<ponko::input::GamepadButton, Failure> {
+pub(crate) fn button(value: u32) -> Result<ponko::input::GamepadButton, Failure> {
     gamepad_button_from_c(value).ok_or_else(|| invalid("unknown gamepad button"))
 }
 fn axis(value: u32) -> Result<ponko::input::GamepadAxis, Failure> {
@@ -207,6 +214,14 @@ pub(crate) unsafe fn action_from_c(
                     _ => return Err(invalid("unknown stick")),
                 },
                 deadzone: b.deadzone,
+            }),
+            (0, 7) => buttons.push(ButtonBinding::Gesture(gesture_from_c(b.first)?)),
+            (1, 8) => axes.push(AxisBinding::Gesture {
+                axis: gesture_axis_from_c(b.first)?,
+                scale: scale_from_c(b.deadzone)?,
+            }),
+            (2, 9) => vectors.push(Axis2Binding::Drag {
+                scale: scale_from_c(b.deadzone)?,
             }),
             _ => return Err(invalid("source does not match action kind")),
         }
@@ -324,7 +339,8 @@ pub unsafe extern "C" fn ponko_ctx_actions(ctx: *mut PonkoCtx, map: *mut PonkoAc
 }
 
 /// Feed manual input: kind 0 key, 1 mouse, 2 gamepad button, 3 gamepad axis,
-/// 4 focus lost, 5 gamepad disconnected. Digital value is 0 released, nonzero held.
+/// 4 focus lost, 5 gamepad disconnected, 8 gamepad connected (into `slot`,
+/// generic family). Digital value is 0 released, nonzero held.
 /// ```
 /// assert_ne!(unsafe { ponko_ffi::ponko_ctx_feed_input(std::ptr::null_mut(), 0, 0, 0, 1.0) } as u32, 0);
 /// ```
@@ -412,6 +428,7 @@ pub(crate) fn input_event(kind: u32, slot: u32, input: u32, value: f32) -> Resul
         3 => InputEvent::GamepadAxis(pad(slot)?, axis(input)?, value),
         4 => InputEvent::FocusLost,
         5 => InputEvent::GamepadDisconnected(pad(slot)?),
+        8 => InputEvent::GamepadConnected(pad(slot)?),
         _ => return Err(invalid("unknown input event kind")),
     })
 }

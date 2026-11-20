@@ -236,6 +236,9 @@ recommendation: [MESH_SHADERS.md](MESH_SHADERS.md)
 Whole systems at the same time (the parallel system scheduler), its
 overhead and its crossover: [SCHEDULE.md](SCHEDULE.md) (`-- schedule`).
 
+Required components: zero cost when unused, the cost of filling a gap,
+and the tutorial lines they removed: [REQUIRED.md](REQUIRED.md) (`-- ecs/`).
+
 Hardware ray tracing through wgpu's ray queries: the backend support
 matrix, what screen-space reflections and probe GI miss, an isolated
 ray-query reflection prototype's cost and memory, and the decision (defer):

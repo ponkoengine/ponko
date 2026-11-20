@@ -30,6 +30,12 @@ const FULL: u8 = 5;
 const HEARTBEAT: u8 = 6;
 const INTERVAL: Duration = Duration::from_millis(100);
 const EVENT_LIMIT: usize = 4096;
+/// Renet channels of the engine's internal lanes (replication).
+const INTERNAL_RELIABLE: u8 = 3;
+const INTERNAL_UNRELIABLE: u8 = 4;
+/// Internal messages kept for the replication layer at most; more are
+/// left in renet (reliable) or dropped (unreliable) until it takes them.
+const INTERNAL_LIMIT: usize = 4096;
 
 /// Delivery policy; ordering is independent in each direction and peer.
 /// ```
@@ -193,7 +199,7 @@ struct Link {
     server_nonce: u64,
     connected: bool,
     last_seen: Duration,
-    last_sent: Duration,
+    last_sent: Option<Duration>,
     renet: RenetClient,
     next_unreliable: u64,
     received_unreliable: Option<u64>,
@@ -216,6 +222,18 @@ impl Link {
                 max_memory_usage_bytes: CHANNEL_MEMORY,
                 send_type: SendType::Unreliable,
             },
+            // The engine's own lanes for replication (`net::replicate`):
+            // never seen by the game's `events()`. Empty lanes send nothing.
+            ChannelConfig {
+                channel_id: INTERNAL_RELIABLE,
+                max_memory_usage_bytes: CHANNEL_MEMORY,
+                send_type: SendType::ReliableOrdered { resend_time: INTERVAL },
+            },
+            ChannelConfig {
+                channel_id: INTERNAL_UNRELIABLE,
+                max_memory_usage_bytes: CHANNEL_MEMORY,
+                send_type: SendType::Unreliable,
+            },
         ];
         let mut renet = RenetClient::new(ConnectionConfig {
             // Unreliable messages must fit in one Renet update budget or Renet
@@ -231,7 +249,7 @@ impl Link {
             server_nonce,
             connected: server_nonce != 0,
             last_seen: now,
-            last_sent: now,
+            last_sent: (server_nonce != 0).then_some(now),
             renet,
             next_unreliable: 0,
             received_unreliable: None,
@@ -241,13 +259,22 @@ impl Link {
 type Inbox = VecDeque<(SocketAddr, Vec<u8>)>;
 /// Packet boundary below the renet protocol and session handshake.
 ///
-/// Implementations: the Steam relay (feature `steam`) and the scripted
-/// transport used by the conformance tests in `net/message_conformance.rs`,
-/// which also lists the contract each transport has to keep.
-#[cfg(any(test, feature = "steam"))]
+/// Implementations: the Steam relay (feature `steam`), WebRTC data channels
+/// (feature `webrtc`) and the scripted transport used by the conformance
+/// tests in `net/message_conformance.rs`, which also lists the contract each
+/// transport has to keep.
+#[cfg(any(test, feature = "steam", feature = "webrtc"))]
 pub(super) trait PacketTransport: Send {
     fn send(&mut self, to: SocketAddr, bytes: &[u8]) -> io::Result<bool>;
     fn recv(&mut self, buf: &mut [u8]) -> io::Result<Option<(SocketAddr, usize)>>;
+    /// Protocol time, before each poll's receives: for transports with
+    /// timers of their own (WebRTC), so they follow `poll_elapsed`'s clock.
+    fn advance(&mut self, _now: Duration) {}
+    /// The signaling peer behind a session address (WebRTC).
+    #[cfg(feature = "webrtc")]
+    fn signal_peer(&self, _addr: SocketAddr) -> Option<u64> {
+        None
+    }
     #[cfg(feature = "steam")]
     fn lobby(&self) -> Option<&super::SteamLobby> {
         None
@@ -255,7 +282,7 @@ pub(super) trait PacketTransport: Send {
 }
 
 enum Wire {
-    #[cfg(any(test, feature = "steam"))]
+    #[cfg(any(test, feature = "steam", feature = "webrtc"))]
     Custom(Box<dyn PacketTransport>),
     Udp(UdpSocket),
     /// A UDP host that also takes browser clients over WebSocket.
@@ -273,7 +300,7 @@ enum Wire {
 impl Wire {
     fn addr(&self) -> io::Result<SocketAddr> {
         match self {
-            #[cfg(any(test, feature = "steam"))]
+            #[cfg(any(test, feature = "steam", feature = "webrtc"))]
             Self::Custom(_) => Err(io::Error::other("no UDP address")),
             Self::Udp(s) => s.local_addr(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -284,7 +311,7 @@ impl Wire {
     }
     fn send(&mut self, addr: SocketAddr, bytes: &[u8]) -> io::Result<bool> {
         match self {
-            #[cfg(any(test, feature = "steam"))]
+            #[cfg(any(test, feature = "steam", feature = "webrtc"))]
             Self::Custom(t) => t.send(addr, bytes),
             Self::Udp(s) => udp_send(s, addr, bytes),
             #[cfg(not(target_arch = "wasm32"))]
@@ -318,7 +345,7 @@ impl Wire {
     }
     fn recv(&mut self, buf: &mut [u8]) -> io::Result<Option<(SocketAddr, usize)>> {
         match self {
-            #[cfg(any(test, feature = "steam"))]
+            #[cfg(any(test, feature = "steam", feature = "webrtc"))]
             Self::Custom(t) => t.recv(buf),
             Self::Udp(s) => udp_recv(s, buf),
             #[cfg(not(target_arch = "wasm32"))]
@@ -368,6 +395,11 @@ fn udp_recv(s: &UdpSocket, buf: &mut [u8]) -> io::Result<Option<(SocketAddr, usi
 fn local_addr(index: usize) -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], (index + 1) as u16))
 }
+/// A random number from the OS-seeded hasher, for session discriminators.
+#[cfg(feature = "webrtc")]
+pub(super) fn random_u64() -> u64 {
+    nonce()
+}
 fn nonce() -> u64 {
     // RandomState seeds each hasher from OS randomness. This is a session
     // discriminator, not authentication or a cryptographic key.
@@ -399,14 +431,22 @@ pub struct NetMessages {
     next_peer: u64,
     now: Duration,
     last_poll: crate::perf::Instant,
+    has_polled: bool,
+    /// Polled by a game on its own clock ([`game_clock`](Self::game_clock)):
+    /// the game time of the last poll.
+    game_clock: bool,
+    game_polled: Option<f64>,
     timeout: Duration,
     events: VecDeque<MessageEvent>,
     event_bytes: usize,
+    /// Messages on the internal lanes, for the replication layer:
+    /// (sender, reliable, payload).
+    internal: VecDeque<(PeerId, bool, renet::Bytes)>,
     stats: MessageStats,
     scratch: Vec<u8>,
 }
 impl NetMessages {
-    #[cfg(any(test, feature = "steam"))]
+    #[cfg(any(test, feature = "steam", feature = "webrtc"))]
     pub(super) fn transported(
         transport: Box<dyn PacketTransport>,
         host: Option<SocketAddr>,
@@ -421,6 +461,14 @@ impl NetMessages {
     #[cfg(feature = "steam")]
     pub(super) fn transport_peer_addr(&self, peer: PeerId) -> Option<SocketAddr> {
         self.links.get(&peer).filter(|l| l.connected).map(|l| l.addr)
+    }
+    #[cfg(feature = "webrtc")]
+    pub(super) fn transport_signal_peer(&self, peer: PeerId) -> Option<u64> {
+        let link = self.links.get(&peer).filter(|l| l.connected)?;
+        match &self.wire {
+            Wire::Custom(t) => t.signal_peer(link.addr),
+            _ => None,
+        }
     }
     #[cfg(feature = "steam")]
     pub(super) fn transport_lobby(&self) -> Option<&super::SteamLobby> {
@@ -438,9 +486,13 @@ impl NetMessages {
             next_peer: 1,
             now: Duration::ZERO,
             last_poll: crate::perf::Instant::now(),
+            has_polled: false,
+            game_clock: false,
+            game_polled: None,
             timeout: Duration::from_secs(10),
             events: VecDeque::new(),
             event_bytes: 0,
+            internal: VecDeque::new(),
             stats: MessageStats::default(),
             scratch: Vec::with_capacity(1500),
         }
@@ -549,6 +601,44 @@ impl NetMessages {
         assert!(!timeout.is_zero(), "timeout must be positive");
         self.timeout = timeout;
         self
+    }
+    /// When a game polls this endpoint ([`Game::messages`](crate::game::Game::messages)),
+    /// count the game's time instead of the wall clock: resends, timeouts
+    /// and pacing follow the frames the game runs. A headless run goes as
+    /// fast as it can, so on the wall clock it would see no time pass
+    /// between frames; on the game clock it plays the same every time. For
+    /// tests, bots and replays; real play keeps the wall clock (the
+    /// default), so a slow frame doesn't slow the connection down.
+    ///
+    /// Polling it yourself ([`poll`](Self::poll)) still uses the wall clock.
+    ///
+    /// ```
+    /// let net = ponko::net::NetMessages::loopback(2).remove(0).game_clock();
+    /// assert!(net.is_on_game_clock());
+    /// ```
+    #[must_use]
+    pub fn game_clock(mut self) -> Self {
+        self.game_clock = true;
+        self
+    }
+    /// Whether a game polls this endpoint on its own clock
+    /// ([`game_clock`](Self::game_clock)).
+    /// ```
+    /// assert!(!ponko::net::NetMessages::loopback(2)[0].is_on_game_clock());
+    /// ```
+    #[must_use]
+    pub fn is_on_game_clock(&self) -> bool {
+        self.game_clock
+    }
+    /// A game's poll, once a frame: on the wall clock, or on the game's
+    /// (`game_time`, seconds) with [`game_clock`](Self::game_clock).
+    pub(crate) fn poll_frame(&mut self, game_time: f64) -> io::Result<()> {
+        if !self.game_clock {
+            return self.poll();
+        }
+        let step = self.game_polled.map_or(0.0, |t| (game_time - t).max(0.0));
+        self.game_polled = Some(game_time);
+        self.poll_elapsed(Duration::from_secs_f64(step))
     }
     /// Local UDP address (`None` for in-memory sessions).
     /// ```
@@ -715,7 +805,8 @@ impl NetMessages {
         Ok(())
     }
     /// Poll with elapsed wall time, once per game frame. Processes at most 256
-    /// incoming datagrams per call.
+    /// incoming datagrams per call. The clock starts at the first poll. Later
+    /// gaps are bounded as in [`poll_elapsed`](Self::poll_elapsed).
     ///
     /// # Errors
     ///
@@ -733,6 +824,13 @@ impl NetMessages {
     /// Poll with an explicit elapsed duration for deterministic tests or a
     /// caller-owned clock. Do not mix with `poll` in one clock interval.
     ///
+    /// The first poll starts the clock and ignores the elapsed duration. A
+    /// joining endpoint attempts its first hello immediately. Each later poll
+    /// advances protocol time by at most half the configured timeout (with a
+    /// minimum step limit of one nanosecond). This gives a peer time to reply
+    /// after a stalled frame. Silence still accumulates across polls, and
+    /// incoming packets are processed before checking for timeouts.
+    ///
     /// # Errors
     ///
     /// The errors of [`poll`](Self::poll).
@@ -743,7 +841,15 @@ impl NetMessages {
     /// ```
     pub fn poll_elapsed(&mut self, elapsed: Duration) -> io::Result<()> {
         self.last_poll = crate::perf::Instant::now();
-        self.now = self.now.saturating_add(elapsed);
+        let elapsed = if self.has_polled {
+            elapsed.min((self.timeout / 2).max(Duration::from_nanos(1)))
+        } else {
+            self.has_polled = true;
+            Duration::ZERO
+        };
+        let now = self.now.saturating_add(elapsed);
+        let elapsed = now - self.now;
+        self.now = now;
         if self.events.len() >= EVENT_LIMIT || self.event_bytes >= CHANNEL_MEMORY {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -752,6 +858,10 @@ impl NetMessages {
         }
         for link in self.links.values_mut() {
             link.renet.update(elapsed);
+        }
+        #[cfg(any(test, feature = "steam", feature = "webrtc"))]
+        if let Wire::Custom(t) = &mut self.wire {
+            t.advance(self.now);
         }
         let mut buf = [0u8; 1500];
         for _ in 0..256 {
@@ -809,13 +919,24 @@ impl NetMessages {
                             });
                         }
                     }
+                    for (channel, reliable) in [(INTERNAL_RELIABLE, true), (INTERNAL_UNRELIABLE, false)] {
+                        while self.internal.len() < INTERNAL_LIMIT {
+                            let Some(message) = link.renet.receive_message(channel) else {
+                                break;
+                            };
+                            self.internal.push_back((peer, reliable, message));
+                        }
+                    }
                     for packet in link.renet.get_packets_to_send() {
                         self.transmit(link, DATA, &packet)?;
                     }
                 }
-                if self.now.saturating_sub(link.last_sent) >= INTERVAL {
+                if link
+                    .last_sent
+                    .is_none_or(|sent| self.now.saturating_sub(sent) >= INTERVAL)
+                {
                     self.transmit(link, if link.connected { HEARTBEAT } else { HELLO }, &[])?;
-                    link.last_sent = self.now;
+                    link.last_sent = Some(self.now);
                 }
             }
             Ok(())
@@ -845,10 +966,10 @@ impl NetMessages {
         let cn = u64::from_le_bytes(data[5..13].try_into().expect("nonce"));
         let sn = u64::from_le_bytes(data[13..21].try_into().expect("nonce"));
         if self.hosting && kind == HELLO && cn != 0 && sn == 0 {
-            if let Some(link) = self.links.values().find(|l| l.addr == addr) {
+            if let Some((&peer, link)) = self.links.iter().find(|(_, l)| l.addr == addr) {
                 if link.client_nonce == cn {
-                    let peer = *self.links.iter().find(|(_, l)| l.addr == addr).expect("link").0;
-                    let link = self.links.remove(&peer).expect("link");
+                    let mut link = self.links.remove(&peer).expect("link");
+                    link.last_seen = self.now;
                     let result = self.transmit(&link, WELCOME, &[]);
                     self.links.insert(peer, link);
                     result?;
@@ -975,6 +1096,67 @@ impl NetMessages {
     pub fn connected_peers(&self) -> usize {
         self.links.values().filter(|link| link.connected).count()
     }
+    /// The address a connected peer's packets come from, for a server's
+    /// own limits per address (`None` for an unknown or still joining
+    /// peer). A browser peer of [`accept_web`](Self::accept_web) has an
+    /// address of its own per connection, in a private IPv6 range, not the
+    /// browser's; an in-memory peer has `127.0.0.1` and its index plus one
+    /// as the port.
+    /// ```
+    /// use ponko::net::{NetMessages, PeerId};
+    /// let mut nets = NetMessages::loopback(2);
+    /// for _ in 0..40 {
+    ///     nets.iter_mut().for_each(|n| n.poll_elapsed(std::time::Duration::from_millis(20)).unwrap());
+    /// }
+    /// let addr = nets[1].peer_addr(PeerId::HOST).unwrap();
+    /// assert_eq!((addr.ip().to_string(), addr.port()), ("127.0.0.1".to_string(), 1));
+    /// assert!(nets[1].peer_addr(PeerId::from_bits(9)).is_none());
+    /// ```
+    pub fn peer_addr(&self, peer: PeerId) -> Option<SocketAddr> {
+        self.links.get(&peer).filter(|l| l.connected).map(|l| l.addr)
+    }
+
+    /// Whether this endpoint hosts (from [`host`](Self::host) or the first
+    /// of [`loopback`](Self::loopback)) rather than joins.
+    /// ```
+    /// let nets = ponko::net::NetMessages::loopback(2);
+    /// assert!(nets[0].is_host() && !nets[1].is_host());
+    /// ```
+    pub fn is_host(&self) -> bool {
+        self.hosting
+    }
+
+    /// The peers connected now, in id order.
+    pub(crate) fn peer_ids(&self) -> impl Iterator<Item = PeerId> + '_ {
+        self.links.iter().filter(|(_, l)| l.connected).map(|(&p, _)| p)
+    }
+
+    /// Queues `bytes` on an internal lane (the replication layer's).
+    pub(crate) fn send_internal(&mut self, peer: PeerId, reliable: bool, bytes: &[u8]) -> io::Result<()> {
+        if bytes.len() > MAX_MESSAGE_BYTES {
+            return Err(invalid("message exceeds 1 MiB"));
+        }
+        let link = self
+            .links
+            .get_mut(&peer)
+            .filter(|l| l.connected)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "peer is not connected"))?;
+        let channel = if reliable {
+            INTERNAL_RELIABLE
+        } else {
+            INTERNAL_UNRELIABLE
+        };
+        if !link.renet.can_send_message(channel, bytes.len()) {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "message lane is full"));
+        }
+        link.renet.send_message(channel, bytes.to_vec());
+        Ok(())
+    }
+
+    /// The oldest message received on an internal lane: (sender, reliable, bytes).
+    pub(crate) fn next_internal(&mut self) -> Option<(PeerId, bool, renet::Bytes)> {
+        self.internal.pop_front()
+    }
 }
 
 /// Hooks for the fuzzing entry points in `net/fuzz.rs`.
@@ -1005,5 +1187,51 @@ impl NetMessages {
         datagram.extend_from_slice(&sn.to_le_bytes());
         datagram.extend_from_slice(rest);
         self.receive(from, &datagram)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_wall_clock_poll_sends_hello_after_long_startup() {
+        let mut client = NetMessages::loopback(2).remove(1);
+        client.last_poll -= Duration::from_secs(30);
+
+        client.poll().unwrap();
+
+        assert_eq!(client.next_event(), None);
+        assert_eq!(client.stats().packets_sent, 1, "first poll sends a hello");
+    }
+
+    #[test]
+    fn first_explicit_poll_sends_hello_after_long_startup() {
+        let mut nets = NetMessages::loopback(2);
+        for net in nets.iter_mut().rev() {
+            net.poll_elapsed(Duration::from_secs(30)).unwrap();
+        }
+        nets[1].poll_elapsed(Duration::ZERO).unwrap();
+
+        assert!(matches!(nets[0].next_event(), Some(MessageEvent::Connected(_))));
+        assert_eq!(nets[1].next_event(), Some(MessageEvent::Connected(PeerId::HOST)));
+    }
+
+    #[test]
+    fn one_long_poll_preserves_a_healthy_link_on_both_sides() {
+        for side in [0, 1] {
+            let mut nets = NetMessages::loopback(2);
+            nets[1].poll_elapsed(INTERVAL).unwrap();
+            nets[0].poll_elapsed(INTERVAL).unwrap();
+            nets[1].poll_elapsed(Duration::ZERO).unwrap();
+            assert!(matches!(nets[0].next_event(), Some(MessageEvent::Connected(_))));
+            assert_eq!(nets[1].next_event(), Some(MessageEvent::Connected(PeerId::HOST)));
+
+            // Leave the other endpoint unpolled, with no reply in flight.
+            let net = &mut nets[side];
+            net.poll_elapsed(Duration::MAX).unwrap();
+            assert_eq!(net.next_event(), None);
+            assert_eq!(net.connected_peers(), 1);
+        }
     }
 }

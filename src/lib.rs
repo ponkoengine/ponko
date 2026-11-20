@@ -112,10 +112,14 @@ pub mod nav;
 pub mod prelude;
 #[cfg(feature = "3d")]
 pub mod terrain;
+#[cfg(feature = "3d")]
+pub mod water;
 
 pub mod access;
 pub mod actions;
+pub mod ai;
 mod alloc_count;
+pub mod aseprite;
 mod asset_cache;
 pub mod assets;
 pub mod attach;
@@ -133,6 +137,7 @@ pub mod debug;
 pub mod diagnostics;
 mod draw_space;
 mod ecs;
+mod edit2d;
 #[cfg(feature = "3d")]
 mod edit3d;
 mod editor;
@@ -174,6 +179,14 @@ pub mod __ffi {
     #[must_use]
     pub fn system_named(game: &crate::game::Game, name: &str) -> Option<crate::game::SystemId> {
         game.system_named(name)
+    }
+
+    /// The render target that `texture` (a C `PonkoTexture`) is. The caller
+    /// checks it is one first (`Graphics::is_render_target`). Unstable.
+    #[cfg(feature = "3d")]
+    #[must_use]
+    pub fn render_target(texture: crate::texture::Texture) -> crate::render::RenderTarget {
+        crate::render::RenderTarget::from_texture(texture)
     }
 
     /// The slot bits of a mesh's, GPU buffer's or collision mesh's id: the
@@ -253,8 +266,14 @@ mod three;
 pub mod tilemap;
 mod time;
 pub mod ui;
+#[cfg(feature = "video")]
+pub mod video;
 #[cfg(all(target_arch = "wasm32", feature = "window"))]
-mod web;
+pub mod web;
+// Worker threads for web builds compiled with atomics (the guide's
+// "Threads on the web").
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+mod web_threads;
 
 /// The whole ECS crate ([`ponko_ecs`]), for advanced use: component ids,
 /// read-only world views, the dynamic and C path ([`World::raw`](ponko_ecs::World::raw)), chunks

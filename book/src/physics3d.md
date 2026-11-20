@@ -52,7 +52,10 @@ has the whole order.
 ## Bodies, colliders and terrain
 
 An entity becomes a body with a `d3::Transform`, a `d3::RigidBody` and a
-`d3::Collider` (in meters). Terrain gets a **heightfield** made from the same
+`d3::Collider` (in meters). As in 2D, a body brings a transform and a
+`d3::Velocity` the spawn lacks, and a collider without a body brings
+`d3::RigidBody::fixed()` ([required components](ecs.md#required-components)).
+Terrain gets a **heightfield** made from the same
 heights, size and corner as its [terrain tile](3d.md), so what you walk on
 is what you see:
 
@@ -163,8 +166,8 @@ again in code after loading.
 
 **`d3::Transform` stays the source of truth**, as in 2D: after each step,
 dynamic bodies write their pose into it; set a transform yourself and the
-body teleports there. A `d3::Velocity` component reads and sets a body's
-speed (in C++ a plain struct and a query column). Physics ignores a
+body teleports there. Every body's `d3::Velocity` component reads and sets
+its speed (in C++ a plain struct and a query column). Physics ignores a
 transform's scale: size the collider instead.
 
 **Collision groups** decide who touches whom. A collider is in the groups

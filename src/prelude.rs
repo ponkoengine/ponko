@@ -6,7 +6,8 @@
 //! `Mat4` and their constructors, from [`ponko::math`](crate::math)), input
 //! ([`Key`], [`MouseButton`], the gamepad types, the action map), [`Color`],
 //! textures, sounds and fonts, menus ([`Ui`], [`UiEvent`], [`UiLayout`]),
-//! [`Rect`], [`Random`], [`Events`], game-state run conditions
+//! [`Rect`], the entity the camera rigs follow ([`CameraTarget`]),
+//! [`Random`], [`Events`], game-state run conditions
 //! ([`in_state`]), reflection, and the [`d2`] and `d3` modules, so code for
 //! both dimensions can write `d2::Transform` next to `d3::Transform`.
 //!
@@ -39,7 +40,7 @@ pub use crate::actions::{
 };
 pub use crate::assets::Assets;
 pub use crate::audio::{AudioBus, Playing, Sound, SoundParams};
-pub use crate::camera::Rect;
+pub use crate::camera::{CameraTarget, Rect};
 #[cfg(any(feature = "physics", feature = "physics3d"))]
 #[doc(no_inline)]
 pub use crate::collision::{BodyKind, CollisionStarted, CollisionStopped};
@@ -54,7 +55,7 @@ pub use crate::events::Events;
 pub use crate::game::{ConfiguredGame, Game, IntoSystem, Phase, Plugin, SystemId, Systems};
 pub use crate::handle::Handle;
 pub use crate::hierarchy::{CommandsHierarchy, WorldHierarchy};
-pub use crate::input::{Gamepad, GamepadAxis, GamepadButton, GamepadStick, Key, MouseButton};
+pub use crate::input::{Gamepad, GamepadAxis, GamepadButton, GamepadStick, Gesture, Key, MouseButton};
 #[cfg(feature = "3d")]
 pub use crate::math::Mat4;
 pub use crate::math::{Quat, UVec2, Vec2, Vec3, Vec4, uvec2, vec2, vec3, vec4};
@@ -68,7 +69,7 @@ pub use crate::text::{Font, TextParams, TextShaping};
 pub use crate::texture::{DrawParams, Texture, TextureFilter};
 pub use crate::time::{Time, Turns};
 pub use crate::{d2, systems};
-pub use ponko_ecs::{Added, Changed, Commands, Component, Entity, Or, Query, Tick, With, Without, World};
+pub use ponko_ecs::{Added, Changed, Commands, Component, Entity, HookWorld, Or, Query, Tick, With, Without, World};
 pub use serde_json::json;
 
 /// Deprecated: write [`d2::Transform`] (the prelude

@@ -69,6 +69,8 @@ use crate::color::Color;
 mod builtin;
 pub(crate) mod control;
 mod flush;
+mod toggles;
+pub(crate) use toggles::MAX_TOGGLES;
 
 #[cfg(test)]
 mod tests;
@@ -92,6 +94,10 @@ const THREE_D: u8 = 1;
 const SCREEN: u8 = 2;
 /// Line flag: not hidden by nearer 3D surfaces (2D: drawn over the UI).
 const ON_TOP: u8 = 4;
+/// Label flag: a 3D label hidden by nearer 3D surfaces, as lines are.
+const TESTED: u8 = 8;
+/// How far from the 3D camera the colliders view draws mesh triangles, by default.
+const COLLIDER_DISTANCE: f32 = 50.0;
 
 /// A point type a debug shape takes: [`Vec2`] for the 2D world or the
 /// screen, [`Vec3`] for the 3D world. Implemented for those two only.
@@ -262,6 +268,10 @@ pub struct DebugDraw {
     now: f32,
     /// The built-in views that are on.
     views: builtin::Views,
+    /// The game's own toggles ([`Game::debug_toggle`](crate::game::Game::debug_toggle)).
+    toggles: toggles::Toggles,
+    /// How far from the 3D camera the colliders view draws mesh triangles.
+    collider_distance: f32,
     /// What was drawn, boxed so `Ctx` stays small.
     buf: Box<Buffers>,
 }
@@ -297,6 +307,8 @@ impl DebugDraw {
             in_sim: false,
             now: 0.0,
             views: builtin::Views::default(),
+            toggles: toggles::Toggles::default(),
+            collider_distance: COLLIDER_DISTANCE,
             buf: Box::default(),
         }
     }
@@ -395,6 +407,7 @@ impl DebugDraw {
         self.enabled = main.enabled;
         self.in_sim = main.in_sim;
         self.now = main.now;
+        self.toggles.follow(&main.toggles);
     }
 
     /// Takes what a view system drew into its own buffer ([`follow`](Self::follow)).
@@ -797,9 +810,9 @@ impl DebugDraw {
     }
 
     /// Text with its top-left corner at `at` (a 3D point is projected to
-    /// the screen; one behind the camera isn't drawn). Labels are always
-    /// drawn over everything, 14 pixels high unless
-    /// [`size`](DebugShape::size) says otherwise.
+    /// the screen; one behind the camera isn't drawn). Labels are drawn over
+    /// everything, unless a 3D one is [`depth_tested`](DebugShape::depth_tested),
+    /// 14 pixels high unless [`size`](DebugShape::size) says otherwise.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -862,6 +875,100 @@ impl DebugDraw {
     pub fn showing(&self, view: DebugView) -> bool {
         self.views.get(view)
     }
+
+    /// Whether to draw what debug toggle `name` stands for: debug drawing
+    /// is on, and so is the toggle. The game and its plugins add toggles
+    /// with [`Game::debug_toggle`](crate::game::Game::debug_toggle); tools
+    /// turn them on and off with the control endpoint's `debug.draw`
+    /// method, code with [`set_toggle`](Self::set_toggle). `false` for a
+    /// name no one added. Check it before work done only to be drawn.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// fn draw_paths(ctx: &mut Ctx) {
+    ///     if ctx.debug.toggled("ai.paths") {
+    ///         ctx.debug.line(vec2(0.0, 0.0), vec2(10.0, 0.0), Color::YELLOW);
+    ///     }
+    /// }
+    /// Game::new("toggles", 1, 1).debug_draw(true).debug_toggle("ai.paths", true).run_headless(0, |ctx| {
+    ///     draw_paths(ctx);
+    ///     assert_eq!(ctx.debug.stats().lines_2d, 1);
+    ///     ctx.debug.set_toggle("ai.paths", false).unwrap();
+    ///     ctx.debug.clear();
+    ///     draw_paths(ctx);
+    ///     assert_eq!(ctx.debug.stats().lines_2d, 0);
+    /// });
+    /// ```
+    #[must_use]
+    pub fn toggled(&self, name: &str) -> bool {
+        self.enabled && self.toggles.get(name)
+    }
+
+    /// Turns debug toggle `name` on or off, as a key binding or a menu
+    /// would.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// Game::new("toggles", 1, 1).debug_draw(true).debug_toggle("ai.paths", false).run_headless(0, |ctx| {
+    ///     ctx.debug.set_toggle("ai.paths", true).unwrap();
+    ///     assert!(ctx.debug.toggled("ai.paths"));
+    ///     assert_eq!(ctx.debug.set_toggle("ai.nope", true).unwrap_err().kind(), ErrorKind::NotFound);
+    /// });
+    /// ```
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`](crate::error::ErrorKind::NotFound) if no toggle
+    /// of that name was added; the message lists the ones that were.
+    pub fn set_toggle(&mut self, name: &str, on: bool) -> Result<(), crate::error::Error> {
+        if self.toggles.set(name, on) {
+            Ok(())
+        } else {
+            Err(crate::error::Error::new(
+                crate::error::ErrorKind::NotFound,
+                format!("no debug toggle `{name}` (toggles: {})", self.toggles.names()),
+            ))
+        }
+    }
+
+    /// Every debug toggle the game added and whether it is on (whatever
+    /// [`enabled`](Self::enabled) says), in the order they were added.
+    pub fn toggles(&self) -> impl Iterator<Item = (&str, bool)> + '_ {
+        self.toggles.iter()
+    }
+
+    /// The game's toggles, when it starts.
+    pub(crate) fn set_toggles(&mut self, toggles: &[(String, bool)]) {
+        self.toggles = toggles::Toggles::new(toggles);
+    }
+
+    /// The `toggles` names, for messages.
+    pub(crate) fn toggle_names(&self) -> String {
+        self.toggles.names()
+    }
+
+    /// How far from the 3D camera (in world units) the
+    /// [colliders view](DebugView::Colliders) draws the triangles of 3D
+    /// collision meshes and terrain: a triangle farther than that from the
+    /// camera is left out, so a big level or terrain costs what is near.
+    /// Default 50. Values below 0 (or not finite) are taken as 0.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx) {
+    /// ctx.debug.show(ponko::debug::DebugView::Colliders, true);
+    /// ctx.debug.set_collider_distance(20.0);
+    /// assert_eq!(ctx.debug.collider_distance(), 20.0);
+    /// # }
+    /// ```
+    pub fn set_collider_distance(&mut self, distance: f32) {
+        self.collider_distance = if distance.is_finite() { distance.max(0.0) } else { 0.0 };
+    }
+
+    /// See [`set_collider_distance`](Self::set_collider_distance).
+    #[must_use]
+    pub fn collider_distance(&self) -> f32 {
+        self.collider_distance
+    }
 }
 
 /// What [`DebugDraw`]'s calls return: the shape just drawn, to change.
@@ -912,7 +1019,33 @@ impl DebugShape<'_> {
     /// Draws 3D lines over nearer surfaces instead of hidden by them, and 2D
     /// lines over the UI instead of under it.
     pub fn on_top(mut self) -> Self {
-        self.each(|l| l.flags |= ON_TOP, |l| l.flags |= ON_TOP);
+        self.each(|l| l.flags |= ON_TOP, |l| l.flags = (l.flags | ON_TOP) & !TESTED);
+        self
+    }
+
+    /// Hides 3D labels behind nearer 3D surfaces, as 3D lines are (labels
+    /// are otherwise drawn over everything). A depth-tested label is drawn
+    /// in the lit 3D frame, facing the camera, `size` pixels high where it
+    /// is, with its top-left corner at its point; exposure and tone mapping
+    /// apply to its color, as to the lines. Lines are depth-tested already
+    /// (unless [`on_top`](Self::on_top)); 2D shapes don't change. The last
+    /// of `on_top` and `depth_tested` wins.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # fn f(ctx: &mut Ctx, crate_at: Vec3) {
+    /// ctx.debug.text(crate_at + Vec3::Y, "crate", Color::WHITE).depth_tested();
+    /// # }
+    /// ```
+    pub fn depth_tested(mut self) -> Self {
+        self.each(
+            |_| {},
+            |l| {
+                if l.flags & THREE_D != 0 {
+                    l.flags = (l.flags | TESTED) & !ON_TOP;
+                }
+            },
+        );
         self
     }
 

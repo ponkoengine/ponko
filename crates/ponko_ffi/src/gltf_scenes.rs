@@ -3,7 +3,7 @@
 //! `GltfRoot::spawn` in Rust and the guide's "From Blender to the game".
 use std::ffi::c_char;
 
-use ponko::d3::{GltfNode, GltfOptions, GltfRoot, SpawnPoint};
+use ponko::d3::{GltfNode, GltfOptions, GltfRoot, GltfScene, SpawnPoint};
 use ponko_ecs::Entity;
 
 use crate::ctx::{PonkoCtx, ctx_access, out, text};
@@ -165,4 +165,101 @@ pub unsafe extern "C" fn ponko_spawn_point_name(
             write_text(buffer, capacity, out_len, &point.name)
         })
     })
+}
+
+/// Reads the glTF file at `path` node by node and checks its custom
+/// properties against the game's reflected components, without spawning
+/// anything (`GltfScene::load`): for tools, or to place things your own
+/// way. Writes it as a JSON object, as `ponko_gltf_node_extras` writes
+/// text: `"nodes"`, parents before their children, each with its
+/// `"name"`, `"path"`, `"parent"` (an index into the list, or null),
+/// `"transform"` (in its parent's space) and `"world"` (in the file's
+/// space) as `{"position", "rotation", "scale"}`, `"extras"` (every
+/// custom property), `"mesh"` (`{"corners", "triangles"}`, or null) and
+/// `"light"` (whether it has one); and `"spawn_points"`, each
+/// `{"name", "transform"}` in the file's space. Errors name the file and
+/// the node, as `ponko_ctx_spawn_gltf`'s do.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_gltf_scene_load(std::ptr::null_mut(), c"a.glb".as_ptr(), std::ptr::null_mut(), 0, std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// Live ctx; `path` NUL-terminated; `buffer` holds `capacity` bytes (or null with 0); `out_len` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_gltf_scene_load(
+    ctx: *mut PonkoCtx,
+    path: *const c_char,
+    buffer: *mut c_char,
+    capacity: usize,
+    out_len: *mut usize,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        if out_len.is_null() {
+            return Err(invalid("output is null"));
+        }
+        let path = text(path)?;
+        ctx_access(ctx, |c| {
+            let scene = GltfScene::load(c, path).map_err(engine_error)?;
+            write_text(buffer, capacity, out_len, &scene_json(&scene).to_string())
+        })
+    })
+}
+
+/// The JSON Schema of the custom properties the game reads
+/// (`gltf_properties_schema`): the `ponko:` keys and every reflected
+/// component, as `ponko schema` writes it, for an editor or a script to
+/// check properties before exporting. Written as `ponko_gltf_node_extras`
+/// writes text.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_gltf_properties_schema(std::ptr::null_mut(), std::ptr::null_mut(), 0, std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `world` null or live; `buffer` holds `capacity` bytes (or null with 0); `out_len` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_gltf_properties_schema(
+    world: *mut PonkoWorld,
+    buffer: *mut c_char,
+    capacity: usize,
+    out_len: *mut usize,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        access(world, |w, _| {
+            let schema = ponko::d3::gltf_properties_schema(w).to_string();
+            write_text(buffer, capacity, out_len, &schema)
+        })
+    })
+}
+
+/// A `GltfScene` as the JSON `ponko_gltf_scene_load` writes.
+fn scene_json(scene: &GltfScene) -> serde_json::Value {
+    use serde_json::json;
+    let place = |t: &ponko::d3::Transform| {
+        json!({
+            "position": t.position.to_array(),
+            "rotation": t.rotation.to_array(),
+            "scale": t.scale.to_array(),
+        })
+    };
+    let nodes: Vec<serde_json::Value> = scene
+        .nodes
+        .iter()
+        .map(|n| {
+            json!({
+                "name": n.name,
+                "path": n.path,
+                "parent": n.parent,
+                "transform": place(&n.transform),
+                "world": place(&n.world),
+                "extras": n.extras,
+                "mesh": n.mesh.as_ref().map(|m| json!({ "corners": m.positions.len(), "triangles": m.indices.len() / 3 })),
+                "light": n.light.is_some(),
+            })
+        })
+        .collect();
+    let spawn_points: Vec<serde_json::Value> = scene
+        .spawn_points()
+        .map(|(name, at)| json!({ "name": name, "transform": place(&at) }))
+        .collect();
+    json!({ "nodes": nodes, "spawn_points": spawn_points })
 }

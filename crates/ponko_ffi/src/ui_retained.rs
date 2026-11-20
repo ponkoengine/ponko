@@ -311,6 +311,21 @@ pub enum PonkoUiEventKind {
     PONKO_UI_EVENT_SUBMITTED,
     /// Cancel popped a screen (`id` is the screen's root).
     PONKO_UI_EVENT_SCREEN_POPPED,
+    /// A context-menu entry was chosen (`id` is the node the menu belongs
+    /// to; the entry's index is in `PonkoUiEventEx::index`). Only
+    /// `ponko_ctx_ui_next_event_ex` reports it.
+    PONKO_UI_EVENT_CHOSEN,
+    /// A dragged item was let go on a drop target (`id` is the item, the
+    /// target is `PonkoUiEventEx::other`). Only `ponko_ctx_ui_next_event_ex`
+    /// reports it.
+    PONKO_UI_EVENT_DROPPED,
+    /// A list shows other items than before (`id` is the list): refresh the
+    /// rows' looks. Only `ponko_ctx_ui_next_event_ex` reports it.
+    PONKO_UI_EVENT_ROWS_SHOWN,
+    /// A tween or timeline played on the node ended (`id` is the node;
+    /// `ponko_ctx_ui_animate`, `ponko_ctx_ui_play`). Only
+    /// `ponko_ctx_ui_next_event_ex` reports it.
+    PONKO_UI_EVENT_ANIMATION_DONE,
 }
 
 /// A layout length. `kind` is a `PonkoUiLengthKind`.
@@ -1139,7 +1154,7 @@ unsafe fn layout_style(l: &PonkoUiLayout) -> Result<Style, Failure> {
 ///
 /// # Safety
 /// `layout` is null or a readable layout whose arrays and UTF-8 string pointers are valid.
-unsafe fn style_or_default(layout: *const PonkoUiLayout) -> Result<Style, Failure> {
+pub(crate) unsafe fn style_or_default(layout: *const PonkoUiLayout) -> Result<Style, Failure> {
     // SAFETY: caller contract.
     match unsafe { layout.as_ref() } {
         Some(layout) => unsafe { layout_style(layout) },
@@ -1267,10 +1282,10 @@ pub(crate) unsafe fn with_ui<R>(
 // ---- building the tree -------------------------------------------------------
 
 /// What a new node starts with besides its layout.
-struct Start<'a> {
-    text: &'a str,
-    paint: Option<UiPaint>,
-    value: Option<f32>,
+pub(crate) struct Start<'a> {
+    pub(crate) text: &'a str,
+    pub(crate) paint: Option<UiPaint>,
+    pub(crate) value: Option<f32>,
 }
 
 /// Adds a node under `parent` (or detached for `PONKO_UI_NONE`). Everything
@@ -1278,7 +1293,7 @@ struct Start<'a> {
 ///
 /// # Safety
 /// Forwards the caller's contract for `ctx`, `layout` and `out_id`.
-unsafe fn add(
+pub(crate) unsafe fn add(
     ctx: *mut PonkoCtx,
     target: u64,
     parent: u64,
@@ -1312,7 +1327,7 @@ unsafe fn add(
     }
 }
 
-fn plain(text: &str) -> Start<'_> {
+pub(crate) fn plain(text: &str) -> Start<'_> {
     Start {
         text,
         paint: None,
@@ -2235,7 +2250,8 @@ pub unsafe extern "C" fn ponko_ctx_ui_next_event(
             return Err(invalid("output is null"));
         }
         with_ui(ctx, target, |ui| {
-            // Events the C API has no kind for yet are skipped.
+            // Events this ABI 2 call has no kind for are skipped (the widget
+            // set's are read with `ponko_ctx_ui_next_event_ex`).
             let (kind, id) = loop {
                 let Some(event) = ui.next_event() else {
                     return Err(error(PonkoStatus::PONKO_NOT_FOUND, "no UI events left"));
@@ -2524,7 +2540,7 @@ pub struct PonkoUiTheme {
     pub border_width: f32,
 }
 
-fn theme_to_c(t: &UiTheme) -> PonkoUiTheme {
+pub(crate) fn theme_to_c(t: &UiTheme) -> PonkoUiTheme {
     PonkoUiTheme {
         panel: to_c(t.panel),
         control: to_c(t.control),
@@ -2541,7 +2557,9 @@ fn theme_to_c(t: &UiTheme) -> PonkoUiTheme {
     }
 }
 
-fn theme_from_c(t: &PonkoUiTheme) -> Result<UiTheme, Failure> {
+/// `t` over `base`, which gives what `PonkoUiTheme` doesn't hold (spacing,
+/// radius, tooltip delay: `PonkoUiThemeEx`).
+pub(crate) fn theme_from_c(t: &PonkoUiTheme, base: &UiTheme) -> Result<UiTheme, Failure> {
     let (text_size, title_size, border_width) = (num(t.text_size)?, num(t.title_size)?, num(t.border_width)?);
     if text_size < 0.0 || title_size < 0.0 || border_width < 0.0 {
         return Err(invalid("UI text sizes and border width must not be negative"));
@@ -2559,6 +2577,7 @@ fn theme_from_c(t: &PonkoUiTheme) -> Result<UiTheme, Failure> {
         text_size,
         title_size,
         border_width,
+        ..*base
     })
 }
 
@@ -2608,8 +2627,9 @@ pub unsafe extern "C" fn ponko_ctx_ui_set_theme(
         let Some(theme) = theme.as_ref() else {
             return Err(invalid("theme is null"));
         };
-        let theme = theme_from_c(theme)?;
         ctx_access(ctx, |c| {
+            let base = *ui_of(c, target)?.theme();
+            let theme = theme_from_c(theme, &base)?;
             check_font(c, theme.font)?;
             ui_of(c, target)?.set_theme(theme);
             Ok(())
@@ -2931,12 +2951,12 @@ mod tests {
             title_size: 40.0,
             ..UiTheme::default()
         };
-        assert_eq!(theme_from_c(&theme_to_c(&theme)).ok(), Some(theme));
+        assert_eq!(theme_from_c(&theme_to_c(&theme), &theme).ok(), Some(theme));
         let bad = PonkoUiTheme {
             text_size: -1.0,
             ..ponko_ui_theme_default()
         };
-        assert!(theme_from_c(&bad).is_err());
+        assert!(theme_from_c(&bad, &UiTheme::default()).is_err());
     }
 
     #[test]

@@ -1,0 +1,12 @@
+{
+  "fixture": "gltf_instances_v1.json",
+  "format": "ponko-world",
+  "version": 1,
+  "engine_version": "ponko 0.1.0 (dev branch, before 0.2.0)",
+  "engine_revision": "9aee05caddf0e4ae1da6b21a2270aaa65d87e6c2",
+  "toolchain": "rustc 1.100.0 (0ef1bc386 2026-11-09), aarch64-apple-darwin",
+  "features": "--features 3d",
+  "generated_by": "PONKO_SAVE_FIXTURE_OUT=<path> cargo test -p ponko --features 3d --test gltf_scenes -- --ignored --exact write_gltf_instances_v1_fixture",
+  "date": "2026-11-20",
+  "baseline": "Prefab instances of a glTF scene (three barrel nodes: one moved and emptied, one destroyed, one untouched) and a player, saved before prefab instances were linked to their glTF scene: the instances carry no link, and GltfNode is counted under not_saved."
+}

@@ -10,18 +10,18 @@
 
 use super::shader_checks::{self, Swap, end_scope, rejected};
 use super::{
-    EFFECT_VARIANT, GpuMaterial, PassTimer, Renderer3D, Targets, build_effect, compose_effect, effect_pipeline,
-    for_samples, passes,
+    EFFECT_VARIANT, PassTimer, Renderer3D, Targets, build_effect, compose_effect, effect_pipeline, for_samples, passes,
 };
+use crate::handle::{INDEX_MASK, write_slot};
 use crate::three::{ShaderDiagnostic, ShaderKind};
 
 /// Every effect's pipelines, and the effects this frame runs.
 #[derive(Default)]
 pub(super) struct Effects {
     /// Screen effect pipelines, by effect id.
-    pub(super) pipelines: Vec<wgpu::RenderPipeline>,
+    pub(super) pipelines: Vec<Option<wgpu::RenderPipeline>>,
     /// Each effect's compiled shader, for building its target pipeline.
-    pub(super) modules: Vec<wgpu::ShaderModule>,
+    pub(super) modules: Vec<Option<wgpu::ShaderModule>>,
     /// Target effect pipelines, by effect id: built when first used.
     pub(super) target_pipelines: Vec<Option<wgpu::RenderPipeline>>,
     /// Render targets target effects write: (texture id, texture, its view),
@@ -38,7 +38,7 @@ pub(super) struct Effects {
 pub(super) struct EffectPass<'a, 't> {
     /// The main view's frame bind group.
     pub(super) frame: &'a wgpu::BindGroup,
-    pub(super) materials: &'a [GpuMaterial],
+    pub(super) resources: &'a super::resources::Resources,
     /// Bound in the GPU buffer slot, which effects don't use.
     pub(super) storage_dummy: Option<&'a wgpu::BindGroup>,
     pub(super) targets: &'a Targets,
@@ -55,14 +55,21 @@ impl Effects {
         &mut self,
         device: &wgpu::Device,
         wanted: &[(u32, u32, u32)],
-        materials: &[GpuMaterial],
+        resources: &super::resources::Resources,
         render_targets: &[(u32, wgpu::Texture)],
         layout: &wgpu::PipelineLayout,
         skipped: impl Fn(usize) -> bool,
     ) {
         self.target_frame.clear();
         for (i, &(effect, target, material)) in wanted.iter().enumerate() {
-            if effect as usize >= self.pipelines.len() || material as usize >= materials.len() || skipped(i) {
+            let effect = effect & INDEX_MASK;
+            let Some(material) = resources.material_slot(material) else {
+                continue;
+            };
+            let Some(Some(module)) = self.modules.get(effect as usize) else {
+                continue;
+            };
+            if skipped(i) {
                 continue;
             }
             let index = match self.targets.iter().position(|&(t, _, _)| t == target) {
@@ -82,7 +89,7 @@ impl Effects {
                     device,
                     layout,
                     "3d target effect",
-                    &self.modules[effect as usize],
+                    module,
                     "vs_effect_target",
                     "fs_effect_target",
                 ));
@@ -116,7 +123,7 @@ impl Effects {
             });
             pass.set_pipeline(self.target_pipelines[effect as usize].as_ref().unwrap());
             pass.set_bind_group(0, ctx.frame, &[]);
-            pass.set_bind_group(1, &ctx.materials[material as usize].bind_group, &[]);
+            pass.set_bind_group(1, &ctx.resources.material(material).bind_group, &[]);
             pass.set_bind_group(2, &ctx.targets.scene_of_hdr, &[]);
             if let Some(dummy) = ctx.storage_dummy {
                 pass.set_bind_group(3, dummy, &[]);
@@ -157,9 +164,13 @@ impl Effects {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipelines[effect as usize]);
+            pass.set_pipeline(
+                self.pipelines[effect as usize]
+                    .as_ref()
+                    .expect("listed effect has a pipeline"),
+            );
             pass.set_bind_group(0, ctx.frame, &[]);
-            pass.set_bind_group(1, &ctx.materials[material as usize].bind_group, &[]);
+            pass.set_bind_group(1, &ctx.resources.material(material).bind_group, &[]);
             pass.set_bind_group(2, source, &[]);
             if let Some(dummy) = ctx.storage_dummy {
                 pass.set_bind_group(3, dummy, &[]);
@@ -172,21 +183,39 @@ impl Effects {
 
 impl Renderer3D {
     /// Compiles a screen effect from the game's WGSL; returns its id.
+    #[cfg(test)]
     pub fn create_effect(
         &mut self,
         device: &wgpu::Device,
         name: &str,
         user: &str,
     ) -> Result<u32, Box<ShaderDiagnostic>> {
+        let slot = self.effects.pipelines.len() as u32;
+        self.create_effect_at(device, slot, name, user)?;
+        Ok(slot)
+    }
+
+    pub fn create_effect_at(
+        &mut self,
+        device: &wgpu::Device,
+        id: u32,
+        name: &str,
+        user: &str,
+    ) -> Result<(), Box<ShaderDiagnostic>> {
         let start = crate::perf::Instant::now();
-        let made = self.compile_effect(device, name, user);
+        let made = self.compile_effect(device, id, name, user);
         self.shaders.cache.counters.compiled(start.elapsed());
         made
     }
 
-    fn compile_effect(&mut self, device: &wgpu::Device, name: &str, user: &str) -> Result<u32, Box<ShaderDiagnostic>> {
+    fn compile_effect(
+        &mut self,
+        device: &wgpu::Device,
+        id: u32,
+        name: &str,
+        user: &str,
+    ) -> Result<(), Box<ShaderDiagnostic>> {
         let (module, pipeline, verdict) = self.checked_effect(device, name, user)?;
-        let id = self.effects.pipelines.len() as u32;
         self.installed(ShaderKind::Effect, id);
         if let Some(verdict) = verdict {
             let swap = Swap::Effect {
@@ -195,10 +224,19 @@ impl Renderer3D {
             };
             self.wait_for_verdict(id, name, EFFECT_VARIANT, swap, verdict);
         }
-        self.effects.pipelines.push(pipeline);
-        self.effects.modules.push(module);
-        self.effects.target_pipelines.push(None);
-        Ok(id)
+        write_slot(&mut self.effects.pipelines, id, Some(pipeline));
+        write_slot(&mut self.effects.modules, id, Some(module));
+        write_slot(&mut self.effects.target_pipelines, id, None);
+        Ok(())
+    }
+
+    pub fn free_effect(&mut self, id: u32) {
+        self.forget_shader_checks(ShaderKind::Effect, id);
+        if let Some(pipeline) = self.effects.pipelines.get_mut(id as usize) {
+            *pipeline = None;
+            self.effects.modules[id as usize] = None;
+            self.effects.target_pipelines[id as usize] = None;
+        }
     }
 
     /// Checks an effect's WGSL (with its place in the game's code) and
@@ -252,15 +290,15 @@ impl Renderer3D {
         if i >= self.effects.pipelines.len() {
             return Ok(());
         }
-        let old_pipeline = std::mem::replace(&mut self.effects.pipelines[i], new.clone());
-        let old_module = std::mem::replace(&mut self.effects.modules[i], module);
+        let old_pipeline = self.effects.pipelines[i].replace(new.clone());
+        let old_module = self.effects.modules[i].replace(module);
         // Rebuilt from the new shader when next used.
         self.effects.target_pipelines[i] = None;
         self.installed(ShaderKind::Effect, id);
         if let Some(verdict) = verdict {
             let swap = Swap::Effect {
                 new,
-                old: Some((old_module, old_pipeline)),
+                old: old_module.zip(old_pipeline),
             };
             self.wait_for_verdict(id, name, EFFECT_VARIANT, swap, verdict);
         }

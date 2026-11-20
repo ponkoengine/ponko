@@ -35,7 +35,9 @@ use super::linear;
 /// (stylized gradients, painted clouds, a night sky) takes the place of
 /// both. The engine uses it wherever it looks at the sky: the background,
 /// the fog's color, reflections and the ambient light, and what reflection
-/// probes capture.
+/// probes capture. The engine brings one ready-made: the sky kit
+/// ([`kit`](Self::kit), [`SkyKit`](crate::render::SkyKit)), the atmosphere
+/// with raymarched clouds, a moon with phases and stars.
 ///
 /// ```no_run
 /// # use ponko::prelude::*;
@@ -148,6 +150,11 @@ pub struct Sky {
     /// the background, the fog and the reflections still show the shader's
     /// sky. Default off: the ambient light is the sky's own light.
     pub authored_ambient: bool,
+    /// The sky kit: a ready-made sky with clouds, a moon and stars, on the
+    /// sky shader hook (see [`SkyKit`](crate::render::SkyKit)). It takes the
+    /// place of the atmosphere and the flat sky like a [`shader`](Self::shader),
+    /// which wins if both are set. `None` (the default) costs nothing.
+    pub kit: Option<crate::render::SkyKit>,
 }
 
 /// A sky shader: the game's own sky, made with
@@ -168,6 +175,9 @@ pub struct Sky {
 /// read `frame` (`frame.sun_dir`, `frame.sun_color`, `frame.time`,
 /// [`Sky::shader_params`] as `frame.sky_params`) and the engine's helpers
 /// (`hash2`, `noise2`, `fbm2`, `PI`); it declares no bindings of its own.
+/// `drawing_background()` is true while it draws the background and false
+/// for the sky texture: sharp detail the fog and the ambient light don't
+/// need (stars, a moon's face) can be left out of the texture.
 ///
 /// What the fog, reflections and ambient light show is rebuilt when the
 /// sun, [`Lighting`] or [`Sky::shader_params`] change, not as `frame.time`
@@ -225,6 +235,7 @@ impl Default for Sky {
             shader: None,
             shader_params: [Vec4::ZERO; 4],
             authored_ambient: false,
+            kit: None,
         }
     }
 }

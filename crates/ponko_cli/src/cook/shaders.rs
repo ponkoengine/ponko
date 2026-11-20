@@ -8,6 +8,13 @@
 //! test `cook_shader_parts_match_the_engine` writes them from the engine's
 //! own composition, and fails when they are out of date.
 //!
+//! Before compiling, [`validate`] checks the engine's rules for the kind
+//! (a hook's signature, no entry points or bindings of its own) from the
+//! engine's own rule table: `shaders/rules.rs` is the engine's
+//! `src/render/shader_rules.rs`, kept so by the engine's test
+//! `the_cooks_shader_rules_are_the_engines`. So a shader that cooks also
+//! loads.
+//!
 //! The kind comes from the hook the file defines (`vertex`/`surface`: a
 //! material, `fragment`: a sprite shader, `sky`, `effect`, `compute` or
 //! `update`), or from `cook.json`; a file with its own `@vertex`,
@@ -16,6 +23,9 @@
 #![deny(missing_docs)]
 
 use super::ShaderKind;
+
+#[path = "shaders/rules.rs"]
+mod rules;
 
 /// Where the engine's mesh prelude goes in a part file.
 const PRELUDE: &str = "//@@ponko-mesh-prelude@@\n";
@@ -159,6 +169,10 @@ pub fn validate(name: &str, source: &str, kind: Option<ShaderKind>) -> Result<Sh
             ));
         }
     };
+    if let Some((range, message)) = rules::check(kind.name(), source) {
+        let place = at_line(name, source, 0, range.start).unwrap_or_else(|| name.to_string());
+        return Err(format!("{place}: {message}"));
+    }
     let (composed, start) = compose(kind, source);
     let place = |at: Option<usize>| match at.and_then(|at| at_line(name, source, start, at)) {
         Some(place) => place,
@@ -260,6 +274,49 @@ mod tests {
             ),
             Ok(ShaderKind::Material)
         );
+    }
+
+    #[test]
+    fn the_engines_rules_fail_the_cook_where_the_engine_would_fail_the_load() {
+        // Each compiles as WGSL, and the engine refuses it at load.
+        for (source, kind, says) in [
+            (
+                "@group(2) @binding(9) var t: texture_2d<f32>;\nfn surface(s: Surface) -> Surface { return s; }",
+                ShaderKind::Material,
+                "may not declare bindings",
+            ),
+            (
+                "fn surface(s: Surface, extra: f32) -> Surface { return s; }",
+                ShaderKind::Material,
+                "wrong signature",
+            ),
+            (
+                "@group(0) @binding(9) var t: texture_2d<f32>;\nfn fragment(p: SpritePixel) -> vec4<f32> { return p.color; }",
+                ShaderKind::Sprite,
+                "may not declare bindings",
+            ),
+            (
+                "fn sky(d: vec3<f32>) -> vec4<f32> { return vec4<f32>(d, 1.0); }",
+                ShaderKind::Sky,
+                "wrong signature",
+            ),
+            (
+                "fn helper() -> f32 { return 1.0; }",
+                ShaderKind::Sky,
+                "needs a `sky` hook",
+            ),
+        ] {
+            let err = validate("s.wgsl", source, Some(kind)).unwrap_err();
+            assert!(err.starts_with("s.wgsl:") && err.contains(says), "{err}");
+        }
+        // The place is the line of the game's file.
+        let err = validate(
+            "b.wgsl",
+            "// fine\n@group(2) @binding(9) var t: texture_2d<f32>;\nfn surface(s: Surface) -> Surface { return s; }",
+            None,
+        )
+        .unwrap_err();
+        assert!(err.starts_with("b.wgsl:2:1:"), "{err}");
     }
 
     #[test]

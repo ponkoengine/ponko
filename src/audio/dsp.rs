@@ -129,9 +129,91 @@ impl Effect for Ducker {
     }
 }
 
-/// For tests: a backend that plays to nothing and lets the test pull the
-/// mix out a block at a time, the way an output device would.
-#[cfg(test)]
+/// A pitch shift's settings, written by the game side and read by the
+/// audio thread without locking.
+pub(super) struct PitchShared {
+    ratio: AtomicU32,
+    mix: AtomicU32,
+}
+impl PitchShared {
+    pub(super) fn new(ratio: f32, mix: f32) -> Arc<Self> {
+        Arc::new(Self {
+            ratio: AtomicU32::new(ratio.to_bits()),
+            mix: AtomicU32::new(mix.to_bits()),
+        })
+    }
+    pub(super) fn set(&self, ratio: f32, mix: f32) {
+        self.ratio.store(ratio.to_bits(), Ordering::Relaxed);
+        self.mix.store(mix.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// The window each read head crosses, in seconds.
+const PITCH_WINDOW: f64 = 0.04;
+/// The delay line holds this much sound, at the highest sample rate taken.
+const PITCH_LINE: usize = 2 * 192_000 * 40 / 1000 + 4;
+
+/// Shifts the pitch with a delay line read by two heads half a window
+/// apart, each moving at `ratio` against the writing and faded in and out
+/// (sin²) as it wraps, so their sum stays at full level.
+pub(super) struct PitchShiftBuilder(pub(super) Arc<PitchShared>);
+impl EffectBuilder for PitchShiftBuilder {
+    type Handle = ();
+    fn build(self) -> (Box<dyn Effect>, ()) {
+        (
+            Box::new(PitchShift {
+                shared: self.0,
+                line: vec![Frame::ZERO; PITCH_LINE].into_boxed_slice(),
+                write: 0,
+                phase: 0.0,
+            }),
+            (),
+        )
+    }
+}
+struct PitchShift {
+    shared: Arc<PitchShared>,
+    line: Box<[Frame]>,
+    write: usize,
+    /// Where the first head is in its window, 0–1.
+    phase: f64,
+}
+impl PitchShift {
+    /// The sound `delay` frames (fractional) behind the writing.
+    fn read(&self, delay: f64) -> Frame {
+        let n = self.line.len();
+        let at = self.write as f64 - delay;
+        let at = at.rem_euclid(n as f64);
+        let i = at.floor() as usize % n;
+        let j = (i + 1) % n;
+        let t = (at - at.floor()) as f32;
+        self.line[i] * (1.0 - t) + self.line[j] * t
+    }
+}
+impl Effect for PitchShift {
+    fn process(&mut self, input: &mut [Frame], dt: f64, _info: &Info) {
+        let ratio = f64::from(f32::from_bits(self.shared.ratio.load(Ordering::Relaxed)));
+        let mix = f32::from_bits(self.shared.mix.load(Ordering::Relaxed));
+        // A rate the line can't hold a window of is left as it is.
+        let window = (PITCH_WINDOW / dt.max(1e-9)).min((self.line.len() / 2) as f64);
+        let step = (1.0 - ratio) / window.max(1.0);
+        let n = self.line.len();
+        for frame in input {
+            self.line[self.write] = *frame;
+            if mix > 0.0 && ratio != 1.0 {
+                let other = (self.phase + 0.5).fract();
+                let fade = |p: f64| (std::f64::consts::PI * p).sin().powi(2) as f32;
+                let wet = self.read(self.phase * window) * fade(self.phase) + self.read(other * window) * fade(other);
+                *frame = *frame * (1.0 - mix) + wet * mix;
+            }
+            self.phase = (self.phase + step).rem_euclid(1.0);
+            self.write = (self.write + 1) % n;
+        }
+    }
+}
+
+/// A backend that plays to nothing and lets the game (offline mixing) or a
+/// test pull the mix out a block at a time, the way an output device would.
 pub(crate) mod buffer {
     use kira::backend::{Backend, Renderer};
     use std::sync::{Arc, Mutex};
@@ -157,7 +239,7 @@ pub(crate) mod buffer {
             ))
         }
         fn start(&mut self, renderer: Renderer) -> Result<(), ()> {
-            *self.renderer.lock().unwrap() = Some(renderer);
+            *self.renderer.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(renderer);
             Ok(())
         }
     }
@@ -171,8 +253,10 @@ pub(crate) mod buffer {
         /// The next `seconds` of the mix, as (left, right) pairs.
         pub(crate) fn render(&self, seconds: f32) -> Vec<[f32; 2]> {
             let frames = (seconds * self.sample_rate as f32).round() as usize;
-            let mut guard = self.renderer.lock().unwrap();
-            let renderer = guard.as_mut().expect("the mixer opened its output");
+            let mut guard = self.renderer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(renderer) = guard.as_mut() else {
+                return vec![[0.0; 2]; frames];
+            };
             let mut out = Vec::with_capacity(frames);
             let mut block = [0.0f32; 2 * 128];
             let mut left = frames;
@@ -188,6 +272,7 @@ pub(crate) mod buffer {
     }
 
     /// Root-mean-square of the left channel.
+    #[cfg(test)]
     pub(crate) fn rms(frames: &[[f32; 2]]) -> f32 {
         (frames.iter().map(|f| f[0] * f[0]).sum::<f32>() / frames.len().max(1) as f32).sqrt()
     }

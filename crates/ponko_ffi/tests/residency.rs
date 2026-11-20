@@ -4,6 +4,8 @@
 use std::ffi::{CString, c_void};
 use std::ptr::null_mut;
 
+mod common;
+
 use ponko_ffi::*;
 
 use PonkoAssetState::*;
@@ -193,4 +195,77 @@ fn games_stream_assets_and_lod_levels_through_the_c_api() {
     // Asked for by the group in the first frame's streaming step and, with
     // deterministic uploads, uploaded in the same step.
     assert_eq!(seen.house_resident_at, Some(1));
+}
+
+#[test]
+fn caller_buffers_get_the_sorted_streamed_asset_prefix_and_its_names() {
+    common::run_ctx(|ctx| unsafe {
+        let mut texture = std::mem::zeroed::<PonkoTexture>();
+        let mut ready = false;
+        for path in [c"missing-z.png", c"missing-a.png"] {
+            assert_eq!(
+                ponko_ctx_stream_texture(ctx, path.as_ptr(), &mut texture, &mut ready),
+                PONKO_OK
+            );
+        }
+        assert_eq!(ponko_ctx_finish_uploads(ctx), PONKO_OK);
+
+        let mut len = 99;
+        let mut bytes = 99;
+        assert_eq!(
+            ponko_ctx_streamed_assets(ctx, null_mut(), 0, null_mut(), 0, &mut len, &mut bytes),
+            PONKO_OK
+        );
+        assert_eq!((len, bytes), (2, 0));
+
+        let mut records = [PonkoStreamedAsset::default(); 2];
+        let mut names = [1; 40];
+        assert_eq!(
+            ponko_ctx_streamed_assets(
+                ctx,
+                records.as_mut_ptr(),
+                1,
+                names.as_mut_ptr(),
+                2,
+                &mut len,
+                &mut bytes
+            ),
+            PONKO_OK
+        );
+        assert_eq!((len, bytes), (2, c"missing-a.png".count_bytes() + 1));
+        assert_eq!(records[1], PonkoStreamedAsset::default());
+        assert_eq!(names, [1; 40], "no partial name");
+
+        assert_eq!(
+            ponko_ctx_streamed_assets(
+                ctx,
+                records.as_mut_ptr(),
+                records.len(),
+                names.as_mut_ptr(),
+                names.len(),
+                &mut len,
+                &mut bytes
+            ),
+            PONKO_OK
+        );
+        assert_eq!(len, 2);
+        assert_eq!(bytes, 2 * (c"missing-a.png".count_bytes() + 1));
+        for (record, name) in records.iter().zip([c"missing-a.png", c"missing-z.png"]) {
+            assert_eq!(record.kind, PONKO_RESIDENCY_TEXTURE as u32);
+            assert_eq!(record.state, PONKO_ASSET_FAILED as u32);
+            assert!(!record.has_handle);
+            assert_eq!((record.width, record.height), (0, 0));
+            assert_eq!(record.name_len, name.count_bytes());
+            assert_eq!(std::ffi::CStr::from_ptr(names.as_ptr().add(record.name_offset)), name);
+        }
+
+        assert_eq!(
+            ponko_ctx_streamed_assets(ctx, records.as_mut_ptr(), 1, null_mut(), 1, &mut len, &mut bytes),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            ponko_ctx_streamed_assets(ctx, records.as_mut_ptr(), 1, null_mut(), 0, &mut len, null_mut()),
+            PONKO_INVALID_ARGUMENT
+        );
+    });
 }

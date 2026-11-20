@@ -1,0 +1,53 @@
+[package]
+name = "ponko_lobby"
+version = "0.1.0"
+description = "A reference lobby, matchmaking and relay server for Ponko games: rooms with codes, host migration, rate limits."
+keywords = ["gamedev", "lobby", "matchmaking", "relay", "server"]
+categories = ["game-development", "network-programming"]
+documentation = "https://docs.rs/ponko_lobby/"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+# What `ponko package` puts in the server's package (the container recipe,
+# `Dockerfile` here and the guide's "Dedicated servers" chapter).
+[package.metadata.ponko]
+name = "ponko-lobby"
+id = "dev.ponko.lobby"
+files = [
+    { from = "../../LICENSE-MIT", to = "LICENSE-MIT" },
+    { from = "../../LICENSE-APACHE", to = "LICENSE-APACHE" },
+    { from = "../../NOTICE", to = "NOTICE" },
+]
+
+[[bin]]
+name = "ponko-lobby"
+path = "src/main.rs"
+
+# The WebRTC signaling test (`tests/webrtc.rs`): the engine's WebRTC
+# endpoints, signaled through this server. Off: the server itself never
+# needs it (it relays signaling like any other bytes).
+[features]
+webrtc = ["ponko/webrtc"]
+
+[[test]]
+name = "webrtc"
+required-features = ["webrtc"]
+
+[dependencies]
+# The engine without a window, GPU, sound or gamepads (a server needs none of
+# them), with the lobby protocol and client (`lobby`).
+ponko = { path = "../..", version = "0.1.0", default-features = false, features = ["lobby"] }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+# The load test's memory figure (getrusage); already in the engine's tree.
+libc = "0.2"

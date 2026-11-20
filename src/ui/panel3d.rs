@@ -8,19 +8,20 @@ use glam::{Mat4, Vec2, Vec3};
 use super::retained::Ui;
 use crate::d3::Transform as Transform3D;
 use crate::gfx::Graphics;
+use crate::render::RenderTarget;
 use crate::render::batch::PanelDraw;
-use crate::{ctx::Ctx, input::MouseButton, texture::Texture};
+use crate::{ctx::Ctx, input::MouseButton};
 use ponko_ecs::{Component, Entity};
 
 /// Retained UI shown on a quad in the world (Rust's [`Ui`] on a surface):
 /// a computer screen, a shop terminal, a sign with buttons. Build `ui` like
-/// [`Ctx::ui`]; its widgets are laid out in `texture`'s pixels.
+/// [`Ctx::ui`]; its widgets are laid out in its `target`'s pixels.
 ///
 /// The panel is the quad `size` meters wide and high in its entity's XY
 /// plane, centered on it, facing +Z (what [`mesh`](Self::mesh) makes). The
 /// mouse uses the nearest panel the camera ray through it hits, unless the
 /// screen's own UI has it; the panel clicked last also gets the keyboard.
-/// [`Graphics::create_ui_panel`](crate::gfx::Graphics::create_ui_panel) makes the texture, material and mesh at once.
+/// [`Graphics::create_ui_panel`](crate::gfx::Graphics::create_ui_panel) makes the render target, material and mesh at once.
 ///
 /// ```
 /// # use ponko::prelude::*;
@@ -38,7 +39,8 @@ pub struct UiPanel3D {
     pub ui: Ui,
     /// What it's drawn into each frame: a render target
     /// ([`Graphics::create_render_target`](crate::gfx::Graphics::create_render_target)) whose size is the panel's in pixels.
-    pub texture: Texture,
+    /// A material shows it through [`RenderTarget::texture`].
+    pub target: RenderTarget,
     /// Its size in the world, in meters.
     pub size: Vec2,
     /// Whether the mouse and keyboard can use it. Default true.
@@ -50,7 +52,7 @@ pub struct UiPanel3D {
 impl std::fmt::Debug for UiPanel3D {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UiPanel3D")
-            .field("texture", &self.texture)
+            .field("target", &self.target)
             .field("size", &self.size)
             .field("interactive", &self.interactive)
             .field("pointer", &self.pointer)
@@ -59,8 +61,8 @@ impl std::fmt::Debug for UiPanel3D {
 }
 
 impl UiPanel3D {
-    /// A panel drawn into `texture` (a render target), `size` meters in the
-    /// world. Show `texture` on [`mesh`](Self::mesh) with a material.
+    /// A panel drawn into `target`, `size` meters in the world. Show
+    /// `target.texture()` on [`mesh`](Self::mesh) with a material.
     /// ```
     /// # use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
@@ -70,10 +72,10 @@ impl UiPanel3D {
     /// });
     /// ```
     #[must_use]
-    pub fn new(texture: Texture, size: Vec2) -> Self {
+    pub fn new(target: RenderTarget, size: Vec2) -> Self {
         Self {
             ui: Ui::default(),
-            texture,
+            target,
             size,
             interactive: true,
             pointer: None,
@@ -84,7 +86,7 @@ impl UiPanel3D {
     /// with the texture's top-left corner at the top left.
     /// ```
     /// # use ponko::prelude::*;
-    /// # fn f(screen: Texture) {
+    /// # fn f(screen: ponko::render::RenderTarget) {
     /// let panel = ponko::d3::UiPanel::new(screen, vec2(2.0, 1.0));
     /// let quad = panel.mesh();
     /// assert_eq!(quad.positions[0], vec3(-1.0, 0.5, 0.0));
@@ -141,7 +143,7 @@ impl UiPanel3D {
             return None;
         }
         let distance = (matrix.transform_point3(at) - origin).length();
-        let pixels = Vec2::new(self.texture.width() as f32, self.texture.height() as f32);
+        let pixels = self.target.size();
         let uv = Vec2::new(at.x / self.size.x + 0.5, 0.5 - at.y / self.size.y);
         Some((distance, uv * pixels))
     }
@@ -181,7 +183,7 @@ impl Graphics {
     /// # use ponko::prelude::*;
     /// Game::new("t", 1, 1).run_headless(0, |ctx| {
     ///     let (panel, model) = ctx.gfx.create_ui_panel(256, 256, vec2(0.5, 0.5));
-    ///     assert_eq!(panel.texture.width(), 256);
+    ///     assert_eq!(panel.target.width(), 256);
     ///     ctx.world.spawn((ponko::d3::Transform::default(), model, panel));
     /// });
     /// ```
@@ -214,8 +216,9 @@ impl Graphics {
                 "panel size must be positive and finite",
             ));
         }
-        let texture = self.try_create_render_target(width, height)?;
-        let panel = UiPanel3D::new(texture, size);
+        let target = self.try_create_render_target(width, height)?;
+        let texture = target.texture();
+        let panel = UiPanel3D::new(target, size);
         let material = self.create_material(crate::render::MaterialDesc {
             color: crate::color::Color::BLACK,
             texture: Some(texture),
@@ -291,7 +294,7 @@ impl Ctx {
             let Some(panel) = self.world.get_mut::<UiPanel3D>(e) else {
                 continue;
             };
-            let viewport = Vec2::new(panel.texture.width() as f32, panel.texture.height() as f32);
+            let viewport = panel.target.size();
             panel.pointer = pointer;
             ui.frame_with_text(viewport, &input, &mut self.gfx.text);
             if let Some(panel) = self.world.get_mut::<UiPanel3D>(e) {
@@ -318,7 +321,7 @@ impl Ctx {
             let Some((mut ui, texture)) = self
                 .world
                 .get_mut::<UiPanel3D>(e)
-                .map(|p| (std::mem::take(&mut p.ui), p.texture))
+                .map(|p| (std::mem::take(&mut p.ui), p.target.texture()))
             else {
                 continue;
             };
@@ -354,12 +357,13 @@ impl Ctx {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::texture::Texture;
     use crate::ui::UiEvent;
     use crate::ui::UiWidget;
     use glam::{Vec2 as V2, vec3};
 
     fn panel() -> UiPanel3D {
-        UiPanel3D::new(Texture::new(1, 200, 100), V2::new(2.0, 1.0))
+        UiPanel3D::new(RenderTarget::from_texture(Texture::new(1, 200, 100)), V2::new(2.0, 1.0))
     }
 
     #[test]
@@ -397,7 +401,7 @@ mod tests {
         ctx.scene3d.camera.position = Vec3::ZERO;
         ctx.scene3d.camera.look_at(-Vec3::Z);
         let mut spawn = |z: f32| {
-            let mut p = UiPanel3D::new(Texture::new(1, 200, 100), V2::new(2.0, 1.0));
+            let mut p = UiPanel3D::new(RenderTarget::from_texture(Texture::new(1, 200, 100)), V2::new(2.0, 1.0));
             let style = taffy::Style {
                 size: taffy::Size::from_percent(1.0, 1.0),
                 ..Default::default()

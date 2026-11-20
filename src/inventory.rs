@@ -385,6 +385,34 @@ pub struct AssetRecord {
     pub owner: AssetOwner,
 }
 
+/// Who owns a live handle, borrowing any file name from the inventory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AssetOwnerRef<'a> {
+    /// Game code.
+    Code,
+    /// A loaded file, by its asset name.
+    File(&'a str),
+    /// The engine itself.
+    Engine,
+}
+
+/// A live handle's inventory record without an owned file name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AssetRecordRef<'a> {
+    /// The handle's id.
+    pub id: u32,
+    /// Estimated bytes it holds.
+    pub bytes: u64,
+    /// The frame it was made on.
+    pub made_frame: u64,
+    /// Frames since then.
+    pub age_frames: u64,
+    /// Who made it.
+    pub owner: AssetOwnerRef<'a>,
+}
+
 /// Bytes of an RGBA8 image.
 pub(crate) fn rgba8_bytes(width: u32, height: u32) -> u64 {
     u64::from(width) * u64::from(height) * 4
@@ -405,6 +433,21 @@ pub(crate) fn mip_chain_bytes(width: u32, height: u32, bytes_per_pixel: u64) -> 
 }
 
 impl Ledger {
+    fn record_ref(&self, class: AssetClass, id: u32, bytes: u64, engine: bool) -> AssetRecordRef<'_> {
+        let (made_frame, name) = self.birth(class, id);
+        AssetRecordRef {
+            id,
+            bytes,
+            made_frame,
+            age_frames: self.now.saturating_sub(made_frame),
+            owner: if engine {
+                AssetOwnerRef::Engine
+            } else {
+                name.map_or(AssetOwnerRef::Code, AssetOwnerRef::File)
+            },
+        }
+    }
+
     /// The record of live handle `id` of `class`, `now` being this frame.
     fn record(&self, class: AssetClass, id: u32, bytes: u64, engine: bool) -> AssetRecord {
         let (made_frame, owner) = self.birth(class, id);
@@ -495,24 +538,39 @@ impl crate::gfx::Graphics {
     /// });
     /// ```
     pub fn asset_handles_into(&self, class: AssetClass, out: &mut Vec<AssetRecord>) {
-        let ledger = &self.asset_ledger;
         let mut at = 0;
+        self.visit_asset_records(class, |id, bytes, engine| {
+            write_record(&self.asset_ledger, out, &mut at, class, id, bytes, engine);
+        });
+        out.truncate(at);
+        out.sort_unstable_by_key(|r| (r.made_frame, r.id));
+    }
+
+    /// Visits each live graphics handle of `class` once, in unspecified
+    /// order and without allocating. Sound handles belong to
+    /// [`Audio::visit_asset_handles`](crate::audio::Audio::visit_asset_handles).
+    /// Use [`Self::asset_handles_into`] for an owned, sorted listing.
+    pub fn visit_asset_handles(&self, class: AssetClass, mut visit: impl FnMut(AssetRecordRef<'_>)) {
+        self.visit_asset_records(class, |id, bytes, engine| {
+            visit(self.asset_ledger.record_ref(class, id, bytes, engine));
+        });
+    }
+
+    fn visit_asset_records(&self, class: AssetClass, mut visit: impl FnMut(u32, u64, bool)) {
         match class {
             AssetClass::Texture => {
-                for (&id, &bytes) in &ledger.textures {
-                    write_record(ledger, out, &mut at, class, id, bytes, !self.textures_live.was_made(id));
+                for (&id, &bytes) in &self.asset_ledger.textures {
+                    visit(id, bytes, !self.textures_live.was_made(id));
                 }
             }
             AssetClass::Sound => {}
             #[cfg(feature = "3d")]
-            _ => self.assets3d.records(class, &self.textures_live, |id, bytes| {
-                write_record(ledger, out, &mut at, class, id, bytes, false);
-            }),
+            _ => self
+                .assets3d
+                .records(class, &self.textures_live, |id, bytes| visit(id, bytes, false)),
             #[cfg(not(feature = "3d"))]
             _ => {}
         }
-        out.truncate(at);
-        out.sort_unstable_by_key(|r| (r.made_frame, r.id));
     }
 }
 
@@ -543,19 +601,25 @@ impl crate::audio::Audio {
     /// ```
     pub fn asset_handles_into(&self, out: &mut Vec<AssetRecord>) {
         let mut at = 0;
-        for id in self.sounds_live.ids() {
-            write_record(
-                &self.ledger,
-                out,
-                &mut at,
-                AssetClass::Sound,
-                id,
-                self.backend.sound_bytes(id),
-                false,
-            );
-        }
+        self.visit_asset_records(|id, bytes| {
+            write_record(&self.ledger, out, &mut at, AssetClass::Sound, id, bytes, false);
+        });
         out.truncate(at);
         out.sort_unstable_by_key(|r| (r.made_frame, r.id));
+    }
+
+    /// Visits each live sound handle once, in unspecified order and without
+    /// allocating. Use [`Self::asset_handles_into`] for an owned, sorted listing.
+    pub fn visit_asset_handles(&self, mut visit: impl FnMut(AssetRecordRef<'_>)) {
+        self.visit_asset_records(|id, bytes| {
+            visit(self.ledger.record_ref(AssetClass::Sound, id, bytes, false));
+        });
+    }
+
+    fn visit_asset_records(&self, mut visit: impl FnMut(u32, u64)) {
+        for id in self.sounds_live.ids() {
+            visit(id, self.backend.sound_bytes(id));
+        }
     }
 }
 

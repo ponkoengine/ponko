@@ -9,16 +9,17 @@
 //! It is compiled for the web, and natively for its tests.
 
 use std::io::Cursor;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed};
+use std::sync::{Arc, Mutex};
 
-use kira::info::Info;
+use kira::info::{Info, WhenToStart};
 use kira::sound::{PlaybackState, Sound, SoundData};
-use kira::{Frame, Panning, interpolate_frame};
+use kira::{Frame, Panning, StartTime, Tween, interpolate_frame};
 use symphonia::core::codecs::{CodecParameters, audio::AudioDecoder};
 use symphonia::core::errors::Error as DecodeError;
-use symphonia::core::formats::{FormatReader, TrackType, probe::Hint};
+use symphonia::core::formats::{FormatReader, SeekMode, SeekTo, TrackType, probe::Hint};
 use symphonia::core::io::MediaSourceStream;
+use symphonia::core::units::Time;
 
 /// How long a stop fades out: Kira's default tween, which the other voices use.
 const STOP_FADE_SECONDS: f64 = 0.01;
@@ -88,6 +89,30 @@ struct Shared {
     stop: AtomicBool,
     /// 0 playing, 1 stopping (fading out), 2 stopped.
     state: AtomicU8,
+    /// Volume changes and stops that wait for a start time or take longer
+    /// than the smoothing. Only ever contended in native tests: on the web
+    /// one thread both plays and mixes.
+    changes: Mutex<Vec<Change>>,
+}
+
+/// A change from the handle, made when `at` comes.
+#[derive(Clone, Copy, Debug)]
+struct Change {
+    at: StartTime,
+    what: What,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum What {
+    /// To this linear gain, over these seconds.
+    Volume(f32, f64),
+    /// Fade out over these seconds, then stop.
+    Stop(f64),
+}
+
+/// Seconds a tween lasts, at least one smoothing step so nothing clicks.
+fn tween_seconds(tween: &Tween) -> f64 {
+    tween.duration.as_secs_f64().max(SMOOTHING_SECONDS)
 }
 
 const PLAYING: u8 = 0;
@@ -100,6 +125,14 @@ pub(crate) struct ChunkedData {
     volume: f32,
     rate: f64,
     looping: bool,
+    panning: f32,
+    start_time: StartTime,
+    /// Seconds into the sound to start from.
+    from: f64,
+    /// Where a loop goes back to, and where it turns (seconds).
+    loop_start: f64,
+    loop_end: Option<f64>,
+    fade_in: Option<f64>,
 }
 
 impl ChunkedData {
@@ -110,7 +143,53 @@ impl ChunkedData {
             volume: gain(volume),
             rate: speed(rate),
             looping,
+            panning: 0.0,
+            start_time: StartTime::Immediate,
+            from: 0.0,
+            loop_start: 0.0,
+            loop_end: None,
+            fade_in: None,
         }
+    }
+    /// -1 (left) to 1 (right).
+    #[must_use]
+    pub fn panning(mut self, panning: f32) -> Self {
+        self.panning = pan(panning);
+        self
+    }
+    /// Silent until `at` (a delay or a clock time), then plays.
+    #[must_use]
+    pub fn start_time(mut self, at: StartTime) -> Self {
+        self.start_time = at;
+        self
+    }
+    /// Starts `seconds` into the sound.
+    #[must_use]
+    pub fn start_position(mut self, seconds: f64) -> Self {
+        self.from = if seconds.is_finite() { seconds.max(0.0) } else { 0.0 };
+        self
+    }
+    /// A looping playback turns at `end` (`None`: the end of the sound)
+    /// and goes back to `start` (seconds).
+    #[must_use]
+    pub fn loop_points(mut self, start: f64, end: Option<f64>) -> Self {
+        self.loop_start = if start.is_finite() { start.max(0.0) } else { 0.0 };
+        self.loop_end = end.filter(|e| e.is_finite() && *e > self.loop_start);
+        self
+    }
+    /// Fades in from silence over the tween once it starts.
+    #[must_use]
+    pub fn fade_in(mut self, tween: Option<Tween>) -> Self {
+        self.fade_in = tween.as_ref().map(tween_seconds);
+        self
+    }
+}
+
+fn pan(panning: f32) -> f32 {
+    if panning.is_finite() {
+        panning.clamp(-1.0, 1.0)
+    } else {
+        0.0
     }
 }
 
@@ -151,8 +230,34 @@ impl ChunkedHandle {
         self.shared.stop.store(true, Relaxed);
     }
 
+    /// Fades out over the tween from its start time, then stops.
+    pub fn stop_with(&mut self, tween: Tween) {
+        if tween.start_time == StartTime::Immediate && tween.duration.as_secs_f64() <= STOP_FADE_SECONDS {
+            self.stop();
+        } else {
+            self.push(tween.start_time, What::Stop(tween_seconds(&tween)));
+        }
+    }
+
+    /// Linear gain, over the tween from its start time.
+    pub fn set_volume_with(&mut self, volume: f32, tween: Tween) {
+        if tween.start_time == StartTime::Immediate && tween.duration.as_secs_f64() <= SMOOTHING_SECONDS {
+            self.set_volume(volume);
+        } else {
+            self.push(tween.start_time, What::Volume(gain(volume), tween_seconds(&tween)));
+        }
+    }
+
+    fn push(&mut self, at: StartTime, what: What) {
+        let mut changes = self
+            .shared
+            .changes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        changes.push(Change { at, what });
+    }
+
     /// Linear gain, smoothed.
-    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub fn set_volume(&mut self, volume: f32) {
         self.shared.volume.store(gain(volume).to_bits(), Relaxed);
     }
@@ -160,16 +265,10 @@ impl ChunkedHandle {
     /// -1 (left) to 1 (right), smoothed.
     #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub fn set_panning(&mut self, panning: f32) {
-        let panning = if panning.is_finite() {
-            panning.clamp(-1.0, 1.0)
-        } else {
-            0.0
-        };
-        self.shared.panning.store(panning.to_bits(), Relaxed);
+        self.shared.panning.store(pan(panning).to_bits(), Relaxed);
     }
 
     /// Playback speed (which also changes the pitch).
-    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub fn set_playback_rate(&mut self, rate: f64) {
         self.shared.rate.store(speed(rate).to_bits(), Relaxed);
     }
@@ -196,10 +295,29 @@ pub(crate) struct ChunkedSound {
     /// Frames of silence pushed into the window after the end; once the
     /// current frame is one of them (3), the sound is over.
     tail: u8,
+    /// The source frame `next_frame` gives next.
+    position: u64,
+    /// Frames still to drop after a seek landed before its target.
+    skip: u64,
+    /// Loop points in source frames.
+    loop_start: u64,
+    loop_end: Option<u64>,
+    /// Waiting for this to start; silent meanwhile.
+    waiting: Option<StartTime>,
     volume: f32,
+    /// Where the volume moves, and by how much a second.
+    target: f32,
+    volume_rate: f32,
+    /// The last volume the handle set without a tween.
+    asked: f32,
     panning: f32,
-    /// 1, falling to 0 while it stops.
+    /// 0 to 1: the fade in, then the fade out of a stop.
     fade: f64,
+    /// Change of `fade` per second: positive fading in, negative stopping.
+    fade_rate: f64,
+    stopping: bool,
+    /// Changes from the handle not yet due, oldest first.
+    pending: Vec<Change>,
     shared: Arc<Shared>,
 }
 
@@ -208,11 +326,14 @@ impl ChunkedSound {
         let (decoding, header) = open(&data.bytes)?;
         let shared = Arc::new(Shared {
             volume: AtomicU32::new(data.volume.to_bits()),
-            panning: AtomicU32::new(0f32.to_bits()),
+            panning: AtomicU32::new(data.panning.to_bits()),
             rate: AtomicU64::new(data.rate.to_bits()),
             stop: AtomicBool::new(false),
             state: AtomicU8::new(PLAYING),
+            changes: Mutex::new(Vec::with_capacity(4)),
         });
+        let rate = f64::from(header.sample_rate);
+        let frames = |seconds: f64| (seconds * rate).round() as u64;
         let mut sound = Self {
             bytes: data.bytes,
             decoding: Some(decoding),
@@ -224,11 +345,26 @@ impl ChunkedSound {
             window: [Frame::ZERO; 4],
             fraction: 0.0,
             tail: 0,
+            position: 0,
+            skip: 0,
+            loop_start: frames(data.loop_start),
+            loop_end: data.loop_end.map(frames),
+            waiting: (data.start_time != StartTime::Immediate).then_some(data.start_time),
             volume: data.volume,
-            panning: 0.0,
-            fade: 1.0,
+            target: data.volume,
+            volume_rate: 0.0,
+            asked: data.volume,
+            panning: data.panning,
+            fade: if data.fade_in.is_some() { 0.0 } else { 1.0 },
+            fade_rate: data.fade_in.map_or(0.0, |s| 1.0 / s),
+            stopping: false,
+            pending: Vec::with_capacity(4),
             shared: shared.clone(),
         };
+        let from = frames(data.from);
+        if from > 0 {
+            sound.seek(from);
+        }
         for _ in 1..4 {
             sound.advance();
         }
@@ -242,7 +378,34 @@ impl ChunkedSound {
     }
 
     fn done(&self) -> bool {
-        self.tail >= 3 || self.fade <= 0.0
+        self.tail >= 3 || (self.stopping && self.fade <= 0.0)
+    }
+
+    /// Goes to source frame `frame`: a seek in the file where it can
+    /// (decoding from the packet before it and dropping the rest), else
+    /// decoding from the start.
+    fn seek(&mut self, frame: u64) {
+        self.samples.clear();
+        self.next = 0;
+        self.position = frame;
+        self.skip = 0;
+        if frame > 0
+            && let Some(d) = self.decoding.as_mut()
+            && let Some(time) = Time::try_from_secs_f64(frame as f64 / f64::from(self.sample_rate))
+            && let Ok(to) = d.reader.seek(
+                SeekMode::Accurate,
+                SeekTo::Time {
+                    time,
+                    track_id: Some(d.track),
+                },
+            )
+        {
+            d.decoder.reset();
+            self.skip = u64::try_from(to.required_ts.get() - to.actual_ts.get()).unwrap_or(0);
+            return;
+        }
+        self.decoding = open(&self.bytes).ok().map(|(decoding, _)| decoding);
+        self.skip = frame;
     }
 
     /// Moves the window on by one source frame.
@@ -261,7 +424,17 @@ impl ChunkedSound {
     /// up; `None` at the end.
     fn next_frame(&mut self) -> Option<Frame> {
         let mut reopened = false;
-        while self.next * self.channels >= self.samples.len() {
+        if self.looping && self.loop_end.is_some_and(|end| self.position >= end) {
+            self.seek(self.loop_start);
+        }
+        while self.next * self.channels >= self.samples.len() || self.skip > 0 {
+            if self.skip > 0 && self.next * self.channels < self.samples.len() {
+                let left = self.samples.len() / self.channels - self.next;
+                let dropped = left.min(usize::try_from(self.skip).unwrap_or(usize::MAX));
+                self.next += dropped;
+                self.skip -= dropped as u64;
+                continue;
+            }
             let decoding = self.decoding.as_mut()?;
             match decoding.reader.next_packet() {
                 Ok(Some(packet)) if packet.track_id == decoding.track => match decoding.decoder.decode(&packet) {
@@ -281,6 +454,7 @@ impl ChunkedSound {
         }
         let at = self.next * self.channels;
         self.next += 1;
+        self.position += 1;
         let left = self.samples[at];
         Some(if self.channels == 1 {
             Frame::from_mono(left)
@@ -289,42 +463,132 @@ impl ChunkedSound {
         })
     }
 
-    /// The decoder reached the end: start over when looping (once per
-    /// frame asked for, so a sound without samples can't loop forever),
-    /// else stop decoding.
+    /// The decoder reached the end: back to the loop start when looping
+    /// (once per frame asked for, so a sound without samples can't loop
+    /// forever), else stop decoding.
     fn end(&mut self, reopened: &mut bool) {
-        self.decoding = if self.looping && !*reopened {
+        if self.looping && !*reopened {
             *reopened = true;
-            open(&self.bytes).ok().map(|(decoding, _)| decoding)
+            self.seek(self.loop_start);
         } else {
-            None
-        };
+            self.decoding = None;
+        }
+    }
+
+    /// Whether `at` has come, counting a block of `block` seconds: a delay
+    /// is due within the block when `within` (the start, which is cut to
+    /// the sample), else from the block after it ends (changes, as Kira
+    /// times its own). `None`: it never will.
+    fn due(at: &mut StartTime, block: f64, within: bool, info: &Info) -> Option<bool> {
+        match at {
+            StartTime::Immediate => Some(true),
+            StartTime::Delayed(left) => {
+                let due = if within {
+                    left.as_secs_f64() <= block
+                } else {
+                    left.is_zero()
+                };
+                *left = left.saturating_sub(std::time::Duration::from_secs_f64(block));
+                Some(due)
+            }
+            StartTime::ClockTime(time) => match info.when_to_start(*time) {
+                WhenToStart::Now => Some(true),
+                WhenToStart::Later => Some(false),
+                WhenToStart::Never => None,
+            },
+        }
+    }
+
+    /// Applies the handle's changes that are due this block.
+    fn take_changes(&mut self, block: f64, info: &Info) {
+        let mut i = 0;
+        while i < self.pending.len() {
+            match Self::due(&mut self.pending[i].at, block, false, info) {
+                Some(false) => i += 1,
+                // A clock that went away: the change never comes.
+                None => {
+                    self.pending.remove(i);
+                }
+                Some(true) => match self.pending.remove(i).what {
+                    What::Volume(volume, seconds) => {
+                        self.target = volume;
+                        self.volume_rate = (volume - self.volume).abs() / seconds as f32;
+                    }
+                    What::Stop(seconds) => self.begin_stop(seconds),
+                },
+            }
+        }
+    }
+
+    fn begin_stop(&mut self, seconds: f64) {
+        if !self.stopping {
+            self.stopping = true;
+            self.fade_rate = -self.fade.max(1e-3) / seconds;
+            self.shared.state.store(STOPPING, Relaxed);
+        }
     }
 }
 
 impl Sound for ChunkedSound {
     fn on_start_processing(&mut self) {
-        if self.shared.stop.load(Relaxed) && self.shared.state.load(Relaxed) == PLAYING {
-            self.shared.state.store(STOPPING, Relaxed);
+        if let Ok(mut changes) = self.shared.changes.try_lock() {
+            self.pending.append(&mut changes);
         }
     }
 
-    fn process(&mut self, out: &mut [Frame], dt: f64, _info: &Info) {
-        let volume = f32::from_bits(self.shared.volume.load(Relaxed));
+    fn process(&mut self, out: &mut [Frame], dt: f64, info: &Info) {
+        let block = dt * out.len() as f64;
+        if self.shared.stop.load(Relaxed) {
+            self.begin_stop(STOP_FADE_SECONDS);
+        }
+        let mut out = out;
+        if let Some(at) = &mut self.waiting {
+            if self.stopping {
+                // Stopped before it started.
+                self.tail = 3;
+            }
+            let wait = match at {
+                StartTime::Delayed(left) => left.as_secs_f64(),
+                _ => 0.0,
+            };
+            match Self::due(at, block, true, info) {
+                Some(true) => {
+                    // A delay ends inside the block: silence up to it.
+                    let silent = ((wait / dt) as usize).min(out.len());
+                    out[..silent].fill(Frame::ZERO);
+                    out = &mut out[silent..];
+                    self.waiting = None;
+                }
+                Some(false) if !self.done() => {
+                    out.fill(Frame::ZERO);
+                    return;
+                }
+                _ => self.tail = 3,
+            }
+        }
+        self.take_changes(block, info);
+        let asked = f32::from_bits(self.shared.volume.load(Relaxed));
+        if asked != self.asked {
+            self.asked = asked;
+            self.target = asked;
+            self.volume_rate = (asked - self.volume).abs() / SMOOTHING_SECONDS as f32;
+        }
         let panning = f32::from_bits(self.shared.panning.load(Relaxed));
         let step = f64::from_bits(self.shared.rate.load(Relaxed)) * f64::from(self.sample_rate) * dt;
         let smoothing = (dt / SMOOTHING_SECONDS).min(1.0) as f32;
-        let stopping = self.shared.stop.load(Relaxed);
+        let volume_step = self.volume_rate * dt as f32;
         for frame in out {
             if self.done() {
                 *frame = Frame::ZERO;
                 continue;
             }
-            self.volume += (volume - self.volume) * smoothing;
+            self.volume = if self.volume < self.target {
+                (self.volume + volume_step).min(self.target)
+            } else {
+                (self.volume - volume_step).max(self.target)
+            };
             self.panning += (panning - self.panning) * smoothing;
-            if stopping {
-                self.fade -= dt / STOP_FADE_SECONDS;
-            }
+            self.fade = (self.fade + self.fade_rate * dt).min(1.0);
             let [previous, current, next_1, next_2] = self.window;
             let sample = interpolate_frame(previous, current, next_1, next_2, self.fraction as f32);
             *frame = (sample * self.volume * self.fade.max(0.0) as f32).panned(Panning(self.panning));
@@ -485,6 +749,93 @@ mod tests {
         assert!(!sound.finished());
         run(&mut sound, 200, 1.0 / 8000.0);
         assert!(sound.finished());
+    }
+
+    fn value(i: usize) -> f32 {
+        ramp(i + 1)[i] as f32 / 32768.0
+    }
+
+    #[test]
+    fn chunked_stream_waits_for_its_start_time() {
+        let bytes = wav(8000, &ramp(4000));
+        let data = ChunkedData::new(bytes, 1.0, 1.0, false)
+            .start_time(StartTime::Delayed(std::time::Duration::from_millis(50)));
+        let (mut sound, _handle) = ChunkedSound::new(data).unwrap();
+        let out = run(&mut sound, 800, 1.0 / 8000.0);
+        // 50 ms at 8 kHz: 400 frames of silence, then the sound from its start.
+        assert!(out[..400].iter().all(|f| *f == Frame::ZERO));
+        assert!((out[400].left - value(0)).abs() < 1e-6, "{:?}", out[400]);
+        assert!((out[500].left - value(100)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn chunked_stream_starts_at_its_panning() {
+        let bytes = wav(8000, &[16_384; 800]);
+        let (mut sound, _handle) = ChunkedSound::new(ChunkedData::new(bytes, 1.0, 1.0, false).panning(1.0)).unwrap();
+        let out = run(&mut sound, 1, 1.0 / 8000.0);
+        assert!(out[0].left.abs() < 1e-3 && out[0].right > 0.4, "{:?}", out[0]);
+    }
+
+    #[test]
+    fn chunked_stream_starts_where_asked_and_loops_between_its_points() {
+        let bytes = wav(8000, &ramp(8000));
+        // Starts 0.1 s in; the loop turns at 0.5 s back to 0.25 s.
+        let data = ChunkedData::new(bytes, 1.0, 1.0, true)
+            .start_position(0.1)
+            .loop_points(0.25, Some(0.5));
+        let (mut sound, _handle) = ChunkedSound::new(data).unwrap();
+        let out = run(&mut sound, 6000, 1.0 / 8000.0);
+        assert!((out[0].left - value(800)).abs() < 1e-6, "{:?}", out[0]);
+        // Frame 3199 of the sound is the last before the turn at 4000...
+        assert!((out[3199].left - value(3999)).abs() < 1e-6);
+        // ...then 2000 again, and each 2000 frames after.
+        assert!((out[3200].left - value(2000)).abs() < 1e-6, "{:?}", out[3200]);
+        assert!((out[5200].left - value(2000)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn chunked_stream_fades_in_and_tweens_its_volume_from_a_start_time() {
+        let bytes = wav(8000, &[16_384; 8000]);
+        let tween = |ms| Tween {
+            duration: std::time::Duration::from_millis(ms),
+            ..Default::default()
+        };
+        let data = ChunkedData::new(bytes, 1.0, 1.0, false).fade_in(Some(tween(100)));
+        let (mut sound, mut handle) = ChunkedSound::new(data).unwrap();
+        let out = run(&mut sound, 1200, 1.0 / 8000.0);
+        // Halfway through the 100 ms fade in, then full.
+        assert!((out[400].left - 0.25).abs() < 0.01, "{:?}", out[400]);
+        assert!((out[1000].left - 0.5).abs() < 1e-3);
+        // Down to a fifth over 100 ms, 50 ms from now.
+        handle.set_volume_with(
+            0.2,
+            Tween {
+                start_time: StartTime::Delayed(std::time::Duration::from_millis(48)),
+                ..tween(100)
+            },
+        );
+        let out = run(&mut sound, 1600, 1.0 / 8000.0);
+        assert!((out[300].left - 0.5).abs() < 1e-3, "not yet: {:?}", out[300]);
+        assert!((out[800].left - 0.3).abs() < 0.02, "halfway: {:?}", out[800]);
+        assert!((out[1500].left - 0.1).abs() < 1e-3);
+    }
+
+    #[test]
+    fn chunked_stream_stops_over_a_tween_when_its_time_comes() {
+        let bytes = wav(8000, &[16_384; 8000]);
+        let (mut sound, mut handle) = play(&bytes, true);
+        handle.stop_with(Tween {
+            start_time: StartTime::Delayed(std::time::Duration::from_millis(16)),
+            duration: std::time::Duration::from_millis(100),
+            ..Default::default()
+        });
+        let out = run(&mut sound, 512, 1.0 / 8000.0);
+        assert!((out[100].left - 0.5).abs() < 1e-3, "not yet");
+        assert!((out[511].left - 0.25).abs() < 0.02, "halfway: {:?}", out[511]);
+        assert_eq!(handle.state(), PlaybackState::Stopping);
+        run(&mut sound, 512, 1.0 / 8000.0);
+        assert!(sound.finished());
+        assert_eq!(handle.state(), PlaybackState::Stopped);
     }
 
     #[test]

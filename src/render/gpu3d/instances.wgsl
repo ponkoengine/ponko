@@ -9,6 +9,9 @@
 // A job culls one batch for one view and distance level; its cells take
 // `cells` consecutive workgroups starting at `first`.
 //
+//   header (depth[0..24]): the grid's width, height, camera distance, on,
+//                          its view-projection, where the views start,
+//                          where the probes start, how many, the size cut
 //   root (indices[0..8]): jobs, table, cell workgroups, side, scan groups, 0...
 //   job (12 words): block, visibility, arguments, parts,
 //                   first, cells, view, flags, near, far (as f32 bits),
@@ -19,7 +22,8 @@
 // one past it, then N local ranks, C cell offsets, ceil(C/64) group offsets);
 // `arguments` indexes `args`.
 // Flags: 1 = one mesh with a maximum distance to the instance's sphere,
-// 2 = test against the depth grid.
+// 2 = test against the depth grid, 4 = a face view of global illumination's
+// probes: leave out instances under one of their pixels (see `probe_sized`).
 @group(0) @binding(0) var<storage,read> data:array<vec4<f32>>;
 @group(0) @binding(1) var<storage,read_write> indices:array<u32>;
 @group(0) @binding(2) var<storage,read_write> args:array<atomic<u32>>;
@@ -44,6 +48,17 @@ fn hidden(center:vec3<f32>, radius:f32) -> bool {
     return true;
 }
 fn word(i:u32) -> vec4<f32> {return vec4<f32>(depth[i],depth[i+1u],depth[i+2u],depth[i+3u]);}
+// Flag 4: whether the sphere is at least a pixel wide seen from one of
+// this frame's probes (`radius >= cut * distance`), as the CPU path keeps
+// an instance in one probe's own view. A face view sees for all of them.
+fn probe_sized(center:vec3<f32>, radius:f32) -> bool {
+    let first=bitcast<u32>(depth[21]); let count=bitcast<u32>(depth[22]);
+    if count==0u {return true;}
+    for(var k=0u;k<count;k++) {
+        if radius >= depth[23]*distance(center,word(first+k*4u).xyz) {return true;}
+    }
+    return false;
+}
 // `view`: the index in `depth` of the view's first plane; `far`: the
 // maximum distance to the sphere (flag 1 only).
 fn visible(center:vec3<f32>, radius:f32, view:u32, flags:u32, far:f32) -> bool {
@@ -100,6 +115,7 @@ fn main(@builtin(workgroup_id) group:vec3<u32>, @builtin(local_invocation_index)
             let i=start+local;
             let sphere=data[block+1u+i*6u+5u];
             yes=visible(sphere.xyz,sphere.w,view,flags,band.y);
+            yes=yes && ((flags & 4u) == 0u || probe_sized(sphere.xyz,sphere.w));
             if (flags & 1u) == 0u {
                 let d=distance(data[block+1u+i*6u+3u].xyz,eye);
                 yes=yes && d>=band.x && d<band.y;

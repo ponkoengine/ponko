@@ -228,7 +228,7 @@ pub unsafe extern "C" fn ponko_input_scenario_to_json(
 /// Adds an input step at simulation tick `tick`, fed before that tick's
 /// simulation systems run. The event is described as for
 /// `ponko_ctx_feed_input`: `kind` 0 key, 1 mouse, 2 gamepad button, 3
-/// gamepad axis, 4 focus lost, 5 gamepad disconnected.
+/// gamepad axis, 4 focus lost, 5 gamepad disconnected, 8 gamepad connected.
 /// ```
 /// let s = ponko_ffi::ponko_input_scenario_new();
 /// let space = ponko_ffi::PonkoKey::PONKO_KEY_SPACE as u32;
@@ -562,6 +562,57 @@ pub unsafe extern "C" fn ponko_ctx_cancel_scenario(ctx: *mut PonkoCtx, out_was_r
             } else {
                 out(out_was_running, was)
             }
+        })
+    })
+}
+
+/// Starts recording the input (Rust `Input::start_recording`): every
+/// key, mouse, gamepad, focus and IME event from now on, from the window or
+/// fed, at the simulation tick that first sees it. Its tick 0 is the next
+/// simulation tick; what is held now is recorded there. Starting again
+/// restarts it.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_start_input_recording(std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_start_input_recording(ctx: *mut PonkoCtx) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            c.input.start_recording();
+            Ok(())
+        })
+    })
+}
+
+/// Stops the recording `ponko_ctx_start_input_recording` began (Rust
+/// `Input::stop_recording`): `*out_scenario` is a new scenario lasting
+/// the ticks recorded, which replays the input on the same ticks (free it
+/// with `ponko_input_scenario_free`), or null when none was running.
+/// ```
+/// let mut s = std::ptr::null_mut();
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_stop_input_recording(std::ptr::null_mut(), &mut s) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_scenario` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_stop_input_recording(
+    ctx: *mut PonkoCtx,
+    out_scenario: *mut *mut PonkoInputScenario,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        if out_scenario.is_null() {
+            return Err(invalid("output is null"));
+        }
+        ctx_access(ctx, |c| {
+            let raw = c
+                .input
+                .stop_recording()
+                .map_or(std::ptr::null_mut(), |s| Box::into_raw(Box::new(PonkoInputScenario(s))));
+            out(out_scenario, raw)
         })
     })
 }

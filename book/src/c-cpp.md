@@ -426,6 +426,7 @@ where C++ does the same thing another way:
 | `ponko_ctx_cast_ray_filtered`, `ponko_ctx_overlap_ball` (2D) | `ctx::cast_ray_filtered` and `ctx::overlap_ball` call `ponko_ctx_cast_ray2d` and `ponko_ctx_overlap_circle2d`, which also take the `filter2d`'s collision groups |
 | `ponko_ctx_cast_ray2d_ex`, `ponko_ctx_cast_ray2d_all_ex`, `ponko_ctx_cast_circle2d_ex`, `ponko_ctx_cast_box2d_ex`, `ponko_ctx_cast_capsule2d_ex`, `ponko_ctx_overlap_point2d_ex`, `ponko_ctx_overlap_circle2d_ex`, `ponko_ctx_overlap_box2d_ex`, `ponko_ctx_overlap_capsule2d_ex`, `ponko_ctx_closest_point2d_ex`, `ponko_ctx_penetrations2d_ex`, `ponko_ctx_cast_ray3d_ex`, `ponko_ctx_cast_ray3d_all_ex`, `ponko_ctx_cast_sphere3d_ex`, `ponko_ctx_cast_capsule3d_ex`, `ponko_ctx_cast_box3d_ex`, `ponko_ctx_overlap_point3d_ex`, `ponko_ctx_overlap_sphere3d_ex`, `ponko_ctx_overlap_box3d_ex`, `ponko_ctx_overlap_capsule3d_ex`, `ponko_ctx_closest_point3d_ex`, `ponko_ctx_penetrations3d_ex` | The `ctx` queries of the same names take a `filter2d` or `filter3d`, which carries the collision groups already; `query_filter_ex_of` turns one into a `PonkoQueryFilterEx` for the C calls |
 | `ponko_ctx_set_particle_emitter3d` | `ctx::set_particle_emitter3d` calls `ponko_ctx_set_particle_emitter3d_ex`, which also takes the settings' `softness` |
+| `ponko_ctx_ui_next_event` | `ui::tree::next_event` calls `ponko_ctx_ui_next_event_ex`, which also gives the widget set's events (`chosen`, `dropped`, `rows_shown`) |
 
 `scripts/check-cpp-api.py` keeps this true: CI fails when a C function has no
 C++ wrapper and isn't on this list (`scripts/cpp-c-only.txt`, with the reasons).
@@ -452,24 +453,38 @@ binding arrives:
 | `Assets::scene_asset_field` | [Asset sources](asset-sources.md) | C components have no text fields to name an asset in; load what a scene needs before `load_scene` |
 | `PackSource` | [Asset sources](asset-sources.md#packs) | C and C++ games read the default `assets.pack` like Rust games; a pack of their own can be read through `ponko_ctx_add_asset_source` |
 | `Query::with_lookup`, `World::get_many_mut` | [Entities, components, queries](ecs.md#borrowing-several-things-at-once) | Generic borrows; component pointers from `get` don't borrow |
+| `World::query_ref` | [Entities, components, queries](ecs.md#read-only-queries-on-a-shared-world) | C and C++ queries read through component pointers and need no exclusive borrow of the world |
 | `SystemView` | [Declared system access](system-access.md) | C and C++ systems take the whole `ctx`, so they run alone; declare their access by name |
 | `Storage::write_json`, `Storage::read_json` | [Saves and settings](storage.md#save-slots) | Generic over Rust types; serialize yourself and pass the bytes to `storage_write` and `storage_read` |
 | `SaveFormat`, `Storage::save_world_in_background` | [Saves and settings](storage.md#large-worlds) | Not bound yet: save slots are JSON, written on the game's thread by `ponko_ctx_save_world`; `ponko_ctx_load_world` reads binary slots too |
 | `UiAccessAdapter::for_ns_view` | [Retained game UI](ui.md#the-screen-reader-adapter) | It needs a Rust `Ui`; the engine's own window gets the adapter, and `ponko_ui_access_*` give a snapshot for one of your own |
+| `Buoyancy::points` | [Water](water.md#floating-bodies) | Custom sample points, water density and the ripple switch aren't bound: C floats boxes and spheres (`ponko_ctx_set_buoyancy_box`, `_sphere`) in fresh water |
 | `NavObstacleShape` | [3D navigation meshes](navigation3d.md#obstacle-shapes) | Obstacles are unturned boxes: `ponko_ctx_set_nav_obstacle` and `ponko_ctx_set_nav_carve_obstacle` |
 | `SkyShader` | [A sky of your own](3d.md#a-sky-of-your-own) | The built-in atmosphere or the flat sky (`PonkoSky`); sky shaders have no C binding yet |
+| `SkyKit` | [The sky kit](3d.md#the-sky-kit) | The built-in atmosphere (`PonkoSky`), without clouds or a moon; the kit has no C binding yet |
+| `DayNight` | [The sky kit](3d.md#the-sky-kit) | Move the sun each frame with `ponko_sun_direction_at` |
 | `Graphics::stream_instance_cell` | [Streaming instance cells](3d.md#streaming-instance-cells) | Build a cell's matrices on your own threads, then `ponko_ctx_add_instance_cell` (`ctx::add_instance_cell`) on the game's |
 | `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |
+| `GamepadBackend` | [Backends and tests](controllers.md#backends-and-tests) | Native games use the built-in gamepad backend |
+| `FakeGamepads` | [Backends and tests](controllers.md#backends-and-tests) | Native tests feed `ponko_ctx_feed_input` (kind 8 connects a pad) and `ponko_ctx_feed_gamepad_motion` |
 | `Graphics::instance_cell_state` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: a cell added from C is on the GPU at once |
 | `Ui::set_rich`, `Ui::set_inline_image`, `Ui::set_inline_font`, `Ui::link`, `UiEvent::LinkClicked` | [Retained game UI](ui.md#rich-text) | Not bound yet: several labels side by side, each with its own paint; a button for each link |
+| `GltfScene::nav_source` | [From Blender to the game](blender.md#navigation-meshes) | Read the nodes and their places with `ponko_gltf_scene_load`, and bake from mesh data of your own (`ponko_nav_sources_add_mesh`, `ponko_ctx_bake_navmesh`) |
 | `Graphics::load_lights`, `Graphics::load_cameras` | [3D](3d.md#gltf-extensions-lights-and-cameras) | Models load with the same glTF extensions; a file's lights and cameras aren't returned yet, so place them yourself |
 | `Smoothing` | [Client prediction](networking.md#your-own-player-at-once-client-prediction) | Generic over what is drawn; prediction and the input queue are bound (`ponko::prediction`), so fade the correction offset (`reconciled::before`) yourself |
-| `GltfScene::load`, `gltf_properties_schema` | [From Blender to the game](blender.md#c-and-c) | Spawn the file with `ponko_ctx_spawn_gltf` and read its nodes from the entities; `PONKO_SCHEMA=<file>` (`ponko schema`) writes the schema for any game |
 | `Physics3D::move_character` | [3D physics](physics3d.md#a-walking-character) | Characters walk with the physics step only; one tick can't be replayed on its own |
 | `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ games don't build for the web yet |
+| `LobbyClient::join_web` | [Lobbies, matchmaking and relays](lobby.md#the-client) | C and C++ games don't build for the web yet; their lobby clients join over UDP |
+| `Replication::input`, `Replication::predicted`, `Replication::event` | [From C and C++](replication.md#from-c-and-c) | Not bound yet: C and C++ games declare components, mark entities and read replicas; they send controls and events as application messages, and the server moves their entities |
+| `Replication::interpolated`, `Replication::position` | [From C and C++](replication.md#from-c-and-c) | Generic over `Interpolate` and a Rust closure: C components are set when their update arrives, and interest uses the entities' transforms |
+| `Signaling` | [Peer to peer over WebRTC](webrtc.md#with-any-signaling-channel) | C and C++ WebRTC endpoints are signaled through a lobby client (`ponko_net_messages_rtc_host`, `_rtc_join`) |
+| `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ games don't build for the web yet |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |
 | `perf::net_alloc_bytes` | [Profiling](profiling.md) | C and C++ count the frees of their own memory nowhere; `ponko_ctx_live_counts` and the asset inventory are the leak checks |
-| `Animator::normalized_time_f64`, `Skeleton::normalized_time_f64` | [The simulation clock](sim-clock.md#very-long-sessions) | The C API reads the `f32` normalized time; its steps get coarse after hours of one looping state |
+| `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
+| `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
+| `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
+| `Video` | [Video](video.md#c-and-c) | Not bound yet: decode with a library of the game's own and show the frames with `ponko_ctx_update_texture` |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in

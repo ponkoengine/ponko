@@ -69,9 +69,7 @@ impl Renderer {
         match *self {}
     }
     #[cfg(all(feature = "3d", feature = "compressed-textures"))]
-    pub fn create_compressed_texture_array(&mut self, _layers: &[&crate::compressed::CompressedImage]) -> u32 {
-        match *self {}
-    }
+    pub fn create_compressed_texture_array(&mut self, _id: u32, _layers: &[&crate::compressed::CompressedImage]) {}
     #[cfg(feature = "3d")]
     pub fn create_render_target(&mut self, _width: u32, _height: u32) -> u32 {
         match *self {}
@@ -123,6 +121,15 @@ impl Renderer {
         match *self {}
     }
     #[cfg(feature = "3d")]
+    pub fn free_effect(&mut self, _id: u32) {
+        match *self {}
+    }
+
+    #[cfg(feature = "3d")]
+    pub fn free_sky_shader(&mut self, _id: u32) {
+        match *self {}
+    }
+    #[cfg(feature = "3d")]
     pub fn free_compute(&mut self, _id: u32) {
         match *self {}
     }
@@ -131,7 +138,11 @@ impl Renderer {
         match *self {}
     }
     #[cfg(feature = "3d")]
-    pub fn create_material(&mut self, _desc: &crate::three::GpuMaterialDesc) -> u32 {
+    pub fn set_baked_lighting(&mut self, _layers: Option<(u32, &[Vec<u16>])>) {
+        match *self {}
+    }
+    #[cfg(feature = "3d")]
+    pub fn create_material(&mut self, _id: u32, _desc: &crate::three::GpuMaterialDesc) {
         match *self {}
     }
     #[cfg(feature = "3d")]
@@ -160,7 +171,7 @@ impl Renderer {
         match *self {}
     }
     #[cfg(feature = "3d")]
-    pub fn create_texture_array(&mut self, _width: u32, _height: u32, _layers: &[&[u8]], _linear: bool) -> u32 {
+    pub fn create_texture_array(&mut self, _id: u32, _width: u32, _height: u32, _layers: &[&[u8]], _linear: bool) {
         match *self {}
     }
 
@@ -174,9 +185,16 @@ impl Renderer {
     pub fn set_gpu_buffer_motion(&mut self, _: u32, _: bool) {}
     #[cfg(feature = "3d")]
     pub fn set_instance_batch(&mut self, _: u32, _: Option<&crate::three::instances::Batch>) {}
+    #[cfg(feature = "3d")]
+    pub fn set_crowd(&mut self, _: u32, _: Option<&crate::three::crowd::CrowdData>) {}
     pub fn set_mesh_gpu_buffer(&mut self, _: u32, _: u32, _: u32) {}
     #[cfg(feature = "3d")]
-    pub fn create_compute(&mut self, _name: &str, _source: &str) -> Result<u32, Box<crate::render::ShaderDiagnostic>> {
+    pub fn create_compute(
+        &mut self,
+        _id: u32,
+        _name: &str,
+        _source: &str,
+    ) -> Result<(), Box<crate::render::ShaderDiagnostic>> {
         match *self {}
     }
     #[cfg(feature = "3d")]
@@ -206,7 +224,12 @@ impl Renderer {
         match *self {}
     }
     #[cfg(feature = "3d")]
-    pub fn create_effect(&mut self, _name: &str, _source: &str) -> Result<u32, Box<crate::render::ShaderDiagnostic>> {
+    pub fn create_effect(
+        &mut self,
+        _id: u32,
+        _name: &str,
+        _source: &str,
+    ) -> Result<(), Box<crate::render::ShaderDiagnostic>> {
         match *self {}
     }
     #[cfg(feature = "3d")]
@@ -219,7 +242,12 @@ impl Renderer {
         match *self {}
     }
     #[cfg(feature = "3d")]
-    pub fn create_shader(&mut self, _name: &str, _source: &str) -> Result<u32, Box<crate::render::ShaderDiagnostic>> {
+    pub fn create_shader(
+        &mut self,
+        _id: u32,
+        _name: &str,
+        _source: &str,
+    ) -> Result<(), Box<crate::render::ShaderDiagnostic>> {
         match *self {}
     }
     #[cfg(feature = "3d")]
@@ -246,7 +274,7 @@ impl Renderer {
         match *self {}
     }
     #[cfg(feature = "3d")]
-    pub fn take_occlusion(&mut self) -> Option<crate::three::occlusion::OcclusionGrid> {
+    pub fn replace_occlusion(&mut self, _slot: &mut Option<crate::three::occlusion::OcclusionGrid>) {
         match *self {}
     }
     #[cfg(feature = "3d")]

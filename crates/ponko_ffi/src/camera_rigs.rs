@@ -766,8 +766,9 @@ pub const PONKO_FIRST_PERSON_CAMERA_VERSION: u32 = 1;
 
 /// A first-person camera (Rust `d3::FirstPersonCamera`): turn it with
 /// `ponko_first_person_camera_look`, place it at the eye with
-/// `ponko_first_person_camera_update`. Walk along `(-sin yaw, 0, -cos yaw)`
-/// and strafe along `(cos yaw, 0, -sin yaw)`. The fields after `smoothing`
+/// `ponko_first_person_camera_update`. Walk along
+/// `ponko_first_person_camera_flat_forward` and strafe along
+/// `ponko_first_person_camera_flat_right`. The fields after `smoothing`
 /// are its state.
 ///
 /// Version 1: every field below.
@@ -878,6 +879,56 @@ pub unsafe extern "C" fn ponko_first_person_camera_look(
     })
 }
 
+/// Level forward (the way the view faces, along the ground) for `rig`'s
+/// yaw, into `out_forward`: move the character this way for "forward".
+/// The same as `(-sin yaw, 0, -cos yaw)`.
+/// # Safety
+/// `rig` null or a readable descriptor; `out_forward` null or writable.
+/// ```
+/// use ponko_ffi::*;
+/// let mut r: PonkoFirstPersonCamera = unsafe { std::mem::zeroed() };
+/// (r.struct_size, r.version) = (size_of::<PonkoFirstPersonCamera>() as u32, PONKO_FIRST_PERSON_CAMERA_VERSION);
+/// let mut forward = PonkoVec3::default();
+/// unsafe {
+///     ponko_first_person_camera_defaults(&mut r);
+///     assert_eq!(ponko_first_person_camera_flat_forward(&r, &mut forward), PonkoStatus::PONKO_OK);
+/// }
+/// assert_eq!((forward.x, forward.y, forward.z), (0.0, 0.0, -1.0));
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_first_person_camera_flat_forward(
+    rig: *const PonkoFirstPersonCamera,
+    out_forward: *mut PonkoVec3,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { out(out_forward, to_c(read_first(rig)?.flat_forward())) })
+}
+
+/// Level right for `rig`'s yaw, into `out_right`: for strafing. The same
+/// as `(cos yaw, 0, -sin yaw)`.
+/// # Safety
+/// `rig` null or a readable descriptor; `out_right` null or writable.
+/// ```
+/// use ponko_ffi::*;
+/// let mut r: PonkoFirstPersonCamera = unsafe { std::mem::zeroed() };
+/// (r.struct_size, r.version) = (size_of::<PonkoFirstPersonCamera>() as u32, PONKO_FIRST_PERSON_CAMERA_VERSION);
+/// let mut right = PonkoVec3::default();
+/// unsafe {
+///     ponko_first_person_camera_defaults(&mut r);
+///     assert_eq!(ponko_first_person_camera_flat_right(&r, &mut right), PonkoStatus::PONKO_OK);
+///     assert_eq!(ponko_first_person_camera_flat_right(&r, std::ptr::null_mut()), PonkoStatus::PONKO_INVALID_ARGUMENT);
+/// }
+/// assert_eq!((right.x, right.y, right.z), (1.0, 0.0, 0.0));
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_first_person_camera_flat_right(
+    rig: *const PonkoFirstPersonCamera,
+    out_right: *mut PonkoVec3,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { out(out_right, to_c(read_first(rig)?.flat_right())) })
+}
+
 /// Places the 3D camera at `eye`, turned to the view (eased by `smoothing`).
 /// # Safety
 /// `rig` null or a readable, writable descriptor; `ctx` null or live.
@@ -907,7 +958,8 @@ pub const PONKO_THIRD_PERSON_CAMERA_VERSION: u32 = 1;
 /// A third-person camera behind a character (Rust `d3::ThirdPersonCamera`):
 /// orbits a pivot above it, follows it smoothly, and comes in front of
 /// walls with `ponko_third_person_camera_update_physics`. Move the
-/// character along `(-sin yaw, 0, -cos yaw)` for "forward". The fields
+/// character along `ponko_third_person_camera_flat_forward` for "forward"
+/// (and `_flat_right` for right). The fields
 /// after `recover_smoothing` are its state.
 ///
 /// Version 1: every field below.
@@ -1037,6 +1089,56 @@ pub unsafe extern "C" fn ponko_third_person_camera_look(
         r.look(v2(delta));
         write_desc(rig, &third_to_c(&r))
     })
+}
+
+/// Level forward (the way the view faces, along the ground) for `rig`'s
+/// yaw, into `out_forward`: move the character this way for "forward".
+/// The same as `(-sin yaw, 0, -cos yaw)`.
+/// # Safety
+/// `rig` null or a readable descriptor; `out_forward` null or writable.
+/// ```
+/// use ponko_ffi::*;
+/// let mut r: PonkoThirdPersonCamera = unsafe { std::mem::zeroed() };
+/// (r.struct_size, r.version) = (size_of::<PonkoThirdPersonCamera>() as u32, PONKO_THIRD_PERSON_CAMERA_VERSION);
+/// let mut forward = PonkoVec3::default();
+/// unsafe {
+///     ponko_third_person_camera_defaults(&mut r);
+///     assert_eq!(ponko_third_person_camera_flat_forward(&r, &mut forward), PonkoStatus::PONKO_OK);
+/// }
+/// assert_eq!((forward.x, forward.y, forward.z), (0.0, 0.0, -1.0));
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_third_person_camera_flat_forward(
+    rig: *const PonkoThirdPersonCamera,
+    out_forward: *mut PonkoVec3,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { out(out_forward, to_c(read_third(rig)?.flat_forward())) })
+}
+
+/// Level right for `rig`'s yaw, into `out_right`: for strafing. The same
+/// as `(cos yaw, 0, -sin yaw)`.
+/// # Safety
+/// `rig` null or a readable descriptor; `out_right` null or writable.
+/// ```
+/// use ponko_ffi::*;
+/// let mut r: PonkoThirdPersonCamera = unsafe { std::mem::zeroed() };
+/// (r.struct_size, r.version) = (size_of::<PonkoThirdPersonCamera>() as u32, PONKO_THIRD_PERSON_CAMERA_VERSION);
+/// let mut right = PonkoVec3::default();
+/// unsafe {
+///     ponko_third_person_camera_defaults(&mut r);
+///     assert_eq!(ponko_third_person_camera_flat_right(&r, &mut right), PonkoStatus::PONKO_OK);
+///     assert_eq!(ponko_third_person_camera_flat_right(&r, std::ptr::null_mut()), PonkoStatus::PONKO_INVALID_ARGUMENT);
+/// }
+/// assert_eq!((right.x, right.y, right.z), (1.0, 0.0, 0.0));
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_third_person_camera_flat_right(
+    rig: *const PonkoThirdPersonCamera,
+    out_right: *mut PonkoVec3,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { out(out_right, to_c(read_third(rig)?.flat_right())) })
 }
 
 /// Follows `target` (the character's position) by `dt` seconds and places

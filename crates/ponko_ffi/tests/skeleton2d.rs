@@ -39,8 +39,8 @@ const RIG: &str = r#"{ "format": "ponko-skeleton2d", "version": 1,
   }
 }"#;
 
-const SHEARED: &str = r#"{ "skeleton": { "spine": "4.2.11" },
-  "bones": [{ "name": "root" }, { "name": "arm", "parent": "root", "shearX": 4 }] }"#;
+const NO_SCALE: &str = r#"{ "skeleton": { "spine": "4.2.11" },
+  "bones": [{ "name": "root" }, { "name": "arm", "parent": "root", "inherit": "noScale" }] }"#;
 
 const CRAB: &[u8] = include_bytes!("../../../assets/crab.png");
 
@@ -50,7 +50,7 @@ unsafe fn files(ctx: *mut PonkoCtx) {
         for (name, bytes) in [
             (c"rig/rig.json", RIG.as_bytes()),
             (c"rig/crab.png", CRAB),
-            (c"spine/sheared.json", SHEARED.as_bytes()),
+            (c"spine/no-scale.json", NO_SCALE.as_bytes()),
         ] {
             assert_eq!(
                 ponko_memory_source_insert(source, name.as_ptr(), bytes.as_ptr(), bytes.len()),
@@ -141,20 +141,20 @@ fn files_load_once_with_their_warnings() {
         );
         assert_eq!(warnings, 0);
         assert_eq!(
-            ponko_ctx_load_skeleton2d(ctx, c"spine/sheared.json".as_ptr(), &mut warnings),
+            ponko_ctx_load_skeleton2d(ctx, c"spine/no-scale.json".as_ptr(), &mut warnings),
             PONKO_OK
         );
         assert_eq!(warnings, 1);
         let mut len = 0;
         assert_eq!(
-            ponko_ctx_skeleton2d_warning(ctx, c"spine/sheared.json".as_ptr(), 0, null_mut(), 0, &mut len),
+            ponko_ctx_skeleton2d_warning(ctx, c"spine/no-scale.json".as_ptr(), 0, null_mut(), 0, &mut len),
             PONKO_OK
         );
         let mut buffer = vec![0 as c_char; len + 1];
         assert_eq!(
             ponko_ctx_skeleton2d_warning(
                 ctx,
-                c"spine/sheared.json".as_ptr(),
+                c"spine/no-scale.json".as_ptr(),
                 0,
                 buffer.as_mut_ptr(),
                 buffer.len(),
@@ -164,11 +164,11 @@ fn files_load_once_with_their_warnings() {
         );
         let warning = CStr::from_ptr(buffer.as_ptr()).to_str().unwrap();
         assert!(
-            warning.starts_with("spine/sheared.json: Spine shear (bone \"arm\")"),
+            warning.starts_with("spine/no-scale.json: Spine inherit mode \"noScale\" (bone \"arm\")"),
             "{warning}"
         );
         assert_eq!(
-            ponko_ctx_skeleton2d_warning(ctx, c"spine/sheared.json".as_ptr(), 1, null_mut(), 0, &mut len),
+            ponko_ctx_skeleton2d_warning(ctx, c"spine/no-scale.json".as_ptr(), 1, null_mut(), 0, &mut len),
             PONKO_NOT_FOUND
         );
         assert_eq!(
@@ -346,6 +346,72 @@ fn ik_targets_bend_the_chain_by_their_mix() {
         assert_eq!(ponko_ctx_skeleton2d_clear_ik_target(ctx, e, 3), PONKO_INVALID_ARGUMENT);
         assert_eq!(
             ponko_ctx_skeleton2d_bone(ctx, e, 9, null_mut(), null_mut()),
+            PONKO_INVALID_ARGUMENT
+        );
+    });
+}
+
+#[test]
+fn look_at_and_two_bone_ik_pose_the_bones_once() {
+    run_ctx(|ctx| unsafe {
+        files(ctx);
+        let e = rigged(ctx);
+        let upper = index(ponko_ctx_skeleton2d_bone_index, ctx, e, c"upper");
+        let lower = index(ponko_ctx_skeleton2d_bone_index, ctx, e, c"lower");
+        // Look straight down from the root: a quarter turn clockwise.
+        let below = PonkoVec2 { x: 0.0, y: 10.0 };
+        assert_eq!(ponko_ctx_skeleton2d_look_at(ctx, e, upper, below, 1.0), PONKO_OK);
+        near(bone(ctx, e, upper).1, std::f32::consts::FRAC_PI_2);
+        // Half way: an eighth turn.
+        assert_eq!(ponko_ctx_skeleton2d_update(ctx, e, 0.0), PONKO_OK);
+        assert_eq!(ponko_ctx_skeleton2d_look_at(ctx, e, upper, below, 0.5), PONKO_OK);
+        near(bone(ctx, e, upper).1, std::f32::consts::FRAC_PI_4);
+        // Two bones of 10 reaching (10, 10): the elbow at (10, 0) bending
+        // clockwise, at (0, 10) the other way.
+        let corner = PonkoVec2 { x: 10.0, y: 10.0 };
+        assert_eq!(
+            ponko_ctx_skeleton2d_two_bone_ik(ctx, e, upper, lower, corner, true, 1.0),
+            PONKO_OK
+        );
+        near(bone(ctx, e, upper).1, 0.0);
+        let (elbow, turn) = bone(ctx, e, lower);
+        near(elbow.x, 10.0);
+        near(elbow.y, 0.0);
+        near(turn, std::f32::consts::FRAC_PI_2);
+        assert_eq!(
+            ponko_ctx_skeleton2d_two_bone_ik(ctx, e, upper, lower, corner, false, 1.0),
+            PONKO_OK
+        );
+        let (elbow, turn) = bone(ctx, e, lower);
+        near(elbow.x, 0.0);
+        near(elbow.y, 10.0);
+        near(turn, 0.0);
+        // The next update poses the bones from their clips again.
+        assert_eq!(ponko_ctx_skeleton2d_update(ctx, e, 0.0), PONKO_OK);
+        near(bone(ctx, e, upper).1, 0.0);
+        near(bone(ctx, e, lower).0.y, 0.0);
+        // Checked: a chain whose second bone isn't the first's child, a bone
+        // that isn't there, a target or mix that isn't a number.
+        assert_eq!(
+            ponko_ctx_skeleton2d_two_bone_ik(ctx, e, lower, upper, corner, true, 1.0),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert!(last_error().contains("child"));
+        assert_eq!(
+            ponko_ctx_skeleton2d_two_bone_ik(ctx, e, upper, 9, corner, true, 1.0),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            ponko_ctx_skeleton2d_look_at(ctx, e, 9, below, 1.0),
+            PONKO_INVALID_ARGUMENT
+        );
+        let nan = PonkoVec2 { x: f32::NAN, y: 0.0 };
+        assert_eq!(
+            ponko_ctx_skeleton2d_look_at(ctx, e, upper, nan, 1.0),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            ponko_ctx_skeleton2d_two_bone_ik(ctx, e, upper, lower, corner, true, f32::NAN),
             PONKO_INVALID_ARGUMENT
         );
     });

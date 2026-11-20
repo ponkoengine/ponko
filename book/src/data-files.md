@@ -122,15 +122,18 @@ breaks the rules or is missing from this table.
 | `Graphics::load_effect` | `Effect` | Panics; `try_load_effect` returns `Result<Effect, Error>` |
 | `Graphics::load_compute` | `Compute` | Panics; `try_load_compute` returns `Result<Compute, Error>` |
 | `Graphics::load_texture_array` | `TextureArray` | Panics; `try_load_texture_array` returns `Result<TextureArray, Error>` |
+| `Graphics::load_baked_lighting` | `BakedLighting` | Panics; `try_load_baked_lighting` returns `Result<BakedLighting, Error>` |
 | `Graphics::load_reflection_probe` | `()` | Panics; `try_load_reflection_probe` returns `Result<(), Error>` |
 | `Ctx::load_skeleton2d` | `Arc<SkeletonData>` | Panics; `try_load_skeleton2d` returns `Result<Arc<SkeletonData>, Error>` |
 | `Audio::load_mixer` | `()` | Panics; `try_load_mixer` returns `Result<(), Error>` |
 | `Audio::load_stream` | `Sound` | Panics; `try_load_stream` returns `Result<Sound, Error>` |
 | `Assets::load_resource` | `()` | Panics; `try_load_resource` returns `Result<(), Error>`; replaces the whole resource |
 | `Assets::load_strings` | `()` | Panics; `try_load_strings` returns `Result<(), Error>` |
+| `Assets::load_behavior_tree` | `()` | Panics; `try_load_behavior_tree` returns `Result<(), Error>` |
 | `Assets::load_reflected_resource_json`, `load_reflected_component_json` | `Result<(), Error>` | Reflection edits; no panic on load failure; object fields merge |
 | `Assets::load_with` | `Result<T, Error>` | Custom decoder operation; propagates source/decoder errors (a user decoder can panic) |
-| `Assets::load_level` | `Result<Level, Error>` | Runtime level operation; no panic on load failure |
+| `Graphics::load_aseprite` / `try_load_aseprite` | `Aseprite` / `Result<Aseprite, Error>` | Named sprite atlas and timeline, cached and hot reloaded |
+| `Assets::load_level`, `Assets::load_ldtk_worlds` | `Result<Level, Error>`, `Result<Vec<LdtkWorld>, Error>` | Runtime level operations; no panic on load failure |
 | `Ctx::load_scene`, `load_scene_lockstep`, `load_world` | `Result<(), Error>` | Runtime world operations; no panic on load failure |
 | `Ctx::load_collision_mesh`, `load_collision_mesh_with` | `CollisionMesh` | Panics; matching `try_load_*` returns `Result<CollisionMesh, Error>` |
 | `Ctx::load_texture`, `load_sound` | `Texture`, `Sound` | Deprecated forwarding shortcuts, removed in the next minor; panic; use `gfx.load_texture` / `audio.load` (fallible: `gfx.try_load_texture` / `audio.try_load`) |

@@ -117,3 +117,57 @@ fn coin_dash_menus_lead_into_play_and_back_with_the_ui_checked_at_each_step() {
     assert_eq!(world.resource::<settings::Settings>().ui_scale, 1.25);
     assert_eq!(world.resource::<Round>().number, 1);
 }
+
+#[test]
+fn coin_dash_menus_fade_in_on_the_ui_clock() {
+    // O opens the settings in frame 26, Escape closes them in frame 40.
+    let scenario = tap(tap(InputScenario::new(), 25, Key::O), 40, Key::Escape)
+        .duration(70)
+        .named("coin dash menu motion");
+    // Every frame: the screen, how far its text has come in, and the
+    // settings screen's opacity and whether it takes input.
+    let seen = Rc::new(RefCell::new(Vec::<(Screen, f32, f32, bool)>::new()));
+    let log = seen.clone();
+    let game = Game::new("coin dash menu motion", ARENA.x as u32, ARENA.y as u32)
+        .seed(SEED)
+        .headless_frames(true)
+        .plugin(CoinDash)
+        .system(move |ctx: &mut Ctx| {
+            let text = ctx.world.resource::<MenuFade>().shown;
+            // Laid out as the frame's drawing lays it out, after the
+            // systems that pushed or popped a screen.
+            ctx.ui.layout(ARENA);
+            let settings = ctx.ui.find("settings");
+            let opacity = settings.and_then(|id| ctx.ui.drawn(id)).map_or(0.0, |d| d.opacity);
+            let up = settings.is_some_and(|id| ctx.ui.is_shown(id));
+            log.borrow_mut().push((screen(&ctx.world), text, opacity, up));
+        });
+    let (_, report) = game.run_headless_scenario(scenario, |_| {});
+    report.assert_passed();
+    let seen = seen.borrow();
+    let fades_in = |values: &[f32]| {
+        values.iter().any(|&v| v > 0.0 && v < 1.0)
+            && values.windows(2).all(|w| w[1] >= w[0])
+            && values.last() == Some(&1.0)
+    };
+    // The title's text fades and rises in.
+    let title: Vec<f32> = seen.iter().take_while(|s| s.0 == Screen::Title).map(|s| s.1).collect();
+    assert!(fades_in(&title), "the title text fades in: {title:?}");
+    // The settings screen fades in while it already takes input...
+    let open: Vec<f32> = (seen.iter())
+        .skip_while(|s| s.0 != Screen::Settings)
+        .take_while(|s| s.0 == Screen::Settings)
+        .map(|s| s.2)
+        .collect();
+    assert!(fades_in(&open), "the settings screen fades in: {open:?}");
+    // ...and fades out without input under the title's text coming back.
+    let back = seen.iter().rposition(|s| s.0 == Screen::Settings).unwrap() + 1;
+    let after = &seen[back..];
+    assert!(after.iter().all(|s| s.0 == Screen::Title && !s.3));
+    assert!(
+        after.iter().any(|s| s.2 > 0.0 && s.2 < 1.0),
+        "the settings fade out: {after:?}"
+    );
+    let title_again: Vec<f32> = after.iter().map(|s| s.1).collect();
+    assert!(fades_in(&title_again), "the title text fades in again: {title_again:?}");
+}

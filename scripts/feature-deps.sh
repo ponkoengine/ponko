@@ -28,6 +28,9 @@ PHYSICS="rapier2d rapier3d"
 NAVMESH="navmesh-rs"
 TOOLS="puffin puffin_http subsecond dioxus-devtools"
 STEAM="steamworks"
+# Peer-to-peer WebRTC endpoints are opt-in (`webrtc`): str0m and its DTLS
+# stack on the desktop.
+WEBRTC="str0m"
 # Image decoders beyond PNG. Each is an opt-in `image-*` feature; JPEG is a
 # default one (`image-jpeg`), so builds without defaults must not carry it.
 JPEG="zune-jpeg"
@@ -70,17 +73,17 @@ SERVER_TEMPLATE=$(template_features server)
 
 # name | cargo package and feature arguments | forbidden crates
 CONTRACTS=(
-  "headless|-p ponko --no-default-features|$RENDER $AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS_ALL $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES"
-  "headless with audio|-p ponko --no-default-features --features audio|$RENDER $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS_ALL $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES"
-  "window-only 2D|-p ponko --no-default-features --features window|$AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES"
+  "headless|-p ponko --no-default-features|$RENDER $AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS_ALL $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES $WEBRTC"
+  "headless with audio|-p ponko --no-default-features --features audio|$RENDER $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS_ALL $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES $WEBRTC"
+  "window-only 2D|-p ponko --no-default-features --features window|$AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES $WEBRTC"
   # A 2D game with JPEG backgrounds and WebP tiles: image decoders, no 3D.
-  "2D with image formats|-p ponko --no-default-features --features window,image-jpeg,image-webp|$AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS $SHAPING_ALL $TEXTURES"
-  "default|-p ponko|$MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS $OTHER_IMAGES $SHAPING $TEXTURES"
+  "2D with image formats|-p ponko --no-default-features --features window,image-jpeg,image-webp|$AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS $SHAPING_ALL $TEXTURES $WEBRTC"
+  "default|-p ponko|$MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS $OTHER_IMAGES $SHAPING $TEXTURES $WEBRTC"
   # A localized 2D game: the shaper and its Unicode tables, nothing else.
   # The adapters bring only themselves and their system bindings (zbus on
   # Linux), no other subsystem.
-  "2D with accessibility|-p ponko --no-default-features --features accessibility|$AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES"
-  "2D with text shaping|-p ponko --no-default-features --features window,text-shaping|$AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS $JPEG $OTHER_IMAGES fontdb $TEXTURES"
+  "2D with accessibility|-p ponko --no-default-features --features accessibility|$AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES $WEBRTC"
+  "2D with text shaping|-p ponko --no-default-features --features window,text-shaping|$AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS $JPEG $OTHER_IMAGES fontdb $TEXTURES $WEBRTC"
   # The C library always turns on the engine's `3d` and `navmesh` features:
   # its 3D and navigation functions are exported unconditionally (the C
   # header declares them all). So its smallest build carries glTF and Recast,
@@ -90,8 +93,15 @@ CONTRACTS=(
   # container image. No renderer, audio, input devices, models, physics,
   # navigation, dev tools, Steam, accessibility, shaping or extra image
   # decoders: the runtime image has no system libraries for them.
-  "server template|-p ponko $SERVER_TEMPLATE|$RENDER $AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS_ALL $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES"
-  "C library, no defaults|-p ponko_ffi --no-default-features|$RENDER $AUDIO $INSPECTOR $GAMEPAD $PHYSICS $TOOLS $STEAM $ACCESS_ALL $TEXTURES"
+  "server template|-p ponko $SERVER_TEMPLATE|$RENDER $AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS_ALL $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES $WEBRTC"
+  # The lobby server (`crates/ponko_lobby`, `ponko-lobby`): the server
+  # template's build plus the lobby protocol, which brings no crate of its
+  # own. Same container image, same nothing-optional rule.
+  "lobby server|-p ponko_lobby|$RENDER $AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS_ALL $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES $WEBRTC"
+  "C library, no defaults|-p ponko_ffi --no-default-features|$RENDER $AUDIO $INSPECTOR $GAMEPAD $PHYSICS $TOOLS $STEAM $ACCESS_ALL $TEXTURES $WEBRTC"
+  # WebRTC on a headless build: str0m and its crypto, nothing of the
+  # window, audio or tools.
+  "headless with webrtc|-p ponko --no-default-features --features webrtc|$RENDER $AUDIO $INSPECTOR $GAMEPAD $MODELS $PHYSICS $NAVMESH $TOOLS $STEAM $ACCESS_ALL $JPEG $OTHER_IMAGES $SHAPING_ALL $TEXTURES"
 )
 
 # The crate names in one build, sorted and unique.

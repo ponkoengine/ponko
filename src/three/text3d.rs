@@ -100,6 +100,10 @@ impl Text3D {
 /// glyphs record distances.
 pub(crate) const MAX_REACH: f32 = (SDF_SPREAD as f32 - 0.5) / SDF_PX;
 
+/// How much nearer the camera a depth-tested debug label is drawn than its
+/// point, as a share of the distance: a label on a surface stays readable.
+const LABEL_PULL: f32 = 0.005;
+
 /// One corner of a glyph quad.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
@@ -127,7 +131,53 @@ impl TextFrame {
     /// Adds `t`'s glyph quads placed by `at`, laid out in `text` (whose
     /// SDF atlas is `ATLAS` pixels wide).
     pub(crate) fn push(&mut self, t: &Text3D, at: &Transform3D, camera: &Camera3D, text: &mut Text) {
-        let block = text.layout_sdf(&t.text, t.font);
+        self.push_str(&t.text, t, at, camera, text, false);
+    }
+
+    /// A depth-tested debug label (`ctx.debug.text(..).depth_tested()`):
+    /// `string` facing the camera, `pixels` high at its distance, its
+    /// top-left corner at `at`, pulled a little toward the camera so a label
+    /// on a surface isn't cut by it. Nothing while `at` is behind the near plane.
+    pub(crate) fn push_label(
+        &mut self,
+        string: &str,
+        at: Vec3,
+        (color, pixels): (Color, f32),
+        camera: &Camera3D,
+        text: &mut Text,
+    ) {
+        let depth = (at - camera.position).dot(camera.forward());
+        let height = camera.viewport().y;
+        if !(depth > camera.near && height > 0.0) || string.is_empty() {
+            return;
+        }
+        let at = camera.position + (at - camera.position) * (1.0 - LABEL_PULL);
+        let depth = depth * (1.0 - LABEL_PULL);
+        let meters_per_pixel = 2.0 * depth * (camera.fov_y * 0.5).tan() / height;
+        let style = Text3D {
+            text: String::new(),
+            size: pixels * meters_per_pixel,
+            color,
+            align: TextAlign3D::Left,
+            billboard: true,
+            ..Text3D::new(String::new())
+        };
+        self.push_str(string, &style, &Transform3D::at(at), camera, text, true);
+    }
+
+    /// `string` placed and styled by `t` (its own text unused); with
+    /// `top_left` the block's top-left corner is at the transform's
+    /// position instead of its center.
+    fn push_str(
+        &mut self,
+        string: &str,
+        t: &Text3D,
+        at: &Transform3D,
+        camera: &Camera3D,
+        text: &mut Text,
+        top_left: bool,
+    ) {
+        let block = text.layout_sdf(string, t.font);
         let side = Text::ATLAS_SIZE as f32;
         let meters = t.size.max(0.0) / SDF_PX;
         let widths = text.line_widths();
@@ -155,8 +205,14 @@ impl TextFrame {
             };
             // Pixels (y down from the block's top) to the block's plane
             // (y up from its center).
-            let corner =
-                |dx: f32, dy: f32| Vec2::new(p.pos.x + dx * size.x + shift, block.y / 2.0 - (p.pos.y + dy * size.y));
+            let anchor = if top_left {
+                Vec2::new(block.x / 2.0, -block.y / 2.0)
+            } else {
+                Vec2::ZERO
+            };
+            let corner = |dx: f32, dy: f32| {
+                anchor + Vec2::new(p.pos.x + dx * size.x + shift, block.y / 2.0 - (p.pos.y + dy * size.y))
+            };
             let uv0 = Vec2::new(atlas_at[0] as f32, atlas_at[1] as f32) / side;
             let uv = |dx: f32, dy: f32| (uv0 + Vec2::new(dx, dy) * size / side).to_array();
             let v = |dx: f32, dy: f32| TextVertex {
@@ -193,7 +249,9 @@ impl Ctx {
                     frame.order.push(((at.position - eye).dot(forward), e));
                 }
             });
-        if frame.order.is_empty() {
+        // `ctx.debug`'s depth-tested labels (see `debug::flush`).
+        let labels = !self.gfx.frame3d.debug_lines.labels.is_empty();
+        if frame.order.is_empty() && !labels {
             return;
         }
         frame.order.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -212,6 +270,19 @@ impl Ctx {
                 continue;
             };
             frame.push(t, at, &self.scene3d.camera, &mut self.gfx.text);
+        }
+        if labels {
+            let lines = &self.gfx.frame3d.debug_lines;
+            for l in &lines.labels {
+                let string = &lines.text[l.text.clone()];
+                frame.push_label(
+                    string,
+                    l.at,
+                    (l.color, l.size),
+                    &self.scene3d.camera,
+                    &mut self.gfx.text,
+                );
+            }
         }
         if let Some(renderer) = self.gfx.renderer.as_mut() {
             for (at, size, rgba) in self.gfx.text.sdf.uploads.drain(..) {
@@ -334,5 +405,88 @@ mod tests {
         // Spaces take room but draw nothing; empty text draws nothing.
         assert_eq!(quads(&Text3D::new("a b"), &Transform3D::default()).len(), 12);
         assert!(quads(&Text3D::new(""), &Transform3D::default()).is_empty());
+    }
+
+    /// The screen rectangle (min, max, in pixels) of `camera`'s view of quads.
+    fn on_screen(v: &[TextVertex], camera: &Camera3D) -> (Vec2, Vec2) {
+        v.iter()
+            .fold((Vec2::splat(f32::MAX), Vec2::splat(f32::MIN)), |(lo, hi), v| {
+                let p = camera.world_to_screen(Vec3::from_array(v.position)).expect("in front");
+                (lo.min(p), hi.max(p))
+            })
+    }
+
+    #[test]
+    fn a_debug_label_is_its_size_in_pixels_at_any_distance_with_its_corner_at_its_point() {
+        let mut camera = Camera3D::new(Vec2::new(800.0, 600.0));
+        camera.position = Vec3::ZERO;
+        camera.rotation = Quat::IDENTITY;
+        let (size, pad) = (20.0, 2.0 * SDF_SPREAD as f32 / SDF_PX * 20.0);
+        let mut heights = Vec::new();
+        for (at, depth) in [(Vec3::new(0.0, 0.0, -10.0), 10.0), (Vec3::new(4.0, 2.0, -40.0), 40.0)] {
+            let mut frame = TextFrame::default();
+            frame.push_label("Hi", at, (Color::WHITE, size), &camera, &mut Text::new());
+            assert_eq!(frame.vertices.len(), 2 * 6, "a quad per letter");
+            // Facing the camera: flat in its view plane, a little nearer than the point.
+            for v in &frame.vertices {
+                let z = -v.position[2];
+                assert!(z < depth && z > depth * 0.99, "{z} vs {depth}");
+            }
+            let (lo, hi) = on_screen(&frame.vertices, &camera);
+            let corner = camera.world_to_screen(at).expect("in front");
+            assert!(
+                (lo - corner).abs().max_element() <= pad,
+                "top-left corner {lo} at the point {corner}"
+            );
+            let tall = hi.y - lo.y;
+            assert!(tall > size * 0.5 && tall < size + 2.0 * pad, "{tall} px for {size} px");
+            heights.push(tall);
+        }
+        assert!(
+            (heights[0] - heights[1]).abs() < 0.5,
+            "the same at any distance: {heights:?}"
+        );
+        // Behind the camera, or empty: nothing.
+        let mut frame = TextFrame::default();
+        frame.push_label(
+            "Hi",
+            Vec3::new(0.0, 0.0, 5.0),
+            (Color::WHITE, size),
+            &camera,
+            &mut Text::new(),
+        );
+        frame.push_label(
+            "",
+            Vec3::new(0.0, 0.0, -5.0),
+            (Color::WHITE, size),
+            &camera,
+            &mut Text::new(),
+        );
+        assert!(frame.vertices.is_empty());
+    }
+
+    #[test]
+    fn depth_tested_debug_labels_become_3d_text() {
+        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(800.0, 600.0));
+        // No GPU: screen text (the label on top) is dropped, as in a headless game.
+        ctx.gfx.headless = true;
+        ctx.scene3d.camera.position = Vec3::new(0.0, 0.0, 5.0);
+        ctx.scene3d.camera.rotation = Quat::IDENTITY;
+        ctx.debug.set_enabled(true);
+        ctx.debug.text(Vec3::ZERO, "tested", Color::WHITE).depth_tested();
+        ctx.debug.text(Vec3::ZERO, "on top", Color::WHITE);
+        ctx.gfx.frame3d.debug_lines.clear();
+        ctx.hand_over_debug_draw();
+        let lines = &ctx.gfx.frame3d.debug_lines;
+        assert_eq!(lines.labels.len(), 1, "only the depth-tested one goes to the 3D frame");
+        assert_eq!(&lines.text[lines.labels[0].text.clone()], "tested");
+        // The atlas a running game makes on the GPU.
+        ctx.gfx.frame3d.particles.texts.atlas = Some(Texture::new(0, Text::ATLAS_SIZE, Text::ATLAS_SIZE));
+        ctx.collect_text3d();
+        assert_eq!(
+            ctx.gfx.frame3d.particles.texts.vertices.len(),
+            6 * 6,
+            "a quad per letter"
+        );
     }
 }

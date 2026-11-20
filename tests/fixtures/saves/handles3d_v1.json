@@ -1,0 +1,47 @@
+{
+  "entities": [
+    {
+      "components": {
+        "Model": {
+          "color": {
+            "a": 1.0,
+            "b": 1.0,
+            "g": 1.0,
+            "r": 1.0
+          },
+          "mesh": "models/house.glb"
+        },
+        "ModelMaterial": {
+          "material": "roof",
+          "mesh": "models/house.glb"
+        },
+        "ShadowMesh": {
+          "mesh": "models/house.glb"
+        },
+        "Transform3D": {
+          "position": [
+            1.0,
+            0.0,
+            -2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "entity": 0
+    }
+  ],
+  "format": "ponko-world",
+  "not_saved": {},
+  "resources": {},
+  "version": 1
+}

@@ -52,6 +52,11 @@ ruzstd = { version = "0.9.1", default-features = false, features = ["std"], opti
 sha2 = "0.10.9"
 meshopt = { version = "0.7.0", optional = true }
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in"], optional = true }
+# `ponko cook` reads Aseprite files (feature `aseprite`) with
+# aseprite-loader: pure Rust, no unsafe code, MIT OR Apache-2.0, maintained
+# (0.4.2, February 2026), and it composites frames with Aseprite's blend
+# modes. Its PNG output uses `image`, as textures do.
+aseprite-loader = { version = "0.4.2", optional = true }
 
 [dev-dependencies]
 # Decodes the BCn blocks `ponko textures` writes, to compare with the source.
@@ -60,9 +65,11 @@ texture2ddecoder = "0.1.2"
 symphonia = { version = "0.6.1", default-features = false, features = ["flac"] }
 
 [features]
-default = ["textures", "meshes", "shaders"]
+default = ["textures", "meshes", "shaders", "aseprite"]
 textures = ["dep:basis-universal", "dep:image", "dep:ktx2", "dep:ruzstd"]
 # `ponko cook` optimizes glTF meshes (vertex cache, overdraw, vertex fetch).
 meshes = ["dep:meshopt"]
 # `ponko cook` validates WGSL shaders as the engine composes them.
 shaders = ["dep:naga"]
+# `ponko cook` turns Aseprite files into the sheet and JSON the engine loads.
+aseprite = ["dep:aseprite-loader", "dep:image", "image/png"]

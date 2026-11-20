@@ -69,6 +69,7 @@ impl Ctx {
     /// | 3D skeletons and morph weights | Components that aren't saved: gone with their entities unless the game adds them again. The engine's skinning scratch is rebuilt every frame from the world as it is. |
     /// | `SkinOf`, `AttachToJoint`, 3D joints | Reflected: the scene's, to the scene's entities. Skeletons aren't saved, so skins and joint attachments show once the game gives their entity a skeleton again. |
     /// | [`PrefabParts`] | Reflected: the scene's prefab trees keep their parts, for [`despawn_prefab`](Self::despawn_prefab). |
+    /// | glTF scenes (`GltfRoot`, with the `3d` feature) | Their roots and nodes aren't saved: gone, and the meshes, materials and textures made for them freed. Their prefab instances are saved, with a record of each scene: spawning the file again adopts them (see `GltfRoot::spawn`). |
     /// | [`Children`](crate::hierarchy::Children) | Reflected: the scene's children lists, in their saved order. |
     /// | Assets | Textures, meshes and collision files the scene names are loaded first and stay cached. Loaded assets are never unloaded by a load. |
     /// | Prefabs | Kept: files [`spawn_prefab`](Self::spawn_prefab) read stay cached, so spawning one after a load doesn't read it again. |
@@ -177,12 +178,16 @@ impl Ctx {
     /// describes: its assets first, then the entities, then the services
     /// that follow entity ids.
     pub(crate) fn replace_world_now(&mut self, save: &Value) -> Result<(), crate::error::Error> {
+        #[cfg(feature = "3d")]
+        self.gltf_before_world_load(save);
         // Migrated first, so the assets are found under the current names.
         let save = crate::reflect::migrate_save(&self.world, save)?;
         self.load_scene_assets(&save)?;
         self.world.load(&save)?;
         self.commands = self.world.commands();
         self.scene_loads += 1;
+        #[cfg(feature = "3d")]
+        self.gltf_after_world_load(&save);
         #[cfg(feature = "physics")]
         self.physics.forget_bodies();
         #[cfg(feature = "physics3d")]
@@ -467,7 +472,7 @@ struct PrefabEntry {
 
 impl PrefabFile {
     /// Reads a version-1 file (one entity) or a version-2 file (a tree).
-    fn parse(prefab: &Value) -> Result<Self, String> {
+    pub(crate) fn parse(prefab: &Value) -> Result<Self, String> {
         if prefab["format"] != PREFAB_FORMAT {
             return Err(format!("not a prefab (expected \"format\": \"{PREFAB_FORMAT}\")"));
         }

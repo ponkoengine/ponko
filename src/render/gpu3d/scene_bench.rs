@@ -499,14 +499,30 @@ impl SceneBench {
         }
         // `PONKO_RENDER_VIEWS=2` or `4`: split screen, each camera circling
         // the scene from its own side (what each more view costs).
+        // `minimap`: the main camera on the whole target and a quarter-sized
+        // view in its corner with the costly effects off, as a game's minimap.
         if let Some(views) = std::env::var("PONKO_RENDER_VIEWS").ok().filter(|v| v.trim() != "1") {
             let n = match views.trim() {
                 "2" => 2,
                 "4" => 4,
-                other => return Err(format!("PONKO_RENDER_VIEWS={other} is not 1, 2 or 4")),
+                "minimap" => {
+                    let mut map = bench.ctx.scene3d.camera;
+                    map.rect = crate::camera::Viewport::new(0.75, 0.0, 0.25, 0.25);
+                    let mut cheap = bench.ctx.scene3d.post;
+                    cheap.bloom = 0.0;
+                    cheap.ssr = 0.0;
+                    cheap.contact_shadows = 0.0;
+                    cheap.ambient_occlusion.enabled = false;
+                    cheap.anti_aliasing = crate::render::AntiAliasing::Fxaa;
+                    bench.ctx.scene3d.views.push(crate::d3::View::new(map).with_post(cheap));
+                    0
+                }
+                other => return Err(format!("PONKO_RENDER_VIEWS={other} is not 1, 2, 4 or minimap")),
             };
             let camera = &mut bench.ctx.scene3d.camera;
-            camera.rect = crate::camera::Viewport::split(n, 0);
+            if n > 0 {
+                camera.rect = crate::camera::Viewport::split(n, 0);
+            }
             for i in 1..n {
                 let mut view = *camera;
                 view.rect = crate::camera::Viewport::split(n, i);
@@ -1395,8 +1411,8 @@ impl SceneBench {
         frame.motion.enabled = motion;
         if !ctx.scene3d.camera.occlusion_culling {
             frame.occlusion = None;
-        } else if let Some(grid) = self.renderer.take_occlusion() {
-            frame.occlusion = Some(grid);
+        } else {
+            self.renderer.replace_occlusion(&mut frame.occlusion);
         }
         // Several cameras: the sun's cascades cover every view.
         frame.shadow_views.clear();
@@ -1454,7 +1470,7 @@ impl SceneBench {
                 light,
                 camera: ctx.scene3d.camera.position,
                 post: &ctx.scene3d.post,
-                time: (self.frames as f32 / 60.0, 1.0 / 60.0),
+                time: (self.frames as f64 / 60.0, 1.0 / 60.0),
                 occlusion: ctx.scene3d.camera.occlusion_culling,
             };
             self.renderer.prepare(
@@ -1571,7 +1587,7 @@ impl SceneBench {
             light,
             camera: ctx.scene3d.camera.position,
             post: &ctx.scene3d.post,
-            time: (self.frames as f32 / 60.0, 1.0 / 60.0),
+            time: (self.frames as f64 / 60.0, 1.0 / 60.0),
             occlusion: ctx.scene3d.camera.occlusion_culling,
         };
         let views = ctx

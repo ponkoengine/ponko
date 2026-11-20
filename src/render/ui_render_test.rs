@@ -141,6 +141,8 @@ mod before {
                 UiPaint {
                     wrap: true,
                     border_width: 1.0,
+                    // A button's text is centred across by default.
+                    align: crate::ui::UiTextAlign::Center,
                     ..Default::default()
                 },
             );
@@ -269,8 +271,8 @@ mod before {
 }
 
 /// The window's sprite pipeline on a device with no window.
-struct Painter {
-    gpu: TestGpu,
+pub(super) struct Painter {
+    pub(super) gpu: TestGpu,
     pipeline: wgpu::RenderPipeline,
     camera_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
@@ -281,7 +283,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 impl Painter {
     /// `None` without a GPU.
-    fn new() -> Option<Self> {
+    pub(super) fn new() -> Option<Self> {
         let gpu = gpu()?;
         let device = &gpu.device;
         let shader = device.create_shader_module(wgpu::include_wgsl!("sprite.wgsl"));
@@ -406,19 +408,25 @@ impl Painter {
     }
 
     /// A screen to draw UI on: a `Ctx` with no window and no renderer, and
-    /// the two textures its UI draws with (white, the glyph atlas).
-    fn screen(&self, size: Vec2) -> Screen {
+    /// the three textures its UI draws with (white, the glyph atlas, the
+    /// disc of round corners and radio buttons).
+    pub(super) fn screen(&self, size: Vec2) -> Screen {
         let mut ctx = Ctx::new(1.0 / 60.0, size);
         ctx.gfx.stand_in_textures();
+        let (side, disc) = crate::gfx::Graphics::circle_pixels();
         Screen {
             ctx,
-            textures: vec![self.texture(1, Some(&[255; 4])), self.texture(Text::ATLAS_SIZE, None)],
+            textures: vec![
+                self.texture(1, Some(&[255; 4])),
+                self.texture(Text::ATLAS_SIZE, None),
+                self.texture(side, Some(&disc)),
+            ],
         }
     }
 
     /// The picture of what `screen`'s `Ctx` has drawn into its UI list
     /// since the last one, `size` pixels, on the window's clear colour.
-    fn shot(&self, screen: &mut Screen, size: Vec2) -> Image {
+    pub(super) fn shot(&self, screen: &mut Screen, size: Vec2) -> Image {
         use wgpu::util::DeviceExt;
         let (device, queue) = (&self.gpu.device, &self.gpu.queue);
         // Glyphs made while drawing go into the atlas, as the renderer does.
@@ -470,8 +478,8 @@ impl Painter {
 }
 
 /// See [`Painter::screen`].
-struct Screen {
-    ctx: Ctx,
+pub(super) struct Screen {
+    pub(super) ctx: Ctx,
     textures: Vec<GpuTexture>,
 }
 

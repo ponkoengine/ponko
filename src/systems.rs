@@ -17,6 +17,7 @@
 //! | `update_animators` | `UPDATE_ANIMATORS` | always (`3d`) | end of `Animate` |
 //! | [`update_skeletons2d`] | `UPDATE_SKELETONS2D` | always | end of `Animate` |
 //! | [`update_particles`] | `UPDATE_PARTICLES` | always | end of `Animate` |
+//! | [`update_camera_rigs`] | `UPDATE_CAMERA_RIGS` | always | end of `Animate` |
 //! | `update_audio3d` | `UPDATE_AUDIO3D` | always (`3d`) | end of `Draw` |
 //! | [`animate_sprites`] | `ANIMATE_SPRITES` | always | `Draw` |
 //! | [`draw_tilemaps`] | `DRAW_TILEMAPS` | always | `Draw` |
@@ -86,6 +87,33 @@ pub fn update_particles(ctx: &mut Ctx) {
     ctx.update_particles2d(dt);
     #[cfg(feature = "3d")]
     ctx.update_particles();
+}
+
+/// Updates the camera rigs kept as resources
+/// ([`d2::FollowCamera`](crate::d2::FollowCamera), and with `3d` the
+/// third-person, first-person and orbit cameras) with the entity that has a
+/// [`CameraTarget`](crate::camera::CameraTarget), and places the camera.
+/// The game runs it last in [`Phase::Animate`](crate::game::Phase::Animate),
+/// after the particles
+/// ([`Systems::UPDATE_CAMERA_RIGS`](crate::game::Systems::UPDATE_CAMERA_RIGS)),
+/// so the rigs see where everything ended up this frame and
+/// [`Phase::Late`](crate::game::Phase::Late) systems see the placed camera.
+/// Then, with `3d`, it puts every `d3::HeldItem` in front of the camera.
+/// Without a rig resource or a held item it does nothing.
+///
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::camera::CameraTarget;
+/// use ponko::d2::FollowCamera;
+///
+/// let mut game = Game::new("Follow", 640, 360).headless_frames(true);
+/// game.run_headless(2, |ctx| {
+///     ctx.world.insert_resource(FollowCamera::default().with_smooth_time(0.0));
+///     ctx.world.spawn((d2::Transform::at(vec2(900.0, 40.0)), CameraTarget));
+/// });
+/// ```
+pub fn update_camera_rigs(ctx: &mut Ctx) {
+    crate::camera::feed::update_camera_rigs(ctx);
 }
 
 /// Draws every 2D [`ParticleEmitter`](crate::d2::ParticleEmitter)'s

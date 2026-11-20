@@ -107,6 +107,28 @@ impl Recorder {
         drop(log);
     }
 
+    /// Stops noting accesses for a while (component hooks, whose work isn't
+    /// the system's that caused it); returns whether it was on, for
+    /// [`resume`](Self::resume).
+    #[inline]
+    pub(crate) fn pause(&self) -> bool {
+        #[cfg(debug_assertions)]
+        {
+            self.on.swap(false, std::sync::atomic::Ordering::Relaxed)
+        }
+        #[cfg(not(debug_assertions))]
+        false
+    }
+
+    /// Ends a [`pause`](Self::pause): `was` is what it returned.
+    #[inline]
+    pub(crate) fn resume(&self, #[allow(unused_variables)] was: bool) {
+        #[cfg(debug_assertions)]
+        if was {
+            self.on.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     pub(crate) fn stop(&mut self) -> Option<AccessLog> {
         #[cfg(debug_assertions)]
         {

@@ -39,6 +39,11 @@ fn starts(log: &Log<u64>) -> impl FnMut(&mut Ctx) + 'static {
 }
 
 #[cfg(feature = "physics")]
+/// The moving body of a test. Every body has a velocity (a body requires
+/// one), so tests find theirs by this.
+#[derive(Component)]
+struct Ball;
+
 mod physics2d {
     use super::*;
     use ponko::d2::{Collider, RigidBody, Transform as Transform2D, Velocity};
@@ -54,12 +59,13 @@ mod physics2d {
     }
 
     /// A ball flying left towards the sensor at the origin.
-    fn flying_ball() -> (Transform2D, RigidBody, Collider, Velocity) {
+    fn flying_ball() -> (Transform2D, RigidBody, Collider, Velocity, Ball) {
         (
             Transform2D::at(vec2(100.0, 0.0)),
             RigidBody::dynamic(),
             Collider::circle(5.0),
             Velocity::linear(vec2(-600.0, 0.0)),
+            Ball,
         )
     }
 
@@ -170,7 +176,7 @@ mod physics2d {
         let mut ball = None;
         let world = Game::new("t", 1, 1)
             .add(Phase::BeforePhysics, |ctx: &mut Ctx| {
-                let ball = ctx.world.query::<Entity>().filter::<With<Velocity>>().iter().next();
+                let ball = ctx.world.query::<Entity>().filter::<With<Ball>>().iter().next();
                 match (ctx.time.sim_tick(), ball) {
                     // Into the sensor: a teleport, by writing the transform.
                     (3, Some(ball)) => ctx.world.get_mut::<Transform2D>(ball).unwrap().position = vec2(2.0, 0.0),
@@ -192,7 +198,7 @@ mod physics2d {
                     Transform2D::at(vec2(100.0, 0.0)),
                     RigidBody::dynamic(),
                     Collider::circle(5.0),
-                    Velocity::default(),
+                    Ball,
                 )));
             });
         assert_eq!(seen.borrow()[..], [3], "the teleport's contact, the tick it happened");
@@ -217,7 +223,7 @@ mod physics2d {
                     let ball = ctx
                         .world
                         .query::<Entity>()
-                        .filter::<With<Velocity>>()
+                        .filter::<With<Ball>>()
                         .iter()
                         .next()
                         .unwrap();
@@ -240,7 +246,6 @@ mod physics3d {
     use super::*;
     use ponko::d3::{
         Character as Character3D, Collider as Collider3D, RigidBody as RigidBody3D, Transform as Transform3D,
-        Velocity as Velocity3D,
     };
 
     fn sensor() -> (Transform3D, RigidBody3D, Collider3D) {
@@ -299,7 +304,7 @@ mod physics3d {
         let world = Game::new("t", 1, 1)
             .add(Phase::BeforePhysics, starts(&early))
             .add(Phase::BeforePhysics, |ctx: &mut Ctx| {
-                let ball = ctx.world.query::<Entity>().filter::<With<Velocity3D>>().iter().next();
+                let ball = ctx.world.query::<Entity>().filter::<With<Ball>>().iter().next();
                 match (ctx.time.sim_tick(), ball) {
                     (3, Some(ball)) => ctx.world.get_mut::<Transform3D>(ball).unwrap().position = vec3(0.2, 0.0, 0.0),
                     (6, Some(ball)) => ctx.commands.despawn(ball),
@@ -320,7 +325,7 @@ mod physics3d {
                     Transform3D::at(vec3(10.0, 0.0, 0.0)),
                     RigidBody3D::dynamic(),
                     Collider3D::sphere(0.5),
-                    Velocity3D::default(),
+                    Ball,
                 )));
             });
         assert_eq!(late.borrow()[..], [3], "the teleport's contact, the tick it happened");

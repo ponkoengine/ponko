@@ -13,11 +13,12 @@ something your game made. Every kind works the same way:
 | An empty handle | `Texture::NONE`, `Mesh::NONE`, ... | `ponko::none<ponko::texture>()` |
 | How many are live? | `ctx.live_counts()` | `ctx.live_counts()` |
 
-The kinds are `Texture` (render targets included), `Sound`, `Font`, and with
-the `3d` feature `Mesh`, `Material`, `Shader`, `Compute`, `Effect`,
-`GpuBuffer`, `InstanceBatch`, `TextureArray` and `TerrainTile` (with
-`physics3d`, `CollisionMesh` too). They implement the `Handle` trait, so a
-helper can take any of them.
+The kinds are `Texture`, `Sound`, `Font`, and with the `3d` feature
+`Mesh`, `Material`, `Shader`, `Compute`, `Effect`, `GpuBuffer`,
+`InstanceBatch`, `TextureArray`, `TerrainTile` and `RenderTarget` (with
+`physics3d`, `CollisionMesh` too). Each is its own type (see [Each kind is
+its own type](#each-kind-is-its-own-type)). They implement the `Handle`
+trait, so a helper can take any of them.
 
 The service that holds a handle answers the same questions:
 `ctx.gfx.is_live(h)`, `ctx.gfx.free(h)` and `ctx.gfx.live_counts()` for
@@ -110,6 +111,80 @@ materials and the textures they use, and they outlive the mesh:
 To hide something for a while, show `Mesh::NONE` instead of freeing it, and
 show the real mesh again later. Free when you won't need it again.
 
+## Each kind is its own type
+
+A mesh is not a texture, and a texture is not a render target: every kind
+(a sky shader too) is its own type, so passing the wrong kind is a compile
+error instead of a wrong picture at run time. `ctx.gfx.create_render_target(w, h)` returns
+a `RenderTarget`, and what draws into one (`TargetCamera::new` and
+`TargetCamera::reflection`, `ComputePass::new`, `TargetEffect::new`,
+`d3::UiPanel::new`) takes only that, so an image loaded from a file can't
+end up where a camera should draw. Where a texture is read (a material, a
+sprite, a draw call), `target.texture()` reads the target as the texture
+it draws into:
+
+<div class="lang-pair">
+<div>
+
+```rust
+# fn setup(ctx: &mut Ctx) {
+use ponko::render::{MaterialDesc, RenderTarget, TargetCamera};
+let screen: RenderTarget = ctx.gfx.create_render_target(320, 180);
+ctx.scene3d.passes.target_cameras.push(TargetCamera::new(ctx.scene3d.camera, screen));
+// A material reads it as the texture it draws into.
+let monitor = ctx.gfx.create_material(MaterialDesc::default().with_emissive_map(screen.texture()));
+// An image is not a render target: this doesn't compile.
+//     TargetCamera::new(ctx.scene3d.camera, ctx.gfx.load_texture("crab.png"));
+# let _ = monitor;
+# }
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:typed_handles}}
+```
+
+</div>
+</div>
+
+The types cost nothing: a handle is its id (a texture also carries its
+size, a sound its length), as small as a plain number, and a
+`RenderTarget` is the `Texture` it wraps, with the same size and layout.
+`tests/handle_layout.rs` checks it. Scenes and saves store handles by
+the asset's name, never by type or number, so files written before a
+kind got its own type load as they did.
+
+A render target is a texture too, so the two live and die together:
+`ctx.is_live(target)` and `ctx.is_live(target.texture())` agree, and
+freeing either frees both. Freeing a texture's handle as a render target
+does nothing unless it is one.
+
+**Moving to `RenderTarget`** (render targets were `Texture`s before
+0.2.0). The change is mechanical:
+
+- Keep what `create_render_target` returns (or `try_create_render_target`,
+  or a `d3::UiPanel`'s `target`, which was `texture`) as a `RenderTarget`,
+  and take one in helpers that hand it to the calls above.
+- Where it was passed as a texture (`with_custom_textures`,
+  `with_texture`, `with_emissive_map`, `Sprite::new`, `ctx.gfx.draw`),
+  write `target.texture()`.
+- A `ComputePass` writing a GPU buffer has `RenderTarget::NONE` as its
+  target.
+
+```rust
+# use ponko::render::{ComputePass, MaterialDesc};
+# fn setup(ctx: &mut Ctx, heights: ponko::render::Compute) {
+// Before: let water = ctx.gfx.create_render_target(256, 256);  // a Texture
+//         MaterialDesc::default().with_custom_textures([Some(water), None])
+let water = ctx.gfx.create_render_target(256, 256); // a RenderTarget
+ctx.scene3d.passes.compute.push(ComputePass::new(heights, water));
+let look = MaterialDesc::default().with_custom_textures([Some(water.texture()), None]);
+# let _ = look;
+# }
+```
+
 ## Counting
 
 `ctx.live_counts()` returns how many handles of each kind are live. Compare
@@ -195,6 +270,40 @@ C passes the kind and the id:
 An unknown kind is an invalid argument. `PONKO_HANDLE_NONE` is the empty id
 for every kind. C API calls that take a handle report a freed one as an
 invalid argument.
+
+C keeps one struct per kind with an integer id, so the compiler can't stop
+an id of one kind being passed as another; the kind is checked at run time
+instead. A render target is a `PonkoTexture`, and its own kind,
+`PONKO_HANDLE_RENDER_TARGET`: `ponko_ctx_handle_is_live` with that kind
+answers whether a texture is a live render target, freeing a plain texture
+as one is an invalid argument, and the calls that draw into a target (a
+target camera, a reflection camera, a compute pass, a target effect) refuse
+a plain texture:
+
+```c
+{{#include ../../examples/cpp/guide.c:render_target_kind}}
+```
+
+Ids of different kinds can be equal, so the generic calls trust the kind
+they are given: free a mesh as `PONKO_HANDLE_MESH`.
+
+Why the kind isn't in the id: a C id is 32 bits, all of them used (20 for
+the slot, 12 for the generation that makes a freed handle stay dead), and
+ABI 2 promises those values and layouts. Putting the kind in the top bits
+would change every id C code has stored or compared, including `{0}` as the
+built-in font, and the structs that embed handles. That needs a new ABI
+version: ids of kind:4 | generation:8 | slot:20 (so a slot comes back as
+the same handle after 256 frees instead of 4096), the font as kind 0 so
+`{0}` stays the built-in one, every engine table indexed by slot, and a
+migration note. Until then the kind travels next to the id.
+
+C++ gives each kind its own type again: `ctx.create_render_target` returns
+a `ponko::render_target`, which converts to `ponko::texture` (and has
+`texture()`) wherever a texture is read, while `target_camera_of`,
+`compute_pass_of`, `target_effect_of` and `ctx.reflection_camera` take only
+a `render_target`. A target read back from the engine (a target camera's
+`target`) is a plain texture; `ctx.render_target_of(t)` checks that it is
+a render target and throws `ponko::error` if not.
 
 The inventory takes a class (`PonkoAssetClass`, which counts the engine's
 textures and lists render targets on their own) instead of a kind:

@@ -279,10 +279,7 @@ impl Metadata {
                                 .ok_or_else(|| format!("{at} files: a table needs `from` and `to` strings, got {item}"))
                         };
                         let to = get("to")?;
-                        if to.contains(['/', '\\']) || to == "." || to == ".." {
-                            return Err(format!("{at} files: `to = \"{to}\"` is a file name, not a path"));
-                        }
-                        (get("from")?, to)
+                        (get("from")?, files_to(&to).map_err(|e| format!("{at} files: {e}"))?)
                     }
                     other => return Err(format!("{at} files: expected a path or {{ from, to }}, got {other}")),
                 });
@@ -329,6 +326,25 @@ impl Metadata {
         }
         Ok(())
     }
+}
+
+/// A `files` entry's `to`: a file name, or a path below the package's top
+/// folder (`docs/README.txt`), `/`-separated, with no `.`, `..` or empty
+/// parts. Returned as written.
+fn files_to(to: &str) -> Result<String, String> {
+    let parts: Vec<&str> = to.split('/').collect();
+    if to.contains('\\') {
+        return Err(format!("`to = \"{to}\"`: separate folders with `/`"));
+    }
+    if parts.iter().any(|p| p.is_empty() || *p == "." || *p == "..") {
+        return Err(format!(
+            "`to = \"{to}\"` must be a file name or a path inside the package (`docs/README.txt`: relative, no `.` or `..`)"
+        ));
+    }
+    if parts.iter().any(|p| p.contains(':')) {
+        return Err(format!("`to = \"{to}\"`: `:` can't be in a file name on every system"));
+    }
+    Ok(to.to_string())
 }
 
 fn file_name(path: &str) -> Result<String, String> {
@@ -414,8 +430,9 @@ pub struct Plan {
 pub enum Built<'a> {
     /// A desktop executable.
     Program(&'a Path),
-    /// A web build: wasm-bindgen's `game.js` and `game_bg.wasm`, in this folder.
-    Web(&'a Path),
+    /// A web build: wasm-bindgen's `game.js` and `game_bg.wasm`, in `dir`;
+    /// `threads` when it was built with them (atomics and shared memory).
+    Web { dir: &'a Path, threads: bool },
 }
 
 /// The name of a package's folder (and archives): `coin-dash-0.1.0-macos-aarch64`.
@@ -477,7 +494,7 @@ pub fn plan(
         });
     };
     let (program, app_dir) = match (built, app) {
-        (Built::Web(dir), _) => {
+        (Built::Web { dir, threads }, _) => {
             for name in ["game.js", "game_bg.wasm"] {
                 entries.push(Entry {
                     path: top(name),
@@ -511,6 +528,23 @@ pub fn plan(
                 });
             }
             docs(&mut entries, &folder);
+            if threads {
+                entries.push(Entry {
+                    path: top("ponko-worker.js"),
+                    source: Source::Text(WEB_WORKER.to_string()),
+                    executable: false,
+                });
+                // The game's own file at one of these places wins.
+                for (name, text) in web_header_files() {
+                    if !entries.iter().any(|e| e.path == top(name)) {
+                        entries.push(Entry {
+                            path: top(name),
+                            source: Source::Text(text),
+                            executable: false,
+                        });
+                    }
+                }
+            }
             (top("index.html"), None)
         }
         (Built::Program(exe), false) => {
@@ -569,6 +603,17 @@ pub fn plan(
         if !seen.insert(e.path.clone()) {
             return Err(format!(
                 "two files would be {} in the package: check `assets` and `files` in [package.metadata.ponko]",
+                e.path.display()
+            ));
+        }
+    }
+    // A file can't also be a folder another file is in (`files` with
+    // `to = "docs/README.txt"` beside a file named `docs`).
+    for e in &entries {
+        if let Some(folder) = e.path.ancestors().skip(1).find(|a| seen.contains(*a)) {
+            return Err(format!(
+                "{} would be a file and the folder of {} in the package: check `assets` and `files` in [package.metadata.ponko]",
+                folder.display(),
                 e.path.display()
             ));
         }
@@ -669,6 +714,46 @@ pub fn web_index(name: &str, icon: bool) -> String {
 }
 
 pub const WEB_INDEX: &str = include_str!("index.html");
+
+/// The worker script of a web build with threads: the engine's
+/// `web/ponko-worker.js` (embedded; a test keeps the copies equal).
+pub const WEB_WORKER: &str = include_str!("ponko-worker.js");
+
+/// The response headers that make a page cross-origin isolated, which a
+/// web build with threads needs to start its workers.
+pub const ISOLATION_HEADERS: [(&str, &str); 2] = [
+    ("Cross-Origin-Opener-Policy", "same-origin"),
+    ("Cross-Origin-Embedder-Policy", "require-corp"),
+];
+
+/// The files, beside `index.html`, that make common static hosts send
+/// [`ISOLATION_HEADERS`] with every file: `_headers` (Netlify, Cloudflare
+/// Pages), `vercel.json` (Vercel) and `.htaccess` (Apache with
+/// mod_headers). Hosts that read none of them ignore them.
+pub fn web_header_files() -> Vec<(&'static str, String)> {
+    let netlify: String = ISOLATION_HEADERS.iter().map(|(k, v)| format!("  {k}: {v}\n")).collect();
+    let vercel = serde_json::json!({
+        "headers": [{
+            "source": "/(.*)",
+            "headers": ISOLATION_HEADERS
+                .iter()
+                .map(|(k, v)| serde_json::json!({"key": k, "value": v}))
+                .collect::<Vec<_>>(),
+        }]
+    });
+    let apache: String = ISOLATION_HEADERS
+        .iter()
+        .map(|(k, v)| format!("  Header set {k} \"{v}\"\n"))
+        .collect();
+    vec![
+        ("_headers", format!("/*\n{netlify}")),
+        (
+            "vercel.json",
+            serde_json::to_string_pretty(&vercel).unwrap_or_default() + "\n",
+        ),
+        (".htaccess", format!("<IfModule mod_headers.c>\n{apache}</IfModule>\n")),
+    ]
+}
 
 /// The page with the game's canvas naming its asset pack (`data-pack`),
 /// which the engine fetches, with HTTP range requests, before setup.
@@ -905,7 +990,10 @@ mod tests {
             &g,
             &platform("wasm32-unknown-unknown"),
             false,
-            Built::Web(Path::new("/bindgen")),
+            Built::Web {
+                dir: Path::new("/bindgen"),
+                threads: false,
+            },
             "N",
             Some(b"png"),
             None,
@@ -936,7 +1024,59 @@ mod tests {
             page.contains("<title>Coin Dash · Ponko</title>") && page.contains("href=\"icon.png\""),
             "{page}"
         );
-        assert!(page.contains("import init from \"./game.js\""));
+        assert!(page.contains("import init, * as game from \"./game.js\""));
+        // Without threads: no worker script and no header files.
+        for extra in ["ponko-worker.js", "_headers", "vercel.json", ".htaccess"] {
+            assert!(!p.iter().any(|f| f.ends_with(extra)), "{extra} in {p:#?}");
+        }
+    }
+
+    #[test]
+    fn a_web_package_with_threads_has_the_worker_and_headers_for_common_hosts() {
+        let mut g = game();
+        // The game's own vercel.json stays; the other header files are added.
+        g.files.push(FileCopy {
+            from: "/src/vercel.json".into(),
+            to: "vercel.json".into(),
+        });
+        let plan = plan(
+            &g,
+            &platform("wasm32-unknown-unknown"),
+            false,
+            Built::Web {
+                dir: Path::new("/bindgen"),
+                threads: true,
+            },
+            "N",
+            None,
+            None,
+        )
+        .unwrap();
+        let entry = |name: &str| {
+            plan.entries
+                .iter()
+                .find(|e| e.path == Path::new("coin-dash-1.2.3-web").join(name))
+                .unwrap_or_else(|| panic!("{name} missing from {:#?}", paths(&plan)))
+        };
+        let text = |name: &str| match &entry(name).source {
+            Source::Text(t) => t.clone(),
+            other => panic!("{name}: {other:?}"),
+        };
+        assert_eq!(text("ponko-worker.js"), WEB_WORKER);
+        assert_eq!(entry("vercel.json").source, Source::Copy("/src/vercel.json".into()));
+        for name in ["_headers", ".htaccess"] {
+            let file = text(name);
+            for (header, value) in ISOLATION_HEADERS {
+                assert!(file.contains(header) && file.contains(value), "{name}:\n{file}");
+            }
+        }
+        assert!(text("_headers").starts_with("/*\n"), "Netlify's rule for every path");
+        let vercel: Value = serde_json::from_str(&web_header_files()[1].1).unwrap();
+        assert_eq!(vercel["headers"][0]["source"], "/(.*)");
+        assert_eq!(
+            vercel["headers"][0]["headers"][1],
+            json!({"key": "Cross-Origin-Embedder-Policy", "value": "require-corp"})
+        );
     }
 
     #[test]
@@ -982,7 +1122,10 @@ mod tests {
             &g,
             &platform("wasm32-unknown-unknown"),
             false,
-            Built::Web(Path::new("/bindgen")),
+            Built::Web {
+                dir: Path::new("/bindgen"),
+                threads: false,
+            },
             "N",
             None,
             Some(pack),
@@ -1060,6 +1203,18 @@ mod tests {
     }
 
     #[test]
+    fn the_embedded_worker_script_is_the_engines() {
+        // As index.html: the published crate carries a copy of web/ponko-worker.js.
+        let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/ponko-worker.js");
+        if let Ok(text) = std::fs::read_to_string(engine) {
+            assert_eq!(
+                WEB_WORKER, text,
+                "copy web/ponko-worker.js to crates/ponko_cli/src/package/ponko-worker.js"
+            );
+        }
+    }
+
+    #[test]
     fn two_files_at_one_place_are_refused() {
         let mut g = game();
         g.files.push(FileCopy {
@@ -1077,6 +1232,85 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("LICENSE-MIT"), "{err}");
+    }
+
+    #[test]
+    fn files_can_go_into_subfolders_of_the_package() {
+        let meta = json!({"ponko": {"files": [
+            {"from": "docs/r.txt", "to": "docs/README.txt"},
+            {"from": "replays/battle.rec", "to": "replays/demo/battle.rec"},
+        ]}});
+        let m = Metadata::from_cargo(&meta, None).unwrap();
+        assert_eq!(
+            m.files.unwrap(),
+            [
+                ("docs/r.txt".to_string(), "docs/README.txt".to_string()),
+                ("replays/battle.rec".into(), "replays/demo/battle.rec".into())
+            ]
+        );
+        let mut g = game();
+        g.files.push(FileCopy {
+            from: "/src/docs/manual.pdf".into(),
+            to: "docs/manual.pdf".into(),
+        });
+        let linux = plan(
+            &g,
+            &platform("x86_64-unknown-linux-gnu"),
+            false,
+            Built::Program(Path::new("/t/coin_dash")),
+            "",
+            None,
+            None,
+        )
+        .unwrap();
+        let folder = "coin-dash-1.2.3-linux-x86_64";
+        assert!(
+            paths(&linux).contains(&format!("{folder}/docs/manual.pdf")),
+            "{:?}",
+            paths(&linux)
+        );
+        // A macOS app has its files inside the bundle and beside it.
+        let mac = plan(
+            &g,
+            &platform("aarch64-apple-darwin"),
+            true,
+            Built::Program(Path::new("/t/coin_dash")),
+            "",
+            None,
+            None,
+        )
+        .unwrap();
+        let mac_paths = paths(&mac);
+        let folder = "coin-dash-1.2.3-macos-aarch64";
+        for at in [
+            format!("{folder}/docs/manual.pdf"),
+            format!("{folder}/Coin Dash.app/Contents/Resources/docs/manual.pdf"),
+        ] {
+            assert!(mac_paths.contains(&at), "{at} in {mac_paths:?}");
+        }
+    }
+
+    #[test]
+    fn a_file_where_another_file_needs_a_folder_is_refused() {
+        let mut g = game();
+        g.files.push(FileCopy {
+            from: "/src/docs.txt".into(),
+            to: "README.txt/extra.txt".into(),
+        });
+        let err = plan(
+            &g,
+            &platform("x86_64-unknown-linux-gnu"),
+            false,
+            Built::Program(Path::new("/t/x")),
+            "",
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("README.txt") && err.contains("a file and the folder"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1126,9 +1360,23 @@ mod tests {
             (json!({"ponko": {"assets": "assets"}}), "assets: expected a list"),
             (json!({"ponko": {"files": [{"from": "a"}]}}), "`from` and `to`"),
             (
-                json!({"ponko": {"files": [{"from": "a", "to": "d/a"}]}}),
-                "file name, not a path",
+                json!({"ponko": {"files": [{"from": "a", "to": "../a"}]}}),
+                "inside the package",
             ),
+            (
+                json!({"ponko": {"files": [{"from": "a", "to": "/a"}]}}),
+                "inside the package",
+            ),
+            (
+                json!({"ponko": {"files": [{"from": "a", "to": "d//a"}]}}),
+                "inside the package",
+            ),
+            (
+                json!({"ponko": {"files": [{"from": "a", "to": "d/./a"}]}}),
+                "inside the package",
+            ),
+            (json!({"ponko": {"files": [{"from": "a", "to": "d\\a"}]}}), "with `/`"),
+            (json!({"ponko": {"files": [{"from": "a", "to": "C:/a"}]}}), "`:`"),
         ] {
             let err = Metadata::from_cargo(&meta, None).unwrap_err();
             assert!(err.contains(needle), "{err} (wanted {needle})");

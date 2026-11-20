@@ -26,14 +26,22 @@ struct Rig {
 
 impl Rig {
     /// `None` without a GPU.
-    fn new() -> Option<Self> {
-        Self::sized(SIZE, SIZE)
+    fn sized(width: u32, height: u32) -> Option<Self> {
+        Self::with_limits(width, height, false)
     }
 
-    fn sized(width: u32, height: u32) -> Option<Self> {
+    /// `game`: with the texture slots a game asks for (`gpu.rs`), room for
+    /// decals, global illumination's probes and the reflections' spread
+    /// image; otherwise the default 16.
+    fn with_limits(width: u32, height: u32, game: bool) -> Option<Self> {
         let gpu = crate::render::render_test_support::gpu_with(|adapter| {
+            let slots = adapter.limits().max_sampled_textures_per_shader_stage.clamp(16, 24);
             Ok(wgpu::DeviceDescriptor {
                 required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+                required_limits: wgpu::Limits {
+                    max_sampled_textures_per_shader_stage: if game { slots } else { 16 },
+                    ..Default::default()
+                },
                 ..Default::default()
             })
         })?;
@@ -258,7 +266,12 @@ fn mirror_rig() -> Option<(Rig, Vec3, Vec3)> {
 }
 
 fn floor_rig(roughness: f32) -> Option<(Rig, Vec3, Vec3)> {
-    let mut rig = Rig::new()?;
+    floor_rig_with(roughness, false)
+}
+
+/// `game`: with the texture slots a game asks for (see `Rig::sized_like_a_game`).
+fn floor_rig_with(roughness: f32, game: bool) -> Option<(Rig, Vec3, Vec3)> {
+    let mut rig = Rig::with_limits(SIZE, SIZE, game)?;
     if !crate::render::render_test_support::needs(&rig.device, crate::render::GpuFeature::ScreenSpaceReflections) {
         return None;
     }
@@ -362,12 +375,16 @@ fn reflections_work_with_taa_and_fade_with_distance() {
 
 #[test]
 fn reflections_and_ambient_occlusion_share_the_opaque_pass_image() {
-    let Some((mut rig, reflection, _)) = mirror_rig() else {
+    // With the spread image copied into the first level, and read directly.
+    for game in [false, true] {
+        reflections_and_ambient_occlusion_take_turns(game);
+    }
+}
+
+fn reflections_and_ambient_occlusion_take_turns(game: bool) {
+    let Some((mut rig, reflection, _)) = floor_rig_with(0.0, game) else {
         return;
     };
-    if !crate::render::render_test_support::needs(&rig.device, crate::render::GpuFeature::ScreenSpaceReflections) {
-        return;
-    }
     let view_proj = rig.ctx.scene3d.camera.view_proj();
     let red = |pixels: &[u8]| {
         let (x, y) = pixel(view_proj, reflection);
@@ -386,6 +403,64 @@ fn reflections_and_ambient_occlusion_share_the_opaque_pass_image() {
     rig.draw();
     let pixels = rig.draw();
     assert!(red(&pixels) > 120, "and so does a clear without it: {}", red(&pixels));
+    rig.ctx.scene3d.post.ambient_occlusion.enabled = true;
+    rig.draw();
+    let pixels = rig.draw();
+    assert!(red(&pixels) > 120, "and GTAO again: {}", red(&pixels));
+}
+
+#[test]
+fn the_spread_image_read_directly_draws_what_its_copy_does() {
+    // A rough floor, where the spread decides the blur: with the texture
+    // slots a game asks for, the opaque pass reads the spread image itself;
+    // with the default 16, a copy in the screen image's first level.
+    let draw = |game: bool, ao: bool| {
+        let (mut rig, reflection, _) = floor_rig_with(0.4, game)?;
+        let slot = crate::render::capabilities::GpuLimits::of(&rig.device).reflection_spread();
+        if game && !slot {
+            crate::render::render_test_support::skip("no texture slot for the reflection spread image");
+            return None;
+        }
+        assert!(game || !slot, "16 texture slots leave none for the spread image");
+        rig.ctx.scene3d.post.ambient_occlusion.enabled = ao;
+        rig.ctx.scene3d.post.ssr = 1.0;
+        for _ in 0..3 {
+            rig.draw();
+        }
+        let pixels = rig.draw();
+        let (x, y) = pixel(rig.ctx.scene3d.camera.view_proj(), reflection);
+        let red = i32::from(pixels[((y * SIZE + x) * 4) as usize]);
+        Some((pixels, red))
+    };
+    for ao in [false, true] {
+        let Some((copied, copied_red)) = draw(false, ao) else {
+            return;
+        };
+        let Some((direct, direct_red)) = draw(true, ao) else {
+            return;
+        };
+        assert!(
+            copied_red > 60 && direct_red > 60,
+            "both reflect the box: {copied_red}, {direct_red} (ao {ao})"
+        );
+        // GTAO's denoise copies no spread where the first depth sample is
+        // sky, so edge pixels may differ a little.
+        let diffs: Vec<u8> = copied.iter().zip(&direct).map(|(a, b)| a.abs_diff(*b)).collect();
+        let worst = diffs.iter().copied().max().unwrap_or(0);
+        let off = diffs.iter().filter(|&&d| d > 2).count() as f32 / diffs.len() as f32;
+        assert!(
+            worst <= 16 && off < 0.005,
+            "read directly or copied, the same image: off by up to {worst}, {:.2}% by more than 2 (ao {ao})",
+            off * 100.0
+        );
+    }
+    // Negative control: with the reflections off, no red there.
+    let Some((mut rig, reflection, _)) = floor_rig_with(0.4, true) else {
+        return;
+    };
+    let (x, y) = pixel(rig.ctx.scene3d.camera.view_proj(), reflection);
+    let off = i32::from(rig.draw()[((y * SIZE + x) * 4) as usize]);
+    assert!(off < 40, "no reflections, no red: {off}");
 }
 
 #[test]
@@ -843,18 +918,107 @@ fn rough_reflections_match_their_references() {
     }
 }
 
-/// Offscreen timestamp measurement; run with --release --ignored
-/// --nocapture. The frame's GPU time and the reflection passes' spans at
-/// 1920x1080 with the High preset's screen effects (reflections, half-size
-/// temporal ambient occlusion with 2 slices and 4 steps) and with
-/// reflections alone, over a glossy floor with a glowing box.
+/// A few milliseconds of arithmetic for the GPU between the measured
+/// frames: a GPU that idles between them lowers its clock, and its passes
+/// then take twice as long or more (measured on an Apple GPU), more than
+/// any difference worth measuring.
+struct Busy {
+    pipeline: wgpu::ComputePipeline,
+    group: wgpu::BindGroup,
+}
+
+impl Busy {
+    fn new(device: &wgpu::Device) -> Self {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("busy"),
+            source: wgpu::ShaderSource::Wgsl(
+                "@group(0) @binding(0) var<storage, read_write> out: array<f32>;
+                 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                     var x = f32(id.x);
+                     for (var i = 0; i < 4096; i++) { x = fract(x * 1.618 + 0.31); }
+                     out[id.x] = x;
+                 }"
+                .into(),
+            ),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("busy"),
+            layout: None,
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("busy"),
+            size: 4 * 64 * 8192,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("busy"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
+        Self { pipeline, group }
+    }
+
+    fn run(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.group, &[]);
+            pass.dispatch_workgroups(8192, 1, 1);
+        }
+        queue.submit([encoder.finish()]);
+        // Done before the frame starts, so no pass of it waits for this.
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    }
+}
+
+/// Offscreen timestamp measurement; run with --ignored --nocapture (the
+/// times are GPU timestamps, which the build's optimization doesn't
+/// change; the GPU is kept busy between frames, see `Busy`). At 1920x1080 over a glossy floor with a glowing box, on a
+/// device with the limits a game asks for: for the High and Ultra presets,
+/// and High without ambient occlusion or contact shadows, the frame's GPU
+/// time (the sum of its passes' spans) with reflections off and on, in
+/// alternating blocks of 20 frames, and the reflection passes' spans. The
+/// last setup again with the default 16 texture slots, where a full-size
+/// pass copies the reflections' spread for the opaque pass.
 #[test]
 #[ignore]
 fn reflection_gpu_cost_at_1080p() {
-    let Some(mut rig) = Rig::sized(1920, 1080) else { return };
+    use crate::render::GraphicsQuality;
+    for (name, quality, ao, game) in [
+        ("High", GraphicsQuality::High, true, true),
+        ("Ultra", GraphicsQuality::Ultra, true, true),
+        ("High without ambient occlusion", GraphicsQuality::High, false, true),
+        (
+            "High without ambient occlusion, 16 texture slots",
+            GraphicsQuality::High,
+            false,
+            false,
+        ),
+    ] {
+        if !reflection_gpu_cost(name, quality, ao, game) {
+            return;
+        }
+    }
+}
+
+/// One setup of `reflection_gpu_cost_at_1080p`; false without a GPU or
+/// timestamps.
+fn reflection_gpu_cost(name: &str, quality: crate::render::GraphicsQuality, ao: bool, game: bool) -> bool {
+    let Some(mut rig) = Rig::with_limits(1920, 1080, game) else {
+        return false;
+    };
     let Some(mut timer) = super::timer::GpuTimer::new(&rig.device, &rig.queue) else {
         crate::render::render_test_support::skip("timestamp queries unavailable");
-        return;
+        return false;
     };
     let floor = rig.mesh(
         &MeshData::cube(1.0),
@@ -889,47 +1053,57 @@ fn reflection_gpu_cost_at_1080p() {
     ));
     rig.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
     rig.ctx.scene3d.camera.look_at(Vec3::ZERO);
-    rig.ctx.scene3d.post.ssr = 1.0;
-    rig.ctx.scene3d.post.bloom = 0.0;
-    rig.ctx.scene3d.lighting.shadows = false;
     let median = |samples: &mut Vec<f32>| {
         samples.sort_by(f32::total_cmp);
         samples[samples.len() / 2]
     };
-    for ao in [true, false] {
-        let post = &mut rig.ctx.scene3d.post;
-        post.ambient_occlusion.enabled = ao;
-        post.ambient_occlusion.slices = 2;
-        post.ambient_occlusion.steps = 4;
-        post.ao_half_resolution = true;
-        post.ao_temporal = true;
-        let mut frames = Vec::new();
-        let mut passes: Vec<(&'static str, Vec<f32>)> = Vec::new();
-        for frame in 0..400 {
-            rig.draw_timed(Some(&mut timer));
-            // Results come back a few frames late.
-            if frame < 40 {
-                continue;
-            }
-            frames.push(timer.last_frame.iter().map(|s| s.ms).sum::<f32>());
-            for span in &timer.last_frame {
-                match passes.iter_mut().find(|(name, _)| *name == span.name) {
-                    Some((_, times)) => times.push(span.ms),
-                    None => passes.push((span.name, vec![span.ms])),
-                }
+    let busy = Busy::new(&rig.device);
+    rig.ctx.scene3d.set_quality(quality);
+    let post = &mut rig.ctx.scene3d.post;
+    if !ao {
+        post.ambient_occlusion.enabled = false;
+        post.contact_shadows = 0.0;
+    }
+    assert!(post.ssr > 0.0, "the preset has reflections");
+    let strength = post.ssr;
+    // [off, on]
+    let mut frames = [Vec::new(), Vec::new()];
+    let mut passes: Vec<(&'static str, Vec<f32>)> = Vec::new();
+    for frame in 0..840 {
+        let on = (frame / 20) % 2 == 1;
+        rig.ctx.scene3d.post.ssr = if on { strength } else { 0.0 };
+        busy.run(&rig.device, &rig.queue);
+        rig.draw_timed(Some(&mut timer));
+        // Results come back a few frames late, and a block starts
+        // without the reflections' history: keep each block's last 12.
+        if frame < 40 || frame % 20 < 8 {
+            continue;
+        }
+        frames[usize::from(on)].push(timer.last_frame.iter().map(|s| s.ms).sum::<f32>());
+        if !on {
+            continue;
+        }
+        for span in timer.last_frame.iter().filter(|s| s.name.contains("reflection")) {
+            match passes.iter_mut().find(|(name, _)| *name == span.name) {
+                Some((_, times)) => times.push(span.ms),
+                None => passes.push((span.name, vec![span.ms])),
             }
         }
-        assert!(!frames.is_empty(), "GPU timestamps must be collected");
-        let spans: Vec<String> = passes
-            .iter_mut()
-            .map(|(name, times)| format!("{name} {:.4}", median(times)))
-            .collect();
-        eprintln!(
-            "1920x1080, ambient occlusion {ao}: frame median {:.4} ms; passes: {}",
-            median(&mut frames),
-            spans.join(", ")
-        );
     }
+    assert!(!passes.is_empty(), "GPU timestamps must be collected");
+    let [mut off, mut on] = frames;
+    let (off, on) = (median(&mut off), median(&mut on));
+    let spans: Vec<String> = passes
+        .iter_mut()
+        .map(|(name, times)| format!("{name} {:.4}", median(times)))
+        .collect();
+    eprintln!(
+        "1920x1080, {name}: frame median {off:.4} ms without reflections, {on:.4} ms with (+{:.4} ms); \
+         reflection passes: {}",
+        on - off,
+        spans.join(", ")
+    );
+    true
 }
 
 #[test]
@@ -1059,5 +1233,78 @@ fn the_march_finds_distant_hits_in_reverse_z_depth_without_a_far_plane() {
             );
             assert!(beside[0] < 40.0, "the sky beside it is not a surface: {beside:?}");
         }
+    }
+}
+
+// ---- Grain: contact reflections at full HD without temporal antialiasing ----
+
+/// The low bar's contact reflection at 1920x1080 over a floor of
+/// `roughness`, without temporal antialiasing (nothing averages the trace
+/// over frames): how grainy it is. Inside the reflection's band (the rows
+/// whose mean is at least half the brightest row's), each pixel is
+/// compared with the mean of its row's 33 pixels around it (the band runs
+/// along the rows): the RMS of the differences over the band's mean, and
+/// the fraction of pixels under half their row's local mean (holes).
+fn contact_grain(roughness: f32) -> Option<(f32, f32)> {
+    let mut stage = Stage::with(super::regression_stage::Setup {
+        size: (1920, 1080),
+        ..Default::default()
+    })?;
+    if !crate::render::render_test_support::needs(&stage.device, GpuFeature::ScreenSpaceReflections) {
+        return None;
+    }
+    bars_over_a_floor(&mut stage, roughness);
+    let off = stage.settled(2);
+    stage.ctx.scene3d.post.ssr = 1.0;
+    let on = stage.settled(4);
+    let eye = stage.ctx.scene3d.camera.position;
+    let through = |p: Vec3| eye + (p - eye) * (eye.y / (eye.y - p.y));
+    // The middle of the low bar, away from its ends.
+    let (x0, cy) = stage.pixel(through(vec3(-2.0, -0.25, 0.0)));
+    let (x1, _) = stage.pixel(through(vec3(-0.8, -0.25, 0.0)));
+    stage.finish();
+    let linear = |image: &Image, x: u32, y: u32| {
+        let v = f32::from(image.pixel(x, y)[0]) / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let reflected = |x: u32, y: u32| (linear(&on, x, y) - linear(&off, x, y)).max(0.0);
+    let rows: Vec<u32> = (cy.saturating_sub(60)..(cy + 60).min(1079)).collect();
+    let row_mean = |y: u32| (x0..x1).map(|x| reflected(x, y)).sum::<f32>() / (x1 - x0) as f32;
+    let brightest = rows.iter().map(|&y| row_mean(y)).fold(0.0, f32::max);
+    assert!(brightest > 0.05, "the floor reflects the low bar: {brightest}");
+    let (mut sum, mut squares, mut holes, mut count) = (0.0, 0.0, 0, 0);
+    for &y in rows.iter().filter(|&&y| row_mean(y) >= brightest * 0.5) {
+        for x in x0 + 16..x1 - 16 {
+            let local = (x - 16..=x + 16).map(|x| reflected(x, y)).sum::<f32>() / 33.0;
+            let v = reflected(x, y);
+            sum += v;
+            squares += (v - local).powi(2);
+            holes += usize::from(v < local * 0.5);
+            count += 1;
+        }
+    }
+    let mean = sum / count as f32;
+    Some(((squares / count as f32).sqrt() / mean, holes as f32 / count as f32))
+}
+
+/// The contact reflection's grain without TAA to smooth it: the trace's
+/// jittered steps once missed a quarter of its pixels at low roughness
+/// (grain 0.49, holes 27% before the march was rebuilt). What is left is
+/// the bottom edge's one-pixel stair at half size.
+#[test]
+fn contact_reflections_show_no_grain_at_full_hd_without_taa() {
+    for (roughness, max_grain, max_holes) in [(0.0, 0.12, 0.03), (0.1, 0.12, 0.03), (0.2, 0.03, 0.005)] {
+        let Some((grain, holes)) = contact_grain(roughness) else {
+            return;
+        };
+        eprintln!("roughness {roughness}: contact reflection grain {grain:.3} (RMS / mean), holes {holes:.3}");
+        assert!(
+            grain < max_grain && holes < max_holes,
+            "roughness {roughness}: grain {grain:.3} (at most {max_grain}), holes {holes:.3} (at most {max_holes})"
+        );
     }
 }

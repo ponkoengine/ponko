@@ -22,6 +22,8 @@ mod tiled;
 mod xml;
 
 pub use autotile::{AutoTile, Neighbours};
+pub use ldtk::{LdtkLayout, LdtkLevel, LdtkWorld};
+pub(crate) use level::resolve as resolve_relative_asset;
 pub use level::{
     Layer, LayerKind, Level, LevelLayer, LevelObject, LevelOptions, LevelRoot, ObjectShape, PlacedTile, Properties,
     TileInfo, TileLayer, Tileset,

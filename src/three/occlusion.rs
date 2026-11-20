@@ -37,17 +37,44 @@ impl OcclusionGrid {
         self.levels.first()
     }
     /// A grid of `width` x `height` farthest depths, row by row from the top.
+    #[cfg(test)]
     pub fn new(view_proj: Mat4, camera: Vec3, width: u32, height: u32, depth: Vec<f32>) -> Self {
+        let mut grid = Self::default();
+        grid.rebuild(view_proj, camera, width, height, &depth);
+        grid
+    }
+
+    /// Makes this the grid [`new`](Self::new) makes, in the storage it
+    /// already has: a grid read back every frame allocates nothing once
+    /// its levels have grown.
+    pub fn rebuild(&mut self, view_proj: Mat4, camera: Vec3, width: u32, height: u32, depth: &[f32]) {
         assert_eq!(depth.len(), (width * height) as usize);
-        let mut levels = vec![(width, height, depth)];
+        self.view_proj = view_proj;
+        self.camera = camera;
+        let levels = &mut self.levels;
+        if levels.is_empty() {
+            levels.push((0, 0, Vec::new()));
+        }
+        levels[0].0 = width;
+        levels[0].1 = height;
+        levels[0].2.clear();
+        levels[0].2.extend_from_slice(depth);
+        let mut n = 1;
         loop {
-            let (w, h, below) = levels.last().expect("level 0");
-            let (w, h) = (*w, *h);
+            let (w, h) = (levels[n - 1].0, levels[n - 1].1);
             if w <= 1 && h <= 1 {
                 break;
             }
             let (nw, nh) = (w.div_ceil(2), h.div_ceil(2));
-            let mut next = vec![0.0f32; (nw * nh) as usize];
+            if levels.len() <= n {
+                levels.push((0, 0, Vec::new()));
+            }
+            let (done, rest) = levels.split_at_mut(n);
+            let below = &done[n - 1].2;
+            let (lw, lh, next) = &mut rest[0];
+            (*lw, *lh) = (nw, nh);
+            next.clear();
+            next.resize((nw * nh) as usize, 0.0);
             for y in 0..nh {
                 for x in 0..nw {
                     let mut far = 1.0f32;
@@ -58,13 +85,9 @@ impl OcclusionGrid {
                     next[(y * nw + x) as usize] = far;
                 }
             }
-            levels.push((nw, nh, next));
+            n += 1;
         }
-        Self {
-            view_proj,
-            camera,
-            levels,
-        }
+        levels.truncate(n);
     }
 
     /// Whether a box (`min`, `max` in world space) was hidden. `camera`:

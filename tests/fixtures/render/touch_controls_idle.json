@@ -1,0 +1,17 @@
+{
+  "name": "touch_controls_idle",
+  "scene": "on-screen touch controls in a 256x144 view on black: a stick (a see-through white disc with a solid rim and a brighter knob in its middle) at the bottom left, a round button labelled A at the bottom right and a small corner button labelled II at the top right, none held; drawn with the window's sprite pipeline into an sRGB target",
+  "width": 256,
+  "height": 144,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 24,
+    "outliers": 0.004,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "76d48572d8446f97",
+  "reason": "new on-screen touch controls test"
+}

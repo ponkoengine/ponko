@@ -14,7 +14,7 @@ pub const PONKO_PRESS_THRESHOLD: f32 = 0.5;
 
 /// One press as the binding description `ponko_action_map_set` takes: kind
 /// key, mouse, gamepad button or gamepad axis (with the default deadzone).
-fn describe(pressed: PressedInput) -> Option<PonkoActionBinding> {
+pub(crate) fn describe(pressed: PressedInput) -> Option<PonkoActionBinding> {
     let blank = PonkoActionBinding {
         kind: 0,
         pad: 0,
@@ -48,18 +48,24 @@ fn describe(pressed: PressedInput) -> Option<PonkoActionBinding> {
             deadzone,
             ..blank
         },
+        PressedInput::Button(ButtonBinding::Gesture(g)) => PonkoActionBinding {
+            kind: PonkoActionSource::PONKO_ACTION_GESTURE as u32,
+            first: crate::touch::gesture_to_c(g),
+            ..blank
+        },
         // A press kind this ABI version cannot describe is left out.
         _ => return None,
     })
 }
 
-/// Lists every key, mouse button, gamepad button and gamepad axis that went
-/// down this frame (Rust's `ctx.input.pressed_this_frame()`), as
+/// Lists every key, mouse button, gamepad button, gamepad axis and touch
+/// gesture that went down this frame (Rust's `ctx.input.pressed_this_frame()`), as
 /// `PonkoActionBinding`s: kinds `PONKO_ACTION_KEY`, `PONKO_ACTION_MOUSE`,
-/// `PONKO_ACTION_GAMEPAD_BUTTON` and `PONKO_ACTION_GAMEPAD_AXIS` (with the
-/// default deadzone), ready for `ponko_action_map_set` (kind 0 for the
-/// buttons, 1 for the axis). Order: keys, mouse buttons, each gamepad slot's
-/// buttons, then axes; the same every run.
+/// `PONKO_ACTION_GAMEPAD_BUTTON`, `PONKO_ACTION_GAMEPAD_AXIS` (with the
+/// default deadzone) and `PONKO_ACTION_GESTURE`, ready for
+/// `ponko_action_map_set` (kind 0 for the buttons and gestures, 1 for the
+/// axis). Order: keys, mouse buttons, each gamepad slot's buttons, axes,
+/// then gestures; the same every run.
 ///
 /// `axis_threshold` is how far a stick or trigger must move to count, in
 /// `0..=1`; `0.0` means `PONKO_PRESS_THRESHOLD`. `out_count` receives the

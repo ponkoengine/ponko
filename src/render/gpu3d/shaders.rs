@@ -74,7 +74,10 @@ impl Shaders {
             &shadow_layout,
             "built-in",
             &for_samples(
-                &compose_shader_storage("", features.decals, features.gi, features.storage),
+                &with_reflection_spread(
+                    compose_shader_storage("", features.decals, features.gi, features.storage),
+                    features.spread,
+                ),
                 samples,
                 float_depth,
             ),
@@ -199,11 +202,9 @@ impl Shaders {
         replacing: Option<u32>,
         defer: bool,
     ) -> Result<(Arc<ShaderPipelines>, shader_checks::LaterVerdict), Box<ShaderDiagnostic>> {
-        let storage = self.features.storage;
-        let (decals, gi) = (self.features.decals, self.features.gi);
         let key = self.cache.key(ModuleKey {
             source: user.into(),
-            features: Features { decals, gi, storage },
+            features: self.features,
         });
         if let Some(shared) = self.cache.get(&key) {
             // A reload with unchanged code finds its own set: nothing shared.
@@ -233,6 +234,25 @@ impl Shaders {
         Ok((built, verdict))
     }
 
+    /// The source of `set`'s module composed by `compose` (from the game's
+    /// code as drawn, with decals and global illumination as this device
+    /// has them) instead of [`compose_material`], ready for the targets:
+    /// what crowds build their own pipelines from (see `crowds.rs`). `None`
+    /// for a set the cache no longer holds.
+    pub(super) fn compose_like(
+        &self,
+        set: &Arc<ShaderPipelines>,
+        compose: impl Fn(&str, bool, bool) -> String,
+    ) -> Option<String> {
+        let (key, _) = self.cache.live().find(|(_, s)| Arc::ptr_eq(s, set))?;
+        let drawn = super::vertex_motion::with_past(&key.module.source);
+        let source = with_reflection_spread(
+            compose(&drawn, self.features.decals, self.features.gi),
+            self.features.spread,
+        );
+        Some(for_samples(&source, self.samples, self.float_depth).into_owned())
+    }
+
     /// Compiles a material shader that no other shader shares.
     pub(super) fn compile_material(
         &self,
@@ -250,11 +270,14 @@ impl Shaders {
         // Checked as the game wrote it, so messages quote its own code;
         // drawn with its reads of the last frame (see `vertex_motion.rs`).
         let drawn = super::vertex_motion::with_past(user);
-        let source = compose_storage(user, decals, gi, storage);
+        let spread = self.features.spread;
+        let source = with_reflection_spread(compose_storage(user, decals, gi, storage), spread);
         crate::render::diagnose(name, ShaderKind::Material, &variant, &source)?;
         let source = match drawn {
             std::borrow::Cow::Borrowed(_) => source,
-            std::borrow::Cow::Owned(ref code) => compose_storage(code, decals, gi, storage),
+            std::borrow::Cow::Owned(ref code) => {
+                with_reflection_spread(compose_storage(code, decals, gi, storage), spread)
+            }
         };
         let past = super::vertex_motion::vertex_past(&drawn, &source);
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -648,6 +671,43 @@ pub(super) const DECALS: &str = include_str!("../decal.wgsl");
 
 pub(super) const NO_DECALS: &str = include_str!("../decal_off.wgsl");
 
+/// The first and last lines of the material shader's read of the
+/// reflections' spread image (`mesh_main.wgsl`).
+const SPREAD_BEGIN: &str = "// ---- reflection spread image: begin ----";
+const SPREAD_END: &str = "// ---- reflection spread image: end ----";
+
+/// What a device without a texture slot for the reflections' spread image
+/// reads instead: the copy in the screen image's first level.
+const SPREAD_FALLBACK: &str = "fn reflection_spread(pixel: vec2<f32>, copied: f32) -> f32 { return copied; }";
+
+/// A material shader `source` for a device with (`spread`) or without a
+/// texture slot for the reflections' half-size spread image (see
+/// `GpuLimits::reflection_spread`): without one, its binding and read are
+/// replaced by [`SPREAD_FALLBACK`]. The lines don't move, so error messages
+/// point at the same lines.
+pub(super) fn with_reflection_spread(source: String, spread: bool) -> String {
+    if spread {
+        return source;
+    }
+    let (Some(begin), Some(end)) = (source.find(SPREAD_BEGIN), source.find(SPREAD_END)) else {
+        return source;
+    };
+    let end = end + SPREAD_END.len();
+    let lines = source[begin..end].matches('\n').count();
+    let mut out = String::with_capacity(source.len());
+    out.push_str(&source[..begin]);
+    out.push_str(SPREAD_FALLBACK);
+    out.extend(std::iter::repeat_n('\n', lines));
+    out.push_str(&source[end..]);
+    out
+}
+
+/// Whether `device` has a texture slot for the reflections' spread image
+/// in the opaque pass.
+pub(crate) fn supports_reflection_spread(device: &wgpu::Device) -> bool {
+    GpuLimits::of(device).reflection_spread()
+}
+
 /// Whether `device` has a texture slot to spare for projected decals.
 /// Native devices ask for more than the default when the adapter has it;
 /// WebGL2 doesn't, and skips decals.
@@ -660,6 +720,21 @@ pub(crate) fn supports_decals(device: &wgpu::Device) -> bool {
 pub(super) const GI: &str = include_str!("../gi.wgsl");
 
 pub(super) const NO_GI: &str = include_str!("../gi_off.wgsl");
+
+/// Baked lighting in the mesh shader (see `three::bake`), read from the
+/// material's third texture array slot, or the stand-in for a game shader
+/// that uses that slot itself.
+pub(super) const BAKED: &str = include_str!("../baked.wgsl");
+
+pub(super) const NO_BAKED: &str = include_str!("../baked_off.wgsl");
+
+/// Whether a game's material code `user` reads its own third texture array
+/// (which then can't carry the baked lighting).
+pub(super) fn uses_third_array(user: &str) -> bool {
+    crate::render::shader_diagnostics::contract_tokens(user)
+        .iter()
+        .any(|t| t.0 == "custom_array2")
+}
 
 /// Global illumination's probe update pass (see `gi.rs`).
 pub(super) const GI_UPDATE: &str = include_str!("../gi_update.wgsl");
@@ -718,14 +793,16 @@ pub(crate) fn compose_shader_with(user: &str, decals: bool) -> String {
 pub(super) fn compose_material(user: &str, decals: bool, gi: bool) -> String {
     let decal_code = if decals { DECALS } else { NO_DECALS };
     let gi_code = if gi { GI } else { NO_GI };
+    let baked_code = if uses_third_array(user) { NO_BAKED } else { BAKED };
     let mut source = String::with_capacity(
-        MESH_PRELUDE.len() + decal_code.len() + gi_code.len() + user.len() + MESH_MAIN.len() + 200,
+        MESH_PRELUDE.len() + decal_code.len() + gi_code.len() + baked_code.len() + user.len() + MESH_MAIN.len() + 200,
     );
     source.push_str(MESH_PRELUDE);
     source.push_str("@group(3) @binding(0) var<storage, read> items: array<vec4<f32>>;\n@group(3) @binding(1) var<storage, read> static_indices: array<u32>;\n");
     source.push_str(super::vertex_motion::ITEM_HELPER);
     source.push_str(decal_code);
     source.push_str(gi_code);
+    source.push_str(baked_code);
     source.push_str("\n// ---- the game's shader ----\n");
     source.push_str(user);
     source.push_str("\n// ---- the engine's entry points ----\n");
@@ -922,6 +999,7 @@ pub(super) fn build_pipelines(
         samples,
         depth,
         past,
+        crowd: false,
     };
     ShaderPipelines {
         sides: Sides::ALL.map(|sides| builder.timed_build(ShaderVariant::new(sides, Instancing::Plain), counters)),
@@ -948,6 +1026,11 @@ pub(super) struct SideBuilder {
     /// What its `vertex` reads of the last frame: with anything, each set
     /// also has a still motion pipeline ([`Pipelines::velocity_still`]).
     pub(super) past: VertexPast,
+    /// A crowd's set (see `crowds.rs`): a third vertex buffer brings each
+    /// corner's joints and weights, the instance buffer is a zero-stride
+    /// marker, and the motion vectors come from `vs_velocity_still` (the
+    /// crowd's records as of the last frame), with no still variant.
+    pub(super) crowd: bool,
 }
 
 impl SideBuilder {
@@ -1038,7 +1121,7 @@ impl SideBuilder {
     /// [`PipelineRole`].
     pub(super) fn build(&self, variant: ShaderVariant) -> Pipelines {
         let cull = variant.sides.cull();
-        let shared = variant.instancing.shared();
+        let shared = variant.instancing.shared() || self.crowd;
         let vs = PipelineRole::vertex_entry;
         let fs = |role: PipelineRole| role.fragment_entry(variant.instancing);
         let (device, module, layout, shadow_layout, samples) = (
@@ -1059,7 +1142,9 @@ impl SideBuilder {
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &INSTANCE_ATTRIBUTES,
             }),
+            self.crowd.then_some(super::crowds::INFLUENCE_LAYOUT),
         ];
+        let buffers = if self.crowd { &buffers[..] } else { &buffers[..2] };
         let depth_format = self.depth;
         let depth = |write, compare, bias| {
             Some(wgpu::DepthStencilState {
@@ -1098,7 +1183,7 @@ impl SideBuilder {
                     module,
                     entry_point: Some(vertex),
                     compilation_options: Default::default(),
-                    buffers: &buffers,
+                    buffers,
                 },
                 primitive: wgpu::PrimitiveState {
                     cull_mode: cull,
@@ -1135,30 +1220,43 @@ impl SideBuilder {
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
         })];
-        let velocity = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("3d motion vectors"),
-            layout: Some(layout),
-            vertex: wgpu::VertexState {
-                module,
-                entry_point: Some(vs(PipelineRole::Velocity)),
-                compilation_options: Default::default(),
-                buffers: &moved_buffers,
-            },
-            primitive: wgpu::PrimitiveState {
-                cull_mode: cull,
-                ..Default::default()
-            },
-            depth_stencil: depth(false, wgpu::CompareFunction::Equal, Default::default()),
-            multisample: msaa,
-            fragment: Some(wgpu::FragmentState {
-                module,
-                entry_point: fs(PipelineRole::Velocity),
-                compilation_options: Default::default(),
-                targets: &velocity_target,
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let velocity = if self.crowd {
+            pipeline(
+                "3d crowd motion vectors",
+                layout,
+                "vs_velocity_still",
+                fs(PipelineRole::Velocity),
+                cull,
+                depth(false, wgpu::CompareFunction::Equal, Default::default()),
+                msaa,
+                &velocity_target,
+            )
+        } else {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("3d motion vectors"),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some(vs(PipelineRole::Velocity)),
+                    compilation_options: Default::default(),
+                    buffers: &moved_buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: cull,
+                    ..Default::default()
+                },
+                depth_stencil: depth(false, wgpu::CompareFunction::Equal, Default::default()),
+                multisample: msaa,
+                fragment: Some(wgpu::FragmentState {
+                    module,
+                    entry_point: fs(PipelineRole::Velocity),
+                    compilation_options: Default::default(),
+                    targets: &velocity_target,
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
         let shadow_bias = wgpu::DepthBiasState {
             constant: 2,
             slope_scale: 2.0,
@@ -1273,7 +1371,7 @@ impl SideBuilder {
             // Models that hold still but whose `vertex` moves them: drawn
             // from the frame's own instances, `vertex` run as of this frame
             // and the last (see `vertex_motion.rs`).
-            velocity_still: self.past.any().then(|| {
+            velocity_still: (self.past.any() && !self.crowd).then(|| {
                 pipeline(
                     "3d still motion vectors",
                     layout,

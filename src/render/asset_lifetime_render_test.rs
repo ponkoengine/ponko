@@ -33,10 +33,9 @@ fn a_batch_whose_mesh_was_freed_never_draws_the_mesh_made_in_its_slot() {
     let red = rig.mesh(&cube, glow(Color::RED));
     // Makes the green material on both sides (the renderer's ids follow
     // the game's); its own mesh is never drawn.
+    let next = rig.ctx.gfx.assets3d.material_ids.next("material");
     let _spare = rig.mesh(&MeshData::cube(0.1), glow(Color::GREEN));
-    let green_material = Material {
-        id: rig.ctx.gfx.assets3d.materials - 1,
-    };
+    let green_material = Material { id: next };
     let transforms: Vec<Mat4> = (-2..=2)
         .map(|x| Mat4::from_translation(Vec3::new(x as f32 * 1.5, 0.0, 0.0)))
         .collect();

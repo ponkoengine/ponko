@@ -1,4 +1,11 @@
-# Multiplayer: deterministic lockstep
+# Lockstep, rollback and your own protocol
+
+This chapter is for games that don't take the default path,
+[replication](replication.md) (see [pick a model](multiplayer.md)):
+deterministic **lockstep** and **rollback**, and **application messages**
+with the building blocks for a protocol of your own.
+
+## Lockstep
 
 Lockstep is how RTS and simulation games do multiplayer: every player runs
 the whole simulation, and only **inputs** cross the network. As long as
@@ -11,7 +18,7 @@ randomness per (seed, tick, system, entity), and deterministic queries and
 physics. Lockstep adds the session: 2–8 players, plain UDP (WebSocket
 for [browser players](#in-the-browser)), no server to run.
 
-## Host and join
+### Host and join
 
 One player hosts, the others join by address (`join_web` and `--web` are
 for [browser players](#in-the-browser)):
@@ -39,7 +46,7 @@ The host is player 0; the others get 1, 2, ... in the order they join. The
 game starts when everyone is in. Until then, and whenever a player's input
 is late, the simulation waits: frames (drawing, UI) go on, ticks don't.
 
-## Inputs out, inputs in
+### Inputs out, inputs in
 
 A player's input is whatever you send with `ctx.net.set_input(&value)`: a
 serde type in Rust (a plain struct in C++, up to 1024 bytes). Set it in a
@@ -71,7 +78,7 @@ it every frame for held keys. Without a session, `ctx.net` is offline: one
 player whose input applies on the next tick. The same code runs alone and
 online, so you can build the single-player game first.
 
-## Input delay
+### Input delay
 
 Input set at tick `t` is used at tick `t + input_delay` on every machine
 (default 3 ticks, 50 ms at 60 Hz). That's the time it has to reach the
@@ -82,7 +89,7 @@ the host: `Net::host(addr, players)?.input_delay(5)`.
 Packets get lost; nobody notices. Every packet repeats all inputs the other
 side hasn't acknowledged yet, so the next one fills the gap.
 
-## Staying in sync
+### Staying in sync
 
 Lockstep only works if the simulation really is deterministic. The rules:
 
@@ -110,14 +117,14 @@ ponko lockstep: desync with player 1 at tick 119: Unit differ
 Only reflected components are compared, so reflect the ones your
 simulation changes.
 
-## Status
+### Status
 
 `ctx.net.state()` says where the session is: `Connecting`, `Running`, or
 `Lost` (a player was silent for longer than the timeout, 10 s by default,
 or the host refused us; `ctx.net.error()` says why). `ctx.net.player()` and
 `players()` say who's who; `stats()` counts packets and bytes sent.
 
-## Over Steam
+### Over Steam
 
 With the `steam` feature, Steam carries the packets: players meet in a
 friends-only Steam lobby, invites come from the Steam overlay, and Steam's
@@ -166,7 +173,7 @@ Try it with two Steam accounts on two machines:
 to invite, and `cargo run --example lockstep --features steam -- steam-join`
 on the other, then accept the invite.
 
-## In the browser
+### In the browser
 
 A web build can't open UDP sockets, so browser players connect over
 **WebSocket**, which every browser has. The host keeps its UDP socket for
@@ -202,9 +209,10 @@ Things to know:
   here: a lockstep tick waits for every player's input anyway, so an
   unreliable channel would make no tick run sooner. The packets are the
   same as over UDP, one WebSocket message each. An unreliable browser
-  transport (WebTransport, WebRTC data channels) would help
-  [messages](#application-messages-rust) more than lockstep; it isn't
-  there yet.
+  transport would help [messages](#application-messages-rust) more than
+  lockstep: [WebRTC data channels](webrtc.md) (feature `webrtc`) carry
+  message endpoints peer to peer, with real unreliable lanes, also between
+  two browsers.
 - **`https://` pages need `wss://`.** The host speaks plain `ws://`. A page
   served over HTTPS may only open `wss://` URLs, so put a TLS proxy (Caddy,
   nginx) in front of the WebSocket port and join `wss://your.host/...`.
@@ -221,7 +229,7 @@ headless browser: two tabs of the web build, a native host and a native
 client over UDP play the lockstep example together, and all four must end
 up with the same world.
 
-## Testing
+### Testing
 
 `Net::loopback(players)` connects sessions in memory, so a test can run a
 whole match headless, one thread per player, and check that every world
@@ -231,7 +239,7 @@ ends identical:
 {{#include ../../tests/net.rs:loopback}}
 ```
 
-## Cost
+### Cost
 
 Measured with `cargo run --release -p ponko_bench -- net`: 10,000 ticks of
 a small input-driven sim take 2 ms offline and 8.5 ms as two loopback
@@ -424,9 +432,10 @@ Everything networking is behind `ctx.net` (and in the `ponko::net` module):
 
 | Pick | For | Start with |
 |---|---|---|
+| [Replication](replication.md) | Server-authoritative games: declare components, mark entities, the engine syncs them (deltas, interest, budget, prediction, events) | `Game::replication(Replication::new()...)` with `Game::messages(endpoint)`, then `ctx.net.replication` |
 | Lockstep (above) | Deterministic simulations with 2–8 players: only inputs cross the network | `Game::lockstep(net)`, then `ctx.net.set_input` and `ctx.net.input` (`ctx.net.lockstep`) |
 | [Messages](#application-messages-rust) | Everything else: your own packets on reliable and unreliable lanes | `Game::messages(endpoint)`, then `ctx.net.messages` |
-| [Snapshots](#replicating-state-over-messages) | Server-authoritative worlds on top of messages | `ctx.net.snapshots` and `ctx.net.interest` |
+| [Snapshots](#replicating-state-over-messages) | Server-authoritative worlds with your own packet format, on top of messages | `ctx.net.snapshots` and `ctx.net.interest` |
 | [Rollback](#rollback) | Small deterministic games that must answer at once (fighting, racing): predict, roll back, re-simulate | `Rollback::new(players, me)`, a `RollbackGame`, packets over messages |
 
 Lockstep and messages are independent and can run side by side. A
@@ -499,6 +508,13 @@ iterator (it borrows the endpoint); `next_event()` takes one at a time and
 lets you send in between. Events include connections, complete
 messages, and disconnections with diagnostic reasons. The default silence
 and connection timeout is ten seconds; configure it with `.timeout(duration)`.
+The clock starts when you first poll the endpoint, so startup work before
+that call uses none of the timeout. The joining endpoint attempts its first
+hello immediately. After that, each poll advances protocol time by at most
+half the configured timeout (minimum step limit of one nanosecond). This
+gives peers time to respond after a stalled frame. The endpoint checks
+for incoming packets before testing for silence. A peer that stays silent
+across polls still times out.
 `disconnect(peer)` discards pending messages, sends three best-effort leave
 notifications and reports a local event. If those notifications are lost,
 the remote detects the timeout. Dropping an endpoint is detected by timeout.
@@ -518,7 +534,12 @@ allocation-free frames.
 `loopback(n)` builds an in-memory host and clients, intentionally reversing
 packet arrival to exercise reordering. `loopback_lossy(n, drop_one_in)` also
 drops every Nth datagram. `poll_elapsed(duration)` advances an explicit clock
-for deterministic tests without sleeping.
+for deterministic tests without sleeping, with the same first-poll and
+per-poll limits as `poll()`. An endpoint the game polls (`Game::messages`)
+counts wall time; `NetMessages::game_clock()` makes it count the game's
+own time instead, the time since the last frame, with the same limits, so
+a headless test that plays a minute in a fraction of a second still sees
+its resends and timeouts happen (see [testing replication](replication.md#test-it)).
 
 UDP sessions use nonblocking `std::net::UdpSocket` on the calling thread;
 there is no async runtime or worker thread. They are **unauthenticated and
@@ -617,6 +638,11 @@ but its Steamworks 0.12.2 dependency differs from this engine's 0.13.1, and
 the engine instead adapts the existing renet packet protocol directly.
 
 ## Replicating state over messages
+
+[Replication](replication.md) does everything in this section for you:
+it builds on these same pieces and adds the wire format, deltas against
+acknowledged baselines and a bandwidth budget. The helpers below are for
+a game that keeps its own packet format.
 
 Client/server and co-op games usually don't run lockstep: each player owns
 their own motion (and the vehicle they drive), the host owns the rest, and

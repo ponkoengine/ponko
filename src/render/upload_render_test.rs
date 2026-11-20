@@ -83,8 +83,8 @@ fn a_still_scene_with_a_running_clock_uploads_only_the_clock() {
     let Some((mut rig, _)) = scene(16) else { return };
     let c = steady(&mut rig, 4, 6, |rig, i| rig.time = (i as f32 / 60.0, 1.0 / 60.0));
     eprintln!("still scene, clock running: {c:?} ({} bytes)", c.bytes());
-    // One vec4 in each frame uniform: the camera's and the shadow views'.
-    assert!(c.uniforms > 0 && c.uniforms <= 16 * 8, "{c:?}");
+    // Only the legacy clock and split clock, one vec4 each per view.
+    assert!(c.uniforms > 0 && c.uniforms <= 2 * 16 * 8, "{c:?}");
     assert_eq!(c.bytes(), c.uniforms, "{c:?}");
     rig.check_mirrors();
 }
@@ -146,6 +146,40 @@ fn edited_scenes_draw_the_same_as_ones_uploaded_whole() {
     for step in 0..4 {
         edit(&mut fresh, &mut fresh_cubes, step);
     }
+    let whole = fresh.draw();
+    let differ = edited.iter().zip(&whole).filter(|(a, b)| a != b).count();
+    assert_eq!(differ, 0, "{differ} bytes differ");
+}
+
+#[test]
+fn writes_of_frames_prepared_but_not_drawn_land_before_the_next_frames() {
+    let Some((mut rig, mut cubes)) = scene(16) else { return };
+    rig.draw();
+    // Each edit's frame is prepared and skipped, so its gathered writes
+    // wait; the next frame's land after them.
+    for step in 0..4 {
+        edit(&mut rig, &mut cubes, step);
+        rig.prepare_only = true;
+        rig.draw();
+        rig.ctx.world.get_mut::<Transform3D>(cubes[1]).unwrap().position.y = step as f32 * 0.25;
+        rig.draw();
+        rig.prepare_only = false;
+    }
+    let edited = rig.draw();
+    rig.check_mirrors();
+    let Some((mut fresh, mut fresh_cubes)) = scene(16) else {
+        return;
+    };
+    for step in 0..4 {
+        edit(&mut fresh, &mut fresh_cubes, step);
+    }
+    fresh
+        .ctx
+        .world
+        .get_mut::<Transform3D>(fresh_cubes[1])
+        .unwrap()
+        .position
+        .y = 0.75;
     let whole = fresh.draw();
     let differ = edited.iter().zip(&whole).filter(|(a, b)| a != b).count();
     assert_eq!(differ, 0, "{differ} bytes differ");

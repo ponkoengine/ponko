@@ -136,7 +136,8 @@ impl Graphics {
     /// What happened to each of the game's shaders (sprite shaders, and
     /// with the `3d` feature material shaders, screen effects and compute
     /// passes) the last time it was compiled: one
-    /// entry per name and kind, oldest first. A coding agent or tool can
+    /// entry per name and kind, oldest first. Freeing the last 3D resource
+    /// with a name and kind removes its entry. A coding agent or tool can
     /// check here whether an edit took effect, and where an error is,
     /// without reading logs.
     ///

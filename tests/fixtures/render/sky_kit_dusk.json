@@ -1,0 +1,17 @@
+{
+  "name": "sky_kit_dusk",
+  "scene": "the sky kit at 17:42, looking west: a red sunset lighting the clouds from below",
+  "width": 192,
+  "height": 112,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 16,
+    "outliers": 0.015,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "cda6977ef20b2855",
+  "reason": "new: the sky kit at four times of day"
+}

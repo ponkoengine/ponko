@@ -78,3 +78,42 @@ fn a_gltf_scene_spawns_with_nodes_found_by_path_and_despawns() {
     );
     assert_eq!(nowhere, PONKO_NOT_FOUND);
 }
+
+#[test]
+fn a_gltf_file_is_read_without_spawning_and_the_schema_lists_the_properties() {
+    let path = courtyard();
+    let mut seen = None;
+    unsafe {
+        let game = ponko_game_new(c"gltf".as_ptr(), 64, 64);
+        run_game(game, 0, |ctx| {
+            let len = || {
+                let mut n = 0;
+                assert_eq!(ponko_world_len(ponko_ctx_world(ctx), &mut n), PONKO_OK);
+                n
+            };
+            let entities_before = len();
+            let scene = read_text(|b, n, l| ponko_gltf_scene_load(ctx, path.as_ptr(), b, n, l)).unwrap();
+            let spawned = len() - entities_before;
+            let missing = read_text(|b, n, len| ponko_gltf_scene_load(ctx, c"levels/nowhere.gltf".as_ptr(), b, n, len))
+                .unwrap_err();
+            let schema = read_text(|b, n, len| ponko_gltf_properties_schema(ponko_ctx_world(ctx), b, n, len)).unwrap();
+            seen = Some((scene, spawned, missing, schema));
+        });
+    }
+    let (scene, spawned, missing, schema) = seen.unwrap();
+    assert_eq!(spawned, 0, "nothing spawned");
+    assert_eq!(missing, PONKO_NOT_FOUND);
+    let scene: serde_json::Value = serde_json::from_str(&scene).unwrap();
+    let door = scene["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["path"] == "Gate/Door")
+        .unwrap();
+    assert_eq!(door["extras"]["door"], "north");
+    assert_eq!(door["world"]["position"], serde_json::json!([0.0, 1.0, -6.0]));
+    assert_eq!(door["mesh"]["triangles"], 12);
+    assert_eq!(scene["spawn_points"][0]["name"], "player");
+    let schema: serde_json::Value = serde_json::from_str(&schema).unwrap();
+    assert!(schema["properties"]["ponko:collider"]["enum"].is_array());
+}

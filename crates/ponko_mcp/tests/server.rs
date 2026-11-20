@@ -53,6 +53,19 @@ fn start_game_with(name: &'static str, injection: bool) -> (u16, thread::JoinHan
             .control_endpoint(true)
             .input_injection(injection)
             .sim_system(regen)
+            // What a plugin adds for tools: a debug toggle and a method.
+            .debug_toggle("rules.regen", false)
+            .control_method(
+                "rules.set_round",
+                "sets the round: params {\"round\": number}",
+                |ctx: &mut Ctx, params: &Value| {
+                    let round = params["round"]
+                        .as_u64()
+                        .ok_or_else(|| Error::new(ErrorKind::Invalid, "`round` must be a whole number"))?;
+                    ctx.world.resource_mut::<Rules>().round = round as u32;
+                    Ok(json!({ "round": round }))
+                },
+            )
             .run_headless(u64::MAX, move |ctx| {
                 ctx.world.reflect::<Health>();
                 ctx.events.reflect::<Regen>();
@@ -174,6 +187,44 @@ fn agents_drive_several_games_through_mcp() {
 
     let err = agent.tool("screenshot", json!({ "instance": "alpha" })).unwrap_err();
     assert!(err.contains("no window"), "headless games say why: {err}");
+
+    // A method the game added, and its debug toggle.
+    let answer = agent
+        .tool(
+            "call_game_method",
+            json!({ "instance": "beta", "method": "rules.set_round", "params": { "round": 7 } }),
+        )
+        .unwrap();
+    assert_eq!(answer, json!({ "round": 7 }));
+    let rules = agent
+        .tool("get_resource", json!({ "instance": "beta", "resource": "Rules" }))
+        .unwrap();
+    assert_eq!(rules["round"], 7, "{rules}");
+    let refused = agent
+        .tool(
+            "call_game_method",
+            json!({ "instance": "beta", "method": "rules.set_round" }),
+        )
+        .unwrap_err();
+    assert!(refused.contains("`round` must be a whole number"), "{refused}");
+    let refused = agent
+        .tool("call_game_method", json!({ "instance": "beta", "method": "game.quit" }))
+        .unwrap_err();
+    assert!(refused.contains("not a method this game added"), "{refused}");
+    let drawn = agent
+        .tool(
+            "debug_draw",
+            json!({ "instance": "beta", "toggles": { "rules.regen": true } }),
+        )
+        .unwrap();
+    assert_eq!(drawn["toggles"], json!({ "rules.regen": true }), "{drawn}");
+    let methods = agent
+        .tool("instance_capabilities", json!({ "instance": "beta" }))
+        .unwrap();
+    assert!(
+        methods.to_string().contains("rules.set_round"),
+        "the added method is reported: {methods}"
+    );
 
     // Capabilities: what alpha can do, learned without changing it.
     let tick_before = agent.tool("instance_info", json!({ "instance": "alpha" })).unwrap()["tick"].clone();

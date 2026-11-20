@@ -1,0 +1,174 @@
+pub mod ponko_lobby
+pub mod ponko_lobby::load
+pub struct ponko_lobby::load::LoadConfig
+pub ponko_lobby::load::LoadConfig::matched_rooms: usize
+pub ponko_lobby::load::LoadConfig::payload_bytes: usize
+pub ponko_lobby::load::LoadConfig::relay_rounds: usize
+pub ponko_lobby::load::LoadConfig::room_size: u16
+pub ponko_lobby::load::LoadConfig::rooms: usize
+impl core::clone::Clone for ponko_lobby::load::LoadConfig
+pub fn ponko_lobby::load::LoadConfig::clone(&self) -> Self
+impl core::default::Default for ponko_lobby::load::LoadConfig
+pub fn ponko_lobby::load::LoadConfig::default() -> Self
+impl core::fmt::Debug for ponko_lobby::load::LoadConfig
+pub fn ponko_lobby::load::LoadConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct ponko_lobby::load::LoadReport
+pub ponko_lobby::load::LoadReport::clients: usize
+pub ponko_lobby::load::LoadReport::connect: core::time::Duration
+pub ponko_lobby::load::LoadReport::fill_rooms: core::time::Duration
+pub ponko_lobby::load::LoadReport::matchmaking: core::time::Duration
+pub ponko_lobby::load::LoadReport::migrations_seen: u64
+pub ponko_lobby::load::LoadReport::relay: core::time::Duration
+pub ponko_lobby::load::LoadReport::relay_bytes: u64
+pub ponko_lobby::load::LoadReport::relay_delivered: u64
+pub ponko_lobby::load::LoadReport::relay_expected: u64
+pub ponko_lobby::load::LoadReport::relay_messages_per_second: f64
+pub ponko_lobby::load::LoadReport::relay_mib_per_second: f64
+pub ponko_lobby::load::LoadReport::rooms_created: u64
+pub ponko_lobby::load::LoadReport::rooms_per_second: f64
+pub ponko_lobby::load::LoadReport::server: ponko_lobby::LobbyStats
+pub ponko_lobby::load::LoadReport::simulated: core::time::Duration
+pub ponko_lobby::load::LoadReport::total: core::time::Duration
+impl core::clone::Clone for ponko_lobby::load::LoadReport
+pub fn ponko_lobby::load::LoadReport::clone(&self) -> Self
+impl core::default::Default for ponko_lobby::load::LoadReport
+pub fn ponko_lobby::load::LoadReport::default() -> Self
+impl core::fmt::Debug for ponko_lobby::load::LoadReport
+pub fn ponko_lobby::load::LoadReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn ponko_lobby::load::run(&ponko_lobby::load::LoadConfig) -> core::result::Result<ponko_lobby::load::LoadReport, alloc::string::String>
+#[non_exhaustive] pub enum ponko_lobby::AddressKey
+pub ponko_lobby::AddressKey::Connection
+pub ponko_lobby::AddressKey::Ip
+impl core::clone::Clone for ponko_lobby::AddressKey
+pub fn ponko_lobby::AddressKey::clone(&self) -> Self
+impl core::cmp::Eq for ponko_lobby::AddressKey
+impl core::cmp::PartialEq for ponko_lobby::AddressKey
+pub fn ponko_lobby::AddressKey::eq(&self, &Self) -> bool
+impl core::default::Default for ponko_lobby::AddressKey
+pub fn ponko_lobby::AddressKey::default() -> Self
+impl core::fmt::Debug for ponko_lobby::AddressKey
+pub fn ponko_lobby::AddressKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_lobby::AddressKey
+impl core::marker::StructuralPartialEq for ponko_lobby::AddressKey
+pub struct ponko_lobby::FillBySize
+impl core::clone::Clone for ponko_lobby::FillBySize
+pub fn ponko_lobby::FillBySize::clone(&self) -> Self
+impl core::default::Default for ponko_lobby::FillBySize
+pub fn ponko_lobby::FillBySize::default() -> Self
+impl core::fmt::Debug for ponko_lobby::FillBySize
+pub fn ponko_lobby::FillBySize::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_lobby::FillBySize
+impl ponko_lobby::Matchmaker for ponko_lobby::FillBySize
+pub fn ponko_lobby::FillBySize::form(&mut self, &str, u16, &[ponko_lobby::Waiting], core::time::Duration, &mut alloc::vec::Vec<alloc::vec::Vec<usize>>)
+#[non_exhaustive] pub struct ponko_lobby::LobbyLimits
+pub ponko_lobby::LobbyLimits::address_key: ponko_lobby::AddressKey
+pub ponko_lobby::LobbyLimits::connections_per_address: u32
+pub ponko_lobby::LobbyLimits::idle_timeout: core::time::Duration
+pub ponko_lobby::LobbyLimits::matchmaking_every: core::time::Duration
+pub ponko_lobby::LobbyLimits::max_meta_bytes: u32
+pub ponko_lobby::LobbyLimits::max_relay_bytes: u32
+pub ponko_lobby::LobbyLimits::max_request_bytes: usize
+pub ponko_lobby::LobbyLimits::max_room_size: u16
+pub ponko_lobby::LobbyLimits::max_rooms: usize
+pub ponko_lobby::LobbyLimits::relay_burst_bytes: f64
+pub ponko_lobby::LobbyLimits::relay_bytes_per_second: f64
+pub ponko_lobby::LobbyLimits::request_burst: f64
+pub ponko_lobby::LobbyLimits::requests_per_second: f64
+pub ponko_lobby::LobbyLimits::room_idle_timeout: core::time::Duration
+impl core::clone::Clone for ponko_lobby::LobbyLimits
+pub fn ponko_lobby::LobbyLimits::clone(&self) -> Self
+impl core::default::Default for ponko_lobby::LobbyLimits
+pub fn ponko_lobby::LobbyLimits::default() -> Self
+impl core::fmt::Debug for ponko_lobby::LobbyLimits
+pub fn ponko_lobby::LobbyLimits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct ponko_lobby::LobbyServer
+impl ponko_lobby::LobbyServer
+pub fn ponko_lobby::LobbyServer::endpoint(&self, usize) -> core::option::Option<&ponko::net::messages::NetMessages>
+pub fn ponko_lobby::LobbyServer::last_error(&self) -> core::option::Option<&str>
+pub fn ponko_lobby::LobbyServer::listen(&mut self, ponko::net::messages::NetMessages) -> usize
+pub fn ponko_lobby::LobbyServer::matchmaker(self, impl ponko_lobby::Matchmaker) -> Self
+pub fn ponko_lobby::LobbyServer::new(ponko_lobby::LobbyLimits) -> Self
+pub fn ponko_lobby::LobbyServer::on_host_left(self, impl ponko_lobby::HostMigration) -> Self
+pub fn ponko_lobby::LobbyServer::poll(&mut self)
+pub fn ponko_lobby::LobbyServer::poll_elapsed(&mut self, core::time::Duration)
+pub fn ponko_lobby::LobbyServer::room(&self, &str) -> core::option::Option<&ponko::net::lobby::RoomInfo>
+pub fn ponko_lobby::LobbyServer::rooms(&self) -> impl core::iter::traits::iterator::Iterator<Item = &ponko::net::lobby::RoomInfo>
+pub fn ponko_lobby::LobbyServer::seed(self, u64) -> Self
+pub fn ponko_lobby::LobbyServer::shutdown(&mut self)
+pub fn ponko_lobby::LobbyServer::stats(&self) -> ponko_lobby::LobbyStats
+pub fn ponko_lobby::LobbyServer::uptime(&self) -> core::time::Duration
+impl core::fmt::Debug for ponko_lobby::LobbyServer
+pub fn ponko_lobby::LobbyServer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct ponko_lobby::LobbyStats
+pub ponko_lobby::LobbyStats::closed_connections: u64
+pub ponko_lobby::LobbyStats::connections: usize
+pub ponko_lobby::LobbyStats::host_migrations: u64
+pub ponko_lobby::LobbyStats::matches_made: u64
+pub ponko_lobby::LobbyStats::queued: usize
+pub ponko_lobby::LobbyStats::rate_limited: u64
+pub ponko_lobby::LobbyStats::refused: u64
+pub ponko_lobby::LobbyStats::relay_bytes_in: u64
+pub ponko_lobby::LobbyStats::relay_bytes_out: u64
+pub ponko_lobby::LobbyStats::relay_dropped: u64
+pub ponko_lobby::LobbyStats::relay_in: u64
+pub ponko_lobby::LobbyStats::relay_out: u64
+pub ponko_lobby::LobbyStats::requests: u64
+pub ponko_lobby::LobbyStats::rooms: usize
+pub ponko_lobby::LobbyStats::rooms_closed: u64
+pub ponko_lobby::LobbyStats::rooms_created: u64
+pub ponko_lobby::LobbyStats::socket_errors: u64
+impl core::clone::Clone for ponko_lobby::LobbyStats
+pub fn ponko_lobby::LobbyStats::clone(&self) -> Self
+impl core::cmp::Eq for ponko_lobby::LobbyStats
+impl core::cmp::PartialEq for ponko_lobby::LobbyStats
+pub fn ponko_lobby::LobbyStats::eq(&self, &Self) -> bool
+impl core::default::Default for ponko_lobby::LobbyStats
+pub fn ponko_lobby::LobbyStats::default() -> Self
+impl core::fmt::Debug for ponko_lobby::LobbyStats
+pub fn ponko_lobby::LobbyStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_lobby::LobbyStats
+impl core::marker::StructuralPartialEq for ponko_lobby::LobbyStats
+pub struct ponko_lobby::StunResponder
+impl ponko_lobby::StunResponder
+pub fn ponko_lobby::StunResponder::bind(impl std::net::socket_addr::ToSocketAddrs) -> core::io::error::Result<Self>
+pub fn ponko_lobby::StunResponder::local_addr(&self) -> core::io::error::Result<core::net::socket_addr::SocketAddr>
+pub fn ponko_lobby::StunResponder::poll(&mut self) -> usize
+pub fn ponko_lobby::StunResponder::stats(&self) -> ponko_lobby::StunStats
+impl core::fmt::Debug for ponko_lobby::StunResponder
+pub fn ponko_lobby::StunResponder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct ponko_lobby::StunStats
+pub ponko_lobby::StunStats::answered: u64
+pub ponko_lobby::StunStats::ignored: u64
+pub ponko_lobby::StunStats::rate_limited: u64
+impl core::clone::Clone for ponko_lobby::StunStats
+pub fn ponko_lobby::StunStats::clone(&self) -> Self
+impl core::cmp::Eq for ponko_lobby::StunStats
+impl core::cmp::PartialEq for ponko_lobby::StunStats
+pub fn ponko_lobby::StunStats::eq(&self, &Self) -> bool
+impl core::default::Default for ponko_lobby::StunStats
+pub fn ponko_lobby::StunStats::default() -> Self
+impl core::fmt::Debug for ponko_lobby::StunStats
+pub fn ponko_lobby::StunStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_lobby::StunStats
+impl core::marker::StructuralPartialEq for ponko_lobby::StunStats
+pub struct ponko_lobby::Waiting
+pub ponko_lobby::Waiting::member: ponko::net::lobby::MemberId
+pub ponko_lobby::Waiting::rating: i32
+pub ponko_lobby::Waiting::since: core::time::Duration
+impl core::clone::Clone for ponko_lobby::Waiting
+pub fn ponko_lobby::Waiting::clone(&self) -> Self
+impl core::cmp::Eq for ponko_lobby::Waiting
+impl core::cmp::PartialEq for ponko_lobby::Waiting
+pub fn ponko_lobby::Waiting::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_lobby::Waiting
+pub fn ponko_lobby::Waiting::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_lobby::Waiting
+impl core::marker::StructuralPartialEq for ponko_lobby::Waiting
+pub trait ponko_lobby::HostMigration: core::marker::Send + 'static
+pub fn ponko_lobby::HostMigration::next_host(&mut self, &ponko::net::lobby::RoomInfo) -> core::option::Option<ponko::net::lobby::MemberId>
+impl<F: core::ops::function::FnMut(&ponko::net::lobby::RoomInfo) -> core::option::Option<ponko::net::lobby::MemberId> + core::marker::Send + 'static> ponko_lobby::HostMigration for F
+pub fn F::next_host(&mut self, &ponko::net::lobby::RoomInfo) -> core::option::Option<ponko::net::lobby::MemberId>
+pub trait ponko_lobby::Matchmaker: core::marker::Send + 'static
+pub fn ponko_lobby::Matchmaker::form(&mut self, &str, u16, &[ponko_lobby::Waiting], core::time::Duration, &mut alloc::vec::Vec<alloc::vec::Vec<usize>>)
+impl ponko_lobby::Matchmaker for ponko_lobby::FillBySize
+pub fn ponko_lobby::FillBySize::form(&mut self, &str, u16, &[ponko_lobby::Waiting], core::time::Duration, &mut alloc::vec::Vec<alloc::vec::Vec<usize>>)

@@ -242,36 +242,38 @@ frames that do the same on the GPU.
 seconds since the start steps in 3.9 ms after ten hours, 7.8 ms after a
 day, 31 ms after three days. That is what you get from
 `ctx.time.elapsed() as f32` in your own code, and what 3D material shaders
-see as their time (`frame.time.x`). For anything periodic (a blinking
-light, a scrolling texture, a bobbing pickup), wrap it before converting:
-`(ctx.time.elapsed() % period) as f32`. The engine's own looping clocks
-wrap the same way (sprite-sheet animations within their loop, camera
-shake every 4096 s) or count in `f64`: a 3D `Animator` and a 2D
-`Skeleton` keep their unwrapped normalized time (loops so far plus the
-fraction of this one, which exit times and events read) in `f64`, so a
-state looping for days poses, fires events and moves its root on
-schedule. Their `normalized_time()` hands it out as an `f32`, which steps
-coarsely after hours (a one-second loop in steps of 1/256 after ten);
-`normalized_time_f64()` reads it in full (Rust only: the C API reads the
-`f32`). Shader time has no such fix: wrapping it would make every effect
-that reads it jump once a period, so a shader with long-running motion
-wraps its own period (pass `(elapsed % period) as f32` in
-`MaterialDesc::custom`, for example).
+see as their legacy time (`frame.time.x`). For periodic Rust code, wrap
+the clock before converting it with `(ctx.time.elapsed() % period) as f32`.
+In 3D WGSL, use `ponko_elapsed_time_wrapped(4u)` for a four-second cycle.
+It reduces the whole seconds before adding the fractional second, so
+the phase still advances smoothly after days. The helper also uses the
+last drawn frame's time when the motion pass evaluates `vertex` for that
+frame. For other period math, `frame.time_seconds.x` is the whole elapsed
+seconds as a `u32`, and `frame.time_fraction.x` is the subsecond part as
+an `f32`. Their `.y` components hold the same pair for the last drawn
+frame. Keep the parts separate until you have reduced the whole seconds
+to a small value.
+
+A 3D `Animator` and a 2D `Skeleton` keep their unwrapped normalized
+time (loops so far plus the fraction of this one) in `f64`, so a state
+looping for days poses, fires events and moves its root on schedule.
+Use `normalized_time_f64()` in Rust. In C, use
+`ponko_ctx_animator_normalized_time_f64` or
+`ponko_ctx_skeleton2d_normalized_time_f64` with a writable `double`.
+The C++ `Ctx` wrapper exposes these as
+`animator_normalized_time_f64(entity)` and
+`skeleton2d_normalized_time_f64(entity)`. The original float accessors
+and state calls still return the rounded value.
 
 **Memory.** Entity ids, UI nodes, textures (render targets included),
-sounds, fonts, meshes, GPU buffers, collision meshes and instance cells
-reuse what was freed: the next one made takes a freed one's slot, under a
-new handle, so making and freeing them for hours holds memory where it
-was, and archetypes and the query cache stay as they are. No handle is
-given out twice: a slot is given out 4095 times and then retired, which
-costs a few hundred bytes per 4095 made (200 000 textures and sounds made
-and freed hold 5 KB more in the engine's test). A handle kept past its
-`free` stays dead: it never reaches what its slot holds next, and a sprite
-or material still showing a freed texture draws white. Materials,
-shaders, compute passes, screen effects and texture arrays never reuse an
-id: a freed one keeps a small table entry (a freed 3D material holds no
-GPU memory of its own), so make them once and change them
-(`ctx.gfx.update_material`) rather than making new ones all session.
+sounds, fonts, meshes, GPU buffers, collision meshes, instance cells,
+3D materials, material shaders, compute passes, screen effects and
+texture arrays reuse freed slots under new handles. A slot is given out
+4095 times and then retired. A handle kept past its `free` stays dead
+even after its slot is reused. Draws still using a freed material use
+the plain fallback material. A material with a freed shader uses the
+built-in shader, and one sampling a freed texture or texture array
+reads white. Freed compute passes and screen effects are skipped.
 Popped UI screens keep their nodes until the game removes them (see
 [the screen stack](ui.md#screen-stack-and-modal-dialogs)). To check your own game, count with
 [`perf::net_alloc_bytes`](profiling.md#count-allocations) across a stretch
