@@ -1,10 +1,15 @@
 //! The `ponko-lobby` program: the smoke run `ponko package` does, and a
 //! real run that serves a client and stops on `SIGTERM`.
 
+#[cfg(unix)]
 use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
+#[cfg(unix)]
+use std::process::{Child, Stdio};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 use ponko::net::lobby::LobbyClient;
 
 const BIN: &str = env!("CARGO_BIN_EXE_ponko-lobby");
