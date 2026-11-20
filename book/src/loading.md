@@ -55,15 +55,18 @@ its name, as the loads take it:
 `with` takes the same shape as `ctx.assets.load_with`: a function from the
 file's bytes to your value or an `Error` (usually `ErrorKind::Decode`), so
 any loader written that way plugs in, a level format, a tile map or a sprite
-sheet's data. A value is taken once, by its type; `take_group_value` returns
+sheet's data. It is an `Fn`, not an `FnOnce`: a [restart](#trying-again)
+runs it again for a file that failed. A value is taken once, by its type; `take_group_value` returns
 `None` before the group loaded it, after it was taken, or for another type.
 
 `ctx.assets.start_group(group)` starts it and returns a `GroupId`; the work
 begins at the start of the next frame. `ctx.assets.group(name)` finds the
 last group started with that name, so systems don't need to keep the id.
-Starting a group with the same name again (after a failure, say) makes a new
-group. It reads its files again, but an asset the old one already loaded
-keeps its first handle: the copy just read is dropped.
+Starting a group with the same name again makes a new group. It reads its
+files again, but an asset the old one already loaded keeps its first handle:
+the copy just read is dropped. To try a failed group again, restart it
+instead ([Trying again](#trying-again)): that reads only what had not
+loaded.
 
 ## Progress, ready, failed, cancelled
 
@@ -84,15 +87,40 @@ Sizes are known up front when every source can say them without reading:
 the `assets/` folder, [packs](asset-sources.md#packs), `MemorySource`, and
 your own sources that implement `AssetSource::size`.
 
-The **first failure** ends the group: its state is `Failed` and
+The **first failure** stops the group: its state is `Failed` and
 `group_error(id)` returns the error, with the path of the asset that failed
 (`error.path()`) and its kind: `NotFound` for a missing file, `Decode` for a
 broken one, or what your `with` loader returned. The assets the group
-already finished stay loaded; the rest are not started.
+already finished stay loaded, and no more are started. The ones already
+being read when it failed finish on their workers and wait, so a restart
+doesn't read them again.
 
 `ctx.assets.cancel_group(id)` stops a group: the files not yet started are
 never read, the ones on workers are dropped when they finish, and streams
 that haven't uploaded anything are removed. Its state is `Cancelled`.
+Cancelling a failed group also drops what it kept for a restart.
+
+## Trying again
+
+`ctx.assets.restart_group(id)` loads the rest of a failed or cancelled
+group. It is `Loading` again at once, and from the next frame it reads
+**only the assets that had not loaded**: the one that failed and the ones
+never started. What loaded keeps its handle and isn't read again, values
+you haven't taken yet stay, and the files that were being read when it
+failed are taken as they are. Restarting a group that is loading or ready
+does nothing. It's for a loading screen's "try again" after a dropped
+connection, or after fixing a broken file:
+
+```rust
+# use ponko::prelude::*;
+# use ponko::assets::GroupState;
+fn retry_button(ctx: &mut Ctx) {
+    let Some(id) = ctx.assets.group("level 1") else { return };
+    if ctx.assets.group_state(id) == GroupState::Failed && ctx.input.key_pressed(Key::R) {
+        ctx.assets.restart_group(id); // reads only what failed
+    }
+}
+```
 
 ## Never stalling a frame
 
@@ -111,6 +139,26 @@ alone).
 longest step in milliseconds, how many steps went over the budget, and the
 bytes uploaded in the last frame. `ctx.gfx.upload_stats()` includes the
 group's uploads in the frame's totals.
+
+## What uploads cost
+
+Making a texture on the GPU is the part of loading that has to run on the
+game thread. The group measures it, so a loading screen (or a profiling
+overlay) can show what its uploads cost on the player's GPU:
+
+- `group_stats()`: `upload_ms`, the milliseconds the last step spent
+  uploading (part of its `step_ms`), `max_upload_ms`, the most any step
+  spent, and `total_upload_ms` and `total_upload_bytes` since the game
+  started.
+- `group_progress(id)`: `upload_ms` and `bytes_uploaded` of that group
+  alone.
+
+The time is the game thread's: making each texture and handing the GPU its
+pixels, measured around those calls. The GPU copies the pixels while it
+draws the frame, in its own time; the [measured numbers](#measured) show
+how much that adds. Streamed textures and meshes upload in the streaming
+step and count in `ctx.gfx.upload_stats()` instead. A headless game has no
+GPU, so there the time is only the engine's bookkeeping.
 
 ## Where files are read
 
@@ -139,8 +187,10 @@ state](states.md): entering `loading` calls `group(ctx)` and starts the
 group it returns, and once it is ready the game moves to `then` (the change
 applies at the end of that tick, like any other). Leaving `loading` early,
 to go back to the title, cancels the group. A failed group keeps the game in
-`loading`, so the loading screen can show `group_error` and offer a retry
-(`set_state(loading)` enters it again and starts a new group).
+`loading`, so the loading screen can show `group_error` and offer a retry:
+`restart_group` on the group (found by its name) loads what failed, and the
+game moves on once it is ready. (`set_state(loading)` would enter the state
+again and start a new group, reading every file again.)
 
 ## Measured
 
@@ -173,8 +223,20 @@ and decodes run in the group step, one piece of work at a time, and it
 stops for the frame once the budget is spent: a loading screen keeps
 drawing between files. A build with threads, on a page that allows them,
 reads and decodes on job workers as on the desktop ([Threads on the
-web](web-threads.md)); the browser test checks a group from `assets/` there. One file
-that takes longer than the budget to decode still makes that frame long.
+web](web-threads.md)); the browser test checks a group from `assets/` there.
+
+Without workers, a large file is **decoded in slices**: a PNG texture a few
+rows at a time (about 64 KiB of pixels a slice) and a sound a few packets at
+a time, with the frame budget checked between slices. So one large image or
+a long piece of music is spread over as many frames as it needs instead of
+taking one long frame, and the pixels and samples are exactly those of the
+one-piece decode. Uploading it waits for a frame with budget left. What
+can't be split still runs in one piece: other image formats (JPEG and the
+rest), interlaced PNGs, your own `with` loaders and `bytes`, and streamed
+textures and meshes (the streaming system decodes those). The tests run
+this path natively, decoding on the game thread as a browser does: a 2048 ×
+2048 PNG at a 0.5 ms budget takes several steps of about 0.5 ms each
+instead of one of 2.6 ms.
 Files come from what the page fetched (`assets/index.json`) and from
 sources, as for every load in a browser. The browser smoke test
 (`web/smoke/`) loads a group from an in-memory source and checks that it is
@@ -189,8 +251,9 @@ From C, `ponko_asset_group_new(name)` makes a group,
 the group; free one you don't start with `ponko_asset_group_free`). Group ids
 are `uint32_t`, never 0. `ponko_ctx_asset_group_state`,
 `ponko_ctx_asset_group_progress`, `ponko_ctx_find_asset_group`,
-`ponko_ctx_cancel_asset_group` and `ponko_ctx_set_asset_group_frame_budget`
-match the Rust calls; `ponko_ctx_asset_group_error` returns the failure's
+`ponko_ctx_cancel_asset_group`, `ponko_ctx_restart_asset_group`,
+`ponko_ctx_asset_group_stats` (with the upload fields) and
+`ponko_ctx_set_asset_group_frame_budget` match the Rust calls; `ponko_ctx_asset_group_error` returns the failure's
 status and sets the last error, its kind and its path.
 `ponko_ctx_take_asset_group_bytes` hands a `PONKO_GROUP_BYTES` asset's bytes
 to your decode callback once, and `ponko_game_loading_state` makes a loading
@@ -199,7 +262,8 @@ state whose callback adds the group's assets.
 read.
 
 In C++, `ponko::asset_group` is the builder, `ctx.start_asset_group`,
-`ctx.asset_group_progress` and the rest are `ponko::ctx` methods,
+`ctx.asset_group_progress`, `ctx.restart_asset_group` and the rest are
+`ponko::ctx` methods,
 `ctx.asset_group_error(id)` returns an `std::optional<ponko::error>`, and
 `ctx.take_asset_group_bytes(id, path, decode)` returns what your
 `decode(data, len)` returns. There is no C or C++ form of `with`: take the
