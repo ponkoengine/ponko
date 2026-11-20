@@ -84,7 +84,8 @@ impl GpuMaterialDesc {
     }
 }
 
-/// A glTF file's nodes, the mesh made for each node that has one, and
+/// A glTF file's nodes, the mesh made for each node that has one (one
+/// for all the nodes of one glTF mesh), and
 /// where the file is on disk, when it is a file
 /// ([`Graphics::load_node_meshes`]).
 pub(crate) type NodeMeshes = (gltf::LoadedNodes, Vec<Option<Mesh>>, Option<std::path::PathBuf>);

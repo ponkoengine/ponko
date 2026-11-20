@@ -560,7 +560,9 @@ impl GltfRoot {
     ///   groups and render layers. The guide's "From Blender to the game"
     ///   lists them.
     ///
-    /// Every spawn of one file shares its meshes and materials: a hundred
+    /// Nodes of one glTF mesh share one uploaded mesh, and every spawn of
+    /// one file shares its meshes, materials and collision shapes (the
+    /// hulls and triangle meshes fitted for its colliders): a hundred
     /// spawns hold one copy, freed when the last of them is despawned.
     ///
     /// Everything but the prefab instances carries
