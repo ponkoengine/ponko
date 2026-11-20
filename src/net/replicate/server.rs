@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use glam::Vec3;
-use ponko_ecs::{Entity, World};
+use ponko_ecs::{ChunkQuery, ComponentId, Entity, Tick, World};
 
 use super::bits::{BitReader, BitWriter};
 use super::inputs::InputStream;
@@ -22,6 +22,11 @@ const DESTROYING: u8 = 3;
 
 /// Destroy records in one packet at most; the rest go in the next ones.
 const MAX_DESTROYS: usize = 64;
+
+/// Every live entity is read again at least once in this many ticks, changed
+/// or not: a write the world can't see (through a raw pointer, without
+/// `mark_changed`) is still sent, about a second later at 60 Hz.
+const SWEEP_TICKS: usize = 64;
 
 /// A replicated entity, by net id.
 #[derive(Clone)]
@@ -40,6 +45,8 @@ pub(crate) struct Slot {
     /// Clients whose view of this id isn't `NONE`: the id is reused only
     /// once this is 0 and the entity is gone.
     known_by: u32,
+    /// The tick (`sync_count`) it was last listed in `changed`.
+    listed: u64,
 }
 
 /// What one client has of one entity.
@@ -57,6 +64,9 @@ struct ViewState {
     sent: u32,
     /// Priority accumulated while waiting to be sent.
     acc: f32,
+    /// The entity changed, or the baseline did, since its words were last
+    /// compared with the baseline: compare them this tick.
+    dirty: bool,
     /// Ring of interest this tick, plus 1 (0: out of interest).
     scope: u8,
     /// Due this tick by its ring's rate.
@@ -128,11 +138,29 @@ pub(crate) struct SendSettings {
     pub(crate) tick: u64,
 }
 
+/// The server reads only what changed: the replicated components' changes
+/// are tracked, and this is where it stopped looking.
+struct Tracking {
+    /// [`World::id`]: another world (the game replaced it) is read in full.
+    world: u64,
+    since: Tick,
+    /// Each kind's component.
+    ids: Vec<ComponentId>,
+    replicated: ComponentId,
+}
+
 #[derive(Default)]
 pub(crate) struct Server {
     pub(crate) slots: Vec<Slot>,
     free: Vec<u32>,
     pub(crate) words: Vec<u32>,
+    /// Ids whose words, components or owner changed this tick.
+    changed: Vec<u32>,
+    /// Ids given out or handed over since the last extraction: read in full.
+    fresh: Vec<u32>,
+    tracking: Option<Tracking>,
+    /// The next id the rolling re-read (`SWEEP_TICKS`) looks at.
+    sweep: usize,
     pub(crate) clients: BTreeMap<PeerId, Conn>,
     pub(crate) interest: Option<Interest>,
     sync_count: u64,
@@ -143,6 +171,8 @@ pub(crate) struct Server {
     entities: Vec<InterestEntity>,
     writer: BitWriter,
     owned: Vec<(PeerId, Entity)>,
+    touched: Vec<Entity>,
+    read: Vec<u32>,
 }
 
 impl Server {
@@ -155,14 +185,16 @@ impl Server {
         {
             let slots = &mut self.slots;
             let found = &mut self.found;
+            let fresh = &mut self.fresh;
             world.query::<(Entity, &Replicated)>().for_each(|(e, rep)| {
-                match rep.id.and_then(|id| slots.get_mut(id as usize)) {
-                    Some(slot) if slot.alive && slot.entity == e => {
+                match rep.id.and_then(|id| slots.get_mut(id as usize).map(|slot| (id, slot))) {
+                    Some((id, slot)) if slot.alive && slot.entity == e => {
                         slot.seen = stamp;
                         if slot.meta.owner != rep.owner {
                             // A handoff: a new authority epoch (as `Authority::handoff`).
                             slot.meta.owner = rep.owner;
                             slot.meta.epoch = slot.meta.epoch.wrapping_add(1);
+                            fresh.push(id);
                         }
                         slot.priority = rep.priority;
                         slot.global = rep.global;
@@ -187,6 +219,7 @@ impl Server {
                         global: false,
                         position: None,
                         known_by: 0,
+                        listed: 0,
                     });
                     (self.slots.len() - 1) as u32
                 }
@@ -204,6 +237,7 @@ impl Server {
             slot.meta = Meta { owner, epoch: 0 };
             slot.priority = priority;
             slot.global = global;
+            self.fresh.push(id);
         }
         for (id, slot) in self.slots.iter_mut().enumerate() {
             if slot.alive && slot.seen != stamp {
@@ -216,33 +250,121 @@ impl Server {
         }
     }
 
-    /// Reads every live entity's words, kinds and position out of the
-    /// world (after [`refresh`](Self::refresh) and the inputs).
+    /// Brings the live entities' words and kinds up to date with the world
+    /// (after [`refresh`](Self::refresh) and the inputs), and lists the
+    /// ids that changed. Only entities whose replicated components changed
+    /// are read (the world's change tracking says which), plus the new
+    /// ones and a few more each tick (`SWEEP_TICKS`); the first time, or
+    /// in a world it hasn't seen, everything is. With interest, positions
+    /// are read for every live entity.
     pub(crate) fn extract(
         &mut self,
-        world: &World,
+        world: &mut World,
         kinds: &[Kind],
         stride: usize,
         position: &dyn Fn(&World, Entity) -> Option<Vec3>,
     ) {
         self.words.resize(self.slots.len() * stride, 0);
-        for (id, slot) in self.slots.iter_mut().enumerate() {
-            if !slot.alive {
-                continue;
-            }
-            let words = &mut self.words[id * stride..(id + 1) * stride];
-            let mut present = 0u64;
-            for (k, kind) in kinds.iter().enumerate() {
-                let out = &mut words[kind.offset..kind.offset + kind.words()];
-                if kind.access.read(world, slot.entity, out) {
-                    present |= 1 << k;
-                } else {
-                    out.fill(0);
+        self.changed.clear();
+        let stamp = self.sync_count;
+        let n = self.slots.len();
+        match &mut self.tracking {
+            Some(t) if t.world == world.id() => {
+                self.touched.clear();
+                for &id in &t.ids {
+                    // Only replicated entities: the archetypes with both.
+                    let ids = [id, t.replicated];
+                    let query = ChunkQuery::new(&ids).writes(0).changed(1).since(t.since);
+                    let touched = &mut self.touched;
+                    world
+                        .raw()
+                        .query_chunks(query, |chunk| touched.extend_from_slice(chunk.entities));
+                    // A component taken off an entity that stays.
+                    self.touched
+                        .extend_from_slice(world.raw_ref().removed_dynamic(id, t.since));
+                }
+                t.since = world.advance_change_tick();
+                for i in 0..self.touched.len() {
+                    let e = self.touched[i];
+                    let Some(id) = world.get::<Replicated>(e).and_then(|r| r.id) else {
+                        continue;
+                    };
+                    if self.slots.get(id as usize).is_some_and(|s| s.alive && s.entity == e) {
+                        self.read_slot(world, kinds, stride, id, false, stamp);
+                    }
+                }
+                for _ in 0..n.div_ceil(SWEEP_TICKS).min(n) {
+                    let id = (self.sweep % n) as u32;
+                    self.sweep = self.sweep.wrapping_add(1);
+                    self.read_slot(world, kinds, stride, id, false, stamp);
                 }
             }
-            slot.present = present;
-            slot.position = position(world, slot.entity);
+            _ => {
+                let ids = kinds.iter().map(|k| k.access.track(world)).collect();
+                let replicated = world.register::<Replicated>();
+                self.tracking = Some(Tracking {
+                    world: world.id(),
+                    since: world.advance_change_tick(),
+                    ids,
+                    replicated,
+                });
+                for id in 0..n as u32 {
+                    self.read_slot(world, kinds, stride, id, false, stamp);
+                }
+            }
         }
+        for i in 0..self.fresh.len() {
+            let id = self.fresh[i];
+            self.read_slot(world, kinds, stride, id, true, stamp);
+        }
+        self.fresh.clear();
+        if self.interest.is_some() {
+            for slot in self.slots.iter_mut().filter(|s| s.alive) {
+                slot.position = position(world, slot.entity);
+            }
+        }
+    }
+
+    /// Reads one live entity's words and kinds; lists it in `changed` if
+    /// they differ from what it had (or `force`).
+    fn read_slot(&mut self, world: &World, kinds: &[Kind], stride: usize, id: u32, force: bool, stamp: u64) {
+        let Some(slot) = self.slots.get_mut(id as usize).filter(|s| s.alive) else {
+            return;
+        };
+        self.read.resize(stride, 0);
+        let mut present = 0u64;
+        for (k, kind) in kinds.iter().enumerate() {
+            let out = &mut self.read[kind.offset..kind.offset + kind.words()];
+            if kind.access.read(world, slot.entity, out) {
+                present |= 1 << k;
+            } else {
+                out.fill(0);
+            }
+        }
+        let words = &mut self.words[id as usize * stride..(id as usize + 1) * stride];
+        if force || present != slot.present || *words != self.read[..] {
+            words.copy_from_slice(&self.read);
+            slot.present = present;
+            if slot.listed != stamp {
+                slot.listed = stamp;
+                self.changed.push(id);
+            }
+        }
+    }
+
+    /// The ids listed as changed by the last extraction.
+    #[cfg(test)]
+    pub(crate) fn changed(&self) -> &[u32] {
+        &self.changed
+    }
+
+    /// The tick up to which the world's changes have been read, for
+    /// keeping the logs of removed components until then.
+    pub(crate) fn changes_seen(&self, world: &World) -> Option<Tick> {
+        self.tracking
+            .as_ref()
+            .filter(|t| t.world == world.id())
+            .map(|t| t.since)
     }
 
     /// The live entity with net id `id`.
@@ -381,6 +503,7 @@ impl Server {
         let Self {
             slots,
             words,
+            changed,
             clients,
             interest,
             candidates,
@@ -394,6 +517,9 @@ impl Server {
         if conn.views.len() < slots.len() {
             conn.views.resize(slots.len(), ViewState::default());
             conn.base_words.resize(slots.len() * stride, 0);
+        }
+        for &id in changed.iter() {
+            conn.views[id as usize].dirty = true;
         }
 
         // Interest: which ring each entity is in for this client, this tick.
@@ -466,11 +592,16 @@ impl Server {
                     });
                 }
                 LIVE => {
-                    let base = &conn.base_words[id * stride..(id + 1) * stride];
-                    let now = &words[id * stride..(id + 1) * stride];
-                    let changed = view.base_present != slot.present
-                        || view.base_meta != slot.meta
-                        || changed_words(kinds, slot.present, base, now);
+                    // Only entities that changed (or whose baseline did) are
+                    // compared; the rest are known to match their baseline.
+                    let changed = view.dirty && {
+                        let base = &conn.base_words[id * stride..(id + 1) * stride];
+                        let now = &words[id * stride..(id + 1) * stride];
+                        view.base_present != slot.present
+                            || view.base_meta != slot.meta
+                            || changed_words(kinds, slot.present, base, now)
+                    };
+                    view.dirty = changed;
                     let owned = slot.meta.owner == Some(peer);
                     if changed || owned {
                         let weight = tiers
@@ -650,6 +781,7 @@ fn acknowledge(conn: &mut Conn, slots: &mut [Slot], free: &mut Vec<u32>, seq: u1
             continue; // an older record than the baseline
         }
         view.state = LIVE;
+        view.dirty = true; // a new baseline: compare it with the entity
         view.base_seq = seq;
         view.base_present = entry.present;
         view.base_meta = entry.meta;

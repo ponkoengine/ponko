@@ -1330,6 +1330,26 @@ impl Replication {
         }
     }
 
+    /// Server: the net ids whose replicated values changed in the last tick.
+    #[cfg(test)]
+    pub(crate) fn server_changed(&self) -> Vec<u32> {
+        let mut ids = self
+            .inner
+            .as_ref()
+            .map_or_else(Vec::new, |i| i.server.changed().to_vec());
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Server: the world tick up to which replication has read the
+    /// replicated components' changes. Removal logs are kept from there on.
+    pub(crate) fn changes_seen(&self, world: &World) -> Option<ponko_ecs::Tick> {
+        let inner = self.inner.as_ref()?;
+        (inner.role == ReplicationRole::Server)
+            .then(|| inner.server.changes_seen(world))
+            .flatten()
+    }
+
     /// Once a frame, after the ticks: shows interpolated kinds at the
     /// frame's time (`alpha` of a tick past the last one).
     pub(crate) fn frame(&mut self, world: &mut World, alpha: f64) {
