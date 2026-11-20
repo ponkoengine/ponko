@@ -19,3 +19,11 @@
 - The threaded web build (`web/smoke/threads.mjs`) and replication in the
   browser (`web/smoke/replication.mjs`) run in the web smoke job.
 - "Adding or changing a cargo feature" in `CONTRIBUTING.md`.
+
+### Fixed
+
+- A web build with threads (`web/build.sh --threads`) compiled again: the
+  built-in controller backend held the browser's gamepad objects, which can't
+  be sent between threads once the memory is shared, and `GamepadBackend` is
+  `Send`. Such a build now starts no built-in controllers (a game's own
+  `GamepadBackend` works); the ordinary web build is unchanged.

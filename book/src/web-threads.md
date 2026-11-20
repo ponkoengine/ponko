@@ -180,6 +180,11 @@ game also stays on one thread, after at most 20 seconds, and says why.
   shared memory must have a maximum.
 - **Thread-local values on workers are never dropped**: the workers live
   as long as the page.
+- **No built-in controllers.** The browser's gamepad objects can't be sent
+  between threads once the memory is shared, and the controller backend must
+  be `Send`, so a build with threads doesn't start the built-in one
+  (`ctx.input.gamepads()` stays empty unless the game brings its own
+  `GamepadBackend`). The ordinary web build has controllers as before.
 - **A nightly toolchain.** The ordinary web build stays on stable, without
   threads.
 

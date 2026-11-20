@@ -252,13 +252,27 @@ impl Ctx {
     /// pads disconnect first, and the new one is polled right away. Games
     /// choose one with [`Game::gamepad_backend`](crate::game::Game::gamepad_backend);
     /// the window installs gilrs when they didn't.
-    #[cfg_attr(not(all(feature = "gamepad", feature = "window")), allow(dead_code))]
+    #[cfg_attr(
+        not(all(
+            feature = "gamepad",
+            feature = "window",
+            not(all(target_arch = "wasm32", target_feature = "atomics"))
+        )),
+        allow(dead_code)
+    )]
     pub(crate) fn set_gamepad_backend(&mut self, backend: impl GamepadBackend) {
         self.gamepad_driver.install(&mut self.input, Box::new(backend));
     }
 
     /// Whether a gamepad backend is installed.
-    #[cfg_attr(not(all(feature = "gamepad", feature = "window")), allow(dead_code))]
+    #[cfg_attr(
+        not(all(
+            feature = "gamepad",
+            feature = "window",
+            not(all(target_arch = "wasm32", target_feature = "atomics"))
+        )),
+        allow(dead_code)
+    )]
     pub(crate) fn has_gamepad_backend(&self) -> bool {
         self.gamepad_driver.installed()
     }
