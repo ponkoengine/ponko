@@ -216,6 +216,30 @@ share of uploads (the upload budget is what bounds that), noise PNGs may
 decode more cheaply than real art, and one set of runs on a loaded machine
 is for comparing the cases within a run.
 
+Repeated after restarts and sliced decodes were added (same machine and
+command, three runs, load average 117 to 145, so again not a quiet
+machine): `load_texture` 11.0 to 16.0 ms worst and 0.20 to 0.21 ms median,
+`stream_texture` 0.12 to 0.22 ms and 0.001 to 0.003 ms, the asset group
+0.04 to 0.06 ms and 0.001 ms, usable after 6 to 9 frames. The ordering and
+the group's distance from its budget hold; a repeat on a quiet machine is
+still to be done (the same command).
+
+**Uploads on a real GPU.** The offscreen timing test
+`group_upload_cost_on_the_gpu` (`cargo test --release -p ponko --lib
+--features 3d group_upload_cost_on_the_gpu -- --ignored --nocapture`)
+loads sixteen 1024 × 1024 noise PNGs (64 MiB of RGBA) as a group on the
+production renderer, drawing and reading back a frame after each step.
+On the same M4 Max (Metal, release, load average 145 to 210), three runs:
+the game thread spent 0.28 to 0.99 ms per MiB uploading (18 to 63 ms for
+the 64 MiB), a step uploading 16 MiB (the default upload budget) about 4
+ms of it, and that step's frame took 0.2 to 2 ms longer to finish on the
+GPU than a frame with nothing uploaded. Single steps of 14 to 32 ms and
+frames 14 to 29 ms longer showed up in every run, where the busy machine
+paused the thread; on a quiet machine expect the low ends. So with the
+default budgets a frame that uploads pays about 4 ms on the game thread
+plus a millisecond or two on the GPU; a lower upload budget
+(`ctx.gfx.set_upload_budget`) spreads that thinner.
+
 ## In a browser
 
 In an ordinary web build there are no worker threads, so a group's reads
@@ -235,8 +259,11 @@ can't be split still runs in one piece: other image formats (JPEG and the
 rest), interlaced PNGs, your own `with` loaders and `bytes`, and streamed
 textures and meshes (the streaming system decodes those). The tests run
 this path natively, decoding on the game thread as a browser does: a 2048 ×
-2048 PNG at a 0.5 ms budget takes several steps of about 0.5 ms each
-instead of one of 2.6 ms.
+2048 noise PNG that decodes in one piece in 2.9 to 4.6 ms (release, M4 Max,
+busy machine) takes 7 or 8 steps of a median 0.50 to 0.51 ms at a 0.5 ms
+budget, 3.4 to 3.7 ms in all (one run in three, paused by the load, had a
+median of 1.2 ms). A browser decodes more slowly, so there a large file
+spreads over more frames.
 Files come from what the page fetched (`assets/index.json`) and from
 sources, as for every load in a browser. The browser smoke test
 (`web/smoke/`) loads a group from an in-memory source and checks that it is
