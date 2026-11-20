@@ -263,6 +263,10 @@ accesskit_windows = { version = "0.35.2", optional = true }
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 accesskit_unix = { version = "0.24.1", optional = true }
 
+# The standalone editor uses system file pickers on these desktop targets.
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+rfd = { version = "0.18", optional = true }
+
 # The web build (wasm32): the browser APIs for the canvas and fetching
 # assets, and WebGL2 for browsers without WebGPU.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -333,7 +337,7 @@ inspector = ["window", "dep:egui", "dep:egui-wgpu", "dep:egui-winit"]
 # scenes and prefabs. Off (the default): `PONKO_EDITOR` is ignored and no
 # edit-mode code is in the build. The in-game inspector is the `inspector`
 # feature.
-editor = ["inspector"]
+editor = ["inspector", "dep:rfd"]
 # Screen-reader support for the retained UI (`ctx.ui`): roles, names, values
 # and focus are given to the system's accessibility API, and its requests
 # (press, focus, set value) reach the UI. macOS (VoiceOver), Windows (UI
