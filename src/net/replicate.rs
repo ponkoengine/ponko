@@ -671,12 +671,15 @@ impl Inner {
         }
         let Some(m) = endpoint else {
             // Offline: only the host's own deliveries.
+            self.server.idle();
             self.flush_local();
             return;
         };
         let any_ready = self.server.clients.values().any(|c| c.ready);
         if any_ready {
             self.server.extract(world, &self.kinds, self.stride, &*self.position);
+        } else {
+            self.server.idle();
         }
         for (target, index, tick, payload) in std::mem::take(&mut self.outbox) {
             match target {
@@ -1333,6 +1336,12 @@ impl Replication {
             (ReplicationRole::Server, endpoint) => inner.server_end(endpoint, world),
             _ => {}
         }
+    }
+
+    /// Server: the ids waiting to be read in full.
+    #[cfg(test)]
+    pub(crate) fn server_pending(&self) -> usize {
+        self.inner.as_ref().map_or(0, |i| i.server.pending())
     }
 
     /// Server: the net ids whose replicated values changed in the last tick.

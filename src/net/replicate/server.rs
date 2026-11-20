@@ -352,6 +352,20 @@ impl Server {
         }
     }
 
+    /// No client is ready, so nothing is extracted: forget where reading
+    /// stopped (the first client's tick reads everything) and what was
+    /// waiting to be read in full, so nothing piles up meanwhile.
+    pub(crate) fn idle(&mut self) {
+        self.fresh.clear();
+        self.tracking = None;
+    }
+
+    /// Ids waiting to be read in full.
+    #[cfg(test)]
+    pub(crate) fn pending(&self) -> usize {
+        self.fresh.len()
+    }
+
     /// The ids listed as changed by the last extraction.
     #[cfg(test)]
     pub(crate) fn changed(&self) -> &[u32] {

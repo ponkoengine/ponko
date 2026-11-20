@@ -26,6 +26,7 @@
 //! | A component taken off an entity is taken off its replicas | `a_removed_component_is_removed_from_replicas` |
 //! | A write the world can't see still arrives, within a sweep | `writes_the_world_cannot_see_arrive_within_a_sweep` |
 //! | A world the game replaced is read in full | `a_replaced_world_is_read_in_full` |
+//! | A server without clients keeps nothing pending, and its first client gets everything | `a_server_without_clients_keeps_nothing_pending` |
 //!
 //! Over every transport the message protocol lists:
 //!
@@ -1042,5 +1043,28 @@ fn a_replaced_world_is_read_in_full() {
     });
     s.run(60, |_, _| {});
     assert_eq!(replicas(&mut s.sides[1].world).len(), 12);
+    assert_converged(&mut s, |_, _, _| true);
+}
+
+#[test]
+fn a_server_without_clients_keeps_nothing_pending() {
+    let mut s = Session::scripted(1, declarations, |_| {});
+    // The client's endpoint stays quiet: the server ticks alone, spawning.
+    for tick in 0..200u64 {
+        let server = &mut s.sides[0];
+        server.tick(|side| {
+            churn(&mut side.world, tick);
+            if tick.is_multiple_of(3) {
+                spawn_crowd(&mut side.world, 1);
+            }
+        });
+        assert!(
+            server.rep.server_changed().is_empty(),
+            "nothing is read while nobody listens"
+        );
+        assert_eq!(server.rep.server_pending(), 0, "tick {tick}: nothing piles up");
+    }
+    s.join(200);
+    s.run(60, |_, _| {});
     assert_converged(&mut s, |_, _, _| true);
 }
