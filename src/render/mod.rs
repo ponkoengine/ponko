@@ -473,6 +473,8 @@ mod editor_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod gltf_extensions_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod gltf_sharing_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod instance_cells_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod instance_cells_render_test;
