@@ -1033,6 +1033,11 @@ impl Replication {
     /// and read as [`NetEvent<T>`] from [`ctx.events`](crate::ctx::Ctx::events).
     /// Events are reliable and ordered, delivered at the start of a tick.
     ///
+    /// They travel in binary: MessagePack with fields by position (not by
+    /// name), so a small event takes a few bytes. A field the type leaves
+    /// out when serializing (`#[serde(skip_serializing_if = ...)]`) shifts
+    /// the others, and the receiver drops the event: send it as it is.
+    ///
     /// # Panics
     /// If `T` was declared already.
     #[must_use]
@@ -1449,6 +1454,33 @@ mod tests {
         assert!(!deliver_event::<Hit>(&mut events, PeerId::HOST, tick, payload));
         assert!(events.read::<NetEvent<Hit>>().is_empty());
         assert_eq!(read_event(&[0x80]), None, "a varint cut short");
+    }
+
+    /// A field left out when empty: fine in JSON, not by position.
+    #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+    struct Sparse {
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        note: Option<u32>,
+        value: u32,
+    }
+
+    #[test]
+    fn events_that_leave_out_fields_are_dropped_not_misread() {
+        let message = binary_message(&Sparse { note: None, value: 9 }, 1);
+        let (_, tick, payload) = read_event(&message[1..]).unwrap();
+        let mut events = Events::default();
+        assert!(!deliver_event::<Sparse>(&mut events, PeerId::HOST, tick, payload));
+        // With the field there, it arrives.
+        assert_eq!(
+            round_trip(
+                &Sparse {
+                    note: Some(1),
+                    value: 9
+                },
+                1
+            ),
+            6
+        );
     }
 
     #[test]

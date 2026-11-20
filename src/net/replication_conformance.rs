@@ -36,7 +36,9 @@
 //! | UDP, and WebSocket (what browsers use; a native client here) | `replicates_over_udp_and_websocket` |
 //! | Steam relay (fake Steam API, `--features steam`) | `replicates_over_the_steam_relay` in `net/steam_messages.rs` |
 //!
-//! A real browser and two machines are checks for a person (the guide's
+//! A browser joining a server is checked by `web/smoke/replication.mjs` (a
+//! headless tab of the web build and a native dedicated server). Playing in
+//! a real browser and two machines are checks for a person (the guide's
 //! "Replication" chapter lists them).
 
 use std::collections::BTreeMap;

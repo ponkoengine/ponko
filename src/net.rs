@@ -136,7 +136,8 @@ pub const MAX_PLAYERS: usize = 8;
 pub const MAX_INPUT_BYTES: usize = 1024;
 
 const MAGIC: [u8; 4] = *b"CRBN";
-const VERSION: u8 = 1;
+/// 2: checks hash the world with `world_hash` (1 hashed its JSON save).
+const VERSION: u8 = 2;
 const HELLO: u8 = 1;
 const WELCOME: u8 = 2;
 const START: u8 = 3;
@@ -1555,6 +1556,8 @@ mod tests {
         b.reflect::<crate::d2::Transform>();
         b.spawn((crate::d2::Transform::at(glam::vec2(1.0, 0.0)),));
         let (ca, cb) = (Check::of(&a, 5), Check::of(&b, 5));
+        // The check is the public world hash, part by part.
+        assert_eq!(ca.hash.total, crate::reflect::world_hash(&a));
         assert!(ca.compare(&Check::of(&a, 5), 1).is_none());
         let d = ca.compare(&cb, 1).expect("different");
         assert_eq!(d.components, ["Transform2D"]);
@@ -1562,5 +1565,25 @@ mod tests {
         cb.write(&mut out);
         let back = Check::read(&mut Reader(&out)).unwrap();
         assert_eq!((back.tick, back.hash), (cb.tick, cb.hash));
+    }
+
+    #[test]
+    fn checks_name_resources_and_parts_only_one_side_has() {
+        #[derive(serde::Serialize, serde::Deserialize, Default)]
+        struct Score(u32);
+        let make = |score: u32| {
+            let mut w = World::new();
+            w.reflect::<crate::d2::Transform>();
+            w.reflect_resource::<Score>();
+            w.insert_resource(Score(score));
+            w
+        };
+        let (a, mut b) = (make(1), make(2));
+        let d = Check::of(&a, 9).compare(&Check::of(&b, 9), 2).expect("different");
+        assert_eq!(d.components, ["resource:Score"]);
+        b.insert_resource(Score(1));
+        b.spawn((crate::d2::Transform::default(),));
+        let d = Check::of(&a, 9).compare(&Check::of(&b, 9), 2).expect("different");
+        assert_eq!(d.components, ["Transform2D"], "a component only one side has");
     }
 }
