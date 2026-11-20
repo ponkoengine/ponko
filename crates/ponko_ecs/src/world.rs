@@ -573,7 +573,7 @@ impl World {
         // One bounds check for both uses.
         let archetype = &mut self.archetypes[a];
         if archetype.tracked() {
-            self.changes.log_despawn(&self.infos, archetype, e, loc.row as usize);
+            self.changes.log_despawn(archetype, e, loc.row as usize);
         }
         let moved = unsafe { archetype.swap_remove_drop(loc.row as usize) };
         let Some(moved) = moved else {
@@ -2223,7 +2223,7 @@ impl World {
             // The components the entity keeps take their stamps along.
             let now = self.changes.stamp();
             s.copy_stamps_to(row, d, new_row, now);
-            s.swap_remove_stamps(row, last);
+            s.swap_remove_stamps(row, last, now);
         }
         s.entities.swap_remove(row);
         if row != last {

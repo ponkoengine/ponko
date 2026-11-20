@@ -390,6 +390,48 @@ fn despawning_logs_a_removal_for_each_tracked_component() {
     assert_eq!(changed::<Armor>(&mut w, seen), [c]);
 }
 
+/// Despawns move the last row's stamps into the freed row, across the
+/// 64-row blocks change filters skip by: changed rows that move stay
+/// visible, still rows that move stay quiet, in every block.
+#[test]
+fn despawns_across_many_blocks_keep_change_filters_exact() {
+    let mut w = World::new();
+    w.track_changes::<Health>();
+    w.track_changes::<Armor>();
+    let mut live: Vec<Entity> = (0..1000).map(|i| w.spawn((Health(i), Armor(i)))).collect();
+    let mut rng = Rng::new(136);
+    for round in 0..20 {
+        let seen = w.advance_change_tick();
+        let mut health = Vec::new();
+        let mut armor = Vec::new();
+        for _ in 0..10 {
+            let e = live[rng.below(live.len())];
+            if !health.contains(&e) {
+                w.get_mut::<Health>(e).unwrap().0 += 1;
+                health.push(e);
+            }
+        }
+        for _ in 0..3 {
+            let e = live[rng.below(live.len())];
+            if !armor.contains(&e) {
+                assert!(w.mark_changed::<Armor>(e));
+                armor.push(e);
+            }
+        }
+        // Despawn some, changed or not; the last rows move into their places.
+        for _ in 0..25 {
+            let e = live.swap_remove(rng.below(live.len()));
+            assert!(w.despawn(e));
+            health.retain(|&h| h != e);
+            armor.retain(|&a| a != e);
+        }
+        assert_eq!(changed::<Health>(&mut w, seen), sorted(health), "round {round}");
+        assert_eq!(changed::<Armor>(&mut w, seen), sorted(armor), "round {round}");
+        assert_eq!(added::<Health>(&mut w, seen), [], "round {round}");
+    }
+    assert_eq!(w.len(), 500);
+}
+
 #[test]
 fn a_reused_entity_slot_starts_with_fresh_stamps() {
     let (mut w, [a, _, _], _) = three();
