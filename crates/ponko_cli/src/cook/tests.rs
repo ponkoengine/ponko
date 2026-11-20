@@ -713,3 +713,60 @@ fn an_aseprite_file_is_cooked_into_its_export_replacing_an_old_one() {
     assert_eq!(names, ["art/hero.aseprite", "art/hero.json", "art/hero.png"]);
     assert_eq!(file(&kept, "art/hero.json"), b"{}");
 }
+
+#[cfg(feature = "aseprite")]
+#[test]
+fn aseprite_conversion_is_cached_by_source_content_and_split_mode() {
+    let cache = temp("aseprite-cache");
+    let settings = settings(Some(cache.clone()));
+    let mut hero = super::aseprite::tests::hero();
+    let run = |bytes: &[u8], config: &Config| {
+        cook_files(vec![("art/hero.aseprite".into(), bytes.to_vec())], config, &settings).unwrap()
+    };
+    let default = Config::default();
+    let first = run(&hero, &default);
+    let warm = run(&hero, &default);
+    assert_eq!(warm.counts(), (0, 1), "{}", warm.report());
+    assert_eq!(first.files, warm.files);
+    let split = Config::parse(r#"{"assets":{"art/hero.aseprite":{"layers":true}}}"#).unwrap();
+    let split_first = run(&hero, &split);
+    assert_ne!(split_first.files, first.files);
+    assert_eq!(run(&hero, &split).counts(), (0, 1));
+    hero[136..138].copy_from_slice(&42u16.to_le_bytes());
+    let edited = run(&hero, &default);
+    assert_eq!(edited.counts(), (1, 0));
+    assert_ne!(edited.files, first.files);
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[cfg(all(feature = "meshes", feature = "textures"))]
+#[test]
+fn image_only_cooking_keeps_external_geometry_buffers_through_cache_hits() {
+    let cache = temp("kept-model");
+    let settings = settings(Some(cache.clone()));
+    let (mut json, original) = gltf::tests::textured(2, 16);
+    let ext = "EXT_meshopt_compression";
+    json["extensionsUsed"] = serde_json::json!([ext]);
+    json["buffers"][0]["uri"] = serde_json::json!("geometry.bin");
+    let files = vec![
+        ("models/model.gltf".into(), serde_json::to_vec(&json).unwrap()),
+        ("models/geometry.bin".into(), original.clone()),
+    ];
+    for expected in [Outcome::Cooked, Outcome::Cached] {
+        let cooked = cook_files(files.clone(), &Config::default(), &settings).unwrap();
+        assert_eq!(outcome(&cooked, "models/model.gltf"), expected);
+        assert_eq!(outcome(&cooked, "models/geometry.bin"), Outcome::Kept(None));
+        let output = cooked
+            .files
+            .iter()
+            .find(|(name, _)| name == "models/model.gltf")
+            .unwrap();
+        let output = gltf_json(&output.1).unwrap();
+        assert_eq!(output["buffers"][0], json["buffers"][0]);
+        assert_eq!(output["accessors"], json["accessors"]);
+        assert!(output["buffers"][1]["uri"].as_str().unwrap().starts_with("data:"));
+        assert_eq!(output["images"][0]["mimeType"], "image/ktx2");
+        assert_eq!(cooked.files[0], ("models/geometry.bin".into(), original.clone()));
+    }
+    std::fs::remove_dir_all(cache).unwrap();
+}

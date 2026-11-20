@@ -392,6 +392,67 @@ mod tests {
             .unwrap()
             .pack(&image, true, 64)
             .unwrap();
+        let pixels = upload_atlas(&gpu, &atlas);
+        let cell_pixel = |slot: u32, x: u32, y: u32| {
+            let columns = atlas.size.x / atlas.canvas.x;
+            let x = slot % columns * atlas.canvas.x + x;
+            let y = slot / columns * atlas.canvas.y + y;
+            let offset = ((y * atlas.size.x + x) * 4) as usize;
+            &pixels[offset..offset + 4]
+        };
+        assert_eq!(cell_pixel(0, 1, 0), [255, 0, 0, 255]);
+        assert_eq!(
+            cell_pixel(0, 0, 0),
+            [0; 4],
+            "trim placement preserves the canvas origin"
+        );
+        assert_eq!(cell_pixel(1, 0, 1), [0, 255, 0, 255]);
+        assert_eq!(cell_pixel(2, 0, 0), [0, 0, 255, 255]);
+        assert_eq!(cell_pixel(3, 1, 1), [255, 255, 0, 255], "hat cel");
+        for slot in [4, 5] {
+            for y in 0..2 {
+                for x in 0..2 {
+                    assert_eq!(cell_pixel(slot, x, y), [0; 4], "missing hat cel");
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "aseprite-source")]
+    #[test]
+    fn aseprite_source_and_cooked_export_upload_identical_atlas_pixels() {
+        let Some(gpu) = gpu() else {
+            return;
+        };
+        let source = include_bytes!("../../tests/fixtures/cook/source/hero.aseprite");
+        let cooked = include_str!("../../tests/fixtures/cook/cooked/hero.json");
+        let png = include_bytes!("../../tests/fixtures/cook/cooked/hero.png");
+        let sheet = ponko_aseprite::decode(source, false, 64).unwrap();
+        let export: Export = serde_json::from_value(sheet.export).unwrap();
+        let from_source = export
+            .pack(
+                &Image {
+                    rgba: sheet.rgba,
+                    width: sheet.width,
+                    height: sheet.height,
+                },
+                false,
+                64,
+            )
+            .unwrap();
+        let image = crate::assets::decode_image(png, "hero.png", "hero.png").unwrap();
+        let from_cook = Export::parse(cooked, "hero.json")
+            .unwrap()
+            .pack(&image, false, 64)
+            .unwrap();
+        let pixels = upload_atlas(&gpu, &from_source);
+        assert_eq!(from_source.size, from_cook.size);
+        assert_eq!(pixels, upload_atlas(&gpu, &from_cook));
+        assert!(pixels.chunks_exact(4).any(|px| px == [255, 0, 0, 255]));
+        assert!(pixels.chunks_exact(4).any(|px| px == [0; 4]));
+    }
+
+    fn upload_atlas(gpu: &crate::render::render_test_support::TestGpu, atlas: &Packed) -> Vec<u8> {
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Aseprite atlas fixture"),
             size: wgpu::Extent3d {
@@ -416,29 +477,6 @@ mod tests {
             },
             texture.size(),
         );
-        let pixels = read_texture(&gpu.device, &gpu.queue, &texture);
-        let cell_pixel = |slot: u32, x: u32, y: u32| {
-            let columns = atlas.size.x / atlas.canvas.x;
-            let x = slot % columns * atlas.canvas.x + x;
-            let y = slot / columns * atlas.canvas.y + y;
-            let offset = ((y * atlas.size.x + x) * 4) as usize;
-            &pixels[offset..offset + 4]
-        };
-        assert_eq!(cell_pixel(0, 1, 0), [255, 0, 0, 255]);
-        assert_eq!(
-            cell_pixel(0, 0, 0),
-            [0; 4],
-            "trim placement preserves the canvas origin"
-        );
-        assert_eq!(cell_pixel(1, 0, 1), [0, 255, 0, 255]);
-        assert_eq!(cell_pixel(2, 0, 0), [0, 0, 255, 255]);
-        assert_eq!(cell_pixel(3, 1, 1), [255, 255, 0, 255], "hat cel");
-        for slot in [4, 5] {
-            for y in 0..2 {
-                for x in 0..2 {
-                    assert_eq!(cell_pixel(slot, x, y), [0; 4], "missing hat cel");
-                }
-            }
-        }
+        read_texture(&gpu.device, &gpu.queue, &texture)
     }
 }

@@ -578,6 +578,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd307490d624467aa6f74b0eabb77633d1f758a7b25f12bceb0b22e08d9726f6"
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4024,6 +4030,7 @@ dependencies = [
  "objc2-foundation 0.2.2",
  "objc2-metal 0.3.2",
  "pollster",
+ "ponko_aseprite",
  "ponko_ecs",
  "ponko_image_diff",
  "ponko_macros",
@@ -4063,6 +4070,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ponko_aseprite"
+version = "0.1.0"
+dependencies = [
+ "aseprite-loader",
+ "flate2",
+ "serde_json",
+]
+
+[[package]]
 name = "ponko_bench"
 version = "0.1.0"
 dependencies = [
@@ -4084,7 +4100,7 @@ dependencies = [
 name = "ponko_cli"
 version = "0.1.0"
 dependencies = [
- "aseprite-loader",
+ "base64",
  "basis-universal",
  "crc32fast",
  "flate2",
@@ -4092,6 +4108,7 @@ dependencies = [
  "ktx2",
  "meshopt",
  "naga",
+ "ponko_aseprite",
  "ponko_image_diff",
  "ruzstd",
  "serde_json",

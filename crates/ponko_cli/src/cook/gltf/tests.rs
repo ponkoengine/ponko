@@ -938,3 +938,43 @@ fn a_mesh_that_fits_one_range_keeps_one_child() {
     let child = &cooked_json["nodes"][children[0].as_u64().unwrap() as usize];
     assert_eq!(child["extensions"][POSITIONS_EXTENSION], json!({}));
 }
+
+#[cfg(feature = "textures")]
+#[test]
+fn images_are_compressed_without_relocating_meshopt_or_draco_geometry() {
+    for ext in [
+        "EXT_meshopt_compression",
+        "KHR_meshopt_compression",
+        "KHR_draco_mesh_compression",
+    ] {
+        let (mut json, bin) = textured(2, 16);
+        json["extensionsUsed"] = json!([ext]);
+        json["extensionsRequired"] = json!([ext]);
+        if ext == "KHR_draco_mesh_compression" {
+            json["meshes"][0]["primitives"][0]["extensions"] =
+                json!({(ext): {"bufferView": 0, "attributes": {"POSITION": 0}}});
+        } else {
+            json["bufferViews"][0]["extensions"] = json!({(ext): {"buffer": 0, "byteOffset": 0, "byteLength": 12}});
+            // A declared fallback placeholder without a URI has no data.
+            json["buffers"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"byteLength": 1024, "extensions": {(ext): {"fallback": true}}}));
+        }
+        let options = Options {
+            images: Some(Images { basis: false }),
+            ..ALL
+        };
+        let (out, note, gpu) = cook("packed.glb", &glb(&json, &bin), &[], options).unwrap().unwrap();
+        let (cooked, blob) = split_glb(&out).unwrap();
+        assert_eq!(cooked["accessors"], json["accessors"]);
+        assert_eq!(cooked["meshes"], json["meshes"]);
+        let views = json["bufferViews"].as_array().unwrap();
+        assert_eq!(&cooked["bufferViews"].as_array().unwrap()[..views.len()], views);
+        assert_eq!(&blob.unwrap()[..24], &bin[..24]);
+        assert!(cooked["extensionsRequired"].as_array().unwrap().contains(&json!(ext)));
+        assert_eq!(ktx2_of(&out, 0).1, 146);
+        assert!(note.contains("3 images compressed"));
+        assert!(gpu.is_some());
+    }
+}

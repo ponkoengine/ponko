@@ -176,14 +176,22 @@ reads `.aseprite` files itself and writes the same export next to each:
 `hero.aseprite` becomes `hero.json` and `hero.png`, with every frame on a
 whole canvas, the tags (direction and repeats), slices and, with
 `"layers": true` for the file in `cook.json`, each visible layer under
-`{frame}:{layer}` names. The game loads `hero.json` as above. The Aseprite
-file itself isn't in the cooked files. While you develop, the game reads
-`assets/` as it is, with hot reload, so keep exporting from Aseprite there
-if you edit sprites while it runs: the cook replaces that export with the
-one it makes from the `.aseprite` file, so a shipped sheet is never older
-than its source. Group opacity isn't applied to the layers in a group, and
-tilemap layers aren't read: export those from Aseprite and set the file to
-`"keep"`.
+`{frame}:{layer}` names. The game can load `hero.json` as above.
+
+For direct loading during development, enable Ponko's `aseprite-source`
+Cargo feature and pass the loose source path to the same loader, for
+example `ctx.gfx.try_load_aseprite("sprites/hero.aseprite", false)`.
+With [hot reload](#hot-reload) enabled, saving the source updates
+existing atlas handles and animations. An invalid edit leaves the last
+successful atlas active. Use the same split-layer setting in the loader
+and `cook.json`.
+
+After cooking, the same source path resolves to the sibling JSON and PNG
+in the cooked assets, including when the development feature is off.
+Both direct loading and cooking apply group opacity and blend mode to
+the composited group. Tilemap layers draw embedded tiles, including
+flipped tiles and linked cels. Embed the tilesets in Aseprite before
+importing a source that links to an external tileset.
 
 ## Blend modes and sprite shaders
 

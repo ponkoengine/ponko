@@ -1,4 +1,4 @@
-//! Aseprite JSON Array exports as sprite atlases with variable-time animations.
+//! Aseprite sprite atlases with variable-time animations.
 //!
 //! Load one with [`Graphics::try_load_aseprite`]. Composited and split-layer exports
 //! use the same atlas and animation APIs.
@@ -9,7 +9,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 use glam::IVec2;
 use ponko_ecs::Component;
 
-use crate::assets::Origin;
+use crate::assets::{Image, Origin};
 use crate::camera::Rect;
 use crate::ctx::Ctx;
 use crate::ecs::Sprite;
@@ -206,7 +206,9 @@ impl Graphics {
     /// Loads an Aseprite JSON Array export and packs its PNG frames into one
     /// atlas. With `split_layers`, export using `--split-layers` and
     /// `--filename-format '{frame}:{layer}'`. Otherwise the export is
-    /// treated as one composite layer.
+    /// treated as one composite layer. Enable `aseprite-source` to read
+    /// loose `.aseprite` or `.ase` files directly in development. The same
+    /// source path resolves to its sibling `.json` after cooking.
     ///
     /// # Panics
     ///
@@ -221,12 +223,13 @@ impl Graphics {
     /// Fallible [`Self::load_aseprite`]. The image is relative to the JSON
     /// and both files are read through the same asset sources as other
     /// assets. Each path and split mode is cached for the game's lifetime.
-    /// With hot reload on, edits to either disk file refresh the shared
-    /// atlas. A failed reload keeps the last successful atlas.
+    /// With hot reload on, edits to the loose source or to either export
+    /// file refresh the shared atlas. A failed reload keeps the last
+    /// successful atlas.
     ///
     /// # Errors
     ///
-    /// An asset error if the JSON or image is missing, malformed,
+    /// An asset error if the source or export is missing, malformed,
     /// unsupported, or too large for the atlas.
     pub fn try_load_aseprite(&mut self, path: &str, split_layers: bool) -> Result<Aseprite, Error> {
         let key = (path.to_owned(), split_layers);
@@ -256,20 +259,12 @@ impl Graphics {
     }
 
     fn read_aseprite(&mut self, path: &str, split_layers: bool, old: Option<Texture>) -> Result<Atlas, Error> {
-        let found = self.asset_sources.find(path)?;
-        let source = found.origin.clone();
-        let input = found.into_text(path)?;
-        let export = export::Export::parse(&input, path)?;
-        let image_path = crate::tilemap::resolve_relative_asset(path, &export.meta.image);
-        let found = self.asset_sources.find(&image_path)?;
-        let image_source = found.origin.clone();
-        let image_bytes = found.into_bytes().map_err(|err| err.with_path(&image_path))?;
-        let image = crate::assets::decode_image(&image_bytes, &image_path, &image_path)?;
         let max = if self.headless {
             8192
         } else {
             self.renderer().max_texture_size()
         };
+        let (export, image, origins) = self.read_aseprite_data(path, split_layers, max)?;
         let packed = export
             .pack(&image, split_layers, max)
             .map_err(|err| err.with_path(path))?;
@@ -284,7 +279,7 @@ impl Graphics {
         };
         let kind = Asset::Aseprite(split_layers);
         self.watcher.forget_named(path, kind);
-        for origin in [source, image_source] {
+        for origin in origins {
             if let Origin::File(file) = origin {
                 self.watcher.watch(path, file, kind);
             }
@@ -296,5 +291,53 @@ impl Graphics {
             clips: packed.clips,
             slices: packed.slices,
         })
+    }
+
+    fn read_aseprite_data(
+        &self,
+        path: &str,
+        // Only the loose-source path needs these before packing.
+        _split_layers: bool,
+        _max: u32,
+    ) -> Result<(export::Export, Image, Vec<Origin>), Error> {
+        let cooked;
+        let json_path = if let Some((stem, _)) = path
+            .rsplit_once('.')
+            .filter(|(_, ext)| ext.eq_ignore_ascii_case("aseprite") || ext.eq_ignore_ascii_case("ase"))
+        {
+            #[cfg(feature = "aseprite-source")]
+            match self.asset_sources.find(path) {
+                Ok(found) if matches!(found.origin, Origin::File(_)) => {
+                    let origin = found.origin.clone();
+                    let bytes = found.into_bytes().map_err(|error| error.with_path(path))?;
+                    let sheet = ponko_aseprite::decode(&bytes, _split_layers, _max)
+                        .map_err(|error| Error::new(ErrorKind::Decode, error).with_path(path))?;
+                    let export = serde_json::from_value(sheet.export)
+                        .map_err(|error| Error::new(ErrorKind::Decode, error.to_string()).with_path(path))?;
+                    let image = Image {
+                        width: sheet.width,
+                        height: sheet.height,
+                        rgba: sheet.rgba,
+                    };
+                    return Ok((export, image, vec![origin]));
+                }
+                Err(error) if error.kind() != ErrorKind::NotFound => return Err(error),
+                _ => {}
+            }
+            cooked = format!("{stem}.json");
+            cooked.as_str()
+        } else {
+            path
+        };
+        let found = self.asset_sources.find(json_path)?;
+        let source = found.origin.clone();
+        let input = found.into_text(json_path)?;
+        let export = export::Export::parse(&input, json_path)?;
+        let image_path = crate::tilemap::resolve_relative_asset(json_path, &export.meta.image);
+        let found = self.asset_sources.find(&image_path)?;
+        let image_source = found.origin.clone();
+        let image_bytes = found.into_bytes().map_err(|err| err.with_path(&image_path))?;
+        let image = crate::assets::decode_image(&image_bytes, &image_path, &image_path)?;
+        Ok((export, image, vec![source, image_source]))
     }
 }
