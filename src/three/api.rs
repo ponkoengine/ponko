@@ -1074,11 +1074,12 @@ impl Graphics {
             .collect();
         let images = (&loaded.images[..], &loaded.blocks[..]);
         let materials = self.file_materials(path, &file, &loaded.materials, images, image_keys, refresh);
-        let meshes = loaded
-            .nodes
-            .iter()
-            .map(|node| {
-                node.mesh.as_ref().map(|m| {
+        // Nodes of one glTF mesh share one uploaded mesh.
+        let mut meshes: Vec<Option<Mesh>> = Vec::with_capacity(loaded.nodes.len());
+        for node in &loaded.nodes {
+            let mesh = match node.same_mesh_as {
+                Some(first) => meshes[first],
+                None => node.mesh.as_ref().map(|m| {
                     let parts: Vec<(Range<u32>, Material)> = m
                         .parts
                         .iter()
@@ -1087,9 +1088,10 @@ impl Graphics {
                     let mesh = self.mesh_from_parts(&m.data, &parts, None, m.morph_defaults.clone());
                     self.asset_ledger.own(crate::inventory::AssetClass::Mesh, mesh.id, path);
                     mesh
-                })
-            })
-            .collect();
+                }),
+            };
+            meshes.push(mesh);
+        }
         Ok((loaded, meshes, on_disk))
     }
 

@@ -82,10 +82,12 @@ pub struct GltfRoot {
     /// The options it was spawned with.
     pub options: GltfOptions,
     nodes: Vec<SpawnedNode>,
-    /// The meshes of its nodes: shared by every scene spawned from the
-    /// same file, freed with the last of them.
+    /// The meshes of its nodes, each once: shared by its nodes of the
+    /// same glTF mesh and by every scene spawned from the same file, freed
+    /// with the last of them.
     meshes: Vec<Mesh>,
-    /// The collision shapes made for its nodes, freed with it.
+    /// The collision shapes of its nodes' colliders, each once: shared as
+    /// the meshes are.
     #[cfg(feature = "physics3d")]
     shapes: Vec<crate::d3::CollisionMesh>,
 }
@@ -154,12 +156,99 @@ pub struct SpawnPoint {
     pub name: String,
 }
 
-/// The meshes made for each glTF file spawned as a scene, one per node
-/// (`None` for a node without triangles), shared by every scene spawned
-/// from the file: a world resource the game doesn't see, kept across
-/// world loads so the meshes of scenes a load replaced can be freed.
+/// What every scene of each glTF file spawned as a scene shares, by file:
+/// a world resource the game doesn't see, kept across world loads so what
+/// the scenes a load replaced held can be freed.
 #[derive(Default)]
-pub(crate) struct GltfMeshes(HashMap<String, Vec<Option<Mesh>>>);
+pub(crate) struct GltfShared(HashMap<String, FileShare>);
+
+/// What the scenes of one glTF file share: the mesh of each node (`None`
+/// for a node without triangles; nodes of one glTF mesh have the same
+/// one) and the shapes fitted for its colliders, by what they were fitted
+/// to (nodes of one mesh at one scale have the same one).
+#[derive(Clone)]
+struct FileShare {
+    meshes: Vec<Option<Mesh>>,
+    #[cfg(feature = "physics3d")]
+    shapes: HashMap<ShapeKey, crate::d3::Collider>,
+}
+
+impl FileShare {
+    fn new(meshes: Vec<Option<Mesh>>) -> Self {
+        Self {
+            meshes,
+            #[cfg(feature = "physics3d")]
+            shapes: HashMap::new(),
+        }
+    }
+
+    /// Everything it holds that is freed: its meshes and collision meshes.
+    fn held(self) -> Held {
+        Held {
+            meshes: self.meshes.into_iter().flatten().collect(),
+            #[cfg(feature = "physics3d")]
+            shapes: self.shapes.into_values().filter_map(|c| mesh_shape(&c)).collect(),
+        }
+    }
+}
+
+/// What a collider shape was fitted to: a node's mesh (the first node of
+/// its glTF mesh, [`LoadedNode::same_mesh_as`]), the kind of collider,
+/// and the node's scale and level offset, bit for bit.
+#[cfg(feature = "physics3d")]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct ShapeKey {
+    mesh: usize,
+    kind: u8,
+    scale: [u32; 3],
+    level: [u32; 10],
+}
+
+#[cfg(feature = "physics3d")]
+impl ShapeKey {
+    fn new(mesh: usize, kind: NodeCollider, scale: Vec3, level: &Transform3D) -> Self {
+        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<u32>>();
+        let mut l = [0; 10];
+        l[..3].copy_from_slice(&bits(&level.position.to_array()));
+        l[3..7].copy_from_slice(&bits(&level.rotation.to_array()));
+        l[7..].copy_from_slice(&bits(&level.scale.to_array()));
+        Self {
+            mesh,
+            kind: kind as u8,
+            scale: scale.to_array().map(f32::to_bits),
+            level: l,
+        }
+    }
+}
+
+/// The collision mesh of `c`, if it has one (hulls and triangle meshes).
+#[cfg(feature = "physics3d")]
+fn mesh_shape(c: &crate::d3::Collider) -> Option<crate::d3::CollisionMesh> {
+    match c.shape {
+        crate::d3::Shape::Mesh(shape) => Some(shape),
+        _ => None,
+    }
+}
+
+/// Meshes and collision meshes made for a file's scenes, to free once
+/// nothing holds them ([`Ctx::release_gltf`]).
+#[derive(Default)]
+struct Held {
+    meshes: Vec<Mesh>,
+    #[cfg(feature = "physics3d")]
+    shapes: Vec<crate::d3::CollisionMesh>,
+}
+
+impl Held {
+    /// What `scene` holds.
+    fn of(scene: &GltfRoot) -> Self {
+        Self {
+            meshes: scene.meshes.clone(),
+            #[cfg(feature = "physics3d")]
+            shapes: scene.shapes.clone(),
+        }
+    }
+}
 
 /// The glTF scenes in the world and their prefab instances: a reflected
 /// resource, so world saves hold it. A scene spawned again after a load
@@ -577,9 +666,16 @@ impl Ctx {
     pub(crate) fn spawn_gltf(&mut self, path: &str, at: Transform3D, options: GltfOptions) -> Result<Entity, Error> {
         let shared = self
             .world
-            .get_resource::<GltfMeshes>()
+            .get_resource::<GltfShared>()
             .and_then(|t| t.0.get(path).cloned());
-        let (loaded, meshes, file) = self.gfx.load_node_meshes(path, false, shared.as_deref())?;
+        let reuse = shared.as_ref().map(|s| s.meshes.as_slice());
+        let (loaded, meshes, file) = self.gfx.load_node_meshes(path, false, reuse)?;
+        // The file's collision shapes go with its meshes: a spawn that
+        // shares the meshes shares the shapes made for them too.
+        let mut share = match shared {
+            Some(s) if s.meshes == meshes => s,
+            _ => FileShare::new(meshes),
+        };
         let root = self.world.spawn((
             at,
             GltfRoot {
@@ -593,16 +689,16 @@ impl Ctx {
             NotSaved,
         ));
         let adopt = self.claim_saved_scene(path, at, root);
-        if let Err(e) = self.apply_gltf(root, path, &loaded.nodes, meshes.clone(), adopt) {
+        if let Err(e) = self.apply_gltf(root, path, &loaded.nodes, &mut share, adopt, true) {
             self.world.despawn(root);
             self.forget_saved_scene(root);
             return Err(e);
         }
-        let old = self.gltf_meshes().0.insert(path.to_string(), meshes);
+        let old = self.gltf_shared().0.insert(path.to_string(), share);
         if let Some(old) = old {
             // A file that changed without hot reload: the scenes spawned
-            // before keep their meshes until they go.
-            self.release_gltf_meshes(path, old.into_iter().flatten().collect(), None);
+            // before keep their meshes and shapes until they go.
+            self.release_gltf(path, old.held(), None);
         }
         if let Some(file) = file
             && !self.assets.watcher.watching(&file, |a| matches!(a, Asset::GltfScene))
@@ -614,7 +710,8 @@ impl Ctx {
 
     /// Despawns the scene whose root is `root` (see [`GltfRoot::spawn`]):
     /// the root, every node's entity (prefab instances with their parts)
-    /// and the meshes and collision shapes made for it. Returns how many
+    /// and the meshes and collision shapes made for it, unless another
+    /// scene of the file still holds them. Returns how many
     /// entities that was, `None` if `root` isn't a scene's root.
     pub(crate) fn despawn_gltf(&mut self, root: Entity) -> Option<usize> {
         let scene = self.world.get::<GltfRoot>(root).cloned()?;
@@ -627,8 +724,7 @@ impl Ctx {
             }
         }
         n += usize::from(self.world.despawn(root));
-        self.free_gltf_shapes(&scene);
-        self.release_gltf_meshes(&scene.path, scene.meshes.clone(), None);
+        self.release_gltf(&scene.path, Held::of(&scene), None);
         self.forget_saved_scene(root);
         Some(n)
     }
@@ -643,20 +739,24 @@ impl Ctx {
             .filter(|(_, r)| r.path == path)
             .map(|(e, _)| e)
             .collect();
-        // The first scene reads the file again and makes new meshes, the
-        // others share them; the old ones go once no scene holds them.
-        let mut fresh: Option<Vec<Option<Mesh>>> = None;
+        // The first scene reads the file again and makes new meshes and
+        // shapes, the others share them; the old ones go once no scene
+        // holds them.
+        let mut fresh: Option<FileShare> = None;
         let mut result = Ok(());
         for root in roots {
-            let loaded = self.gfx.load_node_meshes(path, fresh.is_none(), fresh.as_deref());
+            let reuse = fresh.as_ref().map(|f| f.meshes.as_slice());
+            let loaded = self.gfx.load_node_meshes(path, fresh.is_none(), reuse);
             let applied = loaded.and_then(|(loaded, meshes, _)| {
-                self.apply_gltf(root, path, &loaded.nodes, meshes.clone(), false)
-                    .map(|()| meshes)
+                let mut share = match &fresh {
+                    Some(f) if f.meshes == meshes => f.clone(),
+                    _ => FileShare::new(meshes),
+                };
+                self.apply_gltf(root, path, &loaded.nodes, &mut share, false, false)
+                    .map(|()| share)
             });
             match applied {
-                Ok(meshes) => {
-                    fresh.get_or_insert(meshes);
-                }
+                Ok(share) => fresh = Some(share),
                 Err(e) => {
                     result = Err(e.to_string());
                     break;
@@ -664,66 +764,70 @@ impl Ctx {
             }
         }
         if let Some(fresh) = fresh
-            && let Some(old) = self.gltf_meshes().0.insert(path.to_string(), fresh)
+            && let Some(old) = self.gltf_shared().0.insert(path.to_string(), fresh)
         {
-            self.release_gltf_meshes(path, old.into_iter().flatten().collect(), None);
+            self.release_gltf(path, old.held(), None);
         }
         result
     }
 
-    /// The shared meshes of every spawned file.
-    fn gltf_meshes(&mut self) -> &mut GltfMeshes {
-        if self.world.get_resource::<GltfMeshes>().is_none() {
-            self.world.insert_resource(GltfMeshes::default());
+    /// What the scenes of every spawned file share.
+    fn gltf_shared(&mut self) -> &mut GltfShared {
+        if self.world.get_resource::<GltfShared>().is_none() {
+            self.world.insert_resource(GltfShared::default());
         }
-        self.world.resource_mut::<GltfMeshes>()
+        self.world.resource_mut::<GltfShared>()
     }
 
-    /// Frees those of `candidates` (meshes made for file `path`) that no
-    /// scene holds any more, but `except`'s (a root being taken down).
-    /// When no scene of `path` is left, frees its shared meshes and the
-    /// materials and textures it made too.
-    fn release_gltf_meshes(&mut self, path: &str, mut candidates: Vec<Mesh>, except: Option<Entity>) {
-        let mut held: HashSet<u32> = HashSet::new();
+    /// Frees those of `candidates` (meshes and collision meshes made for
+    /// file `path`) that no scene holds any more, but `except`'s (a root
+    /// being taken down). When no scene of `path` is left, frees what the
+    /// file's scenes shared, and the materials and textures it made too.
+    fn release_gltf(&mut self, path: &str, mut candidates: Held, except: Option<Entity>) {
+        let mut meshes: HashSet<u32> = HashSet::new();
+        #[cfg(feature = "physics3d")]
+        let mut shapes: HashSet<u32> = HashSet::new();
         let mut path_alive = false;
         for (e, r) in self.world.query::<(Entity, &GltfRoot)>().iter() {
             if Some(e) == except {
                 continue;
             }
-            held.extend(r.meshes.iter().map(|m| m.id));
+            meshes.extend(r.meshes.iter().map(|m| m.id));
+            #[cfg(feature = "physics3d")]
+            shapes.extend(r.shapes.iter().map(|m| m.id));
             path_alive |= r.path == path;
         }
         if path_alive {
-            if let Some(current) = self.world.get_resource::<GltfMeshes>().and_then(|t| t.0.get(path)) {
-                held.extend(current.iter().flatten().map(|m| m.id));
+            if let Some(current) = self.world.get_resource::<GltfShared>().and_then(|t| t.0.get(path)) {
+                meshes.extend(current.meshes.iter().flatten().map(|m| m.id));
+                #[cfg(feature = "physics3d")]
+                shapes.extend(current.shapes.values().filter_map(mesh_shape).map(|m| m.id));
             }
         } else if let Some(old) = self
             .world
-            .get_resource_mut::<GltfMeshes>()
+            .get_resource_mut::<GltfShared>()
             .and_then(|t| t.0.remove(path))
         {
-            candidates.extend(old.into_iter().flatten());
+            let old = old.held();
+            candidates.meshes.extend(old.meshes);
+            #[cfg(feature = "physics3d")]
+            candidates.shapes.extend(old.shapes);
         }
-        for mesh in candidates {
+        for mesh in candidates.meshes {
             // `insert` also skips a mesh listed twice.
-            if held.insert(mesh.id) {
+            if meshes.insert(mesh.id) {
                 self.free(mesh);
+            }
+        }
+        #[cfg(feature = "physics3d")]
+        for shape in candidates.shapes {
+            if shapes.insert(shape.id) {
+                self.free(shape);
             }
         }
         if !path_alive {
             self.gfx.release_file_materials(path);
         }
-    }
-
-    /// Frees the collision shapes made for `scene`.
-    #[allow(clippy::unused_self)]
-    fn free_gltf_shapes(&mut self, scene: &GltfRoot) {
-        #[cfg(feature = "physics3d")]
-        for &shape in &scene.shapes {
-            self.free(shape);
-        }
-        #[cfg(not(feature = "physics3d"))]
-        let _ = scene;
     }
 
     /// Finds the saved record a scene of `path` spawned at `at` with root
@@ -798,8 +902,9 @@ impl Ctx {
     /// After the world was replaced by `save` (a world save or scene):
     /// the saved scene records come from the save (a save without them
     /// has none), a save from before they existed that holds glTF prefab
-    /// instances is noted ([`UnlinkedGltfSave`]), and the meshes of the
-    /// scenes that went with the old world are freed.
+    /// instances is noted ([`UnlinkedGltfSave`]), and the meshes and
+    /// collision shapes of the scenes that went with the old world are
+    /// freed.
     pub(crate) fn gltf_after_world_load(&mut self, save: &Value) {
         let named = save["resources"].get("GltfSceneSaves").is_some();
         if named {
@@ -817,36 +922,52 @@ impl Ctx {
         }
         let files: Vec<String> = self
             .world
-            .get_resource::<GltfMeshes>()
+            .get_resource::<GltfShared>()
             .map(|t| t.0.keys().cloned().collect())
             .unwrap_or_default();
         for path in files {
-            self.release_gltf_meshes(&path, Vec::new(), None);
+            self.release_gltf(&path, Held::default(), None);
         }
     }
 
-    /// Brings the scene of `root` to `nodes` (with a mesh made for each
-    /// node that has one): checks everything that can fail first, then
-    /// changes the world, keeping the entities of nodes whose path stays.
-    /// On an error nothing changed and `meshes` are freed, unless another
-    /// scene holds them. `adopt`: the first spawn after a world load, with
-    /// the scene's saved record ([`GltfSceneSaves`]): its live instances
-    /// become its prefab nodes where they are, and nodes whose instance is
-    /// gone aren't spawned.
+    /// Brings the scene of `root` to `nodes`, with the file's meshes and
+    /// collision shapes from `share` (the shapes it lacks are made and
+    /// added to it): checks everything that can fail first, then changes
+    /// the world, keeping the entities of nodes whose path stays. On an
+    /// error nothing changed and the meshes and shapes made for it are
+    /// freed, unless another scene holds them. `adopt`: the first spawn
+    /// after a world load, with the scene's saved record
+    /// ([`GltfSceneSaves`]): its live instances become its prefab nodes
+    /// where they are, and nodes whose instance is gone aren't spawned.
+    /// `spawning`: `root` is new and goes if this fails.
     fn apply_gltf(
         &mut self,
         root: Entity,
         path: &str,
         nodes: &[LoadedNode],
-        meshes: Vec<Option<Mesh>>,
+        share: &mut FileShare,
         adopt: bool,
+        spawning: bool,
     ) -> Result<(), Error> {
-        let made: Vec<Mesh> = meshes.iter().flatten().copied().collect();
+        let meshes = share.meshes.clone();
+        let mut made: Vec<Mesh> = Vec::new();
+        for &mesh in meshes.iter().flatten() {
+            if !made.contains(&mesh) {
+                made.push(mesh);
+            }
+        }
+        // What to free if this fails: a reload's own scene keeps its old
+        // meshes, a new one goes.
+        let except = spawning.then_some(root);
         let checked = self.check_gltf(root, path, nodes);
         let (plan, mut old, at) = match checked {
             Ok(c) => c,
             Err(e) => {
-                self.release_gltf_meshes(path, made, Some(root));
+                let made = Held {
+                    meshes: made,
+                    ..Held::default()
+                };
+                self.release_gltf(path, made, except);
                 return Err(e);
             }
         };
@@ -892,10 +1013,14 @@ impl Ctx {
             }
         }
         #[cfg(feature = "physics3d")]
-        let colliders = match self.gltf_colliders(path, &plan, nodes) {
+        let (colliders, fresh_shapes) = match self.gltf_colliders(path, &plan, nodes, &share.shapes) {
             Ok(c) => c,
             Err(e) => {
-                self.release_gltf_meshes(path, made, Some(root));
+                let made = Held {
+                    meshes: made,
+                    ..Held::default()
+                };
+                self.release_gltf(path, made, except);
                 return Err(e);
             }
         };
@@ -934,13 +1059,12 @@ impl Ctx {
                     for (_, e) in fresh_prefabs {
                         self.despawn_prefab(e);
                     }
-                    self.release_gltf_meshes(path, made, Some(root));
-                    #[cfg(feature = "physics3d")]
-                    for c in &colliders {
-                        if let crate::d3::Shape::Mesh(shape) = c.collider.shape {
-                            self.free(shape);
-                        }
-                    }
+                    let made = Held {
+                        meshes: made,
+                        #[cfg(feature = "physics3d")]
+                        shapes: fresh_shapes.values().filter_map(mesh_shape).collect(),
+                    };
+                    self.release_gltf(path, made, except);
                     return Err(node_error(e.kind(), path, &node.path, e.message()));
                 }
             }
@@ -1044,13 +1168,16 @@ impl Ctx {
             else {
                 continue;
             };
-            if let crate::d3::Shape::Mesh(shape) = c.collider.shape {
+            if let Some(shape) = mesh_shape(&c.collider)
+                && !shapes.contains(&shape)
+            {
                 shapes.push(shape);
             }
             self.world.insert(e, c.body);
             self.world.insert(e, c.collider);
         }
-        self.free_gltf_shapes(&old);
+        #[cfg(feature = "physics3d")]
+        share.shapes.extend(fresh_shapes);
         // The saved record: each prefab node's instance, or none.
         let instances: BTreeMap<String, SavedInstance> = plan
             .nodes
@@ -1075,6 +1202,9 @@ impl Ctx {
                 r.shapes = shapes;
             }
         }
+        // What the scene held before and no scene holds now (a reload's
+        // old shapes; its old meshes go with the file's old share).
+        self.release_gltf(path, Held::of(&old), None);
         Ok(())
     }
 
@@ -1115,16 +1245,25 @@ impl Ctx {
     }
 
     /// Makes the colliders the plan asks for, each from its node's mesh
-    /// scaled as the node is in the world.
+    /// scaled as the node is in the world. Shapes already in `made` (by
+    /// what they fit, see [`ShapeKey`]) are used again; the ones made here
+    /// come back too, to add to the file's share. On an error those are
+    /// freed.
     #[cfg(feature = "physics3d")]
-    fn gltf_colliders(&mut self, path: &str, plan: &Plan, nodes: &[LoadedNode]) -> Result<Vec<ColliderPlan>, Error> {
-        use crate::d3::{Collider, CollisionGroups, RigidBody};
+    #[allow(clippy::type_complexity)]
+    fn gltf_colliders(
+        &mut self,
+        path: &str,
+        plan: &Plan,
+        nodes: &[LoadedNode],
+        made: &HashMap<ShapeKey, crate::d3::Collider>,
+    ) -> Result<(Vec<ColliderPlan>, HashMap<ShapeKey, crate::d3::Collider>), Error> {
+        use crate::d3::{CollisionGroups, RigidBody};
         let mut out: Vec<ColliderPlan> = Vec::new();
-        let fail = |ctx: &mut Ctx, out: &[ColliderPlan], node: &str, message: &str| {
-            for c in out {
-                if let crate::d3::Shape::Mesh(shape) = c.collider.shape {
-                    ctx.free(shape);
-                }
+        let mut fresh: HashMap<ShapeKey, crate::d3::Collider> = HashMap::new();
+        let fail = |ctx: &mut Ctx, fresh: &HashMap<ShapeKey, crate::d3::Collider>, node: &str, message: &str| {
+            for shape in fresh.values().filter_map(mesh_shape) {
+                ctx.free(shape);
             }
             node_error(ErrorKind::Decode, path, node, message)
         };
@@ -1135,7 +1274,7 @@ impl Ctx {
             }
             let source = plan.shape_source(i);
             let Some(mesh) = &nodes[source].mesh else {
-                return Err(fail(self, &out, &node.path, "\"ponko:collider\" needs a mesh to fit"));
+                return Err(fail(self, &fresh, &node.path, "\"ponko:collider\" needs a mesh to fit"));
             };
             // Colliders don't take the transform's scale: put it in the shape.
             let level = if source == i {
@@ -1144,44 +1283,18 @@ impl Ctx {
                 plan.nodes[source].local
             };
             let scale = node.world.scale.abs();
-            let to_node = Mat4::from_scale(scale) * level_matrix(&level);
-            let corners: Vec<Vec3> = mesh
-                .data
-                .positions
-                .iter()
-                .map(|&p| to_node.transform_point3(p))
-                .collect();
-            let (center, size) = bounds(&corners);
-            let collider = match kind {
-                NodeCollider::Box => Collider::cuboid(size).offset(center),
-                NodeCollider::Sphere => {
-                    let radius = corners.iter().map(|p| p.distance(center)).fold(0.0, f32::max);
-                    Collider::sphere(radius).offset(center)
-                }
-                NodeCollider::Capsule => {
-                    let radius = (size.x.max(size.z) * 0.5).max(1e-3);
-                    Collider::capsule((size.y - 2.0 * radius).max(0.0), radius).offset(center)
-                }
-                NodeCollider::Hull => match self.physics3d.convex_hull(&corners) {
-                    Some(shape) => Collider::mesh(shape),
-                    None => return Err(fail(self, &out, &node.path, "its mesh has no volume for a convex hull")),
-                },
-                NodeCollider::Trimesh => {
-                    let triangles: Vec<[u32; 3]> = mesh.data.indices.as_chunks::<3>().0.to_vec();
-                    match self.physics3d.trimesh(&corners, &triangles) {
-                        Some(shape) => Collider::mesh(shape),
-                        None => {
-                            return Err(fail(
-                                self,
-                                &out,
-                                &node.path,
-                                "its mesh has no triangles to collide with",
-                            ));
-                        }
+            let key = ShapeKey::new(nodes[source].same_mesh_as.unwrap_or(source), kind, scale, &level);
+            let shape = match made.get(&key).or_else(|| fresh.get(&key)) {
+                Some(&shape) => shape,
+                None => {
+                    let to_node = Mat4::from_scale(scale) * level_matrix(&level);
+                    match self.fit_collider(kind, &mesh.data, to_node) {
+                        Ok(shape) => *fresh.entry(key).or_insert(shape),
+                        Err(message) => return Err(fail(self, &fresh, &node.path, message)),
                     }
                 }
             };
-            let mut collider = collider;
+            let mut collider = shape;
             collider.sensor = node.props.sensor;
             collider.groups = CollisionGroups::new(
                 node.props.collision_layers.unwrap_or(u32::MAX),
@@ -1198,7 +1311,39 @@ impl Ctx {
                 body,
             });
         }
-        Ok(out)
+        Ok((out, fresh))
+    }
+
+    /// A collider of `kind` fitted to `mesh`'s corners moved by `to_node`
+    /// (a hull and a triangle mesh make a collision mesh), or why it can't
+    /// be.
+    #[cfg(feature = "physics3d")]
+    fn fit_collider(&mut self, kind: NodeCollider, mesh: &MeshData, to_node: Mat4) -> Result<crate::d3::Collider, &'static str> {
+        use crate::d3::Collider;
+        let corners: Vec<Vec3> = mesh.positions.iter().map(|&p| to_node.transform_point3(p)).collect();
+        let (center, size) = bounds(&corners);
+        Ok(match kind {
+            NodeCollider::Box => Collider::cuboid(size).offset(center),
+            NodeCollider::Sphere => {
+                let radius = corners.iter().map(|p| p.distance(center)).fold(0.0, f32::max);
+                Collider::sphere(radius).offset(center)
+            }
+            NodeCollider::Capsule => {
+                let radius = (size.x.max(size.z) * 0.5).max(1e-3);
+                Collider::capsule((size.y - 2.0 * radius).max(0.0), radius).offset(center)
+            }
+            NodeCollider::Hull => match self.physics3d.convex_hull(&corners) {
+                Some(shape) => Collider::mesh(shape),
+                None => return Err("its mesh has no volume for a convex hull"),
+            },
+            NodeCollider::Trimesh => {
+                let triangles: Vec<[u32; 3]> = mesh.indices.as_chunks::<3>().0.to_vec();
+                match self.physics3d.trimesh(&corners, &triangles) {
+                    Some(shape) => Collider::mesh(shape),
+                    None => return Err("its mesh has no triangles to collide with"),
+                }
+            }
+        })
     }
 
     /// The `GltfNode` of a planned node.

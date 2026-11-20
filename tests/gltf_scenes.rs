@@ -44,8 +44,9 @@ fn base64(bytes: &[u8]) -> String {
 }
 
 /// A `.gltf` file with `nodes` (glTF node objects; `"mesh": 0` is a 1 m
-/// cube around the node's origin), every node without a parent at the top
-/// of the scene, and `lights` as `KHR_lights_punctual` lights.
+/// cube around the node's origin, and `"mesh": 1` another glTF mesh of the
+/// same cube), every node without a parent at the top of the scene, and
+/// `lights` as `KHR_lights_punctual` lights.
 fn gltf(nodes: Value, lights: Value) -> String {
     let corners: [[f32; 3]; 8] = [
         [-0.5, -0.5, -0.5],
@@ -83,7 +84,10 @@ fn gltf(nodes: Value, lights: Value) -> String {
         "scene": 0,
         "scenes": [{ "nodes": top }],
         "nodes": nodes,
-        "meshes": [{ "name": "cube", "primitives": [{ "attributes": { "POSITION": 0 }, "indices": 1, "material": 0 }] }],
+        "meshes": [
+            { "name": "cube", "primitives": [{ "attributes": { "POSITION": 0 }, "indices": 1, "material": 0 }] },
+            { "name": "cube copy", "primitives": [{ "attributes": { "POSITION": 0 }, "indices": 1, "material": 0 }] }
+        ],
         "materials": [{ "name": "paint", "pbrMetallicRoughness": { "baseColorFactor": [0.8, 0.2, 0.2, 1.0] } }],
         "buffers": [{ "byteLength": bytes.len(), "uri": format!("data:application/octet-stream;base64,{}", base64(&bytes)) }],
         "bufferViews": [
@@ -506,7 +510,7 @@ fn reexporting_a_file_spawned_twice_gives_both_scenes_one_new_set_of_meshes() {
             meshes.push(m);
         }
     }
-    assert_eq!(meshes.len(), 2, "Door and Wall, once for both scenes");
+    assert_eq!(meshes.len(), 1, "Door and Wall's one glTF mesh, once for both scenes");
 }
 
 #[test]
@@ -676,9 +680,8 @@ fn write_gltf_instances_v1_fixture() {
 
 // ---- shared meshes ---------------------------------------------------------------
 
-/// A prop of three different meshes (a 1 m cube scaled three ways is one
-/// glTF mesh; these are three nodes of it, so three meshes per spawn
-/// before sharing) and one material.
+/// A prop of three parts (a 1 m cube scaled three ways: three nodes of one
+/// glTF mesh, which share one uploaded mesh) and one material.
 fn prop() -> String {
     gltf(
         json!([
@@ -716,7 +719,7 @@ fn a_hundred_spawns_of_one_file_hold_one_copy_of_its_meshes() {
         let hundred = meshes_and_materials(ctx);
         eprintln!("glTF spawns: none {empty:?}, one {one:?}, a hundred {hundred:?} (meshes, mesh bytes, materials)");
         assert_eq!(empty, (0, 0, 0));
-        assert_eq!(one.0, 3, "one mesh per node with triangles");
+        assert_eq!(one.0, 1, "one mesh for the three nodes of one glTF mesh");
         assert_eq!(
             hundred, one,
             "a hundred spawns share the first one's meshes and material"
@@ -744,8 +747,279 @@ fn a_hundred_spawns_of_one_file_hold_one_copy_of_its_meshes() {
 
         // Spawned again, the file makes them again.
         let again = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
-        assert_eq!(meshes_and_materials(ctx).0, 3);
+        assert_eq!(meshes_and_materials(ctx).0, 1);
         ctx.despawn_prefab(again);
+    });
+}
+
+#[test]
+fn nodes_of_one_gltf_mesh_share_one_uploaded_mesh_and_other_meshes_get_their_own() {
+    // Six nodes of mesh 0 (two in a group, one scaled) and two of mesh 1.
+    let file = TempAsset::with_contents(
+        "rocks.gltf",
+        &gltf(
+            json!([
+                { "name": "A", "mesh": 0 },
+                { "name": "B", "mesh": 0, "translation": [2.0, 0.0, 0.0] },
+                { "name": "C", "mesh": 0, "scale": [3.0, 1.0, 3.0] },
+                { "name": "Pile", "children": [4, 5] },
+                { "name": "D", "mesh": 0 },
+                { "name": "E", "mesh": 0, "translation": [0.0, 1.0, 0.0] },
+                { "name": "F", "mesh": 1 },
+                { "name": "G", "mesh": 1, "translation": [0.0, 0.0, 4.0] },
+                { "name": "H", "mesh": 0, "extras": { "ponko:Health": { "hp": 1.0 } } }
+            ]),
+            json!([]),
+        ),
+    );
+    let one = TempAsset::with_contents("one.gltf", &gltf(json!([{ "name": "A", "mesh": 0 }]), json!([])));
+    game().run_headless(0, |ctx| {
+        reflect(ctx);
+        let single = ctx.spawn_prefab(one.name(), Transform::default()).unwrap();
+        let (_, one_mesh_bytes, _) = meshes_and_materials(ctx);
+        ctx.despawn_prefab(single);
+        assert_eq!(meshes_and_materials(ctx).0, 0);
+
+        let root = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        let (meshes, bytes, materials) = meshes_and_materials(ctx);
+        eprintln!(
+            "nine nodes of two glTF meshes: {meshes} meshes, {bytes} bytes (one mesh: {one_mesh_bytes} bytes; one per node: {} bytes)",
+            8 * one_mesh_bytes
+        );
+        assert_eq!(meshes, 2, "one uploaded mesh per glTF mesh, not one per node");
+        assert_eq!(bytes, 2 * one_mesh_bytes);
+        assert_eq!(materials, 1);
+        let scene = ctx.world.get::<GltfRoot>(root).unwrap().clone();
+        let mesh_of = |ctx: &mut Ctx, path: &str| ctx.world.get::<Model>(scene.entity(path).unwrap()).unwrap().mesh;
+        let first = mesh_of(ctx, "A");
+        for path in ["B", "C", "Pile/D", "Pile/E", "H"] {
+            assert_eq!(mesh_of(ctx, path), first, "{path} draws mesh 0's one copy");
+        }
+        let second = mesh_of(ctx, "F");
+        assert_ne!(second, first);
+        assert_eq!(mesh_of(ctx, "G"), second);
+        // Each node keeps its own place, scale and components.
+        let c = scene.entity("C").unwrap();
+        assert_eq!(ctx.world.get::<Transform>(c).unwrap().scale, vec3(3.0, 1.0, 3.0));
+        assert_eq!(
+            ctx.world.get::<Health>(scene.entity("H").unwrap()),
+            Some(&Health { hp: 1.0 })
+        );
+
+        // The shared meshes go with the scene, once each.
+        assert_eq!(ctx.despawn_prefab(root), 10);
+        assert!(!ctx.is_live(first) && !ctx.is_live(second));
+        assert_eq!(meshes_and_materials(ctx), (0, 0, 0));
+    });
+}
+
+#[test]
+fn a_read_scene_gives_every_node_of_a_shared_mesh_its_triangles() {
+    let file = TempAsset::with_contents("prop.gltf", &prop());
+    game().run_headless(0, |ctx| {
+        let scene = GltfScene::load(ctx, file.name()).unwrap();
+        for node in &scene.nodes {
+            let mesh = node.mesh.as_ref().unwrap_or_else(|| panic!("{} has its mesh", node.path));
+            assert_eq!((mesh.positions.len(), mesh.indices.len()), (8, 36), "{}", node.path);
+        }
+    });
+}
+
+#[test]
+fn a_bad_export_keeps_the_old_scene_drawing_its_meshes() {
+    use std::sync::{Arc, Mutex};
+    let file = TempAsset::with_contents("live.gltf", &two_boxes(0.0, 5.0, true));
+    let broken = gltf(
+        json!([{ "name": "Door", "mesh": 0, "extras": { "ponko:colider": "box" } }]),
+        json!([]),
+    );
+    let live = Arc::new(Mutex::new(Vec::new()));
+    let log = live.clone();
+    let name = file.name().to_string();
+    let path = file.path();
+    game()
+        .hot_reload(true)
+        .sim_system(move |ctx: &mut Ctx| {
+            let tick = ctx.time.sim_tick();
+            if tick == 2 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                std::fs::write(&path, &broken).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(400));
+            }
+            if tick == 4 {
+                let door = node(&mut ctx.world, "Door");
+                let mesh = ctx.world.get::<Model>(door).unwrap().mesh;
+                log.lock().unwrap().push(ctx.is_live(mesh));
+            }
+        })
+        .run_headless(5, move |ctx| {
+            reflect(ctx);
+            ctx.spawn_prefab(&name, Transform::default()).unwrap();
+        });
+    assert_eq!(*live.lock().unwrap(), [true], "the old scene's mesh stays live");
+}
+
+/// A file of four nodes of one glTF mesh with colliders: two triangle
+/// meshes at the same scale, one at another scale, and a hull.
+#[cfg(feature = "physics3d")]
+fn rock_colliders() -> String {
+    gltf(
+        json!([
+            { "name": "A", "mesh": 0, "extras": { "ponko:collider": "trimesh" } },
+            { "name": "B", "mesh": 0, "translation": [3.0, 0.0, 0.0], "extras": { "ponko:collider": "trimesh" } },
+            { "name": "Big", "mesh": 0, "scale": [4.0, 1.0, 4.0], "extras": { "ponko:collider": "trimesh" } },
+            { "name": "Hull", "mesh": 0, "translation": [0.0, 0.0, 3.0], "extras": { "ponko:collider": "hull" } },
+            { "name": "Crate", "mesh": 0, "translation": [0.0, 3.0, 0.0], "extras": { "ponko:collider": "box" } }
+        ]),
+        json!([]),
+    )
+}
+
+/// The collision mesh of `path`'s collider in the scene of `root`.
+#[cfg(feature = "physics3d")]
+fn collision_mesh(ctx: &mut Ctx, root: Entity, path: &str) -> ponko::d3::CollisionMesh {
+    let e = ctx.world.get::<GltfRoot>(root).unwrap().entity(path).unwrap();
+    match ctx.world.get::<ponko::d3::Collider>(e).unwrap().shape {
+        ponko::d3::Shape::Mesh(m) => m,
+        other => panic!("{path} has a {other:?}"),
+    }
+}
+
+#[cfg(feature = "physics3d")]
+#[test]
+fn spawning_a_scene_again_reuses_its_collision_shapes_until_the_last_one_goes() {
+    let file = TempAsset::with_contents("rocks.gltf", &rock_colliders());
+    game().physics3d(Vec3::ZERO).run_headless(0, |ctx| {
+        let first = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        assert_eq!(
+            ctx.live_counts().collision_meshes,
+            3,
+            "A and B share a triangle mesh; Big's scale and the hull make their own"
+        );
+        let a = collision_mesh(ctx, first, "A");
+        assert_eq!(collision_mesh(ctx, first, "B"), a);
+        assert_ne!(collision_mesh(ctx, first, "Big"), a);
+        let mut roots = vec![first];
+        for i in 1..100 {
+            let at = Transform::at(vec3(i as f32 * 20.0, 0.0, 0.0));
+            roots.push(ctx.spawn_prefab(file.name(), at).unwrap());
+        }
+        assert_eq!(ctx.live_counts().collision_meshes, 3, "a hundred spawns share them");
+        for path in ["A", "B", "Big", "Hull"] {
+            assert_eq!(collision_mesh(ctx, roots[99], path), collision_mesh(ctx, first, path), "{path}");
+        }
+        let hull = collision_mesh(ctx, first, "Hull");
+
+        // Freed with the last scene that uses them, not before.
+        for &root in &roots[..99] {
+            ctx.despawn_prefab(root);
+        }
+        assert_eq!(ctx.live_counts().collision_meshes, 3);
+        assert!(ctx.is_live(a) && ctx.is_live(hull));
+        ctx.despawn_prefab(roots[99]);
+        assert_eq!(ctx.live_counts().collision_meshes, 0, "freed with the last scene");
+        assert!(!ctx.is_live(a) && !ctx.is_live(hull));
+
+        // Spawned again, the file makes them again.
+        let again = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        assert_eq!(ctx.live_counts().collision_meshes, 3);
+        ctx.despawn_prefab(again);
+        assert_eq!(ctx.live_counts().collision_meshes, 0);
+    });
+}
+
+#[cfg(feature = "physics3d")]
+#[test]
+fn shared_collision_shapes_collide_in_every_scene() {
+    use ponko::d3::{Collider, RigidBody};
+    let file = TempAsset::with_contents("rocks.gltf", &rock_colliders());
+    let mut world = game().physics3d(vec3(0.0, -9.81, 0.0)).run_headless(60, |ctx| {
+        for x in [0.0, 50.0] {
+            ctx.spawn_prefab(file.name(), Transform::at(vec3(x, 0.0, 0.0))).unwrap();
+            // A ball dropped on each scene's rock A lands on it.
+            ctx.world.spawn((
+                Transform::at(vec3(x, 2.0, 0.0)),
+                RigidBody::dynamic(),
+                Collider::sphere(0.25),
+            ));
+        }
+    });
+    let balls: Vec<f32> = world
+        .query::<(&Transform, &RigidBody)>()
+        .iter()
+        .filter(|(_, b)| b.kind == BodyKind::Dynamic)
+        .map(|(t, _)| t.position.y)
+        .collect();
+    assert_eq!(balls.len(), 2);
+    for y in balls {
+        assert!((0.6..1.0).contains(&y), "the ball rests on the rock's top (0.5 + 0.25): {y}");
+    }
+}
+
+#[cfg(feature = "physics3d")]
+#[test]
+fn reexporting_frees_the_old_collision_shapes_and_shares_the_new_ones() {
+    use std::sync::{Arc, Mutex};
+    let file = TempAsset::with_contents("rocks.gltf", &rock_colliders());
+    let after = gltf(
+        json!([
+            { "name": "A", "mesh": 0, "scale": [2.0, 2.0, 2.0], "extras": { "ponko:collider": "trimesh" } },
+            { "name": "B", "mesh": 0, "scale": [2.0, 2.0, 2.0], "extras": { "ponko:collider": "trimesh" } }
+        ]),
+        json!([]),
+    );
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let path = file.path();
+    let name = file.name().to_string();
+    game()
+        .hot_reload(true)
+        .physics3d(Vec3::ZERO)
+        .sim_system(move |ctx: &mut Ctx| {
+            let tick = ctx.time.sim_tick();
+            let roots: Vec<Entity> = ctx.world.query::<(Entity, &GltfRoot)>().iter().map(|(e, _)| e).collect();
+            if tick == 2 {
+                let old: Vec<_> = roots.iter().map(|&r| collision_mesh(ctx, r, "A")).collect();
+                log.lock().unwrap().push((ctx.live_counts().collision_meshes, old, false));
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                std::fs::write(&path, &after).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(400));
+            }
+            if tick == 4 {
+                let new: Vec<_> = roots.iter().map(|&r| collision_mesh(ctx, r, "B")).collect();
+                let old_live = log.lock().unwrap()[0].1.iter().any(|&m| ctx.is_live(m));
+                log.lock().unwrap().push((ctx.live_counts().collision_meshes, new, old_live));
+            }
+        })
+        .run_headless(5, move |ctx| {
+            for x in [0.0, 30.0] {
+                ctx.spawn_prefab(&name, Transform::at(vec3(x, 0.0, 0.0))).unwrap();
+            }
+        });
+    let seen = seen.lock().unwrap();
+    let (before, old, _) = &seen[0];
+    assert_eq!(*before, 3);
+    assert_eq!(old[0], old[1], "both scenes share the first export's shape");
+    let (after, new, old_live) = &seen[1];
+    assert_eq!(*after, 1, "A and B of both scenes share one new triangle mesh");
+    assert_eq!(new[0], new[1]);
+    assert!(!old_live, "the first export's shapes are freed");
+}
+
+#[cfg(feature = "physics3d")]
+#[test]
+fn loading_a_world_frees_the_collision_shapes_of_the_scenes_it_replaced() {
+    let file = TempAsset::with_contents("rocks.gltf", &rock_colliders());
+    game().physics3d(Vec3::ZERO).run_headless(0, |ctx| {
+        let empty_world = ctx.world.save();
+        for i in 0..3 {
+            ctx.spawn_prefab(file.name(), Transform::at(vec3(i as f32 * 20.0, 0.0, 0.0)))
+                .unwrap();
+        }
+        assert_eq!(ctx.live_counts().collision_meshes, 3);
+        let scene = TempAsset::with_contents("empty.json", &empty_world.to_string());
+        ctx.load_scene(scene.name()).unwrap();
+        assert_eq!(ctx.live_counts().collision_meshes, 0);
     });
 }
 

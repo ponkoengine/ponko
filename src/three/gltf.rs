@@ -7,6 +7,7 @@
 //! skinned meshes stay in the space they were bound in, and other meshes
 //! follow their node rigidly. Animation clips retain local joint tracks.
 
+use std::collections::HashMap;
 use std::ops::Range;
 
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
@@ -418,6 +419,11 @@ pub(crate) struct LoadedNode {
     pub light: Option<ModelLight>,
     /// Whether its mesh is skinned (read in its bind pose).
     pub skinned: bool,
+    /// An earlier node (an index into [`LoadedNodes::nodes`]) with the
+    /// same mesh: the file's same glTF mesh, with the same morph weights.
+    /// Its [`mesh`](Self::mesh) is a copy of that node's, so one uploaded
+    /// mesh serves both.
+    pub same_mesh_as: Option<usize>,
 }
 
 /// The mesh of one node, from [`load_nodes`].
@@ -486,7 +492,10 @@ pub(crate) fn load_nodes(
         .default_scene()
         .or_else(|| gltf.scenes().next())
         .ok_or_else(|| format!("{name}: has no scene"))?;
-    let mut nodes = Vec::new();
+    let mut nodes: Vec<LoadedNode> = Vec::new();
+    // The first node of each glTF mesh (with its node's own morph weights,
+    // which override the mesh's): later nodes copy its mesh.
+    let mut first_of_mesh: HashMap<(usize, Option<Vec<u32>>), usize> = HashMap::new();
     let mut stack: Vec<(gltf::Node, Option<usize>)> = scene.nodes().map(|n| (n, None)).collect();
     stack.reverse();
     while let Some((node, parent)) = stack.pop() {
@@ -501,7 +510,18 @@ pub(crate) fn load_nodes(
             .as_ref()
             .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok());
         let mut mesh = None;
-        if let Some(m) = node.mesh() {
+        let mut same_mesh_as = None;
+        let key = node
+            .mesh()
+            .map(|m| (m.index(), node.weights().map(|w| w.iter().map(|x| x.to_bits()).collect())));
+        if let Some(&first) = key.as_ref().and_then(|k| first_of_mesh.get(k)) {
+            mesh = nodes[first].mesh.as_ref().map(|m| NodeMesh {
+                data: m.data.clone(),
+                parts: m.parts.clone(),
+                morph_defaults: m.morph_defaults.clone(),
+            });
+            same_mesh_as = mesh.as_ref().map(|_| first);
+        } else if let Some(m) = node.mesh() {
             let targets = target_names(&m);
             let mut by_material: Vec<(usize, MeshData)> = Vec::new();
             for primitive in m.primitives() {
@@ -553,8 +573,12 @@ pub(crate) fn load_nodes(
             mesh,
             light: gltf_ext::light_of(&json, node.index(), Mat4::IDENTITY, node.name()),
             skinned: node.skin().is_some(),
+            same_mesh_as,
         });
         let at = nodes.len() - 1;
+        if let Some(key) = key {
+            first_of_mesh.entry(key).or_insert(at);
+        }
         let children: Vec<_> = node.children().collect();
         stack.extend(children.into_iter().rev().map(|c| (c, Some(at))));
     }
