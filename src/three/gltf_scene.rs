@@ -240,6 +240,15 @@ struct Held {
 }
 
 impl Held {
+    /// `meshes` and no collision meshes.
+    fn meshes(meshes: Vec<Mesh>) -> Self {
+        Self {
+            meshes,
+            #[cfg(feature = "physics3d")]
+            shapes: Vec::new(),
+        }
+    }
+
     /// What `scene` holds.
     fn of(scene: &GltfRoot) -> Self {
         Self {
@@ -965,10 +974,7 @@ impl Ctx {
         let (plan, mut old, at) = match checked {
             Ok(c) => c,
             Err(e) => {
-                let made = Held {
-                    meshes: made,
-                    ..Held::default()
-                };
+                let made = Held::meshes(made);
                 self.release_gltf(path, made, except);
                 return Err(e);
             }
@@ -1018,10 +1024,7 @@ impl Ctx {
         let (colliders, fresh_shapes) = match self.gltf_colliders(path, &plan, nodes, &share.shapes) {
             Ok(c) => c,
             Err(e) => {
-                let made = Held {
-                    meshes: made,
-                    ..Held::default()
-                };
+                let made = Held::meshes(made);
                 self.release_gltf(path, made, except);
                 return Err(e);
             }
