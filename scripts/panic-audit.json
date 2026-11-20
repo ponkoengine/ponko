@@ -587,6 +587,12 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. let events = ctx.events.used.get_mut().take().unwrap_or_default();     let problems = access.undeclared(&ctx.world, &used, &events, !ctx.commands.is_empty());     if !problems.is_empty() {         panic!(",
     "site": "src/access.rs:884"
   },
+  "src/ai/mod.rs:d8912e00f29d9446": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"{e}\")",
+    "reason": "BehaviorTrees::insert displays try_insert's error, which names every tree on the subtree cycle; try_insert returns it instead.",
+    "site": "src/ai/mod.rs:200"
+  },
   "src/ai/mod.rs:e38794b1532eada7": {
     "classification": "forwarded-error",
     "construction": "panic!(\"{e}\")",
@@ -3323,12 +3329,6 @@
     "reason": "Internal invariant: n.caret = prev;                 changed = true;             } else if delete && n.caret < n.text.len() {                 let end = n.caret + n.text[n.caret..].chars().next().unwrap().len_utf8();",
     "site": "src/ui/retained.rs:1878"
   },
-  "src/ui/retained.rs:24f26aee6359ffd6": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: ) * self.scale     }     fn place(&mut self, id: UiId, origin: Vec2, clip: Rect) {         let layout = *self.tree.layout(self.node(id).unwrap().layout).unwrap();",
-    "site": "src/ui/retained.rs:1540"
-  },
   "src/ui/retained.rs:2e06d039dce823cc": {
     "classification": "invariant",
     "construction": ".expect(\"valid UI layout\")",
@@ -3340,18 +3340,6 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: /// `ime_keys`, a composition owns the keys: only committed text goes in.     fn edit(&mut self, input: &UiInput, ime_keys: bool) {         let id = self.focus.unwrap();         let n = self.node_mut(id).unwrap();",
     "site": "src/ui/retained.rs:1832"
-  },
-  "src/ui/retained.rs:317aaed934ef6171": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: self.visible.push(id);         let child_clip = if scrollable {             let mut inner = rect;             if self.node(id).unwrap().max_scroll.y > 0.0 {",
-    "site": "src/ui/retained.rs:1562"
-  },
-  "src/ui/retained.rs:39d9969e186fa50d": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: min: pos,             max: pos + size,         };         let n = self.node_mut(id).unwrap();",
-    "site": "src/ui/retained.rs:1548"
   },
   "src/ui/retained.rs:3ababb3bf0d3bd8f": {
     "classification": "invariant",
@@ -3383,12 +3371,6 @@
     "reason": "Internal invariant: let n = self.node(id).unwrap();             if n.widget == UiWidget::Scroll {                 let next = n.scroll + input.wheel / self.scale;                 self.node_mut(id).unwrap().scroll = next;",
     "site": "src/ui/retained.rs:1643"
   },
-  "src/ui/retained.rs:479a9552c1ba6332": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: self.edit(input, ime_keys);         } else if let Some(id) = self             .focus             .filter(|&id| self.node(id).unwrap().widget == UiWidget::Slider)",
-    "site": "src/ui/retained.rs:1708"
-  },
   "src/ui/retained.rs:496114de541e8292": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -3419,12 +3401,6 @@
     "reason": "place: ids come from the screen stack or a placed parent's children, all live nodes with Taffy nodes",
     "site": "src/ui/retained.rs:1792"
   },
-  "src/ui/retained.rs:5c64cb4ca657c5f2": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: } else {             clip         };         let count = self.node(id).unwrap().children.len();",
-    "site": "src/ui/retained.rs:1569"
-  },
   "src/ui/retained.rs:5e9eec72fe6b3ad0": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -3436,12 +3412,6 @@
     "construction": ".expect(\"valid UI child\")",
     "reason": "Internal invariant: let node = self.node_mut(id).unwrap();         node.parent = Some(parent);         let layout = node.layout;         self.tree.add_child(p, layout).expect(\"valid UI child\");",
     "site": "src/ui/retained.rs:730"
-  },
-  "src/ui/retained.rs:70dfa7c3ad4d3a8a": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: HUD and screen roots are live nodes (free detaches them first).",
-    "site": "src/ui/retained.rs:1516"
   },
   "src/ui/retained.rs:770336853e26275d": {
     "classification": "caller-contract",
@@ -3491,12 +3461,6 @@
     "reason": "Internal invariant: .pressed                 .filter(|&id| self.node(id).is_some_and(|n| n.widget == UiWidget::Slider))             {                 let n = self.node(id).unwrap();",
     "site": "src/ui/retained.rs:1681"
   },
-  "src/ui/retained.rs:afb16c486dde7b51": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: }         let editing = self             .focus             .is_some_and(|id| self.node(id).unwrap().widget == UiWidget::TextInput);",
-    "site": "src/ui/retained.rs:1703"
-  },
   "src/ui/retained.rs:b9b01831c8f59645": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -3520,12 +3484,6 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: HUD and screen roots are live nodes (free detaches them first).",
     "site": "src/ui/retained.rs:1644"
-  },
-  "src/ui/retained.rs:d0cf129464f51abd": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: ) * self.scale     }     fn place(&mut self, id: UiId, origin: Vec2, clip: Rect) {         let layout = *self.tree.layout(self.node(id).unwrap().layout).unwrap();",
-    "site": "src/ui/retained.rs:1540"
   },
   "src/ui/retained.rs:d170fafce50fb3e3": {
     "classification": "caller-contract",
@@ -3557,12 +3515,6 @@
     "reason": "Internal invariant: }                     }                     Drag::Bar(id, start, offset) => {                         let n = self.node(id).unwrap();",
     "site": "src/ui/retained.rs:1661"
   },
-  "src/ui/retained.rs:e601fdc7f7d58bb2": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: .filter(|&id| self.node(id).unwrap().widget == UiWidget::Slider)             && direction.x != 0.0         {             let value = self.value(id).unwrap() + direction.x * super::access::SLIDER_STEP;",
-    "site": "src/ui/retained.rs:1711"
-  },
   "src/ui/retained.rs:e61b4eb46337a31e": {
     "classification": "invariant",
     "construction": ".unwrap()",
@@ -3586,12 +3538,6 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: ui.layout_with_text(viewport, &mut self.gfx.text);         let scale = ui.scale();         for (order, &id) in ui.visible.iter().enumerate() {             let n = ui.node(id).unwrap();",
     "site": "src/ui/retained_draw.rs:212"
-  },
-  "src/ui/retained_draw.rs:3ed84b3c94bf5193": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: );             }             self.gfx.ui_list.set_clip(Some(intersect(n.clip, n.rect)));             let layout = ui.tree.layout(n.layout).unwrap();",
-    "site": "src/ui/retained_draw.rs:253"
   },
   "src/ui/retained_ime.rs:505778b347d4bf2e": {
     "classification": "invariant",

@@ -196,8 +196,9 @@ pub(crate) struct Tick<'a> {
     pub(crate) started: bool,
     /// The signals the brain heard since its last think.
     pub(crate) signals: &'a [(Key, Option<Value>)],
-    /// Where `random` and `chance` draw from: this think's stream.
-    pub(crate) random: Random,
+    /// Where `random` and `chance` draw from: the game's seed (or the
+    /// brain's) and the entity, with `now`.
+    pub(crate) seed: u64,
     pub(crate) who: u64,
     pub(crate) rng: Option<Rng>,
 }
@@ -205,8 +206,9 @@ pub(crate) struct Tick<'a> {
 impl Tick<'_> {
     /// This think's random numbers, made when first needed.
     fn rng(&mut self) -> &mut Rng {
-        let (random, who) = (self.random, self.who);
-        self.rng.get_or_insert_with(|| random.stream(who))
+        let (seed, now, who) = (self.seed, self.now, self.who);
+        self.rng
+            .get_or_insert_with(|| Random::new(seed, now, AI_STREAM).stream(who))
     }
 
     /// Ticked at the previous think and still running then.
@@ -231,6 +233,10 @@ pub(crate) struct Linker<'a> {
     /// cycle.
     stack: Vec<&'static str>,
 }
+
+/// The stream number brains draw random numbers from (with the seed and
+/// the brain's tick), apart from every system's own.
+const AI_STREAM: usize = 0x4149_5f42;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 

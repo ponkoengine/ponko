@@ -26,7 +26,15 @@
 //!   selected entity, with what each node did at the last think.
 //! - **Deterministic.** Thinking happens in [`think`], a sim system the game
 //!   adds, at fixed ticks; waits and cooldowns count ticks; a `utility` tie
-//!   goes to the earlier child. The same blackboards give the same choices.
+//!   goes to the earlier child; `random` and `chance` draw from the game's
+//!   [seed](crate::game::Game::seed), the brain's tick and its entity. The
+//!   same seed, blackboards and signals give the same choices.
+//! - **Saved.** A brain's JSON holds its memory (the running nodes, how far
+//!   its waits and cooldowns are), so a world read back from a save carries
+//!   on at the same running node, counting ticks on from the save.
+//! - **Events.** A `wait_for` node waits for a [`Signal`], an event the game
+//!   sends (or [`forward`]s from the engine's own): the brain doesn't poll a
+//!   blackboard entry, and the signal wakes it whatever its period.
 //! - **Level of detail.** A brain thinks every [`period`](Brain::period)
 //!   ticks (staggered by entity, so a crowd spreads its thinking), and at
 //!   once when its action ends or the game [wakes](Brain::wake) it. Far
@@ -56,6 +64,8 @@
 //! | `{"sequence": [..]}` | its children in order until one doesn't succeed; that one's result |
 //! | `{"selector": [..]}` | its children in order until one doesn't fail (a fallback list) |
 //! | `{"utility": [..], "stick": 0.1}` | its children best score first until one doesn't fail; each child has a `"score"`; `stick` is added to the child that was running, against dithering |
+//! | `{"parallel": [..], "success": "all", "failure": "any"}` | all its children at once; succeeds when that many succeeded (`"all"`, `"any"` or a count), fails when that many failed or all finished short; then stops the ones still running. At most one child may hold `do` nodes |
+//! | `{"random": [..]}` | its children in a random order until one doesn't fail; a running child carries on |
 //! | `{"invert": node}` | success and failure swapped |
 //! | `{"succeed": node}` | success when the node finishes either way |
 //! | `{"check": "key"}` | succeeds if the entry is true, a number other than 0, a point or an entity |
@@ -64,6 +74,9 @@
 //! | `{"do": "action", ...}` | asks the game for an action; runs until the game reports; other fields are its parameters ([`Brain::param`]) |
 //! | `{"wait": seconds}` | runs for that long, then succeeds |
 //! | `{"cooldown": seconds, "child": node}` | fails for that long after the child succeeded |
+//! | `{"chance": p}` | succeeds with probability `p` (0 to 1), drawn each time it is reached |
+//! | `{"wait_for": "signal", "timeout": s, "store": "key"}` | runs until the brain hears the [`Signal`]; then succeeds, writing the signal's value to `key`; fails after `timeout` seconds (if given; 0 asks only this think) |
+//! | `{"subtree": "ai/patrol.json"}` | runs another tree (its root, with its blackboard defaults) by name; see [`BehaviorTrees`] |
 //!
 //! Any node may have a `"name"`, shown in the debug view. A score is a
 //! number or a list of numbers and considerations,
@@ -76,7 +89,10 @@
 //! one that wasn't reached is dropped, and starts over when reached later.
 //! A running `sequence` resumes at its running step (the steps before it
 //! don't run again), but asks its checks again first: a
-//! `[check alert, do chase]` stops chasing once `alert` is false.
+//! `[check alert, do chase]` stops chasing once `alert` is false. A running
+//! `parallel` likewise keeps its finished children's results but asks
+//! its checks again: `{"parallel": [{"do": "aim"}, {"check": "alert"}]}`
+//! aims while alert.
 //!
 //! # Use
 //!
@@ -134,13 +150,8 @@ pub use tree::BehaviorTree;
 pub use utility::{Consideration, Curve, best, combine, normalize};
 
 use crate::ctx::Ctx;
-use crate::random::Random;
 use crate::reflect::WorldReflect;
 use tree::{NodeState, Tick};
-
-/// The stream number brains draw random numbers from (with the seed and
-/// the brain's tick), apart from every system's own.
-const AI_STREAM: usize = 0x4149_5f42;
 
 /// What a node, or an action, did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -212,9 +223,10 @@ impl BehaviorTrees {
     /// cycle, naming every tree on it;
     /// [`Limit`](crate::error::ErrorKind::Limit) if a linked tree would have
     /// more than 65,535 nodes.
-    pub fn try_insert(&mut self, name: &str, tree: BehaviorTree) -> Result<(), crate::error::Error> {
+    /// A tree already shared (`Arc<BehaviorTree>`) goes in as it is.
+    pub fn try_insert(&mut self, name: &str, tree: impl Into<Arc<BehaviorTree>>) -> Result<(), crate::error::Error> {
         let name = Key::named(name).name();
-        let tree = Arc::new(tree);
+        let tree = tree.into();
         let mut sources = self.sources.clone();
         sources.insert(name, tree);
         // This tree, and every tree that uses it (its linked form names
@@ -433,8 +445,12 @@ fn try_add_tree(world: &mut World, name: &'static str, tree: BehaviorTree) -> Re
 /// [`Blackboard`]; [`think`] runs it.
 ///
 /// Its JSON (inspector, saves) is `{"tree": "ai/guard.json", "period": 1,
-/// "action": "patrol", "status": "running"}`; `action` and `status` are for
-/// reading only. A brain read back from JSON starts its tree over.
+/// "action": "patrol", "status": "running", "memory": {..}}`; `action` is
+/// for reading only. `memory` (once it has thought) holds the running
+/// nodes, by index, and how far its waits and cooldowns are: a brain read
+/// back with it carries on where it was, counting its ticks on from the
+/// save, if its tree is the same ([`BehaviorTree::fingerprint`]); without
+/// it, or with another tree, it starts its tree over.
 #[derive(Component, Clone, Debug)]
 pub struct Brain {
     tree_name: &'static str,
@@ -457,10 +473,8 @@ pub struct Brain {
     offset: u64,
     /// The brain's tick at the last think pass, for saves.
     clock: u64,
-    /// Read back from a save: the brain's tick at its next think pass.
-    resume_at: Option<u64>,
     /// Read back from a save: its tree's memory, used when it finds that
-    /// tree.
+    /// tree. Until then its tick stays the one after the save.
     restore: Option<Box<Memory>>,
     /// Signals heard since the last think.
     signals: Vec<(Key, Option<Value>)>,
@@ -487,7 +501,6 @@ impl Brain {
             wake: false,
             offset: 0,
             clock: 0,
-            resume_at: None,
             restore: None,
             signals: Vec::new(),
             seed: crate::random::DEFAULT_SEED,
@@ -499,8 +512,18 @@ impl Brain {
     /// give each agent its own. The [`think`](think) system ignores it and
     /// uses the game's [seed](crate::game::Game::seed) and the entity.
     pub fn with_seed(mut self, seed: u64) -> Brain {
-        self.seed = seed;
+        self.set_seed(seed);
         self
+    }
+
+    /// Sets the seed of [`with_seed`](Self::with_seed).
+    pub fn set_seed(&mut self, seed: u64) {
+        self.seed = seed;
+    }
+
+    /// The seed of [`with_seed`](Self::with_seed).
+    pub fn seed(&self) -> u64 {
+        self.seed
     }
 
     /// Hears `signal`: a `wait_for` node waiting for it succeeds at the
@@ -660,14 +683,16 @@ impl Brain {
     /// read back from a save, where it goes on from the tick it was saved
     /// at.
     fn clock_at(&self, tick: u64) -> u64 {
-        self.resume_at.unwrap_or(tick.wrapping_add(self.offset))
+        match &self.restore {
+            Some(memory) => memory.clock.wrapping_add(1),
+            None => tick.wrapping_add(self.offset),
+        }
     }
 
-    /// Starts a think pass at sim tick `tick`: takes up a saved clock.
+    /// Starts a think pass at sim tick `tick`: a brain read back from a
+    /// save goes on at the tick after the one it was saved at.
     fn pass(&mut self, tick: u64) -> u64 {
-        if let Some(at) = self.resume_at.take() {
-            self.offset = at.wrapping_sub(tick);
-        }
+        self.offset = self.clock_at(tick).wrapping_sub(tick);
         self.clock = tick.wrapping_add(self.offset);
         self.clock
     }
@@ -696,12 +721,12 @@ impl Brain {
         if self.bound.as_ref().is_none_or(|b| b.id() != tree.id()) {
             self.bind(tree.clone(), bb);
         }
-        let random = Random::new(self.seed, now, AI_STREAM);
-        self.run(tree, bb, now, dt, random, 0);
+        self.run(tree, bb, now, dt, self.seed, 0);
     }
 
     /// One think with the tree it is bound to, at the brain's tick `now`.
-    fn run(&mut self, tree: &BehaviorTree, bb: &mut Blackboard, now: u64, dt: f32, random: Random, who: u64) {
+    /// `seed` and `who` pick the random stream (with `now`).
+    fn run(&mut self, tree: &BehaviorTree, bb: &mut Blackboard, now: u64, dt: f32, seed: u64, who: u64) {
         self.thinks = self.thinks.wrapping_add(1);
         self.wake = false;
         let mut t = Tick {
@@ -715,7 +740,7 @@ impl Brain {
             action: None,
             started: false,
             signals: &self.signals,
-            random,
+            seed,
             who,
             rng: None,
         };
@@ -859,11 +884,7 @@ impl<'de> Deserialize<'de> for Brain {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Brain, D::Error> {
         let json = BrainJson::deserialize(d)?;
         let mut brain = Brain::new(&json.tree).with_period(json.period);
-        if let Some(memory) = json.memory {
-            // It goes on at the tick after the one it was saved at.
-            brain.resume_at = Some(memory.clock.wrapping_add(1));
-            brain.restore = Some(Box::new(memory));
-        }
+        brain.restore = json.memory.map(Box::new);
         Ok(brain)
     }
 }
@@ -1072,8 +1093,7 @@ pub fn think(ctx: &mut Ctx) {
                 // Taken out and put back: no reference count traffic
                 // between cores.
                 if let Some(tree) = brain.bound.take() {
-                    let random = Random::new(seed, now, AI_STREAM);
-                    brain.run(&tree, bb, now, dt, random, e.to_bits());
+                    brain.run(&tree, bb, now, dt, seed, e.to_bits());
                     brain.bound = Some(tree);
                 }
             });
