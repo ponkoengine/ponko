@@ -1967,10 +1967,12 @@ mod tests {
             ctx.edit(|ed, ctx| ed.set(ctx, crate_e, "Hp", serde_json::json!(8.0)))
                 .unwrap();
             let wall = gltf_node(&mut ctx, "Wall");
-            p.select(Some(wall), false);
+            click_row(&egui, &mut p, &mut ctx, "Wall");
+            assert_eq!(p.selected, Some(wall));
             frame(&egui, &mut p, &mut ctx, vec![plain(Key::Delete)]);
             assert!(!ctx.world.is_alive(wall), "deleted");
-            p.select(Some(crate_e), false);
+            click_row(&egui, &mut p, &mut ctx, "Crate");
+            assert_eq!(p.selected, Some(crate_e));
             let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
             let all = texts(&shapes);
             for row in ["Crate › Attached3D", "Crate › Hp", "Wall", "Wall/Lamp"] {
@@ -2072,6 +2074,36 @@ mod tests {
             assert_eq!(models, 2, "the crate and the lamp, once");
         }
 
+        /// Clicks the hierarchy row of the entity labelled `name`.
+        fn click_row(egui: &egui::Context, p: &mut Panels, ctx: &mut Ctx, name: &str) {
+            let shapes = drawn(egui, p, ctx, vec![]);
+            let at = text_at(&shapes, |t| t.split("  #").next() == Some(name) && t.contains("  #"))
+                .unwrap_or_else(|| panic!("a row named {name}: {:?}", texts(&shapes)));
+            assert!(at.x < SIDE_PANEL, "in the hierarchy: {at}");
+            frame(egui, p, ctx, vec![moved(at)]);
+            frame(egui, p, ctx, vec![button(at, true)]);
+            frame(egui, p, ctx, vec![button(at, false)]);
+        }
+
+        #[test]
+        fn a_click_on_a_hierarchy_row_selects_its_entity() {
+            let file = gltf_asset("row-click", &yard_nodes(-3.0));
+            let (egui, mut p, mut ctx, _) = editor_with_level(&file);
+            let (wall, lamp) = (gltf_node(&mut ctx, "Wall"), gltf_node(&mut ctx, "Wall/Lamp"));
+            assert_eq!(p.selected, None);
+            click_row(&egui, &mut p, &mut ctx, "Wall");
+            assert_eq!(p.selected, Some(wall), "the clicked row's entity");
+            click_row(&egui, &mut p, &mut ctx, "Lamp");
+            assert_eq!(p.selection(), vec![lamp], "a plain click replaces the selection");
+            // The rows still drag: the lamp onto the crate.
+            let crate_e = gltf_node(&mut ctx, "Crate");
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            let row = |name: &str| text_at(&shapes, |t| t.starts_with(name) && t.contains('#')).unwrap();
+            mouse_drag(&egui, &mut p, &mut ctx, row("Lamp"), row("Crate"), 4);
+            assert_eq!(parent_of(&ctx, lamp), Some(crate_e), "{:?}", p.error);
+            assert_eq!(p.selection(), vec![lamp], "a drag doesn't change the selection");
+        }
+
         #[test]
         fn play_then_stop_spawns_gltf_scenes_again_and_undo_still_reaches_their_nodes() {
             let file = gltf_asset("gltf-play", &yard_nodes(-3.0));
@@ -2083,8 +2115,8 @@ mod tests {
                 .unwrap();
             let wall = gltf_node(&mut ctx, "Wall");
             ctx.edit(|ed, ctx| ed.delete(ctx, wall)).unwrap();
-            p.select(Some(crate_e), false);
-            frame(&egui, &mut p, &mut ctx, vec![]);
+            click_row(&egui, &mut p, &mut ctx, "Crate");
+            assert_eq!(p.selected, Some(crate_e));
 
             // Played: the game moves the crate. Stopped.
             frame(&egui, &mut p, &mut ctx, vec![command(Key::P)]);
