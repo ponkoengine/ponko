@@ -502,8 +502,6 @@ binding arrives:
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
-| `WindowService::safe_area` | [Touch](touch.md#notches-home-bars-and-rounded-corners) | Not bound yet: the engine's touch controls and arrange screen keep to the safe area all the same; C and C++ can't read or feed it |
-| `Ui::set_inside_safe_area` | [Touch](touch.md#notches-home-bars-and-rounded-corners) | Not bound yet: UI roots made from C and C++ are laid out in the whole window |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in

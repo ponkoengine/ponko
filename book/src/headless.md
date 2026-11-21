@@ -256,6 +256,46 @@ per run. With frames, `headless/frames-10k-ticks` costs about 0.9 µs a frame
 for that empty game (the UI frame and the built-in draw systems), and no
 allocations per frame.
 
+### Insets as a scenario step
+
+A layout for a notched phone is checked without one: the scenario step
+`safe_insets(tick, SafeInsets::new(top, right, bottom, left))` feeds the
+window's [safe area](touch.md#notches-home-bars-and-rounded-corners) on that
+tick, before its systems run, as `ctx.window.feed_safe_insets` does. With
+frames, the UI lays out with it in the frame of that tick (a root made
+`inside_safe_area` follows it) and the insets stay until another step changes
+them, so a scenario can turn the phone. In the JSON form, which the control
+endpoint and tools take, it is `{ "tick": 3, "type": "safe_insets", "top": 0,
+"right": 47, "bottom": 21, "left": 0 }` (a side left out is 0). From C it is
+`ponko_input_scenario_safe_insets`, from C++ `safe_insets(tick, insets)`.
+
+```rust
+use ponko::prelude::*;
+use ponko::scenario::InputScenario;
+use ponko::window::SafeInsets;
+
+#[test]
+fn the_hud_keeps_clear_of_the_notch_when_the_phone_turns() {
+    let scenario = InputScenario::new()
+        // Held sideways, the notch on the left; at tick 2, turned the other way.
+        .safe_insets(0, SafeInsets::new(0.0, 0.0, 21.0, 47.0))
+        .safe_insets(2, SafeInsets::new(0.0, 47.0, 21.0, 0.0))
+        .duration(4);
+    let (_world, report) = Game::new("notch", 844, 390)
+        .headless_frames(true)
+        .add(Phase::Frame, |ctx: &mut Ctx| {
+            let hud = ctx.ui.find("hud").unwrap();
+            // The HUD fills what the player can see.
+            assert_eq!(ctx.ui.rect(hud), Some(ctx.window.safe_area()));
+        })
+        .run_headless_scenario(scenario, |ctx| {
+            let hud = ctx.ui.root().layout(ponko::ui::UiLayout::fill()).name("hud").inside_safe_area().id();
+            ctx.ui.show_hud(hud);
+        });
+    report.assert_passed();
+}
+```
+
 ## The pointer, sounds and quitting
 
 A headless run has no mouse. Its pointer rests at the window's top-left

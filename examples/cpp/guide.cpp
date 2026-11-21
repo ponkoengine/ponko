@@ -3937,6 +3937,37 @@ static ponko::input_scenario touch_test() {
 }
 // ANCHOR_END: touch_scenario
 
+// ANCHOR: safe_area
+// A HUD that keeps clear of a phone's notch, and a test that feeds one.
+static void safe_area_hud(ponko::ctx& ctx) {
+    namespace u = ponko::ui;
+    auto ui = ctx.ui_retained();
+    auto backdrop = ui.add_panel(u::none, u::fill());       // reaches under the notch
+    ui.show_hud(backdrop);
+    auto hud = ui.add_panel(u::none, u::fill());
+    ui.set_inside_safe_area(hud);                           // laid out in what the player sees
+    ui.add_label(hud, "Score 0", u::fixed(120, 30));
+    ui.show_hud(hud);
+}
+static ponko::input_scenario notched_phone() {
+    ponko::input_scenario s;
+    // A phone held sideways: the notch on the left, the home bar below (top, right, bottom, left).
+    s.safe_insets(0, {0, 0, 21, 47});
+    return s;
+}
+// ANCHOR_END: safe_area
+
+static void safe_area_runs() {
+    ponko::game game("Notch", 844, 390);
+    game.headless_frames(true);
+    auto run = game.run_headless_scenario(notched_phone(), safe_area_hud);
+    if (run.report.status == PONKO_SCENARIO_FAILED) std::abort();
+    ponko::game("Notch by hand", 844, 390).run_headless(0, [](ponko::ctx& ctx) {
+        ctx.window_feed_safe_insets({0, 0, 21, 47});
+        if (ctx.window_safe_area().min.x != 47) std::abort();
+    });
+}
+
 static void touch_scenario_runs() {
     ponko::game game("Fingers", 640, 800);
     auto run = game.run_headless_scenario(touch_test());
@@ -4859,6 +4890,7 @@ int main() {
     component_hooks_run();
     sky_kit_runs();
     touch_scenario_runs();
+    safe_area_runs();
     states_guide();
     state_screen_guide();
     native_prediction_runs();
