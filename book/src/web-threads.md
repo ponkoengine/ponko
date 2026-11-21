@@ -12,8 +12,12 @@ Web Workers that share the game's memory, as it does on threads natively:
   skeleton drawing and its copy into the frame's draw list (from 64
   skeletons), 3D character moves (from 16 characters), the 3D renderer's
   culling (each model compared with its last frame and culled again for
-  the camera and the shadow views) and the entities' JSON of a world save
-  (`World::save`, and so `save_world` and `save_world_in_background`).
+  the camera and the shadow views) and [light baking](3d.md#baked-lighting)
+  (`bake_lighting`).
+
+[The engine's parallel loops](#the-engines-parallel-loops) lists every one,
+with what it measured in a browser, and the few that stay on the page's
+thread.
 
 They all go through one runner: a pass started on the page's thread is
 handed to the frame's workers and the page's thread spins until it is done,
@@ -21,15 +25,16 @@ as for a parallel query. A pass that cuts its work into pieces cuts it for
 the frame pool's threads, not for the page's own (one): the 3D culling, for
 one, takes its single-pass path only when the game really has one thread.
 Each pass gives the same result on any number of threads (the native tests
-run each on one thread and on all of them; a JSON save's text is the same
-byte for byte).
+run each on one thread and on all of them).
 
 [Jobs](streaming.md) run on workers of their own. The asset reads and
 decodes of [asset groups](loading.md) and streaming are jobs, so they run
 there too.
 
 Two things are needed: a **build with threads**, which takes a nightly
-toolchain, and a page served with **two headers**. Without the headers,
+toolchain, and a page served with **two headers** (or, on a host that can't
+send them, [a service worker](#hosts-that-cant-send-the-headers) that adds
+them). Without the headers,
 the same build runs on the page's thread alone and says why in the
 browser's console. The ordinary web build (`web/build.sh` without
 `--threads`) is unchanged: it has no threads and needs neither.
@@ -104,16 +109,34 @@ Cross-Origin-Embedder-Policy: require-corp
 send them, beside `index.html`. A game's own file at one of those places
 wins. Hosts that read none of them ignore them.
 
-| Host | How | Written by `ponko package` |
-|---|---|---|
-| Netlify, Cloudflare Pages | `_headers` | yes |
-| Vercel | `vercel.json` | yes |
-| Apache (with `mod_headers`) | `.htaccess` | yes |
-| nginx | `add_header Cross-Origin-Opener-Policy same-origin always;` and the same for `Cross-Origin-Embedder-Policy require-corp`, in the site's `location` | no: server configuration |
-| Caddy | `header Cross-Origin-Opener-Policy same-origin` and `header Cross-Origin-Embedder-Policy require-corp` in the site block | no: server configuration |
-| Firebase Hosting | a `headers` entry in `firebase.json`, which sits beside the folder, not in it | no |
-| itch.io | its embed options for HTML games offer `SharedArrayBuffer` support; check on the page itself | no |
-| GitHub Pages | can't set headers: the game runs on one thread | no |
+### Which hosts work
+
+What matters is what a host lets you configure: response headers for the
+game's files (then threads work with nothing more), or nothing (then
+[the service worker](#hosts-that-cant-send-the-headers) gives the page the
+headers itself, if the game's page is the top-level page). From each host's
+own documentation, November 2026:
+
+| Host | What you can configure | Threads | Written by `ponko package` |
+|---|---|---|---|
+| Netlify | headers, in a `_headers` file in the published folder (or `[[headers]]` in `netlify.toml`) | with the headers | `_headers` |
+| Cloudflare Pages, Cloudflare Workers static assets | headers, in a `_headers` file in the output folder | with the headers | `_headers` |
+| Vercel | headers, in `vercel.json` (`headers`, by `source` path) | with the headers | `vercel.json` |
+| Apache (with `mod_headers`) | headers, in `.htaccess` where the server allows overrides | with the headers | `.htaccess` |
+| Firebase Hosting | headers, in `firebase.json` (`hosting.headers`), which sits beside the folder, not in it | with the headers | no: add the two headers there |
+| Azure Static Web Apps | headers, in `staticwebapp.config.json` (`globalHeaders`) | with the headers | no: add them there |
+| AWS Amplify Hosting | headers, in `customHttp.yml` or the console's custom headers | with the headers | no: add them there |
+| Render (static sites) | headers, in the site's dashboard settings (path `/*`) | with the headers | no: set them there |
+| nginx | the server's configuration: `add_header Cross-Origin-Opener-Policy same-origin always;` and the same for `Cross-Origin-Embedder-Policy require-corp`, in the site's `location` | with the headers | no: server configuration |
+| Caddy | the server's configuration: `header Cross-Origin-Opener-Policy same-origin` and `header Cross-Origin-Embedder-Policy require-corp` in the site block | with the headers | no: server configuration |
+| GitHub Pages | no response headers | with the service worker | `--isolation-worker` |
+| GitLab Pages | redirects and error pages, no response headers | with the service worker | `--isolation-worker` |
+| itch.io | the game runs in a frame on itch.io's own page, so only itch.io can isolate it; its HTML5 documentation lists no header setting (the game's edit page has had a `SharedArrayBuffer` option: check there) | only if itch.io isolates its page; the service worker can't help inside another site's frame | no |
+
+Any other static host is one of the two kinds: if it lets you set response
+headers, set the two above for every file; if it doesn't, use the service
+worker. A site that shows the game in a frame of its own page (a game
+portal) must isolate that page itself.
 
 On your own computer, `python3 -m http.server` sends neither header. This
 serves the game's folder with them, on <http://localhost:8000>:
@@ -134,6 +157,69 @@ only if they allow it (with `Cross-Origin-Resource-Policy` or CORS
 headers). The game's own files come from the same origin and are fine.
 Fonts, scripts or images from another site, and the page inside an
 `<iframe>` of another site, need those sites' cooperation.
+
+## Hosts that can't send the headers
+
+[`web/ponko-isolate.js`](../../web/ponko-isolate.js) gives the page the two
+headers without the server: a script on the page registers it as a
+[service worker](https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API),
+which then adds `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` to every response from the
+game's own origin, and the page reloads once to come through it. Add it
+with:
+
+```sh
+web/build.sh --threads --isolation-worker --bin my_game
+ponko package --web --threads --isolation-worker
+```
+
+Both put `ponko-isolate.js` beside `index.html` and load it in the page's
+`<head>`, before the game's script. A page of your own adds
+`<script src="ponko-isolate.js"></script>` to its `<head>`. It must stay
+its own file, on the game's origin, beside the page or in a folder above
+it: a service worker serves the folder it is in and those below it.
+
+**When to use it.** Only on hosts that can't send headers ([the table
+above](#which-hosts-work)): real headers cost nothing, the worker costs the
+things below.
+
+**What it costs.**
+- **The first visit loads the page twice.** The page arrives without the
+  headers; the script registers the worker and, once it is active, reloads.
+  In the browser test the reload came before the game had logged anything,
+  so the player sees the loading line twice. A forced reload (Shift+Reload)
+  skips service workers, so the page arrives without the headers again and
+  the script reloads once more.
+- **Every request of the game's origin goes through the worker**, which
+  copies each response's headers and adds two. The body is passed on as it
+  streams.
+- **It stays.** The browser keeps the worker for the origin, and every page
+  in its folder and below gets the headers, with what they break: a page
+  isolated this way can't talk to pop-up windows of other sites, so sign-in
+  and payment windows that report back to the page stop working there, and
+  files from other sites need their cooperation (above). Serve such pages
+  from another folder or origin.
+- **Where it can't work, nothing changes**: without a secure context
+  (HTTPS, or `localhost`), without service workers (some browsers turn them
+  off in private windows), inside another site's frame (the page around it
+  must be isolated too), or when the page still isn't isolated after its
+  one reload. The script says which in the console (`ponko-isolate.js: not
+  isolating the page: ...`), never reloads more than once per tab, and the
+  game runs on the page's thread alone.
+
+`<script src="ponko-isolate.js" data-coep="credentialless"></script>` sends
+`Cross-Origin-Embedder-Policy: credentialless` instead: files from other
+sites then load without cookies instead of having to allow it. Chromium
+(96 and later) and Firefox (119 and later) support it, Safari doesn't, and
+there the page isn't isolated and the game runs on one thread. Keep
+`require-corp` unless the game loads files from sites you don't control.
+
+`node web/smoke/threads.mjs --build --case service-worker` proves it: it
+serves the threaded fixture built with `--isolation-worker` *without* the
+headers, and the page must reload once, be controlled by the worker, be
+cross-origin isolated and pass every check of the isolated run. In headless
+Chromium 156 it did: 13 worker threads, every pass that goes to the
+workers went there, and the same checksum as the run with real headers.
 
 ## What runs where
 
@@ -164,14 +250,14 @@ ponko: this build can use threads, but the page isn't cross-origin isolated (...
   On the desktop the setting does nothing.
 - **Jobs** have half as many workers of their own (at least one), so busy
   jobs never hold up a frame, as natively. [Asset groups](loading.md) and
-  streamed textures and meshes read and decode on them. Saves in the
-  background (`save_world_in_background`) build the world's JSON on the
-  frame's workers, as `World::save` does, then encode and write it on the
-  page's thread, because the browser's storage belongs to it.
+  streamed textures and meshes read and decode on them. Saves
+  (`World::save`, `save_world`, `save_world_in_background`) build the
+  world's JSON on the page's thread, where it is faster (see
+  [below](#the-engines-parallel-loops)), and encode and write it there too,
+  because the browser's storage belongs to it.
 - **Everything else** stays on the page's thread: your systems, drawing
   (the GPU's command recording too: WebGPU objects can't be sent to a
-  worker), sound, input, and the engine's other internal parallel loops
-  (baking, video frames), which there run one piece after another.
+  worker), sound and input.
 - **Controllers** work as in the ordinary web build (`ctx.input.gamepads()`
   and the rest of [Input](input.md)), read the same way: the browser's
   gamepad objects can't be sent between threads once the memory is shared,
@@ -196,6 +282,51 @@ the console. Nothing else changes: a world simulated with threads and
 without ends up the same (the browser test checks this, below). If the
 workers can't start, for example because `ponko-worker.js` is missing, the
 game also stays on one thread, after at most 20 seconds, and says why.
+
+## The engine's parallel loops
+
+Every place the engine runs work in parallel (each use of rayon outside
+benchmarks and tests), and where it runs in a web build with threads. The
+times come from the browser fixture (`node web/smoke/threads.mjs --build`
+prints them): each pass timed around its call on the page's thread, so with
+threads the time includes handing it to the workers and waiting for them;
+the median of 20 ticks (the bake runs once). Headless Chromium 156 on an
+Apple M4 Max (14 cores), 13 frame threads, against the same build on a page
+that isn't isolated. One page load each, with other builds running (a load
+average of 100 to 150): the larger differences are far beyond that noise,
+the ones under half a millisecond are not.
+
+| Loop | In the fixture | Where it runs | 13 threads (ms) | Page's thread alone (ms) |
+|---|---|---|---|---|
+| Parallel queries, view systems, the scheduler's batches, the ECS's parallel sorts (the 2D sprite pass's parallel query too) | see [Numbers](#numbers) | the frame pool, through the ECS's runner | see [Numbers](#numbers) | |
+| [Hierarchy](hierarchy.md) update (`hierarchy/shared_level`) | 4,000 attached children | the frame pool, when a level is worth sharing | 0.20 | 0.10 |
+| [Spatial grid](spatial.md) rebuild (`spatial/shared_rebuild`) | 200,000 entries | the frame pool | 1.40 | 1.60 |
+| [Flow field](pathfinding.md) directions (`flow/shared_directions`) | 256 × 256 cells | the frame pool | 0.96 | 1.30 |
+| 3D culling, retained (`three/shared_cull`) | 20,000 models | the frame pool | 0.38 | 1.00 |
+| 2D skeleton drawing (`skeleton2d/shared_draw`) | 256 skeletons of two sprites | the frame pool, from 64 skeletons | 0.23 | 0.10 |
+| 3D character moves (`physics3d/shared_characters`) | 32 characters | the frame pool, from 16 characters | 0.29 | 0.20 |
+| [Light baking](3d.md#baked-lighting) (`three/shared_bake`): gathering, smoothing, probes | a floor, a ball and a wall, 16 samples | the frame pool | 18.1 | 52.3 |
+| Entities' JSON of a world save (`World::save`) | 24,000 entities, 1 MB of JSON | **the page's thread**: on the workers it took 223 ms | 25.2 | 22.2 |
+| 3D command recording | | **the page's thread**, one encoder after another: WebGPU objects can't be sent to a worker | | |
+| Jobs (asset reads and decodes, streaming) | | the job workers | | |
+| Video frames (YUV to RGB) | | not in web builds: the `video` feature decodes on the desktop only | | |
+| The C API's parallel loops (`ponko_ffi`) | | not in web builds: C and C++ games have none yet | | |
+| The Unity importer (`ponko_unity`) | | not in web builds: a desktop tool | | |
+
+What the numbers say:
+- **The bake (2.9×), the 3D culling (2.6×) and the flow field (1.4×) gain
+  from the workers.** The spatial grid's rebuild is the same within the
+  noise.
+- **The small passes don't gain at the fixture's sizes**: the hierarchy's
+  4,000 children, 256 small skeletons and 32 characters take 0.1 to 0.2 ms
+  on one thread, about what waking 13 workers and waiting for them costs.
+  They are shared out because their thresholds were set for the desktop;
+  nobody has measured yet from what size they gain in a browser.
+- **The JSON save is ten times slower on the workers** (223 ms on 13
+  threads against 22 ms alone, measured before it was moved back): it is
+  many small allocations, and the browser's threads share one allocator
+  lock. So a web build with threads builds it on the page's thread (25 ms
+  there in the run with threads), and the desktop keeps it parallel.
 
 ## Limits
 
@@ -266,16 +397,22 @@ time an ordinary build).
 fixture with threads and opens it in headless Chromium twice. Served with
 the headers, the parallel query, the batch systems, the jobs and the asset
 group must run on two or more workers, and never on the page's thread; the
-hierarchy must share a level out, and at least two of the engine's own
-passes (the fixture rebuilds a spatial grid of 200,000 entries, computes
-a flow field, collects the 3D frame of 20,000 models and saves its world as
-JSON) must go through the frame pool's runner (`passes_shared`, from the
-scope each opens there), the 3D culling and the save among them. The
-runner builds the fixture with the `3d` and `bench-internals` features,
-for the 3D collection without a GPU.
+hierarchy must share a level out, and the engine's own passes (the
+fixture rebuilds a spatial grid of 200,000 entries, computes a flow field,
+collects the 3D frame of 20,000 models, draws 256 2D skeletons, walks 32 3D
+characters and bakes a small scene's light) must go through the frame
+pool's runner (`passes_shared`, from the scope each opens there), the 3D
+culling, the skeletons, the characters and the bake among them; its world's
+JSON save must not. Every pass must report its time, and the runner prints
+the table [above](#the-engines-parallel-loops). The runner builds the
+fixture with the `3d`, `physics3d` and `bench-internals` features, for the
+3D collection and the skeleton drawing without a GPU.
 Served without them, everything must run on the page's thread, and the
 console must say why. Both runs must end with the same world (the same 3D
-frame and the same JSON save too), and must read the same file. With `--case gamepads` it feeds the isolated page fake
+frame, skeleton vertices, characters' places, bake and JSON save too), and
+must read the same file. With `--case service-worker` it serves a build
+with [the service worker](#hosts-that-cant-send-the-headers) without the
+headers, and the page must reach the isolated run's results. With `--case gamepads` it feeds the isolated page fake
 browser gamepads and checks that the engine sees each one connect, press,
 move and leave.
 
@@ -283,6 +420,7 @@ move and leave.
 node web/smoke/threads.mjs --build                # the checks
 node web/smoke/threads.mjs --case worker-panic    # a worker's panic stops the game
 node web/smoke/threads.mjs --case gamepads        # fed gamepads reach the game
+node web/smoke/threads.mjs --build --case service-worker   # isolated without headers
 node web/smoke/threads.mjs --case warning         # a warning fails the build
 node web/smoke/threads.mjs --bench --repeat 3     # the numbers above
 ```
