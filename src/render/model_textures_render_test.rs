@@ -298,3 +298,51 @@ fn an_uncooked_models_cooked_image_files_stay_blocks_with_the_occlusion_merged()
     );
     assert!(reads.iter().any(|r| r.ends_with("crate_ax.png")), "{reads:?}");
 }
+
+/// A model whose geometry is meshopt-compressed keeps that geometry in the
+/// cook, and its own images still become KTX2: `tests/fixtures/cook-kept/`.
+#[cfg(feature = "gltf-meshopt")]
+#[test]
+fn a_meshopt_models_cooked_images_stay_blocks_and_its_geometry_is_unchanged() {
+    let Some(gpu) = bc_gpu() else {
+        return;
+    };
+    let formats = super::blocks::gpu_formats(gpu.device.features());
+    let source = load(
+        "source/packed.glb",
+        include_bytes!("../../tests/fixtures/cook-kept/source/packed.glb"),
+        formats,
+    );
+    let cooked = load(
+        "cooked/packed.glb",
+        include_bytes!("../../tests/fixtures/cook-kept/cooked/packed.glb"),
+        formats,
+    );
+    // The same decompressed triangles.
+    assert!(!source.data.indices.is_empty());
+    assert_eq!(cooked.data.positions, source.data.positions);
+    assert_eq!(cooked.data.normals, source.data.normals);
+    assert_eq!(cooked.data.uvs, source.data.uvs);
+    assert_eq!(cooked.data.indices, source.data.indices);
+
+    assert!(source.blocks.iter().all(Option::is_none), "the source's PNGs decode");
+    let m = &cooked.materials[0];
+    let kind = |i: Option<usize>| {
+        let b = cooked.blocks[i.expect("the material has it")]
+            .as_ref()
+            .expect("every image stays blocks");
+        (b.format, b.srgb)
+    };
+    assert_eq!(kind(m.image), (BlockFormat::Bc7, true), "the color: BC7 sRGB");
+    assert_eq!(kind(m.normal_map), (BlockFormat::Bc5, false), "the normal map: BC5");
+    assert_eq!(kind(m.orm_map), (BlockFormat::Bc7, false), "ORM: BC7, linear");
+
+    let before = video_memory(&gpu, &source);
+    let after = video_memory(&gpu, &cooked);
+    eprintln!(
+        "packed.glb on {} ({:?}): textures {before} bytes of video memory from the source, {after} cooked",
+        gpu.info.name, gpu.info.backend
+    );
+    assert_eq!(before, 3 * 5460);
+    assert_eq!(after, 3 * 87 * 16);
+}
