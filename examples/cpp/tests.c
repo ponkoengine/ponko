@@ -2423,6 +2423,21 @@ static void focus_and_hud_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_ui_clear_focus(ctx, s) == PONKO_OK);
     CHECK(ponko_ctx_ui_focus(ctx, s, &focus) == PONKO_OK && focus == PONKO_UI_NONE);
 
+    /* A still screen costs no layout: the count stays over its frames. */
+    PonkoUiInput still = ponko_ui_input_default();
+    CHECK(ponko_ctx_ui_frame(ctx, s, window, &still) == PONKO_OK);
+    uint64_t laid_out = 0, passes = 0;
+    CHECK(ponko_ctx_ui_layout_passes(ctx, s, &laid_out) == PONKO_OK && laid_out >= 1);
+    for (int i = 0; i < 10; ++i) {
+        CHECK(ponko_ctx_ui_set_text(ctx, s, count, "0 / 5") == PONKO_OK); /* the same text */
+        CHECK(ponko_ctx_ui_frame(ctx, s, window, &still) == PONKO_OK);
+    }
+    CHECK(ponko_ctx_ui_layout_passes(ctx, s, &passes) == PONKO_OK && passes == laid_out);
+    CHECK(ponko_ctx_ui_set_text(ctx, s, count, "1 / 5") == PONKO_OK);
+    CHECK(ponko_ctx_ui_frame(ctx, s, window, &still) == PONKO_OK);
+    CHECK(ponko_ctx_ui_layout_passes(ctx, s, &passes) == PONKO_OK && passes == laid_out + 1);
+    CHECK(ponko_ctx_ui_layout_passes(ctx, s, NULL) == PONKO_INVALID_ARGUMENT);
+
     /* Escape closes the menu; the HUD stays. */
     PonkoUiInput escape = ponko_ui_input_default();
     escape.cancel = true;

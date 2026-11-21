@@ -359,7 +359,8 @@ impl Renderer3D {
         self.lists.moved_runs.clear();
         self.particles
             .prepare(device, queue, &frame.particles, view_proj, scene.camera);
-        self.prepare_debug_lines(device, queue, &frame.debug_lines, view_proj, size);
+        let for_targets = frame.views.iter().any(|v| v.debug);
+        self.prepare_debug_lines(device, queue, &frame.debug_lines, (view_proj, size), for_targets);
         let ao_on = post.ambient_occlusion.enabled
             && post.ambient_occlusion.radius.is_finite()
             && post.ambient_occlusion.intensity.is_finite()
@@ -720,6 +721,11 @@ impl Renderer3D {
                 self.particles
                     .prepare_target(device, queue, view.target, particles, view.view_proj, view.camera);
             }
+            if view.debug
+                && let Some(lines) = &mut self.debug_lines
+            {
+                lines.prepare_target(device, queue, view.target, view.view_proj, view.size);
+            }
             if used == views.len() {
                 views.push((0, Vec::new(), 0));
             }
@@ -740,6 +746,9 @@ impl Renderer3D {
         self.lists.views = views;
         if !extra {
             self.particles.end_targets();
+            if let Some(lines) = &mut self.debug_lines {
+                lines.end_targets();
+            }
         }
         self.lists.gi_runs.clear();
         self.lists.gi_face_runs.clear();
@@ -793,7 +802,9 @@ impl Renderer3D {
             |k| drawn[k],
             // Poses that moved are posed as they were too, for the motion
             // pass (only when it draws something: not on a reset frame).
-            self.screen.velocity_on && !frame.motion.runs.is_empty(),
+            self.screen.velocity_on
+                && (!frame.motion.runs.is_empty()
+                    || frame.view_model.as_ref().is_some_and(|v| !v.motion.runs.is_empty())),
         );
         self.lists.skin_drawn = drawn;
         self.order_runs();
@@ -886,6 +897,7 @@ impl Renderer3D {
                 self.lists.moved_runs.extend_from_slice(&frame.motion.runs);
             }
         }
+        self.upload_view_model_motion(device, queue, frame);
         true
     }
 
@@ -1000,6 +1012,7 @@ impl Renderer3D {
             view_proj: view_proj.to_cols_array_2d(),
             unjittered_view_proj: unjittered.to_cols_array_2d(),
             previous_view_proj: previous_view_proj.to_cols_array_2d(),
+            reprojection: previous_view_proj.to_cols_array_2d(),
             jitter: [jitter[0], jitter[1], 0.0, 0.0],
             sun_view_proj: frame.sun_view_proj.map(|m| m.to_cols_array_2d()),
             caster_view_proj: Mat4::IDENTITY.to_cols_array_2d(),
@@ -1182,6 +1195,7 @@ impl Renderer3D {
             // Target cameras are not resolved over time.
             theirs.unjittered_view_proj = theirs.view_proj;
             theirs.previous_view_proj = theirs.view_proj;
+            theirs.reprojection = theirs.view_proj;
             theirs.jitter = [0.0; 4];
             theirs.camera = view.camera.extend(1.0).to_array();
             theirs.screen = [
@@ -1219,6 +1233,7 @@ impl Renderer3D {
                 theirs.inv_view_proj = view_proj.inverse().to_cols_array_2d();
                 theirs.unjittered_view_proj = theirs.view_proj;
                 theirs.previous_view_proj = theirs.view_proj;
+                theirs.reprojection = theirs.view_proj;
                 theirs.camera = probe.extend(1.0).to_array();
                 theirs.sky_light[3] = (probe.y / 1000.0).max(0.0);
                 sync_frame(queue, &gi.face_buffers[i], 0, &mut gi.face_mirrors[i], &theirs);
@@ -1321,18 +1336,24 @@ impl Renderer3D {
 }
 
 impl Renderer3D {
-    /// Uploads `ctx.debug`'s 3D lines (see `debug_lines.rs`), making the
+    /// Uploads `ctx.debug`'s 3D lines (see `debug_lines.rs`) seen through
+    /// `camera` (its view-projection and target size), making the
     /// pipelines the first time there are some, and again when the scene's
-    /// sample count or depth format changed.
+    /// sample count or depth format changed. `for_targets`: target cameras
+    /// draw them too.
     fn prepare_debug_lines(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         lines: &crate::debug::GpuLines,
-        view_proj: Mat4,
-        size: (u32, u32),
+        (view_proj, size): (Mat4, (u32, u32)),
+        for_targets: bool,
     ) {
-        let made_for = (self.samples, self.shaders.depth_format());
+        use super::super::debug_lines::{DebugLines, SeeThrough};
+        let see_through = SeeThrough::for_samples(self.samples);
+        #[cfg(test)]
+        let see_through = self.debug_see_through.unwrap_or(see_through);
+        let made_for = (self.samples, self.shaders.depth_format(), see_through);
         if self.debug_lines.as_ref().is_some_and(|l| l.made_for != made_for) {
             self.debug_lines = None;
         }
@@ -1340,11 +1361,7 @@ impl Renderer3D {
             return;
         }
         self.debug_lines
-            .get_or_insert_with(|| {
-                Box::new(super::super::debug_lines::DebugLines::new(
-                    device, made_for.0, made_for.1,
-                ))
-            })
-            .prepare(device, queue, lines, view_proj, size);
+            .get_or_insert_with(|| Box::new(DebugLines::new(device, made_for.0, made_for.1, made_for.2)))
+            .prepare(device, queue, lines, view_proj, size, for_targets);
     }
 }

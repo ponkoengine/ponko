@@ -187,8 +187,9 @@ pub(super) enum Kind {
     /// Global illumination's probe views: lit, solid surfaces writing
     /// their own depth (cut-outs went through `PrepassCoverage`).
     Capture,
-    /// The view model's held items (`view_model.rs`): lit, solid surfaces
-    /// writing their own depth at the end of the opaque pass.
+    /// The view model's held items (`view_model.rs`): lit, solid and
+    /// cut-out surfaces writing their own depth at the end of the opaque
+    /// pass.
     ViewModel,
 }
 
@@ -230,9 +231,10 @@ impl Renderer3D {
     pub(super) fn draw_role(&self, kind: Kind, id: u32, m: &GpuMaterial) -> Option<PipelineRole> {
         let stencil_solid = !m.cutout && !m.transparent && self.stencil.has(id);
         if kind == Kind::ViewModel {
-            // In no prepass: solid surfaces write their own depth; cut-outs
-            // (tested against the prepass's depth) aren't drawn.
-            return (!m.cutout && !m.transparent).then_some(PipelineRole::OpaqueSolid);
+            // In no prepass: solid surfaces write their own depth, and so
+            // do cut-outs, through a pipeline of their own that cuts their
+            // holes (see `draw_pipeline`).
+            return (!m.transparent).then_some(PipelineRole::OpaqueSolid);
         }
         if stencil_solid && matches!(kind, Kind::Velocity | Kind::VelocityStill) {
             return None;
@@ -256,6 +258,9 @@ impl Renderer3D {
         kind: Kind,
         role: PipelineRole,
     ) -> Option<&'a wgpu::RenderPipeline> {
+        if kind == Kind::ViewModel && self.resources.material(id).cutout {
+            return Some(shader.view_model_cutout(variant));
+        }
         if matches!(kind, Kind::Opaque | Kind::Transparent)
             && let Some(pipeline) = self.stencil.pipeline(
                 id,
@@ -673,7 +678,7 @@ impl Renderer3D {
                     let capture = self.environment.is_capture(*id);
                     let clear = if capture { wgpu::Color::TRANSPARENT } else { clear };
                     let particles = self.particles.target(*id).map(|p| (p, textures));
-                    self.draw_view(encoder, target, runs, *batch_view, clear, time, particles);
+                    self.draw_view(encoder, (*id, target), runs, *batch_view, clear, time, particles);
                 }
                 self.environment.probes(encoder, time);
             }
@@ -725,7 +730,13 @@ impl Renderer3D {
                             resolve_target: Some(taa.velocity()),
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Discard,
+                                // Kept for the held items' motion, drawn
+                                // over it after the color pass.
+                                store: if self.view_model_motion() {
+                                    wgpu::StoreOp::Store
+                                } else {
+                                    wgpu::StoreOp::Discard
+                                },
                             },
                         })],
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -839,6 +850,8 @@ impl Renderer3D {
                     // Last: the held items, over everything (see `view_model.rs`).
                     self.draw_view_model(&mut pass, targets.size, true, !split);
                 }
+                // The held items' motion, now that they are in the depth.
+                self.record_view_model_motion(encoder, targets, time);
                 if let (Some(ssr), Some(images)) = (&self.screen.ssr, &targets.ssr) {
                     ssr.keep(encoder, images);
                 }
@@ -1094,14 +1107,15 @@ impl Renderer3D {
 
     /// One target camera's view: depth prepass, then the lit solid models
     /// and the sky, resolved into its render target.
-    /// Draws a target camera's view into `target`: its prepass, then its
-    /// models and the sky, then `particles` (its particles, ribbons and
-    /// lines, with the textures they read), if any.
+    /// Draws a target camera's view into `target` (render target `id`): its
+    /// prepass, then its models and the sky, then `particles` (its
+    /// particles, ribbons and lines, with the textures they read), if any,
+    /// and `ctx.debug`'s lines if it draws them.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_view<'t>(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        target: &ViewTarget,
+        (id, target): (u32, &ViewTarget),
         runs: &[(u32, u32, u32)],
         batch_view: usize,
         clear: wgpu::Color,
@@ -1182,6 +1196,9 @@ impl Renderer3D {
             pass.set_bind_group(2, &self.no_scene, &[]);
             self.particles
                 .draw_view(view, &mut pass, textures, self.resources.white);
+        }
+        if let Some(lines) = &self.debug_lines {
+            lines.draw_target(&mut pass, id);
         }
     }
 

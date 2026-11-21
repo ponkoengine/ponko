@@ -4,7 +4,7 @@
 //! negative control). With 4 samples and with 1 (as on WebGL2). Skips
 //! without a GPU.
 use super::regression_stage::*;
-use super::render_test_support::{Image, Tolerance};
+use super::render_test_support::{Image, Tolerance, keep_image};
 use crate::prelude::*;
 
 /// Green when the green channel clearly leads.
@@ -128,57 +128,76 @@ fn depth_tested_lines_hide_behind_surfaces_and_lines_on_top_do_not() {
     }
 }
 
+/// See-through lines (alpha 0.5) show half of the scene behind them and
+/// opaque lines cover it, depth-tested and on top: with 4 samples a pixel
+/// (alpha to coverage: half the samples) and with 1 (blended).
 #[test]
-fn see_through_lines_blend_over_the_scene_and_opaque_lines_cover_it() {
-    let Some(mut stage) = Stage::new() else {
-        return;
-    };
-    let grey = stage.cube(Color::rgb(0.5, 0.5, 0.5));
-    stage.block(grey, vec3(-2.0, 0.0, -1.0), vec3(2.0, 1.4, -0.6));
-    let debug = &mut stage.ctx.debug;
-    debug.set_enabled(true);
-    let (opaque, half) = (vec3(-1.0, 0.4, 0.0), vec3(1.0, 0.4, 0.0));
-    debug
-        .line(opaque - Vec3::Y * 0.3, opaque + Vec3::Y * 0.3, Color::GREEN)
-        .width(8.0);
-    debug
-        .line(half - Vec3::Y * 0.3, half + Vec3::Y * 0.3, Color::GREEN.with_alpha(0.5))
-        .width(8.0);
-    // On top: one of each kind again, beside the others.
-    debug
-        .line(opaque + Vec3::X * 0.5, opaque + vec3(0.5, 0.6, 0.0), Color::BLUE)
-        .width(8.0)
-        .on_top();
-    debug
-        .line(
-            half - Vec3::X * 0.5,
-            half + vec3(-0.5, 0.6, 0.0),
-            Color::BLUE.with_alpha(0.5),
-        )
-        .width(8.0)
-        .on_top();
-    let drawn = image(&mut stage);
-    let at = |p: Vec3| stage.color_at(&drawn, p);
-    let (full, mixed) = (at(opaque), at(half));
-    assert!(green(full), "opaque: {full:?}");
-    // Half green over the grey box: greener than grey, less than full green,
-    // and the grey shows through in red and blue.
-    assert!(
-        mixed[1] > mixed[0] + 20.0 && mixed[1] < full[1] - 20.0 && mixed[0] > full[0] + 20.0,
-        "see-through: {mixed:?} vs {full:?}"
-    );
-    let (top, top_mixed) = (at(opaque + vec3(0.5, 0.3, 0.0)), at(half + vec3(-0.5, 0.3, 0.0)));
-    assert!(blue(top), "opaque on top: {top:?}");
-    assert!(
-        top_mixed[2] < top[2] - 20.0 && top_mixed[0] > top[0] + 20.0,
-        "{top_mixed:?} vs {top:?}"
-    );
-    // A draw call for each of the four kinds.
-    let with_lines = stage.renderer.draw_calls();
-    stage.ctx.debug.set_enabled(false);
-    let _ = image(&mut stage);
-    assert_eq!(with_lines - stage.renderer.draw_calls(), 4);
-    stage.finish();
+fn see_through_lines_show_the_scene_through_them_and_opaque_lines_cover_it() {
+    for samples in [4, 1] {
+        let Some(mut stage) = Stage::with(Setup {
+            samples,
+            ..Default::default()
+        }) else {
+            return;
+        };
+        let grey = stage.cube(Color::rgb(0.5, 0.5, 0.5));
+        stage.block(grey, vec3(-2.0, 0.0, -1.0), vec3(2.0, 1.4, -0.6));
+        let debug = &mut stage.ctx.debug;
+        debug.set_enabled(true);
+        let (opaque, half) = (vec3(-1.0, 0.4, 0.0), vec3(1.0, 0.4, 0.0));
+        debug
+            .line(opaque - Vec3::Y * 0.3, opaque + Vec3::Y * 0.3, Color::GREEN)
+            .width(8.0);
+        debug
+            .line(half - Vec3::Y * 0.3, half + Vec3::Y * 0.3, Color::GREEN.with_alpha(0.5))
+            .width(8.0);
+        // On top: one of each kind again, beside the others.
+        debug
+            .line(opaque + Vec3::X * 0.5, opaque + vec3(0.5, 0.6, 0.0), Color::BLUE)
+            .width(8.0)
+            .on_top();
+        debug
+            .line(
+                half - Vec3::X * 0.5,
+                half + vec3(-0.5, 0.6, 0.0),
+                Color::BLUE.with_alpha(0.5),
+            )
+            .width(8.0)
+            .on_top();
+        let drawn = image(&mut stage);
+        let at = |p: Vec3| stage.color_at(&drawn, p);
+        let (full, mixed) = (at(opaque), at(half));
+        assert!(green(full), "{samples}x: opaque: {full:?}");
+        // Half green over the grey box: greener than grey, less than full
+        // green, and the grey shows through in red and blue.
+        assert!(
+            mixed[1] > mixed[0] + 20.0 && mixed[1] < full[1] - 20.0 && mixed[0] > full[0] + 20.0,
+            "{samples}x: see-through: {mixed:?} vs {full:?}"
+        );
+        let (top, top_mixed) = (at(opaque + vec3(0.5, 0.3, 0.0)), at(half + vec3(-0.5, 0.3, 0.0)));
+        assert!(blue(top), "{samples}x: opaque on top: {top:?}");
+        assert!(
+            top_mixed[2] < top[2] - 20.0 && top_mixed[0] > top[0] + 20.0,
+            "{samples}x: {top_mixed:?} vs {top:?}"
+        );
+        // Negative control: the same lines blended (as before) look alike.
+        stage.renderer.debug_see_through = Some(super::debug_lines::SeeThrough::Blend);
+        let blended = image(&mut stage);
+        let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(&b).all(|(a, b)| (a - b).abs() < 40.0);
+        let blended_mixed = stage.color_at(&blended, half);
+        assert!(
+            close(mixed, blended_mixed),
+            "{samples}x: like blending: {mixed:?} vs {blended_mixed:?}"
+        );
+        stage.renderer.debug_see_through = None;
+        // A draw call for each of the four kinds.
+        let _ = image(&mut stage);
+        let with_lines = stage.renderer.draw_calls();
+        stage.ctx.debug.set_enabled(false);
+        let _ = image(&mut stage);
+        assert_eq!(with_lines - stage.renderer.draw_calls(), 4, "{samples}x");
+        stage.finish();
+    }
 }
 
 #[test]
@@ -212,6 +231,8 @@ enum Lines {
     Tested,
     /// The upright lines, all on top.
     Top,
+    /// The upright lines (half on top), see-through (alpha 0.5).
+    SeeThrough,
 }
 
 fn draw_lines(debug: &mut crate::debug::DebugDraw, lines: Lines) {
@@ -226,7 +247,12 @@ fn draw_lines(debug: &mut crate::debug::DebugDraw, lines: Lines) {
     for i in 0..100_000 {
         let x = (i % 1000) as f32 * 0.008 - 4.0;
         let z = (i / 1000) as f32 * 0.04 - 2.0 + behind;
-        let shape = debug.line(vec3(x, 0.0, z), vec3(x, tall, z), Color::GREEN);
+        let color = if lines == Lines::SeeThrough {
+            Color::GREEN.with_alpha(0.5)
+        } else {
+            Color::GREEN
+        };
+        let shape = debug.line(vec3(x, 0.0, z), vec3(x, tall, z), color);
         let top = match lines {
             Lines::Tested => false,
             Lines::Top => true,
@@ -241,7 +267,9 @@ fn draw_lines(debug: &mut crate::debug::DebugDraw, lines: Lines) {
 /// The GPU side of 100,000 debug lines at 1280x720, over a floor and a few
 /// boxes, measured with GPU timestamps: the opaque pass (where the lines
 /// are drawn) and the whole frame, for each kind of [`Lines`], with 4
-/// samples a pixel and with 1. The cases take turns, 20 frames at a time
+/// samples a pixel and with 1. See-through lines are timed both ways:
+/// blended (what every sample count did before) and as drawn now (alpha to
+/// coverage with several samples a pixel). The cases take turns, 20 frames at a time
 /// for 8 rounds, so a busy GPU slows them alike; the median and the spread
 /// (min, p90) of the timed frames are printed. Ignored by default (a
 /// timing); `ponko_bench -- debug/` measures the CPU side. Run it with
@@ -278,17 +306,22 @@ fn time_lines(samples: u32) {
         "adapter: {} ({:?}), {samples} sample(s) a pixel",
         stage.info.name, stage.info.backend
     );
+    use super::debug_lines::SeeThrough;
+    let now = SeeThrough::for_samples(samples);
     let cases = [
-        ("none", Lines::None),
-        ("upright", Lines::Upright),
-        ("behind", Lines::Behind),
-        ("dots", Lines::Dots),
-        ("tested", Lines::Tested),
-        ("top", Lines::Top),
+        ("none", Lines::None, now),
+        ("upright", Lines::Upright, now),
+        ("behind", Lines::Behind, now),
+        ("dots", Lines::Dots, now),
+        ("tested", Lines::Tested, now),
+        ("top", Lines::Top, now),
+        ("see-through blended", Lines::SeeThrough, SeeThrough::Blend),
+        ("see-through now", Lines::SeeThrough, now),
     ];
     let mut times = vec![(Vec::new(), Vec::new()); cases.len()];
     for _round in 0..8 {
-        for (case, &(_, lines)) in cases.iter().enumerate() {
+        for (case, &(_, lines, see_through)) in cases.iter().enumerate() {
+            stage.renderer.debug_see_through = Some(see_through);
             stage.ctx.debug.clear();
             draw_lines(&mut stage.ctx.debug, lines);
             stage.ctx.gfx.frame3d.debug_lines.clear();
@@ -319,11 +352,11 @@ fn time_lines(samples: u32) {
         v.sort_by(f32::total_cmp);
         (v[v.len() / 2], v[0], v[v.len() * 9 / 10])
     };
-    for ((name, _), (opaque, frame)) in cases.iter().zip(&mut times) {
+    for ((name, _, _), (opaque, frame)) in cases.iter().zip(&mut times) {
         assert!(opaque.len() >= 40, "{name}: only {} frames timed", opaque.len());
         let (o, f) = (spread(opaque), spread(frame));
         println!(
-            "{name:>8}: opaque pass median {:.3} ms (min {:.3}, p90 {:.3}); frame median {:.3} ms (min {:.3}, p90 {:.3}); {} frames",
+            "{name:>20}: opaque pass median {:.3} ms (min {:.3}, p90 {:.3}); frame median {:.3} ms (min {:.3}, p90 {:.3}); {} frames",
             o.0,
             o.1,
             o.2,
@@ -334,4 +367,226 @@ fn time_lines(samples: u32) {
         );
     }
     stage.finish();
+}
+
+/// Several 3D cameras drawn through a game's own frame (`Ctx::render_frame`
+/// with the offscreen renderer): the main camera and a second player in
+/// split screen, and a target camera into a render target.
+struct Views {
+    ctx: crate::ctx::Ctx,
+    target: crate::render::RenderTarget,
+    wall: Option<Entity>,
+}
+
+/// The window's size: two square halves.
+const VIEWS: (u32, u32) = (256, 128);
+/// A magenta label in front of the wall, and where it is.
+const FRONT: Vec3 = vec3(-1.5, 2.6, 1.0);
+/// A cyan label behind the wall, where the wall hides it from every camera.
+const BEHIND: Vec3 = vec3(-1.0, 2.2, -2.0);
+/// A green line in front of the wall, and behind it a yellow one.
+const LINE: (Vec3, Vec3) = (vec3(-2.0, 0.8, 1.0), vec3(2.0, 0.8, 1.0));
+const LINE_BEHIND: (Vec3, Vec3) = (vec3(-2.0, 1.4, -2.0), vec3(2.0, 1.4, -2.0));
+
+impl Views {
+    fn new() -> Option<Self> {
+        let mut ctx = super::render_test_support::offscreen_ctx(VIEWS)?;
+        ctx.scene3d.sky.atmosphere = false;
+        ctx.gfx.clear_color = Color::BLACK;
+        let grey = ctx
+            .gfx
+            .create_material(crate::render::MaterialDesc::color(Color::rgb(0.4, 0.4, 0.4)));
+        let cube = ctx.gfx.create_mesh(&crate::render::MeshData::cube(1.0), grey);
+        // A wall 8 wide and 5 high, its front at z = 0.5.
+        let wall = ctx.world.spawn((
+            crate::d3::Transform {
+                position: vec3(0.0, 2.0, 0.0),
+                scale: vec3(8.0, 5.0, 1.0),
+                ..Default::default()
+            },
+            crate::render::Model::new(cube),
+        ));
+        let camera = |x: f32, rect| {
+            let mut camera = ctx.scene3d.camera;
+            camera.position = vec3(x, 2.0, 9.0);
+            camera.look_at(vec3(0.0, 1.8, 0.0));
+            camera.rect = rect;
+            camera
+        };
+        let (main, second) = (
+            camera(-0.5, crate::camera::Viewport::split(2, 0)),
+            camera(0.5, crate::camera::Viewport::split(2, 1)),
+        );
+        let seen_by_target = camera(0.0, crate::camera::Viewport::FULL);
+        ctx.scene3d.camera = main;
+        ctx.scene3d.views.push(crate::d3::View::new(second));
+        let target = ctx.gfx.create_render_target(128, 128);
+        ctx.scene3d
+            .passes
+            .target_cameras
+            .push(crate::render::TargetCamera::new(seen_by_target, target));
+        Some(Self {
+            ctx,
+            target,
+            wall: Some(wall),
+        })
+    }
+
+    /// Draws the labels and lines (each label depth-tested), then a frame;
+    /// returns the window and the render target, as RGBA8 (the target's
+    /// linear HDR light clamped and encoded as sRGB).
+    fn frame(&mut self) -> (Image, Image) {
+        let debug = &mut self.ctx.debug;
+        debug.clear();
+        debug.set_enabled(true);
+        debug
+            .text(FRONT, "MM", Color::rgb(1.0, 0.0, 1.0))
+            .size(16.0)
+            .depth_tested();
+        debug
+            .text(BEHIND, "MM", Color::rgb(0.0, 1.0, 1.0))
+            .size(16.0)
+            .depth_tested();
+        debug.line(LINE.0, LINE.1, Color::GREEN).width(3.0);
+        debug.line(LINE_BEHIND.0, LINE_BEHIND.1, Color::YELLOW).width(3.0);
+        let path = std::env::temp_dir().join(format!(
+            "ponko-debug-views-{}-{:?}.png",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        self.ctx.gfx.queue_screenshot(path.clone(), 0, None);
+        assert_eq!(self.ctx.render_frame(), crate::render::FrameStatus::Offscreen);
+        let shot = image::open(&path).expect("the frame was captured").to_rgba8();
+        let _ = std::fs::remove_file(&path);
+        let window = Image {
+            width: shot.width(),
+            height: shot.height(),
+            rgba: shot.into_raw(),
+        };
+        keep_image(&window);
+        let renderer = self.ctx.gfx.renderer.as_ref().expect("an offscreen renderer");
+        let bytes = renderer
+            .read_texture(self.target.texture().id)
+            .expect("the render target");
+        let encode = |v: f32| (v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+        let rgba = bytes
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .flat_map(|p| {
+                let c = |i: usize| half::f16::from_le_bytes([p[2 * i], p[2 * i + 1]]).to_f32();
+                [encode(c(0)), encode(c(1)), encode(c(2)), 255]
+            })
+            .collect();
+        let target = Image {
+            width: 128,
+            height: 128,
+            rgba,
+        };
+        keep_image(&target);
+        (window, target)
+    }
+}
+
+fn magenta8(p: [u8; 4]) -> bool {
+    p[0] > 110 && p[2] > 110 && p[1] < 80
+}
+
+fn cyan8(p: [u8; 4]) -> bool {
+    p[1] > 110 && p[2] > 110 && p[0] < 80
+}
+
+fn green8(p: [u8; 4]) -> bool {
+    p[1] > 110 && p[0] < 80 && p[2] < 80
+}
+
+fn yellow8(p: [u8; 4]) -> bool {
+    p[0] > 110 && p[1] > 110 && p[2] < 80
+}
+
+/// How many pixels of `image` in columns `x` are `is`.
+fn count(image: &Image, x: std::ops::Range<u32>, is: fn([u8; 4]) -> bool) -> usize {
+    let mut n = 0;
+    for y in 0..image.height {
+        for x in x.clone() {
+            n += usize::from(is(image.pixel(x, y)));
+        }
+    }
+    n
+}
+
+/// What each 3D view shows: (main half, second player's half, render target).
+fn shown(views: &mut Views, is: fn([u8; 4]) -> bool) -> [usize; 3] {
+    let (window, target) = views.frame();
+    [
+        count(&window, 0..128, is),
+        count(&window, 128..256, is),
+        count(&target, 0..128, is),
+    ]
+}
+
+#[test]
+fn depth_tested_labels_and_lines_show_in_every_3d_view_and_hide_behind_surfaces() {
+    let Some(mut views) = Views::new() else {
+        return;
+    };
+    // In front of the wall: the label and the line in each view.
+    let labels = shown(&mut views, magenta8);
+    assert!(
+        labels.iter().all(|&n| n >= 8),
+        "the front label in the main half, the second half and the render target: {labels:?}"
+    );
+    let lines = shown(&mut views, green8);
+    assert!(
+        lines.iter().all(|&n| n >= 20),
+        "the front line in every view: {lines:?}"
+    );
+    // Behind the wall: hidden from every camera.
+    let hidden = shown(&mut views, cyan8);
+    assert_eq!(hidden, [0; 3], "the wall hides the label behind it");
+    assert_eq!(shown(&mut views, yellow8), [0; 3], "the wall hides the line behind it");
+
+    // Negative control: without the wall, every view shows the label and
+    // the line behind it, so they were drawn and hidden by depth.
+    views.ctx.world.despawn(views.wall.take().unwrap());
+    let behind = shown(&mut views, cyan8);
+    assert!(behind.iter().all(|&n| n >= 8), "no wall, the label shows: {behind:?}");
+    let behind = shown(&mut views, yellow8);
+    assert!(behind.iter().all(|&n| n >= 20), "no wall, the line shows: {behind:?}");
+
+    // A camera off the default layer shows neither; the others still do.
+    let without_default = crate::camera::RenderLayers::ALL.without(0);
+    views.ctx.scene3d.views[0].camera.layers = without_default;
+    views.ctx.scene3d.passes.target_cameras[0].camera.layers = without_default;
+    let off = shown(&mut views, magenta8);
+    assert!(
+        off[0] >= 8 && off[1] == 0 && off[2] == 0,
+        "off the default layer: {off:?}"
+    );
+    let off = shown(&mut views, green8);
+    assert!(
+        off[0] >= 20 && off[1] == 0 && off[2] == 0,
+        "off the default layer: {off:?}"
+    );
+    // The main camera off it, the target camera on it: only the target
+    // shows them.
+    views.ctx.scene3d.camera.layers = without_default;
+    views.ctx.scene3d.passes.target_cameras[0].camera.layers = crate::camera::RenderLayers::ALL;
+    let target_only = shown(&mut views, magenta8);
+    assert!(
+        target_only[0] == 0 && target_only[2] >= 8,
+        "only the target camera shows the label: {target_only:?}"
+    );
+    let target_only = shown(&mut views, green8);
+    assert!(
+        target_only[0] == 0 && target_only[2] >= 20,
+        "only the target camera shows the line: {target_only:?}"
+    );
+    // A target camera without particles leaves debug drawing out too (the
+    // main camera draws again: a frame with nothing at all to draw skips
+    // the 3D passes, the target cameras' too).
+    views.ctx.scene3d.camera.layers = crate::camera::RenderLayers::ALL;
+    views.ctx.scene3d.passes.target_cameras[0].camera.particles = false;
+    assert_eq!(shown(&mut views, magenta8)[2], 0, "no particles, no label");
+    assert_eq!(shown(&mut views, green8)[2], 0, "no particles, no line");
 }

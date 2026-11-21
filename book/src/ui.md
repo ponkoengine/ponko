@@ -577,8 +577,12 @@ laid out. Scrolling and animations of drawn properties (opacity, scale,
 offset, color) move what was laid out without a layout; width and height
 tweens lay out each frame they play.
 
-`Ui::layout_passes` counts the layouts, so a test can check that a screen
-which should be still is not laid out every frame:
+`Ui::layout_passes` counts the layouts (`ponko_ctx_ui_layout_passes` in C,
+`layout_passes()` in C++), so a test can check that a screen which should be
+still is not laid out every frame:
+
+<div class="lang-pair">
+<div>
 
 ```rust
 # use ponko::prelude::*;
@@ -596,12 +600,33 @@ for _ in 0..60 {
 assert_eq!(ui.layout_passes(), laid_out);
 ```
 
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:ui_layout_passes}}
+```
+
+</div>
+</div>
+
+Drawing skips the same way. Each node keeps the sprites it drew (its fill,
+border, image, widget parts and glyphs) until something it is drawn from
+changes: its rectangle, clip, paint, text, value, scroll, caret or
+selection, its state's fill, or an animation of it; or, for every node, the
+window size, the scales, the theme or the fonts. A still frame repeats every
+node's sprites without laying out a single glyph; when a label's text
+changes, that label alone is drawn again, along with the nodes its new size
+moves. A spinner is drawn each frame, since its dots go round with the
+clock. What is drawn is the same either way.
+
 The `frame2d/...` benchmarks of `ponko_bench` time a whole 2D frame without a
 window (2,000 sprites under a HUD and a settings screen of about 150 nodes):
 the UI's input, layout and draw list, the game's systems and the sprite
 batching. With layout skipped, a frame where the UI is still went from about
 1.07 ms to 0.11 ms of CPU, and one where the score's text changes every frame
-from about 1.08 ms to 0.11 ms.
+from about 1.08 ms to 0.11 ms. Keeping each node's drawing took both to about
+0.035 ms (the same frame without a UI takes about 0.017 ms).
 
 ## Accessibility semantics
 

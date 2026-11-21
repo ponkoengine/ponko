@@ -25,6 +25,7 @@ fn record_camera(ctx: &mut Ctx) {
 
 // ANCHOR: follow
 fn setup_follow_camera(ctx: &mut Ctx) {
+    // The rig, as a resource: it holds the camera's state.
     ctx.world.insert_resource(
         FollowCamera::default()
             .with_dead_zone(vec2(32.0, 48.0)) // the player can move this much without scrolling
@@ -33,35 +34,24 @@ fn setup_follow_camera(ctx: &mut Ctx) {
     );
 }
 
-/// A frame system, after the player moved.
-fn follow_the_player(ctx: &mut Ctx) {
-    let Some(hero) = ctx
-        .world
-        .query::<(&Player, &Transform)>()
-        .iter()
-        .next()
-        .map(|(_, t)| t.position)
-    else {
-        return;
-    };
-    let dt = ctx.time.frame_dt();
-    ctx.world
-        .resource_mut::<FollowCamera>()
-        .update(&mut ctx.camera, hero, dt);
+/// The player, with the part the rig follows: every frame, after
+/// everything moved, the engine moves the camera to it. No system.
+fn spawn_player(ctx: &mut Ctx, at: Vec2) -> Entity {
+    ctx.world.spawn((Player, Transform::at(at), CameraTarget))
 }
 // ANCHOR_END: follow
 
 #[test]
-fn the_camera_catches_up_with_the_player_and_stops_at_the_level_edge() {
+fn the_camera_follows_the_camera_target_with_no_system_and_stops_at_the_level_edge() {
     let run = |hero_at: Vec2| {
         Game::new("follow", 800, 600)
             .setup(move |ctx| {
                 setup_follow_camera(ctx);
                 ctx.world.insert_resource(Centres::default());
-                ctx.world.spawn((Player, Transform::at(hero_at)));
+                spawn_player(ctx, hero_at);
             })
-            .system(follow_the_player)
-            .system(record_camera)
+            // Read where the camera is once the engine placed it.
+            .add(Phase::Late, record_camera)
             .headless_frames(true)
             .run_headless(180)
     };
@@ -76,6 +66,22 @@ fn the_camera_catches_up_with_the_player_and_stops_at_the_level_edge() {
     assert!(
         (last.x - 400.0).abs() < 1.0,
         "the level starts at 0, so the camera stops half a screen in: {last}"
+    );
+    // Without the part, nothing moves the camera.
+    let world = Game::new("follow", 800, 600)
+        .setup(|ctx| {
+            setup_follow_camera(ctx);
+            ctx.world.insert_resource(Centres::default());
+            ctx.world.spawn((Player, Transform::at(vec2(2000.0, 360.0))));
+        })
+        .add(Phase::Late, record_camera)
+        .headless_frames(true)
+        .run_headless(60);
+    let centres = &world.resource::<Centres>().0;
+    assert!(
+        centres.iter().all(|c| *c == centres[0]) && (centres[0].x - 2000.0).abs() > 1000.0,
+        "no camera target, no following: {:?}",
+        centres.last()
     );
 }
 
@@ -100,16 +106,16 @@ fn a_hit_shakes_the_camera_and_the_shaking_dies_down() {
             setup_follow_camera(ctx);
             ctx.world.insert_resource(CameraShake::default());
             ctx.world.insert_resource(Centres::default());
-            ctx.world.spawn((Player, Transform::at(vec2(400.0, 300.0))));
+            spawn_player(ctx, vec2(400.0, 300.0));
         })
         .sim_system(|ctx: &mut Ctx| {
             if ctx.time.sim_tick() == 20 {
                 ctx.events.send(Hit);
             }
         })
-        .system(follow_the_player)
-        .system(shake_on_hits)
-        .system(record_camera)
+        // After the engine placed the camera on the player.
+        .add(Phase::Late, shake_on_hits)
+        .add(Phase::Late, record_camera)
         .headless_frames(true)
         .run_headless(200);
     let centres = &world.resource::<Centres>().0;

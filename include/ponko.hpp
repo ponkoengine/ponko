@@ -4674,6 +4674,8 @@ public:
     std::optional<id> top_screen() const { id n = none; detail::check(ponko_ctx_ui_top_screen(raw_, target_, &n)); return maybe(n); }
     /// Whether `node` is shown: on a screen of the stack, neither it nor a node above it hidden.
     bool is_shown(id node) const { bool s = false; detail::check(ponko_ctx_ui_is_shown(raw_, target_, node, &s)); return s; }
+    /// How many times the tree has been laid out (`Ui::layout_passes`): a layout runs only when something changed since the last one, so the count stays the same over a still screen's frames.
+    std::uint64_t layout_passes() const { std::uint64_t n = 0; detail::check(ponko_ctx_ui_layout_passes(raw_, target_, &n)); return n; }
     /// The focused node, if any.
     std::optional<id> focus() const { id n = none; detail::check(ponko_ctx_ui_focus(raw_, target_, &n)); return maybe(n); }
     /// Focuses `node` (an enabled, shown button, text input, toggle or slider on the top screen), as Tab would.
