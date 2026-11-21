@@ -28,14 +28,45 @@ export const CHECK_TICKS = 150;
  * `gamepads-plain` is `gamepads` on the ordinary web build (no threads),
  * whose pads come from the same backend, built without shared memory.
  */
-export const CASES = ["worker-panic", "gamepads", "gamepads-plain", "warning"];
+export const CASES = ["worker-panic", "gamepads", "gamepads-plain", "service-worker", "warning"];
+
+/**
+ * The fixture's threaded build has these features: its 3D culling and
+ * light bake need the 3D renderer, its characters 3D physics, and the
+ * culling and skeleton drawing their headless handles.
+ */
+export const FIXTURE_FEATURES = "3d,physics3d,bench-internals";
 
 /** Where the ordinary build of the fixture goes for `--case gamepads-plain`. */
 export const PLAIN_DIR = "target/web/web_threads_plain";
 
+/**
+ * Where the threaded build with `ponko-isolate.js` goes for `--case
+ * service-worker` (`web/build.sh --threads --isolation-worker`).
+ */
+export const SW_DIR = "target/web/web_threads_sw";
+
+/** What `ponko-isolate.js` logs when it reloads the page through its worker. */
+export const SW_RELOAD_MESSAGE = "ponko-isolate.js: reloading once";
+
+/**
+ * The parallel passes the fixture times (`pass_ms`), by the scope each opens
+ * on the frame pool: the hierarchy's update and the engine's own passes.
+ */
+export const PASSES = [
+  "hierarchy/shared_level",
+  "spatial/shared_rebuild",
+  "flow/shared_directions",
+  "three/shared_cull",
+  "reflect/save",
+  "skeleton2d/shared_draw",
+  "physics3d/shared_characters",
+  "three/shared_bake",
+];
+
 export const USAGE =
   "usage: threads.mjs [--dir <site>] [--build] [--browser chromium|firefox|webkit]\n" +
-  "                   [--check] [--case worker-panic|gamepads|gamepads-plain|warning]\n" +
+  "                   [--check] [--case worker-panic|gamepads|gamepads-plain|service-worker|warning]\n" +
   "                   [--bench [--workloads par,sweep,interleaved,jobs] [--threads 1,<n>] [--repeat <r>]]\n" +
   "                   [--out <dir>] [--timeout <s>]";
 
@@ -89,7 +120,7 @@ export function parseArgs(argv) {
     }
   }
   if (args.case && args.mode !== "check") throw new UsageError("--case goes with --check");
-  args.dir ??= args.case === "gamepads-plain" ? PLAIN_DIR : "target/web/web_threads";
+  args.dir ??= args.case === "gamepads-plain" ? PLAIN_DIR : args.case === "service-worker" ? SW_DIR : "target/web/web_threads";
   return args;
 }
 
@@ -108,8 +139,10 @@ export function checkReady(state) {
 /**
  * The problems with a check run on a cross-origin isolated page: the game
  * must have started workers and run query items, batch systems, a shared
- * hierarchy level, at least two of the engine's own parallel passes and
- * jobs on them, never on the page's thread.
+ * hierarchy level, the engine's own parallel passes (the retained 3D
+ * culling, the 2D skeleton drawing, the 3D characters and the light bake
+ * among them; the JSON world save never) and jobs on them, never on the
+ * page's thread.
  */
 export function checkIsolated(state) {
   const problems = [];
@@ -128,6 +161,16 @@ export function checkIsolated(state) {
     passes.length >= 2,
     `the engine's own passes that went through the frame pool's runner: ${passes.length ? passes.join(", ") : "none"}, not at least 2`,
   );
+  // Sized by the frame pool's threads, not rayon's (1 on the page).
+  expect(passes.includes("three/shared_cull"), "the 3D culling didn't go through the frame pool's runner (three/shared_cull)");
+  // The JSON save stays on the page's thread: shared out, the browser's
+  // one allocator lock made it about 10 times slower.
+  expect(!passes.includes("reflect/shared_save"), "the JSON world save went to the frame pool's workers (reflect/shared_save), where it is slower");
+  for (const pass of ["skeleton2d/shared_draw", "physics3d/shared_characters", "three/shared_bake"]) {
+    expect(passes.includes(pass), `${pass} didn't go through the frame pool's runner`);
+  }
+  problems.push(...checkPassTimes(state));
+  expect(Array.isArray(state.frame3d) && state.frame3d[0] > 0, `the 3D frame found no models to draw (frame3d: ${JSON.stringify(state.frame3d)})`);
   expect(state.wait_off_page === true, "the job waited for in setup ran on the page's thread");
   expect(state.job_off_page === true, "a job ran on the page's thread");
   expect(state.group === "ready", `the asset group from assets/ didn't load (${state.group})`);
@@ -154,11 +197,76 @@ export function checkFallback(state, consoleText) {
   return problems;
 }
 
+/** Every pass in `PASSES` must have been timed (`pass_ms`, in milliseconds). */
+export function checkPassTimes(state) {
+  const times = state.pass_ms ?? {};
+  const missing = PASSES.filter((p) => !(Number.isFinite(times[p]) && times[p] >= 0));
+  return missing.length ? [`no time for ${missing.join(", ")} (pass_ms: ${JSON.stringify(times)})`] : [];
+}
+
+/**
+ * One row per pass in `PASSES`: whether the isolated run shared it out to
+ * the workers (its scope opened there; the hierarchy's `hier_shared`), and
+ * its time with threads and on the page's thread alone, from the two runs.
+ */
+export function passRows(isolated, plain) {
+  const shared = new Set(isolated.passes_shared ?? []);
+  return PASSES.map((pass) => {
+    const threaded = isolated.pass_ms?.[pass] ?? null;
+    const alone = plain.pass_ms?.[pass] ?? null;
+    return {
+      pass,
+      shared: pass === "hierarchy/shared_level" ? isolated.hier_shared === true : shared.has(pass),
+      threaded_ms: threaded,
+      alone_ms: alone,
+      speedup: threaded > 0 && alone != null ? alone / threaded : null,
+    };
+  });
+}
+
+/** `passRows` as a Markdown table. */
+export function passTable(rows, threads) {
+  const ms = (v) => (v == null ? "n/a" : v.toFixed(2));
+  const lines = [
+    `| Pass (scope) | Shared out | ${threads} threads (ms) | Page's thread alone (ms) | Speed-up |`,
+    "|---|---|---|---|---|",
+  ];
+  for (const r of rows) {
+    const speedup = r.speedup == null ? "n/a" : `${r.speedup.toFixed(1)}x`;
+    lines.push(`| \`${r.pass}\` | ${r.shared ? "yes" : "no"} | ${ms(r.threaded_ms)} | ${ms(r.alone_ms)} | ${speedup} |`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * The problems with a check run served without the headers, with
+ * `ponko-isolate.js`: the page must have reloaded once through the service
+ * worker and then be isolated, with the game's work on the workers.
+ */
+export function checkServiceWorker(state, consoleText) {
+  const problems = [];
+  if (!consoleText.includes(SW_RELOAD_MESSAGE)) {
+    problems.push(`the console doesn't say the page reloaded through the service worker ("${SW_RELOAD_MESSAGE}")`);
+  }
+  if (state.isolated !== true) {
+    problems.push(`the page isn't cross-origin isolated after the reload (isolated: ${state.isolated})`);
+    return problems;
+  }
+  problems.push(...checkIsolated(state));
+  return problems;
+}
+
 /** The two runs must have simulated the same world and read the same file. */
 export function checkSameResult(isolated, fallback) {
   const problems = [];
   if (isolated.checksum !== fallback.checksum) {
     problems.push(`the checksums differ: ${isolated.checksum} with threads, ${fallback.checksum} without`);
+  }
+  if (JSON.stringify(isolated.frame3d) !== JSON.stringify(fallback.frame3d)) {
+    problems.push(`the 3D frames differ: ${JSON.stringify(isolated.frame3d)} with threads, ${JSON.stringify(fallback.frame3d)} without`);
+  }
+  if (isolated.save_bytes !== fallback.save_bytes) {
+    problems.push(`the JSON saves differ in length: ${isolated.save_bytes} bytes with threads, ${fallback.save_bytes} without`);
   }
   if (isolated.group_bytes !== fallback.group_bytes) {
     problems.push(`the asset group read ${isolated.group_bytes} bytes with threads, ${fallback.group_bytes} without`);

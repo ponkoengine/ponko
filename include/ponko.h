@@ -1524,6 +1524,8 @@ typedef struct PonkoLatestWins PonkoLatestWins;
 
 typedef struct PonkoLightBakeScene PonkoLightBakeScene;
 
+typedef struct PonkoLoadedWorld PonkoLoadedWorld;
+
 typedef struct PonkoLobby PonkoLobby;
 
 typedef struct PonkoMemorySource PonkoMemorySource;
@@ -2314,6 +2316,10 @@ typedef struct PonkoColliderFocus {
   float radius;
   float keep_radius;
 } PonkoColliderFocus;
+
+typedef struct PonkoCollisionMeshData *(*PonkoTerrainRebuildFn)(const struct PonkoLoadedWorld *world,
+                                                                uint64_t tile,
+                                                                void *user);
 
 typedef struct PonkoPointHit2D {
   struct PonkoEntity entity;
@@ -6620,6 +6626,18 @@ enum PonkoStatus ponko_ctx_physics3d_is_collider_active(struct PonkoCtx *ctx,
                                                         uint64_t entity,
                                                         bool *out_active);
 
+enum PonkoStatus ponko_ctx_physics3d_set_terrain_rebuild(struct PonkoCtx *ctx,
+                                                         PonkoTerrainRebuildFn rebuild,
+                                                         void *user);
+
+enum PonkoStatus ponko_ctx_physics3d_clear_terrain_rebuild(struct PonkoCtx *ctx);
+
+enum PonkoStatus ponko_loaded_world_get(const struct PonkoLoadedWorld *world,
+                                        uint64_t entity,
+                                        uint32_t component,
+                                        void *out_data,
+                                        size_t size);
+
 enum PonkoStatus ponko_ctx_set_physics_paused(struct PonkoCtx *ctx, bool paused);
 
 enum PonkoStatus ponko_ctx_is_physics_paused(struct PonkoCtx *ctx, bool *out_paused);
@@ -8636,6 +8654,16 @@ enum PonkoStatus ponko_ctx_ui_safe_area(struct PonkoCtx *ctx,
                                         uint64_t target,
                                         struct PonkoRect *out_area);
 
+enum PonkoStatus ponko_ctx_ui_set_fade_as_group(struct PonkoCtx *ctx,
+                                                uint64_t target,
+                                                uint64_t id,
+                                                bool on);
+
+enum PonkoStatus ponko_ctx_ui_fades_as_group(struct PonkoCtx *ctx,
+                                             uint64_t target,
+                                             uint64_t id,
+                                             bool *out_on);
+
 enum PonkoStatus ponko_ctx_ui_show_hud(struct PonkoCtx *ctx, uint64_t target, uint64_t root);
 
 enum PonkoStatus ponko_ctx_ui_hide_hud(struct PonkoCtx *ctx, uint64_t target, uint64_t root);
@@ -10417,6 +10445,10 @@ enum PonkoStatus ponko_ctx_water_touch(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_ctx_water_waiting_contacts(struct PonkoCtx *ctx,
                                                   uint64_t entity,
                                                   uint32_t *out_count);
+
+enum PonkoStatus ponko_ctx_water_started_contacts(struct PonkoCtx *ctx,
+                                                  uint64_t entity,
+                                                  uint64_t *out_count);
 
 enum PonkoStatus ponko_ctx_set_buoyancy_box(struct PonkoCtx *ctx,
                                             uint64_t entity,

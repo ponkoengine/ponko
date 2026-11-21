@@ -740,6 +740,8 @@ pub struct Ui {
     /// The HUD roots ([`Ui::show_hud`]), drawn below every screen, bottom first.
     pub(super) huds: Vec<UiId>,
     pub(super) visible: Vec<UiId>,
+    /// The nodes that fade as one image ([`Ui::set_fade_as_group`]).
+    pub(super) fade_groups: Vec<UiId>,
     pub(super) events: std::collections::VecDeque<UiEvent>,
     /// The screens the player closed in this frame (each also sent a
     /// `ScreenPopped`), kept apart from `events`, which systems drain.
@@ -813,6 +815,7 @@ impl Default for Ui {
             screens: Vec::new(),
             huds: Vec::new(),
             visible: Vec::new(),
+            fade_groups: Vec::new(),
             events: std::collections::VecDeque::new(),
             closed: Vec::new(),
             ime: Default::default(),

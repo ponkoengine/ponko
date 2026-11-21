@@ -448,7 +448,10 @@ web](web-threads.md)). The folder then also holds `ponko-worker.js`, and
 files that make common hosts send the two headers threads need: `_headers`
 for Netlify and Cloudflare Pages, `vercel.json` for Vercel, and
 `.htaccess` for Apache. On another host, set the headers yourself. Without
-them the game runs on one thread.
+them the game runs on one thread. On a host that can't send headers at all,
+`--isolation-worker` adds `ponko-isolate.js`, a service worker that adds them
+at the cost of one reload on the first visit (see [Hosts that can't send the
+headers](web-threads.md#hosts-that-cant-send-the-headers)).
 
 ### Other platforms and limits
 

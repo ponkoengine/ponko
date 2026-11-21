@@ -1059,22 +1059,32 @@ static void presence_filters_allocate_nothing() {
     auto parallel_filtered = [&](ponko::ctx& ctx) { ctx.world().each_par<with<Hero>>([](const Label&) {}); };
     auto parallel_plain = [&](ponko::ctx& ctx) { ctx.world().each_par([](const Label&) {}); };
     auto every = [&](ponko::ctx& ctx) { every_rows = ctx.world().count<Label>(); };
-    auto run = ponko::game("filter allocations", 1, 1)
-        .sim_system(each_filtered, "each_filtered")
-        .sim_system(query_filtered, "query_filtered")
-        .sim_system(count_filtered, "count_filtered")
-        .sim_system(every, "every")
-        .sim_system(leaky, "leaky")
-        .sim_system(parallel_filtered, "parallel_filtered")
-        .sim_system(parallel_plain, "parallel_plain")
-        .profile_headless(5, 40, setup);
+    auto profile = [&] {
+        return ponko::game("filter allocations", 1, 1)
+            .sim_system(each_filtered, "each_filtered")
+            .sim_system(query_filtered, "query_filtered")
+            .sim_system(count_filtered, "count_filtered")
+            .sim_system(every, "every")
+            .sim_system(leaky, "leaky")
+            .sim_system(parallel_filtered, "parallel_filtered")
+            .sim_system(parallel_plain, "parallel_plain")
+            .profile_headless(5, 40, setup);
+    };
+    // A system's count is the whole process's while it runs (a parallel system's workers
+    // allocate on their own threads), so on a busy machine another thread's allocation can land
+    // in a sequential system's run now and then (seen once in about 150 runs under a load
+    // average of 100). A filter that allocates is never at zero, so one clean run of three
+    // is asked for, not three.
+    auto run = profile();
+    auto clean = [](const std::string& json) {
+        return system_allocations(json, "each_filtered") == 0.0 && system_allocations(json, "query_filtered") == 0.0 &&
+               system_allocations(json, "count_filtered") == 0.0 && system_allocations(json, "every") == 0.0;
+    };
+    for (int attempt = 1; attempt < 3 && !clean(run.report.json()); ++attempt) run = profile();
     CHECK(each_rows == 32 + 40 && query_rows == 32 && count_rows == 24 && every_rows == 64);
     const std::string json = run.report.json();
     CHECK(system_allocations(json, "leaky") >= 1.0);   // the report does see allocations
-    CHECK(system_allocations(json, "each_filtered") == 0.0);
-    CHECK(system_allocations(json, "query_filtered") == 0.0);
-    CHECK(system_allocations(json, "count_filtered") == 0.0);
-    CHECK(system_allocations(json, "every") == 0.0);
+    CHECK(clean(json));
     // On all cores the thread pool may allocate now and then; the filter must
     // not add an allocation to every call (one call per frame here).
     const double plain = system_allocations(json, "parallel_plain");
@@ -1700,6 +1710,55 @@ static void handle_lifecycle() {
         CHECK(ctx.unload_mesh("models/house.glb") && !ctx.is_live(house));
         CHECK(!ctx.unload_mesh("models/house.glb"));
         throws([&] { ctx.asset_count(static_cast<ponko::asset_class>(99)); });
+    });
+}
+
+// A terrain tile saved, then loaded: the rebuild makes its ground again
+// from the tile's saved corner; one that throws stops the game.
+static void terrain_rebuild() {
+    int calls = 0;
+    bool solid = false;
+    auto rebuild = [&calls](const ponko::loaded_world& world, ponko::entity tile) -> std::optional<ponko::collision_mesh_data> {
+        ++calls;
+        CHECK(!world.get<ponko::collider_focus>(tile));
+        if (world.get<ponko::transform3d>(tile)->position.x != -10) return std::nullopt;
+        return ponko::collision_mesh_data::heightfield(std::vector<float>(9, 2.0f), 20);
+    };
+    ponko::game("tiles", 1, 1)
+        .data_dir("ponko-cpp-terrain")
+        .physics3d({0, 0, 0})
+        .sim_system([&solid](ponko::ctx& ctx) {
+            if (ctx.sim_tick() != 1) return;
+            auto hit = ctx.cast_ray3d({0, 10, 0}, {0, -1, 0}, 20);
+            solid = hit && std::fabs(hit->point.y - 2) < 0.01f;
+        })
+        .run_headless(3, [&](ponko::ctx& ctx) {
+            auto mesh = ctx.add_collision_mesh(ponko::collision_mesh_data::heightfield(std::vector<float>(9, 2.0f), 20));
+            auto world = ctx.world();
+            world.spawn(ponko::transform3d_at({-10, 0, -10}), ponko::solid_terrain(mesh));
+            world.spawn(ponko::focus_colliders(1, 2));  // its type is known before the load
+            ctx.save_world("tiles");
+            ctx.set_terrain_rebuild(rebuild);
+            ctx.clear_terrain_rebuild();
+            ctx.load_world("tiles");
+            CHECK(calls == 0);
+            ctx.set_terrain_rebuild(rebuild);
+            ctx.load_world("tiles");
+            ctx.delete_world("tiles");
+        });
+    CHECK(calls == 1 && solid);
+    // An exception in the rebuild comes out of run_headless.
+    throws([] {
+        ponko::game("tiles", 1, 1).data_dir("ponko-cpp-terrain").physics3d({0, 0, 0}).run_headless(1, [](ponko::ctx& ctx) {
+            auto mesh = ctx.add_collision_mesh(ponko::collision_mesh_data::heightfield(std::vector<float>(9, 2.0f), 20));
+            ctx.world().spawn(ponko::transform3d_at({0, 0, 0}), ponko::solid_terrain(mesh));
+            ctx.save_world("tiles");
+            ctx.set_terrain_rebuild([](const ponko::loaded_world&, ponko::entity) -> std::optional<ponko::collision_mesh_data> {
+                throw std::runtime_error("no heights");
+            });
+            ctx.load_world("tiles");
+            ctx.delete_world("tiles");
+        });
     });
 }
 
@@ -2657,6 +2716,11 @@ static void retained_ui_presets() {
         auto side = ui.add_panel(bar, u::column(120));
         auto buy = ui.add_button(bar, "Buy", u::fixed(100, 30));
         auto map = ui.add_panel(root, u::anchored(0.75f, 0, 0.25f, 0.25f));
+        // Fading as one image: off by default, on once set.
+        CHECK(!ui.fades_as_group(root));
+        ui.set_fade_as_group(root);
+        CHECK(ui.fades_as_group(root) && !ui.fades_as_group(bar));
+        throws([&] { ui.set_fade_as_group(9999); });
         ui.push_screen(root);
         auto dialog = ui.add_panel(u::none, u::centered(200, 100).top(40));
         ui.push_modal(dialog);
@@ -3971,12 +4035,12 @@ static void brain_values_ripples_and_ui_area() {
 
     // A body falling in starts ripples with its switch on, none with it off.
     auto splashed = [](bool ripples) {
-        std::uint32_t most = 0;
+        std::uint64_t started = 0;
         ponko::entity lake = 0;
         ponko::game("c++ splash", 1, 1)
             .physics3d({0, -9.81f, 0})
             .water()
-            .sim_system([&](ponko::ctx& ctx) { most = std::max(most, ctx.water_waiting_contacts(lake)); }, "watch")
+            .sim_system([&](ponko::ctx& ctx) { started = ctx.water_started_contacts(lake); }, "watch")
             .run_headless(100, [&](ponko::ctx& ctx) {
                 lake = ctx.spawn_water(ponko::water_desc::lake({0, 0}, {20, 20}, 0));
                 auto box = ponko::box_collider({0.8f, 0.8f, 0.8f});
@@ -3987,8 +4051,9 @@ static void brain_values_ripples_and_ui_area() {
                 ctx.set_buoyancy(body, floats);
                 CHECK(ctx.water_waiting_contacts(lake) == 0);
                 throws([&] { ctx.water_waiting_contacts(body); });   // a body is no water
+                throws([&] { ctx.water_started_contacts(body); });
             });
-        return most;
+        return started;
     };
     CHECK(splashed(true) > 0);
     CHECK(splashed(false) == 0);   // a body with the switch off starts none
@@ -3996,7 +4061,7 @@ static void brain_values_ripples_and_ui_area() {
         const auto lake = ctx.spawn_water(ponko::water_desc::lake({0, 0}, {20, 20}, 0));
         ctx.water_touch(lake, {0, 0}, 0.5f, 0.1f);
         ctx.water_touch(lake, {500, 0}, 0.5f, 0.1f);   // outside the ripple area: dropped
-        CHECK(ctx.water_waiting_contacts(lake) == 1);
+        CHECK(ctx.water_waiting_contacts(lake) == 1 && ctx.water_started_contacts(lake) == 1);
     });
 
     // A panel's own safe area.
@@ -5345,12 +5410,19 @@ static void native_parity_round5() {
         }
         CHECK(after.count - before.count == 1 && after.bytes - before.bytes == sizeof(int));
         // Net bytes: PONKO_COUNT_CPP_ALLOCATIONS counts the frees too, so what is given back leaves them.
-        const std::int64_t held = ponko::net_alloc_bytes();
-        auto* block = new char[4096];
-        const std::int64_t holding = ponko::net_alloc_bytes();
-        delete[] block;
-        const std::int64_t released = ponko::net_alloc_bytes();
-        CHECK(holding - held >= 4096 && holding - released >= 4096);
+        // The figure is the whole process's: another thread (the engine's workers, still freeing
+        // what an earlier game left) may give memory back in between on a busy machine, so a few
+        // tries are allowed. A block that isn't counted, or a free that isn't, fails every one.
+        bool counted = false;
+        for (int attempt = 0; attempt < 5 && !counted; ++attempt) {
+            const std::int64_t held = ponko::net_alloc_bytes();
+            auto* block = new char[4096];
+            const std::int64_t holding = ponko::net_alloc_bytes();
+            delete[] block;
+            const std::int64_t released = ponko::net_alloc_bytes();
+            counted = holding - held >= 4096 && holding - released >= 4096;
+        }
+        CHECK(counted);
         ctx.set_profiling(false);
     });
 
@@ -5421,6 +5493,7 @@ int main() {
     inverse_kinematics();
     streaming();
     streamed_worlds();
+    terrain_rebuild();
     model_material_overrides();
     handle_lifecycle();
     asset_streaming();
