@@ -231,6 +231,7 @@ impl Time {
 
     /// The fixed step in seconds, full precision (`sim_time` is the tick
     /// times this).
+    #[cfg(feature = "3d")]
     pub(crate) fn sim_step(&self) -> f64 {
         self.sim.step
     }
