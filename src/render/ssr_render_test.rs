@@ -1716,7 +1716,10 @@ fn far_thin_things_are_reflected_about_as_wide_as_in_a_true_mirror() {
         widths.push((*d, wider, reflected.0 / truth.0));
     }
     for (d, wider, light) in widths {
-        assert!(light > 0.3, "the rail {d} away is reflected: x{light:.2} the light a true mirror shows");
+        assert!(
+            light > 0.3,
+            "the rail {d} away is reflected: x{light:.2} the light a true mirror shows"
+        );
         assert!(
             (0.75..WIDEST).contains(&wider),
             "the rail {d} away is reflected about as wide as in a true mirror: x{wider:.2}"
