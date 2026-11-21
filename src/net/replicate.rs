@@ -348,9 +348,11 @@ pub struct PeerStats {
     /// State packets never acknowledged within the window of 64.
     pub packets_lost: u64,
     /// Entity records sent (creates, full states and deltas). A change goes
-    /// once; it goes again only if the client hasn't acknowledged it within
-    /// the resend timeout (the measured round trip plus a margin), or if it
-    /// changed again meanwhile.
+    /// once; it goes again if it changed again meanwhile, at once if the
+    /// client acknowledged later packets but not its one, or if the client
+    /// hasn't acknowledged it within the resend timeout (the measured round
+    /// trip plus a margin, doubling with each try while nothing is
+    /// acknowledged, up to 4 s).
     pub records_sent: u64,
     /// Spawns sent.
     pub creates_sent: u64,
@@ -358,8 +360,7 @@ pub struct PeerStats {
     pub fulls_sent: u64,
     /// Deltas against an acknowledged baseline.
     pub deltas_sent: u64,
-    /// Despawns sent (repeated after the resend timeout until
-    /// acknowledged).
+    /// Despawns sent (repeated, as records are, until acknowledged).
     pub destroys_sent: u64,
     /// Changed entities left for a later tick by the budget, summed over
     /// ticks.

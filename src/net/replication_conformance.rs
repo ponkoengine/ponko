@@ -31,6 +31,9 @@
 //! | A server without clients keeps nothing pending, and its first client gets everything | `a_server_without_clients_keeps_nothing_pending` |
 //! | A change is sent once; while its acknowledgement is on the way it isn't sent again | `a_change_is_sent_once_while_its_acknowledgement_is_on_the_way` |
 //! | What isn't acknowledged in time (changes, despawns) is sent again after the resend timeout, not every tick, and arrives once the link is back | `unacknowledged_changes_are_resent_after_the_timeout_not_every_tick` |
+//! | A packet that acknowledgements of later packets skip is resent at once, a round trip after the next packet, not after the timeout | `a_packet_that_later_acknowledgements_skip_is_resent_at_once` |
+//! | On a lossy link lost changes arrive sooner for about the same bytes; on one that reorders, a learned tolerance keeps late packets from being resent | `lost_changes_arrive_sooner_on_a_lossy_link_for_the_same_bytes` |
+//! | While nothing is acknowledged each resend waits twice as long as the one before, up to 4 s; the first acknowledgement sends everything again at once | `resends_back_off_while_nothing_is_acknowledged` |
 //!
 //! Over every transport the message protocol lists:
 //!
