@@ -1089,7 +1089,9 @@ fn low_wall_grid(rig: &BatchRig, z: f32, top: f32, size: u32) -> crate::three::o
 }
 
 /// Characters standing behind a wall a little lower than a jump: kept by
-/// occlusion culling only while their own clip's bounds rise above it.
+/// occlusion culling only while their own clip's bounds rise above it (the
+/// jumping ones held at the top of the jump, so the box of their frame
+/// range does too).
 /// Returns the characters the camera's view keeps without and with the
 /// depth grid, or `None` without a GPU.
 fn kept_behind_a_low_wall(compute: bool) -> Option<(u32, u32)> {
@@ -1108,7 +1110,7 @@ fn kept_behind_a_low_wall(compute: bool) -> Option<(u32, u32)> {
         for x in -6..=6_i32 {
             let at = Mat4::from_translation(vec3(x as f32, 0.0, -20.0 - row as f32));
             let clip = u16::from(row == 0 && matches!(x, -5 | -2 | 1 | 4));
-            people.push(CrowdInstance::new(at).playing(clip, 0.0).with_speed(0.0));
+            people.push(CrowdInstance::new(at).playing(clip, 0.5).with_speed(0.0));
         }
     }
     let c = crowd(
@@ -1142,6 +1144,196 @@ fn occlusion_culling_keeps_only_characters_whose_clip_rises_above_the_wall() {
         assert_eq!(
             kept, 4,
             "compute {compute}: only the four jumping ones rise above the wall"
+        );
+    }
+}
+
+/// The camera 8 m in front of a row of figures, pitched up so its view's
+/// bottom edge passes 3.2 m above their feet where they stand: standing
+/// figures (2.15 tall) are wholly below it, and only the middle of a jump
+/// (1.5 m high) lifts a head into the picture.
+fn look_over_heads(rig: &mut BatchRig) {
+    rig.ctx.scene3d.camera.position = vec3(0.0, 1.0, 8.0);
+    let pitch = ((3.2_f32 - 1.0) / 8.0).atan() + 30f32.to_radians();
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 1.0 + 8.0 * pitch.tan(), 0.0));
+}
+
+/// Thirteen figures in a row, each held at its own point of [`jump`] (on
+/// baked frames 1, 3, ... 25 of 31), seen by [`look_over_heads`]: the
+/// figures drawn as skinned models posed there (the reference: a model is
+/// culled by its posed bounds), then by a crowd culled by the box of the
+/// frame range each shows, then by the crowd standing (all at frame 0).
+/// Returns the three images and the characters the crowd drew of 13, or
+/// `None` without a GPU.
+fn jumps_over_the_bottom_edge(compute: bool) -> Option<(Image, Image, Image, u32)> {
+    let mut rig = BatchRig::new(RigSetup {
+        compute,
+        ..Default::default()
+    })?;
+    rig.skins = true;
+    look_over_heads(&mut rig);
+    let (skeleton, data) = figure();
+    let mesh = skinned_mesh(&mut rig, &data, glow(Color::WHITE), &skeleton);
+    let jump = jump(&skeleton);
+    let at = |i: usize| (Mat4::from_translation(vec3(-2.4 + 0.4 * i as f32, 0.0, 0.0)), (2 * i + 1) as f32 / 30.0);
+    // The standing figure's head stays below the view's bottom edge.
+    let top = rig.ctx.scene3d.camera.view_proj().project_point3(vec3(0.0, 2.15, 0.15));
+    assert!(top.y < -1.0, "the scene's standing figures are out of view ({top})");
+    let models: Vec<_> = (0..13)
+        .map(|i| {
+            let (m, t) = at(i);
+            let mut posed = skeleton.clone();
+            posed.reset_pose();
+            jump.sample(t, &mut posed);
+            let (_, _, position) = m.to_scale_rotation_translation();
+            rig.ctx.world.spawn((Transform3D::at(position), Model::new(mesh), posed))
+        })
+        .collect();
+    let model_image = rig.image();
+    for model in models {
+        rig.ctx.world.despawn(model);
+    }
+    let animation = CrowdAnimation::bake(&skeleton, &[jump.into()], 30.0);
+    let people: Vec<_> = (0..13)
+        .map(|i| {
+            let (m, t) = at(i);
+            CrowdInstance::new(m).playing(0, t).with_speed(0.0)
+        })
+        .collect();
+    let c = crowd(
+        &mut rig,
+        &animation,
+        &[CrowdLevel::new(mesh, 0.0, f32::INFINITY)],
+        &people,
+        CrowdOptions::default(),
+    );
+    let crowd_image = rig.image();
+    let drawn = rig
+        .renderer
+        .crowd_drawn(&rig.gpu.device, &rig.gpu.queue, c.id, 0)
+        .expect("the crowd");
+    let standing: Vec<_> = people.iter().map(|p| p.playing(0, 0.0)).collect();
+    assert!(rig.ctx.gfx.update_crowd(c, &standing));
+    upload(&mut rig, c);
+    let standing_image = rig.image();
+    Some((model_image, crowd_image, standing_image, drawn))
+}
+
+#[test]
+fn a_crowd_culled_by_frame_ranges_still_draws_every_visible_character() {
+    for compute in [true, false] {
+        let Some((model, crowd, standing, drawn)) = jumps_over_the_bottom_edge(compute) else {
+            return;
+        };
+        let lit = |i: &Image| i.fraction(0..i.width, 0..i.height, |p| p[0] > 128);
+        assert!(lit(&model) > 0.005, "compute {compute}: heads come into view ({})", lit(&model));
+        let d = support::diff_within(&crowd, &model, SAME_POSE);
+        eprintln!("compute {compute}: {drawn} of 13 characters drawn; crowd against models {d}");
+        support::keep_image(&crowd);
+        assert!(
+            d.within(SAME_POSE),
+            "compute {compute}: frame range culling left out a visible character: {d}"
+        );
+        // Every pixel a model draws, the crowd draws: no visible character
+        // was culled (one pixel of an edge may round either way).
+        let missing = (0..model.height)
+            .flat_map(|y| (0..model.width).map(move |x| (x, y)))
+            .filter(|&(x, y)| model.pixel(x, y)[0] > 128 && crowd.pixel(x, y)[0] <= 128)
+            .count();
+        assert!(missing <= 2, "compute {compute}: {missing} pixels of the models missing from the crowd");
+        // Negative control: the crowd standing draws none of it.
+        assert_eq!(lit(&standing), 0.0, "compute {compute}: standing, every figure is out of view");
+        // Five heads clear the view's edge (frames 11 to 19); a box around
+        // the whole jump kept all 13, and the ranges of the jump's start
+        // and end lie below the edge.
+        assert!(
+            (5..13).contains(&drawn),
+            "compute {compute}: fewer than 13 drawn, every visible one among them: {drawn}"
+        );
+    }
+}
+
+/// Like [`kept_behind_a_low_wall`], closer: two rows of 13 figures at z -6
+/// and -7 behind a wall at z -5, 2.8 m high, every one jumping, each from
+/// its own point of the jump, moving on at `speed` for `frames` frames of
+/// a tenth of a second: the characters the camera's view keeps without
+/// and with the depth grid, summed over the frames.
+fn jumpers_behind_a_low_wall(compute: bool, speed: f32, frames: u32) -> Option<(u32, u32)> {
+    let mut rig = BatchRig::new(RigSetup {
+        compute,
+        ..Default::default()
+    })?;
+    rig.dt = 0.1;
+    // Closer than `kept_behind_a_low_wall`'s, so the depth grid's cells
+    // are an eighth of a metre high where the figures stand.
+    rig.ctx.scene3d.camera.position = vec3(0.0, 1.5, 8.0);
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 1.5, 0.0));
+    let (skeleton, data) = figure();
+    let mesh = skinned_mesh(&mut rig, &data, glow(Color::rgb(1.0, 0.0, 0.0)), &skeleton);
+    let animation = idle_and_jump(&skeleton);
+    let mut people = Vec::new();
+    for row in 0..2 {
+        for x in -6..=6_i32 {
+            let at = Mat4::from_translation(vec3(x as f32 * 0.8, 0.0, -6.0 - row as f32));
+            let time = (x + 6 + 13 * row) as f32 / 26.0;
+            people.push(CrowdInstance::new(at).playing(1, time).with_speed(speed));
+        }
+    }
+    let c = crowd(
+        &mut rig,
+        &animation,
+        &[CrowdLevel::new(mesh, 0.0, f32::INFINITY)],
+        &people,
+        CrowdOptions::default(),
+    );
+    let drawn = |rig: &BatchRig| {
+        rig.renderer
+            .crowd_drawn(&rig.gpu.device, &rig.gpu.queue, c.id, 0)
+            .expect("the crowd")
+    };
+    let (mut all, mut kept) = (0, 0);
+    for _ in 0..frames {
+        rig.ctx.scene3d.camera.occlusion_culling = false;
+        rig.grid = None;
+        rig.frame();
+        all += drawn(&rig);
+        rig.ctx.scene3d.camera.occlusion_culling = true;
+        rig.grid = Some(low_wall_grid(&rig, -5.0, 2.8, 120));
+        rig.frame();
+        kept += drawn(&rig);
+    }
+    Some((all, kept))
+}
+
+#[test]
+fn occlusion_culling_keeps_jumping_characters_only_while_their_frame_range_is_high() {
+    for compute in [true, false] {
+        // Held at 26 points of the jump: those near its top clear the wall.
+        let Some((all, kept)) = jumpers_behind_a_low_wall(compute, 0.0, 1) else {
+            return;
+        };
+        eprintln!("compute {compute}: 26 jumping behind the low wall, {all} in view, {kept} kept by occlusion culling");
+        assert_eq!(all, 26, "compute {compute}: every character is in the camera's view");
+        // A head clears the wall's line (2.9 and 3.0 m up where the rows
+        // stand) from 0.75 m into the jump: times 0.25 to 0.75, 13 of the 26
+        // (the depth grid's cells keep a few more). A box around the whole
+        // jump kept all 26. The CPU path's grid test reads coarser cells for
+        // a box over many of them (`OcclusionGrid::hides`): it may keep all.
+        let most = if compute { 25 } else { 26 };
+        assert!(
+            (13..=most).contains(&kept),
+            "compute {compute}: every character above the wall, at most {most}: {kept}"
+        );
+        // Moving on, each character is kept while its frame range is high
+        // (the clock reaches the cull pass): about as many over the frames.
+        let Some((all, moving)) = jumpers_behind_a_low_wall(compute, 1.0, 10) else {
+            return;
+        };
+        eprintln!("compute {compute}: jumping on for 10 frames, {all} in view, {moving} kept");
+        assert_eq!(all, 260, "compute {compute}");
+        assert!(
+            (130..=most * 10).contains(&moving),
+            "compute {compute}: kept while high over a whole jump: {moving}"
         );
     }
 }
@@ -1190,7 +1382,8 @@ fn kept_by_the_probe_cut(cpu: bool, frames: usize, all_jump: bool) -> Option<(u3
             let at =
                 Mat4::from_scale_rotation_translation(Vec3::splat(0.2), Quat::IDENTITY, vec3(x as f32, -0.5, z as f32));
             let clip = u16::from(all_jump || (x + z * 13).rem_euclid(5) == 0);
-            people.push(CrowdInstance::new(at).playing(clip, 0.0).with_speed(0.0));
+            // The jumping ones held at the top of the jump.
+            people.push(CrowdInstance::new(at).playing(clip, 0.5).with_speed(0.0));
         }
     }
     let c = rig.ctx.gfx.create_crowd(
