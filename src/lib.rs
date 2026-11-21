@@ -157,9 +157,12 @@ mod gamepad;
     any(test, all(target_arch = "wasm32", target_feature = "atomics"))
 ))]
 mod gamepad_web;
+// Rumble through the browser's `vibrationActuator`, shared by both web gamepad backends.
 pub mod gfx;
 pub mod handle;
 pub mod hierarchy;
+#[cfg(all(feature = "gamepad", any(test, target_arch = "wasm32")))]
+mod web_rumble;
 
 /// Raw handle ids, for the engine's own language bindings (`ponko_ffi`),
 /// whose C handles are plain ids. **Not part of the API**: hidden, unstable,

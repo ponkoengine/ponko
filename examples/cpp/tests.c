@@ -2902,11 +2902,16 @@ static void render_descriptors_setup(PonkoCtx* ctx, void* user) {
     PonkoTargetCamera monitor = {.camera = abi2, .target = screen};
     PonkoTargetCameraEx monitor_ex = {.struct_size = sizeof monitor_ex, .version = PONKO_TARGET_CAMERA_EX_VERSION};
     CHECK(ponko_target_camera_ex_from(&monitor, &monitor_ex) == PONKO_OK && monitor_ex.particles);
+    CHECK(monitor_ex.debug_draw == PONKO_DEBUG_DRAW_DEFAULT);
     monitor_ex.particles = false;
+    monitor_ex.debug_draw = PONKO_DEBUG_DRAW_ON;
     const PonkoTargetCameraEx* cameras[1] = {&monitor_ex};
     CHECK(ponko_ctx_set_target_cameras_ex(ctx, cameras, 1) == PONKO_OK);
     PonkoTargetCameraEx read = {.struct_size = sizeof read, .version = PONKO_TARGET_CAMERA_EX_VERSION};
     CHECK(ponko_ctx_target_camera_ex(ctx, 0, &read) == PONKO_OK && !read.particles && read.target_camera.target.id == screen.id);
+    CHECK(read.debug_draw == PONKO_DEBUG_DRAW_ON);
+    monitor_ex.debug_draw = 9;
+    CHECK(ponko_ctx_set_target_cameras_ex(ctx, cameras, 1) == PONKO_INVALID_ARGUMENT);
     CHECK(ponko_ctx_target_camera_ex(ctx, 1, &read) == PONKO_INVALID_ARGUMENT);
 }
 static void render_descriptors(void) {

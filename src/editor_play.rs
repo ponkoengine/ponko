@@ -77,6 +77,8 @@ impl Editor {
         for (edit, now) in values {
             match edit {
                 PlayEdit::Component(e, name) => {
+                    // A glTF node is another entity after Stop.
+                    let e = self.resolve(e);
                     if !ctx.world.is_alive(e) {
                         continue;
                     }

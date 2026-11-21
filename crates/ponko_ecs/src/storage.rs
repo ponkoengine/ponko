@@ -960,11 +960,12 @@ impl Archetype {
     /// isn't a change to the components it keeps. `dst_row` must be within
     /// `dst`'s capacity.
     ///
-    /// Sets the block summary of `dst_row` in `dst` to `now`, the current
-    /// tick's low 32 bits: as new as any stamp, so it covers the moved ones
-    /// (readers that haven't seen `now` look at that block's rows once).
-    /// The block of `row` here is kept by the swap-remove that follows
-    /// ([`swap_remove_stamps`](Self::swap_remove_stamps)).
+    /// The block summary of `dst_row` in `dst` becomes the newer of itself
+    /// and the moved `changed` stamp, as a swap-remove keeps it
+    /// ([`move_stamps`]): exact, so a still entity moved into a still block
+    /// leaves that block skipped by `Added`/`Changed` readers. `now` is the
+    /// current tick's low 32 bits. The block of `row` here is kept by the
+    /// swap-remove that follows ([`swap_remove_stamps`](Self::swap_remove_stamps)).
     #[inline]
     pub(crate) fn copy_stamps_to(&self, row: usize, dst: &Archetype, dst_row: usize, now: u32) {
         debug_assert!(row < self.len() && dst_row < dst.cap());
@@ -985,8 +986,10 @@ impl Archetype {
                 // The summary follows the two arrays of `dst.cap()` stamps.
                 unsafe {
                     dst_added.add(dst_row).write(added.add(row).read());
-                    dst_changed.add(dst_row).write(changed.add(row).read());
-                    dst_added.add(2 * dst.cap() + dst_row / CHANGE_BLOCK).write(now);
+                    let moved = changed.add(row).read();
+                    dst_changed.add(dst_row).write(moved);
+                    let block = dst_added.add(2 * dst.cap() + dst_row / CHANGE_BLOCK);
+                    block.write(newest(block.read(), moved, now));
                 }
             }
         }

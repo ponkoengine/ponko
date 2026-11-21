@@ -10,10 +10,9 @@
 
 use std::{collections::BTreeSet, ops::Range};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
-use super::{Companions, Doc, encode_glb};
+use super::{Companions, Doc, base64_encode, encode_glb};
 
 /// Offsets move by multiples of this, which keeps every view's alignment
 /// (glTF asks for at most 4; meshopt decoders like 16).
@@ -57,10 +56,8 @@ pub(super) fn write(
         let removed = drop_replaced_images(&mut doc.json, b, data, image_views);
         if removed > 0 && data_uri {
             doc.json["buffers"][b]["byteLength"] = json!(data.len());
-            doc.json["buffers"][b]["uri"] = json!(format!(
-                "data:application/octet-stream;base64,{}",
-                STANDARD.encode(&data)
-            ));
+            doc.json["buffers"][b]["uri"] =
+                json!(format!("data:application/octet-stream;base64,{}", base64_encode(data)));
         } else if removed > 0
             && let Some(path) = own_file
         {
@@ -105,7 +102,7 @@ pub(super) fn write(
             .ok_or("model buffers must be an array")?;
         buffers.push(json!({
             "byteLength": data.len(),
-            "uri": format!("data:application/octet-stream;base64,{}", STANDARD.encode(&data)),
+            "uri": format!("data:application/octet-stream;base64,{}", base64_encode(&data)),
         }));
         Vec::new()
     };

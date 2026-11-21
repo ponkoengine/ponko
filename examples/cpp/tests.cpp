@@ -4476,9 +4476,12 @@ static void versioned_render_descriptors() {
         auto screen = ctx.create_render_target(64, 64);
         auto monitor = ponko::target_camera_ex_of(ponko::target_camera_of(ctx.camera3d(), screen));
         CHECK(monitor.particles);
+        CHECK(monitor.debug_draw == static_cast<std::uint32_t>(ponko::camera_debug_draw::as_default));
         monitor.particles = false;
+        monitor.debug_draw = static_cast<std::uint32_t>(ponko::camera_debug_draw::on);
         ctx.set_target_cameras_ex({monitor});
         CHECK(!ctx.target_camera_ex(0).particles && ctx.target_cameras().size() == 1);
+        CHECK(ctx.target_camera_ex(0).debug_draw == static_cast<std::uint32_t>(ponko::camera_debug_draw::on));
         throws_kind([&] { (void)ctx.target_camera_ex(1); }, PONKO_ERROR_INVALID);
         ctx.set_target_cameras_ex({});
         CHECK(ctx.target_cameras().empty());

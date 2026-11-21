@@ -1218,11 +1218,22 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// (split_toning_shadows, split_toning_highlights, split_toning_balance), depth of field (dof_enabled,
 /// dof_focus_distance, dof_focus_range, dof_blur) and the sample count (msaa).
 using post_ex = PonkoPostEx;
-/// The 3D camera that can grow (PonkoCamera3DEx): `camera` is ponko::camera3d, plus occlusion_culling and
-/// particles (whether it draws particles, trails and lines).
+/// Whether a camera draws `ctx.debug`'s 3D lines and labels (the `debug_draw` of camera3d_ex and
+/// target_camera_ex, Rust `Camera::debug_draw`); set it with `static_cast<std::uint32_t>(...)`.
+enum class camera_debug_draw : std::uint32_t {
+    /// As before the flag: the window's camera draws them, a target camera while it draws particles.
+    as_default = PONKO_DEBUG_DRAW_DEFAULT,
+    /// Always (on the default layer).
+    on = PONKO_DEBUG_DRAW_ON,
+    /// Never.
+    off = PONKO_DEBUG_DRAW_OFF,
+};
+/// The 3D camera that can grow (PonkoCamera3DEx): `camera` is ponko::camera3d, plus occlusion_culling,
+/// particles (whether it draws particles, trails and lines) and debug_draw (a ponko::camera_debug_draw).
 using camera3d_ex = PonkoCamera3DEx;
 /// A target camera that can grow (PonkoTargetCameraEx): `target_camera` is ponko::target_camera, plus
-/// particles.
+/// particles and debug_draw (a ponko::camera_debug_draw: whether it draws `ctx.debug`'s 3D drawing, whatever
+/// particles says).
 using target_camera_ex = PonkoTargetCameraEx;
 
 /// A material_desc_ex holding `d` (no stencil).
@@ -1348,7 +1359,8 @@ inline post_ex blend_post_volumes(const post_ex& base, const std::vector<post_vo
     detail::check(ponko_post_blend_volumes(&base, raw.data(), raw.size(), at, &out));
     return out;
 }
-/// A camera3d_ex holding `c`, with no occlusion culling and particles drawn (set `particles` to change that).
+/// A camera3d_ex holding `c`, with no occlusion culling, particles drawn and camera_debug_draw::as_default (set
+/// `particles` and `debug_draw` to change that).
 inline camera3d_ex camera3d_ex_of(const camera3d& c) {
     camera3d_ex x{};
     x.struct_size = sizeof(camera3d_ex);
@@ -1356,7 +1368,8 @@ inline camera3d_ex camera3d_ex_of(const camera3d& c) {
     detail::check(ponko_camera3d_ex_from(&c, &x));
     return x;
 }
-/// A target_camera_ex holding `t`, with particles drawn (set `particles` to change that).
+/// A target_camera_ex holding `t`, with particles drawn and camera_debug_draw::as_default (set `particles` and
+/// `debug_draw` to change that).
 inline target_camera_ex target_camera_ex_of(const target_camera& t) {
     target_camera_ex x{};
     x.struct_size = sizeof(target_camera_ex);
@@ -7792,7 +7805,7 @@ public:
         detail::check(ponko_ctx_set_target_cameras(raw_, list.data(), list.size()));
     }
     /// The target camera `index` (counting from 0, up to target_cameras().size()) in its versioned form
-    /// (target_camera_ex), with whether it draws particles. Throws for an index past the end.
+    /// (target_camera_ex), with whether it draws particles and debug drawing. Throws for an index past the end.
     ponko::target_camera_ex target_camera_ex(std::size_t index) const {
         ponko::target_camera_ex t{};
         t.struct_size = sizeof(ponko::target_camera_ex);
@@ -7801,7 +7814,7 @@ public:
         return t;
     }
     /// Replaces the target cameras drawn each frame from their versioned forms (empty: none): as
-    /// set_target_cameras, each with its `particles`.
+    /// set_target_cameras, each with its `particles` and `debug_draw`.
     void set_target_cameras_ex(const std::vector<ponko::target_camera_ex>& list) {
         std::vector<const PonkoTargetCameraEx*> pointers;
         pointers.reserve(list.size());

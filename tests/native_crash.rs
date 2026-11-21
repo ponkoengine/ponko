@@ -7,10 +7,25 @@
 //! `_exit(42)`. The engine's handler writes the report and then hands the
 //! crash on to them, as it does to any handler that was there before, so the
 //! child exits with code 42 instead of dying of the signal: no core file, no
-//! system crash report and no crash dialog for it. The test that lets a child
-//! really die of the signal runs on Linux, and elsewhere only with
-//! `PONKO_CRASH_TESTS_DIE=1` (macOS and Windows keep a system crash report of
-//! it, and Windows may show its error dialog).
+//! system crash report and no crash dialog for it.
+//!
+//! The test that lets a child really die of the signal runs on Linux only,
+//! and on macOS and Windows only with `PONKO_CRASH_TESTS_DIE=1`: there the
+//! system keeps its own crash report of every child that dies (a `.ips` file
+//! on macOS, a Windows Error Reporting entry), one per run on every
+//! contributor's machine, for little more than Linux shows (on macOS the
+//! hand-on to the default is the same Unix code; on Windows it is the
+//! system's, the filter only returns). The guide's "How it is tested" has
+//! the decision. When turned on, the Windows child sets its error mode so no
+//! dialog waits for a click.
+//!
+//! The report's backtrace: frame 0 is the instruction that crashed, so it is
+//! named after the function that crashed on every system. Deeper frames need
+//! frame pointers: macOS keeps them always, so there the chain must reach
+//! the test's own function; elsewhere that is checked only with
+//! `PONKO_CRASH_TESTS_FRAME_POINTERS=1`, for a run built with
+//! `RUSTFLAGS="-C force-frame-pointers=yes"` (the workspace's flags stay as
+//! they are). Windows walks with the system's unwinder and checks it always.
 //!
 //! No window opens: the games run headless.
 #![cfg(any(unix, windows))]
@@ -54,6 +69,8 @@ fn child_that_crashes_when_asked() {
     let dir = PathBuf::from(std::env::var_os(DIR).unwrap_or_default());
     if std::env::var(HANDLED).as_deref() == Ok("1") {
         child::install_exiting_handlers();
+    } else {
+        child::no_crash_dialog();
     }
     Game::new("Space Crab", 1, 1)
         .data_dir(&dir)
@@ -126,6 +143,62 @@ fn the_report(dir: &Path, output: &Output) -> (CrashReport, String) {
     (seen[0].clone(), text)
 }
 
+/// The chain of frames reaches the test's own function where the build
+/// keeps frame pointers (or Windows unwinds with its tables).
+fn walks_the_whole_chain() -> bool {
+    cfg!(any(target_vendor = "apple", windows))
+        || std::env::var("PONKO_CRASH_TESTS_FRAME_POINTERS").as_deref() == Ok("1")
+}
+
+/// A backtrace's frames, each with its names, files and module.
+fn frames(backtrace: &str) -> Vec<String> {
+    let mut frames: Vec<String> = Vec::new();
+    for line in backtrace.lines() {
+        let numbered = line
+            .trim_start()
+            .split_once(": ")
+            .is_some_and(|(n, _)| n.parse::<usize>().is_ok());
+        match frames.last_mut() {
+            Some(frame) if !numbered => {
+                frame.push('\n');
+                frame.push_str(line);
+            }
+            _ => frames.push(line.to_string()),
+        }
+    }
+    frames
+}
+
+/// Some frame of `backtrace` is in `function`, in this test's file. (Names
+/// from line-table debug info are short: `segfault`, not its whole path.)
+fn has_frame(backtrace: &str, function: &str) -> bool {
+    frames(backtrace)
+        .iter()
+        .any(|f| f.contains(function) && f.contains("native_crash.rs:"))
+}
+
+/// The backtrace names the function that crashed in frame 0, in the test's
+/// binary, and the caller chain where the build keeps it.
+fn assert_backtrace_of_the_segfault(report: &CrashReport) {
+    let backtrace = report.backtrace();
+    let frames = frames(backtrace);
+    let frame_0 = frames.first().map_or("", String::as_str);
+    assert!(
+        frame_0.starts_with("   0: ") && has_frame(frame_0, "segfault"),
+        "frame 0 is the crashing function, named at the next start:\n{backtrace}"
+    );
+    assert!(
+        frame_0.contains("in <game>/native_crash"),
+        "with its module and offset:\n{backtrace}"
+    );
+    if walks_the_whole_chain() {
+        assert!(
+            has_frame(backtrace, "child_that_crashes_when_asked"),
+            "the walk reaches the test's function:\n{backtrace}"
+        );
+    }
+}
+
 fn assert_holds_the_crash(text: &str, signals: &[&str]) {
     for line in [
         "Space Crab crash report",
@@ -134,7 +207,7 @@ fn assert_holds_the_crash(text: &str, signals: &[&str]) {
         &format!("engine version: {}", env!("CARGO_PKG_VERSION")),
         &format!("os: {}", std::env::consts::OS),
         "gpu: not opened",
-        "backtrace:\n  not kept for a crash that is not a panic",
+        "backtrace:\n     0: ",
         "  the crab's last words",
         "  a C library's last words",
     ] {
@@ -172,6 +245,7 @@ fn a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start() {
         "{message}"
     );
     assert!(report.uptime_secs() >= 0.1, "{}", report.uptime_secs());
+    assert_backtrace_of_the_segfault(&report);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -190,6 +264,11 @@ fn an_abort_in_native_code_leaves_a_report_for_the_next_start() {
     assert_holds_the_crash(&text, &["SIGABRT"]);
     assert_eq!(report.signal(), Some("SIGABRT"));
     assert!(report.message().starts_with("SIGABRT: abort"), "{}", report.message());
+    // Frame 0 is inside the C library's abort (named from its exported
+    // symbols); the chain up to the caller needs the library's frame records.
+    if walks_the_whole_chain() {
+        assert!(has_frame(report.backtrace(), "abort"), "{}", report.backtrace());
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -214,8 +293,9 @@ fn a_crash_still_ends_the_process_as_a_crash_after_the_report() {
             output.status
         );
     }
-    let (_report, text) = the_report(&dir, &output);
+    let (report, text) = the_report(&dir, &output);
     assert!(text.contains("kind: native"), "{text}");
+    assert_backtrace_of_the_segfault(&report);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -281,6 +361,7 @@ mod child {
         unsafe { libc::write(1, bytes.as_ptr().cast(), bytes.len() as _) };
     }
 
+    #[inline(never)]
     pub fn abort() {
         // SAFETY: C's abort; it never returns.
         unsafe { libc::abort() }
@@ -306,8 +387,10 @@ mod child {
         }
     }
 
-    /// A real memory fault: a write to a page with no access.
+    /// A real memory fault: a write to a page with no access, by this
+    /// function's own instruction (frame 0 of the report).
     #[cfg(unix)]
+    #[inline(never)]
     pub fn segfault() {
         // SAFETY: maps one fresh page with no access, then writes to it,
         // which faults; the handlers never return here.
@@ -321,10 +404,13 @@ mod child {
                 0,
             );
             assert_ne!(page, libc::MAP_FAILED);
-            std::ptr::write_volatile(page.cast::<u8>().add(16), 1);
+            *std::hint::black_box(page.cast::<u8>().wrapping_add(16)) = 1;
         }
         unreachable!("the write faulted");
     }
+
+    #[cfg(unix)]
+    pub fn no_crash_dialog() {}
 
     #[cfg(windows)]
     mod win {
@@ -336,7 +422,10 @@ mod child {
                 filter: Option<unsafe extern "system" fn(*const c_void) -> i32>,
             ) -> *const c_void;
             pub fn VirtualAlloc(address: *mut c_void, size: usize, kind: u32, protect: u32) -> *mut c_void;
+            pub fn SetErrorMode(mode: u32) -> u32;
         }
+        /// `SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX`.
+        pub const NO_DIALOGS: u32 = 0x0001 | 0x0002;
         pub const MEM_COMMIT_RESERVE: u32 = 0x1000 | 0x2000;
         pub const PAGE_NOACCESS: u32 = 0x01;
     }
@@ -362,13 +451,21 @@ mod child {
         }
     }
 
+    /// A child that really dies shows no Windows Error Reporting dialog.
     #[cfg(windows)]
+    pub fn no_crash_dialog() {
+        // SAFETY: sets this process's error mode.
+        unsafe { win::SetErrorMode(win::NO_DIALOGS) };
+    }
+
+    #[cfg(windows)]
+    #[inline(never)]
     pub fn segfault() {
         // SAFETY: allocates one page with no access, then writes to it.
         unsafe {
             let page = win::VirtualAlloc(std::ptr::null_mut(), 4096, win::MEM_COMMIT_RESERVE, win::PAGE_NOACCESS);
             assert!(!page.is_null());
-            std::ptr::write_volatile(page.cast::<u8>().add(16), 1);
+            *std::hint::black_box(page.cast::<u8>().wrapping_add(16)) = 1;
         }
         unreachable!("the write faulted");
     }

@@ -20,7 +20,12 @@
 //! view_model_cutout`). Held items whose material has a stencil state draw
 //! with it (`stencil.rs`), after the others and in their stencil's order,
 //! as solid stencil materials do in the world: one that marks the stencil
-//! draws before one that tests it. Before the held items, one full-screen triangle
+//! draws before one that tests it. See-through ones too, among each other:
+//! they are drawn after the world's see-through surfaces, which, when the
+//! transparent pass is split off, read the depth and so leave the stencil
+//! read-only; held see-through items with a stencil then get a small pass
+//! of their own right after it, on the same color and depth, where they
+//! write it (`record_view_model_see_through`). Before the held items, one full-screen triangle
 //! pushes any world surface inside that sliver (a wall nearer than a
 //! hundredth of the near plane's distance beyond it) back to the sliver's
 //! far edge, so nothing in the world ever cuts into them.
@@ -56,6 +61,9 @@ pub(super) struct ViewModelPass {
     /// they draw: by stencil rank, then as `runs` holds them (empty
     /// otherwise: `runs` is drawn as it is).
     parts: Vec<(Run, usize)>,
+    /// Whether a see-through part of theirs has a stencil state: with the
+    /// transparent pass split off, they then draw in a pass of their own.
+    see_through_stencil: bool,
     /// Their motion's runs, in `motion`: every held item, with temporal
     /// antialiasing on (empty otherwise, and on a frame without a past).
     motion_runs: Vec<Run>,
@@ -104,6 +112,7 @@ impl Renderer3D {
             ViewModelPass {
                 runs: Vec::new(),
                 parts: Vec::new(),
+                see_through_stencil: false,
                 motion_runs: Vec::new(),
                 motion: None,
                 previous: None,
@@ -126,8 +135,10 @@ impl Renderer3D {
         );
         let mut parts = std::mem::take(&mut pass.parts);
         self.order_view_model_parts(&mut parts);
+        let see_through_stencil = self.view_model_see_through_stencil();
         let Some(pass) = self.view_model.as_mut() else { return };
         pass.parts = parts;
+        pass.see_through_stencil = see_through_stencil;
         let (format, samples) = (self.shaders.depth_format(), self.samples);
         if !pass.push_back.as_ref().is_some_and(|p| (p.1, p.2) == (format, samples)) {
             pass.push_back = Some((push_back_pipeline(device, format, samples), format, samples));
@@ -160,6 +171,78 @@ impl Renderer3D {
             let own = self.resources.meshes[self.base(mesh) as usize].parts[part].1;
             self.stencil.rank(self.part_material(mesh, part, own))
         });
+    }
+
+    /// Whether a see-through part of a held item has a stencil state.
+    fn view_model_see_through_stencil(&self) -> bool {
+        if !self.stencil.any() {
+            return false;
+        }
+        self.view_model_runs().iter().any(|&(mesh, _, _)| {
+            let mesh = mesh & !FADED;
+            self.resources.meshes[self.base(mesh) as usize]
+                .parts
+                .iter()
+                .enumerate()
+                .any(|(part, &(_, own))| {
+                    let material = self.part_material(mesh, part, own);
+                    self.resources.material(material).transparent && self.stencil.has(material)
+                })
+        })
+    }
+
+    /// Whether the held items' see-through surfaces draw in a pass of
+    /// their own (`record_view_model_see_through`): one of them has a
+    /// stencil state, and the transparent pass, split off, can't write it.
+    pub(super) fn view_model_see_through_pass(&self) -> bool {
+        !self.extra
+            && self.splits_transparent()
+            && self
+                .view_model
+                .as_ref()
+                .is_some_and(|p| p.see_through_stencil && !p.runs.is_empty())
+    }
+
+    /// Records the held items' see-through surfaces over the frame, right
+    /// after the split-off transparent pass, with the stencil written (see
+    /// the module's notes). Nothing samples the depth here: held items
+    /// read no scene.
+    pub(super) fn record_view_model_see_through(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        targets: &Targets,
+        time: &PassTimer<'_, '_>,
+    ) {
+        passes::mark("view model see-through");
+        let (color, resolve) = self.frame_color(targets);
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("3d view model see-through"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: color,
+                depth_slice: None,
+                resolve_target: resolve,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: if self.samples <= 1 {
+                        wgpu::StoreOp::Store
+                    } else {
+                        wgpu::StoreOp::Discard
+                    },
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &targets.depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: self.stencil_ops(Some(false)),
+            }),
+            timestamp_writes: time("view model see-through"),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.draw_view_model(&mut pass, targets.size, false, true);
     }
 
     /// Step 6, for the view model: its held items' motion instances (all
@@ -352,7 +435,7 @@ impl Renderer3D {
             draw(pass, record::Kind::ViewModel);
         }
         if blended {
-            draw(pass, record::Kind::Transparent);
+            draw(pass, record::Kind::ViewModelBlended);
         }
     }
 
@@ -391,6 +474,18 @@ impl Renderer3D {
     #[cfg(test)]
     pub(crate) fn view_model_jittered(&self) -> Option<Mat4> {
         self.view_model.as_ref().map(|p| p.jittered)
+    }
+
+    /// Whether the transparent pass is split off the opaque one this frame.
+    #[cfg(test)]
+    pub(crate) fn transparent_split(&self) -> bool {
+        self.splits_transparent()
+    }
+
+    /// Whether the held see-through items draw in a pass of their own.
+    #[cfg(test)]
+    pub(crate) fn held_see_through_pass(&self) -> bool {
+        self.view_model_see_through_pass()
     }
 
     /// Whether the last recorded frame drew the held items' motion.

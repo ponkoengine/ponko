@@ -1,0 +1,17 @@
+{
+  "name": "crowd_crossfade",
+  "scene": "three skinned crowd figures 7.5 m, 9 m and 10.5 m from the camera; a red near level to 10 m crossfading over its last 2 m into a green far level; 192x128",
+  "width": 192,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 24,
+    "outliers": 0.005,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "0d242f7085e4a8eb",
+  "reason": "New: crowd levels crossfading between a near and a far mesh"
+}

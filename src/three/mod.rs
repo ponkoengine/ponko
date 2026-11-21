@@ -148,6 +148,8 @@ pub use gltf_ext::{ModelCamera, ModelLight, ModelLightKind, ModelProjection};
 pub use gltf_props::{NodeBody, NodeCollider, NodeProperties, gltf_properties_schema};
 #[cfg(all(test, feature = "editor"))]
 pub(crate) use gltf_scene::cube_gltf;
+#[cfg(feature = "editor")]
+pub(crate) use gltf_scene::{GltfEntities, GltfOverride, GltfOverrideKind};
 pub use gltf_scene::{GltfNode, GltfOptions, GltfRoot, GltfScene, GltfSceneNode, SpawnPoint};
 pub use mesh::{MeshData, MorphFrame, MorphTarget};
 pub use post::{AmbientOcclusion, AntiAliasing, DepthOfField, Post, PostVolume, SplitToning, Tonemap};
@@ -824,6 +826,28 @@ pub struct Camera3D {
     /// scene without them (a security monitor, a map view): see
     /// [`TargetCamera::with_particles`](crate::render::TargetCamera::with_particles).
     pub particles: bool,
+    /// Whether it draws `ctx.debug`'s 3D lines and labels: `Some(true)`
+    /// always, `Some(false)` never. `None`, the default, keeps what cameras
+    /// drew before this flag: a camera in the window draws them, a
+    /// [`TargetCamera`](crate::render::TargetCamera) only while it draws
+    /// [`particles`](Self::particles). They are on the default layer, so a
+    /// camera whose [`layers`](Self::layers) leave it out never draws them.
+    /// See [`TargetCamera::with_debug_draw`](crate::render::TargetCamera::with_debug_draw).
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("Debug map", 640, 360).run_headless(0, |ctx| {
+    ///     // A top-down map that shows the debug drawing without the smoke.
+    ///     let map = ctx.gfx.create_render_target(256, 256);
+    ///     let mut camera = ctx.scene3d.camera;
+    ///     camera.particles = false;
+    ///     camera.debug_draw = Some(true);
+    ///     ctx.scene3d.passes.target_cameras.push(ponko::render::TargetCamera::new(camera, map));
+    ///     // The window's camera keeps its view clean.
+    ///     ctx.scene3d.camera.debug_draw = Some(false);
+    /// });
+    /// ```
+    pub debug_draw: Option<bool>,
     /// The part of the window it draws into: the whole window by default.
     /// Split screen, minimaps and picture in picture give each camera its
     /// own (see `d3::View`); its aspect ratio, [`screen_ray`](Self::screen_ray),
@@ -851,10 +875,18 @@ impl Camera3D {
             far: 1000.0,
             occlusion_culling: false,
             particles: true,
+            debug_draw: None,
             rect: crate::camera::Viewport::FULL,
             layers: crate::camera::RenderLayers::ALL,
             window: viewport,
         }
+    }
+
+    /// Whether it draws `ctx.debug`'s 3D lines and labels (see
+    /// [`debug_draw`](Self::debug_draw)); `target`: it is a target camera.
+    pub(crate) fn draws_debug(&self, target: bool) -> bool {
+        self.layers.intersects(crate::camera::RenderLayers::DEFAULT)
+            && self.debug_draw.unwrap_or(!target || self.particles)
     }
 
     pub(crate) fn set_viewport(&mut self, viewport: Vec2) {
