@@ -73,14 +73,18 @@ the template. The runner records both in `report.json`.
 
 ## Runtime failures
 
-`runtime-failures.mjs` stops the 2D fixture after it started, three ways,
+`runtime-failures.mjs` stops the 2D fixture after it started, four ways,
 and checks that each reaches the page (the guide's
 [Failures while playing](../../book/src/web.md#failures-while-playing)):
 
 ```sh
 web/build.sh web_smoke
-node web/smoke/runtime-failures.mjs                       # all three cases
+node web/smoke/runtime-failures.mjs                       # all four cases
 node web/smoke/runtime-failures.mjs --case context-lost   # one of them
+# A lost WebGPU device where a WebGPU canvas presents (Chromium's new
+# headless mode; the headless shell loses the device by itself):
+node web/smoke/runtime-failures.mjs --case device-lost --chromium-mode new \
+  --browser-arg --use-webgpu-adapter=swiftshader --allow-unsupported
 ```
 
 - `runtime-panic`: the fixture panics in a frame after 20 ticks. The page
@@ -92,6 +96,17 @@ node web/smoke/runtime-failures.mjs --case context-lost   # one of them
   callback's `text` holds it.
 - `context-lost`: on WebGL2, the runner loses the canvas's context while
   the game runs: kind `ContextLost` and its message on the page.
+- `device-lost`: on WebGPU, the runner destroys the game's `GPUDevice`
+  while the game runs (no browser lets a page crash its GPU process; a
+  destroyed device is lost the same way to the game): kind `DeviceLost`,
+  and the engine's message with the reason the page's own `device.lost`
+  got (“Device was destroyed”). Where the game opened no WebGPU device (the
+  browser has none, so it runs on WebGL2) the case is unsupported, not
+  failed; a run where every case was unsupported exits 2, or 0 with
+  `--allow-unsupported`. Chromium's headless shell can't present a WebGPU
+  canvas and loses the device by itself before the runner does; the run
+  says which (“device lost by the browser” or “by the runner”). The other
+  cases hide WebGPU, so that loss can't stop the game before they do.
 
 The callback is subscribed late, after the failure, so the run also checks
 that a late subscriber gets it at once. `runtime-failures.test.mjs` checks
