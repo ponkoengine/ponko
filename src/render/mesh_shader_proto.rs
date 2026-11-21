@@ -709,7 +709,9 @@ pub(super) struct Rig {
     /// Per level: meshlet count and first meshlet.
     level_meshlets: [[u32; 2]; LEVELS],
     meshlet_count: u32,
-    queries: Option<(wgpu::QuerySet, wgpu::Buffer, wgpu::Buffer)>,
+    /// The set, its resolve and read buffers, and the right to hold the
+    /// set (Metal allows 32 per process: see `query_sets.rs`).
+    queries: Option<(wgpu::QuerySet, wgpu::Buffer, wgpu::Buffer, super::query_sets::Lease)>,
     memory: Memory,
 }
 
@@ -991,7 +993,12 @@ impl Rig {
                 view_formats: &[],
             })
             .create_view(&Default::default());
-        let queries = device.features().contains(wgpu::Features::TIMESTAMP_QUERY).then(|| {
+        let lease = device
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
+            .then(|| super::query_sets::lease(device, "prototype timer"))
+            .flatten();
+        let queries = lease.map(|lease| {
             (
                 device.create_query_set(&wgpu::QuerySetDescriptor {
                     label: Some("prototype timestamps"),
@@ -1010,6 +1017,7 @@ impl Rig {
                     16,
                     wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 ),
+                lease,
             )
         });
         let memory = Memory {
@@ -1512,7 +1520,7 @@ impl Rig {
                 }
             }
         }
-        if let Some((set, resolve, read)) = &self.queries {
+        if let Some((set, resolve, read, _)) = &self.queries {
             // A trailing blit: Metal writes an encoder's end sample when the
             // next one starts, so the resolve sees it.
             encoder.clear_buffer(&self.args_read, 0, Some(16));
@@ -1527,7 +1535,7 @@ impl Rig {
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let gpu_ms = started.elapsed().as_secs_f64() * 1e3 / frames.len() as f64;
         let mut cull_ms = None;
-        if let (Some((_, _, read)), true) = (&self.queries, path.culls_on_compute()) {
+        if let (Some((_, _, read, _)), true) = (&self.queries, path.culls_on_compute()) {
             let ticks = read_u64(&device, read, 2);
             let period = f64::from(queue.get_timestamp_period());
             cull_ms = Some(ticks[1].saturating_sub(ticks[0]) as f64 * period / 1e6);

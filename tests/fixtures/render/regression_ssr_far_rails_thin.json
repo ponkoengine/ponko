@@ -1,0 +1,17 @@
+{
+  "name": "regression_ssr_far_rails_thin",
+  "scene": "Four thin red glowing rails (emissive 4, 0, 0; 1 up, 0.15 d long, 0.06 + 0.005 d thick) over a white mirror floor (metallic 1, roughness 0), d = 8, 14, 22 and 32 away; nothing lit, exposure -5, screen-space reflections at 1.0 reaching 60 with thin objects on (the coarse depth), no TAA, fourth frame; camera at (0, 1.2, 4) looking at (0, 0.6, -20); 1920x1080 cropped to 144x192 from (496, 512): the nearest rail and its whole reflection, 4x multisampling, no tonemapping.",
+  "width": 144,
+  "height": 192,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 16,
+    "outliers": 0.015,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "1d4d74aff545541d",
+  "reason": "new: thin objects keep the nearest rail's reflection whole"
+}

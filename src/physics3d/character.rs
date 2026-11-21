@@ -351,11 +351,16 @@ pub(super) fn move_characters(physics: &mut Physics3D, world: &mut World, dt: f3
         let hits = &mut hits[..characters.len()];
         if characters.len() >= PARALLEL_FROM {
             use rayon::prelude::*;
-            characters
-                .par_iter()
-                .zip(hits.par_iter_mut())
-                .map(|((e, c), hits)| plan(physics, *e, c, dt, hits))
-                .collect_into_vec(plans);
+            // On the frame pool (on the web, its workers, not the page's
+            // thread), as parallel queries run.
+            crate::frame_pool::run(|| {
+                crate::profile_scope!("physics3d/shared_characters");
+                characters
+                    .par_iter()
+                    .zip(hits.par_iter_mut())
+                    .map(|((e, c), hits)| plan(physics, *e, c, dt, hits))
+                    .collect_into_vec(plans);
+            });
         } else {
             plans.extend(
                 characters

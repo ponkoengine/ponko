@@ -33,6 +33,7 @@ use super::{
 /// | `post.ambient_occlusion` (slices, steps) | off | off | 2, 4 | 4, 8 |
 /// | `post.ao_half_resolution` / `ao_temporal` | off | off | on | on |
 /// | `post.ssr` | 0 | 0 | 1 | 1 |
+/// | `post.ssr_thin_objects` | off | off | off | on |
 /// | `lighting.gi.enabled` | off | off | off | on |
 /// | `post.anti_aliasing` | none | FXAA | SMAA | SMAA |
 ///
@@ -68,7 +69,8 @@ pub enum GraphicsQuality {
     /// Four 4096² cascades (256 MB of shadow maps) reaching 120 units, all
     /// redrawn every frame, with contact-hardening edges, 24 views of up to 2048² for point and spot
     /// lights in an 8192² atlas (another 256 MB), finer AO (4 slices, 8
-    /// steps), screen-space reflections, global illumination, SMAA.
+    /// steps), screen-space reflections that keep thin things whole without
+    /// TAA ([`Post::ssr_thin_objects`]), global illumination, SMAA.
     Ultra,
 }
 
@@ -101,6 +103,7 @@ impl GraphicsQuality {
                 ao_slices: 2,
                 ao_steps: 4,
                 ssr: 0.0,
+                ssr_thin_objects: false,
                 gi: false,
                 anti_aliasing: AntiAliasing::None,
             },
@@ -122,6 +125,7 @@ impl GraphicsQuality {
                 ao_slices: 2,
                 ao_steps: 4,
                 ssr: 0.0,
+                ssr_thin_objects: false,
                 gi: false,
                 anti_aliasing: AntiAliasing::Fxaa,
             },
@@ -143,6 +147,7 @@ impl GraphicsQuality {
                 ao_slices: 2,
                 ao_steps: 4,
                 ssr: 1.0,
+                ssr_thin_objects: false,
                 gi: false,
                 anti_aliasing: AntiAliasing::Smaa,
             },
@@ -164,6 +169,7 @@ impl GraphicsQuality {
                 ao_slices: 4,
                 ao_steps: 8,
                 ssr: 1.0,
+                ssr_thin_objects: true,
                 gi: true,
                 anti_aliasing: AntiAliasing::Smaa,
             },
@@ -192,6 +198,7 @@ struct Preset {
     ao_slices: u32,
     ao_steps: u32,
     ssr: f32,
+    ssr_thin_objects: bool,
     gi: bool,
     anti_aliasing: AntiAliasing,
 }
@@ -228,6 +235,7 @@ impl Preset {
             ao_slices: post.ambient_occlusion.slices.clamp(1, 8),
             ao_steps: post.ambient_occlusion.steps.clamp(1, 16),
             ssr: float(post.ssr, 0.0, 1.0, dp.ssr),
+            ssr_thin_objects: post.ssr_thin_objects,
             gi: lighting.gi.enabled,
             anti_aliasing: post.anti_aliasing,
         }
@@ -243,6 +251,7 @@ impl Preset {
         post.ambient_occlusion.slices = self.ao_slices;
         post.ambient_occlusion.steps = self.ao_steps;
         post.ssr = self.ssr;
+        post.ssr_thin_objects = self.ssr_thin_objects;
         lighting.gi.enabled = self.gi;
         lighting.shadows = self.shadows;
         lighting.shadow_distance = self.shadow_distance;
@@ -392,6 +401,7 @@ impl SceneSettings {
         }
         if !caps.available(F::ScreenSpaceReflections) {
             post.ssr = 0.0;
+            post.ssr_thin_objects = false;
         }
         if !caps.available(F::GlobalIllumination) {
             lighting.gi.enabled = false;
@@ -445,6 +455,7 @@ mod tests {
             assert!(a.ambient_occlusion <= b.ambient_occlusion);
             assert!(a.ao_slices * a.ao_steps <= b.ao_slices * b.ao_steps);
             assert!(a.ssr <= b.ssr);
+            assert!(a.ssr_thin_objects <= b.ssr_thin_objects);
             assert!(a.gi <= b.gi);
             assert!(a.anti_aliasing as u32 <= b.anti_aliasing as u32);
         }
@@ -522,6 +533,11 @@ mod tests {
         assert_eq!(high.anti_aliasing, AntiAliasing::Smaa);
         assert_eq!((low.ssr, medium.ssr, high.ssr), (0.0, 0.0, 1.0));
         assert_eq!(
+            [low, medium, high, ultra].map(|p| p.ssr_thin_objects),
+            [false, false, false, true],
+            "thin objects in reflections only at the highest quality"
+        );
+        assert_eq!(
             (ultra.shadow_distance, ultra.shadow_cascades, ultra.shadow_resolution),
             (120.0, 4, 4096)
         );
@@ -596,6 +612,7 @@ mod tests {
                 assert_eq!(s.post.ao_half_resolution, p.ao_half_resolution);
                 assert_eq!(s.post.ao_temporal, p.ao_temporal);
                 assert_eq!(s.post.ssr, p.ssr);
+                assert_eq!(s.post.ssr_thin_objects, p.ssr_thin_objects);
                 assert_eq!(s.lighting.gi.enabled, p.gi);
             }
         });
@@ -662,7 +679,7 @@ mod tests {
         on_baseline.fit_quality_to(&GpuTier::Baseline.report());
         let (l, p) = (&on_baseline.lighting, &on_baseline.post);
         assert_eq!(p.anti_aliasing, AntiAliasing::Taa, "baseline has TAA");
-        assert!(p.ambient_occlusion.enabled && p.ssr == 1.0);
+        assert!(p.ambient_occlusion.enabled && p.ssr == 1.0 && p.ssr_thin_objects);
         assert!(!l.gi.enabled, "no room for the GI probes at the baseline floor");
         assert_eq!(l.shadow_resolution, 2048);
         let mut on_webgl2 = ultra(true);
@@ -670,7 +687,7 @@ mod tests {
         let (l, p) = (&on_webgl2.lighting, &on_webgl2.post);
         assert_eq!(p.anti_aliasing, AntiAliasing::Fxaa);
         assert!(!p.ambient_occlusion.enabled && !p.ao_temporal && !p.ao_half_resolution);
-        assert_eq!((p.ssr, l.gi.enabled), (0.0, false));
+        assert_eq!((p.ssr, p.ssr_thin_objects, l.gi.enabled), (0.0, false, false));
         assert_eq!(l.light_shadow_atlas, 2048);
         assert_eq!(l.shadow_cascades, 4, "untouched");
     }

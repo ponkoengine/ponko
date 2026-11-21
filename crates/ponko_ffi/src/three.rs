@@ -2904,6 +2904,17 @@ fn quality_from_c(q: &PonkoGraphicsQuality, settings: &mut SceneSettings) -> Res
     l.light_shadow_views = q.light_shadow_views;
     l.light_shadow_resolution = q.light_shadow_resolution;
     l.light_shadow_atlas = q.light_shadow_atlas;
+    // The ABI 2 struct has no field for thin objects in reflections
+    // (`PonkoPostEx::ssr_thin_objects`): it follows the preset the rest of
+    // the struct is, so a preset set from C is that preset (Ultra turns it
+    // on, the others off), and stays as it was for a custom struct.
+    let kept = settings.post.ssr_thin_objects;
+    if settings.quality().is_none() {
+        settings.post.ssr_thin_objects = !kept;
+        if settings.quality().is_none() {
+            settings.post.ssr_thin_objects = kept;
+        }
+    }
     Ok(())
 }
 
@@ -3000,7 +3011,10 @@ pub unsafe extern "C" fn ponko_ctx_graphics_quality(
 /// `ctx.scene3d.set_quality`): writes the matching post and lighting
 /// settings and pins render scale and sun shadow resolution against
 /// automatic quality; the next frame draws at the new resolution and
-/// shadow map sizes. Fields outside their ranges (see
+/// shadow map sizes. Thin objects in reflections, which the struct has no
+/// field for (`PonkoPostEx::ssr_thin_objects`), follow the preset the struct
+/// is (on for ultra, off for the others) and are left as they are for a
+/// custom one. Fields outside their ranges (see
 /// `PonkoGraphicsQuality`) are `PONKO_INVALID_ARGUMENT` and change nothing.
 /// # Safety
 /// `ctx` null or live; `quality` valid.

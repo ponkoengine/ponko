@@ -47,6 +47,8 @@ mod occlusion;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod particles;
 mod pipeline_stats;
+#[cfg(feature = "window")]
+mod query_sets;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod screen;
 #[cfg(feature = "window")]

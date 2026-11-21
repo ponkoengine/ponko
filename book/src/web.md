@@ -35,7 +35,9 @@ python3 -m http.server -d target/web/my_game 8000
 ```
 
 and open <http://localhost:8000>. In the engine's repository,
-`web/build.sh battle` builds an example.
+`web/build.sh battle` builds an example. `--simd` builds with WASM SIMD (a
+faster CPU wave spectrum for the water; see the water guide's "On the
+web"), for browsers that have it.
 
 The output folder is a static site: put it on any web host (GitHub Pages,
 itch.io, your own server). It holds the page, the game (`game_bg.wasm`, about

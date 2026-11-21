@@ -443,9 +443,10 @@ webrtc = [
 # simd128 FFT in web builds, for a WebGL2 sea and buoyancy in the browser
 # (book/src/water.md, "Waves from a spectrum", has the measured gain). A web
 # build with it must also set `-C target-feature=+simd128` (it fails to
-# compile otherwise: without that flag the FFT is three times slower), and
-# then needs a browser with fixed-width SIMD (Chrome 91, Firefox 89,
-# Safari 16.4). Does nothing outside wasm32 or without `3d`.
+# compile otherwise: without that flag the FFT is three times slower);
+# `web/build.sh --simd` sets both. The module then needs a browser with
+# fixed-width SIMD (Chrome 91, Firefox 89, Safari 16.4). Does nothing
+# outside wasm32 or without `3d`.
 wasm-simd = ["rustfft?/wasm_simd"]
 
 # Text shaping with harfrust: ligatures and kerning from the font's
