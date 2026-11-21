@@ -837,7 +837,7 @@ pub unsafe extern "C" fn ponko_game_profile_headless(
 /// `PONKO_UNSUPPORTED` and `ponko_last_error()` says why; other failures
 /// keep their statuses. In a browser it doesn't return once the game is
 /// running: the game's frames stay as they are while it plays (the guide's
-/// "C and C++ on the web").
+/// "C and C++" section of the web chapter).
 ///
 /// Ownership: `game` is taken over and freed when the run ends (also on
 /// failure); don't use or free it after. `user` stays the caller's, is passed

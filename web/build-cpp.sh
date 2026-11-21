@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds a C or C++ game for the web, ready to serve as a static site (the
-# guide's "C and C++ on the web"). Run it from the game's folder: its
+# web guide's "C and C++"). Run it from the game's folder: its
 # assets/ folder is copied like web/build.sh does.
 #
 #   web/build-cpp.sh game.cpp                         # -> target/web/game/

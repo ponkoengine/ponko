@@ -28,8 +28,8 @@
 use std::cell::Cell;
 use std::ffi::c_int;
 
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(inline_js = r#"
 let left;
@@ -77,7 +77,7 @@ thread_local! {
 
 /// `f` as a JavaScript function that calls it directly. A function's
 /// address is its index in the module's function table.
-fn table_function(f: extern "C" fn()) -> js_sys::Function {
+fn table_function(f: fn()) -> js_sys::Function {
     let table: js_sys::WebAssembly::Table = wasm_bindgen::function_table().unchecked_into();
     match table.get(f as *const () as usize as u32) {
         Ok(function) => function.unchecked_into(),
@@ -85,7 +85,7 @@ fn table_function(f: extern "C" fn()) -> js_sys::Function {
     }
 }
 
-extern "C" fn call_job() {
+fn call_job() {
     if let Some(job) = JOB.with(Cell::take) {
         // SAFETY: `run_event_loop` stored it just before this call, and the
         // closure it points to lives in that function's frame, which is
@@ -116,7 +116,7 @@ pub(crate) fn run_event_loop(
     result.unwrap_or(Ok(()))
 }
 
-extern "C" fn call_main() {
+fn call_main() {
     if let Some(main) = MAIN.with(Cell::take) {
         // SAFETY: the program's entry point, called once, with no arguments.
         let code = unsafe { main() };

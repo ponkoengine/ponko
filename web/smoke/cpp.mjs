@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// A C++ game in the browser (the guide's "C and C++ on the web"): the
+// A C++ game in the browser (the web guide's "C and C++"): the
 // getting-started game of the guide, the `first_game_full` snippet of
 // examples/cpp/guide.cpp exactly as the guide shows it, built with
 // web/build-cpp.sh and run in headless Chromium (no window). It must:
@@ -7,7 +7,7 @@
 // 1. start: the page's status line goes away (the game reached its event
 //    loop) with no page error;
 // 2. fetch `crab.png` (HTTP 200), which its setup loads;
-// 3. draw: the canvas is not blank (the crab on the clear color);
+// 3. draw: the canvas is not blank (the crab on the clear color), on WebGL2;
 // 4. keep running its C++ systems: while ArrowRight is held the crab moves
 //    right. The system is a lambda capturing `pos`, a local of the game's
 //    function, by reference: the local must outlive the call to run(),
@@ -17,7 +17,8 @@
 //   node web/smoke/cpp.mjs [--dir <site>] [--out <dir>] [--timeout <s>]
 //
 // The report (report.json in --out) has the module's size and the startup
-// time (navigation to the game's first frame). Exit codes as smoke.mjs: 0
+// time (navigation to the game's first frame); --out also gets the canvas
+// before and after the key (before.png, after.png). Exit codes as smoke.mjs: 0
 // passed, 1 failed, 2 unsupported (no browser), 3 bad arguments or no build.
 
 import { spawnSync } from "node:child_process";
@@ -151,6 +152,11 @@ async function main() {
   const deadline = args.timeout * 1000;
   try {
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    // WebGL2, as the other runners' headless checks: the headless shell's
+    // WebGPU device can't present a canvas (see README.md, "What runs where").
+    await page.addInitScript(() => {
+      Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined, configurable: true });
+    });
     const errors = [];
     const console_ = [];
     const fetched = new Map();
@@ -182,7 +188,8 @@ async function main() {
     // 3. Drawn.
     await page.waitForTimeout(500);
     const canvas = page.locator(GAME_CANVAS);
-    const before = await foreground(page, await canvas.screenshot());
+    const beforePng = await canvas.screenshot({ path: join(args.out, "before.png") });
+    const before = await foreground(page, beforePng);
     report.before = before;
     if (!before) return finish(EXIT.app, "the canvas is blank");
     report.steps.push("drawn");
@@ -193,7 +200,7 @@ async function main() {
     await page.waitForTimeout(1000);
     await page.keyboard.up("ArrowRight");
     await page.waitForTimeout(200);
-    const after = await foreground(page, await canvas.screenshot());
+    const after = await foreground(page, await canvas.screenshot({ path: join(args.out, "after.png") }));
     report.after = after;
     if (!after || after.centerX < before.centerX + 20) {
       return finish(EXIT.app, `the crab didn't move right while ArrowRight was held: ${JSON.stringify({ before, after })}`);

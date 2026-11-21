@@ -1,8 +1,8 @@
 //! The browser entry point of a C or C++ game: `web/build-cpp.sh` compiles
 //! the game with the WASI SDK's clang and links its objects into this
-//! program, built for `wasm32-unknown-unknown` (the guide's "C and C++ on the
-//! web"). It is a library (`crate-type = ["cdylib"]`), so the only `main`
-//! is the game's; its start function calls that.
+//! program, built for `wasm32-unknown-unknown` (the web guide's "C and
+//! C++"). It is a library (`crate-type = ["cdylib"]`), so the only `main` is
+//! the game's; its start function calls that.
 //!
 //! The C and C++ standard libraries come from the WASI SDK and call a few
 //! WASI functions; the ones a game needs in a browser are defined below
@@ -32,7 +32,6 @@ pub fn start() {
     unsafe { __wasm_call_ctors() };
     ponko_ffi::web::run_main(__main_void);
 }
-
 
 /// The WASI functions of the C library (`wasi_snapshot_preview1`), as the
 /// C library declares them: the linker uses these definitions instead of
@@ -77,7 +76,11 @@ mod wasi {
             for &byte in bytes {
                 if byte == b'\n' {
                     let text = String::from_utf8_lossy(line);
-                    if fd == 1 { console_log(&text) } else { console_error(&text) }
+                    if fd == 1 {
+                        console_log(&text)
+                    } else {
+                        console_error(&text)
+                    }
                     line.clear();
                 } else {
                     line.push(byte);
@@ -132,12 +135,22 @@ mod wasi {
     }
 
     #[unsafe(no_mangle)]
-    extern "C" fn __imported_wasi_snapshot_preview1_fd_seek(_fd: i32, _offset: i64, _whence: i32, _to: *mut u64) -> i32 {
+    extern "C" fn __imported_wasi_snapshot_preview1_fd_seek(
+        _fd: i32,
+        _offset: i64,
+        _whence: i32,
+        _to: *mut u64,
+    ) -> i32 {
         EBADF
     }
 
     #[unsafe(no_mangle)]
-    extern "C" fn __imported_wasi_snapshot_preview1_fd_read(_fd: i32, _iovs: *const u32, _len: usize, _read: *mut usize) -> i32 {
+    extern "C" fn __imported_wasi_snapshot_preview1_fd_read(
+        _fd: i32,
+        _iovs: *const u32,
+        _len: usize,
+        _read: *mut usize,
+    ) -> i32 {
         EBADF
     }
 
@@ -172,7 +185,13 @@ mod wasi {
     }
 
     #[unsafe(no_mangle)]
-    extern "C" fn __imported_wasi_snapshot_preview1_path_filestat_get(_fd: i32, _flags: i32, _path: i32, _len: i32, _stat: i32) -> i32 {
+    extern "C" fn __imported_wasi_snapshot_preview1_path_filestat_get(
+        _fd: i32,
+        _flags: i32,
+        _path: i32,
+        _len: i32,
+        _stat: i32,
+    ) -> i32 {
         EBADF
     }
 
@@ -182,7 +201,13 @@ mod wasi {
     }
 
     #[unsafe(no_mangle)]
-    extern "C" fn __imported_wasi_snapshot_preview1_fd_readdir(_fd: i32, _buf: i32, _len: i32, _cookie: i64, _used: i32) -> i32 {
+    extern "C" fn __imported_wasi_snapshot_preview1_fd_readdir(
+        _fd: i32,
+        _buf: i32,
+        _len: i32,
+        _cookie: i64,
+        _used: i32,
+    ) -> i32 {
         EBADF
     }
 
@@ -212,7 +237,14 @@ mod wasi {
     }
 
     #[unsafe(no_mangle)]
-    extern "C" fn __imported_wasi_snapshot_preview1_path_rename(_fd: i32, _from: i32, _from_len: i32, _to_fd: i32, _to: i32, _to_len: i32) -> i32 {
+    extern "C" fn __imported_wasi_snapshot_preview1_path_rename(
+        _fd: i32,
+        _from: i32,
+        _from_len: i32,
+        _to_fd: i32,
+        _to: i32,
+        _to_len: i32,
+    ) -> i32 {
         EBADF
     }
 
@@ -239,7 +271,10 @@ mod wasi {
     }
 
     #[unsafe(no_mangle)]
-    unsafe extern "C" fn __imported_wasi_snapshot_preview1_environ_sizes_get(count: *mut usize, size: *mut usize) -> i32 {
+    unsafe extern "C" fn __imported_wasi_snapshot_preview1_environ_sizes_get(
+        count: *mut usize,
+        size: *mut usize,
+    ) -> i32 {
         // SAFETY: as in args_sizes_get.
         unsafe { __imported_wasi_snapshot_preview1_args_sizes_get(count, size) }
     }
@@ -252,7 +287,11 @@ mod wasi {
     /// The real-time clock (0) is `Date.now()`, the others `performance.now()`,
     /// in nanoseconds.
     #[unsafe(no_mangle)]
-    unsafe extern "C" fn __imported_wasi_snapshot_preview1_clock_time_get(id: i32, _precision: i64, time: *mut u64) -> i32 {
+    unsafe extern "C" fn __imported_wasi_snapshot_preview1_clock_time_get(
+        id: i32,
+        _precision: i64,
+        time: *mut u64,
+    ) -> i32 {
         let ms = match id {
             0 => date_now(),
             1..=3 => performance_now(),

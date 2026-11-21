@@ -317,11 +317,14 @@ writes the same static site as `web/build.sh`: the page, `game.js`,
 `game_bg.wasm` and a copy of your `assets/`. `--features` picks
 `ponko_ffi`'s features, and flags after `--` go to the compiler
 (`-- -DNDEBUG -Isrc`). The guide's first game
-([Getting started](getting-started.md)), built this way, is
-WEB_CPP_SIZE of WebAssembly (WEB_CPP_GZIP compressed) and reaches its first frame
-WEB_CPP_START after the page is opened in headless Chromium on an Apple
-Silicon laptop (measured while other builds were running, so take it as an
-upper bound).
+([Getting started](getting-started.md)), built this way, is 21.9 MB of
+WebAssembly (7.5 MB compressed with gzip) and reaches its first frame 0.5 s
+after the page is opened, in headless Chromium on WebGL2 on an Apple
+Silicon laptop (measured while other builds were running, so take the time
+as an upper bound). That is more than a Rust game's build, because the
+library's C API reaches the engine's 3D renderer and navigation whatever
+the game calls, and `ponko_ffi`'s default features (2D and 3D physics, the
+inspector, text shaping, sound) are all in it.
 
 What's different from the desktop, besides [the above](#whats-different-in-a-browser):
 
