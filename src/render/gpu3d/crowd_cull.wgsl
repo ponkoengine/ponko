@@ -1,8 +1,11 @@
 // Crowd culling (see `crowds.rs`): one thread per character tests its
-// bounding sphere against every view of the frame and its origin's distance
-// against each level's band, and appends it to the visible list of each
-// (view, level) that draws it. `finish` then writes the counts into the
-// indirect draws, one per (view, level, mesh part).
+// culling box (its clips' box under its transform) against every view of
+// the frame and its origin's distance against each level's band, and
+// appends it to the visible list of each (view, level) that draws it:
+// from the list's front when the level draws it whole, from its back when
+// it draws it dithered (crossfading into the next level). `finish` then
+// writes the counts into the indirect draws, two per (view, level, mesh
+// part): the whole characters', the dithered ones'.
 
 struct Params {
     // Characters.
@@ -19,8 +22,10 @@ struct Params {
     row: u32,
     // Clips in the bake.
     clips: u32,
-    // A sphere around every level's mesh in every baked pose, in model space.
-    bounds: vec4<f32>,
+    // Where the clips' boxes start in `views` (two vec4s a clip: lowest
+    // and highest corner, around every level's mesh in every frame baked
+    // of the clip, in model space).
+    boxes_at: u32,
     // 1: the first view (the camera) leaves out what the depth grid hides.
     occlusion: u32,
     // Global illumination's face views (`gi_first` to `gi_end`) keep only
@@ -33,10 +38,11 @@ struct Params {
     probes_at: u32,
     cut: f32,
     pad0: u32,
-    pad1: u32,
-    // Per level: nearest distance, farthest (exclusive), drawn in cameras
-    // (1) or not (0), drawn in shadow views.
+    // Per level: nearest distance, farthest (exclusive), the distance it
+    // fades out over before the farthest, and in over before the nearest.
     bands: array<vec4<f32>, 8>,
+    // Per level: 1 drawn in cameras, | 2 drawn in shadow views.
+    kinds: array<vec4<u32>, 2>,
 };
 
 // An earlier frame's camera depth, shrunk to a grid of farthest depths
@@ -53,10 +59,12 @@ struct Grid {
 @group(0) @binding(1) var<storage, read> records: array<vec4<f32>>;
 // Per view: six planes, then the eye (w: 1 for a shadow view). After the
 // views, the level of each indirect draw, four to a vec4 (as bits), then
-// the probes global illumination updates this frame.
+// the probes global illumination updates this frame, and from `boxes_at`
+// the clips' boxes.
 @group(0) @binding(2) var<storage, read> views: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read_write> visible: array<u32>;
-// Per (view, level) a count, then the indirect draws (five words each).
+// Per (view, level) two counts (whole, dithered), then the indirect draws
+// (five words each).
 @group(0) @binding(4) var<storage, read_write> draws: array<atomic<u32>>;
 @group(0) @binding(5) var<uniform> grid: Grid;
 
@@ -64,11 +72,12 @@ fn grid_depth(i: u32) -> f32 {
     return grid.depths[i / 4u][i % 4u];
 }
 
-// Whether the depth grid hides the sphere: its box's nearest depth is
-// behind the farthest depth of every cell it covers (reverse-Z: nearer is
-// greater). As the instance batches' test (`instances.wgsl`).
-fn hidden(center: vec3<f32>, radius: f32) -> bool {
-    let extent = vec3<f32>(radius + grid.head.z);
+// Whether the depth grid hides the world-axis box around `center` (half
+// its size `half`): its nearest depth is behind the farthest depth of
+// every cell it covers (reverse-Z: nearer is greater). As the instance
+// batches' test (`instances.wgsl`).
+fn hidden(center: vec3<f32>, half: vec3<f32>) -> bool {
+    let extent = half + vec3<f32>(grid.head.z);
     var lo = vec2<f32>(1e30);
     var hi = vec2<f32>(-1e30);
     var nearest = -1e30;
@@ -104,8 +113,8 @@ fn hidden(center: vec3<f32>, radius: f32) -> bool {
     return true;
 }
 
-// Whether the sphere is at least one pixel wide seen from one of this
-// frame's probes.
+// Whether a box of half diagonal `radius` is at least one pixel wide seen
+// from one of this frame's probes.
 fn probe_sized(center: vec3<f32>, radius: f32) -> bool {
     for (var k = 0u; k < params.probes; k++) {
         if radius >= params.cut * distance(center, views[params.probes_at + k].xyz) {
@@ -126,15 +135,38 @@ fn cull(@builtin(global_invocation_id) id: vec3<u32>) {
     let m1 = records[base + 1u].xyz;
     let m2 = records[base + 2u].xyz;
     let origin = records[base + 3u].xyz;
-    let b = params.bounds;
-    let center = m0 * b.x + m1 * b.y + m2 * b.z + origin;
-    let radius = b.w * length(vec3<f32>(length(m0), length(m1), length(m2)));
+    // The box of the clip it plays, of the one it blends to, or of both
+    // while it blends (as `character_bounds` in `three/crowd.rs`).
+    let anim = bitcast<vec4<u32>>(records[base + 5u]);
+    let blend = anim.w & 0xffffu;
+    var lo = vec3<f32>(1e30);
+    var hi = vec3<f32>(-1e30);
+    if blend < 0xffffu {
+        let k = params.boxes_at + min(anim.x & 0xffffu, params.clips - 1u) * 2u;
+        lo = views[k].xyz;
+        hi = views[k + 1u].xyz;
+    }
+    if blend > 0u {
+        let k = params.boxes_at + min(anim.x >> 16u, params.clips - 1u) * 2u;
+        lo = min(lo, views[k].xyz);
+        hi = max(hi, views[k + 1u].xyz);
+    }
+    // In the world: a center and three half axes (`CullBox`).
+    let mid = (lo + hi) * 0.5;
+    let size = (hi - lo) * 0.5;
+    let center = m0 * mid.x + m1 * mid.y + m2 * mid.z + origin;
+    let a0 = m0 * size.x;
+    let a1 = m1 * size.y;
+    let a2 = m2 * size.z;
+    let extent = abs(a0) + abs(a1) + abs(a2);
+    let radius = sqrt(dot(a0, a0) + dot(a1, a1) + dot(a2, a2));
     for (var v = 0u; v < params.views; v++) {
         let at = v * 7u;
         var inside = true;
         for (var p = 0u; p < 6u; p++) {
             let plane = views[at + p];
-            if dot(plane.xyz, center) + plane.w < -radius {
+            let reach = abs(dot(plane.xyz, a0)) + abs(dot(plane.xyz, a1)) + abs(dot(plane.xyz, a2));
+            if dot(plane.xyz, center) + plane.w < -reach {
                 inside = false;
                 break;
             }
@@ -142,7 +174,7 @@ fn cull(@builtin(global_invocation_id) id: vec3<u32>) {
         if !inside {
             continue;
         }
-        if v == 0u && params.occlusion != 0u && hidden(center, radius) {
+        if v == 0u && params.occlusion != 0u && hidden(center, extent) {
             continue;
         }
         if v >= params.gi_first && v < params.gi_end && !probe_sized(center, radius) {
@@ -153,11 +185,34 @@ fn cull(@builtin(global_invocation_id) id: vec3<u32>) {
         let shadow = eye.w > 0.5;
         for (var l = 0u; l < params.levels; l++) {
             let band = params.bands[l];
-            let kind = select(band.z, band.w, shadow) > 0.5;
-            if kind && far >= band.x && far < band.y {
-                let list = v * params.levels + l;
-                let slot = atomicAdd(&draws[list], 1u);
+            let kinds = params.kinds[l / 4u][l % 4u];
+            if (kinds & select(1u, 2u, shadow)) == 0u {
+                continue;
+            }
+            // The share of its pixels the level keeps: 0 whole, negative
+            // fading out, positive fading in (as `level_fade` in `crowds.rs`).
+            var keep = 0.0;
+            if far >= band.x && far < band.y {
+                let start = band.y - band.z;
+                if band.z > 0.0 && far >= start {
+                    keep = -(1.0 - (far - start) / band.z);
+                }
+            } else if band.w > 0.0 && far < band.x && far >= band.x - band.w {
+                keep = (far - (band.x - band.w)) / band.w;
+            } else {
+                continue;
+            }
+            let steps = floor(abs(keep) * 511.0 + 0.5);
+            let list = v * params.levels + l;
+            if keep == 0.0 || steps >= 511.0 {
+                let slot = atomicAdd(&draws[list * 2u], 1u);
                 visible[list * params.region + 1u + slot] = i;
+            } else if steps > 0.0 {
+                // The dither in the entry's top ten bits: nine for the
+                // steps, one for fading out.
+                let slot = atomicAdd(&draws[list * 2u + 1u], 1u);
+                let q = u32(steps) | select(0u, 512u, keep < 0.0);
+                visible[list * params.region + params.region - 1u - slot] = i | (q << 22u);
             }
         }
     }
@@ -166,12 +221,15 @@ fn cull(@builtin(global_invocation_id) id: vec3<u32>) {
 @compute @workgroup_size(64)
 fn finish(@builtin(global_invocation_id) id: vec3<u32>) {
     let e = id.x;
-    if e >= params.views * params.parts {
+    let per_view = params.parts * 2u;
+    if e >= params.views * per_view {
         return;
     }
-    let v = e / params.parts;
+    // Per view: every part's draw of the whole characters, then of the dithered.
+    let v = e / per_view;
+    let dithered = (e % per_view) / params.parts;
     let part = e % params.parts;
     let level = bitcast<u32>(views[params.views * 7u + part / 4u][part % 4u]);
-    let count = atomicLoad(&draws[v * params.levels + level]);
+    let count = atomicLoad(&draws[(v * params.levels + level) * 2u + dithered]);
     atomicStore(&draws[params.args + e * 5u + 1u], count);
 }

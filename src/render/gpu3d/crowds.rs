@@ -51,7 +51,7 @@ use super::shaders::{Pipelines, ShaderPipelines, compose_material};
 use super::skinning::GpuSkin;
 use super::{GpuLimits, Instance3D, Instancing, MAX_CASCADES, Renderer3D, ShaderVariant, Sides, Vertex};
 use crate::render::traffic::{self, Counted, NewBuffer, Upload};
-use crate::three::crowd::{CrowdData, CrowdRecord, MAX_CROWD_LEVELS, top_influences};
+use crate::three::crowd::{CrowdData, CrowdRecord, CullBox, MAX_CROWD_LEVELS, top_influences};
 
 /// Joints (`Uint16x4`) and weights (`Float32x4`) of each corner, from the
 /// skin's influence buffer.
@@ -70,8 +70,13 @@ const VERTEX: &str = include_str!("crowd_vertex.wgsl");
 
 /// Bytes of one indirect indexed draw.
 const ARGS: u64 = 20;
-/// Bytes of the cull pass's uniform (see `Params` in `crowd_cull.wgsl`).
-const PARAMS: u64 = 80 + 16 * MAX_CROWD_LEVELS as u64;
+/// Bytes of the cull pass's uniform (see `Params` in `crowd_cull.wgsl`):
+/// 16 words, each level's band, each level's kinds.
+const PARAMS: u64 = 64 + 16 * MAX_CROWD_LEVELS as u64 + 4 * MAX_CROWD_LEVELS as u64;
+/// Steps of a crossfade's share of pixels kept: the 9 bits a visible
+/// list's entry has for it above the character's index (22 bits, see
+/// [`MAX_CROWD_INSTANCES`](crate::three::crowd::MAX_CROWD_INSTANCES)), with a 10th for its sign.
+const FADE_STEPS: f32 = 511.0;
 /// Where the advance pass's uniform (`Advance` in `crowd_advance.wgsl`)
 /// starts in the params buffer: past the cull's, at the offset alignment
 /// every device allows.
@@ -91,6 +96,36 @@ const GRID_BYTES: u64 = 64 << 10;
 fn cull_source(bytes: u64) -> String {
     CULL.replace("GRID_VEC4S", &(bytes / 16 - 5).to_string())
 }
+
+/// How `level` draws a character whose origin is `distance` from a view's
+/// eye: `None` not at all, `Some(0.0)` whole, else dithered with that
+/// share of its pixels (negative: the level fading out, keeping the pixels
+/// the one fading in leaves; see `Instance3D::with_fade`), in steps of
+/// 1/[`FADE_STEPS`]. A level fades out over the last `fade_out` of its
+/// band, and in over the `fade_in` before it (the fade of the level that
+/// ends where it starts). The cull pass does the same (`crowd_cull.wgsl`).
+fn level_fade(level: &Level, distance: f32) -> Option<f32> {
+    let keep = if distance >= level.min && distance < level.max {
+        let start = level.max - level.fade_out;
+        if level.fade_out > 0.0 && distance >= start {
+            -(1.0 - (distance - start) / level.fade_out)
+        } else {
+            return Some(0.0);
+        }
+    } else if level.fade_in > 0.0 && distance < level.min && distance >= level.min - level.fade_in {
+        (distance - (level.min - level.fade_in)) / level.fade_in
+    } else {
+        return None;
+    };
+    let steps = (keep.abs() * FADE_STEPS + 0.5).floor();
+    if steps <= 0.0 {
+        None
+    } else if steps >= FADE_STEPS {
+        Some(0.0)
+    } else {
+        Some(steps.copysign(keep) / FADE_STEPS)
+    }
+}
 /// What the CPU path's posed frames may take per crowd: more frames than
 /// fit are thinned out (every second one, every third...).
 const POSED_BYTES: u64 = 64 << 20;
@@ -101,11 +136,17 @@ const POSED_BYTES: u64 = 64 << 20;
 pub(super) fn compose_crowd(user: &str, decals: bool, gi: bool) -> String {
     const FIELDS: &str = "    @location(9) uv1: vec2<f32>,\n};";
     const BINDINGS: &str = "@group(3) @binding(1) var<storage, read> static_indices: array<u32>;\n";
+    const FADE: &str = "    out.fade = in.m1.w;\n";
     let source = compose_material(user, decals, gi);
     let helper = include_str!("instance_vertex.wgsl");
     // Invariants: the mesh shader's own text (checked by
     // `crowd_shaders_compose_on_the_mesh_shader`).
-    debug_assert!(source.contains(FIELDS) && source.contains(BINDINGS) && source.contains(helper));
+    debug_assert!(
+        source.contains(FIELDS)
+            && source.contains(BINDINGS)
+            && source.contains(helper)
+            && source.matches(FADE).count() == 2
+    );
     source
         .replacen(
             FIELDS,
@@ -114,6 +155,9 @@ pub(super) fn compose_crowd(user: &str, decals: bool, gi: bool) -> String {
         )
         .replacen(BINDINGS, &format!("{BINDINGS}{VERTEX}"), 1)
         .replacen(helper, "", 1)
+        // The main and shadow vertex entry points take the dither from the
+        // character's list entry (see `crowd_fade`).
+        .replace(FADE, "    out.fade = crowd_fade(in);\n")
 }
 
 /// One level of a crowd, as the renderer draws it.
@@ -127,6 +171,10 @@ struct Level {
     influences: u32,
     section: u32,
     slots: u32,
+    /// Distance over which it fades out before `max`, and in before `min`
+    /// (see [`level_fade`]).
+    fade_out: f32,
+    fade_in: f32,
 }
 
 /// What a frame's upload and culling read of a crowd besides its levels.
@@ -134,7 +182,6 @@ struct Level {
 struct Frame {
     count: u32,
     clips: u32,
-    bounds: (Vec3, f32),
     /// Seconds its clips played on since its records were first drawn,
     /// and as of the last frame for the last frame's records.
     elapsed: f32,
@@ -189,9 +236,11 @@ struct Extra<'a> {
 struct GpuCrowd {
     levels: Vec<Level>,
     casts: bool,
+    /// Whether a level crossfades (the GPU path then draws each level's
+    /// dithered list too).
+    fades: bool,
     clips: u32,
     count: u32,
-    bounds: (Vec3, f32),
     min: Vec3,
     max: Vec3,
     /// The bake it was made from (a new bake makes the crowd anew).
@@ -224,12 +273,21 @@ struct GpuPath {
     current: usize,
     anim: wgpu::Buffer,
     params: wgpu::Buffer,
-    /// Per level, at the uniform alignment: its `CrowdLevel` (see `crowd_vertex.wgsl`).
+    /// Per level, at the uniform alignment: its `CrowdLevel` (see
+    /// `crowd_vertex.wgsl`) for its whole characters, then every level's
+    /// for its dithered ones.
     levels: wgpu::Buffer,
-    /// Views, then the level of each indirect draw.
+    /// Views, then the level of each indirect draw, room for the probes,
+    /// then the clips' boxes (from `boxes_at`, in vec4s).
     views: wgpu::Buffer,
+    /// Per clip its model-space box: lowest corner, highest (as vec4s).
+    clip_boxes: Vec<[f32; 8]>,
+    boxes_at: u32,
+    /// Per (view, level) a list: a leading 0, the whole characters from
+    /// the front, the dithered ones from the back.
     visible: wgpu::Buffer,
-    /// Per (view, level) a count, then the indirect draws.
+    /// Per (view, level) two counts (whole, dithered), then the indirect
+    /// draws: per view, every level's parts whole, then dithered.
     draws: wgpu::Buffer,
     /// Views the buffers have room for.
     view_capacity: u32,
@@ -262,7 +320,7 @@ struct GpuPath {
 /// What the CPU path keeps (see the module's docs).
 struct CpuPath {
     records: Vec<CrowdRecord>,
-    spheres: Vec<[f32; 4]>,
+    boxes: Vec<CullBox>,
     /// The clip table as baked (first frame, frames, fps, looping).
     table: Vec<[f32; 4]>,
     /// Per clip: its first frame among the posed ones, how many were posed,
@@ -275,11 +333,12 @@ struct CpuPath {
     /// This frame's characters, grouped as `runs` says.
     instances: Option<wgpu::Buffer>,
     instance_capacity: u32,
-    /// (view, level, posed frame, first instance, count), by view.
-    runs: Vec<(u32, u32, u32, u32, u32)>,
+    /// (view, level, posed frame, first instance, count, dithered), by view.
+    runs: Vec<(u32, u32, u32, u32, u32, bool)>,
     /// Per view: its range of `runs`.
     view_runs: Vec<(u32, u32)>,
-    keys: Vec<(u64, u32)>,
+    /// (view, level, dithered, frame) as a key, the character, its dither.
+    keys: Vec<(u64, u32, f32)>,
     frames: Vec<u32>,
     out: Vec<Instance3D>,
 }
@@ -316,6 +375,8 @@ struct Shared {
 struct CrowdSet {
     set: Weak<ShaderPipelines>,
     sides: Sides,
+    /// The crossfade (dithering) variant.
+    fade: bool,
     targets: TargetKey,
     /// `None`: the crowd module didn't build; its crowds draw nothing.
     pipelines: Option<Pipelines>,
@@ -419,14 +480,18 @@ impl Crowds {
         }
     }
 
-    /// The crowd pipelines of `set` drawn with `sides`, if built.
-    fn pipelines(&self, set: &Arc<ShaderPipelines>, sides: Sides) -> Option<&Pipelines> {
+    /// The crowd pipelines of `set` drawn with `sides` (dithering for a
+    /// crossfade with `fade`), if built.
+    fn pipelines(&self, set: &Arc<ShaderPipelines>, sides: Sides, fade: bool) -> Option<&Pipelines> {
+        self.set(set, sides, fade)?.pipelines.as_ref()
+    }
+
+    /// The entry of `set`'s crowd pipelines for `sides` and `fade`, built or not.
+    fn set(&self, set: &Arc<ShaderPipelines>, sides: Sides, fade: bool) -> Option<&CrowdSet> {
         let at = Arc::as_ptr(set);
         self.sets
             .iter()
-            .find(|s| s.sides == sides && std::ptr::eq(s.set.as_ptr(), at))?
-            .pipelines
-            .as_ref()
+            .find(|s| s.sides == sides && s.fade == fade && std::ptr::eq(s.set.as_ptr(), at))
     }
 }
 
@@ -591,8 +656,8 @@ impl Renderer3D {
             Path::Cpu(p) => {
                 p.records.clear();
                 p.records.extend_from_slice(&data.records);
-                p.spheres.clear();
-                p.spheres.extend_from_slice(&data.spheres);
+                p.boxes.clear();
+                p.boxes.extend_from_slice(&data.boxes);
             }
         }
     }
@@ -604,7 +669,8 @@ impl Renderer3D {
             .levels
             .iter()
             .zip(&data.sections)
-            .map(|(l, s)| Level {
+            .enumerate()
+            .map(|(k, (l, s))| Level {
                 mesh: l.mesh.slot(),
                 min: l.min_distance,
                 max: l.max_distance,
@@ -613,6 +679,14 @@ impl Renderer3D {
                 influences: u32::from(l.influences),
                 section: s.start,
                 slots: s.slots,
+                fade_out: if l.max_distance.is_finite() { l.fade } else { 0.0 },
+                // The fade of the level that ends where this one starts.
+                fade_in: data
+                    .levels
+                    .iter()
+                    .enumerate()
+                    .find(|&(j, o)| j != k && o.max_distance == l.min_distance && o.fade > 0.0)
+                    .map_or(0.0, |(_, o)| o.fade),
             })
             .collect();
         let gpu = self.resources.storage_read.is_some() && GpuLimits::of(device).compute_culling();
@@ -638,24 +712,29 @@ impl Renderer3D {
                     .get(level.mesh as usize)
                     .map_or(0, |m| m.parts.len() as u32);
             }
+            let clip_boxes = data
+                .clip_bounds
+                .iter()
+                .map(|(lo, hi)| [lo.x, lo.y, lo.z, 0.0, hi.x, hi.y, hi.z, 0.0])
+                .collect();
             Path::Gpu(Box::new(GpuPath::new(
                 device,
                 shared,
                 anim,
                 (data.records.len() as u32).max(1),
                 levels.len(),
-                parts,
-                part_base,
+                (parts, part_base),
+                clip_boxes,
             )))
         } else {
             Path::Cpu(Box::new(self.pose_on_cpu(device, data, &levels)))
         };
         Some(GpuCrowd {
             casts: levels.iter().any(|l| l.shadows),
+            fades: levels.iter().any(|l| l.fade_out > 0.0),
             levels,
             clips: data.clips,
             count: 0,
-            bounds: data.bounds,
             min: data.min,
             max: data.max,
             animation: data.texels.clone(),
@@ -906,7 +985,7 @@ impl Renderer3D {
         }
         CpuPath {
             records: Vec::new(),
-            spheres: Vec::new(),
+            boxes: Vec::new(),
             table,
             clips,
             step,
@@ -1012,7 +1091,7 @@ impl Renderer3D {
             }
             if !extra && crowd.casts && crowd.count > 0 {
                 let casting = || crowd.levels.iter().filter(|l| l.shadows);
-                let near = casting().map(|l| l.min).fold(f32::INFINITY, f32::min);
+                let near = casting().map(|l| l.min - l.fade_in).fold(f32::INFINITY, f32::min);
                 let far = casting().map(|l| l.max).fold(0.0, f32::max);
                 for v in super::shadow_views(drawn.cascades, drawn.light_views) {
                     let slot = &slots[v + 1];
@@ -1024,7 +1103,6 @@ impl Renderer3D {
             let info = Frame {
                 count: crowd.count,
                 clips: crowd.clips,
-                bounds: crowd.bounds,
                 elapsed: crowd.elapsed,
                 past_elapsed: crowd.past_elapsed,
             };
@@ -1084,34 +1162,34 @@ impl Renderer3D {
                     };
                     let set = self.shaders.sets[gm.shader as usize].clone();
                     let sides = Sides::of(gm.double_sided);
-                    if self.crowds.pipelines(&set, sides).is_some()
-                        || self
-                            .crowds
-                            .sets
-                            .iter()
-                            .any(|s| s.sides == sides && std::ptr::eq(s.set.as_ptr(), Arc::as_ptr(&set)))
-                    {
-                        continue;
+                    // The dithering variant only for crowds that crossfade.
+                    for fade in [false, crowd.fades] {
+                        if self.crowds.set(&set, sides, fade).is_some() {
+                            continue;
+                        }
+                        let pipelines = self.build_crowd_pipelines(device, &set, sides, fade);
+                        self.crowds.sets.push(CrowdSet {
+                            set: Arc::downgrade(&set),
+                            sides,
+                            fade,
+                            targets,
+                            pipelines,
+                        });
                     }
-                    let pipelines = self.build_crowd_pipelines(device, &set, sides);
-                    self.crowds.sets.push(CrowdSet {
-                        set: Arc::downgrade(&set),
-                        sides,
-                        targets,
-                        pipelines,
-                    });
                 }
             }
         }
     }
 
-    /// A material shader's crowd pipelines for `sides`, or `None` (said)
-    /// if its code doesn't build with the crowd's parts.
+    /// A material shader's crowd pipelines for `sides` (dithering for a
+    /// crossfade with `fade`), or `None` (said) if its code doesn't build
+    /// with the crowd's parts.
     fn build_crowd_pipelines(
         &self,
         device: &wgpu::Device,
         set: &Arc<ShaderPipelines>,
         sides: Sides,
+        fade: bool,
     ) -> Option<Pipelines> {
         let shared = self.crowds.shared.as_ref()?;
         let source = self.shaders.compose_like(set, compose_crowd)?;
@@ -1127,7 +1205,8 @@ impl Renderer3D {
             crowd: true,
             ..set.builder.clone()
         };
-        let pipelines = builder.build(ShaderVariant::new(sides, Instancing::Plain));
+        let instancing = if fade { Instancing::Crossfade } else { Instancing::Plain };
+        let pipelines = builder.build(ShaderVariant::new(sides, instancing));
         match super::end_scope(scope, false) {
             Ok(None) => Some(pipelines),
             Ok(Some(error)) => {
@@ -1154,7 +1233,7 @@ impl Renderer3D {
                 && crowd.count > 0
                 && g.culled > 0
             {
-                let counts = u64::from(g.view_capacity) * crowd.levels.len() as u64 * 4;
+                let counts = u64::from(g.view_capacity) * crowd.levels.len() as u64 * 8;
                 encoder.clear_buffer(&g.draws, 0, Some(counts));
             }
         }
@@ -1183,7 +1262,7 @@ impl Renderer3D {
             pass.set_pipeline(&shared.cull);
             pass.dispatch_workgroups(row, groups.div_ceil(row), 1);
             pass.set_pipeline(&shared.finish);
-            pass.dispatch_workgroups((g.culled * g.parts).div_ceil(64), 1, 1);
+            pass.dispatch_workgroups((g.culled * g.parts * 2).div_ceil(64), 1, 1);
         }
     }
 
@@ -1237,50 +1316,62 @@ impl Renderer3D {
                 continue;
             };
             let list = (view * levels + l) as u64;
-            let offsets = [
-                (list * u64::from(g.region) * 4) as u32,
-                (l as u64 * u64::from(shared.uniform_align)) as u32,
-            ];
-            let mut level_bound = false;
-            for (part, (_, own)) in mesh.parts.iter().enumerate() {
-                let material = self.part_material(level.mesh, part, *own);
-                let Some(m) = self.resources.materials.get(material as usize) else {
-                    continue;
-                };
-                let Some(role) = self.draw_role(kind, material, m) else {
-                    continue;
-                };
-                let shader = &self.shaders.sets[m.shader as usize];
-                let Some(pipeline) = self
-                    .crowds
-                    .pipelines(shader, Sides::of(m.double_sided))
-                    .and_then(|p| p.for_kind(kind, role))
-                else {
-                    continue;
-                };
-                pass.set_pipeline(pipeline);
-                n.pipelines += 1;
-                if !bound_buffers {
-                    pass.set_vertex_buffer(1, shared.marker.slice(..));
-                    n.vertex_buffers += 1;
-                    bound_buffers = true;
+            let mut buffers_bound = false;
+            // The level's whole characters, then (crossfading) its dithered ones.
+            for fade in [false, true] {
+                if fade && !crowd.fades {
+                    break;
                 }
-                if !level_bound {
-                    pass.set_vertex_buffer(0, vertices.slice(..));
-                    pass.set_vertex_buffer(2, skin.influences().slice(..));
-                    pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.set_bind_group(3, &g.draw[g.current][usize::from(crowd.moved)], &offsets);
-                    n.vertex_buffers += 2;
-                    n.index_buffers += 1;
+                let offsets = [
+                    (list * u64::from(g.region) * 4) as u32,
+                    ((usize::from(fade) * levels + l) as u64 * u64::from(shared.uniform_align)) as u32,
+                ];
+                let mut group_bound = false;
+                for (part, (_, own)) in mesh.parts.iter().enumerate() {
+                    let material = self.part_material(level.mesh, part, *own);
+                    let Some(m) = self.resources.materials.get(material as usize) else {
+                        continue;
+                    };
+                    let Some(role) = self.draw_role(kind, material, m) else {
+                        continue;
+                    };
+                    let shader = &self.shaders.sets[m.shader as usize];
+                    let Some(pipeline) = self
+                        .crowds
+                        .pipelines(shader, Sides::of(m.double_sided), fade)
+                        .and_then(|p| p.for_kind(kind, role))
+                    else {
+                        continue;
+                    };
+                    pass.set_pipeline(pipeline);
+                    n.pipelines += 1;
+                    if !bound_buffers {
+                        pass.set_vertex_buffer(1, shared.marker.slice(..));
+                        n.vertex_buffers += 1;
+                        bound_buffers = true;
+                    }
+                    if !buffers_bound {
+                        pass.set_vertex_buffer(0, vertices.slice(..));
+                        pass.set_vertex_buffer(2, skin.influences().slice(..));
+                        pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                        n.vertex_buffers += 2;
+                        n.index_buffers += 1;
+                        buffers_bound = true;
+                    }
+                    if !group_bound {
+                        pass.set_bind_group(3, &g.draw[g.current][usize::from(crowd.moved)], &offsets);
+                        n.bind_groups += 1;
+                        group_bound = true;
+                    }
+                    pass.set_bind_group(1, &m.bind_group, &[]);
                     n.bind_groups += 1;
-                    level_bound = true;
+                    let draw = u64::from(g.parts) * (2 * view as u64 + u64::from(fade))
+                        + u64::from(g.part_base[l])
+                        + part as u64;
+                    let at = u64::from(g.view_capacity) * levels as u64 * 8 + draw * ARGS;
+                    pass.draw_indexed_indirect(&g.draws, at);
+                    n.draws += 1;
                 }
-                pass.set_bind_group(1, &m.bind_group, &[]);
-                n.bind_groups += 1;
-                let draw = u64::from(g.parts) * view as u64 + u64::from(g.part_base[l]) + part as u64;
-                let at = u64::from(g.view_capacity) * levels as u64 * 4 + draw * ARGS;
-                pass.draw_indexed_indirect(&g.draws, at);
-                n.draws += 1;
             }
         }
     }
@@ -1299,7 +1390,7 @@ impl Renderer3D {
             return;
         };
         let mut dummy = false;
-        for &(_, l, frame, first, count) in &p.runs[start as usize..end as usize] {
+        for &(_, l, frame, first, count, fade) in &p.runs[start as usize..end as usize] {
             let level = &crowd.levels[l as usize];
             let Some((posed, corners)) = &p.posed[l as usize] else {
                 continue;
@@ -1321,7 +1412,8 @@ impl Renderer3D {
                     continue;
                 };
                 let shader = &self.shaders.sets[m.shader as usize];
-                let variant = ShaderVariant::new(Sides::of(m.double_sided), Instancing::Plain);
+                let instancing = if fade { Instancing::Crossfade } else { Instancing::Plain };
+                let variant = ShaderVariant::new(Sides::of(m.double_sided), instancing);
                 let Some(pipeline) = self.draw_pipeline(shader, material, variant, kind, role) else {
                     continue;
                 };
@@ -1365,8 +1457,8 @@ impl GpuPath {
         anim: wgpu::Buffer,
         capacity: u32,
         levels: usize,
-        parts: u32,
-        part_base: Vec<u32>,
+        (parts, part_base): (u32, Vec<u32>),
+        clip_boxes: Vec<[f32; 8]>,
     ) -> Self {
         let records = Self::records(device, capacity);
         let params = device.new_buffer(&wgpu::BufferDescriptor {
@@ -1377,11 +1469,11 @@ impl GpuPath {
         });
         let level_buffer = device.new_buffer(&wgpu::BufferDescriptor {
             label: Some("crowd levels"),
-            size: levels as u64 * u64::from(shared.uniform_align),
+            size: 2 * levels as u64 * u64::from(shared.uniform_align),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let (views, visible, draws) = Self::view_buffers(device, 1, 1, 1, 1);
+        let (views, visible, draws) = Self::view_buffers(device, 1, 1, 1, (1, clip_boxes.len() as u32));
         let cull = Self::cull_groups(device, shared, &records, &params, &views, &visible, &draws);
         let draw = Self::draw_groups(device, shared, &records, &visible, &anim, &level_buffer, 4);
         let advance = Self::advance_groups(device, shared, &records, &params, &anim);
@@ -1393,6 +1485,8 @@ impl GpuPath {
             params,
             levels: level_buffer,
             views,
+            clip_boxes,
+            boxes_at: 0,
             visible,
             draws,
             view_capacity: 0,
@@ -1421,18 +1515,25 @@ impl GpuPath {
         })
     }
 
+    /// Where the clips' boxes start in the views buffer, in vec4s, for
+    /// `views` views and `parts` mesh parts: past the most a frame writes.
+    fn boxes_at(views: u32, parts: u32) -> u64 {
+        u64::from(views) * 7 + u64::from(parts.div_ceil(4)).max(1) + PROBES
+    }
+
     /// The views, visible lists and draws buffers for `views` views of
-    /// `levels` levels, `region` entries a list and `parts` draws a view.
+    /// `levels` levels, `region` entries a list, `parts` mesh parts a view
+    /// (each drawn whole and dithered) and `clips` clips' boxes.
     fn view_buffers(
         device: &wgpu::Device,
         views: u32,
         levels: u32,
         region: u32,
-        parts: u32,
+        (parts, clips): (u32, u32),
     ) -> (wgpu::Buffer, wgpu::Buffer, wgpu::Buffer) {
         let views_buffer = device.new_buffer(&wgpu::BufferDescriptor {
             label: Some("crowd views"),
-            size: (u64::from(views) * 7 + u64::from(parts.div_ceil(4)).max(1) + PROBES) * 16,
+            size: (Self::boxes_at(views, parts) + 2 * u64::from(clips)) * 16,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1444,7 +1545,7 @@ impl GpuPath {
         });
         let draws = device.new_buffer(&wgpu::BufferDescriptor {
             label: Some("crowd draws"),
-            size: (u64::from(views) * u64::from(levels) * 4 + u64::from(views) * u64::from(parts).max(1) * ARGS)
+            size: (u64::from(views) * u64::from(levels) * 8 + u64::from(views) * 2 * u64::from(parts).max(1) * ARGS)
                 .max(16),
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::INDIRECT
@@ -1636,11 +1737,13 @@ impl GpuPath {
         }
         self.region = region as u32;
         self.view_capacity = capacity;
+        let clips = self.clip_boxes.len() as u32;
         (self.views, self.visible, self.draws) =
-            Self::view_buffers(device, capacity, l as u32, self.region, self.parts);
-        // The draws' fixed words: index count and first index of each part.
-        let mut args: Vec<u32> = Vec::with_capacity((capacity * self.parts * 5) as usize);
-        for _ in 0..capacity {
+            Self::view_buffers(device, capacity, l as u32, self.region, (self.parts, clips));
+        // The draws' fixed words: index count and first index of each
+        // part, whole then dithered.
+        let mut args: Vec<u32> = Vec::with_capacity((capacity * self.parts * 10) as usize);
+        for _ in 0..capacity * 2 {
             for level in levels {
                 if let Some(mesh) = meshes.get(level.mesh as usize) {
                     for (range, _) in &mesh.parts {
@@ -1650,10 +1753,20 @@ impl GpuPath {
             }
         }
         if !args.is_empty() {
-            let at = u64::from(capacity) * l * 4;
+            let at = u64::from(capacity) * l * 8;
             queue
                 .uploading(Upload::StaticBatches)
                 .write_buffer(&self.draws, at, bytemuck::cast_slice(&args));
+        }
+        // The clips' boxes, which only a new crowd changes.
+        let boxes_at = Self::boxes_at(capacity, self.parts);
+        self.boxes_at = boxes_at as u32;
+        if !self.clip_boxes.is_empty() {
+            queue.uploading(Upload::StaticBatches).write_buffer(
+                &self.views,
+                boxes_at * 16,
+                bytemuck::cast_slice(&self.clip_boxes),
+            );
         }
         self.rebind(device, shared);
     }
@@ -1714,13 +1827,13 @@ impl GpuPath {
             levels.len() as u32,
             self.parts,
             self.region,
-            self.view_capacity * levels.len() as u32,
+            // The indirect draws start after two counts per (view, level).
+            self.view_capacity * levels.len() as u32 * 2,
             row * 64,
             crowd.clips,
         ]);
-        let (center, radius) = crowd.bounds;
-        params[8..12].copy_from_slice(&[center.x, center.y, center.z, radius].map(f32::to_bits));
-        params[12..20].copy_from_slice(&[
+        params[8..16].copy_from_slice(&[
+            self.boxes_at,
             u32::from(occluded),
             gi.start as u32,
             gi.end as u32,
@@ -1728,16 +1841,12 @@ impl GpuPath {
             probes_at,
             crate::three::gi::GI_SMALLEST.to_bits(),
             0,
-            0,
         ]);
+        let kinds = 16 + 4 * MAX_CROWD_LEVELS;
         for (l, level) in levels.iter().enumerate() {
-            let band = [
-                level.min,
-                level.max,
-                f32::from(u8::from(level.camera)),
-                f32::from(u8::from(level.shadows)),
-            ];
-            params[20 + l * 4..24 + l * 4].copy_from_slice(&band.map(f32::to_bits));
+            let band = [level.min, level.max, level.fade_out, level.fade_in];
+            params[16 + l * 4..20 + l * 4].copy_from_slice(&band.map(f32::to_bits));
+            params[kinds + l] = u32::from(level.camera) | u32::from(level.shadows) << 1;
         }
         let advance = (ADVANCE_AT / 4) as usize;
         params[advance..advance + 4].copy_from_slice(&[crowd.count, row * 64, crowd.clips, self.seconds.to_bits()]);
@@ -1751,22 +1860,28 @@ impl GpuPath {
                 .uploading(Upload::StaticBatches)
                 .write_buffer(&self.views, 0, scratch)
         );
-        // The levels' uniforms.
+        // The levels' uniforms: for the whole characters (read from a
+        // list's front, after its leading 0), then for the dithered ones
+        // (from its back).
         let stride = shared.uniform_align as usize;
         scratch.clear();
-        scratch.resize(levels.len() * stride, 0);
-        for (l, level) in levels.iter().enumerate() {
-            let words = [
-                level.section,
-                level.slots,
-                level.influences,
-                crowd.clips,
-                crowd.elapsed.to_bits(),
-                crowd.past_elapsed.to_bits(),
-                0,
-                0,
-            ];
-            scratch[l * stride..l * stride + 32].copy_from_slice(bytemuck::cast_slice(&words));
+        scratch.resize(2 * levels.len() * stride, 0);
+        for fade in [false, true] {
+            let (first, step) = if fade { (self.region - 1, -1_i32) } else { (1, 1) };
+            for (l, level) in levels.iter().enumerate() {
+                let words = [
+                    level.section,
+                    level.slots,
+                    level.influences,
+                    crowd.clips,
+                    crowd.elapsed.to_bits(),
+                    crowd.past_elapsed.to_bits(),
+                    first,
+                    step as u32,
+                ];
+                let at = (usize::from(fade) * levels.len() + l) * stride;
+                scratch[at..at + 32].copy_from_slice(bytemuck::cast_slice(&words));
+            }
         }
         gpu!(
             queue
@@ -1845,45 +1960,48 @@ impl CpuPath {
                 continue;
             }
             let shadow = drawn.shadow(v);
-            for (i, s) in self.spheres.iter().enumerate() {
-                let center = Vec3::new(s[0], s[1], s[2]);
-                if !slot.planes.iter().all(|p| p.truncate().dot(center) + p.w >= -s[3]) {
+            for (i, b) in self.boxes.iter().enumerate() {
+                if slot.planes.iter().any(|p| b.behind(*p)) {
                     continue;
                 }
-                let r = Vec3::splat(s[3]);
+                let e = b.extent();
                 if v == 0
                     && let Some((grid, camera)) = extra.grid
-                    && grid.hides(center - r, center + r, camera)
+                    && grid.hides(b.center - e, b.center + e, camera)
                 {
                     continue;
                 }
                 let cut = crate::three::gi::GI_SMALLEST;
-                if gi_faces.contains(&v) && !extra.probes.iter().any(|p| s[3] >= cut * center.distance(*p)) {
+                if gi_faces.contains(&v) && !extra.probes.iter().any(|p| b.radius() >= cut * b.center.distance(*p)) {
                     continue;
                 }
                 let m = &self.records[i].instance.model;
                 let distance = Vec3::new(m[3][0], m[3][1], m[3][2]).distance(slot.eye);
                 for (l, level) in levels.iter().enumerate() {
                     let kind = if shadow { level.shadows } else { level.camera };
-                    if kind && distance >= level.min && distance < level.max {
-                        let key = (v as u64) << 40 | (l as u64) << 32 | u64::from(self.frames[i]);
-                        self.keys.push((key, i as u32));
+                    if let Some(fade) = level_fade(level, distance).filter(|_| kind) {
+                        let key = (v as u64) << 40
+                            | (l as u64) << 32
+                            | u64::from(fade != 0.0) << 31
+                            | u64::from(self.frames[i]);
+                        self.keys.push((key, i as u32, fade));
                     }
                 }
             }
         }
-        self.keys.sort_unstable();
+        self.keys.sort_unstable_by_key(|&(key, i, _)| (key, i));
         self.out.clear();
         self.runs.clear();
         self.view_runs.clear();
         self.view_runs.resize(views, (0, 0));
-        for &(key, i) in &self.keys {
-            let (v, l, f) = ((key >> 40) as u32, (key >> 32) as u32 & 0xff, key as u32);
+        for &(key, i, fade) in &self.keys {
+            let (v, l) = ((key >> 40) as u32, (key >> 32) as u32 & 0xff);
+            let (dithered, f) = (key >> 31 & 1 != 0, key as u32 & 0x7fff_ffff);
             match self.runs.last_mut() {
-                Some(run) if (run.0, run.1, run.2) == (v, l, f) => run.4 += 1,
-                _ => self.runs.push((v, l, f, self.out.len() as u32, 1)),
+                Some(run) if (run.0, run.1, run.2, run.5) == (v, l, f, dithered) => run.4 += 1,
+                _ => self.runs.push((v, l, f, self.out.len() as u32, 1, dithered)),
             }
-            self.out.push(self.records[i as usize].instance);
+            self.out.push(self.records[i as usize].instance.with_fade(fade));
         }
         let mut start = 0;
         for (v, range) in self.view_runs.iter_mut().enumerate() {
@@ -1934,6 +2052,14 @@ impl Renderer3D {
         Some(matches!(crowd.path, Path::Gpu(_)))
     }
 
+    /// Global illumination's face direction views this frame (empty
+    /// without probe updates), as `crowd_drawn` numbers views.
+    pub(crate) fn crowd_gi_faces(&self) -> std::ops::Range<usize> {
+        self.lists
+            .gi_batch_slot
+            .map_or(0..0, |gi| gi + 1..gi + crate::three::gi::GI_BATCH_FACES)
+    }
+
     /// Crowd `id`'s clock as the last frame's shaders got it: seconds since
     /// its epoch, at that frame and at the one before.
     pub(crate) fn crowd_clock(&self, id: u32) -> Option<(f32, f32)> {
@@ -1944,18 +2070,34 @@ impl Renderer3D {
     /// How many characters of crowd `id` the last frame drawn put in view
     /// `view` (summed over its levels; read back from the GPU on the GPU path).
     pub(crate) fn crowd_drawn(&self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, view: usize) -> Option<u32> {
+        self.crowd_drawn_dithered(device, queue, id, view)
+            .map(|(whole, dithered)| whole + dithered)
+    }
+
+    /// [`crowd_drawn`](Self::crowd_drawn) split into the characters drawn
+    /// whole and those drawn dithered (crossfading between levels): a
+    /// character crossfading counts once per level it is drawn in.
+    pub(crate) fn crowd_drawn_dithered(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: u32,
+        view: usize,
+    ) -> Option<(u32, u32)> {
         let crowd = self.crowds.crowds.get(id as usize)?.as_ref()?;
         let levels = crowd.levels.len();
         match &crowd.path {
             Path::Cpu(p) => {
                 let &(start, end) = p.view_runs.get(view)?;
-                Some(p.runs[start as usize..end as usize].iter().map(|r| r.4).sum())
+                let runs = &p.runs[start as usize..end as usize];
+                let count = |dithered: bool| runs.iter().filter(|r| r.5 == dithered).map(|r| r.4).sum();
+                Some((count(false), count(true)))
             }
             Path::Gpu(g) => {
                 if view as u32 >= g.culled {
-                    return Some(0);
+                    return Some((0, 0));
                 }
-                let bytes = (levels * 4) as u64;
+                let bytes = (levels * 8) as u64;
                 let readback = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("crowd counts readback"),
                     size: bytes,
@@ -1963,14 +2105,17 @@ impl Renderer3D {
                     mapped_at_creation: false,
                 });
                 let mut encoder = device.create_command_encoder(&Default::default());
-                encoder.copy_buffer_to_buffer(&g.draws, (view * levels * 4) as u64, &readback, 0, bytes);
+                encoder.copy_buffer_to_buffer(&g.draws, (view * levels * 8) as u64, &readback, 0, bytes);
                 queue.submit([encoder.finish()]);
                 readback.map_async(wgpu::MapMode::Read, .., |r| r.expect("crowd counts map"));
                 device
                     .poll(wgpu::PollType::wait_indefinitely())
                     .expect("crowd counts readback");
                 let counts: Vec<u32> = bytemuck::cast_slice(&readback.get_mapped_range(..).expect("mapped")).to_vec();
-                Some(counts.iter().sum())
+                // Two counts per level: whole, dithered.
+                let whole = counts.iter().step_by(2).sum();
+                let dithered = counts.iter().skip(1).step_by(2).sum();
+                Some((whole, dithered))
             }
         }
     }
