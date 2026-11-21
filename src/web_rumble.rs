@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn an_effect_is_shorter_than_the_browsers_cap_and_is_replayed_before_it_ends() {
-        assert!(EFFECT_MS < 5000, "browsers cap an effect at 5 s");
+        const { assert!(EFFECT_MS < 5000, "browsers cap an effect at 5 s") };
         assert!(
             RESEND < Duration::from_millis(u64::from(EFFECT_MS)),
             "replayed before it ends"

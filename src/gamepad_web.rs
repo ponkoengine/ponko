@@ -300,13 +300,16 @@ mod tests {
     /// Readings a test sets between frames, as a page's
     /// `navigator.getGamepads()` would return them; `ids_read` counts the
     /// `id`s the backend asked for.
+    /// One call on a fake actuator: `(index, strong, weak, duration in ms)`.
+    type Effect = (u32, f32, f32, u32);
+
     #[derive(Clone)]
     struct Fed {
         pads: Arc<Mutex<Vec<PadReading>>>,
         ids_read: Arc<Mutex<u32>>,
         /// What the browser's actuators were asked: `(index, strong, weak,
         /// duration in ms)` per `playEffect`, `(index, 0, 0, 0)` per `reset`.
-        effects: Arc<Mutex<Vec<(u32, f32, f32, u32)>>>,
+        effects: Arc<Mutex<Vec<Effect>>>,
         /// How far the test has moved the clock.
         elapsed: Arc<Mutex<Duration>>,
         start: Arc<web_time::Instant>,
