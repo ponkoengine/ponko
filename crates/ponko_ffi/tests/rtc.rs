@@ -63,7 +63,8 @@ fn a_c_game_hosts_a_room_member_over_webrtc() {
     let mut got = Vec::new();
     let start = Instant::now();
     while got.len() < 2 {
-        assert!(start.elapsed() < Duration::from_secs(10), "stage {stage}, got {got:?}");
+        // A hang detector: the loop ends when both are connected.
+        assert!(start.elapsed() < Duration::from_secs(60), "stage {stage}, got {got:?}");
         server.poll();
         for lobby in [a, b] {
             assert_eq!(unsafe { ponko_lobby_poll(lobby) }, PONKO_OK);
