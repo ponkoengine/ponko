@@ -112,8 +112,9 @@ impl ProfileScope {
 
     /// Starts timing and returns a token for [`end`](Self::end); 0 when
     /// profiling is off. For code that can't hold a guard (the C API).
-    /// Scopes timed this way count no allocations: only a guard from
-    /// [`enter`](Self::enter) knows where its thread's count stood.
+    /// Scopes timed this way count no allocations unless they end with
+    /// [`end_counting`](Self::end_counting): only the caller knows where its
+    /// thread's count stood.
     #[inline]
     pub fn begin(&'static self) -> u64 {
         if ACTIVE.load(Relaxed) == 0 {
@@ -134,6 +135,32 @@ impl ProfileScope {
         let elapsed = now_ns().saturating_sub(token);
         self.ns.fetch_add(elapsed, Relaxed);
         self.calls.fetch_add(1, Relaxed);
+    }
+
+    /// [`end`](Self::end) for a scope whose caller read its thread's
+    /// allocation count ([`thread_alloc_counts`](crate::perf::thread_alloc_counts)`().count`)
+    /// right after [`begin`](Self::begin), as `allocs_at_begin`: also counts
+    /// the allocations made on this thread since then, as a guard from
+    /// [`enter`](Self::enter) does. Call it on the thread that began the
+    /// scope. The C API's `ponko_profile_end` uses it.
+    ///
+    /// ```
+    /// use ponko::perf::{ProfileScope, thread_alloc_counts};
+    /// static SCOPE: ProfileScope = ProfileScope::new("parse");
+    /// let token = SCOPE.begin();
+    /// let allocs = thread_alloc_counts().count;
+    /// // ... the work ...
+    /// SCOPE.end_counting(token, allocs);
+    /// ```
+    #[inline]
+    pub fn end_counting(&self, token: u64, allocs_at_begin: u64) {
+        if token != 0 {
+            let made = crate::alloc_count::thread_alloc_counts()
+                .count
+                .wrapping_sub(allocs_at_begin);
+            self.allocs.fetch_add(made, Relaxed);
+        }
+        self.end(token);
     }
 
     fn totals(&self) -> Totals {

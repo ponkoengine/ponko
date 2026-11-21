@@ -293,22 +293,164 @@ pub unsafe extern "C" fn ponko_ctx_create_crowd(
             if levels.is_null() || level_count == 0 || level_count > ponko::render::MAX_CROWD_LEVELS {
                 return Err(invalid("give 1 to 8 crowd levels"));
             }
-            let levels: Vec<CrowdLevel> = std::slice::from_raw_parts(levels, level_count)
-                .iter()
-                .map(|l| {
-                    CrowdLevel::new(to_c(l.mesh), l.min_distance, l.max_distance)
-                        .with_camera(l.camera)
-                        .with_shadows(l.shadows)
-                        .with_influences(l.influences)
-                })
-                .collect();
-            let people = instances_from_c(instances, count)?;
-            let options = CrowdOptions::default().with_cast_shadows(options.cast_shadows);
-            let crowd = c
-                .gfx
-                .try_create_crowd(&animation.0, &levels, &people, options)
-                .map_err(engine_error)?;
-            out(output, PonkoCrowd { id: __ffi::id(crowd) })
+            let levels = levels_from_c(levels, std::ptr::null(), level_count);
+            create(c, animation, &levels, instances, count, options.cast_shadows, output)
+        })
+    })
+}
+
+/// The levels behind `levels`, each with its fade from `fades` (null: none).
+///
+/// # Safety
+/// `levels` holds `level_count` entries, and a non-null `fades` too.
+unsafe fn levels_from_c(levels: *const PonkoCrowdLevel, fades: *const f32, level_count: usize) -> Vec<CrowdLevel> {
+    // SAFETY: caller contract.
+    let (levels, fades) = unsafe {
+        (
+            std::slice::from_raw_parts(levels, level_count),
+            (!fades.is_null()).then(|| std::slice::from_raw_parts(fades, level_count)),
+        )
+    };
+    levels
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            CrowdLevel::new(to_c(l.mesh), l.min_distance, l.max_distance)
+                .with_camera(l.camera)
+                .with_shadows(l.shadows)
+                .with_influences(l.influences)
+                .with_fade(fades.map_or(0.0, |f| f[i]))
+        })
+        .collect()
+}
+
+/// Makes the crowd and writes it to `output`.
+///
+/// # Safety
+/// A non-null `instances` holds `count` entries; `output` non-null and writable.
+unsafe fn create(
+    c: &mut ponko::prelude::Ctx,
+    animation: &PonkoCrowdAnimation,
+    levels: &[CrowdLevel],
+    instances: *const PonkoCrowdInstance,
+    count: usize,
+    cast_shadows: bool,
+    output: *mut PonkoCrowd,
+) -> Result<(), crate::Failure> {
+    // SAFETY: caller contract.
+    let people = unsafe { instances_from_c(instances, count)? };
+    let options = CrowdOptions::default().with_cast_shadows(cast_shadows);
+    let crowd = c
+        .gfx
+        .try_create_crowd(&animation.0, levels, &people, options)
+        .map_err(engine_error)?;
+    // SAFETY: caller contract.
+    unsafe { out(output, PonkoCrowd { id: __ffi::id(crowd) }) }
+}
+
+/// The version of `PonkoCrowdDesc` this header describes.
+pub const PONKO_CROWD_DESC_VERSION: u32 = 1;
+
+/// Everything about a crowd to make (Rust `Graphics::try_create_crowd`
+/// with its levels and options). A versioned descriptor: set `struct_size`
+/// and `version`, fill it (`ponko_crowd_desc_defaults` clears the rest),
+/// and make the crowd with `ponko_ctx_create_crowd_ex`.
+///
+/// Version 1 adds to `ponko_ctx_create_crowd`'s arguments `fades`: per
+/// level, how far before its `max_distance` it crossfades into the next
+/// level (Rust `CrowdLevel::fade`), so characters don't pop from one mesh
+/// to the next. `PonkoCrowdLevel` keeps its layout.
+/// ```
+/// let d = ponko_ffi::ponko_crowd_desc_defaults();
+/// assert_eq!((d.version, d.level_count, d.fades.is_null()), (ponko_ffi::PONKO_CROWD_DESC_VERSION, 0, true));
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PonkoCrowdDesc {
+    /// `sizeof(PonkoCrowdDesc)` as the caller compiled it.
+    pub struct_size: u32,
+    /// `PONKO_CROWD_DESC_VERSION` as the caller compiled it.
+    pub version: u32,
+    /// The baked clips (`ponko_ctx_bake_crowd_animation`).
+    pub animation: *const PonkoCrowdAnimation,
+    /// 1 to 8 levels of detail.
+    pub levels: *const PonkoCrowdLevel,
+    /// How many `levels` (and `fades`) there are.
+    pub level_count: usize,
+    /// Null (no level fades), or `level_count` fades in world units: each
+    /// finite, 0 (switch at once) up to its level's band width.
+    pub fades: *const f32,
+    /// The characters, `count` of them (null when 0).
+    pub instances: *const PonkoCrowdInstance,
+    /// How many `instances` there are.
+    pub count: usize,
+    /// Whether the crowd casts shadows at all (Rust `CrowdOptions::cast_shadows`).
+    pub cast_shadows: bool,
+}
+
+impl crate::descriptors::Versioned for PonkoCrowdDesc {
+    const NAME: &'static str = "PonkoCrowdDesc";
+    const VERSION: u32 = PONKO_CROWD_DESC_VERSION;
+    fn len_of(version: u32) -> Option<usize> {
+        match version {
+            1 => Some(std::mem::offset_of!(Self, cast_shadows) + size_of::<bool>()),
+            _ => None,
+        }
+    }
+}
+
+/// A crowd description with its header set, nothing in it, and shadows on
+/// (Rust `CrowdOptions::default`).
+/// ```
+/// assert!(ponko_ffi::ponko_crowd_desc_defaults().cast_shadows);
+/// ```
+#[unsafe(no_mangle)]
+pub extern "C" fn ponko_crowd_desc_defaults() -> PonkoCrowdDesc {
+    PonkoCrowdDesc {
+        struct_size: size_of::<PonkoCrowdDesc>() as u32,
+        version: PONKO_CROWD_DESC_VERSION,
+        animation: std::ptr::null(),
+        levels: std::ptr::null(),
+        level_count: 0,
+        fades: std::ptr::null(),
+        instances: std::ptr::null(),
+        count: 0,
+        cast_shadows: CrowdOptions::default().cast_shadows,
+    }
+}
+
+/// Makes a crowd from `desc` (Rust `Graphics::try_create_crowd`):
+/// `ponko_ctx_create_crowd` with the levels' crossfades. A bad header, a
+/// level whose mesh is freed, from another game or not skinned, a bad
+/// distance band, fade or influence count, or a character the engine
+/// rejects is an invalid argument.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_create_crowd_ex(std::ptr::null_mut(), std::ptr::null(), std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `desc` null or a readable descriptor whose pointers
+/// hold the counts it gives; `output` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_create_crowd_ex(
+    ctx: *mut PonkoCtx,
+    desc: *const PonkoCrowdDesc,
+    output: *mut PonkoCrowd,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            if output.is_null() {
+                return Err(invalid("output is null"));
+            }
+            let d = crate::descriptors::read_desc(desc, ponko_crowd_desc_defaults())?;
+            let Some(animation) = d.animation.as_ref() else {
+                return Err(invalid("animation is null"));
+            };
+            if d.levels.is_null() || d.level_count == 0 || d.level_count > ponko::render::MAX_CROWD_LEVELS {
+                return Err(invalid("give 1 to 8 crowd levels"));
+            }
+            let levels = levels_from_c(d.levels, d.fades, d.level_count);
+            create(c, animation, &levels, d.instances, d.count, d.cast_shadows, output)
         })
     })
 }

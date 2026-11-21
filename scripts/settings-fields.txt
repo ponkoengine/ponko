@@ -75,6 +75,8 @@ struct WaterDesc WaterDesc src/water/mod.rs PonkoWaterDesc
 
 struct Wave Wave src/water/waves.rs PonkoWave
 
+struct WaveSpectrum WaveSpectrum src/water/spectrum.rs PonkoWaveSpectrum
+
 struct ParticleSettings2D ParticleSettings2D src/particles2d.rs PonkoParticleSettings2D
 ParticleSettings2D.lifetime         lifetime_min         # a range is a _min and a _max field
 ParticleSettings2D.speed            speed_min            # same

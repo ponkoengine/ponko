@@ -5212,3 +5212,154 @@ int main() {
                                ctx.skeleton2d_bone_index(puppet, "hand"), to, true, 0.5f); // the arm half way
     // ANCHOR_END: skeleton2d_one_off
 }
+
+// Compiled for the guide's crash report, touch, camera, window, water and
+// loading chapters; a game calls these from main, its setup and its systems.
+[[maybe_unused]] static void crash_reports_guide() {
+    // ANCHOR: crash_reports
+    ponko::game("Space Crab", 1280, 720)
+        .app_id("space-crab")
+        .crash_reports(ponko::crash_mode::build_default, "1.4.2", [](const ponko::crash_report& report) {
+            // Runs inside the panic hook for a panic: quick, and no throwing.
+            if (report.path) std::fprintf(stderr, "Space Crab stopped. A report is in %s\n", report.path);
+        })
+        .run([](ponko::ctx& ctx) {
+            for (const auto& name : ctx.saved_crash_reports()) { // newest first
+                auto text = ctx.storage_read_text(name.c_str());
+                // Ask the player, then send *text with an HTTP client of your choice.
+                (void)text;
+                ctx.storage_delete(name.c_str());
+            }
+        });
+    // ANCHOR_END: crash_reports
+}
+[[maybe_unused]] static void crash_report_own_error() {
+    // ANCHOR: crash_report_own
+    ponko::report_crash("the save file is damaged"); // false when reports are off
+    // ANCHOR_END: crash_report_own
+}
+[[maybe_unused]] static void touch_layout_guide(ponko::ctx& ctx) {
+    // ANCHOR: touch_styles
+    ponko::touch_style warm;
+    warm.button = {1, 0.8f, 0.5f, 0.35f};
+    warm.size = 1.2f;
+    ponko::touch_style attack = warm;
+    attack.button = {1, 0.2f, 0.2f, 0.45f};
+    attack.held = {1, 0.4f, 0.4f, 0.85f};
+    ctx.set_touch_controls(ponko::touch_controls()
+                               .stick("move")
+                               .button("jump", "A")
+                               .button("attack", "B")
+                               .style(warm)
+                               .control_style("attack", attack)
+                               // The attack button 120 units in from the bottom right corner.
+                               .place("attack", ponko::touch_place({1, 1}, {-120, -120})));
+    // ANCHOR_END: touch_styles
+    // ANCHOR: touch_layout
+    // At setup: the player's arrangement from last time.
+    try { ctx.restore_touch_layout(); } catch (const ponko::error&) {}
+    // The arrange screen: drags move controls, press nothing.
+    ctx.edit_touch_controls(true);
+    ctx.set_touch_layout(1.25f, 0.6f); // the size and opacity sliders
+    // When the player leaves the arrange screen:
+    ctx.edit_touch_controls(false);
+    ctx.save_touch_layout(); // touch_controls.json in the player's storage
+    // ANCHOR_END: touch_layout
+}
+[[maybe_unused]] static void camera_target_guide(ponko::ctx& ctx) {
+    ponko::entity hero = ctx.world().spawn(ponko::transform_at({400, 300}));
+    // ANCHOR: camera_target
+    // Once, in setup: the rig, kept by the engine...
+    ponko::follow_camera2d follow;
+    follow.dead_zone = {32, 48};
+    follow.look_ahead = {48, 0};
+    follow.set_bounds({{0, 0}, {4000, 720}});
+    follow.keep(ctx);
+    // ...and the entity it follows.
+    ctx.set_camera_target(hero);
+    // ANCHOR_END: camera_target
+}
+[[maybe_unused]] static void restore_window_guide() {
+    // ANCHOR: restore_window
+    ponko::game("Space Crab", 1280, 720)
+        .app_id("space-crab")
+        .restore_window_settings() // window.json from last time, before the window opens
+        .run([](ponko::ctx&) {});
+    // ANCHOR_END: restore_window
+}
+[[maybe_unused]] static void water_spectrum_guide(ponko::ctx& ctx) {
+    // ANCHOR: water_spectrum
+    ponko::wave_spectrum storm({12, 4}, 2.5f); // wind in m/s, height in m
+    storm.tile = 256;
+    storm.resolution = 128;
+    storm.choppiness = 1.2f;
+    storm.seed = 7;
+    ponko::entity sea = ctx.spawn_water(ponko::water_desc::sea(0, {12, 4}, 2.5f).with_spectrum(storm));
+    float height = ctx.water_height(sea, {30, -8}, static_cast<float>(ctx.time()));
+    // ANCHOR_END: water_spectrum
+    (void)height;
+}
+// ANCHOR: sliced_loader_cpp
+// A sliced loader's state: start makes it from the file's bytes, step does
+// one bounded piece and says whether it is all done.
+struct wall_count {
+    std::string text;
+    std::size_t at = 0, walls = 0;
+    bool step() { // one row
+        for (; at < text.size() && text[at] != '\n'; ++at) walls += text[at] == '#';
+        if (at < text.size()) ++at;
+        return at == text.size();
+    }
+};
+// ANCHOR_END: sliced_loader_cpp
+[[maybe_unused]] static void sliced_loader_guide(ponko::ctx& ctx) {
+    // ANCHOR: sliced_group_cpp
+    ponko::asset_group group("level");
+    group.sliced("walls.txt", [](const std::uint8_t* bytes, std::size_t len) {
+        return wall_count{std::string(bytes, bytes + len)};
+    });
+    std::uint32_t id = ctx.start_asset_group(std::move(group));
+    // ... later, once ctx.asset_group_state(id) is ready:
+    std::unique_ptr<wall_count> walls = ctx.take_asset_group_sliced<wall_count>(id, "walls.txt");
+    // ANCHOR_END: sliced_group_cpp
+    (void)walls;
+}
+[[maybe_unused]] static void arrange_touch_guide(ponko::ctx& ctx) {
+    auto tree = ctx.ui_retained();
+    // ANCHOR: arrange_touch_controls
+    auto arrange = tree.find("settings.arrange");
+    while (auto event = tree.next_event()) {
+        if (arrange && event->kind == ponko::ui::event_kind::clicked && event->node == *arrange) {
+            // The controls show (on a desktop too), with a small panel beside them.
+            ctx.arrange_touch_controls();
+        }
+    }
+    // ANCHOR_END: arrange_touch_controls
+}
+[[maybe_unused]] static void crowd_fade_guide(ponko::ctx& ctx, const ponko::crowd_animation& bake, ponko::mesh near,
+                                              ponko::mesh far, const std::vector<ponko::crowd_instance>& people) {
+    // ANCHOR: crowd_fade
+    const float forever = std::numeric_limits<float>::infinity();
+    ponko::crowd crowd = ctx.create_crowd(bake,
+        {{near, 0, 40, true, true, 4}, {far, 40, forever, true, true, 1}},
+        {4, 0}, // the near level crossfades into the far one from 36 m
+        people);
+    // ANCHOR_END: crowd_fade
+    (void)crowd;
+}
+[[maybe_unused]] static void nav_crowd_stats_guide(ponko::ctx& ctx) {
+    // ANCHOR: nav_crowd_stats
+    ponko::nav_crowd_stats stats = ctx.navmesh_crowd_stats();
+    double work_per_agent = double(stats.work) / double(std::max<std::uint64_t>(stats.agent_steps, 1));
+    // ANCHOR_END: nav_crowd_stats
+    (void)work_per_agent;
+}
+[[maybe_unused]] static void thread_allocs_guide() {
+    // ANCHOR: thread_allocs
+    ponko::alloc_counts before = ponko::thread_alloc_counts();
+    std::vector<int> scratch(64); // what is measured
+    ponko::alloc_counts after = ponko::thread_alloc_counts();
+    std::uint64_t made_here = after.count - before.count; // on this thread only
+    // ANCHOR_END: thread_allocs
+    (void)made_here;
+}

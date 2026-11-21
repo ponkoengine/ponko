@@ -363,6 +363,11 @@ using crowd_level = PonkoCrowdLevel;
 using crowd_instance = PonkoCrowdInstance;
 /// Settings of a crowd (Rust `CrowdOptions`).
 using crowd_options = PonkoCrowdOptions;
+/// What a navmesh's crowd has done since it was baked (Rust `NavCrowdStats`), from ctx::navmesh_crowd_stats:
+/// crowd steps, agents moved and the backend's work, all only growing.
+using nav_crowd_stats = PonkoNavCrowdStats;
+/// Heap allocations counted while profiling was on (Rust `AllocCounts`), from thread_alloc_counts.
+using alloc_counts = PonkoAllocCounts;
 /// A clip to bake for crowds (Rust `CrowdClip`), from crowd_clip_of.
 using crowd_clip = PonkoCrowdClip;
 /// A GPU array of four-float elements (Rust `GpuBuffer`) for compute passes, from ctx::create_gpu_buffer. A
@@ -486,6 +491,15 @@ using touch = PonkoTouch;
 using gesture_event = PonkoGestureEvent;
 /// The thresholds gestures are recognized with (Rust `GestureSettings`): pixels and seconds.
 using gesture_settings = PonkoGestureSettings;
+/// Whether a game writes crash reports (game::crash_reports): the build's default (on in release
+/// builds with a window), on everywhere (also headless), off everywhere.
+enum class crash_mode : std::uint32_t { build_default, on, off };
+/// What stopped the game (`crash_report::kind`, Rust `CrashKind`).
+enum class crash_kind : std::uint32_t { panic, error, native };
+/// One crash report, as game::crash_reports' hook gets it (Rust `CrashReport`): `kind` (a
+/// crash_kind value), `message`, `game_version`, `file` and `path` (null when not saved), `text` (the
+/// whole file), and more. Its strings live only while the hook runs.
+using crash_report = PonkoCrashReport;
 /// An axis-aligned rectangle from `min` (top-left) to `max` (Rust `Rect`); see rect_at.
 using rect = PonkoRect;
 /// A font handle (Rust `Font`) from ctx::load_font; `{0}` is the built-in font.
@@ -1199,6 +1213,15 @@ inline void check_abi_version() {
 }
 }  // namespace detail
 
+/// Writes a crash report for the game's own fatal error, `message`, and runs the hook (Rust
+/// `ponko::crash::report`): for a game about to stop without crashing. False when reports are off.
+inline bool report_crash(const char* message) {
+    const PonkoStatus status = ponko_crash_report(message);
+    if (status == PONKO_NOT_FOUND) return false;
+    detail::check(status);
+    return true;
+}
+
 // Versioned descriptors (STABILITY.md): structs that start with struct_size and version, so a release can
 // add fields at the end. The helpers below fill both header fields for this header's version and the
 // defaults; change the fields you need and pass the struct by reference.
@@ -1693,6 +1716,11 @@ public:
         return perf_report(text.str());
     }
 };
+
+/// The allocations counted so far on the calling thread while profiling was on (Rust
+/// `perf::thread_alloc_counts`): read it twice on one thread and subtract to count what the code between
+/// allocated there. A PONKO_PROFILE_SCOPE counts its own the same way.
+inline alloc_counts thread_alloc_counts() noexcept { return ponko_thread_alloc_counts(); }
 
 /// Times the scope it lives in (see PONKO_PROFILE_SCOPE).
 class profile_scope_guard {
@@ -5756,6 +5784,24 @@ public:
     /// The C handle.
     PonkoGlyphAtlas* raw() const noexcept { return raw_; }
 };
+/// How on-screen controls look (Rust `TouchStyle`): the colors of a stick's base and knob and of a
+/// button idle, held and its label, which tint the images (drawn white); an image of the game's own
+/// in place of the engine's disc (`has_image`, `image`); a size. For touch_controls::style and
+/// control_style.
+struct touch_style : PonkoTouchStyle {
+    /// The engine's look: see-through white discs, size 1.
+    touch_style() : PonkoTouchStyle(ponko_touch_style_default()) {}
+};
+/// Where an on-screen control's centre sits (Rust `TouchPlace`): at `anchor`, a point of the view
+/// from (0, 0) top left to (1, 1) bottom right, moved by `offset` UI units.
+struct touch_place : PonkoTouchPlace {
+    /// Centred `offset` UI units from `anchor`.
+    touch_place(vec2 anchor, vec2 offset) : PonkoTouchPlace{anchor, offset} {}
+};
+/// What the player changed about one on-screen control (Rust `TouchAdjust`): where they put it
+/// (`placed`, `place`) and its size, times the game's. From ctx::touch_layout_control.
+using touch_adjust = PonkoTouchAdjust;
+
 /// On-screen controls for ctx::set_touch_controls (Rust `TouchControls`): sticks in the bottom
 /// corners, round buttons at the bottom right, small buttons in the top right corner, each driving a
 /// named action while a finger holds it. Shown on touch devices only, unless show() says otherwise;
@@ -5774,6 +5820,39 @@ public:
     touch_controls& show(touch_show when) { show_ = when; return *this; }
     /// Whether they stay over open UI screens.
     touch_controls& over_screens(bool on) { over_screens_ = on; return *this; }
+    /// How every control looks (the engine's see-through discs by default).
+    touch_controls& style(const touch_style& look) { style_ = look; return *this; }
+    /// How the control driving `action` looks, over style().
+    touch_controls& control_style(std::string action, const touch_style& look) {
+        styles_.push_back({std::move(action), look});
+        return *this;
+    }
+    /// Puts the control driving `action` at `where` instead of where the engine lays it out;
+    /// the player can still move it.
+    touch_controls& place(std::string action, touch_place where) {
+        places_.push_back({std::move(action), where});
+        return *this;
+    }
+    /// The descriptor ctx::set_touch_controls passes, borrowing `list`, `styles` and `places`
+    /// (filled here) and this object's strings.
+    PonkoTouchControlsDesc desc(std::vector<PonkoTouchControl>& list, std::vector<PonkoTouchControlStyle>& styles,
+                                std::vector<PonkoTouchControlPlace>& places) const {
+        list = raw();
+        styles.clear();
+        for (const auto& s : styles_) styles.push_back({s.first.c_str(), s.second});
+        places.clear();
+        for (const auto& p : places_) places.push_back({p.first.c_str(), p.second});
+        PonkoTouchControlsDesc d{};
+        d.struct_size = sizeof d;
+        d.version = PONKO_TOUCH_CONTROLS_DESC_VERSION;
+        detail::check(ponko_touch_controls_desc_defaults(&d));
+        d.controls = list.data(); d.count = list.size();
+        d.show = static_cast<std::uint32_t>(show_); d.over_screens = over_screens_;
+        d.style = style_;
+        d.styles = styles.data(); d.style_count = styles.size();
+        d.places = places.data(); d.place_count = places.size();
+        return d;
+    }
     /// The C descriptions, borrowing this object's strings.
     std::vector<PonkoTouchControl> raw() const {
         std::vector<PonkoTouchControl> list;
@@ -5794,6 +5873,9 @@ private:
     std::vector<entry> entries_;
     touch_show show_ = touch_show::automatic;
     bool over_screens_ = false;
+    touch_style style_;
+    std::vector<std::pair<std::string, PonkoTouchStyle>> styles_;
+    std::vector<std::pair<std::string, PonkoTouchPlace>> places_;
 };
 
 /// Manual input for tests and replay (same state as live input).
@@ -5945,6 +6027,10 @@ public:
     input_scenario& touch(std::uint64_t tick, std::uint64_t id, touch_phase phase, vec2 at) {
         return step(ponko_input_scenario_touch(raw_, tick, id, static_cast<std::uint32_t>(phase), at));
     }
+    /// Feeds a trackpad gesture (as ctx::feed_trackpad) before the simulation systems of tick `tick` run.
+    input_scenario& trackpad(std::uint64_t tick, gesture g, touch_phase phase, float amount) {
+        return step(ponko_input_scenario_trackpad(raw_, tick, static_cast<std::uint32_t>(g), static_cast<std::uint32_t>(phase), amount));
+    }
     /// A tap at `at` on tick `tick`: a finger down and up within the tick (a tap gesture, or a press of the
     /// on-screen button under it). Each finger gets an id of its own.
     input_scenario& tap(std::uint64_t tick, vec2 at) { return step(ponko_input_scenario_tap(raw_, tick, at)); }
@@ -6082,6 +6168,33 @@ public:
     asset_group& sound(const char* path) { return add(PONKO_GROUP_SOUND, path); }
     /// The file's bytes, for your own decoder (`ctx::take_asset_group_bytes`).
     asset_group& bytes(const char* path) { return add(PONKO_GROUP_BYTES, path); }
+    /// A file of your own decoded a piece at a time (Rust `AssetGroup::with_sliced`): `start(data,
+    /// len)` makes a loader `L` from the file's bytes, and its `bool step()` does the next bounded
+    /// piece, true once it is all done (throw to fail the group). Without worker threads each frame
+    /// steps it within its budget; with workers it runs on one, so touch only the loader. Take it with
+    /// `ctx::take_asset_group_sliced<L>`.
+    template<class F> asset_group& sliced(const char* path, F start) {
+        using L = std::decay_t<decltype(start(std::declval<const std::uint8_t*>(), std::size_t{}))>;
+        struct holder { F start; };
+        PonkoSliceLoader loader{};
+        loader.struct_size = sizeof loader;
+        loader.version = PONKO_SLICE_LOADER_VERSION;
+        loader.start = [](void* user, const std::uint8_t* data, std::size_t len, void** out) noexcept -> std::uint32_t {
+            try { *out = new L(static_cast<holder*>(user)->start(data, len)); return PONKO_OK; }
+            catch (...) { return PONKO_INVALID_ARGUMENT; }
+        };
+        loader.step = [](void*, void* state, bool* done) noexcept -> std::uint32_t {
+            try { *done = static_cast<L*>(state)->step(); return PONKO_OK; }
+            catch (...) { return PONKO_INVALID_ARGUMENT; }
+        };
+        loader.free_state = [](void*, void* state) noexcept { delete static_cast<L*>(state); };
+        auto* h = new holder{std::move(start)};
+        loader.user = h;
+        loader.free_user = [](void* user) noexcept { delete static_cast<holder*>(user); };
+        const PonkoStatus status = ponko_asset_group_add_sliced(raw_, path, &loader);
+        if (status != PONKO_OK) { delete h; detail::check(status); }
+        return *this;
+    }
     /// Gives up ownership of the C group (to start it). Null afterwards.
     PonkoAssetGroup* release() noexcept { return std::exchange(raw_, nullptr); }
 private:
@@ -7031,6 +7144,11 @@ public:
     // Touch (Rust `InputEvent::Touch`, `input.touches`, `gesture_events`, `set_touch_controls`, ...).
     /// Feeds a finger's event as the window does: `id` names the finger, `at` is in window pixels.
     void feed_touch(std::uint64_t id, touch_phase phase, vec2 at) { detail::check(ponko_ctx_feed_touch(raw_, id, static_cast<std::uint32_t>(phase), at)); }
+    /// Feeds a trackpad gesture (Rust `InputEvent::Trackpad`): gesture::pinch (`amount` how much it
+    /// spread), gesture::rotate (radians) or gesture::double_tap, at the mouse pointer; no touches.
+    void feed_trackpad(gesture g, touch_phase phase, float amount) {
+        detail::check(ponko_ctx_feed_trackpad(raw_, static_cast<std::uint32_t>(g), static_cast<std::uint32_t>(phase), amount));
+    }
     /// The fingers on the screen, oldest first.
     std::vector<touch> touches() const {
         std::size_t count = 0;
@@ -7069,8 +7187,11 @@ public:
     void set_gesture_settings(const ponko::gesture_settings& s) { detail::check(ponko_ctx_set_gesture_settings(raw_, &s)); }
     /// Puts on-screen controls on the screen, replacing any.
     void set_touch_controls(const touch_controls& controls) {
-        auto list = controls.raw();
-        detail::check(ponko_ctx_set_touch_controls(raw_, list.data(), list.size(), static_cast<std::uint32_t>(controls.when()), controls.over_screens()));
+        std::vector<PonkoTouchControl> list;
+        std::vector<PonkoTouchControlStyle> styles;
+        std::vector<PonkoTouchControlPlace> places;
+        const PonkoTouchControlsDesc d = controls.desc(list, styles, places);
+        detail::check(ponko_ctx_set_touch_controls_ex(raw_, &d));
     }
     /// Takes the on-screen controls away.
     void remove_touch_controls() { detail::check(ponko_ctx_remove_touch_controls(raw_)); }
@@ -7091,6 +7212,46 @@ public:
         detail::check(status);
         return at;
     }
+    /// Turns the player's arranging of the on-screen controls on or off (Rust
+    /// `Input::edit_touch_controls`): while on, they show, press nothing, and a drag moves one into
+    /// the player's layout. Save it when the player is done (save_touch_layout).
+    void edit_touch_controls(bool on) { detail::check(ponko_ctx_edit_touch_controls(raw_, on)); }
+    /// Opens the engine's ready-made screen where the player arranges the on-screen controls (Rust
+    /// `Input::arrange_touch_controls`): edit mode at once, the screen (`touch.arrange.*` UI nodes) at the next
+    /// UI pass; its Save writes the layout to storage, its Cancel puts the old one back.
+    void arrange_touch_controls() { detail::check(ponko_ctx_arrange_touch_controls(raw_)); }
+    /// Whether the player is arranging the on-screen controls.
+    bool editing_touch_controls() const { bool b = false; detail::check(ponko_ctx_editing_touch_controls(raw_, &b)); return b; }
+    /// Every control's size in the player's layout, times the game's.
+    float touch_layout_size() const { float v = 1; detail::check(ponko_ctx_touch_layout(raw_, &v, nullptr)); return v; }
+    /// Every control's opacity in the player's layout, 0 to 1.
+    float touch_layout_opacity() const { float v = 1; detail::check(ponko_ctx_touch_layout(raw_, nullptr, &v)); return v; }
+    /// Sets every control's size and opacity in the player's layout (a settings screen's sliders);
+    /// each control's own changes stay.
+    void set_touch_layout(float size, float opacity) { detail::check(ponko_ctx_set_touch_layout(raw_, size, opacity)); }
+    /// What the player changed about the control driving `action`.
+    touch_adjust touch_layout_control(const char* action) const {
+        touch_adjust a{}; detail::check(ponko_ctx_touch_layout_control(raw_, action, &a)); return a;
+    }
+    /// Sets what the player changed about the control driving `action`.
+    void set_touch_layout_control(const char* action, const touch_adjust& adjust) {
+        detail::check(ponko_ctx_set_touch_layout_control(raw_, action, &adjust));
+    }
+    /// Forgets the player's changes to the control driving `action`: it follows the game again.
+    void forget_touch_layout_control(const char* action) { detail::check(ponko_ctx_set_touch_layout_control(raw_, action, nullptr)); }
+    /// Puts every control back where the game puts it, at size and opacity 1.
+    void reset_touch_layout() { detail::check(ponko_ctx_reset_touch_layout(raw_)); }
+    /// The player's layout as JSON, for a settings file of the game's own.
+    std::string touch_layout_json() const {
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* n) { return ponko_ctx_touch_layout_json(raw_, b, c, n); });
+    }
+    /// Replaces the player's layout with one from touch_layout_json's text; throws ponko::error if
+    /// it isn't one (nothing changes).
+    void set_touch_layout_json(const char* json) { detail::check(ponko_ctx_set_touch_layout_json(raw_, json)); }
+    /// Saves the player's layout in the game's storage (`touch_controls.json`).
+    void save_touch_layout() { detail::check(ponko_ctx_save_touch_layout(raw_)); }
+    /// Reads back the saved layout, at setup; no file changes nothing.
+    void restore_touch_layout() { detail::check(ponko_ctx_restore_touch_layout(raw_)); }
     /// Scalar axis action `name`, -1 to 1. Unknown actions read 0.
     float action_axis(const char* name) const { float value = 0; detail::check(ponko_ctx_action_axis(raw_, name, &value)); return value; }
     /// Vector axis action `name`, each component -1 to 1. Unknown actions read zero.
@@ -7361,6 +7522,19 @@ public:
     std::string storage_dir() {
         return detail::read_text([&](char* b, std::size_t c, std::size_t* n) { return ponko_ctx_storage_dir(raw_, b, c, n); });
     }
+    /// The crash reports in the game's storage, newest first (Rust `ponko::crash::saved_reports`):
+    /// read one with storage_read_text, delete it with storage_delete.
+    std::vector<std::string> saved_crash_reports() {
+        const std::string text = detail::read_text([&](char* b, std::size_t c, std::size_t* n) { return ponko_ctx_saved_crash_reports(raw_, b, c, n); });
+        std::vector<std::string> names;
+        std::size_t start = 0;
+        while (start < text.size()) {
+            const std::size_t end = std::min(text.find('\n', start), text.size());
+            names.emplace_back(text, start, end - start);
+            start = end + 1;
+        }
+        return names;
+    }
     /// Saves the world's reflected components and resources in save slot `slot`.
     void save_world(const char* slot) { detail::check(ponko_ctx_save_world(raw_, slot)); }
     /// Replaces the world with save slot `slot` (as load_scene does).
@@ -7538,6 +7712,17 @@ public:
     ponko::camera camera() const { ponko::camera c{}; detail::check(ponko_ctx_camera(raw_, &c)); return c; }
     /// Moves or zooms the 2D camera. Throws ponko::error unless the zoom is positive.
     void set_camera(const ponko::camera& c) { detail::check(ponko_ctx_set_camera(raw_, &c)); }
+    /// Marks entity `e` as the one the kept camera rigs follow (Rust `CameraTarget`), or takes the
+    /// mark off: the engine moves each rig kept with its keep() to it every frame. Throws ponko::error
+    /// for a dead entity.
+    void set_camera_target(entity e, bool on = true) { detail::check(ponko_ctx_set_camera_target(raw_, e, on)); }
+    /// The entity the kept rigs follow (the first marked one), if any.
+    std::optional<entity> camera_target() const {
+        entity e = 0; bool found = false;
+        detail::check(ponko_ctx_camera_target(raw_, &e, &found));
+        if (!found) return std::nullopt;
+        return e;
+    }
     /// Multiplies the 2D zoom by `factor`, keeping the world point under window pixel `screen` where it is
     /// (Rust `Camera::zoom_at`): zooming at the pointer. Throws ponko::error unless `factor` is positive.
     void camera_zoom_at(vec2 screen, float factor) { detail::check(ponko_ctx_camera_zoom_at(raw_, screen, factor)); }
@@ -7668,6 +7853,24 @@ public:
         crowd c{};
         detail::check(ponko_ctx_create_crowd(raw_, animation.raw(), levels.data(), levels.size(), people.data(),
             people.size(), options, &c));
+        return c;
+    }
+    /// The same with crossfades between the levels (Rust `CrowdLevel::with_fade`): `fades[k]` is how far
+    /// before level `k`'s far distance it dithers into the next, 0 to switch at once; one per level. Throws
+    /// ponko::error for a fade that isn't finite or is wider than its level's band, and as create_crowd does.
+    crowd create_crowd(const crowd_animation& animation, const std::vector<crowd_level>& levels,
+        const std::vector<float>& fades, const std::vector<crowd_instance>& people, crowd_options options = {true}) {
+        if (fades.size() != levels.size()) throw std::invalid_argument("create_crowd: give one fade per level");
+        PonkoCrowdDesc d = ponko_crowd_desc_defaults();
+        d.animation = animation.raw();
+        d.levels = levels.data();
+        d.level_count = levels.size();
+        d.fades = fades.data();
+        d.instances = people.data();
+        d.count = people.size();
+        d.cast_shadows = options.cast_shadows;
+        crowd c{};
+        detail::check(ponko_ctx_create_crowd_ex(raw_, &d, &c));
         return c;
     }
     /// Replaces a crowd's characters (Rust `Graphics::update_crowd`), as often as every frame. Throws
@@ -8160,6 +8363,15 @@ public:
     }
     /// Takes `e`'s agent and obstacle off (whichever it has).
     void remove_nav(entity e) { detail::check(ponko_ctx_remove_nav(raw_, e)); }
+    /// What the navmesh's crowd has done since it was baked (Rust `NavMesh::crowd_stats`), for tests that
+    /// count the crowd's cost instead of timing it. Throws ponko::error with no navmesh.
+    nav_crowd_stats navmesh_crowd_stats() const {
+        nav_crowd_stats s{};
+        s.struct_size = sizeof s;
+        s.version = PONKO_NAV_CROWD_STATS_VERSION;
+        detail::check(ponko_ctx_navmesh_crowd_stats(raw_, &s));
+        return s;
+    }
     /// Gives `e` (which needs a 3D transform) a new particle emitter, replacing any old one.
     void set_particle_emitter3d(entity e, const particle_settings& settings) {
         PonkoParticleSettings3DEx c = settings.raw_ex();
@@ -8723,6 +8935,13 @@ public:
         if (st.error) std::rethrow_exception(st.error);
         detail::check(status);
         return std::move(*st.value);
+    }
+    /// Takes the finished loader of asset `path` of group `id` (added with `asset_group::sliced`),
+    /// once; `L` is the loader's type. Throws ponko::error if it isn't there (not finished, or taken).
+    template<class L> std::unique_ptr<L> take_asset_group_sliced(std::uint32_t id, const char* path) {
+        void* state = nullptr;
+        detail::check(ponko_ctx_take_asset_group_sliced(raw_, id, path, &state));
+        return std::unique_ptr<L>(static_cast<L*>(state));
     }
     /// How long the game thread may spend on asset groups each frame, in milliseconds (default 4).
     void set_asset_group_frame_budget(float milliseconds) {
@@ -10016,6 +10235,14 @@ struct camera_shake : PonkoCameraShake {
     void apply3d(ctx& c) const { detail::check(ponko_camera_shake_apply3d(this, c.raw())); }
 };
 
+/// A sea's waves from a wind-driven spectrum (Rust water::WaveSpectrum): thousands of waves worked
+/// out each frame with an FFT. Change tile, resolution, choppiness or seed, then water_desc::with_spectrum.
+struct wave_spectrum : PonkoWaveSpectrum {
+    /// A sea under `wind` (m/s along x and z) with `height` metres of significant wave height, on a
+    /// 256 m square of 128 cells.
+    wave_spectrum(vec2 wind, float height) : PonkoWaveSpectrum(ponko_wave_spectrum(wind, height)) {}
+};
+
 /// Everything about one body of water (Rust water::WaterDesc): start from lake, river or sea,
 /// change any field, then ctx::spawn_water.
 struct water_desc : PonkoWaterDesc {
@@ -10036,6 +10263,12 @@ struct water_desc : PonkoWaterDesc {
         water_desc d;
         detail::check(ponko_water_desc_sea(&d, level, wind, height));
         return d;
+    }
+    /// The waves from `spectrum` instead of the Gerstner waves (Rust `Waves::spectrum`).
+    water_desc& with_spectrum(const wave_spectrum& spectrum) {
+        has_spectrum = true;
+        this->spectrum = spectrum;
+        return *this;
     }
 
 private:
@@ -10059,6 +10292,18 @@ struct follow_camera2d : PonkoFollowCamera2D {
     void update(ctx& c, vec2 target, float dt) { detail::check(ponko_follow_camera2d_update(this, c.raw(), target, dt)); }
     /// Puts the camera on `target` at once.
     void snap(ctx& c, vec2 target) { detail::check(ponko_follow_camera2d_snap(this, c.raw(), target)); }
+    /// Keeps a copy of this rig in the world for the engine to update every frame toward the entity
+    /// marked with ctx::set_camera_target (Rust: the rig as a resource), replacing the one kept before.
+    void keep(ctx& c) const { detail::check(ponko_ctx_set_follow_camera2d_rig(c.raw(), this)); }
+    /// The rig the engine keeps, as it last updated it, if one is kept.
+    static std::optional<follow_camera2d> kept(ctx& c) {
+        follow_camera2d rig; bool is_kept = false;
+        detail::check(ponko_ctx_follow_camera2d_rig(c.raw(), &rig, &is_kept));
+        if (!is_kept) return std::nullopt;
+        return rig;
+    }
+    /// Stops keeping the rig: the engine leaves the camera alone.
+    static void remove_kept(ctx& c) { detail::check(ponko_ctx_set_follow_camera2d_rig(c.raw(), nullptr)); }
 };
 
 /// Pixel-perfect 2D (Rust d2::PixelPerfect): a whole-number zoom and a camera on the art pixel grid.
@@ -10273,6 +10518,18 @@ struct orbit_camera : PonkoOrbitCamera {
     void mouse_controls(ctx& c) { detail::check(ponko_orbit_camera_mouse_controls(this, c.raw())); }
     /// Eases toward the goal and places the 3D camera.
     void update(ctx& c, float dt) { detail::check(ponko_orbit_camera_update(this, c.raw(), dt)); }
+    /// Keeps a copy of this rig in the world for the engine to update every frame toward the entity
+    /// marked with ctx::set_camera_target (Rust: the rig as a resource), replacing the one kept before.
+    void keep(ctx& c) const { detail::check(ponko_ctx_set_orbit_camera_rig(c.raw(), this)); }
+    /// The rig the engine keeps, as it last updated it, if one is kept.
+    static std::optional<orbit_camera> kept(ctx& c) {
+        orbit_camera rig; bool is_kept = false;
+        detail::check(ponko_ctx_orbit_camera_rig(c.raw(), &rig, &is_kept));
+        if (!is_kept) return std::nullopt;
+        return rig;
+    }
+    /// Stops keeping the rig: the engine leaves the camera alone.
+    static void remove_kept(ctx& c) { detail::check(ponko_ctx_set_orbit_camera_rig(c.raw(), nullptr)); }
 };
 
 /// A first-person camera (Rust d3::FirstPersonCamera): look with mouse motion, update at the eye.
@@ -10291,6 +10548,18 @@ struct first_person_camera : PonkoFirstPersonCamera {
     vec3 flat_forward() const { vec3 v{}; detail::check(ponko_first_person_camera_flat_forward(this, &v)); return v; }
     /// Level right, for strafing.
     vec3 flat_right() const { vec3 v{}; detail::check(ponko_first_person_camera_flat_right(this, &v)); return v; }
+    /// Keeps a copy of this rig in the world for the engine to update every frame toward the entity
+    /// marked with ctx::set_camera_target (Rust: the rig as a resource), replacing the one kept before.
+    void keep(ctx& c) const { detail::check(ponko_ctx_set_first_person_camera_rig(c.raw(), this)); }
+    /// The rig the engine keeps, as it last updated it, if one is kept.
+    static std::optional<first_person_camera> kept(ctx& c) {
+        first_person_camera rig; bool is_kept = false;
+        detail::check(ponko_ctx_first_person_camera_rig(c.raw(), &rig, &is_kept));
+        if (!is_kept) return std::nullopt;
+        return rig;
+    }
+    /// Stops keeping the rig: the engine leaves the camera alone.
+    static void remove_kept(ctx& c) { detail::check(ponko_ctx_set_first_person_camera_rig(c.raw(), nullptr)); }
 };
 
 /// A third-person camera behind a character (Rust d3::ThirdPersonCamera): follows it, and with
@@ -10314,6 +10583,18 @@ struct third_person_camera : PonkoThirdPersonCamera {
     vec3 flat_forward() const { vec3 v{}; detail::check(ponko_third_person_camera_flat_forward(this, &v)); return v; }
     /// Level right, for strafing.
     vec3 flat_right() const { vec3 v{}; detail::check(ponko_third_person_camera_flat_right(this, &v)); return v; }
+    /// Keeps a copy of this rig in the world for the engine to update every frame toward the entity
+    /// marked with ctx::set_camera_target (Rust: the rig as a resource), replacing the one kept before.
+    void keep(ctx& c) const { detail::check(ponko_ctx_set_third_person_camera_rig(c.raw(), this)); }
+    /// The rig the engine keeps, as it last updated it, if one is kept.
+    static std::optional<third_person_camera> kept(ctx& c) {
+        third_person_camera rig; bool is_kept = false;
+        detail::check(ponko_ctx_third_person_camera_rig(c.raw(), &rig, &is_kept));
+        if (!is_kept) return std::nullopt;
+        return rig;
+    }
+    /// Stops keeping the rig: the engine leaves the camera alone.
+    static void remove_kept(ctx& c) { detail::check(ponko_ctx_set_third_person_camera_rig(c.raw(), nullptr)); }
 };
 
 /// Low-detail ground for the whole world beyond the loaded terrain tiles
@@ -10390,6 +10671,7 @@ class game {
         shared_state* st;
     };
     std::vector<std::unique_ptr<group_holder>> groups_;
+    std::unique_ptr<std::function<void(const crash_report&)>> crash_hook_;
 
     // A loading state's group builder: adds nothing once the game has failed.
     static void group_trampoline(PonkoCtx* raw, PonkoAssetGroup* group, void* user) noexcept {
@@ -10466,6 +10748,33 @@ public:
     game& app_id(const char* app_id) { return check(ponko_game_app_id(raw_, app_id)); }
     /// Keeps ctx::storage_* files in `dir` itself (tests, portable installs).
     game& data_dir(const char* dir) { return check(ponko_game_data_dir(raw_, dir)); }
+    /// Crash reports (Rust `Game::crash_reports`): whether a panic, a fatal engine error, a crash in
+    /// native code (finished at the next start) or ponko::crash_report writes a report into the game's
+    /// storage (`crash-reports/`, needs app_id or data_dir), with the game's version (`game_version`,
+    /// copied; null: not set), and the hook to run with each. The hook runs inside the crash handling,
+    /// on the thread that crashed: keep it quick; what it throws is dropped.
+    game& crash_reports(crash_mode mode, const char* game_version = nullptr,
+                        std::function<void(const crash_report&)> on_crash = nullptr) {
+        PonkoCrashReports r{};
+        r.struct_size = sizeof r;
+        r.version = PONKO_CRASH_REPORTS_VERSION;
+        r.mode = static_cast<std::uint32_t>(mode);
+        r.game_version = game_version;
+        std::unique_ptr<std::function<void(const crash_report&)>> hook;
+        if (on_crash) {
+            hook = std::make_unique<std::function<void(const crash_report&)>>(std::move(on_crash));
+            r.on_crash = [](const PonkoCrashReport* report, void* user) noexcept {
+                try { (*static_cast<std::function<void(const crash_report&)>*>(user))(*report); } catch (...) {}
+            };
+            r.user = hook.get();
+        }
+        check(ponko_game_crash_reports(raw_, &r));
+        crash_hook_ = std::move(hook);
+        return *this;
+    }
+    /// Opens the first window with the player's saved settings (Rust `Game::restore_window_settings`):
+    /// `window.json` from ctx::window_save_settings, before the window exists. Needs app_id or data_dir.
+    game& restore_window_settings(bool on = true) { return check(ponko_game_restore_window_settings(raw_, on)); }
     /// Wait for the display between frames (default on).
     game& vsync(bool on) { return check(ponko_game_vsync(raw_, on)); }
     /// Samples per pixel of the 3D frame: 4 (default) or 2.
