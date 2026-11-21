@@ -10392,6 +10392,10 @@ enum PonkoStatus ponko_ctx_water_waiting_contacts(struct PonkoCtx *ctx,
                                                   uint64_t entity,
                                                   uint32_t *out_count);
 
+enum PonkoStatus ponko_ctx_water_started_contacts(struct PonkoCtx *ctx,
+                                                  uint64_t entity,
+                                                  uint64_t *out_count);
+
 enum PonkoStatus ponko_ctx_set_buoyancy_box(struct PonkoCtx *ctx,
                                             uint64_t entity,
                                             struct PonkoVec3 size,

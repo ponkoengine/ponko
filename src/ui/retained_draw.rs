@@ -2082,6 +2082,129 @@ mod tests {
         }
     }
 
+    /// The font file of the fixtures `name`.
+    #[cfg(feature = "text-shaping")]
+    fn fixture_font(name: &str) -> Vec<u8> {
+        std::fs::read(format!("{}/assets/fonts/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+    }
+
+    #[cfg(feature = "text-shaping")]
+    #[test]
+    fn wrapped_shaped_text_moved_sideways_keeps_its_glyphs() {
+        use crate::ui::UiTextAlign;
+        // Japanese has no spaces and breaks between characters; Arabic runs
+        // right to left and breaks at spaces.
+        const JAPANESE: &str = "日本語のテキスト日本語のテキスト日本語のテキスト日本語のテキスト日本語のテキスト";
+        const ARABIC: &str = "مرحبا مرحبا مرحبا مرحبا مرحبا مرحبا مرحبا مرحبا مرحبا مرحبا";
+        for (pixels, scale) in SCALES {
+            let mut ctx = ctx();
+            ctx.set_scale_factor(pixels);
+            ctx.ui.set_scale(scale);
+            // The fixture fonts, loaded into the UI's text: the default font
+            // has neither script, so its fallback chain shapes them.
+            let jp = ctx.gfx.text.add_font(&fixture_font("NotoSansJP-Subset.otf")).unwrap();
+            let arabic = ctx
+                .gfx
+                .text
+                .add_font(&fixture_font("NotoSansArabic-Subset.ttf"))
+                .unwrap();
+            ctx.gfx.text.set_fallbacks(Font::DEFAULT, &[jp, arabic]);
+            let ui = &mut ctx.ui;
+            let menu = ui.root().layout(UiLayout::centered(460.0, 640.0).gap(4.0)).id();
+            // Rows of a panel that is resized and a wrapped label it pushes
+            // along: Japanese and Arabic, plain and rich, aligned each way.
+            let mut grows = Vec::new();
+            let mut labels = Vec::new();
+            for (text, rtl) in [(JAPANESE, false), (ARABIC, true)] {
+                for rich in [false, true] {
+                    for align in [UiTextAlign::Start, UiTextAlign::End] {
+                        let row = ui.panel(menu).layout(UiLayout::row(80.0).gap(6.0)).id();
+                        grows.push(ui.panel(row).layout(UiLayout::fixed(40.0, 20.0)).id());
+                        let markup = format!("[b]{text}[/b]");
+                        let mut label = ui
+                            .label(row, if rich { &markup } else { text })
+                            .wrap()
+                            .align(align)
+                            .layout(UiLayout::fixed(170.3, 76.0));
+                        if rich {
+                            label = label.rich();
+                        }
+                        labels.push((label.id(), rich, rtl));
+                    }
+                }
+            }
+            ui.push_modeless(menu);
+            let what = format!("scale factor {pixels}, UI scale {scale}");
+            let still = UiInput::default();
+            same_as_drawn_anew(&mut ctx, &still, &what);
+            for &(label, rich, rtl) in &labels {
+                let lines = line_starts(&ctx, label).len();
+                assert!(lines >= 2, "{what}: the text wraps onto lines: {lines}");
+                if !rich {
+                    assert!(
+                        glyphs(&ctx, label).lines.iter().all(|line| line.rtl == rtl),
+                        "{what}: lines run the way their script does"
+                    );
+                }
+            }
+            let at = |ctx: &Ctx| labels.iter().map(|&(l, ..)| ctx.ui.rect(l).unwrap()).collect::<Vec<_>>();
+            for width in [41.3, 55.7, 40.0, 63.15, 47.9] {
+                let before_rects = at(&ctx);
+                for &grow in &grows {
+                    ctx.ui.set_layout(grow, UiLayout::fixed(width, 20.0));
+                }
+                let before = layouts(&ctx);
+                let (redrawn, ..) = frame(&mut ctx, &still);
+                assert!(redrawn >= 16, "{what}: the panels and the labels: {redrawn}");
+                assert_eq!(layouts(&ctx), before, "{what}: pushed by {width}: no text laid out");
+                for (was, now) in before_rects.iter().zip(at(&ctx)) {
+                    assert_ne!(was.min.x, now.min.x, "{what}: every label moved sideways");
+                }
+                same_as_drawn_anew(&mut ctx, &still, &what);
+            }
+            // Each label keeps the range of widths that break its lines the
+            // same way: a little wider, inside it, it isn't laid out again;
+            // past it, it is. The range is in physical pixels for plain
+            // text, window pixels for rich text.
+            let wider = |ctx: &mut Ctx, past: bool| {
+                for &(label, rich, _) in &labels {
+                    let room = glyphs(ctx, label).room;
+                    let per_unit = if rich { scale } else { scale * pixels };
+                    assert!(room.hi.is_finite(), "{what}: a wider box breaks its lines elsewhere");
+                    let slack = (room.hi - room.width) / per_unit;
+                    let more = if past { slack + 0.5 } else { slack * 0.5 };
+                    let width = ctx.ui.rect(label).unwrap().size().x / scale + more;
+                    ctx.ui.set_layout(label, UiLayout::fixed(width, 76.0));
+                }
+            };
+            wider(&mut ctx, false);
+            let before = layouts(&ctx);
+            frame(&mut ctx, &still);
+            assert_eq!(layouts(&ctx), before, "{what}: widened inside its range: not laid out");
+            same_as_drawn_anew(&mut ctx, &still, &what);
+            wider(&mut ctx, true);
+            let before = layouts(&ctx);
+            same_as_drawn_anew(&mut ctx, &still, &what);
+            assert!(
+                layouts(&ctx) - before >= labels.len() as u64,
+                "{what}: widened past its range: laid out"
+            );
+            // The control: drawn with nothing kept, a move lays every
+            // label's text out.
+            ctx.ui.draw_cache.off = true;
+            for &grow in &grows {
+                ctx.ui.set_layout(grow, UiLayout::fixed(52.4, 20.0));
+            }
+            let before = layouts(&ctx);
+            frame(&mut ctx, &still);
+            assert!(
+                layouts(&ctx) - before >= labels.len() as u64,
+                "{what}: drawn anew, the labels are laid out"
+            );
+            ctx.ui.draw_cache.off = false;
+        }
+    }
+
     #[test]
     fn a_wrapped_label_whose_width_alternates_keeps_a_layout_for_each() {
         for (pixels, scale) in SCALES {

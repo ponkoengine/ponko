@@ -3906,12 +3906,12 @@ static void brain_values_ripples_and_ui_area() {
 
     // A body falling in starts ripples with its switch on, none with it off.
     auto splashed = [](bool ripples) {
-        std::uint32_t most = 0;
+        std::uint64_t started = 0;
         ponko::entity lake = 0;
         ponko::game("c++ splash", 1, 1)
             .physics3d({0, -9.81f, 0})
             .water()
-            .sim_system([&](ponko::ctx& ctx) { most = std::max(most, ctx.water_waiting_contacts(lake)); }, "watch")
+            .sim_system([&](ponko::ctx& ctx) { started = ctx.water_started_contacts(lake); }, "watch")
             .run_headless(100, [&](ponko::ctx& ctx) {
                 lake = ctx.spawn_water(ponko::water_desc::lake({0, 0}, {20, 20}, 0));
                 auto box = ponko::box_collider({0.8f, 0.8f, 0.8f});
@@ -3922,8 +3922,9 @@ static void brain_values_ripples_and_ui_area() {
                 ctx.set_buoyancy(body, floats);
                 CHECK(ctx.water_waiting_contacts(lake) == 0);
                 throws([&] { ctx.water_waiting_contacts(body); });   // a body is no water
+                throws([&] { ctx.water_started_contacts(body); });
             });
-        return most;
+        return started;
     };
     CHECK(splashed(true) > 0);
     CHECK(splashed(false) == 0);   // a body with the switch off starts none
@@ -3931,7 +3932,7 @@ static void brain_values_ripples_and_ui_area() {
         const auto lake = ctx.spawn_water(ponko::water_desc::lake({0, 0}, {20, 20}, 0));
         ctx.water_touch(lake, {0, 0}, 0.5f, 0.1f);
         ctx.water_touch(lake, {500, 0}, 0.5f, 0.1f);   // outside the ripple area: dropped
-        CHECK(ctx.water_waiting_contacts(lake) == 1);
+        CHECK(ctx.water_waiting_contacts(lake) == 1 && ctx.water_started_contacts(lake) == 1);
     });
 
     // A panel's own safe area.
