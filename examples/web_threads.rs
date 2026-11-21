@@ -1085,32 +1085,43 @@ fn bench(game: Game, workload: String) {
     .run();
 }
 
+#[cfg(feature = "bench-internals")]
 /// Each mode's timed runs at one size of a sweep, after one untimed run.
 const SWEEP_REPS: usize = 15;
 
+#[cfg(feature = "bench-internals")]
 /// The sizes the threshold sweep times each pass at: attached children,
 /// 2D skeletons and 3D characters.
 const SWEEP_CHILDREN: [usize; 8] = [512, 1_024, 2_048, 4_096, 8_192, 16_384, 32_768, 65_536];
+#[cfg(feature = "bench-internals")]
 const SWEEP_SKELETONS: [usize; 9] = [16, 32, 64, 128, 256, 512, 1_024, 2_048, 4_096];
+#[cfg(all(feature = "bench-internals", feature = "physics3d"))]
 const SWEEP_CHARACTERS: [usize; 8] = [4, 8, 16, 32, 64, 128, 256, 512];
 
+#[cfg(feature = "bench-internals")]
 /// The hierarchy's sides are sizes, not its threshold (a time): far below
 /// and far past any budget a browser needs.
 const SIDE_CHILDREN: [usize; 2] = [512, 65_536];
 
+#[cfg(feature = "bench-internals")]
 /// Entities saved as JSON by the allocator sweep, and agents its allocating
 /// parallel query runs over.
 const ALLOC_SAVED: usize = 24_000;
+#[cfg(feature = "bench-internals")]
 const ALLOC_AGENTS: usize = 20_000;
 
+#[cfg(feature = "bench-internals")]
 /// One pass the threshold sweep times.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SweepPass {
     Hierarchy,
     Skeletons,
+    // Swept only with the `physics3d` feature.
+    #[cfg_attr(not(feature = "physics3d"), allow(dead_code))]
     Characters,
 }
 
+#[cfg(feature = "bench-internals")]
 impl SweepPass {
     fn name(self) -> &'static str {
         match self {
@@ -1121,6 +1132,7 @@ impl SweepPass {
     }
 }
 
+#[cfg(feature = "bench-internals")]
 /// One step of a sweep, one per tick.
 #[derive(Clone, Copy, Debug)]
 enum SweepStep {
@@ -1135,6 +1147,7 @@ enum SweepStep {
     Alloc,
 }
 
+#[cfg(feature = "bench-internals")]
 /// A sweep's state across ticks.
 #[derive(Default)]
 struct Sweep {
@@ -1155,6 +1168,7 @@ struct Sweep {
     alloc: Option<serde_json::Value>,
 }
 
+#[cfg(feature = "bench-internals")]
 /// FNV-1a over `bytes`, continuing `hash`.
 fn fnv(hash: u64, bytes: &[u8]) -> u64 {
     bytes
@@ -1162,8 +1176,10 @@ fn fnv(hash: u64, bytes: &[u8]) -> u64 {
         .fold(hash, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
 }
 
+#[cfg(feature = "bench-internals")]
 const FNV_START: u64 = 0xcbf2_9ce4_8422_2325;
 
+#[cfg(feature = "bench-internals")]
 fn median_ms(mut times: Vec<f64>) -> f64 {
     times.sort_by(f64::total_cmp);
     (times[times.len() / 2] * 1000.0).round() / 1000.0
@@ -1219,11 +1235,8 @@ fn sweep(game: Game, kind: String) {
         "allocator" => sweep.steps.push(SweepStep::Alloc),
         other => panic!("web_threads: unknown sweep `{other}` (thresholds or allocator)"),
     }
-    let mut game = game;
     #[cfg(feature = "physics3d")]
-    {
-        game = game.physics3d(vec3(0.0, -9.81, 0.0));
-    }
+    let game = game.physics3d(vec3(0.0, -9.81, 0.0));
     let mut smoke = None;
     let mut ticks = 0u64;
     let allocator = kind == "allocator";
@@ -1439,12 +1452,13 @@ fn run_pass(ctx: &mut Ctx, s: &mut Sweep, pass: SweepPass) -> f64 {
         }
         SweepPass::Characters => {
             #[cfg(feature = "physics3d")]
-            {
+            let ms = {
                 reset_characters(ctx);
-                return timed_call(|| ctx.bench_characters3d_move(DT)).1;
-            }
+                timed_call(|| ctx.bench_characters3d_move(DT)).1
+            };
             #[cfg(not(feature = "physics3d"))]
-            0.0
+            let ms = 0.0;
+            ms
         }
     }
 }
@@ -1478,7 +1492,7 @@ fn pass_hash(ctx: &mut Ctx, s: &mut Sweep, pass: SweepPass) -> u64 {
         }
         SweepPass::Characters => {
             #[cfg(feature = "physics3d")]
-            return s.characters.iter().fold(FNV_START, |h, &e| {
+            let hash = s.characters.iter().fold(FNV_START, |h, &e| {
                 ctx.world.get::<ponko::d3::Character>(e).map_or(h, |c| {
                     let h = fnv(h, &c.velocity.x.to_bits().to_le_bytes());
                     let h = fnv(h, &c.velocity.y.to_bits().to_le_bytes());
@@ -1487,7 +1501,8 @@ fn pass_hash(ctx: &mut Ctx, s: &mut Sweep, pass: SweepPass) -> u64 {
                 })
             });
             #[cfg(not(feature = "physics3d"))]
-            0
+            let hash = 0;
+            hash
         }
     }
 }
