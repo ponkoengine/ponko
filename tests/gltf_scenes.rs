@@ -937,6 +937,28 @@ fn spawning_a_scene_again_reuses_its_collision_shapes_until_the_last_one_goes() 
 
 #[cfg(feature = "physics3d")]
 #[test]
+fn a_collision_shape_the_game_freed_is_made_again_for_the_next_spawn() {
+    let file = TempAsset::with_contents("rocks.gltf", &rock_colliders());
+    game().physics3d(Vec3::ZERO).run_headless(0, |ctx| {
+        let first = ctx.spawn_prefab(file.name(), Transform::default()).unwrap();
+        let freed = collision_mesh(ctx, first, "A");
+        ctx.free(freed);
+        let second = ctx
+            .spawn_prefab(file.name(), Transform::at(vec3(20.0, 0.0, 0.0)))
+            .unwrap();
+        let made = collision_mesh(ctx, second, "A");
+        assert_ne!(made, freed);
+        assert!(ctx.is_live(made), "a live shape, not the freed one");
+        assert_eq!(collision_mesh(ctx, second, "B"), made);
+        assert_eq!(collision_mesh(ctx, second, "Hull"), collision_mesh(ctx, first, "Hull"));
+        ctx.despawn_prefab(first);
+        ctx.despawn_prefab(second);
+        assert_eq!(ctx.live_counts().collision_meshes, 0);
+    });
+}
+
+#[cfg(feature = "physics3d")]
+#[test]
 fn shared_collision_shapes_collide_in_every_scene() {
     use ponko::d3::{Collider, RigidBody};
     let file = TempAsset::with_contents("rocks.gltf", &rock_colliders());

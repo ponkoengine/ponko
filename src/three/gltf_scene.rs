@@ -687,6 +687,11 @@ impl Ctx {
             Some(s) if s.meshes == meshes => s,
             _ => FileShare::new(meshes),
         };
+        // A shape the game freed itself is made again.
+        #[cfg(feature = "physics3d")]
+        share
+            .shapes
+            .retain(|_, c| mesh_shape(c).is_none_or(|m| self.physics3d.is_live(m)));
         let root = self.world.spawn((
             at,
             GltfRoot {
