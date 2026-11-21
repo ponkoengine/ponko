@@ -2602,6 +2602,11 @@ static void retained_ui_presets() {
         auto side = ui.add_panel(bar, u::column(120));
         auto buy = ui.add_button(bar, "Buy", u::fixed(100, 30));
         auto map = ui.add_panel(root, u::anchored(0.75f, 0, 0.25f, 0.25f));
+        // Fading as one image: off by default, on once set.
+        CHECK(!ui.fades_as_group(root));
+        ui.set_fade_as_group(root);
+        CHECK(ui.fades_as_group(root) && !ui.fades_as_group(bar));
+        throws([&] { ui.set_fade_as_group(9999); });
         ui.push_screen(root);
         auto dialog = ui.add_panel(u::none, u::centered(200, 100).top(40));
         ui.push_modal(dialog);

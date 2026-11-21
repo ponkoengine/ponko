@@ -973,6 +973,17 @@ impl UiBuilder<'_> {
         self.ui.set_paint(self.id, paint);
         self
     }
+    /// Fade it and its children as one image; see [`Ui::set_fade_as_group`].
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut ui = ponko::ui::Ui::default();
+    /// let menu = ui.root().fade_as_group().id();
+    /// assert!(ui.fades_as_group(menu));
+    /// ```
+    pub fn fade_as_group(self) -> Self {
+        self.ui.set_fade_as_group(self.id, true);
+        self
+    }
     /// Enable or disable interaction; see [`Ui::set_enabled`].
     /// ```
     /// use ponko::prelude::*;

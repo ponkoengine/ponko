@@ -8611,6 +8611,16 @@ enum PonkoStatus ponko_ctx_ui_safe_area(struct PonkoCtx *ctx,
                                         uint64_t target,
                                         struct PonkoRect *out_area);
 
+enum PonkoStatus ponko_ctx_ui_set_fade_as_group(struct PonkoCtx *ctx,
+                                                uint64_t target,
+                                                uint64_t id,
+                                                bool on);
+
+enum PonkoStatus ponko_ctx_ui_fades_as_group(struct PonkoCtx *ctx,
+                                             uint64_t target,
+                                             uint64_t id,
+                                             bool *out_on);
+
 enum PonkoStatus ponko_ctx_ui_show_hud(struct PonkoCtx *ctx, uint64_t target, uint64_t root);
 
 enum PonkoStatus ponko_ctx_ui_hide_hud(struct PonkoCtx *ctx, uint64_t target, uint64_t root);
