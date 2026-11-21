@@ -20,7 +20,7 @@
 //! TLS proxy in front of the host (Caddy, nginx) provides. Like UDP sessions,
 //! connections are unauthenticated and any page may connect.
 
-use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) use native::{WebClient, WebListener};
@@ -75,6 +75,117 @@ pub(super) fn conn_id(addr: SocketAddr) -> Option<u64> {
         return None;
     }
     Some(u64::from(s[4]) << 48 | u64::from(s[5]) << 32 | u64::from(s[6]) << 16 | u64::from(s[7]))
+}
+
+/// Where a browser (WebSocket) client's connection comes from, as a host
+/// sees it: the TCP peer, and the client addresses a reverse proxy in front
+/// of the host wrote into the upgrade request's `X-Forwarded-For` header.
+/// From [`NetMessages::web_peer`](super::NetMessages::web_peer).
+///
+/// The header is only as honest as whoever wrote it: anyone may send one.
+/// [`client_ip`](Self::client_ip) believes it only from proxies the caller
+/// trusts.
+///
+/// ```
+/// use ponko::net::WebPeer;
+/// let peer = WebPeer::new("10.0.0.2:41000".parse().unwrap(), Some("203.0.113.7"));
+/// assert_eq!(peer.forwarded_for(), Some("203.0.113.7"));
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebPeer {
+    remote: SocketAddr,
+    forwarded_for: Option<String>,
+}
+
+/// Hops of an `X-Forwarded-For` header read at most.
+const MAX_HOPS: usize = 32;
+
+impl WebPeer {
+    /// A peer with this TCP address and `X-Forwarded-For` header (several
+    /// header lines joined with commas, in order), for tests and servers of
+    /// your own.
+    /// ```
+    /// let peer = ponko::net::WebPeer::new("192.0.2.1:5000".parse().unwrap(), None);
+    /// ```
+    pub fn new(remote: SocketAddr, forwarded_for: Option<&str>) -> Self {
+        Self {
+            remote,
+            forwarded_for: forwarded_for.map(str::to_owned),
+        }
+    }
+
+    /// The address the TCP connection comes from: the browser, or the
+    /// proxy in front of the host.
+    /// ```
+    /// let peer = ponko::net::WebPeer::new("192.0.2.1:5000".parse().unwrap(), None);
+    /// assert_eq!(peer.remote().port(), 5000);
+    /// ```
+    pub fn remote(&self) -> SocketAddr {
+        self.remote
+    }
+
+    /// The request's `X-Forwarded-For` header as sent, if any.
+    /// ```
+    /// assert_eq!(ponko::net::WebPeer::new("192.0.2.1:5000".parse().unwrap(), None).forwarded_for(), None);
+    /// ```
+    pub fn forwarded_for(&self) -> Option<&str> {
+        self.forwarded_for.as_deref()
+    }
+
+    /// The client's IP address, believing the `X-Forwarded-For` header only
+    /// as far as `trusted` says: starting from the TCP peer, each hop that
+    /// is a trusted proxy hands over to the address it wrote (the header's
+    /// last entry first). The first address that isn't trusted is the
+    /// client. A connection from an untrusted peer is the peer itself,
+    /// whatever its header says, so a client can't pick an address by
+    /// sending the header.
+    ///
+    /// `None` when a trusted proxy sent no header or an entry that isn't an
+    /// IP address (`unknown`, a name): the client can't be told apart from
+    /// the proxy. Entries may carry a port (`192.0.2.1:5000`,
+    /// `[2001:db8::1]:5000`). When every hop is trusted, the first entry.
+    ///
+    /// ```
+    /// use std::net::IpAddr;
+    /// use ponko::net::WebPeer;
+    /// let proxy: IpAddr = "10.0.0.2".parse().unwrap();
+    /// let trusted = |ip: IpAddr| ip == proxy;
+    /// // Through the proxy, which appended the address it saw:
+    /// let peer = WebPeer::new("10.0.0.2:41000".parse().unwrap(), Some("198.51.100.1, 203.0.113.7"));
+    /// assert_eq!(peer.client_ip(trusted), Some("203.0.113.7".parse().unwrap()));
+    /// // Straight from a client that wrote the header itself: ignored.
+    /// let peer = WebPeer::new("203.0.113.9:5000".parse().unwrap(), Some("198.51.100.1"));
+    /// assert_eq!(peer.client_ip(trusted), Some("203.0.113.9".parse().unwrap()));
+    /// ```
+    pub fn client_ip(&self, trusted: impl Fn(IpAddr) -> bool) -> Option<IpAddr> {
+        let mut ip = self.remote.ip().to_canonical();
+        if !trusted(ip) {
+            return Some(ip);
+        }
+        let header = self.forwarded_for.as_deref()?;
+        for entry in header.rsplit(',').take(MAX_HOPS) {
+            ip = parse_hop(entry.trim())?;
+            if !trusted(ip) {
+                return Some(ip);
+            }
+        }
+        if header.split(',').nth(MAX_HOPS).is_some() {
+            return None; // Longer than any real chain of proxies.
+        }
+        Some(ip)
+    }
+}
+
+/// One `X-Forwarded-For` entry: an IP address, with or without a port.
+fn parse_hop(entry: &str) -> Option<IpAddr> {
+    if let Ok(ip) = entry.parse::<IpAddr>() {
+        return Some(ip.to_canonical());
+    }
+    if let Some(v6) = entry.strip_prefix('[') {
+        let (ip, _) = v6.split_once(']')?;
+        return ip.parse::<IpAddr>().ok().map(|ip| ip.to_canonical());
+    }
+    entry.parse::<SocketAddr>().ok().map(|a| a.ip().to_canonical())
 }
 
 /// What a `ws://host:port/path` URL names, checked before connecting, so a
@@ -134,17 +245,17 @@ mod native {
     use std::collections::BTreeMap;
     use std::io;
     use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::time::Duration;
 
     use tungstenite::handshake::MidHandshake;
-    use tungstenite::handshake::server::{NoCallback, ServerHandshake};
+    use tungstenite::handshake::server::{Callback, ErrorResponse, Request, Response, ServerHandshake};
     use tungstenite::protocol::WebSocketConfig;
     use tungstenite::{HandshakeError, Message, WebSocket};
 
-    use super::{MAX_BUFFERED, MAX_PACKET, conn_addr, conn_id, parse_url};
+    use super::{MAX_BUFFERED, MAX_PACKET, WebPeer, conn_addr, conn_id, parse_url};
     use crate::perf::Instant;
 
     /// Handshakes in flight at once; more connections wait in the OS backlog.
@@ -202,18 +313,58 @@ mod native {
         }
     }
 
-    type Handshake = MidHandshake<ServerHandshake<TcpStream, NoCallback>>;
+    /// The longest `X-Forwarded-For` header kept; a longer one is dropped.
+    const MAX_FORWARDED: usize = 1024;
+
+    /// Keeps the upgrade request's `X-Forwarded-For` header (every line of
+    /// it, joined in order) for [`WebPeer`].
+    struct Capture(Arc<Mutex<Option<String>>>);
+
+    impl Callback for Capture {
+        fn on_request(self, request: &Request, response: Response) -> Result<Response, ErrorResponse> {
+            let lines: Vec<&str> = request
+                .headers()
+                .get_all("x-forwarded-for")
+                .iter()
+                .filter_map(|v| v.to_str().ok())
+                .collect();
+            let joined = lines.join(", ");
+            if !lines.is_empty() && joined.len() <= MAX_FORWARDED {
+                *self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(joined);
+            }
+            Ok(response)
+        }
+    }
+
+    type Handshake = MidHandshake<ServerHandshake<TcpStream, Capture>>;
+
+    /// A handshake in flight: when it started, the TCP peer, and where its
+    /// proxy header lands.
+    struct Pending {
+        started: Instant,
+        remote: SocketAddr,
+        forwarded: Arc<Mutex<Option<String>>>,
+    }
+
+    impl Pending {
+        fn peer(&self) -> WebPeer {
+            let forwarded = self.forwarded.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            WebPeer::new(self.remote, forwarded.as_deref())
+        }
+    }
 
     /// A host's WebSocket side: accepts browser connections on a TCP port and
     /// moves their packets. Polled; never blocks.
     pub(in crate::net) struct WebListener {
         listener: TcpListener,
-        handshakes: Vec<(Instant, Handshake)>,
+        handshakes: Vec<(Pending, Handshake)>,
         conns: BTreeMap<u64, WebSocket<TcpStream>>,
         /// When each connection last sent a packet (or opened).
         heard: BTreeMap<u64, Instant>,
         /// Connections silent past this are dropped ([`SILENCE_TIMEOUT`]).
         silence: Duration,
+        /// Where each connection comes from.
+        peers: BTreeMap<u64, WebPeer>,
         next_id: u64,
         /// The connection read first on the next poll, so one busy browser
         /// can't starve the others.
@@ -230,6 +381,7 @@ mod native {
                 conns: BTreeMap::new(),
                 heard: BTreeMap::new(),
                 silence: SILENCE_TIMEOUT,
+                peers: BTreeMap::new(),
                 next_id: 1,
                 cursor: 0,
             })
@@ -254,9 +406,15 @@ mod native {
                 Ok(sent) => sent,
                 Err(_) => {
                     self.conns.remove(&id);
+                    self.peers.remove(&id);
                     false
                 }
             }
+        }
+
+        /// Where connection `addr` comes from, while it is open.
+        pub(in crate::net) fn peer(&self, addr: SocketAddr) -> Option<WebPeer> {
+            conn_id(addr).and_then(|id| self.peers.get(&id)).cloned()
         }
 
         /// The next packet from any connection, after accepting new ones.
@@ -286,6 +444,7 @@ mod native {
                     Ok(None) => {}
                     Err(_) => {
                         self.conns.remove(&id);
+                        self.peers.remove(&id);
                     }
                 }
             }
@@ -296,28 +455,38 @@ mod native {
         fn accept(&mut self) {
             let now = Instant::now();
             while self.handshakes.len() < MAX_HANDSHAKES {
-                let Ok((stream, _)) = self.listener.accept() else { break };
+                let Ok((stream, remote)) = self.listener.accept() else { break };
                 if self.conns.len() >= MAX_CONNECTIONS
                     || stream.set_nonblocking(true).is_err()
                     || stream.set_nodelay(true).is_err()
                 {
                     continue; // dropped: closes the connection
                 }
-                self.handshake(now, tungstenite::accept_with_config(stream, Some(config())));
+                let pending = Pending {
+                    started: now,
+                    remote,
+                    forwarded: Arc::default(),
+                };
+                let capture = Capture(pending.forwarded.clone());
+                self.handshake(
+                    pending,
+                    tungstenite::accept_hdr_with_config(stream, capture, Some(config())),
+                );
             }
-            for (started, mid) in std::mem::take(&mut self.handshakes) {
-                if now - started > HANDSHAKE_TIMEOUT {
+            for (pending, mid) in std::mem::take(&mut self.handshakes) {
+                if now - pending.started > HANDSHAKE_TIMEOUT {
                     continue;
                 }
                 let result = mid.handshake();
-                self.handshake(started, result);
+                self.handshake(pending, result);
             }
             // Gone connections (closed elsewhere) and silent ones.
-            let (conns, silence) = (&mut self.conns, self.silence);
+            let (conns, peers, silence) = (&mut self.conns, &mut self.peers, self.silence);
             self.heard.retain(|id, heard| {
                 let keep = conns.contains_key(id) && now - *heard <= silence;
                 if !keep {
                     conns.remove(id);
+                    peers.remove(id);
                 }
                 keep
             });
@@ -337,16 +506,17 @@ mod native {
 
         fn handshake(
             &mut self,
-            started: Instant,
-            result: Result<WebSocket<TcpStream>, HandshakeError<ServerHandshake<TcpStream, NoCallback>>>,
+            pending: Pending,
+            result: Result<WebSocket<TcpStream>, HandshakeError<ServerHandshake<TcpStream, Capture>>>,
         ) {
             match result {
                 Ok(ws) => {
                     self.conns.insert(self.next_id, ws);
                     self.heard.insert(self.next_id, Instant::now());
+                    self.peers.insert(self.next_id, pending.peer());
                     self.next_id += 1;
                 }
-                Err(HandshakeError::Interrupted(mid)) => self.handshakes.push((started, mid)),
+                Err(HandshakeError::Interrupted(mid)) => self.handshakes.push((pending, mid)),
                 Err(HandshakeError::Failure(_)) => {} // not a WebSocket client
             }
         }

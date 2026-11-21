@@ -2697,6 +2697,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cbf36668475a45a46bf8710e927e7458b7c387e7c46ddb5457ae0c71cf5e817"
 
 [[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3836,6 +3846,7 @@ dependencies = [
  "libm",
  "lz4_flex",
  "matroska-demuxer",
+ "md-5",
  "meshopt",
  "naga",
  "navmesh-rs",
@@ -3867,6 +3878,7 @@ dependencies = [
  "sdl3-sys",
  "serde",
  "serde_json",
+ "sha1",
  "siphasher",
  "smallvec",
  "steamworks",

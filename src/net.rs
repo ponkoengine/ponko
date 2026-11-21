@@ -29,10 +29,12 @@
 //! single-player game has an offline lockstep session and nothing else.
 //! Feature `steam` adds Steam relays and lobbies for both transports.
 //! Feature `lobby` adds a client for a lobby server (the `lobby` module): rooms with
-//! codes, matchmaking, host migration and a relay, on any platform.
+//! codes, matchmaking, host migration and a relay, on any platform; lockstep
+//! sessions and message endpoints run through that relay with
+//! [`Net::host_relay`] and [`NetMessages::host_relay`].
 //! Feature `webrtc` adds peer-to-peer message endpoints over WebRTC data
 //! channels (module `rtc`): browser to browser and browser to desktop, through
-//! NATs with STUN.
+//! NATs with STUN, and through TURN servers when nothing else gets through.
 //!
 //! Browser players (a web build can't open UDP sockets) connect over
 //! WebSocket: the host adds a listener with [`Net::accept_web`] or
@@ -101,12 +103,15 @@ mod rtc_browser;
 mod rtc_native;
 #[cfg(all(test, feature = "webrtc", not(target_arch = "wasm32")))]
 mod rtc_tests;
+#[cfg(all(feature = "webrtc", not(target_arch = "wasm32")))]
+mod turn;
 mod sequence;
 mod service;
 pub(crate) mod snapshots;
 #[cfg(any(feature = "lobby", feature = "webrtc"))]
 pub mod stun;
 mod websocket;
+pub use websocket::WebPeer;
 #[cfg(target_arch = "wasm32")]
 mod websocket_browser;
 pub use game_rollback::GameRollback;
@@ -711,6 +716,7 @@ impl Net {
             return self.lose(e);
         }
         if !s.started {
+            s.transport.flush();
             return false;
         }
         self.state = NetState::Running;
@@ -724,6 +730,7 @@ impl Net {
             self.pending.clear();
         }
         s.flush(now, self.player, self.players);
+        s.transport.flush();
         if let Some(quiet) = s.silent_peer(now, self.timeout) {
             return self.lose(format!("player {quiet} stopped answering"));
         }
@@ -753,6 +760,7 @@ impl Net {
         }
         let check = Check::of(world, tick);
         s.send_check(&check);
+        s.transport.flush();
         if self.desync.is_none() {
             self.desync = s.compare_stored(&check);
             if let Some(d) = &self.desync {
@@ -816,9 +824,11 @@ impl Net {
                 let addr = s.peers[i].addr;
                 s.send_simple(addr, BYE);
             }
+            s.transport.flush();
             return true;
         }
         s.flush(now, self.player, self.players);
+        s.transport.flush();
         false
     }
 }
@@ -1394,6 +1404,14 @@ trait Transport: Send {
     }
     /// Where browser players connect, once [`accept_web`](Self::accept_web) ran.
     fn web_addr(&self) -> Option<SocketAddr> {
+        None
+    }
+    /// After the session's sends of one poll: for transports that queue
+    /// packets for a carrier of their own (the lobby relay).
+    fn flush(&mut self) {}
+    /// The lobby connection under a relay session.
+    #[cfg(feature = "lobby")]
+    fn lobby_mut(&mut self) -> Option<&mut lobby::LobbyClient> {
         None
     }
 }

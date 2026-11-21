@@ -102,15 +102,26 @@ until one works (ICE). `RtcConfig::stun("stun:host:port")` adds one.
 | One side has a public address (a server, port forwarding) | connects | connects | |
 | Both behind ordinary home routers (cone NATs) | no | connects | |
 | One side behind a strict (symmetric) NAT, the other public | should (only tested with STUN) | connects | |
-| Both behind strict NATs (some mobile networks, some offices) | no | no | yes |
+| Both behind strict NATs (some mobile networks, some offices) | no | no | connects through TURN |
 
 **TURN** relays the traffic of peers that can't reach each other at all.
-`RtcConfig::turn(url, username, credential)` adds a server **in browsers
-only**: the desktop side has no TURN client and ignores it. A desktop peer
-still connects to a browser that uses TURN, since the browser's relay
-address is just one more address to try. Players who can't connect at all
-can fall back to the [lobby's relay](lobby.md#direct-or-relayed), which
-works through any NAT.
+`RtcConfig::turn("turn:host:port", username, credential)` adds a server,
+on the desktop and in browsers (`turn_servers()` lists them). Each peer borrows an address on the TURN
+server (an allocation) and offers it as one more candidate; ICE tries the
+direct pairs first and the relayed ones last, so the TURN server only
+carries the players who need it. The traffic stays encrypted end to end
+(DTLS): the TURN server only forwards it.
+
+The desktop client speaks TURN over UDP with long-term credentials (what
+coturn and hosted services use), with Send and Data indications; `turns:`
+(TLS) and `?transport=tcp` servers are used by browsers only. A desktop
+peer also connects to a browser that uses its own TURN server, since a
+relayed address is just one more address to try. `RtcConfig::relay_only()`
+offers relayed addresses only, never the machine's own, like a browser's
+`iceTransportPolicy: "relay"`. [Putting a game online](online.md) sets up
+coturn. Players who can't use TURN can fall back to a
+[relay session](lobby.md#game-sessions-through-the-relay) through the
+lobby, which works through any NAT.
 
 On the desktop, `RtcConfig::bind` picks the UDP socket's address (a fixed
 port is easier to forward on a router), and `host_address` offers a public
@@ -145,7 +156,9 @@ LOBBY_STUN=0.0.0.0:3478 LOBBY_WEB=0.0.0.0:7701 cargo run -p ponko_lobby
 - STUN has to see the players' real public addresses: run it on a public
   address, not behind a load balancer or proxy that rewrites them.
 - Any other STUN server works too. TURN needs a server of its own
-  (coturn, or a hosted one); the lobby has none.
+  (coturn, or a hosted one); the lobby has none. [Putting a game
+  online](online.md) runs coturn next to the lobby, and lets it answer
+  STUN too.
 
 **Security.** WebRTC encrypts every connection (DTLS), keyed by
 fingerprints in the offer and answer. Those travel through the lobby, which
@@ -162,7 +175,8 @@ message over 16 KiB.
 
 - **Star, not mesh.** Every client connects to the host, as with UDP;
   clients don't connect to each other.
-- **No TURN on the desktop** (see above).
+- **TURN over UDP only on the desktop**: no `turns:` (TLS) or TCP, which
+  browsers use for networks that block UDP.
 - **mDNS addresses are skipped on the desktop.** Browsers hide local
   addresses behind `*.local` names, which the desktop side can't look up;
   a desktop and a browser on one local network then connect through STUN
@@ -181,7 +195,7 @@ November 2026:
 
 | Crate | Version | License | Model | Crates it builds (new to the engine) | Notes |
 |---|---|---|---|---|---|
-| **str0m**, `aws-lc-rs` crypto | 0.25.0 | MIT/Apache-2.0 | sans-IO, no runtime | 91 (49) | Picked: polled from the game thread like the rest of the engine. No TURN client. |
+| **str0m**, `aws-lc-rs` crypto | 0.25.0 | MIT/Apache-2.0 | sans-IO, no runtime | 91 (49) | Picked: polled from the game thread like the rest of the engine. No TURN client: the engine has its own (`net/turn.rs`, sans-IO too), on `sha1` and `md-5` for TURN's message integrity |
 | str0m, `rust-crypto` | 0.25.0 | MIT/Apache-2.0 | sans-IO | 119 (71) | Still builds aws-lc through its DTLS stack, so no lighter |
 | rtc (webrtc-rs, sans-IO) | 0.21.1 | MIT/Apache-2.0 | sans-IO | 157 (100) | Has TURN and mDNS; about twice the new crates |
 | webrtc (webrtc-rs) | 0.21.1 | MIT/Apache-2.0 | async (tokio or smol) | 179 | Needs an async runtime the engine doesn't have |
@@ -218,7 +232,16 @@ Checked, in `cargo test`:
   unreliable messages are never delivered stale.
 - Two peers behind simulated cone NATs connect with the in-memory STUN
   server and not without it; a peer behind a symmetric NAT reaches a public
-  host, two symmetric NATs don't connect (TURN's case).
+  host, two symmetric NATs don't connect without TURN, and do with a TURN
+  server on the network (the test's own TURN server: allocations with
+  long-term credentials, permissions, Send and Data indications); wrong
+  TURN credentials leave them unconnected; peers that can reach each
+  other directly don't use the relay.
+- Two desktop endpoints with `relay_only` connect through a TURN server
+  on real UDP sockets on loopback.
+- The TURN client's messages: HMAC-SHA1 against RFC 2202, the long-term
+  key against RFC 5389's example, stale nonces, refreshes, a silent
+  server.
 - A host takes several clients, refuses offers beyond its limit, ignores
   strangers, and gives a rejoining client a fresh connection.
 - The same over real UDP sockets on loopback.
@@ -238,7 +261,8 @@ Checked, in `cargo test`:
   real browser.
 - **No real NAT.** NAT traversal was tested against simulated NATs only,
   never across real routers or the internet.
-- **No public STUN or TURN server** was used, and TURN not at all.
+- **No public STUN or TURN server** was used. TURN was tested against
+  the engine's own test server only, never coturn or a hosted service.
 
 To try it by hand: run `ponko-lobby` with `LOBBY_STUN`, then two copies of
 a game that uses the code above, on two networks, one of them in a
@@ -253,13 +277,13 @@ make an endpoint signaled through a lobby client (`lobby::rtc_host` and
 `ponko_net_messages_rtc_peer` (`net_messages::rtc_peer`) gives a peer's
 member id. Build `ponko_ffi` with `--features webrtc`; without it the calls
 fail with an error that says so. `Signaling` on its own channel and TURN
-are Rust-only, and a C or C++ game built for the web has no WebRTC
-endpoint.
+servers (`RtcConfig::turn`, `relay_only`) are Rust-only, and a C or C++
+game built for the web has no WebRTC endpoint.
 
 ## Testing
 
 ```sh
-cargo test -p ponko --no-default-features --features webrtc,lobby --lib -- net::rtc net::stun
+cargo test -p ponko --no-default-features --features webrtc,lobby --lib -- net::rtc net::stun net::turn
 cargo test -p ponko_lobby --features webrtc --test webrtc --test stun
 cargo test -p ponko_ffi --features webrtc --test rtc
 ```

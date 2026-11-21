@@ -267,6 +267,13 @@ meshopt = { version = "0.7.0", optional = true }
 # Its DTLS needs aws-lc (a C library built with the system's C compiler);
 # the guide's "Peer to peer" section compares the alternatives.
 str0m = { version = "0.25.0", optional = true, default-features = false, features = ["aws-lc-rs"] }
+# The desktop TURN client's message integrity (feature `webrtc`): TURN's
+# long-term credentials are an HMAC-SHA1 under an MD5 key (RFC 8489,
+# section 9.2.2), fixed by the protocol. sha1 is already in the tree
+# (tungstenite's handshake); md-5 is its RustCrypto sibling on the same
+# `digest` crate. aws-lc, which str0m brings, has no MD5.
+sha1 = { version = "0.10.7", optional = true, default-features = false }
+md-5 = { version = "0.10.6", optional = true, default-features = false }
 
 # The system's fonts by family name and coverage (feature `system-fonts`):
 # desktop only, the web has no font files to read.
@@ -479,6 +486,8 @@ lobby = []
 # Off: no WebRTC code or crates in the build.
 webrtc = [
     "dep:str0m",
+    "dep:sha1",
+    "dep:md-5",
     "web-sys/RtcPeerConnection",
     "web-sys/RtcConfiguration",
     "web-sys/RtcIceServer",

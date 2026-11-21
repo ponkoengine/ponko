@@ -38,6 +38,7 @@
 #![deny(missing_docs)]
 
 pub mod protocol;
+mod relay;
 
 use std::collections::VecDeque;
 use std::io;
@@ -387,6 +388,9 @@ pub struct LobbyClient {
     scratch: Vec<u8>,
     #[cfg(feature = "webrtc")]
     signaling: Option<super::rtc::Signaling>,
+    /// Session packets relayed to a [relay session](relay) that owns this
+    /// client, by sender; `None` while no session does.
+    session: Option<VecDeque<(MemberId, Vec<u8>)>>,
 }
 
 impl std::fmt::Debug for LobbyClient {
@@ -451,6 +455,7 @@ impl LobbyClient {
             scratch: Vec::new(),
             #[cfg(feature = "webrtc")]
             signaling: None,
+            session: None,
         }
     }
 
@@ -562,6 +567,14 @@ impl LobbyClient {
                 MessageEvent::Message { lane, bytes, .. } => match protocol::decode::<Reply>(&bytes) {
                     Some(Frame::Control(reply)) => self.reply(reply),
                     Some(Frame::Relay { member, payload }) => {
+                        if let Some(inbox) = &mut self.session
+                            && let Some(packet) = relay::session_packet(payload)
+                        {
+                            if inbox.len() < relay::INBOX {
+                                inbox.push_back((MemberId(member), packet.to_vec()));
+                            }
+                            continue;
+                        }
                         #[cfg(feature = "webrtc")]
                         if let Some(signaling) = &self.signaling
                             && signaling.deliver(u64::from(member), payload)
@@ -576,6 +589,13 @@ impl LobbyClient {
                     }
                     None => {} // From a newer server: skipped.
                 },
+            }
+        }
+        // A session owns this client and the game may never read its
+        // events: keep the newest.
+        if self.session.is_some() {
+            while self.events.len() > relay::EVENTS {
+                self.events.pop_front();
             }
         }
     }

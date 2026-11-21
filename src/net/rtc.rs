@@ -44,9 +44,10 @@
 //! # }
 //! ```
 //!
-//! [`RtcConfig`] names the STUN servers (and, in browsers, TURN servers)
-//! peers ask for their public address. Without any, peers connect on the
-//! same network or when one of them has a public address.
+//! [`RtcConfig`] names the STUN servers peers ask for their public address,
+//! and the TURN servers that relay for peers that can't reach each other
+//! at all. Without any, peers connect on the same network or when one of
+//! them has a public address.
 //!
 //! On the desktop the connections are str0m's, polled from the game thread
 //! on one UDP socket (no async runtime, no threads); in a browser they are
@@ -112,6 +113,7 @@ pub struct RtcConfig {
     servers: Vec<IceServer>,
     pub(super) bind: SocketAddr,
     pub(super) host_addrs: Vec<IpAddr>,
+    pub(super) relay_only: bool,
 }
 
 impl Default for RtcConfig {
@@ -133,6 +135,7 @@ impl RtcConfig {
             servers: Vec::new(),
             bind: SocketAddr::from(([0, 0, 0, 0], 0)),
             host_addrs: Vec::new(),
+            relay_only: false,
         }
     }
 
@@ -153,11 +156,15 @@ impl RtcConfig {
         self
     }
 
-    /// Adds a TURN server (`turn:host:port` or `turns:host:port`) with its
-    /// credentials: it relays the traffic of peers that can't reach each
-    /// other at all (both behind strict NATs). **Browsers only**: the
-    /// desktop side has no TURN client and ignores it; a desktop peer still
-    /// connects to a browser that uses one.
+    /// Adds a TURN server (`turn:host:port`, port 3478 when left out) with
+    /// its credentials: it relays the traffic of peers that can't reach
+    /// each other at all (both behind strict NATs). Peers still connect
+    /// directly when they can; the relayed path is the last one tried.
+    ///
+    /// The desktop speaks TURN over UDP with long-term credentials (what
+    /// coturn and most services use); its host name is looked up when the
+    /// endpoint is made. `turns:` (TLS) and `?transport=tcp` servers are
+    /// used by browsers only; the desktop skips them.
     /// ```
     /// let config = ponko::net::rtc::RtcConfig::new().turn("turn:192.0.2.10:3478", "user", "secret");
     /// assert_eq!(config.stun_urls().count(), 0);
@@ -168,6 +175,21 @@ impl RtcConfig {
             username: Some(username.to_string()),
             credential: Some(credential.to_string()),
         });
+        self
+    }
+
+    /// Connects through the TURN servers only, never directly: no host or
+    /// STUN addresses are offered, so the other side never learns this
+    /// machine's address (a browser's `iceTransportPolicy: "relay"`).
+    /// Without a TURN server nothing connects.
+    /// ```
+    /// let config = ponko::net::rtc::RtcConfig::new()
+    ///     .turn("turn:192.0.2.10:3478", "user", "secret")
+    ///     .relay_only();
+    /// ```
+    #[must_use]
+    pub fn relay_only(mut self) -> Self {
+        self.relay_only = true;
         self
     }
 
@@ -206,6 +228,18 @@ impl RtcConfig {
             .iter()
             .filter(|s| s.username.is_none())
             .map(|s| s.url.as_str())
+    }
+
+    /// Every TURN server as `(url, username, credential)`, in the order given.
+    /// ```
+    /// let config = ponko::net::rtc::RtcConfig::new().stun("stun:a").turn("turn:b", "u", "p");
+    /// assert_eq!(config.turn_servers().collect::<Vec<_>>(), [("turn:b", "u", "p")]);
+    /// ```
+    pub fn turn_servers(&self) -> impl Iterator<Item = (&str, &str, &str)> {
+        self.servers.iter().filter_map(|s| match (&s.username, &s.credential) {
+            (Some(user), Some(credential)) => Some((s.url.as_str(), user.as_str(), credential.as_str())),
+            _ => None,
+        })
     }
 
     /// Every server as `(url, username, credential)`, for the browser.
