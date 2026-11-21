@@ -43,11 +43,15 @@ struct Full { @builtin(position) at: vec4<f32> };
     return out;
 }
 
-// Steps along the ray, then halvings of the step that crossed.
-const STEPS: i32 = 32;
+// Steps along the ray, then halvings of the step that crossed. 48 rather
+// than 32: far along the ray, steps are tens of pixels long and step over
+// thin things (a rail, a cable) without TAA to fill the gaps; with the depth
+// copy (see `fs_depth`) the 48 cost less than the 32 did reading the
+// multisampled depth.
+const STEPS: i32 = 48;
 const REFINE: i32 = 6;
 // How fast the steps grow on screen: each is e^(GROWTH / STEPS) times
-// (about 1.1 times) the one before.
+// (about 1.06 times) the one before.
 const GROWTH: f32 = 3.0;
 
 fn coordinate(p: vec2<i32>) -> vec2<i32> {
@@ -209,11 +213,14 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
     let ratio = exp(GROWTH / f32(STEPS));
     var grown = exp(GROWTH * jitter / f32(STEPS));
     // The most of a step a crossing may count as the ray's travel (see
-    // below): four pixels at 1080p, as many of the screen's height at
-    // other sizes, and at least four.
-    let most = max(4.0, size.y / 270.0) / pixels;
+    // below): two pixels at 1080p, as many of the screen's height at other
+    // sizes, and at least two.
+    let most = max(2.0, size.y / 540.0) / pixels;
     var before = 0.0;
     var was_behind = false;
+    // How far in front of the camera the surface the ray was last behind
+    // is (see the still-behind case below).
+    var behind_w = 0.0;
     var hit = -1.0;
     for (var i = 0; i < STEPS; i++) {
         let s = first + scale * (grown - 1.0);
@@ -236,11 +243,11 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
                 // scene puts them, and allowing for the steps keeps where
                 // a contact reflection ends from depending on where each
                 // pixel's jittered steps fell (no grain without TAA). But
-                // a step counts as at most a few pixels (`most`): far
-                // along the ray steps are tens of pixels long, and two of
-                // them made a thin thing far away as thick as the ray's
-                // travel over them, a blob in the reflection where a
-                // thin line belongs.
+                // a step counts as at most two pixels (`most`): far along
+                // the ray steps are tens of pixels long, and two of them
+                // made a thin thing far away as thick as the ray's travel
+                // over them, a blob in the reflection where a thin line
+                // belongs.
                 for (var j = 0; j < REFINE; j++) {
                     let mid = (lo + hi) * 0.5;
                     if line_behind(line, mid, size) { hi = mid; } else { lo = mid; }
@@ -248,15 +255,23 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
                 let w = line_w(line, hi);
                 let at = vec2<i32>(line_uv(line, hi) * size);
                 let travel = 2.0 * line_w_change(line, w, min(step, most));
-                found = w - scene_w(at, z_at(at)) < thickness(w) + travel;
+                behind_w = scene_w(at, z_at(at));
+                found = w - behind_w < thickness(w) + travel;
             } else {
                 // Still behind, now by less than the thickness and two of
                 // this step: in front of something new, which it hit
                 // within the step (where, it doesn't know; large things
                 // far away are found here, past a crossing too thin for
-                // them).
+                // them). Only a new surface, farther than the one it was
+                // behind: past a rejected crossing the ray is often still
+                // behind the same thin thing (its top, a step further),
+                // and taking that as a hit put back the blob and the
+                // grain the tight crossing leaves out.
                 let w = line_w(line, s);
-                if w - scene_w(q, z) < thickness(w) + 2.0 * line_w_change(line, w, step) {
+                let surface = scene_w(q, z);
+                let new_surface = surface > behind_w + thickness(behind_w);
+                behind_w = surface;
+                if new_surface && w - surface < thickness(w) + 2.0 * line_w_change(line, w, step) {
                     for (var j = 0; j < REFINE; j++) {
                         let mid = (lo + hi) * 0.5;
                         if line_behind(line, mid, size) { hi = mid; } else { lo = mid; }
