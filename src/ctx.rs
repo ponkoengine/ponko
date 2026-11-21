@@ -669,6 +669,8 @@ impl Ctx {
     #[inline]
     pub(crate) fn frame_begin_services(&mut self) {
         self.update_retained_ui();
+        // What a system feeds from now on reaches the UI between systems.
+        self.input.mark_ui_seen();
         self.update_touch_controls();
     }
 

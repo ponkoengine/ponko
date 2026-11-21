@@ -732,6 +732,16 @@ impl TouchState {
         fired
     }
 
+    /// The touch pointer went down / lifted this frame.
+    pub(crate) fn pointer_edges(&self) -> (bool, bool) {
+        (self.pointer_pressed, self.pointer_released)
+    }
+
+    pub(crate) fn set_pointer_edges(&mut self, pressed: bool, released: bool) {
+        self.pointer_pressed = pressed;
+        self.pointer_released = released;
+    }
+
     pub(crate) fn end_frame(&mut self) {
         self.pointer_pressed = false;
         self.pointer_released = false;

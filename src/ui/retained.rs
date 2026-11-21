@@ -783,6 +783,8 @@ pub struct Ui {
     /// The ray the mouse uses on world panels instead of the camera's through it.
     #[cfg(feature = "3d")]
     pub(crate) pointer_ray: Option<(glam::Vec3, glam::Vec3)>,
+    /// A second pass in the same frame, for input a system fed.
+    pub(super) same_frame: super::same_frame::SameFrame,
 }
 // SAFETY: the only part that isn't `Send`/`Sync` is taffy's `CompactLength`,
 // which may hold an opaque `calc()` handle as a raw pointer. The engine
@@ -827,6 +829,7 @@ impl Default for Ui {
             overlay_has_pointer: false,
             #[cfg(feature = "3d")]
             pointer_ray: None,
+            same_frame: Default::default(),
         }
     }
 }
@@ -1876,11 +1879,15 @@ impl Ui {
     /// let mut ui = ponko::ui::Ui::default(); ui.frame(vec2(800.0,600.0), &ponko::ui::UiInput::default());
     /// ```
     pub fn frame(&mut self, viewport: Vec2, input: &UiInput) {
-        self.events.clear();
-        self.closed.clear();
-        self.consumed = false;
+        // A second pass in a frame (input a system fed) keeps the first's
+        // events and closed screens, and its clock stays.
+        let again = self.start_frame_pass();
+        if !again {
+            self.closed.clear();
+            self.consumed = false;
+        }
         self.pointer = input.pointer;
-        self.widgets.advance(input.dt);
+        self.widgets.advance(if again { 0.0 } else { input.dt });
         self.advance_motion(self.widgets.dt);
         self.layout(viewport);
         let access_moved_focus = self.apply_access_actions();

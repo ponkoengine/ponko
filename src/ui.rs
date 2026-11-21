@@ -152,6 +152,7 @@ mod retained_ime;
 mod retained_layout;
 mod retained_locale;
 mod rich;
+mod same_frame;
 pub mod touch;
 mod widgets;
 mod widgets_draw;

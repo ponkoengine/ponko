@@ -37,6 +37,7 @@ pub use controller::{
 pub use glyphs::{Glyph, GlyphAtlas, Glyphs};
 pub use ime::ImeEvent;
 pub(crate) mod touch;
+mod ui_seen;
 pub use touch::{Gesture, GestureAxis, GestureEvent, GestureSettings, Touch, TouchPhase};
 
 macro_rules! define_keys {
@@ -515,6 +516,8 @@ pub struct Input {
     pub(crate) controllers: controller::Controllers,
     /// Touches, gestures and the on-screen controls' zones.
     pub(crate) touch: touch::TouchState,
+    /// What the retained UI took of this frame's input.
+    ui_seen: ui_seen::UiSeen,
 }
 
 impl Input {
@@ -536,6 +539,7 @@ impl Input {
             ime: Default::default(),
             controllers: Default::default(),
             touch: Default::default(),
+            ui_seen: Default::default(),
         }
     }
 
@@ -725,6 +729,7 @@ impl Input {
         self.mouse_pos_at_frame_start = self.mouse_pos;
         // One-frame gestures are over: their actions see the release next frame.
         self.touch.end_frame();
+        self.end_ui_frame();
         self.refresh_actions();
     }
 
@@ -1290,6 +1295,7 @@ impl Input {
     /// ```
     pub fn feed(&mut self, event: crate::actions::InputEvent) {
         use crate::actions::InputEvent;
+        self.fed_after_ui();
         match event {
             InputEvent::Key(k, down) => self.set_key(k, down),
             InputEvent::Mouse(b, down) => self.set_mouse_button(b, down),
@@ -1358,6 +1364,7 @@ impl Input {
     /// # }
     /// ```
     pub fn insert_text(&mut self, text: &str) {
+        self.fed_after_ui();
         self.add_text(text);
     }
 }
