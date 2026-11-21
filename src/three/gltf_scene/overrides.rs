@@ -16,7 +16,10 @@
 //! A node deleted while editing is recorded as deleted (spawns and reloads
 //! leave it out, its children hang off its parent), and a node attached to
 //! another parent records that parent: another node of the scene by path,
-//! the scene's root, or an entity saved with the world.
+//! the scene's root, the root or a node of another scene (by the number of
+//! that scene's record), or an entity saved with the world. Another
+//! scene's node may spawn after the node attached to it (scenes spawn
+//! one by one after a load): each spawn links the nodes waiting for it.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -76,6 +79,20 @@ pub(super) enum NodeParent {
     Node(String),
     /// An entity saved with the world (its id is kept by world saves).
     Entity(Entity),
+    /// The root of another scene, by its record's number.
+    SceneRoot(u64),
+    /// A node of another scene: its record's number and the node's path.
+    SceneNode { scene: u64, node: String },
+}
+
+impl NodeParent {
+    /// The other scene it names, if it names one.
+    fn other_scene(&self) -> Option<u64> {
+        match self {
+            Self::SceneRoot(id) | Self::SceneNode { scene: id, .. } => Some(*id),
+            _ => None,
+        }
+    }
 }
 
 /// One way a node of a glTF scene differs from its file, as the editor
@@ -235,6 +252,11 @@ impl Ctx {
                         let mut link = link.clone();
                         link.remove("to");
                         o.components.insert("Attached3D".into(), Value::Object(link));
+                    } else if let Some(waiting) = self.waiting_link(root, &node.path) {
+                        // Its parent's scene isn't spawned (yet): the link
+                        // it was saved with stays.
+                        o.parent = Some(waiting.0);
+                        o.components.insert("Attached3D".into(), waiting.1);
                     }
                     o
                 }
@@ -268,6 +290,9 @@ impl Ctx {
         }
         if let Some(node) = scene.nodes.iter().find(|n| n.entity == parent) {
             return Some(NodeParent::Node(node.path.clone()));
+        }
+        if let Some(other) = self.other_scene_parent(parent) {
+            return Some(other);
         }
         if self.world.get::<crate::reflect::NotSaved>(parent).is_some() {
             eprintln!(
@@ -360,6 +385,9 @@ impl Ctx {
         };
         scene.baseline = baseline;
         if overrides.is_empty() {
+            // Nodes of other scenes may wait for this one.
+            self.link_scene_parents();
+            crate::hierarchy::settle(&mut self.world);
             return;
         }
         let file = scene.path.clone();
@@ -369,10 +397,19 @@ impl Ctx {
                 continue;
             };
             if let Some(parent) = &o.parent {
+                if parent.other_scene().is_some() {
+                    // Linked below, with its offset, once that scene is
+                    // spawned.
+                    let rest = o.components.iter().filter(|(name, _)| *name != "Attached3D");
+                    let rest: Vec<(String, Value)> = rest.map(|(k, v)| (k.clone(), v.clone())).collect();
+                    self.apply_node_components(&file, path, e, &rest, &o.remove);
+                    continue;
+                }
                 let to = match parent {
                     NodeParent::Root => Some(root),
                     NodeParent::Node(p) => nodes.iter().find(|(n, _)| n == p).map(|&(_, e)| e),
                     NodeParent::Entity(e) => Some(*e),
+                    NodeParent::SceneRoot(_) | NodeParent::SceneNode { .. } => None,
                 };
                 match to.filter(|&to| self.world.is_alive(to) && to != e) {
                     Some(to) => match self.world.get_mut::<crate::attach::Attached3D>(e) {
@@ -384,24 +421,146 @@ impl Ctx {
                     None => eprintln!("ponko: {file}: node \"{path}\": the parent it was attached to is gone"),
                 }
             }
-            for (name, value) in &o.components {
-                let value = match (self.world.get_json(e, name), value) {
-                    (Ok(Value::Object(mut now)), Value::Object(fields)) => {
-                        now.extend(fields.iter().map(|(k, v)| (k.clone(), v.clone())));
-                        Value::Object(now)
-                    }
-                    _ => value.clone(),
-                };
-                if let Err(err) = self.world.set_json(e, name, value) {
-                    eprintln!("ponko: {file}: node \"{path}\": its override of {name} is left out: {err}");
-                }
-            }
-            for name in &o.remove {
-                let _ = self.world.remove_json(e, name);
-            }
+            let components: Vec<(String, Value)> = o.components.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            self.apply_node_components(&file, path, e, &components, &o.remove);
         }
+        self.link_scene_parents();
         // Attached nodes go where their changed offsets put them.
         crate::hierarchy::settle(&mut self.world);
+    }
+
+    /// Puts a node's overridden `components` (changed fields merged into
+    /// what it has) on node entity `e` and takes `remove` off it.
+    fn apply_node_components(
+        &mut self,
+        file: &str,
+        path: &str,
+        e: Entity,
+        components: &[(String, Value)],
+        remove: &[String],
+    ) {
+        for (name, value) in components {
+            let value = match (self.world.get_json(e, name), value) {
+                (Ok(Value::Object(mut now)), Value::Object(fields)) => {
+                    now.extend(fields.iter().map(|(k, v)| (k.clone(), v.clone())));
+                    Value::Object(now)
+                }
+                _ => value.clone(),
+            };
+            if let Err(err) = self.world.set_json(e, name, value) {
+                eprintln!("ponko: {file}: node \"{path}\": its override of {name} is left out: {err}");
+            }
+        }
+        for name in remove {
+            let _ = self.world.remove_json(e, name);
+        }
+    }
+
+    /// The scene record numbers and roots of the spawned scenes.
+    fn spawned_scenes(&self) -> Vec<(u64, Entity)> {
+        let Some(saves) = self.world.get_resource::<GltfSceneSaves>() else {
+            return Vec::new();
+        };
+        saves
+            .scenes
+            .iter()
+            .filter_map(|s| s.root.filter(|&r| self.world.is_alive(r)).map(|r| (s.id, r)))
+            .collect()
+    }
+
+    /// `parent` as the root or a node of another spawned scene.
+    fn other_scene_parent(&self, parent: Entity) -> Option<NodeParent> {
+        for (id, root) in self.spawned_scenes() {
+            if root == parent {
+                return Some(NodeParent::SceneRoot(id));
+            }
+            let Some(scene) = self.world.get::<GltfRoot>(root) else {
+                continue;
+            };
+            if let Some(node) = scene.nodes.iter().find(|n| n.entity == parent) {
+                return Some(NodeParent::SceneNode {
+                    scene: id,
+                    node: node.path.clone(),
+                });
+            }
+        }
+        None
+    }
+
+    /// The entity a parent in another scene is now: `None` while that
+    /// scene isn't spawned or the node is deleted.
+    fn other_scene_entity(&self, parent: &NodeParent) -> Option<Entity> {
+        let id = parent.other_scene()?;
+        let (_, root) = self.spawned_scenes().into_iter().find(|&(s, _)| s == id)?;
+        let to = match parent {
+            NodeParent::SceneNode { node, .. } => self.world.get::<GltfRoot>(root)?.entity_at(node)?,
+            _ => root,
+        };
+        self.world.is_alive(to).then_some(to)
+    }
+
+    /// The saved link of node `path` of `root`'s scene to another scene's
+    /// root or node, with its saved `Attached3D` fields, while that scene
+    /// has a record and isn't spawned (yet). A link to a scene that is
+    /// gone, or to a node deleted from it, isn't kept.
+    fn waiting_link(&self, root: Entity, path: &str) -> Option<(NodeParent, Value)> {
+        let saves = self.world.get_resource::<GltfSceneSaves>()?;
+        let record = saves.scenes.iter().find(|s| s.root == Some(root))?;
+        let o = record.overrides.get(path)?;
+        let parent = o.parent.clone()?;
+        let other = saves.scenes.iter().find(|s| Some(s.id) == parent.other_scene())?;
+        if other.root.is_some_and(|r| self.world.is_alive(r)) {
+            return None;
+        }
+        Some((parent, o.components.get("Attached3D")?.clone()))
+    }
+
+    /// Hangs every spawned node whose saved parent is in another scene off
+    /// that parent, where it is spawned and the node isn't on it yet, with
+    /// its saved offset.
+    fn link_scene_parents(&mut self) {
+        let Some(saves) = self.world.get_resource::<GltfSceneSaves>() else {
+            return;
+        };
+        let mut links: Vec<(String, String, Entity, NodeParent, Value)> = Vec::new();
+        for record in &saves.scenes {
+            let Some(scene) = record.root.and_then(|r| self.world.get::<GltfRoot>(r)) else {
+                continue;
+            };
+            for (path, o) in &record.overrides {
+                let Some(parent) = o.parent.clone().filter(|p| p.other_scene().is_some()) else {
+                    continue;
+                };
+                let Some(e) = scene.entity_at(path).filter(|&e| self.world.is_alive(e)) else {
+                    continue;
+                };
+                let fields = o.components.get("Attached3D").cloned().unwrap_or(Value::Null);
+                links.push((record.path.clone(), path.clone(), e, parent, fields));
+            }
+        }
+        for (file, path, e, parent, fields) in links {
+            let Some(to) = self.other_scene_entity(&parent).filter(|&to| to != e) else {
+                continue;
+            };
+            if self
+                .world
+                .get::<crate::attach::Attached3D>(e)
+                .is_some_and(|l| l.to == to)
+            {
+                continue;
+            }
+            let mut link = match self.world.get_json(e, "Attached3D") {
+                Ok(Value::Object(now)) => now,
+                _ => JsonMap::new(),
+            };
+            if let Value::Object(fields) = fields {
+                link.extend(fields);
+            }
+            link.insert("to".into(), serde_json::json!(to.to_bits()));
+            if let Err(err) = self.world.set_json(e, "Attached3D", Value::Object(link)) {
+                eprintln!("ponko: {file}: node \"{path}\": the link to its parent in another scene is left out: {err}");
+            }
+        }
     }
 
     /// Spawns again every glTF scene whose saved record lost its root
@@ -882,6 +1041,55 @@ mod tests {
             again["resources"]["GltfSceneSaves"]["scenes"][0]["overrides"],
             save["resources"]["GltfSceneSaves"]["scenes"][0]["overrides"]
         );
+    }
+
+    #[test]
+    fn a_node_attached_to_another_scenes_node_comes_back_on_it_whichever_scene_spawns_first() {
+        let yard = Temp::new("cross-yard", &yard(3.0, 1.0));
+        let posts = Temp::new("cross-posts", &cube_gltf(&json!([{ "name": "Post", "mesh": 0 }])));
+        let mut ctx = ctx();
+        let a = ctx.spawn_prefab(&yard.name, T3::default()).unwrap();
+        let b = ctx.spawn_prefab(&posts.name, T3::at(vec3(4.0, 0.0, 0.0))).unwrap();
+        ctx.track_gltf_overrides();
+        let (wall, post) = (node(&ctx, a, "Shed/Wall"), node(&ctx, b, "Post"));
+        // Hung off the post where it stands, as the editor does.
+        let at = *ctx.world.get::<T3>(wall).unwrap();
+        ctx.world.insert(wall, crate::attach::Attached3D::to(post));
+        crate::editor::place_world3d(&mut ctx.world, wall, at);
+        ctx.record_gltf_overrides(None);
+        let save = ctx.world.save();
+        let records = &save["resources"]["GltfSceneSaves"]["scenes"];
+        assert_eq!(
+            records[0]["overrides"]["Shed/Wall"]["parent"],
+            json!({ "scene_node": { "scene": records[1]["id"], "node": "Post" } }),
+            "{records}"
+        );
+
+        for posts_first in [false, true] {
+            let mut game = self::ctx();
+            game.replace_world(&save).unwrap();
+            let spawn =
+                |game: &mut Ctx, file: &Temp, x: f32| game.spawn_prefab(&file.name, T3::at(vec3(x, 0.0, 0.0))).unwrap();
+            let (a, b) = if posts_first {
+                let b = spawn(&mut game, &posts, 4.0);
+                (spawn(&mut game, &yard, 0.0), b)
+            } else {
+                let a = spawn(&mut game, &yard, 0.0);
+                // Saved again before the post's scene is there: the link waits.
+                game.record_gltf_overrides(None);
+                let again = game.world.save();
+                assert_eq!(
+                    again["resources"]["GltfSceneSaves"]["scenes"][0]["overrides"], records[0]["overrides"],
+                    "kept while its parent's scene isn't spawned"
+                );
+                (a, spawn(&mut game, &posts, 4.0))
+            };
+            let (wall, post) = (node(&game, a, "Shed/Wall"), node(&game, b, "Post"));
+            let link = game.world.get::<crate::attach::Attached3D>(wall).map(|l| l.to);
+            assert_eq!(link, Some(post), "posts first: {posts_first}");
+            let now = game.world.get::<T3>(wall).unwrap().position;
+            assert!((now - at.position).length() < 1e-4, "posts first: {posts_first}: {now}");
+        }
     }
 
     fn map(v: Value) -> JsonMap {
