@@ -145,6 +145,8 @@
 
 #define PONKO_TILE_FLIP_DIAGONAL 4
 
+#define PONKO_LOOPBACK_LINK_VERSION 1
+
 #define PONKO_NAV_CROWD_STATS_VERSION 1
 
 #define PONKO_PRESS_THRESHOLD 0.5
@@ -2012,6 +2014,15 @@ typedef struct PonkoTurns {
   uint32_t now;
   float dt;
 } PonkoTurns;
+
+typedef struct PonkoLoopbackLink {
+  uint32_t struct_size;
+  uint32_t version;
+  double loss;
+  double delay;
+  double jitter;
+  uint64_t seed;
+} PonkoLoopbackLink;
 
 typedef struct PonkoMessageEvent {
   enum PonkoMessageEventKind kind;
@@ -4364,6 +4375,10 @@ enum PonkoStatus ponko_ai_brain_param_num(const struct PonkoAiBrain *brain,
                                           uint64_t key,
                                           float *out_value);
 
+enum PonkoStatus ponko_ai_brain_wake(struct PonkoAiBrain *brain);
+
+enum PonkoStatus ponko_ai_brain_signal(struct PonkoAiBrain *brain, uint64_t key);
+
 enum PonkoStatus ponko_ai_blackboard_set_num(struct PonkoAiBlackboard *board,
                                              uint64_t key,
                                              float value);
@@ -6009,6 +6024,12 @@ enum PonkoStatus ponko_net_messages_join(const char *addr, struct PonkoNetMessag
 enum PonkoStatus ponko_net_messages_loopback(size_t players,
                                              struct PonkoNetMessages **out_endpoints);
 
+enum PonkoStatus ponko_loopback_link_defaults(struct PonkoLoopbackLink *link);
+
+enum PonkoStatus ponko_net_messages_loopback_link(size_t players,
+                                                  const struct PonkoLoopbackLink *link,
+                                                  struct PonkoNetMessages **out_endpoints);
+
 void ponko_net_messages_free(struct PonkoNetMessages *endpoint);
 
 enum PonkoStatus ponko_net_messages_set_timeout(struct PonkoNetMessages *endpoint, uint64_t ms);
@@ -6028,6 +6049,8 @@ enum PonkoStatus ponko_net_messages_send_to_all(struct PonkoNetMessages *endpoin
                                                 size_t len);
 
 enum PonkoStatus ponko_net_messages_poll(struct PonkoNetMessages *endpoint);
+
+enum PonkoStatus ponko_net_messages_poll_elapsed(struct PonkoNetMessages *endpoint, double seconds);
 
 enum PonkoStatus ponko_net_messages_next_event(struct PonkoNetMessages *endpoint,
                                                struct PonkoMessageEvent *out_event,

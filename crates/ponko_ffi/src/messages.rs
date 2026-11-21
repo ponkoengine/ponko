@@ -6,11 +6,13 @@ use std::ffi::{CString, c_char};
 use std::time::Duration;
 
 use ponko::net::Lane;
+use ponko::net::LoopbackLink;
 use ponko::net::MessageEvent;
 use ponko::net::NetMessages;
 use ponko::net::PeerId;
 
 use crate::ctx::{out, text};
+use crate::descriptors::{Versioned, read_desc, write_desc};
 use crate::{Failure, PonkoStatus, boundary, invalid, invalid_owned};
 
 fn io(e: std::io::Error) -> Failure {
@@ -232,6 +234,149 @@ pub unsafe extern "C" fn ponko_net_messages_loopback(
     })
 }
 
+/// The version of `PonkoLoopbackLink` this header describes.
+pub const PONKO_LOOPBACK_LINK_VERSION: u32 = 1;
+
+/// What an in-memory link does to datagrams (Rust `LoopbackLink`), for
+/// `ponko_net_messages_loopback_link`: loses a share of them and delays
+/// each by a fixed time plus a random part, so some overtake others. The
+/// dice are a hash of the seed, the sender and the datagram's number: the
+/// same seed loses and delays the same datagrams on every run. A versioned
+/// descriptor: set the header, fill it with `ponko_loopback_link_defaults`
+/// (a perfect link), change what you need.
+///
+/// Version 1: every field below.
+/// ```
+/// use ponko_ffi::*;
+/// let mut link: PonkoLoopbackLink = unsafe { std::mem::zeroed() };
+/// (link.struct_size, link.version) = (size_of::<PonkoLoopbackLink>() as u32, PONKO_LOOPBACK_LINK_VERSION);
+/// assert_eq!(unsafe { ponko_loopback_link_defaults(&mut link) }, PonkoStatus::PONKO_OK);
+/// assert_eq!((link.loss, link.delay, link.jitter, link.seed), (0.0, 0.0, 0.0, 0));
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PonkoLoopbackLink {
+    /// `sizeof(PonkoLoopbackLink)` as the caller compiled it.
+    pub struct_size: u32,
+    /// `PONKO_LOOPBACK_LINK_VERSION` as the caller compiled it.
+    pub version: u32,
+    /// The share of datagrams lost, 0 to 1. Default 0.
+    pub loss: f64,
+    /// Seconds every datagram takes at the least. Default 0.
+    pub delay: f64,
+    /// Seconds a datagram may take on top, picked per datagram: one delayed
+    /// more than the gap to the next arrives after it. Default 0.
+    pub jitter: f64,
+    /// Another seed loses and delays other datagrams. Default 0.
+    pub seed: u64,
+}
+
+const _: () = assert!(
+    std::mem::offset_of!(PonkoLoopbackLink, struct_size) == 0 && std::mem::offset_of!(PonkoLoopbackLink, version) == 4
+);
+impl Versioned for PonkoLoopbackLink {
+    const NAME: &'static str = "PonkoLoopbackLink";
+    const VERSION: u32 = PONKO_LOOPBACK_LINK_VERSION;
+    fn len_of(version: u32) -> Option<usize> {
+        match version {
+            1 => Some(std::mem::offset_of!(Self, seed) + size_of::<u64>()),
+            _ => None,
+        }
+    }
+}
+
+impl Default for PonkoLoopbackLink {
+    fn default() -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            version: PONKO_LOOPBACK_LINK_VERSION,
+            loss: 0.0,
+            delay: 0.0,
+            jitter: 0.0,
+            seed: 0,
+        }
+    }
+}
+
+/// Seconds as a duration: finite and not negative, or an error naming `what`.
+fn seconds(value: f64, what: &'static str) -> Result<Duration, Failure> {
+    Duration::try_from_secs_f64(value).map_err(|_| invalid(what))
+}
+
+fn link_from_c(c: &PonkoLoopbackLink) -> Result<LoopbackLink, Failure> {
+    if !(0.0..=1.0).contains(&c.loss) {
+        return Err(invalid("PonkoLoopbackLink: loss must be a share from 0 to 1"));
+    }
+    Ok(LoopbackLink::new()
+        .loss(c.loss)
+        .delay(seconds(c.delay, "PonkoLoopbackLink: delay must be finite seconds, 0 or more")?)
+        .jitter(seconds(c.jitter, "PonkoLoopbackLink: jitter must be finite seconds, 0 or more")?)
+        .seed(c.seed))
+}
+
+/// Fills the fields of `link`'s version with the defaults: a perfect link,
+/// nothing lost or delayed. `struct_size` and `version` must be set first.
+///
+/// Ownership: `link` is the caller's, written during the call only.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_loopback_link_defaults(std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `link` null or a writable descriptor with its header set.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_loopback_link_defaults(link: *mut PonkoLoopbackLink) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { write_desc(link, &PonkoLoopbackLink::default()) })
+}
+
+/// `ponko_net_messages_loopback` over a link that loses, delays and
+/// reorders datagrams as `link` says, the same ones on every run (Rust
+/// `NetMessages::loopback_link`): native tests of a game's netcode on a bad
+/// network. The delays count on the endpoints' protocol clocks: poll them
+/// together every frame with `ponko_net_messages_poll_elapsed` (or a
+/// game's clock, `ponko_net_messages_game_clock`) for runs that repeat
+/// exactly. `PONKO_INVALID_ARGUMENT` for a loss outside 0 to 1, a negative
+/// or non-finite delay or jitter, or fewer than 2 or more than 1025
+/// players.
+///
+/// Ownership: `link` is read during the call only; on success
+/// `out_endpoints` receives `players` owned endpoints, the caller's; free
+/// each with ponko_net_messages_free (or give it to ponko_game_messages).
+/// ```
+/// use ponko_ffi::*;
+/// let link = PonkoLoopbackLink { loss: 0.1, jitter: 0.05, seed: 3, ..Default::default() };
+/// let mut e = [std::ptr::null_mut(); 2];
+/// assert_eq!(unsafe { ponko_net_messages_loopback_link(2, &link, e.as_mut_ptr()) }, PonkoStatus::PONKO_OK);
+/// for p in e { unsafe { ponko_net_messages_free(p) } }
+/// let bad = PonkoLoopbackLink { loss: 1.5, ..Default::default() };
+/// assert_eq!(unsafe { ponko_net_messages_loopback_link(2, &bad, e.as_mut_ptr()) }, PonkoStatus::PONKO_INVALID_ARGUMENT);
+/// ```
+/// # Safety
+/// `link` null or a readable descriptor with its header set;
+/// `out_endpoints` writable for `players` pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_net_messages_loopback_link(
+    players: usize,
+    link: *const PonkoLoopbackLink,
+    out_endpoints: *mut *mut PonkoNetMessages,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let link = link_from_c(&read_desc(link, PonkoLoopbackLink::default())?)?;
+        if out_endpoints.is_null() {
+            return Err(invalid("output is null"));
+        }
+        if !(2..=1025).contains(&players) {
+            return Err(invalid("a loopback needs 2 to 1025 players"));
+        }
+        for (i, net) in NetMessages::loopback_link(players, link).into_iter().enumerate() {
+            // SAFETY: the caller made room for `players` pointers.
+            out_endpoints.add(i).write(wrap(net));
+        }
+        Ok(())
+    })
+}
+
 /// Closes an endpoint (without telling peers; disconnect them first for
 /// that). Null does nothing.
 /// ```
@@ -342,6 +487,26 @@ pub unsafe extern "C" fn ponko_net_messages_send_to_all(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ponko_net_messages_poll(endpoint: *mut PonkoNetMessages) -> PonkoStatus {
     boundary(|| live(endpoint)?.net.poll().map_err(io))
+}
+
+/// `ponko_net_messages_poll` on a clock of the caller's: protocol time
+/// moves on by `seconds` (Rust `NetMessages::poll_elapsed`), not by the
+/// wall clock. For tests that step loopback endpoints frame by frame (a
+/// lossy `ponko_net_messages_loopback_link` delays by this clock), and for
+/// replays. The first poll starts the clock; don't mix it with
+/// `ponko_net_messages_poll` on one endpoint. `PONKO_INVALID_ARGUMENT` for a
+/// negative or non-finite `seconds`.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_net_messages_poll_elapsed(std::ptr::null_mut(), 0.016) } as u32, 1);
+/// ```
+/// # Safety
+/// `endpoint` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_net_messages_poll_elapsed(endpoint: *mut PonkoNetMessages, seconds: f64) -> PonkoStatus {
+    boundary(|| {
+        let elapsed = self::seconds(seconds, "elapsed must be finite seconds, 0 or more")?;
+        live(endpoint)?.net.poll_elapsed(elapsed).map_err(io)
+    })
 }
 
 /// Takes the oldest event into `*out_event`; `*out_found` is false when
