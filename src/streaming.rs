@@ -173,13 +173,19 @@ pub struct UploadStats {
     pub step_ms: f32,
     /// The longest upload step so far, in milliseconds.
     pub max_step_ms: f32,
-    /// The GPU's own time copying the textures the latest timed upload
-    /// step uploaded, in milliseconds: what `step_ms` leaves out. It
-    /// arrives a frame or a few after that step. `None` before the first,
-    /// and always where the GPU can't time uploads (see
+    /// The GPU's own time copying the textures and mesh buffers the latest
+    /// timed upload step uploaded, in milliseconds: what `step_ms` leaves
+    /// out. It arrives a frame or a few after that step. `None` before the
+    /// first, and always where the GPU can't time uploads (see
     /// `gpu_upload_timing`). Asset groups' uploads are timed apart, in
     /// [`GroupStats`](crate::assets::GroupStats).
     pub gpu_upload_ms: Option<f32>,
+    /// The GPU's own time copying the textures made outside the upload
+    /// steps (with [`create_texture`](crate::gfx::Graphics::create_texture),
+    /// `load_texture` and the like) in the latest frame that made any, in
+    /// milliseconds. It arrives a few frames later; `None` before the
+    /// first, and always where the GPU can't time uploads.
+    pub gpu_created_ms: Option<f32>,
     /// Whether the GPU times uploads (it has timestamp queries): `false`
     /// headless, on GPUs without them, and in browsers that don't offer
     /// them; then only the game thread's time is measured.
@@ -351,9 +357,11 @@ pub(crate) trait StreamSlices<T>: Send {
 /// Reads a streamed asset's file, wherever the decode runs.
 pub(crate) type ReadFile = Box<dyn FnOnce() -> Result<(Origin, Vec<u8>), crate::error::Error> + Send>;
 
-/// A texture decoded a slice at a time: read, a PNG a few rows a slice
-/// (other formats in one piece), then its smaller resolutions a few rows a
-/// slice. The same levels as [`decode_texture`] and [`pyramid`] make.
+/// A texture decoded a slice at a time: read, a PNG a few rows a slice, a
+/// KTX2 or DDS file a few block rows (or a piece of a supercompressed
+/// level) a slice (other formats in one piece), then the smaller
+/// resolutions of an RGBA8 image a few rows a slice. The same levels as
+/// [`decode_texture`] and [`pyramid`] make.
 struct TextureSlices {
     name: String,
     max: u32,
@@ -364,6 +372,9 @@ struct TextureSlices {
 enum TexturePhase {
     Read(ReadFile),
     Png(Origin, Box<assets::group::sliced::PngSlices>),
+    /// A KTX2 or DDS file: its bytes and its decode.
+    #[cfg(feature = "compressed-textures")]
+    Compressed(Origin, Vec<u8>, Box<crate::compressed::DecodeSlices>),
     Pyramid(Origin, PyramidSlices),
     Taken,
 }
@@ -374,6 +385,13 @@ impl StreamSlices<(Origin, Pyramid)> for TextureSlices {
         match std::mem::replace(&mut self.phase, TexturePhase::Taken) {
             TexturePhase::Read(read) => {
                 let (origin, bytes) = read().map_err(|e| e.with_path(name))?;
+                #[cfg(feature = "compressed-textures")]
+                if let Some(slices) =
+                    crate::compressed::DecodeSlices::new(&bytes, name, &origin.describe(name), self.gpu)
+                {
+                    self.phase = TexturePhase::Compressed(origin, bytes, Box::new(slices?));
+                    return Ok(None);
+                }
                 let bytes = std::sync::Arc::new(bytes);
                 match assets::group::sliced::PngSlices::new(&bytes) {
                     Some(png) => self.phase = TexturePhase::Png(origin, Box::new(png)),
@@ -394,6 +412,20 @@ impl StreamSlices<(Origin, Pyramid)> for TextureSlices {
                 } else {
                     TexturePhase::Png(origin, png)
                 };
+                Ok(None)
+            }
+            #[cfg(feature = "compressed-textures")]
+            TexturePhase::Compressed(origin, bytes, mut slices) => {
+                match slices.step(&bytes)? {
+                    None => self.phase = TexturePhase::Compressed(origin, bytes, slices),
+                    Some(crate::compressed::Decoded::Rgba(image)) => {
+                        self.phase = TexturePhase::Pyramid(origin, PyramidSlices::new(image));
+                    }
+                    Some(crate::compressed::Decoded::Blocks(image)) => {
+                        let levels = blocks_pyramid(name, &origin, &image, self.max)?;
+                        return Ok(Some((origin, levels)));
+                    }
+                }
                 Ok(None)
             }
             TexturePhase::Pyramid(origin, mut levels) => {
@@ -655,6 +687,7 @@ impl Ctx {
                         groups.total_gpu_upload_ms += f64::from(ms);
                     }
                     crate::render::upload_timer::UploadStep::Streaming => streams.gpu_upload_ms = Some(ms),
+                    crate::render::upload_timer::UploadStep::Created => streams.gpu_created_ms = Some(ms),
                 });
             }
         }
@@ -1708,14 +1741,7 @@ fn decode_texture(
         return Ok(match decoded? {
             crate::compressed::Decoded::Rgba(image) => (origin, pyramid(image, max)),
             crate::compressed::Decoded::Blocks(image) => {
-                let levels = block_pyramid(&image, max);
-                if levels.is_empty() {
-                    return Err(crate::error::Error::new(
-                        crate::error::ErrorKind::Limit,
-                        format!("{what} is larger than this GPU's textures and has no smaller mip level to use"),
-                    )
-                    .with_path(name));
-                }
+                let levels = blocks_pyramid(name, &origin, &image, max)?;
                 (origin, levels)
             }
         });
@@ -1724,6 +1750,26 @@ fn decode_texture(
     let TextureFormats = gpu;
     let image = assets::decode_image(&bytes, name, &what)?;
     Ok((origin, pyramid(image, max)))
+}
+
+/// [`block_pyramid`], or why there is none.
+#[cfg(feature = "compressed-textures")]
+fn blocks_pyramid(
+    name: &str,
+    origin: &Origin,
+    image: &crate::compressed::CompressedImage,
+    max: u32,
+) -> Result<Pyramid, crate::error::Error> {
+    let levels = block_pyramid(image, max);
+    if levels.is_empty() {
+        let what = origin.describe(name);
+        return Err(crate::error::Error::new(
+            crate::error::ErrorKind::Limit,
+            format!("{what} is larger than this GPU's textures and has no smaller mip level to use"),
+        )
+        .with_path(name));
+    }
+    Ok(levels)
 }
 
 // Replace a slot without dropping its owned name buffer.
@@ -1869,6 +1915,49 @@ mod tests {
             let ((origin, levels), _) = run(&mut slices, &sources);
             assert_eq!(origin, whole.0);
             assert!(same(&levels, &whole.1), "{w} x {h} at most {max}: other levels");
+        }
+    }
+
+    /// A KTX2 file of noise BC1 blocks, 256 x 256 down to 1 x 1, its levels
+    /// Zstandard-packed.
+    #[cfg(feature = "compressed-textures")]
+    fn noise_ktx2() -> Vec<u8> {
+        use crate::compressed::{BlockFormat, tests};
+        let levels = tests::noise_levels(BlockFormat::Bc1, 256, 256);
+        tests::ktx2_file(Some(ktx2::Format::BC1_RGBA_UNORM_BLOCK), 256, 256, &levels, true)
+    }
+
+    #[cfg(feature = "compressed-textures")]
+    #[test]
+    fn sliced_ktx2_texture_decodes_make_the_levels_the_worker_decode_makes() {
+        let sources = assets::SharedSources::default();
+        let rgba_only = crate::compressed::GpuFormats::default();
+        // Kept as blocks, and decoded to RGBA8 (then halved) on the CPU.
+        for (gpu, max) in [
+            (crate::compressed::GpuFormats::ALL, u32::MAX),
+            (crate::compressed::GpuFormats::ALL, 64),
+            (rgba_only, u32::MAX),
+        ] {
+            let file = noise_ktx2();
+            let whole = decode_texture("t.ktx2", Origin::File("t.ktx2".into()), Ok(file.clone()), max, gpu).unwrap();
+            let mut slices = TextureSlices {
+                name: "t.ktx2".into(),
+                max,
+                gpu,
+                phase: TexturePhase::Read(Box::new(move || Ok((Origin::File("t.ktx2".into()), file)))),
+            };
+            let ((_, levels), n) = run(&mut slices, &sources);
+            assert!(same(&levels, &whole.1), "{gpu:?} at most {max}: other levels");
+            assert!(
+                levels.iter().zip(&whole.1).all(|(a, b)| a.blocks == b.blocks),
+                "{gpu:?} at most {max}: other blocks"
+            );
+            // The read, a slice a level (nine, each small enough for one),
+            // the choice, and for RGBA8: the 256 KiB of the 256 x 256
+            // decode at 64 KiB a slice (four bands of 16 block rows) and
+            // the halvings to 128, 64 and 32 (one each).
+            let expected = if gpu == rgba_only { 1 + 9 + 1 + 4 + 3 } else { 1 + 9 + 1 };
+            assert_eq!(n, expected, "{gpu:?} at most {max}");
         }
     }
 

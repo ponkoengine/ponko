@@ -186,7 +186,7 @@ time. Where the GPU has **timestamp queries** (most desktop GPUs; browsers
 only with WebGPU's `timestamp-query`), the group measures that too:
 
 - `group_stats()`: `gpu_upload_ms`, the GPU's own time copying the textures
-  of the latest step it timed, and `total_gpu_upload_ms` since the game
+  and mesh buffers of the latest step it timed, and `total_gpu_upload_ms` since the game
   started. They arrive a frame or a few after the step, as the GPU's
   results are read back without waiting.
 - `gpu_upload_timing` says whether this GPU times uploads. Where it doesn't
@@ -194,14 +194,21 @@ only with WebGPU's `timestamp-query`), the group measures that too:
   it is `false` and `gpu_upload_ms` stays `None`: only the game thread's
   time is measured.
 
-To time a copy, the step makes each texture write itself, as the GPU
-driver layer otherwise does (through a staging buffer), with the copy
-between two timestamps, and submits it at once. The time is the sum of
-those copies: the GPU's work alone, without the time it sat idle between
-them. Textures of other uploads (made by systems with `create_texture`, or
-glTF files' buffers) aren't timed. Streamed textures and meshes upload in
-the streaming step and count in `ctx.gfx.upload_stats()` instead, which has
-the same `gpu_upload_ms` and `gpu_upload_timing` for that step's textures.
+To time a copy, the step makes each texture and mesh buffer write itself,
+as the GPU driver layer otherwise does (through a staging buffer), with the
+copy between two timestamps, and submits it at once. A mesh buffer made
+with its contents is made empty and its contents copied in that way, and
+meshes made in the step are copied into the shared mesh buffers before it
+ends rather than at the next draw, so their copies are the step's. The time
+is the sum of those copies: the GPU's work alone, without the time it sat
+idle between them. Streamed textures and meshes upload in the streaming
+step and count in `ctx.gfx.upload_stats()` instead, which has the same
+`gpu_upload_ms` and `gpu_upload_timing` for that step's uploads. Textures
+made outside the steps (by systems, with `create_texture`) are timed
+together, a frame's worth at a time: `upload_stats().gpu_created_ms` is
+the GPU's time for those of the latest frame it timed. At most 64 copies
+are timed per step (or frame of made textures); later ones still upload,
+untimed.
 Some drivers now and then leave a timestamp unwritten (on an Apple GPU
 about one copy in three, in our tests): such a copy is left out of the sum,
 and a step whose copies all lost one keeps the previous step's time.
@@ -316,9 +323,11 @@ samples are exactly those of the one-piece decode. Uploading it waits for a
 frame with budget left. A group's streamed textures and meshes are decoded
 in slices by the streaming step, after the group step and within what it
 left of the same budget ([Streaming](streaming.md#browsers-and-asset-sources)).
-What can't be split still runs in one piece: other image formats (JPEG and
-the rest), interlaced PNGs, your own `with` loaders and `bytes`, and the
-geometry of a glTF file (its PNG images are sliced).
+KTX2 textures and the images, JSON, buffers and geometry of a glTF file
+are sliced too ([Streaming](streaming.md#browsers-and-asset-sources) says
+how). What can't be split still runs in one piece: other image formats
+(JPEG and the rest), interlaced PNGs, and your own `with` loaders and
+`bytes`.
 
 The tests run this path natively, decoding on the game thread as a browser
 does, and check the slicing by counting rather than timing: each piece of

@@ -48,10 +48,59 @@ enum Phase {
 struct Images {
     origin: Origin,
     bytes: Vec<u8>,
-    /// PNG images not started, by image index, last first.
+    /// PNG and KTX2 images not started, by image index, last first.
     todo: Vec<(usize, Arc<Vec<u8>>)>,
-    current: Option<(usize, PngSlices)>,
+    current: Option<(usize, ImageSlices)>,
     done: HashMap<usize, gltf::Predecoded>,
+}
+
+/// One image being decoded a slice at a time.
+enum ImageSlices {
+    Png(Box<PngSlices>),
+    /// A KTX2 file (`KHR_texture_basisu`): its bytes and its decode.
+    #[cfg(feature = "compressed-textures")]
+    Ktx2(Arc<Vec<u8>>, Box<crate::compressed::DecodeSlices>),
+}
+
+impl ImageSlices {
+    /// Starts decoding image `index`, `bytes`, for `gpu`, if it is one the
+    /// slicers split.
+    fn new(name: &str, index: usize, bytes: Arc<Vec<u8>>, gpu: gltf::GpuFormats) -> Option<Self> {
+        #[cfg(feature = "compressed-textures")]
+        if crate::compressed::is_ktx2(&bytes) {
+            let what = format!("image {index} of {name}");
+            let slices = crate::compressed::DecodeSlices::new(&bytes, name, &what, gpu)?.ok()?;
+            return Some(ImageSlices::Ktx2(bytes, Box::new(slices)));
+        }
+        let _ = (name, index, gpu);
+        PngSlices::new(&bytes).map(|png| ImageSlices::Png(Box::new(png)))
+    }
+
+    /// The next slice: the image once it is decoded (as the parse decodes
+    /// it for `gpu`), else the rest to do; `None` if it failed (the parse
+    /// decodes it again, failing with its message).
+    fn step(self, gpu: gltf::GpuFormats) -> Option<Result<gltf::Predecoded, Self>> {
+        #[cfg(not(feature = "compressed-textures"))]
+        let _ = gpu;
+        match self {
+            ImageSlices::Png(mut png) => match png.step() {
+                Ok(false) => Some(Err(ImageSlices::Png(png))),
+                Ok(true) => {
+                    let image = png.finish();
+                    Some(Ok(((image.width, image.height, image.rgba), None, None)))
+                }
+                Err(_) => None,
+            },
+            #[cfg(feature = "compressed-textures")]
+            ImageSlices::Ktx2(bytes, mut slices) => match slices.step(&bytes).ok()? {
+                None => Some(Err(ImageSlices::Ktx2(bytes, slices))),
+                Some(crate::compressed::Decoded::Rgba(i)) => Some(Ok(((i.width, i.height, i.rgba), None, Some(gpu)))),
+                Some(crate::compressed::Decoded::Blocks(b)) => {
+                    Some(Ok(((b.width, b.height, Vec::new()), Some(b), Some(gpu))))
+                }
+            },
+        }
+    }
 }
 
 impl MeshSlices {
@@ -108,19 +157,15 @@ impl crate::streaming::StreamSlices<(Origin, LoadedFile)> for MeshSlices {
                 if images.current.is_none()
                     && let Some((index, bytes)) = images.todo.pop()
                 {
-                    images.current = PngSlices::new(&bytes).map(|png| (index, png));
+                    images.current = ImageSlices::new(&self.name, index, bytes, self.gpu).map(|i| (index, i));
                 }
-                if let Some((index, mut png)) = images.current.take() {
-                    match png.step() {
-                        Ok(false) => images.current = Some((index, png)),
-                        Ok(true) => {
-                            let image = png.finish();
-                            images
-                                .done
-                                .insert(index, ((image.width, image.height, image.rgba), None, None));
+                if let Some((index, image)) = images.current.take() {
+                    match image.step(self.gpu) {
+                        Some(Err(rest)) => images.current = Some((index, rest)),
+                        Some(Ok(decoded)) => {
+                            images.done.insert(index, decoded);
                         }
-                        // The parse decodes it again, failing with its message.
-                        Err(_) => {}
+                        None => {}
                     }
                     self.phase = Phase::Images(images);
                     return Ok(None);
@@ -158,15 +203,18 @@ impl crate::streaming::StreamSlices<(Origin, LoadedFile)> for MeshSlices {
     }
 }
 
-/// The PNG images that file `name`'s textures use, by image index, in
-/// order: their bytes, from the file's binary chunk, its buffers or files
-/// of their own. What can't be found here (a broken file, a data URI that
-/// isn't base64) is left out: the parse finds it, or says what is wrong.
+/// The PNG and KTX2 images that file `name`'s textures use (their own
+/// image, and a `KHR_texture_basisu` one with the `compressed-textures`
+/// feature), by image index, in order: their bytes, from the file's binary
+/// chunk, its buffers or files of their own. What can't be found here (a
+/// broken file, a data URI that isn't base64) is left out: the parse finds
+/// it, or says what is wrong.
 fn png_images(
     name: &str,
     bytes: &[u8],
     read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Vec<(usize, Arc<Vec<u8>>)> {
+    use serde_json::Value;
     let (json, bin) = if bytes.starts_with(b"glTF") {
         match ::gltf::Glb::from_slice(bytes) {
             Ok(glb) => (glb.json, glb.bin),
@@ -175,27 +223,37 @@ fn png_images(
     } else {
         (std::borrow::Cow::Borrowed(bytes), None)
     };
-    let Ok(root) = serde_json::from_slice::<::gltf::json::Root>(&json) else {
+    let Ok(root) = serde_json::from_slice::<Value>(&json) else {
         return Vec::new();
     };
-    let mut used: Vec<usize> = root.textures.iter().map(|t| t.source.value()).collect();
+    let list = |key: &str| root[key].as_array().map_or(&[][..], Vec::as_slice);
+    let index = |v: &Value| v.as_u64().and_then(|i| usize::try_from(i).ok());
+    let mut used: Vec<usize> = Vec::new();
+    for texture in list("textures") {
+        used.extend(index(&texture["source"]));
+        if cfg!(feature = "compressed-textures") {
+            used.extend(index(&texture["extensions"]["KHR_texture_basisu"]["source"]));
+        }
+    }
     used.sort_unstable();
     used.dedup();
     let folder = gltf::folder_of(name);
     let mut buffers: HashMap<usize, Option<Vec<u8>>> = HashMap::new();
     let mut out = Vec::new();
-    for index in used {
-        let Some(image) = root.images.get(index) else {
+    for at in used {
+        let Some(image) = list("images").get(at) else {
             continue;
         };
-        let data = if let Some(view) = image.buffer_view {
-            let Some(view) = root.buffer_views.get(view.value()) else {
+        let data = if let Some(view) = index(&image["bufferView"]) {
+            let Some(view) = list("bufferViews").get(view) else {
                 continue;
             };
-            let start = view.byte_offset.map_or(0, |o| o.0) as usize;
-            let range = start..start.saturating_add(view.byte_length.0 as usize);
-            let buffer = view.buffer.value();
-            match root.buffers.get(buffer).and_then(|b| b.uri.as_deref()) {
+            let (Some(buffer), Some(length)) = (index(&view["buffer"]), index(&view["byteLength"])) else {
+                continue;
+            };
+            let start = index(&view["byteOffset"]).unwrap_or(0);
+            let range = start..start.saturating_add(length);
+            match list("buffers").get(buffer).and_then(|b| b["uri"].as_str()) {
                 None => bin.as_deref().and_then(|bin| bin.get(range)).map(<[u8]>::to_vec),
                 Some(uri) => buffers
                     .entry(buffer)
@@ -204,18 +262,29 @@ fn png_images(
                     .and_then(|b| b.get(range))
                     .map(<[u8]>::to_vec),
             }
-        } else if let Some(uri) = &image.uri {
+        } else if let Some(uri) = image["uri"].as_str() {
             gltf::fetch(uri, folder, read).ok()
         } else {
             None
         };
         if let Some(data) = data
-            && data.starts_with(b"\x89PNG\r\n\x1a\n")
+            && (data.starts_with(b"\x89PNG\r\n\x1a\n") || is_ktx2(&data))
         {
-            out.push((index, Arc::new(data)));
+            out.push((at, Arc::new(data)));
         }
     }
     out
+}
+
+/// Whether `bytes` are a KTX2 file the build reads.
+fn is_ktx2(bytes: &[u8]) -> bool {
+    #[cfg(feature = "compressed-textures")]
+    return crate::compressed::is_ktx2(bytes);
+    #[cfg(not(feature = "compressed-textures"))]
+    {
+        let _ = bytes;
+        false
+    }
 }
 
 #[cfg(test)]
@@ -244,6 +313,17 @@ mod tests {
     /// in the file's binary chunk, and its emissive image the file
     /// `glow.png` next to it.
     fn glb(embedded: &[u8]) -> Vec<u8> {
+        glb_with(
+            embedded,
+            r#"[{"source":0},{"source":1}]"#,
+            r#"[{"bufferView":3,"mimeType":"image/png"},{"uri":"glow.png"}]"#,
+            "",
+        )
+    }
+
+    /// [`glb`] with its own `textures` and `images`, and `extras` JSON
+    /// members.
+    fn glb_with(embedded: &[u8], textures: &str, images: &str, extras: &str) -> Vec<u8> {
         let mut bin = Vec::new();
         for v in [
             0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
@@ -262,8 +342,8 @@ mod tests {
             r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0}}],
             "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"TEXCOORD_0":1}},"indices":2,"material":0}}]}}],
             "materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}}}},"emissiveTexture":{{"index":1}}}}],
-            "textures":[{{"source":0}},{{"source":1}}],
-            "images":[{{"bufferView":3,"mimeType":"image/png"}},{{"uri":"glow.png"}}],
+            "textures":{textures},
+            "images":{images},{extras}
             "buffers":[{{"byteLength":{}}}],
             "bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":36}},{{"buffer":0,"byteOffset":36,"byteLength":24}},
                 {{"buffer":0,"byteOffset":60,"byteLength":6}},{{"buffer":0,"byteOffset":{image_at},"byteLength":{}}}],
@@ -526,5 +606,63 @@ mod tests {
         assert_eq!(sliced.parts, whole.parts);
         assert_eq!(pieces["buffers"], 1);
         assert_eq!(reads, 2, "read once by each parse");
+    }
+
+    /// The images and blocks of `a` and `b` are the same.
+    fn same_images(a: &gltf::Loaded, b: &gltf::Loaded) -> bool {
+        a.images == b.images && a.blocks == b.blocks
+    }
+
+    #[cfg(feature = "compressed-textures")]
+    #[test]
+    fn sliced_meshes_decode_their_ktx2_images_in_slices_into_what_the_parse_makes() {
+        use crate::compressed::{BlockFormat, GpuFormats, tests};
+        Game::new("t", 1, 1).hot_reload(false).run_headless(0, |ctx| {
+            let levels = tests::noise_levels(BlockFormat::Bc7, 128, 128);
+            let ktx2 = tests::ktx2_file(Some(ktx2::Format::BC7_UNORM_BLOCK), 128, 128, &levels, true);
+            ctx.assets
+                .add_source(MemorySource::new("mem").with("m/glow.png", noise_png(64, 2)));
+            let sources = ctx.gfx.asset_sources.clone();
+            // As the base color image, and as the `KHR_texture_basisu`
+            // image of a texture whose own image is a PNG.
+            let files = [
+                glb(&ktx2),
+                glb_with(
+                    &ktx2,
+                    r#"[{"source":1,"extensions":{"KHR_texture_basisu":{"source":0}}},{"source":1}]"#,
+                    r#"[{"bufferView":3,"mimeType":"image/ktx2"},{"uri":"glow.png"}]"#,
+                    r#""extensionsUsed":["KHR_texture_basisu"],"#,
+                ),
+            ];
+            for file in files {
+                // Kept as BC7 blocks, and decoded to RGBA8 on the CPU.
+                for gpu in [GpuFormats::ALL, GpuFormats::default()] {
+                    let mut read = |f: &str| sources.read(f);
+                    let whole = gltf::load_for("m/tri.glb", &file, &mut read, &|_| false, gpu).unwrap();
+                    let origin = Origin::File("m/tri.glb".into());
+                    let mut slices = MeshSlices::read("m/tri.glb", gpu, origin, file.clone());
+                    let (mut steps, mut most_images) = (0, 0);
+                    let loaded = loop {
+                        steps += 1;
+                        most_images = most_images.max(slices.images_done());
+                        if let Some((_, loaded)) = slices.step(&sources).unwrap() {
+                            break loaded;
+                        }
+                    };
+                    let LoadedFile::Parsed(loaded) = loaded else {
+                        panic!("parsed on the game thread")
+                    };
+                    assert_eq!(most_images, 2, "{gpu:?}: both decoded before the parse");
+                    assert!(same_images(&loaded, &whole), "{gpu:?}: the slices made other images");
+                    assert_eq!(loaded.blocks.iter().flatten().count(), usize::from(gpu.bc));
+                    assert_eq!(loaded.data, whole.data);
+                    // The KTX2 file: its eight levels, the choice, and for
+                    // RGBA8 the 64 KiB of the decode in one band.
+                    let ktx2_slices = 8 + 1 + usize::from(!gpu.bc);
+                    // The scan, the images, the parse's six.
+                    assert_eq!(steps, 1 + ktx2_slices + 1 + 6, "{gpu:?}");
+                }
+            }
+        });
     }
 }

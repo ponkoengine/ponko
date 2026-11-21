@@ -1589,6 +1589,9 @@ impl Images<'_> {
         };
         match note.split_once('|') {
             Some((a, b)) if resolve(a) == m && resolve(b) == o => {
+                if let Some(decoded) = take_predecoded(holder, self.gpu) {
+                    return Ok(Ok(decoded));
+                }
                 let what = format!("image {holder} of {}", self.name);
                 decode_bytes(bytes, self.name, &what, self.gpu).map(Ok)
             }
@@ -1626,15 +1629,8 @@ fn decode(
     name: &str,
     gpu: GpuFormats,
 ) -> Result<(Image, Option<Blocks>), String> {
-    let predecoded = DECODED.with(|d| {
-        let mut d = d.borrow_mut();
-        let fits = d
-            .get(&image.index())
-            .is_some_and(|(_, _, formats)| formats.is_none_or(|f| f == gpu));
-        if fits { d.remove(&image.index()) } else { None }
-    });
-    if let Some((decoded, blocks, _)) = predecoded {
-        return Ok((decoded, blocks));
+    if let Some(decoded) = take_predecoded(image.index(), gpu) {
+        return Ok(decoded);
     }
     let bytes = match image.source() {
         gltf::image::Source::View { view, .. } => {
@@ -1647,6 +1643,19 @@ fn decode(
         gltf::image::Source::Uri { uri, .. } => fetch(uri, folder, read)?,
     };
     decode_bytes(bytes, name, &format!("image {} of {name}", image.index()), gpu)
+}
+
+/// Image `index` of the file being parsed, if it was decoded before the
+/// parse for `gpu` ([`Parse::with_images`]).
+fn take_predecoded(index: usize, gpu: GpuFormats) -> Option<(Image, Option<Blocks>)> {
+    DECODED.with(|d| {
+        let mut d = d.borrow_mut();
+        let fits = d
+            .get(&index)
+            .is_some_and(|(_, _, formats)| formats.is_none_or(|f| f == gpu));
+        let (image, blocks, _) = if fits { d.remove(&index)? } else { return None };
+        Some((image, blocks))
+    })
 }
 
 /// [`decode`] of an image's bytes.

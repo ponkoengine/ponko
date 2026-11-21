@@ -1483,24 +1483,51 @@ impl Renderer {
         id
     }
 
-    /// Whether this GPU times the asset group and streaming steps'
-    /// texture uploads (it has timestamp queries).
+    /// Whether this GPU times the asset group and streaming steps' texture
+    /// and mesh buffer uploads, and textures made outside them (it has
+    /// timestamp queries).
     pub fn times_uploads(&self) -> bool {
         self.upload_timer.is_some() || super::upload_timer::active()
     }
 
-    /// Times the texture uploads made on this thread, as `step`'s, until
-    /// [`end_timed_uploads`](Self::end_timed_uploads).
+    /// Times the texture and mesh buffer uploads made on this thread, as
+    /// `step`'s, until [`end_timed_uploads`](Self::end_timed_uploads).
     pub fn begin_timed_uploads(&mut self, step: super::upload_timer::UploadStep) {
         if let Some(timer) = self.upload_timer.take() {
             super::upload_timer::activate(timer, step);
         }
     }
 
-    /// Stops timing texture uploads; their GPU time comes back through
-    /// [`collect_upload_times`](Self::collect_upload_times) a few frames later.
+    /// Stops timing uploads; their GPU time comes back through
+    /// [`collect_upload_times`](Self::collect_upload_times) a few frames
+    /// later. Meshes made meanwhile are copied into the shared mesh arena
+    /// first (the frame's draw would copy them anyway), so their copies are
+    /// timed with the step's.
     pub fn end_timed_uploads(&mut self) {
+        #[cfg(feature = "3d")]
+        if super::upload_timer::active()
+            && let Some(three) = &mut self.three
+        {
+            three.flush_mesh_arena(&self.device, &self.queue);
+        }
         if let Some(timer) = super::upload_timer::deactivate() {
+            self.upload_timer = Some(timer);
+        }
+    }
+
+    /// Starts timing a texture made outside the steps, unless a step's
+    /// uploads are being timed already (it is then theirs): whether it did.
+    fn begin_created_upload(&mut self) -> bool {
+        if self.upload_timer.is_none() {
+            return false;
+        }
+        self.begin_timed_uploads(super::upload_timer::UploadStep::Created);
+        true
+    }
+
+    /// Stops timing a made texture, if `timed` (`begin_created_upload`).
+    fn end_created_upload(&mut self, timed: bool) {
+        if timed && let Some(timer) = super::upload_timer::deactivate() {
             self.upload_timer = Some(timer);
         }
     }
@@ -1536,8 +1563,12 @@ impl Renderer {
     }
 
     /// Uploads RGBA8 (sRGB) pixels and returns the texture's id.
+    /// Outside the asset group and streaming steps, its upload is timed
+    /// with the frame's other made textures ([`UploadStep::Created`](super::upload_timer::UploadStep::Created)).
     pub fn create_texture(&mut self, width: u32, height: u32, rgba: &[u8]) -> u32 {
+        let timed = self.begin_created_upload();
         let texture = self.upload_texture(width, height, rgba);
+        self.end_created_upload(timed);
         let bind_group = self.sprite_bind_group(&texture, false);
         let id = self.textures.add(GpuTexture {
             bind_group,
@@ -1561,7 +1592,9 @@ impl Renderer {
     /// id. It keeps its own mipmaps: none are made for 3D materials.
     #[cfg(feature = "compressed-textures")]
     pub fn create_compressed_texture(&mut self, image: &crate::compressed::CompressedImage) -> u32 {
+        let timed = self.begin_created_upload();
         let texture = super::blocks::upload(&self.device, &self.queue, "compressed texture", &[image]);
+        self.end_created_upload(timed);
         let bind_group = self.sprite_bind_group(&texture, false);
         self.textures.add(GpuTexture {
             bind_group,
