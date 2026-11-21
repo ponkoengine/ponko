@@ -174,6 +174,8 @@ pub struct Graphics {
     /// empty while the main camera alone draws the whole window.
     pub(crate) cameras2d: Vec<crate::camera::views::Camera2DFrame>,
     pub(crate) clear_color: Color,
+    /// HDR output settings (`render/hdr.rs`).
+    pub(crate) hdr_output: crate::render::HdrOutput,
     pub(crate) text: Text,
     /// Reused for a text field's selection spans.
     pub(crate) selection_scratch: Vec<[f32; 2]>,
@@ -235,6 +237,7 @@ impl Graphics {
             ui_list: DrawList::default(),
             cameras2d: Vec::new(),
             clear_color: Color::PONKO_DARK,
+            hdr_output: crate::render::HdrOutput::default(),
             text: Text::new(),
             selection_scratch: Vec::new(),
             glyph_scratch: Vec::new(),

@@ -378,6 +378,8 @@ pub struct Game {
     fixed_hz_set: bool,
     seed: u64,
     vsync: bool,
+    /// From `hdr_output`: the window opens for HDR output with these.
+    hdr_output: crate::render::HdrOutput,
     fullscreen: bool,
     /// From `restore_window_settings`: open the first window with `window.json`.
     restore_window: bool,
@@ -643,6 +645,12 @@ impl ConfiguredGame {
     /// See [`Game::vsync`].
     pub fn vsync(mut self, on: bool) -> Self {
         self.game = self.game.vsync(on);
+        self
+    }
+
+    /// See [`Game::hdr_output`].
+    pub fn hdr_output(mut self, settings: crate::render::HdrOutput) -> Self {
+        self.game = self.game.hdr_output(settings);
         self
     }
 
@@ -1264,6 +1272,7 @@ impl Game {
             fixed_hz_set: false,
             seed: crate::random::DEFAULT_SEED,
             vsync: true,
+            hdr_output: crate::render::HdrOutput::default(),
             fullscreen: false,
             restore_window: false,
             sim_systems: Vec::new(),
@@ -2739,6 +2748,7 @@ impl Game {
         let fixed_dt = Clock::new(self.fixed_hz).fixed_dt();
         let mut ctx = Ctx::new(fixed_dt, Vec2::new(self.width as f32, self.height as f32));
         ctx.seed = self.seed;
+        ctx.gfx.hdr_output = self.hdr_output;
         if headless {
             ctx.set_headless(true);
         }
@@ -2921,6 +2931,27 @@ impl Game {
     /// ```
     pub fn vsync(mut self, on: bool) -> Self {
         self.vsync = on;
+        self
+    }
+
+    /// HDR display output (off by default): with `settings.enabled`, the
+    /// window opens in an HDR format and color space where the display
+    /// system offers one, and the 3D frame's highlights reach the display's
+    /// peak while UI and sprites stay at paper white. Where none is offered
+    /// it opens in SDR as usual. Off, nothing changes and nothing extra is
+    /// drawn. While the game runs, `ctx.gfx.set_hdr_output` changes paper
+    /// white and peak and switches between HDR and SDR output (only if the
+    /// window opened with HDR on), and `ctx.gfx.hdr_status()` says what the
+    /// window does. See [`HdrOutput`](crate::render::HdrOutput).
+    ///
+    /// ```no_run
+    /// # use ponko::prelude::*;
+    /// Game::new("Bright", 1280, 720)
+    ///     .hdr_output(ponko::render::HdrOutput::on())
+    ///     .run(|_| |_: &mut Ctx| {});
+    /// ```
+    pub fn hdr_output(mut self, settings: crate::render::HdrOutput) -> Self {
+        self.hdr_output = settings;
         self
     }
 

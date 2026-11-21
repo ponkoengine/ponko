@@ -782,7 +782,8 @@ pub(crate) struct PostUniform {
     pub grade: [f32; 4],
     /// White balance multipliers in LMS space; w: vignette.
     pub balance: [f32; 4],
-    /// x: tone map, y: lookup table size (0 for none), z: bloom on (1/0).
+    /// x: tone map, y: lookup table size (0 for none), z: bloom on (1/0),
+    /// w: HDR output (1/0; see [`hdr`](Self::hdr)).
     pub mode: [u32; 4],
     /// x: bloom threshold, y: soft knee.
     pub bloom: [f32; 4],
@@ -801,7 +802,9 @@ pub(crate) struct PostUniform {
     /// Depth of field: x focus distance, y sharp range, z largest blur
     /// (fraction of the scene's height; 0 off).
     pub dof: [f32; 4],
-    /// The camera's near (x) and far (y) planes, to turn depth into distance.
+    /// The camera's near (x) and far (y) planes, to turn depth into
+    /// distance; z: with HDR output (`mode.w` 1), the brightest the frame
+    /// may be over SDR white.
     pub camera: [f32; 4],
 }
 
@@ -889,6 +892,18 @@ impl PostUniform {
     /// field reads distances from the depth buffer with them).
     pub fn camera(mut self, near: f32, far: f32) -> Self {
         self.camera = [near, far, 0.0, 0.0];
+        self
+    }
+
+    /// The same, for HDR output reaching `headroom` times SDR white:
+    /// the tone mapped highlights open up to it, and the scaling pass
+    /// clamps to it instead of to white. `None` (or a headroom of 1 or less)
+    /// keeps the SDR frame exactly as it was.
+    pub fn hdr(mut self, headroom: Option<f32>) -> Self {
+        if let Some(h) = headroom.filter(|h| h.is_finite() && *h > 1.0) {
+            self.mode[3] = 1;
+            self.camera[2] = h;
+        }
         self
     }
 
