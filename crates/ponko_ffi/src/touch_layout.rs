@@ -354,6 +354,30 @@ pub unsafe extern "C" fn ponko_ctx_edit_touch_controls(ctx: *mut PonkoCtx, on: b
     })
 }
 
+/// Opens the engine's ready-made screen where the player arranges the
+/// on-screen controls (Rust `Input::arrange_touch_controls`): a settings
+/// page's "arrange controls" button. Edit mode starts at once; the screen
+/// (UI nodes named `touch.arrange.<part>`: `title`, `note`, `reset`,
+/// `cancel`, `save`, ...) is built at the UI's next pass. The player drags,
+/// resizes and resets the controls; `Save` writes the layout to storage and
+/// closes it, `Cancel` puts back the layout it opened with. Called again
+/// while it is open, nothing changes.
+/// ```
+/// assert_ne!(unsafe { ponko_ffi::ponko_ctx_arrange_touch_controls(std::ptr::null_mut()) } as u32, 0);
+/// ```
+/// # Safety
+/// Context live or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_arrange_touch_controls(ctx: *mut PonkoCtx) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        ctx_access(ctx, |c| {
+            c.input.arrange_touch_controls();
+            Ok(())
+        })
+    })
+}
+
 /// Whether the player is arranging the on-screen controls (Rust
 /// `Input::editing_touch_controls`).
 /// ```

@@ -331,3 +331,39 @@ fn trackpad_gestures_from_c_feed_the_pinch_and_make_no_touch_device() {
         ponko_input_scenario_free(s);
     }
 }
+
+#[test]
+fn the_ready_made_arrange_screen_opens_in_edit_mode_and_is_built_by_the_next_frame() {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    static SAVE: AtomicU64 = AtomicU64::new(PONKO_UI_NONE);
+    unsafe extern "C" fn look(ctx: *mut PonkoCtx, _: *mut std::ffi::c_void) {
+        let mut id = 0;
+        // SAFETY: a live context and a NUL-terminated name.
+        let status = unsafe { ponko_ctx_ui_find(ctx, PONKO_UI_SCREEN, c"touch.arrange.save".as_ptr(), &mut id) };
+        assert_eq!(status, PONKO_OK);
+        SAVE.store(id, Relaxed);
+    }
+    SAVE.store(PONKO_UI_NONE, Relaxed);
+    unsafe {
+        let game = ponko_game_new(c"touch".as_ptr(), 960, 540);
+        assert_eq!(ponko_game_hot_reload(game, false), PONKO_OK);
+        assert_eq!(ponko_game_headless_frames(game, true), PONKO_OK);
+        assert_eq!(
+            ponko_game_late_system(game, c"look".as_ptr(), Some(look), null_mut()),
+            PONKO_OK
+        );
+        let world = common::run_game(game, 2, |ctx| {
+            let mut d = desc();
+            shown_controls(ctx, &mut d);
+            assert_eq!(ponko_ctx_arrange_touch_controls(ctx), PONKO_OK);
+            let mut editing = false;
+            assert_eq!(ponko_ctx_editing_touch_controls(ctx, &mut editing), PONKO_OK);
+            assert!(editing, "edit mode starts at once");
+            // Again while open: nothing changes.
+            assert_eq!(ponko_ctx_arrange_touch_controls(ctx), PONKO_OK);
+        });
+        ponko_world_free(world);
+        assert_eq!(ponko_ctx_arrange_touch_controls(null_mut()), PONKO_INVALID_ARGUMENT);
+    }
+    assert_ne!(SAVE.load(Relaxed), PONKO_UI_NONE, "the screen's Save button is there");
+}

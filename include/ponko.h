@@ -145,6 +145,8 @@
 
 #define PONKO_TILE_FLIP_DIAGONAL 4
 
+#define PONKO_NAV_CROWD_STATS_VERSION 1
+
 #define PONKO_PRESS_THRESHOLD 0.5
 
 #define PONKO_QUERY_CACHE_AUTO 0
@@ -190,6 +192,8 @@
 #define PONKO_TEXTURE_DATA 1
 
 #define PONKO_DECAL_NO_IMAGE UINT32_MAX
+
+#define PONKO_CROWD_DESC_VERSION 1
 
 #define PONKO_TILE_EMPTY 65535
 
@@ -2032,6 +2036,14 @@ typedef struct PonkoNavBakeSettings {
   bool carving;
 } PonkoNavBakeSettings;
 
+typedef struct PonkoNavCrowdStats {
+  uint32_t struct_size;
+  uint32_t version;
+  uint64_t steps;
+  uint64_t agent_steps;
+  uint64_t work;
+} PonkoNavCrowdStats;
+
 typedef struct PonkoParticleKey {
   float t;
   float value;
@@ -2140,6 +2152,11 @@ typedef struct PonkoGpuUploads {
   uint32_t buffers_created;
   uint32_t reallocations;
 } PonkoGpuUploads;
+
+typedef struct PonkoAllocCounts {
+  uint64_t count;
+  uint64_t bytes;
+} PonkoAllocCounts;
 
 typedef struct PonkoRigidBody {
   uint32_t kind;
@@ -2925,6 +2942,18 @@ typedef struct PonkoCrowdOptions {
 typedef struct PonkoCrowd {
   uint32_t id;
 } PonkoCrowd;
+
+typedef struct PonkoCrowdDesc {
+  uint32_t struct_size;
+  uint32_t version;
+  const struct PonkoCrowdAnimation *animation;
+  const struct PonkoCrowdLevel *levels;
+  size_t level_count;
+  const float *fades;
+  const struct PonkoCrowdInstance *instances;
+  size_t count;
+  bool cast_shadows;
+} PonkoCrowdDesc;
 
 typedef struct PonkoSpriteSheet {
   struct PonkoTexture texture;
@@ -6021,6 +6050,9 @@ enum PonkoStatus ponko_ctx_set_nav_avoidance(struct PonkoCtx *ctx,
                                              float weight,
                                              float neighbour_distance);
 
+enum PonkoStatus ponko_ctx_navmesh_crowd_stats(struct PonkoCtx *ctx,
+                                               struct PonkoNavCrowdStats *stats);
+
 enum PonkoStatus ponko_game_lockstep_host(struct PonkoGame *game,
                                           const char *addr,
                                           uint32_t players,
@@ -6099,6 +6131,8 @@ const struct PonkoProfileScope *ponko_profile_scope(const char *name);
 uint64_t ponko_profile_begin(const struct PonkoProfileScope *scope);
 
 void ponko_profile_end(const struct PonkoProfileScope *scope, uint64_t token);
+
+struct PonkoAllocCounts ponko_thread_alloc_counts(void);
 
 void ponko_note_allocation(size_t bytes);
 
@@ -8113,6 +8147,12 @@ enum PonkoStatus ponko_ctx_create_crowd(struct PonkoCtx *ctx,
                                         struct PonkoCrowdOptions options,
                                         struct PonkoCrowd *output);
 
+struct PonkoCrowdDesc ponko_crowd_desc_defaults(void);
+
+enum PonkoStatus ponko_ctx_create_crowd_ex(struct PonkoCtx *ctx,
+                                           const struct PonkoCrowdDesc *desc,
+                                           struct PonkoCrowd *output);
+
 enum PonkoStatus ponko_ctx_update_crowd(struct PonkoCtx *ctx,
                                         struct PonkoCrowd crowd,
                                         const struct PonkoCrowdInstance *instances,
@@ -10051,6 +10091,8 @@ enum PonkoStatus ponko_ctx_set_touch_controls_ex(struct PonkoCtx *ctx,
                                                  const struct PonkoTouchControlsDesc *desc);
 
 enum PonkoStatus ponko_ctx_edit_touch_controls(struct PonkoCtx *ctx, bool on);
+
+enum PonkoStatus ponko_ctx_arrange_touch_controls(struct PonkoCtx *ctx);
 
 enum PonkoStatus ponko_ctx_editing_touch_controls(struct PonkoCtx *ctx, bool *out_editing);
 

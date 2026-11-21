@@ -93,3 +93,52 @@ fn scopes_are_free_when_profiling_is_off() {
         ponko_profile_end(std::ptr::null(), ponko_profile_begin(std::ptr::null()));
     }
 }
+
+unsafe extern "C" fn allocating(_ctx: *mut PonkoCtx, _user: *mut c_void) {
+    unsafe {
+        static SCOPE: std::sync::atomic::AtomicPtr<PonkoProfileScope> = std::sync::atomic::AtomicPtr::new(null_mut());
+        let mut scope = SCOPE.load(std::sync::atomic::Ordering::Relaxed);
+        if scope.is_null() {
+            scope = ponko_profile_scope(c"c_alloc/inner".as_ptr()).cast_mut();
+            SCOPE.store(scope, std::sync::atomic::Ordering::Relaxed);
+        }
+        // Outside the scope: not its.
+        ponko_note_allocation(16);
+        let token = ponko_profile_begin(scope);
+        let before = ponko_thread_alloc_counts();
+        for _ in 0..3 {
+            ponko_note_allocation(64);
+        }
+        let after = ponko_thread_alloc_counts();
+        ponko_profile_end(scope, token);
+        if token != 0 {
+            assert_eq!((after.count - before.count, after.bytes - before.bytes), (3, 192));
+        }
+    }
+}
+
+#[test]
+fn a_c_scope_counts_the_allocations_made_on_its_thread() {
+    let json = unsafe {
+        let g = ponko_game_new(c"p".as_ptr(), 1, 1);
+        assert_eq!(
+            ponko_game_sim_system(g, c"c_alloc".as_ptr(), 1, Some(allocating), null_mut()),
+            PONKO_OK
+        );
+        let mut world = null_mut();
+        assert_eq!(
+            ponko_game_profile_headless(g, 5, 20, None, null_mut(), &mut world),
+            PONKO_OK
+        );
+        assert_eq!(ponko_world_free(world), PONKO_OK);
+        read(|b, c, n| ponko_last_perf_report(b, c, n))
+    };
+    let report: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let scope = report["scopes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "c_alloc/inner")
+        .unwrap_or_else(|| panic!("the scope is in the report: {json}"));
+    assert_eq!(scope["allocs_per_frame"].as_f64(), Some(3.0), "{scope}");
+}
