@@ -1532,6 +1532,7 @@ impl Renderer3D {
         for batch in self.static_batches.iter().flatten() {
             batch.tally_memory(t);
         }
+        self.batching.tally_memory(t);
         if let Some(culling) = &self.static_culling {
             culling.tally_memory(t);
         }
