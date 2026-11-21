@@ -436,22 +436,6 @@ impl DrawList {
         self.clip = clip;
     }
 
-    /// Pushes `sprites` (from [`record_from`](Self::record_from)) again
-    /// `dz` further along in depth, in the clip set now rather than theirs,
-    /// each one `tinted` marks with `color`: text drawn in an earlier frame,
-    /// pushed again without laying it out, somewhere else in the drawing
-    /// order, clip or color.
-    pub fn replay_recolored(&mut self, sprites: &[Recorded], dz: f32, tinted: &[bool], color: [u8; 4]) {
-        debug_assert_eq!(sprites.len(), tinted.len(), "one mark per sprite");
-        for (s, &tint) in sprites.iter().zip(tinted) {
-            let mut instance = s.instance;
-            if tint {
-                instance.color = color;
-            }
-            self.push_styled(s.texture, s.style, shifted(s.z, dz), instance);
-        }
-    }
-
     /// Moves the sprites pushed from index `start` on: each position goes
     /// to `pos * scale + shift` and each size is scaled by `scale` (an
     /// animated UI node's offset and size), and their alpha is multiplied
@@ -620,24 +604,6 @@ mod tests {
         let (sprites, _) = again.finish();
         let tags: Vec<f32> = sprites.iter().map(|s| s.pos[0]).collect();
         assert_eq!(tags, [3.0, 1.0, 2.0]);
-    }
-
-    #[test]
-    fn recolored_replays_tint_the_marked_sprites_in_the_clip_set_now() {
-        let mut drawn = DrawList::default();
-        drawn.set_clip(Some(crate::camera::Rect::new(0.0, 0.0, 5.0, 5.0)));
-        drawn.push(1, 1.0, inst(1.0));
-        drawn.push(1, 1.0, inst(2.0));
-        let mut recorded = Vec::new();
-        drawn.record_from(0, &mut recorded);
-        let clip = crate::camera::Rect::new(1.0, 2.0, 3.0, 4.0);
-        let mut again = DrawList::default();
-        again.set_clip(Some(clip));
-        again.replay_recolored(&recorded, 0.0, &[true, false], [9, 8, 7, 6]);
-        let (sprites, batches) = again.finish();
-        assert_eq!(sprites[0].color, [9, 8, 7, 6]);
-        assert_eq!(sprites[1].color, [255; 4], "not marked: as recorded");
-        assert!(batches.iter().all(|b| b.clip == Some(clip)));
     }
 
     #[test]

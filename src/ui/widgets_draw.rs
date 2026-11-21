@@ -230,7 +230,13 @@ impl Ctx {
 
     /// What goes over the whole tree at `z`: the item being dragged (and
     /// where it would land), the item carried with the keyboard, the tooltip.
-    pub(super) fn draw_widget_overlays(&mut self, ui: &Ui, z: f32) {
+    ///
+    /// Their text is laid out once and kept in `kept` while it, its font and
+    /// size, and the draw cache's `epoch` (what every node's drawing depends
+    /// on) hold; `None`: laid out each time. A tooltip following the
+    /// pointer, or an item dragged, places its glyphs again without laying
+    /// its text out.
+    pub(super) fn draw_widget_overlays(&mut self, ui: &Ui, z: f32, kept: &mut OverlayText, epoch: Option<u64>) {
         let scale = ui.scale();
         let theme = *ui.theme();
         let ring = 2.0 * scale;
@@ -285,8 +291,9 @@ impl Ctx {
                 z: z + 0.3,
             };
             // Its text in the middle, as on the item.
-            let size = self.gfx.measure_text_ex(&n.text, params.font, params.size);
-            self.gfx.draw_text_ex(&n.text, ghost.center() - size * 0.5, params);
+            let drag = kept.slot(epoch, |k| &mut k.drag);
+            let size = drag.lay_out(&mut self.gfx, epoch, &n.text, params);
+            self.gfx.push_glyphs(&drag.quads, ghost.center() - size * 0.5, params);
         }
         if let Some((id, rect)) = ui.shown_tooltip()
             && let Some(text) = ui.tooltip(id)
@@ -303,12 +310,66 @@ impl Ctx {
                 color: theme.text,
                 z: z + 1.2,
             };
-            self.gfx.draw_text_ex(
-                text,
+            let tooltip = kept.slot(epoch, |k| &mut k.tooltip);
+            tooltip.lay_out(&mut self.gfx, epoch, text, params);
+            self.gfx.push_glyphs(
+                &tooltip.quads,
                 rect.min + vec2(theme.spacing, theme.spacing * 0.5) * scale,
                 params,
             );
         }
+    }
+}
+
+/// The text the overlays drew last, laid out ([`Ctx::draw_widget_overlays`]).
+#[derive(Default)]
+pub(super) struct OverlayText {
+    tooltip: KeptText,
+    drag: KeptText,
+    /// Text laid out with nothing kept, leaving the others as they were.
+    scratch: KeptText,
+}
+
+impl OverlayText {
+    /// Where to lay text out: `which` while drawings are kept in an
+    /// `epoch`, else the scratch slot.
+    fn slot(&mut self, epoch: Option<u64>, which: impl FnOnce(&mut Self) -> &mut KeptText) -> &mut KeptText {
+        if epoch.is_some() {
+            which(self)
+        } else {
+            &mut self.scratch
+        }
+    }
+}
+
+/// One string laid out, and what it was laid out from.
+#[derive(Default)]
+struct KeptText {
+    /// The draw cache's epoch it was laid out in; 0: never.
+    epoch: u64,
+    text: String,
+    font: crate::text::Font,
+    size: f32,
+    measured: Vec2,
+    quads: Vec<crate::gfx::GlyphQuad>,
+}
+
+impl KeptText {
+    /// `text` laid out in `params`' font and size, in `quads`: kept from
+    /// the last time while nothing it depends on changed in `epoch`
+    /// (`None`: laid out again). Returns its size, in window pixels.
+    fn lay_out(&mut self, gfx: &mut crate::gfx::Graphics, epoch: Option<u64>, text: &str, params: TextParams) -> Vec2 {
+        let (font, size) = (params.font, params.size);
+        let kept = epoch == Some(self.epoch) && self.font == font && self.size == size && self.text == text;
+        if !kept {
+            self.quads.clear();
+            self.measured = gfx.lay_out_glyphs(text, font, size, &mut self.quads);
+            self.epoch = epoch.unwrap_or(0);
+            (self.font, self.size) = (font, size);
+            self.text.clear();
+            self.text.push_str(text);
+        }
+        self.measured
     }
 }
 
