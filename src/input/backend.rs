@@ -1,6 +1,6 @@
 //! Where gamepads come from: a [`GamepadBackend`] reports controllers and
 //! their input, and plays rumble. The engine's own backend reads gilrs (the
-//! `gamepad` feature, in a window); [`FakeGamepads`] is a scripted one for
+//! `gamepad` feature, in a window; the browser's gamepads on the web); [`FakeGamepads`] is a scripted one for
 //! tests; a game can choose another (a platform SDK that reads gyros) with
 //! [`Game::gamepad_backend`](crate::game::Game::gamepad_backend).
 //!
@@ -251,7 +251,7 @@ impl Ctx {
     /// Installs where gamepads come from, replacing the current backend: its
     /// pads disconnect first, and the new one is polled right away. Games
     /// choose one with [`Game::gamepad_backend`](crate::game::Game::gamepad_backend);
-    /// the window installs gilrs when they didn't.
+    /// the window installs gilrs (the browser's gamepads on the web) when they didn't.
     #[cfg_attr(not(all(feature = "gamepad", feature = "window")), allow(dead_code))]
     pub(crate) fn set_gamepad_backend(&mut self, backend: impl GamepadBackend) {
         self.gamepad_driver.install(&mut self.input, Box::new(backend));

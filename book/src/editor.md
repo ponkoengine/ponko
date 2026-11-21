@@ -154,9 +154,30 @@ file) above the scenes and prefabs it found, and **Save as** a path field
 beside **Scene** and **Prefab**, with the default name filled in. Enter
 or the button confirms, Esc cancels and changes nothing, and a file that
 can't be read or written is reported in the panel like the picker's
-errors. A browser has no `assets/` folder to write to, so there a save
-reports that web builds have no files; **Open** reads the files the page
-fetched.
+errors.
+
+### Saving in a browser
+
+A browser has no `assets/` folder to write to, so the web build keeps what
+the editor saves (**Save**, **Save as**, **Save selection as prefab**) in
+the page's `localStorage`, one entry per file named after the page's path
+and the asset (`ponko-assets:/play/:scenes/level.json`), so two games on
+one site keep theirs apart. The saved file is read from there at once,
+and when the page is loaded again the saved files replace the fetched
+ones before setup runs: the game and the editor find the version you
+saved. The status bar says the file stayed in the browser.
+
+**File > Download** saves the document, then hands its file to you as a
+browser download, to keep it or to copy it into the project's `assets/`.
+A browser keeps a few megabytes per site this way and may clear them;
+when it refuses a save (it is full), the error says so and Download still
+gives you the file.
+
+**Open** and the asset panel list the web build's file manifest: the
+files named in `assets/index.json` (which `web/build.sh` and `ponko
+package --web` write), the files in the page's asset pack, and the ones
+saved in the browser. A JSON file is listed as a scene or prefab by its
+`"format"`, as on the desktop.
 
 While the system's picker is up it has the keyboard, so the editor never
 sees the keys let go meanwhile: the Ctrl (⌘) of Ctrl+O, or the Enter that

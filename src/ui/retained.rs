@@ -639,6 +639,8 @@ pub(super) struct Node {
     pub initial_focus: bool,
     /// Pressing it also closes its screen ([`Ui::set_closes_screen`]).
     pub closes_screen: bool,
+    /// As a root, laid out inside the safe area ([`Ui::set_inside_safe_area`]).
+    pub inside_safe_area: bool,
     /// A text input takes IME composition ([`Ui::set_ime_allowed`]).
     pub ime: bool,
     /// The IME composition it shows at its caret; empty: none.
@@ -762,6 +764,9 @@ pub struct Ui {
     /// to whole pixels add up the same in layout and drawing.
     pub(super) pixels: f32,
     pub(super) viewport: Vec2,
+    /// The part of the viewport roots inside the safe area are laid out
+    /// in ([`Ui::set_safe_area`]); `None`: the whole viewport.
+    pub(super) safe_area: Option<Rect>,
     pub(super) pointer: Vec2,
     pub(super) measure: crate::text::Text,
     pub(super) external_fonts: bool,
@@ -821,6 +826,7 @@ impl Default for Ui {
             scale: 1.0,
             pixels: 1.0,
             viewport: Vec2::ZERO,
+            safe_area: None,
             pointer: Vec2::ZERO,
             measure: crate::text::Text::new(),
             external_fonts: false,
@@ -899,6 +905,7 @@ impl Ui {
             title: false,
             initial_focus: false,
             closes_screen: false,
+            inside_safe_area: false,
             ime: true,
             preedit: String::new(),
             preedit_cursor: None,
@@ -1337,6 +1344,77 @@ impl Ui {
     pub fn closes_screen(&self, id: UiId) -> bool {
         self.node(id).is_some_and(|n| n.closes_screen)
     }
+    /// Lays out root `id` (a screen or a HUD) inside the safe area, the
+    /// part of the window a phone's notch, home bar and rounded corners
+    /// leave ([`ctx.window.safe_area`](crate::window::WindowService::safe_area)), instead of
+    /// the whole window: its sizes, fractions, anchors and `auto` margins
+    /// count from the safe area's edges. Off by default, so a background
+    /// still fills the screen; put the buttons and the HUD in it. Only
+    /// roots move; a child follows its root. The builder's
+    /// [`inside_safe_area`](super::UiBuilder::inside_safe_area) does the same.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::ui::{UiInput, UiLayout};
+    /// let mut ui = ponko::ui::Ui::default();
+    /// let hud = ui.root().layout(UiLayout::fill()).id();
+    /// ui.set_inside_safe_area(hud, true);
+    /// ui.show_hud(hud);
+    /// // A notch 47 wide on the left, a home bar 21 tall below.
+    /// ui.set_safe_area(Some(Rect::new(47.0, 0.0, 753.0, 379.0)));
+    /// ui.frame(vec2(800.0, 400.0), &UiInput::default());
+    /// assert_eq!(ui.rect(hud), Some(Rect::new(47.0, 0.0, 753.0, 379.0)));
+    /// ```
+    pub fn set_inside_safe_area(&mut self, id: UiId, on: bool) {
+        if let Some(n) = self.node_mut(id)
+            && n.inside_safe_area != on
+        {
+            n.inside_safe_area = on;
+            let layout = n.layout;
+            let _ = self.tree.mark_dirty(layout);
+        }
+    }
+    /// Whether root `id` is laid out inside the safe area
+    /// ([`set_inside_safe_area`](Self::set_inside_safe_area)).
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut ui = ponko::ui::Ui::default();
+    /// let root = ui.root().id();
+    /// assert!(!ui.inside_safe_area(root));
+    /// ```
+    pub fn inside_safe_area(&self, id: UiId) -> bool {
+        self.node(id).is_some_and(|n| n.inside_safe_area)
+    }
+    /// The part of the viewport, in its pixels, that roots
+    /// [inside the safe area](Self::set_inside_safe_area) are laid out in;
+    /// `None` (the default) for the whole viewport. The engine sets it
+    /// from [`ctx.window.safe_area`](crate::window::WindowService::safe_area) every frame; a
+    /// `Ui` of the game's own (a world panel's) sets it itself.
+    /// ```
+    /// use ponko::prelude::*;
+    /// let mut ui = ponko::ui::Ui::default();
+    /// ui.set_safe_area(Some(Rect::new(0.0, 30.0, 800.0, 570.0)));
+    /// assert_eq!(ui.safe_area(), Some(Rect::new(0.0, 30.0, 800.0, 570.0)));
+    /// ```
+    pub fn set_safe_area(&mut self, area: Option<Rect>) {
+        self.safe_area = area.filter(|r| r.min.is_finite() && r.max.is_finite());
+    }
+    /// The safe area roots are laid out in ([`set_safe_area`](Self::set_safe_area)).
+    pub fn safe_area(&self) -> Option<Rect> {
+        self.safe_area
+    }
+    /// The part of the viewport root `root` is laid out in: the safe area
+    /// (inside the viewport) for a root inside it, else the viewport.
+    fn root_area(&self, root: UiId, viewport: Vec2) -> Rect {
+        let window = Rect::new(0.0, 0.0, viewport.x, viewport.y);
+        match self.safe_area {
+            Some(safe) if self.inside_safe_area(root) => {
+                let min = safe.min.clamp(Vec2::ZERO, window.max);
+                let max = safe.max.clamp(min, window.max);
+                Rect { min, max }
+            }
+            _ => window,
+        }
+    }
     /// Whether `id` may take the focus now, before layout gives it a size.
     pub(super) fn can_focus(&self, id: UiId) -> bool {
         self.interactive(id) && self.is_shown(id) && self.node(id).is_some_and(|n| self.takes_focus(n))
@@ -1688,6 +1766,7 @@ impl Ui {
         // for another window size, scale or font set.
         let key = super::retained_layout::LayoutKey {
             viewport,
+            safe_area: self.safe_area,
             scale: self.scale,
             pixels: self.pixels,
             external_fonts: self.external_fonts,
@@ -1715,16 +1794,25 @@ impl Ui {
         // A screen going off keeps the layout it had on the stack: it costs
         // no layout work while it goes.
         let roots = self.huds.iter().chain(self.screens.iter().map(|s| &s.root));
+        let window = Rect::new(0.0, 0.0, viewport.x, viewport.y);
         for root in roots {
             let layout = nodes[root.slot()].as_ref().unwrap().layout;
             if !self.tree.dirty(layout).unwrap_or(true) {
                 continue;
             }
+            // As `root_area`, which borrows all of `self`.
+            let area = match self.safe_area {
+                Some(safe) if nodes[root.slot()].as_ref().is_some_and(|n| n.inside_safe_area) => {
+                    let min = safe.min.clamp(Vec2::ZERO, window.max);
+                    safe.max.clamp(min, window.max) - min
+                }
+                _ => viewport,
+            };
             let _ = self.tree.compute_layout_with_measure(
                 layout,
                 Size {
-                    width: AvailableSpace::Definite(viewport.x / self.scale),
-                    height: AvailableSpace::Definite(viewport.y / self.scale),
+                    width: AvailableSpace::Definite(area.x / self.scale),
+                    height: AvailableSpace::Definite(area.y / self.scale),
                 },
                 |inputs, _, context, style| {
                     let Some((slot, n)) = context.and_then(|index| Some((*index, nodes[*index].as_ref()?))) else {
@@ -1799,7 +1887,8 @@ impl Ui {
         let window = Rect::new(0.0, 0.0, viewport.x, viewport.y);
         for i in 0..self.huds.len() {
             let root = self.huds[i];
-            self.place(root, self.root_offset(root), window, (Xf::IDENTITY, window));
+            let origin = self.root_origin(root, viewport);
+            self.place(root, origin, window, (Xf::IDENTITY, window));
         }
         let screens = self.screens.len();
         for depth in 0..=screens {
@@ -1807,21 +1896,29 @@ impl Ui {
                 let going = self.motion.exiting[e];
                 if going.depth.min(screens) == depth {
                     let root = going.root;
-                    self.place(root, self.root_offset(root), window, (Xf::IDENTITY, window));
+                    let origin = self.root_origin(root, viewport);
+                    self.place(root, origin, window, (Xf::IDENTITY, window));
                 }
             }
             if depth < screens {
                 let root = self.screens[depth].root;
-                self.place(root, self.root_offset(root), window, (Xf::IDENTITY, window));
+                let origin = self.root_origin(root, viewport);
+                self.place(root, origin, window, (Xf::IDENTITY, window));
             }
         }
     }
-    /// Where a screen root's `auto` margins move it: they take the window's
+    /// Where root `root`'s top left goes: the corner of the area it is
+    /// laid out in (`root_area`), moved by its `auto` margins.
+    fn root_origin(&self, root: UiId, viewport: Vec2) -> Vec2 {
+        let area = self.root_area(root, viewport);
+        area.min + self.root_offset(root, area.size())
+    }
+    /// Where a screen root's `auto` margins move it: they take its area's
     /// free space, as they do for a child of a flex container (both sides
     /// `auto` centers it, one side pushes it to the other edge). Taffy gives
     /// a root's auto margins nothing, because a root has no container. Roots
     /// out of the flow are placed by their insets instead.
-    fn root_offset(&self, root: UiId) -> Vec2 {
+    fn root_offset(&self, root: UiId, area: Vec2) -> Vec2 {
         let Some(node) = self.node(root) else { return Vec2::ZERO };
         let (Ok(style), Ok(layout)) = (self.tree.style(node.layout), self.tree.layout(node.layout)) else {
             return Vec2::ZERO;
@@ -1835,7 +1932,7 @@ impl Ui {
             (true, false) => free,
             _ => 0.0,
         };
-        let free = self.viewport / self.scale
+        let free = area / self.scale
             - vec2(
                 layout.size.width + own.left + own.right,
                 layout.size.height + own.top + own.bottom,

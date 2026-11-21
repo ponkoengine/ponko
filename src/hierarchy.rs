@@ -696,7 +696,9 @@ fn update_with(world: &mut World, s: &mut State, mode: Mode) {
     apply_unlinks(world, s);
     join_parents(world, s);
 
-    // Roots that moved since they were last placed, compared on all cores:
+    // Roots that moved since they were last placed, compared on all cores
+    // when there are enough of them to be worth it (`par_collect_into`
+    // times its first rows and stays on this thread under about 50 µs):
     // each root with children is a node of the first level, empty if it
     // stayed put.
     s.starts.clear();
@@ -1053,8 +1055,20 @@ fn find_starts(world: &World, s: &mut State) {
     }
 }
 
-/// Levels with at least this many children are placed on all cores.
-const PARALLEL: usize = 2048;
+/// Levels with at least this many children may be placed in one pass over
+/// every attached entity ([`place_linear`]) instead of a lookup each.
+const LINEAR: usize = 2048;
+
+/// The children of a level placed by lookups ([`place_level`]) that run on
+/// the calling thread first, timed: they decide whether the rest is shared
+/// out between cores.
+const PROBE: usize = 256;
+
+/// A pass projected to take less than this on the calling thread stays
+/// there: waking other threads costs more than it saves, and on a busy
+/// machine a woken thread may not run for milliseconds. The same budget as
+/// the ECS's parallel loops, which the other passes use.
+const SERIAL_BUDGET_NS: u128 = 50_000;
 
 /// The components placement reads and writes, looked up once per update.
 #[derive(Clone, Copy)]
@@ -1336,8 +1350,9 @@ fn gather<T: Copy>(
     (placed, kids)
 }
 
-/// Places a big level on all cores in one pass over the attached entities,
-/// in storage order: each finds its parent's node in `s.frontier` through
+/// Places a big level in one pass over the attached entities, in storage
+/// order, on all cores when the pass is long enough to be worth it
+/// (`par_collect_into` measures its first rows): each finds its parent's node in `s.frontier` through
 /// `s.table` and writes its own transform, with no lookups of its own.
 /// `kids` is how many children the level's lists name. Fills `s.next`;
 /// returns how many children its nodes' lists name, if it counted them.
@@ -1419,8 +1434,8 @@ fn place_linear(world: &mut World, s: &mut State, ids: &Ids, kids: usize) -> Opt
 
 /// Places every subtree: the moved roots are already in `s.frontier`;
 /// the changed children in `s.starts` are placed from their parents
-/// first. Then level by level down; a big level is worked out and written
-/// on all cores.
+/// first. Then level by level down; a level whose work, measured, would
+/// take long enough is worked out on all cores.
 fn place_all(world: &mut World, s: &mut State) {
     let ids = Ids::of(world);
     let mut counted = true;
@@ -1455,7 +1470,7 @@ fn place_all(world: &mut World, s: &mut State) {
             break;
         }
         s.next.clear();
-        let linear = kids >= PARALLEL && !ids.t2_tracked && {
+        let linear = kids >= LINEAR && !ids.t2_tracked && {
             #[cfg(feature = "3d")]
             let untracked = !ids.t3_tracked;
             #[cfg(not(feature = "3d"))]
@@ -1479,7 +1494,9 @@ fn place_all(world: &mut World, s: &mut State) {
 
 /// Places the children in `s.pairs`, each looked up on its own, and fills
 /// `s.next` with those that have children; returns `Some(0)` if none has.
-/// A big level is worked out on all cores.
+/// A level is worked out on all cores when its first [`PROBE`] children,
+/// timed, project it over [`SERIAL_BUDGET_NS`]: by the work measured, not
+/// the number of children.
 fn place_level(world: &mut World, s: &mut State, ids: &Ids) -> Option<usize> {
     {
         let (w, frontier) = (&*world, &s.frontier);
@@ -1487,12 +1504,19 @@ fn place_level(world: &mut World, s: &mut State, ids: &Ids) -> Option<usize> {
             let n = &frontier[i as usize];
             compute(w, ids, n.e?, &n.at, kid)
         };
-        if s.pairs.len() >= PARALLEL {
-            use rayon::prelude::*;
-            s.pairs.par_iter().map(one).collect_into_vec(&mut s.placed);
+        s.placed.clear();
+        let (first, rest) = s.pairs.split_at(PROBE.min(s.pairs.len()));
+        if rest.is_empty() {
+            s.placed.extend(first.iter().map(one));
         } else {
-            s.placed.clear();
-            s.placed.extend(s.pairs.iter().map(one));
+            let start = web_time::Instant::now();
+            s.placed.extend(first.iter().map(one));
+            if worth_sharing(start.elapsed().as_nanos(), first.len(), s.pairs.len()) {
+                use rayon::prelude::*;
+                s.placed.par_extend(rest.par_iter().map(one));
+            } else {
+                s.placed.extend(rest.iter().map(one));
+            }
         }
     }
     for (&(i, kid), placed) in s.pairs.iter().zip(&s.placed) {
@@ -1519,7 +1543,31 @@ fn place_level(world: &mut World, s: &mut State, ids: &Ids) -> Option<usize> {
     s.next.is_empty().then_some(0)
 }
 
+/// Whether a pass of `total` items, whose first `done` took `spent_ns` on
+/// the calling thread, is worth sharing out between cores: whether the
+/// whole pass projects to at least [`SERIAL_BUDGET_NS`].
+fn worth_sharing(spent_ns: u128, done: usize, total: usize) -> bool {
+    spent_ns * total as u128 / done.max(1) as u128 >= SERIAL_BUDGET_NS
+}
+
 /// [`update`] for the editor: places everything now, despawns nothing.
 pub(crate) fn settle(world: &mut World) {
     update(world, Mode::Settle);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_level_is_shared_out_only_when_its_timed_children_project_over_the_budget() {
+        // 256 children at 30 ns each (lookups): 2,000 project to 60 µs.
+        assert!(worth_sharing(256 * 30, 256, 2_000));
+        // 1,000 of them project to 30 µs: the calling thread places them.
+        assert!(!worth_sharing(256 * 30, 256, 1_000));
+        // At 0.4 ns each, 100,000 project to 39 µs (here) and 200,000 to
+        // 78 µs (shared): the work decides, not the count.
+        assert!(!worth_sharing(100, 256, 100_000));
+        assert!(worth_sharing(100, 256, 200_000));
+    }
 }

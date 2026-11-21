@@ -44,3 +44,6 @@ __pycache__/
 
 # tests/plugin_crate.rs copies the workspace's lock file there while it builds
 /tests/plugin-crate/Cargo.lock
+
+# What the web_editor_save example saves when run on the desktop
+/assets/smoke/editor-kept.json

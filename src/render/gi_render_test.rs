@@ -31,6 +31,8 @@ pub(super) struct Rig {
     pub(super) renderer: Box<Renderer3D>,
     pub(super) ctx: Box<Ctx>,
     pub(super) size: (u32, u32),
+    /// The GPU drawing (for reference images).
+    pub(super) info: wgpu::AdapterInfo,
     /// The instance batches (one per mesh, in the order the meshes first
     /// come) and cells [`blocks`](Self::blocks) made.
     batches: Vec<crate::render::InstanceBatch>,
@@ -92,7 +94,7 @@ impl Rig {
                 ..Default::default()
             })
         })?;
-        let (device, queue) = (gpu.device, gpu.queue);
+        let (device, queue, info) = (gpu.device, gpu.queue, gpu.info);
         if let Some(slots) = slots
             && supports_gi(&device) != slots
         {
@@ -193,6 +195,7 @@ impl Rig {
         Some(Self {
             device,
             queue,
+            info,
             output,
             target,
             textures,
@@ -1528,13 +1531,13 @@ fn tint_east_of_a_partition(x: Option<f32>) -> Option<i32> {
     Some(c[0] - c[1])
 }
 
-/// Pins a known limitation, not wanted behaviour: probe GI leaks light
-/// through a wall much thinner than the probe spacing when the wall lies on
-/// a probe plane. It is the measured baseline in §2 of
-/// `crates/ponko_bench/RAY_TRACING.md`. When the limitation is fixed, flip
-/// `on_plane > 20` to `on_plane <= 5` and update the note.
+/// A wall much thinner than the probe spacing, lying on a plane of probes,
+/// buries them: they see light on both sides of it. Their neighbours'
+/// distances give them away, and the camera's view leaves them out, so the
+/// red stays on its side. The baseline in §2 of
+/// `crates/ponko_bench/RAY_TRACING.md`.
 #[test]
-fn bounced_light_leaks_through_a_thin_partition_on_a_probe_plane() {
+fn bounced_light_stops_at_a_thin_partition_on_a_probe_plane() {
     let Some(open) = tint_east_of_a_partition(None) else {
         return;
     };
@@ -1550,5 +1553,245 @@ fn bounced_light_leaks_through_a_thin_partition_on_a_probe_plane() {
     );
     assert!(open > 40, "positive control: the open room's floor is tinted: {open}");
     assert!(between <= 5, "between the probes the partition holds: {between}");
-    assert!(on_plane > 20, "on a probe plane the red leaks through it: {on_plane}");
+    assert!(on_plane <= 5, "on a probe plane the partition holds too: {on_plane}");
+}
+
+/// A closed room with white walls (the inside from -2 to 2 across, -0.5 to
+/// 2.5 high, walls 0.4 thick), lit only by a shadowed lamp inside it, no
+/// sun, sky or ambient light; probes every unit (7 x 5 x 7 = 245, so a
+/// full round of updates is 16 frames at 16 a frame). Each bounce keeps
+/// 94% of the light, so the probes' own light takes over a thousand frames
+/// to settle. Draws `checkpoints` frames in turn and returns, after each,
+/// how bright the roof is (the linear sum of red, green and blue over a
+/// few points; no tonemapping). `unsettled`: the camera's view reads the
+/// probes' latest light instead of the settled estimate.
+fn closed_lamp_room(checkpoints: &[usize], unsettled: bool) -> Option<Vec<f32>> {
+    let mut rig = Rig::new(true)?;
+    rig.renderer.gi_unsettled = unsettled;
+    let white = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc::color(Color::WHITE).with_roughness(1.0),
+    );
+    let (inner, outer) = (2.0, 2.4);
+    let walls = [
+        (white, vec3(-outer, -0.9, -outer), vec3(outer, -0.5, outer)), // floor
+        (white, vec3(-outer, 2.5, -outer), vec3(outer, 2.9, outer)),   // roof
+        (white, vec3(-outer, -0.5, -outer), vec3(-inner, 2.5, outer)), // west
+        (white, vec3(inner, -0.5, -outer), vec3(outer, 2.5, outer)),   // east
+        (white, vec3(-inner, -0.5, -outer), vec3(inner, 2.5, -inner)), // north
+        (white, vec3(-inner, -0.5, inner), vec3(inner, 2.5, outer)),   // south
+    ];
+    rig.blocks(&walls, Build::Models);
+    rig.ctx.world.spawn((
+        Transform3D::at(vec3(1.2, 0.0, 1.2)),
+        crate::d3::PointLight {
+            intensity: 0.6,
+            range: 10.0,
+            shadows: true,
+            ..Default::default()
+        },
+    ));
+    dark_world(&mut rig);
+    rig.ctx.scene3d.lighting.gi = GlobalIllumination {
+        enabled: true,
+        extent: vec3(6.0, 4.0, 6.0),
+        spacing: 1.0,
+        probes_per_frame: crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME,
+        intensity: 1.0,
+    };
+    rig.ctx.scene3d.camera.position = vec3(-1.5, 0.0, -1.5);
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 2.5, 0.0));
+    let points = [vec3(0.0, 2.5, 0.0), vec3(-0.5, 2.5, 0.5), vec3(0.5, 2.5, -0.5)];
+    let mut drawn = 0;
+    let mut out = Vec::new();
+    for &at in checkpoints {
+        let pixels = rig.draw(at - drawn);
+        drawn = at;
+        let linear = |c: i32| {
+            let c = c as f32 / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let sum: f32 = points
+            .iter()
+            .map(|&p| rig.at(&pixels, p).iter().map(|&c| linear(c)).sum::<f32>())
+            .sum();
+        out.push(sum);
+    }
+    Some(out)
+}
+
+/// No sun, sky or ambient light, no tonemapping or bloom: only the lamps
+/// and what bounces off the walls.
+fn dark_world(rig: &mut Rig) {
+    let lighting = &mut rig.ctx.scene3d.lighting;
+    lighting.sun_intensity = 0.0;
+    lighting.ambient_intensity = 0.0;
+    rig.ctx.scene3d.sky.sky_color = Color::BLACK;
+    rig.ctx.scene3d.sky.ground_color = Color::BLACK;
+    rig.ctx.scene3d.post.tonemap = crate::render::Tonemap::None;
+    rig.ctx.scene3d.post.bloom = 0.0;
+}
+
+/// The bound: from 400 frames (25 rounds of probe updates) after the light
+/// comes on, the roof of a bright closed room stays within 6% of where it
+/// settles, and on its way it never overshoots by more than 2%. The
+/// probes' latest light alone is still more than 10% short then.
+#[test]
+fn probe_light_in_a_bright_closed_room_settles_within_400_frames() {
+    let checkpoints: Vec<usize> = (1..=16).map(|k| k * 100).collect();
+    let Some(settled) = closed_lamp_room(&checkpoints, false) else {
+        return;
+    };
+    let unsettled = closed_lamp_room(&checkpoints, true).unwrap();
+    let last = *unsettled.last().unwrap();
+    let print = |b: &[f32]| {
+        b.iter()
+            .map(|v| format!("{:.3}", v / last))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    eprintln!("roof against where it settles, every 100 frames: {}", print(&settled));
+    eprintln!("without the settled estimate: {}", print(&unsettled));
+    let at_400 = settled[3] / last;
+    assert!(
+        (0.94..=1.02).contains(&at_400),
+        "settled within 400 frames: {at_400:.3}"
+    );
+    for (k, v) in settled.iter().enumerate().skip(3) {
+        assert!(
+            (v / last - 1.0).abs() <= 0.06,
+            "stays settled at frame {}: {:.3}",
+            (k + 1) * 100,
+            v / last
+        );
+    }
+    assert!(
+        settled.iter().all(|v| v / last <= 1.02),
+        "never overshoots: {}",
+        print(&settled)
+    );
+    let at_1600 = settled[15] / last;
+    assert!((at_1600 - 1.0).abs() <= 0.02, "both reach the same light: {at_1600:.3}");
+    assert!(
+        unsettled[3] / last < 0.9,
+        "negative control: the latest light alone is short: {}",
+        print(&unsettled)
+    );
+}
+
+/// Two closed-off rooms side by side under a black sky, no roof, seen from
+/// straight above: the west one lit by a shadowed lamp, the east one dark,
+/// a 10 cm white wall between them at `x` from the floor to the top of the
+/// outer walls. Probes every 2 units, so at 0 the wall runs through a
+/// plane of probes. Returns the rig and the image after `frames`.
+fn lit_and_dark_rooms(x: f32, wall: bool, frames: usize) -> Option<(Rig, Vec<u8>)> {
+    let mut rig = Rig::new(true)?;
+    let white = rig.mesh(
+        &MeshData::cube(1.0),
+        MaterialDesc::color(Color::WHITE).with_roughness(1.0),
+    );
+    let (lo, hi, t) = (-6.0, 6.0, 0.4);
+    let mut walls = vec![
+        (white, vec3(lo - t, -0.9, -3.0 - t), vec3(hi + t, -0.5, 3.0 + t)), // floor
+        (white, vec3(lo - t, -0.5, -3.0 - t), vec3(lo, 4.5, 3.0 + t)),      // west
+        (white, vec3(hi, -0.5, -3.0 - t), vec3(hi + t, 4.5, 3.0 + t)),      // east
+        (white, vec3(lo, -0.5, -3.0 - t), vec3(hi, 4.5, -3.0)),             // north
+        (white, vec3(lo, -0.5, 3.0), vec3(hi, 4.5, 3.0 + t)),               // south
+    ];
+    if wall {
+        walls.push((white, vec3(x - 0.05, -0.5, -3.0), vec3(x + 0.05, 4.5, 3.0)));
+    }
+    rig.blocks(&walls, Build::Models);
+    rig.ctx.world.spawn((
+        Transform3D::at(vec3(x - 3.0, 1.0, 0.0)),
+        crate::d3::PointLight {
+            intensity: 3.0,
+            range: 12.0,
+            shadows: true,
+            ..Default::default()
+        },
+    ));
+    dark_world(&mut rig);
+    rig.ctx.scene3d.lighting.gi = GlobalIllumination {
+        enabled: true,
+        extent: vec3(16.0, 14.0, 10.0),
+        spacing: 2.0,
+        probes_per_frame: crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME,
+        intensity: 1.0,
+    };
+    // Above the wall (inside the probe grid, which moves with the camera),
+    // so it hides neither floor.
+    rig.ctx.scene3d.camera.position = vec3(x, 6.5, 0.01);
+    rig.ctx.scene3d.camera.look_at(vec3(x, -0.5, 0.0));
+    rig.ctx.scene3d.camera.fov_y = 100f32.to_radians();
+    let pixels = rig.draw(frames);
+    Some((rig, pixels))
+}
+
+/// How bright the floor is (the sum of red, green and blue) at `points`
+/// east of `x`: the brightest of each across the room.
+fn floor_east_of(rig: &Rig, pixels: &[u8], x: f32, points: &[f32]) -> Vec<i32> {
+    points
+        .iter()
+        .map(|&d| {
+            [-1.5, 0.0, 1.5]
+                .map(|z| rig.at(pixels, vec3(x + d, -0.5, z)).iter().sum::<i32>())
+                .into_iter()
+                .max()
+                .unwrap()
+        })
+        .collect()
+}
+
+/// A 10 cm wall on a plane of probes 2 units apart keeps the bounced light
+/// in the lit room: the dark room's floor stays dark right up to the wall,
+/// a sixteenth as bright as the lit room's floor a unit from the wall or
+/// less.
+#[test]
+fn a_thin_wall_on_a_plane_of_coarse_probes_keeps_the_dark_room_dark() {
+    use crate::render::render_test_support::{Image, keep_image};
+    let points = [0.3, 0.6, 1.0, 2.0, 3.0];
+    let Some((rig, pixels)) = lit_and_dark_rooms(0.0, true, 200) else {
+        return;
+    };
+    let dark = floor_east_of(&rig, &pixels, 0.0, &points);
+    let lit = floor_east_of(&rig, &pixels, -2.0, &[1.0])[0];
+    let image = Image {
+        width: rig.size.0,
+        height: rig.size.1,
+        rgba: pixels,
+    };
+    keep_image(&image);
+    let (open_rig, open_pixels) = lit_and_dark_rooms(0.0, false, 200).unwrap();
+    let open = floor_east_of(&open_rig, &open_pixels, 0.0, &points);
+    keep_image(&Image {
+        width: open_rig.size.0,
+        height: open_rig.size.1,
+        rgba: open_pixels,
+    });
+    eprintln!(
+        "dark room's floor 0.3 to 3 units from the wall: {dark:?}, lit room's floor {lit}, without the wall {open:?}"
+    );
+    assert!(
+        open[0] > lit / 4,
+        "positive control: without the wall the light reaches there: {open:?} vs {lit}"
+    );
+    assert!(
+        dark.iter().all(|&d| d * 16 <= lit),
+        "the dark room stays dark: {dark:?} vs {lit}"
+    );
+    crate::render::render_test_support::check_reference(
+        "gi_thin_wall",
+        &image,
+        crate::render::regression_stage::EFFECT_REFERENCE,
+        "Two white rooms 12 x 6 units without a roof under a black sky, no sun or ambient light, split by a 10 cm \
+         white wall at x = 0 that lies on a plane of probes 2 units apart; a shadowed lamp at (-3, 1, 0) lights \
+         the west room only; 200 frames of probe updates at 16 a frame, camera at (0, 6.5, 0.01) looking straight \
+         down, 100 degree field of view; 128x128, 4x multisampling, no tonemapping.",
+        &rig.info,
+    );
 }

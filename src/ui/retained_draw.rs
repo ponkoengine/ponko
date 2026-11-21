@@ -74,6 +74,7 @@ impl Ctx {
         input.preedit_cursor = self.input.preedit_cursor();
         input.composing = self.input.composing();
         self.ui.pixels = self.gfx.scale_factor;
+        self.ui.safe_area = Some(self.window.safe_area());
         self.ui.frame_with_text(self.window_size(), &input, &mut self.gfx.text);
         self.ui_state.retained_input_text = input.text;
         self.ui_state.retained_preedit = input.preedit;
@@ -250,6 +251,7 @@ impl Ctx {
         let mut input = self.retained_input(&self.ui, text);
         input.dt = dt;
         self.ui.pixels = self.gfx.scale_factor;
+        self.ui.safe_area = Some(self.window.safe_area());
         self.ui.frame_with_text(self.window_size(), &input, &mut self.gfx.text);
         self.ui_state.retained_input_text = input.text;
     }

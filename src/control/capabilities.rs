@@ -37,6 +37,7 @@ pub(super) const FEATURES: &[(&str, bool)] = &[
     ("compressed-textures", cfg!(feature = "compressed-textures")),
     ("basis-universal", cfg!(feature = "basis-universal")),
     ("gltf-meshopt", cfg!(feature = "gltf-meshopt")),
+    ("wasm-simd", cfg!(feature = "wasm-simd")),
     ("aseprite-source", cfg!(feature = "aseprite-source")),
     ("image-jpeg", cfg!(feature = "image-jpeg")),
     ("image-webp", cfg!(feature = "image-webp")),

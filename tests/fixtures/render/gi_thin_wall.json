@@ -1,0 +1,17 @@
+{
+  "name": "gi_thin_wall",
+  "scene": "Two white rooms 12 x 6 units without a roof under a black sky, no sun or ambient light, split by a 10 cm white wall at x = 0 that lies on a plane of probes 2 units apart; a shadowed lamp at (-3, 1, 0) lights the west room only; 200 frames of probe updates at 16 a frame, camera at (0, 6.5, 0.01) looking straight down, 100 degree field of view; 128x128, 4x multisampling, no tonemapping.",
+  "width": 128,
+  "height": 128,
+  "format": "rgba8-srgb",
+  "tolerance": {
+    "channel": 16,
+    "outliers": 0.015,
+    "edge": 1
+  },
+  "adapter": "Apple M4 Max",
+  "backend": "Metal",
+  "driver": "unknown",
+  "checksum": "8a66a97a31c5a145",
+  "reason": "New: a thin wall on a plane of coarse probes keeps the bounced light in the lit room (#155)"
+}
