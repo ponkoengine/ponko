@@ -34,10 +34,13 @@ impl Tileset {
         palette: Option<&Palette>,
         budget: usize,
     ) -> Result<Self, String> {
-        let raw = chunk
-            .tiles
-            .as_ref()
-            .ok_or_else(|| format!("tileset {:?} has no embedded tiles; embed them in Aseprite", chunk.name))?;
+        let raw = chunk.tiles.as_ref().ok_or_else(|| match chunk.external_file {
+            Some(_) => format!(
+                "tileset {:?} links to another file; read it with `decode_linked`, which opens that file",
+                chunk.name
+            ),
+            None => format!("tileset {:?} has no tiles and links to no file", chunk.name),
+        })?;
         let (width, height) = (usize::from(chunk.width), usize::from(chunk.height));
         let count = chunk.number_of_tiles as usize;
         let pixels = width

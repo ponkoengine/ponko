@@ -476,6 +476,8 @@ mod views_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d", feature = "editor"))]
 mod editor_render_test;
+#[cfg(all(test, feature = "window", feature = "3d", feature = "editor"))]
+mod editor_thumbnail_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod gltf_extensions_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]

@@ -27,14 +27,63 @@ pub struct Sheet {
     pub note: String,
 }
 
+/// Reads another file by its asset path, for [`decode_linked`]: its bytes,
+/// or why it can't be read.
+pub type Load<'a> = dyn FnMut(&str) -> Result<Vec<u8>, String> + 'a;
+
 /// Reads a source file and builds a sheet. Set `split` for separately
 /// composited visible layers, and `max_side` to the largest sheet dimension.
 ///
 /// # Errors
 ///
-/// Returns a message for invalid data, unsupported external tilesets,
-/// or a sheet that would exceed the size limit.
+/// Returns a message for invalid data, a tileset that links to another
+/// file (use [`decode_linked`]), or a sheet that would exceed the size
+/// limit.
 pub fn decode(bytes: &[u8], split: bool, max_side: u32) -> Result<Sheet, String> {
+    decode_file(None, bytes, split, max_side)
+}
+
+/// [`decode`] for the file at asset path `path`, whose tilesets may link
+/// to a tileset in another file instead of holding their tiles (Aseprite's
+/// external tilesets). `load` reads such a file by its asset path, which is
+/// the link resolved against `path`'s folder (`tiles/ground.aseprite`
+/// beside `maps/a.aseprite` is `maps/tiles/ground.aseprite`). A linked
+/// tileset may link on, up to 8 files deep.
+///
+/// # Errors
+///
+/// As [`decode`], and when a linked file can't be loaded, isn't an
+/// Aseprite file, lacks the tileset or has tiles of another size, or a
+/// link is an absolute path or leaves the root.
+pub fn decode_linked(
+    path: &str,
+    bytes: &[u8],
+    split: bool,
+    max_side: u32,
+    load: &mut Load<'_>,
+) -> Result<Sheet, String> {
+    decode_file(Some((path, load)), bytes, split, max_side)
+}
+
+/// The asset paths of the files the tilesets of the file at asset path
+/// `path` link to, resolved as [`decode_linked`] resolves them; not the
+/// files those link to in turn. For a cache key, or files to watch.
+///
+/// # Errors
+///
+/// Returns a message for invalid data or a link that is an absolute path
+/// or leaves the root.
+pub fn linked_files(path: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
+    let file = parse_raw_file(bytes).map_err(|e| format!("not a readable Aseprite file: {e}"))?;
+    render::linked_files(path, &file)
+}
+
+fn decode_file(
+    linked: Option<(&str, &mut Load<'_>)>,
+    bytes: &[u8],
+    split: bool,
+    max_side: u32,
+) -> Result<Sheet, String> {
     let file = parse_raw_file(bytes).map_err(|e| format!("not a readable Aseprite file: {e}"))?;
     let (w, h) = (u32::from(file.header.width), u32::from(file.header.height));
     if w == 0 || h == 0 || file.frames.is_empty() {
@@ -50,6 +99,9 @@ pub fn decode(bytes: &[u8], split: bool, max_side: u32) -> Result<Sheet, String>
         }
     }
     let mut renderer = render::Renderer::new(&file)?;
+    if let Some((path, load)) = linked {
+        renderer.link_tilesets(path, load)?;
+    }
     let layers = if split { renderer.split_layers()? } else { Vec::new() };
     let selections: Vec<_> = if split {
         layers.iter().map(|(i, name)| (Some(*i), Some(*name))).collect()

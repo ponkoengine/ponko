@@ -3,7 +3,10 @@
 //!
 //! - a texture, scaled down;
 //! - a glTF model, drawn from above at an angle by a small software
-//!   rasterizer (flat shaded, depth tested);
+//!   rasterizer (flat shaded, depth tested) at first; then, when the game
+//!   has a GPU, by the engine's own renderer on the game thread (see
+//!   `editor_thumb_studio.rs`), kept on disk by the model's content so the
+//!   next run shows it at once;
 //! - a prefab, as its first sprite's texture or its model, else a map of
 //!   where its entities are;
 //! - a scene, as a map of where its entities are (2D positions, or 3D ones
@@ -52,6 +55,122 @@ impl Thumb {
     pub fn is_drawn(&self) -> bool {
         self.rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 0)
     }
+}
+
+/// Bumped when rendered thumbnails look different: older cached ones are
+/// then made again.
+const LOOK: &str = "ponko-model-thumbnail-1";
+
+/// The folder rendered model thumbnails are kept in: the user's cache
+/// folder (`PONKO_THUMBNAIL_CACHE` names another). `None` in unit tests
+/// (they name their own) and on the web.
+fn default_cache() -> Option<PathBuf> {
+    if cfg!(test) || cfg!(target_arch = "wasm32") {
+        return None;
+    }
+    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+    if let Some(dir) = var("PONKO_THUMBNAIL_CACHE") {
+        return Some(dir);
+    }
+    let base = if cfg!(windows) {
+        var("LOCALAPPDATA")
+    } else if cfg!(target_os = "macos") {
+        var("HOME").map(|h| h.join("Library/Caches"))
+    } else {
+        var("XDG_CACHE_HOME").or_else(|| var("HOME").map(|h| h.join(".cache")))
+    };
+    base.map(|b| b.join("ponko").join("thumbnails"))
+}
+
+/// The files a glTF file names (its buffers and images, not inline data),
+/// as it names them.
+pub(crate) fn named_files(bytes: &[u8]) -> Vec<String> {
+    #[cfg(feature = "3d")]
+    if let Ok(gltf) = gltf::Gltf::from_slice(bytes) {
+        let buffers = gltf.buffers().filter_map(|b| match b.source() {
+            gltf::buffer::Source::Uri(uri) => Some(uri.to_string()),
+            gltf::buffer::Source::Bin => None,
+        });
+        let images = gltf.images().filter_map(|i| match i.source() {
+            gltf::image::Source::Uri { uri, .. } => Some(uri.to_string()),
+            gltf::image::Source::View { .. } => None,
+        });
+        return buffers.chain(images).filter(|u| !u.starts_with("data:")).collect();
+    }
+    let _ = bytes;
+    Vec::new()
+}
+
+/// The name a model's rendered thumbnail is kept under: a hash of the
+/// file, of the files it names, of the thumbnail size and of [`LOOK`], so
+/// a changed model (or texture) is drawn again and an unchanged one never.
+pub(crate) fn content_key(file: &Path, bytes: &[u8]) -> String {
+    // FNV-1a, 64 bits, with the length beside it.
+    fn add(mut h: u64, bytes: &[u8]) -> u64 {
+        for &b in bytes {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+        h
+    }
+    let mut h = add(0xcbf2_9ce4_8422_2325, bytes);
+    let mut len = bytes.len();
+    let folder = file.parent().unwrap_or(Path::new("."));
+    for uri in named_files(bytes) {
+        let named = std::fs::read(folder.join(&uri)).unwrap_or_default();
+        h = add(add(h, uri.as_bytes()), &named);
+        len += named.len();
+    }
+    h = add(add(h, &(SIZE as u32).to_le_bytes()), LOOK.as_bytes());
+    format!("{h:016x}-{len}")
+}
+
+/// A model to draw with the renderer: `rel` in assets folder `root`, kept
+/// as `png` (`None`: no cache folder).
+#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "3d"), allow(dead_code))]
+struct RenderJob {
+    root: PathBuf,
+    rel: String,
+    png: Option<PathBuf>,
+}
+
+/// [`make`], with model thumbnails from the cache folder `cache` when it
+/// holds this content's; else the software one, and the model to draw.
+fn make_cached(
+    root: &Path,
+    rel: &str,
+    kind: AssetKind,
+    cache: Option<&Path>,
+) -> (Result<Thumb, String>, Option<RenderJob>) {
+    if kind != AssetKind::Model {
+        return (make(root, rel, kind), None);
+    }
+    let file = root.join(rel);
+    let bytes = match std::fs::read(&file) {
+        Ok(b) => b,
+        Err(e) => return (Err(format!("{rel}: {e}")), None),
+    };
+    let soft = model(&file, &bytes).map_err(|e| format!("{rel}: {e}"));
+    let Ok(soft) = soft else { return (soft, None) };
+    let png = cache.map(|c| c.join(format!("{}.png", content_key(&file, &bytes))));
+    if let Some(png) = &png
+        && let Ok(image) = image::open(png)
+    {
+        let image = image.to_rgba8();
+        let cached = Thumb {
+            width: image.width() as usize,
+            height: image.height() as usize,
+            rgba: image.into_raw(),
+            note: soft.note,
+        };
+        return (Ok(cached), None);
+    }
+    let job = RenderJob {
+        root: root.to_path_buf(),
+        rel: rel.to_string(),
+        png,
+    };
+    (Ok(soft), Some(job))
 }
 
 /// Makes the thumbnail of asset `rel` (relative to `root`, the assets
@@ -318,16 +437,30 @@ fn raster(triangles: &[[glam::Vec3; 3]]) -> Thumb {
     t
 }
 
-/// What the worker is asked for: (key, assets folder, path, kind).
-type Job = (String, PathBuf, String, AssetKind);
+/// What the worker is asked for: (generation, key, assets folder, path,
+/// kind, cache folder).
+type Job = (u64, String, PathBuf, String, AssetKind, Option<PathBuf>);
+/// What it hands back: (generation, key, thumbnail, model to draw with
+/// the renderer).
+type Done = (u64, String, Result<Thumb, String>, Option<RenderJob>);
 
 /// Thumbnails made on a worker thread and kept by asset path.
 pub(crate) struct Thumbnails {
     ready: HashMap<String, Result<Thumb, String>>,
     asked: HashSet<String>,
     jobs: Option<mpsc::Sender<Job>>,
-    done: mpsc::Receiver<(String, Result<Thumb, String>)>,
-    done_tx: mpsc::Sender<(String, Result<Thumb, String>)>,
+    done: mpsc::Receiver<Done>,
+    done_tx: mpsc::Sender<Done>,
+    /// Where rendered model thumbnails are kept (see [`content_key`]).
+    pub cache: Option<PathBuf>,
+    /// Models waiting for the renderer, oldest first.
+    renders: Vec<RenderJob>,
+    /// Paths whose thumbnail the renderer replaced since the panel last looked.
+    updated: Vec<String>,
+    #[cfg(feature = "3d")]
+    studio: Option<super::thumb_studio::Studio>,
+    /// Counts `clear`s: what was asked for before one is dropped.
+    generation: u64,
 }
 
 impl Default for Thumbnails {
@@ -339,6 +472,12 @@ impl Default for Thumbnails {
             jobs: None,
             done,
             done_tx,
+            cache: default_cache(),
+            renders: Vec::new(),
+            updated: Vec::new(),
+            #[cfg(feature = "3d")]
+            studio: None,
+            generation: 0,
         }
     }
 }
@@ -357,11 +496,20 @@ impl Thumbnails {
     pub fn get(&mut self, root: &Path, rel: &str, kind: AssetKind) -> Option<&Result<Thumb, String>> {
         self.collect();
         if !self.ready.contains_key(rel) && self.asked.insert(rel.to_string()) {
-            let job = (rel.to_string(), root.to_path_buf(), rel.to_string(), kind);
+            let job = (
+                self.generation,
+                rel.to_string(),
+                root.to_path_buf(),
+                rel.to_string(),
+                kind,
+                self.cache.clone(),
+            );
             let sent = self.worker().send(job);
-            if let Err(mpsc::SendError((key, root, rel, kind))) = sent {
+            if let Err(mpsc::SendError((_, key, root, rel, kind, cache))) = sent {
                 // The worker is gone: make it here.
-                self.ready.insert(key, make(&root, &rel, kind));
+                let (thumb, render) = make_cached(&root, &rel, kind, cache.as_deref());
+                self.ready.insert(key, thumb);
+                self.renders.extend(render);
             }
         }
         self.ready.get(rel)
@@ -374,8 +522,9 @@ impl Thumbnails {
             let spawned = std::thread::Builder::new()
                 .name("ponko-thumbnails".into())
                 .spawn(move || {
-                    for (key, root, rel, kind) in rx {
-                        if done.send((key, make(&root, &rel, kind))).is_err() {
+                    for (generation, key, root, rel, kind, cache) in rx {
+                        let (thumb, render) = make_cached(&root, &rel, kind, cache.as_deref());
+                        if done.send((generation, key, thumb, render)).is_err() {
                             break;
                         }
                     }
@@ -391,15 +540,81 @@ impl Thumbnails {
 
     /// Takes the thumbnails the worker finished.
     fn collect(&mut self) {
-        while let Ok((key, thumb)) = self.done.try_recv() {
-            self.ready.insert(key, thumb);
+        while let Ok(done) = self.done.try_recv() {
+            self.take(done);
         }
+    }
+
+    fn take(&mut self, (generation, key, thumb, render): Done) {
+        // Asked for before a `clear`: made again when asked again.
+        if generation != self.generation {
+            return;
+        }
+        self.ready.insert(key, thumb);
+        self.renders.extend(render);
+    }
+
+    /// Whether a thumbnail asked for isn't made yet.
+    fn waiting(&self) -> bool {
+        self.asked.iter().any(|k| !self.ready.contains_key(k))
+    }
+
+    /// Draws the oldest model waiting for the renderer on `gpu`'s device
+    /// (once the worker has made its software thumbnail), keeps it on disk
+    /// and in place of the software one. Without a GPU (headless) the
+    /// software thumbnails stay. Returns whether one was drawn.
+    #[cfg(feature = "3d")]
+    pub fn render_models(&mut self, gpu: Option<&crate::render::Renderer>) -> bool {
+        self.collect();
+        if self.renders.is_empty() {
+            return false;
+        }
+        let Some(gpu) = gpu else {
+            self.renders.clear();
+            return false;
+        };
+        let job = self.renders.remove(0);
+        let studio = self.studio.get_or_insert_with(|| super::thumb_studio::Studio::new(gpu));
+        let out = job
+            .png
+            .clone()
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("ponko-thumbnail-{}.png", std::process::id())));
+        if let Some(dir) = out.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let drawn = studio.render(&job.root, &job.rel, &out);
+        if job.png.is_none() {
+            let _ = std::fs::remove_file(&out);
+        }
+        match drawn {
+            Ok(mut thumb) => {
+                thumb.note = self
+                    .ready
+                    .get(&job.rel)
+                    .and_then(|t| t.as_ref().ok())
+                    .and_then(|t| t.note.clone());
+                self.ready.insert(job.rel.clone(), Ok(thumb));
+                self.updated.push(job.rel);
+                true
+            }
+            Err(e) => {
+                // The software thumbnail stays.
+                eprintln!("ponko: editor thumbnail: {e}");
+                false
+            }
+        }
+    }
+
+    /// The paths whose thumbnail changed since the last call.
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
+    pub fn take_updated(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.updated)
     }
 
     /// Thumbnails made since the last call: the panel turns them into
     /// textures.
     pub fn is_pending(&self) -> bool {
-        self.asked.len() > self.ready.len()
+        self.waiting() || !self.renders.is_empty()
     }
 
     /// Waits (at most `timeout`: a hang detector) until every thumbnail asked for is made.
@@ -407,10 +622,10 @@ impl Thumbnails {
     pub fn wait(&mut self, timeout: std::time::Duration) -> bool {
         let end = web_time::Instant::now() + timeout;
         self.collect();
-        while self.is_pending() {
+        while self.waiting() {
             let left = end.saturating_duration_since(web_time::Instant::now());
             match self.done.recv_timeout(left) {
-                Ok((key, thumb)) => drop(self.ready.insert(key, thumb)),
+                Ok(done) => self.take(done),
                 Err(_) => return false,
             }
         }
@@ -422,6 +637,9 @@ impl Thumbnails {
         self.collect();
         self.ready.clear();
         self.asked.clear();
+        self.renders.clear();
+        self.updated.clear();
+        self.generation += 1;
     }
 }
 
@@ -490,6 +708,73 @@ mod tests {
         let tile = make(&fixtures(), "tile.png", AssetKind::Texture).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(t.unwrap(), tile);
+    }
+
+    #[cfg(feature = "3d")]
+    #[test]
+    fn the_cache_name_follows_the_model_and_the_files_it_names_not_where_it_is() {
+        let dir = std::env::temp_dir().join(format!("ponko-thumb-key-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        let gltf = br#"{"asset":{"version":"2.0"},"buffers":[{"byteLength":4,"uri":"cube.bin"}]}"#;
+        assert_eq!(named_files(gltf), ["cube.bin"]);
+        std::fs::write(dir.join("cube.bin"), [1, 2, 3, 4]).unwrap();
+        std::fs::write(dir.join("a/cube.bin"), [1, 2, 3, 4]).unwrap();
+        let here = content_key(&dir.join("m.gltf"), gltf);
+        assert_eq!(
+            here,
+            content_key(&dir.join("a/other.gltf"), gltf),
+            "the same content elsewhere"
+        );
+        std::fs::write(dir.join("a/cube.bin"), [9, 2, 3, 4]).unwrap();
+        let changed = content_key(&dir.join("a/other.gltf"), gltf);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_ne!(here, changed, "a changed buffer is drawn again");
+        assert_ne!(here, content_key(&dir.join("m.gltf"), b"{}"));
+    }
+
+    #[cfg(feature = "3d")]
+    #[test]
+    fn a_cached_model_thumbnail_is_used_and_an_uncached_one_waits_for_the_renderer() {
+        let cache = std::env::temp_dir().join(format!("ponko-thumb-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cache);
+        let mut thumbs = Thumbnails {
+            cache: Some(cache.clone()),
+            ..Thumbnails::default()
+        };
+        assert!(thumbs.get(&fixtures(), "grid.glb", AssetKind::Model).is_none());
+        assert!(thumbs.wait(std::time::Duration::from_secs(10)));
+        let soft = make(&fixtures(), "grid.glb", AssetKind::Model).unwrap();
+        assert_eq!(
+            thumbs
+                .get(&fixtures(), "grid.glb", AssetKind::Model)
+                .unwrap()
+                .as_ref()
+                .unwrap(),
+            &soft
+        );
+        assert!(thumbs.is_pending(), "waiting for the renderer");
+        assert!(!thumbs.render_models(None), "no GPU: nothing drawn");
+        assert!(!thumbs.is_pending(), "and the software one stays");
+
+        // A thumbnail kept under the model's content is used as it is.
+        let bytes = std::fs::read(fixtures().join("grid.glb")).unwrap();
+        let png = cache.join(format!("{}.png", content_key(&fixtures().join("grid.glb"), &bytes)));
+        std::fs::create_dir_all(&cache).unwrap();
+        image::RgbaImage::from_pixel(SIZE as u32, SIZE as u32, image::Rgba([255, 0, 255, 255]))
+            .save(&png)
+            .unwrap();
+        thumbs.clear();
+        assert!(thumbs.get(&fixtures(), "grid.glb", AssetKind::Model).is_none());
+        assert!(thumbs.wait(std::time::Duration::from_secs(10)));
+        let cached = thumbs
+            .get(&fixtures(), "grid.glb", AssetKind::Model)
+            .unwrap()
+            .clone()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&cache);
+        assert_eq!(&cached.rgba[..4], [255, 0, 255, 255]);
+        assert_eq!(cached.note, soft.note, "with its triangle count");
+        assert!(!thumbs.is_pending(), "nothing to draw");
     }
 
     #[test]

@@ -18,7 +18,7 @@ use crate::three::{Camera3D, Scene3D, SkyLight, linear};
 /// the stage's output and reads it back. `shared_shadows: false` leaves the
 /// views out of the sun's cascades (what the views would get without
 /// shared shadows: a negative control).
-fn frame(stage: &mut Stage, windows: &mut WindowViews, shared_shadows: bool) -> Image {
+pub(super) fn frame(stage: &mut Stage, windows: &mut WindowViews, shared_shadows: bool) -> Image {
     let ctx = &mut stage.ctx;
     ctx.place_cameras();
     let post = &ctx.scene3d.post;

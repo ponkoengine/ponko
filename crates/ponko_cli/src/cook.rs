@@ -1220,12 +1220,13 @@ pub fn cook_files(files: Vec<(String, Vec<u8>)>, config: &Config, settings: &Set
 }
 
 /// Makes each Aseprite file of `all` (unless its rule keeps or skips it)
-/// into its sheet and JSON ([`aseprite::export`]): they take its place in
-/// `all`. Returns its entries and, for each file made, the Aseprite file it
-/// was made from. An export already beside an Aseprite file (from
-/// Aseprite, for hot reload while developing) is replaced, so the cooked
-/// files are never older than their source. A file that can't be read is
-/// an error.
+/// into its sheet and JSON ([`aseprite::export_linked`]): they take its
+/// place in `all`. A tileset that links to another Aseprite file reads it
+/// from the assets, and that file's bytes are part of the cache key.
+/// Returns its entries and, for each file made, the Aseprite file it was
+/// made from. An export already beside an Aseprite file (from Aseprite, for
+/// hot reload while developing) is replaced, so the cooked files are never
+/// older than their source. A file that can't be read is an error.
 #[cfg(feature = "aseprite")]
 fn convert_aseprite(
     all: &mut BTreeMap<String, Vec<u8>>,
@@ -1233,6 +1234,9 @@ fn convert_aseprite(
     cache: Option<&Cache>,
 ) -> Result<(Vec<Entry>, BTreeMap<String, String>), String> {
     let names: Vec<String> = all.keys().filter(|n| aseprite::is_aseprite(n)).cloned().collect();
+    // The sources as they were, for tilesets that link to another Aseprite
+    // file: each is replaced by its sheet in `all` as it is converted.
+    let sources: BTreeMap<String, Vec<u8>> = names.iter().map(|n| (n.clone(), all[n].clone())).collect();
     let (mut entries, mut made, mut errors) = (Vec::new(), BTreeMap::new(), Vec::new());
     for name in names {
         let rule = config.rule_for(&name);
@@ -1250,7 +1254,11 @@ fn convert_aseprite(
         // The JSON embeds the sheet's basename. Moving the pair to a
         // different directory reuses the conversion.
         let basename = png.rsplit('/').next().unwrap_or(&png);
-        let key = cache.map(|_| key(Kind::Other, &format!("aseprite:{split}:{basename}"), &bytes, &[]));
+        let find = |path: &str| sources.get(path).or_else(|| all.get(path));
+        let key = cache.map(|_| {
+            let linked = aseprite::linked_files(&name, &bytes, find);
+            key(Kind::Other, &format!("aseprite:{split}:{basename}"), &bytes, &linked)
+        });
         let cached = cache.zip(key.as_deref()).and_then(|(cache, key)| {
             let (bytes, note, _) = cache.get(key)?;
             let (json, png) = aseprite::cached_pair(&bytes)?;
@@ -1263,7 +1271,11 @@ fn convert_aseprite(
         let (converted, outcome) = match cached {
             Some(sheet) => (Ok(sheet), Outcome::Cached),
             None => {
-                let converted = aseprite::export(&name, &bytes, split);
+                let converted = aseprite::export_linked(&name, &bytes, split, &mut |path| {
+                    find(path)
+                        .cloned()
+                        .ok_or_else(|| format!("{path} is not among the assets"))
+                });
                 if let (Ok(sheet), Some((cache, key))) = (&converted, cache.zip(key.as_deref())) {
                     cache.put(key, &(aseprite::cache_pair(sheet), sheet.note.clone(), None));
                 }

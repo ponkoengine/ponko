@@ -1042,23 +1042,74 @@ fn images_are_compressed_without_relocating_meshopt_or_draco_geometry() {
         let (cooked, blob) = split_glb(&out).unwrap();
         assert_eq!(cooked["accessors"], json["accessors"]);
         assert_eq!(cooked["meshes"], json["meshes"]);
+        // The geometry and animation views (0 to 5) lie before the images.
         let views = json["bufferViews"].as_array().unwrap();
-        assert_eq!(&cooked["bufferViews"].as_array().unwrap()[..views.len()], views);
-        assert_eq!(&blob.unwrap()[..24], &bin[..24]);
+        assert_eq!(&cooked["bufferViews"].as_array().unwrap()[..6], &views[..6]);
+        let end = views[5]["byteOffset"].as_u64().unwrap() as usize + 24;
+        assert_eq!(&blob.unwrap()[..end], &bin[..end]);
         assert!(cooked["extensionsRequired"].as_array().unwrap().contains(&json!(ext)));
         assert_eq!(ktx2_of(&out, 0).1, 146);
-        assert!(note.contains("3 images compressed"));
+        assert!(note.contains("3 images compressed"), "{note}");
+        assert!(note.contains("bytes of replaced images dropped"), "{note}");
         assert!(gpu.is_some());
     }
 }
 
-#[cfg(all(feature = "textures", feature = "meshes"))]
+/// The bytes of buffer `b` a view (or a compressed stream) addresses.
+#[cfg(feature = "textures")]
+fn bytes_of<'a>(place: &Value, bin: &'a [u8]) -> &'a [u8] {
+    let at = place["byteOffset"].as_u64().unwrap_or(0) as usize;
+    &bin[at..at + place["byteLength"].as_u64().unwrap() as usize]
+}
+
+/// Moves a model's images to the front of its GLB chunk, so the geometry
+/// and every other view lie after them, and fixes the offsets.
+#[cfg(feature = "textures")]
+fn images_first(json: &mut Value, bin: &[u8]) -> Vec<u8> {
+    let images: std::collections::BTreeSet<usize> = json["images"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["bufferView"].as_u64().unwrap() as usize)
+        .collect();
+    let mut out = Vec::new();
+    let mut places: Vec<(usize, Option<&str>)> = images.iter().map(|&i| (i, None)).collect();
+    let views = json["bufferViews"].as_array().unwrap().len();
+    for i in (0..views).filter(|i| !images.contains(i)) {
+        places.push((i, None));
+        for name in COMPRESSED_GEOMETRY {
+            if json["bufferViews"][i]["extensions"][*name].is_object() {
+                places.push((i, Some(*name)));
+            }
+        }
+    }
+    for (i, stream) in places {
+        let place = match stream {
+            Some(name) => &mut json["bufferViews"][i]["extensions"][name],
+            None => &mut json["bufferViews"][i],
+        };
+        if place["buffer"].as_u64() != Some(0) {
+            continue;
+        }
+        let bytes = bytes_of(place, bin).to_vec();
+        out.resize(out.len().next_multiple_of(4), 0);
+        place["byteOffset"] = json!(out.len());
+        out.extend(bytes);
+    }
+    json["buffers"][0]["byteLength"] = json!(out.len());
+    out
+}
+
+#[cfg(all(feature = "meshes", feature = "textures"))]
 #[test]
 fn a_meshopt_models_images_become_ktx2_and_its_streams_stay_byte_for_byte() {
     let (json, bin) = meshopt_textured(16);
     let source = glb(&json, &bin);
     let (out, note, gpu) = cook("packed.glb", &source, &[], ALL).unwrap().unwrap();
-    assert_eq!(note, "EXT_meshopt_compression geometry kept, 3 images compressed");
+    assert!(
+        note.starts_with("EXT_meshopt_compression geometry kept, 3 images compressed, "),
+        "{note}"
+    );
     let (before, after) = gpu.unwrap();
     assert!(after * 3 < before, "{before} -> {after}");
     let (cooked, blob) = split_glb(&out).unwrap();
@@ -1066,26 +1117,182 @@ fn a_meshopt_models_images_become_ktx2_and_its_streams_stay_byte_for_byte() {
     assert_eq!(cooked["accessors"], json["accessors"]);
     assert_eq!(cooked["buffers"][1], json["buffers"][1], "the fallback buffer");
     let views = json["bufferViews"].as_array().unwrap();
-    assert_eq!(&cooked["bufferViews"].as_array().unwrap()[..views.len()], views);
+    assert_eq!(&cooked["bufferViews"].as_array().unwrap()[..6], &views[..6]);
     // Every compressed stream and the animation's data are where they were.
     for view in &views[..6] {
         let place = view["extensions"]["EXT_meshopt_compression"]
             .as_object()
             .map_or(view, |_| &view["extensions"]["EXT_meshopt_compression"]);
-        let at = place["byteOffset"].as_u64().unwrap() as usize;
-        let range = at..at + place["byteLength"].as_u64().unwrap() as usize;
-        assert_eq!(blob[range.clone()], bin[range]);
+        assert_eq!(bytes_of(place, &blob), bytes_of(place, &bin));
     }
-    // The four source images: three became KTX2 and were zeroed; the
-    // occlusion, merged into the metallic-roughness image, too.
     for (i, image) in json["images"].as_array().unwrap().iter().enumerate() {
         let view = &views[image["bufferView"].as_u64().unwrap() as usize];
-        let at = view["byteOffset"].as_u64().unwrap() as usize;
-        let range = at..at + view["byteLength"].as_u64().unwrap() as usize;
-        assert!(bin[range.clone()].starts_with(b"\x89PNG"), "image {i} of the source");
-        assert!(blob[range].iter().all(|b| *b == 0), "image {i} is zeroed");
+        assert!(bytes_of(view, &bin).starts_with(b"\x89PNG"), "image {i} of the source");
     }
     assert_eq!(ktx2_of(&out, 0).1, 146, "base color: BC7 sRGB");
+}
+
+/// The cooked chunk holds the kept data, at most 16 zeroed bytes per run of
+/// replaced images, and the KTX2 images: nothing else.
+#[cfg(feature = "textures")]
+fn assert_only_kept_data_and_ktx2(source_views: usize, cooked: &Value, blob: &[u8], kept: usize, runs: usize) {
+    let views = cooked["bufferViews"].as_array().unwrap();
+    let ktx2: usize = views[source_views..]
+        .iter()
+        .map(|v| v["byteLength"].as_u64().unwrap() as usize)
+        .sum();
+    let len = cooked["buffers"][0]["byteLength"].as_u64().unwrap() as usize;
+    // Alignment: up to 3 bytes before each view.
+    let padding = 3 * views.len();
+    assert!(
+        len >= kept + ktx2 && len <= kept + ktx2 + 16 * runs + padding,
+        "{len} bytes: {kept} kept, {ktx2} of KTX2, {runs} runs"
+    );
+    assert!(blob.len() >= len);
+}
+
+#[cfg(all(feature = "meshes", feature = "textures"))]
+#[test]
+fn replaced_images_before_the_geometry_are_dropped_and_its_streams_move_byte_for_byte() {
+    let (mut json, bin) = meshopt_textured(32);
+    let bin = images_first(&mut json, &bin);
+    let source = glb(&json, &bin);
+    let (out, note, _) = cook("packed.glb", &source, &[], ALL).unwrap().unwrap();
+    let (cooked, blob) = split_glb(&out).unwrap();
+    let blob = blob.unwrap();
+    assert_eq!(cooked["accessors"], json["accessors"]);
+    let ext = "EXT_meshopt_compression";
+    let images: Vec<usize> = json["images"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["bufferView"].as_u64().unwrap() as usize)
+        .collect();
+    let image_bytes: usize = images
+        .iter()
+        .map(|&v| json["bufferViews"][v]["byteLength"].as_u64().unwrap() as usize)
+        .sum();
+    let mut kept = 0;
+    for (i, view) in json["bufferViews"].as_array().unwrap().iter().enumerate() {
+        if images.contains(&i) {
+            continue;
+        }
+        let now = &cooked["bufferViews"][i];
+        // Nothing but the place changed, and it moved by a multiple of 16.
+        let place = |v: &Value| {
+            v["extensions"][ext]
+                .as_object()
+                .map_or(v.clone(), |_| v["extensions"][ext].clone())
+        };
+        let (then_place, now_place) = (place(view), place(now));
+        let (then_at, now_at) = (
+            then_place["byteOffset"].as_u64().unwrap(),
+            now_place["byteOffset"].as_u64().unwrap(),
+        );
+        assert!(now_at < then_at, "view {i} moved down");
+        assert_eq!((then_at - now_at) % 16, 0, "view {i} keeps its alignment");
+        assert_eq!(bytes_of(&now_place, &blob), bytes_of(&then_place, &bin), "view {i}");
+        let mut unmoved = now.clone();
+        if view["buffer"] == 0 {
+            unmoved["byteOffset"] = view["byteOffset"].clone();
+        } else {
+            unmoved["extensions"][ext]["byteOffset"] = view["extensions"][ext]["byteOffset"].clone();
+        }
+        assert_eq!(&unmoved, view, "view {i}");
+        kept += then_place["byteLength"].as_u64().unwrap() as usize;
+    }
+    let dropped: usize = note
+        .split(", ")
+        .find_map(|part| part.strip_suffix(" bytes of replaced images dropped"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    // Each run of image bytes (one per image here: alignment gaps part
+    // them) keeps up to 16 zeroed bytes.
+    assert!(
+        dropped + 16 * images.len() >= image_bytes && dropped <= image_bytes,
+        "{dropped} of {image_bytes}"
+    );
+    assert_only_kept_data_and_ktx2(
+        json["bufferViews"].as_array().unwrap().len(),
+        &cooked,
+        &blob,
+        kept,
+        images.len(),
+    );
+    assert!(out.len() < source.len(), "{} -> {} bytes", source.len(), out.len());
+}
+
+#[cfg(feature = "textures")]
+#[test]
+fn a_draco_models_views_after_replaced_images_move_and_keep_their_bytes() {
+    let (mut json, bin) = textured(2, 32);
+    let ext = "KHR_draco_mesh_compression";
+    json["extensionsUsed"] = json!([ext]);
+    json["extensionsRequired"] = json!([ext]);
+    json["meshes"][0]["primitives"][0]["extensions"] = json!({(ext): {"bufferView": 3, "attributes": {"POSITION": 0}}});
+    let bin = images_first(&mut json, &bin);
+    let options = Options {
+        images: Some(Images { basis: false }),
+        ..ALL
+    };
+    let (out, _, _) = cook("draco.glb", &glb(&json, &bin), &[], options).unwrap().unwrap();
+    let (cooked, blob) = split_glb(&out).unwrap();
+    let blob = blob.unwrap();
+    assert_eq!(cooked["meshes"], json["meshes"]);
+    assert_eq!(cooked["accessors"], json["accessors"]);
+    for i in 0..6 {
+        let (then, now) = (&json["bufferViews"][i], &cooked["bufferViews"][i]);
+        assert_eq!(bytes_of(now, &blob), bytes_of(then, &bin), "view {i}");
+        let moved = then["byteOffset"].as_u64().unwrap() - now["byteOffset"].as_u64().unwrap();
+        assert!(moved > 0 && moved % 16 == 0, "view {i} moved by {moved}");
+    }
+}
+
+#[cfg(feature = "textures")]
+#[test]
+fn replaced_images_in_a_data_uri_buffer_are_dropped_from_it() {
+    let (mut json, bin) = textured(2, 32);
+    let ext = "KHR_draco_mesh_compression";
+    json["extensionsUsed"] = json!([ext]);
+    json["meshes"][0]["primitives"][0]["extensions"] = json!({(ext): {"bufferView": 3, "attributes": {"POSITION": 0}}});
+    let bin = images_first(&mut json, &bin);
+    let uri = |bytes: &[u8]| {
+        use base64::Engine as _;
+        format!(
+            "data:application/octet-stream;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        )
+    };
+    json["buffers"][0]["uri"] = json!(uri(&bin));
+    let source = serde_json::to_vec(&json).unwrap();
+    let options = Options {
+        images: Some(Images { basis: false }),
+        ..ALL
+    };
+    let (out, note, _) = cook("model.gltf", &source, &[], options).unwrap().unwrap();
+    assert!(note.contains("bytes of replaced images dropped"), "{note}");
+    let cooked: Value = serde_json::from_slice(&out).unwrap();
+    let data = |b: &Value| base64(b["uri"].as_str().unwrap().split_once(",").unwrap().1).unwrap();
+    let now = data(&cooked["buffers"][0]);
+    assert_eq!(cooked["buffers"][0]["byteLength"], now.len());
+    assert!(now.len() + 1000 < bin.len(), "{} -> {}", bin.len(), now.len());
+    for i in 0..6 {
+        let (then, cooked_view) = (&json["bufferViews"][i], &cooked["bufferViews"][i]);
+        assert_eq!(bytes_of(cooked_view, &now), bytes_of(then, &bin), "view {i}");
+    }
+    // The KTX2 images went to a new buffer of their own.
+    assert!(ktx2_view(&cooked).is_some());
+}
+
+#[cfg(feature = "textures")]
+fn ktx2_view(json: &Value) -> Option<u64> {
+    let image = json["images"]
+        .as_array()?
+        .iter()
+        .find(|i| i["mimeType"] == "image/ktx2")?;
+    let view = &json["bufferViews"][image["bufferView"].as_u64()? as usize];
+    (view["buffer"].as_u64()? == 1).then_some(view["byteLength"].as_u64()?)
 }
 
 #[cfg(feature = "textures")]

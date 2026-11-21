@@ -18,11 +18,15 @@ use aseprite_loader::{
         image::Image,
         palette::{Palette, create_palette},
         raw_file::RawFile,
+        raw_file::parse_raw_file,
     },
     loader::{AsepriteFile, Frame, FrameCel, Layer, LayerSelection},
 };
 
-use crate::{MAX_BYTES, rgba_len, tiles::Tileset};
+use crate::{Load, MAX_BYTES, rgba_len, tiles::Tileset};
+
+/// How many files deep a tileset may link to another file's tileset.
+const MAX_LINKS: usize = 8;
 
 struct Node<'a> {
     layer: &'a LayerChunk<'a>,
@@ -38,6 +42,7 @@ pub(super) struct Renderer<'a> {
     roots: Vec<usize>,
     cels: Vec<BTreeMap<usize, &'a CelChunk<'a>>>,
     tilesets: BTreeMap<u32, &'a TilesetChunk<'a>>,
+    files: BTreeMap<u32, &'a str>,
     decoded_tilesets: BTreeMap<u32, Tileset>,
     tileset_budget: usize,
 }
@@ -48,6 +53,7 @@ impl<'a> Renderer<'a> {
         let mut roots = Vec::new();
         let mut groups: Vec<usize> = Vec::new();
         let mut tilesets = BTreeMap::new();
+        let files = external_files(file);
         for chunk in file.frames.iter().flat_map(|f| &f.chunks) {
             match chunk {
                 Chunk::Layer(layer) => {
@@ -113,9 +119,47 @@ impl<'a> Renderer<'a> {
             roots,
             cels,
             tilesets,
+            files,
             decoded_tilesets: BTreeMap::new(),
             tileset_budget: MAX_BYTES,
         })
+    }
+
+    /// Decodes the tilesets the tilemap layers use that link to a tileset
+    /// in another file instead of holding their tiles; `path` is this
+    /// file's asset path, which the links are relative to.
+    pub(super) fn link_tilesets(&mut self, path: &str, load: &mut Load<'_>) -> Result<(), String> {
+        let used: BTreeSet<u32> = self
+            .nodes
+            .iter()
+            .filter(|node| node.layer.layer_type == LayerType::Tilemap)
+            .filter_map(|node| node.layer.tileset_index)
+            .collect();
+        for id in used {
+            // A missing tileset or one without tiles or link is reported
+            // where a layer draws it.
+            let Some(&chunk) = self.tilesets.get(&id) else { continue };
+            let (None, Some(link)) = (&chunk.tiles, chunk.external_file) else {
+                continue;
+            };
+            let name = self
+                .files
+                .get(&link.external_file_id)
+                .ok_or_else(|| format!("tileset {:?} links to a file the file doesn't list", chunk.name))?;
+            let tiles = linked_tileset(
+                path,
+                name,
+                link.tileset_id,
+                (chunk.width, chunk.height),
+                load,
+                self.tileset_budget,
+                0,
+            )
+            .map_err(|e| format!("tileset {:?}: {e}", chunk.name))?;
+            self.tileset_budget -= tiles.byte_len();
+            self.decoded_tilesets.insert(id, tiles);
+        }
+        Ok(())
     }
 
     pub(super) fn split_layers(&self) -> Result<Vec<(usize, &'a str)>, String> {
@@ -306,6 +350,119 @@ impl<'a> Renderer<'a> {
         file.render_frame(0, canvas, &LayerSelection::All)
             .map_err(|err| err.to_string())
     }
+}
+
+/// The external files a file lists, by entry ID.
+fn external_files<'a>(file: &'a RawFile<'a>) -> BTreeMap<u32, &'a str> {
+    file.frames
+        .iter()
+        .flat_map(|f| &f.chunks)
+        .filter_map(|chunk| match chunk {
+            Chunk::ExternalFiles(list) => Some(list.files.iter().map(|f| (f.entry_id, f.file_name))),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// The asset paths of the files `file`'s tilesets link to instead of
+/// holding their tiles, resolved against `path`.
+pub(super) fn linked_files(path: &str, file: &RawFile<'_>) -> Result<Vec<String>, String> {
+    let files = external_files(file);
+    let mut out = BTreeSet::new();
+    for chunk in file.frames.iter().flat_map(|f| &f.chunks) {
+        if let Chunk::Tileset(tileset) = chunk
+            && tileset.tiles.is_none()
+            && let Some(link) = tileset.external_file
+            && let Some(name) = files.get(&link.external_file_id)
+        {
+            out.insert(resolve(path, name)?);
+        }
+    }
+    Ok(out.into_iter().collect())
+}
+
+/// Tileset `id` of the file `name` links to (relative to `base`), whose
+/// tiles must be `size`. That tileset may link on, up to [`MAX_LINKS`]
+/// files deep.
+fn linked_tileset(
+    base: &str,
+    name: &str,
+    id: u32,
+    size: (u16, u16),
+    load: &mut Load<'_>,
+    budget: usize,
+    depth: usize,
+) -> Result<Tileset, String> {
+    if depth >= MAX_LINKS {
+        return Err(format!(
+            "its links go more than {MAX_LINKS} files deep; is there a loop?"
+        ));
+    }
+    let path = resolve(base, name)?;
+    let bytes = load(&path).map_err(|e| format!("its file {path} can't be read: {e}"))?;
+    if bytes.len() > MAX_BYTES {
+        return Err(format!("its file {path} exceeds the 256 MiB byte limit"));
+    }
+    let file = parse_raw_file(&bytes).map_err(|e| format!("its file {path} is not a readable Aseprite file: {e}"))?;
+    let chunk = file
+        .frames
+        .iter()
+        .flat_map(|f| &f.chunks)
+        .find_map(|chunk| match chunk {
+            Chunk::Tileset(tileset) if tileset.id == id => Some(tileset),
+            _ => None,
+        })
+        .ok_or_else(|| format!("its file {path} has no tileset {id}"))?;
+    if (chunk.width, chunk.height) != size {
+        return Err(format!(
+            "tileset {:?} of {path} has {} x {} tiles, but the link expects {} x {}",
+            chunk.name, chunk.width, chunk.height, size.0, size.1
+        ));
+    }
+    if let (None, Some(link)) = (&chunk.tiles, chunk.external_file) {
+        let files = external_files(&file);
+        let next = files
+            .get(&link.external_file_id)
+            .ok_or_else(|| format!("tileset {:?} of {path} links to a file {path} doesn't list", chunk.name))?;
+        return linked_tileset(&path, next, link.tileset_id, size, load, budget, depth + 1);
+    }
+    let palette = if file.header.color_depth == ColorDepth::Indexed {
+        Some(create_palette(&file.header, &file.frames).map_err(|e| format!("{path}: {e}"))?)
+    } else {
+        None
+    };
+    Tileset::decode(chunk, file.header.color_depth, palette.as_ref(), budget).map_err(|e| format!("{path}: {e}"))
+}
+
+/// Resolves `name`, a path relative to the file at asset path `base`, to
+/// an asset path. Absolute paths and paths above the root are refused.
+pub(super) fn resolve(base: &str, name: &str) -> Result<String, String> {
+    let name = name.replace('\\', "/");
+    if name.starts_with('/') || name.as_bytes().get(1) == Some(&b':') {
+        return Err(format!(
+            "it links to {name:?}, an absolute path: link the tileset file by a path relative to this one"
+        ));
+    }
+    let base = base.replace('\\', "/");
+    let root = if base.starts_with('/') { "/" } else { "" };
+    let mut parts: Vec<&str> = match base.rsplit_once('/') {
+        Some((folder, _)) => folder.split('/').filter(|p| !p.is_empty() && *p != ".").collect(),
+        None => Vec::new(),
+    };
+    for part in name.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => match parts.last() {
+                Some(p) if *p != ".." && !p.ends_with(':') => {
+                    parts.pop();
+                }
+                _ => return Err(format!("it links to {name:?}, outside the folders it can read")),
+            },
+            p => parts.push(p),
+        }
+    }
+    Ok(format!("{root}{}", parts.join("/")))
 }
 
 pub(super) fn inflate(bytes: &[u8], len: usize) -> Result<Vec<u8>, String> {

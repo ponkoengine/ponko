@@ -8,7 +8,9 @@ take about 20,000 draw calls and most of a frame before anything else is drawn. 
 
 A crowd is the skinned sibling of an [instance batch](3d.md#gpu-driven-instances):
 one record per character, culled per view on the GPU, drawn by indirect
-draws in the normal depth, color, shadow and motion passes. Its clips are
+draws in the normal depth, color, shadow and motion passes, in global
+illumination's probes and in window views, and left out where occlusion
+culling finds it hidden. Its clips are
 baked once, every vertex is skinned in the vertex shader from the bake, and
 each character's clips play on by themselves between updates: a crowd that
 only stands and cheers costs no upload at all.
@@ -116,6 +118,54 @@ last frame's, so the animation itself moves the history, and an update that
 moves a character runs its motion from its last record (by its index in the
 list). A character an update appends starts from its new record, still.
 
+## Long sessions: the clock
+
+The times a character plays count from the crowd's last update, and the
+clips run on from there on the GPU. A crowd keeps when it was last updated
+in 64-bit seconds of game time; the shaders get the 32-bit seconds since
+then. So that number never grows large, every 16 seconds of game time the
+characters' clip times are moved on to the present (wrapped into a
+looping clip, held at the end of one that holds) and counted from there: a
+crowd that stands for a whole day steps its clips, and writes its motion
+vectors, as finely as in its first minute. On the GPU path that is one
+small compute dispatch over the characters every 16 seconds; on the CPU
+path a loop over them. A test runs a crowd through 24 hours of game time
+and checks its pose and its motion vectors.
+
+The times you hand an update are 32-bit too: give a time within its clip
+(a looping clip's time modulo its length, worked out in `f64` if it comes
+from a long-running clock), not seconds since the game began. At a day's
+86,400 s a 32-bit time is only precise to about 1/128 s.
+
+## In probes, window views and occlusion culling
+
+- **Global illumination.** The probes see a crowd's levels that are drawn
+  in cameras, lit as models are, and its shadow levels cast in the probes'
+  sun shadow map. A crowd is culled for the probes in seven more views
+  whatever the size of the grid (the probes' shadow map and one per face
+  direction, as GPU-driven instance batches are), and a face direction
+  keeps only the characters at least one probe pixel wide seen from one of
+  the frame's probes. A character's level there is the one for its
+  distance from the camera. Each of these views adds a visible list to the
+  crowd (4 bytes per character and level), only on frames that update
+  probes.
+- **Window views.** A [window view](viewports.md) culls and draws crowds
+  for its own camera, at the main frame's time, with its own motion
+  vectors: one more cull dispatch on the GPU path, one more CPU cull on
+  the CPU path. Crowds have no render layers: every view draws them.
+- **Occlusion culling.** With the camera's
+  [occlusion culling](3d.md#occlusion-culling) on, the camera's view
+  leaves out the characters whose bounding sphere (around every baked
+  pose, grown by how far the camera moved since) lies behind the depth
+  grid everywhere it covers. On the GPU path the cull pass reads the grid
+  as a uniform: the finest level of its pyramid that fits a uniform binding
+  (64 KiB, or the device's smaller limit; a level is the farthest depth of
+  four of the one below, so a coarser one hides less, never more). Hidden
+  characters still cast shadows. As with models, a character that comes
+  out from behind a wall can show a frame or two late, and since the grid
+  is of an earlier frame, so can one standing behind a character that
+  walked away.
+
 ## How it is drawn: two paths
 
 Every frame, on devices with compute culling and storage buffers
@@ -123,9 +173,11 @@ Every frame, on devices with compute culling and storage buffers
 
 - A compute pass tests each character's bounding sphere (around every level
   in every baked pose) against every view of the frame (the camera, the sun's
-  cascades, the shadow views of point and spot lights, target cameras), and
-  its distance against each level's band, and appends it to that view and
-  level's list.
+  cascades, the shadow views of point and spot lights, target cameras,
+  global illumination's views), the camera's against the occlusion grid,
+  and its distance against each level's band, and appends it to that view
+  and level's list. Every 16 seconds of game time a dispatch before it
+  moves the characters' clip times on (see the clock above).
 - Each (view, level, mesh part) is one indirect draw over its list. The
   vertex shader reads the character's record, finds its clips' two nearest
   frames, blends the joints' matrices between them and with the second clip,
@@ -200,10 +252,7 @@ for that, and it draws once per frame shown.
 
 ## Not yet
 
-- Crowds are not drawn into global illumination's probes or into
-  additional window views.
-- No occlusion culling for crowds (instance batches have it), and no
-  crossfades between levels.
+- No crossfades between levels.
 - Stencil states of a material are ignored on the GPU path. Transparent
   materials are drawn unsorted; give crowds opaque or cutout materials.
 - The order characters are drawn in within a level isn't fixed.

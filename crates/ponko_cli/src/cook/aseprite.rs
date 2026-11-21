@@ -28,9 +28,24 @@ pub struct Sheet {
 }
 
 /// Reads Aseprite file `name` and writes its sheet; `split` splits the
-/// frames by layer.
+/// frames by layer. A tileset that links to another file is an error: see
+/// [`export_linked`].
+#[cfg(test)]
 pub fn export(name: &str, bytes: &[u8], split: bool) -> Result<Sheet, String> {
-    let sheet = ponko_aseprite::decode(bytes, split, 16384).map_err(|e| format!("{name}: {e}"))?;
+    export_linked(name, bytes, split, &mut |path| {
+        Err(format!("{path} is not among the assets"))
+    })
+}
+
+/// [`export`], reading the files its tilesets link to with `load`, by
+/// their names among the assets.
+pub fn export_linked(
+    name: &str,
+    bytes: &[u8],
+    split: bool,
+    load: &mut ponko_aseprite::Load<'_>,
+) -> Result<Sheet, String> {
+    let sheet = ponko_aseprite::decode_linked(name, bytes, split, 16384, load).map_err(|e| format!("{name}: {e}"))?;
     let mut export = sheet.export;
     export["meta"]["app"] = serde_json::json!("ponko cook");
     export["meta"]["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
@@ -57,6 +72,31 @@ pub fn export(name: &str, bytes: &[u8], split: bool) -> Result<Sheet, String> {
         png,
         note: sheet.note,
     })
+}
+
+/// The files Aseprite file `name` reads through its tilesets' links, and
+/// those read in turn, each once, with their bytes from `find`: part of
+/// its cache key, so editing a linked tileset cooks the file again. A file
+/// `find` doesn't have is left out (the conversion reports it).
+pub(super) fn linked_files<'a>(
+    name: &str,
+    bytes: &[u8],
+    find: impl Fn(&str) -> Option<&'a Vec<u8>>,
+) -> Vec<(String, Vec<u8>)> {
+    let mut seen = std::collections::BTreeMap::new();
+    let mut todo = vec![(name.to_string(), bytes.to_vec())];
+    while let Some((name, bytes)) = todo.pop() {
+        for linked in ponko_aseprite::linked_files(&name, &bytes).unwrap_or_default() {
+            if seen.contains_key(&linked) || linked == name {
+                continue;
+            }
+            if let Some(found) = find(&linked) {
+                seen.insert(linked.clone(), found.clone());
+                todo.push((linked, found.clone()));
+            }
+        }
+    }
+    seen.into_iter().collect()
 }
 
 // Store the two outputs in one cache entry. A reader gets the complete

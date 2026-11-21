@@ -166,14 +166,16 @@ fn paint(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Texture, mut
     queue.submit(buffers);
 }
 
-/// Where `draw` puts its entity on the screen: the middle of the view
-/// between the panels.
+/// Where `draw` spawns its entity: under this window point of the camera
+/// before the editor's panels take their place.
 const ENTITY_AT: (u32, u32) = (SIZE.0 / 2, 170);
 
 /// One editor frame over a 2D world with an entity at `ENTITY_AT` (`select`:
 /// selected and renamed), as the editor app (`app`) or as the game with the
 /// inspector closed, drawn into an offscreen target over the world colour.
-fn draw(gpu: &TestGpu, app: bool, select: bool) -> Image {
+/// Also returns where the entity is drawn: the editor's camera shows the
+/// free view between the panels.
+fn draw(gpu: &TestGpu, app: bool, select: bool) -> (Image, (u32, u32)) {
     let mut ctx = Ctx::new(1.0 / 60.0, glam::Vec2::new(SIZE.0 as f32, SIZE.1 as f32));
     ctx.world.reflect::<Health>();
     let at = ctx
@@ -186,7 +188,8 @@ fn draw(gpu: &TestGpu, app: bool, select: bool) -> Image {
     paint(&gpu.device, &gpu.queue, &target, drawn, Some(WORLD));
     let image = Image::read(&gpu.device, &gpu.queue, &target);
     keep_image(&image);
-    image
+    let on_screen = ctx.camera.world_to_screen(at).round();
+    (image, (on_screen.x as u32, on_screen.y as u32))
 }
 
 #[test]
@@ -196,7 +199,7 @@ fn the_editor_app_frames_the_world_with_its_panels_and_draws_the_gizmo_on_the_se
     let world = |p: [u8; 4]| near(p, WORLD, 6);
     let panel = |p: [u8; 4]| !near(p, WORLD, 30);
 
-    let image = draw(&gpu, true, true);
+    let (image, (cx, cy)) = draw(&gpu, true, true);
     // The menu bar along the top and the status bar along the bottom.
     assert_region(&image, 0..w, 2..14, 0.95, "menu bar", panel);
     assert_region(&image, 0..w, h - 12..h - 2, 0.95, "status bar", panel);
@@ -206,7 +209,6 @@ fn the_editor_app_frames_the_world_with_its_panels_and_draws_the_gizmo_on_the_se
     // The asset panel along the bottom, above the status bar.
     assert_region(&image, 0..w, h - 200..h - 40, 0.9, "asset panel", panel);
     // The world between them, around the gizmo.
-    let (cx, cy) = ENTITY_AT;
     assert_region(&image, cx - 120..cx - 90, cy + 50..cy + 100, 0.9, "world", world);
     // The gizmo: the x arrow to the right of the entity, the y arrow below
     // it (screen y grows down).
@@ -219,12 +221,12 @@ fn the_editor_app_frames_the_world_with_its_panels_and_draws_the_gizmo_on_the_se
 
     // Negative controls: nothing selected draws no gizmo; the game without
     // edit mode (inspector closed) is all world.
-    let unselected = draw(&gpu, true, false);
+    let (unselected, (ux, uy)) = draw(&gpu, true, false);
     assert!(
-        unselected.fraction(cx + 20..cx + 60, cy - 3..cy + 4, red) < 0.01,
+        unselected.fraction(ux + 20..ux + 60, uy - 3..uy + 4, red) < 0.01,
         "no gizmo"
     );
-    let game = draw(&gpu, false, false);
+    let (game, _) = draw(&gpu, false, false);
     assert_region(&game, 0..w, 0..h, 0.999, "the game alone", world);
 }
 
