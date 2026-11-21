@@ -161,7 +161,9 @@ impl GpuTimer {
         self.cadence.every = n.max(1);
     }
 
-    /// Whether the frame begun last writes timestamps.
+    /// Whether the frame begun last writes timestamps (the scene
+    /// benchmark resolves only those).
+    #[cfg(all(feature = "3d", not(target_arch = "wasm32"), any(test, feature = "bench-internals")))]
     pub fn timing_this_frame(&self) -> bool {
         self.current.is_some()
     }
