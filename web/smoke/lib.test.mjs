@@ -16,6 +16,8 @@ import {
   parseArgs,
   parseFixtures,
   parseExpect,
+  reloadStepsOf,
+  checkAfterReload,
   parseMin,
   parsePress,
   startWatchdog,
@@ -114,6 +116,40 @@ test("presses and minimums parse", () => {
   assert.deepEqual(parseExpect("settings_at_start:Loaded"), { field: "settings_at_start", value: "Loaded" });
   assert.throws(() => parseExpect("Loaded"), /--after-reload wants/);
   assert.throws(() => parseFixtures('{"a":{"example":"a","afterReload":["x"]}}'), /--after-reload wants/);
+});
+
+test("reload steps: one from afterReload, several from reloads or --reload, each checked on its own page load", () => {
+  const fixtures = parseFixtures(JSON.stringify({
+    once: { example: "once", afterReload: ["kept:Loaded", "storage:persistent"] },
+    steps: { example: "steps", reloads: [["found:Saved", "reverted:1"], [], ["found:Build"]] },
+    none: { example: "none" },
+  }));
+  const kept = { field: "kept", value: "Loaded" };
+  assert.deepEqual(parseArgs(["--fixture", "once"], fixtures).reloads, [[kept, { field: "storage", value: "persistent" }]]);
+  assert.deepEqual(parseArgs(["--fixture", "steps"], fixtures).reloads, [
+    [{ field: "found", value: "Saved" }, { field: "reverted", value: "1" }],
+    [],
+    [{ field: "found", value: "Build" }],
+  ]);
+  assert.deepEqual(parseArgs(["--fixture", "none"], fixtures).reloads, []);
+  // On the command line --reload adds a step and --after-reload a field to
+  // the last one; flags replace the fixture's steps.
+  assert.deepEqual(parseArgs(["--fixture", "steps", "--after-reload", "kept:Loaded", "--reload", "--after-reload", "found:Build"], fixtures).reloads, [
+    [kept],
+    [{ field: "found", value: "Build" }],
+  ]);
+  assert.deepEqual(parseArgs(["--dir", "d", "--reload", "--reload"]).reloads, [[], []]);
+  assert.deepEqual(parseArgs(["--dir", "d", "--reload", "--after-reload", "kept:Loaded", "--reload"]).reloads, [[kept], []]);
+  assert.deepEqual(parseArgs(["--dir", "d", "--after-reload", "kept:Loaded"]).reloads, [[kept]]);
+
+  assert.throws(() => reloadStepsOf({ afterReload: ["a:b"], reloads: [["a:b"]] }), /not both/);
+  assert.throws(() => reloadStepsOf({ reloads: ["a:b"] }), /list of steps/);
+  assert.throws(() => parseFixtures('{"a":{"example":"a","reloads":[["x"]]}}'), /--after-reload wants/);
+
+  assert.equal(checkAfterReload({ kept: "Loaded", reverted: 1 }, [kept, { field: "reverted", value: "1" }], 1), null);
+  assert.equal(checkAfterReload({ kept: "Saved" }, [kept], 2), 'after reload 2, kept is "Saved", not Loaded');
+  assert.equal(checkAfterReload(undefined, [kept], 1), "after reload 1, kept is undefined, not Loaded");
+  assert.equal(checkAfterReload({}, [], 3), null, "a step without fields only has to run");
 });
 
 test("the engine's backend names map to the canvas's context", () => {

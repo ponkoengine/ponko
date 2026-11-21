@@ -506,7 +506,12 @@ fn map_into<A: Sync, B: Send>(input: &[A], out: &mut Vec<B>, parallel: bool, f: 
     out.clear();
     if parallel {
         use rayon::prelude::*;
-        input.par_iter().map(f).collect_into_vec(out);
+        // On the frame pool (on the web, its workers, not the page's
+        // thread), as parallel queries run.
+        crate::frame_pool::run(|| {
+            crate::profile_scope!("spatial/shared_rebuild");
+            input.par_iter().map(f).collect_into_vec(out);
+        });
     } else {
         out.extend(input.iter().map(f));
     }

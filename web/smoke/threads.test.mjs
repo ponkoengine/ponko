@@ -43,13 +43,14 @@ const isolatedRun = {
   batch_on_page: false,
   batch_threaded_runs: 160,
   hier_shared: true,
+  passes_shared: ["spatial/shared_rebuild", "flow/shared_directions"],
   schedule_threads: true,
   wait_off_page: true,
   job_off_page: true,
   group: "ready",
   group_off_page: true,
   group_bytes: 966,
-  checksum: 83614676.95699096,
+  checksum: 86576768.95592952,
 };
 
 const plainRun = {
@@ -62,13 +63,14 @@ const plainRun = {
   batch_on_page: true,
   batch_threaded_runs: 0,
   hier_shared: false,
+  passes_shared: [],
   schedule_threads: false,
   wait_off_page: false,
   job_off_page: false,
   group: "ready",
   group_off_page: false,
   group_bytes: 966,
-  checksum: 83614676.95699096,
+  checksum: 86576768.95592952,
 };
 
 test("the isolation headers are the two that make a page cross-origin isolated", () => {
@@ -110,11 +112,16 @@ test("an isolated run passes only when workers ran the queries, batches and jobs
   assert.ok(problems.some((p) => p.includes("query items ran on the page's thread")));
   assert.ok(problems.some((p) => p.includes("no batch")));
   assert.ok(problems.some((p) => p.includes("hierarchy shared no level")));
+  assert.ok(problems.some((p) => p.includes("own passes that went through the frame pool's runner: none")));
   assert.ok(problems.some((p) => p.includes("a job ran on the page's thread")));
   assert.ok(problems.some((p) => p.includes("decoded on the page's thread")));
   // A group that couldn't read its file on a worker fails the check by name.
   const failed = checkIsolated({ ...isolatedRun, group: 'failed: "crab.png" not found in assets/' });
   assert.deepEqual(failed, [`the asset group from assets/ didn't load (failed: "crab.png" not found in assets/)`]);
+  // One of the engine's passes is not "at least two".
+  assert.deepEqual(checkIsolated({ ...isolatedRun, passes_shared: ["flow/shared_directions"] }), [
+    "the engine's own passes that went through the frame pool's runner: flow/shared_directions, not at least 2",
+  ]);
   // One worker is not "more than one".
   assert.equal(checkIsolated({ ...isolatedRun, par_threads: 1 }).length, 1);
 });

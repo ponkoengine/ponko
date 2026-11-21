@@ -12,6 +12,10 @@
 //! - a scene, as a map of where its entities are (2D positions, or 3D ones
 //!   seen from above);
 //! - a sound, as its waveform (with the `audio` feature) and its length.
+//!
+//! The files come from an assets folder on disk, or (in a web build, which
+//! has no folders) from the files the page fetched and the editor saved,
+//! by name: see [`Source`].
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -20,6 +24,75 @@ use std::sync::mpsc;
 use serde_json::Value;
 
 use super::cook::AssetKind;
+
+/// Where the files thumbnails are made from are read.
+#[derive(Clone)]
+pub(crate) enum Source {
+    /// An assets folder on disk.
+    Folder(PathBuf),
+    /// Files in memory by asset name: a web build's fetched and saved
+    /// files (`assets::read_web_asset`), or a map in tests.
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    Memory(MemoryFiles),
+}
+
+/// The bytes of a file in memory by its asset name, if there is one.
+pub(crate) type MemoryFiles = std::sync::Arc<dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync>;
+
+impl Source {
+    /// The bytes of asset `rel`.
+    fn read(&self, rel: &str) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Folder(root) => std::fs::read(root.join(rel)).map_err(|e| e.to_string()),
+            Self::Memory(files) => files(rel).ok_or_else(|| "not among the page's files".to_string()),
+        }
+    }
+}
+
+impl std::fmt::Debug for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Folder(root) => f.debug_tuple("Folder").field(root).finish(),
+            Self::Memory(_) => f.write_str("Memory"),
+        }
+    }
+}
+
+impl From<&Path> for Source {
+    fn from(root: &Path) -> Self {
+        Self::Folder(root.to_path_buf())
+    }
+}
+
+impl From<&PathBuf> for Source {
+    fn from(root: &PathBuf) -> Self {
+        Self::Folder(root.clone())
+    }
+}
+
+impl From<&Source> for Source {
+    fn from(source: &Source) -> Self {
+        source.clone()
+    }
+}
+
+/// The asset name of `uri` as named by asset `rel` (a model's buffer or
+/// image beside it): `.` and `..` resolved, `None` if it leaves the root.
+#[cfg_attr(not(feature = "3d"), allow(dead_code))]
+fn beside(rel: &str, uri: &str) -> Option<String> {
+    let mut parts: Vec<&str> = rel.split('/').collect();
+    parts.pop();
+    for part in uri.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            _ => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
 
 /// Thumbnails are this many pixels on their long side.
 pub(crate) const SIZE: usize = 64;
@@ -137,21 +210,24 @@ struct RenderJob {
 
 /// [`make`], with model thumbnails from the cache folder `cache` when it
 /// holds this content's; else the software one, and the model to draw.
+///
+/// Files in memory (the web) have neither: their software thumbnail stays.
 fn make_cached(
-    root: &Path,
+    source: &Source,
     rel: &str,
     kind: AssetKind,
     cache: Option<&Path>,
 ) -> (Result<Thumb, String>, Option<RenderJob>) {
-    if kind != AssetKind::Model {
-        return (make(root, rel, kind), None);
-    }
+    let root = match source {
+        Source::Folder(root) if kind == AssetKind::Model => root,
+        _ => return (make(source, rel, kind), None),
+    };
     let file = root.join(rel);
     let bytes = match std::fs::read(&file) {
         Ok(b) => b,
         Err(e) => return (Err(format!("{rel}: {e}")), None),
     };
-    let soft = model(&file, &bytes).map_err(|e| format!("{rel}: {e}"));
+    let soft = model(source, rel, &bytes).map_err(|e| format!("{rel}: {e}"));
     let Ok(soft) = soft else { return (soft, None) };
     let png = cache.map(|c| c.join(format!("{}.png", content_key(&file, &bytes))));
     if let Some(png) = &png
@@ -174,19 +250,19 @@ fn make_cached(
     (Ok(soft), Some(job))
 }
 
-/// Makes the thumbnail of asset `rel` (relative to `root`, the assets
-/// folder) of kind `kind`.
-pub(crate) fn make(root: &Path, rel: &str, kind: AssetKind) -> Result<Thumb, String> {
-    let file = root.join(rel);
-    let bytes = std::fs::read(&file).map_err(|e| format!("{rel}: {e}"))?;
+/// Makes the thumbnail of asset `rel` of kind `kind`, from `source` (an
+/// assets folder, or the files in memory).
+pub(crate) fn make(source: impl Into<Source>, rel: &str, kind: AssetKind) -> Result<Thumb, String> {
+    let source = source.into();
+    let bytes = source.read(rel).map_err(|e| format!("{rel}: {e}"))?;
     match kind {
         AssetKind::Texture => texture(&bytes).map_err(|e| format!("{rel}: {e}")),
-        AssetKind::Model => model(&file, &bytes).map_err(|e| format!("{rel}: {e}")),
+        AssetKind::Model => model(&source, rel, &bytes).map_err(|e| format!("{rel}: {e}")),
         AssetKind::Sound => sound(&bytes).map_err(|e| format!("{rel}: {e}")),
         AssetKind::Prefab | AssetKind::Scene => {
             let json: Value = serde_json::from_slice(&bytes).map_err(|e| format!("{rel}: {e}"))?;
             if kind == AssetKind::Prefab
-                && let Some(thumb) = prefab_look(root, &json)
+                && let Some(thumb) = prefab_look(&source, &json)
             {
                 return Ok(thumb);
             }
@@ -208,7 +284,7 @@ fn texture(bytes: &[u8]) -> Result<Thumb, String> {
 }
 
 /// A prefab's first sprite texture, else its first model.
-fn prefab_look(root: &Path, json: &Value) -> Option<Thumb> {
+fn prefab_look(source: &Source, json: &Value) -> Option<Thumb> {
     let mut entities: Vec<&Value> = json["entities"]
         .as_array()
         .map(|a| a.iter().collect())
@@ -219,11 +295,10 @@ fn prefab_look(root: &Path, json: &Value) -> Option<Thumb> {
     let components = entities.iter().map(|e| e.get("components").unwrap_or(e));
     for c in components {
         if let Some(t) = c["Sprite"]["texture"].as_str() {
-            return std::fs::read(root.join(t)).ok().and_then(|b| texture(&b).ok());
+            return source.read(t).ok().and_then(|b| texture(&b).ok());
         }
         if let Some(m) = c["Model"]["mesh"].as_str() {
-            let file = root.join(m);
-            return std::fs::read(&file).ok().and_then(|b| model(&file, &b).ok());
+            return source.read(m).ok().and_then(|b| model(source, m, &b).ok());
         }
     }
     None
@@ -312,16 +387,16 @@ fn sound(_: &[u8]) -> Result<Thumb, String> {
 }
 
 #[cfg(feature = "3d")]
-fn model(file: &Path, bytes: &[u8]) -> Result<Thumb, String> {
+fn model(source: &Source, rel: &str, bytes: &[u8]) -> Result<Thumb, String> {
     let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| format!("not a glTF file: {e}"))?;
-    let folder = file.parent().unwrap_or(Path::new("."));
     let mut blob = gltf.blob.clone();
     let mut buffers = Vec::new();
     for buffer in gltf.buffers() {
         let data = match buffer.source() {
             gltf::buffer::Source::Bin => blob.take().ok_or("missing its binary chunk")?,
             gltf::buffer::Source::Uri(uri) if !uri.starts_with("data:") => {
-                std::fs::read(folder.join(uri)).map_err(|e| format!("{uri}: {e}"))?
+                let name = beside(rel, uri).ok_or_else(|| format!("{uri}: outside the assets"))?;
+                source.read(&name).map_err(|e| format!("{uri}: {e}"))?
             }
             gltf::buffer::Source::Uri(_) => return Err("embedded (data:) buffers have no thumbnail".into()),
         };
@@ -369,7 +444,7 @@ fn model(file: &Path, bytes: &[u8]) -> Result<Thumb, String> {
 }
 
 #[cfg(not(feature = "3d"))]
-fn model(_: &Path, _: &[u8]) -> Result<Thumb, String> {
+fn model(_: &Source, _: &str, _: &[u8]) -> Result<Thumb, String> {
     Err("models need the `3d` feature".into())
 }
 
@@ -438,9 +513,9 @@ fn raster(triangles: &[[glam::Vec3; 3]]) -> Thumb {
     t
 }
 
-/// What the worker is asked for: (generation, key, assets folder, path,
-/// kind, cache folder).
-type Job = (u64, String, PathBuf, String, AssetKind, Option<PathBuf>);
+/// What the worker is asked for: (generation, key, where the files are,
+/// path, kind, cache folder).
+type Job = (u64, String, Source, String, AssetKind, Option<PathBuf>);
 /// What it hands back: (generation, key, thumbnail, model to draw with
 /// the renderer).
 type Done = (u64, String, Result<Thumb, String>, Option<RenderJob>);
@@ -493,22 +568,23 @@ impl std::fmt::Debug for Thumbnails {
 }
 
 impl Thumbnails {
-    /// The thumbnail of `rel`, if made; else it's asked for (once).
-    pub fn get(&mut self, root: &Path, rel: &str, kind: AssetKind) -> Option<&Result<Thumb, String>> {
+    /// The thumbnail of `rel` (read from `source`: an assets folder, or
+    /// the files in memory), if made; else it's asked for (once).
+    pub fn get(&mut self, source: impl Into<Source>, rel: &str, kind: AssetKind) -> Option<&Result<Thumb, String>> {
         self.collect();
         if !self.ready.contains_key(rel) && self.asked.insert(rel.to_string()) {
             let job = (
                 self.generation,
                 rel.to_string(),
-                root.to_path_buf(),
+                source.into(),
                 rel.to_string(),
                 kind,
                 self.cache.clone(),
             );
             let sent = self.worker().send(job);
-            if let Err(mpsc::SendError((_, key, root, rel, kind, cache))) = sent {
-                // The worker is gone: make it here.
-                let (thumb, render) = make_cached(&root, &rel, kind, cache.as_deref());
+            if let Err(mpsc::SendError((_, key, source, rel, kind, cache))) = sent {
+                // The worker is gone (or the web build has none): make it here.
+                let (thumb, render) = make_cached(&source, &rel, kind, cache.as_deref());
                 self.ready.insert(key, thumb);
                 self.renders.extend(render);
             }
@@ -523,8 +599,8 @@ impl Thumbnails {
             let spawned = std::thread::Builder::new()
                 .name("ponko-thumbnails".into())
                 .spawn(move || {
-                    for (generation, key, root, rel, kind, cache) in rx {
-                        let (thumb, render) = make_cached(&root, &rel, kind, cache.as_deref());
+                    for (generation, key, source, rel, kind, cache) in rx {
+                        let (thumb, render) = make_cached(&source, &rel, kind, cache.as_deref());
                         if done.send((generation, key, thumb, render)).is_err() {
                             break;
                         }
@@ -548,7 +624,8 @@ impl Thumbnails {
 
     fn take(&mut self, (generation, key, thumb, render): Done) {
         // Asked for before a `clear`: made again when asked again.
-        if generation != self.generation {
+        // Or forgotten since (its file changed): made again when asked again.
+        if generation != self.generation || !self.asked.contains(&key) {
             return;
         }
         self.ready.insert(key, thumb);
@@ -646,6 +723,15 @@ impl Thumbnails {
             }
         }
         true
+    }
+
+    /// Forgets the thumbnail of `rel` (its file changed): it's made again
+    /// when asked for next.
+    pub fn forget(&mut self, rel: &str) {
+        self.collect();
+        self.ready.remove(rel);
+        self.asked.remove(rel);
+        self.renders.retain(|job| job.rel != rel);
     }
 
     /// Forgets every thumbnail (files changed).
@@ -791,6 +877,119 @@ mod tests {
         assert_eq!(&cached.rgba[..4], [255, 0, 255, 255]);
         assert_eq!(cached.note, soft.note, "with its triangle count");
         assert!(!thumbs.is_pending(), "nothing to draw");
+    }
+
+    /// A map of files by asset name, as a web build has them.
+    fn in_memory(files: Vec<(&str, Vec<u8>)>) -> Source {
+        let files: HashMap<String, Vec<u8>> = files.into_iter().map(|(n, b)| (n.to_string(), b)).collect();
+        Source::Memory(std::sync::Arc::new(move |name: &str| files.get(name).cloned()))
+    }
+
+    #[test]
+    fn thumbnails_of_files_in_memory_match_the_ones_made_from_the_folder() {
+        let tile = std::fs::read(fixtures().join("tile.png")).unwrap();
+        let prefab = serde_json::json!({ "format": "ponko-prefab", "version": 1,
+            "components": { "Sprite": { "texture": "sprites/tile.png" } } });
+        let scene = serde_json::json!({ "format": "ponko-world", "entities": [
+            { "entity": 0, "components": { "Transform2D": { "position": [0.0, 0.0] } } }
+        ]});
+        let memory = in_memory(vec![
+            ("sprites/tile.png", tile),
+            ("prefabs/p.json", prefab.to_string().into_bytes()),
+            ("scenes/s.json", scene.to_string().into_bytes()),
+        ]);
+        let from_disk = make(&fixtures(), "tile.png", AssetKind::Texture).unwrap();
+        assert_eq!(
+            make(&memory, "sprites/tile.png", AssetKind::Texture).unwrap(),
+            from_disk
+        );
+        assert_eq!(
+            make(&memory, "prefabs/p.json", AssetKind::Prefab).unwrap(),
+            from_disk,
+            "the prefab's sprite, read from memory too"
+        );
+        assert_eq!(
+            make(&memory, "scenes/s.json", AssetKind::Scene).unwrap(),
+            map(&scene, false)
+        );
+        let missing = make(&memory, "sprites/nope.png", AssetKind::Texture).unwrap_err();
+        assert!(missing.contains("sprites/nope.png"), "{missing}");
+
+        // Asked for through the panel's cache: made from memory, kept.
+        let mut thumbs = Thumbnails::default();
+        assert!(thumbs.get(&memory, "sprites/tile.png", AssetKind::Texture).is_none());
+        assert!(thumbs.wait(std::time::Duration::from_secs(10)));
+        assert_eq!(
+            thumbs.get(&memory, "sprites/tile.png", AssetKind::Texture),
+            Some(&Ok(from_disk))
+        );
+        assert!(!thumbs.is_pending(), "no renderer pass for files in memory");
+    }
+
+    #[test]
+    fn a_forgotten_thumbnail_is_made_again_from_the_new_file() {
+        let tile = std::fs::read(fixtures().join("tile.png")).unwrap();
+        let scene = serde_json::json!({ "format": "ponko-world", "entities": [] });
+        let mut thumbs = Thumbnails::default();
+        let first = in_memory(vec![("a.png", tile.clone())]);
+        thumbs.get(&first, "a.png", AssetKind::Texture);
+        assert!(thumbs.wait(std::time::Duration::from_secs(10)));
+        let tile_thumb = thumbs.get(&first, "a.png", AssetKind::Texture).unwrap().clone();
+        // Not made again until forgotten.
+        let other = in_memory(vec![("a.png", scene.to_string().into_bytes())]);
+        assert_eq!(thumbs.get(&other, "a.png", AssetKind::Texture), Some(&tile_thumb));
+        thumbs.forget("a.png");
+        assert!(thumbs.get(&other, "a.png", AssetKind::Texture).is_none());
+        assert!(thumbs.wait(std::time::Duration::from_secs(10)));
+        assert!(
+            thumbs.get(&other, "a.png", AssetKind::Texture).unwrap().is_err(),
+            "the new file isn't a picture"
+        );
+    }
+
+    #[test]
+    fn files_a_model_names_are_found_beside_it() {
+        assert_eq!(beside("models/a.gltf", "a.bin").as_deref(), Some("models/a.bin"));
+        assert_eq!(
+            beside("models/a.gltf", "./tex/b.png").as_deref(),
+            Some("models/tex/b.png")
+        );
+        assert_eq!(
+            beside("models/a.gltf", "../shared/a.bin").as_deref(),
+            Some("shared/a.bin")
+        );
+        assert_eq!(beside("a.gltf", "a.bin").as_deref(), Some("a.bin"));
+        assert_eq!(beside("a.gltf", "../a.bin"), None, "outside the assets");
+    }
+
+    #[cfg(feature = "3d")]
+    #[test]
+    fn a_model_in_memory_reads_its_buffer_beside_it() {
+        let positions: Vec<u8> = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        let gltf = serde_json::json!({
+            "asset": { "version": "2.0" },
+            "scene": 0,
+            "scenes": [{ "nodes": [0] }],
+            "nodes": [{ "mesh": 0 }],
+            "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 } }] }],
+            "buffers": [{ "byteLength": 36, "uri": "../buffers/tri.bin" }],
+            "bufferViews": [{ "buffer": 0, "byteLength": 36 }],
+            "accessors": [{ "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                "min": [0.0, 0.0, 0.0], "max": [1.0, 0.0, 1.0] }]
+        });
+        let memory = in_memory(vec![
+            ("models/tri.gltf", gltf.to_string().into_bytes()),
+            ("buffers/tri.bin", positions),
+        ]);
+        let t = make(&memory, "models/tri.gltf", AssetKind::Model).unwrap();
+        assert!(t.is_drawn());
+        assert_eq!(t.note.as_deref(), Some("1 triangles"));
+        let alone = in_memory(vec![("models/tri.gltf", gltf.to_string().into_bytes())]);
+        let err = make(&alone, "models/tri.gltf", AssetKind::Model).unwrap_err();
+        assert!(err.contains("tri.bin"), "the missing buffer is named: {err}");
     }
 
     #[test]

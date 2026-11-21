@@ -521,16 +521,23 @@ query, like every ctx call; a query row has its own:
 `ponko_ai_brain_wake` makes a row's brain think at the next
 `ponko_ctx_ai_think` whatever its period (Rust `Brain::wake`), and
 `ponko_ai_brain_signal` gives it a signal at once (Rust `Brain::signal`),
-where `ponko_ctx_ai_signal` sends an event, which a parallel loop can't.
+where `ponko_ctx_ai_signal` sends an event, which a parallel loop can't. A
+signal can carry a value, which a `wait_for` node with `"store"` writes to
+the blackboard (Rust `Brain::signal_with`): `ponko_ai_brain_signal_num`,
+`_entity`, `_vec2` and `_vec3`, in `ponko_query` and `ponko_query_par` alike.
 
 In C++ the typed loops take the rows like components:
 `world().each` and `each_par` hand an `ai::brain_row` and an
 `ai::blackboard_row` parameter (by value, in any place among the others)
 the entity's brain and blackboard, visit only entities with a brain, and
-keep their filters (`each<ponko::with<Guard>>`). `ai::query` /
-`ai::query_par` hand a whole chunk and its `ai::rows`, and the older
-`ai::each<Ts...>(ctx, fn)` still calls `fn(entity, ai::brain_row,
-ai::blackboard_row, Ts&...)`:
+keep their filters (`each<ponko::with<Guard>>`). That typed `each` is the
+one way to loop over brains; `ai::each<Ts...>(ctx, fn)` is only another
+spelling of it (it calls `world().each` for `fn(entity, ai::brain_row,
+ai::blackboard_row, Ts&...)`), kept so older code compiles. `ai::query` /
+`ai::query_par` hand a whole chunk and its `ai::rows`, for code that works
+on arrays. A row's `brain.signal_num(key, v)`, `signal_entity`,
+`signal_vec2` and `signal_vec3` carry a value (here, where the sentry
+spotted something), also from `each_par`:
 
 ```cpp
 {{#include ../../examples/cpp/guide.cpp:ai_loop}}
