@@ -1104,6 +1104,11 @@ mod backend {
             self.next += 1;
             self.next
         }
+        /// Nothing is heard without the `audio` feature.
+        #[cfg(feature = "video")]
+        pub fn soundtrack_position(&self, _id: u64) -> Option<f64> {
+            None
+        }
         pub fn sync_buses(&mut self) {}
         pub fn effects(&mut self, _id: u64, _effects: AudioEffects) {}
         #[cfg(feature = "3d")]

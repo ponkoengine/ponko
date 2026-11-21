@@ -42,6 +42,11 @@ enum Av1 {}
 #[cfg(not(target_arch = "wasm32"))]
 use av1::Av1;
 
+/// How far apart, in seconds, the picture and the sound may drift before
+/// the one behind catches up: more than a mixer block or two, less than
+/// the eye notices.
+const SYNC_SECONDS: f64 = 0.1;
+
 /// The Matroska codec id of AV1 pictures.
 const AV1: &str = "V_AV1";
 /// The Matroska codec id of Vorbis sound.
@@ -343,11 +348,14 @@ impl Video {
     /// is playing, and shows the frame for the new time. Call it once a
     /// frame, from a frame system.
     ///
-    /// The picture follows the frame clock and the sound the audio clock;
-    /// both run in real time. A frame longer than 0.25 s (a load that
-    /// blocks) advances the clock by only 0.25 s: call
-    /// [`seek`](Self::seek) with [`time`](Self::time) afterwards to bring
-    /// the sound back in line.
+    /// The picture follows the frame clock and the sound the audio
+    /// device's; both run in real time. When they drift more than a tenth
+    /// of a second apart, the one behind catches up: after frames that
+    /// didn't run while the sound played on (a load that blocked, a game
+    /// stopped in the debugger, a browser tab in the background) the
+    /// picture skips ahead to the sound, and a sound that started late
+    /// (a browser waiting for the first click) starts again at the
+    /// picture's time.
     ///
     /// [`Time::frame_dt`]: crate::time::Time::frame_dt
     ///
@@ -356,7 +364,8 @@ impl Video {
     /// frame stays shown).
     pub fn update(&mut self, ctx: &mut Ctx) -> Result<(), Error> {
         let dt = ctx.time.frame_dt();
-        self.advance(ctx, dt)
+        self.advance(ctx, dt)?;
+        self.follow_sound(ctx)
     }
 
     /// [`update`](Self::update) by `seconds` instead of the frame's time:
@@ -386,6 +395,29 @@ impl Video {
         }
         self.time = time;
         self.show(ctx, time)
+    }
+
+    /// Brings the picture and the sound together again when they are more
+    /// than [`SYNC_SECONDS`] apart (see [`update`](Self::update)).
+    fn follow_sound(&mut self, ctx: &mut Ctx) -> Result<(), Error> {
+        let (true, Some(voice)) = (self.playing, self.voice) else {
+            return Ok(());
+        };
+        let Some(heard) = ctx.audio.soundtrack_position(voice) else {
+            return Ok(());
+        };
+        let drift = heard - self.time;
+        if drift > SYNC_SECONDS {
+            // The sound played on without the picture: skip ahead to it.
+            self.advance(ctx, drift as f32)
+        } else if drift < -SYNC_SECONDS {
+            // The sound is late: it starts again where the picture is.
+            self.stop_sound(&mut ctx.audio);
+            self.start_sound(&mut ctx.audio);
+            Ok(())
+        } else {
+            Ok(())
+        }
     }
 
     /// Frees its texture and sound, and stops the sound.
@@ -562,6 +594,17 @@ impl Audio {
         self.sounds_live.insert(id);
         self.ledger.made(crate::inventory::AssetClass::Sound, id);
         Ok(Sound::new(id, seconds))
+    }
+
+    /// Seconds into soundtrack voice `playing` the mixer has played up to:
+    /// the clock the picture follows. `None` when nothing is mixed (a
+    /// headless run without an offline output, no `audio` feature) or the
+    /// voice isn't heard yet.
+    pub(crate) fn soundtrack_position(&self, playing: Playing) -> Option<f64> {
+        if self.silent_output() {
+            return None;
+        }
+        self.backend.soundtrack_position(playing.0)
     }
 
     /// Plays soundtrack `sound` on `bus` from `from` seconds in. Like
