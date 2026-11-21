@@ -398,12 +398,25 @@ fn streamed_cells_redraw_only_the_shadow_views_they_reach() {
 /// in view from above under a lit sky with sun shadows; each cell on its
 /// own (`separate`, as before cells were drawn together) or not.
 fn field(path: BatchPath, separate: bool, cells: usize, columns: i32) -> Option<(BatchRig, Vec<InstanceCell>)> {
+    field_of(path, (separate, false), cells, columns)
+}
+
+/// [`field`], with the GPU-driven path's cells in their own pools but each
+/// drawn on its own (`ungrouped`), as on a device without
+/// `Features::INDIRECT_FIRST_INSTANCE`.
+fn field_of(
+    path: BatchPath,
+    (separate, ungrouped): (bool, bool),
+    cells: usize,
+    columns: i32,
+) -> Option<(BatchRig, Vec<InstanceCell>)> {
     let mut rig = BatchRig::new(RigSetup::default())?;
     if path == BatchPath::Gpu && !support::needs(&rig.gpu.device, GpuFeature::ComputeCulling) {
         return None;
     }
     rig.renderer.batching.path = path;
     rig.renderer.batching.separate_cells = separate;
+    rig.renderer.batching.ungrouped_cells = ungrouped;
     ground(&mut rig);
     let mesh = rig.mesh(&MeshData::cube(1.0), glow(Color::rgb(0.2, 0.9, 0.4)));
     let batch = rig.ctx.gfx.create_instance_batch(mesh, &[], Default::default());
@@ -564,4 +577,155 @@ fn cpu_cells_take_ranges_of_one_vertex_buffer_and_reuse_freed_ones() {
         free_cell(&mut together, handle);
     }
     assert_eq!(together.renderer.cell_vertices_use().map(|u| u.1), Some(0));
+}
+
+#[test]
+fn cpu_cells_next_to_each_other_in_the_shared_buffer_draw_as_one() {
+    let (Some((mut apart, apart_handles)), Some((mut together, handles))) =
+        (field(BatchPath::Cpu, true, 24, 6), field(BatchPath::Cpu, false, 24, 6))
+    else {
+        return;
+    };
+    let (a, b) = (apart.image(), together.image());
+    assert!(
+        a.rgba == b.rgba,
+        "joined draws draw the same: {}",
+        support::diff(&a, &b, 0)
+    );
+    // Every cell is in the camera's view and their ranges follow one
+    // another: one draw for all 24.
+    let in_view = together
+        .renderer
+        .static_batches
+        .iter()
+        .flatten()
+        .filter(|b| b.visible.first().is_some_and(|l| !l.is_empty()))
+        .count();
+    assert_eq!(in_view, 24, "every cell is culled into the camera's view");
+    assert_eq!(together.renderer.joined_cell_draws(0), 1);
+    let (apart_n, together_n) = (drawn(&mut apart), drawn(&mut together));
+    eprintln!("draws: apart {} together {}", apart_n.draws, together_n.draws);
+    // Joining keeps its lists between frames: a steady frame allocates
+    // nothing preparing or recording the cells' draws.
+    assert_eq!(together.batch_preparation_allocations(), 0);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .use_current_thread()
+        .build()
+        .unwrap();
+    let [_, ran, ours] = together.recording_allocations(&pool);
+    assert!(ran > 0, "the batch drawing code ran");
+    assert_eq!(ours, 0, "the batch drawing code allocated recording the joined draws");
+    assert!(
+        together_n.draws + 2 * 23 <= apart_n.draws,
+        "the camera's two passes draw the 24 cells once each ({} against {})",
+        together_n.draws,
+        apart_n.draws
+    );
+    // A freed cell leaves a gap in the buffer: the run splits around it,
+    // and a cell taking its range joins it again.
+    free_cell(&mut apart, apart_handles[9]);
+    free_cell(&mut together, handles[9]);
+    let (a, b) = (apart.image(), together.image());
+    assert!(a.rgba == b.rgba, "a gap draws the same: {}", support::diff(&a, &b, 0));
+    assert_eq!(together.renderer.joined_cell_draws(0), 2, "split around the gap");
+    let batch = InstanceBatch {
+        id: together.ctx.gfx.assets3d.instance_batches
+            [together.ctx.gfx.instance_cell_row(handles[0]).unwrap() as usize]
+            .as_ref()
+            .unwrap()
+            .parent
+            .unwrap(),
+    };
+    let apart_batch = InstanceBatch {
+        id: apart.ctx.gfx.assets3d.instance_batches
+            [apart.ctx.gfx.instance_cell_row(apart_handles[0]).unwrap() as usize]
+            .as_ref()
+            .unwrap()
+            .parent
+            .unwrap(),
+    };
+    let (transforms, colors) = cell_instances((3, -1), 3);
+    add_cell(&mut together, batch, &transforms, &colors);
+    add_cell(&mut apart, apart_batch, &transforms, &colors);
+    let (a, b) = (apart.image(), together.image());
+    assert!(
+        a.rgba == b.rgba,
+        "the refilled gap draws the same: {}",
+        support::diff(&a, &b, 0)
+    );
+    assert_eq!(together.renderer.joined_cell_draws(0), 1, "the new cell took the gap");
+    // Negative control: a cell missing on one side only shows.
+    free_cell(&mut together, handles[0]);
+    let (a, b) = (apart.image(), together.image());
+    assert!(a.rgba != b.rgba, "a missing cell must show");
+}
+
+#[test]
+fn gpu_cells_take_pools_of_their_own_whose_blocks_start_on_a_record() {
+    let (Some((mut apart, apart_handles)), Some((mut together, handles)), Some((mut alone, alone_handles))) = (
+        field(BatchPath::Gpu, true, 24, 6),
+        field(BatchPath::Gpu, false, 24, 6),
+        field_of(BatchPath::Gpu, (false, true), 24, 6),
+    ) else {
+        return;
+    };
+    let align = together.renderer.storage_alignment().expect("GPU-driven");
+    let rows = |rig: &BatchRig, handles: &[InstanceCell]| -> Vec<u32> {
+        handles
+            .iter()
+            .map(|&c| rig.ctx.gfx.instance_cell_row(c).unwrap())
+            .collect()
+    };
+    // A cell of 9 instances: a header, 9 records and its one cell box.
+    let bytes = 16 + 9 * 96 + 32;
+    for (rig, handles, own) in [
+        (&together, &handles, true),
+        (&alone, &alone_handles, true),
+        (&apart, &apart_handles, false),
+    ] {
+        for row in rows(rig, handles) {
+            let (start, cells) = rig.renderer.batch_record_start(row).expect("GPU-driven");
+            assert_eq!(cells, own, "cells in pools of their own: {own}");
+            let step = if own { 96 } else { align };
+            assert_eq!(start % step, 0, "a block starts on a multiple of {step}");
+        }
+        let padded = if own {
+            u64::div_ceil(bytes, 96) * 96
+        } else {
+            u64::div_ceil(bytes, align) * align
+        };
+        let (used, _) = rig.renderer.pool_records();
+        assert_eq!(used, 24 * padded, "each block is padded to its pool's alignment only");
+    }
+    eprintln!("storage binding alignment {align}");
+    // Drawn together, each on its own from a cell pool, or as before: the
+    // same pixels.
+    let (a, b, c) = (apart.image(), together.image(), alone.image());
+    assert!(a.rgba == b.rgba, "together: {}", support::diff(&a, &b, 0));
+    assert!(
+        a.rgba == c.rgba,
+        "on their own from a cell pool: {}",
+        support::diff(&a, &c, 0)
+    );
+    for rig in [&together, &alone] {
+        rig.renderer.check_batch_order(&rig.gpu.device, &rig.gpu.queue);
+    }
+    // Freed cells' ranges go to the next ones; still the same pixels.
+    for (rig, handles) in [
+        (&mut apart, &apart_handles),
+        (&mut together, &handles),
+        (&mut alone, &alone_handles),
+    ] {
+        for &h in &handles[4..10] {
+            free_cell(rig, h);
+        }
+    }
+    let (a, b, c) = (apart.image(), together.image(), alone.image());
+    assert!(a.rgba == b.rgba, "together, after frees: {}", support::diff(&a, &b, 0));
+    assert!(a.rgba == c.rgba, "alone, after frees: {}", support::diff(&a, &c, 0));
+    // Negative control: a cell missing on one side only shows.
+    free_cell(&mut together, handles[0]);
+    let (a, b) = (apart.image(), together.image());
+    assert!(a.rgba != b.rgba, "a missing cell must show");
 }
