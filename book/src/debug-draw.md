@@ -164,6 +164,27 @@ lists every 3D camera (the window's, each extra view's, each target
 camera's) under **Cameras** with three buttons for its `debug_draw`:
 **Default**, **On** and **Off**.
 
+A debug map, a camera high above drawing
+into a render target that shows the paths and sight cones while the
+player's view leaves them out:
+
+<div class="lang-pair">
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:debug_map_camera}}
+```
+
+</div>
+<div>
+
+```c
+{{#include ../../examples/cpp/guide.c:debug_map_camera_c}}
+```
+
+</div>
+</div>
+
 In a render target the 3D lines and
 depth-tested labels are drawn against that camera's own depth, and 3D
 labels on top are on top there as they are on screen: drawn last, over the

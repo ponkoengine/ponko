@@ -468,9 +468,35 @@ let nets: Vec<NetMessages> = NetMessages::loopback_link(3, link)
 
 The dice are a hash of the seed, the sender and the datagram's number, so
 the same seed loses and delays the same datagrams on every run (on game
-time, with the sides taking turns as below). `LoopbackLink` is Rust-only
-for now; C and C++ tests use the plain loopback. To make a run the same
-every time:
+time, with the sides taking turns as below).
+
+C and C++ tests get the same link: `PonkoLoopbackLink` is a versioned
+descriptor (loss as a share, delay and jitter in seconds, the seed) that
+`ponko_net_messages_loopback_link` takes, and C++'s
+`net_messages::loopback(players, link)` takes as `ponko::loopback_link`.
+The delays count on each endpoint's own clock, so a test that steps the
+endpoints itself polls them all with the same step
+(`ponko_net_messages_poll_elapsed`, `net_messages::poll_elapsed`); endpoints a
+game polls count its time with `game_clock`:
+
+<div class="lang-pair">
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:loopback_link}}
+```
+
+</div>
+<div>
+
+```c
+{{#include ../../examples/cpp/guide.c:loopback_link_c}}
+```
+
+</div>
+</div>
+
+To make a run the same every time:
 
 1. **Count game time.** `NetMessages::game_clock()` makes an endpoint's
    resends and timeouts count the game's ticks instead of the wall clock.

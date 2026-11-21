@@ -4693,6 +4693,115 @@ static void world_brains_in_loops() {
     CHECK(b.get_vec3(p3).value_or(ponko::vec3{}).z == 3 && !b.get_vec3(at) && !b.get_entity(p3));
 }
 
+// Brain rows in typed loops (gl#190): each and each_par take ai::brain_row and ai::blackboard_row beside
+// the components, in any order and with filters; rows woken and signalled from the parallel loop.
+static void brain_rows_in_typed_loops() {
+    namespace ai = ponko::ai;
+    struct Spot { float x, y; };
+    struct Gate { int open; };
+    const auto alert = ai::key("alert"), chase = ai::key("chase"), idle = ai::key("idle"), door = ai::key("door");
+    const auto at = ai::key("at"), enter = ai::key("enter");
+    std::vector<ponko::entity> guards, guests;
+    int rows_seen = 0, gates_seen = 0;
+    std::size_t brains_counted = 0;
+    ponko::game("brain rows", 1, 1)
+        .sim_system([&](ponko::ctx& ctx) {            // senses, on all cores, from tick 1
+            if (ctx.sim_tick() != 1) return;
+            ctx.world().each_par([&](ponko::entity e, const Spot& spot, ai::blackboard_row board, ai::brain_row brain) {
+                board.set_flag(alert, true);
+                board.set_vec2(at, {spot.x, spot.y});
+                // Guards with an even index think at once; the others not for a million ticks.
+                if ((e & 1) == 0) brain.wake();
+            });
+            ctx.world().each_par<ponko::with<Gate>>([&](ai::brain_row brain) { brain.signal(door); });
+        }, "senses")
+        .sim_system(ai::think, "think")
+        .sim_system([&](ponko::ctx& ctx) {            // looks, row by row
+            if (ctx.sim_tick() != 1) return;
+            ctx.world().each([&](ponko::entity e, ai::brain_row brain, const Spot& spot, ai::blackboard_row board) {
+                ++rows_seen;
+                CHECK(board.get_vec2(at).value_or(ponko::vec2{}).x == spot.x);
+                CHECK(brain.action() == ((e & 1) == 0 ? chase : idle));
+            });
+            ctx.world().each<ponko::with<Gate>>([&](ai::brain_row brain) {
+                ++gates_seen;
+                CHECK(brain.doing(enter));
+            });
+            brains_counted = ctx.world().count<ai::brain_row>();
+        }, "looks")
+        .run_headless(2, [&](ponko::ctx& ctx) {
+            ai::add_tree(ctx, "guard", ai::behavior_tree(R"({"root": {"selector": [
+                {"sequence": [{"check": "alert"}, {"do": "chase"}]}, {"do": "idle"}
+            ]}})"));
+            ai::add_tree(ctx, "guest", ai::behavior_tree(R"({"root": {"sequence": [
+                {"wait_for": "door"}, {"do": "enter"}
+            ]}})"));
+            for (int i = 0; i < 400; ++i) {
+                const ponko::entity e = ctx.world().spawn(Spot{float(i), 1});
+                ai::add_brain(ctx, e, "guard", 1000000);
+                guards.push_back(e);
+            }
+            for (int i = 0; i < 3; ++i) {
+                const ponko::entity e = ctx.world().spawn(Gate{0});
+                ai::add_brain(ctx, e, "guest", 1000000);
+                guests.push_back(e);
+            }
+            ctx.world().spawn(Spot{9, 9});   // no brain: never visited
+        });
+    CHECK(rows_seen == 400 && gates_seen == 3 && brains_counted == 403);
+}
+
+// A lossy, reordering loopback link (gl#190), stepped on the endpoints' own clocks: the reliable lane gets
+// every message through in order, the unreliable one loses some, the same ones on every run.
+static void lossy_loopback_links() {
+    struct heard { std::vector<std::uint32_t> reliable, unreliable; int frames = 0; };
+    auto run = [](const ponko::loopback_link& link) {
+        auto nets = ponko::net_messages::loopback(2, link);
+        heard h;
+        std::uint64_t peer = 0;
+        bool host_saw = false, joined = false;
+        std::uint32_t sent = 0;
+        for (; h.frames < 5000 && h.reliable.size() < 100; ++h.frames) {
+            nets[0].poll_elapsed(1.0 / 60);
+            nets[1].poll_elapsed(1.0 / 60);
+            while (auto e = nets[0].next_event()) if (e->kind == PONKO_MESSAGE_CONNECTED) { peer = e->peer; host_saw = true; }
+            while (auto e = nets[1].next_event()) {
+                if (e->kind == PONKO_MESSAGE_CONNECTED) joined = true;
+                if (e->kind != PONKO_MESSAGE) continue;
+                std::uint32_t n = 0;
+                std::memcpy(&n, e->bytes.data(), sizeof n);
+                (e->on == PONKO_LANE_RELIABLE ? h.reliable : h.unreliable).push_back(n);
+            }
+            if (host_saw && joined && sent < 100) {
+                nets[0].send(peer, PONKO_LANE_RELIABLE, &sent, sizeof sent);
+                nets[0].send(peer, PONKO_LANE_UNRELIABLE, &sent, sizeof sent);
+                ++sent;
+            }
+        }
+        return h;
+    };
+    auto link = ponko::loopback_link_defaults();
+    CHECK(link.loss == 0 && link.delay == 0 && link.jitter == 0 && link.seed == 0);
+    link.loss = 0.2;
+    link.delay = 0.03;
+    link.jitter = 0.05;
+    link.seed = 3;
+    const heard lossy = run(link);
+    std::vector<std::uint32_t> all(100);
+    for (std::uint32_t i = 0; i < 100; ++i) all[i] = i;
+    CHECK(lossy.reliable == all);
+    CHECK(lossy.unreliable.size() >= 50 && lossy.unreliable.size() < 100);
+    const heard again = run(link);
+    CHECK(again.unreliable == lossy.unreliable && again.frames == lossy.frames);
+    // Negative control: a perfect link loses nothing and is done sooner.
+    const heard perfect = run(ponko::loopback_link_defaults());
+    CHECK(perfect.unreliable == all && perfect.frames < lossy.frames);
+    link.loss = 1.5;
+    throws([&] { ponko::net_messages::loopback(2, link); });
+    auto nets = ponko::net_messages::loopback(2, ponko::loopback_link_defaults());
+    throws([&] { nets[0].poll_elapsed(-1); });
+}
+
 // The pointer, the wheel, the sounds started, quitting and zoom_at, headless; a button that closes its screen.
 static void headless_play() {
     ponko::game("headless play", 800, 600).run_headless(0, [](ponko::ctx& ctx) {
@@ -5101,5 +5210,7 @@ int main() {
     world_brains();
     world_brains_in_loops();
     native_parity_round5();
+    brain_rows_in_typed_loops();
+    lossy_loopback_links();
     std::cout << "C++ wrapper tests passed\n";
 }

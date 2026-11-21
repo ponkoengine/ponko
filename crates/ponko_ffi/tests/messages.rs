@@ -361,3 +361,135 @@ fn bad_arguments_are_errors_not_crashes() {
         ponko_net_messages_free(e[1]);
     }
 }
+
+/// A version-1 loopback link with these settings.
+fn link(loss: f64, delay: f64, jitter: f64, seed: u64) -> PonkoLoopbackLink {
+    let mut l: PonkoLoopbackLink = unsafe { std::mem::zeroed() };
+    (l.struct_size, l.version) = (size_of::<PonkoLoopbackLink>() as u32, PONKO_LOOPBACK_LINK_VERSION);
+    assert_eq!(unsafe { ponko_loopback_link_defaults(&mut l) }, OK);
+    (l.loss, l.delay, l.jitter, l.seed) = (loss, delay, jitter, seed);
+    l
+}
+
+/// What a client heard from its host over `link`, stepped at 60 Hz on the
+/// endpoints' own clocks: the host sends message `i` on the reliable and on
+/// the unreliable lane at frame `i` (200 frames), then the run goes on until
+/// every reliable one is in. The frame and number of each reliable arrival,
+/// and the numbers of the unreliable ones.
+fn heard_over(link: &PonkoLoopbackLink) -> (Vec<(u32, u32)>, Vec<u32>) {
+    unsafe {
+        let mut e = [null_mut(); 2];
+        assert_eq!(ponko_net_messages_loopback_link(2, link, e.as_mut_ptr()), OK);
+        let [host, client] = e;
+        let (mut peer, mut joined) = (None, false);
+        let (mut reliable, mut unreliable) = (Vec::new(), Vec::new());
+        let mut sent = 0u32;
+        for frame in 0..5000u32 {
+            for &endpoint in &e {
+                assert_eq!(ponko_net_messages_poll_elapsed(endpoint, 1.0 / 60.0), OK);
+            }
+            for ev in drain(host) {
+                if let Event::Connected(p) = ev {
+                    peer = Some(p);
+                }
+            }
+            for ev in drain(client) {
+                match ev {
+                    Event::Connected(_) => joined = true,
+                    Event::Message(0, PONKO_LANE_RELIABLE, b) => {
+                        reliable.push((frame, u32::from_le_bytes(b[..].try_into().unwrap())))
+                    }
+                    Event::Message(0, PONKO_LANE_UNRELIABLE, b) => {
+                        unreliable.push(u32::from_le_bytes(b[..].try_into().unwrap()))
+                    }
+                    other => panic!("unexpected {other:?}"),
+                }
+            }
+            if let (Some(p), true) = (peer, joined)
+                && sent < 200
+            {
+                let bytes = sent.to_le_bytes();
+                assert_eq!(
+                    ponko_net_messages_send(host, p, PONKO_LANE_RELIABLE, bytes.as_ptr(), 4),
+                    OK
+                );
+                assert_eq!(
+                    ponko_net_messages_send(host, p, PONKO_LANE_UNRELIABLE, bytes.as_ptr(), 4),
+                    OK
+                );
+                sent += 1;
+            }
+            if reliable.len() == 200 {
+                break;
+            }
+        }
+        ponko_net_messages_free(host);
+        ponko_net_messages_free(client);
+        (reliable, unreliable)
+    }
+}
+
+#[test]
+fn a_lossy_loopback_link_loses_and_delays_the_same_datagrams_on_every_run() {
+    let lossy = link(0.2, 0.03, 0.05, 3);
+    let (reliable, unreliable) = heard_over(&lossy);
+    // The reliable lane gets every message through, once and in order.
+    assert_eq!(
+        reliable.iter().map(|r| r.1).collect::<Vec<_>>(),
+        (0..200).collect::<Vec<_>>()
+    );
+    // The unreliable lane loses about a fifth.
+    assert!(
+        (100..=185).contains(&unreliable.len()),
+        "{} of 200 unreliable messages arrived",
+        unreliable.len()
+    );
+    // The same seed, the same run; another seed, another one.
+    assert_eq!(heard_over(&lossy), (reliable.clone(), unreliable.clone()));
+    assert_ne!(heard_over(&link(0.2, 0.03, 0.05, 4)).1, unreliable);
+    // Negative control: a perfect link loses nothing and delivers sooner.
+    let (fast, all) = heard_over(&link(0.0, 0.0, 0.0, 3));
+    assert_eq!(all, (0..200).collect::<Vec<_>>());
+    assert!(fast.last().unwrap().0 < reliable.last().unwrap().0);
+}
+
+#[test]
+fn bad_loopback_links_and_clocks_are_refused() {
+    unsafe {
+        let mut e = [null_mut(); 2];
+        for bad in [
+            link(1.5, 0.0, 0.0, 0),
+            link(-0.1, 0.0, 0.0, 0),
+            link(0.0, -1.0, 0.0, 0),
+            link(0.0, 0.0, f64::NAN, 0),
+            link(0.0, f64::INFINITY, 0.0, 0),
+        ] {
+            assert_eq!(
+                ponko_net_messages_loopback_link(2, &bad, e.as_mut_ptr()),
+                BAD,
+                "{bad:?}"
+            );
+        }
+        let fine = link(0.5, 0.01, 0.01, 1);
+        assert_eq!(ponko_net_messages_loopback_link(1, &fine, e.as_mut_ptr()), BAD);
+        assert_eq!(ponko_net_messages_loopback_link(1026, &fine, e.as_mut_ptr()), BAD);
+        assert_eq!(ponko_net_messages_loopback_link(2, &fine, null_mut()), BAD);
+        assert_eq!(ponko_net_messages_loopback_link(2, null(), e.as_mut_ptr()), BAD);
+        // A descriptor without its header, or from a newer header, is refused.
+        let mut unset = fine;
+        unset.version = 0;
+        assert_eq!(ponko_net_messages_loopback_link(2, &unset, e.as_mut_ptr()), BAD);
+        let mut newer = fine;
+        newer.version = PONKO_LOOPBACK_LINK_VERSION + 1;
+        assert_eq!(ponko_net_messages_loopback_link(2, &newer, e.as_mut_ptr()), BAD);
+        assert_eq!(ponko_loopback_link_defaults(null_mut()), BAD);
+        // Poll times must be finite and not negative.
+        assert_eq!(ponko_net_messages_loopback_link(2, &fine, e.as_mut_ptr()), OK);
+        assert_eq!(ponko_net_messages_poll_elapsed(e[0], -0.5), BAD);
+        assert_eq!(ponko_net_messages_poll_elapsed(e[0], f64::NAN), BAD);
+        assert_eq!(ponko_net_messages_poll_elapsed(null_mut(), 0.0), BAD);
+        assert_eq!(ponko_net_messages_poll_elapsed(e[0], 0.0), OK);
+        ponko_net_messages_free(e[0]);
+        ponko_net_messages_free(e[1]);
+    }
+}
