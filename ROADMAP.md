@@ -51,7 +51,7 @@ early 2027.
 | 2D essentials | Image formats #377; blend modes and sprite shaders #378; 2D particles #379; tilemap import, animation and colliders #381 |
 | Scenes and saves | Prefabs with children #367; user data folder, atomic saves, browser storage #365; pressed-this-frame input for rebinding #369 |
 | Test and ship | Headless UI and frame systems #370; `package` command #366; signed downloads #282; a second 2D reference game #374; agent acceptance suite #416; web audio #419 |
-| API | One path per type #383; `Ctx` shortcuts #384; remaining C and C++ bindings #387; immediate UI scale and theme #414 |
+| API | One path per type #383; `Ctx` shortcuts #384; typed handles, one type per handle kind (render targets, sprite shaders and materials included) #386; remaining C and C++ bindings #387; immediate UI scale and theme #414 |
 | Releases | Semver checks #355; API snapshots #356; trusted publishing #357; release candidates and patch branches #358; migration notes #359; dependency audit #360; benchmark tracking #361 |
 
 ### 0.3.0: 3D production and text
@@ -65,7 +65,7 @@ scene editing in 3D.
 | Rendering | Motion vectors for animated meshes #391; and for custom vertex functions #392; GI coverage #394; stencil #397; custom sky #398; probe refresh #399; transparency and particles #400; post effects #401; instance batch streaming #396; GPU memory reports #393; 2D lighting #380 |
 | Text and UI | Shaping, fallback and right-to-left #409; IME #410; localization #411; rich text #412; screen readers on Windows and Linux #413 |
 | Tools | 3D scene editing #415; a 3D reference game #375; WebGPU gated in CI #427 |
-| API and simulation | Third-party types in the API #385; typed handles #386; dependency-based system batches #388; save migrations #368; navmesh carving #407 |
+| API and simulation | Third-party types in the API #385; dependency-based system batches #388; save migrations #368; navmesh carving #407 |
 
 ### 0.4.0: multiplayer and platforms
 

@@ -5,7 +5,7 @@
 use std::ffi::c_char;
 use std::sync::Arc;
 
-use ponko::ai::{BehaviorTree, Blackboard, Brain, Curve, Key, Status, Value};
+use ponko::ai::{BehaviorTree, BehaviorTrees, Blackboard, Brain, Curve, Key, Status, Value};
 use ponko::prelude::{Entity, Vec2, Vec3};
 
 use crate::PonkoVec3;
@@ -148,6 +148,62 @@ pub unsafe extern "C" fn ponko_behavior_tree_new(json: *const c_char) -> *mut Po
         Ok(())
     });
     tree
+}
+
+/// Compiles a tree from JSON whose `subtree` nodes run other trees:
+/// `{"subtree": "patrol"}` runs `subtrees[i]` where `names[i]` is
+/// `"patrol"` (Rust `BehaviorTrees`). The subtrees may name each other; a
+/// name not in the list is a node that fails. Returns null on an error
+/// (`ponko_last_error`), such as a cycle (a tree that runs itself, through
+/// others), which names every tree on it. The new tree keeps what it needs:
+/// the subtrees may be freed after.
+/// ```
+/// assert!(unsafe { ponko_ffi::ponko_behavior_tree_new_linked(std::ptr::null(), std::ptr::null(), std::ptr::null(), 0) }.is_null());
+/// ```
+/// # Safety
+/// `json` null or a NUL-terminated string; `names` and `subtrees` null or
+/// `count` NUL-terminated strings and `count` live trees.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_behavior_tree_new_linked(
+    json: *const c_char,
+    names: *const *const c_char,
+    subtrees: *const *const PonkoBehaviorTree,
+    count: usize,
+) -> *mut PonkoBehaviorTree {
+    let mut tree = std::ptr::null_mut();
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let compiled = BehaviorTree::from_json(text(json)?).map_err(invalid_owned)?;
+        let names = list(names, count, "names")?;
+        let subtrees = list(subtrees, count, "subtrees")?;
+        let mut trees = BehaviorTrees::default();
+        for (&name, &sub) in names.iter().zip(subtrees) {
+            trees
+                .try_insert(text(name)?, tree_ref(sub)?.clone())
+                .map_err(invalid_owned)?;
+        }
+        // A name of its own no subtree can have.
+        trees.try_insert("(the new tree)", compiled).map_err(invalid_owned)?;
+        let linked = trees
+            .get("(the new tree)")
+            .cloned()
+            .ok_or_else(|| invalid("the linked tree is missing"))?;
+        tree = Box::into_raw(Box::new(PonkoBehaviorTree(linked)));
+        Ok(())
+    });
+    tree
+}
+
+/// `count` items from `items`.
+unsafe fn list<'a, T>(items: *const T, count: usize, what: &str) -> Result<&'a [T], Failure> {
+    if count == 0 {
+        return Ok(&[]);
+    }
+    if items.is_null() {
+        return Err(invalid_owned(format!("{what} is null with a nonzero count")));
+    }
+    // SAFETY: the caller supplies `count` readable items.
+    Ok(unsafe { std::slice::from_raw_parts(items, count) })
 }
 
 /// Frees a tree. Null is ignored. Brains that ran it keep what they need.
@@ -372,6 +428,94 @@ pub unsafe extern "C" fn ponko_brain_wake(brain: *mut PonkoBrain) -> PonkoStatus
         brain_mut(brain)?.brain.wake();
         Ok(())
     })
+}
+
+/// The brain hears signal `key` (Rust `Brain::signal`): a `wait_for` node
+/// waiting for it succeeds at its next think, which is due at once.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_brain_signal(std::ptr::null_mut(), 0) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_brain_signal(brain: *mut PonkoBrain, key: u64) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let brain = brain_mut(brain)?;
+        brain.brain.signal(key_of(key)?);
+        Ok(())
+    })
+}
+
+/// Sets the seed its `random` and `chance` nodes draw from, with the tick
+/// (Rust `Brain::set_seed`): give each agent its own.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_brain_set_seed(std::ptr::null_mut(), 7) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_brain_set_seed(brain: *mut PonkoBrain, seed: u64) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        brain_mut(brain)?.brain.set_seed(seed);
+        Ok(())
+    })
+}
+
+/// Writes the brain for a save, as JSON: its tree's name, period and seed,
+/// its memory (the running nodes, waits and cooldowns) and its blackboard.
+/// `ponko_brain_load_json` reads it back.
+/// ```
+/// let mut len = 0;
+/// assert_eq!(unsafe { ponko_ffi::ponko_brain_save_json(std::ptr::null(), std::ptr::null_mut(), 0, &mut len) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or live; `buffer` writable for `capacity` bytes (or null with capacity 0); `out_len` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_brain_save_json(
+    brain: *const PonkoBrain,
+    buffer: *mut c_char,
+    capacity: usize,
+    out_len: *mut usize,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let b = brain_ref(brain)?;
+        let json = serde_json::json!({"brain": b.brain, "seed": b.brain.seed(), "blackboard": b.bb});
+        write_text(buffer, capacity, out_len, &json.to_string())
+    })
+}
+
+/// A brain read back from `ponko_brain_save_json`'s text: at its next
+/// `ponko_brain_think` with the tree it was saved with, it carries on at the
+/// same running node, wait and cooldown, counting ticks on from the one it
+/// was saved at (whatever tick you pass then); with another tree it starts
+/// over. Null on an error (`ponko_last_error`).
+/// ```
+/// assert!(unsafe { ponko_ffi::ponko_brain_load_json(c"{}".as_ptr()) }.is_null());
+/// ```
+/// # Safety
+/// `json` null or a NUL-terminated string. Free the brain with `ponko_brain_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_brain_load_json(json: *const c_char) -> *mut PonkoBrain {
+    let mut brain = std::ptr::null_mut();
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let bad = |e: serde_json::Error| invalid_owned(format!("not a saved brain: {e}"));
+        let mut saved: serde_json::Value = serde_json::from_str(text(json)?).map_err(bad)?;
+        let mut b: Brain = serde_json::from_value(saved["brain"].take()).map_err(bad)?;
+        if let Some(seed) = saved["seed"].as_u64() {
+            b.set_seed(seed);
+        }
+        let bb = match saved["blackboard"].take() {
+            serde_json::Value::Null => Blackboard::new(),
+            json => serde_json::from_value(json).map_err(bad)?,
+        };
+        brain = Box::into_raw(Box::new(PonkoBrain { brain: b, bb }));
+        Ok(())
+    });
+    brain
 }
 
 unsafe fn set(brain: *mut PonkoBrain, key: u64, value: Value) -> PonkoStatus {
