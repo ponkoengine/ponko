@@ -127,6 +127,10 @@
 
 #define PONKO_HANDLE_NONE UINT32_MAX
 
+#define PONKO_HDR_OUTPUT_VERSION 1
+
+#define PONKO_HDR_STATUS_VERSION 1
+
 #define PONKO_MAX_GAMEPADS 8
 
 #define PONKO_LEVEL_SHAPE_RECT 0
@@ -383,6 +387,21 @@ typedef enum PonkoQuantize {
   PONKO_QUANTIZE_BEAT = 1,
   PONKO_QUANTIZE_BAR = 2,
 } PonkoQuantize;
+
+typedef enum PonkoHdrEncoding {
+  PONKO_HDR_ENCODING_SDR = 0,
+  PONKO_HDR_ENCODING_SCRGB = 1,
+  PONKO_HDR_ENCODING_EXTENDED_SRGB = 2,
+  PONKO_HDR_ENCODING_PQ = 3,
+} PonkoHdrEncoding;
+
+typedef enum PonkoHdrOffReason {
+  PONKO_HDR_OFF_NONE = 0,
+  PONKO_HDR_OFF_HEADLESS = 1,
+  PONKO_HDR_OFF_NOT_REQUESTED = 2,
+  PONKO_HDR_OFF_OFF = 3,
+  PONKO_HDR_OFF_UNSUPPORTED = 4,
+} PonkoHdrOffReason;
 
 typedef enum PonkoLobbyEventKind {
   PONKO_LOBBY_CONNECTED = 0,
@@ -1915,6 +1934,28 @@ typedef struct PonkoStreamedAsset {
   size_t name_offset;
   size_t name_len;
 } PonkoStreamedAsset;
+
+typedef struct PonkoHdrOutput {
+  uint32_t struct_size;
+  uint32_t version;
+  bool enabled;
+  float paper_white_nits;
+  float peak_nits;
+} PonkoHdrOutput;
+
+typedef struct PonkoHdrStatus {
+  uint32_t struct_size;
+  uint32_t version;
+  bool available;
+  bool active;
+  enum PonkoHdrEncoding encoding;
+  enum PonkoHdrOffReason reason;
+  float paper_white_nits;
+  float peak_nits;
+  float headroom;
+  float display_peak_nits;
+  float display_headroom;
+} PonkoHdrStatus;
 
 typedef struct PonkoLevelOptions {
   const char *const *prefab_classes;
@@ -5706,6 +5747,16 @@ enum PonkoStatus ponko_ctx_streamed_assets(struct PonkoCtx *ctx,
                                            size_t *out_len,
                                            size_t *out_names_len);
 
+enum PonkoStatus ponko_hdr_output_defaults(struct PonkoHdrOutput *out_hdr);
+
+enum PonkoStatus ponko_game_hdr_output(struct PonkoGame *game, const struct PonkoHdrOutput *hdr);
+
+enum PonkoStatus ponko_ctx_hdr_output(struct PonkoCtx *ctx, struct PonkoHdrOutput *out_hdr);
+
+enum PonkoStatus ponko_ctx_set_hdr_output(struct PonkoCtx *ctx, const struct PonkoHdrOutput *hdr);
+
+enum PonkoStatus ponko_ctx_hdr_status(struct PonkoCtx *ctx, struct PonkoHdrStatus *out_status);
+
 enum PonkoStatus ponko_game_headless_frames(struct PonkoGame *game, bool on);
 
 enum PonkoStatus ponko_input_scenario_click(struct PonkoInputScenario *scenario,
@@ -8607,14 +8658,14 @@ enum PonkoStatus ponko_ctx_ui_set_safe_area(struct PonkoCtx *ctx,
                                             uint64_t target,
                                             const struct PonkoRect *area);
 
-enum PonkoStatus ponko_ctx_ui_safe_area(struct PonkoCtx *ctx,
-                                        uint64_t target,
-                                        struct PonkoRect *out_area);
-
 enum PonkoStatus ponko_ctx_ui_set_fade_as_group(struct PonkoCtx *ctx,
                                                 uint64_t target,
                                                 uint64_t id,
                                                 bool on);
+
+enum PonkoStatus ponko_ctx_ui_safe_area(struct PonkoCtx *ctx,
+                                        uint64_t target,
+                                        struct PonkoRect *out_area);
 
 enum PonkoStatus ponko_ctx_ui_fades_as_group(struct PonkoCtx *ctx,
                                              uint64_t target,

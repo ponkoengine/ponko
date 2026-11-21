@@ -155,12 +155,12 @@ pub struct HdrStatus {
     /// reports it (macOS, or Windows from its nits).
     pub display_headroom: Option<f32>,
     /// Why HDR isn't active, when it isn't.
-    pub reason: Option<&'static str>,
+    pub reason: Option<HdrOffReason>,
 }
 
 impl HdrStatus {
     /// SDR output, for `reason`.
-    pub(crate) fn sdr(available: bool, reason: &'static str) -> Self {
+    pub(crate) fn sdr(available: bool, reason: HdrOffReason) -> Self {
         Self {
             available,
             active: false,
@@ -175,14 +175,51 @@ impl HdrStatus {
     }
 }
 
-/// Why HDR isn't active, as [`HdrStatus::reason`] says it.
-pub(crate) mod reasons {
-    pub const HEADLESS: &str = "no window: headless runs draw nothing";
-    pub const NOT_REQUESTED: &str =
-        "HDR output was not turned on before the window opened (Game::hdr_output); it applies at the next start";
-    pub const OFF: &str = "HDR output is turned off (HdrOutput::enabled)";
-    pub const UNSUPPORTED: &str = "the window's display system offers no HDR color space this renderer can encode \
-         (WebGL2 and OpenGL never do; Vulkan only where the driver exposes one)";
+/// Why HDR isn't active ([`HdrStatus::reason`]).
+/// ```
+/// use ponko::render::HdrOffReason;
+/// assert!(HdrOffReason::NotRequested.describe().contains("Game::hdr_output"));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[repr(u32)]
+pub enum HdrOffReason {
+    /// No window: headless runs draw nothing.
+    Headless = 1,
+    /// HDR output wasn't turned on before the window opened
+    /// ([`Game::hdr_output`](crate::game::Game::hdr_output)); turning it on
+    /// now applies at the next start. A settings menu says "restart".
+    NotRequested = 2,
+    /// [`HdrOutput::enabled`] is false.
+    Off = 3,
+    /// The window's display system offers no HDR color space the renderer
+    /// can encode: WebGL2 and OpenGL never do, Vulkan only where the driver
+    /// exposes one, a browser only with an HDR canvas.
+    Unsupported = 4,
+}
+
+impl HdrOffReason {
+    /// The reason in words.
+    #[must_use]
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Headless => "no window: headless runs draw nothing",
+            Self::NotRequested => {
+                "HDR output was not turned on before the window opened (Game::hdr_output); it applies at the next start"
+            }
+            Self::Off => "HDR output is turned off (HdrOutput::enabled)",
+            Self::Unsupported => {
+                "the window's display system offers no HDR color space this renderer can encode \
+                 (WebGL2 and OpenGL never do; Vulkan only where the driver exposes one)"
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for HdrOffReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.describe())
+    }
 }
 
 /// What the display reports, as `hdr_output.rs` reads it from wgpu.
@@ -313,7 +350,7 @@ impl Graphics {
         if let Some(renderer) = &self.renderer {
             return renderer.hdr_status();
         }
-        HdrStatus::sdr(false, reasons::HEADLESS)
+        HdrStatus::sdr(false, HdrOffReason::Headless)
     }
 }
 
@@ -401,9 +438,11 @@ mod tests {
                 last = v;
             }
             let k = HIGHLIGHT_KNEE;
-            let e = 1e-3;
+            // A one-sided difference: the curve's second-order term adds
+            // about (headroom - knee) * step / 0.04 to it.
+            let e = 1e-4;
             let slope = (expand_highlights([k + e; 3], headroom)[0] - k) / e;
-            assert!((slope - 1.0).abs() < 0.02, "slope {slope} at the knee");
+            assert!((slope - 1.0).abs() < 0.05, "slope {slope} at the knee");
         }
     }
 }

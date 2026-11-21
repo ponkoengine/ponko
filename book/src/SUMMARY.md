@@ -26,6 +26,7 @@
 - [Parallel systems](parallel-systems.md)
 - [Ctx and its services](services.md)
 - [Window service](window.md)
+  - [HDR displays](hdr.md)
 - [Input: keyboard, mouse, gamepads](input.md)
 - [Controllers: rumble, prompts, motion, players](controllers.md)
 - [Named input actions](actions.md)

@@ -16,7 +16,7 @@
 //! headroom (`Surface::display_hdr_info`). It writes no HDR metadata
 //! (`vkSetHdrMetadataEXT`, DXGI `SetHDRMetaData`), so PQ output carries none.
 
-use super::hdr::{DisplayReport, HdrEncoding, HdrOutput, HdrStatus, SCRGB_NITS, brightness, reasons};
+use super::hdr::{DisplayReport, HdrEncoding, HdrOffReason, HdrOutput, HdrStatus, SCRGB_NITS, brightness};
 
 /// The surface format and color space HDR output takes on a window, and
 /// how the frame is encoded for them.
@@ -162,6 +162,7 @@ impl Hdr {
 
     /// The 3D frame's headroom over SDR white while HDR is active; `None`
     /// tone maps for SDR (exactly as without HDR).
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     pub fn tonemap_headroom(&self) -> Option<f32> {
         self.active().then(|| self.brightness().2)
     }
@@ -200,11 +201,11 @@ impl Hdr {
     pub fn status(&self) -> HdrStatus {
         let available = self.choice.is_some();
         let reason = if self.choice.is_none() {
-            Some(reasons::UNSUPPORTED)
+            Some(HdrOffReason::Unsupported)
         } else if self.pass.is_none() {
-            Some(reasons::NOT_REQUESTED)
+            Some(HdrOffReason::NotRequested)
         } else if !self.settings.enabled {
-            Some(reasons::OFF)
+            Some(HdrOffReason::Off)
         } else {
             None
         };
@@ -569,10 +570,10 @@ mod tests {
         let plain = Hdr::plain(HdrOutput::on(), windows, F::Bgra8UnormSrgb);
         let status = plain.status();
         assert!(status.available && !status.active);
-        assert_eq!(status.reason, Some(reasons::NOT_REQUESTED));
+        assert_eq!(status.reason, Some(HdrOffReason::NotRequested));
         assert_eq!(plain.tonemap_headroom(), None, "SDR tone mapping");
         let none = Hdr::plain(HdrOutput::on(), None, F::Bgra8UnormSrgb);
-        assert_eq!(none.status().reason, Some(reasons::UNSUPPORTED));
+        assert_eq!(none.status().reason, Some(HdrOffReason::Unsupported));
         assert_eq!(
             none.surface_target(),
             (F::Bgra8UnormSrgb, wgpu::SurfaceColorSpace::Auto, F::Bgra8UnormSrgb)

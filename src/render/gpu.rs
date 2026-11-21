@@ -752,6 +752,33 @@ impl Renderer {
         renderer
     }
 
+    /// Tests: [`offscreen`](Self::offscreen) opened for HDR output as a
+    /// window offering `choice` would be, with `settings`. The output pass
+    /// draws into the offscreen frame, which [`read_output`](Self::read_output)
+    /// reads back.
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn offscreen_hdr(
+        gpu: super::render_test_support::TestGpu,
+        size: (u32, u32),
+        choice: super::hdr_output::OutputChoice,
+        settings: super::HdrOutput,
+    ) -> Self {
+        let mut renderer = Self::offscreen(gpu, size);
+        renderer.config.format = choice.format;
+        renderer.config.color_space = choice.color_space;
+        let sdr = wgpu::TextureFormat::Rgba8UnormSrgb;
+        renderer.with_hdr(super::hdr_output::Hdr::plain(settings, Some(choice), sdr), true)
+    }
+
+    /// Tests: the last offscreen frame's format and bytes as drawn (with
+    /// HDR output, what the output pass wrote), or `None` before one.
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn read_output(&self) -> Option<(wgpu::TextureFormat, Vec<u8>)> {
+        let target = self.hidden_target.as_ref()?;
+        let bytes = super::render_test_support::read_texture(&self.device, &self.queue, target);
+        Some((target.format(), bytes))
+    }
+
     /// A renderer drawing offscreen at `size` on this renderer's GPU (the
     /// same device and queue, its own pipelines and resources): the
     /// editor's model thumbnails (not on the web: see `thumb_studio`).

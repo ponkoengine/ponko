@@ -5417,6 +5417,24 @@ int main() {
         .run([](ponko::ctx&) {});
     // ANCHOR_END: restore_window
 }
+[[maybe_unused]] static void hdr_output_guide() {
+    // ANCHOR: hdr_output
+    ponko::hdr_output hdr = ponko::hdr_output_defaults();
+    hdr.enabled = true;            // HDR where the display system offers it
+    hdr.paper_white_nits = 200.0f; // UI and sprites
+    ponko::game("Bright", 1280, 720)
+        .hdr_output(hdr)
+        .run([](ponko::ctx& ctx) {
+            ponko::hdr_status status = ctx.hdr_status();
+            if (status.reason == PONKO_HDR_OFF_NOT_REQUESTED) {
+                // the settings menu says "applies after a restart"
+            }
+            ponko::hdr_output now = ctx.hdr_output();
+            now.peak_nits = 600.0f; // the player's slider
+            ctx.set_hdr_output(now);
+        });
+    // ANCHOR_END: hdr_output
+}
 [[maybe_unused]] static void water_spectrum_guide(ponko::ctx& ctx) {
     // ANCHOR: water_spectrum
     ponko::wave_spectrum storm({12, 4}, 2.5f); // wind in m/s, height in m
