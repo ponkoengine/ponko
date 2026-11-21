@@ -1327,12 +1327,13 @@ fn convert_aseprite(
     // file: each is replaced by its sheet in `all` as it is converted.
     let sources: BTreeMap<String, Vec<u8>> = names.iter().map(|n| (n.clone(), all[n].clone())).collect();
     let (mut entries, mut made, mut errors) = (Vec::new(), BTreeMap::new(), Vec::new());
-    // The files a converted file's tilesets link to, each with the first
-    // file that links to it.
+    // The files the tilesets of a file that is part of the output link to,
+    // each with the first file that links to it. A converted file counts,
+    // and so does one a `keep` rule copies as it is (it is still part of the
+    // assets and still reads the tileset file); a skipped one does not.
     let mut linked_from: BTreeMap<String, String> = BTreeMap::new();
     for name in &names {
-        let rule = config.rule_for(name);
-        if rule.keep || rule.skip {
+        if config.rule_for(name).skip {
             continue;
         }
         for linked in ponko_aseprite::linked_files(name, &sources[name]).unwrap_or_default() {
