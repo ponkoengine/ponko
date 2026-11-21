@@ -273,6 +273,11 @@ fn assert_reaches_workers(n: usize) {
 /// slow enough to run in parallel: at least 200 ns per entity, so the timed
 /// first chunk alone takes over 100 µs. Not needed under Miri, which always
 /// runs the parallel path.
+///
+/// The spin is a lower bound, so it holds on a paused machine: a thread
+/// that loses its core only spins longer, which keeps the query on the
+/// parallel path. The tests that use it assert the order and the rows
+/// visited, which are the same on either path, never a time.
 fn slow(slow: bool) {
     if slow && !cfg!(miri) {
         let start = std::time::Instant::now();
@@ -692,15 +697,28 @@ fn a_slow_query_over_tiny_archetypes_runs_on_more_than_one_thread() {
     let n = w.query::<&Id>().count();
     assert_reaches_workers(n);
     let threads = Mutex::new(HashSet::new());
-    // About 2 µs per entity, over 10 ms in all: far over the serial budget,
-    // and long enough for idle workers to pick up chunks.
+    let here = std::thread::current().id();
+    let rows_here = std::sync::atomic::AtomicUsize::new(0);
+    // At least 2 µs per entity (a lower bound: a paused thread only spins
+    // longer), so the timed first chunk projects the query far over the
+    // serial budget. That chunk runs here, on the test's own thread, which
+    // is not one of the pool's, and every later row goes to the pool: rows
+    // land on more than one thread however late the workers wake.
     w.query::<&Id>().par_for_each(|_| {
         let start = std::time::Instant::now();
         while start.elapsed() < std::time::Duration::from_micros(2) {
             std::hint::spin_loop();
         }
+        if std::thread::current().id() == here {
+            rows_here.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         threads.lock().unwrap().insert(std::thread::current().id());
     });
+    assert_eq!(
+        rows_here.into_inner(),
+        MIN_CHUNK,
+        "only the timed first chunk runs on the calling thread"
+    );
     let threads = threads.into_inner().unwrap().len();
     assert!(threads > 1, "{threads} thread ran {n} rows of slow work");
 }
