@@ -217,7 +217,8 @@ goes, in a running game:
   frame: profiling, the overlay, a trace, a `PONKO_BENCH` run or automatic
   quality. The smoothed times weigh each sample by the frames it stands
   for, so they settle at the same values either way (see
-  [Cost](viewports.md#cost) for what it saves).
+  [Cost](viewports.md#cost) for what it saves). A game can pick how often
+  itself: [how often GPU passes are timed](#how-often-gpu-passes-are-timed).
 - **`ctx.perf.render_stats()`**: draw calls; 3D models and triangles drawn for
   the camera and, separately, for the shadow maps; and the render CPU
   time split into culling (`collect_ms`), recording (`record_ms`, all
@@ -253,6 +254,48 @@ goes, in a running game:
 
 </div>
 </div>
+
+### How often GPU passes are timed
+
+`ctx.perf.set_gpu_timing` picks the cadence, separately from profiling
+(which also times scopes and counts allocations):
+
+```rust
+# use ponko::prelude::*;
+use ponko::perf::GpuTiming;
+
+fn gpu_times(ctx: &mut Ctx) {
+    // Fresh `gpu_passes()` every frame, with profiling still off.
+    ctx.perf.set_gpu_timing(GpuTiming::Every(1));
+    // Or one frame in four, or none at all:
+    // ctx.perf.set_gpu_timing(GpuTiming::Every(4));
+    // ctx.perf.set_gpu_timing(GpuTiming::Off);
+    // `GpuTiming::Auto` is the default: one frame in 16, every frame
+    // while profiling is on.
+}
+```
+
+An explicit choice also wins over profiling: `Every(4)` with profiling on
+times one frame in four. The overlay, traces, `PONKO_BENCH` runs and
+automatic quality read every frame's times, so they get every frame while
+they are on, whatever the setting; the choice applies again when they stop.
+`Off` leaves `gpu_passes()` empty and `gpu_ms` `None` (with nothing reading
+them). A change takes effect on the next frame.
+
+What each choice costs the game's thread in heap allocations per frame
+(the offscreen test `allocations_per_frame_fall_as_gpu_timing_gets_rarer`;
+a debug test build on an Apple M4 Max, Metal, a 64 x 64 offscreen frame of
+one cube, so only the differences carry over to a real scene):
+
+| Setting | Allocations per frame | More than `Off` |
+|---|---|---|
+| `Every(1)` | 282.0 | 45.0 |
+| `Every(4)` | 248.2 | 11.2 |
+| `Auto` (one in 16) | 239.8 | 2.8 |
+| `Off` | 237.0 | |
+
+The rest is the frame itself. These count the game's thread only: the
+graphics library allocates on the threads that record passes too.
 
 ### Benchmark runs
 

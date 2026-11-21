@@ -499,6 +499,7 @@ binding arrives:
 | `LoopbackLink` | [Test it](replication.md#test-it) | Not bound yet: C and C++ tests use the plain loopback (`ponko_net_messages_loopback`); a link that loses and reorders datagrams is for Rust tests and benchmarks |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |
 | `perf::net_alloc_bytes` | [Profiling](profiling.md) | C and C++ count the frees of their own memory nowhere; `ponko_ctx_live_counts` and the asset inventory are the leak checks |
+| `GpuTiming`, `Perf::set_gpu_timing`, `Perf::gpu_timing` | [Performance](performance.md#how-often-gpu-passes-are-timed) | Not bound yet: C and C++ games get the engine default (one frame in 16, every frame while profiling is on) |
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
