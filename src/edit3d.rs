@@ -130,8 +130,11 @@ pub(crate) fn world_to_screen(camera: &Camera, p: Vec3) -> Option<Vec2> {
         return None;
     }
     let ndc = clip.truncate() / clip.w;
-    let size = camera.viewport();
-    Some(Vec2::new((ndc.x + 1.0) * 0.5 * size.x, (1.0 - ndc.y) * 0.5 * size.y))
+    // In the camera's part of the window (the editor gives it the part its
+    // panels leave free).
+    let rect = camera.screen_rect();
+    let size = rect.size();
+    Some(rect.min + Vec2::new((ndc.x + 1.0) * 0.5 * size.x, (1.0 - ndc.y) * 0.5 * size.y))
 }
 
 /// World units one window pixel spans at `p`'s depth.

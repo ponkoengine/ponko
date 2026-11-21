@@ -81,6 +81,10 @@ pub(super) struct BatchRig {
     /// Collect the skinned models of the world each frame (the crowd tests
     /// compare crowds with them).
     pub skins: bool,
+    /// The game time of the next frame, in seconds, and how far each frame
+    /// moves it on.
+    pub time: f64,
+    pub dt: f64,
 }
 
 impl BatchRig {
@@ -142,6 +146,8 @@ impl BatchRig {
             keep_order: false,
             prepared_allocations: [0; 3],
             skins: false,
+            time: 0.0,
+            dt: 1.0 / 60.0,
         })
     }
 
@@ -304,7 +310,8 @@ impl BatchRig {
         if self.skins {
             frame.skins = skins;
         }
-        let time = self.frames as f64 / 60.0;
+        let time = self.time;
+        self.time += self.dt;
         self.frames += 1;
         let scene = Scene3D {
             frame: &frame,
@@ -317,7 +324,7 @@ impl BatchRig {
             },
             camera: ctx.scene3d.camera.position,
             post: &ctx.scene3d.post,
-            time: (time, 1.0 / 60.0),
+            time: (time, self.dt as f32),
             occlusion: ctx.scene3d.camera.occlusion_culling,
         };
         let (renderer, gpu, size) = (&mut self.renderer, &self.gpu, self.size);

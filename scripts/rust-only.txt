@@ -47,7 +47,8 @@ NetMessages::join_web            networking.md     # same
 NetMessages::web_addr            networking.md     # same
 Replication::input               replication.md    # not bound yet; C and C++ games send controls as application messages and move their entities on the server
 Replication::predicted           replication.md    # same; a C client shows its own entity as the server sends it
-Replication::event               replication.md    # not bound yet; events go as application messages on the reliable lane
+Replication::event               replication.md    # generic over serde types; C and C++ events will be raw events (Replication::raw_event)
+Replication::raw_event           replication.md    # the Rust side of events as bytes is in place, its C and C++ calls are not bound yet; events go as application messages until then
 Replication::interpolated        replication.md    # generic over Interpolate; C components are set when their update arrives
 Replication::position            replication.md    # a Rust closure; interest uses the entities' transforms
 GltfScene::nav_source            blender.md        # read the nodes and their places with ponko_gltf_scene_load, and bake from mesh data of your own (ponko_nav_sources_add_mesh)
