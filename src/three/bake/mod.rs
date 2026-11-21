@@ -10,10 +10,23 @@
 //! directly every frame, with their real-time shadows, so moving models
 //! still cast shadows on baked ones.
 
+mod albedo;
+mod bc6h;
 mod bvh;
+#[cfg(all(feature = "window", not(target_arch = "wasm32")))]
+mod gpu;
 mod pack;
+mod sources;
 mod trace;
 mod uv;
+
+pub use albedo::BakeTexture;
+#[cfg(all(feature = "window", not(target_arch = "wasm32")))]
+pub use gpu::bake_lighting_gpu;
+#[cfg(all(feature = "window", not(target_arch = "wasm32"), test))]
+pub(crate) use gpu::bake_on as bake_lighting_on;
+pub(crate) use sources::BakeSources;
+pub use sources::{GltfBake, Unbaked, WorldBake};
 
 use glam::{Mat3, Mat4, UVec3, Vec2, Vec3};
 use rayon::prelude::*;
@@ -65,6 +78,11 @@ pub struct LightBakeSettings {
     /// Where the random numbers start: the same seed bakes the same result
     /// on any machine and any number of threads. Default 0.
     pub seed: u64,
+    /// Block-compresses the lightmap pages (BC6H): 1 byte a texel instead
+    /// of 8 in the file and on GPUs that sample BC6H (desktop ones; the
+    /// others take 4), for about 1 % less precise light (see the guide's
+    /// "Baked lighting"). Default on.
+    pub compress: bool,
 }
 
 impl Default for LightBakeSettings {
@@ -78,6 +96,7 @@ impl Default for LightBakeSettings {
             probe_spacing: 2.0,
             denoise: true,
             seed: 0,
+            compress: true,
         }
     }
 }
@@ -100,6 +119,8 @@ impl LightBakeSettings {
         denoise: bool => with_denoise;
         /// Sets [`seed`](Self::seed).
         seed: u64 => with_seed;
+        /// Sets [`compress`](Self::compress).
+        compress: bool => with_compress;
     }
 }
 
@@ -121,10 +142,18 @@ pub struct BakeModel {
     positions: Vec<Vec3>,
     normals: Vec<Vec3>,
     uvs1: Vec<Vec2>,
+    /// The mesh's texture coordinates, which albedo maps are read with.
+    uvs: Vec<Vec2>,
+    /// The texture its color is multiplied with (see `with_albedo_map`).
+    albedo_map: Option<std::sync::Arc<BakeTexture>>,
     indices: Vec<u32>,
+    /// Index ranges (of `indices`) drawn with materials of their own: a
+    /// mesh of several parts, from a world or a glTF scene. Triangles in
+    /// none take the model's own.
+    parts: Vec<(std::ops::Range<u32>, PartMaterial)>,
     /// Its color (sRGB, as [`MaterialDesc::color`]): how much light it
-    /// bounces. Textures aren't read: for a textured surface, set it to
-    /// the texture's average color times the material's. Default white.
+    /// bounces, times its [albedo map](Self::with_albedo_map) where it has
+    /// one. Default white.
     pub albedo: Color,
     /// Light it gives off itself (as [`MaterialDesc::emissive`]), which
     /// lights what's around it in the bake. Default black.
@@ -156,7 +185,10 @@ impl BakeModel {
                 .map(|&n| (normal_matrix * n).normalize_or_zero())
                 .collect(),
             uvs1: mesh.uvs1.clone(),
+            uvs: mesh.uvs.clone(),
+            albedo_map: None,
             indices: mesh.indices.clone(),
+            parts: Vec::new(),
             albedo: Color::WHITE,
             emissive: Color::rgb(0.0, 0.0, 0.0),
             double_sided: false,
@@ -164,7 +196,32 @@ impl BakeModel {
         }
     }
 
-    /// Takes the albedo, emissive color and sides from a material.
+    /// Multiplies its color with `map` where rays hit it, read through the
+    /// mesh's first texture coordinates ([`MeshData::uvs`]), as the
+    /// renderer draws a material's [`texture`](MaterialDesc::texture): the
+    /// light it bounces takes the texture's colors.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let bricks = ponko::render::BakeTexture::from_rgba(1, 1, &[180, 60, 40, 255]).unwrap();
+    /// let wall = ponko::render::BakeModel::new(&ponko::render::MeshData::cube(1.0), Mat4::IDENTITY).with_albedo_map(bricks);
+    /// # let _ = wall;
+    /// ```
+    #[must_use]
+    pub fn with_albedo_map(mut self, map: BakeTexture) -> Self {
+        self.albedo_map = Some(std::sync::Arc::new(map));
+        self
+    }
+
+    /// The same without an albedo map.
+    #[cfg(test)]
+    pub(crate) fn without_albedo_map(mut self) -> Self {
+        self.albedo_map = None;
+        self
+    }
+
+    /// Takes the albedo, emissive color and sides from a material (not its
+    /// texture: give that with [`with_albedo_map`](Self::with_albedo_map)).
     #[must_use]
     pub fn with_material(mut self, material: &MaterialDesc) -> Self {
         self.albedo = material.color;
@@ -182,6 +239,20 @@ impl BakeModel {
         double_sided: bool => with_double_sided;
         /// Sets [`lightmapped`](Self::lightmapped).
         lightmapped: bool => with_lightmapped;
+    }
+
+    /// Draws the triangles of `indices` (a range of the mesh's indices)
+    /// with `material` instead of the model's own.
+    pub(crate) fn with_part(mut self, indices: std::ops::Range<u32>, material: PartMaterial) -> Self {
+        self.parts.push((indices, material));
+        self
+    }
+
+    /// The material of the model's `k`th triangle: its part's, else the
+    /// model's own (`None`).
+    fn part_of(&self, k: usize) -> Option<usize> {
+        let first = (k * 3) as u32;
+        self.parts.iter().position(|(range, _)| range.contains(&first))
     }
 
     fn triangles(&self) -> impl Iterator<Item = [usize; 3]> + '_ {
@@ -213,9 +284,115 @@ impl BakeModel {
     }
 }
 
-/// Baked lighting's GPU layers (see `BakedLighting::gpu_layers`) and
-/// their side, as the renderer takes them.
-pub(crate) type BakedLayers = std::sync::Arc<(u32, Vec<Vec<u16>>)>;
+/// What a part of a [`BakeModel`] is made of (see `BakeModel::with_part`),
+/// in linear color.
+#[derive(Debug, Clone)]
+pub(crate) struct PartMaterial {
+    pub albedo: Vec3,
+    pub emissive: Vec3,
+    pub double_sided: bool,
+    pub map: Option<std::sync::Arc<BakeTexture>>,
+}
+
+impl PartMaterial {
+    /// `material` drawn tinted with `tint` (sRGB, as a model's color).
+    pub(crate) fn of(material: &MaterialDesc, tint: Color) -> Self {
+        let rgb = |c: Color| {
+            let [r, g, b, _] = linear(c);
+            Vec3::new(r, g, b)
+        };
+        Self {
+            albedo: rgb(material.color) * rgb(tint),
+            emissive: rgb(material.emissive),
+            double_sided: material.double_sided,
+            map: None,
+        }
+    }
+}
+
+/// Baked lighting as the renderer takes it (see `BakedLighting::gpu_layers`).
+pub(crate) type BakedLayers = std::sync::Arc<GpuBaked>;
+
+/// Baked lighting laid out for the GPU (see `BakedLighting::gpu_layers`):
+/// the header array (one layer of RGBA half floats, `header_side` wide)
+/// and the pages array (`page_size` square: the light, then the
+/// directions as `d * 0.5 + 0.5`).
+#[derive(Debug, Clone)]
+pub(crate) struct GpuBaked {
+    pub header_side: u32,
+    /// The header's rows: as many as it fills (at most `header_side`).
+    pub header_rows: u32,
+    pub header: Vec<u16>,
+    pub page_size: u32,
+    /// Each page's RGBA half floats.
+    pub pages: Vec<Vec<u16>>,
+    /// The same pages as BC6H blocks, for a compressed bake: the GPU
+    /// samples these where it has BC6H, and the shared-exponent format
+    /// made from `pages` elsewhere.
+    pub blocks: Option<Vec<Vec<u8>>>,
+    /// Takes the shared-exponent format even where BC6H is sampled (for
+    /// tests).
+    pub shared_exponent: bool,
+}
+
+/// How the GPU holds a bake's pages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PageFormat {
+    /// RGBA half floats, 8 bytes a texel: an uncompressed bake.
+    Half,
+    /// BC6H blocks, 1 byte a texel.
+    Bc6h,
+    /// The shared-exponent RGB9E5 format, 4 bytes a texel.
+    SharedExponent,
+}
+
+impl GpuBaked {
+    /// The pages' format on a GPU that samples BC6H (`bc`) or doesn't.
+    pub fn format(&self, bc: bool) -> PageFormat {
+        match &self.blocks {
+            None => PageFormat::Half,
+            Some(_) if bc && !self.shared_exponent => PageFormat::Bc6h,
+            Some(_) => PageFormat::SharedExponent,
+        }
+    }
+
+    /// The header array's layers and the pages array's: two at least (the
+    /// GL backend takes a one-layer array for a 2D texture).
+    pub fn layers(&self) -> (u32, u32) {
+        (2, (self.pages.len() as u32).max(2))
+    }
+
+    /// The GPU memory the two arrays take, in bytes, the pages in `format`.
+    pub fn bytes(&self, format: PageFormat) -> u64 {
+        let (header, pages) = self.layers();
+        let per_texel = match format {
+            PageFormat::Half => 8,
+            PageFormat::Bc6h => 1,
+            PageFormat::SharedExponent => 4,
+        };
+        let page = u64::from(self.page_size).pow(2) * per_texel;
+        let pages = if self.pages.is_empty() {
+            0
+        } else {
+            u64::from(pages) * page
+        };
+        u64::from(self.header_side) * u64::from(self.header_rows) * 8 * u64::from(header) + pages
+    }
+
+    /// The pages in the shared-exponent format, for `queue.write_texture`.
+    pub fn shared_exponent_pages(&self) -> Vec<Vec<u32>> {
+        self.pages
+            .iter()
+            .map(|page| {
+                page.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|t| bc6h::rgb9e5([t[0], t[1], t[2]].map(f16_to_f32)))
+                    .collect()
+            })
+            .collect()
+    }
+}
 
 /// What [`bake_lighting`] bakes: the models, and the light they're lit by.
 ///
@@ -231,7 +408,7 @@ pub(crate) type BakedLayers = std::sync::Arc<(u32, Vec<Vec<u16>>)>;
 /// ```
 #[derive(Debug, Clone)]
 pub struct LightBakeScene {
-    models: Vec<BakeModel>,
+    pub(crate) models: Vec<BakeModel>,
     lamps: Vec<Lamp>,
     sun: Option<(Vec3, Vec3)>,
     sky: SkyLight,
@@ -349,6 +526,12 @@ pub struct LightmapRect {
 /// coordinates it was baked with. Without baked lighting set, or with an
 /// index it doesn't have, the model is drawn as without the component.
 ///
+/// On a [`LodGroup`](crate::render::LodGroup) it is the entry of the first
+/// level's first renderer, and renderer `k` of that level reads entry
+/// `index + k` (as [`LightBakeScene::add_world`] lays a group out). The
+/// other levels, and instance batches, which have no lightmaps, take the
+/// light of the bake's probe volume, as models without the component do.
+///
 /// ```
 /// # use ponko::prelude::*;
 /// let mut world = World::new();
@@ -403,6 +586,10 @@ pub struct BakedLighting {
     rects: Vec<Option<LightmapRect>>,
     probes: Option<Probes>,
     stats: BakeStats,
+    /// For a compressed bake, each page as BC6H blocks (the light pages,
+    /// then the directions as `d * 0.5 + 0.5`): `light` and `direction`
+    /// hold what they decode to.
+    blocks: Option<Vec<Vec<u8>>>,
 }
 
 /// The most lightmap pages a bake makes.
@@ -414,7 +601,12 @@ const HEADER_TEXELS: u32 = 8;
 /// (no texture array of images has a negative value).
 const SIGNATURE: f32 = -1.0;
 const MAGIC: &[u8; 8] = b"PONKOLIT";
-const VERSION: u32 = 1;
+/// Version 2 is version 1's data compressed with LZ4, its pages as BC6H
+/// blocks (and a bit per texel for which are baked) when the bake is.
+const VERSION: u32 = 2;
+/// The most bytes a file's data may unpack to: 16 directional pages of
+/// 2048 x 2048 half floats (1 GiB), and its tables.
+const MAX_UNPACKED: usize = (1 << 30) + (1 << 28);
 
 impl BakedLighting {
     /// The pages' width and height in texels.
@@ -435,6 +627,59 @@ impl BakedLighting {
         !self.direction.is_empty()
     }
 
+    /// Whether its pages are block-compressed
+    /// ([`LightBakeSettings::compress`]).
+    #[must_use]
+    pub fn is_compressed(&self) -> bool {
+        self.blocks.is_some()
+    }
+
+    /// The same with its pages block-compressed (BC6H), and its texels
+    /// what the blocks decode to.
+    pub(crate) fn compress(mut self) -> Self {
+        if self.blocks.is_some() {
+            return self;
+        }
+        let side = self.page_size;
+        let one = f32_to_f16(1.0);
+        // Directions as the GPU reads them, 0 to 1.
+        let to_unit = |d: u16| f32_to_f16((f16_to_f32(d) * 0.5 + 0.5).clamp(0.0, 1.0));
+        let from_unit = |v: u16| f32_to_f16(f16_to_f32(v) * 2.0 - 1.0);
+        let mut blocks = Vec::with_capacity(self.light.len() + self.direction.len());
+        for page in &mut self.light {
+            let b = bc6h::encode_page(page, side);
+            bc6h::decode_page(&b, side, page).expect("blocks of our own");
+            for t in page.iter_mut().filter(|t| t[3] == 0) {
+                *t = [0; 4];
+            }
+            blocks.push(b);
+        }
+        for (p, page) in self.direction.iter_mut().enumerate() {
+            let mut unit: Vec<[u16; 4]> = page
+                .iter()
+                .zip(&self.light[p])
+                .map(|(d, l)| {
+                    [
+                        to_unit(d[0]),
+                        to_unit(d[1]),
+                        to_unit(d[2]),
+                        if l[3] != 0 { one } else { 0 },
+                    ]
+                })
+                .collect();
+            let b = bc6h::encode_page(&unit, side);
+            bc6h::decode_page(&b, side, &mut unit).expect("blocks of our own");
+            for (d, u) in page.iter_mut().zip(&unit) {
+                if u[3] != 0 {
+                    *d = [from_unit(u[0]), from_unit(u[1]), from_unit(u[2]), d[3]];
+                }
+            }
+            blocks.push(b);
+        }
+        self.blocks = Some(blocks);
+        self
+    }
+
     /// The component that draws model `index` of the bake (its index in
     /// the [`LightBakeScene`]) with its lightmap; `None` for a model that
     /// isn't lightmapped.
@@ -450,8 +695,9 @@ impl BakedLighting {
     }
 
     /// The baked light at texel (`x`, `y`) of `page`: irradiance over pi
-    /// (what a white surface there shows), and whether the texel was baked
-    /// (its own or filled from a neighbour).
+    /// (what a white surface there shows; for a compressed bake, as its
+    /// blocks decode), and whether the texel was baked (its own or filled
+    /// from a neighbour).
     #[must_use]
     pub fn texel(&self, page: u32, x: u32, y: u32) -> Option<(Vec3, bool)> {
         let t = self.light.get(page as usize)?.get((y * self.page_size + x) as usize)?;
@@ -491,24 +737,42 @@ impl BakedLighting {
 
     /// The GPU memory it takes when set with
     /// [`Graphics::set_baked_lighting`](crate::gfx::Graphics::set_baked_lighting),
-    /// in bytes: a header layer, then each page's light and directions,
-    /// 8 bytes a texel.
+    /// in bytes: a small array for the table of lightmaps and the probes,
+    /// and each page's light and directions: 1 byte a texel compressed
+    /// (on a GPU that samples BC6H; 4 on the others), else 8. 0 when its
+    /// tables don't fit a texture (`set_baked_lighting` says why).
     #[must_use]
     pub fn gpu_bytes(&self) -> u64 {
-        let layers = 1 + self.light.len() + self.direction.len();
-        u64::from(self.page_size) * u64::from(self.page_size) * 8 * layers as u64
+        self.gpu_layers().map_or(0, |g| g.bytes(g.format(true)))
     }
 
-    /// The texture array the renderer reads (RGBA half floats, each layer
-    /// `page_size` square): layer 0 holds a header (texel 0: the signature
-    /// -1, the pages, 1 when directional; texels 1 and 2: the probe grid's
-    /// origin in two parts and its spacing; texel 3: its counts and the row
-    /// its probes start at), from texel 8 two texels per model (x, y,
-    /// width, height; page), then three texels per probe. Then the pages'
-    /// light, then their directions.
-    pub(crate) fn gpu_layers(&self) -> Result<Vec<Vec<u16>>, Error> {
-        let side = self.page_size;
-        let area = (side * side) as usize;
+    /// What the renderer reads, in two texture arrays. The header (RGBA
+    /// half floats, one layer, the smallest power of two from 64 wide
+    /// whose square holds it, as many rows as it fills): texel 0 the signature -1, the pages, 1 when
+    /// directional, the intensity; texels 1 and 2 the probe grid's origin
+    /// in two parts and its spacing; texel 3 its counts and the row its
+    /// probes start at; texel 4 the pages' size and layers; from texel 8
+    /// two texels per model (x, y, width, height; page), then three texels
+    /// per probe. The pages: each page's light, then their directions (as
+    /// `d * 0.5 + 0.5`).
+    pub(crate) fn gpu_layers(&self) -> Result<GpuBaked, Error> {
+        let table = HEADER_TEXELS as usize + 2 * self.rects.len();
+        let probes = self.probes.as_ref().map_or(0, |p| p.coefficients.len());
+        let holds = |side: usize| table.div_ceil(side) * side + 3 * probes <= side * side;
+        let Some(side) = std::iter::successors(Some(64usize), |s| Some(s * 2))
+            .take_while(|&s| s <= 2048)
+            .find(|&s| holds(s))
+        else {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                format!(
+                    "baked lighting: {} models and {probes} probes don't fit a 2048 x 2048 table; \
+                     bake with a larger probe_spacing",
+                    self.rects.len()
+                ),
+            ));
+        };
+        let area = side * side;
         let mut header = vec![[0u16; 4]; area];
         let set = |header: &mut Vec<[u16; 4]>, at: usize, v: [f32; 4]| header[at] = v.map(f32_to_f16);
         set(
@@ -521,17 +785,18 @@ impl BakedLighting {
                 1.0,
             ],
         );
+        set(
+            &mut header,
+            4,
+            [
+                self.page_size as f32,
+                (self.light.len() + self.direction.len()) as f32,
+                0.0,
+                0.0,
+            ],
+        );
         for (i, rect) in self.rects.iter().enumerate() {
             let at = HEADER_TEXELS as usize + 2 * i;
-            if at + 1 >= area {
-                return Err(Error::new(
-                    ErrorKind::Limit,
-                    format!(
-                        "baked lighting: {} models don't fit in a {side} page's table; bake with a larger page_size",
-                        self.rects.len()
-                    ),
-                ));
-            }
             if let Some(r) = rect {
                 set(
                     &mut header,
@@ -542,16 +807,7 @@ impl BakedLighting {
             }
         }
         if let Some(p) = &self.probes {
-            let row = (HEADER_TEXELS as usize + 2 * self.rects.len()).div_ceil(side as usize);
-            let count = p.coefficients.len();
-            if row * side as usize + 3 * count > area {
-                return Err(Error::new(
-                    ErrorKind::Limit,
-                    format!(
-                        "baked lighting: {count} probes don't fit in a {side} page; bake with a larger probe_spacing or page_size"
-                    ),
-                ));
-            }
+            let row = table.div_ceil(side);
             let hi = p.origin.to_array().map(|v| f16_to_f32(f32_to_f16(v)));
             set(&mut header, 1, [hi[0], hi[1], hi[2], p.spacing]);
             set(
@@ -565,29 +821,55 @@ impl BakedLighting {
                 [p.counts.x as f32, p.counts.y as f32, p.counts.z as f32, row as f32],
             );
             for (i, c) in p.coefficients.iter().enumerate() {
-                let at = row * side as usize + 3 * i;
+                let at = row * side + 3 * i;
                 set(&mut header, at, [c[0], c[1], c[2], c[3]]);
                 set(&mut header, at + 1, [c[4], c[5], c[6], c[7]]);
                 set(&mut header, at + 2, [c[8], c[9], c[10], c[11]]);
             }
         }
+        // Only the rows the table and the probes fill.
+        let rows = (table.div_ceil(side) * side + 3 * probes).div_ceil(side);
+        header.truncate(rows * side);
         let flat = |layer: &[[u16; 4]]| layer.iter().flatten().copied().collect::<Vec<u16>>();
-        let mut layers = vec![flat(&header)];
-        layers.extend(self.light.iter().map(|l| flat(l)));
-        layers.extend(self.direction.iter().map(|l| flat(l)));
-        Ok(layers)
+        let to_unit = |d: u16| f32_to_f16((f16_to_f32(d) * 0.5 + 0.5).clamp(0.0, 1.0));
+        let mut pages: Vec<Vec<u16>> = self.light.iter().map(|l| flat(l)).collect();
+        pages.extend(self.direction.iter().map(|l| {
+            l.iter()
+                .flat_map(|d| [to_unit(d[0]), to_unit(d[1]), to_unit(d[2]), d[3]])
+                .collect()
+        }));
+        Ok(GpuBaked {
+            header_side: side as u32,
+            header_rows: rows as u32,
+            header: flat(&header),
+            page_size: self.page_size,
+            pages,
+            blocks: self.blocks.clone(),
+            shared_exponent: false,
+        })
     }
 
     /// The bake as bytes, to keep in a file and load with
     /// [`from_bytes`](Self::from_bytes) (or
-    /// [`Graphics::load_baked_lighting`](crate::gfx::Graphics::load_baked_lighting)).
+    /// [`Graphics::load_baked_lighting`](crate::gfx::Graphics::load_baked_lighting)):
+    /// compressed with LZ4, a compressed bake's pages as their blocks (1
+    /// byte a texel), an uncompressed one's as half floats (8).
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(64 + self.gpu_bytes() as usize);
+        let mut out = Vec::with_capacity(16);
+        out.extend_from_slice(MAGIC);
+        out.extend_from_slice(&VERSION.to_le_bytes());
+        out.extend_from_slice(&lz4_flex::block::compress_prepend_size(&self.body(true)));
+        out
+    }
+
+    /// What follows the magic and version in [`to_bytes`](Self::to_bytes)
+    /// (before LZ4); `version_2` false: version 1's (with the pages as half
+    /// floats).
+    fn body(&self, version_2: bool) -> Vec<u8> {
+        let mut out = Vec::new();
         let u = |out: &mut Vec<u8>, v: u32| out.extend_from_slice(&v.to_le_bytes());
         let f = |out: &mut Vec<u8>, v: f32| out.extend_from_slice(&v.to_le_bytes());
-        out.extend_from_slice(MAGIC);
-        u(&mut out, VERSION);
         u(&mut out, self.page_size);
         u(&mut out, self.pages());
         u(&mut out, u32::from(self.directional()));
@@ -619,22 +901,70 @@ impl BakedLighting {
             }
             None => u(&mut out, 0),
         }
-        for page in self.light.iter().chain(&self.direction) {
-            for t in page {
-                for v in t {
-                    out.extend_from_slice(&v.to_le_bytes());
+        if version_2 {
+            u(&mut out, u32::from(self.is_compressed()));
+        }
+        match self.blocks.as_ref().filter(|_| version_2) {
+            Some(blocks) => {
+                // Which texels are baked, a bit each, then the blocks.
+                for page in &self.light {
+                    out.extend(page.chunks(8).map(|eight| {
+                        eight
+                            .iter()
+                            .enumerate()
+                            .fold(0u8, |bits, (k, t)| bits | u8::from(t[3] != 0) << k)
+                    }));
+                }
+                for b in blocks {
+                    out.extend_from_slice(b);
+                }
+            }
+            None => {
+                for page in self.light.iter().chain(&self.direction) {
+                    for t in page {
+                        for v in t {
+                            out.extend_from_slice(&v.to_le_bytes());
+                        }
+                    }
                 }
             }
         }
         out
     }
 
-    /// Reads what [`to_bytes`](Self::to_bytes) wrote.
+    /// The mean absolute difference between the directions of `self` and
+    /// `other`, over the texels `self` baked (for tests).
+    #[cfg(test)]
+    pub(crate) fn direction_error(&self, other: &Self) -> f32 {
+        let (mut sum, mut n) = (0.0, 0u64);
+        for (p, page) in self.direction.iter().enumerate() {
+            for (i, d) in page.iter().enumerate() {
+                if self.light[p][i][3] != 0 {
+                    let e = other.direction[p][i];
+                    sum += (0..3).map(|k| (f16_to_f32(d[k]) - f16_to_f32(e[k])).abs()).sum::<f32>() / 3.0;
+                    n += 1;
+                }
+            }
+        }
+        sum / n.max(1) as f32
+    }
+
+    /// The bake in version 1's format (for tests of reading it).
+    #[cfg(test)]
+    pub(crate) fn to_bytes_v1(&self) -> Vec<u8> {
+        let mut out = MAGIC.to_vec();
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend(self.body(false));
+        out
+    }
+
+    /// Reads what [`to_bytes`](Self::to_bytes) wrote (or an earlier
+    /// version of it).
     ///
     /// # Errors
     ///
     /// [`ErrorKind::Decode`] for bytes that aren't baked lighting (or are
-    /// cut short, or of another version).
+    /// cut short, or of a later version).
     ///
     /// ```
     /// let err = ponko::render::BakedLighting::from_bytes(b"not a bake").unwrap_err();
@@ -646,9 +976,33 @@ impl BakedLighting {
         if r.take(8)? != MAGIC {
             return Err(bad("not a baked lighting file (made by BakedLighting::to_bytes)"));
         }
-        if r.u32()? != VERSION {
-            return Err(bad("made by another version of Ponko; bake it again"));
+        match r.u32()? {
+            1 => Self::read_body(&mut r, false),
+            2 => {
+                let packed = &bytes[r.at..];
+                let size = Reader { bytes: packed, at: 0 }.u32()? as usize;
+                // LZ4 packs at most 255 bytes into one.
+                if size > MAX_UNPACKED || size > packed.len().saturating_mul(255) {
+                    return Err(bad("its data is larger than any bake"));
+                }
+                let body = lz4_flex::block::decompress(&packed[4..], size)
+                    .ok()
+                    .filter(|b| b.len() == size)
+                    .ok_or_else(|| bad("its data is damaged"))?;
+                let mut r = Reader { bytes: &body, at: 0 };
+                let baked = Self::read_body(&mut r, true)?;
+                if r.at != body.len() {
+                    return Err(bad("it has data past its end"));
+                }
+                Ok(baked)
+            }
+            _ => Err(bad("made by a later version of Ponko; bake it again")),
         }
+    }
+
+    /// Reads [`body`](Self::body).
+    fn read_body(r: &mut Reader<'_>, version_2: bool) -> Result<Self, Error> {
+        let bad = |why: &str| Error::new(ErrorKind::Decode, format!("baked lighting: {why}"));
         let page_size = r.u32()?;
         let pages = r.u32()?;
         let directional = r.u32()? != 0;
@@ -695,21 +1049,71 @@ impl BakedLighting {
         } else {
             None
         };
+        let compressed = version_2 && r.u32()? != 0;
         let area = (page_size * page_size) as usize;
-        let mut read_pages = |n: u32| -> Result<Vec<Vec<[u16; 4]>>, Error> {
-            (0..n)
-                .map(|_| {
-                    let b = r.take(area * 8)?;
-                    Ok(b.as_chunks::<8>()
-                        .0
-                        .iter()
-                        .map(|t| std::array::from_fn(|k| u16::from_le_bytes([t[2 * k], t[2 * k + 1]])))
-                        .collect())
-                })
-                .collect()
-        };
-        let light = read_pages(pages)?;
-        let direction = if directional { read_pages(pages)? } else { Vec::new() };
+        let mut light: Vec<Vec<[u16; 4]>>;
+        let mut direction: Vec<Vec<[u16; 4]>>;
+        let mut blocks = None;
+        if compressed {
+            if page_size % 8 != 0 {
+                return Err(bad("its sizes are out of range"));
+            }
+            let one = f32_to_f16(1.0);
+            light = Vec::with_capacity(pages as usize);
+            for _ in 0..pages {
+                let bits = r.take(area / 8)?;
+                light.push(
+                    (0..area)
+                        .map(|i| [0, 0, 0, if bits[i / 8] >> (i % 8) & 1 != 0 { one } else { 0 }])
+                        .collect(),
+                );
+            }
+            let layers = pages as usize * if directional { 2 } else { 1 };
+            let per_page = area / 16 * bc6h::BLOCK_BYTES;
+            let read: Vec<Vec<u8>> = (0..layers)
+                .map(|_| r.take(per_page).map(<[u8]>::to_vec))
+                .collect::<Result<_, _>>()?;
+            let damaged = || bad("a block is damaged");
+            for (page, b) in light.iter_mut().zip(&read) {
+                bc6h::decode_page(b, page_size, page).ok_or_else(damaged)?;
+                for t in page.iter_mut().filter(|t| t[3] == 0) {
+                    *t = [0; 4];
+                }
+            }
+            let from_unit = |v: u16| f32_to_f16(f16_to_f32(v) * 2.0 - 1.0);
+            direction = Vec::new();
+            for (p, b) in read.iter().enumerate().skip(pages as usize) {
+                let mut page = light[p - pages as usize].clone();
+                bc6h::decode_page(b, page_size, &mut page).ok_or_else(damaged)?;
+                direction.push(
+                    page.iter()
+                        .map(|u| {
+                            if u[3] != 0 {
+                                [from_unit(u[0]), from_unit(u[1]), from_unit(u[2]), one]
+                            } else {
+                                [0; 4]
+                            }
+                        })
+                        .collect(),
+                );
+            }
+            blocks = Some(read);
+        } else {
+            let mut read_pages = |n: u32| -> Result<Vec<Vec<[u16; 4]>>, Error> {
+                (0..n)
+                    .map(|_| {
+                        let b = r.take(area * 8)?;
+                        Ok(b.as_chunks::<8>()
+                            .0
+                            .iter()
+                            .map(|t| std::array::from_fn(|k| u16::from_le_bytes([t[2 * k], t[2 * k + 1]])))
+                            .collect())
+                    })
+                    .collect()
+            };
+            light = read_pages(pages)?;
+            direction = if directional { read_pages(pages)? } else { Vec::new() };
+        }
         if rects
             .iter()
             .flatten()
@@ -724,6 +1128,7 @@ impl BakedLighting {
             rects,
             probes,
             stats: BakeStats::default(),
+            blocks,
         })
     }
 }
@@ -762,6 +1167,9 @@ impl crate::gfx::Graphics {
     /// already light it). Each model's material must leave its third
     /// custom texture array empty: that slot (`custom_array2`) carries the
     /// baked lighting, so a material that uses it (terrain) isn't lit by it.
+    /// The lightmap pages go in the second slot (`custom_array1`): a
+    /// material that sets its own array there takes the probes' light
+    /// instead of its lightmap.
     /// Setting new baked lighting replaces the old.
     ///
     /// GPU memory: [`BakedLighting::gpu_bytes`]. Works on every GPU tier,
@@ -785,22 +1193,21 @@ impl crate::gfx::Graphics {
     /// which setting to change).
     pub fn set_baked_lighting(&mut self, baked: Option<&BakedLighting>) -> Result<(), Error> {
         let layers = match baked {
-            Some(b) => Some(std::sync::Arc::new((b.page_size(), b.gpu_layers()?))),
+            Some(b) => Some(std::sync::Arc::new(b.gpu_layers()?)),
             None => None,
         };
         if let (Some(layers), Some(renderer)) = (&layers, self.renderer.as_ref())
             && !self.headless
         {
             let (max, max_layers) = renderer.max_texture_array_size();
-            if layers.0 > max || layers.1.len() as u32 > max_layers {
+            let pages = layers.layers().1;
+            if layers.page_size.max(layers.header_side) > max || pages > max_layers {
                 return Err(Error::new(
                     ErrorKind::Limit,
                     format!(
-                        "set_baked_lighting: {} layers of {} x {} are more than this GPU takes ({max} x {max}, {max_layers} layers); \
+                        "set_baked_lighting: {pages} layers of {} x {} are more than this GPU takes ({max} x {max}, {max_layers} layers); \
                          bake with a smaller page_size",
-                        layers.1.len(),
-                        layers.0,
-                        layers.0
+                        layers.page_size, layers.page_size
                     ),
                 ));
             }
@@ -817,7 +1224,7 @@ impl crate::gfx::Graphics {
             return;
         }
         if let (Some(upload), Some(renderer)) = (self.assets3d.baked_upload.take(), self.renderer.as_mut()) {
-            renderer.set_baked_lighting(upload.as_deref().map(|(side, layers)| (*side, layers.as_slice())));
+            renderer.set_baked_lighting(upload.as_deref());
         }
     }
 
@@ -877,6 +1284,8 @@ struct Texel {
     model: u32,
     /// Whether the texel's center is on the triangle (not just near it).
     exact: bool,
+    /// Its page and place on it (`page << 32 | index`): what seeds its rays.
+    key: u64,
 }
 
 /// What gathering found at a texel: irradiance over pi, the mean
@@ -926,11 +1335,104 @@ pub fn bake_lighting(scene: &LightBakeScene, settings: &LightBakeSettings) -> Re
     // as parallel queries run: the bake's parallel loops start inside.
     crate::frame_pool::run(|| {
         crate::profile_scope!("three/shared_bake");
-        bake(scene, settings)
+        bake_with(scene, settings, &mut CpuGather)
     })
 }
 
-fn bake(scene: &LightBakeScene, settings: &LightBakeSettings) -> Result<BakedLighting, Error> {
+/// A probe's gathered order-1 harmonics (none: inside geometry), and the
+/// rays traced for it.
+type GatheredProbe = (Option<[f32; 12]>, u64);
+
+/// Where a bake gathers its light: rays traced on the CPU's cores, or on a
+/// GPU (`gpu::GpuGather`).
+trait Gatherer {
+    /// What each lightmap texel gathers from `samples` rays.
+    fn texels(&mut self, trace: &TraceScene, texels: &[Texel], samples: u32, seed: u64)
+    -> Result<Vec<Gathered>, Error>;
+    /// What each probe at `positions` gathers from `samples` rays over the
+    /// sphere: its coefficients (`None` inside geometry) and its rays.
+    fn probes(
+        &mut self,
+        trace: &TraceScene,
+        positions: &[Vec3],
+        samples: u32,
+        seed: u64,
+    ) -> Result<Vec<GatheredProbe>, Error>;
+}
+
+/// Gathering on every CPU core.
+struct CpuGather;
+
+impl Gatherer for CpuGather {
+    fn texels(
+        &mut self,
+        trace: &TraceScene,
+        texels: &[Texel],
+        samples: u32,
+        seed: u64,
+    ) -> Result<Vec<Gathered>, Error> {
+        Ok(texels
+            .par_iter()
+            .map(|t| gather(trace, t, samples, seed, t.key))
+            .collect())
+    }
+
+    fn probes(
+        &mut self,
+        trace: &TraceScene,
+        positions: &[Vec3],
+        samples: u32,
+        seed: u64,
+    ) -> Result<Vec<GatheredProbe>, Error> {
+        Ok(positions
+            .par_iter()
+            .enumerate()
+            .map(|(i, &at)| {
+                let mut rng = Rng::new(seed, i as u64, 2);
+                let offset = (rng.next(), rng.next());
+                let (mut c0, mut cx, mut cy, mut cz, mut back) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 0);
+                for s in 0..samples {
+                    let (u1, u2) = trace::r2(s, offset);
+                    let d = trace::sphere_sample(u1, u2);
+                    let got = trace.incoming(at, d, 0, &mut rng);
+                    back += u32::from(got.back);
+                    c0 += got.light;
+                    cx += got.light * d.x;
+                    cy += got.light * d.y;
+                    cz += got.light * d.z;
+                }
+                (probe_from_sums([c0, cx, cy, cz], back, samples), rng.rays)
+            })
+            .collect())
+    }
+}
+
+/// A probe's coefficients from the sums of `samples` rays' light over the
+/// sphere (times 1, x, y and z of their directions), or `None` when more
+/// than a quarter of them reached the back of something (it is inside).
+fn probe_from_sums([c0, cx, cy, cz]: [Vec3; 4], back: u32, samples: u32) -> Option<[f32; 12]> {
+    if back * 4 > samples {
+        return None;
+    }
+    // Radiance's order-1 harmonics, then irradiance over pi from
+    // them: E/pi = L00 Y00 + 2/3 L1m Y1m (n), with Y00 = 0.282095
+    // and Y1m = 0.488603 (x, y, z): over the sphere's 4 pi.
+    let k = 4.0 * std::f32::consts::PI / samples as f32;
+    let l0 = c0 * k * 0.282_095;
+    let l1 = [cx, cy, cz].map(|c| c * k * 0.488_603);
+    let e0 = l0 * 0.282_095;
+    let e1 = l1.map(|c| c * 0.488_603 * (2.0 / 3.0));
+    Some([
+        e0.x, e0.y, e0.z, e1[0].x, e1[0].y, e1[0].z, e1[1].x, e1[1].y, e1[1].z, e1[2].x, e1[2].y, e1[2].z,
+    ])
+}
+
+/// [`bake_lighting`], gathering with `gatherer`.
+fn bake_with(
+    scene: &LightBakeScene,
+    settings: &LightBakeSettings,
+    gatherer: &mut dyn Gatherer,
+) -> Result<BakedLighting, Error> {
     let start = web_time::Instant::now();
     let invalid = |m: String| Error::new(ErrorKind::Invalid, format!("bake_lighting: {m}"));
     let tpu = settings.texels_per_unit;
@@ -1032,16 +1534,18 @@ fn bake(scene: &LightBakeScene, settings: &LightBakeSettings) -> Result<BakedLig
         .iter()
         .enumerate()
         .flat_map(|(p, page)| {
-            page.iter()
-                .enumerate()
-                .filter_map(move |(i, t)| t.map(|t| (p as u32, i as u32, t)))
+            page.iter().enumerate().filter_map(move |(i, t)| {
+                t.map(|mut t| {
+                    t.key = u64::from(p as u32) << 32 | i as u64;
+                    (p as u32, i as u32, t)
+                })
+            })
         })
         .collect();
     let samples = settings.samples;
-    let gathered: Vec<Gathered> = jobs
-        .par_iter()
-        .map(|&(p, i, t)| gather(&trace, &t, samples, settings.seed, u64::from(p) << 32 | u64::from(i)))
-        .collect();
+    let job_texels: Vec<Texel> = jobs.iter().map(|j| j.2).collect();
+    let gathered = gatherer.texels(&trace, &job_texels, samples, settings.seed)?;
+    drop(job_texels);
     let mut stats = BakeStats {
         texels: jobs.len() as u64,
         ..Default::default()
@@ -1084,16 +1588,24 @@ fn bake(scene: &LightBakeScene, settings: &LightBakeSettings) -> Result<BakedLig
     } else {
         Vec::new()
     };
-    let probes = grid.map(|grid| bake_probes(&trace, grid, settings, &mut stats));
-    stats.seconds = start.elapsed().as_secs_f64();
-    Ok(BakedLighting {
+    let probes = match grid {
+        Some(grid) => Some(bake_probes(&trace, grid, settings, &mut stats, gatherer)?),
+        None => None,
+    };
+    let mut baked = BakedLighting {
         page_size: side,
         light: light_pages,
         direction: direction_pages,
         rects,
         probes,
         stats,
-    })
+        blocks: None,
+    };
+    if settings.compress {
+        baked = baked.compress();
+    }
+    baked.stats.seconds = start.elapsed().as_secs_f64();
+    Ok(baked)
 }
 
 /// Every model's triangles in one tree, with what they are made of, and
@@ -1109,14 +1621,37 @@ fn trace_scene(scene: &LightBakeScene, bounces: u32) -> (TraceScene, Vec<Tri>, V
     let mut corner_normals = Vec::new();
     let mut surfaces = Vec::with_capacity(scene.models.len());
     let mut first_tri = Vec::with_capacity(scene.models.len());
-    for (m, model) in scene.models.iter().enumerate() {
+    let mut maps: Vec<std::sync::Arc<BakeTexture>> = Vec::new();
+    let mut tri_uvs = Vec::new();
+    let mut map_index = |map: &Option<std::sync::Arc<BakeTexture>>| {
+        map.as_ref()
+            .map(|map| match maps.iter().position(|m| std::sync::Arc::ptr_eq(m, map)) {
+                Some(i) => i as u32,
+                None => {
+                    maps.push(std::sync::Arc::clone(map));
+                    maps.len() as u32 - 1
+                }
+            })
+    };
+    for model in &scene.models {
+        let base = surfaces.len() as u32;
+        let textured = model.uvs.len() == model.positions.len();
         surfaces.push(Surface {
             albedo: rgb(model.albedo).clamp(Vec3::ZERO, Vec3::ONE),
             emissive: rgb(model.emissive).max(Vec3::ZERO),
             double_sided: model.double_sided,
+            map: if textured { map_index(&model.albedo_map) } else { None },
         });
+        for (_, part) in &model.parts {
+            surfaces.push(Surface {
+                albedo: part.albedo.clamp(Vec3::ZERO, Vec3::ONE),
+                emissive: part.emissive.max(Vec3::ZERO),
+                double_sided: part.double_sided,
+                map: if textured { map_index(&part.map) } else { None },
+            });
+        }
         first_tri.push(tris.len());
-        for [a, b, c] in model.triangles() {
+        for (k, [a, b, c]) in model.triangles().enumerate() {
             let p = &model.positions;
             let tri = Tri::new(p[a], p[b], p[c]);
             // Degenerate triangles stay, so indices line up with the
@@ -1128,7 +1663,12 @@ fn trace_scene(scene: &LightBakeScene, bounces: u32) -> (TraceScene, Vec<Tri>, V
                 [n[a], n[b], n[c]]
             });
             tris.push(tri);
-            tri_surface.push(m as u32);
+            tri_uvs.push(if textured {
+                [model.uvs[a], model.uvs[b], model.uvs[c]]
+            } else {
+                [Vec2::ZERO; 3]
+            });
+            tri_surface.push(base + model.part_of(k).map_or(0, |p| p as u32 + 1));
         }
     }
     let trace = TraceScene::new(
@@ -1136,6 +1676,7 @@ fn trace_scene(scene: &LightBakeScene, bounces: u32) -> (TraceScene, Vec<Tri>, V
         tri_surface,
         corner_normals,
         surfaces,
+        (maps, tri_uvs),
         scene.sun,
         scene.lamps.clone(),
         scene.sky,
@@ -1238,6 +1779,7 @@ fn rasterize(
                 normal: if normal.dot(face) > 0.0 { normal } else { face },
                 model: m,
                 exact,
+                key: 0,
             });
         }
     }
@@ -1453,47 +1995,17 @@ fn bake_probes(
     (origin, spacing, counts): (Vec3, f32, UVec3),
     settings: &LightBakeSettings,
     stats: &mut BakeStats,
-) -> Probes {
+    gatherer: &mut dyn Gatherer,
+) -> Result<Probes, Error> {
     let total = (counts.x * counts.y * counts.z) as usize;
     let samples = settings.samples.max(16) * 2;
-    let results: Vec<(Option<[f32; 12]>, u64)> = (0..total)
-        .into_par_iter()
+    let positions: Vec<Vec3> = (0..total as u32)
         .map(|i| {
-            let i = i as u32;
             let cell = UVec3::new(i % counts.x, (i / counts.x) % counts.y, i / (counts.x * counts.y));
-            let at = origin + cell.as_vec3() * spacing;
-            let mut rng = Rng::new(settings.seed, u64::from(i), 2);
-            let offset = (rng.next(), rng.next());
-            let (mut c0, mut cx, mut cy, mut cz, mut back) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 0);
-            for s in 0..samples {
-                let (u1, u2) = trace::r2(s, offset);
-                let d = trace::sphere_sample(u1, u2);
-                let got = trace.incoming(at, d, 0, &mut rng);
-                back += u32::from(got.back);
-                c0 += got.light;
-                cx += got.light * d.x;
-                cy += got.light * d.y;
-                cz += got.light * d.z;
-            }
-            if back * 4 > samples {
-                return (None, rng.rays);
-            }
-            // Radiance's order-1 harmonics, then irradiance over pi from
-            // them: E/pi = L00 Y00 + 2/3 L1m Y1m (n), with Y00 = 0.282095
-            // and Y1m = 0.488603 (x, y, z): over the sphere's 4 pi.
-            let k = 4.0 * std::f32::consts::PI / samples as f32;
-            let l0 = c0 * k * 0.282_095;
-            let l1 = [cx, cy, cz].map(|c| c * k * 0.488_603);
-            let e0 = l0 * 0.282_095;
-            let e1 = l1.map(|c| c * 0.488_603 * (2.0 / 3.0));
-            (
-                Some([
-                    e0.x, e0.y, e0.z, e1[0].x, e1[0].y, e1[0].z, e1[1].x, e1[1].y, e1[1].z, e1[2].x, e1[2].y, e1[2].z,
-                ]),
-                rng.rays,
-            )
+            origin + cell.as_vec3() * spacing
         })
         .collect();
+    let results = gatherer.probes(trace, &positions, samples, settings.seed)?;
     stats.probes = total as u64;
     stats.rays += results.iter().map(|r| r.1).sum::<u64>();
     let mut coefficients: Vec<Option<[f32; 12]>> = results.into_iter().map(|r| r.0).collect();
@@ -1533,12 +2045,12 @@ fn bake_probes(
             break;
         }
     }
-    Probes {
+    Ok(Probes {
         origin,
         spacing,
         counts,
         coefficients: coefficients.into_iter().map(Option::unwrap_or_default).collect(),
-    }
+    })
 }
 
 /// `x` as a half float (rounded to nearest, overflow to infinity).

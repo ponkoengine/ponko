@@ -2885,6 +2885,18 @@
     "reason": "Internal invariant: };             return;         }         let s = sample.unwrap();",
     "site": "src/three/autotune.rs:223"
   },
+  "src/three/bake/mod.rs:29b73c37e0eb892f": {
+    "classification": "invariant",
+    "construction": ".expect(\"blocks of our own\")",
+    "reason": "compress decodes blocks encode_page made just above from the same page and side: always mode 11, always the right length",
+    "site": "src/three/bake/mod.rs:645"
+  },
+  "src/three/bake/mod.rs:65691f982511d403": {
+    "classification": "invariant",
+    "construction": ".expect(\"blocks of our own\")",
+    "reason": "compress decodes blocks encode_page made just above from the same page and side: always mode 11, always the right length",
+    "site": "src/three/bake/mod.rs:658"
+  },
   "src/three/bake/mod.rs:7c9483706dd71301": {
     "classification": "forwarded-error",
     "construction": "panic!(\"{e}\")",

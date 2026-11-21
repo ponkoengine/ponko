@@ -11,6 +11,8 @@ pub(super) struct Surface {
     pub albedo: Vec3,
     pub emissive: Vec3,
     pub double_sided: bool,
+    /// Its albedo map, an index into `TraceScene::maps`.
+    pub map: Option<u32>,
 }
 
 /// A point or spot light, as the renderer lights with it.
@@ -46,13 +48,16 @@ impl SkyLight {
 }
 
 pub(super) struct TraceScene {
-    bvh: Bvh,
+    pub bvh: Bvh,
     /// Per triangle: which surface, its unit face normal, its corners'
     /// normals.
     pub tri_surface: Vec<u32>,
     pub tri_normal: Vec<Vec3>,
     pub tri_corner_normals: Vec<[Vec3; 3]>,
     pub surfaces: Vec<Surface>,
+    /// Albedo maps, and each triangle's corners' texture coordinates.
+    pub maps: Vec<std::sync::Arc<super::BakeTexture>>,
+    pub tri_uvs: Vec<[glam::Vec2; 3]>,
     /// Unit direction towards the sun, and its light (linear color times
     /// intensity).
     pub sun: Option<(Vec3, Vec3)>,
@@ -77,6 +82,7 @@ impl TraceScene {
         tri_surface: Vec<u32>,
         tri_corner_normals: Vec<[Vec3; 3]>,
         surfaces: Vec<Surface>,
+        (maps, tri_uvs): (Vec<std::sync::Arc<super::BakeTexture>>, Vec<[glam::Vec2; 3]>),
         sun: Option<(Vec3, Vec3)>,
         lamps: Vec<Lamp>,
         sky: SkyLight,
@@ -102,6 +108,8 @@ impl TraceScene {
             tri_normal,
             tri_corner_normals,
             surfaces,
+            maps,
+            tri_uvs,
             sun,
             lamps,
             sky,
@@ -189,7 +197,15 @@ impl TraceScene {
             flip = true;
         }
         let mut light = surface.emissive;
-        if depth < self.bounces && surface.albedo != Vec3::ZERO {
+        let albedo = match surface.map {
+            Some(map) => {
+                let [a, b, c] = self.tri_uvs[i];
+                let uv = a * (1.0 - hit.u - hit.v) + b * hit.u + c * hit.v;
+                surface.albedo * self.maps[map as usize].sample(uv)
+            }
+            None => surface.albedo,
+        };
+        if depth < self.bounces && albedo != Vec3::ZERO {
             let [n0, n1, n2] = self.tri_corner_normals[i];
             let mut n = (n0 * (1.0 - hit.u - hit.v) + n1 * hit.u + n2 * hit.v).normalize_or(ng);
             if flip {
@@ -201,7 +217,7 @@ impl TraceScene {
             let p = origin + dir * hit.t + ng * self.bias;
             let direct = self.direct(p, n, &mut rng.rays);
             let bounce = self.incoming(p, cosine_sample(n, rng.next(), rng.next()), depth + 1, rng);
-            light += surface.albedo * (direct / std::f32::consts::PI + bounce.light);
+            light += albedo * (direct / std::f32::consts::PI + bounce.light);
         }
         Incoming { light, back: false }
     }

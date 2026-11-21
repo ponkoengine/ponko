@@ -90,7 +90,10 @@ impl Rig {
                         .unwrap_or(defaults.max_storage_buffers_per_shader_stage),
                     ..defaults
                 },
-                required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+                // As the engine asks: block-compressed textures (baked
+                // lightmaps) where the adapter has them.
+                required_features: adapter.features()
+                    & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TEXTURE_COMPRESSION_BC),
                 ..Default::default()
             })
         })?;

@@ -610,6 +610,8 @@ mod ray_query_prototype_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod ray_tracing_probe_render_test;
 
+#[cfg(all(feature = "3d", feature = "window", not(target_arch = "wasm32")))]
+pub use crate::three::bake_lighting_gpu;
 #[cfg(feature = "3d")]
 pub use crate::three::Upscaler;
 #[cfg(feature = "3d")]
@@ -625,8 +627,8 @@ pub use crate::three::{
 };
 #[cfg(feature = "3d")]
 pub use crate::three::{
-    BakeModel, BakeStats, BakedLighting, LightBakeScene, LightBakeSettings, LightmapRect, Lightmapped,
-    MAX_LIGHTMAP_PAGES, bake_lighting,
+    BakeModel, BakeStats, BakeTexture, BakedLighting, GltfBake, LightBakeScene, LightBakeSettings, LightmapRect,
+    Lightmapped, MAX_LIGHTMAP_PAGES, Unbaked, WorldBake, bake_lighting,
 };
 #[cfg(feature = "3d")]
 pub use crate::three::{CloudQuality, Clouds, DayNight, Moon, SkyKit};

@@ -500,6 +500,10 @@ binding arrives:
 | `GameRollback` | [Rollback](networking.md#rolling-back-a-whole-game) | Generic over the game's input type, which C and C++ can't name; C and C++ games use lockstep (`ponko_net_*`). A binding with fixed-size byte inputs is possible later |
 | `WorldSnapshot` | [Rollback](networking.md#rolling-back-a-whole-game) | Used through `GameRollback`; C and C++ components without a destructor are copied as bytes, so a binding can follow with it |
 | `Graphics::load_lights`, `Graphics::load_cameras` | [3D](3d.md#gltf-extensions-lights-and-cameras) | Models load with the same glTF extensions; a file's lights and cameras aren't returned yet, so place them yourself |
+| `LightBakeScene::add_world`, `LightBakeScene::add_gltf`, `Graphics::keep_bake_sources`, `Unbaked` | [Baked lighting](3d.md#baked-lighting) | C and C++ components can't be listed by mesh: add each model with `ponko_light_bake_scene_add` (`light_bake_scene::add`), and leave out the ones that shouldn't bake |
+| `BakeTexture` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: give a textured model its texture's average color as its albedo |
+| `bake_lighting_gpu` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: `ponko_bake_lighting` bakes the same light on the CPU |
+| `LightBakeSettings::compress` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: C and C++ bakes are compressed, the default |
 | `Smoothing` | [Client prediction](networking.md#your-own-player-at-once-client-prediction) | Generic over what is drawn; prediction and the input queue are bound (`ponko::prediction`), so fade the correction offset (`reconciled::before`) yourself |
 | `Physics3D::move_character` | [3D physics](physics3d.md#a-walking-character) | Characters walk with the physics step only; one tick can't be replayed on its own |
 | `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ web games can't join over WebSocket |
