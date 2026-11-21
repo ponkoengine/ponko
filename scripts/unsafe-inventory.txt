@@ -125,7 +125,7 @@ src/web_threads.rs | spawn_worker | web/smoke/threads.mjs | wasm
 
 # ---- The command-line tool ---------------------------------------------------
 
-crates/ponko_cli/src/textures.rs | uastc | crates/ponko_cli/src/textures.rs::basis_textures_keep_uastc_blocks_and_say_their_channels | c-library
+crates/ponko_cli/src/textures.rs | uastc_on | crates/ponko_cli/src/textures.rs::the_shared_encoder_gives_the_same_blocks_as_a_fresh_one | c-library
 
 # ---- The C API: helpers no tested C function reaches by a plain call ---------
 

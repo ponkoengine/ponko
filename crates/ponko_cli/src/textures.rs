@@ -598,20 +598,63 @@ fn uastc(rgba: &[u8], width: u32, height: u32, srgb: bool, mipmaps: bool) -> Res
     params.set_generate_mipmaps(mipmaps);
     params.set_print_status_to_stdout(false);
     params.source_image_mut(0).init(rgba, width, height, 4);
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
-    let mut compressor = Compressor::new(threads);
-    // SAFETY: `params` outlives the compressor's use of it (both are dropped
-    // at the end of this function, after `process`), and holds one valid
-    // source image of `width` x `height` x 4 bytes copied in by `init`.
-    let ready = unsafe { compressor.init(&params) };
+    if encoder_threads(width, height) == 1 {
+        // No worker threads: dropping it joins nothing.
+        return uastc_on(&mut Compressor::new(1), &params);
+    }
+    let mut shared = SHARED_ENCODER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    uastc_on(shared.get_or_insert_with(|| Compressor::new(cores())), &params)
+}
+
+/// Encodes `params` (one RGBA8 source image) on `compressor`: [`uastc`]'s
+/// levels and alpha.
+fn uastc_on(compressor: &mut Compressor, params: &CompressorParams) -> Result<(Vec<Vec<u8>>, bool), String> {
+    // SAFETY: `init` copies `params` (the settings and the one source image
+    // `uastc` copied in with `source_image_mut(0).init`) into the
+    // compressor, so nothing it keeps points into `params`.
+    let ready = unsafe { compressor.init(params) };
     if !ready {
         return Err("the Basis Universal encoder refused the settings".into());
     }
-    // SAFETY: as above; `init` succeeded.
+    // SAFETY: as above; `init` succeeded. Every encode starts by reading its
+    // source images again, so a reused compressor keeps nothing of the image
+    // before (the test `the_shared_encoder_gives_the_same_blocks_as_a_fresh_one`).
     unsafe { compressor.process() }.map_err(|e| format!("Basis Universal encoding failed: {e:?}"))?;
     let levels = basis_uastc_levels(compressor.basis_file())?;
     Ok((levels, compressor.any_source_image_has_alpha()))
 }
+
+/// Images with fewer 4 x 4 blocks than this (a 256 x 256 image has 4,096)
+/// are encoded on the calling thread alone: worker threads gain little on
+/// them, and a cook already encodes several images at once, one per core.
+const SHARED_ENCODER_MIN_BLOCKS: u64 = 4096;
+
+/// How many threads encode a `width` x `height` image: the calling thread
+/// alone for a small one, every core for a larger one (on
+/// [`SHARED_ENCODER`]).
+fn encoder_threads(width: u32, height: u32) -> u32 {
+    let blocks = u64::from(width.div_ceil(4)) * u64::from(height.div_ceil(4));
+    if blocks < SHARED_ENCODER_MIN_BLOCKS { 1 } else { cores() }
+}
+
+/// The threads the machine runs at once.
+fn cores() -> u32 {
+    std::thread::available_parallelism().map_or(1, |n| u32::try_from(n.get()).unwrap_or(u32::MAX))
+}
+
+/// The process's one Basis Universal encoder with worker threads, made on
+/// first use and never dropped; larger images take turns on it.
+///
+/// Dropping an encoder that has worker threads can hang forever. Its job
+/// pool's destructor sets the pool's stop flag without holding the pool's
+/// lock, then wakes the workers and joins them; a worker that has just
+/// found no work, but not yet gone to sleep, misses that wake-up and sleeps
+/// for good, so the join never returns. It takes a busy machine (seen at a
+/// load average of 80, an encoder dropped right after a small encode), and
+/// the encoder is third-party code, so this module never drops one: an
+/// encoder of one thread has no workers to join, and this one lives until
+/// the process exits.
+static SHARED_ENCODER: std::sync::Mutex<Option<Compressor>> = std::sync::Mutex::new(None);
 
 /// The UASTC blocks of each mip level of image 0 in a `.basis` file (its
 /// slice descriptions say where), so they can go into a KTX2 file.
@@ -938,6 +981,95 @@ pub(crate) mod tests {
         assert_eq!(reader.basic_dfd().unwrap().sample_information[0].channel_type, 5);
         assert_eq!(reader.levels().len(), 6);
         assert_eq!(reader.transfer_function(), Some(ktx2::TransferFunction::Linear));
+    }
+
+    /// A `size` x `size` image unlike its neighbours: noise over a
+    /// gradient, from `seed`.
+    fn noisy(size: u32, seed: u32) -> Vec<u8> {
+        let mut state = seed.wrapping_mul(2_654_435_761).max(1);
+        let mut rgba = Vec::new();
+        for y in 0..size {
+            for x in 0..size {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                let n = (state % 32) as u8;
+                rgba.extend_from_slice(&[
+                    (x as u8).wrapping_add(n),
+                    (y as u8).wrapping_add(n),
+                    (seed as u8) ^ n,
+                    255,
+                ]);
+            }
+        }
+        rgba
+    }
+
+    #[test]
+    fn small_images_encode_on_one_thread_and_larger_ones_on_one_shared_encoder() {
+        assert_eq!(encoder_threads(32, 32), 1);
+        assert_eq!(encoder_threads(252, 252), 1, "63 x 63 blocks");
+        assert_eq!(encoder_threads(256, 256), cores());
+        assert_eq!(encoder_threads(4096, 4), 1, "one row of 1,024 blocks");
+        assert_eq!(encoder_threads(4096, 16), cores());
+        let pointer = || SHARED_ENCODER.lock().unwrap().as_ref().map(|c| c.0);
+        uastc(&noisy(256, 1), 256, 256, true, true).unwrap();
+        let first = pointer().expect("the larger image made the shared encoder");
+        uastc(&noisy(256, 2), 256, 256, true, true).unwrap();
+        uastc(&noisy(16, 3), 16, 16, true, true).unwrap();
+        assert_eq!(pointer(), Some(first), "the same encoder, kept");
+    }
+
+    #[test]
+    fn the_shared_encoder_gives_the_same_blocks_as_a_fresh_one() {
+        let (a, b) = (noisy(256, 4), noisy(256, 5));
+        // A goes first, so B is encoded on an encoder that last held A.
+        let on_shared_a = uastc(&a, 256, 256, true, true).unwrap();
+        let on_shared_b = uastc(&b, 256, 256, true, true).unwrap();
+        let fresh = |rgba: &[u8]| {
+            let mut params = CompressorParams::new();
+            params.set_basis_format(BasisTextureFormat::UASTC4x4);
+            params.set_uastc_quality_level(UASTC_QUALITY_DEFAULT);
+            params.set_color_space(ColorSpace::Srgb);
+            params.set_generate_mipmaps(true);
+            params.set_print_status_to_stdout(false);
+            params.source_image_mut(0).init(rgba, 256, 256, 4);
+            uastc_on(&mut Compressor::new(1), &params).unwrap()
+        };
+        assert_eq!(on_shared_b, fresh(&b));
+        assert_eq!(on_shared_a, fresh(&a));
+        // Negative control: the two images' blocks differ.
+        assert_ne!(on_shared_a.0[0], on_shared_b.0[0]);
+    }
+
+    #[test]
+    fn encodes_from_many_threads_at_once_all_finish() {
+        // Encoders used to be made and dropped per image; one dropped on a
+        // busy machine could hang the process (see `SHARED_ENCODER`).
+        let (done, finished) = std::sync::mpsc::channel();
+        for t in 0..8u32 {
+            let done = done.clone();
+            std::thread::spawn(move || {
+                for i in 0..12u32 {
+                    let size = if i % 6 == 5 { 256 } else { 4 << (i % 4) };
+                    let encoded = encode(&noisy(size, t * 100 + i), size, size, Rule::of(Kind::Color));
+                    done.send(encoded.map(|e| e.levels)).unwrap();
+                }
+            });
+        }
+        drop(done);
+        let mut count = 0;
+        loop {
+            match finished.recv_timeout(std::time::Duration::from_secs(120)) {
+                Ok(levels) => {
+                    assert!(levels.unwrap() >= 3);
+                    count += 1;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("an encode stalled after {count} of 96"),
+            }
+        }
+        assert_eq!(count, 96);
     }
 
     #[test]
