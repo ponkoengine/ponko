@@ -1041,7 +1041,7 @@ fn memory_run(load_from: Option<&serde_json::Value>, ticks: u64, save_at: u64) -
             ctx.world.query::<(Entity, &mut Blackboard)>().for_each(|(e, bb)| {
                 let n = bb.num(Key::new("work")) + 1.0;
                 bb.set(Key::new("work"), n);
-                if n as u32 % 25 == 0 {
+                if (n as u32).is_multiple_of(25) {
                     ring.push(e);
                 }
             });
@@ -1058,7 +1058,7 @@ fn memory_run(load_from: Option<&serde_json::Value>, ticks: u64, save_at: u64) -
                     if brain.action().is_some() {
                         let steps = bb.num(Key::new("steps")) + 1.0;
                         bb.set(Key::new("steps"), steps);
-                        if steps as u32 % 3 == 0 {
+                        if (steps as u32).is_multiple_of(3) {
                             brain.succeed();
                         }
                     }
@@ -1167,7 +1167,7 @@ fn decisions(seed: u64) -> Vec<u64> {
             ctx.world.query::<(Entity, &mut Blackboard)>().for_each(|(e, bb)| {
                 let x = (e.index() as u64 * 2_654_435_761 + tick * 40_503) % 1000;
                 bb.set(HUNGER, (x % 100) as f32);
-                if x % 97 == 0 {
+                if x.is_multiple_of(97) {
                     shout.push(e);
                 }
             });

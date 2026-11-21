@@ -414,7 +414,7 @@ fn read_subtrees(
         let text = sources
             .find(sub)
             .and_then(|f| f.into_text(sub))
-            .map_err(|e| e.context(&format!("subtree of {}", stack[stack.len() - 1])))?;
+            .map_err(|e| e.context(format!("subtree of {}", stack.last().copied().unwrap_or(sub))))?;
         let subtree = BehaviorTree::from_json(&text).map_err(|e| e.context(sub).with_path(sub))?;
         stack.push(sub);
         read_subtrees(world, sources, &subtree, stack, found)?;

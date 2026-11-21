@@ -225,10 +225,13 @@ impl Tick<'_> {
     }
 }
 
+/// Finds a tree by name, for `subtree` nodes.
+pub(crate) type Resolve<'r> = dyn Fn(&str) -> Option<Arc<BehaviorTree>> + 'r;
+
 /// How `subtree` nodes are linked while a tree compiles.
 pub(crate) struct Linker<'a> {
     /// Finds a tree by name; `None` while compiling a tree on its own.
-    resolve: Option<&'a dyn Fn(&str) -> Option<Arc<BehaviorTree>>>,
+    resolve: Option<&'a Resolve<'a>>,
     /// The trees being compiled, outermost first: a name already here is a
     /// cycle.
     stack: Vec<&'static str>,
@@ -276,11 +279,7 @@ impl BehaviorTree {
     /// [`ErrorKind::Invalid`] for a cycle (a tree that is, through its
     /// subtrees, part of itself), naming every tree on it;
     /// [`ErrorKind::Limit`] if the linked tree has too many nodes.
-    pub(crate) fn link(
-        name: &'static str,
-        src: &BehaviorTree,
-        resolve: &dyn Fn(&str) -> Option<Arc<BehaviorTree>>,
-    ) -> Result<BehaviorTree, Error> {
+    pub(crate) fn link(name: &'static str, src: &BehaviorTree, resolve: &Resolve<'_>) -> Result<BehaviorTree, Error> {
         BehaviorTree::compile(
             &src.source,
             &mut Linker {
