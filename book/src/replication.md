@@ -666,7 +666,8 @@ and the server moves the players' entities. So are
 `Replication::interpolated` and `Replication::position` (generic over Rust
 types): a C component is set when its update arrives.
 
-Events for C and C++ are [raw events](#raw-events-bytes-you-encode):
+Typed events (`Replication::event`) are generic over serde types, so
+events for C and C++ are [raw events](#raw-events-bytes-you-encode):
 bytes the game encodes itself. Their Rust side (`Replication::raw_event`,
 `to_server_raw`, `to_client_raw`, `to_clients_raw` and
 `NetEvent<RawEvent>`) is in place; the C and C++ calls that wrap it are
