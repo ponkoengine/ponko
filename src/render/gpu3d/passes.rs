@@ -141,6 +141,9 @@ pub(crate) enum Resource {
     /// The reflection cone's spread, as the trace writes it: where its
     /// rays found something.
     ReflectionHits,
+    /// The scene depth copied to one 32-bit float per pixel, which the
+    /// reflections' trace and filtered levels read.
+    ReflectionDepth,
     /// The reflection cone's spread filled in where the rays found nothing:
     /// the opaque pass reads it, or a copy in the screen image's first
     /// level.
@@ -201,6 +204,8 @@ pub(crate) enum Format {
     /// The reflection cone's spread and whether a ray found anything: two
     /// 16-bit float channels.
     Hits,
+    /// A copy of the depth as a color image: one 32-bit float channel.
+    DepthCopy,
     /// The window's (or render target's) color format.
     Output,
     /// Decided by the game or by another module: not checked.
@@ -229,7 +234,7 @@ pub(crate) struct Desc {
 
 impl Resource {
     /// Every resource, in declaration order.
-    pub(crate) const ALL: [Resource; 49] = {
+    pub(crate) const ALL: [Resource; 50] = {
         use Resource::*;
         [
             VisibleDraws,
@@ -269,6 +274,7 @@ impl Resource {
             ScreenImage,
             ReflectionLevels,
             ReflectionHits,
+            ReflectionDepth,
             ReflectionSpread,
             ReflectionHistory,
             TaaHistory,
@@ -338,6 +344,7 @@ impl Resource {
             Resource::ScreenImage => desc("screen image", Frame, F::Screen, One),
             Resource::ReflectionLevels => desc("reflection levels", Frame, F::Screen, One),
             Resource::ReflectionHits => desc("reflection hits", Frame, F::Hits, One),
+            Resource::ReflectionDepth => desc("reflection depth", Frame, F::DepthCopy, One),
             Resource::ReflectionSpread => desc("reflection spread", Frame, F::Spread, One),
             Resource::ReflectionHistory => desc("reflection history", Persistent, F::Hdr, One),
             Resource::TaaHistory => desc("taa history", Persistent, F::Hdr, One),
@@ -1044,11 +1051,18 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
             // With the spread image read directly and without ambient
             // occlusion, the first frame also clears the screen image's first
             // level to say the reflections are there; nothing else writes it.
+            // The depth the trace and the filtered levels read, copied to
+            // one sample per pixel (cheaper to read than the multisampled one).
+            step(
+                "reflection depth",
+                on(F::SSR),
+                &[u(SceneDepth, A::SampleMs), u(ReflectionDepth, A::Color)],
+            ),
             step(
                 "reflections",
                 on(F::SSR),
                 &[
-                    u(SceneDepth, A::SampleMs),
+                    u(ReflectionDepth, A::Sample),
                     u(ReflectionHistory, A::SamplePrevious),
                     u(ScreenImage, A::Color),
                     u(ReflectionHits, A::Color),
@@ -1063,6 +1077,7 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 &[
                     u(ScreenImage, A::Read),
                     u(ReflectionHits, A::Read),
+                    u(ReflectionDepth, A::Read),
                     u(ReflectionLevels, A::Write),
                     u(ReflectionLevels, A::CopyFrom),
                     u(ScreenImage, A::CopyTo),
