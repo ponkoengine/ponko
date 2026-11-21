@@ -515,20 +515,14 @@ impl Ctx {
         ctx
     }
 
-    /// Which frames' GPU passes are timed: every frame while something reads
-    /// every frame (profiling, the HUD, a trace, a benchmark run, automatic
-    /// quality, which counts consecutive frames over or under its budget),
-    /// otherwise every [`GPU_TIMING_EVERY`](crate::perf::GPU_TIMING_EVERY)th.
+    /// Which frames' GPU passes are timed: every `n`th, 0 for none (see
+    /// [`Perf::gpu_timing_every`](crate::perf::Perf::gpu_timing_every)).
     pub(crate) fn gpu_timing_every(&self) -> u32 {
         #[cfg(feature = "3d")]
         let autotune = self.scene3d.autotune.policy.is_some();
         #[cfg(not(feature = "3d"))]
         let autotune = false;
-        if autotune || self.perf.reads_every_gpu_frame() {
-            1
-        } else {
-            crate::perf::GPU_TIMING_EVERY
-        }
+        self.perf.gpu_timing_every(autotune)
     }
 
     /// Engine side: draw everything queued this frame, then reset the queue.
