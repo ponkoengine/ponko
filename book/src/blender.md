@@ -265,19 +265,36 @@ mesh each.
 
 Every spawn of one file shares its meshes, materials and collision shapes.
 The hull or triangle mesh fitted for a `ponko:collider` is made once for
-the file, and used again by its other nodes of the same mesh at the same
-scale and by every later spawn; boxes, spheres and capsules are fitted
-once too. All of it goes when the last scene that uses it is despawned or
-replaced by a world load. Exporting the file again while the game runs
-makes one new set for all its scenes and frees the old set once no scene
-holds it.
+the file, unscaled, and used again by its other nodes of the same mesh at
+every scale and by every later spawn: each collider scales it where it is
+used (`d3::Shape::ScaledMesh`), so a node scaled up, flattened or mirrored
+(a negative scale) is solid exactly where it is drawn. Boxes, spheres and
+capsules are fitted to the scaled mesh, once per scale. All of it goes
+when the last scene that uses it is despawned or replaced by a world load.
+Exporting the file again while the game runs makes one new set for all its
+scenes and frees the old set once no scene holds it.
+
+A file is read once while it is unchanged. The first spawn parses it; the
+nodes it read (their transforms, properties and lights, and each glTF
+mesh's corners and triangles, once) stay with the file's shared meshes, so
+a later spawn only reads the file's bytes and its buffers to see that they
+are the same, and parses nothing. A file or buffer that changed on disk
+since, a mesh the game freed, or the last scene of the file going makes
+the next spawn read it again; an export the game reloads is parsed once
+for all its scenes. The corners and triangles kept are a CPU copy of the
+file's geometry, without normals, UVs or images, for as long as a scene of
+the file lives.
 
 The engine's benchmark (`cargo run --release -p ponko_bench -- gltf/`)
 spawns a file of twelve nodes of one rock mesh (1,024 corners), eight of
 them with colliders. One spawn holds one mesh (66.5 KiB) instead of twelve
-(798 KiB). A hundred spawns hold two collision meshes instead of 600, keep
-1.4 MiB of heap instead of 115 MiB, and take about 9 ms instead of
-0.2–0.9 s.
+(798 KiB). A hundred spawns hold two collision meshes instead of 600 and
+keep 1.5 MiB of heap instead of 115 MiB. They take about 2.3 ms: the first
+spawn 0.5 ms, each later one about 18 µs, where it was 80 µs when every
+spawn parsed the file (8.4 ms for the hundred); keeping what was read costs
+45 KiB. With the rocks at four scales (plain, doubled, flattened and
+mirrored), a hundred spawns hold two collision meshes where fitting one per
+scale made five.
 
 ## Navigation meshes
 

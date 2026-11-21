@@ -483,8 +483,11 @@ impl Physics3D {
     ///
     /// The shape's own offset doesn't apply (place it with `position`); a
     /// [`Shape3D::Mesh`] keeps the offset its mesh was made with, and a freed
-    /// one finds nothing. A pair that has no penetration depth (a triangle
-    /// mesh or heightfield against another) is left out. Doesn't allocate.
+    /// one finds nothing. A [`Shape3D::ScaledMesh`] uses the copy a collider
+    /// at the same scale already has, else makes one for the query (which
+    /// allocates). A pair that has no penetration depth (a triangle
+    /// mesh or heightfield against another) is left out. Doesn't allocate,
+    /// but for that scaled copy.
     ///
     /// ```
     /// use ponko::prelude::*;
@@ -517,6 +520,12 @@ impl Physics3D {
                     let shape = slot.shape.as_ref().expect("live slot");
                     let at = position + rotation.normalize() * slot.offset;
                     self.push_out(&**shape, at, rotation, filter, out);
+                }
+            }
+            Shape3D::ScaledMesh { mesh, scale } => {
+                if let Some((shape, offset, _)) = self.scaled_mesh(mesh, scale) {
+                    let at = position + rotation.normalize() * offset;
+                    self.push_out(&*shape, at, rotation, filter, out);
                 }
             }
         }

@@ -88,7 +88,11 @@ impl GpuMaterialDesc {
 /// for all the nodes of one glTF mesh), and
 /// where the file is on disk, when it is a file
 /// ([`Graphics::load_node_meshes`]).
-pub(crate) type NodeMeshes = (gltf::LoadedNodes, Vec<Option<Mesh>>, Option<std::path::PathBuf>);
+pub(crate) type NodeMeshes = (
+    std::sync::Arc<gltf::ReadNodes>,
+    Vec<Option<Mesh>>,
+    Option<std::path::PathBuf>,
+);
 
 impl Graphics {
     /// Puts a material on the GPU: a color (and texture), how rough and how
@@ -1038,15 +1042,18 @@ impl Graphics {
     /// Each call makes new meshes; the caller frees them, unless `reuse`
     /// holds meshes made for the same file before (another spawn's), all
     /// live and one for each node that has triangles: then those are
-    /// returned again, and the file's images aren't decoded. `refresh` (the
-    /// file changed) never reuses, reads its images again and updates its
-    /// materials in place. Also returns where the file is on disk, when it
-    /// is a file.
+    /// returned again, and the file's images aren't decoded; if `read` (what
+    /// an earlier call returned for the file) holds the file as it still is,
+    /// the file isn't parsed either. `refresh` (the file changed) never
+    /// reuses, reads its images again and updates its materials in place.
+    /// Returns the nodes as read, to keep for the next call, and where the
+    /// file is on disk, when it is a file.
     pub(crate) fn load_node_meshes(
         &mut self,
         path: &str,
         refresh: bool,
         reuse: Option<&[Option<Mesh>]>,
+        read: Option<&std::sync::Arc<gltf::ReadNodes>>,
     ) -> Result<NodeMeshes, crate::error::Error> {
         let found = self.asset_sources.find(path)?;
         let file = found.origin.clone();
@@ -1058,7 +1065,18 @@ impl Graphics {
         let reuse = reuse.filter(|meshes| !refresh && meshes.iter().flatten().all(|&m| self.is_live(m)));
         let shared = &self.assets3d.shared_images;
         let sources = &self.asset_sources;
+        // Every mesh is there and the file is as it was read: nothing to parse.
+        let fits = |meshes: &[Option<Mesh>], nodes: &[gltf::LoadedNode]| {
+            meshes.len() == nodes.len() && meshes.iter().zip(nodes).all(|(m, n)| m.is_some() == n.mesh.is_some())
+        };
+        if let (Some(meshes), Some(read)) = (reuse, read)
+            && fits(meshes, &read.nodes)
+            && read.unchanged(&bytes, &mut |name| sources.read(name))
+        {
+            return Ok((std::sync::Arc::clone(read), meshes.to_vec(), on_disk));
+        }
         let gpu = self.model_formats();
+        self.assets3d.gltf_scene_parses += 1;
         let loaded = gltf::load_nodes(
             path,
             &bytes,
@@ -1071,18 +1089,15 @@ impl Graphics {
         )
         .map_err(|e| crate::error::Error::decode(path, e))?;
         if let Some(meshes) = reuse
-            && meshes.len() == loaded.nodes.len()
-            && meshes
-                .iter()
-                .zip(&loaded.nodes)
-                .all(|(m, n)| m.is_some() == n.mesh.is_some())
+            && fits(meshes, &loaded.nodes)
         {
-            return Ok((loaded, meshes.to_vec(), on_disk));
+            let read = gltf::ReadNodes::keep(loaded, &bytes);
+            return Ok((std::sync::Arc::new(read), meshes.to_vec(), on_disk));
         }
         if reuse.is_some() {
             // The file no longer matches the meshes (changed on disk, with
             // hot reload off): read it whole.
-            return self.load_node_meshes(path, refresh, None);
+            return self.load_node_meshes(path, refresh, None, None);
         }
         let image_keys = loaded
             .image_sources
@@ -1109,7 +1124,8 @@ impl Graphics {
             };
             meshes.push(mesh);
         }
-        Ok((loaded, meshes, on_disk))
+        let read = gltf::ReadNodes::keep(loaded, &bytes);
+        Ok((std::sync::Arc::new(read), meshes, on_disk))
     }
 
     /// The block formats a model's KTX2 images stay in (see

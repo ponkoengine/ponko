@@ -391,6 +391,39 @@ pub(super) fn scaled(shape: &rp::SharedShape, scale: Vec3) -> rp::SharedShape {
     }
 }
 
+/// A copy of `shape` scaled by `scale` for a
+/// [`Shape3D::ScaledMesh`](super::Shape3D::ScaledMesh): a hull or triangle
+/// mesh is built again from its scaled points, so a negative component
+/// mirrors it and a stretch keeps its normals right (a triangle mesh
+/// mirrored along one or three axes turns its triangles around, so they
+/// still face out); a heightfield takes the scale's size, as
+/// [`scaled`] does. Each component is at least 1e-6 from zero. `None` if
+/// the scaled hull has no volume or the triangle mesh can't be built.
+pub(super) fn scaled_copy(shape: &rp::SharedShape, scale: Vec3) -> Option<rp::SharedShape> {
+    let tiny = 1e-6;
+    let scale = Vec3::select(
+        scale.abs().cmplt(Vec3::splat(tiny)),
+        Vec3::splat(tiny).copysign(scale),
+        scale,
+    );
+    let s = to_rp(scale);
+    if let Some(mesh) = shape.as_trimesh() {
+        let vertices: Vec<rp::Vector> = mesh.vertices().iter().map(|&v| v * s).collect();
+        let mirrored = scale.x * scale.y * scale.z < 0.0;
+        let indices: Vec<[u32; 3]> = mesh
+            .indices()
+            .iter()
+            .map(|&[a, b, c]| if mirrored { [a, c, b] } else { [a, b, c] })
+            .collect();
+        rp::SharedShape::trimesh_with_flags(vertices, indices, mesh.flags()).ok()
+    } else if let Some(hull) = shape.as_convex_polyhedron() {
+        let points: Vec<rp::Vector> = hull.points().iter().map(|&p| p * s).collect();
+        rp::SharedShape::convex_hull(&points)
+    } else {
+        Some(scaled(shape, scale))
+    }
+}
+
 /// Brings static colliders near a focus in (nearest first, at most the
 /// budget) and takes those far from every focus out, unless a moving body
 /// is over them. With streaming off, brings back any that are out.

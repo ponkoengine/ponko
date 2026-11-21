@@ -205,10 +205,30 @@ Two more modes:
   default, three page loads each (`--repeat`). It prints the medians, their
   spread, and each speed-up, saying whether it is beyond the noise.
   `--dir <an ordinary build> --threads 1` times a build without threads.
+- `--case gamepads` replaces `navigator.getGamepads()` on the isolated page
+  with fed pads (an Xbox pad by its Chromium `id`), and steps them: no pad,
+  a pad connects, South, d-pad right, a quarter-pulled left trigger and both
+  sticks, everything let go, the pad unplugged. After each step the fixture's
+  `pads` must show what the engine saw: the pad in slot 0 with its name,
+  family and USB ids, exactly those buttons down, the axes (stick y up stays
+  negative), one South press, then no pad.
+- `--case warning` needs no browser: it builds the example
+  `examples/web_threads_warning.rs` with threads and `-D warnings`. The
+  example's only code is an unused function that only a build with threads
+  compiles, so the build must fail on it, as an error from `-D warnings`.
+  If it passes, the threaded build lost `-D warnings` (or its atomics).
+
+`--build` (and `--case warning`) add `-D warnings` to the build's flags, so a
+warning in the threaded build fails the check. `web/build.sh --threads` keeps
+the caller's flags: cargo reads only the first of `CARGO_ENCODED_RUSTFLAGS`,
+`RUSTFLAGS` and the target's flags that is set, and the thread flags go into
+that one (`build.test.mjs` checks this with `--print-env`).
 
 ```sh
 node web/smoke/threads.mjs --build
 node web/smoke/threads.mjs --case worker-panic
+node web/smoke/threads.mjs --case gamepads
+node web/smoke/threads.mjs --case warning
 node web/smoke/threads.mjs --bench --workloads par,sweep --repeat 3
 ```
 
