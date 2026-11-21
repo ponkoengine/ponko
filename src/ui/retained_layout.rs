@@ -332,6 +332,79 @@ mod tests {
         assert_eq!(passes_over(&mut ui, 3, &UiInput::default()), 0);
     }
 
+    /// A row of a panel `width` wide and a plain and a rich wrapped label
+    /// sharing what is left; laid out once. Returns the UI, the panel and
+    /// the labels.
+    fn wrapped_row(width: f32) -> (Ui, crate::ui::UiId, [crate::ui::UiId; 2]) {
+        let mut ui = Ui::default();
+        let root = ui.root().layout(UiLayout::centered(400.0, 300.0)).id();
+        let row = ui.panel(root).layout(UiLayout::row(200.0).gap(4.0)).id();
+        let panel = ui.panel(row).layout(UiLayout::fixed(width, 20.0)).id();
+        let plain = ui
+            .label(row, "A paragraph long enough to wrap onto a few lines next to the panel.")
+            .wrap()
+            .layout(UiLayout::auto().grow(1.0))
+            .id();
+        let rich = ui
+            .label(row, "[color=#ff0]Gold[/color] and [b]a few more words[/b] to wrap as well.")
+            .rich()
+            .wrap()
+            .layout(UiLayout::auto().grow(1.0))
+            .id();
+        ui.push_modeless(root);
+        ui.frame(VIEW, &UiInput::default());
+        (ui, panel, [plain, rich])
+    }
+
+    #[test]
+    fn wrapped_text_is_measured_once_per_width_it_is_offered() {
+        let widths = [60.0, 140.0];
+        let (mut ui, panel, labels) = wrapped_row(widths[0]);
+        let sizes = |ui: &Ui| labels.map(|l| ui.rect(l).unwrap().size());
+        let first = sizes(&ui);
+        // The panel resized back and forth: each width is measured once.
+        ui.set_layout(panel, UiLayout::fixed(widths[1], 20.0));
+        ui.frame(VIEW, &UiInput::default());
+        let second = sizes(&ui);
+        assert_ne!(first, second, "the labels wrap differently");
+        for round in 0..6 {
+            let width = widths[round % 2];
+            ui.set_layout(panel, UiLayout::fixed(width, 20.0));
+            let (passes, measured) = (ui.layout_passes(), ui.measure.layouts());
+            ui.frame(VIEW, &UiInput::default());
+            assert_eq!(ui.layout_passes(), passes + 1, "laid out");
+            assert_eq!(ui.measure.layouts(), measured, "{width} wide again: no text measured");
+            assert_eq!(sizes(&ui), [first, second][round % 2], "{width} wide: the same sizes");
+        }
+        // What is kept is what a fresh layout gives.
+        for width in widths {
+            ui.set_layout(panel, UiLayout::fixed(width, 20.0));
+            ui.frame(VIEW, &UiInput::default());
+            let (fresh, _, fresh_labels) = wrapped_row(width);
+            assert_eq!(sizes(&ui), fresh_labels.map(|l| fresh.rect(l).unwrap().size()), "{width} wide");
+        }
+        // The controls: a new width is measured, and the kept widths are
+        // bounded: after four others, the first is measured again.
+        ui.set_layout(panel, UiLayout::fixed(100.0, 20.0));
+        let measured = ui.measure.layouts();
+        ui.frame(VIEW, &UiInput::default());
+        assert!(ui.measure.layouts() > measured, "a new width is measured");
+        for width in [70.0, 80.0, 90.0, 110.0] {
+            ui.set_layout(panel, UiLayout::fixed(width, 20.0));
+            ui.frame(VIEW, &UiInput::default());
+        }
+        ui.set_layout(panel, UiLayout::fixed(widths[0], 20.0));
+        let measured = ui.measure.layouts();
+        ui.frame(VIEW, &UiInput::default());
+        assert!(ui.measure.layouts() > measured, "a width long forgotten is measured again");
+        assert_eq!(sizes(&ui), first);
+        // New text is measured again at a width it had.
+        ui.set_text(labels[0], "Another paragraph, long enough to wrap onto a few lines too.");
+        let measured = ui.measure.layouts();
+        ui.frame(VIEW, &UiInput::default());
+        assert!(ui.measure.layouts() > measured, "new text is measured");
+    }
+
     #[test]
     fn scrolling_moves_nodes_without_a_layout() {
         let mut ui = Ui::default();
