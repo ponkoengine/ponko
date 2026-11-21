@@ -513,14 +513,24 @@ entities first. The calls by entity (`ponko_ctx_ai_*`) are refused inside a
 query, like every ctx call; a query row has its own:
 `ponko_chunk_ai_brain(chunk, column, row)` and
 `ponko_chunk_ai_blackboard` reach a row's brain and blackboard, and
-`ponko_ai_brain_action`, `_started`, `_finish`, `_param_num`,
-`ponko_ai_blackboard_set_num` (and `_flag`, `_vec2`, `_vec3`, `_entity`)
-and `ponko_ai_blackboard_num` (and `_flag`, `_entity`, `_vec2`, `_vec3`)
-work on it, in `ponko_query` and on all cores in `ponko_query_par` (each
-row is its callback's own). In C++, `ai::each<Ts...>(ctx, fn)` calls
-`fn(entity, ai::brain_row, ai::blackboard_row, Ts&...)` for every entity
-with a brain and all of `Ts`, and `ai::query` / `ai::query_par` hand a
-chunk and its `ai::rows`:
+`ponko_ai_brain_action`, `_started`, `_finish`, `_param_num`, `_wake`,
+`_signal`, `ponko_ai_blackboard_set_num` (and `_flag`, `_vec2`, `_vec3`,
+`_entity`) and `ponko_ai_blackboard_num` (and `_flag`, `_entity`, `_vec2`,
+`_vec3`) work on it, in `ponko_query` and on all cores in
+`ponko_query_par` (each row is its callback's own).
+`ponko_ai_brain_wake` makes a row's brain think at the next
+`ponko_ctx_ai_think` whatever its period (Rust `Brain::wake`), and
+`ponko_ai_brain_signal` gives it a signal at once (Rust `Brain::signal`),
+where `ponko_ctx_ai_signal` sends an event, which a parallel loop can't.
+
+In C++ the typed loops take the rows like components:
+`world().each` and `each_par` hand an `ai::brain_row` and an
+`ai::blackboard_row` parameter (by value, in any place among the others)
+the entity's brain and blackboard, visit only entities with a brain, and
+keep their filters (`each<ponko::with<Guard>>`). `ai::query` /
+`ai::query_par` hand a whole chunk and its `ai::rows`, and the older
+`ai::each<Ts...>(ctx, fn)` still calls `fn(entity, ai::brain_row,
+ai::blackboard_row, Ts&...)`:
 
 ```cpp
 {{#include ../../examples/cpp/guide.cpp:ai_loop}}

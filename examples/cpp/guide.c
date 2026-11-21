@@ -215,6 +215,50 @@ static void versioned_descriptors(PonkoCtx* ctx) {
     // ANCHOR_END: versioned_post
 }
 
+static void debug_map_camera(PonkoCtx* ctx) {
+    // ANCHOR: debug_map_camera_c
+    PonkoCamera3DEx main = {.struct_size = sizeof main, .version = PONKO_CAMERA3D_EX_VERSION};
+    CHECK(ponko_ctx_camera3d_ex(ctx, &main) == PONKO_OK);
+    main.debug_draw = PONKO_DEBUG_DRAW_OFF;          // the player's view stays clean
+    CHECK(ponko_ctx_set_camera3d_ex(ctx, &main) == PONKO_OK);
+
+    PonkoTexture map;                                // a corner of the screen, a tool
+    CHECK(ponko_ctx_create_render_target(ctx, 256, 256, &map) == PONKO_OK);
+    PonkoTargetCamera above = {.camera = main.camera, .target = map};
+    above.camera.position = (PonkoVec3){0, 120, 0};
+    above.camera.rotation = ponko_quat_from_axis_angle((PonkoVec3){1, 0, 0}, -1.5707964f);  // straight down
+    PonkoTargetCameraEx map_camera = {.struct_size = sizeof map_camera, .version = PONKO_TARGET_CAMERA_EX_VERSION};
+    CHECK(ponko_target_camera_ex_from(&above, &map_camera) == PONKO_OK);
+    map_camera.debug_draw = PONKO_DEBUG_DRAW_ON;     // the map shows the paths and sight cones
+    const PonkoTargetCameraEx* cameras[1] = {&map_camera};
+    CHECK(ponko_ctx_set_target_cameras_ex(ctx, cameras, 1) == PONKO_OK);
+    // ANCHOR_END: debug_map_camera_c
+    PonkoTargetCameraEx read = {.struct_size = sizeof read, .version = PONKO_TARGET_CAMERA_EX_VERSION};
+    CHECK(ponko_ctx_target_camera_ex(ctx, 0, &read) == PONKO_OK && read.debug_draw == PONKO_DEBUG_DRAW_ON);
+    CHECK(read.target_camera.camera.position.y == 120 && read.target_camera.target.id == map.id);
+    PonkoCamera3DEx window = {.struct_size = sizeof window, .version = PONKO_CAMERA3D_EX_VERSION};
+    CHECK(ponko_ctx_camera3d_ex(ctx, &window) == PONKO_OK && window.debug_draw == PONKO_DEBUG_DRAW_OFF);
+    CHECK(ponko_ctx_set_target_cameras_ex(ctx, NULL, 0) == PONKO_OK);
+    window.debug_draw = PONKO_DEBUG_DRAW_DEFAULT;
+    CHECK(ponko_ctx_set_camera3d_ex(ctx, &window) == PONKO_OK);
+}
+
+static void loopback_link(void) {
+    // ANCHOR: loopback_link_c
+    PonkoLoopbackLink link = {.struct_size = sizeof link, .version = PONKO_LOOPBACK_LINK_VERSION};
+    CHECK(ponko_loopback_link_defaults(&link) == PONKO_OK);  // a perfect link
+    link.loss = 0.05;                                        // 5% lost each way
+    link.delay = 0.017;                                      // a frame of delay
+    link.jitter = 0.05;                                      // plus up to 50 ms: packets overtake
+    link.seed = 1;
+    PonkoNetMessages* nets[3];
+    CHECK(ponko_net_messages_loopback_link(3, &link, nets) == PONKO_OK);
+    // Every frame, each endpoint moves on by the same step on its own clock:
+    for (int i = 0; i < 3; ++i) CHECK(ponko_net_messages_poll_elapsed(nets[i], 1.0 / 60) == PONKO_OK);
+    // ANCHOR_END: loopback_link_c
+    for (int i = 0; i < 3; ++i) ponko_net_messages_free(nets[i]);
+}
+
 // ANCHOR: sliced_loader_c
 // A level's walls, read a row at a time so a big file never stalls a frame.
 typedef struct { char* text; size_t len, at, walls; } WallCount;
@@ -276,11 +320,13 @@ static void setup(PonkoCtx* ctx, void* user) {
     retained_ui(ctx, user);
     versioned_descriptors(ctx);
     sliced_loader(ctx);
+    debug_map_camera(ctx);
 }
 
 int main(void) {
     abi_check();
     filters();
+    loopback_link();
     PonkoGame* game = ponko_game_new("c guide", 1, 1);
     CHECK(game);
     PonkoWorld* world = NULL;
