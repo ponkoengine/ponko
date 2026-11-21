@@ -463,6 +463,7 @@ binding arrives:
 | `SkyShader` | [A sky of your own](3d.md#a-sky-of-your-own) | The built-in atmosphere or the flat sky (`PonkoSky`); sky shaders have no C binding yet |
 | `SkyKit` | [The sky kit](3d.md#the-sky-kit) | The built-in atmosphere (`PonkoSky`), without clouds or a moon; the kit has no C binding yet |
 | `DayNight` | [The sky kit](3d.md#the-sky-kit) | Move the sun each frame with `ponko_sun_direction_at` |
+| `CameraTarget` | [Following something](camera-ui.md#following-something) | Keep the rig descriptor and update it once a frame (`ponko_follow_camera2d_update`, the 3D rigs' update calls) |
 | `Graphics::stream_instance_cell` | [Streaming instance cells](3d.md#streaming-instance-cells) | Build a cell's matrices on your own threads, then `ponko_ctx_add_instance_cell` (`ctx::add_instance_cell`) on the game's |
 | `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |
 | `GamepadBackend` | [Backends and tests](controllers.md#backends-and-tests) | Native games use the built-in gamepad backend |
