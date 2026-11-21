@@ -540,7 +540,9 @@ impl Ctx {
             }
             self.push_plain(glyphs, origin, width, params, n.paint.align);
         }
-        if kept.is_none() && let Some(key) = glyph_key {
+        if kept.is_none()
+            && let Some(key) = glyph_key
+        {
             fresh.epoch = cache.epoch;
             fresh.key = Some(key);
             fresh.text.clear();
@@ -2153,9 +2155,13 @@ mod tests {
                 }
             }
             // New text drops the layouts of the old.
-            ctx.ui.set_text(plain, "Other words, wrapped onto lines of their own here.");
+            ctx.ui
+                .set_text(plain, "Other words, wrapped onto lines of their own here.");
             same_as_drawn_anew(&mut ctx, &still, &what);
-            assert!(ctx.ui.node(plain).unwrap().drawn.older.is_empty(), "{what}: no stale layouts");
+            assert!(
+                ctx.ui.node(plain).unwrap().drawn.older.is_empty(),
+                "{what}: no stale layouts"
+            );
         }
     }
 

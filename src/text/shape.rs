@@ -473,7 +473,13 @@ impl Text {
     /// Where to end the first line of `line` wrapped in `room` (pixels):
     /// the last Unicode line-break opportunity (UAX #14) that fits, with
     /// trailing spaces left out; inside the first word if none does.
-    pub(super) fn wrap_end_shaped(&mut self, line: &str, font: Font, px: f32, room: &mut crate::text::WrapRoom) -> usize {
+    pub(super) fn wrap_end_shaped(
+        &mut self,
+        line: &str,
+        font: Font,
+        px: f32,
+        room: &mut crate::text::WrapRoom,
+    ) -> usize {
         self.with_shaped(line, font, |_, s| {
             // Width of the logical prefix that ends at byte `end`.
             let prefix = |end: usize| -> f32 {
@@ -700,7 +706,10 @@ mod tests {
         assert!(end > 0 && end < text.len() && text.is_char_boundary(end), "{end}");
         let words = "été hiver";
         let full = t.layout(words, Font::DEFAULT, 20.0, false).x;
-        assert_eq!(t.wrap_end_shaped(words, Font::DEFAULT, 20.0, &mut crate::text::WrapRoom::new(full - 1.0)), "été".len());
+        assert_eq!(
+            t.wrap_end_shaped(words, Font::DEFAULT, 20.0, &mut crate::text::WrapRoom::new(full - 1.0)),
+            "été".len()
+        );
     }
 
     #[test]

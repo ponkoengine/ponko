@@ -1773,9 +1773,7 @@ impl Ui {
                             // the same way: a row resized back and forth
                             // measures it once for each.
                             let mut height = if n.paint.wrap {
-                                sizes.wrapped(width * k, |room| {
-                                    plain_height(text, &n.text, (font, px, k), Some(room))
-                                })
+                                sizes.wrapped(width * k, |room| plain_height(text, &n.text, (font, px, k), Some(room)))
                             } else {
                                 natural.y
                             };
