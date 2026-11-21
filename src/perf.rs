@@ -612,7 +612,8 @@ impl Perf {
 // Detailed reports live beside the frame service.
 #[doc(inline)]
 pub use crate::alloc_count::{
-    AllocCounts, CountingAllocator, alloc_counts, net_alloc_bytes, note_allocation, thread_alloc_counts,
+    AllocCounts, CountingAllocator, alloc_counts, net_alloc_bytes, note_allocation, note_deallocation,
+    thread_alloc_counts,
 };
 pub use crate::perf_report::*;
 pub use crate::profiler::{FrameStats, GpuPass};

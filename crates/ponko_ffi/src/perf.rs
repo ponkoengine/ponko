@@ -420,6 +420,37 @@ pub extern "C" fn ponko_note_allocation(bytes: usize) {
     ponko::perf::note_allocation(bytes);
 }
 
+/// Counts the free of `bytes` that `ponko_note_allocation` counted, so
+/// `ponko_net_alloc_bytes` sees what the game gives back
+/// (`PONKO_COUNT_CPP_ALLOCATIONS` in `ponko.hpp` calls this from
+/// `operator delete`). Counted only while profiling is on.
+/// ```
+/// ponko_ffi::ponko_note_allocation(64);
+/// ponko_ffi::ponko_note_deallocation(64);
+/// ```
+#[unsafe(no_mangle)]
+pub extern "C" fn ponko_note_deallocation(bytes: usize) {
+    ponko::perf::note_deallocation(bytes);
+}
+
+/// Bytes allocated minus bytes freed while profiling was on, for the whole
+/// process (Rust `perf::net_alloc_bytes`): the library's own memory, and the
+/// game's where it reports it (`ponko_note_allocation` and
+/// `ponko_note_deallocation`, which `PONKO_COUNT_CPP_ALLOCATIONS` calls).
+/// Read it twice with profiling on and subtract: what the code between
+/// still holds. A loop that gives back what it takes reads (close to) zero
+/// however long it runs; a leak grows with every pass. Memory allocated
+/// before profiling was turned on and freed after counts as a negative.
+/// ```
+/// let before = ponko_ffi::ponko_net_alloc_bytes();
+/// let after = ponko_ffi::ponko_net_alloc_bytes();
+/// assert_eq!(after - before, 0, "nothing ran in between");
+/// ```
+#[unsafe(no_mangle)]
+pub extern "C" fn ponko_net_alloc_bytes() -> i64 {
+    ponko::perf::net_alloc_bytes()
+}
+
 /// Turns the deeper profiling on or off: scopes are timed and allocations
 /// counted (the overlay switches it on by itself).
 /// ```

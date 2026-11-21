@@ -163,6 +163,8 @@
 
 #define PONKO_QUERY_CACHE_NEVER 2
 
+#define PONKO_UPLOAD_STATS_EX_VERSION 1
+
 #define PONKO_SHADER_MATERIAL 0
 
 #define PONKO_SHADER_EFFECT 1
@@ -268,6 +270,12 @@
 #define PONKO_WATER_MAX_WAVES 8
 
 #define PONKO_BUOYANCY_DRAG 4.0
+
+#define PONKO_BUOYANCY_DESC_VERSION 1
+
+#define PONKO_BUOYANCY_MAX_POINTS 32
+
+#define PONKO_FRESH_WATER_DENSITY 1000.0
 
 #define PONKO_LIVE_COUNTS_EX_VERSION 1
 
@@ -2535,6 +2543,18 @@ typedef struct PonkoUploadStats {
   float max_step_ms;
 } PonkoUploadStats;
 
+typedef struct PonkoUploadStatsEx {
+  uint32_t struct_size;
+  uint32_t version;
+  struct PonkoUploadStats stats;
+  uint32_t frame_slices;
+  bool has_gpu_upload_ms;
+  float gpu_upload_ms;
+  bool has_gpu_created_ms;
+  float gpu_created_ms;
+  bool gpu_upload_timing;
+} PonkoUploadStatsEx;
+
 typedef void (*PonkoResourceScopeFn)(struct PonkoWorld *world, void *value, void *user);
 
 typedef uint32_t (*PonkoJsonConvertFn)(void *user, const char *json, const char **out_json);
@@ -3732,6 +3752,18 @@ typedef struct PonkoWaterSample {
   struct PonkoVec3 velocity;
   float squeeze;
 } PonkoWaterSample;
+
+typedef struct PonkoBuoyancyDesc {
+  uint32_t struct_size;
+  uint32_t version;
+  struct PonkoVec3 points[PONKO_BUOYANCY_MAX_POINTS];
+  uint32_t point_count;
+  float volume;
+  float height;
+  float water_density;
+  float drag;
+  bool ripples;
+} PonkoBuoyancyDesc;
 
 typedef struct PonkoHookEvent {
   uint64_t entity;
@@ -6274,6 +6306,10 @@ struct PonkoAllocCounts ponko_thread_alloc_counts(void);
 
 void ponko_note_allocation(size_t bytes);
 
+void ponko_note_deallocation(size_t bytes);
+
+int64_t ponko_net_alloc_bytes(void);
+
 enum PonkoStatus ponko_ctx_set_profiling(struct PonkoCtx *ctx, bool on);
 
 enum PonkoStatus ponko_ctx_set_gpu_timing(struct PonkoCtx *ctx, uint32_t kind, uint32_t every);
@@ -7051,6 +7087,9 @@ enum PonkoStatus ponko_ctx_set_upload_budget(struct PonkoCtx *ctx, bool has_budg
 enum PonkoStatus ponko_ctx_set_deterministic_uploads(struct PonkoCtx *ctx, bool on);
 
 enum PonkoStatus ponko_ctx_upload_stats(struct PonkoCtx *ctx, struct PonkoUploadStats *out_stats);
+
+enum PonkoStatus ponko_ctx_upload_stats_ex(struct PonkoCtx *ctx,
+                                           struct PonkoUploadStatsEx *out_stats);
 
 enum PonkoStatus ponko_ctx_finish_uploads(struct PonkoCtx *ctx);
 
@@ -10325,6 +10364,24 @@ enum PonkoStatus ponko_ctx_remove_buoyancy(struct PonkoCtx *ctx, uint64_t entity
 enum PonkoStatus ponko_ctx_buoyancy_submerged(const struct PonkoCtx *ctx,
                                               uint64_t entity,
                                               float *out_share);
+
+enum PonkoStatus ponko_buoyancy_desc_box(struct PonkoBuoyancyDesc *desc, struct PonkoVec3 size);
+
+enum PonkoStatus ponko_buoyancy_desc_sphere(struct PonkoBuoyancyDesc *desc, float radius);
+
+enum PonkoStatus ponko_buoyancy_desc_points(struct PonkoBuoyancyDesc *desc,
+                                            const struct PonkoVec3 *points,
+                                            uint32_t count,
+                                            float volume,
+                                            float height);
+
+enum PonkoStatus ponko_ctx_set_buoyancy(struct PonkoCtx *ctx,
+                                        uint64_t entity,
+                                        const struct PonkoBuoyancyDesc *desc);
+
+enum PonkoStatus ponko_ctx_buoyancy(const struct PonkoCtx *ctx,
+                                    uint64_t entity,
+                                    struct PonkoBuoyancyDesc *out_desc);
 
 enum PonkoStatus ponko_component_on_add(struct PonkoWorld *world,
                                         uint32_t component,

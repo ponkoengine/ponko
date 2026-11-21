@@ -120,6 +120,19 @@ pub fn note_allocation(bytes: usize) {
     note(bytes);
 }
 
+/// Counts the free of `bytes` that [`note_allocation`] counted, so
+/// [`net_alloc_bytes`] sees memory given back by something that isn't
+/// Rust's allocator (C++'s `operator delete` with
+/// `PONKO_COUNT_CPP_ALLOCATIONS`). Counts only while profiling is on.
+///
+/// ```
+/// ponko::perf::note_allocation(64);
+/// ponko::perf::note_deallocation(64);
+/// ```
+pub fn note_deallocation(bytes: usize) {
+    note_free(bytes);
+}
+
 /// The allocations counted so far (while profiling was on). Take two readings
 /// and subtract to count a stretch of code. All zero if
 /// [`CountingAllocator`] isn't installed and nothing calls

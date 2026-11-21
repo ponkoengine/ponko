@@ -116,6 +116,26 @@ unsafe extern "C" fn setup(ctx: *mut PonkoCtx, user: *mut c_void) {
         assert_eq!(ponko_ctx_upload_stats(ctx, &mut uploads), PONKO_OK);
         assert_eq!((uploads.failures, uploads.pending), (1, 0));
         assert!(uploads.has_budget && uploads.budget == 1 << 20);
+        // The versioned form: the same counters, plus the GPU's own times,
+        // which never arrive headless (no timestamp queries).
+        let mut ex: PonkoUploadStatsEx = std::mem::zeroed();
+        (ex.struct_size, ex.version) = (size_of::<PonkoUploadStatsEx>() as u32, PONKO_UPLOAD_STATS_EX_VERSION);
+        assert_eq!(ponko_ctx_upload_stats_ex(ctx, &mut ex), PONKO_OK);
+        assert_eq!(ex.stats, uploads);
+        assert!(!ex.gpu_upload_timing && !ex.has_gpu_created_ms && !ex.has_gpu_upload_ms);
+        assert_eq!((ex.gpu_created_ms, ex.gpu_upload_ms), (0.0, 0.0));
+        ex.version = 0;
+        assert_eq!(
+            ponko_ctx_upload_stats_ex(ctx, &mut ex),
+            PONKO_INVALID_ARGUMENT,
+            "header not set"
+        );
+        (ex.struct_size, ex.version) = (8, PONKO_UPLOAD_STATS_EX_VERSION);
+        assert_eq!(
+            ponko_ctx_upload_stats_ex(ctx, &mut ex),
+            PONKO_INVALID_ARGUMENT,
+            "too small"
+        );
 
         // A LOD group whose one level streams in from a file.
         let world = ponko_ctx_world(ctx);

@@ -1017,6 +1017,19 @@ static bool water_snippets() {
     return std::fabs(surface) < 1.2f && std::fabs(y - surface) < 0.6f && depth > 0.1f && depth < 0.95f;
 }
 
+[[maybe_unused]] static void buoyancy_desc_guide(ponko::ctx& ctx, ponko::entity raft) {
+    // ANCHOR: buoyancy_desc
+    // A raft in sea water: denser than fresh, so it rides a little higher.
+    auto planks = ponko::buoyancy_desc::box({2, 0.4f, 2});
+    planks.water_density = 1025;
+    planks.ripples = false; // no rings where it crosses the surface
+    ctx.set_buoyancy(raft, planks);
+    // Or sample points of your own, sharing 0.6 m³, each a 0.3 m column.
+    auto hull = ponko::buoyancy_desc::from_points({{-1, 0, 0}, {1, 0, 0}, {0, 0, -1}, {0, 0, 1}}, 0.6f, 0.3f);
+    ctx.set_buoyancy(raft, hull);
+    // ANCHOR_END: buoyancy_desc
+}
+
 // ANCHOR: collider_streaming
 /// A streamed tile, built on a worker: its meshes and its collider, from
 /// the same heights.
@@ -5447,4 +5460,14 @@ struct wall_count {
     std::uint64_t made_here = after.count - before.count; // on this thread only
     // ANCHOR_END: thread_allocs
     (void)made_here;
+}
+[[maybe_unused]] static void net_allocs_guide(ponko::ctx& ctx, void (*load_and_unload_level)(ponko::ctx&)) {
+    // ANCHOR: net_allocs
+    ctx.set_profiling(true); // counted only while profiling is on
+    load_and_unload_level(ctx); // warm-up: caches and tables fill
+    std::int64_t before = ponko::net_alloc_bytes();
+    for (int i = 0; i < 10; ++i) load_and_unload_level(ctx);
+    std::int64_t kept = ponko::net_alloc_bytes() - before;
+    std::printf("%lld bytes still held\n", static_cast<long long>(kept));
+    // ANCHOR_END: net_allocs
 }
