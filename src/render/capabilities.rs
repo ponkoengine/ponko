@@ -1219,7 +1219,8 @@ mod tests {
         let name = |feature: GpuFeature| serde_json::to_value(feature).unwrap().as_str().unwrap().to_owned();
         let mut table = String::from("| | WebGPU | WebGL2 (the fallback) |\n|---|---|---|\n");
         table += &format!("| `GpuTier` | `{}` | `{}` |\n", webgpu.tier, webgl2.tier);
-        let limits: [(&str, fn(&GpuLimits) -> String); 4] = [
+        type Limit = fn(&GpuLimits) -> String;
+        let limits: [(&str, Limit); 4] = [
             ("largest 2D texture", |l| format!("{}²", l.max_texture_dimension_2d)),
             ("sampled textures per shader stage", |l| {
                 l.max_sampled_textures_per_shader_stage.to_string()
