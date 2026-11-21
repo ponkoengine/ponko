@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Map, Value as Json};
+use smallvec::SmallVec;
 
 use super::utility::{Consideration, Curve, combine_n};
 use super::{Blackboard, Key, Status, Value};
@@ -155,6 +156,19 @@ enum Term {
     Consider(Consideration),
 }
 
+/// An action a brain is doing: its `do` node, what the game reported for
+/// it, and whether it started at the last think.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Act {
+    pub(crate) node: u16,
+    pub(crate) report: Status,
+    pub(crate) started: bool,
+}
+
+/// The actions a brain is doing, in tree order: two inline, so a brain
+/// with one or two actions at once needs no heap.
+pub(crate) type Acts = SmallVec<[Act; 2]>;
+
 /// One brain's memory of one node.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NodeState {
@@ -188,12 +202,11 @@ pub(crate) struct Tick<'a> {
     pub(crate) thinks: u32,
     pub(crate) now: u64,
     pub(crate) dt: f32,
-    /// The action running before this think, and what the game reported.
-    pub(crate) prev_action: Option<u16>,
-    pub(crate) report: Status,
-    /// The action running after it, and whether it started now.
-    pub(crate) action: Option<u16>,
-    pub(crate) started: bool,
+    /// The actions: the first `prev` are the ones running before this
+    /// think (with what the game reported); the ones running after it are
+    /// pushed behind them, in tree order.
+    pub(crate) actions: &'a mut Acts,
+    pub(crate) prev: usize,
     /// The signals the brain heard since its last think.
     pub(crate) signals: &'a [(Key, Option<Value>)],
     /// Where `random` and `chance` draw from: the game's seed (or the
@@ -719,14 +732,25 @@ impl BehaviorTree {
         let acting: Vec<usize> = (0..indices.len())
             .filter(|&n| self.nodes[indices[n] as usize].acts)
             .collect();
-        if let (Kind::Parallel { .. }, [first, second, ..]) = (node_kind, acting.as_slice()) {
-            return Err(bad(
-                &path,
-                format!(
-                    "children [{first}] and [{second}] both have \"do\" nodes; a brain does one action at a time, \
-                     so only one child of a \"parallel\" may (the others check, wait or wait for signals)"
-                ),
-            ));
+        if let Kind::Parallel { .. } = node_kind {
+            // Its children's actions run at once, and the game names an
+            // action by its name: two children may not share one.
+            for (x, &a) in acting.iter().enumerate() {
+                for &b in &acting[x + 1..] {
+                    if let Some(action) = self
+                        .actions_below(indices[a] as usize)
+                        .find(|k| self.actions_below(indices[b] as usize).any(|o| o == *k))
+                    {
+                        return Err(bad(
+                            &path,
+                            format!(
+                                "children [{a}] and [{b}] can both do \"{action}\" at once; a brain runs one \
+                                 action of each name at a time, so give one of them another name"
+                            ),
+                        ));
+                    }
+                }
+            }
         }
         let start = self.kids.len() as u32;
         self.kids.extend_from_slice(&indices);
@@ -749,6 +773,16 @@ impl BehaviorTree {
             None => label,
         };
         Ok(index as u16)
+    }
+
+    /// The actions of the `do` nodes in node `k`'s subtree.
+    fn actions_below(&self, k: usize) -> impl Iterator<Item = Key> + '_ {
+        self.nodes[k..self.nodes[k].end as usize]
+            .iter()
+            .filter_map(|n| match n.kind {
+                Kind::Do { action, .. } => Some(action),
+                _ => None,
+            })
     }
 
     /// Compiles a `score`: a number, or a list of numbers and considerations.
@@ -974,15 +1008,32 @@ impl BehaviorTree {
                 Status::Success
             }
             Kind::Do { .. } => {
-                if t.prev_action == Some(i as u16) && t.continuing(i) {
-                    if t.report == Status::Running {
-                        t.action = Some(i as u16);
-                    }
-                    t.report
+                let node = i as u16;
+                let was = if t.continuing(i) {
+                    t.actions[..t.prev].iter().find(|a| a.node == node).map(|a| a.report)
                 } else {
-                    t.action = Some(i as u16);
-                    t.started = true;
-                    Status::Running
+                    None
+                };
+                match was {
+                    // Carries on, or ends as the game reported.
+                    Some(report) => {
+                        if report == Status::Running {
+                            t.actions.push(Act {
+                                node,
+                                report,
+                                started: false,
+                            });
+                        }
+                        report
+                    }
+                    None => {
+                        t.actions.push(Act {
+                            node,
+                            report: Status::Running,
+                            started: true,
+                        });
+                        Status::Running
+                    }
                 }
             }
         };
@@ -999,7 +1050,8 @@ impl BehaviorTree {
     fn tick_parallel(&self, i: usize, success: u8, failure: u8, t: &mut Tick<'_>) -> Status {
         let kids = self.children(i);
         let mut done = if t.continuing(i) { t.states[i].at } else { 0 };
-        let (action, started) = (t.action, t.started);
+        // The actions its children start or carry on go behind this mark.
+        let mark = t.actions.len();
         let (mut ok, mut bad, mut finished) = (0u8, 0u8, 0usize);
         let mut status = Status::Running;
         for (n, &k) in kids.iter().enumerate() {
@@ -1038,17 +1090,15 @@ impl BehaviorTree {
         }
         t.states[i].at = done;
         if status != Status::Running {
-            // Stop what still runs below it: an action it started is
-            // dropped, and a running node starts over when next reached.
+            // Stop what still runs below it: the actions its children
+            // run are dropped, and a running node starts over when next
+            // reached.
             for (n, &k) in kids.iter().enumerate() {
                 if done & (1 << n) == 0 {
                     self.halt(k as usize, t);
                 }
             }
-            if t.action != action {
-                t.action = action;
-                t.started = started;
-            }
+            t.actions.truncate(mark);
         }
         status
     }
