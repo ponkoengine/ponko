@@ -1769,7 +1769,7 @@ impl Renderer {
 
     /// Draws with baked lighting (`BakedLighting::gpu_layers`), or without.
     #[cfg(feature = "3d")]
-    pub fn set_baked_lighting(&mut self, layers: Option<(u32, &[Vec<u16>])>) {
+    pub fn set_baked_lighting(&mut self, layers: Option<&crate::three::bake::GpuBaked>) {
         self.three();
         if let Some(three) = &mut self.three {
             three.set_baked_lighting(&self.device, &self.queue, layers, &self.textures);

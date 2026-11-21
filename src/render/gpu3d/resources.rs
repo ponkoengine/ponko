@@ -39,9 +39,10 @@ pub(super) struct Resources {
     pub(super) arrays: Vec<wgpu::TextureView>,
     /// A 1x1 white one-layer array, for materials without one.
     pub(super) white_array: wgpu::TextureView,
-    /// The baked lighting (see `three::bake`): bound in the third array
-    /// slot (`custom_array2`) of every material that sets no array there.
-    pub(super) lightmap: Option<wgpu::TextureView>,
+    /// The baked lighting (see `three::bake`): its header, bound in the
+    /// third array slot (`custom_array2`) of every material that sets no
+    /// array there, and its pages, in the second (`custom_array1`).
+    pub(super) lightmap: Option<(wgpu::TextureView, Option<wgpu::TextureView>)>,
     /// The game's GPU buffers, by id, and what binds them: read by material
     /// shaders, written by compute passes. `None` where the GPU has no
     /// storage buffers (WebGL2); `storage_dummy` is bound by draws without one.
@@ -276,26 +277,29 @@ impl Resources {
     }
 
     /// What a material's array slot `slot` binds for array `id`: the baked
-    /// lighting in an empty third slot, while there is one.
+    /// lighting's header in an empty third slot and its pages in an empty
+    /// second, while there is one.
     pub(super) fn material_slot_array(&self, slot: usize, id: Option<u32>) -> &wgpu::TextureView {
         match (&self.lightmap, slot, id) {
-            (Some(lightmap), 2, None) => lightmap,
+            (Some((header, _)), 2, None) => header,
+            (Some((_, Some(pages))), 1, None) => pages,
             _ => self.material_array(id),
         }
     }
 
-    /// Sets the baked lighting array (`None`: none) and binds every material
-    /// that sets no third array again, so it reads it there.
+    /// Sets the baked lighting's header and pages (`None`: none) and binds
+    /// every material that leaves its second or third array empty again,
+    /// so it reads them there.
     pub(super) fn set_lightmap(
         &mut self,
         device: &wgpu::Device,
-        lightmap: Option<wgpu::TextureView>,
+        lightmap: Option<(wgpu::TextureView, Option<wgpu::TextureView>)>,
         textures: &dyn TextureTable,
     ) {
         self.lightmap = lightmap;
         for i in 0..self.materials.len() {
             let material = &self.materials[i];
-            if material.bindings.array_ids[2].is_some()
+            if (material.bindings.array_ids[1].is_some() && material.bindings.array_ids[2].is_some())
                 || self
                     .freed_material
                     .as_ref()
@@ -705,8 +709,11 @@ impl Resources {
         for view in self.arrays.iter().chain([&self.white_array]) {
             t.view(C::Textures, "texture array", view);
         }
-        if let Some(view) = &self.lightmap {
-            t.view(C::Textures, "baked lighting", view);
+        if let Some((header, pages)) = &self.lightmap {
+            t.view(C::Textures, "baked lighting", header);
+            if let Some(pages) = pages {
+                t.view(C::Textures, "lightmaps", pages);
+            }
         }
         for material in self.materials.iter().chain(&self.freed_material) {
             t.buffer(C::Other, "material uniforms", &material.buffer);

@@ -195,12 +195,8 @@ fn draw_in(
     if lightmaps {
         let baked = baked.expect("a bake to draw with");
         let layers = baked.gpu_layers().expect("fits");
-        rig.renderer.set_baked_lighting(
-            &rig.device,
-            &rig.queue,
-            Some((baked.page_size(), &layers)),
-            &rig.textures,
-        );
+        rig.renderer
+            .set_baked_lighting(&rig.device, &rig.queue, Some(&layers), &rig.textures);
     }
     let pixels = rig.draw(if light == Light::Realtime { frames } else { 2 });
     keep_image(&Image {
@@ -467,12 +463,8 @@ fn baked_tint_past_a_partition(x: Option<f32>) -> Option<i32> {
             .spawn((Transform3D::at((lo + hi) * 0.5), Model::new(mesh), lightmap));
     }
     let layers = baked.gpu_layers().expect("fits");
-    rig.renderer.set_baked_lighting(
-        &rig.device,
-        &rig.queue,
-        Some((baked.page_size(), &layers)),
-        &rig.textures,
-    );
+    rig.renderer
+        .set_baked_lighting(&rig.device, &rig.queue, Some(&layers), &rig.textures);
     let pixels = rig.draw(2);
     let c = rig.at(&pixels, vec3(floor, -0.5, -0.8));
     Some(c[0] - c[1])
@@ -651,12 +643,8 @@ fn town_cost(slots: bool, low: bool) {
                     let _ = rig.ctx.world.remove::<crate::render::Lightmapped>(e);
                 }
             }
-            rig.renderer.set_baked_lighting(
-                &rig.device,
-                &rig.queue,
-                bake.then(|| (baked.page_size(), layers.as_slice())),
-                &rig.textures,
-            );
+            rig.renderer
+                .set_baked_lighting(&rig.device, &rig.queue, bake.then_some(&layers), &rig.textures);
             for _ in 0..20 {
                 let _ = rig.frame(Some(&mut timer));
             }
@@ -748,12 +736,8 @@ fn baked_room_close_up() {
             .spawn((Transform3D::at(vec3(-0.5, -0.1, 0.8)), Model::new(ball)));
         if baked_light {
             let layers = baked.gpu_layers().expect("fits");
-            rig.renderer.set_baked_lighting(
-                &rig.device,
-                &rig.queue,
-                Some((baked.page_size(), &layers)),
-                &rig.textures,
-            );
+            rig.renderer
+                .set_baked_lighting(&rig.device, &rig.queue, Some(&layers), &rig.textures);
         }
         let pixels = rig.draw(2);
         keep_image(&Image {
@@ -1026,12 +1010,8 @@ fn room_with(
             .spawn((Transform3D::at((lo + hi) * 0.5), Model::new(cube)));
     }
     let layers = baked.gpu_layers().expect("fits");
-    rig.renderer.set_baked_lighting(
-        &rig.device,
-        &rig.queue,
-        Some((baked.page_size(), &layers)),
-        &rig.textures,
-    );
+    rig.renderer
+        .set_baked_lighting(&rig.device, &rig.queue, Some(&layers), &rig.textures);
     let pixels = rig.draw(2);
     keep_image(&Image {
         width: SIZE,
@@ -1147,4 +1127,258 @@ fn instance_batches_take_the_baked_probes_light_as_models_do() {
         (0..3).any(|k| (unbaked[k] - lit[k]).abs() > 10),
         "negative control: without the bake the top is lit otherwise: {unbaked:?} vs {lit:?}"
     );
+}
+
+/// The room lit by `baked`, its pages uploaded as `layers` says.
+fn room_drawn_with(baked: &BakedLighting, layers: &crate::three::bake::GpuBaked, tpu: f32) -> Option<(Rig, Vec<u8>)> {
+    let mut rig = Rig::any()?;
+    set_up(&mut rig.ctx);
+    for (i, (red, lo, hi)) in room().into_iter().enumerate() {
+        let mesh = rig.mesh(&box_mesh(lo, hi, tpu), material(red));
+        let lightmap = baked.lightmap(i).expect("lightmapped");
+        rig.ctx
+            .world
+            .spawn((Transform3D::at((lo + hi) * 0.5), Model::new(mesh), lightmap));
+    }
+    rig.renderer
+        .set_baked_lighting(&rig.device, &rig.queue, Some(layers), &rig.textures);
+    let pixels = rig.draw(2);
+    keep_image(&Image {
+        width: SIZE,
+        height: SIZE,
+        rgba: pixels.clone(),
+    });
+    Some((rig, pixels))
+}
+
+#[test]
+fn compressed_lightmaps_draw_as_their_blocks_decode_in_every_format() {
+    use crate::three::bake::PageFormat;
+    let tpu = 4.0;
+    let Some(rig) = Rig::any() else {
+        skip("no GPU");
+        return;
+    };
+    let bc = rig.device.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+    let mut ctx = rig.ctx;
+    set_up(&mut ctx);
+    let baked = bake_lighting(&bake_scene(&ctx, tpu), &settings(tpu).with_samples(64)).expect("bakes");
+    assert!(baked.is_compressed());
+    let layers = baked.gpu_layers().expect("fits");
+    // The texels the blocks decode to on the CPU, as half floats: what the
+    // GPU must show from the blocks (BC6H) or the shared-exponent format.
+    let decoded = crate::three::bake::GpuBaked {
+        blocks: None,
+        ..layers.clone()
+    };
+    let shared = crate::three::bake::GpuBaked {
+        shared_exponent: true,
+        ..layers.clone()
+    };
+    // The negative control: the blocks of a bake with the sun elsewhere.
+    ctx.scene3d.lighting.sun_direction = vec3(1.0, -1.0, 0.3);
+    let other = bake_lighting(&bake_scene(&ctx, tpu), &settings(tpu).with_samples(64)).expect("bakes");
+    let wrong = crate::three::bake::GpuBaked {
+        blocks: other.gpu_layers().expect("fits").blocks,
+        ..layers.clone()
+    };
+    let (Some((_, blocks)), Some((_, halves)), Some((_, nine)), Some((_, off))) = (
+        room_drawn_with(&baked, &layers, tpu),
+        room_drawn_with(&baked, &decoded, tpu),
+        room_drawn_with(&baked, &shared, tpu),
+        room_drawn_with(&baked, &wrong, tpu),
+    ) else {
+        return;
+    };
+    let (gpu, shared, control) = (apart(&blocks, &halves), apart(&nine, &halves), apart(&off, &halves));
+    eprintln!(
+        "mean difference (0-255) from the decoded texels as half floats: the blocks as {:?} {gpu}, \
+         shared exponent {shared}, another bake's blocks {control}",
+        layers.format(bc)
+    );
+    if bc {
+        assert_eq!(layers.format(bc), PageFormat::Bc6h);
+    } else {
+        skip("no BC6H on this GPU: the blocks were drawn in the shared-exponent format");
+    }
+    assert!(gpu < 0.1, "the GPU decodes the blocks as the CPU does: {gpu}");
+    assert!(
+        shared < 0.3,
+        "the shared-exponent format holds the same light: {shared}"
+    );
+    assert!(
+        control > 1.0,
+        "negative control: other blocks draw otherwise: {control}"
+    );
+}
+
+/// What compressing lightmaps saves and costs: the size of a town's bake
+/// on disk and on the GPU, compressed and not, its error, and the room
+/// drawn with each next to a path-traced reference. Writes the images
+/// (and the difference, eight times brighter) to `PONKO_MEASURE_OUT`.
+///
+/// `cargo test --release --features 3d --lib lightmap_compression_cost -- --ignored --nocapture`
+#[test]
+#[ignore = "a benchmark: run it in release"]
+fn lightmap_compression_cost() {
+    use crate::three::bake::PageFormat;
+    // The town of `town_cost`: 900 buildings on a ground.
+    let mut cube = MeshData::cube(1.0);
+    cube.generate_lightmap_uvs(16.0);
+    let lighting = crate::render::Lighting {
+        sun_direction: vec3(-0.4, -1.0, -0.3),
+        ..Default::default()
+    };
+    let mut scene = LightBakeScene::new(&lighting, &crate::render::Sky::default());
+    let transform =
+        |lo: Vec3, hi: Vec3| Mat4::from_scale_rotation_translation(hi - lo, Quat::IDENTITY, (lo + hi) * 0.5);
+    scene.add(BakeModel::new(
+        &cube,
+        transform(vec3(-60.0, -1.0, -60.0), vec3(60.0, 0.0, 60.0)),
+    ));
+    let mut seed = 7u32;
+    let mut random = move || {
+        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        (seed >> 8) as f32 / (1 << 24) as f32
+    };
+    for i in 0..30 {
+        for j in 0..30 {
+            let at = vec3(i as f32 * 4.0 - 58.0, 0.0, j as f32 * 4.0 - 58.0);
+            let color = if (i + j) % 3 == 0 {
+                Color::rgb(0.8, 0.5, 0.3)
+            } else {
+                Color::WHITE
+            };
+            let hi = at + vec3(2.5, 3.0 + random() * 9.0, 2.5);
+            scene.add(BakeModel::new(&cube, transform(at, hi)).with_albedo(color));
+        }
+    }
+    let settings = LightBakeSettings::default()
+        .with_texels_per_unit(1.0)
+        .with_probe_spacing(4.0)
+        .with_compress(false);
+    let plain = bake_lighting(&scene, &settings).expect("bakes");
+    let start = std::time::Instant::now();
+    let packed = plain.clone().compress();
+    let compress_s = start.elapsed().as_secs_f64();
+    let (a, b) = (plain.gpu_layers().expect("fits"), packed.gpu_layers().expect("fits"));
+    println!(
+        "town: {} pages of {}, {} texels; bake {:.2} s, compressing {:.3} s",
+        plain.pages(),
+        plain.page_size(),
+        plain.stats().texels,
+        plain.stats().seconds,
+        compress_s
+    );
+    println!(
+        "town on disk: {} bytes uncompressed, {} compressed; on the GPU: {} bytes as half floats, {} as BC6H, \
+         {} in the shared-exponent format",
+        plain.to_bytes().len(),
+        packed.to_bytes().len(),
+        a.bytes(PageFormat::Half),
+        b.bytes(PageFormat::Bc6h),
+        b.bytes(PageFormat::SharedExponent)
+    );
+    let (light, direction) = texel_error(&plain, &packed);
+    println!(
+        "town, compressed against uncompressed over the baked texels: light {:.4} relative mean absolute \
+         ({:.4} at the 99th percentile), directions {:.4} mean absolute",
+        light.0, light.1, direction
+    );
+    // The same bake on the GPU, twice (the first run builds the pipeline).
+    for run in 0..2 {
+        match crate::render::bake_lighting_gpu(&scene, &settings) {
+            Ok(gpu) => println!(
+                "town on the GPU, run {run}: {:.2} s, {:.1} M rays; on the CPU {:.2} s, {:.1} M rays",
+                gpu.stats().seconds,
+                gpu.stats().rays as f64 / 1e6,
+                plain.stats().seconds,
+                plain.stats().rays as f64 / 1e6
+            ),
+            Err(e) => println!("no GPU bake: {e}"),
+        }
+    }
+
+    // The room, drawn with both, against the path-traced reference.
+    let tpu = 4.0;
+    let Some(rig) = Rig::any() else {
+        skip("no GPU");
+        return;
+    };
+    let mut ctx = rig.ctx;
+    set_up(&mut ctx);
+    let room = bake_scene(&ctx, tpu);
+    let plain = bake_lighting(&room, &self::settings(tpu).with_compress(false)).expect("bakes");
+    let packed = plain.clone().compress();
+    let (light, direction) = texel_error(&plain, &packed);
+    let (Some((rig, before)), Some((_, after))) = (
+        room_drawn_with(&plain, &plain.gpu_layers().expect("fits"), tpu),
+        room_drawn_with(&packed, &packed.gpu_layers().expect("fits"), tpu),
+    ) else {
+        return;
+    };
+    let truth = reference(&rig, &room, 1024);
+    let bc = rig.device.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+    let format = packed.gpu_layers().expect("fits").format(bc);
+    println!(
+        "room: {format:?} on the GPU ({} bytes) against half floats ({} bytes); texels: light {:.4} relative mean \
+         absolute ({:.4} at the 99th percentile), directions {:.4}; image: mean difference {:.3} of 255, error \
+         to the path-traced reference {:.4} uncompressed and {:.4} compressed",
+        packed.gpu_bytes(),
+        plain.gpu_bytes(),
+        light.0,
+        light.1,
+        direction,
+        apart(&before, &after),
+        error(&before, &truth),
+        error(&after, &truth),
+    );
+    if let Some(out) = std::env::var_os("PONKO_MEASURE_OUT") {
+        let out = std::path::PathBuf::from(out);
+        std::fs::create_dir_all(&out).expect("makes the folder");
+        let save = |name: &str, rgba: &[u8]| {
+            image::save_buffer(out.join(name), rgba, SIZE, SIZE, image::ColorType::Rgba8).expect("writes");
+        };
+        save("room-uncompressed.png", &before);
+        save("room-compressed.png", &after);
+        let diff: Vec<u8> = before
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(after.as_chunks::<4>().0)
+            .flat_map(|(x, y)| {
+                let d = |k: usize| (x[k].abs_diff(y[k]) as u32 * 8).min(255) as u8;
+                [d(0), d(1), d(2), 255]
+            })
+            .collect();
+        save("room-difference-x8.png", &diff);
+        println!("images in {}", out.display());
+    }
+}
+
+/// How far `b`'s texels are from `a`'s, over the texels `a` baked: the
+/// light's relative mean absolute difference and its 99th percentile
+/// (per texel, relative to its brightness), and the directions' mean
+/// absolute difference.
+fn texel_error(a: &BakedLighting, b: &BakedLighting) -> ((f32, f32), f32) {
+    let side = a.page_size();
+    let (mut diff, mut total, mut each) = (0.0, 0.0, Vec::new());
+    for page in 0..a.pages() {
+        for y in 0..side {
+            for x in 0..side {
+                let (l, baked) = a.texel(page, x, y).expect("in the page");
+                if !baked {
+                    continue;
+                }
+                let (m, _) = b.texel(page, x, y).expect("in the page");
+                let d = (l - m).abs().element_sum();
+                diff += d;
+                total += l.element_sum();
+                each.push(d / l.element_sum().max(1e-3));
+            }
+        }
+    }
+    each.sort_by(f32::total_cmp);
+    let p99 = each.get(each.len() * 99 / 100).copied().unwrap_or(0.0);
+    ((diff / total.max(1e-6), p99), a.direction_error(b))
 }

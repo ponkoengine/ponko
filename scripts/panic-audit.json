@@ -1721,12 +1721,6 @@
     "reason": "Internal invariant: /// [`SpriteInstance::vertex`]) are one triangle, drawn with `texture`     /// and `style` at `z`, after what was pushed before at the same `z`.     pub fn push_mesh(&mut self, texture: u32, style: u32, z: f32, vertices: &[SpriteInstance]) {         debug_assert!(vertices.len().is_multiple_of(3), \"a triangle list\");",
     "site": "src/render/batch.rs:268"
   },
-  "src/render/batch.rs:425b76146f336cfa": {
-    "classification": "invariant",
-    "construction": "debug_assert_eq!(sprites.len(), tinted.len(), \"one mark per sprite\")",
-    "reason": "The UI passes one tint mark per saved sprite; both lists are built together in retained_draw.",
-    "site": "src/render/batch.rs:445"
-  },
   "src/render/batch.rs:8a7c66e1c35edbe8": {
     "classification": "invariant",
     "construction": "debug_assert!(style < CLIPPED)",
@@ -2764,6 +2758,18 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: };             return;         }         let s = sample.unwrap();",
     "site": "src/three/autotune.rs:223"
+  },
+  "src/three/bake/mod.rs:29b73c37e0eb892f": {
+    "classification": "invariant",
+    "construction": ".expect(\"blocks of our own\")",
+    "reason": "compress decodes blocks encode_page made just above from the same page and side: always mode 11, always the right length",
+    "site": "src/three/bake/mod.rs:645"
+  },
+  "src/three/bake/mod.rs:65691f982511d403": {
+    "classification": "invariant",
+    "construction": ".expect(\"blocks of our own\")",
+    "reason": "compress decodes blocks encode_page made just above from the same page and side: always mode 11, always the right length",
+    "site": "src/three/bake/mod.rs:658"
   },
   "src/three/bake/mod.rs:7c9483706dd71301": {
     "classification": "forwarded-error",

@@ -49,6 +49,13 @@ Signaling                        webrtc.md         # C and C++ WebRTC endpoints 
 RtcConfig::turn                  webrtc.md         # TURN works in browsers only, and C and C++ games don't build for the web yet
 Graphics::load_lights            3d.md             # glTF lights and cameras: read the file's KHR_lights_punctual and cameras yourself; models load with the same extensions
 Graphics::load_cameras           3d.md             # same
+LightBakeScene::add_world        3d.md             # C and C++ components can't be enumerated by mesh; add each model with ponko_light_bake_scene_add
+LightBakeScene::add_gltf         3d.md             # same: add the file's meshes with ponko_light_bake_scene_add where they stand
+Graphics::keep_bake_sources      3d.md             # only add_world reads what it keeps
+Unbaked                          3d.md             # only add_world reads it; leave the model out of the C bake scene
+BakeTexture                      3d.md             # not bound yet; a textured model bakes with the texture's average color as its albedo
+bake_lighting_gpu                3d.md             # not bound yet; ponko_bake_lighting bakes the same light on the CPU
+LightBakeSettings::compress      3d.md             # not bound yet; C and C++ bakes are compressed, the default
 SkeletonData::add_bone           skeleton2d.md     # C and C++ skeletons come from files (Ponko's format or a Spine export) through the assets
 SpineAtlas                       skeleton2d.md     # load the export, its .atlas and pages through the assets (a memory source for files in memory)
 Plugin::dependencies             plugins.md        # C plugins (ponko_game_plugin) have no names or dependencies and are never duplicates

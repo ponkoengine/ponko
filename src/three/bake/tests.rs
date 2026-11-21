@@ -286,6 +286,99 @@ fn baked_lighting_survives_bytes() {
 }
 
 #[test]
+fn files_of_version_1_still_load() {
+    let mut scene = gray_sky(0.4, 4.0);
+    room(true, &mut scene, 1.0);
+    let baked = bake_lighting(
+        &scene,
+        &settings()
+            .with_texels_per_unit(1.0)
+            .with_samples(4)
+            .with_probe_spacing(2.0)
+            .with_compress(false),
+    )
+    .unwrap();
+    let mut back = BakedLighting::from_bytes(&baked.to_bytes_v1()).unwrap();
+    back.stats = baked.stats;
+    assert_eq!(back, baked);
+    // A later version is refused.
+    let mut later = baked.to_bytes();
+    later[8] = 3;
+    assert_eq!(BakedLighting::from_bytes(&later).unwrap_err().kind(), ErrorKind::Decode);
+}
+
+#[test]
+fn compressed_bakes_take_an_eighth_of_the_space_and_stay_within_two_percent() {
+    let mut scene = gray_sky(0.4, 4.0);
+    room(true, &mut scene, 1.0);
+    let plain = bake_lighting(
+        &scene,
+        &settings()
+            .with_texels_per_unit(4.0)
+            .with_samples(16)
+            .with_probe_spacing(2.0)
+            .with_compress(false),
+    )
+    .unwrap();
+    let packed = plain.clone().compress();
+    assert!(!plain.is_compressed() && packed.is_compressed());
+    // Compressing again changes nothing, and a compressed bake survives
+    // bytes exactly.
+    assert_eq!(packed.clone().compress(), packed);
+    let mut back = BakedLighting::from_bytes(&packed.to_bytes()).unwrap();
+    back.stats = packed.stats;
+    assert_eq!(back, packed);
+    // The pages: a byte a texel on disk (with a bit for which are baked)
+    // instead of 8, and on a GPU with BC6H.
+    let side = u64::from(plain.page_size());
+    let pages = 2 * u64::from(plain.pages());
+    let (v1, disk_plain, disk_packed) = (
+        plain.to_bytes_v1().len() as u64,
+        plain.to_bytes().len() as u64,
+        packed.to_bytes().len() as u64,
+    );
+    assert!(
+        disk_packed * 8 <= v1 && disk_packed * 2 < disk_plain,
+        "on disk: {disk_packed} compressed, {disk_plain} not, {v1} in version 1 ({pages} pages of {side})"
+    );
+    let (a, b) = (plain.gpu_layers().unwrap(), packed.gpu_layers().unwrap());
+    use super::PageFormat;
+    let header = a.bytes(PageFormat::Half) - pages.max(2) * side * side * 8;
+    assert_eq!(b.bytes(PageFormat::Bc6h), header + pages.max(2) * side * side);
+    assert_eq!(
+        b.bytes(PageFormat::SharedExponent),
+        header + pages.max(2) * side * side * 4
+    );
+    // The light it holds: within 2 % on average (relative mean absolute).
+    let (mut diff, mut total) = (0.0, 0.0);
+    for page in 0..plain.pages() {
+        for y in 0..plain.page_size() {
+            for x in 0..plain.page_size() {
+                let (l, baked) = plain.texel(page, x, y).unwrap();
+                let (m, kept) = packed.texel(page, x, y).unwrap();
+                assert_eq!(baked, kept);
+                if baked {
+                    diff += (l - m).abs().element_sum();
+                    total += l.element_sum();
+                }
+            }
+        }
+    }
+    let error = diff / total;
+    assert!(error < 0.02, "{error}");
+    assert!(
+        plain.direction_error(&packed) < 0.02,
+        "{}",
+        plain.direction_error(&packed)
+    );
+    // A file whose data claims to unpack to more than any bake is refused
+    // before it unpacks.
+    let mut huge = packed.to_bytes();
+    huge[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert_eq!(BakedLighting::from_bytes(&huge).unwrap_err().kind(), ErrorKind::Decode);
+}
+
+#[test]
 fn the_gpu_layers_start_with_the_header_and_the_rectangle_table() {
     let mut scene = gray_sky(0.4, 0.0);
     let ids = room(true, &mut scene, 1.0);
@@ -298,11 +391,15 @@ fn the_gpu_layers_start_with_the_header_and_the_rectangle_table() {
     )
     .unwrap();
     let layers = baked.gpu_layers().unwrap();
-    assert_eq!(layers.len() as u32, 1 + 2 * baked.pages());
+    assert_eq!(layers.pages.len() as u32, 2 * baked.pages());
     let side = baked.page_size() as usize;
-    assert!(layers.iter().all(|l| l.len() == side * side * 4));
-    let texel = |i: usize| -> [f32; 4] { std::array::from_fn(|k| f16_to_f32(layers[0][i * 4 + k])) };
+    assert!(layers.pages.iter().all(|l| l.len() == side * side * 4));
+    let (header, rows) = (layers.header_side as usize, layers.header_rows as usize);
+    assert!(rows <= header);
+    assert_eq!(layers.header.len(), header * rows * 4);
+    let texel = |i: usize| -> [f32; 4] { std::array::from_fn(|k| f16_to_f32(layers.header[i * 4 + k])) };
     assert_eq!(texel(0), [-1.0, baked.pages() as f32, 1.0, 1.0]);
+    assert_eq!(texel(4), [side as f32, 2.0 * baked.pages() as f32, 0.0, 0.0]);
     let r = baked.rect(ids[3]).unwrap();
     let at = HEADER_TEXELS as usize + 2 * ids[3];
     assert_eq!(texel(at), [r.x as f32, r.y as f32, r.width as f32, r.height as f32]);
@@ -310,7 +407,11 @@ fn the_gpu_layers_start_with_the_header_and_the_rectangle_table() {
     // The probe grid's origin, from its two parts.
     let origin = Vec3::from_slice(&texel(1)[..3]) + Vec3::from_slice(&texel(2)[..3]);
     assert!((origin - baked.probes.as_ref().unwrap().origin).abs().max_element() < 1e-3);
-    assert_eq!(baked.gpu_bytes(), (side * side * 8 * layers.len()) as u64);
+    // Compressed: the two-layer header, and a byte a texel for the pages
+    // (two layers at least).
+    assert!(baked.is_compressed());
+    let pages = (2 * baked.pages()).max(2) as usize;
+    assert_eq!(baked.gpu_bytes(), (header * rows * 8 * 2 + side * side * pages) as u64);
 }
 
 #[test]

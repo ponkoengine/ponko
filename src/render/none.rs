@@ -148,7 +148,7 @@ impl Renderer {
         match *self {}
     }
     #[cfg(feature = "3d")]
-    pub fn set_baked_lighting(&mut self, _layers: Option<(u32, &[Vec<u16>])>) {
+    pub fn set_baked_lighting(&mut self, _layers: Option<&crate::three::bake::GpuBaked>) {
         match *self {}
     }
     #[cfg(feature = "3d")]

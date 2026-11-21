@@ -492,6 +492,10 @@ binding arrives:
 | `Ui::set_rich`, `Ui::set_inline_image`, `Ui::set_inline_font`, `Ui::link`, `UiEvent::LinkClicked` | [Retained game UI](ui.md#rich-text) | Not bound yet: several labels side by side, each with its own paint; a button for each link |
 | `GltfScene::nav_source` | [From Blender to the game](blender.md#navigation-meshes) | Read the nodes and their places with `ponko_gltf_scene_load`, and bake from mesh data of your own (`ponko_nav_sources_add_mesh`, `ponko_ctx_bake_navmesh`) |
 | `Graphics::load_lights`, `Graphics::load_cameras` | [3D](3d.md#gltf-extensions-lights-and-cameras) | Models load with the same glTF extensions; a file's lights and cameras aren't returned yet, so place them yourself |
+| `LightBakeScene::add_world`, `LightBakeScene::add_gltf`, `Graphics::keep_bake_sources`, `Unbaked` | [Baked lighting](3d.md#baked-lighting) | C and C++ components can't be listed by mesh: add each model with `ponko_light_bake_scene_add` (`light_bake_scene::add`), and leave out the ones that shouldn't bake |
+| `BakeTexture` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: give a textured model its texture's average color as its albedo |
+| `bake_lighting_gpu` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: `ponko_bake_lighting` bakes the same light on the CPU |
+| `LightBakeSettings::compress` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: C and C++ bakes are compressed, the default |
 | `Smoothing` | [Client prediction](networking.md#your-own-player-at-once-client-prediction) | Generic over what is drawn; prediction and the input queue are bound (`ponko::prediction`), so fade the correction offset (`reconciled::before`) yourself |
 | `Physics3D::move_character` | [3D physics](physics3d.md#a-walking-character) | Characters walk with the physics step only; one tick can't be replayed on its own |
 | `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ games don't build for the web yet |
