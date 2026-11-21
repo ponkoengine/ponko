@@ -625,7 +625,10 @@ fn a_subtree_cycle_is_an_error_with_both_names() {
         message.contains("ai/a.json") && message.contains("ai/b.json"),
         "{message}"
     );
-    assert!(message.contains("subtree cycle"), "{message}");
+    assert!(
+        message.contains("subtree cycle: ai/b.json -> ai/a.json -> ai/b.json"),
+        "{message}"
+    );
     // Nothing changed.
     assert!(trees.get("ai/b.json").is_none());
     let error = trees

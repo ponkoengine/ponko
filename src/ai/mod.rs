@@ -237,9 +237,10 @@ impl BehaviorTrees {
             .filter(|(_, t)| t.subtrees().contains(&name))
             .map(|(&n, _)| n)
             .collect();
-        relink.push(name);
         relink.sort_unstable();
-        relink.dedup();
+        // The new tree first, so a cycle is named from it.
+        relink.retain(|n| *n != name);
+        relink.insert(0, name);
         let resolve = |n: &str| sources.get(n).cloned();
         let mut linked = Vec::with_capacity(relink.len());
         for n in relink {

@@ -205,10 +205,7 @@ fn a_linked_tree_runs_its_subtrees_and_a_cycle_names_both_trees() {
         let json = cr#"{"root": {"subtree": "a"}}"#;
         assert!(ponko_behavior_tree_new_linked(json.as_ptr(), names.as_ptr(), subtrees.as_ptr(), 2).is_null());
         let error = last_error();
-        assert!(
-            error.contains("subtree cycle: a -> b -> a") || error.contains("subtree cycle: b -> a -> b"),
-            "{error}"
-        );
+        assert!(error.contains("subtree cycle: b -> a -> b"), "{error}");
         assert!(ponko_behavior_tree_new_linked(json.as_ptr(), null(), null(), 1).is_null());
         ponko_behavior_tree_free(a);
         ponko_behavior_tree_free(b);

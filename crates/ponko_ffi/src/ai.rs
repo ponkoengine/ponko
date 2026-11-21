@@ -433,8 +433,8 @@ pub unsafe extern "C" fn ponko_brain_wake(brain: *mut PonkoBrain) -> PonkoStatus
 pub unsafe extern "C" fn ponko_brain_signal(brain: *mut PonkoBrain, key: u64) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
-        let key = key_of(key)?;
-        brain_mut(brain)?.brain.signal(key);
+        let brain = brain_mut(brain)?;
+        brain.brain.signal(key_of(key)?);
         Ok(())
     })
 }
