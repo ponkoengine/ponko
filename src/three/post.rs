@@ -60,6 +60,45 @@ pub enum AntiAliasing {
     Taa = 3,
 }
 
+/// How a 3D frame drawn below the window's size ([`Post::render_scale`]
+/// under 1) is brought up to it ([`Post::upscaler`]).
+/// ```
+/// use ponko::render::{AntiAliasing, Post, Upscaler};
+/// assert_eq!(Upscaler::default(), Upscaler::Bilinear);
+/// let mut post = Post::default();
+/// // Draw two thirds of the pixels across and rebuild the rest over time.
+/// (post.render_scale, post.anti_aliasing, post.upscaler) = (0.67, AntiAliasing::Taa, Upscaler::Temporal);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+#[repr(u32)]
+pub enum Upscaler {
+    /// One pass stretches the finished frame to the window, sharpened by
+    /// [`Post::sharpen`]: cheap, and as soft as the lower resolution is.
+    /// Detail smaller than a drawn pixel is lost.
+    #[default]
+    Bilinear = 0,
+    /// Temporal upscaling, built on [`AntiAliasing::Taa`]: the frame is
+    /// drawn at the render size with a sub-pixel jitter that differs every
+    /// frame, and each window pixel collects the samples that land near it
+    /// over several frames, reprojected along the motion vectors and
+    /// clipped to the colors nearby as TAA's are. A still or slowly moving
+    /// picture converges on detail close to the window's resolution; what
+    /// was just uncovered or moves fast starts from a smooth stretch of the
+    /// drawn frame. It replaces TAA's own resolve, so it costs about what
+    /// TAA does at the render size, plus two history images of the
+    /// window's size. [`Post::taa_sharpness`] sharpens it.
+    ///
+    /// Only used with [`AntiAliasing::Taa`] and a
+    /// [`render_scale`](Post::render_scale) below 1; otherwise the frame is
+    /// stretched as with [`Bilinear`](Self::Bilinear) (WebGL2, which has
+    /// no TAA, included). It runs after tone mapping, so bloom, depth of
+    /// field and grading work at the render size, and the lens effects
+    /// ([`Post::lens_distortion`], [`Post::chromatic_aberration`]) blur a
+    /// little more near the edges of the picture.
+    Temporal = 1,
+}
+
 /// Smallest [`Post::render_scale`]: [`Post::MIN_RENDER_SCALE`].
 pub(crate) const MIN_RENDER_SCALE: f32 = 0.25;
 /// Largest [`Post::render_scale`]: [`Post::MAX_RENDER_SCALE`].
@@ -290,6 +329,10 @@ pub struct Post {
     /// contrast filter that only touches soft edges). Only used with a
     /// `render_scale` other than 1. Default 0.
     pub sharpen: f32,
+    /// How a `render_scale` below 1 is brought up to the window's size:
+    /// stretched ([`Upscaler::Bilinear`], the default) or rebuilt over
+    /// frames ([`Upscaler::Temporal`], with [`AntiAliasing::Taa`]).
+    pub upscaler: Upscaler,
     /// Ambient-only GTAO, before opaque lighting.
     pub ambient_occlusion: AmbientOcclusion,
     /// Trace GTAO at half width and height, then bilaterally upsample.
@@ -449,6 +492,7 @@ impl Default for Post {
         Self {
             render_scale: 1.0,
             sharpen: 0.0,
+            upscaler: Upscaler::Bilinear,
             ambient_occlusion: AmbientOcclusion::default(),
             ao_half_resolution: false,
             ao_temporal: false,
@@ -619,6 +663,7 @@ impl Post {
         Post {
             render_scale: pick(t, a.render_scale, b.render_scale),
             sharpen: f(a.sharpen, b.sharpen),
+            upscaler: pick(t, a.upscaler, b.upscaler),
             ambient_occlusion: ao,
             ao_half_resolution: pick(t, a.ao_half_resolution, b.ao_half_resolution),
             ao_temporal: pick(t, a.ao_temporal, b.ao_temporal),

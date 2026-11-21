@@ -196,7 +196,7 @@ impl Renderer3D {
         size: (u32, u32),
         post: &crate::render::Post,
         ao_on: bool,
-        upscaled: bool,
+        (upscaled, window): (bool, (u32, u32)),
     ) -> bool {
         self.targets.as_ref().is_none_or(|t| {
             t.size != size
@@ -211,7 +211,8 @@ impl Renderer3D {
                 || t.ssr
                     .as_ref()
                     .is_some_and(|s| s.coarse_depth().is_some() != self.screen.ssr_thin)
-                || t.taa.is_some() != self.screen.taa_on
+                || t.taa.is_some() != (self.screen.taa_on && !self.screen.upscale_on)
+                || t.upscaler.as_ref().map(|u| u.size) != self.screen.upscale_on.then_some(window)
                 || t.velocity.is_some() != self.screen.velocity_on
                 || t.post.stale(&self.post, upscaled)
         })
@@ -219,7 +220,12 @@ impl Renderer3D {
 
     /// Makes the scene-sized targets for `size` and the effects that are on
     /// this frame (decided earlier in `prepare`).
-    pub(super) fn make_targets(&self, device: &wgpu::Device, size: (u32, u32), upscaled: bool) -> Targets {
+    pub(super) fn make_targets(
+        &self,
+        device: &wgpu::Device,
+        size: (u32, u32),
+        (upscaled, window): (bool, (u32, u32)),
+    ) -> Targets {
         let texture = |label, format, samples, usage| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -299,7 +305,7 @@ impl Renderer3D {
             .screen
             .taa
             .as_ref()
-            .filter(|_| self.screen.taa_on)
+            .filter(|_| self.screen.taa_on && !self.screen.upscale_on)
             .map(|t| t.targets(device, size, velocity.as_ref().unwrap().velocity(), &depth_read));
         let lit = match &taa {
             Some(t) => &t.input_view,
@@ -342,14 +348,33 @@ impl Renderer3D {
                     .map(|stand_in| ssr.as_ref().map_or(stand_in, |s| s.spread().1)),
             )
         });
+        let post = self.post.targets(device, size, upscaled, &hdr, &scene_view);
+        // The temporal upscaler reads the tone mapped frame the scaling
+        // pass would have stretched.
+        let upscaler = self
+            .screen
+            .taa
+            .as_ref()
+            .filter(|_| self.screen.upscale_on)
+            .zip(post.upscaled())
+            .map(|(t, input)| {
+                t.upscale_targets(
+                    device,
+                    window,
+                    input,
+                    velocity.as_ref().unwrap().velocity(),
+                    &depth_read,
+                )
+            });
         Targets {
             samples: self.samples,
+            upscaler,
             ao,
             ssr,
             opaque_scene,
             taa,
             velocity,
-            post: self.post.targets(device, size, upscaled, &hdr, &scene_view),
+            post,
             color: target("3d color", HDR_FORMAT, self.samples, none),
             depth,
             depth_read,
@@ -376,6 +401,9 @@ pub(super) struct Targets {
     /// With temporal antialiasing: the lit frame's image, history and motion.
     pub(super) taa: Option<crate::render::taa::TaaTargets>,
     pub(super) velocity: Option<crate::render::taa::VelocityTargets>,
+    /// With the temporal upscaler: its window-sized histories (instead of
+    /// `taa`).
+    pub(super) upscaler: Option<crate::render::taa::UpscaleTargets>,
     /// The post chain's images (see `post.rs`).
     pub(super) post: PostTargets,
     /// Multisampled HDR color, resolved into `hdr`.
@@ -753,6 +781,9 @@ impl Targets {
         }
         if let Some(copy) = &self.depth_copy {
             t.view(C::FrameTargets, "depth copy", &copy.view);
+        }
+        if let Some(upscaler) = &self.upscaler {
+            upscaler.tally_memory(t);
         }
         if let Some(taa) = &self.taa {
             taa.tally_memory(t);
