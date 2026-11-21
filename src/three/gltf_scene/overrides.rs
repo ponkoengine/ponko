@@ -12,6 +12,11 @@
 //! neither is an attached node's world transform, which follows its
 //! offset. A prefab node keeps only where it stands: its instance is saved
 //! with the world already.
+//!
+//! A node deleted while editing is recorded as deleted (spawns and reloads
+//! leave it out, its children hang off its parent), and a node attached to
+//! another parent records that parent: another node of the scene by path,
+//! the scene's root, or an entity saved with the world.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -39,11 +44,78 @@ pub(super) struct NodeOverrides {
     /// Components the file gives the node and it doesn't have.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     remove: Vec<String>,
+    /// The node was deleted: spawns and reloads leave it out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) deleted: bool,
+    /// The node hangs off another parent than the file's (its offset is
+    /// then the whole `Attached3D` in `components`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent: Option<NodeParent>,
 }
 
 impl NodeOverrides {
     fn is_empty(&self) -> bool {
-        self.components.is_empty() && self.remove.is_empty()
+        self.components.is_empty() && self.remove.is_empty() && !self.deleted && self.parent.is_none()
+    }
+
+    fn deleted() -> Self {
+        Self {
+            deleted: true,
+            ..Self::default()
+        }
+    }
+}
+
+/// The parent a node was attached to instead of the file's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum NodeParent {
+    /// The scene's root.
+    Root,
+    /// Another node of the scene, by path.
+    Node(String),
+    /// An entity saved with the world (its id is kept by world saves).
+    Entity(Entity),
+}
+
+/// One way a node of a glTF scene differs from its file, as the editor
+/// lists it.
+#[cfg_attr(not(feature = "editor"), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GltfOverride {
+    /// The node's path.
+    pub node: String,
+    /// Its entity (dead for a deleted node).
+    pub entity: Entity,
+    pub kind: GltfOverrideKind,
+}
+
+/// What a [`GltfOverride`] changes.
+#[cfg_attr(not(feature = "editor"), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum GltfOverrideKind {
+    /// Component `name` differs from the file's in these fields (empty: a
+    /// value that isn't an object).
+    Changed { name: String, fields: Vec<String> },
+    /// Component `name` was added.
+    Added(String),
+    /// Component `name` of the file was taken off.
+    Removed(String),
+    /// It hangs off another parent: the entity it is attached to now.
+    Parent(Entity),
+    /// It was deleted.
+    Deleted,
+}
+
+impl GltfOverrideKind {
+    /// The component it is about (`Attached3D` for a parent).
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub(crate) fn component(&self) -> Option<&str> {
+        match self {
+            Self::Changed { name, .. } | Self::Added(name) | Self::Removed(name) => Some(name),
+            Self::Parent(_) => Some("Attached3D"),
+            Self::Deleted => None,
+        }
     }
 }
 
@@ -85,53 +157,190 @@ impl Ctx {
             if !self.world.is_alive(node.entity) {
                 continue;
             }
-            let wanted: &[&str] = if node.prefab.is_some() {
-                &["Transform3D"]
-            } else {
-                &names
-            };
-            let mut map = JsonMap::new();
-            for &name in wanted {
-                if NOT_COMPARED.contains(&name) {
-                    continue;
-                }
-                if let Ok(v) = self.world.get_json(node.entity, name) {
-                    map.insert(name.to_string(), v);
-                }
-            }
+            let map = self.node_components(node.entity, node.prefab.is_some(), &names);
             out.insert(node.path.clone(), map);
         }
         out
+    }
+
+    /// The compared components of node entity `e` (of a prefab node, only
+    /// where it stands), from the reflected `names`.
+    fn node_components(&self, e: Entity, prefab: bool, names: &[&str]) -> JsonMap {
+        let wanted: &[&str] = if prefab { &["Transform3D"] } else { names };
+        let mut map = JsonMap::new();
+        for &name in wanted {
+            if NOT_COMPARED.contains(&name) {
+                continue;
+            }
+            if let Ok(v) = self.world.get_json(e, name) {
+                map.insert(name.to_string(), v);
+            }
+        }
+        map
     }
 
     /// Writes how the scenes of file `path` (of every file for `None`)
     /// differ from their baseline into their saved records, with where
     /// their roots stand now. Scenes without a baseline keep their record.
     pub(crate) fn record_gltf_overrides(&mut self, path: Option<&str>) {
-        let roots: Vec<(Entity, Arc<BTreeMap<String, JsonMap>>)> = self
+        let roots: Vec<Entity> = self
             .world
             .query::<(Entity, &GltfRoot)>()
             .iter()
             .filter(|(_, r)| path.is_none_or(|p| r.path == p))
-            .filter_map(|(e, r)| Some((e, r.baseline.clone()?)))
+            .map(|(e, _)| e)
             .collect();
-        for (root, baseline) in roots {
-            let now = self.gltf_nodes_now(root);
-            let overrides: BTreeMap<String, NodeOverrides> = baseline
-                .iter()
-                .filter_map(|(node, file)| Some((node.clone(), node_overrides(file, now.get(node)?))))
-                .filter(|(_, o)| !o.is_empty())
-                .collect();
-            let at = self.world.get::<Transform3D>(root).copied();
-            if let Some(saves) = self.world.get_resource_mut::<GltfSceneSaves>()
-                && let Some(scene) = saves.scenes.iter_mut().find(|s| s.root == Some(root))
-            {
-                scene.overrides = overrides;
-                if let Some(at) = at {
-                    scene.at = at;
-                }
+        for root in roots {
+            self.record_scene_overrides(root);
+        }
+    }
+
+    /// [`record_gltf_overrides`](Self::record_gltf_overrides) for the
+    /// scene of `root`.
+    pub(super) fn record_scene_overrides(&mut self, root: Entity) {
+        let Some(overrides) = self.scene_overrides(root) else {
+            return;
+        };
+        let at = self.world.get::<Transform3D>(root).copied();
+        if let Some(saves) = self.world.get_resource_mut::<GltfSceneSaves>()
+            && let Some(scene) = saves.scenes.iter_mut().find(|s| s.root == Some(root))
+        {
+            scene.overrides = overrides;
+            if let Some(at) = at {
+                scene.at = at;
             }
         }
+    }
+
+    /// How the nodes of `root`'s scene differ from its baseline, by node
+    /// path; `None` without a baseline.
+    fn scene_overrides(&self, root: Entity) -> Option<BTreeMap<String, NodeOverrides>> {
+        let scene = self.world.get::<GltfRoot>(root)?;
+        let baseline = scene.baseline.clone()?;
+        let now = self.gltf_nodes_now(root);
+        let mut out = BTreeMap::new();
+        for node in &scene.nodes {
+            let o = match now.get(&node.path) {
+                None => NodeOverrides::deleted(),
+                Some(now) => {
+                    let Some(file) = baseline.get(&node.path) else {
+                        continue;
+                    };
+                    let mut o = node_overrides(file, now);
+                    o.parent = self.parent_override(root, scene, &node.path, file, now);
+                    if o.parent.is_some()
+                        && let Some(Value::Object(link)) = now.get("Attached3D")
+                    {
+                        // Its offset is in the new parent's space: all of it.
+                        let mut link = link.clone();
+                        link.remove("to");
+                        o.components.insert("Attached3D".into(), Value::Object(link));
+                    }
+                    o
+                }
+            };
+            if !o.is_empty() {
+                out.insert(node.path.clone(), o);
+            }
+        }
+        Some(out)
+    }
+
+    /// The parent node `path` (with components `now`, `file` in the file)
+    /// hangs off instead of the file's, if it does and that parent can be
+    /// named in a save.
+    fn parent_override(
+        &self,
+        root: Entity,
+        scene: &GltfRoot,
+        path: &str,
+        file: &JsonMap,
+        now: &JsonMap,
+    ) -> Option<NodeParent> {
+        let to = |c: &JsonMap| c.get("Attached3D").and_then(|a| a["to"].as_u64());
+        let now_to = to(now)?;
+        if to(file) == Some(now_to) {
+            return None;
+        }
+        let parent = Entity::from_bits(now_to);
+        if parent == root {
+            return Some(NodeParent::Root);
+        }
+        if let Some(node) = scene.nodes.iter().find(|n| n.entity == parent) {
+            return Some(NodeParent::Node(node.path.clone()));
+        }
+        if self.world.get::<crate::reflect::NotSaved>(parent).is_some() {
+            eprintln!(
+                "ponko: {}: node \"{path}\" hangs off entity {now_to}, which saves leave out: that parent isn't kept",
+                scene.path
+            );
+            return None;
+        }
+        Some(NodeParent::Entity(parent))
+    }
+
+    /// The overrides of `root`'s scene as the editor lists them, nodes in
+    /// path order: deleted nodes, other parents, then components. Empty
+    /// without a baseline (nothing was edited).
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub(crate) fn gltf_overrides(&self, root: Entity) -> Vec<GltfOverride> {
+        let Some(scene) = self.world.get::<GltfRoot>(root) else {
+            return Vec::new();
+        };
+        let overrides = self.scene_overrides(root).unwrap_or_default();
+        let mut out = Vec::new();
+        for (node, o) in overrides {
+            let Some(entity) = scene.entity_at(&node) else {
+                continue;
+            };
+            let mut push = |kind| {
+                out.push(GltfOverride {
+                    node: node.clone(),
+                    entity,
+                    kind,
+                });
+            };
+            if o.deleted {
+                push(GltfOverrideKind::Deleted);
+                continue;
+            }
+            if o.parent.is_some()
+                && let Some(link) = self.world.get::<crate::attach::Attached3D>(entity)
+            {
+                push(GltfOverrideKind::Parent(link.to));
+            }
+            let file = scene.baseline.as_ref().and_then(|b| b.get(&node));
+            for (name, value) in &o.components {
+                if name == "Attached3D" && o.parent.is_some() {
+                    continue;
+                }
+                let kind = if file.is_some_and(|f| f.contains_key(name)) {
+                    let fields = match value {
+                        Value::Object(fields) => fields.keys().cloned().collect(),
+                        _ => Vec::new(),
+                    };
+                    GltfOverrideKind::Changed {
+                        name: name.clone(),
+                        fields,
+                    }
+                } else {
+                    GltfOverrideKind::Added(name.clone())
+                };
+                push(kind);
+            }
+            for name in &o.remove {
+                push(GltfOverrideKind::Removed(name.clone()));
+            }
+        }
+        out
+    }
+
+    /// Component `name` of node `node` of `root`'s scene as the file made
+    /// it (`None`: the file doesn't give it one, or nothing was edited).
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub(crate) fn gltf_file_value(&self, root: Entity, node: &str, name: &str) -> Option<Value> {
+        let scene = self.world.get::<GltfRoot>(root)?;
+        scene.baseline.as_ref()?.get(node)?.get(name).cloned()
     }
 
     /// After `root`'s scene was spawned or brought to its file again:
@@ -159,6 +368,22 @@ impl Ctx {
             let Some(&(_, e)) = nodes.iter().find(|(p, e)| p == path && self.world.is_alive(*e)) else {
                 continue;
             };
+            if let Some(parent) = &o.parent {
+                let to = match parent {
+                    NodeParent::Root => Some(root),
+                    NodeParent::Node(p) => nodes.iter().find(|(n, _)| n == p).map(|&(_, e)| e),
+                    NodeParent::Entity(e) => Some(*e),
+                };
+                match to.filter(|&to| self.world.is_alive(to) && to != e) {
+                    Some(to) => match self.world.get_mut::<crate::attach::Attached3D>(e) {
+                        Some(link) => link.to = to,
+                        None => {
+                            self.world.insert(e, crate::attach::Attached3D::to(to));
+                        }
+                    },
+                    None => eprintln!("ponko: {file}: node \"{path}\": the parent it was attached to is gone"),
+                }
+            }
             for (name, value) in &o.components {
                 let value = match (self.world.get_json(e, name), value) {
                     (Ok(Value::Object(mut now)), Value::Object(fields)) => {
@@ -202,6 +427,201 @@ impl Ctx {
             }
         }
         errors
+    }
+}
+
+/// The entities of every glTF scene when the editor's Play saved the
+/// world, by the place of the scene's record in [`GltfSceneSaves`]: its
+/// root and its nodes by path. Stop spawns the scenes again (they aren't
+/// saved) and maps these to the new entities, so the undo history keeps
+/// pointing at them.
+#[cfg_attr(not(feature = "editor"), allow(dead_code))]
+#[derive(Debug, Default)]
+pub(crate) struct GltfEntities(Vec<Option<(Entity, Vec<(String, Entity)>)>>);
+
+impl Ctx {
+    /// The entities of every glTF scene now (see [`GltfEntities`]).
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub(crate) fn gltf_entities(&self) -> GltfEntities {
+        let Some(saves) = self.world.get_resource::<GltfSceneSaves>() else {
+            return GltfEntities::default();
+        };
+        GltfEntities(
+            saves
+                .scenes
+                .iter()
+                .map(|s| {
+                    let root = s.root?;
+                    let scene = self.world.get::<GltfRoot>(root)?;
+                    Some((root, scene.nodes.iter().map(|n| (n.path.clone(), n.entity)).collect()))
+                })
+                .collect(),
+        )
+    }
+
+    /// After the world was put back from a save that holds the scene
+    /// records of `before` (the editor's Stop): spawns every scene again,
+    /// with its overrides, and returns each entity of `before` that is
+    /// another one now, with that one. Errors are printed: a scene whose
+    /// file no longer loads stays out.
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub(crate) fn respawn_gltf_entities(&mut self, before: &GltfEntities) -> Vec<(Entity, Entity)> {
+        for e in self.respawn_saved_gltf() {
+            eprintln!("ponko: {e}");
+        }
+        let roots: Vec<Option<Entity>> = self
+            .world
+            .get_resource::<GltfSceneSaves>()
+            .map(|s| s.scenes.iter().map(|s| s.root).collect())
+            .unwrap_or_default();
+        let mut moved = Vec::new();
+        for (old, new) in before.0.iter().zip(roots) {
+            let (Some((old_root, nodes)), Some(new_root)) = (old, new) else {
+                continue;
+            };
+            let Some(scene) = self.world.get::<GltfRoot>(new_root) else {
+                continue;
+            };
+            moved.push((*old_root, new_root));
+            for (path, e) in nodes {
+                if let Some(now) = scene.entity_at(path) {
+                    moved.push((*e, now));
+                }
+            }
+        }
+        moved.retain(|(a, b)| a != b);
+        moved
+    }
+
+    /// An undo brought back despawned entities, as `(was, now)`: `was` the
+    /// entity it stood for. Those that were nodes of a glTF scene are its
+    /// nodes again: each scene with such a node records how its nodes
+    /// differ from the file (the ones brought back no longer deleted) and
+    /// is brought to its file again, which puts back on them what saves
+    /// leave out (meshes, colliders, lights) and their overrides on top.
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub(crate) fn gltf_nodes_back(&mut self, back: &[(Entity, Entity)]) {
+        let mut touched: Vec<Entity> = Vec::new();
+        let mut instances: Vec<(Entity, String, Entity)> = Vec::new();
+        for (root, scene) in self.world.query::<(Entity, &mut GltfRoot)>().iter() {
+            for node in &mut scene.nodes {
+                let Some(&(_, now)) = back.iter().find(|(was, _)| *was == node.entity) else {
+                    continue;
+                };
+                node.entity = now;
+                if node.prefab.is_some() {
+                    instances.push((root, node.path.clone(), now));
+                }
+                if !touched.contains(&root) {
+                    touched.push(root);
+                }
+            }
+        }
+        for &(root, ref path, now) in &instances {
+            if let Some(saves) = self.world.get_resource_mut::<GltfSceneSaves>()
+                && let Some(scene) = saves.scenes.iter_mut().find(|s| s.root == Some(root))
+                && let Some(instance) = scene.instances.get_mut(path)
+            {
+                instance.entity = Some(now);
+            }
+        }
+        // Each node brought back, as it was deleted.
+        let names: Vec<String> = self
+            .world
+            .reflected_components()
+            .iter()
+            .map(|n| n.to_string())
+            .collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut kept: Vec<(Entity, bool, JsonMap)> = Vec::new();
+        for &(_, now) in back {
+            let prefab = touched.iter().find_map(|&root| {
+                let scene = self.world.get::<GltfRoot>(root)?;
+                scene.nodes.iter().find(|n| n.entity == now).map(|n| n.prefab.is_some())
+            });
+            let Some(prefab) = prefab else { continue };
+            if kept.iter().any(|(e, ..)| *e == now) {
+                continue;
+            }
+            if !prefab {
+                self.world.insert(now, crate::reflect::NotSaved);
+            }
+            kept.push((now, prefab, self.node_components(now, prefab, &names)));
+        }
+        for root in touched {
+            self.record_scene_overrides(root);
+            if let Err(e) = self.refresh_gltf_scene(root) {
+                eprintln!("ponko: {e}");
+            }
+        }
+        // The file dressed them again: what they had on top of it comes back.
+        for (e, prefab, was) in kept {
+            let now = self.node_components(e, prefab, &names);
+            for (name, value) in &was {
+                if now.get(name).is_none_or(|v| !same(v, value)) {
+                    let _ = self.world.set_json(e, name, value.clone());
+                }
+            }
+            for name in now.keys().filter(|n| !was.contains_key(*n)) {
+                let _ = self.world.remove_json(e, name);
+            }
+        }
+        crate::hierarchy::settle(&mut self.world);
+    }
+
+    /// Brings node `node` of `root`'s scene back, with the nodes below it,
+    /// if they were deleted in the editor, and returns their entities.
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub(crate) fn restore_gltf_nodes(&mut self, root: Entity, node: &str) -> Result<Vec<Entity>, crate::error::Error> {
+        self.record_scene_overrides(root);
+        let below = format!("{node}/");
+        let mut restored: Vec<String> = Vec::new();
+        if let Some(saves) = self.world.get_resource_mut::<GltfSceneSaves>()
+            && let Some(scene) = saves.scenes.iter_mut().find(|s| s.root == Some(root))
+        {
+            for (path, o) in &mut scene.overrides {
+                if o.deleted && (path == node || path.starts_with(&below)) {
+                    o.deleted = false;
+                    restored.push(path.clone());
+                }
+            }
+            scene.overrides.retain(|_, o| !o.is_empty());
+        }
+        if restored.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.refresh_gltf_scene(root)?;
+        let scene = self.world.get::<GltfRoot>(root);
+        Ok(restored
+            .iter()
+            .filter_map(|p| scene.and_then(|s| s.entity_at(p)))
+            .filter(|&e| self.world.is_alive(e))
+            .collect())
+    }
+
+    /// Brings `root`'s scene to its file again as it was last read (as a
+    /// hot reload does, without reading it), with its recorded overrides.
+    fn refresh_gltf_scene(&mut self, root: Entity) -> Result<(), crate::error::Error> {
+        let path = self
+            .world
+            .get::<GltfRoot>(root)
+            .map(|s| s.path.clone())
+            .ok_or_else(|| crate::error::Error::new(crate::error::ErrorKind::NotFound, "the glTF scene is gone"))?;
+        let share = self
+            .world
+            .get_resource::<super::GltfShared>()
+            .and_then(|t| t.0.get(&path).cloned());
+        let Some((mut share, read)) = share.and_then(|s| {
+            let read = s.read.clone()?;
+            Some((s, read))
+        }) else {
+            return self
+                .reload_gltf(&path)
+                .map_err(|e| crate::error::Error::new(crate::error::ErrorKind::Decode, e).with_path(&path));
+        };
+        self.apply_gltf(root, &path, &read.nodes, &mut share, false, false)?;
+        self.gltf_shared().0.insert(path, share);
+        Ok(())
     }
 }
 
