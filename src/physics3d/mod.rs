@@ -1235,7 +1235,7 @@ impl Physics3D {
     /// `true`). `None` for a freed mesh, or a scale that leaves nothing.
     pub(crate) fn scaled_mesh(&self, mesh: CollisionMesh, scale: Vec3) -> Option<(rp::SharedShape, Vec3, bool)> {
         let slot = self.mesh(mesh)?;
-        let base = slot.shape.as_ref().expect("live slot");
+        let base = slot.shape.as_ref()?;
         if scale == Vec3::ONE {
             return Some((base.clone(), slot.offset, false));
         }
