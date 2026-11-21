@@ -90,6 +90,11 @@ pub(crate) struct Item {
     /// Its width; an image's height.
     pub width: f32,
     pub image_height: f32,
+    /// Its line's width, and how far along the room left beside the line
+    /// the line goes: 0 at the box's left edge, 0.5 centred, 1 at its
+    /// right edge ([`Item::line_x`]).
+    pub line: f32,
+    pub along: f32,
     /// The line's baseline, top and bottom.
     pub baseline: f32,
     pub top: f32,
@@ -99,6 +104,15 @@ pub(crate) struct Item {
     pub end: u32,
     /// Index of its span.
     pub span: u32,
+}
+
+impl Item {
+    /// How far right of where it was laid out its line goes in a box
+    /// `width` wide: its alignment, for a layout made without a box width
+    /// ([`Align::width`] `None`).
+    pub(crate) fn line_x(&self, width: f32) -> f32 {
+        self.along * (width - self.line)
+    }
 }
 
 /// Scratch space for laying rich text out, reused frame to frame.
@@ -127,8 +141,11 @@ pub(crate) struct Base {
 #[derive(Clone, Copy)]
 pub(crate) struct Align {
     pub align: UiTextAlign,
-    /// The text box's width.
-    pub width: f32,
+    /// The text box's width. `None` starts every line at the left edge,
+    /// for its drawing to align it in whatever width the box has then
+    /// ([`Item::line_x`]): a node that moves and whose width changes in
+    /// its last bits keeps its layout.
+    pub width: Option<f32>,
     /// Start and end follow each paragraph's direction.
     pub directional: bool,
 }
@@ -136,9 +153,20 @@ pub(crate) struct Align {
 impl Align {
     pub(crate) const MEASURE: Align = Align {
         align: UiTextAlign::Start,
-        width: 0.0,
+        width: None,
         directional: false,
     };
+
+    /// How far along the room left beside a line it goes: 0 at the box's
+    /// left edge, 1 at its right. Start and End follow a right-to-left
+    /// paragraph's direction.
+    fn along(self, rtl: bool) -> f32 {
+        match (self.align, rtl) {
+            (UiTextAlign::Start, false) | (UiTextAlign::End, true) => 0.0,
+            (UiTextAlign::Center, _) => 0.5,
+            (UiTextAlign::End, false) | (UiTextAlign::Start, true) => 1.0,
+        }
+    }
 }
 
 /// Recognized tag names, in the order of [`Tag`].
@@ -706,12 +734,8 @@ impl Lines<'_> {
             }
             level -= 1;
         }
-        let free = self.align.width - width;
-        let mut x = match (self.align.align, rtl) {
-            (UiTextAlign::Start, false) | (UiTextAlign::End, true) => 0.0,
-            (UiTextAlign::Center, _) => free * 0.5,
-            (UiTextAlign::End, false) | (UiTextAlign::Start, true) => free,
-        };
+        let along = self.align.along(rtl);
+        let mut x = 0.0;
         let baseline = self.y + ascent;
         let bottom = baseline + descent;
         for item in line.iter_mut() {
@@ -729,7 +753,12 @@ impl Lines<'_> {
             item.baseline = baseline;
             item.top = self.y;
             item.bottom = bottom;
+            item.line = width;
+            item.along = along;
             x += item.width;
+            if let Some(box_width) = self.align.width {
+                item.at.x += item.line_x(box_width);
+            }
         }
         self.widest = self.widest.max(width);
         self.y = bottom;
@@ -926,7 +955,7 @@ impl Ui {
         };
         let align = Align {
             align: n.paint.align,
-            width: rect.size().x,
+            width: Some(rect.size().x),
             directional: true,
         };
         let wrap = n.paint.wrap.then_some(rect.size().x);
@@ -1107,7 +1136,7 @@ mod tests {
         // Right-aligned lines end at the box's right edge.
         let align = Align {
             align: UiTextAlign::End,
-            width: 200.0,
+            width: Some(200.0),
             directional: false,
         };
         rich.layout(base, Some(200.0), align, &mut text, &mut out);

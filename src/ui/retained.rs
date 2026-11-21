@@ -1707,7 +1707,7 @@ impl Ui {
         let nodes = &self.nodes;
         let text = &mut self.measure;
         let scratch = &mut self.rich_layout;
-        let unwrapped = &mut self.layout_cache.unwrapped;
+        let sizes = &mut self.layout_cache.sizes;
         let external_fonts = self.external_fonts;
         // Physical pixels per layout unit: text is measured at the size
         // it is drawn.
@@ -1735,53 +1735,41 @@ impl Ui {
                         style,
                         |_, _| 0.0,
                         |known, available| {
+                            let mut spare = super::retained_layout::TextSizes::default();
+                            let sizes = sizes.get_mut(slot).unwrap_or(&mut spare);
                             if let Some(rich) = n.rich() {
-                                return rich_size(rich, n, (external_fonts, k), known, available, text, scratch);
+                                return rich_size(rich, n, (external_fonts, k), (known, available), text, scratch, sizes);
                             }
-                            // Unwrapped text measures the same whatever
-                            // room it is offered: measured once.
-                            let kept = unwrapped.get_mut(slot).filter(|_| !n.paint.wrap);
-                            if let Some(Some(size)) = kept.as_deref() {
-                                return Size {
-                                    width: known.width.unwrap_or(size.x),
-                                    height: known.height.unwrap_or(size.y),
-                                };
-                            }
-                            let size = text.layout(
-                                &n.text,
-                                if external_fonts { n.paint.font } else { Font::DEFAULT },
-                                n.paint.font_size * k,
-                                false,
-                            ) / k;
                             let font = if external_fonts { n.paint.font } else { Font::DEFAULT };
-                            let width = known.width.unwrap_or_else(|| match available.width {
-                                AvailableSpace::Definite(w) if n.paint.wrap => size.x.min(w.max(0.0)),
-                                AvailableSpace::MinContent if n.paint.wrap => {
-                                    text.min_content_width(&n.text, font, n.paint.font_size * k) / k
+                            let px = n.paint.font_size * k;
+                            // Its width unwrapped, and its height when it
+                            // doesn't wrap: the same whatever room it is
+                            // offered, measured once.
+                            let natural = sizes.natural(|| {
+                                let size = text.layout(&n.text, font, px, false) / k;
+                                if n.paint.wrap {
+                                    size
+                                } else {
+                                    Vec2::new(size.x, plain_height(text, &n.text, (font, px, k), None))
                                 }
-                                _ => size.x,
                             });
-                            let mut height = 0.0;
-                            for paragraph in n.text.split('\n') {
-                                let mut rest = paragraph;
-                                loop {
-                                    let end = if n.paint.wrap {
-                                        wrap_end(text, rest, font, n.paint.font_size * k, width * k)
-                                    } else {
-                                        rest.len()
-                                    };
-                                    height += text.layout(&rest[..end], font, n.paint.font_size * k, false).y / k;
-                                    if end == rest.len() {
-                                        break;
-                                    }
-                                    rest = rest[end..].trim_start();
+                            let width = known.width.unwrap_or_else(|| match available.width {
+                                AvailableSpace::Definite(w) if n.paint.wrap => natural.x.min(w.max(0.0)),
+                                AvailableSpace::MinContent if n.paint.wrap => {
+                                    sizes.min_content(|| text.min_content_width(&n.text, font, px) / k)
                                 }
-                            }
+                                _ => natural.x,
+                            });
+                            // Wrapped, its height at each width it was
+                            // offered lately: a row resized back and forth
+                            // measures it once for each.
+                            let mut height = if n.paint.wrap {
+                                sizes.wrapped(width, || plain_height(text, &n.text, (font, px, k), Some(width)))
+                            } else {
+                                natural.y
+                            };
                             if n.text.is_empty() && !super::widgets::keeps_line(n.widget) {
                                 height = 0.0;
-                            }
-                            if let Some(kept) = kept {
-                                *kept = Some(Vec2::new(size.x, height));
                             }
                             Size {
                                 width,
@@ -2316,10 +2304,10 @@ fn rich_size(
     rich: &super::rich::RichText,
     n: &Node,
     (external_fonts, pixels): (bool, f32),
-    known: Size<Option<f32>>,
-    available: Size<AvailableSpace>,
+    (known, available): (Size<Option<f32>>, Size<AvailableSpace>),
     text: &mut crate::text::Text,
     scratch: &mut super::rich::RichLayout,
+    sizes: &mut super::retained_layout::TextSizes,
 ) -> Size<f32> {
     use super::rich::{Align, Base};
     let base = Base {
@@ -2329,14 +2317,14 @@ fn rich_size(
         fonts: external_fonts,
         pixels,
     };
-    let natural = rich.layout(base, None, Align::MEASURE, text, scratch);
+    let natural = sizes.natural(|| rich.layout(base, None, Align::MEASURE, text, scratch));
     let width = known.width.unwrap_or_else(|| match available.width {
         AvailableSpace::Definite(w) if n.paint.wrap => natural.x.min(w.max(0.0)),
-        AvailableSpace::MinContent if n.paint.wrap => rich.min_content(base, text),
+        AvailableSpace::MinContent if n.paint.wrap => sizes.min_content(|| rich.min_content(base, text)),
         _ => natural.x,
     });
     let mut height = if n.paint.wrap {
-        rich.layout(base, Some(width), Align::MEASURE, text, scratch).y
+        sizes.wrapped(width, || rich.layout(base, Some(width), Align::MEASURE, text, scratch).y)
     } else {
         natural.y
     };
@@ -2347,6 +2335,28 @@ fn rich_size(
         width,
         height: known.height.unwrap_or(height),
     }
+}
+
+/// The height of plain text `s`'s lines in layout units, measured in
+/// `font` at `px` physical pixels (`k` per layout unit), wrapped at
+/// `wrap` layout units when given.
+fn plain_height(text: &mut crate::text::Text, s: &str, (font, px, k): (Font, f32, f32), wrap: Option<f32>) -> f32 {
+    let mut height = 0.0;
+    for paragraph in s.split('\n') {
+        let mut rest = paragraph;
+        loop {
+            let end = match wrap {
+                Some(width) => wrap_end(text, rest, font, px, width * k),
+                None => rest.len(),
+            };
+            height += text.layout(&rest[..end], font, px, false).y / k;
+            if end == rest.len() {
+                break;
+            }
+            rest = rest[end..].trim_start();
+        }
+    }
+    height
 }
 
 pub(super) fn wrap_end(text: &mut crate::text::Text, line: &str, font: Font, size: f32, width: f32) -> usize {

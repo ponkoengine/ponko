@@ -38,11 +38,65 @@ pub(super) struct LayoutKey {
 pub(super) struct LayoutCache {
     pub key: Option<LayoutKey>,
     pub passes: u64,
-    /// Each node's unwrapped text as last measured, by slot: its width and
-    /// height in layout units. Kept while what it is measured from holds,
-    /// so a label Taffy asks again (its row resized around it) is not
-    /// measured again.
-    pub unwrapped: Vec<Option<Vec2>>,
+    /// Each node's text as measured, by slot. Kept while what it is
+    /// measured from holds, so a label Taffy asks again (its row resized
+    /// around it) is not measured again.
+    pub sizes: Vec<TextSizes>,
+}
+
+/// How many widths a wrapped text keeps its height for: a row resized
+/// back and forth, or Taffy asking for its smallest and its largest size,
+/// finds them kept.
+const WIDTHS: usize = 4;
+
+/// A node's text as measured, in layout units: its size unwrapped, its
+/// narrowest width, its height wrapped at each of the last few widths.
+#[derive(Default, Clone)]
+pub(super) struct TextSizes {
+    /// Its width and height on unwrapped lines.
+    natural: Option<Vec2>,
+    /// Wrapped: its widest word or image, as narrow as it can wrap.
+    min_content: Option<f32>,
+    /// Wrapped: its height at each width (`f32::to_bits`), the oldest
+    /// replaced first.
+    wrapped: [(u32, f32); WIDTHS],
+    /// How many of `wrapped` are measured.
+    len: u8,
+    /// The one replaced next once all are.
+    next: u8,
+}
+
+impl TextSizes {
+    /// Its unwrapped size, measured with `measure` the first time.
+    pub(super) fn natural(&mut self, measure: impl FnOnce() -> Vec2) -> Vec2 {
+        *self.natural.get_or_insert_with(measure)
+    }
+
+    /// Its narrowest width, measured with `measure` the first time.
+    pub(super) fn min_content(&mut self, measure: impl FnOnce() -> f32) -> f32 {
+        *self.min_content.get_or_insert_with(measure)
+    }
+
+    /// Its height wrapped at `width`, measured with `measure` unless this
+    /// width is one of the last few it was measured at.
+    pub(super) fn wrapped(&mut self, width: f32, measure: impl FnOnce() -> f32) -> f32 {
+        let bits = width.to_bits();
+        let len = usize::from(self.len);
+        if let Some(&(_, height)) = self.wrapped[..len].iter().find(|(w, _)| *w == bits) {
+            return height;
+        }
+        let height = measure();
+        let at = if len < WIDTHS {
+            self.len += 1;
+            len
+        } else {
+            let at = usize::from(self.next);
+            self.next = ((at + 1) % WIDTHS) as u8;
+            at
+        };
+        self.wrapped[at] = (bits, height);
+        height
+    }
 }
 
 impl Node {
@@ -109,16 +163,16 @@ impl Ui {
     /// shown root has something to lay out.
     pub(super) fn mark_layout_changes(&mut self, key: LayoutKey) -> bool {
         let all = self.layout_cache.key != Some(key);
-        let unwrapped = &mut self.layout_cache.unwrapped;
-        unwrapped.resize(self.nodes.len(), None);
+        let sizes = &mut self.layout_cache.sizes;
+        sizes.resize(self.nodes.len(), TextSizes::default());
         for (slot, n) in self.nodes.iter_mut().enumerate() {
             let Some(n) = n else {
-                unwrapped[slot] = None;
+                sizes[slot] = TextSizes::default();
                 continue;
             };
             if n.measure_changed() | all {
                 let _ = self.tree.mark_dirty(n.layout);
-                unwrapped[slot] = None;
+                sizes[slot] = TextSizes::default();
             }
         }
         self.layout_cache.key = Some(key);
