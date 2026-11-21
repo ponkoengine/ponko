@@ -131,10 +131,16 @@ fn uploads_report_the_gpus_own_copy_time_where_it_has_timestamps_and_still_draw(
     ctx.scene3d.sky.atmosphere = false;
     ctx.gfx.clear(Color::BLACK);
     let blue = |_, _| [0, 0, 255, 255];
-    let source = MemorySource::new("mem")
+    let mut source = MemorySource::new("mem")
         .with("red.png", png(SIZE, SIZE, |_, _| [255, 0, 0, 255]))
         .with("blue.png", png(SIZE, SIZE, blue))
         .with("noise.png", noise_png(512, 7));
+    // More uploads for the collecting below: Metal now and then leaves a
+    // timestamp unwritten, and a step whose copies all lost one has no time.
+    const MORE: u32 = 16;
+    for i in 0..MORE {
+        source.insert(format!("more{i}.png"), noise_png(64, i + 1));
+    }
     ctx.assets.add_background_source(source);
     let id = ctx
         .assets
@@ -170,13 +176,30 @@ fn uploads_report_the_gpus_own_copy_time_where_it_has_timestamps_and_still_draw(
     let p = blue_frame.get_pixel(SIZE / 2, SIZE / 2);
     assert!(p[2] > 200 && p[0] < 40, "the streamed texture draws: {p:?}");
 
-    // The times come back a few frames later.
+    // The times come back a few frames later. A step whose timestamps the
+    // GPU didn't write has none, so while one is missing, upload a little
+    // more through that step (a bounded count, not a wait on the clock).
     let mut groups = ctx.assets.group_stats();
     let mut streams = ctx.gfx.upload_stats();
-    for i in 0..200 {
+    let (mut more_groups, mut more_streams) = (0, 0);
+    for i in 0..400 {
         if groups.gpu_upload_ms.is_some() && streams.gpu_upload_ms.is_some() {
             break;
         }
+        if i % 25 == 24 {
+            if groups.gpu_upload_ms.is_none() && more_groups < MORE / 2 {
+                let more = AssetGroup::new(format!("more{more_groups}"))
+                    .texture(&format!("more{more_groups}.png"));
+                more_groups += 1;
+                let id = ctx.assets.start_group(more);
+                load(&mut ctx, id);
+            }
+            if streams.gpu_upload_ms.is_none() && more_streams < MORE / 2 {
+                let _ = ctx.gfx.stream_texture(&format!("more{}.png", MORE / 2 + more_streams));
+                more_streams += 1;
+            }
+        }
+        ctx.pump_asset_groups();
         frame(&mut ctx, &format!("collect{i}"));
         ctx.pump_streaming();
         groups = ctx.assets.group_stats();

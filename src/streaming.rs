@@ -1759,6 +1759,13 @@ fn write_streamed(
 mod tests {
     use super::*;
 
+    /// The formats a texture decode targets (a unit struct without compressed
+    /// textures, a set of supported formats with them).
+    #[allow(clippy::default_constructed_unit_structs)]
+    fn formats() -> TextureFormats {
+        TextureFormats::default()
+    }
+
     fn image(w: u32, h: u32) -> assets::Image {
         assets::Image {
             width: w,
@@ -1850,7 +1857,7 @@ mod tests {
             (20, 9, u32::MAX),
         ] {
             let png = noise_png(w, h);
-            let formats = TextureFormats::default();
+            let formats = formats();
             let whole = decode_texture("t.png", Origin::File("t.png".into()), Ok(png.clone()), max, formats).unwrap();
             let mut slices = TextureSlices {
                 name: "t.png".into(),
@@ -1870,7 +1877,7 @@ mod tests {
         let mut slices = TextureSlices {
             name: "t.png".into(),
             max: u32::MAX,
-            gpu: TextureFormats::default(),
+            gpu: formats(),
             phase: TexturePhase::Read(Box::new(move || Ok((Origin::File("t.png".into()), png)))),
         };
         let (_, n) = run(&mut slices, &assets::SharedSources::default());
@@ -1887,7 +1894,7 @@ mod tests {
         let mut slices = TextureSlices {
             name: "cut.png".into(),
             max: u32::MAX,
-            gpu: TextureFormats::default(),
+            gpu: formats(),
             phase: TexturePhase::Read(Box::new(move || Ok((Origin::File("cut.png".into()), png)))),
         };
         let sources = assets::SharedSources::default();

@@ -199,6 +199,9 @@ them. Textures of other uploads (made by systems with `create_texture`, or
 glTF files' buffers) aren't timed. Streamed textures and meshes upload in
 the streaming step and count in `ctx.gfx.upload_stats()` instead, which has
 the same `gpu_upload_ms` and `gpu_upload_timing` for that step's textures.
+Some drivers now and then leave a timestamp unwritten (on an Apple GPU
+about one copy in three, in our tests): such a copy is left out of the sum,
+and a step whose copies all lost one keeps the previous step's time.
 A headless game has no GPU, so there the time is only the engine's
 bookkeeping.
 
