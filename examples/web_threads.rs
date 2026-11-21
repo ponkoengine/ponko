@@ -5,18 +5,24 @@
 //! **Check** (the default): a parallel query over 20,000 entities every
 //! tick, four view systems the parallel scheduler batches together (its
 //! threshold at zero, so a batch goes to the workers whenever there are
-//! any), jobs (one waited for during setup and one every 30 ticks), and an
+//! any), jobs (one waited for during setup and one every 30 ticks), a
+//! moving root with 4,000 attached children whose transforms are tracked
+//! (so the hierarchy places them by lookups, on the workers when the level
+//! is worth sharing, through the same runner as the parallel query), and an
 //! asset group of a texture and a file decoded with `AssetGroup::with`,
 //! both from `assets/`. It publishes which threads ran each, for the runner
 //! (see `common/web_smoke.rs`):
 //!
-//! `{"fixture":"web_threads","ticks":160,"threads":7,"isolated":true,"par_threads":7,"par_on_page":false,"batch_threads":4,"batch_threaded_runs":160,"wait_off_page":true,"job_off_page":true,"group":"ready","group_off_page":true,"group_bytes":966,"checksum":...}`
+//! `{"fixture":"web_threads","ticks":160,"threads":7,"isolated":true,"par_threads":7,"par_on_page":false,"batch_threads":4,"batch_threaded_runs":160,"hier_shared":true,"wait_off_page":true,"job_off_page":true,"group":"ready","group_off_page":true,"group_bytes":966,"checksum":...}`
 //!
 //! `threads` is what the engine started (`ponko::web::threads()`, 0 when it
 //! runs on the page's thread alone); `par_threads` and `batch_threads`
 //! count the threads other than the page's that ran query items and batch
-//! systems; `checksum` sums every position at tick 120, the same however
-//! many threads ran them. `?smoke_case=worker-panic` panics inside the
+//! systems (batch systems not while profiling, when the scheduler runs them
+//! on the page's thread); `hier_shared` says whether the hierarchy shared a
+//! level out (the engine's `hierarchy/shared_level` scope, timed over 20
+//! ticks with profiling on); `checksum` sums every position and every attached child's
+//! place at tick 120, the same however many threads ran them. `?smoke_case=worker-panic` panics inside the
 //! parallel query at tick 30: the game must stop with an error, not hang.
 //!
 //! `pads` lists the controllers the engine sees (`threads.mjs --case
@@ -51,11 +57,13 @@ use std::cell::Cell;
 use std::hint::black_box;
 use std::rc::Rc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::ThreadId;
 use std::time::Duration;
 
 use ponko::access::SystemAccess;
 use ponko::assets::{AssetGroup, GroupId, GroupState};
+use ponko::attach::Attached;
 use ponko::input::{Input, Rumble};
 use ponko::prelude::*;
 use ponko::streaming::Job;
@@ -67,6 +75,16 @@ use web_time::Instant;
 mod smoke;
 
 const DT: f32 = 1.0 / 60.0;
+
+/// Children attached to the moving root: enough that the hierarchy's
+/// lookup level is shared out on the web.
+const CHILDREN: usize = 4_000;
+
+/// The first of the 20 ticks profiled (see `hier_shared`).
+const PROFILED_FROM: u64 = 90;
+
+/// Profiling is on: the scheduler runs batches on the page's thread.
+static PROFILING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Component)]
 struct Pos {
@@ -124,7 +142,9 @@ fn steer(p: &mut Pos, v: &mut Vel) {
 
 /// `schedule.rs`'s heavy system: roughly 20 ns per entity natively.
 fn heavy<const N: usize>(sys: &mut SystemView) {
-    note(&SEEN_BATCH, &BATCH_THREADS);
+    if !PROFILING.load(Ordering::Relaxed) {
+        note(&SEEN_BATCH, &BATCH_THREADS);
+    }
     let dt = black_box(DT);
     sys.world.query::<&mut Val<N>>().for_each(|v| {
         for _ in 0..4 {
@@ -270,6 +290,10 @@ struct Check {
     group_state: Option<String>,
     group_off_page: Option<bool>,
     group_bytes: Option<usize>,
+    /// The root the hierarchy's children follow.
+    root: Option<Entity>,
+    /// The hierarchy shared a level out.
+    hier_shared: bool,
 }
 
 /// The asset group's file decoded with `with`, and what its decoder returns.
@@ -302,17 +326,28 @@ fn check(game: Game) {
             }
             steer(p, v);
         });
+        if let Some(root) = s.root
+            && let Some(t) = ctx.world.get_mut::<d2::Transform>(root)
+        {
+            t.position = vec2(320.0 + (tick % 64) as f32, 180.0);
+            t.rotation = tick as f32 * 0.01;
+        }
         if tick == 120 {
             let mut sum = 0.0f64;
             ctx.world
                 .query::<&Pos>()
                 .for_each(|p| sum += f64::from(p.x) + f64::from(p.y));
+            ctx.world
+                .query::<(&d2::Transform, &Attached)>()
+                .for_each(|(t, _)| sum += f64::from(t.position.x) + f64::from(t.position.y));
             s.checksum = Some(sum);
         }
         if tick.is_multiple_of(30) && s.job.is_none() {
             s.job = Some(Job::spawn(|| std::thread::current().id()));
         }
     })
+    // The hierarchy's update: the children follow the root.
+    .sim_system(ponko::systems::follow_attachments)
     .system(move |ctx| {
         let mut s = frame.borrow_mut();
         if let Some(job) = &mut s.job
@@ -346,6 +381,17 @@ fn check(game: Game) {
                 }
             }
         }
+        // Scopes are timed for a few ticks (the scheduler doesn't batch
+        // while profiling): `hierarchy/shared_level` runs once per level
+        // shared out.
+        let profiling = (PROFILED_FROM..PROFILED_FROM + 20).contains(&s.ticks);
+        ctx.perf.set_profiling(profiling);
+        PROFILING.store(profiling, Ordering::Relaxed);
+        s.hier_shared |= ctx
+            .perf
+            .scope_timings()
+            .iter()
+            .any(|t| t.name == "hierarchy/shared_level" && t.calls > 0);
         let batch_threaded_runs = s.batch_threaded_runs;
         s.pad_presses += ctx
             .input
@@ -382,6 +428,7 @@ fn check(game: Game) {
             "batch_threads": batch_threads,
             "batch_on_page": batch_on_page,
             "batch_threaded_runs": batch_threaded_runs,
+            "hier_shared": s.hier_shared,
             "schedule_threads": s.schedule_threads,
             "wait_off_page": s.wait_off_page,
             "job_off_page": s.job_off_page,
@@ -408,6 +455,16 @@ fn check(game: Game) {
     .setup(move |ctx| {
         spawn_agents(ctx, 20_000);
         spawn_vals::<4>(ctx, 16_000);
+        // Tracked transforms: the hierarchy places the children by lookups.
+        ctx.world.track_changes::<d2::Transform>();
+        let root = ctx.world.spawn((d2::Transform::at(vec2(320.0, 180.0)),));
+        for i in 0..CHILDREN {
+            let f = i as f32;
+            ctx.world.spawn((
+                d2::Transform::default(),
+                Attached::to(root).offset(vec2((f * 0.37) % 200.0, (f * 0.11) % 120.0)),
+            ));
+        }
         // Waited for on the page's thread, which spins (it may not block).
         let thread = Job::spawn(|| std::thread::current().id()).wait();
         // Files from assets/ (assets/index.json on the web), read and
@@ -420,6 +477,7 @@ fn check(game: Game) {
         let mut s = state.borrow_mut();
         s.wait_off_page = Some(thread != page);
         s.group = Some(ctx.assets.start_group(group));
+        s.root = Some(root);
     })
     .run();
 }

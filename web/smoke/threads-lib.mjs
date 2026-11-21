@@ -107,8 +107,8 @@ export function checkReady(state) {
 
 /**
  * The problems with a check run on a cross-origin isolated page: the game
- * must have started workers and run query items, batch systems and jobs on
- * them, never on the page's thread.
+ * must have started workers and run query items, batch systems, a shared
+ * hierarchy level and jobs on them, never on the page's thread.
  */
 export function checkIsolated(state) {
   const problems = [];
@@ -121,6 +121,7 @@ export function checkIsolated(state) {
   expect(state.batch_on_page === false, "batch systems ran on the page's thread");
   expect(state.batch_threaded_runs > 0, "the scheduler sent no batch to the workers");
   expect(state.schedule_threads === true, "the scheduler says it has no threads");
+  expect(state.hier_shared === true, "the hierarchy shared no level out to the workers");
   expect(state.wait_off_page === true, "the job waited for in setup ran on the page's thread");
   expect(state.job_off_page === true, "a job ran on the page's thread");
   expect(state.group === "ready", `the asset group from assets/ didn't load (${state.group})`);
