@@ -54,7 +54,6 @@ const isolatedRun = {
     "spatial/shared_rebuild",
     "flow/shared_directions",
     "three/shared_cull",
-    "reflect/shared_save",
     "skeleton2d/shared_draw",
     "physics3d/shared_characters",
     "three/shared_bake",
@@ -144,7 +143,6 @@ test("an isolated run passes only when workers ran the queries, batches and jobs
   // One of the engine's passes is not "at least two".
   assert.deepEqual(checkIsolated({ ...isolatedRun, passes_shared: ["three/shared_cull"] }), [
     "the engine's own passes that went through the frame pool's runner: three/shared_cull, not at least 2",
-    "the JSON world save didn't go through the frame pool's runner (reflect/shared_save)",
     "skeleton2d/shared_draw didn't go through the frame pool's runner",
     "physics3d/shared_characters didn't go through the frame pool's runner",
     "three/shared_bake didn't go through the frame pool's runner",
@@ -159,8 +157,9 @@ test("an isolated run passes only when workers ran the queries, batches and jobs
   assert.deepEqual(checkIsolated({ ...isolatedRun, passes_shared: without("three/shared_cull") }), [
     "the 3D culling didn't go through the frame pool's runner (three/shared_cull)",
   ]);
-  assert.deepEqual(checkIsolated({ ...isolatedRun, passes_shared: without("reflect/shared_save") }), [
-    "the JSON world save didn't go through the frame pool's runner (reflect/shared_save)",
+  // The JSON save must stay on the page's thread, where it is faster.
+  assert.deepEqual(checkIsolated({ ...isolatedRun, passes_shared: [...isolatedRun.passes_shared, "reflect/shared_save"] }), [
+    "the JSON world save went to the frame pool's workers (reflect/shared_save), where it is slower",
   ]);
   // A build without the 3D features collects no 3D frame.
   assert.deepEqual(checkIsolated({ ...isolatedRun, frame3d: null }), ["the 3D frame found no models to draw (frame3d: null)"]);

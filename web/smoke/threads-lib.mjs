@@ -58,7 +58,7 @@ export const PASSES = [
   "spatial/shared_rebuild",
   "flow/shared_directions",
   "three/shared_cull",
-  "reflect/shared_save",
+  "reflect/save",
   "skeleton2d/shared_draw",
   "physics3d/shared_characters",
   "three/shared_bake",
@@ -139,9 +139,10 @@ export function checkReady(state) {
 /**
  * The problems with a check run on a cross-origin isolated page: the game
  * must have started workers and run query items, batch systems, a shared
- * hierarchy level, at least two of the engine's own parallel passes (the
- * retained 3D culling and the JSON world save among them) and jobs on them,
- * never on the page's thread.
+ * hierarchy level, the engine's own parallel passes (the retained 3D
+ * culling, the 2D skeleton drawing, the 3D characters and the light bake
+ * among them; the JSON world save never) and jobs on them, never on the
+ * page's thread.
  */
 export function checkIsolated(state) {
   const problems = [];
@@ -160,9 +161,11 @@ export function checkIsolated(state) {
     passes.length >= 2,
     `the engine's own passes that went through the frame pool's runner: ${passes.length ? passes.join(", ") : "none"}, not at least 2`,
   );
-  // Both sized by the frame pool's threads, not rayon's (1 on the page).
+  // Sized by the frame pool's threads, not rayon's (1 on the page).
   expect(passes.includes("three/shared_cull"), "the 3D culling didn't go through the frame pool's runner (three/shared_cull)");
-  expect(passes.includes("reflect/shared_save"), "the JSON world save didn't go through the frame pool's runner (reflect/shared_save)");
+  // The JSON save stays on the page's thread: shared out, the browser's
+  // one allocator lock made it about 10 times slower.
+  expect(!passes.includes("reflect/shared_save"), "the JSON world save went to the frame pool's workers (reflect/shared_save), where it is slower");
   for (const pass of ["skeleton2d/shared_draw", "physics3d/shared_characters", "three/shared_bake"]) {
     expect(passes.includes(pass), `${pass} didn't go through the frame pool's runner`);
   }

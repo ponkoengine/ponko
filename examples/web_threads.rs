@@ -16,13 +16,14 @@
 //! and a 256 × 256 flow field computed every 10 ticks, the 3D frame of
 //! 20,000 models collected and culled every 10 ticks, 256 2D skeletons
 //! drawn every 10 ticks, 32 3D characters walking every tick, a small
-//! scene's light baked once, and the world saved as JSON every tick while
-//! profiling, all through that runner), and an
+//! scene's light baked once, all through that runner, and the world saved
+//! as JSON every tick while profiling, which stays on the page's thread),
+//! and an
 //! asset group of a texture and a file decoded with `AssetGroup::with`,
 //! both from `assets/`. It publishes which threads ran each, for the runner
 //! (see `common/web_smoke.rs`):
 //!
-//! `{"fixture":"web_threads","ticks":160,"threads":7,"isolated":true,"par_threads":7,"par_on_page":false,"batch_threads":4,"batch_threaded_runs":160,"hier_shared":true,"passes_shared":["flow/shared_directions","spatial/shared_rebuild","three/shared_cull","reflect/shared_save",...],"pass_ms":{"spatial/shared_rebuild":4.1,...},"frame3d":[...],"save_bytes":...,"wait_off_page":true,"job_off_page":true,"group":"ready","group_off_page":true,"group_bytes":966,"checksum":...}`
+//! `{"fixture":"web_threads","ticks":160,"threads":7,"isolated":true,"par_threads":7,"par_on_page":false,"batch_threads":4,"batch_threaded_runs":160,"hier_shared":true,"passes_shared":["flow/shared_directions","spatial/shared_rebuild","three/shared_cull",...],"pass_ms":{"spatial/shared_rebuild":4.1,...},"frame3d":[...],"save_bytes":...,"wait_off_page":true,"job_off_page":true,"group":"ready","group_off_page":true,"group_bytes":966,"checksum":...}`
 //!
 //! `threads` is what the engine started (`ponko::web::threads()`, 0 when it
 //! runs on the page's thread alone); `par_threads` and `batch_threads`
@@ -33,8 +34,9 @@
 //! ticks with profiling on); `passes_shared` lists the engine's passes
 //! that went through the frame pool's runner, by the scope each opens there
 //! (`spatial/shared_rebuild`, `flow/shared_directions`, `three/shared_cull`,
-//! `reflect/shared_save`, `skeleton2d/shared_draw`,
-//! `physics3d/shared_characters`, `three/shared_bake`); `pass_ms` is each
+//! `skeleton2d/shared_draw`, `physics3d/shared_characters`,
+//! `three/shared_bake`; and `reflect/shared_save`, which must not open
+//! on the web, where the save stays on the page's thread); `pass_ms` is each
 //! pass's time in milliseconds (`PASS_TIMES`: the median of the 20 ticks
 //! profiled, the bake's one run), timed around the call on the page's
 //! thread, so with threads it includes handing the pass to the workers;
@@ -108,7 +110,9 @@ const PROFILED_FROM: u64 = 90;
 /// The engine's own parallel passes the fixture runs, by the scope each
 /// opens on the thread that shares it out (on the web, a worker). The 3D
 /// culling runs only in a build with the `3d` and `bench-internals`
-/// features (`threads.mjs` builds it so).
+/// features (`threads.mjs` builds it so). `reflect/shared_save` is listed
+/// so that the runner sees it if it ever opens: in a web build with threads
+/// the save stays on the page's thread, where it is faster.
 const ENGINE_PASSES: [&str; 7] = [
     "spatial/shared_rebuild",
     "flow/shared_directions",
@@ -120,13 +124,14 @@ const ENGINE_PASSES: [&str; 7] = [
 ];
 
 /// The passes `pass_ms` times, by the scope each opens on the frame pool:
-/// the hierarchy's update and the engine's own passes.
+/// the hierarchy's update and the engine's own passes (`reflect/save`: the
+/// JSON save, which a web build with threads keeps on the page's thread).
 const PASS_TIMES: [&str; 8] = [
     "hierarchy/shared_level",
     "spatial/shared_rebuild",
     "flow/shared_directions",
     "three/shared_cull",
-    "reflect/shared_save",
+    "reflect/save",
     "skeleton2d/shared_draw",
     "physics3d/shared_characters",
     "three/shared_bake",
@@ -494,7 +499,7 @@ fn check(game: Game) {
         if timed {
             let (save, ms) = timed_call(|| save_json(&ctx.world));
             s.save = Some(save);
-            s.time("reflect/shared_save", ms);
+            s.time("reflect/save", ms);
         }
         #[cfg(feature = "3d")]
         if tick == BAKE_AT {
@@ -581,8 +586,9 @@ fn check(game: Game) {
             if t.calls > 0 && ENGINE_PASSES.contains(&t.name) && !s.passes_shared.contains(&t.name) {
                 s.passes_shared.push(t.name);
             }
-            // Inside the physics step, so timed by its scope (per step).
-            if profiling && t.calls > 0 && t.name == "physics3d/shared_characters" {
+            // Inside the physics step, so timed by its scope (per step),
+            // from whichever frame's timings hold it.
+            if t.calls > 0 && t.name == "physics3d/shared_characters" {
                 characters_ms = Some(f64::from(t.last_ms) / f64::from(t.calls));
             }
         }
