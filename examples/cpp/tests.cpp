@@ -2621,6 +2621,29 @@ static void retained_ui_presets() {
     });
 }
 
+// A still screen costs no layout: the count of layouts stays the same.
+static void retained_ui_still_screen_costs_no_layout() {
+    ponko::game("retained ui layout passes", 1, 1).run_headless(0, [&](ponko::ctx& ctx) {
+        namespace u = ponko::ui;
+        auto ui = ctx.ui_retained();
+        const ponko::vec2 window{800, 600};
+        auto hud = ui.add_panel(u::none, u::fill().padding(10));
+        auto score = ui.add_label(hud, "Score: 0", u::row(30));
+        ui.show_hud(hud);
+        ui.frame(window);
+        const auto laid_out = ui.layout_passes();
+        CHECK(laid_out >= 1);
+        for (int i = 0; i < 10; ++i) {
+            ui.set_text(score, "Score: 0");  // what the label already shows
+            ui.frame(window);
+        }
+        CHECK(ui.layout_passes() == laid_out);
+        ui.set_text(score, "Score: 10");
+        ui.frame(window);
+        CHECK(ui.layout_passes() == laid_out + 1);
+    });
+}
+
 // What a screen reader reads of a UI, what changed, and what it can ask.
 static void retained_ui_access() {
     ponko::game("retained ui access", 1, 1).run_headless(0, [&](ponko::ctx& ctx) {
@@ -4671,6 +4694,7 @@ int main() {
     ribbons_and_decals();
     retained_ui();
     retained_ui_presets();
+    retained_ui_still_screen_costs_no_layout();
     retained_ui_access();
     ui_panels();
     events();
