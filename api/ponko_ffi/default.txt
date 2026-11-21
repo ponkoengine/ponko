@@ -5924,6 +5924,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub c fn ponko_ffi::ponko_collider3d_capsule(f32, f32) -> ponko_ffi::PonkoCollider3D
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_collider3d_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_collider3d_mesh(ponko_ffi::PonkoCollisionMesh) -> ponko_ffi::PonkoCollider3D
+#[no_mangle] pub c fn ponko_ffi::ponko_collider3d_scaled_mesh(ponko_ffi::PonkoCollisionMesh, ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoCollider3D
 #[no_mangle] pub c fn ponko_ffi::ponko_collider3d_sphere(f32) -> ponko_ffi::PonkoCollider3D
 #[no_mangle] pub c fn ponko_ffi::ponko_collider_capsule(f32, f32) -> ponko_ffi::PonkoCollider
 #[no_mangle] pub c fn ponko_ffi::ponko_collider_circle(f32) -> ponko_ffi::PonkoCollider
