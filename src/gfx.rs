@@ -177,6 +177,8 @@ pub struct Graphics {
     pub(crate) text: Text,
     /// Reused for a text field's selection spans.
     pub(crate) selection_scratch: Vec<[f32; 2]>,
+    /// Reused for the glyphs `draw_text_ex` lays out.
+    glyph_scratch: Vec<GlyphQuad>,
     font_atlas: Option<Texture>,
     pub(crate) scale_factor: f32,
     /// A 1x1 white texture, for rectangles and lines.
@@ -235,6 +237,7 @@ impl Graphics {
             clear_color: Color::PONKO_DARK,
             text: Text::new(),
             selection_scratch: Vec::new(),
+            glyph_scratch: Vec::new(),
             font_atlas: None,
             scale_factor: 1.0,
             white: None,
@@ -385,6 +388,24 @@ impl Graphics {
         if self.headless || text.is_empty() {
             return;
         }
+        let mut quads = std::mem::take(&mut self.glyph_scratch);
+        quads.clear();
+        self.lay_out_glyphs(text, params.font, params.size, &mut quads);
+        self.push_glyphs(&quads, pos, params);
+        self.glyph_scratch = quads;
+    }
+
+    /// Lays `text` out at `size` window pixels per line, as
+    /// [`draw_text_ex`](Self::draw_text_ex) draws it, appending its glyphs
+    /// to `out` (missing ones go into the atlas) for
+    /// [`push_glyphs`](Self::push_glyphs) to draw wherever the text goes.
+    /// Headless, it only measures. Returns the size, as
+    /// [`measure_text_ex`](Self::measure_text_ex) does.
+    pub(crate) fn lay_out_glyphs(&mut self, text: &str, font: Font, size: f32, out: &mut Vec<GlyphQuad>) -> Vec2 {
+        let scale = self.scale_factor;
+        if self.headless || text.is_empty() {
+            return self.text.layout(text, font, size * scale, false) / scale;
+        }
         let atlas = match self.font_atlas {
             Some(t) => t,
             None => {
@@ -394,8 +415,7 @@ impl Graphics {
                 t
             }
         };
-        let scale = self.scale_factor;
-        self.text.layout(text, params.font, params.size * scale, true);
+        let measured = self.text.layout(text, font, size * scale, true) / scale;
         if !self.text.uploads.is_empty()
             && let Some(renderer) = self.renderer.as_mut()
         {
@@ -404,28 +424,44 @@ impl Graphics {
             }
         }
         let side = Text::ATLAS_SIZE as f32;
+        out.extend(self.text.placed().iter().filter_map(|p| {
+            let at = p.glyph.at?;
+            let size = Vec2::new(p.glyph.size[0] as f32, p.glyph.size[1] as f32);
+            Some(GlyphQuad {
+                pos: p.pos,
+                size: (size / scale).into(),
+                uv: uv_region([at[0] as f32 / side, at[1] as f32 / side], (size / side).into()),
+            })
+        }));
+        measured
+    }
+
+    /// Draws glyphs [`lay_out_glyphs`](Self::lay_out_glyphs) laid out, with
+    /// their run's origin at `pos` (snapped to a physical pixel), in
+    /// `params`' color and depth (its font and size are the layout's).
+    pub(crate) fn push_glyphs(&mut self, quads: &[GlyphQuad], pos: Vec2, params: TextParams) {
+        let Some(atlas) = self.font_atlas.filter(|_| !self.headless) else {
+            return;
+        };
+        let scale = self.scale_factor;
         let color = params.color.to_rgba8();
         // Glyphs are rasterized for whole physical pixels and placed at
         // whole-pixel offsets from the run's origin; the origin goes on the
         // physical pixel grid too, or the linearly filtered atlas would
         // smear every glyph across two pixels.
         let origin = snap_to_pixels(pos, scale) * scale;
-        for p in self.text.placed() {
-            let Some(at) = p.glyph.at else { continue };
-            let size = Vec2::new(p.glyph.size[0] as f32, p.glyph.size[1] as f32);
-            let uv = uv_region([at[0] as f32 / side, at[1] as f32 / side], (size / side).into());
-            self.ui_list.push(
-                atlas.id,
-                params.z,
-                SpriteInstance::new(
-                    ((origin + p.pos) / scale).into(),
-                    (size / scale).into(),
-                    [0.0, 0.0],
-                    0.0,
-                    color,
-                )
-                .with_uv(uv),
-            );
+        for q in quads {
+            // `SpriteInstance::new` with a top-left pivot, whose `f16`
+            // bits are zeros.
+            let instance = SpriteInstance {
+                pos: ((origin + q.pos) / scale).into(),
+                size: q.size,
+                pivot: [0; 2],
+                rotation: 0.0,
+                color,
+                uv: q.uv,
+            };
+            self.ui_list.push(atlas.id, params.z, instance);
         }
     }
 
@@ -1346,6 +1382,19 @@ fn push_sprite(
     );
 }
 
+/// One glyph of laid-out text ([`Graphics::lay_out_glyphs`]): where it sits
+/// from its run's origin, in whole physical pixels, how big it is, and
+/// where it is in the glyph atlas. Kept, text is drawn again anywhere at
+/// the same size and scale factor without laying it out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct GlyphQuad {
+    /// From the run's origin, in physical pixels.
+    pos: Vec2,
+    /// In window pixels.
+    size: [f32; 2],
+    uv: [u16; 4],
+}
+
 /// `pos`, in window pixels, moved to the nearest of the physical pixels
 /// there are `scale` of per window pixel.
 fn snap_to_pixels(pos: Vec2, scale: f32) -> Vec2 {
@@ -1381,6 +1430,21 @@ mod tests {
     }
 
     const FRACTIONS: [f32; 3] = [0.25, 0.5, 0.75];
+
+    #[test]
+    fn glyph_sprites_are_top_left_pivoted_sprites() {
+        let mut ctx = Ctx::new(1.0 / 60.0, vec2(320.0, 240.0));
+        ctx.gfx.stand_in_textures();
+        ctx.set_scale_factor(1.5);
+        ctx.gfx
+            .draw_text_ex("Glyphs", vec2(10.3, 20.6), TextParams::default().with_size(16.0));
+        let (sprites, _) = ctx.gfx.ui_list.finish();
+        assert!(sprites.len() >= 5, "{} glyphs", sprites.len());
+        for s in sprites {
+            let made = crate::render::batch::SpriteInstance::new(s.pos, s.size, [0.0, 0.0], 0.0, s.color).with_uv(s.uv);
+            assert_eq!(*s, made, "as SpriteInstance::new makes it");
+        }
+    }
 
     #[test]
     fn glyphs_land_on_whole_physical_pixels_at_fractional_positions() {

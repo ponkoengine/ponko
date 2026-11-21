@@ -137,8 +137,31 @@ fn steering(ctx: &mut Ctx) {
 readings on one thread, subtracted, are what the code between them
 allocated there. Allocation tests use these instead of allowing for the
 pool's own allocations (`tests/skeleton2d_alloc.rs`). Scopes timed from C
-and C++ (`ponko_profile_begin`/`_end`) count time only, and
-`thread_alloc_counts` is Rust-only.
+and C++ (`ponko_profile_begin`/`_end`, `PONKO_PROFILE_SCOPE`) count their
+thread's allocations the same way, when they end on the thread that began
+them, and `ponko_thread_alloc_counts()` (C++ `ponko::thread_alloc_counts()`)
+reads the count directly:
+
+<div class="lang-pair">
+<div>
+
+```rust
+let before = ponko::perf::thread_alloc_counts();
+let scratch = vec![0; 64]; // what is measured
+let after = ponko::perf::thread_alloc_counts();
+let made_here = after.count - before.count; // on this thread only
+# let _ = (scratch, made_here);
+```
+
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:thread_allocs}}
+```
+
+</div>
+</div>
 
 ### In a running game
 

@@ -460,6 +460,8 @@ mod model_textures_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod occlusion_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod pass_timing_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod regression_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod regression_sequence_render_test;

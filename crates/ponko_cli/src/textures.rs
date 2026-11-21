@@ -591,6 +591,11 @@ fn halve(level: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
 /// Encodes RGBA8 pixels as UASTC with Basis Universal: each mip level's
 /// 16-byte blocks, largest first, and whether any pixel isn't opaque.
 fn uastc(rgba: &[u8], width: u32, height: u32, srgb: bool, mipmaps: bool) -> Result<(Vec<Vec<u8>>, bool), String> {
+    uastc_on(&mut lend_encoder(), &uastc_params(rgba, width, height, srgb, mipmaps))
+}
+
+/// The encoder settings of [`uastc`], with the pixels copied in.
+fn uastc_params(rgba: &[u8], width: u32, height: u32, srgb: bool, mipmaps: bool) -> CompressorParams {
     let mut params = CompressorParams::new();
     params.set_basis_format(BasisTextureFormat::UASTC4x4);
     params.set_uastc_quality_level(UASTC_QUALITY_DEFAULT);
@@ -598,19 +603,91 @@ fn uastc(rgba: &[u8], width: u32, height: u32, srgb: bool, mipmaps: bool) -> Res
     params.set_generate_mipmaps(mipmaps);
     params.set_print_status_to_stdout(false);
     params.source_image_mut(0).init(rgba, width, height, 4);
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
-    let mut compressor = Compressor::new(threads);
-    // SAFETY: `params` outlives the compressor's use of it (both are dropped
-    // at the end of this function, after `process`), and holds one valid
-    // source image of `width` x `height` x 4 bytes copied in by `init`.
-    let ready = unsafe { compressor.init(&params) };
+    params
+}
+
+/// Encodes `params` (from [`uastc_params`]) on `compressor`: [`uastc`]'s
+/// levels and alpha.
+fn uastc_on(compressor: &mut Compressor, params: &CompressorParams) -> Result<(Vec<Vec<u8>>, bool), String> {
+    // SAFETY: `params` holds valid settings and one source image of
+    // `width` x `height` x 4 bytes (copied in by `uastc_params`); `init`
+    // copies all of it into the compressor, which keeps no pointer into it.
+    let ready = unsafe { compressor.init(params) };
     if !ready {
         return Err("the Basis Universal encoder refused the settings".into());
     }
-    // SAFETY: as above; `init` succeeded.
+    // SAFETY: as above; `init` succeeded. Every encode starts by reading its
+    // source images again, so a reused compressor keeps nothing of the image
+    // before (the test `a_reused_encoder_gives_the_same_blocks_as_a_fresh_one`).
     unsafe { compressor.process() }.map_err(|e| format!("Basis Universal encoding failed: {e:?}"))?;
     let levels = basis_uastc_levels(compressor.basis_file())?;
     Ok((levels, compressor.any_source_image_has_alpha()))
+}
+
+/// Basis Universal encoders not in use, each with a worker thread per core.
+/// They are never dropped: a cook takes one per image it encodes at once
+/// and puts it back, and they live until the process exits.
+///
+/// Dropping an encoder that has worker threads can hang forever. Its job
+/// pool's destructor sets the pool's stop flag without holding the pool's
+/// lock, then wakes the workers and joins them; a worker that has just
+/// found no work, but not yet gone to sleep, misses that wake-up and sleeps
+/// for good, so the join never returns. It takes a busy machine (seen at a
+/// load average of 80), and the encoder is third-party code, so this module
+/// never drops one. Keeping them also saves starting and joining a thread
+/// per core for every image. The cost: each keeps the buffers of the
+/// largest image it encoded, as much memory as encoding them all at once
+/// took anyway, until the process (a `ponko` command) exits.
+static IDLE_ENCODERS: EncoderList = std::sync::Mutex::new(Vec::new());
+
+type EncoderList = std::sync::Mutex<Vec<Compressor>>;
+
+/// An encoder from an idle list (a new one when it is empty), which goes
+/// back there when this is dropped, even in a panic.
+struct LentEncoder {
+    encoder: Option<Compressor>,
+    from: &'static EncoderList,
+}
+
+/// An encoder from [`IDLE_ENCODERS`].
+fn lend_encoder() -> LentEncoder {
+    lend_encoder_from(&IDLE_ENCODERS)
+}
+
+fn lend_encoder_from(list: &'static EncoderList) -> LentEncoder {
+    let idle = list.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop();
+    let encoder = idle.unwrap_or_else(|| {
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        Compressor::new(u32::try_from(cores).unwrap_or(u32::MAX))
+    });
+    LentEncoder {
+        encoder: Some(encoder),
+        from: list,
+    }
+}
+
+impl std::ops::Deref for LentEncoder {
+    type Target = Compressor;
+    fn deref(&self) -> &Compressor {
+        self.encoder.as_ref().expect("lent until dropped")
+    }
+}
+
+impl std::ops::DerefMut for LentEncoder {
+    fn deref_mut(&mut self) -> &mut Compressor {
+        self.encoder.as_mut().expect("lent until dropped")
+    }
+}
+
+impl Drop for LentEncoder {
+    fn drop(&mut self) {
+        if let Some(encoder) = self.encoder.take() {
+            self.from
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(encoder);
+        }
+    }
 }
 
 /// The UASTC blocks of each mip level of image 0 in a `.basis` file (its
@@ -938,6 +1015,93 @@ pub(crate) mod tests {
         assert_eq!(reader.basic_dfd().unwrap().sample_information[0].channel_type, 5);
         assert_eq!(reader.levels().len(), 6);
         assert_eq!(reader.transfer_function(), Some(ktx2::TransferFunction::Linear));
+    }
+
+    /// A `size` x `size` image unlike its neighbours: noise over a
+    /// gradient, from `seed`.
+    fn noisy(size: u32, seed: u32) -> Vec<u8> {
+        let mut state = seed.wrapping_mul(2_654_435_761).max(1);
+        let mut rgba = Vec::new();
+        for y in 0..size {
+            for x in 0..size {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                let n = (state % 32) as u8;
+                rgba.extend_from_slice(&[
+                    (x as u8).wrapping_add(n),
+                    (y as u8).wrapping_add(n),
+                    (seed as u8) ^ n,
+                    255,
+                ]);
+            }
+        }
+        rgba
+    }
+
+    #[test]
+    fn a_lent_encoder_goes_back_to_the_idle_list_even_in_a_panic() {
+        // A list of its own: other tests borrow from the shared one meanwhile.
+        static LIST: EncoderList = std::sync::Mutex::new(Vec::new());
+        let idle = |pointer| LIST.lock().unwrap().iter().any(|c| c.0 == pointer);
+        let encoder = lend_encoder_from(&LIST);
+        let pointer = encoder.0;
+        assert!(!idle(pointer), "lent out");
+        drop(encoder);
+        assert!(idle(pointer), "back after use");
+        let lent = std::panic::catch_unwind(|| {
+            let encoder = lend_encoder_from(&LIST);
+            let pointer = encoder.0 as usize;
+            std::panic::panic_any(pointer);
+        });
+        let pointer = *lent.unwrap_err().downcast::<usize>().unwrap() as *mut _;
+        assert!(idle(pointer), "back after a panic");
+    }
+
+    #[test]
+    fn a_reused_encoder_gives_the_same_blocks_as_a_fresh_one() {
+        let (a, b) = (noisy(256, 4), noisy(64, 5));
+        let params = |rgba: &[u8], size| uastc_params(rgba, size, size, true, true);
+        let mut reused = lend_encoder();
+        // A goes first, so B is encoded on an encoder that last held a larger A.
+        let on_reused_a = uastc_on(&mut reused, &params(&a, 256)).unwrap();
+        let on_reused_b = uastc_on(&mut reused, &params(&b, 64)).unwrap();
+        let fresh = |rgba: &[u8], size| uastc_on(&mut Compressor::new(1), &params(rgba, size)).unwrap();
+        assert_eq!(on_reused_b, fresh(&b, 64));
+        assert_eq!(on_reused_a, fresh(&a, 256));
+        assert_eq!(on_reused_b.0.len(), 7, "64 x 64 has 7 levels, not A's 9");
+        // Negative control: the comparison notices other blocks.
+        assert_ne!(on_reused_b, fresh(&noisy(64, 6), 64));
+    }
+
+    #[test]
+    fn encodes_from_many_threads_at_once_all_finish() {
+        // Encoders used to be made and dropped per image; one dropped on a
+        // busy machine could hang the process (see `IDLE_ENCODERS`).
+        let (done, finished) = std::sync::mpsc::channel();
+        for t in 0..8u32 {
+            let done = done.clone();
+            std::thread::spawn(move || {
+                for i in 0..12u32 {
+                    let size = if i % 6 == 5 { 256 } else { 4 << (i % 4) };
+                    let encoded = encode(&noisy(size, t * 100 + i), size, size, Rule::of(Kind::Color));
+                    done.send(encoded.map(|e| e.levels)).unwrap();
+                }
+            });
+        }
+        drop(done);
+        let mut count = 0;
+        loop {
+            match finished.recv_timeout(std::time::Duration::from_secs(120)) {
+                Ok(levels) => {
+                    assert!(levels.unwrap() >= 3);
+                    count += 1;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("an encode stalled after {count} of 96"),
+            }
+        }
+        assert_eq!(count, 96);
     }
 
     #[test]

@@ -436,14 +436,41 @@ engine's `Interest` (with hysteresis, so things at the edge don't flicker
 in and out) does the deciding.
 
 `peer_stats(peer)` on the server and `client_stats()` on a client count
-packets, bytes, records, deltas, deferred entities and losses.
+packets, bytes, records, deltas, deferred entities and losses;
+`resend_stats(peer)` on the server says what went again and why, and how
+long it waits now ([Reading the resends](#reading-the-resends)).
 
 ## Test it
 
 Multiplayer bugs hide in timing, so tests play the network on purpose:
-`NetMessages::loopback(n)` connects `n` endpoints in memory, and
+`NetMessages::loopback(n)` connects `n` endpoints in memory,
 `NetMessages::loopback_lossy(n, k)` loses every `k`th datagram and delivers
-the rest newest first. To make a run the same every time:
+the rest newest first, and `NetMessages::loopback_link(n, link)` plays a
+link that loses a share of the datagrams and delays each one, some more
+than others, so they overtake each other:
+
+```rust
+use std::time::Duration;
+use ponko::net::{LoopbackLink, NetMessages};
+
+// 5% lost each way, a frame of delay plus up to 50 ms: packets overtake.
+let link = LoopbackLink::new()
+    .loss(0.05)
+    .delay(Duration::from_millis(17))
+    .jitter(Duration::from_millis(50))
+    .seed(1);
+let nets: Vec<NetMessages> = NetMessages::loopback_link(3, link)
+    .into_iter()
+    .map(NetMessages::game_clock)
+    .collect();
+# assert_eq!(nets.len(), 3);
+```
+
+The dice are a hash of the seed, the sender and the datagram's number, so
+the same seed loses and delays the same datagrams on every run (on game
+time, with the sides taking turns as below). `LoopbackLink` is Rust-only
+for now; C and C++ tests use the plain loopback. To make a run the same
+every time:
 
 1. **Count game time.** `NetMessages::game_clock()` makes an endpoint's
    resends and timeouts count the game's ticks instead of the wall clock.
@@ -551,9 +578,19 @@ cargo run --release -p ponko_bench --bin replication -- 3
 | 1 in 10 move, 64 KB/s | 62,006 | 65,636 | 1,000 | 0.26 ms, 0.28 ms |
 | 1 in 20 move, 64 KB/s | 31,266 | 34,891 | 1,000 | 0.14 ms, 0.39 ms (busy machine, see below) |
 | All move, interest rings (250 m every tick, 500 m every 4th) | 62,246 (58,559 to 63,923 by client) | 65,905 | 235 | 0.36 ms, 0.38 ms |
+| 1 in 10 move, 64 KB/s, 5% lost each way and reordered | 63,443 (63,055 to 63,831 by client) | 63,937 | 1,000 | 0.61 ms, 0.73 ms (busy machine, see below) |
 
 *Payload* is replication's packets; *on the wire* adds the transport's
-framing, acknowledgements and resends. Ten seconds were measured after a
+framing, acknowledgements and resends. The last scenario runs over
+`loopback_link` (above): 5% of the datagrams lost each way, a frame of
+delay plus up to 50 ms, so about one packet in three arrives after one
+sent later. Its *payload* is what the server sent, and *on the wire* what
+the clients received, so the lost datagrams count in the first and not
+the second. The server resent 125 records per second to each client, all
+of them early (acknowledgements skipped their packet) and none on the
+timeout; the lost bandwidth comes out of the budget, so the payload rises
+from 62,006 to the 64 KB/s cap. The link is seeded, so these bytes are
+exact too. Ten seconds were measured after a
 two-second warm-up (everyone joining and getting the spawn burst). Server
 CPU is its whole tick: receiving, the game's systems, finding what
 changed, encoding and sending to all 16 clients.
@@ -567,7 +604,13 @@ kept the same M4 Max busy (load average 100 to 180), so it is only good
 for comparing with the row below it; an idle-machine run of it is still
 to be done. The other rows' times were measured before changes were sent
 once (next section) and didn't move beyond that busy machine's noise
-since.
+since. The lossy row's time is from 2026-11-21 too, with the load average
+at 97 to 114: three invocations of three runs each, alternating with the
+lossless `1 in 10` row. Its medians were 0.608, 0.618 and 0.610 ms; the
+lossless row's in the same invocations 0.521, 0.362 and 0.499 ms (it
+measured 0.26 ms on the idle machine). On that machine the lossy link
+costs the server somewhat more (more records, at the budget), but take
+nothing finer than that from those numbers.
 
 ### Sent once, resent when lost
 
@@ -662,6 +705,60 @@ medians were 0.204 and 0.210 ms before (runs from 0.189 to 0.267 ms), and
 0.138 and 0.160 ms after (0.136 to 0.290 ms): fewer records to encode,
 though the busy machine's spread overlaps. In `all move, 64 KB/s` the
 two builds didn't differ beyond the noise (0.92 to 0.95 ms both).
+
+### Reading the resends
+
+`resend_stats(peer)` on the server returns a `ResendStats` for that
+client (`None` if it isn't one):
+
+| Field | Counts |
+|---|---|
+| `early_resends` | records sent again at once because the client acknowledged later packets but not theirs |
+| `timeout_resends` | records sent again because the resend timeout passed |
+| `late_acks` | packets called lost (their records went again early) that were acknowledged after all: resends for nothing, each of which makes the server tolerate more reordering |
+| `timeout_ticks` | the resend timeout now, in ticks, backed off |
+| `backoff` | resend timeouts in a row with nothing acknowledged; each doubled the timeout |
+| `reorder_ticks` | how late, in ticks, a packet may arrive behind later ones before it is called lost |
+
+A resend is a record (a spawn, a state or a despawn) that goes again with
+nothing changed since it last went; an entity that changed sends its new
+state, which counts as new, not as a resend. A client's own entities go
+in every packet and never count.
+
+```rust
+use ponko::prelude::*;
+
+fn net_hud(ctx: &mut Ctx) {
+    for peer in ctx.net.replication.clients() {
+        let Some(r) = ctx.net.replication.resend_stats(peer) else { continue };
+        if r.backoff > 2 {
+            // Several timeouts in a row: this client hasn't answered for a while.
+            let waits = f64::from(r.timeout_ticks) / 60.0;
+            println!("{peer:?}: no answer, next resend in {waits:.1} s");
+        }
+    }
+}
+# let _ = net_hud;
+```
+
+Why a struct of its own and not more fields of `PeerStats`: `PeerStats`
+is not `#[non_exhaustive]`, so a new field would break code that builds
+one with a struct literal (a test's expected value, say), which the
+[stability promises](../../STABILITY.md) rule out, and its C mirror
+(`PonkoReplicationPeerStats`) would change layout. `ResendStats` is
+`#[non_exhaustive]`, so it can grow; C and C++ read it with
+`ponko_ctx_replication_resend_stats` and `ctx.replication_resend_stats(peer)`
+(a `PonkoReplicationResendStats` of its own).
+
+The engine's suite checks the counts on its scripted network: the five
+records of a lost packet count as five early resends (five timeout
+resends with the early rule off); on a link losing 10% and reordering up
+to three ticks, some packets are late rather than lost and the server
+learns a tolerance of a few ticks (with the tolerance off, more than twice
+as many late acknowledgements and no tolerance); over a 9 s outage each
+try sends the five records and the despawn again on the timeout,
+`backoff` counts the tries, `timeout_ticks` stops at 4 s (240 ticks at
+60 Hz), and the first acknowledgement brings both back.
 
 ### Only what changed
 

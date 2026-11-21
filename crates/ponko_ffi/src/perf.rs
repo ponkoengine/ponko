@@ -297,9 +297,22 @@ pub unsafe extern "C" fn ponko_profile_scope(name: *const c_char) -> *const Ponk
     }
 }
 
+/// The most scopes one thread keeps open at once while counting their
+/// allocations; deeper ones are timed only.
+const OPEN_SCOPES: usize = 256;
+
+std::thread_local! {
+    /// The scopes open on this thread: the scope, its token and the
+    /// thread's allocation count when it began.
+    static OPEN: std::cell::RefCell<Vec<(usize, u64, u64)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Starts timing `scope`; hand the result to `ponko_profile_end`. Costs one
 /// atomic load (and returns 0) while profiling is off, and is safe to call
-/// from any thread.
+/// from any thread. While profiling is on it also notes the thread's
+/// allocation count, so the scope counts the allocations made on this
+/// thread until `ponko_profile_end` (on the same thread) as Rust's
+/// `profile_scope!` does.
 /// ```
 /// let scope = unsafe { ponko_ffi::ponko_profile_scope(c"work".as_ptr()) };
 /// let token = unsafe { ponko_ffi::ponko_profile_begin(scope) };
@@ -310,18 +323,88 @@ pub unsafe extern "C" fn ponko_profile_scope(name: *const c_char) -> *const Ponk
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ponko_profile_begin(scope: *const PonkoProfileScope) -> u64 {
     // SAFETY: scopes come from `scope_named`, which leaks them: they are `'static`.
-    unsafe { scope.cast::<ProfileScope>().as_ref() }.map_or(0, ProfileScope::begin)
+    let Some(s) = (unsafe { scope.cast::<ProfileScope>().as_ref() }) else {
+        return 0;
+    };
+    let token = s.begin();
+    if token != 0 {
+        let _ = OPEN.try_with(|open| {
+            if let Ok(mut open) = open.try_borrow_mut()
+                && open.len() < OPEN_SCOPES
+            {
+                // Grown before the count is read, so the stack's own
+                // allocation isn't the scope's.
+                open.reserve(1);
+                let allocs = ponko::perf::thread_alloc_counts().count;
+                open.push((scope as usize, token, allocs));
+            }
+        });
+    }
+    token
 }
 
 /// Stops timing `scope`, started by `ponko_profile_begin` (which returned
-/// `token`).
+/// `token`), and counts the allocations made on this thread since then.
+/// Ended on another thread than the one that began it, the scope counts its
+/// time only.
 /// # Safety
 /// `scope` must be null or from `ponko_profile_scope`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ponko_profile_end(scope: *const PonkoProfileScope, token: u64) {
     // SAFETY: as in `ponko_profile_begin`.
-    if let Some(scope) = unsafe { scope.cast::<ProfileScope>().as_ref() } {
-        scope.end(token);
+    let Some(s) = (unsafe { scope.cast::<ProfileScope>().as_ref() }) else {
+        return;
+    };
+    let began = (token != 0)
+        .then(|| {
+            OPEN.try_with(|open| {
+                let mut open = open.try_borrow_mut().ok()?;
+                let at = open
+                    .iter()
+                    .rposition(|&(sc, t, _)| sc == scope as usize && t == token)?;
+                Some(open.remove(at).2)
+            })
+            .ok()
+            .flatten()
+        })
+        .flatten();
+    match began {
+        Some(allocs) => s.end_counting(token, allocs),
+        None => s.end(token),
+    }
+}
+
+/// Heap allocations counted while profiling was on (Rust `AllocCounts`).
+/// ```
+/// let a = ponko_ffi::PonkoAllocCounts::default();
+/// assert_eq!((a.count, a.bytes), (0, 0));
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PonkoAllocCounts {
+    /// Allocations (and reallocations).
+    pub count: u64,
+    /// Bytes requested by them.
+    pub bytes: u64,
+}
+
+/// The allocations counted so far on the calling thread while profiling was
+/// on (Rust `perf::thread_alloc_counts`). Take two readings on the same
+/// thread and subtract to count what the code between them allocated there,
+/// without what other threads did meanwhile. All zero unless the library
+/// counts its allocations (`CountingAllocator`) or the game reports its own
+/// (`ponko_note_allocation`, `PONKO_COUNT_CPP_ALLOCATIONS`).
+/// ```
+/// let before = ponko_ffi::ponko_thread_alloc_counts();
+/// let after = ponko_ffi::ponko_thread_alloc_counts();
+/// assert_eq!(after.count - before.count, 0, "nothing ran in between");
+/// ```
+#[unsafe(no_mangle)]
+pub extern "C" fn ponko_thread_alloc_counts() -> PonkoAllocCounts {
+    let a = ponko::perf::thread_alloc_counts();
+    PonkoAllocCounts {
+        count: a.count,
+        bytes: a.bytes,
     }
 }
 

@@ -1808,6 +1808,25 @@ static void crowd_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_create_crowd(ctx, animation, &level, 1, people, 3, options, &crowd) == PONKO_OK);
     size_t count = 0;
     CHECK(ponko_ctx_crowd_len(ctx, crowd, &count) == PONKO_OK && count == 3);
+    /* Two levels that crossfade over the near one's last 5 m (PonkoCrowdDesc); a fade wider than its
+       band is refused. */
+    {
+        PonkoCrowdLevel near_far[2] = {{mesh, 0, 30, true, true, 4}, {mesh, 30, INFINITY, true, true, 1}};
+        float fades[2] = {5, 0};
+        PonkoCrowdDesc desc = ponko_crowd_desc_defaults();
+        CHECK(desc.struct_size == sizeof desc && desc.cast_shadows && desc.fades == NULL);
+        desc.animation = animation;
+        desc.levels = near_far; desc.level_count = 2; desc.fades = fades;
+        desc.instances = people; desc.count = 3;
+        PonkoCrowd faded;
+        CHECK(ponko_ctx_create_crowd_ex(ctx, &desc, &faded) == PONKO_OK);
+        CHECK(ponko_ctx_crowd_len(ctx, faded, &count) == PONKO_OK && count == 3);
+        CHECK(ponko_ctx_free_crowd(ctx, faded) == PONKO_OK);
+        fades[0] = 31;
+        CHECK(ponko_ctx_create_crowd_ex(ctx, &desc, &faded) == PONKO_INVALID_ARGUMENT);
+        desc.version = 0;
+        CHECK(ponko_ctx_create_crowd_ex(ctx, &desc, &faded) == PONKO_INVALID_ARGUMENT);
+    }
     /* A level that isn't skinned or moves no corner, a clip the bake hasn't. */
     PonkoCrowdLevel bad = {plain, 0, INFINITY, true, true, 4};
     PonkoCrowd other;
@@ -2456,6 +2475,10 @@ static void focus_and_hud_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_load_collision_mesh(ctx, path, one, true, &wide) == PONKO_INVALID_ARGUMENT); /* a flat hull */
     CHECK(ponko_ctx_load_collision_mesh(ctx, "no/such.glb", one, false, &wide) == PONKO_NOT_FOUND);
     CHECK(ponko_ctx_load_collision_mesh(ctx, path, one, false, NULL) == PONKO_INVALID_ARGUMENT);
+    /* One mesh at any size: a collider scaled where it is used. */
+    PonkoCollider3D mirrored = ponko_collider3d_scaled_mesh(floor, (PonkoVec3){-1, 1, 2});
+    CHECK(mirrored.shape == PONKO_SHAPE3D_SCALED_MESH && mirrored.mesh.id == floor.id);
+    CHECK(mirrored.size.x == -1 && mirrored.size.z == 2 && mirrored.friction == 0.5f);
 }
 static void focus_huds_and_collision_files(void) {
     char path[1024];
@@ -3004,6 +3027,441 @@ static void headless_play(void) {
     CHECK(!up[0] && !up[1] && up[2] && up[3] && !up[4] && !up[5]);
 }
 
+/* World brains inside query loops: the brain and blackboard columns. */
+typedef struct BrainLoop {
+    uint64_t alert, chase, speed, at;
+    uint32_t ids[2];
+    int chasing, started;
+    float seen_speed;
+} BrainLoop;
+
+static uint64_t ai_key_of(const char* name) {
+    uint64_t k = 0;
+    CHECK(ponko_ai_key(name, &k) == PONKO_OK);
+    return k;
+}
+
+static void brain_senses_rows(const PonkoChunk* chunk, void* user) {
+    const BrainLoop* l = user;
+    for (size_t i = 0; i < chunk->count; ++i) {
+        PonkoAiBlackboard* board = ponko_chunk_ai_blackboard(chunk, 1, i);
+        CHECK(board != NULL);
+        CHECK(ponko_ai_blackboard_set_flag(board, l->alert, true) == PONKO_OK);
+        PonkoVec2 at = {(float)i, 2};
+        CHECK(ponko_ai_blackboard_set_vec2(board, l->at, at) == PONKO_OK);
+    }
+    CHECK(ponko_chunk_ai_blackboard(chunk, 1, chunk->count) == NULL);
+}
+
+static void brain_act_rows(const PonkoChunk* chunk, void* user) {
+    BrainLoop* l = user;
+    for (size_t i = 0; i < chunk->count; ++i) {
+        PonkoAiBrain* brain = ponko_chunk_ai_brain(chunk, 0, i);
+        const PonkoAiBlackboard* board = ponko_chunk_ai_blackboard(chunk, 1, i);
+        uint64_t action = 0;
+        bool started = false, alert = false;
+        PonkoVec2 at = {0, 0};
+        CHECK(ponko_ai_brain_action(brain, 0, &action) == PONKO_OK);
+        CHECK(ponko_ai_blackboard_flag(board, l->alert, &alert) == PONKO_OK && alert);
+        CHECK(ponko_ai_blackboard_vec2(board, l->at, &at) == PONKO_OK && at.y == 2);
+        if (action != l->chase) continue;
+        ++l->chasing;
+        CHECK(ponko_ai_brain_started(brain, 0, &started) == PONKO_OK);
+        if (started) ++l->started;
+        CHECK(ponko_ai_brain_param_num(brain, 0, l->speed, &l->seen_speed) == PONKO_OK);
+        CHECK(ponko_ai_brain_finish(brain, l->chase, PONKO_AI_SUCCESS) == PONKO_OK);
+    }
+}
+
+static void brain_senses(PonkoCtx* ctx, void* user) {
+    BrainLoop* l = user;
+    CHECK(ponko_query(ponko_ctx_world(ctx), l->ids, 2, brain_senses_rows, l) == PONKO_OK);
+}
+
+static void brain_think(PonkoCtx* ctx, void* user) {
+    (void)user;
+    CHECK(ponko_ctx_ai_think(ctx) == PONKO_OK);
+}
+
+static void brain_act(PonkoCtx* ctx, void* user) {
+    BrainLoop* l = user;
+    CHECK(ponko_query(ponko_ctx_world(ctx), l->ids, 2, brain_act_rows, l) == PONKO_OK);
+}
+
+static void brain_setup(PonkoCtx* ctx, void* user) {
+    BrainLoop* l = user;
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    CHECK(ponko_ai_brain_component(w, &l->ids[0]) == PONKO_OK);
+    CHECK(ponko_ai_blackboard_component(w, &l->ids[1]) == PONKO_OK);
+    PonkoBehaviorTree* tree = ponko_behavior_tree_new(
+        "{\"root\": {\"sequence\": [{\"check\": \"alert\"}, {\"do\": \"chase\", \"speed\": 2.5}]}}");
+    CHECK(tree != NULL);
+    CHECK(ponko_ctx_ai_add_tree(ctx, "guard", tree) == PONKO_OK);
+    ponko_behavior_tree_free(tree);
+    for (int i = 0; i < 4; ++i) {
+        uint64_t e = 0;
+        CHECK(ponko_spawn(w, NULL, 0, &e) == PONKO_OK);
+        CHECK(ponko_ctx_ai_add_brain(ctx, e, "guard", 1) == PONKO_OK);
+        if (i == 0) {
+            /* Entities and points on a blackboard read back by entity, too. */
+            PonkoVec3 p = {1, 2, 3}, q = {0, 0, 0};
+            uint64_t buddy = 0;
+            CHECK(ponko_ctx_ai_set_entity(ctx, e, ai_key_of("buddy"), e) == PONKO_OK);
+            CHECK(ponko_ctx_ai_set_vec3(ctx, e, ai_key_of("p3"), p) == PONKO_OK);
+            CHECK(ponko_ctx_ai_entity(ctx, e, ai_key_of("buddy"), &buddy) == PONKO_OK && buddy == e);
+            CHECK(ponko_ctx_ai_vec3(ctx, e, ai_key_of("p3"), &q) == PONKO_OK && q.z == 3);
+            PonkoVec2 none;
+            CHECK(ponko_ctx_ai_vec2(ctx, e, ai_key_of("p3"), &none) == PONKO_NOT_FOUND);
+        }
+    }
+}
+
+static void world_brains_in_loops(void) {
+    BrainLoop l = {ai_key_of("alert"), ai_key_of("chase"), ai_key_of("speed"), ai_key_of("at"), {0, 0}, 0, 0, 0};
+    PonkoGame* game = ponko_game_new("brain loops", 1, 1);
+    CHECK(ponko_game_sim_system(game, "senses", 1, brain_senses, &l) == PONKO_OK);
+    CHECK(ponko_game_sim_system(game, "think", 1, brain_think, &l) == PONKO_OK);
+    CHECK(ponko_game_sim_system(game, "act", 1, brain_act, &l) == PONKO_OK);
+    PonkoWorld* w = NULL;
+    CHECK(ponko_game_run_headless(game, 4, brain_setup, &l, &w) == PONKO_OK);
+    ponko_world_free(w);
+    /* Each chase is reported done when seen: the tree succeeds at the next
+       think and starts over at the one after, so they chase at ticks 0 and 2. */
+    CHECK(l.chasing == 8 && l.started == 8 && l.seen_speed == 2.5f);
+
+    /* A native brain's blackboard holds entities and points as well. */
+    PonkoBrain* b = ponko_brain_new(1);
+    PonkoVec2 p = {3, 4}, q = {0, 0};
+    uint64_t e = 0;
+    CHECK(ponko_brain_set_vec2(b, l.at, p) == PONKO_OK && ponko_brain_vec2(b, l.at, &q) == PONKO_OK && q.y == 4);
+    CHECK(ponko_brain_set_entity(b, l.alert, 9) == PONKO_OK && ponko_brain_entity(b, l.alert, &e) == PONKO_OK && e == 9);
+    PonkoVec3 r;
+    CHECK(ponko_brain_vec3(b, l.at, &r) == PONKO_NOT_FOUND);
+    ponko_brain_free(b);
+}
+
+/* Native parity, round 5 (gl#157): crash reports, touch looks and the player's layout, trackpad
+   gestures, camera targets with kept rigs, the window restored before setup, spectrum seas and
+   sliced loaders, from C. */
+typedef struct { int reports; uint32_t kind; char message[64]; char version[16]; char file[96]; } CrashSeen;
+static void crash_hook(const PonkoCrashReport* report, void* user) {
+    CrashSeen* seen = user;
+    seen->reports++;
+    seen->kind = report->kind;
+    snprintf(seen->message, sizeof seen->message, "%s", report->message);
+    snprintf(seen->version, sizeof seen->version, "%s", report->game_version ? report->game_version : "");
+    snprintf(seen->file, sizeof seen->file, "%s", report->file ? report->file : "");
+}
+static void crash_setup(PonkoCtx* ctx, void* user) {
+    CrashSeen* seen = user;
+    CHECK(ponko_crash_report("the save file is damaged") == PONKO_OK);
+    CHECK(seen->reports == 1 && seen->kind == PONKO_CRASH_ERROR);
+    CHECK(strcmp(seen->message, "the save file is damaged") == 0 && strcmp(seen->version, "1.4.2") == 0);
+    CHECK(strncmp(seen->file, "crash-reports/", 14) == 0);
+    char names[512]; size_t len = 0;
+    CHECK(ponko_ctx_saved_crash_reports(ctx, names, sizeof names, &len) == PONKO_OK && len > 0);
+    CHECK(strstr(names, seen->file) == names); /* newest first */
+    char text[8192]; size_t text_len = 0;
+    CHECK(ponko_ctx_storage_read(ctx, seen->file, (uint8_t*)text, sizeof text - 1, &text_len) == PONKO_OK);
+    text[text_len < sizeof text ? text_len : sizeof text - 1] = 0;
+    CHECK(strstr(text, "game version: 1.4.2") != NULL);
+    CHECK(ponko_ctx_storage_delete(ctx, seen->file) == PONKO_OK);
+}
+static void crash_off_setup(PonkoCtx* ctx, void* user) {
+    (void)ctx; (void)user;
+    CHECK(ponko_crash_report("not written") == PONKO_NOT_FOUND);
+}
+
+static void touch_layout_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    PonkoTouchControl controls[] = {{PONKO_TOUCH_STICK, "move", NULL}, {PONKO_TOUCH_BUTTON, "jump", "A"}};
+    PonkoTouchControlPlace places[] = {{"jump", {{0.75f, 1}, {0, -60}}}};
+    PonkoTouchControlStyle styles[] = {{"jump", ponko_touch_style_default()}};
+    styles[0].style.button = (PonkoColor){1, .2f, .2f, .4f};
+    PonkoTouchControlsDesc desc = {.struct_size = sizeof desc, .version = PONKO_TOUCH_CONTROLS_DESC_VERSION};
+    CHECK(ponko_touch_controls_desc_defaults(&desc) == PONKO_OK && desc.style.size == 1);
+    desc.controls = controls; desc.count = 2; desc.show = PONKO_TOUCH_SHOW_ALWAYS;
+    desc.style.size = 1.2f;
+    desc.styles = styles; desc.style_count = 1;
+    desc.places = places; desc.place_count = 1;
+    CHECK(ponko_ctx_set_touch_controls_ex(ctx, &desc) == PONKO_OK);
+    PonkoVec2 at;
+    CHECK(ponko_ctx_touch_control_center(ctx, "jump", &at) == PONKO_OK && at.x == 720 && at.y == 480);
+    desc.style.size = 0;
+    CHECK(ponko_ctx_set_touch_controls_ex(ctx, &desc) == PONKO_INVALID_ARGUMENT);
+
+    /* The player drags the jump button in edit mode: it moves, it isn't pressed. */
+    bool editing = false;
+    CHECK(ponko_ctx_edit_touch_controls(ctx, true) == PONKO_OK);
+    CHECK(ponko_ctx_editing_touch_controls(ctx, &editing) == PONKO_OK && editing);
+    PonkoVec2 to = {at.x - 300, at.y};
+    CHECK(ponko_ctx_feed_touch(ctx, 1, PONKO_TOUCH_STARTED, at) == PONKO_OK);
+    CHECK(ponko_ctx_feed_touch(ctx, 1, PONKO_TOUCH_MOVED, to) == PONKO_OK);
+    CHECK(ponko_ctx_feed_touch(ctx, 1, PONKO_TOUCH_ENDED, to) == PONKO_OK);
+    CHECK(ponko_ctx_edit_touch_controls(ctx, false) == PONKO_OK);
+    PonkoVec2 now;
+    CHECK(ponko_ctx_touch_control_center(ctx, "jump", &now) == PONKO_OK && now.x == to.x && now.y == to.y);
+    PonkoTouchAdjust adjust;
+    CHECK(ponko_ctx_touch_layout_control(ctx, "jump", &adjust) == PONKO_OK && adjust.placed);
+
+    /* Sliders, JSON, reset. */
+    float size = 0, opacity = 0;
+    CHECK(ponko_ctx_set_touch_layout(ctx, 1.5f, .5f) == PONKO_OK);
+    CHECK(ponko_ctx_touch_layout(ctx, &size, &opacity) == PONKO_OK && size == 1.5f && opacity == .5f);
+    char json[1024]; size_t len = 0;
+    CHECK(ponko_ctx_touch_layout_json(ctx, json, sizeof json, &len) == PONKO_OK && strstr(json, "jump"));
+    CHECK(ponko_ctx_reset_touch_layout(ctx) == PONKO_OK);
+    CHECK(ponko_ctx_touch_layout_control(ctx, "jump", &adjust) == PONKO_OK && !adjust.placed);
+    CHECK(ponko_ctx_set_touch_layout_json(ctx, json) == PONKO_OK);
+    CHECK(ponko_ctx_touch_layout_control(ctx, "jump", &adjust) == PONKO_OK && adjust.placed);
+    CHECK(ponko_ctx_set_touch_layout_control(ctx, "jump", NULL) == PONKO_OK);
+    adjust.placed = false; adjust.size = 1.25f;
+    CHECK(ponko_ctx_set_touch_layout_control(ctx, "move", &adjust) == PONKO_OK);
+    CHECK(ponko_ctx_touch_layout_control(ctx, "move", &adjust) == PONKO_OK && adjust.size == 1.25f);
+    CHECK(ponko_ctx_save_touch_layout(ctx) == PONKO_OK);
+    CHECK(ponko_ctx_restore_touch_layout(ctx) == PONKO_OK);
+    /* The engine's own arrange screen: edit mode at once. */
+    CHECK(ponko_ctx_arrange_touch_controls(ctx) == PONKO_OK);
+    CHECK(ponko_ctx_editing_touch_controls(ctx, &editing) == PONKO_OK && editing);
+}
+
+/* A trackpad pinch: the same gesture as two fingers, and no touch device. */
+static void trackpad_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    CHECK(ponko_ctx_feed_trackpad(ctx, PONKO_GESTURE_PINCH, PONKO_TOUCH_STARTED, .25f) == PONKO_OK);
+    float scale = 0; bool touch = true;
+    CHECK(ponko_ctx_gesture_deltas(ctx, NULL, &scale, NULL) == PONKO_OK && scale == 1.25f);
+    CHECK(ponko_ctx_touch_device(ctx, &touch) == PONKO_OK && !touch);
+    PonkoInputScenario* scenario = ponko_input_scenario_new();
+    CHECK(ponko_input_scenario_trackpad(scenario, 2, PONKO_GESTURE_ROTATE, PONKO_TOUCH_MOVED, .5f) == PONKO_OK);
+    ponko_input_scenario_free(scenario);
+}
+
+typedef struct { uint64_t hero; bool started; PonkoVec2 center; } TargetSeen;
+static void target_setup(PonkoCtx* ctx, void* user) {
+    TargetSeen* seen = user;
+    PonkoFollowCamera2D follow = {.struct_size = sizeof follow, .version = PONKO_FOLLOW_CAMERA2D_VERSION};
+    CHECK(ponko_follow_camera2d_defaults(&follow) == PONKO_OK);
+    CHECK(ponko_ctx_set_follow_camera2d_rig(ctx, &follow) == PONKO_OK);
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    uint32_t transform;
+    CHECK(ponko_transform_component(w, &transform) == PONKO_OK);
+    PonkoTransform2D at = {{500, 200}, 0, {1, 1}};
+    PonkoValue value = {transform, &at, sizeof at};
+    CHECK(ponko_spawn(w, &value, 1, &seen->hero) == PONKO_OK);
+    CHECK(ponko_ctx_set_camera_target(ctx, seen->hero, true) == PONKO_OK);
+}
+static void target_look(PonkoCtx* ctx, void* user) {
+    TargetSeen* seen = user;
+    PonkoFollowCamera2D follow = {.struct_size = sizeof follow, .version = PONKO_FOLLOW_CAMERA2D_VERSION};
+    bool kept = false, found = false; uint64_t target = 0;
+    CHECK(ponko_ctx_follow_camera2d_rig(ctx, &follow, &kept) == PONKO_OK && kept);
+    CHECK(ponko_ctx_camera_target(ctx, &target, &found) == PONKO_OK && found && target == seen->hero);
+    seen->started = follow.started;
+    seen->center = follow.center;
+}
+
+typedef struct { PonkoVec2 size; bool save; } WindowSeen;
+static void window_setup(PonkoCtx* ctx, void* user) {
+    WindowSeen* seen = user;
+    PonkoWindowPropertiesEx props = {.struct_size = sizeof props, .version = PONKO_WINDOW_PROPERTIES_EX_VERSION};
+    CHECK(ponko_ctx_window_properties_ex(ctx, &props) == PONKO_OK);
+    seen->size = props.size;
+    if (seen->save) {
+        CHECK(ponko_ctx_window_set_size(ctx, (PonkoVec2){1024, 768}) == PONKO_OK);
+        CHECK(ponko_ctx_window_save_settings(ctx) == PONKO_OK);
+    }
+}
+static PonkoVec2 window_size_seen(bool restore, bool save) {
+    WindowSeen seen = {{0, 0}, save};
+    PonkoGame* game = ponko_game_new("restore", 800, 600);
+    CHECK(ponko_game_data_dir(game, "ponko-c-batch5") == PONKO_OK);
+    CHECK(ponko_game_restore_window_settings(game, restore) == PONKO_OK);
+    PonkoWorld* w = NULL;
+    CHECK(ponko_game_run_headless(game, 0, window_setup, &seen, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    return seen.size;
+}
+
+static void spectrum_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    PonkoWaterDesc sea = {.struct_size = sizeof sea, .version = PONKO_WATER_DESC_VERSION};
+    CHECK(ponko_water_desc_sea(&sea, 0, (PonkoVec2){12, 4}, 2) == PONKO_OK && !sea.has_spectrum);
+    sea.has_spectrum = true;
+    sea.spectrum = ponko_wave_spectrum((PonkoVec2){12, 4}, 2);
+    CHECK(sea.spectrum.tile == 256 && sea.spectrum.resolution == 128);
+    uint64_t water;
+    CHECK(ponko_ctx_spawn_water(ctx, &sea, &water) == PONKO_OK);
+    float spread = 0;
+    for (int i = 0; i < 4; ++i) {
+        PonkoWaterSample s;
+        CHECK(ponko_ctx_water_sample(ctx, water, (PonkoVec2){i * 17.0f, i * -9.0f}, i * .7f, &s) == PONKO_OK);
+        spread += fabsf(s.height);
+    }
+    CHECK(spread > 0.001f); /* a 2 m sea is not flat */
+    sea.spectrum.tile = 0;
+    CHECK(ponko_ctx_spawn_water(ctx, &sea, &water) == PONKO_INVALID_ARGUMENT);
+}
+
+/* A sliced loader: counts the '#' of a file, 64 bytes a step. */
+typedef struct { uint8_t* bytes; size_t len, at, walls; } Walls;
+typedef struct { int steps, freed_users; } SliceCounts;
+static uint32_t walls_start(void* user, const uint8_t* bytes, size_t len, void** out_state) {
+    (void)user;
+    Walls* w = calloc(1, sizeof *w);
+    w->bytes = malloc(len); memcpy(w->bytes, bytes, len); w->len = len;
+    *out_state = w;
+    return PONKO_OK;
+}
+static uint32_t walls_step(void* user, void* state, bool* out_done) {
+    SliceCounts* counts = user; Walls* w = state;
+    counts->steps++;
+    size_t end = w->at + 64 < w->len ? w->at + 64 : w->len;
+    for (; w->at < end; ++w->at) w->walls += w->bytes[w->at] == '#';
+    *out_done = w->at == w->len;
+    return PONKO_OK;
+}
+static void walls_free(void* user, void* state) { (void)user; Walls* w = state; free(w->bytes); free(w); }
+static void walls_free_user(void* user) { ((SliceCounts*)user)->freed_users++; }
+static void sliced_setup(PonkoCtx* ctx, void* user) {
+    SliceCounts* counts = user;
+    char level[200];
+    for (int i = 0; i < 200; ++i) level[i] = i % 4 == 0 ? '#' : '.';
+    PonkoMemorySource* files = ponko_memory_source_new("walls");
+    CHECK(ponko_memory_source_insert(files, "walls.txt", (const uint8_t*)level, sizeof level) == PONKO_OK);
+    CHECK(ponko_ctx_add_background_memory_source(ctx, files) == PONKO_OK);
+    ponko_memory_source_free(files);
+    PonkoSliceLoader loader = {.struct_size = sizeof loader, .version = PONKO_SLICE_LOADER_VERSION,
+                               .start = walls_start, .step = walls_step, .free_state = walls_free,
+                               .user = counts, .free_user = walls_free_user};
+    PonkoAssetGroup* group = ponko_asset_group_new("level");
+    CHECK(ponko_asset_group_add_sliced(group, "walls.txt", &loader) == PONKO_OK);
+    uint32_t id;
+    CHECK(ponko_ctx_start_asset_group(ctx, group, &id) == PONKO_OK);
+    CHECK(ponko_ctx_finish_uploads(ctx) == PONKO_OK);
+    uint32_t state;
+    CHECK(ponko_ctx_asset_group_state(ctx, id, &state) == PONKO_OK && state == PONKO_GROUP_READY);
+    CHECK(counts->steps == 4); /* 200 bytes, 64 a step */
+    void* taken = NULL;
+    CHECK(ponko_ctx_take_asset_group_sliced(ctx, id, "walls.txt", &taken) == PONKO_OK);
+    CHECK(((Walls*)taken)->walls == 50);
+    walls_free(NULL, taken);
+    CHECK(ponko_ctx_take_asset_group_sliced(ctx, id, "walls.txt", &taken) == PONKO_NOT_FOUND);
+}
+
+/* The navmesh crowd's counts, read after the navigation step each tick. */
+static void crowd_count_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    PonkoNavCrowdStats stats = {.struct_size = sizeof stats, .version = PONKO_NAV_CROWD_STATS_VERSION};
+    CHECK(ponko_ctx_navmesh_crowd_stats(ctx, &stats) == PONKO_NOT_FOUND); /* nothing baked yet */
+    PonkoNavSources* sources = ponko_nav_sources_new();
+    PonkoMeshData* floor = ponko_mesh_data_plane(20);
+    CHECK(ponko_nav_sources_add_mesh(sources, floor, ponko_transform3d_at((PonkoVec3){0, 0, 0})) == PONKO_OK);
+    ponko_mesh_data_free(floor);
+    CHECK(ponko_ctx_bake_navmesh(ctx, sources, NULL) == PONKO_OK);
+    ponko_nav_sources_free(sources);
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    uint32_t transform;
+    CHECK(ponko_transform3d_component(w, &transform) == PONKO_OK);
+    for (int i = 0; i < 3; ++i) {
+        PonkoTransform3D at = ponko_transform3d_at((PonkoVec3){-5, 0, (float)i - 1});
+        PonkoValue part = {transform, &at, sizeof at};
+        uint64_t e;
+        CHECK(ponko_spawn(w, &part, 1, &e) == PONKO_OK);
+        CHECK(ponko_ctx_set_nav_agent(ctx, e, 2, 0.25f, 8) == PONKO_OK);
+        CHECK(ponko_ctx_set_nav_avoidance(ctx, e, true, 1, 3) == PONKO_OK);
+        PonkoVec3 to = {5, 0, 0};
+        CHECK(ponko_ctx_set_nav_destination(ctx, e, &to) == PONKO_OK);
+    }
+}
+static void crowd_count_read(PonkoCtx* ctx, void* user) {
+    PonkoNavCrowdStats* stats = user;
+    CHECK(ponko_ctx_navmesh_crowd_stats(ctx, stats) == PONKO_OK);
+}
+
+/* Allocations on this thread, and a scope that counts the ones made inside it. */
+static void alloc_count_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    CHECK(ponko_ctx_set_profiling(ctx, true) == PONKO_OK);
+    const PonkoProfileScope* scope = ponko_profile_scope("c/alloc");
+    uint64_t token = ponko_profile_begin(scope);
+    CHECK(token != 0); /* profiling is on */
+    PonkoAllocCounts before = ponko_thread_alloc_counts();
+    ponko_note_allocation(64);
+    ponko_note_allocation(32);
+    PonkoAllocCounts after = ponko_thread_alloc_counts();
+    ponko_profile_end(scope, token);
+    CHECK(after.count - before.count == 2 && after.bytes - before.bytes == 96);
+    CHECK(ponko_ctx_set_profiling(ctx, false) == PONKO_OK);
+}
+
+static void native_parity_round5(void) {
+    /* Crash reports: on, with the game's version and a hook. */
+    CrashSeen seen = {0};
+    PonkoCrashReports reports = {.struct_size = sizeof reports, .version = PONKO_CRASH_REPORTS_VERSION};
+    reports.mode = PONKO_CRASH_REPORTS_ON;
+    reports.game_version = "1.4.2";
+    reports.on_crash = crash_hook;
+    reports.user = &seen;
+    PonkoGame* game = ponko_game_new("Space Crab", 1, 1);
+    CHECK(ponko_game_data_dir(game, "ponko-c-batch5") == PONKO_OK);
+    CHECK(ponko_game_crash_reports(game, &reports) == PONKO_OK);
+    PonkoWorld* w = NULL;
+    CHECK(ponko_game_run_headless(game, 0, crash_setup, &seen, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    reports.mode = PONKO_CRASH_REPORTS_OFF;
+    game = ponko_game_new("Space Crab", 1, 1);
+    CHECK(ponko_game_crash_reports(game, &reports) == PONKO_OK);
+    reports.mode = 7;
+    CHECK(ponko_game_crash_reports(game, &reports) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_game_run_headless(game, 0, crash_off_setup, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    CHECK(seen.reports == 1);
+
+    game = ponko_game_new("touch", 960, 540);
+    CHECK(ponko_game_data_dir(game, "ponko-c-batch5") == PONKO_OK);
+    CHECK(ponko_game_run_headless(game, 0, touch_layout_setup, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    game = ponko_game_new("trackpad", 960, 540);
+    CHECK(ponko_game_run_headless(game, 0, trackpad_setup, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+
+    TargetSeen target = {0};
+    game = ponko_game_new("target", 640, 360);
+    CHECK(ponko_game_headless_frames(game, true) == PONKO_OK);
+    CHECK(ponko_game_late_system(game, "look", target_look, &target) == PONKO_OK);
+    CHECK(ponko_game_run_headless(game, 3, target_setup, &target, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    CHECK(target.started && fabsf(target.center.x - 500) < 1e-3f && fabsf(target.center.y - 200) < 1e-3f);
+
+    PonkoVec2 first = window_size_seen(false, true);
+    CHECK(first.x == 800 && first.y == 600);
+    PonkoVec2 restored = window_size_seen(true, false);
+    CHECK(restored.x == 1024 && restored.y == 768);
+
+    game = ponko_game_new("sea", 1, 1);
+    CHECK(ponko_game_run_headless(game, 0, spectrum_setup, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+
+    PonkoNavCrowdStats crowd_stats = {.struct_size = sizeof crowd_stats, .version = PONKO_NAV_CROWD_STATS_VERSION};
+    game = ponko_game_new("nav crowd", 1, 1);
+    CHECK(ponko_game_fixed_hz(game, 60) == PONKO_OK && ponko_game_navmesh3d(game) == PONKO_OK);
+    CHECK(ponko_game_sim_system(game, "read", 1, crowd_count_read, &crowd_stats) == PONKO_OK);
+    CHECK(ponko_game_run_headless(game, 10, crowd_count_setup, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    CHECK(crowd_stats.steps == 10 && crowd_stats.agent_steps == 30 && crowd_stats.work > 0);
+
+    game = ponko_game_new("allocs", 1, 1);
+    CHECK(ponko_game_run_headless(game, 0, alloc_count_setup, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+
+    SliceCounts counts = {0};
+    game = ponko_game_new("walls", 1, 1);
+    CHECK(ponko_game_run_headless(game, 0, sliced_setup, &counts, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    CHECK(counts.freed_users == 1);
+}
+
 int main(void) {
     states();
     change_detection();
@@ -3110,5 +3568,7 @@ int main(void) {
     render_descriptors();
     camera_rigs();
     headless_play();
+    world_brains_in_loops();
+    native_parity_round5();
     return 0;
 }

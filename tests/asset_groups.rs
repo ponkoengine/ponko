@@ -1153,3 +1153,77 @@ fn headless_upload_stats_say_the_gpu_does_not_time_uploads() {
         assert_eq!(groups.total_gpu_upload_ms, 0.0);
     });
 }
+
+/// A group whose first two assets are held on their workers (a gated
+/// source) while its third, missing, fails it: the failure is seen with
+/// both still in flight, whatever the machine's load.
+fn a_group_failing_with_two_assets_held(ctx: &mut Ctx, slow: Slow) -> ponko::assets::GroupId {
+    ctx.assets.add_background_source(slow);
+    let id = ctx.assets.start_group(
+        AssetGroup::new("level")
+            .texture("art.png")
+            .bytes("a.bin")
+            .bytes("missing.bin"),
+    );
+    frames_until_done(ctx, id);
+    assert_eq!(ctx.assets.group_state(id), GroupState::Failed);
+    let progress = ctx.assets.group_progress(id);
+    assert_eq!((progress.loaded, progress.bytes_uploaded), (0, 0), "both are held");
+    id
+}
+
+fn held_files() -> Slow {
+    Slow::new(
+        "held",
+        Duration::ZERO,
+        &[("art.png", png(4, 2, [1, 2, 3, 255])), ("a.bin", b"a".to_vec())],
+    )
+    .gated()
+}
+
+#[test]
+fn finish_uploads_counts_what_a_failed_group_had_in_flight() {
+    let slow = held_files();
+    let (gate, reads) = (slow.clone(), slow.reads.clone());
+    game().run_headless(0, move |ctx| {
+        let id = a_group_failing_with_two_assets_held(ctx, slow);
+        // The held reads go on; `finish_uploads` waits for them and counts
+        // them, so a failed group's progress after it is the same every run.
+        gate.open();
+        ctx.finish_uploads();
+        assert_eq!(ctx.assets.group_state(id), GroupState::Failed);
+        assert_eq!(ctx.assets.group_error(id).unwrap().path(), Some("missing.bin"));
+        let progress = ctx.assets.group_progress(id);
+        assert_eq!((progress.loaded, progress.total), (2, 3));
+        assert_eq!(progress.bytes_uploaded, 4 * 2 * 4, "the texture uploaded");
+        assert_eq!(ctx.assets.take_group_value::<Vec<u8>>(id, "a.bin"), Some(b"a".to_vec()));
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+
+        // The restart has only the missing file left to read.
+        ctx.assets
+            .add_background_source(MemorySource::new("late").with("missing.bin", "m"));
+        ctx.assets.restart_group(id);
+        ctx.finish_uploads();
+        assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+        assert_eq!(ctx.assets.group_progress(id).bytes_uploaded, 4 * 2 * 4, "uploaded once");
+        assert_eq!(reads.load(Ordering::SeqCst), 2, "nothing held was read again");
+    });
+}
+
+#[test]
+fn a_failed_group_keeps_counting_what_it_had_in_flight_frame_by_frame() {
+    let slow = held_files();
+    let gate = slow.clone();
+    game().run_headless(0, move |ctx| {
+        let id = a_group_failing_with_two_assets_held(ctx, slow);
+        gate.open();
+        let deadline = Instant::now() + PATIENCE;
+        while ctx.assets.group_progress(id).loaded < 2 {
+            assert!(Instant::now() < deadline, "the held assets were never counted");
+            ctx.pump_asset_groups();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(ctx.assets.group_state(id), GroupState::Failed, "still failed");
+        assert_eq!(ctx.assets.group_progress(id).bytes_uploaded, 4 * 2 * 4);
+    });
+}

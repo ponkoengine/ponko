@@ -359,11 +359,13 @@ fn a_scaled_mesh_collider_round_trips_with_its_scale() {
     unsafe {
         let w = ponko_world_new();
         ids_of(w, &mut ids);
-        let scaled = PonkoCollider3D {
-            shape: PonkoShape3DKind::PONKO_SHAPE3D_SCALED_MESH as u32,
-            size: v3(-1.0, 2.0, 0.5),
-            ..ponko_collider3d_mesh(PonkoCollisionMesh { id: 7 })
-        };
+        let scaled = ponko_collider3d_scaled_mesh(PonkoCollisionMesh { id: 7 }, v3(-1.0, 2.0, 0.5));
+        assert_eq!(scaled.shape, PonkoShape3DKind::PONKO_SHAPE3D_SCALED_MESH as u32);
+        assert_eq!(
+            (scaled.density, scaled.friction),
+            (1000.0, 0.5),
+            "the defaults of the other shapes"
+        );
         let values = [value(ids.collider, &scaled)];
         let mut e = 0;
         assert_eq!(ponko_spawn(w, values.as_ptr(), 1, &mut e), PONKO_OK);

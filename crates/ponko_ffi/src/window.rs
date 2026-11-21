@@ -850,6 +850,24 @@ pub unsafe extern "C" fn ponko_ctx_window_save_settings(ctx: *mut PonkoCtx) -> P
     // SAFETY: all pointer use follows the caller contract; inputs are checked before mutation.
     boundary(|| unsafe { ctx_access(ctx, |c| c.window.save_settings(&mut c.storage).map_err(window_error)) })
 }
+/// Opens the first window with the player's saved settings (Rust
+/// `Game::restore_window_settings`): `window.json` from the game's storage
+/// (`ponko_ctx_window_save_settings` writes it) gives the window's mode,
+/// size, position and flags before it exists, so it doesn't show at its
+/// default size first. The game needs an app id (`ponko_game_app_id`) or a
+/// data folder; with no saved file, or one that can't be used, the window
+/// opens with the defaults. A headless run applies the settings to the
+/// context's window before setup. Off by default.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_game_restore_window_settings(std::ptr::null_mut(), true) } as u32, 1);
+/// ```
+/// # Safety
+/// `game` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_game_restore_window_settings(game: *mut crate::PonkoGame, on: bool) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { crate::game::build(game, |g| crate::game::ok(g.restore_window_settings(on))) }
+}
 /// Restores `window.json` from player storage, if there is one. A stored monitor or exclusive mode that is gone falls back to windowed (the reason is logged).
 /// # Safety
 /// Contexts must be null or live outside queries. Descriptor headers must be initialized;

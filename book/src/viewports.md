@@ -267,6 +267,22 @@ the minimap costs a third of a split-screen view: give a small view its
 own post settings (`d3::View::with_post`) with what it doesn't need turned
 off.
 
+Timing the GPU passes is part of that: each timed pass costs wgpu its
+timestamp queries' reset map and bookkeeping. A game times one frame in 16
+(and every frame only while profiling, the overlay, a trace, a benchmark run
+or automatic quality reads every frame; see `ctx.perf.gpu_passes()`). The
+same benchmark with `PONKO_RENDER_GPU_EVERY=16` against every frame
+(issue #178; the counts repeat exactly from run to run):
+
+| Cameras | Every frame timed | One frame in 16 timed |
+|---|---|---|
+| 1 | 753 | 676 |
+| 2 (halves) | 1262 | 1184 |
+
+With one camera, about 53 of the 77 saved are the timed passes' query
+bookkeeping; the rest is the benchmark's separate command buffer that
+resolves the timestamps (a game resolves them in its frame's own).
+
 CPU time grows by roughly what the main camera's collecting and recording
 cost at the view's size. Times measured on a busy machine vary too much to
 quote; measure your own scene with the benchmark.
