@@ -193,7 +193,8 @@ decisions.
 
 `threads.mjs` checks a web build with threads (the guide's "Threads on the
 web"): the fixture `examples/web_threads.rs`, built with
-`web/build.sh --threads web_threads` (`--build` builds it first). It serves
+`web/build.sh --threads --features 3d,physics3d,bench-internals web_threads`
+(`--build` builds it first). It serves
 the build twice and opens each in a new browser context:
 
 - **With** the cross-origin isolation headers
@@ -202,12 +203,28 @@ the build twice and opens each in a new browser context:
   - the engine must start two or more workers;
   - a parallel query, a batch of four view systems (threshold zero), two
     jobs and an asset group (a texture and a `with` file from `assets/`)
-    must each run on two or more of them, and never on the page's thread.
+    must each run on two or more of them, and never on the page's thread;
+  - at least two of the engine's own parallel passes must go through the
+    frame pool's runner (`passes_shared`), among them the retained 3D
+    culling of 20,000 models (`three/shared_cull`, which must also find
+    models to draw), the drawing of 256 2D skeletons
+    (`skeleton2d/shared_draw`), the moves of 32 3D characters
+    (`physics3d/shared_characters`) and a small light bake
+    (`three/shared_bake`); the JSON save of the game's world must not
+    (`reflect/shared_save`: in the browser it is faster on the page's
+    thread);
+  - every timed pass must have a time (`pass_ms`).
 - **Without** the headers: everything runs on the page's thread, and the
   console says why (`it runs on the page's thread alone`).
 
-Both runs must reach the same checksum at tick 120 and read the same file.
-Two more modes:
+Both runs must reach the same checksum at tick 120 (the 3D frame's counts,
+the skeletons' vertices, the characters' places, the bake's hash and the
+JSON save's length and hash are in it; the frame and the save are compared
+on their own too) and read the same file. The run prints a table of the
+timed passes: whether each was shared out, and its median time with threads
+and on the page's thread alone (the guide's list of parallel loops comes
+from it).
+More modes:
 - `--case worker-panic` panics inside the parallel query on a worker. The
   console must say `the game stops`, the page must still answer, and the
   ticks must stop.
@@ -241,6 +258,12 @@ Two more modes:
   come from the same backend built without threads (it replaced gilrs on
   the web; the guide's web chapter says why). Both apply gilrs's dead zone
   (0.1, rescaled), and the expected axes take it out the same way.
+- `--case service-worker` builds the fixture with `ponko-isolate.js`
+  (`web/build.sh --threads --isolation-worker`, in
+  `target/web/web_threads_sw`) and serves it **without** the headers. The
+  page must reload once through the service worker (`ponko-isolate.js:
+  reloading once` in the console), be controlled by it, be cross-origin
+  isolated, and pass every check of the isolated run above.
 - `--case warning` needs no browser: it builds the example
   `examples/web_threads_warning.rs` with threads and `-D warnings`. The
   example's only code is an unused function that only a build with threads
@@ -279,8 +302,9 @@ water guide's "Waves from a spectrum"): the fixture
 `examples/web_spectrum.rs`, in three builds (`--build` makes them):
 `scalar` (`web/build.sh --features 3d web_spectrum`), `simd128`
 (`-C target-feature=+simd128` for the whole module, added to the rust
-flags cargo reads) and `simd` (that, and the `wasm-simd` feature:
-rustfft's SIMD FFT; the feature without the flag doesn't compile). Each page load times one new moment of the field
+flags cargo reads) and `simd` (`web/build.sh --simd`: that, and the
+`wasm-simd` feature: rustfft's SIMD FFT; the feature without the flag
+doesn't compile). Each page load times one new moment of the field
 (`Waves::height_at` at a new time, what a WebGL2 upload costs) and one with
 the sway's speed (`Waves::sample`, what buoyancy costs) at 64, 128 and 256
 cells, eight moments per reading because the browser's clock is coarse.

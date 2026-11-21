@@ -259,6 +259,9 @@ impl Panels {
                     CollapsingHeader::new("Systems")
                         .default_open(true)
                         .show(ui, |ui| systems(ui, ctx));
+                    CollapsingHeader::new("GPU passes")
+                        .default_open(false)
+                        .show(ui, |ui| gpu_passes(ui, ctx));
                     let toggles = ctx.debug.toggles().next().is_some();
                     CollapsingHeader::new("Debug drawing")
                         .default_open(toggles)
@@ -1057,6 +1060,50 @@ fn systems(ui: &mut Ui, ctx: &Ctx) {
     });
 }
 
+/// One row of the GPU pass list: a pass's name and its time, or `None` when
+/// it ran but couldn't be timed (shown as "not timed", never as 0 ms).
+type GpuPassRow = (&'static str, Option<f32>);
+
+/// The latest timed frame's GPU passes in the order they run, then the
+/// passes that ran but couldn't be timed.
+fn gpu_pass_rows(passes: &[crate::perf::GpuPass], not_timed: &[&'static str]) -> Vec<GpuPassRow> {
+    let timed = passes.iter().map(|p| (p.name, Some(p.ms)));
+    timed.chain(not_timed.iter().map(|&name| (name, None))).collect()
+}
+
+/// Each GPU pass's time; a pass that ran but couldn't be timed says
+/// "not timed". Empty until a frame's times have come back (windowed games
+/// time one frame in 16 unless profiling is on).
+fn gpu_passes(ui: &mut Ui, ctx: &Ctx) {
+    let rows = gpu_pass_rows(ctx.perf.gpu_passes(), ctx.perf.gpu_passes_not_timed());
+    if rows.is_empty() {
+        ui.label(RichText::new("no GPU pass times yet").weak());
+        return;
+    }
+    let top = rows.iter().filter_map(|r| r.1).fold(0.001, f32::max);
+    egui::Grid::new("inspector-gpu-passes").num_columns(3).show(ui, |ui| {
+        for (name, ms) in rows {
+            ui.label(name);
+            match ms {
+                Some(ms) => {
+                    ui.label(format!("{ms:.3} ms"));
+                    let (rect, _) = ui.allocate_exact_size(vec2(60.0, 8.0), Sense::hover());
+                    let mut bar = rect;
+                    bar.set_width(rect.width() * ms / top);
+                    ui.painter().rect_filled(bar, 1.0, Color32::from_rgb(90, 150, 230));
+                }
+                None => {
+                    ui.label(RichText::new("not timed").weak()).on_hover_text(
+                        "the pass ran, but the GPU wrote no usable timestamps for it (a pass with nothing to do, or a backend that can't time that kind of pass); the frame's GPU time still includes it",
+                    );
+                    ui.label("");
+                }
+            }
+            ui.end_row();
+        }
+    });
+}
+
 /// The overlay as part of the windowed loop: egui's context and window
 /// input, around [`Panels`].
 pub(crate) struct Inspector {
@@ -1448,6 +1495,62 @@ mod tests {
             json!({ "current": 2.5, "max": 7, "offset": -3, "name": "crab", "on": true })
         );
         assert!(value["max"].is_u64() && value["offset"].is_i64() && value["current"].is_f64());
+    }
+
+    /// Every text drawn on the screen of one headless egui frame.
+    fn drawn_texts(ctx: &Ctx) -> Vec<String> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let egui = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 300.0))),
+            ..Default::default()
+        };
+        let mut out = egui.run_ui(input, |ui| gpu_passes(ui, ctx));
+        out.textures_delta.clear();
+        let mut texts = Vec::new();
+        out.shapes.iter().for_each(|c| walk(&c.shape, &mut texts));
+        texts
+    }
+
+    #[test]
+    fn gpu_passes_that_ran_but_could_not_be_timed_show_as_not_timed_not_as_zero() {
+        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(400.0, 300.0));
+        ctx.perf.gpu_passes = vec![
+            crate::perf::GpuPass {
+                name: "opaque",
+                ms: 1.5,
+            },
+            crate::perf::GpuPass { name: "post", ms: 0.25 },
+        ];
+        ctx.perf.gpu_passes_not_timed = vec!["crowd cull"];
+        let texts = drawn_texts(&ctx);
+        assert!(texts.contains(&"1.500 ms".to_owned()), "{texts:?}");
+        assert!(texts.contains(&"0.250 ms".to_owned()), "{texts:?}");
+        let at = |name: &str| {
+            texts
+                .iter()
+                .position(|t| t == name)
+                .unwrap_or_else(|| panic!("{name} missing: {texts:?}"))
+        };
+        assert_eq!(texts[at("crowd cull") + 1], "not timed", "{texts:?}");
+        assert!(at("crowd cull") > at("post"), "timed passes come first: {texts:?}");
+        assert_eq!(
+            texts.iter().filter(|t| t.as_str() == "not timed").count(),
+            1,
+            "{texts:?}"
+        );
+        assert!(!texts.iter().any(|t| t.starts_with("0.000")), "no 0 ms row: {texts:?}");
+
+        // Nothing came back yet: a plain note, no rows.
+        ctx.perf.gpu_passes.clear();
+        ctx.perf.gpu_passes_not_timed.clear();
+        assert_eq!(drawn_texts(&ctx), ["no GPU pass times yet"]);
     }
 
     #[test]

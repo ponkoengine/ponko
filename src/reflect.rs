@@ -11,6 +11,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use ponko_ecs::{Component, ComponentId, Entity, World};
+#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
 use rayon::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -1328,17 +1329,31 @@ impl WorldReflect for World {
             }
             entities.extend_from_slice(a.entities());
         }
-        // Each entity's JSON on its own: in parallel, in id order.
+        // Each entity's JSON on its own, in id order. The text is the same on
+        // any number of threads.
         entities.sort_unstable_by_key(|e| e.to_bits());
-        let entities: Vec<Value> = entities
-            .par_iter()
-            .filter_map(|&e| match self.entity_json(e) {
-                Ok(Value::Object(components)) if !components.is_empty() => {
-                    Some(serde_json::json!({ "entity": e.to_bits(), "components": components }))
-                }
-                _ => None,
-            })
-            .collect();
+        let one = |&e: &Entity| match self.entity_json(e) {
+            Ok(Value::Object(components)) if !components.is_empty() => {
+                Some(serde_json::json!({ "entity": e.to_bits(), "components": components }))
+            }
+            _ => None,
+        };
+        // Natively in parallel, on the frame pool, as parallel queries run.
+        #[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
+        let entities: Vec<Value> = crate::frame_pool::run(|| {
+            crate::profile_scope!("reflect/shared_save");
+            entities.par_iter().filter_map(one).collect()
+        });
+        // In a web build with threads, one after another on the calling
+        // thread: the JSON is many small allocations, and the browser's
+        // threads share one allocator lock, so the frame pool's workers
+        // made it about 10 times slower than the page's thread alone
+        // (measured in the threads fixture, book/src/web-threads.md).
+        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+        let entities: Vec<Value> = {
+            crate::profile_scope!("reflect/save");
+            entities.iter().filter_map(one).collect()
+        };
         let mut resources = serde_json::Map::new();
         for r in registry(self).map_or(&[][..], |r| &r.resources) {
             if let Some(Ok(v)) = (r.get)(self) {

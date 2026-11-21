@@ -378,8 +378,8 @@ fn a_mirrored_heightfield_tile_that_loads_later_is_streamed_in_where_it_is_drawn
 
 #[test]
 fn a_mirrored_heightfield_tile_is_solid_where_it_is_drawn_after_a_save_and_load() {
-    // A saved world keeps the tile's transform, mirror included; the game
-    // makes its collider again from the heights after loading.
+    // A saved world keeps the tile's transform, mirror included; a game
+    // without a terrain rebuild gives the loaded tile a new collider.
     let dir = std::env::temp_dir().join(format!("ponko-test-mirrored-terrain-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let corner = vec3(-4.0, 0.5, 2.0);
@@ -422,6 +422,113 @@ fn a_mirrored_heightfield_tile_is_solid_where_it_is_drawn_after_a_save_and_load(
         .run_headless(3, |ctx| ctx.load_world("mirrored").unwrap());
     let _ = std::fs::remove_dir_all(&dir);
     assert_drawn(&out.take().expect("probed"), corner, scale);
+}
+
+#[test]
+fn a_mirrored_heightfield_tile_keeps_its_collider_through_a_save_and_load() {
+    // The game sets how a tile's ground is made again once; after loading,
+    // it doesn't make the collider itself.
+    let dir = std::env::temp_dir().join(format!("ponko-test-kept-terrain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let corner = vec3(-4.0, 0.5, 2.0);
+    let scale = vec3(1.0, 1.5, -2.0);
+    fn rebuild(ctx: &mut Ctx) {
+        ctx.physics3d.set_terrain_rebuild(|world, tile| {
+            // The tile's saved transform says which heights it had.
+            let mirrored = world.get::<Transform>(tile)?.scale.z < 0.0;
+            mirrored.then(|| CollisionMeshData::heightfield(&bumpy_heights(), 16.0))
+        });
+    }
+    Game::new("t", 1, 1)
+        .data_dir(&dir)
+        .physics3d(Vec3::ZERO)
+        .run_headless(1, move |ctx| {
+            rebuild(ctx);
+            let mesh = ctx.physics3d.heightfield(&bumpy_heights(), 16.0);
+            let tile = Transform {
+                position: corner,
+                scale,
+                ..Transform::default()
+            };
+            ctx.world.spawn((tile, TerrainCollider::new(mesh).friction(0.2)));
+            // Not the rebuild's: left without ground after the load.
+            ctx.world.spawn((Transform::default(), TerrainCollider::new(mesh)));
+            ctx.storage.save_world(&ctx.world, "kept").unwrap();
+        });
+    let out = Rc::new(RefCell::new(None));
+    let probes = out.clone();
+    Game::new("t", 1, 1)
+        .data_dir(&dir)
+        .physics3d(Vec3::ZERO)
+        .sim_system(move |ctx: &mut Ctx| {
+            if ctx.time.sim_tick() == 2 {
+                *probes.borrow_mut() = Some(probe_tile(ctx, corner, scale));
+            }
+        })
+        .run_headless(3, |ctx| {
+            rebuild(ctx);
+            ctx.load_world("kept").unwrap();
+            let mut tiles: Vec<(Vec3, TerrainCollider)> = ctx
+                .world
+                .query::<(&Transform, &TerrainCollider)>()
+                .iter()
+                .map(|(t, c)| (t.scale, *c))
+                .collect();
+            tiles.sort_by(|a, b| a.0.z.total_cmp(&b.0.z));
+            assert_eq!(tiles.len(), 2, "both colliders were saved");
+            let (mirrored, plain) = (tiles[0].1, tiles[1].1);
+            assert!(ctx.physics3d.is_live(mirrored.mesh), "the mirrored tile is solid again");
+            assert_eq!(mirrored.friction, 0.2, "with its surface");
+            assert!(!ctx.physics3d.is_live(plain.mesh), "the other was left without ground");
+        });
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_drawn(&out.take().expect("probed"), corner, scale);
+}
+
+#[test]
+fn a_loaded_terrain_collider_without_a_rebuild_keeps_its_surface_and_has_no_ground() {
+    let dir = std::env::temp_dir().join(format!("ponko-test-unbuilt-terrain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let hit = Rc::new(RefCell::new(None));
+    let out = hit.clone();
+    Game::new("t", 1, 1)
+        .data_dir(&dir)
+        .physics3d(Vec3::ZERO)
+        .run_headless(1, |ctx| {
+            let mesh = ctx.physics3d.heightfield(&[1.0; 5 * 5], 10.0);
+            let solid = TerrainCollider::new(mesh).restitution(0.4);
+            ctx.world.spawn((Transform::default(), solid));
+            ctx.storage.save_world(&ctx.world, "unbuilt").unwrap();
+        });
+    Game::new("t", 1, 1)
+        .data_dir(&dir)
+        .physics3d(Vec3::ZERO)
+        .sim_system(move |ctx: &mut Ctx| {
+            if ctx.time.sim_tick() == 1 {
+                let ray = ctx
+                    .physics3d
+                    .cast_ray(vec3(5.0, 10.0, 5.0), Vec3::NEG_Y, 20.0, QueryFilter::default());
+                *out.borrow_mut() = Some(ray.is_some());
+            }
+        })
+        .run_headless(2, |ctx| {
+            ctx.load_world("unbuilt").unwrap();
+            let c = *ctx
+                .world
+                .query::<(Entity, &TerrainCollider)>()
+                .iter()
+                .next()
+                .expect("saved")
+                .1;
+            assert_eq!(c.restitution, 0.4);
+            assert!(!ctx.physics3d.is_live(c.mesh));
+        });
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        hit.take(),
+        Some(false),
+        "nothing to stand on until the game gives it a mesh"
+    );
 }
 
 #[test]

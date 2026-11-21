@@ -371,7 +371,9 @@ ctx.ui.show_hud(hud);
   platform layer of the game's own. The UI lays out with them from the
   next frame. A headless scenario feeds them as a step,
   [`InputScenario::safe_insets(tick, insets)`](headless.md#insets-as-a-scenario-step),
-  so a layout for a notched phone is checked without a device.
+  so a layout for a notched phone is checked without a device. A
+  scenario's insets hold while it runs: the browser's, read on a resize
+  meanwhile, apply once it ends.
 
 ```rust
 # use ponko::prelude::*;
@@ -451,6 +453,16 @@ out inside it after `ponko_ctx_ui_set_inside_safe_area` (and
 `window_safe_insets()` and `window_feed_safe_insets(insets)`, the UI's
 `set_inside_safe_area(root)` and `inside_safe_area(root)`, and the scenario's
 `safe_insets(tick, insets)`, with `ponko::safe_insets` for the insets.
+
+The engine sets the screen's UI safe area from the window's every frame. A
+UI of the game's own, a world panel's (the panel's entity as the `target` of
+the `ponko_ctx_ui_*` calls), sets it itself, in its own pixels (Rust
+`Ui::set_safe_area` and `safe_area`): `ponko_ctx_ui_set_safe_area` (a
+`PonkoRect`, or `NULL` to clear it) and `ponko_ctx_ui_safe_area`, which
+answers `PONKO_NOT_FOUND` while there is none. Roots made inside the safe
+area are laid out in it, the others in the whole panel. In C++ it is the
+UI's `set_safe_area(rect)`, `clear_safe_area()` and `safe_area()`, a
+`std::optional<rect>`.
 
 Styles and placement are the versioned `PonkoTouchControlsDesc` of
 `ponko_ctx_set_touch_controls_ex`: the controls, a `PonkoTouchStyle` for all

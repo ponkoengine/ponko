@@ -1273,7 +1273,9 @@ using collider_ex = PonkoColliderEx;
 using query_filter_ex = PonkoQueryFilterEx;
 /// Post-processing that can grow (PonkoPostEx): `post` is ponko::post, plus split toning
 /// (split_toning_shadows, split_toning_highlights, split_toning_balance), depth of field (dof_enabled,
-/// dof_focus_distance, dof_focus_range, dof_blur) and the sample count (msaa).
+/// dof_focus_distance, dof_focus_range, dof_blur), the sample count (msaa) and, from version 2, thin
+/// objects in screen-space reflections (ssr_thin_objects: whole without TAA, about a millisecond more at
+/// 1920x1080; the ultra preset turns it on).
 using post_ex = PonkoPostEx;
 /// Whether a camera draws `ctx.debug`'s 3D lines and labels (the `debug_draw` of camera3d_ex and
 /// target_camera_ex, Rust `Camera::debug_draw`); set it with `static_cast<std::uint32_t>(...)`.
@@ -1637,6 +1639,9 @@ struct identity {
     // a ctx only lasts one system call, the hook as long as the game. An
     // exception it throws is kept in hook_error and rethrown by the game.
     std::function<void(contact_pair3d&)> contact_hook;
+    // The terrain rebuild (ctx::set_terrain_rebuild), for the same reason,
+    // already turned into what the C callback returns.
+    std::function<PonkoCollisionMeshData*(const PonkoLoadedWorld*, std::uint64_t)> terrain_rebuild;
     first_error hook_error;
 };
 
@@ -2837,6 +2842,28 @@ public:
     }
     /// Whether `e` is alive (ponko_hook_is_alive).
     bool alive(entity e) const { bool a = false; detail::check(ponko_hook_is_alive(raw_, e, &a)); return a; }
+};
+/// The world just loaded, as a terrain rebuild sees it
+/// (ctx::set_terrain_rebuild): read-only, valid only during the call.
+class loaded_world {
+    const PonkoLoadedWorld* raw_;
+    detail::identity* owner_;
+public:
+    /// Wraps the C handle a rebuild got and the world's C++ identity;
+    /// ctx::set_terrain_rebuild does this for you.
+    loaded_world(const PonkoLoadedWorld* raw, detail::identity* owner) : raw_(raw), owner_(owner) {}
+    /// `e`'s `T`, or nothing if it has none (ponko_loaded_world_get). `T`
+    /// must have been used on the world before the load.
+    template<class T> std::optional<T> get(entity e) const {
+        const std::size_t slot = detail::type_slot<T>();
+        if (slot >= owner_->ids.size() || owner_->ids[slot] == 0)
+            throw std::logic_error(detail::type_name<T>() + " is used for the first time inside a terrain rebuild; use it on the world first");
+        T value{};
+        const PonkoStatus status = ponko_loaded_world_get(raw_, e, owner_->ids[slot] - 1, &value, sizeof(T));
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return value;
+    }
 };
 /// Out of line: hook_world is defined after world_view.
 template<class T, bool Replace, class F> void world_view::add_hook(hook_register reg, F f) {
@@ -4943,6 +4970,24 @@ public:
     void set_inside_safe_area(id node, bool on = true) { detail::check(ponko_ctx_ui_set_inside_safe_area(raw_, target_, node, on)); }
     /// Whether root `node` is laid out inside the safe area.
     bool inside_safe_area(id node) const { bool on = false; detail::check(ponko_ctx_ui_inside_safe_area(raw_, target_, node, &on)); return on; }
+    /// Sets the part of the viewport, in its pixels, that roots made with set_inside_safe_area are laid out
+    /// in (Rust `Ui::set_safe_area`). The engine sets the screen's from ctx::window_safe_area every frame,
+    /// so this is for a UI of the game's own, a world panel's. A rectangle that isn't finite counts as none.
+    void set_safe_area(ponko::rect area) { detail::check(ponko_ctx_ui_set_safe_area(raw_, target_, &area)); }
+    /// Clears the safe area: roots inside it are laid out in the whole viewport again.
+    void clear_safe_area() { detail::check(ponko_ctx_ui_set_safe_area(raw_, target_, nullptr)); }
+    /// The safe area set with set_safe_area, or nothing: roots inside it use the whole viewport.
+    std::optional<ponko::rect> safe_area() const {
+        ponko::rect r{};
+        const auto status = ponko_ctx_ui_safe_area(raw_, target_, &r);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return r;
+    }
+    /// Fades `node` and everything inside it as one image (drawn opaque into an offscreen layer shown at its opacity), so overlapping children don't show through each other (`on` false: piece by piece, the default).
+    void set_fade_as_group(id node, bool on = true) { detail::check(ponko_ctx_ui_set_fade_as_group(raw_, target_, node, on)); }
+    /// Whether `node` fades as one image.
+    bool fades_as_group(id node) const { bool on = false; detail::check(ponko_ctx_ui_fades_as_group(raw_, target_, node, &on)); return on; }
     /// Shows the tree under `root` as a HUD: drawn below every screen, never closed by Escape, never takes input.
     void show_hud(id root) { detail::check(ponko_ctx_ui_show_hud(raw_, target_, root)); }
     /// Takes a HUD off the screen; its nodes stay.
@@ -5555,6 +5600,7 @@ public:
 /// `CollisionMeshData`): make it on any thread (std::async), then
 /// ctx::add_collision_mesh on the game's, which is quick.
 class collision_mesh_data {
+    friend class ctx;  // hands the data to the engine from a terrain rebuild
     std::unique_ptr<PonkoCollisionMeshData, void (*)(PonkoCollisionMeshData*)> raw_;
     explicit collision_mesh_data(PonkoCollisionMeshData* d) : raw_(d, ponko_collision_mesh_data_free) {
         if (!d) throw std::invalid_argument(ponko_last_error());
@@ -6783,6 +6829,14 @@ class ctx {
         if (owner.hook_error.set.load() || !owner.contact_hook) return;
         try { contact_pair3d pair(raw); owner.contact_hook(pair); }
         catch (...) { owner.hook_error.capture(); }
+    }
+    /// Calls the rebuild from ctx::set_terrain_rebuild. Nothing may unwind
+    /// into the engine: an exception is kept for the game to rethrow.
+    static PonkoCollisionMeshData* terrain_trampoline(const PonkoLoadedWorld* raw, std::uint64_t tile, void* user) noexcept {
+        auto& owner = *static_cast<detail::identity*>(user);
+        if (owner.hook_error.set.load() || !owner.terrain_rebuild) return nullptr;
+        try { return owner.terrain_rebuild(raw, tile); }
+        catch (...) { owner.hook_error.capture(); return nullptr; }
     }
     friend class game;
     /// Replays what after_system queued, now that no query holds the world.
@@ -8440,6 +8494,21 @@ public:
     /// Starts a ring of contact ripples on the water at `at` (x, z); `strength` about metres high.
     void water_touch(entity water, vec2 at, float radius, float strength) {
         detail::check(ponko_ctx_water_touch(raw_, water, at, radius, strength));
+    }
+    /// How many contact ripples wait on `water` for its next update: the rings water_touch and floating
+    /// bodies crossing the surface started (each update takes three; a body whose ripple switch is off
+    /// starts none). Read it in a system after physics to see a body's ripples by their effect.
+    std::uint32_t water_waiting_contacts(entity water) {
+        std::uint32_t n = 0;
+        detail::check(ponko_ctx_water_waiting_contacts(raw_, water, &n));
+        return n;
+    }
+    /// How many contact ripples have started on `water` since it was made. The update doesn't drain it,
+    /// so a test reads it once after the physics step instead of keeping the most of water_waiting_contacts.
+    std::uint64_t water_started_contacts(entity water) {
+        std::uint64_t n = 0;
+        detail::check(ponko_ctx_water_started_contacts(raw_, water, &n));
+        return n;
     }
     /// Makes 3D body `e` float as a box of `size` (needs physics3d and game::water()).
     void set_buoyancy_box(entity e, vec3 size, float drag = PONKO_BUOYANCY_DRAG) {
@@ -10111,6 +10180,32 @@ public:
     void clear_contact_hook3d() {
         detail::check(ponko_ctx_set_contact_hook3d(raw_, nullptr, nullptr));
         owner_->contact_hook = nullptr;
+    }
+    /// How terrain tiles are made solid again after a load (Rust
+    /// `Physics3D::set_terrain_rebuild`): a saved world keeps each
+    /// terrain_collider's surface but not its heightfield, so after
+    /// load_world or load_scene `rebuild(world, tile)` is called for each
+    /// tile whose collider has no mesh, and the heightfield it returns goes
+    /// in the tile's collider before the next step. The tile's saved
+    /// components (`world.get<transform3d>(tile)`, or one of your own) say
+    /// which heights it had; std::nullopt leaves it without ground. Set it
+    /// once, in setup; it stays through loads and replaces an earlier one.
+    /// It runs inside the load: it must not use this ctx. An exception it
+    /// throws leaves that tile without ground, stops the game and comes out
+    /// of `run`/`run_headless`.
+    void set_terrain_rebuild(std::function<std::optional<collision_mesh_data>(const loaded_world&, entity)> rebuild) {
+        if (!rebuild) { clear_terrain_rebuild(); return; }
+        detail::identity* owner = owner_.get();
+        owner_->terrain_rebuild = [owner, rebuild = std::move(rebuild)](const PonkoLoadedWorld* raw, std::uint64_t tile) {
+            std::optional<collision_mesh_data> made = rebuild(loaded_world(raw, owner), tile);
+            return made ? made->raw_.release() : nullptr;
+        };
+        detail::check(ponko_ctx_physics3d_set_terrain_rebuild(raw_, terrain_trampoline, owner));
+    }
+    /// Stops making terrain tiles solid again after a load.
+    void clear_terrain_rebuild() {
+        detail::check(ponko_ctx_physics3d_clear_terrain_rebuild(raw_));
+        owner_->terrain_rebuild = nullptr;
     }
     /// The closest collider a ray hits within `max_distance`.
     std::optional<hit3d> cast_ray3d(vec3 origin, vec3 direction, float max_distance, filter3d filter = {}) {
@@ -11919,6 +12014,14 @@ public:
     /// which comes at the next ai::think. Unlike ai::signal it reaches this brain at once, without an
     /// event, so it works from the parallel loops too.
     void signal(std::uint64_t key) { detail::check(ponko_ai_brain_signal(raw_, key)); }
+    /// signal() carrying a number, which a `wait_for` node with `"store": "key"` writes to the blackboard.
+    void signal_num(std::uint64_t key, float value) { detail::check(ponko_ai_brain_signal_num(raw_, key, value)); }
+    /// signal() carrying an entity (who shouted, who shot).
+    void signal_entity(std::uint64_t key, entity value) { detail::check(ponko_ai_brain_signal_entity(raw_, key, value)); }
+    /// signal() carrying a 2D point (where the noise was).
+    void signal_vec2(std::uint64_t key, vec2 value) { detail::check(ponko_ai_brain_signal_vec2(raw_, key, value)); }
+    /// signal() carrying a 3D point.
+    void signal_vec3(std::uint64_t key, vec3 value) { detail::check(ponko_ai_brain_signal_vec3(raw_, key, value)); }
     /// The C row.
     PonkoAiBrain* raw() const noexcept { return raw_; }
 };
@@ -12020,16 +12123,12 @@ template<class... Ts, class F> void query(ctx& c, F&& fn) { detail::brain_query<
 /// touch only its own chunk's rows.
 template<class... Ts, class F> void query_par(ctx& c, F&& fn) { detail::brain_query<Ts...>(c, true, fn); }
 /// Calls `fn(entity, ai::brain_row, ai::blackboard_row, Ts&...)` for every
-/// entity with a world brain and all of `Ts`. world_view::each does the same
-/// with the rows among its parameters, in any order, with filters and
-/// each_par: prefer it.
+/// entity with a world brain and all of `Ts`. It is world_view::each with the
+/// rows as parameters, the one typed loop over brains: write that directly
+/// (`c.world().each([&](entity e, ai::brain_row b, ai::blackboard_row bb, T& t) {...})`),
+/// which also takes the rows in any order, filters and each_par.
 template<class... Ts, class F> void each(ctx& c, F&& fn) {
-    query<Ts...>(c, [&fn](chunk<Ts...> ch, rows r) {
-        const auto cols = ch.columns();
-        for (std::size_t i = 0; i < ch.size(); ++i) {
-            std::apply([&](auto*... col) { fn(ch.entity(i), r.brain(i), r.blackboard(i), col[i]...); }, cols);
-        }
-    });
+    c.world().each([&fn](entity e, brain_row brain, blackboard_row board, Ts&... ts) { fn(e, brain, board, ts...); });
 }
 } // namespace ai
 } // namespace ponko

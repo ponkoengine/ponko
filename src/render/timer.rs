@@ -123,55 +123,20 @@ pub(crate) struct GpuTimer {
     /// Reused by `read_frame` to sort a frame's passes.
     order: Vec<Charge>,
     cadence: Cadence,
-    /// Tests only: this timer's share of the process's timestamp queries.
-    /// Declared last, so the queries are dropped before it is given back.
-    #[cfg(test)]
-    _permit: test_permits::Permit,
-}
-
-/// Tests run many devices in one process, and they share what the system
-/// allows: Metal loses the device once a process holds more than about
-/// 2,048 timestamp queries. A game has one timer (`QUERIES * SLOTS`
-/// queries); a test making one waits here while too many others hold theirs.
-#[cfg(test)]
-mod test_permits {
-    use std::sync::{Condvar, Mutex, PoisonError};
-
-    /// Timers alive at once: 4 of 384 queries each leave room for the
-    /// tests that make query sets of their own.
-    const AT_ONCE: u32 = 4;
-    static HELD: Mutex<u32> = Mutex::new(0);
-    static FREED: Condvar = Condvar::new();
-
-    pub(super) struct Permit;
-
-    impl Permit {
-        pub(super) fn take() -> Self {
-            let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
-            while *held >= AT_ONCE {
-                held = FREED.wait(held).unwrap_or_else(PoisonError::into_inner);
-            }
-            *held += 1;
-            Permit
-        }
-    }
-
-    impl Drop for Permit {
-        fn drop(&mut self) {
-            *HELD.lock().unwrap_or_else(PoisonError::into_inner) -= 1;
-            FREED.notify_one();
-        }
-    }
+    /// The right to hold `queries` (see `query_sets.rs`). Declared last,
+    /// so the queries are dropped before it is given back.
+    _lease: super::query_sets::Lease,
 }
 
 impl GpuTimer {
-    /// `None` if the GPU can't do timestamp queries.
+    /// `None` if the GPU can't do timestamp queries, or (after one
+    /// warning) if this process already holds all the timestamp query sets
+    /// the engine takes (see `query_sets.rs`).
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
         }
-        #[cfg(test)]
-        let permit = test_permits::Permit::take();
+        let lease = super::query_sets::lease(device, "GPU frame timer")?;
         let queries = device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("frame timestamps"),
             ty: wgpu::QueryType::Timestamp,
@@ -216,8 +181,7 @@ impl GpuTimer {
             last_end: 0,
             order: Vec::with_capacity(MAX_PASSES as usize),
             cadence: Cadence::EVERY_FRAME,
-            #[cfg(test)]
-            _permit: permit,
+            _lease: lease,
         })
     }
 
@@ -1104,6 +1068,108 @@ mod tests {
             checked += 1;
         }
         assert!(checked >= 8, "{checked} frames checked");
+    }
+
+    /// More devices with timers than Metal has query sets for: 20 devices,
+    /// each with a frame timer and an upload timer, ask for 40 sets, where a
+    /// process may hold 32 (`query_sets.rs`; before, the timers took 7 sets
+    /// a device, so the fifth device was lost). No device is lost: on Metal
+    /// the timers past the engine's 28 sets are refused before a set is
+    /// made, and every device, timed or not, still draws. Elsewhere every
+    /// timer is made. Offscreen, no window; skips without a GPU or
+    /// timestamp queries.
+    #[cfg(feature = "3d")]
+    #[test]
+    fn more_timed_devices_than_metal_has_query_sets_for_all_keep_working() {
+        use super::super::query_sets::{ENGINE_SETS, refuse_when_full};
+        use super::super::upload_timer::UploadTimer;
+        use std::sync::atomic::AtomicBool;
+        const DEVICES: usize = 20;
+        // As in a game: refused at once, not after waiting for other tests.
+        refuse_when_full(true);
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                refuse_when_full(false);
+            }
+        }
+        let _restore = Restore;
+        let mut devices = Vec::new();
+        for _ in 0..DEVICES {
+            let Some((device, queue)) = device(wgpu::Features::TIMESTAMP_QUERY) else {
+                return;
+            };
+            if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+                crate::render::render_test_support::skip("needs timestamp queries");
+                return;
+            }
+            let lost = Arc::new(AtomicBool::new(false));
+            let flag = lost.clone();
+            device.set_device_lost_callback(move |_, _| flag.store(true, Ordering::Release));
+            let timer = GpuTimer::new(&device, &queue);
+            let uploads = UploadTimer::new(&device, &queue);
+            devices.push((device, queue, lost, timer, uploads));
+        }
+        let made = devices
+            .iter()
+            .map(|d| usize::from(d.3.is_some()) + usize::from(d.4.is_some()))
+            .sum::<usize>();
+        if devices[0].0.adapter_info().backend == wgpu::Backend::Metal {
+            // Other tests may hold some of the 28 right now.
+            assert!(made <= ENGINE_SETS as usize, "{made} timers made");
+            assert!(
+                devices.iter().any(|d| d.3.is_none()),
+                "some devices go without a frame timer"
+            );
+        } else {
+            assert_eq!(made, DEVICES * 2, "no limit is known on this backend");
+        }
+        for (i, (device, queue, lost, timer, _)) in devices.iter_mut().enumerate() {
+            let target = device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = target.create_view(&Default::default());
+            if let Some(timer) = timer.as_mut() {
+                timer.begin_frame();
+            }
+            let mut encoder = device.create_command_encoder(&Default::default());
+            drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::RED),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: timer.as_ref().and_then(|t| t.pass("clear")),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            }));
+            if let Some(timer) = timer.as_mut() {
+                timer.resolve(&mut encoder);
+            }
+            queue.submit([encoder.finish()]);
+            if let Some(timer) = timer.as_mut() {
+                timer.submitted();
+            }
+            assert!(device.poll(wgpu::PollType::wait_indefinitely()).is_ok(), "device {i}");
+            assert!(!lost.load(Ordering::Acquire), "device {i} was lost");
+        }
     }
 
     /// A device with timestamp queries gets a timer, and it reports nothing

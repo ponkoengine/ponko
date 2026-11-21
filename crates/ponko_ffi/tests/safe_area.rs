@@ -256,3 +256,93 @@ fn the_scenario_step_from_c_adds_what_rust_adds_and_feeds_the_window_on_its_tick
         );
     }
 }
+
+#[test]
+fn a_panels_own_safe_area_holds_the_roots_made_inside_it() {
+    unsafe {
+        run_ctx(|ctx| {
+            let w = ponko_ctx_world(ctx);
+            let mut transform = 0;
+            assert_eq!(ponko_transform3d_component(w, &mut transform), PONKO_OK);
+            let at = ponko_transform3d_at(PonkoVec3 {
+                x: 0.0,
+                y: 0.0,
+                z: -3.0,
+            });
+            let value = PonkoValue {
+                component: transform,
+                data: (&raw const at).cast(),
+                size: size_of::<PonkoTransform3D>(),
+            };
+            let mut panel = 0;
+            assert_eq!(ponko_spawn(w, &value, 1, &mut panel), PONKO_OK);
+            let size = PonkoVec2 { x: 2.0, y: 1.0 };
+            assert_eq!(
+                ponko_ctx_create_ui_panel(ctx, panel, 200, 100, size, null_mut()),
+                PONKO_OK
+            );
+            let fill = ponko_ui_layout_fill();
+            let (mut inside, mut outside) = (PONKO_UI_NONE, PONKO_UI_NONE);
+            for root in [&mut inside, &mut outside] {
+                assert_eq!(ponko_ctx_ui_add_panel(ctx, panel, PONKO_UI_NONE, &fill, root), PONKO_OK);
+            }
+            assert_eq!(ponko_ctx_ui_set_inside_safe_area(ctx, panel, inside, true), PONKO_OK);
+            for root in [inside, outside] {
+                assert_eq!(ponko_ctx_ui_show_hud(ctx, panel, root), PONKO_OK);
+            }
+            let viewport = PonkoVec2 { x: 200.0, y: 100.0 };
+            let (mut got, mut r) = (PonkoRect::default(), PonkoRect::default());
+
+            // No safe area of its own: nothing to read, the whole panel.
+            assert_eq!(ponko_ctx_ui_safe_area(ctx, panel, &mut got), PONKO_NOT_FOUND);
+            assert_eq!(ponko_ctx_ui_layout(ctx, panel, viewport), PONKO_OK);
+            assert_eq!(ponko_ctx_ui_rect(ctx, panel, inside, &mut r), PONKO_OK);
+            assert_eq!(r, rect(0.0, 0.0, 200.0, 100.0));
+
+            // The rim of a curved display is out: the root inside keeps to
+            // the rest, the one that isn't reaches under it.
+            let area = rect(10.0, 5.0, 190.0, 95.0);
+            assert_eq!(ponko_ctx_ui_set_safe_area(ctx, panel, &area), PONKO_OK);
+            assert_eq!(ponko_ctx_ui_safe_area(ctx, panel, &mut got), PONKO_OK);
+            assert_eq!(got, area);
+            assert_eq!(ponko_ctx_ui_layout(ctx, panel, viewport), PONKO_OK);
+            assert_eq!(ponko_ctx_ui_rect(ctx, panel, inside, &mut r), PONKO_OK);
+            assert_eq!(r, area, "inside the safe area");
+            assert_eq!(ponko_ctx_ui_rect(ctx, panel, outside, &mut r), PONKO_OK);
+            assert_eq!(r, rect(0.0, 0.0, 200.0, 100.0), "the other root is not");
+            // The screen's UI is its own: this panel's area didn't reach it.
+            assert_eq!(ponko_ctx_ui_safe_area(ctx, PONKO_UI_SCREEN, &mut got), PONKO_NOT_FOUND);
+
+            // A rectangle that isn't finite counts as none, as does NULL.
+            let nan = rect(f32::NAN, 0.0, 10.0, 10.0);
+            assert_eq!(ponko_ctx_ui_set_safe_area(ctx, panel, &nan), PONKO_OK);
+            assert_eq!(ponko_ctx_ui_safe_area(ctx, panel, &mut got), PONKO_NOT_FOUND);
+            assert_eq!(ponko_ctx_ui_set_safe_area(ctx, panel, &area), PONKO_OK);
+            assert_eq!(ponko_ctx_ui_set_safe_area(ctx, panel, std::ptr::null()), PONKO_OK);
+            assert_eq!(ponko_ctx_ui_safe_area(ctx, panel, &mut got), PONKO_NOT_FOUND);
+            assert_eq!(ponko_ctx_ui_layout(ctx, panel, viewport), PONKO_OK);
+            assert_eq!(ponko_ctx_ui_rect(ctx, panel, inside, &mut r), PONKO_OK);
+            assert_eq!(r, rect(0.0, 0.0, 200.0, 100.0), "cleared");
+
+            assert_eq!(ponko_ctx_ui_safe_area(ctx, panel, null_mut()), PONKO_INVALID_ARGUMENT);
+            assert_eq!(
+                ponko_ctx_ui_set_safe_area(ctx, 0xdead_beef, &area),
+                PONKO_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                ponko_ctx_ui_safe_area(ctx, 0xdead_beef, &mut got),
+                PONKO_INVALID_ARGUMENT
+            );
+        });
+        let area = PonkoRect::default();
+        let mut got = PonkoRect::default();
+        assert_eq!(
+            ponko_ctx_ui_set_safe_area(null_mut(), PONKO_UI_SCREEN, &area),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            ponko_ctx_ui_safe_area(null_mut(), PONKO_UI_SCREEN, &mut got),
+            PONKO_INVALID_ARGUMENT
+        );
+    }
+}

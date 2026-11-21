@@ -181,6 +181,117 @@ pub unsafe extern "C" fn ponko_ctx_ui_inside_safe_area(
     })
 }
 
+/// Sets the part of the viewport, in its pixels, that roots laid out inside
+/// the safe area (`ponko_ctx_ui_set_inside_safe_area`) of the UI `target`
+/// use (Rust `Ui::set_safe_area`); NULL `area` clears it, so they are laid
+/// out in the whole viewport again. The engine sets the screen's from
+/// `ponko_ctx_window_safe_area` every frame, so this is for a UI of the
+/// game's own, a world panel's (`target` its entity). A rectangle with a
+/// value that isn't finite counts as none.
+///
+/// Ownership: `area` is read during the call only.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ui_set_safe_area(std::ptr::null_mut(), ponko_ffi::PONKO_UI_SCREEN, std::ptr::null()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `area` null or readable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_set_safe_area(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    area: *const crate::PonkoRect,
+) -> PonkoStatus {
+    // SAFETY: `area` is null or readable by the caller contract.
+    let area: Option<ponko::prelude::Rect> = unsafe { area.as_ref() }.map(|r| crate::types::to_c(*r));
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        with_ui(ctx, target, |ui| {
+            ui.set_safe_area(area);
+            Ok(())
+        })
+    })
+}
+
+/// Writes the safe area of the UI `target` (`ponko_ctx_ui_set_safe_area`).
+/// `PONKO_NOT_FOUND` when it has none, that is, roots inside the safe area
+/// are laid out in the whole viewport; `area` is then left as it was.
+///
+/// Ownership: `out_area` is written during the call only.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ui_safe_area(std::ptr::null_mut(), ponko_ffi::PONKO_UI_SCREEN, std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_area` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_safe_area(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    out_area: *mut crate::PonkoRect,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        if out_area.is_null() {
+            return Err(invalid("safe area output is null"));
+        }
+        let area = with_ui(ctx, target, |ui| Ok(ui.safe_area()))?;
+        match area {
+            Some(r) => out(out_area, crate::types::to_c(r)),
+            None => Err(crate::error(PonkoStatus::PONKO_NOT_FOUND, "the UI has no safe area")),
+        }
+    })
+}
+
+/// Fades node `id` and everything inside it as one image (`on` true), or
+/// piece by piece (false, the default; Rust `Ui::set_fade_as_group`).
+/// While the group is partly transparent (its own opacity or an ancestor's)
+/// it is drawn opaque into an offscreen layer the size of the window, shown
+/// at the group's opacity: overlapping children no longer show through each
+/// other. Nothing extra is drawn while it is opaque. World-space panels fade
+/// piece by piece. `PONKO_NOT_FOUND` for a node that doesn't exist.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ui_set_fade_as_group(std::ptr::null_mut(), ponko_ffi::PONKO_UI_SCREEN, 0, true) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_set_fade_as_group(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    id: u64,
+    on: bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        with_ui(ctx, target, |ui| {
+            let id = existing(ui, id)?;
+            ui.set_fade_as_group(id, on);
+            Ok(())
+        })
+    })
+}
+
+/// Whether node `id` fades as one image (`ponko_ctx_ui_set_fade_as_group`).
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ui_fades_as_group(std::ptr::null_mut(), ponko_ffi::PONKO_UI_SCREEN, 0, &mut false) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_on` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_fades_as_group(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    id: u64,
+    out_on: *mut bool,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        with_ui(ctx, target, |ui| {
+            let id = existing(ui, id)?;
+            out(out_on, ui.fades_as_group(id))
+        })
+    })
+}
+
 /// Shows the tree under a detached `root` as a HUD: display-only UI (a
 /// score, a health bar) drawn below every screen. Escape (or a gamepad's
 /// East button) never closes it, it takes no pointer or focus, and it

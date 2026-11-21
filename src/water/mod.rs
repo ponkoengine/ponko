@@ -521,6 +521,8 @@ pub struct Water {
     surface: MaterialDesc,
     /// Ripple contacts waiting for the simulation: x, z, radius, strength.
     contacts: Vec<Vec4>,
+    /// How many contacts [`Water::touch`] accepted since the water was made.
+    contacts_started: u64,
     /// The ripple simulation, where the CPU runs it (no compute shaders).
     cpu_ripples: Option<ripples::CpuRipples>,
     /// The spectrum's field as uploaded, where the CPU works it out.
@@ -669,6 +671,7 @@ impl Water {
             parts,
             surface,
             contacts: Vec::with_capacity(MAX_WAITING_CONTACTS),
+            contacts_started: 0,
             cpu_ripples,
             field_upload: Vec::new(),
             contacts_sent: false,
@@ -768,12 +771,26 @@ impl Water {
             self.contacts.remove(0);
         }
         self.contacts.push(Vec4::new(at.x, at.y, radius.max(0.05), strength));
+        self.contacts_started += 1;
     }
 
-    /// How many ripple contacts wait for a frame.
+    /// How many ripple contacts wait for a frame. The water's update in
+    /// [`Phase::Late`](crate::game::Phase::Late) takes them, so a system after
+    /// physics sees the ones the step started; for a test that only needs to
+    /// know whether any started, see [`contacts_started`](Self::contacts_started).
     #[must_use]
     pub fn waiting_contacts(&self) -> usize {
         self.contacts.len()
+    }
+
+    /// How many ripple contacts have started since the water was made: the
+    /// rings [`touch`](Self::touch) accepted, and floating bodies' crossings of
+    /// the surface. Unlike [`waiting_contacts`](Self::waiting_contacts) the
+    /// update doesn't drain it, so a test reads it once after the physics step
+    /// instead of keeping the most of a count over every tick.
+    #[must_use]
+    pub fn contacts_started(&self) -> u64 {
+        self.contacts_started
     }
 
     /// Whether the underwater effect is in the frame's passes now.
@@ -784,16 +801,20 @@ impl Water {
 
     /// One frame's upkeep: the mirror camera follows the camera, waiting
     /// contacts go to the ripple simulation, and the underwater effect is
-    /// on exactly while the camera may be under. Returns where the mesh
-    /// goes now.
+    /// on exactly while the camera may be under. `steps` and `floating`
+    /// let a CPU-uploaded spectrum draw from the fixed steps' moments (see
+    /// [`drawn_steps`]). Returns where the mesh goes now.
     pub(crate) fn update(
         &mut self,
         gfx: &mut crate::gfx::Graphics,
         scene: &mut crate::render::SceneSettings,
         window: Vec2,
         t: f32,
+        steps: Option<spectrum::DrawnSteps>,
+        floating: bool,
     ) -> Vec3 {
         let camera = scene.camera;
+        let mut drawn = None;
         if let Some(target) = self.parts.reflection {
             let wanted = planar_size(window, self.desc.quality.spec().planar_scale);
             let target = if (target.width(), target.height()) == wanted {
@@ -838,12 +859,12 @@ impl Water {
             (self.parts.spectrum, self.desc.waves.spectrum_field())
         {
             // No compute shaders: the CPU works the field out and uploads it.
-            let now = spectrum.field(t, false);
-            spectrum::write_half_texels(&now.texels, &mut self.field_upload);
+            let blended = spectrum.write_drawn(t, steps, floating, &mut self.field_upload);
             gfx.write_render_target(field, &self.field_upload);
+            drawn = steps.filter(|_| blended);
         }
         if let Some((effect, material)) = self.parts.underwater {
-            let under = self.camera_may_be_under(&camera, t);
+            let under = self.camera_may_be_under(&camera, t, drawn);
             let entry = ScreenEffect::new(effect).with_material(material);
             let effects = &mut scene.passes.effects;
             let at = effects.iter().position(|e| *e == entry);
@@ -861,7 +882,13 @@ impl Water {
 
     /// Whether any of the camera's near plane may be below the surface:
     /// its centre is within reach of it (and over the area).
-    fn camera_may_be_under(&self, camera: &crate::three::Camera3D, t: f32) -> bool {
+    /// `drawn`: the steps the uploaded field was blended from, if it was.
+    fn camera_may_be_under(
+        &self,
+        camera: &crate::three::Camera3D,
+        t: f32,
+        drawn: Option<spectrum::DrawnSteps>,
+    ) -> bool {
         let p = camera.position;
         let reach = camera.near * 2.0 + 0.05;
         if !self.desc.follow_camera {
@@ -882,7 +909,12 @@ impl Water {
         if p.y - reach < self.desc.level - reach_of_waves {
             return true;
         }
-        p.y - reach < self.height_at(Vec2::new(p.x, p.z), t) + 0.05
+        let at = Vec2::new(p.x, p.z);
+        let height = match (drawn, self.desc.waves.spectrum_field()) {
+            (Some(steps), Some(spectrum)) => self.desc.level + spectrum.drawn_height(at, steps),
+            _ => self.height_at(at, t),
+        };
+        p.y - reach < height + 0.05
     }
 
     /// Replaces the planar reflection's target with one of `size`.
@@ -1037,11 +1069,16 @@ pub fn update_water(ctx: &mut Ctx) {
     bodies.clear();
     ctx.world.query::<(Entity, &Water)>().for_each(|(e, _)| bodies.push(e));
     let (window, t) = (ctx.window_size(), ctx.time.elapsed() as f32);
+    let steps = drawn_steps(&ctx.time);
+    #[cfg(feature = "physics3d")]
+    let floating = ctx.world.query::<&Buoyancy>().iter().next().is_some();
+    #[cfg(not(feature = "physics3d"))]
+    let floating = false;
     for &e in &bodies {
         let Some(water) = ctx.world.get_mut::<Water>(e) else {
             continue;
         };
-        let at = water.update(&mut ctx.gfx, &mut ctx.scene3d, window, t);
+        let at = water.update(&mut ctx.gfx, &mut ctx.scene3d, window, t, steps, floating);
         if let Some(transform) = ctx.world.get_mut::<Transform3D>(e)
             && transform.position != at
         {
@@ -1052,6 +1089,25 @@ pub fn update_water(ctx: &mut Ctx) {
         Some(scratch) => scratch.0 = bodies,
         None => ctx.world.insert_resource(WaterScratch(bodies)),
     }
+}
+
+/// The two fixed steps the frame's time ([`Time::elapsed`](crate::time::Time::elapsed)) sits
+/// between, when it does: the next step's time as `float_bodies` asks it
+/// then, the one after, and how far the frame is between them. `None` once
+/// the frame's clock has left the simulation's steps (a pause, or a
+/// simulation speed other than 1, moves them apart); the frame's field is
+/// then worked out at its own time.
+pub(crate) fn drawn_steps(time: &crate::time::Time) -> Option<spectrum::DrawnSteps> {
+    let (step, tick, between) = (time.sim_step(), time.sim_tick(), time.fixed_alpha());
+    let t0 = tick as f64 * step;
+    // The clocks agree (to a microsecond) while the frame is `between` of
+    // the way from the next step to the one after.
+    let on_steps = (time.elapsed() - (t0 + f64::from(between) * step)).abs() < 1e-6;
+    on_steps.then(|| spectrum::DrawnSteps {
+        t0: t0 as f32,
+        t1: ((tick + 1) as f64 * step) as f32,
+        between: between.clamp(0.0, 1.0),
+    })
 }
 
 /// The water entities of this frame (kept, so the update doesn't allocate).
