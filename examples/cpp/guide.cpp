@@ -1396,8 +1396,9 @@ static void sentries_alarm(ponko::ctx& ctx) {         // signals, before think
 static int sentries_act(ponko::ctx& ctx) {            // act
     static const std::uint64_t run = ponko::ai::key("run"), shout = ponko::ai::key("shout");
     int shouts = 0;
-    // Every entity with a brain, its brain and blackboard as the loop visits it.
-    ponko::ai::each(ctx, [&](ponko::entity, ponko::ai::brain_row brain, ponko::ai::blackboard_row) {
+    // Every entity with a brain: its brain as the loop visits it (a typed each takes the
+    // brain and blackboard rows like components).
+    ctx.world().each([&](ponko::ai::brain_row brain) {
         if (brain.started(shout)) {                          // two actions at once
             ++shouts;                                        // play the sound once
             brain.finish(shout, ponko::ai::status::success);
@@ -1410,21 +1411,26 @@ static int sentries_act(ponko::ctx& ctx) {            // act
 // ANCHOR_END: ai_world
 
 // ANCHOR: ai_loop
-struct Eyes { float range; };                        // a component of your own
+struct Eyes { float range; bool spotted; };          // a component of your own
 
-// Senses on all cores: each sentry's blackboard learns how far it sees.
+// Senses on all cores: each sentry's blackboard learns how far it sees, and
+// one that spotted something hears the alarm now, without waiting for the
+// broadcast (brain.wake() would only make it think at once).
 static void sentries_senses(ponko::ctx& ctx) {
-    static const std::uint64_t range = ponko::ai::key("range");
-    ponko::ai::query_par<const Eyes>(ctx, [&](ponko::chunk<const Eyes> chunk, ponko::ai::rows brains) {
-        auto [eyes] = chunk.columns();
-        for (std::size_t i = 0; i < chunk.size(); ++i) brains.blackboard(i).set_num(range, eyes[i].range);
+    static const std::uint64_t range = ponko::ai::key("range"), alarm = ponko::ai::key("alarm");
+    ctx.world().each_par([&](Eyes& eyes, ponko::ai::brain_row brain, ponko::ai::blackboard_row board) {
+        board.set_num(range, eyes.range);
+        if (eyes.spotted) {
+            brain.signal(alarm);
+            eyes.spotted = false;
+        }
     });
 }
 // ANCHOR_END: ai_loop
 
 static void ai_world_guide_runs() {
     std::vector<ponko::entity> sentries;
-    int shouts = 0;
+    int shouts = 0, first_run = -1;
     bool running = false;
     float range = 0;
     ponko::game("sentries", 1, 1)
@@ -1434,13 +1440,15 @@ static void ai_world_guide_runs() {
         .sim_system([&](ponko::ctx& ctx) {
             shouts += sentries_act(ctx);
             running = ponko::ai::doing(ctx, sentries[0], ponko::ai::key("run"));
+            if (running && first_run < 0) first_run = int(ctx.sim_tick());
             range = ponko::ai::num(ctx, sentries[0], ponko::ai::key("range")).value_or(0);
         }, "act")
         .run_headless(40, [&](ponko::ctx& ctx) {
             sentries_setup(ctx, sentries);
-            for (ponko::entity e : sentries) ctx.world().set(e, Eyes{12});
+            for (ponko::entity e : sentries) ctx.world().set(e, Eyes{12, e == sentries[0]});
         });
-    if (shouts != 3 || !running || range != 12) {
+    // The first sentry spotted something at once; the others waited for the alarm at tick 30.
+    if (shouts != 3 || !running || range != 12 || first_run != 0) {
         std::fprintf(stderr, "ai world guide: %d shouts, running %d\n", shouts, running);
         std::abort();
     }
@@ -2326,6 +2334,25 @@ static void monitor(ponko::ctx& ctx, ponko::render_target screen) {
 }
 // ANCHOR_END: monitor
 
+// ANCHOR: debug_map_camera
+/// A debug map: a camera high above draws into `map` (a corner of the
+/// screen, a second window, a tool) and shows the debug drawing, the paths
+/// and sight cones; the window's camera leaves it out, so the player's
+/// view stays clean.
+static void debug_map_camera(ponko::ctx& ctx, ponko::render_target map) {
+    auto main = ctx.camera3d_ex();
+    main.debug_draw = static_cast<std::uint32_t>(ponko::camera_debug_draw::off);
+    ctx.set_camera3d(main);
+
+    ponko::camera3d above = ctx.camera3d();
+    above.position = {0, 120, 0};
+    above.rotation = ponko::quat_from_rotation_x(-1.5707964f);   // looking straight down
+    auto camera = ponko::target_camera_ex_of(ponko::target_camera_of(above, map));
+    camera.debug_draw = static_cast<std::uint32_t>(ponko::camera_debug_draw::on);
+    ctx.set_target_cameras_ex({camera});
+}
+// ANCHOR_END: debug_map_camera
+
 // ANCHOR: terrain_material
 static float hill_height(float x, float z) { return std::sin(x * 0.02f) * 6 + std::cos(z * 0.03f) * 4; }
 
@@ -2568,6 +2595,19 @@ static void the_pond_mirrors_the_camera() {
         auto list = ctx.target_cameras();
         if (list.size() != 1 || list[0].camera.position.y != -5 || list[0].target.width != 32) {
             std::fprintf(stderr, "pond\n");
+            std::abort();
+        }
+    });
+}
+
+static void the_debug_map_shows_what_the_window_leaves_out() {
+    ponko::game("debug map", 64, 64).run_headless(1, [](ponko::ctx& ctx) {
+        debug_map_camera(ctx, ctx.create_render_target(32, 32));
+        const auto map = ctx.target_camera_ex(0);
+        if (ctx.target_cameras().size() != 1 || map.target_camera.camera.position.y != 120 ||
+            map.debug_draw != static_cast<std::uint32_t>(ponko::camera_debug_draw::on) ||
+            ctx.camera3d_ex().debug_draw != static_cast<std::uint32_t>(ponko::camera_debug_draw::off)) {
+            std::fprintf(stderr, "debug map\n");
             std::abort();
         }
     });
@@ -4646,6 +4686,37 @@ static void play_tick(ponko::ctx& ctx, std::uint16_t chat, int& heard) {
 }
 // ANCHOR_END: replication_inputs
 
+// ANCHOR: loopback_link
+// A test on a bad network: 5% lost each way, a frame of delay plus up to
+// 50 ms, so packets overtake each other.
+static std::vector<ponko::net_messages> bad_network() {
+    auto link = ponko::loopback_link_defaults();
+    link.loss = 0.05;
+    link.delay = 0.017;
+    link.jitter = 0.05;
+    link.seed = 1;
+    return ponko::net_messages::loopback(3, link);
+}
+
+// One frame: every endpoint moves on by the same step on its own clock, so
+// the same datagrams are lost and late on every run.
+static void step(std::vector<ponko::net_messages>& nets) {
+    for (auto& net : nets) net.poll_elapsed(1.0 / 60);
+}
+// ANCHOR_END: loopback_link
+
+static void bad_network_runs() {
+    auto nets = bad_network();
+    int connected = 0;
+    for (int frame = 0; frame < 600 && connected < 4; ++frame) {
+        step(nets);
+        for (auto& net : nets)
+            while (auto e = net.next_event()) connected += e->kind == PONKO_MESSAGE_CONNECTED;
+    }
+    // Two clients joined: each sees the host, the host sees both.
+    if (nets.size() != 3 || connected != 4) { std::fprintf(stderr, "bad network guide: %d\n", connected); std::abort(); }
+}
+
 static void replication_inputs_run() {
     auto chat = std::make_shared<std::uint16_t>(0);
     auto heard = std::make_shared<int>(0);
@@ -4855,6 +4926,7 @@ int main() {
     builder_setup_runs_headless();
     replication_runs();
     replication_inputs_run();
+    bad_network_runs();
     baked_runs();
     component_hooks_run();
     sky_kit_runs();
@@ -4972,6 +5044,7 @@ int main() {
     ponko::game("decal guide", 64, 64).run_headless(0, projected_decals);
     the_ripples_run_on_a_render_target();
     the_pond_mirrors_the_camera();
+    the_debug_map_shows_what_the_window_leaves_out();
     the_hills_are_nine_tiles();
     tiles_are_solid_only_near_the_player_and_the_car();
     the_ground_streams_in_and_out();

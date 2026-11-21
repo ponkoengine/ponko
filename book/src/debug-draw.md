@@ -159,7 +159,26 @@ is the rule above. A monitor can show the debug drawing without the smoke
 top-down map can be the only place it shows, with the window's camera's
 `debug_draw` at `Some(false)`. From C and C++ it is the `debug_draw` field
 of `PonkoCamera3DEx` and `PonkoTargetCameraEx`, a `PonkoDebugDraw`
-(`ponko::camera_debug_draw`).
+(`ponko::camera_debug_draw`). A debug map, a camera high above drawing
+into a render target that shows the paths and sight cones while the
+player's view leaves them out:
+
+<div class="lang-pair">
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:debug_map_camera}}
+```
+
+</div>
+<div>
+
+```c
+{{#include ../../examples/cpp/guide.c:debug_map_camera_c}}
+```
+
+</div>
+</div>
 
 In a render target the 3D lines and
 depth-tested labels are drawn against that camera's own depth, and 3D

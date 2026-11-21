@@ -58,6 +58,3 @@ Game::control_method             plugins.md        # the control endpoint's buil
 GamepadBackend                   controllers.md    # native games use the built-in gamepad backend
 FakeGamepads                     controllers.md    # native tests feed ponko_ctx_feed_input (kind 8 connects a pad) and ponko_ctx_feed_gamepad_motion
 Buoyancy::points                 water.md          # C floats boxes and spheres (ponko_ctx_set_buoyancy_box, _sphere) in fresh water, rippling as they cross
-LoopbackLink                     replication.md    # not bound yet: C and C++ tests use the plain loopback (ponko_net_messages_loopback)
-WindowService::safe_area         touch.md          # not bound yet: the engine's touch controls keep to it all the same; C and C++ can't read or feed it
-Ui::set_inside_safe_area         touch.md          # not bound yet: C and C++ UI roots are laid out in the whole window
