@@ -3875,6 +3875,13 @@ typedef struct PonkoNetEvent {
   size_t size;
 } PonkoNetEvent;
 
+typedef struct PonkoSafeInsets {
+  float top;
+  float right;
+  float bottom;
+  float left;
+} PonkoSafeInsets;
+
 typedef struct PonkoSkyKit {
   uint32_t struct_size;
   uint32_t version;
@@ -8559,6 +8566,16 @@ enum PonkoStatus ponko_ctx_ui_closes_screen(struct PonkoCtx *ctx,
                                             uint64_t id,
                                             bool *out_on);
 
+enum PonkoStatus ponko_ctx_ui_set_inside_safe_area(struct PonkoCtx *ctx,
+                                                   uint64_t target,
+                                                   uint64_t id,
+                                                   bool on);
+
+enum PonkoStatus ponko_ctx_ui_inside_safe_area(struct PonkoCtx *ctx,
+                                               uint64_t target,
+                                               uint64_t id,
+                                               bool *out_on);
+
 enum PonkoStatus ponko_ctx_ui_show_hud(struct PonkoCtx *ctx, uint64_t target, uint64_t root);
 
 enum PonkoStatus ponko_ctx_ui_hide_hud(struct PonkoCtx *ctx, uint64_t target, uint64_t root);
@@ -10583,6 +10600,10 @@ enum PonkoStatus ponko_input_scenario_touch_drag(struct PonkoInputScenario *scen
                                                  struct PonkoVec2 start,
                                                  struct PonkoVec2 end);
 
+enum PonkoStatus ponko_input_scenario_safe_insets(struct PonkoInputScenario *scenario,
+                                                  uint64_t tick,
+                                                  struct PonkoSafeInsets insets);
+
 enum PonkoStatus ponko_sky_kit_defaults(struct PonkoSkyKit *kit);
 
 enum PonkoStatus ponko_ctx_sky_kit(struct PonkoCtx *ctx, struct PonkoSkyKit *out_kit);
@@ -10719,6 +10740,13 @@ enum PonkoStatus ponko_ctx_window_save_settings(struct PonkoCtx *ctx);
 enum PonkoStatus ponko_game_restore_window_settings(struct PonkoGame *game, bool on);
 
 enum PonkoStatus ponko_ctx_window_restore_settings(struct PonkoCtx *ctx);
+
+enum PonkoStatus ponko_ctx_window_safe_area(struct PonkoCtx *ctx, struct PonkoRect *area);
+
+enum PonkoStatus ponko_ctx_window_safe_insets(struct PonkoCtx *ctx, struct PonkoSafeInsets *insets);
+
+enum PonkoStatus ponko_ctx_window_feed_safe_insets(struct PonkoCtx *ctx,
+                                                   struct PonkoSafeInsets insets);
 
 enum PonkoStatus ponko_ctx_window_monitor_count(struct PonkoCtx *ctx, size_t *count);
 
