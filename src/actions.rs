@@ -877,11 +877,11 @@ pub enum InputEvent {
         /// Where, in window pixels.
         position: Vec2,
     },
-    /// A desktop trackpad's gesture (a Mac's): [`Gesture::Pinch`](crate::input::Gesture::Pinch)
+    /// A desktop trackpad's gesture (a Mac's): [`Gesture::Pinch`]
     /// with how much it magnified (`0.1`: 10 % larger, negative smaller),
-    /// [`Gesture::Rotate`](crate::input::Gesture::Rotate) with how far it
+    /// [`Gesture::Rotate`] with how far it
     /// turned in radians, clockwise positive, or
-    /// [`Gesture::DoubleTap`](crate::input::Gesture::DoubleTap) (a
+    /// [`Gesture::DoubleTap`] (a
     /// two-finger double tap; `amount` unused). `phase` says whether it
     /// begins, goes on or ends. It feeds the same gestures and amounts as
     /// two fingers on a touch screen, at the mouse pointer; a trackpad

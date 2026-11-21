@@ -139,7 +139,8 @@ fn input_the_ui_took_at_the_frame_start_is_not_taken_again() {
         .headless_frames(true)
         .add(Phase::Input, |ctx: &mut Ctx| {
             // Every frame a bot also presses a key the UI doesn't use.
-            ctx.input.feed(InputEvent::Key(Key::F, ctx.time.frame() % 2 == 0));
+            ctx.input
+                .feed(InputEvent::Key(Key::F, ctx.time.frame().is_multiple_of(2)));
         })
         .add(Phase::Frame, move |ctx: &mut Ctx| clicks_of(ctx, &log))
         .run_headless_scenario(scenario, menu);
