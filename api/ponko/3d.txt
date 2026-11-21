@@ -5864,6 +5864,18 @@ impl core::fmt::Debug for ponko::net::PredictionStats
 pub fn ponko::net::PredictionStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::net::PredictionStats
 impl core::marker::StructuralPartialEq for ponko::net::PredictionStats
+pub struct ponko::net::RawEvent
+pub ponko::net::RawEvent::bytes: alloc::vec::Vec<u8>
+impl ponko::net::RawEvent
+pub fn ponko::net::RawEvent::name(&self) -> &str
+impl core::clone::Clone for ponko::net::RawEvent
+pub fn ponko::net::RawEvent::clone(&self) -> Self
+impl core::cmp::Eq for ponko::net::RawEvent
+impl core::cmp::PartialEq for ponko::net::RawEvent
+pub fn ponko::net::RawEvent::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::net::RawEvent
+pub fn ponko::net::RawEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::net::RawEvent
 pub struct ponko::net::RawField
 pub ponko::net::RawField::name: alloc::string::String
 pub ponko::net::RawField::offset: usize
@@ -5939,13 +5951,17 @@ pub fn ponko::net::Replication::peer_stats(&self, ponko::net::PeerId) -> core::o
 pub fn ponko::net::Replication::position(self, impl core::ops::function::Fn(&ponko_ecs::world::World, ponko_ecs::entity::Entity) -> core::option::Option<glam::f32::vec3::Vec3> + core::marker::Send + core::marker::Sync + 'static) -> Self
 pub fn ponko::net::Replication::predicted<S, I>(self, impl core::ops::function::Fn(&mut S, &I) + core::marker::Send + core::marker::Sync + 'static) -> Self where S: ponko::net::Replicate + ponko_ecs::bundle::Component + core::cmp::PartialEq, I: ponko::net::Replicate
 pub fn ponko::net::Replication::raw_component(self, &str, ponko_ecs::storage::ComponentId, usize, alloc::vec::Vec<ponko::net::RawField>) -> Self
+pub fn ponko::net::Replication::raw_event(self, &str) -> Self
 pub fn ponko::net::Replication::role(&self) -> ponko::net::ReplicationRole
 pub fn ponko::net::Replication::server_tick(&self) -> u64
 pub fn ponko::net::Replication::set_input<I: ponko::net::Replicate>(&mut self, I)
 pub fn ponko::net::Replication::set_viewer(&mut self, ponko::net::PeerId, core::option::Option<glam::f32::vec3::Vec3>)
 pub fn ponko::net::Replication::to_client<T: serde_core::ser::Serialize + 'static>(&mut self, ponko::net::PeerId, &T)
+pub fn ponko::net::Replication::to_client_raw(&mut self, ponko::net::PeerId, &str, &[u8]) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::net::Replication::to_clients<T: serde_core::ser::Serialize + 'static>(&mut self, &T)
+pub fn ponko::net::Replication::to_clients_raw(&mut self, &str, &[u8]) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::net::Replication::to_server<T: serde_core::ser::Serialize + 'static>(&mut self, &T)
+pub fn ponko::net::Replication::to_server_raw(&mut self, &str, &[u8]) -> core::result::Result<(), ponko::error::Error>
 impl core::default::Default for ponko::net::Replication
 pub fn ponko::net::Replication::default() -> Self
 impl core::fmt::Debug for ponko::net::Replication
@@ -6109,6 +6125,7 @@ pub const ponko::net::MAX_INPUT_BYTES: usize
 pub const ponko::net::MAX_INTEREST_TIERS: usize
 pub const ponko::net::MAX_MESSAGE_BYTES: usize
 pub const ponko::net::MAX_PLAYERS: usize
+pub const ponko::net::MAX_RAW_EVENT_BYTES: usize
 pub trait ponko::net::Interpolate: core::marker::Copy
 pub fn ponko::net::Interpolate::extrapolate(&Self, &Self, f32, f32) -> Self
 pub fn ponko::net::Interpolate::interpolate(&Self, &Self, f32, f32) -> Self
