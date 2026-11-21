@@ -3833,6 +3833,11 @@ enum PonkoStatus ponko_ai_key_name(uint64_t key, char *buffer, size_t capacity, 
 
 struct PonkoBehaviorTree *ponko_behavior_tree_new(const char *json);
 
+struct PonkoBehaviorTree *ponko_behavior_tree_new_linked(const char *json,
+                                                         const char *const *names,
+                                                         const struct PonkoBehaviorTree *const *subtrees,
+                                                         size_t count);
+
 void ponko_behavior_tree_free(struct PonkoBehaviorTree *tree);
 
 enum PonkoStatus ponko_behavior_tree_len(const struct PonkoBehaviorTree *tree, size_t *out_len);
@@ -3866,6 +3871,17 @@ enum PonkoStatus ponko_brain_finish(struct PonkoBrain *brain, enum PonkoAiStatus
 enum PonkoStatus ponko_brain_status(const struct PonkoBrain *brain, enum PonkoAiStatus *out_status);
 
 enum PonkoStatus ponko_brain_wake(struct PonkoBrain *brain);
+
+enum PonkoStatus ponko_brain_signal(struct PonkoBrain *brain, uint64_t key);
+
+enum PonkoStatus ponko_brain_set_seed(struct PonkoBrain *brain, uint64_t seed);
+
+enum PonkoStatus ponko_brain_save_json(const struct PonkoBrain *brain,
+                                       char *buffer,
+                                       size_t capacity,
+                                       size_t *out_len);
+
+struct PonkoBrain *ponko_brain_load_json(const char *json);
 
 enum PonkoStatus ponko_brain_set_num(struct PonkoBrain *brain, uint64_t key, float value);
 

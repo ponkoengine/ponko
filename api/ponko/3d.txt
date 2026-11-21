@@ -403,10 +403,13 @@ pub struct ponko::ai::BehaviorTree
 impl ponko::ai::BehaviorTree
 pub fn ponko::ai::BehaviorTree::actions(&self) -> alloc::vec::Vec<ponko::ai::Key>
 pub fn ponko::ai::BehaviorTree::defaults(&self) -> impl core::iter::traits::iterator::Iterator<Item = (ponko::ai::Key, ponko::ai::Value)> + '_
+pub fn ponko::ai::BehaviorTree::fingerprint(&self) -> u64
 pub fn ponko::ai::BehaviorTree::from_json(&str) -> core::result::Result<ponko::ai::BehaviorTree, ponko::error::Error>
 pub fn ponko::ai::BehaviorTree::from_value(&serde_json::value::Value) -> core::result::Result<ponko::ai::BehaviorTree, ponko::error::Error>
 pub fn ponko::ai::BehaviorTree::is_empty(&self) -> bool
 pub fn ponko::ai::BehaviorTree::len(&self) -> usize
+pub fn ponko::ai::BehaviorTree::signals(&self) -> &[ponko::ai::Key]
+pub fn ponko::ai::BehaviorTree::subtrees(&self) -> &[&'static str]
 impl core::fmt::Debug for ponko::ai::BehaviorTree
 pub fn ponko::ai::BehaviorTree::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::ai::BehaviorTrees
@@ -416,6 +419,7 @@ pub fn ponko::ai::BehaviorTrees::insert(&mut self, &str, ponko::ai::BehaviorTree
 pub fn ponko::ai::BehaviorTrees::is_empty(&self) -> bool
 pub fn ponko::ai::BehaviorTrees::len(&self) -> usize
 pub fn ponko::ai::BehaviorTrees::names(&self) -> alloc::vec::Vec<&'static str>
+pub fn ponko::ai::BehaviorTrees::try_insert(&mut self, &str, impl core::convert::Into<alloc::rcs::arc::Arc<ponko::ai::BehaviorTree>>) -> core::result::Result<(), ponko::error::Error>
 impl core::default::Default for ponko::ai::BehaviorTrees
 pub fn ponko::ai::BehaviorTrees::default() -> Self
 pub struct ponko::ai::Blackboard
@@ -459,7 +463,11 @@ pub fn ponko::ai::Brain::new(&str) -> ponko::ai::Brain
 pub fn ponko::ai::Brain::param(&self, ponko::ai::Key) -> core::option::Option<ponko::ai::Value>
 pub fn ponko::ai::Brain::param_num(&self, ponko::ai::Key) -> core::option::Option<f32>
 pub fn ponko::ai::Brain::period(&self) -> u32
+pub fn ponko::ai::Brain::seed(&self) -> u64
 pub fn ponko::ai::Brain::set_period(&mut self, u32)
+pub fn ponko::ai::Brain::set_seed(&mut self, u64)
+pub fn ponko::ai::Brain::signal(&mut self, ponko::ai::Key)
+pub fn ponko::ai::Brain::signal_with(&mut self, ponko::ai::Key, impl core::convert::Into<ponko::ai::Value>)
 pub fn ponko::ai::Brain::started(&self) -> bool
 pub fn ponko::ai::Brain::status(&self) -> ponko::ai::Status
 pub fn ponko::ai::Brain::succeed(&mut self)
@@ -469,6 +477,7 @@ pub fn ponko::ai::Brain::trace(&self) -> alloc::vec::Vec<ponko::ai::TraceLine<'_
 pub fn ponko::ai::Brain::tree(&self) -> &'static str
 pub fn ponko::ai::Brain::wake(&mut self)
 pub fn ponko::ai::Brain::with_period(self, u32) -> ponko::ai::Brain
+pub fn ponko::ai::Brain::with_seed(self, u64) -> ponko::ai::Brain
 impl core::clone::Clone for ponko::ai::Brain
 pub fn ponko::ai::Brain::clone(&self) -> Self
 impl core::fmt::Debug for ponko::ai::Brain
@@ -517,6 +526,22 @@ pub fn ponko::ai::Key::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::R
 impl core::hash::Hash for ponko::ai::Key
 pub fn ponko::ai::Key::hash<H: core::hash::Hasher>(&self, &mut H)
 impl core::marker::Copy for ponko::ai::Key
+pub struct ponko::ai::Signal
+pub ponko::ai::Signal::name: ponko::ai::Key
+pub ponko::ai::Signal::target: core::option::Option<ponko_ecs::entity::Entity>
+pub ponko::ai::Signal::value: core::option::Option<ponko::ai::Value>
+impl ponko::ai::Signal
+pub fn ponko::ai::Signal::broadcast(ponko::ai::Key) -> ponko::ai::Signal
+pub fn ponko::ai::Signal::to(ponko_ecs::entity::Entity, ponko::ai::Key) -> ponko::ai::Signal
+pub fn ponko::ai::Signal::with(self, impl core::convert::Into<ponko::ai::Value>) -> ponko::ai::Signal
+impl core::clone::Clone for ponko::ai::Signal
+pub fn ponko::ai::Signal::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ai::Signal
+pub fn ponko::ai::Signal::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::ai::Signal
+pub fn ponko::ai::Signal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::ai::Signal
+impl core::marker::StructuralPartialEq for ponko::ai::Signal
 pub struct ponko::ai::TraceLine<'a>
 pub ponko::ai::TraceLine::depth: usize
 pub ponko::ai::TraceLine::label: &'a str
@@ -533,6 +558,7 @@ impl<'a> core::marker::StructuralPartialEq for ponko::ai::TraceLine<'a>
 pub fn ponko::ai::add_tree(&mut ponko_ecs::world::World, &str, ponko::ai::BehaviorTree)
 pub fn ponko::ai::best<T>(impl core::iter::traits::collect::IntoIterator<Item = (T, f32)>) -> core::option::Option<(T, f32)>
 pub fn ponko::ai::combine(&[f32]) -> f32
+pub fn ponko::ai::forward<T: 'static>(impl core::ops::function::Fn(&T) -> core::option::Option<ponko::ai::Signal> + 'static) -> impl core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static
 pub fn ponko::ai::lod_period(f32, &[(f32, u32)], u32) -> u32
 pub fn ponko::ai::normalize(f32, f32, f32) -> f32
 pub fn ponko::ai::think(&mut ponko::prelude::Ctx)
