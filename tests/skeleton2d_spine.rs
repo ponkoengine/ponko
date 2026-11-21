@@ -401,11 +401,8 @@ fn every_spine_feature_not_read_warns_naming_it_and_the_file() {
     type Patch = fn(&mut serde_json::Value);
     let cases: &[(&str, Patch)] = &[
         // Whole-file features.
-        ("path constraints", |v| {
-            v["path"] = json!([{ "name": "p", "bones": ["arm"], "target": "arm" }])
-        }),
-        ("physics constraints", |v| {
-            v["physics"] = json!([{ "name": "p", "bone": "arm" }])
+        ("global physics settings (physics constraint \"p\")", |v| {
+            v["physics"] = json!([{ "name": "p", "bone": "arm", "windGlobal": true }])
         }),
         ("event values (event \"step\")", |v| {
             v["events"]["step"] = json!({ "int": 3 })
@@ -445,9 +442,6 @@ fn every_spine_feature_not_read_warns_naming_it_and_the_file() {
         ("bounding box (attachment \"it\"", |v| {
             v["skins"][0]["attachments"]["arm"]["it"] = json!({ "type": "boundingbox", "vertexCount": 0 })
         }),
-        ("path attachment (attachment \"it\"", |v| {
-            v["skins"][0]["attachments"]["arm"]["it"] = json!({ "type": "path" })
-        }),
         ("point attachment (attachment \"it\"", |v| {
             v["skins"][0]["attachments"]["arm"]["it"] = json!({ "type": "point" })
         }),
@@ -474,17 +468,8 @@ fn every_spine_feature_not_read_warns_naming_it_and_the_file() {
             v["ik"][0]["skin"] = json!(true)
         }),
         // Animations.
-        ("IK timelines (animation \"wave\")", |v| {
-            v["animations"]["wave"]["ik"] = json!({ "reach": [{}] })
-        }),
-        ("transform constraint timelines (animation \"wave\")", |v| {
-            v["animations"]["wave"]["transform"] = json!({ "t": [{}] })
-        }),
-        ("path constraint timelines (animation \"wave\")", |v| {
-            v["animations"]["wave"]["path"] = json!({ "p": {} })
-        }),
-        ("physics constraint timelines (animation \"wave\")", |v| {
-            v["animations"]["wave"]["physics"] = json!({ "p": {} })
+        ("IK softness keys (animation \"wave\", IK constraint \"reach\")", |v| {
+            v["animations"]["wave"]["ik"] = json!({ "reach": [{ "softness": 4 }] })
         }),
         ("sequence timelines (animation \"wave\")", |v| {
             v["animations"]["wave"]["attachments"] = json!({ "default": { "arm": { "it": { "sequence": [{}] } } } })
@@ -533,24 +518,6 @@ fn spine_warnings_are_listed_once_each() {
     assert_eq!(
         data.warnings(),
         ["a.json: Spine event values (animation \"wave\") isn't read; the event fires by name only"]
-    );
-}
-
-#[test]
-fn path_and_physics_constraints_warn_with_the_reason_they_are_left_out() {
-    use serde_json::json;
-    let mut v: serde_json::Value = serde_json::from_str(BASE).unwrap();
-    v["path"] = json!([{ "name": "p", "bones": ["arm"], "target": "arm" }]);
-    v["physics"] = json!([{ "name": "p", "bone": "arm" }]);
-    let data = SkeletonData::from_spine_json(&v.to_string(), "a.json").unwrap();
-    let w = data.warnings();
-    assert!(
-        w.iter()
-            .any(|w| w.starts_with("a.json: Spine path constraints isn't read") && w.contains("path attachments"))
-    );
-    assert!(
-        w.iter()
-            .any(|w| w.starts_with("a.json: Spine physics constraints isn't read") && w.contains("simulation"))
     );
 }
 

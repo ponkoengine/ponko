@@ -2140,6 +2140,27 @@ pub unsafe extern "C" fn ponko_ctx_ui_focus(ctx: *mut PonkoCtx, target: u64, out
     boundary(|| unsafe { with_ui(ctx, target, |ui| out(out_id, id_to_c(ui.focus()))) })
 }
 
+/// Writes how many times the tree has been laid out to `out_passes`
+/// (`Ui::layout_passes`). A layout runs only when something changed since
+/// the last one (the window size, the scale, the fonts, a node's layout,
+/// text, font or size, a node added, removed or shown), so a test can check
+/// that a still screen costs no layout: the count stays the same over its
+/// frames.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ui_layout_passes(std::ptr::null_mut(), ponko_ffi::PONKO_UI_SCREEN, &mut 0) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_passes` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_ui_layout_passes(
+    ctx: *mut PonkoCtx,
+    target: u64,
+    out_passes: *mut u64,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe { with_ui(ctx, target, |ui| out(out_passes, ui.layout_passes())) })
+}
+
 /// Sets a user scale on top of the window's DPI scale (clamped to 0.25..8).
 /// Geometry, text and hit testing all use it.
 /// ```

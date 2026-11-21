@@ -1013,15 +1013,32 @@ static void lobby_client(void) {
 }
 
 /* WebRTC endpoints signaled through a lobby client: argument checks, and a
-   non-WebRTC endpoint has no lobby member behind its peers. The native test
-   build has no `webrtc` feature (the calls then fail); the full flow runs in
-   crates/ponko_ffi/tests/rtc.rs with it. */
+   non-WebRTC endpoint has no lobby member behind its peers. The library is
+   built either without the `webrtc` feature (the calls then fail and say so)
+   or with it (CMake option PONKO_WEBRTC, which defines PONKO_WEBRTC: a lobby
+   client that is not in a room still gets an endpoint, which waits for its
+   signaling). The full flow runs in crates/ponko_ffi/tests/rtc.rs. */
 static void rtc_endpoints(void) {
     PonkoNetMessages* endpoint = (PonkoNetMessages*)1;
     CHECK(ponko_net_messages_rtc_host(NULL, NULL, NULL, 4, &endpoint) != PONKO_OK && !endpoint);
     PonkoLobby* lobby = NULL;
     CHECK(ponko_lobby_join("127.0.0.1:9", &lobby) == PONKO_OK);
     CHECK(ponko_net_messages_rtc_join(lobby, 0, NULL, NULL, &endpoint) != PONKO_OK && !endpoint);
+#ifdef PONKO_WEBRTC
+    CHECK(ponko_net_messages_rtc_host(lobby, NULL, "127.0.0.1:0", 4, &endpoint) == PONKO_OK && endpoint);
+    uint32_t hosted = 7;
+    CHECK(ponko_net_messages_rtc_peer(endpoint, 1, &hosted) == PONKO_OK && hosted == 0);
+    ponko_net_messages_free(endpoint);
+    endpoint = NULL;
+    CHECK(ponko_net_messages_rtc_join(lobby, 1, "", "127.0.0.1:0", &endpoint) == PONKO_OK && endpoint);
+    ponko_net_messages_free(endpoint);
+    endpoint = (PonkoNetMessages*)1;
+    CHECK(ponko_net_messages_rtc_host(lobby, NULL, "not an address", 4, &endpoint) != PONKO_OK && !endpoint);
+    CHECK(strstr(ponko_last_error(), "bind is not an address") != NULL);
+#else
+    CHECK(ponko_net_messages_rtc_host(lobby, NULL, NULL, 4, &endpoint) != PONKO_OK && !endpoint);
+    CHECK(strstr(ponko_last_error(), "without the `webrtc` feature") != NULL);
+#endif
     ponko_lobby_free(lobby);
     PonkoNetMessages* pair[2] = {NULL, NULL};
     CHECK(ponko_net_messages_loopback(2, pair) == PONKO_OK);
@@ -2405,6 +2422,21 @@ static void focus_and_hud_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_ctx_ui_set_focus(ctx, s, quit) == PONKO_OK);
     CHECK(ponko_ctx_ui_clear_focus(ctx, s) == PONKO_OK);
     CHECK(ponko_ctx_ui_focus(ctx, s, &focus) == PONKO_OK && focus == PONKO_UI_NONE);
+
+    /* A still screen costs no layout: the count stays over its frames. */
+    PonkoUiInput still = ponko_ui_input_default();
+    CHECK(ponko_ctx_ui_frame(ctx, s, window, &still) == PONKO_OK);
+    uint64_t laid_out = 0, passes = 0;
+    CHECK(ponko_ctx_ui_layout_passes(ctx, s, &laid_out) == PONKO_OK && laid_out >= 1);
+    for (int i = 0; i < 10; ++i) {
+        CHECK(ponko_ctx_ui_set_text(ctx, s, count, "0 / 5") == PONKO_OK); /* the same text */
+        CHECK(ponko_ctx_ui_frame(ctx, s, window, &still) == PONKO_OK);
+    }
+    CHECK(ponko_ctx_ui_layout_passes(ctx, s, &passes) == PONKO_OK && passes == laid_out);
+    CHECK(ponko_ctx_ui_set_text(ctx, s, count, "1 / 5") == PONKO_OK);
+    CHECK(ponko_ctx_ui_frame(ctx, s, window, &still) == PONKO_OK);
+    CHECK(ponko_ctx_ui_layout_passes(ctx, s, &passes) == PONKO_OK && passes == laid_out + 1);
+    CHECK(ponko_ctx_ui_layout_passes(ctx, s, NULL) == PONKO_INVALID_ARGUMENT);
 
     /* Escape closes the menu; the HUD stays. */
     PonkoUiInput escape = ponko_ui_input_default();

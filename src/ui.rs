@@ -4,7 +4,14 @@
 //! focus and queued events ([`Ui`]); who has the pointer and the keyboard
 //! ([`Ui::wants_pointer`], [`Ui::wants_keyboard`]); and the immediate
 //! widgets for debug overlays, `ctx.ui.immediate` ([`UiImmediate`]), with
-//! their [`UiStyle`]. A `d3::UiPanel` (feature `3d`) carries a tree of its own for a
+#![cfg_attr(
+    feature = "3d",
+    doc = " their [`UiStyle`]. A [`d3::UiPanel`](crate::d3::UiPanel) (feature `3d`) carries a tree of its own for a"
+)]
+#![cfg_attr(
+    not(feature = "3d"),
+    doc = " their [`UiStyle`]. A `d3::UiPanel` (feature `3d`) carries a tree of its own for a"
+)]
 //! surface in the 3D world.
 //!
 //! **When to call it.** Build the tree in setup, then change its text,
@@ -149,6 +156,7 @@ mod pixel_snap_tests;
 mod retained;
 mod retained_draw;
 mod retained_ime;
+mod retained_layout;
 mod retained_locale;
 mod rich;
 pub mod touch;

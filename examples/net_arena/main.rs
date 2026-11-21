@@ -8,8 +8,12 @@
 //!   `net_arena join <addr>`         join one, such as `127.0.0.1:7777`
 //!
 //! Add `--bot` to let a bot play instead of the keyboard. Browser clients can
-//! join a server too: it also accepts WebSocket connections on port 7778,
-//! and a web build joins with `NetMessages::join_web("ws://<host>:7778")`.
+//! join a server too: it also accepts WebSocket connections on port 7778
+//! (`server [addr] --web <addr>` picks another), and the web build joins the
+//! server its page names (`?server=ws://host:port`; without it, port 7778 of
+//! the page's own host). The browser smoke test (`web/smoke/replication.mjs`)
+//! runs a dedicated server on free ports and checks that a headless browser
+//! tab joins it and sees replicated orbs move.
 //!
 //! Move with the arrow keys or WASD, dash with Shift, wave with Space.
 //!
@@ -31,27 +35,46 @@ const WEB_PORT: u16 = 7778;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let bot = args.iter().any(|a| a == "--bot");
-    let words: Vec<&str> = args.iter().map(String::as_str).filter(|a| *a != "--bot").collect();
+    let mut words: Vec<&str> = args.iter().map(String::as_str).filter(|a| *a != "--bot").collect();
+    let default_web = format!("0.0.0.0:{WEB_PORT}");
+    let web = match words.iter().position(|a| *a == "--web") {
+        Some(i) if i + 1 < words.len() => {
+            let addr = words[i + 1].to_string();
+            words.drain(i..i + 2);
+            addr
+        }
+        Some(_) => fail("--web needs an address, such as 127.0.0.1:7778"),
+        None => default_web,
+    };
     match words.as_slice() {
         [] => {
-            let net = host(&format!("0.0.0.0:{PORT}"));
+            let net = host(&format!("0.0.0.0:{PORT}"), &web);
             play(build("Orb Arena (host)").messages(net), bot, true);
         }
-        ["server"] => serve(&format!("0.0.0.0:{PORT}")),
-        ["server", addr] => serve(addr),
+        ["server"] => serve(&format!("0.0.0.0:{PORT}"), &web),
+        ["server", addr] => serve(addr, &web),
         ["join", addr] => {
             let net = NetMessages::join(*addr).unwrap_or_else(|e| fail(&format!("can't join {addr}: {e}")));
             play(build("Orb Arena").messages(net), bot, false);
         }
-        _ => fail("usage: net_arena [server [addr] | join <addr>] [--bot]"),
+        _ => fail("usage: net_arena [server [addr] [--web <addr>] | join <addr>] [--bot]"),
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
-    // A browser can't host: it joins the server of the page's machine.
-    let net = NetMessages::join_web(&format!("ws://127.0.0.1:{WEB_PORT}")).expect("a ws:// address");
-    play(build("Orb Arena").messages(net), false, false);
+    // A browser can't host: it joins the server its page names
+    // (`?server=ws://host:port`), or port 7778 of the page's own host.
+    let location = web_sys::window().expect("a page").location();
+    let search = location.search().unwrap_or_default();
+    let named = search
+        .trim_start_matches('?')
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("server="))
+        .map(str::to_string);
+    let server = named.unwrap_or_else(|| format!("ws://{}:{WEB_PORT}", location.hostname().unwrap_or_default()));
+    let net = NetMessages::join_web(&server).expect("a ws:// or wss:// server URL");
+    play(build("Orb Arena").messages(net).system(smoke::publish), false, false);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -60,11 +83,11 @@ fn fail(message: &str) -> ! {
     std::process::exit(2);
 }
 
-/// A UDP endpoint for up to 16 clients, browsers included.
+/// A UDP endpoint for up to 16 clients, browsers included (over WebSocket
+/// on `web`).
 #[cfg(not(target_arch = "wasm32"))]
-fn host(addr: &str) -> NetMessages {
+fn host(addr: &str, web: &str) -> NetMessages {
     let net = NetMessages::host(addr, 16).unwrap_or_else(|e| fail(&format!("can't host on {addr}: {e}")));
-    let web = std::net::SocketAddr::new([0, 0, 0, 0].into(), WEB_PORT);
     net.accept_web(web)
         .unwrap_or_else(|e| fail(&format!("can't accept browsers on {web}: {e}")))
 }
@@ -73,11 +96,14 @@ fn host(addr: &str) -> NetMessages {
 /// A dedicated server: the same game, no window, paced to wall time, with
 /// JSON log lines and a clean stop on Ctrl-C.
 #[cfg(not(target_arch = "wasm32"))]
-fn serve(addr: &str) {
+fn serve(addr: &str, web: &str) {
+    let net = host(addr, web);
+    // Where it listens (port 0 picks a free one): the smoke test reads it.
+    if let (Some(udp), Some(web)) = (net.local_addr(), net.web_addr()) {
+        println!("serving on {udp}, browsers on ws://{web}");
+    }
     let config = ponko::server::ServerConfig::new();
-    build("Orb Arena server")
-        .messages(host(addr))
-        .run_server(config, |_| {});
+    build("Orb Arena server").messages(net).run_server(config, |_| {});
 }
 // ANCHOR_END: dedicated
 
@@ -182,4 +208,56 @@ fn draw(ctx: &mut Ctx) {
         ctx.gfx.draw_text(e, vec2(-h, -h - 24.0), 16.0, Color::RED);
     }
     ctx.world.insert_resource(shout);
+}
+
+/// What the web build shows the browser smoke test (`web/smoke/replication.mjs`):
+/// `<html data-smoke>` with whether it joined, the replicas it holds, and
+/// how far the replicated orbs moved since it first saw each.
+#[cfg(target_arch = "wasm32")]
+mod smoke {
+    use std::collections::BTreeMap;
+
+    use super::game::{Orb, Player};
+    use ponko::net::Replica;
+    use ponko::prelude::*;
+
+    /// Where each orb (by net id) was when it was first seen.
+    #[derive(Default)]
+    struct FirstSeen(BTreeMap<u32, Vec2>);
+
+    pub fn publish(ctx: &mut Ctx) {
+        let mut first = ctx.world.remove_resource::<FirstSeen>().unwrap_or_default();
+        let (mut orbs, mut moved, mut farthest) = (0usize, 0usize, 0.0f32);
+        ctx.world.query::<(&Orb, &Replica)>().for_each(|(orb, replica)| {
+            let from = *first.0.entry(replica.id().index()).or_insert(orb.at);
+            let distance = from.distance(orb.at);
+            orbs += 1;
+            moved += usize::from(distance > 1.0);
+            farthest = farthest.max(distance);
+        });
+        let mut replicas = 0usize;
+        ctx.world.query::<&Replica>().for_each(|_| replicas += 1);
+        let mut mine = false;
+        ctx.world
+            .query::<(&Player, &Replica)>()
+            .for_each(|(_, r)| mine |= r.is_mine());
+        ctx.world.insert_resource(first);
+        let state = serde_json::json!({
+            "fixture": "net_arena",
+            "ticks": ctx.time.sim_tick(),
+            "joined": ctx.net.replication.is_joined(),
+            "error": ctx.net.replication.error(),
+            "replicas": replicas,
+            "orbs": orbs,
+            "moved": moved,
+            "farthest": farthest,
+            "mine": mine,
+        });
+        if let Some(root) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.document_element())
+        {
+            let _ = root.set_attribute("data-smoke", &state.to_string());
+        }
+    }
 }

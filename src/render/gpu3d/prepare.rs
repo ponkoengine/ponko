@@ -1209,6 +1209,8 @@ impl Renderer3D {
             theirs.sun_view_proj[0] = g.sun_view_proj.to_cols_array_2d();
             theirs.cascade_texel[0] = g.sun_texel;
             theirs.sky_kit[5][0] = 0.0;
+            // Tells `gi_light` it draws a probe view (see gi.wgsl).
+            theirs.gi[0][0] = 1.0;
             for (i, view_proj) in g.face_view_proj.iter().enumerate() {
                 let probe = g.updates[i / 6].position;
                 theirs.view_proj = view_proj.to_cols_array_2d();

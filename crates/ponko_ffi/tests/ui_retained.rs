@@ -446,6 +446,58 @@ fn screens_stack_modal_and_pop() {
     run(screens_stack_and_pop);
 }
 
+unsafe fn passes(ctx: Ctx) -> u64 {
+    let mut n = u64::MAX;
+    assert_eq!(
+        unsafe { ponko_ctx_ui_layout_passes(ctx, PONKO_UI_SCREEN, &mut n) },
+        PONKO_OK
+    );
+    n
+}
+
+unsafe fn still_screen_costs_no_layout(ctx: Ctx) {
+    unsafe {
+        let root = panel(ctx, PONKO_UI_NONE, &size(400.0, 300.0));
+        let score = id_of(|out| {
+            ponko_ctx_ui_add_label(
+                ctx,
+                PONKO_UI_SCREEN,
+                root,
+                c"Score: 0".as_ptr(),
+                &size(200.0, 30.0),
+                out,
+            )
+        });
+        assert_eq!(ponko_ctx_ui_show_hud(ctx, PONKO_UI_SCREEN, root), PONKO_OK);
+        frame(ctx, ponko_ui_input_default());
+        let laid_out = passes(ctx);
+        assert!(laid_out >= 1, "the first frame lays the tree out");
+        for _ in 0..10 {
+            // A HUD system writing the text the label already shows.
+            assert_eq!(
+                ponko_ctx_ui_set_text(ctx, PONKO_UI_SCREEN, score, c"Score: 0".as_ptr()),
+                PONKO_OK
+            );
+            frame(ctx, ponko_ui_input_default());
+        }
+        assert_eq!(passes(ctx), laid_out, "still frames cost no layout");
+        assert_eq!(
+            ponko_ctx_ui_set_text(ctx, PONKO_UI_SCREEN, score, c"Score: 10".as_ptr()),
+            PONKO_OK
+        );
+        frame(ctx, ponko_ui_input_default());
+        assert_eq!(passes(ctx), laid_out + 1, "a changed text lays out once");
+        assert_eq!(
+            ponko_ctx_ui_layout_passes(ctx, PONKO_UI_SCREEN, null_mut()),
+            PONKO_INVALID_ARGUMENT
+        );
+    }
+}
+#[test]
+fn a_still_screen_costs_no_layout() {
+    run(still_screen_costs_no_layout);
+}
+
 unsafe fn screen_modes(ctx: Ctx) {
     unsafe {
         use PonkoUiScreenMode::*;

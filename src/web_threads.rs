@@ -162,6 +162,9 @@ fn stop_if_failed() {
 /// memory a worker still uses.
 fn stop(why: &str) -> ! {
     web_sys::console::error_1(&JsValue::from_str(&format!("ponko: {why}; the game stops")));
+    // The page shows it (on a worker, where no page callback lives, this
+    // does nothing).
+    crate::web::report_failure(crate::web::thread_stopped(why));
     std::process::abort()
 }
 

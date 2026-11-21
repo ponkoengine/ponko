@@ -322,3 +322,30 @@ fn bad_arguments_are_errors_not_crashes() {
         ponko_lobby_free(null_mut());
     }
 }
+
+/// Without the `webrtc` feature the WebRTC calls fail and name it (with the
+/// feature, `tests/rtc.rs` runs the flow). The native test programs run both
+/// ways: `examples/cpp/CMakeLists.txt`, option `PONKO_WEBRTC`.
+#[cfg(not(feature = "webrtc"))]
+#[test]
+fn without_the_webrtc_feature_the_calls_name_it() {
+    unsafe {
+        let mut lobby = null_mut();
+        assert_eq!(ponko_lobby_join(c"127.0.0.1:9".as_ptr(), &mut lobby), PONKO_OK);
+        let mut endpoint = std::ptr::dangling_mut::<PonkoNetMessages>();
+        assert_eq!(
+            ponko_net_messages_rtc_host(lobby, null(), null(), 4, &mut endpoint),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert!(endpoint.is_null());
+        let message = CStr::from_ptr(ponko_last_error()).to_string_lossy().into_owned();
+        assert!(message.contains("without the `webrtc` feature"), "{message}");
+        endpoint = std::ptr::dangling_mut::<PonkoNetMessages>();
+        assert_eq!(
+            ponko_net_messages_rtc_join(lobby, 1, null(), null(), &mut endpoint),
+            PONKO_INVALID_ARGUMENT
+        );
+        assert!(endpoint.is_null());
+        ponko_lobby_free(lobby);
+    }
+}

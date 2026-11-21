@@ -1,0 +1,16 @@
+# Cargo features that may lack a check line in .github/workflows/ci.yml, one
+# per line: `crate/feature kind reason`, kind being clippy, test or doc.
+# scripts/check-feature-coverage.py reads this: it fails for a feature with
+# no line and no entry here, and for an entry that is not needed any more.
+# Prefer a line in ci.yml; an entry is for a feature with nothing a cargo
+# test could check, and the reason says what checks it instead.
+
+ponko/control-env test Only lets a release build honor PONKO_CONTROL=1; the native job builds the C library with it and drives a release C++ game over the control endpoint (the validation bundle step)
+ponko_ffi/control-env test As ponko/control-env: the native job builds the C library with it for the validation bundle
+ponko_bench/render test Benchmark drivers are not tests (AGENTS.md); the unit tests the crate has run in cargo test --workspace, and the clippy lines build every driver
+ponko_bench/audio test As ponko_bench/render: the driver needs an audio device, clippy builds it
+ponko_bench/text-shaping test As ponko_bench/render
+ponko_bench/video test As ponko_bench/render: the driver needs a clip, clippy builds it
+
+# Browser runners (web/smoke, web/gallery) that CI does not run, `runner <path> <reason>`.
+runner web/smoke/first-load.mjs A measurement tool for the first-load cost of a build (requests, bytes, time on an emulated network), not a pass or fail check

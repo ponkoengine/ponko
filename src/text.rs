@@ -222,6 +222,12 @@ pub(crate) struct Text {
     /// Shaping state: font data, shaped strings, glyphs by index.
     #[cfg(feature = "text-shaping")]
     shaper: shape::Shaper,
+    /// Counts the changes that can change how text measures (fonts added,
+    /// replaced or freed, fallback chains, shaping): the UI lays out again
+    /// when it moves ([`Text::revision`]).
+    revision: u64,
+    /// Counts the times the glyph atlas was emptied ([`Text::atlas_resets`]).
+    atlas_resets: u64,
 }
 
 /// The bytes of a font file as a font; not one this engine reads is
@@ -261,7 +267,15 @@ impl Text {
             shaping: TextShaping::Auto,
             #[cfg(feature = "text-shaping")]
             shaper: shape::Shaper::default(),
+            revision: 0,
+            atlas_resets: 0,
         }
+    }
+
+    /// Moves on whenever text may measure differently than before: a font
+    /// added, replaced or freed, a fallback chain or the shaping changed.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub const ATLAS_SIZE: u32 = ATLAS;
@@ -316,6 +330,7 @@ impl Text {
             chain.clear();
         }
         self.live.insert(id);
+        self.revision += 1;
         #[cfg(feature = "text-shaping")]
         self.shaper.set_bytes(id, bytes, index);
         Ok(Font(id))
@@ -334,6 +349,7 @@ impl Text {
         }
         self.fallbacks[i].clear();
         self.fallbacks[i].extend(fallbacks.iter().copied().filter(|&f| f != font));
+        self.revision += 1;
         #[cfg(feature = "text-shaping")]
         self.shaper.forget_shapes();
     }
@@ -353,6 +369,9 @@ impl Text {
 
     /// Sets which strings are shaped.
     pub fn set_shaping(&mut self, shaping: TextShaping) {
+        if self.shaping != shaping {
+            self.revision += 1;
+        }
         self.shaping = shaping;
     }
 
@@ -405,6 +424,7 @@ impl Text {
             chain.clear();
         }
         self.ids.release(font.0);
+        self.revision += 1;
         self.glyphs.retain(|k, _| k.0 != font.0);
         self.sdf.glyphs.retain(|k, _| k.0 != font.0);
         #[cfg(feature = "text-shaping")]
@@ -429,6 +449,7 @@ impl Text {
             return Ok(());
         }
         self.fonts[(font.0 & crate::handle::INDEX_MASK) as usize] = Some(new);
+        self.revision += 1;
         self.glyphs.retain(|k, _| k.0 != font.0);
         self.sdf.glyphs.retain(|k, _| k.0 != font.0);
         #[cfg(feature = "text-shaping")]
@@ -468,7 +489,14 @@ impl Text {
         self.shaper.glyphs.clear();
         self.cursor = [PAD, PAD];
         self.row = 0;
+        self.atlas_resets += 1;
         true
+    }
+
+    /// How many times [`begin_frame`](Self::begin_frame) emptied the glyph
+    /// atlas: glyphs drawn before it moves may sit elsewhere in it now.
+    pub fn atlas_resets(&self) -> u64 {
+        self.atlas_resets
     }
 
     /// Lays out `text` at `px` physical pixels per line. With `rasterize`,
@@ -914,9 +942,12 @@ mod tests {
         let many: String = ('A'..='Z').chain('a'..='z').collect();
         t.layout(&many, Font::DEFAULT, 400.0, true);
         assert!(t.full);
+        assert_eq!(t.atlas_resets(), 0);
         assert!(t.begin_frame());
         assert!(!t.full && t.glyphs.is_empty());
+        assert_eq!(t.atlas_resets(), 1, "what was drawn before must be drawn again");
         assert!(!t.begin_frame());
+        assert_eq!(t.atlas_resets(), 1);
     }
 
     #[test]

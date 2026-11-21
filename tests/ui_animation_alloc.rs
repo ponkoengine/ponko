@@ -1,9 +1,10 @@
 //! UI animations add no allocations to a frame: state transitions, screens
 //! coming on and going off, looping timelines and layout tweens all run on
 //! storage that keeps its capacity. (Taffy's flexbox layout allocates a few
-//! scratch vectors for each root it lays out, animated or not; the test
-//! compares the same frames with and without animation, so that cost is in
-//! both counts.)
+//! scratch vectors for each root it lays out, animated or not, and a frame
+//! where nothing changed lays out nothing; the test compares the same frames
+//! with and without animation, with as many layouts, so that cost is in both
+//! counts.)
 
 use ponko::prelude::*;
 use ponko::skeleton2d::Bezier;
@@ -52,9 +53,11 @@ const VIEW: Vec2 = Vec2::new(800.0, 600.0);
 /// (state changes, interrupted ones too), the dialog is pushed and popped,
 /// a timeline is played again. With `animated`, every kind of animation is
 /// on: theme transitions with a press scale, screen transitions, ping-pong
-/// timelines of scale and background on ten buttons and a looping width.
-/// Returns the allocations of the last five seconds.
-fn steady_allocations(animated: bool) -> u64 {
+/// timelines of scale and background on ten buttons and a looping width;
+/// without, the game sets that width itself every frame, so both lay out
+/// as often. Returns the allocations and the layouts of the last five
+/// seconds.
+fn steady_allocations(animated: bool) -> (u64, u64) {
     let mut ui = Ui::default();
     if animated {
         ui.set_theme(UiTheme {
@@ -105,6 +108,11 @@ fn steady_allocations(animated: bool) -> u64 {
                 dt: 1.0 / 60.0,
                 ..Default::default()
             };
+            if !animated {
+                // What the looping width tween does, by hand.
+                let width = 200.0 + (n % 60) as f32;
+                ui.set_layout(buttons[20], UiLayout::row(30.0).width(width));
+            }
             ui.frame(VIEW, &input);
             for _ in ui.events() {}
             match n % 30 {
@@ -124,17 +132,20 @@ fn steady_allocations(animated: bool) -> u64 {
     }
     assert_eq!(ui.is_animating(buttons[0]), animated);
     assert_eq!(ui.is_animating(buttons[20]), animated);
-    allocations(|| {
+    let layouts = ui.layout_passes();
+    let allocated = allocations(|| {
         for s in 3..8 {
             second(&mut ui, s * 60);
         }
-    })
+    });
+    (allocated, ui.layout_passes() - layouts)
 }
 
 #[test]
 fn animated_frames_allocate_no_more_than_still_ones() {
-    let still = steady_allocations(false);
-    let animated = steady_allocations(true);
+    let (still, still_layouts) = steady_allocations(false);
+    let (animated, animated_layouts) = steady_allocations(true);
+    assert_eq!(animated_layouts, still_layouts, "both lay out as often");
     assert_eq!(
         animated, still,
         "five seconds of animated frames allocated {animated} times, the same frames without animation {still}"

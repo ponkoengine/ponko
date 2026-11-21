@@ -140,6 +140,18 @@ pub(crate) struct Batch {
     pub end: u32,
 }
 
+/// A sprite as it was pushed on a [`DrawList`], with its clip and style:
+/// kept to push it again ([`DrawList::replay`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Recorded {
+    instance: SpriteInstance,
+    texture: u32,
+    z: f32,
+    /// Blend mode, material and the [`MESH`] bit.
+    style: u32,
+    clip: Option<crate::camera::Rect>,
+}
+
 /// One world-space UI panel's drawing this frame: drawn into a render
 /// target before the 3D frame that shows it.
 #[derive(Default)]
@@ -381,6 +393,42 @@ impl DrawList {
         self.instances.len()
     }
 
+    /// Copies the sprites pushed from index `start` on into `out` (emptied
+    /// first), each with the clip and style it was pushed with, so that
+    /// [`replay`](Self::replay) can push them again in a later frame.
+    pub fn record_from(&self, start: usize, out: &mut Vec<Recorded>) {
+        out.clear();
+        out.extend((start..self.instances.len()).map(|i| {
+            let state = self.states[i];
+            let (clip, style) = if state & CLIPPED == 0 {
+                (None, state)
+            } else {
+                let (clip, style, _) = self.clipped[(state & !CLIPPED) as usize];
+                (clip, style)
+            };
+            Recorded {
+                instance: self.instances[i],
+                texture: self.textures[i],
+                z: self.zs[i],
+                style,
+                clip,
+            }
+        }));
+    }
+
+    /// Pushes `sprites` (from [`record_from`](Self::record_from)) as they
+    /// were pushed, on the render layers sprites are pushed on now. The
+    /// list ends up as if they had been drawn again; the clip set for the
+    /// sprites pushed next stays as it was.
+    pub fn replay(&mut self, sprites: &[Recorded]) {
+        let clip = self.clip;
+        for s in sprites {
+            self.clip = s.clip;
+            self.push_styled(s.texture, s.style, s.z, s.instance);
+        }
+        self.clip = clip;
+    }
+
     /// Moves the sprites pushed from index `start` on: each position goes
     /// to `pos * scale + shift` and each size is scaled by `scale` (an
     /// animated UI node's offset and size), and their alpha is multiplied
@@ -495,6 +543,44 @@ mod tests {
 
     fn inst(tag: f32) -> SpriteInstance {
         SpriteInstance::new([tag, 0.0], [1.0, 1.0], [0.5, 0.5], 0.0, [255; 4])
+    }
+
+    /// Pushes a few sprites with clips, styles, meshes and z values.
+    fn mixed(list: &mut DrawList) {
+        let clip = crate::camera::Rect::new(10.0, 20.0, 30.0, 40.0);
+        list.push(1, 2.0, inst(1.0));
+        list.set_clip(Some(clip));
+        list.push_styled(2, 7, 1.0, inst(2.0));
+        list.push_mesh(3, 5, 1.5, &[inst(3.0), inst(4.0), inst(5.0)]);
+        list.set_clip(None);
+        list.push(1, 0.5, inst(6.0));
+    }
+
+    #[test]
+    fn replayed_sprites_draw_as_pushed() {
+        let mut drawn = DrawList::default();
+        drawn.push(9, 0.0, inst(0.0));
+        let start = drawn.len();
+        mixed(&mut drawn);
+        drawn.push(9, 3.0, inst(7.0));
+        let mut recorded = Vec::new();
+        drawn.record_from(start, &mut recorded);
+        assert_eq!(recorded.len(), 7, "everything pushed from `start` on");
+
+        let mut again = DrawList::default();
+        again.push(9, 0.0, inst(0.0));
+        again.set_clip(Some(crate::camera::Rect::new(0.0, 0.0, 1.0, 1.0)));
+        again.replay(&recorded);
+        assert_eq!(
+            again.clip(),
+            Some(crate::camera::Rect::new(0.0, 0.0, 1.0, 1.0)),
+            "the clip stays"
+        );
+        let (sprites, batches) = drawn.finish();
+        let (sprites, batches) = (sprites.to_vec(), batches.to_vec());
+        let (replayed, replayed_batches) = again.finish();
+        assert_eq!(replayed, &sprites[..]);
+        assert_eq!(replayed_batches, &batches[..]);
     }
 
     #[test]

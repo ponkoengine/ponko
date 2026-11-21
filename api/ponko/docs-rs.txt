@@ -403,10 +403,13 @@ pub struct ponko::ai::BehaviorTree
 impl ponko::ai::BehaviorTree
 pub fn ponko::ai::BehaviorTree::actions(&self) -> alloc::vec::Vec<ponko::ai::Key>
 pub fn ponko::ai::BehaviorTree::defaults(&self) -> impl core::iter::traits::iterator::Iterator<Item = (ponko::ai::Key, ponko::ai::Value)> + '_
+pub fn ponko::ai::BehaviorTree::fingerprint(&self) -> u64
 pub fn ponko::ai::BehaviorTree::from_json(&str) -> core::result::Result<ponko::ai::BehaviorTree, ponko::error::Error>
 pub fn ponko::ai::BehaviorTree::from_value(&serde_json::value::Value) -> core::result::Result<ponko::ai::BehaviorTree, ponko::error::Error>
 pub fn ponko::ai::BehaviorTree::is_empty(&self) -> bool
 pub fn ponko::ai::BehaviorTree::len(&self) -> usize
+pub fn ponko::ai::BehaviorTree::signals(&self) -> &[ponko::ai::Key]
+pub fn ponko::ai::BehaviorTree::subtrees(&self) -> &[&'static str]
 impl core::fmt::Debug for ponko::ai::BehaviorTree
 pub fn ponko::ai::BehaviorTree::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::ai::BehaviorTrees
@@ -416,6 +419,7 @@ pub fn ponko::ai::BehaviorTrees::insert(&mut self, &str, ponko::ai::BehaviorTree
 pub fn ponko::ai::BehaviorTrees::is_empty(&self) -> bool
 pub fn ponko::ai::BehaviorTrees::len(&self) -> usize
 pub fn ponko::ai::BehaviorTrees::names(&self) -> alloc::vec::Vec<&'static str>
+pub fn ponko::ai::BehaviorTrees::try_insert(&mut self, &str, impl core::convert::Into<alloc::rcs::arc::Arc<ponko::ai::BehaviorTree>>) -> core::result::Result<(), ponko::error::Error>
 impl core::default::Default for ponko::ai::BehaviorTrees
 pub fn ponko::ai::BehaviorTrees::default() -> Self
 pub struct ponko::ai::Blackboard
@@ -459,7 +463,11 @@ pub fn ponko::ai::Brain::new(&str) -> ponko::ai::Brain
 pub fn ponko::ai::Brain::param(&self, ponko::ai::Key) -> core::option::Option<ponko::ai::Value>
 pub fn ponko::ai::Brain::param_num(&self, ponko::ai::Key) -> core::option::Option<f32>
 pub fn ponko::ai::Brain::period(&self) -> u32
+pub fn ponko::ai::Brain::seed(&self) -> u64
 pub fn ponko::ai::Brain::set_period(&mut self, u32)
+pub fn ponko::ai::Brain::set_seed(&mut self, u64)
+pub fn ponko::ai::Brain::signal(&mut self, ponko::ai::Key)
+pub fn ponko::ai::Brain::signal_with(&mut self, ponko::ai::Key, impl core::convert::Into<ponko::ai::Value>)
 pub fn ponko::ai::Brain::started(&self) -> bool
 pub fn ponko::ai::Brain::status(&self) -> ponko::ai::Status
 pub fn ponko::ai::Brain::succeed(&mut self)
@@ -469,6 +477,7 @@ pub fn ponko::ai::Brain::trace(&self) -> alloc::vec::Vec<ponko::ai::TraceLine<'_
 pub fn ponko::ai::Brain::tree(&self) -> &'static str
 pub fn ponko::ai::Brain::wake(&mut self)
 pub fn ponko::ai::Brain::with_period(self, u32) -> ponko::ai::Brain
+pub fn ponko::ai::Brain::with_seed(self, u64) -> ponko::ai::Brain
 impl core::clone::Clone for ponko::ai::Brain
 pub fn ponko::ai::Brain::clone(&self) -> Self
 impl core::fmt::Debug for ponko::ai::Brain
@@ -517,6 +526,22 @@ pub fn ponko::ai::Key::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::R
 impl core::hash::Hash for ponko::ai::Key
 pub fn ponko::ai::Key::hash<H: core::hash::Hasher>(&self, &mut H)
 impl core::marker::Copy for ponko::ai::Key
+pub struct ponko::ai::Signal
+pub ponko::ai::Signal::name: ponko::ai::Key
+pub ponko::ai::Signal::target: core::option::Option<ponko_ecs::entity::Entity>
+pub ponko::ai::Signal::value: core::option::Option<ponko::ai::Value>
+impl ponko::ai::Signal
+pub fn ponko::ai::Signal::broadcast(ponko::ai::Key) -> ponko::ai::Signal
+pub fn ponko::ai::Signal::to(ponko_ecs::entity::Entity, ponko::ai::Key) -> ponko::ai::Signal
+pub fn ponko::ai::Signal::with(self, impl core::convert::Into<ponko::ai::Value>) -> ponko::ai::Signal
+impl core::clone::Clone for ponko::ai::Signal
+pub fn ponko::ai::Signal::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ai::Signal
+pub fn ponko::ai::Signal::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::ai::Signal
+pub fn ponko::ai::Signal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::ai::Signal
+impl core::marker::StructuralPartialEq for ponko::ai::Signal
 pub struct ponko::ai::TraceLine<'a>
 pub ponko::ai::TraceLine::depth: usize
 pub ponko::ai::TraceLine::label: &'a str
@@ -533,6 +558,7 @@ impl<'a> core::marker::StructuralPartialEq for ponko::ai::TraceLine<'a>
 pub fn ponko::ai::add_tree(&mut ponko_ecs::world::World, &str, ponko::ai::BehaviorTree)
 pub fn ponko::ai::best<T>(impl core::iter::traits::collect::IntoIterator<Item = (T, f32)>) -> core::option::Option<(T, f32)>
 pub fn ponko::ai::combine(&[f32]) -> f32
+pub fn ponko::ai::forward<T: 'static>(impl core::ops::function::Fn(&T) -> core::option::Option<ponko::ai::Signal> + 'static) -> impl core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static
 pub fn ponko::ai::lod_period(f32, &[(f32, u32)], u32) -> u32
 pub fn ponko::ai::normalize(f32, f32, f32) -> f32
 pub fn ponko::ai::think(&mut ponko::prelude::Ctx)
@@ -1152,7 +1178,7 @@ pub fn ponko::assets::AssetGroup::paths(&self) -> impl core::iter::traits::itera
 pub fn ponko::assets::AssetGroup::sound(self, &str) -> Self
 pub fn ponko::assets::AssetGroup::streamed_texture(self, &str) -> Self
 pub fn ponko::assets::AssetGroup::texture(self, &str) -> Self
-pub fn ponko::assets::AssetGroup::with<T: core::marker::Send + 'static>(self, &str, impl core::ops::function::FnOnce(&[u8]) -> core::result::Result<T, ponko::error::Error> + core::marker::Send + 'static) -> Self
+pub fn ponko::assets::AssetGroup::with<T: core::marker::Send + 'static>(self, &str, impl core::ops::function::Fn(&[u8]) -> core::result::Result<T, ponko::error::Error> + core::marker::Send + core::marker::Sync + 'static) -> Self
 impl core::fmt::Debug for ponko::assets::AssetGroup
 pub fn ponko::assets::AssetGroup::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::assets::Assets
@@ -1180,6 +1206,7 @@ pub fn ponko::assets::Assets::group_progress(&self, ponko::assets::GroupId) -> p
 pub fn ponko::assets::Assets::group_state(&self, ponko::assets::GroupId) -> ponko::assets::GroupState
 pub fn ponko::assets::Assets::group_stats(&self) -> ponko::assets::GroupStats
 pub fn ponko::assets::Assets::groups(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = ponko::assets::GroupId> + '_
+pub fn ponko::assets::Assets::restart_group(&mut self, ponko::assets::GroupId)
 pub fn ponko::assets::Assets::set_group_frame_budget(&mut self, f32)
 pub fn ponko::assets::Assets::start_group(&mut self, ponko::assets::AssetGroup) -> ponko::assets::GroupId
 pub fn ponko::assets::Assets::take_group_value<T: 'static>(&mut self, ponko::assets::GroupId, &str) -> core::option::Option<T>
@@ -1212,9 +1239,11 @@ pub ponko::assets::GroupProgress::bytes_known: bool
 pub ponko::assets::GroupProgress::bytes_loaded: u64
 pub ponko::assets::GroupProgress::bytes_read: u64
 pub ponko::assets::GroupProgress::bytes_total: u64
+pub ponko::assets::GroupProgress::bytes_uploaded: u64
 pub ponko::assets::GroupProgress::loaded: usize
 pub ponko::assets::GroupProgress::state: ponko::assets::GroupState
 pub ponko::assets::GroupProgress::total: usize
+pub ponko::assets::GroupProgress::upload_ms: f32
 impl ponko::assets::GroupProgress
 pub fn ponko::assets::GroupProgress::fraction(&self) -> f32
 impl core::clone::Clone for ponko::assets::GroupProgress
@@ -1229,9 +1258,13 @@ impl core::marker::StructuralPartialEq for ponko::assets::GroupProgress
 pub ponko::assets::GroupStats::frame_budget_ms: f32
 pub ponko::assets::GroupStats::frame_bytes: u64
 pub ponko::assets::GroupStats::max_step_ms: f32
+pub ponko::assets::GroupStats::max_upload_ms: f32
 pub ponko::assets::GroupStats::over_budget: u64
 pub ponko::assets::GroupStats::step_ms: f32
 pub ponko::assets::GroupStats::steps: u64
+pub ponko::assets::GroupStats::total_upload_bytes: u64
+pub ponko::assets::GroupStats::total_upload_ms: f64
+pub ponko::assets::GroupStats::upload_ms: f32
 impl core::clone::Clone for ponko::assets::GroupStats
 pub fn ponko::assets::GroupStats::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko::assets::GroupStats
@@ -10624,6 +10657,7 @@ pub fn ponko::assets::Assets::group_progress(&self, ponko::assets::GroupId) -> p
 pub fn ponko::assets::Assets::group_state(&self, ponko::assets::GroupId) -> ponko::assets::GroupState
 pub fn ponko::assets::Assets::group_stats(&self) -> ponko::assets::GroupStats
 pub fn ponko::assets::Assets::groups(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = ponko::assets::GroupId> + '_
+pub fn ponko::assets::Assets::restart_group(&mut self, ponko::assets::GroupId)
 pub fn ponko::assets::Assets::set_group_frame_budget(&mut self, f32)
 pub fn ponko::assets::Assets::start_group(&mut self, ponko::assets::AssetGroup) -> ponko::assets::GroupId
 pub fn ponko::assets::Assets::take_group_value<T: 'static>(&mut self, ponko::assets::GroupId, &str) -> core::option::Option<T>
@@ -11463,6 +11497,8 @@ pub fn ponko::prelude::Ui::set_inline_font(&mut self, &str, ponko::text::Font)
 pub fn ponko::prelude::Ui::set_inline_image(&mut self, &str, ponko::texture::Texture)
 pub fn ponko::prelude::Ui::set_rich(&mut self, ponko::prelude::UiId, bool)
 impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::layout_passes(&self) -> u64
+impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::localize(&mut self, &ponko::locale::Strings)
 pub fn ponko::prelude::Ui::set_text_key(&mut self, ponko::prelude::UiId, &str, &[(&str, ponko::locale::Arg)])
 pub fn ponko::prelude::Ui::text_key(&self, ponko::prelude::UiId) -> core::option::Option<&str>
@@ -11890,6 +11926,22 @@ impl core::default::Default for ponko::reflect::SaveMigrations
 pub fn ponko::reflect::SaveMigrations::default() -> Self
 impl core::fmt::Debug for ponko::reflect::SaveMigrations
 pub fn ponko::reflect::SaveMigrations::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct ponko::reflect::WorldHashParts
+pub ponko::reflect::WorldHashParts::parts: alloc::vec::Vec<(alloc::string::String, u64)>
+pub ponko::reflect::WorldHashParts::total: u64
+impl ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::differing(&self, &ponko::reflect::WorldHashParts) -> alloc::vec::Vec<alloc::string::String>
+pub fn ponko::reflect::WorldHashParts::of(&ponko_ecs::world::World) -> Self
+impl core::clone::Clone for ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::clone(&self) -> Self
+impl core::cmp::Eq for ponko::reflect::WorldHashParts
+impl core::cmp::PartialEq for ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::default() -> Self
+impl core::fmt::Debug for ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::reflect::WorldHashParts
 pub trait ponko::reflect::WorldReflect
 pub fn ponko::reflect::WorldReflect::describe_component(&mut self, &str, ponko::reflect::ValueSchema) -> core::result::Result<(), ponko::reflect::ReflectError>
 pub fn ponko::reflect::WorldReflect::describe_resource(&mut self, &str, ponko::reflect::ValueSchema) -> core::result::Result<(), ponko::reflect::ReflectError>
@@ -14196,6 +14248,7 @@ pub mod ponko::skeleton2d
 #[non_exhaustive] pub enum ponko::skeleton2d::Attachment
 pub ponko::skeleton2d::Attachment::Clipping(ponko::skeleton2d::ClippingMask)
 pub ponko::skeleton2d::Attachment::Mesh(ponko::skeleton2d::SkinnedMesh)
+pub ponko::skeleton2d::Attachment::Path(ponko::skeleton2d::PathShape)
 pub ponko::skeleton2d::Attachment::Sprite(ponko::skeleton2d::SpritePart)
 impl ponko::skeleton2d::Attachment
 pub fn ponko::skeleton2d::Attachment::texture(&self) -> ponko::texture::Texture
@@ -14205,6 +14258,8 @@ impl core::cmp::PartialEq for ponko::skeleton2d::Attachment
 pub fn ponko::skeleton2d::Attachment::eq(&self, &Self) -> bool
 impl core::convert::From<ponko::skeleton2d::ClippingMask> for ponko::skeleton2d::Attachment
 pub fn ponko::skeleton2d::Attachment::from(ponko::skeleton2d::ClippingMask) -> Self
+impl core::convert::From<ponko::skeleton2d::PathShape> for ponko::skeleton2d::Attachment
+pub fn ponko::skeleton2d::Attachment::from(ponko::skeleton2d::PathShape) -> Self
 impl core::convert::From<ponko::skeleton2d::SkinnedMesh> for ponko::skeleton2d::Attachment
 pub fn ponko::skeleton2d::Attachment::from(ponko::skeleton2d::SkinnedMesh) -> Self
 impl core::convert::From<ponko::skeleton2d::SpritePart> for ponko::skeleton2d::Attachment
@@ -14245,6 +14300,51 @@ impl core::fmt::Debug for ponko::skeleton2d::Curve
 pub fn ponko::skeleton2d::Curve::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::skeleton2d::Curve
 impl core::marker::StructuralPartialEq for ponko::skeleton2d::Curve
+#[non_exhaustive] pub enum ponko::skeleton2d::PathPosition
+pub ponko::skeleton2d::PathPosition::Fixed
+pub ponko::skeleton2d::PathPosition::Percent
+impl core::clone::Clone for ponko::skeleton2d::PathPosition
+pub fn ponko::skeleton2d::PathPosition::clone(&self) -> Self
+impl core::cmp::Eq for ponko::skeleton2d::PathPosition
+impl core::cmp::PartialEq for ponko::skeleton2d::PathPosition
+pub fn ponko::skeleton2d::PathPosition::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::skeleton2d::PathPosition
+pub fn ponko::skeleton2d::PathPosition::default() -> Self
+impl core::fmt::Debug for ponko::skeleton2d::PathPosition
+pub fn ponko::skeleton2d::PathPosition::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::skeleton2d::PathPosition
+impl core::marker::StructuralPartialEq for ponko::skeleton2d::PathPosition
+#[non_exhaustive] pub enum ponko::skeleton2d::PathRotate
+pub ponko::skeleton2d::PathRotate::Chain
+pub ponko::skeleton2d::PathRotate::ChainScale
+pub ponko::skeleton2d::PathRotate::Tangent
+impl core::clone::Clone for ponko::skeleton2d::PathRotate
+pub fn ponko::skeleton2d::PathRotate::clone(&self) -> Self
+impl core::cmp::Eq for ponko::skeleton2d::PathRotate
+impl core::cmp::PartialEq for ponko::skeleton2d::PathRotate
+pub fn ponko::skeleton2d::PathRotate::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::skeleton2d::PathRotate
+pub fn ponko::skeleton2d::PathRotate::default() -> Self
+impl core::fmt::Debug for ponko::skeleton2d::PathRotate
+pub fn ponko::skeleton2d::PathRotate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::skeleton2d::PathRotate
+impl core::marker::StructuralPartialEq for ponko::skeleton2d::PathRotate
+#[non_exhaustive] pub enum ponko::skeleton2d::PathSpacing
+pub ponko::skeleton2d::PathSpacing::Fixed
+pub ponko::skeleton2d::PathSpacing::Length
+pub ponko::skeleton2d::PathSpacing::Percent
+pub ponko::skeleton2d::PathSpacing::Proportional
+impl core::clone::Clone for ponko::skeleton2d::PathSpacing
+pub fn ponko::skeleton2d::PathSpacing::clone(&self) -> Self
+impl core::cmp::Eq for ponko::skeleton2d::PathSpacing
+impl core::cmp::PartialEq for ponko::skeleton2d::PathSpacing
+pub fn ponko::skeleton2d::PathSpacing::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::skeleton2d::PathSpacing
+pub fn ponko::skeleton2d::PathSpacing::default() -> Self
+impl core::fmt::Debug for ponko::skeleton2d::PathSpacing
+pub fn ponko::skeleton2d::PathSpacing::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::skeleton2d::PathSpacing
+impl core::marker::StructuralPartialEq for ponko::skeleton2d::PathSpacing
 #[non_exhaustive] pub enum ponko::skeleton2d::SkeletonMotion
 pub ponko::skeleton2d::SkeletonMotion::Blend1D
 pub ponko::skeleton2d::SkeletonMotion::Blend1D::children: alloc::vec::Vec<(f32, usize)>
@@ -14354,14 +14454,22 @@ pub ponko::skeleton2d::Clip::deform: alloc::vec::Vec<ponko::skeleton2d::DeformTr
 pub ponko::skeleton2d::Clip::draw_order: alloc::vec::Vec<ponko::skeleton2d::Key<core::option::Option<alloc::rcs::arc::Arc<[u16]>>>>
 pub ponko::skeleton2d::Clip::duration: f32
 pub ponko::skeleton2d::Clip::events: alloc::vec::Vec<ponko::anim::AnimationEvent>
+pub ponko::skeleton2d::Clip::ik: alloc::vec::Vec<ponko::skeleton2d::IkTrack>
 pub ponko::skeleton2d::Clip::name: alloc::rcs::arc::Arc<str>
+pub ponko::skeleton2d::Clip::paths: alloc::vec::Vec<ponko::skeleton2d::PathTrack>
+pub ponko::skeleton2d::Clip::physics: alloc::vec::Vec<ponko::skeleton2d::PhysicsTrack>
 pub ponko::skeleton2d::Clip::slots: alloc::vec::Vec<ponko::skeleton2d::SlotTrack>
+pub ponko::skeleton2d::Clip::transforms: alloc::vec::Vec<ponko::skeleton2d::TransformTrack>
 impl ponko::skeleton2d::Clip
 pub fn ponko::skeleton2d::Clip::new(&str, f32) -> Self
 pub fn ponko::skeleton2d::Clip::with_bone_track(self, ponko::skeleton2d::BoneTrack) -> Self
 pub fn ponko::skeleton2d::Clip::with_deform_track(self, ponko::skeleton2d::DeformTrack) -> Self
 pub fn ponko::skeleton2d::Clip::with_event(self, f32, &str) -> Self
+pub fn ponko::skeleton2d::Clip::with_ik_track(self, ponko::skeleton2d::IkTrack) -> Self
+pub fn ponko::skeleton2d::Clip::with_path_track(self, ponko::skeleton2d::PathTrack) -> Self
+pub fn ponko::skeleton2d::Clip::with_physics_track(self, ponko::skeleton2d::PhysicsTrack) -> Self
 pub fn ponko::skeleton2d::Clip::with_slot_track(self, ponko::skeleton2d::SlotTrack) -> Self
+pub fn ponko::skeleton2d::Clip::with_transform_track(self, ponko::skeleton2d::TransformTrack) -> Self
 impl core::clone::Clone for ponko::skeleton2d::Clip
 pub fn ponko::skeleton2d::Clip::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko::skeleton2d::Clip
@@ -14414,6 +14522,21 @@ pub fn ponko::skeleton2d::IkConstraint::eq(&self, &Self) -> bool
 impl core::fmt::Debug for ponko::skeleton2d::IkConstraint
 pub fn ponko::skeleton2d::IkConstraint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::skeleton2d::IkConstraint
+#[non_exhaustive] pub struct ponko::skeleton2d::IkTrack
+pub ponko::skeleton2d::IkTrack::bend_positive: alloc::vec::Vec<ponko::skeleton2d::Key<bool>>
+pub ponko::skeleton2d::IkTrack::constraint: usize
+pub ponko::skeleton2d::IkTrack::mix: alloc::vec::Vec<ponko::skeleton2d::Key<f32>>
+impl ponko::skeleton2d::IkTrack
+pub fn ponko::skeleton2d::IkTrack::new(usize) -> Self
+impl core::clone::Clone for ponko::skeleton2d::IkTrack
+pub fn ponko::skeleton2d::IkTrack::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::skeleton2d::IkTrack
+pub fn ponko::skeleton2d::IkTrack::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::skeleton2d::IkTrack
+pub fn ponko::skeleton2d::IkTrack::default() -> Self
+impl core::fmt::Debug for ponko::skeleton2d::IkTrack
+pub fn ponko::skeleton2d::IkTrack::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::skeleton2d::IkTrack
 #[non_exhaustive] pub struct ponko::skeleton2d::Key<T>
 pub ponko::skeleton2d::Key::curve: ponko::skeleton2d::Curve
 pub ponko::skeleton2d::Key::time: f32
@@ -14443,6 +14566,109 @@ impl core::fmt::Debug for ponko::skeleton2d::MeshVertex
 pub fn ponko::skeleton2d::MeshVertex::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::skeleton2d::MeshVertex
 impl core::marker::StructuralPartialEq for ponko::skeleton2d::MeshVertex
+#[non_exhaustive] pub struct ponko::skeleton2d::PathConstraint
+pub ponko::skeleton2d::PathConstraint::bones: alloc::vec::Vec<usize>
+pub ponko::skeleton2d::PathConstraint::mix_rotate: f32
+pub ponko::skeleton2d::PathConstraint::mix_translate: glam::f32::vec2::Vec2
+pub ponko::skeleton2d::PathConstraint::name: alloc::rcs::arc::Arc<str>
+pub ponko::skeleton2d::PathConstraint::offset_rotation: f32
+pub ponko::skeleton2d::PathConstraint::position: f32
+pub ponko::skeleton2d::PathConstraint::position_mode: ponko::skeleton2d::PathPosition
+pub ponko::skeleton2d::PathConstraint::rotate_mode: ponko::skeleton2d::PathRotate
+pub ponko::skeleton2d::PathConstraint::spacing: f32
+pub ponko::skeleton2d::PathConstraint::spacing_mode: ponko::skeleton2d::PathSpacing
+pub ponko::skeleton2d::PathConstraint::target: usize
+impl ponko::skeleton2d::PathConstraint
+pub fn ponko::skeleton2d::PathConstraint::new(&str, &[usize], usize) -> Self
+impl core::clone::Clone for ponko::skeleton2d::PathConstraint
+pub fn ponko::skeleton2d::PathConstraint::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::skeleton2d::PathConstraint
+pub fn ponko::skeleton2d::PathConstraint::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::skeleton2d::PathConstraint
+pub fn ponko::skeleton2d::PathConstraint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::skeleton2d::PathConstraint
+#[non_exhaustive] pub struct ponko::skeleton2d::PathShape
+pub ponko::skeleton2d::PathShape::closed: bool
+pub ponko::skeleton2d::PathShape::constant_speed: bool
+pub ponko::skeleton2d::PathShape::lengths: alloc::vec::Vec<f32>
+pub ponko::skeleton2d::PathShape::vertices: alloc::vec::Vec<ponko::skeleton2d::MeshVertex>
+impl ponko::skeleton2d::PathShape
+pub fn ponko::skeleton2d::PathShape::curves(&self) -> usize
+pub fn ponko::skeleton2d::PathShape::new(alloc::vec::Vec<ponko::skeleton2d::MeshVertex>) -> Self
+impl core::clone::Clone for ponko::skeleton2d::PathShape
+pub fn ponko::skeleton2d::PathShape::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::skeleton2d::PathShape
+pub fn ponko::skeleton2d::PathShape::eq(&self, &Self) -> bool
+impl core::convert::From<ponko::skeleton2d::PathShape> for ponko::skeleton2d::Attachment
+pub fn ponko::skeleton2d::Attachment::from(ponko::skeleton2d::PathShape) -> Self
+impl core::fmt::Debug for ponko::skeleton2d::PathShape
+pub fn ponko::skeleton2d::PathShape::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::skeleton2d::PathShape
+#[non_exhaustive] pub struct ponko::skeleton2d::PathTrack
+pub ponko::skeleton2d::PathTrack::constraint: usize
+pub ponko::skeleton2d::PathTrack::mix_rotate: alloc::vec::Vec<ponko::skeleton2d::Key<f32>>
+pub ponko::skeleton2d::PathTrack::mix_translate: alloc::vec::Vec<ponko::skeleton2d::Key<glam::f32::vec2::Vec2>>
+pub ponko::skeleton2d::PathTrack::position: alloc::vec::Vec<ponko::skeleton2d::Key<f32>>
+pub ponko::skeleton2d::PathTrack::spacing: alloc::vec::Vec<ponko::skeleton2d::Key<f32>>
+impl ponko::skeleton2d::PathTrack
+pub fn ponko::skeleton2d::PathTrack::new(usize) -> Self
+impl core::clone::Clone for ponko::skeleton2d::PathTrack
+pub fn ponko::skeleton2d::PathTrack::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::skeleton2d::PathTrack
+pub fn ponko::skeleton2d::PathTrack::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::skeleton2d::PathTrack
+pub fn ponko::skeleton2d::PathTrack::default() -> Self
+impl core::fmt::Debug for ponko::skeleton2d::PathTrack
+pub fn ponko::skeleton2d::PathTrack::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::skeleton2d::PathTrack
+#[non_exhaustive] pub struct ponko::skeleton2d::PhysicsConstraint
+pub ponko::skeleton2d::PhysicsConstraint::bone: usize
+pub ponko::skeleton2d::PhysicsConstraint::damping: f32
+pub ponko::skeleton2d::PhysicsConstraint::gravity: f32
+pub ponko::skeleton2d::PhysicsConstraint::inertia: f32
+pub ponko::skeleton2d::PhysicsConstraint::limit: f32
+pub ponko::skeleton2d::PhysicsConstraint::mass: f32
+pub ponko::skeleton2d::PhysicsConstraint::mix: f32
+pub ponko::skeleton2d::PhysicsConstraint::name: alloc::rcs::arc::Arc<str>
+pub ponko::skeleton2d::PhysicsConstraint::reference_scale: f32
+pub ponko::skeleton2d::PhysicsConstraint::rotate: f32
+pub ponko::skeleton2d::PhysicsConstraint::scale_x: f32
+pub ponko::skeleton2d::PhysicsConstraint::shear_x: f32
+pub ponko::skeleton2d::PhysicsConstraint::step: f32
+pub ponko::skeleton2d::PhysicsConstraint::strength: f32
+pub ponko::skeleton2d::PhysicsConstraint::wind: f32
+pub ponko::skeleton2d::PhysicsConstraint::x: f32
+pub ponko::skeleton2d::PhysicsConstraint::y: f32
+impl ponko::skeleton2d::PhysicsConstraint
+pub fn ponko::skeleton2d::PhysicsConstraint::new(&str, usize) -> Self
+impl core::clone::Clone for ponko::skeleton2d::PhysicsConstraint
+pub fn ponko::skeleton2d::PhysicsConstraint::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::skeleton2d::PhysicsConstraint
+pub fn ponko::skeleton2d::PhysicsConstraint::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::skeleton2d::PhysicsConstraint
+pub fn ponko::skeleton2d::PhysicsConstraint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::skeleton2d::PhysicsConstraint
+#[non_exhaustive] pub struct ponko::skeleton2d::PhysicsTrack
+pub ponko::skeleton2d::PhysicsTrack::constraint: core::option::Option<usize>
+pub ponko::skeleton2d::PhysicsTrack::damping: alloc::vec::Vec<ponko::skeleton2d::Key<f32>>
+pub ponko::skeleton2d::PhysicsTrack::gravity: alloc::vec::Vec<ponko::skeleton2d::Key<f32>>
+pub ponko::skeleton2d::PhysicsTrack::inertia: alloc::vec::Vec<ponko::skeleton2d::Key<f32>>
+pub ponko::skeleton2d::PhysicsTrack::mass: alloc::vec::Vec<ponko::skeleton2d::Key<f32>>
+pub ponko::skeleton2d::PhysicsTrack::mix: alloc::vec::Vec<ponko::skeleton2d::Key<f32>>
+pub ponko::skeleton2d::PhysicsTrack::reset: alloc::vec::Vec<f32>
+pub ponko::skeleton2d::PhysicsTrack::strength: alloc::vec::Vec<ponko::skeleton2d::Key<f32>>
+pub ponko::skeleton2d::PhysicsTrack::wind: alloc::vec::Vec<ponko::skeleton2d::Key<f32>>
+impl ponko::skeleton2d::PhysicsTrack
+pub fn ponko::skeleton2d::PhysicsTrack::new(core::option::Option<usize>) -> Self
+impl core::clone::Clone for ponko::skeleton2d::PhysicsTrack
+pub fn ponko::skeleton2d::PhysicsTrack::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::skeleton2d::PhysicsTrack
+pub fn ponko::skeleton2d::PhysicsTrack::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::skeleton2d::PhysicsTrack
+pub fn ponko::skeleton2d::PhysicsTrack::default() -> Self
+impl core::fmt::Debug for ponko::skeleton2d::PhysicsTrack
+pub fn ponko::skeleton2d::PhysicsTrack::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::skeleton2d::PhysicsTrack
 pub struct ponko::skeleton2d::Skeleton
 pub ponko::skeleton2d::Skeleton::color: ponko::color::Color
 pub ponko::skeleton2d::Skeleton::manual: bool
@@ -14473,6 +14699,7 @@ pub fn ponko::skeleton2d::Skeleton::parameter(&self, ponko::anim::ParamId) -> co
 pub fn ponko::skeleton2d::Skeleton::parameter_id(&self, &str) -> core::option::Option<ponko::anim::ParamId>
 pub fn ponko::skeleton2d::Skeleton::play(&mut self, &str) -> bool
 pub fn ponko::skeleton2d::Skeleton::play_once(&mut self, &str) -> bool
+pub fn ponko::skeleton2d::Skeleton::reset_physics(&mut self)
 pub fn ponko::skeleton2d::Skeleton::set_attachment(&mut self, usize, core::option::Option<core::option::Option<&str>>)
 pub fn ponko::skeleton2d::Skeleton::set_bone_pose(&mut self, usize, ponko::skeleton2d::BonePose)
 pub fn ponko::skeleton2d::Skeleton::set_bool(&mut self, ponko::anim::ParamId, bool)
@@ -14502,6 +14729,8 @@ pub fn ponko::skeleton2d::SkeletonData::add_attachment(&mut self, usize, &str, i
 pub fn ponko::skeleton2d::SkeletonData::add_bone(&mut self, &str, core::option::Option<usize>, ponko::skeleton2d::BonePose, f32) -> usize
 pub fn ponko::skeleton2d::SkeletonData::add_clip(&mut self, ponko::skeleton2d::Clip) -> usize
 pub fn ponko::skeleton2d::SkeletonData::add_ik(&mut self, ponko::skeleton2d::IkConstraint) -> usize
+pub fn ponko::skeleton2d::SkeletonData::add_path_constraint(&mut self, ponko::skeleton2d::PathConstraint) -> usize
+pub fn ponko::skeleton2d::SkeletonData::add_physics_constraint(&mut self, ponko::skeleton2d::PhysicsConstraint) -> usize
 pub fn ponko::skeleton2d::SkeletonData::add_skin(&mut self, &str) -> usize
 pub fn ponko::skeleton2d::SkeletonData::add_skin_attachment(&mut self, usize, usize, &str, impl core::convert::Into<ponko::skeleton2d::Attachment>)
 pub fn ponko::skeleton2d::SkeletonData::add_slot(&mut self, &str, usize) -> usize
@@ -14517,6 +14746,10 @@ pub fn ponko::skeleton2d::SkeletonData::ik_constraints(&self) -> &[ponko::skelet
 pub fn ponko::skeleton2d::SkeletonData::images(&self) -> alloc::vec::Vec<&str>
 pub fn ponko::skeleton2d::SkeletonData::name(&self) -> core::option::Option<&str>
 pub fn ponko::skeleton2d::SkeletonData::new() -> Self
+pub fn ponko::skeleton2d::SkeletonData::path_constraint(&self, &str) -> core::option::Option<usize>
+pub fn ponko::skeleton2d::SkeletonData::path_constraints(&self) -> &[ponko::skeleton2d::PathConstraint]
+pub fn ponko::skeleton2d::SkeletonData::physics_constraint(&self, &str) -> core::option::Option<usize>
+pub fn ponko::skeleton2d::SkeletonData::physics_constraints(&self) -> &[ponko::skeleton2d::PhysicsConstraint]
 pub fn ponko::skeleton2d::SkeletonData::premultiplied(&self) -> bool
 pub fn ponko::skeleton2d::SkeletonData::set_graph(&mut self, alloc::rcs::arc::Arc<ponko::skeleton2d::SkeletonGraph>) -> core::result::Result<(), ponko::skeleton2d::SkeletonError>
 pub fn ponko::skeleton2d::SkeletonData::set_slot_rest(&mut self, usize, core::option::Option<&str>, ponko::color::Color)
@@ -14529,6 +14762,7 @@ pub fn ponko::skeleton2d::SkeletonData::transform_constraints(&self) -> &[ponko:
 pub fn ponko::skeleton2d::SkeletonData::warnings(&self) -> &[alloc::string::String]
 impl ponko::skeleton2d::SkeletonData
 pub fn ponko::skeleton2d::SkeletonData::from_json(&str, &str) -> core::result::Result<Self, ponko::skeleton2d::SkeletonError>
+pub fn ponko::skeleton2d::SkeletonData::to_json(&self, &str) -> core::result::Result<alloc::string::String, ponko::skeleton2d::SkeletonError>
 impl ponko::skeleton2d::SkeletonData
 pub fn ponko::skeleton2d::SkeletonData::from_spine_json(&str, &str) -> core::result::Result<Self, ponko::skeleton2d::SkeletonError>
 pub fn ponko::skeleton2d::SkeletonData::from_spine_json_with_atlas(&str, &str, &ponko::skeleton2d::SpineAtlas) -> core::result::Result<Self, ponko::skeleton2d::SkeletonError>
@@ -14686,6 +14920,23 @@ pub fn ponko::skeleton2d::TransformConstraint::eq(&self, &Self) -> bool
 impl core::fmt::Debug for ponko::skeleton2d::TransformConstraint
 pub fn ponko::skeleton2d::TransformConstraint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for ponko::skeleton2d::TransformConstraint
+#[non_exhaustive] pub struct ponko::skeleton2d::TransformTrack
+pub ponko::skeleton2d::TransformTrack::constraint: usize
+pub ponko::skeleton2d::TransformTrack::mix_rotate: alloc::vec::Vec<ponko::skeleton2d::Key<f32>>
+pub ponko::skeleton2d::TransformTrack::mix_scale: alloc::vec::Vec<ponko::skeleton2d::Key<glam::f32::vec2::Vec2>>
+pub ponko::skeleton2d::TransformTrack::mix_shear_y: alloc::vec::Vec<ponko::skeleton2d::Key<f32>>
+pub ponko::skeleton2d::TransformTrack::mix_translate: alloc::vec::Vec<ponko::skeleton2d::Key<glam::f32::vec2::Vec2>>
+impl ponko::skeleton2d::TransformTrack
+pub fn ponko::skeleton2d::TransformTrack::new(usize) -> Self
+impl core::clone::Clone for ponko::skeleton2d::TransformTrack
+pub fn ponko::skeleton2d::TransformTrack::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::skeleton2d::TransformTrack
+pub fn ponko::skeleton2d::TransformTrack::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::skeleton2d::TransformTrack
+pub fn ponko::skeleton2d::TransformTrack::default() -> Self
+impl core::fmt::Debug for ponko::skeleton2d::TransformTrack
+pub fn ponko::skeleton2d::TransformTrack::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::skeleton2d::TransformTrack
 pub mod ponko::spatial
 #[repr(C)] pub struct ponko::spatial::GridEntry<T>
 pub ponko::spatial::GridEntry::data: T
@@ -16028,6 +16279,8 @@ pub fn ponko::prelude::Ui::set_inline_font(&mut self, &str, ponko::text::Font)
 pub fn ponko::prelude::Ui::set_inline_image(&mut self, &str, ponko::texture::Texture)
 pub fn ponko::prelude::Ui::set_rich(&mut self, ponko::prelude::UiId, bool)
 impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::layout_passes(&self) -> u64
+impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::localize(&mut self, &ponko::locale::Strings)
 pub fn ponko::prelude::Ui::set_text_key(&mut self, ponko::prelude::UiId, &str, &[(&str, ponko::locale::Arg)])
 pub fn ponko::prelude::Ui::text_key(&self, ponko::prelude::UiId) -> core::option::Option<&str>
@@ -16292,11 +16545,14 @@ pub ponko::ui::UiPaint::texture: core::option::Option<ponko::texture::Texture>
 pub ponko::ui::UiPaint::wrap: bool
 impl core::clone::Clone for ponko::ui::UiPaint
 pub fn ponko::ui::UiPaint::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ui::UiPaint
+pub fn ponko::ui::UiPaint::eq(&self, &Self) -> bool
 impl core::default::Default for ponko::ui::UiPaint
 pub fn ponko::ui::UiPaint::default() -> Self
 impl core::fmt::Debug for ponko::ui::UiPaint
 pub fn ponko::ui::UiPaint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::ui::UiPaint
+impl core::marker::StructuralPartialEq for ponko::ui::UiPaint
 pub struct ponko::ui::UiScreenTransition
 pub ponko::ui::UiScreenTransition::offset: glam::f32::vec2::Vec2
 pub ponko::ui::UiScreenTransition::opacity: f32

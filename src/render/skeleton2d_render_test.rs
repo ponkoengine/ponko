@@ -2,7 +2,9 @@
 //! mesh covers what its triangles cover, follows its bones when they turn
 //! (vertices weighted between two bones land between them), samples its
 //! texture by its UVs, and a rigid part on a bone draws over it in slot
-//! order. The background where nothing is drawn, and a hidden slot, are the
+//! order. A part on a bone that a path constraint places draws where the
+//! path puts it, and the path itself draws nothing. The background where
+//! nothing is drawn, a hidden slot and an unapplied constraint are the
 //! controls. Skips without a GPU.
 
 use std::sync::Arc;
@@ -15,7 +17,9 @@ use super::render_test_support::{gpu, gpu_adjusted, read_texture, target, white_
 use super::sprite_pipelines::SpritePipelines;
 use crate::color::Color;
 use crate::ecs::Transform2D;
-use crate::skeleton2d::{BonePose, MeshVertex, Skeleton, SkeletonData, SkinnedMesh, SpritePart};
+use crate::skeleton2d::{
+    BonePose, MeshVertex, PathConstraint, PathPosition, PathShape, Skeleton, SkeletonData, SkinnedMesh, SpritePart,
+};
 use crate::texture::Texture;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -322,4 +326,68 @@ fn skinned_meshes_draw_with_webgl2_limits() {
     );
     let Some(mut rig) = Rig::new(gpu) else { return };
     skinned_mesh_cases(&mut rig);
+}
+
+/// A green 4 x 4 part (pivot at its left middle) on bone `tail`, which a path
+/// constraint places 45 units along an L: 30 right, then 30 down (each leg a
+/// straight bezier with its handles at its thirds, so distance is exact).
+/// `mix` 0 leaves the bone at the root.
+fn on_a_path(rig: &mut Rig, mix: f32) -> Skeleton {
+    let green = rig.texture(&[[0, 255, 0, 255]]);
+    let mut data = SkeletonData::new();
+    let root = data.add_bone("root", None, BonePose::IDENTITY, 0.0);
+    let tail = data.add_bone("tail", Some(root), BonePose::IDENTITY, 4.0);
+    let track = data.add_slot("track", root);
+    let points = [
+        (-10.0, 0.0),
+        (0.0, 0.0),
+        (10.0, 0.0),
+        (20.0, 0.0),
+        (30.0, 0.0),
+        (30.0, 10.0),
+        (30.0, 20.0),
+        (30.0, 30.0),
+        (30.0, 40.0),
+    ];
+    let vertices = points
+        .iter()
+        .map(|&(x, y)| MeshVertex::new(vec2(x, y), Vec2::ZERO, &[(root, 1.0)]))
+        .collect();
+    data.add_attachment(track, "track", PathShape::new(vertices));
+    let mut along = PathConstraint::new("along", &[tail], track);
+    along.position_mode = PathPosition::Fixed;
+    along.position = 45.0;
+    along.mix_rotate = mix;
+    along.mix_translate = Vec2::splat(mix);
+    data.add_path_constraint(along);
+    let slot = data.add_slot("part", tail);
+    let part = SpritePart::new(green)
+        .with_size(vec2(4.0, 4.0))
+        .with_pivot(vec2(0.0, 0.5));
+    data.add_attachment(slot, "part", part);
+    let mut s = Skeleton::new(Arc::new(data));
+    s.update(0.0);
+    s
+}
+
+#[test]
+fn parts_on_path_constrained_bones_draw_where_the_path_puts_them() {
+    let Some(mut rig) = Rig::new(gpu()) else { return };
+    let at = vec2(10.0, 10.0);
+    // 45 along: 15 down the second leg, at (40, 25) on screen, turned to
+    // point down it, so the part covers x 38..42, y 25..29.
+    let mut s = on_a_path(&mut rig, 1.0);
+    let placed = rig.draw(&mut s, at);
+    assert_eq!(placed.at(40, 27), Seen::Green, "on the path, pointing down it");
+    assert_eq!(placed.at(44, 27), Seen::Background, "turned: not along +x");
+    assert_eq!(placed.at(12, 10), Seen::Background, "no longer at the root");
+    // The path is a shape for constraints: it draws nothing.
+    for (x, y) in [(25, 10), (40, 15)] {
+        assert_eq!(placed.at(x, y), Seen::Background, "({x}, {y})");
+    }
+    // Control: unapplied, the part stays at the root, along +x.
+    let mut s = on_a_path(&mut rig, 0.0);
+    let rest = rig.draw(&mut s, at);
+    assert_eq!(rest.at(12, 10), Seen::Green);
+    assert_eq!(rest.at(40, 27), Seen::Background);
 }

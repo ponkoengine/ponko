@@ -7,8 +7,10 @@ use glam::{Affine2, Vec2};
 use ponko_ecs::Component;
 
 use super::clip::{sample, sample_deform, step};
-use super::data::{BonePose, Constraint, SkeletonData, TransformConstraint, angle_delta};
+use super::data::{Attachment, BonePose, Constraint, Named, SkeletonData, TransformConstraint, angle_delta};
 use super::graph::{SkeletonGraph, SkeletonMotion};
+use super::path::{PATH_VALUES, PathScratch};
+use super::physics::{PHYSICS_VALUES, Spring};
 use crate::anim::graph::{check_command, consume_triggers, select_transition, set_bool, set_float, set_trigger};
 use crate::anim::{AnimationGraphError, AnimationParameter, ParamId, StateId};
 use crate::color::Color;
@@ -95,6 +97,20 @@ pub struct Skeleton {
     /// Per slot: the attachment a deform track moves now (its data index)
     /// and the offsets, one per vertex and influence. Kept between frames.
     deform: Vec<(Option<usize>, Vec<Vec2>)>,
+    /// Space for the deforms of a crossfade's or blend's other sides.
+    deform_scratch: [Vec<Vec2>; 3],
+    /// Every constraint's values now (IK mixes, transform mixes, path
+    /// positions, spacings and mixes, physics settings), as the data's
+    /// `constraint_layout` lays them out; then the same with no clip, and
+    /// space for a crossfade's and a blend's other sides.
+    values: [Vec<f32>; 4],
+    /// Per IK constraint: whether two bones bend the positive way now.
+    bend: Vec<bool>,
+    /// Per physics constraint: its springs.
+    springs: Vec<Spring>,
+    /// Seconds the physics constraints step at the next solve.
+    physics_delta: f32,
+    path_scratch: PathScratch,
     /// Multiplies every clip's and state's speed. Default 1.
     pub speed: f32,
     /// Draw order among sprites: higher is on top. Default 0.
@@ -130,6 +146,12 @@ impl Skeleton {
             ik_targets: Vec::new(),
             ik_mix: Vec::new(),
             deform: Vec::new(),
+            deform_scratch: Default::default(),
+            values: Default::default(),
+            bend: Vec::new(),
+            springs: Vec::new(),
+            physics_delta: 0.0,
+            path_scratch: PathScratch::default(),
             speed: 1.0,
             z: 0.0,
             color: Color::WHITE,
@@ -155,6 +177,13 @@ impl Skeleton {
         self.draw_order = (0..d.slots.len() as u16).collect();
         self.ik_targets = vec![None; d.ik.len()];
         self.ik_mix = d.ik.iter().map(|c| c.mix).collect();
+        self.bend = d.ik.iter().map(|c| c.bend_positive).collect();
+        self.springs = vec![Spring::default(); d.physics.len()];
+        self.physics_delta = 0.0;
+        let len = d.constraint_layout().len;
+        for v in &mut self.values {
+            *v = vec![0.0; len];
+        }
         self.graph = d.graph.clone();
         self.parameters = self.graph.as_ref().map_or_else(Vec::new, |g| g.parameters.clone());
         self.play = self.graph.as_ref().map(|g| Play {
@@ -164,6 +193,7 @@ impl Skeleton {
         });
         self.fade = None;
         self.pending = None;
+        self.pose_constraints();
         self.pose_slots();
         self.solve();
     }
@@ -637,7 +667,8 @@ impl Skeleton {
         self.ik_targets[ik] = target.filter(|t| t.is_finite());
     }
 
-    /// Sets how much IK constraint `ik` applies, 0 to 1.
+    /// Sets how much IK constraint `ik` applies, 0 to 1, while no clip
+    /// keys its mix (an [`IkTrack`](super::IkTrack) replaces it).
     ///
     /// # Panics
     /// If `ik` isn't a constraint of the data.
@@ -814,6 +845,7 @@ impl Skeleton {
         if let Some(play) = self.play {
             let next = self.advance(play, dt);
             self.collect_events(play.what, play.time, next.time, play.looping);
+            self.reset_springs(play.what, play.time, next.time, play.looping);
             self.play = Some(next);
         }
         if let Some(mut fade) = self.fade.take() {
@@ -824,8 +856,54 @@ impl Skeleton {
             }
         }
         self.pose_bones();
+        self.pose_constraints();
         self.pose_slots();
+        self.physics_delta = dt;
         self.solve();
+    }
+
+    /// Starts every physics constraint's springs over from where its bone
+    /// is now, as if the skeleton had always stood there (after moving it
+    /// a long way at once, say).
+    pub fn reset_physics(&mut self) {
+        for s in &mut self.springs {
+            s.reset();
+        }
+    }
+
+    /// Starts over the springs whose physics keys reset between normalized
+    /// times `old` and `new` of what plays.
+    fn reset_springs(&mut self, what: Playing, old: f64, new: f64, looping: bool) {
+        if new <= old {
+            return;
+        }
+        let (clip, _) = self.dominant(what, old, looping);
+        let data = self.data.clone();
+        let clip = &data.clips[clip];
+        if clip.physics.is_empty() || clip.duration <= 0.0 {
+            return;
+        }
+        for track in &clip.physics {
+            for &seconds in &track.reset {
+                let at = f64::from((seconds / clip.duration).clamp(0.0, 1.0));
+                let mut cycle = if looping { old.floor() } else { 0.0 };
+                let mut hit = false;
+                while cycle <= new.floor() {
+                    let t = cycle + at;
+                    hit |= t > old && t <= new;
+                    if !looping {
+                        break;
+                    }
+                    cycle += 1.0;
+                }
+                if hit {
+                    match track.constraint {
+                        Some(c) => self.springs[c].reset(),
+                        None => self.reset_physics(),
+                    }
+                }
+            }
+        }
     }
 
     /// `play` advanced by `dt` seconds.
@@ -933,6 +1011,90 @@ impl Skeleton {
         self.blend = blend;
     }
 
+    /// Every constraint's values: its own (the game's IK mix), replaced by
+    /// what plays where it keys them, mixed across a crossfade.
+    fn pose_constraints(&mut self) {
+        let data = self.data.clone();
+        if data.constraints.is_empty() {
+            return;
+        }
+        let layout = data.constraint_layout();
+        let [mut values, mut setup, mut from, mut scratch] = std::mem::take(&mut self.values);
+        data.constraint_values(&mut setup);
+        setup[..self.ik_mix.len()].copy_from_slice(&self.ik_mix);
+        values.clone_from(&setup);
+        let sample = |s: &Self, play: Play, out: &mut [f32], scratch: &mut [f32]| {
+            let at = |clip: usize| phase(play.time, play.looping) * data.clips[clip].duration;
+            let (a, b, f) = s.clips_of(play.what);
+            data.clips[a].sample_constraints(at(a), &layout, out);
+            if f > 0.0 && b != a {
+                scratch.copy_from_slice(&setup);
+                data.clips[b].sample_constraints(at(b), &layout, scratch);
+                for (o, v) in out.iter_mut().zip(scratch.iter()) {
+                    *o += (v - *o) * f;
+                }
+            }
+        };
+        if let Some(play) = self.play {
+            sample(self, play, &mut values, &mut scratch);
+        }
+        if let Some(fade) = self.fade {
+            from.clone_from(&setup);
+            sample(self, fade.from, &mut from, &mut scratch);
+            let w = 1.0 - (fade.elapsed / fade.duration).clamp(0.0, 1.0);
+            for (o, v) in values.iter_mut().zip(&from) {
+                *o += (v - *o) * w;
+            }
+        }
+        self.values = [values, setup, from, scratch];
+    }
+
+    /// The clips `what` plays: one clip (twice, weight 0), or a 1D blend's
+    /// two around its parameter and how far toward the second.
+    fn clips_of(&self, what: Playing) -> (usize, usize, f32) {
+        match what {
+            Playing::Clip(c) => (c, c, 0.0),
+            Playing::State(s) => match &self.graph.as_ref().expect("a graph").states[s].motion {
+                SkeletonMotion::Clip(c) => (*c, *c, 0.0),
+                SkeletonMotion::Blend1D { parameter, children } => {
+                    blend_children(children, float(&self.parameters, *parameter))
+                }
+            },
+        }
+    }
+
+    /// The deform offsets `play` gives attachment `a` (data index) into
+    /// `out`, a blend's two clips mixed; `false` if no clip of it deforms
+    /// `a`.
+    fn deform_of(&self, play: Play, a: usize, out: &mut Vec<Vec2>, scratch: &mut Vec<Vec2>) -> bool {
+        let data = &self.data;
+        let named = &data.attachments[a];
+        let at = |clip: usize| phase(play.time, play.looping) * data.clips[clip].duration;
+        let (ca, cb, f) = self.clips_of(play.what);
+        let sample_into = |clip: usize, out: &mut Vec<Vec2>| match data.clips[clip]
+            .deform
+            .iter()
+            .find(|t| t.slot == named.slot && t.skin == named.skin && t.attachment == named.name)
+        {
+            Some(t) => sample_deform(&t.keys, at(clip), out),
+            None => {
+                out.clear();
+                out.resize(named.binds.len(), Vec2::ZERO);
+                false
+            }
+        };
+        let mut any = sample_into(ca, out);
+        if f > 0.0 && cb != ca {
+            any |= sample_into(cb, scratch);
+            if any {
+                for (o, s) in out.iter_mut().zip(scratch.iter()) {
+                    *o += (*s - *o) * f;
+                }
+            }
+        }
+        any
+    }
+
     /// Samples `play` into `out` (already at rest); `scratch` is space for
     /// a blend's second clip.
     fn sample(&self, play: Play, out: &mut [BonePose], scratch: &mut [BonePose]) {
@@ -1003,19 +1165,52 @@ impl Skeleton {
         for d in &mut self.deform {
             d.0 = None;
         }
-        if let Some((c, seconds)) = clip {
-            for track in &data.clips[c].deform {
-                let Some(a) = self.shown[track.slot].1 else {
+        let deforms = |p: Option<Play>, s: &Self| {
+            p.is_some_and(|p| {
+                let (a, b, _) = s.clips_of(p.what);
+                !data.clips[a].deform.is_empty() || !data.clips[b].deform.is_empty()
+            })
+        };
+        if deforms(self.play, self) || deforms(self.fade.map(|f| f.from), self) {
+            let [mut a_side, mut b_side, mut scratch] = std::mem::take(&mut self.deform_scratch);
+            for slot in 0..data.slots.len() {
+                let Some(a) = self.shown[slot].1 else {
                     continue;
                 };
-                let named = &data.attachments[a];
-                if named.skin == track.skin && named.name == track.attachment {
-                    let deform = &mut self.deform[track.slot];
-                    if sample_deform(&track.keys, seconds, &mut deform.1) {
-                        deform.0 = Some(a);
+                if data.attachments[a].attachment.weighted().is_none() {
+                    continue;
+                }
+                let mut out = std::mem::take(&mut self.deform[slot].1);
+                let mut any = match self.play {
+                    Some(p) => self.deform_of(p, a, &mut out, &mut scratch),
+                    None => false,
+                };
+                if let Some(fade) = self.fade {
+                    let from = self.deform_of(fade.from, a, &mut a_side, &mut scratch);
+                    if from || any {
+                        if !any {
+                            out.clear();
+                            out.resize(a_side.len(), Vec2::ZERO);
+                        }
+                        let w = 1.0 - (fade.elapsed / fade.duration).clamp(0.0, 1.0);
+                        for (o, v) in out.iter_mut().zip(&a_side) {
+                            *o += (*v - *o) * w;
+                        }
+                        any = true;
                     }
                 }
+                b_side.clear();
+                self.deform[slot] = (any.then_some(a), out);
             }
+            self.deform_scratch = [a_side, b_side, scratch];
+        }
+        for (i, ik) in data.ik.iter().enumerate() {
+            self.bend[i] = clip
+                .and_then(|(c, seconds)| {
+                    let track = data.clips[c].ik.iter().find(|t| t.constraint == i)?;
+                    step(&track.bend_positive, seconds).copied()
+                })
+                .unwrap_or(ik.bend_positive);
         }
         let order = clip.and_then(|(c, seconds)| step(&data.clips[c].draw_order, seconds).cloned().flatten());
         match order {
@@ -1033,34 +1228,97 @@ impl Skeleton {
     fn solve(&mut self) {
         self.update_world(0);
         let data = self.data.clone();
+        let layout = data.constraint_layout();
         for &c in &data.constraints {
             match c {
                 Constraint::Ik(i) => {
                     let ik = &data.ik[i];
+                    let mix = self.values[0][i];
                     let target = self.ik_targets[i].unwrap_or(self.world[ik.target].translation);
                     match ik.bones[..] {
-                        [bone] => self.look_at(bone, target, self.ik_mix[i]),
+                        [bone] => self.look_at(bone, target, mix),
                         [upper, lower] => {
-                            self.two_bone_ik(upper, lower, target, ik.bend_positive, self.ik_mix[i]);
+                            self.two_bone_ik(upper, lower, target, self.bend[i], mix);
                         }
                         _ => {}
                     }
                 }
-                Constraint::Transform(i) => self.apply_transform(&data.transforms[i]),
+                Constraint::Transform(i) => {
+                    let o = layout.transforms + 6 * i;
+                    let mut mix = [0.0; 6];
+                    mix.copy_from_slice(&self.values[0][o..o + 6]);
+                    self.apply_transform(&data.transforms[i], mix);
+                }
+                Constraint::Path(i) => self.apply_path(&data, i, layout.paths + PATH_VALUES * i),
+                Constraint::Physics(i) => {
+                    let c = &data.physics[i];
+                    let o = layout.physics + PHYSICS_VALUES * i;
+                    let mut v = [0.0; PHYSICS_VALUES];
+                    v.copy_from_slice(&self.values[0][o..o + PHYSICS_VALUES]);
+                    let mut m = self.world[c.bone];
+                    let length = data.bones[c.bone].length;
+                    super::physics::apply(c, v, length, self.physics_delta, &mut self.springs[i], &mut m);
+                    self.world[c.bone] = m;
+                    self.settle(std::slice::from_ref(&c.bone));
+                }
+            }
+        }
+        self.physics_delta = 0.0;
+    }
+
+    /// Places path constraint `i`'s bones along the path its slot shows
+    /// (its values at `o`).
+    fn apply_path(&mut self, data: &SkeletonData, i: usize, o: usize) {
+        let c = &data.paths[i];
+        let Some(a) = self.shown[c.target].1 else {
+            return;
+        };
+        let named = &data.attachments[a];
+        let Attachment::Path(path) = &named.attachment else {
+            return;
+        };
+        let mut v = [0.0; PATH_VALUES];
+        v.copy_from_slice(&self.values[0][o..o + PATH_VALUES]);
+        let mut scratch = std::mem::take(&mut self.path_scratch);
+        let deform = self.deform(c.target, a);
+        let posed = scratch.posed();
+        posed.extend((0..path.vertices.len()).map(|k| skinned(&self.world, named, deform, k)));
+        let mirrored = self.world[data.slots[c.target].bone].matrix2.determinant() < 0.0;
+        let lengths = |b: usize| data.bones[b].length;
+        if super::path::apply(c, v, lengths, path, mirrored, &mut self.world, &mut scratch) {
+            self.settle(&c.bones);
+        }
+        self.path_scratch = scratch;
+    }
+
+    /// After a constraint set the skeleton-space matrices of `bones`: their
+    /// poses relative to their parents follow, and the bones below them
+    /// move with them.
+    fn settle(&mut self, bones: &[usize]) {
+        let Some(&first) = bones.iter().min() else {
+            return;
+        };
+        for i in first..self.world.len() {
+            let parent = self.data.bones[i].parent;
+            if bones.contains(&i) {
+                let p = parent.map_or(Affine2::IDENTITY, |p| self.world[p]);
+                self.pose[i] = BonePose::of_matrix(p.inverse() * self.world[i]);
+            } else if let Some(p) = parent {
+                self.world[i] = self.world[p] * self.pose[i].matrix();
             }
         }
     }
 
     /// Moves `c`'s bones toward (or by) its target's transform, as Spine's
     /// transform constraints do, and updates the bones below each.
-    fn apply_transform(&mut self, c: &TransformConstraint) {
+    fn apply_transform(&mut self, c: &TransformConstraint, mix: [f32; 6]) {
         let target = self.world[c.target];
         let target_pose = self.pose[c.target];
         for &bone in &c.bones {
             let pose = if c.local {
-                local_transform(c, self.pose[bone], target_pose)
+                local_transform(c, mix, self.pose[bone], target_pose)
             } else {
-                let world = world_transform(c, self.world[bone], target);
+                let world = world_transform(c, mix, self.world[bone], target);
                 let parent = self.data.bones[bone]
                     .parent
                     .map_or(Affine2::IDENTITY, |p| self.world[p]);
@@ -1084,28 +1342,30 @@ fn direction(v: Vec2) -> f32 {
 
 /// Bone matrix `m` moved by transform constraint `c` in skeleton space,
 /// toward (absolute) or by (relative) the target's matrix `t`.
-fn world_transform(c: &TransformConstraint, mut m: Affine2, t: Affine2) -> Affine2 {
+fn world_transform(c: &TransformConstraint, mix: [f32; 6], mut m: Affine2, t: Affine2) -> Affine2 {
+    let [mix_rotate, mix_x, mix_y, mix_scale_x, mix_scale_y, mix_shear_y] = mix;
+    let mix_translate = Vec2::new(mix_x, mix_y);
     let (tx, ty) = (t.matrix2.x_axis, t.matrix2.y_axis);
     // A mirrored target turns the offsets the mirrored way.
     let reflect = if t.matrix2.determinant() > 0.0 { 1.0 } else { -1.0 };
     let offset_rotation = c.offset_rotation * reflect;
     let offset_shear = c.offset_shear_y * reflect;
-    if c.mix_rotate != 0.0 {
+    if mix_rotate != 0.0 {
         let mut r = direction(tx) + offset_rotation;
         if !c.relative {
             r -= direction(m.matrix2.x_axis);
         }
-        m.matrix2 = glam::Mat2::from_angle(wrap(r) * c.mix_rotate) * m.matrix2;
+        m.matrix2 = glam::Mat2::from_angle(wrap(r) * mix_rotate) * m.matrix2;
     }
-    if c.mix_translate != Vec2::ZERO {
+    if mix_translate != Vec2::ZERO {
         let to = t.transform_point2(c.offset_translation);
-        m.translation += if c.relative { to } else { to - m.translation } * c.mix_translate;
+        m.translation += if c.relative { to } else { to - m.translation } * mix_translate;
     }
     let mut axes = [m.matrix2.x_axis, m.matrix2.y_axis];
-    for (axis, (target_axis, offset, mix)) in axes.iter_mut().zip([
-        (tx, c.offset_scale.x, c.mix_scale.x),
-        (ty, c.offset_scale.y, c.mix_scale.y),
-    ]) {
+    for (axis, (target_axis, offset, mix)) in axes
+        .iter_mut()
+        .zip([(tx, c.offset_scale.x, mix_scale_x), (ty, c.offset_scale.y, mix_scale_y)])
+    {
         if mix == 0.0 {
             continue;
         }
@@ -1120,16 +1380,16 @@ fn world_transform(c: &TransformConstraint, mut m: Affine2, t: Affine2) -> Affin
         *axis *= k;
     }
     m.matrix2 = glam::Mat2::from_cols(axes[0], axes[1]);
-    if c.mix_shear_y != 0.0 {
+    if mix_shear_y != 0.0 {
         let (bx, by) = (m.matrix2.x_axis, m.matrix2.y_axis);
         // The target's y axis's angle from its x axis, a quarter turn
         // without shear; the bone's y axis turns toward the same.
         let target_shear = wrap(direction(ty) - direction(tx));
         let r = if c.relative {
-            direction(by) + (target_shear - std::f32::consts::FRAC_PI_2 + offset_shear) * c.mix_shear_y
+            direction(by) + (target_shear - std::f32::consts::FRAC_PI_2 + offset_shear) * mix_shear_y
         } else {
             let own = wrap(direction(by) - direction(bx));
-            direction(by) + (wrap(target_shear - own) + offset_shear) * c.mix_shear_y
+            direction(by) + (wrap(target_shear - own) + offset_shear) * mix_shear_y
         };
         m.matrix2.y_axis = Vec2::from_angle(r) * by.length();
     }
@@ -1138,17 +1398,19 @@ fn world_transform(c: &TransformConstraint, mut m: Affine2, t: Affine2) -> Affin
 
 /// Bone pose `pose` moved by transform constraint `c` relative to its
 /// parent, toward (absolute) or by (relative) the target's pose `t`.
-fn local_transform(c: &TransformConstraint, mut pose: BonePose, t: BonePose) -> BonePose {
+fn local_transform(c: &TransformConstraint, mix: [f32; 6], mut pose: BonePose, t: BonePose) -> BonePose {
+    let [mix_rotate, mix_x, mix_y, mix_scale_x, mix_scale_y, mix_shear_y] = mix;
+    let (mix_translate, mix_scale) = (Vec2::new(mix_x, mix_y), Vec2::new(mix_scale_x, mix_scale_y));
     if c.relative {
-        pose.rotation += (t.rotation + c.offset_rotation) * c.mix_rotate;
-        pose.translation += (t.translation + c.offset_translation) * c.mix_translate;
-        pose.scale *= (t.scale - Vec2::ONE + c.offset_scale) * c.mix_scale + Vec2::ONE;
-        pose.shear.y += (t.shear.y + c.offset_shear_y) * c.mix_shear_y;
+        pose.rotation += (t.rotation + c.offset_rotation) * mix_rotate;
+        pose.translation += (t.translation + c.offset_translation) * mix_translate;
+        pose.scale *= (t.scale - Vec2::ONE + c.offset_scale) * mix_scale + Vec2::ONE;
+        pose.shear.y += (t.shear.y + c.offset_shear_y) * mix_shear_y;
     } else {
-        pose.rotation += wrap(t.rotation - pose.rotation + c.offset_rotation) * c.mix_rotate;
-        pose.translation += (t.translation - pose.translation + c.offset_translation) * c.mix_translate;
-        pose.scale += (t.scale - pose.scale + c.offset_scale) * c.mix_scale;
-        pose.shear.y += wrap(t.shear.y - pose.shear.y + c.offset_shear_y) * c.mix_shear_y;
+        pose.rotation += wrap(t.rotation - pose.rotation + c.offset_rotation) * mix_rotate;
+        pose.translation += (t.translation - pose.translation + c.offset_translation) * mix_translate;
+        pose.scale += (t.scale - pose.scale + c.offset_scale) * mix_scale;
+        pose.shear.y += wrap(t.shear.y - pose.shear.y + c.offset_shear_y) * mix_shear_y;
     }
     pose
 }
@@ -1181,5 +1443,106 @@ pub(crate) fn blend_children(children: &[(f32, usize)], value: f32) -> (usize, u
         let (t0, a) = children[hi - 1];
         let (t1, b) = children[hi];
         (a, b, (value - t0) / (t1 - t0))
+    }
+}
+
+/// Where vertex `v` of the mesh, mask or path `named` is with bone
+/// matrices `world`: its influences' bones as posed, plus a deform's
+/// offsets in those bones' spaces.
+pub(crate) fn skinned(world: &[Affine2], named: &Named, deform: Option<&[Vec2]>, v: usize) -> Vec2 {
+    let mut at = Vec2::ZERO;
+    for k in 0..4 {
+        let (b, local, w) = named.binds[4 * v + k];
+        if w > 0.0 {
+            let local = deform.map_or(local, |d| local + d[4 * v + k]);
+            at += world[usize::from(b)].transform_point2(local) * w;
+        }
+    }
+    at
+}
+
+#[cfg(test)]
+mod tests {
+    //! Deforms across crossfades and 1D blends, read where the drawing
+    //! reads them.
+    use std::sync::Arc;
+
+    use glam::Vec2;
+
+    use super::Skeleton;
+    use crate::anim::{AnimationParameter, ParamId, StateId};
+    use crate::skeleton2d::{
+        BonePose, Clip, DeformTrack, Key, MeshVertex, SkeletonData, SkeletonGraph, SkeletonMotion, SkeletonState,
+        SkinnedMesh,
+    };
+    use crate::texture::Texture;
+
+    /// One mesh vertex, moved 10 right by clip "pushed" and not by "still".
+    fn rig() -> Arc<SkeletonData> {
+        let mut data = SkeletonData::new();
+        let root = data.add_bone("root", None, BonePose::IDENTITY, 0.0);
+        let slot = data.add_slot("skin", root);
+        let vertex = MeshVertex::new(Vec2::ZERO, Vec2::ZERO, &[(root, 1.0)]);
+        data.add_attachment(
+            slot,
+            "skin",
+            SkinnedMesh::new(Texture::new(0, 1, 1), vec![vertex], vec![]),
+        );
+        let mut push = DeformTrack::new(slot, 0, "skin");
+        let mut moved = vec![Vec2::ZERO; 4];
+        moved[0] = Vec2::new(10.0, 0.0);
+        push.keys = vec![Key::new(0.0, Arc::from(moved))];
+        data.add_clip(Clip::new("pushed", 1.0).with_deform_track(push));
+        data.add_clip(Clip::new("still", 1.0));
+        let graph = SkeletonGraph::new(
+            vec![("t", AnimationParameter::Float(0.0))],
+            vec![SkeletonState::new(
+                "blend",
+                SkeletonMotion::Blend1D {
+                    parameter: ParamId(0),
+                    children: vec![(0.0, 1), (1.0, 0)],
+                },
+            )],
+            vec![],
+            StateId(0),
+        )
+        .unwrap();
+        data.set_graph(graph).unwrap();
+        Arc::new(data)
+    }
+
+    fn offset(s: &Skeleton) -> f32 {
+        let a = s.shown(0).unwrap();
+        s.deform(0, a).map_or(0.0, |d| d[0].x)
+    }
+
+    #[test]
+    fn deforms_blend_across_a_crossfade_both_ways() {
+        let mut s = Skeleton::new(rig());
+        assert!(s.play("pushed"));
+        s.update(0.0);
+        assert_eq!(offset(&s), 10.0);
+        s.crossfade("still", 1.0);
+        s.update(0.25);
+        assert!((offset(&s) - 7.5).abs() < 1e-5, "{}", offset(&s));
+        s.update(0.5);
+        assert!((offset(&s) - 2.5).abs() < 1e-5, "{}", offset(&s));
+        s.update(0.5);
+        assert_eq!(offset(&s), 0.0, "the fade is over");
+        // And into a deform: it grows in rather than snapping at half way.
+        s.crossfade("pushed", 1.0);
+        s.update(0.25);
+        assert!((offset(&s) - 2.5).abs() < 1e-5, "{}", offset(&s));
+    }
+
+    #[test]
+    fn deforms_blend_by_a_1d_blends_weight() {
+        let mut s = Skeleton::new(rig());
+        s.set_float(ParamId(0), 0.3);
+        s.update(0.0);
+        assert!((offset(&s) - 3.0).abs() < 1e-5, "{}", offset(&s));
+        s.set_float(ParamId(0), 1.0);
+        s.update(0.0);
+        assert_eq!(offset(&s), 10.0);
     }
 }

@@ -200,7 +200,7 @@ pub enum UiTextAlign {
 /// let paint = ponko::ui::UiPaint { background: Color::BLUE, font_size: 20.0, ..Default::default() };
 /// assert_eq!(paint.font_size, 20.0);
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UiPaint {
     /// Normal background.
     /// ```
@@ -655,6 +655,10 @@ pub(super) struct Node {
     /// Its animation: drawn properties, state and screen transitions,
     /// where it is drawn.
     pub motion: super::anim::NodeMotion,
+    /// What its text was measured from in the last layout.
+    pub measured: super::retained_layout::Measured,
+    /// What it drew last, kept until what it is drawn from changes.
+    pub drawn: super::retained_draw::Drawn,
 }
 /// How a screen pushed on the [`Ui`]'s stack treats the screens below it
 /// ([`Ui::push_screen_with_mode`]). Either way only the top screen takes
@@ -768,6 +772,11 @@ pub struct Ui {
     pub(super) rich_assets: super::rich::RichAssets,
     /// Scratch space for laying out rich text.
     pub(super) rich_layout: super::rich::RichLayout,
+    /// What the last layout was computed for, and how many ran.
+    pub(super) layout_cache: super::retained_layout::LayoutCache,
+    /// What the nodes' kept drawing was drawn for, and how many were drawn
+    /// again ([`Ui::node_redraws`]).
+    pub(super) draw_cache: super::retained_draw::DrawCache,
     /// The named nodes ([`Ui::find`]).
     pub(super) names: std::collections::HashMap<String, UiId>,
     /// The immediate widgets (a panel, a label, a button drawn the frame
@@ -817,6 +826,8 @@ impl Default for Ui {
             theme: super::UiTheme::default(),
             rich_assets: Default::default(),
             rich_layout: Default::default(),
+            layout_cache: Default::default(),
+            draw_cache: Default::default(),
             names: std::collections::HashMap::new(),
             immediate: super::UiImmediate::default(),
             overlay_has_pointer: false,
@@ -891,6 +902,8 @@ impl Ui {
             rich: None,
             extra: None,
             motion: Default::default(),
+            measured: Default::default(),
+            drawn: Default::default(),
         });
         id
     }
@@ -981,7 +994,12 @@ impl Ui {
     /// ```
     pub fn set_layout(&mut self, id: UiId, layout: UiLayout) {
         if let Some(n) = self.node(id) {
-            let _ = self.tree.set_style(n.layout, layout.into_unstable_style());
+            let style = layout.into_unstable_style();
+            // The same layout again leaves the node's layout standing.
+            if self.tree.style(n.layout).is_ok_and(|old| *old == style) {
+                return;
+            }
+            let _ = self.tree.set_style(n.layout, style);
         }
     }
     /// The node's current layout, or `None` for a removed node.
@@ -1634,7 +1652,10 @@ impl Ui {
         })
     }
     /// Resolve all screens against the logical window size. Percent sizes,
-    /// min/max, flex/grid and absolute offsets are Taffy styles.
+    /// min/max, flex/grid and absolute offsets are Taffy styles. Only what
+    /// changed since the last layout is laid out again; with nothing
+    /// changed, nodes are only placed where scrolling and animations put
+    /// them ([`Ui::layout_passes`]).
     /// ```
     /// use ponko::prelude::*;
     /// let mut ui = ponko::ui::Ui::default(); ui.layout(vec2(800.0,600.0));
@@ -1654,14 +1675,31 @@ impl Ui {
             self.focus = None;
         }
     }
-    /// Taffy's layout of every root, then each node's rectangle and clip.
+    /// Taffy's layout of the roots where something changed since the last
+    /// one (`retained_layout`), then each node's rectangle and clip.
     fn compute_layout(&mut self, viewport: Vec2) {
-        self.visible.clear();
-        // Intrinsic text measurement uses the engine's font layout, headlessly.
-        for n in self.nodes.iter().flatten() {
-            let _ = self.tree.mark_dirty(n.layout);
-        }
         self.parse_rich();
+        // Taffy lays out again only what changed: a style or a child (it
+        // sees those), a node's text measure (marked here), or everything
+        // for another window size, scale or font set.
+        let key = super::retained_layout::LayoutKey {
+            viewport,
+            scale: self.scale,
+            pixels: self.pixels,
+            external_fonts: self.external_fonts,
+            fonts: self.measure.revision(),
+        };
+        if self.mark_layout_changes(key) {
+            self.layout_cache.passes += 1;
+            self.run_taffy(viewport);
+        }
+        // Placing is a cheap walk: it runs every time, so scrolling and
+        // animations move nodes without a layout.
+        self.place_roots(viewport);
+    }
+    /// Taffy's layout of every shown root with something dirty, text
+    /// measured with the engine's font layout (headlessly too).
+    fn run_taffy(&mut self, viewport: Vec2) {
         let nodes = &self.nodes;
         let text = &mut self.measure;
         let scratch = &mut self.rich_layout;
@@ -1674,6 +1712,9 @@ impl Ui {
         let roots = self.huds.iter().chain(self.screens.iter().map(|s| &s.root));
         for root in roots {
             let layout = nodes[root.slot()].as_ref().unwrap().layout;
+            if !self.tree.dirty(layout).unwrap_or(true) {
+                continue;
+            }
             let _ = self.tree.compute_layout_with_measure(
                 layout,
                 Size {
@@ -1734,6 +1775,11 @@ impl Ui {
                 },
             );
         }
+    }
+    /// Each shown node's rectangle and clip from Taffy's layout, where
+    /// scrolling and animations put it.
+    fn place_roots(&mut self, viewport: Vec2) {
+        self.visible.clear();
         // HUDs first: `visible` is drawing order, so they are under the
         // screens. A screen going off is drawn where it was on the stack.
         let window = Rect::new(0.0, 0.0, viewport.x, viewport.y);
