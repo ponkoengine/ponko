@@ -54,8 +54,14 @@ pub(crate) fn screen_projection(size: Vec2) -> Mat4 {
 /// | [`assets`](Self::assets) | [`Assets`](crate::assets::Assets): asset sources, data files, saving scenes and prefabs, hot reload. |
 /// | [`perf`](Self::perf) | [`Perf`](crate::perf::Perf): timings, the HUD, traces, profiling reports. |
 /// | [`storage`](Self::storage) | [`Storage`](crate::storage::Storage): the player's saves and settings, crash-safe, on the desktop and the web. |
-#[cfg_attr(feature = "3d", doc = " | [`camera`](Self::camera), `scene3d` | What the renderer reads when the frame is drawn: the 2D camera, and with `3d` the [`SceneSettings`](crate::render::SceneSettings) (camera, lighting, sky, post-processing, levels of detail, GPU passes, quality). |")]
-#[cfg_attr(not(feature = "3d"), doc = " | [`camera`](Self::camera), `scene3d` | What the renderer reads when the frame is drawn: the 2D camera, and with `3d` the `SceneSettings` (camera, lighting, sky, post-processing, levels of detail, GPU passes, quality). |")]
+#[cfg_attr(
+    feature = "3d",
+    doc = " | [`camera`](Self::camera), `scene3d` | What the renderer reads when the frame is drawn: the 2D camera, and with `3d` the [`SceneSettings`](crate::render::SceneSettings) (camera, lighting, sky, post-processing, levels of detail, GPU passes, quality). |"
+)]
+#[cfg_attr(
+    not(feature = "3d"),
+    doc = " | [`camera`](Self::camera), `scene3d` | What the renderer reads when the frame is drawn: the 2D camera, and with `3d` the `SceneSettings` (camera, lighting, sky, post-processing, levels of detail, GPU passes, quality). |"
+)]
 /// | [`spatial`](Self::spatial), `physics`, `physics3d`, [`net`](Self::net) | Neighbor queries, the physics worlds, [`Networking`](crate::net::Networking): lockstep, messages, snapshots. |
 ///
 /// # Shortcuts

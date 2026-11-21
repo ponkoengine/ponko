@@ -5,7 +5,10 @@
 //! [`crate::streaming`], which documents the whole asset service.
 //!
 //! A game asks for an asset by name each time it needs it
-#![cfg_attr(feature = "3d", doc = " ([`Graphics::resident_mesh`](crate::gfx::Graphics::resident_mesh)); the asset loads if")]
+#![cfg_attr(
+    feature = "3d",
+    doc = " ([`Graphics::resident_mesh`](crate::gfx::Graphics::resident_mesh)); the asset loads if"
+)]
 #![cfg_attr(not(feature = "3d"), doc = " (`Graphics::resident_mesh`); the asset loads if")]
 //! it isn't resident, and when the resident bytes of its kind go over the
 //! kind's budget, the least recently used assets that nothing needs are
@@ -28,8 +31,14 @@ use ponko_ecs::World;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ResidencyKind {
-    #[cfg_attr(feature = "3d", doc = " Meshes loaded from files with [`Graphics::resident_mesh`](crate::gfx::Graphics::resident_mesh):")]
-    #[cfg_attr(not(feature = "3d"), doc = " Meshes loaded from files with `Graphics::resident_mesh`:")]
+    #[cfg_attr(
+        feature = "3d",
+        doc = " Meshes loaded from files with [`Graphics::resident_mesh`](crate::gfx::Graphics::resident_mesh):"
+    )]
+    #[cfg_attr(
+        not(feature = "3d"),
+        doc = " Meshes loaded from files with `Graphics::resident_mesh`:"
+    )]
     /// their vertex and index buffers.
     Mesh,
     /// Images loaded with [`Graphics::resident_texture`](crate::gfx::Graphics::resident_texture)
@@ -387,7 +396,10 @@ impl crate::gfx::Graphics {
     ///
     /// The budget counts the engine's estimates of the assets' GPU memory,
     /// and only assets loaded through residency or streaming (such as
-    #[cfg_attr(feature = "3d", doc = " [`resident_mesh`](crate::gfx::Graphics::resident_mesh)). It can be exceeded: assets")]
+    #[cfg_attr(
+        feature = "3d",
+        doc = " [`resident_mesh`](crate::gfx::Graphics::resident_mesh)). It can be exceeded: assets"
+    )]
     #[cfg_attr(not(feature = "3d"), doc = " `resident_mesh`). It can be exceeded: assets")]
     /// that are pinned, shown by entities, or asked for in this or the
     /// previous frame or tick are never evicted, and [`ResidencyStats::over_budget_bytes`] says by

@@ -138,12 +138,21 @@ pub struct GpuLimits {
 }
 
 /// What the device's limits allow for instance batches
-#[cfg_attr(feature = "3d", doc = " ([`InstanceBatch`](crate::render::InstanceBatch)): [`GpuCapabilities::instance_batches`].")]
-#[cfg_attr(not(feature = "3d"), doc = " (`InstanceBatch`): [`GpuCapabilities::instance_batches`].")]
+#[cfg_attr(
+    feature = "3d",
+    doc = " ([`InstanceBatch`](crate::render::InstanceBatch)): [`GpuCapabilities::instance_batches`]."
+)]
+#[cfg_attr(
+    not(feature = "3d"),
+    doc = " (`InstanceBatch`): [`GpuCapabilities::instance_batches`]."
+)]
 ///
 /// A batch is *GPU-driven* when the device has compute culling and the
 /// batch has one distance level and at least `min_gpu_instances` instances
-#[cfg_attr(feature = "3d", doc = " (or what [`BatchCulling`](crate::render::BatchCulling) asks): one compute dispatch")]
+#[cfg_attr(
+    feature = "3d",
+    doc = " (or what [`BatchCulling`](crate::render::BatchCulling) asks): one compute dispatch"
+)]
 #[cfg_attr(not(feature = "3d"), doc = " (or what `BatchCulling` asks): one compute dispatch")]
 /// culls every such batch per instance, and each is drawn with indirect
 /// draws. Every other batch is culled on the CPU, cell by cell, and drawn
@@ -340,7 +349,10 @@ pub struct GpuFeatureStatus {
 /// the per-feature entries of [`GpuCapabilities`] are the exact answer.
 /// Nothing in the table fails on a weaker tier: each unavailable feature
 /// falls back as its [`GpuFeatureStatus`] says.
-#[cfg_attr(feature = "3d", doc = " [`SceneSettings::set_recommended_quality`](crate::render::SceneSettings::set_recommended_quality)")]
+#[cfg_attr(
+    feature = "3d",
+    doc = " [`SceneSettings::set_recommended_quality`](crate::render::SceneSettings::set_recommended_quality)"
+)]
 #[cfg_attr(not(feature = "3d"), doc = " `SceneSettings::set_recommended_quality`")]
 /// picks a preset per tier.
 ///

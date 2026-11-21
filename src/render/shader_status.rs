@@ -8,19 +8,43 @@ use crate::gfx::Graphics;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ShaderKind {
-    #[cfg_attr(feature = "3d", doc = " A material shader ([`Graphics::create_shader`](crate::gfx::Graphics::create_shader), [`Graphics::load_shader`](crate::gfx::Graphics::load_shader)).")]
-    #[cfg_attr(not(feature = "3d"), doc = " A material shader (`Graphics::create_shader`, `Graphics::load_shader`).")]
+    #[cfg_attr(
+        feature = "3d",
+        doc = " A material shader ([`Graphics::create_shader`](crate::gfx::Graphics::create_shader), [`Graphics::load_shader`](crate::gfx::Graphics::load_shader))."
+    )]
+    #[cfg_attr(
+        not(feature = "3d"),
+        doc = " A material shader (`Graphics::create_shader`, `Graphics::load_shader`)."
+    )]
     Material,
-    #[cfg_attr(feature = "3d", doc = " A screen effect ([`Graphics::create_effect`](crate::gfx::Graphics::create_effect), [`Graphics::load_effect`](crate::gfx::Graphics::load_effect)).")]
-    #[cfg_attr(not(feature = "3d"), doc = " A screen effect (`Graphics::create_effect`, `Graphics::load_effect`).")]
+    #[cfg_attr(
+        feature = "3d",
+        doc = " A screen effect ([`Graphics::create_effect`](crate::gfx::Graphics::create_effect), [`Graphics::load_effect`](crate::gfx::Graphics::load_effect))."
+    )]
+    #[cfg_attr(
+        not(feature = "3d"),
+        doc = " A screen effect (`Graphics::create_effect`, `Graphics::load_effect`)."
+    )]
     Effect,
-    #[cfg_attr(feature = "3d", doc = " A compute pass ([`Graphics::create_compute`](crate::gfx::Graphics::create_compute), [`Graphics::load_compute`](crate::gfx::Graphics::load_compute)).")]
-    #[cfg_attr(not(feature = "3d"), doc = " A compute pass (`Graphics::create_compute`, `Graphics::load_compute`).")]
+    #[cfg_attr(
+        feature = "3d",
+        doc = " A compute pass ([`Graphics::create_compute`](crate::gfx::Graphics::create_compute), [`Graphics::load_compute`](crate::gfx::Graphics::load_compute))."
+    )]
+    #[cfg_attr(
+        not(feature = "3d"),
+        doc = " A compute pass (`Graphics::create_compute`, `Graphics::load_compute`)."
+    )]
     Compute,
     /// A sprite shader ([`Graphics::create_sprite_shader`](crate::gfx::Graphics::create_sprite_shader), [`Graphics::load_sprite_shader`](crate::gfx::Graphics::load_sprite_shader)).
     Sprite,
-    #[cfg_attr(feature = "3d", doc = " A sky shader ([`Graphics::create_sky_shader`](crate::gfx::Graphics::create_sky_shader), [`Graphics::load_sky_shader`](crate::gfx::Graphics::load_sky_shader)).")]
-    #[cfg_attr(not(feature = "3d"), doc = " A sky shader (`Graphics::create_sky_shader`, `Graphics::load_sky_shader`).")]
+    #[cfg_attr(
+        feature = "3d",
+        doc = " A sky shader ([`Graphics::create_sky_shader`](crate::gfx::Graphics::create_sky_shader), [`Graphics::load_sky_shader`](crate::gfx::Graphics::load_sky_shader))."
+    )]
+    #[cfg_attr(
+        not(feature = "3d"),
+        doc = " A sky shader (`Graphics::create_sky_shader`, `Graphics::load_sky_shader`)."
+    )]
     Sky,
 }
 

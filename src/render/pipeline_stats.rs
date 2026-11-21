@@ -33,7 +33,10 @@ pub struct PipelineStats {
     /// Draws whose pipelines were already built.
     pub hits: u64,
     /// Draws that had to build their variant first, inside a frame (see
-    #[cfg_attr(feature = "3d", doc = " [`Graphics::warm_render_pipelines`](crate::gfx::Graphics::warm_render_pipelines)).")]
+    #[cfg_attr(
+        feature = "3d",
+        doc = " [`Graphics::warm_render_pipelines`](crate::gfx::Graphics::warm_render_pipelines))."
+    )]
     #[cfg_attr(not(feature = "3d"), doc = " `Graphics::warm_render_pipelines`).")]
     pub misses: u64,
     /// Material shaders made or reloaded with the same code (and variant)

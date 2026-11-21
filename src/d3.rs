@@ -11,8 +11,14 @@
 //! (meshes, materials, models, shaders, level of detail, render settings),
 //! [`anim`](crate::anim) (skeletons, clips, animators, IK),
 //! [`terrain`](crate::terrain), [`particles`](crate::particles) (curves and
-#![cfg_attr(any(feature = "physics", feature = "physics3d"), doc = " gradients shared with 2D), [`collision`](crate::collision) (body kinds")]
-#![cfg_attr(not(any(feature = "physics", feature = "physics3d")), doc = " gradients shared with 2D), `collision` (body kinds")]
+#![cfg_attr(
+    any(feature = "physics", feature = "physics3d"),
+    doc = " gradients shared with 2D), [`collision`](crate::collision) (body kinds"
+)]
+#![cfg_attr(
+    not(any(feature = "physics", feature = "physics3d")),
+    doc = " gradients shared with 2D), `collision` (body kinds"
+)]
 //! and collision events, shared with 2D), [`attach`](crate::attach)
 //! (3D attachments, `Attached3D`, with the 2D ones) and [`nav`](crate::nav)
 //! (navigation mesh baking).
@@ -38,7 +44,6 @@
 //! two steps, so motion looks smooth at any frame rate. Turn it on with
 #![cfg_attr(feature = "physics3d", doc = " [`Game::physics3d`](crate::game::Game::physics3d).")]
 #![cfg_attr(not(feature = "physics3d"), doc = " `Game::physics3d`.")]
-
 #![deny(missing_docs)]
 
 // Types whose home is this module.
