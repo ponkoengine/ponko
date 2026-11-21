@@ -403,19 +403,35 @@ mod tests {
     fn brightness_prefers_the_games_peak_then_the_displays() {
         let mut hdr = HdrOutput::on();
         let none = DisplayReport::default();
-        assert_eq!(brightness(&hdr, false, none), (200.0, 1000.0, 5.0), "no report: 1000 nits");
+        assert_eq!(
+            brightness(&hdr, false, none),
+            (200.0, 1000.0, 5.0),
+            "no report: 1000 nits"
+        );
         let windows = DisplayReport {
             peak_nits: Some(600.0),
             headroom: Some(2.0),
         };
-        assert_eq!(brightness(&hdr, false, windows), (200.0, 600.0, 3.0), "absolute: the panel's nits");
+        assert_eq!(
+            brightness(&hdr, false, windows),
+            (200.0, 600.0, 3.0),
+            "absolute: the panel's nits"
+        );
         let mac = DisplayReport {
             peak_nits: None,
             headroom: Some(4.0),
         };
-        assert_eq!(brightness(&hdr, true, mac), (200.0, 800.0, 4.0), "relative: the headroom");
+        assert_eq!(
+            brightness(&hdr, true, mac),
+            (200.0, 800.0, 4.0),
+            "relative: the headroom"
+        );
         hdr.peak_nits = 1500.0;
-        assert_eq!(brightness(&hdr, false, windows), (200.0, 1500.0, 7.5), "the game's peak wins");
+        assert_eq!(
+            brightness(&hdr, false, windows),
+            (200.0, 1500.0, 7.5),
+            "the game's peak wins"
+        );
         hdr.peak_nits = 50.0;
         assert_eq!(brightness(&hdr, false, windows).2, 1.0, "never below paper white");
         hdr.peak_nits = 1e9;

@@ -47,27 +47,33 @@ fn candidates(backend: wgpu::Backend) -> &'static [OutputChoice] {
         }
     }
     match backend {
-        wgpu::Backend::Metal => &const {
-            [
-                c(Rgba16Float, Cs::ExtendedSrgbLinear, ScRgb, true),
-                c(Rgba16Float, Cs::ExtendedSrgb, ExtendedSrgb, true),
-                c(Rgb10a2Unorm, Cs::Bt2100Pq, Pq, false),
-            ]
-        },
-        wgpu::Backend::Dx12 => &const {
-            [
-                c(Rgba16Float, Cs::ExtendedSrgbLinear, ScRgb, false),
-                c(Rgb10a2Unorm, Cs::Bt2100Pq, Pq, false),
-            ]
-        },
-        wgpu::Backend::Vulkan => &const {
-            [
-                c(Rgba16Float, Cs::ExtendedSrgbLinear, ScRgb, false),
-                c(Rgb10a2Unorm, Cs::Bt2100Pq, Pq, false),
-                c(Rgba16Float, Cs::Bt2100Pq, Pq, false),
-                c(Rgba16Float, Cs::ExtendedSrgb, ExtendedSrgb, false),
-            ]
-        },
+        wgpu::Backend::Metal => {
+            &const {
+                [
+                    c(Rgba16Float, Cs::ExtendedSrgbLinear, ScRgb, true),
+                    c(Rgba16Float, Cs::ExtendedSrgb, ExtendedSrgb, true),
+                    c(Rgb10a2Unorm, Cs::Bt2100Pq, Pq, false),
+                ]
+            }
+        }
+        wgpu::Backend::Dx12 => {
+            &const {
+                [
+                    c(Rgba16Float, Cs::ExtendedSrgbLinear, ScRgb, false),
+                    c(Rgb10a2Unorm, Cs::Bt2100Pq, Pq, false),
+                ]
+            }
+        }
+        wgpu::Backend::Vulkan => {
+            &const {
+                [
+                    c(Rgba16Float, Cs::ExtendedSrgbLinear, ScRgb, false),
+                    c(Rgb10a2Unorm, Cs::Bt2100Pq, Pq, false),
+                    c(Rgba16Float, Cs::Bt2100Pq, Pq, false),
+                    c(Rgba16Float, Cs::ExtendedSrgb, ExtendedSrgb, false),
+                ]
+            }
+        }
         wgpu::Backend::BrowserWebGpu => &const { [c(Rgba16Float, Cs::ExtendedSrgb, ExtendedSrgb, true)] },
         // OpenGL/WebGL2 offer sRGB only; the no-op backend draws nothing.
         _ => &[],
@@ -169,11 +175,7 @@ impl Hdr {
 
     /// Paper white, peak and headroom as used.
     pub fn brightness(&self) -> (f32, f32, f32) {
-        brightness(
-            &self.settings,
-            self.choice.is_some_and(|c| c.relative),
-            self.display,
-        )
+        brightness(&self.settings, self.choice.is_some_and(|c| c.relative), self.display)
     }
 
     /// The surface's format, color space and view format for the output
@@ -357,51 +359,51 @@ impl HdrPass {
 
     /// A view of the frame image at `size`, made again when the size changed.
     pub fn frame_view(&mut self, device: &wgpu::Device, (width, height): (u32, u32)) -> wgpu::TextureView {
-        let fits = self
-            .frame
-            .as_ref()
-            .is_some_and(|f| f.texture.width() == width && f.texture.height() == height);
-        if !fits {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("hdr frame"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: FRAME_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let group = |buffer: &wgpu::Buffer| {
-                device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("hdr output"),
-                    layout: &self.layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: buffer.as_entire_binding(),
-                        },
-                    ],
-                })
-            };
-            let (window, sdr) = (group(&self.uniform), group(&self.sdr_uniform));
-            self.frame = Some(FrameImage {
-                texture,
-                view,
-                window,
-                sdr,
-            });
+        if let Some(f) = &self.frame
+            && f.texture.width() == width
+            && f.texture.height() == height
+        {
+            return f.view.clone();
         }
-        self.frame.as_ref().map(|f| f.view.clone()).expect("made above")
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hdr frame"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FRAME_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let group = |buffer: &wgpu::Buffer| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("hdr output"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: buffer.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+        let (window, sdr) = (group(&self.uniform), group(&self.sdr_uniform));
+        self.frame = Some(FrameImage {
+            texture,
+            view: view.clone(),
+            window,
+            sdr,
+        });
+        view
     }
 
     /// Records the pass drawing the frame image into `target` (of `format`,
@@ -502,7 +504,10 @@ mod tests {
     #[test]
     fn windows_takes_scrgb_then_hdr10() {
         let choice = choose_output(wgpu::Backend::Dx12, &dx12()).expect("DXGI offers scRGB");
-        assert_eq!((choice.format, choice.encoding, choice.relative), (F::Rgba16Float, HdrEncoding::ScRgb, false));
+        assert_eq!(
+            (choice.format, choice.encoding, choice.relative),
+            (F::Rgba16Float, HdrEncoding::ScRgb, false)
+        );
         let no_float = caps(&[(F::Bgra8UnormSrgb, S::SRGB), (F::Rgb10a2Unorm, S::SRGB | S::BT2100_PQ)]);
         let choice = choose_output(wgpu::Backend::Dx12, &no_float).expect("HDR10 next");
         assert_eq!(
@@ -514,7 +519,11 @@ mod tests {
     #[test]
     fn vulkan_takes_what_the_driver_exposes() {
         let sdr_only = caps(&[(F::Bgra8UnormSrgb, S::SRGB), (F::Bgra8Unorm, S::SRGB)]);
-        assert_eq!(choose_output(wgpu::Backend::Vulkan, &sdr_only), None, "no HDR color space");
+        assert_eq!(
+            choose_output(wgpu::Backend::Vulkan, &sdr_only),
+            None,
+            "no HDR color space"
+        );
         let hdr10 = caps(&[(F::Bgra8UnormSrgb, S::SRGB), (F::Rgb10a2Unorm, S::SRGB | S::BT2100_PQ)]);
         assert_eq!(
             choose_output(wgpu::Backend::Vulkan, &hdr10).map(|c| c.encoding),
@@ -561,7 +570,11 @@ mod tests {
         let windows = choose_output(wgpu::Backend::Dx12, &dx12()).unwrap();
         assert_eq!(OutputUniform::new(&windows, 200.0).params[0], 2.5);
         let mac = choose_output(wgpu::Backend::Metal, &metal()).unwrap();
-        assert_eq!(OutputUniform::new(&mac, 200.0).params[0], 1.0, "macOS sets SDR white itself");
+        assert_eq!(
+            OutputUniform::new(&mac, 200.0).params[0],
+            1.0,
+            "macOS sets SDR white itself"
+        );
     }
 
     #[test]

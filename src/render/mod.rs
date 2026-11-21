@@ -79,7 +79,6 @@ pub(crate) mod upload_timer;
 mod views;
 
 pub use crate::sprite_material::{BlendMode, SpriteMaterial, SpriteMaterialDesc, SpriteShader};
-pub use hdr::{HdrEncoding, HdrOffReason, HdrOutput, HdrStatus};
 #[cfg(feature = "3d")]
 pub use crate::three::{QualityAutotune, QualityAutotuneReason, QualityAutotuneStatus, QualityChange};
 pub use capabilities::{GpuAdapter, GpuBatchLimits, GpuCapabilities, GpuFeature, GpuFeatureStatus, GpuLimits, GpuTier};
@@ -102,6 +101,7 @@ pub use gpu3d::{
     LodBench, LodFrame, LodMemory, LodPath, LodScene, RecordBench, RecordScene, SceneBench, SceneFrame, SceneKind,
     SceneSetup,
 };
+pub use hdr::{HdrEncoding, HdrOffReason, HdrOutput, HdrStatus};
 /// Unstable 2D lighting benchmark driver for `ponko_bench` (feature `bench-internals`).
 #[doc(hidden)]
 #[cfg(all(
@@ -495,6 +495,8 @@ mod gltf_extensions_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod gltf_sharing_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod hdr_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod instance_cells_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod instance_cells_render_test;
@@ -538,8 +540,6 @@ mod transparency_bench;
 mod transparency_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod ui_animation_render_test;
-#[cfg(all(test, feature = "window", feature = "3d"))]
-mod hdr_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod ui_group_fade_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]

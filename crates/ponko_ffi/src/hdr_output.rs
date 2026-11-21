@@ -87,7 +87,11 @@ fn output_from_c(c: &PonkoHdrOutput) -> Result<HdrOutput, Failure> {
     if c.peak_nits.is_nan() || c.peak_nits < 0.0 {
         return Err(invalid("peak_nits must be 0 (the display's) or more"));
     }
-    let mut h = if c.enabled { HdrOutput::on() } else { HdrOutput::default() };
+    let mut h = if c.enabled {
+        HdrOutput::on()
+    } else {
+        HdrOutput::default()
+    };
     h.paper_white_nits = c.paper_white_nits;
     h.peak_nits = c.peak_nits;
     Ok(h)

@@ -1526,7 +1526,12 @@ impl Renderer {
         if let Some(hidden) = &self.hidden_target {
             t.texture(C::FrameTargets, "offscreen frame", hidden);
         }
-        if let Some(frame) = self.hdr.pass.as_ref().and_then(super::hdr_output::HdrPass::frame_texture) {
+        if let Some(frame) = self
+            .hdr
+            .pass
+            .as_ref()
+            .and_then(super::hdr_output::HdrPass::frame_texture)
+        {
             t.texture(C::FrameTargets, "hdr frame", frame);
         }
         t.buffer(C::InstanceBatches, "sprite instances", &self.instance_buffer);

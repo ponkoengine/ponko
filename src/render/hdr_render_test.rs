@@ -41,7 +41,10 @@ fn to_f16(v: f32) -> u16 {
     let bits = v.to_bits();
     let sign = ((bits >> 16) & 0x8000) as u16;
     let exp = ((bits >> 23) & 0xff) as i32 - 127 + 15;
-    assert!((1..31).contains(&exp), "{v} is outside the half float range the tests use");
+    assert!(
+        (1..31).contains(&exp),
+        "{v} is outside the half float range the tests use"
+    );
     let man = ((bits & 0x7f_ffff) + 0x1000) >> 13;
     let (exp, man) = if man == 0x400 { (exp + 1, 0) } else { (exp, man) };
     sign | ((exp as u16) << 10) | man as u16
@@ -51,11 +54,15 @@ fn to_f16(v: f32) -> u16 {
 fn decode(format: wgpu::TextureFormat, bytes: &[u8]) -> Vec<[f32; 4]> {
     match format {
         wgpu::TextureFormat::Rgba16Float => bytes
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .map(|p| [0, 1, 2, 3].map(|i| from_f16(u16::from_le_bytes([p[2 * i], p[2 * i + 1]]))))
             .collect(),
         wgpu::TextureFormat::Rgb10a2Unorm => bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| {
                 let v = u32::from_le_bytes([p[0], p[1], p[2], p[3]]);
                 let c = |shift: u32| ((v >> shift) & 0x3ff) as f32 / 1023.0;
@@ -63,7 +70,9 @@ fn decode(format: wgpu::TextureFormat, bytes: &[u8]) -> Vec<[f32; 4]> {
             })
             .collect(),
         wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| [0, 1, 2, 3].map(|i| f32::from(p[i]) / 255.0))
             .collect(),
         other => panic!("no decoder for {other:?}"),
@@ -118,7 +127,10 @@ fn encode(gpu: &TestGpu, color: [f32; 3], uniform: OutputUniform, format: wgpu::
 
 fn choice(encoding: HdrEncoding, relative: bool) -> OutputChoice {
     let (format, color_space) = match encoding {
-        HdrEncoding::ScRgb => (wgpu::TextureFormat::Rgba16Float, wgpu::SurfaceColorSpace::ExtendedSrgbLinear),
+        HdrEncoding::ScRgb => (
+            wgpu::TextureFormat::Rgba16Float,
+            wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
+        ),
         HdrEncoding::ExtendedSrgb => (wgpu::TextureFormat::Rgba16Float, wgpu::SurfaceColorSpace::ExtendedSrgb),
         HdrEncoding::Pq => (wgpu::TextureFormat::Rgb10a2Unorm, wgpu::SurfaceColorSpace::Bt2100Pq),
         HdrEncoding::Sdr => (wgpu::TextureFormat::Rgba8UnormSrgb, wgpu::SurfaceColorSpace::Srgb),
@@ -142,18 +154,33 @@ fn output_pass_encodes_scrgb_extended_srgb_pq_and_sdr_as_the_reference_math() {
         // A colored frame, so the PQ primaries' matrix shows.
         let c = [v, v * 0.5, v * 0.25];
         // scRGB on Windows: 1.0 is 80 nits, so paper white is 2.5.
-        let got = encode(&gpu, c, OutputUniform::new(&choice(HdrEncoding::ScRgb, false), paper), f16);
+        let got = encode(
+            &gpu,
+            c,
+            OutputUniform::new(&choice(HdrEncoding::ScRgb, false), paper),
+            f16,
+        );
         for i in 0..3 {
             assert!(close(got[i], c[i] * 2.5, 2e-3, 1e-4), "scRGB {v}: {got:?}");
         }
         assert_eq!(got[3], 1.0, "opaque");
         // scRGB on macOS: 1.0 is the system's SDR white.
-        let got = encode(&gpu, c, OutputUniform::new(&choice(HdrEncoding::ScRgb, true), paper), f16);
+        let got = encode(
+            &gpu,
+            c,
+            OutputUniform::new(&choice(HdrEncoding::ScRgb, true), paper),
+            f16,
+        );
         for i in 0..3 {
             assert!(close(got[i], c[i], 2e-3, 1e-4), "EDR {v}: {got:?}");
         }
         // Extended sRGB (a browser's HDR canvas): the curve above 1 too.
-        let got = encode(&gpu, c, OutputUniform::new(&choice(HdrEncoding::ExtendedSrgb, true), paper), f16);
+        let got = encode(
+            &gpu,
+            c,
+            OutputUniform::new(&choice(HdrEncoding::ExtendedSrgb, true), paper),
+            f16,
+        );
         for i in 0..3 {
             assert!(close(got[i], srgb(c[i]), 2e-3, 2e-4), "extended sRGB {v}: {got:?}");
         }
@@ -166,7 +193,10 @@ fn output_pass_encodes_scrgb_extended_srgb_pq_and_sdr_as_the_reference_math() {
         }
         let got = encode(&gpu, c, pq, wgpu::TextureFormat::Rgb10a2Unorm);
         for i in 0..3 {
-            assert!(close(got[i], want[i], 0.0, 1.5 / 1023.0), "PQ 10-bit {v}: {got:?} want {want:?}");
+            assert!(
+                close(got[i], want[i], 0.0, 1.5 / 1023.0),
+                "PQ 10-bit {v}: {got:?} want {want:?}"
+            );
         }
         // SDR (HDR switched off, screenshots): clamped to white, sRGB.
         let got = encode(&gpu, c, OutputUniform::SDR, wgpu::TextureFormat::Rgba8UnormSrgb);
@@ -176,7 +206,12 @@ fn output_pass_encodes_scrgb_extended_srgb_pq_and_sdr_as_the_reference_math() {
         }
     }
     // The negative control: paper white moves scRGB on Windows only.
-    let bright = encode(&gpu, [1.0; 3], OutputUniform::new(&choice(HdrEncoding::ScRgb, false), 400.0), f16);
+    let bright = encode(
+        &gpu,
+        [1.0; 3],
+        OutputUniform::new(&choice(HdrEncoding::ScRgb, false), 400.0),
+        f16,
+    );
     assert!(close(bright[0], 5.0, 2e-3, 0.0), "{bright:?}");
 }
 
@@ -334,20 +369,32 @@ fn each_tonemapper_keeps_its_sdr_curve_below_the_knee_and_reaches_the_peak_in_hd
     let headroom = 5.0;
     let knee = super::hdr::HIGHLIGHT_KNEE;
     for tonemap in [Tonemap::Aces, Tonemap::AgX, Tonemap::Neutral, Tonemap::None] {
-        let mut post = crate::render::Post::default();
-        post.tonemap = tonemap;
+        let post = crate::render::Post {
+            tonemap,
+            ..Default::default()
+        };
         let sdr = tonemap_row(&gpu, &grey, &post, None);
         let hdr = tonemap_row(&gpu, &grey, &post, Some(headroom));
         // The negative control: headroom 1 is the SDR frame exactly.
-        assert_eq!(tonemap_row(&gpu, &grey, &post, Some(1.0)), sdr, "{tonemap:?}: headroom 1 is SDR");
-        assert!(sdr.iter().all(|p| p[0] <= 1.0), "{tonemap:?}: SDR stays at or below white");
+        assert_eq!(
+            tonemap_row(&gpu, &grey, &post, Some(1.0)),
+            sdr,
+            "{tonemap:?}: headroom 1 is SDR"
+        );
+        assert!(
+            sdr.iter().all(|p| p[0] <= 1.0),
+            "{tonemap:?}: SDR stays at or below white"
+        );
         let mut last = 0.0;
         for (i, (s, h)) in sdr.iter().zip(&hdr).enumerate() {
             assert!(h[0] + 1e-3 >= last, "{tonemap:?}: monotonic at {i}: {h:?} after {last}");
             last = h[0];
             if tonemap == Tonemap::None {
                 let want = grey[i][0].min(headroom);
-                assert!(close(h[0], want, 1e-2, 1e-3), "{tonemap:?} keeps light to the headroom: {h:?} for {want}");
+                assert!(
+                    close(h[0], want, 1e-2, 1e-3),
+                    "{tonemap:?} keeps light to the headroom: {h:?} for {want}"
+                );
                 continue;
             }
             if s[0] < knee - 0.01 {
@@ -357,17 +404,28 @@ fn each_tonemapper_keeps_its_sdr_curve_below_the_knee_and_reaches_the_peak_in_hd
                 // float, whose rounding the steep part above the knee
                 // amplifies): within a few percent.
                 let want = expand_highlights([s[0], s[1], s[2]], headroom);
-                assert!(close(h[0], want[0], 3e-2, 2e-2), "{tonemap:?} at {i}: {h:?}, twin {want:?}");
+                assert!(
+                    close(h[0], want[0], 3e-2, 2e-2),
+                    "{tonemap:?} at {i}: {h:?}, twin {want:?}"
+                );
             }
         }
         let top = hdr.last().unwrap()[0];
-        assert!(top >= 0.95 * headroom && top <= headroom + 1e-2, "{tonemap:?} reaches the peak: {top}");
-        assert!(top > 4.0 * sdr.last().unwrap()[0], "{tonemap:?}: brighter than SDR white");
+        assert!(
+            top >= 0.95 * headroom && top <= headroom + 1e-2,
+            "{tonemap:?} reaches the peak: {top}"
+        );
+        assert!(
+            top > 4.0 * sdr.last().unwrap()[0],
+            "{tonemap:?}: brighter than SDR white"
+        );
     }
     // A colored highlight keeps its hue: the channels' ratios of the SDR
     // picture (the expansion scales all three by one factor).
-    let mut post = crate::render::Post::default();
-    post.tonemap = Tonemap::Neutral;
+    let post = crate::render::Post {
+        tonemap: Tonemap::Neutral,
+        ..Default::default()
+    };
     let orange = [[6.0, 2.0, 0.5]];
     let (s, h) = (
         tonemap_row(&gpu, &orange, &post, None)[0],
@@ -375,7 +433,10 @@ fn each_tonemapper_keeps_its_sdr_curve_below_the_knee_and_reaches_the_peak_in_hd
     );
     assert!(h[0] > 1.5 * s[0], "brighter: {h:?} vs {s:?}");
     for i in 1..3 {
-        assert!(close(h[i] / h[0], s[i] / s[0], 1e-2, 1e-3), "ratios kept: {h:?} vs {s:?}");
+        assert!(
+            close(h[i] / h[0], s[i] / s[0], 1e-2, 1e-3),
+            "ratios kept: {h:?} vs {s:?}"
+        );
     }
 }
 
@@ -488,7 +549,12 @@ fn ui_stays_at_paper_white_while_3d_highlights_go_above_it_in_an_hdr_frame() {
     let status = ctx.gfx.hdr_status();
     assert!(status.active && status.available, "{status:?}");
     assert_eq!(
-        (status.encoding, status.paper_white_nits, status.peak_nits, status.headroom),
+        (
+            status.encoding,
+            status.paper_white_nits,
+            status.peak_nits,
+            status.headroom
+        ),
         (HdrEncoding::ScRgb, 200.0, 1000.0, 5.0)
     );
     let (format, hdr) = output(&mut ctx);
@@ -499,7 +565,10 @@ fn ui_stays_at_paper_white_while_3d_highlights_go_above_it_in_an_hdr_frame() {
         assert!(close(*c, 2.5, 2e-3, 0.0), "UI white is paper white: {ui:?}");
     }
     let lit = at(&hdr, BOX);
-    assert!(lit[0] > 2.0 * ui[0], "the box's highlight is far above paper white: {lit:?} vs {ui:?}");
+    assert!(
+        lit[0] > 2.0 * ui[0],
+        "the box's highlight is far above paper white: {lit:?} vs {ui:?}"
+    );
     assert!(lit[0] <= 5.0 * 2.5 + 0.05, "and never above the peak: {lit:?}");
     // A screenshot of an HDR frame is SDR: both clip to white.
     let image = shot(&mut ctx);
@@ -542,11 +611,17 @@ fn a_pq_window_gets_paper_white_ui_in_hdr10() {
     let want = pq_encode([1.0; 3], 200.0)[0];
     let ui = at(&pq, UI);
     for c in &ui[..3] {
-        assert!(close(*c, want, 0.0, 1.5 / 1023.0), "UI at 200 nits in PQ: {ui:?} want {want}");
+        assert!(
+            close(*c, want, 0.0, 1.5 / 1023.0),
+            "UI at 200 nits in PQ: {ui:?} want {want}"
+        );
     }
     let lit = at(&pq, BOX);
     let peak = pq_encode([5.0; 3], 200.0)[0];
-    assert!(lit[0] > ui[0] + 0.1 && lit[0] <= peak + 2.0 / 1023.0, "{lit:?}, peak {peak}");
+    assert!(
+        lit[0] > ui[0] + 0.1 && lit[0] <= peak + 2.0 / 1023.0,
+        "{lit:?}, peak {peak}"
+    );
 }
 
 #[test]
