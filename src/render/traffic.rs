@@ -202,16 +202,19 @@ impl Uploading<'_, wgpu::Queue> {
     /// thread's writes (see [`begin_batch`]), a small one joins it instead.
     pub fn write_buffer(&self, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
         add(self.kind, data.len() as u64);
-        if batched(self.kind, buffer, offset, data) {
+        if batched(buffer, offset, data) {
             return;
         }
         // wgpu's own allocations (a staging buffer a write) aren't the
         // caller's: tests that count a module's allocations leave them out.
         #[cfg(all(test, feature = "3d"))]
         let _wgpu = crate::three::lights::tests::unmarked();
+        // Lands at the next submission: what is held must go first.
+        submit_held();
         self.to.write_buffer(buffer, offset, data);
     }
-    /// `Queue::write_texture`, counted.
+    /// `Queue::write_texture`, counted. While a [`WriteBatch`] gathers this
+    /// thread's writes, a small one of an uncompressed format joins it.
     pub fn write_texture(
         &self,
         texture: wgpu::TexelCopyTextureInfo<'_>,
@@ -220,6 +223,18 @@ impl Uploading<'_, wgpu::Queue> {
         size: wgpu::Extent3d,
     ) {
         add(self.kind, data.len() as u64);
+        // A step whose uploads the GPU times makes the copy itself, after
+        // whatever is held, so the writes keep their order.
+        if self.kind == Upload::Textures && super::upload_timer::active() {
+            submit_held();
+            if super::upload_timer::write_texture(&texture, data, layout, size) {
+                return;
+            }
+        }
+        if batched_texture(&texture, data, layout, size) {
+            return;
+        }
+        submit_held();
         self.to.write_texture(texture, data, layout, size);
     }
 }
@@ -244,27 +259,56 @@ pub(crate) const BATCHED_WRITE_BYTES: usize = 64 * 1024;
 /// on the GPU: the same bytes land in the same places, in the order they
 /// were written, before the frame's passes run.
 ///
-/// Persistent instance batches (`Upload::StaticBatches`) are written on
-/// their own as before. A write too big for the batch
-/// ([`BATCHED_WRITE_BYTES`]), unaligned, or made on another thread goes
-/// straight to `wgpu` too: it lands ahead of the batch's copies, which is
-/// the order it was made in unless its buffer already had a batched write,
-/// in which case it joins the batch.
+/// A write too big for the batch ([`BATCHED_WRITE_BYTES`]), unaligned, or
+/// made on another thread goes straight to `wgpu`: it lands ahead of the
+/// batch's copies, which is the order it was made in unless its buffer
+/// already had a batched write, in which case it joins the batch. A
+/// buffer grown while a batch gathers copies its old contents over after
+/// the batch's writes so far (see [`submit_copy`]). Texture writes of
+/// formats of single-texel blocks join it too.
 #[derive(Default)]
 #[cfg_attr(not(feature = "3d"), allow(dead_code))]
 pub(crate) struct WriteBatch {
     bytes: Vec<u8>,
     copies: Vec<BatchedCopy>,
     staging: Option<wgpu::Buffer>,
+    /// While command buffers are held (see [`hold`]): the hold this batch's
+    /// staging buffer is being filled for, and the bytes of it the held
+    /// buffers' copies still read. Each upload goes after them.
+    used: (u64, u64),
 }
 
 /// One batched write: `size` bytes from `from` in the staging buffer to
-/// `offset` in `to`.
+/// `to`.
 struct BatchedCopy {
-    to: wgpu::Buffer,
-    offset: u64,
+    to: Destination,
     from: u64,
     size: u64,
+}
+
+/// Where a batched write goes.
+enum Destination {
+    /// At `offset` in a buffer.
+    Buffer(wgpu::Buffer, u64),
+    /// Into part of a texture, from rows of `bytes_per_row` (a multiple of
+    /// `wgpu::COPY_BYTES_PER_ROW_ALIGNMENT`) in the staging buffer.
+    Texture {
+        texture: wgpu::Texture,
+        mip_level: u32,
+        origin: wgpu::Origin3d,
+        aspect: wgpu::TextureAspect,
+        extent: wgpu::Extent3d,
+        bytes_per_row: u32,
+    },
+}
+
+impl Destination {
+    fn is_buffer(&self, buffer: &wgpu::Buffer) -> bool {
+        matches!(self, Self::Buffer(b, _) if b == buffer)
+    }
+    fn is_texture(&self, texture: &wgpu::Texture) -> bool {
+        matches!(self, Self::Texture { texture: t, .. } if t == texture)
+    }
 }
 
 thread_local! {
@@ -313,7 +357,7 @@ fn batched_bridge(page: usize) -> usize {
 
 /// Puts a write into this thread's batch, if one is gathering and the
 /// write belongs there (see [`WriteBatch`]).
-fn batched(kind: Upload, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> bool {
+fn batched(buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> bool {
     let aligned = data.len().is_multiple_of(4) && offset.is_multiple_of(4) && !data.is_empty();
     BATCH.with(|b| {
         let Ok(mut b) = b.try_borrow_mut() else {
@@ -322,11 +366,83 @@ fn batched(kind: Upload, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> boo
         let Some(batch) = b.as_mut() else {
             return false;
         };
-        let joins = || batch.copies.iter().any(|c| c.to == *buffer);
-        if !aligned || (kind == Upload::StaticBatches || data.len() > BATCHED_WRITE_BYTES) && !joins() {
+        let joins = || batch.copies.iter().any(|c| c.to.is_buffer(buffer));
+        // While command buffers are held (see `hold`), a write made on its
+        // own would land ahead of them: every one that can joins.
+        let own = data.len() > BATCHED_WRITE_BYTES && held_generation().is_none();
+        if !aligned || own && !joins() {
             return false;
         }
         batch.push(buffer, offset, data);
+        true
+    })
+}
+
+/// [`batched`] for a texture write: one of a format of single-texel
+/// blocks, whose rows are laid out again (padded to
+/// `wgpu::COPY_BYTES_PER_ROW_ALIGNMENT`) to be copied from the staging
+/// buffer.
+fn batched_texture(
+    texture: &wgpu::TexelCopyTextureInfo<'_>,
+    data: &[u8],
+    layout: wgpu::TexelCopyBufferLayout,
+    extent: wgpu::Extent3d,
+) -> bool {
+    let format = texture.texture.format();
+    let Some(block) = format.block_copy_size(Some(texture.aspect)) else {
+        return false;
+    };
+    if format.block_dimensions() != (1, 1)
+        || extent.width == 0
+        || extent.height == 0
+        || extent.depth_or_array_layers == 0
+    {
+        return false;
+    }
+    let row = u64::from(extent.width) * u64::from(block);
+    let src_row = layout.bytes_per_row.map_or(row, u64::from);
+    let rows = u64::from(layout.rows_per_image.unwrap_or(extent.height));
+    let (height, layers) = (u64::from(extent.height), u64::from(extent.depth_or_array_layers));
+    // What wgpu would refuse is left for it to say.
+    let last = layout.offset + ((layers - 1) * rows + height - 1) * src_row + row;
+    if src_row < row || rows < height || last > data.len() as u64 {
+        return false;
+    }
+    let padded = row.next_multiple_of(u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT));
+    BATCH.with(|b| {
+        let Ok(mut b) = b.try_borrow_mut() else {
+            return false;
+        };
+        let Some(batch) = b.as_mut() else {
+            return false;
+        };
+        let joins = || batch.copies.iter().any(|c| c.to.is_texture(texture.texture));
+        let own = padded * height * layers > BATCHED_WRITE_BYTES as u64 && held_generation().is_none();
+        if own && !joins() {
+            return false;
+        }
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+        batch.bytes.resize(batch.bytes.len().next_multiple_of(align), 0);
+        let from = batch.bytes.len() as u64;
+        for layer in 0..layers {
+            for y in 0..height {
+                let at = (layout.offset + (layer * rows + y) * src_row) as usize;
+                batch.bytes.extend_from_slice(&data[at..at + row as usize]);
+                batch.bytes.resize(batch.bytes.len() + (padded - row) as usize, 0);
+            }
+        }
+        batch.copies.push(BatchedCopy {
+            to: Destination::Texture {
+                texture: texture.texture.clone(),
+                mip_level: texture.mip_level,
+                origin: texture.origin,
+                aspect: texture.aspect,
+                extent,
+                bytes_per_row: padded as u32,
+            },
+            from,
+            size: padded * height * layers,
+        });
         true
     })
 }
@@ -339,16 +455,16 @@ impl WriteBatch {
         self.bytes.extend_from_slice(data);
         // A write right after the last one, into the same buffer: one copy.
         if let Some(last) = self.copies.last_mut()
-            && last.to == *buffer
-            && last.offset + last.size == offset
+            && let Destination::Buffer(to, at) = &last.to
+            && to == buffer
+            && at + last.size == offset
             && last.from + last.size == from
         {
             last.size += size;
             return;
         }
         self.copies.push(BatchedCopy {
-            to: buffer.clone(),
-            offset,
+            to: Destination::Buffer(buffer.clone(), offset),
             from,
             size,
         });
@@ -357,24 +473,47 @@ impl WriteBatch {
     /// Uploads the gathered bytes in one write into the staging buffer
     /// (made, or made bigger, when they don't fit). Their copies into place
     /// wait for [`record`](Self::record), which must come before anything
-    /// reads those buffers and before the next `upload`.
+    /// reads those buffers and before the next `upload`, unless command
+    /// buffers are held (see [`hold`]): then each upload of the hold goes
+    /// after the last one in the staging buffer, as copies of earlier ones
+    /// wait in held buffers.
     pub(crate) fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         if self.copies.is_empty() {
             self.bytes.clear();
             return;
         }
-        let needed = self.bytes.len() as u64;
-        if self.staging.as_ref().is_none_or(|s| s.size() < needed) {
+        let hold = held_generation();
+        // Texture copies read rows from a multiple of the row alignment.
+        let mut at = match hold {
+            Some(hold) if self.used.0 == hold => self
+                .used
+                .1
+                .next_multiple_of(u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)),
+            _ => 0,
+        };
+        let len = self.bytes.len() as u64;
+        if self.staging.as_ref().is_none_or(|s| s.size() < at + len) {
+            // Held copies keep reading the old one; this upload starts the
+            // new one, which fits a whole hold's uploads next time.
             self.staging = Some(device.new_buffer(&wgpu::BufferDescriptor {
                 label: Some("frame writes"),
-                size: needed.next_power_of_two().max(4096),
+                size: (at + len).next_power_of_two().max(4096),
                 usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }));
+            at = 0;
+        }
+        if let Some(hold) = hold {
+            self.used = (hold, at + len);
         }
         if let Some(staging) = &self.staging {
             // Counted when each write was gathered.
-            queue.write_buffer(staging, 0, &self.bytes);
+            queue.write_buffer(staging, at, &self.bytes);
+        }
+        if at > 0 {
+            for copy in &mut self.copies {
+                copy.from += at;
+            }
         }
         self.bytes.clear();
     }
@@ -388,11 +527,165 @@ impl WriteBatch {
     pub(crate) fn record(&mut self, encoder: &mut wgpu::CommandEncoder) {
         if let Some(staging) = &self.staging {
             for copy in &self.copies {
-                encoder.copy_buffer_to_buffer(staging, copy.from, &copy.to, copy.offset, copy.size);
+                match &copy.to {
+                    Destination::Buffer(to, offset) => {
+                        encoder.copy_buffer_to_buffer(staging, copy.from, to, *offset, copy.size);
+                    }
+                    Destination::Texture {
+                        texture,
+                        mip_level,
+                        origin,
+                        aspect,
+                        extent,
+                        bytes_per_row,
+                    } => encoder.copy_buffer_to_texture(
+                        wgpu::TexelCopyBufferInfo {
+                            buffer: staging,
+                            layout: wgpu::TexelCopyBufferLayout {
+                                offset: copy.from,
+                                bytes_per_row: Some(*bytes_per_row),
+                                rows_per_image: Some(extent.height),
+                            },
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture,
+                            mip_level: *mip_level,
+                            origin: *origin,
+                            aspect: *aspect,
+                        },
+                        *extent,
+                    ),
+                }
             }
         }
         self.copies.clear();
     }
+}
+
+/// Command buffers held back to be submitted together (see [`hold`]).
+#[cfg_attr(not(feature = "3d"), allow(dead_code))]
+struct Held {
+    /// The queue they go to, while holding.
+    queue: Option<wgpu::Queue>,
+    /// Kept between holds, so holding allocates nothing once warm.
+    buffers: Vec<wgpu::CommandBuffer>,
+    /// Command buffers held since [`hold`], submitted or not.
+    held: usize,
+    /// Which hold this is (counts up from 1), for [`WriteBatch::upload`].
+    generation: u64,
+    /// Submissions made while holding: one at the end, and one each time
+    /// a write that cannot wait in a batch made them go early.
+    submits: u32,
+}
+
+thread_local! {
+    static HELD: std::cell::RefCell<Held> = const {
+        std::cell::RefCell::new(Held {
+            queue: None,
+            buffers: Vec::new(),
+            held: 0,
+            generation: 0,
+            submits: 0,
+        })
+    };
+}
+
+/// Holds the command buffers this thread submits through [`submit`] back,
+/// for [`release`] to submit together: several frames (a window's views)
+/// recorded one after another, in one submission instead of one each.
+///
+/// Nothing changes on the GPU: the buffers run in the order they were
+/// made, and every write lands where it would have. A frame's buffer
+/// writes are made at the next submission, ahead of every buffer in it, so
+/// while buffers are held each write that can is gathered into the
+/// preparing frame's [`WriteBatch`] (whose copies its own first buffer
+/// records); one that cannot (unaligned, a compressed texture's, made
+/// outside a batch) submits what is held first.
+#[cfg_attr(not(feature = "3d"), allow(dead_code))]
+pub(crate) fn hold(queue: &wgpu::Queue) {
+    HELD.with(|held| {
+        let mut held = held.borrow_mut();
+        held.queue = Some(queue.clone());
+        held.generation += 1;
+        held.held = 0;
+        held.submits = 0;
+    });
+}
+
+/// The hold this thread is in, if it holds command buffers.
+fn held_generation() -> Option<u64> {
+    HELD.with(|h| {
+        let h = h.try_borrow().ok()?;
+        h.queue.as_ref().map(|_| h.generation)
+    })
+}
+
+/// Submits `buffers`, or holds them after the ones held (see [`hold`]).
+#[cfg_attr(not(feature = "3d"), allow(dead_code))]
+pub(crate) fn submit(queue: &wgpu::Queue, buffers: impl IntoIterator<Item = wgpu::CommandBuffer>) {
+    let buffers = HELD.with(|h| {
+        let mut h = h.borrow_mut();
+        if h.queue.is_none() {
+            return Some(buffers);
+        }
+        let before = h.buffers.len();
+        h.buffers.extend(buffers);
+        h.held += h.buffers.len() - before;
+        None
+    });
+    if let Some(buffers) = buffers {
+        queue.submit(buffers);
+    }
+}
+
+/// Submits a copy that `record` records into a new encoder (`label`),
+/// after every buffer write this thread made so far: a buffer about to be
+/// replaced by a bigger one, copied over. Writes a batch gathered (see
+/// [`WriteBatch`]) are recorded first in it (otherwise they would land
+/// after it, in the frame's first buffer); writes made on their own land
+/// first anyway, at its submission.
+#[cfg_attr(not(feature = "3d"), allow(dead_code))]
+pub(crate) fn submit_copy(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: Option<&str>,
+    record: impl FnOnce(&mut wgpu::CommandEncoder),
+) {
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label });
+    BATCH.with(|b| {
+        if let Ok(mut b) = b.try_borrow_mut()
+            && let Some(batch) = b.as_mut()
+        {
+            batch.upload(device, queue);
+            batch.record(&mut encoder);
+        }
+    });
+    record(&mut encoder);
+    submit(queue, [encoder.finish()]);
+}
+
+/// Submits what is held now, and keeps holding.
+fn submit_held() {
+    HELD.with(|h| {
+        let Ok(mut h) = h.try_borrow_mut() else { return };
+        let h = &mut *h;
+        if let Some(queue) = h.queue.as_ref().filter(|_| !h.buffers.is_empty()) {
+            h.submits += 1;
+            queue.submit(h.buffers.drain(..));
+        }
+    });
+}
+
+/// Ends the hold: submits what is held, in one submission. Gives the
+/// command buffers and submissions made since [`hold`].
+#[cfg_attr(not(feature = "3d"), allow(dead_code))]
+pub(crate) fn release() -> (usize, u32) {
+    submit_held();
+    HELD.with(|h| {
+        let mut h = h.borrow_mut();
+        h.queue = None;
+        (h.held, h.submits)
+    })
 }
 
 #[cfg_attr(not(feature = "3d"), allow(dead_code))]

@@ -285,17 +285,8 @@ a plain texture:
 ```
 
 Ids of different kinds can be equal, so the generic calls trust the kind
-they are given: free a mesh as `PONKO_HANDLE_MESH`.
-
-Why the kind isn't in the id: a C id is 32 bits, all of them used (20 for
-the slot, 12 for the generation that makes a freed handle stay dead), and
-ABI 2 promises those values and layouts. Putting the kind in the top bits
-would change every id C code has stored or compared, including `{0}` as the
-built-in font, and the structs that embed handles. That needs a new ABI
-version: ids of kind:4 | generation:8 | slot:20 (so a slot comes back as
-the same handle after 256 frees instead of 4096), the font as kind 0 so
-`{0}` stays the built-in one, every engine table indexed by slot, and a
-migration note. Until then the kind travels next to the id.
+they are given: free a mesh as `PONKO_HANDLE_MESH`. (ABI 3 puts the kind
+in the id; see [below](#the-kind-in-the-id-from-abi-3).)
 
 C++ gives each kind its own type again: `ctx.create_render_target` returns
 a `ponko::render_target`, which converts to `ponko::texture` (and has
@@ -311,3 +302,43 @@ textures and lists render targets on their own) instead of a kind:
 ```c
 {{#include ../../examples/cpp/guide.c:asset_inventory}}
 ```
+
+### The kind in the id, from ABI 3
+
+ABI 2 keeps the kind next to the id because a C id is 32 bits, all of them
+used (20 for the slot, 12 for the generation that makes a freed handle stay
+dead), and ABI 2 promises those values and layouts. The next C ABI version
+(ABI 3) puts the kind into the id. This is decided:
+
+- **Ids grow to 64 bits.** Every handle struct holds a `uint64_t id`. Its
+  low 32 bits are the engine's id as today (slot and generation), so a slot
+  still comes back as the same handle only after 4096 frees.
+- **The top 8 bits are the kind**: `PonkoHandleKind` plus one. Bits 32 to
+  55 are zero; an id with any of them set is an invalid argument.
+- **Every id the library hands out carries its kind.** A call given an id of
+  another kind fails with `PONKO_INVALID_ARGUMENT`, naming both kinds, so
+  passing a mesh as a material is caught where it happens. The generic calls
+  (`ponko_ctx_handle_free`, `ponko_ctx_handle_is_live`) read the kind from
+  the id and lose their `kind` argument.
+- **Kind 0 means "not tagged"**: the call takes the id as the kind it
+  expects. `{0}` still means the built-in font, the white texture and the
+  default material, and a tagged id round-trips through code written for ABI
+  2 that only stores and compares ids.
+- `PONKO_HANDLE_NONE` becomes `UINT64_MAX`.
+
+Why not four bits of kind in the 32-bit id (kind 4, generation 8, slot 20),
+the smaller change sketched before: four bits name 16 kinds, and the engine
+already has 14 C kinds plus crowds, instance cells, collision meshes, sky
+shaders and terrain tiles waiting for theirs; and eight bits of generation
+would bring a freed handle back to life after 256 frees of its slot. Eight
+bits of kind leave room for 255, and the generation stays as strong as
+Rust's.
+
+What it costs: a handle is 8 bytes in C instead of 4, so the structs that
+embed handles (`PonkoSprite`, `PonkoModel`, the 3D descriptors) change
+layout. That is what an ABI version is for: ABI 3 changes them all at once,
+with the versioned descriptors' `...Ex` forms (see STABILITY.md). Moving a
+program over is a rebuild against the new header, plus widening any place
+that keeps an id in a `uint32_t` of its own. C++ handles are typed already;
+their ids widen with them and C++ code changes only where it spells out
+`std::uint32_t`. Until ABI 3 the kind travels next to the id.

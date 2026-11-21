@@ -1,0 +1,362 @@
+//! Streamed meshes decoded a slice at a time, where there are no worker
+//! threads (a browser build without threads): the streaming step reads the
+//! file, decodes its PNG images a few rows at a time with the asset
+//! groups' PNG slicer, and then parses the file with those images already
+//! decoded. Only the parse of the geometry runs in one piece.
+//!
+//! The mesh is exactly what the one-piece parse makes: the slicer gives
+//! the same pixels as `decode_image`, and an image it can't split (another
+//! format, an interlaced PNG, a broken one) is left to the parse, which
+//! decodes it as always (and fails with the usual message).
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use super::gltf;
+use super::streamed::LoadedFile;
+use crate::assets::group::sliced::PngSlices;
+use crate::assets::{Origin, SharedSources};
+use crate::error::Error;
+
+/// Reads the file, on the game thread.
+pub(crate) type Read = Box<dyn FnOnce() -> Result<(Origin, Vec<u8>), Error> + Send>;
+
+/// A glTF file decoded a slice at a time.
+pub(crate) struct MeshSlices {
+    name: String,
+    gpu: gltf::GpuFormats,
+    phase: Phase,
+}
+
+enum Phase {
+    /// Not read yet.
+    Read(Read),
+    /// Read: its images are looked for next.
+    Scan(Origin, Vec<u8>),
+    /// Its PNG images being decoded, then the parse.
+    Images(Box<Images>),
+    /// Done (or failed).
+    Taken,
+}
+
+struct Images {
+    origin: Origin,
+    bytes: Vec<u8>,
+    /// PNG images not started, by image index, last first.
+    todo: Vec<(usize, Arc<Vec<u8>>)>,
+    current: Option<(usize, PngSlices)>,
+    done: HashMap<usize, gltf::Image>,
+}
+
+impl MeshSlices {
+    /// Decodes what `read` gives.
+    pub fn new(name: &str, gpu: gltf::GpuFormats, read: Read) -> Self {
+        Self {
+            name: name.to_string(),
+            gpu,
+            phase: Phase::Read(read),
+        }
+    }
+
+    /// Decodes `bytes`, read already from `origin`.
+    pub fn read(name: &str, gpu: gltf::GpuFormats, origin: Origin, bytes: Vec<u8>) -> Self {
+        Self {
+            name: name.to_string(),
+            gpu,
+            phase: Phase::Scan(origin, bytes),
+        }
+    }
+
+    /// PNG images decoded so far, for tests.
+    #[cfg(test)]
+    pub fn images_done(&self) -> usize {
+        match &self.phase {
+            Phase::Images(images) => images.done.len(),
+            _ => 0,
+        }
+    }
+}
+
+impl crate::streaming::StreamSlices<(Origin, LoadedFile)> for MeshSlices {
+    fn step(&mut self, sources: &SharedSources) -> Result<Option<(Origin, LoadedFile)>, Error> {
+        let mut read = |file: &str| sources.read(file);
+        match std::mem::replace(&mut self.phase, Phase::Taken) {
+            Phase::Read(read) => {
+                let (origin, bytes) = read().map_err(|e| e.with_path(&self.name))?;
+                self.phase = Phase::Scan(origin, bytes);
+                Ok(None)
+            }
+            Phase::Scan(origin, bytes) => {
+                let mut todo = png_images(&self.name, &bytes, &mut read);
+                todo.reverse();
+                self.phase = Phase::Images(Box::new(Images {
+                    origin,
+                    bytes,
+                    todo,
+                    current: None,
+                    done: HashMap::new(),
+                }));
+                Ok(None)
+            }
+            Phase::Images(mut images) => {
+                if images.current.is_none()
+                    && let Some((index, bytes)) = images.todo.pop()
+                {
+                    images.current = PngSlices::new(&bytes).map(|png| (index, png));
+                }
+                if let Some((index, mut png)) = images.current.take() {
+                    match png.step() {
+                        Ok(false) => images.current = Some((index, png)),
+                        Ok(true) => {
+                            let image = png.finish();
+                            images.done.insert(index, (image.width, image.height, image.rgba));
+                        }
+                        // The parse decodes it again, failing with its message.
+                        Err(_) => {}
+                    }
+                    self.phase = Phase::Images(images);
+                    return Ok(None);
+                }
+                if !images.todo.is_empty() {
+                    self.phase = Phase::Images(images);
+                    return Ok(None);
+                }
+                let Images {
+                    origin, bytes, done, ..
+                } = *images;
+                let loaded = gltf::load_with_images(&self.name, &bytes, &mut read, &|_| false, self.gpu, done)
+                    .map_err(|e| Error::decode(&self.name, e))?;
+                Ok(Some((origin, LoadedFile::Parsed(Box::new(loaded)))))
+            }
+            Phase::Taken => Err(Error::new(
+                crate::error::ErrorKind::Invalid,
+                format!("{} was decoded already", self.name),
+            )),
+        }
+    }
+}
+
+/// The PNG images that file `name`'s textures use, by image index, in
+/// order: their bytes, from the file's binary chunk, its buffers or files
+/// of their own. What can't be found here (a broken file, a data URI that
+/// isn't base64) is left out: the parse finds it, or says what is wrong.
+fn png_images(
+    name: &str,
+    bytes: &[u8],
+    read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+) -> Vec<(usize, Arc<Vec<u8>>)> {
+    let (json, bin) = if bytes.starts_with(b"glTF") {
+        match ::gltf::Glb::from_slice(bytes) {
+            Ok(glb) => (glb.json, glb.bin),
+            Err(_) => return Vec::new(),
+        }
+    } else {
+        (std::borrow::Cow::Borrowed(bytes), None)
+    };
+    let Ok(root) = serde_json::from_slice::<::gltf::json::Root>(&json) else {
+        return Vec::new();
+    };
+    let mut used: Vec<usize> = root.textures.iter().map(|t| t.source.value()).collect();
+    used.sort_unstable();
+    used.dedup();
+    let folder = gltf::folder_of(name);
+    let mut buffers: HashMap<usize, Option<Vec<u8>>> = HashMap::new();
+    let mut out = Vec::new();
+    for index in used {
+        let Some(image) = root.images.get(index) else {
+            continue;
+        };
+        let data = if let Some(view) = image.buffer_view {
+            let Some(view) = root.buffer_views.get(view.value()) else {
+                continue;
+            };
+            let start = view.byte_offset.map_or(0, |o| o.0) as usize;
+            let range = start..start.saturating_add(view.byte_length.0 as usize);
+            let buffer = view.buffer.value();
+            match root.buffers.get(buffer).and_then(|b| b.uri.as_deref()) {
+                None => bin.as_deref().and_then(|bin| bin.get(range)).map(<[u8]>::to_vec),
+                Some(uri) => buffers
+                    .entry(buffer)
+                    .or_insert_with(|| gltf::fetch(uri, folder, read).ok())
+                    .as_deref()
+                    .and_then(|b| b.get(range))
+                    .map(<[u8]>::to_vec),
+            }
+        } else if let Some(uri) = &image.uri {
+            gltf::fetch(uri, folder, read).ok()
+        } else {
+            None
+        };
+        if let Some(data) = data
+            && data.starts_with(b"\x89PNG\r\n\x1a\n")
+        {
+            out.push((index, Arc::new(data)));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::MemorySource;
+    use crate::prelude::*;
+    use crate::streaming::{AssetState, ResidencyKind, StreamSlices};
+
+    fn noise_png(side: u32, seed: u32) -> Vec<u8> {
+        let mut s = seed.wrapping_mul(0x9E37_79B9) | 1;
+        let image = image::RgbaImage::from_fn(side, side, |_, _| {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            image::Rgba([s as u8, (s >> 8) as u8, (s >> 16) as u8, 255])
+        });
+        let mut bytes = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    /// A GLB of one textured triangle: its base color image is `embedded`,
+    /// in the file's binary chunk, and its emissive image the file
+    /// `glow.png` next to it.
+    fn glb(embedded: &[u8]) -> Vec<u8> {
+        let mut bin = Vec::new();
+        for v in [
+            0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+        ] {
+            bin.extend_from_slice(&v.to_le_bytes());
+        }
+        for i in [0u16, 1, 2, 0] {
+            bin.extend_from_slice(&i.to_le_bytes());
+        }
+        let image_at = bin.len();
+        bin.extend_from_slice(embedded);
+        while !bin.len().is_multiple_of(4) {
+            bin.push(0);
+        }
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"TEXCOORD_0":1}},"indices":2,"material":0}}]}}],
+            "materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}}}},"emissiveTexture":{{"index":1}}}}],
+            "textures":[{{"source":0}},{{"source":1}}],
+            "images":[{{"bufferView":3,"mimeType":"image/png"}},{{"uri":"glow.png"}}],
+            "buffers":[{{"byteLength":{}}}],
+            "bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":36}},{{"buffer":0,"byteOffset":36,"byteLength":24}},
+                {{"buffer":0,"byteOffset":60,"byteLength":6}},{{"buffer":0,"byteOffset":{image_at},"byteLength":{}}}],
+            "accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}},
+                {{"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"}},
+                {{"bufferView":2,"componentType":5123,"count":3,"type":"SCALAR"}}]}}"#,
+            bin.len(),
+            embedded.len()
+        );
+        let mut json = json.into_bytes();
+        while !json.len().is_multiple_of(4) {
+            json.push(b' ');
+        }
+        let mut out = Vec::new();
+        out.extend_from_slice(b"glTF");
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&((12 + 8 + json.len() + 8 + bin.len()) as u32).to_le_bytes());
+        out.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"JSON");
+        out.extend_from_slice(&json);
+        out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"BIN\0");
+        out.extend_from_slice(&bin);
+        out
+    }
+
+    #[test]
+    fn sliced_meshes_decode_their_png_images_a_few_rows_a_slice_into_what_the_parse_makes() {
+        Game::new("t", 1, 1).hot_reload(false).run_headless(0, |ctx| {
+            let (base, glow) = (noise_png(256, 1), noise_png(128, 2));
+            ctx.assets.add_source(MemorySource::new("mem").with("m/glow.png", glow));
+            let file = glb(&base);
+            let sources = ctx.gfx.asset_sources.clone();
+            let mut read = |f: &str| sources.read(f);
+            let whole = gltf::load("m/tri.glb", &file, &mut read, &|_| false).unwrap();
+            assert_eq!(whole.images.len(), 2);
+
+            let origin = Origin::File("m/tri.glb".into());
+            let mut slices = MeshSlices::read("m/tri.glb", gltf::GpuFormats::default(), origin.clone(), file);
+            let mut steps = 0;
+            let mut most_images = 0;
+            let (got_origin, loaded) = loop {
+                steps += 1;
+                most_images = most_images.max(slices.images_done());
+                if let Some(done) = slices.step(&sources).unwrap() {
+                    break done;
+                }
+            };
+            assert_eq!(got_origin, origin);
+            let LoadedFile::Parsed(loaded) = loaded else {
+                panic!("parsed on the game thread")
+            };
+            // Both images were decoded by the slicer before the parse.
+            assert_eq!(most_images, 2);
+            // The scan; 64 KiB of RGBA a slice: 64 rows of the 256-pixel
+            // image (4 slices) and all 128 rows of the other (1); the parse.
+            assert_eq!(steps, 1 + 4 + 1 + 1);
+            assert!(loaded.images == whole.images, "the slices made other pixels");
+            assert_eq!(loaded.data.positions.len(), whole.data.positions.len());
+            assert_eq!(loaded.parts, whole.parts);
+        });
+    }
+
+    #[test]
+    fn a_mesh_image_the_slicer_cannot_decode_is_left_to_the_parse() {
+        Game::new("t", 1, 1).hot_reload(false).run_headless(0, |ctx| {
+            let mut cut = noise_png(256, 1);
+            cut.truncate(cut.len() / 2);
+            ctx.assets
+                .add_source(MemorySource::new("mem").with("m/glow.png", noise_png(8, 2)));
+            let sources = ctx.gfx.asset_sources.clone();
+            let mut slices = MeshSlices::read(
+                "m/tri.glb",
+                gltf::GpuFormats::default(),
+                Origin::File("m/tri.glb".into()),
+                glb(&cut),
+            );
+            let error = loop {
+                match slices.step(&sources) {
+                    Ok(None) => {}
+                    Ok(Some(_)) => panic!("a broken image loaded"),
+                    Err(e) => break e,
+                }
+            };
+            assert_eq!(
+                (error.kind(), error.path()),
+                (crate::error::ErrorKind::Decode, Some("m/tri.glb"))
+            );
+            assert!(error.to_string().contains("an image can't be read"), "{error}");
+        });
+    }
+
+    #[test]
+    fn without_workers_a_streamed_mesh_decodes_within_the_frame_budget_and_uploads() {
+        Game::new("t", 1, 1).hot_reload(false).run_headless(0, |ctx| {
+            ctx.gfx.streaming.sliced = Some(true);
+            ctx.assets.groups.piece_cost = Some(0.125 / 1000.0);
+            ctx.assets.set_group_frame_budget(0.25);
+            ctx.assets.add_source(
+                MemorySource::new("mem")
+                    .with("m/tri.glb", glb(&noise_png(256, 1)))
+                    .with("m/glow.png", noise_png(128, 2)),
+            );
+            assert_eq!(ctx.gfx.stream_mesh("m/tri.glb"), None);
+            let mut frames = Vec::new();
+            while ctx.gfx.asset_state(ResidencyKind::Mesh, "m/tri.glb") != AssetState::Resident {
+                ctx.pump_asset_groups();
+                ctx.pump_streaming();
+                frames.push(ctx.gfx.upload_stats().frame_slices);
+                assert!(frames.len() < 100, "never loaded: {frames:?}");
+            }
+            // Two pieces a frame: the scan, five image slices, the parse.
+            assert!(frames.iter().all(|&n| n <= 2), "{frames:?}");
+            assert_eq!(frames.iter().sum::<u32>(), 7, "{frames:?}");
+            assert!(ctx.gfx.stream_mesh("m/tri.glb").is_some());
+        });
+    }
+}

@@ -480,6 +480,7 @@ fn run_step(
         }
         std::fs::write(&file, text).map_err(|e| format!("can't write {path}: {e}"))
     } else if let Some(until) = step.get("until") {
+        // A hang detector: the step ends as soon as its condition holds.
         let deadline = Instant::now() + Duration::from_secs(step["timeout_secs"].as_u64().unwrap_or(10));
         loop {
             if let Some(each) = step.get("each") {

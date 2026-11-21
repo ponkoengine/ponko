@@ -251,6 +251,12 @@ pub(crate) const CLIPPED: u32 = 1 << 31;
 /// the module docs). Below [`CLIPPED`], above every style key.
 pub(crate) const MESH: u32 = 1 << 30;
 
+/// `z` moved `dz` along in depth; exactly `z` when `dz` is 0 (`-0.0 + 0.0`
+/// would sort apart from `-0.0`).
+fn shifted(z: f32, dz: f32) -> f32 {
+    if dz == 0.0 { z } else { z + dz }
+}
+
 /// Maps an `f32` to a `u32` whose unsigned order matches the float order.
 fn z_key(z: f32) -> u32 {
     let bits = z.to_bits();
@@ -417,16 +423,33 @@ impl DrawList {
     }
 
     /// Pushes `sprites` (from [`record_from`](Self::record_from)) as they
-    /// were pushed, on the render layers sprites are pushed on now. The
-    /// list ends up as if they had been drawn again; the clip set for the
-    /// sprites pushed next stays as it was.
-    pub fn replay(&mut self, sprites: &[Recorded]) {
+    /// were pushed, `dz` further along in depth, on the render layers
+    /// sprites are pushed on now. The list ends up as if they had been
+    /// drawn again `dz` deeper; the clip set for the sprites pushed next
+    /// stays as it was.
+    pub fn replay(&mut self, sprites: &[Recorded], dz: f32) {
         let clip = self.clip;
         for s in sprites {
             self.clip = s.clip;
-            self.push_styled(s.texture, s.style, s.z, s.instance);
+            self.push_styled(s.texture, s.style, shifted(s.z, dz), s.instance);
         }
         self.clip = clip;
+    }
+
+    /// Pushes `sprites` (from [`record_from`](Self::record_from)) again
+    /// `dz` further along in depth, in the clip set now rather than theirs,
+    /// each one `tinted` marks with `color`: text drawn in an earlier frame,
+    /// pushed again without laying it out, somewhere else in the drawing
+    /// order, clip or color.
+    pub fn replay_recolored(&mut self, sprites: &[Recorded], dz: f32, tinted: &[bool], color: [u8; 4]) {
+        debug_assert_eq!(sprites.len(), tinted.len(), "one mark per sprite");
+        for (s, &tint) in sprites.iter().zip(tinted) {
+            let mut instance = s.instance;
+            if tint {
+                instance.color = color;
+            }
+            self.push_styled(s.texture, s.style, shifted(s.z, dz), instance);
+        }
     }
 
     /// Moves the sprites pushed from index `start` on: each position goes
@@ -570,7 +593,7 @@ mod tests {
         let mut again = DrawList::default();
         again.push(9, 0.0, inst(0.0));
         again.set_clip(Some(crate::camera::Rect::new(0.0, 0.0, 1.0, 1.0)));
-        again.replay(&recorded);
+        again.replay(&recorded, 0.0);
         assert_eq!(
             again.clip(),
             Some(crate::camera::Rect::new(0.0, 0.0, 1.0, 1.0)),
@@ -581,6 +604,40 @@ mod tests {
         let (replayed, replayed_batches) = again.finish();
         assert_eq!(replayed, &sprites[..]);
         assert_eq!(replayed_batches, &batches[..]);
+    }
+
+    #[test]
+    fn replayed_sprites_move_in_depth_together() {
+        let mut drawn = DrawList::default();
+        drawn.push(1, 10.0, inst(1.0));
+        drawn.push(1, 10.7, inst(2.0));
+        let mut recorded = Vec::new();
+        drawn.record_from(0, &mut recorded);
+        // Replayed 8 deeper, they go above what lies between.
+        let mut again = DrawList::default();
+        again.replay(&recorded, 8.0);
+        again.push(2, 12.0, inst(3.0));
+        let (sprites, _) = again.finish();
+        let tags: Vec<f32> = sprites.iter().map(|s| s.pos[0]).collect();
+        assert_eq!(tags, [3.0, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn recolored_replays_tint_the_marked_sprites_in_the_clip_set_now() {
+        let mut drawn = DrawList::default();
+        drawn.set_clip(Some(crate::camera::Rect::new(0.0, 0.0, 5.0, 5.0)));
+        drawn.push(1, 1.0, inst(1.0));
+        drawn.push(1, 1.0, inst(2.0));
+        let mut recorded = Vec::new();
+        drawn.record_from(0, &mut recorded);
+        let clip = crate::camera::Rect::new(1.0, 2.0, 3.0, 4.0);
+        let mut again = DrawList::default();
+        again.set_clip(Some(clip));
+        again.replay_recolored(&recorded, 0.0, &[true, false], [9, 8, 7, 6]);
+        let (sprites, batches) = again.finish();
+        assert_eq!(sprites[0].color, [9, 8, 7, 6]);
+        assert_eq!(sprites[1].color, [255; 4], "not marked: as recorded");
+        assert!(batches.iter().all(|b| b.clip == Some(clip)));
     }
 
     #[test]

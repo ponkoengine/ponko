@@ -37,6 +37,8 @@ static RING: Mutex<Ring> = Mutex::new(Ring {
 fn push_line(bytes: &[u8]) {
     let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
     let cut = &bytes[..bytes.len().min(MAX_LINE_BYTES)];
+    // Also for a crash that is not a panic, read without a lock.
+    crate::crash::native::keep_line(cut);
     let line = String::from_utf8_lossy(cut).into_owned();
     let mut ring = RING.lock().unwrap_or_else(|e| e.into_inner());
     if ring.lines.len() == MAX_LINES {

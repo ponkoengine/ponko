@@ -82,8 +82,8 @@ test("a WebGL2 context lost while playing is shown", async () => {
 test("a WebGPU device lost while playing is shown with the browser's reason", async () => {
   const page = await startPage();
   page.started();
-  const message = "The WebGPU device was lost while the game was running: Device was destroyed. Reload the page to try again.";
-  page.fail({ kind: "DeviceLost", message, location: null, text: null });
+  const message = "The WebGPU device was destroyed while the game was running: Device was destroyed. Reload the page to try again.";
+  page.fail({ kind: "DeviceLost", message, location: null, text: null, reason: "Destroyed" });
   assert.deepEqual(page.body.appended, [page.status]);
   assert.equal(page.status.className, "error");
   assert.equal(page.status.textContent, `The game stopped: ${message}`);
@@ -93,7 +93,7 @@ test("a game's own text replaces the page's for a lost WebGPU device too", async
   const page = await startPage();
   page.started();
   const message = "The WebGPU device was lost while the game was running. Reload the page to try again.";
-  page.fail({ kind: "DeviceLost", message, location: null, text: "The graphics card stopped answering. Reload to keep playing." });
+  page.fail({ kind: "DeviceLost", message, location: null, text: "The graphics card stopped answering. Reload to keep playing.", reason: "Unknown" });
   assert.equal(page.status.textContent, "The graphics card stopped answering. Reload to keep playing.");
 });
 
@@ -137,26 +137,34 @@ test("a startup error stays on the page when a script error follows it", async (
 });
 
 // The browser runner's own checks (runtime-failures.mjs), on recorded runs.
-const { checkRun, deviceLostMessage, expected, runOutcome } = await import("./runtime-failures.mjs");
+const { checkReport, checkRun, deviceLostMessage, deviceLostReason, expected, runOutcome } = await import("./runtime-failures.mjs");
+
+/** The crash report the engine hands the page for a run that wanted `want`. */
+const reportFor = (want) => ({
+  name: "crash-reports/crash-report.txt",
+  kind: want.report,
+  message: want.message,
+  text: `Ponko: web smoke crash report\nkind: ${want.report}\nmessage: ${want.message}\nengine version: 0.1.0\n`,
+});
 
 test("the browser runner passes a run that shows the panic it reported", () => {
   const want = expected("runtime-panic");
-  const failure = { kind: "Panic", message: want.message, location: "examples/common/web_smoke.rs:80:13", text: null };
-  assert.deepEqual(checkRun("runtime-panic", { ticks: 21, status: want.status, failure }), []);
+  const failure = { kind: "Panic", message: want.message, location: "examples/common/web_smoke.rs:80:13", text: null, reason: null };
+  assert.deepEqual(checkRun("runtime-panic", { ticks: 21, status: want.status, failure, report: reportFor(want) }), []);
 });
 
 test("the browser runner fails a run whose page shows the trap instead of the panic", () => {
   const want = expected("runtime-panic");
-  const failure = { kind: "Panic", message: want.message, location: "examples/common/web_smoke.rs:80:13", text: null };
-  const problems = checkRun("runtime-panic", { ticks: 21, status: "The game stopped: RuntimeError: unreachable (see the browser console)", failure });
+  const failure = { kind: "Panic", message: want.message, location: "examples/common/web_smoke.rs:80:13", text: null, reason: null };
+  const problems = checkRun("runtime-panic", { ticks: 21, status: "The game stopped: RuntimeError: unreachable (see the browser console)", failure, report: reportFor(want) });
   assert.equal(problems.length, 1);
   assert.match(problems[0], /the page shows/);
 });
 
 test("the browser runner fails a run without the game's own failure text", () => {
   const want = expected("failure-text");
-  const failure = { kind: "Panic", message: want.message, location: "examples/common/web_smoke.rs:80:13", text: null };
-  const problems = checkRun("failure-text", { ticks: 21, status: `The game stopped: ${want.message}`, failure });
+  const failure = { kind: "Panic", message: want.message, location: "examples/common/web_smoke.rs:80:13", text: null, reason: null };
+  const problems = checkRun("failure-text", { ticks: 21, status: `The game stopped: ${want.message}`, failure, report: reportFor(want) });
   assert.equal(problems.length, 2);
 });
 
@@ -165,27 +173,79 @@ test("the browser runner fails a run where no failure reached onPonkoFailure", (
   assert.deepEqual(checkRun("context-lost", { ticks: 30, status: want.status, failure: null }), ["onPonkoFailure never called its callback"]);
 });
 
-// A lost WebGPU device: the engine's message carries the browser's reason.
+// A lost WebGPU device: the failure says whether it was destroyed, and the
+// engine's message carries the browser's words.
 const destroyed = { reason: "destroyed", message: "Device was destroyed.", by: "runner" };
-const lostFailure = (message) => ({ kind: "DeviceLost", message, location: null, text: null });
+const crashed = { reason: "unknown", message: "GPU process crashed.", by: "browser" };
+const lostFailure = (message, reason = "Destroyed") => ({ kind: "DeviceLost", message, location: null, text: null, reason });
 
-test("the engine's lost-device sentence carries the browser's reason without a doubled stop", () => {
+test("the engine's lost-device sentence carries the browser's words without a doubled stop", () => {
   assert.equal(
-    deviceLostMessage("Device was destroyed."),
-    "The WebGPU device was lost while the game was running: Device was destroyed. Reload the page to try again.",
+    deviceLostMessage("destroyed", "Device was destroyed."),
+    "The WebGPU device was destroyed while the game was running: Device was destroyed. Reload the page to try again.",
   );
   assert.equal(
-    deviceLostMessage(""),
+    deviceLostMessage("unknown", "GPU process crashed."),
+    "The WebGPU device was lost while the game was running: GPU process crashed. Reload the page to try again.",
+  );
+  assert.equal(
+    deviceLostMessage("unknown", ""),
     "The WebGPU device was lost while the game was running. Reload the page to try again.",
   );
-  assert.equal(deviceLostMessage("  \n"), deviceLostMessage(""));
+  assert.equal(deviceLostMessage("unknown", "  \n"), deviceLostMessage("unknown", ""));
+});
+
+test("a destroyed device and one lost for another reason are told apart", () => {
+  assert.equal(deviceLostReason("destroyed"), "Destroyed");
+  assert.equal(deviceLostReason("unknown"), "Unknown");
+  // A reason a later browser adds is still a lost device.
+  assert.equal(deviceLostReason("out-of-memory"), "Unknown");
+  assert.equal(expected("device-lost", destroyed).reason, "Destroyed");
+  assert.equal(expected("device-lost", crashed).reason, "Unknown");
+  assert.notEqual(expected("device-lost", destroyed).message, expected("device-lost", { ...crashed, message: destroyed.message }).message);
+  // Only a lost device has a reason.
+  for (const other of ["runtime-panic", "failure-text", "context-lost"]) assert.equal(expected(other).reason, null);
+});
+
+test("the browser runner passes a device lost for an unknown reason that reached the page as one", () => {
+  const want = expected("device-lost", crashed);
+  const seen = { ticks: 40, status: want.status, failure: lostFailure(want.message, "Unknown"), lost: crashed, report: reportFor(want) };
+  assert.deepEqual(checkRun("device-lost", seen), []);
+});
+
+test("the browser runner fails a destroyed device reported without its reason or as lost", () => {
+  const want = expected("device-lost", destroyed);
+  for (const reason of [undefined, null, "Unknown"]) {
+    const failure = { ...lostFailure(want.message), reason };
+    const seen = { ticks: 40, status: want.status, failure, lost: destroyed, report: reportFor(want) };
+    const problems = checkRun("device-lost", seen);
+    assert.ok(problems.some((p) => p.startsWith("the failure's reason")), `${reason}: ${problems.join("; ")}`);
+  }
 });
 
 test("the browser runner passes a run where the lost device reached the page with its reason", () => {
   const want = expected("device-lost", destroyed);
   assert.equal(want.kind, "DeviceLost");
-  const seen = { ticks: 40, status: want.status, failure: lostFailure(want.message), lost: destroyed };
+  const seen = { ticks: 40, status: want.status, failure: lostFailure(want.message), lost: destroyed, report: reportFor(want) };
   assert.deepEqual(checkRun("device-lost", seen), []);
+});
+
+test("the browser runner fails a lost device that wrote no crash report", () => {
+  const want = expected("device-lost", destroyed);
+  const seen = { ticks: 40, status: want.status, failure: lostFailure(want.message), lost: destroyed, report: null };
+  assert.deepEqual(checkRun("device-lost", seen), ["no crash report reached the page (window.ponkoCrashReport)"]);
+});
+
+test("a lost device's crash report is an error with the page's message", () => {
+  const want = expected("device-lost", destroyed);
+  assert.equal(want.report, "error");
+  assert.deepEqual(checkReport(want, reportFor(want)), []);
+  const asPanic = { ...reportFor(want), kind: "panic" };
+  assert.ok(checkReport(want, asPanic).some((p) => p.startsWith("the crash report's kind")));
+  const other = reportFor(expected("context-lost"));
+  const problems = checkReport(want, other);
+  assert.ok(problems.some((p) => p.startsWith("the crash report's message")), problems.join("; "));
+  assert.ok(problems.some((p) => p.startsWith("the crash report's text lacks")), problems.join("; "));
 });
 
 test("the browser runner fails a lost device reported as a lost WebGL2 context", () => {
@@ -197,7 +257,7 @@ test("the browser runner fails a lost device reported as a lost WebGL2 context",
 });
 
 test("the browser runner fails a lost device whose message drops the browser's reason", () => {
-  const generic = deviceLostMessage("");
+  const generic = deviceLostMessage("destroyed", "");
   const seen = { ticks: 40, status: `The game stopped: ${generic}`, failure: lostFailure(generic), lost: destroyed };
   const problems = checkRun("device-lost", seen);
   assert.ok(problems.some((p) => p.startsWith("the failure's message")), problems.join("; "));
@@ -211,7 +271,7 @@ test("the browser runner fails a device-lost run where the page never heard of i
 
 test("the browser runner fails a device-lost run where the device was never lost", () => {
   const want = expected("device-lost");
-  const problems = checkRun("device-lost", { ticks: 40, status: want.status, failure: lostFailure(want.message), lost: null });
+  const problems = checkRun("device-lost", { ticks: 40, status: want.status, failure: lostFailure(want.message, "Unknown"), lost: null, report: reportFor(want) });
   assert.deepEqual(problems, ["the browser never resolved the game's device.lost"]);
 });
 

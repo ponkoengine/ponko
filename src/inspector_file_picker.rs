@@ -28,13 +28,15 @@ impl Panels {
     }
 
     /// Selects a path via the windowed backend, or supplies one in a headless test.
+    /// Returns whether `choose` was asked: a system dialog had the keyboard,
+    /// so the panels forget the keys held (see `Panels::input_lost`).
     pub(super) fn run_file_picker(
         &mut self,
         ctx: &mut Ctx,
         choose: impl FnOnce(FilePicker, &Path, Option<&str>) -> Option<PathBuf>,
-    ) {
+    ) -> bool {
         let Some(request) = self.app.as_mut().and_then(|app| app.file_picker.take()) else {
-            return;
+            return false;
         };
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -70,8 +72,10 @@ impl Panels {
             } else {
                 None
             };
-            let Some(chosen) = choose(request, &folder, name) else {
-                return;
+            let chosen = choose(request, &folder, name);
+            self.input_lost();
+            let Some(chosen) = chosen else {
+                return true;
             };
             let chosen = if saving { with_json_extension(chosen) } else { chosen };
             let name = asset_name(&roots, &chosen, saving).and_then(|name| {
@@ -86,7 +90,7 @@ impl Panels {
                 Ok(name)
             });
             let Some(name) = self.report(name) else {
-                return;
+                return true;
             };
             match request {
                 FilePicker::Open => self.open_file(ctx, &name),
@@ -97,9 +101,14 @@ impl Panels {
                     }
                 }
             }
+            true
         }
+        // Web builds ask for the path in a field instead (`App::system_picker`).
         #[cfg(target_arch = "wasm32")]
-        let _ = (ctx, choose, request);
+        {
+            let _ = (ctx, choose, request);
+            false
+        }
     }
 }
 

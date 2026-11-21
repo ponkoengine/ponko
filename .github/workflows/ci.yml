@@ -305,6 +305,27 @@ jobs:
           - name: compressed textures and geometry
             scope: -p ponko
             args: --features 3d,basis-universal,gltf-meshopt
+          # The command line tool's cook and texture features, each alone and
+          # the three that need no Aseprite (a test or a dependency used by
+          # only some combinations fails here, not in a user's `cargo install`).
+          - name: command line tool with no features
+            scope: -p ponko_cli
+            args: --no-default-features
+          - name: command line tool with textures only
+            scope: -p ponko_cli
+            args: --no-default-features --features textures
+          - name: command line tool with meshes only
+            scope: -p ponko_cli
+            args: --no-default-features --features meshes
+          - name: command line tool with shaders only
+            scope: -p ponko_cli
+            args: --no-default-features --features shaders
+          - name: command line tool with Aseprite only
+            scope: -p ponko_cli
+            args: --no-default-features --features aseprite
+          - name: command line tool with textures, meshes and shaders
+            scope: -p ponko_cli
+            args: --no-default-features --features meshes,textures,shaders
           # Every benchmark driver: the offscreen rendering benchmarks
           # (`render/scene`, `render/record`), the positional sound, shaped
           # text and video decoding ones.
@@ -323,6 +344,9 @@ jobs:
           # WebM playback (AV1 pictures, Vorbis sound), desktop only.
           - name: video feature
             scope: -p ponko
+            args: --features video
+          - name: C library with video
+            scope: -p ponko_ffi
             args: --features video
           # The lobby client alone (no window, audio or other optional
           # subsystem), then with the WebRTC endpoints on top of it.
@@ -638,6 +662,18 @@ jobs:
       - name: Tests, engine with no default features
         if: ${{ !cancelled() }}
         run: cargo test -p ponko --tests --no-fail-fast --no-default-features
+      # The command line tool's feature subsets: its unit tests (the cook and
+      # texture code) with each of its features alone, and the three without
+      # Aseprite.
+      - name: Tests, command line tool feature subsets
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test -p ponko_cli --no-fail-fast --no-default-features --bin ponko
+          cargo test -p ponko_cli --no-fail-fast --no-default-features --features textures --bin ponko
+          cargo test -p ponko_cli --no-fail-fast --no-default-features --features meshes --bin ponko
+          cargo test -p ponko_cli --no-fail-fast --no-default-features --features shaders --bin ponko
+          cargo test -p ponko_cli --no-fail-fast --no-default-features --features aseprite --bin ponko
+          cargo test -p ponko_cli --no-fail-fast --no-default-features --features meshes,textures,shaders --bin ponko
       # JPEG off (the no-default-features run above) names the feature in its
       # error; a 2D build with only JPEG loads one; every format loads its own.
       - name: Tests, 2D engine with JPEG only
@@ -674,10 +710,14 @@ jobs:
           cargo test -p ponko --no-fail-fast --features 3d,system-fonts --test text_shaping
           cargo test -p ponko --no-fail-fast --features 3d,system-fonts --lib text
       # The editor as an app: documents, undo, saving scenes and prefabs,
-      # cooking and play mode, all without a window.
+      # cooking and play mode, all without a window; then its panels (the
+      # inspector's modules with the editor on: file picker, path field,
+      # keys after a dialog, asset panel).
       - name: Tests, editor
         if: ${{ !cancelled() }}
-        run: cargo test -p ponko --no-fail-fast --features editor --lib editor
+        run: |
+          cargo test -p ponko --no-fail-fast --features editor --lib editor
+          cargo test -p ponko --no-fail-fast --features editor --lib inspector
       # `.aseprite` source files loaded without an export beside them.
       - name: Tests, aseprite-source
         if: ${{ !cancelled() }}
@@ -689,6 +729,7 @@ jobs:
         run: |
           cargo test -p ponko --no-fail-fast --features video --test video
           cargo test -p ponko --no-fail-fast --features video --lib video
+          cargo test -p ponko_ffi --no-fail-fast --features video --test video
       # The lobby client with nothing else in the build, then WebRTC
       # endpoints: the engine's own tests, the lobby server's (its relay
       # carries the signaling) and the C library's, on loopback.
@@ -1172,6 +1213,18 @@ jobs:
       # Shaping works in the browser; system fonts build and report that the
       # web has none.
       - run: cargo check -p ponko --target wasm32-unknown-unknown --features system-fonts
+      # The editor in the browser: Open and Save as ask for a path in a
+      # field (no system dialog), and model thumbnails stay the software
+      # ones (no offscreen readback or disk cache there).
+      - run: cargo clippy -p ponko --target wasm32-unknown-unknown --features editor -- -D warnings
+      - run: cargo clippy -p ponko --target wasm32-unknown-unknown --features editor,3d -- -D warnings
+      # The threaded web configuration (atomics, std rebuilt, nightly): the
+      # nightly clippy has lints the stable one lacks, and some code is only
+      # compiled with atomics. `web/build.sh --threads --clippy` lints the
+      # engine and the threads fixture with the flags a threaded build uses.
+      - name: Nightly Rust for the threaded web build
+        run: rustup toolchain install nightly --profile minimal --component rust-src,clippy --target wasm32-unknown-unknown
+      - run: web/build.sh --threads --clippy
       - name: Find the wasm-bindgen version in Cargo.lock
         run: echo "WASM_BINDGEN=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print }' Cargo.lock)" >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@v2
@@ -1309,8 +1362,10 @@ jobs:
       # (nightly Rust rebuilding std with atomics, hence rust-src). Served with
       # the cross-origin isolation headers its work must run on workers; served
       # without, on the page's thread alone, with the same result. A worker's
-      # panic must stop the game. Fed browser gamepads must reach the game
-      # (`--case gamepads`), and a warning must fail the threaded build
+      # panic must stop the game. Fed browser gamepads must reach the game and
+      # its rumble the pad's `vibrationActuator` (`--case gamepads`; the same
+      # on the ordinary build, whose pads come from gilrs, `--case
+      # gamepads-plain`), and a warning must fail the threaded build
       # (`--case warning`: an example whose only code is an unused function
       # behind `target_feature = "atomics"`, built with -D warnings).
       - name: Nightly Rust for the threaded web build
@@ -1323,6 +1378,7 @@ jobs:
           node web/smoke/threads.mjs --build
           node web/smoke/threads.mjs --case worker-panic
           node web/smoke/threads.mjs --case gamepads
+          node web/smoke/threads.mjs --build --case gamepads-plain
           node web/smoke/threads.mjs --case warning
       # Replication in the browser (web/smoke/replication.mjs): the Orb Arena
       # example, a native dedicated server (no window) and one tab that joins

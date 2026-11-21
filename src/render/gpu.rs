@@ -102,6 +102,9 @@ pub(crate) struct Renderer {
     sprite_mirror: traffic::Mirror,
 
     timer: Option<GpuTimer>,
+    /// Times the GPU's copies of the asset group and streaming steps'
+    /// texture uploads; `None` without timestamp queries.
+    upload_timer: Option<super::upload_timer::UploadTimer>,
     /// What this GPU can do and the fallbacks used (fixed once opened).
     capabilities: super::GpuCapabilities,
     /// Draw frames the window can't take into `hidden_target` instead of
@@ -545,12 +548,14 @@ impl Renderer {
         )?;
         // In a browser, a WebGPU device lost while the game runs (the GPU
         // process crashed or was reset) stops it for good: the page hears
-        // of it through `onPonkoFailure`, kind `DeviceLost`. On WebGL2 the
+        // of it through `onPonkoFailure`, kind `DeviceLost`, with whether it
+        // was destroyed or lost for another reason. On WebGL2 the
         // canvas's lost context reports it instead (`ContextLost`).
         #[cfg(target_arch = "wasm32")]
         if adapter.get_info().backend == wgpu::Backend::BrowserWebGpu {
-            device.set_device_lost_callback(|_reason, message| {
-                crate::web::report_failure(crate::web::device_lost_while_playing(&message));
+            device.set_device_lost_callback(|reason, message| {
+                let reason = crate::web::DeviceLostReason::from_wgpu(reason);
+                crate::web::report_failure(crate::web::device_lost_while_playing(reason, &message));
             });
         }
 
@@ -674,8 +679,8 @@ impl Renderer {
 
     /// A renderer drawing offscreen at `size` on this renderer's GPU (the
     /// same device and queue, its own pipelines and resources): the
-    /// editor's model thumbnails.
-    #[cfg(all(feature = "3d", feature = "editor"))]
+    /// editor's model thumbnails (not on the web: see `thumb_studio`).
+    #[cfg(all(feature = "3d", feature = "editor", not(target_arch = "wasm32")))]
     pub(crate) fn offscreen_twin(&self, size: (u32, u32)) -> Self {
         let msaa = 4;
         let info = self.device.adapter_info();
@@ -804,6 +809,7 @@ impl Renderer {
         });
         let instance_buffer = Self::create_instance_buffer(&device, INITIAL_INSTANCE_CAPACITY);
         let timer = GpuTimer::new(&device, &queue);
+        let upload_timer = super::upload_timer::UploadTimer::new(&device, &queue);
 
         Self {
             window_surface,
@@ -839,6 +845,7 @@ impl Renderer {
             too_many_sprites: false,
             sprite_mirror: traffic::Mirror::default(),
             timer,
+            upload_timer,
             capabilities,
             draw_hidden: false,
             only_hidden: false,
@@ -1476,6 +1483,35 @@ impl Renderer {
         });
         self.three().add_render_target(id, &texture);
         id
+    }
+
+    /// Whether this GPU times the asset group and streaming steps'
+    /// texture uploads (it has timestamp queries).
+    pub fn times_uploads(&self) -> bool {
+        self.upload_timer.is_some() || super::upload_timer::active()
+    }
+
+    /// Times the texture uploads made on this thread, as `step`'s, until
+    /// [`end_timed_uploads`](Self::end_timed_uploads).
+    pub fn begin_timed_uploads(&mut self, step: super::upload_timer::UploadStep) {
+        if let Some(timer) = self.upload_timer.take() {
+            super::upload_timer::activate(timer, step);
+        }
+    }
+
+    /// Stops timing texture uploads; their GPU time comes back through
+    /// [`collect_upload_times`](Self::collect_upload_times) a few frames later.
+    pub fn end_timed_uploads(&mut self) {
+        if let Some(timer) = super::upload_timer::deactivate() {
+            self.upload_timer = Some(timer);
+        }
+    }
+
+    /// Calls `done` with each timed step whose GPU time came back.
+    pub fn collect_upload_times(&mut self, done: impl FnMut(super::upload_timer::UploadStep, f32)) {
+        if let Some(timer) = &mut self.upload_timer {
+            timer.collect(done);
+        }
     }
 
     /// Writes `texels` (RGBA half floats, 8 bytes each) into render target

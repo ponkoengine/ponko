@@ -220,9 +220,13 @@ the same asset sources as everything else: a link to
 root; an absolute link is an error that says to make it relative). The
 linked file may link on to another, up to 8 files deep. While you develop,
 saving the tileset file reloads every loose `.aseprite` file that uses it,
-like saving the file itself. In the cook, give a file that only holds
-tilesets a `"skip"` rule in `cook.json` if the game doesn't load it: the
-map still reads it, but its own sheet isn't written.
+like saving the file itself. In the cook, a file that only holds tilesets
+(at least one tileset and no layer, so nothing to draw) and that another
+file links to gets no sheet: the cook's report says it is left out, and the
+files that link to it still read it. No `"skip"` rule is needed. The file
+that links to it can be one a `"keep"` rule copies as it is: it still counts. A file
+of only tilesets that nothing links to still gets a sheet (an empty one),
+and a `"skip"` rule leaves out any file you don't load.
 
 The cook caches each conversion by the file's bytes, the bytes of the
 tileset files it links to and its split setting, so a cook that changed

@@ -122,6 +122,9 @@ pub(crate) struct TextVertex {
 #[derive(Default)]
 pub(crate) struct TextFrame {
     pub vertices: Vec<TextVertex>,
+    /// How many of the last `vertices` are debug labels on top (target
+    /// cameras only), drawn after everything else without a depth test.
+    pub on_top: usize,
     pub atlas: Option<Texture>,
     /// Scratch: (depth, entity) of each text to draw.
     order: Vec<(f32, ponko_ecs::Entity)>,
@@ -268,25 +271,30 @@ impl Ctx {
             }
         };
         let (frame3d, text, world) = (&mut self.gfx.frame3d, &mut self.gfx.text, &mut self.world);
-        let shows = |layers: crate::camera::RenderLayers| layers.intersects(crate::camera::RenderLayers::DEFAULT);
         let lines = &frame3d.debug_lines;
         let main = &self.scene3d.camera;
         let labels_for = |on: bool| (labels && on).then_some(lines);
-        frame3d.particles.texts.lay_out(
-            world,
-            main,
-            labels_for(shows(main.layers) && !lines.hidden),
-            text,
-            atlas,
-        );
+        // The window's cameras draw the labels on top as screen text.
+        frame3d
+            .particles
+            .texts
+            .lay_out(world, main, (labels_for(!lines.hidden), false), true, text, atlas);
         for (frame, view) in frame3d.window_views.iter_mut().zip(&self.scene3d.views) {
-            let labels = labels_for(shows(view.camera.layers));
-            frame.particles.texts.lay_out(world, &view.camera, labels, text, atlas);
+            let labels = labels_for(view.camera.draws_debug(false));
+            frame
+                .particles
+                .texts
+                .lay_out(world, &view.camera, (labels, false), true, text, atlas);
         }
         for view in &mut frame3d.views {
-            if let Some(eye) = view.eye.filter(|_| view.particles) {
+            // Its 3D text is drawn with its particles; its labels with its
+            // debug drawing, which has a flag of its own.
+            if let Some(eye) = view.eye.filter(|_| view.particles || view.debug) {
                 let labels = labels_for(view.debug);
-                view.frame.particles.texts.lay_out(world, &eye, labels, text, atlas);
+                view.frame
+                    .particles
+                    .texts
+                    .lay_out(world, &eye, (labels, true), view.particles, text, atlas);
             }
         }
         if let Some(renderer) = self.gfx.renderer.as_mut() {
@@ -303,15 +311,19 @@ impl TextFrame {
     /// Nothing to draw (keeping the storage and the atlas).
     pub(crate) fn clear(&mut self) {
         self.vertices.clear();
+        self.on_top = 0;
     }
 
-    /// Lays out every [`Text3D`] in `world` for `camera`, farthest first,
-    /// then `labels`' depth-tested labels, sampling `atlas`.
+    /// Lays out every [`Text3D`] in `world` for `camera` (with `texts`),
+    /// farthest first, then `labels`' depth-tested labels and, with
+    /// `on_top`, its labels on top last (the last [`on_top`](Self::on_top)
+    /// vertices), sampling `atlas`.
     fn lay_out(
         &mut self,
         world: &mut ponko_ecs::World,
         camera: &Camera3D,
-        labels: Option<&crate::debug::GpuLines>,
+        (labels, on_top): (Option<&crate::debug::GpuLines>, bool),
+        texts: bool,
         text: &mut Text,
         atlas: Texture,
     ) {
@@ -323,7 +335,7 @@ impl TextFrame {
         world
             .query::<(ponko_ecs::Entity, &Text3D, &Transform3D)>()
             .for_each(|(e, t, at)| {
-                if !t.text.is_empty() && t.size > 0.0 {
+                if texts && !t.text.is_empty() && t.size > 0.0 {
                     order.push(((at.position - eye).dot(forward), e));
                 }
             });
@@ -336,11 +348,19 @@ impl TextFrame {
         }
         self.order = order;
         if let Some(lines) = labels {
-            for l in &lines.labels {
+            for l in lines.labels.iter().filter(|l| !l.on_top) {
                 let string = &lines.text[l.text.clone()];
                 self.push_label(string, l.at, (l.color, l.size), camera, text);
             }
         }
+        let below = self.vertices.len();
+        if let Some(lines) = labels.filter(|_| on_top) {
+            for l in lines.labels.iter().filter(|l| l.on_top) {
+                let string = &lines.text[l.text.clone()];
+                self.push_label(string, l.at, (l.color, l.size), camera, text);
+            }
+        }
+        self.on_top = self.vertices.len() - below;
     }
 }
 
@@ -537,5 +557,42 @@ mod tests {
             6 * 6,
             "a quad per letter"
         );
+    }
+
+    #[test]
+    fn a_target_camera_lays_out_debug_labels_by_its_debug_flag_and_3d_text_by_its_particles() {
+        let mut ctx = Ctx::new(1.0 / 60.0, Vec2::new(800.0, 600.0));
+        ctx.gfx.headless = true;
+        ctx.scene3d.camera.position = Vec3::new(0.0, 0.0, 5.0);
+        ctx.scene3d.camera.rotation = Quat::IDENTITY;
+        ctx.world
+            .spawn((Text3D::new("abc"), Transform3D::at(Vec3::new(1.0, 0.0, 0.0))));
+        ctx.debug.set_enabled(true);
+        ctx.debug.text(Vec3::ZERO, "tested", Color::WHITE).depth_tested();
+        ctx.gfx.frame3d.debug_lines.clear();
+        ctx.hand_over_debug_draw();
+        ctx.gfx.frame3d.particles.texts.atlas = Some(Texture::new(0, Text::ATLAS_SIZE, Text::ATLAS_SIZE));
+        let eye = ctx.scene3d.camera;
+        // (particles, debug drawing): the label's six quads with debug
+        // drawing, the text's three with particles.
+        for ((particles, debug), quads) in [
+            ((true, true), 9),
+            ((false, true), 6),
+            ((true, false), 3),
+            ((false, false), 0),
+        ] {
+            ctx.gfx.frame3d.views = vec![crate::three::collect::ViewFrame {
+                particles,
+                debug,
+                eye: Some(eye),
+                ..Default::default()
+            }];
+            ctx.collect_text3d();
+            assert_eq!(
+                ctx.gfx.frame3d.views[0].frame.particles.texts.vertices.len(),
+                quads * 6,
+                "particles {particles}, debug drawing {debug}"
+            );
+        }
     }
 }

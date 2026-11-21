@@ -254,6 +254,14 @@ pub struct CrowdLevel {
     /// weights scaled back to a whole. 4 keeps the mesh as made; 1 moves
     /// each corner rigidly with its main joint, the cheapest.
     pub influences: u8,
+    /// How far before [`max_distance`](Self::max_distance) this level
+    /// starts to crossfade, in world units: over that stretch it dithers
+    /// out while the level whose band starts at its `max_distance` dithers
+    /// in (or, if none does, it fades out to nothing), so characters
+    /// don't pop from one mesh to the next. 0 (the default) switches at
+    /// once. Finite, at most the band's width; a level whose
+    /// `max_distance` is infinite never fades.
+    pub fade: f32,
 }
 
 impl CrowdLevel {
@@ -268,6 +276,7 @@ impl CrowdLevel {
             camera: true,
             shadows: true,
             influences: 4,
+            fade: 0.0,
         }
     }
 
@@ -278,6 +287,8 @@ impl CrowdLevel {
         shadows: bool => with_shadows;
         /// Sets [`influences`](Self::influences), 1 to 4.
         influences: u8 => with_influences;
+        /// Sets [`fade`](Self::fade), the crossfade into the next level.
+        fade: f32 => with_fade;
     }
 }
 
@@ -438,6 +449,65 @@ impl CrowdRecord {
     }
 }
 
+/// A character's culling box in the world: the box of the clips it plays
+/// (see [`CrowdData::clip_bounds`]) under its transform, a center and
+/// three half axes (orthogonal unless the transform shears). The GPU
+/// path's cull pass works out the same box (`crowd_cull.wgsl`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct CullBox {
+    pub center: Vec3,
+    pub axes: [Vec3; 3],
+}
+
+impl CullBox {
+    /// The model-space box `(lo, hi)` under `transform`.
+    pub fn new(transform: &Mat4, (lo, hi): (Vec3, Vec3)) -> Self {
+        let half = (hi - lo) * 0.5;
+        Self {
+            center: transform.transform_point3((lo + hi) * 0.5),
+            axes: [
+                transform.x_axis.truncate() * half.x,
+                transform.y_axis.truncate() * half.y,
+                transform.z_axis.truncate() * half.z,
+            ],
+        }
+    }
+
+    /// Half the size of the world-axis box around it.
+    pub fn extent(&self) -> Vec3 {
+        self.axes[0].abs() + self.axes[1].abs() + self.axes[2].abs()
+    }
+
+    /// Half its diagonal (its size, for global illumination's probe cut).
+    pub fn radius(&self) -> f32 {
+        self.axes.iter().map(|a| a.length_squared()).sum::<f32>().sqrt()
+    }
+
+    /// Whether it lies wholly behind `plane` (normal xyz, offset w).
+    pub fn behind(&self, plane: glam::Vec4) -> bool {
+        let n = plane.truncate();
+        let reach: f32 = self.axes.iter().map(|a| n.dot(*a).abs()).sum();
+        n.dot(self.center) + plane.w < -reach
+    }
+}
+
+/// The model-space box of a character playing the clips of `anim` (its
+/// record's animation words): its clip's, its blend clip's, or both
+/// joined while it blends between them. `clip_bounds` has at least one clip.
+pub(crate) fn character_bounds(clip_bounds: &[(Vec3, Vec3)], anim: [u32; 4]) -> (Vec3, Vec3) {
+    let last = clip_bounds.len().saturating_sub(1);
+    let of = |clip: u32| clip_bounds[(clip as usize).min(last)];
+    let blend = anim[3] & 0xffff;
+    match blend {
+        0 => of(anim[0] & 0xffff),
+        0xffff => of(anim[0] >> 16),
+        _ => {
+            let (a, b) = (of(anim[0] & 0xffff), of(anim[0] >> 16));
+            (a.0.min(b.0), a.1.max(b.1))
+        }
+    }
+}
+
 /// Where one level's skin matrices start in the bake, and
 /// how many the mesh has a frame (one per joint it binds).
 #[derive(Clone, Copy, Debug)]
@@ -457,12 +527,13 @@ pub(crate) struct CrowdData {
     pub texels: Arc<[[f32; 4]]>,
     pub sections: Vec<Section>,
     pub clips: u32,
-    /// A sphere around every level's mesh in every baked frame, in model space.
-    pub bounds: (Vec3, f32),
+    /// Per clip: a box (lowest and highest corner) around every level's
+    /// mesh in every frame baked of it, in model space.
+    pub clip_bounds: Vec<(Vec3, Vec3)>,
     pub records: Vec<CrowdRecord>,
-    /// Per character: its world sphere (center, radius).
-    pub spheres: Vec<[f32; 4]>,
-    /// A box around every character's sphere and origin.
+    /// Per character: its culling box in the world (see [`CullBox`]).
+    pub boxes: Vec<CullBox>,
+    /// A box around every character's culling box and origin.
     pub min: Vec3,
     pub max: Vec3,
     /// Withdrawn from the renderer because a level's mesh was freed.
@@ -500,19 +571,18 @@ impl CrowdData {
     /// Makes `instances` (checked) the crowd's characters.
     fn set_instances(&mut self, instances: &[CrowdInstance]) {
         self.records.clear();
-        self.spheres.clear();
+        self.boxes.clear();
         self.min = Vec3::splat(f32::INFINITY);
         self.max = Vec3::splat(f32::NEG_INFINITY);
-        let (center, radius) = self.bounds;
         for i in instances {
             let m = i.transform;
-            self.records.push(CrowdRecord::new(i));
-            let c = m.transform_point3(center);
-            let r = radius * Vec3::new(m.x_axis.length(), m.y_axis.length(), m.z_axis.length()).length();
-            self.spheres.push(c.extend(r).to_array());
-            let origin = m.w_axis.truncate();
-            self.min = self.min.min(c - r).min(origin);
-            self.max = self.max.max(c + r).max(origin);
+            let record = CrowdRecord::new(i);
+            let b = CullBox::new(&m, character_bounds(&self.clip_bounds, record.anim));
+            self.records.push(record);
+            self.boxes.push(b);
+            let (e, origin) = (b.extent(), m.w_axis.truncate());
+            self.min = self.min.min(b.center - e).min(origin);
+            self.max = self.max.max(b.center + e).max(origin);
         }
     }
 }
@@ -625,6 +695,12 @@ impl Graphics {
             {
                 return invalid("crowd level: use finite min_distance >= 0 and max_distance > min_distance".into());
             }
+            if !(level.fade.is_finite() && level.fade >= 0.0 && level.fade <= level.max_distance - level.min_distance) {
+                return invalid(format!(
+                    "crowd level: fade must be finite, >= 0 and at most the band's width (max_distance - min_distance), not {}",
+                    level.fade
+                ));
+            }
             if !(1..=4).contains(&level.influences) {
                 return invalid(format!(
                     "crowd level: influences must be 1 to 4, not {}",
@@ -672,24 +748,29 @@ impl Graphics {
             .collect();
         let joints = baked.joints.len();
         let mut sections = Vec::with_capacity(levels.len());
-        let mut lo = Vec3::splat(f32::INFINITY);
-        let mut hi = Vec3::splat(f32::NEG_INFINITY);
+        // Per clip, a box around every level's slots (each a sphere around
+        // the corners it moves) in every frame of the clip: skinning blends
+        // those frames' matrices, so every pose shown lies inside.
+        let mut clip_bounds = vec![(Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)); baked.clips.len()];
         for skin in &skins {
             let slots = skin.slots.len();
             let start = texels.len() as u32;
             let joint_of: Vec<Option<usize>> = (0..slots).map(|s| joint_in(skin, &baked.joints, s)).collect();
             texels.reserve(frames * slots * 3);
-            for g in 0..frames {
-                let pose = &baked.matrices[g * joints..(g + 1) * joints];
-                for s in 0..slots {
-                    let m = joint_of[s].map_or(Mat4::IDENTITY, |j| pose[j] * skin.inverse_binds[s]);
-                    texels.extend([m.row(0).to_array(), m.row(1).to_array(), m.row(2).to_array()]);
-                    let (c, r) = skin.bounds[s];
-                    if r >= 0.0 {
-                        let scale = m.x_axis.length().max(m.y_axis.length()).max(m.z_axis.length());
-                        let p = m.transform_point3(c);
-                        lo = lo.min(p - r * scale);
-                        hi = hi.max(p + r * scale);
+            // The clips' frames follow each other: frame after frame, as `matrices`.
+            for (clip, (lo, hi)) in baked.clips.iter().zip(&mut clip_bounds) {
+                for g in clip.first as usize..(clip.first + clip.frames) as usize {
+                    let pose = &baked.matrices[g * joints..(g + 1) * joints];
+                    for s in 0..slots {
+                        let m = joint_of[s].map_or(Mat4::IDENTITY, |j| pose[j] * skin.inverse_binds[s]);
+                        texels.extend([m.row(0).to_array(), m.row(1).to_array(), m.row(2).to_array()]);
+                        let (c, r) = skin.bounds[s];
+                        if r >= 0.0 {
+                            let scale = m.x_axis.length().max(m.y_axis.length()).max(m.z_axis.length());
+                            let p = m.transform_point3(c);
+                            *lo = lo.min(p - r * scale);
+                            *hi = hi.max(p + r * scale);
+                        }
                     }
                 }
             }
@@ -698,20 +779,20 @@ impl Graphics {
                 slots: slots as u32,
             });
         }
-        let bounds = if lo.cmple(hi).all() {
-            ((lo + hi) * 0.5, (hi - lo).length() * 0.5)
-        } else {
-            (Vec3::ZERO, 0.0)
-        };
+        for b in &mut clip_bounds {
+            if !b.0.cmple(b.1).all() {
+                *b = (Vec3::ZERO, Vec3::ZERO);
+            }
+        }
         let mut data = CrowdData {
             levels: levels.to_vec(),
             options,
             texels: texels.into(),
             sections,
             clips,
-            bounds,
+            clip_bounds,
             records: Vec::new(),
-            spheres: Vec::new(),
+            boxes: Vec::new(),
             min: Vec3::ZERO,
             max: Vec3::ZERO,
             suspended: false,
@@ -883,6 +964,54 @@ mod tests {
     }
 
     #[test]
+    fn a_character_is_culled_by_the_box_of_the_clips_it_plays() {
+        let boxes = [
+            (Vec3::ZERO, vec3(1.0, 2.0, 1.0)),
+            (vec3(-1.0, 0.0, 0.0), vec3(1.0, 4.0, 1.0)),
+        ];
+        let record = |clip: u16, blend_clip: u16, blend: f32| {
+            CrowdRecord::new(
+                &CrowdInstance::new(Mat4::IDENTITY)
+                    .playing(clip, 0.0)
+                    .blending(blend_clip, 0.0, blend),
+            )
+            .anim
+        };
+        assert_eq!(character_bounds(&boxes, record(0, 1, 0.0)), boxes[0], "its clip alone");
+        assert_eq!(
+            character_bounds(&boxes, record(0, 1, 1.0)),
+            boxes[1],
+            "the blend clip alone"
+        );
+        assert_eq!(
+            character_bounds(&boxes, record(0, 1, 0.5)),
+            (vec3(-1.0, 0.0, 0.0), vec3(1.0, 4.0, 1.0)),
+            "both while blending"
+        );
+    }
+
+    #[test]
+    fn a_cull_box_follows_the_transform() {
+        // A box 2 x 4 x 2 turned a quarter turn about z, twice the size.
+        let m = Mat4::from_scale_rotation_translation(
+            Vec3::splat(2.0),
+            Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+            vec3(10.0, 0.0, 0.0),
+        );
+        let b = CullBox::new(&m, (vec3(-1.0, 0.0, -1.0), vec3(1.0, 4.0, 1.0)));
+        assert!(b.center.distance(vec3(6.0, 0.0, 0.0)) < 1e-4, "{}", b.center);
+        assert!(
+            b.extent().distance(vec3(4.0, 2.0, 2.0)) < 1e-4,
+            "lying down: {}",
+            b.extent()
+        );
+        assert!((b.radius() - vec3(4.0, 2.0, 2.0).length()).abs() < 1e-4);
+        // Planes facing +x: behind one at x 11, not at x 9.
+        assert!(b.behind(Vec4::new(1.0, 0.0, 0.0, -11.0)));
+        assert!(!b.behind(Vec4::new(1.0, 0.0, 0.0, -9.0)));
+    }
+
+    #[test]
     fn baking_samples_both_ends_of_every_clip() {
         let (skeleton, clip) = bend();
         let idle = AnimationClip::new("idle", &skeleton, vec![]);
@@ -948,11 +1077,14 @@ mod tests {
             assert_eq!(data.sections[1].start, 1 + 5 * 2 * 3);
             assert_eq!(data.texels.len(), 1 + 5 * 2 * 3 + 5 * 3);
             assert_eq!(data.texels[0], [0.0, 5.0, 4.0, 1.0]);
-            // The bent top reaches x -1 to -2 at the end: inside the bounds.
-            let (c, r) = data.bounds;
-            for p in [vec3(-2.0, 1.0, 0.0), vec3(0.0, 2.0, 0.0), Vec3::ZERO] {
-                assert!(p.distance(c) <= r + 0.3, "{p} outside {c} {r}");
+            // The top's tip, at (0, 2) at rest, turns to (-1, 1) at the end:
+            // both inside the clip's box, which reaches little further
+            // (each slot's sphere around its corners, under its matrix).
+            let (lo, hi) = data.clip_bounds[0];
+            for p in [vec3(-1.0, 1.0, 0.0), vec3(0.0, 2.0, 0.0), Vec3::ZERO] {
+                assert!(p.cmpge(lo).all() && p.cmple(hi).all(), "{p} outside {lo} {hi}");
             }
+            assert!(lo.x > -1.5 && hi.y < 2.5, "a tight box: {lo} {hi}");
             // The last frame's top slot: rows of a quarter turn about (0, 1).
             let last = data.sections[0].start as usize + (4 * 2 + 1) * 3;
             let row0 = Vec4::from(data.texels[last]);

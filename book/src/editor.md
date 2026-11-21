@@ -146,8 +146,25 @@ The file has to be inside the project's `assets/` folder. The editor
 refuses one outside it, or one that another `assets/` folder or a
 registered asset source would shadow, and says why. A name typed without
 an extension gets `.json`. On Linux the picker is the desktop's file
-chooser portal, with Zenity as the fallback. Builds without a system
-picker (the web) keep the editor's own path field.
+chooser portal, with Zenity as the fallback.
+
+Builds without a system picker (the web) ask in the editor's own dialog
+instead: **Open** shows a path field (starting at the open document's
+file) above the scenes and prefabs it found, and **Save as** a path field
+beside **Scene** and **Prefab**, with the default name filled in. Enter
+or the button confirms, Esc cancels and changes nothing, and a file that
+can't be read or written is reported in the panel like the picker's
+errors. A browser has no `assets/` folder to write to, so there a save
+reports that web builds have no files; **Open** reads the files the page
+fetched.
+
+While the system's picker is up it has the keyboard, so the editor never
+sees the keys let go meanwhile: the Ctrl (⌘) of Ctrl+O, or the Enter that
+pressed **Choose file…**. When the picker closes, and whenever the window
+loses or regains focus, the editor forgets every key and modifier it
+thought held; a key still down counts again when it is pressed again. The
+game's own input (`ctx.input`) already lets everything go when the window
+loses focus.
 
 ## When the file changes on disk
 
@@ -175,7 +192,9 @@ in the user's cache folder (`~/Library/Caches/ponko/thumbnails` on macOS,
 Linux, `%LOCALAPPDATA%\ponko\thumbnails` on Windows;
 `PONKO_THUMBNAIL_CACHE` names another folder) under a hash of the model's
 file and the buffers and images it names: the next run shows them at once,
-in any project, and a changed model or texture is drawn again. The search field (Ctrl+F) shows
+in any project, and a changed model or texture is drawn again. The web
+build keeps the software drawing: a browser can't wait for the GPU's
+picture within the frame, and has no cache folder. The search field (Ctrl+F) shows
 every asset whose path has all the words typed, in any folder, and
 **List again** reads the folder again after files were added.
 
@@ -261,9 +280,31 @@ file makes of it is its override, kept in the scene's saved record:
   editor spawns its glTF scenes where they were, with them, and a game
   that loads the save and spawns the file again gets them too.
 
-Overrides are per component (the changed fields of each), a node's parent
-link is never one, and a node deleted in the editor comes back with the
-file: hide it, or leave it out of the export.
+Overrides are per component (the changed fields of each), and two more
+kinds are per node:
+
+- A node **deleted** in the editor (with the nodes that hang off it) stays
+  deleted: re-exports and reopens leave it out, and what you attached to
+  it elsewhere before deleting it stays where you put it.
+- A node **attached to another parent** (dragged onto another row in the
+  hierarchy, or detached) keeps that parent: another node of the scene,
+  the scene's root, or an entity the scene file saves. A parent the save
+  leaves out (a node of another glTF scene) can't be kept, and the editor
+  says so on its console.
+
+Selecting a scene's root or any of its nodes shows, at the top of the
+inspector, the file it came from and every override of the scene, one row
+each (*node* › *component*, *node* › parent, or the deleted *node*), with a
+**Revert** button that puts the file's value, the file's parent or the
+deleted node back (one undo step each), and **Revert all**. Undoing a
+delete brings the node back whole: what saves leave out of it (its mesh,
+collider, light) comes from the file again.
+
+Play and Stop keep glTF scenes: Play records how they were edited, and
+Stop spawns them again from their files (saves leave their nodes out) with
+those edits. Their nodes are new entities then; the undo history and the
+selection follow them, so undoing past Stop still reaches the edits made
+before Play.
 
 ## Play mode
 
@@ -329,7 +370,10 @@ editor = ["ponko/editor"]
 ```
 
 The feature needs the [inspector](inspector.md) (it turns it on) and a
-window.
+window. A [web build](web.md) with the feature starts in edit mode from
+the page's address instead of the variable: `?editor` (or `?editor=1`)
+edits what setup made, `?editor=levels/a.json` opens that file. Open and
+Save as use the path field there (see [Choosing a file](#choosing-a-file)).
 
 C and C++ games get edit mode from `ponko_ffi`'s `editor` feature and the
 same `PONKO_EDITOR` variable, with the asset panel, prefab overrides and
@@ -351,7 +395,11 @@ instance's overrides are listed, reverted one at a time or all together
 and applied to the prefab and its other instances (and, for a prefab
 inside a prefab, to the outer or the included file with **Apply to
 *name***), a glTF scene's node moved with the gizmo keeps its place through
-a re-export and a save and reopen, the 2D and 3D cameras centre on the
+a re-export and a save and reopen, glTF nodes deleted with the Delete key
+or dragged onto another row in the hierarchy stay so through both, a glTF
+scene's overrides are listed and reverted from its panel, Play then Stop
+spawns glTF scenes again with the undo history pointing at their new
+nodes, the 2D and 3D cameras centre on the
 view between the panels and follow a dragged panel edge, a model tile
 shows the thumbnail kept on disk for its content, Stop gives back the
 world saved at Play byte for byte (and keeps only the edits ticked), the
@@ -360,11 +408,34 @@ projects survive a restart, and the asset panel's thumbnails, search and
 import settings match what `ponko cook` reads (both read one shared
 fixture). A sound's preview is checked through the audio engine's offline
 output, without a speaker. Open and Save as tests inject paths through
-a fake picker. Trying the real system file picker requires a desktop
-session. Offscreen GPU tests draw the editor's window
+a fake picker, and the web build's path field is answered the same way
+(typed, Enter or Esc) with the system picker turned off. Other tests hold
+Ctrl and Enter down, then close the picker or feed the window's focus
+events (as macOS reports them, both "focused"), and check that nothing is
+held afterwards and that a plain S doesn't save. Offscreen GPU tests draw the editor's window
 over a 2D world and over a frame of the 3D renderer and check where its
 panels and gizmo are, and draw the asset panel, a prefab's overrides, the
 shortcuts window and the play bar, each against a control; another draws a
 model's thumbnail with the renderer, checks the model covers its middle and
 not its corners, that it isn't the software drawing, and that the next run
 reads it from the cache without drawing.
+
+## Checks for a person
+
+The tests feed the picker's answers and the focus events; these need a
+real desktop session or browser:
+
+1. On macOS, Windows and Linux (with the desktop's portal, and with
+   Zenity), **Open** and **Save as** show the system's picker in the
+   document's folder, with the name filled in for a save; a file outside
+   `assets/` is refused, and canceling changes nothing.
+2. On each of the three, open the picker with Ctrl+O (⌘O) and with Enter
+   on **Choose file…**, then choose a file and also cancel. Back in the
+   editor, press plain O, S and Enter: none of them act as if Ctrl (⌘) or
+   Enter were still held (no second picker, no save, no confirmed
+   dialog). Switching to another window with Ctrl or Alt held and back
+   must leave nothing held either.
+3. In a browser, a web build with the feature opened with `?editor`:
+   **Open** and **Save as** show the path field, Enter and Esc work, a
+   save reports that web builds have no files, and the asset panel's
+   model tiles keep their software thumbnails.

@@ -239,6 +239,30 @@ impl Ctx {
         self.update_retained_ui();
     }
 
+    /// `ponko_bench`: the retained UI's frame with this frame's input, its
+    /// clock moved `dt` seconds (frames of a headless run take no time):
+    /// its animations play, it is laid out and sends its events.
+    /// Unstable (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(feature = "bench-internals")]
+    pub fn bench_ui_frame(&mut self, dt: f32) {
+        let text = std::mem::take(&mut self.ui_state.retained_input_text);
+        let mut input = self.retained_input(&self.ui, text);
+        input.dt = dt;
+        self.ui.pixels = self.gfx.scale_factor;
+        self.ui.frame_with_text(self.window_size(), &input, &mut self.gfx.text);
+        self.ui_state.retained_input_text = input.text;
+    }
+
+    /// `ponko_bench`: text pushes its glyphs as with a GPU (a headless run
+    /// skips them), into stand-in textures. Unstable (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(feature = "bench-internals")]
+    pub fn bench_ui_glyphs(&mut self) {
+        self.gfx.stand_in_textures();
+        self.gfx.headless = false;
+    }
+
     /// `ponko_bench`: the retained UI's work after a frame's systems, as a
     /// window's frame does it (layout of what the systems changed, the draw
     /// list), then forgets the draw list. Returns the sprites drawn.
@@ -266,8 +290,9 @@ impl Ctx {
 
     /// Draws `ui`, laid out in `viewport`, into `ui_list`. A node whose
     /// drawing depends on nothing that changed since its last frame
-    /// ([`DrawKey`]) pushes the sprites it pushed then; the others are
-    /// drawn again, and kept.
+    /// ([`DrawKey`]) pushes the sprites it pushed then, moved to its depth
+    /// now (nodes added or removed before it in drawing order don't draw it
+    /// again); the others are drawn again, and kept.
     pub(crate) fn draw_ui_tree(&mut self, ui: &mut crate::ui::Ui, viewport: Vec2) {
         // Mutations made by game systems (including screen pushes) show now.
         ui.pixels = self.gfx.scale_factor;
@@ -291,21 +316,29 @@ impl Ctx {
         for order in 0..ui.visible.len() {
             let id = ui.visible[order];
             let Some(n) = ui.node(id) else { continue };
-            let key = DrawKey::of(ui, n, order);
+            let key = DrawKey::of(ui, n);
             shown_text(ui, n, &mut text);
             // A spinner's dots go round with the clock.
             let kept = keep && n.widget != UiWidget::Spinner && n.drawn.is_for(epoch, &key, &text);
+            let z = node_z(order);
             if kept {
-                self.gfx.ui_list.replay(&n.drawn.sprites);
+                self.gfx.ui_list.replay(&n.drawn.sprites, z - n.drawn.z);
                 continue;
             }
             let start = self.gfx.ui_list.len();
             self.draw_ui_node(ui, id, order, viewport);
             ui.draw_cache.redraws += 1;
+            let glyphs = &mut self.ui_state.glyphs;
             if keep && let Some(n) = ui.node_mut(id) {
                 self.gfx.ui_list.record_from(start, &mut n.drawn.sprites);
-                n.drawn.keep(epoch, key, &text);
+                n.drawn.keep(epoch, key, &text, z);
+                if glyphs.fresh {
+                    // Its text was laid out again: kept for its next drawing.
+                    std::mem::swap(&mut n.drawn.glyphs, glyphs);
+                    n.drawn.glyphs.fresh = false;
+                }
             }
+            glyphs.fresh = false;
         }
         ui.draw_cache.text = text;
         self.gfx.ui_list.set_clip(None);
@@ -317,7 +350,7 @@ impl Ctx {
     fn draw_ui_node(&mut self, ui: &crate::ui::Ui, id: UiId, order: usize, viewport: Vec2) {
         let scale = ui.scale();
         let Some(n) = ui.node(id) else { return };
-        let z = 100.0 + order as f32 * 4.0;
+        let z = node_z(order);
         // Where its animation draws it: everything below is drawn in
         // its place, then moved, scaled and faded together.
         let xf = n.motion.xf;
@@ -431,7 +464,6 @@ impl Ctx {
             );
         }
         let font_size = n.paint.font_size * scale;
-        let mut origin = text_rect.min;
         // A text input shows an IME composition at its caret.
         let is_input = n.widget == crate::ui::UiWidget::TextInput;
         let mut shown = std::mem::take(&mut self.ui_state.shown_scratch);
@@ -455,8 +487,43 @@ impl Ctx {
         // right-to-left paragraphs from the right.
         let directional = !is_input;
         let flags = (n.paint.wrap, directional);
+        let centred = framed && n.rich().is_none();
+        // The text keeps its glyphs from its last drawing while what they
+        // are laid out from holds: only their depth, clip and color change
+        // (an animation of the node's opacity, scale, offset or colors moves
+        // and tints them afterwards). A focused text field measures its
+        // caret and selection each time it is drawn.
+        let cache = &ui.draw_cache;
+        let focused = at.is_some() && ui.focus == Some(id);
+        let glyph_key = (!cache.off && !focused).then(|| GlyphKey {
+            rect: text_rect,
+            font: n.paint.font,
+            size: font_size,
+            wrap: n.paint.wrap,
+            directional,
+            align: n.paint.align,
+            centred,
+            rich: n.rich.as_deref().map(|r| r.parsed),
+        });
+        if let Some(key) = &glyph_key
+            && n.drawn.glyphs.is_for(cache.epoch, key, text)
+        {
+            let glyphs = &n.drawn.glyphs;
+            self.gfx
+                .ui_list
+                .replay_recolored(&glyphs.sprites, z - glyphs.z, &glyphs.tinted, n.paint.color.to_rgba8());
+            self.ui_state.shown_scratch = shown;
+            self.draw_scroll_thumb(n, scale, z);
+            if !xf.is_identity() {
+                self.gfx
+                    .ui_list
+                    .transform_from(sprites, xf.scale, xf.shift.into(), xf.opacity);
+            }
+            return;
+        }
+        let mut origin = text_rect.min;
         // A control's text sits in the middle of its height.
-        if framed && n.rich().is_none() {
+        if centred {
             let height = self.retained_text(text, origin, text_rect.size().x, params, flags, n.paint.align, false);
             if height < text_rect.size().y {
                 origin.y = text_rect.center().y - height * 0.5;
@@ -519,12 +586,38 @@ impl Ctx {
                 );
             }
         }
+        let start = self.gfx.ui_list.len();
+        let mut tinted = std::mem::take(&mut self.ui_state.glyphs.tinted);
+        tinted.clear();
         if let Some(rich) = n.rich() {
-            self.retained_rich(rich, &n.paint, text_rect, scale, params.z);
+            self.retained_rich(rich, &n.paint, text_rect, scale, params.z, &mut tinted);
         } else {
             self.retained_text(text, origin, text_rect.size().x, params, flags, n.paint.align, true);
+            // Every glyph takes the node's text color.
+            tinted.resize(self.gfx.ui_list.len() - start, true);
+        }
+        let glyphs = &mut self.ui_state.glyphs;
+        glyphs.tinted = tinted;
+        if let Some(key) = glyph_key {
+            self.gfx.ui_list.record_from(start, &mut glyphs.sprites);
+            glyphs.epoch = cache.epoch;
+            glyphs.key = Some(key);
+            glyphs.z = z;
+            glyphs.text.clear();
+            glyphs.text.push_str(text);
+            glyphs.fresh = true;
         }
         self.ui_state.shown_scratch = shown;
+        self.draw_scroll_thumb(n, scale, z);
+        if !xf.is_identity() {
+            self.gfx
+                .ui_list
+                .transform_from(sprites, xf.scale, xf.shift.into(), xf.opacity);
+        }
+    }
+
+    /// A scroll area's thumb, when it has something to scroll.
+    fn draw_scroll_thumb(&mut self, n: &Node, scale: f32, z: f32) {
         if n.widget == crate::ui::UiWidget::Scroll && n.max_scroll.y > 0.0 {
             let h = n.rect.size().y;
             let thumb = (h * h / (h + n.max_scroll.y * scale)).max(20.0 * scale).min(h);
@@ -534,11 +627,6 @@ impl Ctx {
                 n.paint.border,
                 z + 0.9,
             );
-        }
-        if !xf.is_identity() {
-            self.gfx
-                .ui_list
-                .transform_from(sprites, xf.scale, xf.shift.into(), xf.opacity);
         }
     }
     /// Lays `text` out from `origin` in lines `width` wide and, with `draw`,
@@ -602,7 +690,9 @@ impl Ctx {
         y - origin.y
     }
     /// Draws a rich node's text ([`crate::ui::Ui::set_rich`]) in `rect`:
-    /// each run in its font, size and color, its images, underlines.
+    /// each run in its font, size and color, its images, underlines. Marks
+    /// in `tinted` (empty) which sprites take `paint`'s color: those of
+    /// runs with no color of their own.
     fn retained_rich(
         &mut self,
         rich: &super::rich::RichText,
@@ -610,8 +700,10 @@ impl Ctx {
         rect: Rect,
         scale: f32,
         z: f32,
+        tinted: &mut Vec<bool>,
     ) {
         use super::rich::{Align, Base, bold_offset};
+        let start = self.gfx.ui_list.len();
         let base = Base {
             font: paint.font,
             size: paint.font_size,
@@ -631,6 +723,7 @@ impl Ctx {
             let span = &rich.spans[item.span as usize];
             let (font, size) = rich.font_size(span, base);
             let color = span.style.color.unwrap_or(paint.color);
+            let tint = span.style.color.is_none();
             let at = rect.min + item.at;
             if let Some(image) = span.image {
                 // Images keep their own colors, and their edges go on
@@ -647,6 +740,7 @@ impl Ctx {
                     Color::WHITE,
                     z,
                 );
+                tinted.resize(self.gfx.ui_list.len() - start, false);
             } else {
                 let params = TextParams { font, size, color, z };
                 let run = &rich.text[item.start as usize..item.end as usize];
@@ -665,6 +759,7 @@ impl Ctx {
                 let y = rect.min.y + item.baseline + thick;
                 self.gfx.ui_fill(Rect::new(at.x, y, item.width, thick), color, z);
             }
+            tinted.resize(self.gfx.ui_list.len() - start, tint);
         }
         self.ui_state.rich_layout = out;
     }
@@ -721,6 +816,12 @@ impl Ctx {
 /// What a key-binding field shows while it listens.
 const LISTENING: &str = "Press a key";
 
+/// The depth of the `order`th visible node: each one 4 above the last, room
+/// for its parts in between.
+fn node_z(order: usize) -> f32 {
+    100.0 + order as f32 * 4.0
+}
+
 /// What every node's drawing depends on: when it changes, every node is
 /// drawn again.
 #[derive(Clone, Copy, PartialEq)]
@@ -742,10 +843,11 @@ struct FrameKey {
 
 /// What one node's drawing depends on besides its text and the
 /// [`FrameKey`]: when any of it changes, the node is drawn again.
+///
+/// Its place among the visible nodes is not part of it: kept sprites move
+/// to the depth it has now.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct DrawKey {
-    /// Its place among the visible nodes: its depth.
-    order: usize,
     rect: Rect,
     clip: Rect,
     /// Where its animation draws it, and how opaque.
@@ -772,14 +874,13 @@ pub(super) struct DrawKey {
 }
 
 impl DrawKey {
-    fn of(ui: &crate::ui::Ui, n: &Node, order: usize) -> Self {
+    fn of(ui: &crate::ui::Ui, n: &Node) -> Self {
         let id = n.id;
         let edges = ui.tree.layout(n.layout).map_or([0.0; 8], |l| {
             let (p, b) = (l.padding, l.border);
             [p.left, p.right, p.top, p.bottom, b.left, b.right, b.top, b.bottom]
         });
         Self {
-            order,
             rect: n.rect,
             clip: n.motion.shown_clip,
             xf: n.motion.xf,
@@ -820,23 +921,78 @@ pub(super) struct Drawn {
     epoch: u64,
     key: Option<DrawKey>,
     text: String,
+    /// The depth it was drawn at ([`node_z`]).
+    z: f32,
     sprites: Vec<crate::render::batch::Recorded>,
+    /// Its text as laid out then, for drawing it again around it.
+    glyphs: Glyphs,
 }
 
 impl Drawn {
-    /// Whether its sprites are what drawing it from `key` and `text` would push.
+    /// Whether its sprites are what drawing it from `key` and `text` would
+    /// push (at the depth it was drawn at).
     fn is_for(&self, epoch: u64, key: &DrawKey, text: &str) -> bool {
         self.epoch == epoch && self.key.as_ref() == Some(key) && self.text == text
     }
 
     /// Remembers what the sprites just recorded were drawn from.
-    fn keep(&mut self, epoch: u64, key: DrawKey, text: &str) {
+    fn keep(&mut self, epoch: u64, key: DrawKey, text: &str, z: f32) {
         self.epoch = epoch;
         self.key = Some(key);
+        self.z = z;
         if self.text != text {
             self.text.clear();
             self.text.push_str(text);
         }
+    }
+}
+
+/// What a node's text is laid out from, besides the text itself and the
+/// [`FrameKey`]. Its color is not part of it, nor where the node's
+/// animation draws it: those are applied to the glyphs kept.
+#[derive(Clone, Copy, PartialEq)]
+struct GlyphKey {
+    /// Where it is laid out: its width, its start, the height a control's
+    /// text is centred in.
+    rect: Rect,
+    font: crate::text::Font,
+    /// The font size times the UI's scale.
+    size: f32,
+    wrap: bool,
+    /// Right-to-left paragraphs start at the right.
+    directional: bool,
+    align: crate::ui::UiTextAlign,
+    /// Centred in the height of a control.
+    centred: bool,
+    /// The revision a rich node's markup was parsed with.
+    rich: Option<u64>,
+}
+
+/// A node's text as last drawn, before its animation moved it: its glyphs
+/// (a rich node's images and underlines too), kept until what they are
+/// laid out from changes ([`GlyphKey`]). A node drawn again for anything
+/// else (its fill, its colors, its opacity, scale or offset, its depth)
+/// pushes these again instead of laying its text out.
+#[derive(Default)]
+pub(crate) struct Glyphs {
+    /// The [`DrawCache`] epoch they were laid out in; 0: never.
+    epoch: u64,
+    key: Option<GlyphKey>,
+    text: String,
+    /// The depth of the node they were drawn for ([`node_z`]).
+    z: f32,
+    sprites: Vec<crate::render::batch::Recorded>,
+    /// Which sprites take the node's text color ([`crate::ui::UiPaint::color`]):
+    /// every glyph of plain text, a rich node's runs with no color of their own.
+    tinted: Vec<bool>,
+    /// The engine's scratch copy was just laid out, for the node drawn now.
+    fresh: bool,
+}
+
+impl Glyphs {
+    /// Whether they are what laying out `text` from `key` would give.
+    fn is_for(&self, epoch: u64, key: &GlyphKey, text: &str) -> bool {
+        self.epoch == epoch && self.key.as_ref() == Some(key) && self.text == text
     }
 }
 
@@ -1019,6 +1175,120 @@ mod tests {
         );
         same_as_drawn_anew(&mut ctx, &step, "faded");
         assert_eq!(frame(&mut ctx, &step).0, 0, "the animation ended");
+    }
+
+    #[test]
+    fn a_changed_subtree_alone_is_drawn_again() {
+        let mut ctx = ctx();
+        let h = hud(&mut ctx);
+        // More of the menu, drawn after the HUD.
+        for i in 0..6 {
+            let row = ctx.ui.panel(h.menu).layout(UiLayout::row(20.0)).id();
+            ctx.ui.label(row, format!("Option {i}"));
+        }
+        frame(&mut ctx, &UiInput::default());
+        assert_eq!(frame(&mut ctx, &UiInput::default()).0, 0);
+        let bar = ctx.ui.parent(h.score).unwrap();
+        let menu_nodes = ctx.ui.visible.len() - ctx.ui.visible.iter().position(|&n| n == h.menu).unwrap();
+        assert!(menu_nodes > 10, "{menu_nodes}");
+        // A slot added to the HUD: every node of the menu comes later in
+        // drawing order, but none of them changed.
+        let slot = ctx.ui.panel(bar).layout(UiLayout::fixed(30.0, 30.0)).id();
+        ctx.ui.label(slot, "9");
+        assert_eq!(
+            same_as_drawn_anew(&mut ctx, &UiInput::default(), "a slot added"),
+            2,
+            "the slot and its label"
+        );
+        assert_eq!(frame(&mut ctx, &UiInput::default()).0, 0, "and kept");
+        // Removed again: the menu comes back to its depth, still kept.
+        ctx.ui.remove(slot);
+        assert_eq!(same_as_drawn_anew(&mut ctx, &UiInput::default(), "a slot removed"), 0);
+        // The HUD's row moves: it and what is in it, nothing else.
+        ctx.ui.set_layout(bar, UiLayout::row(30.0).gap(8.0).padding(4.0));
+        assert_eq!(
+            same_as_drawn_anew(&mut ctx, &UiInput::default(), "the HUD's row moved"),
+            3,
+            "the row and its two labels"
+        );
+        // A dialog over it all, and gone again: drawn alone.
+        let dialog = ctx.ui.root().layout(UiLayout::centered(200.0, 100.0)).id();
+        ctx.ui.button(dialog, "OK").layout(UiLayout::fill());
+        ctx.ui.push_modal(dialog);
+        assert_eq!(same_as_drawn_anew(&mut ctx, &UiInput::default(), "a dialog"), 2);
+        ctx.ui.pop_screen();
+        assert_eq!(same_as_drawn_anew(&mut ctx, &UiInput::default(), "no dialog"), 0);
+    }
+
+    /// The strings laid out so far.
+    fn layouts(ctx: &Ctx) -> u64 {
+        ctx.gfx.text.layouts()
+    }
+
+    #[test]
+    fn animated_nodes_keep_their_text_laid_out() {
+        let mut ctx = ctx();
+        ctx.ui.set_theme(UiTheme {
+            transition: UiTransition::new(0.2),
+            ..UiTheme::default()
+        });
+        let image = Texture::new(10, 32, 32);
+        ctx.ui.set_inline_image("coin", image);
+        let ui = &mut ctx.ui;
+        let menu = ui.root().layout(UiLayout::centered(400.0, 400.0).gap(4.0)).id();
+        let title = ui.label(menu, "Settings").id();
+        let play = ui.button(menu, "Play").layout(UiLayout::row(28.0)).id();
+        let rich = ui
+            .label(menu, "[color=#ff0]Gold[/color] [img=coin] [u]x3[/u]")
+            .rich()
+            .id();
+        ui.label(menu, "A paragraph long enough to wrap onto a second line in its row.")
+            .wrap();
+        ui.toggle(menu, "Music").layout(UiLayout::row(28.0));
+        ui.dropdown(menu, ["Low", "High"]).layout(UiLayout::row(28.0));
+        ui.text_input(menu).text("Ada").layout(UiLayout::row(28.0));
+        ui.push_modeless(menu);
+        same_as_drawn_anew(&mut ctx, &UiInput::default(), "first frame");
+        let step = UiInput {
+            dt: 0.05,
+            ..Default::default()
+        };
+        let animations: [(&str, UiId, UiTween); 6] = [
+            ("opacity", menu, UiTween::opacity(0.4)),
+            ("scale", menu, UiTween::scale(1.2)),
+            ("offset", play, UiTween::offset(vec2(30.0, -10.0))),
+            ("text color", title, UiTween::text_color(Color::RED)),
+            ("rich text color", rich, UiTween::text_color(Color::GREEN)),
+            ("background", play, UiTween::background(Color::BLUE)),
+        ];
+        for (what, id, tween) in animations {
+            ctx.ui.animate(id, tween.seconds(1.0));
+            for _ in 0..5 {
+                let before = layouts(&ctx);
+                let (redrawn, ..) = frame(&mut ctx, &step);
+                assert!(redrawn > 0, "{what}: the node is drawn again");
+                assert_eq!(layouts(&ctx), before, "{what}: no text laid out");
+                // What it draws is what drawing anew gives.
+                same_as_drawn_anew(&mut ctx, &step, what);
+            }
+        }
+        // The pointer onto the button: its fill fades to the hovered one.
+        let over = UiInput {
+            pointer: ctx.ui.rect(play).unwrap().center(),
+            dt: 0.05,
+            ..Default::default()
+        };
+        for _ in 0..5 {
+            let before = layouts(&ctx);
+            frame(&mut ctx, &over);
+            assert_eq!(layouts(&ctx), before, "hover: no text laid out");
+            same_as_drawn_anew(&mut ctx, &over, "hover");
+        }
+        // The control: new text is laid out.
+        ctx.ui.set_text(title, "Options");
+        let before = layouts(&ctx);
+        same_as_drawn_anew(&mut ctx, &UiInput::default(), "new text");
+        assert!(layouts(&ctx) > before, "the new text is laid out");
     }
 
     #[test]

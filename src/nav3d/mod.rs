@@ -252,12 +252,34 @@ struct NavState {
     crowd_seen: Vec<bool>,
     crowd_owners: Vec<Option<Entity>>,
     crowd_workspace: Workspace,
+    crowd_stats: NavCrowdStats,
     /// Present only when baked with `NavBakeSettings::carving`.
     cache: Option<carve::LayerCache>,
     /// The carving obstacles the cached layers are rebuilt with, in order.
     carved: Vec<NavObstacle3D>,
     carve_failed: bool,
 }
+/// What the crowd of a [`NavMesh`](NavMesh3D) has done since it was baked,
+/// from [`NavMesh::crowd_stats`](NavMesh3D::crowd_stats). All three only grow.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct NavCrowdStats {
+    /// Crowd steps run: one a tick while any agent has
+    /// [`avoidance`](NavAgent3D::avoidance) on, more when a long tick is split
+    /// into 60 Hz steps (at most 64).
+    pub steps: u64,
+    /// Agents moved, added up over the steps: 500 agents for 60 steps is
+    /// 30 000.
+    pub agent_steps: u64,
+    /// The navigation backend's work units, added up over the steps: path
+    /// corridor upkeep, neighbour and wall queries, steering and velocity
+    /// sampling. Each agent looks at a bounded number of neighbours, so for
+    /// crowds of the same density `work / agent_steps` stays about the same
+    /// however many agents there are; a step that grew with the square of the
+    /// agents would multiply it.
+    pub work: u64,
+}
+
 impl NavMesh3D {
     /// Bakes ordered world triangles with bounded backend memory/work budgets.
     /// Empty triangle soups and nonfinite inputs are errors; an entirely steep
@@ -354,6 +376,29 @@ impl NavMesh3D {
     /// ```
     pub fn update_carving(&mut self, budget: usize) -> Result<usize, NavBakeError> {
         self.state.as_mut().map_or(Ok(0), |s| s.update_carving(budget))
+    }
+    /// What the crowd has done since this mesh was baked: the steps
+    /// [`step_navmesh3d`] ran for agents with
+    /// [`avoidance`](NavAgent3D::avoidance), how many agents they moved and the
+    /// work they took. Counts, not times, so a test can tell "every agent
+    /// moved every tick, and the work per agent didn't grow with the crowd"
+    /// on a machine of any speed and any load.
+    /// ```
+    /// use ponko::prelude::*;
+    /// let floor = ponko::nav::NavSource::from_mesh(&ponko::render::MeshData::plane(20.0), ponko::d3::Transform::default());
+    /// let world = Game::new("crowd", 1, 1).fixed_hz(60).sim_system(systems::step_navmesh3d).run_headless(10, |ctx| {
+    ///     ctx.world.insert_resource(ponko::d3::NavMesh::bake(&[floor], ponko::nav::NavBakeSettings::default()).unwrap());
+    ///     let agent = ponko::d3::NavAgent { avoidance: true, destination: Some(Vec3::X * 5.0), ..Default::default() };
+    ///     ctx.world.spawn((ponko::d3::Transform::default(), agent));
+    /// });
+    /// let stats = world.resource::<ponko::d3::NavMesh>().crowd_stats();
+    /// assert_eq!((stats.steps, stats.agent_steps), (10, 10));
+    /// ```
+    #[must_use]
+    pub fn crowd_stats(&self) -> NavCrowdStats {
+        self.state
+            .as_ref()
+            .map_or_else(NavCrowdStats::default, |s| s.crowd_stats)
     }
     /// Whether queued carving updates remain.
     /// ```
@@ -475,6 +520,7 @@ impl NavState {
             crowd_seen: Vec::new(),
             crowd_owners: Vec::new(),
             crowd_workspace: Workspace::new(),
+            crowd_stats: NavCrowdStats::default(),
             cache,
             carved: Vec::new(),
             carve_failed: false,
@@ -1112,6 +1158,10 @@ fn step_crowd(world: &mut World, nav: &mut NavState, dt: f32) {
         {
             break;
         }
+        let s = &mut nav.crowd_stats;
+        s.steps += 1;
+        s.agent_steps += c.active_agents().count() as u64;
+        s.work += nav.crowd_workspace.usage().work;
     }
     world
         .query::<(Entity, &mut Transform3D, &mut NavAgent3D)>()

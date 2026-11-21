@@ -130,6 +130,48 @@ ctx.world.despawn(enemy);
 - The check enables the `3d`, `physics`, `physics3d`, `navmesh` and `steam`
   features, so snippets for those compile without extra setup.
 
+## Tests on a busy machine
+
+`cargo test --workspace` runs many test binaries at once, often next to other
+builds, so any thread can be paused for a while. A test that passes alone and
+fails under load is a broken test. When a test is about time or frames:
+
+- **Count the work, not the time.** Assert how many reads, jobs, uploads or
+  ticks happened, or wait for a state (an asset becomes resident, a job
+  finishes) instead of a number of frames. A source that blocks on a gate the
+  test opens proves "this never waited on the game thread" without a clock.
+- **A lower bound is safe.** `sleep` and timers only end late, so "at least
+  185 ms passed" holds on any machine.
+- **An upper bound is a hang detector.** A loop that ends as soon as the
+  condition holds can have a long limit at no cost: use 30 to 60 seconds,
+  never a few hundred milliseconds, and say in a comment that it is a hang
+  detector. Under a load average of more than ten times the core count, a
+  sleep overshot by at most about 20 ms, but a whole process can wait
+  seconds for its turn.
+- **A coarse complexity guard** ("parsing this file takes under 5 s, not
+  minutes") keeps its bound only with a comment on why the margin covers a
+  paused process.
+- **Process-wide counters see other threads.** The global allocator counts
+  every thread: a Rayon worker that starts or parks late allocates its sleep
+  lock once, and the pool's job queue allocates a block every few dozen jobs.
+  An allocation test counts per thread instead: `profile_scope!` around the
+  code it checks, and inside the parallel work, counts the allocations on
+  its own thread ([Allocations per thread](profiling.md#allocations-per-thread)).
+  What is left of the pool's own is on the calling thread, a fixed number
+  per job handed in, and the test says so.
+- **Count the engine's work.** The engine keeps counters for this: the crowd
+  of a navigation mesh counts its steps, the agents they moved and their
+  work units (`NavMesh::crowd_stats`), so "every agent moved every tick and
+  the work per agent did not grow with the crowd" needs no clock.
+- **A spin is a lower bound too.** A loop that spins until some time has
+  passed only runs longer on a paused thread. Use it to make work slow
+  enough for a parallel path, never to give other threads time to wake:
+  assert what holds whichever thread ran what.
+
+Which assets finished before a group failed, which worker took a job and how
+many frames a load took all depend on scheduling; assert them only where the
+engine promises them.
+
 ## Panics and error messages
 
 A panic or error message says what the caller did and how to fix it

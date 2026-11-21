@@ -29,7 +29,8 @@ const SPACING: f32 = 1.6;
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Way {
     /// One crowd; `compute: false` takes the CPU path (WebGL2's limits).
-    Crowd { compute: bool, levels: bool },
+    /// `fade`: the near level crossfades into the far one over 5 m.
+    Crowd { compute: bool, levels: bool, fade: bool },
     /// One skinned model each, posed on the CPU every frame by the clips.
     Models,
     /// No characters, only the ground: the rest of the frame.
@@ -100,12 +101,12 @@ fn run(s: &Scenario) -> Option<Run> {
     let clips = [bend(&skeleton), sway(&skeleton)];
     let start = |i: usize| (i % 37) as f32 * 0.027;
     match s.way {
-        Way::Crowd { levels, .. } => {
+        Way::Crowd { levels, fade, .. } => {
             let animation = CrowdAnimation::bake(&skeleton, &[clips[0].clone().into(), clips[1].clone().into()], 30.0);
             let far = skinned_mesh(&mut rig, &figure_with(1).1, body, &skeleton);
             let levels = if levels {
                 vec![
-                    CrowdLevel::new(mesh, 0.0, 40.0),
+                    CrowdLevel::new(mesh, 0.0, 40.0).with_fade(if fade { 5.0 } else { 0.0 }),
                     CrowdLevel::new(far, 40.0, f32::INFINITY),
                 ]
             } else {
@@ -218,7 +219,11 @@ fn crowd_benchmark() {
         figure_with(CUTS).1.positions.len(),
     );
     drop(probe);
-    let gpu = |levels| Way::Crowd { compute: true, levels };
+    let gpu = |levels| Way::Crowd {
+        compute: true,
+        levels,
+        fade: false,
+    };
     let scenarios = [
         Scenario {
             name: "no characters",
@@ -241,10 +246,20 @@ fn crowd_benchmark() {
             shadows: true,
         },
         Scenario {
+            name: "crowd, GPU path, 2 levels crossfading over 5 m, sun shadows",
+            way: Way::Crowd {
+                compute: true,
+                levels: true,
+                fade: true,
+            },
+            shadows: true,
+        },
+        Scenario {
             name: "crowd, CPU path (WebGL2 limits)",
             way: Way::Crowd {
                 compute: false,
                 levels: false,
+                fade: false,
             },
             shadows: false,
         },

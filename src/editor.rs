@@ -21,13 +21,18 @@ use glam::Vec2;
 pub(crate) mod cook;
 #[path = "editor_document.rs"]
 mod document;
+#[cfg(all(feature = "editor", feature = "3d"))]
+#[path = "editor_gltf.rs"]
+pub(crate) mod gltf;
 #[cfg(feature = "editor")]
 #[path = "editor_play.rs"]
 pub(crate) mod play;
 #[cfg(feature = "editor")]
 #[path = "editor_prefab.rs"]
 pub(crate) mod prefab;
-#[cfg(all(feature = "editor", feature = "3d"))]
+// The web build keeps the software thumbnails: it has no blocking GPU
+// readback to capture a frame with, and no cache folder to keep it in.
+#[cfg(all(feature = "editor", feature = "3d", not(target_arch = "wasm32")))]
 #[path = "editor_thumb_studio.rs"]
 pub(crate) mod thumb_studio;
 #[cfg(feature = "editor")]
@@ -116,6 +121,10 @@ struct Played {
     /// The entities there were at Play.
     #[cfg(feature = "editor")]
     alive: std::collections::HashSet<Entity>,
+    /// The glTF scenes' entities at Play: saves leave them out, so Stop
+    /// spawns the scenes again and points the history at the new ones.
+    #[cfg(all(feature = "editor", feature = "3d"))]
+    gltf: crate::three::GltfEntities,
 }
 
 /// What a merging step changes: one component of one entity, or one resource.
@@ -195,6 +204,10 @@ impl Editor {
     #[cfg_attr(not(feature = "inspector"), allow(dead_code))]
     pub fn play(&mut self, ctx: &mut Ctx) {
         if self.played_from.is_none() {
+            // How the glTF scenes were edited goes in their records, so
+            // Stop spawns them again as they are now.
+            #[cfg(feature = "3d")]
+            ctx.record_gltf_overrides(None);
             self.played_from = Some(Played {
                 save: ctx.world.save(),
                 steps: self.undo.len(),
@@ -208,6 +221,8 @@ impl Editor {
                     .iter()
                     .flat_map(|a| a.entities().iter().copied())
                     .collect(),
+                #[cfg(all(feature = "editor", feature = "3d"))]
+                gltf: ctx.gltf_entities(),
             });
         }
         self.open = None;
@@ -216,6 +231,8 @@ impl Editor {
 
     /// Pauses and puts the world back as it was when Play was pressed.
     /// Components that aren't reflected can't be saved, so aren't put back.
+    /// glTF scenes are spawned again from their files, with how they were
+    /// edited before Play; the history's steps name their new entities.
     /// If the world can't be put back (a lockstep session is running:
     /// [`ErrorKind::Unsupported`](crate::error::ErrorKind::Unsupported)), the Play
     /// snapshot and the undo history are kept and the simulation keeps
@@ -235,6 +252,10 @@ impl Editor {
         self.undo.truncate(played.steps);
         self.redo.clear();
         self.remap = played.remap;
+        #[cfg(all(feature = "editor", feature = "3d"))]
+        for (old, new) in ctx.respawn_gltf_entities(&played.gltf) {
+            self.moved(old, new);
+        }
         self.state = played.state;
         self.open = None;
         // The editor's own load: the steps from before Play still hold.
@@ -292,6 +313,17 @@ impl Editor {
     /// despawned and brought back).
     pub fn resolve(&self, e: Entity) -> Entity {
         self.remap.get(&e).copied().unwrap_or(e)
+    }
+
+    /// `old` was despawned and `new` stands for it now: steps naming
+    /// either name `new`.
+    fn moved(&mut self, old: Entity, new: Entity) {
+        for to in self.remap.values_mut() {
+            if *to == old {
+                *to = new;
+            }
+        }
+        self.remap.insert(old, new);
     }
 
     /// Writes component `name` of `e` (adding it if missing), with undo.
@@ -783,17 +815,26 @@ impl Editor {
                 Undo::Despawned(snapshot)
             }
             Undo::Despawned(snapshot) => {
+                // What each stood for before (a glTF node's entity after
+                // Stop spawned its scene again).
+                #[cfg(feature = "3d")]
+                let was: Vec<Entity> = snapshot.iter().map(|(old, _)| self.resolve(*old)).collect();
                 let map = respawn(ctx, &snapshot, self.remap.clone())?;
                 let mut back = Vec::with_capacity(snapshot.len());
                 for (old, _) in &snapshot {
                     let new = map[old];
-                    for to in self.remap.values_mut() {
-                        if to == old {
-                            *to = new;
-                        }
-                    }
-                    self.remap.insert(*old, new);
+                    self.moved(*old, new);
                     back.push(new);
+                }
+                // glTF scene nodes are their scene's nodes again.
+                #[cfg(feature = "3d")]
+                {
+                    let mut nodes: Vec<(Entity, Entity)> = Vec::with_capacity(2 * back.len());
+                    for (((old, _), was), &new) in snapshot.iter().zip(was).zip(&back) {
+                        nodes.push((*old, new));
+                        nodes.push((was, new));
+                    }
+                    ctx.gltf_nodes_back(&nodes);
                 }
                 Undo::Spawned(back)
             }

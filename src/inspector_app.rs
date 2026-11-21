@@ -28,7 +28,8 @@ use crate::reflect::WorldReflect;
 
 /// Environment variable that starts the game in edit mode: `1` edits the
 /// world the game's setup made; anything else is a scene or prefab file in
-/// `assets/` to open.
+/// `assets/` to open. Web builds read the page's `?editor` instead.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const ENV_EDITOR: &str = "PONKO_EDITOR";
 
 /// Whether the game was asked to start in edit mode: `None` if not;
@@ -85,6 +86,9 @@ pub(crate) struct App {
     start: Option<Option<String>>,
     pub dialog: Option<Dialog>,
     pub(super) file_picker: Option<FilePicker>,
+    /// Whether Open and Save as use the system's file dialog; else they
+    /// ask for the path in a field (web builds, and tests of them).
+    pub(super) system_picker: bool,
     /// The window title set last, so it's only set when it changes.
     title: String,
     /// The game's own window title, read on the first frame (the window's
@@ -96,6 +100,9 @@ pub(crate) struct App {
     pub assets: super::assets_panel::AssetPanel,
     /// The selected prefab instance compared with its prefab.
     pub prefab: Option<super::prefab_panel::PrefabView>,
+    /// The selected node's glTF scene compared with its file.
+    #[cfg(feature = "3d")]
+    pub gltf: Option<super::gltf_panel::GltfView>,
     /// An open prefab document's file as opened (or last applied), for
     /// Apply to scenes.
     pub prefab_base: Option<(String, serde_json::Value)>,
@@ -124,6 +131,7 @@ impl App {
         Self {
             start: Some(start),
             prefs: super::prefs::Prefs::load(settings, project),
+            system_picker: file_picker::ENABLED,
             ..Self::default()
         }
     }
@@ -365,8 +373,14 @@ impl Panels {
         }));
     }
 
+    /// Whether Open and Save as use the system's file dialog (see
+    /// `App::system_picker`).
+    fn system_picker(&self) -> bool {
+        self.app.as_ref().is_some_and(|app| app.system_picker)
+    }
+
     fn ask_open(&mut self, ctx: &Ctx) {
-        if !file_picker::ENABLED {
+        if !self.system_picker() {
             let path = ctx.editor.doc.path.clone().unwrap_or_default();
             self.set_dialog(Some(Dialog::Open { path }));
         } else if ctx.editor.dirty() {
@@ -600,6 +614,8 @@ impl Panels {
                     ui.label(RichText::new(format!("{} selected; showing the first", selection.len())).weak());
                 }
                 self.prefab_section(ui, ctx, e);
+                #[cfg(feature = "3d")]
+                self.gltf_section(ui, ctx, e);
                 self.entity(ui, ctx, e);
             }
             None => {
@@ -630,6 +646,7 @@ impl Panels {
         let enter = ui.input(|i| i.key_pressed(Key::Enter));
         let escape = ui.input(|i| i.key_pressed(Key::Escape));
         let dirty = ctx.editor.dirty();
+        let system_picker = self.system_picker();
         let title = match &dialog {
             Dialog::PickOpen | Dialog::Open { .. } => "Open",
             Dialog::SaveAs { .. } => "Save as",
@@ -686,7 +703,7 @@ impl Panels {
                     });
                 }
                 Dialog::SaveAs { path, kind, then_quit } => {
-                    if !file_picker::ENABLED {
+                    if !system_picker {
                         ui.label("File in assets/:");
                         path_field(ui, path);
                     }
@@ -696,11 +713,11 @@ impl Panels {
                         ui.radio_value(kind, DocKind::Prefab, "Prefab")
                             .on_hover_text("The world's one root entity and what hangs off it");
                     });
-                    if !file_picker::ENABLED && exists(path) && ctx.editor.doc.path.as_deref() != Some(path.as_str()) {
+                    if !system_picker && exists(path) && ctx.editor.doc.path.as_deref() != Some(path.as_str()) {
                         ui.colored_label(Color32::from_rgb(255, 190, 60), "That file exists: saving replaces it.");
                     }
                     ui.horizontal(|ui| {
-                        if file_picker::ENABLED {
+                        if system_picker {
                             if !escape && (ui.button("Choose file…").clicked() || enter) {
                                 self.pick_file(FilePicker::SaveAs {
                                     kind: *kind,
@@ -915,7 +932,7 @@ mod tests {
             events,
             ..Default::default()
         };
-        let mut out = egui.run_ui(input, |ui| p.show(ui, ctx));
+        let mut out = p.run(egui, input, ctx);
         out.textures_delta.clear();
         out.shapes
     }
@@ -989,6 +1006,52 @@ mod tests {
             path.map(std::path::Path::to_path_buf)
         });
         assert!(called, "the editor queued a file picker");
+    }
+
+    /// The web build's answer to Open or Save as: types `path` into the
+    /// dialog's path field and presses Enter, or cancels with Esc (`None`),
+    /// as [`answer_picker`] answers for the system dialog.
+    fn answer_path_field(egui: &egui::Context, p: &mut Panels, ctx: &mut Ctx, path: Option<&str>) {
+        assert!(
+            matches!(p.dialog(), Some(Dialog::Open { .. } | Dialog::SaveAs { .. })),
+            "{:?}",
+            p.dialog()
+        );
+        match path {
+            Some(path) => {
+                frame(egui, p, ctx, vec![]); // the field takes the keyboard
+                let typed = vec![command(Key::A), egui::Event::Text(path.into())];
+                frame(egui, p, ctx, typed);
+                frame(egui, p, ctx, vec![plain(Key::Enter)]);
+            }
+            None => frame(egui, p, ctx, vec![plain(Key::Escape)]),
+        }
+        let asked = p.run_file_picker(ctx, |_, _, _| panic!("the path field, not a system dialog"));
+        assert!(!asked);
+    }
+
+    /// The editor as the web build has it: no system file dialog.
+    fn web_editor() -> (egui::Context, Panels, Ctx) {
+        let (egui, mut p, ctx) = editor(None);
+        p.app.as_mut().unwrap().system_picker = false;
+        (egui, p, ctx)
+    }
+
+    /// One frame with exactly these events: unlike [`frame`], held
+    /// modifiers change only with a `ModifiersChanged` event, as a window
+    /// reports them.
+    fn raw_frame(egui: &egui::Context, p: &mut Panels, ctx: &mut Ctx, events: Vec<egui::Event>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+            events,
+            ..Default::default()
+        };
+        p.run(egui, input, ctx).textures_delta.clear();
+    }
+
+    /// Whether egui holds any modifier, or Enter, down.
+    fn held(egui: &egui::Context) -> bool {
+        egui.input(|i| i.modifiers.any() || i.key_down(Key::Enter))
     }
 
     /// The window title the editor set last.
@@ -1255,6 +1318,115 @@ mod tests {
     }
 
     #[test]
+    fn the_web_editor_saves_as_and_opens_through_the_path_field() {
+        let file = TempAsset::new("web-path-field");
+        let (egui, mut p, mut ctx) = web_editor();
+        let e = the_entity(&mut ctx);
+        ctx.edit(|ed, ctx| ed.rename(ctx, e, "Typed")).unwrap();
+
+        // Untitled: Ctrl+S asks for the kind and the file in one dialog.
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::S)]);
+        let Some(Dialog::SaveAs { path, .. }) = p.dialog() else {
+            panic!("Save as asks for the path: {:?}", p.dialog());
+        };
+        assert_eq!(path, super::super::DEFAULT_SCENE, "the field suggests the default name");
+        answer_path_field(&egui, &mut p, &mut ctx, Some(&file.name));
+        assert!(p.error.is_none(), "{:?}", p.error);
+        assert!(p.dialog().is_none() && file.file.is_file() && !ctx.editor.dirty());
+        assert_eq!(ctx.editor.doc.path.as_deref(), Some(file.name.as_str()));
+
+        // Open: the field starts at the document's file; Esc keeps it.
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::N)]);
+        assert_eq!(ctx.world.len(), 0);
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
+        assert_eq!(p.dialog(), Some(&Dialog::Open { path: String::new() }));
+        answer_path_field(&egui, &mut p, &mut ctx, None);
+        assert!(p.dialog().is_none() && ctx.editor.doc.path.is_none() && ctx.world.is_empty());
+
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
+        answer_path_field(&egui, &mut p, &mut ctx, Some(&file.name));
+        assert!(p.error.is_none(), "{:?}", p.error);
+        assert_eq!(ctx.editor.doc.path.as_deref(), Some(file.name.as_str()));
+        let e = the_entity(&mut ctx);
+        let name = ctx.world.get::<crate::hierarchy::EntityName>(e).map(|n| n.0.clone());
+        assert_eq!(name.as_deref(), Some("Typed"), "the saved world came back");
+    }
+
+    #[test]
+    fn the_web_editor_reports_a_path_field_error_and_keeps_the_dialog() {
+        let (egui, mut p, mut ctx) = web_editor();
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
+        answer_path_field(&egui, &mut p, &mut ctx, Some("no-such-scene.json"));
+        assert!(p.error.is_some(), "a missing file is reported");
+        assert!(ctx.editor.doc.path.is_none());
+    }
+
+    #[test]
+    fn keys_held_when_the_focus_left_are_released_when_it_returns() {
+        let (egui, mut p, mut ctx) = editor(None);
+        // Ctrl (⌘) and Enter go down; their key-up events go to another window.
+        let down = vec![
+            egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
+            key(Key::Enter, egui::Modifiers::COMMAND),
+        ];
+        raw_frame(&egui, &mut p, &mut ctx, down);
+        raw_frame(&egui, &mut p, &mut ctx, vec![]);
+        assert!(held(&egui), "nothing let them go yet");
+
+        // The window loses focus and gets it back. On macOS egui-winit
+        // reports both as focused (it asks the window late), so egui itself
+        // keeps the keys: the panels forget them.
+        p.focus_changed(false);
+        p.focus_changed(true);
+        let reported = vec![egui::Event::WindowFocused(true), egui::Event::WindowFocused(true)];
+        raw_frame(&egui, &mut p, &mut ctx, reported);
+        assert!(!held(&egui));
+
+        // A key pressed once focus is back counts as usual.
+        let again = vec![
+            egui::Event::ModifiersChanged(egui::Modifiers::SHIFT),
+            key(Key::Enter, egui::Modifiers::SHIFT),
+        ];
+        raw_frame(&egui, &mut p, &mut ctx, again);
+        assert!(egui.input(|i| i.modifiers.shift && i.key_down(Key::Enter)));
+    }
+
+    #[test]
+    fn the_system_dialog_leaves_no_modifier_or_enter_held() {
+        let file = TempAsset::new("dialog-keys");
+        let (egui, mut p, mut ctx) = editor(None);
+        // Ctrl+S, then Enter on "Choose file…": neither key-up reaches the
+        // editor while the dialog is up.
+        let save = vec![
+            egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
+            key(Key::S, egui::Modifiers::COMMAND),
+        ];
+        raw_frame(&egui, &mut p, &mut ctx, save);
+        assert!(matches!(p.dialog(), Some(Dialog::SaveAs { .. })));
+        raw_frame(&egui, &mut p, &mut ctx, vec![key(Key::Enter, egui::Modifiers::COMMAND)]);
+        assert!(held(&egui));
+        answer_picker(
+            &mut p,
+            &mut ctx,
+            FilePicker::SaveAs {
+                kind: DocKind::Scene,
+                then_quit: false,
+            },
+            Some(&file.file),
+        );
+        // No focus event at all: the dialog's return is enough.
+        raw_frame(&egui, &mut p, &mut ctx, vec![]);
+        assert!(!held(&egui), "Ctrl and Enter are let go");
+        assert!(file.file.is_file() && p.dialog().is_none());
+
+        // A plain S is not Ctrl+S: the document isn't saved again.
+        let e = the_entity(&mut ctx);
+        ctx.edit(|ed, ctx| ed.rename(ctx, e, "After")).unwrap();
+        raw_frame(&egui, &mut p, &mut ctx, vec![key(Key::S, egui::Modifiers::NONE)]);
+        assert!(ctx.editor.dirty());
+    }
+
+    #[test]
     fn a_snapped_2d_gizmo_drag_in_the_viewport_is_one_undo_step() {
         let (egui, mut p, mut ctx) = editor(None);
         let e = the_entity(&mut ctx);
@@ -1301,8 +1473,9 @@ mod tests {
         let mut other = ctx.world.save();
         other["entities"][0]["components"]["Hp"] = serde_json::json!(6.0);
         std::fs::write(&file.file, serde_json::to_string(&other).unwrap() + "\n\n\n").unwrap();
-        // The check runs every half second: wait it out in frames.
-        let until = web_time::Instant::now() + crate::editor::document_check_every() * 3;
+        // The check runs every half second: wait it out in frames (60 checks'
+        // worth: a hang detector, not a number of checks a busy machine makes).
+        let until = web_time::Instant::now() + crate::editor::document_check_every() * 60;
         while ctx.world.query::<&Hp>().iter().next().map(|h| h.0) != Some(6.0) {
             assert!(web_time::Instant::now() < until, "not reloaded");
             frame(&egui, &mut p, &mut ctx, vec![]);
@@ -1710,6 +1883,246 @@ mod tests {
             assert_eq!(ctx.editor.doc.path.as_deref(), Some(file.name.as_str()));
             frame(&egui, &mut p, &mut ctx, vec![]);
             assert!(p.scene.active3d && p.selected.is_none());
+        }
+
+        /// A `.gltf` asset of these nodes (see `cube_gltf`), named for this
+        /// test run.
+        fn gltf_asset(what: &str, nodes: &serde_json::Value) -> TempAsset {
+            let name = format!("ponko-test-app-{what}-{}.gltf", std::process::id());
+            let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets")
+                .join(&name);
+            std::fs::write(&file, crate::three::cube_gltf(nodes)).unwrap();
+            TempAsset { name, file }
+        }
+
+        /// A crate at the origin with Hp 3, a wall, and a lamp on the wall.
+        fn yard_nodes(wall_x: f32) -> serde_json::Value {
+            serde_json::json!([
+                { "name": "Crate", "mesh": 0, "extras": { "ponko:Hp": 3.0 } },
+                { "name": "Wall", "mesh": 0, "translation": [wall_x, 0.0, -3.0], "children": [2] },
+                { "name": "Lamp", "mesh": 0, "translation": [0.0, 2.0, 0.0] },
+            ])
+        }
+
+        /// The editor with the game's level, `file`, spawned by its setup.
+        fn editor_with_level(file: &TempAsset) -> (egui::Context, Panels, Ctx, Entity) {
+            let (egui, mut p, mut ctx, e) = editor3d();
+            ctx.set_headless(true);
+            ctx.world.despawn(e);
+            let root = ctx.spawn_prefab(&file.name, T3::default()).unwrap();
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            (egui, p, ctx, root)
+        }
+
+        /// The entity of node `path` of the only glTF scene.
+        fn gltf_node(ctx: &mut Ctx, path: &str) -> Entity {
+            let roots: Vec<Entity> = ctx
+                .world
+                .query::<(Entity, &crate::d3::GltfRoot)>()
+                .iter()
+                .map(|(e, _)| e)
+                .collect();
+            assert_eq!(roots.len(), 1, "one scene");
+            ctx.world
+                .get::<crate::d3::GltfRoot>(roots[0])
+                .unwrap()
+                .entity(path)
+                .unwrap()
+        }
+
+        fn parent_of(ctx: &Ctx, e: Entity) -> Option<Entity> {
+            ctx.world.get::<crate::attach::Attached3D>(e).map(|a| a.to)
+        }
+
+        fn position(ctx: &Ctx, e: Entity) -> Vec3 {
+            ctx.world.get::<T3>(e).unwrap().position
+        }
+
+        /// Drags the selection's x arrow (the gizmo at `from`) 2.2 units
+        /// along with snapping on: to `from + 2` on x.
+        fn drag_x(egui: &egui::Context, p: &mut Panels, ctx: &mut Ctx, from: Vec3) {
+            let grab = on_axis_at(ctx, from);
+            let to = screen(ctx, vec3(from.x + along_x_at(ctx, grab, from.x) + 2.2, 0.0, 0.0));
+            mouse_drag(egui, p, ctx, grab, to, 5);
+        }
+
+        #[test]
+        fn the_gltf_panel_lists_a_scene_nodes_overrides_and_each_revert_puts_one_back() {
+            let file = gltf_asset("gltf-panel", &yard_nodes(-3.0));
+            let (egui, mut p, mut ctx, _) = editor_with_level(&file);
+            let crate_e = gltf_node(&mut ctx, "Crate");
+            select_it(&egui, &mut p, &mut ctx, crate_e);
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            assert!(
+                text_at(&shapes, |t| t == "Node Crate of").is_some(),
+                "the scene's section"
+            );
+            assert!(text_at(&shapes, |t| t == "Same as the file").is_some());
+
+            // Moved with the gizmo, its Hp changed, the wall deleted with
+            // the Delete key.
+            drag_x(&egui, &mut p, &mut ctx, Vec3::ZERO);
+            assert!((position(&ctx, crate_e) - vec3(2.0, 0.0, 0.0)).length() < 1e-4);
+            ctx.edit(|ed, ctx| ed.set(ctx, crate_e, "Hp", serde_json::json!(8.0)))
+                .unwrap();
+            let wall = gltf_node(&mut ctx, "Wall");
+            p.select(Some(wall), false);
+            frame(&egui, &mut p, &mut ctx, vec![plain(Key::Delete)]);
+            assert!(!ctx.world.is_alive(wall), "deleted");
+            p.select(Some(crate_e), false);
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            let all = texts(&shapes);
+            for row in ["Crate › Attached3D", "Crate › Hp", "Wall", "Wall/Lamp"] {
+                assert!(all.iter().any(|t| t == row), "{row} is listed: {all:?}");
+            }
+            assert!(all.iter().any(|t| t == "deleted"));
+            assert!(all.iter().any(|t| t == "changed: offset"), "{all:?}");
+
+            // The first Revert puts the crate where the file has it.
+            click_text(&egui, &mut p, &mut ctx, |t| t == "Revert");
+            assert!(p.error.is_none(), "{:?}", p.error);
+            assert!(position(&ctx, crate_e).length() < 1e-4, "{}", position(&ctx, crate_e));
+            assert_eq!(ctx.world.get::<Hp>(crate_e), Some(&Hp(8.0)), "only that one");
+            click_text(&egui, &mut p, &mut ctx, |t| t == "Revert");
+            assert_eq!(ctx.world.get::<Hp>(crate_e), Some(&Hp(3.0)));
+            // The deleted wall's Revert spawns it again, with its lamp.
+            click_text(&egui, &mut p, &mut ctx, |t| t == "Revert");
+            assert!(p.error.is_none(), "{:?}", p.error);
+            let (wall, lamp) = (gltf_node(&mut ctx, "Wall"), gltf_node(&mut ctx, "Wall/Lamp"));
+            assert!(ctx.world.is_alive(wall) && ctx.world.is_alive(lamp));
+            assert!(ctx.world.get::<crate::render::Model>(wall).is_some());
+            assert_eq!(parent_of(&ctx, lamp), Some(wall));
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            assert!(
+                text_at(&shapes, |t| t == "Same as the file").is_some(),
+                "{:?}",
+                texts(&shapes)
+            );
+
+            // Each Revert is an undo step.
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::Z)]);
+            assert!(!ctx.world.is_alive(wall), "the wall is deleted again");
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::Z)]);
+            assert_eq!(ctx.world.get::<Hp>(crate_e), Some(&Hp(8.0)));
+        }
+
+        #[test]
+        fn gltf_nodes_deleted_or_attached_elsewhere_in_the_editor_stay_so_through_a_reexport_and_a_reopen() {
+            let file = gltf_asset("gltf-tree", &yard_nodes(-3.0));
+            let scene = TempAsset::new("gltf-tree-scene");
+            let (egui, mut p, mut ctx, _) = editor_with_level(&file);
+            let (crate_e, wall, lamp) = (
+                gltf_node(&mut ctx, "Crate"),
+                gltf_node(&mut ctx, "Wall"),
+                gltf_node(&mut ctx, "Wall/Lamp"),
+            );
+            // The lamp's row dragged onto the crate's in the hierarchy.
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            let row = |name: &str| text_at(&shapes, |t| t.starts_with(name) && t.contains('#')).unwrap();
+            let (from, onto) = (row("Lamp"), row("Crate"));
+            assert!(from.x < SIDE_PANEL, "in the hierarchy: {from}");
+            mouse_drag(&egui, &mut p, &mut ctx, from, onto, 4);
+            assert_eq!(parent_of(&ctx, lamp), Some(crate_e), "{:?}", p.error);
+            let lamp_at = position(&ctx, lamp);
+            // The wall clicked in the view, then Delete.
+            let there = screen(&ctx, vec3(-3.0, 0.0, -3.0));
+            assert!(there.x > SIDE_PANEL, "in the view: {there}");
+            frame(&egui, &mut p, &mut ctx, vec![moved(there), button(there, true)]);
+            frame(&egui, &mut p, &mut ctx, vec![button(there, false)]);
+            assert_eq!(p.selected, Some(wall));
+            frame(&egui, &mut p, &mut ctx, vec![plain(Key::Delete)]);
+            assert!(!ctx.world.is_alive(wall));
+            assert!(ctx.world.is_alive(lamp), "the lamp hangs off the crate now");
+
+            // Exported again with the wall elsewhere: still deleted, the
+            // lamp still on the crate where it was put.
+            std::fs::write(&file.file, crate::three::cube_gltf(&yard_nodes(-5.0))).unwrap();
+            ctx.reload_gltf(&file.name).unwrap();
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            let wall = gltf_node(&mut ctx, "Wall");
+            assert!(!ctx.world.is_alive(wall), "not spawned again");
+            assert_eq!(gltf_node(&mut ctx, "Wall/Lamp"), lamp);
+            assert_eq!(parent_of(&ctx, lamp), Some(crate_e));
+            assert!(
+                (position(&ctx, lamp) - lamp_at).length() < 1e-4,
+                "{}",
+                position(&ctx, lamp)
+            );
+
+            // Saved and opened again.
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene))
+                .unwrap();
+            p.open_file(&mut ctx, &scene.name);
+            assert!(p.error.is_none(), "{:?}", p.error);
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            let (crate_e, wall, lamp) = (
+                gltf_node(&mut ctx, "Crate"),
+                gltf_node(&mut ctx, "Wall"),
+                gltf_node(&mut ctx, "Wall/Lamp"),
+            );
+            assert!(!ctx.world.is_alive(wall), "still deleted");
+            assert_eq!(parent_of(&ctx, lamp), Some(crate_e), "still on the crate");
+            assert!(
+                (position(&ctx, lamp) - lamp_at).length() < 1e-4,
+                "{}",
+                position(&ctx, lamp)
+            );
+            let models = ctx.world.query::<&crate::render::Model>().iter().count();
+            assert_eq!(models, 2, "the crate and the lamp, once");
+        }
+
+        #[test]
+        fn play_then_stop_spawns_gltf_scenes_again_and_undo_still_reaches_their_nodes() {
+            let file = gltf_asset("gltf-play", &yard_nodes(-3.0));
+            let (egui, mut p, mut ctx, _) = editor_with_level(&file);
+            let crate_e = gltf_node(&mut ctx, "Crate");
+            select_it(&egui, &mut p, &mut ctx, crate_e);
+            drag_x(&egui, &mut p, &mut ctx, Vec3::ZERO);
+            ctx.edit(|ed, ctx| ed.set(ctx, crate_e, "Hp", serde_json::json!(8.0)))
+                .unwrap();
+            let wall = gltf_node(&mut ctx, "Wall");
+            ctx.edit(|ed, ctx| ed.delete(ctx, wall)).unwrap();
+            p.select(Some(crate_e), false);
+            frame(&egui, &mut p, &mut ctx, vec![]);
+
+            // Played: the game moves the crate. Stopped.
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::P)]);
+            assert!(ctx.editor.playing());
+            ctx.world.get_mut::<T3>(crate_e).unwrap().position.y += 5.0;
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::Period)]);
+            assert!(!ctx.editor.playing() && p.dialog().is_none(), "{:?}", p.error);
+
+            // The scene is there again, as it was edited.
+            let now = gltf_node(&mut ctx, "Crate");
+            assert!(ctx.world.is_alive(now), "spawned again");
+            assert!(
+                (position(&ctx, now) - vec3(2.0, 0.0, 0.0)).length() < 1e-4,
+                "{}",
+                position(&ctx, now)
+            );
+            assert_eq!(ctx.world.get::<Hp>(now), Some(&Hp(8.0)));
+            assert!(ctx.world.get::<crate::render::Model>(now).is_some());
+            let wall = gltf_node(&mut ctx, "Wall");
+            assert!(!ctx.world.is_alive(wall), "still deleted");
+            assert_eq!(p.selected, Some(now), "the selection follows it");
+
+            // Undo walks back through the edits made before Play.
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::Z)]);
+            let (wall, lamp) = (gltf_node(&mut ctx, "Wall"), gltf_node(&mut ctx, "Wall/Lamp"));
+            assert!(
+                ctx.world.is_alive(wall) && ctx.world.is_alive(lamp),
+                "the delete undone"
+            );
+            assert!(ctx.world.get::<crate::render::Model>(wall).is_some());
+            assert_eq!(parent_of(&ctx, lamp), Some(wall));
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::Z)]);
+            assert_eq!(ctx.world.get::<Hp>(now), Some(&Hp(3.0)));
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::Z)]);
+            assert!(position(&ctx, now).length() < 1e-4, "{}", position(&ctx, now));
+            assert!(!ctx.editor.can_undo() && !ctx.editor.dirty());
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::Y)]);
+            assert!((position(&ctx, now) - vec3(2.0, 0.0, 0.0)).length() < 1e-4, "redo too");
         }
 
         /// The x arrow's grab point with the gizmo at `pivot`.

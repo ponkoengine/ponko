@@ -16,7 +16,73 @@ use crate::assets::Image;
 /// Output bytes one slice decodes, about: small enough that a slice costs a
 /// fraction of a millisecond, large enough that the budget checks between
 /// slices cost nothing.
-const SLICE_BYTES: usize = 64 * 1024;
+pub(crate) const SLICE_BYTES: usize = 64 * 1024;
+
+/// Whether [`Job`](crate::streaming::Job)s run where they are spawned, on
+/// the game thread: a browser build without threads, or one whose page
+/// didn't start them. Decodes are then done a slice at a time.
+pub(crate) fn jobs_run_here() -> bool {
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    {
+        crate::web_threads::frame_threads() == 0
+    }
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+    {
+        true
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
+}
+
+/// The time one frame's step may spend, checked between pieces of work
+/// (a read, a slice of a decode, an upload): the first piece always runs,
+/// so every step gets somewhere.
+pub(crate) struct WorkClock {
+    start: crate::perf::Instant,
+    /// Seconds.
+    budget: f64,
+    pieces: u32,
+    /// Tests: each piece counts as this many seconds instead of the time it
+    /// took, so how many pieces a step runs follows from the budget alone.
+    cost: Option<f64>,
+}
+
+impl WorkClock {
+    /// A step of `budget` seconds; `cost`: see [`WorkClock::cost`].
+    pub fn new(budget: f64, cost: Option<f64>) -> Self {
+        Self {
+            start: crate::perf::Instant::now(),
+            budget,
+            pieces: 0,
+            cost,
+        }
+    }
+
+    /// Whether another piece of work may start.
+    pub fn may_work(&self) -> bool {
+        self.pieces == 0 || self.elapsed() < self.budget
+    }
+
+    /// One piece of work starts.
+    pub fn piece(&mut self) {
+        self.pieces += 1;
+    }
+
+    /// Pieces of work so far.
+    pub fn pieces(&self) -> u32 {
+        self.pieces
+    }
+
+    /// Seconds spent so far (counted, in tests that set a cost).
+    pub fn elapsed(&self) -> f64 {
+        match self.cost {
+            Some(cost) => f64::from(self.pieces) * cost,
+            None => self.start.elapsed().as_secs_f64(),
+        }
+    }
+}
 
 /// A file's bytes, shared with the caller (which decodes them in one piece
 /// if they can't be split).
@@ -29,7 +95,7 @@ impl AsRef<[u8]> for Bytes {
 }
 
 /// A PNG decoded a few rows at a time, into RGBA8 as `decode_image` makes it.
-pub(super) struct PngSlices {
+pub(crate) struct PngSlices {
     reader: png::Reader<Cursor<Bytes>>,
     width: u32,
     height: u32,
@@ -160,7 +226,7 @@ fn push_rgba(out: &mut Vec<u8>, row: &[u8], width: u32, channels: usize, wide: b
 
 /// A sound decoded a few packets at a time, into what `decode_sound` makes.
 #[cfg(feature = "audio")]
-pub(super) struct SoundSlices {
+pub(crate) struct SoundSlices {
     reader: Box<dyn symphonia::core::formats::FormatReader>,
     decoder: Box<dyn symphonia::core::codecs::audio::AudioDecoder>,
     track: u32,

@@ -150,6 +150,14 @@ pub(crate) struct Batching {
     /// cut, as before it, to compare.
     #[cfg(test)]
     pub no_probe_cut: bool,
+    /// Tests and benchmarks: the probes' views test every instance of the
+    /// cells they see, without leaving out whole cells too far from them
+    /// first (see `far_from_probes`), as before that, to compare.
+    #[cfg(test)]
+    pub no_far_cells: bool,
+    /// Cells of CPU-culled batches the probes' views left out whole as too
+    /// far from their probe in the last prepared frame (tests).
+    pub(crate) far_cells: u32,
 }
 
 /// Global illumination off for this many prepared frames in a row counts
@@ -259,10 +267,10 @@ impl Arena {
             let capacity = needed.next_power_of_two().min(self.most);
             let bigger = Self::make(device, self.label, self.usage, capacity);
             if self.end > 0 {
-                // Writes queued for the old buffer land before this copy.
-                let mut encoder = device.create_command_encoder(&Default::default());
-                encoder.copy_buffer_to_buffer(&self.buffer, 0, &bigger, 0, Some(self.end));
-                queue.submit([encoder.finish()]);
+                // Writes made to the old buffer land before this copy.
+                traffic::submit_copy(device, queue, None, |encoder| {
+                    encoder.copy_buffer_to_buffer(&self.buffer, 0, &bigger, 0, Some(self.end));
+                });
             }
             self.buffer = bigger;
             self.capacity = capacity;
@@ -821,6 +829,18 @@ fn keep_probe_visible(
     std::mem::swap(runs, scratch);
 }
 
+/// Whether no instance of `cell` is a probe pixel wide (see
+/// `GI_SMALLEST`) seen from any of `probes`: its widest one (`reach`) is
+/// too small at the box's nearest point to each. A little margin keeps
+/// rounding from leaving out a cell whose instance would be kept.
+fn far_from_probes(cell: &Cell, probes: &[Vec3]) -> bool {
+    let cut = crate::three::gi::GI_SMALLEST * (1.0 - 1e-3);
+    probes.iter().all(|&probe| {
+        let (near2, _) = box_distances(cell.min, cell.max, probe);
+        cell.reach < cut * near2.sqrt()
+    })
+}
+
 /// Adds instances `start..start + count` to a view's draws, joined to the
 /// run before them when they follow it.
 fn push_run(runs: &mut Vec<(u32, u32)>, start: u32, count: u32) {
@@ -886,9 +906,21 @@ fn cull_cells(
     view: &SlotView,
     (near, far): (f32, f32),
     hides: impl Fn(Vec3, Vec3) -> bool,
+    probe: Option<Vec3>,
+    far_cells: &mut u32,
 ) {
     let legacy = batch.legacy_distance;
+    // A probe's view drops every instance under one of its pixels (see
+    // `keep_probe_visible`): a cell none of whose instances can be that
+    // wide from the probe is left out whole, before its instances are.
+    let probe = probe.filter(|_| legacy || !batch.origin_radii.is_empty());
     for cell in &batch.cells {
+        if let Some(probe) = probe
+            && far_from_probes(cell, std::slice::from_ref(&probe))
+        {
+            *far_cells += 1;
+            continue;
+        }
         let (near2, far2) = box_distances(cell.min, cell.max, view.eye);
         if !legacy && (near2 >= far * far || far2 < near * near) {
             continue;
@@ -1053,7 +1085,10 @@ impl Renderer3D {
                 Some((pool, at)) => {
                     // The batch's block: a header, its records, its cells.
                     let mut source = Vec::with_capacity(1 + 6 * count as usize + 2 * batch.cells.len());
-                    source.push([count as f32, batch.cells.len() as f32, 0.0, 0.0]);
+                    // The widest reach of any cell: the probes' size cut
+                    // leaves out a cell only when even that is too small.
+                    let reach = batch.cells.iter().fold(0.0f32, |most, cell| most.max(cell.reach));
+                    source.push([count as f32, batch.cells.len() as f32, reach, 0.0]);
                     for (i, sphere) in batch.instances.iter().zip(batch.spheres.iter()) {
                         source.extend_from_slice(&i.model);
                         source.push(i.color);
@@ -1401,7 +1436,7 @@ impl Renderer3D {
         }
         batching.capped = false;
         let max_views = self.static_culling.as_ref().map_or(usize::MAX, |c| c.max_views);
-        (batching.skipped, batching.dispatches, batching.jobs) = (0, 0, 0);
+        (batching.skipped, batching.dispatches, batching.jobs, batching.far_cells) = (0, 0, 0, 0);
         for batch in self.static_batches.iter_mut().flatten() {
             for view in &mut batch.views {
                 view.active = false;
@@ -1550,7 +1585,19 @@ impl Renderer3D {
                             let hides = |min: Vec3, max: Vec3| {
                                 slot == 0 && grid.is_some_and(|(g, _)| g.hides(min, max, camera))
                             };
-                            cull_cells(batch, &mut runs, &view, band, hides);
+                            #[cfg(test)]
+                            let probe_cells = probe(slot).filter(|_| !batching.no_far_cells);
+                            #[cfg(not(test))]
+                            let probe_cells = probe(slot);
+                            cull_cells(
+                                batch,
+                                &mut runs,
+                                &view,
+                                band,
+                                hides,
+                                probe_cells,
+                                &mut batching.far_cells,
+                            );
                             if let Some(probe) = probe(slot) {
                                 keep_probe_visible(batch, &mut runs, &mut batching.probe_runs, &view, probe);
                             }
@@ -1628,6 +1675,10 @@ impl Renderer3D {
         let probe_faces = self.lists.gi_batch_slot.map_or(0..0, |gi| gi + 1..gi + GI_BATCH_FACES);
         #[cfg(test)]
         let probe_faces = if batching.no_probe_cut { 0..0 } else { probe_faces };
+        #[cfg(test)]
+        let far_cells = !batching.no_far_cells;
+        #[cfg(not(test))]
+        let far_cells = true;
         for batch in self.static_batches.iter_mut().flatten() {
             let Some(pooled) = &batch.pooled else { continue };
             let pool = &mut culling.pools[pooled.pool];
@@ -1674,7 +1725,8 @@ impl Renderer3D {
                 }
                 let flags = u32::from(batch.legacy_distance)
                     | (u32::from(view.slot == 0 && occlusion) << 1)
-                    | (u32::from(probe_faces.contains(&view.slot)) << 2);
+                    | (u32::from(probe_faces.contains(&view.slot)) << 2)
+                    | (u32::from(probe_faces.contains(&view.slot) && far_cells) << 3);
                 page.table.extend([
                     block,
                     (view.visibility.0 / 4) as u32,
