@@ -233,7 +233,13 @@ fn contacts_wait_their_turn_and_stay_in_the_ripple_field() {
         }
         water.touch(vec2(500.0, 0.0), 0.5, 0.1);
         assert_eq!(water.waiting_contacts(), 5, "a contact outside the field is dropped");
+        assert_eq!(water.contacts_started(), 5, "only the accepted ones count");
         ponko::water::update_water(ctx);
+        assert_eq!(
+            ctx.world.get::<Water>(e).unwrap().contacts_started(),
+            5,
+            "the update drains the waiting ones, not the total"
+        );
         assert_eq!(
             ctx.world.get::<Water>(e).unwrap().waiting_contacts(),
             2,
@@ -385,28 +391,30 @@ mod floating {
     }
 
     #[test]
-    fn a_body_falling_in_starts_ripples() {
-        struct Splashed(Entity, bool);
-        let world = Game::new("splash", 64, 64)
-            .physics3d(vec3(0.0, -9.81, 0.0))
-            .plugin(WaterPlugin)
-            .add(ponko::prelude::Phase::AfterPhysics, |ctx: &mut Ctx| {
-                let lake = ctx.world.resource::<Splashed>().0;
-                if ctx.world.get::<Water>(lake).unwrap().waiting_contacts() > 0 {
-                    ctx.world.resource_mut::<Splashed>().1 = true;
-                }
-            })
-            .run_headless(60, |ctx| {
-                let lake = Water::spawn(ctx, WaterDesc::lake(Vec2::ZERO, vec2(20.0, 20.0), 0.0));
-                ctx.world.insert_resource(Splashed(lake, false));
-                ctx.world.spawn((
-                    Transform::at(vec3(1.0, 1.5, 0.0)),
-                    RigidBody::dynamic(),
-                    Collider::cuboid(Vec3::splat(0.4)).density(500.0),
-                    Buoyancy::cuboid(Vec3::splat(0.4)),
-                ));
-            });
-        assert!(world.resource::<Splashed>().1, "the splash queued a contact ripple");
+    fn a_body_falling_in_starts_ripples_only_with_its_ripple_switch_on() {
+        let started = |ripples: bool| {
+            let mut lake = None;
+            let world = Game::new("splash", 64, 64)
+                .physics3d(vec3(0.0, -9.81, 0.0))
+                .plugin(WaterPlugin)
+                .run_headless(60, |ctx| {
+                    lake = Some(Water::spawn(ctx, WaterDesc::lake(Vec2::ZERO, vec2(20.0, 20.0), 0.0)));
+                    let mut floats = Buoyancy::cuboid(Vec3::splat(0.4));
+                    floats.ripples = ripples;
+                    ctx.world.spawn((
+                        Transform::at(vec3(1.0, 1.5, 0.0)),
+                        RigidBody::dynamic(),
+                        Collider::cuboid(Vec3::splat(0.4)).density(500.0),
+                        floats,
+                    ));
+                });
+            // The water's update takes the waiting contacts every frame; the
+            // running total is what the splash left, read once after the run.
+            let water = world.get::<Water>(lake.unwrap()).unwrap();
+            water.contacts_started()
+        };
+        assert!(started(true) > 0, "the splash started contact ripples");
+        assert_eq!(started(false), 0, "a body with the switch off starts none");
     }
 }
 
