@@ -24,7 +24,8 @@
 //! **What it needs.** No window, no GPU and no audio device. Files come
 //! from the added sources, then the `assets/` folders on desktop (the
 //! files fetched from `assets/index.json` in a browser); saving writes to
-//! `assets/` and isn't available in web builds. The calls that read or
+//! `assets/`, and in web builds only with the `editor` feature, which keeps
+//! saved files in the browser's storage. The calls that read or
 //! write entities and resources take the world (`&mut ctx.world`), so
 //! `ctx.assets` borrows apart from it.
 //!
@@ -947,24 +948,68 @@ pub(crate) fn list(dir: &str, extension: &str) -> Vec<String> {
     names
 }
 
-/// Web builds have no folders to list.
+/// Web builds list their file manifest (see [`web_manifest`]).
 #[cfg(all(target_arch = "wasm32", feature = "inspector"))]
-pub(crate) fn list(_dir: &str, _extension: &str) -> Vec<String> {
-    Vec::new()
+pub(crate) fn list(dir: &str, extension: &str) -> Vec<String> {
+    let prefix = format!("{dir}/");
+    let suffix = format!(".{extension}");
+    let mut names: Vec<String> = web_manifest()
+        .into_iter()
+        .filter(|n| n.starts_with(&prefix) && !n[prefix.len()..].contains('/') && n.ends_with(&suffix))
+        .collect();
+    names.sort();
+    names
 }
 
-/// Web builds can't write files.
+/// The web build's file manifest: the files fetched from the names in
+/// `assets/index.json` (with the files the editor saved in the browser),
+/// and the files in the page's asset pack. Sorted, each once.
 #[cfg(target_arch = "wasm32")]
+#[cfg_attr(not(feature = "inspector"), allow(dead_code))]
+pub(crate) fn web_manifest() -> Vec<String> {
+    let mut names: Vec<String> = web_files::with(|files| files.keys().cloned().collect());
+    for pack in pack::default_packs() {
+        names.extend(pack.names().map(str::to_string));
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// The bytes of `name` in the web build's file manifest (a fetched or
+/// saved file, else the page's asset pack).
+#[cfg(target_arch = "wasm32")]
+#[cfg_attr(not(feature = "inspector"), allow(dead_code))]
+pub(crate) fn read_web_asset(name: &str) -> Option<Vec<u8>> {
+    if let Some(bytes) = web_files::with(|files| files.get(name).map(|b| b.to_vec())) {
+        return Some(bytes);
+    }
+    let pack = pack::default_packs().iter().find(|p| p.contains(name))?;
+    pack.read(name).ok()
+}
+
+/// Web builds without the editor can't write files.
+#[cfg(all(target_arch = "wasm32", not(feature = "editor")))]
 pub(crate) fn write(name: &str, _: &[u8]) -> Result<PathBuf, String> {
     Err(format!("can't save \"{name}\": web builds have no files"))
 }
 
+/// With the editor, web builds keep what they save in the browser's
+/// storage (see `editor::web`): it is read from there from now on, and
+/// again when the page is loaded next.
+#[cfg(all(target_arch = "wasm32", feature = "editor"))]
+pub(crate) fn write(name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    crate::editor::web::keep(name, bytes)?;
+    web_files::insert(name.to_string(), bytes.to_vec());
+    Ok(PathBuf::from(name))
+}
+
 /// [`write`] for the public save calls: a failure is
 /// [`ErrorKind::Io`](crate::error::ErrorKind::Io) naming `name`, or
-/// [`Unsupported`](crate::error::ErrorKind::Unsupported) in web builds, which have
-/// no files.
+/// [`Unsupported`](crate::error::ErrorKind::Unsupported) in web builds without
+/// the editor, which have no files.
 pub(crate) fn write_asset(name: &str, bytes: &[u8]) -> Result<(), crate::error::Error> {
-    let kind = if cfg!(target_arch = "wasm32") {
+    let kind = if cfg!(all(target_arch = "wasm32", not(feature = "editor"))) {
         crate::error::ErrorKind::Unsupported
     } else {
         crate::error::ErrorKind::Io
@@ -1176,7 +1221,8 @@ pub(crate) type DataLoader = Box<dyn Fn(&mut World, &str) -> Result<(), crate::e
 ///   change, at the start of a frame). Read what was reloaded from any
 ///   system, and save from any system.
 /// - **What it needs:** no window, GPU or audio device. Saving writes to
-///   `assets/` and isn't available in web builds. The calls that read or
+///   `assets/`; web builds save only with the `editor` feature (into the
+///   browser's storage, see the guide's "Saving in a browser"). The calls that read or
 ///   write entities and resources take the world (`&mut ctx.world`), so
 ///   `ctx.assets` borrows apart from it.
 #[derive(Default)]
@@ -1595,7 +1641,8 @@ impl Assets {
     }
 
     /// Saves the world (its reflected components and resources) as a scene
-    /// in `assets/<path>`, over the file if it exists. Not in web builds.
+    /// in `assets/<path>`, over the file if it exists. Web builds save only
+    /// with the `editor` feature, into the browser's storage.
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
@@ -1607,7 +1654,8 @@ impl Assets {
     /// # Errors
     ///
     /// [`ErrorKind::Io`](crate::error::ErrorKind::Io) if the file can't be written
-    /// ([`Unsupported`](crate::error::ErrorKind::Unsupported) in web builds).
+    /// ([`Unsupported`](crate::error::ErrorKind::Unsupported) in web builds
+    /// without the `editor` feature).
     pub fn save_scene(&self, world: &World, path: &str) -> Result<(), crate::error::Error> {
         let text = serde_json::to_string_pretty(&world.save())?;
         write_asset(path, text.as_bytes())
@@ -1615,7 +1663,8 @@ impl Assets {
 
     /// Saves entity `e` (its reflected components) as a prefab in
     /// `assets/<path>`, for [`spawn_prefab`](crate::ctx::Ctx::spawn_prefab). Its
-    /// position isn't kept: each spawn says where. Not in web builds.
+    /// position isn't kept: each spawn says where. Web builds save only
+    /// with the `editor` feature, into the browser's storage.
     ///
     /// The prefab holds `e`'s children too: its [`PrefabParts`](crate::prelude::PrefabParts)
     /// (if a prefab spawned it) and every entity attached to one of them,
@@ -1636,7 +1685,8 @@ impl Assets {
     ///
     /// [`ErrorKind::BadHandle`](crate::error::ErrorKind::BadHandle) if `e` is dead,
     /// [`Io`](crate::error::ErrorKind::Io) if the file can't be written
-    /// ([`Unsupported`](crate::error::ErrorKind::Unsupported) in web builds).
+    /// ([`Unsupported`](crate::error::ErrorKind::Unsupported) in web builds
+    /// without the `editor` feature).
     pub fn save_prefab(&mut self, world: &World, e: Entity, path: &str) -> Result<(), crate::error::Error> {
         let mut components = world.entity_json(e)?;
         if let Some(t) = components.get_mut("Transform2D") {
