@@ -903,20 +903,18 @@ mod tests {
 
     #[test]
     fn both_storages_compute_the_same_frames() {
-        // One density and fewer entities under Miri, which interprets every step.
-        let (n, densities): (usize, &[u32]) = if cfg!(miri) { (200, &[20]) } else { (3000, &[5, 20]) };
-        for &density in densities {
+        for density in [5, 20] {
             for rows in [false, true] {
-                let mut arch = Workload::new(World::new(), n, density, 10, 4);
+                let mut arch = Workload::new(World::new(), 3000, density, 10, 4);
                 let sset = Sset {
                     h: Hybrid::default(),
                     rows,
                 };
-                let mut sset = Workload::new(sset, n, density, 10, 4);
+                let mut sset = Workload::new(sset, 3000, density, 10, 4);
                 assert_eq!(arch_state(&arch), sset_state(&sset), "after settling");
                 assert!(arch.store.archetypes().1 > 50, "the combinations multiply");
                 assert_eq!(sset.store.archetypes().1, 1, "dense data in one archetype");
-                let mut flags = Workload::new(Flags(World::new()), n, density, 10, 4);
+                let mut flags = Workload::new(Flags(World::new()), 3000, density, 10, 4);
                 assert_eq!(arch_state(&arch), flags_state(&flags), "after settling");
                 for _ in 0..4 {
                     let (a, s, f) = (arch.frame(), sset.frame(), flags.frame());
@@ -927,6 +925,25 @@ mod tests {
                     assert_eq!(arch_state(&arch), flags_state(&flags));
                 }
             }
+        }
+    }
+
+    /// The set-driven `and` join (archetype data read by cached id) finds
+    /// what the archetype queries find. Small, so it runs under Miri.
+    #[test]
+    fn the_set_driven_and_join_matches_the_archetype_queries() {
+        for rows in [false, true] {
+            let mut arch = Workload::new(World::new(), 40, 20, 0, 1);
+            let sset = Sset {
+                h: Hybrid::default(),
+                rows,
+            };
+            let mut sset = Workload::new(sset, 40, 20, 0, 1);
+            arch.churn_tick();
+            sset.churn_tick();
+            let want = arch.store.and();
+            assert_ne!(want, 0, "some entities have both tags of a pair");
+            assert_eq!(sset.store.and(), want);
         }
     }
 

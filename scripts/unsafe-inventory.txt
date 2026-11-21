@@ -179,7 +179,7 @@ crates/ponko_bench/src/query_policy.rs | register_late | crates/ponko_bench/src/
 crates/ponko_bench/src/sparse_set/proto.rs | dense_ref | crates/ponko_bench/src/sparse_set/proto.rs::both_join_drivers_visit_the_same_entities | miri
 crates/ponko_bench/src/sparse_set/proto.rs | dense_mut | crates/ponko_bench/src/sparse_set/proto.rs::both_join_drivers_visit_the_same_entities | miri
 crates/ponko_bench/src/sparse_set/proto.rs | Hybrid::join_from_set | crates/ponko_bench/src/sparse_set/proto.rs::both_join_drivers_visit_the_same_entities | miri
-crates/ponko_bench/src/sparse_set.rs | Sset::and | crates/ponko_bench/src/sparse_set.rs::both_storages_compute_the_same_frames | miri
+crates/ponko_bench/src/sparse_set.rs | Sset::and | crates/ponko_bench/src/sparse_set.rs::the_set_driven_and_join_matches_the_archetype_queries | miri
 crates/ponko_bench/src/sparse_set.rs | dense_sset_iter | crates/ponko_bench/src/sparse_set.rs::the_dense_case_computes_the_same_on_every_storage | miri
 
 # ---- The C API: helpers no tested C function reaches by a plain call ---------
