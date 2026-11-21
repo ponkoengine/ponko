@@ -12,6 +12,8 @@
   writes one for a game's own fatal error. The newest ten are kept.
 - Web builds hand a report to the page as a `ponkocrashreport` event (and
   `window.ponkoCrashReport`); the generated page offers it as a file to save.
+  The failures that stop a running browser game (a lost WebGL2 context, a
+  stopped worker thread) write a report too.
 
 ### Changed
 - Release builds of a game with a window now write crash reports by default

@@ -182,6 +182,11 @@ pub(crate) fn report(failure: Failure) {
     let Some(game) = game.ok().flatten() else {
         return;
     };
+    // A crash report (`ponko::crash`), when the game has them on: a panic
+    // wrote its own in the panic hook already.
+    if failure.kind != FailureKind::Panic {
+        let _ = crate::crash::report(&failure);
+    }
     let text = game.iter().fold(None, |text, callback| callback(&failure).or(text));
     let page = FAILURES
         .try_with(|failures| {

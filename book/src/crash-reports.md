@@ -63,7 +63,9 @@ file.
   catches with `catch_unwind` gets one too.
 - **A fatal engine error**: `Game::run` or `try_run` ends with an error (no
   usable GPU, the window couldn't be made, a setup callback failed), or a
-  headless run's setup failed. The report's kind is `error`.
+  headless run's setup failed; in a browser, also the failures that stop a
+  running game (the WebGL2 context lost, a worker thread that stopped). The
+  report's kind is `error`.
 - **The game's own fatal error**: `ponko::crash::report("why")` writes one
   for a game that stops without panicking.
 
@@ -166,8 +168,10 @@ window.addEventListener("ponkocrashreport", (event) => {
 });
 ```
 
-The page's own messages for a game that couldn't start or stopped are in
-[Web builds](web.md); the report is the longer version, for the developer.
+The report comes before the page's own failure message (`onPonkoFailure`,
+see [Web builds](web.md)), for the same panic or failure: the page shows
+the short message for the player, and the report is the longer version, for
+the developer.
 
 ## Limits
 
