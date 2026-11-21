@@ -1084,6 +1084,10 @@ impl Renderer3D {
                 [n.x, n.y, n.z, g.intensity],
                 [origin.x, origin.y, origin.z, gi.rows() as f32],
             ];
+            #[cfg(test)]
+            if self.gi_unsettled {
+                uniform.gi[0][1] = 1.0;
+            }
         }
         // A three-color ambient, from the authored colors.
         let authored_ambient = match (self.sky_shader, self.kit) {

@@ -12,8 +12,9 @@
 // The probes' own views read the light tiles, so each bounce starts from
 // the light as it is.
 //
-// frame.gi[0]: x 1 in the probes' own views (0 elsewhere), yz unused, w
-// the probe spacing; frame.gi[1]: xyz probes along each axis, w the
+// frame.gi[0]: x 1 in the probes' own views (0 elsewhere), y 1 to read
+// the light tiles in the camera's view too (tests), z unused, w the probe
+// spacing; frame.gi[1]: xyz probes along each axis, w the
 // intensity (0: off); frame.gi[2]: xyz the grid's lowest probe (in probe
 // cells), w the rows of tiles.
 @group(0) @binding(10) var gi_atlas: texture_2d<f32>;
@@ -64,7 +65,7 @@ fn gi_light(world: vec3<f32>, n: vec3<f32>, view: vec3<f32>) -> vec4<f32> {
     let t = clamp(local - base, vec3<f32>(0.0), vec3<f32>(1.0));
     // The settled tiles (64 tiles of 8 texels to the right), except in the
     // probes' own views.
-    let settled = vec2<f32>(select(512.0, 0.0, frame.gi[0].x > 0.5), 0.0);
+    let settled = vec2<f32>(select(512.0, 0.0, frame.gi[0].x > 0.5 || frame.gi[0].y > 0.5), 0.0);
     var sum = vec3<f32>(0.0);
     var total = 0.0;
     var covered = 0.0;

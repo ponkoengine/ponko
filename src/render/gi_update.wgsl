@@ -124,7 +124,7 @@ var<workgroup> gi_buried: bool;
 // spacing by between GI_BURIED.x and GI_BURIED.y of it), the probe sits in
 // a wall between them. Such a probe is marked (its code negated) and gives
 // no light.
-const GI_BURIED: vec2<f32> = vec2<f32>(-0.01, 0.25);
+const GI_BURIED: vec2<f32> = vec2<f32>(-0.03, 0.25);
 
 // What tells which probe a slot holds (GiGrid::code).
 fn gi_code(cell: vec3<f32>, counts: vec3<f32>) -> f32 {
@@ -175,6 +175,67 @@ fn gi_ray(i: u32) -> vec3<f32> {
     return forward + cross(forward, up) * uv.x - up * uv.y;
 }
 
+// Where a view pixel's samples see surfaces this much further apart (as a
+// fraction of the distance), one surface hides part of another there.
+const GI_EDGE: f32 = 0.02;
+
+// The light of view pixel `at` (`depth` its first sample's, `radiance` what
+// it resolved to), from the surface in front where one hides another
+// there. With multisampling a triangle is shaded once per pixel, at the
+// pixel's center, for all the samples it covers; where it is partly hidden,
+// that center can lie on its hidden part, on the far side of what hides it
+// (a room's long wall seen past the end of a thin partition: its hidden
+// part is in the next room, lit by that room's lamp and probes). Such a
+// pixel's light came from somewhere the probe can't see, and a white room
+// passes it on bounce after bounce. Instead it takes the light of the
+// neighbouring pixel (in the same view) whose surface is nearest the
+// pixel's front sample.
+fn gi_front_light(at: vec2<i32>, depth: f32, radiance: vec3<f32>, near: f32, far: f32) -> vec3<f32> {
+    let samples = i32(textureNumSamples(gi_view_depth));
+    var front = depth;
+    var back = depth;
+    for (var k = 1; k < samples; k++) {
+        let d = textureLoad(gi_view_depth, at, k);
+        front = max(front, d);
+        back = min(back, d);
+    }
+    // Reverse-Z: larger is nearer. Against the sky, nothing is hidden.
+    if back <= 0.0 {
+        return radiance;
+    }
+    let front_along = gi_along(front, near, far);
+    if gi_along(back, near, far) <= front_along * (1.0 + GI_EDGE) {
+        return radiance;
+    }
+    // The view's pixels around it, inside the view.
+    let corner = (at / i32(GI_VIEW)) * i32(GI_VIEW);
+    var best = radiance;
+    var closest = 1e30;
+    for (var k = 0; k < 4; k++) {
+        var step = vec2<i32>(0, 0);
+        step[k / 2] = select(-1, 1, (k & 1) == 1);
+        let q = at + step;
+        if any(q < corner) || any(q >= corner + vec2<i32>(i32(GI_VIEW))) {
+            continue;
+        }
+        let d = textureLoad(gi_view_depth, q, 0);
+        if d <= 0.0 {
+            continue;
+        }
+        let off = abs(gi_along(d, near, far) - front_along);
+        if off < closest {
+            closest = off;
+            best = textureLoad(gi_views, q, 0).rgb;
+        }
+    }
+    return best;
+}
+
+// Distance along a view at depth `d` (reverse-Z: 1 near, 0 far).
+fn gi_along(d: f32, near: f32, far: f32) -> f32 {
+    return near * far / max(near + d * (far - near), 1e-6);
+}
+
 @compute @workgroup_size(8, 8, 4)
 fn cs_update(
     @builtin(workgroup_id) block: vec3<u32>,
@@ -201,6 +262,8 @@ fn cs_update(
         if depth <= 0.0 {
             // Nothing there: the sky.
             radiance = environment_sample(0.0, ray / length1, 0.3, false);
+        } else {
+            radiance = gi_front_light(at, depth, radiance, near, far);
         }
         // Distance along the view (reverse-Z: 1 near, 0 far), then along
         // the ray.
