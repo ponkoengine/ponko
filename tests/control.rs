@@ -1,5 +1,11 @@
 //! The control endpoint, end to end: a headless game driven over TCP, the
 //! way `ponko-mcp` drives it.
+//!
+//! The game runs on a thread of its own, so the tests wait for it: every
+//! 10 s limit here (deadlines, read and receive timeouts) is a hang
+//! detector, which ends as soon as the game has answered. The short sleeps
+//! before "nothing more happened" checks are lower bounds, which a busy
+//! machine only makes longer.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};

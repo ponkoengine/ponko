@@ -402,7 +402,7 @@ impl Thumbnails {
         self.asked.len() > self.ready.len()
     }
 
-    /// Waits (at most `timeout`) until every thumbnail asked for is made.
+    /// Waits (at most `timeout`: a hang detector) until every thumbnail asked for is made.
     #[cfg(test)]
     pub fn wait(&mut self, timeout: std::time::Duration) -> bool {
         let end = web_time::Instant::now() + timeout;

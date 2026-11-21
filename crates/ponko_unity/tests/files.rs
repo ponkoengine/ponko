@@ -335,6 +335,9 @@ fn blend_shape_channels_sharing_frames_are_errors() {
     let shared = "    - {name: s, frameIndex: 0, frameCount: 2000}\n".repeat(2000);
     let started = std::time::Instant::now();
     let err = mesh(&shared).unwrap_err();
+    // Comparing every pair of the 2000 shapes' 2000 frames would take
+    // minutes; the check is milliseconds, which no busy machine stretches
+    // to 5 s.
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
     assert!(err.message().contains("share frames"), "{err}");
     let partly = "    - {name: a, frameIndex: 0, frameCount: 10}\n    - {name: b, frameIndex: 5, frameCount: 10}\n";

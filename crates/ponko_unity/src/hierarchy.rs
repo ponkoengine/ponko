@@ -699,6 +699,8 @@ mod tests {
         let took = started.elapsed();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(small, Ok(256));
+        // Expanding every placement would take far longer than 10 s; the
+        // refusal is a count, milliseconds even on a busy machine.
         assert!(took < std::time::Duration::from_secs(10), "took {took:?}");
         assert!(err.unwrap().message().contains("placed too many times"));
     }
