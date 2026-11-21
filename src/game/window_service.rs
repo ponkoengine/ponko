@@ -322,13 +322,15 @@ mod tests {
 
     #[test]
     fn first_window_is_created_with_the_restored_settings_and_shown_as_is() {
-        let mut s = WindowSettings::default();
-        s.size = glam::Vec2::new(1280.0, 720.0);
-        s.position = Some(IVec2::new(40, -60));
-        s.min_size = Some(glam::Vec2::new(320.0, 240.0));
-        s.max_size = Some(glam::Vec2::new(2000.0, 1500.0));
-        s.always_on_top = true;
-        s.decorations = false;
+        let s = WindowSettings {
+            size: glam::Vec2::new(1280.0, 720.0),
+            position: Some(IVec2::new(40, -60)),
+            min_size: Some(glam::Vec2::new(320.0, 240.0)),
+            max_size: Some(glam::Vec2::new(2000.0, 1500.0)),
+            always_on_top: true,
+            decorations: false,
+            ..Default::default()
+        };
         let a = first_window_attributes(Window::default_attributes(), &s, Some(Fullscreen::Borderless(None)));
         assert_eq!(a.inner_size, Some(Size::Logical(LogicalSize::new(1280.0, 720.0))));
         assert_eq!(a.min_inner_size, Some(Size::Logical(LogicalSize::new(320.0, 240.0))));

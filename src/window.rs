@@ -817,26 +817,29 @@ mod web_tests {
 mod startup_tests {
     use super::*;
     fn defaults() -> WindowSettings {
-        let mut s = WindowSettings::default();
-        s.title = "Game".into();
-        s.size = Vec2::new(800.0, 600.0);
-        s
+        WindowSettings {
+            title: "Game".into(),
+            size: Vec2::new(800.0, 600.0),
+            ..Default::default()
+        }
     }
     fn saved() -> WindowSettings {
-        let mut s = WindowSettings::default();
-        s.title = "Old title".into();
-        s.size = Vec2::new(1280.0, 720.0);
-        s.position = Some(IVec2::new(40, 60));
-        s.min_size = Some(Vec2::new(320.0, 240.0));
-        s.always_on_top = true;
-        s.decorations = false;
-        s
+        WindowSettings {
+            title: "Old title".into(),
+            size: Vec2::new(1280.0, 720.0),
+            position: Some(IVec2::new(40, 60)),
+            min_size: Some(Vec2::new(320.0, 240.0)),
+            always_on_top: true,
+            decorations: false,
+            ..Default::default()
+        }
     }
     fn display(mode: VideoMode) -> Monitor {
-        let mut m = Monitor::default();
-        m.size = UVec2::new(2560, 1440);
-        m.modes = vec![mode];
-        m
+        Monitor {
+            size: UVec2::new(2560, 1440),
+            modes: vec![mode],
+            ..Default::default()
+        }
     }
     fn mode() -> VideoMode {
         VideoMode::new(1920, 1080, 60_000, 32)
