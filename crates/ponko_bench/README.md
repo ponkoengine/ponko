@@ -262,7 +262,7 @@ ray-query reflection prototype's cost and memory, and the decision (defer):
 
 - The "build" rows measure different work: building a bevy `QueryState` matches it against every archetype, while a ponko `Query` only resolves component ids and matches while it runs, and hecs only borrows the world (it keeps a per-world cache of each query type's matching archetypes). The "build and count" row does the same work in ponko and bevy (resolve, match all 1024 archetypes, sum lengths), so compare those two; hecs hits its cache. bevy systems normally keep their `QueryState` and update it incrementally, which this benchmark does not measure.
 - The iteration row builds the query once for bevy (a kept `QueryState`) and once per run for ponko, as each library's systems use them.
-- ponko's "build and count" is 2.4 ms here, against 1.5 ms in the recording of 2026-11-09 (taken while the machine was shared with other work). [ECS.md](ECS.md) has the p95 and the cold-world row.
+- ponko's "build and count" is 2.4 ms here, against 1.5 ms in the recording of 2026-11-09 (taken while the machine was shared with other work). The code went from 33 M to 42 M instructions per 1000 builds and counts on 2026-11-09 to 11 (typed query filters and the query index test each archetype against more) and has not moved since; the rest of the gap is the machine and code layout. [ECS.md](ECS.md#costs-won-back-since-the-baselines) has the revisions, the p95 and the cold-world row.
 
 ## Caveats
 

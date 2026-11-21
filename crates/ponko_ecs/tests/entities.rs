@@ -335,3 +335,42 @@ fn deserialized_entities_follow_the_innermost_remap() {
     assert_eq!(c.0, outer, "the outer map is back");
     assert_eq!(read().0, saved, "and none outside");
 }
+
+#[test]
+fn bundle_values_of_every_size_and_alignment_land_whole() {
+    // Spawns move each value with a copy of its own size: odd sizes,
+    // high alignments, large and zero-sized values all come back intact,
+    // through one-by-one spawns and batches alike.
+    #[derive(Component, Debug, PartialEq, Clone, Copy)]
+    struct Byte(u8);
+    #[derive(Component, Debug, PartialEq, Clone, Copy)]
+    struct Odd([u8; 3]);
+    #[derive(Component, Debug, PartialEq, Clone, Copy)]
+    #[repr(align(32))]
+    struct Wide(u64, u32);
+    #[derive(Component, Debug, PartialEq, Clone, Copy)]
+    struct Big([u64; 40]);
+    let value = |i: u64| {
+        (
+            Byte(i as u8),
+            Tag,
+            Odd([i as u8, (i >> 8) as u8, 0xA5]),
+            Wide(i * 3, !(i as u32)),
+            Big(std::array::from_fn(|k| i * 100 + k as u64)),
+        )
+    };
+    let mut w = World::new();
+    let one: Vec<_> = (0..70).map(|i| (i, w.spawn(value(i)))).collect();
+    w.spawn_batch((70..300).map(value));
+    // A batch that doesn't know its length grows the columns as it goes.
+    w.spawn_batch((300..400).filter(|i| i % 3 != 0).map(value));
+    w.despawn(one[5].1);
+    let mut seen = 0;
+    for (b, o, wide, big) in w.query::<(&Byte, &Odd, &Wide, &Big)>().iter() {
+        let i = wide.0 / 3;
+        assert_eq!((b, o, wide, big), (&value(i).0, &value(i).2, &value(i).3, &value(i).4));
+        seen += 1;
+    }
+    assert_eq!(seen, 70 + 230 + 66 - 1);
+    assert_eq!(w.get::<Big>(one[69].1), Some(&value(69).4));
+}

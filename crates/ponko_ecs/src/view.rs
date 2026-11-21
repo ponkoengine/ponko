@@ -1054,12 +1054,10 @@ impl<'v, Q: QueryData> ViewQuery<'v, Q> {
                         None => break,
                     }
                 }
-                for row in start..end {
-                    // SAFETY: `row` is in bounds; the view checked that `Q`
-                    // only touches declared components, with declared
-                    // mutability (a `QueryRef`'s `Q` only reads).
-                    f(unsafe { Q::fetch(state, row) });
-                }
+                // SAFETY: the rows are in bounds; the view checked that `Q`
+                // only touches declared components, with declared
+                // mutability (a `QueryRef`'s `Q` only reads).
+                unsafe { crate::query::for_rows::<Q>(state, start..end, &mut f) };
                 if runs.is_none() {
                     break;
                 }

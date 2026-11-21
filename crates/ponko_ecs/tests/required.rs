@@ -423,3 +423,94 @@ fn bundles_that_lack_nothing_spawn_where_they_did() {
     assert_eq!(world.components_of(plain).unwrap().len(), 1);
     assert_eq!(world.query::<&Enemy>().iter().count(), 2);
 }
+
+#[test]
+fn a_batch_fills_the_gaps_of_every_entity_and_keeps_its_own_values() {
+    let mut world = World::new();
+    // Some give Health, some don't; one batch of a known length, one that
+    // grows as it goes (`filter` gives no lower bound).
+    world.spawn_batch((0..150).map(|i| (Enemy, Plain(i as u8))));
+    world.spawn_batch((0..150).map(|i| (Health(i), Enemy)));
+    world.spawn_batch((0..90).filter(|i| i % 2 == 0).map(|i| (Boss, Plain(i as u8))));
+    assert_eq!(world.len(), 345);
+    let mut filled = world
+        .query::<(&Plain, &Health, &Position)>()
+        .filter::<ponko_ecs::Without<Boss>>();
+    assert_eq!(filled.iter().count(), 150);
+    assert!(
+        filled
+            .iter()
+            .all(|(_, h, p)| *h == Health(100) && *p == Position(0.0, 0.0))
+    );
+    let mut own: Vec<u32> = world
+        .query::<&Health>()
+        .filter::<ponko_ecs::Without<Plain>>()
+        .iter()
+        .map(|h| h.0)
+        .collect();
+    own.sort_unstable();
+    assert_eq!(own, (0..150).collect::<Vec<_>>());
+    let mut bosses = world.query::<(&Boss, &Enemy, &Health, &Plain)>();
+    assert_eq!(bosses.iter().count(), 45);
+    assert!(bosses.iter().all(|(_, _, h, p)| *h == Health(1000) && p.0 % 2 == 0));
+}
+
+#[test]
+fn a_batch_with_hooks_and_gaps_runs_each_hook_on_a_whole_entity() {
+    let mut world = World::new();
+    world.insert_resource(Seen::default());
+    world.on_add::<Enemy>(enemy_added);
+    world.on_add::<Health>(health_added);
+    world.spawn_batch((0..40).map(|_| (Enemy,)));
+    world.spawn_batch((0..10).filter(|_| true).map(|i| (Enemy, Health(i))));
+    let seen = std::mem::take(&mut world.resource_mut::<Seen>().0);
+    assert_eq!(seen.len(), 100);
+    assert!(seen.iter().all(|&(_, h, p)| h && p), "{seen:?}");
+    assert_eq!(world.query::<(&Enemy, &Health, &Position)>().iter().count(), 50);
+    let own = world.query::<&Health>().iter().filter(|h| h.0 < 10).count();
+    assert_eq!(own, 10);
+}
+
+static LIVES: AtomicUsize = AtomicUsize::new(0);
+
+/// Panics once `LIVES` runs out.
+fn mortal() -> Health {
+    if LIVES.fetch_sub(1, Ordering::SeqCst) == 0 {
+        panic!("out of lives")
+    }
+    Health(1)
+}
+
+#[test]
+fn a_constructor_panicking_mid_batch_keeps_the_entities_before_it() {
+    #[derive(Component)]
+    struct Mortal;
+    for hooked in [false, true] {
+        let mut world = World::new();
+        world.require::<Mortal, _>(MadeFirst::default);
+        world.require::<Mortal, _>(mortal);
+        if hooked {
+            world.insert_resource(Seen::default());
+            world.on_add::<Health>(health_added);
+        }
+        LIVES.store(3, Ordering::SeqCst);
+        let batch = (0..10u8).map(|i| (Mortal, Plain(i)));
+        assert!(catch_unwind(AssertUnwindSafe(|| world.spawn_batch(batch))).is_err());
+        // The three made before the panic stay, whole; the fourth id went back.
+        assert_eq!(world.len(), 3, "hooked: {hooked}");
+        let mut kept: Vec<u8> = world
+            .query::<(&Plain, &Health, &MadeFirst)>()
+            .iter()
+            .map(|q| q.0.0)
+            .collect();
+        kept.sort_unstable();
+        assert_eq!(kept, [0, 1, 2]);
+        // And the world goes on: the same batch spawns once lives return.
+        LIVES.store(100, Ordering::SeqCst);
+        world.spawn_batch((0..4u8).map(|i| (Mortal, Plain(i))));
+        assert_eq!(world.query::<(&Plain, &Health)>().iter().count(), 7);
+        let e = world.query::<Entity>().iter().next().unwrap();
+        world.despawn(e);
+        assert_eq!(world.len(), 6);
+    }
+}
