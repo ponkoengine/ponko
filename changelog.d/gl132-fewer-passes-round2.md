@@ -16,7 +16,8 @@
 ### Added
 - Probe views for global illumination leave out whole instance cells too far
   from every probe for their widest instance to be a pixel wide, on the CPU
-  and the GPU culling paths, with the same result as testing each instance:
+  and the GPU culling paths (the GPU path with the widest instance of the
+  whole batch), with the same result as testing each instance:
   in a scene of 250,000 rocks over 1 km x 1 km the CPU path's preparing went
   from about 9 ms to about 2.8 ms a frame. `Cell` (instance cells) gains a
   `reach` field.

@@ -1,8 +1,9 @@
 // Culls a page's static batch views with stable compaction in four stages.
 //
-// `data` holds a pool's batches as vec4s: per batch a block of a header,
-// six vec4s per instance and three per cell (its box with its first instance
-// and count, then the widest instance's reach for the probes' size cut). `indices` is a page: its root,
+// `data` holds a pool's batches as vec4s: per batch a block of a header
+// (instances, cells, the widest instance's reach for the probes' size cut),
+// six vec4s per instance and two per cell (its box with its first instance
+// and count). `indices` is a page: its root,
 // this frame's jobs, and the visible instance list of each of its views.
 // `args` holds the views' indirect draw arguments (five words per mesh
 // part). `depth` holds what all pages share this frame: the occlusion
@@ -62,7 +63,7 @@ fn probe_sized(center:vec3<f32>, radius:f32) -> bool {
     }
     return false;
 }
-// Flag 8: whether a cell's widest instance (`reach`, centred in its box) can
+// Flag 8: whether the batch's widest instance (`reach`), in this cell, can
 // be a pixel wide seen from one of this frame's probes: from the box's
 // nearest point. A little margin keeps rounding on the safe side.
 fn probe_near(lo:vec3<f32>, hi:vec3<f32>, reach:f32) -> bool {
@@ -112,11 +113,11 @@ fn main(@builtin(workgroup_id) group:vec3<u32>, @builtin(local_invocation_index)
         flags=indices[job+7u];
         band=vec2<f32>(bitcast<f32>(indices[job+8u]),bitcast<f32>(indices[job+9u]));
         eye=word(view+24u).xyz;
-        let base=block+1u+total*6u+cell*3u;
+        let base=block+1u+total*6u+cell*2u;
         let cell_lo=data[base]; let cell_hi=data[base+1u];
         start=bitcast<u32>(cell_lo.w); count=bitcast<u32>(cell_hi.w);
         eligible=visible((cell_lo.xyz+cell_hi.xyz)*0.5,length(cell_hi.xyz-cell_lo.xyz)*0.5,view,flags,band.y);
-        eligible=eligible && ((flags & 8u) == 0u || probe_near(cell_lo.xyz,cell_hi.xyz,data[base+2u].x));
+        eligible=eligible && ((flags & 8u) == 0u || probe_near(cell_lo.xyz,cell_hi.xyz,data[block].z));
         if (flags & 1u) == 0u {
             let near=max(max(cell_lo.xyz-eye,eye-cell_hi.xyz),vec3<f32>(0.0));
             let far=max(abs(cell_lo.xyz-eye),abs(cell_hi.xyz-eye));
@@ -198,7 +199,7 @@ fn scatter(@builtin(workgroup_id) group:vec3<u32>, @builtin(local_invocation_ind
     if slot >= indices[2] {return;}
     let job=job_for(slot); let block=indices[job]; let list=indices[job+1u];
     let cell=slot-indices[job+4u]; let total=u32(data[block].x);
-    let base=block+1u+total*6u+cell*3u;
+    let base=block+1u+total*6u+cell*2u;
     let start=bitcast<u32>(data[base].w); let count=bitcast<u32>(data[base+1u].w);
     let cells=indices[job+5u];
     let offset=indices[list+1u+2u*total+cell]+indices[list+1u+2u*total+cells+cell/64u];

@@ -39,7 +39,7 @@ use blend_order::BlendOrder;
 
 /// Bytes of an instance's record in a pool (six vec4s) and of a cell's.
 const RECORD: u64 = 96;
-const CELL: u64 = 48;
+const CELL: u64 = 32;
 /// Bytes of an instance on the CPU path's vertex buffer.
 const VERTEX: u64 = size_of::<Instance3D>() as u64;
 /// Bytes of one indirect draw's arguments.
@@ -1084,8 +1084,11 @@ impl Renderer3D {
             match (fits <= most).then(|| culling.place(device, queue, bytes)).flatten() {
                 Some((pool, at)) => {
                     // The batch's block: a header, its records, its cells.
-                    let mut source = Vec::with_capacity(1 + 6 * count as usize + 3 * batch.cells.len());
-                    source.push([count as f32, batch.cells.len() as f32, 0.0, 0.0]);
+                    let mut source = Vec::with_capacity(1 + 6 * count as usize + 2 * batch.cells.len());
+                    // The widest reach of any cell: the probes' size cut
+                    // leaves out a cell only when even that is too small.
+                    let reach = batch.cells.iter().fold(0.0f32, |most, cell| most.max(cell.reach));
+                    source.push([count as f32, batch.cells.len() as f32, reach, 0.0]);
                     for (i, sphere) in batch.instances.iter().zip(batch.spheres.iter()) {
                         source.extend_from_slice(&i.model);
                         source.push(i.color);
@@ -1094,7 +1097,6 @@ impl Renderer3D {
                     for cell in &batch.cells {
                         source.push(cell.min.extend(f32::from_bits(cell.start)).to_array());
                         source.push(cell.max.extend(f32::from_bits(cell.count)).to_array());
-                        source.push([cell.reach, 0.0, 0.0, 0.0]);
                     }
                     let pool_buffers = &mut culling.pools[pool];
                     queue.uploading(Upload::StaticBatches).write_buffer(
