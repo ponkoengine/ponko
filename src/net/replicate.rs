@@ -1428,7 +1428,7 @@ mod tests {
         let mut events = Events::default();
         assert!(deliver_event::<T>(&mut events, PeerId::HOST, back_tick, payload));
         let got: Vec<T> = events.read::<NetEvent<T>>().iter().map(|e| e.event.clone()).collect();
-        assert_eq!(got, [event.clone()]);
+        assert_eq!(got, std::slice::from_ref(event));
         message.len()
     }
 
@@ -1453,6 +1453,14 @@ mod tests {
             println!("{name}: {binary} bytes per event (JSON: {json})");
             assert!(binary < json, "{name}: {binary} bytes in binary, {json} as JSON");
         }
+    }
+
+    #[test]
+    fn events_with_maps_keyed_by_tuples_travel() {
+        // JSON needs string keys, so these couldn't be sent before.
+        let grid: std::collections::BTreeMap<(u8, u8), u8> = [((1, 2), 3), ((4, 5), 6)].into();
+        assert!(serde_json::to_vec(&grid).is_err());
+        round_trip(&grid, 7);
     }
 
     #[test]

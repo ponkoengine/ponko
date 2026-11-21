@@ -485,9 +485,15 @@ mod declared_replication_misuse {
     #[derive(Serialize, Deserialize)]
     struct Hello;
 
-    /// JSON maps need string keys: this one can't be sent.
-    #[derive(Serialize, Deserialize)]
+    /// An event whose `Serialize` refuses it: it can't be sent.
+    #[derive(Deserialize)]
     struct Grid(HashMap<(u8, u8), u8>);
+
+    impl Serialize for Grid {
+        fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("a grid stays on the server"))
+        }
+    }
 
     #[derive(Component, Clone, Copy)]
     struct Blob(#[allow(dead_code)] u32);

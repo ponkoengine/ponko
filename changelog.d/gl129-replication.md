@@ -29,8 +29,9 @@
   after a varint event type and tick (they were JSON after a fixed 10-byte
   header). Bytes per event: a hit (`NetId`, `f32`, `Vec2`, `bool`) 26
   instead of 76, a two-letter chat line 9 instead of 24, an enum variant 12
-  instead of 22 to 29. Servers and clients of different builds refuse each
-  other on join, as before.
+  instead of 22 to 29. Maps with keys that aren't strings (a
+  `HashMap<(u8, u8), u8>`), which JSON refused, now travel. Servers and
+  clients of different builds refuse each other on join, as before.
 - **Breaking:** an event type that leaves fields out when serializing
   (`#[serde(skip_serializing_if = ...)]`) no longer arrives: with fields by
   position the receiver can't tell them apart and drops the event. Remove
