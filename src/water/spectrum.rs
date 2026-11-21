@@ -434,7 +434,7 @@ impl SpectrumField {
     /// faster than steps: two moments once, then one a step instead of one
     /// a frame); a frame otherwise never works out more than one moment.
     /// Otherwise it is the moment at `s.at`. Returns whether it blended.
-    pub(crate) fn write_drawn(&self, s: DrawnSteps, floating: bool, out: &mut Vec<u8>) -> bool {
+    pub(crate) fn write_drawn(&self, s: DrawnSteps, floating: bool, out: &mut Vec<u16>) -> bool {
         if self.shares(s, floating) {
             let (a, b) = (self.field(s.t0, floating), self.field(s.t1, floating));
             write_half_texels_between(&a.texels, &b.texels, s.between, out);
@@ -709,55 +709,84 @@ impl Field {
     }
 }
 
-/// `v` as a half float's bits (round to nearest even), for uploads.
+/// `v` as a half float's bits, for uploads: rounded to the nearest (ties
+/// to even), too large to infinity, and any NaN to the quiet NaN `0x7e00`
+/// with `v`'s sign. Branch-free (a loop of it vectorises): the sum with
+/// 0.5 rounds a subnormal half's bits into place, and a normal one's
+/// exponent is rebiased in the same add that rounds its mantissa.
 pub(crate) fn f16_bits(v: f32) -> u16 {
-    let bits = v.to_bits();
-    let sign = ((bits >> 16) & 0x8000) as u16;
-    let exp = ((bits >> 23) & 0xff) as i32;
-    let mant = bits & 0x007f_ffff;
-    if exp == 0xff {
-        // Infinity or NaN.
-        return sign | 0x7c00 | if mant != 0 { 0x200 } else { 0 };
-    }
-    let e = exp - 127 + 15;
-    if e >= 0x1f {
-        return sign | 0x7c00;
-    }
-    if e <= 0 {
-        // Subnormal, or zero.
-        if e < -10 {
-            return sign;
-        }
-        let m = mant | 0x0080_0000;
-        let shift = (14 - e) as u32;
-        let half = m >> shift;
-        let rest = m & ((1 << shift) - 1);
-        let mid = 1 << (shift - 1);
-        let round = u32::from(rest > mid || (rest == mid && half & 1 == 1));
-        return sign | (half + round) as u16;
-    }
-    let half = ((e as u32) << 10) | (mant >> 13);
-    let rest = mant & 0x1fff;
-    let round = u32::from(rest > 0x1000 || (rest == 0x1000 && half & 1 == 1));
-    sign | (half + round) as u16
+    let x = v.to_bits();
+    let sign = (x >> 16) & 0x8000;
+    let a = x & 0x7fff_ffff;
+    // 65536 and up (rounding below it is the normal case's carry).
+    let big = if a > 0x7f80_0000 { 0x7e00 } else { 0x7c00 };
+    // Under 2^-14: the float add rounds to the half's subnormal steps.
+    const HALF: u32 = 126 << 23;
+    let small = (f32::from_bits(a) + f32::from_bits(HALF)).to_bits().wrapping_sub(HALF);
+    // Exponent -127 + 15 (wrapping), half an ulp less one, and the odd bit
+    // for ties to even.
+    let normal = a.wrapping_add(0xc800_0fff).wrapping_add((a >> 13) & 1) >> 13;
+    let bits = if a >= 143 << 23 {
+        big
+    } else if a < 113 << 23 {
+        small
+    } else {
+        normal
+    };
+    (bits | sign) as u16
 }
 
-/// `texels` as an RGBA half-float upload, into `out` (kept between frames).
-pub(crate) fn write_half_texels(texels: &[[f32; 4]], out: &mut Vec<u8>) {
-    out.clear();
-    out.extend(texels.iter().flat_map(|t| t.map(f16_bits)).flat_map(u16::to_le_bytes));
+/// How many floats an upload converts at a time (a blended one on the
+/// stack), so each chunk is still in the cache for its second pass.
+const UPLOAD_CHUNK: usize = 1024;
+
+/// [`f16_bits`] of every float of `src`, into `dst` (as long), as the GPU
+/// reads them (little-endian). Where the CPU converts half floats itself
+/// (F16C on x86, FP16 on ARM; the `half` crate checks at run time) it does,
+/// about five times as fast as [`f16_bits`] in a loop; the result is the
+/// same bits (`the_upload_converts_every_float_as_f16_bits`).
+fn write_halves(src: &[f32], dst: &mut [u16]) {
+    #[cfg(not(target_arch = "wasm32"))]
+    for (dst, src) in dst.chunks_mut(UPLOAD_CHUNK).zip(src.chunks(UPLOAD_CHUNK)) {
+        use half::slice::{HalfBitsSliceExt, HalfFloatSliceExt};
+        dst.reinterpret_cast_mut::<half::f16>().convert_from_f32_slice(src);
+        for h in dst.iter_mut() {
+            // The CPU keeps some of a NaN's payload: the one quiet NaN.
+            let nan = *h & 0x7fff > 0x7c00;
+            *h = (if nan { (*h & 0x8000) | 0x7e00 } else { *h }).to_le();
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    for (h, v) in dst.iter_mut().zip(src) {
+        *h = f16_bits(*v).to_le();
+    }
+}
+
+/// `texels` as an RGBA half-float upload, into `out` (kept between
+/// frames; its bytes are what `write_render_target` takes).
+pub(crate) fn write_half_texels(texels: &[[f32; 4]], out: &mut Vec<u16>) {
+    let src = texels.as_flattened();
+    out.resize(src.len(), 0);
+    write_halves(src, out);
 }
 
 /// [`write_half_texels`] of the blend of two moments' texels, `f` (0 to 1)
 /// of the way from `a` to `b`.
-fn write_half_texels_between(a: &[[f32; 4]], b: &[[f32; 4]], f: f32, out: &mut Vec<u8>) {
-    out.clear();
-    out.extend(
-        a.iter()
-            .zip(b)
-            .flat_map(|(a, b)| std::array::from_fn::<_, 4, _>(|i| f16_bits(a[i] + (b[i] - a[i]) * f)))
-            .flat_map(u16::to_le_bytes),
-    );
+fn write_half_texels_between(a: &[[f32; 4]], b: &[[f32; 4]], f: f32, out: &mut Vec<u16>) {
+    let (a, b) = (a.as_flattened(), b.as_flattened());
+    out.resize(a.len(), 0);
+    let mut blend = [0.0f32; UPLOAD_CHUNK];
+    for ((out, a), b) in out
+        .chunks_mut(UPLOAD_CHUNK)
+        .zip(a.chunks(UPLOAD_CHUNK))
+        .zip(b.chunks(UPLOAD_CHUNK))
+    {
+        let blend = &mut blend[..a.len()];
+        for ((v, a), b) in blend.iter_mut().zip(a).zip(b) {
+            *v = a + (b - a) * f;
+        }
+        write_halves(blend, out);
+    }
 }
 
 #[cfg(test)]
@@ -1198,7 +1227,7 @@ mod tests {
     struct Frames {
         clock: crate::time::Clock,
         time: crate::time::Time,
-        upload: Vec<u8>,
+        upload: Vec<u16>,
         /// The steps last drawn between, and whether the upload blended.
         drawn: Option<(DrawnSteps, bool)>,
         /// Uploads made.
@@ -1334,7 +1363,10 @@ mod tests {
         for i in 0..40 {
             frames.frame(&spectrum, frame_dt(60.0, i), true);
             let at = crate::water::drawn_steps(&frames.time).at;
-            assert!((f64::from(at) - frames.time.elapsed()).abs() < 1e-5, "frame {i}: on the frame's clock");
+            assert!(
+                (f64::from(at) - frames.time.elapsed()).abs() < 1e-5,
+                "frame {i}: on the frame's clock"
+            );
         }
         frames.time.pause();
         frames.frame(&spectrum, 1.0 / 60.0, true);
@@ -1347,8 +1379,14 @@ mod tests {
         frames.frame(&spectrum, 1.0 / 60.0, true);
         let resumed = crate::water::drawn_steps(&frames.time).at;
         let behind = frames.time.elapsed() - f64::from(resumed);
-        assert!(behind > 0.45, "half a second paused: the waves are {behind} s behind the frame's clock");
-        assert!(resumed > paused.at && resumed - paused.at < 0.02, "and go on where they stopped");
+        assert!(
+            behind > 0.45,
+            "half a second paused: the waves are {behind} s behind the frame's clock"
+        );
+        assert!(
+            resumed > paused.at && resumed - paused.at < 0.02,
+            "and go on where they stopped"
+        );
     }
 
     #[test]
@@ -1377,7 +1415,10 @@ mod tests {
             assert_eq!((moments, steps), (1, 1), "{hz} Hz: one step while paused, its moment");
             frames.time.resume();
             let (moments, steps) = shared_frames(&mut frames, &spectrum, hz, 89, 40);
-            assert!(moments <= steps + 1, "{hz} Hz after resuming: {moments} moments in {steps} steps");
+            assert!(
+                moments <= steps + 1,
+                "{hz} Hz after resuming: {moments} moments in {steps} steps"
+            );
             for speed in [2.0, 0.5, 1.0] {
                 frames.time.set_speed(speed);
                 let (moments, steps) = shared_frames(&mut frames, &spectrum, hz, 129, 60);
@@ -1446,11 +1487,9 @@ mod tests {
         let exact = SpectrumField::new(settings).field(t0 + step * between, false);
         let mut exact_half = Vec::new();
         write_half_texels(&exact.texels, &mut exact_half);
-        let half = |b: &[u8]| -> Vec<f32> {
-            b.as_chunks::<2>()
-                .0
-                .iter()
-                .map(|&c| half::f16::from_bits(u16::from_le_bytes(c)).to_f32())
+        let half = |b: &[u16]| -> Vec<f32> {
+            b.iter()
+                .map(|&h| half::f16::from_bits(u16::from_le(h)).to_f32())
                 .collect()
         };
         let (a, b) = (half(&blended), half(&exact_half));
@@ -1572,6 +1611,252 @@ mod tests {
             spectrum.field(t as f32, false);
         }
         assert_eq!(held.texels, held_texels, "a held moment never changes");
+    }
+
+    /// This thread's CPU time so far, in milliseconds.
+    fn thread_cpu_ms() -> f64 {
+        #[cfg(unix)]
+        {
+            let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+            // SAFETY: `t` is a valid, writable timespec.
+            let ok = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) } == 0;
+            assert!(ok, "the thread's CPU clock");
+            t.tv_sec as f64 * 1000.0 + t.tv_nsec as f64 / 1e6
+        }
+        #[cfg(not(unix))]
+        {
+            use std::sync::OnceLock;
+            static START: OnceLock<std::time::Instant> = OnceLock::new();
+            START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64() * 1000.0
+        }
+    }
+
+    /// The conversion as it was before it was made branch-free: `v` as a
+    /// half float's bits, by cases.
+    fn reference_f16_bits(v: f32) -> u16 {
+        let bits = v.to_bits();
+        let sign = ((bits >> 16) & 0x8000) as u16;
+        let exp = ((bits >> 23) & 0xff) as i32;
+        let mant = bits & 0x007f_ffff;
+        if exp == 0xff {
+            // Infinity or NaN.
+            return sign | 0x7c00 | if mant != 0 { 0x200 } else { 0 };
+        }
+        let e = exp - 127 + 15;
+        if e >= 0x1f {
+            return sign | 0x7c00;
+        }
+        if e <= 0 {
+            // Subnormal, or zero.
+            if e < -10 {
+                return sign;
+            }
+            let m = mant | 0x0080_0000;
+            let shift = (14 - e) as u32;
+            let half = m >> shift;
+            let rest = m & ((1 << shift) - 1);
+            let mid = 1 << (shift - 1);
+            let round = u32::from(rest > mid || (rest == mid && half & 1 == 1));
+            return sign | (half + round) as u16;
+        }
+        let half = ((e as u32) << 10) | (mant >> 13);
+        let rest = mant & 0x1fff;
+        let round = u32::from(rest > 0x1000 || (rest == 0x1000 && half & 1 == 1));
+        sign | (half + round) as u16
+    }
+
+    /// The upload as it was before: the reference conversion, a float at a
+    /// time, into bytes.
+    fn reference_upload(texels: &[[f32; 4]], out: &mut Vec<u8>) {
+        out.clear();
+        out.extend(
+            texels
+                .iter()
+                .flat_map(|t| t.map(reference_f16_bits))
+                .flat_map(u16::to_le_bytes),
+        );
+    }
+
+    /// The blended upload as it was before.
+    fn reference_upload_between(a: &[[f32; 4]], b: &[[f32; 4]], f: f32, out: &mut Vec<u8>) {
+        out.clear();
+        out.extend(
+            a.iter()
+                .zip(b)
+                .flat_map(|(a, b)| std::array::from_fn::<_, 4, _>(|i| reference_f16_bits(a[i] + (b[i] - a[i]) * f)))
+                .flat_map(u16::to_le_bytes),
+        );
+    }
+
+    /// Floats where a conversion goes wrong if it does: both zeros, every
+    /// exponent with mantissas on both sides of each bit the rounding may
+    /// look at (ties included), infinities, NaNs with payloads, the edges
+    /// of the half floats' range and a million more from a fixed sequence.
+    fn interesting_floats() -> Vec<f32> {
+        let mut bits = Vec::new();
+        for sign in [0, 0x8000_0000u32] {
+            for exp in 0..=0xffu32 {
+                for k in 0..23 {
+                    let unit = 1u32 << k;
+                    for high in [0, 1, 0x155, 0x3ff] {
+                        let top = (high << 13) & 0x007f_ffff;
+                        for low in [0, unit - 1, unit, unit + 1, (unit << 1) - 1, unit | (unit >> 1)] {
+                            bits.push(sign | (exp << 23) | ((top | low) & 0x007f_ffff));
+                        }
+                    }
+                }
+            }
+        }
+        let mut x = 0x9e37_79b9u32;
+        for _ in 0..1_000_000 {
+            // xorshift32
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            bits.push(x);
+        }
+        let mut floats: Vec<f32> = bits.into_iter().map(f32::from_bits).collect();
+        floats.extend([
+            0.0,
+            -0.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            -f32::NAN,
+            f32::from_bits(0x7f80_0001),
+            f32::from_bits(0xffbf_ffff),
+            f32::from_bits(0x7fff_ffff),
+            f32::MIN_POSITIVE,
+            f32::from_bits(1),
+            f32::MAX,
+            65504.0,
+            65519.996,
+            65520.0,
+            65535.996,
+            65536.0,
+            6.103_515_6e-5, // 2^-14, the smallest normal half
+            5.960_464_5e-8, // 2^-24, the smallest subnormal half
+            2.980_232_2e-8, // 2^-25, a tie between 0 and the smallest
+            8.940_697e-8,   // 1.5 × 2^-24, a tie up to 2 × 2^-24
+            1.000_488_3,    // 1 + 2^-11, a tie down to 1
+            1.001_464_8,    // 1 + 3 × 2^-11, a tie up
+        ]);
+        floats
+    }
+
+    #[test]
+    fn f16_bits_rounds_every_interesting_float_as_the_reference() {
+        for v in interesting_floats() {
+            assert_eq!(f16_bits(v), reference_f16_bits(v), "{v:e} ({:#010x})", v.to_bits());
+        }
+    }
+
+    #[test]
+    fn the_upload_converts_every_float_as_f16_bits() {
+        let floats = interesting_floats();
+        // Texels of four, a whole number of them.
+        let texels: Vec<[f32; 4]> = floats.as_chunks::<4>().0.to_vec();
+        let mut upload = Vec::new();
+        write_half_texels(&texels, &mut upload);
+        let mut before = Vec::new();
+        reference_upload(&texels, &mut before);
+        assert_eq!(
+            bytemuck::cast_slice::<u16, u8>(&upload),
+            &before[..],
+            "the exact upload"
+        );
+        // Blends, as the reference blends: with itself (each finite float
+        // again, infinities to NaN) and with other values.
+        let shifted: Vec<[f32; 4]> = texels.iter().map(|t| t.map(|v| v * 0.75 + 0.1)).collect();
+        for (other, f) in [(&texels, 0.5), (&shifted, 0.3), (&shifted, 0.0), (&shifted, 1.0)] {
+            write_half_texels_between(&texels, other, f, &mut upload);
+            reference_upload_between(&texels, other, f, &mut before);
+            assert_eq!(
+                bytemuck::cast_slice::<u16, u8>(&upload),
+                &before[..],
+                "a blend {f} of the way"
+            );
+        }
+    }
+
+    /// Every one of the 2^32 floats converts as the reference does. Takes
+    /// a few seconds in release (minutes in debug): run by hand,
+    /// `cargo test -p ponko --lib --features 3d --release every_float_converts_as_the_reference -- --ignored`.
+    #[test]
+    #[ignore]
+    fn every_float_converts_as_the_reference() {
+        let mut texels = vec![[0.0f32; 4]; 1 << 16];
+        let (mut upload, mut before) = (Vec::new(), Vec::new());
+        for high in 0..1u32 << 14 {
+            for (i, t) in texels.iter_mut().enumerate() {
+                *t = std::array::from_fn(|j| f32::from_bits((high << 18) | ((i as u32) << 2) | j as u32));
+            }
+            write_half_texels(&texels, &mut upload);
+            reference_upload(&texels, &mut before);
+            assert_eq!(
+                bytemuck::cast_slice::<u16, u8>(&upload),
+                &before[..],
+                "floats from {:#x}",
+                high << 18
+            );
+            for t in &texels {
+                for v in t {
+                    assert_eq!(f16_bits(*v), reference_f16_bits(*v), "{:#x}", v.to_bits());
+                }
+            }
+        }
+    }
+
+    /// The WebGL2 upload's f32 to f16 conversion alone, before (a float at
+    /// a time, by cases) and after (the CPU's own conversion where it has
+    /// one), against a moment of the CPU field: thread CPU time per
+    /// upload, the medians of five runs of 100. Run by hand in release:
+    /// `cargo test -p ponko --lib --features 3d --release half_upload_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn half_upload_cost() {
+        let median = |mut v: Vec<f64>| {
+            v.sort_by(f64::total_cmp);
+            v[v.len() / 2]
+        };
+        for cells in [128, 256] {
+            let settings = WaveSpectrum::new(Vec2::new(8.0, -6.0), 1.5).with_tile(256.0, cells);
+            let spectrum = SpectrumField::new(settings);
+            let (a, b) = (spectrum.field(10.0, false), spectrum.field(10.02, false));
+            let (mut bytes, mut halves) = (Vec::new(), Vec::new());
+            let (reps, mut moment) = (100, 0);
+            let mut rows: Vec<(&str, Vec<f64>)> = Vec::new();
+            for _ in 0..5 {
+                let mut time = |name: &'static str, f: &mut dyn FnMut()| {
+                    f();
+                    let start = thread_cpu_ms();
+                    for _ in 0..reps {
+                        f();
+                    }
+                    let ms = (thread_cpu_ms() - start) / f64::from(reps);
+                    match rows.iter_mut().find(|r| r.0 == name) {
+                        Some(r) => r.1.push(ms),
+                        None => rows.push((name, vec![ms])),
+                    }
+                };
+                time("a moment of the field", &mut || {
+                    moment += 1;
+                    drop(spectrum.field(20.0 + moment as f32 * 0.02, false));
+                });
+                time("exact upload, before", &mut || reference_upload(&a.texels, &mut bytes));
+                time("exact upload, after", &mut || write_half_texels(&a.texels, &mut halves));
+                time("blended upload, before", &mut || {
+                    reference_upload_between(&a.texels, &b.texels, 0.4, &mut bytes);
+                });
+                time("blended upload, after", &mut || {
+                    write_half_texels_between(&a.texels, &b.texels, 0.4, &mut halves);
+                });
+            }
+            for (name, v) in rows {
+                let runs: Vec<String> = v.iter().map(|ms| format!("{ms:.4}")).collect();
+                eprintln!("{cells} cells, {name}: {:.4} ms (runs {})", median(v), runs.join(" "));
+            }
+        }
     }
 
     #[test]

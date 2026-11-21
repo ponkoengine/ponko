@@ -527,7 +527,7 @@ pub struct Water {
     /// The ripple simulation, where the CPU runs it (no compute shaders).
     cpu_ripples: Option<ripples::CpuRipples>,
     /// The spectrum's field as uploaded, where the CPU works it out.
-    field_upload: Vec<u8>,
+    field_upload: Vec<u16>,
     /// Whether the ripple material carries contacts now.
     contacts_sent: bool,
     /// Whether the underwater effect is in the frame's passes now.
@@ -917,7 +917,7 @@ impl Water {
                         // No compute shaders: the CPU works the field out and uploads it.
                         None => {
                             let blended = spectrum.write_drawn(steps, floating, &mut self.field_upload);
-                            gfx.write_render_target(field, &self.field_upload);
+                            gfx.write_render_target(field, bytemuck::cast_slice(&self.field_upload));
                             blended
                         }
                     };
@@ -1065,7 +1065,7 @@ fn spawn_spectrum(ctx: &mut Ctx, field: &spectrum::SpectrumField) -> Result<Spec
     let start = ctx.gfx.try_create_render_target(n, n)?;
     let mut upload = Vec::new();
     spectrum::write_half_texels(&field.start_texels(), &mut upload);
-    ctx.gfx.write_render_target(start, &upload);
+    ctx.gfx.write_render_target(start, bytemuck::cast_slice(&upload));
     let mut materials = [<Material as crate::handle::Handle>::NONE; MAX_SPECTRUM_PASSES];
     let descs = spectrum_materials(field, start);
     for (slot, desc) in materials.iter_mut().zip(&descs) {
