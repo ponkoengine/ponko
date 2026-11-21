@@ -330,7 +330,8 @@ impl MeshData {
     }
 
     /// The triangles: [`indices`](Self::indices) three at a time, the
-    /// shape `Physics::trimesh` takes. Extra
+    #[cfg_attr(feature = "physics3d", doc = " shape [`Physics::trimesh`](crate::d3::Physics::trimesh) takes. Extra")]
+    #[cfg_attr(not(feature = "physics3d"), doc = " shape `Physics::trimesh` takes. Extra")]
     /// indices at the end that make no whole triangle are left out.
     ///
     /// ```

@@ -1,7 +1,8 @@
 //! Two-dimensional game types. Pair with `ponko::prelude::*`.
 //!
 //! `use ponko::d2::*;` brings in the types whose 3D twin has the same name
-//! in `d3` or that would otherwise carry a `2D` in their name: the
+#![cfg_attr(feature = "3d", doc = " in [`d3`](crate::d3) or that would otherwise carry a `2D` in their name: the")]
+#![cfg_attr(not(feature = "3d"), doc = " in `d3` or that would otherwise carry a `2D` in their name: the")]
 //! transform, the camera, the physics (feature `physics`), the particle
 //! emitter, the lights and occluders, and the sprite. This module is their
 //! one path, under these names, so it is the name rustdoc and the guide

@@ -124,7 +124,7 @@ pub(crate) fn context_lost() -> Error {
 /// and the parallel scheduler's batches; jobs have their own, half as
 /// many): 0 for a build without threads (the default web build), on a
 /// page that isn't cross-origin isolated, and before startup is done. See
-/// the guide's "Threads on the web" and [`Game::web_threads`](crate::Game::web_threads).
+/// the guide's "Threads on the web" and [`Game::web_threads`](crate::game::Game::web_threads).
 pub fn threads() -> usize {
     #[cfg(target_feature = "atomics")]
     return crate::web_threads::frame_threads();

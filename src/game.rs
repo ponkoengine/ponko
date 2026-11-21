@@ -233,7 +233,8 @@ impl Systems {
     pub const FOLLOW_ATTACHMENTS: SystemId = SystemId(8);
     /// Navigation update, when explicitly registered.
     pub const STEP_NAVMESH3D: SystemId = SystemId(9);
-    /// Advances every `Animator` and poses its skeleton
+    #[cfg_attr(feature = "3d", doc = " Advances every [`Animator`](crate::anim::Animator) and poses its skeleton")]
+    #[cfg_attr(not(feature = "3d"), doc = " Advances every `Animator` and poses its skeleton")]
     /// (feature `3d`). Stays at the end of [`Phase::Animate`].
     pub const UPDATE_ANIMATORS: SystemId = SystemId(10);
     /// Advances particle emitters (2D, and with feature `3d` the 3D ones
@@ -3162,7 +3163,8 @@ impl Game {
     /// a game that pauses behind a menu still sees the scenario input that
     /// closes it. To hold only physics (a pause screen whose sim systems keep
     /// running, in a window and headless alike), use
-    /// `Physics::set_paused` (2D) or
+    #[cfg_attr(feature = "physics", doc = " [`Physics::set_paused`](crate::d2::Physics::set_paused) (2D) or")]
+    #[cfg_attr(not(feature = "physics"), doc = " `Physics::set_paused` (2D) or")]
     /// `ctx.physics3d.set_paused` (3D, feature `physics3d`). Textures
     /// still load (for their sizes), but nothing is uploaded to a GPU.
     ///

@@ -30,7 +30,8 @@
 //!
 //! Freeing something others still use is defined: they draw with the
 //! default. A model whose mesh was freed draws nothing (as with
-//! `Mesh::NONE`); a material whose texture was freed
+#![cfg_attr(feature = "3d", doc = " [`Mesh::NONE`](crate::render::Mesh::NONE)); a material whose texture was freed")]
+#![cfg_attr(not(feature = "3d"), doc = " `Mesh::NONE`); a material whose texture was freed")]
 //! samples white, as if it had none; a mesh part whose material was freed
 //! draws with the default material; text in a freed font uses the built-in
 //! one. Nothing is reference counted: freeing is explicit, and handles
@@ -48,12 +49,18 @@ mod sealed {
 
 /// A handle to a resource the engine holds for the game: [`Texture`](crate::texture::Texture),
 /// [`Sound`](crate::audio::Sound), [`Font`](crate::text::Font),
-/// [`SpriteShader`](crate::render::SpriteShader), [`SpriteMaterial`](crate::render::SpriteMaterial), and with the `3d` feature `Mesh`,
-/// `Material`, `Shader`, `RenderTarget`,
-/// `Compute`, `Effect`,
-/// `GpuBuffer`, `InstanceBatch`,
-/// `TextureArray` and `TerrainTile`
-/// (with `physics3d`, `CollisionMesh` too).
+#[cfg_attr(feature = "3d", doc = " [`SpriteShader`](crate::render::SpriteShader), [`SpriteMaterial`](crate::render::SpriteMaterial), and with the `3d` feature [`Mesh`](crate::render::Mesh),")]
+#[cfg_attr(not(feature = "3d"), doc = " [`SpriteShader`](crate::render::SpriteShader), [`SpriteMaterial`](crate::render::SpriteMaterial), and with the `3d` feature `Mesh`,")]
+#[cfg_attr(feature = "3d", doc = " [`Material`](crate::render::Material), [`Shader`](crate::render::Shader), `RenderTarget`,")]
+#[cfg_attr(not(feature = "3d"), doc = " `Material`, `Shader`, `RenderTarget`,")]
+#[cfg_attr(feature = "3d", doc = " [`Compute`](crate::render::Compute), [`Effect`](crate::render::Effect),")]
+#[cfg_attr(not(feature = "3d"), doc = " `Compute`, `Effect`,")]
+#[cfg_attr(feature = "3d", doc = " [`GpuBuffer`](crate::render::GpuBuffer), [`InstanceBatch`](crate::render::InstanceBatch),")]
+#[cfg_attr(not(feature = "3d"), doc = " `GpuBuffer`, `InstanceBatch`,")]
+#[cfg_attr(feature = "3d", doc = " [`TextureArray`](crate::terrain::TextureArray) and [`TerrainTile`](crate::terrain::TerrainTile)")]
+#[cfg_attr(not(feature = "3d"), doc = " `TextureArray` and `TerrainTile`")]
+#[cfg_attr(feature = "physics3d", doc = " (with `physics3d`, [`CollisionMesh`](crate::d3::CollisionMesh) too).")]
+#[cfg_attr(not(feature = "physics3d"), doc = " (with `physics3d`, `CollisionMesh` too).")]
 ///
 /// Each kind is its own type, so passing one kind where another is wanted
 /// doesn't compile: a mesh is not a texture, and a texture is not a render

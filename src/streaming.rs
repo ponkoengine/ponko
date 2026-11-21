@@ -24,7 +24,8 @@
 //! feature) says which cells of a grid to load or drop as the camera moves.
 //!
 //! [`Graphics::stream_texture`](crate::gfx::Graphics::stream_texture) (and, with the `3d` feature,
-//! `Graphics::stream_mesh`) never wait: the first call starts decoding the file
+#![cfg_attr(feature = "3d", doc = " [`Graphics::stream_mesh`](crate::gfx::Graphics::stream_mesh)) never wait: the first call starts decoding the file")]
+#![cfg_attr(not(feature = "3d"), doc = " `Graphics::stream_mesh`) never wait: the first call starts decoding the file")]
 //! on a [`Job`] thread and returns `None`; once decoded, the
 //! asset is uploaded at the start of a frame, within the
 //! [upload budget](crate::gfx::Graphics::set_upload_budget). A texture appears first as a

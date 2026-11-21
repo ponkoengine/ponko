@@ -1,7 +1,8 @@
 //! Rendering: GPU capabilities and frame statistics, and with the `3d`
 //! feature the home of the 3D rendering types: meshes, materials, models,
 //! shaders and effects, levels of detail, instancing and render settings.
-//! `d3` re-exports them for `use ponko::d3::*;`.
+#![cfg_attr(feature = "3d", doc = " [`d3`](crate::d3) re-exports them for `use ponko::d3::*;`.")]
+#![cfg_attr(not(feature = "3d"), doc = " `d3` re-exports them for `use ponko::d3::*;`.")]
 
 #![deny(missing_docs)]
 
@@ -163,7 +164,8 @@ pub struct RenderStats {
     /// 3D pipeline variants built while drawing (crossfading level-of-detail
     /// models, buffer-driven instances), each the first time a frame needed
     /// it. Each one costs several milliseconds inside its frame; call
-    /// `Graphics::warm_render_pipelines`
+    #[cfg_attr(feature = "3d", doc = " [`Graphics::warm_render_pipelines`](crate::gfx::Graphics::warm_render_pipelines)")]
+    #[cfg_attr(not(feature = "3d"), doc = " `Graphics::warm_render_pipelines`")]
     /// while loading to build them up front. Always 0 without the `3d` feature.
     pub pipelines_built: usize,
     /// What the renderer sent to the GPU since the frame before: bytes
