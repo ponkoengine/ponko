@@ -17,8 +17,13 @@
 //! browser object (it looks the pad up in `navigator.getGamepads()` each
 //! time), so it is as good in a build with threads as in one without.
 //!
-//! The browser's actuators drive the two body motors only: trigger motors
-//! (`trigger-rumble`) are not used, and the capability stays `false`.
+//! Trigger motors follow the same rules as on the desktop: a pad whose
+//! actuator lists the `trigger-rumble` effect (in `effects`, or through the
+//! older `canPlayEffectType`) reports `capabilities.trigger_rumble` and
+//! plays the trigger levels with the body motors' in one `trigger-rumble`
+//! effect; on any other pad the trigger levels are dropped, the body motors
+//! still play (`dual-rumble`), and a request for the triggers alone plays
+//! nothing ([`WebEffect::for_pad`]).
 
 use web_time::{Duration, Instant};
 
@@ -30,15 +35,65 @@ pub(crate) const EFFECT_MS: u32 = 2000;
 /// again: half of [`EFFECT_MS`], so a late frame never leaves a gap.
 pub(crate) const RESEND: Duration = Duration::from_millis(1000);
 
+/// One effect for a pad's `vibrationActuator`, levels `0..=1`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum WebEffect {
+    /// `dual-rumble`: the two body motors.
+    Dual { strong: f32, weak: f32 },
+    /// `trigger-rumble`: the body motors and the two trigger motors.
+    Trigger {
+        strong: f32,
+        weak: f32,
+        left: f32,
+        right: f32,
+    },
+}
+
+impl WebEffect {
+    /// The effect that plays `levels` on a pad with trigger motors
+    /// (`triggers`) or without, by the desktop's rules: the triggers'
+    /// levels reach a pad that has trigger motors and are dropped on one
+    /// that hasn't, where the body motors still play. `None`: nothing to
+    /// play (every motor the pad has is off).
+    pub(crate) fn for_pad(levels: MotorLevels, triggers: bool) -> Option<WebEffect> {
+        let MotorLevels {
+            strong,
+            weak,
+            left_trigger: left,
+            right_trigger: right,
+        } = levels;
+        if triggers && (left > 0.0 || right > 0.0) {
+            Some(WebEffect::Trigger {
+                strong,
+                weak,
+                left,
+                right,
+            })
+        } else if strong > 0.0 || weak > 0.0 {
+            Some(WebEffect::Dual { strong, weak })
+        } else {
+            None
+        }
+    }
+
+    /// The browser's name for it, `playEffect`'s first argument.
+    pub(crate) fn kind(self) -> &'static str {
+        match self {
+            WebEffect::Dual { .. } => "dual-rumble",
+            WebEffect::Trigger { .. } => "trigger-rumble",
+        }
+    }
+}
+
 /// What the browser is asked to do with a pad's `vibrationActuator`.
 pub(crate) trait Actuators {
     /// The clock the re-sending counts on (a test's replaces it).
     fn now(&self) -> Instant {
         Instant::now()
     }
-    /// `playEffect("dual-rumble", ...)` on the pad at browser `index`; a
+    /// `playEffect(effect.kind(), ...)` on the pad at browser `index`; a
     /// new effect replaces the one playing.
-    fn play(&mut self, index: u32, strong: f32, weak: f32, duration_ms: u32);
+    fn play(&mut self, index: u32, effect: WebEffect, duration_ms: u32);
     /// `reset()`: stops whatever plays on that pad.
     fn stop(&mut self, index: u32);
 }
@@ -49,7 +104,7 @@ struct Playing {
     device: DeviceKey,
     /// Its place in `navigator.getGamepads()`.
     index: u32,
-    levels: MotorLevels,
+    effect: WebEffect,
     sent: Instant,
 }
 
@@ -60,22 +115,30 @@ pub(crate) struct WebRumble {
 }
 
 impl WebRumble {
-    /// The engine's wish for `device` (browser pad `index`): plays the body
-    /// motors' levels now, or stops the pad when they are off.
-    pub(crate) fn set(&mut self, actuators: &mut impl Actuators, device: DeviceKey, index: u32, levels: MotorLevels) {
+    /// The engine's wish for `device` (browser pad `index`, with trigger
+    /// motors or not): plays the levels the pad has motors for now
+    /// ([`WebEffect::for_pad`]), or stops the pad when they are off.
+    pub(crate) fn set(
+        &mut self,
+        actuators: &mut impl Actuators,
+        device: DeviceKey,
+        index: u32,
+        triggers: bool,
+        levels: MotorLevels,
+    ) {
         let was = self.playing.iter().position(|p| p.device == device);
-        if levels.strong <= 0.0 && levels.weak <= 0.0 {
+        let Some(effect) = WebEffect::for_pad(levels, triggers) else {
             if let Some(at) = was {
                 let old = self.playing.swap_remove(at);
                 actuators.stop(old.index);
             }
             return;
-        }
+        };
         let now = actuators.now();
         let playing = Playing {
             device,
             index,
-            levels,
+            effect,
             sent: now,
         };
         match was {
@@ -87,7 +150,7 @@ impl WebRumble {
             }
             None => self.playing.push(playing),
         }
-        actuators.play(index, levels.strong, levels.weak, EFFECT_MS);
+        actuators.play(index, effect, EFFECT_MS);
     }
 
     /// Once per frame: plays again what was last sent a [`RESEND`] ago.
@@ -99,7 +162,7 @@ impl WebRumble {
         for p in &mut self.playing {
             if now.saturating_duration_since(p.sent) >= RESEND {
                 p.sent = now;
-                actuators.play(p.index, p.levels.strong, p.levels.weak, EFFECT_MS);
+                actuators.play(p.index, p.effect, EFFECT_MS);
             }
         }
     }
@@ -121,6 +184,8 @@ pub(crate) struct BrowserPad {
     pub(crate) id: String,
     /// Whether it has a `vibrationActuator` that plays effects.
     pub(crate) rumble: bool,
+    /// Whether that actuator plays `trigger-rumble`.
+    pub(crate) trigger_rumble: bool,
 }
 
 /// The browser's pad for the `nth` connected pad of the engine's backend
@@ -151,6 +216,24 @@ impl Browser {
             .filter(|v| !v.is_undefined() && !v.is_null())
     }
 
+    /// Whether `pad`'s actuator plays `trigger-rumble`: it lists it in
+    /// `effects` or, in browsers from before that list, says yes to
+    /// `canPlayEffectType("trigger-rumble")`.
+    pub(crate) fn has_trigger_actuator(pad: &wasm_bindgen::JsValue) -> bool {
+        use wasm_bindgen::{JsCast, JsValue};
+        let Some(actuator) = Self::actuator(pad) else {
+            return false;
+        };
+        let wanted = JsValue::from_str("trigger-rumble");
+        if let Some(effects) = Self::get(&actuator, "effects") {
+            return js_sys::Array::is_array(&effects) && js_sys::Array::from(&effects).includes(&wanted, 0);
+        }
+        Self::get(&actuator, "canPlayEffectType")
+            .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+            .and_then(|f| f.call1(&actuator, &wanted).ok())
+            .is_some_and(|yes| yes.is_truthy())
+    }
+
     fn actuator(pad: &wasm_bindgen::JsValue) -> Option<wasm_bindgen::JsValue> {
         let actuator = Self::get(pad, "vibrationActuator")?;
         Self::get(&actuator, "playEffect")?;
@@ -171,6 +254,7 @@ impl Browser {
                 index,
                 id,
                 rumble: Self::has_actuator(pad),
+                trigger_rumble: Self::has_trigger_actuator(pad),
             });
         });
         out
@@ -236,24 +320,39 @@ impl Browser {
 
 #[cfg(target_arch = "wasm32")]
 impl Actuators for Browser {
-    fn play(&mut self, index: u32, strong: f32, weak: f32, duration_ms: u32) {
+    fn play(&mut self, index: u32, effect: WebEffect, duration_ms: u32) {
         use wasm_bindgen::JsValue;
         let Some(actuator) = Self::actuator_at(index) else {
             return;
         };
         let params = js_sys::Object::new();
-        for (key, value) in [
-            ("startDelay", 0.0),
-            ("duration", f64::from(duration_ms)),
-            ("weakMagnitude", f64::from(weak.clamp(0.0, 1.0))),
-            ("strongMagnitude", f64::from(strong.clamp(0.0, 1.0))),
-        ] {
+        let set = |key: &str, value: f64| {
             let _ = js_sys::Reflect::set(&params, &JsValue::from_str(key), &JsValue::from_f64(value));
+        };
+        let level = |v: f32| f64::from(v.clamp(0.0, 1.0));
+        set("startDelay", 0.0);
+        set("duration", f64::from(duration_ms));
+        match effect {
+            WebEffect::Dual { strong, weak } => {
+                set("weakMagnitude", level(weak));
+                set("strongMagnitude", level(strong));
+            }
+            WebEffect::Trigger {
+                strong,
+                weak,
+                left,
+                right,
+            } => {
+                set("weakMagnitude", level(weak));
+                set("strongMagnitude", level(strong));
+                set("leftTrigger", level(left));
+                set("rightTrigger", level(right));
+            }
         }
         Self::call(
             &actuator,
             "playEffect",
-            &[JsValue::from_str("dual-rumble"), params.into()],
+            &[JsValue::from_str(effect.kind()), params.into()],
         );
     }
 
@@ -273,12 +372,7 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq)]
     enum Call {
-        Play {
-            index: u32,
-            strong: f32,
-            weak: f32,
-            ms: u32,
-        },
+        Play { index: u32, effect: WebEffect, ms: u32 },
         Stop(u32),
     }
 
@@ -308,13 +402,8 @@ mod tests {
         fn now(&self) -> Instant {
             self.start + self.elapsed.get()
         }
-        fn play(&mut self, index: u32, strong: f32, weak: f32, ms: u32) {
-            self.calls.push(Call::Play {
-                index,
-                strong,
-                weak,
-                ms,
-            });
+        fn play(&mut self, index: u32, effect: WebEffect, ms: u32) {
+            self.calls.push(Call::Play { index, effect, ms });
         }
         fn stop(&mut self, index: u32) {
             self.calls.push(Call::Stop(index));
@@ -332,10 +421,13 @@ mod tests {
     const PAD: DeviceKey = DeviceKey(2);
 
     fn play(strong: f32, weak: f32) -> Call {
+        play_at(2, strong, weak)
+    }
+
+    fn play_at(index: u32, strong: f32, weak: f32) -> Call {
         Call::Play {
-            index: 2,
-            strong,
-            weak,
+            index,
+            effect: WebEffect::Dual { strong, weak },
             ms: EFFECT_MS,
         }
     }
@@ -353,7 +445,7 @@ mod tests {
     fn rumble_plays_at_once_with_the_engines_levels() {
         let (mut fake, _) = Fake::new();
         let mut rumble = WebRumble::default();
-        rumble.set(&mut fake, PAD, 2, levels(0.8, 0.3));
+        rumble.set(&mut fake, PAD, 2, false, levels(0.8, 0.3));
         assert_eq!(fake.take(), [play(0.8, 0.3)]);
     }
 
@@ -361,7 +453,7 @@ mod tests {
     fn rumble_is_sent_again_before_the_browsers_cap_for_as_long_as_it_plays() {
         let (mut fake, clock) = Fake::new();
         let mut rumble = WebRumble::default();
-        rumble.set(&mut fake, PAD, 2, levels(1.0, 0.5));
+        rumble.set(&mut fake, PAD, 2, false, levels(1.0, 0.5));
         fake.take();
         // Every frame for 12 seconds (a rumble that outlasts two caps).
         let mut sent = Vec::new();
@@ -390,7 +482,7 @@ mod tests {
     fn nothing_is_sent_between_the_resends() {
         let (mut fake, clock) = Fake::new();
         let mut rumble = WebRumble::default();
-        rumble.set(&mut fake, PAD, 2, levels(1.0, 0.0));
+        rumble.set(&mut fake, PAD, 2, false, levels(1.0, 0.0));
         fake.take();
         clock.set(RESEND - Duration::from_millis(1));
         rumble.refresh(&mut fake);
@@ -401,11 +493,11 @@ mod tests {
     fn off_stops_the_pad_once_and_ends_the_resending() {
         let (mut fake, clock) = Fake::new();
         let mut rumble = WebRumble::default();
-        rumble.set(&mut fake, PAD, 2, levels(1.0, 1.0));
+        rumble.set(&mut fake, PAD, 2, false, levels(1.0, 1.0));
         fake.take();
-        rumble.set(&mut fake, PAD, 2, MotorLevels::OFF);
+        rumble.set(&mut fake, PAD, 2, false, MotorLevels::OFF);
         assert_eq!(fake.take(), [Call::Stop(2)]);
-        rumble.set(&mut fake, PAD, 2, MotorLevels::OFF);
+        rumble.set(&mut fake, PAD, 2, false, MotorLevels::OFF);
         clock.set(Duration::from_secs(10));
         rumble.refresh(&mut fake);
         assert!(
@@ -415,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn trigger_motors_alone_play_nothing() {
+    fn trigger_motors_alone_play_nothing_on_a_pad_without_them() {
         let (mut fake, _) = Fake::new();
         let mut rumble = WebRumble::default();
         let triggers = MotorLevels {
@@ -423,7 +515,7 @@ mod tests {
             right_trigger: 1.0,
             ..MotorLevels::OFF
         };
-        rumble.set(&mut fake, PAD, 2, triggers);
+        rumble.set(&mut fake, PAD, 2, false, triggers);
         assert!(fake.take().is_empty(), "the browser's body motors only");
     }
 
@@ -431,9 +523,9 @@ mod tests {
     fn new_levels_replace_the_old_ones_and_restart_the_resend_clock() {
         let (mut fake, clock) = Fake::new();
         let mut rumble = WebRumble::default();
-        rumble.set(&mut fake, PAD, 2, levels(1.0, 0.0));
+        rumble.set(&mut fake, PAD, 2, false, levels(1.0, 0.0));
         clock.set(Duration::from_millis(900));
-        rumble.set(&mut fake, PAD, 2, levels(0.2, 0.4));
+        rumble.set(&mut fake, PAD, 2, false, levels(0.2, 0.4));
         fake.take();
         clock.set(Duration::from_millis(1500));
         rumble.refresh(&mut fake);
@@ -447,43 +539,23 @@ mod tests {
     fn a_pad_that_is_gone_is_forgotten_without_a_call() {
         let (mut fake, clock) = Fake::new();
         let mut rumble = WebRumble::default();
-        rumble.set(&mut fake, PAD, 2, levels(1.0, 1.0));
-        rumble.set(&mut fake, DeviceKey(3), 3, levels(0.5, 0.5));
+        rumble.set(&mut fake, PAD, 2, false, levels(1.0, 1.0));
+        rumble.set(&mut fake, DeviceKey(3), 3, false, levels(0.5, 0.5));
         fake.take();
         rumble.forget(PAD);
         clock.set(Duration::from_secs(2));
         rumble.refresh(&mut fake);
-        assert_eq!(
-            fake.take(),
-            [Call::Play {
-                index: 3,
-                strong: 0.5,
-                weak: 0.5,
-                ms: EFFECT_MS
-            }],
-            "only the other pad plays on"
-        );
+        assert_eq!(fake.take(), [play_at(3, 0.5, 0.5)], "only the other pad plays on");
     }
 
     #[test]
     fn a_pad_that_moved_in_the_browsers_list_stops_where_it_was() {
         let (mut fake, _) = Fake::new();
         let mut rumble = WebRumble::default();
-        rumble.set(&mut fake, PAD, 2, levels(1.0, 1.0));
+        rumble.set(&mut fake, PAD, 2, false, levels(1.0, 1.0));
         fake.take();
-        rumble.set(&mut fake, PAD, 1, levels(1.0, 1.0));
-        assert_eq!(
-            fake.take(),
-            [
-                Call::Stop(2),
-                Call::Play {
-                    index: 1,
-                    strong: 1.0,
-                    weak: 1.0,
-                    ms: EFFECT_MS
-                }
-            ]
-        );
+        rumble.set(&mut fake, PAD, 1, false, levels(1.0, 1.0));
+        assert_eq!(fake.take(), [Call::Stop(2), play_at(1, 1.0, 1.0)]);
     }
 
     fn browser(index: u32, id: &str, rumble: bool) -> BrowserPad {
@@ -491,7 +563,95 @@ mod tests {
             index,
             id: id.into(),
             rumble,
+            trigger_rumble: false,
         }
+    }
+
+    fn with_triggers(strong: f32, weak: f32, left: f32, right: f32) -> MotorLevels {
+        MotorLevels {
+            strong,
+            weak,
+            left_trigger: left,
+            right_trigger: right,
+        }
+    }
+
+    #[test]
+    fn a_pad_with_trigger_motors_plays_all_four_motors_as_one_trigger_rumble() {
+        let (mut fake, _) = Fake::new();
+        let mut rumble = WebRumble::default();
+        rumble.set(&mut fake, PAD, 2, true, with_triggers(0.0, 0.2, 0.4, 0.9));
+        let effect = WebEffect::Trigger {
+            strong: 0.0,
+            weak: 0.2,
+            left: 0.4,
+            right: 0.9,
+        };
+        assert_eq!(effect.kind(), "trigger-rumble");
+        assert_eq!(
+            fake.take(),
+            [Call::Play {
+                index: 2,
+                effect,
+                ms: EFFECT_MS
+            }]
+        );
+    }
+
+    #[test]
+    fn trigger_levels_are_dropped_on_a_pad_without_trigger_motors_and_the_body_motors_still_play() {
+        let (mut fake, _) = Fake::new();
+        let mut rumble = WebRumble::default();
+        rumble.set(&mut fake, PAD, 2, false, with_triggers(0.0, 0.2, 0.4, 0.9));
+        assert_eq!(fake.take(), [play(0.0, 0.2)], "dual-rumble, as the desktop drops them");
+    }
+
+    #[test]
+    fn body_rumble_alone_stays_dual_rumble_on_a_pad_with_trigger_motors() {
+        let (mut fake, _) = Fake::new();
+        let mut rumble = WebRumble::default();
+        rumble.set(&mut fake, PAD, 2, true, levels(0.8, 0.3));
+        assert_eq!(fake.take(), [play(0.8, 0.3)]);
+    }
+
+    #[test]
+    fn trigger_rumble_alone_plays_and_is_replayed_and_stopped_on_a_pad_with_trigger_motors() {
+        let (mut fake, clock) = Fake::new();
+        let mut rumble = WebRumble::default();
+        let triggers = with_triggers(0.0, 0.0, 1.0, 0.5);
+        rumble.set(&mut fake, PAD, 2, true, triggers);
+        let effect = WebEffect::Trigger {
+            strong: 0.0,
+            weak: 0.0,
+            left: 1.0,
+            right: 0.5,
+        };
+        let want = Call::Play {
+            index: 2,
+            effect,
+            ms: EFFECT_MS,
+        };
+        assert_eq!(fake.take(), [want.clone()]);
+        clock.set(RESEND);
+        rumble.refresh(&mut fake);
+        assert_eq!(fake.take(), [want], "replayed before the cap, as body rumble is");
+        rumble.set(&mut fake, PAD, 2, true, MotorLevels::OFF);
+        assert_eq!(fake.take(), [Call::Stop(2)]);
+    }
+
+    #[test]
+    fn the_effect_for_each_pad_follows_the_desktop_rules() {
+        let only_triggers = with_triggers(0.0, 0.0, 0.3, 0.0);
+        assert_eq!(WebEffect::for_pad(only_triggers, false), None);
+        assert!(matches!(
+            WebEffect::for_pad(only_triggers, true),
+            Some(WebEffect::Trigger { left, .. }) if left == 0.3
+        ));
+        assert_eq!(WebEffect::for_pad(MotorLevels::OFF, true), None);
+        assert_eq!(
+            WebEffect::for_pad(levels(0.5, 0.0), true).map(WebEffect::kind),
+            Some("dual-rumble")
+        );
     }
 
     #[test]

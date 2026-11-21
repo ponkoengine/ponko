@@ -12,6 +12,8 @@ import {
   checkGamepadStep,
   checkRumbleCalls,
   checkSameResult,
+  checkTriggerCapabilities,
+  checkTriggerRumbleCalls,
   checkWarningBuild,
   denyWarnings,
   EFFECT_CAP_MS,
@@ -26,6 +28,9 @@ import {
   PLAIN_DIR,
   summarize,
   summaryTable,
+  TRIGGER_PADS,
+  TRIGGER_RUMBLE,
+  triggerRumbleDone,
 } from "./threads-lib.mjs";
 
 const isolatedRun = {
@@ -207,6 +212,7 @@ test("each gamepad step passes only on what the engine must report", () => {
     vendor: 0x045e,
     product: 0x0b13,
     rumble: true,
+    trigger_rumble: false,
     down,
     axes: { lx: 0, ly: 0, rx: 0, ry: 0, lt: 0, rt: 0, ...axes },
     ...extra,
@@ -218,6 +224,7 @@ test("each gamepad step passes only on what the engine must report", () => {
   assert.match(checkGamepadStep(connect, { pads: [] })[0], /one pad/);
   assert.match(checkGamepadStep(connect, { pads: [{ ...pad([], {}), family: "Generic" }] })[0], /family/);
   assert.match(checkGamepadStep(connect, { pads: [{ ...pad([], {}), rumble: false }] })[0], /rumble capability/);
+  assert.match(checkGamepadStep(connect, { pads: [{ ...pad([], {}), trigger_rumble: true }] })[0], /trigger rumble capability/);
   const pressed = { pads: [pad(["DPadRight", "South"], { lx: 0.5, ly: -1, ry: 0.75, lt: 0.25 })], pad_presses: 1 };
   assert.deepEqual(checkGamepadStep(press, pressed), []);
   // Y up must stay negative, and a quarter-pulled trigger isn't a press.
@@ -293,4 +300,60 @@ test("rumble fails on wrong levels, no stop, or a stop at the wrong time", () =>
   assert.ok(checkRumbleCalls([play(0, { strong: 1 }), play(1000), stop(2500)]).some((p) => /levels/.test(p)));
   assert.ok(checkRumbleCalls([play(0), play(1000), play(2000)]).some((p) => /not the stop/.test(p)));
   assert.ok(checkRumbleCalls([play(0), play(1000), stop(1200)]).some((p) => /it stopped after/.test(p)));
+});
+
+test("a pad fed with trigger rumble lists trigger-rumble in its actuator's effects and records the trigger levels", async () => {
+  const { scope, clock } = fakeScope();
+  installFakeGamepads(scope);
+  scope.__ponkoFeedGamepads(TRIGGER_PADS());
+  const [triggers, body] = scope.navigator.getGamepads();
+  assert.deepEqual(triggers.vibrationActuator.effects, ["dual-rumble", "trigger-rumble"]);
+  assert.deepEqual(body.vibrationActuator.effects, ["dual-rumble"]);
+  assert.equal(triggers.triggerRumble, undefined, "the flag isn't a property of the browser's Gamepad");
+  clock.now = 500;
+  const params = { startDelay: 0, duration: 2000, strongMagnitude: 0, weakMagnitude: 0.2, leftTrigger: 0.4, rightTrigger: 0.9 };
+  assert.equal(await triggers.vibrationActuator.playEffect("trigger-rumble", params), "complete");
+  await assert.rejects(body.vibrationActuator.playEffect("trigger-rumble", params), TypeError, "not one of its effects");
+  assert.deepEqual(scope.__ponkoRumbleCalls, [
+    { kind: "play", index: 0, type: "trigger-rumble", duration: 2000, strong: 0, weak: 0.2, left: 0.4, right: 0.9, delay: 0, at: 500 },
+    { kind: "rejected", index: 1, type: "trigger-rumble", duration: 2000, strong: 0, weak: 0.2, left: 0.4, right: 0.9, delay: 0, at: 500 },
+  ]);
+});
+
+test("both pads must report their trigger capability", () => {
+  const pad = (slot, trigger_rumble) => ({ slot, rumble: true, trigger_rumble });
+  assert.deepEqual(checkTriggerCapabilities({ pads: [pad(1, false), pad(0, true)] }), []);
+  assert.match(checkTriggerCapabilities({ pads: [pad(0, false), pad(1, false)] })[0], /plays trigger-rumble reports/);
+  assert.match(checkTriggerCapabilities({ pads: [pad(0, true), pad(1, true)] })[0], /doesn't reports/);
+  assert.match(checkTriggerCapabilities({ pads: [pad(0, true)] })[0], /two pads/);
+});
+
+const want = TRIGGER_RUMBLE;
+const triggerPlay = (at, extra = {}) => ({
+  kind: "play", index: 0, type: "trigger-rumble", duration: 2000, strong: want.strong, weak: want.weak, left: want.left, right: want.right, delay: 0, at, ...extra,
+});
+const bodyPlay = (at, extra = {}) => ({
+  kind: "play", index: 1, type: "dual-rumble", duration: 2000, strong: want.strong, weak: want.weak, delay: 0, at, ...extra,
+});
+const reset = (index, at) => ({ kind: "reset", index, at });
+const ms = want.seconds * 1000;
+
+test("trigger rumble passes when the pad with trigger motors gets trigger-rumble and the other dual-rumble, both stopped", () => {
+  const calls = [triggerPlay(0), bodyPlay(1), triggerPlay(1000), bodyPlay(1001), reset(0, ms), reset(1, ms + 1)];
+  assert.deepEqual(checkTriggerRumbleCalls(calls), []);
+  assert.ok(triggerRumbleDone(calls));
+  assert.ok(!triggerRumbleDone(calls.slice(0, -1)), "the second pad isn't stopped yet");
+});
+
+test("trigger rumble fails when the fallback differs from the desktop's, or levels or the stop are wrong", () => {
+  // The pad without trigger motors got trigger-rumble (refused by a browser) or nothing.
+  const refused = { ...triggerPlay(1, { index: 1 }), kind: "rejected" };
+  assert.ok(checkTriggerRumbleCalls([triggerPlay(0), refused, reset(0, ms), reset(1, ms)]).some((p) => /refused/.test(p)));
+  assert.ok(checkTriggerRumbleCalls([triggerPlay(0), reset(0, ms), reset(1, ms)]).some((p) => /pad 1 was never played/.test(p)));
+  // The pad with trigger motors got only dual-rumble: its triggers were dropped.
+  assert.ok(checkTriggerRumbleCalls([bodyPlay(0, { index: 0 }), bodyPlay(1), reset(0, ms), reset(1, ms)]).some((p) => /pad 0 got a dual-rumble/.test(p)));
+  assert.ok(checkTriggerRumbleCalls([triggerPlay(0, { right: 0.1 }), bodyPlay(1), reset(0, ms), reset(1, ms)]).some((p) => /trigger levels/.test(p)));
+  assert.ok(checkTriggerRumbleCalls([triggerPlay(0), bodyPlay(1, { weak: 0 }), reset(0, ms), reset(1, ms)]).some((p) => /pad 1: body levels/.test(p)));
+  assert.ok(checkTriggerRumbleCalls([triggerPlay(0), bodyPlay(1), reset(1, ms)]).some((p) => /pad 0's last call/.test(p)));
+  assert.ok(checkTriggerRumbleCalls([triggerPlay(0), bodyPlay(1), reset(0, 200), reset(1, ms)]).some((p) => /pad 0 stopped after/.test(p)));
 });

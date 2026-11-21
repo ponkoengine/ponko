@@ -23,6 +23,9 @@
 // the engine sees them connect, press, move and leave; the pads have a fake
 // `vibrationActuator` that records its calls, and the game's rumble must
 // reach it (played again before the browser's 5 s cap, stopped at its end).
+// Then two pads, one whose actuator lists `trigger-rumble`: a rumble with
+// trigger levels must reach it as `trigger-rumble` and the other pad as
+// `dual-rumble` with the trigger levels dropped, as on the desktop.
 // Real rumble can't be felt in a headless browser: the recorded calls are
 // the proof. `--case gamepads-plain` runs it on the ordinary web build of
 // the same fixture, whose pads come from gilrs, not the threaded backend.
@@ -55,6 +58,11 @@ import {
   checkGamepadStep,
   checkRumbleCalls,
   checkSameResult,
+  checkTriggerCapabilities,
+  checkTriggerRumbleCalls,
+  TRIGGER_PADS,
+  TRIGGER_PRESS,
+  triggerRumbleDone,
   checkWarningBuild,
   denyWarnings,
   fakeGamepad,
@@ -206,9 +214,33 @@ async function gamepads(browser, servers, args, report, plain = false) {
       `${seen.filter((c) => c.kind === "reset").length} stop(s)${rumbleProblems.length ? `: ${rumbleProblems.join("; ")}` : ", as the game asked"}`,
   );
   problems.push(...rumbleProblems.map((p) => `rumble: ${p}`));
+  // Trigger rumble: North on two pads, one with trigger motors.
+  await feed([]);
+  await until(page, lines, (s) => (s?.pads ?? []).length === 0, 10, "the pads leaving");
+  await feed(TRIGGER_PADS());
+  const twoPads = await until(page, lines, (s) => (s?.pads ?? []).length === 2, 10, "two pads connecting");
+  const capabilityProblems = checkTriggerCapabilities(twoPads);
+  await withDeadline(page.evaluate(() => (window.__ponkoRumbleCalls.length = 0)), CALL_TIMEOUT_MS, "clearing the rumble calls");
+  await feed(TRIGGER_PADS(TRIGGER_PRESS));
+  const triggerEnd = Date.now() + 12_000;
+  let triggerCalls = [];
+  while (Date.now() < triggerEnd) {
+    triggerCalls = await calls();
+    if (triggerRumbleDone(triggerCalls)) break;
+    await sleep(100);
+  }
+  const triggerProblems = [...capabilityProblems, ...checkTriggerRumbleCalls(triggerCalls)];
+  const kinds = (index) => [...new Set(triggerCalls.filter((c) => c.index === index && c.kind === "play").map((c) => c.type))].join(",") || "nothing";
+  console.log(
+    `gamepads, trigger rumble: the pad with trigger motors got ${kinds(0)}, the other ${kinds(1)}` +
+      (triggerProblems.length ? `: ${triggerProblems.join("; ")}` : ", as on the desktop"),
+  );
+  problems.push(...triggerProblems.map((p) => `trigger rumble: ${p}`));
   await feed([]);
   const final = await state(page);
-  report.runs = { gamepads: { steps, rumble_calls: seen, threads: final?.threads, console: lines } };
+  report.runs = {
+    gamepads: { steps, rumble_calls: seen, trigger_rumble_calls: triggerCalls, threads: final?.threads, console: lines },
+  };
   const threads = final?.threads;
   if (plain) {
     if (threads !== 0) problems.push(`the ordinary build ran ${threads} worker threads, not 0`);

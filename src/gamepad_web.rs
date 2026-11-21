@@ -17,13 +17,14 @@
 //! as the engine has them). Triggers report their value as an axis and,
 //! when the browser says they are pressed, as a button. A pad's key is its
 //! browser index. Rumble goes to the pad's `vibrationActuator` where the
-//! browser has one (see [`crate::web_rumble`]); there is no motion, as with
+//! browser has one, the trigger motors' with it where that plays
+//! `trigger-rumble` (see [`crate::web_rumble`]); there is no motion, as with
 //! gilrs on the web.
 
 use crate::input::{
     ControllerFamily, DeviceKey, GamepadAxis, GamepadBackend, GamepadButton, GamepadEvents, GamepadInfo, MotorLevels,
 };
-use crate::web_rumble::{Actuators, WebRumble};
+use crate::web_rumble::{Actuators, WebEffect, WebRumble};
 
 /// Buttons of the standard layout the engine reads (16 is the home button,
 /// which it has no name for).
@@ -83,6 +84,8 @@ pub(crate) struct PadReading {
     /// Whether the pad has a `vibrationActuator`. Read with `id`, so only
     /// meaningful when that is `Some`.
     pub(crate) rumble: bool,
+    /// Whether that actuator plays `trigger-rumble`. Read with `id`, too.
+    pub(crate) trigger_rumble: bool,
     pub(crate) buttons: [ButtonReading; BUTTONS],
     pub(crate) axes: [f32; AXES],
 }
@@ -99,6 +102,8 @@ pub(crate) trait ReadPads: Actuators + Send + 'static {
 #[derive(Debug, Clone)]
 struct Known {
     index: u32,
+    /// Whether its actuator plays the trigger motors.
+    trigger_rumble: bool,
     buttons: [ButtonReading; BUTTONS],
     axes: [f32; AXES],
 }
@@ -177,9 +182,11 @@ impl<R: ReadPads> GamepadBackend for WebGamepads<R> {
                     }
                     let mut info = info_from_id(reading.id.as_deref().unwrap_or(""));
                     info.capabilities.rumble = reading.rumble;
+                    info.capabilities.trigger_rumble = reading.trigger_rumble;
                     events.connected(device, info);
                     self.known.push(Known {
                         index: reading.index,
+                        trigger_rumble: reading.trigger_rumble,
                         buttons: [ButtonReading::default(); BUTTONS],
                         axes: [0.0; AXES],
                     });
@@ -208,13 +215,15 @@ impl<R: ReadPads> GamepadBackend for WebGamepads<R> {
         self.rumble.refresh(&mut self.reader);
     }
 
-    /// Plays the body motors on the pad's `vibrationActuator`, where it has
-    /// one, again before the browser ends each effect (`web_rumble`).
+    /// Plays the motors the pad's `vibrationActuator` has (the body motors,
+    /// and the triggers' where it plays `trigger-rumble`), again before the
+    /// browser ends each effect (`web_rumble`).
     fn set_rumble(&mut self, device: DeviceKey, levels: MotorLevels) {
         let Some(known) = self.known.iter().find(|k| u64::from(k.index) == device.0) else {
             return;
         };
-        self.rumble.set(&mut self.reader, device, known.index, levels);
+        self.rumble
+            .set(&mut self.reader, device, known.index, known.trigger_rumble, levels);
     }
 }
 
@@ -225,8 +234,8 @@ pub(crate) struct BrowserPads;
 
 #[cfg(target_arch = "wasm32")]
 impl Actuators for BrowserPads {
-    fn play(&mut self, index: u32, strong: f32, weak: f32, duration_ms: u32) {
-        crate::web_rumble::Browser.play(index, strong, weak, duration_ms);
+    fn play(&mut self, index: u32, effect: WebEffect, duration_ms: u32) {
+        crate::web_rumble::Browser.play(index, effect, duration_ms);
     }
 
     fn stop(&mut self, index: u32) {
@@ -260,6 +269,7 @@ impl ReadPads for BrowserPads {
                 index,
                 id: (!known(index)).then(|| get(&pad, "id").and_then(|id| id.as_string()).unwrap_or_default()),
                 rumble: !known(index) && crate::web_rumble::Browser::has_actuator(&pad),
+                trigger_rumble: !known(index) && crate::web_rumble::Browser::has_trigger_actuator(&pad),
                 ..PadReading::default()
             };
             if let Some(buttons) = get(&pad, "buttons") {
@@ -310,6 +320,8 @@ mod tests {
         /// What the browser's actuators were asked: `(index, strong, weak,
         /// duration in ms)` per `playEffect`, `(index, 0, 0, 0)` per `reset`.
         effects: Arc<Mutex<Vec<Effect>>>,
+        /// Every `playEffect`'s effect, in order.
+        played: Arc<Mutex<Vec<WebEffect>>>,
         /// How far the test has moved the clock.
         elapsed: Arc<Mutex<Duration>>,
         start: Arc<web_time::Instant>,
@@ -321,6 +333,7 @@ mod tests {
                 pads: Arc::default(),
                 ids_read: Arc::default(),
                 effects: Arc::default(),
+                played: Arc::default(),
                 elapsed: Arc::default(),
                 start: Arc::new(web_time::Instant::now()),
             }
@@ -331,8 +344,10 @@ mod tests {
         fn now(&self) -> web_time::Instant {
             *self.start + *self.elapsed.lock().unwrap()
         }
-        fn play(&mut self, index: u32, strong: f32, weak: f32, duration_ms: u32) {
+        fn play(&mut self, index: u32, effect: WebEffect, duration_ms: u32) {
+            let (WebEffect::Dual { strong, weak } | WebEffect::Trigger { strong, weak, .. }) = effect;
             self.effects.lock().unwrap().push((index, strong, weak, duration_ms));
+            self.played.lock().unwrap().push(effect);
         }
         fn stop(&mut self, index: u32) {
             self.effects.lock().unwrap().push((index, 0.0, 0.0, 0));
@@ -563,7 +578,7 @@ mod tests {
             assert!(!ctx.input.gamepad_info(slot(1)).unwrap().capabilities.rumble);
             assert!(
                 !ctx.input.gamepad_info(slot(0)).unwrap().capabilities.trigger_rumble,
-                "body motors only"
+                "its actuator doesn't play trigger-rumble"
             );
             *count.lock().unwrap() += 1;
         });
@@ -639,5 +654,49 @@ mod tests {
             "no call for a pad that is gone: {effects:?}"
         );
         assert_eq!(effects.len(), 1, "not replayed after it left: {effects:?}");
+    }
+
+    #[test]
+    fn a_pad_whose_actuator_plays_trigger_rumble_says_so_and_gets_the_trigger_levels() {
+        let fed = Fed::default();
+        fed.set(|pads| {
+            pads.push(PadReading {
+                trigger_rumble: true,
+                ..rumbling_pad(0)
+            });
+            pads.push(rumbling_pad(1));
+        });
+        let seen = Arc::new(Mutex::new(0));
+        let count = seen.clone();
+        run(&fed, 2, move |ctx, frame| {
+            if frame == 0 {
+                let caps = |n| ctx.input.gamepad_info(slot(n)).unwrap().capabilities;
+                assert!(caps(0).trigger_rumble && caps(0).rumble);
+                assert!(!caps(1).trigger_rumble && caps(1).rumble);
+                let kick = Rumble::new(0.0, 0.2).triggers(0.4, 0.9).seconds(f32::INFINITY);
+                ctx.input.rumble(slot(0), kick);
+                ctx.input.rumble(slot(1), kick);
+                *count.lock().unwrap() += 1;
+            }
+        });
+        assert_eq!(*seen.lock().unwrap(), 1, "the checks ran");
+        let effects = fed.effects.lock().unwrap().clone();
+        let played = fed.played.lock().unwrap().clone();
+        let at = |index| effects.iter().zip(&played).find(|(e, _)| e.0 == index).map(|(_, p)| *p);
+        assert_eq!(
+            at(0),
+            Some(WebEffect::Trigger {
+                strong: 0.0,
+                weak: 0.2,
+                left: 0.4,
+                right: 0.9
+            }),
+            "the pad with trigger motors: {played:?}"
+        );
+        assert_eq!(
+            at(1),
+            Some(WebEffect::Dual { strong: 0.0, weak: 0.2 }),
+            "the pad without: the triggers dropped, as on the desktop: {played:?}"
+        );
     }
 }

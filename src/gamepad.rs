@@ -6,9 +6,10 @@
 //! (evdev) and Windows; nothing on macOS. On the web its backend has no
 //! force feedback either, so there the engine plays rumble itself through
 //! the browser's `vibrationActuator` (`web_rumble`), finding each pad in
-//! `navigator.getGamepads()` by its name. It reads no gyro or
-//! accelerometer and drives no trigger motors anywhere, so those
-//! capabilities are reported `false`.
+//! `navigator.getGamepads()` by its name, with the trigger motors where
+//! the browser's actuator plays `trigger-rumble`. It reads no gyro or
+//! accelerometer anywhere and drives no trigger motors on the desktop, so
+//! those capabilities are reported `false` there.
 
 use gilrs::ff::Effect;
 use gilrs::{Axis, Button, EventType, GamepadId, Gilrs};
@@ -81,9 +82,10 @@ impl GilrsBackend {
     fn info(gilrs: &Gilrs, id: GamepadId) -> GamepadInfo {
         let pad = gilrs.gamepad(id);
         #[cfg(target_arch = "wasm32")]
-        let web_rumble = Self::browser_pad(gilrs, id).is_some_and(|p| p.rumble);
+        let (web_rumble, trigger_rumble) =
+            Self::browser_pad(gilrs, id).map_or((false, false), |p| (p.rumble, p.trigger_rumble));
         #[cfg(not(target_arch = "wasm32"))]
-        let web_rumble = false;
+        let (web_rumble, trigger_rumble) = (false, false);
         GamepadInfo {
             name: pad.name().to_string(),
             family: ControllerFamily::detect(pad.vendor_id(), pad.product_id(), pad.name()),
@@ -91,7 +93,7 @@ impl GilrsBackend {
             product_id: pad.product_id(),
             capabilities: GamepadCapabilities {
                 rumble: pad.is_ff_supported() || web_rumble,
-                trigger_rumble: false,
+                trigger_rumble,
                 motion: false,
             },
         }
@@ -152,7 +154,10 @@ impl GamepadBackend for GilrsBackend {
             return;
         };
         match Self::browser_pad(gilrs, id) {
-            Some(pad) => self.web.rumble.set(&mut self.web.browser, device, pad.index, levels),
+            Some(pad) => self
+                .web
+                .rumble
+                .set(&mut self.web.browser, device, pad.index, pad.trigger_rumble, levels),
             // Its browser pad is gone: nothing to play or to stop.
             None => self.web.rumble.forget(device),
         }
