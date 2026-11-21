@@ -1816,7 +1816,11 @@ mod tests {
                 (MARKUP, UiTextAlign::Start, Some(260.3)),
                 (MARKUP, UiTextAlign::Center, Some(260.3)),
                 (MARKUP, UiTextAlign::End, Some(260.3)),
-                ("[color=#ff0]\u{5e9}\u{5dc}\u{5d5}\u{5dd}[/color] [img=coin]", UiTextAlign::Start, Some(260.3)),
+                (
+                    "[color=#ff0]\u{5e9}\u{5dc}\u{5d5}\u{5dd}[/color] [img=coin]",
+                    UiTextAlign::Start,
+                    Some(260.3),
+                ),
                 (MARKUP, UiTextAlign::Start, None),
             ];
             for (markup, align, width) in boxes {
@@ -1864,6 +1868,39 @@ mod tests {
             let before = layouts(&ctx);
             same_as_drawn_anew(&mut ctx, &still, &what);
             assert!(layouts(&ctx) > before, "{what}: a new alignment is laid out");
+        }
+    }
+
+    #[test]
+    fn a_row_resized_back_and_forth_draws_what_drawing_anew_gives() {
+        for (pixels, scale) in SCALES {
+            let mut ctx = ctx();
+            ctx.set_scale_factor(pixels);
+            ctx.ui.set_scale(scale);
+            let ui = &mut ctx.ui;
+            let menu = ui.root().layout(UiLayout::centered(420.0, 300.0)).id();
+            let row = ui.panel(menu).layout(UiLayout::row(160.0).gap(6.0)).id();
+            let panel = ui.panel(row).layout(UiLayout::fixed(40.0, 20.0)).id();
+            ui.label(row, "[color=#ff0]Gold[/color] [b]x3[/b]")
+                .rich()
+                .align(crate::ui::UiTextAlign::Center)
+                .layout(UiLayout::fixed(90.0, 24.0));
+            ui.label(row, "A paragraph long enough to wrap onto a few lines in the row.")
+                .wrap()
+                .layout(UiLayout::auto().grow(1.0));
+            ui.label(row, "[u]Rich[/u] text long enough to wrap onto lines too.")
+                .rich()
+                .wrap()
+                .layout(UiLayout::auto().grow(1.0));
+            ui.push_modeless(menu);
+            let what = format!("scale factor {pixels}, UI scale {scale}");
+            let still = UiInput::default();
+            same_as_drawn_anew(&mut ctx, &still, &what);
+            for round in 0..6 {
+                let width = [40.0, 64.3][round % 2];
+                ctx.ui.set_layout(panel, UiLayout::fixed(width, 20.0));
+                same_as_drawn_anew(&mut ctx, &still, &format!("{what}, {width} wide"));
+            }
         }
     }
 

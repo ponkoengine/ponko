@@ -1738,7 +1738,15 @@ impl Ui {
                             let mut spare = super::retained_layout::TextSizes::default();
                             let sizes = sizes.get_mut(slot).unwrap_or(&mut spare);
                             if let Some(rich) = n.rich() {
-                                return rich_size(rich, n, (external_fonts, k), (known, available), text, scratch, sizes);
+                                return rich_size(
+                                    rich,
+                                    n,
+                                    (external_fonts, k),
+                                    (known, available),
+                                    text,
+                                    scratch,
+                                    sizes,
+                                );
                             }
                             let font = if external_fonts { n.paint.font } else { Font::DEFAULT };
                             let px = n.paint.font_size * k;
@@ -2324,7 +2332,9 @@ fn rich_size(
         _ => natural.x,
     });
     let mut height = if n.paint.wrap {
-        sizes.wrapped(width, || rich.layout(base, Some(width), Align::MEASURE, text, scratch).y)
+        sizes.wrapped(width, || {
+            rich.layout(base, Some(width), Align::MEASURE, text, scratch).y
+        })
     } else {
         natural.y
     };

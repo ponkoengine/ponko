@@ -341,12 +341,18 @@ mod tests {
         let row = ui.panel(root).layout(UiLayout::row(200.0).gap(4.0)).id();
         let panel = ui.panel(row).layout(UiLayout::fixed(width, 20.0)).id();
         let plain = ui
-            .label(row, "A paragraph long enough to wrap onto a few lines next to the panel.")
+            .label(
+                row,
+                "A paragraph long enough to wrap onto a few lines next to the panel.",
+            )
             .wrap()
             .layout(UiLayout::auto().grow(1.0))
             .id();
         let rich = ui
-            .label(row, "[color=#ff0]Gold[/color] and [b]a few more words[/b] to wrap as well.")
+            .label(
+                row,
+                "[color=#ff0]Gold[/color] and [b]a few more words[/b] to wrap as well.",
+            )
             .rich()
             .wrap()
             .layout(UiLayout::auto().grow(1.0))
@@ -381,7 +387,11 @@ mod tests {
             ui.set_layout(panel, UiLayout::fixed(width, 20.0));
             ui.frame(VIEW, &UiInput::default());
             let (fresh, _, fresh_labels) = wrapped_row(width);
-            assert_eq!(sizes(&ui), fresh_labels.map(|l| fresh.rect(l).unwrap().size()), "{width} wide");
+            assert_eq!(
+                sizes(&ui),
+                fresh_labels.map(|l| fresh.rect(l).unwrap().size()),
+                "{width} wide"
+            );
         }
         // The controls: a new width is measured, and the kept widths are
         // bounded: after four others, the first is measured again.
@@ -396,10 +406,16 @@ mod tests {
         ui.set_layout(panel, UiLayout::fixed(widths[0], 20.0));
         let measured = ui.measure.layouts();
         ui.frame(VIEW, &UiInput::default());
-        assert!(ui.measure.layouts() > measured, "a width long forgotten is measured again");
+        assert!(
+            ui.measure.layouts() > measured,
+            "a width long forgotten is measured again"
+        );
         assert_eq!(sizes(&ui), first);
         // New text is measured again at a width it had.
-        ui.set_text(labels[0], "Another paragraph, long enough to wrap onto a few lines too.");
+        ui.set_text(
+            labels[0],
+            "Another paragraph, long enough to wrap onto a few lines too.",
+        );
         let measured = ui.measure.layouts();
         ui.frame(VIEW, &UiInput::default());
         assert!(ui.measure.layouts() > measured, "new text is measured");
