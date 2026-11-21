@@ -46,7 +46,7 @@ makes the same edits through the same undo history (see
 
 | Part | What it has |
 |---|---|
-| Menu bar | **File** (New scene, Open, Open recent, Save, Save as, Save selection as prefab, Reload from disk), **Edit** (Undo, Redo, Duplicate, Rename, Delete, New entity), **Window** (the asset panel on or off), **Help** (Shortcuts), the [play bar](#play-mode), the view (2D or 3D) and the gizmo's mode, axes and snapping |
+| Menu bar | **File** (New scene, Open, Open recent, Save, Save as, Save selection as prefab, Reload from disk), **Edit** (Undo, Redo, Duplicate, Rename, Delete, New entity), **Author** (the [authoring windows](#authoring-particles-tiles-animation-graphs-materials-and-terrain)), **Window** (the asset panel on or off), **Help** (Shortcuts), the [play bar](#play-mode), the view (2D or 3D) and the gizmo's mode, axes and snapping |
 | Hierarchy (left) | Every entity under what it hangs off. Click to select, Shift or Ctrl+click to add to the selection, drag onto another row to attach (the whole selection moves with the dragged row), drag onto *drop here to detach* to make a root. Double-click or F2 renames; a right click has Rename, Duplicate, New child, Detach and Delete |
 | Inspector (right) | A prefab instance's [overrides](#prefab-instances-and-overrides), then the selected entity's components, editable in place, **Add component** and **Remove**; below them resources and performance, as in the [inspector](inspector.md) |
 | Assets (bottom) | The [asset panel](#the-asset-panel): the assets folder as a tree, thumbnails, search, and the selected asset's details and import settings |
@@ -366,6 +366,134 @@ those edits. Their nodes are new entities then; the undo history and the
 selection follow them, so undoing past Stop still reaches the edits made
 before Play.
 
+## Authoring: particles, tiles, animation graphs, materials and terrain
+
+Some things are tuned by eye rather than typed: how a fire's sparks rise,
+which tile goes where, when a character blends from walking to running,
+how shiny a rock is, where a hill stands. The editor has a tool for each.
+They all work the same way:
+
+- every edit is a step in the [one history](#undo-and-what-counts-as-unsaved):
+  a drag, a brush stroke or a typed value is one step, and Ctrl+Z takes it
+  back wherever it was made;
+- what they edit shows at once in the view, while the game is paused;
+- they save in the formats the game already loads, so nothing changes in
+  the game's code: Ctrl+S (or a window's **Save**) writes every edited file
+  with the scene, and a file with unsaved edits marks the document unsaved
+  (the close question covers it too).
+
+Particle emitters are components, so their section is in the inspector and
+they are saved with the scene. The others edit files of their own: open one
+from **Author**, which asks for a path in `assets/` and lists the files the
+tool opens. Closing a window drops its unsaved edits. JSON files are written
+back with two-space indents and their keys in alphabetical order; the
+loaders don't mind the order.
+
+What stays in other tools, on purpose: modelling, rigging and drawing
+animation clips (Blender, Spine), tilesets, Wang sets, objects and other map
+formats (Tiled, LDtk), texture painting and generated terrain, and shader
+code beyond quick edits (your code editor; the [hot reload](3d.md#shader-errors-and-reloads)
+picks its saves up).
+
+### Particles
+
+Select an entity with a 2D or 3D `ParticleEmitter`: its **Particles**
+section has every setting (rate, burst, duration and looping, lifetime,
+speed, shape, gravity, drag, size, rotation, texture and sprite sheet,
+blend, the particle limit, local or world space, seed and, in 3D, softness),
+the size over a particle's life as a curve and its colour as a gradient.
+In the curve, click to add a key, drag one to move it and double-click to
+remove it; the gradient's bar works the same way, with each key's time and
+colour below it. **Live preview** (on by default) runs the selected
+emitter while the game is paused, and an edit keeps the particles already
+flying, so a change shows on the cloud you were looking at; **Restart**
+starts it over.
+
+### Tilemaps
+
+**Author → Tilemap…** opens a Tiled map (`.tmj`, the JSON kind that
+[`spawn_level`](tiles.md#tilemaps) loads). Pick a layer and a tileset, click a
+tile in the palette, then paint in the view: **Paint** puts the tile,
+**Erase** clears cells and **Autotile** puts the frame each cell's
+neighbours call for. The autotile rule is kept as a property of the layer,
+`autotile`, with the value `four <first tile>` (16 frames, see
+`AutoTile::four`) or `blob <first tile>` (47 frames, `AutoTile::blob`), so
+the next session and your own code can read it. The level in the view
+follows every stroke; **Show in the view** spawns it when the scene has
+none. Infinite maps (chunked) aren't edited here.
+
+### Animation graphs
+
+**Author → Animation graph…** opens a 2D skeleton in Ponko's format
+(`"format": "ponko-skeleton2d"`, see [2D skeletons](skeleton2d.md)) and
+shows its graph: a node for each state, an arrow for each transition, and
+**Any state** for transitions from anywhere. Click a state or an arrow to
+edit it below the canvas, drag a state to move it, and right-drag from one
+state onto another to add a transition. A state plays one clip or a 1D
+blend tree over a float parameter, at a speed, looping or not; a transition
+has its conditions (greater, less, bool, trigger), an exit time, a fade and
+an offset. **+ State** and **+ Parameter** add them.
+
+The **Preview** runs the graph on the skeleton with test values for its
+parameters (they aren't saved): drag a float, tick a bool or **Fire** a
+trigger, and the state playing turns green and the pose follows. A graph
+the runtime would refuse says why under the canvas, and the preview keeps
+the last one that loaded. Where the nodes sit is the editor's own; the
+file has no place for it. 3D animation graphs are built in code and have
+no file to edit.
+
+### Materials and shaders
+
+**Author → Materials…** opens a glTF file (`.gltf`; export a `.glb` as
+`.gltf` to edit it) and edits its materials: base colour, metallic,
+roughness, emission, normal strength, alpha mode and double-sidedness, and
+each texture slot, which takes one of the file's images or a PNG from
+`assets/` (added to the file, by a name relative to it). Every model drawn
+with the file's materials changes as you edit; textures are read again only
+when a slot changes.
+
+**Author → Shader…** opens a material shader (`.wgsl`, see
+[custom shaders](3d.md#custom-shaders)). The line with the first error is marked and
+the compiler's message is under the code; while the code compiles, the
+game's shader loaded from that file takes it once typing pauses (with an
+error, the last good code stays, as with hot reload). Below the code are
+the custom values (`material.custom[0]` to `[3]`) and textures of the
+materials drawn with the shader, edited live. Those are set in code, with
+`MaterialDesc::with_custom`, so **Save** writes the `.wgsl` alone and
+**Copy as Rust** copies the values as code to paste where the game makes
+its material.
+
+### Terrain
+
+**Author → Terrain…** opens a terrain file, or makes a new flat tile when
+the name isn't there yet. The brushes work on the tile in the 3D view:
+drag over it to **Raise**, **Lower** or **Smooth** the ground, or **Paint**
+a ground layer, under a circle of the brush's radius, at its strength.
+**+ layer** adds a layer from a PNG; each layer repeats every *size* world
+units. **Show in the view** puts the tile in the middle of the world when
+the scene has none (it isn't saved with the scene).
+
+A terrain file is JSON, with its images beside it, and
+`ctx.spawn_terrain(path, corner)` spawns it as a [`TerrainTile`](3d.md#terrain):
+
+```json
+{
+  "format": "ponko-terrain", "version": 1,
+  "size": 64.0,
+  "heights": "hill-heights.png", "low": -8.0, "high": 24.0,
+  "layers": [{ "texture": "grass.png", "size": 4.0 }, { "texture": "rock.png", "size": 6.0 }],
+  "weights": ["hill-weights.png"],
+  "roughness": 0.9
+}
+```
+
+`heights` is a square greyscale PNG of n × n heights (16 bits a pixel; 8
+work too), rows along +Z, black at `low` and white at `high`. `weights`
+are RGBA PNGs over the whole tile: red, green, blue and alpha of the first
+are layers 0 to 3, of the second layers 4 to 7. Without layers the tile is
+drawn with the default material. The brushes keep heights between `low`
+and `high`; changing either keeps the ground where it is.
+
 ## Play mode
 
 The play bar runs the game in the editor:
@@ -479,6 +607,25 @@ shortcuts window and the play bar, each against a control; another draws a
 model's thumbnail with the renderer, checks the model covers its middle and
 not its corners, that it isn't the software drawing, and that the next run
 reads it from the cache without drawing.
+
+The authoring tools are tested by mouse the same way: a particle setting
+dragged (one undo step, saved with the scene), a curve key added, dragged
+and removed, a gradient key moved and removed, the preview running while
+paused; tiles painted from the palette along a row (one step, the level
+following), autotiled with the right frames and saved into the `.tmj`;
+a state, a transition and its condition added in the graph and saved as a
+skeleton the runtime loads, the preview following a dragged test value
+into the next state, a broken graph explained in place; a material's
+metallic dragged with the loaded model's material following and a PNG
+picked for its base colour; a shader error shown at its line and undone;
+custom values dragged onto the shader's materials; the raise brush held
+over a terrain (one step), a layer added, painted and saved as PNGs that
+`spawn_terrain` loads. Offscreen GPU tests check the previews draw: a
+material edit recolours its model, a shader edit shows and a broken one
+keeps the last good look, a painted terrain layer shows where it was
+painted, the particle preview draws particles (none without it), and the
+graph's preview poses its skeleton by the test value, each against the
+picture without the edit.
 
 ## Checks for a person
 
