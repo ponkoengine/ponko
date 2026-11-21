@@ -10,7 +10,7 @@
 //! connected sessions: those use the hidden `ponko::__fuzz` entry points
 //! (only built with `--cfg fuzzing`, which `cargo fuzz` sets).
 
-use ponko::assets::MemorySource;
+use ponko::assets::{AssetSource as _, MemorySource};
 use ponko::prelude::*;
 use ponko::reflect::WorldReflect;
 
@@ -192,12 +192,12 @@ pub fn lobby(data: &[u8]) {
     let mut endpoints = NetMessages::loopback(2).into_iter();
     let mut fake_host = endpoints.next().expect("two endpoints");
     let mut client = LobbyClient::new(endpoints.next().expect("two endpoints"));
-    let mut client_peer = None;
-    let mut step = |server: &mut ponko_lobby::LobbyServer,
-                    raw: &mut NetMessages,
-                    honest: &mut LobbyClient,
-                    fake_host: &mut NetMessages,
-                    client: &mut LobbyClient| {
+    let client_peer = std::cell::Cell::new(None);
+    let step = |server: &mut ponko_lobby::LobbyServer,
+                raw: &mut NetMessages,
+                honest: &mut LobbyClient,
+                fake_host: &mut NetMessages,
+                client: &mut LobbyClient| {
         server.poll_elapsed(STEP);
         let _ = raw.poll_elapsed(STEP);
         while raw.next_event().is_some() {}
@@ -206,7 +206,7 @@ pub fn lobby(data: &[u8]) {
         let _ = fake_host.poll_elapsed(STEP);
         while let Some(event) = fake_host.next_event() {
             if let MessageEvent::Connected(peer) = event {
-                client_peer = Some(peer);
+                client_peer.set(Some(peer));
             }
         }
         let _ = client.poll_elapsed(STEP);
@@ -218,7 +218,7 @@ pub fn lobby(data: &[u8]) {
         }
         step(&mut server, &mut raw, &mut honest, &mut fake_host, &mut client);
     }
-    let Some(peer) = client_peer else {
+    let Some(peer) = client_peer.get() else {
         panic!("the lobby client connects to its fake host")
     };
     for (flags, bytes) in records(data) {
@@ -272,8 +272,9 @@ pub fn aseprite(data: &[u8]) {
                     }
                     let _ = sprite.slice("s", frame);
                 }
-                let _ = sprite.animation("Run", None);
-                let _ = sprite.sprite_at(1.5);
+                if let Ok(run) = sprite.animation("Run", None) {
+                    let _ = run.sprite_at(1.5);
+                }
             }
         }
     });
