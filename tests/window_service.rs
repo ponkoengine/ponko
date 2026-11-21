@@ -271,3 +271,14 @@ fn restore_window_settings_is_off_by_default_and_harmless_without_a_file() {
         .run_headless(0, |ctx| assert_eq!(ctx.window.settings().size, Vec2::new(640.0, 480.0)));
     let _ = std::fs::remove_dir_all(dir);
 }
+#[test]
+fn restore_window_settings_with_an_unusable_game_size_still_starts() {
+    let dir = std::env::temp_dir().join(format!("ponko-window-startup-zero-{}", std::process::id()));
+    let mut ran = false;
+    Game::new("zero", 0, 0)
+        .data_dir(&dir)
+        .restore_window_settings(true)
+        .run_headless(0, |_| ran = true);
+    assert!(ran);
+    let _ = std::fs::remove_dir_all(dir);
+}

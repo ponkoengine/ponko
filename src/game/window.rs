@@ -395,10 +395,14 @@ where
         // The web's storage is read now (see `resumed`); a canvas has no
         // default-sized window to show first.
         #[cfg(target_arch = "wasm32")]
-        if self.config.restore_window
-            && let Err(e) = self.ctx.window.restore_settings(&self.ctx.storage)
-        {
-            eprintln!("ponko: opening the window with its default settings: {e}");
+        if self.config.restore_window {
+            match self.ctx.window.restore_settings(&self.ctx.storage) {
+                // The title belongs to the game, as on the desktop.
+                Ok(()) => {
+                    let _ = self.ctx.window.set_title(self.config.title.clone());
+                }
+                Err(e) => eprintln!("ponko: opening the window with its default settings: {e}"),
+            }
         }
         if let Some(setup) = self.setup.take() {
             self.ctx.set_in_setup(true);

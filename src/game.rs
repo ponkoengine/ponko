@@ -3366,7 +3366,9 @@ impl Game {
         if self.restore_window {
             let settings = self.first_window_settings(&ctx.storage, &ctx.window.monitors());
             ctx.set_window_size(settings.size);
-            ctx.window.request(crate::window::WindowRequest::Settings(settings))?;
+            if let Err(e) = ctx.window.request(crate::window::WindowRequest::Settings(settings)) {
+                eprintln!("ponko: opening the window with its default settings: {e}");
+            }
         }
         let control = self.start_control(&mut ctx, true);
         ctx.set_in_setup(true);
