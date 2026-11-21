@@ -672,6 +672,42 @@ impl Renderer {
         renderer
     }
 
+    /// A renderer drawing offscreen at `size` on this renderer's GPU (the
+    /// same device and queue, its own pipelines and resources): the
+    /// editor's model thumbnails.
+    #[cfg(all(feature = "3d", feature = "editor"))]
+    pub(crate) fn offscreen_twin(&self, size: (u32, u32)) -> Self {
+        let msaa = 4;
+        let info = self.device.adapter_info();
+        let capabilities = super::capabilities::of_device(&info, &self.device, (msaa, msaa));
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            width: size.0,
+            height: size.1,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: Vec::new(),
+        };
+        let mut renderer = Self::from_device(
+            None,
+            (self.device.clone(), self.queue.clone()),
+            config,
+            capabilities,
+            &[],
+            Render3DSettings {
+                msaa,
+                requested_msaa: msaa,
+                supports_msaa2: false,
+                tiled: info.backend == wgpu::Backend::Metal,
+            },
+        );
+        renderer.set_draw_hidden(true, true);
+        renderer
+    }
+
     fn from_device(
         window_surface: Option<WindowSurface>,
         (device, queue): (wgpu::Device, wgpu::Queue),

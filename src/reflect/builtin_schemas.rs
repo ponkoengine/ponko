@@ -420,7 +420,10 @@ fn file_material() -> ValueSchema {
 }
 #[cfg(feature = "3d")]
 pub(super) fn model_material() -> ValueSchema {
-    ValueSchema::strict_object([("mesh", String), ("material", file_material())])
+    ValueSchema::any_of([
+        ValueSchema::strict_object([("mesh", String), ("material", file_material())]),
+        ValueSchema::strict_object([("texture", String)]),
+    ])
 }
 #[cfg(feature = "3d")]
 pub(super) fn model_materials() -> ValueSchema {
@@ -649,11 +652,13 @@ pub(in crate::reflect) mod tests {
             let by_name = || MaterialRef::Name("Wet".into());
             for material in [by_name(), MaterialRef::Index(2)] {
                 let json = MaterialJson {
-                    mesh: "rocks.glb".into(),
-                    material,
+                    mesh: Some("rocks.glb".into()),
+                    material: Some(material),
+                    texture: None,
                 };
                 validate(&model_material(), &json_of(json));
             }
+            validate(&model_material(), &json_of(MaterialJson::texture("bricks.png".into())));
             let parts = ModelMaterialsJson {
                 parts: vec![
                     PartMaterialJson {
