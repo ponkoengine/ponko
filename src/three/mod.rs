@@ -149,7 +149,7 @@ pub use gltf_props::{NodeBody, NodeCollider, NodeProperties, gltf_properties_sch
 #[cfg(all(test, feature = "editor"))]
 pub(crate) use gltf_scene::cube_gltf;
 #[cfg(feature = "editor")]
-pub(crate) use gltf_scene::{GltfEntities, GltfOverride, GltfOverrideKind};
+pub(crate) use gltf_scene::{GltfEntities, GltfOverride, GltfOverrideKind, WaitingLink};
 pub use gltf_scene::{GltfNode, GltfOptions, GltfRoot, GltfScene, GltfSceneNode, SpawnPoint};
 pub use mesh::{MeshData, MorphFrame, MorphTarget};
 pub use post::{AmbientOcclusion, AntiAliasing, DepthOfField, Post, PostVolume, SplitToning, Tonemap};
