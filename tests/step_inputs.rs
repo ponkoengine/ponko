@@ -38,12 +38,13 @@ fn starts(log: &Log<u64>) -> impl FnMut(&mut Ctx) + 'static {
     }
 }
 
-#[cfg(feature = "physics")]
 /// The moving body of a test. Every body has a velocity (a body requires
 /// one), so tests find theirs by this.
+#[cfg(any(feature = "physics", feature = "physics3d"))]
 #[derive(Component)]
 struct Ball;
 
+#[cfg(feature = "physics")]
 mod physics2d {
     use super::*;
     use ponko::d2::{Collider, RigidBody, Transform as Transform2D, Velocity};
