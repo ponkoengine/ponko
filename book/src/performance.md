@@ -211,7 +211,13 @@ goes, in a running game:
 - **`ctx.perf.gpu_passes()`**: GPU time per pass (each shadow cascade, depth
   prepass, opaque, transparent, screen effects, bloom, post), measured
   with timestamp queries. On GPUs that draw in tiles, passes overlap, so
-  each is counted from the end of the one before.
+  each is counted from the end of the one before; a pass the GPU runs
+  entirely alongside others (a compute pass next to a render pass it
+  doesn't depend on) shares that time with them evenly, so the passes add
+  up to no more than the frame's GPU time. A pass that ran but whose times
+  didn't come back is listed by `ctx.perf.gpu_passes_not_timed()` and
+  marked "not timed" in the overlay, the report and traces, never shown as
+  0 ms (see [Which passes can be timed](#which-passes-can-be-timed)).
   Timing a pass costs the graphics library a few heap allocations, so a
   game times one frame in 16, and every frame while something reads every
   frame: profiling, the overlay, a trace, a `PONKO_BENCH` run or automatic
@@ -253,6 +259,25 @@ goes, in a running game:
 
 </div>
 </div>
+
+### Which passes can be timed
+
+| Backend | Render passes | Compute passes (culling, skinning, GI, reflections) |
+|---|---|---|
+| Metal (macOS, iOS) | Timed | Timed. A frame's timestamps are read once the GPU has finished it: Metal writes a compute pass's late, and reading them sooner gave the previous frame's, so these passes used to read 0 ms. |
+| Vulkan, DirectX 12 | Timed | Timed |
+| OpenGL (desktop, with `GL_ARB_timer_query`) | Timed | Timed |
+| WebGPU in a browser | Timed where the browser offers timestamp queries; browsers round them, so short passes read coarse times | Same |
+| WebGL2, and GPUs without timestamp queries | Not timed: no GPU times at all (`gpu_ms` is `None`) | Not timed |
+
+On any backend, a pass with nothing to do (no draws, no dispatches) may
+write no timestamps: Metal skips such a pass. It is then listed as not
+timed for that frame. The frame's GPU time still covers everything that
+ran. The engine's offscreen GPU test of a compute pass
+(`a_compute_pass_with_real_work_gets_a_time_within_the_frame` in
+`src/render/timer.rs`) has run on Metal; the other rows follow from what
+the graphics library supports there and are checked when that test runs on
+those machines.
 
 ### Benchmark runs
 

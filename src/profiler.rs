@@ -227,6 +227,7 @@ impl Profiler {
         sample: FrameSample,
         systems: &[SystemTiming],
         gpu_passes: &[GpuPass],
+        not_timed: &[&'static str],
         gpu_frame: Option<(&[PassSpan], u64)>,
         render: RenderStats,
     ) -> bool {
@@ -245,7 +246,7 @@ impl Profiler {
             _ => None,
         };
         if let Some(trace) = &mut self.trace
-            && trace.record(self.frame, &sample, systems, new_gpu)
+            && trace.record(self.frame, &sample, systems, new_gpu.map(|spans| (spans, not_timed)))
         {
             self.trace = None;
         }
@@ -260,15 +261,27 @@ impl Profiler {
         self.since_refresh += sample.frame_ms / 1000.0;
         if self.since_refresh >= REFRESH || self.stats.frames == 0 {
             self.since_refresh = 0.0;
-            self.refresh(systems, gpu_passes, render);
+            self.refresh(systems, gpu_passes, not_timed, render);
         }
         quit
     }
 
-    fn refresh(&mut self, systems: &[SystemTiming], gpu_passes: &[GpuPass], render: RenderStats) {
+    fn refresh(
+        &mut self,
+        systems: &[SystemTiming],
+        gpu_passes: &[GpuPass],
+        not_timed: &[&'static str],
+        render: RenderStats,
+    ) {
         self.stats = summarize(&self.ring, &mut self.sorted);
         if self.hud {
-            hud_text(&mut self.hud_text, &self.stats, systems, gpu_passes, render);
+            hud_text(
+                &mut self.hud_text,
+                &self.stats,
+                systems,
+                (gpu_passes, not_timed),
+                render,
+            );
         }
     }
 }
@@ -315,7 +328,13 @@ fn summarize(samples: &[FrameSample], sorted: &mut Vec<f32>) -> FrameStats {
 /// Lines in the HUD for systems and for GPU passes.
 const HUD_ROWS: usize = 8;
 
-fn hud_text(out: &mut String, s: &FrameStats, systems: &[SystemTiming], passes: &[GpuPass], r: RenderStats) {
+fn hud_text(
+    out: &mut String,
+    s: &FrameStats,
+    systems: &[SystemTiming],
+    (passes, not_timed): (&[GpuPass], &[&'static str]),
+    r: RenderStats,
+) {
     out.clear();
     let _ = writeln!(
         out,
@@ -354,6 +373,10 @@ fn hud_text(out: &mut String, s: &FrameStats, systems: &[SystemTiming], passes: 
         for i in shown.into_iter().flatten() {
             let _ = writeln!(out, "{:>6.2}  {}", passes[i].ms, passes[i].name);
         }
+    }
+    // Not 0 ms: these ran, but their times didn't come back.
+    for name in not_timed.iter().take(HUD_ROWS) {
+        let _ = writeln!(out, "     -  {name} (not timed)");
     }
     if !systems.is_empty() {
         out.push_str("-- systems\n");
@@ -415,7 +438,13 @@ impl Trace {
     }
 
     /// Returns `true` once the trace is written.
-    fn record(&mut self, frame: u64, s: &FrameSample, systems: &[SystemTiming], gpu: Option<&[PassSpan]>) -> bool {
+    fn record(
+        &mut self,
+        frame: u64,
+        s: &FrameSample,
+        systems: &[SystemTiming],
+        gpu: Option<(&[PassSpan], &[&'static str])>,
+    ) -> bool {
         if frame <= self.skip {
             return false;
         }
@@ -443,12 +472,19 @@ impl Trace {
         }
         self.events.push(span("render", 1, s.render_start_ms, s.render_ms));
         self.events.push(span("display wait", 1, s.render_start_ms, s.wait_ms));
-        if let Some(spans) = gpu {
+        if let Some((spans, not_timed)) = gpu {
             // GPU clocks aren't the CPU's: the passes are placed from this
-            // frame's submit on. They belong to a frame 1-3 frames back.
+            // frame's submit on. They belong to a frame a few frames back.
             let base = s.render_start_ms + s.render_ms;
             for p in spans {
                 self.events.push(span(p.name, 2, base + p.start_ms, p.ms));
+            }
+            // Passes that ran but couldn't be timed: a mark, not a 0 ms slice.
+            for name in not_timed {
+                self.events.push(serde_json::json!({
+                    "name": format!("{name} (not timed)"), "ph": "i", "s": "t", "pid": 1, "tid": 2,
+                    "ts": t0 + f64::from(base) * 1000.0,
+                }));
             }
         }
         self.clock_us += f64::from(s.frame_ms.max(frame_end)) * 1000.0;
@@ -687,9 +723,9 @@ mod tests {
     fn the_rolling_window_keeps_the_latest_frames() {
         let mut p = Profiler::new();
         for i in 0..(WINDOW + 10) {
-            p.record(sample(i as f32), &[], &[], None, RenderStats::default());
+            p.record(sample(i as f32), &[], &[], &[], None, RenderStats::default());
         }
-        p.refresh(&[], &[], RenderStats::default());
+        p.refresh(&[], &[], &[], RenderStats::default());
         assert_eq!(p.stats().frames, WINDOW);
         assert_eq!(p.stats().max_ms, (WINDOW + 9) as f32);
     }
@@ -704,9 +740,58 @@ mod tests {
                 ms: 5.0,
             },
         ];
-        hud_text(&mut text, &FrameStats::default(), &[], &passes, RenderStats::default());
+        hud_text(
+            &mut text,
+            &FrameStats::default(),
+            &[],
+            (&passes, &[]),
+            RenderStats::default(),
+        );
         let opaque = text.find("opaque").unwrap();
         assert!(opaque < text.find("post").unwrap(), "{text}");
+    }
+
+    /// A pass that ran but couldn't be timed is listed as such, not as 0 ms.
+    #[test]
+    fn hud_lists_passes_that_could_not_be_timed() {
+        let mut text = String::new();
+        let passes = [GpuPass {
+            name: "opaque",
+            ms: 5.0,
+        }];
+        hud_text(
+            &mut text,
+            &FrameStats::default(),
+            &[],
+            (&passes, &["crowd cull"]),
+            RenderStats::default(),
+        );
+        assert!(text.contains("crowd cull (not timed)"), "{text}");
+        assert!(!text.contains("0.00  crowd cull"), "{text}");
+    }
+
+    /// A trace shows timed passes as slices and the ones that couldn't be
+    /// timed as marks, never as 0 ms slices.
+    #[test]
+    fn traces_mark_passes_that_could_not_be_timed() {
+        let path = std::env::temp_dir().join(format!("ponko-not-timed-{}.json", std::process::id()));
+        let mut t = Trace::new(path.clone(), 0, 2);
+        let spans = [PassSpan {
+            name: "opaque",
+            start_ms: 0.0,
+            ms: 2.0,
+        }];
+        assert!(!t.record(1, &sample(5.0), &[], Some((&spans, &["crowd cull"]))));
+        assert!(t.record(2, &sample(5.0), &[], None));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let events = doc["traceEvents"].as_array().unwrap();
+        let named = |n: &str| events.iter().find(|e| e["name"] == n).cloned();
+        assert_eq!(named("opaque").unwrap()["ph"], "X");
+        let mark = named("crowd cull (not timed)").expect("a mark for the pass");
+        assert_eq!(mark["ph"], "i");
+        assert!(named("crowd cull").is_none(), "no 0 ms slice");
     }
 
     #[test]

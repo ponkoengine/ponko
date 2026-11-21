@@ -281,6 +281,9 @@ pub enum WarningKind {
     HeavyShadows,
     /// Very many draw calls.
     ManyDrawCalls,
+    /// Some GPU passes ran but couldn't be timed: they are missing from
+    /// [`RenderReport::gpu_passes`] rather than shown as 0 ms.
+    PassesNotTimed,
 }
 
 /// A problem the report found, and what to do about it.
@@ -1239,6 +1242,25 @@ pub(crate) fn analyze(report: &mut PerfReport) {
     report.warnings = w;
 }
 
+/// Adds a [`WarningKind::PassesNotTimed`] warning naming `not_timed`, the
+/// passes of the latest timed frame whose times didn't come back.
+pub(crate) fn warn_not_timed(report: &mut PerfReport, not_timed: &[&'static str]) {
+    if not_timed.is_empty() {
+        return;
+    }
+    report.warnings.push(PerfWarning {
+        kind: WarningKind::PassesNotTimed,
+        message: format!(
+            "GPU passes not timed (left out of gpu_passes, not 0 ms): {}",
+            not_timed.join(", ")
+        ),
+        hint: "The GPU wrote no usable timestamps for them: a pass with nothing to do (Metal skips an empty \
+               pass), or a backend that can't time that kind of pass. The guide's pass table (\"Profiling a \
+               frame\") lists which. The frame's GPU time still includes them."
+            .into(),
+    });
+}
+
 /// The overlay's extra lines: scopes, allocations and the worst warnings.
 pub(crate) fn hud_lines(out: &mut String, report: &PerfReport) {
     out.clear();
@@ -1521,6 +1543,31 @@ mod tests {
         assert_eq!(loaded.gpu_memory, None);
         // And the class names reports print.
         assert_eq!(r.gpu_memory.unwrap().classes()[3].0, "frame_targets");
+    }
+
+    /// Passes that couldn't be timed are named in a warning, not listed
+    /// at 0 ms among the passes.
+    #[test]
+    fn passes_that_could_not_be_timed_are_named_in_a_warning() {
+        let mut r = PerfReport {
+            render: Some(RenderReport {
+                gpu_passes: vec![PassReport {
+                    name: "opaque".into(),
+                    ms: 3.0,
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        warn_not_timed(&mut r, &[]);
+        assert!(r.warnings.is_empty());
+        warn_not_timed(&mut r, &["crowd cull", "sky texture"]);
+        let w = &r.warnings[0];
+        assert_eq!(w.kind, WarningKind::PassesNotTimed);
+        assert!(w.message.contains("crowd cull, sky texture"), "{}", w.message);
+        let render = r.render.as_ref().unwrap();
+        assert!(render.gpu_passes.iter().all(|p| p.name != "crowd cull"));
+        assert!(r.to_string().contains("not timed"), "{r}");
     }
 
     #[test]
