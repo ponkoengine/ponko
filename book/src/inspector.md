@@ -19,6 +19,11 @@ opens on the right of the window. It shows the game as it runs:
 - **Resources**: reflected resources, editable the same way.
 - **Systems**: each system's average time per frame, slowest bars longest.
   Sim systems are marked `(sim)`.
+- **Debug drawing**: [debug drawing](debug-draw.md) on or off with how
+  much it shows, each built-in view (colliders, navmesh, bounds, lights,
+  hierarchy), how far the colliders view draws mesh triangles, and every
+  toggle the game and its plugins added with `Game::debug_toggle`, each a
+  checkbox. Open by default when the game has toggles.
 
 Only [reflected](reflection.md) components and resources can be read and
 edited; others show up by name, marked *not reflected*. The same reflection

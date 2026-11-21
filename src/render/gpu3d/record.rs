@@ -678,7 +678,7 @@ impl Renderer3D {
                     let capture = self.environment.is_capture(*id);
                     let clear = if capture { wgpu::Color::TRANSPARENT } else { clear };
                     let particles = self.particles.target(*id).map(|p| (p, textures));
-                    self.draw_view(encoder, target, runs, *batch_view, clear, time, particles);
+                    self.draw_view(encoder, (*id, target), runs, *batch_view, clear, time, particles);
                 }
                 self.environment.probes(encoder, time);
             }
@@ -1104,14 +1104,15 @@ impl Renderer3D {
 
     /// One target camera's view: depth prepass, then the lit solid models
     /// and the sky, resolved into its render target.
-    /// Draws a target camera's view into `target`: its prepass, then its
-    /// models and the sky, then `particles` (its particles, ribbons and
-    /// lines, with the textures they read), if any.
+    /// Draws a target camera's view into `target` (render target `id`): its
+    /// prepass, then its models and the sky, then `particles` (its
+    /// particles, ribbons and lines, with the textures they read), if any,
+    /// and `ctx.debug`'s lines if it draws them.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_view<'t>(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        target: &ViewTarget,
+        (id, target): (u32, &ViewTarget),
         runs: &[(u32, u32, u32)],
         batch_view: usize,
         clear: wgpu::Color,
@@ -1192,6 +1193,9 @@ impl Renderer3D {
             pass.set_bind_group(2, &self.no_scene, &[]);
             self.particles
                 .draw_view(view, &mut pass, textures, self.resources.white);
+        }
+        if let Some(lines) = &self.debug_lines {
+            lines.draw_target(&mut pass, id);
         }
     }
 

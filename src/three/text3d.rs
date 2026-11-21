@@ -234,28 +234,31 @@ fn premultiplied(c: Color) -> [f32; 4] {
 }
 
 impl Ctx {
-    /// Lays out this frame's [`Text3D`]s into glyph quads (farthest first)
-    /// and puts new glyphs on the GPU.
+    /// Lays out this frame's [`Text3D`]s and `ctx.debug`'s depth-tested
+    /// labels into glyph quads (farthest first) for every 3D camera, each
+    /// facing it: the main camera, each window view
+    /// ([`SceneSettings::views`](crate::render::SceneSettings::views)) and
+    /// each target camera that draws particles. Labels go to the cameras
+    /// that show the default layer. New glyphs go on the GPU once.
     pub(crate) fn collect_text3d(&mut self) {
-        let frame = &mut self.gfx.frame3d.particles.texts;
-        frame.vertices.clear();
-        frame.order.clear();
-        let camera = &self.scene3d.camera;
-        let (eye, forward) = (camera.position, camera.forward());
-        self.world
-            .query::<(ponko_ecs::Entity, &Text3D, &Transform3D)>()
-            .for_each(|(e, t, at)| {
-                if !t.text.is_empty() && t.size > 0.0 {
-                    frame.order.push(((at.position - eye).dot(forward), e));
-                }
-            });
-        // `ctx.debug`'s depth-tested labels (see `debug::flush`).
-        let labels = !self.gfx.frame3d.debug_lines.labels.is_empty();
-        if frame.order.is_empty() && !labels {
+        let frame3d = &mut self.gfx.frame3d;
+        frame3d.particles.texts.clear();
+        for frame in &mut frame3d.window_views {
+            frame.particles.texts.clear();
+        }
+        for view in &mut frame3d.views {
+            view.frame.particles.texts.clear();
+        }
+        let labels = !frame3d.debug_lines.labels.is_empty();
+        let texts = self
+            .world
+            .query::<&Text3D>()
+            .iter()
+            .any(|t| !t.text.is_empty() && t.size > 0.0);
+        if !texts && !labels {
             return;
         }
-        frame.order.sort_by(|a, b| b.0.total_cmp(&a.0));
-        let atlas = match frame.atlas {
+        let atlas = match frame3d.particles.texts.atlas {
             Some(t) => t,
             None => {
                 let side = Text::ATLAS_SIZE;
@@ -264,24 +267,26 @@ impl Ctx {
                 t
             }
         };
-        let mut frame = std::mem::take(&mut self.gfx.frame3d.particles.texts);
-        for &(_, e) in &frame.order.clone() {
-            let (Some(t), Some(at)) = (self.world.get::<Text3D>(e), self.world.get::<Transform3D>(e)) else {
-                continue;
-            };
-            frame.push(t, at, &self.scene3d.camera, &mut self.gfx.text);
+        let (frame3d, text, world) = (&mut self.gfx.frame3d, &mut self.gfx.text, &mut self.world);
+        let shows = |layers: crate::camera::RenderLayers| layers.intersects(crate::camera::RenderLayers::DEFAULT);
+        let lines = &frame3d.debug_lines;
+        let main = &self.scene3d.camera;
+        let labels_for = |on: bool| (labels && on).then_some(lines);
+        frame3d.particles.texts.lay_out(
+            world,
+            main,
+            labels_for(shows(main.layers) && !lines.hidden),
+            text,
+            atlas,
+        );
+        for (frame, view) in frame3d.window_views.iter_mut().zip(&self.scene3d.views) {
+            let labels = labels_for(shows(view.camera.layers));
+            frame.particles.texts.lay_out(world, &view.camera, labels, text, atlas);
         }
-        if labels {
-            let lines = &self.gfx.frame3d.debug_lines;
-            for l in &lines.labels {
-                let string = &lines.text[l.text.clone()];
-                frame.push_label(
-                    string,
-                    l.at,
-                    (l.color, l.size),
-                    &self.scene3d.camera,
-                    &mut self.gfx.text,
-                );
+        for view in &mut frame3d.views {
+            if let Some(eye) = view.eye.filter(|_| view.particles) {
+                let labels = labels_for(view.debug);
+                view.frame.particles.texts.lay_out(world, &eye, labels, text, atlas);
             }
         }
         if let Some(renderer) = self.gfx.renderer.as_mut() {
@@ -291,7 +296,51 @@ impl Ctx {
         } else {
             self.gfx.text.sdf.uploads.clear();
         }
-        self.gfx.frame3d.particles.texts = frame;
+    }
+}
+
+impl TextFrame {
+    /// Nothing to draw (keeping the storage and the atlas).
+    pub(crate) fn clear(&mut self) {
+        self.vertices.clear();
+    }
+
+    /// Lays out every [`Text3D`] in `world` for `camera`, farthest first,
+    /// then `labels`' depth-tested labels, sampling `atlas`.
+    fn lay_out(
+        &mut self,
+        world: &mut ponko_ecs::World,
+        camera: &Camera3D,
+        labels: Option<&crate::debug::GpuLines>,
+        text: &mut Text,
+        atlas: Texture,
+    ) {
+        self.vertices.clear();
+        self.atlas = Some(atlas);
+        let mut order = std::mem::take(&mut self.order);
+        order.clear();
+        let (eye, forward) = (camera.position, camera.forward());
+        world
+            .query::<(ponko_ecs::Entity, &Text3D, &Transform3D)>()
+            .for_each(|(e, t, at)| {
+                if !t.text.is_empty() && t.size > 0.0 {
+                    order.push(((at.position - eye).dot(forward), e));
+                }
+            });
+        order.sort_by(|a, b| b.0.total_cmp(&a.0));
+        for &(_, e) in &order {
+            let (Some(t), Some(at)) = (world.get::<Text3D>(e), world.get::<Transform3D>(e)) else {
+                continue;
+            };
+            self.push(t, at, camera, text);
+        }
+        self.order = order;
+        if let Some(lines) = labels {
+            for l in &lines.labels {
+                let string = &lines.text[l.text.clone()];
+                self.push_label(string, l.at, (l.color, l.size), camera, text);
+            }
+        }
     }
 }
 
