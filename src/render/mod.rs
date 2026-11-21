@@ -24,6 +24,9 @@ mod gpu;
 mod gpu3d;
 #[cfg(feature = "window")]
 mod gpu_textures;
+pub(crate) mod hdr;
+#[cfg(feature = "window")]
+mod hdr_output;
 #[cfg(all(feature = "window", feature = "3d"))]
 mod lights;
 #[cfg(feature = "window")]
@@ -76,6 +79,7 @@ pub(crate) mod upload_timer;
 mod views;
 
 pub use crate::sprite_material::{BlendMode, SpriteMaterial, SpriteMaterialDesc, SpriteShader};
+pub use hdr::{HdrEncoding, HdrOutput, HdrStatus};
 #[cfg(feature = "3d")]
 pub use crate::three::{QualityAutotune, QualityAutotuneReason, QualityAutotuneStatus, QualityChange};
 pub use capabilities::{GpuAdapter, GpuBatchLimits, GpuCapabilities, GpuFeature, GpuFeatureStatus, GpuLimits, GpuTier};
