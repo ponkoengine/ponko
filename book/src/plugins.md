@@ -187,12 +187,11 @@ check. A new engine minor is a new minor of each of its crates. Its first
 crate, `ponko_pulse`, is the template's own plugin, kept so every check
 builds the template against the engine.
 
-Its README lists the steps to add a plugin; `scripts/check.sh` there checks
-each crate's layout (the name, the workspace's engine dependency, a README
-with a versions table, headless tests), then formatting, clippy and the
-tests. `scripts/check.sh --engine ../ponko` builds against an engine
-checkout beside it, for a plugin that needs an engine change that isn't
-merged yet.
+Until the engine is on crates.io, its crates build against an engine
+checkout beside it (`../ponko`, on `main`). Its README lists the steps to
+add a plugin; `scripts/check.sh` there checks each crate's layout (the
+name, the workspace's engine dependency, a README with a versions table,
+headless tests), then formatting, clippy and the tests.
 
 ## From C and C++
 

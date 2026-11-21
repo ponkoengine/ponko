@@ -11,7 +11,15 @@
   "Remember the player's choice" in the window chapter. Rust-only for now.
 - The guide's plugins chapter points at the companion plugins repository
   (`ponko-plugins`, beside the engine): a workspace of plugin crates made
-  from the plugin template, with a check script for each crate's layout,
-  clippy and tests. `scripts/project-url.py` knows companion repositories:
+  from the plugin template, built against an engine checkout beside it,
+  with a check script for each crate's layout, clippy and tests. `scripts/project-url.py` knows companion repositories:
   `check` fails on a link to one that isn't beside `PROJECT_URL`, and `set`
   moves those links with the engine's.
+- `scripts/bench-aligned.sh`: cargo with every function aligned to 128 bytes
+  (`-C llvm-args=-align-all-functions=7`), so two builds compared by a
+  benchmark lay out their code the same way and a small difference is the
+  code, not where it fell. `ponko_bench` records it as `env.code_align` in
+  its JSON, and `bench_track compare` warns when the two sides differ in it.
+  The benchmark README ("Two builds, one layout") says how, with a
+  measurement: two builds of the same code moved a third of the runner's
+  functions without it and none with it.
