@@ -315,7 +315,7 @@ impl ModPack {
     /// Checks the files of this mod against `limits` and `world`'s
     /// reflection; returns the bytes of the JSON files it read, for the
     /// fingerprint.
-    fn check(&self, world: &World, limits: &ModLimits) -> Result<Vec<(String, u64, Option<Vec<u8>>)>, ModError> {
+    fn check(&self, world: &World, limits: &ModLimits) -> Result<Vec<CheckedFile>, ModError> {
         let id = self.id();
         let mut names = self.files.names();
         names.sort_unstable();
@@ -372,6 +372,9 @@ impl ModPack {
         Ok(out)
     }
 }
+
+/// A checked file of a mod: its name, its size, and its bytes if it is JSON.
+type CheckedFile = (String, u64, Option<Vec<u8>>);
 
 /// 1 to 64 of `a-z`, `0-9`, `-`, `_`.
 fn valid_id(id: &str) -> bool {
@@ -769,17 +772,20 @@ impl ModSet {
             checked.push(self.packs[i].check(&ctx.world, &self.limits)?);
         }
         // Everything is fine: build the source and the resource.
-        let mut packs: Vec<Option<ModPack>> = self.packs.into_iter().map(Some).collect();
+        // The packs in load order: each sorted by its place in `order`.
+        let mut rank = vec![0; order.len()];
+        for (place, &i) in order.iter().enumerate() {
+            rank[i] = place;
+        }
+        let mut packs: Vec<(usize, ModPack)> = self.packs.into_iter().enumerate().map(|(i, p)| (rank[i], p)).collect();
+        packs.sort_by_key(|&(place, _)| place);
         let mut source = ModSource {
             files: BTreeMap::new(),
             mods: Vec::with_capacity(order.len()),
         };
         let mut info = Vec::with_capacity(order.len());
         let mut hash = Fnv::new();
-        for (slot, (&i, files)) in order.iter().zip(checked).enumerate() {
-            let pack = packs[i]
-                .take()
-                .expect("invariant: each index appears once in the order");
+        for (slot, ((_, pack), files)) in packs.into_iter().zip(checked).enumerate() {
             hash.str(pack.id());
             hash.str(&pack.manifest.mod_version);
             for (name, size, json) in &files {
