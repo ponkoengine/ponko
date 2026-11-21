@@ -1,20 +1,24 @@
 //! Streamed meshes decoded a slice at a time, where there are no worker
 //! threads (a browser build without threads): the streaming step reads the
 //! file, decodes its PNG images a few rows at a time with the asset
-//! groups' PNG slicer, and then parses the file with those images already
-//! decoded. Only the parse of the geometry runs in one piece.
+//! groups' PNG slicer, and then parses the file a piece at a time
+//! ([`gltf::Parse`]): its JSON, each buffer (an inline one a slice of
+//! bytes at a time), the document, its checks, its materials (with those
+//! images already decoded), a few thousand corners of its primitives at a
+//! time, and the end.
 //!
-//! The mesh is exactly what the one-piece parse makes: the slicer gives
-//! the same pixels as `decode_image`, and an image it can't split (another
-//! format, an interlaced PNG, a broken one) is left to the parse, which
-//! decodes it as always (and fails with the usual message).
+//! The mesh is exactly what the one-piece parse makes: `load_for` runs the
+//! same steps, the slicer gives the same pixels as `decode_image`, and an
+//! image it can't split (another format, an interlaced PNG, a broken one)
+//! is left to the parse, which decodes it as always (and fails with the
+//! usual message).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::gltf;
 use super::streamed::LoadedFile;
-use crate::assets::group::sliced::PngSlices;
+use crate::assets::group::sliced::{PngSlices, SLICE_BYTES};
 use crate::assets::{Origin, SharedSources};
 use crate::error::Error;
 
@@ -35,6 +39,8 @@ enum Phase {
     Scan(Origin, Vec<u8>),
     /// Its PNG images being decoded, then the parse.
     Images(Box<Images>),
+    /// Being parsed, a piece a slice.
+    Parse(Origin, Box<gltf::Parse>),
     /// Done (or failed).
     Taken,
 }
@@ -45,7 +51,7 @@ struct Images {
     /// PNG images not started, by image index, last first.
     todo: Vec<(usize, Arc<Vec<u8>>)>,
     current: Option<(usize, PngSlices)>,
-    done: HashMap<usize, gltf::Image>,
+    done: HashMap<usize, gltf::Predecoded>,
 }
 
 impl MeshSlices {
@@ -109,7 +115,9 @@ impl crate::streaming::StreamSlices<(Origin, LoadedFile)> for MeshSlices {
                         Ok(false) => images.current = Some((index, png)),
                         Ok(true) => {
                             let image = png.finish();
-                            images.done.insert(index, (image.width, image.height, image.rgba));
+                            images
+                                .done
+                                .insert(index, ((image.width, image.height, image.rgba), None, None));
                         }
                         // The parse decodes it again, failing with its message.
                         Err(_) => {}
@@ -124,9 +132,23 @@ impl crate::streaming::StreamSlices<(Origin, LoadedFile)> for MeshSlices {
                 let Images {
                     origin, bytes, done, ..
                 } = *images;
-                let loaded = gltf::load_with_images(&self.name, &bytes, &mut read, &|_| false, self.gpu, done)
-                    .map_err(|e| Error::decode(&self.name, e))?;
-                Ok(Some((origin, LoadedFile::Parsed(Box::new(loaded)))))
+                let parse = gltf::Parse::new(&self.name, &bytes, self.gpu)
+                    .map_err(|e| Error::decode(&self.name, e))?
+                    .with_images(done);
+                self.phase = Phase::Parse(origin, Box::new(parse));
+                Ok(None)
+            }
+            Phase::Parse(origin, mut parse) => {
+                match parse
+                    .step(&mut read, &|_| false, SLICE_BYTES)
+                    .map_err(|e| Error::decode(&self.name, e))?
+                {
+                    Some(loaded) => Ok(Some((origin, LoadedFile::Parsed(Box::new(loaded))))),
+                    None => {
+                        self.phase = Phase::Parse(origin, parse);
+                        Ok(None)
+                    }
+                }
             }
             Phase::Taken => Err(Error::new(
                 crate::error::ErrorKind::Invalid,
@@ -297,8 +319,10 @@ mod tests {
             // Both images were decoded by the slicer before the parse.
             assert_eq!(most_images, 2);
             // The scan; 64 KiB of RGBA a slice: 64 rows of the 256-pixel
-            // image (4 slices) and all 128 rows of the other (1); the parse.
-            assert_eq!(steps, 1 + 4 + 1 + 1);
+            // image (4 slices) and all 128 rows of the other (1); the parse:
+            // its JSON, the binary chunk, the document, its checks, the
+            // materials, and the one triangle with the end.
+            assert_eq!(steps, 1 + 4 + 1 + 6);
             assert!(loaded.images == whole.images, "the slices made other pixels");
             assert_eq!(loaded.data.positions.len(), whole.data.positions.len());
             assert_eq!(loaded.parts, whole.parts);
@@ -353,10 +377,154 @@ mod tests {
                 frames.push(ctx.gfx.upload_stats().frame_slices);
                 assert!(frames.len() < 100, "never loaded: {frames:?}");
             }
-            // Two pieces a frame: the scan, five image slices, the parse.
+            // Two pieces a frame: the scan, five image slices, the JSON, the
+            // binary chunk, the document, its checks, the materials, the
+            // triangle.
             assert!(frames.iter().all(|&n| n <= 2), "{frames:?}");
-            assert_eq!(frames.iter().sum::<u32>(), 7, "{frames:?}");
+            assert_eq!(frames.iter().sum::<u32>(), 12, "{frames:?}");
             assert!(ctx.gfx.stream_mesh("m/tri.glb").is_some());
         });
+    }
+
+    /// A glTF file of one mesh of eight primitives, of 150 to 1200
+    /// triangles each (deterministic noise), on two nodes (the second a
+    /// child of the first, moved), its buffer `uri`: the buffer's bytes.
+    fn grid_gltf(uri: &str) -> (String, Vec<u8>) {
+        let mut bin = Vec::new();
+        let mut s = 0x2545_F491u32;
+        let mut primitives = Vec::new();
+        let (mut views, mut accessors) = (Vec::new(), Vec::new());
+        for k in 0..8 {
+            let corners = (k + 1) * 150 * 3;
+            let at = bin.len();
+            for _ in 0..corners * 3 {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                bin.extend_from_slice(&((s % 2000) as f32 / 100.0 - 10.0).to_le_bytes());
+            }
+            views.push(format!(
+                r#"{{"buffer":0,"byteOffset":{at},"byteLength":{}}}"#,
+                corners * 12
+            ));
+            accessors.push(format!(
+                r#"{{"bufferView":{},"componentType":5126,"count":{corners},"type":"VEC3","min":[-10,-10,-10],"max":[10,10,10]}}"#,
+                views.len() - 1
+            ));
+            let at = bin.len();
+            for i in 0..corners as u32 {
+                bin.extend_from_slice(&(corners as u32 - 1 - i).to_le_bytes());
+            }
+            views.push(format!(
+                r#"{{"buffer":0,"byteOffset":{at},"byteLength":{}}}"#,
+                corners * 4
+            ));
+            accessors.push(format!(
+                r#"{{"bufferView":{},"componentType":5125,"count":{corners},"type":"SCALAR"}}"#,
+                views.len() - 1
+            ));
+            primitives.push(format!(
+                r#"{{"attributes":{{"POSITION":{}}},"indices":{}}}"#,
+                accessors.len() - 2,
+                accessors.len() - 1
+            ));
+        }
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],
+            "nodes":[{{"mesh":0,"children":[1]}},{{"mesh":0,"translation":[3,0,0]}}],
+            "meshes":[{{"primitives":[{}]}}],
+            "buffers":[{{"byteLength":{},"uri":"{uri}"}}],
+            "bufferViews":[{}],"accessors":[{}]}}"#,
+            primitives.join(","),
+            bin.len(),
+            views.join(","),
+            accessors.join(",")
+        );
+        (json, bin)
+    }
+
+    /// Base64 of `bytes`.
+    fn base64(bytes: &[u8]) -> String {
+        const ABC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let n = chunk
+                .iter()
+                .enumerate()
+                .fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
+            for i in 0..4 {
+                if i <= chunk.len() {
+                    out.push(char::from(ABC[(n >> (18 - 6 * i) & 63) as usize]));
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+
+    /// Parses `json` a piece at a time as the streaming step does: the
+    /// loaded file, and the pieces each phase took (the walk's with the
+    /// corners each added).
+    fn parse_in_slices(
+        name: &str,
+        json: &str,
+        read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+    ) -> (gltf::Loaded, HashMap<&'static str, usize>, Vec<usize>) {
+        let mut parse = gltf::Parse::new(name, json.as_bytes(), gltf::GpuFormats::default()).unwrap();
+        let (mut pieces, mut walk) = (HashMap::new(), Vec::new());
+        loop {
+            let phase = parse.phase();
+            *pieces.entry(phase).or_insert(0) += 1;
+            let before = parse.corners();
+            match parse.step(read, &|_| false, SLICE_BYTES).unwrap() {
+                Some(loaded) => return (loaded, pieces, walk),
+                None if phase == "walk" => walk.push(parse.corners() - before),
+                None => {}
+            }
+        }
+    }
+
+    #[test]
+    fn a_sliced_parse_decodes_an_inline_buffer_a_slice_of_bytes_at_a_time_into_the_same_mesh() {
+        let (json, bin) = grid_gltf("");
+        let uri = format!("data:application/octet-stream;base64,{}", base64(&bin));
+        let json = json.replace(r#""uri":"""#, &format!(r#""uri":"{uri}""#));
+        let mut nothing = |f: &str| Err(format!("{f} isn't there"));
+        let whole = gltf::load("m/grid.gltf", json.as_bytes(), &mut nothing, &|_| false).unwrap();
+        let (sliced, pieces, walk) = parse_in_slices("m/grid.gltf", &json, &mut nothing);
+        assert!(sliced.data == whole.data, "the slices made another mesh");
+        assert_eq!(sliced.parts, whole.parts);
+        // 64 KiB of bytes a slice: as many slices as that takes.
+        assert_eq!(pieces["buffers"], bin.len().div_ceil(SLICE_BYTES));
+        assert!(pieces["buffers"] > 1);
+        // Each walk slice adds at most a slice's worth of corners, plus
+        // the primitive that crossed it (the largest is 3600 corners).
+        let per_slice = SLICE_BYTES / gltf::CORNER_BYTES;
+        let corners: usize = 2 * (1..=8).map(|k| k * 450).sum::<usize>();
+        assert_eq!(whole.data.positions.len(), corners);
+        assert!(walk.iter().all(|&n| n < per_slice + 3600), "{walk:?}");
+        assert!(walk.len() + 1 >= corners / (per_slice + 3600), "{walk:?}");
+        assert!(walk.len() > 4, "{walk:?}");
+    }
+
+    #[test]
+    fn a_sliced_parse_reads_a_buffer_file_in_its_own_slice_into_the_same_mesh() {
+        let (json, bin) = grid_gltf("grid.bin");
+        let mut reads = 0;
+        let mut read = |f: &str| {
+            reads += 1;
+            if f == "m/grid.bin" {
+                Ok(bin.clone())
+            } else {
+                Err(format!("{f} isn't there"))
+            }
+        };
+        let whole = gltf::load("m/grid.gltf", json.as_bytes(), &mut read, &|_| false).unwrap();
+        let (sliced, pieces, _) = parse_in_slices("m/grid.gltf", &json, &mut read);
+        assert!(sliced.data == whole.data, "the slices made another mesh");
+        assert_eq!(sliced.parts, whole.parts);
+        assert_eq!(pieces["buffers"], 1);
+        assert_eq!(reads, 2, "read once by each parse");
     }
 }

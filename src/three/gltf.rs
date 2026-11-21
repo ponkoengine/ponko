@@ -140,7 +140,7 @@ pub(crate) use crate::compressed::GpuFormats;
 
 /// Without `compressed-textures` every image is decoded.
 #[cfg(not(feature = "compressed-textures"))]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GpuFormats {}
 
 /// An image kept in a GPU block format.
@@ -203,27 +203,15 @@ pub(crate) fn load(
     load_for(name, bytes, read, have, GpuFormats::default())
 }
 
+/// An image decoded before the parse ([`Parse::with_images`]): its pixels
+/// or blocks, and the block formats it was decoded for (`None`: the same
+/// for any, as a PNG's are).
+pub(crate) type Predecoded = (Image, Option<Blocks>, Option<GpuFormats>);
+
 std::thread_local! {
     /// Images of the file being parsed on this thread that were decoded
-    /// before the parse, by image index ([`load_with_images`]).
-    static DECODED: std::cell::RefCell<HashMap<usize, Image>> = std::cell::RefCell::new(HashMap::new());
-}
-
-/// [`load_for`], with some of the file's images decoded already (to RGBA8,
-/// as `decode_image` does), by image index: a streamed mesh decodes them a
-/// slice at a time first where there are no worker threads.
-pub(crate) fn load_with_images(
-    name: &str,
-    bytes: &[u8],
-    read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
-    have: &dyn Fn(&str) -> bool,
-    gpu: GpuFormats,
-    decoded: HashMap<usize, Image>,
-) -> Result<Loaded, String> {
-    DECODED.with(|d| *d.borrow_mut() = decoded);
-    let loaded = load_for(name, bytes, read, have, gpu);
-    DECODED.with(|d| d.borrow_mut().clear());
-    loaded
+    /// before the parse, by image index ([`Parse::with_images`]).
+    static DECODED: std::cell::RefCell<HashMap<usize, Predecoded>> = std::cell::RefCell::new(HashMap::new());
 }
 
 /// [`load`], with KTX2 images in a block format of `gpu` kept as they are
@@ -235,194 +223,452 @@ pub(crate) fn load_for(
     have: &dyn Fn(&str) -> bool,
     gpu: GpuFormats,
 ) -> Result<Loaded, String> {
-    check_glb_length(name, bytes)?;
-    let gltf_ext::Prepared {
-        document: gltf,
-        buffers,
-        json,
-        preferred_image,
-        dequantize,
-        mut warnings,
-    } = gltf_ext::prepare(name, bytes, read)?;
-    check_accessors(&gltf).map_err(|e| format!("{name}: {e}"))?;
-    check_node_tree(&gltf).map_err(|e| format!("{name}: {e}"))?;
-    let FileMaterials {
-        mut materials,
-        mappings,
-        images,
-        blocks,
-        image_sources,
-    } = read_materials(
-        &gltf,
-        &buffers,
-        &json,
-        &preferred_image,
-        name,
-        (have, gpu),
-        read,
-        &mut warnings,
-    )?;
-    let default_material = materials.len();
+    let mut parse = Parse::new(name, bytes, gpu)?;
+    loop {
+        if let Some(loaded) = parse.step(read, have, usize::MAX)? {
+            return Ok(loaded);
+        }
+    }
+}
 
-    // Every primitive in the scene, placed by its node, grouped by material.
-    let scene = gltf
-        .default_scene()
-        .or_else(|| gltf.scenes().next())
-        .ok_or_else(|| format!("{name}: has no scene"))?;
-    let mut rig = if gltf.skins().len() > 0 || gltf.animations().len() > 0 {
-        Some(Rig::new(&gltf, &scene, name)?)
-    } else {
-        None
-    };
-    let mut by_material: Vec<(usize, MeshData)> = Vec::new();
-    // Morph targets' default weights, by name.
-    let mut defaults: Vec<(String, f32)> = Vec::new();
-    let mut lights = Vec::new();
-    let mut cameras = Vec::new();
-    let mut stack: Vec<(gltf::Node, Mat4)> = scene.nodes().map(|n| (n, Mat4::IDENTITY)).collect();
-    while let Some((node, parent)) = stack.pop() {
-        let mut matrix = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
-        let children = matrix;
-        lights.extend(gltf_ext::light_of(&json, node.index(), matrix, node.name()));
-        cameras.extend(gltf_ext::camera_of(&node, matrix));
-        if let Some(mesh) = node.mesh() {
-            // A skinned mesh is in the space it was bound in, whatever its
-            // node; any other follows its node.
-            let binding = match (&mut rig, node.skin()) {
-                (None, _) => Binding::None,
-                (Some(rig), Some(skin)) => {
-                    matrix = Mat4::IDENTITY;
-                    let reader = skin.reader(|b| buffers.get(b.index()).map(Vec::as_slice));
-                    let inverse: Vec<Mat4> = reader
-                        .read_inverse_bind_matrices()
-                        .map(|m| m.map(|m| Mat4::from_cols_array_2d(&m)).collect())
-                        .unwrap_or_default();
-                    let mut slots = Vec::new();
-                    for (i, joint) in skin.joints().enumerate() {
-                        let j = rig.of_node[joint.index()];
-                        if j == u16::MAX {
-                            return Err(format!("{name}: a skin's joint isn't in the scene"));
-                        }
-                        let ib = inverse.get(i).copied().unwrap_or(Mat4::IDENTITY);
-                        slots.push(rig.slot(j, ib).map_err(|e| format!("{name}: {e}"))?);
-                    }
-                    Binding::Skin(slots)
+/// What a corner of a mesh adds as it is read, for [`Parse::step`]'s
+/// bound: its position, normal, texture coordinates and index.
+pub(crate) const CORNER_BYTES: usize = 12 + 12 + 8 + 4;
+
+/// [`load_for`] a bounded piece at a time, for a streamed mesh where there
+/// are no worker threads: [`Parse::new`] parses the JSON, and each
+/// [`Parse::step`] fetches a buffer (or decodes a piece of an inline one),
+/// makes the document, checks it, reads its materials, adds a few
+/// primitives' triangles, or finishes. `load_for` runs the same steps, so
+/// the mesh is the same whichever way it was parsed.
+pub(crate) struct Parse {
+    name: String,
+    gpu: GpuFormats,
+    state: ParseState,
+    /// Images decoded before the parse, taken by the materials step.
+    decoded: HashMap<usize, Predecoded>,
+}
+
+enum ParseState {
+    Buffers(Box<gltf_ext::Start>),
+    Document(Box<gltf_ext::Start>),
+    Checks(Box<gltf_ext::Prepared>),
+    Materials(Box<gltf_ext::Prepared>),
+    Walk(Box<Walk>),
+    Done,
+}
+
+/// The node walk of [`Parse`]: every primitive in the scene, placed by
+/// its node, grouped by material.
+struct Walk {
+    prepared: gltf_ext::Prepared,
+    materials: Vec<LoadedMaterial>,
+    mappings: Vec<UvMapping>,
+    images: Vec<Image>,
+    blocks: Vec<Option<Blocks>>,
+    image_sources: Vec<Option<String>>,
+    default_material: usize,
+    rig: Option<Rig>,
+    by_material: Vec<(usize, MeshData)>,
+    /// Morph targets' default weights, by name.
+    defaults: Vec<(String, f32)>,
+    lights: Vec<ModelLight>,
+    cameras: Vec<ModelCamera>,
+    /// Nodes still to visit, by index, with their parents' matrix.
+    stack: Vec<(usize, Mat4)>,
+    /// The node whose primitives are being added.
+    node: Option<NodeWalk>,
+}
+
+/// A node with a mesh, part way through its primitives.
+struct NodeWalk {
+    index: usize,
+    /// Its mesh's matrix (identity when skinned).
+    matrix: Mat4,
+    /// Its children's parent matrix.
+    children: Mat4,
+    binding: Binding,
+    targets: Vec<String>,
+    next_primitive: usize,
+}
+
+impl Parse {
+    /// Starts parsing glTF `bytes`: checks its length and parses its JSON.
+    pub(crate) fn new(name: &str, bytes: &[u8], gpu: GpuFormats) -> Result<Self, String> {
+        check_glb_length(name, bytes)?;
+        let start = gltf_ext::Start::new(name, bytes)?;
+        Ok(Self {
+            name: name.to_string(),
+            gpu,
+            state: ParseState::Buffers(Box::new(start)),
+            decoded: HashMap::new(),
+        })
+    }
+
+    /// With some of the file's images decoded already, by image index: a
+    /// streamed mesh decodes them a slice at a time first where there are
+    /// no worker threads. One decoded for other block formats than an
+    /// image is asked for in is decoded again.
+    pub(crate) fn with_images(mut self, decoded: HashMap<usize, Predecoded>) -> Self {
+        self.decoded = decoded;
+        self
+    }
+
+    /// The next piece of the parse: the file once it is done. `work` bounds
+    /// the bytes a piece that can be split makes: those of an inline buffer
+    /// decoded, and of the corners of the primitives added (at
+    /// [`CORNER_BYTES`] a corner, and at least one primitive). Files the
+    /// file refers to are read with `read`; images in files `have` says
+    /// are loaded already aren't read.
+    pub(crate) fn step(
+        &mut self,
+        read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+        have: &dyn Fn(&str) -> bool,
+        work: usize,
+    ) -> Result<Option<Loaded>, String> {
+        let name = self.name.as_str();
+        match std::mem::replace(&mut self.state, ParseState::Done) {
+            ParseState::Buffers(mut start) => {
+                // Four characters of base64 make three bytes.
+                let chars = work.saturating_mul(4) / 3;
+                self.state = if start.next_buffer(name, read, chars)? {
+                    ParseState::Document(start)
+                } else {
+                    ParseState::Buffers(start)
+                };
+            }
+            ParseState::Document(start) => {
+                self.state = ParseState::Checks(Box::new(start.finish(name)?));
+            }
+            ParseState::Checks(prepared) => {
+                check_accessors(&prepared.document).map_err(|e| format!("{name}: {e}"))?;
+                check_node_tree(&prepared.document).map_err(|e| format!("{name}: {e}"))?;
+                self.state = ParseState::Materials(prepared);
+            }
+            ParseState::Materials(prepared) => {
+                let decoded = std::mem::take(&mut self.decoded);
+                DECODED.with(|d| *d.borrow_mut() = decoded);
+                let walk = Walk::new(*prepared, name, have, self.gpu, read);
+                DECODED.with(|d| d.borrow_mut().clear());
+                self.state = ParseState::Walk(Box::new(walk?));
+            }
+            ParseState::Walk(mut walk) => {
+                if walk.step(name, work / CORNER_BYTES)? {
+                    return walk.finish(name).map(Some);
                 }
-                (Some(rig), None) => {
-                    let j = rig.of_node[node.index()];
-                    let ib = rig.rest[usize::from(j)].inverse();
-                    Binding::Rigid(rig.slot(j, ib).map_err(|e| format!("{name}: {e}"))?)
+                self.state = ParseState::Walk(walk);
+            }
+            ParseState::Done => return Err(format!("{name} was parsed already")),
+        }
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+impl Parse {
+    /// Which piece comes next, for tests.
+    pub(crate) fn phase(&self) -> &'static str {
+        match &self.state {
+            ParseState::Buffers(_) => "buffers",
+            ParseState::Document(_) => "document",
+            ParseState::Checks(_) => "checks",
+            ParseState::Materials(_) => "materials",
+            ParseState::Walk(_) => "walk",
+            ParseState::Done => "done",
+        }
+    }
+
+    /// Corners added so far by the walk, for tests.
+    pub(crate) fn corners(&self) -> usize {
+        match &self.state {
+            ParseState::Walk(walk) => walk.by_material.iter().map(|(_, d)| d.positions.len()).sum(),
+            _ => 0,
+        }
+    }
+}
+
+impl Walk {
+    /// Reads the materials and the scene's skeleton, and starts the walk.
+    fn new(
+        mut prepared: gltf_ext::Prepared,
+        name: &str,
+        have: &dyn Fn(&str) -> bool,
+        gpu: GpuFormats,
+        read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+    ) -> Result<Self, String> {
+        let FileMaterials {
+            materials,
+            mappings,
+            images,
+            blocks,
+            image_sources,
+        } = read_materials(
+            &prepared.document,
+            &prepared.buffers,
+            &prepared.json,
+            &prepared.preferred_image,
+            name,
+            (have, gpu),
+            read,
+            &mut prepared.warnings,
+        )?;
+        let default_material = materials.len();
+        let gltf = &prepared.document;
+        let scene = gltf
+            .default_scene()
+            .or_else(|| gltf.scenes().next())
+            .ok_or_else(|| format!("{name}: has no scene"))?;
+        let rig = if gltf.skins().len() > 0 || gltf.animations().len() > 0 {
+            Some(Rig::new(gltf, &scene, name)?)
+        } else {
+            None
+        };
+        let stack = scene.nodes().map(|n| (n.index(), Mat4::IDENTITY)).collect();
+        Ok(Self {
+            prepared,
+            materials,
+            mappings,
+            images,
+            blocks,
+            image_sources,
+            default_material,
+            rig,
+            by_material: Vec::new(),
+            defaults: Vec::new(),
+            lights: Vec::new(),
+            cameras: Vec::new(),
+            stack,
+            node: None,
+        })
+    }
+
+    /// Adds primitives until about `corners` corners are added (at least
+    /// one primitive, when there is one): `true` once every node is done.
+    fn step(&mut self, name: &str, corners: usize) -> Result<bool, String> {
+        let mut added = 0usize;
+        loop {
+            if self.node.is_none() {
+                let Some((index, parent)) = self.stack.pop() else {
+                    return Ok(true);
+                };
+                self.start_node(index, parent, name)?;
+            }
+            let Some(node) = self.node.as_mut() else {
+                continue;
+            };
+            let gltf = &self.prepared.document;
+            let mesh = gltf
+                .nodes()
+                .nth(node.index)
+                .and_then(|n| n.mesh())
+                .ok_or_else(|| format!("{name}: a node's mesh isn't in the file"))?;
+            let Some(primitive) = mesh.primitives().nth(node.next_primitive) else {
+                let (index, children) = (node.index, node.children);
+                self.node = None;
+                if let Some(n) = gltf.nodes().nth(index) {
+                    self.stack.extend(n.children().map(|c| (c.index(), children)));
+                }
+                continue;
+            };
+            node.next_primitive += 1;
+            if primitive.mode() != gltf::mesh::Mode::Triangles {
+                continue; // lines and points aren't drawn
+            }
+            // Positions `ponko cook` quantized: back to their size first.
+            let matrix = node.matrix * dequantization(&self.prepared.dequantize, &mesh, &primitive);
+            let material = primitive.material().index().unwrap_or(self.default_material);
+            let at = match self.by_material.iter().position(|(m, _)| *m == material) {
+                Some(i) => i,
+                None => {
+                    self.by_material.push((material, MeshData::default()));
+                    self.by_material.len() - 1
                 }
             };
-            let targets = target_names(&mesh);
-            for (k, target) in targets.iter().enumerate() {
-                if !defaults.iter().any(|(n, _)| n == target) {
-                    let weight = node
-                        .weights()
-                        .or_else(|| mesh.weights())
-                        .and_then(|w| w.get(k))
-                        .copied()
-                        .unwrap_or(0.0);
-                    defaults.push((target.clone(), weight));
-                }
-            }
-            for primitive in mesh.primitives() {
-                if primitive.mode() != gltf::mesh::Mode::Triangles {
-                    continue; // lines and points aren't drawn
-                }
-                // Positions `ponko cook` quantized: back to their size first.
-                let matrix = matrix * dequantization(&dequantize, &mesh, &primitive);
-                let material = primitive.material().index().unwrap_or(default_material);
-                let at = match by_material.iter().position(|(m, _)| *m == material) {
-                    Some(i) => i,
-                    None => {
-                        by_material.push((material, MeshData::default()));
-                        by_material.len() - 1
-                    }
-                };
-                let part = Part {
-                    matrix,
-                    binding: &binding,
-                    targets: &targets,
-                    mapping: mappings.get(material).copied().unwrap_or(UvMapping::PLAIN),
-                };
-                append(&mut by_material[at].1, &primitive, &buffers, &part, name)?;
+            let part = Part {
+                matrix,
+                binding: &node.binding,
+                targets: &node.targets,
+                mapping: self.mappings.get(material).copied().unwrap_or(UvMapping::PLAIN),
+            };
+            let out = &mut self.by_material[at].1;
+            let before = out.positions.len();
+            append(out, &primitive, &self.prepared.buffers, &part, name)?;
+            added = added.saturating_add(out.positions.len() - before);
+            if added >= corners {
+                return Ok(false);
             }
         }
-        stack.extend(node.children().map(|c| (c, children)));
-    }
-    if by_material.is_empty() {
-        return Err(format!("{name}: has no triangles"));
-    }
-    if by_material.iter().any(|(m, _)| *m == default_material) {
-        materials.push(LoadedMaterial::plain());
     }
 
-    let (mut data, parts) = merge_by_material(by_material);
-    // Importer-authored in-between frames are ordinary glTF targets plus
-    // a channel mapping in mesh extras. Resolve indices after name merging.
-    for mesh in gltf.meshes() {
-        let names = target_names(&mesh);
-        let extras = mesh
-            .extras()
-            .as_ref()
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok());
-        if let Some(frames) = extras
-            .as_ref()
-            .and_then(|v| v.get("ponkoMorphFrames"))
-            .and_then(|v| v.as_array())
-        {
-            for f in frames {
-                let parse = || -> Option<super::MorphFrame> {
-                    let channel = names.get(f["channel"].as_u64()? as usize)?;
-                    let target = names.get(f["target"].as_u64()? as usize)?;
-                    Some(super::MorphFrame {
-                        channel: data.morph_targets.iter().position(|t| t.name == *channel)?,
-                        target: data.morph_targets.iter().position(|t| t.name == *target)?,
-                        weight: f["weight"].as_f64()? as f32,
-                    })
-                };
-                let frame = parse().ok_or("invalid morph frame extras")?;
-                if !data.morph_frames.contains(&frame) {
-                    data.morph_frames.push(frame);
+    /// Visits node `index`: its lights and cameras, and, if it has a mesh,
+    /// its binding and morph targets before its primitives are added. A
+    /// node without a mesh puts its children on the stack at once.
+    fn start_node(&mut self, index: usize, parent: Mat4, name: &str) -> Result<(), String> {
+        let gltf = &self.prepared.document;
+        let node = gltf
+            .nodes()
+            .nth(index)
+            .ok_or_else(|| format!("{name}: a node isn't in the file"))?;
+        let mut matrix = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
+        let children = matrix;
+        self.lights.extend(gltf_ext::light_of(
+            &self.prepared.json,
+            node.index(),
+            matrix,
+            node.name(),
+        ));
+        self.cameras.extend(gltf_ext::camera_of(&node, matrix));
+        let Some(mesh) = node.mesh() else {
+            self.stack.extend(node.children().map(|c| (c.index(), children)));
+            return Ok(());
+        };
+        // A skinned mesh is in the space it was bound in, whatever its
+        // node; any other follows its node.
+        let buffers = &self.prepared.buffers;
+        let binding = match (&mut self.rig, node.skin()) {
+            (None, _) => Binding::None,
+            (Some(rig), Some(skin)) => {
+                matrix = Mat4::IDENTITY;
+                let reader = skin.reader(|b| buffers.get(b.index()).map(Vec::as_slice));
+                let inverse: Vec<Mat4> = reader
+                    .read_inverse_bind_matrices()
+                    .map(|m| m.map(|m| Mat4::from_cols_array_2d(&m)).collect())
+                    .unwrap_or_default();
+                let mut slots = Vec::new();
+                for (i, joint) in skin.joints().enumerate() {
+                    let j = rig.of_node[joint.index()];
+                    if j == u16::MAX {
+                        return Err(format!("{name}: a skin's joint isn't in the scene"));
+                    }
+                    let ib = inverse.get(i).copied().unwrap_or(Mat4::IDENTITY);
+                    slots.push(rig.slot(j, ib).map_err(|e| format!("{name}: {e}"))?);
+                }
+                Binding::Skin(slots)
+            }
+            (Some(rig), None) => {
+                let j = rig.of_node[node.index()];
+                let ib = rig.rest[usize::from(j)].inverse();
+                Binding::Rigid(rig.slot(j, ib).map_err(|e| format!("{name}: {e}"))?)
+            }
+        };
+        let targets = target_names(&mesh);
+        for (k, target) in targets.iter().enumerate() {
+            if !self.defaults.iter().any(|(n, _)| n == target) {
+                let weight = node
+                    .weights()
+                    .or_else(|| mesh.weights())
+                    .and_then(|w| w.get(k))
+                    .copied()
+                    .unwrap_or(0.0);
+                self.defaults.push((target.clone(), weight));
+            }
+        }
+        self.node = Some(NodeWalk {
+            index,
+            matrix,
+            children,
+            binding,
+            targets,
+            next_primitive: 0,
+        });
+        Ok(())
+    }
+
+    /// Merges the parts, reads morph frames and clips: the loaded file.
+    fn finish(self, name: &str) -> Result<Loaded, String> {
+        let Self {
+            prepared,
+            mut materials,
+            images,
+            blocks,
+            image_sources,
+            default_material,
+            rig,
+            by_material,
+            defaults,
+            lights,
+            cameras,
+            ..
+        } = self;
+        let gltf_ext::Prepared {
+            document: gltf,
+            buffers,
+            warnings,
+            ..
+        } = prepared;
+        if by_material.is_empty() {
+            return Err(format!("{name}: has no triangles"));
+        }
+        if by_material.iter().any(|(m, _)| *m == default_material) {
+            materials.push(LoadedMaterial::plain());
+        }
+
+        let (mut data, parts) = merge_by_material(by_material);
+        // Importer-authored in-between frames are ordinary glTF targets plus
+        // a channel mapping in mesh extras. Resolve indices after name merging.
+        for mesh in gltf.meshes() {
+            let names = target_names(&mesh);
+            let extras = mesh
+                .extras()
+                .as_ref()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok());
+            if let Some(frames) = extras
+                .as_ref()
+                .and_then(|v| v.get("ponkoMorphFrames"))
+                .and_then(|v| v.as_array())
+            {
+                for f in frames {
+                    let parse = || -> Option<super::MorphFrame> {
+                        let channel = names.get(f["channel"].as_u64()? as usize)?;
+                        let target = names.get(f["target"].as_u64()? as usize)?;
+                        Some(super::MorphFrame {
+                            channel: data.morph_targets.iter().position(|t| t.name == *channel)?,
+                            target: data.morph_targets.iter().position(|t| t.name == *target)?,
+                            weight: f["weight"].as_f64()? as f32,
+                        })
+                    };
+                    let frame = parse().ok_or("invalid morph frame extras")?;
+                    if !data.morph_frames.contains(&frame) {
+                        data.morph_frames.push(frame);
+                    }
                 }
             }
         }
+        data.problem().map_err(|e| format!("{name}: {e}"))?;
+        let morph_defaults = data
+            .morph_targets
+            .iter()
+            .map(|t| defaults.iter().find(|(n, _)| *n == t.name).map_or(0.0, |d| d.1))
+            .collect();
+        let clips = match &rig {
+            Some(rig) => read_clips(&gltf, &buffers, rig, &data)?,
+            None => Vec::new(),
+        };
+        let skin = rig.map(|rig| LoadedSkin {
+            joints: clips
+                .first()
+                .map_or_else(|| rig.joints.into(), |c| c.source_joints().clone()),
+            slots: rig.slots.iter().map(|s| s.0).collect(),
+            inverse_binds: rig.slots.iter().map(|s| s.1).collect(),
+        });
+        for warning in &warnings {
+            gltf_ext::warn(warning);
+        }
+        Ok(Loaded {
+            data,
+            parts,
+            materials,
+            images,
+            blocks,
+            image_sources,
+            skin,
+            clips,
+            morph_defaults,
+            lights,
+            cameras,
+            warnings,
+        })
     }
-    data.problem().map_err(|e| format!("{name}: {e}"))?;
-    let morph_defaults = data
-        .morph_targets
-        .iter()
-        .map(|t| defaults.iter().find(|(n, _)| *n == t.name).map_or(0.0, |d| d.1))
-        .collect();
-    let clips = match &rig {
-        Some(rig) => read_clips(&gltf, &buffers, rig, &data)?,
-        None => Vec::new(),
-    };
-    let skin = rig.map(|rig| LoadedSkin {
-        joints: clips
-            .first()
-            .map_or_else(|| rig.joints.into(), |c| c.source_joints().clone()),
-        slots: rig.slots.iter().map(|s| s.0).collect(),
-        inverse_binds: rig.slots.iter().map(|s| s.1).collect(),
-    });
-    for warning in &warnings {
-        gltf_ext::warn(warning);
-    }
-    Ok(Loaded {
-        data,
-        parts,
-        materials,
-        images,
-        blocks,
-        image_sources,
-        skin,
-        clips,
-        morph_defaults,
-        lights,
-        cameras,
-        warnings,
-    })
 }
 
 /// One node of a file's scene, read on its own by [`load_nodes`].
@@ -1380,8 +1626,15 @@ fn decode(
     name: &str,
     gpu: GpuFormats,
 ) -> Result<(Image, Option<Blocks>), String> {
-    if let Some(decoded) = DECODED.with(|d| d.borrow_mut().remove(&image.index())) {
-        return Ok((decoded, None));
+    let predecoded = DECODED.with(|d| {
+        let mut d = d.borrow_mut();
+        let fits = d
+            .get(&image.index())
+            .is_some_and(|(_, _, formats)| formats.is_none_or(|f| f == gpu));
+        if fits { d.remove(&image.index()) } else { None }
+    });
+    if let Some((decoded, blocks, _)) = predecoded {
+        return Ok((decoded, blocks));
     }
     let bytes = match image.source() {
         gltf::image::Source::View { view, .. } => {
@@ -1420,11 +1673,8 @@ pub(super) fn fetch(
     folder: &str,
     read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<Vec<u8>, String> {
-    if let Some(rest) = uri.strip_prefix("data:") {
-        let (_, data) = rest
-            .split_once(";base64,")
-            .ok_or("only base64 data URIs are supported")?;
-        return base64(data);
+    if let Some(data) = inline_data(uri) {
+        return base64(data?);
     }
     let file = percent_decode(uri);
     read(&format!("{folder}{file}"))
@@ -1720,26 +1970,74 @@ fn check_glb_length(name: &str, bytes: &[u8]) -> Result<(), String> {
 }
 
 fn base64(text: &str) -> Result<Vec<u8>, String> {
-    let value = |c: u8| match c {
-        b'A'..=b'Z' => Some(c - b'A'),
-        b'a'..=b'z' => Some(c - b'a' + 26),
-        b'0'..=b'9' => Some(c - b'0' + 52),
-        b'+' | b'-' => Some(62),
-        b'/' | b'_' => Some(63),
-        _ => None,
-    };
-    let mut out = Vec::with_capacity(text.len() * 3 / 4);
-    let (mut acc, mut bits) = (0u32, 0);
-    for c in text.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=') {
-        let v = value(c).ok_or("bad base64 in a data URI")?;
-        acc = acc << 6 | u32::from(v);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
+    let mut decoder = Base64::with_capacity(text.len());
+    decoder.feed(text)?;
+    Ok(decoder.finish())
+}
+
+/// A base64 decoder fed a piece of the text at a time (an inline buffer
+/// decoded in slices): the same bytes as decoding it whole.
+pub(super) struct Base64 {
+    out: Vec<u8>,
+    acc: u32,
+    bits: u32,
+}
+
+impl Base64 {
+    /// For about `chars` characters of text.
+    pub(super) fn with_capacity(chars: usize) -> Self {
+        Self {
+            out: Vec::with_capacity(chars * 3 / 4),
+            acc: 0,
+            bits: 0,
         }
     }
-    Ok(out)
+
+    /// Decodes the next piece of the text.
+    pub(super) fn feed(&mut self, text: &str) -> Result<(), String> {
+        let value = |c: u8| match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' | b'-' => Some(62),
+            b'/' | b'_' => Some(63),
+            _ => None,
+        };
+        for c in text.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=') {
+            let v = value(c).ok_or("bad base64 in a data URI")?;
+            self.acc = self.acc << 6 | u32::from(v);
+            self.bits += 6;
+            if self.bits >= 8 {
+                self.bits -= 8;
+                self.out.push((self.acc >> self.bits) as u8);
+            }
+        }
+        Ok(())
+    }
+
+    /// The bytes decoded.
+    pub(super) fn finish(self) -> Vec<u8> {
+        self.out
+    }
+}
+
+/// A data URI's base64 text; `None` for a URI that isn't a data URI.
+pub(super) fn inline_data(uri: &str) -> Option<Result<&str, String>> {
+    let rest = uri.strip_prefix("data:")?;
+    Some(
+        rest.split_once(";base64,")
+            .map(|(_, data)| data)
+            .ok_or_else(|| "only base64 data URIs are supported".to_string()),
+    )
+}
+
+/// `at`, or the next character boundary of `text` after it (or its end).
+pub(super) fn char_boundary(text: &str, at: usize) -> usize {
+    let mut at = at.min(text.len());
+    while !text.is_char_boundary(at) {
+        at += 1;
+    }
+    at
 }
 
 pub(super) fn to_srgb(linear: f32) -> f32 {
