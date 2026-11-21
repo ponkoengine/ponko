@@ -437,7 +437,10 @@ impl Ctx {
 /// pointing at them.
 #[cfg_attr(not(feature = "editor"), allow(dead_code))]
 #[derive(Debug, Default)]
-pub(crate) struct GltfEntities(Vec<Option<(Entity, Vec<(String, Entity)>)>>);
+pub(crate) struct GltfEntities(Vec<Option<SceneEntities>>);
+
+/// A scene's root and its nodes' entities by path.
+type SceneEntities = (Entity, Vec<(String, Entity)>);
 
 impl Ctx {
     /// The entities of every glTF scene now (see [`GltfEntities`]).
