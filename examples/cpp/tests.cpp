@@ -2278,9 +2278,23 @@ static void lobby_client() {
     CHECK(lobby.room_meta().empty());
     ponko::lobby moved = std::move(lobby);
     CHECK(!moved.state().connected);
-    // WebRTC endpoints through the lobby: member ids start at 1, and this
-    // build has no `webrtc` feature (crates/ponko_ffi/tests/rtc.rs has the flow).
+    // WebRTC endpoints through the lobby: member ids start at 1. The library
+    // is built without the `webrtc` feature (the calls throw and say so) or
+    // with it (CMake option PONKO_WEBRTC, which defines PONKO_WEBRTC: a client
+    // that is not in a room still gets an endpoint, which waits for its
+    // signaling). crates/ponko_ffi/tests/rtc.rs has the full flow.
     throws([&] { moved.rtc_join(0, nullptr); });
+#ifdef PONKO_WEBRTC
+    {
+        auto hosted = moved.rtc_host("", 4, "127.0.0.1:0");
+        CHECK(hosted.rtc_peer(1) == 0);
+        auto joined = moved.rtc_join(1, "", "127.0.0.1:0");
+        CHECK(joined.rtc_peer(1) == 0);
+    }
+    throws_invalid([&] { moved.rtc_host("", 4, "not an address"); }, "bind is not an address");
+#else
+    throws_invalid([&] { moved.rtc_host("", 4); }, "without the `webrtc` feature");
+#endif
     auto pair = ponko::net_messages::loopback(2);
     CHECK(pair[0].rtc_peer(1) == 0);
 }

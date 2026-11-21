@@ -62,7 +62,15 @@ cargo build --workspace --examples
 cargo test --workspace
 cargo clippy --workspace --all-targets
 python3 scripts/collect-panics.py --check   # every panic site has a reviewed decision
+python3 scripts/check-feature-coverage.py   # every cargo feature has clippy and test lines in ci.yml
 ```
+
+If you add or change a cargo feature, or a web smoke runner, give it its lines
+in `.github/workflows/ci.yml` (the list of checks) and run the last command;
+CONTRIBUTING.md, "Adding or changing a cargo feature", has the details. Also
+run the feature's own lines locally, for example
+`cargo clippy -p ponko --features video` and
+`cargo test -p ponko --features video --test video`.
 
 `collect-panics.py --check` fails for a new or changed `panic!`, `assert!`,
 `unwrap` or `expect` in the engine or ECS production code. Review the site
@@ -78,7 +86,7 @@ cd crates/ponko_ecs
 cargo +nightly miri test --tests --no-default-features --features derive
 # The parallel path. rayon's dependency crossbeam-epoch trips Stacked Borrows
 # (not our code), and its global thread pool outlives main:
-MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-ignore-leaks" cargo +nightly miri test --test parallel --test changes --test view_groups --test query_cache --test query_cache_views
+MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-ignore-leaks" cargo +nightly miri test --test parallel --test changes --test view_groups --test query_cache --test query_cache_views --test hooks --test required
 ```
 
 ## Project rules

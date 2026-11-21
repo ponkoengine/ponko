@@ -1013,15 +1013,32 @@ static void lobby_client(void) {
 }
 
 /* WebRTC endpoints signaled through a lobby client: argument checks, and a
-   non-WebRTC endpoint has no lobby member behind its peers. The native test
-   build has no `webrtc` feature (the calls then fail); the full flow runs in
-   crates/ponko_ffi/tests/rtc.rs with it. */
+   non-WebRTC endpoint has no lobby member behind its peers. The library is
+   built either without the `webrtc` feature (the calls then fail and say so)
+   or with it (CMake option PONKO_WEBRTC, which defines PONKO_WEBRTC: a lobby
+   client that is not in a room still gets an endpoint, which waits for its
+   signaling). The full flow runs in crates/ponko_ffi/tests/rtc.rs. */
 static void rtc_endpoints(void) {
     PonkoNetMessages* endpoint = (PonkoNetMessages*)1;
     CHECK(ponko_net_messages_rtc_host(NULL, NULL, NULL, 4, &endpoint) != PONKO_OK && !endpoint);
     PonkoLobby* lobby = NULL;
     CHECK(ponko_lobby_join("127.0.0.1:9", &lobby) == PONKO_OK);
     CHECK(ponko_net_messages_rtc_join(lobby, 0, NULL, NULL, &endpoint) != PONKO_OK && !endpoint);
+#ifdef PONKO_WEBRTC
+    CHECK(ponko_net_messages_rtc_host(lobby, NULL, "127.0.0.1:0", 4, &endpoint) == PONKO_OK && endpoint);
+    uint32_t hosted = 7;
+    CHECK(ponko_net_messages_rtc_peer(endpoint, 1, &hosted) == PONKO_OK && hosted == 0);
+    ponko_net_messages_free(endpoint);
+    endpoint = NULL;
+    CHECK(ponko_net_messages_rtc_join(lobby, 1, "", "127.0.0.1:0", &endpoint) == PONKO_OK && endpoint);
+    ponko_net_messages_free(endpoint);
+    endpoint = (PonkoNetMessages*)1;
+    CHECK(ponko_net_messages_rtc_host(lobby, NULL, "not an address", 4, &endpoint) != PONKO_OK && !endpoint);
+    CHECK(strstr(ponko_last_error(), "bind is not an address") != NULL);
+#else
+    CHECK(ponko_net_messages_rtc_host(lobby, NULL, NULL, 4, &endpoint) != PONKO_OK && !endpoint);
+    CHECK(strstr(ponko_last_error(), "without the `webrtc` feature") != NULL);
+#endif
     ponko_lobby_free(lobby);
     PonkoNetMessages* pair[2] = {NULL, NULL};
     CHECK(ponko_net_messages_loopback(2, pair) == PONKO_OK);

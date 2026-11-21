@@ -385,7 +385,7 @@ where
 
         // The built-in controllers, unless the game brought its own backend
         // (setup can still replace them with `set_gamepad_backend`).
-        #[cfg(feature = "gamepad")]
+        #[cfg(all(feature = "gamepad", not(all(target_arch = "wasm32", target_feature = "atomics"))))]
         if !self.ctx.has_gamepad_backend() {
             self.ctx.set_gamepad_backend(crate::gamepad::GilrsBackend::new());
         }

@@ -294,10 +294,45 @@ jobs:
           - name: compressed textures and geometry
             scope: -p ponko
             args: --features 3d,basis-universal,gltf-meshopt
-          # The offscreen rendering benchmarks (`render/scene`, `render/record`).
-          - name: benchmarks with the renderer
+          # Every benchmark driver: the offscreen rendering benchmarks
+          # (`render/scene`, `render/record`), the positional sound, shaped
+          # text and video decoding ones.
+          - name: benchmarks with every feature
             scope: -p ponko_bench
-            args: --features render
+            args: --all-features
+          # The editor as an app (`ponko editor`): the inspector's panels in
+          # edit mode, saving scenes and prefabs.
+          - name: editor feature
+            scope: -p ponko
+            args: --features editor
+          # WebM playback (AV1 pictures, Vorbis sound), desktop only.
+          - name: video feature
+            scope: -p ponko
+            args: --features video
+          # The lobby client alone (no window, audio or other optional
+          # subsystem), then with the WebRTC endpoints on top of it.
+          - name: lobby client without a window
+            scope: -p ponko
+            args: --no-default-features --features lobby
+          - name: WebRTC endpoints
+            scope: -p ponko
+            args: --features lobby,webrtc
+          # Systems called through subsecond's jump table.
+          - name: hot patching
+            scope: -p ponko
+            args: --features hotpatch
+          - name: ECS with serde
+            scope: -p ponko_ecs
+            args: --features serde
+          - name: lobby server with WebRTC
+            scope: -p ponko_lobby
+            args: --features webrtc
+          # Every export of the C library on, so each feature's C functions
+          # are linted: the editor, accessibility, Basis Universal, system
+          # fonts and WebRTC ones.
+          - name: C library with every feature
+            scope: -p ponko_ffi
+            args: --all-features
     steps:
       - uses: actions/checkout@v7
       - name: Install ALSA and udev headers (audio, gamepads)
@@ -623,6 +658,41 @@ jobs:
         run: |
           cargo test -p ponko --no-fail-fast --features 3d,system-fonts --test text_shaping
           cargo test -p ponko --no-fail-fast --features 3d,system-fonts --lib text
+      # The editor as an app: documents, undo, saving scenes and prefabs,
+      # cooking and play mode, all without a window.
+      - name: Tests, editor
+        if: ${{ !cancelled() }}
+        run: cargo test -p ponko --no-fail-fast --features editor --lib editor
+      # WebM files with AV1 pictures and Vorbis sound (desktop only: on the
+      # web loading a video reports `Unsupported`).
+      - name: Tests, video
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test -p ponko --no-fail-fast --features video --test video
+          cargo test -p ponko --no-fail-fast --features video --lib video
+      # The lobby client with nothing else in the build, then WebRTC
+      # endpoints: the engine's own tests, the lobby server's (its relay
+      # carries the signaling) and the C library's, on loopback.
+      - name: Tests, lobby client and WebRTC endpoints
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test -p ponko --no-fail-fast --no-default-features --features lobby --lib net::lobby
+          cargo test -p ponko --no-fail-fast --features lobby,webrtc --lib net::rtc
+          cargo test -p ponko_lobby --no-fail-fast --features webrtc --test webrtc
+          cargo test -p ponko_ffi --no-fail-fast --features webrtc --test rtc
+      # The C library's optional features: the editor, system fonts,
+      # accessibility and Basis Universal (their C functions fail with an
+      # error naming the feature without them).
+      - name: Tests, C library with optional features
+        if: ${{ !cancelled() }}
+        run: cargo test -p ponko_ffi --no-fail-fast --features editor,system-fonts,accessibility,basis-universal --test text_shaping --test ui_access --test access --test compressed_textures
+      - name: Tests, ECS with serde
+        if: ${{ !cancelled() }}
+        run: cargo test -p ponko_ecs --no-fail-fast --features serde --test entities
+      # The profiling tests with puffin's scopes and server compiled in.
+      - name: Tests, profiling feature
+        if: ${{ !cancelled() }}
+        run: cargo test -p ponko --no-fail-fast --features profiling --test profiling
       # Systems called through subsecond's jump table (no dx attached) behave the same.
       - name: Tests, engine with hotpatch
         if: ${{ !cancelled() }}
@@ -653,7 +723,9 @@ jobs:
       # links and loads on each OS, and the address mapping.
       - name: Tests, Steam transport
         if: ${{ !cancelled() }}
-        run: cargo test -p ponko --no-fail-fast --features steam --lib net::steam
+        run: |
+          cargo test -p ponko --no-fail-fast --features steam --lib net::steam
+          cargo test -p ponko_ffi --no-fail-fast --features steam --test steam_messages
       # The screen-reader adapters (opt-in). Every OS: the UI's semantics as
       # AccessKit data, the adapter's own logic, and that the feature builds.
       # macOS: an `NSView` is asked what a screen reader asks, on the main
@@ -697,6 +769,13 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo doc --workspace --no-deps
+      # The features docs.rs builds (Cargo.toml, [package.metadata.docs.rs]),
+      # with the editor as well: their docs must build without warnings
+      # (RUSTDOCFLAGS denies them).
+      - name: Docs with every public feature
+        run: |
+          cargo doc -p ponko --no-deps --features physics,physics3d,physics-determinism,steam,3d,navmesh,accessibility,control-env,profiling,video,lobby,webrtc,editor
+          cargo doc -p ponko_ecs -p ponko_ffi --no-deps --all-features
 
   # The API of the published crates against the last crates.io release, with
   # cargo-semver-checks. scripts/semver-checks.py decides what a break means:
@@ -885,9 +964,11 @@ jobs:
           # `changes` holds the parallel loops over rows picked by change filters,
           # `view_groups` the views that share a world across threads,
           # `query_cache` and `query_cache_views` the parallel loops and view
-          # batches that find their archetypes through the query index.
+          # batches that find their archetypes through the query index,
+          # `hooks` and `required` the component hooks and required components
+          # (their commands are also recorded on several threads).
           - name: par_for_each, tree borrows
-            args: --test parallel --test changes --test view_groups --test query_cache --test query_cache_views
+            args: --test parallel --test changes --test view_groups --test query_cache --test query_cache_views --test hooks --test required
             flags: -Zmiri-tree-borrows -Zmiri-ignore-leaks
     env:
       MIRIFLAGS: ${{ matrix.flags }}
@@ -971,7 +1052,10 @@ jobs:
           PYTHON
       # control-env: the validation bundle step below drives the release C++
       # battle through PONKO_CONTROL, which a release build honors only with it.
-      - run: cargo build -p ponko_ffi --release --features control-env
+      # webrtc: the C and C++ test programs run against a library with the
+      # WebRTC endpoints (-DPONKO_WEBRTC=ON below); without the feature
+      # tests/lobby.rs of ponko_ffi holds that the calls fail and name it.
+      - run: cargo build -p ponko_ffi --release --features control-env,webrtc
       - name: Verify dynamic exports
         shell: bash
         run: |
@@ -981,7 +1065,7 @@ jobs:
             *) library=target/release/libponko_ffi.so ;;
           esac
           python3 scripts/test-native-symbols.py "$library"
-      - run: cmake -S examples/cpp -B target/native -DCMAKE_BUILD_TYPE=Release -DPONKO_LIBRARY_DIR=${{ github.workspace }}/target/release
+      - run: cmake -S examples/cpp -B target/native -DCMAKE_BUILD_TYPE=Release -DPONKO_WEBRTC=ON -DPONKO_LIBRARY_DIR=${{ github.workspace }}/target/release
       - run: cmake --build target/native --config Release
       - run: ctest --test-dir target/native -C Release --output-on-failure
       # A C++ game through the validation bundle tool: started headless,
@@ -1104,6 +1188,8 @@ jobs:
           web/build.sh lights2d
           web/build.sh lockstep
           cargo build --example lockstep
+          web/build.sh net_arena
+          cargo build --example net_arena
       # Each browser step has its own deadline (a few minutes per run; a run
       # takes seconds), on top of the runner's own (a deadline on every
       # browser call and --run-timeout per run, failing as "browser-hang"
@@ -1140,6 +1226,29 @@ jobs:
         timeout-minutes: 8
         if: ${{ !cancelled() }}
         run: node web/smoke/multiplayer.mjs --browser chromium
+      # Threads on the web (web/smoke/threads.mjs, the guide's "Threads on the
+      # web"): examples/web_threads built with `web/build.sh --threads`
+      # (nightly Rust rebuilding std with atomics, hence rust-src). Served with
+      # the cross-origin isolation headers its work must run on workers; served
+      # without, on the page's thread alone, with the same result. A worker's
+      # panic must stop the game.
+      - name: Nightly Rust for the threaded web build
+        if: ${{ !cancelled() }}
+        run: rustup toolchain install nightly --profile minimal --component rust-src --target wasm32-unknown-unknown
+      - name: Chromium, threaded web build (workers, the fallback without headers)
+        timeout-minutes: 15
+        if: ${{ !cancelled() }}
+        run: |
+          node web/smoke/threads.mjs --build
+          node web/smoke/threads.mjs --case worker-panic
+      # Replication in the browser (web/smoke/replication.mjs): the Orb Arena
+      # example, a native dedicated server (no window) and one tab that joins
+      # it over WebSocket. The tab must hold the server's orbs and its own
+      # player and see an orb move.
+      - name: Chromium, replication (a tab joins a native dedicated server and sees entities move)
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: node web/smoke/replication.mjs --browser chromium
       # WebGPU: the headless shell, then the full browser's new headless mode
       # with software Vulkan (a WebGPU canvas is presented through its
       # compositor). Each passes only if it draws or is reported unsupported.
