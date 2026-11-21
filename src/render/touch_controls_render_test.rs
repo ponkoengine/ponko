@@ -421,8 +421,9 @@ fn restyled_moved_controls_are_drawn_in_their_color_where_they_were_put_and_fade
     assert!(fg < fr * 0.3 && fb < fr * 0.3, "still red: {fr} {fg} {fb}");
 }
 
-/// The arrange screen's view: a phone held sideways, at UI scale 1.
-const ARRANGE: (u32, u32) = (640, 360);
+/// The arrange screen's view: 512x384 UI units at UI scale 0.5, so the
+/// reference stays small.
+const ARRANGE: (u32, u32) = (256, 192);
 
 #[test]
 fn the_arrange_screen_shows_its_panel_beside_the_controls_and_lights_the_picked_one() {
@@ -433,9 +434,12 @@ fn the_arrange_screen_shows_its_panel_beside_the_controls_and_lights_the_picked_
         .button("fire", "B")
         .corner_button("pause", "II");
     let mut ctx = rig.ctx(controls);
+    ctx.ui.set_scale(0.5);
     // A desktop: the controls show only because the screen arranges them.
     ctx.input.set_touch_device(false);
     ctx.arrange_touch_controls();
+    // Placed for the scale.
+    ctx.update_touch_controls();
     // A finger taps B: picked, to resize.
     let fire = ctx.input.touch_control_center("fire").expect("a button");
     let jump = ctx.input.touch_control_center("jump").expect("a button");
@@ -461,10 +465,20 @@ fn the_arrange_screen_shows_its_panel_beside_the_controls_and_lights_the_picked_
     }
     let area = card.size().x * card.size().y;
     assert!(dark as f32 > area * 0.5, "a dark panel: {dark} of {area}");
-    assert!(lit > 400, "with light text and widgets on it: {lit}");
-    for (action, at) in [("jump", jump), ("fire", fire)] {
-        assert!(!card.contains(at), "the panel keeps clear of {action}");
+    assert!(lit > 100, "with light text and widgets on it: {lit}");
+    for zone in &ctx.input.touch.zones {
+        let near = zone.center.clamp(card.min, card.max);
+        assert!(
+            near.distance(zone.center) >= zone.radius - 0.5,
+            "the panel {card:?} keeps clear of {} at {}",
+            zone.action,
+            zone.center
+        );
     }
+    assert!(
+        card.min.y < 16.0,
+        "the stick is under the middle: the panel goes to the top"
+    );
     let (picked, other) = (
         mean_light(&image, fire, radius * 0.8),
         mean_light(&image, jump, radius * 0.8),
@@ -475,8 +489,8 @@ fn the_arrange_screen_shows_its_panel_beside_the_controls_and_lights_the_picked_
         "touch_arrange_screen",
         &image,
         REFERENCE,
-        "the ready-made screen for arranging on-screen touch controls in a 640x360 view on black: a dark panel in \
-         the middle titled \"Arrange the controls\" with a note, the picked control's row (B, - and + buttons, 100 %), \
+        "the ready-made screen for arranging on-screen touch controls in a 256x192 view at UI scale 0.5 on black: \
+         a dark panel at the top titled \"Arrange the controls\" with a note, the picked control's row (B, - and + buttons, 100 %), \
          Size and Opacity sliders and Reset, Cancel and Save buttons; around it a stick at the bottom left, buttons \
          A and B at the bottom right (B brighter: picked) and a corner button II at the top right",
         &rig.gpu.info,
