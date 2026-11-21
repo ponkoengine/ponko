@@ -202,6 +202,29 @@ pub(crate) fn load(
     load_for(name, bytes, read, have, GpuFormats::default())
 }
 
+std::thread_local! {
+    /// Images of the file being parsed on this thread that were decoded
+    /// before the parse, by image index ([`load_with_images`]).
+    static DECODED: std::cell::RefCell<HashMap<usize, Image>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// [`load_for`], with some of the file's images decoded already (to RGBA8,
+/// as `decode_image` does), by image index: a streamed mesh decodes them a
+/// slice at a time first where there are no worker threads.
+pub(crate) fn load_with_images(
+    name: &str,
+    bytes: &[u8],
+    read: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+    have: &dyn Fn(&str) -> bool,
+    gpu: GpuFormats,
+    decoded: HashMap<usize, Image>,
+) -> Result<Loaded, String> {
+    DECODED.with(|d| *d.borrow_mut() = decoded);
+    let loaded = load_for(name, bytes, read, have, gpu);
+    DECODED.with(|d| d.borrow_mut().clear());
+    loaded
+}
+
 /// [`load`], with KTX2 images in a block format of `gpu` kept as they are
 /// (in [`Loaded::blocks`]).
 pub(crate) fn load_for(
@@ -1280,6 +1303,9 @@ fn decode(
     name: &str,
     gpu: GpuFormats,
 ) -> Result<(Image, Option<Blocks>), String> {
+    if let Some(decoded) = DECODED.with(|d| d.borrow_mut().remove(&image.index())) {
+        return Ok((decoded, None));
+    }
     let bytes = match image.source() {
         gltf::image::Source::View { view, .. } => {
             let buffer = &buffers[view.buffer().index()];

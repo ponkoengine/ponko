@@ -101,6 +101,7 @@ mod extraction_test;
 mod quality;
 mod resident;
 mod retained;
+mod sliced_mesh;
 mod streamed;
 pub(crate) use streamed::LoadedFile;
 pub use streamed::StreamedLod;

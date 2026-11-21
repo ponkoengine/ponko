@@ -769,6 +769,9 @@ pub(crate) struct Groups {
     /// Tests: what each piece of work counts as, in seconds, instead of the
     /// time it takes (see [`sliced::WorkClock`]).
     pub(crate) piece_cost: Option<f64>,
+    /// Seconds the group step spent this frame (counted as the clock
+    /// counts them), for what streaming may still spend.
+    frame_secs: f64,
 }
 
 impl Default for Groups {
@@ -779,6 +782,7 @@ impl Default for Groups {
             stopping: false,
             sliced: None,
             piece_cost: None,
+            frame_secs: 0.0,
             budget_ms: DEFAULT_GROUP_FRAME_BUDGET_MS,
             stats: GroupStats {
                 frame_budget_ms: DEFAULT_GROUP_FRAME_BUDGET_MS,
@@ -802,6 +806,13 @@ fn max_in_flight() -> usize {
 }
 
 impl Groups {
+    /// A clock for the streaming step's slices: what this frame's group
+    /// step left of the frame budget.
+    pub(crate) fn clock_after_step(&self) -> sliced::WorkClock {
+        let budget = f64::from(self.budget_ms) / 1000.0 - self.frame_secs;
+        sliced::WorkClock::new(budget, self.piece_cost)
+    }
+
     /// Whether large decodes run a slice at a time on the game thread.
     fn sliced(&self) -> bool {
         self.sliced.unwrap_or_else(sliced::jobs_run_here)
@@ -1176,6 +1187,7 @@ impl Ctx {
     /// ```
     #[doc(hidden)]
     pub fn pump_asset_groups(&mut self) {
+        self.assets.groups.frame_secs = 0.0;
         if self.assets.groups.stopping {
             self.stop_cancelled_streams();
         }
@@ -1207,6 +1219,7 @@ impl Ctx {
         stats.max_step_ms = stats.max_step_ms.max(ms);
         stats.frame_bytes = frame.spent;
         stats.pieces = frame.clock.pieces();
+        self.assets.groups.frame_secs = frame.clock.elapsed();
         let upload_ms = (frame.upload_secs * 1000.0) as f32;
         stats.upload_ms = upload_ms;
         stats.max_upload_ms = stats.max_upload_ms.max(upload_ms);
