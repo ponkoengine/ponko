@@ -12,6 +12,6 @@
   "adapter": "Apple M4 Max",
   "backend": "Metal",
   "driver": "unknown",
-  "checksum": "8a66a97a31c5a145",
-  "reason": "New: a thin wall on a plane of coarse probes keeps the bounced light in the lit room (#155)"
+  "checksum": "19094938a1465374",
+  "reason": "Probes just under a thin wall's top are found buried: the dark room's walls next to the wall lose the lit room's light and the lit room's walls there get theirs back (gl207)"
 }

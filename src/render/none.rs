@@ -76,6 +76,9 @@ impl Renderer {
     }
     #[cfg(all(feature = "3d", feature = "compressed-textures"))]
     pub fn create_compressed_texture_array(&mut self, _id: u32, _layers: &[&crate::compressed::CompressedImage]) {}
+    pub fn ui_layer_texture(&mut self, _i: usize) -> u32 {
+        match *self {}
+    }
     #[cfg(feature = "3d")]
     pub fn create_render_target(&mut self, _width: u32, _height: u32) -> u32 {
         match *self {}

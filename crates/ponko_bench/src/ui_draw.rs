@@ -8,6 +8,9 @@
 //! - `ui/draw-fade`: the settings screen fades from opaque to half
 //!   see-through and back, forever: every one of its nodes is drawn with a
 //!   new opacity each frame.
+//! - `ui/draw-fade-group`: the same fade, the settings screen fading as
+//!   one image (`Ui::set_fade_as_group`): its nodes go into an offscreen
+//!   layer and keep their drawings; only the layer's opacity changes.
 //! - `ui/draw-pulse`: the text color of the settings screen's 40 action
 //!   labels goes back and forth, forever.
 //! - `ui/draw-insert`: a slot (a panel with a label) is added to the HUD one
@@ -43,6 +46,7 @@ struct Times(Vec<Duration>);
 enum Change {
     Still,
     Fade,
+    FadeGroup,
     Pulse,
     Insert,
     Scroll,
@@ -54,6 +58,7 @@ pub fn run(b: &mut Bench) {
     for (name, change) in [
         ("ui/draw-still", Change::Still),
         ("ui/draw-fade", Change::Fade),
+        ("ui/draw-fade-group", Change::FadeGroup),
         ("ui/draw-pulse", Change::Pulse),
         ("ui/draw-insert", Change::Insert),
         ("ui/draw-scroll", Change::Scroll),
@@ -67,7 +72,10 @@ pub fn run(b: &mut Bench) {
             ctx.bench_ui_glyphs();
             let hud = build_ui(ctx);
             match change {
-                Change::Fade => {
+                Change::Fade | Change::FadeGroup => {
+                    if change == Change::FadeGroup {
+                        ctx.ui.set_fade_as_group(hud.menu, true);
+                    }
                     let fade = UiTimeline::new()
                         .then(UiTween::opacity(0.5).from(1.0).seconds(0.5))
                         .repeat(UiRepeat::PingPong);
