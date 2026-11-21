@@ -842,7 +842,8 @@ mod sys {
         let mut floor = sp.max(low);
         let mut fp = fp;
         while n < MAX_FRAMES {
-            let inside = fp >= floor && fp % WORD == 0 && fp.checked_add(2 * WORD).is_some_and(|end| end <= high);
+            let inside =
+                fp >= floor && fp.is_multiple_of(WORD) && fp.checked_add(2 * WORD).is_some_and(|end| end <= high);
             if !inside {
                 break;
             }
@@ -864,7 +865,7 @@ mod sys {
     /// The stack the walk may read for a thread whose stack pointer is
     /// `sp`: a recorded one that holds it, else the 8 MiB above it.
     /// Async-signal-safe.
-    fn stack_of(sp: usize) -> (usize, usize) {
+    pub(super) fn stack_of(sp: usize) -> (usize, usize) {
         STACKS
             .iter()
             .map(|slot| (slot[0].load(Ordering::Acquire), slot[1].load(Ordering::Acquire)))
@@ -1975,6 +1976,18 @@ mod tests {
         stack[11] = 0;
         let n = sys::walk(0xaaaa, four, at(0, &stack), bounds, &mut frames);
         assert_eq!(frames[..n], [0xaaaa, 0x1111]);
+    }
+
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    #[test]
+    fn a_recorded_threads_stack_bounds_the_walk_on_that_thread() {
+        let local = std::hint::black_box(0u64);
+        let sp = &raw const local as usize;
+        let unknown = (sp, sp + 8 * 1024 * 1024);
+        sys::register_this_thread();
+        let (low, high) = sys::stack_of(sp);
+        assert!(low <= sp && sp < high, "{low:#x}..{high:#x} holds {sp:#x}");
+        assert_ne!((low, high), unknown, "the recorded range, not the guess");
     }
 
     #[cfg(unix)]
