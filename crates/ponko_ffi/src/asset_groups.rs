@@ -19,7 +19,7 @@ use crate::{PonkoCtx, PonkoGame, PonkoStatus, boundary, engine_error, invalid, i
 /// let group = unsafe { ponko_ffi::ponko_asset_group_new(c"level".as_ptr()) };
 /// unsafe { ponko_ffi::ponko_asset_group_free(group) };
 /// ```
-pub struct PonkoAssetGroup(Option<AssetGroup>);
+pub struct PonkoAssetGroup(pub(crate) Option<AssetGroup>);
 
 /// Where an asset group is (Rust's `GroupState`), from
 /// `ponko_ctx_asset_group_state`; pass it as a `uint32_t`.
@@ -145,7 +145,7 @@ fn state_to_c(state: GroupState) -> u32 {
 }
 
 /// The group `id` names in `c`, or `PONKO_INVALID_ARGUMENT`.
-fn group_id(c: &ponko::prelude::Ctx, id: u32) -> Result<GroupId, crate::Failure> {
+pub(crate) fn group_id(c: &ponko::prelude::Ctx, id: u32) -> Result<GroupId, crate::Failure> {
     (id as usize)
         .checked_sub(1)
         .and_then(|i| c.assets.groups().nth(i))

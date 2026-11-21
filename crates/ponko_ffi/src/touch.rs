@@ -537,34 +537,52 @@ pub unsafe extern "C" fn ponko_ctx_set_touch_controls(
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
-            if controls.is_null() && count != 0 {
-                return Err(invalid("controls is null"));
-            }
-            let list = if count == 0 {
-                &[]
-            } else {
-                std::slice::from_raw_parts(controls, count)
-            };
-            let mut set = TouchControls::new().show(show_from_c(show)?).over_screens(over_screens);
-            for control in list {
-                let action = text(control.action)?;
-                let label = if control.label.is_null() {
-                    ""
-                } else {
-                    text(control.label)?
-                };
-                set = match control.kind {
-                    0 => set.stick(action),
-                    1 => set.right_stick(action),
-                    2 => set.button(action, label),
-                    3 => set.corner_button(action, label),
-                    _ => return Err(invalid("unknown touch control kind")),
-                };
-            }
+            let set = controls_from_c(controls, count, show, over_screens)?;
             c.input.set_touch_controls(set);
             Ok(())
         })
     })
+}
+
+/// The Rust set of `count` C controls, checked.
+///
+/// # Safety
+/// `controls` readable for `count` elements (or null with count 0), their
+/// strings NUL-terminated.
+pub(crate) unsafe fn controls_from_c(
+    controls: *const PonkoTouchControl,
+    count: usize,
+    show: u32,
+    over_screens: bool,
+) -> Result<TouchControls, Failure> {
+    if controls.is_null() && count != 0 {
+        return Err(invalid("controls is null"));
+    }
+    let list = if count == 0 {
+        &[]
+    } else {
+        // SAFETY: caller contract.
+        unsafe { std::slice::from_raw_parts(controls, count) }
+    };
+    let mut set = TouchControls::new().show(show_from_c(show)?).over_screens(over_screens);
+    for control in list {
+        // SAFETY: caller contract: NUL-terminated strings.
+        let action = unsafe { text(control.action)? };
+        let label = if control.label.is_null() {
+            ""
+        } else {
+            // SAFETY: as above.
+            unsafe { text(control.label)? }
+        };
+        set = match control.kind {
+            0 => set.stick(action),
+            1 => set.right_stick(action),
+            2 => set.button(action, label),
+            3 => set.corner_button(action, label),
+            _ => return Err(invalid("unknown touch control kind")),
+        };
+    }
+    Ok(set)
 }
 
 fn show_from_c(value: u32) -> Result<TouchShow, Failure> {

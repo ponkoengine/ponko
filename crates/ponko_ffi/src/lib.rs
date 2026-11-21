@@ -153,6 +153,7 @@ mod camera_rigs;
 mod viewports;
 // Touch input, gestures and on-screen controls (gl#61).
 mod touch;
+mod touch_layout;
 // The water kit: lakes, rivers, seas and buoyancy (gl#51).
 mod water;
 // Native API parity, round 4 (gl#122): hooks, sky kit, video, baking,
@@ -165,6 +166,9 @@ mod replication_raw;
 mod scenario_touch;
 mod sky_kit;
 mod video;
+// Native API parity, round 5 (gl#157): crash reports and sliced loaders.
+mod crash;
+mod slice_loaders;
 pub use access::*;
 pub use actions::*;
 pub use ai::*;
@@ -184,6 +188,8 @@ pub use skeleton2d::*;
 pub use sky_kit::*;
 pub use states::*;
 pub use video::*;
+pub use crash::*;
+pub use slice_loaders::*;
 /// Counts the library's heap allocations while profiling is on (one atomic
 /// load per allocation otherwise), so a C or C++ game's reports show how many
 /// the engine makes. A Rust program that links this crate as a library and
@@ -278,6 +284,7 @@ pub use text3d::*;
 pub use three::*;
 pub use tiles::*;
 pub use touch::*;
+pub use touch_layout::*;
 pub use types::*;
 pub use ui_access::*;
 pub use ui_focus_hud::*;
