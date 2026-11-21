@@ -1840,11 +1840,15 @@ fn thin_bars_are_reflected_about_as_wide_as_in_a_true_mirror_at_full_hd() {
     }
 }
 
+/// A bar's band in a true mirror and in the screen-space reflection
+/// (energy, RMS width; see `band`).
+type BarBands = ((f32, f32), (f32, f32));
+
 /// The bars of [`bars_over_a_floor`] at 1920x1080 without TAA, with
 /// `Post::ssr_thin_objects` set to `thin`: for each bar, low then high, what
 /// a true mirror shows and its screen-space reflection (energy, RMS width;
 /// see `band`).
-fn thin_bar_bands(thin: bool) -> Option<[((f32, f32), (f32, f32)); 2]> {
+fn thin_bar_bands(thin: bool) -> Option<[BarBands; 2]> {
     let setup = || super::regression_stage::Setup {
         size: (1920, 1080),
         ..Default::default()

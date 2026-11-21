@@ -178,7 +178,10 @@ fn thin_objects_reach_the_engine_in_version_2_and_version_1_callers_keep_todays_
         assert_eq!(ponko_post_ex_lerp(&v1, &on, 1.0, &mut blended), PONKO_OK);
         let mut from_v2: PonkoPostEx = header(PONKO_POST_EX_VERSION);
         assert_eq!(ponko_post_ex_lerp(&back, &back, 1.0, &mut from_v2), PONKO_OK);
-        assert!(blended.ssr_thin_objects, "the output's field past version 1 is left alone");
+        assert!(
+            blended.ssr_thin_objects,
+            "the output's field past version 1 is left alone"
+        );
         assert!(from_v2.ssr_thin_objects, "version 2 blends it");
     });
 }
