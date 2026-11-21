@@ -244,10 +244,11 @@ pub unsafe extern "C" fn ponko_ctx_ui_safe_area(
 /// Fades node `id` and everything inside it as one image (`on` true), or
 /// piece by piece (false, the default; Rust `Ui::set_fade_as_group`).
 /// While the group is partly transparent (its own opacity or an ancestor's)
-/// it is drawn opaque into an offscreen layer the size of the window, shown
-/// at the group's opacity: overlapping children no longer show through each
-/// other. Nothing extra is drawn while it is opaque. World-space panels fade
-/// piece by piece. `PONKO_NOT_FOUND` for a node that doesn't exist.
+/// it is drawn opaque into an offscreen layer the size of what it draws,
+/// shown at the group's opacity: overlapping children no longer show
+/// through each other. Nothing extra is drawn while it is opaque. Groups in
+/// world-space panels fade the same way. `PONKO_NOT_FOUND` for a node that
+/// doesn't exist.
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_ui_set_fade_as_group(std::ptr::null_mut(), ponko_ffi::PONKO_UI_SCREEN, 0, true) } as u32, 1);
 /// ```

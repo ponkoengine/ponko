@@ -315,6 +315,8 @@ impl Ctx {
         self.world
             .query::<(Entity, &UiPanel3D)>()
             .for_each(|(e, _)| entities.push(e));
+        // Their fading groups' layers come after the screen's.
+        self.ui_state.fade.next_slot = self.ui_state.fade.screen_slots;
         // Panels' pixels are the texture's: no window scaling.
         let window_scale = std::mem::replace(&mut self.gfx.scale_factor, 1.0);
         for &e in &entities {

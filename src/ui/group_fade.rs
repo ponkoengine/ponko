@@ -4,9 +4,17 @@
 //! opacity shows its own fill through its buttons, and a child through the
 //! sibling it overlaps. A node marked to fade as a group is drawn, while it
 //! is partly transparent, with its whole subtree at full opacity into a
-//! texture of the window's size ([`DrawList::offscreen`]), which one quad
-//! then shows at the group's opacity: what is behind the group shows
-//! through it evenly, nothing inside it shows through anything else.
+//! texture of its own ([`DrawList::offscreen`]), which one quad then shows
+//! at the group's opacity: what is behind the group shows through it
+//! evenly, nothing inside it shows through anything else.
+//!
+//! The layer covers what the group draws (children that overflow its
+//! rectangle, shadows and outlines included: the sprites' own extent, cut
+//! by their clips and the group's), snapped outwards to whole pixels and
+//! cut to the target (the window, or a world-space panel's texture). Its
+//! texture is kept from frame to frame, one per layer drawn at once
+//! ([`layer_texture_size`]): a group that moves or changes size a little
+//! while it fades makes no texture after its first frame.
 //!
 //! The layer is used only while a marked group is between transparent and
 //! opaque: at rest, or with no marked group, nothing changes. Its nodes'
@@ -14,13 +22,13 @@
 //! their drawings are kept and repeated ([`super::retained_draw`]) instead
 //! of drawn again each frame of the fade.
 //!
-//! Only the screen's UI fades groups this way; world-space panels
-//! (`UiPanel3D`) still fade each piece.
+//! World-space panels (`UiPanel3D`) fade their groups the same way, into
+//! layers in their render target's pixels.
 
 use super::retained::{Ui, UiId};
 use crate::color::Color;
 use crate::ctx::Ctx;
-use crate::render::batch::{DrawList, SpriteInstance};
+use crate::render::batch::{DrawList, SpriteInstance, uv_region};
 use crate::sprite_material::{BlendMode, style_key};
 use glam::Vec2;
 
@@ -33,9 +41,11 @@ impl Ui {
     /// panel's fill no longer shows through its buttons. Off by default:
     /// each piece is faded on its own, which costs nothing extra.
     ///
-    /// The layer is a texture of the window's size, drawn only while the
-    /// group is partly transparent. Groups inside a fading group get their
-    /// own layer. World-space panels (`UiPanel3D`) fade each piece.
+    /// The layer is a texture the size of what the group draws (its
+    /// children's overflow, shadows and outlines included, cut to the
+    /// window), drawn only while the group is partly transparent, and
+    /// kept for the next frames. Groups inside a fading group get their
+    /// own layer. World-space panels (`UiPanel3D`) fade groups the same way.
     /// ```
     /// use ponko::prelude::*;
     /// use ponko::ui::{UiLayout, UiTween};
@@ -85,14 +95,52 @@ struct Layer {
     /// How opaque it is shown in its parent list.
     alpha: f32,
     texture: u32,
+    /// Its place among this frame's layers, the screen's and the panels'
+    /// (the renderer's texture and [`FadeLayers::kept`]).
+    slot: usize,
+    /// Where the quad that shows it is in its parent list.
+    shown: usize,
+    /// Its root's clip, the quad's.
+    clip: Option<crate::camera::Rect>,
+}
+
+/// Textures are made in steps of this many pixels.
+const LAYER_STEP: u32 = 64;
+
+/// The size of the texture a layer that draws `need` pixels into a target
+/// of `target` pixels is drawn into, when the one kept is `kept` (`[0, 0]`:
+/// none yet). The kept one stays while it holds `need` and is at most
+/// twice the size it would be made now in each direction; otherwise one is
+/// made with `need` rounded up to steps of [`LAYER_STEP`] pixels (no larger
+/// than the target). A group that moves, or grows and shrinks by less
+/// than a step, keeps its texture.
+pub(crate) fn layer_texture_size(kept: [u32; 2], need: [u32; 2], target: [u32; 2]) -> [u32; 2] {
+    let want: [u32; 2] = std::array::from_fn(|k| {
+        need[k]
+            .div_ceil(LAYER_STEP)
+            .saturating_mul(LAYER_STEP)
+            .min(target[k].max(need[k]))
+    });
+    let fits = (0..2).all(|k| kept[k] >= need[k] && kept[k] <= want[k].saturating_mul(2));
+    if fits { kept } else { want }
 }
 
 /// The engine's side: this frame's layers and the lists drawn into, kept
 /// between frames so that a fade allocates nothing after its first frame.
 #[derive(Default)]
 pub(crate) struct FadeLayers {
-    /// The screen's UI is drawn now (not a world-space panel's).
-    pub(crate) screen: bool,
+    /// The slot the next layer drawn this frame takes.
+    pub(crate) next_slot: usize,
+    /// How many the screen's UI took this frame: world-space panels' layers
+    /// come after them.
+    pub(crate) screen_slots: usize,
+    /// Each slot's texture size, kept between frames
+    /// ([`layer_texture_size`]).
+    kept: Vec<[u32; 2]>,
+    /// Layers the size of the whole target, as before they were sized to
+    /// their group: the GPU tests' reference.
+    #[cfg(test)]
+    pub(crate) whole_target: bool,
     layers: Vec<Layer>,
     /// Per visible node, the list it is drawn into (as `Layer::parent`).
     list_of: Vec<u32>,
@@ -109,6 +157,16 @@ pub(crate) struct FadeLayers {
     /// The list drawn into now.
     current: usize,
     viewport: Vec2,
+    /// Each layer's origin, size and texture size this frame, in pixels.
+    regions: Vec<([u32; 2], [u32; 2], [u32; 2])>,
+}
+
+#[cfg(test)]
+impl FadeLayers {
+    /// Each layer slot's texture size, as last drawn.
+    pub(crate) fn texture_sizes(&self) -> &[[u32; 2]] {
+        &self.kept
+    }
 }
 
 impl Ctx {
@@ -116,7 +174,7 @@ impl Ctx {
     /// opacity made relative to their layer's. Whether any does: when not
     /// (no group fading, the common case), nothing else is done.
     pub(super) fn begin_fade_layers(&mut self, ui: &mut Ui, viewport: Vec2) -> bool {
-        if ui.fade_groups.is_empty() || !self.ui_state.fade.screen {
+        if ui.fade_groups.is_empty() {
             return false;
         }
         let mut groups = std::mem::take(&mut ui.fade_groups);
@@ -148,6 +206,9 @@ impl Ctx {
                         opacity,
                         alpha,
                         texture: 0,
+                        slot: 0,
+                        shown: 0,
+                        clip: Some(n.motion.shown_clip),
                     });
                     list = state.layers.len();
                 }
@@ -159,7 +220,8 @@ impl Ctx {
             return false;
         }
         for (i, layer) in state.layers.iter_mut().enumerate() {
-            layer.texture = self.gfx.renderer.as_mut().map_or(0, |r| r.ui_layer_texture(i));
+            layer.slot = state.next_slot + i;
+            layer.texture = self.gfx.renderer.as_mut().map_or(0, |r| r.ui_layer_texture(layer.slot));
         }
         let lists = state.layers.len() + 1;
         if state.parked.len() < lists {
@@ -189,7 +251,7 @@ impl Ctx {
 
     /// Before drawing the `order`th visible node: its list made the one
     /// drawn into. A layer's root first shows the layer in its parent list.
-    pub(super) fn enter_fade_layer(&mut self, ui: &Ui, order: usize) {
+    pub(super) fn enter_fade_layer(&mut self, order: usize) {
         let list = self.ui_state.fade.list_of[order] as usize;
         if list == self.ui_state.fade.current {
             return;
@@ -198,7 +260,8 @@ impl Ctx {
             let layer = self.ui_state.fade.layers[list - 1];
             if layer.root == order {
                 self.switch_fade_list(layer.parent);
-                let clip = ui.node(ui.visible[order]).map(|n| n.motion.shown_clip);
+                // Placed over what the layer holds once it is drawn
+                // (`end_fade_layers`).
                 let viewport = self.ui_state.fade.viewport;
                 let shown = SpriteInstance::new(
                     [0.0, 0.0],
@@ -207,8 +270,9 @@ impl Ctx {
                     0.0,
                     Color::rgba(1.0, 1.0, 1.0, layer.alpha).to_rgba8(),
                 );
+                self.ui_state.fade.layers[list - 1].shown = self.gfx.ui_list.len();
                 let list = &mut self.gfx.ui_list;
-                list.set_clip(clip);
+                list.set_clip(layer.clip);
                 // The layer holds colors times their alpha.
                 list.push_styled(
                     layer.texture,
@@ -222,15 +286,88 @@ impl Ctx {
     }
 
     /// After drawing `ui`'s nodes: back to the screen's list, which takes
-    /// this frame's layers, and the nodes' opacity as it was.
+    /// this frame's layers, each fitted to what it holds, and the nodes'
+    /// opacity as it was.
     pub(super) fn end_fade_layers(&mut self, ui: &mut Ui) {
         self.switch_fade_list(0);
+        let scale = self.gfx.scale_factor;
         let state = &mut self.ui_state.fade;
+        let viewport = state.viewport;
+        let target = [(viewport.x * scale).round() as u32, (viewport.y * scale).round() as u32];
+        state.regions.clear();
+        state.regions.resize(state.layers.len(), ([0; 2], [0; 2], [0; 2]));
+        // Innermost first: a layer's quad is part of what its parent holds.
+        for k in (0..state.layers.len()).rev() {
+            let layer = state.layers[k];
+            let mut drawn = state.parked[k + 1].drawn_bounds();
+            for cut in [
+                layer.clip,
+                Some(crate::camera::Rect::new(0.0, 0.0, viewport.x, viewport.y)),
+            ] {
+                drawn = match (drawn, cut) {
+                    (Some(d), Some(c)) => {
+                        let min = d.min.max(c.min);
+                        let max = d.max.min(c.max);
+                        (min.x < max.x && min.y < max.y).then_some(crate::camera::Rect { min, max })
+                    }
+                    (d, _) => d,
+                };
+            }
+            // Whole pixels, outwards: what the layer leaves out stays clear.
+            let (mut origin, mut size) = ([0; 2], [0; 2]);
+            if let Some(d) = drawn {
+                for axis in 0..2 {
+                    let lo = (d.min[axis] * scale).floor().clamp(0.0, target[axis] as f32) as u32;
+                    let hi = (d.max[axis] * scale).ceil().clamp(lo as f32, target[axis] as f32) as u32;
+                    (origin[axis], size[axis]) = (lo, hi - lo);
+                }
+            }
+            #[cfg(test)]
+            if state.whole_target && size != [0, 0] {
+                (origin, size) = ([0, 0], target);
+            }
+            if state.kept.len() <= layer.slot {
+                state.kept.resize(layer.slot + 1, [0, 0]);
+            }
+            let empty = size[0] == 0 || size[1] == 0;
+            let texture_size = if empty {
+                state.kept[layer.slot]
+            } else {
+                layer_texture_size(state.kept[layer.slot], size, target)
+            };
+            #[cfg(test)]
+            let texture_size = if state.whole_target && !empty {
+                target
+            } else {
+                texture_size
+            };
+            state.kept[layer.slot] = texture_size;
+            let parent = if layer.parent == 0 {
+                &mut self.gfx.ui_list
+            } else {
+                &mut state.parked[layer.parent]
+            };
+            if let Some(quad) = parent.instance_mut(layer.shown) {
+                let to_units = |p: u32| p as f32 / scale;
+                quad.pos = [to_units(origin[0]), to_units(origin[1])];
+                quad.size = if empty {
+                    [0.0, 0.0]
+                } else {
+                    [to_units(size[0]), to_units(size[1])]
+                };
+                let part = |k: usize| size[k] as f32 / texture_size[k].max(1) as f32;
+                quad.uv = uv_region([0.0, 0.0], [part(0), part(1)]);
+            }
+            state.regions[k] = (origin, if empty { [0, 0] } else { size }, texture_size);
+        }
         let slots = self.gfx.ui_list.offscreen_slots(state.layers.len());
         for (k, (slot, layer)) in slots.iter_mut().zip(&state.layers).enumerate() {
             slot.texture = layer.texture;
             std::mem::swap(&mut slot.list, &mut state.parked[k + 1]);
+            (slot.origin, slot.size, slot.texture_size) = state.regions[k];
+            slot.scale = scale;
         }
+        state.next_slot += state.layers.len();
         for &(id, opacity) in &state.saved {
             if let Some(n) = ui.node_mut(id) {
                 n.motion.xf.opacity = opacity;
@@ -253,6 +390,7 @@ impl Ctx {
 
 #[cfg(test)]
 mod tests {
+    use super::layer_texture_size;
     use crate::ctx::Ctx;
     use crate::prelude::*;
     use crate::render::batch::{Batch, SpriteInstance};
@@ -300,7 +438,12 @@ mod tests {
         batches: Vec<Batch>,
         /// Each layer's texture, sprites and batches.
         layers: Vec<(u32, Vec<SpriteInstance>, Vec<Batch>)>,
+        /// Each layer's origin, size and texture size, in pixels.
+        regions: Vec<Region>,
     }
+
+    /// A layer's origin, size and texture size, in pixels.
+    type Region = ([u32; 2], [u32; 2], [u32; 2]);
 
     /// The UI's frame `dt` seconds on, then its drawing as a window draws it.
     fn frame(ctx: &mut Ctx, dt: f32) -> Drawn {
@@ -322,6 +465,7 @@ mod tests {
                 .iter()
                 .map(|l| (l.texture, l.finished().0.to_vec(), l.finished().1.to_vec()))
                 .collect(),
+            regions: layers.iter().map(|l| (l.origin, l.size, l.texture_size)).collect(),
         };
         ctx.gfx.ui_list.clear();
         drawn
@@ -388,7 +532,8 @@ mod tests {
         assert_eq!(d.sprites.len(), 1, "only the layer is shown");
         let shown = shown_layers(&d);
         assert_eq!(shown.len(), 1);
-        assert_eq!((shown[0].pos, shown[0].size), ([0.0, 0.0], VIEW.into()));
+        // Shown where the squares are: (32, 24) to (224, 120).
+        assert_eq!((shown[0].pos, shown[0].size), ([32.0, 24.0], [192.0, 96.0]));
         assert_eq!(shown[0].color, [255, 255, 255, 128]);
         // What the game reads stays the opacity it is drawn at.
         assert_eq!(ctx.ui.drawn(a).unwrap().opacity, 0.5);
@@ -466,6 +611,139 @@ mod tests {
             outer_alphas.len() >= 3 && outer_alphas.iter().all(|&a| a == 128),
             "{outer_alphas:?}"
         );
+    }
+
+    /// The one layer's origin, size and texture size, and the quad that
+    /// shows it.
+    fn one_layer(d: &Drawn) -> (Region, SpriteInstance) {
+        assert_eq!(d.layers.len(), 1);
+        let shown = shown_layers(d);
+        assert_eq!(shown.len(), 1);
+        (d.regions[0], *shown[0])
+    }
+
+    #[test]
+    fn a_layer_covers_what_its_group_draws_not_the_window() {
+        let mut ctx = ctx();
+        let (group, _) = squares(&mut ctx, None);
+        // A child reaching past the group's own rectangle, and past the
+        // window's right edge: the layer takes it in, cut to the window.
+        let group_box = ctx
+            .ui
+            .panel(group)
+            .layout(UiLayout::anchored(0.25, 0.25, 0.25, 0.25))
+            .id();
+        ctx.ui
+            .panel(group_box)
+            .layout(UiLayout::anchored(0.5, 0.5, 0.0, 0.0).width(300.0).height(20.5))
+            .background(Color::WHITE)
+            .border_width(0.0);
+        ctx.ui.set_fade_as_group(group_box, true);
+        ctx.ui.animate(group_box, UiTween::opacity(0.5).seconds(0.0));
+        let d = frame(&mut ctx, 0.0);
+        let ((origin, size, texture), quad) = one_layer(&d);
+        let r = ctx.ui.rect(group_box).unwrap();
+        assert_eq!(origin, [r.min.x as u32, r.min.y as u32], "from the group's corner");
+        assert_eq!(
+            size[0],
+            320 - origin[0],
+            "to the window's right edge: the child overflows"
+        );
+        // The overflowing child ends 20.5 pixels below its top: a whole
+        // pixel more, not less.
+        let child_bottom = r.min.y + r.size().y * 0.5 + 20.5;
+        assert_eq!(size[1] as f32, (r.size().y).max(child_bottom.ceil() - r.min.y));
+        assert!(size[0] <= texture[0] && size[1] <= texture[1]);
+        assert_eq!(texture.map(|t| t % 64), [0, 0], "made in steps of 64 pixels");
+        // The quad shows the drawn part of the texture, where it was drawn.
+        assert_eq!(quad.pos, [origin[0] as f32, origin[1] as f32]);
+        assert_eq!(quad.size, [size[0] as f32, size[1] as f32]);
+        let part = crate::render::batch::uv_region(
+            [0.0; 2],
+            [size[0] as f32 / texture[0] as f32, size[1] as f32 / texture[1] as f32],
+        );
+        assert_eq!(quad.uv, part);
+        // 4K-sized arithmetic: the window-sized layer was the whole target.
+        assert!(texture[0] * texture[1] < 320 * 240 / 2, "{texture:?}");
+    }
+
+    #[test]
+    fn layer_textures_are_kept_while_they_fit_and_made_in_steps() {
+        let target = [3840, 2160];
+        // First: the need rounded up to 64-pixel steps.
+        assert_eq!(layer_texture_size([0, 0], [400, 300], target), [448, 320]);
+        // Moving or changing by less than a step: kept.
+        for need in [[400, 300], [401, 299], [448, 320], [300, 200]] {
+            assert_eq!(layer_texture_size([448, 320], need, target), [448, 320], "{need:?}");
+        }
+        // Too small: made larger; much too large: made smaller.
+        assert_eq!(layer_texture_size([448, 320], [449, 300], target), [512, 320]);
+        assert_eq!(layer_texture_size([448, 320], [100, 100], target), [128, 128]);
+        // Never larger than the target (unless the target is no multiple).
+        assert_eq!(layer_texture_size([0, 0], [3840, 2150], target), [3840, 2160]);
+        assert_eq!(layer_texture_size([0, 0], [10, 1], [30, 1]), [30, 1]);
+    }
+
+    #[test]
+    fn a_moving_fading_group_keeps_its_layer_texture() {
+        let mut ctx = ctx();
+        let (group, _) = squares(&mut ctx, None);
+        let inner = ctx.ui.panel(group).layout(UiLayout::anchored(0.2, 0.2, 0.3, 0.3)).id();
+        ctx.ui.panel(inner).layout(UiLayout::fill()).background(Color::WHITE);
+        ctx.ui.set_fade_as_group(inner, true);
+        ctx.ui.animate(
+            inner,
+            UiTween::opacity(0.2)
+                .seconds(1.0)
+                .with_ease(crate::skeleton2d::Bezier::LINEAR),
+        );
+        ctx.ui.animate(
+            inner,
+            UiTween::offset(vec2(100.0, 50.0))
+                .seconds(1.0)
+                .with_ease(crate::skeleton2d::Bezier::LINEAR),
+        );
+        let first = frame(&mut ctx, 0.05);
+        let (_, _, kept) = one_layer(&first).0;
+        let mut origins = Vec::new();
+        for _ in 0..15 {
+            let d = frame(&mut ctx, 0.05);
+            let ((origin, size, texture), _) = one_layer(&d);
+            assert_eq!(texture, kept, "the same texture size while it moves");
+            // Snapped outwards, a pixel more where it sits between two.
+            let first = one_layer(&first).0.1;
+            assert!((0..2).all(|k| size[k].abs_diff(first[k]) <= 1), "{size:?} {first:?}");
+            origins.push(origin);
+        }
+        assert!(origins.windows(2).all(|w| w[1][0] > w[0][0]), "it moved: {origins:?}");
+        assert_eq!(ctx.ui_state.fade.kept[0], kept);
+    }
+
+    #[test]
+    fn a_layer_inside_a_layer_is_placed_in_its_parents_pixels() {
+        let mut ctx = ctx();
+        let (outer, _) = squares(&mut ctx, None);
+        let inner = ctx
+            .ui
+            .panel(outer)
+            .layout(UiLayout::anchored(0.5, 0.5, 0.25, 0.25))
+            .id();
+        ctx.ui.panel(inner).layout(UiLayout::fill()).background(Color::WHITE);
+        ctx.ui.set_fade_as_group(outer, true);
+        ctx.ui.set_fade_as_group(inner, true);
+        ctx.ui.animate(outer, UiTween::opacity(0.5).seconds(0.0));
+        ctx.ui.animate(inner, UiTween::opacity(0.5).seconds(0.0));
+        let d = frame(&mut ctx, 0.0);
+        assert_eq!(d.layers.len(), 2);
+        // The inner group's quad, in the outer layer's list, where it is.
+        let (_, sprites, batches) = &d.layers[0];
+        let inner_quad = shown_in(sprites, batches)[0];
+        assert_eq!(inner_quad.pos, [160.0, 120.0]);
+        assert_eq!(inner_quad.size, [80.0, 60.0]);
+        assert_eq!(d.regions[1].0, [160, 120]);
+        // The outer layer holds the squares and the inner group's quad.
+        assert_eq!(d.regions[0].0, [32, 24]);
+        assert_eq!(d.regions[0].1, [240 - 32, 180 - 24]);
     }
 
     #[test]

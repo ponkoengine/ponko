@@ -285,9 +285,11 @@ impl Ctx {
         // game, context and node tree simultaneously is required.
         let spare = self.ui_state.retained_spare.take().unwrap_or_default();
         let mut ui = std::mem::replace(&mut self.ui, spare);
-        self.ui_state.fade.screen = true;
+        // The screen's fading groups take the first layers; world-space
+        // panels' come after them.
+        self.ui_state.fade.next_slot = 0;
         self.draw_ui_tree(&mut ui, self.window_size());
-        self.ui_state.fade.screen = false;
+        self.ui_state.fade.screen_slots = self.ui_state.fade.next_slot;
         std::mem::swap(&mut self.ui, &mut ui);
         self.ui_state.retained_spare = Some(ui);
     }
@@ -321,7 +323,7 @@ impl Ctx {
         let layered = self.begin_fade_layers(ui, viewport);
         for order in 0..ui.visible.len() {
             if layered {
-                self.enter_fade_layer(ui, order);
+                self.enter_fade_layer(order);
             }
             let id = ui.visible[order];
             let Some(n) = ui.node(id) else { continue };
