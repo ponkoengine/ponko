@@ -702,6 +702,11 @@ jobs:
       - name: Tests, glTF with compressed geometry
         if: ${{ !cancelled() }}
         run: cargo test -p ponko --no-fail-fast --features 3d,gltf-meshopt --lib three::gltf
+      # The wasm-simd feature does nothing natively: the CPU wave spectrum's
+      # tests must pass with it on all the same.
+      - name: Tests, water spectrum with wasm-simd
+        if: ${{ !cancelled() }}
+        run: cargo test -p ponko --no-fail-fast --features 3d,wasm-simd --lib water::spectrum
       # Shaped text, fallback chains and the system font search, with the
       # offscreen reference images of shaped text where a GPU is found.
       - name: Tests, text shaping and system fonts
@@ -1207,6 +1212,19 @@ jobs:
       # meshoptimizer (C++) is left out there too: meshopt-compressed glTF
       # files load on the web only from their uncompressed fallback.
       - run: cargo clippy -p ponko --target wasm32-unknown-unknown --features 3d,gltf-meshopt
+      # rustfft's WASM SIMD for the water spectrum, with simd128 for the whole
+      # module (the feature refuses to compile without it, and that refusal
+      # is checked too: the first command must fail on its message).
+      - name: wasm-simd without simd128 is refused
+        run: |
+          if cargo check -p ponko --target wasm32-unknown-unknown --features 3d,wasm-simd --lib 2> target/wasm-simd-refused.txt; then
+            echo "wasm-simd built without simd128" >&2; exit 1
+          fi
+          grep "needs the whole build compiled with SIMD" target/wasm-simd-refused.txt
+      - name: Clippy, wasm-simd with simd128
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: -C target-feature=+simd128
+        run: cargo clippy -p ponko --target wasm32-unknown-unknown --features 3d,wasm-simd --example web_spectrum -- -D warnings
       # The accessibility feature has no web adapter (AccessKit has none for
       # a canvas): it must build and do nothing.
       - run: cargo check -p ponko --target wasm32-unknown-unknown --features accessibility
@@ -1357,6 +1375,15 @@ jobs:
         run: >-
           node web/smoke/runtime-failures.mjs --case device-lost --chromium-mode new
           --browser-arg --use-webgpu-adapter=swiftshader --allow-unsupported --out target/web-smoke/runtime-failures-webgpu
+      # The water kit's CPU wave spectrum in the browser (web/smoke/spectrum.mjs,
+      # the water guide's "On the web"): examples/web_spectrum.rs built plain,
+      # with simd128 and with simd128 and wasm-simd, each timing every grid
+      # size. Each build must say it was built as asked; the times go to the
+      # report, never pass or fail.
+      - name: Chromium, the water spectrum with and without WASM SIMD
+        timeout-minutes: 30
+        if: ${{ !cancelled() }}
+        run: node web/smoke/spectrum.mjs --build --repeat 1
       # Threads on the web (web/smoke/threads.mjs, the guide's "Threads on the
       # web"): examples/web_threads built with `web/build.sh --threads`
       # (nightly Rust rebuilding std with atomics, hence rust-src). Served with
