@@ -220,6 +220,10 @@ impl Uploading<'_, wgpu::Queue> {
         size: wgpu::Extent3d,
     ) {
         add(self.kind, data.len() as u64);
+        // A step whose uploads the GPU times makes the copy itself.
+        if self.kind == Upload::Textures && super::upload_timer::write_texture(&texture, data, layout, size) {
+            return;
+        }
         self.to.write_texture(texture, data, layout, size);
     }
 }

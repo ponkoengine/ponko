@@ -69,6 +69,8 @@ mod timer;
 #[cfg(feature = "window")]
 pub(crate) mod traffic;
 #[cfg(feature = "window")]
+pub(crate) mod upload_timer;
+#[cfg(feature = "window")]
 mod views;
 
 pub use crate::sprite_material::{BlendMode, SpriteMaterial, SpriteMaterialDesc, SpriteShader};
