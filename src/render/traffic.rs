@@ -202,7 +202,7 @@ impl Uploading<'_, wgpu::Queue> {
     /// thread's writes (see [`begin_batch`]), a small one joins it instead.
     pub fn write_buffer(&self, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
         add(self.kind, data.len() as u64);
-        if batched(self.kind, buffer, offset, data) {
+        if batched(buffer, offset, data) {
             return;
         }
         // wgpu's own allocations (a staging buffer a write) aren't the
@@ -251,12 +251,13 @@ pub(crate) const BATCHED_WRITE_BYTES: usize = 64 * 1024;
 /// on the GPU: the same bytes land in the same places, in the order they
 /// were written, before the frame's passes run.
 ///
-/// Persistent instance batches (`Upload::StaticBatches`) are written on
-/// their own as before. A write too big for the batch
-/// ([`BATCHED_WRITE_BYTES`]), unaligned, or made on another thread goes
-/// straight to `wgpu` too: it lands ahead of the batch's copies, which is
-/// the order it was made in unless its buffer already had a batched write,
-/// in which case it joins the batch.
+/// A write too big for the batch ([`BATCHED_WRITE_BYTES`]), unaligned, or
+/// made on another thread goes straight to `wgpu`: it lands ahead of the
+/// batch's copies, which is the order it was made in unless its buffer
+/// already had a batched write, in which case it joins the batch. A
+/// buffer grown while a batch gathers copies its old contents over after
+/// the batch's writes so far (see [`submit_copy`]). Texture writes of
+/// formats of single-texel blocks join it too.
 #[derive(Default)]
 #[cfg_attr(not(feature = "3d"), allow(dead_code))]
 pub(crate) struct WriteBatch {
@@ -348,7 +349,7 @@ fn batched_bridge(page: usize) -> usize {
 
 /// Puts a write into this thread's batch, if one is gathering and the
 /// write belongs there (see [`WriteBatch`]).
-fn batched(kind: Upload, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> bool {
+fn batched(buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> bool {
     let aligned = data.len().is_multiple_of(4) && offset.is_multiple_of(4) && !data.is_empty();
     BATCH.with(|b| {
         let Ok(mut b) = b.try_borrow_mut() else {
@@ -360,7 +361,7 @@ fn batched(kind: Upload, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> boo
         let joins = || batch.copies.iter().any(|c| c.to.is_buffer(buffer));
         // While command buffers are held (see `hold`), a write made on its
         // own would land ahead of them: every one that can joins.
-        let own = (kind == Upload::StaticBatches || data.len() > BATCHED_WRITE_BYTES) && held_generation().is_none();
+        let own = data.len() > BATCHED_WRITE_BYTES && held_generation().is_none();
         if !aligned || own && !joins() {
             return false;
         }
@@ -556,11 +557,13 @@ impl WriteBatch {
 /// Command buffers held back to be submitted together (see [`hold`]).
 #[cfg_attr(not(feature = "3d"), allow(dead_code))]
 struct Held {
-    queue: wgpu::Queue,
+    /// The queue they go to, while holding.
+    queue: Option<wgpu::Queue>,
+    /// Kept between holds, so holding allocates nothing once warm.
     buffers: Vec<wgpu::CommandBuffer>,
     /// Command buffers held since [`hold`], submitted or not.
     held: usize,
-    /// Which hold this is (never 0), for [`WriteBatch::upload`].
+    /// Which hold this is (counts up from 1), for [`WriteBatch::upload`].
     generation: u64,
     /// Submissions made while holding: one at the end, and one each time
     /// a write that cannot wait in a batch made them go early.
@@ -568,8 +571,15 @@ struct Held {
 }
 
 thread_local! {
-    static HELD: std::cell::RefCell<Option<Held>> = const { std::cell::RefCell::new(None) };
-    static HOLDS: Cell<u64> = const { Cell::new(0) };
+    static HELD: std::cell::RefCell<Held> = const {
+        std::cell::RefCell::new(Held {
+            queue: None,
+            buffers: Vec::new(),
+            held: 0,
+            generation: 0,
+            submits: 0,
+        })
+    };
 }
 
 /// Holds the command buffers this thread submits through [`submit`] back,
@@ -581,53 +591,51 @@ thread_local! {
 /// writes are made at the next submission, ahead of every buffer in it, so
 /// while buffers are held each write that can is gathered into the
 /// preparing frame's [`WriteBatch`] (whose copies its own first buffer
-/// records); one that cannot (unaligned, a texture's, made outside a
-/// batch) submits what is held first.
+/// records); one that cannot (unaligned, a compressed texture's, made
+/// outside a batch) submits what is held first.
 #[cfg_attr(not(feature = "3d"), allow(dead_code))]
 pub(crate) fn hold(queue: &wgpu::Queue) {
-    let generation = HOLDS.with(|h| {
-        h.set(h.get() + 1);
-        h.get()
-    });
     HELD.with(|held| {
-        *held.borrow_mut() = Some(Held {
-            queue: queue.clone(),
-            buffers: Vec::new(),
-            held: 0,
-            generation,
-            submits: 0,
-        });
+        let mut held = held.borrow_mut();
+        held.queue = Some(queue.clone());
+        held.generation += 1;
+        held.held = 0;
+        held.submits = 0;
     });
 }
 
 /// The hold this thread is in, if it holds command buffers.
 fn held_generation() -> Option<u64> {
-    HELD.with(|h| h.try_borrow().ok()?.as_ref().map(|h| h.generation))
+    HELD.with(|h| {
+        let h = h.try_borrow().ok()?;
+        h.queue.as_ref().map(|_| h.generation)
+    })
 }
 
 /// Submits `buffers`, or holds them after the ones held (see [`hold`]).
 #[cfg_attr(not(feature = "3d"), allow(dead_code))]
 pub(crate) fn submit(queue: &wgpu::Queue, buffers: impl IntoIterator<Item = wgpu::CommandBuffer>) {
-    let buffers = HELD.with(|h| match h.borrow_mut().as_mut() {
-        Some(held) => {
-            let before = held.buffers.len();
-            held.buffers.extend(buffers);
-            held.held += held.buffers.len() - before;
-            None
+    let buffers = HELD.with(|h| {
+        let mut h = h.borrow_mut();
+        if h.queue.is_none() {
+            return Some(buffers);
         }
-        None => Some(buffers),
+        let before = h.buffers.len();
+        h.buffers.extend(buffers);
+        h.held += h.buffers.len() - before;
+        None
     });
     if let Some(buffers) = buffers {
         queue.submit(buffers);
     }
 }
 
-/// Submits a copy that `record` records into a new encoder (`label`), after every
-/// buffer write this thread made so far: a buffer about to be replaced by
-/// a bigger one, copied over. Writes a batch gathered (see [`WriteBatch`])
-/// are recorded first in it while buffers are held (otherwise they would
-/// land after it, in the frame's first buffer); without a hold, writes made
-/// on their own already land first, at its submission.
+/// Submits a copy that `record` records into a new encoder (`label`),
+/// after every buffer write this thread made so far: a buffer about to be
+/// replaced by a bigger one, copied over. Writes a batch gathered (see
+/// [`WriteBatch`]) are recorded first in it (otherwise they would land
+/// after it, in the frame's first buffer); writes made on their own land
+/// first anyway, at its submission.
 #[cfg_attr(not(feature = "3d"), allow(dead_code))]
 pub(crate) fn submit_copy(
     device: &wgpu::Device,
@@ -636,16 +644,14 @@ pub(crate) fn submit_copy(
     record: impl FnOnce(&mut wgpu::CommandEncoder),
 ) {
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label });
-    if held_generation().is_some() {
-        BATCH.with(|b| {
-            if let Ok(mut b) = b.try_borrow_mut()
-                && let Some(batch) = b.as_mut()
-            {
-                batch.upload(device, queue);
-                batch.record(&mut encoder);
-            }
-        });
-    }
+    BATCH.with(|b| {
+        if let Ok(mut b) = b.try_borrow_mut()
+            && let Some(batch) = b.as_mut()
+        {
+            batch.upload(device, queue);
+            batch.record(&mut encoder);
+        }
+    });
     record(&mut encoder);
     submit(queue, [encoder.finish()]);
 }
@@ -654,9 +660,10 @@ pub(crate) fn submit_copy(
 fn submit_held() {
     HELD.with(|h| {
         let Ok(mut h) = h.try_borrow_mut() else { return };
-        if let Some(held) = h.as_mut().filter(|h| !h.buffers.is_empty()) {
-            held.submits += 1;
-            held.queue.submit(held.buffers.drain(..));
+        let h = &mut *h;
+        if let Some(queue) = h.queue.as_ref().filter(|_| !h.buffers.is_empty()) {
+            h.submits += 1;
+            queue.submit(h.buffers.drain(..));
         }
     });
 }
@@ -665,14 +672,12 @@ fn submit_held() {
 /// command buffers and submissions made since [`hold`].
 #[cfg_attr(not(feature = "3d"), allow(dead_code))]
 pub(crate) fn release() -> (usize, u32) {
-    let Some(mut held) = HELD.with(|h| h.borrow_mut().take()) else {
-        return (0, 0);
-    };
-    if !held.buffers.is_empty() {
-        held.submits += 1;
-        held.queue.submit(held.buffers);
-    }
-    (held.held, held.submits)
+    submit_held();
+    HELD.with(|h| {
+        let mut h = h.borrow_mut();
+        h.queue = None;
+        (h.held, h.submits)
+    })
 }
 
 #[cfg_attr(not(feature = "3d"), allow(dead_code))]

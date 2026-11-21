@@ -398,6 +398,8 @@ pub(crate) struct Renderer3D {
     /// (see `traffic::WriteBatch`); `draw` records their copies into place
     /// first (or the next `prepare` does, if the frame wasn't drawn).
     writes: std::sync::Mutex<traffic::WriteBatch>,
+    /// `draw`'s list of the frame's parts, kept between frames.
+    parts: std::sync::Mutex<Vec<record::Part>>,
     frame_buffer: wgpu::Buffer,
     /// What `frame_buffer` holds (see `sync_frame`).
     frame_mirror: Mirror,
@@ -1044,6 +1046,7 @@ impl Renderer3D {
             view_model: None,
             extra: false,
             writes: Default::default(),
+            parts: Default::default(),
             post,
             effects: Effects::default(),
             custom_passes: Default::default(),

@@ -157,7 +157,7 @@ pub(crate) struct Batching {
     pub no_far_cells: bool,
     /// Cells of CPU-culled batches the probes' views left out whole as too
     /// far from their probe in the last prepared frame (tests).
-    pub(super) far_cells: u32,
+    pub(crate) far_cells: u32,
 }
 
 /// Global illumination off for this many prepared frames in a row counts

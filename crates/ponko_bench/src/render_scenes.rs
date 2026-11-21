@@ -400,7 +400,7 @@ pub fn run(b: &mut Bench) -> Option<String> {
         );
         println!(
             "    {} command buffers in {} submission(s) a frame",
-            last.command_buffers, last.submits
+            scene.command_buffers, scene.submits
         );
         if let Some(dir) = &png {
             save_png(dir, kind, &bench, settings.setup.size);
