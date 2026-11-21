@@ -47,12 +47,12 @@ export const PLAIN_DIR = "target/web/web_threads_plain";
 export const SW_DIR = "target/web/web_threads_sw";
 
 /**
- * Where `--case allocator` builds the fixture a second time with the
- * standard allocator (`SYSTEM_ALLOCATOR_CFG` added to its flags), to compare
- * with the per-thread one of `target/web/web_threads`.
+ * Where `--case allocator` builds the fixture a second time with one heap
+ * per thread (`THREAD_HEAPS_CFG` added to its flags), to compare with the
+ * standard allocator of `target/web/web_threads`.
  */
-export const SYSTEM_ALLOCATOR_DIR = "target/web/web_threads_system_alloc";
-export const SYSTEM_ALLOCATOR_CFG = "--cfg ponko_web_system_allocator";
+export const THREAD_HEAPS_DIR = "target/web/web_threads_heaps";
+export const THREAD_HEAPS_CFG = "--cfg ponko_web_thread_heaps";
 
 /** The passes `--case thresholds` sweeps (the fixture's `?sweep=thresholds`). */
 export const SWEPT = ["hierarchy/shared_level", "skeleton2d/shared_draw", "physics3d/shared_characters"];
@@ -660,7 +660,7 @@ export function checkTriggerRumbleCalls(calls) {
 
 /**
  * `env` with `flag` added to the variable cargo reads (as `denyWarnings`):
- * the build of `--case allocator` with the standard allocator.
+ * the build of `--case allocator` with one heap per thread.
  */
 export function addRustFlag(env, flag) {
   const out = { ...env };
@@ -738,13 +738,14 @@ export function sweepTable(rows, threads, noiseMs = 0.05) {
 
 /**
  * The problems with `--case allocator`'s two runs: the default build must
- * have the per-thread allocator and the other one the standard one, and
- * each must have saved the same JSON on the page's thread and the workers.
+ * have the standard allocator and the one built with `THREAD_HEAPS_CFG` one
+ * heap per thread, and each must have saved the same JSON on the page's
+ * thread and the workers.
  */
 export function checkAllocator(perThread, system) {
   const problems = [];
-  if (perThread.per_thread_allocator !== true) problems.push("the default threaded build doesn't have the per-thread allocator");
-  if (system.per_thread_allocator !== false) problems.push(`the build with ${SYSTEM_ALLOCATOR_CFG} still has the per-thread allocator`);
+  if (system.per_thread_allocator !== false) problems.push("the default threaded build has the per-thread allocator");
+  if (perThread.per_thread_allocator !== true) problems.push(`the build with ${THREAD_HEAPS_CFG} doesn't have the per-thread allocator`);
   for (const [name, s] of [["per-thread", perThread], ["standard", system]]) {
     if (s.isolated !== true || !(s.threads >= 2)) problems.push(`${name}: the page isn't isolated with workers (threads: ${s.threads})`);
     if (s.alloc?.same_save !== true) problems.push(`${name}: the save on the workers differs from the page's thread's`);
@@ -767,7 +768,7 @@ export function allocatorTable(perThread, system, sizes) {
     ["A vector grown to 1,000,000 numbers by pushes, page's thread", "vec_grow_ms"],
     ["Parallel query allocating per item", "par_alloc_ms"],
   ];
-  const lines = ["| Pass | Standard allocator (ms) | Per-thread allocator (ms) |", "|---|---|---|"];
+  const lines = ["| Pass | Standard allocator (ms) | One heap per thread (ms) |", "|---|---|---|"];
   for (const [label, key] of rows) lines.push(`| ${label} | ${ms(system.alloc?.[key])} | ${ms(perThread.alloc?.[key])} |`);
   const kb = (b) => (b == null ? "n/a" : `${Math.round(b / 1024)} KiB`);
   lines.push(`| \`game_bg.wasm\` | ${kb(sizes.system)} | ${kb(sizes.perThread)} |`);

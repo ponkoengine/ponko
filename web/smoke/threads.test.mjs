@@ -43,8 +43,8 @@ import {
   checkAllocator,
   checkSides,
   SWEPT,
-  SYSTEM_ALLOCATOR_CFG,
-  SYSTEM_ALLOCATOR_DIR,
+  THREAD_HEAPS_CFG,
+  THREAD_HEAPS_DIR,
   sweepDone,
   sweepTable,
 } from "./threads-lib.mjs";
@@ -471,12 +471,12 @@ function sweptRun() {
 
 test("the threshold cases parse, and the allocator's second build has its own folder and flag", () => {
   assert.equal(parseArgs(["--case", "thresholds"]).case, "thresholds");
-  assert.equal(parseArgs(["--case", "allocator"]).dir, "target/web/web_threads", "the per-thread build is the default one");
-  assert.notEqual(SYSTEM_ALLOCATOR_DIR, "target/web/web_threads");
-  assert.equal(addRustFlag({}, SYSTEM_ALLOCATOR_CFG).RUSTFLAGS, "--cfg ponko_web_system_allocator");
-  assert.equal(addRustFlag({ RUSTFLAGS: "-D warnings" }, SYSTEM_ALLOCATOR_CFG).RUSTFLAGS, "-D warnings --cfg ponko_web_system_allocator");
-  const encoded = addRustFlag({ CARGO_ENCODED_RUSTFLAGS: "-D\x1fwarnings" }, SYSTEM_ALLOCATOR_CFG);
-  assert.equal(encoded.CARGO_ENCODED_RUSTFLAGS, "-D\x1fwarnings\x1f--cfg\x1fponko_web_system_allocator");
+  assert.equal(parseArgs(["--case", "allocator"]).dir, "target/web/web_threads", "the standard allocator's build is the default one");
+  assert.notEqual(THREAD_HEAPS_DIR, "target/web/web_threads");
+  assert.equal(addRustFlag({}, THREAD_HEAPS_CFG).RUSTFLAGS, "--cfg ponko_web_thread_heaps");
+  assert.equal(addRustFlag({ RUSTFLAGS: "-D warnings" }, THREAD_HEAPS_CFG).RUSTFLAGS, "-D warnings --cfg ponko_web_thread_heaps");
+  const encoded = addRustFlag({ CARGO_ENCODED_RUSTFLAGS: "-D\x1fwarnings" }, THREAD_HEAPS_CFG);
+  assert.equal(encoded.CARGO_ENCODED_RUSTFLAGS, "-D\x1fwarnings\x1f--cfg\x1fponko_web_thread_heaps");
   assert.equal(sweepDone(null), false);
   assert.equal(sweepDone({ done: false }), false);
   assert.equal(sweepDone({ done: true }), true);
@@ -512,7 +512,7 @@ test("the sweep table says which side is faster, and calls differences inside th
   assert.match(table, /\| 3 \| .* \| shared \|/);
 });
 
-test("the allocator case needs the per-thread allocator in the default build only, and the same saves", () => {
+test("the allocator case needs the standard allocator in the default build, heaps in the other, and the same saves", () => {
   const run = (perThread) => ({
     isolated: true,
     threads: 13,
@@ -520,8 +520,8 @@ test("the allocator case needs the per-thread allocator in the default build onl
     alloc: { same_save: true, save_page_ms: 20, save_workers_ms: perThread ? 5 : 200, parse_ms: 9, par_alloc_ms: 1 },
   });
   assert.deepEqual(checkAllocator(run(true), run(false)), []);
-  assert.match(checkAllocator(run(false), run(false)).join(), /doesn't have the per-thread allocator/);
-  assert.match(checkAllocator(run(true), run(true)).join(), /still has the per-thread allocator/);
+  assert.match(checkAllocator(run(false), run(false)).join(), /ponko_web_thread_heaps doesn't have the per-thread allocator/);
+  assert.match(checkAllocator(run(true), run(true)).join(), /the default threaded build has the per-thread allocator/);
   const differs = run(true);
   differs.alloc.same_save = false;
   assert.match(checkAllocator(differs, run(false)).join(), /per-thread: the save on the workers differs/);

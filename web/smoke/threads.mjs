@@ -44,12 +44,13 @@
 // runs each on both sides of its web threshold. It prints the timings, and
 // each pass must stay on the page's thread below its threshold, be shared
 // out from it, and end on the same hash as the page's thread alone.
-// `--case allocator` builds the fixture a second time with the standard
-// allocator (`--cfg ponko_web_system_allocator`) and opens both builds with
+// `--case allocator` builds the fixture a second time with one heap per
+// thread (`--cfg ponko_web_thread_heaps`) and opens both builds with
 // `?sweep=allocator`: the JSON save on the page's thread and on the
-// workers, parsing it, and a parallel query that allocates. It prints both
-// builds' times and wasm sizes; the default build must have the per-thread
-// allocator, and each save must be the same from the workers.
+// workers and its parts, parsing it, small blocks, a growing vector, and a
+// parallel query that allocates. It prints both builds' times and wasm
+// sizes; the default build must have the standard allocator and the other
+// one heap per thread, and each save must be the same from the workers.
 // The bench runs the fixture's workloads on the isolated page with one
 // thread (`?threads=1`) and with the engine's default, and prints the
 // medians, their spread, and the speed-up with whether it is beyond the
@@ -70,8 +71,8 @@ import {
   GAMEPAD_STEPS,
   ISOLATION_HEADERS,
   RUMBLE_PRESS,
-  SYSTEM_ALLOCATOR_CFG,
-  SYSTEM_ALLOCATOR_DIR,
+  THREAD_HEAPS_CFG,
+  THREAD_HEAPS_DIR,
   addRustFlag,
   allocatorTable,
   checkAllocator,
@@ -333,10 +334,10 @@ async function thresholds(browser, servers, args, report) {
 
 /** The allocator sweep on both builds: see the file's comment. */
 async function allocator(browser, servers, args, report) {
-  const system = await serve(resolve(SYSTEM_ALLOCATOR_DIR), ISOLATION_HEADERS);
+  const heaps = await serve(resolve(THREAD_HEAPS_DIR), ISOLATION_HEADERS);
   const runs = {};
   try {
-    for (const [name, server] of [["perThread", servers.isolated], ["system", system]]) {
+    for (const [name, server] of [["system", servers.isolated], ["perThread", heaps]]) {
       const context = await browser.newContext();
       await context.addInitScript(hideWebGpu);
       const { page, lines } = await open(context, `http://127.0.0.1:${server.address().port}/?sweep=allocator`);
@@ -344,10 +345,10 @@ async function allocator(browser, servers, args, report) {
       await context.close();
     }
   } finally {
-    system.close();
+    heaps.close();
   }
   const size = async (dir) => (await stat(join(dir, "game_bg.wasm")).catch(() => null))?.size ?? null;
-  const sizes = { perThread: await size(resolve(args.dir)), system: await size(resolve(SYSTEM_ALLOCATOR_DIR)) };
+  const sizes = { system: await size(resolve(args.dir)), perThread: await size(resolve(THREAD_HEAPS_DIR)) };
   report.runs = { allocator: { ...runs, wasm_bytes: sizes } };
   console.log(`\n${allocatorTable(runs.perThread, runs.system, sizes)}\n`);
   return checkAllocator(runs.perThread, runs.system);
@@ -420,10 +421,10 @@ async function main() {
       : args.case === "service-worker"
         ? ["web/build.sh", "--threads", "--isolation-worker", "--features", FIXTURE_FEATURES, "web_threads", args.dir]
         : ["web/build.sh", "--threads", "--features", FIXTURE_FEATURES, "web_threads"];
-  // The standard allocator's build first, so the default one is cargo's last.
+  // The build with one heap per thread first, so the default one is cargo's last.
   if (args.build && args.case === "allocator") {
-    const systemArgs = ["web/build.sh", "--threads", "--features", FIXTURE_FEATURES, "web_threads", SYSTEM_ALLOCATOR_DIR];
-    if (spawnSync("bash", systemArgs, { stdio: "inherit", env: addRustFlag(buildEnv, SYSTEM_ALLOCATOR_CFG) }).status !== 0) {
+    const heapsArgs = ["web/build.sh", "--threads", "--features", FIXTURE_FEATURES, "web_threads", THREAD_HEAPS_DIR];
+    if (spawnSync("bash", heapsArgs, { stdio: "inherit", env: addRustFlag(buildEnv, THREAD_HEAPS_CFG) }).status !== 0) {
       process.exit(EXIT.usage);
     }
   }

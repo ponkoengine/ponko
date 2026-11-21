@@ -161,7 +161,17 @@ pub(super) struct Plan {
 /// (walking on a flat floor, Apple M4 Pro, 12 cores): one thread is faster
 /// at 8 (0.036 vs 0.044 ms a tick), the two tie at 12, and the pool wins
 /// from 16 (0.053 vs 0.044 ms; 0.107 vs 0.059 ms at 32).
+#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
 pub(crate) const PARALLEL_FROM: usize = 16;
+
+/// In a web build with threads, handing the moves to the frame pool's
+/// workers and waiting for them costs about 0.05 ms. In headless Chromium
+/// with 13 threads (the moves alone, on a flat floor), 128 characters took
+/// 0.06 ms on the page's thread and 0.09 ms shared out, 256 took 0.13 and
+/// 0.10 ms, 512 took 0.28 and 0.14 ms (`web/smoke/threads.mjs --case
+/// thresholds`; the guide's "Threads on the web").
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+pub(crate) const PARALLEL_FROM: usize = 256;
 
 /// Works out `c`'s move. Fills `hits` (emptied first) with the dynamic
 /// bodies it walked into, if it pushes.

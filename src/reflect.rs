@@ -165,10 +165,13 @@ const SAVE_VERSION: u64 = 1;
 /// Whether a save builds each entity's JSON on the frame pool. Natively it
 /// does. In a web build with threads it stays on the calling thread: the
 /// JSON is many small allocations, and the browser's threads share the
-/// standard allocator's one lock, so the frame pool's workers made it about
-/// 10 times slower than the page's thread alone (measured in the threads
-/// fixture, book/src/web-threads.md).
-const SAVE_SHARED: bool = !cfg!(all(target_arch = "wasm32", target_feature = "atomics"));
+/// standard allocator's one lock, so the frame pool's workers made it 17
+/// times slower than the page's thread alone (700 ms against 41 ms in the
+/// threads fixture, book/src/web-threads.md). With one heap per thread
+/// (`--cfg ponko_web_thread_heaps`) the workers are faster again (40 ms
+/// against 61 ms there), so such a build shares it out.
+const SAVE_SHARED: bool =
+    !cfg!(all(target_arch = "wasm32", target_feature = "atomics")) || cfg!(ponko_web_thread_heaps);
 /// Entity slots a save may use beyond its own entities, for the gaps that
 /// despawns leave: 2^22 slots, about 64 MiB of slot table and free list at worst.
 const LOAD_SPARE_SLOTS: usize = 1 << 22;

@@ -1428,8 +1428,8 @@ jobs:
       # (`--case service-worker`). Each small parallel pass must stay on the
       # page's thread below its web threshold, be shared out from it, and end
       # on the page's thread's result (`--case thresholds`); the default
-      # threaded build must have the per-thread allocator and the build with
-      # `--cfg ponko_web_system_allocator` the standard one, each saving the
+      # threaded build must have the standard allocator and the build with
+      # `--cfg ponko_web_thread_heaps` one heap per thread, each saving the
       # same JSON on the workers as on the page's thread (`--case allocator`).
       - name: Nightly Rust for the threaded web build
         if: ${{ !cancelled() }}

@@ -165,9 +165,9 @@ pub mod bench_sharing {
     }
 
     /// Whether this build allocates from one heap per thread (a web build
-    /// with threads, without `--cfg ponko_web_system_allocator`).
+    /// with threads and `--cfg ponko_web_thread_heaps`).
     pub fn per_thread_allocator() -> bool {
-        cfg!(all(target_arch = "wasm32", target_feature = "atomics", not(ponko_web_system_allocator)))
+        cfg!(all(target_arch = "wasm32", target_feature = "atomics", ponko_web_thread_heaps))
     }
 
     /// The fewest 3D characters whose moves are shared out.
@@ -314,9 +314,9 @@ pub mod web;
 // "Threads on the web").
 #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
 mod web_threads;
-// One heap per thread for web builds with threads, unless the game brings
-// its own allocator (see the module).
-#[cfg(all(target_arch = "wasm32", target_feature = "atomics", not(ponko_web_system_allocator)))]
+// One heap per thread for web builds with threads that ask for it with
+// `--cfg ponko_web_thread_heaps` (see the module).
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics", ponko_web_thread_heaps))]
 mod web_alloc;
 
 /// The whole ECS crate ([`ponko_ecs`]), for advanced use: component ids,
