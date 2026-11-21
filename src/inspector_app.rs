@@ -1336,7 +1336,7 @@ mod tests {
         frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
         assert_eq!(p.dialog(), Some(&Dialog::Open { path: String::new() }));
         answer_path_field(&egui, &mut p, &mut ctx, None);
-        assert!(p.dialog().is_none() && ctx.editor.doc.path.is_none() && ctx.world.len() == 0);
+        assert!(p.dialog().is_none() && ctx.editor.doc.path.is_none() && ctx.world.is_empty());
 
         frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
         answer_path_field(&egui, &mut p, &mut ctx, Some(&file.name));
