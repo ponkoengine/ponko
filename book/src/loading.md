@@ -93,7 +93,9 @@ The **first failure** stops the group: its state is `Failed` and
 broken one, or what your `with` loader returned. The assets the group
 already finished stay loaded, and no more are started. The ones already
 being read when it failed finish on their workers and wait, so a restart
-doesn't read them again.
+doesn't read them again. Which assets had finished by the time the failure
+came back depends on the workers, so a failed group's `loaded` can differ
+from run to run; a test should check it after the restart, not before.
 
 `ctx.assets.cancel_group(id)` stops a group: the files not yet started are
 never read, the ones on workers are dropped when they finish, and streams
