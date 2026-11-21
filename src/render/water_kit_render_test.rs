@@ -463,15 +463,20 @@ fn spectrum_waves_cost() {
     // The frame's GPU time, median of 40 after 20 to settle.
     let measure = |ctx: &mut Ctx, desc: WaterDesc| {
         let e = Water::spawn(ctx, desc);
-        let mut totals = Vec::new();
+        let (mut totals, mut read) = (Vec::new(), 0);
         for i in 0..60 {
             frame(ctx);
+            // Wait for the GPU, so the next frame reads this one's stamps
+            // back; a sample counts only when a new one arrived.
             let renderer = ctx.gfx.renderer.as_ref().unwrap();
-            if let Some((spans, _)) = renderer.gpu_frame()
-                && i >= 20
-                && !spans.is_empty()
+            let _ = renderer.texture_for_test(0).0.poll(wgpu::PollType::wait_indefinitely());
+            if let Some((spans, frames)) = renderer.gpu_frame()
+                && frames > read
             {
-                totals.push(spans.iter().map(|p| p.ms).sum::<f32>());
+                read = frames;
+                if i >= 20 && !spans.is_empty() {
+                    totals.push(spans.iter().map(|p| p.ms).sum::<f32>());
+                }
             }
         }
         crate::water::despawn_water(ctx, e);

@@ -600,16 +600,20 @@ fn cloud_presets_gpu_time() {
         .unwrap_or(3);
     look(&mut stage, vec3(0.0, 2.0, 0.0), -Vec3::Z, 20.0);
     stage.ctx.scene3d.lighting.sun_direction = crate::render::Sky::sun_direction_at(14.0);
-    // The whole frame's GPU time (every pass's), over 40 frames after 20 to
-    // settle: what the kit adds is the difference to the frame without it.
-    // (Per-pass stamps on a tiled GPU charge a pass with work queued before
-    // it, so the kit's own passes are listed for orientation only.)
+    // The whole frame's GPU time (every pass's): what the kit adds is the
+    // difference to the frame without it. (Per-pass stamps on a tiled GPU
+    // charge a pass with work queued before it, so the kit's own passes are
+    // listed for orientation only.) Each frame waits for the GPU and reads
+    // its own stamps back: a busy machine otherwise returns them many
+    // frames late.
     let kit_passes = ["sky kit lookup", "cloud shadows", "clouds", "cloud resolve"];
-    let mut run = |stage: &mut Stage| {
-        let (mut totals, mut each) = (Vec::new(), vec![Vec::new(); kit_passes.len()]);
-        for frame in 0..60 {
+    let mut frames = |stage: &mut Stage, settle: usize, count: usize, totals: &mut Vec<f32>, each: &mut [Vec<f32>]| {
+        for frame in 0..settle + count {
+            timer.last_frame.clear();
             stage.render_timed(Some(&mut timer));
-            if frame < 20 || timer.last_frame.is_empty() {
+            let _ = stage.device.poll(wgpu::PollType::wait_indefinitely());
+            timer.collect(&stage.device);
+            if frame < settle || timer.last_frame.is_empty() {
                 continue;
             }
             totals.push(timer.last_frame.iter().map(|p| p.ms).sum::<f32>());
@@ -617,46 +621,71 @@ fn cloud_presets_gpu_time() {
                 each[i].push(timer.last_frame.iter().find(|p| p.name == *name).map_or(0.0, |p| p.ms));
             }
         }
-        totals.sort_by(f32::total_cmp);
-        for v in &mut each {
-            v.sort_by(f32::total_cmp);
-        }
-        let at = |v: &Vec<f32>, q: f32| v[((v.len() - 1) as f32 * q) as usize];
-        let parts: Vec<String> = kit_passes
-            .iter()
-            .zip(&each)
-            .map(|(name, v)| format!("{name} {:.3}", at(v, 0.5)))
-            .collect();
-        (at(&totals, 0.5), at(&totals, 0.1), at(&totals, 0.9), parts.join(", "))
+    };
+    let median = |v: &mut Vec<f32>| {
+        v.sort_by(f32::total_cmp);
+        v.get(v.len() / 2).copied().unwrap_or(0.0)
     };
     for r in 0..runs {
         stage.ctx.scene3d.sky.kit = None;
-        let (base, lo, hi, _) = run(&mut stage);
-        eprintln!("run {r}: 1920x1080, frame without the kit (atmosphere): {base:.3} ms median ({lo:.3}..{hi:.3})");
+        let mut base = Vec::new();
+        frames(&mut stage, 20, 40, &mut base, &mut vec![Vec::new(); kit_passes.len()]);
+        let base = median(&mut base);
+        eprintln!("run {r}: 1920x1080, frame without the kit (atmosphere): {base:.3} ms median");
         for quality in CloudQuality::ALL {
-            let ways: &[bool] = if quality.interleaved() {
-                &[true, false]
+            set_time(&mut stage, 14.0, SkyKit::default().with_quality(quality));
+            // The passes are made in the first frame with the kit.
+            stage.render();
+            // The ways to march, in blocks of 12 frames (after 8 to settle),
+            // taking turns so the GPU's clock and the machine's load weigh
+            // on both alike; the order flips from run to run.
+            let ways: Vec<bool> = if quality.interleaved() {
+                if r % 2 == 0 {
+                    vec![true, false]
+                } else {
+                    vec![false, true]
+                }
             } else {
-                &[false]
+                vec![false]
             };
-            for &full in ways {
-                set_time(&mut stage, 14.0, SkyKit::default().with_quality(quality));
-                // The passes are made in the first frame with the kit.
-                stage.render();
-                stage.renderer.set_full_cloud_march(full);
-                let (total, lo, hi, parts) = run(&mut stage);
+            let mut results: Vec<(Vec<f32>, Vec<Vec<f32>>, Vec<f32>)> = ways
+                .iter()
+                .map(|_| (Vec::new(), vec![Vec::new(); kit_passes.len()], Vec::new()))
+                .collect();
+            for _block in 0..6 {
+                for (w, &full) in ways.iter().enumerate() {
+                    stage.renderer.set_full_cloud_march(full);
+                    let (totals, each, blocks) = &mut results[w];
+                    let mut block = Vec::new();
+                    frames(&mut stage, 8, 12, &mut block, each);
+                    totals.extend_from_slice(&block);
+                    blocks.push(median(&mut block));
+                }
+            }
+            stage.renderer.set_full_cloud_march(false);
+            for (w, &full) in ways.iter().enumerate() {
+                let (totals, each, blocks) = &mut results[w];
+                let total = median(totals);
+                let parts: Vec<String> = kit_passes
+                    .iter()
+                    .zip(each.iter_mut())
+                    .map(|(name, v)| format!("{name} {:.3}", median(v)))
+                    .collect();
+                blocks.sort_by(f32::total_cmp);
                 let how = match (quality.is_volumetric(), full || !quality.interleaved()) {
                     (false, _) => "",
                     (true, true) => " full",
                     (true, false) => " interleaved",
                 };
                 eprintln!(
-                    "run {r}: {}{how}: frame {total:.3} ms median ({lo:.3}..{hi:.3}), kit +{:.3} ms; {parts}",
+                    "run {r}: {}{how}: frame {total:.3} ms median (blocks {:.3}..{:.3}), kit +{:.3} ms; {}",
                     quality.name(),
+                    blocks[0],
+                    blocks[blocks.len() - 1],
                     total - base,
+                    parts.join(", ")
                 );
             }
-            stage.renderer.set_full_cloud_march(false);
         }
     }
     stage.finish();

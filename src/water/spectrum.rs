@@ -182,8 +182,22 @@ pub(crate) struct SpectrumField {
     /// heights' and sways' spread).
     pub max_height: f32,
     pub max_sway: f32,
-    /// The last two moments worked out (newest last).
-    cache: Mutex<Vec<Arc<Field>>>,
+    /// The last two moments worked out (newest last), and the buffers the
+    /// next one is worked out in.
+    cache: Mutex<Cache>,
+}
+
+/// The CPU's moments and its work space: kept between frames, so a new
+/// moment allocates nothing once the first few are made.
+#[derive(Debug, Default)]
+struct Cache {
+    fields: Vec<Arc<Field>>,
+    ab: Vec<[C; 2]>,
+    a: Vec<C>,
+    b: Vec<C>,
+    v: Vec<C>,
+    scratch: Vec<C>,
+    column: Vec<C>,
 }
 
 impl PartialEq for SpectrumField {
@@ -290,7 +304,10 @@ impl SpectrumField {
             h0,
             max_height: 10.0 * sigma,
             max_sway: 10.0 * settings.choppiness.max(0.0) * sigma,
-            cache: Mutex::new(Vec::with_capacity(2)),
+            cache: Mutex::new(Cache {
+                fields: Vec::with_capacity(2),
+                ..Cache::default()
+            }),
         }
     }
 
@@ -302,13 +319,23 @@ impl SpectrumField {
 
     /// The two packed signals at time `t`, spectrum texel by texel (what
     /// `spectrum.wgsl` computes), and the sway's speed if `speed`.
-    fn at_time(&self, t: f32, speed: bool) -> (Vec<[C; 2]>, Vec<C>) {
+    fn at_time(&self, t: f32, ab: &mut Vec<[C; 2]>, v: Option<&mut Vec<C>>) {
         let n = self.n;
         let tile = self.settings.tile.max(1.0);
         let chop = self.settings.choppiness.max(0.0);
         let t = wrap_time(t);
-        let mut ab = vec![[C::ZERO; 2]; n * n];
-        let mut v = if speed { vec![C::ZERO; n * n] } else { Vec::new() };
+        ab.clear();
+        ab.resize(n * n, [C::ZERO; 2]);
+        let speed = v.is_some();
+        let mut no_v = Vec::new();
+        let v = match v {
+            Some(v) => {
+                v.clear();
+                v.resize(n * n, C::ZERO);
+                v
+            }
+            None => &mut no_v,
+        };
         for j in 0..n {
             for i in 0..n {
                 let k = Vec2::new(wave_index(i, n), wave_index(j, n)) * (TAU / tile);
@@ -334,46 +361,67 @@ impl SpectrumField {
                 }
             }
         }
-        (ab, v)
     }
 
     /// The field at time `t`, worked out on the CPU (with the sway's speed
     /// if `speed`); the last two moments are kept.
     pub fn field(&self, t: f32, speed: bool) -> Arc<Field> {
         let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(f) = cache.iter().find(|f| f.t == t && (!speed || !f.sway_speed.is_empty())) {
+        if let Some(f) = cache
+            .fields
+            .iter()
+            .find(|f| f.t == t && (!speed || !f.sway_speed.is_empty()))
+        {
             return f.clone();
         }
-        let field = Arc::new(self.compute(t, speed));
-        if cache.len() == 2 {
-            cache.remove(0);
-        }
-        cache.push(field.clone());
+        // The oldest moment's buffers are reused, unless someone still
+        // holds it.
+        let old = if cache.fields.len() == 2 {
+            Arc::try_unwrap(cache.fields.remove(0)).ok()
+        } else {
+            None
+        };
+        let field = Arc::new(self.compute(t, speed, &mut cache, old));
+        cache.fields.push(field.clone());
         field
     }
 
-    fn compute(&self, t: f32, speed: bool) -> Field {
+    fn compute(&self, t: f32, speed: bool, work: &mut Cache, old: Option<Field>) -> Field {
         let n = self.n;
-        let (ab, v) = self.at_time(t, speed);
-        let mut a: Vec<C> = ab.iter().map(|p| p[0]).collect();
-        let mut b: Vec<C> = ab.iter().map(|p| p[1]).collect();
-        let mut scratch = vec![C::ZERO; n];
-        inverse_fft_2d(&mut a, n, &mut scratch);
-        inverse_fft_2d(&mut b, n, &mut scratch);
-        let texels = a.iter().zip(&b).map(|(a, b)| [a.re, a.im, b.re, b.im]).collect();
-        let sway_speed = if speed {
-            let mut v = v;
-            inverse_fft_2d(&mut v, n, &mut scratch);
-            v.iter().map(|c| [c.re, c.im]).collect()
-        } else {
-            Vec::new()
-        };
-        Field {
+        let Cache {
+            ab,
+            a,
+            b,
+            v,
+            scratch,
+            column,
+            ..
+        } = work;
+        self.at_time(t, ab, speed.then_some(&mut *v));
+        a.clear();
+        a.extend(ab.iter().map(|p| p[0]));
+        b.clear();
+        b.extend(ab.iter().map(|p| p[1]));
+        inverse_fft_2d(a, n, scratch, column);
+        inverse_fft_2d(b, n, scratch, column);
+        let mut field = old.unwrap_or(Field {
             t,
             n,
-            texels,
-            sway_speed,
+            texels: Vec::new(),
+            sway_speed: Vec::new(),
+        });
+        field.t = t;
+        field.n = n;
+        field.texels.clear();
+        field
+            .texels
+            .extend(a.iter().zip(b.iter()).map(|(a, b)| [a.re, a.im, b.re, b.im]));
+        field.sway_speed.clear();
+        if speed {
+            inverse_fft_2d(v, n, scratch, column);
+            field.sway_speed.extend(v.iter().map(|c| [c.re, c.im]));
         }
+        field
     }
 }
 
@@ -412,17 +460,17 @@ pub(crate) fn inverse_fft(x: &mut [C], scratch: &mut [C]) {
 }
 
 /// The 2D inverse FFT of `x` (`n` x `n`, rows of x) in place: rows, then columns.
-fn inverse_fft_2d(x: &mut [C], n: usize, scratch: &mut Vec<C>) {
+fn inverse_fft_2d(x: &mut [C], n: usize, scratch: &mut Vec<C>, column: &mut Vec<C>) {
     scratch.resize(n, C::ZERO);
     for row in x.chunks_exact_mut(n) {
         inverse_fft(row, scratch);
     }
-    let mut column = vec![C::ZERO; n];
+    column.resize(n, C::ZERO);
     for i in 0..n {
         for j in 0..n {
             column[j] = x[j * n + i];
         }
-        inverse_fft(&mut column, scratch);
+        inverse_fft(column, scratch);
         for j in 0..n {
             x[j * n + i] = column[j];
         }
@@ -615,6 +663,30 @@ mod tests {
         for (x, y) in a.texels.iter().zip(&b.texels) {
             assert!((x[0] - y[0]).abs() < 1e-3);
         }
+    }
+
+    #[test]
+    fn a_new_moment_reuses_the_oldest_ones_buffers() {
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+        let first = spectrum.field(1.0, false);
+        let first_texels = first.texels.as_ptr();
+        let kept = first.texels.clone();
+        drop(first);
+        spectrum.field(2.0, false);
+        // The cache holds two moments: the third takes over the first's.
+        let third = spectrum.field(3.0, false);
+        assert_eq!(
+            third.texels.as_ptr(),
+            first_texels,
+            "the oldest moment's texels are reused"
+        );
+        assert_ne!(third.texels, kept, "and hold the new moment");
+        // A moment someone still holds is left alone.
+        let held = spectrum.field(4.0, false);
+        let held_texels = held.texels.clone();
+        spectrum.field(5.0, false);
+        spectrum.field(6.0, false);
+        assert_eq!(held.texels, held_texels, "a held moment never changes");
     }
 
     #[test]

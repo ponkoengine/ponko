@@ -873,6 +873,15 @@ impl Water {
                 return false;
             }
         }
+        // Clearly over or under every wave: no need to ask the waves
+        // (which, from a spectrum, is a CPU FFT at a new moment).
+        let reach_of_waves = self.desc.waves.max_height() + 0.05;
+        if p.y - reach > self.desc.level + reach_of_waves {
+            return false;
+        }
+        if p.y - reach < self.desc.level - reach_of_waves {
+            return true;
+        }
         p.y - reach < self.height_at(Vec2::new(p.x, p.z), t) + 0.05
     }
 
