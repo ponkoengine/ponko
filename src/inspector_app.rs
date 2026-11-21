@@ -1301,8 +1301,9 @@ mod tests {
         let mut other = ctx.world.save();
         other["entities"][0]["components"]["Hp"] = serde_json::json!(6.0);
         std::fs::write(&file.file, serde_json::to_string(&other).unwrap() + "\n\n\n").unwrap();
-        // The check runs every half second: wait it out in frames.
-        let until = web_time::Instant::now() + crate::editor::document_check_every() * 3;
+        // The check runs every half second: wait it out in frames (60 checks'
+        // worth: a hang detector, not a number of checks a busy machine makes).
+        let until = web_time::Instant::now() + crate::editor::document_check_every() * 60;
         while ctx.world.query::<&Hp>().iter().next().map(|h| h.0) != Some(6.0) {
             assert!(web_time::Instant::now() < until, "not reloaded");
             frame(&egui, &mut p, &mut ctx, vec![]);

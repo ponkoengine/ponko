@@ -2158,6 +2158,9 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
     })
 }
 
+// The 5 and 10 s limits in these tests (read timeouts, deadlines) are hang
+// detectors: each wait ends as soon as the reply or the work is there, so
+// only a hang uses one up; a busy machine delays a thread by milliseconds.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2214,9 +2217,11 @@ mod tests {
         while *control.owed.count() == 0 {
             thread::yield_now();
         }
-        let started = std::time::Instant::now();
+        let owed = Arc::clone(&control.owed);
         drop(control);
-        assert!(started.elapsed() < EXIT_FLUSH_TIMEOUT, "the exit waited out its limit");
+        // The exit returned because the refusal was written, not because its
+        // wait ran out (the game would never have answered): nothing is owed.
+        assert_eq!(*owed.count(), 0, "the exit waited out its limit");
         let mut reply = String::new();
         BufReader::new(client).read_line(&mut reply).unwrap();
         let reply: Value = serde_json::from_str(&reply).unwrap();
@@ -2235,13 +2240,12 @@ mod tests {
         // The game takes the request and keeps it for later, then exits:
         // whatever held it is dropped before the endpoint.
         let held = control.requests.recv_timeout(Duration::from_secs(5)).unwrap();
-        let started = std::time::Instant::now();
+        let owed = Arc::clone(&control.owed);
         drop(held);
         drop(control);
-        assert!(
-            started.elapsed() < EXIT_FLUSH_TIMEOUT / 2,
-            "the exit waited for a reply that could not come"
-        );
+        // Nothing is owed once the exit returns: it didn't give up waiting
+        // for a reply that could not come (the client's own wait is 30 s).
+        assert_eq!(*owed.count(), 0, "the exit waited for a reply that could not come");
         let mut reply = String::new();
         BufReader::new(client).read_line(&mut reply).unwrap();
         let reply: Value = serde_json::from_str(&reply).unwrap();
@@ -3080,7 +3084,8 @@ mod tests {
         let plain_now = std::fs::read_to_string(format!("{dir}/c.json")).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(pipe.is_err(), "{pipe:?}");
-        assert!(waited < Duration::from_secs(5), "waited {waited:?} on a pipe");
+        // Opening a pipe nobody reads would block for good: a hang detector.
+        assert!(waited < Duration::from_secs(30), "waited {waited:?} on a pipe");
         assert!(linked.unwrap_err().contains("hard links"));
         assert_eq!(linked_target, "{\"long\": \"old contents\"}");
         assert!(plain.is_ok(), "{plain:?}");

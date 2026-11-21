@@ -33,6 +33,19 @@ impl Strings {
     }
 }
 
+/// Runs `parse` and checks it took under 5 s. The inputs here make a parser
+/// that walks the counts they claim (or rescans what it read) take minutes;
+/// parsing them as intended is milliseconds of work, which even a machine
+/// running a dozen threads per core stretches only to a fraction of a
+/// second. So the bound holds on a busy machine and fails on the blow-up.
+fn quickly<T>(parse: impl FnOnce() -> T) -> T {
+    let started = std::time::Instant::now();
+    let parsed = parse();
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(5), "took {took:?}");
+    parsed
+}
+
 fn file() -> Vec<u8> {
     let mut local = Strings(Vec::new());
     let test_object = local.add("TestObject");
@@ -263,13 +276,7 @@ fn arrays_of_empty_elements_with_corrupt_counts_are_errors() {
     assert_eq!(three.objects[0].type_name, "Holder");
     assert_eq!(three.objects[0].body["m_Tail"].as_i64(), Some(9));
     for bad in [-1, i32::MIN, 1 << 30, i32::MAX] {
-        let started = std::time::Instant::now();
-        let err = UnityFile::parse_binary(&empty_elements(bad)).unwrap_err();
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "{bad} took {:?}",
-            started.elapsed()
-        );
+        let err = quickly(|| UnityFile::parse_binary(&empty_elements(bad))).unwrap_err();
         assert!(err.to_string().contains("binary asset"), "{bad}: {err}");
     }
 }
@@ -312,13 +319,7 @@ fn nested_arrays_of_empty_elements_are_bounded_by_the_files_size() {
     // Each inner array claims as many empty elements as there are bytes
     // left, which a check on one array alone would allow: about a million
     // values per 1000 outer elements, from 4 KB.
-    let started = std::time::Instant::now();
-    let err = UnityFile::parse_binary(&nested_empty_elements(1000, |_, left| left as i32)).unwrap_err();
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(5),
-        "took {:?}",
-        started.elapsed()
-    );
+    let err = quickly(|| UnityFile::parse_binary(&nested_empty_elements(1000, |_, left| left as i32))).unwrap_err();
     assert!(err.to_string().contains("more than its size allows"), "{err}");
 }
 
@@ -352,13 +353,7 @@ fn overlapping_objects_are_errors() {
     assert_eq!(UnityFile::parse_binary(&apart).unwrap().objects.len(), 2);
     // The same bytes, many times.
     let entries: Vec<(i64, i64, u32)> = (0..2_000).map(|n| (n, 0, size)).collect();
-    let started = std::time::Instant::now();
-    let err = UnityFile::parse_binary(&build_objects(&nodes, &local, &data, &entries)).unwrap_err();
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(5),
-        "took {:?}",
-        started.elapsed()
-    );
+    let err = quickly(|| UnityFile::parse_binary(&build_objects(&nodes, &local, &data, &entries))).unwrap_err();
     assert!(err.to_string().contains("overlap"), "{err}");
     // Partly overlapping, and outside the data.
     let partly = build_objects(&nodes, &local, &data, &[(1, 0, size), (2, 4, 8)]);
@@ -383,13 +378,7 @@ fn overlapping_objects_are_errors() {
 fn type_tree_names_without_an_end_are_errors() {
     let mut local = Strings(vec![b'a'; 200_000]);
     let nodes: Vec<Node> = (0..5_000).map(|n| (u8::from(n > 0), false, 0, 0, 4, 0)).collect();
-    let started = std::time::Instant::now();
-    let err = UnityFile::parse_binary(&build(&nodes, &local, &[0; 4])).unwrap_err();
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(5),
-        "took {:?}",
-        started.elapsed()
-    );
+    let err = quickly(|| UnityFile::parse_binary(&build(&nodes, &local, &[0; 4]))).unwrap_err();
     assert!(err.to_string().contains("name longer than"), "{err}");
     // Short names, shared by many nodes, count against the budget.
     local.0 = b"abcdefghijklmnopqrstuvwxyz".repeat(30);
@@ -481,13 +470,7 @@ fn big_subtrees_are_skipped_without_walking_them_per_value() {
     let n = 50_000;
     let mut object = (n as i32).to_le_bytes().to_vec();
     object.extend(0i32.to_le_bytes().repeat(n));
-    let started = std::time::Instant::now();
-    let parsed = UnityFile::parse_binary(&build(&nodes, &local, &object)).unwrap();
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(5),
-        "took {:?}",
-        started.elapsed()
-    );
+    let parsed = quickly(|| UnityFile::parse_binary(&build(&nodes, &local, &object))).unwrap();
     assert_eq!(parsed.objects[0].body["m_Items"].as_seq().unwrap().len(), n);
 }
 
@@ -513,12 +496,6 @@ fn nested_arrays_with_huge_counts_reserve_nothing_up_front() {
     let mut object = i32::MAX.to_le_bytes().repeat(usize::from(depth));
     object.extend(i32::MAX.to_le_bytes());
     object.extend(vec![b'x'; 1 << 20]);
-    let started = std::time::Instant::now();
-    let err = UnityFile::parse_binary(&build(&nodes, &local, &object)).unwrap_err();
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(5),
-        "took {:?}",
-        started.elapsed()
-    );
+    let err = quickly(|| UnityFile::parse_binary(&build(&nodes, &local, &object))).unwrap_err();
     assert!(err.to_string().contains("binary asset"), "{err}");
 }

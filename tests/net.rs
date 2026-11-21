@@ -315,15 +315,21 @@ fn a_web_client_whose_host_is_not_a_websocket_server_is_lost_at_once() {
         let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n");
     });
     let start = std::time::Instant::now();
-    // No tick can run: the run ends when the session is lost.
+    // No tick can run: the run ends when the session is lost. The silence
+    // timeout is ten minutes, so only a client that waited for it instead of
+    // giving up at once can reach the bound below.
     Game::new("net", 1, 1)
-        .lockstep(Net::join_web(&format!("ws://{addr}/game")).unwrap())
+        .lockstep(
+            Net::join_web(&format!("ws://{addr}/game"))
+                .unwrap()
+                .timeout(Duration::from_secs(600)),
+        )
         .sim_system(|_: &mut Ctx| panic!("no tick runs without a host"))
         .run_headless(10, |_| {});
     answer.join().unwrap();
     assert!(
-        start.elapsed() < Duration::from_secs(5),
-        "lost at once, not after the 10 s silence timeout"
+        start.elapsed() < Duration::from_secs(60),
+        "lost at once, not after the silence timeout"
     );
 }
 

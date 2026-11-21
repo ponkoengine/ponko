@@ -298,7 +298,8 @@ fn a_step_that_hangs_is_killed_at_its_timeout() {
     o.step_timeout = Duration::from_millis(600);
     let started = std::time::Instant::now();
     let report = orchestrate::run(&o).unwrap();
-    assert!(started.elapsed() < Duration::from_secs(30));
+    // A hang detector: a step that isn't killed never ends.
+    assert!(started.elapsed() < Duration::from_secs(60));
     let m = &report.manifest;
     assert_eq!(m["result"]["failure"]["kind"], "step_timeout");
     assert_eq!(m["commands"][1]["status"], "timeout");
@@ -737,12 +738,14 @@ fn two_launched_runs_of_one_setup_compare_as_the_same() {
 fn a_game_that_never_opens_its_control_endpoint_is_a_bounded_launch_timeout() {
     let dir = out_dir("launch-timeout");
     let mut o = Options::new(&dir, Variant::Fixed);
-    let mut launch = this_binary(IDLE_ENV, "30");
+    // It would idle ten minutes: only a game that wasn't killed reaches the
+    // bound below, however slow the machine is.
+    let mut launch = this_binary(IDLE_ENV, "600");
     launch.launch_timeout = Duration::from_secs(2);
     o.launch = Some(launch);
     let started = std::time::Instant::now();
     let report = orchestrate::run(&o).unwrap();
-    assert!(started.elapsed() < Duration::from_secs(20), "the idle game was killed");
+    assert!(started.elapsed() < Duration::from_secs(60), "the idle game was killed");
     let m = &report.manifest;
     assert!(!report.passed);
     let failure = &m["result"]["failure"];
