@@ -134,7 +134,7 @@ machine name, no network address, no hardware serial numbers.
 | `os` | The operating system, its version and the CPU architecture, with the kernel's name and release on Unix (`macos 15.1 aarch64 (Darwin 24.1.0)`); in a browser, the browser's user agent. |
 | `gpu`, `gpu driver` | The GPU the renderer opened: its name, graphics API, type, and the driver's name and version where the driver reports them. `not opened` before the first frame and in headless runs. |
 | `settings` | The graphics settings at the last frame: the window's size, scale and mode, vsync, and in 3D builds the quality preset (or `custom`), render scale, multisampling, shadows, antialiasing, ambient occlusion and automatic quality. |
-| `backtrace` | Where the panic happened, frame by frame, from the panicking frame down. A release build without debug info shows fewer names (`debug = "line-tables-only"` in the release profile gives file names and lines for little size). |
+| `backtrace` | Where the panic happened, frame by frame, from the panicking frame down. A release build without debug info shows fewer names (`debug = "line-tables-only"` in the release profile gives file names and lines for little size). For a `native` crash, the frames the handler walked, each with its module and offset ([below](#backtraces-of-a-native-crash)). |
 | `log` | The last 100 lines the game printed on standard output and error (Rust's `println!`, C's `printf` and the engine's messages), oldest first. Not kept in browsers. |
 
 The JSON form (`serde_json`) has the same fields, named `kind`, `message`,
@@ -161,8 +161,10 @@ access violation on Windows stops the game without a panic. With reports on,
 these leave a report too, of kind `native`, on Linux, macOS and Windows. It
 says which signal (or Windows exception) stopped the game, when, the game's
 and the engine's versions, the system, the GPU and the settings of the last
-change, and the last lines the game printed. It has no backtrace, no thread
-name and no panic location.
+change, the last lines the game printed and a backtrace: the frames the
+crash handler could walk, named at the next start (see
+[Backtraces of a native crash](#backtraces-of-a-native-crash)). It has no
+thread name and no panic location.
 
 The report is finished at the **next start** of the game: `saved_reports`
 lists it, and the game's `on_crash` hook runs with it, early in that start,
@@ -177,7 +179,7 @@ any of the engine's own locks, and the memory near the crash may be
 damaged. Code that runs then may only do what is safe at any instruction:
 
 - **Linux and macOS (a signal handler).** Only async-signal-safe calls:
-  `write` to a file descriptor, `clock_gettime`, `sigaction`, `raise`. No
+  `write` and `read` on file descriptors, `clock_gettime`, `sigaction`, `raise`. No
   allocation (`malloc` may hold its lock), no locks (`Mutex`, `println!`,
   `Backtrace`), no formatting machinery (`format!` allocates), nothing that
   loads symbols. The handler reads only memory that was set up for it, with
@@ -236,6 +238,126 @@ missing when the engine's copy thread hadn't passed them on yet (the
 handler gives it 50 ms). A library that installs its own handler after the
 engine started comes first, and decides itself whether to hand a crash on.
 
+### Backtraces of a native crash
+
+A panic's backtrace comes from Rust's unwinder, which loads symbols,
+allocates and takes locks: none of that is allowed in a crash handler. So a
+native crash's backtrace is made in two halves: the handler writes **raw
+addresses**, and the next start turns them into **names**.
+
+**In the handler (Linux and macOS).** The system hands the handler the
+crashed thread's registers. From them it takes the instruction that crashed
+(frame 0), the frame pointer and the stack pointer, and walks the chain of
+frame records: each record holds the caller's frame pointer and the return
+address into the caller. Every step is checked before it is read:
+
+- the frame pointer lies inside the crashed thread's stack: the range the
+  engine recorded ahead of time for the thread that started the run (the
+  game's main thread, `pthread_getattr_np` on Linux,
+  `pthread_get_stackaddr_np` on macOS), or, for any other thread, the 8 MiB
+  above the stack pointer;
+- it is aligned, and higher than the one before (a stack grows down, so a
+  chain that goes back down or stands still is broken);
+- the two words are read through a pipe opened ahead of time: `write` from
+  the address into the pipe, then `read` them back. For an address that
+  isn't mapped, `write` fails with `EFAULT` instead of faulting a second
+  time inside the handler.
+
+The walk stops at the first step that fails, at a return address of zero,
+or after 64 frames. On 64-bit ARM, return addresses that carry a pointer
+authentication code are stripped to the address.
+
+Each address is written as digits, with the **module** it falls into (the
+program or a shared library) and its **offset** from that module's start.
+The handler finds the module in a table in static memory, prepared ahead of
+time like the fixed part: each loaded module's address range, path and
+build id (`_dyld_*` on macOS, `dl_iterate_phdr` on Linux), in two halves of
+atomic values, the idle one filled and then switched. It is refreshed off
+the handler when the run starts, when the renderer opened its GPU (drivers
+load then), when the settings change, and when the number of loaded modules
+changed (checked every 2 seconds at a drawn frame). After the frames, the
+handler writes the path and build id of each module they used.
+
+**In the filter (Windows).** 64-bit Windows code keeps no frame-pointer
+chain: the Windows x64 calling convention lets the frame register point
+anywhere inside its frame, and functions are unwound with tables instead.
+The filter calls `RtlCaptureStackBackTrace`, the system's own table-driven
+unwinder: it reads the unwind tables of the modules already in memory and
+allocates nothing, but it is the one call in the filter that does more than
+copy bytes (it reads the loader's table of modules, so a crash inside the
+loader itself may get no frames). The frames of the exception dispatch
+above the crash are dropped, so frame 0 is the faulting instruction. The
+module table comes from the process's module list (`K32EnumProcessModules`).
+
+**At the next start**, a frame gets names only when the same binary is still
+there: a module loaded in the new process under the same path with the same
+build id (the `LC_UUID` on macOS, the GNU build id on Linux, or the file's
+size and modification time for a library built without one, and the PE
+header's time stamp and image size on Windows). Its address in the new
+process is the new start plus the offset, and the
+[`backtrace`](https://docs.rs/backtrace) crate turns it into function names,
+files and lines from the binary's debug info (a system library without
+debug info gets the name of its exported function). A frame whose binary
+changed (the game was updated between the crash and the next start) or
+isn't loaded keeps its module and offset, which is all `addr2line`,
+`llvm-symbolizer` or `atos` need with the binary that crashed:
+
+```text
+backtrace:
+     0: my_game::terrain::sample
+               at src/terrain.rs:120:9
+               in <game>/my-game +0x1a2b4
+     1: my_game::terrain::build
+               at src/terrain.rs:88:17
+               in <game>/my-game +0x1a3f0
+     2: /usr/lib/libfoo.so.2 +0x4410 (not loaded now, or not the same file)
+```
+
+**Frame pointers.** The walk needs every function between the crash and
+`main` to keep its frame record. Apple's targets always keep them (Rust and
+Apple's compilers), so a macOS report walks the whole chain. On Linux and
+other targets, Rust leaves them out by default, in debug builds too: a
+report then has frame 0 (the crashing function is always right) and stops
+early, or a frame or two later. A game that wants whole backtraces there
+builds with frame pointers, for example in its `.cargo/config.toml`:
+
+```toml
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "force-frame-pointers=yes"]
+```
+
+That costs one register, usually around 1 % of speed or less. System
+libraries built without them (common on older Linux distributions) end the
+chain where they are entered. Windows needs none of this: its unwinder uses
+the tables every function has.
+
+### How it is tested
+
+`tests/native_crash.rs` runs the test binary again as a child that crashes
+inside a game: a write to a page with no access, or C's `abort()`. The
+child installs handlers of its own first that end it with `_exit(42)`, so
+the engine's handler writes its report and hands the crash on to them, as
+it does to any handler that was there before. The child exits with 42 and
+never dies of the signal: no core file, no system crash report, no crash
+dialog. The next start in the test reads the report: its signal, its log,
+and its backtrace, whose frame 0 is named after the function that crashed
+(and, on macOS, whose chain reaches the test's own function).
+
+One test lets the child really die of the signal, to show the process still
+ends as a crash after the report (the hand-on to the system's default). It
+runs on **Linux only**, and on macOS and Windows only with
+`PONKO_CRASH_TESTS_DIE=1`. The reason: there the system keeps its own
+crash report of every child that dies, a `.ips` file under
+`~/Library/Logs/DiagnosticReports` on macOS (with a "quit unexpectedly"
+prompt in some sessions) and a Windows Error Reporting entry (with its
+dialog, unless turned off for the machine) on Windows, one per test run, on
+every contributor's machine. What that test adds over the others is small
+on those systems: on macOS the hand-on is the same Unix code that Linux runs
+every time; on Windows it is no code of the engine's at all (the filter
+returns `EXCEPTION_CONTINUE_SEARCH` and Windows ends the process). When it
+is turned on, the Windows child sets its error mode
+(`SEM_NOGPFAULTERRORBOX`) so no dialog waits for a click.
+
 ## In the browser
 
 A web build writes its report into the page's storage, in the same
@@ -266,9 +388,11 @@ the developer.
   C++ game gets the default (reports in a release build of the engine's
   library, for a game with a window and an app id), without a hook or a
   game version.
-- A crash that is not a panic writes its report at the next start, without
-  a backtrace (see [Crashes that are not panics](#crashes-that-are-not-panics));
-  a process the system kills (`SIGKILL`, running out of memory) writes none.
+- A crash that is not a panic writes its report at the next start (see
+  [Crashes that are not panics](#crashes-that-are-not-panics)); its
+  backtrace is as deep as the frame pointers allow on Linux, and has names
+  only where the same binary is still installed. A process the system kills
+  (`SIGKILL`, running out of memory) writes none.
 - In a browser, the log isn't kept, and a backtrace has no frames (wasm has
   no backtraces); the message and location are there.
 - A Windows game built for the GUI subsystem (`windows_subsystem = "windows"`)
