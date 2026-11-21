@@ -151,6 +151,12 @@ pub(crate) struct Cell {
     pub max: Vec3,
     pub start: u32,
     pub count: u32,
+    /// The largest radius global illumination's probes test an instance of
+    /// the cell with for their size cut: its bounding sphere's, or for
+    /// distance levels a sphere around its origin that holds it. Its
+    /// centre is in the cell's box, so a probe farther from the box than
+    /// `reach / GI_SMALLEST` sees none of them a pixel wide.
+    pub reach: f32,
 }
 pub(crate) struct Batch {
     pub levels: Vec<InstanceLevel>,
@@ -264,6 +270,7 @@ impl Batch {
                     max: center + radius,
                     start: batch.instances.len() as u32,
                     count: 0,
+                    reach: 0.0,
                 });
                 previous = Some(key);
             }
@@ -279,6 +286,12 @@ impl Batch {
             batch.min = batch.min.min(cell.min);
             batch.max = batch.max.max(cell.max);
             cell.count += 1;
+            let reach = if legacy_distance {
+                radius
+            } else {
+                center.distance(matrix.w_axis.truncate()) + radius
+            };
+            cell.reach = cell.reach.max(reach);
             let mut model = matrix.to_cols_array_2d();
             model[0][3] = super::projected::receiver_mask(None);
             batch.instances.push(Instance3D {

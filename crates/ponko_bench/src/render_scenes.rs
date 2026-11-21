@@ -269,6 +269,7 @@ fn measure(kind: SceneKind, settings: &Settings) -> Result<(SceneReport, SceneBe
         ],
         state_changes: last.state_changes.map(u64::from),
         command_buffers: last.command_buffers as u64,
+        submits: last.submits as u64,
         allocs_per_frame: allocs.count as f64 / count,
         alloc_bytes_per_frame: allocs.bytes as f64 / count,
     };
@@ -396,6 +397,10 @@ pub fn run(b: &mut Bench) -> Option<String> {
             last.shadow_triangles,
             batch_instances,
             scene.uploads_per_frame.iter().map(|(_, bytes)| bytes).sum::<f64>()
+        );
+        println!(
+            "    {} command buffers in {} submission(s) a frame",
+            last.command_buffers, last.submits
         );
         if let Some(dir) = &png {
             save_png(dir, kind, &bench, settings.setup.size);
