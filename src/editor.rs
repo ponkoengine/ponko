@@ -17,6 +17,9 @@ use crate::{ctx::Ctx, reflect::WorldReflect};
 use glam::Vec2;
 
 #[cfg(feature = "editor")]
+#[path = "editor_author.rs"]
+pub(crate) mod author;
+#[cfg(feature = "editor")]
 #[path = "editor_cook.rs"]
 pub(crate) mod cook;
 #[path = "editor_document.rs"]
@@ -83,6 +86,9 @@ enum Undo {
         node: String,
         link: Option<crate::three::WaitingLink>,
     },
+    /// Asset document `key` (an authoring panel's file) was `before`.
+    #[cfg(feature = "editor")]
+    Asset { key: String, before: Value },
     /// Several changes made as one (a drag of several entities).
     Group(Vec<Undo>),
 }
@@ -123,6 +129,10 @@ pub(crate) struct Editor {
     /// `Ctx::scene_loads` the history belongs to: a load since then
     /// replaced the entities its steps name.
     loads: u64,
+    /// Files the authoring panels edit (tilemaps, graphs, materials,
+    /// terrain), with what is saved of each.
+    #[cfg(feature = "editor")]
+    pub(crate) docs: author::Docs,
 }
 
 /// What Play saved for Stop.
@@ -145,6 +155,8 @@ struct Played {
 enum Merge {
     Component(Entity, String),
     Resource(String),
+    #[cfg(feature = "editor")]
+    Asset(String),
 }
 
 /// Marks an entity whose components a restore hasn't set yet.
@@ -209,6 +221,12 @@ impl Editor {
     /// Whether the world differs from the document's file: something was
     /// changed since it was opened or saved, and not undone.
     pub fn dirty(&self) -> bool {
+        // An authoring panel's file differing from the disk counts too: it
+        // can outlive its steps (Stop drops the steps made while playing).
+        #[cfg(feature = "editor")]
+        if self.docs.any_unsaved() {
+            return true;
+        }
         self.state != self.doc.saved
     }
 
@@ -861,6 +879,11 @@ impl Editor {
                 let root = self.resolve(root);
                 let link = ctx.set_waiting_link(root, &node, link)?;
                 Undo::GltfLink { root, node, link }
+            }
+            #[cfg(feature = "editor")]
+            Undo::Asset { key, before } => {
+                let now = self.docs.swap(&key, before);
+                Undo::Asset { key, before: now }
             }
             Undo::Group(steps) => {
                 let mut back = Vec::with_capacity(steps.len());

@@ -121,6 +121,8 @@ pub(crate) struct App {
     view2d: Option<crate::camera::Viewport>,
     #[cfg_attr(not(feature = "3d"), allow(dead_code))]
     view3d: Option<crate::camera::Viewport>,
+    /// The authoring windows (the Author menu).
+    pub author: super::author::Authoring,
 }
 
 impl App {
@@ -220,6 +222,7 @@ impl Panels {
             self.centre_cameras(ctx, free, ui.ctx().content_rect());
         }
         self.dialogs(ui, ctx);
+        self.author_windows(ui, ctx);
         self.shortcuts_window(ui);
         self.world_and_keys(ui, ctx);
         self.remember(ui, ctx);
@@ -358,6 +361,14 @@ impl Panels {
 
     /// Saves the document to its file, or asks for one.
     pub(crate) fn save(&mut self, ctx: &mut Ctx) -> bool {
+        // The authoring panels' files first: they don't need the scene's name.
+        let docs = ctx.editor.docs.save_all().map_err(String::from);
+        let Some(paths) = self.report(docs) else {
+            return false;
+        };
+        for path in &paths {
+            self.asset_changed(path);
+        }
         if ctx.editor.doc.path.is_none() {
             self.ask_save_as(ctx, false);
             return false;
@@ -587,6 +598,7 @@ impl Panels {
                     ui.close();
                 }
             });
+            self.author_menu(ui);
             ui.menu_button("Window", |ui| {
                 let mut layout = self.layout();
                 if ui.checkbox(&mut layout.assets, "Assets panel").changed() {
@@ -690,6 +702,7 @@ impl Panels {
                 self.prefab_section(ui, ctx, e);
                 #[cfg(feature = "3d")]
                 self.gltf_section(ui, ctx, e);
+                self.particles_section(ui, ctx, e);
                 self.entity(ui, ctx, e);
             }
             None => {

@@ -538,6 +538,9 @@ pub(super) fn decode_error(message: impl Into<String>) -> Error {
 pub(super) struct Reader<'a> {
     assets: &'a Assets,
     pub files: Vec<ReadFile>,
+    /// A file read from memory instead (name, text): the editor's unsaved
+    /// map.
+    memory: Option<(&'a str, &'a str)>,
 }
 
 impl Reader<'_> {
@@ -555,6 +558,11 @@ impl Reader<'_> {
     }
 
     pub fn text(&mut self, name: &str) -> Result<String, Error> {
+        if let Some((file, text)) = self.memory
+            && file == name
+        {
+            return Ok(text.to_string());
+        }
         String::from_utf8(self.bytes(name)?).map_err(|e| decode_error(format!("{name} is not UTF-8 text: {e}")))
     }
 }
@@ -568,9 +576,21 @@ impl Level {
     /// (or other `.json`) are Tiled maps, `.ldtk` LDtk projects. Also
     /// returns the files read and where they are on disk.
     fn read(assets: &Assets, path: &str, options: &LevelOptions) -> Result<(Level, Vec<ReadFile>), Error> {
+        Self::read_with(assets, path, options, None)
+    }
+
+    /// [`read`](Self::read), with `memory` (the file's text) instead of the
+    /// file itself when given.
+    fn read_with(
+        assets: &Assets,
+        path: &str,
+        options: &LevelOptions,
+        memory: Option<&str>,
+    ) -> Result<(Level, Vec<ReadFile>), Error> {
         let mut reader = Reader {
             assets,
             files: Vec::new(),
+            memory: memory.map(|text| (path, text)),
         };
         let text = reader.text(path)?;
         let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
@@ -1107,6 +1127,18 @@ impl Ctx {
     /// Spawns every level loaded from `path` again (hot reload). On an
     /// error the old ones stay.
     pub(crate) fn reload_level(&mut self, path: &str) -> Result<(), String> {
+        self.reload_level_with(path, None)
+    }
+
+    /// Spawns every level loaded from `path` again from `text`, the map as
+    /// the editor's tilemap panel has it (not saved yet). On an error the
+    /// old ones stay.
+    #[cfg(feature = "editor")]
+    pub(crate) fn reload_level_from_text(&mut self, path: &str, text: &str) -> Result<(), String> {
+        self.reload_level_with(path, Some(text))
+    }
+
+    fn reload_level_with(&mut self, path: &str, memory: Option<&str>) -> Result<(), String> {
         let roots: Vec<_> = self
             .world
             .query::<(Entity, &Transform2D, &LevelRoot)>()
@@ -1117,7 +1149,7 @@ impl Ctx {
         let mut replacements = Vec::new();
         let result = (|| -> Result<(), Error> {
             for (root, origin, old) in roots {
-                let (level, files) = Level::read(&self.assets, path, &old.options)?;
+                let (level, files) = Level::read_with(&self.assets, path, &old.options, memory)?;
                 let offset = ldtk_offset(&level, &old.options);
                 let at = origin + offset;
                 let entities = self.spawn_level_parts(&level, at, &old.options)?;
