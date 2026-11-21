@@ -23,9 +23,12 @@ export const WORKLOADS = ["par", "sweep", "interleaved", "jobs"];
 /** Ticks a check waits for: past the checksum (tick 120) and a few jobs. */
 export const CHECK_TICKS = 150;
 
+/** The `--case`s: the browser ones, and `warning`, a build with no browser. */
+export const CASES = ["worker-panic", "gamepads", "warning"];
+
 export const USAGE =
   "usage: threads.mjs [--dir <site>] [--build] [--browser chromium|firefox|webkit]\n" +
-  "                   [--check] [--case worker-panic]\n" +
+  "                   [--check] [--case worker-panic|gamepads|warning]\n" +
   "                   [--bench [--workloads par,sweep,interleaved,jobs] [--threads 1,<n>] [--repeat <r>]]\n" +
   "                   [--out <dir>] [--timeout <s>]";
 
@@ -62,7 +65,7 @@ export function parseArgs(argv) {
       case "--bench": args.mode = "bench"; break;
       case "--case": {
         args.case = value(i++, flag);
-        if (args.case !== "worker-panic") throw new UsageError(`unknown case ${args.case} (worker-panic)`);
+        if (!CASES.includes(args.case)) throw new UsageError(`unknown case ${args.case} (${CASES.join(", ")})`);
         break;
       }
       case "--workloads": {
@@ -200,4 +203,138 @@ export function summaryTable(rows) {
     lines.push(`| ${r.workload} | ${r.threads} | ${ms(r.median_ms)} | ${ms(r.min_ms)}–${ms(r.max_ms)} | ${spread} | ${speedup} |`);
   }
   return lines.join("\n");
+}
+
+/**
+ * `env` with `-D warnings` added where cargo reads it: the first of
+ * CARGO_ENCODED_RUSTFLAGS, RUSTFLAGS and the wasm target's flags that is
+ * set, else RUSTFLAGS. `web/build.sh --threads` then adds its own flags to
+ * the same variable, so a warning fails the threaded build.
+ */
+export function denyWarnings(env) {
+  const out = { ...env };
+  const set = (name) => (out[name] ?? "") !== "";
+  const target = "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS";
+  if (set("CARGO_ENCODED_RUSTFLAGS")) {
+    const words = out.CARGO_ENCODED_RUSTFLAGS.split("\x1f");
+    if (!/-D\x1fwarnings|-Dwarnings/.test(words.join("\x1f"))) out.CARGO_ENCODED_RUSTFLAGS = [...words, "-D", "warnings"].join("\x1f");
+  } else {
+    const name = !set("RUSTFLAGS") && set(target) ? target : "RUSTFLAGS";
+    const now = out[name] ?? "";
+    if (!/-D\s*warnings/.test(now)) out[name] = `${now} -D warnings`.trim();
+  }
+  return out;
+}
+
+/** The warning self-test's example and the unused function it must fail on. */
+export const WARNING_FIXTURE = "web_threads_warning";
+export const WARNING_ITEM = "seen_only_by_a_threaded_build";
+
+/**
+ * The problems with the warning self-test's build (`status`, its whole
+ * output): it must fail, on the fixture's unused function, because
+ * `-D warnings` turned that warning into an error.
+ */
+export function checkWarningBuild(status, output) {
+  const problems = [];
+  if (status === 0) {
+    problems.push(`the threaded build of ${WARNING_FIXTURE} passed: its warning didn't fail it (-D warnings or the atomics were dropped)`);
+    return problems;
+  }
+  if (!output.includes(WARNING_ITEM)) {
+    problems.push(`the threaded build failed, but not on ${WARNING_ITEM} (a build that compiles it has atomics); see the output above`);
+  } else if (!output.includes("implied by `-D warnings`")) {
+    problems.push(`${WARNING_ITEM} was reported, but not as an error from -D warnings`);
+  }
+  return problems;
+}
+
+/** The browser `id` of the fed pad: Chromium's form, with USB ids. */
+export const FAKE_PAD_ID = "Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 045e Product: 0b13)";
+
+/**
+ * A plain object shaped like the browser's `Gamepad` (standard layout: 17
+ * buttons, 4 axes). `buttons` maps a button's index to its value; above
+ * half is pressed, as browsers report triggers.
+ */
+export function fakeGamepad({ index = 0, id = FAKE_PAD_ID, buttons = {}, axes = [0, 0, 0, 0] } = {}) {
+  return {
+    id,
+    index,
+    connected: true,
+    mapping: "standard",
+    timestamp: 0,
+    buttons: Array.from({ length: 17 }, (_, i) => {
+      const value = buttons[i] ?? 0;
+      return { pressed: value > 0.5, touched: value > 0, value };
+    }),
+    axes,
+  };
+}
+
+/**
+ * Replaces `navigator.getGamepads()` in `scope` (the page, before its
+ * scripts run) with fed pads: `scope.__ponkoFeedGamepads(pads)` sets them,
+ * and the call returns four places, each pad at its `index`. Self-contained,
+ * so the runner can pass it to the page as it is.
+ */
+export function installFakeGamepads(scope = globalThis) {
+  let pads = [];
+  scope.__ponkoFeedGamepads = (next) => {
+    pads = next;
+  };
+  const list = () => {
+    const places = [null, null, null, null];
+    for (const pad of pads) places[pad.index] = pad;
+    return places;
+  };
+  Object.defineProperty(scope.navigator, "getGamepads", { configurable: true, value: list });
+}
+
+/**
+ * The gamepad case's steps: the pads fed to the page, and what the engine
+ * must then report in the fixture's `pads` (null: no pads).
+ */
+export const GAMEPAD_STEPS = [
+  { name: "no pad", pads: [], expect: null },
+  {
+    name: "a pad connects",
+    pads: [fakeGamepad()],
+    expect: { down: [], axes: { lx: 0, ly: 0, rx: 0, ry: 0, lt: 0, rt: 0 } },
+  },
+  {
+    name: "buttons, sticks and a trigger",
+    // South, d-pad right, the left trigger a quarter in; left stick right and up.
+    pads: [fakeGamepad({ buttons: { 0: 1, 15: 1, 6: 0.25 }, axes: [0.5, -1, 0, 0.75] })],
+    expect: { down: ["South", "DPadRight"], axes: { lx: 0.5, ly: -1, rx: 0, ry: 0.75, lt: 0.25, rt: 0 }, presses: 1 },
+  },
+  {
+    name: "everything let go",
+    pads: [fakeGamepad()],
+    expect: { down: [], axes: { lx: 0, ly: 0, rx: 0, ry: 0, lt: 0, rt: 0 }, presses: 1 },
+  },
+  { name: "the pad unplugged", pads: [], expect: null },
+];
+
+/** The problems with the fixture's state after a gamepad step. */
+export function checkGamepadStep(step, state) {
+  const pads = state?.pads ?? [];
+  if (step.expect == null) return pads.length === 0 ? [] : [`expected no pads, the engine sees ${JSON.stringify(pads)}`];
+  if (pads.length !== 1) return [`expected one pad, the engine sees ${pads.length}: ${JSON.stringify(pads)}`];
+  const [pad] = pads;
+  const problems = [];
+  const expect = (ok, what) => ok || problems.push(what);
+  expect(pad.slot === 0, `the pad is in slot ${pad.slot}, not 0`);
+  expect(pad.name === FAKE_PAD_ID, `the pad's name is ${JSON.stringify(pad.name)}`);
+  expect(pad.family === "Xbox", `the pad's family is ${pad.family}, not Xbox (from its vendor id)`);
+  expect(pad.vendor === 0x045e && pad.product === 0x0b13, `the pad's ids are ${pad.vendor}:${pad.product}, not 0x045e:0x0b13`);
+  const down = [...pad.down].sort().join(",");
+  expect(down === [...step.expect.down].sort().join(","), `buttons down: [${pad.down}], not [${step.expect.down}]`);
+  for (const [axis, want] of Object.entries(step.expect.axes)) {
+    expect(Math.abs((pad.axes?.[axis] ?? NaN) - want) < 1e-6, `axis ${axis} is ${pad.axes?.[axis]}, not ${want}`);
+  }
+  if (step.expect.presses != null) {
+    expect(state.pad_presses === step.expect.presses, `South was pressed ${state.pad_presses} times, not ${step.expect.presses}`);
+  }
+  return problems;
 }
