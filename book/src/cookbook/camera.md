@@ -1,10 +1,12 @@
 # Cameras
 
-Following the player, shaking the screen, zooming toward the cursor, pixel art and a minimap. The tests run with frames (`headless_frames(true)`), because cameras are updated by frame systems.
+Following the player, shaking the screen, zooming toward the cursor, pixel art and a minimap. The tests run with frames (`headless_frames(true)`), because cameras are updated every frame.
 
 ## Follow the player
 
-A follow camera with a dead zone (the player can move a little without scrolling), a look-ahead and bounds so it never shows past the level's edge. Keep it as a resource: it holds the camera's state.
+A follow camera with a dead zone (the player can move a little without scrolling), a look-ahead and bounds so it never shows past the level's edge. Keep it as a resource (it holds the camera's state) and give the player the [`CameraTarget`](../camera-ui.md#following-something) part: every frame, after everything moved, the engine moves the camera to it, so there is no camera system to write. Something that runs after the camera was placed (a shake, a reading of where it is) goes in `Phase::Late`. The same works in 3D with the [3D rigs](../3d.md#camera-rigs).
+
+C and C++ keep the rig themselves and update it once a frame, after the player moved: `CameraTarget` is Rust-only for now.
 
 <div class="lang-pair">
 <div>
@@ -25,7 +27,7 @@ A follow camera with a dead zone (the player can move a little without scrolling
 
 ## Shake the screen
 
-Trauma goes from 0 to 1, adds up with every hit and wears off by itself. The shake is applied after the camera was placed, so it never changes where the camera really is.
+Trauma goes from 0 to 1, adds up with every hit and wears off by itself. The shake is applied after the camera was placed (with a rig the engine updates, add it in `Phase::Late`), so it never changes where the camera really is.
 
 <div class="lang-pair">
 <div>

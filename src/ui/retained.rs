@@ -200,7 +200,7 @@ pub enum UiTextAlign {
 /// let paint = ponko::ui::UiPaint { background: Color::BLUE, font_size: 20.0, ..Default::default() };
 /// assert_eq!(paint.font_size, 20.0);
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UiPaint {
     /// Normal background.
     /// ```
@@ -657,6 +657,8 @@ pub(super) struct Node {
     pub motion: super::anim::NodeMotion,
     /// What its text was measured from in the last layout.
     pub measured: super::retained_layout::Measured,
+    /// What it drew last, kept until what it is drawn from changes.
+    pub drawn: super::retained_draw::Drawn,
 }
 /// How a screen pushed on the [`Ui`]'s stack treats the screens below it
 /// ([`Ui::push_screen_with_mode`]). Either way only the top screen takes
@@ -711,7 +713,8 @@ pub(super) enum Drag {
 /// - **When to call it:** build the tree in setup, then change text, values
 ///   and screens from any system. The engine lays it out and feeds it input
 ///   before the frame's systems, so [`events`](Self::events) queued this
-///   frame are read in a frame or simulation system. Immediate widgets are
+///   frame are read in a frame or simulation system. Input a system feeds
+///   (`ctx.input.feed`) reaches it before the next system runs. Immediate widgets are
 ///   drawn the frame they are called.
 /// - **What it needs:** nothing to build and query (tests drive it with
 ///   [`frame`](Self::frame)); drawing needs a window. It borrows apart from
@@ -772,6 +775,9 @@ pub struct Ui {
     pub(super) rich_layout: super::rich::RichLayout,
     /// What the last layout was computed for, and how many ran.
     pub(super) layout_cache: super::retained_layout::LayoutCache,
+    /// What the nodes' kept drawing was drawn for, and how many were drawn
+    /// again ([`Ui::node_redraws`]).
+    pub(super) draw_cache: super::retained_draw::DrawCache,
     /// The named nodes ([`Ui::find`]).
     pub(super) names: std::collections::HashMap<String, UiId>,
     /// The immediate widgets (a panel, a label, a button drawn the frame
@@ -783,6 +789,8 @@ pub struct Ui {
     /// The ray the mouse uses on world panels instead of the camera's through it.
     #[cfg(feature = "3d")]
     pub(crate) pointer_ray: Option<(glam::Vec3, glam::Vec3)>,
+    /// A second pass in the same frame, for input a system fed.
+    pub(super) same_frame: super::same_frame::SameFrame,
 }
 // SAFETY: the only part that isn't `Send`/`Sync` is taffy's `CompactLength`,
 // which may hold an opaque `calc()` handle as a raw pointer. The engine
@@ -822,11 +830,13 @@ impl Default for Ui {
             rich_assets: Default::default(),
             rich_layout: Default::default(),
             layout_cache: Default::default(),
+            draw_cache: Default::default(),
             names: std::collections::HashMap::new(),
             immediate: super::UiImmediate::default(),
             overlay_has_pointer: false,
             #[cfg(feature = "3d")]
             pointer_ray: None,
+            same_frame: Default::default(),
         }
     }
 }
@@ -897,6 +907,7 @@ impl Ui {
             extra: None,
             motion: Default::default(),
             measured: Default::default(),
+            drawn: Default::default(),
         });
         id
     }
@@ -1876,11 +1887,15 @@ impl Ui {
     /// let mut ui = ponko::ui::Ui::default(); ui.frame(vec2(800.0,600.0), &ponko::ui::UiInput::default());
     /// ```
     pub fn frame(&mut self, viewport: Vec2, input: &UiInput) {
-        self.events.clear();
-        self.closed.clear();
-        self.consumed = false;
+        // A second pass in a frame (input a system fed) keeps the first's
+        // events and closed screens, and its clock stays.
+        let again = self.start_frame_pass();
+        if !again {
+            self.closed.clear();
+            self.consumed = false;
+        }
         self.pointer = input.pointer;
-        self.widgets.advance(input.dt);
+        self.widgets.advance(if again { 0.0 } else { input.dt });
         self.advance_motion(self.widgets.dt);
         self.layout(viewport);
         let access_moved_focus = self.apply_access_actions();

@@ -72,6 +72,8 @@ pub struct Touch {
     multi: bool,
     /// It made a long press.
     long_pressed: bool,
+    /// It moves a control in edit mode (its `claim`).
+    moves_control: bool,
 }
 
 impl Touch {
@@ -381,6 +383,41 @@ pub(crate) struct TouchState {
     pointer_released: bool,
     /// A finger was the last pointer used (not the mouse).
     pub(crate) pointer_is_touch: bool,
+    /// The player's arrangement of the controls.
+    pub(crate) layout: crate::ui::touch::TouchLayout,
+    /// The player is moving the controls ([`Input::edit_touch_controls`]).
+    editing: bool,
+    /// The control being moved, and by what.
+    edit: Option<EditDrag>,
+    /// How many times a control was moved (the UI lays them out again).
+    pub(crate) moved: u64,
+    /// The mouse's left button went down on a control being moved this
+    /// frame: the UI doesn't see it.
+    mouse_took: bool,
+    /// Where a finger lifted last, and the frame it lifted in: mouse
+    /// events the system makes up for it are not the mouse's.
+    last_lift: Option<(u64, Vec2)>,
+    /// Frames ended, for `last_lift`.
+    frames: u64,
+    /// A trackpad pinch / rotation is going on.
+    trackpad_pinch: bool,
+    trackpad_rotate: bool,
+}
+
+/// What moves a control in edit mode.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Mover {
+    Finger(u64),
+    Mouse,
+}
+
+/// A control the player is moving.
+#[derive(Debug, Clone, Copy)]
+struct EditDrag {
+    zone: u16,
+    by: Mover,
+    /// From the pointer to the control's centre.
+    grab: Vec2,
 }
 
 impl Default for TouchState {
@@ -410,6 +447,15 @@ impl Default for TouchState {
             pointer_pressed: false,
             pointer_released: false,
             pointer_is_touch: false,
+            layout: Default::default(),
+            editing: false,
+            edit: None,
+            moved: 0,
+            mouse_took: false,
+            last_lift: None,
+            frames: 0,
+            trackpad_pinch: false,
+            trackpad_rotate: false,
         }
     }
 }
@@ -430,6 +476,76 @@ impl TouchState {
             }
     }
 
+    /// Whether the controls' nodes are up: they take touches, or the
+    /// player is moving them.
+    pub(crate) fn controls_drawn(&self) -> bool {
+        self.controls_active() || (self.editing && !self.zones.is_empty())
+    }
+
+    /// The control the player is moving now.
+    pub(crate) fn edited_zone(&self) -> Option<usize> {
+        self.edit.map(|e| usize::from(e.zone))
+    }
+
+    /// In edit mode, `by` going down at `at`: the control under it is moved
+    /// from now on. Returns it.
+    fn start_edit(&mut self, by: Mover, at: Vec2) -> Option<u16> {
+        if !self.editing || self.edit.is_some() {
+            return None;
+        }
+        let zone = self
+            .zones
+            .iter()
+            .enumerate()
+            .filter(|(_, z)| z.shown && at.distance(z.center) <= z.reach)
+            .min_by(|(_, a), (_, b)| at.distance(a.center).total_cmp(&at.distance(b.center)))
+            .map(|(i, _)| i as u16)?;
+        self.edit = Some(EditDrag {
+            zone,
+            by,
+            grab: self.zones[usize::from(zone)].center - at,
+        });
+        Some(zone)
+    }
+
+    /// The pointer moving a control went to `at`.
+    fn drag_edit(&mut self, by: Mover, at: Vec2) {
+        let Some(edit) = self.edit.filter(|e| e.by == by) else {
+            return;
+        };
+        if let Some(zone) = self.zones.get_mut(usize::from(edit.zone)) {
+            zone.center = crate::ui::touch::drag_to(at + edit.grab, zone.radius, self.view);
+            self.moved += 1;
+        }
+    }
+
+    /// The control being moved is let go: the player's layout keeps it
+    /// there, anchored to the nearest corner of the view.
+    fn finish_edit(&mut self) {
+        let Some(edit) = self.edit.take() else {
+            return;
+        };
+        let Some(zone) = self.zones.get(usize::from(edit.zone)) else {
+            return;
+        };
+        let (window, scale) = self.view;
+        let scale = scale.max(1e-3);
+        let place = crate::ui::touch::TouchPlace::nearest_corner(zone.center / scale, window / scale);
+        let action = zone.action.clone();
+        self.layout.adjust(&action).place = Some(place);
+    }
+
+    /// Whether a mouse event at `at` is one the system made up for a
+    /// finger (Windows does, for the first finger): a finger is down there
+    /// or lifted there this frame or the last.
+    fn mouse_for_finger(&self, at: Vec2) -> bool {
+        let near = |p: Vec2| p.distance(at) <= 2.0 * self.settings.tap_distance.max(1.0);
+        self.touches.iter().any(|t| near(t.position) || near(t.frame_start))
+            || self
+                .last_lift
+                .is_some_and(|(frame, p)| frame + 1 >= self.frames && near(p))
+    }
+
     /// Whether `gesture` happened (or began) this frame.
     pub(crate) fn fired(&self, gesture: Gesture) -> bool {
         self.fired[gesture as usize]
@@ -441,8 +557,8 @@ impl TouchState {
             || match gesture {
                 Gesture::Drag => self.drag.is_some(),
                 Gesture::LongPress => self.touches.iter().any(|t| t.long_pressed && t.claim.is_none()),
-                Gesture::Pinch => self.two.is_some_and(|t| t.pinching),
-                Gesture::Rotate => self.two.is_some_and(|t| t.rotating),
+                Gesture::Pinch => self.trackpad_pinch || self.two.is_some_and(|t| t.pinching),
+                Gesture::Rotate => self.trackpad_rotate || self.two.is_some_and(|t| t.rotating),
                 _ => false,
             }
     }
@@ -501,7 +617,27 @@ impl TouchState {
             // The system reused a live id: the old touch ends first.
             self.end(id, at, true);
         }
-        let claim = if self.controls_active() { self.claim(at) } else { None };
+        if let Some(zone) = self.start_edit(Mover::Finger(id), at) {
+            // Moving a control: no gesture, no action, not the UI's.
+            self.touches.push(Touch {
+                id,
+                position: at,
+                start: at,
+                frame_start: at,
+                started_at: self.now,
+                claim: Some(zone),
+                moved: false,
+                multi: false,
+                long_pressed: false,
+                moves_control: true,
+            });
+            return;
+        }
+        let claim = if self.controls_active() && !self.editing {
+            self.claim(at)
+        } else {
+            None
+        };
         let mut touch = Touch {
             id,
             position: at,
@@ -512,6 +648,7 @@ impl TouchState {
             moved: false,
             multi: false,
             long_pressed: false,
+            moves_control: false,
         };
         if let Some(zone) = claim.and_then(|z| self.zones.get_mut(usize::from(z))) {
             match zone.kind {
@@ -577,6 +714,10 @@ impl TouchState {
         self.touches[i].position = at;
         if self.primary == Some(id) {
             self.pointer = at;
+        }
+        if self.touches[i].moves_control {
+            self.drag_edit(Mover::Finger(id), at);
+            return;
         }
         if let Some(zone) = self.touches[i].claim {
             if let Some(zone) = self.zones.get_mut(usize::from(zone))
@@ -645,6 +786,13 @@ impl TouchState {
             return;
         };
         let touch = self.touches.remove(i);
+        self.last_lift = Some((self.frames, touch.position));
+        if touch.moves_control {
+            if self.edit.is_some_and(|e| e.by == Mover::Finger(id)) {
+                self.finish_edit();
+            }
+            return;
+        }
         if let Some(zone) = touch.claim {
             if let Some(zone) = self.zones.get_mut(usize::from(zone)) {
                 match zone.kind {
@@ -704,8 +852,39 @@ impl TouchState {
         }
     }
 
+    /// A trackpad's gesture at `at` (the mouse pointer).
+    fn trackpad(&mut self, gesture: Gesture, phase: TouchPhase, amount: f32, at: Vec2) {
+        let amount = if amount.is_finite() { amount } else { 0.0 };
+        let going = matches!(phase, TouchPhase::Started | TouchPhase::Moved);
+        let counts = phase != TouchPhase::Cancelled;
+        match gesture {
+            Gesture::Pinch => {
+                if going && !self.trackpad_pinch {
+                    self.fire(Gesture::Pinch, at);
+                }
+                self.trackpad_pinch = going;
+                if counts {
+                    self.pinch_scale *= (1.0 + amount).max(0.01);
+                }
+            }
+            Gesture::Rotate => {
+                if going && !self.trackpad_rotate {
+                    self.fire(Gesture::Rotate, at);
+                }
+                self.trackpad_rotate = going;
+                if counts {
+                    self.rotation += amount;
+                }
+            }
+            Gesture::DoubleTap => self.fire(Gesture::DoubleTap, at),
+            _ => {}
+        }
+    }
+
     /// Every touch ends without a gesture (focus lost).
     pub(crate) fn cancel_all(&mut self) {
+        self.trackpad_pinch = false;
+        self.trackpad_rotate = false;
         while let Some(t) = self.touches.last() {
             let (id, at) = (t.id, t.position);
             self.end(id, at, true);
@@ -732,7 +911,19 @@ impl TouchState {
         fired
     }
 
+    /// The touch pointer went down / lifted this frame.
+    pub(crate) fn pointer_edges(&self) -> (bool, bool) {
+        (self.pointer_pressed, self.pointer_released)
+    }
+
+    pub(crate) fn set_pointer_edges(&mut self, pressed: bool, released: bool) {
+        self.pointer_pressed = pressed;
+        self.pointer_released = released;
+    }
+
     pub(crate) fn end_frame(&mut self) {
+        self.frames += 1;
+        self.mouse_took = self.edit.is_some_and(|e| e.by == Mover::Mouse);
         self.pointer_pressed = false;
         self.pointer_released = false;
         self.events.clear();
@@ -771,8 +962,8 @@ fn wrap(a: f32) -> f32 {
     if a.is_finite() { a } else { 0.0 }
 }
 
-/// Whether this platform has a touch screen: a phone or tablet, or a
-/// browser that reports touch points.
+/// Whether this platform has a touch screen: a phone or tablet, a browser
+/// that reports touch points, a Windows or Linux desktop with one.
 #[cfg(feature = "window")]
 pub(crate) fn platform_has_touch() -> bool {
     #[cfg(target_arch = "wasm32")]
@@ -781,7 +972,7 @@ pub(crate) fn platform_has_touch() -> bool {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        cfg!(any(target_os = "ios", target_os = "android"))
+        cfg!(any(target_os = "ios", target_os = "android")) || super::touch_desktop::has_touch_screen()
     }
 }
 
@@ -796,7 +987,48 @@ pub(crate) fn prepare_canvas(window: &winit::window::Window) {
 }
 
 impl Input {
+    /// The mouse's left button went down or up at the pointer: moves an
+    /// on-screen control in edit mode. Returns `false` for a press the
+    /// system made up for a finger (the finger is the input; the press is
+    /// dropped).
+    pub(crate) fn touch_mouse_button(&mut self, down: bool) -> bool {
+        let at = self.mouse_pos();
+        let t = &mut self.touch;
+        if down && t.mouse_for_finger(at) {
+            return false;
+        }
+        if down {
+            if t.start_edit(Mover::Mouse, at).is_some() {
+                t.mouse_took = true;
+            }
+        } else if t.edit.is_some_and(|e| e.by == Mover::Mouse) {
+            t.finish_edit();
+        }
+        true
+    }
+
+    /// The mouse moved to `at`: drags a control being moved with it.
+    /// Returns `false` for a move the system made up for a finger, which
+    /// leaves the finger the UI's pointer.
+    pub(crate) fn touch_mouse_moved(&mut self, at: Vec2) -> bool {
+        let t = &mut self.touch;
+        t.drag_edit(Mover::Mouse, at);
+        !(t.primary.is_some() || t.mouse_for_finger(at))
+    }
+
+    pub(crate) fn feed_trackpad(&mut self, gesture: Gesture, phase: TouchPhase, amount: f32) {
+        self.record(crate::actions::InputEvent::Trackpad { gesture, phase, amount });
+        let at = self.mouse_pos();
+        self.touch.trackpad(gesture, phase, amount, at);
+        self.refresh_actions();
+    }
+
     pub(crate) fn feed_touch(&mut self, id: u64, phase: TouchPhase, at: Vec2) {
+        self.record(crate::actions::InputEvent::Touch {
+            id,
+            phase,
+            position: at,
+        });
         self.touch.feed(id, phase, at);
         self.refresh_actions();
     }
@@ -809,6 +1041,9 @@ impl Input {
         let t = &self.touch;
         if t.pointer_is_touch {
             (t.pointer, t.pointer_pressed, t.primary.is_some(), t.pointer_released)
+        } else if self.touch.mouse_took {
+            // The mouse is moving an on-screen control.
+            (self.mouse_pos(), false, false, false)
         } else {
             use super::MouseButton::Left;
             (
@@ -980,7 +1215,8 @@ impl Input {
     pub fn set_touch_controls(&mut self, controls: crate::ui::touch::TouchControls) {
         let (window, scale) = self.touch.view;
         let mut zones = crate::ui::touch::zones(&controls);
-        crate::ui::touch::place_zones(&controls, &mut zones, window, scale);
+        crate::ui::touch::place_zones(&controls, &self.touch.layout, &mut zones, window, scale);
+        self.touch.edit = None;
         self.touch.replace_zones(zones);
         self.touch.show = controls.show;
         self.touch.controls = controls;
@@ -1060,6 +1296,132 @@ impl Input {
     pub fn set_touch_control_shown(&mut self, action: &str, shown: bool) {
         for zone in self.touch.zones.iter_mut().filter(|z| z.action == action) {
             zone.shown = shown;
+        }
+    }
+
+    /// Turns the players' arranging of the on-screen controls on or off.
+    /// While it is on, the controls show (also under a UI screen, also off
+    /// a touch screen), press no actions, and a finger or the mouse
+    /// dragging one moves it: where it is let go, it stays, anchored to the
+    /// nearest corner, in the player's [`TouchLayout`](crate::ui::touch::TouchLayout).
+    /// Save it when the player is done ([`save_touch_layout`](Self::save_touch_layout)).
+    /// Turning it off lets go of a control being moved.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::actions::InputEvent;
+    /// use ponko::ui::touch::{TouchControls, TouchShow};
+    /// Game::new("touch", 960, 540).run_headless(0, |ctx| {
+    ///     ctx.input.set_action("jump", Action::Button(vec![]));
+    ///     ctx.input.set_touch_controls(TouchControls::new().button("jump", "A").show(TouchShow::Always));
+    ///     ctx.input.edit_touch_controls(true);
+    ///     // The player drags the jump button to the left.
+    ///     let at = ctx.input.touch_control_center("jump").unwrap();
+    ///     ctx.input.feed(InputEvent::touch_start(1, at));
+    ///     ctx.input.feed(InputEvent::touch_move(1, at - vec2(300.0, 0.0)));
+    ///     ctx.input.feed(InputEvent::touch_end(1, at - vec2(300.0, 0.0)));
+    ///     assert!(!ctx.input.action_pressed("jump"), "moving it doesn't press it");
+    ///     ctx.input.edit_touch_controls(false);
+    ///     assert_eq!(ctx.input.touch_control_center("jump"), Some(at - vec2(300.0, 0.0)));
+    ///     assert!(ctx.input.touch_layout().controls["jump"].place.is_some());
+    /// });
+    /// ```
+    pub fn edit_touch_controls(&mut self, on: bool) {
+        if !on {
+            self.touch.finish_edit();
+        }
+        self.touch.editing = on;
+    }
+
+    /// Whether the player is arranging the on-screen controls
+    /// ([`edit_touch_controls`](Self::edit_touch_controls)).
+    #[must_use]
+    pub fn editing_touch_controls(&self) -> bool {
+        self.touch.editing
+    }
+
+    /// The player's arrangement of the on-screen controls: where they
+    /// moved each, its size, their opacity.
+    #[must_use]
+    pub fn touch_layout(&self) -> &crate::ui::touch::TouchLayout {
+        &self.touch.layout
+    }
+
+    /// Replaces the player's arrangement of the on-screen controls: a
+    /// settings screen's size and opacity sliders, a "reset layout" button
+    /// (`TouchLayout::default()`), a layout read back from a file. The
+    /// controls take their places at once and their look from the next
+    /// frame. Sizes below a tenth are a tenth, opacity is kept within 0..=1.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::ui::touch::{TouchControls, TouchLayout, TouchShow};
+    /// Game::new("touch", 960, 540).run_headless(0, |ctx| {
+    ///     ctx.input.set_touch_controls(TouchControls::new().button("jump", "A").show(TouchShow::Always));
+    ///     let before = ctx.input.touch_control_center("jump").unwrap();
+    ///     let mut layout = ctx.input.touch_layout().clone();
+    ///     layout.size = 1.5;
+    ///     layout.opacity = 0.5;
+    ///     ctx.input.set_touch_layout(layout);
+    ///     // Where it was, half as big again.
+    ///     assert_eq!(ctx.input.touch_control_center("jump"), Some(before));
+    ///     ctx.input.set_touch_layout(TouchLayout::default());
+    /// });
+    /// ```
+    pub fn set_touch_layout(&mut self, layout: crate::ui::touch::TouchLayout) {
+        self.touch.edit = None;
+        self.touch.layout = layout.sane();
+        let t = &mut self.touch;
+        let (window, scale) = t.view;
+        crate::ui::touch::place_zones(&t.controls, &t.layout, &mut t.zones, window, scale);
+        // Built again for the new opacity.
+        t.generation += 1;
+    }
+
+    /// Saves the player's arrangement of the on-screen controls in the
+    /// game's player storage, as [`TouchLayout::FILE`](crate::ui::touch::TouchLayout::FILE),
+    /// next to the other settings (`Window::save_settings` keeps the
+    /// window's there).
+    ///
+    /// # Errors
+    /// The storage could not write the file.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::ui::touch::TouchLayout;
+    /// # let dir = std::env::temp_dir().join(format!("ponko-touch-doc-{}", std::process::id()));
+    /// Game::new("touch", 960, 540).data_dir(&dir).run_headless(0, |ctx| {
+    ///     let mut layout = TouchLayout::default();
+    ///     layout.opacity = 0.4;
+    ///     ctx.input.set_touch_layout(layout);
+    ///     ctx.input.save_touch_layout(&mut ctx.storage).unwrap();
+    /// });
+    /// // The next run, at setup:
+    /// Game::new("touch", 960, 540).data_dir(&dir).run_headless(0, |ctx| {
+    ///     ctx.input.restore_touch_layout(&ctx.storage).unwrap();
+    ///     assert_eq!(ctx.input.touch_layout().opacity, 0.4);
+    /// });
+    /// # std::fs::remove_dir_all(&dir).ok();
+    /// ```
+    pub fn save_touch_layout(&self, storage: &mut crate::storage::Storage) -> Result<(), crate::error::Error> {
+        storage.write_json(crate::ui::touch::TouchLayout::FILE, &self.touch.layout)
+    }
+
+    /// Reads back the arrangement [`save_touch_layout`](Self::save_touch_layout)
+    /// saved, at setup. No file (the player never moved a control) leaves
+    /// the layout as it is.
+    ///
+    /// # Errors
+    /// The file is there but could not be read or is not a touch layout;
+    /// the layout is left as it is.
+    pub fn restore_touch_layout(&mut self, storage: &crate::storage::Storage) -> Result<(), crate::error::Error> {
+        match storage.read_json(crate::ui::touch::TouchLayout::FILE) {
+            Ok(layout) => {
+                self.set_touch_layout(layout);
+                Ok(())
+            }
+            Err(e) if e.kind() == crate::error::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
         }
     }
 }

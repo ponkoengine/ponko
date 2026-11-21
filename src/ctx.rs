@@ -54,7 +54,14 @@ pub(crate) fn screen_projection(size: Vec2) -> Mat4 {
 /// | [`assets`](Self::assets) | [`Assets`](crate::assets::Assets): asset sources, data files, saving scenes and prefabs, hot reload. |
 /// | [`perf`](Self::perf) | [`Perf`](crate::perf::Perf): timings, the HUD, traces, profiling reports. |
 /// | [`storage`](Self::storage) | [`Storage`](crate::storage::Storage): the player's saves and settings, crash-safe, on the desktop and the web. |
-/// | [`camera`](Self::camera), `scene3d` | What the renderer reads when the frame is drawn: the 2D camera, and with `3d` the `SceneSettings` (camera, lighting, sky, post-processing, levels of detail, GPU passes, quality). |
+#[cfg_attr(
+    feature = "3d",
+    doc = " | [`camera`](Self::camera), `scene3d` | What the renderer reads when the frame is drawn: the 2D camera, and with `3d` the [`SceneSettings`](crate::render::SceneSettings) (camera, lighting, sky, post-processing, levels of detail, GPU passes, quality). |"
+)]
+#[cfg_attr(
+    not(feature = "3d"),
+    doc = " | [`camera`](Self::camera), `scene3d` | What the renderer reads when the frame is drawn: the 2D camera, and with `3d` the `SceneSettings` (camera, lighting, sky, post-processing, levels of detail, GPU passes, quality). |"
+)]
 /// | [`spatial`](Self::spatial), `physics`, `physics3d`, [`net`](Self::net) | Neighbor queries, the physics worlds, [`Networking`](crate::net::Networking): lockstep, messages, snapshots. |
 ///
 /// # Shortcuts
@@ -209,6 +216,8 @@ pub struct Ctx {
     pub(crate) system_index: usize,
     /// No window or GPU (`Game::run_headless`): textures are size-only handles.
     pub(crate) headless: bool,
+    /// Crash reports for this run, when they are on (`Game::crash_reports`).
+    pub(crate) crash: Option<crate::crash::Running>,
     /// Where the control endpoint listens, if it's on.
     pub(crate) control_addr: Option<std::net::SocketAddr>,
     /// The control methods the game and its plugins added, and the
@@ -284,7 +293,7 @@ pub struct Ctx {
     /// How the 3D world is drawn (feature `3d`): the camera, lighting, sky
     /// and fog, post-processing, levels of detail, the game's own GPU passes,
     /// graphics quality presets and automatic quality. See
-    /// `SceneSettings`.
+    /// [`SceneSettings`](crate::render::SceneSettings).
     ///
     /// ```no_run
     /// # use ponko::prelude::*;
@@ -476,6 +485,7 @@ impl Ctx {
             seed: crate::random::DEFAULT_SEED,
             system_index: 0,
             headless: false,
+            crash: None,
             control_addr: None,
             extensions: crate::control::GameExtensions::default(),
             in_setup: false,
@@ -507,6 +517,7 @@ impl Ctx {
 
     /// Engine side: draw everything queued this frame, then reset the queue.
     pub(crate) fn render_frame(&mut self) -> FrameStatus {
+        crate::crash::note_frame(self);
         self.draw_retained_ui();
         let capture = !self.gfx.screenshots.is_empty();
         #[cfg(feature = "3d")]
@@ -669,6 +680,8 @@ impl Ctx {
     #[inline]
     pub(crate) fn frame_begin_services(&mut self) {
         self.update_retained_ui();
+        // What a system feeds from now on reaches the UI between systems.
+        self.input.mark_ui_seen();
         self.update_touch_controls();
     }
 

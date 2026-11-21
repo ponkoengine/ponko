@@ -190,6 +190,8 @@ the game runs (the browser reset its GPU process; the game can't draw on a
 restored context, so the page asks for a reload), and a worker thread of a
 [threads](web-threads.md) build that stopped, with that worker's panic
 message. The panic also stays in the developer console, with its location.
+A game with [crash reports](crash-reports.md#in-the-browser) on also gets
+the long version for its developers, which the page offers as a file.
 
 The game can say it in its own words. Register `ponko::web::on_failure`
 before running the game: it runs once, right before the game stops, with

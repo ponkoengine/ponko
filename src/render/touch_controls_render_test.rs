@@ -18,7 +18,7 @@ use crate::color::Color;
 use crate::ctx::Ctx;
 use crate::text::Text;
 use crate::texture::Texture;
-use crate::ui::touch::{DISC, TouchControls, disc_pixels};
+use crate::ui::touch::{DISC, TouchControls, TouchLayout, TouchPlace, TouchStyle, disc_pixels};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const SIZE: (u32, u32) = (256, 144);
@@ -348,4 +348,67 @@ fn onscreen_controls_show_a_knob_that_follows_the_finger_and_a_button_that_light
         ctx.gfx.ui_list.finish().0.is_empty(),
         "nothing is drawn without a touch screen"
     );
+}
+
+/// The mean color of the points `0.75 * radius` left, right and below
+/// `centre`: a button's disc beside its label.
+fn disc_color(image: &Image, centre: Vec2, radius: f32) -> [f32; 3] {
+    let mut sum = [0.0f32; 3];
+    let spots = [vec2(-0.75, 0.0), vec2(0.75, 0.0), vec2(0.0, 0.75)];
+    for d in spots {
+        let at = centre + d * radius;
+        let p = image.pixel(at.x as u32, at.y as u32);
+        for c in 0..3 {
+            sum[c] += p[c] as f32 / spots.len() as f32;
+        }
+    }
+    sum
+}
+
+#[test]
+fn restyled_moved_controls_are_drawn_in_their_color_where_they_were_put_and_fade_with_the_players_opacity() {
+    let Some(rig) = Rig::new() else { return };
+    let red = TouchStyle {
+        button: Color::rgba(1.0, 0.0, 0.0, 0.8),
+        ..TouchStyle::default()
+    };
+    let middle = vec2(SIZE.0 as f32, SIZE.1 as f32) / 2.0;
+    let default_jump = rig
+        .ctx(controls())
+        .input
+        .touch_control_center("jump")
+        .expect("a button");
+    let mut ctx = rig.ctx(
+        controls()
+            .control_style("jump", red)
+            .place("jump", TouchPlace::new(vec2(0.5, 0.5), Vec2::ZERO)),
+    );
+    assert_eq!(ctx.input.touch_control_center("jump"), Some(middle));
+    let radius = ctx.input.touch.zones[1].radius;
+    let image = rig.draw(&mut ctx);
+    let [r, g, b] = disc_color(&image, middle, radius);
+    assert!(
+        r > 80.0 && g < r * 0.3 && b < r * 0.3,
+        "red where it was put: {r} {g} {b}"
+    );
+    assert!(
+        mean_light(&image, default_jump, radius * 0.6) < 3.0,
+        "nothing where the engine would have put it"
+    );
+    let stick = ctx.input.touch_control_center("move").expect("a stick");
+    let [sr, sg, sb] = disc_color(&image, stick, ctx.input.touch.zones[0].radius * 0.8);
+    assert!(
+        (sr - sg).abs() < 4.0 && (sr - sb).abs() < 4.0 && sr > 10.0,
+        "the stick keeps the engine's white: {sr} {sg} {sb}"
+    );
+    // The player's layout at half the opacity: the same red, fainter.
+    let layout = TouchLayout {
+        opacity: 0.5,
+        ..TouchLayout::default()
+    };
+    ctx.input.set_touch_layout(layout);
+    let faint = rig.draw(&mut ctx);
+    let [fr, fg, fb] = disc_color(&faint, middle, radius);
+    assert!(fr < r * 0.8 && fr > 20.0, "fainter: {fr} vs {r}");
+    assert!(fg < fr * 0.3 && fb < fr * 0.3, "still red: {fr} {fg} {fb}");
 }
