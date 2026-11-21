@@ -1795,14 +1795,13 @@ impl Ui {
         let roots = self.huds.iter().chain(self.screens.iter().map(|s| &s.root));
         let window = Rect::new(0.0, 0.0, viewport.x, viewport.y);
         for root in roots {
-            let node = nodes[root.slot()].as_ref().unwrap();
-            let layout = node.layout;
+            let layout = nodes[root.slot()].as_ref().unwrap().layout;
             if !self.tree.dirty(layout).unwrap_or(true) {
                 continue;
             }
             // As `root_area`, which borrows all of `self`.
             let area = match self.safe_area {
-                Some(safe) if node.inside_safe_area => {
+                Some(safe) if nodes[root.slot()].as_ref().is_some_and(|n| n.inside_safe_area) => {
                     let min = safe.min.clamp(Vec2::ZERO, window.max);
                     safe.max.clamp(min, window.max) - min
                 }
