@@ -220,6 +220,12 @@ Every frame, on devices with compute culling and storage buffers
   and skins the corner.
 - A crowd's cull pass costs about 10 µs of GPU time for 10,000 characters
   (40 µs with two levels and sun shadows) on the machine measured below.
+  Culling by each clip's box instead of one sphere left that unchanged
+  within the noise (30 to 50 µs with two levels and sun shadows, before
+  and after, measured on 2026-11-21 on a busy machine). A crossfading
+  level adds its dithered draws: 30 draws instead of 18 for the
+  benchmark's two levels with sun shadows (`crowd_benchmark`'s
+  crossfading scene).
 
 **WebGL2** has no compute shaders, no storage buffers in vertex shaders,
 every one of the 16 texture slots of a vertex shader already taken by the
