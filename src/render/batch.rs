@@ -93,6 +93,19 @@ impl SpriteInstance {
 /// `x` as IEEE half-precision bits, rounded to nearest even. Too big for
 /// `f16` becomes infinity, too small becomes zero.
 #[inline]
+/// The value of half-float `bits` (as [`f16_bits`] makes them).
+pub(crate) fn f16_value(bits: u16) -> f32 {
+    let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exp = i32::from((bits >> 10) & 0x1f);
+    let man = f32::from(bits & 0x3ff);
+    sign * match exp {
+        0 => man * 2f32.powi(-24),
+        0x1f if man == 0.0 => f32::INFINITY,
+        0x1f => f32::NAN,
+        e => (1.0 + man / 1024.0) * 2f32.powi(e - 15),
+    }
+}
+
 pub(crate) fn f16_bits(x: f32) -> u16 {
     let b = x.to_bits();
     let sign = ((b >> 16) & 0x8000) as u16;
@@ -188,20 +201,27 @@ pub(crate) struct DrawList {
     sorted: Vec<SpriteInstance>,
     batches: Vec<Batch>,
 
-    /// Lists drawn into textures of the window's size before this one,
+    /// Lists drawn into textures of their own before this one,
     /// which shows them (a UI group fading as one image); the first
     /// `offscreen_live` are this frame's. Empty unless a group fades.
     offscreen: Vec<Offscreen>,
     offscreen_live: usize,
 }
 
-/// A [`DrawList`] drawn into texture `texture` (cleared to transparent,
-/// the size of the window, with the screen's projection) before the list
-/// that holds it: its sprites end up premultiplied by their alpha there.
+/// A [`DrawList`] drawn into texture `texture` (cleared to transparent)
+/// before the list that holds it: its sprites end up premultiplied by
+/// their alpha there. The texture is `texture_size` pixels; the list draws
+/// into its top-left `size` pixels, which show the target's pixels from
+/// `origin` on (the list's coordinates are the target's, `scale` pixels to
+/// a unit). `size` 0: nothing to draw.
 #[derive(Debug, Default)]
 pub(crate) struct Offscreen {
     pub texture: u32,
     pub list: DrawList,
+    pub origin: [u32; 2],
+    pub size: [u32; 2],
+    pub texture_size: [u32; 2],
+    pub scale: f32,
 }
 
 /// Room for `n` sprites at the end of a [`DrawList`], to be filled from
@@ -451,6 +471,66 @@ impl DrawList {
         self.clip = clip;
     }
 
+    /// Sprite `i` as pushed, to change it in place before the list is
+    /// finished.
+    pub fn instance_mut(&mut self, i: usize) -> Option<&mut SpriteInstance> {
+        self.instances.get_mut(i)
+    }
+
+    /// The rectangle every sprite pushed this frame covers, each cut by
+    /// its clip: what the list draws, its rotated corners and meshes'
+    /// vertices included, plain sprites tinted fully transparent left out.
+    /// `None` when it draws nothing.
+    pub fn drawn_bounds(&self) -> Option<crate::camera::Rect> {
+        let (mut min, mut max) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
+        for (s, &state) in self.instances.iter().zip(&self.states) {
+            let (clip, style, mesh, _) = Self::resolve(&self.clipped, state);
+            // A plain sprite tinted fully transparent (a UI node's clear
+            // fill) leaves its pixels as they were.
+            if style == 0 && s.color[3] == 0 {
+                continue;
+            }
+            let (mut lo, mut hi) = (s.pos, s.pos);
+            if !mesh {
+                let pivot = [f16_value(s.pivot[0]), f16_value(s.pivot[1])];
+                let (sin, cos) = s.rotation.sin_cos();
+                for corner in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]] {
+                    let local = [(corner[0] - pivot[0]) * s.size[0], (corner[1] - pivot[1]) * s.size[1]];
+                    let p = [
+                        s.pos[0] + local[0] * cos - local[1] * sin,
+                        s.pos[1] + local[0] * sin + local[1] * cos,
+                    ];
+                    for k in 0..2 {
+                        lo[k] = lo[k].min(p[k]);
+                        hi[k] = hi[k].max(p[k]);
+                    }
+                }
+            }
+            if let Some(c) = clip {
+                lo = [lo[0].max(c.min.x), lo[1].max(c.min.y)];
+                hi = [hi[0].min(c.max.x), hi[1].min(c.max.y)];
+            }
+            // A mesh's vertex is a point of it; a sprite with no area
+            // (or clipped away) draws nothing.
+            let empty = if mesh {
+                lo[0] > hi[0] || lo[1] > hi[1]
+            } else {
+                lo[0] >= hi[0] || lo[1] >= hi[1]
+            };
+            if empty {
+                continue;
+            }
+            for k in 0..2 {
+                min[k] = min[k].min(lo[k]);
+                max[k] = max[k].max(hi[k]);
+            }
+        }
+        (min[0] < max[0] && min[1] < max[1]).then(|| crate::camera::Rect {
+            min: min.into(),
+            max: max.into(),
+        })
+    }
+
     /// Moves the sprites pushed from index `start` on: each position goes
     /// to `pos * scale + shift` and each size is scaled by `scale` (an
     /// animated UI node's offset and size), and their alpha is multiplied
@@ -486,11 +566,6 @@ impl DrawList {
         }
         self.offscreen_live = n;
         &mut self.offscreen[..n]
-    }
-
-    /// This frame's offscreen lists.
-    pub fn offscreen(&self) -> &[Offscreen] {
-        &self.offscreen[..self.offscreen_live]
     }
 
     /// [`finish`](Self::finish), and the offscreen lists finished too: a
