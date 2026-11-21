@@ -467,7 +467,6 @@ fn net_pose_moves_a_transform_from_buffered_snapshots() {
 
 /// Declared replication refuses misuse with a message that names the fix.
 mod declared_replication_misuse {
-    use std::collections::HashMap;
 
     use ponko::net::{InterestConfig, PeerId, Quantize, RawField, RawType, Replicate, Replication, SnapshotConfig};
     use ponko::prelude::*;
@@ -487,7 +486,7 @@ mod declared_replication_misuse {
 
     /// An event whose `Serialize` refuses it: it can't be sent.
     #[derive(Deserialize)]
-    struct Grid(HashMap<(u8, u8), u8>);
+    struct Grid;
 
     impl Serialize for Grid {
         fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
@@ -563,7 +562,7 @@ mod declared_replication_misuse {
     #[should_panic(expected = "doesn't serialize")]
     fn an_event_that_does_not_serialize_is_refused() {
         let mut r = Replication::new().event::<Grid>();
-        r.to_clients(&Grid(HashMap::from([((1, 2), 3)])));
+        r.to_clients(&Grid);
     }
 
     #[test]

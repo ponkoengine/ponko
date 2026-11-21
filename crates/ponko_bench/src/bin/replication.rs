@@ -13,8 +13,9 @@
 //!   client), median and 90th percentile over the ticks of a run, and the
 //!   spread of the median over the runs.
 //!
-//! Run with: cargo run --release -p ponko_bench --bin replication [-- runs [scenario]]
-//! (`scenario`: part of a scenario's name, such as `"1 in 20"`).
+//! Run with `cargo run --release -p ponko_bench --bin replication -- <runs> <scenario>`;
+//! both are optional (3 runs, every scenario). `<scenario>` is part of a
+//! scenario's name, such as `"1 in 20"`.
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 

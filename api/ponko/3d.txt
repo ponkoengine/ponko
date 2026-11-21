@@ -9644,6 +9644,22 @@ impl core::default::Default for ponko::reflect::SaveMigrations
 pub fn ponko::reflect::SaveMigrations::default() -> Self
 impl core::fmt::Debug for ponko::reflect::SaveMigrations
 pub fn ponko::reflect::SaveMigrations::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct ponko::reflect::WorldHashParts
+pub ponko::reflect::WorldHashParts::parts: alloc::vec::Vec<(alloc::string::String, u64)>
+pub ponko::reflect::WorldHashParts::total: u64
+impl ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::differing(&self, &ponko::reflect::WorldHashParts) -> alloc::vec::Vec<alloc::string::String>
+pub fn ponko::reflect::WorldHashParts::of(&ponko_ecs::world::World) -> Self
+impl core::clone::Clone for ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::clone(&self) -> Self
+impl core::cmp::Eq for ponko::reflect::WorldHashParts
+impl core::cmp::PartialEq for ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::default() -> Self
+impl core::fmt::Debug for ponko::reflect::WorldHashParts
+pub fn ponko::reflect::WorldHashParts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::reflect::WorldHashParts
 pub trait ponko::reflect::WorldReflect
 pub fn ponko::reflect::WorldReflect::describe_component(&mut self, &str, ponko::reflect::ValueSchema) -> core::result::Result<(), ponko::reflect::ReflectError>
 pub fn ponko::reflect::WorldReflect::describe_resource(&mut self, &str, ponko::reflect::ValueSchema) -> core::result::Result<(), ponko::reflect::ReflectError>
