@@ -2,7 +2,7 @@
 
 use super::InputScenario;
 use crate::actions::InputEvent;
-use crate::input::{ImeEvent, Input};
+use crate::input::{Gamepad, GamepadInfo, ImeEvent, Input};
 
 /// An input recording in progress: [`Input::start_recording`].
 #[derive(Debug, Clone)]
@@ -24,6 +24,8 @@ pub(crate) struct Recording {
 enum Recorded {
     Input(InputEvent),
     Ime(ImeEvent),
+    /// A pad connecting, with its description.
+    Connected(Gamepad, GamepadInfo),
 }
 
 impl Recording {
@@ -35,6 +37,7 @@ impl Recording {
             (Some(Recorded::Input(InputEvent::GamepadAxis(p, a, _))), InputEvent::GamepadAxis(q, b, _)) => {
                 p == q && a == b
             }
+            (Some(Recorded::Input(InputEvent::GamepadMotion(p, _))), InputEvent::GamepadMotion(q, _)) => p == q,
             _ => false,
         };
         if replaces {
@@ -58,6 +61,7 @@ impl Recording {
             scenario = match event {
                 Recorded::Input(event) => scenario.at(tick, event),
                 Recorded::Ime(event) => scenario.ime(tick, event),
+                Recorded::Connected(pad, info) => scenario.connect_gamepad(tick, pad, info),
             };
         }
         self.scenario = scenario;
@@ -67,8 +71,10 @@ impl Recording {
 impl Input {
     /// Starts recording the input into an [`InputScenario`] that
     /// [`stop_recording`](Self::stop_recording) returns: keys, mouse
-    /// buttons, the pointer, the wheel, gamepad buttons and axes, focus
-    /// loss, gamepad disconnects and IME events, from the window or fed by
+    /// buttons, the pointer, the wheel, gamepad buttons and axes, gamepads
+    /// connecting (with their [`GamepadInfo`], so a replay shows the same
+    /// prompts) and disconnecting, gamepad motion (gyro and accelerometer),
+    /// focus loss and IME events, from the window, a backend or fed by
     /// code, each at the simulation tick that first sees it. Replaying it
     /// ([`Game::run_headless_scenario`](crate::game::Game::run_headless_scenario),
     /// [`Ctx::start_scenario`](crate::ctx::Ctx::start_scenario)) feeds the
@@ -77,14 +83,15 @@ impl Input {
     /// [`world_hash`](crate::reflect::world_hash).
     ///
     /// The recording's tick 0 is the next simulation tick that begins (from
-    /// a system: the tick after this one). What is held when it starts
-    /// (keys, buttons, the pointer, stick positions) is recorded at tick 0.
+    /// a system: the tick after this one). What is there when it starts
+    /// (the pads connected, keys, buttons, the pointer, stick positions,
+    /// each pad's last motion reading) is recorded at tick 0.
     /// Starting again restarts it.
     ///
     /// Not recorded: text typed without an IME (`typed_text` comes from key
     /// events on the window, which records the keys), raw mouse motion for
-    /// mouse-look, and gamepads being plugged in, so a replay that reads a
-    /// pad needs it connected as it was. Edges (`key_pressed`) last a frame:
+    /// mouse-look, and rumble (an output). Motion readings and stick
+    /// positions between two ticks keep only the last. Edges (`key_pressed`) last a frame:
     /// an event in a frame that runs no simulation tick reaches the next
     /// tick as a held key, but in the replay as a fresh press.
     ///
@@ -115,8 +122,18 @@ impl Input {
             pending: Vec::new(),
             scenario: InputScenario::new(),
         };
+        // Pads first, so their held buttons replay onto a connected pad.
+        for &pad in self.gamepads() {
+            let info = self.controllers.info[pad.slot()].clone().unwrap_or_default();
+            recording.pending.push(Recorded::Connected(pad, info));
+        }
         for event in self.held_as_events() {
             recording.push(event);
+        }
+        for &pad in self.gamepads() {
+            if let Some(motion) = self.controllers.motion[pad.slot()] {
+                recording.push(InputEvent::GamepadMotion(pad, motion));
+            }
         }
         self.scenarios.recording = Some(Box::new(recording));
     }
@@ -158,6 +175,14 @@ impl Input {
     pub(crate) fn record(&mut self, event: InputEvent) {
         if let Some(recording) = self.scenarios.recording.as_deref_mut() {
             recording.push(event);
+        }
+    }
+
+    /// Notes a pad connecting, described by `info`, for a recording in progress.
+    #[inline]
+    pub(crate) fn record_connected(&mut self, pad: Gamepad, info: &GamepadInfo) {
+        if let Some(recording) = self.scenarios.recording.as_deref_mut() {
+            recording.pending.push(Recorded::Connected(pad, info.clone()));
         }
     }
 
