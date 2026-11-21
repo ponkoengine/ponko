@@ -417,6 +417,61 @@ fn prompts_follow_the_last_used_device_and_its_family() {
 }
 
 #[test]
+fn key_prompts_follow_the_keyboard_layout_in_text_atlas_caps_and_inline_images() {
+    use ponko::input::{GlyphAtlas, KeyLabels};
+    // A French (AZERTY) keyboard: the keys in W and A's places read Z and Q.
+    let azerty = KeyLabels::from_layout(|key| match key {
+        Key::W => Some('z'),
+        Key::A => Some('q'),
+        Key::Q => Some('a'),
+        Key::Z => Some('w'),
+        _ => None,
+    });
+    let us_atlas = GlyphAtlas::new(32);
+    let world = Game::new("t", 1, 1)
+        .sim_system(move |ctx: &mut Ctx| {
+            let mut atlas = GlyphAtlas::new(32);
+            match ctx.time.sim_tick() {
+                0 => {
+                    prompt_map(ctx);
+                    let wasd = ctx.input.action_glyphs("move");
+                    assert_eq!(
+                        ctx.input.key_labels().text(&wasd),
+                        "W/A/S/D",
+                        "a US keyboard until told"
+                    );
+                    ctx.input.set_key_labels(azerty.clone());
+                    assert!(ctx.input.key_labels_changed());
+                }
+                1 => {
+                    assert!(!ctx.input.key_labels_changed(), "an edge, for one frame");
+                    let wasd = ctx.input.action_glyphs("move");
+                    assert_eq!(
+                        wasd.first(),
+                        Some(Glyph::Key(Key::W)),
+                        "bindings stay physical: the same key"
+                    );
+                    assert_eq!(ctx.input.key_labels().text(&wasd), "Z/Q/S/D");
+                    assert_eq!(wasd.to_string(), "W/A/S/D", "Glyph::label is the US position's");
+                    assert_eq!(ctx.input.key_labels().text(&ctx.input.action_glyphs("jump")), "Space");
+                    atlas.set_key_labels(ctx.input.key_labels());
+                    assert_eq!(atlas.key_labels(), ctx.input.key_labels());
+                    let cap = |a: &GlyphAtlas, k| a.glyph_rgba(Glyph::Key(k));
+                    assert_ne!(cap(&atlas, Key::W), cap(&us_atlas, Key::W), "W's cap reads Z");
+                    assert_eq!(cap(&atlas, Key::W), cap(&us_atlas, Key::Z), "drawn as the US Z cap");
+                    assert_eq!(cap(&atlas, Key::S), cap(&us_atlas, Key::S), "S is S on both");
+                    let markup = atlas.inline_image(&mut ctx.gfx, &mut ctx.ui, Glyph::Key(Key::W));
+                    assert_eq!(markup, "[img=key.w alt=Z]");
+                    ctx.world.insert_resource(true);
+                }
+                _ => {}
+            }
+        })
+        .run_headless(2, |_| {});
+    assert!(world.get_resource::<bool>().is_some(), "the checks ran");
+}
+
+#[test]
 fn per_player_actions_retarget_gamepad_bindings() {
     Game::new("t", 1, 1).run_headless(0, |ctx| {
         prompt_map(ctx);

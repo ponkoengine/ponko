@@ -69,6 +69,8 @@ no platform artwork in it. Make it once, then draw prompt rows:
 use ponko::input::GlyphAtlas;
 
 fn prompts(ctx: &mut Ctx, atlas: &mut GlyphAtlas) {
+    // Key caps read as on the player's keyboard (Z for `Key::W` in France).
+    atlas.set_key_labels(ctx.input.key_labels());
     let jump = ctx.input.action_glyphs("jump");
     let fire = ctx.input.action_glyphs("fire");
     let x = 16.0;
@@ -98,13 +100,62 @@ Other ways to use it:
 - `atlas.inline_image(&mut ctx.gfx, &mut ctx.ui, glyph)` names one glyph for
   [rich text](ui.md) and returns its markup, `[img=pad.xbox.south alt=A]`:
   "Press [A] to talk".
-- `glyphs.to_string()` (`"W/A/S/D"`, `"Cross"`) and `Glyph::label()` are
-  text-only prompts and what a screen reader says.
+- `ctx.input.key_labels().text(&glyphs)` (`"Z/Q/S/D"` for WASD on a French
+  keyboard, `"Cross"`) is a text-only prompt and what a screen reader says;
+  `glyphs.to_string()` and `Glyph::label()` name keys by their US position.
 
 An action with no binding on the device used last gives no glyphs: bind
-both, or show the label alone. Keys are labelled by their position on a US
-keyboard, like `Key` itself, so an AZERTY player sees `W` for the key that
-reads `Z`.
+both, or show the label alone.
+
+### Key labels follow the keyboard layout
+
+`Key` names a key by its place on a US keyboard, so `Key::W` is the key
+above `S` on every layout and controls stay put. Its prompt shows what is
+printed on it: `ctx.input.key_labels()` (a `KeyLabels`) labels the letters,
+the digit row and the punctuation keys for the player's layout, and every
+other key (Space, Shift, the arrows, the numpad) by its usual name. Pass it
+to `atlas.set_key_labels` before drawing prompts (it repaints only the caps
+that changed, and costs a comparison when none did), and use
+`key_labels().text(&glyphs)` for text. `ctx.input.key_labels_changed()` says
+when to redraw text prompts.
+
+Where the labels come from:
+
+| | Windows | macOS | Linux (X11, Wayland) | Web |
+|---|---|---|---|---|
+| The whole layout, when the window opens and when it gets the focus back | yes (`MapVirtualKeyExW`) | yes (the input source's `UCKeyTranslate`) | no | no |
+| Each character key the player presses | yes | yes | yes | letters only |
+
+Windows and macOS give the whole layout without a window
+(`KeyLabels::system()`), so prompts are right from the first frame. Linux
+and the web only say what a key typed when it is pressed (winit has no
+call that maps a key to the layout's character without an event), so there
+a prompt shows the US label until the player presses that key once. On the
+web the character comes with Shift applied, so only letters (whose case is
+all Shift changes) are learned. Headless runs keep US labels until
+`ctx.input.set_key_labels(KeyLabels::from_layout(...))`, which is also how
+a game offers a "keyboard layout" option and how tests check a layout:
+
+```rust
+# use ponko::prelude::*;
+// A French keyboard, as far as the prompts need it.
+let azerty = ponko::input::KeyLabels::from_layout(|key| match key {
+    Key::W => Some('z'),
+    Key::A => Some('q'),
+    Key::Q => Some('a'),
+    Key::Z => Some('w'),
+    Key::Semicolon => Some('m'),
+    _ => None, // the same as on a US keyboard
+});
+Game::new("t", 1, 1).run_headless(1, move |ctx| {
+    ctx.input.set_key_labels(azerty.clone());
+    assert_eq!(ctx.input.key_labels().label(Key::W), "Z");
+});
+```
+
+From C and C++, `ponko_glyph_atlas_draw_prompt` and
+`ponko_glyph_atlas_texture` label the caps for the player's layout
+themselves; text labels (`ponko_glyph_label`) are the US ones for now.
 
 The reference image of the GPU test `prompt_row_render_test` shows one row
 per device kind: keyboard and mouse, then the Xbox, PlayStation, Nintendo
@@ -117,9 +168,10 @@ accelerometer (m/s², gravity included) reading, or `None` when the pad has
 sent none. Axes are the pad's held flat: x right, y up, z toward the player.
 `motion.aim_delta(dt)` turns it into a yaw/pitch change for gyro aiming.
 
-The built-in backend reads no motion sensors (see the table below), so
-motion arrives only from a backend that can read them, from
-`InputEvent::GamepadMotion` in tests and replays, and from the scenario step
+The default backend (gilrs) reads no motion sensors; the SDL backend
+(feature `gamepad-sdl`, below) reads them on DualShock 4, DualSense, Switch
+Pro and Joy-Con pads. Motion also arrives from `InputEvent::GamepadMotion`
+in tests, from recordings and replays, and from the scenario step
 `gamepad_motion`.
 
 ## Local multiplayer: slots and players
@@ -191,11 +243,69 @@ assert_eq!(fake.rumble(pad).strong, 1.0);
 
 Without a backend, `InputEvent::GamepadConnected(pad)` and
 `InputEvent::GamepadMotion` (scenario steps `gamepad_connected` and
-`gamepad_motion`) drive hot-plug and motion in replays.
+`gamepad_motion`) drive hot-plug and motion in replays; a
+`gamepad_connected` step with an `info` object (what an
+[input recording](actions.md#recording-live-input) writes) connects a pad
+with its name, family and capabilities.
+
+### The SDL backend: gyro and trigger rumble
+
+gilrs, the default, reads no gyro or accelerometer, drives no trigger
+motors and plays no rumble on macOS. The feature `gamepad-sdl` makes the
+window read pads through [SDL 3](https://libsdl.org)'s gamepad API instead
+(on the desktop; the web keeps the browser's pads). Nothing else changes for
+the game: the same `ctx.input` calls, slots, dead zone (gilrs's) and
+trigger buttons (pressed past three quarters of the travel, released under
+two thirds, as gilrs does), with `GamepadInfo::capabilities` saying what SDL
+reports each pad can do. If SDL can't start, the window says why on stderr
+and uses gilrs when `gamepad` is on too.
+
+```toml
+[dependencies]
+ponko = { version = "...", features = ["gamepad-sdl"] }
+```
+
+It links the SDL 3 library, found with pkg-config or vcpkg: install it to
+build (`brew install sdl3`, a Linux distribution's SDL 3 development
+package, `vcpkg install sdl3`) and ship it with the game (`SDL3.dll`,
+`libSDL3.dylib`, `libSDL3.so.0` next to the executable or in the app
+bundle). To build SDL from source instead (it needs CMake and a C
+compiler), turn on the `sdl3-sys` crate's `build-from-source` feature in
+the game's own `Cargo.toml`.
+
+**Why SDL.** These were the candidates, read from their sources and
+documentation (November 2026):
+
+| | gilrs 0.11 (default) | SDL 3 (`sdl3-sys` 0.7, SDL 3.2 to 3.4) | Apple's GameController framework | hidapi plus our own drivers |
+|---|---|---|---|---|
+| Platforms | Windows, macOS, Linux, web | Windows, macOS, Linux (and more) | macOS only | all, per pad model |
+| Gyro and accelerometer | none | DualShock 4, DualSense, Switch Pro, Joy-Cons (its HID drivers, all three systems; GameController on macOS) | DualShock 4, DualSense, Switch Pro | what we write |
+| Trigger rumble | none | Xbox One and Series pads (Windows.Gaming.Input, GameController on macOS, its USB driver on Linux) | Xbox pads, through CoreHaptics | what we write; Xbox pads on macOS need GameController anyway |
+| Body rumble on macOS | none | yes (GameController and CoreHaptics, or its HID drivers) | yes | what we write |
+| License | MIT or Apache-2.0 | Zlib (bindings and library) | system framework | MIT or BSD |
+| Cost | pure Rust | a C library to link and ship | one platform | a driver per pad family to write and keep |
+
+SDL is the only one that covers all three features on all three desktop
+systems, and the pads it supports are kept up by the project most PC games
+already rely on. The cost is a native library to install and ship, which is
+why it is an optional feature and gilrs stays the default (a game that
+needs neither gyro nor trigger rumble gains nothing from it). `sdl3-sys` is
+the low-level binding with no other dependencies; the engine uses about
+twenty of its functions and the `sdl3` crate's safe wrapper would only add
+another layer. SDL's own handlers for Ctrl-C are left off, so the game's
+stay in charge.
+
+Its tests run without a pad: the backend's logic is tested through
+`GamepadBackend` with a scripted device layer (connections, buttons,
+sticks, triggers as buttons, gyro and accelerometer joined into one reading
+a frame, rumble and its refresh, slots for returning pads), and the calls
+into SDL with SDL's own virtual gamepads (`cargo test -p ponko --features
+gamepad-sdl --lib gamepad_sdl`). What only a real pad shows (the gyro's
+values and the rumble felt) is checked by hand.
 
 ### What each platform supports
 
-What the built-in backend can do depends on what gilrs 0.11 implements on
+What the default backend can do depends on what gilrs 0.11 implements on
 each desktop platform, and on the web on what the browser has. Features it can't
 drive are reported as `false` in `GamepadInfo::capabilities`, never faked:
 
@@ -207,6 +317,19 @@ drive are reported as `false` in `GamepadInfo::capabilities`, never faked:
 | Body rumble (`strong`, `weak`) | yes, on pads with force feedback | yes, on gamepads with motors | no | where the browser has `vibrationActuator` (Chromium-based browsers) |
 | Trigger rumble | no | no (the system has it; gilrs sends zero) | no | where the pad's actuator lists `trigger-rumble` (Chromium on Windows, Xbox pads) |
 | Gyro and accelerometer | no | no | no | no |
+
+With `gamepad-sdl` on the desktop, SDL 3 (what SDL implements, from its
+source; per pad, `capabilities` says what SDL reports):
+
+| | Linux | Windows | macOS |
+|---|---|---|---|
+| Buttons, sticks, triggers, hot-plug, name, ids, family | yes | yes | yes |
+| Body rumble | yes (evdev force feedback, or SDL's HID drivers) | yes | yes (GameController and CoreHaptics, or SDL's HID drivers) |
+| Trigger rumble | Xbox One and Series pads on USB (SDL's driver) | Xbox One and Series pads (Windows.Gaming.Input) | Xbox One and Series pads (GameController) |
+| Gyro and accelerometer | DualShock 4, DualSense, Switch Pro, Joy-Cons (reading their HID reports needs access to `/dev/hidraw*`, a udev rule) | the same pads | the same pads |
+
+A DualSense's adaptive triggers resist rather than rumble: SDL's driver for
+it plays no trigger motor, so it reports `trigger_rumble: false`.
 
 On the web the engine reads the browser's pads itself, in the standard
 layout and with gilrs's dead zone (a tenth of the travel, rescaled), so
@@ -229,8 +352,8 @@ with [threads](web-threads.md). `web/smoke/threads.mjs --case gamepads`
 checks both kinds of pad in a headless browser with fed pads whose
 actuators record what they are asked.
 
-For trigger rumble or motion on a platform, install a backend that reads a
-library or SDK that has them; the engine's API already carries both.
+For trigger rumble or motion on the desktop, turn on `gamepad-sdl`; for a
+platform SDK of your own, install a `GamepadBackend` that reads it.
 
 ## From C and C++
 
@@ -246,5 +369,9 @@ and the atlas (`ponko_glyph_atlas_new`, `_free`, `_pixels`, `_region`,
 `_texture`, `_draw_prompt`). `ponko_ctx_feed_input` kind 8 connects a pad.
 C++ wraps them on `ponko::ctx` (`rumble`, `gamepad_info`, `last_device`,
 `action_glyphs`, `draw_prompt`, ...) with `ponko::glyph_atlas`.
+The SDL backend is a feature of the engine library, so a native game built
+with `gamepad-sdl` gets it too. `KeyLabels` (text labels for a layout) and
+`InputScenario::connect_gamepad` are Rust-only; C and C++ scenarios are
+JSON, where a `gamepad_connected` step takes the same `info` object.
 Custom backends (`GamepadBackend`) and `FakeGamepads` are Rust-only: a
 native game uses the built-in backend, and its tests feed events.

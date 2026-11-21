@@ -346,6 +346,11 @@ jobs:
           - name: aseprite-source feature
             scope: -p ponko
             args: --features aseprite-source
+          # Gamepads through SDL 3 instead of gilrs (gyro, trigger rumble).
+          # Linting needs no SDL library: nothing is linked.
+          - name: gamepad-sdl feature
+            scope: -p ponko
+            args: --features gamepad-sdl
           # WebM playback (AV1 pictures, Vorbis sound), desktop only.
           - name: video feature
             scope: -p ponko
@@ -743,6 +748,14 @@ jobs:
       - name: Tests, aseprite-source
         if: ${{ !cancelled() }}
         run: cargo test -p ponko --no-fail-fast --features aseprite-source --test aseprite
+      # The SDL 3 gamepad backend: its tests drive SDL's own virtual
+      # gamepads (no device, no window) and a scripted device layer. It
+      # links SDL 3, which Homebrew has (Ubuntu's LTS release doesn't yet).
+      - name: Tests, SDL gamepad backend
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        run: |
+          brew install sdl3
+          cargo test -p ponko --no-fail-fast --features gamepad-sdl --lib gamepad_sdl
       # WebM files with AV1 pictures and Vorbis sound (desktop only: on the
       # web loading a video reports `Unsupported`).
       - name: Tests, video
