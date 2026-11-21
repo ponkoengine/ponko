@@ -346,7 +346,7 @@ pub struct Post {
     /// to fill the gaps their reflections come out dotted and dimmer. With
     /// this on, the trace also reads a coarse copy of the depth (the nearest
     /// depth of 8 to 64 pixel blocks) along each long step and looks closer
-    /// where something could be in front of the ray. It costs about a
+    /// where something could be in front of the ray. It costs about half a
     /// millisecond more at 1920x1080 on a fast GPU (the guide's reflections
     /// section has the numbers), so it is off by default and on in
     /// [`GraphicsQuality::Ultra`](crate::render::GraphicsQuality::Ultra).
