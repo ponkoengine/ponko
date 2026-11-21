@@ -343,6 +343,10 @@ pub(crate) struct Renderer3D {
     particles: super::particles::Particles,
     /// `ctx.debug`'s 3D lines (made the first time a frame has one).
     debug_lines: Option<Box<super::debug_lines::DebugLines>>,
+    /// Tests: draw see-through debug lines this way instead of the cheaper
+    /// one for the sample count (to time both in one run).
+    #[cfg(test)]
+    pub(super) debug_see_through: Option<super::debug_lines::SeeThrough>,
 
     // ---- Scene targets: replaced when the size or the passes change ----
     targets: Option<Targets>,
@@ -1086,6 +1090,8 @@ impl Renderer3D {
             skinning: skinning::Skinning::new(device, GpuLimits::of(device).gpu_skinning()),
             particles,
             debug_lines: None,
+            #[cfg(test)]
+            debug_see_through: None,
             occlusion: super::occlusion::Occlusion::new(device, compute),
             occluded: 0,
             shadows: ShadowMaps {

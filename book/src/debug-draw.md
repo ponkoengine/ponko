@@ -65,8 +65,10 @@ Each returns the shape, to change it:
   styles (`ponko_debug_style_with_space`); in C++ `ponko::draw_space` with
   `ponko::with_space` for both.
 - `.depth_tested()`: a 3D label is hidden behind nearer 3D surfaces, as 3D
-  lines are, instead of drawn over everything. It is drawn in the 3D frame,
-  facing the camera and `size` pixels high where it is.
+  lines are, instead of drawn over everything. It is drawn in the 3D frame
+  of every 3D camera that shows debug drawing (split-screen views and
+  target cameras too, see below), facing that camera and `size` pixels high
+  where it is.
 - `.width(px)`: line width in pixels (1 by default).
 - `.size(px)`: label height in pixels (14 by default).
 
@@ -126,7 +128,9 @@ ctx.debug.set_collider_distance(30.0); // mesh and terrain triangles within 30 m
 ## At runtime and from tools
 
 `ctx.debug.set_enabled(on)` turns it on or off while the game runs (off forgets
-everything drawn). `Game::debug_draw(on)` chooses before the game starts,
+everything drawn). The [inspector](inspector.md)'s **Debug drawing** section
+shows and flips the same switches with the mouse: debug drawing, each
+built-in view, the colliders view's distance and the game's own toggles. `Game::debug_draw(on)` chooses before the game starts,
 overriding the build's default. A running game with the control endpoint
 answers `debug.draw` (`on`, `views`, `toggles`, `clear`; see
 [the control endpoint](control.md)), and its MCP server has the `debug_draw`
@@ -138,6 +142,18 @@ A game or plugin adds switches of its own for what it draws:
 (true while debug drawing is on and so is the toggle). Keys turn them on
 with `ctx.debug.set_toggle`, tools with `debug.draw`'s `toggles`, which
 also lists them ([Plugins for other crates](plugins.md#debug-toggles)).
+
+## In every camera
+
+Debug drawing is on the default layer (layer 0), so every camera that shows
+that layer shows it: the main camera, each view of a split screen (see
+[Viewports](viewports.md#debug-drawing)), and each target camera drawing
+into a [render target](3d.md#render-targets) that draws particles (a
+mirror or a monitor shows the 3D lines and the depth-tested labels, a
+reflection probe's capture doesn't). In a render target the 3D lines and
+depth-tested labels are drawn against that camera's own depth; labels on
+top and 2D shapes are window text and sprites, and stay out of render
+targets.
 
 ## Cost
 
