@@ -904,7 +904,7 @@ mod tests {
     #[test]
     fn both_storages_compute_the_same_frames() {
         // One density and fewer entities under Miri, which interprets every step.
-        let (n, densities): (usize, &[u32]) = if cfg!(miri) { (1000, &[20]) } else { (3000, &[5, 20]) };
+        let (n, densities): (usize, &[u32]) = if cfg!(miri) { (200, &[20]) } else { (3000, &[5, 20]) };
         for &density in densities {
             for rows in [false, true] {
                 let mut arch = Workload::new(World::new(), n, density, 10, 4);
