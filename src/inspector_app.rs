@@ -300,7 +300,8 @@ impl Panels {
         let now = web_time::Instant::now();
         match ctx.edit(|ed, ctx| ed.check_disk(ctx, now)) {
             Some(DiskChange::Reloaded) => {
-                self.status = Some(format!("{} changed on disk: opened again", ctx.editor.doc.name()));
+                self.error = None;
+                self.opened(ctx, format!("{} changed on disk: opened again", ctx.editor.doc.name()));
                 self.select(None, false);
             }
             Some(DiskChange::Conflict) | None => {}
@@ -617,7 +618,7 @@ impl Panels {
     fn reload(&mut self, ctx: &mut Ctx) {
         let reloaded = ctx.edit(|ed, ctx| ed.reload(ctx)).map_err(String::from);
         if self.report(reloaded).is_some() {
-            self.status = Some(format!("opened {} again", ctx.editor.doc.name()));
+            self.opened(ctx, format!("opened {} again", ctx.editor.doc.name()));
             self.select(None, false);
         }
     }
@@ -661,6 +662,12 @@ impl Panels {
             }
             if ctx.editor.playing() {
                 ui.colored_label(Color32::from_rgb(120, 200, 255), "playing: Stop puts the world back");
+            }
+            if self.browser_storage()
+                && let Some(warning) = crate::editor::web::persistence().warning()
+            {
+                ui.colored_label(Color32::from_rgb(255, 190, 60), BROWSER_MAY_CLEAR)
+                    .on_hover_text(warning);
             }
             ui.separator();
             if let Some(error) = &self.error {
@@ -892,6 +899,9 @@ impl Panels {
     fn browser_saves_dialog(&mut self, ui: &mut Ui, ctx: &mut Ctx) -> bool {
         let saved = crate::editor::web::saved();
         let mut revert = None;
+        if let Some(warning) = crate::editor::web::persistence().warning() {
+            ui.colored_label(Color32::from_rgb(255, 190, 60), warning);
+        }
         if saved.is_empty() {
             ui.label("Nothing is saved in this browser: the game reads the build's files.");
         } else {
@@ -952,6 +962,10 @@ impl Panels {
         self.scene.asset_list(ctx)
     }
 }
+
+/// The status bar's note when the browser refused persistent storage (its
+/// hover text says the rest).
+const BROWSER_MAY_CLEAR: &str = "the browser may clear saves";
 
 /// A one-line path field that has the keyboard while its dialog is open.
 fn path_field(ui: &mut Ui, path: &mut String) {
@@ -1656,6 +1670,34 @@ mod tests {
     }
 
     #[test]
+    fn the_web_editor_says_when_the_browser_refused_to_keep_its_saves() {
+        use crate::editor::web::{Persistence, test_browser};
+        let may_clear = |shown: &[String]| shown.iter().any(|t| t == super::BROWSER_MAY_CLEAR);
+        let (egui, mut p, mut ctx) = web_editor();
+        // Not answered yet, then granted: nothing to warn about.
+        assert!(!may_clear(&texts(&drawn(&egui, &mut p, &mut ctx, vec![]))));
+        test_browser::answer(Persistence::Granted);
+        assert_eq!(ctx.assets.browser_saves_persistent(), Some(true));
+        assert!(!may_clear(&texts(&drawn(&egui, &mut p, &mut ctx, vec![]))));
+
+        // Refused: the status bar says so, and the saves window says why.
+        test_browser::answer(Persistence::Refused);
+        assert_eq!(ctx.assets.browser_saves_persistent(), Some(false));
+        let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+        assert!(may_clear(&shown), "the status bar warns: {shown:?}");
+        click_text(&egui, &mut p, &mut ctx, |t| t == "File");
+        click_text(&egui, &mut p, &mut ctx, |t| t == "Saved in this browser…");
+        frame(&egui, &mut p, &mut ctx, vec![]);
+        let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+        let warning = Persistence::Refused.warning().unwrap();
+        assert!(shown.iter().any(|t| t == warning), "the window explains: {shown:?}");
+
+        // The desktop editor saves to files: no browser to warn about.
+        let (egui, mut p, mut ctx) = editor(None);
+        assert!(!may_clear(&texts(&drawn(&egui, &mut p, &mut ctx, vec![]))));
+    }
+
+    #[test]
     fn the_web_editor_saves_in_the_browser_and_download_hands_over_the_file() {
         let file = TempAsset::new("web-download");
         let (egui, mut p, mut ctx) = web_editor();
@@ -2099,6 +2141,56 @@ mod tests {
                 painted,
                 "opened again, still painted"
             );
+        }
+
+        #[test]
+        fn opening_a_scene_whose_gltf_scene_fails_to_load_names_the_file_in_the_error_line() {
+            let nodes = serde_json::json!([{ "name": "Box", "mesh": 0 }]);
+            let cube = crate::three::cube_gltf(&nodes);
+            let (good, broken) = (
+                gltf_asset("unloaded-good", &nodes),
+                gltf_asset("unloaded-broken", &nodes),
+            );
+            let scene = TempAsset::new("unloaded-scene");
+            let (egui, mut p, mut ctx, e) = editor3d();
+            ctx.set_headless(true);
+            ctx.world.despawn(e);
+            ctx.spawn_prefab(&good.name, T3::default()).unwrap();
+            ctx.spawn_prefab(&broken.name, T3::at(vec3(3.0, 0.0, 0.0))).unwrap();
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene))
+                .unwrap();
+            let roots = |ctx: &mut Ctx| ctx.world.query::<&crate::d3::GltfRoot>().iter().count();
+
+            // Both load: no error.
+            p.open_file(&mut ctx, &scene.name);
+            assert!(p.error.is_none(), "{:?}", p.error);
+            assert_eq!(roots(&mut ctx), 2);
+
+            // One file is broken now: the scene opens without it, and the
+            // error line says which file, not only the console.
+            std::fs::write(&broken.file, "not a glTF file").unwrap();
+            p.open_file(&mut ctx, &scene.name);
+            assert_eq!(roots(&mut ctx), 1, "the broken one is left out");
+            assert_eq!(ctx.editor.doc.path.as_deref(), Some(scene.name.as_str()), "opened");
+            let error = p.error.clone().unwrap_or_default();
+            assert!(
+                error.contains(&broken.name) && !error.contains(&good.name),
+                "names the file that failed: {error}"
+            );
+            assert!(
+                p.status.as_deref().unwrap_or("").contains(&scene.name),
+                "{:?}",
+                p.status
+            );
+            let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+            assert!(shown.iter().any(|t| t == &error), "the status bar shows it: {shown:?}");
+
+            // Fixed and opened again: the error line clears.
+            std::fs::write(&broken.file, &cube).unwrap();
+            p.open_file(&mut ctx, &scene.name);
+            assert!(p.error.is_none(), "{:?}", p.error);
+            assert_eq!(roots(&mut ctx), 2);
+            assert!(ctx.editor.doc.unloaded.is_empty());
         }
 
         #[test]
@@ -2558,7 +2650,13 @@ mod tests {
             // Opened again with the post's file broken.
             std::fs::write(&posts.file, "not a glTF file").unwrap();
             p.open_file(&mut ctx, &scene.name);
-            assert!(p.error.is_none(), "the scene opens without it: {:?}", p.error);
+            assert_eq!(
+                ctx.editor.doc.path.as_deref(),
+                Some(scene.name.as_str()),
+                "opens without it"
+            );
+            let error = p.error.clone().unwrap_or_default();
+            assert!(error.contains(&posts.name), "the error line names it: {error}");
             frame(&egui, &mut p, &mut ctx, vec![]);
             let (lamp, wall) = (node_in(&mut ctx, &yard, "Wall/Lamp"), node_in(&mut ctx, &yard, "Wall"));
             assert_eq!(parent_of(&ctx, lamp), Some(wall), "it waits on the file's parent");

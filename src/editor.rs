@@ -50,6 +50,8 @@ pub(crate) fn document_check_every() -> web_time::Duration {
     document::CHECK_EVERY
 }
 pub(crate) use document::Kind as DocKind;
+#[cfg(feature = "inspector")]
+pub(crate) use document::Unloaded;
 
 /// Undo steps kept; older ones are dropped.
 const MAX_UNDO: usize = 200;
