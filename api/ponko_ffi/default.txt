@@ -266,6 +266,19 @@ impl core::fmt::Debug for ponko_ffi::PonkoCursorIcon
 pub fn ponko_ffi::PonkoCursorIcon::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoCursorIcon
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoCursorIcon
+#[repr(C)] pub enum ponko_ffi::PonkoDebugDraw
+pub ponko_ffi::PonkoDebugDraw::PONKO_DEBUG_DRAW_DEFAULT
+pub ponko_ffi::PonkoDebugDraw::PONKO_DEBUG_DRAW_OFF
+pub ponko_ffi::PonkoDebugDraw::PONKO_DEBUG_DRAW_ON
+impl core::clone::Clone for ponko_ffi::PonkoDebugDraw
+pub fn ponko_ffi::PonkoDebugDraw::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoDebugDraw
+impl core::cmp::PartialEq for ponko_ffi::PonkoDebugDraw
+pub fn ponko_ffi::PonkoDebugDraw::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoDebugDraw
+pub fn ponko_ffi::PonkoDebugDraw::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoDebugDraw
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoDebugDraw
 #[repr(u32)] pub enum ponko_ffi::PonkoDebugView
 pub ponko_ffi::PonkoDebugView::PONKO_DEBUG_VIEW_BOUNDS = 2
 pub ponko_ffi::PonkoDebugView::PONKO_DEBUG_VIEW_COLLIDERS = 0
@@ -1952,6 +1965,7 @@ impl core::marker::Copy for ponko_ffi::PonkoCamera3D
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoCamera3D
 #[repr(C)] pub struct ponko_ffi::PonkoCamera3DEx
 pub ponko_ffi::PonkoCamera3DEx::camera: ponko_ffi::PonkoCamera3D
+pub ponko_ffi::PonkoCamera3DEx::debug_draw: u32
 pub ponko_ffi::PonkoCamera3DEx::occlusion_culling: bool
 pub ponko_ffi::PonkoCamera3DEx::particles: bool
 pub ponko_ffi::PonkoCamera3DEx::struct_size: u32
@@ -4358,6 +4372,7 @@ pub fn ponko_ffi::PonkoTargetCamera::fmt(&self, &mut core::fmt::Formatter<'_>) -
 impl core::marker::Copy for ponko_ffi::PonkoTargetCamera
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoTargetCamera
 #[repr(C)] pub struct ponko_ffi::PonkoTargetCameraEx
+pub ponko_ffi::PonkoTargetCameraEx::debug_draw: u32
 pub ponko_ffi::PonkoTargetCameraEx::particles: bool
 pub ponko_ffi::PonkoTargetCameraEx::struct_size: u32
 pub ponko_ffi::PonkoTargetCameraEx::target_camera: ponko_ffi::PonkoTargetCamera

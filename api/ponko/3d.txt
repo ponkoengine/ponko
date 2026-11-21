@@ -2559,6 +2559,7 @@ impl core::fmt::Debug for ponko::d3::AudioSource
 pub fn ponko::d3::AudioSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl ponko_ecs::bundle::Component for ponko::d3::AudioSource
 pub struct ponko::d3::Camera
+pub ponko::d3::Camera::debug_draw: core::option::Option<bool>
 pub ponko::d3::Camera::far: f32
 pub ponko::d3::Camera::fov_y: f32
 pub ponko::d3::Camera::layers: ponko::camera::RenderLayers
@@ -7456,6 +7457,7 @@ impl core::fmt::Debug for ponko::d3::AudioSource
 pub fn ponko::d3::AudioSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl ponko_ecs::bundle::Component for ponko::d3::AudioSource
 pub struct ponko::prelude::d3::Camera
+pub ponko::prelude::d3::Camera::debug_draw: core::option::Option<bool>
 pub ponko::prelude::d3::Camera::far: f32
 pub ponko::prelude::d3::Camera::fov_y: f32
 pub ponko::prelude::d3::Camera::layers: ponko::camera::RenderLayers
@@ -11695,6 +11697,7 @@ pub ponko::render::TargetCamera::target: ponko::render::RenderTarget
 impl ponko::render::TargetCamera
 pub fn ponko::render::TargetCamera::new(ponko::d3::Camera, ponko::render::RenderTarget) -> Self
 pub fn ponko::render::TargetCamera::reflection(ponko::d3::Camera, ponko::render::RenderTarget, f32) -> Self
+pub fn ponko::render::TargetCamera::with_debug_draw(self, bool) -> Self
 pub fn ponko::render::TargetCamera::with_particles(self, bool) -> Self
 impl core::clone::Clone for ponko::render::TargetCamera
 pub fn ponko::render::TargetCamera::clone(&self) -> Self
