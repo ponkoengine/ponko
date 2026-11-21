@@ -485,6 +485,7 @@ binding arrives:
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
 | `Video` | [Video](video.md#c-and-c) | Not bound yet: decode with a library of the game's own and show the frames with `ponko_ctx_update_texture` |
+| `AssetGroup::with_sliced`, `SliceLoader` | [Loading screens](loading.md#loaders-that-work-in-slices) | Not bound yet: add the file with `PONKO_GROUP_BYTES` and decode it once the group is ready |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in

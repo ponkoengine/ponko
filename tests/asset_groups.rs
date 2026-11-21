@@ -1012,7 +1012,8 @@ mod guide {
     }
 }
 
-/// Parses lines of numbers a few at a time.
+// ANCHOR: sliced_loader
+/// Parses lines of numbers, two lines a call.
 struct Numbers {
     text: String,
     at: usize,
@@ -1039,6 +1040,7 @@ impl ponko::assets::SliceLoader for Numbers {
     }
 }
 
+/// `start` for `with_sliced`: `AssetGroup::new("level").with_sliced("level.txt", numbers)`.
 fn numbers(bytes: Vec<u8>) -> Result<Numbers, Error> {
     let text = String::from_utf8(bytes).map_err(|e| Error::new(ErrorKind::Decode, e.to_string()))?;
     Ok(Numbers {
@@ -1047,6 +1049,7 @@ fn numbers(bytes: Vec<u8>) -> Result<Numbers, Error> {
         values: Vec::new(),
     })
 }
+// ANCHOR_END: sliced_loader
 
 #[test]
 fn a_sliced_loader_makes_its_value_and_its_errors_name_the_asset() {

@@ -108,21 +108,26 @@ fn group_textures_are_made_on_the_gpu_draw_and_count_their_upload_cost() {
     );
 }
 
-#[test]
-fn uploads_report_the_gpus_own_copy_time_where_it_has_timestamps_and_still_draw() {
-    // The production renderer asks for timestamp queries where the adapter
-    // has them: so does this device.
-    let Some(gpu) = support::gpu_with(|adapter| {
+/// An offscreen game whose device has timestamp queries where the adapter
+/// does, as the production renderer asks for them.
+fn timed_ctx() -> Option<Ctx> {
+    let gpu = support::gpu_with(|adapter| {
         Ok(wgpu::DeviceDescriptor {
             required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
             ..Default::default()
         })
-    }) else {
-        return;
-    };
+    })?;
     let mut ctx = Ctx::new(1.0 / 60.0, vec2(SIZE as f32, SIZE as f32));
     ctx.audio.headless = true;
     ctx.gfx.renderer = Some(super::gpu::Renderer::offscreen(gpu, (SIZE, SIZE)));
+    Some(ctx)
+}
+
+#[test]
+fn uploads_report_the_gpus_own_copy_time_where_it_has_timestamps_and_still_draw() {
+    let Some(mut ctx) = timed_ctx() else {
+        return;
+    };
     ctx.scene3d.sky.atmosphere = false;
     ctx.gfx.clear(Color::BLACK);
     let blue = |_, _| [0, 0, 255, 255];
@@ -208,7 +213,7 @@ fn uploads_report_the_gpus_own_copy_time_where_it_has_timestamps_and_still_draw(
 fn group_upload_cost_on_the_gpu() {
     const TEXTURES: u32 = 16;
     const SIDE: u32 = 1024;
-    let Some(mut ctx) = support::offscreen_ctx((SIZE, SIZE)) else {
+    let Some(mut ctx) = timed_ctx() else {
         return;
     };
     ctx.scene3d.sky.atmosphere = false;
@@ -241,6 +246,11 @@ fn group_upload_cost_on_the_gpu() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
+    // The GPU's own copy times come back a few frames later.
+    for i in 0..10 {
+        frame(&mut ctx, &format!("after{i}"));
+        ctx.pump_streaming();
+    }
     empty.sort_by(f32::total_cmp);
     let base = empty[empty.len() / 2];
     let stats = ctx.assets.group_stats();
@@ -256,6 +266,16 @@ fn group_upload_cost_on_the_gpu() {
         stats.total_upload_ms / mib,
         stats.max_upload_ms
     );
+    if stats.gpu_upload_timing {
+        println!(
+            "GPU's own copy time (timestamps): {:.2} ms in all, {:.3} ms per MiB, latest step {:.3} ms",
+            stats.total_gpu_upload_ms,
+            stats.total_gpu_upload_ms / mib,
+            stats.gpu_upload_ms.unwrap_or(0.0)
+        );
+    } else {
+        println!("this GPU has no timestamp queries: copies not timed");
+    }
     println!("frame drawn and read back with nothing uploaded: median {base:.2} ms");
     for (upload_ms, step_ms, bytes, frame_ms) in &loaded {
         println!(
