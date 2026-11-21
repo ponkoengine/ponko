@@ -877,6 +877,33 @@ pub enum InputEvent {
         /// Where, in window pixels.
         position: Vec2,
     },
+    /// A desktop trackpad's gesture (a Mac's): [`Gesture::Pinch`](crate::input::Gesture::Pinch)
+    /// with how much it magnified (`0.1`: 10 % larger, negative smaller),
+    /// [`Gesture::Rotate`](crate::input::Gesture::Rotate) with how far it
+    /// turned in radians, clockwise positive, or
+    /// [`Gesture::DoubleTap`](crate::input::Gesture::DoubleTap) (a
+    /// two-finger double tap; `amount` unused). `phase` says whether it
+    /// begins, goes on or ends. It feeds the same gestures and amounts as
+    /// two fingers on a touch screen, at the mouse pointer; a trackpad
+    /// makes no touches and no touch device. Other gestures are ignored.
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::actions::InputEvent;
+    /// use ponko::input::TouchPhase;
+    /// Game::new("t", 320, 240).run_headless(0, |ctx| {
+    ///     ctx.input.feed(InputEvent::Trackpad { gesture: Gesture::Pinch, phase: TouchPhase::Started, amount: 0.25 });
+    ///     assert_eq!(ctx.input.pinch_scale(), 1.25);
+    ///     assert!(!ctx.input.touch_device());
+    /// });
+    /// ```
+    Trackpad {
+        /// Which gesture.
+        gesture: crate::input::Gesture,
+        /// Begins, goes on, ends.
+        phase: crate::input::TouchPhase,
+        /// How much, this event.
+        amount: f32,
+    },
 }
 
 impl InputEvent {

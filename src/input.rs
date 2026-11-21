@@ -37,6 +37,7 @@ pub use controller::{
 pub use glyphs::{Glyph, GlyphAtlas, Glyphs};
 pub use ime::ImeEvent;
 pub(crate) mod touch;
+mod touch_desktop;
 mod ui_seen;
 pub use touch::{Gesture, GestureAxis, GestureEvent, GestureSettings, Touch, TouchPhase};
 
@@ -555,6 +556,13 @@ impl Input {
     }
 
     pub(crate) fn set_mouse_button(&mut self, button: MouseButton, is_down: bool) {
+        // A press the system made up for a finger is not the mouse's (nor
+        // is the release of a button not held: the made-up press's).
+        if button == MouseButton::Left
+            && (!self.touch_mouse_button(is_down) || (!is_down && !self.mouse.down[button as usize]))
+        {
+            return;
+        }
         self.record(crate::actions::InputEvent::Mouse(button, is_down));
         if is_down {
             self.controllers.used(InputDevice::KeyboardMouse);
@@ -565,11 +573,13 @@ impl Input {
     }
 
     pub(crate) fn set_mouse_pos(&mut self, pos: Vec2) {
-        if pos != self.mouse_pos {
+        // The system moves the cursor with a finger: that's no mouse use.
+        let mouse = self.touch_mouse_moved(pos);
+        if pos != self.mouse_pos && mouse {
             self.touch.pointer_is_touch = false;
         }
         self.record(crate::actions::InputEvent::MouseMove(pos));
-        if pos.distance_squared(self.mouse_pos) >= MOUSE_USE_DISTANCE * MOUSE_USE_DISTANCE {
+        if mouse && pos.distance_squared(self.mouse_pos) >= MOUSE_USE_DISTANCE * MOUSE_USE_DISTANCE {
             self.controllers.used(InputDevice::KeyboardMouse);
         }
         self.mouse_pos = pos;
@@ -1308,6 +1318,7 @@ impl Input {
             InputEvent::MouseMove(at) => self.set_mouse_pos(at),
             InputEvent::MouseWheel(lines) => self.add_mouse_wheel(lines),
             InputEvent::Touch { id, phase, position } => self.feed_touch(id, phase, position),
+            InputEvent::Trackpad { gesture, phase, amount } => self.feed_trackpad(gesture, phase, amount),
         }
     }
 
