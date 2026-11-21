@@ -591,6 +591,11 @@ fn halve(level: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
 /// Encodes RGBA8 pixels as UASTC with Basis Universal: each mip level's
 /// 16-byte blocks, largest first, and whether any pixel isn't opaque.
 fn uastc(rgba: &[u8], width: u32, height: u32, srgb: bool, mipmaps: bool) -> Result<(Vec<Vec<u8>>, bool), String> {
+    uastc_on(&mut lend_encoder(), &uastc_params(rgba, width, height, srgb, mipmaps))
+}
+
+/// The encoder settings of [`uastc`], with the pixels copied in.
+fn uastc_params(rgba: &[u8], width: u32, height: u32, srgb: bool, mipmaps: bool) -> CompressorParams {
     let mut params = CompressorParams::new();
     params.set_basis_format(BasisTextureFormat::UASTC4x4);
     params.set_uastc_quality_level(UASTC_QUALITY_DEFAULT);
@@ -598,63 +603,81 @@ fn uastc(rgba: &[u8], width: u32, height: u32, srgb: bool, mipmaps: bool) -> Res
     params.set_generate_mipmaps(mipmaps);
     params.set_print_status_to_stdout(false);
     params.source_image_mut(0).init(rgba, width, height, 4);
-    if encoder_threads(width, height) == 1 {
-        // No worker threads: dropping it joins nothing.
-        return uastc_on(&mut Compressor::new(1), &params);
-    }
-    let mut shared = SHARED_ENCODER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    uastc_on(shared.get_or_insert_with(|| Compressor::new(cores())), &params)
+    params
 }
 
-/// Encodes `params` (one RGBA8 source image) on `compressor`: [`uastc`]'s
+/// Encodes `params` (from [`uastc_params`]) on `compressor`: [`uastc`]'s
 /// levels and alpha.
 fn uastc_on(compressor: &mut Compressor, params: &CompressorParams) -> Result<(Vec<Vec<u8>>, bool), String> {
-    // SAFETY: `init` copies `params` (the settings and the one source image
-    // `uastc` copied in with `source_image_mut(0).init`) into the
-    // compressor, so nothing it keeps points into `params`.
+    // SAFETY: `params` holds valid settings and one source image of
+    // `width` x `height` x 4 bytes (copied in by `uastc_params`); `init`
+    // copies all of it into the compressor, which keeps no pointer into it.
     let ready = unsafe { compressor.init(params) };
     if !ready {
         return Err("the Basis Universal encoder refused the settings".into());
     }
     // SAFETY: as above; `init` succeeded. Every encode starts by reading its
     // source images again, so a reused compressor keeps nothing of the image
-    // before (the test `the_shared_encoder_gives_the_same_blocks_as_a_fresh_one`).
+    // before (the test `a_reused_encoder_gives_the_same_blocks_as_a_fresh_one`).
     unsafe { compressor.process() }.map_err(|e| format!("Basis Universal encoding failed: {e:?}"))?;
     let levels = basis_uastc_levels(compressor.basis_file())?;
     Ok((levels, compressor.any_source_image_has_alpha()))
 }
 
-/// Images with fewer 4 x 4 blocks than this (a 256 x 256 image has 4,096)
-/// are encoded on the calling thread alone: worker threads gain little on
-/// them, and a cook already encodes several images at once, one per core.
-const SHARED_ENCODER_MIN_BLOCKS: u64 = 4096;
-
-/// How many threads encode a `width` x `height` image: the calling thread
-/// alone for a small one, every core for a larger one (on
-/// [`SHARED_ENCODER`]).
-fn encoder_threads(width: u32, height: u32) -> u32 {
-    let blocks = u64::from(width.div_ceil(4)) * u64::from(height.div_ceil(4));
-    if blocks < SHARED_ENCODER_MIN_BLOCKS { 1 } else { cores() }
-}
-
-/// The threads the machine runs at once.
-fn cores() -> u32 {
-    std::thread::available_parallelism().map_or(1, |n| u32::try_from(n.get()).unwrap_or(u32::MAX))
-}
-
-/// The process's one Basis Universal encoder with worker threads, made on
-/// first use and never dropped; larger images take turns on it.
+/// Basis Universal encoders not in use, each with a worker thread per core.
+/// They are never dropped: a cook takes one per image it encodes at once
+/// and puts it back, and they live until the process exits.
 ///
 /// Dropping an encoder that has worker threads can hang forever. Its job
 /// pool's destructor sets the pool's stop flag without holding the pool's
 /// lock, then wakes the workers and joins them; a worker that has just
 /// found no work, but not yet gone to sleep, misses that wake-up and sleeps
 /// for good, so the join never returns. It takes a busy machine (seen at a
-/// load average of 80, an encoder dropped right after a small encode), and
-/// the encoder is third-party code, so this module never drops one: an
-/// encoder of one thread has no workers to join, and this one lives until
-/// the process exits.
-static SHARED_ENCODER: std::sync::Mutex<Option<Compressor>> = std::sync::Mutex::new(None);
+/// load average of 80), and the encoder is third-party code, so this module
+/// never drops one. Keeping them also saves starting and joining a thread
+/// per core for every image. The cost: each keeps the buffers of the
+/// largest image it encoded, as much memory as encoding them all at once
+/// took anyway, until the process (a `ponko` command) exits.
+static IDLE_ENCODERS: std::sync::Mutex<Vec<Compressor>> = std::sync::Mutex::new(Vec::new());
+
+/// An encoder from [`IDLE_ENCODERS`] (a new one when all are in use), which
+/// goes back there when this is dropped, even in a panic.
+struct LentEncoder(Option<Compressor>);
+
+fn lend_encoder() -> LentEncoder {
+    let idle = IDLE_ENCODERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .pop();
+    LentEncoder(Some(idle.unwrap_or_else(|| {
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        Compressor::new(u32::try_from(cores).unwrap_or(u32::MAX))
+    })))
+}
+
+impl std::ops::Deref for LentEncoder {
+    type Target = Compressor;
+    fn deref(&self) -> &Compressor {
+        self.0.as_ref().expect("lent until dropped")
+    }
+}
+
+impl std::ops::DerefMut for LentEncoder {
+    fn deref_mut(&mut self) -> &mut Compressor {
+        self.0.as_mut().expect("lent until dropped")
+    }
+}
+
+impl Drop for LentEncoder {
+    fn drop(&mut self) {
+        if let Some(encoder) = self.0.take() {
+            IDLE_ENCODERS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(encoder);
+        }
+    }
+}
 
 /// The UASTC blocks of each mip level of image 0 in a `.basis` file (its
 /// slice descriptions say where), so they can go into a KTX2 file.
@@ -1006,46 +1029,42 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn small_images_encode_on_one_thread_and_larger_ones_on_one_shared_encoder() {
-        assert_eq!(encoder_threads(32, 32), 1);
-        assert_eq!(encoder_threads(252, 252), 1, "63 x 63 blocks");
-        assert_eq!(encoder_threads(256, 256), cores());
-        assert_eq!(encoder_threads(4096, 4), 1, "one row of 1,024 blocks");
-        assert_eq!(encoder_threads(4096, 16), cores());
-        let pointer = || SHARED_ENCODER.lock().unwrap().as_ref().map(|c| c.0);
-        uastc(&noisy(256, 1), 256, 256, true, true).unwrap();
-        let first = pointer().expect("the larger image made the shared encoder");
-        uastc(&noisy(256, 2), 256, 256, true, true).unwrap();
-        uastc(&noisy(16, 3), 16, 16, true, true).unwrap();
-        assert_eq!(pointer(), Some(first), "the same encoder, kept");
+    fn a_lent_encoder_goes_back_to_the_idle_list_even_in_a_panic() {
+        let idle = |pointer| IDLE_ENCODERS.lock().unwrap().iter().any(|c| c.0 == pointer);
+        let encoder = lend_encoder();
+        let pointer = encoder.0.as_ref().unwrap().0;
+        assert!(!idle(pointer), "lent out");
+        drop(encoder);
+        assert!(idle(pointer), "back after use");
+        let lent = std::panic::catch_unwind(|| {
+            let encoder = lend_encoder();
+            let pointer = encoder.0.as_ref().unwrap().0 as usize;
+            std::panic::panic_any(pointer);
+        });
+        let pointer = *lent.unwrap_err().downcast::<usize>().unwrap() as *mut _;
+        assert!(idle(pointer), "back after a panic");
     }
 
     #[test]
-    fn the_shared_encoder_gives_the_same_blocks_as_a_fresh_one() {
-        let (a, b) = (noisy(256, 4), noisy(256, 5));
-        // A goes first, so B is encoded on an encoder that last held A.
-        let on_shared_a = uastc(&a, 256, 256, true, true).unwrap();
-        let on_shared_b = uastc(&b, 256, 256, true, true).unwrap();
-        let fresh = |rgba: &[u8]| {
-            let mut params = CompressorParams::new();
-            params.set_basis_format(BasisTextureFormat::UASTC4x4);
-            params.set_uastc_quality_level(UASTC_QUALITY_DEFAULT);
-            params.set_color_space(ColorSpace::Srgb);
-            params.set_generate_mipmaps(true);
-            params.set_print_status_to_stdout(false);
-            params.source_image_mut(0).init(rgba, 256, 256, 4);
-            uastc_on(&mut Compressor::new(1), &params).unwrap()
-        };
-        assert_eq!(on_shared_b, fresh(&b));
-        assert_eq!(on_shared_a, fresh(&a));
-        // Negative control: the two images' blocks differ.
-        assert_ne!(on_shared_a.0[0], on_shared_b.0[0]);
+    fn a_reused_encoder_gives_the_same_blocks_as_a_fresh_one() {
+        let (a, b) = (noisy(256, 4), noisy(64, 5));
+        let params = |rgba: &[u8], size| uastc_params(rgba, size, size, true, true);
+        let mut reused = lend_encoder();
+        // A goes first, so B is encoded on an encoder that last held a larger A.
+        let on_reused_a = uastc_on(&mut reused, &params(&a, 256)).unwrap();
+        let on_reused_b = uastc_on(&mut reused, &params(&b, 64)).unwrap();
+        let fresh = |rgba: &[u8], size| uastc_on(&mut Compressor::new(1), &params(rgba, size)).unwrap();
+        assert_eq!(on_reused_b, fresh(&b, 64));
+        assert_eq!(on_reused_a, fresh(&a, 256));
+        assert_eq!(on_reused_b.0.len(), 7, "64 x 64 has 7 levels, not A's 9");
+        // Negative control: the comparison notices other blocks.
+        assert_ne!(on_reused_b, fresh(&noisy(64, 6), 64));
     }
 
     #[test]
     fn encodes_from_many_threads_at_once_all_finish() {
         // Encoders used to be made and dropped per image; one dropped on a
-        // busy machine could hang the process (see `SHARED_ENCODER`).
+        // busy machine could hang the process (see `IDLE_ENCODERS`).
         let (done, finished) = std::sync::mpsc::channel();
         for t in 0..8u32 {
             let done = done.clone();
