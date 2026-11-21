@@ -248,4 +248,129 @@ mod tests {
             );
         }
     }
+
+    /// The lines of `shaders` (path, text) that call a sampling function
+    /// after `||` or `&&`. Browsers' WGSL compilers (Chrome's Tint) reject
+    /// `textureSample` in non-uniform control flow, and `a || f()` calls `f`
+    /// only where `a` is false: such a line makes every pipeline of its
+    /// module invalid on WebGPU, so a 3D scene draws black. naga accepts it,
+    /// so no native test sees it.
+    fn samples_after_a_short_circuit(shaders: &[(String, String)]) -> Vec<String> {
+        // Each function's body: from `fn name(` at the start of a line to
+        // the brace that closes it.
+        let mut bodies = Vec::new();
+        for (_, text) in shaders {
+            let mut current: Option<(String, String, i32)> = None;
+            for line in text.lines() {
+                let code = line.split("//").next().unwrap();
+                // `fn name(` or `@fragment fn name(`, at the start of a line.
+                let declared = if code.starts_with('@') {
+                    code.find(" fn ").map(|at| &code[at + 1..])
+                } else {
+                    Some(code)
+                };
+                if current.is_none()
+                    && let Some(rest) = declared.and_then(|d| d.strip_prefix("fn "))
+                {
+                    let name = rest.split('(').next().unwrap().trim().to_owned();
+                    current = Some((name, String::new(), 0));
+                }
+                if let Some((_, body, depth)) = &mut current {
+                    body.push_str(code);
+                    body.push('\n');
+                    *depth += code.matches('{').count() as i32 - code.matches('}').count() as i32;
+                    if *depth <= 0 && code.contains('}') {
+                        let (name, body, _) = current.take().unwrap();
+                        bodies.push((name, body));
+                    }
+                }
+            }
+        }
+        let samples = |body: &str| {
+            ["textureSample(", "textureSampleBias(", "textureSampleCompare("]
+                .iter()
+                .any(|call| body.contains(call))
+        };
+        let calls = |line: &str, name: &str| {
+            line.match_indices(&format!("{name}("))
+                .any(|(at, _)| at == 0 || !line[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
+        };
+        // The functions that sample, directly or through another.
+        let mut sampling: Vec<&str> = bodies
+            .iter()
+            .filter(|(_, b)| samples(b))
+            .map(|(n, _)| n.as_str())
+            .collect();
+        loop {
+            let more: Vec<&str> = bodies
+                .iter()
+                .filter(|(n, b)| !sampling.contains(&n.as_str()) && sampling.iter().any(|s| calls(b, s)))
+                .map(|(n, _)| n.as_str())
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            sampling.extend(more);
+        }
+        let mut found = Vec::new();
+        for (path, text) in shaders {
+            for (n, line) in text.lines().enumerate() {
+                let code = line.split("//").next().unwrap();
+                let Some(at) = code.find("||").into_iter().chain(code.find("&&")).min() else {
+                    continue;
+                };
+                let after = &code[at..];
+                if samples(after) || sampling.iter().any(|s| calls(after, s)) {
+                    found.push(format!("{path}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn no_shader_samples_a_texture_after_a_short_circuit() {
+        let mut shaders = Vec::new();
+        let mut dirs = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/render")];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|e| e == "wgsl") {
+                    shaders.push((path.display().to_string(), std::fs::read_to_string(path).unwrap()));
+                }
+            }
+        }
+        assert!(shaders.len() > 10, "found the renderer's shaders");
+        let found = samples_after_a_short_circuit(&shaders);
+        assert!(
+            found.is_empty(),
+            "sample before the condition instead (let x = ...; if a || x ...): {found:#?}"
+        );
+        // The line Chrome rejected, against the real shaders: the mesh
+        // shaders' `surface_at` samples (through the material's textures).
+        let mut with_rejected = shaders.clone();
+        with_rejected.push((
+            "rejected.wgsl".into(),
+            "fn probe(in: VertexOut, front: bool) {\n    if !fade_keeps(in.fade, in.clip.xy) || surface_at(in, front).alpha < 0.5 {\n        discard;\n    }\n}\n".into(),
+        ));
+        let flagged = samples_after_a_short_circuit(&with_rejected);
+        assert!(
+            flagged.len() == 1 && flagged[0].starts_with("rejected.wgsl:2:"),
+            "{flagged:?}"
+        );
+        // The same through a helper of its own.
+        let rejected = "fn surface_at(uv: vec2<f32>) -> vec4<f32> {\n    return textureSample(t, s, uv);\n}\n\
+                        fn fs(in: In) {\n    if !keeps(in) || surface_at(in.uv).a < 0.5 {\n        discard;\n    }\n}\n";
+        let flagged = samples_after_a_short_circuit(&[("rejected.wgsl".into(), rejected.into())]);
+        assert_eq!(flagged.len(), 1, "{flagged:?}");
+        assert!(flagged[0].starts_with("rejected.wgsl:5:"), "{flagged:?}");
+        // Sampled before the branch, as the shaders do: fine.
+        let fixed = rejected.replace(
+            "    if !keeps(in) || surface_at(in.uv).a < 0.5 {",
+            "    let a = surface_at(in.uv).a;\n    if !keeps(in) || a < 0.5 {",
+        );
+        assert!(samples_after_a_short_circuit(&[("fixed.wgsl".into(), fixed)]).is_empty());
+    }
 }

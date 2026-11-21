@@ -106,10 +106,54 @@ fails when it is out of date; `PONKO_UPDATE_BOOK=1 cargo test -p ponko
 --features 3d --lib web_backend_table` rewrites it.
 
 <!-- web-backend-table:start -->
+| | WebGPU | WebGL2 (the fallback) |
+|---|---|---|
+| `GpuTier` | `baseline` | `webgl2` |
+| largest 2D texture | 8192² | 2048² |
+| sampled textures per shader stage | 16 | 16 |
+| storage buffers per shader stage | 8 | 0 |
+| compute workgroups per dimension | 65535 | 0 |
+| `timestamps` | no, no GPU pass times; RenderStats::gpu_ms is None | no, no GPU pass times; RenderStats::gpu_ms is None |
+| `compute` | yes | no, compute passes and the effects that need them are skipped (see the other entries) |
+| `storage_buffers` | yes | no, GPU buffers are not created and compute passes using them do nothing; material shaders reading `items` and GPU-buffer instance setup report an error with a fix to use CPU-backed instance batches or model entities |
+| `compute_culling` | yes | no, instance batches are culled on the CPU, cell by cell, and drawn with direct draws (the same picture); crowds are culled on the CPU and drawn from frames posed when they are made |
+| `gpu_skinning` | yes | no, skinned and morphed meshes are posed on the CPU |
+| `occlusion_culling` | yes | no, off: hidden models are drawn |
+| `temporal_antialiasing` | yes | no, FXAA instead of TAA |
+| `ambient_occlusion` | yes | no, off |
+| `contact_shadows` | yes | no, off |
+| `screen_space_reflections` | yes | no, off |
+| `global_illumination` | no, off: sky and ambient light only | no, off: sky and ambient light only |
+| `decals` | no, decals are not drawn | no, decals are not drawn |
+| `multisampling` | yes | no, no multisampling: edges are smoothed only by FXAA or SMAA, if chosen |
 <!-- web-backend-table:end -->
 
-**Size and startup.** One `.wasm` holds both backends: wgpu's WebGPU binding
-and its WebGL2 backend with the shader translator. WEB_SIZE_NUMBERS
+**Size and startup.** One `.wasm` holds both backends: wgpu's WebGPU binding,
+and its WebGL2 backend with the shader translator, which the WebGL2 path
+needs and the WebGPU path never runs. Measured on the smoke fixtures
+(`web/build.sh`, release, wasm-bindgen 0.2.130; bytes of `game_bg.wasm`):
+
+| Build | Raw | gzip -9 | brotli -q 11 |
+|---|---|---|---|
+| 2D fixture (`web_smoke`), both backends | 15,144,997 | 5,252,906 | 3,378,309 |
+| 2D fixture, WebGPU only (wgpu without `webgl`, an experiment) | 13,181,687 | 4,596,210 | 2,970,584 |
+| 3D fixture (`web_smoke_3d`, `--features 3d`), both backends | 19,176,434 | 6,487,015 | 4,129,117 |
+| 3D fixture, WebGPU only (the same experiment) | 17,188,373 | 5,818,912 | 3,724,727 |
+
+So the fallback costs about 2 MB of the raw module and about 0.4 MB
+(11 to 14 %) of what a server sends brotli-compressed; the engine has no
+switch to leave it out, since every browser without a working WebGPU would
+then show nothing.
+
+Time to the first frame (from the page's navigation start to the 3D
+fixture's first published state; median of five fresh loads each, served
+from the same machine) in Chromium 156's new headless mode on an Apple
+Silicon Mac, on a busy machine (a load average of about 100 from other
+builds), so the absolute numbers are high and noisy: **WebGPU 200 ms**
+(132 to 213), **WebGL2 298 ms** (290 to 355). An earlier run under the
+same load gave 248 and 370 ms. The pages that try WebGPU first and fall
+back (no adapter, a refused device, a device lost as it opens) took 350 to
+433 ms, one load each: the WebGPU attempt adds little to the WebGL2 start.
 
 `web/smoke/webgpu-fallback.mjs` checks each way into WebGL2 in a headless
 browser, faking the failure in the page before the game starts (see the

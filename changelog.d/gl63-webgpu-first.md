@@ -14,3 +14,13 @@
 - `web/smoke/webgpu-fallback.mjs`: each way into the WebGL2 fallback, and
   the WebGPU path itself, in a headless browser, with the time to the first
   frame on each.
+
+### Fixed
+- 3D scenes drew black on the browser's WebGPU (Chrome): the cut-out
+  crossfade fragment shader sampled a texture behind `||`, non-uniform
+  control flow that browsers' WGSL compilers reject, which made every 3D
+  pipeline of that module invalid. A test now finds any shader that samples
+  after `||` or `&&`, which naga accepts and so no native test saw.
+- 3D models drew nothing on WebGL2: small mesh index writes joined the
+  frame's batched copies, and WebGL2 can't copy into an index buffer from
+  another buffer. In a browser, index buffers are written on their own.

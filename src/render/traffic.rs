@@ -374,6 +374,9 @@ fn batched(buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> bool {
         let Some(batch) = b.as_mut() else {
             return false;
         };
+        if !copies_into(buffer.usage(), cfg!(target_arch = "wasm32")) {
+            return false;
+        }
         let joins = || batch.copies.iter().any(|c| c.to.is_buffer(buffer));
         // While command buffers are held (see `hold`), a write made on its
         // own would land ahead of them: every one that can joins.
@@ -384,6 +387,16 @@ fn batched(buffer: &wgpu::Buffer, offset: u64, data: &[u8]) -> bool {
         batch.push(buffer, offset, data);
         true
     })
+}
+
+/// Whether a buffer of `usage` can take the batch's copy from its staging
+/// buffer: not an index buffer in a browser (`browser`), where WebGL2
+/// copies into an index buffer only from another index buffer (wgpu's
+/// `DownlevelFlags::UNRESTRICTED_INDEX_BUFFER`; WebGPU could, but which of
+/// the two draws isn't known here). Such a write goes on its own, as
+/// `Queue::write_buffer` (WebGL2's `bufferSubData`).
+fn copies_into(usage: wgpu::BufferUsages, browser: bool) -> bool {
+    !(browser && usage.contains(wgpu::BufferUsages::INDEX))
 }
 
 /// [`batched`] for a texture write: one of a format of single-texel
@@ -1203,6 +1216,19 @@ mod tests {
         assert!(!outgrown(&mut capacity, 5000, 1000), "nothing bigger to make");
         assert_eq!(capacity, 1000);
         assert_eq!(take().reallocations, 2);
+    }
+
+    #[test]
+    fn a_browsers_index_buffers_are_written_on_their_own_not_copied() {
+        use wgpu::BufferUsages as U;
+        // WebGL2 refuses a copy into an index buffer from the staging
+        // buffer: the 3D scene's meshes then draw nothing.
+        assert!(!copies_into(U::INDEX | U::COPY_DST, true));
+        assert!(!copies_into(U::INDEX | U::VERTEX | U::COPY_DST, true));
+        assert!(copies_into(U::VERTEX | U::COPY_DST, true));
+        assert!(copies_into(U::UNIFORM | U::COPY_DST, true));
+        // On the desktop every backend copies into them.
+        assert!(copies_into(U::INDEX | U::COPY_DST, false));
     }
 
     #[test]

@@ -1213,7 +1213,7 @@ mod tests {
             let status = caps.feature(feature).unwrap();
             match &status.fallback {
                 None => "yes".to_owned(),
-                Some(fallback) => format!("no: {fallback}"),
+                Some(fallback) => format!("no, {fallback}"),
             }
         };
         let name = |feature: GpuFeature| serde_json::to_value(feature).unwrap().as_str().unwrap().to_owned();
@@ -1271,8 +1271,8 @@ mod tests {
         );
         // What the table must show for its point to hold: WebGPU runs the
         // compute features, WebGL2 falls back from them.
-        assert!(table.contains("| `ambient_occlusion` | yes | no: off |"), "{table}");
-        assert!(table.contains("| `global_illumination` | no: "), "{table}");
+        assert!(table.contains("| `ambient_occlusion` | yes | no, off |"), "{table}");
+        assert!(table.contains("| `global_illumination` | no, "), "{table}");
     }
 
     #[cfg(feature = "window")]
