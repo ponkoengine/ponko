@@ -218,7 +218,7 @@ const AIM: Key = Key::new("aim");
 const SPREAD: Key = Key::new("spread");
 
 let tree = Arc::new(BehaviorTree::from_json(r#"{"root": {"sequence": [
-    {"parallel": [{"do": "move", "to": "cover"}, {"do": "aim", "spread": 0.5}]},
+    {"parallel": [{"do": "move", "to": [4, 2]}, {"do": "aim", "spread": 0.5}]},
     {"do": "fire"}
 ]}}"#).unwrap());
 let (mut brain, mut bb) = (Brain::new("soldier"), Blackboard::new());

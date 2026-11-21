@@ -98,7 +98,7 @@
 //! # Several actions at once
 //!
 //! A `parallel` whose children hold `do` nodes runs their actions side by
-//! side: `{"parallel": [{"do": "move", "to": "cover"}, {"do": "aim"}]}`
+//! side: `{"parallel": [{"do": "move", "to": [4, 2]}, {"do": "aim"}]}`
 //! moves and aims. The design:
 //!
 //! - **An action is named by its name.** The game asks
@@ -639,7 +639,7 @@ impl Brain {
     /// const MOVE: Key = Key::new("move");
     /// const AIM: Key = Key::new("aim");
     /// let tree = Arc::new(BehaviorTree::from_json(r#"{"root": {"parallel": [
-    ///     {"do": "move", "to": "cover"}, {"do": "aim"}
+    ///     {"do": "move", "to": [4, 2]}, {"do": "aim"}
     /// ]}}"#).unwrap());
     /// let (mut brain, mut bb) = (Brain::new("soldier"), Blackboard::new());
     /// brain.think(&tree, &mut bb, 0, 0.1);

@@ -267,10 +267,12 @@ fn a_signal_ends_a_wait_and_a_saved_brain_carries_on_where_it_was() {
 
 #[test]
 fn a_native_brain_runs_several_actions_and_reports_each() {
-    let soldier = tree(r#"{"root": {"sequence": [
+    let soldier = tree(
+        r#"{"root": {"sequence": [
         {"parallel": [{"do": "move", "speed": 2}, {"do": "aim", "spread": 0.5}]},
         {"do": "fire"}
-    ]}}"#);
+    ]}}"#,
+    );
     let (mv, aim, fire, spread) = (key("move"), key("aim"), key("fire"), key("spread"));
     let brain = ponko_brain_new(1);
     let at = |i: usize| {
@@ -293,8 +295,14 @@ fn a_native_brain_runs_several_actions_and_reports_each() {
         assert_eq!(ponko_brain_action_param_num(brain, mv, spread, &mut v), PONKO_NOT_FOUND);
         // The aim is done; the move carries on, not started again.
         assert_eq!(ponko_brain_finish_action(brain, aim, PONKO_AI_SUCCESS), PONKO_OK);
-        assert_eq!(ponko_brain_finish_action(brain, fire, PONKO_AI_SUCCESS), PONKO_NOT_FOUND);
-        assert_eq!(ponko_brain_finish_action(brain, mv, PONKO_AI_RUNNING), PONKO_INVALID_ARGUMENT);
+        assert_eq!(
+            ponko_brain_finish_action(brain, fire, PONKO_AI_SUCCESS),
+            PONKO_NOT_FOUND
+        );
+        assert_eq!(
+            ponko_brain_finish_action(brain, mv, PONKO_AI_RUNNING),
+            PONKO_INVALID_ARGUMENT
+        );
         assert_eq!(ponko_brain_think(brain, soldier, 1, 1.0 / 60.0), PONKO_OK);
         assert_eq!((at(0), at(1)), (mv, 0));
         assert_eq!(ponko_brain_action_started(brain, 0, &mut started), PONKO_OK);

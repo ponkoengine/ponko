@@ -152,8 +152,8 @@ fn c_games_send_signals_to_world_brains_and_act_on_several_actions() {
     let (run, shout, rest) = (key("run"), key("shout"), key("rest"));
     let none = (0, 0);
     // Both wait for the alarm; the first hears it at tick 5, the second at 9.
-    for tick in 0..5 {
-        assert_eq!(log.rows[tick], [none, none], "tick {tick}");
+    for (tick, row) in log.rows[..5].iter().enumerate() {
+        assert_eq!(row, &[none, none], "tick {tick}");
     }
     assert_eq!(log.rows[5], [(run, shout), none]);
     assert_eq!(log.rows[6], [(run, shout), none]);
