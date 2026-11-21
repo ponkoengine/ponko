@@ -1363,9 +1363,10 @@ jobs:
       # the cross-origin isolation headers its work must run on workers; served
       # without, on the page's thread alone, with the same result. A worker's
       # panic must stop the game. Fed browser gamepads must reach the game and
-      # its rumble the pad's `vibrationActuator` (`--case gamepads`; the same
-      # on the ordinary build, whose pads come from gilrs, `--case
-      # gamepads-plain`), and a warning must fail the threaded build
+      # its rumble the pad's `vibrationActuator`, trigger rumble the pad whose
+      # actuator lists `trigger-rumble` (`--case gamepads`; the same on the
+      # ordinary build, `--case gamepads-plain`), and a warning must fail the
+      # threaded build
       # (`--case warning`: an example whose only code is an unused function
       # behind `target_feature = "atomics"`, built with -D warnings).
       - name: Nightly Rust for the threaded web build

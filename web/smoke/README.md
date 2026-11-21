@@ -234,8 +234,9 @@ Two more modes:
   proof.
 - `--case gamepads-plain` is the same case on the ordinary build of the
   fixture (`--build` makes it, in `target/web/web_threads_plain`), whose pads
-  come from gilrs instead of the threaded backend. gilrs applies a dead zone
-  and rescales sticks and triggers, so axes are compared within 0.1.
+  come from the same backend built without threads (it replaced gilrs on
+  the web; the guide's web chapter says why). Both apply gilrs's dead zone
+  (0.1, rescaled), and the expected axes take it out the same way.
 - `--case warning` needs no browser: it builds the example
   `examples/web_threads_warning.rs` with threads and `-D warnings`. The
   example's only code is an unused function that only a build with threads
@@ -271,8 +272,8 @@ are not tried yet.
 
 `spectrum.mjs` times the water kit's CPU wave spectrum in the browser (the
 water guide's "Waves from a spectrum"): the fixture
-`examples/web_spectrum.rs`, in three builds (`--build` makes them):
-`scalar` (`web/build.sh --features 3d web_spectrum`), `fft-simd` (with the
+`examples/web_spectrum.rs`, in four builds (`--build` makes them):
+`scalar` (`web/build.sh --features 3d web_spectrum`), `simd128` (`-C target-feature=+simd128` alone), `fft-simd` (with the
 `wasm-simd` feature: rustfft's SIMD FFT) and `simd` (that, and
 `-C target-feature=+simd128` for the whole module, added to the rust flags
 cargo reads). Each page load times one new moment of the field

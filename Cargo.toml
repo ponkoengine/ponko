@@ -178,7 +178,6 @@ subsecond = { version = "0.7.10", optional = true }
 dioxus-devtools = { version = "0.7.10", default-features = false, optional = true }
 # `Instant` that also works in browsers; on desktop it is std's own type.
 web-time = "1.1.0"
-gilrs = { version = "0.11.2", optional = true }
 steamworks = { version = "0.13.1", optional = true }
 gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "extras"], optional = true }
 # Level files from level editors (`ponko::tilemap`): `quick-xml` reads
@@ -205,6 +204,9 @@ matroska-demuxer = { version = "0.8.1", optional = true }
 
 # Waits for the GPU on desktop (feature `window`); the web build awaits it.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The desktop's gamepads (feature `gamepad`); web builds read the browser's
+# themselves (src/gamepad_web.rs).
+gilrs = { version = "0.11.2", optional = true }
 arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"], optional = true }
 pollster = { version = "1.0.1", optional = true }
 # AV1 pictures for `video`: rav1d, the Rust port of dav1d, 8-bit only and
@@ -361,7 +363,8 @@ editor = ["inspector", "dep:rfd"]
 # feature builds and does nothing. Off: no adapter;
 # `Ui::accessibility_tree` and `UiAccessTracker` are always there.
 accessibility = ["window", "dep:accesskit", "dep:accesskit_macos", "dep:accesskit_windows", "dep:accesskit_unix"]
-# Gamepads through gilrs (Xbox, PlayStation, Switch and other controllers).
+# Gamepads through gilrs (Xbox, PlayStation, Switch and other controllers);
+# in web builds the browser's gamepads, read by the engine.
 # Off: `ctx.input.gamepads()` is always empty. On Linux it needs libudev headers.
 gamepad = ["window", "dep:gilrs"]
 # Lets a release build honor `PONKO_CONTROL=1` (debug builds always do), for

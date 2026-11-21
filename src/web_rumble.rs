@@ -1,6 +1,4 @@
-//! Rumble in the browser, for both web gamepad backends: the ordinary build's
-//! (gilrs, which has no force feedback on the web) and the threaded build's
-//! (`gamepad_web`).
+//! Rumble in the browser, for the web's gamepad backend (`gamepad_web`).
 //!
 //! A browser plays a pad's rumble through `gamepad.vibrationActuator`:
 //! `playEffect("dual-rumble", {startDelay, duration, weakMagnitude,
@@ -174,29 +172,6 @@ impl WebRumble {
     }
 }
 
-/// One of the browser's pads, as far as rumble needs it.
-#[cfg_attr(not(all(target_arch = "wasm32", not(target_feature = "atomics"))), allow(dead_code))]
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct BrowserPad {
-    /// Its place in `navigator.getGamepads()`.
-    pub(crate) index: u32,
-    /// The browser's `id` text.
-    pub(crate) id: String,
-    /// Whether it has a `vibrationActuator` that plays effects.
-    pub(crate) rumble: bool,
-    /// Whether that actuator plays `trigger-rumble`.
-    pub(crate) trigger_rumble: bool,
-}
-
-/// The browser's pad for the `nth` connected pad of the engine's backend
-/// that has `id` as its name, when that backend (gilrs) doesn't say where
-/// in the browser's list a pad is: pads of one `id` are numbered in the
-/// order the browser lists them, which is the order gilrs finds them in.
-#[cfg_attr(not(all(target_arch = "wasm32", not(target_feature = "atomics"))), allow(dead_code))]
-pub(crate) fn pick<'a>(pads: &'a [BrowserPad], id: &str, nth: usize) -> Option<&'a BrowserPad> {
-    pads.iter().filter(|p| p.id == id).nth(nth)
-}
-
 /// The page side: `navigator.getGamepads()` on the calling thread. Where
 /// there is no such call (a worker), there are no pads and nothing plays.
 #[cfg(target_arch = "wasm32")]
@@ -238,26 +213,6 @@ impl Browser {
         let actuator = Self::get(pad, "vibrationActuator")?;
         Self::get(&actuator, "playEffect")?;
         Some(actuator)
-    }
-
-    /// The pads connected now, in the browser's order (what the ordinary
-    /// build, whose gilrs doesn't say where a pad is, looks them up by).
-    #[cfg_attr(target_feature = "atomics", allow(dead_code))]
-    pub(crate) fn pads() -> Vec<BrowserPad> {
-        let mut out = Vec::new();
-        Self::each_pad(|slot, pad| {
-            let index = Self::get(pad, "index")
-                .and_then(|i| i.as_f64())
-                .map_or(slot, |i| i as u32);
-            let id = Self::get(pad, "id").and_then(|id| id.as_string()).unwrap_or_default();
-            out.push(BrowserPad {
-                index,
-                id,
-                rumble: Self::has_actuator(pad),
-                trigger_rumble: Self::has_trigger_actuator(pad),
-            });
-        });
-        out
     }
 
     /// Calls `each(slot, pad)` for every connected pad of `navigator.getGamepads()`.
@@ -558,15 +513,6 @@ mod tests {
         assert_eq!(fake.take(), [Call::Stop(2), play_at(1, 1.0, 1.0)]);
     }
 
-    fn browser(index: u32, id: &str, rumble: bool) -> BrowserPad {
-        BrowserPad {
-            index,
-            id: id.into(),
-            rumble,
-            trigger_rumble: false,
-        }
-    }
-
     fn with_triggers(strong: f32, weak: f32, left: f32, right: f32) -> MotorLevels {
         MotorLevels {
             strong,
@@ -652,15 +598,5 @@ mod tests {
             WebEffect::for_pad(levels(0.5, 0.0), true).map(WebEffect::kind),
             Some("dual-rumble")
         );
-    }
-
-    #[test]
-    fn identical_pads_are_told_apart_by_the_order_the_browser_lists_them() {
-        let pads = [browser(0, "A", true), browser(1, "B", false), browser(3, "A", true)];
-        assert_eq!(pick(&pads, "A", 0).map(|p| p.index), Some(0));
-        assert_eq!(pick(&pads, "A", 1).map(|p| p.index), Some(3));
-        assert_eq!(pick(&pads, "A", 2), None);
-        assert_eq!(pick(&pads, "B", 0).map(|p| p.rumble), Some(false));
-        assert_eq!(pick(&pads, "C", 0), None);
     }
 }

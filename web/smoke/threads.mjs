@@ -6,7 +6,7 @@
 //   node web/smoke/threads.mjs --build                  # the checks
 //   node web/smoke/threads.mjs --case worker-panic      # a worker's panic stops the game
 //   node web/smoke/threads.mjs --case gamepads          # fed browser gamepads reach the game, and rumble the pad
-//   node web/smoke/threads.mjs --build --case gamepads-plain   # the same on the ordinary build (gilrs)
+//   node web/smoke/threads.mjs --build --case gamepads-plain   # the same on the ordinary build
 //   node web/smoke/threads.mjs --case warning           # a warning fails the threaded build
 //   node web/smoke/threads.mjs --bench --repeat 3       # 1 vs N threads
 //
@@ -28,7 +28,7 @@
 // `dual-rumble` with the trigger levels dropped, as on the desktop.
 // Real rumble can't be felt in a headless browser: the recorded calls are
 // the proof. `--case gamepads-plain` runs it on the ordinary web build of
-// the same fixture, whose pads come from gilrs, not the threaded backend.
+// the same fixture: the same backend, built without threads.
 // The bench runs the fixture's workloads on the isolated page with one
 // thread (`?threads=1`) and with the engine's default, and prints the
 // medians, their spread, and the speed-up with whether it is beyond the
@@ -46,7 +46,6 @@ import { LAUNCHERS, serve } from "./smoke.mjs";
 import {
   FALLBACK_WARNING,
   GAMEPAD_STEPS,
-  GILRS_AXIS_TOLERANCE,
   ISOLATION_HEADERS,
   RUMBLE_PRESS,
   RUMBLE_SECONDS,
@@ -186,7 +185,7 @@ async function gamepads(browser, servers, args, report, plain = false) {
     let left = ["not checked"];
     while (Date.now() < deadline) {
       last = await state(page);
-      left = checkGamepadStep(step, last, plain ? GILRS_AXIS_TOLERANCE : undefined);
+      left = checkGamepadStep(step, last);
       if (left.length === 0) break;
       await sleep(100);
     }

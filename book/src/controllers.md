@@ -164,7 +164,8 @@ copy per player with `Action::for_pad`:
 ## Backends and tests
 
 Pads come from a `GamepadBackend`. In a window the engine reads them with
-[gilrs](https://crates.io/crates/gilrs) (feature `gamepad`); headless runs
+[gilrs](https://crates.io/crates/gilrs) (feature `gamepad`), and in a web
+build from the browser's `navigator.getGamepads()` itself; headless runs
 have none. `Game::new(...).gamepad_backend(backend)` chooses another, polled
 once before setup so its pads are already connected there. A backend reports connections, buttons, axes and motion
 through `GamepadEvents` at the start of each frame and is told motor levels
@@ -195,7 +196,7 @@ Without a backend, `InputEvent::GamepadConnected(pad)` and
 ### What each platform supports
 
 What the built-in backend can do depends on what gilrs 0.11 implements on
-each platform, and on the web on what the browser has. Features it can't
+each desktop platform, and on the web on what the browser has. Features it can't
 drive are reported as `false` in `GamepadInfo::capabilities`, never faked:
 
 | | Linux (evdev) | Windows (Windows.Gaming.Input) | macOS | Web |
@@ -207,8 +208,10 @@ drive are reported as `false` in `GamepadInfo::capabilities`, never faked:
 | Trigger rumble | no | no (the system has it; gilrs sends zero) | no | where the pad's actuator lists `trigger-rumble` (Chromium on Windows, Xbox pads) |
 | Gyro and accelerometer | no | no | no | no |
 
-On the web the engine plays rumble itself: gilrs has no force feedback
-there, so it calls `playEffect("dual-rumble", ...)` on the pad's
+On the web the engine reads the browser's pads itself, in the standard
+layout and with gilrs's dead zone (a tenth of the travel, rescaled), so
+sticks and triggers read as on the desktop. It plays rumble itself too: it
+calls `playEffect("dual-rumble", ...)` on the pad's
 `vibrationActuator`, or `playEffect("trigger-rumble", ...)` with the
 trigger levels too when the actuator lists that effect in its `effects`
 (or, in older browsers, says yes to `canPlayEffectType`). Browsers end an effect after at most 5 seconds, so the

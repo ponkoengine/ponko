@@ -20,7 +20,7 @@ import {
   fakeGamepad,
   FAKE_PAD_ID,
   GAMEPAD_STEPS,
-  GILRS_AXIS_TOLERANCE,
+  deadZone,
   installFakeGamepads,
   WARNING_ITEM,
   median,
@@ -225,17 +225,15 @@ test("each gamepad step passes only on what the engine must report", () => {
   assert.match(checkGamepadStep(connect, { pads: [{ ...pad([], {}), family: "Generic" }] })[0], /family/);
   assert.match(checkGamepadStep(connect, { pads: [{ ...pad([], {}), rumble: false }] })[0], /rumble capability/);
   assert.match(checkGamepadStep(connect, { pads: [{ ...pad([], {}), trigger_rumble: true }] })[0], /trigger rumble capability/);
-  const pressed = { pads: [pad(["DPadRight", "South"], { lx: 0.5, ly: -1, ry: 0.75, lt: 0.25 })], pad_presses: 1 };
+  const pressed = { pads: [pad(["DPadRight", "South"], { lx: 0.5, ly: -1, ry: 0.65 / 0.9, lt: 0.15 / 0.9 })], pad_presses: 1 };
   assert.deepEqual(checkGamepadStep(press, pressed), []);
   // Y up must stay negative, and a quarter-pulled trigger isn't a press.
   assert.match(checkGamepadStep(press, { ...pressed, pads: [{ ...pressed.pads[0], axes: { ...pressed.pads[0].axes, ly: 1 } }] })[0], /ly/);
   assert.match(checkGamepadStep(press, { ...pressed, pads: [{ ...pressed.pads[0], down: ["South", "DPadRight", "LeftTrigger"] }] })[0], /buttons down/);
   assert.match(checkGamepadStep(press, { ...pressed, pad_presses: 0 })[0], /pressed 0 times/);
-  // gilrs's dead zone moves a half to 0.44: fine on the ordinary build, not for the exact backend.
-  const scaled = { ...pressed, pads: [{ ...pressed.pads[0], axes: { ...pressed.pads[0].axes, lx: 0.444 } }] };
-  assert.match(checkGamepadStep(press, scaled)[0], /lx/);
-  assert.deepEqual(checkGamepadStep(press, scaled, GILRS_AXIS_TOLERANCE), []);
-  assert.match(checkGamepadStep(press, { ...scaled, pads: [{ ...scaled.pads[0], axes: { ...scaled.pads[0].axes, lx: -0.5 } }] }, GILRS_AXIS_TOLERANCE)[0], /lx/);
+  // The fed values without the dead zone are wrong: the engine reads 0.7222 and 0.1667.
+  const raw = { ...pressed, pads: [{ ...pressed.pads[0], axes: { ...pressed.pads[0].axes, ry: 0.75, lt: 0.25 } }] };
+  assert.equal(checkGamepadStep(press, raw).length, 2);
   assert.deepEqual(checkGamepadStep(release, { pads: [pad([], {})], pad_presses: 1 }), []);
   assert.deepEqual(checkGamepadStep(unplug, { pads: [] }), []);
 });
@@ -356,4 +354,13 @@ test("trigger rumble fails when the fallback differs from the desktop's, or leve
   assert.ok(checkTriggerRumbleCalls([triggerPlay(0), bodyPlay(1, { weak: 0 }), reset(0, ms), reset(1, ms)]).some((p) => /pad 1: body levels/.test(p)));
   assert.ok(checkTriggerRumbleCalls([triggerPlay(0), bodyPlay(1), reset(1, ms)]).some((p) => /pad 0's last call/.test(p)));
   assert.ok(checkTriggerRumbleCalls([triggerPlay(0), bodyPlay(1), reset(0, 200), reset(1, ms)]).some((p) => /pad 0 stopped after/.test(p)));
+});
+
+test("the expected axes take out the engine's dead zone as gilrs does", () => {
+  assert.equal(deadZone(0.05), 0);
+  assert.equal(deadZone(-0.1), 0);
+  assert.ok(Math.abs(deadZone(0.55) - 0.5) < 1e-12);
+  assert.ok(Math.abs(deadZone(-0.55) + 0.5) < 1e-12);
+  assert.equal(deadZone(1), 1);
+  assert.equal(deadZone(-1.5), -1, "past the edge reads full");
 });

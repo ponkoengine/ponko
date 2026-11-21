@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import { UsageError } from "./lib.mjs";
 import { CELLS, KINDS, VARIANTS, benchDone, buildArgs, checkRun, parseArgs, summarize, summaryTable, variantEnv } from "./spectrum-lib.mjs";
 
-test("arguments default to all three builds, three loads each, and refuse what they don't know", () => {
+test("arguments default to all four builds, three loads each, and refuse what they don't know", () => {
   const args = parseArgs([]);
-  assert.deepEqual(args.variants, ["scalar", "fft-simd", "simd"]);
+  assert.deepEqual(args.variants, ["scalar", "simd128", "fft-simd", "simd"]);
   assert.equal(args.repeat, 3);
   assert.equal(args.build, false);
   assert.deepEqual(parseArgs(["--variants", "scalar,simd", "--repeat", "5", "--build"]).variants, ["scalar", "simd"]);
@@ -16,9 +16,10 @@ test("arguments default to all three builds, three loads each, and refuse what t
   assert.throws(() => parseArgs(["--fast"]), UsageError);
 });
 
-test("only the simd build adds simd128, to the flags cargo reads, keeping theirs", () => {
+test("only the simd128 and simd builds add simd128, to the flags cargo reads, keeping theirs", () => {
   const target = "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS";
   assert.deepEqual(variantEnv("scalar", { PATH: "p" }), { PATH: "p" });
+  assert.equal(variantEnv("simd128", {})[target], "-C target-feature=+simd128");
   assert.deepEqual(variantEnv("fft-simd", {}), {}, "rustfft's SIMD needs no compiler flag");
   assert.equal(variantEnv("simd", {})[target], "-C target-feature=+simd128");
   assert.equal(variantEnv("simd", { [target]: "-C opt-level=s" })[target], "-C opt-level=s -C target-feature=+simd128");
@@ -69,7 +70,7 @@ test("the summary gives medians, ranges and speed-ups beyond the noise only when
     { variant: "fft-simd", bench: run("fft-simd", (c) => c / 90).bench },
   ];
   const rows = summarize(loads);
-  assert.equal(rows.length, CELLS.length * KINDS.length * 3);
+  assert.equal(rows.length, CELLS.length * KINDS.length * 3, "the variants loaded, not all four");
   const at = (cells, kind, variant) => rows.find((r) => r.cells === cells && r.kind === kind && r.variant === variant);
   const base = at(256, "height", "scalar");
   assert.equal(base.speedup, undefined);

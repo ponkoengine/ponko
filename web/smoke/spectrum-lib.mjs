@@ -11,18 +11,20 @@ export const CELLS = [64, 128, 256];
 export const KINDS = ["height", "sway"];
 
 /**
- * The builds compared: the ordinary one; rustfft's WASM SIMD FFT alone (the
- * `wasm-simd` feature, which needs no compiler flag); and that with
- * `simd128` for the whole module (the engine's own loops too).
+ * The builds compared: the ordinary one; `simd128` for the whole module
+ * (the compiler's own vectorising, rustfft's scalar code); rustfft's WASM
+ * SIMD FFT alone (the `wasm-simd` feature, which needs no compiler flag);
+ * and both.
  */
 export const VARIANTS = {
   scalar: { features: "3d", simd128: false, dir: "target/web/web_spectrum" },
+  simd128: { features: "3d", simd128: true, dir: "target/web/web_spectrum_simd128" },
   "fft-simd": { features: "3d,wasm-simd", simd128: false, dir: "target/web/web_spectrum_fft_simd" },
   simd: { features: "3d,wasm-simd", simd128: true, dir: "target/web/web_spectrum_simd" },
 };
 
 export const USAGE =
-  "usage: spectrum.mjs [--build] [--variants scalar,fft-simd,simd] [--repeat <r>]\n" +
+  "usage: spectrum.mjs [--build] [--variants scalar,simd128,fft-simd,simd] [--repeat <r>]\n" +
   "                    [--browser chromium|firefox|webkit] [--out <dir>] [--timeout <s>]";
 
 export function parseArgs(argv) {

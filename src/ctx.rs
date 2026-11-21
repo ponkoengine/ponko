@@ -224,7 +224,7 @@ pub struct Ctx {
     /// plugins' names, from the builder.
     pub(crate) extensions: crate::control::GameExtensions,
     /// Where gamepads come from (`Game::gamepad_backend`, or gilrs in a
-    /// window), polled in `begin_frame`.
+    /// window; the browser's gamepads on the web), polled in `begin_frame`.
     pub(crate) gamepad_driver: crate::input::backend::GamepadDriver,
     /// `true` while the game's setup (and plugins' setups) run.
     in_setup: bool,

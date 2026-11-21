@@ -3,13 +3,13 @@
 // the fixture examples/web_spectrum.rs, built with and without WASM SIMD,
 // timed in a headless browser.
 //
-//   node web/smoke/spectrum.mjs --build                 # build all three, time each 3 times
+//   node web/smoke/spectrum.mjs --build                 # build all four, time each 3 times
 //   node web/smoke/spectrum.mjs --variants scalar,simd --repeat 5
 //
 // The builds (spectrum-lib.mjs, VARIANTS): `scalar`, the ordinary web
-// build; `fft-simd`, with the `wasm-simd` feature (rustfft's SIMD FFT,
-// no compiler flag); `simd`, that and `-C target-feature=+simd128` for the
-// whole module. Each page load times one new moment of the field (the
+// build; `simd128`, `-C target-feature=+simd128` alone; `fft-simd`, with
+// the `wasm-simd` feature (rustfft's SIMD FFT, no compiler flag); `simd`,
+// both. Each page load times one new moment of the field (the
 // WebGL2 upload, `height_at`) and one with the sway's speed (`sample`,
 // buoyancy) at 64, 128 and 256 cells; the runner checks every build says
 // it was built as asked and timed everything, then prints the median of

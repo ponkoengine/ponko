@@ -26,7 +26,7 @@ export const CHECK_TICKS = 150;
 /**
  * The `--case`s: the browser ones, and `warning`, a build with no browser.
  * `gamepads-plain` is `gamepads` on the ordinary web build (no threads),
- * which reads the pads through gilrs.
+ * whose pads come from the same backend, built without shared memory.
  */
 export const CASES = ["worker-panic", "gamepads", "gamepads-plain", "warning"];
 
@@ -375,9 +375,15 @@ export const GAMEPAD_STEPS = [
   },
   {
     name: "buttons, sticks and a trigger",
-    // South, d-pad right, the left trigger a quarter in; left stick right and up.
+    // South, d-pad right, the left trigger a quarter in; left stick right and
+    // up (past the edge: as fed), right stick three quarters down. The dead
+    // zone (0.1, as gilrs's) rescales the right stick and the trigger.
     pads: [fakeGamepad({ buttons: { 0: 1, 15: 1, 6: 0.25 }, axes: [0.5, -1, 0, 0.75] })],
-    expect: { down: ["South", "DPadRight"], axes: { lx: 0.5, ly: -1, rx: 0, ry: 0.75, lt: 0.25, rt: 0 }, presses: 1 },
+    expect: {
+      down: ["South", "DPadRight"],
+      axes: { lx: 0.5, ly: -1, rx: 0, ry: deadZone(0.75), lt: deadZone(0.25), rt: 0 },
+      presses: 1,
+    },
   },
   {
     name: "everything let go",
@@ -387,12 +393,19 @@ export const GAMEPAD_STEPS = [
   { name: "the pad unplugged", pads: [], expect: null },
 ];
 
-/** How far an axis may be from the fed value on the ordinary build: gilrs applies its own dead zone and scaling. */
-export const GILRS_AXIS_TOLERANCE = 0.1;
+/**
+ * A value along one axis (the other at rest) as the engine reads it: the
+ * dead zone of `src/gamepad_web.rs` (0.1, gilrs's) taken out and the rest
+ * rescaled so full still reads 1. Hoisted, so GAMEPAD_STEPS can use it.
+ */
+export function deadZone(value, zone = 0.1) {
+  const magnitude = Math.min(Math.abs(value), 1);
+  return magnitude <= zone ? 0 : (Math.sign(value) * (magnitude - zone)) / (1 - zone);
+}
 
 /**
  * The problems with the fixture's state after a gamepad step; axes must be
- * within `tolerance` of the fed values (exact for the threaded backend).
+ * within `tolerance` of the expected values (the backend's f32 against these doubles).
  */
 export function checkGamepadStep(step, state, tolerance = 1e-6) {
   const pads = state?.pads ?? [];
