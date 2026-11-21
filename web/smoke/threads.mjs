@@ -7,6 +7,7 @@
 //   node web/smoke/threads.mjs --case worker-panic      # a worker's panic stops the game
 //   node web/smoke/threads.mjs --case gamepads          # fed browser gamepads reach the game, and rumble the pad
 //   node web/smoke/threads.mjs --build --case gamepads-plain   # the same on the ordinary build
+//   node web/smoke/threads.mjs --build --case service-worker   # isolated by ponko-isolate.js, no headers
 //   node web/smoke/threads.mjs --case warning           # a warning fails the threaded build
 //   node web/smoke/threads.mjs --bench --repeat 3       # 1 vs N threads
 //
@@ -15,6 +16,12 @@
 // items, scheduler batches and jobs on them and never on the page's thread;
 // served without, it must run on the page's thread alone and say why in the
 // console. Both runs must simulate the same world (a checksum at tick 120).
+// It prints each parallel pass the fixture times: whether it was shared out
+// to the workers, and its time with threads and on the page's thread alone.
+// `--case service-worker` builds the fixture with ponko-isolate.js
+// (web/build.sh --isolation-worker) and serves it WITHOUT the headers: the
+// page must reload once through the service worker and then be isolated,
+// with every check of the isolated run passing.
 // `--build` builds with RUSTFLAGS="-D warnings" added, so a warning in the
 // threaded build fails the check; `--case warning` proves that it does, by
 // building an example whose only code is an unused function that only a
@@ -54,6 +61,10 @@ import {
   USAGE,
   checkFallback,
   checkIsolated,
+  checkPassTimes,
+  checkServiceWorker,
+  passRows,
+  passTable,
   checkReady,
   checkGamepadStep,
   checkRumbleCalls,
@@ -131,6 +142,37 @@ async function check(browser, servers, args, report) {
       `asset group ${s.group}, decoded off the page: ${s.group_off_page}`,
   );
   console.log(`not isolated: ${runs.plain.state.threads} worker threads ("${FALLBACK_WARNING}"); checksums ${s.checksum} and ${runs.plain.state.checksum}`);
+  problems.push(...checkPassTimes(runs.plain.state).map((p) => `not isolated: ${p}`));
+  report.passes = passRows(s, runs.plain.state);
+  console.log(`\n${passTable(report.passes, s.threads)}\n`);
+  return problems;
+}
+
+/**
+ * Served without the headers, with ponko-isolate.js: the page reloads once
+ * through its service worker, and must then pass the isolated run's checks.
+ */
+async function serviceWorker(browser, servers, args, report) {
+  const context = await browser.newContext({ serviceWorkers: "allow" });
+  const { page, lines } = await open(context, `http://127.0.0.1:${servers.plain.address().port}/`);
+  // The page reloads under us: a read that meets the navigation just retries.
+  const deadline = Date.now() + args.timeout * 1000;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await state(page).catch(() => null);
+    if (checkReady(last) && last.isolated === true) break;
+    await sleep(250);
+  }
+  const isolated = await withDeadline(page.evaluate(() => window.crossOriginIsolated), CALL_TIMEOUT_MS, "reading crossOriginIsolated");
+  const controlled = await withDeadline(page.evaluate(() => navigator.serviceWorker.controller != null), CALL_TIMEOUT_MS, "reading the service worker");
+  report.runs = { service_worker: { state: last, crossOriginIsolated: isolated, controlled, console: lines } };
+  const problems = last ? checkServiceWorker(last, lines.join("\n")) : ["the fixture published no state"];
+  if (!controlled) problems.push("the page isn't controlled by the service worker");
+  console.log(
+    `service worker: crossOriginIsolated ${isolated}, controlled ${controlled}, ${last?.threads} worker threads; ` +
+      `engine passes on the pool: ${(last?.passes_shared ?? []).join(", ")}`,
+  );
+  await context.close();
   return problems;
 }
 
@@ -312,14 +354,24 @@ async function main() {
   // With -D warnings: a warning in the threaded build fails the check.
   const buildEnv = denyWarnings(process.env);
   // The ordinary build (no --threads) of the same fixture, for gamepads-plain.
-  const buildArgs = args.case === "gamepads-plain" ? ["web/build.sh", "web_threads", args.dir] : ["web/build.sh", "--threads", "--features", FIXTURE_FEATURES, "web_threads"];
+  const buildArgs =
+    args.case === "gamepads-plain"
+      ? ["web/build.sh", "web_threads", args.dir]
+      : args.case === "service-worker"
+        ? ["web/build.sh", "--threads", "--isolation-worker", "--features", FIXTURE_FEATURES, "web_threads", args.dir]
+        : ["web/build.sh", "--threads", "--features", FIXTURE_FEATURES, "web_threads"];
   if (args.build && spawnSync("bash", buildArgs, { stdio: "inherit", env: buildEnv }).status !== 0) {
     process.exit(EXIT.usage);
   }
   const root = resolve(args.dir);
   // A bench may time a build without threads (`--threads 1`), for what the
   // fallback costs; the checks need the threaded build.
-  const needed = args.mode === "bench" || args.case === "gamepads-plain" ? ["index.html"] : ["index.html", "ponko-worker.js"];
+  const needed =
+    args.mode === "bench" || args.case === "gamepads-plain"
+      ? ["index.html"]
+      : args.case === "service-worker"
+        ? ["index.html", "ponko-worker.js", "ponko-isolate.js"]
+        : ["index.html", "ponko-worker.js"];
   for (const file of needed) {
     if (!(await stat(join(root, file)).catch(() => null))) {
       console.error(`${join(root, file)} is missing: pass --build, or build it with web/build.sh --threads --features ${FIXTURE_FEATURES} web_threads`);
@@ -364,6 +416,8 @@ async function main() {
           ? gamepads
           : args.case === "gamepads-plain"
             ? (...a) => gamepads(...a, true)
+            : args.case === "service-worker"
+              ? serviceWorker
             : args.mode === "bench"
               ? bench
               : check;
