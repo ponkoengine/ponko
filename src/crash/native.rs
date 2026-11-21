@@ -229,7 +229,8 @@ impl Drop for Armed {
         if let Some(file) = &self.file {
             sys::disarm(file);
         }
-        drop(self.file.take());
+        // Closed (and its lock let go) before the file is deleted.
+        self.file = None;
         let _ = std::fs::remove_file(&self.path);
     }
 }
