@@ -645,7 +645,9 @@ list for the same HUD and settings screen, with every glyph pushed as with
 a GPU. A frame of the settings screen fading went from about 0.20 ms to
 0.030 ms with this, one where 40 labels pulse in color from 0.047 ms to
 0.027 ms, and one where a HUD slot is added or removed from 0.21 ms to
-0.027 ms; a still frame costs about 0.024 ms.
+0.027 ms; a still frame costs about 0.024 ms. A frame with the settings
+screen's list scrolling a fraction of a pixel went from about 0.074 ms to
+0.028 ms once moved text kept its glyphs.
 
 The `frame2d/...` benchmarks of `ponko_bench` time a whole 2D frame without a
 window (2,000 sprites under a HUD and a settings screen of about 150 nodes):

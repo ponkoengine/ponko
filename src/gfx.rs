@@ -429,7 +429,7 @@ impl Graphics {
             let size = Vec2::new(p.glyph.size[0] as f32, p.glyph.size[1] as f32);
             Some(GlyphQuad {
                 pos: p.pos,
-                size,
+                size: (size / scale).into(),
                 uv: uv_region([at[0] as f32 / side, at[1] as f32 / side], (size / side).into()),
             })
         }));
@@ -451,18 +451,17 @@ impl Graphics {
         // smear every glyph across two pixels.
         let origin = snap_to_pixels(pos, scale) * scale;
         for q in quads {
-            self.ui_list.push(
-                atlas.id,
-                params.z,
-                SpriteInstance::new(
-                    ((origin + q.pos) / scale).into(),
-                    (q.size / scale).into(),
-                    [0.0, 0.0],
-                    0.0,
-                    color,
-                )
-                .with_uv(q.uv),
-            );
+            // `SpriteInstance::new` with a top-left pivot, whose `f16`
+            // bits are zeros.
+            let instance = SpriteInstance {
+                pos: ((origin + q.pos) / scale).into(),
+                size: q.size,
+                pivot: [0; 2],
+                rotation: 0.0,
+                color,
+                uv: q.uv,
+            };
+            self.ui_list.push(atlas.id, params.z, instance);
         }
     }
 
@@ -1384,13 +1383,15 @@ fn push_sprite(
 }
 
 /// One glyph of laid-out text ([`Graphics::lay_out_glyphs`]): where it sits
-/// from its run's origin and how big it is, in whole physical pixels, and
+/// from its run's origin, in whole physical pixels, how big it is, and
 /// where it is in the glyph atlas. Kept, text is drawn again anywhere at
-/// the same size without laying it out.
+/// the same size and scale factor without laying it out.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct GlyphQuad {
+    /// From the run's origin, in physical pixels.
     pos: Vec2,
-    size: Vec2,
+    /// In window pixels.
+    size: [f32; 2],
     uv: [u16; 4],
 }
 
@@ -1429,6 +1430,21 @@ mod tests {
     }
 
     const FRACTIONS: [f32; 3] = [0.25, 0.5, 0.75];
+
+    #[test]
+    fn glyph_sprites_are_top_left_pivoted_sprites() {
+        let mut ctx = Ctx::new(1.0 / 60.0, vec2(320.0, 240.0));
+        ctx.gfx.stand_in_textures();
+        ctx.set_scale_factor(1.5);
+        ctx.gfx
+            .draw_text_ex("Glyphs", vec2(10.3, 20.6), TextParams::default().with_size(16.0));
+        let (sprites, _) = ctx.gfx.ui_list.finish();
+        assert!(sprites.len() >= 5, "{} glyphs", sprites.len());
+        for s in sprites {
+            let made = crate::render::batch::SpriteInstance::new(s.pos, s.size, [0.0, 0.0], 0.0, s.color).with_uv(s.uv);
+            assert_eq!(*s, made, "as SpriteInstance::new makes it");
+        }
+    }
 
     #[test]
     fn glyphs_land_on_whole_physical_pixels_at_fractional_positions() {

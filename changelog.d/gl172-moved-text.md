@@ -6,7 +6,11 @@
   row lays out only the item that came into view. The tooltip measures and
   lays out its text once while it shows, not each frame it follows the
   pointer, and an item dragged with the pointer lays out its text once.
-  What is drawn is unchanged. NUMBERS
+  What is drawn is unchanged. In `ponko_bench` (medians of seven
+  interleaved runs on a very busy machine), a frame of the settings screen
+  with its list scrolling went from 0.072–0.076 ms to 0.026–0.028 ms; the
+  other `ui/draw-...` frames, the tooltip one included, are unchanged
+  within the noise (about 1 µs).
 - `ponko_bench` has `ui/draw-scroll` (the settings screen's list of 40
   actions scrolling a fraction of a pixel a frame) and `ui/draw-tooltip`
   (its tooltip following the pointer).

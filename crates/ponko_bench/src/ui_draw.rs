@@ -116,6 +116,9 @@ pub fn run(b: &mut Bench) {
                     times.push(took);
                 }
             }
+            if change == Change::Tooltip {
+                assert!(ctx.ui.shown_tooltip().is_some(), "the tooltip shows while timed");
+            }
             ctx.world.insert_resource(Times(times));
         });
         let mut times = world.remove_resource::<Times>().expect("the times").0;
