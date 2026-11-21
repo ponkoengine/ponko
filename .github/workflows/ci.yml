@@ -674,10 +674,14 @@ jobs:
           cargo test -p ponko --no-fail-fast --features 3d,system-fonts --test text_shaping
           cargo test -p ponko --no-fail-fast --features 3d,system-fonts --lib text
       # The editor as an app: documents, undo, saving scenes and prefabs,
-      # cooking and play mode, all without a window.
+      # cooking and play mode, all without a window; then its panels (the
+      # inspector's modules with the editor on: file picker, path field,
+      # keys after a dialog, asset panel).
       - name: Tests, editor
         if: ${{ !cancelled() }}
-        run: cargo test -p ponko --no-fail-fast --features editor --lib editor
+        run: |
+          cargo test -p ponko --no-fail-fast --features editor --lib editor
+          cargo test -p ponko --no-fail-fast --features editor --lib inspector
       # `.aseprite` source files loaded without an export beside them.
       - name: Tests, aseprite-source
         if: ${{ !cancelled() }}
@@ -1172,6 +1176,11 @@ jobs:
       # Shaping works in the browser; system fonts build and report that the
       # web has none.
       - run: cargo check -p ponko --target wasm32-unknown-unknown --features system-fonts
+      # The editor in the browser: Open and Save as ask for a path in a
+      # field (no system dialog), and model thumbnails stay the software
+      # ones (no offscreen readback or disk cache there).
+      - run: cargo clippy -p ponko --target wasm32-unknown-unknown --features editor -- -D warnings
+      - run: cargo clippy -p ponko --target wasm32-unknown-unknown --features editor,3d -- -D warnings
       - name: Find the wasm-bindgen version in Cargo.lock
         run: echo "WASM_BINDGEN=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print }' Cargo.lock)" >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@v2

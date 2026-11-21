@@ -27,7 +27,9 @@ pub(crate) mod play;
 #[cfg(feature = "editor")]
 #[path = "editor_prefab.rs"]
 pub(crate) mod prefab;
-#[cfg(all(feature = "editor", feature = "3d"))]
+// The web build keeps the software thumbnails: it has no blocking GPU
+// readback to capture a frame with, and no cache folder to keep it in.
+#[cfg(all(feature = "editor", feature = "3d", not(target_arch = "wasm32")))]
 #[path = "editor_thumb_studio.rs"]
 pub(crate) mod thumb_studio;
 #[cfg(feature = "editor")]
