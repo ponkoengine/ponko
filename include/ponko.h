@@ -4424,6 +4424,20 @@ enum PonkoStatus ponko_ai_brain_wake(struct PonkoAiBrain *brain);
 
 enum PonkoStatus ponko_ai_brain_signal(struct PonkoAiBrain *brain, uint64_t key);
 
+enum PonkoStatus ponko_ai_brain_signal_num(struct PonkoAiBrain *brain, uint64_t key, float value);
+
+enum PonkoStatus ponko_ai_brain_signal_entity(struct PonkoAiBrain *brain,
+                                              uint64_t key,
+                                              uint64_t value);
+
+enum PonkoStatus ponko_ai_brain_signal_vec2(struct PonkoAiBrain *brain,
+                                            uint64_t key,
+                                            struct PonkoVec2 value);
+
+enum PonkoStatus ponko_ai_brain_signal_vec3(struct PonkoAiBrain *brain,
+                                            uint64_t key,
+                                            struct PonkoVec3 value);
+
 enum PonkoStatus ponko_ai_blackboard_set_num(struct PonkoAiBlackboard *board,
                                              uint64_t key,
                                              float value);
@@ -8588,6 +8602,14 @@ enum PonkoStatus ponko_ctx_ui_inside_safe_area(struct PonkoCtx *ctx,
                                                uint64_t id,
                                                bool *out_on);
 
+enum PonkoStatus ponko_ctx_ui_set_safe_area(struct PonkoCtx *ctx,
+                                            uint64_t target,
+                                            const struct PonkoRect *area);
+
+enum PonkoStatus ponko_ctx_ui_safe_area(struct PonkoCtx *ctx,
+                                        uint64_t target,
+                                        struct PonkoRect *out_area);
+
 enum PonkoStatus ponko_ctx_ui_show_hud(struct PonkoCtx *ctx, uint64_t target, uint64_t root);
 
 enum PonkoStatus ponko_ctx_ui_hide_hud(struct PonkoCtx *ctx, uint64_t target, uint64_t root);
@@ -10365,6 +10387,10 @@ enum PonkoStatus ponko_ctx_water_touch(struct PonkoCtx *ctx,
                                        struct PonkoVec2 at,
                                        float radius,
                                        float strength);
+
+enum PonkoStatus ponko_ctx_water_waiting_contacts(struct PonkoCtx *ctx,
+                                                  uint64_t entity,
+                                                  uint32_t *out_count);
 
 enum PonkoStatus ponko_ctx_set_buoyancy_box(struct PonkoCtx *ctx,
                                             uint64_t entity,

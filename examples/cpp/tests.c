@@ -3764,6 +3764,170 @@ static void lossy_loopback_and_brain_rows(void) {
     CHECK(ponko_net_messages_loopback_link(2, &link, e) == PONKO_INVALID_ARGUMENT);
 }
 
+/* gl#202: brain rows signalled with a value, a water body's waiting ripples, a UI's own safe area. */
+typedef struct {
+    uint32_t ids[2];
+    uint64_t shout, heard, react, guards[5];
+    int checked;
+} Voices;
+
+static void voice_rows(const PonkoChunk* chunk, void* user) {
+    const Voices* v = user;
+    for (size_t i = 0; i < chunk->count; ++i) {
+        size_t at = 0;
+        while (v->guards[at] != (uint64_t)chunk->entities[i].index) ++at;
+        PonkoAiBrain* b = ponko_chunk_ai_brain(chunk, 0, i);
+        switch (at) {
+        case 0: CHECK(ponko_ai_brain_signal_num(b, v->shout, 7.5f) == PONKO_OK); break;
+        case 1: CHECK(ponko_ai_brain_signal_entity(b, v->shout, 42) == PONKO_OK); break;
+        case 2: CHECK(ponko_ai_brain_signal_vec2(b, v->shout, (PonkoVec2){1, -2}) == PONKO_OK); break;
+        case 3: CHECK(ponko_ai_brain_signal_vec3(b, v->shout, (PonkoVec3){3, 4, 5}) == PONKO_OK); break;
+        default: CHECK(ponko_ai_brain_signal(b, v->shout) == PONKO_OK); break; /* nothing to store */
+        }
+    }
+}
+
+static void voice_hear_rows(const PonkoChunk* chunk, void* user) {
+    Voices* v = user;
+    for (size_t i = 0; i < chunk->count; ++i) {
+        size_t at = 0;
+        while (v->guards[at] != (uint64_t)chunk->entities[i].index) ++at;
+        PonkoAiBlackboard* board = ponko_chunk_ai_blackboard(chunk, 1, i);
+        uint64_t action = 1, e = 0;
+        float n = 0;
+        PonkoVec2 p2 = {0};
+        PonkoVec3 p3 = {0};
+        CHECK(ponko_ai_brain_action(ponko_chunk_ai_brain(chunk, 0, i), 0, &action) == PONKO_OK && action == v->react);
+        CHECK((ponko_ai_blackboard_num(board, v->heard, &n) == PONKO_OK) == (at == 0));
+        CHECK((ponko_ai_blackboard_entity(board, v->heard, &e) == PONKO_OK) == (at == 1));
+        CHECK((ponko_ai_blackboard_vec2(board, v->heard, &p2) == PONKO_OK) == (at == 2));
+        CHECK((ponko_ai_blackboard_vec3(board, v->heard, &p3) == PONKO_OK) == (at == 3));
+        if (at == 0) CHECK(n == 7.5f);
+        if (at == 1) CHECK(e == 42);
+        if (at == 2) CHECK(p2.x == 1 && p2.y == -2);
+        if (at == 3) CHECK(p3.x == 3 && p3.y == 4 && p3.z == 5);
+        ++v->checked;
+    }
+}
+
+static void voice_system(PonkoCtx* ctx, void* user) {
+    Voices* v = user;
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    if (ponko_ctx_sim_tick(ctx) == 1) CHECK(ponko_query_par(w, v->ids, 2, voice_rows, v) == PONKO_OK);
+    if (ponko_ctx_sim_tick(ctx) == 2) CHECK(ponko_query(w, v->ids, 2, voice_hear_rows, v) == PONKO_OK);
+}
+
+static void voice_setup(PonkoCtx* ctx, void* user) {
+    Voices* v = user;
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    CHECK(ponko_ai_brain_component(w, &v->ids[0]) == PONKO_OK);
+    CHECK(ponko_ai_blackboard_component(w, &v->ids[1]) == PONKO_OK);
+    PonkoBehaviorTree* tree = ponko_behavior_tree_new(
+        "{\"root\": {\"sequence\": [{\"wait_for\": \"shout\", \"store\": \"heard\"}, {\"do\": \"react\"}]}}");
+    CHECK(tree && ponko_ctx_ai_add_tree(ctx, "listener", tree) == PONKO_OK);
+    ponko_behavior_tree_free(tree);
+    for (int i = 0; i < 5; ++i) {
+        uint64_t e = 0;
+        CHECK(ponko_spawn(w, NULL, 0, &e) == PONKO_OK);
+        CHECK(ponko_ctx_ai_add_brain(ctx, e, "listener", 1000000) == PONKO_OK);
+        v->guards[i] = (uint64_t)(uint32_t)e; /* the entity's index (generation 0) */
+    }
+}
+
+typedef struct { Cars cars; uint64_t lake; bool ripples; uint32_t most_waiting; } Splash;
+static void splash_setup(PonkoCtx* ctx, void* user) {
+    Splash* s = user;
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    ids(w, &s->cars);
+    PonkoWaterDesc lake = {.struct_size = sizeof lake, .version = PONKO_WATER_DESC_VERSION};
+    CHECK(ponko_water_desc_lake(&lake, (PonkoVec2){0, 0}, (PonkoVec2){20, 20}, 0) == PONKO_OK);
+    CHECK(ponko_ctx_spawn_water(ctx, &lake, &s->lake) == PONKO_OK);
+    PonkoTransform3D at = ponko_transform3d_at((PonkoVec3){1, 1.5f, 0});
+    PonkoRigidBody3D body = ponko_rigid_body3d(PONKO_BODY_DYNAMIC);
+    PonkoCollider3D box = ponko_collider3d_box((PonkoVec3){0.8f, 0.8f, 0.8f});
+    box.density = 500;
+    PonkoValue values[] = {{s->cars.transform, &at, sizeof at}, {s->cars.body, &body, sizeof body},
+                           {s->cars.collider, &box, sizeof box}};
+    uint64_t e;
+    CHECK(ponko_spawn(w, values, 3, &e) == PONKO_OK);
+    PonkoBuoyancyDesc d = {.struct_size = sizeof d, .version = PONKO_BUOYANCY_DESC_VERSION};
+    CHECK(ponko_buoyancy_desc_box(&d, (PonkoVec3){0.8f, 0.8f, 0.8f}) == PONKO_OK);
+    d.ripples = s->ripples;
+    CHECK(ponko_ctx_set_buoyancy(ctx, e, &d) == PONKO_OK);
+}
+static void splash_watch(PonkoCtx* ctx, void* user) {
+    Splash* s = user;
+    uint32_t n = UINT32_MAX;
+    CHECK(ponko_ctx_water_waiting_contacts(ctx, s->lake, &n) == PONKO_OK);
+    if (n > s->most_waiting) s->most_waiting = n;
+}
+static uint32_t splashed(bool ripples) {
+    Splash s = {0};
+    s.ripples = ripples;
+    PonkoGame* game = ponko_game_new("splash", 1, 1);
+    CHECK(ponko_game_physics3d(game, (PonkoVec3){0, -9.81f, 0}) == PONKO_OK && ponko_game_water(game) == PONKO_OK);
+    CHECK(ponko_game_sim_system(game, "watch", 1, splash_watch, &s) == PONKO_OK);
+    PonkoWorld* w = NULL;
+    CHECK(ponko_game_run_headless(game, 100, splash_setup, &s, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    return s.most_waiting;
+}
+
+static void panel_area_setup(PonkoCtx* ctx, void* user) {
+    (void)user;
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    uint32_t transform;
+    CHECK(ponko_transform3d_component(w, &transform) == PONKO_OK);
+    PonkoTransform3D at = ponko_transform3d_at((PonkoVec3){0, 0, -3});
+    PonkoValue value = {transform, &at, sizeof at};
+    uint64_t panel;
+    CHECK(ponko_spawn(w, &value, 1, &panel) == PONKO_OK);
+    CHECK(ponko_ctx_create_ui_panel(ctx, panel, 200, 100, (PonkoVec2){2, 1}, NULL) == PONKO_OK);
+    PonkoUiLayout fill = ponko_ui_layout_fill();
+    uint64_t inside, outside;
+    CHECK(ponko_ctx_ui_add_panel(ctx, panel, PONKO_UI_NONE, &fill, &inside) == PONKO_OK);
+    CHECK(ponko_ctx_ui_add_panel(ctx, panel, PONKO_UI_NONE, &fill, &outside) == PONKO_OK);
+    CHECK(ponko_ctx_ui_set_inside_safe_area(ctx, panel, inside, true) == PONKO_OK);
+    CHECK(ponko_ctx_ui_show_hud(ctx, panel, inside) == PONKO_OK && ponko_ctx_ui_show_hud(ctx, panel, outside) == PONKO_OK);
+    PonkoRect area = {{10, 5}, {190, 95}}, got, r;
+    CHECK(ponko_ctx_ui_safe_area(ctx, panel, &got) == PONKO_NOT_FOUND); /* none yet */
+    CHECK(ponko_ctx_ui_set_safe_area(ctx, panel, &area) == PONKO_OK);
+    CHECK(ponko_ctx_ui_safe_area(ctx, panel, &got) == PONKO_OK && rect_is(got, 10, 5, 190, 95));
+    CHECK(ponko_ctx_ui_layout(ctx, panel, (PonkoVec2){200, 100}) == PONKO_OK);
+    CHECK(ponko_ctx_ui_rect(ctx, panel, inside, &r) == PONKO_OK && rect_is(r, 10, 5, 190, 95));
+    CHECK(ponko_ctx_ui_rect(ctx, panel, outside, &r) == PONKO_OK && rect_is(r, 0, 0, 200, 100));
+    CHECK(ponko_ctx_ui_safe_area(ctx, PONKO_UI_SCREEN, &got) == PONKO_NOT_FOUND); /* the screen's UI is its own */
+    CHECK(ponko_ctx_ui_set_safe_area(ctx, panel, NULL) == PONKO_OK);
+    CHECK(ponko_ctx_ui_safe_area(ctx, panel, &got) == PONKO_NOT_FOUND);
+    CHECK(ponko_ctx_ui_layout(ctx, panel, (PonkoVec2){200, 100}) == PONKO_OK);
+    CHECK(ponko_ctx_ui_rect(ctx, panel, inside, &r) == PONKO_OK && rect_is(r, 0, 0, 200, 100));
+    CHECK(ponko_ctx_ui_safe_area(ctx, panel, NULL) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_ui_safe_area(NULL, panel, &got) == PONKO_INVALID_ARGUMENT);
+}
+
+static void brain_values_ripples_and_ui_area(void) {
+    Voices v = {{0, 0}, ai_key_of("shout"), ai_key_of("heard"), ai_key_of("react"), {0}, 0};
+    PonkoGame* game = ponko_game_new("voices", 1, 1);
+    CHECK(ponko_game_sim_system(game, "voices", 1, voice_system, &v) == PONKO_OK);
+    CHECK(ponko_game_sim_system(game, "think", 1, brain_think, &v) == PONKO_OK);
+    PonkoWorld* w = NULL;
+    CHECK(ponko_game_run_headless(game, 3, voice_setup, &v, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    CHECK(v.checked == 5);
+    CHECK(ponko_ai_brain_signal_num(NULL, v.shout, 1) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ai_brain_signal_entity(NULL, v.shout, 1) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ai_brain_signal_vec2(NULL, v.shout, (PonkoVec2){0, 0}) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ai_brain_signal_vec3(NULL, v.shout, (PonkoVec3){0, 0, 0}) == PONKO_INVALID_ARGUMENT);
+
+    /* A body falling in starts ripples with its switch on, none with it off. */
+    CHECK(splashed(true) > 0);
+    CHECK(splashed(false) == 0);
+
+    game = ponko_game_new("panel area", 1, 1);
+    CHECK(ponko_game_run_headless(game, 0, panel_area_setup, NULL, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+}
+
 int main(void) {
     states();
     change_detection();
@@ -3874,5 +4038,6 @@ int main(void) {
     world_brains_in_loops();
     native_parity_round5();
     lossy_loopback_and_brain_rows();
+    brain_values_ripples_and_ui_area();
     return 0;
 }
