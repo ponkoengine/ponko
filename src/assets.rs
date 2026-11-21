@@ -1687,6 +1687,31 @@ impl Assets {
         Vec::new()
     }
 
+    /// Whether the browser keeps the editor's saves (see
+    /// [`browser_saves`](Self::browser_saves)) when it runs low on space:
+    /// in web builds with the `editor` feature the page asks for persistent
+    /// storage before setup. `Some(true)` when the browser granted it,
+    /// `Some(false)` when it refused (the saves may be cleared; the editor
+    /// says so), `None` until it answers, and always in other builds.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.assets.browser_saves_persistent(), None); // no browser
+    /// });
+    /// ```
+    #[must_use]
+    pub fn browser_saves_persistent(&self) -> Option<bool> {
+        #[cfg(feature = "editor")]
+        return match crate::editor::web::persistence() {
+            crate::editor::web::Persistence::Unknown => None,
+            crate::editor::web::Persistence::Granted => Some(true),
+            crate::editor::web::Persistence::Refused => Some(false),
+        };
+        #[cfg(not(feature = "editor"))]
+        None
+    }
+
     /// Drops the copy of `path` saved in this browser (see
     /// [`browser_saves`](Self::browser_saves)): from now on, and after the
     /// page is loaded again, `path` is the build's own file, or no file if

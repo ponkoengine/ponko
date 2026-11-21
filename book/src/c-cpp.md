@@ -501,6 +501,7 @@ binding arrives:
 | `Signaling` | [Peer to peer over WebRTC](webrtc.md#with-any-signaling-channel) | C and C++ WebRTC endpoints are signaled through a lobby client (`ponko_net_messages_rtc_host`, `_rtc_join`) |
 | `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ games don't build for the web yet |
 | `Assets::browser_saves`, `Assets::revert_browser_save` | [Saving in a browser](editor.md#saving-in-a-browser) | C and C++ games don't build for the web yet, so they keep no files in a browser |
+| `Assets::browser_saves`, `Assets::revert_browser_save`, `Assets::browser_saves_persistent` | [Saving in a browser](editor.md#saving-in-a-browser) | C and C++ games don't build for the web yet, so they keep no files in a browser |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |

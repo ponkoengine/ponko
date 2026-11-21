@@ -36,7 +36,7 @@ export const USAGE =
   "                 [--allow-unsupported]\n" +
   "                 [--asset <file under assets/>] [--asset-size <W>x<H>|none]\n" +
   "                 [--press <Key>=<field>:<value>]... [--min <field>=<number>]...\n" +
-  "                 [--after-reload <field>:<value>]...\n" +
+  "                 [--after-reload <field>:<value>]... [--reload [--after-reload <field>:<value>]...]...\n" +
   "                 [--engine-gpu required|optional] [--music required|none]\n" +
   "                 [--no-trace] [--chrome-trace]\n" +
   "                 [--chromium-mode shell|new] [--browser-arg <flag>]...";
@@ -62,7 +62,35 @@ export function parseMin(spec) {
   return { field: match[1], min: Number(match[2]) };
 }
 
-const FIXTURE_KEYS = ["example", "features", "asset", "assetSize", "assetSource", "presses", "min", "afterReload", "engineGpu", "music"];
+const FIXTURE_KEYS = ["example", "features", "asset", "assetSize", "assetSource", "presses", "min", "afterReload", "reloads", "engineGpu", "music"];
+
+/**
+ * A fixture's reload steps: each one reloads the page, and the new page must
+ * report its fields. `reloads` lists several (`[["kept:Loaded"], ["shipped:Back"]]`,
+ * each page load its own); `afterReload` is the one-step form.
+ */
+export function reloadStepsOf(fixture) {
+  if (fixture?.reloads && fixture?.afterReload) {
+    throw new UsageError("give a fixture either \"afterReload\" (one reload) or \"reloads\" (several), not both");
+  }
+  if (fixture?.reloads) {
+    if (!Array.isArray(fixture.reloads) || !fixture.reloads.every(Array.isArray)) {
+      throw new UsageError('"reloads" is a list of steps, each a list of "<field>:<value>"');
+    }
+    return fixture.reloads.map((step) => step.map(parseExpect));
+  }
+  return fixture?.afterReload ? [fixture.afterReload.map(parseExpect)] : [];
+}
+
+/** Why the page loaded by reload step `step` (from 1) doesn't report `expects`, or null when it does. */
+export function checkAfterReload(state, expects, step) {
+  for (const { field, value } of expects) {
+    if (String(state?.[field]) !== value) {
+      return `after reload ${step}, ${field} is ${JSON.stringify(state?.[field])}, not ${value}`;
+    }
+  }
+  return null;
+}
 
 /** Parses fixtures.json: what each example needs from the runner. */
 export function parseFixtures(text) {
@@ -73,7 +101,7 @@ export function parseFixtures(text) {
     }
     if (typeof fixture.example !== "string") throw new UsageError(`fixtures.json: ${name} needs an "example"`);
     if (fixture.presses) fixture.presses.forEach(parsePress);
-    if (fixture.afterReload) fixture.afterReload.forEach(parseExpect);
+    reloadStepsOf(fixture);
   }
   return fixtures;
 }
@@ -93,7 +121,7 @@ export function parseArgs(argv, fixtures = {}) {
     build: false,
     presses: [],
     mins: [],
-    afterReload: [],
+    reloads: [],
   };
   const given = {};
   for (let i = 0; i < argv.length; i++) {
@@ -121,7 +149,15 @@ export function parseArgs(argv, fixtures = {}) {
       case "--music": given.music = value(); break;
       case "--press": (given.presses ??= []).push(parsePress(value())); break;
       case "--min": (given.mins ??= []).push(parseMin(value())); break;
-      case "--after-reload": (given.afterReload ??= []).push(parseExpect(value())); break;
+      // Each --reload adds a reload step; --after-reload adds a field to the
+      // last step (making the first one if there is none yet).
+      case "--reload": (given.reloads ??= []).push([]); break;
+      case "--after-reload": {
+        given.reloads ??= [];
+        if (!given.reloads.length) given.reloads.push([]);
+        given.reloads.at(-1).push(parseExpect(value()));
+        break;
+      }
       default: fail(`unknown argument ${flag}`);
     }
   }
@@ -136,7 +172,7 @@ export function parseArgs(argv, fixtures = {}) {
   args.assetSize = given.assetSize ?? (fixture ? fixture.assetSize ?? "none" : "32x32");
   args.assetSource = given.assetSource ?? (fixture ? fixture.assetSource ?? "none" : "4x2");
   args.presses = given.presses ?? (fixture?.presses ?? []).map(parsePress);
-  args.afterReload = given.afterReload ?? (fixture?.afterReload ?? []).map(parseExpect);
+  args.reloads = given.reloads ?? reloadStepsOf(fixture);
   args.mins = given.mins ?? Object.entries(fixture?.min ?? {}).map(([field, min]) => ({ field, min }));
   args.engineGpu = given.engineGpu ?? (fixture?.engineGpu ? "required" : "optional");
   args.music = given.music ?? (fixture?.music ? "required" : "none");

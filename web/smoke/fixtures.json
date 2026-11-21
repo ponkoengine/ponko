@@ -34,8 +34,11 @@
     "features": ["editor"],
     "asset": "crab.png",
     "assetSize": "32x32",
-    "min": { "read_back": 1, "listed": 2, "reverted": 1 },
-    "afterReload": ["kept:Loaded", "shipped:Back"],
+    "min": { "read_back": 1, "listed": 2 },
+    "reloads": [
+      ["found:Saved", "kept:Loaded", "reverted:1", "shipped:Build"],
+      ["found:Build", "kept:Loaded", "reverted:0", "shipped:Build"]
+    ],
     "engineGpu": true
   },
   "lights2d": {
