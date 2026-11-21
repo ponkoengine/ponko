@@ -246,3 +246,62 @@ fn loose_aseprite_edits_refresh_live_playback_without_an_export() {
     assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1);
     std::fs::remove_dir_all(folder).unwrap();
 }
+
+/// A loose `.aseprite` file whose tileset links to another file reads it
+/// through the asset sources, and an edit of that file reloads the map.
+#[cfg(all(feature = "aseprite-source", not(target_arch = "wasm32")))]
+#[test]
+fn a_loose_aseprite_files_linked_tileset_loads_and_its_edits_reload_the_file() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    let folder = std::env::temp_dir().join(format!("ponko-aseprite-linked-{}", std::process::id()));
+    std::fs::create_dir_all(folder.join("tiles")).unwrap();
+    let map = folder.join("map.aseprite");
+    let tiles = folder.join("tiles/ground.aseprite");
+    std::fs::write(&map, include_bytes!("fixtures/aseprite-linked/map.aseprite")).unwrap();
+    let source = include_bytes!("fixtures/aseprite-linked/tiles/ground.aseprite");
+    std::fs::write(&tiles, source).unwrap();
+    let map_path = map.to_str().unwrap().to_owned();
+    let reload_path = map_path.clone();
+    let atlas = Arc::new(Mutex::new(None::<ponko::aseprite::Aseprite>));
+    let running = atlas.clone();
+    let reloaded = Arc::new(AtomicBool::new(false));
+    let observed = reloaded.clone();
+    let mut deadline = None;
+    Game::new("aseprite linked", 1, 1)
+        .hot_reload(true)
+        .sim_system(move |ctx: &mut Ctx| {
+            if deadline.is_none() {
+                // Another valid file of another size (so coarse filesystem
+                // stamps can't hide the edit): one more, empty frame.
+                let mut edited = source.to_vec();
+                edited.extend_from_slice(&16u32.to_le_bytes());
+                edited.extend_from_slice(&0xf1fau16.to_le_bytes());
+                edited.extend_from_slice(&[0; 10]);
+                let size = edited.len() as u32;
+                edited[..4].copy_from_slice(&size.to_le_bytes());
+                edited[6..8].copy_from_slice(&2u16.to_le_bytes());
+                std::fs::write(&tiles, edited).unwrap();
+                deadline = Some(Instant::now() + Duration::from_secs(3));
+            } else if ctx.assets.reloaded_files().contains(&reload_path) {
+                observed.store(true, Ordering::Relaxed);
+            }
+            if !observed.load(Ordering::Relaxed) {
+                assert!(
+                    Instant::now() < deadline.unwrap(),
+                    "the linked tileset's edit was not reloaded"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(running.lock().unwrap().is_some());
+        })
+        .run_headless(160, |ctx| {
+            let loaded = ctx.gfx.try_load_aseprite(&map_path, false).unwrap();
+            assert_eq!(loaded.frame_count(), 1);
+            *atlas.lock().unwrap() = Some(loaded);
+        });
+    assert!(reloaded.load(Ordering::Relaxed));
+    std::fs::remove_dir_all(folder).unwrap();
+}

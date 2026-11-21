@@ -739,6 +739,36 @@ fn aseprite_conversion_is_cached_by_source_content_and_split_mode() {
     std::fs::remove_dir_all(cache).unwrap();
 }
 
+#[cfg(feature = "aseprite")]
+#[test]
+fn a_linked_tileset_is_read_from_the_assets_and_its_edits_cook_the_map_again() {
+    use super::aseprite::tests::{linked_map, tileset_file};
+    let cache = temp("aseprite-linked");
+    let settings = settings(Some(cache.clone()));
+    // The tileset's own file is left out of the cooked files.
+    let config = Config::parse(r#"{"assets":{"art/tiles/ground.aseprite":"skip"}}"#).unwrap();
+    let run = |color: [u8; 4]| {
+        let files = vec![
+            ("art/map.aseprite".into(), linked_map("tiles/ground.aseprite", 3, 2)),
+            ("art/tiles/ground.aseprite".into(), tileset_file(3, color)),
+        ];
+        cook_files(files, &config, &settings).unwrap()
+    };
+    let corner = |cooked: &Cooked| {
+        let png = file(cooked, "art/map.png");
+        image::load_from_memory(png).unwrap().into_rgba8().get_pixel(3, 1).0
+    };
+    let first = run([0, 255, 0, 255]);
+    let names: Vec<&str> = first.files.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["art/map.json", "art/map.png"], "{}", first.report());
+    assert_eq!(corner(&first), [0, 255, 0, 255]);
+    assert_eq!(run([0, 255, 0, 255]).counts(), (0, 1), "nothing changed");
+    let edited = run([0, 0, 255, 255]);
+    assert_eq!(edited.counts(), (1, 0), "{}", edited.report());
+    assert_eq!(corner(&edited), [0, 0, 255, 255]);
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
 #[cfg(all(feature = "meshes", feature = "textures"))]
 #[test]
 fn image_only_cooking_keeps_external_geometry_buffers_through_cache_hits() {
