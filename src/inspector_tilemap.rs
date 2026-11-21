@@ -504,7 +504,7 @@ fn palette(ui: &mut Ui, ctx: &Ctx, state: &mut TilemapState, sheet: &Sheet) {
     }
     let Some((_, texture)) = &state.palette else { return };
     let [iw, ih] = texture.size().map(|n| n as f32);
-    let scale = (240.0 / iw).min(2.0).max(0.25);
+    let scale = (240.0 / iw).clamp(0.25, 2.0);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(iw * scale, ih * scale), Sense::click());
     ui.data_mut(|d| d.insert_temp(palette_id(), rect));
     let painter = ui.painter_at(rect);

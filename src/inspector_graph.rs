@@ -367,16 +367,15 @@ fn canvas(ui: &mut Ui, g: &mut GraphState, f: &mut Value) {
     };
     let press = ui.input(|i| i.pointer.press_origin());
     let (secondary, primary) = ui.input(|i| (i.pointer.secondary_down(), i.pointer.primary_down()));
-    if response.drag_started() {
-        if let Some(p) = press
-            && let Some(n) = node_at(p)
-        {
-            if secondary {
-                g.linking = Some(n);
-            } else {
-                g.selected = (n != ANY).then(|| Selected::State(n.clone()));
-                ui.data_mut(|d| d.insert_temp(canvas_id().with("drag"), n));
-            }
+    if response.drag_started()
+        && let Some(p) = press
+        && let Some(n) = node_at(p)
+    {
+        if secondary {
+            g.linking = Some(n);
+        } else {
+            g.selected = (n != ANY).then(|| Selected::State(n.clone()));
+            ui.data_mut(|d| d.insert_temp(canvas_id().with("drag"), n));
         }
     }
     if response.dragged()

@@ -129,42 +129,49 @@ pub(crate) fn settings_from_json(world: &World, value: Value) -> Result<Particle
         None => None,
     };
     let count = |n: u64, what: &str| usize::try_from(n).map_err(|_| format!("particle {what} is too large"));
-    let mut s = ParticleSettings3D::default();
-    s.rate = j.rate;
-    s.burst = count(j.burst, "burst")?;
-    s.duration = j.duration;
-    s.looping = j.looping;
-    s.lifetime = j.lifetime;
-    s.speed = j.speed;
-    s.shape = match j.shape {
-        ShapeJson::Point => ParticleShape3D::Point,
-        ShapeJson::Sphere { radius } => ParticleShape3D::Sphere { radius },
-        ShapeJson::Cone { angle } => ParticleShape3D::Cone { angle },
-        ShapeJson::Box { half_extents } => ParticleShape3D::Box { half_extents },
+    let defaults = ParticleSettings3D::default();
+    let s = ParticleSettings3D {
+        rate: j.rate,
+        burst: count(j.burst, "burst")?,
+        duration: j.duration,
+        looping: j.looping,
+        lifetime: j.lifetime,
+        speed: j.speed,
+        shape: match j.shape {
+            ShapeJson::Point => ParticleShape3D::Point,
+            ShapeJson::Sphere { radius } => ParticleShape3D::Sphere { radius },
+            ShapeJson::Cone { angle } => ParticleShape3D::Cone { angle },
+            ShapeJson::Box { half_extents } => ParticleShape3D::Box { half_extents },
+        },
+        gravity: j.gravity,
+        drag: j.drag,
+        size: j.size,
+        rotation: j.rotation,
+        size_over_life: if j.size_over_life.is_empty() {
+            defaults.size_over_life
+        } else {
+            ParticleCurve::try_new(j.size_over_life)?
+        },
+        color_over_life: if j.color_over_life.is_empty() {
+            defaults.color_over_life
+        } else {
+            ParticleGradient::try_new(j.color_over_life)?
+        },
+        texture,
+        sheet: j.sheet,
+        blend: match j.blend {
+            BlendJson::Alpha => ParticleBlend3D::Alpha,
+            BlendJson::Additive => ParticleBlend3D::Additive,
+        },
+        max_particles: count(j.max_particles, "max_particles")?,
+        space: match j.space {
+            SpaceJson::World => ParticleSpace::World,
+            SpaceJson::Local => ParticleSpace::Local,
+        },
+        seed: j.seed,
+        softness: j.softness,
+        ..defaults
     };
-    s.gravity = j.gravity;
-    s.drag = j.drag;
-    s.size = j.size;
-    s.rotation = j.rotation;
-    if !j.size_over_life.is_empty() {
-        s.size_over_life = ParticleCurve::try_new(j.size_over_life)?;
-    }
-    if !j.color_over_life.is_empty() {
-        s.color_over_life = ParticleGradient::try_new(j.color_over_life)?;
-    }
-    s.texture = texture;
-    s.sheet = j.sheet;
-    s.blend = match j.blend {
-        BlendJson::Alpha => ParticleBlend3D::Alpha,
-        BlendJson::Additive => ParticleBlend3D::Additive,
-    };
-    s.max_particles = count(j.max_particles, "max_particles")?;
-    s.space = match j.space {
-        SpaceJson::World => ParticleSpace::World,
-        SpaceJson::Local => ParticleSpace::Local,
-    };
-    s.seed = j.seed;
-    s.softness = j.softness;
     if s.max_particles > MAX_POOL {
         return Err(format!("particle max_particles is above {MAX_POOL}"));
     }

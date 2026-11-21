@@ -77,8 +77,10 @@ fn unhex(text: &str) -> Vec<u8> {
         _ => 0,
     };
     text.as_bytes()
-        .chunks_exact(2)
-        .map(|p| digit(p[0]) << 4 | digit(p[1]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[hi, lo]| digit(hi) << 4 | digit(lo))
         .collect()
 }
 
@@ -104,8 +106,10 @@ fn from_doc(doc: &Value) -> Result<TerrainData, String> {
     json.check()?;
     let n = doc["_n"].as_u64().unwrap_or(0) as usize;
     let heights: Vec<u16> = unhex(doc["_heights"].as_str().unwrap_or(""))
-        .chunks_exact(2)
-        .map(|p| u16::from_be_bytes([p[0], p[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&p| u16::from_be_bytes(p))
         .collect();
     if n < 2 || heights.len() != n * n {
         return Err("the heights aren't a square grid".into());
