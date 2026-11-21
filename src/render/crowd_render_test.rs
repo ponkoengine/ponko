@@ -846,9 +846,15 @@ fn box_at(lo: Vec3, hi: Vec3) -> Mat4 {
 
 /// Global illumination's closed white room (`gi_render_test`'s red wall
 /// room) whose sunlit west wall is a red crowd character (a skinned cube
-/// stretched over the wall), or a red model with `crowd` false.
-fn red_crowd_room(crowd: bool) -> Option<super::gi_render_test::Rig> {
-    let mut rig = super::gi_render_test::Rig::new(true)?;
+/// stretched over the wall), or a red model with `crowd` false. `cpu`: on
+/// a device with global illumination but too few storage buffers a
+/// shader stage for compute culling, where crowds take the CPU path.
+fn red_crowd_room(crowd: bool, cpu: bool) -> Option<super::gi_render_test::Rig> {
+    let mut rig = if cpu {
+        super::gi_render_test::Rig::with_storage_buffers(3)?
+    } else {
+        super::gi_render_test::Rig::new(true)?
+    };
     let white = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
     let red = MaterialDesc::color(Color::rgb(0.9, 0.04, 0.04));
     let (inner, outer) = (3.5, 3.9);
@@ -893,6 +899,7 @@ fn red_crowd_room(crowd: bool) -> Option<super::gi_render_test::Rig> {
         );
         let data = rig.ctx.gfx.assets3d.crowds[c.id as usize].as_ref();
         rig.renderer.set_crowd(&rig.device, &rig.queue, c.id, data);
+        assert_eq!(rig.renderer.crowd_on_gpu(c.id), Some(!cpu), "the crowd's path");
     } else {
         let mesh = rig.mesh(&MeshData::cube(1.0), red);
         let (scale, _, position) = west.to_scale_rotation_translation();
@@ -929,29 +936,48 @@ fn red_crowd_room(crowd: bool) -> Option<super::gi_render_test::Rig> {
 fn global_illumination_probes_see_crowds_as_they_see_models() {
     // The sunlit red wall a crowd character: the probes see it, so the
     // floor beside it takes red bounce light, as beside a red model wall.
-    let Some(mut models) = red_crowd_room(false) else {
-        return;
-    };
-    let Some(mut crowds) = red_crowd_room(true) else {
-        return;
-    };
-    let (a, b) = (models.draw(80), crowds.draw(80));
-    let near_red = vec3(-3.0, -0.5, -0.8);
-    let far_side = vec3(-0.5, -0.5, -0.8);
-    let sunlit_wall = vec3(-3.5, 1.0, 0.0);
-    let (m, n) = (models.at(&a, near_red), crowds.at(&b, near_red));
-    let (mf, nf) = (models.at(&a, far_side), crowds.at(&b, far_side));
-    eprintln!("floor by the red wall: {m:?} model, {n:?} crowd; further away {mf:?}, {nf:?}");
-    assert!(
-        crowds.at(&b, sunlit_wall)[0] > 150,
-        "the crowd wall is drawn, in the sun"
-    );
-    assert!(n[0] > n[1] + 20, "red bounce light from a crowd wall: {n:?}");
-    for (x, y) in [(m, n), (mf, nf)] {
+    // On the GPU path, and on the CPU path of a device that runs global
+    // illumination without compute culling (a device without compute
+    // shaders has no probes at all).
+    for cpu in [false, true] {
+        let Some(mut models) = red_crowd_room(false, cpu) else {
+            return;
+        };
+        let Some(mut crowds) = red_crowd_room(true, cpu) else {
+            return;
+        };
+        let (a, b) = (models.draw(80), crowds.draw(80));
+        let near_red = vec3(-3.0, -0.5, -0.8);
+        let far_side = vec3(-0.5, -0.5, -0.8);
+        let sunlit_wall = vec3(-3.5, 1.0, 0.0);
+        let (m, n) = (models.at(&a, near_red), crowds.at(&b, near_red));
+        let (mf, nf) = (models.at(&a, far_side), crowds.at(&b, far_side));
+        eprintln!("cpu {cpu}: floor by the red wall: {m:?} model, {n:?} crowd; further away {mf:?}, {nf:?}");
         assert!(
-            (0..3).all(|k| (x[k] - y[k]).abs() <= 12),
-            "a crowd lights the floor as a model does: {x:?} vs {y:?}"
+            crowds.at(&b, sunlit_wall)[0] > 150,
+            "cpu {cpu}: the crowd wall is drawn, in the sun"
         );
+        assert!(n[0] > n[1] + 20, "cpu {cpu}: red bounce light from a crowd wall: {n:?}");
+        for (x, y) in [(m, n), (mf, nf)] {
+            assert!(
+                (0..3).all(|k| (x[k] - y[k]).abs() <= 12),
+                "cpu {cpu}: a crowd lights the floor as a model does: {x:?} vs {y:?}"
+            );
+        }
+        // The light comes from the crowd's character in the probes' own
+        // views (the room's only crowd, number 0), not from the camera's.
+        let _ = crowds.frame(None);
+        let faces = crowds.renderer.crowd_gi_faces();
+        assert!(!faces.is_empty(), "cpu {cpu}: the probes update");
+        let seen: u32 = faces
+            .map(|v| {
+                crowds
+                    .renderer
+                    .crowd_drawn(&crowds.device, &crowds.queue, 0, v)
+                    .unwrap_or(0)
+            })
+            .sum();
+        assert!(seen > 0, "cpu {cpu}: the probes' face views draw the crowd");
     }
 }
 
@@ -1124,8 +1150,8 @@ fn occlusion_culling_keeps_only_characters_whose_clip_rises_above_the_wall() {
 /// probes: per frame, how many its six face directions keep (summed over
 /// `frames` frames). `cpu`: on a device whose crowds take the CPU path
 /// (too few storage buffers for compute culling) and runs global
-/// illumination all the same.
-fn kept_by_the_probe_cut(cpu: bool, frames: usize) -> Option<(u32, u32)> {
+/// illumination all the same. `all_jump`: every character jumps.
+fn kept_by_the_probe_cut(cpu: bool, frames: usize, all_jump: bool) -> Option<(u32, u32)> {
     let mut rig = if cpu {
         super::gi_render_test::Rig::with_storage_buffers(3)?
     } else {
@@ -1163,7 +1189,7 @@ fn kept_by_the_probe_cut(cpu: bool, frames: usize) -> Option<(u32, u32)> {
         for x in -6..=6_i32 {
             let at =
                 Mat4::from_scale_rotation_translation(Vec3::splat(0.2), Quat::IDENTITY, vec3(x as f32, -0.5, z as f32));
-            let clip = u16::from((x + z * 13).rem_euclid(5) == 0);
+            let clip = u16::from(all_jump || (x + z * 13).rem_euclid(5) == 0);
             people.push(CrowdInstance::new(at).playing(clip, 0.0).with_speed(0.0));
         }
     }
@@ -1194,17 +1220,33 @@ fn kept_by_the_probe_cut(cpu: bool, frames: usize) -> Option<(u32, u32)> {
         }
         camera += rig.renderer.crowd_drawn(&rig.device, &rig.queue, c.id, 0).unwrap_or(0);
     }
-    eprintln!("cpu {cpu}: probe faces kept {faces} characters over {frames} frames; the camera {camera}");
+    eprintln!(
+        "cpu {cpu}, all jump {all_jump}: probe faces kept {faces} characters over {frames} frames; the camera {camera}"
+    );
     Some((faces, camera))
 }
 
 #[test]
 fn the_probe_size_cut_keeps_characters_by_their_own_clip() {
+    let mut kept = Vec::new();
     for cpu in [false, true] {
-        let Some((faces, camera)) = kept_by_the_probe_cut(cpu, 8) else {
+        let (Some((mixed, camera)), Some((jumping, _))) = (
+            kept_by_the_probe_cut(cpu, 8, false),
+            kept_by_the_probe_cut(cpu, 8, true),
+        ) else {
             return;
         };
-        assert!(camera > 0 && faces > 0, "{faces} {camera}");
+        assert!(camera > 0 && mixed > 0, "cpu {cpu}: {mixed} {camera}");
+        // Standing characters are smaller than jumping ones: the probes
+        // keep fewer of them (one box for every clip kept as many).
+        assert!(
+            mixed < jumping,
+            "cpu {cpu}: a field of mostly standing characters keeps fewer ({mixed}) than one all jumping ({jumping})"
+        );
+        kept.push((mixed, jumping));
+    }
+    if let [gpu, cpu] = kept[..] {
+        assert_eq!(gpu, cpu, "both paths cut the same characters");
     }
 }
 
