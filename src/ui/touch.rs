@@ -31,6 +31,7 @@
 //! them ([`TouchPlace`]); the player moves and resizes them
 //! ([`Input::edit_touch_controls`](crate::input::Input::edit_touch_controls),
 //! [`TouchLayout`]), and the arrangement is saved with the settings.
+//! [`Ctx::arrange_touch_controls`] opens a ready-made screen for that.
 #![deny(missing_docs)]
 
 mod arrange;

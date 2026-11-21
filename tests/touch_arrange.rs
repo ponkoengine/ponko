@@ -157,6 +157,7 @@ fn saved(dir: &Path) -> Option<TouchLayout> {
     Some(TouchLayout::from_json(&text).unwrap())
 }
 
+// ANCHOR: fingers
 #[test]
 fn fingers_move_and_resize_the_controls_on_the_arrange_screen_and_save_keeps_them() {
     let s = spots((960, 540), 1.0);
@@ -199,6 +200,7 @@ fn fingers_move_and_resize_the_controls_on_the_arrange_screen_and_save_keeps_the
     assert!(log[16].closed, "the game hears it closed, in the frame of the tap");
     let _ = std::fs::remove_dir_all(dir);
 }
+// ANCHOR_END: fingers
 
 #[test]
 fn the_mouse_moves_and_resizes_the_controls_and_cancel_puts_them_back() {
