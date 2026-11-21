@@ -45,6 +45,7 @@ import { CALL_TIMEOUT_MS, EXIT, UsageError, launchConfig, launchFailureKind, sta
 import { LAUNCHERS, serve } from "./smoke.mjs";
 import {
   FALLBACK_WARNING,
+  FIXTURE_FEATURES,
   GAMEPAD_STEPS,
   ISOLATION_HEADERS,
   RUMBLE_PRESS,
@@ -311,7 +312,7 @@ async function main() {
   // With -D warnings: a warning in the threaded build fails the check.
   const buildEnv = denyWarnings(process.env);
   // The ordinary build (no --threads) of the same fixture, for gamepads-plain.
-  const buildArgs = args.case === "gamepads-plain" ? ["web/build.sh", "web_threads", args.dir] : ["web/build.sh", "--threads", "web_threads"];
+  const buildArgs = args.case === "gamepads-plain" ? ["web/build.sh", "web_threads", args.dir] : ["web/build.sh", "--threads", "--features", FIXTURE_FEATURES, "web_threads"];
   if (args.build && spawnSync("bash", buildArgs, { stdio: "inherit", env: buildEnv }).status !== 0) {
     process.exit(EXIT.usage);
   }
@@ -321,7 +322,7 @@ async function main() {
   const needed = args.mode === "bench" || args.case === "gamepads-plain" ? ["index.html"] : ["index.html", "ponko-worker.js"];
   for (const file of needed) {
     if (!(await stat(join(root, file)).catch(() => null))) {
-      console.error(`${join(root, file)} is missing: pass --build, or build it with web/build.sh --threads web_threads`);
+      console.error(`${join(root, file)} is missing: pass --build, or build it with web/build.sh --threads --features ${FIXTURE_FEATURES} web_threads`);
       process.exit(EXIT.usage);
     }
   }

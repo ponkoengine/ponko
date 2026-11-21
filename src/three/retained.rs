@@ -1234,9 +1234,11 @@ impl Tracked {
             renumbered,
             cull,
         };
-        // With one thread (a browser, a single core) splitting the work up
-        // only costs: one pass does everything.
-        let serial = rayon::current_num_threads() == 1;
+        // With one thread (a single core, a web page without threads)
+        // splitting the work up only costs: one pass does everything. On a
+        // web page with threads that is the frame pool's count, not rayon's
+        // (the page's own pool is the page's thread alone).
+        let serial = crate::frame_pool::threads() == 1;
         #[cfg(test)]
         let serial = SERIAL.get().unwrap_or(serial);
         let (found, new) = if serial {
@@ -1603,10 +1605,15 @@ impl Tracked {
         let pass = |tracked: &Self, how: How<'_>, rush: bool, (results, lists, arena): Out<'_>, world: &mut World| {
             let arena = if tracking { &[] } else { shared(arena) };
             let pass = tracked.pass(assets, culler, overrides, how, rush, lists, arena);
-            world
-                .query::<ModelItem<'_>>()
-                .filter::<Without<SkinOf>>()
-                .par_collect_into(results, |item| pass.check(item));
+            // On the frame pool (on the web, its workers, not the page's
+            // thread), as parallel queries run.
+            crate::frame_pool::run(|| {
+                crate::profile_scope!("three/shared_cull");
+                world
+                    .query::<ModelItem<'_>>()
+                    .filter::<Without<SkinOf>>()
+                    .par_collect_into(results, |item| pass.check(item));
+            });
         };
         // In a rush: the objects this frame finds drawn.
         let mut now = std::mem::take(&mut self.fresh_drawn);

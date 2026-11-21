@@ -8484,6 +8484,13 @@ public:
         detail::check(ponko_ctx_water_waiting_contacts(raw_, water, &n));
         return n;
     }
+    /// How many contact ripples have started on `water` since it was made. The update doesn't drain it,
+    /// so a test reads it once after the physics step instead of keeping the most of water_waiting_contacts.
+    std::uint64_t water_started_contacts(entity water) {
+        std::uint64_t n = 0;
+        detail::check(ponko_ctx_water_started_contacts(raw_, water, &n));
+        return n;
+    }
     /// Makes 3D body `e` float as a box of `size` (needs physics3d and game::water()).
     void set_buoyancy_box(entity e, vec3 size, float drag = PONKO_BUOYANCY_DRAG) {
         detail::check(ponko_ctx_set_buoyancy_box(raw_, e, size, drag));
