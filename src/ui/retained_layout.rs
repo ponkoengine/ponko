@@ -26,6 +26,7 @@ pub(super) struct Measured {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct LayoutKey {
     pub viewport: Vec2,
+    pub safe_area: Option<crate::camera::Rect>,
     pub scale: f32,
     pub pixels: f32,
     pub external_fonts: bool,

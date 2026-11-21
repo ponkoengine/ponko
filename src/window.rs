@@ -406,6 +406,10 @@ pub struct WindowService {
     last_focus: Option<bool>,
     last_minimized: Option<bool>,
     pub(crate) paste_target: Option<crate::ui::UiId>,
+    /// The window's size in logical pixels (as `Ctx::window_size`), and
+    /// what the platform covers of it ([`safe_area`](Self::safe_area)).
+    logical_size: Vec2,
+    safe_insets: SafeInsets,
 }
 impl Default for WindowService {
     fn default() -> Self {
@@ -423,6 +427,8 @@ impl WindowService {
             last_focus: Some(state.focused),
             last_minimized: Some(state.minimized),
             paste_target: None,
+            logical_size: Vec2::ZERO,
+            safe_insets: SafeInsets::NONE,
         }
     }
     /// Replace the inert backend with an already-created window adapter.
@@ -495,6 +501,45 @@ impl WindowService {
             self.close = true;
         }
         true
+    }
+    /// The part of the window nothing covers, in logical pixels (as
+    /// [`Ctx::window_size`](crate::ctx::Ctx::window_size)): the window less
+    /// a phone's notch or camera cutout, its home bar and rounded corners,
+    /// where the platform reports them (see [`SafeInsets`]). The whole
+    /// window where nothing covers it. Touch controls, the arrange screen
+    /// and UI roots made with
+    /// [`inside_safe_area`](crate::ui::UiBuilder::inside_safe_area) stay in it.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::window::SafeInsets;
+    /// Game::new("notch", 800, 400).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.window.safe_area().size(), vec2(800.0, 400.0), "nothing covered");
+    ///     // As a phone held sideways reports it: the notch left, the home bar below.
+    ///     ctx.window.feed_safe_insets(SafeInsets::new(0.0, 0.0, 21.0, 47.0));
+    ///     assert_eq!(ctx.window.safe_area(), Rect::new(47.0, 0.0, 753.0, 379.0));
+    /// });
+    /// ```
+    pub fn safe_area(&self) -> crate::camera::Rect {
+        self.safe_insets.area(self.logical_size)
+    }
+    /// How far in from each window edge the platform covers it: what
+    /// [`safe_area`](Self::safe_area) leaves out.
+    pub fn safe_insets(&self) -> SafeInsets {
+        self.safe_insets
+    }
+    /// Feeds the window's safe area insets, as the platform reports them:
+    /// a test of a notched phone, a platform layer of the game's own. The
+    /// engine feeds them itself where it reads them (the browser, on a
+    /// page with `viewport-fit=cover`), again whenever the window changes
+    /// size. Negative or not finite insets count as 0. The UI lays out with
+    /// them from the next frame.
+    pub fn feed_safe_insets(&mut self, insets: SafeInsets) {
+        self.safe_insets = insets.sanitized();
+    }
+    /// The window's size in logical pixels, which the safe area is cut from.
+    pub(crate) fn set_logical_size(&mut self, size: Vec2) {
+        self.logical_size = size;
     }
     /// Veto the current close request. Explicit `ctx.quit()` remains unconditional.
     pub fn cancel_close(&mut self) {
@@ -777,6 +822,165 @@ pub(crate) fn validate_web(request: &WindowRequest) -> Result<(), Error> {
             Ok(())
         }
         _ => Ok(()),
+    }
+}
+
+/// How far in from each edge of the window the platform covers it (a
+/// phone's notch or camera cutout, its home bar, rounded corners), in
+/// logical pixels: what [`WindowService::safe_area`] leaves out. All zero where nothing covers the window (desktops).
+///
+/// ```
+/// use ponko::window::SafeInsets;
+/// // A phone held sideways: the notch on the left, the home bar below.
+/// let insets = SafeInsets::new(0.0, 0.0, 21.0, 47.0);
+/// assert_eq!(insets.left, 47.0);
+/// assert_eq!(SafeInsets::default(), SafeInsets::NONE);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SafeInsets {
+    /// From the top edge.
+    pub top: f32,
+    /// From the right edge.
+    pub right: f32,
+    /// From the bottom edge.
+    pub bottom: f32,
+    /// From the left edge.
+    pub left: f32,
+}
+
+impl SafeInsets {
+    /// Nothing covered.
+    pub const NONE: Self = Self {
+        top: 0.0,
+        right: 0.0,
+        bottom: 0.0,
+        left: 0.0,
+    };
+
+    /// Insets in CSS order: top, right, bottom, left.
+    pub fn new(top: f32, right: f32, bottom: f32, left: f32) -> Self {
+        Self {
+            top,
+            right,
+            bottom,
+            left,
+        }
+    }
+
+    /// Each inset made usable: a negative or not finite one is 0.
+    pub(crate) fn sanitized(self) -> Self {
+        let f = |v: f32| if v.is_finite() { v.max(0.0) } else { 0.0 };
+        Self::new(f(self.top), f(self.right), f(self.bottom), f(self.left))
+    }
+
+    /// The part of a window `size` large these insets leave, at least a
+    /// point (insets wider than the window meet in it).
+    pub(crate) fn area(self, size: Vec2) -> crate::camera::Rect {
+        let s = self.sanitized();
+        let size = size.max(Vec2::ZERO);
+        let min = Vec2::new(s.left, s.top).min(size);
+        let max = (size - Vec2::new(s.right, s.bottom)).max(min);
+        crate::camera::Rect { min, max }
+    }
+}
+
+/// `"47px"` (a computed CSS length) as 47.
+#[cfg(any(test, all(target_arch = "wasm32", feature = "window")))]
+fn css_pixels(value: &str) -> Option<f32> {
+    value
+        .trim()
+        .strip_suffix("px")?
+        .trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|v| v.is_finite())
+}
+
+/// The browser's safe area insets (`env(safe-area-inset-*)`, non-zero only
+/// on a page with `viewport-fit=cover` on a phone that has a notch or
+/// rounded corners) as they reach into the game's canvas.
+#[cfg(all(target_arch = "wasm32", feature = "window"))]
+pub(crate) fn web_safe_insets(window: &winit::window::Window) -> SafeInsets {
+    use winit::platform::web::WindowExtWebSys;
+    const PROBE: &str = "ponko-safe-area";
+    let (Some(page), Some(canvas)) = (web_sys::window(), window.canvas()) else {
+        return SafeInsets::NONE;
+    };
+    let Some(document) = page.document() else {
+        return SafeInsets::NONE;
+    };
+    // A hidden element padded by the insets: its computed padding is them.
+    let probe = match document.get_element_by_id(PROBE) {
+        Some(probe) => probe,
+        None => {
+            let (Ok(probe), Some(body)) = (document.create_element("div"), document.body()) else {
+                return SafeInsets::NONE;
+            };
+            probe.set_id(PROBE);
+            let _ = probe.set_attribute(
+                "style",
+                "position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;\
+                 padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) \
+                 env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)",
+            );
+            let _ = body.append_child(&probe);
+            probe
+        }
+    };
+    let Ok(Some(style)) = page.get_computed_style(&probe) else {
+        return SafeInsets::NONE;
+    };
+    let inset = |side: &str| {
+        style
+            .get_property_value(&format!("padding-{side}"))
+            .ok()
+            .and_then(|v| css_pixels(&v))
+            .unwrap_or(0.0)
+    };
+    // The insets count from the page's edges; the canvas may not reach them.
+    let r = canvas.get_bounding_client_rect();
+    let width = page.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(r.right());
+    let height = page.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(r.bottom());
+    let reach = |inset: f32, gap: f64| (f64::from(inset) - gap).max(0.0) as f32;
+    SafeInsets::new(
+        reach(inset("top"), r.top()),
+        reach(inset("right"), width - r.right()),
+        reach(inset("bottom"), height - r.bottom()),
+        reach(inset("left"), r.left()),
+    )
+}
+
+#[cfg(test)]
+mod safe_area_tests {
+    use super::*;
+
+    #[test]
+    fn safe_insets_leave_the_middle_of_the_window() {
+        let area = SafeInsets::new(10.0, 20.0, 30.0, 40.0).area(Vec2::new(400.0, 300.0));
+        assert_eq!((area.min, area.max), (Vec2::new(40.0, 10.0), Vec2::new(380.0, 270.0)));
+        assert_eq!(
+            SafeInsets::NONE.area(Vec2::new(400.0, 300.0)).max,
+            Vec2::new(400.0, 300.0),
+            "nothing covered: the whole window"
+        );
+    }
+
+    #[test]
+    fn nonsense_insets_are_made_usable() {
+        let s = SafeInsets::new(-5.0, f32::NAN, f32::INFINITY, 3.0).sanitized();
+        assert_eq!(s, SafeInsets::new(0.0, 0.0, 0.0, 3.0));
+        // Insets wider than the window meet in a point inside it.
+        let area = SafeInsets::new(0.0, 300.0, 0.0, 300.0).area(Vec2::new(400.0, 300.0));
+        assert_eq!(area.size().x, 0.0);
+        assert!(area.min.x <= 400.0 && area.min.x >= 0.0);
+    }
+
+    #[test]
+    fn computed_css_lengths_read_as_pixels() {
+        assert_eq!(css_pixels("47px"), Some(47.0));
+        assert_eq!(css_pixels(" 0px "), Some(0.0));
+        assert_eq!(css_pixels("34.5px"), Some(34.5));
+        assert_eq!(css_pixels("auto"), None);
     }
 }
 

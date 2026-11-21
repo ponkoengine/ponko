@@ -362,6 +362,10 @@ where
         crate::crash::note_gpu(&mut self.ctx);
         self.ctx.set_window_size(Self::logical_window_size(&window));
         self.ctx.set_scale_factor(window.scale_factor() as f32);
+        #[cfg(target_arch = "wasm32")]
+        self.ctx
+            .window
+            .feed_safe_insets(crate::window::web_safe_insets(&window));
         // Edit mode (`ponko editor`): the inspector's panels are the window.
         #[cfg(feature = "editor")]
         let edit_mode = crate::inspector::app::requested();
@@ -683,6 +687,11 @@ where
                     self.ctx.set_window_size(Self::logical_window_size(&window));
                 }
                 self.ctx.set_scale_factor(window.scale_factor() as f32);
+                // Turning the phone moves the notch.
+                #[cfg(target_arch = "wasm32")]
+                self.ctx
+                    .window
+                    .feed_safe_insets(crate::window::web_safe_insets(&window));
                 window.request_redraw();
             }
 

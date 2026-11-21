@@ -278,10 +278,11 @@ struct GpuPath {
     /// for its dithered ones.
     levels: wgpu::Buffer,
     /// Views, then the level of each indirect draw, room for the probes,
-    /// then the clips' boxes (from `boxes_at`, in vec4s).
+    /// then the clips' frame ranges' boxes (from `boxes_at`, in vec4s).
     views: wgpu::Buffer,
-    /// Per clip its model-space box: lowest corner, highest (as vec4s).
-    clip_boxes: Vec<[f32; 8]>,
+    /// The bake's cull table (`CrowdData::cull_table`): per clip its
+    /// timing and first range, then per frame range its model-space box.
+    clip_boxes: Vec<[f32; 4]>,
     boxes_at: u32,
     /// Per (view, level) a list: a leading 0, the whole characters from
     /// the front, the dithered ones from the back.
@@ -320,7 +321,13 @@ struct GpuPath {
 /// What the CPU path keeps (see the module's docs).
 struct CpuPath {
     records: Vec<CrowdRecord>,
+    /// This frame's culling boxes, per character: the box of the frame
+    /// range of the frame it shows.
     boxes: Vec<CullBox>,
+    /// Per clip where its frame ranges' boxes start in `range_bounds`, and
+    /// those boxes (`CrowdData::range_bounds`).
+    range_first: Vec<u32>,
+    range_bounds: Vec<(Vec3, Vec3)>,
     /// The clip table as baked (first frame, frames, fps, looping).
     table: Vec<[f32; 4]>,
     /// Per clip: its first frame among the posed ones, how many were posed,
@@ -656,8 +663,6 @@ impl Renderer3D {
             Path::Cpu(p) => {
                 p.records.clear();
                 p.records.extend_from_slice(&data.records);
-                p.boxes.clear();
-                p.boxes.extend_from_slice(&data.boxes);
             }
         }
     }
@@ -712,11 +717,7 @@ impl Renderer3D {
                     .get(level.mesh as usize)
                     .map_or(0, |m| m.parts.len() as u32);
             }
-            let clip_boxes = data
-                .clip_bounds
-                .iter()
-                .map(|(lo, hi)| [lo.x, lo.y, lo.z, 0.0, hi.x, hi.y, hi.z, 0.0])
-                .collect();
+            let clip_boxes = data.cull_table();
             Path::Gpu(Box::new(GpuPath::new(
                 device,
                 shared,
@@ -986,6 +987,8 @@ impl Renderer3D {
         CpuPath {
             records: Vec::new(),
             boxes: Vec::new(),
+            range_first: data.range_first.clone(),
+            range_bounds: data.range_bounds.clone(),
             table,
             clips,
             step,
@@ -1458,7 +1461,7 @@ impl GpuPath {
         capacity: u32,
         levels: usize,
         (parts, part_base): (u32, Vec<u32>),
-        clip_boxes: Vec<[f32; 8]>,
+        clip_boxes: Vec<[f32; 4]>,
     ) -> Self {
         let records = Self::records(device, capacity);
         let params = device.new_buffer(&wgpu::BufferDescriptor {
@@ -1523,17 +1526,17 @@ impl GpuPath {
 
     /// The views, visible lists and draws buffers for `views` views of
     /// `levels` levels, `region` entries a list, `parts` mesh parts a view
-    /// (each drawn whole and dithered) and `clips` clips' boxes.
+    /// (each drawn whole and dithered) and a cull table of `table` vec4s.
     fn view_buffers(
         device: &wgpu::Device,
         views: u32,
         levels: u32,
         region: u32,
-        (parts, clips): (u32, u32),
+        (parts, table): (u32, u32),
     ) -> (wgpu::Buffer, wgpu::Buffer, wgpu::Buffer) {
         let views_buffer = device.new_buffer(&wgpu::BufferDescriptor {
             label: Some("crowd views"),
-            size: (Self::boxes_at(views, parts) + 2 * u64::from(clips)) * 16,
+            size: (Self::boxes_at(views, parts) + u64::from(table)) * 16,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -1737,9 +1740,9 @@ impl GpuPath {
         }
         self.region = region as u32;
         self.view_capacity = capacity;
-        let clips = self.clip_boxes.len() as u32;
+        let table = self.clip_boxes.len() as u32;
         (self.views, self.visible, self.draws) =
-            Self::view_buffers(device, capacity, l as u32, self.region, (self.parts, clips));
+            Self::view_buffers(device, capacity, l as u32, self.region, (self.parts, table));
         // The draws' fixed words: index count and first index of each
         // part, whole then dithered.
         let mut args: Vec<u32> = Vec::with_capacity((capacity * self.parts * 10) as usize);
@@ -1758,7 +1761,7 @@ impl GpuPath {
                 .uploading(Upload::StaticBatches)
                 .write_buffer(&self.draws, at, bytemuck::cast_slice(&args));
         }
-        // The clips' boxes, which only a new crowd changes.
+        // The cull table, which only a new crowd changes.
         let boxes_at = Self::boxes_at(capacity, self.parts);
         self.boxes_at = boxes_at as u32;
         if !self.clip_boxes.is_empty() {
@@ -1840,7 +1843,8 @@ impl GpuPath {
             probes.len() as u32,
             probes_at,
             crate::three::gi::GI_SMALLEST.to_bits(),
-            0,
+            // The characters' times are this far on (their frame ranges).
+            crowd.elapsed.to_bits(),
         ]);
         let kinds = 16 + 4 * MAX_CROWD_LEVELS;
         for (l, level) in levels.iter().enumerate() {
@@ -1912,8 +1916,9 @@ impl CpuPath {
         }
     }
 
-    /// The baked frame nearest each character's time, among the posed ones.
-    fn frame_of(&self, record: &CrowdRecord, elapsed: f32) -> u32 {
+    /// The clip a character shows (its blend clip from half way) and,
+    /// among the clip's posed frames, the one nearest its time.
+    fn shown(&self, record: &CrowdRecord, elapsed: f32) -> (usize, u32) {
         let [clips, ta, tb, packed] = record.anim;
         let blend = (packed & 0xffff) as f32 / 65535.0;
         let speed = f32::from((packed >> 16) as u16 as i16) / 256.0;
@@ -1922,8 +1927,9 @@ impl CpuPath {
         } else {
             (clips & 0xffff, f32::from_bits(ta))
         };
-        let Some(&(first, count, fps, looping, _)) = self.clips.get(clip as usize).or(self.clips.last()) else {
-            return 0;
+        let clip = (clip as usize).min(self.clips.len().saturating_sub(1));
+        let Some(&(_, count, fps, looping, _)) = self.clips.get(clip) else {
+            return (0, 0);
         };
         let step = self.step as f32;
         // In baked frames, then among the posed ones (every `step`th).
@@ -1934,7 +1940,37 @@ impl CpuPath {
         } else {
             p.clamp(0.0, last)
         };
-        first + ((p / step).round() as u32).min(count - 1)
+        (clip, ((p / step).round() as u32).min(count - 1))
+    }
+
+    /// A character's culling box this frame, showing posed frame `k` of
+    /// clip `clip` ([`shown`](Self::shown)): the box of the frame range of
+    /// that baked frame, under its transform.
+    fn cull_box(&self, record: &CrowdRecord, (clip, k): (usize, u32)) -> CullBox {
+        let frames = self.table.get(clip).map_or(1, |c| c[1] as u32);
+        let frame = (k * self.step).min(frames.saturating_sub(1));
+        let first = self.range_first.get(clip).copied().unwrap_or(0);
+        let next = self
+            .range_first
+            .get(clip + 1)
+            .copied()
+            .unwrap_or(self.range_bounds.len() as u32);
+        let range = (first + frame / crate::three::crowd::RANGE_FRAMES).min(next.saturating_sub(1));
+        let bounds = self
+            .range_bounds
+            .get(range as usize)
+            .copied()
+            .unwrap_or((Vec3::ZERO, Vec3::ZERO));
+        // The record's model matrix carries other words in its first two
+        // columns' w.
+        let m = &record.instance.model;
+        let model = Mat4::from_cols(
+            Vec4::new(m[0][0], m[0][1], m[0][2], 0.0),
+            Vec4::new(m[1][0], m[1][1], m[1][2], 0.0),
+            Vec4::new(m[2][0], m[2][1], m[2][2], 0.0),
+            Vec4::new(m[3][0], m[3][1], m[3][2], 1.0),
+        );
+        CullBox::new(&model, bounds)
     }
 
     /// Culls the characters against this frame's views on the CPU and
@@ -1950,9 +1986,13 @@ impl CpuPath {
     ) {
         let gi_faces = drawn.gi_faces();
         self.frames.clear();
+        self.boxes.clear();
         for i in 0..self.records.len() {
-            let f = self.frame_of(&self.records[i], crowd.elapsed);
+            let shown = self.shown(&self.records[i], crowd.elapsed);
+            let f = self.clips.get(shown.0).map_or(0, |c| c.0 + shown.1);
             self.frames.push(f);
+            let b = self.cull_box(&self.records[i], shown);
+            self.boxes.push(b);
         }
         self.keys.clear();
         for (v, slot) in slots.iter().enumerate().take(views) {
@@ -2256,6 +2296,12 @@ mod tests {
         } else {
             p.clamp(0.0, last)
         }
+    }
+
+    #[test]
+    fn the_cull_shader_groups_frames_into_ranges_as_the_bake_does() {
+        let line = format!("const RANGE_FRAMES: u32 = {}u;", crate::three::crowd::RANGE_FRAMES);
+        assert!(CULL.contains(&line), "crowd_cull.wgsl needs `{line}`");
     }
 
     #[test]

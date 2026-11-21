@@ -370,8 +370,9 @@ pub(crate) struct TouchState {
     /// were set (the UI rebuilds their nodes when it changes).
     pub(crate) controls: crate::ui::touch::TouchControls,
     pub(crate) generation: u64,
-    /// The window size and UI scale the zones are placed for.
-    pub(crate) view: (Vec2, f32),
+    /// The part of the window the zones are placed in (its safe area, in
+    /// window pixels) and the UI scale.
+    pub(crate) view: (crate::camera::Rect, f32),
     /// A menu screen is open over the controls: they step aside.
     pub(crate) suspended: bool,
     /// The first free finger, the UI's pointer while it is down.
@@ -451,7 +452,7 @@ impl Default for TouchState {
             show: TouchShow::Auto,
             controls: crate::ui::touch::TouchControls::default(),
             generation: 0,
-            view: (Vec2::ZERO, 1.0),
+            view: (crate::camera::Rect::default(), 1.0),
             suspended: false,
             primary: None,
             pointer: Vec2::ZERO,
@@ -541,7 +542,7 @@ impl TouchState {
     }
 
     /// The control being moved is let go: the player's layout keeps it
-    /// there, anchored to the nearest corner of the view.
+    /// there, anchored to the nearest corner of the view (its safe area).
     fn finish_edit(&mut self) {
         let Some(edit) = self.edit.take() else {
             return;
@@ -549,9 +550,9 @@ impl TouchState {
         let Some(zone) = self.zones.get(usize::from(edit.zone)) else {
             return;
         };
-        let (window, scale) = self.view;
+        let (area, scale) = self.view;
         let scale = scale.max(1e-3);
-        let place = crate::ui::touch::TouchPlace::nearest_corner(zone.center / scale, window / scale);
+        let place = crate::ui::touch::TouchPlace::nearest_corner((zone.center - area.min) / scale, area.size() / scale);
         let action = zone.action.clone();
         self.layout.adjust(&action).place = Some(place);
     }
