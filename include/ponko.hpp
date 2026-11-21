@@ -8370,8 +8370,11 @@ public:
         if (ponko_ctx_asset_group_error(raw_, id) == PONKO_OK) return std::nullopt;
         return detail::last_error();
     }
-    /// Stops loading group `id`; what loaded stays loaded.
+    /// Stops loading group `id`; what loaded stays loaded. A failed group is cancelled too, dropping
+    /// what it kept for a restart.
     void cancel_asset_group(std::uint32_t id) { detail::check(ponko_ctx_cancel_asset_group(raw_, id)); }
+    /// Loads the rest of a failed or cancelled group `id`: only what had not loaded is read again.
+    void restart_asset_group(std::uint32_t id) { detail::check(ponko_ctx_restart_asset_group(raw_, id)); }
     /// Takes the bytes of asset `path` of group `id` (added with `asset_group::bytes`) and returns
     /// `decode(data, len)`. Throws ponko::error if they aren't there (not loaded, or taken), and what
     /// `decode` throws.

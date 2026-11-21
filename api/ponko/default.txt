@@ -712,7 +712,7 @@ pub fn ponko::assets::AssetGroup::paths(&self) -> impl core::iter::traits::itera
 pub fn ponko::assets::AssetGroup::sound(self, &str) -> Self
 pub fn ponko::assets::AssetGroup::streamed_texture(self, &str) -> Self
 pub fn ponko::assets::AssetGroup::texture(self, &str) -> Self
-pub fn ponko::assets::AssetGroup::with<T: core::marker::Send + 'static>(self, &str, impl core::ops::function::FnOnce(&[u8]) -> core::result::Result<T, ponko::error::Error> + core::marker::Send + 'static) -> Self
+pub fn ponko::assets::AssetGroup::with<T: core::marker::Send + 'static>(self, &str, impl core::ops::function::Fn(&[u8]) -> core::result::Result<T, ponko::error::Error> + core::marker::Send + core::marker::Sync + 'static) -> Self
 impl core::fmt::Debug for ponko::assets::AssetGroup
 pub fn ponko::assets::AssetGroup::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct ponko::assets::Assets
@@ -740,6 +740,7 @@ pub fn ponko::assets::Assets::group_progress(&self, ponko::assets::GroupId) -> p
 pub fn ponko::assets::Assets::group_state(&self, ponko::assets::GroupId) -> ponko::assets::GroupState
 pub fn ponko::assets::Assets::group_stats(&self) -> ponko::assets::GroupStats
 pub fn ponko::assets::Assets::groups(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = ponko::assets::GroupId> + '_
+pub fn ponko::assets::Assets::restart_group(&mut self, ponko::assets::GroupId)
 pub fn ponko::assets::Assets::set_group_frame_budget(&mut self, f32)
 pub fn ponko::assets::Assets::start_group(&mut self, ponko::assets::AssetGroup) -> ponko::assets::GroupId
 pub fn ponko::assets::Assets::take_group_value<T: 'static>(&mut self, ponko::assets::GroupId, &str) -> core::option::Option<T>
@@ -772,9 +773,11 @@ pub ponko::assets::GroupProgress::bytes_known: bool
 pub ponko::assets::GroupProgress::bytes_loaded: u64
 pub ponko::assets::GroupProgress::bytes_read: u64
 pub ponko::assets::GroupProgress::bytes_total: u64
+pub ponko::assets::GroupProgress::bytes_uploaded: u64
 pub ponko::assets::GroupProgress::loaded: usize
 pub ponko::assets::GroupProgress::state: ponko::assets::GroupState
 pub ponko::assets::GroupProgress::total: usize
+pub ponko::assets::GroupProgress::upload_ms: f32
 impl ponko::assets::GroupProgress
 pub fn ponko::assets::GroupProgress::fraction(&self) -> f32
 impl core::clone::Clone for ponko::assets::GroupProgress
@@ -789,9 +792,13 @@ impl core::marker::StructuralPartialEq for ponko::assets::GroupProgress
 pub ponko::assets::GroupStats::frame_budget_ms: f32
 pub ponko::assets::GroupStats::frame_bytes: u64
 pub ponko::assets::GroupStats::max_step_ms: f32
+pub ponko::assets::GroupStats::max_upload_ms: f32
 pub ponko::assets::GroupStats::over_budget: u64
 pub ponko::assets::GroupStats::step_ms: f32
 pub ponko::assets::GroupStats::steps: u64
+pub ponko::assets::GroupStats::total_upload_bytes: u64
+pub ponko::assets::GroupStats::total_upload_ms: f64
+pub ponko::assets::GroupStats::upload_ms: f32
 impl core::clone::Clone for ponko::assets::GroupStats
 pub fn ponko::assets::GroupStats::clone(&self) -> Self
 impl core::cmp::PartialEq for ponko::assets::GroupStats
@@ -6340,6 +6347,7 @@ pub fn ponko::assets::Assets::group_progress(&self, ponko::assets::GroupId) -> p
 pub fn ponko::assets::Assets::group_state(&self, ponko::assets::GroupId) -> ponko::assets::GroupState
 pub fn ponko::assets::Assets::group_stats(&self) -> ponko::assets::GroupStats
 pub fn ponko::assets::Assets::groups(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = ponko::assets::GroupId> + '_
+pub fn ponko::assets::Assets::restart_group(&mut self, ponko::assets::GroupId)
 pub fn ponko::assets::Assets::set_group_frame_budget(&mut self, f32)
 pub fn ponko::assets::Assets::start_group(&mut self, ponko::assets::AssetGroup) -> ponko::assets::GroupId
 pub fn ponko::assets::Assets::take_group_value<T: 'static>(&mut self, ponko::assets::GroupId, &str) -> core::option::Option<T>
