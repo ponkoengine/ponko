@@ -165,13 +165,14 @@ pub(super) struct Plan {
 pub(crate) const PARALLEL_FROM: usize = 16;
 
 /// In a web build with threads, handing the moves to the frame pool's
-/// workers and waiting for them costs about 0.05 ms. In headless Chromium
+/// workers and waiting for them costs about 0.1 ms. In headless Chromium
 /// with 13 threads (the moves alone, on a flat floor), 128 characters took
-/// 0.06 ms on the page's thread and 0.09 ms shared out, 256 took 0.13 and
-/// 0.10 ms, 512 took 0.28 and 0.14 ms (`web/smoke/threads.mjs --case
-/// thresholds`; the guide's "Threads on the web").
+/// 0.06 ms on the page's thread and 0.08 to 0.09 ms shared out; 256 took
+/// 0.13 ms and 0.10 or 0.19 ms (two runs: the edge); 512 took 0.27 ms and
+/// 0.13 ms in both (`web/smoke/threads.mjs --case thresholds`; the guide's
+/// "Threads on the web").
 #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
-pub(crate) const PARALLEL_FROM: usize = 256;
+pub(crate) const PARALLEL_FROM: usize = 512;
 
 /// Works out `c`'s move. Fills `hits` (emptied first) with the dynamic
 /// bodies it walked into, if it pushes.

@@ -14,8 +14,8 @@
 //! is worth sharing, through the same runner as the parallel query), the
 //! engine's own parallel passes (a spatial grid of 200,000 entries rebuilt
 //! and a 256 × 256 flow field computed every 10 ticks, the 3D frame of
-//! 20,000 models collected and culled every 10 ticks, 256 2D skeletons
-//! drawn every 10 ticks, 32 3D characters walking every tick, a small
+//! 20,000 models collected and culled every 10 ticks, 1,024 2D skeletons
+//! drawn every 10 ticks, 600 3D characters walking every tick, a small
 //! scene's light baked once, all through that runner, and the world saved
 //! as JSON every tick while profiling, which stays on the page's thread),
 //! and an
@@ -138,15 +138,15 @@ const PASS_TIMES: [&str; 8] = [
     "three/shared_bake",
 ];
 
-/// 2D skeletons drawn every `PASS_EVERY` ticks: past the 64 from which
-/// their drawing is shared out.
+/// 2D skeletons drawn every `PASS_EVERY` ticks: past the 512 from which
+/// their drawing is shared out in a web build with threads (64 natively).
 #[cfg(feature = "bench-internals")]
-const SKELETONS: usize = 256;
+const SKELETONS: usize = 1_024;
 
-/// 3D characters walking every tick: past the 16 from which their moves
-/// are shared out.
+/// 3D characters walking every tick: past the 512 from which their moves
+/// are shared out in a web build with threads (16 natively).
 #[cfg(feature = "physics3d")]
-const CHARACTERS: usize = 32;
+const CHARACTERS: usize = 600;
 
 /// The tick the small scene's light is baked on (once, while profiling).
 #[cfg(feature = "3d")]
@@ -767,7 +767,7 @@ fn spawn_characters(ctx: &mut Ctx) {
         ponko::d3::Collider::cuboid(vec3(200.0, 1.0, 200.0)),
     ));
     for i in 0..CHARACTERS {
-        let (x, z) = ((i % 8) as f32 * 3.0 - 12.0, (i / 8) as f32 * 3.0 - 6.0);
+        let (x, z) = ((i % 32) as f32 * 3.0 - 48.0, (i / 32) as f32 * 3.0 - 30.0);
         let mut c = ponko::d3::Character::new(1.8, 0.3 + (i % 7) as f32 * 0.001);
         c.push_mass = 0.0;
         ctx.world.spawn((ponko::d3::Transform::at(vec3(x, 1.0, z)), c));
