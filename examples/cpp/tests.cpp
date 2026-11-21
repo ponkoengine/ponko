@@ -1648,6 +1648,55 @@ static void handle_lifecycle() {
     });
 }
 
+// A terrain tile saved, then loaded: the rebuild makes its ground again
+// from the tile's saved corner; one that throws stops the game.
+static void terrain_rebuild() {
+    int calls = 0;
+    bool solid = false;
+    auto rebuild = [&calls](const ponko::loaded_world& world, ponko::entity tile) -> std::optional<ponko::collision_mesh_data> {
+        ++calls;
+        CHECK(!world.get<ponko::collider_focus>(tile));
+        if (world.get<ponko::transform3d>(tile)->position.x != -10) return std::nullopt;
+        return ponko::collision_mesh_data::heightfield(std::vector<float>(9, 2.0f), 20);
+    };
+    ponko::game("tiles", 1, 1)
+        .data_dir("ponko-cpp-terrain")
+        .physics3d({0, 0, 0})
+        .sim_system([&solid](ponko::ctx& ctx) {
+            if (ctx.sim_tick() != 1) return;
+            auto hit = ctx.cast_ray3d({0, 10, 0}, {0, -1, 0}, 20);
+            solid = hit && std::fabs(hit->point.y - 2) < 0.01f;
+        })
+        .run_headless(3, [&](ponko::ctx& ctx) {
+            auto mesh = ctx.add_collision_mesh(ponko::collision_mesh_data::heightfield(std::vector<float>(9, 2.0f), 20));
+            auto world = ctx.world();
+            world.spawn(ponko::transform3d_at({-10, 0, -10}), ponko::solid_terrain(mesh));
+            world.spawn(ponko::focus_colliders(1, 2));  // its type is known before the load
+            ctx.save_world("tiles");
+            ctx.set_terrain_rebuild(rebuild);
+            ctx.clear_terrain_rebuild();
+            ctx.load_world("tiles");
+            CHECK(calls == 0);
+            ctx.set_terrain_rebuild(rebuild);
+            ctx.load_world("tiles");
+            ctx.delete_world("tiles");
+        });
+    CHECK(calls == 1 && solid);
+    // An exception in the rebuild comes out of run_headless.
+    throws([] {
+        ponko::game("tiles", 1, 1).data_dir("ponko-cpp-terrain").physics3d({0, 0, 0}).run_headless(1, [](ponko::ctx& ctx) {
+            auto mesh = ctx.add_collision_mesh(ponko::collision_mesh_data::heightfield(std::vector<float>(9, 2.0f), 20));
+            ctx.world().spawn(ponko::transform3d_at({0, 0, 0}), ponko::solid_terrain(mesh));
+            ctx.save_world("tiles");
+            ctx.set_terrain_rebuild([](const ponko::loaded_world&, ponko::entity) -> std::optional<ponko::collision_mesh_data> {
+                throw std::runtime_error("no heights");
+            });
+            ctx.load_world("tiles");
+            ctx.delete_world("tiles");
+        });
+    });
+}
+
 static void streamed_worlds() {
     // Far ground, cut where a tile is shown.
     ponko::game("far", 64, 64).run_headless(0, [](ponko::ctx& ctx) {
@@ -2602,6 +2651,11 @@ static void retained_ui_presets() {
         auto side = ui.add_panel(bar, u::column(120));
         auto buy = ui.add_button(bar, "Buy", u::fixed(100, 30));
         auto map = ui.add_panel(root, u::anchored(0.75f, 0, 0.25f, 0.25f));
+        // Fading as one image: off by default, on once set.
+        CHECK(!ui.fades_as_group(root));
+        ui.set_fade_as_group(root);
+        CHECK(ui.fades_as_group(root) && !ui.fades_as_group(bar));
+        throws([&] { ui.set_fade_as_group(9999); });
         ui.push_screen(root);
         auto dialog = ui.add_panel(u::none, u::centered(200, 100).top(40));
         ui.push_modal(dialog);
@@ -5373,6 +5427,7 @@ int main() {
     inverse_kinematics();
     streaming();
     streamed_worlds();
+    terrain_rebuild();
     model_material_overrides();
     handle_lifecycle();
     asset_streaming();
