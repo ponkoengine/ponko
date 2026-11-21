@@ -589,6 +589,10 @@ impl Ctx {
         if let Some(renderer) = &self.gfx.renderer {
             self.perf.gpu_passes.clear();
             self.perf.gpu_passes.extend_from_slice(renderer.gpu_passes());
+            self.perf.gpu_passes_not_timed.clear();
+            self.perf
+                .gpu_passes_not_timed
+                .extend_from_slice(renderer.gpu_passes_not_timed());
             self.perf.display_wait_ms = renderer.display_wait_ms();
         }
         self.gfx.draw_list.clear();
