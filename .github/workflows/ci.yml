@@ -1234,6 +1234,13 @@ jobs:
         timeout-minutes: 8
         if: ${{ !cancelled() }}
         run: node web/smoke/multiplayer.mjs --browser chromium
+      # Failures while playing (web/smoke/runtime-failures.mjs): a panic after
+      # startup, the game's own failure text and a lost WebGL2 context must
+      # each reach the page. Uses the web_smoke build made above.
+      - name: Chromium, failures after startup reach the page
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: node web/smoke/runtime-failures.mjs
       # Threads on the web (web/smoke/threads.mjs, the guide's "Threads on the
       # web"): examples/web_threads built with `web/build.sh --threads`
       # (nightly Rust rebuilding std with atomics, hence rust-src). Served with
