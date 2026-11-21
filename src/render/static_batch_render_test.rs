@@ -98,13 +98,17 @@ impl BatchRig {
             };
             (setup.shrink)(&mut limits);
             let timestamps = setup.timestamps && adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+            // As a game's device: instance cells are drawn together where
+            // the adapter has a first instance in indirect draws.
+            let first_instance = adapter.features() & wgpu::Features::INDIRECT_FIRST_INSTANCE;
             Ok(wgpu::DeviceDescriptor {
                 required_limits: limits,
-                required_features: if timestamps {
-                    wgpu::Features::TIMESTAMP_QUERY
-                } else {
-                    wgpu::Features::empty()
-                },
+                required_features: first_instance
+                    | if timestamps {
+                        wgpu::Features::TIMESTAMP_QUERY
+                    } else {
+                        wgpu::Features::empty()
+                    },
                 ..Default::default()
             })
         })?;

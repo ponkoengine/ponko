@@ -15,6 +15,13 @@ use crate::render::{GpuFeature, InstanceBatch, InstanceCell, Mesh, MeshData};
 use crate::streaming::CellStreamer;
 use std::collections::BTreeMap;
 
+/// No difference allowed: cells draw the very pixels one batch draws.
+const EXACT: support::Tolerance = support::Tolerance {
+    channel: 0,
+    outliers: 0.0,
+    edge: 0,
+};
+
 /// Width of a streamed cell, in metres.
 pub(super) const CELL: f32 = 8.0;
 
@@ -200,7 +207,7 @@ fn streamed_cells_draw_what_one_batch_draws_in_every_view_on_both_paths() {
             cells.stream(&streamer, false);
             whole.stream(&streamer, true);
             let (a, b) = (cells.rig.image(), whole.rig.image());
-            assert_same(&format!("{path:?} frame {k}"), &a, &b, SAME_DEVICE, 0.2);
+            assert_same(&format!("{path:?} frame {k}"), &a, &b, EXACT, 0.2);
             if let Ok(dir) = std::env::var("PONKO_BATCH_IMAGES") {
                 std::fs::create_dir_all(&dir).unwrap();
                 let file = std::path::Path::new(&dir).join(format!("cells-{path:?}-{k}.png"));
@@ -210,13 +217,13 @@ fn streamed_cells_draw_what_one_batch_draws_in_every_view_on_both_paths() {
                 target_image(&cells.rig, &cells.target),
                 target_image(&whole.rig, &whole.target),
             );
-            assert_same(&format!("{path:?} target camera, frame {k}"), &a, &b, SAME_DEVICE, 0.1);
+            assert_same(&format!("{path:?} target camera, frame {k}"), &a, &b, EXACT, 0.1);
             if path == BatchPath::Gpu {
                 cells
                     .rig
                     .renderer
                     .check_mirrors(&cells.rig.gpu.device, &cells.rig.gpu.queue);
-                pool_bytes.push(cells.rig.renderer.instance_batch_stats().pool_bytes);
+                pool_bytes.push((cells.cells.len(), cells.rig.renderer.instance_batch_stats().pool_bytes));
             }
         }
         assert!(
@@ -250,7 +257,11 @@ fn streamed_cells_draw_what_one_batch_draws_in_every_view_on_both_paths() {
                 stats.cull_jobs as usize > cells.cells.len(),
                 "shadow views culled cells too"
             );
-            let (early, late) = (pool_bytes[8], *pool_bytes.last().unwrap());
+            // From the frame with the most live cells on (where cells drawn
+            // together pad each cell's block to a record boundary, it is
+            // reached later than without).
+            let peak = (0..pool_bytes.len()).max_by_key(|&k| (pool_bytes[k].0, k)).unwrap();
+            let (early, late) = (pool_bytes[peak].1, pool_bytes.last().unwrap().1);
             assert!(late <= early, "the pool grew from {early} to {late} bytes");
         }
         // Negative control: the cell under the focus, gone on one side
@@ -381,4 +392,176 @@ fn streamed_cells_redraw_only_the_shadow_views_they_reach() {
             "{path:?}: views a streamed cell doesn't reach are kept: {kept_while_streaming} on {streamed} frames"
         );
     }
+}
+
+/// A rig of `path` with `cells` cells of 3 x 3 pillars, `columns` wide, all
+/// in view from above under a lit sky with sun shadows; each cell on its
+/// own (`separate`, as before cells were drawn together) or not.
+fn field(path: BatchPath, separate: bool, cells: usize, columns: i32) -> Option<(BatchRig, Vec<InstanceCell>)> {
+    let mut rig = BatchRig::new(RigSetup::default())?;
+    if path == BatchPath::Gpu && !support::needs(&rig.gpu.device, GpuFeature::ComputeCulling) {
+        return None;
+    }
+    rig.renderer.batching.path = path;
+    rig.renderer.batching.separate_cells = separate;
+    ground(&mut rig);
+    let mesh = rig.mesh(&MeshData::cube(1.0), glow(Color::rgb(0.2, 0.9, 0.4)));
+    let batch = rig.ctx.gfx.create_instance_batch(mesh, &[], Default::default());
+    rig.ctx.scene3d.lighting.shadows = true;
+    rig.ctx.scene3d.lighting.shadow_distance = 80.0;
+    let handles = (0..cells as i32)
+        .map(|c| {
+            let (transforms, colors) = cell_instances((c % columns, -(c / columns)), 3);
+            add_cell(&mut rig, batch, &transforms, &colors)
+        })
+        .collect();
+    let camera = &mut rig.ctx.scene3d.camera;
+    camera.far = 200.0;
+    camera.position = vec3(20.0, 44.0, 8.0);
+    camera.look_at(vec3(20.0, 0.0, -12.0));
+    Some((rig, handles))
+}
+
+/// What the batch passes of the frame last drawn set and drew.
+fn drawn(rig: &mut BatchRig) -> super::gpu3d::StateChanges {
+    rig.frame().changes
+}
+
+#[test]
+fn cells_of_a_batch_share_a_bind_group_and_draw_once_per_material_and_view() {
+    let (Some((mut apart, _)), Some((mut together, _))) =
+        (field(BatchPath::Gpu, true, 24, 6), field(BatchPath::Gpu, false, 24, 6))
+    else {
+        return;
+    };
+    let Some((mut few, _)) = field(BatchPath::Gpu, false, 6, 6) else {
+        return;
+    };
+    // Drawn together or each on its own, the picture is the same, with no
+    // difference allowed.
+    let (a, b) = (apart.image(), together.image());
+    let d = support::diff(&a, &b, 0);
+    assert!(
+        a.rgba == b.rgba,
+        "cells drawn together differ from each on its own: {d}"
+    );
+    assert!(
+        a.fraction(0..a.width, 0..a.height, |p| p[1] > 120 && p[0] < 110) > 0.02,
+        "the cells show"
+    );
+    few.image();
+    let (apart_n, together_n, few_n) = (drawn(&mut apart), drawn(&mut together), drawn(&mut few));
+    eprintln!(
+        "draws: apart {} together {} (6 cells: {}); bind groups: apart {} together {}",
+        apart_n.draws, together_n.draws, few_n.draws, apart_n.bind_groups, together_n.bind_groups
+    );
+    if !together
+        .gpu
+        .device
+        .features()
+        .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+    {
+        // The fallback: each cell on its own, as before.
+        assert_eq!(together.renderer.cell_groups(), (0, 0));
+        assert_eq!(together_n.draws, apart_n.draws);
+        return;
+    }
+    let (groups, members) = together.renderer.cell_groups();
+    assert!(groups >= 2, "the camera's and the cascades' groups: {groups}");
+    assert!(members >= 24, "every cell's camera view is in a group: {members}");
+    assert_eq!(
+        apart.renderer.cell_groups(),
+        (0, 0),
+        "the control draws each cell on its own"
+    );
+    // One draw per material and view, however many cells.
+    assert_eq!(together_n.draws, few_n.draws, "24 cells draw as often as 6");
+    assert_eq!(together_n.bind_groups, few_n.bind_groups);
+    assert!(
+        apart_n.draws >= together_n.draws + 23,
+        "each on its own: a draw per cell ({} against {})",
+        apart_n.draws,
+        together_n.draws
+    );
+    // A freed cell leaves its group drawing nothing for it, and the
+    // group's last cell takes the group with it.
+    let (Some((mut cells, handles)), Some((mut reference, _))) =
+        (field(BatchPath::Gpu, false, 12, 6), field(BatchPath::Gpu, false, 6, 6))
+    else {
+        return;
+    };
+    cells.image();
+    for &handle in &handles[6..] {
+        free_cell(&mut cells, handle);
+    }
+    let (a, b) = (cells.image(), reference.image());
+    assert!(
+        a.rgba == b.rgba,
+        "freed cells draw nothing: {}",
+        support::diff(&a, &b, 0)
+    );
+    for &handle in &handles[..6] {
+        free_cell(&mut cells, handle);
+    }
+    assert_eq!(cells.renderer.cell_groups(), (0, 0), "emptied groups are gone");
+}
+
+#[test]
+fn cpu_cells_take_ranges_of_one_vertex_buffer_and_reuse_freed_ones() {
+    let (Some((mut apart, _)), Some((mut together, handles))) =
+        (field(BatchPath::Cpu, true, 24, 6), field(BatchPath::Cpu, false, 24, 6))
+    else {
+        return;
+    };
+    let (a, b) = (apart.image(), together.image());
+    assert!(
+        a.rgba == b.rgba,
+        "a shared buffer draws the same: {}",
+        support::diff(&a, &b, 0)
+    );
+    let rows: Vec<u32> = handles
+        .iter()
+        .map(|&c| together.ctx.gfx.instance_cell_row(c).unwrap())
+        .collect();
+    assert!(rows.iter().all(|&row| together.renderer.batch_shares_vertices(row)));
+    assert!(
+        apart.renderer.cell_vertices_use().is_none(),
+        "the control's cells own buffers"
+    );
+    let (apart_n, together_n) = (drawn(&mut apart), drawn(&mut together));
+    eprintln!(
+        "vertex buffers set: apart {} together {}; draws apart {} together {}",
+        apart_n.vertex_buffers, together_n.vertex_buffers, apart_n.draws, together_n.draws
+    );
+    assert!(
+        together_n.vertex_buffers + 23 <= apart_n.vertex_buffers,
+        "consecutive cells bind the shared buffer once"
+    );
+    // A long walk: cells come and go, the buffer stops growing.
+    let batch = InstanceBatch {
+        id: together.ctx.gfx.assets3d.instance_batches[rows[0] as usize]
+            .as_ref()
+            .unwrap()
+            .parent
+            .unwrap(),
+    };
+    let mut live: std::collections::VecDeque<InstanceCell> = handles.into();
+    let mut capacity = Vec::new();
+    for step in 0..200 {
+        let (transforms, colors) = cell_instances((step % 9, step % 5), 3);
+        live.push_back(add_cell(&mut together, batch, &transforms, &colors));
+        free_cell(&mut together, live.pop_front().unwrap());
+        let (bytes, used, cells) = together.renderer.cell_vertices_use().unwrap();
+        assert_eq!(cells, 24);
+        assert_eq!(used, 24 * 9 * 80, "only the live cells' ranges are handed out");
+        capacity.push(bytes);
+    }
+    assert!(
+        capacity.iter().all(|&c| c == capacity[0]),
+        "freed ranges are reused: {capacity:?}"
+    );
+    for handle in live {
+        free_cell(&mut together, handle);
+    }
+    assert_eq!(together.renderer.cell_vertices_use().map(|u| u.1), Some(0));
 }
