@@ -833,28 +833,11 @@ fn rss(b: &Bench) {
             let bytes = either!(&mut w, |w| w.store.bytes());
             println!(
                 "{name}: peak RSS {}, storage {} KiB",
-                peak_rss().map_or("unavailable".into(), |b| format!("{} KiB", b / 1024)),
+                crate::alloc::peak_rss().map_or("unavailable".into(), |b| format!("{} KiB", b / 1024)),
                 bytes / 1024
             );
         }
     }
-}
-
-#[cfg(unix)]
-fn peak_rss() -> Option<usize> {
-    // SAFETY: `getrusage` fills the struct it is given.
-    let usage = unsafe {
-        let mut usage = std::mem::zeroed::<libc::rusage>();
-        (libc::getrusage(libc::RUSAGE_SELF, &mut usage) == 0).then_some(usage)?
-    };
-    // Bytes on macOS, KiB on Linux.
-    let unit = if cfg!(target_os = "macos") { 1 } else { 1024 };
-    Some(usage.ru_maxrss as usize * unit)
-}
-
-#[cfg(not(unix))]
-fn peak_rss() -> Option<usize> {
-    None
 }
 
 #[cfg(test)]

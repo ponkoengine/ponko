@@ -121,6 +121,63 @@ src/web_threads.rs | spawn_worker | web/smoke/threads.mjs | wasm
 
 crates/ponko_cli/src/textures.rs | uastc | crates/ponko_cli/src/textures.rs::basis_textures_keep_uastc_blocks_and_say_their_channels | c-library
 
+# ---- The benchmark binary (crates/ponko_bench) ------------------------------
+
+# The allocator that counts every benchmark's allocations, and the peak
+# resident memory the memory cases print.
+crates/ponko_bench/src/alloc.rs | impl GlobalAlloc for Counting | crates/ponko_bench/src/alloc.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+crates/ponko_bench/src/alloc.rs | Counting::alloc | crates/ponko_bench/src/alloc.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+crates/ponko_bench/src/alloc.rs | Counting::alloc_zeroed | crates/ponko_bench/src/alloc.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+crates/ponko_bench/src/alloc.rs | Counting::dealloc | crates/ponko_bench/src/alloc.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+crates/ponko_bench/src/alloc.rs | Counting::realloc | crates/ponko_bench/src/alloc.rs::the_counting_allocator_forwards_every_call_to_the_system_allocator | miri
+crates/ponko_bench/src/alloc.rs | peak_rss | crates/ponko_bench/src/alloc.rs::the_peak_resident_set_covers_memory_in_use | os
+crates/ponko_bench/src/streaming.rs | thread_cpu | crates/ponko_bench/src/streaming.rs::the_thread_clock_moves_forward_with_work | os
+
+# The prototype archetype world (what the C API path costs without the ECS).
+crates/ponko_bench/src/own.rs | Column::ptr | crates/ponko_bench/src/own.rs::spawn_get_despawn | miri
+crates/ponko_bench/src/own.rs | Column::grow | crates/ponko_bench/src/own.rs::swap_remove_keeps_rows_valid | miri
+crates/ponko_bench/src/own.rs | Column::swap_remove_forget | crates/ponko_bench/src/own.rs::swap_remove_keeps_rows_valid | miri
+crates/ponko_bench/src/own.rs | Column::dealloc | crates/ponko_bench/src/own.rs::drops_run_exactly_once | miri
+crates/ponko_bench/src/own.rs | drop_ptr | crates/ponko_bench/src/own.rs::drops_run_exactly_once | miri
+crates/ponko_bench/src/own.rs | Archetype::reserve | crates/ponko_bench/src/own.rs::swap_remove_keeps_rows_valid | miri
+crates/ponko_bench/src/own.rs | Archetype::swap_remove_drop | crates/ponko_bench/src/own.rs::swap_remove_keeps_rows_valid | miri
+crates/ponko_bench/src/own.rs | Archetype::drop | crates/ponko_bench/src/own.rs::drops_run_exactly_once | miri
+crates/ponko_bench/src/own.rs | World::spawn | crates/ponko_bench/src/own.rs::spawn_get_despawn | miri
+crates/ponko_bench/src/own.rs | World::spawn_dynamic | crates/ponko_bench/src/own.rs::dynamic_components_and_chunks | miri
+crates/ponko_bench/src/own.rs | World::despawn | crates/ponko_bench/src/own.rs::spawn_get_despawn | miri
+crates/ponko_bench/src/own.rs | World::get | crates/ponko_bench/src/own.rs::spawn_get_despawn | miri
+crates/ponko_bench/src/own.rs | World::get_mut | crates/ponko_bench/src/own.rs::get_mut_writes_the_entitys_own_row | miri
+crates/ponko_bench/src/own.rs | World::insert | crates/ponko_bench/src/own.rs::insert_remove_moves_archetype | miri
+crates/ponko_bench/src/own.rs | World::remove | crates/ponko_bench/src/own.rs::insert_remove_moves_archetype | miri
+crates/ponko_bench/src/own.rs | World::move_row | crates/ponko_bench/src/own.rs::insert_remove_moves_archetype | miri
+crates/ponko_bench/src/own.rs | World::for_each | crates/ponko_bench/src/own.rs::query_matches_across_archetypes | miri
+crates/ponko_bench/src/own.rs | trait Bundle | crates/ponko_bench/src/own.rs::spawn_get_despawn | miri
+crates/ponko_bench/src/own.rs | macro bundle_tuple! | crates/ponko_bench/src/own.rs::spawn_get_despawn | miri
+crates/ponko_bench/src/own.rs | trait Query | crates/ponko_bench/src/own.rs::query_matches_across_archetypes | miri
+crates/ponko_bench/src/own.rs | impl Query for &T | crates/ponko_bench/src/own.rs::query_matches_across_archetypes | miri
+crates/ponko_bench/src/own.rs | impl Query for &mut T | crates/ponko_bench/src/own.rs::query_matches_across_archetypes | miri
+crates/ponko_bench/src/own.rs | T::fetch | crates/ponko_bench/src/own.rs::query_matches_across_archetypes | miri
+crates/ponko_bench/src/own.rs | macro query_tuple! | crates/ponko_bench/src/own.rs::query_matches_across_archetypes | miri
+crates/ponko_bench/src/main.rs | own_dynamic_world | crates/ponko_bench/src/main.rs::the_dynamic_chunk_step_moves_every_entity | miri
+crates/ponko_bench/src/main.rs | own_dynamic_step | crates/ponko_bench/src/main.rs::the_dynamic_chunk_step_moves_every_entity | miri
+
+# Components registered and written by id, as the C API does.
+crates/ponko_bench/src/membership.rs | registered_world | crates/ponko_bench/src/membership.rs::candidates_agree_with_the_linear_scan | miri
+crates/ponko_bench/src/membership.rs | add | crates/ponko_bench/src/membership.rs::warm_transitions_create_no_archetypes | miri
+crates/ponko_bench/src/membership.rs | noop_drop | crates/ponko_bench/src/membership.rs::a_component_with_a_drop_function_toggles_without_new_archetypes | miri
+crates/ponko_bench/src/membership.rs | register_with_drop | crates/ponko_bench/src/membership.rs::a_component_with_a_drop_function_toggles_without_new_archetypes | miri
+crates/ponko_bench/src/membership.rs | add_with_drop | crates/ponko_bench/src/membership.rs::a_component_with_a_drop_function_toggles_without_new_archetypes | miri
+crates/ponko_bench/src/membership.rs | query_world | crates/ponko_bench/src/membership.rs::the_query_worlds_hold_every_archetype_with_p_and_v | miri
+crates/ponko_bench/src/query_filters.rs | step | crates/ponko_bench/src/query_filters.rs::the_c_path_steps_every_row_once_with_and_without_a_filter | miri
+crates/ponko_bench/src/query_policy.rs | register_late | crates/ponko_bench/src/query_policy.rs::components_registered_late_keep_query_results | miri
+
+# Sparse-set prototypes reading archetype components by cached id.
+crates/ponko_bench/src/sparse_set/proto.rs | dense_ref | crates/ponko_bench/src/sparse_set/proto.rs::both_join_drivers_visit_the_same_entities | miri
+crates/ponko_bench/src/sparse_set/proto.rs | dense_mut | crates/ponko_bench/src/sparse_set/proto.rs::both_join_drivers_visit_the_same_entities | miri
+crates/ponko_bench/src/sparse_set/proto.rs | Hybrid::join_from_set | crates/ponko_bench/src/sparse_set/proto.rs::both_join_drivers_visit_the_same_entities | miri
+crates/ponko_bench/src/sparse_set.rs | Sset::and | crates/ponko_bench/src/sparse_set.rs::both_storages_compute_the_same_frames | miri
+crates/ponko_bench/src/sparse_set.rs | dense_sset_iter | crates/ponko_bench/src/sparse_set.rs::the_dense_case_computes_the_same_on_every_storage | miri
+
 # ---- The C API: helpers no tested C function reaches by a plain call ---------
 
 # Called by the engine through a trait object or a drop, not by name.

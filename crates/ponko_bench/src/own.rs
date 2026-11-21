@@ -789,6 +789,20 @@ mod tests {
     }
 
     #[test]
+    fn get_mut_writes_the_entitys_own_row() {
+        let mut w = World::new();
+        let es: Vec<_> = (0..4).map(|i| w.spawn((Pos(i as f32, 0.0), Vel(0.0, 0.0)))).collect();
+        w.get_mut::<Pos>(es[2]).unwrap().1 = 9.0;
+        assert!(w.get_mut::<Tag>(es[2]).is_none());
+        for (i, &e) in es.iter().enumerate() {
+            let y = if i == 2 { 9.0 } else { 0.0 };
+            assert_eq!(w.get::<Pos>(e), Some(&Pos(i as f32, y)));
+        }
+        w.despawn(es[2]);
+        assert!(w.get_mut::<Pos>(es[2]).is_none(), "a dead entity has nothing");
+    }
+
+    #[test]
     fn zero_sized_components() {
         let mut w = World::new();
         let es: Vec<_> = (0..20).map(|_| w.spawn((Tag, Pos(1.0, 1.0)))).collect();

@@ -522,11 +522,8 @@ fn transitions(filter: Option<&str>) {
         }
         let (mut w, ids, e) = world_with(&set);
         let extra0 = ids[SPREAD];
-        // SAFETY: an 8-byte value whose drop function does nothing.
-        let with_drop = unsafe { w.raw().register_component("with-drop", 8, 8, Some(noop_drop)) };
-        let drop_value = [0u8; 8];
-        // SAFETY: an 8-byte value of the 8-byte component.
-        assert!(unsafe { w.raw().insert_dynamic(e, with_drop, drop_value.as_ptr()) });
+        let with_drop = register_with_drop(&mut w);
+        assert!(add_with_drop(&mut w, e, with_drop));
         assert!(w.raw().remove_dynamic(e, with_drop));
         let extras: Vec<ComponentId> = ids[SPREAD..SPREAD + 32].to_vec();
         // Visit every edge once, so each case below starts with the edges cached.
@@ -557,8 +554,7 @@ fn transitions(filter: Option<&str>) {
                     Box::new(|| {
                         let mut w = w.borrow_mut();
                         for _ in 0..TOGGLES {
-                            // SAFETY: an 8-byte value of the 8-byte component.
-                            unsafe { w.raw().insert_dynamic(e, with_drop, drop_value.as_ptr()) };
+                            add_with_drop(&mut w, e, with_drop);
                             w.raw().remove_dynamic(e, with_drop);
                         }
                         0
@@ -588,8 +584,7 @@ fn transitions(filter: Option<&str>) {
             let before = crate::alloc::Counts::now();
             add(&mut w, e, extra0);
             w.raw().remove_dynamic(e, extra0);
-            // SAFETY: an 8-byte value of the 8-byte component.
-            unsafe { w.raw().insert_dynamic(e, with_drop, drop_value.as_ptr()) };
+            add_with_drop(&mut w, e, with_drop);
             w.raw().remove_dynamic(e, with_drop);
             for &x in &extras {
                 add(&mut w, e, x);
@@ -627,6 +622,20 @@ fn transitions(filter: Option<&str>) {
 /// Drop function of the `with-drop` component: removing a component that has
 /// one moves the value out before dropping it.
 unsafe extern "C-unwind" fn noop_drop(_: *mut u8) {}
+
+/// Registers `with-drop`: 8 bytes, with a drop function that does nothing.
+fn register_with_drop(w: &mut World) -> ComponentId {
+    // SAFETY: plain 8-byte values; `noop_drop` accepts any of them.
+    unsafe { w.raw().register_component("with-drop", 8, 8, Some(noop_drop)) }
+}
+
+/// Adds (or replaces) `e`'s `with-drop` value; false for a dead entity.
+fn add_with_drop(w: &mut World, e: Entity, id: ComponentId) -> bool {
+    let value = 0u64;
+    // SAFETY: `id` is the 8-byte, 8-aligned `with-drop` and `value` is 8
+    // aligned bytes.
+    unsafe { w.raw().insert_dynamic(e, id, (&raw const value).cast()) }
+}
 
 /// Multiplicative hash of the id: the same `write_u32` as the engine's
 /// `ComponentIdHasher`, which is crate-private.
@@ -1040,6 +1049,42 @@ mod tests {
             assert!(w.raw().remove_dynamic(e, x));
         }
         assert_eq!(w.raw_ref().archetypes().len(), before);
+    }
+
+    /// A component with a drop function comes and goes like the others,
+    /// through warm edges.
+    #[test]
+    fn a_component_with_a_drop_function_toggles_without_new_archetypes() {
+        let set = pick(Layout::Sparse, 8);
+        let (mut w, _ids, e) = world_with(&set);
+        let with_drop = register_with_drop(&mut w);
+        assert!(add_with_drop(&mut w, e, with_drop));
+        assert!(add_with_drop(&mut w, e, with_drop), "a second add replaces");
+        assert!(w.raw().remove_dynamic(e, with_drop));
+        let before = w.raw_ref().archetypes().len();
+        for _ in 0..16 {
+            assert!(add_with_drop(&mut w, e, with_drop));
+            assert!(w.raw().remove_dynamic(e, with_drop));
+        }
+        assert_eq!(w.raw_ref().archetypes().len(), before);
+        w.despawn(e);
+        assert!(!add_with_drop(&mut w, e, with_drop));
+    }
+
+    /// The query benchmark's world: `QUERY_ARCHETYPES` archetypes of
+    /// `QUERY_ROWS` rows, each with `P` and `V`, wherever they were registered.
+    #[test]
+    fn the_query_worlds_hold_every_archetype_with_p_and_v() {
+        for place in [Place::First, Place::Last] {
+            let (mut w, p, v) = query_world(4, place);
+            assert_ne!(p, v);
+            let mut rows = 0;
+            w.query::<(&P, &V)>().for_each(|(p, v)| {
+                assert_eq!((p.0, v.0), (1.0, 0.5));
+                rows += 1;
+            });
+            assert_eq!(rows, QUERY_ARCHETYPES * QUERY_ROWS);
+        }
     }
 
     #[test]

@@ -290,14 +290,18 @@ fn churn(b: &mut Bench) {
             |s| {
                 for _ in 0..256 {
                     s.step += 1;
-                    let name = format!("late-{}", s.step);
-                    // SAFETY: a plain 4-byte component without a destructor.
-                    black_box(unsafe { s.w.raw().register_component(&name, 4, 4, None) });
+                    black_box(register_late(&mut s.w, s.step));
                     black_box(four_queries(&mut s.w));
                 }
             },
         );
     }
+}
+
+/// Registers component `late-<n>` (4 plain bytes) between queries.
+fn register_late(w: &mut World, n: usize) -> ComponentId {
+    // SAFETY: a plain 4-byte component without a destructor.
+    unsafe { w.raw().register_component(&format!("late-{n}"), 4, 4, None) }
 }
 
 struct Game {
@@ -500,23 +504,6 @@ fn frames(b: &mut Bench) {
 }
 
 /// Peak resident memory of this process so far, in bytes.
-#[cfg(unix)]
-fn peak_rss() -> Option<usize> {
-    // SAFETY: `getrusage` fills the struct it is given.
-    let usage = unsafe {
-        let mut usage = std::mem::zeroed::<libc::rusage>();
-        (libc::getrusage(libc::RUSAGE_SELF, &mut usage) == 0).then_some(usage)?
-    };
-    // Bytes on macOS, kilobytes elsewhere.
-    let unit = if cfg!(target_os = "macos") { 1 } else { 1024 };
-    Some(usage.ru_maxrss as usize * unit)
-}
-
-#[cfg(not(unix))]
-fn peak_rss() -> Option<usize> {
-    None
-}
-
 /// The index's own bytes (the `KiB` column) and the process's peak resident
 /// memory after 100 frames of the mixed workload. Run one case per process
 /// (`-- query-policy/mem/4096/auto`): the peak never goes down.
@@ -548,7 +535,7 @@ fn memory(b: &mut Bench) {
                     stats.indices,
                     stats.bytes,
                     world / 1024,
-                    peak_rss().map_or("unavailable".into(), |b| format!("{} KiB", b / 1024)),
+                    crate::alloc::peak_rss().map_or("unavailable".into(), |b| format!("{} KiB", b / 1024)),
                 );
             }
         }
@@ -649,6 +636,17 @@ mod tests {
             assert_eq!(count_with(&mut w, k), expected);
             assert!(sum_with(&mut w, k) > 0);
         }
+    }
+
+    /// Registering components between queries changes no query's answer.
+    #[test]
+    fn components_registered_late_keep_query_results() {
+        let mut s = churn_world(Strategy::Auto);
+        let before = four_queries(&mut s.w);
+        let ids: Vec<ComponentId> = (0..16).map(|n| register_late(&mut s.w, n)).collect();
+        assert!(ids.windows(2).all(|p| p[0] != p[1]));
+        assert_eq!(s.w.component_info(ids[3]).name(), "late-3");
+        assert_eq!(four_queries(&mut s.w), before);
     }
 
     #[test]

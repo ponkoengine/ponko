@@ -4,9 +4,9 @@
 "Every `unsafe` block needs a test that exercises it" (AGENTS.md). The ECS
 (crates/ponko_ecs) runs its own tests under Miri; this script covers the rest
 of the workspace: the engine (src/) and the crates' library and binary
-sources (crates/*/src), except
-  - crates/ponko_ecs (its own Miri jobs) and crates/ponko_bench (the
-    benchmark binary, never shipped; its prototypes have their own tests),
+sources (crates/*/src, the benchmark binary crates/ponko_bench included),
+except
+  - crates/ponko_ecs (its own Miri jobs),
   - the bodies of `extern "C" fn` exports in crates/ponko_ffi/src: each export
     is tested or on a reasoned allowlist, which scripts/check-ffi-coverage.py
     holds (the helpers of the C API crate are listed here like any other code),
@@ -48,10 +48,8 @@ ROOT = Path(__file__).resolve().parent.parent
 INVENTORY = ROOT / 'scripts' / 'unsafe-inventory.txt'
 NO_MIRI = {'c-library', 'gpu', 'os', 'windows', 'macos', 'wasm', 'window', 'sanitizers'}
 TEST_DIRS = {'tests', 'examples', 'benches'}
-# The ECS has its own Miri jobs. ponko_bench is the benchmark binary (never
-# published or shipped): its prototypes carry their own tests, and its
-# benchmark bodies are what a benchmark run executes.
-SKIPPED_CRATES = {'ponko_ecs', 'ponko_bench'}
+# The ECS has its own Miri jobs.
+SKIPPED_CRATES = {'ponko_ecs'}
 
 # What is not code: raw strings, strings, byte and character literals, block
 # and line comments. They are blanked (newlines kept) so offsets still match.
@@ -234,8 +232,15 @@ def unsafe_sites(path, text):
         if macros:
             item = 'macro ' + macros[-1][3]
         elif form == 'impl':
-            header = code[m.end():body_start(code, m.end()) or m.end() + 80]
-            item = 'impl ' + ' '.join(header.split()[1:])
+            header = code[m.end():body_start(code, m.end()) or m.end() + 80].strip()[len('impl'):].lstrip()
+            if header.startswith('<'):  # the impl's own generics: `impl<T: X> Trait for Type<T>`
+                depth = 0
+                for i, c in enumerate(header):
+                    depth += (c == '<') - (c == '>')
+                    if depth == 0:
+                        header = header[i + 1:]
+                        break
+            item = 'impl ' + ' '.join(header.split())
             item = re.sub(r'\s*\{.*', '', item)
         elif form == 'trait':
             item = 'trait ' + re.match(r'trait\s+(\w+)', rest).group(1)
@@ -528,12 +533,19 @@ def unit_test_path(test):
         package, rest = parts[1], parts[2:]
     else:
         package, rest = 'ponko', parts
+    crate = ROOT / Path(*parts[:len(parts) - len(rest)])
     if rest[0] == 'tests':
         target = f'--test {Path(rest[1]).stem}'
         modules = []
     else:
-        target = '--lib'
-        modules = list(rest[1:])
+        if rest[:2] == ('src', 'bin'):
+            # A binary of its own (`src/bin/<name>.rs` or `src/bin/<name>/main.rs`).
+            target = f'--bin {Path(rest[2]).stem}'
+            modules = list(rest[3:]) or ['main']
+        else:
+            # A library, or a crate that is only a binary (`src/main.rs`).
+            target = '--lib' if (crate / 'src' / 'lib.rs').is_file() else f'--bin {package}'
+            modules = list(rest[1:])
         modules[-1] = Path(modules[-1]).stem
         if modules[-1] in ('mod', 'lib', 'main'):
             modules.pop()
@@ -577,6 +589,7 @@ fn plain() { let s = "unsafe { not code }"; } // unsafe in a comment
 fn reads(p: *const u8) -> u8 { unsafe { *p } }
 struct Slots;
 unsafe impl Send for Slots {}
+unsafe impl<T: Copy> Sync for Wrap<T> {}
 impl Slots {
     pub unsafe fn write(&self) { unsafe { core::hint::black_box(0) }; }
     fn helper(&self) { let f: unsafe fn() = noop; let c = 'x'; unsafe { f() } }
@@ -600,6 +613,7 @@ def selftest():
     want = [
         ('reads', 'block', False),
         ('impl Send for Slots', 'impl', False),
+        ('impl Sync for Wrap<T>', 'impl', False),
         ('Slots::write', 'fn', False),
         ('Slots::write', 'block', False),
         ('Slots::helper', 'block', False),

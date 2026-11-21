@@ -126,28 +126,6 @@ fn row(f: &SceneFrame) -> FrameRow {
     }
 }
 
-/// The process's largest resident set so far, or why it can't be read.
-fn peak_rss() -> Result<u64, String> {
-    #[cfg(unix)]
-    {
-        // SAFETY: `getrusage` fills the zeroed struct it is given.
-        let usage = unsafe {
-            let mut usage: libc::rusage = std::mem::zeroed();
-            if libc::getrusage(libc::RUSAGE_SELF, &mut usage) != 0 {
-                return Err("getrusage failed".to_owned());
-            }
-            usage
-        };
-        // Bytes on macOS, kilobytes elsewhere.
-        let unit = if cfg!(target_os = "macos") { 1 } else { 1024 };
-        Ok(usage.ru_maxrss as u64 * unit)
-    }
-    #[cfg(not(unix))]
-    {
-        Err("the peak resident set is not read on this platform".to_owned())
-    }
-}
-
 /// Draws `kind` and gathers its report. `Err` without a GPU.
 fn measure(kind: SceneKind, settings: &Settings) -> Result<(SceneReport, SceneBench), String> {
     let mut bench = SceneBench::new(kind, settings.setup)?;
@@ -410,7 +388,7 @@ pub fn run(b: &mut Bench) -> Option<String> {
     if report.scenes.is_empty() {
         return None;
     }
-    match peak_rss() {
+    match alloc::peak_rss() {
         Ok(bytes) => report.peak_rss_bytes = Some(bytes),
         Err(reason) => report.peak_rss_unavailable = Some(reason),
     }
