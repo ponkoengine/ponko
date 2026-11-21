@@ -532,12 +532,54 @@ fn resolved_clouds_hold_still_from_frame_to_frame() {
     stage.finish();
 }
 
+#[test]
+fn interleaved_presets_march_a_quarter_and_settle_on_the_same_clouds() {
+    let Some(mut stage) = stage((96, 64), None) else { return };
+    set_time(&mut stage, 15.0, SkyKit::default());
+    look(&mut stage, vec3(0.0, 2.0, 0.0), -Vec3::Z, 30.0);
+    // The default preset is interleaved: its trace is a quarter of the
+    // cloud image (48 x 32 at half this frame's size).
+    let interleaved = stage.settled(SETTLE * 2);
+    assert_eq!(
+        stage.renderer.cloud_trace_size(),
+        Some((24, 16)),
+        "a quarter of the pixels marched"
+    );
+    // The same clouds marched at every pixel each frame.
+    assert!(stage.renderer.set_full_cloud_march(true));
+    let full = stage.settled(SETTLE * 2);
+    assert_eq!(stage.renderer.cloud_trace_size(), Some((48, 32)), "every pixel marched");
+    let same = Tolerance {
+        channel: 12,
+        outliers: 0.03,
+        edge: 0,
+    };
+    let d = diff_within(&interleaved, &full, same);
+    eprintln!("interleaved vs full march: {d}");
+    assert!(
+        d.within(same),
+        "the interleaved march settles on the clouds a full march draws: {d:?}"
+    );
+    // Negative control: the comparison tells other clouds apart.
+    stage.renderer.set_full_cloud_march(false);
+    set_time(&mut stage, 15.0, SkyKit::default().with_coverage(0.75));
+    let other = stage.settled(SETTLE * 2);
+    let d = diff_within(&interleaved, &other, same);
+    assert!(!d.within(same), "more cover draws other clouds: {d}");
+    stage.finish();
+}
+
 // ---------------------------------------------------------------------------
 // Cost.
 
 /// The GPU time of the kit's passes at each [`CloudQuality`], at
-/// 1920 x 1080 (the numbers in `CloudQuality`'s docs). Run by hand:
-/// `cargo test -p ponko --lib --features 3d --release cloud_presets_gpu_time -- --ignored --nocapture`.
+/// 1920 x 1080 (the numbers in `CloudQuality`'s docs): every volumetric
+/// preset both ways, marching every pixel each frame ("full", what the
+/// presets did before the interleaved march) and as it ships, the two
+/// interleaved run after run so a busy machine weighs on both alike. Run
+/// by hand:
+/// `cargo test -p ponko --lib --features 3d --release cloud_presets_gpu_time -- --ignored --nocapture`
+/// (`PONKO_CLOUD_RUNS` sets the runs, default 3).
 #[test]
 #[ignore]
 fn cloud_presets_gpu_time() {
@@ -552,6 +594,10 @@ fn cloud_presets_gpu_time() {
         skip("timestamp queries unavailable");
         return;
     };
+    let runs: usize = std::env::var("PONKO_CLOUD_RUNS")
+        .ok()
+        .and_then(|r| r.parse().ok())
+        .unwrap_or(3);
     look(&mut stage, vec3(0.0, 2.0, 0.0), -Vec3::Z, 20.0);
     stage.ctx.scene3d.lighting.sun_direction = crate::render::Sky::sun_direction_at(14.0);
     // The whole frame's GPU time (every pass's), over 40 frames after 20 to
@@ -583,16 +629,35 @@ fn cloud_presets_gpu_time() {
             .collect();
         (at(&totals, 0.5), at(&totals, 0.1), at(&totals, 0.9), parts.join(", "))
     };
-    let (base, lo, hi, _) = run(&mut stage);
-    eprintln!("1920x1080, frame without the kit (atmosphere): {base:.3} ms median ({lo:.3}..{hi:.3})");
-    for quality in CloudQuality::ALL {
-        set_time(&mut stage, 14.0, SkyKit::default().with_quality(quality));
-        let (total, lo, hi, parts) = run(&mut stage);
-        eprintln!(
-            "{}: frame {total:.3} ms median ({lo:.3}..{hi:.3}), kit +{:.3} ms; {parts}",
-            quality.name(),
-            total - base,
-        );
+    for r in 0..runs {
+        stage.ctx.scene3d.sky.kit = None;
+        let (base, lo, hi, _) = run(&mut stage);
+        eprintln!("run {r}: 1920x1080, frame without the kit (atmosphere): {base:.3} ms median ({lo:.3}..{hi:.3})");
+        for quality in CloudQuality::ALL {
+            let ways: &[bool] = if quality.interleaved() {
+                &[true, false]
+            } else {
+                &[false]
+            };
+            for &full in ways {
+                set_time(&mut stage, 14.0, SkyKit::default().with_quality(quality));
+                // The passes are made in the first frame with the kit.
+                stage.render();
+                stage.renderer.set_full_cloud_march(full);
+                let (total, lo, hi, parts) = run(&mut stage);
+                let how = match (quality.is_volumetric(), full || !quality.interleaved()) {
+                    (false, _) => "",
+                    (true, true) => " full",
+                    (true, false) => " interleaved",
+                };
+                eprintln!(
+                    "run {r}: {}{how}: frame {total:.3} ms median ({lo:.3}..{hi:.3}), kit +{:.3} ms; {parts}",
+                    quality.name(),
+                    total - base,
+                );
+            }
+            stage.renderer.set_full_cloud_march(false);
+        }
     }
     stage.finish();
 }

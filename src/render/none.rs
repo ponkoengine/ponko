@@ -74,6 +74,10 @@ impl Renderer {
     pub fn create_render_target(&mut self, _width: u32, _height: u32) -> u32 {
         match *self {}
     }
+    #[cfg(feature = "3d")]
+    pub fn write_render_target(&mut self, _id: u32, _width: u32, _height: u32, _texels: &[u8]) {
+        match *self {}
+    }
     pub fn update_texture(&mut self, _id: u32, _width: u32, _height: u32, _rgba: &[u8]) {
         match *self {}
     }

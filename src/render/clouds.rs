@@ -13,7 +13,13 @@
 //!   frame's width and height into `trace`, the resolve of that with last
 //!   frame's result into one of the two `history` images (they swap each
 //!   frame), and the composite of the resolved image over the sky's pixels
-//!   in the opaque pass, right after the sky.
+//!   in the opaque pass, right after the sky. The interleaved presets
+//!   (`CloudQuality::interleaved`) march a quarter of the history's pixels
+//!   each frame: `trace` is half its width and height, and the resolve
+//!   fills in the other three of each 2 x 2 block from their history.
+//!   No upsample needs the depth: the march never stops at geometry (it
+//!   traces every pixel to the sky), and the composite's depth test keeps
+//!   the clouds to the sky's pixels at the frame's full size.
 //!
 //! The kit's sky itself is a sky shader (`sky_kit.wgsl`), compiled and
 //! held with the game's sky shaders (`gpu3d/sky_shaders.rs`).
@@ -75,11 +81,28 @@ struct PassUniform {
     previous: [[f32; 4]; 4],
     params: [f32; 4],
     size: [f32; 4],
+    step: [f32; 4],
 }
 
 /// The cloud image's size for a frame of `size`: half its width and height.
 pub(super) fn cloud_size(size: (u32, u32)) -> (u32, u32) {
     (size.0.div_ceil(2).max(1), size.1.div_ceil(2).max(1))
+}
+
+/// The trace's size for a cloud image of `size`: the same, or interleaved
+/// half its width and height (one pixel of each 2 x 2 block a frame).
+pub(super) fn trace_size(size: (u32, u32), interleaved: bool) -> (u32, u32) {
+    if interleaved {
+        (size.0.div_ceil(2).max(1), size.1.div_ceil(2).max(1))
+    } else {
+        size
+    }
+}
+
+/// Which pixel of each 2 x 2 block an interleaved trace marches on frame
+/// `frame`: all four in turn, the diagonal ones first.
+pub(super) fn interleave_step(frame: u32) -> (u32, u32) {
+    [(0, 0), (1, 1), (1, 0), (0, 1)][(frame % 4) as usize]
 }
 
 /// What the passes are made from, from the 3D renderer.
@@ -105,6 +128,10 @@ pub(super) struct Clouds {
     /// volumetric passes run (main view only).
     pub shadows: bool,
     pub volumetric: bool,
+    /// Tests: march every pixel each frame whatever the preset (the
+    /// presets' cost before the interleaved march).
+    #[cfg(test)]
+    pub full_march: bool,
 }
 
 struct Volume {
@@ -130,6 +157,8 @@ struct Volume {
 
 struct Images {
     size: (u32, u32),
+    /// Whether the trace is interleaved (a quarter of the history).
+    interleaved: bool,
     trace: wgpu::Texture,
     history: [wgpu::Texture; 2],
     /// The march's group (it reads neither image).
@@ -267,6 +296,8 @@ impl Clouds {
             volume: None,
             shadows: false,
             volumetric: false,
+            #[cfg(test)]
+            full_march: false,
         }
     }
 
@@ -446,10 +477,18 @@ impl Clouds {
         view_proj: Mat4,
         quality: CloudQuality,
     ) {
+        #[cfg(test)]
+        let full_march = self.full_march;
+        #[cfg(not(test))]
+        let full_march = false;
         let Some(v) = &mut self.volume else { return };
         let size = cloud_size(size);
-        if v.images.as_ref().is_none_or(|i| i.size != size) {
-            v.images = Some(Images::new(device, v, size));
+        let interleaved = quality.interleaved() && !full_march;
+        if v.images
+            .as_ref()
+            .is_none_or(|i| i.size != size || i.interleaved != interleaved)
+        {
+            v.images = Some(Images::new(device, v, size, interleaved));
             v.previous = None;
         }
         if v.quality != quality {
@@ -469,6 +508,10 @@ impl Clouds {
                 f32::from(previous.is_some()),
             ],
             size: [size.0 as f32, size.1 as f32, 1.0 / size.0 as f32, 1.0 / size.1 as f32],
+            step: {
+                let (x, y) = interleave_step(v.frames);
+                [x as f32, y as f32, f32::from(interleaved), 0.0]
+            },
         };
         v.mirror
             .upload(queue, Upload::Uniforms, &v.buffer, 0, bytemuck::bytes_of(&uniform));
@@ -574,13 +617,13 @@ impl Clouds {
 }
 
 impl Images {
-    fn new(device: &wgpu::Device, v: &Volume, size: (u32, u32)) -> Self {
-        let image = |label| {
+    fn new(device: &wgpu::Device, v: &Volume, size: (u32, u32), interleaved: bool) -> Self {
+        let image = |label, (width, height): (u32, u32)| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d {
-                    width: size.0,
-                    height: size.1,
+                    width,
+                    height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -597,8 +640,8 @@ impl Images {
                 view_formats: &[],
             })
         };
-        let trace = image("cloud trace");
-        let history = [image("cloud history"), image("cloud history")];
+        let trace = image("cloud trace", trace_size(size, interleaved));
+        let history = [image("cloud history", size), image("cloud history", size)];
         let view = |t: &wgpu::Texture| t.create_view(&Default::default());
         let (trace_view, history_views) = (view(&trace), [view(&history[0]), view(&history[1])]);
         let group = |a: &wgpu::TextureView, b: &wgpu::TextureView| {
@@ -627,6 +670,7 @@ impl Images {
         };
         Self {
             size,
+            interleaved,
             trace_group: group(&history_views[0], &history_views[1]),
             resolve_groups: [
                 group(&trace_view, &history_views[1]),

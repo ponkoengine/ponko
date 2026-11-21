@@ -1,8 +1,13 @@
 //! Gerstner waves: one table of waves that the water's vertex shader and
 //! the CPU height query both evaluate, so floating bodies ride the waves
-//! that are drawn.
+//! that are drawn. Or waves from a spectrum (`spectrum.rs`), a field the
+//! GPU and the CPU work out with the same FFT.
+
+use std::sync::Arc;
 
 use glam::{Vec2, Vec3};
+
+use super::spectrum::{SpectrumField, WaveSpectrum};
 
 /// Gravity the waves' speeds follow (deep-water dispersion), in m/s².
 pub const WAVE_GRAVITY: f32 = 9.81;
@@ -133,6 +138,8 @@ pub(crate) struct WaveTerm {
 pub struct Waves {
     terms: Vec<WaveTerm>,
     waves: Vec<Wave>,
+    /// Waves from a spectrum instead of the table.
+    spectrum: Option<Arc<SpectrumField>>,
 }
 
 impl Default for Waves {
@@ -148,7 +155,46 @@ impl Waves {
         Self {
             terms: Vec::new(),
             waves: Vec::new(),
+            spectrum: None,
         }
+    }
+
+    /// Waves from a wind-driven spectrum ([`WaveSpectrum`]): a sea of
+    /// thousands of waves, worked out each frame with an FFT. On the GPU
+    /// by compute passes, on a GPU without compute shaders (WebGL2) by the
+    /// CPU and uploaded; the height query runs the same FFT on the CPU.
+    /// The guide's "Waves from a spectrum" has the costs.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::water::{WaveSpectrum, Waves};
+    /// let sea = Waves::spectrum(WaveSpectrum::new(vec2(10.0, 0.0), 1.5));
+    /// assert!(sea.is_spectrum() && !sea.is_empty());
+    /// assert!(sea.waves().is_empty(), "no table of single waves");
+    /// ```
+    #[must_use]
+    pub fn spectrum(spectrum: WaveSpectrum) -> Self {
+        Self {
+            terms: Vec::new(),
+            waves: Vec::new(),
+            spectrum: Some(Arc::new(SpectrumField::new(spectrum))),
+        }
+    }
+
+    /// Whether these are waves from a spectrum.
+    #[must_use]
+    pub fn is_spectrum(&self) -> bool {
+        self.spectrum.is_some()
+    }
+
+    /// The spectrum's settings, for waves from one.
+    #[must_use]
+    pub fn spectrum_settings(&self) -> Option<WaveSpectrum> {
+        self.spectrum.as_ref().map(|s| s.settings)
+    }
+
+    pub(crate) fn spectrum_field(&self) -> Option<&Arc<SpectrumField>> {
+        self.spectrum.as_ref()
     }
 
     /// The waves given (the first [`MAX_WAVES`]). Waves of zero length or
@@ -179,7 +225,11 @@ impl Waves {
                 phase: w.phase,
             })
             .collect();
-        Self { terms, waves }
+        Self {
+            terms,
+            waves,
+            spectrum: None,
+        }
     }
 
     /// Gentle ripples for a lake or pond: three short waves `height` metres
@@ -228,7 +278,8 @@ impl Waves {
         Self::new(&waves)
     }
 
-    /// The waves as given (after dropping empty ones).
+    /// The waves as given (after dropping empty ones); none for waves from
+    /// a spectrum.
     #[must_use]
     pub fn waves(&self) -> &[Wave] {
         &self.waves
@@ -237,20 +288,27 @@ impl Waves {
     /// Whether there are no waves (flat water).
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.terms.is_empty()
+        self.terms.is_empty() && self.spectrum.is_none()
     }
 
     /// The highest the surface can rise above (or sink below) its rest
-    /// level: the sum of the amplitudes.
+    /// level: the sum of the amplitudes (from a spectrum: ten times the
+    /// heights' spread, which a sea practically never reaches).
     #[must_use]
     pub fn max_height(&self) -> f32 {
+        if let Some(s) = &self.spectrum {
+            return s.max_height;
+        }
         self.terms.iter().map(|t| t.amplitude).sum()
     }
 
     /// The farthest the surface moves sideways: the sum of the horizontal
-    /// amplitudes.
+    /// amplitudes (from a spectrum: as [`max_height`](Self::max_height)).
     #[must_use]
     pub fn max_sway(&self) -> f32 {
+        if let Some(s) = &self.spectrum {
+            return s.max_sway;
+        }
         self.terms.iter().map(|t| t.sway).sum()
     }
 
@@ -262,6 +320,9 @@ impl Waves {
     /// sideways and up. This is what the vertex shader does to each vertex.
     #[must_use]
     pub fn displace(&self, p: Vec2, t: f32) -> Vec3 {
+        if let Some(s) = &self.spectrum {
+            return s.field(t, false).displace(p, s.settings.tile.max(1.0));
+        }
         let mut out = Vec3::new(p.x, 0.0, p.y);
         for w in &self.terms {
             let theta = w.k * w.dir.dot(p) - w.omega * t + w.phase;
@@ -278,6 +339,9 @@ impl Waves {
     /// kept below folding, so it converges).
     #[must_use]
     pub fn rest_point(&self, at: Vec2, t: f32) -> Vec2 {
+        if let Some(s) = &self.spectrum {
+            return s.field(t, false).rest_point(at, s.settings.tile.max(1.0));
+        }
         if self.terms.is_empty() {
             return at;
         }
@@ -313,6 +377,10 @@ impl Waves {
     /// tessellation.
     #[must_use]
     pub fn height_at(&self, at: Vec2, t: f32) -> f32 {
+        if let Some(s) = &self.spectrum {
+            let (field, tile) = (s.field(t, false), s.settings.tile.max(1.0));
+            return field.displace(field.rest_point(at, tile), tile).y;
+        }
         if self.terms.is_empty() {
             return 0.0;
         }
@@ -323,12 +391,19 @@ impl Waves {
     /// velocity there and how squeezed it is.
     #[must_use]
     pub fn sample(&self, at: Vec2, t: f32) -> WaveSample {
+        if let Some(s) = &self.spectrum {
+            let (field, tile) = (s.field(t, true), s.settings.tile.max(1.0));
+            return field.sample_rest(field.rest_point(at, tile), tile);
+        }
         let p = self.rest_point(at, t);
         self.sample_rest(p, t)
     }
 
     /// [`sample`](Self::sample) at rest point `p`.
     pub(crate) fn sample_rest(&self, p: Vec2, t: f32) -> WaveSample {
+        if let Some(s) = &self.spectrum {
+            return s.field(t, true).sample_rest(p, s.settings.tile.max(1.0));
+        }
         let mut height = 0.0;
         let mut n = Vec3::Y;
         let mut v = Vec3::ZERO;

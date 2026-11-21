@@ -285,6 +285,21 @@ impl CloudQuality {
         }
     }
 
+    /// Whether each frame marches a quarter of the cloud image's pixels (one
+    /// of every 2 x 2 block, a different one each frame) and fills in the
+    /// rest from the frames before: `Low` and `Medium`, the presets for
+    /// mid-range GPUs. `High` marches every pixel each frame.
+    ///
+    /// ```
+    /// use ponko::render::CloudQuality;
+    /// assert!(CloudQuality::Medium.interleaved());
+    /// assert!(!CloudQuality::High.interleaved());
+    /// ```
+    #[must_use]
+    pub fn interleaved(self) -> bool {
+        matches!(self, CloudQuality::Low | CloudQuality::Medium)
+    }
+
     /// The preset's name: `flat`, `low`, `medium` or `high`.
     #[must_use]
     pub fn name(self) -> &'static str {

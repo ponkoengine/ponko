@@ -11,6 +11,10 @@
 //! - **Waves**: up to [`MAX_WAVES`] Gerstner waves ([`Waves`]) move the
 //!   vertices. The CPU evaluates the same table ([`Water::height_at`],
 //!   [`Water::sample`]), so what floats rides the waves that are drawn.
+//!   Or waves from a spectrum ([`Waves::spectrum`], [`WaveSpectrum`]): a
+//!   field worked out each frame by an FFT, in compute passes (or on the
+//!   CPU where the GPU has no compute shaders), the height query running
+//!   the same FFT.
 //! - **Refraction with depth absorption**: what lies under the surface is
 //!   bent by its normal and dimmed per colour channel by the length of
 //!   water the light crosses ([`WaterDesc::absorption`]), towards the
@@ -24,7 +28,8 @@
 //! - **Flow**: a current ([`WaterDesc::flow`]) or a [`FlowMap`] moves the
 //!   small ripples and the foam downstream.
 //! - **Contact ripples**: [`Water::touch`] (and bodies crossing the
-//!   surface) start rings in a ripple simulation run by a compute pass.
+//!   surface) start rings in a ripple simulation run by a compute pass,
+//!   or on the CPU (and uploaded) on a GPU without compute shaders.
 //! - **Underwater**: when the camera dips below the surface, a screen
 //!   effect tints and dims what it sees by the water between.
 //!
@@ -32,11 +37,14 @@
 //! texture, shader or uniform is added before that.
 
 mod buoyancy;
+mod ripples;
 pub(crate) mod shaders;
+pub(crate) mod spectrum;
 mod waves;
 
 #[cfg(feature = "physics3d")]
 pub use buoyancy::{Buoyancy, float_bodies};
+pub use spectrum::{SPECTRUM_PERIOD, WaveSpectrum};
 pub use waves::{MAX_WAVES, WAVE_GRAVITY, Wave, WaveSample, Waves};
 
 use glam::{Vec2, Vec3, Vec4};
@@ -308,8 +316,8 @@ pub struct WaterDesc {
     /// How much work the shader and passes do.
     pub quality: WaterQuality,
     /// Contact ripples ([`Water::touch`]): a ripple simulation over a
-    /// square of `ripple_area` metres around `center`. Needs compute
-    /// shaders (not on WebGL2, where touching does nothing).
+    /// square of `ripple_area` metres around `center`, in a compute pass,
+    /// or on the CPU on a GPU without compute shaders (WebGL2).
     pub ripples: bool,
     /// The side of the ripple square, in metres.
     pub ripple_area: f32,
@@ -454,14 +462,40 @@ pub(crate) struct WaterParts {
     pub reflection: Option<RenderTarget>,
     pub ripples: Option<RippleParts>,
     pub underwater: Option<(Effect, Material)>,
+    pub spectrum: Option<SpectrumParts>,
 }
 
-/// The contact ripple simulation's handles.
+/// The contact ripple simulation's handles. `compute` is `None` where
+/// the CPU runs the simulation (no compute shaders) and uploads it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct RippleParts {
-    pub compute: Compute,
+    pub compute: Option<Compute>,
     pub target: RenderTarget,
     pub material: Material,
+}
+
+/// The most FFT passes a spectrum takes: the spectrum, then eight stages
+/// along x and eight along z (256 texels across).
+pub(crate) const MAX_SPECTRUM_PASSES: usize = 17;
+
+/// The handles of waves from a spectrum: the field the surface reads, and
+/// on the GPU path its start and its passes (`gpu` is `None` where the CPU
+/// works the field out and uploads it).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SpectrumParts {
+    pub field: RenderTarget,
+    pub gpu: Option<SpectrumPasses>,
+}
+
+/// The spectrum's GPU passes: the start texture, the two shaders and a
+/// material per pass (`count` of them, the spectrum's first).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SpectrumPasses {
+    pub start: RenderTarget,
+    pub spectrum: Compute,
+    pub butterfly: Compute,
+    pub materials: [Material; MAX_SPECTRUM_PASSES],
+    pub count: usize,
 }
 
 /// How many ripple contacts one frame's simulation step takes; more wait
@@ -487,6 +521,10 @@ pub struct Water {
     surface: MaterialDesc,
     /// Ripple contacts waiting for the simulation: x, z, radius, strength.
     contacts: Vec<Vec4>,
+    /// The ripple simulation, where the CPU runs it (no compute shaders).
+    cpu_ripples: Option<ripples::CpuRipples>,
+    /// The spectrum's field as uploaded, where the CPU works it out.
+    field_upload: Vec<u8>,
     /// Whether the ripple material carries contacts now.
     contacts_sent: bool,
     /// Whether the underwater effect is in the frame's passes now.
@@ -542,13 +580,10 @@ impl Water {
         } else {
             None
         };
-        // Without compute shaders (WebGL2) making the pass fails: no ripples.
-        let compute = if desc.ripples {
-            ctx.gfx.try_create_compute("water ripples", shaders::RIPPLES).ok()
-        } else {
-            None
-        };
-        let ripples = if let Some(compute) = compute {
+        // Without compute shaders (WebGL2) making the pass fails: the CPU
+        // runs the ripples instead.
+        let ripples = if desc.ripples {
+            let compute = ctx.gfx.try_create_compute("water ripples", shaders::RIPPLES).ok();
             let target = ctx
                 .gfx
                 .try_create_render_target(spec.ripple_texels, spec.ripple_texels)?;
@@ -561,12 +596,17 @@ impl Water {
         } else {
             None
         };
+        let spectrum = match desc.waves.spectrum_field() {
+            Some(field) => Some(spawn_spectrum(ctx, field)?),
+            None => None,
+        };
         let has_ripples = ripples.is_some();
         let shader = ctx.gfx.try_create_shader(
             "water surface",
             &shaders::surface(&desc, reflection.is_some(), has_ripples),
         )?;
-        let surface = surface_material(&desc, shader, reflection, ripples.map(|r| r.target), flow);
+        let mut surface = surface_material(&desc, shader, reflection, ripples.map(|r| r.target), flow);
+        surface.texture = spectrum.map(|s| s.field.texture());
         let material = ctx.gfx.try_create_material(surface)?;
         let data = water_mesh(&desc);
         let mesh = ctx.gfx.try_create_mesh(&data, material)?;
@@ -576,16 +616,31 @@ impl Water {
             let effect = ctx
                 .gfx
                 .try_create_effect("water underwater", &shaders::underwater(&desc))?;
-            let material = ctx.gfx.try_create_material(underwater_material(&desc))?;
+            let mut under = underwater_material(&desc);
+            under.texture = spectrum.map(|s| s.field.texture());
+            let material = ctx.gfx.try_create_material(under)?;
             Some((effect, material))
         } else {
             None
         };
-        if let Some(r) = ripples {
+        if let Some(RippleParts {
+            compute: Some(compute),
+            target,
+            material,
+        }) = ripples
+        {
             ctx.scene3d
                 .passes
                 .compute
-                .push(ComputePass::new(r.compute, r.target).with_material(r.material));
+                .push(ComputePass::new(compute, target).with_material(material));
+        }
+        if let Some(SpectrumParts { field, gpu: Some(gpu) }) = spectrum {
+            ctx.scene3d
+                .passes
+                .compute
+                .extend(gpu.materials[..gpu.count].iter().enumerate().map(|(i, &m)| {
+                    ComputePass::new(if i == 0 { gpu.spectrum } else { gpu.butterfly }, field).with_material(m)
+                }));
         }
         let parts = WaterParts {
             shader,
@@ -595,6 +650,7 @@ impl Water {
             reflection,
             ripples,
             underwater,
+            spectrum,
         };
         let at = mesh_position(&desc, ctx.scene3d.camera.position);
         let water = Water::from_parts(desc, parts, surface);
@@ -604,11 +660,17 @@ impl Water {
     /// A water body over handles already made (the GPU tests make them on
     /// both sides themselves).
     pub(crate) fn from_parts(desc: WaterDesc, parts: WaterParts, surface: MaterialDesc) -> Self {
+        let cpu_ripples = parts
+            .ripples
+            .filter(|r| r.compute.is_none())
+            .map(|r| ripples::CpuRipples::new(r.target.width()));
         Self {
             desc,
             parts,
             surface,
             contacts: Vec::with_capacity(MAX_WAITING_CONTACTS),
+            cpu_ripples,
+            field_upload: Vec::new(),
             contacts_sent: false,
             under: false,
             ripple_sent: None,
@@ -746,7 +808,18 @@ impl Water {
                 None => passes.push(mirror),
             }
         }
-        if let Some(r) = self.parts.ripples {
+        if let (Some(r), Some(sim)) = (self.parts.ripples, self.cpu_ripples.as_mut()) {
+            // The CPU's simulation: a step a frame, as the compute pass.
+            let take = self.contacts.len().min(CONTACTS_PER_FRAME);
+            let mut now = [Vec4::ZERO; CONTACTS_PER_FRAME];
+            for (slot, c) in now.iter_mut().zip(self.contacts.drain(..take)) {
+                *slot = c;
+            }
+            let region = ripple_material(&self.desc, &[]).custom[0];
+            if sim.step(region, &now[..take]) {
+                gfx.write_render_target(r.target, &sim.upload);
+            }
+        } else if let Some(r) = self.parts.ripples {
             let take = self.contacts.len().min(CONTACTS_PER_FRAME);
             // A frame without contacts after one with them clears them;
             // otherwise the material stays as it is.
@@ -760,6 +833,14 @@ impl Water {
                 self.ripple_sent = Some(desc);
                 self.contacts_sent = take > 0;
             }
+        }
+        if let (Some(SpectrumParts { field, gpu: None }), Some(spectrum)) =
+            (self.parts.spectrum, self.desc.waves.spectrum_field())
+        {
+            // No compute shaders: the CPU works the field out and uploads it.
+            let now = spectrum.field(t, false);
+            spectrum::write_half_texels(&now.texels, &mut self.field_upload);
+            gfx.write_render_target(field, &self.field_upload);
         }
         if let Some((effect, material)) = self.parts.underwater {
             let under = self.camera_may_be_under(&camera, t);
@@ -825,9 +906,23 @@ impl Water {
         }
         if let Some(r) = parts.ripples {
             passes.compute.retain(|c| c.target != r.target);
-            ctx.gfx.free(r.compute);
+            if let Some(compute) = r.compute {
+                ctx.gfx.free(compute);
+            }
             ctx.gfx.free(r.target);
             ctx.gfx.free(r.material);
+        }
+        if let Some(s) = parts.spectrum {
+            passes.compute.retain(|c| c.target != s.field);
+            if let Some(gpu) = s.gpu {
+                ctx.gfx.free(gpu.spectrum);
+                ctx.gfx.free(gpu.butterfly);
+                ctx.gfx.free(gpu.start);
+                for &m in &gpu.materials[..gpu.count] {
+                    ctx.gfx.free(m);
+                }
+            }
+            ctx.gfx.free(s.field);
         }
         if let Some((effect, material)) = parts.underwater {
             passes.effects.retain(|e| e.effect != effect);
@@ -843,7 +938,70 @@ impl Water {
         self.contacts.clear();
         self.contacts_sent = false;
         self.under = false;
+        self.cpu_ripples = None;
     }
+}
+
+/// Makes the field of waves from a spectrum: on the GPU its start and its
+/// FFT passes (added to the frame by the caller), or, without compute
+/// shaders, just the field the CPU uploads to.
+fn spawn_spectrum(ctx: &mut Ctx, field: &spectrum::SpectrumField) -> Result<SpectrumParts, crate::error::Error> {
+    let n = field.n as u32;
+    let target = ctx.gfx.try_create_render_target(n, n)?;
+    let Ok(first) = ctx.gfx.try_create_compute("water spectrum", shaders::SPECTRUM) else {
+        return Ok(SpectrumParts {
+            field: target,
+            gpu: None,
+        });
+    };
+    let butterfly = ctx.gfx.try_create_compute("water spectrum fft", shaders::BUTTERFLY)?;
+    let start = ctx.gfx.try_create_render_target(n, n)?;
+    let mut upload = Vec::new();
+    spectrum::write_half_texels(&field.start_texels(), &mut upload);
+    ctx.gfx.write_render_target(start, &upload);
+    let mut materials = [<Material as crate::handle::Handle>::NONE; MAX_SPECTRUM_PASSES];
+    let descs = spectrum_materials(field, start);
+    for (slot, desc) in materials.iter_mut().zip(&descs) {
+        *slot = ctx.gfx.try_create_material(*desc)?;
+    }
+    Ok(SpectrumParts {
+        field: target,
+        gpu: Some(SpectrumPasses {
+            start,
+            spectrum: first,
+            butterfly,
+            materials,
+            count: descs.len(),
+        }),
+    })
+}
+
+/// The values of the spectrum's passes, in order: the spectrum (reading
+/// the start), then each FFT stage along x and along z.
+pub(crate) fn spectrum_materials(field: &spectrum::SpectrumField, start: RenderTarget) -> Vec<MaterialDesc> {
+    let n = field.n as f32;
+    let s = field.settings;
+    let mut out = vec![MaterialDesc {
+        custom: [
+            Vec4::new(n, s.tile.max(1.0), s.choppiness.max(0.0), SPECTRUM_PERIOD),
+            Vec4::ZERO,
+            Vec4::ZERO,
+            Vec4::ZERO,
+        ],
+        custom_textures: [Some(start.texture()), None],
+        ..Default::default()
+    }];
+    for along in [0.0, 1.0] {
+        let mut ns = 1;
+        while ns < field.n {
+            out.push(MaterialDesc {
+                custom: [Vec4::new(n, ns as f32, along, 0.0), Vec4::ZERO, Vec4::ZERO, Vec4::ZERO],
+                ..Default::default()
+            });
+            ns *= 2;
+        }
+    }
+    out
 }
 
 /// Despawns water body `entity` and frees what it made (see [`Water::free`]).
