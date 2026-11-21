@@ -356,6 +356,8 @@ where
         let benchmarking = self.ctx.perf.profiler.benchmarking();
         renderer.set_draw_hidden(benchmarking, benchmarking && !present);
         self.ctx.gfx.renderer = Some(renderer);
+        // A crash report from here on (setup too) names the GPU.
+        crate::crash::note_gpu(&mut self.ctx);
         self.ctx.set_window_size(Self::logical_window_size(&window));
         self.ctx.set_scale_factor(window.scale_factor() as f32);
         // Edit mode (`ponko editor`): the inspector's panels are the window.

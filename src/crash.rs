@@ -700,13 +700,9 @@ pub(crate) fn start(
 /// Keeps what a report says about the frame: the GPU (once) and the
 /// graphics settings. Runs at each drawn frame while reports are on.
 pub(crate) fn note_frame(ctx: &mut Ctx) {
+    note_gpu(ctx);
     let Some(running) = ctx.crash.as_ref() else {
         return;
-    };
-    let gpu = if running.gpu_noted {
-        None
-    } else {
-        ctx.gfx.renderer.as_ref().map(|r| r.capabilities().adapter.clone())
     };
     let settings = Settings {
         framed: true,
@@ -734,16 +730,28 @@ pub(crate) fn note_frame(ctx: &mut Ctx) {
             }
         }),
     };
-    let Some(running) = ctx.crash.as_mut() else {
-        return;
-    };
     // Never wait on the frame: a report being written holds it a moment.
     if let Ok(mut snapshot) = running.shared.snapshot.try_lock() {
         snapshot.settings = settings;
-        if let Some(gpu) = gpu {
-            snapshot.gpu = Some(gpu);
-            running.gpu_noted = true;
-        }
+    }
+}
+
+/// Keeps the GPU the renderer opened for a report, once: when the renderer
+/// starts (so a panic in setup names it) or at the first frame.
+pub(crate) fn note_gpu(ctx: &mut Ctx) {
+    let Some(running) = ctx.crash.as_mut() else {
+        return;
+    };
+    if running.gpu_noted {
+        return;
+    }
+    let Some(renderer) = ctx.gfx.renderer.as_ref() else {
+        return;
+    };
+    let gpu = renderer.capabilities().adapter.clone();
+    if let Ok(mut snapshot) = running.shared.snapshot.try_lock() {
+        snapshot.gpu = Some(gpu);
+        running.gpu_noted = true;
     }
 }
 

@@ -12,10 +12,16 @@ fn a_report_names_the_gpu_and_the_graphics_settings_of_the_last_frame() {
     };
     ctx.crash = Some(crate::crash::Running::for_test("gpu test", true));
 
-    // Negative control: before a frame, the report knows neither.
+    // Negative control: before the renderer is noted, the report knows
+    // neither the GPU nor a frame.
     let before = ctx.crash.as_ref().unwrap().preview("before");
     assert!(before.gpu().is_none());
     assert_eq!(before.settings(), [("frames".to_string(), "none drawn yet".to_string())]);
+    // The window loop notes the GPU when the renderer starts, before setup.
+    crate::crash::note_gpu(&mut ctx);
+    let in_setup = ctx.crash.as_ref().unwrap().preview("in setup");
+    assert!(in_setup.gpu().is_some_and(|gpu| !gpu.name.is_empty()));
+    assert_eq!(in_setup.settings(), before.settings(), "no frame yet");
 
     ctx.scene3d.set_quality(GraphicsQuality::High);
     assert_eq!(ctx.render_frame(), FrameStatus::Offscreen);
