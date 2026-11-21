@@ -451,7 +451,7 @@ impl Renderer {
     }
 
     /// The device-lost callback's flag: tests lose a device on purpose.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "3d"))]
     pub(crate) fn device_lost_flag(&self) -> &std::sync::atomic::AtomicBool {
         &self.device_lost
     }

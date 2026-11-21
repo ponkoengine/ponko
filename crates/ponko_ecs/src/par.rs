@@ -83,7 +83,9 @@ fn this_thread() -> usize {
 /// ```
 /// use rayon::prelude::*;
 /// let tally = ponko_ecs::LoopTally::start();
-/// (0..4).into_par_iter().for_each(|i| tally.count(|| std::hint::black_box(i)));
+/// (0..4).into_par_iter().for_each(|i| {
+///     tally.count(|| std::hint::black_box(i));
+/// });
 /// tally.finish();
 /// ```
 pub struct LoopTally {
