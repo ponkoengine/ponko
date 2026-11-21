@@ -451,7 +451,10 @@ to all: `ponko_ctx_ai_signal` and `_num`, `_entity`, `_vec2`, `_vec3` for a
 value that `"store"` writes. The actions and blackboards of world brains:
 `ponko_ctx_ai_action`, `_started`, `_finish`, `_param_num`, and
 `ponko_ctx_ai_set_num` (and `_flag`, `_vec2`, `_vec3`, `_entity`),
-`ponko_ctx_ai_num`, `ponko_ctx_ai_flag`.
+`ponko_ctx_ai_num`, `ponko_ctx_ai_flag`, `ponko_ctx_ai_entity`,
+`ponko_ctx_ai_vec2` and `ponko_ctx_ai_vec3` (C++ `ai::num`, `flag`,
+`get_entity`, `get_vec2`, `get_vec3`; a native brain has the same
+getters: `ponko_brain_entity`, `_vec2`, `_vec3`).
 
 <div class="lang-pair">
 <div>
@@ -502,5 +505,26 @@ Game::new("sentries", 640, 480)
 </div>
 </div>
 
-A system can't read a world brain while it runs a query over the world
-(`ponko_query`): collect the entities first, as above.
+The loop over the brains is a query, as in Rust: `Brain` and `Blackboard`
+are query columns (`ponko_ai_brain_component`,
+`ponko_ai_blackboard_component`), so a system reads and writes them where
+it visits each entity, with its position or health, and needs no list of
+entities first. The calls by entity (`ponko_ctx_ai_*`) are refused inside a
+query, like every ctx call; a query row has its own:
+`ponko_chunk_ai_brain(chunk, column, row)` and
+`ponko_chunk_ai_blackboard` reach a row's brain and blackboard, and
+`ponko_ai_brain_action`, `_started`, `_finish`, `_param_num`,
+`ponko_ai_blackboard_set_num` (and `_flag`, `_vec2`, `_vec3`, `_entity`)
+and `ponko_ai_blackboard_num` (and `_flag`, `_entity`, `_vec2`, `_vec3`)
+work on it, in `ponko_query` and on all cores in `ponko_query_par` (each
+row is its callback's own). In C++, `ai::each<Ts...>(ctx, fn)` calls
+`fn(entity, ai::brain_row, ai::blackboard_row, Ts&...)` for every entity
+with a brain and all of `Ts`, and `ai::query` / `ai::query_par` hand a
+chunk and its `ai::rows`:
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:ai_loop}}
+```
+
+`ponko_get` and `ponko_set` refuse the two ids: brains and blackboards
+have no C layout, and only these calls look inside them.

@@ -163,6 +163,11 @@ other world or context calls throw (C: return `PONKO_BUSY`), except
   `ponko_ctx_nav_view`), taken before the loop, whose `sample_position`,
   `sample_positions` and `find_path` work in `each_par` too. Read each once
   per system: a second read of the events gives only newer ones;
+- world brains: `ai::each` and `ai::query` visit each entity's brain and
+  blackboard with its components, and their rows are read and written in
+  the `_par` versions too (C: the brain and blackboard query columns,
+  `ponko_chunk_ai_brain` and the `ponko_ai_brain_*` and
+  `ponko_ai_blackboard_*` calls; see [Game AI](ai.md));
 - spatial queries, and the clock values `dt()`, `sim_tick()`, `random()`.
 
 ```cpp
