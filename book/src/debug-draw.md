@@ -65,8 +65,10 @@ Each returns the shape, to change it:
   styles (`ponko_debug_style_with_space`); in C++ `ponko::draw_space` with
   `ponko::with_space` for both.
 - `.depth_tested()`: a 3D label is hidden behind nearer 3D surfaces, as 3D
-  lines are, instead of drawn over everything. It is drawn in the 3D frame,
-  facing the camera and `size` pixels high where it is.
+  lines are, instead of drawn over everything. It is drawn in the 3D frame
+  of every 3D camera that shows debug drawing (split-screen views and
+  target cameras too, see below), facing that camera and `size` pixels high
+  where it is.
 - `.width(px)`: line width in pixels (1 by default).
 - `.size(px)`: label height in pixels (14 by default).
 
@@ -126,7 +128,9 @@ ctx.debug.set_collider_distance(30.0); // mesh and terrain triangles within 30 m
 ## At runtime and from tools
 
 `ctx.debug.set_enabled(on)` turns it on or off while the game runs (off forgets
-everything drawn). `Game::debug_draw(on)` chooses before the game starts,
+everything drawn). The [inspector](inspector.md)'s **Debug drawing** section
+shows and flips the same switches with the mouse: debug drawing, each
+built-in view, the colliders view's distance and the game's own toggles. `Game::debug_draw(on)` chooses before the game starts,
 overriding the build's default. A running game with the control endpoint
 answers `debug.draw` (`on`, `views`, `toggles`, `clear`; see
 [the control endpoint](control.md)), and its MCP server has the `debug_draw`
@@ -139,12 +143,26 @@ A game or plugin adds switches of its own for what it draws:
 with `ctx.debug.set_toggle`, tools with `debug.draw`'s `toggles`, which
 also lists them ([Plugins for other crates](plugins.md#debug-toggles)).
 
+## In every camera
+
+Debug drawing is on the default layer (layer 0), so every camera that shows
+that layer shows it: the main camera, each view of a split screen (see
+[Viewports](viewports.md#debug-drawing)), and each target camera drawing
+into a [render target](3d.md#render-targets) that draws particles (a
+mirror or a monitor shows the 3D lines and the depth-tested labels, a
+reflection probe's capture doesn't). In a render target the 3D lines and
+depth-tested labels are drawn against that camera's own depth; labels on
+top and 2D shapes are window text and sprites, and stay out of render
+targets.
+
 ## Cost
 
-All of a frame's 3D lines are one buffer and at most four draw calls (the
-depth-tested ones, then the ones on top, each opaque first and see-through
-second), expanded into quads on the GPU. Opaque lines (alpha 1, nearly all)
-are drawn without blending. 2D lines are sprites in one batch, and labels are
+All of a frame's 3D lines are one buffer and at most four draw calls a
+camera (the depth-tested ones, then the ones on top, each opaque first and
+see-through second), expanded into quads on the GPU. Opaque lines (alpha 1,
+nearly all) are drawn without blending; see-through ones (alpha below 1)
+with alpha to coverage when the frame has several samples a pixel (the
+default 4x MSAA), blended with one. 2D lines are sprites in one batch, and labels are
 screen text (depth-tested 3D labels are 3D text). Buffers keep their capacity,
 so steady drawing doesn't allocate: `tests/debug_draw_alloc.rs` checks it with
 a counting allocator, and `cargo run --release -p ponko_bench -- debug/`
@@ -170,11 +188,33 @@ frames, cases taking turns, two runs each, on an Apple M4 Max (Metal):
 
 Most of the cost was blending: a line one pixel wide covers only some of a
 pixel's samples, and blending those into the 4-sample HDR frame cost about
-three times as much as writing them. See-through lines (alpha below 1) are
-still blended, at that cost. Vertex work is about 0.6 ms of what is
+three times as much as writing them. Vertex work is about 0.6 ms of what is
 left; the rest is filling the pixels the lines cover. The machine was busy with
 other builds and GPU tests while this was measured (the spread was within 3%
 between runs); the numbers are to be repeated on a quiet machine.
+
+See-through lines don't blend either with several samples a pixel: with
+alpha to coverage a line of alpha 0.5 covers half of each pixel's samples,
+and the frame's resolve averages them with what is behind, as blending
+would. The same test times the 100,000 lines (half on top) at alpha 0.5
+both ways, taking turns in one run; the opaque pass's median over about 160
+frames in four runs, on the same M4 Max while about a dozen other builds
+ran (load 130 to 170):
+
+| 100,000 see-through lines | 4 samples a pixel | 1 sample |
+|---|---|---|
+| blended (as before) | 3.70, 4.81, 4.67, 4.84 ms | 1.67 ms each run |
+| alpha to coverage (now, 4 samples) | 3.03, 3.03, 3.00, 3.06 ms | blended: 1.67 ms each run |
+| for comparison: the same lines opaque / no lines | 1.89 / 0.41 ms | 1.30 / 0.44 ms |
+
+So the see-through lines' own cost at 4 samples went from about 3.3 to 4.4
+ms to about 2.6 ms; blended runs were the noisy ones (single frames from 1.5
+to 5.1 ms), the coverage runs stayed within 0.06 ms of each other. Coverage
+comes in steps of a quarter with 4 samples (how a GPU rounds alpha to
+samples, and whether it dithers, varies), and
+overlapping see-through lines no longer add up: the second covers the same
+samples as the first. With one sample a pixel (WebGL2, or MSAA off)
+see-through lines are still blended and cost what they did.
 
 Notes:
 

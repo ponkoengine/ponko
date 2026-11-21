@@ -464,6 +464,9 @@ features! {
     CLOUDS = 42, "volumetric clouds";
     /// The sky kit's air lookup is drawn (with the sky texture).
     KIT_SKY = 43, "sky kit lookup";
+    /// The view model's held items write their own motion vectors (with
+    /// temporal antialiasing), after the color pass.
+    VIEW_MODEL_MOTION = 44, "view model motion";
 }
 
 impl Features {
@@ -1141,6 +1144,17 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                     u(Hdr, A::Resolve).on(F::MSAA).off(F::TAA),
                     u(TaaInput, A::Color).on(F::TAA).off(F::MSAA),
                     u(Hdr, A::Color).off(F::MSAA.with(F::TAA)),
+                ],
+            ),
+            // The held items' motion over the motion image, now that the
+            // color step put them in the depth (see `view_model.rs`).
+            step(
+                "view model motion",
+                on(F::VIEW_MODEL_MOTION.with(F::VELOCITY)),
+                models![
+                    u(VelocityColor, A::ColorLoad),
+                    u(Velocity, A::Resolve),
+                    u(SceneDepth, A::DepthRead),
                 ],
             ),
             step(
