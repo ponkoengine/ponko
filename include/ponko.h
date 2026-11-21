@@ -910,6 +910,7 @@ typedef enum PonkoShape3DKind {
   PONKO_SHAPE3D_BOX,
   PONKO_SHAPE3D_CAPSULE,
   PONKO_SHAPE3D_MESH,
+  PONKO_SHAPE3D_SCALED_MESH,
 } PonkoShape3DKind;
 
 typedef enum PonkoParticleShape3D {

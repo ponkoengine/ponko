@@ -1093,6 +1093,7 @@ impl core::marker::Copy for ponko_ffi::PonkoService
 pub ponko_ffi::PonkoShape3DKind::PONKO_SHAPE3D_BOX
 pub ponko_ffi::PonkoShape3DKind::PONKO_SHAPE3D_CAPSULE
 pub ponko_ffi::PonkoShape3DKind::PONKO_SHAPE3D_MESH
+pub ponko_ffi::PonkoShape3DKind::PONKO_SHAPE3D_SCALED_MESH
 pub ponko_ffi::PonkoShape3DKind::PONKO_SHAPE3D_SPHERE
 impl core::clone::Clone for ponko_ffi::PonkoShape3DKind
 pub fn ponko_ffi::PonkoShape3DKind::clone(&self) -> Self

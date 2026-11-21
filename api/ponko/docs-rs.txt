@@ -2807,6 +2807,9 @@ pub ponko::d3::Shape::Capsule::radius: f32
 pub ponko::d3::Shape::Cuboid
 pub ponko::d3::Shape::Cuboid::size: glam::f32::vec3::Vec3
 pub ponko::d3::Shape::Mesh(ponko::d3::CollisionMesh)
+pub ponko::d3::Shape::ScaledMesh
+pub ponko::d3::Shape::ScaledMesh::mesh: ponko::d3::CollisionMesh
+pub ponko::d3::Shape::ScaledMesh::scale: glam::f32::vec3::Vec3
 pub ponko::d3::Shape::Sphere
 pub ponko::d3::Shape::Sphere::radius: f32
 impl core::clone::Clone for ponko::d3::Shape
@@ -2946,6 +2949,7 @@ pub fn ponko::d3::Collider::groups(self, ponko::d3::CollisionGroups) -> Self
 pub fn ponko::d3::Collider::mesh(ponko::d3::CollisionMesh) -> Self
 pub fn ponko::d3::Collider::offset(self, glam::f32::vec3::Vec3) -> Self
 pub fn ponko::d3::Collider::restitution(self, f32) -> Self
+pub fn ponko::d3::Collider::scaled_mesh(ponko::d3::CollisionMesh, glam::f32::vec3::Vec3) -> Self
 pub fn ponko::d3::Collider::sensor(self) -> Self
 pub fn ponko::d3::Collider::sphere(f32) -> Self
 impl core::clone::Clone for ponko::d3::Collider
@@ -8959,6 +8963,9 @@ pub ponko::prelude::d3::Shape::Capsule::radius: f32
 pub ponko::prelude::d3::Shape::Cuboid
 pub ponko::prelude::d3::Shape::Cuboid::size: glam::f32::vec3::Vec3
 pub ponko::prelude::d3::Shape::Mesh(ponko::d3::CollisionMesh)
+pub ponko::prelude::d3::Shape::ScaledMesh
+pub ponko::prelude::d3::Shape::ScaledMesh::mesh: ponko::d3::CollisionMesh
+pub ponko::prelude::d3::Shape::ScaledMesh::scale: glam::f32::vec3::Vec3
 pub ponko::prelude::d3::Shape::Sphere
 pub ponko::prelude::d3::Shape::Sphere::radius: f32
 impl core::clone::Clone for ponko::d3::Shape
@@ -9098,6 +9105,7 @@ pub fn ponko::d3::Collider::groups(self, ponko::d3::CollisionGroups) -> Self
 pub fn ponko::d3::Collider::mesh(ponko::d3::CollisionMesh) -> Self
 pub fn ponko::d3::Collider::offset(self, glam::f32::vec3::Vec3) -> Self
 pub fn ponko::d3::Collider::restitution(self, f32) -> Self
+pub fn ponko::d3::Collider::scaled_mesh(ponko::d3::CollisionMesh, glam::f32::vec3::Vec3) -> Self
 pub fn ponko::d3::Collider::sensor(self) -> Self
 pub fn ponko::d3::Collider::sphere(f32) -> Self
 impl core::clone::Clone for ponko::d3::Collider
