@@ -209,14 +209,284 @@ pub(crate) fn is_ktx2(bytes: &[u8]) -> bool {
 /// of plain pixels for the image decoder). `path` and `what` are for
 /// messages, as in [`decode_image`](crate::assets::decode_image).
 pub(crate) fn decode(bytes: &[u8], path: &str, what: &str, gpu: GpuFormats) -> Option<Result<Decoded, Error>> {
-    let file = if is_ktx2(bytes) {
-        read_ktx2(bytes, path, what)
-    } else if bytes.starts_with(b"DDS ") {
-        read_dds(bytes, path, what)?
-    } else {
-        return None;
+    let mut slices = match DecodeSlices::new(bytes, path, what, gpu)? {
+        Ok(slices) => slices.with_slice_bytes(usize::MAX),
+        Err(e) => return Some(Err(e)),
     };
-    Some(file.and_then(|file| for_gpu(file, path, what, gpu)))
+    Some(loop {
+        match slices.step(bytes) {
+            Ok(Some(decoded)) => break Ok(decoded),
+            Ok(None) => {}
+            Err(e) => break Err(e),
+        }
+    })
+}
+
+/// [`decode`] a slice at a time, for a streamed texture where there are no
+/// worker threads: a KTX2 file's levels unpacked from their
+/// supercompression, UASTC transcoded and blocks the GPU can't sample
+/// decoded to RGBA8, each a bounded number of output bytes a slice (a band
+/// of whole block rows, at least one). `decode` runs the same slices
+/// without the bound, so both make the same texture.
+pub(crate) struct DecodeSlices {
+    path: String,
+    what: String,
+    gpu: GpuFormats,
+    /// Output bytes a slice makes at most (at least one block row).
+    slice: usize,
+    phase: SlicePhase,
+}
+
+enum SlicePhase {
+    /// A KTX2 file's levels being unpacked.
+    Unpack(Box<Unpack>),
+    /// Every level there: what the GPU gets is chosen next.
+    Read(Box<File>),
+    /// What the GPU gets being made.
+    Gpu(Box<GpuWork>),
+    Taken,
+}
+
+/// A KTX2 file whose levels are being unpacked into `file`.
+struct Unpack {
+    file: File,
+    /// Each level's bytes in the file, and its unpacked length.
+    ranges: Vec<(std::ops::Range<usize>, usize)>,
+    scheme: Option<ktx2::SupercompressionScheme>,
+    /// The level being unpacked.
+    current: Option<Inflate>,
+}
+
+/// A supercompressed level part way through.
+enum Inflate {
+    Zstd {
+        decoder: Box<ruzstd::decoding::FrameDecoder>,
+        /// Bytes of the level read so far.
+        read: usize,
+        out: Vec<u8>,
+    },
+    Zlib {
+        decoder: Box<flate2::Decompress>,
+        out: Vec<u8>,
+    },
+}
+
+/// What the GPU gets, being made from the read file.
+enum GpuWork {
+    /// Level 0 of blocks the GPU can't sample, decoded to RGBA8 a band of
+    /// block rows at a time.
+    Cpu {
+        file: File,
+        format: BlockFormat,
+        rgba: Vec<u8>,
+        /// The next block row.
+        row: u32,
+    },
+    /// UASTC transcoded a band of block rows at a time.
+    #[cfg(all(feature = "basis-universal", not(target_arch = "wasm32")))]
+    Uastc(Box<Transcode>),
+}
+
+impl DecodeSlices {
+    /// Starts decoding a KTX2 or DDS file `bytes` (reading its header, and
+    /// a DDS file's levels); `None` for other files, as [`decode`].
+    pub(crate) fn new(bytes: &[u8], path: &str, what: &str, gpu: GpuFormats) -> Option<Result<Self, Error>> {
+        let phase = if is_ktx2(bytes) {
+            read_ktx2_header(bytes, path, what).map(|unpack| SlicePhase::Unpack(Box::new(unpack)))
+        } else if bytes.starts_with(b"DDS ") {
+            read_dds(bytes, path, what)?.map(|file| SlicePhase::Read(Box::new(file)))
+        } else {
+            return None;
+        };
+        Some(phase.map(|phase| Self {
+            path: path.to_string(),
+            what: what.to_string(),
+            gpu,
+            slice: crate::assets::group::sliced::SLICE_BYTES,
+            phase,
+        }))
+    }
+
+    /// Makes at most `bytes` of output a slice (at least one block row).
+    pub(crate) fn with_slice_bytes(mut self, bytes: usize) -> Self {
+        self.slice = bytes.max(1);
+        self
+    }
+
+    /// The next slice of the decode of `bytes` (the file's, as given to
+    /// [`new`](Self::new)): the texture once it is done.
+    pub(crate) fn step(&mut self, bytes: &[u8]) -> Result<Option<Decoded>, Error> {
+        let (path, what) = (self.path.as_str(), self.what.as_str());
+        match std::mem::replace(&mut self.phase, SlicePhase::Taken) {
+            SlicePhase::Unpack(mut unpack) => {
+                self.phase = if unpack.step(bytes, self.slice, path, what)? {
+                    check_levels(&unpack.file, path, what)?;
+                    SlicePhase::Read(Box::new(unpack.file))
+                } else {
+                    SlicePhase::Unpack(unpack)
+                };
+                Ok(None)
+            }
+            SlicePhase::Read(file) => match choose_for_gpu(*file, path, what, self.gpu)? {
+                Ok(decoded) => Ok(Some(decoded)),
+                Err(work) => {
+                    self.phase = SlicePhase::Gpu(Box::new(work));
+                    Ok(None)
+                }
+            },
+            SlicePhase::Gpu(mut work) => {
+                if let Some(decoded) = work.step(self.slice, path, what)? {
+                    return Ok(Some(decoded));
+                }
+                self.phase = SlicePhase::Gpu(work);
+                Ok(None)
+            }
+            SlicePhase::Taken => Err(Error::new(ErrorKind::Invalid, format!("{what} was decoded already"))),
+        }
+    }
+}
+
+/// Block rows of `format` at `width` that make about `bytes` of output,
+/// at `out_block` bytes an output block (at least one row).
+fn band_rows(width: u32, out_block: usize, bytes: usize) -> u32 {
+    let row = (width.div_ceil(BLOCK) as usize).saturating_mul(out_block).max(1);
+    u32::try_from(bytes / row).unwrap_or(u32::MAX).max(1)
+}
+
+impl Unpack {
+    /// Unpacks the next piece of the levels, `slice` bytes of output at
+    /// most: `true` once every level is in `file`.
+    fn step(&mut self, bytes: &[u8], slice: usize, path: &str, what: &str) -> Result<bool, Error> {
+        let i = self.file.levels.len();
+        let Some((range, unpacked)) = self.ranges.get(i).cloned() else {
+            return Ok(true);
+        };
+        let data = bytes.get(range).ok_or_else(|| {
+            invalid(
+                path,
+                what,
+                format_args!("KTX2: mip level {i} is past the end of the file"),
+            )
+        })?;
+        let level = match self.scheme {
+            None => Some(data.to_vec()),
+            Some(ktx2::SupercompressionScheme::Zstandard) => {
+                let zstd = |e: &dyn std::fmt::Display| invalid(path, what, format_args!("Zstandard: {e}"));
+                let current = match self.current.take() {
+                    Some(current) => current,
+                    None => {
+                        let mut decoder = Box::new(ruzstd::decoding::FrameDecoder::new());
+                        let mut source = data;
+                        decoder.init(&mut source).map_err(|e| zstd(&e))?;
+                        Inflate::Zstd {
+                            decoder,
+                            read: data.len() - source.len(),
+                            out: Vec::with_capacity(unpacked),
+                        }
+                    }
+                };
+                let Inflate::Zstd {
+                    mut decoder,
+                    mut read,
+                    mut out,
+                } = current
+                else {
+                    unreachable!("a Zstandard file unpacks with Zstandard")
+                };
+                let mut source = &data[read..];
+                let done = decoder
+                    .decode_blocks(&mut source, ruzstd::decoding::BlockDecodingStrategy::UptoBytes(slice))
+                    .map_err(|e| zstd(&e))?;
+                read = data.len() - source.len();
+                if let Some(piece) = decoder.collect() {
+                    out.extend_from_slice(&piece);
+                }
+                if done {
+                    Some(out)
+                } else {
+                    self.current = Some(Inflate::Zstd { decoder, read, out });
+                    None
+                }
+            }
+            Some(ktx2::SupercompressionScheme::ZLIB) => {
+                let current = self.current.take().unwrap_or_else(|| Inflate::Zlib {
+                    decoder: Box::new(flate2::Decompress::new(true)),
+                    out: Vec::with_capacity(unpacked),
+                });
+                let Inflate::Zlib { mut decoder, mut out } = current else {
+                    unreachable!("a zlib file unpacks with zlib")
+                };
+                let goal = out.len().saturating_add(slice);
+                let status = loop {
+                    if out.len() == out.capacity() {
+                        out.reserve(slice.clamp(1, 64 << 10));
+                    }
+                    let input = &data[decoder.total_in() as usize..];
+                    let before = (decoder.total_in(), decoder.total_out());
+                    let status = decoder
+                        .decompress_vec(input, &mut out, flate2::FlushDecompress::None)
+                        .map_err(|e| invalid(path, what, format_args!("zlib: {e}")))?;
+                    let stuck = (decoder.total_in(), decoder.total_out()) == before;
+                    if status == flate2::Status::StreamEnd || out.len() >= goal || stuck {
+                        break (status, stuck);
+                    }
+                };
+                match status {
+                    (flate2::Status::StreamEnd, _) => Some(out),
+                    // Cut short: what it has, as a read to the end makes.
+                    (_, true) => Some(out),
+                    _ => {
+                        self.current = Some(Inflate::Zlib { decoder, out });
+                        None
+                    }
+                }
+            }
+            Some(scheme) => {
+                return Err(unsupported(
+                    path,
+                    format!("{what} uses {scheme:?} supercompression, which ponko doesn't unpack"),
+                ));
+            }
+        };
+        if let Some(level) = level {
+            self.file.levels.push(level);
+        }
+        Ok(self.file.levels.len() == self.ranges.len())
+    }
+}
+
+impl GpuWork {
+    /// The next band: the texture once it is done.
+    fn step(&mut self, slice: usize, path: &str, what: &str) -> Result<Option<Decoded>, Error> {
+        match self {
+            GpuWork::Cpu {
+                file,
+                format,
+                rgba,
+                row,
+            } => {
+                let (width, height) = (file.width, file.height);
+                let rows = band_rows(width, 4 * 4 * 4, slice);
+                let (y0, y1) = (*row * BLOCK, row.saturating_add(rows).saturating_mul(BLOCK).min(height));
+                let start = format.level_bytes(width, y0) as usize;
+                let end = format.level_bytes(width, y1) as usize;
+                let band = decode_blocks(*format, width, y1 - y0, &file.levels[0][start..end])
+                    .map_err(|e| invalid(path, what, e))?;
+                rgba.extend_from_slice(&band.rgba);
+                *row = y1.div_ceil(BLOCK);
+                if y1 < height {
+                    return Ok(None);
+                }
+                Ok(Some(Decoded::Rgba(Image {
+                    width,
+                    height,
+                    rgba: std::mem::take(rgba),
+                })))
+            }
+            #[cfg(all(feature = "basis-universal", not(target_arch = "wasm32")))]
+            GpuWork::Uastc(transcode) => transcode.step(slice, path, what),
+        }
+    }
 }
 
 /// [`decode`] to RGBA8 on the CPU, for loaders that need pixels rather
@@ -272,7 +542,8 @@ fn invalid(path: &str, what: &str, why: impl std::fmt::Display) -> Error {
     Error::decode(path, format!("{what} is not a valid texture file: {why}"))
 }
 
-fn read_ktx2(bytes: &[u8], path: &str, what: &str) -> Result<File, Error> {
+/// Reads a KTX2 file's header: its levels are unpacked next ([`Unpack`]).
+fn read_ktx2_header(bytes: &[u8], path: &str, what: &str) -> Result<Unpack, Error> {
     let reader = ktx2::Reader::new(bytes).map_err(|e| invalid(path, what, format_args!("KTX2: {e}")))?;
     let header = reader.header();
     if header.face_count != 1 {
@@ -341,41 +612,39 @@ fn read_ktx2(bytes: &[u8], path: &str, what: &str) -> Result<File, Error> {
             ));
         }
     };
-    let mut levels = Vec::with_capacity(header.level_count.max(1) as usize);
-    for level in reader.levels() {
-        levels.push(match header.supercompression_scheme {
-            None => level.data.to_vec(),
-            Some(ktx2::SupercompressionScheme::Zstandard) => {
-                let mut out = Vec::with_capacity(level.uncompressed_byte_length as usize);
-                let mut decoder = ruzstd::decoding::StreamingDecoder::new(level.data)
-                    .map_err(|e| invalid(path, what, format_args!("Zstandard: {e}")))?;
-                std::io::Read::read_to_end(&mut decoder, &mut out)
-                    .map_err(|e| invalid(path, what, format_args!("Zstandard: {e}")))?;
-                out
-            }
-            Some(ktx2::SupercompressionScheme::ZLIB) => {
-                let mut out = Vec::with_capacity(level.uncompressed_byte_length as usize);
-                std::io::Read::read_to_end(&mut flate2::read::ZlibDecoder::new(level.data), &mut out)
-                    .map_err(|e| invalid(path, what, format_args!("zlib: {e}")))?;
-                out
-            }
-            Some(scheme) => {
-                return Err(unsupported(
-                    path,
-                    format!("{what} uses {scheme:?} supercompression, which ponko doesn't unpack"),
-                ));
-            }
-        });
+    let scheme = header.supercompression_scheme;
+    if let Some(scheme) = scheme
+        && !matches!(
+            scheme,
+            ktx2::SupercompressionScheme::Zstandard | ktx2::SupercompressionScheme::ZLIB
+        )
+    {
+        return Err(unsupported(
+            path,
+            format!("{what} uses {scheme:?} supercompression, which ponko doesn't unpack"),
+        ));
     }
-    let file = File {
-        width: header.pixel_width,
-        height: header.pixel_height,
-        pixels,
-        srgb,
-        levels,
-    };
-    check_levels(&file, path, what)?;
-    Ok(file)
+    // Where each level is in the file (the reader checked they are in it).
+    let base = bytes.as_ptr() as usize;
+    let ranges = reader
+        .levels()
+        .map(|level| {
+            let at = level.data.as_ptr() as usize - base;
+            (at..at + level.data.len(), level.uncompressed_byte_length as usize)
+        })
+        .collect();
+    Ok(Unpack {
+        file: File {
+            width: header.pixel_width,
+            height: header.pixel_height,
+            pixels,
+            srgb,
+            levels: Vec::new(),
+        },
+        ranges,
+        scheme,
+        current: None,
+    })
 }
 
 /// The KTX2 key `ponko cook` writes into an image file of a glTF model
@@ -544,21 +813,22 @@ fn read_dds(bytes: &[u8], path: &str, what: &str) -> Option<Result<File, Error>>
     }))
 }
 
-/// Chooses what to upload for a GPU that samples `gpu`: the file's blocks,
-/// UASTC transcoded, or RGBA8 decoded on the CPU.
-fn for_gpu(file: File, path: &str, what: &str, gpu: GpuFormats) -> Result<Decoded, Error> {
+/// Chooses what to upload for a GPU that samples `gpu`: the file's blocks
+/// or RGBA8 as they are (`Ok`), or the work that makes it: UASTC
+/// transcoded, or blocks decoded to RGBA8 on the CPU (`Err`).
+fn choose_for_gpu(file: File, path: &str, what: &str, gpu: GpuFormats) -> Result<Result<Decoded, GpuWork>, Error> {
     match file.pixels {
         Pixels::Rgba8 => {
             let mut levels = file.levels;
-            Ok(Decoded::Rgba(Image {
+            Ok(Ok(Decoded::Rgba(Image {
                 width: file.width,
                 height: file.height,
                 rgba: levels.swap_remove(0),
-            }))
+            })))
         }
         Pixels::Blocks(format) => {
             if format.sampled_by(gpu) && block_aligned(file.width, file.height) {
-                Ok(Decoded::Blocks(CompressedImage {
+                Ok(Ok(Decoded::Blocks(CompressedImage {
                     width: file.width,
                     height: file.height,
                     format,
@@ -569,11 +839,15 @@ fn for_gpu(file: File, path: &str, what: &str, gpu: GpuFormats) -> Result<Decode
                         NormalChannels::Rgb
                     },
                     levels: file.levels,
-                }))
+                })))
             } else {
-                decode_blocks(format, file.width, file.height, &file.levels[0])
-                    .map(Decoded::Rgba)
-                    .map_err(|e| invalid(path, what, e))
+                let rgba = Vec::with_capacity(file.width as usize * file.height as usize * 4);
+                Ok(Err(GpuWork::Cpu {
+                    file,
+                    format,
+                    rgba,
+                    row: 0,
+                }))
             }
         }
         Pixels::Uastc(channels) => transcode_uastc(file, channels, path, what, gpu),
@@ -624,15 +898,102 @@ fn rebuild_normal_z(rgba: &mut [u8]) {
     }
 }
 
+/// UASTC being transcoded to what the GPU samples, a band of block rows
+/// at a time: every level to `to` (stored as `format`), or, with no block
+/// format to use, level 0 through `to` and decoded to RGBA8 on the CPU.
+#[cfg(all(feature = "basis-universal", not(target_arch = "wasm32")))]
+struct Transcode {
+    file: File,
+    has_alpha: bool,
+    to: basis_universal::TranscoderBlockFormat,
+    format: BlockFormat,
+    normal: NormalChannels,
+    /// RGBA8 of level 0, not blocks.
+    cpu: bool,
+    /// Levels done, the level being made, and its next block row.
+    levels: Vec<Vec<u8>>,
+    current: Vec<u8>,
+    row: u32,
+}
+
+#[cfg(all(feature = "basis-universal", not(target_arch = "wasm32")))]
+impl Transcode {
+    fn step(&mut self, slice: usize, path: &str, what: &str) -> Result<Option<Decoded>, Error> {
+        use basis_universal::{DecodeFlags, SliceParametersUastc};
+        let i = self.levels.len();
+        let (w, h) = ((self.file.width >> i).max(1), (self.file.height >> i).max(1));
+        let out_block = if self.cpu {
+            4 * 4 * 4
+        } else {
+            self.format.block_bytes() as usize
+        };
+        let rows = band_rows(w, out_block, slice);
+        let (y0, y1) = (
+            self.row * BLOCK,
+            self.row.saturating_add(rows).saturating_mul(BLOCK).min(h),
+        );
+        // UASTC blocks are 16 bytes each, as BC7's.
+        let start = BlockFormat::Bc7.level_bytes(w, y0) as usize;
+        let end = BlockFormat::Bc7.level_bytes(w, y1) as usize;
+        // Made for each band: it holds a C++ object, which may not move
+        // between threads as a stream's decode may; making one is cheap.
+        let band = basis_universal::LowLevelUastcTranscoder::new()
+            .transcode_slice(
+                &self.file.levels[i][start..end],
+                SliceParametersUastc {
+                    num_blocks_x: w.div_ceil(BLOCK),
+                    num_blocks_y: (y1 - y0).div_ceil(BLOCK),
+                    has_alpha: self.has_alpha,
+                    original_width: w,
+                    original_height: y1 - y0,
+                },
+                DecodeFlags::HIGH_QUALITY,
+                self.to,
+            )
+            .map_err(|e| invalid(path, what, format_args!("its UASTC blocks don't transcode: {e:?}")))?;
+        if self.cpu {
+            let pixels = decode_blocks(self.format, w, y1 - y0, &band).map_err(|e| invalid(path, what, e))?;
+            self.current.extend_from_slice(&pixels.rgba);
+        } else {
+            self.current.extend_from_slice(&band);
+        }
+        self.row = y1.div_ceil(BLOCK);
+        if y1 < h {
+            return Ok(None);
+        }
+        self.row = 0;
+        let level = std::mem::take(&mut self.current);
+        if self.cpu {
+            return Ok(Some(Decoded::Rgba(Image {
+                width: w,
+                height: h,
+                rgba: level,
+            })));
+        }
+        self.levels.push(level);
+        if self.levels.len() < self.file.levels.len() {
+            return Ok(None);
+        }
+        Ok(Some(Decoded::Blocks(CompressedImage {
+            width: self.file.width,
+            height: self.file.height,
+            format: self.format,
+            srgb: self.file.srgb && self.format.has_srgb(),
+            levels: std::mem::take(&mut self.levels),
+            normal: self.normal,
+        })))
+    }
+}
+
 #[cfg(all(feature = "basis-universal", not(target_arch = "wasm32")))]
 fn transcode_uastc(
     file: File,
     channels: UastcChannels,
-    path: &str,
-    what: &str,
+    _path: &str,
+    _what: &str,
     gpu: GpuFormats,
-) -> Result<Decoded, Error> {
-    use basis_universal::{DecodeFlags, LowLevelUastcTranscoder, SliceParametersUastc, TranscoderBlockFormat as T};
+) -> Result<Result<Decoded, GpuWork>, Error> {
+    use basis_universal::TranscoderBlockFormat as T;
     // Two-channel files: X and Y (red and alpha) into BC5 or EAC RG11's two
     // channels, else into an RGBA format that keeps them in red and alpha.
     let rrrg = channels == UastcChannels::Rrrg;
@@ -656,52 +1017,27 @@ fn transcode_uastc(
     };
     let target = target.filter(|_| block_aligned(file.width, file.height));
     let has_alpha = matches!(channels, UastcChannels::Rgba | UastcChannels::Rrrg);
-    let transcoder = LowLevelUastcTranscoder::new();
-    let slice = |level: &[u8], w: u32, h: u32, to: T| {
-        transcoder
-            .transcode_slice(
-                level,
-                SliceParametersUastc {
-                    num_blocks_x: w.div_ceil(BLOCK),
-                    num_blocks_y: h.div_ceil(BLOCK),
-                    has_alpha,
-                    original_width: w,
-                    original_height: h,
-                },
-                DecodeFlags::HIGH_QUALITY,
-                to,
-            )
-            .map_err(|e| invalid(path, what, format_args!("its UASTC blocks don't transcode: {e:?}")))
+    // No block format to use: RGBA8 of the full size, through BC7 (BC5 for
+    // two channels) decoded on the CPU. Not the transcoder's own RGBA32
+    // output: the `basis-universal` crate sizes its buffer for that with a
+    // row pitch a quarter of the width, which the C++ transcoder then
+    // writes past.
+    let (to, format, normal, cpu) = match target {
+        Some((to, format, normal)) => (to, format, normal, false),
+        None if rrrg => (T::BC5, BlockFormat::Bc5, NormalChannels::Rgb, true),
+        None => (T::BC7, BlockFormat::Bc7, NormalChannels::Rgb, true),
     };
-    let Some((to, format, normal)) = target else {
-        // No block format to use: RGBA8 of the full size, through BC7 (BC5
-        // for two channels) decoded on the CPU. Not the transcoder's own
-        // RGBA32 output: the `basis-universal` crate sizes its buffer for
-        // that with a row pitch a quarter of the width, which the C++
-        // transcoder then writes past.
-        let (to, format) = if rrrg {
-            (T::BC5, BlockFormat::Bc5)
-        } else {
-            (T::BC7, BlockFormat::Bc7)
-        };
-        let blocks = slice(&file.levels[0], file.width, file.height, to)?;
-        return decode_blocks(format, file.width, file.height, &blocks)
-            .map(Decoded::Rgba)
-            .map_err(|e| invalid(path, what, e));
-    };
-    let mut levels = Vec::with_capacity(file.levels.len());
-    for (i, level) in file.levels.iter().enumerate() {
-        let (w, h) = ((file.width >> i).max(1), (file.height >> i).max(1));
-        levels.push(slice(level, w, h, to)?);
-    }
-    Ok(Decoded::Blocks(CompressedImage {
-        width: file.width,
-        height: file.height,
+    Ok(Err(GpuWork::Uastc(Box::new(Transcode {
+        file,
+        has_alpha,
+        to,
         format,
-        srgb: file.srgb && format.has_srgb(),
-        levels,
         normal,
-    }))
+        cpu,
+        levels: Vec::new(),
+        current: Vec::new(),
+        row: 0,
+    }))))
 }
 
 #[cfg(not(all(feature = "basis-universal", not(target_arch = "wasm32"))))]
@@ -711,7 +1047,7 @@ fn transcode_uastc(
     path: &str,
     what: &str,
     _gpu: GpuFormats,
-) -> Result<Decoded, Error> {
+) -> Result<Result<Decoded, GpuWork>, Error> {
     let why = if cfg!(target_arch = "wasm32") {
         "web builds have no Basis Universal transcoder"
     } else {
@@ -748,6 +1084,19 @@ pub(crate) mod tests {
         zstd: bool,
         key_values: &[(&str, &str)],
     ) -> Vec<u8> {
+        let scheme = zstd.then_some(ktx2::SupercompressionScheme::Zstandard);
+        ktx2_file_packed(format, width, height, levels, scheme, key_values)
+    }
+
+    /// [`ktx2_file_with`] with its levels packed with `scheme`.
+    fn ktx2_file_packed(
+        format: Option<ktx2::Format>,
+        width: u32,
+        height: u32,
+        levels: &[Vec<u8>],
+        scheme: Option<ktx2::SupercompressionScheme>,
+        key_values: &[(&str, &str)],
+    ) -> Vec<u8> {
         let mut kvd = Vec::new();
         for (key, value) in key_values {
             let len = key.len() + 1 + value.len() + 1;
@@ -768,12 +1117,16 @@ pub(crate) mod tests {
         let dfd_at = 80 + index_len;
         let packed: Vec<Vec<u8>> = levels
             .iter()
-            .map(|l| {
-                if zstd {
+            .map(|l| match scheme {
+                Some(ktx2::SupercompressionScheme::Zstandard) => {
                     ruzstd::encoding::compress_to_vec(l.as_slice(), ruzstd::encoding::CompressionLevel::Fastest)
-                } else {
-                    l.clone()
                 }
+                Some(ktx2::SupercompressionScheme::ZLIB) => {
+                    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+                    std::io::Write::write_all(&mut z, l).unwrap();
+                    z.finish().unwrap()
+                }
+                _ => l.clone(),
             })
             .collect();
         let kvd_at = dfd_at + dfd_len;
@@ -792,7 +1145,7 @@ pub(crate) mod tests {
             layer_count: 0,
             face_count: 1,
             level_count: levels.len() as u32,
-            supercompression_scheme: zstd.then_some(ktx2::SupercompressionScheme::Zstandard),
+            supercompression_scheme: scheme,
             index: ktx2::Index {
                 dfd_byte_offset: dfd_at as u32,
                 dfd_byte_length: dfd_len as u32,
@@ -1162,5 +1515,185 @@ pub(crate) mod tests {
         let half = image.starting_at_level(1);
         assert_eq!((half.width, half.height), (8, 4));
         assert_eq!(half.levels, levels[1..]);
+    }
+
+    /// `blocks` blocks of `bytes` each of noise: any bytes are a valid
+    /// BC1, BC5 or BC7 block (decoders read every bit pattern).
+    pub(crate) fn noise_blocks(blocks: usize, bytes: usize, seed: u32) -> Vec<u8> {
+        let mut s = seed.wrapping_mul(0x9E37_79B9) | 1;
+        (0..blocks * bytes)
+            .map(|_| {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                s as u8
+            })
+            .collect()
+    }
+
+    /// Noise levels of `format` from `width` x `height` down to 1 x 1.
+    pub(crate) fn noise_levels(format: BlockFormat, width: u32, height: u32) -> Vec<Vec<u8>> {
+        let mut levels = Vec::new();
+        let (mut w, mut h) = (width, height);
+        loop {
+            let blocks = (w.div_ceil(BLOCK) * h.div_ceil(BLOCK)) as usize;
+            levels.push(noise_blocks(blocks, format.block_bytes() as usize, w ^ h << 8));
+            if w == 1 && h == 1 {
+                return levels;
+            }
+            (w, h) = ((w / 2).max(1), (h / 2).max(1));
+        }
+    }
+
+    /// Decodes `file` for `gpu` a slice of `bytes` at a time: what it
+    /// makes, and the slices it took.
+    fn sliced(file: &[u8], gpu: GpuFormats, bytes: usize) -> (Decoded, usize) {
+        let mut slices = DecodeSlices::new(file, "a.ktx2", "a", gpu)
+            .expect("a KTX2 or DDS file")
+            .unwrap()
+            .with_slice_bytes(bytes);
+        for n in 1.. {
+            if let Some(decoded) = slices.step(file).unwrap() {
+                return (decoded, n);
+            }
+        }
+        unreachable!()
+    }
+
+    fn same(a: &Decoded, b: &Decoded) -> bool {
+        match (a, b) {
+            (Decoded::Rgba(a), Decoded::Rgba(b)) => (a.width, a.height, &a.rgba) == (b.width, b.height, &b.rgba),
+            (Decoded::Blocks(a), Decoded::Blocks(b)) => a == b,
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn sliced_ktx2_decodes_make_what_the_whole_decode_makes() {
+        use ktx2::Format as F;
+        use ktx2::SupercompressionScheme as S;
+        let cases = [
+            // Unpacked a piece at a time, uploaded as blocks.
+            (
+                F::BC7_SRGB_BLOCK,
+                BlockFormat::Bc7,
+                128,
+                64,
+                Some(S::Zstandard),
+                GpuFormats::ALL,
+            ),
+            (
+                F::BC7_SRGB_BLOCK,
+                BlockFormat::Bc7,
+                128,
+                64,
+                Some(S::ZLIB),
+                GpuFormats::ALL,
+            ),
+            // Decoded to RGBA8 a band of block rows at a time.
+            (
+                F::BC1_RGBA_UNORM_BLOCK,
+                BlockFormat::Bc1,
+                72,
+                40,
+                None,
+                GpuFormats::default(),
+            ),
+            (
+                F::BC1_RGBA_UNORM_BLOCK,
+                BlockFormat::Bc1,
+                70,
+                38,
+                Some(S::Zstandard),
+                GpuFormats::ALL,
+            ),
+            (
+                F::BC5_UNORM_BLOCK,
+                BlockFormat::Bc5,
+                64,
+                36,
+                Some(S::ZLIB),
+                GpuFormats::default(),
+            ),
+            (
+                F::BC7_UNORM_BLOCK,
+                BlockFormat::Bc7,
+                52,
+                64,
+                None,
+                GpuFormats::default(),
+            ),
+        ];
+        for (format, block, w, h, scheme, gpu) in cases {
+            let levels = noise_levels(block, w, h);
+            let file = ktx2_file_packed(Some(format), w, h, &levels, scheme, &[]);
+            let whole = decode(&file, "a.ktx2", "a", gpu).unwrap().unwrap();
+            let (sliced, n) = sliced(&file, gpu, 1024);
+            assert!(
+                same(&sliced, &whole),
+                "{format:?} {w} x {h} {scheme:?}: the slices made another texture"
+            );
+            // A slice per level at least, then the choice; a CPU decode's
+            // bands come on top (Zstandard splits only between its blocks,
+            // which these small levels fit in one of).
+            let bands = if matches!(whole, Decoded::Rgba(_)) { 2 } else { 0 };
+            assert!(n > levels.len() + bands, "{format:?} {w} x {h} {scheme:?}: {n} slices");
+        }
+    }
+
+    #[test]
+    fn a_sliced_cpu_decode_makes_a_band_of_block_rows_a_slice() {
+        let levels = vec![noise_blocks(16 * 16, 8, 3)];
+        let file = ktx2_file(Some(ktx2::Format::BC1_RGBA_UNORM_BLOCK), 64, 64, &levels, false);
+        // One block row of RGBA8 is 16 blocks of 4 x 4 pixels of 4 bytes.
+        let row = 16 * 4 * 4 * 4;
+        for (bytes, bands) in [(row, 16), (3 * row, 6), (row / 2, 16), (usize::MAX, 1)] {
+            let (decoded, n) = sliced(&file, GpuFormats::default(), bytes);
+            assert!(matches!(decoded, Decoded::Rgba(_)));
+            // The level unpacked, the choice, then the bands.
+            assert_eq!(n, 1 + 1 + bands, "{bytes} bytes a slice");
+        }
+    }
+
+    #[test]
+    fn a_sliced_zstd_level_unpacks_a_bounded_piece_a_slice() {
+        let levels = vec![noise_blocks(64 * 64, 16, 5)];
+        let file = ktx2_file(Some(ktx2::Format::BC7_UNORM_BLOCK), 256, 256, &levels, true);
+        let (decoded, n) = sliced(&file, GpuFormats::ALL, 16 << 10);
+        let Decoded::Blocks(image) = decoded else {
+            panic!("blocks")
+        };
+        assert_eq!(image.levels, levels);
+        // 64 KiB of blocks, at least 16 KiB a slice (whole Zstandard
+        // blocks, at most 128 KiB each): more than one slice, at most four
+        // and the choice.
+        assert!((2..=5).contains(&n), "{n} slices");
+    }
+
+    #[cfg(feature = "basis-universal")]
+    #[test]
+    fn sliced_uastc_transcodes_make_what_the_whole_transcode_makes() {
+        let file = include_bytes!("../tests/fixtures/textures/card_uastc.ktx2");
+        let two = include_bytes!("../tests/fixtures/textures/bumps_uastc.ktx2");
+        let gpus = [
+            GpuFormats::ALL,
+            GpuFormats {
+                astc: true,
+                ..Default::default()
+            },
+            GpuFormats {
+                etc2: true,
+                ..Default::default()
+            },
+            GpuFormats::default(),
+        ];
+        for file in [&file[..], &two[..]] {
+            for gpu in gpus {
+                let whole = decode(file, "a.ktx2", "a", gpu).unwrap().unwrap();
+                let (sliced, n) = sliced(file, gpu, 256);
+                assert!(same(&sliced, &whole), "{gpu:?}: the slices made another texture");
+                assert!(n > 4, "{gpu:?}: {n} slices");
+            }
+        }
     }
 }

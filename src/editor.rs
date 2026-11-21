@@ -39,6 +39,9 @@ pub(crate) mod thumb_studio;
 #[path = "editor_thumbs.rs"]
 pub(crate) mod thumbs;
 #[cfg(feature = "editor")]
+#[path = "editor_web.rs"]
+pub(crate) mod web;
+#[cfg(feature = "editor")]
 pub(crate) use document::DiskChange;
 
 /// How often the document's file is looked at for changes (for tests).
@@ -878,14 +881,32 @@ pub(crate) struct AssetList {
 #[cfg(not(target_arch = "wasm32"))]
 const BROWSE_DEPTH: usize = 8;
 /// Files the browser lists, at most.
-#[cfg(not(target_arch = "wasm32"))]
 const BROWSE_FILES: usize = 4096;
 
 /// Lists the assets the editor can place (see [`AssetList`]), from every
-/// `assets/` folder found. Web builds have no folders: only materials.
+/// `assets/` folder found. Web builds have no folders: they list the web
+/// build's file manifest instead (see [`browse_names`]).
 pub(crate) fn browse(ctx: &Ctx) -> AssetList {
-    let mut out = AssetList::default();
     #[cfg(not(target_arch = "wasm32"))]
+    let mut out = browse_folders();
+    #[cfg(target_arch = "wasm32")]
+    let mut out = {
+        let names = crate::assets::web_manifest();
+        browse_names(names.iter().map(String::as_str), crate::assets::read_web_asset)
+    };
+    #[cfg(feature = "3d")]
+    if let Some(names) = ctx.world.get_resource::<crate::reflect::MaterialNames>() {
+        out.materials = names.list();
+    }
+    let _ = ctx;
+    out.sort();
+    out
+}
+
+/// The files of every `assets/` folder found, by kind.
+#[cfg(not(target_arch = "wasm32"))]
+fn browse_folders() -> AssetList {
+    let mut out = AssetList::default();
     for root in crate::assets::asset_roots() {
         let mut stack = vec![(root.clone(), 0usize)];
         while let Some((dir, depth)) = stack.pop() {
@@ -905,43 +926,90 @@ pub(crate) fn browse(ctx: &Ctx) -> AssetList {
                 }
                 let Ok(rel) = path.strip_prefix(&root) else { continue };
                 let rel = rel.to_string_lossy().replace('\\', "/");
-                let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-                match ext.as_deref() {
-                    Some("glb" | "gltf") => out.meshes.push(rel),
-                    Some("png" | "jpg" | "jpeg") => out.textures.push(rel),
-                    Some("wav" | "ogg" | "flac" | "mp3") => out.sounds.push(rel),
-                    Some("wgsl") => out.shaders.push(rel),
-                    Some("json") => match json_format(&path).as_deref() {
-                        Some(crate::scene::PREFAB_FORMAT) => out.prefabs.push(rel),
-                        Some("ponko-world") => out.scenes.push(rel),
-                        _ => {}
-                    },
-                    _ => {}
-                }
-                let listed = out.meshes.len() + out.prefabs.len() + out.scenes.len();
-                if listed + out.textures.len() + out.sounds.len() + out.shaders.len() >= BROWSE_FILES {
+                out.add(rel, || json_format(&path));
+                if out.len() >= BROWSE_FILES {
                     break;
                 }
             }
         }
     }
-    for list in [
-        &mut out.meshes,
-        &mut out.prefabs,
-        &mut out.scenes,
-        &mut out.textures,
-        &mut out.sounds,
-        &mut out.shaders,
-    ] {
-        list.sort();
-        list.dedup();
-    }
-    #[cfg(feature = "3d")]
-    if let Some(names) = ctx.world.get_resource::<crate::reflect::MaterialNames>() {
-        out.materials = names.list();
-    }
-    let _ = ctx;
     out
+}
+
+/// Lists the assets named in a web build's file manifest, `names`: the
+/// files `assets/index.json` lists (as `web/build.sh` and `ponko package
+/// --web` write it), the page's asset pack, and the files the editor saved
+/// in the browser. `read` gives a file's bytes, for the `"format"` of a
+/// JSON file. Names that are folders' own (hidden files, `index.json`
+/// itself) are left out.
+// Natively only the web editor's tests use it.
+#[cfg_attr(not(any(all(test, feature = "editor"), target_arch = "wasm32")), allow(dead_code))]
+pub(crate) fn browse_names<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    read: impl Fn(&str) -> Option<Vec<u8>>,
+) -> AssetList {
+    let mut out = AssetList::default();
+    for name in names {
+        let hidden = name.split('/').any(|part| part.starts_with('.'));
+        if hidden || name.is_empty() || name == "index.json" {
+            continue;
+        }
+        out.add(name.to_string(), || read(name).and_then(|bytes| json_format_of(&bytes)));
+        if out.len() >= BROWSE_FILES {
+            break;
+        }
+    }
+    out.sort();
+    out
+}
+
+impl AssetList {
+    /// Lists asset `rel` under its kind (by its extension), if the editor
+    /// places it; `json_format` reads a JSON file's `"format"`.
+    fn add(&mut self, rel: String, json_format: impl FnOnce() -> Option<String>) {
+        let file = rel.rsplit('/').next().unwrap_or(&rel);
+        let ext = file.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+        match ext.as_deref() {
+            Some("glb" | "gltf") => self.meshes.push(rel),
+            Some("png" | "jpg" | "jpeg") => self.textures.push(rel),
+            Some("wav" | "ogg" | "flac" | "mp3") => self.sounds.push(rel),
+            Some("wgsl") => self.shaders.push(rel),
+            Some("json") => match json_format().as_deref() {
+                Some(crate::scene::PREFAB_FORMAT) => self.prefabs.push(rel),
+                Some("ponko-world") => self.scenes.push(rel),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    /// Files listed (materials aren't files).
+    fn len(&self) -> usize {
+        let files = [
+            &self.meshes,
+            &self.prefabs,
+            &self.scenes,
+            &self.textures,
+            &self.sounds,
+            &self.shaders,
+        ];
+        files.iter().map(|list| list.len()).sum()
+    }
+
+    /// Each kind's files sorted, each once.
+    fn sort(&mut self) {
+        for list in [
+            &mut self.meshes,
+            &mut self.prefabs,
+            &mut self.scenes,
+            &mut self.textures,
+            &mut self.sounds,
+            &mut self.shaders,
+        ] {
+            list.sort();
+            list.dedup();
+        }
+    }
 }
 
 /// The `"format"` of a JSON file, read whole when it's small, else
@@ -951,8 +1019,7 @@ fn json_format(path: &std::path::Path) -> Option<String> {
     const WHOLE: u64 = 4 << 20;
     let len = std::fs::metadata(path).ok()?.len();
     if len <= WHOLE {
-        let v: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-        return v["format"].as_str().map(str::to_string);
+        return json_format_of(&std::fs::read(path).ok()?);
     }
     let mut head = vec![0u8; 64 << 10];
     let n = std::io::Read::read(&mut std::fs::File::open(path).ok()?, &mut head).ok()?;
@@ -961,6 +1028,12 @@ fn json_format(path: &std::path::Path) -> Option<String> {
         .into_iter()
         .find(|f| head.contains(&format!("\"{f}\"")))
         .map(str::to_string)
+}
+
+/// The `"format"` of the JSON file `bytes`.
+fn json_format_of(bytes: &[u8]) -> Option<String> {
+    let v: Value = serde_json::from_slice(bytes).ok()?;
+    v["format"].as_str().map(str::to_string)
 }
 
 /// A 3D offset for [`Editor::duplicate_many`] (zero in builds without 3D).

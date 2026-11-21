@@ -1577,17 +1577,11 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// # }     /// ```     pub fn load_collision_mesh(&mut self, path: &str) -> CollisionMesh {         self.try_load_collision_mesh(path).unwrap_or_else(|e| panic!(\"{e}\"))",
     "site": "src/physics3d/files.rs:92"
   },
-  "src/physics3d/mod.rs:42efbc4415026baf": {
+  "src/physics3d/mod.rs:60360e84506e1514": {
     "classification": "invariant",
     "construction": ".expect(\"live slot\")",
-    "reason": "Internal invariant: Vec3::ZERO,             ),             Shape3D::Mesh(m) => match self.mesh(m) {                 Some(slot) if scale == Vec3::ONE => (slot.shape.clone().expect(\"live slot\"), slot.offset),",
-    "site": "src/physics3d/mod.rs:1119"
-  },
-  "src/physics3d/mod.rs:93347f7f19f62db8": {
-    "classification": "invariant",
-    "construction": ".expect(\"live slot\")",
-    "reason": "Internal invariant: Shape3D::Mesh(m) => match self.mesh(m) {                 Some(slot) if scale == Vec3::ONE => (slot.shape.clone().expect(\"live slot\"), slot.offset),                 Some(slot) => (                     streaming::scaled(slot.shape.as_ref().expect(\"live slot\"), scale),",
-    "site": "src/physics3d/mod.rs:1121"
+    "reason": "Internal invariant: Physics3D::mesh returns only slots of live meshes, whose shape is set.",
+    "site": "src/physics3d/mod.rs:1300"
   },
   "src/physics3d/query.rs:96d8397a15f3de54": {
     "classification": "invariant",
@@ -3431,12 +3425,6 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// or the GPU can't make a texture that large.     pub fn create_ui_panel(&mut self, width: u32, height: u32, size: Vec2) -> (UiPanel3D, crate::render::Model) {         self.try_create_ui_panel(width, height, size)             .unwrap_or_else(|message| panic!(\"{message}\"))",
     "site": "src/ui/panel3d.rs:195"
   },
-  "src/ui/retained.rs:010e9dbca8b3f128": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Screens and HUDs hold live roots: Ui::remove takes a removed root off both lists.",
-    "site": "src/ui/retained.rs:1707"
-  },
   "src/ui/retained.rs:0274e1172425e574": {
     "classification": "caller-contract",
     "construction": "assert!( self.node(root).is_some_and(|n| n.parent.is_none()), \"UI screen must be a detached root; add a root node or detach it before pushing\" )",
@@ -3562,6 +3550,12 @@
     "construction": "assert!( !self.is_screen(root), \"UI HUD is already a screen; pop it before showing it as a HUD\" )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. self.node(root).is_some_and(|n| n.parent.is_none()),             \"UI HUD must be a detached root; add a root node or detach it first\"         );         assert!(",
     "site": "src/ui/retained.rs:1124"
+  },
+  "src/ui/retained.rs:785a0ef1e04eb5d2": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "HUD and screen roots are live nodes: a root's node is freed only when it is removed from huds/screens.",
+    "site": "src/ui/retained.rs:1798"
   },
   "src/ui/retained.rs:842ad1d2c7596002": {
     "classification": "invariant",

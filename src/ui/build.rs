@@ -1026,6 +1026,19 @@ impl UiBuilder<'_> {
         self.ui.set_closes_screen(self.id, true);
         self
     }
+    /// Lays this root out inside the safe area, clear of a phone's notch,
+    /// home bar and rounded corners; see [`Ui::set_inside_safe_area`].
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::ui::UiLayout;
+    /// let mut ui = ponko::ui::Ui::default();
+    /// let hud = ui.root().layout(UiLayout::fill()).inside_safe_area().id();
+    /// assert!(ui.inside_safe_area(hud));
+    /// ```
+    pub fn inside_safe_area(self) -> Self {
+        self.ui.set_inside_safe_area(self.id, true);
+        self
+    }
     /// Slider (0..1) or toggle (0 off, 1 on) value; see [`Ui::set_value`].
     /// ```
     /// use ponko::prelude::*;

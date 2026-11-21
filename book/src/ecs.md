@@ -222,7 +222,7 @@ What you can ask for (Rust):
 |---|---|
 | `&T` | read access to `T` (entity must have it) |
 | `&mut T` | write access to `T` |
-| `Option<&T>`, `Option<&mut T>` | the component if present; doesn't filter (in `for_each` and the parallel loops, one or two of them cost nothing per entity: the loop is chosen per archetype) |
+| `Option<&T>`, `Option<&mut T>` | the component if present; doesn't filter (in `for_each` and the parallel loops, up to four of them cost nothing per entity: the loop is chosen per archetype) |
 | `Entity` | the entity's id |
 | a tuple of the above | all of them, up to 12 (nest tuples for more) |
 
@@ -398,9 +398,12 @@ Ways to run a query:
 
 - `for_each(f)`: the fastest loop; use this by default.
 - `par_for_each(f)`: same, split over all CPU cores. Use it for per-entity
-  work on many entities. Many small archetypes share the cores too; a query
-  over small archetypes only times its first rows and stays on the calling
-  thread when the whole loop would be quick (under about 50 µs). Because
+  work on many entities. Many small archetypes share the cores too. A loop
+  times its first rows and stays on the calling thread when the whole loop
+  would be quick (under about 50 µs), whatever its size in entities: the
+  work measured decides, so a cheap loop over a big world doesn't wait for
+  other threads, and a heavy one over a few thousand entities still uses
+  every core. Because
   that choice depends on measured time, which threads run which entities,
   and in what order, can change from run to run even on small worlds: side
   effects that depend on order (pushing into a shared `Vec`, summing floats

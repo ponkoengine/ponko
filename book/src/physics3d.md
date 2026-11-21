@@ -85,7 +85,7 @@ is what you see:
 | `d3::Collider::cuboid(size)` | `ponko::box_collider(size)` | full width, height, depth |
 | `d3::Collider::capsule(h, r)` | `ponko::capsule_collider3d(h, r)` | upright; `h` between the centers of its ends |
 | `d3::Collider::mesh(m)` | `ponko::mesh_collider(m)` | a heightfield, convex hull or triangle mesh |
-| `d3::Collider::scaled_mesh(m, scale)` | none yet (C: shape `PONKO_SHAPE3D_SCALED_MESH`, `size` as the scale) | that mesh scaled where it is used; a negative component mirrors it |
+| `d3::Collider::scaled_mesh(m, scale)` | `ponko::scaled_mesh_collider(m, scale)` | that mesh scaled where it is used; a negative component mirrors it |
 | `.density(d)`, `.friction(f)`, `.restitution(r)` | fields of the same name | kg/m³ (default 1000), 0 ice..1 rubber, bounciness |
 | `.sensor()` | `.sensor = true` | reports overlaps, doesn't push |
 | `.offset(v)`, `.groups(g)` | `.offset`, `.groups` | shape moved from the entity; who it touches |
@@ -107,12 +107,14 @@ Collision meshes are made once and shared by any number of colliders:
   still using it keep it until they're removed. A collision mesh is a
   [handle](handles.md): `ctx.is_live(m)` tells whether it still is.
 - `Collider::scaled_mesh(m, scale)` uses one mesh at any size: a rock made
-  once serves a pebble and a boulder, and a negative component mirrors a
-  hull or triangle mesh (a heightfield takes the size only). The mesh stays
+  once serves a pebble and a boulder, and a negative component mirrors it
+  (a heightfield along X and Z; its Y takes the size only, so the ground
+  still faces up). The mesh stays
   one; each collider gets a scaled copy when it enters the physics world,
   shared by the colliders at the same scale and dropped with the last of
-  them. World saves and scene files leave such colliders out; a mesh file
-  in a scene names its own `scale` instead (below).
+  them. C: `ponko_collider3d_scaled_mesh(m, scale)` (the shape
+  `PONKO_SHAPE3D_SCALED_MESH`, with `size` as the scale). A mesh of a file
+  is saved by its file and the collider's scale (below).
 
 Each of these has a twin in `CollisionMeshData` (C++
 `ponko::collision_mesh_data`) that builds the mesh on any thread, for
@@ -125,7 +127,20 @@ the tile's own entity: `TerrainCollider::new(mesh)` (C++
 `ponko::solid_terrain(mesh)`) with the heightfield of the tile's heights.
 It sits at the tile's `d3::Transform`, turned **and scaled** with it (a tile
 drawn twice as high is solid twice as high), so it matches the drawn ground
-triangle for triangle, holes included. Despawning the tile removes it; to
+triangle for triangle, holes included. The scale works as
+`Collider::scaled_mesh`'s: a triangle mesh is built again from its scaled
+corners, so a piece of ground stretched or mirrored (a negative component)
+is solid where it is drawn and its triangles still face up. A heightfield
+mirrored along X or Z (a tile flipped to reuse its heights on the other
+side of a seam) is built again with its heights, holes and the diagonals
+of its cells flipped, so it too is solid exactly where it is drawn. That
+copy is made once when the tile enters the physics world (about 0.1 ms for
+257 × 257 heights) and shared by the tiles at one scale; unmirrored tiles
+cost what they did.
+A negative Y scale takes the size only: the ground still faces up. A saved
+world keeps the tile's `d3::Transform`, mirror included, but not its
+`TerrainCollider` (a heightfield made in code has no file to name): give
+the loaded tile a new one from its heights. Despawning the tile removes it; to
 edit the ground (a crater), make a new heightfield, put it in the
 component's `mesh` and free the old one: the collider changes at the next
 step. Its `friction`, `restitution` and `groups` work as on a `d3::Collider`.
@@ -168,7 +183,15 @@ same file and options:
 ```
 
 A collider of a mesh from `load_collision_mesh` is saved by its file, as a
-scene's is. One of a mesh made in code has no file to name, so saves and the
+scene's is. A `Collider::scaled_mesh` of such a mesh is saved by the file
+and its own scale, and a scene may name one the same way (loading makes the
+file's mesh once, and every scale shares it):
+
+```json
+"Collider3D": { "shape": { "ScaledMesh": { "mesh": { "file": "props/rock.glb" }, "scale": [2, 2, -2] } } }
+```
+
+One of a mesh made in code has no file to name, so saves and the
 editor leave it out, like a sprite of a texture made in code: make it
 again in code after loading.
 

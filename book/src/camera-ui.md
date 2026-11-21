@@ -95,6 +95,9 @@ nothing changes.
 
 ### Following something
 
+<div class="lang-pair">
+<div>
+
 ```rust
 use ponko::d2::FollowCamera;
 # let hero = ctx.world.spawn((d2::Transform::at(vec2(400.0, 300.0)),));
@@ -109,6 +112,16 @@ ctx.world.insert_resource(follow);
 ctx.world.insert(hero, CameraTarget);
 ```
 
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:camera_target}}
+```
+
+</div>
+</div>
+
 The engine's `update_camera_rigs` (at the end of `Phase::Animate`, after the
 frame systems and the animation moved things, before `Phase::Late`) reads
 the target's `Transform` and moves `ctx.camera`. The first frame with a
@@ -117,10 +130,16 @@ level), the camera cuts to it. With no target (a title screen) the rig
 leaves the camera alone, so the game can move it. The same works in 3D with
 the [3D rigs](3d.md#camera-rigs).
 
-`CameraTarget` is Rust-only for now: C and C++ games keep the rig and
-update it themselves, as below. A rig you keep elsewhere (a second camera,
-a split screen) you update yourself too, once a frame, after the thing it
-follows moved:
+From C, `ponko_ctx_set_follow_camera2d_rig(ctx, &rig)` keeps the rig in
+the world (`NULL` takes it away; `ponko_ctx_follow_camera2d_rig` reads its
+state back) and `ponko_ctx_set_camera_target(ctx, entity, true)` marks the
+entity (`false` unmarks it, `ponko_ctx_camera_target` finds it); the 3D
+rigs have the same pair (`_orbit_camera_rig`, `_first_person_camera_rig`,
+`_third_person_camera_rig`). C++ wraps them as the rig's `keep(ctx)`,
+`kept(ctx)` and `remove_kept(ctx)`, and `ctx.set_camera_target`.
+
+A rig you keep yourself (a second camera, a split screen) you update
+yourself, once a frame, after the thing it follows moved:
 
 <div class="lang-pair">
 <div>

@@ -218,6 +218,44 @@ impl Bench {
     }
 }
 
+/// `n` entities of `ent` in the prototype world, their components
+/// registered by name, size and alignment only, as the C API would. Returns
+/// the world and the ids of `Pos` and `Vel`.
+fn own_dynamic_world(n: usize) -> (own::World, [own::ComponentId; 2]) {
+    let mut w = own::World::new();
+    let p = w.register_dynamic("Pos", 8, 4, None);
+    let v = w.register_dynamic("Vel", 8, 4, None);
+    let s = w.register_dynamic("Spr", 20, 4, None);
+    for i in 0..n {
+        let (pp, vv, ss) = ent(i);
+        // SAFETY: each pointer is to a live value of the size and alignment
+        // registered for its component, and the types are `Copy`.
+        unsafe {
+            w.spawn_dynamic(&[
+                (p, (&pp as *const Pos).cast()),
+                (v, (&vv as *const Vel).cast()),
+                (s, (&ss as *const Spr).cast()),
+            ]);
+        }
+    }
+    (w, [p, v])
+}
+
+/// `pos += vel * dt` over the raw columns of `own_dynamic_world`: what a
+/// C++ system does, casting the columns and running a plain loop.
+fn own_dynamic_step(w: &mut own::World, ids: [own::ComponentId; 2], dt: f32) {
+    w.for_each_chunk(&ids, |len, cols| {
+        // SAFETY: the columns are `ids` in order, `len` rows each of two
+        // `f32`s (`Pos` and `Vel`), and only `Pos` is written.
+        let pos = unsafe { std::slice::from_raw_parts_mut(cols[0].cast::<[f32; 2]>(), len) };
+        let vel = unsafe { std::slice::from_raw_parts(cols[1].cast::<[f32; 2]>(), len) };
+        for (p, v) in pos.iter_mut().zip(vel) {
+            p[0] += v[0] * dt;
+            p[1] += v[1] * dt;
+        }
+    });
+}
+
 /// `name` contains one of the `|`-separated parts of `filter`.
 fn matches_filter(filter: &str, name: &str) -> bool {
     filter.split('|').any(|part| name.contains(part))
@@ -968,36 +1006,8 @@ fn main() {
     b.steady(
         "iter/own-dynamic-chunk",
         200,
-        || {
-            // Components registered by name/size/align only, as the C API would.
-            let mut w = own::World::new();
-            let p = w.register_dynamic("Pos", 8, 4, None);
-            let v = w.register_dynamic("Vel", 8, 4, None);
-            let s = w.register_dynamic("Spr", 20, 4, None);
-            for i in 0..N {
-                let (pp, vv, ss) = ent(i);
-                unsafe {
-                    w.spawn_dynamic(&[
-                        (p, (&pp as *const Pos).cast()),
-                        (v, (&vv as *const Vel).cast()),
-                        (s, (&ss as *const Spr).cast()),
-                    ]);
-                }
-            }
-            (w, [p, v])
-        },
-        |(w, ids)| {
-            let dt = black_box(DT);
-            w.for_each_chunk(ids, |len, cols| {
-                // What a C++ system does: cast the columns, run a plain loop.
-                let pos = unsafe { std::slice::from_raw_parts_mut(cols[0].cast::<[f32; 2]>(), len) };
-                let vel = unsafe { std::slice::from_raw_parts(cols[1].cast::<[f32; 2]>(), len) };
-                for (p, v) in pos.iter_mut().zip(vel) {
-                    p[0] += v[0] * dt;
-                    p[1] += v[1] * dt;
-                }
-            });
-        },
+        || own_dynamic_world(N),
+        |(w, ids)| own_dynamic_step(w, *ids, black_box(DT)),
     );
     b.steady(
         "iter/hecs",
@@ -1643,7 +1653,24 @@ fn flow_benches(b: &mut Bench) {
 
 #[cfg(test)]
 mod tests {
-    use super::matches_filter;
+    use super::{DT, matches_filter, own_dynamic_step, own_dynamic_world};
+
+    /// The C-style benchmark moves every entity by its velocity.
+    #[test]
+    fn the_dynamic_chunk_step_moves_every_entity() {
+        let (mut w, [p, v]) = own_dynamic_world(100);
+        own_dynamic_step(&mut w, [p, v], DT);
+        let mut seen = 0;
+        w.for_each_chunk(&[p, v], |len, cols| {
+            // SAFETY: as in `own_dynamic_step`; nothing is written.
+            let pos = unsafe { std::slice::from_raw_parts(cols[0].cast::<[f32; 2]>(), len) };
+            for (i, p) in pos.iter().enumerate() {
+                assert_eq!(*p, [(seen + i) as f32 + DT, 0.5 * DT]);
+            }
+            seen += len;
+        });
+        assert_eq!(seen, 100);
+    }
 
     #[test]
     fn filters_match_any_alternative() {

@@ -12,6 +12,6 @@
   "adapter": "Apple M4 Max",
   "backend": "Metal",
   "driver": "unknown",
-  "checksum": "ec4706a7190a3b71",
-  "reason": "Screen-space reflections: 48 steps and a crossing allowance of at most two pixels keep far thin things thin in reflections without TAA (#123)."
+  "checksum": "ee242c185fa25264",
+  "reason": "Reflections assume thin things as deep as the screen shows them (not a thickness growing with distance): thinner reflections of far rails and bars"
 }

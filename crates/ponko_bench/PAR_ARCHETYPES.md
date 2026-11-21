@@ -34,9 +34,17 @@ Thresholds:
 | Case | Behavior |
 |---|---|
 | total rows ≤ one chunk (`clamp(total / (4 × threads), 512, 8192)`) | calling thread (unchanged) |
-| some archetype has more than 512 matching rows | parallel plan |
+| some archetype has more than 512 matching rows | parallel plan (until #181, see below) |
 | all archetypes ≤ 512 rows, more than one chunk | first 512 rows run on the calling thread, timed; if the whole query projects under **50 µs**, the rest runs there too (as before), otherwise in parallel |
 | the same on the web (no clock) | calling thread (unchanged) |
+
+Since #181 every loop of more than one chunk is timed, whatever the size
+of its archetypes: its first 64 rows, and if those already project it over
+50 µs (and took long enough to read on the clock) the rest goes parallel at
+once; otherwise up to 512 rows, as above. On the web, which has no clock,
+the table above still holds. The measurements are in
+[ECS.md](ECS.md#measured-work-not-entity-counts-181); the tables below
+predate it.
 
 ## Measurements (2026-11-10)
 

@@ -215,10 +215,67 @@ static void versioned_descriptors(PonkoCtx* ctx) {
     // ANCHOR_END: versioned_post
 }
 
+// ANCHOR: sliced_loader_c
+// A level's walls, read a row at a time so a big file never stalls a frame.
+typedef struct { char* text; size_t len, at, walls; } WallCount;
+
+static uint32_t walls_start(void* user, const uint8_t* bytes, size_t len, void** out_state) {
+    (void)user;
+    WallCount* w = calloc(1, sizeof *w);
+    if (!w || !(w->text = malloc(len ? len : 1))) { free(w); return PONKO_INVALID_ARGUMENT; }  // not PONKO_OK: the group fails
+    for (size_t i = 0; i < len; ++i) w->text[i] = (char)bytes[i];  // copy: bytes lives only during this call
+    w->len = len;
+    *out_state = w;
+    return PONKO_OK;
+}
+static uint32_t walls_step(void* user, void* state, bool* out_done) {
+    (void)user;
+    WallCount* w = state;
+    for (; w->at < w->len && w->text[w->at] != '\n'; ++w->at) w->walls += w->text[w->at] == '#';
+    if (w->at < w->len) ++w->at;  // one row a step
+    *out_done = w->at == w->len;
+    return PONKO_OK;
+}
+static void walls_free(void* user, void* state) {
+    (void)user;
+    WallCount* w = state;
+    free(w->text);
+    free(w);
+}
+// ANCHOR_END: sliced_loader_c
+
+static void sliced_loader(PonkoCtx* ctx) {
+    PonkoMemorySource* files = ponko_memory_source_new("levels");
+    const char level[] = "#..#\n#..#\n####\n";
+    CHECK(ponko_memory_source_insert(files, "walls.txt", (const uint8_t*)level, sizeof level - 1) == PONKO_OK);
+    CHECK(ponko_ctx_add_background_memory_source(ctx, files) == PONKO_OK);
+    ponko_memory_source_free(files);
+    // ANCHOR: sliced_group_c
+    PonkoSliceLoader loader = {.struct_size = sizeof loader, .version = PONKO_SLICE_LOADER_VERSION,
+                               .start = walls_start, .step = walls_step, .free_state = walls_free};
+    PonkoAssetGroup* group = ponko_asset_group_new("level");
+    CHECK(ponko_asset_group_add_sliced(group, "walls.txt", &loader) == PONKO_OK);
+    uint32_t id;
+    CHECK(ponko_ctx_start_asset_group(ctx, group, &id) == PONKO_OK);  // the context owns the group now
+    // ... later, once ponko_ctx_asset_group_state says PONKO_GROUP_READY:
+    void* state = NULL;
+    // ANCHOR_END: sliced_group_c
+    CHECK(ponko_ctx_finish_uploads(ctx) == PONKO_OK);
+    // ANCHOR: sliced_take_c
+    if (ponko_ctx_take_asset_group_sliced(ctx, id, "walls.txt", &state) == PONKO_OK) {
+        WallCount* walls = state;  // yours now: free it with your own function
+        printf("%zu walls\n", walls->walls);
+        walls_free(NULL, walls);
+    }
+    // ANCHOR_END: sliced_take_c
+    CHECK(state != NULL);
+}
+
 static void setup(PonkoCtx* ctx, void* user) {
     handles(ctx, user);
     retained_ui(ctx, user);
     versioned_descriptors(ctx);
+    sliced_loader(ctx);
 }
 
 int main(void) {

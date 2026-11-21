@@ -94,10 +94,13 @@ pub unsafe trait QueryData {
 }
 
 /// Calls `f` with the items of rows `rows` of the archetype `state` was made
-/// for. A query with one or two `Option` fetches gets one loop for each
+/// for. A query with one to four `Option` fetches gets one loop for each
 /// combination of the components the archetype may have, picked once here:
 /// no row tests whether the archetype has them, so the loop compiles (and
-/// vectorizes) like that of a query without `Option`s.
+/// vectorizes) like that of a query without `Option`s. With three or four,
+/// that is 8 or 16 copies of the loop, measured worth it: about 0.7× the
+/// instructions and 0.6× the cycles of testing each row, for 1-2 KB more
+/// code per loop (`crates/ponko_bench/ECS.md`).
 ///
 /// # Safety
 /// As for [`QueryData::fetch`], for every row in `rows`.
@@ -146,8 +149,10 @@ pub(crate) unsafe fn for_rows_at<'a, Q: QueryData>(
     match Q::OPTIONS {
         1 => split!(0; 1),
         2 => split!(0 1 2; 3),
-        // None, or so many that a loop for each would cost more code than
-        // the tests it saves.
+        3 => split!(0 1 2 3 4 5 6; 7),
+        4 => split!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14; 15),
+        // None, or so many (32 loops and more) that a loop for each would
+        // cost more code than the tests it saves.
         _ => {
             for row in rows {
                 // SAFETY: the caller's contract.
@@ -771,18 +776,30 @@ const PAR_MIN_CHUNK: usize = if cfg!(miri) { 64 } else { 512 };
 /// balance uneven per-entity work.
 #[cfg(feature = "parallel")]
 const PAR_MAX_CHUNK: usize = if cfg!(miri) { 64 } else { 8192 };
-/// A query whose archetypes are all small (none bigger than `PAR_MIN_CHUNK`
-/// rows) used to run on the calling thread. It still does when its first
-/// `PAR_MIN_CHUNK` rows, timed, project the whole query to under this many
-/// nanoseconds: below that, waking other threads costs more than it saves.
-/// The measured crossover is in `crates/ponko_bench/PAR_ARCHETYPES.md`.
-/// Zero under Miri, so tests always reach the parallel path.
+/// A loop of more than one chunk runs its first rows on the calling thread,
+/// timed, and stays there when they project the whole loop to under this
+/// many nanoseconds: below that, waking other threads costs more than it
+/// saves, and on a busy machine a woken thread may not run for
+/// milliseconds. The measured crossover is in
+/// `crates/ponko_bench/PAR_ARCHETYPES.md`. Zero under Miri, so tests always
+/// reach the parallel path.
 #[cfg(feature = "parallel")]
 const PAR_SERIAL_BUDGET_NS: u128 = if cfg!(miri) { 0 } else { 50_000 };
+/// Rows timed first. A loop already clearly over the budget after these
+/// goes parallel at once, so heavy work runs few rows on one thread before
+/// the others start; a cheap one times `PAR_MIN_CHUNK` rows in all.
+#[cfg(feature = "parallel")]
+const PAR_PROBE_FIRST: usize = 64;
+/// The shortest time projected from after the first rows: below it the
+/// clock (a tick is about 42 ns on Apple silicon) can't tell cheap rows
+/// from heavy ones, so the probe goes on to `PAR_MIN_CHUNK` rows.
+#[cfg(feature = "parallel")]
+const PAR_PROBE_RESOLUTION_NS: u128 = 250;
 
 /// A parallel query's work plan: its rows in query order, how many there
 /// are, the chunk size to split them into (`None`: run on this thread), and
-/// whether to time a first chunk on this thread before deciding.
+/// whether to time its first rows on this thread before deciding (not on
+/// the web, which has no clock to time them with).
 #[cfg(feature = "parallel")]
 struct Plan {
     tasks: Vec<ParTask>,
@@ -796,7 +813,27 @@ impl Plan {
     /// Runs the positions that stay on this thread, by calling
     /// `serial(lo, hi)`, and returns where the parallel part starts and its
     /// chunk size, if there is one.
-    fn run_serial_part(&self, mut serial: impl FnMut(usize, usize)) -> Option<(usize, usize)> {
+    fn run_serial_part(&self, serial: impl FnMut(usize, usize)) -> Option<(usize, usize)> {
+        // The clock starts at its first reading, when the probe starts.
+        let mut start = None;
+        self.run_serial_part_timed(serial, move || {
+            start.get_or_insert_with(std::time::Instant::now).elapsed().as_nanos()
+        })
+    }
+
+    /// [`run_serial_part`](Self::run_serial_part) with the clock given:
+    /// `elapsed()` is the time in nanoseconds since its first call.
+    ///
+    /// Times the first `PAR_PROBE_FIRST` rows; if they already project the
+    /// whole loop over `PAR_SERIAL_BUDGET_NS` (measured, not a tick or two
+    /// of the clock), the rest goes parallel. Otherwise it times up to
+    /// `PAR_MIN_CHUNK` rows and runs the whole loop here if it projects
+    /// under the budget.
+    fn run_serial_part_timed(
+        &self,
+        mut serial: impl FnMut(usize, usize),
+        mut elapsed: impl FnMut() -> u128,
+    ) -> Option<(usize, usize)> {
         let chunk = match self.chunk {
             None => {
                 serial(0, self.total);
@@ -807,13 +844,17 @@ impl Plan {
         if !self.probe {
             return Some((0, chunk));
         }
-        // The rows of small archetypes: time the first ones (as the old
-        // path ran them, on this thread) and keep going here if the whole
-        // query is cheap.
-        let probe = PAR_MIN_CHUNK.min(self.total);
-        let start = std::time::Instant::now();
-        serial(0, probe);
-        let projected = start.elapsed().as_nanos() * self.total as u128 / probe as u128;
+        let total = self.total as u128;
+        let first = PAR_PROBE_FIRST.min(self.total);
+        elapsed();
+        serial(0, first);
+        let spent = elapsed();
+        if spent >= PAR_PROBE_RESOLUTION_NS && spent * total / first as u128 >= PAR_SERIAL_BUDGET_NS {
+            return Some((first, chunk));
+        }
+        let probe = PAR_MIN_CHUNK.min(self.total).max(first);
+        serial(first, probe);
+        let projected = elapsed() * total / probe as u128;
         if projected < PAR_SERIAL_BUDGET_NS {
             serial(probe, self.total);
             return None;
@@ -857,6 +898,37 @@ impl<Q: QueryData> ParWork<'_, Q> {
     unsafe fn visit_shared<F: Fn(usize, Q::Item<'_>)>(&self, lo: usize, hi: usize, f: &F) {
         // SAFETY: the caller's contract.
         unsafe { self.visit(lo, hi, f) }
+    }
+
+    /// Writes `f(item)` for the query positions `lo..hi`, in order, to
+    /// `out[*len..]`, counting each write in `*len` before calling `f` again
+    /// (so a panic in `f` leaves `*len` naming exactly the values written).
+    /// For [`Query::par_collect_into`] of results that need `Drop`, in a
+    /// function of its own like [`visit_shared`](Self::visit_shared): `f` is
+    /// borrowed shared, so a value it captured is loaded once.
+    ///
+    /// # Safety
+    /// As for [`visit`](Self::visit), and `out` has room for `hi - lo` more
+    /// values after the first `*len`, which no one else writes or reads
+    /// meanwhile.
+    #[inline(never)]
+    unsafe fn visit_collect<R, F: Fn(Q::Item<'_>) -> R>(
+        &self,
+        lo: usize,
+        hi: usize,
+        f: &F,
+        out: *mut R,
+        len: &mut usize,
+    ) {
+        // SAFETY: the caller's contract; each write goes to a slot past the
+        // ones counted, which the caller reserved for this range.
+        unsafe {
+            self.visit(lo, hi, |_, item| {
+                let value = f(item);
+                out.add(*len).write(value);
+                *len += 1;
+            })
+        }
     }
 
     /// Calls `f(i, item)` for the query positions `lo..hi`, in order.
@@ -1362,17 +1434,17 @@ impl<'w, Q: QueryData> Query<'w, Q> {
     /// hold many small archetypes or part of a big one, so many small
     /// archetypes use every core too. Use it for heavy per-entity work over
     /// many entities; for a few thousand cheap updates, `for_each` is just as
-    /// fast. A query whose archetypes are all small times its first rows and
+    /// fast. A loop of more than one chunk of rows times its first rows and
     /// stays on the calling thread if the whole loop would take under about
-    /// 50 µs.
+    /// 50 µs, whatever the number or size of its archetypes: the work
+    /// measured decides, not the entity count.
     ///
     /// `f` can't capture `&mut` state (it runs on many threads at once). To
     /// spawn or despawn, collect what you need and use commands afterwards.
     ///
     /// Which entities run together, on which thread and in what order is not
-    /// fixed. For small-archetype queries even the choice between one thread
-    /// and many depends on measured time, so it can change from run to run on
-    /// small worlds too. Side effects that depend on order (pushing into a
+    /// fixed. Even the choice between one thread and many depends on measured
+    /// time, so it can change from run to run. Side effects that depend on order (pushing into a
     /// shared `Vec`, summing floats into shared state) are not reproducible;
     /// per-entity results, the positions of
     /// [`par_for_each_indexed`](Self::par_for_each_indexed) and the order of
@@ -1475,17 +1547,18 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         // scheduling stays negligible.
         let threads = crate::par::threads().max(1);
         let chunk = (total / (threads * 4)).clamp(PAR_MIN_CHUNK, PAR_MAX_CHUNK);
-        // Rows of small archetypes only (none bigger than `PAR_MIN_CHUNK`)
-        // used to run on the calling thread: time the first ones to decide
-        // (see `Plan::run_serial_part`). The web has no clock to time them
-        // with, so they keep running here.
-        let small = longest <= PAR_MIN_CHUNK;
-        let serial = total <= chunk || (small && cfg!(target_family = "wasm"));
+        // A loop of more than one chunk times its first rows to decide
+        // whether to share them out: by the work measured, not by how many
+        // rows there are (see `Plan::run_serial_part`). The web has no
+        // clock: there rows of small archetypes only (none bigger than
+        // `PAR_MIN_CHUNK`) run here, and others on all threads.
+        let web = cfg!(target_family = "wasm");
+        let serial = total <= chunk || (web && longest <= PAR_MIN_CHUNK);
         Plan {
             tasks,
             total,
             chunk: (!serial).then_some(chunk),
-            probe: small,
+            probe: !web,
         }
     }
 
@@ -1627,16 +1700,10 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                 // SAFETY: the plan was built under this query's world borrow,
                 // whose access was validated; the serial part and `fill` hand
                 // out disjoint ranges, and every position is one row of one
-                // archetype.
-                unsafe {
-                    work.visit(lo, hi, |_, item| {
-                        let value = f(item);
-                        // SAFETY: this task exclusively owns these reserved
-                        // slots. Record each write before calling `f` again.
-                        initialized.slots.at(initialized.len).write(value);
-                        initialized.len += 1;
-                    })
-                }
+                // archetype. This task exclusively owns the reserved slots
+                // past `initialized.len`, `hi - lo` of them, and
+                // `visit_collect` counts each write before calling `f` again.
+                unsafe { work.visit_collect(lo, hi, &f, initialized.slots.0, &mut initialized.len) }
             };
             // The serial part fills a prefix of `out`, the parallel part the rest.
             let mut initialized = Initialized { slots, len: 0 };
@@ -1925,6 +1992,76 @@ mod par_plan_tests {
         }
         w.advance_change_tick();
         (w, seen)
+    }
+
+    /// Runs the serial part of a plan of `total` rows split into chunks,
+    /// on a clock that advances `ns_per_row(rows run)` nanoseconds; returns
+    /// how many rows ran here and where the parallel part starts, if any.
+    fn serial_part(total: usize, ns: impl Fn(usize) -> u128) -> (usize, Option<usize>) {
+        let plan = Plan {
+            tasks: Vec::new(),
+            total,
+            chunk: Some(PAR_MIN_CHUNK),
+            probe: true,
+        };
+        let rows = std::cell::Cell::new(0);
+        let part = plan.run_serial_part_timed(
+            |lo, hi| {
+                assert_eq!(lo, rows.get(), "the serial part runs in order");
+                rows.set(hi);
+            },
+            || ns(rows.get()),
+        );
+        assert!(part.is_none_or(|(_, chunk)| chunk == PAR_MIN_CHUNK));
+        (rows.get(), part.map(|(from, _)| from))
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn a_cheap_loop_over_one_big_archetype_stays_on_the_calling_thread() {
+        // 0.2 ns a row (a vectorized `pos += vel * dt`): 200,000 rows take 40 µs.
+        assert_eq!(serial_part(200_000, |rows| rows as u128 / 5), (200_000, None));
+        // 4 ns a row: 10,000 rows take 40 µs, though the first rows are
+        // already long enough to time.
+        assert_eq!(serial_part(10_000, |rows| rows as u128 * 4), (10_000, None));
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn a_heavy_loop_goes_parallel_after_its_first_timed_rows() {
+        // 25 ns a row: the first rows already project 2.5 ms.
+        assert_eq!(
+            serial_part(100_000, |rows| rows as u128 * 25),
+            (PAR_PROBE_FIRST, Some(PAR_PROBE_FIRST))
+        );
+        // 3 ns a row over 100,000 rows (300 µs): the first rows take too
+        // few ticks of the clock to go by, a chunk is over the budget.
+        assert_eq!(
+            serial_part(100_000, |rows| rows as u128 * 3),
+            (PAR_MIN_CHUNK, Some(PAR_MIN_CHUNK))
+        );
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn rows_too_quick_for_the_clock_are_timed_for_a_whole_chunk() {
+        // 1 ns a row: the first rows read as a tick or two of the clock,
+        // which would project 1,000,000 rows to over the budget; a chunk
+        // projects them correctly (1 ms, so parallel).
+        assert_eq!(
+            serial_part(1_000_000, |rows| rows as u128),
+            (PAR_MIN_CHUNK, Some(PAR_MIN_CHUNK))
+        );
+        // 0.02 ns a row, as the clock might read it after the first rows:
+        // 42 ns for 64 rows. Not trusted: the chunk decides (serial).
+        assert_eq!(
+            serial_part(1_000_000, |rows| if rows <= PAR_PROBE_FIRST {
+                42
+            } else {
+                rows as u128 / 50
+            }),
+            (1_000_000, None)
+        );
     }
 
     #[test]

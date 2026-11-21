@@ -8012,6 +8012,7 @@ pub struct ponko::perf::ProfileScope
 impl ponko::perf::ProfileScope
 pub fn ponko::perf::ProfileScope::begin(&'static self) -> u64
 pub fn ponko::perf::ProfileScope::end(&self, u64)
+pub fn ponko::perf::ProfileScope::end_counting(&self, u64, u64)
 pub fn ponko::perf::ProfileScope::enter(&'static self) -> ponko::perf::ScopeGuard
 pub fn ponko::perf::ProfileScope::name(&self) -> &'static str
 pub const fn ponko::perf::ProfileScope::new(&'static str) -> Self
@@ -11565,6 +11566,7 @@ pub fn ponko::prelude::Ui::focus(&self) -> core::option::Option<ponko::prelude::
 pub fn ponko::prelude::Ui::frame(&mut self, glam::f32::vec2::Vec2, &ponko::ui::UiInput)
 pub fn ponko::prelude::Ui::hide_hud(&mut self, ponko::prelude::UiId)
 pub fn ponko::prelude::Ui::hit_test(&self, glam::f32::vec2::Vec2) -> core::option::Option<ponko::prelude::UiId>
+pub fn ponko::prelude::Ui::inside_safe_area(&self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::is_hud(&self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::is_initial_focus(&self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::is_screen(&self, ponko::prelude::UiId) -> bool
@@ -11580,15 +11582,18 @@ pub fn ponko::prelude::Ui::push_screen(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::push_screen_with_mode(&mut self, ponko::prelude::UiId, ponko::ui::ScreenMode)
 pub fn ponko::prelude::Ui::rect(&self, ponko::prelude::UiId) -> core::option::Option<ponko::camera::Rect>
 pub fn ponko::prelude::Ui::remove(&mut self, ponko::prelude::UiId)
+pub fn ponko::prelude::Ui::safe_area(&self) -> core::option::Option<ponko::camera::Rect>
 pub fn ponko::prelude::Ui::screen_mode(&self, ponko::prelude::UiId) -> core::option::Option<ponko::ui::ScreenMode>
 pub fn ponko::prelude::Ui::scroll(&self, ponko::prelude::UiId) -> core::option::Option<glam::f32::vec2::Vec2>
 pub fn ponko::prelude::Ui::set_closes_screen(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_enabled(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_focus(&mut self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::set_initial_focus(&mut self, ponko::prelude::UiId, bool)
+pub fn ponko::prelude::Ui::set_inside_safe_area(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_layout(&mut self, ponko::prelude::UiId, ponko::prelude::UiLayout)
 pub fn ponko::prelude::Ui::set_paint(&mut self, ponko::prelude::UiId, ponko::ui::UiPaint)
 pub fn ponko::prelude::Ui::set_pointer_ray(&mut self, core::option::Option<(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3)>)
+pub fn ponko::prelude::Ui::set_safe_area(&mut self, core::option::Option<ponko::camera::Rect>)
 pub fn ponko::prelude::Ui::set_scale(&mut self, f32)
 pub fn ponko::prelude::Ui::set_scroll(&mut self, ponko::prelude::UiId, glam::f32::vec2::Vec2)
 pub fn ponko::prelude::Ui::set_text(&mut self, ponko::prelude::UiId, impl core::convert::AsRef<str>)
@@ -15370,6 +15375,7 @@ pub ponko::streaming::UploadStats::failures: u64
 pub ponko::streaming::UploadStats::frame_bytes: u64
 pub ponko::streaming::UploadStats::frame_slices: u32
 pub ponko::streaming::UploadStats::frame_uploads: u32
+pub ponko::streaming::UploadStats::gpu_created_ms: core::option::Option<f32>
 pub ponko::streaming::UploadStats::gpu_upload_ms: core::option::Option<f32>
 pub ponko::streaming::UploadStats::gpu_upload_timing: bool
 pub ponko::streaming::UploadStats::held_by_budget: u64
@@ -16438,6 +16444,7 @@ pub fn ponko::prelude::Ui::focus(&self) -> core::option::Option<ponko::prelude::
 pub fn ponko::prelude::Ui::frame(&mut self, glam::f32::vec2::Vec2, &ponko::ui::UiInput)
 pub fn ponko::prelude::Ui::hide_hud(&mut self, ponko::prelude::UiId)
 pub fn ponko::prelude::Ui::hit_test(&self, glam::f32::vec2::Vec2) -> core::option::Option<ponko::prelude::UiId>
+pub fn ponko::prelude::Ui::inside_safe_area(&self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::is_hud(&self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::is_initial_focus(&self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::is_screen(&self, ponko::prelude::UiId) -> bool
@@ -16453,15 +16460,18 @@ pub fn ponko::prelude::Ui::push_screen(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::push_screen_with_mode(&mut self, ponko::prelude::UiId, ponko::ui::ScreenMode)
 pub fn ponko::prelude::Ui::rect(&self, ponko::prelude::UiId) -> core::option::Option<ponko::camera::Rect>
 pub fn ponko::prelude::Ui::remove(&mut self, ponko::prelude::UiId)
+pub fn ponko::prelude::Ui::safe_area(&self) -> core::option::Option<ponko::camera::Rect>
 pub fn ponko::prelude::Ui::screen_mode(&self, ponko::prelude::UiId) -> core::option::Option<ponko::ui::ScreenMode>
 pub fn ponko::prelude::Ui::scroll(&self, ponko::prelude::UiId) -> core::option::Option<glam::f32::vec2::Vec2>
 pub fn ponko::prelude::Ui::set_closes_screen(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_enabled(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_focus(&mut self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::set_initial_focus(&mut self, ponko::prelude::UiId, bool)
+pub fn ponko::prelude::Ui::set_inside_safe_area(&mut self, ponko::prelude::UiId, bool)
 pub fn ponko::prelude::Ui::set_layout(&mut self, ponko::prelude::UiId, ponko::prelude::UiLayout)
 pub fn ponko::prelude::Ui::set_paint(&mut self, ponko::prelude::UiId, ponko::ui::UiPaint)
 pub fn ponko::prelude::Ui::set_pointer_ray(&mut self, core::option::Option<(glam::f32::vec3::Vec3, glam::f32::vec3::Vec3)>)
+pub fn ponko::prelude::Ui::set_safe_area(&mut self, core::option::Option<ponko::camera::Rect>)
 pub fn ponko::prelude::Ui::set_scale(&mut self, f32)
 pub fn ponko::prelude::Ui::set_scroll(&mut self, ponko::prelude::UiId, glam::f32::vec2::Vec2)
 pub fn ponko::prelude::Ui::set_text(&mut self, ponko::prelude::UiId, impl core::convert::AsRef<str>)
@@ -16668,6 +16678,7 @@ pub fn ponko::ui::UiBuilder<'_>::focused(self) -> Self
 pub fn ponko::ui::UiBuilder<'_>::font(self, ponko::text::Font) -> Self
 pub fn ponko::ui::UiBuilder<'_>::id(self) -> ponko::prelude::UiId
 pub fn ponko::ui::UiBuilder<'_>::ime_allowed(self, bool) -> Self
+pub fn ponko::ui::UiBuilder<'_>::inside_safe_area(self) -> Self
 pub fn ponko::ui::UiBuilder<'_>::layout(self, ponko::prelude::UiLayout) -> Self
 pub fn ponko::ui::UiBuilder<'_>::live_region(self, ponko::ui::UiLive) -> Self
 pub fn ponko::ui::UiBuilder<'_>::name(self, impl core::convert::AsRef<str>) -> Self
@@ -17409,6 +17420,28 @@ impl serde_core::ser::Serialize for ponko::window::Monitor
 pub fn ponko::window::Monitor::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for ponko::window::Monitor
 pub fn ponko::window::Monitor::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::window::SafeInsets
+pub ponko::window::SafeInsets::bottom: f32
+pub ponko::window::SafeInsets::left: f32
+pub ponko::window::SafeInsets::right: f32
+pub ponko::window::SafeInsets::top: f32
+impl ponko::window::SafeInsets
+pub const ponko::window::SafeInsets::NONE: Self
+pub fn ponko::window::SafeInsets::new(f32, f32, f32, f32) -> Self
+impl core::clone::Clone for ponko::window::SafeInsets
+pub fn ponko::window::SafeInsets::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::window::SafeInsets
+pub fn ponko::window::SafeInsets::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::window::SafeInsets
+pub fn ponko::window::SafeInsets::default() -> Self
+impl core::fmt::Debug for ponko::window::SafeInsets
+pub fn ponko::window::SafeInsets::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::window::SafeInsets
+impl core::marker::StructuralPartialEq for ponko::window::SafeInsets
+impl serde_core::ser::Serialize for ponko::window::SafeInsets
+pub fn ponko::window::SafeInsets::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::window::SafeInsets
+pub fn ponko::window::SafeInsets::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[non_exhaustive] pub struct ponko::window::VideoMode
 pub ponko::window::VideoMode::bit_depth: u16
 pub ponko::window::VideoMode::height: u32
@@ -17453,8 +17486,11 @@ pub fn ponko::window::WindowService::clipboard_read(&mut self) -> core::result::
 pub fn ponko::window::WindowService::clipboard_write(&mut self, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::window::WindowService::close_requested(&self) -> bool
 pub fn ponko::window::WindowService::feed_event(&mut self, &ponko::window::WindowEvent) -> bool
+pub fn ponko::window::WindowService::feed_safe_insets(&mut self, ponko::window::SafeInsets)
 pub fn ponko::window::WindowService::monitors(&self) -> alloc::vec::Vec<ponko::window::Monitor>
 pub fn ponko::window::WindowService::request(&mut self, ponko::window::WindowRequest) -> core::result::Result<(), ponko::error::Error>
+pub fn ponko::window::WindowService::safe_area(&self) -> ponko::camera::Rect
+pub fn ponko::window::WindowService::safe_insets(&self) -> ponko::window::SafeInsets
 pub fn ponko::window::WindowService::settings(&self) -> &ponko::window::WindowSettings
 pub fn ponko::window::WindowService::state(&self) -> ponko::window::WindowState
 pub fn ponko::window::WindowService::with_backend(impl ponko::window::WindowBackend + 'static) -> Self

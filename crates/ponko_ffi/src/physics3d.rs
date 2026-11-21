@@ -98,9 +98,9 @@ pub struct PonkoRigidBody3D {
 
 /// The built-in `Collider3D` component: a body's shape in meters, centered
 /// on the entity plus `offset`, its surface and its groups. Start from
-/// `ponko_collider3d_sphere`, `_box`, `_capsule` or `_mesh`. Checked on
-/// spawn/set: sizes must be positive, density, friction and restitution
-/// not negative. Not a query column.
+/// `ponko_collider3d_sphere`, `_box`, `_capsule`, `_mesh` or
+/// `_scaled_mesh`. Checked on spawn/set: sizes must be positive, density,
+/// friction and restitution not negative. Not a query column.
 /// ```
 /// let c = ponko_ffi::ponko_collider3d_sphere(0.5);
 /// assert_eq!((c.radius, c.density, c.friction), (0.5, 1000.0, 0.5));
@@ -500,6 +500,26 @@ pub extern "C" fn ponko_collider3d_mesh(mesh: PonkoCollisionMesh) -> PonkoCollid
     PonkoCollider3D {
         mesh,
         ..collider3d(PonkoShape3DKind::PONKO_SHAPE3D_MESH)
+    }
+}
+
+/// A collider of a convex hull, triangle mesh or heightfield scaled by
+/// `scale` where it is used (Rust `Collider3D::scaled_mesh`), so one mesh
+/// serves colliders of every size: a negative component mirrors it (a
+/// heightfield along X and Z; its Y takes the size only). Colliders of one mesh
+/// at one scale share one scaled copy. The shape is
+/// `PONKO_SHAPE3D_SCALED_MESH`, with `size` as the scale.
+/// ```
+/// let m = ponko_ffi::PonkoCollisionMesh { id: 7 };
+/// let c = ponko_ffi::ponko_collider3d_scaled_mesh(m, ponko_ffi::PonkoVec3 { x: -1.0, y: 2.0, z: 1.0 });
+/// assert_eq!((c.mesh.id, c.size.x), (7, -1.0));
+/// ```
+#[unsafe(no_mangle)]
+pub extern "C" fn ponko_collider3d_scaled_mesh(mesh: PonkoCollisionMesh, scale: PonkoVec3) -> PonkoCollider3D {
+    PonkoCollider3D {
+        mesh,
+        size: scale,
+        ..collider3d(PonkoShape3DKind::PONKO_SHAPE3D_SCALED_MESH)
     }
 }
 
@@ -1147,11 +1167,7 @@ mod imp {
                 Shape3D::Cuboid { size } => ponko_collider3d_box(to_c(size)),
                 Shape3D::Capsule { height, radius } => ponko_collider3d_capsule(height, radius),
                 Shape3D::Mesh(m) => ponko_collider3d_mesh(mesh_to_c(m)),
-                Shape3D::ScaledMesh { mesh, scale } => PonkoCollider3D {
-                    shape: PonkoShape3DKind::PONKO_SHAPE3D_SCALED_MESH as u32,
-                    size: to_c(scale),
-                    ..ponko_collider3d_mesh(mesh_to_c(mesh))
-                },
+                Shape3D::ScaledMesh { mesh, scale } => ponko_collider3d_scaled_mesh(mesh_to_c(mesh), to_c(scale)),
                 _ => unreachable!("a new Shape3D needs a PonkoShape3DKind"),
             };
             PonkoCollider3D {

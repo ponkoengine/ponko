@@ -251,10 +251,13 @@ pub enum Shape3D {
     /// A convex hull, triangle mesh or heightfield made by [`Physics3D`],
     /// scaled by `scale` where it is used, so one mesh serves colliders of
     /// every size: see [`Collider3D::scaled_mesh`]. A negative component
-    /// mirrors a hull or triangle mesh; a heightfield takes the size only.
-    /// Serde writes the mesh as [`Shape3D::Mesh`] does; world saves and
-    /// scenes leave such colliders out (a mesh file's description names
-    /// its own `scale` instead).
+    /// mirrors it (a heightfield along X and Z; its Y takes the size only).
+    /// Serde writes the mesh as [`Shape3D::Mesh`] does. World saves and
+    /// scenes keep such a collider of a mesh file (one loaded with
+    /// [`Ctx::load_collision_mesh`](crate::ctx::Ctx::load_collision_mesh) or
+    /// by a scene) by that file and its scale: `{"ScaledMesh": {"mesh":
+    /// {"file": "rock.glb"}, "scale": [2, 2, 2]}}`; one of a mesh made in
+    /// code is left out, as a [`Shape3D::Mesh`] is.
     ScaledMesh {
         /// The mesh, as it was made.
         #[serde(with = "unsaved_mesh")]
@@ -449,10 +452,11 @@ impl Collider3D {
         Self::of(Shape3D::Mesh(mesh))
     }
     /// A convex hull, triangle mesh or heightfield made by [`Physics3D`],
-    /// scaled by `scale` (a negative component mirrors a hull or triangle
-    /// mesh). Colliders of one mesh at any number of sizes share the mesh;
+    /// scaled by `scale` (a negative component mirrors it; a heightfield's
+    /// Y takes the size only, so its ground still faces up). Colliders of one mesh at any number of sizes share the mesh;
     /// each collider gets its scaled copy when it enters the physics world,
-    /// and colliders at the same scale share that copy too.
+    /// and colliders at the same scale share that copy too. A mesh loaded
+    /// from a file is saved by its file and this scale.
     ///
     /// ```
     /// use ponko::prelude::*;
@@ -1144,7 +1148,7 @@ impl Physics3D {
     }
 
     /// Calls `edge` with the edges of `mesh` scaled by `scale` (mirrored by
-    /// a negative component, but for a heightfield), in the collider's
+    /// a negative component, but a heightfield's Y), in the collider's
     /// frame (the entity's, before its rotation and position):
     /// every edge of a convex hull, and of triangle meshes and heightfields
     /// the three edges of each triangle within `reach` of `near` (in that
@@ -1167,14 +1171,15 @@ impl Physics3D {
         let Some(shape) = slot.shape.as_ref() else {
             return false;
         };
-        // A heightfield takes the scale's size, a hull or triangle mesh is
-        // mirrored by a negative component, as their colliders are.
+        // A negative component mirrors the mesh, as it does its collider;
+        // a heightfield's Y takes the size only.
         let tiny = Vec3::splat(1e-6);
         let scale = if shape.as_heightfield().is_some() {
-            scale.abs().max(tiny)
+            scale.with_y(scale.y.abs())
         } else {
-            Vec3::select(scale.abs().cmplt(tiny), tiny.copysign(scale), scale)
+            scale
         };
+        let scale = Vec3::select(scale.abs().cmplt(tiny), tiny.copysign(scale), scale);
         let place = |p: rp::Vector| (from_rp(p) + slot.offset) * scale;
         // The query box in the shape's own (unscaled) frame.
         let center = near / scale - slot.offset;
@@ -1240,7 +1245,8 @@ impl Physics3D {
             return Some((base.clone(), slot.offset, false));
         }
         let offset = if base.as_heightfield().is_some() {
-            slot.offset * scale.abs()
+            // A mirrored heightfield is built mirrored, around its center.
+            slot.offset * scale.with_y(scale.y.abs())
         } else {
             slot.offset * scale
         };
@@ -1264,24 +1270,22 @@ impl Physics3D {
         Some((shape, offset))
     }
 
-    /// A rapier collider for `c` (a speck touching nothing for a freed mesh).
-    fn collider_of(&mut self, c: &Collider3D, e: Entity) -> rp::Collider {
-        self.scaled_collider_of(c, e, Vec3::ONE)
-    }
-
-    /// A rapier collider for a terrain collider, scaled with its tile.
+    /// A rapier collider for a terrain collider, scaled with its tile: the
+    /// scaled copy a [`Shape3D::ScaledMesh`] uses (a triangle mesh is built
+    /// again from its scaled corners, so a mirrored tile is mirrored and
+    /// its triangles still face out), not rapier's own scaling.
     fn terrain_collider_of(&mut self, t: &TerrainCollider, scale: Vec3, e: Entity) -> rp::Collider {
         let c = Collider3D {
             friction: t.friction,
             restitution: t.restitution,
             groups: t.groups,
-            ..Collider3D::mesh(t.mesh)
+            ..Collider3D::scaled_mesh(t.mesh, scale)
         };
-        self.scaled_collider_of(&c, e, scale)
+        self.collider_of(&c, e)
     }
 
-    /// [`collider_of`](Self::collider_of) with its mesh scaled by `scale`.
-    fn scaled_collider_of(&mut self, c: &Collider3D, e: Entity, scale: Vec3) -> rp::Collider {
+    /// A rapier collider for `c` (a speck touching nothing for a freed mesh).
+    fn collider_of(&mut self, c: &Collider3D, e: Entity) -> rp::Collider {
         let tiny = f32::EPSILON;
         let mut dead = false;
         let (shape, offset) = match c.shape {
@@ -1295,11 +1299,7 @@ impl Physics3D {
                 Vec3::ZERO,
             ),
             Shape3D::Mesh(m) => match self.mesh(m) {
-                Some(slot) if scale == Vec3::ONE => (slot.shape.clone().expect("live slot"), slot.offset),
-                Some(slot) => (
-                    streaming::scaled(slot.shape.as_ref().expect("live slot"), scale),
-                    slot.offset * scale.abs(),
-                ),
+                Some(slot) => (slot.shape.clone().expect("live slot"), slot.offset),
                 // A freed mesh: a speck that touches nothing.
                 None => {
                     dead = true;

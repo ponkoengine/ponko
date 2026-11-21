@@ -55,7 +55,8 @@ a whole subtree.
 
 ## Cost
 
-Placing runs on all cores and allocates nothing in steady state: about
+Placing runs on all cores when there is enough of it (a small update
+stays on the calling thread) and allocates nothing in steady state: about
 **0.7 ms per tick for 100,000 attachments** (release, M-series Mac,
 `cargo run --release -p ponko_bench -- attach`). Entities without
 `Attached` cost nothing.

@@ -164,7 +164,8 @@ copy per player with `Action::for_pad`:
 ## Backends and tests
 
 Pads come from a `GamepadBackend`. In a window the engine reads them with
-[gilrs](https://crates.io/crates/gilrs) (feature `gamepad`); headless runs
+[gilrs](https://crates.io/crates/gilrs) (feature `gamepad`), and in a web
+build from the browser's `navigator.getGamepads()` itself; headless runs
 have none. `Game::new(...).gamepad_backend(backend)` chooses another, polled
 once before setup so its pads are already connected there. A backend reports connections, buttons, axes and motion
 through `GamepadEvents` at the start of each frame and is told motor levels
@@ -195,7 +196,7 @@ Without a backend, `InputEvent::GamepadConnected(pad)` and
 ### What each platform supports
 
 What the built-in backend can do depends on what gilrs 0.11 implements on
-each platform, and on the web on what the browser has. Features it can't
+each desktop platform, and on the web on what the browser has. Features it can't
 drive are reported as `false` in `GamepadInfo::capabilities`, never faked:
 
 | | Linux (evdev) | Windows (Windows.Gaming.Input) | macOS | Web |
@@ -204,17 +205,29 @@ drive are reported as `false` in `GamepadInfo::capabilities`, never faked:
 | Name, family | yes | yes | yes | yes |
 | USB vendor / product ids | yes | yes | yes | when the browser reports them |
 | Body rumble (`strong`, `weak`) | yes, on pads with force feedback | yes, on gamepads with motors | no | where the browser has `vibrationActuator` (Chromium-based browsers) |
-| Trigger rumble | no | no (the system has it; gilrs sends zero) | no | no |
+| Trigger rumble | no | no (the system has it; gilrs sends zero) | no | where the pad's actuator lists `trigger-rumble` (Chromium on Windows, Xbox pads) |
 | Gyro and accelerometer | no | no | no | no |
 
-On the web the engine plays rumble itself: gilrs has no force feedback
-there, so it calls `playEffect("dual-rumble", ...)` on the pad's
-`vibrationActuator`. Browsers end an effect after at most 5 seconds, so the
+On the web the engine reads the browser's pads itself, in the standard
+layout and with gilrs's dead zone (a tenth of the travel, rescaled), so
+sticks and triggers read as on the desktop. It plays rumble itself too: it
+calls `playEffect("dual-rumble", ...)` on the pad's
+`vibrationActuator`, or `playEffect("trigger-rumble", ...)` with the
+trigger levels too when the actuator lists that effect in its `effects`
+(or, in older browsers, says yes to `canPlayEffectType`). Browsers end an effect after at most 5 seconds, so the
 engine asks for 2-second effects and plays the same levels again every
 second until the rumble ends (`Rumble::seconds`, or `stop_rumble`); a game
 that stalls stops buzzing within 2 seconds. A pad without an actuator
-reports `rumble: false` and stays quiet. Only the two body motors play, and
-the engine can only report what the browser says it has. The same holds for builds with [threads](web-threads.md).
+reports `rumble: false` and stays quiet.
+
+Trigger levels follow the same rules everywhere: a pad that reports
+`trigger_rumble` gets them; on any other pad they are dropped and the body
+motors still play, so `Rumble::new(0.0, 0.2).triggers(0.0, 1.0)` is a soft
+buzz there, and a rumble of the triggers alone plays nothing. The engine
+can only report what the browser says it has. The same holds for builds
+with [threads](web-threads.md). `web/smoke/threads.mjs --case gamepads`
+checks both kinds of pad in a headless browser with fed pads whose
+actuators record what they are asked.
 
 For trigger rumble or motion on a platform, install a backend that reads a
 library or SDK that has them; the engine's API already carries both.

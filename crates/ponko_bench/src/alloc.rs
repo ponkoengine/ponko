@@ -221,9 +221,75 @@ impl Counts {
     }
 }
 
+/// The process's peak resident memory in bytes, or why it isn't read. The
+/// peak never goes down: run one case per process to measure that case.
+pub fn peak_rss() -> Result<u64, String> {
+    #[cfg(unix)]
+    {
+        // SAFETY: `getrusage` fills the zeroed struct it is given.
+        let usage = unsafe {
+            let mut usage: libc::rusage = std::mem::zeroed();
+            if libc::getrusage(libc::RUSAGE_SELF, &mut usage) != 0 {
+                return Err("getrusage failed".to_owned());
+            }
+            usage
+        };
+        // Bytes on macOS, kilobytes elsewhere.
+        let unit = if cfg!(target_os = "macos") { 1 } else { 1024 };
+        Ok(usage.ru_maxrss as u64 * unit)
+    }
+    #[cfg(not(unix))]
+    {
+        Err("the peak resident set is not read on this platform".to_owned())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each method of the allocator, called directly: it hands out the
+    /// system's memory (zeroed where asked, kept across a reallocation)
+    /// and counts every allocation and reallocation.
+    #[test]
+    fn the_counting_allocator_forwards_every_call_to_the_system_allocator() {
+        let layout = Layout::from_size_align(64, 16).unwrap();
+        let before = Counts::now();
+        // SAFETY: a non-zero layout; each pointer is freed once with the
+        // layout it has at that moment.
+        unsafe {
+            let p = Counting.alloc(layout);
+            assert!(!p.is_null() && p.align_offset(16) == 0);
+            p.write_bytes(7, 64);
+            let p = Counting.realloc(p, layout, 256);
+            assert!(!p.is_null());
+            assert!((0..64).all(|i| *p.add(i) == 7), "a reallocation keeps the bytes");
+            Counting.dealloc(p, Layout::from_size_align(256, 16).unwrap());
+            let z = Counting.alloc_zeroed(layout);
+            assert!(!z.is_null());
+            assert!((0..64).all(|i| *z.add(i) == 0));
+            Counting.dealloc(z, layout);
+        }
+        let counted = Counts::now().since(before);
+        // Other tests allocate at the same time, so only a lower bound holds.
+        assert!(counted.count >= 3 && counted.bytes >= 64 + 256 + 64, "{counted:?}");
+    }
+
+    /// The peak covers memory the process touched (where it is read).
+    #[test]
+    fn the_peak_resident_set_covers_memory_in_use() {
+        let mut big = vec![0u8; 32 << 20];
+        for page in big.chunks_mut(4096) {
+            page[0] = 1;
+        }
+        std::hint::black_box(&big);
+        if cfg!(unix) {
+            let bytes = peak_rss().expect("getrusage reads the peak");
+            assert!(bytes >= 32 << 20, "{bytes} bytes");
+        } else {
+            assert!(peak_rss().is_err());
+        }
+    }
 
     #[test]
     fn allocations_are_counted() {

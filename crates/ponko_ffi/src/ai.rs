@@ -9,6 +9,7 @@ use ponko::ai::{BehaviorTree, BehaviorTrees, Blackboard, Brain, Curve, Key, Stat
 use ponko::prelude::{Entity, Vec2, Vec3};
 
 use crate::PonkoVec3;
+use crate::ai_columns::{NO_ENTITY, NO_VEC2, NO_VEC3, board_value};
 use crate::ctx::{out, text};
 use crate::types::*;
 use crate::{Failure, PonkoStatus, boundary, error, invalid, invalid_owned, write_text};
@@ -635,6 +636,75 @@ pub unsafe extern "C" fn ponko_brain_flag(brain: *const PonkoBrain, key: u64, ou
             .and_then(Value::as_bool)
             .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "no such flag on the blackboard"))?;
         out(out_value, value)
+    })
+}
+
+/// The entity (its bits) at blackboard entry `key`. `PONKO_NOT_FOUND` if
+/// it has none or it isn't an entity.
+///
+/// Ownership: `out_value` is the caller's, written during the call only.
+/// ```
+/// let mut v = 0;
+/// assert_eq!(unsafe { ponko_ffi::ponko_brain_entity(std::ptr::null(), 0, &mut v) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or live; `out_value` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_brain_entity(brain: *const PonkoBrain, key: u64, out_value: *mut u64) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let e = board_value(&brain_ref(brain)?.bb, key, Value::as_entity, NO_ENTITY)?;
+        out(out_value, e.to_bits())
+    })
+}
+
+/// The 2D point at blackboard entry `key`. `PONKO_NOT_FOUND` if it has
+/// none or it isn't a 2D point.
+///
+/// Ownership: `out_value` is the caller's, written during the call only.
+/// ```
+/// let mut v = ponko_ffi::PonkoVec2::default();
+/// assert_eq!(unsafe { ponko_ffi::ponko_brain_vec2(std::ptr::null(), 0, &mut v) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or live; `out_value` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_brain_vec2(
+    brain: *const PonkoBrain,
+    key: u64,
+    out_value: *mut PonkoVec2,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        out(
+            out_value,
+            to_c(board_value(&brain_ref(brain)?.bb, key, Value::as_vec2, NO_VEC2)?),
+        )
+    })
+}
+
+/// The 3D point at blackboard entry `key`. `PONKO_NOT_FOUND` if it has
+/// none or it isn't a 3D point.
+///
+/// Ownership: `out_value` is the caller's, written during the call only.
+/// ```
+/// let mut v = ponko_ffi::PonkoVec3::default();
+/// assert_eq!(unsafe { ponko_ffi::ponko_brain_vec3(std::ptr::null(), 0, &mut v) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or live; `out_value` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_brain_vec3(
+    brain: *const PonkoBrain,
+    key: u64,
+    out_value: *mut PonkoVec3,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        out(
+            out_value,
+            to_c(board_value(&brain_ref(brain)?.bb, key, Value::as_vec3, NO_VEC3)?),
+        )
     })
 }
 

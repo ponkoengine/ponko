@@ -18,6 +18,10 @@
 //!   other physical pixels.
 //! - `ui/draw-tooltip`: the pointer moves over the settings screen, whose
 //!   tooltip shows and follows it.
+//! - `ui/draw-resize`: a row added to the settings screen, of a panel, a
+//!   rich label and a wrapped paragraph: the panel is resized back and
+//!   forth between two widths, every frame, moving the rich label sideways
+//!   and giving the paragraph one width, then the other.
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
@@ -43,6 +47,7 @@ enum Change {
     Insert,
     Scroll,
     Tooltip,
+    Resize,
 }
 
 pub fn run(b: &mut Bench) {
@@ -53,6 +58,7 @@ pub fn run(b: &mut Bench) {
         ("ui/draw-insert", Change::Insert),
         ("ui/draw-scroll", Change::Scroll),
         ("ui/draw-tooltip", Change::Tooltip),
+        ("ui/draw-resize", Change::Resize),
     ] {
         if b.skips(name) {
             continue;
@@ -83,8 +89,10 @@ pub fn run(b: &mut Bench) {
                     };
                     ctx.ui.set_theme(theme);
                 }
+                Change::Resize => {}
                 Change::Still | Change::Insert | Change::Scroll => {}
             }
+            let resized = (change == Change::Resize).then(|| resize_row(ctx, hud.menu));
             let mut slot = None;
             let mut times = Vec::with_capacity(FRAMES);
             for frame in 0..WARMUP + FRAMES {
@@ -107,6 +115,11 @@ pub fn run(b: &mut Bench) {
                         let at = vec2(500.0 + along * 1.3, 300.0 + along * 0.4);
                         ctx.input.feed(InputEvent::MouseMove(at));
                     }
+                    Change::Resize => {
+                        let width = if frame % 2 == 0 { 40.0 } else { 64.0 };
+                        let panel = resized.expect("the resized row");
+                        ctx.ui.set_layout(panel, UiLayout::fixed(width, 20.0));
+                    }
                     _ => {}
                 }
                 ctx.bench_ui_frame(DT);
@@ -124,4 +137,23 @@ pub fn run(b: &mut Bench) {
         let mut times = world.remove_resource::<Times>().expect("the times").0;
         b.report(report::Record::new(name, report::Kind::Steady, WARMUP, &mut times));
     }
+}
+
+/// A row added to the settings screen `menu`: a panel (returned) before a
+/// centred rich label and a wrapped paragraph that takes the rest.
+fn resize_row(ctx: &mut Ctx, menu: ponko::ui::UiId) -> ponko::ui::UiId {
+    let ui = &mut ctx.ui;
+    let row = ui.panel(menu).layout(UiLayout::row(60.0).gap(8.0)).id();
+    let panel = ui.panel(row).layout(UiLayout::fixed(40.0, 20.0)).id();
+    ui.label(row, "[color=#fc0]Gold[/color] [b]x3[/b] [u]each[/u]")
+        .rich()
+        .align(ponko::ui::UiTextAlign::Center)
+        .layout(UiLayout::fixed(140.0, 24.0));
+    ui.label(
+        row,
+        "The window mode and the language take effect when the game restarts.",
+    )
+    .wrap()
+    .layout(UiLayout::auto().grow(1.0));
+    panel
 }
