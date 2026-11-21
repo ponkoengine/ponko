@@ -743,9 +743,10 @@ impl Ctx {
 
     /// Spawns again every glTF scene whose saved record lost its root
     /// (a scene file or save was loaded), where it was saved; each adopts
-    /// its record. Returns the errors, one per scene that didn't spawn.
+    /// its record. Returns the scenes that didn't spawn: each one's file,
+    /// and its error.
     #[cfg_attr(not(feature = "editor"), allow(dead_code))]
-    pub(crate) fn respawn_saved_gltf(&mut self) -> Vec<crate::error::Error> {
+    pub(crate) fn respawn_saved_gltf(&mut self) -> Vec<(String, crate::error::Error)> {
         let orphans: Vec<(String, Transform3D)> = self
             .world
             .get_resource::<GltfSceneSaves>()
@@ -760,7 +761,7 @@ impl Ctx {
         let mut errors = Vec::new();
         for (path, at) in orphans {
             if let Err(e) = self.spawn_gltf(&path, at, super::GltfOptions::default()) {
-                errors.push(e);
+                errors.push((path, e));
             }
         }
         errors
@@ -806,7 +807,7 @@ impl Ctx {
     /// file no longer loads stays out.
     #[cfg_attr(not(feature = "editor"), allow(dead_code))]
     pub(crate) fn respawn_gltf_entities(&mut self, before: &GltfEntities) -> Vec<(Entity, Entity)> {
-        for e in self.respawn_saved_gltf() {
+        for (_, e) in self.respawn_saved_gltf() {
             eprintln!("ponko: {e}");
         }
         let roots: Vec<Option<Entity>> = self

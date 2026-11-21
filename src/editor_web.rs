@@ -18,6 +18,11 @@
 //! and [`Assets::revert_browser_save`](crate::assets::Assets::revert_browser_save)
 //! do the same from code.
 //!
+//! Browsers may clear a site's storage when space runs low, unless the
+//! site's storage is persistent. Before setup the editor asks for that
+//! (`navigator.storage.persist()`); [`persistence`] is the answer, and the
+//! status bar and File > Saved in this browser say when it was refused.
+//!
 //! The parts that don't need a browser (the keys, what is kept and put
 //! back) are written against [`Store`], so tests run them on a map.
 
@@ -51,6 +56,39 @@ impl Store for std::collections::BTreeMap<String, String> {
     }
     fn keys(&self) -> Vec<String> {
         std::collections::BTreeMap::keys(self).cloned().collect()
+    }
+}
+
+/// Whether the browser keeps this site's storage when it runs low on
+/// space: the answer to the editor's request for persistent storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Persistence {
+    /// Not asked (not a browser), or the browser hasn't answered yet.
+    #[default]
+    Unknown,
+    /// Persistent: saves stay until the person clears the site's data.
+    Granted,
+    /// Refused, or the browser can't keep storage persistent (no
+    /// `navigator.storage`): saves may be cleared when space runs low.
+    Refused,
+}
+
+impl Persistence {
+    /// The answer of `navigator.storage.persist()` (or `persisted()`):
+    /// `Some(granted)`, or `None` when the browser has no such call.
+    pub(crate) fn from_answer(granted: Option<bool>) -> Self {
+        match granted {
+            Some(true) => Self::Granted,
+            Some(false) | None => Self::Refused,
+        }
+    }
+
+    /// What the editor shows for it, if anything: a warning when saves
+    /// kept in the browser may be cleared.
+    pub(crate) fn warning(self) -> Option<&'static str> {
+        (self == Self::Refused).then_some(
+            "The browser may clear these saves when it runs low on space: it refused to keep this site's storage. File > Download keeps a copy.",
+        )
     }
 }
 
@@ -172,6 +210,38 @@ mod browser {
     thread_local! {
         /// The build's files that saves replaced (see `remember_shipped`).
         pub(super) static SHIPPED: std::cell::RefCell<super::Shipped> = Default::default();
+        /// The browser's answer to the request for persistent storage.
+        pub(super) static PERSISTENCE: std::cell::Cell<super::Persistence> = Default::default();
+    }
+
+    /// Asks the browser to keep this site's storage when space runs low
+    /// (`navigator.storage.persist()`, after `persisted()` says whether it
+    /// does already); the answer lands in `PERSISTENCE`. Chromium answers
+    /// from how the site is used, Firefox asks the person, and a page
+    /// without `navigator.storage` (not a secure context) is refused.
+    pub(super) fn ask_persistence() {
+        let Some(storage) = web_sys::window()
+            .and_then(|w| js_sys::Reflect::get(&w.navigator(), &"storage".into()).ok())
+            .filter(|s| s.is_object())
+        else {
+            PERSISTENCE.with(|p| p.set(super::Persistence::from_answer(None)));
+            return;
+        };
+        wasm_bindgen_futures::spawn_local(async move {
+            let granted = match call(&storage, "persisted").await {
+                Some(true) => Some(true),
+                _ => call(&storage, "persist").await,
+            };
+            PERSISTENCE.with(|p| p.set(super::Persistence::from_answer(granted)));
+        });
+    }
+
+    /// Calls `storage.<method>()`, which returns a promise of a boolean;
+    /// `None` when there is no such method or it fails.
+    async fn call(storage: &JsValue, method: &str) -> Option<bool> {
+        let f: js_sys::Function = js_sys::Reflect::get(storage, &method.into()).ok()?.dyn_into().ok()?;
+        let promise: js_sys::Promise = f.call0(storage).ok()?.dyn_into().ok()?;
+        wasm_bindgen_futures::JsFuture::from(promise).await.ok()?.as_bool()
     }
 
     /// The page's `localStorage`.
@@ -254,9 +324,11 @@ pub(crate) fn keep(name: &str, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// Puts the assets saved on this page back, over the fetched ones (kept
-/// aside, to revert to). Runs before setup, after the assets were fetched.
+/// aside, to revert to), and asks for persistent storage. Runs before
+/// setup, after the assets were fetched.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn restore() {
+    browser::ask_persistence();
     let Ok((store, page)) = browser::local() else { return };
     for (name, bytes) in kept_in(&store, &page) {
         if let Some(fetched) = crate::assets::read_web_asset(&name) {
@@ -266,6 +338,12 @@ pub(crate) fn restore() {
         }
         crate::assets::insert_web_file(name, bytes);
     }
+}
+
+/// The browser's answer to the request for persistent storage.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn persistence() -> Persistence {
+    browser::PERSISTENCE.with(std::cell::Cell::get)
 }
 
 /// The files saved in this browser for this page, sorted by name.
@@ -303,6 +381,12 @@ pub(crate) mod test_browser {
     thread_local! {
         pub(crate) static STORE: RefCell<BTreeMap<String, String>> = RefCell::default();
         pub(crate) static SHIPPED: RefCell<super::Shipped> = RefCell::default();
+        pub(crate) static PERSISTENCE: std::cell::Cell<super::Persistence> = std::cell::Cell::default();
+    }
+
+    /// The browser's answer to the request for persistent storage.
+    pub(crate) fn answer(persistence: super::Persistence) {
+        PERSISTENCE.with(|p| p.set(persistence));
     }
 
     /// Keeps `text` as asset `name` in the browser; `shipped` is the
@@ -321,6 +405,13 @@ pub(crate) fn saved() -> Vec<Saved> {
     test_browser::STORE.with(|s| test_browser::SHIPPED.with(|sh| saved_in(&*s.borrow(), "/", &sh.borrow())))
 }
 
+/// The browser's answer about persistent storage: in native tests,
+/// `test_browser`'s.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn persistence() -> Persistence {
+    test_browser::PERSISTENCE.with(std::cell::Cell::get)
+}
+
 /// Reverts asset `name`: in native tests, in `test_browser`'s storage.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn forget(name: &str) -> Result<bool, String> {
@@ -331,6 +422,12 @@ pub(crate) fn forget(name: &str) -> Result<bool, String> {
 #[cfg(not(any(test, target_arch = "wasm32")))]
 pub(crate) fn saved() -> Vec<Saved> {
     Vec::new()
+}
+
+/// Desktop builds ask no browser for persistent storage.
+#[cfg(not(any(test, target_arch = "wasm32")))]
+pub(crate) fn persistence() -> Persistence {
+    Persistence::Unknown
 }
 
 /// Desktop builds keep nothing in a browser: nothing to revert.
@@ -436,6 +533,21 @@ mod tests {
             kept_in(&store, "/").is_empty(),
             "nothing is put back over the build's files any more"
         );
+    }
+
+    #[test]
+    fn only_a_refused_request_for_persistent_storage_warns_that_saves_may_be_cleared() {
+        assert_eq!(Persistence::from_answer(Some(true)), Persistence::Granted);
+        assert_eq!(Persistence::from_answer(Some(false)), Persistence::Refused);
+        assert_eq!(
+            Persistence::from_answer(None),
+            Persistence::Refused,
+            "no navigator.storage: nothing keeps it"
+        );
+        assert_eq!(Persistence::Granted.warning(), None);
+        assert_eq!(Persistence::Unknown.warning(), None, "not answered yet");
+        let warning = Persistence::Refused.warning().unwrap();
+        assert!(warning.contains("clear") && warning.contains("Download"), "{warning}");
     }
 
     #[test]
