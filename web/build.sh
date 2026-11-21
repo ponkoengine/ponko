@@ -7,6 +7,7 @@
 #   web/build.sh --features 3d web_smoke_3d   # with Cargo features (comma-separated)
 #   web/build.sh --threads battle        # with threads (nightly; see below)
 #   web/build.sh --threads --print-env   # what a threaded build would set, no build
+#   web/build.sh --threads --clippy      # nightly clippy on the threaded configuration, no build
 #   python3 -m http.server -d target/web/battle 8000
 #
 # Needs: rustup target add wasm32-unknown-unknown
@@ -27,18 +28,25 @@
 # RUSTFLAGS="-D warnings" still fails a threaded build on a warning.
 # --print-env prints the toolchain and that variable instead of building
 # (web/smoke/build.test.mjs checks it).
+#
+# --clippy (with --threads) lints the engine and the threads fixture with
+# the same toolchain and flags, with -D warnings: the nightly clippy has
+# lints the stable one doesn't, and some code only compiles with atomics.
+# It builds nothing to serve (the check list runs it as its own step).
 set -euo pipefail
 
 kind=example
 features=
 threads=
 print_env=
+clippy=
 while [ $# -gt 0 ]; do
   case "$1" in
     --bin) kind=bin; shift ;;
     --features) features=${2:?--features needs a list}; shift 2 ;;
     --threads) threads=1; shift ;;
     --print-env) print_env=1; shift ;;
+    --clippy) clippy=1; shift ;;
     *) break ;;
   esac
 done
@@ -64,13 +72,27 @@ if [ -n "$threads" ]; then
     flags_value="$flags${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:+ $CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS}"
   fi
 fi
+if [ -n "$clippy" ] && [ -z "$threads" ]; then
+  echo "--clippy is for --threads (the ordinary web build is linted by 'cargo clippy --target wasm32-unknown-unknown')" >&2
+  exit 2
+fi
+clippy_args=(-Zbuild-std=panic_abort,std --target wasm32-unknown-unknown -p ponko --lib --example web_threads)
+if [ -n "$features" ]; then
+  clippy_args+=(--features "$features")
+fi
 if [ -n "$print_env" ]; then
   if [ -n "$threads" ]; then
     printf 'toolchain=%s\n%s=%s\n' "$toolchain" "$flags_var" "$flags_value"
+    if [ -n "$clippy" ]; then
+      echo "clippy=cargo +$toolchain clippy ${clippy_args[*]} -- -D warnings"
+    fi
   else
     echo "toolchain=default"
   fi
   exit 0
+fi
+if [ -n "$clippy" ]; then
+  exec env "$flags_var=$flags_value" cargo "+$toolchain" clippy "${clippy_args[@]}" -- -D warnings
 fi
 name=${1:?usage: build.sh [--bin] [--features <list>] <name> [out-dir]}
 here=$(cd "$(dirname "$0")" && pwd)

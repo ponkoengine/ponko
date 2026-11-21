@@ -58,6 +58,20 @@ fewer joints (`with_influences(1)` to `4`: the strongest ones, their
 weights scaled back to a whole). `with_camera(false)` makes a level that
 only casts shadows, `with_shadows(false)` one that casts none.
 
+A level can **crossfade** into the next instead of popping:
+`with_fade(4.0)` on a level whose band ends at 40 m starts, at 36 m, to
+draw its characters through a dither pattern that keeps fewer and fewer
+of their pixels, while the level whose band starts at 40 m draws the
+pixels it leaves out; by 40 m the next level draws them whole. Together
+the two cover every pixel of the character once. A level with a fade and
+no level starting where it ends fades out to nothing. The fade is in
+world units, at most the band's width (0, the default, switches at
+once); levels cast shadows through the same dither. While characters
+crossfade, both levels draw them, and those draws run a fragment shader
+in the depth and shadow passes too: on the GPU path every crossfading
+level adds one more indirect draw per view and mesh part, made only for
+crowds that have a fade.
+
 Each level's mesh is a skinned mesh made for the bake's skeleton
 (`create_skinned_mesh`, or a skinned glTF mesh). A mesh made for another
 skeleton follows the bake's joints by name; a joint the bake hasn't stays
@@ -141,7 +155,12 @@ from a long-running clock), not seconds since the game began. At a day's
 
 - **Global illumination.** The probes see a crowd's levels that are drawn
   in cameras, lit as models are, and its shadow levels cast in the probes'
-  sun shadow map. A crowd is culled for the probes in seven more views
+  sun shadow map. That holds on both paths. Global illumination needs
+  compute shaders, so a device without them (WebGL2) has no probes at all;
+  a device with compute shaders but fewer than the four storage buffers a
+  shader stage that compute culling needs runs global illumination while
+  its crowds take the CPU path, and a test draws the probes there too. A
+  crowd is culled for the probes in seven more views
   whatever the size of the grid (the probes' shadow map and one per face
   direction, as GPU-driven instance batches are), and a face direction
   keeps only the characters at least one probe pixel wide seen from one of
@@ -155,9 +174,9 @@ from a long-running clock), not seconds since the game began. At a day's
   the CPU path. Crowds have no render layers: every view draws them.
 - **Occlusion culling.** With the camera's
   [occlusion culling](3d.md#occlusion-culling) on, the camera's view
-  leaves out the characters whose bounding sphere (around every baked
-  pose, grown by how far the camera moved since) lies behind the depth
-  grid everywhere it covers. On the GPU path the cull pass reads the grid
+  leaves out the characters whose culling box (see below, as a box along
+  the world's axes, grown by how far the camera moved since) lies behind
+  the depth grid everywhere it covers. On the GPU path the cull pass reads the grid
   as a uniform: the finest level of its pyramid that fits a uniform binding
   (64 KiB, or the device's smaller limit; a level is the farthest depth of
   four of the one below, so a coarser one hides less, never more). Hidden
@@ -166,13 +185,30 @@ from a long-running clock), not seconds since the game began. At a day's
   is of an earlier frame, so can one standing behind a character that
   walked away.
 
+## Culling bounds
+
+The bake keeps a box per clip: around every level's mesh in every frame
+baked of that clip. A character is culled by the box of the clip it
+plays, under its transform (the box of the clip it blends to instead
+once the blend is whole, and both joined while it blends): an oriented
+box against each view's planes, a box along the world's axes against the
+occlusion grid, and its half diagonal for the probes' size cut. So a
+crowd that mostly stands and sometimes jumps culls its standing
+characters by their standing box, not by the jump. In a test scene of 26
+characters behind a wall lower than a jump, occlusion culling kept all 26
+with the single sphere around every clip that crowds used before, and
+keeps only the 4 that jump now; in a field of 169 small characters around
+global illumination's probes, the probes' face views kept 3,128 over 8
+frames before and 1,047 now (the camera's view, by its frustum alone, 896
+and 792). Both paths keep the same characters.
+
 ## How it is drawn: two paths
 
 Every frame, on devices with compute culling and storage buffers
 (`GpuFeature::ComputeCulling`: most native GPUs, and WebGPU in the browser):
 
-- A compute pass tests each character's bounding sphere (around every level
-  in every baked pose) against every view of the frame (the camera, the sun's
+- A compute pass tests each character's culling box against every view
+  of the frame (the camera, the sun's
   cascades, the shadow views of point and spot lights, target cameras,
   global illumination's views), the camera's against the occlusion grid,
   and its distance against each level's band, and appends it to that view
@@ -184,6 +220,12 @@ Every frame, on devices with compute culling and storage buffers
   and skins the corner.
 - A crowd's cull pass costs about 10 µs of GPU time for 10,000 characters
   (40 µs with two levels and sun shadows) on the machine measured below.
+  Culling by each clip's box instead of one sphere left that unchanged
+  within the noise (30 to 50 µs with two levels and sun shadows, before
+  and after, measured on 2026-11-21 on a busy machine). A crossfading
+  level adds its dithered draws: 30 draws instead of 18 for the
+  benchmark's two levels with sun shadows (`crowd_benchmark`'s
+  crossfading scene).
 
 **WebGL2** has no compute shaders, no storage buffers in vertex shaders,
 every one of the 16 texture slots of a vertex shader already taken by the
@@ -252,12 +294,9 @@ for that, and it draws once per frame shown.
 
 ## Not yet
 
-- No crossfades between levels.
 - Stencil states of a material are ignored on the GPU path. Transparent
   materials are drawn unsorted; give crowds opaque or cutout materials.
 - The order characters are drawn in within a level isn't fixed.
-- In C, clips with joint tracks come from glTF files (`ponko_ctx_load_clip`)
-  or retargeting (`ponko_retarget_clip`); they can't be built in code yet.
 
 ## C and C++
 
@@ -273,3 +312,20 @@ C++, `ctx::bake_crowd_animation` returns a move-only `ponko::crowd_animation`
 (`crowd_clip_of` wraps a clip), and `ctx::create_crowd`, `update_crowd`,
 `crowd_len` (`std::nullopt` once freed) and `free_crowd` take `ponko::crowd`
 handles (see the C++ above).
+
+Clips can also be made in code: `ponko_ctx_create_clip` takes
+`PonkoJointTrack`s (a joint of the skeleton, a `PonkoJointChannel`, an
+interpolation and the keys) and makes a clip to bake into a crowd or play
+on a skeleton; C++ builds the tracks with `joint_track_of`:
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:crowd_clip_tracks}}
+```
+
+`ponko_ctx_live_counts_ex` (C++ `ctx.live_counts_ex()`) counts the live
+crowds next to the other handles, with instance cells, collision meshes,
+sprite shaders and materials, and sky shaders: a leak check that sees
+them all.
+
+`CrowdLevel::with_fade` has no C or C++ equivalent yet: levels made from C
+switch at once.

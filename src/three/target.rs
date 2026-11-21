@@ -114,7 +114,10 @@ impl RenderTarget {
 /// view's shadows. Transparent models aren't drawn into it; particles,
 /// trails and lines are (sorted and facing this camera), unless its
 /// camera's [`particles`](crate::d3::Camera::particles) is off, but
-/// without [`softness`](crate::d3::ParticleSettings::softness).
+/// without [`softness`](crate::d3::ParticleSettings::softness). So is
+/// `ctx.debug`'s 3D drawing, while it draws particles or its camera's
+/// [`debug_draw`](crate::d3::Camera::debug_draw) says so
+/// ([`with_debug_draw`](Self::with_debug_draw)).
 ///
 /// Target cameras have no temporal history: no jitter, TAA, temporal AO or
 /// SSR is applied. Each draw clears and replaces the target's color/depth.
@@ -182,6 +185,29 @@ impl TargetCamera {
     #[must_use]
     pub fn with_particles(mut self, particles: bool) -> Self {
         self.camera.particles = particles;
+        self
+    }
+
+    /// The same camera, drawing `ctx.debug`'s 3D lines and labels or not,
+    /// whether it draws particles or not (its camera's
+    /// [`debug_draw`](crate::d3::Camera::debug_draw)). Without it, a target
+    /// camera draws them while it draws particles.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("Monitor", 640, 360).run_headless(0, |ctx| {
+    ///     let target = ctx.gfx.create_render_target(256, 256);
+    ///     // A security camera that shows the room and the debug drawing, not the smoke.
+    ///     let camera = ponko::render::TargetCamera::new(ctx.scene3d.camera, target)
+    ///         .with_particles(false)
+    ///         .with_debug_draw(true);
+    ///     assert_eq!(camera.camera.debug_draw, Some(true));
+    ///     ctx.scene3d.passes.target_cameras.push(camera);
+    /// });
+    /// ```
+    #[must_use]
+    pub fn with_debug_draw(mut self, debug_draw: bool) -> Self {
+        self.camera.debug_draw = Some(debug_draw);
         self
     }
 

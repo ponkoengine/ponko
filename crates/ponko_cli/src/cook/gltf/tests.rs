@@ -1257,13 +1257,7 @@ fn replaced_images_in_a_data_uri_buffer_are_dropped_from_it() {
     json["extensionsUsed"] = json!([ext]);
     json["meshes"][0]["primitives"][0]["extensions"] = json!({(ext): {"bufferView": 3, "attributes": {"POSITION": 0}}});
     let bin = images_first(&mut json, &bin);
-    let uri = |bytes: &[u8]| {
-        use base64::Engine as _;
-        format!(
-            "data:application/octet-stream;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        )
-    };
+    let uri = |bytes: &[u8]| format!("data:application/octet-stream;base64,{}", base64_encode(bytes));
     json["buffers"][0]["uri"] = json!(uri(&bin));
     let source = serde_json::to_vec(&json).unwrap();
     let options = Options {
@@ -1409,4 +1403,19 @@ fn a_file_two_buffer_entries_name_is_not_shortened() {
     let owned = std::collections::BTreeSet::from(["geometry.bin".to_string()]);
     let (_, companions) = cook_owning("model.gltf", &source, &deps, ALL, &owned).unwrap().unwrap();
     assert!(companions.is_empty());
+}
+
+#[cfg(feature = "textures")]
+#[test]
+fn base64_written_for_kept_buffers_reads_back_for_every_length() {
+    // Every padding case (0, 1 and 2 bytes in the last group).
+    let data: Vec<u8> = (0..=255).collect();
+    for len in 0..=data.len().min(40) {
+        let text = base64_encode(&data[..len]);
+        assert_eq!(text.len() % 4, 0, "{text}");
+        assert_eq!(base64(&text).unwrap(), &data[..len], "length {len}");
+    }
+    assert_eq!(base64_encode(b"Ma"), "TWE=");
+    assert_eq!(base64_encode(b"M"), "TQ==");
+    assert_eq!(base64_encode(&[0xfb, 0xff, 0xfe]), "+//+");
 }

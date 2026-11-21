@@ -38,6 +38,9 @@ mod debug_panel;
 #[cfg(feature = "editor")]
 #[path = "inspector_file_picker.rs"]
 mod file_picker;
+#[cfg(all(feature = "editor", feature = "3d"))]
+#[path = "inspector_gltf.rs"]
+mod gltf_panel;
 #[path = "inspector_keys.rs"]
 pub(crate) mod keys;
 #[cfg(feature = "editor")]

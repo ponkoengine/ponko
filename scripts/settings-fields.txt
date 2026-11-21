@@ -65,7 +65,7 @@ struct Sky Sky src/three/sky.rs PonkoSky,PonkoLighting
 Sky.shader                        rust-only:SkyShader    # sky shaders have no C binding
 Sky.shader_params                 rust-only:SkyShader    # same
 Sky.authored_ambient              rust-only:SkyShader    # same
-Sky.kit                           rust-only:SkyKit       # the sky kit has no C binding
+Sky.kit                           ponko_ctx_set_sky_kit  # PonkoSkyKit, a versioned descriptor of its own
 
 struct Material MaterialDesc src/three/mod.rs PonkoMaterialDesc,PonkoMaterialDescEx
 

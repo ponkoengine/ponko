@@ -28,6 +28,18 @@
 //!
 //! hecs, like ponko, matches archetypes when a query runs, not when it is
 //! built, so its `query-build` row only borrows the world.
+//!
+//! Change filters over the same archetypes (ponko only), with `Pos`
+//! tracked and nothing written since the reader's tick unless named:
+//!
+//! - `archetypes-1024-tracked/ponko`: the `&Pos` loop without a filter, in
+//!   the tracked world: what the loop costs before any filter.
+//! - `archetypes-1024-changed-none/ponko`: a `Changed<Pos>` loop that
+//!   finds nothing: the cost of matching the filter in every archetype.
+//! - `archetypes-1024-changed-1in16/ponko`: the same with one entity in 16
+//!   changed (one per archetype).
+//! - `query-build+count-changed-x1000/ponko`: build a `Changed<Pos>` query
+//!   and count it, 1000 times, nothing changed.
 
 use bevy_ecs::component::Component;
 use std::hint::black_box;
@@ -121,6 +133,33 @@ fn bevy_world() -> bevy_ecs::world::World {
         }
     }
     w
+}
+
+/// [`ponko_world`] with `Pos` tracked, the reader's tick taken after it was
+/// built, and one entity in `changed_every` changed since (none for 0).
+fn ponko_tracked_world(changed_every: usize) -> (ponko_ecs::World, ponko_ecs::Tick) {
+    let mut w = ponko_world();
+    w.track_changes::<Pos>();
+    let seen = w.advance_change_tick();
+    if changed_every > 0 {
+        let es: Vec<_> = w.query::<ponko_ecs::Entity>().iter().step_by(changed_every).collect();
+        for e in es {
+            w.get_mut::<Pos>(e).unwrap().x += 1.0;
+        }
+    }
+    (w, seen)
+}
+
+fn changed_ponko(w: &mut ponko_ecs::World, seen: ponko_ecs::Tick) -> usize {
+    let mut n = 0;
+    w.query::<&Pos>()
+        .filter::<ponko_ecs::Changed<Pos>>()
+        .since(seen)
+        .for_each(|p| {
+            black_box(p);
+            n += 1;
+        });
+    n
 }
 
 fn hecs_world() -> hecs::World {
@@ -236,6 +275,48 @@ pub fn run(b: &mut Bench) {
         },
     );
 
+    b.steady(
+        "archetypes-1024-tracked/ponko",
+        200,
+        || ponko_tracked_world(0),
+        |(w, _)| {
+            w.query::<&Pos>().for_each(|p| {
+                black_box(p);
+            })
+        },
+    );
+    b.steady(
+        "archetypes-1024-changed-none/ponko",
+        200,
+        || ponko_tracked_world(0),
+        |(w, seen)| {
+            black_box(changed_ponko(w, *seen));
+        },
+    );
+    b.steady(
+        "archetypes-1024-changed-1in16/ponko",
+        200,
+        || ponko_tracked_world(16),
+        |(w, seen)| {
+            black_box(changed_ponko(w, *seen));
+        },
+    );
+    b.steady(
+        &format!("query-build+count-changed-x{QUERY_BUILDS}/ponko"),
+        100,
+        || ponko_tracked_world(0),
+        |(w, seen)| {
+            for _ in 0..QUERY_BUILDS {
+                black_box(
+                    w.query::<&Pos>()
+                        .filter::<ponko_ecs::Changed<Pos>>()
+                        .since(*seen)
+                        .count(),
+                );
+            }
+        },
+    );
+
     b.run("query-build+count-cold/ponko", 200, ponko_world, |w| {
         black_box(count_ponko(w));
     });
@@ -284,6 +365,21 @@ mod tests {
         let sizes: Vec<_> = w.archetypes().map(|a| a.len()).filter(|&n| n > 0).collect();
         assert_eq!(sizes.len(), ARCHETYPES);
         assert!(sizes.iter().all(|&n| n == PER_ARCHETYPE as u32));
+    }
+
+    #[test]
+    fn change_filter_rows_find_what_changed() {
+        let (mut w, seen) = ponko_tracked_world(0);
+        assert_eq!(changed_ponko(&mut w, seen), 0);
+        let (mut w, seen) = ponko_tracked_world(16);
+        assert_eq!(changed_ponko(&mut w, seen), ENTITIES / 16);
+        assert_eq!(
+            w.query::<&Pos>()
+                .filter::<ponko_ecs::Changed<Pos>>()
+                .since(seen)
+                .count(),
+            ENTITIES / 16
+        );
     }
 
     #[test]

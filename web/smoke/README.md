@@ -99,8 +99,10 @@ node web/smoke/runtime-failures.mjs --case device-lost --chromium-mode new \
 - `device-lost`: on WebGPU, the runner destroys the game's `GPUDevice`
   while the game runs (no browser lets a page crash its GPU process; a
   destroyed device is lost the same way to the game): kind `DeviceLost`,
-  and the engine's message with the reason the page's own `device.lost`
-  got (“Device was destroyed”). Where the game opened no WebGPU device (the
+  `reason` `Destroyed` (`Unknown` when the browser lost it first, as the
+  page's own `device.lost` says), and the engine's message for that reason
+  with the browser's words in it (“The WebGPU device was destroyed while
+  the game was running: Device was destroyed.”). Where the game opened no WebGPU device (the
   browser has none, so it runs on WebGL2) the case is unsupported, not
   failed; a run where every case was unsupported exits 2, or 0 with
   `--allow-unsupported`. Chromium's headless shell can't present a WebGPU
@@ -216,12 +218,26 @@ Two more modes:
   sticks, everything let go, the pad unplugged. After each step the fixture's
   `pads` must show what the engine saw: the pad in slot 0 with its name,
   family and USB ids, exactly those buttons down, the axes (stick y up stays
-  negative), one South press, then no pad.
+  negative), one South press, then no pad. The pads have a fake
+  `vibrationActuator` that records its calls (and refuses an effect over
+  the browser's 5 s cap, as Chromium does); pressing West makes the fixture
+  rumble the pad for 2.5 s, and the calls must be `dual-rumble` effects at
+  the asked levels, played again before the cap with no gap, and a `reset`
+  at the end. Real rumble can't be felt in a headless browser: these calls
+  are the proof.
+- `--case gamepads-plain` is the same case on the ordinary build of the
+  fixture (`--build` makes it, in `target/web/web_threads_plain`), whose pads
+  come from gilrs instead of the threaded backend. gilrs applies a dead zone
+  and rescales sticks and triggers, so axes are compared within 0.1.
 - `--case warning` needs no browser: it builds the example
   `examples/web_threads_warning.rs` with threads and `-D warnings`. The
   example's only code is an unused function that only a build with threads
   compiles, so the build must fail on it, as an error from `-D warnings`.
   If it passes, the threaded build lost `-D warnings` (or its atomics).
+
+`web/build.sh --threads --clippy` runs the nightly clippy on the threaded
+configuration (the engine and the fixture, same toolchain and flags), which
+has lints the stable clippy lacks; the check list runs it.
 
 `--build` (and `--case warning`) add `-D warnings` to the build's flags, so a
 warning in the threaded build fails the check. `web/build.sh --threads` keeps
@@ -233,6 +249,7 @@ that one (`build.test.mjs` checks this with `--print-env`).
 node web/smoke/threads.mjs --build
 node web/smoke/threads.mjs --case worker-panic
 node web/smoke/threads.mjs --case gamepads
+node web/smoke/threads.mjs --build --case gamepads-plain
 node web/smoke/threads.mjs --case warning
 node web/smoke/threads.mjs --bench --workloads par,sweep --repeat 3
 ```
