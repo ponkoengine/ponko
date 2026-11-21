@@ -1061,11 +1061,15 @@ impl Inspector {
     pub fn on_event(&mut self, window: &winit::window::Window, event: &winit::event::WindowEvent) -> bool {
         use winit::event::{ElementState, MouseButton, WindowEvent};
         if let WindowEvent::Focused(focused) = event {
-            self.forget_modifiers(window);
+            // Also while closed: the panels forget what was held when
+            // they're opened again.
             self.panels.focus_changed(*focused);
         }
         if !self.open {
             return false;
+        }
+        if let WindowEvent::Focused(_) = event {
+            self.forget_modifiers(window);
         }
         let consumed = self.input.on_window_event(window, event).consumed;
         if self.panels.picking
