@@ -8,7 +8,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use winit::{
     dpi::{LogicalSize, PhysicalPosition},
     monitor::MonitorHandle,
-    window::{CursorGrabMode, Fullscreen, Window, WindowAttributes, WindowLevel},
+    window::{CursorGrabMode, Fullscreen, Window, WindowLevel},
 };
 
 pub(super) type CursorQueue = Rc<RefCell<Option<winit::window::CustomCursorSource>>>;
@@ -75,11 +75,13 @@ pub(super) fn monitor_info(m: &MonitorHandle) -> Monitor {
 /// The attributes the first window is created with, so it opens with
 /// `settings` (its title is set by the caller) instead of being changed after
 /// it is shown. `fullscreen` is `settings.mode` resolved on the monitors.
+/// Desktop only: the web's canvas is sized by the page.
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn first_window_attributes(
-    attributes: WindowAttributes,
+    attributes: winit::window::WindowAttributes,
     settings: &WindowSettings,
     fullscreen: Option<Fullscreen>,
-) -> WindowAttributes {
+) -> winit::window::WindowAttributes {
     let logical = |v: glam::Vec2| LogicalSize::new(v.x, v.y);
     let mut attributes = attributes.with_inner_size(logical(settings.size));
     attributes.min_inner_size = settings.min_size.map(|v| logical(v).into());
@@ -313,7 +315,7 @@ fn clipboard_error(e: arboard::Error) -> Error {
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use winit::dpi::{Position, Size};

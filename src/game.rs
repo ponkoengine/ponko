@@ -2944,13 +2944,16 @@ impl Game {
 
     /// The game's own window settings: its title, size and fullscreen choice.
     pub(crate) fn default_window_settings(&self) -> crate::window::WindowSettings {
-        let mut defaults = crate::window::WindowSettings::default();
-        defaults.title = self.title.clone();
-        defaults.size = Vec2::new(self.width as f32, self.height as f32);
-        if self.fullscreen {
-            defaults.mode = crate::window::WindowMode::Borderless(None);
+        crate::window::WindowSettings {
+            title: self.title.clone(),
+            size: Vec2::new(self.width as f32, self.height as f32),
+            mode: if self.fullscreen {
+                crate::window::WindowMode::Borderless(None)
+            } else {
+                crate::window::WindowMode::Windowed
+            },
+            ..Default::default()
         }
-        defaults
     }
 
     /// The settings the first window opens with: the defaults, or the saved
