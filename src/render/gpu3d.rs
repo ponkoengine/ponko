@@ -382,8 +382,15 @@ pub(crate) struct Renderer3D {
     /// Whether order-independent passes draw their runs sorted by state
     /// (on; off draws them in mesh order, for comparing).
     pub(crate) group_draws: bool,
+    /// Whether the main view's particles are drawn among the see-through
+    /// models, far to near (on; off draws them after all of them, for
+    /// comparing).
+    pub(crate) particles_in_blend_order: bool,
     /// The model passes' state changes since the last `take_state_changes`.
     state_counters: draw_order::StateCounters,
+    /// The same for the particles, ribbons, lines and text of the main
+    /// view (see `take_particle_changes`).
+    particle_counters: draw_order::StateCounters,
 
     // ---- Kept from frame to frame ----
     /// What the temporal effects keep (see `history.rs`).
@@ -1128,6 +1135,8 @@ impl Renderer3D {
             #[cfg(test)]
             defer_checks: false,
             group_draws: true,
+            particles_in_blend_order: true,
+            particle_counters: Default::default(),
             state_counters: Default::default(),
             shadow_cache: ShadowCache::default(),
         }
@@ -1990,7 +1999,7 @@ impl Renderer3D {
             + (parts + view_parts) * 2
             + held_parts
             + self.lists.views.len() * usize::from(self.atmosphere)
-            + self.particles.draw_count()
+            + self.particles.draw_count(self.lists.blend_steps.iter().map(|s| s.1))
             + self.debug_lines.as_ref().map_or(0, |l| l.draw_count())
             + self.effects.frame.len()
             + self.effects.target_frame.len()

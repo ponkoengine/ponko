@@ -37,6 +37,16 @@ pub(crate) struct StateChanges {
     pub draws: u32,
 }
 
+impl std::ops::AddAssign for StateChanges {
+    fn add_assign(&mut self, o: Self) {
+        self.pipelines += o.pipelines;
+        self.bind_groups += o.bind_groups;
+        self.vertex_buffers += o.vertex_buffers;
+        self.index_buffers += o.index_buffers;
+        self.draws += o.draws;
+    }
+}
+
 /// [`StateChanges`] added up across the passes, which record on different
 /// threads; each pass adds its own counts once at its end.
 #[derive(Default)]
@@ -199,13 +209,26 @@ impl Renderer3D {
     /// their instances' bytes, so the same models always draw the same
     /// picture, however the frame holds them. `base`: where `blended`
     /// starts in the instance buffer.
-    pub(super) fn sort_blended(&mut self, instances: &[Instance3D], eye: glam::Vec3, base: u32) {
+    ///
+    /// The main view's particles (`particles`, already far to near) join
+    /// that order: `blend_steps` says where each stretch of them is drawn
+    /// among the runs (see [`place_particles`]), so a particle behind a
+    /// see-through model is drawn before it and takes its tint.
+    pub(super) fn sort_blended(
+        &mut self,
+        instances: &[Instance3D],
+        eye: glam::Vec3,
+        base: u32,
+        particles: &crate::three::particles::ParticleFrame,
+    ) {
         let mut runs = std::mem::take(&mut self.lists.blended_runs);
         let mut sorted = std::mem::take(&mut self.lists.blended);
         let mut keys = std::mem::take(&mut self.lists.blend_keys);
+        let mut steps = std::mem::take(&mut self.lists.blend_steps);
         runs.clear();
         sorted.clear();
         keys.clear();
+        steps.clear();
         for &(mesh, start, count) in &self.lists.runs {
             if !self.blends(mesh) {
                 continue;
@@ -220,9 +243,20 @@ impl Renderer3D {
                 bytemuck::bytes_of(&instances[a.2 as usize]).cmp(bytemuck::bytes_of(&instances[b.2 as usize]))
             })
         });
+        let depths: &[f32] = if self.particles_in_blend_order {
+            &particles.depths
+        } else {
+            &[]
+        };
+        let forward = glam::Vec3::from_slice(&particles.up[..3]).cross(glam::Vec3::from_slice(&particles.right[..3]));
+        let mut placed = 0;
         for &(_, mesh, i) in &keys {
             let at = base + sorted.len() as u32;
+            let [x, y, z, _] = instances[i as usize].model[3];
+            let depth = (glam::Vec3::new(x, y, z) - eye).dot(forward);
+            let stepped = place_particles(depths, &mut placed, depth, runs.len() as u32, &mut steps);
             if let Some((last, start, count)) = runs.last_mut()
+                && !stepped
                 && *last == mesh
                 && *start + *count == at
             {
@@ -235,6 +269,7 @@ impl Renderer3D {
         self.lists.blended_runs = runs;
         self.lists.blended = sorted;
         self.lists.blend_keys = keys;
+        self.lists.blend_steps = steps;
     }
 
     pub(crate) fn state_changes(&self) -> [u32; 5] {
@@ -247,6 +282,36 @@ impl Renderer3D {
     pub(crate) fn take_state_changes(&self) -> StateChanges {
         self.state_counters.take()
     }
+
+    /// The same for the main view's particles, ribbons, lines and text,
+    /// drawn with the see-through models.
+    #[cfg(any(test, all(not(target_arch = "wasm32"), feature = "bench-internals")))]
+    pub(crate) fn take_particle_changes(&self) -> StateChanges {
+        self.particle_counters.take()
+    }
+}
+
+/// Before a see-through model at view depth `depth`, which would be
+/// run `runs` (a new one, if it was a step), the particles farther than
+/// it, from `*placed` on in `depths` (far to near, never rising), are
+/// drawn: pushes that step `(runs, particles up to)` and says whether it
+/// did. Particles as far as the model are drawn after it. The particles
+/// left after the last model are drawn after every see-through model, as
+/// before (see `Renderer3D::draw_see_through`).
+pub(super) fn place_particles(
+    depths: &[f32],
+    placed: &mut usize,
+    depth: f32,
+    runs: u32,
+    steps: &mut Vec<(u32, u32)>,
+) -> bool {
+    let farther = depths[*placed..].iter().take_while(|&&d| d > depth).count();
+    if farther == 0 {
+        return false;
+    }
+    *placed += farther;
+    steps.push((runs, *placed as u32));
+    true
 }
 
 impl Renderer3D {
