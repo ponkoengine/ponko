@@ -40,6 +40,8 @@ macro_rules! with_fields {
 mod animator;
 pub(crate) mod api;
 pub(crate) mod bake;
+#[cfg(all(feature = "window", not(target_arch = "wasm32")))]
+pub use bake::bake_lighting_gpu;
 pub use bake::{
     BakeModel, BakeStats, BakeTexture, BakedLighting, GltfBake, LightBakeScene, LightBakeSettings, LightmapRect,
     Lightmapped, MAX_LIGHTMAP_PAGES, Unbaked, WorldBake, bake_lighting,

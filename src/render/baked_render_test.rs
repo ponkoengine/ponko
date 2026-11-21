@@ -763,3 +763,195 @@ fn baked_room_close_up() {
         });
     }
 }
+
+/// The room's bake scene with the sun shining along `sun`, lit as
+/// [`set_up`] lights it (no GPU needed).
+fn room_scene_lit_from(sun: Vec3, texels_per_unit: f32) -> LightBakeScene {
+    let lighting = crate::render::Lighting {
+        sun_direction: sun,
+        sun_color: Color::WHITE,
+        sun_intensity: 4.0,
+        ambient_intensity: 0.3,
+        ..Default::default()
+    };
+    let sky = crate::render::Sky {
+        sky_color: Color::rgb(0.5, 0.5, 0.5),
+        ground_color: Color::rgb(0.5, 0.5, 0.5),
+        ..Default::default()
+    };
+    let mut scene = LightBakeScene::new(&lighting, &sky);
+    for (red, lo, hi) in room() {
+        let data = box_mesh(lo, hi, texels_per_unit);
+        scene.add(BakeModel::new(&data, Mat4::from_translation((lo + hi) * 0.5)).with_material(&material(red)));
+    }
+    scene
+}
+
+/// How far bake `a` is from bake `b` (of the same scene and page layout):
+/// the mean absolute difference of their lightmap texels' light (red,
+/// green and blue, over every texel both baked) as a share of `b`'s mean,
+/// and the same for the probe volume's light toward each of the six axes
+/// at every probe.
+fn bake_error(a: &BakedLighting, b: &BakedLighting) -> (f32, f32) {
+    assert_eq!(
+        (a.pages(), a.page_size()),
+        (b.pages(), b.page_size()),
+        "the same layout"
+    );
+    let (mut diff, mut total) = (0.0f64, 0.0f64);
+    for page in 0..b.pages() {
+        for y in 0..b.page_size() {
+            for x in 0..b.page_size() {
+                if let (Some((la, true)), Some((lb, true))) = (a.texel(page, x, y), b.texel(page, x, y)) {
+                    diff += f64::from((la - lb).abs().element_sum());
+                    total += f64::from(lb.element_sum());
+                }
+            }
+        }
+    }
+    let lightmaps = (diff / total.max(1e-9)) as f32;
+    let (mut diff, mut total) = (0.0f64, 0.0f64);
+    for x in -3..=3 {
+        for y in 0..=3 {
+            for z in -3..=3 {
+                let at = vec3(x as f32, y as f32 - 0.2, z as f32);
+                for n in [Vec3::X, Vec3::NEG_X, Vec3::Y, Vec3::NEG_Y, Vec3::Z, Vec3::NEG_Z] {
+                    if let (Some(pa), Some(pb)) = (a.probe_light(at, n), b.probe_light(at, n)) {
+                        diff += f64::from((pa - pb).abs().element_sum());
+                        total += f64::from(pb.element_sum());
+                    }
+                }
+            }
+        }
+    }
+    (lightmaps, (diff / total.max(1e-9)) as f32)
+}
+
+/// The most the GPU baker's lightmaps and probes may differ from the CPU
+/// baker's, by [`bake_error`]: 4 % for the lightmaps and 10 % for the
+/// probes, and no more than 1.5 times (plus 1 %) the difference between two
+/// CPU bakes with different seeds (the rays' noise: 2.3 % and 6.0 % in the
+/// room at these settings on an M4 Max, where the GPU came to 2.0 % and
+/// 6.0 %).
+const GPU_BAKE_BOUND: (f32, f32) = (0.04, 0.10);
+
+/// Whether `error` is within [`GPU_BAKE_BOUND`] and the noise `noise`.
+fn within_noise(error: (f32, f32), noise: (f32, f32)) -> bool {
+    error.0 < GPU_BAKE_BOUND.0
+        && error.1 < GPU_BAKE_BOUND.1
+        && error.0 <= noise.0 * 1.5 + 0.01
+        && error.1 <= noise.1 * 1.5 + 0.01
+}
+
+#[test]
+fn the_gpu_baker_matches_the_cpu_baker_within_the_noise() {
+    let Some(gpu) = super::render_test_support::gpu() else {
+        return;
+    };
+    let tpu = 2.0;
+    let scene = room_scene_lit_from(vec3(-1.0, -1.0, 0.0), tpu);
+    let settings = settings(tpu).with_samples(512);
+    let start = std::time::Instant::now();
+    let on_gpu = match crate::three::bake::bake_lighting_on(&gpu.device, &gpu.queue, &scene, &settings) {
+        Ok(baked) => baked,
+        Err(e) if e.kind() == ErrorKind::Unsupported => {
+            skip(e);
+            return;
+        }
+        Err(e) => panic!("{e}"),
+    };
+    let gpu_seconds = start.elapsed().as_secs_f64();
+    let cpu = bake_lighting(&scene, &settings).expect("bakes");
+    let other_seed = bake_lighting(&scene, &settings.with_seed(7)).expect("bakes");
+    // The negative control: the sun through the opening onto the east
+    // wall instead of the red west one.
+    let moved = bake_lighting(&room_scene_lit_from(vec3(1.0, -1.0, 0.0), tpu), &settings).expect("bakes");
+    let noise = bake_error(&other_seed, &cpu);
+    let error = bake_error(&on_gpu, &cpu);
+    let control = bake_error(&on_gpu, &moved);
+    eprintln!(
+        "lightmaps and probes against the CPU bake: GPU {error:?}, CPU with another seed {noise:?}, \
+         CPU with the sun moved {control:?}; GPU bake {gpu_seconds:.2} s, CPU {:.2} s; {} texels, {} probes, {:.1} M rays on the GPU",
+        cpu.stats().seconds,
+        on_gpu.stats().texels,
+        on_gpu.stats().probes,
+        on_gpu.stats().rays as f64 / 1e6,
+    );
+    assert_eq!(on_gpu.stats().texels, cpu.stats().texels);
+    assert!(
+        (on_gpu.stats().rays as f64 / cpu.stats().rays as f64 - 1.0).abs() < 0.05,
+        "the same number of rays, within the noise: {} vs {}",
+        on_gpu.stats().rays,
+        cpu.stats().rays
+    );
+    assert!(
+        within_noise(error, noise),
+        "the GPU bakes the CPU's light: {error:?} (noise {noise:?})"
+    );
+    assert!(
+        !within_noise(control, noise) && control.0 > GPU_BAKE_BOUND.0 * 3.0 && control.1 > GPU_BAKE_BOUND.1 * 3.0,
+        "a bake with the sun moved is far off: {control:?}"
+    );
+}
+
+#[test]
+fn the_gpu_baker_reads_albedo_maps_lamps_and_two_sided_surfaces() {
+    let Some(gpu) = super::render_test_support::gpu() else {
+        return;
+    };
+    let tpu = 2.0;
+    let mut scene = room_scene_lit_from(vec3(-1.0, -1.0, 0.0), tpu);
+    // The red wall's color from a texture instead (red and blue halves),
+    // a lamp in the corner, and a two-sided white panel across the room.
+    let pixels = [230u8, 20, 20, 255, 20, 20, 230, 255];
+    scene.models[1] = scene.models[1]
+        .clone()
+        .with_albedo(Color::WHITE)
+        .with_albedo_map(crate::render::BakeTexture::from_rgba(1, 2, &pixels).unwrap());
+    let lamp = crate::d3::PointLight {
+        intensity: 6.0,
+        range: 5.0,
+        ..Default::default()
+    };
+    scene.add_point_light(vec3(2.5, 2.5, 2.5), &lamp);
+    let spot = crate::d3::SpotLight {
+        intensity: 8.0,
+        range: 6.0,
+        ..Default::default()
+    };
+    scene.add_spot_light(vec3(-2.5, 3.0, -2.5), Vec3::NEG_Y, &spot);
+    let mut panel = MeshData::plane(2.0);
+    panel.generate_lightmap_uvs(tpu);
+    scene.add(
+        BakeModel::new(
+            &panel,
+            Mat4::from_translation(vec3(1.5, 1.5, 0.0)) * Mat4::from_rotation_x(0.5),
+        )
+        .with_double_sided(true),
+    );
+    let settings = settings(tpu).with_samples(512);
+    let on_gpu = match crate::three::bake::bake_lighting_on(&gpu.device, &gpu.queue, &scene, &settings) {
+        Ok(baked) => baked,
+        Err(e) if e.kind() == ErrorKind::Unsupported => {
+            skip(e);
+            return;
+        }
+        Err(e) => panic!("{e}"),
+    };
+    let cpu = bake_lighting(&scene, &settings).expect("bakes");
+    let noise = bake_error(&bake_lighting(&scene, &settings.with_seed(7)).expect("bakes"), &cpu);
+    let error = bake_error(&on_gpu, &cpu);
+    // The negative control: without the albedo map (a white wall).
+    let mut flat = scene.clone();
+    flat.models[1] = flat.models[1].clone().without_albedo_map();
+    let control = bake_error(&on_gpu, &bake_lighting(&flat, &settings).expect("bakes"));
+    eprintln!(
+        "textured, lamps and a two-sided panel: GPU against CPU {error:?}, CPU with another seed {noise:?}, \
+         CPU without the albedo map {control:?}"
+    );
+    assert!(
+        within_noise(error, noise),
+        "the GPU bakes the CPU's light: {error:?} (noise {noise:?})"
+    );
+    assert!(!within_noise(control, noise), "the map matters: {control:?}");
+}

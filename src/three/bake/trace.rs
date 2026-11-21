@@ -48,7 +48,7 @@ impl SkyLight {
 }
 
 pub(super) struct TraceScene {
-    bvh: Bvh,
+    pub bvh: Bvh,
     /// Per triangle: which surface, its unit face normal, its corners'
     /// normals.
     pub tri_surface: Vec<u32>,

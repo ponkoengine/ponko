@@ -12,12 +12,18 @@
 
 mod albedo;
 mod bvh;
+#[cfg(all(feature = "window", not(target_arch = "wasm32")))]
+mod gpu;
 mod pack;
 mod sources;
 mod trace;
 mod uv;
 
 pub use albedo::BakeTexture;
+#[cfg(all(feature = "window", not(target_arch = "wasm32")))]
+pub use gpu::bake_lighting_gpu;
+#[cfg(all(feature = "window", not(target_arch = "wasm32"), test))]
+pub(crate) use gpu::bake_on as bake_lighting_on;
 pub(crate) use sources::BakeSources;
 pub use sources::{GltfBake, Unbaked, WorldBake};
 
@@ -198,6 +204,13 @@ impl BakeModel {
         self
     }
 
+    /// The same without an albedo map.
+    #[cfg(test)]
+    pub(crate) fn without_albedo_map(mut self) -> Self {
+        self.albedo_map = None;
+        self
+    }
+
     /// Takes the albedo, emissive color and sides from a material (not its
     /// texture: give that with [`with_albedo_map`](Self::with_albedo_map)).
     #[must_use]
@@ -306,7 +319,7 @@ pub(crate) type BakedLayers = std::sync::Arc<(u32, Vec<Vec<u16>>)>;
 /// ```
 #[derive(Debug, Clone)]
 pub struct LightBakeScene {
-    models: Vec<BakeModel>,
+    pub(crate) models: Vec<BakeModel>,
     lamps: Vec<Lamp>,
     sun: Option<(Vec3, Vec3)>,
     sky: SkyLight,
@@ -952,6 +965,8 @@ struct Texel {
     model: u32,
     /// Whether the texel's center is on the triangle (not just near it).
     exact: bool,
+    /// Its page and place on it (`page << 32 | index`): what seeds its rays.
+    key: u64,
 }
 
 /// What gathering found at a texel: irradiance over pi, the mean
@@ -997,6 +1012,99 @@ struct Gathered {
 /// [`ErrorKind::Limit`] when the lightmaps need more than
 /// [`MAX_LIGHTMAP_PAGES`] pages.
 pub fn bake_lighting(scene: &LightBakeScene, settings: &LightBakeSettings) -> Result<BakedLighting, Error> {
+    bake_with(scene, settings, &mut CpuGather)
+}
+
+/// Where a bake gathers its light: rays traced on the CPU's cores, or on a
+/// GPU (`gpu::GpuGather`).
+trait Gatherer {
+    /// What each lightmap texel gathers from `samples` rays.
+    fn texels(&mut self, trace: &TraceScene, texels: &[Texel], samples: u32, seed: u64)
+    -> Result<Vec<Gathered>, Error>;
+    /// What each probe at `positions` gathers from `samples` rays over the
+    /// sphere: its coefficients (`None` inside geometry) and its rays.
+    fn probes(
+        &mut self,
+        trace: &TraceScene,
+        positions: &[Vec3],
+        samples: u32,
+        seed: u64,
+    ) -> Result<Vec<(Option<[f32; 12]>, u64)>, Error>;
+}
+
+/// Gathering on every CPU core.
+struct CpuGather;
+
+impl Gatherer for CpuGather {
+    fn texels(
+        &mut self,
+        trace: &TraceScene,
+        texels: &[Texel],
+        samples: u32,
+        seed: u64,
+    ) -> Result<Vec<Gathered>, Error> {
+        Ok(texels
+            .par_iter()
+            .map(|t| gather(trace, t, samples, seed, t.key))
+            .collect())
+    }
+
+    fn probes(
+        &mut self,
+        trace: &TraceScene,
+        positions: &[Vec3],
+        samples: u32,
+        seed: u64,
+    ) -> Result<Vec<(Option<[f32; 12]>, u64)>, Error> {
+        Ok(positions
+            .par_iter()
+            .enumerate()
+            .map(|(i, &at)| {
+                let mut rng = Rng::new(seed, i as u64, 2);
+                let offset = (rng.next(), rng.next());
+                let (mut c0, mut cx, mut cy, mut cz, mut back) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 0);
+                for s in 0..samples {
+                    let (u1, u2) = trace::r2(s, offset);
+                    let d = trace::sphere_sample(u1, u2);
+                    let got = trace.incoming(at, d, 0, &mut rng);
+                    back += u32::from(got.back);
+                    c0 += got.light;
+                    cx += got.light * d.x;
+                    cy += got.light * d.y;
+                    cz += got.light * d.z;
+                }
+                (probe_from_sums([c0, cx, cy, cz], back, samples), rng.rays)
+            })
+            .collect())
+    }
+}
+
+/// A probe's coefficients from the sums of `samples` rays' light over the
+/// sphere (times 1, x, y and z of their directions), or `None` when more
+/// than a quarter of them reached the back of something (it is inside).
+fn probe_from_sums([c0, cx, cy, cz]: [Vec3; 4], back: u32, samples: u32) -> Option<[f32; 12]> {
+    if back * 4 > samples {
+        return None;
+    }
+    // Radiance's order-1 harmonics, then irradiance over pi from
+    // them: E/pi = L00 Y00 + 2/3 L1m Y1m (n), with Y00 = 0.282095
+    // and Y1m = 0.488603 (x, y, z): over the sphere's 4 pi.
+    let k = 4.0 * std::f32::consts::PI / samples as f32;
+    let l0 = c0 * k * 0.282_095;
+    let l1 = [cx, cy, cz].map(|c| c * k * 0.488_603);
+    let e0 = l0 * 0.282_095;
+    let e1 = l1.map(|c| c * 0.488_603 * (2.0 / 3.0));
+    Some([
+        e0.x, e0.y, e0.z, e1[0].x, e1[0].y, e1[0].z, e1[1].x, e1[1].y, e1[1].z, e1[2].x, e1[2].y, e1[2].z,
+    ])
+}
+
+/// [`bake_lighting`], gathering with `gatherer`.
+fn bake_with(
+    scene: &LightBakeScene,
+    settings: &LightBakeSettings,
+    gatherer: &mut dyn Gatherer,
+) -> Result<BakedLighting, Error> {
     let start = std::time::Instant::now();
     let invalid = |m: String| Error::new(ErrorKind::Invalid, format!("bake_lighting: {m}"));
     let tpu = settings.texels_per_unit;
@@ -1098,16 +1206,18 @@ pub fn bake_lighting(scene: &LightBakeScene, settings: &LightBakeSettings) -> Re
         .iter()
         .enumerate()
         .flat_map(|(p, page)| {
-            page.iter()
-                .enumerate()
-                .filter_map(move |(i, t)| t.map(|t| (p as u32, i as u32, t)))
+            page.iter().enumerate().filter_map(move |(i, t)| {
+                t.map(|mut t| {
+                    t.key = u64::from(p as u32) << 32 | i as u64;
+                    (p as u32, i as u32, t)
+                })
+            })
         })
         .collect();
     let samples = settings.samples;
-    let gathered: Vec<Gathered> = jobs
-        .par_iter()
-        .map(|&(p, i, t)| gather(&trace, &t, samples, settings.seed, u64::from(p) << 32 | u64::from(i)))
-        .collect();
+    let job_texels: Vec<Texel> = jobs.iter().map(|j| j.2).collect();
+    let gathered = gatherer.texels(&trace, &job_texels, samples, settings.seed)?;
+    drop(job_texels);
     let mut stats = BakeStats {
         texels: jobs.len() as u64,
         ..Default::default()
@@ -1150,7 +1260,10 @@ pub fn bake_lighting(scene: &LightBakeScene, settings: &LightBakeSettings) -> Re
     } else {
         Vec::new()
     };
-    let probes = grid.map(|grid| bake_probes(&trace, grid, settings, &mut stats));
+    let probes = match grid {
+        Some(grid) => Some(bake_probes(&trace, grid, settings, &mut stats, gatherer)?),
+        None => None,
+    };
     stats.seconds = start.elapsed().as_secs_f64();
     Ok(BakedLighting {
         page_size: side,
@@ -1333,6 +1446,7 @@ fn rasterize(
                 normal: if normal.dot(face) > 0.0 { normal } else { face },
                 model: m,
                 exact,
+                key: 0,
             });
         }
     }
@@ -1548,47 +1662,17 @@ fn bake_probes(
     (origin, spacing, counts): (Vec3, f32, UVec3),
     settings: &LightBakeSettings,
     stats: &mut BakeStats,
-) -> Probes {
+    gatherer: &mut dyn Gatherer,
+) -> Result<Probes, Error> {
     let total = (counts.x * counts.y * counts.z) as usize;
     let samples = settings.samples.max(16) * 2;
-    let results: Vec<(Option<[f32; 12]>, u64)> = (0..total)
-        .into_par_iter()
+    let positions: Vec<Vec3> = (0..total as u32)
         .map(|i| {
-            let i = i as u32;
             let cell = UVec3::new(i % counts.x, (i / counts.x) % counts.y, i / (counts.x * counts.y));
-            let at = origin + cell.as_vec3() * spacing;
-            let mut rng = Rng::new(settings.seed, u64::from(i), 2);
-            let offset = (rng.next(), rng.next());
-            let (mut c0, mut cx, mut cy, mut cz, mut back) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 0);
-            for s in 0..samples {
-                let (u1, u2) = trace::r2(s, offset);
-                let d = trace::sphere_sample(u1, u2);
-                let got = trace.incoming(at, d, 0, &mut rng);
-                back += u32::from(got.back);
-                c0 += got.light;
-                cx += got.light * d.x;
-                cy += got.light * d.y;
-                cz += got.light * d.z;
-            }
-            if back * 4 > samples {
-                return (None, rng.rays);
-            }
-            // Radiance's order-1 harmonics, then irradiance over pi from
-            // them: E/pi = L00 Y00 + 2/3 L1m Y1m (n), with Y00 = 0.282095
-            // and Y1m = 0.488603 (x, y, z): over the sphere's 4 pi.
-            let k = 4.0 * std::f32::consts::PI / samples as f32;
-            let l0 = c0 * k * 0.282_095;
-            let l1 = [cx, cy, cz].map(|c| c * k * 0.488_603);
-            let e0 = l0 * 0.282_095;
-            let e1 = l1.map(|c| c * 0.488_603 * (2.0 / 3.0));
-            (
-                Some([
-                    e0.x, e0.y, e0.z, e1[0].x, e1[0].y, e1[0].z, e1[1].x, e1[1].y, e1[1].z, e1[2].x, e1[2].y, e1[2].z,
-                ]),
-                rng.rays,
-            )
+            origin + cell.as_vec3() * spacing
         })
         .collect();
+    let results = gatherer.probes(trace, &positions, samples, settings.seed)?;
     stats.probes = total as u64;
     stats.rays += results.iter().map(|r| r.1).sum::<u64>();
     let mut coefficients: Vec<Option<[f32; 12]>> = results.into_iter().map(|r| r.0).collect();
@@ -1628,12 +1712,12 @@ fn bake_probes(
             break;
         }
     }
-    Probes {
+    Ok(Probes {
         origin,
         spacing,
         counts,
         coefficients: coefficients.into_iter().map(Option::unwrap_or_default).collect(),
-    }
+    })
 }
 
 /// `x` as a half float (rounded to nearest, overflow to infinity).
