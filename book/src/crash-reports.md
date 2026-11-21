@@ -69,6 +69,10 @@ file.
 - **The game's own fatal error**: `ponko::crash::report("why")` writes one
   for a game that stops without panicking.
 
+- **A crash that is not a panic**: a segmentation fault or an `abort()` in
+  a native library, an access violation on Windows. Its report is finished
+  at the game's next start ([below](#crashes-that-are-not-panics)).
+
 Reports start when the run starts and end with it: a panic after `run`
 returned gets none.
 
@@ -117,8 +121,9 @@ machine name, no network address, no hardware serial numbers.
 
 | Field | What it is |
 |---|---|
-| `kind` | `panic` or `error`. |
-| `message` | The panic's message, or the error's. |
+| `kind` | `panic`, `error` or `native` (a crash that is not a panic, see below). |
+| `signal` | For a `native` crash only: the signal or the Windows exception (`SIGSEGV`, `SIGABRT`, `EXCEPTION_ACCESS_VIOLATION`). |
+| `message` | The panic's message, or the error's; for a `native` crash, the signal, what it means and, for a memory fault, the address it touched. |
 | `location` | For a panic, the source position it came from (`src/main.rs:12:5`). |
 | `thread` | The name of the thread that panicked (`main`), when it has one. |
 | `time` | When, in UTC (`2026-11-21 14:03:07 UTC`). |
@@ -134,8 +139,8 @@ machine name, no network address, no hardware serial numbers.
 
 The JSON form (`serde_json`) has the same fields, named `kind`, `message`,
 `location`, `thread`, `time`, `uptime_secs`, `game`, `game_version`,
-`engine_version`, `os`, `gpu`, `settings`, `backtrace`, `log` and `file` (its
-name in `ctx.storage`).
+`engine_version`, `os`, `gpu`, `settings`, `backtrace`, `log`, `file` (its
+name in `ctx.storage`) and `signal`.
 
 **Paths are made relative to the game's folders.** In every field, the data
 folder becomes `<data>`, the program's folder `<game>`, the working folder
@@ -227,7 +232,9 @@ killing the game for using too much memory, or the player ending it), a
 crash in the first moments before the run started, and Windows' fail-fast
 exits (`__fastfail`, which Rust's own `abort` uses), which skip every
 handler. The lines printed in the last moment before the crash may be
-missing when the engine's copy thread hadn't passed them on yet.
+missing when the engine's copy thread hadn't passed them on yet (the
+handler gives it 50 ms). A library that installs its own handler after the
+engine started comes first, and decides itself whether to hand a crash on.
 
 ## In the browser
 

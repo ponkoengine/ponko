@@ -19,6 +19,14 @@
 //! never sends anything; [`saved_reports`] lists the reports of earlier
 //! runs, for a game that offers to send them at its next start.
 //!
+//! A crash that is not a panic (a segmentation fault or an `abort()` in a
+//! native library, an access violation on Windows) leaves a report too, of
+//! kind [`CrashKind::Native`]: the engine's signal handler (unhandled
+//! exception filter on Windows) writes what was prepared ahead of time into
+//! a file opened ahead of time, and the game's next start turns it into a
+//! report and runs the hook with it. The guide's "Crashes that are not
+//! panics" has the design.
+//!
 //! In a browser the report goes to the page's storage and to the page, as
 //! a `ponkocrashreport` event on `window` (and `window.ponkoCrashReport`):
 //! the page `ponko package --web` makes offers it as a file to save.
@@ -143,6 +151,10 @@ impl CrashReports {
     /// over the network is better left to the next start, from
     /// [`saved_reports`]. [`CrashReport::text`] is the file's text, and
     /// [`CrashReport::path`] the file on the disk.
+    ///
+    /// For a crash that is not a panic ([`CrashKind::Native`]) it runs at
+    /// the game's next start, as that run's reports start, with the report
+    /// of the run that crashed.
     ///
     /// ```
     /// # use ponko::prelude::*;
