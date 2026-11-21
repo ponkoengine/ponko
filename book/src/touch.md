@@ -371,7 +371,9 @@ ctx.ui.show_hud(hud);
   platform layer of the game's own. The UI lays out with them from the
   next frame. A headless scenario feeds them as a step,
   [`InputScenario::safe_insets(tick, insets)`](headless.md#insets-as-a-scenario-step),
-  so a layout for a notched phone is checked without a device.
+  so a layout for a notched phone is checked without a device. A
+  scenario's insets hold while it runs: the browser's, read on a resize
+  meanwhile, apply once it ends.
 
 ```rust
 # use ponko::prelude::*;
