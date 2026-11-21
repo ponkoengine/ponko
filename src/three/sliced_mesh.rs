@@ -609,6 +609,7 @@ mod tests {
     }
 
     /// The images and blocks of `a` and `b` are the same.
+    #[cfg(feature = "compressed-textures")]
     fn same_images(a: &gltf::Loaded, b: &gltf::Loaded) -> bool {
         a.images == b.images && a.blocks == b.blocks
     }

@@ -478,7 +478,7 @@ thread_local! {
 }
 
 /// The texture and buffer copies timed on this thread since the last call.
-#[cfg(test)]
+#[cfg(all(test, feature = "3d"))]
 pub(crate) fn take_timed() -> [u32; 2] {
     TIMED.with(|t| t.replace([0; 2]))
 }
