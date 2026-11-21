@@ -133,8 +133,9 @@ Where it is worked out:
 - **With compute shaders** (every native backend and WebGPU), compute
   passes on the GPU: one turns the spectrum to the frame's time, then one
   per FFT stage along x and along z (13 passes at 64 cells, 17 at 256).
-- **Without** (WebGL2), the CPU runs the same FFT and uploads the field
-  each frame.
+- **Without** (WebGL2), the CPU works out the same field and uploads it
+  each frame. Its FFT is [rustfft](https://crates.io/crates/rustfft)'s,
+  which uses the CPU's SIMD (NEON, SSE or AVX) where there is some.
 - **The CPU's queries** (`height_at`, `sample`, buoyancy) run the same
   FFT on the CPU at the time asked, once per moment (the last two are
   kept), so what floats rides the waves that are drawn. A GPU test reads
@@ -143,24 +144,35 @@ Where it is worked out:
   GPU's field matches the CPU's to 6 mm (it runs in half floats).
 
 Cost, measured on an Apple M4 Max (Metal) while the machine was busy
-with other work (`spectrum_waves_cost` in the engine's tests; the GPU
-column over eleven runs in three sessions, the CPU columns over the three
-runs since the CPU's FFT last changed):
+with other work (load average 70 to 116). The GPU column is from
+`spectrum_waves_cost` in the engine's tests, over eleven runs in three
+sessions; the CPU columns from `cpu_field_cost`, the median of 15 new
+moments in each of five runs, one thread:
 
 | Cells | GPU time over a Gerstner sea (1280x720) | One CPU field | With the sway's speed (buoyancy) |
 |---|---|---|---|
-| 64 | 0.57 to 0.76 ms | 0.16 to 0.53 ms | 0.2 to 0.5 ms |
-| 128 (default) | 0.74 to 0.89 ms | 0.63 to 1.1 ms | 0.9 to 2.4 ms |
-| 256 | 0.88 to 1.02 ms | 4 to 19 ms | 35 to 37 ms |
+| 64 | 0.57 to 0.76 ms | 0.03 to 0.08 ms | 0.05 to 0.06 ms |
+| 128 (default) | 0.74 to 0.89 ms | 0.13 to 0.38 ms | 0.21 to 0.54 ms |
+| 256 | 0.88 to 1.02 ms | 0.58 ms | 0.9 to 1.2 ms |
 
 The GPU column is the whole frame's GPU time against the same sea with
 `Waves::sea` (the copies between FFT passes aren't timed). The CPU
 columns are paid in a frame only when something asks the CPU (a WebGL2
 upload, a query, a floating body), once per moment however many points
 are asked; the underwater check skips the query while the camera is
-clearly above or below every wave. Keep to 128 cells or fewer when the
-CPU works the sea out, on the web or for buoyancy; 256 is for seas drawn
-on the GPU that nothing floats on.
+clearly above or below every wave. The CPU's field used to be a plain
+radix-2 FFT, worked out output by output as the GPU's passes do: in the
+same runs it took 0.14 to 0.42 ms at 64 cells, 0.63 to 0.80 ms at 128 and
+2.9 ms at 256 (4.3 to 9 ms with the sway's speed): the field is now
+about five times cheaper. Splitting it across worker threads was
+tried and left out: on a busy machine waiting for the threads cost more
+than the whole field (0.4 to 40 ms at 256 cells).
+
+On a desktop any size is cheap enough for buoyancy, even 256 cells (about
+a millisecond a moment with the sway's speed). On the web the CPU's FFT
+runs without SIMD and on the page's one thread, and it hasn't been
+measured there: keep to 128 cells or fewer for WebGL2 or for buoyancy in
+the browser, and measure before going higher.
 
 ## Floating bodies
 
