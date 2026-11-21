@@ -601,6 +601,11 @@ impl GltfRoot {
     /// their transform, mesh, materials and properties from the new file;
     /// new nodes are spawned and removed ones despawned. A file that
     /// doesn't load keeps the old scene and prints why.
+    ///
+    /// Edits made in the editor (a node moved, its components changed,
+    /// added or removed) are the scene's overrides: kept in its saved
+    /// record, put back after such a reload and when a loaded save spawns
+    /// the file again, as a prefab instance keeps its overrides.
     /// [`Assets::reloaded_files`](crate::assets::Assets::reloaded_files)
     /// lists `path` that frame.
     ///

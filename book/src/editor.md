@@ -50,7 +50,7 @@ makes the same edits through the same undo history (see
 | Hierarchy (left) | Every entity under what it hangs off. Click to select, Shift or Ctrl+click to add to the selection, drag onto another row to attach (the whole selection moves with the dragged row), drag onto *drop here to detach* to make a root. Double-click or F2 renames; a right click has Rename, Duplicate, New child, Detach and Delete |
 | Inspector (right) | A prefab instance's [overrides](#prefab-instances-and-overrides), then the selected entity's components, editable in place, **Add component** and **Remove**; below them resources and performance, as in the [inspector](inspector.md) |
 | Assets (bottom) | The [asset panel](#the-asset-panel): the assets folder as a tree, thumbnails, search, and the selected asset's details and import settings |
-| Viewport (middle) | The world as the game draws it, with the gizmo on the selection (drawn only in the viewport, never over a panel). The game draws over the whole window and the panels cover its edges, so its camera is not re-centred on the viewport |
+| Viewport (middle) | The world as the game draws it, with the gizmo on the selection (drawn only in the viewport, never over a panel). The 2D and 3D cameras draw into the free part of the window between the panels (their `rect`), so what the camera looks at is in the middle of the viewport; resizing or hiding a panel moves the view with it, never during a drag. A camera rect the game set itself (a split screen) is left alone |
 | Status bar | The document (`untitled scene`, `scene levels/one.json`, `prefab prefabs/crab.json`), *unsaved changes*, and what the last action did |
 
 The window title shows the document's name, with `*` while it has unsaved
@@ -164,14 +164,28 @@ its assets folder: textures (PNG, JPEG), models (glTF), sounds (WAV, OGG,
 FLAC, MP3), prefabs, scenes and shaders. The folders are a tree on the
 left; a tile per asset on the right, with a thumbnail made on a worker
 thread: the image, the model drawn from the front, the sound's waveform, a
-prefab's sprite or model, a scene's map. The search field (Ctrl+F) shows
+prefab's sprite or model, a scene's map.
+
+A model's first thumbnail is a quick software drawing. When the game has a
+GPU, the engine's own renderer then draws the model (lit, with its
+materials and textures) in a small offscreen view on the same GPU, one
+model per frame, and that picture replaces it. Rendered thumbnails are kept
+in the user's cache folder (`~/Library/Caches/ponko/thumbnails` on macOS,
+`$XDG_CACHE_HOME/ponko/thumbnails` or `~/.cache/ponko/thumbnails` on
+Linux, `%LOCALAPPDATA%\ponko\thumbnails` on Windows;
+`PONKO_THUMBNAIL_CACHE` names another folder) under a hash of the model's
+file and the buffers and images it names: the next run shows them at once,
+in any project, and a changed model or texture is drawn again. The search field (Ctrl+F) shows
 every asset whose path has all the words typed, in any folder, and
 **List again** reads the folder again after files were added.
 
 - **Drag** a texture, model or prefab into the viewport to place it where
   you drop it: a prefab as an [instance](#prefab-instances-and-overrides),
-  a model as an entity with that model, a texture as a sprite (2D only).
-  Each placement is one undo step.
+  a model as an entity with that model, a texture as a sprite in 2D. In the
+  3D view, a texture dropped on a model paints it: the model gets a
+  `ModelMaterial` of that image, saved as `{ "texture": "path" }`, and the
+  scene loads the image when it is opened again. Each placement is one
+  undo step.
 - **Double-click** a scene or prefab to open it (asking first if the
   document has unsaved changes).
 - **Click** an asset for its details on the right: its path, its kind and
@@ -218,10 +232,38 @@ opens every scene in the assets folder that has instances of it, updates
 them to the saved prefab (keeping their overrides), saves each and reopens
 the prefab.
 
-Instances of a prefab that has other prefabs inside it show their
-overrides, but **Apply to prefab** refuses them: open the inner prefab and
-change it there. A glTF model placed as a scene is not a prefab instance:
-its file is in its `GltfRoot`, and the editor doesn't compare it.
+### Prefabs inside prefabs
+
+An instance of a prefab that includes other prefabs is compared the same
+way, part by part. **Apply to prefab** writes the outer file and keeps each
+included prefab as the link it is, with how this instance changes it: the
+included root's changed components, those it no longer has (`remove`) and
+changes to the included prefab's own parts (`parts`), as
+[Prefabs that include prefabs](scenes.md#prefabs-that-include-prefabs)
+describes. With a part of an included prefab selected, an **Apply to
+<name>** button writes that part of the instance into the included prefab's
+own file instead; every instance in the scene that uses it, directly or
+inside another prefab, follows. A part deleted from an included prefab
+can't be written as a link: revert it, or apply to the included prefab.
+
+### glTF scenes
+
+A glTF file spawned as a scene (`GltfRoot::spawn`, or `spawn_prefab` of a
+`.glb` in the game's setup) can be edited too: move a node, change or
+remove its components, add new ones. How each node differs from what the
+file makes of it is its override, kept in the scene's saved record:
+
+- **Exporting the file again** (hot reload) updates the scene from the new
+  file and puts the overrides back: a moved node stays where you put it in
+  its parent, a changed component keeps the fields you changed, while
+  everything you didn't touch follows the file.
+- **Saving** the scene writes the overrides; opening it again in the
+  editor spawns its glTF scenes where they were, with them, and a game
+  that loads the save and spawns the file again gets them too.
+
+Overrides are per component (the changed fields of each), a node's parent
+link is never one, and a node deleted in the editor comes back with the
+file: hide it, or leave it out of the export.
 
 ## Play mode
 
@@ -303,9 +345,15 @@ file watch, the gizmos' math, and the panels themselves driven by fake
 mouse and keyboard input: Ctrl+S, F2, the close question, dragging a hierarchy row onto another, dragging a number
 in the inspector, and snapped move, rotate and scale drags in 2D and in a
 3D game, each one undo step. The newer parts are tested the same way:
-dragging an asset into the view places it (one undo step), a prefab
+dragging an asset into the view places it (one undo step), an image
+dropped on a model paints it and the scene keeps it, a prefab
 instance's overrides are listed, reverted one at a time or all together
-and applied to the prefab and its other instances, Stop gives back the
+and applied to the prefab and its other instances (and, for a prefab
+inside a prefab, to the outer or the included file with **Apply to
+<name>**), a glTF scene's node moved with the gizmo keeps its place through
+a re-export and a save and reopen, the 2D and 3D cameras centre on the
+view between the panels and follow a dragged panel edge, a model tile
+shows the thumbnail kept on disk for its content, Stop gives back the
 world saved at Play byte for byte (and keeps only the edits ticked), the
 shortcuts are rebound by key presses and saved, the layout and recent
 projects survive a restart, and the asset panel's thumbnails, search and
@@ -316,4 +364,7 @@ a fake picker. Trying the real system file picker requires a desktop
 session. Offscreen GPU tests draw the editor's window
 over a 2D world and over a frame of the 3D renderer and check where its
 panels and gizmo are, and draw the asset panel, a prefab's overrides, the
-shortcuts window and the play bar, each against a control.
+shortcuts window and the play bar, each against a control; another draws a
+model's thumbnail with the renderer, checks the model covers its middle and
+not its corners, that it isn't the software drawing, and that the next run
+reads it from the cache without drawing.
