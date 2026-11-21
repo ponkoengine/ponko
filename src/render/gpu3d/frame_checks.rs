@@ -190,7 +190,7 @@ impl Renderer3D {
         let (cloud_shadows, clouds) = self.kit_passes();
         [
             Features::MSAA.only_if(self.samples > 1),
-            Features::STATIC_CULL.only_if(self.static_culling.is_some() || (!self.extra && self.crowds.culls())),
+            Features::STATIC_CULL.only_if(self.static_culling.is_some() || self.crowds.culls()),
             Features::SKINNING.only_if(self.skinning.has_work()),
             Features::BUFFER_COMPUTE.only_if(self.lists.computes.iter().any(buffer)),
             Features::TEXTURE_COMPUTE.only_if(self.lists.computes.iter().any(|c| !buffer(c))),

@@ -1446,7 +1446,10 @@ impl GpuPath {
             label: Some("crowd draws"),
             size: (u64::from(views) * u64::from(levels) * 4 + u64::from(views) * u64::from(parts).max(1) * ARGS)
                 .max(16),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::INDIRECT
+                | wgpu::BufferUsages::COPY_DST
+                | traffic::MIRRORED,
             mapped_at_creation: false,
         });
         (views_buffer, visible, draws)
@@ -1923,6 +1926,45 @@ impl Renderer3D {
     pub(crate) fn crowd_on_gpu(&self, id: u32) -> Option<bool> {
         let crowd = self.crowds.crowds.get(id as usize)?.as_ref()?;
         Some(matches!(crowd.path, Path::Gpu(_)))
+    }
+
+    /// Crowd `id`'s clock as the last frame's shaders got it: seconds since
+    /// its epoch, at that frame and at the one before.
+    pub(crate) fn crowd_clock(&self, id: u32) -> Option<(f32, f32)> {
+        let crowd = self.crowds.crowds.get(id as usize)?.as_ref()?;
+        Some((crowd.elapsed, crowd.past_elapsed))
+    }
+
+    /// How many characters of crowd `id` the last frame drawn put in view
+    /// `view` (summed over its levels; read back from the GPU on the GPU path).
+    pub(crate) fn crowd_drawn(&self, device: &wgpu::Device, queue: &wgpu::Queue, id: u32, view: usize) -> Option<u32> {
+        let crowd = self.crowds.crowds.get(id as usize)?.as_ref()?;
+        let levels = crowd.levels.len();
+        match &crowd.path {
+            Path::Cpu(p) => {
+                let &(start, end) = p.view_runs.get(view)?;
+                Some(p.runs[start as usize..end as usize].iter().map(|r| r.4).sum())
+            }
+            Path::Gpu(g) => {
+                if view as u32 >= g.culled {
+                    return Some(0);
+                }
+                let bytes = (levels * 4) as u64;
+                let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("crowd counts readback"),
+                    size: bytes,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+                let mut encoder = device.create_command_encoder(&Default::default());
+                encoder.copy_buffer_to_buffer(&g.draws, (view * levels * 4) as u64, &readback, 0, bytes);
+                queue.submit([encoder.finish()]);
+                readback.map_async(wgpu::MapMode::Read, .., |r| r.expect("crowd counts map"));
+                device.poll(wgpu::PollType::wait_indefinitely()).expect("crowd counts readback");
+                let counts: Vec<u32> = bytemuck::cast_slice(&readback.get_mapped_range(..).expect("mapped")).to_vec();
+                Some(counts.iter().sum())
+            }
+        }
     }
 }
 

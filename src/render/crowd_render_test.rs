@@ -5,7 +5,10 @@
 //! CPU); far levels and fewer influences draw what they should; sun shadows
 //! fall (a reference image); the motion vectors follow the animation; ten
 //! thousand characters take a handful of draws; and a scene without crowds
-//! makes no crowd buffers, uploads or passes. Skips without a GPU.
+//! makes no crowd buffers, uploads or passes. A day into the game the clock
+//! is as precise as at its start; global illumination's probes see crowds;
+//! window views draw them; occlusion culling leaves out a crowd behind a
+//! wall. Skips without a GPU.
 use super::render_test_support::{self as support, Image, Tolerance};
 use super::static_batch_render_test::{BatchRig, RigSetup, glow};
 use crate::anim::{AnimationClip, AnimationTrack, Interpolation, Joint, JointAnimation, Skeleton};
@@ -627,5 +630,380 @@ fn scenes_without_crowds_make_no_crowd_buffers_uploads_or_passes() {
         rig.frame();
         assert_eq!(traffic::take().static_batches, 0, "a freed crowd uploads nothing");
         assert!(!rig.renderer.crowds_cull());
+    }
+}
+
+/// A day of game time, in seconds.
+const DAY: f64 = 86_400.0;
+
+#[test]
+fn crowd_motion_stays_one_frame_of_the_clip_a_day_into_the_game() {
+    // The game clock 24 hours on: a frame's motion is still a 60th of a
+    // second of the bend, not the 32-bit clock's steps (at 86,400 s a
+    // 32-bit float moves in steps of 1/128 s).
+    let Some(mut rig) = BatchRig::new(RigSetup::default()) else {
+        return;
+    };
+    if !rig.compute_culling() {
+        return support::skip("motion vectors need the GPU path");
+    }
+    rig.time = DAY;
+    rig.ctx.scene3d.post.anti_aliasing = AntiAliasing::Taa;
+    front(&mut rig);
+    let (skeleton, data) = figure();
+    let mesh = skinned_mesh(&mut rig, &data, glow(Color::WHITE), &skeleton);
+    let animation = CrowdAnimation::bake(&skeleton, &[CrowdClip::once(bend(&skeleton))], 60.0);
+    let start = 0.2;
+    let c = crowd(
+        &mut rig,
+        &animation,
+        &[CrowdLevel::new(mesh, 0.0, f32::INFINITY).with_influences(1)],
+        &[CrowdInstance::new(Mat4::IDENTITY).playing(0, start)],
+        CrowdOptions::default(),
+    );
+    for _ in 0..3 {
+        rig.frame();
+    }
+    let dt = 1.0 / 60.0;
+    let (elapsed, past) = rig.renderer.crowd_clock(c.id).expect("the crowd");
+    assert!(
+        (elapsed - 2.0 * dt).abs() < 1e-5 && (elapsed - past - dt).abs() < 1e-5,
+        "the shaders get two frames and one frame since the epoch: {elapsed}, {past}"
+    );
+    let head = vec3(0.0, 2.0, 0.15);
+    let now = start + 2.0 * dt;
+    let (before, at) = (bent(head, now - dt), bent(head, now));
+    let view_proj = rig.ctx.scene3d.camera.view_proj();
+    let (b, a) = (view_proj.project_point3(before), view_proj.project_point3(at));
+    let expected = vec2((b.x - a.x) * 0.5, (a.y - b.y) * 0.5);
+    let got = motion_at(&rig, at).expect("the bending figure writes motion");
+    eprintln!("a day in: head motion {got:?}, expected {expected:?}");
+    assert!(
+        (got - expected).length() < 0.1 * expected.length(),
+        "the head moves one frame of the bend a day into the game: {got:?} against {expected:?}"
+    );
+}
+
+#[test]
+fn a_crowd_left_alone_for_a_day_shows_the_pose_its_clip_does() {
+    // A looping one-second bend played from 0.37 s and never updated, the
+    // game clock run to a day and 0.24 s in steps of ten minutes: the
+    // figure shows the bend at 0.61 s, as one held there does, on both
+    // paths. Every step moves the crowd's clock (see `REBASE_SECONDS`).
+    for compute in [true, false] {
+        let Some(mut rig) = BatchRig::new(RigSetup {
+            compute,
+            ..Default::default()
+        }) else {
+            return;
+        };
+        front(&mut rig);
+        let (skeleton, data) = figure();
+        let mesh = skinned_mesh(&mut rig, &data, glow(Color::WHITE), &skeleton);
+        let animation = CrowdAnimation::bake(&skeleton, &[CrowdClip::looping(bend(&skeleton))], 30.0);
+        let level = [CrowdLevel::new(mesh, 0.0, f32::INFINITY)];
+        let c = crowd(
+            &mut rig,
+            &animation,
+            &level,
+            &[CrowdInstance::new(Mat4::IDENTITY).playing(0, 0.37)],
+            CrowdOptions::default(),
+        );
+        rig.dt = 600.0;
+        while rig.time < DAY {
+            rig.frame();
+        }
+        rig.time = DAY + 0.24;
+        let day = rig.image();
+        let (elapsed, _) = rig.renderer.crowd_clock(c.id).expect("the crowd");
+        assert!(
+            elapsed.abs() < 16.0, // the clock moves every 16 s (`REBASE_SECONDS`)
+            "the shaders' seconds stay small: {elapsed}"
+        );
+        let held = |t: f32| CrowdInstance::new(Mat4::IDENTITY).playing(0, t).with_speed(0.0);
+        assert!(rig.ctx.gfx.update_crowd(c, &[held(0.61)]));
+        upload(&mut rig, c);
+        let expected = rig.image();
+        assert!(rig.ctx.gfx.update_crowd(c, &[held(0.0)]));
+        upload(&mut rig, c);
+        let rest = rig.image();
+        let d = support::diff_within(&day, &expected, SAME_POSE);
+        eprintln!("compute {compute}: a day on against held at 0.61 s: {d}");
+        support::keep_image(&day);
+        assert!(
+            d.within(SAME_POSE),
+            "compute {compute}: a day on, the crowd shows the bend at 0.61 s: {d}"
+        );
+        let control = support::diff_within(&rest, &expected, SAME_POSE);
+        assert!(
+            !control.within(SAME_POSE),
+            "compute {compute}: the pose at rest passes as the bent one ({control})"
+        );
+    }
+}
+
+/// The depth grid a readback of the camera's depth would give with a wall
+/// in front of everything left of the middle of the picture, at `depth`
+/// (reverse-Z), and nothing (the far plane) elsewhere.
+fn left_wall_grid(rig: &BatchRig, depth: f32) -> crate::three::occlusion::OcclusionGrid {
+    let camera = &rig.ctx.scene3d.camera;
+    let (w, h) = (32, 32);
+    let depths = (0..w * h).map(|i| if i % w < w / 2 { depth } else { 0.0 }).collect();
+    crate::three::occlusion::OcclusionGrid::new(camera.view_proj(), camera.position, w, h, depths)
+}
+
+#[test]
+fn a_crowd_behind_a_wall_draws_none_of_it() {
+    for compute in [true, false] {
+        let Some(mut rig) = BatchRig::new(RigSetup {
+            compute,
+            ..Default::default()
+        }) else {
+            return;
+        };
+        // The camera looks down -z at a wall 6 m ahead covering the left
+        // half of the picture; the figures stand 22 m behind it, their
+        // culling spheres (around every pose) inside its half of the view.
+        rig.ctx.scene3d.camera.position = vec3(0.0, 1.0, 8.0);
+        rig.ctx.scene3d.camera.look_at(vec3(0.0, 1.0, 0.0));
+        let wall = rig.mesh(&MeshData::cube(1.0), glow(Color::rgb(0.0, 0.0, 1.0)));
+        rig.ctx.world.spawn((
+            Transform3D {
+                position: vec3(-20.0, 1.0, 2.0),
+                scale: vec3(40.0, 40.0, 0.2),
+                ..Default::default()
+            },
+            Model::new(wall),
+        ));
+        let face = rig.ctx.scene3d.camera.view_proj().project_point3(vec3(-1.0, 1.0, 2.1)).z;
+        let (skeleton, data) = figure();
+        let mesh = skinned_mesh(&mut rig, &data, glow(Color::rgb(1.0, 0.0, 0.0)), &skeleton);
+        let animation = CrowdAnimation::bake(&skeleton, &[bend(&skeleton).into()], 30.0);
+        let at = |x: f32| CrowdInstance::new(Mat4::from_translation(vec3(x, 0.0, -20.0)));
+        let behind: Vec<CrowdInstance> = [-4.0, -6.0, -8.0].map(at).to_vec();
+        let c = crowd(
+            &mut rig,
+            &animation,
+            &[CrowdLevel::new(mesh, 0.0, f32::INFINITY)],
+            &behind,
+            CrowdOptions::default(),
+        );
+        let drawn = |rig: &BatchRig| {
+            rig.renderer
+                .crowd_drawn(&rig.gpu.device, &rig.gpu.queue, c.id, 0)
+                .expect("the crowd")
+        };
+        // Negative control: without occlusion culling the camera's view
+        // has every figure (the wall still hides them in the picture).
+        rig.frame();
+        let all = rig.image();
+        assert_eq!(drawn(&rig), 3, "compute {compute}: no occlusion culling, all drawn");
+        rig.ctx.scene3d.camera.occlusion_culling = true;
+        rig.grid = Some(left_wall_grid(&rig, face));
+        let culled = rig.image();
+        assert_eq!(drawn(&rig), 0, "compute {compute}: the crowd behind the wall draws none of it");
+        let red = |p: [u8; 4]| p[0] > 100 && p[2] < 50;
+        assert_eq!(all.fraction(0..128, 0..128, red), 0.0, "the wall hides them anyway");
+        let d = support::diff(&culled, &all, 2);
+        assert!(d.within(super::static_batch_render_test::SAME_DEVICE), "and nothing pops: {d}");
+        // Figures beside the wall are drawn.
+        let mut people = behind.clone();
+        people.extend([4.0, 7.0].map(at));
+        assert!(rig.ctx.gfx.update_crowd(c, &people));
+        upload(&mut rig, c);
+        let image = rig.image();
+        assert_eq!(drawn(&rig), 2, "compute {compute}: the two beside the wall are drawn");
+        assert!(image.fraction(64..128, 0..128, red) > 0.001, "and seen");
+    }
+}
+
+/// A skinned unit cube (every corner on the one joint of `skeleton`).
+fn skinned_cube() -> (Skeleton, MeshData) {
+    let skeleton = Skeleton::new(vec![Joint::new("root", None)]);
+    let mut cube = MeshData::cube(1.0);
+    cube.joints = vec![[0; 4]; cube.positions.len()];
+    cube.weights = vec![[1.0, 0.0, 0.0, 0.0]; cube.positions.len()];
+    (skeleton, cube)
+}
+
+/// The box from `lo` to `hi` as a model matrix of the unit cube.
+fn box_at(lo: Vec3, hi: Vec3) -> Mat4 {
+    Mat4::from_scale_rotation_translation(hi - lo, Quat::IDENTITY, (lo + hi) * 0.5)
+}
+
+/// Global illumination's closed white room (`gi_render_test`'s red wall
+/// room) whose sunlit west wall is a red crowd character (a skinned cube
+/// stretched over the wall), or a red model with `crowd` false.
+fn red_crowd_room(crowd: bool) -> Option<super::gi_render_test::Rig> {
+    let mut rig = super::gi_render_test::Rig::new(true)?;
+    let white = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
+    let red = MaterialDesc::color(Color::rgb(0.9, 0.04, 0.04));
+    let (inner, outer) = (3.5, 3.9);
+    let walls = [
+        (vec3(-outer, -0.9, -outer), vec3(outer, -0.5, outer)), // floor
+        (vec3(inner, -0.5, -outer), vec3(outer, 3.5, outer)),   // east
+        (vec3(-inner, -0.5, -outer), vec3(inner, 3.5, -inner)), // north
+        (vec3(-inner, -0.5, inner), vec3(inner, 3.5, outer)),   // south
+        // The roof, with an opening from x -2 to 0 and z -1.5 to 1.5.
+        (vec3(-outer, 3.5, -outer), vec3(-2.0, 3.9, outer)),
+        (vec3(0.0, 3.5, -outer), vec3(outer, 3.9, outer)),
+        (vec3(-2.0, 3.5, -outer), vec3(0.0, 3.9, -1.5)),
+        (vec3(-2.0, 3.5, 1.5), vec3(0.0, 3.9, outer)),
+    ];
+    for (lo, hi) in walls {
+        let (scale, _, position) = box_at(lo, hi).to_scale_rotation_translation();
+        rig.ctx.world.spawn((
+            Transform3D {
+                position,
+                scale,
+                ..Default::default()
+            },
+            Model::new(white),
+        ));
+    }
+    let west = box_at(vec3(-outer, -0.5, -outer), vec3(-inner, 3.5, outer));
+    if crowd {
+        let (skeleton, cube) = skinned_cube();
+        let material = rig.ctx.gfx.create_material(red);
+        let mesh = rig.ctx.gfx.create_skinned_mesh(&cube, material, &skeleton);
+        rig.renderer
+            .create_material(&rig.device, &GpuMaterialDesc::new(&red), &rig.textures);
+        rig.renderer
+            .create_mesh(&rig.device, &cube, &[(0..cube.indices.len() as u32, material)], true);
+        let idle = AnimationClip::new("idle", &skeleton, vec![]);
+        let animation = CrowdAnimation::bake(&skeleton, &[idle.into()], 30.0);
+        let c = rig.ctx.gfx.create_crowd(
+            &animation,
+            &[CrowdLevel::new(mesh, 0.0, f32::INFINITY)],
+            &[CrowdInstance::new(west)],
+            CrowdOptions::default(),
+        );
+        let data = rig.ctx.gfx.assets3d.crowds[c.id as usize].as_ref();
+        rig.renderer.set_crowd(&rig.device, &rig.queue, c.id, data);
+    } else {
+        let mesh = rig.mesh(&MeshData::cube(1.0), red);
+        let (scale, _, position) = west.to_scale_rotation_translation();
+        rig.ctx.world.spawn((
+            Transform3D {
+                position,
+                scale,
+                ..Default::default()
+            },
+            Model::new(mesh),
+        ));
+    }
+    let lighting = &mut rig.ctx.scene3d.lighting;
+    lighting.sun_direction = vec3(-1.0, -1.0, 0.0);
+    lighting.sun_color = Color::WHITE;
+    lighting.sun_intensity = 4.0;
+    rig.ctx.scene3d.sky.sky_color = Color::rgb(0.5, 0.5, 0.5);
+    rig.ctx.scene3d.sky.ground_color = Color::rgb(0.5, 0.5, 0.5);
+    lighting.ambient_intensity = 0.3;
+    lighting.shadow_distance = 30.0;
+    lighting.gi = crate::render::GlobalIllumination {
+        enabled: true,
+        extent: vec3(12.0, 4.0, 8.0),
+        spacing: 1.0,
+        probes_per_frame: crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME,
+        intensity: 1.0,
+    };
+    rig.ctx.scene3d.camera.position = vec3(2.0, 1.3, 0.3);
+    rig.ctx.scene3d.camera.look_at(vec3(-3.5, -0.2, 0.0));
+    Some(rig)
+}
+
+#[test]
+fn global_illumination_probes_see_crowds_as_they_see_models() {
+    // The sunlit red wall a crowd character: the probes see it, so the
+    // floor beside it takes red bounce light, as beside a red model wall.
+    let Some(mut models) = red_crowd_room(false) else {
+        return;
+    };
+    let Some(mut crowds) = red_crowd_room(true) else {
+        return;
+    };
+    let (a, b) = (models.draw(80), crowds.draw(80));
+    let near_red = vec3(-3.0, -0.5, -0.8);
+    let far_side = vec3(-0.5, -0.5, -0.8);
+    let sunlit_wall = vec3(-3.5, 1.0, 0.0);
+    let (m, n) = (models.at(&a, near_red), crowds.at(&b, near_red));
+    let (mf, nf) = (models.at(&a, far_side), crowds.at(&b, far_side));
+    eprintln!("floor by the red wall: {m:?} model, {n:?} crowd; further away {mf:?}, {nf:?}");
+    assert!(crowds.at(&b, sunlit_wall)[0] > 150, "the crowd wall is drawn, in the sun");
+    assert!(n[0] > n[1] + 20, "red bounce light from a crowd wall: {n:?}");
+    for (x, y) in [(m, n), (mf, nf)] {
+        assert!(
+            (0..3).all(|k| (x[k] - y[k]).abs() <= 12),
+            "a crowd lights the floor as a model does: {x:?} vs {y:?}"
+        );
+    }
+}
+
+#[test]
+fn window_views_draw_crowds_for_their_own_camera() {
+    use super::regression_stage::{Setup, Stage};
+    use crate::camera::Viewport;
+    // Both paths: the desktop tier culls on the GPU, WebGL2's on the CPU.
+    for tier in [None, Some(crate::render::GpuTier::WebGl2)] {
+        let Some(mut stage) = Stage::with(Setup {
+            tier,
+            ..Default::default()
+        }) else {
+            return;
+        };
+        let (skeleton, data) = figure();
+        let red = glow(Color::rgb(1.0, 0.0, 0.0));
+        let material = stage.ctx.gfx.create_material(red);
+        let mesh = stage.ctx.gfx.create_skinned_mesh(&data, material, &skeleton);
+        stage
+            .renderer
+            .create_material(&stage.device, &GpuMaterialDesc::new(&red), &stage.textures);
+        let mut weighted = data.clone();
+        for w in &mut weighted.weights {
+            *w = crate::three::normalized_weights(*w);
+        }
+        stage
+            .renderer
+            .create_mesh(&stage.device, &weighted, &[(0..data.indices.len() as u32, material)], true);
+        let animation = CrowdAnimation::bake(&skeleton, &[bend(&skeleton).into()], 30.0);
+        // A figure at x = -6 and one at x = +6.
+        let people = [-6.0, 6.0].map(|x| CrowdInstance::new(Mat4::from_translation(vec3(x, 0.0, 0.0))));
+        let c = stage.ctx.gfx.create_crowd(
+            &animation,
+            &[CrowdLevel::new(mesh, 0.0, f32::INFINITY)],
+            &people,
+            CrowdOptions::default(),
+        );
+        let crowd_data = stage.ctx.gfx.assets3d.crowds[c.id as usize].as_ref();
+        stage
+            .renderer
+            .set_crowd(&stage.device, &stage.queue, c.id, crowd_data);
+        // Player one looks at the left figure, player two at the right one.
+        let camera_at = |stage: &Stage, x: f32, rect: Viewport| {
+            let mut camera = stage.ctx.scene3d.camera;
+            camera.position = vec3(x, 1.5, 6.0);
+            camera.look_at(vec3(x, 1.0, 0.0));
+            camera.rect = rect;
+            camera
+        };
+        stage.ctx.scene3d.camera = camera_at(&stage, -6.0, Viewport::split(2, 0));
+        let p2 = camera_at(&stage, 6.0, Viewport::split(2, 1));
+        stage.ctx.scene3d.views.push(crate::d3::View::new(p2));
+        let mut windows = super::views::WindowViews::default();
+        let red = |p: [u8; 4]| p[0] > 100 && p[1] < 50 && p[2] < 50;
+        // Twice: the main frame after a view's draws its crowd still.
+        for k in 0..2 {
+            let image = super::views_render_test::frame(&mut stage, &mut windows, true);
+            let (left, right) = (image.fraction(0..64, 0..128, red), image.fraction(64..128, 0..128, red));
+            eprintln!("tier {tier:?}, frame {k}: red {left} left, {right} right");
+            assert!(left > 0.02, "{tier:?}: player one sees the left figure");
+            assert!(right > 0.02, "{tier:?}: player two's view draws the right figure");
+        }
+        // Negative control: player two turned away from both sees none.
+        stage.ctx.scene3d.views[0].camera = camera_at(&stage, 30.0, Viewport::split(2, 1));
+        let image = super::views_render_test::frame(&mut stage, &mut windows, true);
+        assert_eq!(image.fraction(64..128, 0..128, red), 0.0, "{tier:?}: nothing there");
+        assert!(image.fraction(0..64, 0..128, red) > 0.02, "{tier:?}: player one still does");
+        stage.finish();
     }
 }

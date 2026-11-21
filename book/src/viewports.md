@@ -69,6 +69,9 @@ shadowed lights nearest any of the cameras (up to
 `Lighting::light_shadow_views` of them), in one shadow atlas drawn once a
 frame; each light's shadow is as sharp as the camera nearest it needs.
 
+[Crowds](crowds.md) are culled for each view's camera too, at the main
+frame's time.
+
 Views draw without occlusion culling: it reads the depth of the camera's
 last frame, which only the main camera keeps. A view draws everything in
 its frustum, which costs more in a dense city but never hides anything
