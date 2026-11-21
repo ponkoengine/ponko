@@ -100,6 +100,34 @@ default 720), `--out <dir>` (default `target/web-smoke/multiplayer`: its
 (default 240). The page runs on WebGL2 (WebGPU hidden): the test is about
 the network. `multiplayer.test.mjs` tests its checks without a browser.
 
+## Replication
+
+`replication.mjs` checks [replication in the browser](../../book/src/replication.md#dedicated-servers-and-browsers):
+the reference game (`examples/net_arena`) as a web build joining a native
+dedicated server. It starts `net_arena server 127.0.0.1:0 --web 127.0.0.1:0`
+(no window; free ports, printed as `serving on ..., browsers on ws://...`),
+then opens one headless tab of the web build with `?server=ws://...`. The tab
+publishes in `<html data-smoke>` whether it joined, the replicas it holds and
+how far each replicated orb moved since it first saw it. It passes when the
+tab:
+
+- joined (the server's declarations match) without a replication error;
+- holds the server's orbs and its own player (spawned for it by the server,
+  replicated back and marked as its own);
+- saw an orb move at least 5 units: the server's changes reach the browser.
+
+```sh
+node web/smoke/replication.mjs --build          # web/build.sh net_arena + cargo build --example net_arena
+node web/smoke/replication.mjs --dir target/web/net_arena --native target/debug/examples/net_arena
+```
+
+Options: `--browser`, `--out <dir>` (default `target/web-smoke/replication`:
+its `report.json` has the tab's last state, its console and the server's
+output) and `--run-timeout <s>` (default 120; a run takes a few seconds once
+built). The page runs on WebGL2 (WebGPU hidden): the test is about the
+network. `replication.test.mjs` tests its checks without a browser. Checked
+so far in Chromium 156 (headless shell) on an Apple Silicon Mac.
+
 ## The web gallery
 
 `gallery.mjs` checks the [web gallery](../gallery/README.md) the same way,
