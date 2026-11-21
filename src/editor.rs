@@ -942,7 +942,8 @@ fn browse_folders() -> AssetList {
 /// in the browser. `read` gives a file's bytes, for the `"format"` of a
 /// JSON file. Names that are folders' own (hidden files, `index.json`
 /// itself) are left out.
-#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+// Natively only the web editor's tests use it.
+#[cfg_attr(not(any(all(test, feature = "editor"), target_arch = "wasm32")), allow(dead_code))]
 pub(crate) fn browse_names<'a>(
     names: impl IntoIterator<Item = &'a str>,
     read: impl Fn(&str) -> Option<Vec<u8>>,
