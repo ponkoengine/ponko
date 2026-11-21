@@ -87,7 +87,10 @@ impl Hostile {
         for _ in 0..4 {
             match rng.below(10) {
                 // Garbage, and requests far past the size limit.
-                0 => self.send(&rng.bytes(rng.below(2048) as usize)),
+                0 => {
+                    let n = rng.below(2048) as usize;
+                    self.send(&rng.bytes(n));
+                }
                 1 => self.send(&protocol::encode_control(&Request::SetMeta {
                     meta: rng.text(64 * 1024),
                 })),
@@ -99,7 +102,10 @@ impl Hostile {
                 3 => self.send(&protocol::encode_control(&Request::Leave)),
                 // Queues under names never seen before, then cancelled.
                 4 => self.send(&protocol::encode_control(&Request::Queue {
-                    mode: rng.text(1 + rng.below(300) as usize),
+                    mode: {
+                        let n = 1 + rng.below(300) as usize;
+                        rng.text(n)
+                    },
                     size: 2 + rng.below(8) as u16,
                     rating: rng.next() as i32,
                 })),
@@ -130,7 +136,10 @@ impl Hostile {
                     };
                     let _ = self.net.send(PeerId::HOST, lane, &frame);
                 }
-                _ => self.send(&rng.bytes(rng.below(8) as usize)),
+                _ => {
+                    let n = rng.below(8) as usize;
+                    self.send(&rng.bytes(n));
+                }
             }
         }
     }
@@ -147,7 +156,11 @@ fn hostile_clients_keep_server_memory_flat_and_honest_rooms_working() {
     // 120 simulated seconds: every timeout (idle connections, silent
     // links, rate windows) runs many times over.
     const STEPS: usize = 12_000;
-    const WARM: usize = 3_000;
+    // Past every vanished client's link timeout (the last vanishes at 31 s
+    // and is dropped 10 s later): until then the in-memory transport keeps
+    // the packets the server still sends them (the attackers' memory, not
+    // the server's, but the same heap here).
+    const WARM: usize = 5_000;
 
     let mut limits = LobbyLimits::default();
     // Every in-memory client has the same IP: give each its own budgets,
@@ -162,7 +175,7 @@ fn hostile_clients_keep_server_memory_flat_and_honest_rooms_working() {
         .map(|(i, net)| Hostile {
             net,
             deaf: i % 3 == 1,
-            vanishes_at: (i % 4 == 3).then_some(4_000 + i * 100),
+            vanishes_at: (i % 4 == 3).then_some(2_000 + i * 100),
         })
         .collect();
     let vanishing = hostile.iter().filter(|h| h.vanishes_at.is_some()).count();
@@ -170,7 +183,8 @@ fn hostile_clients_keep_server_memory_flat_and_honest_rooms_working() {
     let mut rng = Rng(0x5eed_1234_5678_9abc);
     let mut codes: Vec<String> = Vec::new();
     let mut relayed = [0u64; HONEST];
-    let (mut warm_live, mut peak_after_warm) = (0isize, isize::MIN);
+    // The live heap once a simulated second after the warm-up.
+    let mut samples: Vec<isize> = Vec::new();
     let wall = std::time::Instant::now();
     for step in 0..STEPS {
         server.poll_elapsed(STEP);
@@ -209,24 +223,41 @@ fn hostile_clients_keep_server_memory_flat_and_honest_rooms_working() {
             // guess that wins takes the honest joiner's seat, as it would).
             h.attack(&mut rng, if step > 300 { &codes } else { &[] });
         }
-        if step == WARM {
-            warm_live = live();
+        if step % 1000 == 0 {
+            let s = server.stats();
+            eprintln!(
+                "t={:>4} s live={:.2} MiB conns={} rooms={} queued={} socket_errors={}",
+                step / 100,
+                live() as f64 / 1048576.0,
+                s.connections,
+                s.rooms,
+                s.queued,
+                s.socket_errors
+            );
         }
-        if step > WARM {
-            peak_after_warm = peak_after_warm.max(live());
+        if step >= WARM && step % 100 == 0 {
+            samples.push(live());
         }
     }
     let stats = server.stats();
-    let growth = peak_after_warm - warm_live;
+    let mean = |s: &[isize]| s.iter().sum::<isize>() / s.len() as isize;
+    let (first, second) = samples.split_at(samples.len() / 2);
+    let (before, after) = (mean(first), mean(second));
+    let peak = samples.iter().copied().max().unwrap_or(0);
+    let mib = |b: isize| b as f64 / 1048576.0;
     eprintln!(
-        "hostile load: {STEPS} steps ({:.0} s simulated) in {:.1?}; live heap {:.2} MiB after warm-up, \
-         peak {:.2} MiB later (growth {:+.1} KiB); {} requests, {} refused, {} rate limited, \
+        "hostile load: {STEPS} steps ({:.0} s simulated) in {:.1?}; live heap {:.2} MiB on average from \
+         {} to {} s, {:.2} MiB from {} to {} s, peak {:.2} MiB; {} requests, {} refused, {} rate limited, \
          {} relay in, {} dropped, {} rooms now, {} connections now",
         STEPS as f64 * STEP.as_secs_f64(),
         wall.elapsed(),
-        warm_live as f64 / 1048576.0,
-        peak_after_warm as f64 / 1048576.0,
-        growth as f64 / 1024.0,
+        mib(before),
+        WARM / 100,
+        WARM / 100 + first.len(),
+        mib(after),
+        WARM / 100 + first.len(),
+        STEPS / 100,
+        mib(peak),
         stats.requests,
         stats.refused,
         stats.rate_limited,
@@ -235,10 +266,20 @@ fn hostile_clients_keep_server_memory_flat_and_honest_rooms_working() {
         stats.rooms,
         stats.connections,
     );
-    // Memory: whatever the attackers did after the first 30 s, the heap
-    // grew by less than 1 MiB (no state per message, per guess, per
-    // queue name or per refused request survives).
-    assert!(growth < 1 << 20, "the heap grew by {growth} bytes under attack");
+    // Memory is flat: after the first 50 s the heap has no upward trend
+    // (its average over the last 35 s is within 512 KiB of the 35 s
+    // before: no state per message, per guess, per queue name or per
+    // refused request survives; at about 3000 refused requests a second a
+    // leak of a few bytes each would show), and no moment is more than
+    // 2 MiB above that average (what a step's attacks have in flight). The
+    // deaf attackers' own unread events fill slowly in the same heap.
+    assert!(
+        after - before < 512 << 10,
+        "the heap grew under attack: {:.2} MiB, then {:.2} MiB on average",
+        mib(before),
+        mib(after)
+    );
+    assert!(peak - before < 2 << 20, "the heap reached {:.2} MiB", mib(peak));
     // The attackers hit every limit.
     assert!(stats.refused > 1000 && stats.rate_limited > 1000, "{stats:?}");
     assert!(stats.relay_dropped > 1000, "{stats:?}");

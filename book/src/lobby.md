@@ -254,10 +254,18 @@ relay payloads far past the size limits, rooms made and left, queues under
 names never seen before, guessed and real room codes, relay floods to
 everyone and to members that don't exist. A third of them never read what
 the server sends them, a quarter vanish without a goodbye. The test counts
-the heap of the whole process and checks that it grows by less than 1 MiB
-after the first 30 s, that the vanished connections are dropped and the
-others kept, and that the honest players keep their rooms and hear each
-other.
+the heap of the whole process (server and clients), sampled every
+simulated second once the vanished connections have timed out, and checks
+that it is flat: its average over the last 35 s within 512 KiB of the 35 s
+before, and never more than 2 MiB above it. It also checks that the
+vanished connections are dropped and the others kept, and that the honest
+players keep their rooms and hear each other.
+
+One run on an Apple silicon laptop that was building other projects
+(debug build, 73 s wall for 120 simulated seconds): 371 588 requests, of
+which 369 698 refused (359 746 for the rate limit), 133 862 relay messages
+in and 76 973 dropped; the heap averaged 3.44 MiB from 50 to 85 s and
+3.60 MiB from 85 to 120 s, with a peak of 4.28 MiB.
 
 ## The protocol
 
