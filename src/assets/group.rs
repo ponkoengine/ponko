@@ -15,7 +15,7 @@
 //! cancelled group can be [restarted](Assets::restart_group): only what had
 //! not loaded is read again.
 
-mod sliced;
+pub(crate) mod sliced;
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -416,6 +416,10 @@ pub struct GroupStats {
     pub over_budget: u64,
     /// Bytes the last step uploaded (counted against the upload budget).
     pub frame_bytes: u64,
+    /// Pieces of work the last step ran: reads, decodes, uploads, and
+    /// where there are no workers each slice of a decode. The step checks
+    /// its budget between pieces.
+    pub pieces: u32,
     /// Milliseconds the last step spent uploading: making textures on the
     /// GPU and handing them their pixels (part of `step_ms`). The GPU copies
     /// the pixels in its own time, while it draws the frame.
@@ -628,7 +632,10 @@ pub(crate) struct Groups {
     stats: GroupStats,
     /// Tests: decode on the game thread a slice at a time (as where there
     /// are no workers) or not, instead of what the platform has.
-    sliced: Option<bool>,
+    pub(crate) sliced: Option<bool>,
+    /// Tests: what each piece of work counts as, in seconds, instead of the
+    /// time it takes (see [`sliced::WorkClock`]).
+    pub(crate) piece_cost: Option<f64>,
 }
 
 impl Default for Groups {
@@ -638,6 +645,7 @@ impl Default for Groups {
             loading: 0,
             stopping: false,
             sliced: None,
+            piece_cost: None,
             budget_ms: DEFAULT_GROUP_FRAME_BUDGET_MS,
             stats: GroupStats {
                 frame_budget_ms: DEFAULT_GROUP_FRAME_BUDGET_MS,
@@ -660,27 +668,10 @@ fn max_in_flight() -> usize {
     }
 }
 
-/// Whether [`Job`]s run where they are spawned, on the game thread: a
-/// browser build without threads, or one whose page didn't start them.
-fn jobs_run_here() -> bool {
-    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
-    {
-        crate::web_threads::frame_threads() == 0
-    }
-    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
-    {
-        true
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        false
-    }
-}
-
 impl Groups {
     /// Whether large decodes run a slice at a time on the game thread.
     fn sliced(&self) -> bool {
-        self.sliced.unwrap_or_else(jobs_run_here)
+        self.sliced.unwrap_or_else(sliced::jobs_run_here)
     }
 
     fn get(&self, id: GroupId) -> &Running {
@@ -1062,9 +1053,7 @@ impl Ctx {
         let budget = f64::from(self.assets.groups.budget_ms) / 1000.0;
         let upload_budget = self.gfx.streaming.budget().unwrap_or(u64::MAX);
         let mut frame = Frame {
-            start,
-            budget,
-            worked: false,
+            clock: sliced::WorkClock::new(budget, self.assets.groups.piece_cost),
             upload_budget,
             spent: 0,
             uploads: 0,
@@ -1084,6 +1073,7 @@ impl Ctx {
         stats.step_ms = ms;
         stats.max_step_ms = stats.max_step_ms.max(ms);
         stats.frame_bytes = frame.spent;
+        stats.pieces = frame.clock.pieces();
         let upload_ms = (frame.upload_secs * 1000.0) as f32;
         stats.upload_ms = upload_ms;
         stats.max_upload_ms = stats.max_upload_ms.max(upload_ms);
@@ -1149,7 +1139,7 @@ impl Ctx {
             group.next += 1;
             group.in_flight += 1;
             let started = self.start_item(index, i);
-            frame.worked = true;
+            frame.clock.piece();
             // A browser decodes as it starts: take it at once.
             if let Err(error) = started.and_then(|()| self.advance_item(index, i, frame)) {
                 self.item_failed(index, i, error);
@@ -1295,7 +1285,7 @@ impl Ctx {
                 if !frame.may_work() {
                     return Ok(());
                 }
-                frame.worked = true;
+                frame.clock.piece();
                 if work.step(&item.path)? {
                     break;
                 }
@@ -1337,7 +1327,7 @@ impl Ctx {
                         self.assets.groups.list[index].values.insert(path, value);
                     }
                 }
-                frame.worked = true;
+                frame.clock.piece();
                 true
             }
             Step::Streaming { mesh } => {
@@ -1434,11 +1424,7 @@ impl Ctx {
 
 /// The time and bytes one frame's step may still spend.
 struct Frame {
-    start: crate::perf::Instant,
-    /// Seconds.
-    budget: f64,
-    /// Whether any work ran yet (the first piece always may).
-    worked: bool,
+    clock: sliced::WorkClock,
     upload_budget: u64,
     spent: u64,
     uploads: u32,
@@ -1448,7 +1434,7 @@ struct Frame {
 
 impl Frame {
     fn may_work(&self) -> bool {
-        !self.worked || self.start.elapsed().as_secs_f64() < self.budget
+        self.clock.may_work()
     }
 
     /// Whether `bytes` more may be uploaded now: within the time and the
@@ -1630,12 +1616,13 @@ mod tests {
         bytes
     }
 
-    /// Runs the group step until `id` stops loading; each step's time.
-    fn steps_until_done(ctx: &mut Ctx, id: GroupId) -> Vec<f32> {
+    /// Runs the group step until `id` stops loading; the pieces of work
+    /// each step ran.
+    fn steps_until_done(ctx: &mut Ctx, id: GroupId) -> Vec<u32> {
         let mut steps = Vec::new();
         while ctx.assets.group_state(id) == GroupState::Loading {
             ctx.pump_asset_groups();
-            steps.push(ctx.assets.group_stats().step_ms);
+            steps.push(ctx.assets.group_stats().pieces);
             assert!(steps.len() < 100_000, "the group never finished");
         }
         steps
@@ -1662,43 +1649,39 @@ mod tests {
     }
 
     #[test]
-    fn without_workers_a_long_png_decode_keeps_each_step_near_the_frame_budget() {
-        let png = noise_png(2048, 2048);
-        // The decode in one piece, as a browser without threads did it.
-        let started = std::time::Instant::now();
-        let whole = crate::assets::decode_image(&png, "big.png", "big.png").unwrap();
-        let whole_ms = started.elapsed().as_secs_f32() * 1000.0;
-        assert_eq!(whole.width, 2048);
+    fn without_workers_a_long_png_decode_runs_as_many_slices_a_step_as_the_budget_holds() {
+        let (side, budget_ms, piece_ms) = (2048u32, 0.5f32, 0.125f64);
         Game::new("t", 1, 1).hot_reload(false).run_headless(0, |ctx| {
             ctx.assets.groups.sliced = Some(true);
+            // Each piece of work counts as 0.125 ms whatever it really takes,
+            // so the pieces a step runs follow from the budget alone (a busy
+            // machine can't change them): four a step.
+            ctx.assets.groups.piece_cost = Some(piece_ms / 1000.0);
             ctx.assets
-                .add_background_source(MemorySource::new("mem").with("big.png", png));
-            // Below the decode's few milliseconds here (a browser's is
-            // slower), so it must be spread.
-            let budget = 0.5;
-            ctx.assets.set_group_frame_budget(budget);
+                .add_background_source(MemorySource::new("mem").with("big.png", noise_png(side, side)));
+            ctx.assets.set_group_frame_budget(budget_ms);
             let id = ctx.assets.start_group(AssetGroup::new("big").texture("big.png"));
-            let mut steps = steps_until_done(ctx, id);
+            let steps = steps_until_done(ctx, id);
             assert_eq!(ctx.assets.group_state(id), GroupState::Ready);
-            let total: f32 = steps.iter().sum();
-            steps.sort_by(f32::total_cmp);
-            let median = steps[steps.len() / 2];
-            eprintln!(
-                "one piece: {whole_ms:.1} ms; sliced at a {budget} ms budget: {} steps, median {median:.2} ms, \
-                 longest {:.2} ms, {total:.1} ms in all",
-                steps.len(),
-                steps[steps.len() - 1]
-            );
-            // Spread over frames, each about the budget long. Coarse bounds
-            // only (a busy machine pauses threads): the decode takes far
-            // more than one step, and a typical step is near the budget.
-            assert!(
-                steps.len() as f32 >= (whole_ms / (budget + 3.0)).floor(),
-                "{} steps",
-                steps.len()
-            );
-            assert!(steps.len() >= 3, "{} steps", steps.len());
-            assert!(median < budget + 3.0, "median step {median} ms");
+            assert_eq!(ctx.gfx.load_texture("big.png").width(), side);
+
+            let per_step = (f64::from(budget_ms) / piece_ms) as u32;
+            assert_eq!(per_step, 4);
+            // 64 KiB of RGBA a slice: 8 rows of 2048 pixels, 256 slices.
+            let rows_per_slice = (sliced::SLICE_BYTES / (side as usize * 4)) as u32;
+            let slices = side.div_ceil(rows_per_slice);
+            assert_eq!(slices, 256);
+            // Every step stops at the budget, and the pieces are the read,
+            // each slice once, and the upload.
+            assert!(steps.iter().all(|&p| (1..=per_step).contains(&p)), "{steps:?}");
+            assert_eq!(steps.iter().sum::<u32>(), 1 + slices + 1);
+            // The first step reads and decodes three slices; then four
+            // slices a step; the last step's one slice leaves room for the
+            // upload.
+            let full_steps = (slices - (per_step - 1)).div_ceil(per_step);
+            assert_eq!(steps.len() as u32, 1 + full_steps, "{steps:?}");
+            assert_eq!(steps[0], per_step);
+            assert_eq!(*steps.last().unwrap(), 2, "a slice and the upload");
         });
     }
 
