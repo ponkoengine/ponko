@@ -144,6 +144,9 @@ pub(crate) enum Resource {
     /// The scene depth copied to one 32-bit float per pixel, which the
     /// reflections' trace and filtered levels read.
     ReflectionDepth,
+    /// The nearest depth of each 8x8 block of the reflections' depth copy,
+    /// which their trace reads along the stretches its long steps jump over.
+    ReflectionCoarseDepth,
     /// The reflection cone's spread filled in where the rays found nothing:
     /// the opaque pass reads it, or a copy in the screen image's first
     /// level.
@@ -234,7 +237,7 @@ pub(crate) struct Desc {
 
 impl Resource {
     /// Every resource, in declaration order.
-    pub(crate) const ALL: [Resource; 50] = {
+    pub(crate) const ALL: [Resource; 51] = {
         use Resource::*;
         [
             VisibleDraws,
@@ -275,6 +278,7 @@ impl Resource {
             ReflectionLevels,
             ReflectionHits,
             ReflectionDepth,
+            ReflectionCoarseDepth,
             ReflectionSpread,
             ReflectionHistory,
             TaaHistory,
@@ -345,6 +349,7 @@ impl Resource {
             Resource::ReflectionLevels => desc("reflection levels", Frame, F::Screen, One),
             Resource::ReflectionHits => desc("reflection hits", Frame, F::Hits, One),
             Resource::ReflectionDepth => desc("reflection depth", Frame, F::DepthCopy, One),
+            Resource::ReflectionCoarseDepth => desc("reflection coarse depth", Frame, F::DepthCopy, One),
             Resource::ReflectionSpread => desc("reflection spread", Frame, F::Spread, One),
             Resource::ReflectionHistory => desc("reflection history", Persistent, F::Hdr, One),
             Resource::TaaHistory => desc("taa history", Persistent, F::Hdr, One),
@@ -1058,11 +1063,19 @@ pub(crate) const FRAME_PASSES: [Pass; 8] = [
                 on(F::SSR),
                 &[u(SceneDepth, A::SampleMs), u(ReflectionDepth, A::Color)],
             ),
+            // The nearest depth of each 8x8 block of the copy: a long step
+            // of the trace reads it along what it jumps over.
+            step(
+                "reflection coarse depth",
+                on(F::SSR),
+                &[u(ReflectionDepth, A::Sample), u(ReflectionCoarseDepth, A::Color)],
+            ),
             step(
                 "reflections",
                 on(F::SSR),
                 &[
                     u(ReflectionDepth, A::Sample),
+                    u(ReflectionCoarseDepth, A::Sample),
                     u(ReflectionHistory, A::SamplePrevious),
                     u(ScreenImage, A::Color),
                     u(ReflectionHits, A::Color),

@@ -12,6 +12,6 @@
   "adapter": "Apple M4 Max",
   "backend": "Metal",
   "driver": "unknown",
-  "checksum": "f454108dabefca5e",
-  "reason": "Screen-space reflections: rebuilt march (no grain in contact reflections) and a hits pyramid for the spread fill (smooth edges on wide blurred reflections)"
+  "checksum": "28f256cc1b55d56f",
+  "reason": "Screen-space reflections: a coarse depth image keeps long steps from jumping over thin things, and the trace assumes a thing as deep as it is tall on screen instead of a thickness that grows with distance (#164): thin things' reflections are as wide as a true mirror shows them, and whole"
 }

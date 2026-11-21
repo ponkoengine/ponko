@@ -301,6 +301,10 @@ impl Renderer3D {
                 .ssr
                 .as_ref()
                 .map(|s| view(Resource::ReflectionDepth, s.depth_copy())),
+            targets
+                .ssr
+                .as_ref()
+                .map(|s| view(Resource::ReflectionCoarseDepth, s.coarse_depth())),
             targets.ao.as_ref().map(|a| view(Resource::AoRaw, a.images().0)),
             // Without temporal accumulation the history is a stand-in.
             targets

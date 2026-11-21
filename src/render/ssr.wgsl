@@ -58,6 +58,28 @@ fn coordinate(p: vec2<i32>) -> vec2<i32> {
     return clamp(p, vec2<i32>(0), vec2<i32>(textureDimensions(depth)) - 1);
 }
 fn z_at(p: vec2<i32>) -> f32 { return textureLoad(depth, coordinate(p), 0).r; }
+// The coarse depth: the nearest depth (the greatest, reverse-Z) of each
+// CELL x CELL block of `depth`, made by `fs_coarse` after the copy. A long
+// step of the march reads it along the stretch it jumps over: where the
+// ray stays in front of a block's nearest depth, nothing in that block is
+// in front of it, and only where it doesn't does the march look closer
+// (see `skipped`).
+@group(0) @binding(11) var coarse: texture_2d<f32>;
+const CELL: i32 = 8;
+fn coarse_at(uv: vec2<f32>, size: vec2<f32>) -> f32 {
+    let p = vec2<i32>(uv * size) / CELL;
+    return textureLoad(coarse, clamp(p, vec2<i32>(0), vec2<i32>(textureDimensions(coarse)) - 1), 0).r;
+}
+@fragment fn fs_coarse(in: Full) -> @location(0) vec4<f32> {
+    let base = vec2<i32>(in.at.xy) * CELL;
+    var nearest = 0.0;
+    for (var y = 0; y < CELL; y++) {
+        for (var x = 0; x < CELL; x++) {
+            nearest = max(nearest, z_at(base + vec2<i32>(x, y)));
+        }
+    }
+    return vec4<f32>(nearest, 0.0, 0.0, 0.0);
+}
 // The copy of the depth the trace and the filtered levels read (see
 // `depth`), before the trace.
 @group(0) @binding(12) var scene_depth: texture_depth_multisampled_2d;
@@ -71,8 +93,10 @@ fn ndc(p: vec2<i32>) -> vec2<f32> {
     let uv = (vec2<f32>(coordinate(p)) + 0.5) / vec2<f32>(textureDimensions(depth));
     return uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0);
 }
-fn position(p: vec2<i32>) -> vec3<f32> {
-    let h = settings.inverse * vec4<f32>(ndc(p), z_at(p), 1.0);
+fn position(p: vec2<i32>) -> vec3<f32> { return point(p, z_at(p)); }
+// The point at pixel `p` with depth `z`.
+fn point(p: vec2<i32>, z: f32) -> vec3<f32> {
+    let h = settings.inverse * vec4<f32>(ndc(p), z, 1.0);
     return h.xyz / h.w;
 }
 // How far in front of the camera (clip w) the depth `z` at pixel `p` is.
@@ -143,9 +167,114 @@ fn clip_fraction(s: f32, w0: f32, w1: f32) -> f32 {
     return s * w0 / (s * w0 + (1.0 - s) * w1);
 }
 // How far behind the depth buffer a point `w` in front of the camera still
-// counts as a hit, besides the ray's own travel (see the march): what's on
-// screen is assumed to be that thick.
+// counts as a hit, besides the ray's own travel (see the march), at most:
+// what's on screen is assumed to be no thicker. Where the ray first goes
+// behind something, `surface_thickness` ties it to what the scene shows.
 fn thickness(w: f32) -> f32 { return 0.1 + 0.02 * w; }
+
+// How thick the thing the ray went behind at pixel `at` (`w` in front of
+// the camera) is assumed to be: as deep as it is tall across the view,
+// where the screen shows it along the ray (`direction`, a pixel long) from
+// `at` on, up to `thickness`. The screen shows a thing's front, not how far
+// back it goes: a thin rail is about as deep as it is tall, a wall is deep.
+// A thickness that only grew with the distance made every thin thing far
+// away most of a metre deep, and its reflection half again as wide as a
+// mirror's. The face at `at` goes on while the depth stays on its plane
+// (`on_face`); it is followed with probes 2, 4, 8, 16 and 32 pixels out
+// until one is off it, then two halvings. It costs a few reads where the
+// ray goes behind something, not at every step.
+fn surface_thickness(at: vec2<i32>, w: f32, direction: vec2<f32>) -> f32 {
+    let most = thickness(w);
+    let start = position(at);
+    let z = z_at(at);
+    // A pixel's width there: a thing one pixel tall is that deep, at least.
+    var stretch = distance(point(at + vec2<i32>(1, 0), z), point(at, z));
+    let face = face_at(at, w, direction);
+    if face.y == 0.0 {
+        return min(most, 0.01 + 0.001 * w + stretch);
+    }
+    var on = 1.0;
+    var off = 64.0;
+    for (var k = 0; k < 5; k++) {
+        let reach = f32(2 << u32(k));
+        if !on_face(at, face, direction, reach) {
+            off = reach;
+            break;
+        }
+        on = reach;
+    }
+    if off < 64.0 {
+        for (var k = 0; k < 2; k++) {
+            let mid = (on + off) * 0.5;
+            if on_face(at, face, direction, mid) { on = mid; } else { off = mid; }
+        }
+    }
+    // Only across the view: a face seen at a slant (a floor far away) is
+    // no taller as seen. The pixel at `at` counts too.
+    let across = position(at + vec2<i32>(round(direction * on))) - start;
+    let view = normalize(start - settings.camera.xyz);
+    stretch = max(stretch, length(across - view * dot(across, view)) * (on + 1.0) / on);
+    // And the depth's own precision.
+    return min(most, 0.01 + 0.001 * w + stretch);
+}
+// The plane of the face at pixel `at` (`w` in front of the camera), along
+// `direction` on screen: 1 / w at `at` and how it changes over a pixel
+// (along a plane, 1 / w changes linearly across the screen), from the
+// neighbor along the ray or the one before it, whichever is nearer to it
+// (a silhouette next to `at` doesn't count). y 0: neither neighbor is on a
+// face with `at` (a thing a pixel thin).
+fn face_at(at: vec2<i32>, w: f32, direction: vec2<f32>) -> vec2<f32> {
+    let step = vec2<i32>(round(direction));
+    let inverse = 1.0 / w;
+    let ahead = inverse_w_at(at + step) - inverse;
+    let back = inverse - inverse_w_at(at - step);
+    let change = select(back, ahead, abs(ahead) < abs(back));
+    if abs(change) > 0.05 * inverse { return vec2<f32>(inverse, 0.0); }
+    return vec2<f32>(inverse, change / length(vec2<f32>(step)) + 1e-12);
+}
+// 1 / w at pixel `p` (0 for the sky and off the screen).
+fn inverse_w_at(p: vec2<i32>) -> f32 {
+    if any(p < vec2<i32>(0)) || any(p >= vec2<i32>(textureDimensions(depth))) { return 0.0; }
+    let z = z_at(p);
+    return select(1.0 / scene_w(p, z), 0.0, is_sky(z));
+}
+// Whether the pixel `reach` pixels from `at` along `direction` is still on
+// the plane of `face` (see `face_at`), within 2% of its distance.
+fn on_face(at: vec2<i32>, face: vec2<f32>, direction: vec2<f32>, reach: f32) -> bool {
+    let offset = vec2<i32>(round(direction * reach));
+    let found = inverse_w_at(at + offset);
+    let expected = face.x + face.y * length(vec2<f32>(offset));
+    return found > 0.0 && abs(found - expected) < 0.02 * face.x;
+}
+
+// Where between `a` and `b` on the line (the ray in front of the depth at
+// `a`) the ray first goes behind something, at most `fine` apart (fractions
+// of the line), and how far apart the points looked at there were: the
+// coarse depth (`cell`: a block's width, as a fraction of the line) is read
+// at each block's width along the stretch, and only where the ray isn't in
+// front of the nearest depth of the blocks at both ends is the depth read
+// closer. (-1, 0): nothing there. At most `SPANS` stretches: a longer step
+// reads the coarse depth farther apart.
+const SPANS: i32 = 8;
+fn skipped(l: Line, a: f32, b: f32, size: vec2<f32>, cell: f32, fine: f32) -> vec2<f32> {
+    let spans = i32(min(ceil((b - a) / cell), f32(SPANS)));
+    var head = a;
+    var near_head = coarse_at(line_uv(l, a), size);
+    for (var k = 1; k <= spans; k++) {
+        let tail = mix(a, b, f32(k) / f32(spans));
+        let near_tail = coarse_at(line_uv(l, tail), size);
+        if min(line_depth(l, head), line_depth(l, tail)) < max(near_head, near_tail) {
+            let n = max(ceil((tail - head) / fine), 1.0);
+            for (var j = 1; j <= i32(n); j++) {
+                let t = mix(head, tail, f32(j) / n);
+                if line_behind(l, t, size) { return vec2<f32>(t, (tail - head) / n); }
+            }
+        }
+        head = tail;
+        near_head = near_tail;
+    }
+    return vec2<f32>(-1.0, 0.0);
+}
 
 // The trace's two targets: what the pixel reflects (rgb the color times
 // alpha, alpha how much it counts; 0: the ray found nothing on screen, the
@@ -216,23 +345,46 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
     // below): two pixels at 1080p, as many of the screen's height at other
     // sizes, and at least two.
     let most = max(2.0, size.y / 540.0) / pixels;
+    // A step longer than that also reads the coarse depth along the
+    // stretch it jumps over (see `skipped`), and the depth every `most`
+    // where something there could be in front of the ray: without TAA to
+    // fill the gaps, steps tens of pixels long jumped over thin things (a
+    // rail near the camera came out dotted). The ray direction on screen,
+    // a pixel long, for the thickness (see `surface_thickness`).
+    let cell = f32(CELL) / pixels;
+    let direction = (uv1 - uv0) * size / pixels;
     var before = 0.0;
     var was_behind = false;
     // How far in front of the camera the surface the ray was last behind
     // is (see the still-behind case below).
     var behind_w = 0.0;
     var hit = -1.0;
-    for (var i = 0; i < STEPS; i++) {
-        let s = first + scale * (grown - 1.0);
+    var i = 0;
+    loop {
+        if i >= STEPS { break; }
+        var s = first + scale * (grown - 1.0);
         // This step's share of the line: the march's slope here.
-        let step = scale * GROWTH * grown / f32(STEPS);
+        var step = scale * GROWTH * grown / f32(STEPS);
+        if !on_screen(line_uv(line, s)) { break; }
+        // Whether the ray went behind something the step jumped over: then
+        // this step ends there instead, and the next one is taken again
+        // from it (once, as the ray is then behind).
+        var shortened = false;
+        if !was_behind && step > most * 0.5 {
+            let skip = skipped(line, before, s, size, cell, most * 0.5);
+            if skip.x >= 0.0 && skip.x < s {
+                s = skip.x;
+                step = skip.y;
+                shortened = true;
+            }
+        }
         let uv = line_uv(line, s);
-        if !on_screen(uv) { break; }
         let q = vec2<i32>(uv * size);
         let z = z_at(q);
         let is_behind = !is_sky(z) && line_depth(line, s) < z;
         if is_behind {
-            var lo = before;
+            // A shortened step was looked at `step` apart.
+            var lo = select(before, s - step, shortened);
             var hi = s;
             var found = false;
             if !was_behind {
@@ -254,9 +406,9 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
                 }
                 let w = line_w(line, hi);
                 let at = vec2<i32>(line_uv(line, hi) * size);
-                let travel = 2.0 * line_w_change(line, w, min(step, most));
+                let travel = line_w_change(line, w, min(step, most) * 0.5);
                 behind_w = scene_w(at, z_at(at));
-                found = w - behind_w < thickness(w) + travel;
+                found = w - behind_w < surface_thickness(at, behind_w, direction) + travel;
             } else {
                 // Still behind, now by less than the thickness and two of
                 // this step: in front of something new, which it hit
@@ -287,7 +439,10 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
         }
         was_behind = is_behind;
         before = s;
-        grown *= ratio;
+        if !shortened {
+            grown *= ratio;
+            i++;
+        }
     }
     if hit < 0.0 { return missed; }
     let uv = line_uv(line, hit);

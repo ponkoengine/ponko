@@ -45,6 +45,9 @@ pub(super) const SPREAD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Fl
 pub(super) const HITS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 /// The copy of the scene depth the trace reads (see `ssr.wgsl`).
 pub(super) const DEPTH_COPY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+/// The coarse depth's blocks: each of its pixels holds the nearest depth of
+/// this many pixels squared of the copy (`CELL` in `ssr.wgsl`).
+const COARSE_CELL: u32 = 8;
 
 /// Lets the cost test time frames with and without the filtered levels.
 #[cfg(test)]
@@ -69,6 +72,9 @@ pub(super) struct Ssr {
     /// `ssr.wgsl`).
     depth_layout: wgpu::BindGroupLayout,
     depth_pipeline: wgpu::RenderPipeline,
+    /// The coarse depth (see `ssr.wgsl`), from the copy.
+    coarse_layout: wgpu::BindGroupLayout,
+    coarse_pipeline: wgpu::RenderPipeline,
     /// Without GTAO: the first level's mark and the cone's spread.
     mark_pipeline: wgpu::RenderPipeline,
     blur_layout: wgpu::BindGroupLayout,
@@ -115,6 +121,9 @@ pub(super) struct SsrTargets {
     depth_group: wgpu::BindGroup,
     /// The depth copy (see `ssr.wgsl`), written before the trace each frame.
     depth_copy: wgpu::TextureView,
+    /// The coarse depth, made from the copy before the trace each frame.
+    coarse: wgpu::TextureView,
+    coarse_group: wgpu::BindGroup,
 }
 
 /// The filtered levels' pass: the compute shader writes them to `levels`,
@@ -145,6 +154,12 @@ impl SsrTargets {
     /// declare.
     pub fn depth_copy(&self) -> &wgpu::TextureView {
         &self.depth_copy
+    }
+
+    /// The coarse depth the trace reads (see `ssr.wgsl`): for checking it
+    /// against what the frame's passes declare.
+    pub fn coarse_depth(&self) -> &wgpu::TextureView {
+        &self.coarse
     }
 
     /// The cone's spread, as the trace writes it, and filled in (see the
@@ -187,6 +202,8 @@ impl Ssr {
                     },
                     count: None,
                 },
+                // The coarse depth.
+                texture(11, wgpu::TextureSampleType::Float { filterable: false }, false),
             ],
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("ssr.wgsl"));
@@ -274,6 +291,12 @@ impl Ssr {
         };
         let fill_pipeline = own("fs_fill", &fill_layout, SPREAD_FORMAT);
         let depth_pipeline = own("fs_depth", &depth_layout, DEPTH_COPY_FORMAT);
+        // The coarse depth reads the copy.
+        let coarse_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("screen reflection coarse depth"),
+            entries: &[texture(0, wgpu::TextureSampleType::Float { filterable: false }, false)],
+        });
+        let coarse_pipeline = own("fs_coarse", &coarse_layout, DEPTH_COPY_FORMAT);
         let mark_pipeline = pipeline("fs_mark", &[target(SCREEN_FORMAT)]);
         let compute = |binding, ty| wgpu::BindGroupLayoutEntry {
             binding,
@@ -366,6 +389,8 @@ impl Ssr {
             fill_pipeline,
             depth_layout,
             depth_pipeline,
+            coarse_layout,
+            coarse_pipeline,
             mark_pipeline,
             blur_layout,
             blur_pipeline,
@@ -470,6 +495,19 @@ impl Ssr {
         };
         let hits = sized("screen reflection hits", half_size, HITS_FORMAT);
         let depth_copy = sized("screen reflection depth", size, DEPTH_COPY_FORMAT);
+        let coarse = sized(
+            "screen reflection coarse depth",
+            (size.0.div_ceil(COARSE_CELL), size.1.div_ceil(COARSE_CELL)),
+            DEPTH_COPY_FORMAT,
+        );
+        let coarse_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("screen reflection coarse depth"),
+            layout: &self.coarse_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&depth_copy),
+            }],
+        });
         let depth_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("screen reflection depth"),
             layout: &self.depth_layout,
@@ -499,6 +537,10 @@ impl Ssr {
                     wgpu::BindGroupEntry {
                         binding: 3,
                         resource: self.uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: wgpu::BindingResource::TextureView(&coarse),
                     },
                 ],
             })
@@ -620,6 +662,8 @@ impl Ssr {
             mark_group: group(&spread),
             depth_group,
             depth_copy,
+            coarse,
+            coarse_group,
             history,
             ao: level(0),
             output: level(1),
@@ -648,6 +692,15 @@ impl Ssr {
             &targets.depth_group,
             &targets.depth_copy,
             time("reflection depth"),
+        );
+        super::gpu3d::mark_step("reflection coarse depth");
+        self.full_screen(
+            encoder,
+            "3d screen reflection coarse depth",
+            &self.coarse_pipeline,
+            &targets.coarse_group,
+            &targets.coarse,
+            time("reflection coarse depth"),
         );
         super::gpu3d::mark_step("reflections");
         if targets.unmarked.swap(false, Ordering::Relaxed) {
@@ -822,6 +875,7 @@ impl SsrTargets {
             ("reflection hits", &self.hits),
             ("reflection spread", &self.spread),
             ("reflection depth", &self.depth_copy),
+            ("reflection coarse depth", &self.coarse),
         ] {
             t.view(C::FrameTargets, label, view);
         }

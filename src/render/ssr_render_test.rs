@@ -795,6 +795,13 @@ use super::render_test_support::{Image, check_reference, reference_rejects};
 /// floor's ray reaches it after about 0.7. The high bar's, after about 2.6.
 /// Returns the floor points that mirror a point on each, low then high.
 fn bars_over_a_floor(stage: &mut Stage, roughness: f32) -> (Vec3, Vec3) {
+    bars(stage, roughness, true)
+}
+
+/// The bars of [`bars_over_a_floor`]; without the `mirror`, their mirror
+/// images instead (upside down under the floor's plane, with no floor):
+/// what a true mirror shows.
+fn bars(stage: &mut Stage, roughness: f32, mirror: bool) -> (Vec3, Vec3) {
     let floor = stage.mesh(
         &MeshData::cube(1.0),
         MaterialDesc {
@@ -812,9 +819,20 @@ fn bars_over_a_floor(stage: &mut Stage, roughness: f32) -> (Vec3, Vec3) {
             ..Default::default()
         },
     );
-    stage.block(floor, vec3(-10.0, -1.0, -10.0), vec3(10.0, 0.0, 10.0));
-    stage.block(glow, vec3(-2.6, 0.22, -0.03), vec3(-0.2, 0.28, 0.03));
-    stage.block(glow, vec3(0.2, 1.17, -0.03), vec3(2.6, 1.23, 0.03));
+    let flip = if mirror {
+        stage.block(floor, vec3(-10.0, -1.0, -10.0), vec3(10.0, 0.0, 10.0));
+        1.0
+    } else {
+        -1.0
+    };
+    let bar = |lo: Vec3, hi: Vec3| {
+        let (a, b) = (lo * vec3(1.0, flip, 1.0), hi * vec3(1.0, flip, 1.0));
+        (a.min(b), a.max(b))
+    };
+    let (lo, hi) = bar(vec3(-2.6, 0.22, -0.03), vec3(-0.2, 0.28, 0.03));
+    stage.block(glow, lo, hi);
+    let (lo, hi) = bar(vec3(0.2, 1.17, -0.03), vec3(2.6, 1.23, 0.03));
+    stage.block(glow, lo, hi);
     stage.ctx.scene3d.lighting.sun_intensity = 0.0;
     stage.ctx.scene3d.lighting.ambient_intensity = 0.0;
     stage.ctx.scene3d.post.exposure = -5.0;
@@ -1106,6 +1124,26 @@ fn reflection_gpu_cost(name: &str, quality: crate::render::GraphicsQuality, ao: 
     true
 }
 
+/// What a true mirror shows of the bars of [`bars_over_a_floor`]: the
+/// (peak, RMS width) of each one's mirror image (see `vertical_profile`),
+/// low then high.
+fn true_bar_reflections() -> Option<BarProfiles> {
+    let mut stage = Stage::new()?;
+    let (low, high) = bars(&mut stage, 0.0, false);
+    let on = stage.settled(2);
+    let off = Image {
+        width: on.width,
+        height: on.height,
+        rgba: vec![0; on.rgba.len()],
+    };
+    let found = [
+        vertical_profile(&stage, &on, &off, low),
+        vertical_profile(&stage, &on, &off, high),
+    ];
+    stage.finish();
+    Some(found)
+}
+
 #[test]
 fn contact_reflections_stay_sharper_than_distant_ones_on_a_rough_floor() {
     for ao in [false, true] {
@@ -1122,9 +1160,16 @@ fn contact_reflections_stay_sharper(ao: bool) {
         return;
     };
     rough_stage.finish();
+    if let Some(truth) = true_bar_reflections() {
+        eprintln!("true mirror: (peak, RMS width) {truth:?}");
+    }
     // How much of the mirror's peak each reflection keeps, and how much
     // wider the contact reflection is. (Blurred by roughness alone, the
-    // contact reflection kept 0.19 of its peak and grew 3.2 times wider.)
+    // contact reflection kept 0.19 of its peak and grew 3.2 times wider.
+    // The mirror's own contact reflection is about as thin as a true
+    // mirror's, 0.87 pixels RMS to its 0.5: when the trace assumed things
+    // were thicker it was 1.32, and the rough one kept 0.75 of its peak
+    // and was 1.17 times as wide.)
     let kept = [rough[0].0 / mirror[0].0, rough[1].0 / mirror[1].0];
     let wider = rough[0].1 / mirror[0].1;
     eprintln!(
@@ -1132,9 +1177,9 @@ fn contact_reflections_stay_sharper(ao: bool) {
          {kept:.2?}, contact x{wider:.2} wider"
     );
     assert!(kept[1] < 0.25, "the distant reflection blurs: x{:.2}", kept[1]);
-    assert!(kept[0] > 0.5, "the contact reflection stays sharp: x{:.2}", kept[0]);
-    assert!(kept[0] > kept[1] * 3.0, "far more than the distant one: {kept:.2?}");
-    assert!(wider < 1.6, "and about as narrow as the mirror's: x{wider:.2}");
+    assert!(kept[0] > 0.35, "the contact reflection stays sharp: x{:.2}", kept[0]);
+    assert!(kept[0] > kept[1] * 2.0, "far more than the distant one: {kept:.2?}");
+    assert!(wider < 2.4, "and not much wider than the mirror's: x{wider:.2}");
 }
 
 #[test]
@@ -1449,10 +1494,12 @@ fn rail_reflections() -> Option<(RailBands, [Image; 2], Stage)> {
 /// a ray, and a crossing used to allow two of them of the ray's travel:
 /// rays that passed well below a rail counted as hits, and its reflection
 /// was a slab (RMS width 4.17, 3.57, 2.58 and 2.17 times the rail's,
-/// nearest to farthest, and up to 2.4 times its light). Now 1.6 to 2 times,
-/// and the light about the rail's. Some rays still step over the nearest
-/// rail without TAA, so its reflection is dotted and keeps about half the
-/// light: what this allows.
+/// nearest to farthest, and up to 2.4 times its light). Then 1.6 to 2
+/// times, with the nearest rail dotted (rays stepped over it) and keeping
+/// half its light. Now a long step reads the coarse depth along what it
+/// jumps over, and the trace assumes a rail as deep as it is tall: 1 to
+/// 1.15 times, and about the light a true mirror shows (see
+/// `far_thin_things_are_reflected_about_as_wide_as_in_a_true_mirror`).
 #[test]
 fn far_thin_things_stay_thin_in_reflections_without_taa() {
     let Some((rails, [image, off], stage)) = rail_reflections() else {
@@ -1472,19 +1519,19 @@ fn far_thin_things_stay_thin_in_reflections_without_taa() {
     for (d, [seen, reflected]) in [8, 14, 22, 32].iter().zip(&rails) {
         wider += reflected.1 / seen.1 / 4.0;
         assert!(
-            reflected.0 > seen.0 * 0.4,
+            reflected.0 > seen.0 * 0.7,
             "the rail {d} away is reflected: energy {:.1} of {:.1}",
             reflected.0,
             seen.0
         );
         assert!(
-            reflected.1 < seen.1 * 2.2,
+            reflected.1 < seen.1 * 1.4,
             "the rail {d} away is reflected thin: RMS width {:.2}, the rail's {:.2}",
             reflected.1,
             seen.1
         );
     }
-    assert!(wider < 2.0, "on average about as thin as the rails: x{wider:.2}");
+    assert!(wider < 1.25, "on average about as thin as the rails: x{wider:.2}");
     check_reference(
         "regression_ssr_far_rails",
         &image,
@@ -1627,7 +1674,10 @@ fn true_rail_reflections() -> Option<Vec<(f32, f32)>> {
     })?;
     let rails = rails(&mut stage, false);
     let image = stage.settled(2);
-    let found = rails.iter().map(|&(_, at)| band(&stage, &image, None, at, 30)).collect();
+    let found = rails
+        .iter()
+        .map(|&(_, at)| band(&stage, &image, None, at, 30))
+        .collect();
     stage.finish();
     Some(found)
 }
@@ -1649,6 +1699,16 @@ fn far_thin_things_are_reflected_about_as_wide_as_in_a_true_mirror() {
             truth.0, truth.1, reflected.0, reflected.1
         );
         widths.push(wider);
+        assert!(
+            reflected.0 > truth.0 * 0.6,
+            "the rail {d} away is reflected whole, not dotted: energy {:.1} of {:.1}",
+            reflected.0,
+            truth.0
+        );
+        assert!(
+            (0.75..1.25).contains(&wider),
+            "the rail {d} away is reflected about as wide as in a true mirror: x{wider:.2}"
+        );
     }
 }
 
@@ -1702,5 +1762,60 @@ fn soft_particles_draw_with_temporal_antialiasing() {
     let (above, floor_line) = (at(vec3(0.0, 0.8, 0.0)), at(vec3(0.0, 0.0, 0.0)));
     eprintln!("soft particle with TAA: above the floor {above}, where it meets the floor {floor_line}");
     assert!(above > 60, "the particle shows above the floor: {above}");
-    assert!(floor_line < above, "it fades where it meets the floor: {floor_line} of {above}");
+    assert!(
+        floor_line < above,
+        "it fades where it meets the floor: {floor_line} of {above}"
+    );
+}
+
+/// The bars of [`bars_over_a_floor`] at 1920x1080 without TAA, each
+/// reflection (energy, RMS width; see `band`) against what a true mirror
+/// shows: about as wide (1.31 and 1.17 times; the trace assumes each bar
+/// as deep as it is tall, as it is, and its half-size image widens it a
+/// little). Assumed as thick as the distance alone said (0.1 + 0.02 w), the
+/// same march made them 2.3 and 2.2 times as wide.
+#[test]
+fn thin_bars_are_reflected_about_as_wide_as_in_a_true_mirror_at_full_hd() {
+    let setup = || super::regression_stage::Setup {
+        size: (1920, 1080),
+        ..Default::default()
+    };
+    let Some(mut truth) = Stage::with(setup()) else {
+        return;
+    };
+    let (low, high) = bars(&mut truth, 0.0, false);
+    let image = truth.settled(2);
+    let true_bands = [
+        band(&truth, &image, None, low, 40),
+        band(&truth, &image, None, high, 40),
+    ];
+    truth.finish();
+    let mut stage = Stage::with(setup()).unwrap();
+    bars_over_a_floor(&mut stage, 0.0);
+    let off = stage.settled(2);
+    stage.ctx.scene3d.post.ssr = 1.0;
+    let on = stage.settled(4);
+    let bands = [
+        band(&stage, &on, Some(&off), low, 40),
+        band(&stage, &on, Some(&off), high, 40),
+    ];
+    stage.finish();
+    for (name, (truth, reflected)) in ["low", "high"].iter().zip(true_bands.iter().zip(&bands)) {
+        eprintln!(
+            "{name} bar: true mirror (energy {:.1}, RMS width {:.2}), screen-space (energy {:.1}, RMS width {:.2})",
+            truth.0, truth.1, reflected.0, reflected.1
+        );
+        assert!(
+            reflected.0 > truth.0 * 0.7,
+            "the {name} bar is reflected: energy {:.1} of {:.1}",
+            reflected.0,
+            truth.0
+        );
+        assert!(
+            reflected.1 < truth.1 * 1.5,
+            "the {name} bar is reflected not much wider than in a true mirror: RMS width {:.2} to {:.2}",
+            reflected.1,
+            truth.1
+        );
+    }
 }
