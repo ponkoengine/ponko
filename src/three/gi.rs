@@ -233,6 +233,28 @@ pub(crate) struct GiUpdate {
     pub keep: f32,
 }
 
+/// How much more often a probe whose light is changing looks around: its
+/// turn comes `1 + GI_CHANGE_BOOST * change` times sooner, `change` being
+/// how much its light changed the last time it looked, as a fraction of
+/// the light (at most 1); one whose light has settled changes by under a
+/// hundredth at each look. Stronger, the probes that haven't seen a change
+/// yet wait too long: at 32 a wall taken away still lit the floor beside
+/// it at 92% after a round of updates (at 8: 54%).
+pub(crate) const GI_CHANGE_BOOST: f32 = 4.0;
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: pick the probes by age and distance alone, as before
+    /// changing probes went first (the negative control).
+    pub(crate) static GI_UNBOOSTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// How much each slot's light changed the last time it looked around, as a
+/// fraction of its light: the renderer reads it back from the GPU a frame
+/// or two late (see `render/gi.rs`) and leaves it here; empty or another
+/// grid's length until then.
+pub(crate) type GiChanges = std::sync::Arc<std::sync::Mutex<Vec<f32>>>;
+
 /// Which probe each slot holds, and how long ago it looked around: what
 /// picks the probes to update.
 #[derive(Default)]
@@ -241,12 +263,14 @@ pub(crate) struct GiProbes {
     held: Vec<Option<IVec3>>,
     age: Vec<u32>,
     order: Vec<(bool, f32, u32)>,
+    changes: GiChanges,
 }
 
 impl GiProbes {
     /// Moves the grid to the camera and picks the `budget` probes to update
     /// into `out`: probes no slot holds yet (nearest first), then the ones
-    /// that looked longest ago, nearer ones sooner.
+    /// that looked longest ago, nearer ones and changing ones sooner (see
+    /// [`GI_CHANGE_BOOST`]).
     pub fn plan(
         &mut self,
         counts: [u32; 3],
@@ -271,6 +295,12 @@ impl GiProbes {
         self.held.resize(total, None);
         self.age.resize(total, 0);
         self.order.clear();
+        // A poisoned lock only means a renderer panicked mid-write: the
+        // changes are a hint, so then they're left out.
+        let changes = self.changes.lock().ok();
+        let changes = changes.as_deref().filter(|c| c.len() == total);
+        #[cfg(test)]
+        let changes = changes.filter(|_| !GI_UNBOOSTED.with(|u| u.get()));
         for slot in 0..total {
             let cell = self.grid.cell(slot);
             let distance = self.grid.position(cell).distance(camera) / spacing;
@@ -278,7 +308,8 @@ impl GiProbes {
             let score = if missing {
                 -distance
             } else {
-                self.age[slot] as f32 / (1.0 + distance)
+                let change = changes.map_or(0.0, |c| c[slot].clamp(0.0, 1.0));
+                self.age[slot] as f32 * (1.0 + GI_CHANGE_BOOST * change) / (1.0 + distance)
             };
             self.order.push((missing, score, slot as u32));
         }
@@ -434,6 +465,12 @@ impl Frame3D {
 }
 
 impl GiFrame {
+    /// Where the renderer leaves how much each slot's light changed (see
+    /// [`GiChanges`]).
+    pub(crate) fn changes(&self) -> &GiChanges {
+        &self.probes.changes
+    }
+
     /// [`batch_views`](Self::batch_views), for the views' box `lo..hi`.
     ///
     /// A probe's face looking along `forward` sees a point at least as far
