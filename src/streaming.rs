@@ -697,9 +697,9 @@ impl Ctx {
     /// failed, or held by its residency budget), and every
     /// [asset group](crate::assets::AssetGroup) is ready, failed or
     /// cancelled (a failed one with what it had started before failing
-    /// loaded or failed too, so its progress is the same every run), uploading without the per-frame budgets, and evicting
-    /// what the residency budgets need gone as the frame's streaming step
-    /// does. For tests and tools; it blocks the game thread, which a
+    /// loaded or failed too, so its progress is the same every run),
+    /// uploading without the per-frame budgets, and evicting what the
+    /// residency budgets need gone as the frame's streaming step does. For tests and tools; it blocks the game thread, which a
     /// loading screen that keeps drawing avoids. On `Ctx` because eviction
     /// looks at what the game's world shows.
     ///
