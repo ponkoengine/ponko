@@ -193,6 +193,20 @@ impl core::fmt::Debug for ponko_ffi::PonkoBusEffectKind
 pub fn ponko_ffi::PonkoBusEffectKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoBusEffectKind
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoBusEffectKind
+#[repr(C)] pub enum ponko_ffi::PonkoCloudQuality
+pub ponko_ffi::PonkoCloudQuality::PONKO_CLOUDS_FLAT = 0
+pub ponko_ffi::PonkoCloudQuality::PONKO_CLOUDS_HIGH = 3
+pub ponko_ffi::PonkoCloudQuality::PONKO_CLOUDS_LOW = 1
+pub ponko_ffi::PonkoCloudQuality::PONKO_CLOUDS_MEDIUM = 2
+impl core::clone::Clone for ponko_ffi::PonkoCloudQuality
+pub fn ponko_ffi::PonkoCloudQuality::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoCloudQuality
+impl core::cmp::PartialEq for ponko_ffi::PonkoCloudQuality
+pub fn ponko_ffi::PonkoCloudQuality::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoCloudQuality
+pub fn ponko_ffi::PonkoCloudQuality::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoCloudQuality
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoCloudQuality
 #[repr(u32)] pub enum ponko_ffi::PonkoControllerFamily
 pub ponko_ffi::PonkoControllerFamily::PONKO_FAMILY_GENERIC = 0
 pub ponko_ffi::PonkoControllerFamily::PONKO_FAMILY_NINTENDO = 3
@@ -266,6 +280,19 @@ impl core::fmt::Debug for ponko_ffi::PonkoCursorIcon
 pub fn ponko_ffi::PonkoCursorIcon::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoCursorIcon
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoCursorIcon
+#[repr(C)] pub enum ponko_ffi::PonkoDebugDraw
+pub ponko_ffi::PonkoDebugDraw::PONKO_DEBUG_DRAW_DEFAULT
+pub ponko_ffi::PonkoDebugDraw::PONKO_DEBUG_DRAW_OFF
+pub ponko_ffi::PonkoDebugDraw::PONKO_DEBUG_DRAW_ON
+impl core::clone::Clone for ponko_ffi::PonkoDebugDraw
+pub fn ponko_ffi::PonkoDebugDraw::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoDebugDraw
+impl core::cmp::PartialEq for ponko_ffi::PonkoDebugDraw
+pub fn ponko_ffi::PonkoDebugDraw::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoDebugDraw
+pub fn ponko_ffi::PonkoDebugDraw::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoDebugDraw
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoDebugDraw
 #[repr(u32)] pub enum ponko_ffi::PonkoDebugView
 pub ponko_ffi::PonkoDebugView::PONKO_DEBUG_VIEW_BOUNDS = 2
 pub ponko_ffi::PonkoDebugView::PONKO_DEBUG_VIEW_COLLIDERS = 0
@@ -328,6 +355,19 @@ impl core::fmt::Debug for ponko_ffi::PonkoErrorKind
 pub fn ponko_ffi::PonkoErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoErrorKind
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoErrorKind
+#[repr(C)] pub enum ponko_ffi::PonkoEventTarget
+pub ponko_ffi::PonkoEventTarget::PONKO_EVENT_TO_CLIENT = 1
+pub ponko_ffi::PonkoEventTarget::PONKO_EVENT_TO_CLIENTS = 2
+pub ponko_ffi::PonkoEventTarget::PONKO_EVENT_TO_SERVER = 0
+impl core::clone::Clone for ponko_ffi::PonkoEventTarget
+pub fn ponko_ffi::PonkoEventTarget::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoEventTarget
+impl core::cmp::PartialEq for ponko_ffi::PonkoEventTarget
+pub fn ponko_ffi::PonkoEventTarget::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoEventTarget
+pub fn ponko_ffi::PonkoEventTarget::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoEventTarget
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoEventTarget
 #[repr(C)] pub enum ponko_ffi::PonkoFieldQuantize
 pub ponko_ffi::PonkoFieldQuantize::PONKO_FIELD_ANGLE
 pub ponko_ffi::PonkoFieldQuantize::PONKO_FIELD_BITS
@@ -531,6 +571,19 @@ impl core::fmt::Debug for ponko_ffi::PonkoHandleKind
 pub fn ponko_ffi::PonkoHandleKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoHandleKind
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoHandleKind
+#[repr(C)] pub enum ponko_ffi::PonkoHookKind
+pub ponko_ffi::PonkoHookKind::PONKO_HOOK_ADD = 0
+pub ponko_ffi::PonkoHookKind::PONKO_HOOK_REMOVE = 2
+pub ponko_ffi::PonkoHookKind::PONKO_HOOK_REPLACE = 1
+impl core::clone::Clone for ponko_ffi::PonkoHookKind
+pub fn ponko_ffi::PonkoHookKind::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoHookKind
+impl core::cmp::PartialEq for ponko_ffi::PonkoHookKind
+pub fn ponko_ffi::PonkoHookKind::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoHookKind
+pub fn ponko_ffi::PonkoHookKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoHookKind
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoHookKind
 #[repr(C)] pub enum ponko_ffi::PonkoHumanBone
 pub ponko_ffi::PonkoHumanBone::PONKO_HUMAN_BONE_CHEST = 3
 pub ponko_ffi::PonkoHumanBone::PONKO_HUMAN_BONE_HEAD = 6
@@ -633,6 +686,19 @@ impl core::fmt::Debug for ponko_ffi::PonkoInterestChangeKind
 pub fn ponko_ffi::PonkoInterestChangeKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoInterestChangeKind
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoInterestChangeKind
+#[repr(C)] pub enum ponko_ffi::PonkoJointChannel
+pub ponko_ffi::PonkoJointChannel::PONKO_JOINT_ROTATION = 1
+pub ponko_ffi::PonkoJointChannel::PONKO_JOINT_SCALE = 2
+pub ponko_ffi::PonkoJointChannel::PONKO_JOINT_TRANSLATION = 0
+impl core::clone::Clone for ponko_ffi::PonkoJointChannel
+pub fn ponko_ffi::PonkoJointChannel::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoJointChannel
+impl core::cmp::PartialEq for ponko_ffi::PonkoJointChannel
+pub fn ponko_ffi::PonkoJointChannel::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoJointChannel
+pub fn ponko_ffi::PonkoJointChannel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoJointChannel
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoJointChannel
 #[repr(C)] pub enum ponko_ffi::PonkoJointMotionKind
 pub ponko_ffi::PonkoJointMotionKind::PONKO_JOINT_FREE = 0
 pub ponko_ffi::PonkoJointMotionKind::PONKO_JOINT_LIMITED = 2
@@ -1888,6 +1954,44 @@ impl core::fmt::Debug for ponko_ffi::PonkoAuthority
 pub fn ponko_ffi::PonkoAuthority::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoAuthority
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoAuthority
+#[repr(C)] pub struct ponko_ffi::PonkoBakeModel
+pub ponko_ffi::PonkoBakeModel::albedo: ponko_ffi::PonkoColor
+pub ponko_ffi::PonkoBakeModel::double_sided: bool
+pub ponko_ffi::PonkoBakeModel::emissive: ponko_ffi::PonkoColor
+pub ponko_ffi::PonkoBakeModel::lightmapped: bool
+pub ponko_ffi::PonkoBakeModel::mesh: *const ponko_ffi::PonkoMeshData
+pub ponko_ffi::PonkoBakeModel::struct_size: u32
+pub ponko_ffi::PonkoBakeModel::transform: ponko_ffi::PonkoTransform3D
+pub ponko_ffi::PonkoBakeModel::version: u32
+impl core::clone::Clone for ponko_ffi::PonkoBakeModel
+pub fn ponko_ffi::PonkoBakeModel::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoBakeModel
+pub fn ponko_ffi::PonkoBakeModel::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoBakeModel
+pub fn ponko_ffi::PonkoBakeModel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoBakeModel
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoBakeModel
+pub struct ponko_ffi::PonkoBakedLighting(_)
+#[repr(C)] pub struct ponko_ffi::PonkoBakedLightingInfo
+pub ponko_ffi::PonkoBakedLightingInfo::directional: bool
+pub ponko_ffi::PonkoBakedLightingInfo::gpu_bytes: u64
+pub ponko_ffi::PonkoBakedLightingInfo::inside_texels: u64
+pub ponko_ffi::PonkoBakedLightingInfo::page_size: u32
+pub ponko_ffi::PonkoBakedLightingInfo::pages: u32
+pub ponko_ffi::PonkoBakedLightingInfo::probes: u64
+pub ponko_ffi::PonkoBakedLightingInfo::rays: u64
+pub ponko_ffi::PonkoBakedLightingInfo::seconds: f64
+pub ponko_ffi::PonkoBakedLightingInfo::struct_size: u32
+pub ponko_ffi::PonkoBakedLightingInfo::texels: u64
+pub ponko_ffi::PonkoBakedLightingInfo::version: u32
+impl core::clone::Clone for ponko_ffi::PonkoBakedLightingInfo
+pub fn ponko_ffi::PonkoBakedLightingInfo::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoBakedLightingInfo
+pub fn ponko_ffi::PonkoBakedLightingInfo::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoBakedLightingInfo
+pub fn ponko_ffi::PonkoBakedLightingInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoBakedLightingInfo
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoBakedLightingInfo
 pub struct ponko_ffi::PonkoBehaviorTree(_)
 pub struct ponko_ffi::PonkoBrain
 #[repr(C)] pub struct ponko_ffi::PonkoBusEffect
@@ -1952,6 +2056,7 @@ impl core::marker::Copy for ponko_ffi::PonkoCamera3D
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoCamera3D
 #[repr(C)] pub struct ponko_ffi::PonkoCamera3DEx
 pub ponko_ffi::PonkoCamera3DEx::camera: ponko_ffi::PonkoCamera3D
+pub ponko_ffi::PonkoCamera3DEx::debug_draw: u32
 pub ponko_ffi::PonkoCamera3DEx::occlusion_culling: bool
 pub ponko_ffi::PonkoCamera3DEx::particles: bool
 pub ponko_ffi::PonkoCamera3DEx::struct_size: u32
@@ -2242,6 +2347,25 @@ impl core::fmt::Debug for ponko_ffi::PonkoCrowdOptions
 pub fn ponko_ffi::PonkoCrowdOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoCrowdOptions
 pub struct ponko_ffi::PonkoCtx
+#[repr(C)] pub struct ponko_ffi::PonkoDayNight
+pub ponko_ffi::PonkoDayNight::day: u32
+pub ponko_ffi::PonkoDayNight::days_per_moon: f32
+pub ponko_ffi::PonkoDayNight::first_phase: f32
+pub ponko_ffi::PonkoDayNight::hour: f32
+pub ponko_ffi::PonkoDayNight::hours_per_second: f32
+pub ponko_ffi::PonkoDayNight::night_light: ponko_ffi::PonkoColor
+pub ponko_ffi::PonkoDayNight::struct_size: u32
+pub ponko_ffi::PonkoDayNight::sun_color: ponko_ffi::PonkoColor
+pub ponko_ffi::PonkoDayNight::sun_intensity: f32
+pub ponko_ffi::PonkoDayNight::version: u32
+impl core::clone::Clone for ponko_ffi::PonkoDayNight
+pub fn ponko_ffi::PonkoDayNight::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoDayNight
+pub fn ponko_ffi::PonkoDayNight::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoDayNight
+pub fn ponko_ffi::PonkoDayNight::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoDayNight
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoDayNight
 #[repr(C)] pub struct ponko_ffi::PonkoDebugStats
 pub ponko_ffi::PonkoDebugStats::labels: usize
 pub ponko_ffi::PonkoDebugStats::lines_2d: usize
@@ -2717,6 +2841,19 @@ impl core::fmt::Debug for ponko_ffi::PonkoHit3D
 pub fn ponko_ffi::PonkoHit3D::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoHit3D
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoHit3D
+#[repr(C)] pub struct ponko_ffi::PonkoHookEvent
+pub ponko_ffi::PonkoHookEvent::component: u32
+pub ponko_ffi::PonkoHookEvent::entity: u64
+pub ponko_ffi::PonkoHookEvent::kind: u32
+pub ponko_ffi::PonkoHookEvent::new_value: *const core::ffi::c_void
+pub ponko_ffi::PonkoHookEvent::size: usize
+pub ponko_ffi::PonkoHookEvent::value: *const core::ffi::c_void
+impl core::clone::Clone for ponko_ffi::PonkoHookEvent
+pub fn ponko_ffi::PonkoHookEvent::clone(&self) -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoHookEvent
+pub fn ponko_ffi::PonkoHookEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoHookEvent
+pub struct ponko_ffi::PonkoHookWorld
 pub struct ponko_ffi::PonkoHumanoidMap(_)
 #[repr(C)] pub struct ponko_ffi::PonkoImeEvent
 pub ponko_ffi::PonkoImeEvent::cursor_end: usize
@@ -2906,6 +3043,18 @@ impl core::fmt::Debug for ponko_ffi::PonkoJointMotion3D
 pub fn ponko_ffi::PonkoJointMotion3D::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoJointMotion3D
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoJointMotion3D
+#[repr(C)] pub struct ponko_ffi::PonkoJointTrack
+pub ponko_ffi::PonkoJointTrack::channel: u32
+pub ponko_ffi::PonkoJointTrack::count: usize
+pub ponko_ffi::PonkoJointTrack::interpolation: u32
+pub ponko_ffi::PonkoJointTrack::joint: u32
+pub ponko_ffi::PonkoJointTrack::times: *const f32
+pub ponko_ffi::PonkoJointTrack::values: *const f32
+impl core::clone::Clone for ponko_ffi::PonkoJointTrack
+pub fn ponko_ffi::PonkoJointTrack::clone(&self) -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoJointTrack
+pub fn ponko_ffi::PonkoJointTrack::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoJointTrack
 pub struct ponko_ffi::PonkoLatestWins(_)
 #[repr(C)] pub struct ponko_ffi::PonkoLdtkOptions
 pub ponko_ffi::PonkoLdtkOptions::at_world_position: bool
@@ -2954,6 +3103,26 @@ pub fn ponko_ffi::PonkoLevelOptions::clone(&self) -> Self
 impl core::fmt::Debug for ponko_ffi::PonkoLevelOptions
 pub fn ponko_ffi::PonkoLevelOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoLevelOptions
+pub struct ponko_ffi::PonkoLightBakeScene(_)
+#[repr(C)] pub struct ponko_ffi::PonkoLightBakeSettings
+pub ponko_ffi::PonkoLightBakeSettings::bounces: u32
+pub ponko_ffi::PonkoLightBakeSettings::denoise: bool
+pub ponko_ffi::PonkoLightBakeSettings::directional: bool
+pub ponko_ffi::PonkoLightBakeSettings::page_size: u32
+pub ponko_ffi::PonkoLightBakeSettings::probe_spacing: f32
+pub ponko_ffi::PonkoLightBakeSettings::samples: u32
+pub ponko_ffi::PonkoLightBakeSettings::seed: u64
+pub ponko_ffi::PonkoLightBakeSettings::struct_size: u32
+pub ponko_ffi::PonkoLightBakeSettings::texels_per_unit: f32
+pub ponko_ffi::PonkoLightBakeSettings::version: u32
+impl core::clone::Clone for ponko_ffi::PonkoLightBakeSettings
+pub fn ponko_ffi::PonkoLightBakeSettings::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoLightBakeSettings
+pub fn ponko_ffi::PonkoLightBakeSettings::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoLightBakeSettings
+pub fn ponko_ffi::PonkoLightBakeSettings::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoLightBakeSettings
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoLightBakeSettings
 #[repr(C)] pub struct ponko_ffi::PonkoLighting
 pub ponko_ffi::PonkoLighting::ambient_intensity: f32
 pub ponko_ffi::PonkoLighting::equator_color: ponko_ffi::PonkoColor
@@ -2999,6 +3168,36 @@ impl core::fmt::Debug for ponko_ffi::PonkoLightingEx
 pub fn ponko_ffi::PonkoLightingEx::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoLightingEx
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoLightingEx
+#[repr(C)] pub struct ponko_ffi::PonkoLightmapRect
+pub ponko_ffi::PonkoLightmapRect::height: u32
+pub ponko_ffi::PonkoLightmapRect::page: u32
+pub ponko_ffi::PonkoLightmapRect::width: u32
+pub ponko_ffi::PonkoLightmapRect::x: u32
+pub ponko_ffi::PonkoLightmapRect::y: u32
+impl core::clone::Clone for ponko_ffi::PonkoLightmapRect
+pub fn ponko_ffi::PonkoLightmapRect::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoLightmapRect
+impl core::cmp::PartialEq for ponko_ffi::PonkoLightmapRect
+pub fn ponko_ffi::PonkoLightmapRect::eq(&self, &Self) -> bool
+impl core::default::Default for ponko_ffi::PonkoLightmapRect
+pub fn ponko_ffi::PonkoLightmapRect::default() -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoLightmapRect
+pub fn ponko_ffi::PonkoLightmapRect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoLightmapRect
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoLightmapRect
+#[repr(C)] pub struct ponko_ffi::PonkoLightmapped
+pub ponko_ffi::PonkoLightmapped::index: u32
+impl core::clone::Clone for ponko_ffi::PonkoLightmapped
+pub fn ponko_ffi::PonkoLightmapped::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoLightmapped
+impl core::cmp::PartialEq for ponko_ffi::PonkoLightmapped
+pub fn ponko_ffi::PonkoLightmapped::eq(&self, &Self) -> bool
+impl core::default::Default for ponko_ffi::PonkoLightmapped
+pub fn ponko_ffi::PonkoLightmapped::default() -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoLightmapped
+pub fn ponko_ffi::PonkoLightmapped::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoLightmapped
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoLightmapped
 #[repr(C)] pub struct ponko_ffi::PonkoLine3D
 pub ponko_ffi::PonkoLine3D::blend: u32
 pub ponko_ffi::PonkoLine3D::color: ponko_ffi::PonkoColor
@@ -3039,6 +3238,25 @@ impl core::fmt::Debug for ponko_ffi::PonkoLiveCounts
 pub fn ponko_ffi::PonkoLiveCounts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoLiveCounts
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoLiveCounts
+#[repr(C)] pub struct ponko_ffi::PonkoLiveCountsEx
+pub ponko_ffi::PonkoLiveCountsEx::collision_meshes: usize
+pub ponko_ffi::PonkoLiveCountsEx::counts: ponko_ffi::PonkoLiveCounts
+pub ponko_ffi::PonkoLiveCountsEx::crowds: usize
+pub ponko_ffi::PonkoLiveCountsEx::instance_cells: usize
+pub ponko_ffi::PonkoLiveCountsEx::sky_shaders: usize
+pub ponko_ffi::PonkoLiveCountsEx::sprite_materials: usize
+pub ponko_ffi::PonkoLiveCountsEx::sprite_shaders: usize
+pub ponko_ffi::PonkoLiveCountsEx::struct_size: u32
+pub ponko_ffi::PonkoLiveCountsEx::version: u32
+impl core::clone::Clone for ponko_ffi::PonkoLiveCountsEx
+pub fn ponko_ffi::PonkoLiveCountsEx::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoLiveCountsEx
+impl core::cmp::PartialEq for ponko_ffi::PonkoLiveCountsEx
+pub fn ponko_ffi::PonkoLiveCountsEx::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoLiveCountsEx
+pub fn ponko_ffi::PonkoLiveCountsEx::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoLiveCountsEx
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoLiveCountsEx
 pub struct ponko_ffi::PonkoLobby
 #[repr(C)] pub struct ponko_ffi::PonkoLobbyEvent
 pub ponko_ffi::PonkoLobbyEvent::bytes: *const u8
@@ -3320,9 +3538,28 @@ pub fn ponko_ffi::PonkoNavBakeSettingsEx::fmt(&self, &mut core::fmt::Formatter<'
 impl core::marker::Copy for ponko_ffi::PonkoNavBakeSettingsEx
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoNavBakeSettingsEx
 pub struct ponko_ffi::PonkoNavGrid(_)
+pub struct ponko_ffi::PonkoNavMesh
 pub struct ponko_ffi::PonkoNavSources(_)
 impl core::default::Default for ponko_ffi::PonkoNavSources
 pub fn ponko_ffi::PonkoNavSources::default() -> Self
+#[repr(C)] pub struct ponko_ffi::PonkoNavView
+pub ponko_ffi::PonkoNavView::navmesh: *const ponko_ffi::PonkoNavMesh
+impl core::clone::Clone for ponko_ffi::PonkoNavView
+pub fn ponko_ffi::PonkoNavView::clone(&self) -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoNavView
+pub fn ponko_ffi::PonkoNavView::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoNavView
+#[repr(C)] pub struct ponko_ffi::PonkoNetEvent
+pub ponko_ffi::PonkoNetEvent::data: *const u8
+pub ponko_ffi::PonkoNetEvent::from: u64
+pub ponko_ffi::PonkoNetEvent::kind: u32
+pub ponko_ffi::PonkoNetEvent::size: usize
+pub ponko_ffi::PonkoNetEvent::tick: u64
+impl core::clone::Clone for ponko_ffi::PonkoNetEvent
+pub fn ponko_ffi::PonkoNetEvent::clone(&self) -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoNetEvent
+pub fn ponko_ffi::PonkoNetEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoNetEvent
 pub struct ponko_ffi::PonkoNetMessages
 #[repr(C)] pub struct ponko_ffi::PonkoOrbitCamera
 pub ponko_ffi::PonkoOrbitCamera::current: ponko_ffi::PonkoVec3
@@ -4144,6 +4381,34 @@ impl core::fmt::Debug for ponko_ffi::PonkoSky
 pub fn ponko_ffi::PonkoSky::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoSky
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoSky
+#[repr(C)] pub struct ponko_ffi::PonkoSkyKit
+pub ponko_ffi::PonkoSkyKit::altitude: f32
+pub ponko_ffi::PonkoSkyKit::coverage: f32
+pub ponko_ffi::PonkoSkyKit::density: f32
+pub ponko_ffi::PonkoSkyKit::enabled: bool
+pub ponko_ffi::PonkoSkyKit::kind: f32
+pub ponko_ffi::PonkoSkyKit::moon_brightness: f32
+pub ponko_ffi::PonkoSkyKit::moon_direction: ponko_ffi::PonkoVec3
+pub ponko_ffi::PonkoSkyKit::moon_has_direction: bool
+pub ponko_ffi::PonkoSkyKit::moon_phase: f32
+pub ponko_ffi::PonkoSkyKit::moon_size: f32
+pub ponko_ffi::PonkoSkyKit::offset: ponko_ffi::PonkoVec2
+pub ponko_ffi::PonkoSkyKit::quality: u32
+pub ponko_ffi::PonkoSkyKit::self_shadow: f32
+pub ponko_ffi::PonkoSkyKit::shadows: f32
+pub ponko_ffi::PonkoSkyKit::silver_lining: f32
+pub ponko_ffi::PonkoSkyKit::struct_size: u32
+pub ponko_ffi::PonkoSkyKit::thickness: f32
+pub ponko_ffi::PonkoSkyKit::version: u32
+pub ponko_ffi::PonkoSkyKit::wind: ponko_ffi::PonkoVec2
+impl core::clone::Clone for ponko_ffi::PonkoSkyKit
+pub fn ponko_ffi::PonkoSkyKit::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoSkyKit
+pub fn ponko_ffi::PonkoSkyKit::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoSkyKit
+pub fn ponko_ffi::PonkoSkyKit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoSkyKit
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoSkyKit
 #[repr(C)] pub struct ponko_ffi::PonkoSnapshotConfig
 pub ponko_ffi::PonkoSnapshotConfig::capacity: u32
 pub ponko_ffi::PonkoSnapshotConfig::delay: f64
@@ -4376,6 +4641,7 @@ pub fn ponko_ffi::PonkoTargetCamera::fmt(&self, &mut core::fmt::Formatter<'_>) -
 impl core::marker::Copy for ponko_ffi::PonkoTargetCamera
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoTargetCamera
 #[repr(C)] pub struct ponko_ffi::PonkoTargetCameraEx
+pub ponko_ffi::PonkoTargetCameraEx::debug_draw: u32
 pub ponko_ffi::PonkoTargetCameraEx::particles: bool
 pub ponko_ffi::PonkoTargetCameraEx::struct_size: u32
 pub ponko_ffi::PonkoTargetCameraEx::target_camera: ponko_ffi::PonkoTargetCamera
@@ -5175,6 +5441,31 @@ impl core::fmt::Debug for ponko_ffi::PonkoVelocity3D
 pub fn ponko_ffi::PonkoVelocity3D::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoVelocity3D
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoVelocity3D
+pub struct ponko_ffi::PonkoVideo(_)
+#[repr(C)] pub struct ponko_ffi::PonkoVideoState
+pub ponko_ffi::PonkoVideoState::bus: ponko_ffi::PonkoAudioBus
+pub ponko_ffi::PonkoVideoState::finished: bool
+pub ponko_ffi::PonkoVideoState::frame_time: f32
+pub ponko_ffi::PonkoVideoState::has_sound: bool
+pub ponko_ffi::PonkoVideoState::height: u32
+pub ponko_ffi::PonkoVideoState::looping: bool
+pub ponko_ffi::PonkoVideoState::playing: bool
+pub ponko_ffi::PonkoVideoState::seconds: f32
+pub ponko_ffi::PonkoVideoState::sound: ponko_ffi::PonkoSound
+pub ponko_ffi::PonkoVideoState::struct_size: u32
+pub ponko_ffi::PonkoVideoState::texture: ponko_ffi::PonkoTexture
+pub ponko_ffi::PonkoVideoState::time: f32
+pub ponko_ffi::PonkoVideoState::version: u32
+pub ponko_ffi::PonkoVideoState::volume: f32
+pub ponko_ffi::PonkoVideoState::width: u32
+impl core::clone::Clone for ponko_ffi::PonkoVideoState
+pub fn ponko_ffi::PonkoVideoState::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko_ffi::PonkoVideoState
+pub fn ponko_ffi::PonkoVideoState::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko_ffi::PonkoVideoState
+pub fn ponko_ffi::PonkoVideoState::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoVideoState
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoVideoState
 #[repr(C)] pub struct ponko_ffi::PonkoView2D
 pub ponko_ffi::PonkoView2D::camera: ponko_ffi::PonkoCamera
 pub ponko_ffi::PonkoView2D::clear: ponko_ffi::PonkoColor
@@ -5437,6 +5728,8 @@ pub struct ponko_ffi::PonkoWorld
 pub const ponko_ffi::PONKO_ABI_VERSION: u32
 pub const ponko_ffi::PONKO_ACTION_NONE: u32
 pub const ponko_ffi::PONKO_AI_EVERY_BRAIN: u64
+pub const ponko_ffi::PONKO_BAKED_LIGHTING_INFO_VERSION: u32
+pub const ponko_ffi::PONKO_BAKE_MODEL_VERSION: u32
 pub const ponko_ffi::PONKO_BLEND_ADDITIVE: u32
 pub const ponko_ffi::PONKO_BLEND_ALPHA: u32
 pub const ponko_ffi::PONKO_BLEND_MULTIPLY: u32
@@ -5445,6 +5738,7 @@ pub const ponko_ffi::PONKO_BUOYANCY_DRAG: f32
 pub const ponko_ffi::PONKO_CAMERA3D_EX_VERSION: u32
 pub const ponko_ffi::PONKO_CAMERA_SHAKE_VERSION: u32
 pub const ponko_ffi::PONKO_COLLIDER_EX_VERSION: u32
+pub const ponko_ffi::PONKO_DAY_NIGHT_VERSION: u32
 pub const ponko_ffi::PONKO_DEBUG_STYLE_EX_VERSION: u32
 pub const ponko_ffi::PONKO_DECAL_NO_IMAGE: u32
 pub const ponko_ffi::PONKO_FIRST_PERSON_CAMERA_VERSION: u32
@@ -5456,6 +5750,8 @@ pub const ponko_ffi::PONKO_LEVEL_SHAPE_POLYGON: u32
 pub const ponko_ffi::PONKO_LEVEL_SHAPE_POLYLINE: u32
 pub const ponko_ffi::PONKO_LEVEL_SHAPE_RECT: u32
 pub const ponko_ffi::PONKO_LIGHTING_EX_VERSION: u32
+pub const ponko_ffi::PONKO_LIGHT_BAKE_SETTINGS_VERSION: u32
+pub const ponko_ffi::PONKO_LIVE_COUNTS_EX_VERSION: u32
 pub const ponko_ffi::PONKO_MATERIAL_DESC_EX_VERSION: u32
 pub const ponko_ffi::PONKO_MAX_GAMEPADS: u32
 pub const ponko_ffi::PONKO_MESH_NONE: u32
@@ -5482,6 +5778,7 @@ pub const ponko_ffi::PONKO_SHADER_RELOADED: u32
 pub const ponko_ffi::PONKO_SHADER_RELOAD_FAILED: u32
 pub const ponko_ffi::PONKO_SHADER_SPRITE: u32
 pub const ponko_ffi::PONKO_SINCE_LAST_RUN: u64
+pub const ponko_ffi::PONKO_SKY_KIT_VERSION: u32
 pub const ponko_ffi::PONKO_SOUND_STARTED_VERSION: u32
 pub const ponko_ffi::PONKO_SYSTEM_ANIMATE_SPRITES: u32
 pub const ponko_ffi::PONKO_SYSTEM_DRAW_PARTICLES: u32
@@ -5514,6 +5811,7 @@ pub const ponko_ffi::PONKO_UI_NONE: u64
 pub const ponko_ffi::PONKO_UI_NO_INDEX: u64
 pub const ponko_ffi::PONKO_UI_SCREEN: u64
 pub const ponko_ffi::PONKO_UI_THEME_EX_VERSION: u32
+pub const ponko_ffi::PONKO_VIDEO_STATE_VERSION: u32
 pub const ponko_ffi::PONKO_VIEW2D_VERSION: u32
 pub const ponko_ffi::PONKO_VIEW3D_VERSION: u32
 pub const ponko_ffi::PONKO_WATER_DESC_VERSION: u32
@@ -5576,6 +5874,15 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_authority_check(*const ponko_ffi::PonkoAuthority, u64, u16, *mut ponko_ffi::PonkoAuthorityCheck) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_authority_handoff(*mut ponko_ffi::PonkoAuthority, u64, *mut u16) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_authority_new(u64) -> ponko_ffi::PonkoAuthority
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_bake_lighting(*const ponko_ffi::PonkoLightBakeScene, *const ponko_ffi::PonkoLightBakeSettings, *mut *mut ponko_ffi::PonkoBakedLighting) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_bake_model_defaults(*mut ponko_ffi::PonkoBakeModel) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_baked_lighting_free(*mut ponko_ffi::PonkoBakedLighting)
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_baked_lighting_from_bytes(*const core::ffi::c_void, usize, *mut *mut ponko_ffi::PonkoBakedLighting) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_baked_lighting_info(*const ponko_ffi::PonkoBakedLighting, *mut ponko_ffi::PonkoBakedLightingInfo) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_baked_lighting_lightmap(*const ponko_ffi::PonkoBakedLighting, usize, *mut ponko_ffi::PonkoLightmapRect, *mut ponko_ffi::PonkoLightmapped) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_baked_lighting_probe_light(*const ponko_ffi::PonkoBakedLighting, ponko_ffi::PonkoVec3, ponko_ffi::PonkoVec3, *mut ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_baked_lighting_texel(*const ponko_ffi::PonkoBakedLighting, u32, u32, u32, *mut ponko_ffi::PonkoVec3, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_baked_lighting_to_bytes(*const ponko_ffi::PonkoBakedLighting, *mut u8, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_behavior_tree_free(*mut ponko_ffi::PonkoBehaviorTree)
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_behavior_tree_len(*const ponko_ffi::PonkoBehaviorTree, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_behavior_tree_new(*const core::ffi::primitives::c_char) -> *mut ponko_ffi::PonkoBehaviorTree
@@ -5650,6 +5957,9 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_collision_mesh_data_free(*mut ponko_ffi::PonkoCollisionMeshData)
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_collision_mesh_data_heightfield(*const f32, usize, f32) -> *mut ponko_ffi::PonkoCollisionMeshData
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_collision_mesh_data_trimesh(*const ponko_ffi::PonkoVec3, usize, *const u32, usize) -> *mut ponko_ffi::PonkoCollisionMeshData
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_component_on_add(*mut ponko_ffi::PonkoWorld, u32, ponko_ffi::PonkoHookFn, *mut core::ffi::c_void, ponko_ffi::PonkoFreeUserFn) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_component_on_remove(*mut ponko_ffi::PonkoWorld, u32, ponko_ffi::PonkoHookFn, *mut core::ffi::c_void, ponko_ffi::PonkoFreeUserFn) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_component_on_replace(*mut ponko_ffi::PonkoWorld, u32, ponko_ffi::PonkoHookFn, *mut core::ffi::c_void, ponko_ffi::PonkoFreeUserFn) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_component_reflect(*mut ponko_ffi::PonkoWorld, u32, *const ponko_ffi::PonkoField, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_component_register(*mut ponko_ffi::PonkoWorld, *const core::ffi::primitives::c_char, usize, usize, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_component_require(*mut ponko_ffi::PonkoWorld, u32, u32, *const core::ffi::c_void) -> ponko_ffi::PonkoStatus
@@ -5731,6 +6041,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_animator_state(*mut ponko_ffi::PonkoCtx, u64, *mut usize, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_animator_update(*mut ponko_ffi::PonkoCtx, u64, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_apply_audio_mixer_json(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_apply_day_night(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoDayNight) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_apply_impulse(*mut ponko_ffi::PonkoCtx, u64, ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_apply_impulse3d(*mut ponko_ffi::PonkoCtx, u64, ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_aseprite_frame(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, bool, u32, *const core::ffi::primitives::c_char, *mut ponko_ffi::PonkoSprite) -> ponko_ffi::PonkoStatus
@@ -5821,6 +6132,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_collisions(*mut ponko_ffi::PonkoCtx, bool, *mut *const ponko_ffi::PonkoCollision, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_composing(*mut ponko_ffi::PonkoCtx, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_compute_passes(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoComputePass, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_create_clip(*mut ponko_ffi::PonkoCtx, u64, *const core::ffi::primitives::c_char, *const ponko_ffi::PonkoJointTrack, usize, *mut *mut ponko_ffi::PonkoClip) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_create_compute(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char, *mut ponko_ffi::PonkoCompute) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_create_crowd(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoCrowdAnimation, *const ponko_ffi::PonkoCrowdLevel, usize, *const ponko_ffi::PonkoCrowdInstance, usize, ponko_ffi::PonkoCrowdOptions, *mut ponko_ffi::PonkoCrowd) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_create_effect(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char, *mut ponko_ffi::PonkoEffect) -> ponko_ffi::PonkoStatus
@@ -5926,6 +6238,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_free_mesh(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoMesh) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_free_player(*mut ponko_ffi::PonkoCtx, *mut u32, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_free_terrain_tile(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoTerrainTile) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_free_video(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoVideo) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_at(*mut ponko_ffi::PonkoCtx, u32, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_axis(*mut ponko_ffi::PonkoCtx, u32, u32, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_gamepad_count(*mut ponko_ffi::PonkoCtx, *mut u32) -> ponko_ffi::PonkoStatus
@@ -5966,11 +6279,15 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_key_pressed(*mut ponko_ffi::PonkoCtx, u32, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_key_released(*mut ponko_ffi::PonkoCtx, u32, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_last_device(*mut ponko_ffi::PonkoCtx, *mut u32, *mut u32, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_light_bake_scene_add_lights(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoLightBakeScene) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_light_bake_scene_new(*mut ponko_ffi::PonkoCtx, *mut *mut ponko_ffi::PonkoLightBakeScene) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_lighting(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoLighting) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_lighting_ex(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoLightingEx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_live_counts(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoLiveCounts) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_live_counts_ex(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoLiveCountsEx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_asset_with(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, ponko_ffi::PonkoAssetDecodeFn, *mut core::ffi::c_void) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_audio_mixer(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_baked_lighting(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut *mut ponko_ffi::PonkoBakedLighting) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_clip(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char, *mut *mut ponko_ffi::PonkoClip) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_collision_mesh(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, ponko_ffi::PonkoVec3, bool, *mut ponko_ffi::PonkoCollisionMesh) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_compute(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut ponko_ffi::PonkoCompute) -> ponko_ffi::PonkoStatus
@@ -5992,6 +6309,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_strings(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_texture(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut ponko_ffi::PonkoTexture) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_texture_array(*mut ponko_ffi::PonkoCtx, *const *const core::ffi::primitives::c_char, usize, u32, *mut ponko_ffi::PonkoTextureArray) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_video(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut *mut ponko_ffi::PonkoVideo) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_load_world(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_loaded_materials(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut ponko_ffi::PonkoMaterial, *mut ponko_ffi::PonkoMaterialDesc, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_lod_hysteresis(*mut ponko_ffi::PonkoCtx, u64, *mut f32) -> ponko_ffi::PonkoStatus
@@ -6019,11 +6337,13 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_music_bus(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoAudioBus) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_music_layer_volume(*mut ponko_ffi::PonkoCtx, usize, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_mute_audio_bus(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoAudioBus, bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_nav_view(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoNavView) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_navmesh_find_path(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoVec3, ponko_ffi::PonkoVec3, *mut ponko_ffi::PonkoVec3, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_navmesh_sample_position(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoVec3, f32, *mut ponko_ffi::PonkoVec3, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_navmesh_update_carving(*mut ponko_ffi::PonkoCtx, usize, *mut usize, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_net_desync(*mut ponko_ffi::PonkoCtx, *mut bool, *mut u64, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_net_entity(*mut ponko_ffi::PonkoCtx, u32, *mut u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_net_events(*mut ponko_ffi::PonkoCtx, *mut *const ponko_ffi::PonkoNetEvent, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_net_id(*mut ponko_ffi::PonkoCtx, u64, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_net_player(*mut ponko_ffi::PonkoCtx, *mut u32, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_net_state(*mut ponko_ffi::PonkoCtx, *mut u32) -> ponko_ffi::PonkoStatus
@@ -6118,8 +6438,15 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoReplicatedComponent, usize, u32, *const ponko_ffi::PonkoInterestConfig) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_client_stats(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoReplicationClientStats) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_clients(*mut ponko_ffi::PonkoCtx, *mut u64, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_event(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut u16) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_input(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, usize, *const ponko_ffi::PonkoReplicatedField, usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_input_of(*mut ponko_ffi::PonkoCtx, u64, *mut core::ffi::c_void, usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_interpolated(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *const ponko_ffi::PonkoSnapshotConfig) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_peer_stats(*mut ponko_ffi::PonkoCtx, u64, *mut ponko_ffi::PonkoReplicationPeerStats) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_position(*mut ponko_ffi::PonkoCtx, u32, usize, u32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_predicted(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, ponko_ffi::PonkoPredictFn, *mut core::ffi::c_void, ponko_ffi::PonkoFreeUserFn) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_resend_stats(*mut ponko_ffi::PonkoCtx, u64, *mut ponko_ffi::PonkoReplicationResendStats) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_send(*mut ponko_ffi::PonkoCtx, u32, u64, u16, *const core::ffi::c_void, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_set_viewer(*mut ponko_ffi::PonkoCtx, u64, *const ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_status(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoReplicationStatus) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_reset_motion(*mut ponko_ffi::PonkoCtx, u64) -> ponko_ffi::PonkoStatus
@@ -6161,6 +6488,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_audio_source3d_keyed(*mut ponko_ffi::PonkoCtx, u64, ponko_ffi::PonkoSound, *const ponko_ffi::PonkoAudioSettings3D, *const ponko_ffi::PonkoAudioKey, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_audio_source3d_priority(*mut ponko_ffi::PonkoCtx, u64, u8) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_audio_voice_limit(*mut ponko_ffi::PonkoCtx, u32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_baked_lighting(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoBakedLighting) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_buoyancy_box(*mut ponko_ffi::PonkoCtx, u64, ponko_ffi::PonkoVec3, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_buoyancy_sphere(*mut ponko_ffi::PonkoCtx, u64, f32, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_camera(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoCamera) -> ponko_ffi::PonkoStatus
@@ -6223,6 +6551,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_post(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoPost) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_post_ex(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoPostEx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_profiling(*mut ponko_ffi::PonkoCtx, bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_replication_input(*mut ponko_ffi::PonkoCtx, *const core::ffi::c_void, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_residency_budget(*mut ponko_ffi::PonkoCtx, u32, bool, u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_scene_compute_passes(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoComputePass, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_shadow_mesh(*mut ponko_ffi::PonkoCtx, u64, ponko_ffi::PonkoMesh, bool) -> ponko_ffi::PonkoStatus
@@ -6231,6 +6560,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_skeleton2d(*mut ponko_ffi::PonkoCtx, u64, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_skin_of(*mut ponko_ffi::PonkoCtx, u64, u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_sky(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoSky) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_sky_kit(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoSkyKit) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_sound_effects(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoPlaying, *const ponko_ffi::PonkoAudioEffects) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_sound_loop(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoSound, f32, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_set_sound_priority(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoPlaying, u8) -> ponko_ffi::PonkoStatus
@@ -6297,6 +6627,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_skeleton2d_update(*mut ponko_ffi::PonkoCtx, u64, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_skeleton2d_warning(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, usize, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_sky(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoSky) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_sky_kit(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoSkyKit) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_sound_is_virtual(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoPlaying, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_sound_loop(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoSound, *mut f32, *mut f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_sound_started(*mut ponko_ffi::PonkoCtx, usize, *mut ponko_ffi::PonkoSoundStarted) -> ponko_ffi::PonkoStatus
@@ -6515,6 +6846,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_unload_mesh(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_unpin_resident(*mut ponko_ffi::PonkoCtx, u32, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_update_crowd(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoCrowd, *const ponko_ffi::PonkoCrowdInstance, usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_update_day_night(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoDayNight) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_update_instance_batch(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoInstanceBatch, *const [f32; 16], usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_update_instance_batch_colors(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoInstanceBatch, *const [f32; 16], usize, *const ponko_ffi::PonkoColor, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_update_material(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoMaterial, *const ponko_ffi::PonkoMaterialDesc) -> ponko_ffi::PonkoStatus
@@ -6524,6 +6856,14 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_update_texture(*mut ponko_ffi::PonkoCtx, ponko_ffi::PonkoTexture, *const u8, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_upload_stats(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoUploadStats) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_upload_terrain_tile(*mut ponko_ffi::PonkoCtx, *const ponko_ffi::PonkoTerrainTileData, ponko_ffi::PonkoMaterial, *mut ponko_ffi::PonkoTerrainTile) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_video_advance(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoVideo, f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_video_from_bytes(*mut ponko_ffi::PonkoCtx, *const core::ffi::c_void, usize, *mut *mut ponko_ffi::PonkoVideo) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_video_pause(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoVideo) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_video_play(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoVideo) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_video_seek(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoVideo, f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_video_set_bus(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoVideo, ponko_ffi::PonkoAudioBus) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_video_set_volume(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoVideo, f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_video_update(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoVideo) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_view2d(*mut ponko_ffi::PonkoCtx, usize, *mut ponko_ffi::PonkoView2D) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_view2d_count(*mut ponko_ffi::PonkoCtx, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_view3d(*mut ponko_ffi::PonkoCtx, usize, *mut ponko_ffi::PonkoView3D) -> ponko_ffi::PonkoStatus
@@ -6569,6 +6909,9 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub c fn ponko_ffi::ponko_damp_angle(f32, f32, f32, f32) -> f32
 #[no_mangle] pub c fn ponko_ffi::ponko_damp_vec2(ponko_ffi::PonkoVec2, ponko_ffi::PonkoVec2, f32, f32) -> ponko_ffi::PonkoVec2
 #[no_mangle] pub c fn ponko_ffi::ponko_damp_vec3(ponko_ffi::PonkoVec3, ponko_ffi::PonkoVec3, f32, f32) -> ponko_ffi::PonkoVec3
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_day_night_advance(*mut ponko_ffi::PonkoDayNight, f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_day_night_moon_phase(*const ponko_ffi::PonkoDayNight, *mut f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_day_night_new(f32, *mut ponko_ffi::PonkoDayNight) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_debug_style_default() -> ponko_ffi::PonkoDebugStyle
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_debug_style_ex_defaults(*mut ponko_ffi::PonkoDebugStyleEx) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_debug_style_with_space(ponko_ffi::PonkoDebugStyle, ponko_ffi::PonkoDrawSpace) -> ponko_ffi::PonkoDebugStyle
@@ -6694,6 +7037,13 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_heightfield_at(*const ponko_ffi::PonkoHeightfield, f32, f32, *mut bool, *mut f32, *mut ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_heightfield_free(*mut ponko_ffi::PonkoHeightfield)
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_heightfield_new(*const f32, usize, f32) -> *mut ponko_ffi::PonkoHeightfield
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_hook_despawn_later(*mut ponko_ffi::PonkoHookWorld, u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_hook_get(*mut ponko_ffi::PonkoHookWorld, u64, u32, *mut core::ffi::c_void, usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_hook_is_alive(*mut ponko_ffi::PonkoHookWorld, u64, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_hook_remove_later(*mut ponko_ffi::PonkoHookWorld, u64, u32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_hook_set_later(*mut ponko_ffi::PonkoHookWorld, u64, *const ponko_ffi::PonkoValue) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_hook_spawn_later(*mut ponko_ffi::PonkoHookWorld, *const ponko_ffi::PonkoValue, usize, *mut u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_hook_write(*mut ponko_ffi::PonkoHookWorld, u64, u32, *const core::ffi::c_void, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_human_bone_is_required(u32) -> bool
 #[no_mangle] pub c fn ponko_ffi::ponko_human_bone_name(u32) -> *const core::ffi::primitives::c_char
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_humanoid_map_free(*mut ponko_ffi::PonkoHumanoidMap)
@@ -6722,8 +7072,11 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_input_scenario_named(*mut ponko_ffi::PonkoInputScenario, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_input_scenario_new() -> *mut ponko_ffi::PonkoInputScenario
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_input_scenario_release_when_done(*mut ponko_ffi::PonkoInputScenario) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_input_scenario_tap(*mut ponko_ffi::PonkoInputScenario, u64, ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_input_scenario_to_json(*const ponko_ffi::PonkoInputScenario, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_input_scenario_touch(*mut ponko_ffi::PonkoInputScenario, u64, u64, u32, ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_input_scenario_touch_drag(*mut ponko_ffi::PonkoInputScenario, u64, u64, ponko_ffi::PonkoVec2, ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_input_scenario_touch_hold(*mut ponko_ffi::PonkoInputScenario, u64, u64, ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_input_scenario_type_text(*mut ponko_ffi::PonkoInputScenario, u64, *const core::ffi::primitives::c_char, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_interest_changes(*const ponko_ffi::PonkoInterest, *mut ponko_ffi::PonkoInterestChange, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_interest_config_default() -> ponko_ffi::PonkoInterestConfig
@@ -6755,7 +7108,13 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_level_object_layer(*mut ponko_ffi::PonkoWorld, u64, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_level_object_name(*mut ponko_ffi::PonkoWorld, u64, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_level_property_json(*mut ponko_ffi::PonkoWorld, u64, *const core::ffi::primitives::c_char, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_light_bake_scene_add(*mut ponko_ffi::PonkoLightBakeScene, *const ponko_ffi::PonkoBakeModel, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_light_bake_scene_add_point_light(*mut ponko_ffi::PonkoLightBakeScene, ponko_ffi::PonkoVec3, *const ponko_ffi::PonkoPointLight3D) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_light_bake_scene_add_spot_light(*mut ponko_ffi::PonkoLightBakeScene, ponko_ffi::PonkoVec3, ponko_ffi::PonkoVec3, *const ponko_ffi::PonkoSpotLight3D) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_light_bake_scene_free(*mut ponko_ffi::PonkoLightBakeScene)
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_light_bake_settings_defaults(*mut ponko_ffi::PonkoLightBakeSettings) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_lighting_ex_defaults(*mut ponko_ffi::PonkoLightingEx) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_lightmapped_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_line3d_new(f32, ponko_ffi::PonkoColor) -> ponko_ffi::PonkoLine3D
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_lobby_cancel_queue(*mut ponko_ffi::PonkoLobby) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_lobby_create_room(*mut ponko_ffi::PonkoLobby, u16) -> ponko_ffi::PonkoStatus
@@ -6788,6 +7147,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub c fn ponko_ffi::ponko_mesh_data_cube(f32) -> *mut ponko_ffi::PonkoMeshData
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_mesh_data_decal(*const ponko_ffi::PonkoMeshData, *const f32, f32) -> *mut ponko_ffi::PonkoMeshData
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_mesh_data_free(*mut ponko_ffi::PonkoMeshData)
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_mesh_data_generate_lightmap_uvs(*mut ponko_ffi::PonkoMeshData, f32, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_mesh_data_heightfield(*const f32, usize, f32, u32) -> *mut ponko_ffi::PonkoMeshData
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_mesh_data_morph_target_count(*const ponko_ffi::PonkoMeshData) -> usize
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_mesh_data_new(*const ponko_ffi::PonkoVec3, *const ponko_ffi::PonkoVec3, *const ponko_ffi::PonkoVec2, usize, *const u32, usize) -> *mut ponko_ffi::PonkoMeshData
@@ -6798,6 +7158,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_mesh_data_view(*const ponko_ffi::PonkoMeshData, *mut ponko_ffi::PonkoMeshView) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_model(ponko_ffi::PonkoMesh) -> ponko_ffi::PonkoModel
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_model_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub c fn ponko_ffi::ponko_moon_illumination(f32) -> f32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_motion_blend1d(usize, *mut *mut ponko_ffi::PonkoMotion) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_motion_blend1d_add(*mut ponko_ffi::PonkoMotion, f32, *mut ponko_ffi::PonkoMotion, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_motion_blend2d(usize, usize, *mut *mut ponko_ffi::PonkoMotion) -> ponko_ffi::PonkoStatus
@@ -6814,6 +7175,9 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_nav_sources_add_triangles(*mut ponko_ffi::PonkoNavSources, *const ponko_ffi::PonkoVec3, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_nav_sources_free(*mut ponko_ffi::PonkoNavSources)
 #[no_mangle] pub c fn ponko_ffi::ponko_nav_sources_new() -> *mut ponko_ffi::PonkoNavSources
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_nav_view_find_path(*const ponko_ffi::PonkoNavView, ponko_ffi::PonkoVec3, ponko_ffi::PonkoVec3, *mut ponko_ffi::PonkoVec3, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_nav_view_sample_position(*const ponko_ffi::PonkoNavView, ponko_ffi::PonkoVec3, f32, *mut ponko_ffi::PonkoVec3, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_nav_view_sample_positions(*const ponko_ffi::PonkoNavView, *const ponko_ffi::PonkoVec3, usize, f32, *mut ponko_ffi::PonkoVec3, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_disconnect(*mut ponko_ffi::PonkoNetMessages, u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_free(*mut ponko_ffi::PonkoNetMessages)
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_net_messages_game_clock(*mut ponko_ffi::PonkoNetMessages) -> ponko_ffi::PonkoStatus
@@ -6931,6 +7295,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_set_collider_groups(*mut ponko_ffi::PonkoWorld, u64, ponko_ffi::PonkoCollisionGroups) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_set_parent(*mut ponko_ffi::PonkoWorld, u64, u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_set_polygon_collider(*mut ponko_ffi::PonkoWorld, u64, *const ponko_ffi::PonkoVec2, u32, ponko_ffi::PonkoCollider) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_sky_kit_defaults(*mut ponko_ffi::PonkoSkyKit) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_smooth_damp(f32, f32, *mut f32, f32, f32) -> f32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_smooth_damp_vec2(ponko_ffi::PonkoVec2, ponko_ffi::PonkoVec2, *mut ponko_ffi::PonkoVec2, f32, f32) -> ponko_ffi::PonkoVec2
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_smooth_damp_vec3(ponko_ffi::PonkoVec3, ponko_ffi::PonkoVec3, *mut ponko_ffi::PonkoVec3, f32, f32) -> ponko_ffi::PonkoVec3
@@ -7048,6 +7413,9 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_vehicle3d_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_velocity3d_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_velocity_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_video_frame_rgba(*const ponko_ffi::PonkoVideo, *mut *const u8, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_video_set_looping(*mut ponko_ffi::PonkoVideo, bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_video_state(*const ponko_ffi::PonkoVideo, *mut ponko_ffi::PonkoVideoState) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_view2d_defaults(*mut ponko_ffi::PonkoView2D) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_view3d_defaults(*mut ponko_ffi::PonkoView3D) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_viewport_split(u32, u32) -> ponko_ffi::PonkoViewport
@@ -7096,8 +7464,11 @@ pub type ponko_ffi::PonkoAssetGroupBuildFn = core::option::Option<fn(*mut ponko_
 pub type ponko_ffi::PonkoAssetReadFn = core::option::Option<fn(*mut core::ffi::c_void, *const core::ffi::primitives::c_char, *mut *const u8, *mut usize) -> u32>
 pub type ponko_ffi::PonkoConditionFn = core::option::Option<fn(*mut ponko_ffi::PonkoCtx, *mut core::ffi::c_void) -> bool>
 pub type ponko_ffi::PonkoContactHook3D = core::option::Option<fn(*mut ponko_ffi::PonkoContactPair3D, *mut core::ffi::c_void)>
+pub type ponko_ffi::PonkoFreeUserFn = core::option::Option<fn(*mut core::ffi::c_void)>
+pub type ponko_ffi::PonkoHookFn = core::option::Option<fn(*mut ponko_ffi::PonkoHookWorld, *const ponko_ffi::PonkoHookEvent, *mut core::ffi::c_void)>
 pub type ponko_ffi::PonkoJsonConvertFn = core::option::Option<fn(*mut core::ffi::c_void, *const core::ffi::primitives::c_char, *mut *const core::ffi::primitives::c_char) -> u32>
 pub type ponko_ffi::PonkoPluginBuildFn = core::option::Option<fn(*mut ponko_ffi::PonkoGame, *mut core::ffi::c_void)>
+pub type ponko_ffi::PonkoPredictFn = core::option::Option<fn(*mut core::ffi::c_void, usize, *const core::ffi::c_void, usize, *mut core::ffi::c_void)>
 pub type ponko_ffi::PonkoPredictStepFn = core::option::Option<fn(*mut core::ffi::c_void, *mut core::ffi::c_void, usize, *const core::ffi::c_void, usize) -> bool>
 pub type ponko_ffi::PonkoQueryFn = core::option::Option<fn(*const ponko_ffi::PonkoChunk, *mut core::ffi::c_void)>
 pub type ponko_ffi::PonkoResourceScopeFn = core::option::Option<fn(*mut ponko_ffi::PonkoWorld, *mut core::ffi::c_void, *mut core::ffi::c_void)>
