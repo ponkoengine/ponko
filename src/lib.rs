@@ -167,7 +167,11 @@ pub mod bench_sharing {
     /// Whether this build allocates from one heap per thread (a web build
     /// with threads and `--cfg ponko_web_thread_heaps`).
     pub fn per_thread_allocator() -> bool {
-        cfg!(all(target_arch = "wasm32", target_feature = "atomics", ponko_web_thread_heaps))
+        cfg!(all(
+            target_arch = "wasm32",
+            target_feature = "atomics",
+            ponko_web_thread_heaps
+        ))
     }
 
     /// The fewest 3D characters whose moves are shared out.

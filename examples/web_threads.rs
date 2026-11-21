@@ -1185,17 +1185,34 @@ fn sweep(game: Game, kind: String) {
     let mut sweep = Sweep::default();
     match kind.as_str() {
         "thresholds" => {
-            let sides = |pass, from: usize| [SweepStep::Side(pass, from.saturating_sub(1).max(1)), SweepStep::Side(pass, from)];
-            sweep.steps.extend(SWEEP_CHILDREN.map(|n| SweepStep::Time(SweepPass::Hierarchy, n)));
-            sweep.steps.extend(SIDE_CHILDREN.map(|n| SweepStep::Side(SweepPass::Hierarchy, n)));
+            let sides = |pass, from: usize| {
+                [
+                    SweepStep::Side(pass, from.saturating_sub(1).max(1)),
+                    SweepStep::Side(pass, from),
+                ]
+            };
+            sweep
+                .steps
+                .extend(SWEEP_CHILDREN.map(|n| SweepStep::Time(SweepPass::Hierarchy, n)));
+            sweep
+                .steps
+                .extend(SIDE_CHILDREN.map(|n| SweepStep::Side(SweepPass::Hierarchy, n)));
             sweep.steps.push(SweepStep::Clear(SweepPass::Hierarchy));
-            sweep.steps.extend(SWEEP_SKELETONS.map(|n| SweepStep::Time(SweepPass::Skeletons, n)));
-            sweep.steps.extend(sides(SweepPass::Skeletons, ponko::bench_sharing::skeletons_from()));
+            sweep
+                .steps
+                .extend(SWEEP_SKELETONS.map(|n| SweepStep::Time(SweepPass::Skeletons, n)));
+            sweep
+                .steps
+                .extend(sides(SweepPass::Skeletons, ponko::bench_sharing::skeletons_from()));
             sweep.steps.push(SweepStep::Clear(SweepPass::Skeletons));
             #[cfg(feature = "physics3d")]
             {
-                sweep.steps.extend(SWEEP_CHARACTERS.map(|n| SweepStep::Time(SweepPass::Characters, n)));
-                sweep.steps.extend(sides(SweepPass::Characters, ponko::bench_sharing::characters_from()));
+                sweep
+                    .steps
+                    .extend(SWEEP_CHARACTERS.map(|n| SweepStep::Time(SweepPass::Characters, n)));
+                sweep
+                    .steps
+                    .extend(sides(SweepPass::Characters, ponko::bench_sharing::characters_from()));
                 sweep.steps.push(SweepStep::Clear(SweepPass::Characters));
             }
         }
@@ -1245,7 +1262,8 @@ fn sweep(game: Game, kind: String) {
         if allocator {
             for i in 0..ALLOC_SAVED {
                 let f = i as f32;
-                ctx.world.spawn((d2::Transform::at(vec2((f * 0.37) % 200.0, (f * 0.11) % 120.0)),));
+                ctx.world
+                    .spawn((d2::Transform::at(vec2((f * 0.37) % 200.0, (f * 0.11) % 120.0)),));
             }
             spawn_agents(ctx, ALLOC_AGENTS);
         }
@@ -1261,7 +1279,9 @@ fn sweep(game: Game, kind: String) {
 
 #[cfg(not(feature = "bench-internals"))]
 fn sweep(_game: Game, _kind: String) {
-    panic!("web_threads: ?sweep needs the bench-internals feature (web/build.sh --threads --features 3d,physics3d,bench-internals web_threads)");
+    panic!(
+        "web_threads: ?sweep needs the bench-internals feature (web/build.sh --threads --features 3d,physics3d,bench-internals web_threads)"
+    );
 }
 
 /// Runs one step; `false` if it must wait for the next tick (characters
@@ -1286,7 +1306,9 @@ fn sweep_step(ctx: &mut Ctx, s: &mut Sweep, step: SweepStep) -> bool {
             }
             set_sharing(Sharing::Auto);
             let [serial, shared] = times;
-            s.rows.push(json!({"pass": pass.name(), "size": n, "serial_ms": median_ms(serial), "shared_ms": median_ms(shared)}));
+            s.rows.push(
+                json!({"pass": pass.name(), "size": n, "serial_ms": median_ms(serial), "shared_ms": median_ms(shared)}),
+            );
         }
         SweepStep::Side(pass, n) => {
             if !populate(ctx, s, pass, n) {
@@ -1308,7 +1330,11 @@ fn sweep_step(ctx: &mut Ctx, s: &mut Sweep, step: SweepStep) -> bool {
             let (shared, hash) = result(Sharing::Auto);
             let (_, serial_hash) = result(Sharing::Never);
             set_sharing(Sharing::Auto);
-            let side = if s.sides.iter().any(|v| v["pass"] == pass.name()) { "above" } else { "below" };
+            let side = if s.sides.iter().any(|v| v["pass"] == pass.name()) {
+                "above"
+            } else {
+                "below"
+            };
             s.sides.push(json!({
                 "pass": pass.name(), "size": n, "side": side, "shared": shared,
                 "hash": hash.to_string(), "serial_hash": serial_hash.to_string(),
