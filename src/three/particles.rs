@@ -45,12 +45,14 @@ pub enum ParticleShape3D {
 pub enum ParticleBlend3D {
     /// Ordinary alpha compositing. The particles of every alpha emitter
     /// are sorted far to near together, so two emitters' particles mix
-    /// correctly where they overlap.
+    /// correctly where they overlap, and drawn among the see-through
+    /// models in that order, so glass in front of a particle tints it.
     #[default]
     Alpha,
     /// Emitted light adds to the scene, weighted by alpha. An additive
     /// emitter is drawn whole, where its centre falls among the alpha
-    /// particles (light adds up the same in any order).
+    /// particles and the see-through models (light adds up the same in
+    /// any order, but glass in front of it still dims it).
     Additive,
 }
 /// Settings copied into an emitter. Change settings by creating a new emitter.
