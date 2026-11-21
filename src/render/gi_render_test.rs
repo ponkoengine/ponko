@@ -1319,3 +1319,179 @@ fn bounced_light_leaks_through_a_thin_partition_on_a_probe_plane() {
     assert!(between <= 5, "between the probes the partition holds: {between}");
     assert!(on_plane > 20, "on a probe plane the red leaks through it: {on_plane}");
 }
+
+/// A closed room with white walls (the inside from -2 to 2 across, -0.5 to
+/// 2.5 high, walls 0.4 thick), lit only by a shadowed lamp inside it, no
+/// sun, sky or ambient light; probes every unit (7 x 5 x 7, so a full
+/// round of updates is 16 frames at 16 a frame). Draws `checkpoints`
+/// frames in turn and returns, after each, how bright the roof is (the
+/// sum of red, green and blue over a few points; no tonemapping).
+fn closed_lamp_room(checkpoints: &[usize]) -> Option<Vec<f32>> {
+    let mut rig = Rig::new(true)?;
+    let white = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE).with_roughness(1.0));
+    let (inner, outer) = (2.0, 2.4);
+    let walls = [
+        (white, vec3(-outer, -0.9, -outer), vec3(outer, -0.5, outer)), // floor
+        (white, vec3(-outer, 2.5, -outer), vec3(outer, 2.9, outer)),   // roof
+        (white, vec3(-outer, -0.5, -outer), vec3(-inner, 2.5, outer)), // west
+        (white, vec3(inner, -0.5, -outer), vec3(outer, 2.5, outer)),   // east
+        (white, vec3(-inner, -0.5, -outer), vec3(inner, 2.5, -inner)), // north
+        (white, vec3(-inner, -0.5, inner), vec3(inner, 2.5, outer)),   // south
+    ];
+    rig.blocks(&walls, Build::Models);
+    rig.ctx.world.spawn((
+        Transform3D::at(vec3(1.2, 0.0, 1.2)),
+        crate::d3::PointLight {
+            intensity: 0.6,
+            range: 10.0,
+            shadows: true,
+            ..Default::default()
+        },
+    ));
+    let lighting = &mut rig.ctx.scene3d.lighting;
+    lighting.sun_intensity = 0.0;
+    lighting.ambient_intensity = 0.0;
+    rig.ctx.scene3d.sky.sky_color = Color::BLACK;
+    rig.ctx.scene3d.sky.ground_color = Color::BLACK;
+    rig.ctx.scene3d.post.tonemap = crate::render::Tonemap::None;
+    rig.ctx.scene3d.post.bloom = 0.0;
+    lighting.gi = GlobalIllumination {
+        enabled: true,
+        extent: vec3(6.0, 4.0, 6.0),
+        spacing: 1.0,
+        probes_per_frame: crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME,
+        intensity: 1.0,
+    };
+    rig.ctx.scene3d.camera.position = vec3(-1.5, 0.0, -1.5);
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 2.5, 0.0));
+    let points = [vec3(0.0, 2.5, 0.0), vec3(-0.5, 2.5, 0.5), vec3(0.5, 2.5, -0.5)];
+    let mut drawn = 0;
+    let mut out = Vec::new();
+    for &at in checkpoints {
+        let pixels = rig.draw(at - drawn);
+        drawn = at;
+        let linear = |c: i32| {
+            let c = c as f32 / 255.0;
+            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        };
+        let sum: f32 = points
+            .iter()
+            .map(|&p| rig.at(&pixels, p).iter().map(|&c| linear(c)).sum::<f32>())
+            .sum();
+        out.push(sum);
+    }
+    Some(out)
+}
+
+#[test]
+fn probe_light_in_a_bright_closed_room_probe_repro() {
+    let Some(b) = closed_lamp_room(&(1..=80).map(|k| k * 10).collect::<Vec<_>>()) else {
+        return;
+    };
+    eprintln!("roof brightness at frames 1, 50, 100, 200, 400, 800: {b:?}");
+}
+
+/// Two closed-off rooms side by side under a black sky, no roof, seen from
+/// straight above: the west one lit by a shadowed lamp, the east one dark,
+/// a 10 cm white wall between them at `x` (probes every 2 units, so at 0
+/// the wall runs through a plane of probes). Floors and walls white. The
+/// probes are 9 x 6 x 6. Returns the rig and the image after `frames`.
+fn lit_and_dark_rooms(x: f32, frames: usize) -> Option<(Rig, Vec<u8>)> {
+    rooms(x, frames, false)
+}
+
+fn rooms(x: f32, frames: usize, roof: bool) -> Option<(Rig, Vec<u8>)> {
+    let mut rig = Rig::new(true)?;
+    let white = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE).with_roughness(1.0));
+    let (lo, hi, t) = (-6.0, 6.0, 0.4);
+    let walls = [
+        (white, vec3(lo - t, -0.9, -3.0 - t), vec3(hi + t, -0.5, 3.0 + t)), // floor
+        (white, vec3(lo - t, -0.5, -3.0 - t), vec3(lo, 4.5, 3.0 + t)),      // west
+        (white, vec3(hi, -0.5, -3.0 - t), vec3(hi + t, 4.5, 3.0 + t)),      // east
+        (white, vec3(lo, -0.5, -3.0 - t), vec3(hi, 4.5, -3.0)),             // north
+        (white, vec3(lo, -0.5, 3.0), vec3(hi, 4.5, 3.0 + t)),               // south
+        (white, vec3(x - 0.05, -0.5, -3.0), vec3(x + 0.05, 4.5, 3.0)),      // between
+    ];
+    rig.blocks(&walls, Build::Models);
+    if roof {
+        rig.block(white, vec3(lo - t, 4.5, -3.0 - t), vec3(hi + t, 4.9, 3.0 + t));
+    }
+    rig.ctx.world.spawn((
+        Transform3D::at(vec3(x - 3.0, 1.0, 0.0)),
+        crate::d3::PointLight {
+            intensity: 3.0,
+            range: 12.0,
+            shadows: true,
+            ..Default::default()
+        },
+    ));
+    let lighting = &mut rig.ctx.scene3d.lighting;
+    lighting.sun_intensity = 0.0;
+    lighting.ambient_intensity = 0.0;
+    rig.ctx.scene3d.sky.sky_color = Color::BLACK;
+    rig.ctx.scene3d.sky.ground_color = Color::BLACK;
+    rig.ctx.scene3d.post.tonemap = crate::render::Tonemap::None;
+    rig.ctx.scene3d.post.bloom = 0.0;
+    lighting.gi = GlobalIllumination {
+        enabled: true,
+        extent: vec3(16.0, 14.0, 10.0),
+        spacing: 2.0,
+        probes_per_frame: crate::render::GlobalIllumination::MAX_PROBES_PER_FRAME,
+        intensity: 1.0,
+    };
+    // Inside the probe grid (it moves with the camera), wide enough to see
+    // both rooms.
+    // Above the wall, so it hides neither floor.
+    rig.ctx.scene3d.camera.position = vec3(x, 6.5, 0.01);
+    rig.ctx.scene3d.camera.look_at(vec3(x, -0.5, 0.0));
+    rig.ctx.scene3d.camera.fov_y = 100f32.to_radians();
+    if roof {
+        rig.ctx.scene3d.camera.position = vec3(x + 4.0, 3.5, 0.01);
+        rig.ctx.scene3d.camera.look_at(vec3(x + 1.0, -0.5, 0.0));
+        rig.ctx.scene3d.camera.fov_y = 80f32.to_radians();
+    }
+    let pixels = rig.draw(frames);
+    Some((rig, pixels))
+}
+
+#[test]
+fn thin_wall_roofed_probe_repro() {
+    for x in [0.0, 1.0, 0.5] {
+        let Some((rig, pixels)) = rooms(x, 300, true) else {
+            return;
+        };
+        for d in [0.3, 0.6, 1.0, 2.0] {
+            let row: Vec<i32> = [-1.5, 0.0, 1.5].iter().map(|&z| rig.at(&pixels, vec3(x + d, -0.5, z)).iter().sum()).collect();
+            eprintln!("  roofed {x}: {d} east: {row:?}");
+        }
+    }
+}
+
+/// The brightest of a few floor points in the dark room, 0.3 to 2 units
+/// east of the wall at `x` (the sum of red, green and blue).
+fn dark_room_floor(rig: &Rig, pixels: &[u8], x: f32) -> i32 {
+    [0.3, 0.6, 1.0, 2.0]
+        .iter()
+        .flat_map(|&d| [-1.5, 0.0, 1.5].map(|z| vec3(x + d, -0.5, z)))
+        .map(|p| rig.at(pixels, p).iter().sum::<i32>())
+        .max()
+        .unwrap()
+}
+
+#[test]
+fn thin_wall_probe_repro() {
+    for x in [0.0, 1.0, 0.5] {
+        let Some((mut rig, pixels)) = lit_and_dark_rooms(x, 200) else {
+            return;
+        };
+        rig.ctx.scene3d.lighting.gi.enabled = false;
+        let off = rig.draw(2);
+        eprintln!("gi off: dark {} lit {:?}", dark_room_floor(&rig, &off, x), rig.at(&off, vec3(x - 1.0, -0.5, 1.5)));
+        let lit = rig.at(&pixels, vec3(x - 1.0, -0.5, 1.5));
+        for d in [0.3, 0.6, 1.0, 2.0, 3.0, 4.0] {
+            let row: Vec<i32> = [-1.5, 0.0, 1.5].iter().map(|&z| rig.at(&pixels, vec3(x + d, -0.5, z)).iter().sum()).collect();
+            eprintln!("  {d} east: {row:?}");
+        }
+        eprintln!("wall at {x}: dark room floor {} (lit room floor {lit:?})", dark_room_floor(&rig, &pixels, x));
+    }
+}

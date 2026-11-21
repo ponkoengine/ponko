@@ -8,7 +8,11 @@
 //!   `Renderer3D::record_gi`), lit by a **shadow map** of their own.
 //! - The **update** compute pass (`gi_update.wgsl`): turns each probe's
 //!   views into its tiles in a scratch image, which is then copied into
-//!   the atlas.
+//!   the atlas. Beside each light tile (in the right half of the light
+//!   tiles' rows, which they leave free) goes its **settled** tile: the
+//!   light extrapolated to where the bounces settle, which the camera's
+//!   view reads; the probes' own views read the light tile. The update
+//!   also marks probes inside thin walls, which give no light.
 use super::lights::LightTextures;
 use crate::render::traffic::{NewBuffer, Upload};
 use crate::three::MAX_GI_PROBES_PER_FRAME;
@@ -26,6 +30,8 @@ const LIGHT_TILE: u32 = 8;
 const DEPTH_TILE: u32 = 16;
 const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// Bytes of history per probe slot (a `vec4<f32>` in `gi_update.wgsl`).
+const HISTORY_BYTES: u64 = 16;
 
 /// One probe to update, as `gi_update.wgsl` reads it.
 #[repr(C)]
@@ -40,6 +46,8 @@ struct ProbeUpdate {
 struct Updates {
     list: [ProbeUpdate; MAX_UPDATES as usize],
     params: [f32; 4],
+    /// Probes along each axis, and the spacing.
+    grid: [f32; 4],
 }
 
 pub(super) struct Gi {
@@ -55,6 +63,8 @@ pub(super) struct Gi {
     uniform_mirror: crate::render::traffic::Mirror,
     atlas: wgpu::Texture,
     pub atlas_view: wgpu::TextureView,
+    /// Each slot's history, for its settled tile (see `gi_update.wgsl`).
+    history: wgpu::Buffer,
     /// Probe slots the atlas has room for, and its rows of tiles.
     slots: usize,
     rows: u32,
@@ -128,6 +138,14 @@ impl Gi {
                         view_dimension: wgpu::TextureViewDimension::D2,
                     },
                     4,
+                ),
+                texture(
+                    wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    5,
                 ),
             ],
         });
@@ -204,7 +222,7 @@ impl Gi {
         );
         let scratch = image(
             "3d gi scratch",
-            (LIGHT_TILE + DEPTH_TILE, MAX_UPDATES * DEPTH_TILE),
+            (2 * LIGHT_TILE + DEPTH_TILE, MAX_UPDATES * DEPTH_TILE),
             1,
             ATLAS_FORMAT,
             wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
@@ -233,6 +251,7 @@ impl Gi {
             })
             .collect();
         let (atlas, atlas_view) = Self::atlas(device, 1);
+        let history = Self::history(device, 1);
         let views = views.create_view(&Default::default());
         let resolve = resolve.create_view(&Default::default());
         let depth_read = depth.create_view(&wgpu::TextureViewDescriptor {
@@ -240,7 +259,16 @@ impl Gi {
             ..Default::default()
         });
         let depth = depth.create_view(&Default::default());
-        let group = Self::group(device, &layout, &uniform, &resolve, &depth_read, &atlas_view, &scratch);
+        let group = Self::group(
+            device,
+            &layout,
+            &uniform,
+            &resolve,
+            &depth_read,
+            &atlas_view,
+            &scratch,
+            &history,
+        );
         Self {
             layout,
             sky_layout,
@@ -250,6 +278,7 @@ impl Gi {
             uniform_mirror: Default::default(),
             atlas,
             atlas_view,
+            history,
             slots: 0,
             rows: 1,
             views,
@@ -288,6 +317,17 @@ impl Gi {
         (atlas, view)
     }
 
+    /// The history of `slots` probe slots, zero (none yet) in each.
+    fn history(device: &wgpu::Device, slots: usize) -> wgpu::Buffer {
+        device.new_buffer(&wgpu::BufferDescriptor {
+            label: Some("3d gi history"),
+            size: HISTORY_BYTES * slots.max(1) as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn group(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
@@ -296,6 +336,7 @@ impl Gi {
         depth: &wgpu::TextureView,
         atlas: &wgpu::TextureView,
         scratch: &wgpu::Texture,
+        history: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         let scratch = scratch.create_view(&Default::default());
         let view = |binding, view| wgpu::BindGroupEntry {
@@ -314,6 +355,10 @@ impl Gi {
                 view(2, depth),
                 view(3, atlas),
                 view(4, &scratch),
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: history.as_entire_binding(),
+                },
             ],
         })
     }
@@ -351,6 +396,7 @@ impl Gi {
             self.slots = slots;
             self.rows = (slots as u32).div_ceil(COLUMNS).max(1);
             (self.atlas, self.atlas_view) = Self::atlas(device, self.rows);
+            self.history = Self::history(device, slots);
             self.group = Self::group(
                 device,
                 &self.layout,
@@ -359,19 +405,21 @@ impl Gi {
                 &self.depth_read,
                 &self.atlas_view,
                 &self.scratch,
+                &self.history,
             );
         }
         self.updates.clear();
         let mut updates = Updates {
             list: [ProbeUpdate::default(); MAX_UPDATES as usize],
             params: [frame.near, frame.far, self.rows as f32, VIEW_SIZE as f32],
+            grid: frame.grid.counts.as_vec3().extend(frame.grid.spacing).to_array(),
         };
         for (u, out) in frame.updates.iter().zip(&mut updates.list) {
             let (column, row) = (u.slot % COLUMNS, u.slot / COLUMNS);
             self.updates.push((u.slot, column, row));
             *out = ProbeUpdate {
                 probe: u.position.extend(u.code).to_array(),
-                tile: [column as f32, row as f32, u.keep, 0.0],
+                tile: [column as f32, row as f32, u.keep, u.slot as f32],
             };
         }
         self.uniform_mirror
@@ -438,6 +486,11 @@ impl Gi {
                 tile(column * DEPTH_TILE, self.rows * LIGHT_TILE + row * DEPTH_TILE),
                 size(DEPTH_TILE),
             );
+            encoder.copy_texture_to_texture(
+                scratch(LIGHT_TILE + DEPTH_TILE, y),
+                tile((COLUMNS + column) * LIGHT_TILE, row * LIGHT_TILE),
+                size(LIGHT_TILE),
+            );
         }
     }
 }
@@ -461,6 +514,7 @@ impl Gi {
         use crate::render::memory::MemoryClass as C;
         t.buffer(C::Probes, "probe uniforms", &self.uniform);
         t.texture(C::Probes, "probe atlas", &self.atlas);
+        t.buffer(C::Probes, "probe history", &self.history);
         for (label, view) in [
             ("probe capture", &self.views),
             ("probe capture resolve", &self.resolve),
