@@ -70,7 +70,9 @@ some frames have fewer samples.
 Counts per frame: draw calls, recorded draws, instances and triangles for
 the camera and for the shadow maps, models skipped by occlusion culling,
 bytes uploaded (split by kind), buffers created, pipelines built, pipeline /
-bind group / vertex buffer / index buffer changes, command buffers.
+bind group / vertex buffer / index buffer changes, command buffers and
+submissions (with views: every camera's command buffers and the copy into
+the target).
 Triangles and instances count what the CPU hands the renderer: the instances
 of static batches are drawn from their own buffers and are reported under
 `instance_batches` instead.
@@ -162,7 +164,7 @@ The JSON document:
 - `render.scenes[]`: `scene` (content counts and the quality settings
   drawn with), `timings_ms` (a distribution per step: samples, min, p50,
   p95, p99, max, mean), `gpu_ms`, `counts`, `upload_bytes_per_frame`,
-  `instance_batches`, `state_changes`, `command_buffers`,
+  `instance_batches`, `state_changes`, `command_buffers`, `submits`,
   `allocations_per_frame`, `allocation_bytes_per_frame`, `memory`.
 
 `render.schema_version` is 1. The section reuses the engine's own types and
