@@ -657,3 +657,118 @@ fn a_cut_out_held_item_marks_the_stencil_only_where_it_is_solid() {
         );
     }
 }
+
+/// A transparent material that reads the scene behind it: on screen, it
+/// splits the transparent pass off the opaque one (see `record.rs`).
+const SCENE_READER: &str = "
+fn surface(s: Surface) -> Surface {
+    var out = s;
+    out.emissive = scene_color(s.screen) * 0.5 + vec3<f32>(0.0, 0.3, 0.0);
+    return out;
+}";
+
+/// [`outlined_held_box`] in glass: a see-through box that marks the
+/// stencil inside a larger see-through shell drawn only where it didn't
+/// (after it by its order; the shell's mesh made first, so drawn in the
+/// order they were collected it would come first and blend over the box
+/// too). `stencil`: off for the negative control. `split`: a small glass
+/// cube that reads the scene is on screen too, which splits the
+/// transparent pass off (where the world's see-through surfaces test the
+/// stencil without writing it). `shell`: off to draw the box alone.
+/// Returns the colours at the box's middle and on the shell's rim beside
+/// it.
+fn see_through_outline(samples: u32, stencil: bool, split: bool, shell: bool) -> Option<([f32; 3], [f32; 3])> {
+    let mut stage = Stage::with(Setup {
+        samples,
+        ..Setup::default()
+    })?;
+    let box_item = nose_to_the_wall(&mut stage);
+    stage.ctx.world.despawn(box_item);
+    if split {
+        let (shader, _) = stage.shader("reader", SCENE_READER);
+        let reader = stage.mesh(
+            &MeshData::cube(1.0),
+            MaterialDesc {
+                color: Color::rgba(0.0, 0.0, 0.0, 0.5),
+                blend: Blend::Transparent,
+                shader: Some(shader),
+                ..Default::default()
+            },
+        );
+        // Up and left of the middle, in front of the wall.
+        stage.block(reader, vec3(-0.12, 1.7, -0.25), vec3(-0.1, 1.72, -0.23));
+    }
+    let pick = |s: Stencil| stencil.then_some(s);
+    let glass = |emissive: [f32; 3], stencil| MaterialDesc {
+        color: Color::rgba(0.0, 0.0, 0.0, 0.5),
+        emissive: Color::rgb(emissive[0], emissive[1], emissive[2]),
+        blend: Blend::Transparent,
+        stencil,
+        ..Default::default()
+    };
+    let shell_mesh = stage.mesh(
+        &MeshData::cube(1.0),
+        glass(YELLOW, pick(Stencil::outside(2).with_order(1))),
+    );
+    let body = stage.mesh(&MeshData::cube(1.0), glass(RED, pick(Stencil::mark(2))));
+    for (mesh, side) in [(shell_mesh, 0.12), (body, 0.08)] {
+        if mesh == shell_mesh && !shell {
+            continue;
+        }
+        let mut item = HeldItem::at(HELD_AT);
+        item.offset.scale = Vec3::splat(side);
+        stage
+            .ctx
+            .world
+            .spawn((Model::new(mesh), item, crate::d3::Transform::default()));
+    }
+    let view_model = ViewModel::default().with_fov(50f32.to_radians());
+    stage.ctx.scene3d.view_model = Some(view_model);
+    let image = stage.settled(2);
+    assert_eq!(
+        stage.renderer.transparent_split(),
+        split,
+        "{samples} samples: the transparent pass is split off only with the scene reader"
+    );
+    assert_eq!(
+        stage.renderer.held_see_through_pass(),
+        split && stencil,
+        "{samples} samples: a pass of their own only where the split-off pass can't write the stencil"
+    );
+    let (cx, cy) = held_pixel(&stage, &view_model, HELD_AT);
+    let (rx, ry) = held_pixel(&stage, &view_model, HELD_AT + vec3(0.05, 0.0, 0.06));
+    let colors = (mean_color(&image, cx, cy, 1), mean_color(&image, rx, ry, 1));
+    stage.finish();
+    Some(colors)
+}
+
+#[test]
+fn see_through_held_items_with_a_stencil_draw_in_stencil_order() {
+    for split in [false, true] {
+        for samples in [4, 1] {
+            let Some((alone, _)) = see_through_outline(samples, true, split, false) else {
+                return;
+            };
+            // Negative control: plain glass, the shell blends over the box.
+            let Some((covered, plain_rim)) = see_through_outline(samples, false, split, true) else {
+                return;
+            };
+            let off = |a: [f32; 3], b: [f32; 3]| (0..3).map(|c| (a[c] - b[c]).abs()).fold(0.0, f32::max);
+            assert!(
+                off(covered, alone) > 30.0,
+                "split {split}, {samples} samples, no stencil: the shell tints the box: {covered:?} against the box alone {alone:?}"
+            );
+            let Some((middle, rim)) = see_through_outline(samples, true, split, true) else {
+                return;
+            };
+            assert!(
+                off(middle, alone) < 8.0,
+                "split {split}, {samples} samples: the shell is not drawn where the box marked the stencil: {middle:?} against the box alone {alone:?}"
+            );
+            assert!(
+                off(rim, plain_rim) < 8.0 && yellowness(rim) > 20.0,
+                "split {split}, {samples} samples: the shell is drawn around the box, as without the stencil: {rim:?} against {plain_rim:?}"
+            );
+        }
+    }
+}

@@ -150,7 +150,18 @@ that layer shows it: the main camera, each view of a split screen (see
 [Viewports](viewports.md#debug-drawing)), and each target camera drawing
 into a [render target](3d.md#render-targets) that draws particles (a
 mirror or a monitor shows the 3D lines and the depth-tested labels, a
-reflection probe's capture doesn't). In a render target the 3D lines and
+reflection probe's capture doesn't).
+
+A camera's `debug_draw` changes that: `Some(true)` draws it, `Some(false)`
+leaves it out, whatever the camera's `particles` says; `None`, the default,
+is the rule above. A monitor can show the debug drawing without the smoke
+(`TargetCamera::with_debug_draw(true)` after `with_particles(false)`), or a
+top-down map can be the only place it shows, with the window's camera's
+`debug_draw` at `Some(false)`. From C and C++ it is the `debug_draw` field
+of `PonkoCamera3DEx` and `PonkoTargetCameraEx`, a `PonkoDebugDraw`
+(`ponko::debug_draw`).
+
+In a render target the 3D lines and
 depth-tested labels are drawn against that camera's own depth, and 3D
 labels on top are on top there as they are on screen: drawn last, over the
 scene, the particles and the lines, laid out facing that camera, the size

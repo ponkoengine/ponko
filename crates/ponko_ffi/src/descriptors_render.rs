@@ -441,15 +441,53 @@ pub unsafe extern "C" fn ponko_ctx_set_particle_emitter3d_ex(
 
 // ---- cameras ----------------------------------------------------------------
 
+/// Whether a camera draws `ctx.debug`'s 3D lines and labels (the
+/// `debug_draw` of `PonkoCamera3DEx` and `PonkoTargetCameraEx`, Rust
+/// `Camera::debug_draw`). Passed as a `uint32_t`: another value fails with
+/// `PONKO_INVALID_ARGUMENT`.
+/// ```
+/// assert_eq!(ponko_ffi::PonkoDebugDraw::PONKO_DEBUG_DRAW_DEFAULT as u32, 0);
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum PonkoDebugDraw {
+    /// What cameras drew before the flag: the window's camera draws them, a
+    /// target camera while it draws particles.
+    PONKO_DEBUG_DRAW_DEFAULT,
+    /// Always (on the default layer).
+    PONKO_DEBUG_DRAW_ON,
+    /// Never.
+    PONKO_DEBUG_DRAW_OFF,
+}
+
+fn debug_draw_to_c(d: Option<bool>) -> u32 {
+    (match d {
+        None => PonkoDebugDraw::PONKO_DEBUG_DRAW_DEFAULT,
+        Some(true) => PonkoDebugDraw::PONKO_DEBUG_DRAW_ON,
+        Some(false) => PonkoDebugDraw::PONKO_DEBUG_DRAW_OFF,
+    }) as u32
+}
+
+fn debug_draw_from_c(d: u32) -> Result<Option<bool>, Failure> {
+    match d {
+        d if d == PonkoDebugDraw::PONKO_DEBUG_DRAW_DEFAULT as u32 => Ok(None),
+        d if d == PonkoDebugDraw::PONKO_DEBUG_DRAW_ON as u32 => Ok(Some(true)),
+        d if d == PonkoDebugDraw::PONKO_DEBUG_DRAW_OFF as u32 => Ok(Some(false)),
+        _ => Err(invalid("debug_draw is not a PonkoDebugDraw")),
+    }
+}
+
 /// The version of `PonkoCamera3DEx` this header describes.
-pub const PONKO_CAMERA3D_EX_VERSION: u32 = 1;
+pub const PONKO_CAMERA3D_EX_VERSION: u32 = 2;
 
 /// The 3D camera, in a layout that can grow (Rust `ctx.scene3d.camera`):
 /// `PonkoCamera3D` plus the fields added since ABI 2. Read it with
 /// `ponko_ctx_camera3d_ex` (set `struct_size` and `version` first), change
 /// it, and give it back with `ponko_ctx_set_camera3d_ex`.
 ///
-/// Version 1: `camera`, `occlusion_culling`, `particles`.
+/// Version 1: `camera`, `occlusion_culling`, `particles`. Version 2:
+/// `debug_draw`.
 /// ```
 /// use ponko_ffi::*;
 /// let c = PonkoCamera3D { position: Default::default(), rotation: ponko_quat_identity(), fov_y: 1.0, near: 0.1, far: 100.0 };
@@ -457,6 +495,7 @@ pub const PONKO_CAMERA3D_EX_VERSION: u32 = 1;
 /// (e.struct_size, e.version) = (size_of::<PonkoCamera3DEx>() as u32, PONKO_CAMERA3D_EX_VERSION);
 /// assert_eq!(unsafe { ponko_camera3d_ex_from(&c, &mut e) }, PonkoStatus::PONKO_OK);
 /// assert_eq!((e.camera.far, e.occlusion_culling, e.particles), (100.0, false, true));
+/// assert_eq!(e.debug_draw, PonkoDebugDraw::PONKO_DEBUG_DRAW_DEFAULT as u32);
 /// ```
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -473,6 +512,9 @@ pub struct PonkoCamera3DEx {
     /// Draw particles, trails and lines. Default true. Off for a camera that
     /// should show the scene without them.
     pub particles: bool,
+    /// Whether it draws `ctx.debug`'s 3D lines and labels, a
+    /// `PonkoDebugDraw`. Default `PONKO_DEBUG_DRAW_DEFAULT` (drawn).
+    pub debug_draw: u32,
 }
 assert_header!(PonkoCamera3DEx);
 
@@ -482,6 +524,7 @@ impl Versioned for PonkoCamera3DEx {
     fn len_of(version: u32) -> Option<usize> {
         match version {
             1 => Some(end_of!(Self, particles: bool)),
+            2 => Some(end_of!(Self, debug_draw: u32)),
             _ => None,
         }
     }
@@ -494,11 +537,13 @@ fn camera_ex_of(c: &ponko::d3::Camera) -> PonkoCamera3DEx {
         camera: camera_to_c(c),
         occlusion_culling: c.occlusion_culling,
         particles: c.particles,
+        debug_draw: debug_draw_to_c(c.debug_draw),
     }
 }
 
 /// Fills the fields of `out_camera`'s version from an ABI 2 camera, with the
-/// defaults for the rest (no occlusion culling, particles drawn).
+/// defaults for the rest (no occlusion culling, particles drawn, debug
+/// drawing `PONKO_DEBUG_DRAW_DEFAULT`).
 /// `struct_size` and `version` must be set first.
 /// # Safety
 /// `camera` null or readable; `out_camera` null or a writable descriptor with
@@ -517,6 +562,7 @@ pub unsafe extern "C" fn ponko_camera3d_ex_from(
             camera: *camera,
             occlusion_culling: false,
             particles: true,
+            debug_draw: debug_draw_to_c(None),
         };
         write_desc(out_camera, &value)
     })
@@ -555,6 +601,7 @@ pub unsafe extern "C" fn ponko_ctx_set_camera3d_ex(ctx: *mut PonkoCtx, camera: *
             let mut next = camera_from_c(c.scene3d.camera, &read.camera)?;
             next.occlusion_culling = read.occlusion_culling;
             next.particles = read.particles;
+            next.debug_draw = debug_draw_from_c(read.debug_draw)?;
             c.scene3d.camera = next;
             Ok(())
         })
@@ -562,16 +609,18 @@ pub unsafe extern "C" fn ponko_ctx_set_camera3d_ex(ctx: *mut PonkoCtx, camera: *
 }
 
 /// The version of `PonkoTargetCameraEx` this header describes.
-pub const PONKO_TARGET_CAMERA_EX_VERSION: u32 = 1;
+pub const PONKO_TARGET_CAMERA_EX_VERSION: u32 = 2;
 
 /// A camera drawing the 3D world into a render target each frame, in a
 /// layout that can grow (Rust `TargetCamera`): `PonkoTargetCamera` plus the
 /// fields added since ABI 2. Make one from an ABI 2 camera (for example the
 /// result of `ponko_ctx_reflection_camera`) with `ponko_target_camera_ex_from`,
-/// change `particles` for a camera that shouldn't show particles, and give
-/// the list to `ponko_ctx_set_target_cameras_ex`.
+/// change `particles` for a camera that shouldn't show particles and
+/// `debug_draw` for one that should show `ctx.debug`'s drawing or not
+/// whatever `particles` says, and give the list to
+/// `ponko_ctx_set_target_cameras_ex`.
 ///
-/// Version 1: `target_camera`, `particles`.
+/// Version 1: `target_camera`, `particles`. Version 2: `debug_draw`.
 /// ```
 /// use ponko_ffi::*;
 /// let t = PonkoTargetCamera {
@@ -584,6 +633,7 @@ pub const PONKO_TARGET_CAMERA_EX_VERSION: u32 = 1;
 /// (e.struct_size, e.version) = (size_of::<PonkoTargetCameraEx>() as u32, PONKO_TARGET_CAMERA_EX_VERSION);
 /// assert_eq!(unsafe { ponko_target_camera_ex_from(&t, &mut e) }, PonkoStatus::PONKO_OK);
 /// assert!(e.particles);
+/// assert_eq!(e.debug_draw, PonkoDebugDraw::PONKO_DEBUG_DRAW_DEFAULT as u32);
 /// ```
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -597,6 +647,10 @@ pub struct PonkoTargetCameraEx {
     /// Draw particles, trails and lines. Default true. Off for a monitor that
     /// should show the room but not the smoke.
     pub particles: bool,
+    /// Whether it draws `ctx.debug`'s 3D lines and labels, a
+    /// `PonkoDebugDraw`. Default `PONKO_DEBUG_DRAW_DEFAULT`: while it draws
+    /// particles (a version 1 caller gets that too).
+    pub debug_draw: u32,
 }
 assert_header!(PonkoTargetCameraEx);
 
@@ -606,6 +660,7 @@ impl Versioned for PonkoTargetCameraEx {
     fn len_of(version: u32) -> Option<usize> {
         match version {
             1 => Some(end_of!(Self, particles: bool)),
+            2 => Some(end_of!(Self, debug_draw: u32)),
             _ => None,
         }
     }
@@ -617,12 +672,13 @@ fn target_ex_of(t: &ponko::render::TargetCamera) -> PonkoTargetCameraEx {
         version: PONKO_TARGET_CAMERA_EX_VERSION,
         target_camera: target_camera_to_c(t),
         particles: t.camera.particles,
+        debug_draw: debug_draw_to_c(t.camera.debug_draw),
     }
 }
 
 /// Fills the fields of `out_camera`'s version from an ABI 2 target camera,
-/// with the defaults for the rest (particles drawn). `struct_size` and
-/// `version` must be set first.
+/// with the defaults for the rest (particles drawn, debug drawing
+/// `PONKO_DEBUG_DRAW_DEFAULT`). `struct_size` and `version` must be set first.
 /// # Safety
 /// `camera` null or readable; `out_camera` null or a writable descriptor with
 /// its header set.
@@ -639,6 +695,7 @@ pub unsafe extern "C" fn ponko_target_camera_ex_from(
             version: PONKO_TARGET_CAMERA_EX_VERSION,
             target_camera: *camera,
             particles: true,
+            debug_draw: debug_draw_to_c(None),
         };
         write_desc(out_camera, &value)
     })
@@ -646,7 +703,7 @@ pub unsafe extern "C" fn ponko_target_camera_ex_from(
 
 /// Replaces the target cameras drawn each frame with `count` of them, from
 /// their versioned forms (as `ponko_ctx_set_target_cameras`, each with its
-/// `particles`); 0 draws none. `cameras` is an array of `count` pointers, so
+/// `particles` and `debug_draw`); 0 draws none. `cameras` is an array of `count` pointers, so
 /// each descriptor can be of its own version. Nothing changes when it fails.
 /// # Safety
 /// `ctx` null or live; `cameras` holds `count` pointers (may be null when 0),
@@ -680,11 +737,12 @@ pub unsafe extern "C" fn ponko_ctx_set_target_cameras_ex(
             // SAFETY: plain data, all-zero valid.
             target_camera: std::mem::zeroed(),
             particles: true,
+            debug_draw: debug_draw_to_c(None),
         };
         for &camera in given {
             let d = read_desc(camera, defaults)?;
             list.push(d.target_camera);
-            particles.push(d.particles);
+            particles.push((d.particles, debug_draw_from_c(d.debug_draw)?));
         }
         Ok(())
     });
@@ -699,8 +757,9 @@ pub unsafe extern "C" fn ponko_ctx_set_target_cameras_ex(
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
         ctx_access(ctx, |c| {
-            for (t, on) in c.scene3d.passes.target_cameras.iter_mut().zip(&particles) {
-                t.camera.particles = *on;
+            for (t, &(on, debug_draw)) in c.scene3d.passes.target_cameras.iter_mut().zip(&particles) {
+                t.camera.particles = on;
+                t.camera.debug_draw = debug_draw;
             }
             Ok(())
         })
@@ -755,6 +814,14 @@ mod tests {
         assert_eq!(
             PonkoTargetCameraEx::len_of(1),
             Some(offset_of!(PonkoTargetCameraEx, particles) + 1)
+        );
+        assert_eq!(
+            PonkoCamera3DEx::len_of(2),
+            Some(offset_of!(PonkoCamera3DEx, debug_draw) + 4)
+        );
+        assert_eq!(
+            PonkoTargetCameraEx::len_of(2),
+            Some(offset_of!(PonkoTargetCameraEx, debug_draw) + 4)
         );
         assert_eq!(PonkoPostEx::len_of(2), None);
     }
@@ -816,14 +883,25 @@ mod tests {
                     let mut cam: PonkoCamera3DEx = header(PONKO_CAMERA3D_EX_VERSION);
                     assert_eq!(ponko_ctx_camera3d_ex(c, &mut cam), OK);
                     assert!(cam.particles && !cam.occlusion_culling, "the defaults");
+                    assert_eq!(cam.debug_draw, PonkoDebugDraw::PONKO_DEBUG_DRAW_DEFAULT as u32);
                     cam.particles = false;
                     cam.occlusion_culling = true;
+                    cam.debug_draw = PonkoDebugDraw::PONKO_DEBUG_DRAW_OFF as u32;
                     cam.camera.fov_y = 1.0;
                     assert_eq!(ponko_ctx_set_camera3d_ex(c, &cam), OK);
                     let mut bad = cam;
                     bad.camera.near = 0.0;
                     bad.particles = true;
                     assert_eq!(ponko_ctx_set_camera3d_ex(c, &bad), BAD);
+                    let mut bad = cam;
+                    bad.debug_draw = 3;
+                    bad.particles = true;
+                    assert_eq!(ponko_ctx_set_camera3d_ex(c, &bad), BAD, "not a PonkoDebugDraw");
+                    // A version 1 caller leaves the flag as it is.
+                    let mut v1 = cam;
+                    v1.version = 1;
+                    v1.debug_draw = 3;
+                    assert_eq!(ponko_ctx_set_camera3d_ex(c, &v1), OK);
                     let mut old = std::mem::zeroed::<PonkoCamera3D>();
                     assert_eq!(ponko_ctx_camera3d(c, &mut old), OK);
                     assert_eq!(old.fov_y, 1.0, "the ABI 2 call reads the same camera");
@@ -845,13 +923,26 @@ mod tests {
                     let mut monitor: PonkoTargetCameraEx = header(PONKO_TARGET_CAMERA_EX_VERSION);
                     assert_eq!(ponko_target_camera_ex_from(&abi2, &mut monitor), OK);
                     monitor.particles = false;
+                    monitor.debug_draw = PonkoDebugDraw::PONKO_DEBUG_DRAW_ON as u32;
                     let mut mirror = monitor;
                     mirror.particles = true;
+                    // A version 1 caller gets the default debug drawing.
+                    mirror.version = 1;
+                    mirror.debug_draw = 3;
                     let list = [&raw const monitor, &raw const mirror];
                     assert_eq!(ponko_ctx_set_target_cameras_ex(c, list.as_ptr(), 2), OK);
                     let mut read: PonkoTargetCameraEx = header(PONKO_TARGET_CAMERA_EX_VERSION);
                     assert_eq!(ponko_ctx_target_camera_ex(c, 0, &mut read), OK);
                     assert!(!read.particles && read.target_camera.camera.near == 0.2);
+                    assert_eq!(read.debug_draw, PonkoDebugDraw::PONKO_DEBUG_DRAW_ON as u32);
+                    let mut bad = monitor;
+                    bad.debug_draw = 7;
+                    let list = [&raw const bad];
+                    assert_eq!(
+                        ponko_ctx_set_target_cameras_ex(c, list.as_ptr(), 1),
+                        BAD,
+                        "not a PonkoDebugDraw"
+                    );
                     assert_eq!(ponko_ctx_target_camera_ex(c, 2, &mut read), BAD, "past the end");
                     let none = [std::ptr::null::<PonkoTargetCameraEx>()];
                     assert_eq!(
@@ -866,17 +957,21 @@ mod tests {
             assert_eq!((softness(soft), softness(plain)), (Some(1.5), Some(0.0)));
             let camera = ctx.scene3d.camera;
             assert!(
-                !camera.particles && camera.occlusion_culling,
+                !camera.particles && camera.occlusion_culling && camera.debug_draw == Some(false),
                 "the refused set changed nothing"
             );
-            let flags: Vec<bool> = ctx
+            let flags: Vec<(bool, Option<bool>)> = ctx
                 .scene3d
                 .passes
                 .target_cameras
                 .iter()
-                .map(|t| t.camera.particles)
+                .map(|t| (t.camera.particles, t.camera.debug_draw))
                 .collect();
-            assert_eq!(flags, [false, true], "the refused calls changed nothing");
+            assert_eq!(
+                flags,
+                [(false, Some(true)), (true, None)],
+                "the refused calls changed nothing"
+            );
         });
     }
 
