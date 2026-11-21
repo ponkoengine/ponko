@@ -105,6 +105,9 @@ builtins=$("$sdk/bin/clang" --target=wasm32-wasip1 -print-libgcc-file-name)
 # Warnings fail the link: a WASI function web_main defines with another
 # signature than the C library's would otherwise become a trap.
 link_args+=(-C link-arg=--fatal-warnings)
+# ponko_ffi's src/web.rs keeps the frames a started game left at their
+# depth by setting the stack pointer from JavaScript.
+link_args+=(-C link-arg=--export=__stack_pointer)
 link_args+=(-L "native=$libs/eh" -L "native=$libs" -L "native=$(dirname "$builtins")")
 link_args+=(-l static=c++ -l static=c++abi -l static=unwind -l static=c -l "static=$(basename "$builtins" .a | sed 's/^lib//')")
 
