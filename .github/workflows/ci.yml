@@ -1181,6 +1181,13 @@ jobs:
       # ones (no offscreen readback or disk cache there).
       - run: cargo clippy -p ponko --target wasm32-unknown-unknown --features editor -- -D warnings
       - run: cargo clippy -p ponko --target wasm32-unknown-unknown --features editor,3d -- -D warnings
+      # The threaded web configuration (atomics, std rebuilt, nightly): the
+      # nightly clippy has lints the stable one lacks, and some code is only
+      # compiled with atomics. `web/build.sh --threads --clippy` lints the
+      # engine and the threads fixture with the flags a threaded build uses.
+      - name: Nightly Rust for the threaded web build
+        run: rustup toolchain install nightly --profile minimal --component rust-src,clippy --target wasm32-unknown-unknown
+      - run: web/build.sh --threads --clippy
       - name: Find the wasm-bindgen version in Cargo.lock
         run: echo "WASM_BINDGEN=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print }' Cargo.lock)" >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@v2
@@ -1318,8 +1325,10 @@ jobs:
       # (nightly Rust rebuilding std with atomics, hence rust-src). Served with
       # the cross-origin isolation headers its work must run on workers; served
       # without, on the page's thread alone, with the same result. A worker's
-      # panic must stop the game. Fed browser gamepads must reach the game
-      # (`--case gamepads`), and a warning must fail the threaded build
+      # panic must stop the game. Fed browser gamepads must reach the game and
+      # its rumble the pad's `vibrationActuator` (`--case gamepads`; the same
+      # on the ordinary build, whose pads come from gilrs, `--case
+      # gamepads-plain`), and a warning must fail the threaded build
       # (`--case warning`: an example whose only code is an unused function
       # behind `target_feature = "atomics"`, built with -D warnings).
       - name: Nightly Rust for the threaded web build
@@ -1332,6 +1341,7 @@ jobs:
           node web/smoke/threads.mjs --build
           node web/smoke/threads.mjs --case worker-panic
           node web/smoke/threads.mjs --case gamepads
+          node web/smoke/threads.mjs --build --case gamepads-plain
           node web/smoke/threads.mjs --case warning
       # Replication in the browser (web/smoke/replication.mjs): the Orb Arena
       # example, a native dedicated server (no window) and one tab that joins

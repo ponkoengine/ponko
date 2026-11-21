@@ -112,7 +112,7 @@ impl WebRumble {
 }
 
 /// One of the browser's pads, as far as rumble needs it.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[cfg_attr(not(all(target_arch = "wasm32", not(target_feature = "atomics"))), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BrowserPad {
     /// Its place in `navigator.getGamepads()`.
@@ -127,7 +127,7 @@ pub(crate) struct BrowserPad {
 /// that has `id` as its name, when that backend (gilrs) doesn't say where
 /// in the browser's list a pad is: pads of one `id` are numbered in the
 /// order the browser lists them, which is the order gilrs finds them in.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[cfg_attr(not(all(target_arch = "wasm32", not(target_feature = "atomics"))), allow(dead_code))]
 pub(crate) fn pick<'a>(pads: &'a [BrowserPad], id: &str, nth: usize) -> Option<&'a BrowserPad> {
     pads.iter().filter(|p| p.id == id).nth(nth)
 }
@@ -157,7 +157,9 @@ impl Browser {
         Some(actuator)
     }
 
-    /// The pads connected now, in the browser's order.
+    /// The pads connected now, in the browser's order (what the ordinary
+    /// build, whose gilrs doesn't say where a pad is, looks them up by).
+    #[cfg_attr(target_feature = "atomics", allow(dead_code))]
     pub(crate) fn pads() -> Vec<BrowserPad> {
         let mut out = Vec::new();
         Self::each_pad(|slot, pad| {

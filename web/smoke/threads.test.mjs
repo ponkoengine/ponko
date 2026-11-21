@@ -18,6 +18,7 @@ import {
   fakeGamepad,
   FAKE_PAD_ID,
   GAMEPAD_STEPS,
+  GILRS_AXIS_TOLERANCE,
   installFakeGamepads,
   WARNING_ITEM,
   median,
@@ -223,6 +224,11 @@ test("each gamepad step passes only on what the engine must report", () => {
   assert.match(checkGamepadStep(press, { ...pressed, pads: [{ ...pressed.pads[0], axes: { ...pressed.pads[0].axes, ly: 1 } }] })[0], /ly/);
   assert.match(checkGamepadStep(press, { ...pressed, pads: [{ ...pressed.pads[0], down: ["South", "DPadRight", "LeftTrigger"] }] })[0], /buttons down/);
   assert.match(checkGamepadStep(press, { ...pressed, pad_presses: 0 })[0], /pressed 0 times/);
+  // gilrs's dead zone moves a half to 0.44: fine on the ordinary build, not for the exact backend.
+  const scaled = { ...pressed, pads: [{ ...pressed.pads[0], axes: { ...pressed.pads[0].axes, lx: 0.444 } }] };
+  assert.match(checkGamepadStep(press, scaled)[0], /lx/);
+  assert.deepEqual(checkGamepadStep(press, scaled, GILRS_AXIS_TOLERANCE), []);
+  assert.match(checkGamepadStep(press, { ...scaled, pads: [{ ...scaled.pads[0], axes: { ...scaled.pads[0].axes, lx: -0.5 } }] }, GILRS_AXIS_TOLERANCE)[0], /lx/);
   assert.deepEqual(checkGamepadStep(release, { pads: [pad([], {})], pad_presses: 1 }), []);
   assert.deepEqual(checkGamepadStep(unplug, { pads: [] }), []);
 });

@@ -43,6 +43,7 @@ import { LAUNCHERS, serve } from "./smoke.mjs";
 import {
   FALLBACK_WARNING,
   GAMEPAD_STEPS,
+  GILRS_AXIS_TOLERANCE,
   ISOLATION_HEADERS,
   RUMBLE_PRESS,
   RUMBLE_SECONDS,
@@ -177,7 +178,7 @@ async function gamepads(browser, servers, args, report, plain = false) {
     let left = ["not checked"];
     while (Date.now() < deadline) {
       last = await state(page);
-      left = checkGamepadStep(step, last);
+      left = checkGamepadStep(step, last, plain ? GILRS_AXIS_TOLERANCE : undefined);
       if (left.length === 0) break;
       await sleep(100);
     }

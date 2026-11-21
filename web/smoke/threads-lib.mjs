@@ -370,8 +370,14 @@ export const GAMEPAD_STEPS = [
   { name: "the pad unplugged", pads: [], expect: null },
 ];
 
-/** The problems with the fixture's state after a gamepad step. */
-export function checkGamepadStep(step, state) {
+/** How far an axis may be from the fed value on the ordinary build: gilrs applies its own dead zone and scaling. */
+export const GILRS_AXIS_TOLERANCE = 0.1;
+
+/**
+ * The problems with the fixture's state after a gamepad step; axes must be
+ * within `tolerance` of the fed values (exact for the threaded backend).
+ */
+export function checkGamepadStep(step, state, tolerance = 1e-6) {
   const pads = state?.pads ?? [];
   if (step.expect == null) return pads.length === 0 ? [] : [`expected no pads, the engine sees ${JSON.stringify(pads)}`];
   if (pads.length !== 1) return [`expected one pad, the engine sees ${pads.length}: ${JSON.stringify(pads)}`];
@@ -386,7 +392,7 @@ export function checkGamepadStep(step, state) {
   expect(pad.rumble === true, `the pad's rumble capability is ${pad.rumble}, not true (it has a vibrationActuator)`);
   expect(down === [...step.expect.down].sort().join(","), `buttons down: [${pad.down}], not [${step.expect.down}]`);
   for (const [axis, want] of Object.entries(step.expect.axes)) {
-    expect(Math.abs((pad.axes?.[axis] ?? NaN) - want) < 1e-6, `axis ${axis} is ${pad.axes?.[axis]}, not ${want}`);
+    expect(Math.abs((pad.axes?.[axis] ?? NaN) - want) < tolerance, `axis ${axis} is ${pad.axes?.[axis]}, not ${want}`);
   }
   if (step.expect.presses != null) {
     expect(state.pad_presses === step.expect.presses, `South was pressed ${state.pad_presses} times, not ${step.expect.presses}`);

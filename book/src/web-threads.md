@@ -157,8 +157,11 @@ ponko: this build can use threads, but the page isn't cross-origin isolated (...
   so the engine keeps none. Every frame it calls `navigator.getGamepads()`
   on the page's thread, copies the buttons and axes into plain numbers and
   compares them with the last frame's, which become the engine's events.
-  Pads are read in the browser's standard layout, as in the ordinary build,
-  and there is no rumble on the web in either. A game's own
+  Pads are read in the browser's standard layout, as in the ordinary build.
+  Rumble goes to the pad's `vibrationActuator` where the browser has one,
+  in both builds, played again every second so the browser's 5-second cap
+  never ends it (see [Controllers](controllers.md#what-each-platform-supports)).
+  A game's own
   `GamepadBackend` replaces it as usual.
 
 `ponko::web::threads()` says how many frame threads the game runs on (0 on

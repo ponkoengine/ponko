@@ -195,17 +195,26 @@ Without a backend, `InputEvent::GamepadConnected(pad)` and
 ### What each platform supports
 
 What the built-in backend can do depends on what gilrs 0.11 implements on
-each platform. Features it can't drive are reported as `false` in
-`GamepadInfo::capabilities`, never faked:
+each platform, and on the web on what the browser has. Features it can't
+drive are reported as `false` in `GamepadInfo::capabilities`, never faked:
 
 | | Linux (evdev) | Windows (Windows.Gaming.Input) | macOS | Web |
 |---|---|---|---|---|
 | Buttons, sticks, triggers, hot-plug | yes | yes | yes | yes |
 | Name, family | yes | yes | yes | yes |
 | USB vendor / product ids | yes | yes | yes | when the browser reports them |
-| Body rumble (`strong`, `weak`) | yes, on pads with force feedback | yes, on gamepads with motors | no | no |
+| Body rumble (`strong`, `weak`) | yes, on pads with force feedback | yes, on gamepads with motors | no | where the browser has `vibrationActuator` (Chromium-based browsers) |
 | Trigger rumble | no | no (the system has it; gilrs sends zero) | no | no |
 | Gyro and accelerometer | no | no | no | no |
+
+On the web the engine plays rumble itself: gilrs has no force feedback
+there, so it calls `playEffect("dual-rumble", ...)` on the pad's
+`vibrationActuator`. Browsers end an effect after at most 5 seconds, so the
+engine asks for 2-second effects and plays the same levels again every
+second until the rumble ends (`Rumble::seconds`, or `stop_rumble`); a game
+that stalls stops buzzing within 2 seconds. A pad without an actuator
+reports `rumble: false` and stays quiet. Only the two body motors play, and
+the engine can only report what the browser says it has. The same holds for builds with [threads](web-threads.md).
 
 For trigger rumble or motion on a platform, install a backend that reads a
 library or SDK that has them; the engine's API already carries both.
