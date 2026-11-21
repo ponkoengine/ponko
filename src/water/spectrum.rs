@@ -34,7 +34,8 @@ use super::waves::{WAVE_GRAVITY, WaveSample};
 // asks for both.
 #[cfg(all(feature = "wasm-simd", target_arch = "wasm32", not(target_feature = "simd128")))]
 compile_error!(
-    "the `wasm-simd` feature needs the whole build compiled with SIMD: set \
+    "the `wasm-simd` feature needs the whole build compiled with SIMD: build with \
+     `web/build.sh --simd`, which sets both, or set \
      CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS=\"-C target-feature=+simd128\" \
      (or add it to RUSTFLAGS), or leave the feature off"
 );
@@ -248,6 +249,20 @@ struct Cache {
     v_t: Vec<Complex32>,
     /// The FFT's work space.
     scratch: Vec<Complex32>,
+    /// Whether new moments are worked out with the sway's speed though
+    /// not asked for it: on after a moment worked out without it was
+    /// asked again with it (a WebGL2 upload, then buoyancy at the same
+    /// time), off after such a guess goes unused.
+    guess_speed: bool,
+    /// The moment last worked out with the sway's speed on a guess, until
+    /// a query with the sway's speed uses it.
+    guessed: Option<f32>,
+    /// Moments worked out (tests count them).
+    #[cfg(test)]
+    computed: usize,
+    /// Never guess: the field as it was before guessing (tests time both).
+    #[cfg(test)]
+    never_guess: bool,
 }
 
 impl PartialEq for SpectrumField {
@@ -388,24 +403,63 @@ impl SpectrumField {
     }
 
     /// The field at time `t`, worked out on the CPU (with the sway's speed
-    /// if `speed`); the last two moments are kept.
+    /// if `speed`); the last two moments are kept, so each is worked out
+    /// once however many queries ask. When a moment worked out without the
+    /// sway's speed is then asked with it (the WebGL2 upload, then buoyancy
+    /// at the same time), the next moments are worked out with it from the
+    /// start, until one such guess goes unused.
     pub fn field(&self, t: f32, speed: bool) -> Arc<Field> {
         let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Kept by the moment in the period, as `compute` names it.
+        let key = wrap_time(t);
         if let Some(f) = cache
             .fields
             .iter()
-            .find(|f| f.t == t && (!speed || !f.sway_speed.is_empty()))
+            .find(|f| f.t == key && (!speed || !f.sway_speed.is_empty()))
+            .cloned()
         {
-            return f.clone();
+            if speed && cache.guessed == Some(key) {
+                cache.guessed = None;
+            }
+            return f;
         }
-        // The oldest moment's buffers are reused, unless someone still
-        // holds it.
-        let old = if cache.fields.len() == 2 {
-            Arc::try_unwrap(cache.fields.remove(0)).ok()
+        // The same moment without the sway's speed: replaced, and a sign
+        // that the next moments will be asked with it too.
+        let again = cache.fields.iter().position(|f| f.t == key);
+        let with_speed = if speed {
+            #[cfg(test)]
+            let guess = !cache.never_guess;
+            #[cfg(not(test))]
+            let guess = true;
+            if again.is_some() && guess {
+                cache.guess_speed = true;
+            }
+            true
+        } else if cache.guess_speed {
+            if cache.guessed.is_some() {
+                // The last guess went unused: stop guessing.
+                cache.guess_speed = false;
+                cache.guessed = None;
+                false
+            } else {
+                cache.guessed = Some(key);
+                true
+            }
         } else {
-            None
+            false
         };
-        let field = Arc::new(self.compute(t, speed, &mut cache, old));
+        // The oldest moment's buffers are reused (or the one replaced),
+        // unless someone still holds it.
+        let old = match again {
+            Some(i) => Arc::try_unwrap(cache.fields.remove(i)).ok(),
+            None if cache.fields.len() == 2 => Arc::try_unwrap(cache.fields.remove(0)).ok(),
+            None => None,
+        };
+        #[cfg(test)]
+        {
+            cache.computed += 1;
+        }
+        let field = Arc::new(self.compute(t, with_speed, &mut cache, old));
         cache.fields.push(field.clone());
         field
     }
@@ -920,13 +974,129 @@ mod tests {
 
     #[test]
     fn the_sea_loops_every_period() {
-        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+        let settings = WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64);
+        // Two fields, so the second moment isn't the first one's cache.
         let (a, b) = (
-            spectrum.field(12.5, false),
-            spectrum.field(12.5 + SPECTRUM_PERIOD, false),
+            SpectrumField::new(settings).field(12.5, false),
+            SpectrumField::new(settings).field(12.5 + SPECTRUM_PERIOD, false),
         );
         for (x, y) in a.texels.iter().zip(&b.texels) {
             assert!((x[0] - y[0]).abs() < 1e-3);
+        }
+    }
+
+    fn computed(spectrum: &SpectrumField) -> usize {
+        spectrum.cache.lock().unwrap().computed
+    }
+
+    /// A frame of a WebGL2 sea with something floating, as the game runs
+    /// it on a fixed step: buoyancy at the step's time (with the sway's
+    /// speed), then the texture upload at the frame's, which is the next
+    /// step's time.
+    fn upload_and_buoyancy_frame(spectrum: &SpectrumField, frame: u32) {
+        let step = 1.0 / 60.0;
+        spectrum.field(frame as f32 * step, true);
+        spectrum.field((frame + 1) as f32 * step, false);
+    }
+
+    #[test]
+    fn the_upload_and_buoyancy_work_out_one_moment_once() {
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+        for frame in 0..3 {
+            upload_and_buoyancy_frame(&spectrum, frame);
+        }
+        let before = computed(&spectrum);
+        for frame in 3..13 {
+            upload_and_buoyancy_frame(&spectrum, frame);
+        }
+        assert_eq!(computed(&spectrum) - before, 10, "one new moment a frame");
+        // The other order (upload first, then buoyancy at the same time).
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+        for frame in 0..10 {
+            let t = frame as f32 * 0.1;
+            spectrum.field(t, false);
+            spectrum.field(t, true);
+        }
+        assert_eq!(computed(&spectrum), 11, "the first moment twice, then each once");
+    }
+
+    #[test]
+    fn a_guessed_sway_speed_is_what_a_query_asking_for_it_gets() {
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(8.0, 0.0), 1.5).with_tile(128.0, 64));
+        spectrum.field(1.0, false);
+        spectrum.field(1.0, true);
+        let guessed = spectrum.field(2.0, false);
+        assert!(!guessed.sway_speed.is_empty(), "worked out with the sway's speed");
+        let asked = SpectrumField::new(spectrum.settings).field(2.0, true);
+        assert_eq!(*guessed, *asked, "the same field as when asked for it");
+    }
+
+    #[test]
+    fn an_unused_guess_stops_the_guessing() {
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+        spectrum.field(1.0, false);
+        spectrum.field(1.0, true);
+        assert!(!spectrum.field(2.0, false).sway_speed.is_empty(), "guessed");
+        // Nothing asks 2.0 with the sway's speed: the next moment is plain.
+        assert!(spectrum.field(3.0, false).sway_speed.is_empty(), "no longer guessed");
+        assert!(spectrum.field(4.0, false).sway_speed.is_empty());
+        // Without a moment asked twice, plain queries never pay for the speed.
+        let plain = SpectrumField::new(spectrum.settings);
+        for i in 0..5 {
+            assert!(plain.field(i as f32, false).sway_speed.is_empty());
+            plain.field(i as f32 + 0.5, true);
+        }
+    }
+
+    #[test]
+    fn a_moment_after_the_first_period_is_worked_out_once() {
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+        let t = SPECTRUM_PERIOD * 3.0 + 41.3;
+        let a = spectrum.field(t, false);
+        let b = spectrum.field(t, false);
+        assert!(Arc::ptr_eq(&a, &b), "the second query reads the first one's moment");
+        assert_eq!(computed(&spectrum), 1);
+    }
+
+    /// A frame's CPU field at 128 cells (and 64 and 256) for a WebGL2 sea
+    /// with something floating (`upload_and_buoyancy_frame`), before (no
+    /// guessing: the upload's moment worked out again for buoyancy) and
+    /// after, run after run. Run by hand in release:
+    /// `cargo test -p ponko --lib --features 3d --release upload_and_buoyancy_frame_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn upload_and_buoyancy_frame_cost() {
+        use std::time::Instant;
+        let runs: usize = std::env::var("PONKO_SPECTRUM_RUNS")
+            .ok()
+            .and_then(|r| r.parse().ok())
+            .unwrap_or(5);
+        for run in 0..runs {
+            for cells in [64, 128, 256] {
+                let mut line = format!("run {run}, {cells} cells:");
+                for guess in [false, true] {
+                    let settings = WaveSpectrum::new(Vec2::new(8.0, -6.0), 1.5).with_tile(256.0, cells);
+                    let spectrum = SpectrumField::new(settings);
+                    spectrum.cache.lock().unwrap().never_guess = !guess;
+                    for frame in 0..4 {
+                        upload_and_buoyancy_frame(&spectrum, frame);
+                    }
+                    let mut times: Vec<f32> = (4..19)
+                        .map(|frame| {
+                            let start = Instant::now();
+                            upload_and_buoyancy_frame(&spectrum, frame);
+                            start.elapsed().as_secs_f32() * 1000.0
+                        })
+                        .collect();
+                    times.sort_by(f32::total_cmp);
+                    line += &format!(
+                        " {} {:.3} ms a frame;",
+                        if guess { "after" } else { "before" },
+                        times[times.len() / 2]
+                    );
+                }
+                eprintln!("{line}");
+            }
         }
     }
 

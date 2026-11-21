@@ -12,14 +12,15 @@ export const KINDS = ["height", "sway"];
 
 /**
  * The builds compared: the ordinary one; `simd128` for the whole module
- * (the compiler's own vectorising, rustfft's scalar code); and that with
+ * (the compiler's own vectorising, rustfft's scalar code), the flag alone
+ * added to the environment; and `web/build.sh --simd`, that flag with
  * rustfft's WASM SIMD FFT (the `wasm-simd` feature). The feature without
  * the flag (three times slower when it was measured) no longer compiles.
  */
 export const VARIANTS = {
-  scalar: { features: "3d", simd128: false, dir: "target/web/web_spectrum" },
-  simd128: { features: "3d", simd128: true, dir: "target/web/web_spectrum_simd128" },
-  simd: { features: "3d,wasm-simd", simd128: true, dir: "target/web/web_spectrum_simd" },
+  scalar: { features: "3d", simd128: false, rustfftSimd: false, dir: "target/web/web_spectrum" },
+  simd128: { features: "3d", simd128: true, rustfftSimd: false, dir: "target/web/web_spectrum_simd128" },
+  simd: { features: "3d", simd128: true, rustfftSimd: true, dir: "target/web/web_spectrum_simd" },
 };
 
 export const USAGE =
@@ -66,13 +67,15 @@ export function parseArgs(argv) {
 }
 
 /**
- * The environment a variant builds in: `simd128` added to the rust flags
- * cargo reads (the first of CARGO_ENCODED_RUSTFLAGS, RUSTFLAGS and the
- * wasm target's variable that is set), keeping what they hold.
+ * The environment a variant builds in: for `simd128` alone, the flag added
+ * to the rust flags cargo reads (the first of CARGO_ENCODED_RUSTFLAGS,
+ * RUSTFLAGS and the wasm target's variable that is set), keeping what they
+ * hold. `web/build.sh --simd` adds it itself for the `simd` build.
  */
 export function variantEnv(variant, env) {
   const out = { ...env };
-  if (!VARIANTS[variant].simd128) return out;
+  const v = VARIANTS[variant];
+  if (!v.simd128 || v.rustfftSimd) return out;
   const flag = "-C target-feature=+simd128";
   const set = (name) => (out[name] ?? "") !== "";
   if (set("CARGO_ENCODED_RUSTFLAGS")) {
@@ -88,7 +91,7 @@ export function variantEnv(variant, env) {
 /** The web/build.sh arguments for a variant. */
 export function buildArgs(variant) {
   const v = VARIANTS[variant];
-  return ["web/build.sh", "--features", v.features, "web_spectrum", v.dir];
+  return ["web/build.sh", ...(v.rustfftSimd ? ["--simd"] : []), "--features", v.features, "web_spectrum", v.dir];
 }
 
 /** Whether a page's state has every size and kind timed. */
@@ -106,7 +109,7 @@ export function checkRun(variant, state) {
   const problems = [];
   const expect = (ok, what) => ok || problems.push(what);
   expect(state.simd === v.simd128, `the ${variant} build reports simd128 ${state.simd}, not ${v.simd128}`);
-  const fft = v.features.includes("wasm-simd");
+  const fft = v.rustfftSimd;
   expect(state.rustfft_simd === fft, `the ${variant} build reports rustfft's SIMD ${state.rustfft_simd}, not ${fft}`);
   for (const cells of CELLS) {
     for (const kind of KINDS) {
