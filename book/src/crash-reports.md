@@ -326,8 +326,9 @@ builds with frame pointers, for example in its `.cargo/config.toml`:
 rustflags = ["-C", "force-frame-pointers=yes"]
 ```
 
-That costs one register, usually around 1 % of speed or less. System
-libraries built without them (common on older Linux distributions) end the
+That keeps one register busy in every function, a small cost to measure
+with the game's own benchmark before shipping it. System libraries built
+without them (common on older Linux distributions) end the
 chain where they are entered. Windows needs none of this: its unwinder uses
 the tables every function has.
 
