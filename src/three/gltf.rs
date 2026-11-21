@@ -481,9 +481,9 @@ impl ReadNodes {
     pub(crate) fn keep(loaded: LoadedNodes, bytes: &[u8]) -> Self {
         let mut corners: HashMap<usize, Arc<MeshData>> = HashMap::new();
         let mut nodes = loaded.nodes;
-        for i in 0..nodes.len() {
-            let same_mesh_as = nodes[i].same_mesh_as;
-            let Some(mesh) = &mut nodes[i].mesh else { continue };
+        for (i, node) in nodes.iter_mut().enumerate() {
+            let same_mesh_as = node.same_mesh_as;
+            let Some(mesh) = &mut node.mesh else { continue };
             mesh.data = match same_mesh_as.and_then(|first| corners.get(&first)) {
                 Some(first) => Arc::clone(first),
                 None => {
