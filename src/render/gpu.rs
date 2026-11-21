@@ -674,8 +674,8 @@ impl Renderer {
 
     /// A renderer drawing offscreen at `size` on this renderer's GPU (the
     /// same device and queue, its own pipelines and resources): the
-    /// editor's model thumbnails.
-    #[cfg(all(feature = "3d", feature = "editor"))]
+    /// editor's model thumbnails (not on the web: see `thumb_studio`).
+    #[cfg(all(feature = "3d", feature = "editor", not(target_arch = "wasm32")))]
     pub(crate) fn offscreen_twin(&self, size: (u32, u32)) -> Self {
         let msaa = 4;
         let info = self.device.adapter_info();
