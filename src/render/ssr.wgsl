@@ -26,7 +26,12 @@ struct Settings {
     camera: vec4<f32>,
     params: vec4<f32>,     // strength (0: none), longest ray, frame number
 };
-@group(0) @binding(0) var depth: texture_depth_multisampled_2d;
+// The depth prepass's depth, copied: one 32-bit float per pixel (sample 0
+// of the multisampled depth, see `fs_depth`). The march reads it dozens of
+// times a pixel, and a single-sampled copy holds four times as many pixels
+// in the GPU's caches: copy and trace cost less together than the trace
+// reading the multisampled depth did.
+@group(0) @binding(0) var depth: texture_2d<f32>;
 // fs_trace: the last frame's opaque image. fs_copy: this frame's.
 @group(0) @binding(1) var image: texture_2d<f32>;
 @group(0) @binding(2) var image_sampler: sampler;
@@ -38,17 +43,27 @@ struct Full { @builtin(position) at: vec4<f32> };
     return out;
 }
 
-// Steps along the ray, then halvings of the step that crossed.
-const STEPS: i32 = 32;
+// Steps along the ray, then halvings of the step that crossed. 48 rather
+// than 32: far along the ray, steps are tens of pixels long and step over
+// thin things (a rail, a cable) without TAA to fill the gaps; with the depth
+// copy (see `fs_depth`) the 48 cost less than the 32 did reading the
+// multisampled depth.
+const STEPS: i32 = 48;
 const REFINE: i32 = 6;
 // How fast the steps grow on screen: each is e^(GROWTH / STEPS) times
-// (about 1.1 times) the one before.
+// (about 1.06 times) the one before.
 const GROWTH: f32 = 3.0;
 
 fn coordinate(p: vec2<i32>) -> vec2<i32> {
     return clamp(p, vec2<i32>(0), vec2<i32>(textureDimensions(depth)) - 1);
 }
-fn z_at(p: vec2<i32>) -> f32 { return textureLoad(depth, coordinate(p), 0); }
+fn z_at(p: vec2<i32>) -> f32 { return textureLoad(depth, coordinate(p), 0).r; }
+// The copy of the depth the trace and the filtered levels read (see
+// `depth`), before the trace.
+@group(0) @binding(12) var scene_depth: texture_depth_multisampled_2d;
+@fragment fn fs_depth(in: Full) -> @location(0) vec4<f32> {
+    return vec4<f32>(textureLoad(scene_depth, vec2<i32>(in.at.xy), 0), 0.0, 0.0, 0.0);
+}
 // The depth is reverse-Z: 1 at the near plane, 0 at the far plane and the
 // sky, so farther is smaller. Next to the far plane counts as sky.
 fn is_sky(z: f32) -> bool { return z <= 0.000001; }
@@ -80,13 +95,6 @@ fn edge_fade(uv: vec2<f32>) -> f32 {
     let d = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
     return clamp(d * 10.0, 0.0, 1.0);
 }
-// Whether the ray at clip position `c` is behind the depth buffer at its pixel.
-fn behind(c: vec4<f32>) -> bool {
-    let q = vec2<i32>(to_uv(c) * vec2<f32>(textureDimensions(depth)));
-    let z = z_at(q);
-    return !is_sky(z) && c.z / c.w < z;
-}
-
 // The footprint, in full-size pixels, of a cone of tangent 1 around a ray
 // from `center` (seen along `view`, toward the camera) that ends after
 // `travel`: its diameter there, 2 * travel, seen at the mirror image of the
@@ -103,31 +111,41 @@ fn cone_spread(center: vec3<f32>, view: vec3<f32>, travel: f32) -> f32 {
     return 2.0 * travel * pixels;
 }
 
-// Where step `k` (0 to 1) of the march falls along the ray, as a fraction
-// `f` of it, for a ray whose ends are `w0` and `w1` in front of the camera:
-// on screen, from `first` on, each step a little longer than the one
-// before (see GROWTH). Short steps near the surface, where contact
-// reflections are, and as many pixels apart however far the ray goes into
-// the scene. Clip space is linear along the ray, and its fraction `f`
-// covers `s = f w1 / (w0 + f (w1 - w0))` of the line on screen.
-fn march_at(k: f32, first: f32, w0: f32, w1: f32) -> f32 {
-    let s = first + (1.0 - first) * (exp(GROWTH * k) - 1.0) / (exp(GROWTH) - 1.0);
+// The march, on screen. Along the ray's line there, the depth (z / w) and
+// 1 / w change linearly (perspective keeps lines straight and those two
+// affine), so a point a fraction `s` of the way along it on screen is a mix
+// of the ends': no division per step. `uv` and `depth` at the start, and
+// how they change over the whole line; `inverse_w` likewise.
+struct Line {
+    uv: vec2<f32>,
+    uv_span: vec2<f32>,
+    depth: f32,
+    depth_span: f32,
+    inverse_w: f32,
+    inverse_w_span: f32,
+};
+fn line_uv(l: Line, s: f32) -> vec2<f32> { return l.uv + l.uv_span * s; }
+fn line_depth(l: Line, s: f32) -> f32 { return l.depth + l.depth_span * s; }
+// How far in front of the camera (clip w) the ray is at `s`.
+fn line_w(l: Line, s: f32) -> f32 { return 1.0 / (l.inverse_w + l.inverse_w_span * s); }
+// How much the ray's w changes over a fraction `ds` of the line at `s`,
+// where it is `w` in front of the camera (the derivative of `line_w`).
+fn line_w_change(l: Line, w: f32, ds: f32) -> f32 { return w * w * abs(l.inverse_w_span) * ds; }
+// Whether the ray at `s` is behind the depth buffer at its pixel.
+fn line_behind(l: Line, s: f32, size: vec2<f32>) -> bool {
+    let z = z_at(vec2<i32>(line_uv(l, s) * size));
+    return !is_sky(z) && line_depth(l, s) < z;
+}
+// The fraction of the line in clip space (and in the world) that its
+// fraction `s` on screen stands for, for ends `w0` and `w1` in front of the
+// camera.
+fn clip_fraction(s: f32, w0: f32, w1: f32) -> f32 {
     return s * w0 / (s * w0 + (1.0 - s) * w1);
 }
-// How far behind the depth buffer the point at step `k` of the march, `w`
-// in front of the camera, still counts as a hit: what's on screen is
-// assumed to be that thick, and the ray may have gone that far behind its
-// front within a step. The step is `march_at`'s slope there (one step's
-// share of the ray), so where a reflection ends doesn't depend on where
-// each pixel's jittered steps fell.
-fn thickness(k: f32, w: f32, first: f32, w0: f32, w1: f32) -> f32 {
-    let grown = exp(GROWTH * k);
-    let scale = (1.0 - first) / (exp(GROWTH) - 1.0);
-    let s = first + scale * (grown - 1.0);
-    let d = s * w0 + (1.0 - s) * w1;
-    let step = scale * GROWTH * grown * w0 * w1 / (d * d) / f32(STEPS);
-    return 0.1 + 0.02 * w + 2.0 * step * abs(w1 - w0);
-}
+// How far behind the depth buffer a point `w` in front of the camera still
+// counts as a hit, besides the ray's own travel (see the march): what's on
+// screen is assumed to be that thick.
+fn thickness(w: f32) -> f32 { return 0.1 + 0.02 * w; }
 
 // The trace's two targets: what the pixel reflects (rgb the color times
 // alpha, alpha how much it counts; 0: the ray found nothing on screen, the
@@ -175,48 +193,91 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
     let noise = vec2<f32>(p) + 5.588238 * f32(u32(settings.params.z) % 64u);
     let jitter = fract(52.9829189 * fract(dot(noise, vec2<f32>(0.06711056, 0.00583715))));
     let size = vec2<f32>(textureDimensions(depth));
-    // The first step lands a pixel and a half out: the start's own pixel
-    // can't tell the surface from what's behind it at a grazing angle.
-    let first = min(1.5 / max(length((to_uv(end) - to_uv(start)) * size), 0.0001), 1.0);
+    let uv0 = to_uv(start);
+    let uv1 = to_uv(end);
+    let line = Line(
+        uv0, uv1 - uv0,
+        start.z / start.w, end.z / end.w - start.z / start.w,
+        1.0 / start.w, 1.0 / end.w - 1.0 / start.w,
+    );
+    let pixels = max(length((uv1 - uv0) * size), 0.0001);
+    // The steps: on screen, from `first` on, each e^(GROWTH / STEPS) times
+    // the one before. Short steps near the surface, where contact
+    // reflections are, and as many pixels apart however far the ray goes
+    // into the scene. The first lands a pixel and a half out: the start's
+    // own pixel can't tell the surface from what's behind it at a grazing
+    // angle. Step `k` (0 to 1) falls at `first + scale (e^(GROWTH k) - 1)`;
+    // `grown` holds e^(GROWTH k), one multiplication a step.
+    let first = min(1.5 / pixels, 1.0);
+    let scale = (1.0 - first) / (exp(GROWTH) - 1.0);
+    let ratio = exp(GROWTH / f32(STEPS));
+    var grown = exp(GROWTH * jitter / f32(STEPS));
+    // The most of a step a crossing may count as the ray's travel (see
+    // below): two pixels at 1080p, as many of the screen's height at other
+    // sizes, and at least two.
+    let most = max(2.0, size.y / 540.0) / pixels;
     var before = 0.0;
     var was_behind = false;
+    // How far in front of the camera the surface the ray was last behind
+    // is (see the still-behind case below).
+    var behind_w = 0.0;
     var hit = -1.0;
     for (var i = 0; i < STEPS; i++) {
-        let k = (f32(i) + jitter) / f32(STEPS);
-        let f = march_at(k, first, start.w, end.w);
-        let c = mix(start, end, f);
-        let uv = to_uv(c);
+        let s = first + scale * (grown - 1.0);
+        // This step's share of the line: the march's slope here.
+        let step = scale * GROWTH * grown / f32(STEPS);
+        let uv = line_uv(line, s);
         if !on_screen(uv) { break; }
         let q = vec2<i32>(uv * size);
         let z = z_at(q);
-        let is_behind = !is_sky(z) && c.z / c.w < z;
+        let is_behind = !is_sky(z) && line_depth(line, s) < z;
         if is_behind {
             var lo = before;
-            var hi = f;
+            var hi = s;
             var found = false;
             if !was_behind {
                 // It went behind something: where it crossed, and whether
-                // it was behind by less than the thickness there. Testing
-                // where it crossed rather than where the step fell keeps
-                // the reflection's edges where the scene puts them.
+                // it was behind by less than the thickness and two of its
+                // steps there. Testing where it crossed rather than where
+                // the step fell keeps the reflection's edges where the
+                // scene puts them, and allowing for the steps keeps where
+                // a contact reflection ends from depending on where each
+                // pixel's jittered steps fell (no grain without TAA). But
+                // a step counts as at most two pixels (`most`): far along
+                // the ray steps are tens of pixels long, and two of them
+                // made a thin thing far away as thick as the ray's travel
+                // over them, a blob in the reflection where a thin line
+                // belongs.
                 for (var j = 0; j < REFINE; j++) {
                     let mid = (lo + hi) * 0.5;
-                    if behind(mix(start, end, mid)) { hi = mid; } else { lo = mid; }
+                    if line_behind(line, mid, size) { hi = mid; } else { lo = mid; }
                 }
-                let crossed = mix(start, end, hi);
-                let at = vec2<i32>(to_uv(crossed) * size);
-                // Its step: between this one's and the last's.
-                let within = (hi - before) / max(f - before, 0.000001);
-                let k_crossed = max(k - (1.0 - within) / f32(STEPS), 0.0);
-                found = crossed.w - scene_w(at, z_at(at)) < thickness(k_crossed, crossed.w, first, start.w, end.w);
-            } else if c.w - scene_w(q, z) < thickness(k, c.w, first, start.w, end.w) {
-                // Still behind, now by less than the thickness: in front
-                // of something new, which it hit within the step.
-                for (var j = 0; j < REFINE; j++) {
-                    let mid = (lo + hi) * 0.5;
-                    if behind(mix(start, end, mid)) { hi = mid; } else { lo = mid; }
+                let w = line_w(line, hi);
+                let at = vec2<i32>(line_uv(line, hi) * size);
+                let travel = 2.0 * line_w_change(line, w, min(step, most));
+                behind_w = scene_w(at, z_at(at));
+                found = w - behind_w < thickness(w) + travel;
+            } else {
+                // Still behind, now by less than the thickness and two of
+                // this step: in front of something new, which it hit
+                // within the step (where, it doesn't know; large things
+                // far away are found here, past a crossing too thin for
+                // them). Only a new surface, farther than the one it was
+                // behind: past a rejected crossing the ray is often still
+                // behind the same thin thing (its top, a step further),
+                // and taking that as a hit put back the blob and the
+                // grain the tight crossing leaves out.
+                let w = line_w(line, s);
+                let surface = scene_w(q, z);
+                let new_surface = surface > behind_w + thickness(behind_w);
+                behind_w = surface;
+                if new_surface && w - surface < thickness(w) + 2.0 * line_w_change(line, w, step) {
+                    for (var j = 0; j < REFINE; j++) {
+                        let mid = (lo + hi) * 0.5;
+                        if line_behind(line, mid, size) { hi = mid; } else { lo = mid; }
+                    }
+                    found = true;
                 }
-                found = true;
             }
             // Further behind, the ray passed behind it; go on.
             if found {
@@ -225,10 +286,11 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
             }
         }
         was_behind = is_behind;
-        before = f;
+        before = s;
+        grown *= ratio;
     }
     if hit < 0.0 { return missed; }
-    let uv = to_uv(mix(start, end, hit));
+    let uv = line_uv(line, hit);
     // Where the hit was in the last frame's image.
     let found = position(vec2<i32>(uv * size));
     let last = settings.previous * vec4<f32>(found, 1.0);
@@ -236,7 +298,7 @@ struct Traced { @location(0) color: vec4<f32>, @location(1) hit: vec2<f32> };
     let last_uv = to_uv(last);
     if !on_screen(last_uv) { return missed; }
     let color = textureSampleLevel(image, image_sampler, last_uv, 0.0).rgb;
-    let far = 1.0 - smoothstep(0.6, 1.0, hit * reach);
+    let far = 1.0 - smoothstep(0.6, 1.0, clip_fraction(hit, start.w, end.w) * reach);
     let confidence = strength * far * edge_fade(uv) * edge_fade(last_uv);
     let spread = cone_spread(center, view, distance(origin, found));
     return Traced(vec4<f32>(color * confidence, confidence), vec2<f32>(spread, 1.0));

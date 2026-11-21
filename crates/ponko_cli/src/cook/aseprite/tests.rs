@@ -534,3 +534,241 @@ fn tilemap_layers_draw_embedded_tiles_with_flips_empty_entries_and_links() {
         "linked cel is clipped at its new position"
     );
 }
+
+fn zlib(bytes: &[u8]) -> Vec<u8> {
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut z, bytes).unwrap();
+    z.finish().unwrap()
+}
+
+/// Adds `chunks` (`count` of them) to the first frame of a file [`write`]
+/// made.
+fn add_to_first_frame(file: &mut Vec<u8>, chunks: Vec<u8>, count: u32) {
+    let frame = u32::from_le_bytes(file[128..132].try_into().unwrap()) + chunks.len() as u32;
+    file[128..132].copy_from_slice(&frame.to_le_bytes());
+    let old = u32::from_le_bytes(file[140..144].try_into().unwrap()) + count;
+    file[134..136].copy_from_slice(&(old.min(0xFFFF) as u16).to_le_bytes());
+    file[140..144].copy_from_slice(&old.to_le_bytes());
+    file.splice(144..144, chunks);
+    let size = file.len() as u32;
+    file[..4].copy_from_slice(&size.to_le_bytes());
+}
+
+/// A tileset chunk of 2 x 2 tiles: `tiles` (tile 0 first, four pixels
+/// each) held in the file, and/or a link to tileset `id` of external file
+/// entry `entry`.
+fn tileset_chunk(id: u32, tiles: Option<&[[u8; 4]]>, link: Option<(u32, u32)>, count: u32) -> Vec<u8> {
+    let flags = 4 | u32::from(link.is_some()) | (u32::from(tiles.is_some()) << 1);
+    let mut c = Vec::new();
+    for field in [id, flags, count] {
+        c.extend(field.to_le_bytes());
+    }
+    for field in [2u16, 2, 1] {
+        c.extend(field.to_le_bytes());
+    }
+    c.extend([0; 14]);
+    string(&mut c, "ground");
+    if let Some((entry, id)) = link {
+        c.extend(entry.to_le_bytes());
+        c.extend(id.to_le_bytes());
+    }
+    if let Some(tiles) = tiles {
+        let data = zlib(tiles.as_flattened());
+        c.extend((data.len() as u32).to_le_bytes());
+        c.extend(data);
+    }
+    c
+}
+
+/// A file of only tileset `id`, 2 x 2 tiles: 0 empty, 1 with four colors,
+/// 2 solid `color`.
+pub fn tileset_file(id: u32, color: [u8; 4]) -> Vec<u8> {
+    let mut file = write(4, 2, &[], &[(100, vec![])], &[], &[]);
+    let tiles = [
+        [0; 4], [0; 4], [0; 4], [0; 4], RED, GREEN, BLUE, [255; 4], color, color, color, color,
+    ];
+    let mut chunks = Vec::new();
+    chunk(&mut chunks, 0x2023, &tileset_chunk(id, Some(&tiles), None, 3));
+    add_to_first_frame(&mut file, chunks, 1);
+    file
+}
+
+/// A 4 x 2 map of tiles 1 and 2 whose tileset 5 links to tileset `id` of
+/// the file `link` names, and is `size` tiles (2 x 2 in the file linked).
+pub fn linked_map(link: &str, id: u32, size: u16) -> Vec<u8> {
+    let mut file = write(4, 2, &[], &[(100, vec![])], &[], &[]);
+    let mut chunks = Vec::new();
+    let mut files = Vec::new();
+    files.extend(1u32.to_le_bytes());
+    files.extend([0; 8]);
+    files.extend(7u32.to_le_bytes());
+    files.push(1); // an external tileset
+    files.extend([0; 7]);
+    string(&mut files, link);
+    chunk(&mut chunks, 0x2008, &files);
+    let mut layer = vec![3, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0];
+    string(&mut layer, "map");
+    layer.extend(5u32.to_le_bytes());
+    chunk(&mut chunks, 0x2004, &layer);
+    let mut tileset = tileset_chunk(5, None, Some((7, id)), 3);
+    tileset[12..16].copy_from_slice(&[size as u8, 0, size as u8, 0]);
+    chunk(&mut chunks, 0x2023, &tileset);
+    let mut cel = vec![0, 0, 0, 0, 0, 0, 255, 3, 0, 0, 0, 0, 0, 0, 0, 0];
+    for field in [2u16, 1, 32] {
+        cel.extend(field.to_le_bytes());
+    }
+    for mask in [0x1fff_ffffu32, 0x8000_0000, 0x4000_0000, 0x2000_0000] {
+        cel.extend(mask.to_le_bytes());
+    }
+    cel.extend([0; 10]);
+    cel.extend(zlib(
+        &[1u32, 2].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>(),
+    ));
+    chunk(&mut chunks, 0x2005, &cel);
+    add_to_first_frame(&mut file, chunks, 4);
+    file
+}
+
+/// Exports `map` as `art/map.aseprite` with `files` as the other assets;
+/// also returns the paths read.
+fn export_with(map: &[u8], files: &[(&str, Vec<u8>)]) -> (Result<Sheet, String>, Vec<String>) {
+    let mut read = Vec::new();
+    let sheet = export_linked("art/map.aseprite", map, false, &mut |path| {
+        read.push(path.to_string());
+        files
+            .iter()
+            .find(|(name, _)| *name == path)
+            .map(|(_, bytes)| bytes.clone())
+            .ok_or_else(|| format!("{path} is not among the assets"))
+    });
+    (sheet, read)
+}
+
+#[test]
+fn a_tileset_linked_to_another_file_draws_that_files_tiles() {
+    let tiles = ("art/tiles/ground.aseprite", tileset_file(3, GREEN));
+    let (sheet, read) = export_with(&linked_map("tiles/ground.aseprite", 3, 2), &[tiles]);
+    let sheet = sheet.unwrap();
+    assert_eq!(read, ["art/tiles/ground.aseprite"]);
+    assert_eq!(
+        [(0, 0), (1, 0), (0, 1), (1, 1), (2, 0), (3, 1)].map(|(x, y)| pixel(&sheet.png, x, y)),
+        [RED, GREEN, BLUE, [255; 4], GREEN, GREEN]
+    );
+    // Folders up from the file, and Windows separators, resolve too.
+    let tiles = ("shared/ground.ase", tileset_file(0, BLUE));
+    let (sheet, read) = export_with(&linked_map("..\\shared\\ground.ase", 0, 2), &[tiles]);
+    assert_eq!(read, ["shared/ground.ase"]);
+    assert_eq!(pixel(&sheet.unwrap().png, 3, 0), BLUE);
+}
+
+#[test]
+fn a_tileset_can_link_through_another_files_linked_tileset() {
+    let mut middle = write(4, 2, &[], &[(100, vec![])], &[], &[]);
+    let mut chunks = Vec::new();
+    let mut files = Vec::new();
+    files.extend(1u32.to_le_bytes());
+    files.extend([0; 8]);
+    files.extend(2u32.to_le_bytes());
+    files.push(1);
+    files.extend([0; 7]);
+    string(&mut files, "base/ground.aseprite");
+    chunk(&mut chunks, 0x2008, &files);
+    chunk(&mut chunks, 0x2023, &tileset_chunk(4, None, Some((2, 1)), 3));
+    add_to_first_frame(&mut middle, chunks, 2);
+    let files = [
+        ("art/middle.aseprite", middle),
+        ("art/base/ground.aseprite", tileset_file(1, BLUE)),
+    ];
+    let (sheet, read) = export_with(&linked_map("middle.aseprite", 4, 2), &files);
+    assert_eq!(read, ["art/middle.aseprite", "art/base/ground.aseprite"]);
+    assert_eq!(pixel(&sheet.unwrap().png, 2, 0), BLUE);
+}
+
+#[test]
+fn a_linked_tileset_that_cannot_be_used_is_an_error_naming_the_file() {
+    let tiles = || ("art/tiles/ground.aseprite", tileset_file(3, GREEN));
+    let message = |map: Vec<u8>, files: &[(&str, Vec<u8>)]| export_with(&map, files).0.unwrap_err();
+    let cases = [
+        (
+            message(linked_map("tiles/ground.aseprite", 3, 2), &[]),
+            "art/tiles/ground.aseprite can't be read",
+        ),
+        (
+            message(linked_map("tiles/ground.aseprite", 9, 2), &[tiles()]),
+            "has no tileset 9",
+        ),
+        (
+            message(linked_map("tiles/ground.aseprite", 3, 4), &[tiles()]),
+            "the link expects 4 x 4",
+        ),
+        (
+            message(linked_map("/abs/ground.aseprite", 3, 2), &[tiles()]),
+            "an absolute path",
+        ),
+        (
+            message(linked_map("C:\\ground.aseprite", 3, 2), &[tiles()]),
+            "an absolute path",
+        ),
+        (
+            message(linked_map("../../ground.aseprite", 3, 2), &[tiles()]),
+            "outside the folders",
+        ),
+        (
+            message(
+                linked_map("map.aseprite", 5, 2),
+                &[("art/map.aseprite", linked_map("map.aseprite", 5, 2))],
+            ),
+            "more than 8 files deep",
+        ),
+        (
+            message(
+                linked_map("tiles/ground.aseprite", 3, 2),
+                &[("art/tiles/ground.aseprite", b"nope".to_vec())],
+            ),
+            "not a readable Aseprite file",
+        ),
+    ];
+    for (message, expected) in cases {
+        assert!(message.contains(expected), "{message:?} should say {expected:?}");
+        assert!(
+            message.starts_with("art/map.aseprite: tileset \"ground\": "),
+            "{message}"
+        );
+    }
+    // Without a way to open other files, the decoder says what to use.
+    let message = ponko_aseprite::decode(&linked_map("tiles/ground.aseprite", 3, 2), false, 64).unwrap_err();
+    assert!(message.contains("links to another file"), "{message}");
+}
+
+#[test]
+fn linked_files_lists_each_tilesets_file_once_from_its_folder() {
+    let map = linked_map("../tiles/ground.aseprite", 3, 2);
+    assert_eq!(
+        ponko_aseprite::linked_files("art/maps/a.aseprite", &map).unwrap(),
+        ["art/tiles/ground.aseprite"]
+    );
+    assert_eq!(
+        ponko_aseprite::linked_files("art/hero.aseprite", &hero()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+/// The linked-tileset fixture, `tests/fixtures/aseprite-linked/` at the
+/// repository root (the engine's hot reload test reads it):
+/// `PONKO_UPDATE_ASEPRITE_FIXTURE=1` writes it again.
+#[test]
+fn the_linked_tileset_fixture_is_what_these_builders_make() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/aseprite-linked");
+    let files = [
+        ("map.aseprite", linked_map("tiles/ground.aseprite", 3, 2)),
+        ("tiles/ground.aseprite", tileset_file(3, GREEN)),
+    ];
+    for (name, bytes) in &files {
+        let path = root.join(name);
+        if std::env::var_os("PONKO_UPDATE_ASEPRITE_FIXTURE").is_some() {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+        }
+        assert_eq!(&std::fs::read(&path).unwrap(), bytes, "{name}");
+    }
+}

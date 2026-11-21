@@ -140,13 +140,28 @@ What is decided, and what isn't (yet):
 
 - Included prefabs nest to any depth up to 16; a prefab that includes
   itself, directly or through others, is refused.
-- Changes ("overrides") apply to the included prefab's **root** only. To
-  change one of its parts, change it in code after spawning (its id is in
-  `PrefabParts`), or make a prefab file for that variant.
+- `"components"` change the included prefab's root; `"remove"` lists
+  components its root doesn't get here; `"parts"` changes its other
+  entities, each named by its place in the included prefab's
+  `PrefabParts` (counted from 0, nested prefabs expanded in order), with
+  the same `"components"` and `"remove"`:
+
+  ```json
+  { "entity": 2, "prefab": "prefabs/wheel.json",
+    "components": { "Transform2D": { "position": [40.0, 0.0] } },
+    "remove": ["Squeak"],
+    "parts": [{ "part": 0, "components": { "Hp": 8.0 } }] }
+  ```
+
+  A part number the included prefab doesn't have is an error that says how
+  many parts it has. The editor writes these when you apply an instance
+  whose prefab includes others (see
+  [the editor](editor.md#prefabs-inside-prefabs)).
 - The link is used when spawning only. A spawned tree doesn't remember the
   files it came from, so editing `wheel.json` changes carts spawned later,
-  not those already in a world or a saved scene, and `save_prefab` writes an
-  included prefab's entities into the file instead of the link.
+  not those already in a world or a saved scene (the editor's Apply updates
+  the instances in the open scene), and `save_prefab` writes an included
+  prefab's entities into the file instead of the link.
 
 ## What a load replaces and what it keeps
 

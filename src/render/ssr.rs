@@ -1,6 +1,7 @@
 //! Screen-space reflections (see `ssr.wgsl`): a half-resolution trace after
 //! the depth prepass, read by the opaque pass, and a copy of the opaque
-//! image after it, which the next frame's trace takes its colors from.
+//! image after it, which the next frame's trace takes its colors from. The
+//! trace reads a single-sampled copy of the depth, made just before it.
 //!
 //! Material shaders have no texture slot to spare, so the opaque pass reads
 //! the reflections where it reads GTAO: its scene color slot holds a
@@ -42,6 +43,8 @@ pub(super) const SPREAD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Fl
 /// The trace's second target: the cone's spread and 1 where its ray found
 /// something, 0 where it didn't.
 pub(super) const HITS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
+/// The copy of the scene depth the trace reads (see `ssr.wgsl`).
+pub(super) const DEPTH_COPY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 
 /// Lets the cost test time frames with and without the filtered levels.
 #[cfg(test)]
@@ -62,6 +65,10 @@ pub(super) struct Ssr {
     /// The cone's spread where rays found nothing.
     fill_layout: wgpu::BindGroupLayout,
     fill_pipeline: wgpu::RenderPipeline,
+    /// The depth copy the trace and the filtered levels read (see
+    /// `ssr.wgsl`).
+    depth_layout: wgpu::BindGroupLayout,
+    depth_pipeline: wgpu::RenderPipeline,
     /// Without GTAO: the first level's mark and the cone's spread.
     mark_pipeline: wgpu::RenderPipeline,
     blur_layout: wgpu::BindGroupLayout,
@@ -105,6 +112,9 @@ pub(super) struct SsrTargets {
     copy_group: wgpu::BindGroup,
     fill_group: wgpu::BindGroup,
     mark_group: wgpu::BindGroup,
+    depth_group: wgpu::BindGroup,
+    /// The depth copy (see `ssr.wgsl`), written before the trace each frame.
+    depth_copy: wgpu::TextureView,
 }
 
 /// The filtered levels' pass: the compute shader writes them to `levels`,
@@ -130,6 +140,13 @@ impl SsrTargets {
         (&self.history, self.blur.as_ref().map(|b| &b.levels))
     }
 
+    /// The copy of the scene depth the trace and the filtered levels read
+    /// (see `ssr.wgsl`): for checking it against what the frame's passes
+    /// declare.
+    pub fn depth_copy(&self) -> &wgpu::TextureView {
+        &self.depth_copy
+    }
+
     /// The cone's spread, as the trace writes it, and filled in (see the
     /// module docs).
     pub fn spread(&self) -> (&wgpu::TextureView, &wgpu::TextureView) {
@@ -152,7 +169,7 @@ impl Ssr {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("screen reflections"),
             entries: &[
-                texture(0, wgpu::TextureSampleType::Depth, true),
+                texture(0, wgpu::TextureSampleType::Float { filterable: false }, false),
                 texture(1, wgpu::TextureSampleType::Float { filterable: true }, false),
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
@@ -209,6 +226,11 @@ impl Ssr {
             })
         };
         let trace_pipeline = pipeline("fs_trace", &[target(SCREEN_FORMAT), target(HITS_FORMAT)]);
+        // The depth copy reads the multisampled depth.
+        let depth_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("screen reflection depth"),
+            entries: &[texture(12, wgpu::TextureSampleType::Depth, true)],
+        });
         let fill_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("screen reflection spread"),
             entries: &[
@@ -251,6 +273,7 @@ impl Ssr {
             })
         };
         let fill_pipeline = own("fs_fill", &fill_layout, SPREAD_FORMAT);
+        let depth_pipeline = own("fs_depth", &depth_layout, DEPTH_COPY_FORMAT);
         let mark_pipeline = pipeline("fs_mark", &[target(SCREEN_FORMAT)]);
         let compute = |binding, ty| wgpu::BindGroupLayoutEntry {
             binding,
@@ -274,9 +297,9 @@ impl Ssr {
                 compute(
                     0,
                     wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: true,
+                        multisampled: false,
                     },
                 ),
                 compute(
@@ -341,6 +364,8 @@ impl Ssr {
             copy_pipeline,
             fill_layout,
             fill_pipeline,
+            depth_layout,
+            depth_pipeline,
             mark_pipeline,
             blur_layout,
             blur_pipeline,
@@ -444,6 +469,15 @@ impl Ssr {
             texture(label, size, 1, format, wgpu::TextureUsages::RENDER_ATTACHMENT).create_view(&Default::default())
         };
         let hits = sized("screen reflection hits", half_size, HITS_FORMAT);
+        let depth_copy = sized("screen reflection depth", size, DEPTH_COPY_FORMAT);
+        let depth_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("screen reflection depth"),
+            layout: &self.depth_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 12,
+                resource: wgpu::BindingResource::TextureView(depth),
+            }],
+        });
         let spread = sized("screen reflection spread", half_size, SPREAD_FORMAT);
         let group = |image: &wgpu::TextureView| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -452,7 +486,7 @@ impl Ssr {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(depth),
+                        resource: wgpu::BindingResource::TextureView(&depth_copy),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -509,7 +543,7 @@ impl Ssr {
                 let mut entries = vec![
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(depth),
+                        resource: wgpu::BindingResource::TextureView(&depth_copy),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -584,6 +618,8 @@ impl Ssr {
                 ],
             }),
             mark_group: group(&spread),
+            depth_group,
+            depth_copy,
             history,
             ao: level(0),
             output: level(1),
@@ -604,6 +640,15 @@ impl Ssr {
         targets: &SsrTargets,
         time: &dyn Fn(&'static str) -> Option<wgpu::RenderPassTimestampWrites<'t>>,
     ) {
+        super::gpu3d::mark_step("reflection depth");
+        self.full_screen(
+            encoder,
+            "3d screen reflection depth",
+            &self.depth_pipeline,
+            &targets.depth_group,
+            &targets.depth_copy,
+            time("reflection depth"),
+        );
         super::gpu3d::mark_step("reflections");
         if targets.unmarked.swap(false, Ordering::Relaxed) {
             // Blue 1: the reflections are there (see `SsrTargets::unmarked`).
@@ -776,6 +821,7 @@ impl SsrTargets {
             ("reflection output", &self.output),
             ("reflection hits", &self.hits),
             ("reflection spread", &self.spread),
+            ("reflection depth", &self.depth_copy),
         ] {
             t.view(C::FrameTargets, label, view);
         }

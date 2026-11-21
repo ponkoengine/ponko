@@ -65,6 +65,20 @@ impl AssetPanel {
     pub fn wait_for_thumbnails(&mut self) -> bool {
         self.thumbs.wait(std::time::Duration::from_secs(20))
     }
+
+    /// The thumbnail cache and thumbnails themselves (tests).
+    #[cfg(all(test, feature = "3d"))]
+    pub fn thumbnails(&mut self) -> &mut Thumbnails {
+        &mut self.thumbs
+    }
+
+    /// Makes every thumbnail again, with the cache folder `cache` (tests).
+    #[cfg(all(test, feature = "3d"))]
+    pub fn use_thumbnail_cache(&mut self, cache: PathBuf) {
+        self.thumbs.cache = Some(cache);
+        self.thumbs.clear();
+        self.textures.clear();
+    }
 }
 
 /// Every asset the panel lists, with its kind, sorted by path.
@@ -183,6 +197,14 @@ impl Panels {
         let keys = &self.keys;
         let search_key = ui.input(|i| keys.pressed(i, Action::Search));
         let Some(panel) = self.asset_panel() else { return };
+        // One model a frame drawn by the renderer, in place of its
+        // software thumbnail.
+        #[cfg(feature = "3d")]
+        if panel.thumbs.render_models(ctx.gfx.renderer.as_ref()) {
+            for path in panel.thumbs.take_updated() {
+                panel.textures.remove(&path);
+            }
+        }
         if search_key {
             panel.focus_search = true;
         }
@@ -314,7 +336,9 @@ fn tile(ui: &mut Ui, panel: &mut AssetPanel, path: &str, kind: AssetKind) -> Opt
     let texture = thumbnail(ui, panel, path, kind);
     let selected = panel.selected.as_deref() == Some(path);
     let draw = |ui: &mut Ui| {
-        let (rect, response) = ui.allocate_exact_size(TILE, Sense::click());
+        // Click and drag: a drag starts once the press moves, so a click
+        // still selects the tile.
+        let (rect, response) = ui.allocate_exact_size(TILE, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
         if selected {
             painter.rect_filled(rect, 4.0, ui.visuals().selection.bg_fill);
@@ -363,13 +387,25 @@ fn tile(ui: &mut Ui, panel: &mut AssetPanel, path: &str, kind: AssetKind) -> Opt
         AssetKind::Prefab => Some(AssetDrag::Prefab(path.to_string())),
         _ => None,
     };
-    let response = match payload {
-        Some(payload) => {
-            ui.dnd_drag_source(egui::Id::unique(("asset-tile", path)), payload, draw)
-                .inner
+    let response = draw(ui);
+    if let Some(payload) = payload {
+        if response.dragged() {
+            egui::DragAndDrop::set_payload(ui.ctx(), payload);
+            // The asset's name goes with the pointer.
+            if let Some(at) = ui.ctx().pointer_interact_pos() {
+                let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique(("asset-drag", path)));
+                ui.ctx().layer_painter(layer).text(
+                    at + vec2(12.0, 12.0),
+                    egui::Align2::LEFT_TOP,
+                    short_name(file_name(path)),
+                    egui::FontId::proportional(12.0),
+                    ui.visuals().strong_text_color(),
+                );
+            }
+        } else if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
-        None => draw(ui),
-    };
+    }
     let response = response.on_hover_text(path);
     if response.clicked() {
         panel.selected = Some(path.to_string());
