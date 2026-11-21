@@ -738,6 +738,74 @@ fn forgetting_removals_drops_only_what_every_reader_has_seen() {
 }
 
 #[test]
+fn removal_logs_keep_every_ticks_removals_in_order_through_forgetting() {
+    // Ticks with no, one and many removals, of two tracked components
+    // tracked in a different order than their ids, from despawns and
+    // removes; then forgetting at each tick, against a model.
+    let mut w = World::new();
+    w.spawn((Armor(0),)); // Armor's id comes first.
+    w.track_changes::<Health>();
+    w.track_changes::<Armor>();
+    let mut rng = Rng::new(159);
+    let mut live: Vec<Entity> = (0..400).map(|i| w.spawn((Health(i), Armor(i)))).collect();
+    // (tick of the removal, entity) per component, in log order.
+    let (mut health, mut armor) = (Vec::new(), Vec::new());
+    let mut ticks = vec![Tick::default()];
+    for _ in 0..40 {
+        let now = w.change_tick();
+        for _ in 0..[0, 1, 2, 9][rng.below(4)] {
+            if live.is_empty() {
+                break;
+            }
+            let e = live.swap_remove(rng.below(live.len()));
+            match rng.below(3) {
+                0 => {
+                    if w.has::<Health>(e) {
+                        health.push((now, e));
+                    }
+                    if w.has::<Armor>(e) {
+                        armor.push((now, e));
+                    }
+                    w.despawn(e);
+                }
+                1 => {
+                    if w.remove::<Health>(e).is_some() {
+                        health.push((now, e));
+                    }
+                    live.push(e);
+                }
+                _ => {
+                    if w.remove::<Armor>(e).is_some() {
+                        armor.push((now, e));
+                    }
+                    live.push(e);
+                }
+            }
+        }
+        ticks.push(w.advance_change_tick());
+    }
+    let after = |log: &[(Tick, Entity)], since: Tick| -> Vec<Entity> {
+        log.iter().filter(|(t, _)| *t > since).map(|&(_, e)| e).collect()
+    };
+    for (k, &forget) in ticks.iter().enumerate() {
+        w.forget_removed(forget);
+        for &since in &ticks[k..] {
+            assert_eq!(
+                w.removed_since::<Health>(since),
+                after(&health, since),
+                "forgot {forget:?}"
+            );
+            assert_eq!(
+                w.removed_since::<Armor>(since),
+                after(&armor, since),
+                "forgot {forget:?}"
+            );
+        }
+    }
+    assert!(w.removed_since::<Health>(Tick::default()).is_empty());
+}
+
+#[test]
 #[should_panic(expected = "aren't tracked; call `world.track_changes::<changes::Armor>()` first")]
 fn asking_for_removals_of_an_untracked_component_panics() {
     let mut w = World::new();
@@ -1765,6 +1833,7 @@ fn change_filters_that_skip_still_blocks_find_exactly_what_changed() {
     let mut model: HashMap<Entity, (Tick, Tick)> = HashMap::new();
     let mut live: Vec<Entity> = Vec::new();
     let mut readers: Vec<Tick> = vec![Tick::default()];
+    let mut peak = 0;
     let check = |w: &mut World, model: &HashMap<Entity, (Tick, Tick)>, readers: &[Tick], step: usize| {
         for &since in readers {
             let want_changed = sorted(model.iter().filter(|(_, t)| t.1 > since).map(|(&e, _)| e).collect());
@@ -1799,15 +1868,23 @@ fn change_filters_that_skip_still_blocks_find_exactly_what_changed() {
         }
     };
 
-    let steps = if cfg!(miri) { 60 } else { 400 };
+    // Under Miri a smaller model: fewer steps and operations, and spawn
+    // bursts of a bit over two blocks instead of three, so the world still
+    // spans several blocks (see the end) but every check stays small. The
+    // full size took over an hour there.
+    let (steps, max_ops, burst) = if cfg!(miri) {
+        (50, 12, 2 * 64 + 5)
+    } else {
+        (400, 40, 200)
+    };
     for step in 0..steps {
         let now = w.change_tick();
-        let ops = 1 + rng.below(40);
+        let ops = 1 + rng.below(max_ops);
         for _ in 0..ops {
             match rng.below(12) {
                 // Spawn, now and then a burst that grows the archetypes.
                 0 | 1 => {
-                    let n = if rng.below(10) == 0 { 200 } else { 1 };
+                    let n = if rng.below(10) == 0 { burst } else { 1 };
                     for _ in 0..n {
                         let e = if rng.below(2) == 0 {
                             w.spawn((Health(0),))
@@ -1876,6 +1953,7 @@ fn change_filters_that_skip_still_blocks_find_exactly_what_changed() {
                 _ => {}
             }
         }
+        peak = peak.max(live.len());
         if step % 7 == 0 {
             check(&mut w, &model, &readers, step);
         }
@@ -1887,7 +1965,10 @@ fn change_filters_that_skip_still_blocks_find_exactly_what_changed() {
             }
         }
     }
-    check(&mut w, &model, &readers, 400);
+    check(&mut w, &model, &readers, steps);
+    // The model has to have spanned several blocks of rows for the skipped
+    // blocks to have been tested.
+    assert!(peak > 2 * 64, "the model peaked at {peak} entities");
 }
 
 #[test]
