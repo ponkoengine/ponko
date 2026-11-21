@@ -1767,6 +1767,10 @@ fn raw_components_declared_from_c_replicate_every_field_type() {
     s.run(30, |_, _| {});
     assert_blobs_arrived(&mut s, id, 3);
     let replica = *replicas(&mut s.sides[1].world).values().next().unwrap();
-    assert_eq!(blob_of(&s.sides[1].world, id, replica).unwrap()[0], 10, "the change arrived");
+    assert_eq!(
+        blob_of(&s.sides[1].world, id, replica).unwrap()[0],
+        10,
+        "the change arrived"
+    );
     assert_eq!(s.sides[1].rep.client_stats().packets_bad, 0);
 }
