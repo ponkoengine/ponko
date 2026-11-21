@@ -13,8 +13,17 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 # No window, audio or gamepad: the loaders only. `3d` brings the glTF
-# loader, `gltf-meshopt` its decoder of compressed geometry.
-ponko = { path = "..", default-features = false, features = ["3d", "gltf-meshopt"] }
+# loader, `gltf-meshopt` its decoder of compressed geometry, `lobby` the
+# lobby protocol, `aseprite-source` the Aseprite file reader and
+# `compressed-textures` the KTX2 and DDS readers.
+ponko = { path = "..", default-features = false, features = [
+    "3d",
+    "gltf-meshopt",
+    "lobby",
+    "aseprite-source",
+    "compressed-textures",
+] }
+ponko_lobby = { path = "../crates/ponko_lobby" }
 ponko_unity = { path = "../crates/ponko_unity" }
 glam = "0.34.2"
 
@@ -84,6 +93,48 @@ bench = false
 [[bin]]
 name = "messages"
 path = "fuzz_targets/messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "replication"
+path = "fuzz_targets/replication.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lobby"
+path = "fuzz_targets/lobby.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "control"
+path = "fuzz_targets/control.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "aseprite"
+path = "fuzz_targets/aseprite.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "levels"
+path = "fuzz_targets/levels.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cooked_texture"
+path = "fuzz_targets/cooked_texture.rs"
 test = false
 doc = false
 bench = false

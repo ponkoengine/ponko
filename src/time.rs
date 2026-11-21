@@ -515,6 +515,12 @@ impl Time {
         self.sim.pending_steps = self.sim.pending_steps.saturating_add(1);
     }
 
+    /// [`step`](Self::step) `ticks` times, in one go (the control
+    /// endpoint's `sim.step`, which may ask for billions).
+    pub(crate) fn step_by(&mut self, ticks: u32) {
+        self.sim.pending_steps = self.sim.pending_steps.saturating_add(ticks);
+    }
+
     /// Sets how fast simulated time runs: `1.0` real time, `4.0` four times
     /// as fast, `0.5` half speed. Ticks stay the same length (the fixed step),
     /// so results don't depend on speed; only how many ticks run per frame

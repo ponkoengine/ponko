@@ -129,6 +129,8 @@ impl PngSlices {
             return None;
         }
         let (width, height) = (info.width, info.height);
+        // Too large: decoded in one piece, which refuses it with the message.
+        crate::assets::check_image_size(width.into(), height.into(), "", "").ok()?;
         let (color, depth) = reader.output_color_type();
         let channels = match color {
             png::ColorType::Grayscale => 1,

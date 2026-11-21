@@ -767,11 +767,35 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// # }     /// ```     pub fn load_mixer(&mut self, path: &str) {         self.try_load_mixer(path).unwrap_or_else(|e| panic!(\"{e}\"));",
     "site": "src/audio/mixer_file.rs:87"
   },
+  "src/control.rs:0508bdecda6d776f": {
+    "classification": "invariant",
+    "construction": ".expect(\"a temporary folder\")",
+    "reason": "Fuzz-only code (cfg(any(test, fuzzing))), never in a game build: the fuzz target can't run without its own temporary folder.",
+    "site": "src/control.rs:2196"
+  },
   "src/control.rs:09c1ee8c26e0d287": {
     "classification": "invariant",
     "construction": ".expect(\"a claimed file is open until it is kept or dropped\")",
     "reason": "Internal invariant: pub(crate) fn file(&mut self) -> &mut std::fs::File {         self.file             .as_mut()             .expect(\"a claimed file is open until it is kept or dropped\")",
     "site": "src/control.rs:1052"
+  },
+  "src/control.rs:4989bdcc11d95941": {
+    "classification": "invariant",
+    "construction": ".expect(\"a temporary folder\")",
+    "reason": "Fuzz-only code (cfg(any(test, fuzzing))), never in a game build: the fuzz target can't run without its own temporary folder.",
+    "site": "src/control.rs:2199"
+  },
+  "src/control.rs:51287e0bfcad91fb": {
+    "classification": "invariant",
+    "construction": ".expect(\"a working folder\")",
+    "reason": "Fuzz-only code (cfg(any(test, fuzzing))), never in a game build: the fuzz target can't run without knowing the folder it started in.",
+    "site": "src/control.rs:2197"
+  },
+  "src/control.rs:53d8ac625a773f7a": {
+    "classification": "invariant",
+    "construction": "assert!(!trusted, \"a request without the token was trusted\")",
+    "reason": "Fuzz-only code (cfg(any(test, fuzzing))), never in a game build: the fuzz target's oracle, a line without the token must never be trusted.",
+    "site": "src/control.rs:2209"
   },
   "src/events.rs:472cc3c8006f3318": {
     "classification": "invariant",

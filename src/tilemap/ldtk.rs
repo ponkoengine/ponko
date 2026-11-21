@@ -63,7 +63,7 @@ fn tilesets(defs: &Value, path: &str) -> (Vec<Tileset>, Vec<i64>) {
             image: resolve(path, rel),
             tile_size: UVec2::splat(grid),
             columns,
-            count: columns * rows,
+            count: columns.saturating_mul(rows),
             margin: num_or(t, "padding", 0.0) as u32,
             spacing: num_or(t, "spacing", 0.0) as u32,
             tiles,

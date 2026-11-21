@@ -229,7 +229,9 @@ pub mod net;
 #[cfg(fuzzing)]
 #[doc(hidden)]
 pub mod __fuzz {
-    pub use crate::net::fuzz::{lockstep_packets, message_packets};
+    pub use crate::assets::fuzz_texture as texture;
+    pub use crate::control::fuzz_requests as control_requests;
+    pub use crate::net::fuzz::{lockstep_packets, message_packets, replication_packets};
 }
 pub mod particles;
 mod particles2d;

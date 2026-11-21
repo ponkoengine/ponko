@@ -21,6 +21,9 @@ add prefab tests/fixtures/saves/prefab_v1.json assets/prefabs/*.json assets/*/pr
 add gltf assets/models/*.glb assets/*/*.glb
 add unity_yaml crates/ponko_unity/tests/fixtures/*.asset
 add asset_pack tests/fixtures/packs/*.pack
+add aseprite tests/fixtures/aseprite/*.json tests/fixtures/aseprite-linked/*.aseprite tests/fixtures/cook/source/*.aseprite
+add levels tests/fixtures/tilemaps/*.ldtk tests/fixtures/tilemaps/*.tmj tests/fixtures/tilemaps/*.tmx tests/fixtures/tilemaps/*.tsx
+add cooked_texture tests/fixtures/textures/*.ktx2 tests/fixtures/textures/*.png tests/fixtures/images/*
 for dir in fuzz/seeds/*/; do
     add "$(basename "$dir")" "$dir"*
 done

@@ -1971,9 +1971,7 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
         "sim.step" => {
             let ticks = usize_param(params, "ticks", 1)?;
             let ticks = u32::try_from(ticks).map_err(|_| "`ticks` is too large")?;
-            for _ in 0..ticks {
-                ctx.time.step();
-            }
+            ctx.time.step_by(ticks);
             json!({ "queued_ticks": ticks, "tick": ctx.time.sim_tick() })
         }
         "sim.speed" => {
@@ -2159,6 +2157,69 @@ pub(crate) fn handle(ctx: &mut Ctx, method: &str, params: &Value) -> Result<Valu
         // Not the engine's: a method the game or one of its plugins added.
         other => return game_methods::call(ctx, other, params),
     })
+}
+
+/// Methods that write files below the game's folder: the fuzz target runs
+/// them in a folder of its own, the unit test leaves them out.
+#[cfg(any(test, fuzzing))]
+const WRITING_METHODS: &[&str] = &[
+    "world.save",
+    "scene.save",
+    "prefab.save",
+    "editor.save",
+    "screenshot",
+    "perf.trace",
+];
+
+/// Fuzzing entry point for the control endpoint's requests: `data` as
+/// request lines (at most 16), each checked as a connection checks it
+/// (`handle_line` with the wrong token), then, with the token taken as
+/// right, run by the game's dispatcher on one headless context, so later
+/// requests see what earlier ones made. A request may fail, never crash,
+/// hang or write outside the folder the game runs in.
+#[cfg(any(test, fuzzing))]
+#[doc(hidden)]
+pub fn fuzz_requests(data: &[u8]) {
+    // Files the requests write go to a folder of the fuzzer's own, for the
+    // length of one input: the fuzzer's own paths are relative to the
+    // folder it started in.
+    #[cfg(fuzzing)]
+    let _folder = {
+        struct Back(std::path::PathBuf);
+        impl Drop for Back {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        static FOLDERS: std::sync::OnceLock<(std::path::PathBuf, std::path::PathBuf)> = std::sync::OnceLock::new();
+        let (home, scratch) = FOLDERS.get_or_init(|| {
+            let scratch = std::env::temp_dir().join(format!("ponko-fuzz-control-{}", std::process::id()));
+            std::fs::create_dir_all(&scratch).expect("a temporary folder");
+            (std::env::current_dir().expect("a working folder"), scratch)
+        });
+        std::env::set_current_dir(scratch).expect("a temporary folder");
+        Back(home.clone())
+    };
+    let Ok(text) = std::str::from_utf8(data) else { return };
+    let token = random_token().unwrap_or_else(|_| "0".repeat(32));
+    let (tx, _rx) = mpsc::channel();
+    let mut ctx = Ctx::new(1.0 / 60.0, Vec2::ZERO);
+    for line in text.lines().take(16) {
+        // A stranger's line: refused before anything runs.
+        let (_, trusted) = handle_line(line, &token, &tx, 1);
+        assert!(!trusted, "a request without the token was trusted");
+        let Ok(msg) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(method) = msg.get("method").and_then(Value::as_str) else {
+            continue;
+        };
+        if cfg!(test) && WRITING_METHODS.contains(&method) {
+            continue;
+        }
+        let params = msg.get("params").cloned().unwrap_or(Value::Null);
+        let _ = handle(&mut ctx, method, &params);
+    }
 }
 
 // The 5 and 10 s limits in these tests (read timeouts, deadlines) are hang
@@ -2875,7 +2936,38 @@ mod tests {
                 "{method}"
             );
         }
+        // The editor's saving and opening (refused here for the path, or
+        // for a build without the editor).
+        for path in [absolute, "../escape.json"] {
+            assert!(
+                handle(&mut ctx, "editor.save", &json!({ "path": path })).is_err(),
+                "{path}"
+            );
+            assert!(
+                handle(&mut ctx, "editor.document", &json!({ "open": path })).is_err(),
+                "{path}"
+            );
+        }
         assert!(!outside.exists());
+    }
+
+    #[test]
+    fn the_fuzz_entry_point_survives_every_method_with_odd_params() {
+        let mut lines = String::new();
+        for (method, _) in METHODS {
+            for params in [
+                "{}",
+                "null",
+                "[1]",
+                r#"{"entity": 18446744073709551615, "ticks": 4294967295, "path": "../x.json", "count": -1}"#,
+            ] {
+                lines.push_str(&format!(r#"{{"id": 1, "method": "{method}", "params": {params}}}"#));
+                lines.push('\n');
+            }
+        }
+        for chunk in lines.lines().collect::<Vec<_>>().chunks(16) {
+            fuzz_requests(chunk.join("\n").as_bytes());
+        }
     }
 
     #[test]

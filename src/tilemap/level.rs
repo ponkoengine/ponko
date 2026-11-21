@@ -76,6 +76,13 @@ impl Properties {
     }
 }
 
+/// The most cells a level's tile layer may have (4096 x 4096): a larger
+/// one is refused with [`ErrorKind::Limit`] when the level loads.
+pub(crate) const MAX_LAYER_CELLS: u64 = 1 << 24;
+
+/// The most tiles one tileset of a level may have.
+pub(crate) const MAX_TILESET_TILES: u32 = 1 << 20;
+
 /// A tileset of a [`Level`]: one image cut into same-size tiles.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -583,9 +590,50 @@ impl Level {
                 format!("{path}: not a level file Ponko reads (.tmx, .tmj, .json or .ldtk)"),
             )),
         };
-        let mut level = level.map_err(|e| e.context(path).with_path(path))?;
+        let mut level = level
+            .and_then(|level| level.check_sizes().map(|()| level))
+            .map_err(|e| e.context(path).with_path(path))?;
         level.files = reader.files.iter().map(|(n, _)| n.clone()).collect();
         Ok((level, reader.files))
+    }
+
+    /// Fails with [`ErrorKind::Limit`] for sizes that would allocate
+    /// without bound once the level is spawned: a tile layer of more than
+    /// [`MAX_LAYER_CELLS`] cells, a tileset of more than
+    /// [`MAX_TILESET_TILES`] tiles, or tiles or a tileset sheet past the
+    /// image size limit. A level file is a few bytes of text for any of
+    /// those.
+    fn check_sizes(&self) -> Result<(), Error> {
+        let limit = |message: String| Error::new(ErrorKind::Limit, message);
+        for layer in &self.layers {
+            if let LayerKind::Tiles(tiles) = &layer.kind {
+                let cells = u64::from(tiles.size.x) * u64::from(tiles.size.y);
+                if cells > MAX_LAYER_CELLS {
+                    return Err(limit(format!(
+                        "layer {:?} is {} x {} cells, more than the {MAX_LAYER_CELLS} a layer may have",
+                        layer.name, tiles.size.x, tiles.size.y
+                    )));
+                }
+            }
+        }
+        for set in &self.tilesets {
+            if set.count > MAX_TILESET_TILES {
+                return Err(limit(format!(
+                    "tileset {:?} has {} tiles, more than {MAX_TILESET_TILES}",
+                    set.name, set.count
+                )));
+            }
+            let what = format!("tileset {:?}", set.name);
+            let (tw, th) = (u64::from(set.tile_size.x), u64::from(set.tile_size.y));
+            crate::assets::check_image_size(tw, th, &set.image, &what)?;
+            if set.margin != 0 || set.spacing != 0 {
+                // Its tiles are copied next to each other into a sheet.
+                let columns = u64::from(set.columns.max(1));
+                let rows = u64::from(set.count).div_ceil(columns).max(1);
+                crate::assets::check_image_size(columns * tw, rows * th, &set.image, &what)?;
+            }
+        }
+        Ok(())
     }
 
     /// The layers below the objects' layer count down from `options.z`,
