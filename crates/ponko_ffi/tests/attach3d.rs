@@ -50,7 +50,10 @@ unsafe extern "C" fn setup(ctx: *mut PonkoCtx, user: *mut c_void) {
             reserved: [0; 2],
             offset: at(0.0, 2.0, -5.0),
         };
-        let values = [value(ids.transform, &at(0.0, 0.0, 0.0)), value(ids.attached, &arm)];
+        // A value points at its bytes: they must outlive the spawn (a
+        // temporary would be gone at the end of the `let`).
+        let origin = at(0.0, 0.0, 0.0);
+        let values = [value(ids.transform, &origin), value(ids.attached, &arm)];
         assert_eq!(ponko_spawn(w, values.as_ptr(), 2, &mut ids.arm), PONKO_OK);
     }
 }
