@@ -77,15 +77,22 @@ fn bounce(ctx: &mut Ctx) {
     });
 }
 
-/// The labels the HUD system writes each frame.
-struct Hud {
-    score: UiId,
-    coins: UiId,
-    time: UiId,
+/// The labels the HUD system writes each frame, and the parts the
+/// `ui/draw-...` benchmarks change.
+pub(crate) struct Hud {
+    pub score: UiId,
+    pub coins: UiId,
+    pub time: UiId,
+    /// The HUD's row of item slots.
+    pub slots: UiId,
+    /// The settings screen.
+    pub menu: UiId,
+    /// The 40 labels of the settings screen's list.
+    pub actions: Vec<UiId>,
 }
 
 /// A HUD along the top and a settings screen in the middle.
-fn build_ui(ctx: &mut Ctx) -> Hud {
+pub(crate) fn build_ui(ctx: &mut Ctx) -> Hud {
     let ui = &mut ctx.ui;
     let hud = ui.root().layout(UiLayout::fill().padding(12.0)).id();
     let bar = ui.panel(hud).layout(UiLayout::row(36.0).gap(16.0)).id();
@@ -120,10 +127,14 @@ fn build_ui(ctx: &mut Ctx) -> Hud {
         ui.toggle(menu, name).layout(UiLayout::row(28.0));
     }
     let list = ui.scroll_area(menu).layout(UiLayout::fill().gap(4.0)).id();
+    let mut actions = Vec::with_capacity(40);
     for i in 0..40 {
         let row = ui.panel(list).layout(UiLayout::row(24.0).gap(8.0)).id();
-        ui.label(row, format!("Action {i}"))
-            .layout(UiLayout::auto().width(200.0));
+        let action = ui
+            .label(row, format!("Action {i}"))
+            .layout(UiLayout::auto().width(200.0))
+            .id();
+        actions.push(action);
         ui.button(row, "Rebind");
     }
     let buttons = ui.panel(menu).layout(UiLayout::row(40.0).gap(8.0)).id();
@@ -131,7 +142,14 @@ fn build_ui(ctx: &mut Ctx) -> Hud {
         ui.button(buttons, name).layout(UiLayout::auto().grow(1.0));
     }
     ui.push_modeless(menu);
-    Hud { score, coins, time }
+    Hud {
+        score,
+        coins,
+        time,
+        slots,
+        menu,
+        actions,
+    }
 }
 
 pub fn run(b: &mut Bench) {
