@@ -903,18 +903,20 @@ mod tests {
 
     #[test]
     fn both_storages_compute_the_same_frames() {
-        for density in [5, 20] {
+        // One density and fewer entities under Miri, which interprets every step.
+        let (n, densities): (usize, &[u32]) = if cfg!(miri) { (1000, &[20]) } else { (3000, &[5, 20]) };
+        for &density in densities {
             for rows in [false, true] {
-                let mut arch = Workload::new(World::new(), 3000, density, 10, 4);
+                let mut arch = Workload::new(World::new(), n, density, 10, 4);
                 let sset = Sset {
                     h: Hybrid::default(),
                     rows,
                 };
-                let mut sset = Workload::new(sset, 3000, density, 10, 4);
+                let mut sset = Workload::new(sset, n, density, 10, 4);
                 assert_eq!(arch_state(&arch), sset_state(&sset), "after settling");
                 assert!(arch.store.archetypes().1 > 50, "the combinations multiply");
                 assert_eq!(sset.store.archetypes().1, 1, "dense data in one archetype");
-                let mut flags = Workload::new(Flags(World::new()), 3000, density, 10, 4);
+                let mut flags = Workload::new(Flags(World::new()), n, density, 10, 4);
                 assert_eq!(arch_state(&arch), flags_state(&flags), "after settling");
                 for _ in 0..4 {
                     let (a, s, f) = (arch.frame(), sset.frame(), flags.frame());
@@ -930,7 +932,7 @@ mod tests {
 
     #[test]
     fn the_dense_case_computes_the_same_on_every_storage() {
-        let n = 2000;
+        let n = if cfg!(miri) { 200 } else { 2000 };
         let (mut w, es) = dense_arch(n);
         let (mut set_driven, _) = dense_sset(n);
         let (mut row_driven, _) = dense_sset(n);

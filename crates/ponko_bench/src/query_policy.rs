@@ -641,12 +641,12 @@ mod tests {
     /// Registering components between queries changes no query's answer.
     #[test]
     fn components_registered_late_keep_query_results() {
-        let mut s = churn_world(Strategy::Auto);
-        let before = four_queries(&mut s.w);
-        let ids: Vec<ComponentId> = (0..16).map(|n| register_late(&mut s.w, n)).collect();
+        let mut w = sparse_world(64, Strategy::Auto);
+        let before = four_queries(&mut w);
+        let ids: Vec<ComponentId> = (0..16).map(|n| register_late(&mut w, n)).collect();
         assert!(ids.windows(2).all(|p| p[0] != p[1]));
-        assert_eq!(s.w.component_info(ids[3]).name(), "late-3");
-        assert_eq!(four_queries(&mut s.w), before);
+        assert_eq!(w.component_info(ids[3]).name(), "late-3");
+        assert_eq!(four_queries(&mut w), before);
     }
 
     #[test]

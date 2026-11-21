@@ -718,8 +718,8 @@ fn memory(filter: Option<&str>) {
 
 /// Archetypes in a query-level world; 4 entities each, so per-archetype work
 /// (matching, column lookup) is most of a query's cost, as in worlds with many
-/// component combinations.
-const QUERY_ARCHETYPES: usize = 4096;
+/// component combinations. Fewer under Miri, which interprets every step.
+const QUERY_ARCHETYPES: usize = if cfg!(miri) { 64 } else { 4096 };
 const QUERY_ROWS: usize = 4;
 /// Query-level widths: total components per archetype, the two queried ones
 /// included. Two would leave no room for 4096 distinct archetypes.
