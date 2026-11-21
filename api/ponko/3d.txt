@@ -10408,6 +10408,7 @@ impl core::marker::Copy for ponko::render::CrowdInstance
 impl core::marker::StructuralPartialEq for ponko::render::CrowdInstance
 #[non_exhaustive] pub struct ponko::render::CrowdLevel
 pub ponko::render::CrowdLevel::camera: bool
+pub ponko::render::CrowdLevel::fade: f32
 pub ponko::render::CrowdLevel::influences: u8
 pub ponko::render::CrowdLevel::max_distance: f32
 pub ponko::render::CrowdLevel::mesh: ponko::render::Mesh
@@ -10416,6 +10417,7 @@ pub ponko::render::CrowdLevel::shadows: bool
 impl ponko::render::CrowdLevel
 pub fn ponko::render::CrowdLevel::new(ponko::render::Mesh, f32, f32) -> Self
 pub fn ponko::render::CrowdLevel::with_camera(self, bool) -> Self
+pub fn ponko::render::CrowdLevel::with_fade(self, f32) -> Self
 pub fn ponko::render::CrowdLevel::with_influences(self, u8) -> Self
 pub fn ponko::render::CrowdLevel::with_shadows(self, bool) -> Self
 impl core::clone::Clone for ponko::render::CrowdLevel

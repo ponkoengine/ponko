@@ -1739,11 +1739,11 @@
     "reason": "make_crowd creates the shared crowd state before it makes the first GPU-path crowd and never drops it, so a GPU-path crowd always has it.",
     "site": "src/render/gpu3d/crowds.rs:397"
   },
-  "src/render/gpu3d/crowds.rs:aaee982ef71cfcd6": {
+  "src/render/gpu3d/crowds.rs:fdadabb04b30d01f": {
     "classification": "invariant",
-    "construction": "debug_assert!(source.contains(FIELDS) && source.contains(BINDINGS) && source.contains(helper))",
-    "reason": "Debug check that the engine's own mesh shader still has the text the crowd shader splices into; crowd_shaders_compose_on_the_mesh_shader tests it, callers can't change it.",
-    "site": "src/render/gpu3d/crowds.rs:74"
+    "construction": "debug_assert!( source.contains(FIELDS) && source.contains(BINDINGS) && source.contains(helper) && source.matches(FADE).count() == 2 )",
+    "reason": "Debug-only check of the engine's own mesh shader text (fields, bindings, helper and the two vertex entry points' fade lines) that compose_crowd edits; crowd_shaders_compose_on_the_mesh_shader checks it in every build",
+    "site": "src/render/gpu3d/crowds.rs:144"
   },
   "src/render/gpu3d/custom_passes.rs:96c5b0d2fc4aefbb": {
     "classification": "invariant",
