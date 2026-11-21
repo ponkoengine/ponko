@@ -459,9 +459,12 @@ pub fn ponko::ai::Blackboard::deserialize<D: serde_core::de::Deserializer<'de>>(
 pub struct ponko::ai::Brain
 impl ponko::ai::Brain
 pub fn ponko::ai::Brain::action(&self) -> core::option::Option<ponko::ai::Key>
+pub fn ponko::ai::Brain::action_param(&self, ponko::ai::Key, ponko::ai::Key) -> core::option::Option<ponko::ai::Value>
+pub fn ponko::ai::Brain::actions(&self) -> impl core::iter::traits::iterator::Iterator<Item = ponko::ai::Key> + '_
 pub fn ponko::ai::Brain::doing(&self, ponko::ai::Key) -> bool
 pub fn ponko::ai::Brain::due(&self, u32, u64) -> bool
 pub fn ponko::ai::Brain::fail(&mut self)
+pub fn ponko::ai::Brain::fail_action(&mut self, ponko::ai::Key)
 pub fn ponko::ai::Brain::has_tree(&self) -> bool
 pub fn ponko::ai::Brain::new(&str) -> ponko::ai::Brain
 pub fn ponko::ai::Brain::param(&self, ponko::ai::Key) -> core::option::Option<ponko::ai::Value>
@@ -473,8 +476,10 @@ pub fn ponko::ai::Brain::set_seed(&mut self, u64)
 pub fn ponko::ai::Brain::signal(&mut self, ponko::ai::Key)
 pub fn ponko::ai::Brain::signal_with(&mut self, ponko::ai::Key, impl core::convert::Into<ponko::ai::Value>)
 pub fn ponko::ai::Brain::started(&self) -> bool
+pub fn ponko::ai::Brain::started_action(&self, ponko::ai::Key) -> bool
 pub fn ponko::ai::Brain::status(&self) -> ponko::ai::Status
 pub fn ponko::ai::Brain::succeed(&mut self)
+pub fn ponko::ai::Brain::succeed_action(&mut self, ponko::ai::Key)
 pub fn ponko::ai::Brain::think(&mut self, &alloc::rcs::arc::Arc<ponko::ai::BehaviorTree>, &mut ponko::ai::Blackboard, u64, f32)
 pub fn ponko::ai::Brain::thinks(&self) -> u32
 pub fn ponko::ai::Brain::trace(&self) -> alloc::vec::Vec<ponko::ai::TraceLine<'_>>

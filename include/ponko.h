@@ -91,6 +91,8 @@
 
 #define PONKO_ACTION_NONE UINT32_MAX
 
+#define PONKO_AI_EVERY_BRAIN UINT64_MAX
+
 #define PONKO_SINCE_LAST_RUN UINT64_MAX
 
 #define PONKO_NAV_WALL 0
@@ -3929,6 +3931,114 @@ enum PonkoStatus ponko_brain_trace(const struct PonkoBrain *brain,
 float ponko_ai_curve(enum PonkoAiCurve curve, float param, float x);
 
 float ponko_ai_combine(const float *scores, size_t count);
+
+enum PonkoStatus ponko_brain_action_at(const struct PonkoBrain *brain,
+                                       size_t index,
+                                       uint64_t *out_key);
+
+enum PonkoStatus ponko_brain_action_started(const struct PonkoBrain *brain,
+                                            uint64_t action,
+                                            bool *out_started);
+
+enum PonkoStatus ponko_brain_finish_action(struct PonkoBrain *brain,
+                                           uint64_t action,
+                                           enum PonkoAiStatus status);
+
+enum PonkoStatus ponko_brain_action_param_num(const struct PonkoBrain *brain,
+                                              uint64_t action,
+                                              uint64_t key,
+                                              float *out_value);
+
+enum PonkoStatus ponko_ctx_ai_load_tree(struct PonkoCtx *ctx, const char *path);
+
+enum PonkoStatus ponko_ctx_ai_add_tree(struct PonkoCtx *ctx,
+                                       const char *name,
+                                       const struct PonkoBehaviorTree *tree);
+
+enum PonkoStatus ponko_ctx_ai_add_brain(struct PonkoCtx *ctx,
+                                        uint64_t entity,
+                                        const char *tree,
+                                        uint32_t period);
+
+enum PonkoStatus ponko_ctx_ai_think(struct PonkoCtx *ctx);
+
+enum PonkoStatus ponko_ctx_ai_signal(struct PonkoCtx *ctx, uint64_t target, uint64_t key);
+
+enum PonkoStatus ponko_ctx_ai_signal_num(struct PonkoCtx *ctx,
+                                         uint64_t target,
+                                         uint64_t key,
+                                         float value);
+
+enum PonkoStatus ponko_ctx_ai_signal_entity(struct PonkoCtx *ctx,
+                                            uint64_t target,
+                                            uint64_t key,
+                                            uint64_t value);
+
+enum PonkoStatus ponko_ctx_ai_signal_vec2(struct PonkoCtx *ctx,
+                                          uint64_t target,
+                                          uint64_t key,
+                                          struct PonkoVec2 value);
+
+enum PonkoStatus ponko_ctx_ai_signal_vec3(struct PonkoCtx *ctx,
+                                          uint64_t target,
+                                          uint64_t key,
+                                          struct PonkoVec3 value);
+
+enum PonkoStatus ponko_ctx_ai_action(struct PonkoCtx *ctx,
+                                     uint64_t entity,
+                                     size_t index,
+                                     uint64_t *out_key);
+
+enum PonkoStatus ponko_ctx_ai_started(struct PonkoCtx *ctx,
+                                      uint64_t entity,
+                                      uint64_t action,
+                                      bool *out_started);
+
+enum PonkoStatus ponko_ctx_ai_finish(struct PonkoCtx *ctx,
+                                     uint64_t entity,
+                                     uint64_t action,
+                                     enum PonkoAiStatus status);
+
+enum PonkoStatus ponko_ctx_ai_param_num(struct PonkoCtx *ctx,
+                                        uint64_t entity,
+                                        uint64_t action,
+                                        uint64_t key,
+                                        float *out_value);
+
+enum PonkoStatus ponko_ctx_ai_set_num(struct PonkoCtx *ctx,
+                                      uint64_t entity,
+                                      uint64_t key,
+                                      float value);
+
+enum PonkoStatus ponko_ctx_ai_set_flag(struct PonkoCtx *ctx,
+                                       uint64_t entity,
+                                       uint64_t key,
+                                       bool value);
+
+enum PonkoStatus ponko_ctx_ai_set_vec2(struct PonkoCtx *ctx,
+                                       uint64_t entity,
+                                       uint64_t key,
+                                       struct PonkoVec2 value);
+
+enum PonkoStatus ponko_ctx_ai_set_vec3(struct PonkoCtx *ctx,
+                                       uint64_t entity,
+                                       uint64_t key,
+                                       struct PonkoVec3 value);
+
+enum PonkoStatus ponko_ctx_ai_set_entity(struct PonkoCtx *ctx,
+                                         uint64_t entity,
+                                         uint64_t key,
+                                         uint64_t value);
+
+enum PonkoStatus ponko_ctx_ai_num(struct PonkoCtx *ctx,
+                                  uint64_t entity,
+                                  uint64_t key,
+                                  float *out_value);
+
+enum PonkoStatus ponko_ctx_ai_flag(struct PonkoCtx *ctx,
+                                   uint64_t entity,
+                                   uint64_t key,
+                                   bool *out_value);
 
 enum PonkoStatus ponko_motion_clip(const struct PonkoClip *clip, struct PonkoMotion **out_motion);
 
