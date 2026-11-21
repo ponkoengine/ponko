@@ -66,6 +66,80 @@ pub unsafe trait QueryData {
     fn state(arch: &Archetype, ids: &Self::Ids) -> Option<Self::State>;
     #[doc(hidden)]
     unsafe fn fetch<'a>(state: Self::State, row: usize) -> Self::Item<'a>;
+    /// How many `Option` fetches this has. Loops split on which of their
+    /// components an archetype has ([`for_rows`]), so that rows don't test it.
+    #[doc(hidden)]
+    const OPTIONS: u32 = 0;
+    /// One bit per `Option` fetch, in order (bit 0 the first): set if the
+    /// archetype `state` was made for has its component.
+    #[doc(hidden)]
+    #[inline(always)]
+    fn present(state: &Self::State) -> u32 {
+        let _ = state;
+        0
+    }
+    /// [`fetch`](Self::fetch), with whether each `Option` fetch here has its
+    /// component known at compile time: bit `bit + i` of `PRESENT` for the
+    /// `i`th one.
+    ///
+    /// # Safety
+    /// As for `fetch`, and those bits of `PRESENT` are the ones
+    /// [`present`](Self::present) gives for `state`.
+    #[doc(hidden)]
+    #[inline(always)]
+    unsafe fn fetch_split<'a, const PRESENT: u32>(state: Self::State, row: usize, bit: u32) -> Self::Item<'a> {
+        let _ = bit;
+        unsafe { Self::fetch(state, row) }
+    }
+}
+
+/// Calls `f` with the items of rows `rows` of the archetype `state` was made
+/// for. A query with one or two `Option` fetches gets one loop for each
+/// combination of the components the archetype may have, picked once here:
+/// no row tests whether the archetype has them, so the loop compiles (and
+/// vectorizes) like that of a query without `Option`s.
+///
+/// # Safety
+/// As for [`QueryData::fetch`], for every row in `rows`.
+#[inline(always)]
+pub(crate) unsafe fn for_rows<'a, Q: QueryData>(
+    state: Q::State,
+    rows: std::ops::Range<usize>,
+    f: &mut impl FnMut(Q::Item<'a>),
+) {
+    macro_rules! split {
+        ($($present:literal)* ; $last:literal) => {
+            // `present` sets only the low `Q::OPTIONS` bits: `$last` is
+            // the one value left.
+            match Q::present(&state) {
+                $($present => {
+                    for row in rows {
+                        // SAFETY: the caller's contract; `$present` is what
+                        // `present` gave for `state`.
+                        f(unsafe { Q::fetch_split::<$present>(state, row, 0) });
+                    }
+                })*
+                _ => {
+                    for row in rows {
+                        // SAFETY: as above, for the last combination.
+                        f(unsafe { Q::fetch_split::<$last>(state, row, 0) });
+                    }
+                }
+            }
+        };
+    }
+    match Q::OPTIONS {
+        1 => split!(0; 1),
+        2 => split!(0 1 2; 3),
+        // None, or so many that a loop for each would cost more code than
+        // the tests it saves.
+        _ => {
+            for row in rows {
+                // SAFETY: the caller's contract.
+                f(unsafe { Q::fetch(state, row) });
+            }
+        }
+    }
 }
 
 unsafe impl<T: Component> QueryData for &T {
@@ -138,6 +212,21 @@ unsafe impl<T: Component> QueryData for Option<&T> {
     unsafe fn fetch<'a>(state: Option<*const T>, row: usize) -> Option<&'a T> {
         state.map(|p| unsafe { &*p.add(row) })
     }
+    const OPTIONS: u32 = 1;
+    #[inline(always)]
+    fn present(state: &Option<*const T>) -> u32 {
+        state.is_some() as u32
+    }
+    #[inline(always)]
+    unsafe fn fetch_split<'a, const PRESENT: u32>(state: Option<*const T>, row: usize, bit: u32) -> Option<&'a T> {
+        if PRESENT.checked_shr(bit).unwrap_or(0) & 1 != 0 {
+            // SAFETY: the caller's contract: the bit is set, so the
+            // archetype has the column and `state` is `Some`.
+            Some(unsafe { &*state.unwrap_unchecked().add(row) })
+        } else {
+            None
+        }
+    }
 }
 
 unsafe impl<T: Component> QueryData for Option<&mut T> {
@@ -161,6 +250,21 @@ unsafe impl<T: Component> QueryData for Option<&mut T> {
     #[inline(always)]
     unsafe fn fetch<'a>(state: Option<*mut T>, row: usize) -> Option<&'a mut T> {
         state.map(|p| unsafe { &mut *p.add(row) })
+    }
+    const OPTIONS: u32 = 1;
+    #[inline(always)]
+    fn present(state: &Option<*mut T>) -> u32 {
+        state.is_some() as u32
+    }
+    #[inline(always)]
+    unsafe fn fetch_split<'a, const PRESENT: u32>(state: Option<*mut T>, row: usize, bit: u32) -> Option<&'a mut T> {
+        if PRESENT.checked_shr(bit).unwrap_or(0) & 1 != 0 {
+            // SAFETY: the caller's contract: the bit is set, so the
+            // archetype has the column and `state` is `Some`.
+            Some(unsafe { &mut *state.unwrap_unchecked().add(row) })
+        } else {
+            None
+        }
     }
 }
 
@@ -207,6 +311,31 @@ macro_rules! query_tuple {
             #[inline(always)]
             unsafe fn fetch<'a>(state: Self::State, row: usize) -> Self::Item<'a> {
                 unsafe { ($($t::fetch(state.$i, row),)*) }
+            }
+            const OPTIONS: u32 = 0 $(+ $t::OPTIONS)*;
+            #[inline(always)]
+            #[allow(unused_assignments)]
+            fn present(state: &Self::State) -> u32 {
+                let (mut bits, mut at) = (0u32, 0u32);
+                $(
+                    bits |= $t::present(&state.$i).checked_shl(at).unwrap_or(0);
+                    at += $t::OPTIONS;
+                )*
+                bits
+            }
+            #[inline(always)]
+            #[allow(unused_assignments)]
+            unsafe fn fetch_split<'a, const PRESENT: u32>(state: Self::State, row: usize, bit: u32) -> Self::Item<'a> {
+                let mut at = bit;
+                // SAFETY: the caller's contract, element by element: each
+                // gets the bits from its own first `Option` on.
+                unsafe {
+                    ($({
+                        let item = $t::fetch_split::<PRESENT>(state.$i, row, at);
+                        at += $t::OPTIONS;
+                        item
+                    },)*)
+                }
             }
         }
     };
@@ -1142,9 +1271,9 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                 let Some(state) = Q::state(arch, &ids) else {
                     continue;
                 };
-                for row in 0..len {
-                    f(unsafe { Q::fetch(state, row) });
-                }
+                // SAFETY: the rows of a matching archetype, under the
+                // query's validated borrow.
+                unsafe { for_rows::<Q>(state, 0..len, &mut f) };
             }
             return;
         }
@@ -1184,9 +1313,9 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                         None => break,
                     }
                 }
-                for row in start..end {
-                    f(unsafe { Q::fetch(state, row) });
-                }
+                // SAFETY: rows of a matching archetype, under the query's
+                // validated borrow.
+                unsafe { for_rows::<Q>(state, start..end, &mut f) };
                 if runs.is_none() {
                     break;
                 }

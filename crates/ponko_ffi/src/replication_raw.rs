@@ -5,14 +5,13 @@
 //! `ponko_ctx_replication` (which replaces every earlier declaration), the
 //! same on the server and every client.
 use std::ffi::{c_char, c_void};
-use std::mem::{align_of, offset_of, size_of};
 
-use ponko::net::{PeerId, RawNetEvent, RawType, Replication, ReplicationRole, SnapshotConfig};
+use ponko::net::{NetEvent, PeerId, RawEvent, RawType, Replication, ReplicationRole, SnapshotConfig};
 use ponko::prelude::Vec3;
 use ponko_ecs::ComponentId;
 
 use crate::component_hooks::PonkoFreeUserFn;
-use crate::ctx::{PonkoCtx, ctx_access, events, out, text};
+use crate::ctx::{PonkoCtx, ctx_access, events_kept, out, text};
 use crate::replicate::PonkoSnapshotConfig;
 use crate::replication::{PonkoReplicatedField, field, not_found, slice};
 use crate::{Failure, PonkoStatus, boundary, invalid, invalid_owned};
@@ -293,7 +292,7 @@ pub unsafe extern "C" fn ponko_ctx_replication_event(
                 if out_kind.is_null() {
                     return Err(invalid("output is null"));
                 }
-                if name.is_empty() || r.has_event(name) {
+                if name.is_empty() || r.raw_event_kind(name).is_some() {
                     return Err(invalid_owned(format!(
                         "event names are nonempty and declared once (`{name}`)"
                     )));
@@ -477,11 +476,12 @@ pub enum PonkoEventTarget {
 }
 
 /// Sends an event of a kind from `ponko_ctx_replication_event`: `size`
-/// bytes, reliable and in order (Rust `Replication::raw_to_server`,
-/// `raw_to_client`, `raw_to_clients`). `target` is a `PonkoEventTarget`;
+/// bytes, reliable and in order (Rust `Replication::to_server_raw`,
+/// `to_client_raw`, `to_clients_raw`). `target` is a `PonkoEventTarget`;
 /// `peer` is read for `PONKO_EVENT_TO_CLIENT`. Sending to clients from a
-/// client does nothing. A kind that wasn't declared is
-/// `PONKO_INVALID_ARGUMENT`.
+/// client does nothing. A kind that wasn't declared, more than
+/// Rust `MAX_RAW_EVENT_BYTES` bytes, or 4096 events already waiting to
+/// be sent is `PONKO_INVALID_ARGUMENT`, and nothing is sent.
 ///
 /// Ownership: `data` is copied during the call.
 /// ```
@@ -503,17 +503,17 @@ pub unsafe extern "C" fn ponko_ctx_replication_send(
         unsafe {
             ctx_access(ctx, |c| {
                 let r = &mut c.net.replication;
-                if r.raw_event_name(kind).is_none() {
+                let Some(name) = r.raw_event_name(kind).map(str::to_owned) else {
                     return Err(invalid("that kind wasn't declared with ponko_ctx_replication_event"));
-                }
+                };
                 let bytes = slice(data.cast::<u8>(), size, "data")?;
                 match target {
-                    0 => r.raw_to_server(kind, bytes),
-                    1 => r.raw_to_client(PeerId::from_bits(peer), kind, bytes),
-                    2 => r.raw_to_clients(kind, bytes),
+                    0 => r.to_server_raw(&name, bytes),
+                    1 => r.to_client_raw(PeerId::from_bits(peer), &name, bytes),
+                    2 => r.to_clients_raw(&name, bytes),
                     _ => return Err(invalid("target is not a PonkoEventTarget")),
                 }
-                Ok(())
+                .map_err(crate::engine_error)
             })
         }
     })
@@ -540,26 +540,15 @@ pub struct PonkoNetEvent {
     pub size: usize,
 }
 
-const _: () = {
-    // Events are handed to C in place.
-    let l = RawNetEvent::LAYOUT;
-    assert!(offset_of!(PonkoNetEvent, from) == l[0]);
-    assert!(offset_of!(PonkoNetEvent, tick) == l[1]);
-    assert!(offset_of!(PonkoNetEvent, kind) == l[2]);
-    assert!(offset_of!(PonkoNetEvent, data) == l[3]);
-    assert!(offset_of!(PonkoNetEvent, size) == l[4]);
-    assert!(size_of::<PonkoNetEvent>() == l[5]);
-    assert!(align_of::<PonkoNetEvent>() == align_of::<RawNetEvent>());
-};
-
 /// The events that arrived since this system last read them (Rust
-/// `ctx.events.read::<RawNetEvent>()`), as an array the engine owns, in
+/// `ctx.events.read::<NetEvent<RawEvent>>()`), as an array the engine owns, in
 /// order: `out_count` events at `*out_events`. Works inside `ponko_query`
 /// callbacks (not `ponko_query_par`); read once per system, as a second
 /// read gives only events newer than the first.
 ///
-/// Ownership: the array and the events' bytes belong to the engine and
-/// stay valid until the system returns; copy what you keep.
+/// Ownership: `out_events` receives a borrowed view of an array the engine
+/// owns, as are the events' bytes, valid until the system returns; never
+/// free it, and copy what you keep.
 /// ```
 /// let (mut e, mut n) = (std::ptr::null(), 0usize);
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_net_events(std::ptr::null_mut(), &mut e, &mut n) } as u32, 1);
@@ -576,14 +565,22 @@ pub unsafe extern "C" fn ponko_ctx_net_events(
         if out_events.is_null() || out_count.is_null() {
             return Err(invalid("output is null"));
         }
-        // SAFETY: forwarded caller contract; `RawNetEvent` has
-        // `PonkoNetEvent`'s layout (asserted above), and the slice lives in
-        // the events until the next send of its type, which only the
-        // replication systems do, between systems.
+        // SAFETY: forwarded caller contract. The bytes the array points at
+        // live in the events until the next send of their type, which only
+        // the replication systems do, between systems.
         unsafe {
-            let (ptr, len) = events(ctx, |ev| {
-                let s = ev.read::<RawNetEvent>();
-                Ok((s.as_ptr().cast::<PonkoNetEvent>(), s.len()))
+            let (ptr, len) = events_kept(ctx, |ev| {
+                Ok(ev
+                    .read::<NetEvent<RawEvent>>()
+                    .iter()
+                    .map(|e| PonkoNetEvent {
+                        from: e.from.to_bits(),
+                        tick: e.tick,
+                        kind: u32::from(e.event.kind()),
+                        data: e.event.bytes.as_ptr(),
+                        size: e.event.bytes.len(),
+                    })
+                    .collect())
             })?;
             out(out_events, ptr)?;
             out(out_count, len)

@@ -37,6 +37,8 @@ pub use controller::{
 pub use glyphs::{Glyph, GlyphAtlas, Glyphs};
 pub use ime::ImeEvent;
 pub(crate) mod touch;
+mod touch_desktop;
+mod ui_seen;
 pub use touch::{Gesture, GestureAxis, GestureEvent, GestureSettings, Touch, TouchPhase};
 
 macro_rules! define_keys {
@@ -515,6 +517,8 @@ pub struct Input {
     pub(crate) controllers: controller::Controllers,
     /// Touches, gestures and the on-screen controls' zones.
     pub(crate) touch: touch::TouchState,
+    /// What the retained UI took of this frame's input.
+    ui_seen: ui_seen::UiSeen,
 }
 
 impl Input {
@@ -536,6 +540,7 @@ impl Input {
             ime: Default::default(),
             controllers: Default::default(),
             touch: Default::default(),
+            ui_seen: Default::default(),
         }
     }
 
@@ -551,6 +556,13 @@ impl Input {
     }
 
     pub(crate) fn set_mouse_button(&mut self, button: MouseButton, is_down: bool) {
+        // A press the system made up for a finger is not the mouse's (nor
+        // is the release of a button not held: the made-up press's).
+        if button == MouseButton::Left
+            && (!self.touch_mouse_button(is_down) || (!is_down && !self.mouse.down[button as usize]))
+        {
+            return;
+        }
         self.record(crate::actions::InputEvent::Mouse(button, is_down));
         if is_down {
             self.controllers.used(InputDevice::KeyboardMouse);
@@ -561,11 +573,13 @@ impl Input {
     }
 
     pub(crate) fn set_mouse_pos(&mut self, pos: Vec2) {
-        if pos != self.mouse_pos {
+        // The system moves the cursor with a finger: that's no mouse use.
+        let mouse = self.touch_mouse_moved(pos);
+        if pos != self.mouse_pos && mouse {
             self.touch.pointer_is_touch = false;
         }
         self.record(crate::actions::InputEvent::MouseMove(pos));
-        if pos.distance_squared(self.mouse_pos) >= MOUSE_USE_DISTANCE * MOUSE_USE_DISTANCE {
+        if mouse && pos.distance_squared(self.mouse_pos) >= MOUSE_USE_DISTANCE * MOUSE_USE_DISTANCE {
             self.controllers.used(InputDevice::KeyboardMouse);
         }
         self.mouse_pos = pos;
@@ -725,6 +739,7 @@ impl Input {
         self.mouse_pos_at_frame_start = self.mouse_pos;
         // One-frame gestures are over: their actions see the release next frame.
         self.touch.end_frame();
+        self.end_ui_frame();
         self.refresh_actions();
     }
 
@@ -1290,6 +1305,7 @@ impl Input {
     /// ```
     pub fn feed(&mut self, event: crate::actions::InputEvent) {
         use crate::actions::InputEvent;
+        self.fed_after_ui();
         match event {
             InputEvent::Key(k, down) => self.set_key(k, down),
             InputEvent::Mouse(b, down) => self.set_mouse_button(b, down),
@@ -1302,6 +1318,7 @@ impl Input {
             InputEvent::MouseMove(at) => self.set_mouse_pos(at),
             InputEvent::MouseWheel(lines) => self.add_mouse_wheel(lines),
             InputEvent::Touch { id, phase, position } => self.feed_touch(id, phase, position),
+            InputEvent::Trackpad { gesture, phase, amount } => self.feed_trackpad(gesture, phase, amount),
         }
     }
 
@@ -1358,6 +1375,7 @@ impl Input {
     /// # }
     /// ```
     pub fn insert_text(&mut self, text: &str) {
+        self.fed_after_ui();
         self.add_text(text);
     }
 }

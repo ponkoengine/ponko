@@ -109,6 +109,22 @@ impl Graphics {
         self.try_create_material(desc).unwrap_or_else(|e| panic!("{e}"))
     }
 
+    /// The material of image `path` alone (white, otherwise the default
+    /// material), made once and kept: what a scene's `"ModelMaterial": {
+    /// "texture": path }` draws with, and what the editor puts on a model
+    /// an image is dropped on.
+    pub(crate) fn texture_material(&mut self, path: &str) -> Result<Material, crate::error::Error> {
+        if let Some(material) = self.material_names.textured(path)
+            && self.assets3d.materials_live.contains(material.id)
+        {
+            return Ok(material);
+        }
+        let texture = self.try_load_texture(path)?;
+        let material = self.try_create_material(MaterialDesc::default().with_texture(texture))?;
+        self.material_names.add_texture(path, material);
+        Ok(material)
+    }
+
     /// [`create_material`](Self::create_material) with errors as values.
     ///
     /// # Errors
@@ -1951,6 +1967,9 @@ impl Ctx {
             view.size = size;
             view.camera = eye.position;
             view.particles = eye.particles;
+            // `ctx.debug` draws on the default layer.
+            view.debug = eye.particles && eye.layers.intersects(crate::camera::RenderLayers::DEFAULT);
+            view.eye = Some(eye);
             view.view_proj = match camera.clip_plane {
                 Some(plane) => super::target::oblique(eye.view_proj(), eye.view(), plane),
                 None => eye.view_proj(),
@@ -2159,7 +2178,6 @@ impl Ctx {
         skins.motion = motion;
         skins.collect(&mut self.world, &self.gfx.assets3d);
         self.collect_views(&skins);
-        self.collect_text3d();
         let Some(renderer) = self.gfx.renderer.as_mut() else {
             return;
         };
@@ -2203,16 +2221,19 @@ impl Ctx {
         } else {
             self.gfx.frame3d.window_views.clear();
         }
-        // `ctx.debug`'s lines are on the default layer.
-        if !self
+        // `ctx.debug`'s lines are on the default layer (target cameras that
+        // show it still draw them).
+        self.gfx.frame3d.debug_lines.hidden = !self
             .scene3d
             .camera
             .layers
-            .intersects(crate::camera::RenderLayers::DEFAULT)
-        {
-            self.gfx.frame3d.debug_lines.clear();
-        }
+            .intersects(crate::camera::RenderLayers::DEFAULT);
         self.gfx.frame3d.skins = skins;
+        // Every camera's 3D text, facing it, now that the views are known.
+        self.collect_text3d();
+        let Some(renderer) = self.gfx.renderer.as_mut() else {
+            return;
+        };
         // The atmosphere, and the sky kit (which reddens and sets the sun as it
         // does), light the scene through the air.
         let sky = &self.scene3d.sky;

@@ -102,6 +102,10 @@ fn navmesh(c: &Ctx) -> Result<&NavMesh3D, Failure> {
 }
 
 /// An empty set of walkable geometry.
+///
+/// Ownership: the returned source list is the caller's (null on failure); free
+/// it with ponko_nav_sources_free.
+///
 /// ```
 /// let s = ponko_ffi::ponko_nav_sources_new();
 /// unsafe { ponko_ffi::ponko_nav_sources_free(s) };

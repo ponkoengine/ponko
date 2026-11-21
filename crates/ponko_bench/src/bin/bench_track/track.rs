@@ -66,6 +66,9 @@ pub struct Doc {
     pub time: u64,
     /// The workloads' source hash (instruction documents only).
     pub workloads: Option<String>,
+    /// `env.code_align`: the function alignment of an aligned build
+    /// (`scripts/bench-aligned.sh`), `None` for an ordinary one.
+    pub code_align: Option<u64>,
     /// Samples of every benchmark, in document order.
     pub results: Vec<(String, Vec<f64>)>,
 }
@@ -117,6 +120,7 @@ pub fn parse_doc(text: &str) -> Result<Doc, String> {
         rustc: s("rustc").unwrap_or_else(|| "unknown".into()),
         time,
         workloads: s("workloads"),
+        code_align: env["code_align"].as_u64(),
         results,
     })
 }
@@ -246,6 +250,8 @@ pub struct Side {
     pub git_revs: Vec<String>,
     pub rustc: Vec<String>,
     pub workloads: Vec<String>,
+    /// Function alignments of the side's builds (`"128"`, or `"none"`).
+    pub code_align: Vec<String>,
     /// Benchmark name to every sample, in first-seen order.
     pub samples: Vec<(String, Vec<f64>)>,
 }
@@ -259,6 +265,7 @@ pub fn pool(docs: &[Doc]) -> Result<Side, String> {
         git_revs: Vec::new(),
         rustc: Vec::new(),
         workloads: Vec::new(),
+        code_align: Vec::new(),
         samples: Vec::new(),
     };
     for d in docs {
@@ -279,6 +286,10 @@ pub fn pool(docs: &[Doc]) -> Result<Side, String> {
         };
         add(&mut side.git_revs, &d.git_rev);
         add(&mut side.rustc, &d.rustc);
+        add(
+            &mut side.code_align,
+            &d.code_align.map_or_else(|| "none".to_owned(), |a| a.to_string()),
+        );
         if let Some(w) = &d.workloads {
             add(&mut side.workloads, w);
         }
@@ -334,6 +345,14 @@ pub fn compare(base: &Side, new: &Side, rule: Rule, any_machine: bool) -> Result
             "different compilers: {} and {}; part of a change can be the compiler's",
             base.rustc.join(", "),
             new.rustc.join(", ")
+        ));
+    }
+    if base.code_align != new.code_align {
+        warnings.push(format!(
+            "different function alignment ({} and {}): part of a change can be where the code fell in \
+             the binary; build both sides with scripts/bench-aligned.sh",
+            base.code_align.join(", "),
+            new.code_align.join(", ")
         ));
     }
     if base.workloads != new.workloads {
@@ -755,6 +774,39 @@ mod tests {
         // The machines, and one run per side.
         assert_eq!(c.warnings.len(), 2, "{:?}", c.warnings);
         assert!(c.warnings[1].contains("only 1 run(s)"), "{:?}", c.warnings);
+    }
+
+    #[test]
+    fn sides_built_with_different_function_alignment_are_flagged() {
+        let doc = |align: &str| {
+            parse_doc(&format!(
+                r#"{{"schema_version": 1, "env": {{"machine": "m", "git_rev": "a", "code_align": {align}}},
+                    "results": [{{"name": "x", "p50_ms": 1.0}}]}}"#
+            ))
+            .unwrap()
+        };
+        let aligned = pool(&[doc("128"), doc("128"), doc("128")]).unwrap();
+        let plain = pool(&[doc("null"), doc("null"), doc("null")]).unwrap();
+        let rule = Rule::for_method(Method::Wall);
+        let c = compare(&aligned, &plain, rule, false).unwrap();
+        assert_eq!(c.warnings.len(), 1, "{:?}", c.warnings);
+        assert!(
+            c.warnings[0].contains("different function alignment (128 and none)"),
+            "{:?}",
+            c.warnings
+        );
+        assert!(
+            compare(&aligned, &aligned.clone(), rule, false)
+                .unwrap()
+                .warnings
+                .is_empty()
+        );
+        assert!(
+            compare(&plain, &plain.clone(), rule, false)
+                .unwrap()
+                .warnings
+                .is_empty()
+        );
     }
 
     #[test]

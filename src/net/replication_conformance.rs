@@ -18,6 +18,8 @@
 //! | Owned entities are predicted exactly under loss and jitter (no corrections), and agree with the server | `owned_entities_predict_exactly_under_loss_and_jitter` |
 //! | An ownership handoff moves prediction to the new owner | `an_ownership_handoff_moves_prediction_to_the_new_owner` |
 //! | Events arrive once, in order, both ways, under loss | `events_arrive_once_and_in_order_both_ways_under_loss` |
+//! | Raw events (bytes, declared by name, for C and C++) arrive once, unchanged, both ways, under loss, in one order with typed events | `raw_events_arrive_once_unchanged_and_in_order_with_typed_ones` |
+//! | A raw event that isn't declared or is too long is refused with an error and nothing is sent; a raw event never matches a typed one | `raw_events_that_cannot_go_are_refused`, `a_raw_event_never_matches_a_typed_one` |
 //! | A client with different declarations is refused, and told why | `a_client_with_different_declarations_is_refused` |
 //! | Off, replication does nothing; on, its traffic never reaches the game's own message events | `replication_off_does_nothing`, `replication_traffic_never_reaches_the_games_message_events` |
 //! | A client that leaves is forgotten; a client whose server is gone loses its replicas | `a_client_that_leaves_is_forgotten_and_a_lost_server_takes_its_replicas` |
@@ -27,6 +29,8 @@
 //! | A write the world can't see still arrives, within a sweep | `writes_the_world_cannot_see_arrive_within_a_sweep` |
 //! | A world the game replaced is read in full | `a_replaced_world_is_read_in_full` |
 //! | A server without clients keeps nothing pending, and its first client gets everything | `a_server_without_clients_keeps_nothing_pending` |
+//! | A change is sent once; while its acknowledgement is on the way it isn't sent again | `a_change_is_sent_once_while_its_acknowledgement_is_on_the_way` |
+//! | What isn't acknowledged in time (changes, despawns) is sent again after the resend timeout, not every tick, and arrives once the link is back | `unacknowledged_changes_are_resent_after_the_timeout_not_every_tick` |
 //!
 //! Over every transport the message protocol lists:
 //!
@@ -50,10 +54,11 @@ use ponko_ecs::{Component, Entity, World};
 use serde::{Deserialize, Serialize};
 
 use super::scripted::{Network, Shared, addr, port};
+use crate::error::ErrorKind;
 use crate::events::Events;
 use crate::net::{
-    InterestConfig, InterestTier, Interpolate, MessageEvent, NetEvent, NetMessages, PeerId, Replica, Replicate,
-    Replicated, Replication, ReplicationRole,
+    InterestConfig, InterestTier, Interpolate, MAX_RAW_EVENT_BYTES, MessageEvent, NetEvent, NetMessages, PeerId,
+    RawEvent, Replica, Replicate, Replicated, Replication, ReplicationRole,
 };
 
 pub(super) const HZ: f64 = 60.0;
@@ -1071,4 +1076,282 @@ fn a_server_without_clients_keeps_nothing_pending() {
     s.join(200);
     s.run(60, |_, _| {});
     assert_converged(&mut s, |_, _, _| true);
+}
+
+/// Records the server sent client `client` so far.
+fn records_to(s: &Session, client: usize) -> u64 {
+    s.sides[0].rep.peer_stats(s.me(client)).expect("joined").records_sent
+}
+
+#[test]
+fn a_change_is_sent_once_while_its_acknowledgement_is_on_the_way() {
+    // Six ticks each way: an acknowledgement is back twelve ticks after
+    // its packet left.
+    let mut s = Session::scripted(1, declarations, |n| n.delay = 6);
+    spawn_crowd(&mut s.sides[0].world, 20);
+    s.join(400);
+    s.run(120, |_, _| {});
+    let rtt = s.sides[0].rep.peer_rtt_ticks(s.me(1)).expect("measured");
+    assert!((11.0..=14.0).contains(&rtt), "round trip {rtt} ticks");
+    let movers: Vec<Entity> = originals(&mut s.sides[0].world).into_values().take(5).collect();
+    let before = records_to(&s, 1);
+    // Five entities change once every 30 ticks, ten times.
+    for round in 0..10 {
+        s.step(|i, side| {
+            if i == 0 {
+                for &e in &movers {
+                    side.world.get_mut::<Pos>(e).unwrap().at.x += 1.0 + round as f32;
+                }
+            }
+        });
+        s.run(29, |_, _| {});
+    }
+    // Sending every tick until acknowledged would have sent each change
+    // about twelve times.
+    assert_eq!(records_to(&s, 1) - before, 5 * 10, "each change went once");
+    assert_converged(&mut s, |_, _, _| true);
+}
+
+#[test]
+fn unacknowledged_changes_are_resent_after_the_timeout_not_every_tick() {
+    let mut s = Session::scripted(1, declarations, |n| n.delay = 3);
+    spawn_crowd(&mut s.sides[0].world, 20);
+    s.join(400);
+    s.run(120, |_, _| {});
+    let crowd: Vec<Entity> = originals(&mut s.sides[0].world).into_values().collect();
+    let peer = s.me(1);
+    let before = s.sides[0].rep.peer_stats(peer).unwrap();
+    // The link goes down; five entities change once and one dies.
+    s.net.as_ref().unwrap().lock().unwrap().cut = true;
+    s.step(|i, side| {
+        if i == 0 {
+            for &e in &crowd[..5] {
+                side.world.get_mut::<Pos>(e).unwrap().at.y += 50.0;
+            }
+            side.world.despawn(crowd[19]);
+        }
+    });
+    let ticks = 60;
+    s.run(ticks - 1, |_, _| {});
+    let after = s.sides[0].rep.peer_stats(peer).unwrap();
+    let records = after.records_sent - before.records_sent;
+    let destroys = after.destroys_sent - before.destroys_sent;
+    // A round trip of six ticks: resent about every seventh tick, not
+    // in each of the 60 ticks (which would be 300 records, 60 despawns).
+    assert!(
+        (5 * 5..=5 * 12).contains(&records),
+        "{records} records in {ticks} ticks"
+    );
+    assert!((5..=12).contains(&destroys), "{destroys} despawns in {ticks} ticks");
+    // Back up: everything arrives.
+    s.net.as_ref().unwrap().lock().unwrap().cut = false;
+    s.run(30, |_, _| {});
+    assert_converged(&mut s, |_, _, _| true);
+}
+
+/// The bytes of raw event number `n`: its length varies (some empty, some
+/// longer than a datagram), its content says which it is.
+fn blob(n: u32) -> Vec<u8> {
+    let len = match n % 4 {
+        0 => 0,
+        1 => 3,
+        2 => 40,
+        _ => 3000,
+    };
+    (0..len).map(|i| (n as usize * 31 + i) as u8).collect()
+}
+
+#[test]
+fn raw_events_arrive_once_unchanged_and_in_order_with_typed_ones() {
+    let rep = || declarations().raw_event("blob");
+    let mut s = Session::scripted(2, rep, |n| {
+        n.loss_per_mille = 300;
+        n.jitter = 5;
+        n.duplicate = true;
+    });
+    s.join(600);
+    // What each side heard: typed `Shout`s and raw blobs, each type in
+    // the order it arrived.
+    #[derive(Debug, PartialEq)]
+    enum Heard {
+        Shout(u32),
+        Blob(Vec<u8>),
+    }
+    let mut got: Vec<Vec<(PeerId, Heard)>> = (0..3).map(|_| Vec::new()).collect();
+    let mut hear = |i: usize, side: &mut Side| {
+        for e in side.events.read::<NetEvent<Shout>>() {
+            got[i].push((e.from, Heard::Shout(e.event.0)));
+        }
+        for e in side.events.read::<NetEvent<RawEvent>>() {
+            assert_eq!(e.event.name(), "blob");
+            got[i].push((e.from, Heard::Blob(e.event.bytes.clone())));
+        }
+    };
+    for round in 0..40u32 {
+        s.step(|i, side| {
+            hear(i, side);
+            match i {
+                0 => {
+                    side.rep.to_clients(&Shout(round));
+                    side.rep.to_clients_raw("blob", &blob(round)).unwrap();
+                    if round == 7 {
+                        side.rep.to_server_raw("blob", b"host").unwrap(); // the host itself
+                    }
+                }
+                _ => {
+                    side.rep.to_server_raw("blob", &blob(round * 10 + i as u32)).unwrap();
+                }
+            }
+        });
+    }
+    s.run(200, |i, side| hear(i, side));
+    for (i, heard) in got.iter().enumerate().skip(1) {
+        assert!(heard.iter().all(|e| e.0 == PeerId::HOST));
+        let shouts: Vec<u32> = heard
+            .iter()
+            .filter_map(|e| match e.1 {
+                Heard::Shout(n) => Some(n),
+                Heard::Blob(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            shouts,
+            (0..40).collect::<Vec<_>>(),
+            "client {i}: typed, all, once, in order"
+        );
+        let blobs: Vec<&Vec<u8>> = heard
+            .iter()
+            .filter_map(|e| match &e.1 {
+                Heard::Blob(b) => Some(b),
+                Heard::Shout(_) => None,
+            })
+            .collect();
+        let want: Vec<Vec<u8>> = (0..40).map(blob).collect();
+        assert_eq!(blobs.len(), want.len(), "client {i}: every raw event, once");
+        for (n, (b, w)) in blobs.iter().zip(&want).enumerate() {
+            assert_eq!(*b, w, "client {i}: raw event {n} unchanged and in order");
+        }
+    }
+    for i in 1..=2u32 {
+        let from = s.me(i as usize);
+        let blobs: Vec<&Vec<u8>> = got[0]
+            .iter()
+            .filter(|e| e.0 == from)
+            .filter_map(|e| match &e.1 {
+                Heard::Blob(b) => Some(b),
+                Heard::Shout(_) => None,
+            })
+            .collect();
+        let want: Vec<Vec<u8>> = (0..40).map(|r| blob(r * 10 + i)).collect();
+        assert_eq!(blobs, want.iter().collect::<Vec<_>>(), "from client {i}");
+    }
+    let own: Vec<&(PeerId, Heard)> = got[0].iter().filter(|e| e.0 == PeerId::HOST).collect();
+    assert_eq!(own, [&(PeerId::HOST, Heard::Blob(b"host".to_vec()))]);
+}
+
+#[test]
+fn raw_and_typed_events_keep_one_order() {
+    // A typed and a raw event sent alternately in one tick arrive in that
+    // order (their payloads say where they were in it).
+    let rep = || declarations().raw_event("blob");
+    let mut s = Session::scripted(1, rep, |n| n.loss_per_mille = 200);
+    s.join(600);
+    s.step(|i, side| {
+        if i == 1 {
+            for n in 0..10u32 {
+                side.rep.to_server(&Shout(n * 2));
+                side.rep.to_server_raw("blob", &(n * 2 + 1).to_le_bytes()).unwrap();
+            }
+        }
+    });
+    let mut order: Vec<u32> = Vec::new();
+    s.run(200, |i, side| {
+        if i != 0 {
+            return;
+        }
+        // Every one of them arrives in the same tick: the reliable lane
+        // delivers them together, in order.
+        let shouts: Vec<u32> = side
+            .events
+            .read::<NetEvent<Shout>>()
+            .iter()
+            .map(|e| e.event.0)
+            .collect();
+        let blobs: Vec<u32> = side
+            .events
+            .read::<NetEvent<RawEvent>>()
+            .iter()
+            .map(|e| u32::from_le_bytes(e.event.bytes[..4].try_into().unwrap()))
+            .collect();
+        if !shouts.is_empty() || !blobs.is_empty() {
+            assert_eq!((shouts.len(), blobs.len()), (10, 10), "all in one tick");
+            order.extend(shouts.iter().zip(&blobs).flat_map(|(a, b)| [*a, *b]));
+        }
+    });
+    assert_eq!(order, (0..20).collect::<Vec<_>>());
+}
+
+#[test]
+fn raw_events_that_cannot_go_are_refused() {
+    let mut s = Session::scripted(1, || declarations().raw_event("blob"), |_| {});
+    s.join(400);
+    let errors = {
+        let client = &mut s.sides[1].rep;
+        [
+            client.to_server_raw("nope", b"x").unwrap_err().kind(),
+            client
+                .to_server_raw("blob", &vec![0; MAX_RAW_EVENT_BYTES + 1])
+                .unwrap_err()
+                .kind(),
+            client.to_client_raw(PeerId::HOST, "nope", b"x").unwrap_err().kind(),
+        ]
+    };
+    assert_eq!(errors, [ErrorKind::NotFound, ErrorKind::Limit, ErrorKind::NotFound]);
+    assert!(
+        s.sides[1]
+            .rep
+            .to_server_raw("blob", &vec![7; MAX_RAW_EVENT_BYTES])
+            .is_ok(),
+        "the longest one goes"
+    );
+    let mut heard = 0;
+    s.run(60, |i, side| {
+        if i == 0 {
+            heard += side.events.read::<NetEvent<RawEvent>>().len();
+        }
+    });
+    assert_eq!(heard, 1, "only the one that was accepted arrived");
+    // Replication off: nothing is declared.
+    let mut off = Replication::default();
+    assert_eq!(off.to_server_raw("blob", b"").unwrap_err().kind(), ErrorKind::NotFound);
+    assert!(!off.is_active(), "a refused send doesn't turn replication on");
+}
+
+#[test]
+#[should_panic(expected = "raw event `blob` is declared twice; declare each event once")]
+fn a_raw_event_declared_twice_is_refused() {
+    let _ = Replication::new().raw_event("blob").raw_event("blob");
+}
+
+#[test]
+fn a_raw_event_never_matches_a_typed_one() {
+    // The server reads `Shout` as bytes, the client as a Rust type: the
+    // bytes would be misread, so the client is refused.
+    let mut first = true;
+    let mut s = Session::scripted(
+        1,
+        || {
+            let r = if first {
+                Replication::new().component::<Hp>().raw_event("Shout")
+            } else {
+                Replication::new().component::<Hp>().event::<Shout>()
+            };
+            first = false;
+            r
+        },
+        |_| {},
+    );
+    s.run(100, |_, _| {});
+    assert!(!s.sides[1].rep.is_joined());
+    assert!(s.sides[1].rep.error().is_some_and(|e| e.contains("different")));
 }

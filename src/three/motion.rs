@@ -49,6 +49,11 @@ pub(crate) struct Motion {
     /// Entities (bits) the game asked to have no motion on the next drawn
     /// frame (a teleport, an animation snap): see `Gfx::reset_motion`.
     pub forget: Vec<u64>,
+    /// Lists every model, moved or not (a model that held still, or that
+    /// the game asked to forget, with this frame's matrix as its last).
+    /// The view model's held items are drawn into the motion image over
+    /// whatever the world wrote under them, so each needs its own vector.
+    pub every: bool,
     /// This frame's `forget`, sorted.
     forgotten: Vec<u64>,
     /// The first mesh id of the posed (skinned or morphing) models, and per
@@ -103,6 +108,13 @@ impl Motion {
         }
     }
 
+    /// The entities this frame forgets the motion of (sorted), for a
+    /// frame collected after this one that shares its past (the view
+    /// model's).
+    pub fn forgotten(&self) -> &[u64] {
+        &self.forgotten
+    }
+
     /// Whether this frame lists motion: `moved` does nothing otherwise.
     pub fn tracking(&self) -> bool {
         self.tracking
@@ -123,7 +135,10 @@ impl Motion {
             return;
         }
         if !self.forgotten.is_empty() && key != NO_KEY && self.forgotten.binary_search(&key).is_ok() {
-            return;
+            if !self.every {
+                return;
+            }
+            previous = instance.model;
         }
         // The first slot of the matrix carries the decal layers: not motion.
         previous[0][3] = instance.model[0][3];
@@ -132,7 +147,7 @@ impl Motion {
             .and_then(|k| self.posed.get(k as usize))
             .copied()
             .unwrap_or(false);
-        if posed || previous != instance.model {
+        if posed || self.every || previous != instance.model {
             self.moved.push((
                 mesh,
                 self.moved.len() as u32,
@@ -267,6 +282,28 @@ mod tests {
         motion.moved(3, &at(0.0), at(0.0).model);
         motion.finish();
         assert_eq!(motion.runs, vec![(11, 0, 1)]);
+    }
+
+    #[test]
+    fn every_model_is_listed_when_asked_the_still_and_the_forgotten_without_motion() {
+        let mut motion = enabled();
+        motion.every = true;
+        motion.forget.push(7);
+        motion.begin();
+        motion.moved_by(7, 0, &at(1.0), at(0.0).model);
+        motion.moved_by(8, 1, &at(2.0), at(2.0).model);
+        motion.moved_by(9, 2, &at(3.0), at(2.5).model);
+        motion.finish();
+        assert_eq!(motion.runs, vec![(0, 0, 1), (1, 1, 1), (2, 2, 1)]);
+        assert_eq!(motion.instances[0].previous, at(1.0).model, "forgotten: no motion");
+        assert_eq!(motion.instances[1].previous, at(2.0).model, "held still");
+        assert_eq!(motion.instances[2].previous[3][0], 2.5, "moved");
+        // Without a past (the frame after a reset) nothing is listed.
+        motion.reset = true;
+        motion.begin();
+        motion.moved_by(8, 1, &at(2.0), at(2.0).model);
+        motion.finish();
+        assert!(motion.runs.is_empty());
     }
 
     #[test]

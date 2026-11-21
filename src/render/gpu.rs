@@ -445,6 +445,18 @@ impl Renderer {
         self.screenshot.take()
     }
 
+    /// Tests: texture `id`'s pixels as the GPU holds them (a render
+    /// target's: linear RGBA16F), read back.
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn read_texture(&self, id: u32) -> Option<Vec<u8>> {
+        let texture = &self.textures.get(id)?.texture;
+        Some(super::render_test_support::read_texture(
+            &self.device,
+            &self.queue,
+            texture,
+        ))
+    }
+
     /// Opens the GPU and sets up drawing to `window`, waiting for the GPU
     /// (desktop; the web build calls [`Self::new_async`]).
     #[cfg(not(target_arch = "wasm32"))]
@@ -531,6 +543,16 @@ impl Renderer {
                 .await,
             "could not open the GPU device",
         )?;
+        // In a browser, a WebGPU device lost while the game runs (the GPU
+        // process crashed or was reset) stops it for good: the page hears
+        // of it through `onPonkoFailure`, kind `DeviceLost`. On WebGL2 the
+        // canvas's lost context reports it instead (`ContextLost`).
+        #[cfg(target_arch = "wasm32")]
+        if adapter.get_info().backend == wgpu::Backend::BrowserWebGpu {
+            device.set_device_lost_callback(|_reason, message| {
+                crate::web::report_failure(crate::web::device_lost_while_playing(&message));
+            });
+        }
 
         // The 3D frame's samples per pixel: the game's choice where this GPU
         // can multisample both 3D targets that much, else 4 (always works).
@@ -611,6 +633,13 @@ impl Renderer {
         ))
     }
 
+    /// Tests: the device, the queue and texture `id` (a render target's),
+    /// to read what the GPU left in it.
+    #[cfg(all(test, feature = "3d"))]
+    pub(super) fn texture_for_test(&self, id: u32) -> (&wgpu::Device, &wgpu::Queue, Option<&wgpu::Texture>) {
+        (&self.device, &self.queue, self.textures.live(id).map(|t| &t.texture))
+    }
+
     #[cfg(all(test, feature = "3d"))]
     pub(super) fn offscreen(gpu: super::render_test_support::TestGpu, size: (u32, u32)) -> Self {
         let msaa = 4;
@@ -637,6 +666,42 @@ impl Renderer {
                 requested_msaa: msaa,
                 supports_msaa2: false,
                 tiled: gpu.info.backend == wgpu::Backend::Metal,
+            },
+        );
+        renderer.set_draw_hidden(true, true);
+        renderer
+    }
+
+    /// A renderer drawing offscreen at `size` on this renderer's GPU (the
+    /// same device and queue, its own pipelines and resources): the
+    /// editor's model thumbnails.
+    #[cfg(all(feature = "3d", feature = "editor"))]
+    pub(crate) fn offscreen_twin(&self, size: (u32, u32)) -> Self {
+        let msaa = 4;
+        let info = self.device.adapter_info();
+        let capabilities = super::capabilities::of_device(&info, &self.device, (msaa, msaa));
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            width: size.0,
+            height: size.1,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: Vec::new(),
+        };
+        let mut renderer = Self::from_device(
+            None,
+            (self.device.clone(), self.queue.clone()),
+            config,
+            capabilities,
+            &[],
+            Render3DSettings {
+                msaa,
+                requested_msaa: msaa,
+                supports_msaa2: false,
+                tiled: info.backend == wgpu::Backend::Metal,
             },
         );
         renderer.set_draw_hidden(true, true);
@@ -1411,6 +1476,29 @@ impl Renderer {
         });
         self.three().add_render_target(id, &texture);
         id
+    }
+
+    /// Writes `texels` (RGBA half floats, 8 bytes each) into render target
+    /// `id`, `width` x `height`: a field the CPU worked out.
+    #[cfg(feature = "3d")]
+    pub fn write_render_target(&mut self, id: u32, width: u32, height: u32, texels: &[u8]) {
+        let Some(tex) = self.textures.live(id) else {
+            return;
+        };
+        self.queue.uploading(Upload::Textures).write_texture(
+            tex.texture.as_image_copy(),
+            texels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(8 * width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Uploads RGBA8 (sRGB) pixels and returns the texture's id.

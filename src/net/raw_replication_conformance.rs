@@ -1,6 +1,6 @@
 //! Conformance of replication declared at run time (from C and C++): inputs
 //! and prediction over bytes (`raw_input`, `raw_predicted`), events by name
-//! (`raw_event`, [`RawNetEvent`]) and interpolated components
+//! (`raw_event`, read as `NetEvent<RawEvent>` with their kind) and interpolated components
 //! (`raw_interpolated`), on the scripted network with loss and jitter, the
 //! same way the typed declarations are checked in
 //! `replication_conformance.rs`.
@@ -8,14 +8,16 @@
 //! | Guarantee | Test |
 //! |---|---|
 //! | Raw inputs move the entities their senders own; owners predict them exactly; the server reads each peer's last input | `raw_inputs_predict_exactly_under_loss_and_jitter` |
-//! | Raw events arrive once, in order, both ways, with their bytes and sender | `raw_events_arrive_once_and_in_order_both_ways_under_loss` |
+//! | Raw events arrive once, in order, both ways, with their bytes, sender and kind | `raw_events_arrive_once_and_in_order_both_ways_under_loss` |
 //! | A raw interpolated component's floats move smoothly a delay behind the server; its other fields arrive at once | `a_raw_interpolated_component_moves_smoothly_and_sets_other_fields_at_once` |
 //! | Misdeclarations panic with a message naming the fix | the `should_panic` tests |
 
 use ponko_ecs::{ComponentId, Entity, World};
 
 use super::replication_conformance::{Session, Side, replicas};
-use crate::net::{PeerId, Quantize, RawField, RawNetEvent, RawType, Replica, Replicated, Replication, SnapshotConfig};
+use crate::net::{
+    NetEvent, PeerId, Quantize, RawEvent, RawField, RawType, Replica, Replicated, Replication, SnapshotConfig,
+};
 
 /// Registers the run-time components every side uses, in the same order
 /// (so their ids agree), and returns (body, pos).
@@ -172,17 +174,23 @@ fn raw_events_arrive_once_and_in_order_both_ways_under_loss() {
     assert_eq!(s.sides[0].rep.raw_event_kind("Nope"), None);
     let mut got: Vec<Vec<(PeerId, u16, u32)>> = vec![Vec::new(); 3];
     let mut read = |i: usize, side: &mut Side| {
-        for e in side.events.read::<RawNetEvent>() {
-            got[i].push((e.from(), e.kind(), u32::from_le_bytes(e.bytes().try_into().unwrap())));
+        for e in side.events.read::<NetEvent<RawEvent>>() {
+            assert_eq!(e.event.name(), "RShout");
+            got[i].push((
+                e.from,
+                e.event.kind(),
+                u32::from_le_bytes(e.event.bytes[..].try_into().unwrap()),
+            ));
         }
     };
     for round in 0..40u32 {
         s.step(|i, side| {
             read(i, side);
             match i {
-                0 => side.rep.raw_to_clients(kind, &round.to_le_bytes()),
-                _ => side.rep.raw_to_server(kind, &(round * 10 + i as u32).to_le_bytes()),
+                0 => side.rep.to_clients_raw("RShout", &round.to_le_bytes()),
+                _ => side.rep.to_server_raw("RShout", &(round * 10 + i as u32).to_le_bytes()),
             }
+            .expect("declared and short");
         });
     }
     s.run(200, &mut read);
@@ -278,18 +286,6 @@ mod misdeclarations {
     #[should_panic(expected = "field `y` of `S` lies outside its 6 bytes")]
     fn a_raw_input_field_outside_its_size_is_refused() {
         let _ = Replication::new().raw_input("S", 6, xy(1.0));
-    }
-
-    #[test]
-    #[should_panic(expected = "event `E` is declared twice; declare each event once")]
-    fn a_raw_event_declared_twice_is_refused() {
-        let _ = Replication::new().raw_event("E").raw_event("E");
-    }
-
-    #[test]
-    #[should_panic(expected = "event kind 3 wasn't declared with `raw_event`")]
-    fn sending_an_undeclared_raw_event_kind_is_refused() {
-        Replication::new().raw_event("E").raw_to_server(3, &[1]);
     }
 
     #[test]

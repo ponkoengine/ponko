@@ -33,17 +33,76 @@ fn write_row<B: Bundle>(
 ) -> usize {
     arch.reserve_row(changes, pool);
     let row = arch.len();
-    // SAFETY: `reserve_row` made room for `row` in every column; `cols`
-    // maps each element to the column of its type, so `src` (a value of that
-    // type, moved out of `bundle`) is copied into storage of its own layout.
-    unsafe {
-        bundle.write(&mut |i, src| {
-            let c = &arch.columns[cols[i]];
-            std::ptr::copy_nonoverlapping(src, c.ptr(row), c.size());
-        });
-    }
+    // SAFETY: `reserve_row` made room for `row`.
+    unsafe { write_bundle(arch, cols, bundle, row) };
     arch.entities.push(e);
     row
+}
+
+/// Moves the values of `bundle` into row `row` of `arch`; `cols` maps the
+/// bundle's elements to `arch`'s columns.
+///
+/// # Safety
+/// `row` is within `arch`'s capacity, and `cols` is the column map the
+/// world cached for `B` in `arch`.
+#[inline(always)]
+unsafe fn write_bundle<B: Bundle>(arch: &mut Archetype, cols: &[usize], bundle: B, row: usize) {
+    // SAFETY: the caller made room for `row` in every column; `cols` maps
+    // each element to the column of its type, so `src` (a value of that
+    // type, moved out of `bundle`) is copied into storage of its own layout,
+    // whose values are `size` bytes apart.
+    unsafe {
+        bundle.write(&mut |i, src, size| {
+            let c = &arch.columns[cols[i]];
+            debug_assert_eq!(c.size(), size);
+            std::ptr::copy_nonoverlapping(src, c.base().add(row * size), size);
+        });
+    }
+}
+
+/// Makes the values a bundle lacks and requires into row `row` of `arch`,
+/// for entity `e`: `fills` lists their columns and constructors. If a
+/// constructor panics, `e` goes back to `entities`; the values made before
+/// it are leaked, never dropped twice.
+///
+/// # Safety
+/// `row` is within `arch`'s capacity, and `fills` is the list the world
+/// cached for a bundle that spawns into `arch`.
+#[inline(always)]
+unsafe fn fill_row(
+    arch: &mut Archetype,
+    fills: &[(usize, crate::hooks::Make)],
+    row: usize,
+    entities: &mut Entities,
+    e: Entity,
+) {
+    if fills.is_empty() {
+        return;
+    }
+    let unplaced = Unplaced { entities, e };
+    for &(col, make) in fills {
+        let c = &arch.columns[col];
+        // SAFETY: the caller made room for `row`; `col` is the column of the
+        // component `make` makes.
+        unsafe { make.write(c.ptr(row), c.size()) };
+    }
+    std::mem::forget(unplaced);
+}
+
+/// [`World::placed`] on the two fields it changes, for loops that hold
+/// other parts of the world meanwhile.
+#[inline(always)]
+fn placed(slots: &mut crate::slots::Slots, entities: &mut Entities, a: usize, row: usize, e: Entity) {
+    if row == 0 {
+        slots.filled(a);
+    }
+    entities.set(
+        e,
+        Location {
+            archetype: a as u32,
+            row: row as u32,
+        },
+    );
 }
 
 struct BundleInfo {
@@ -53,6 +112,13 @@ struct BundleInfo {
     archetype: usize,
     /// Column index in the archetype for each tuple element.
     columns: Box<[usize]>,
+    /// The columns of the archetype that the bundle doesn't fill, and how
+    /// to make their required values; empty unless the bundle lacks a
+    /// component it requires. Read only on the tagged path, next to
+    /// `columns`, so filling gaps costs no second lookup.
+    fills: Box<[(usize, crate::hooks::Make)]>,
+    /// Whether the archetype has `on_add` hooks to run after a spawn.
+    adds: bool,
 }
 
 /// One chunk of entities handed to [`RawWorld::for_each_chunk`](crate::RawWorld::for_each_chunk) or
@@ -307,12 +373,15 @@ impl World {
         let Some(arch) = self.archetypes.get_mut(a) else {
             // `a` is tagged (`HOOKED_BUNDLE`): the archetype has `on_add`
             // hooks, or the bundle lacks a component it requires.
-            return self.spawn_batch_hooked(a & !HOOKED_BUNDLE, iter);
+            return self.spawn_batch_hooked::<B>(a & !HOOKED_BUNDLE, iter);
         };
         arch.reserve(iter.size_hint().0, &mut self.slots.buffers);
+        // One lookup of the bundle's column map for the whole batch.
+        let cols = &self.bundles[&TypeId::of::<B>()].columns;
         for b in iter {
             let e = self.entities.alloc();
-            self.spawn_in::<B>(a, b, e);
+            let row = write_row(arch, cols, &self.changes, &mut self.slots.buffers, b, e);
+            placed(&mut self.slots, &mut self.entities, a, row, e);
         }
     }
 
@@ -453,48 +522,50 @@ impl World {
     /// `on_add` hooks if it is tagged as having some.
     #[inline]
     fn spawn_in<B: Bundle>(&mut self, a: usize, bundle: B, e: Entity) -> Entity {
-        let cols = &self.bundles[&TypeId::of::<B>()].columns;
+        let info = &self.bundles[&TypeId::of::<B>()];
         // A tagged index (`HOOKED_BUNDLE`) is past the end: the bounds check
-        // that indexing made here sends it to the hooked path.
+        // that indexing made here sends it to the hooked path, with the
+        // cache entry this lookup found.
         let Some(arch) = self.archetypes.get_mut(a) else {
-            return self.spawn_hooked::<B>(a & !HOOKED_BUNDLE, bundle, e);
+            let info: *const BundleInfo = info;
+            // SAFETY: `info` is `B`'s entry, and the bundle cache doesn't
+            // change before `spawn_hooked` is done reading it.
+            return unsafe { self.spawn_hooked::<B>(a & !HOOKED_BUNDLE, info, bundle, e) };
         };
-        let row = write_row(arch, cols, &self.changes, &mut self.slots.buffers, bundle, e);
+        let row = write_row(arch, &info.columns, &self.changes, &mut self.slots.buffers, bundle, e);
         self.placed(a, row, e);
         e
     }
 
     /// [`spawn_in`](Self::spawn_in) of a tagged bundle (`a` untagged):
     /// places `e` with the components the bundle lacks and requires, then
-    /// runs the archetype's `on_add` hooks and their commands.
+    /// runs the archetype's `on_add` hooks and their commands. One row is
+    /// reserved, the missing values are made into it, then the bundle's are
+    /// moved in, as a plain spawn moves them.
+    ///
+    /// # Safety
+    /// `info` points to `B`'s entry in this world's bundle cache. Nothing
+    /// here changes the cache before the hooks run, and `info` is not read
+    /// after that.
     #[cold]
     #[inline(never)]
-    fn spawn_hooked<B: Bundle>(&mut self, a: usize, bundle: B, e: Entity) -> Entity {
-        let cols = &self.bundles[&TypeId::of::<B>()].columns;
+    unsafe fn spawn_hooked<B: Bundle>(&mut self, a: usize, info: *const BundleInfo, bundle: B, e: Entity) -> Entity {
+        // SAFETY: the caller's contract. The entry lives in the map's own
+        // allocation, which nothing below touches until `adds` is read.
+        let info = unsafe { &*info };
         let arch = &mut self.archetypes[a];
-        let row = match self.hooks.fills.get(&TypeId::of::<B>()) {
-            Some(fills) => {
-                arch.reserve_row(&self.changes, &mut self.slots.buffers);
-                let row = arch.len();
-                // If a constructor panics, `e` goes back; the values made
-                // before it are leaked, never dropped twice.
-                let unplaced = Unplaced {
-                    entities: &mut self.entities,
-                    e,
-                };
-                for &(col, make) in fills.iter() {
-                    let c = &arch.columns[col];
-                    // SAFETY: `reserve_row` made room for `row`; `col` is
-                    // the column of the component `make` makes.
-                    unsafe { make.write(c.ptr(row), c.size()) };
-                }
-                std::mem::forget(unplaced);
-                write_row(arch, cols, &self.changes, &mut self.slots.buffers, bundle, e)
-            }
-            None => write_row(arch, cols, &self.changes, &mut self.slots.buffers, bundle, e),
-        };
+        arch.reserve_row(&self.changes, &mut self.slots.buffers);
+        let row = arch.len();
+        // SAFETY: `reserve_row` made room for `row`; `info` holds the fills
+        // and the column map cached for `B` in this archetype.
+        unsafe {
+            fill_row(arch, &info.fills, row, &mut self.entities, e);
+            write_bundle(arch, &info.columns, bundle, row);
+        }
+        arch.entities.push(e);
+        let adds = info.adds;
         self.placed(a, row, e);
-        if self.hooks.adds(a) {
+        if adds {
             self.run_spawn_hooks(a, e);
         }
         e
@@ -503,16 +574,7 @@ impl World {
     /// Records that `e` was written to `row` of archetype `a`.
     #[inline(always)]
     fn placed(&mut self, a: usize, row: usize, e: Entity) {
-        if row == 0 {
-            self.slots.filled(a);
-        }
-        self.entities.set(
-            e,
-            Location {
-                archetype: a as u32,
-                row: row as u32,
-            },
-        );
+        placed(&mut self.slots, &mut self.entities, a, row, e);
     }
 
     /// [`spawn_batch`](Self::spawn_batch) of a tagged bundle (`a`
@@ -522,10 +584,34 @@ impl World {
     #[inline(never)]
     fn spawn_batch_hooked<B: Bundle>(&mut self, a: usize, iter: impl Iterator<Item = B>) {
         self.archetypes[a].reserve(iter.size_hint().0, &mut self.slots.buffers);
+        let info = &self.bundles[&TypeId::of::<B>()];
+        if !info.adds {
+            // Only gaps to fill, no hooks: one loop that keeps the
+            // archetype and the cache entry at hand, like a plain batch.
+            let arch = &mut self.archetypes[a];
+            for b in iter {
+                let e = self.entities.alloc();
+                arch.reserve_row(&self.changes, &mut self.slots.buffers);
+                let row = arch.len();
+                // SAFETY: `reserve_row` made room for `row`; `info` holds
+                // the fills and the column map cached for `B` here.
+                unsafe {
+                    fill_row(arch, &info.fills, row, &mut self.entities, e);
+                    write_bundle(arch, &info.columns, b, row);
+                }
+                arch.entities.push(e);
+                placed(&mut self.slots, &mut self.entities, a, row, e);
+            }
+            return;
+        }
         let held = self.hold_hooks();
+        // Hooks can't change the bundle cache, and their commands wait for
+        // the end of the batch: the entry stays put for the whole loop.
+        let info: *const BundleInfo = &held.world.bundles[&TypeId::of::<B>()];
         for b in iter {
             let e = held.world.entities.alloc();
-            held.world.spawn_hooked::<B>(a, b, e);
+            // SAFETY: `info` is `B`'s entry, unchanged until the batch ends.
+            unsafe { held.world.spawn_hooked::<B>(a, info, b, e) };
         }
     }
 
@@ -573,7 +659,7 @@ impl World {
         // One bounds check for both uses.
         let archetype = &mut self.archetypes[a];
         if archetype.tracked() {
-            self.changes.log_despawn(&self.infos, archetype, e, loc.row as usize);
+            self.changes.log_despawn(archetype, e, loc.row as usize);
         }
         let moved = unsafe { archetype.swap_remove_drop(loc.row as usize) };
         let Some(moved) = moved else {
@@ -2139,14 +2225,18 @@ impl World {
         };
         let columns = ids.iter().map(|&id| column(id)).collect();
         let fills: Box<[_]> = missing.iter().map(|&(id, make)| (column(id), make)).collect();
-        let tagged = !fills.is_empty() || self.hooks.adds(a);
-        if fills.is_empty() {
-            self.hooks.fills.remove(&key);
-        } else {
-            self.hooks.fills.insert(key, fills);
-        }
+        let adds = self.hooks.adds(a);
+        let tagged = !fills.is_empty() || adds;
         let archetype = if tagged { a | HOOKED_BUNDLE } else { a };
-        self.bundles.insert(key, BundleInfo { archetype, columns });
+        self.bundles.insert(
+            key,
+            BundleInfo {
+                archetype,
+                columns,
+                fills,
+                adds,
+            },
+        );
         archetype
     }
 
@@ -2223,7 +2313,7 @@ impl World {
             // The components the entity keeps take their stamps along.
             let now = self.changes.stamp();
             s.copy_stamps_to(row, d, new_row, now);
-            s.swap_remove_stamps(row, last);
+            s.swap_remove_stamps(row, last, now);
         }
         s.entities.swap_remove(row);
         if row != last {

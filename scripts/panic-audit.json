@@ -245,12 +245,6 @@
     "reason": "Internal invariant: let layout = Layout::array::<Entity>(entities.capacity()).expect(\"a list's own layout\");     let mut entities = std::mem::ManuallyDrop::new(entities);     // `Entity` is `Copy`: forgetting the handles drops nothing.     let p = NonNull::new(entities.as_mut_ptr().cast::<u8>()).expect(\"a list with capacity\");",
     "site": "crates/ponko_ecs/src/storage.rs:962"
   },
-  "crates/ponko_ecs/src/storage.rs:48e6ba09f14e10ae": {
-    "classification": "invariant",
-    "construction": "debug_assert!(row < cap)",
-    "reason": "Internal invariant of column storage (pub(crate) callers pass checked rows and permutations; a column larger than the address space cannot be allocated).",
-    "site": "crates/ponko_ecs/src/storage.rs:854"
-  },
   "crates/ponko_ecs/src/storage.rs:4dbdda23721d2461": {
     "classification": "invariant",
     "construction": ".expect(\"too many entities\")",
@@ -526,6 +520,12 @@
     "construction": "assert!( info.layout == layout && info.type_id.is_none(), \"component name `{name}` is already registered with a different layout; use its original layout or a unique name\" )",
     "reason": "Caller constraint and remedy are explicit in the message: assert!( info.layout == layout && info.type_id.is_none(), \"component name `{name}` is already registered with a different layout; use its original layout or a unique name\" )",
     "site": "crates/ponko_ecs/src/world.rs:1267"
+  },
+  "crates/ponko_ecs/src/world.rs:a3f1ad2e9df94634": {
+    "classification": "invariant",
+    "construction": "debug_assert_eq!(c.size(), size)",
+    "reason": "Debug-only check: the bundle's cached column map puts each element in the column of its own type, so the sizes match.",
+    "site": "crates/ponko_ecs/src/world.rs:57"
   },
   "crates/ponko_ecs/src/world.rs:afadd4e2395c636f": {
     "classification": "caller-contract",
@@ -1187,6 +1187,12 @@
     "reason": "Internal invariant: if seq_diff(p.seq, ack) > 0 {                 break;             }             let p = self.pending.pop_front().expect(\"front exists\");",
     "site": "src/net/prediction.rs:246"
   },
+  "src/net/replicate.rs:170c1031b85ac9af": {
+    "classification": "caller-contract",
+    "construction": "assert!( !inner.events.iter().any(|e| e.is_raw(name)), \"Replication: raw event `{name}` is declared twice; declare each event once\" )",
+    "reason": "Declaration time: names the raw event declared twice and says to declare it once; should_panic test a_raw_event_declared_twice_is_refused",
+    "site": "src/net/replicate.rs:1226"
+  },
   "src/net/replicate.rs:1d7b1a78c6a37edd": {
     "classification": "caller-contract",
     "construction": "assert!( f.offset + f.ty.size() <= size, \"Replication::raw_component: field `{}` of `{name}` lies outside its {size} bytes\", f.name )",
@@ -1211,12 +1217,6 @@
     "reason": "Re-raises InterestConfig::validate's message, which names the bad field; should_panic test",
     "site": "src/net/replicate.rs:1047"
   },
-  "src/net/replicate.rs:4b61902fcdf67892": {
-    "classification": "caller-contract",
-    "construction": "assert!( !inner.events.iter().any(|e| e.type_id == Some(TypeId::of::<T>())), \"Replication: event `{name}` is declared twice; declare each event once\" )",
-    "reason": "The message names the misuse and the fix; documented under Panics.",
-    "site": "src/net/replicate.rs:1082"
-  },
   "src/net/replicate.rs:561f16fe92b073cd": {
     "classification": "caller-contract",
     "construction": "panic!( \"Replication::input_of: the input type is `{}`, not `{}`; read it with the declared input type\", inputs.name(), std::any::type_name::<I>() )",
@@ -1229,35 +1229,29 @@
     "reason": "The message names the misuse and the fix; documented under Panics.",
     "site": "src/net/replicate.rs:1444"
   },
+  "src/net/replicate.rs:5b913faba339490e": {
+    "classification": "caller-contract",
+    "construction": "assert!( !inner.events.iter().any(|e| e.is_type(TypeId::of::<T>())), \"Replication: event `{name}` is declared twice; declare each event once\" )",
+    "reason": "Declaration time: names the event declared twice and says to declare it once; should_panic test in tests/net_replication.rs",
+    "site": "src/net/replicate.rs:1181"
+  },
   "src/net/replicate.rs:5fafb3951332d561": {
     "classification": "caller-contract",
     "construction": "assert!( !self.kinds.iter().any(|k| k.type_id == Some(type_id)), \"Replication: `{}` is declared twice; declare each component once\", kind.name )",
     "reason": "Declaration time: names the component declared twice and says to declare it once; should_panic test",
     "site": "src/net/replicate.rs:505"
   },
-  "src/net/replicate.rs:698408b41d22e899": {
-    "classification": "forwarded-error",
-    "construction": "panic!( \"Replication: event `{}` doesn't serialize: {e}\", std::any::type_name::<T>() )",
-    "reason": "Re-raises serde_json's error for an event value that can't serialize; should_panic test",
-    "site": "src/net/replicate.rs:821"
-  },
-  "src/net/replicate.rs:6b76a7e411ad49b7": {
+  "src/net/replicate.rs:75f83e56a6c96cdf": {
     "classification": "caller-contract",
-    "construction": "assert!( !inner.events.iter().any(|e| e.name == name), \"Replication: event `{name}` is declared twice; declare each event once\" )",
-    "reason": "The message names the misuse and the fix; documented under Panics.",
-    "site": "src/net/replicate.rs:1259"
+    "construction": "panic!( \"Replication: `{0}` isn't a declared event; add `.event::<{0}>()` to the Replication\", crate::reflect::short_name(std::any::type_name::<T>()) )",
+    "reason": "Names the event type that wasn't declared and the .event::<T>() call that declares it; should_panic test in tests/net_replication.rs",
+    "site": "src/net/replicate.rs:889"
   },
   "src/net/replicate.rs:792102dfe1e6c387": {
     "classification": "caller-contract",
     "construction": "panic!( \"Replication::set_input: no input type was declared; add `.input::<{}>()` to the Replication\", crate::reflect::short_name(std::any::type_name::<I>()) )",
     "reason": "Says no input type was declared and the declaration to add; should_panic test",
     "site": "src/net/replicate.rs:1152"
-  },
-  "src/net/replicate.rs:8c07547043a8fc8c": {
-    "classification": "caller-contract",
-    "construction": "panic!( \"Replication: `{0}` isn't a declared event; add `.event::<{0}>()` to the Replication\", crate::reflect::short_name(std::any::type_name::<T>()) )",
-    "reason": "The message names the misuse and the fix; documented under Panics.",
-    "site": "src/net/replicate.rs:842"
   },
   "src/net/replicate.rs:9d2c6cc24103d16d": {
     "classification": "caller-contract",
@@ -1289,17 +1283,23 @@
     "reason": "The message names the misuse and the fix; documented under Panics.",
     "site": "src/net/replicate.rs:1208"
   },
-  "src/net/replicate.rs:c18d9dcceb6a6b85": {
+  "src/net/replicate.rs:ca619d3efdf14c80": {
     "classification": "caller-contract",
-    "construction": "panic!( \"Replication: event kind {kind} wasn't declared with `raw_event`; use the index `raw_event_kind` gives\" )",
-    "reason": "The message names the misuse and the fix; documented under Panics.",
-    "site": "src/net/replicate.rs:555"
+    "construction": "panic!( \"Replication: event `{}` doesn't serialize: {e}\", std::any::type_name::<T>() )",
+    "reason": "Names the event type and serde's error (the value can't be written as MessagePack); should_panic test in tests/net_replication.rs",
+    "site": "src/net/replicate.rs:899"
   },
   "src/net/replicate.rs:db6757892f2516a4": {
     "classification": "caller-contract",
     "construction": "assert!( self.kinds.len() < wire::MAX_KINDS, \"Replication: at most {} component types can be replicated; put fields that change together into one component\", wire::MAX_KINDS )",
     "reason": "Declaration time: names the 64-type limit and says to merge fields into fewer components; should_panic test",
     "site": "src/net/replicate.rs:511"
+  },
+  "src/net/replicate.rs:e4040dbb1c665070": {
+    "classification": "caller-contract",
+    "construction": "assert!( self.events.len() < usize::from(u16::MAX), \"Replication: at most {} event types can be declared; put related events into one enum\", u16::MAX )",
+    "reason": "Declaration time: names the 65535 event-type limit (event types travel as u16) and says to merge related events into one enum",
+    "site": "src/net/replicate.rs:955"
   },
   "src/net/replicate.rs:ffe792e870c55794": {
     "classification": "caller-contract",

@@ -8,7 +8,8 @@ use super::passes::{self, Features, Format, Resource, Samples};
 use super::{DEPTH_FORMAT, FADED, HDR_FORMAT, MAX_CASCADES, Part, Renderer3D, Run, Targets};
 
 /// What only the main camera's frame records, for every window view (see
-/// `views.rs`): posing, the sky's maps, buffer pasts and occlusion.
+/// `views.rs`): posing, the sky's maps, buffer pasts, occlusion and the
+/// view model's motion.
 const MAIN_ONLY: Features = Features::SKINNING
     .with(Features::SKY_TEXTURE)
     .with(Features::SKY_BRDF)
@@ -17,7 +18,8 @@ const MAIN_ONLY: Features = Features::SKINNING
     .with(Features::OCCLUSION)
     .with(Features::CLOUD_SHADOWS)
     .with(Features::CLOUDS)
-    .with(Features::KIT_SKY);
+    .with(Features::KIT_SKY)
+    .with(Features::VIEW_MODEL_MOTION);
 
 /// What a frame's parts are recorded against: the frame's features. Empty
 /// in release builds.
@@ -107,6 +109,7 @@ fn declared(resource: Resource, output: wgpu::TextureFormat, samples: u32) -> (O
         Format::Screen => Some(crate::render::ssr::SCREEN_FORMAT),
         Format::Spread => Some(crate::render::ssr::SPREAD_FORMAT),
         Format::Hits => Some(crate::render::ssr::HITS_FORMAT),
+        Format::DepthCopy => Some(crate::render::ssr::DEPTH_COPY_FORMAT),
         Format::Output => Some(output),
         Format::Buffer | Format::Any => None,
     };
@@ -190,7 +193,7 @@ impl Renderer3D {
         let (cloud_shadows, clouds) = self.kit_passes();
         [
             Features::MSAA.only_if(self.samples > 1),
-            Features::STATIC_CULL.only_if(self.static_culling.is_some() || (!self.extra && self.crowds.culls())),
+            Features::STATIC_CULL.only_if(self.static_culling.is_some() || self.crowds.culls()),
             Features::SKINNING.only_if(self.skinning.has_work()),
             Features::BUFFER_COMPUTE.only_if(self.lists.computes.iter().any(buffer)),
             Features::TEXTURE_COMPUTE.only_if(self.lists.computes.iter().any(|c| !buffer(c))),
@@ -219,6 +222,7 @@ impl Renderer3D {
             Features::SOLID_PREPASS.only_if(self.solid_prepass),
             Features::OCCLUSION.only_if(self.occlusion.recording()),
             Features::VELOCITY.only_if(self.screen.velocity_on && targets.velocity.is_some()),
+            Features::VIEW_MODEL_MOTION.only_if(self.view_model_motion() && targets.velocity.is_some()),
             Features::AO.only_if(self.screen.ao_enabled),
             Features::SSR.only_if(self.screen.ssr.is_some() && targets.ssr.is_some()),
             Features::SSR_SPREAD
@@ -293,6 +297,10 @@ impl Renderer3D {
                 .ssr
                 .as_ref()
                 .map(|s| view(Resource::ReflectionSpread, s.spread().1)),
+            targets
+                .ssr
+                .as_ref()
+                .map(|s| view(Resource::ReflectionDepth, s.depth_copy())),
             targets.ao.as_ref().map(|a| view(Resource::AoRaw, a.images().0)),
             // Without temporal accumulation the history is a stand-in.
             targets

@@ -321,8 +321,9 @@ pub unsafe extern "C" fn ponko_video_state(video: *const PonkoVideo, out_state: 
 /// first; Rust `Video::frame_rgba`): the texture's pixels, for tests and
 /// tools.
 ///
-/// Ownership: the pixels belong to the video and stay valid until the
-/// next call that changes it (play, seek, update, advance, free).
+/// Ownership: `out_pixels` receives a borrowed view of pixels the video
+/// owns, valid until the next call that changes it (play, seek, update,
+/// advance, free); never free it.
 /// ```
 /// let (mut p, mut n) = (std::ptr::null(), 0usize);
 /// assert_eq!(unsafe { ponko_ffi::ponko_video_frame_rgba(std::ptr::null(), &mut p, &mut n) } as u32, 1);

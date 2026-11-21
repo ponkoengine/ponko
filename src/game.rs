@@ -379,6 +379,8 @@ pub struct Game {
     seed: u64,
     vsync: bool,
     fullscreen: bool,
+    /// From `restore_window_settings`: open the first window with `window.json`.
+    restore_window: bool,
     sim_systems: Vec<System>,
     systems: Vec<System>,
     late_systems: Vec<System>,
@@ -437,6 +439,8 @@ pub struct Game {
     ext: plugin::Extensions,
     /// From `gamepad_backend`: where pads come from instead of the default.
     gamepad_backend: Option<Box<dyn crate::input::GamepadBackend>>,
+    /// From `crash_reports`.
+    crash: crate::crash::CrashReports,
 }
 
 type SetupFn = Box<dyn FnOnce(&mut Ctx) -> Result<(), crate::error::Error>>;
@@ -618,6 +622,12 @@ impl ConfiguredGame {
         self
     }
 
+    /// See [`Game::crash_reports`].
+    pub fn crash_reports(mut self, reports: impl Into<crate::crash::CrashReports>) -> Self {
+        self.game = self.game.crash_reports(reports);
+        self
+    }
+
     /// See [`Game::app_id`].
     pub fn app_id(mut self, app_id: impl Into<String>) -> Self {
         self.game = self.game.app_id(app_id);
@@ -639,6 +649,12 @@ impl ConfiguredGame {
     /// See [`Game::fullscreen`].
     pub fn fullscreen(mut self, on: bool) -> Self {
         self.game = self.game.fullscreen(on);
+        self
+    }
+
+    /// See [`Game::restore_window_settings`].
+    pub fn restore_window_settings(mut self, on: bool) -> Self {
+        self.game = self.game.restore_window_settings(on);
         self
     }
 
@@ -1026,6 +1042,8 @@ fn forget_seen_removals<'a>(ctx: &mut Ctx, systems: impl Iterator<Item = &'a Sys
 /// Runs one system, applies its commands, and records how long both took.
 #[inline]
 fn run_one(s: &mut System, ctx: &mut Ctx, timing_index: usize) {
+    // Input the system before fed reaches the retained UI first.
+    ctx.feed_ui_same_frame();
     #[cfg(feature = "profiling")]
     puffin::profile_scope!("system", s.name);
     let allocs_before = ctx.perf.state.on.then(crate::perf::alloc_counts);
@@ -1247,6 +1265,7 @@ impl Game {
             seed: crate::random::DEFAULT_SEED,
             vsync: true,
             fullscreen: false,
+            restore_window: false,
             sim_systems: Vec::new(),
             systems: Vec::new(),
             late_systems: Vec::new(),
@@ -1283,6 +1302,7 @@ impl Game {
             states: Vec::new(),
             ext: plugin::Extensions::default(),
             gamepad_backend: None,
+            crash: crate::crash::CrashReports::default(),
         };
         #[cfg(feature = "3d")]
         game.insert_system(Phase::Animate, System::last(crate::systems::update_animators));
@@ -2739,6 +2759,7 @@ impl Game {
         }
         self.start_networking(&mut ctx);
         ctx.storage = crate::storage::Storage::for_game(self.app_id.as_deref(), self.data_dir.clone());
+        ctx.crash = crate::crash::start(&self.crash, headless, &ctx.storage, &self.title, self.vsync);
         self.ext.install(&mut ctx);
         if let Some(backend) = self.gamepad_backend.take() {
             ctx.gamepad_driver.install(&mut ctx.input, backend);
@@ -2815,6 +2836,26 @@ impl Game {
     /// ```
     pub fn data_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.data_dir = Some(dir.into());
+        self
+    }
+
+    /// Whether a panic or a fatal engine error writes a crash report into
+    /// the player's data folder ([`ctx.storage`](crate::ctx::Ctx::storage),
+    /// so the game needs an [`app_id`](Self::app_id)), and what runs with
+    /// each: `true`, `false` or a [`CrashReports`](crate::crash::CrashReports)
+    /// with the game's version and its own hook. By default reports are on
+    /// in release builds of a game with a window and off in development
+    /// builds and headless runs. See [`ponko::crash`](crate::crash) and the
+    /// guide's "Crash reports".
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let game = Game::new("Space Crab", 1280, 720)
+    ///     .app_id("space-crab")
+    ///     .crash_reports(ponko::crash::CrashReports::default().game_version(env!("CARGO_PKG_VERSION")));
+    /// ```
+    pub fn crash_reports(mut self, reports: impl Into<crate::crash::CrashReports>) -> Self {
+        self.crash = reports.into();
         self
     }
 
@@ -2896,6 +2937,72 @@ impl Game {
         self
     }
 
+    /// Opens the first window with the settings the player saved last time
+    /// ([`WindowService::save_settings`](crate::window::WindowService::save_settings),
+    /// `window.json` in [`ctx.storage`](crate::ctx::Ctx::storage)), off by
+    /// default. The window is created with the saved size, position, mode,
+    /// limits and flags, so the player never sees it at the default size
+    /// first, as they would with
+    /// [`restore_settings`](crate::window::WindowService::restore_settings)
+    /// in setup.
+    ///
+    /// The saved choice wins over [`fullscreen`](Self::fullscreen) and the
+    /// size given to [`Game::new`]; the title stays the game's. With no saved
+    /// file, no [`app_id`](Self::app_id), or a file that can't be used, the
+    /// window opens with the defaults (the reason is printed for a broken
+    /// file). A saved monitor or exclusive mode that is gone opens windowed at
+    /// the saved size. A headless run applies the same settings to
+    /// `ctx.window` and the window size before setup. Web builds restore once
+    /// the browser storage is read, before setup.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # let dir = std::env::temp_dir().join(format!("ponko-doc-restore-window-{}", std::process::id()));
+    /// // A first run saves the player's choice...
+    /// Game::new("Crabs", 800, 600).data_dir(&dir).run_headless(0, |ctx| {
+    ///     ctx.window.set_size(vec2(1024.0, 768.0)).unwrap();
+    ///     ctx.window.save_settings(&mut ctx.storage).unwrap();
+    /// });
+    /// // ...and the next one starts with it.
+    /// Game::new("Crabs", 800, 600).data_dir(&dir).restore_window_settings(true).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.window.settings().size, vec2(1024.0, 768.0));
+    /// });
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
+    pub fn restore_window_settings(mut self, on: bool) -> Self {
+        self.restore_window = on;
+        self
+    }
+
+    /// The game's own window settings: its title, size and fullscreen choice.
+    pub(crate) fn default_window_settings(&self) -> crate::window::WindowSettings {
+        crate::window::WindowSettings {
+            title: self.title.clone(),
+            size: Vec2::new(self.width as f32, self.height as f32),
+            mode: if self.fullscreen {
+                crate::window::WindowMode::Borderless(None)
+            } else {
+                crate::window::WindowMode::Windowed
+            },
+            ..Default::default()
+        }
+    }
+
+    /// The settings the first window opens with: the defaults, or the saved
+    /// ones with `restore_window_settings`. `monitors` are the connected
+    /// displays (none headless).
+    pub(crate) fn first_window_settings(
+        &self,
+        storage: &crate::storage::Storage,
+        monitors: &[crate::window::Monitor],
+    ) -> crate::window::WindowSettings {
+        let defaults = self.default_window_settings();
+        if !self.restore_window {
+            return defaults;
+        }
+        crate::window::startup_settings(defaults, storage.read_json(crate::window::SETTINGS_FILE), monitors)
+    }
+
     /// One frame of game logic: simulation systems `fixed_steps` times, then
     /// frame, late and draw systems. The retained UI updates first
     /// (`Ctx::frame_begin_services`); every other engine step of a frame is
@@ -2927,6 +3034,8 @@ impl Game {
             .run_list(&mut self.late_systems, 2, ctx, n_sim + n_frame, None);
         self.exec
             .run_list(&mut self.draw_systems, 3, ctx, n_sim + n_frame + n_late, None);
+        // Input the last system fed reaches the UI in this frame too.
+        ctx.feed_ui_same_frame();
         end_timings(ctx);
         let frame = self.systems.iter().chain(&self.late_systems).chain(&self.draw_systems);
         forget_seen_removals(ctx, self.sim_systems.iter().chain(frame));
@@ -2992,6 +3101,8 @@ impl Game {
             .run_list(&mut self.late_systems, 2, ctx, n_sim + n_frame, None);
         self.exec
             .run_list(&mut self.draw_systems, 3, ctx, n_sim + n_frame + n_late, None);
+        // Input the last system fed reaches the UI in this frame too.
+        ctx.feed_ui_same_frame();
         end_timings(ctx);
         let frame = self.systems.iter().chain(&self.late_systems).chain(&self.draw_systems);
         forget_seen_removals(ctx, self.sim_systems.iter().chain(frame));
@@ -3288,9 +3399,16 @@ impl Game {
         connect_hotpatch();
         let fixed_dt = Clock::new(self.fixed_hz).fixed_dt();
         let mut ctx = self.build_ctx(true);
+        if self.restore_window {
+            let settings = self.first_window_settings(&ctx.storage, &ctx.window.monitors());
+            ctx.set_window_size(settings.size);
+            if let Err(e) = ctx.window.request(crate::window::WindowRequest::Settings(settings)) {
+                eprintln!("ponko: opening the window with its default settings: {e}");
+            }
+        }
         let control = self.start_control(&mut ctx, true);
         ctx.set_in_setup(true);
-        run_setups(std::mem::take(&mut self.setups), &mut ctx)?;
+        run_setups(std::mem::take(&mut self.setups), &mut ctx).inspect_err(crate::crash::report_error)?;
         let frame_fn = setup(&mut ctx).into_frame_fn();
         match frame_fn {
             Some(f) if self.headless_frames => self.add_setup_closure(f),

@@ -120,6 +120,17 @@ jobs:
       # Every C export needs a test, or a reasoned entry in the allowlist.
       - name: C ABI test coverage
         run: python3 scripts/check-ffi-coverage.py
+      # Every C function says who owns each pointer it takes or returns: by
+      # the rules at the top of ponko.h, or an "Ownership:" paragraph.
+      - name: C ABI pointer ownership
+        run: |
+          python3 scripts/check-ffi-ownership.py
+          python3 scripts/check-ffi-ownership.py --selftest
+      # Every unsafe item outside the ECS has a test (scripts/unsafe-inventory.txt).
+      - name: Unsafe code inventory
+        run: |
+          python3 scripts/check-unsafe.py
+          python3 scripts/check-unsafe.py --selftest
       # Every C function has a C++ wrapper (or a reason on scripts/cpp-c-only.txt),
       # every public C++ declaration a doc comment, and every C/C++ block of the
       # book is an include of a file the native build compiles.
@@ -982,6 +993,14 @@ jobs:
           - name: par_for_each, tree borrows
             args: --test parallel --test changes --test view_groups --test query_cache --test query_cache_views --test hooks --test required
             flags: -Zmiri-tree-borrows -Zmiri-ignore-leaks
+          # The engine's unsafe code outside the ECS: the tests marked `miri`
+          # in scripts/unsafe-inventory.txt (no GPU, window, audio device or
+          # C library), as `check-unsafe.py --miri` lists them. Tree Borrows
+          # for the same reason as the parallel path: rayon runs the threaded
+          # draw-list fills and the hierarchy.
+          - name: engine unsafe code, tree borrows
+            engine: true
+            flags: -Zmiri-tree-borrows -Zmiri-ignore-leaks
     env:
       MIRIFLAGS: ${{ matrix.flags }}
       RUSTFLAGS: ""
@@ -998,7 +1017,15 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
           ARGS: ${{ matrix.args }}
+          ENGINE: ${{ matrix.engine }}
         run: |
+          if [ "$ENGINE" = true ]; then
+            python3 scripts/check-unsafe.py --miri | while IFS= read -r line; do
+              echo "$line"
+              bash -c "$line" || exit 1
+            done
+            exit 0
+          fi
           part1="archetype_alloc borrows_alloc differential views_alloc"
           part2="queries changes query_cache_differential commands_alloc"
           targets=()
@@ -1085,6 +1112,33 @@ jobs:
       - name: Validation bundle of the C++ battle
         if: runner.os != 'Windows'
         run: bash scripts/validation-bundle-native.sh target/native/ponko_cpp_battle
+
+  # The C API under AddressSanitizer and UndefinedBehaviorSanitizer: the C and
+  # C++ test programs built with both against a debug library, and the
+  # ponko_ffi tests with the Rust side built with AddressSanitizer
+  # (CONTRIBUTING.md, "Unsafe code and sanitizers"). One platform: macOS on
+  # Apple silicon, where the commands were checked.
+  sanitizers:
+    name: C API sanitizers
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo build -p ponko_ffi --features control-env,webrtc
+      - run: cmake -S examples/cpp -B target/native-asan -DCMAKE_BUILD_TYPE=Debug -DPONKO_SANITIZE=ON -DPONKO_WEBRTC=ON -DPONKO_LIBRARY_DIR=${{ github.workspace }}/target/debug
+      - run: cmake --build target/native-asan
+      - name: C and C++ test programs, ASan and UBSan
+        env:
+          ASAN_OPTIONS: detect_container_overflow=0
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir target/native-asan --output-on-failure
+      - name: ponko_ffi tests, ASan
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+          RUSTDOCFLAGS: -Zsanitizer=address
+        run: cargo test -p ponko_ffi --target aarch64-apple-darwin --tests
 
   # The web build (wasm32): lint the browser-only code, and build the battle
   # demo the way the docs site does.
@@ -1245,6 +1299,15 @@ jobs:
         timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: node web/smoke/runtime-failures.mjs
+      # A WebGPU device lost while playing (the device-lost case): in the new
+      # headless mode, where a WebGPU canvas presents, with software Vulkan.
+      # A runner without a WebGPU adapter reports it unsupported.
+      - name: Chromium, a lost WebGPU device reaches the page (new headless mode)
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: >-
+          node web/smoke/runtime-failures.mjs --case device-lost --chromium-mode new
+          --browser-arg --use-webgpu-adapter=swiftshader --allow-unsupported --out target/web-smoke/runtime-failures-webgpu
       # Threads on the web (web/smoke/threads.mjs, the guide's "Threads on the
       # web"): examples/web_threads built with `web/build.sh --threads`
       # (nightly Rust rebuilding std with atomics, hence rust-src). Served with
@@ -1661,7 +1724,7 @@ jobs:
   ci-passed:
     name: CI passed
     if: always()
-    needs: [leaks, fmt, reference-images, clippy, feature-deps, msrv, test, windows-unit-build, windows-unit, windows-gpu-tiers, windows-examples, test-features, docs, semver, api-snapshots, book, miri, native, web, web-smoke-runner, web-smoke, package-smoke, validation-bundles, templates, server-container]
+    needs: [leaks, fmt, reference-images, clippy, feature-deps, msrv, test, windows-unit-build, windows-unit, windows-gpu-tiers, windows-examples, test-features, docs, semver, api-snapshots, book, miri, native, sanitizers, web, web-smoke-runner, web-smoke, package-smoke, validation-bundles, templates, server-container]
     runs-on: ubuntu-latest
     steps:
       - name: Check every job

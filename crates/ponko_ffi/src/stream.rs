@@ -40,6 +40,10 @@ pub struct PonkoCellStreamer {
 /// `load_radius` of the point and dropping those beyond `keep_radius`.
 /// Returns null (see `ponko_last_error`) if `cell_size` isn't above 0 or
 /// a radius is negative.
+///
+/// Ownership: the returned streamer is the caller's (null on failure); free it
+/// with ponko_cells_free.
+///
 /// ```
 /// let s = ponko_ffi::ponko_cells_new(256.0, 600.0, 800.0);
 /// assert!(!s.is_null());
@@ -147,6 +151,10 @@ unsafe fn cell_list(
 
 /// The cells the last `ponko_cells_update` started loading, nearest
 /// first. Valid until the next update or free.
+///
+/// Ownership: `out_cells` receives a view of an array the streamer owns, valid
+/// until its next update or its free; never free it.
+///
 /// ```
 /// let (mut c, mut n) = (std::ptr::null(), 0);
 /// assert_eq!(unsafe { ponko_ffi::ponko_cells_to_load(std::ptr::null_mut(), &mut c, &mut n) } as u32, 1);
@@ -165,6 +173,10 @@ pub unsafe extern "C" fn ponko_cells_to_load(
 
 /// The cells the last `ponko_cells_update` dropped, in grid order. Valid
 /// until the next update or free.
+///
+/// Ownership: `out_cells` receives a view of an array the streamer owns, valid
+/// until its next update or its free; never free it.
+///
 /// ```
 /// use ponko_ffi::*;
 /// let s = ponko_cells_new(1.0, 0.4, 0.4);
@@ -252,6 +264,10 @@ pub struct PonkoTerrainTileData(TerrainTileData);
 /// Builds a tile `size` wide from `count` heights (n x n, row after row
 /// along +Z, NaN for a hole). Safe to call from any thread. Returns null
 /// (see `ponko_last_error`) for bad input.
+///
+/// Ownership: the returned tile data is the caller's (null on failure); free it
+/// with ponko_terrain_tile_data_free.
+///
 /// ```
 /// let h = [0.0f32; 9];
 /// let d = unsafe { ponko_ffi::ponko_terrain_tile_data_new(h.as_ptr(), 9, 4.0) };
@@ -399,6 +415,10 @@ pub struct PonkoFarTerrain {
 /// `cell_size` wide. `cell_size` must be a whole number of `spacing`s and
 /// `corner` lie on the grid of `spacing`s. Nothing is made until
 /// `ponko_far_terrain_update`. Null (see `ponko_last_error`) for bad input.
+///
+/// Ownership: the returned far terrain is the caller's (null on failure); free
+/// it with ponko_far_terrain_free.
+///
 /// ```
 /// use ponko_ffi::*;
 /// let h = [0.0f32; 16];

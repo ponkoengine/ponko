@@ -152,6 +152,29 @@ pub(crate) fn newest(a: u32, b: u32, now: u32) -> u32 {
     }
 }
 
+/// Moves the `added` and `changed` stamps of row `last` into `row` of a
+/// tracked column, and keeps the block summary of `row` covering them: it
+/// becomes the newer of itself and the moved `changed` stamp (a value's
+/// `added` stamp is never newer), so a block nobody wrote to stays skipped
+/// by `Added`/`Changed` readers. `now` is the current tick's low 32 bits.
+///
+/// # Safety
+/// `added` and `changed` are the stamp arrays of a tracked column of
+/// capacity `cap` ([`Column::stamps`]), followed by its summary, and `row`
+/// and `last` are below `cap`.
+#[inline(always)]
+unsafe fn move_stamps(added: *mut u32, changed: *mut u32, cap: usize, row: usize, last: usize, now: u32) {
+    // SAFETY: the caller's contract; the summary follows the two arrays of
+    // `cap` stamps, and `row`'s block is in it.
+    unsafe {
+        added.add(row).write(added.add(last).read());
+        let moved = changed.add(last).read();
+        changed.add(row).write(moved);
+        let block = added.add(2 * cap + row / CHANGE_BLOCK);
+        block.write(newest(block.read(), moved, now));
+    }
+}
+
 /// One column's stamps for reading: its `added` or `changed` stamp per row,
 /// and its summary per block of [`CHANGE_BLOCK`] rows, which covers both
 /// (a value's `added` stamp is never newer than its `changed` stamp).
@@ -787,9 +810,11 @@ impl Archetype {
     }
 
     /// Removes `row` by moving the last row into it, dropping the removed
-    /// values. Returns the entity that moved into `row`, if any. In a
-    /// tracked archetype the caller has set `row`'s block summary first
-    /// ([`Changes::log_despawn`](crate::change::Changes::log_despawn)).
+    /// values. Returns the entity that moved into `row`, if any. Moves no
+    /// change stamps: in a tracked archetype the caller has moved them
+    /// first ([`despawn_stamps`](Self::despawn_stamps), through
+    /// [`Changes::log_despawn`](crate::change::Changes::log_despawn)), so an
+    /// untracked despawn runs no stamp code at all.
     pub(crate) unsafe fn swap_remove_drop(&mut self, row: usize) -> Option<Entity> {
         let last = self.len() - 1;
         for c in self.columns.iter_mut() {
@@ -797,9 +822,6 @@ impl Archetype {
                 unsafe { d(c.ptr(row)) }
             }
             unsafe { c.swap_remove_forget(row, last) }
-        }
-        if self.tracked() {
-            self.swap_remove_stamps(row, last);
         }
         self.entities.swap_remove(row);
         (row != last).then(|| self.entities[row])
@@ -849,20 +871,6 @@ impl Archetype {
         }
     }
 
-    /// Sets the block summary of `row` in column `col` to `stamp`, the
-    /// current tick's, if the column is tracked: before the last row's
-    /// stamps move into `row`. `row` must be within the capacity.
-    #[inline]
-    pub(crate) fn summarize(&self, col: usize, row: usize, stamp: u32) {
-        let cap = self.cap();
-        debug_assert!(row < cap);
-        if let Some((added, _)) = self.columns[col].stamps(cap) {
-            // SAFETY: the summary follows the two arrays of `cap` stamps;
-            // `row < cap`, so its block is in it.
-            unsafe { added.add(2 * cap + row / CHANGE_BLOCK).write(stamp) };
-        }
-    }
-
     /// Stamps column `col` of `row`: changed at `stamp` (the current
     /// tick's), and added too if `added`. Does nothing for an untracked
     /// column.
@@ -909,21 +917,40 @@ impl Archetype {
     }
 
     /// Moves the stamps of row `last` into `row` (the stamp half of a
-    /// swap-remove). The caller has set `row`'s block summary to the
-    /// current tick ([`summarize`](Self::summarize)), which covers the
-    /// moved stamps.
-    pub(crate) fn swap_remove_stamps(&self, row: usize, last: usize) {
+    /// swap-remove; see [`move_stamps`]). `now` is the current tick's low
+    /// 32 bits. Nothing moves when `row` is the last row.
+    pub(crate) fn swap_remove_stamps(&self, row: usize, last: usize, now: u32) {
         if row == last {
             return;
         }
         let cap = self.cap();
         for c in self.columns.iter() {
             if let Some((added, changed)) = c.stamps(cap) {
-                // SAFETY: both rows are live rows of this archetype.
-                unsafe {
-                    added.add(row).write(added.add(last).read());
-                    changed.add(row).write(changed.add(last).read());
-                }
+                // SAFETY: both rows are live rows of this archetype, and
+                // the arrays are the column's, for its capacity `cap`.
+                unsafe { move_stamps(added, changed, cap, row, last, now) };
+            }
+        }
+    }
+
+    /// The stamp half of despawning `row`, before its values are
+    /// swap-removed ([`swap_remove_drop`](Self::swap_remove_drop)): calls
+    /// `removed` with each tracked component, and moves the last row's
+    /// stamps into `row` as [`swap_remove_stamps`](Self::swap_remove_stamps)
+    /// does, in the same pass. `now` is the current tick's low 32 bits.
+    #[inline]
+    pub(crate) fn despawn_stamps(&self, row: usize, now: u32, mut removed: impl FnMut(ComponentId)) {
+        let cap = self.cap();
+        let last = self.len() - 1;
+        for (c, &id) in self.columns.iter().zip(self.ids.iter()) {
+            let Some((added, changed)) = c.stamps(cap) else {
+                continue;
+            };
+            removed(id);
+            if row != last {
+                // SAFETY: `row` and `last` are live rows of this archetype,
+                // and the arrays are the column's, for its capacity `cap`.
+                unsafe { move_stamps(added, changed, cap, row, last, now) };
             }
         }
     }
@@ -933,10 +960,11 @@ impl Archetype {
     /// isn't a change to the components it keeps. `dst_row` must be within
     /// `dst`'s capacity.
     ///
-    /// Sets the block summary of `dst_row` in `dst`, and of `row` here
-    /// (where the last row's stamps move next), to `now`, the current
+    /// Sets the block summary of `dst_row` in `dst` to `now`, the current
     /// tick's low 32 bits: as new as any stamp, so it covers the moved ones
-    /// (readers that haven't seen `now` look at those blocks' rows once).
+    /// (readers that haven't seen `now` look at that block's rows once).
+    /// The block of `row` here is kept by the swap-remove that follows
+    /// ([`swap_remove_stamps`](Self::swap_remove_stamps)).
     #[inline]
     pub(crate) fn copy_stamps_to(&self, row: usize, dst: &Archetype, dst_row: usize, now: u32) {
         debug_assert!(row < self.len() && dst_row < dst.cap());
@@ -946,9 +974,6 @@ impl Archetype {
             let Some((added, changed)) = c.stamps(cap) else {
                 continue;
             };
-            // SAFETY: the summary follows the two arrays of `cap` stamps,
-            // and `row`'s block is in it.
-            unsafe { added.add(2 * cap + row / CHANGE_BLOCK).write(now) };
             let id = self.ids[i];
             while j < dst.ids.len() && dst.ids[j] < id {
                 j += 1;

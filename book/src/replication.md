@@ -335,6 +335,50 @@ field is which and drops the event. Send the `Option` as it is instead. A client
 newest server tick it had seen when it sent the event: what it was looking
 at, for judging what it aimed at.
 
+### Raw events: bytes you encode
+
+An event type can also be declared by name, with plain bytes for events:
+for C and C++ games, or a Rust game that encodes its own. `raw_event`
+declares it, `to_server_raw`, `to_client_raw` and `to_clients_raw` send
+the bytes, and they arrive unchanged as `NetEvent<RawEvent>`, every raw
+type in one stream, told apart by `name()` (or `kind()`, the type's index
+among the declared events, which is how C and C++ name them):
+
+```rust
+use ponko::net::{NetEvent, RawEvent, Replication};
+
+fn ping(ctx: &mut Ctx) {
+    if ctx.input.key_pressed(Key::P) {
+        // An error, not a panic: an undeclared name, or too many bytes.
+        if let Err(e) = ctx.net.replication.to_server_raw("ping", &[1, 2, 3]) {
+            eprintln!("{e}");
+        }
+    }
+    let pings: Vec<Vec<u8>> = ctx
+        .events
+        .read::<NetEvent<RawEvent>>()
+        .iter()
+        .filter(|e| e.event.name() == "ping")
+        .map(|e| e.event.bytes.clone())
+        .collect();
+    for bytes in pings {
+        let _ = ctx.net.replication.to_clients_raw("ping", &bytes);
+    }
+}
+
+let game = Game::new("Ping", 800, 600)
+    .replication(Replication::new().raw_event("ping"))
+    .sim_system(ping);
+# let _ = game;
+```
+
+Raw events share the typed events' lane: reliable, ordered (one order
+with typed events), delivered at the start of a tick. One carries at most
+`MAX_RAW_EVENT_BYTES` (1 MiB less a 16-byte header). Both sides declare
+it, in the same place among the events; a raw `"Chat"` never matches a
+typed `Chat`, and the server refuses a client whose declarations differ
+that way.
+
 ## Interest and the budget
 
 A small arena can send everything to everyone. A big world can't, and
@@ -364,6 +408,18 @@ default, `DEFAULT_BUDGET`). When the changes don't fit, the rest wait for
 a later tick, and each waiting entity gains its priority every tick (scaled
 by its interest ring), so the most important go first and nothing waits
 forever. A client's own entities are always sent.
+
+**Each change goes once.** Packets of state are unreliable, so the server
+keeps what each client acknowledged as that client's baseline, and sends
+changes against it. A change goes out once; while the acknowledgement is
+on its way, the entity isn't sent again. Only if the client hasn't
+acknowledged it after a resend timeout, or if the entity changed again
+meanwhile, does it go again. The timeout follows each client's round trip,
+measured from its acknowledgements: the smoothed round trip plus four of
+its deviations, at least two ticks and at most a second (0.2 s until the
+first is measured). Spawns and despawns are resent the same way. On a link
+with a round trip of 100 ms (six ticks at 60 Hz), sending a change in
+every packet until it was acknowledged sent it six times.
 
 **Interest** sends each client only the entities within the outer ring,
 nearer rings more often. An entity that leaves a client's rings is
@@ -488,8 +544,9 @@ cargo run --release -p ponko_bench --bin replication -- 3
 |---|---|---|---|---|
 | All move, no budget | 571,428 | 588,949 | 1,000 | 0.73 ms, 0.77 ms |
 | All move, 64 KB/s budget (the default) | 63,893 | 67,578 | 1,000 | 0.38 ms, 0.42 ms |
-| 1 in 10 move, 64 KB/s | 63,894 | 67,578 | 1,000 | 0.26 ms, 0.28 ms |
-| All move, interest rings (250 m every tick, 500 m every 4th) | 62,256 (58,562 to 63,923 by client) | 65,915 | 235 | 0.36 ms, 0.38 ms |
+| 1 in 10 move, 64 KB/s | 62,006 | 65,636 | 1,000 | 0.26 ms, 0.28 ms |
+| 1 in 20 move, 64 KB/s | 31,266 | 34,891 | 1,000 | 0.14 ms, 0.39 ms (busy machine, see below) |
+| All move, interest rings (250 m every tick, 500 m every 4th) | 62,246 (58,559 to 63,923 by client) | 65,905 | 235 | 0.36 ms, 0.38 ms |
 
 *Payload* is replication's packets; *on the wire* adds the transport's
 framing, acknowledgements and resends. Ten seconds were measured after a
@@ -500,7 +557,39 @@ changed, encoding and sending to all 16 clients.
 The CPU times come from three runs on a 14-core Apple M4 Max on an idle
 machine (2026-11-20, nothing else running); the medians of the runs varied by
 under 0.03 ms in every scenario (0.728 to 0.755 ms in the first). The byte
-counts are exact and don't change.
+counts are exact and don't change. The `1 in 20` row's CPU time is not
+from an idle machine: it was measured on 2026-11-21 while other builds
+kept the same M4 Max busy (load average 100 to 180), so it is only good
+for comparing with the row below it; an idle-machine run of it is still
+to be done. The other rows' times were measured before changes were sent
+once (next section) and didn't move beyond that busy machine's noise
+since.
+
+### Sent once, resent on a timeout
+
+Sending a change in every packet until the client acknowledged it cost a
+round trip's worth of packets per change. Sending it once, and again only
+after the resend timeout, changes the bytes where entities change now and
+then (the benchmark's loopback acknowledges within a few ticks; on real
+links with longer round trips the saving grows with them):
+
+| Scenario | Before: payload, on the wire (B/s per client) | After |
+|---|---|---|
+| 1 in 20 move, 64 KB/s | 63,893, 67,577 (at the budget) | 31,266, 34,891 |
+| 1 in 10 move, 64 KB/s | 63,894, 67,578 (at the budget) | 62,006, 65,636 |
+| All move, interest rings | 62,256, 65,915 | 62,246, 65,905 |
+| All move (no budget, or 64 KB/s) | 571,428 / 63,893 | the same |
+
+Before, the `1 in 20` scenario sat at the 64 KB/s budget, and entities
+that moved waited behind ones resent; now it uses half of it. Where every
+entity changes every tick there is nothing to resend, and nothing changed.
+
+The server's CPU per tick, in the `1 in 20` scenario, five runs of each,
+the two builds alternating (2026-11-21, on the busy machine above): the
+medians were 0.204 and 0.210 ms before (runs from 0.189 to 0.267 ms), and
+0.138 and 0.160 ms after (0.136 to 0.290 ms): fewer records to encode,
+though the busy machine's spread overlaps. In `all move, 64 KB/s` the
+two builds didn't differ beyond the noise (0.92 to 0.95 ms both).
 
 ### Only what changed
 
@@ -580,11 +669,11 @@ after `ponko_ctx_replication` in setup and the same on every side:
 | `ponko_ctx_replication_input` | `ctx.replication_input<I>()` | `Replication::input` |
 | `ponko_ctx_replication_predicted` | `ctx.replication_predicted<S, I>()` | `Replication::predicted` |
 | `ponko_ctx_replication_interpolated` | `ctx.replication_interpolated()` | `Replication::interpolated_with` |
-| `ponko_ctx_replication_event` | `ctx.replication_event()` | `Replication::event` |
+| `ponko_ctx_replication_event` | `ctx.replication_event()` | `Replication::raw_event` |
 | `ponko_ctx_replication_position` | `ctx.replication_position<T>()` | `Replication::position` |
 | `ponko_ctx_set_replication_input`, `ponko_ctx_replication_input_of` | `ctx.set_replication_input()`, `ctx.replication_input_of<I>()` | `set_input`, `input_of` |
-| `ponko_ctx_replication_send` | `ctx.replication_send()` | `to_server`, `to_client`, `to_clients` |
-| `ponko_ctx_net_events` | `ctx.net_events()` | `ctx.events.read::<NetEvent<T>>()` |
+| `ponko_ctx_replication_send` | `ctx.replication_send()` | `to_server_raw`, `to_client_raw`, `to_clients_raw` |
+| `ponko_ctx_net_events` | `ctx.net_events()` | `ctx.events.read::<NetEvent<RawEvent>>()` |
 
 ```cpp
 {{#include ../../examples/cpp/guide.cpp:replication_inputs}}
@@ -600,8 +689,9 @@ after `ponko_ctx_replication` in setup and the same on every side:
   received, `delay` in the past, angle fields (`PONKO_FIELD_ANGLE`) the
   short way round; at most 32 float fields. Its other fields are set when
   they arrive.
-- Events are bytes of a kind, numbered from 0 in the order they were
-  declared. `ponko_ctx_net_events` hands every event that arrived since the
+- Events are [raw events](#raw-events-bytes-you-encode): bytes of a
+  kind, numbered from 0 in the order they were declared (Rust
+  `RawEvent::kind`, `Replication::raw_event_kind`). `ponko_ctx_net_events` hands every event that arrived since the
   system last read them as one array, valid until the system returns.
   It works inside `ponko_query` callbacks (not `ponko_query_par`), so read
   it once per system: a second read gives only newer events.

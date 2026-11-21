@@ -109,8 +109,8 @@ pub use interest::{
 };
 pub use prediction::{InputPush, InputQueue, InputStats, Prediction, PredictionStats, Reconciled, Smooth, Smoothing};
 pub use replicate::{
-    ClientStats, DEFAULT_BUDGET, Fields, NetEvent, NetId, PeerStats, Quantize, RawField, RawNetEvent, RawType, Replica,
-    Replicate, ReplicateField, Replicated, Replication, ReplicationRole, replicated_bits,
+    ClientStats, DEFAULT_BUDGET, Fields, MAX_RAW_EVENT_BYTES, NetEvent, NetId, PeerStats, Quantize, RawEvent, RawField,
+    RawType, Replica, Replicate, ReplicateField, Replicated, Replication, ReplicationRole, replicated_bits,
 };
 pub use rollback::{Advance, Rollback, RollbackDesync, RollbackGame, RollbackStats};
 pub use sequence::{Authority, AuthorityCheck, LatestWins, UpdateStamp, seq_diff, seq_newer};

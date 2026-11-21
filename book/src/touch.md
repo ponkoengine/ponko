@@ -119,7 +119,8 @@ is Coin Dash's set:
   and each stick as a group named after its action, in the
   [accessibility tree](ui-accessibility.md).
 - **The mouse never presses them**, so a desktop with `TouchShow::Always`
-  still plays with the keyboard and mouse.
+  still plays with the keyboard and mouse (it only moves them while the
+  player [arranges them](#players-arrange-the-controls)).
 
 Keeping a held control, the knob following a finger and the highlight of a
 held button allocate nothing once the controls are placed.
@@ -135,10 +136,118 @@ plays a round of Coin Dash by touch alone, with the stick chasing the coins:
 {{#include ../../tests/coin_dash.rs:touch_test}}
 ```
 
-A system that feeds touches runs after the UI read this frame's input, so a
-tap on a menu button belongs in a scenario (fed before the frame, as a
-window's events are); fingers on the on-screen controls and gestures work
-from a system, as above. Each reference game has such a test.
+A system can feed fingers, clicks, keys and text too (a bot, a replay, a
+test): what it feeds reaches the retained UI in the same frame. The UI
+takes the frame's input before the first system; when a system feeds more,
+the engine runs the UI again before the next system, over only what is
+new, so the next system already sees the button clicked, the field
+focused, the screen closed. A click fed by the last system of a frame is
+read by the next frame's systems, once. The second pass moves no
+animation and lays out only what the input changed. Each reference game
+has a touch test.
+
+## Restyling and placing the controls
+
+A game gives its controls its own look with a `TouchStyle`: the colors of
+a stick's base and knob, of a button idle and held and of its label, an
+image of its own in place of the engine's disc (drawn white and tinted by
+those colors: a square, a ring, a pictogram), and a size. `style` sets it
+for every control, `control_style` for one, and `place` puts a control
+where the game wants it instead of where the engine lays it out: a
+`TouchPlace` is a point of the view (`(0, 0)` top left to `(1, 1)` bottom
+right) and an offset from it in UI units, so a control anchored to a
+corner keeps its distance from it when the phone turns.
+
+```rust
+# use ponko::prelude::*;
+# use ponko::ui::touch::{TouchControls, TouchPlace, TouchStyle};
+# fn setup(ctx: &mut Ctx) {
+let warm = TouchStyle { button: Color::rgba(1.0, 0.8, 0.5, 0.35), size: 1.2, ..TouchStyle::default() };
+let attack = TouchStyle { button: Color::rgba(1.0, 0.2, 0.2, 0.45), held: Color::rgba(1.0, 0.4, 0.4, 0.85), ..warm };
+ctx.input.set_touch_controls(
+    TouchControls::new()
+        .stick("move")
+        .button("jump", "A")
+        .button("attack", "B")
+        .style(warm)
+        .control_style("attack", attack)
+        // The attack button 120 units in from the bottom right corner.
+        .place("attack", TouchPlace::new(vec2(1.0, 1.0), vec2(-120.0, -120.0))),
+);
+# }
+```
+
+A control placed or sized so that it would stick out of the view is moved
+in.
+
+## Players arrange the controls
+
+Thumbs differ, and so do phones: players move and resize the controls, and
+the game keeps their arrangement with its settings.
+
+- **Moving.** `ctx.input.edit_touch_controls(true)` (a settings screen's
+  "arrange controls") shows the controls, also under a UI screen and on a
+  desktop, and a finger or the mouse that drags one moves it; it presses no
+  action and clicks nothing under it. Where it is let go it stays,
+  anchored to the nearest corner of the view. `edit_touch_controls(false)`
+  ends it. A see-through screen with a "Done" button over the controls is
+  the usual way to show it.
+- **Sizing and opacity.** The player's arrangement is a `TouchLayout`:
+  each control's place and size (by the action it drives), and the size
+  and opacity of them all. A settings screen's sliders change it with
+  `ctx.input.set_touch_layout`; `TouchLayout::default()` resets it.
+- **Saving.** `ctx.input.save_touch_layout(&mut ctx.storage)` writes it to
+  `touch_controls.json` in the player's [storage](storage.md), next to the
+  window's settings, and `restore_touch_layout(&ctx.storage)` reads it back
+  at setup (no file: nothing changes). `TouchLayout::to_json` and
+  `from_json` are there for a settings file of the game's own.
+
+```rust
+# use ponko::prelude::*;
+# fn setup(ctx: &mut Ctx) {
+// At setup: the player's arrangement from last time.
+ctx.input.restore_touch_layout(&ctx.storage).ok();
+# }
+# fn arrange_done(ctx: &mut Ctx) {
+// When the player leaves the arrange screen:
+ctx.input.edit_touch_controls(false);
+if let Err(e) = ctx.input.save_touch_layout(&mut ctx.storage) {
+    eprintln!("could not save the touch layout: {e}");
+}
+# }
+```
+
+The game's own placement stays the default under the player's: a control
+the player never moved follows the game, and a new set of controls keeps
+the places the player gave the actions it has.
+
+## Touch screens on desktops
+
+The window's touches are the same on every system that has them, and so
+are the gestures and on-screen controls:
+
+| Desktop | Touches and gestures | Counts as a touch device before the first finger |
+| --- | --- | --- |
+| Windows | yes (the window takes the system's touch messages) | yes, when the system reports touch points |
+| Linux, X11 and Wayland | yes (XInput 2 multitouch on X11, `wl_touch` on Wayland) | yes, when the kernel lists a direct multitouch device |
+| macOS | no: Macs have no touch screens | no |
+
+- **Mouse events made up for fingers.** Windows may follow a finger's
+  touches with a made-up mouse press and release, and X11 moves the cursor
+  with the first finger. The engine drops a mouse press at a finger (or
+  where one lifted this frame or the last), and the cursor moving with a
+  finger doesn't take the UI's pointer from it, so a tap clicks a button
+  once and the prompts don't switch to the keyboard and mouse.
+- **A Mac's trackpad** is not a touch screen (its fingers have no place on
+  the screen), but its pinch, rotation and two-finger double tap feed the
+  same gestures as two fingers would: `Gesture::Pinch`, `Rotate` and
+  `DoubleTap`, the pinch and rotation amounts, at the pointer. It doesn't
+  make the Mac a touch device, so on-screen controls stay hidden. Tests and
+  replays feed `InputEvent::Trackpad` (the `trackpad` scenario step), and
+  recordings keep fingers and trackpad gestures.
+- **What needs a person.** The tests feed the events each system sends, in
+  the order it sends them; whether a given touch screen and its driver
+  send them is something only someone with one can see.
 
 ## In the browser
 
@@ -164,3 +273,6 @@ and `ctx.feed_touch`. The scenario builders are
 ```cpp
 {{#include ../../examples/cpp/guide.cpp:touch_scenario}}
 ```
+
+Styles, placement, the player's layout and its edit mode, and trackpad
+events are Rust-only so far.

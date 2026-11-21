@@ -446,6 +446,10 @@ pub unsafe extern "C" fn ponko_ctx_body_mass(
 /// `ponko_query` callbacks (not `ponko_query_par`): read the array once in
 /// the loop (a second read in the same system returns only newer pairs) and
 /// check each entity the loop visits against it, with no call per pair.
+///
+/// Ownership: `out_data` receives a view of an array the engine owns, valid
+/// until the system returns; never free it.
+///
 /// # Safety
 /// Live ctx; writable outputs.
 /// ```

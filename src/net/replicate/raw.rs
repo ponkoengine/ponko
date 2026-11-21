@@ -9,8 +9,6 @@
 //!   component, one per kind.
 //! - [`RawInterpolated`]: an interpolated component kind; its float fields
 //!   are shown between received values, the others set when they arrive.
-//! - [`RawNetEvent`]: an event of a kind declared by name, delivered with
-//!   its bytes.
 
 use std::sync::{Arc, Mutex};
 
@@ -20,7 +18,7 @@ use super::ClientStats;
 use super::fields::{Fields, Quantize, Replicate, quantize_in_place};
 use super::inputs::{PredictedKind, Unapplied};
 use super::kinds::{KindAccess, Raw, RawField, RawType, visit_raw};
-use crate::net::{Interpolate, PeerId, Prediction, Reconciled, SnapshotBuffer, SnapshotConfig};
+use crate::net::{Interpolate, Prediction, Reconciled, SnapshotBuffer, SnapshotConfig};
 
 /// Bytes with the fields that travel: an input, or a predicted state, of a
 /// type declared at run time.
@@ -476,108 +474,4 @@ impl KindAccess for RawInterpolated {
             world.remove::<RawNetBuffers>(e);
         }
     }
-}
-
-/// An event of a kind declared at run time
-/// ([`Replication::raw_event`](super::Replication::raw_event)), read from
-/// [`ctx.events`](crate::ctx::Ctx::events) as itself: who sent it, the
-/// server tick it was sent at, its kind and its bytes. Its layout is fixed
-/// (`repr(C)`), so C reads a slice of them in place.
-#[repr(C)]
-pub struct RawNetEvent {
-    from: u64,
-    tick: u64,
-    kind: u32,
-    data: *mut u8,
-    len: usize,
-}
-
-// SAFETY: the event owns its bytes (a leaked box, freed on drop) and
-// nothing else refers to them; reading them from another thread is reading
-// plain bytes.
-unsafe impl Send for RawNetEvent {}
-// SAFETY: as for Send: shared access only reads the owned bytes.
-unsafe impl Sync for RawNetEvent {}
-
-impl RawNetEvent {
-    pub(crate) fn new(from: PeerId, tick: u64, kind: u16, bytes: &[u8]) -> Self {
-        let boxed: Box<[u8]> = bytes.into();
-        let len = boxed.len();
-        Self {
-            from: from.to_bits(),
-            tick,
-            kind: u32::from(kind),
-            data: Box::into_raw(boxed).cast::<u8>(),
-            len,
-        }
-    }
-
-    /// Who sent it ([`PeerId::HOST`] for the server's own player).
-    #[must_use]
-    pub fn from(&self) -> PeerId {
-        PeerId::from_bits(self.from)
-    }
-
-    /// The server tick it was sent at.
-    #[must_use]
-    pub fn tick(&self) -> u64 {
-        self.tick
-    }
-
-    /// Its kind: the index [`Replication::raw_event_kind`](super::Replication::raw_event_kind)
-    /// gives for its name.
-    #[must_use]
-    pub fn kind(&self) -> u16 {
-        self.kind as u16
-    }
-
-    /// Its bytes, as sent.
-    #[must_use]
-    pub fn bytes(&self) -> &[u8] {
-        // SAFETY: `data` and `len` came from a boxed slice this event owns.
-        unsafe { std::slice::from_raw_parts(self.data, self.len) }
-    }
-
-    /// Byte offsets of its fields (from, tick, kind, data, len) and its
-    /// size, for bindings that read events in place.
-    #[doc(hidden)]
-    pub const LAYOUT: [usize; 6] = [
-        std::mem::offset_of!(Self, from),
-        std::mem::offset_of!(Self, tick),
-        std::mem::offset_of!(Self, kind),
-        std::mem::offset_of!(Self, data),
-        std::mem::offset_of!(Self, len),
-        std::mem::size_of::<Self>(),
-    ];
-}
-
-impl Drop for RawNetEvent {
-    fn drop(&mut self) {
-        // SAFETY: `data` and `len` came from `Box::into_raw` of a boxed
-        // slice in `new`, freed only here.
-        drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(self.data, self.len)) });
-    }
-}
-
-impl std::fmt::Debug for RawNetEvent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RawNetEvent")
-            .field("from", &self.from())
-            .field("tick", &self.tick)
-            .field("kind", &self.kind)
-            .field("bytes", &self.bytes())
-            .finish()
-    }
-}
-
-/// Delivers an event of a kind declared at run time.
-pub(crate) fn deliver_raw(
-    events: &mut crate::events::Events,
-    from: PeerId,
-    tick: u64,
-    kind: u16,
-    bytes: &[u8],
-) -> bool {
-    events.send(RawNetEvent::new(from, tick, kind, bytes));
-    true
 }

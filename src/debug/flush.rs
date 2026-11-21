@@ -41,10 +41,12 @@ pub(crate) struct GpuLabel {
 
 /// This frame's 3D lines, for the renderer, in the order they are drawn:
 /// the depth-tested opaque ones, the depth-tested see-through ones, then
-/// the same two on top; and the depth-tested 3D labels, drawn as 3D text.
-/// Opaque lines (alpha 1, nearly all) are drawn without blending, which
-/// costs a fraction of blending with several samples a pixel. Cleared each
-/// frame, capacity kept.
+/// the same two on top; and the depth-tested 3D labels, drawn as 3D text
+/// by every 3D camera that shows them (`three::text3d`). Opaque lines
+/// (alpha 1, nearly all) are drawn without blending, which costs a
+/// fraction of blending with several samples a pixel; see-through ones use
+/// alpha to coverage then (`render::debug_lines`). Cleared each frame,
+/// capacity kept.
 #[derive(Default, Debug)]
 pub(crate) struct GpuLines {
     pub tested: Vec<LineInstance>,
@@ -54,6 +56,10 @@ pub(crate) struct GpuLines {
     pub labels: Vec<GpuLabel>,
     /// The labels' text, one after the other.
     pub text: String,
+    /// The frame's own camera leaves the default layer out: it draws
+    /// neither the lines nor the labels, which its target cameras may
+    /// still draw.
+    pub hidden: bool,
 }
 
 impl GpuLines {
@@ -71,6 +77,7 @@ impl GpuLines {
         self.top_blended.clear();
         self.labels.clear();
         self.text.clear();
+        self.hidden = false;
     }
 
     /// The four lists of lines, in the order they are drawn.

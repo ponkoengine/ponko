@@ -163,14 +163,15 @@ pub trait Component: Send + Sync + 'static {
 ///
 /// # Safety
 /// `write` must call `f` exactly once per element, in the order of
-/// `component_ids`, with a pointer to a value whose ownership the callee takes.
+/// `component_ids`, with a pointer to a value whose ownership the callee
+/// takes and that value's size in bytes (`size_of` of its type).
 pub unsafe trait Bundle: Send + Sync + 'static {
     #[doc(hidden)]
     const SEAL: Seal;
     #[doc(hidden)]
     fn component_ids(world: &mut World, out: &mut Vec<ComponentId>);
     #[doc(hidden)]
-    unsafe fn write(self, f: &mut impl FnMut(usize, *const u8));
+    unsafe fn write(self, f: &mut impl FnMut(usize, *const u8, usize));
 }
 
 macro_rules! bundle_tuple {
@@ -180,9 +181,11 @@ macro_rules! bundle_tuple {
             fn component_ids(world: &mut World, out: &mut Vec<ComponentId>) {
                 $(out.push(world.register::<$t>());)*
             }
-            unsafe fn write(self, f: &mut impl FnMut(usize, *const u8)) {
+            unsafe fn write(self, f: &mut impl FnMut(usize, *const u8, usize)) {
                 let me = ManuallyDrop::new(self);
-                $(f($i, (&me.$i as *const $t).cast());)*
+                // Each size is a constant here, so the copies `f` makes are
+                // plain moves of known width, not calls to `memcpy`.
+                $(f($i, (&me.$i as *const $t).cast(), std::mem::size_of::<$t>());)*
             }
         }
     };

@@ -41,6 +41,9 @@ pub struct PonkoCtx {
     fps: f32,
     random_bits: u64,
     window: PonkoVec2,
+    /// Arrays handed to C that live until the callback returns
+    /// (`events_kept`); touched only under `events_busy`.
+    kept: std::cell::UnsafeCell<Vec<Box<dyn std::any::Any>>>,
 }
 
 /// Lends `ctx` to C for one callback.
@@ -77,6 +80,7 @@ pub(crate) fn with_ctx<R>(ctx: &mut Ctx, f: impl FnOnce(*mut PonkoCtx) -> R) -> 
         fps: snapshot.5,
         random_bits: snapshot.6,
         window: snapshot.7,
+        kept: std::cell::UnsafeCell::new(Vec::new()),
     };
     f(&mut handle)
 }
@@ -127,6 +131,30 @@ pub(crate) unsafe fn events<R>(
     // SAFETY: `events` is a field only these calls touch, one at a time
     // (the flag), and ctx-wide calls never run while a C callback runs.
     f(unsafe { &mut (*handle.ctx).events })
+}
+
+/// Events made into an array for C (`f` builds it from the events, inside
+/// `ponko_query` callbacks too), kept until the callback returns: its
+/// pointer and length. An empty array isn't kept, and allocates nothing.
+pub(crate) unsafe fn events_kept<T: 'static>(
+    handle: *const PonkoCtx,
+    f: impl FnOnce(&mut ponko::prelude::Events) -> Result<Box<[T]>, Failure>,
+) -> Result<(*const T, usize), Failure> {
+    if handle.is_null() {
+        return Err(invalid("ctx is null"));
+    }
+    // SAFETY: caller supplies a live ctx from a running callback.
+    let handle = unsafe { &*handle };
+    let _held = hold(handle, &handle.events_busy, "events are off during ponko_query_par")?;
+    // SAFETY: as in `events`: the flag gives this call the events alone.
+    let array = f(unsafe { &mut (*handle.ctx).events })?;
+    let (ptr, len) = (array.as_ptr(), array.len());
+    if len > 0 {
+        // SAFETY: `kept` is touched only under the events flag, held here;
+        // moving the box doesn't move its elements, so `ptr` stays valid.
+        unsafe { (*handle.kept.get()).push(Box::new(array)) };
+    }
+    Ok((ptr, len))
 }
 
 /// Clears a part's busy flag when the call that took it ends.
@@ -427,6 +455,10 @@ pub unsafe extern "C" fn ponko_ctx_window_size(ctx: *const PonkoCtx) -> PonkoVec
 }
 
 /// The world of this context. Valid until the callback returns; never free it.
+///
+/// Ownership: the returned world is borrowed from the context until the
+/// callback returns; never free it.
+///
 /// # Safety
 /// `ctx` must be null or live.
 /// ```
@@ -1458,6 +1490,10 @@ pub unsafe extern "C" fn ponko_ctx_send_event(
 /// The next call from the same system returns only newer ones. Each system
 /// that runs every tick sees each event once. The memory stays valid until
 /// the next send of this type or the end of the system.
+///
+/// Ownership: `out_data` receives a view of memory the engine owns, valid until
+/// the next send of this type or the end of the system; never free it.
+///
 /// # Safety
 /// Live ctx; writable outputs.
 /// ```

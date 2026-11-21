@@ -39,8 +39,10 @@ difference larger than this machine's noise.
     the required ones, and its index is tagged like a bundle with `on_add`
     hooks, so the bounds check every spawn already makes sends it to the
     cold path, which makes the missing values first. Its list of
-    (column, constructor) is cached next to it. Untagged bundles run the
-    code they ran before.
+    (column, constructor) is cached in the same entry as its column map
+    (since #136), so the cold path reads one entry, reserves one row,
+    makes the missing values into it and moves the bundle's own in.
+    Untagged bundles run the code they ran before.
   - Insert: one early test of the `hooked` byte; only a world with hooks or
     requirements looks up whether the inserted component requires
     something, and only then goes to a cold path that makes the missing
@@ -154,6 +156,35 @@ column by column through function pointers instead of one inlined bundle
 write), less in batches. `ponko-requires-elsewhere` (a component the
 workload never uses requires another) is the "no requirements" case for
 every spawn: its bundles lack nothing.
+
+**Since #136.** The gap path looked the bundle up twice (its column map,
+then its fills in a second map) and reserved a row twice; a batch of a
+gap-filling bundle went through the hooked path entity by entity. Now the
+fills sit in the bundle's cache entry, the cold path reserves one row, and
+a batch whose archetype has no `on_add` hooks runs one loop like a plain
+batch. Every spawn also moves its values with copies of a constant size
+(no `memcpy` call per component). The same rows, `origin/dev` against the
+branch, interleaved, 8 rounds, both builds aligned; median of the rounds'
+p50s, ms:
+
+| Row | before | after | after/before | after faster |
+|---|---:|---:|---:|---:|
+| `spawn-loop-100k/ponko` | 1.324 | 0.929 | 0.71 | 8/8 |
+| `spawn-loop-100k/ponko-required` | 1.549 | 1.134 | 0.73 | 8/8 |
+| `spawn-batch-100k/ponko` | 1.069 | 0.493 | 0.46 | 8/8 |
+| `spawn-batch-100k/ponko-required` | 1.142 | 0.491 | 0.43 | 8/8 |
+| `spawn-despawn-100k/ponko` | 0.235 | 0.194 | 0.83 | 8/8 |
+| `spawn-despawn-100k/ponko-required` | 0.267 | 0.200 | 0.78 | 7/8 |
+| `spawn-loop-100k/ponko-requires-elsewhere` | 1.349 | 0.948 | 0.71 | 8/8 |
+
+Filling the gap now costs nothing measurable in a batch (0.491 against
+0.493 ms) and 0.006 ms per 100k in churn (0.032 before). One by one it
+costs about 2 ns per spawn, within the noise of before (2.2 ns), so 1.2×
+the now faster plain spawn; its own instructions halved (39 more than the plain spawn instead of 81,
+counted in one process against the code before #47:
+[ECS.md](ECS.md#costs-won-back-since-the-baselines)). What is left is the
+constructor itself: an indirect call per missing component, on a path
+that isn't inlined into the spawn.
 
 
 

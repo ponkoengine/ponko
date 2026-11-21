@@ -263,6 +263,10 @@ fn bone_to_c(bone: HumanBone) -> u32 {
 
 /// The name of a `PonkoHumanBone` in words, such as `"left upper leg"`
 /// (static), or null for an unknown value.
+///
+/// Ownership: the returned string is static (valid for the whole run); never
+/// free it.
+///
 /// ```
 /// let name = unsafe { std::ffi::CStr::from_ptr(ponko_ffi::ponko_human_bone_name(ponko_ffi::PonkoHumanBone::PONKO_HUMAN_BONE_LEFT_UPPER_LEG as u32)) };
 /// assert_eq!(name.to_str(), Ok("left upper leg"));
@@ -305,6 +309,10 @@ unsafe fn put<T>(out_ptr: *mut *mut T, value: T) -> Result<(), Failure> {
 }
 
 /// An empty map: no bone mapped. Free it with `ponko_humanoid_map_free`.
+///
+/// Ownership: on success `out_map` receives an owned map, the caller's; free it
+/// with ponko_humanoid_map_free.
+///
 /// # Safety
 /// `out_map` null or writable.
 /// ```
@@ -334,6 +342,10 @@ fn skeleton(c: &ponko::prelude::Ctx, bits: u64) -> Result<&Skeleton, Failure> {
 /// leg, sides as left/right or a separate l/r, prefixes such as `name:`.
 /// Check `ponko_humanoid_map_missing` afterwards and fix the rest with
 /// `ponko_humanoid_map_set`. `PONKO_NOT_FOUND` if the entity has no skeleton.
+///
+/// Ownership: on success `out_map` receives an owned map, the caller's; free it
+/// with ponko_humanoid_map_free.
+///
 /// # Safety
 /// `ctx` null or live; `out_map` null or writable.
 /// ```
@@ -462,6 +474,10 @@ pub unsafe extern "C" fn ponko_humanoid_map_missing(
 /// `PONKO_INVALID_ARGUMENT` (and a message naming the bone) if a required
 /// bone isn't mapped on either skeleton or a map names a joint its skeleton
 /// doesn't have; `PONKO_NOT_FOUND` if an entity has no skeleton.
+///
+/// Ownership: on success `out_retargeter` receives an owned retargeter, the
+/// caller's; free it with ponko_retargeter_free.
+///
 /// # Safety
 /// `ctx` null or live; maps null or live; `out_retargeter` null or writable.
 /// ```
@@ -561,6 +577,10 @@ pub unsafe extern "C" fn ponko_retargeter_set_sample_rate(retargeter: *mut Ponko
 /// source's key times, adding keys at the sample rate, with linear
 /// interpolation. It samples the whole clip: do it once per clip, at load.
 /// Free the new clip with `ponko_clip_free`.
+///
+/// Ownership: on success `out_clip` receives an owned clip, the caller's; free
+/// it with ponko_clip_free.
+///
 /// # Safety
 /// `retargeter` and `clip` null or live; `out_clip` null or writable.
 /// ```

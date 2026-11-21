@@ -412,6 +412,8 @@ mod contact_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod coverage_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod crash_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod crowd_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod crowd_render_test;
@@ -474,6 +476,8 @@ mod views_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d", feature = "editor"))]
 mod editor_render_test;
+#[cfg(all(test, feature = "window", feature = "3d", feature = "editor"))]
+mod editor_thumbnail_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod gltf_extensions_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
@@ -546,6 +550,10 @@ mod taa_render_test;
 mod environment_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod sky_kit_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod terrain_example_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod water_kit_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod decal_render_test;

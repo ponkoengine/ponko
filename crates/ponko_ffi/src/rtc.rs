@@ -43,6 +43,11 @@ fn io(e: std::io::Error) -> crate::Failure {
 /// normally the room's host). `stun_urls`: space-separated `stun:host:port`
 /// URLs, or null. `bind`: the UDP socket's address, or null for any port.
 /// Poll `lobby` every frame too. Requires the `webrtc` feature.
+///
+/// Ownership: on success `out_endpoint` receives an owned endpoint, the
+/// caller's; free it with ponko_net_messages_free. (or give it to
+/// ponko_game_messages, which takes it over).
+///
 /// # Safety
 /// `lobby` live or null; strings null or NUL-terminated; `out_endpoint`
 /// writable. On failure it is set to null.
@@ -86,6 +91,11 @@ pub unsafe extern "C" fn ponko_net_messages_rtc_host(
 /// the endpoint until it reports the host connected, and `lobby` every
 /// frame too. Settings as `ponko_net_messages_rtc_host`. Requires the
 /// `webrtc` feature.
+///
+/// Ownership: on success `out_endpoint` receives an owned endpoint, the
+/// caller's; free it with ponko_net_messages_free. (or give it to
+/// ponko_game_messages, which takes it over).
+///
 /// # Safety
 /// As `ponko_net_messages_rtc_host`.
 /// ```

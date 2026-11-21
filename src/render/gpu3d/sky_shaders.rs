@@ -334,6 +334,21 @@ impl Renderer3D {
         params
     }
 
+    /// Tests: makes the cloud passes march every pixel each frame whatever
+    /// the preset (the presets' cost before the interleaved march), once
+    /// they are made. Returns whether they are.
+    #[cfg(test)]
+    pub(crate) fn set_full_cloud_march(&mut self, on: bool) -> bool {
+        self.clouds.as_deref_mut().map(|c| c.full_march = on).is_some()
+    }
+
+    /// The size of the cloud trace drawn last frame (for tests).
+    #[cfg(test)]
+    pub(crate) fn cloud_trace_size(&self) -> Option<(u32, u32)> {
+        let (trace, _) = self.clouds.as_deref()?.images()?;
+        Some((trace.width(), trace.height()))
+    }
+
     /// Whether anything of the sky kit was made: its sky pipelines or its
     /// cloud passes (for tests: none until a game turns the kit on).
     #[cfg(test)]

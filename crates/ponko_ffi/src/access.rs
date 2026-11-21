@@ -81,6 +81,10 @@ unsafe fn edit(access: *mut PonkoAccess, f: impl FnOnce(SystemAccess) -> Result<
 }
 
 /// A declaration of nothing. Free once with `ponko_access_free`.
+///
+/// Ownership: the returned declaration is the caller's (null on failure); free
+/// it with ponko_access_free.
+///
 /// ```
 /// let a = ponko_ffi::ponko_access_new();
 /// assert!(!a.is_null());
@@ -264,6 +268,11 @@ pub unsafe extern "C" fn ponko_access_conflicts(
 /// used without being declared. C systems stay sequential, also with
 /// `ponko_game_parallel_systems` on: the declaration is for tools and the
 /// access report.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `system_fn`
+/// and never frees it. It must stay valid until the game is freed (or its run
+/// returns).
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_game_add_system_with_access(std::ptr::null_mut(), 3, std::ptr::null(), 1, std::ptr::null(), None, std::ptr::null_mut()) } as u32, 1);
 /// ```

@@ -1025,8 +1025,10 @@ impl DebugShape<'_> {
 
     /// Hides 3D labels behind nearer 3D surfaces, as 3D lines are (labels
     /// are otherwise drawn over everything). A depth-tested label is drawn
-    /// in the lit 3D frame, facing the camera, `size` pixels high where it
-    /// is, with its top-left corner at its point; exposure and tone mapping
+    /// in the lit 3D frame of every 3D camera that shows the default layer
+    /// (split-screen views, and target cameras that draw particles), facing
+    /// that camera, `size` pixels high where it is, with its top-left
+    /// corner at its point; exposure and tone mapping
     /// apply to its color, as to the lines. Lines are depth-tested already
     /// (unless [`on_top`](Self::on_top)); 2D shapes don't change. The last
     /// of `on_top` and `depth_tested` wins.

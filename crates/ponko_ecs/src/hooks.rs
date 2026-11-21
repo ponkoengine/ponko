@@ -21,7 +21,7 @@ use crate::bundle::Component;
 use crate::commands::Commands;
 use crate::entity::Entity;
 use crate::query::{Query, QueryData};
-use crate::storage::{ComponentId, TypeMap};
+use crate::storage::ComponentId;
 use crate::world::World;
 
 /// How to make a required component's value: `write(data, dst, size)`
@@ -218,10 +218,6 @@ pub(crate) struct Hooks {
     /// Calls in progress that apply the queue when they end (see
     /// [`World::hold_hooks`]); `flush_hooks` does nothing while it is not 0.
     hold: u32,
-    /// By bundle type: the columns of its archetype that the bundle doesn't
-    /// fill, and how to make their required values. Only bundles that lack
-    /// a component they require are here (and tagged `HOOKED_BUNDLE`).
-    pub(crate) fills: TypeMap<Box<[(usize, Make)]>>,
 }
 
 impl Hooks {

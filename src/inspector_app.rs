@@ -99,6 +99,12 @@ pub(crate) struct App {
     /// An open prefab document's file as opened (or last applied), for
     /// Apply to scenes.
     pub prefab_base: Option<(String, serde_json::Value)>,
+    /// The part of the window the panels leave free, and what the 2D and
+    /// 3D cameras were given of it last (see `centre_cameras`).
+    pub view: Option<crate::camera::Viewport>,
+    view2d: Option<crate::camera::Viewport>,
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
+    view3d: Option<crate::camera::Viewport>,
 }
 
 impl App {
@@ -189,6 +195,12 @@ impl Panels {
             .rect
             .width();
         self.set_layout(layout);
+        // Not while a button is held: a drag in the view keeps the view it
+        // started in, however the panels' contents change meanwhile.
+        if !ui.input(|i| i.pointer.any_down()) {
+            let free = ui.available_rect_before_wrap();
+            self.centre_cameras(ctx, free, ui.ctx().content_rect());
+        }
         self.dialogs(ui, ctx);
         self.shortcuts_window(ui);
         self.world_and_keys(ui, ctx);
@@ -202,6 +214,45 @@ impl Panels {
             // Headless (tests) there's no window: the title is kept anyway.
             let _ = ctx.window.set_title(title.clone());
             app.title = title;
+        }
+    }
+
+    /// Gives the 2D and 3D cameras the part of the window the panels leave
+    /// free (`free`, of the window `screen`), so they centre on it: what
+    /// was in the middle of the 2D view stays in the middle of the free
+    /// part, the 3D camera's middle is the free part's middle, and their
+    /// conversions, picking and the 3D aspect ratio follow it. A camera the
+    /// game gave a part of the window itself (split screen) is left alone.
+    fn centre_cameras(&mut self, ctx: &mut Ctx, free: egui::Rect, screen: egui::Rect) {
+        use crate::camera::Viewport;
+        let Some(app) = &mut self.app else { return };
+        if free.width() < 1.0 || free.height() < 1.0 || screen.width() < 1.0 || screen.height() < 1.0 {
+            return;
+        }
+        let view = Viewport::new(
+            (free.min.x - screen.min.x) / screen.width(),
+            (free.min.y - screen.min.y) / screen.height(),
+            free.width() / screen.width(),
+            free.height() / screen.height(),
+        );
+        app.view = Some(view);
+        let ours = |rect: Viewport, set: Option<Viewport>| rect.is_full() || set == Some(rect);
+        let camera = &mut ctx.camera;
+        if ours(camera.rect, app.view2d) {
+            if camera.rect != view {
+                let middle = camera.center();
+                camera.rect = view;
+                camera.look_at(middle);
+            }
+            app.view2d = Some(view);
+        }
+        #[cfg(feature = "3d")]
+        {
+            let camera = &mut ctx.scene3d.camera;
+            if ours(camera.rect, app.view3d) {
+                camera.rect = view;
+                app.view3d = Some(view);
+            }
         }
     }
 
@@ -1448,6 +1499,173 @@ mod tests {
         }
 
         #[test]
+        fn the_3d_camera_centres_on_the_view_between_the_panels() {
+            let (egui, mut p, mut ctx, e) = editor3d();
+            let view = p
+                .app
+                .as_ref()
+                .unwrap()
+                .view
+                .unwrap()
+                .pixels(Vec2::new(SCREEN.x, SCREEN.y));
+            assert!(view.min.x >= SIDE_PANEL - 1.0 && view.min.y > 10.0, "{view:?}");
+            assert_eq!(
+                ctx.scene3d.camera.screen_rect(),
+                view,
+                "the camera draws into the free part"
+            );
+            let aspect = ctx.scene3d.camera.viewport().x / ctx.scene3d.camera.viewport().y;
+            assert!(
+                (aspect - view.size().x / view.size().y).abs() < 1e-4,
+                "its aspect is the view's"
+            );
+            let looked_at = screen(&ctx, Vec3::ZERO);
+            assert!(
+                (looked_at - view.center()).length() < 0.5,
+                "what the camera looks at is in the middle of the view: {looked_at} vs {}",
+                view.center()
+            );
+            // A click there picks it (`select_it` clicks where it is drawn).
+            select_it(&egui, &mut p, &mut ctx, e);
+        }
+
+        #[test]
+        fn an_image_dropped_on_a_model_paints_it_in_one_undo_step_and_the_scene_keeps_it() {
+            let grid = TempAsset::copy_of("paint-grid", "grid.glb");
+            let tile = TempAsset::copy_of("paint-tile", "tile.png");
+            let scene = TempAsset::new("paint-scene");
+            let (egui, mut p, mut ctx, e) = editor3d();
+            // Meshes and textures load as in a headless run (no GPU here).
+            ctx.set_headless(true);
+            let mesh = ctx.gfx.load_mesh(&grid.name);
+            ctx.world.insert(e, crate::render::Model::new(mesh));
+            select_it(&egui, &mut p, &mut ctx, e);
+            p.scene.forget_assets();
+            search(&mut p, "ponko-test-app-paint-tile");
+            let shapes = with_thumbnails(&egui, &mut p, &mut ctx);
+            let short = super::super::super::assets_panel::short_name(&tile.name);
+            let from = text_at(&shapes, |t| t == short).expect("the image's tile");
+            let on_model = screen(&ctx, Vec3::ZERO);
+            let n = ctx.world.len();
+            mouse_drag(&egui, &mut p, &mut ctx, from, on_model, 6);
+            assert!(p.error.is_none(), "{:?}", p.error);
+            assert_eq!(ctx.world.len(), n, "nothing new is placed");
+            let painted = serde_json::json!({ "texture": tile.name });
+            assert_eq!(ctx.world.get_json(e, "ModelMaterial").unwrap(), painted);
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::Z)]);
+            assert!(ctx.world.get_json(e, "ModelMaterial").is_err(), "one undo takes it off");
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::Y)]);
+            assert_eq!(ctx.world.get_json(e, "ModelMaterial").unwrap(), painted);
+
+            // Dropped beside the model: nothing to paint.
+            let beside = Vec2::new(SIDE_PANEL + 20.0, 120.0);
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            let from = text_at(&shapes, |t| t == short).expect("the image's tile");
+            mouse_drag(&egui, &mut p, &mut ctx, from, beside, 6);
+            assert!(p.error.as_deref().unwrap_or("").contains("on a model"), "{:?}", p.error);
+
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene))
+                .unwrap();
+            let saved = std::fs::read_to_string(&scene.file).unwrap();
+            assert!(saved.contains(&format!("\"texture\": \"{}\"", tile.name)), "{saved}");
+            p.open_file(&mut ctx, &scene.name);
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            let e = the_entity(&mut ctx);
+            assert_eq!(
+                ctx.world.get_json(e, "ModelMaterial").unwrap(),
+                painted,
+                "opened again, still painted"
+            );
+        }
+
+        #[test]
+        fn a_gltf_scene_keeps_a_node_moved_in_the_view_through_a_reexport_and_a_reopen() {
+            let yard = |hp: f32, wall_x: f32| {
+                crate::three::cube_gltf(&serde_json::json!([
+                    { "name": "Crate", "mesh": 0, "extras": { "ponko:Hp": hp } },
+                    { "name": "Wall", "mesh": 0, "translation": [wall_x, 0.0, -3.0] },
+                ]))
+            };
+            let name = format!("ponko-test-app-yard-{}.gltf", std::process::id());
+            let file = TempAsset {
+                file: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets")
+                    .join(&name),
+                name,
+            };
+            std::fs::write(&file.file, yard(3.0, -3.0)).unwrap();
+            let scene = TempAsset::new("yard-scene");
+            let (egui, mut p, mut ctx, e) = editor3d();
+            ctx.set_headless(true);
+            ctx.world.despawn(e);
+            // The game's setup spawns its level.
+            let root = ctx.spawn_prefab(&file.name, T3::default()).unwrap();
+            let node = |ctx: &Ctx, root: Entity, path: &str| {
+                ctx.world
+                    .get::<crate::d3::GltfRoot>(root)
+                    .unwrap()
+                    .entity(path)
+                    .unwrap()
+            };
+            let at = |ctx: &Ctx, e: Entity| ctx.world.get::<T3>(e).unwrap().position;
+            let (crate_e, wall) = (node(&ctx, root, "Crate"), node(&ctx, root, "Wall"));
+            select_it(&egui, &mut p, &mut ctx, crate_e);
+            let grab = on_axis(&ctx, Mode::Translate, 0, 0.7);
+            let to = screen(&ctx, vec3(along_x(&ctx, grab) + 2.2, 0.0, 0.0));
+            mouse_drag(&egui, &mut p, &mut ctx, grab, to, 5);
+            assert!(
+                (at(&ctx, crate_e) - vec3(2.0, 0.0, 0.0)).length() < 1e-4,
+                "moved by the gizmo"
+            );
+            ctx.edit(|ed, ctx| ed.set(ctx, crate_e, "Hp", serde_json::json!(8.0)))
+                .unwrap();
+
+            // Exported again: the crate keeps its place and Hp, the wall
+            // goes where the file puts it now.
+            std::fs::write(&file.file, yard(4.0, -5.0)).unwrap();
+            ctx.reload_gltf(&file.name).unwrap();
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            assert_eq!(node(&ctx, root, "Crate"), crate_e);
+            assert!(
+                (at(&ctx, crate_e) - vec3(2.0, 0.0, 0.0)).length() < 1e-4,
+                "{}",
+                at(&ctx, crate_e)
+            );
+            assert_eq!(ctx.world.get_json(crate_e, "Hp").unwrap(), serde_json::json!(8.0));
+            assert!(
+                (at(&ctx, wall) - vec3(-5.0, 0.0, -3.0)).length() < 1e-4,
+                "{}",
+                at(&ctx, wall)
+            );
+
+            // Saved and opened again: the scene is spawned again, with them.
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene))
+                .unwrap();
+            p.open_file(&mut ctx, &scene.name);
+            assert!(p.error.is_none(), "{:?}", p.error);
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            let roots: Vec<Entity> = ctx
+                .world
+                .query::<(Entity, &crate::d3::GltfRoot)>()
+                .iter()
+                .map(|(e, _)| e)
+                .collect();
+            assert_eq!(roots.len(), 1, "the scene once");
+            let crate_e = node(&ctx, roots[0], "Crate");
+            assert!(
+                (at(&ctx, crate_e) - vec3(2.0, 0.0, 0.0)).length() < 1e-4,
+                "{}",
+                at(&ctx, crate_e)
+            );
+            assert_eq!(ctx.world.get_json(crate_e, "Hp").unwrap(), serde_json::json!(8.0));
+            // And a click where it was moved to picks it.
+            let there = screen(&ctx, vec3(2.0, 0.0, 0.0));
+            frame(&egui, &mut p, &mut ctx, vec![moved(there), button(there, true)]);
+            frame(&egui, &mut p, &mut ctx, vec![button(there, false)]);
+            assert_eq!(p.selected, Some(crate_e));
+        }
+
+        #[test]
         fn a_3d_scene_saved_from_the_editor_opens_again_as_it_was_saved() {
             let file = TempAsset::new("scene-3d");
             let (egui, mut p, mut ctx, e) = editor3d();
@@ -1816,6 +2034,118 @@ mod tests {
         assert_eq!(ctx.editor.doc.kind, DocKind::Prefab, "the prefab is open again");
     }
 
+    #[test]
+    fn apply_buttons_write_an_instance_and_the_prefab_it_includes_back_to_their_files() {
+        let inner = TempAsset::new("nested-inner");
+        let outer = TempAsset::new("nested-outer");
+        let cart = serde_json::json!({
+            "format": "ponko-prefab", "version": 2, "entities": [
+                { "entity": 1, "components": {
+                    "Transform2D": { "position": [0.0, 0.0], "rotation": 0.0, "scale": [1.0, 1.0] }, "Hp": 1.0 } },
+                { "entity": 2, "components": {
+                    "Transform2D": { "position": [10.0, 0.0], "rotation": 0.0, "scale": [1.0, 1.0] },
+                    "Attached": { "to": 1, "offset": [10.0, 0.0], "rotation": 0.0 }, "Hp": 2.0 } }
+            ]
+        });
+        std::fs::write(&inner.file, cart.to_string()).unwrap();
+        let train = serde_json::json!({
+            "format": "ponko-prefab", "version": 2, "entities": [
+                { "entity": 1, "components": {
+                    "Transform2D": { "position": [0.0, 0.0], "rotation": 0.0, "scale": [1.0, 1.0] }, "Hp": 3.0 } },
+                { "entity": 2, "prefab": inner.name, "components": {
+                    "Transform2D": { "position": [40.0, 0.0], "rotation": 0.0, "scale": [1.0, 1.0] } } }
+            ]
+        });
+        std::fs::write(&outer.file, train.to_string()).unwrap();
+        let (egui, mut p, mut ctx) = editor(None);
+        let a = ctx
+            .edit(|ed, ctx| ed.spawn_prefab(ctx, &outer.name, Vec2::new(400.0, 300.0)))
+            .unwrap();
+        let b = ctx
+            .edit(|ed, ctx| ed.spawn_prefab(ctx, &outer.name, Vec2::new(500.0, 400.0)))
+            .unwrap();
+        let parts = |ctx: &Ctx, r| ctx.world.get::<crate::scene::PrefabParts>(r).unwrap().0.clone();
+        // The included cart's wheel (Hp 2) of a, selected and changed.
+        let wheel = parts(&ctx, a)[1];
+        p.select(Some(wheel), false);
+        ctx.edit(|ed, ctx| ed.set(ctx, wheel, "Hp", serde_json::json!(8.0)))
+            .unwrap();
+        click_text(&egui, &mut p, &mut ctx, |t| t == format!("Apply to {}", inner.name));
+        assert!(p.error.is_none(), "{:?}", p.error);
+        let cart_now: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&inner.file).unwrap()).unwrap();
+        assert_eq!(cart_now["entities"][1]["components"]["Hp"], 8.0, "{cart_now:#}");
+        assert_eq!(
+            ctx.world.get::<Hp>(parts(&ctx, b)[1]),
+            Some(&Hp(8.0)),
+            "b's cart follows"
+        );
+
+        // Then the included cart's root, applied to the train: a link with
+        // the change.
+        let cart_a = parts(&ctx, a)[0];
+        p.select(Some(cart_a), false);
+        ctx.edit(|ed, ctx| ed.set(ctx, cart_a, "Hp", serde_json::json!(5.0)))
+            .unwrap();
+        click_text(&egui, &mut p, &mut ctx, |t| t == "Apply to prefab");
+        assert!(p.error.is_none(), "{:?}", p.error);
+        let train_now: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&outer.file).unwrap()).unwrap();
+        assert_eq!(train_now["entities"][1]["prefab"], inner.name.as_str(), "{train_now:#}");
+        assert_eq!(train_now["entities"][1]["components"]["Hp"], 5.0);
+        assert_eq!(
+            ctx.world.get::<Hp>(parts(&ctx, b)[0]),
+            Some(&Hp(5.0)),
+            "b follows the train"
+        );
+    }
+
+    #[test]
+    fn the_2d_camera_centres_on_the_view_between_the_panels_and_follows_a_resized_panel() {
+        let (egui, mut p, mut ctx) = editor(None);
+        // Spawned in the middle of the window before the editor opened.
+        let e = the_entity(&mut ctx);
+        let at = |ctx: &Ctx| ctx.camera.world_to_screen(ctx.world.get::<T2>(e).unwrap().position);
+        let view = |p: &Panels| {
+            let v = p.app.as_ref().unwrap().view.unwrap();
+            v.pixels(Vec2::new(SCREEN.x, SCREEN.y))
+        };
+        let before = view(&p);
+        assert!(
+            before.min.x >= SIDE_PANEL - 1.0 && before.max.x <= SCREEN.x - SIDE_PANEL + 1.0,
+            "between the side panels: {before:?}"
+        );
+        assert!(
+            before.min.y > 10.0 && before.max.y < SCREEN.y - 10.0,
+            "below the menu, above the assets: {before:?}"
+        );
+        assert_eq!(ctx.camera.screen_rect(), before, "the camera draws into the free part");
+        assert!(
+            (at(&ctx) - before.center()).length() < 0.5,
+            "what was in the middle of the window is in the middle of the view: {} vs {}",
+            at(&ctx),
+            before.center()
+        );
+        let middle = before.center();
+        frame(&egui, &mut p, &mut ctx, vec![moved(middle), button(middle, true)]);
+        frame(&egui, &mut p, &mut ctx, vec![button(middle, false)]);
+        assert_eq!(p.selected, Some(e), "a click in the middle of the view picks it");
+
+        // Drag the hierarchy's edge 100 px to the right.
+        let edge = Vec2::new(before.min.x, before.center().y);
+        mouse_drag(&egui, &mut p, &mut ctx, edge, edge + Vec2::new(100.0, 0.0), 5);
+        let after = view(&p);
+        assert!(
+            (after.min.x - before.min.x - 100.0).abs() < 2.0,
+            "{before:?} -> {after:?}"
+        );
+        assert!(
+            (at(&ctx) - after.center()).length() < 0.5,
+            "still in the middle of the narrower view: {} vs {}",
+            at(&ctx),
+            after.center()
+        );
+    }
+
     fn the_entity_with_hp(ctx: &mut Ctx, hp: f32) -> Entity {
         let mut q = ctx.world.query::<(Entity, &Hp)>();
         q.iter().find(|(_, h)| h.0 == hp).map(|(e, _)| e).unwrap()
@@ -1891,6 +2221,9 @@ mod tests {
         let from = text_at(&shapes, |t| t == short).expect("the tile");
         let to = Vec2::new(SCREEN.x / 2.0, 200.0);
         let before = ctx.world.len();
+        // Where the view shows it now: the new sprite's components widen
+        // the inspector, and the view keeps its middle when it narrows.
+        let dropped_at = ctx.camera.screen_to_world(to);
         mouse_drag(&egui, &mut p, &mut ctx, from, to, 6);
         assert!(p.error.is_none(), "{:?}", p.error);
         assert_eq!(ctx.world.len(), before + 1);
@@ -1898,12 +2231,59 @@ mod tests {
         let sprite = ctx.world.get_json(e, "Sprite").unwrap();
         assert_eq!(sprite["texture"], tile.name.as_str());
         let at = ctx.world.get::<T2>(e).unwrap().position;
-        assert!(
-            (at - ctx.camera.screen_to_world(to)).length() < 1.0,
-            "placed where it was dropped: {at}"
-        );
+        assert!((at - dropped_at).length() < 1.0, "placed where it was dropped: {at}");
         frame(&egui, &mut p, &mut ctx, vec![command(Key::Z)]);
         assert_eq!(ctx.world.len(), before, "one undo step takes it away");
+    }
+
+    /// A model thumbnail kept on disk under the model's content (as the
+    /// renderer left it in an earlier run) is the tile's picture at once.
+    #[cfg(feature = "3d")]
+    #[test]
+    fn a_model_tile_shows_the_thumbnail_kept_on_disk_for_its_content() {
+        let grid = TempAsset::copy_of("cached-grid", "grid.glb");
+        let cache = std::env::temp_dir().join(format!("ponko-app-thumb-cache-{}", std::process::id()));
+        let bytes = std::fs::read(&grid.file).unwrap();
+        let key = crate::editor::thumbs::content_key(&grid.file, &bytes);
+        std::fs::create_dir_all(&cache).unwrap();
+        let size = crate::editor::thumbs::SIZE as u32;
+        image::RgbaImage::from_pixel(size, size, image::Rgba([255, 0, 255, 255]))
+            .save(cache.join(format!("{key}.png")))
+            .unwrap();
+        let (egui, mut p, mut ctx) = editor(None);
+        p.app.as_mut().unwrap().assets.use_thumbnail_cache(cache.clone());
+        search(&mut p, "ponko-test-app-cached-grid");
+        let shapes = with_thumbnails(&egui, &mut p, &mut ctx);
+        let short = super::super::assets_panel::short_name(&grid.name);
+        assert!(text_at(&shapes, |t| t == short).is_some(), "the tile");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        let thumb = p
+            .app
+            .as_mut()
+            .unwrap()
+            .assets
+            .thumbnails()
+            .get(&root, &grid.name, crate::editor::cook::AssetKind::Model)
+            .cloned();
+        let _ = std::fs::remove_dir_all(&cache);
+        let thumb = thumb.expect("made").unwrap();
+        assert_eq!(
+            &thumb.rgba[..4],
+            [255, 0, 255, 255],
+            "the kept picture, not drawn again"
+        );
+        // Clicked, its details give what the file holds.
+        let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+        let at = text_at(&shapes, |t| t == short).expect("the tile");
+        frame(&egui, &mut p, &mut ctx, vec![moved(at)]);
+        frame(&egui, &mut p, &mut ctx, vec![button(at, true)]);
+        frame(&egui, &mut p, &mut ctx, vec![button(at, false)]);
+        let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+        assert!(
+            text_at(&shapes, |t| t.starts_with("model, ") && t.ends_with(" triangles")).is_some(),
+            "its triangle count: {:?}",
+            texts(&shapes)
+        );
     }
 
     /// The sound plays through the offline mixer only: nothing is heard.
