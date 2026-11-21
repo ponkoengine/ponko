@@ -5,7 +5,7 @@
 //! screen and says no.
 
 /// Whether this desktop has a touch screen.
-#[cfg(feature = "window")]
+#[cfg(all(feature = "window", not(target_arch = "wasm32")))]
 pub(crate) fn has_touch_screen() -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -40,7 +40,10 @@ fn windows_touch_points() -> i32 {
 /// (`INPUT_PROP_DIRECT`) and reports several fingers' positions
 /// (`ABS_MT_POSITION_X`). A trackpad points indirectly; a pen tablet
 /// reports one position.
-#[cfg_attr(not(all(feature = "window", any(target_os = "linux", target_os = "freebsd"))), allow(dead_code))]
+#[cfg_attr(
+    not(all(feature = "window", any(target_os = "linux", target_os = "freebsd"))),
+    allow(dead_code)
+)]
 fn linux_touch_screen(devices: &str) -> bool {
     const INPUT_PROP_DIRECT: u32 = 1;
     const ABS_MT_POSITION_X: u32 = 0x35;
@@ -59,7 +62,10 @@ fn linux_touch_screen(devices: &str) -> bool {
 /// by spaces, the highest first, each as wide as the kernel's `long`
 /// (64 bits on the machines that run games; a word wider than 32 bits'
 /// digits says which).
-#[cfg_attr(not(all(feature = "window", any(target_os = "linux", target_os = "freebsd"))), allow(dead_code))]
+#[cfg_attr(
+    not(all(feature = "window", any(target_os = "linux", target_os = "freebsd"))),
+    allow(dead_code)
+)]
 fn bit_set(words: &str, bit: u32) -> bool {
     let words: Vec<&str> = words.split_whitespace().collect();
     let width = if words.iter().any(|w| w.len() > 8) || cfg!(target_pointer_width = "64") {

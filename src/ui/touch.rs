@@ -685,6 +685,68 @@ mod tests {
     }
 
     #[test]
+    fn a_control_the_player_moved_keeps_its_distance_from_its_corner_when_the_window_changes() {
+        let controls = TouchControls::new().stick("move").button("jump", "A");
+        let mut layout = TouchLayout::default();
+        // 100 left of and 80 above the bottom right corner, at UI scale 2.
+        layout.adjust("jump").place = Some(TouchPlace::nearest_corner(vec2(380.0, 190.0), vec2(480.0, 270.0)));
+        let mut zones = zones(&controls);
+        place_zones(&controls, &layout, &mut zones, vec2(960.0, 540.0), 2.0);
+        assert_eq!(zones[1].center, vec2(760.0, 380.0));
+        // The phone turns: the same distance from the same corner.
+        place_zones(&controls, &layout, &mut zones, vec2(540.0, 960.0), 2.0);
+        assert_eq!(zones[1].center, vec2(340.0, 800.0));
+        // A view too small for it: moved in.
+        place_zones(&controls, &layout, &mut zones, vec2(200.0, 200.0), 1.0);
+        let (c, r) = (zones[1].center, zones[1].radius);
+        assert!(
+            c.x - r >= 0.0 && c.y - r >= 0.0 && c.x + r <= 200.0 && c.y + r <= 200.0,
+            "{c} {r}"
+        );
+    }
+
+    #[test]
+    fn sizes_multiply_the_styles_and_the_players() {
+        let controls = TouchControls::new()
+            .button("jump", "A")
+            .button("fire", "B")
+            .control_style(
+                "fire",
+                TouchStyle {
+                    size: 2.0,
+                    ..TouchStyle::default()
+                },
+            );
+        let mut layout = TouchLayout {
+            size: 1.5,
+            ..TouchLayout::default()
+        };
+        layout.adjust("fire").size = 0.5;
+        let mut zones = zones(&controls);
+        place_zones(&controls, &TouchLayout::default(), &mut zones, vec2(960.0, 540.0), 1.0);
+        let plain = zones[0].radius;
+        place_zones(&controls, &layout, &mut zones, vec2(960.0, 540.0), 1.0);
+        assert!((zones[0].radius - plain * 1.5).abs() < 1e-4);
+        assert!((zones[1].radius - plain * 2.0 * 1.5 * 0.5).abs() < 1e-4);
+        assert!(zones[1].reach >= zones[1].radius);
+    }
+
+    #[test]
+    fn nonsense_numbers_in_a_layout_file_are_made_usable() {
+        let mut layout = TouchLayout {
+            size: f32::NAN,
+            opacity: 7.0,
+            ..TouchLayout::default()
+        };
+        layout.adjust("jump").size = -3.0;
+        layout.adjust("fire").place = Some(TouchPlace::new(vec2(f32::INFINITY, 0.0), Vec2::ZERO));
+        let layout = layout.sane();
+        assert_eq!((layout.size, layout.opacity), (1.0, 1.0));
+        assert_eq!(layout.adjusted("jump").size, 0.1);
+        assert_eq!(layout.adjusted("fire").place, None);
+    }
+
+    #[test]
     fn the_disc_has_a_solid_rim_a_see_through_middle_and_clear_corners() {
         let px = disc_pixels();
         let alpha = |x: u32, y: u32| px[((y * DISC + x) * 4 + 3) as usize];
