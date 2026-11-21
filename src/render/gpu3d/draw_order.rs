@@ -298,7 +298,7 @@ impl Renderer3D {
 /// did. Particles as far as the model are drawn after it. The particles
 /// left after the last model are drawn after every see-through model, as
 /// before (see `Renderer3D::draw_see_through`).
-pub(super) fn place_particles(
+pub(in crate::render) fn place_particles(
     depths: &[f32],
     placed: &mut usize,
     depth: f32,

@@ -124,6 +124,8 @@ use super::capabilities::GpuLimits;
 use crate::handle::{INDEX_MASK, write_slot};
 use crate::render::traffic::{self, Counted, MAX_WRITES, MIRRORED, Mirror, NewBuffer, Synced, Upload};
 pub(crate) use draw_order::StateChanges;
+#[cfg(test)]
+pub(super) use draw_order::place_particles;
 use effects::{EffectPass, Effects};
 use frame::*;
 use history::History;

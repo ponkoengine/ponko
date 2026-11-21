@@ -3,8 +3,8 @@
 //! marks, and each frame uploads only the parts that changed: particles
 //! that stood still, ribbons and lines that kept their shape and text that
 //! stayed the same cost nothing.
-use super::gpu3d::StateChanges;
 use super::gpu_textures::TextureTable;
+use super::gpu3d::StateChanges;
 use crate::d3::ParticleBlend as ParticleBlend3D;
 use crate::render::traffic::{MAX_WRITES, Synced, Upload};
 use crate::three::particles::{ParticleFrame, ParticleInstance, ParticleRun};
