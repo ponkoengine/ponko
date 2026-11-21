@@ -30,6 +30,12 @@ export const CHECK_TICKS = 150;
  */
 export const CASES = ["worker-panic", "gamepads", "gamepads-plain", "warning"];
 
+/**
+ * The fixture's threaded build has these features: its 3D culling check
+ * needs the 3D renderer's collection and its headless handle.
+ */
+export const FIXTURE_FEATURES = "3d,bench-internals";
+
 /** Where the ordinary build of the fixture goes for `--case gamepads-plain`. */
 export const PLAIN_DIR = "target/web/web_threads_plain";
 
@@ -108,7 +114,9 @@ export function checkReady(state) {
 /**
  * The problems with a check run on a cross-origin isolated page: the game
  * must have started workers and run query items, batch systems, a shared
- * hierarchy level and jobs on them, never on the page's thread.
+ * hierarchy level, at least two of the engine's own parallel passes (the
+ * retained 3D culling and the JSON world save among them) and jobs on them,
+ * never on the page's thread.
  */
 export function checkIsolated(state) {
   const problems = [];
@@ -122,6 +130,15 @@ export function checkIsolated(state) {
   expect(state.batch_threaded_runs > 0, "the scheduler sent no batch to the workers");
   expect(state.schedule_threads === true, "the scheduler says it has no threads");
   expect(state.hier_shared === true, "the hierarchy shared no level out to the workers");
+  const passes = state.passes_shared ?? [];
+  expect(
+    passes.length >= 2,
+    `the engine's own passes that went through the frame pool's runner: ${passes.length ? passes.join(", ") : "none"}, not at least 2`,
+  );
+  // Both sized by the frame pool's threads, not rayon's (1 on the page).
+  expect(passes.includes("three/shared_cull"), "the 3D culling didn't go through the frame pool's runner (three/shared_cull)");
+  expect(passes.includes("reflect/shared_save"), "the JSON world save didn't go through the frame pool's runner (reflect/shared_save)");
+  expect(Array.isArray(state.frame3d) && state.frame3d[0] > 0, `the 3D frame found no models to draw (frame3d: ${JSON.stringify(state.frame3d)})`);
   expect(state.wait_off_page === true, "the job waited for in setup ran on the page's thread");
   expect(state.job_off_page === true, "a job ran on the page's thread");
   expect(state.group === "ready", `the asset group from assets/ didn't load (${state.group})`);
@@ -153,6 +170,12 @@ export function checkSameResult(isolated, fallback) {
   const problems = [];
   if (isolated.checksum !== fallback.checksum) {
     problems.push(`the checksums differ: ${isolated.checksum} with threads, ${fallback.checksum} without`);
+  }
+  if (JSON.stringify(isolated.frame3d) !== JSON.stringify(fallback.frame3d)) {
+    problems.push(`the 3D frames differ: ${JSON.stringify(isolated.frame3d)} with threads, ${JSON.stringify(fallback.frame3d)} without`);
+  }
+  if (isolated.save_bytes !== fallback.save_bytes) {
+    problems.push(`the JSON saves differ in length: ${isolated.save_bytes} bytes with threads, ${fallback.save_bytes} without`);
   }
   if (isolated.group_bytes !== fallback.group_bytes) {
     problems.push(`the asset group read ${isolated.group_bytes} bytes with threads, ${fallback.group_bytes} without`);

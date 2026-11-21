@@ -147,6 +147,72 @@ fn split_toning_depth_of_field_and_the_sample_count_reach_the_engine_and_come_ba
     });
 }
 
+/// Version 2 adds thin objects in reflections (`Post::ssr_thin_objects`):
+/// they reach the engine and come back; a version 1 caller neither reads nor
+/// changes them, and blends with them off, as before version 2.
+#[test]
+fn thin_objects_reach_the_engine_in_version_2_and_version_1_callers_keep_todays_behaviour() {
+    run_ctx(|ctx| unsafe {
+        let mut p: PonkoPostEx = header(PONKO_POST_EX_VERSION);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut p), PONKO_OK);
+        assert!(!p.ssr_thin_objects, "off by default");
+        p.ssr_thin_objects = true;
+        assert_eq!(ponko_ctx_set_post_ex(ctx, &p), PONKO_OK, "{}", last_error());
+        let mut back: PonkoPostEx = header(PONKO_POST_EX_VERSION);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut back), PONKO_OK);
+        assert!(back.ssr_thin_objects);
+
+        let mut v1: PonkoPostEx = header(1);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut v1), PONKO_OK);
+        assert!(!v1.ssr_thin_objects, "a field past version 1 isn't written");
+        v1.post.exposure = 0.5;
+        assert_eq!(ponko_ctx_set_post_ex(ctx, &v1), PONKO_OK, "{}", last_error());
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut back), PONKO_OK);
+        assert_eq!(back.post.exposure, 0.5);
+        assert!(back.ssr_thin_objects, "nor read: it keeps its value");
+
+        let mut blended = v1;
+        blended.ssr_thin_objects = true;
+        let mut on = back;
+        on.version = 1;
+        assert_eq!(ponko_post_ex_lerp(&v1, &on, 1.0, &mut blended), PONKO_OK);
+        let mut from_v2: PonkoPostEx = header(PONKO_POST_EX_VERSION);
+        assert_eq!(ponko_post_ex_lerp(&back, &back, 1.0, &mut from_v2), PONKO_OK);
+        assert!(
+            blended.ssr_thin_objects,
+            "the output's field past version 1 is left alone"
+        );
+        assert!(from_v2.ssr_thin_objects, "version 2 blends it");
+    });
+}
+
+/// `PonkoGraphicsQuality` (ABI 2) has no field for thin objects: they follow
+/// the preset the struct is, so ultra set from C is ultra, as in Rust.
+#[test]
+fn a_quality_preset_from_c_sets_thin_objects_as_the_rust_preset_does() {
+    run_ctx(|ctx| unsafe {
+        let mut q: PonkoGraphicsQuality = std::mem::zeroed();
+        let mut level = 9;
+        let mut p: PonkoPostEx = header(PONKO_POST_EX_VERSION);
+        for (preset, thin) in [(3, true), (2, false), (0, false), (3, true)] {
+            assert_eq!(ponko_graphics_quality_preset(preset, &mut q), PONKO_OK);
+            assert_eq!(ponko_graphics_quality_level(&q, &mut level), PONKO_OK);
+            assert_eq!(level, preset, "the struct is the preset");
+            assert_eq!(ponko_ctx_set_graphics_quality(ctx, &q), PONKO_OK, "{}", last_error());
+            assert_eq!(ponko_ctx_post_ex(ctx, &mut p), PONKO_OK);
+            assert_eq!(p.ssr_thin_objects, thin, "preset {preset}");
+            assert_eq!(ponko_ctx_graphics_quality(ctx, &mut q), PONKO_OK);
+            assert_eq!(ponko_graphics_quality_level(&q, &mut level), PONKO_OK);
+            assert_eq!(level, preset, "and reads back as it");
+        }
+        // A custom struct leaves them as they are.
+        q.shadow_distance = 99.0;
+        assert_eq!(ponko_ctx_set_graphics_quality(ctx, &q), PONKO_OK);
+        assert_eq!(ponko_ctx_post_ex(ctx, &mut p), PONKO_OK);
+        assert!(p.ssr_thin_objects, "kept from ultra");
+    });
+}
+
 #[test]
 fn a_post_descriptor_out_of_range_is_refused_and_changes_nothing() {
     run_ctx(|ctx| unsafe {

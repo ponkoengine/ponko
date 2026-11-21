@@ -1195,6 +1195,8 @@ pub struct ponko::assets::Assets
 impl ponko::assets::Assets
 pub fn ponko::assets::Assets::add_background_source(&mut self, impl ponko::assets::AssetSource + core::marker::Send + core::marker::Sync)
 pub fn ponko::assets::Assets::add_source(&mut self, impl ponko::assets::AssetSource)
+pub fn ponko::assets::Assets::browser_saves(&self) -> alloc::vec::Vec<alloc::string::String>
+pub fn ponko::assets::Assets::browser_saves_persistent(&self) -> core::option::Option<bool>
 pub fn ponko::assets::Assets::has_source(&self, &str) -> bool
 pub fn ponko::assets::Assets::hot_reload(&self) -> bool
 pub fn ponko::assets::Assets::load_reflected_component_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
@@ -1204,6 +1206,7 @@ pub fn ponko::assets::Assets::load_strings(&mut self, &mut ponko_ecs::world::Wor
 pub fn ponko::assets::Assets::load_with<T>(&self, &str, impl core::ops::function::FnOnce(&[u8]) -> core::result::Result<T, ponko::error::Error>) -> core::result::Result<T, ponko::error::Error>
 pub fn ponko::assets::Assets::reloaded_files(&self) -> &[alloc::string::String]
 pub fn ponko::assets::Assets::reloaded_textures(&self) -> &[ponko::texture::Texture]
+pub fn ponko::assets::Assets::revert_browser_save(&self, &str) -> core::result::Result<bool, ponko::error::Error>
 pub fn ponko::assets::Assets::save_prefab(&mut self, &ponko_ecs::world::World, ponko_ecs::entity::Entity, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::save_scene(&self, &ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::try_load_resource<R: core::marker::Send + core::marker::Sync + 'static + serde_core::de::DeserializeOwned>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
@@ -8620,6 +8623,8 @@ pub struct ponko::prelude::Assets
 impl ponko::assets::Assets
 pub fn ponko::assets::Assets::add_background_source(&mut self, impl ponko::assets::AssetSource + core::marker::Send + core::marker::Sync)
 pub fn ponko::assets::Assets::add_source(&mut self, impl ponko::assets::AssetSource)
+pub fn ponko::assets::Assets::browser_saves(&self) -> alloc::vec::Vec<alloc::string::String>
+pub fn ponko::assets::Assets::browser_saves_persistent(&self) -> core::option::Option<bool>
 pub fn ponko::assets::Assets::has_source(&self, &str) -> bool
 pub fn ponko::assets::Assets::hot_reload(&self) -> bool
 pub fn ponko::assets::Assets::load_reflected_component_json<T: 'static>(&mut self, &mut ponko_ecs::world::World, &str, ponko_ecs::entity::Entity) -> core::result::Result<(), ponko::error::Error>
@@ -8629,6 +8634,7 @@ pub fn ponko::assets::Assets::load_strings(&mut self, &mut ponko_ecs::world::Wor
 pub fn ponko::assets::Assets::load_with<T>(&self, &str, impl core::ops::function::FnOnce(&[u8]) -> core::result::Result<T, ponko::error::Error>) -> core::result::Result<T, ponko::error::Error>
 pub fn ponko::assets::Assets::reloaded_files(&self) -> &[alloc::string::String]
 pub fn ponko::assets::Assets::reloaded_textures(&self) -> &[ponko::texture::Texture]
+pub fn ponko::assets::Assets::revert_browser_save(&self, &str) -> core::result::Result<bool, ponko::error::Error>
 pub fn ponko::assets::Assets::save_prefab(&mut self, &ponko_ecs::world::World, ponko_ecs::entity::Entity, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::save_scene(&self, &ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::assets::Assets::try_load_resource<R: core::marker::Send + core::marker::Sync + 'static + serde_core::de::DeserializeOwned>(&mut self, &mut ponko_ecs::world::World, &str) -> core::result::Result<(), ponko::error::Error>
@@ -11279,6 +11285,7 @@ pub ponko::render::Post::sharpen: f32
 pub ponko::render::Post::split_toning: ponko::render::SplitToning
 pub ponko::render::Post::ssr: f32
 pub ponko::render::Post::ssr_max_distance: f32
+pub ponko::render::Post::ssr_thin_objects: bool
 pub ponko::render::Post::taa_sharpness: f32
 pub ponko::render::Post::temperature: f32
 pub ponko::render::Post::tint: f32
@@ -14764,6 +14771,7 @@ pub fn ponko::water::FlowMap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core:
 impl core::marker::StructuralPartialEq for ponko::water::FlowMap
 pub struct ponko::water::Water
 impl ponko::water::Water
+pub fn ponko::water::Water::contacts_started(&self) -> u64
 pub fn ponko::water::Water::contains(&self, glam::f32::vec2::Vec2) -> bool
 pub fn ponko::water::Water::desc(&self) -> &ponko::water::WaterDesc
 pub fn ponko::water::Water::free(&mut self, &mut ponko::prelude::Ctx)

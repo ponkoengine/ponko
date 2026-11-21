@@ -29,7 +29,8 @@ impl Editor {
     /// step: a component as the file made it (or taken off if the file
     /// doesn't give it), a node attached elsewhere back on the file's
     /// parent, a deleted node (with the deleted nodes below it) spawned
-    /// again. Nothing changes if one of them fails.
+    /// again, a link to a parent in another scene that isn't there
+    /// forgotten. Nothing changes if one of them fails.
     pub fn revert_gltf(&mut self, ctx: &mut Ctx, root: Entity, which: &[GltfOverride]) -> Result<(), Error> {
         let mark = self.undo.len();
         // Deleted nodes first: the others may name them (a node put back
@@ -51,6 +52,19 @@ impl Editor {
     }
 
     fn revert_gltf_one(&mut self, ctx: &mut Ctx, root: Entity, o: &GltfOverride) -> Result<(), Error> {
+        if let GltfOverrideKind::MissingParent(_) = o.kind {
+            // The node is on the file's parent already: only its record
+            // forgets the link.
+            let link = ctx.set_waiting_link(root, &o.node, None)?;
+            if link.is_some() {
+                self.record(Undo::GltfLink {
+                    root,
+                    node: o.node.clone(),
+                    link,
+                });
+            }
+            return Ok(());
+        }
         let Some(name) = o.kind.component() else {
             // Deleted: the scene spawns it again; undo deletes it again.
             let back = ctx.restore_gltf_nodes(root, &o.node)?;
@@ -278,5 +292,156 @@ mod tests {
         assert_eq!(ctx.gltf_overrides(root).len(), 3, "one undo takes them all back");
         assert_eq!(ctx.world.get::<Hp>(crate_e), Some(&Hp(9.0)));
         assert_eq!(parent(&ctx, lamp), Some(shed));
+    }
+
+    /// The entity of node `path` of the scene of file `file`.
+    fn node_of(ctx: &mut Ctx, file: &Temp, path: &str) -> Entity {
+        let found: Vec<Entity> = ctx
+            .world
+            .query::<&GltfRoot>()
+            .iter()
+            .filter(|r| r.path == file.name)
+            .filter_map(|r| r.entity(path))
+            .collect();
+        assert_eq!(found.len(), 1, "one scene of {}", file.name);
+        found[0]
+    }
+
+    #[test]
+    fn undoing_the_delete_of_another_scenes_node_puts_the_node_attached_to_it_back_on_it_at_once() {
+        // Whichever scene spawned first (and is first among the records).
+        for posts_first in [false, true] {
+            undo_cross_scene_delete(posts_first);
+        }
+    }
+
+    fn undo_cross_scene_delete(posts_first: bool) {
+        let yard_file = Temp::new("undo-cross-yard", &yard(1.0));
+        let posts = Temp::new(
+            "undo-cross-posts",
+            &crate::three::cube_gltf(&json!([{ "name": "Post", "mesh": 0 }])),
+        );
+        let mut ctx = ctx();
+        let spawn =
+            |ctx: &mut Ctx, file: &Temp, x: f32| ctx.spawn_prefab(&file.name, T3::at(vec3(x, 0.0, 0.0))).unwrap();
+        if posts_first {
+            spawn(&mut ctx, &posts, 4.0);
+            spawn(&mut ctx, &yard_file, 0.0);
+        } else {
+            spawn(&mut ctx, &yard_file, 0.0);
+            spawn(&mut ctx, &posts, 4.0);
+        }
+        let (lamp, post) = (node_of(&mut ctx, &yard_file, "Lamp"), node_of(&mut ctx, &posts, "Post"));
+        ctx.edit(|ed, ctx| ed.set_parent(ctx, lamp, Some(post))).unwrap();
+        let lamp_at = at(&ctx, lamp);
+        let on_post = |ctx: &mut Ctx, what: &str| {
+            let (lamp, post) = (node_of(ctx, &yard_file, "Lamp"), node_of(ctx, &posts, "Post"));
+            assert!(
+                ctx.world.is_alive(lamp) && ctx.world.is_alive(post),
+                "{what} (posts first: {posts_first}): both there"
+            );
+            assert_eq!(
+                parent(ctx, lamp),
+                Some(post),
+                "{what} (posts first: {posts_first}): on the post"
+            );
+            assert!((at(ctx, lamp) - lamp_at).length() < 1e-4, "{what}: {}", at(ctx, lamp));
+        };
+
+        ctx.edit(|ed, ctx| ed.delete(ctx, post)).unwrap();
+        assert!(!ctx.world.is_alive(post));
+        ctx.edit(|ed, ctx| ed.undo(ctx)).unwrap();
+        on_post(&mut ctx, "undone");
+        ctx.record_gltf_overrides(None);
+        on_post(&mut ctx, "recorded");
+
+        ctx.edit(|ed, ctx| ed.redo(ctx)).unwrap();
+        let post = node_of(&mut ctx, &posts, "Post");
+        assert!(!ctx.world.is_alive(post), "redo deletes it again");
+        ctx.edit(|ed, ctx| ed.undo(ctx)).unwrap();
+        on_post(&mut ctx, "undone again");
+
+        ctx.edit(|ed, ctx| ed.play(ctx));
+        ctx.edit(|ed, ctx| ed.stop(ctx)).unwrap();
+        on_post(&mut ctx, "after Play and Stop");
+        // Deleted again, played and stopped while it is deleted, then undone.
+        let post = node_of(&mut ctx, &posts, "Post");
+        ctx.edit(|ed, ctx| ed.delete(ctx, post)).unwrap();
+        ctx.edit(|ed, ctx| ed.play(ctx));
+        ctx.edit(|ed, ctx| ed.stop(ctx)).unwrap();
+        ctx.edit(|ed, ctx| ed.undo(ctx)).unwrap();
+        on_post(&mut ctx, "undone after Play and Stop");
+        ctx.record_gltf_overrides(None);
+        ctx.edit(|ed, ctx| ed.play(ctx));
+        ctx.edit(|ed, ctx| ed.stop(ctx)).unwrap();
+        on_post(&mut ctx, "played again");
+    }
+
+    #[test]
+    fn a_link_to_a_scene_that_failed_to_load_is_listed_as_missing_and_reverts_with_undo() {
+        let yard_file = Temp::new("missing-yard", &yard(1.0));
+        let post_gltf = crate::three::cube_gltf(&json!([{ "name": "Post", "mesh": 0 }]));
+        let posts = Temp::new("missing-posts", &post_gltf);
+        let mut ctx = ctx();
+        ctx.spawn_prefab(&yard_file.name, T3::default()).unwrap();
+        ctx.spawn_prefab(&posts.name, T3::at(vec3(4.0, 0.0, 0.0))).unwrap();
+        let (lamp, post) = (node_of(&mut ctx, &yard_file, "Lamp"), node_of(&mut ctx, &posts, "Post"));
+        let lamp_at = at(&ctx, lamp);
+        ctx.edit(|ed, ctx| ed.set_parent(ctx, lamp, Some(post))).unwrap();
+        ctx.record_gltf_overrides(None);
+        let save = ctx.world.save();
+
+        // Opened again with the post's file broken: its scene stays out.
+        std::fs::write(&posts.file, "not a glTF file").unwrap();
+        let mut ctx = self::ctx();
+        ctx.replace_world(&save).unwrap();
+        assert_eq!(ctx.respawn_saved_gltf().len(), 1, "the posts don't load");
+        let root = ctx
+            .world
+            .query::<(Entity, &GltfRoot)>()
+            .iter()
+            .find(|(_, r)| r.path == yard_file.name)
+            .map(|(e, _)| e)
+            .unwrap();
+        let (lamp, wall) = (node(&ctx, root, "Lamp"), node(&ctx, root, "Wall"));
+        assert_eq!(parent(&ctx, lamp), Some(wall), "it waits on the file's parent");
+        let missing = GltfOverrideKind::MissingParent(format!("node \"Post\" of {}", posts.name));
+        let listed = |ctx: &Ctx| -> Vec<(String, GltfOverrideKind)> {
+            ctx.gltf_overrides(root).into_iter().map(|o| (o.node, o.kind)).collect()
+        };
+        assert_eq!(
+            listed(&ctx),
+            [("Shed/Wall/Lamp".to_string(), missing.clone())],
+            "said, not kept silently"
+        );
+        let saved_link = |ctx: &mut Ctx| {
+            ctx.record_gltf_overrides(None);
+            let save = ctx.world.save();
+            save["resources"]["GltfSceneSaves"]["scenes"][0]["overrides"]["Shed/Wall/Lamp"]["scene_parent"]["node"]
+                .as_str()
+                .map(str::to_string)
+        };
+        assert_eq!(saved_link(&mut ctx).as_deref(), Some("Post"), "kept while waiting");
+
+        let all = ctx.gltf_overrides(root);
+        ctx.edit(|ed, ctx| ed.revert_gltf(ctx, root, &all)).unwrap();
+        assert!(listed(&ctx).is_empty(), "{:?}", listed(&ctx));
+        assert_eq!(saved_link(&mut ctx), None, "forgotten");
+        assert_eq!(parent(&ctx, lamp), Some(wall));
+        assert!((at(&ctx, lamp) - lamp_at).length() < 1e-4, "where the file puts it");
+
+        ctx.edit(|ed, ctx| ed.undo(ctx)).unwrap();
+        assert_eq!(listed(&ctx), [("Shed/Wall/Lamp".to_string(), missing)], "undo");
+        assert_eq!(saved_link(&mut ctx).as_deref(), Some("Post"));
+        ctx.edit(|ed, ctx| ed.redo(ctx)).unwrap();
+        assert!(listed(&ctx).is_empty(), "redo");
+        ctx.edit(|ed, ctx| ed.undo(ctx)).unwrap();
+
+        // The file is fixed and its scene spawns: the kept link is made.
+        std::fs::write(&posts.file, &post_gltf).unwrap();
+        assert!(ctx.respawn_saved_gltf().is_empty());
+        let post = node_of(&mut ctx, &posts, "Post");
+        assert_eq!(parent(&ctx, lamp), Some(post), "on the post again");
+        assert!(listed(&ctx).iter().all(|(_, k)| *k == GltfOverrideKind::Parent(post)));
     }
 }

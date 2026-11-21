@@ -19,6 +19,11 @@ opens on the right of the window. It shows the game as it runs:
 - **Resources**: reflected resources, editable the same way.
 - **Systems**: each system's average time per frame, slowest bars longest.
   Sim systems are marked `(sim)`.
+- **GPU passes** (windowed games): each pass's GPU time from the latest timed
+  frame. A pass that ran but couldn't be timed (a pass with nothing to do, or
+  a backend that writes no timestamps for it) says "not timed" instead of
+  0 ms; see [which passes can be timed](performance.md#which-passes-can-be-timed).
+  In the editor it's under **Performance**.
 - **Debug drawing**: [debug drawing](debug-draw.md) on or off with how
   much it shows, each built-in view (colliders, navmesh, bounds, lights,
   hierarchy), how far the colliders view draws mesh triangles, and every

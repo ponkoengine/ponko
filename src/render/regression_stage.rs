@@ -248,7 +248,10 @@ impl Stage {
         self.render_timed(None);
     }
 
-    /// [`render`](Self::render), timing the GPU passes with `timer`.
+    /// [`render`](Self::render), timing the GPU passes with `timer`, as a
+    /// game's frame does: it collects finished readbacks and begins the
+    /// timer's frame itself (callers don't), and submits the timestamps'
+    /// resolve with the frame, in one submission.
     pub fn render_timed(&mut self, mut timer: Option<&mut super::timer::GpuTimer>) {
         if let Some(t) = &mut timer {
             t.collect(&self.device);
@@ -321,18 +324,20 @@ impl Stage {
             format: self.view_format,
             ..Default::default()
         });
-        let buffers = self.renderer.draw(
+        let mut buffers = self.renderer.draw(
             &self.device,
             &view,
             wgpu::Color::BLACK,
             &self.textures,
             timer.as_deref(),
         );
-        self.queue.submit(buffers);
         if let Some(t) = &mut timer {
             let mut encoder = self.device.create_command_encoder(&Default::default());
             t.resolve(&mut encoder);
-            self.queue.submit([encoder.finish()]);
+            buffers.push(encoder.finish());
+        }
+        self.queue.submit(buffers);
+        if let Some(t) = timer {
             t.submitted();
         }
     }

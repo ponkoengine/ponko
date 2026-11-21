@@ -152,7 +152,16 @@ Where it is worked out:
   WASM SIMD in a web build made for it (see [On the web](#on-the-web)).
 - **The CPU's queries** (`height_at`, `sample`, buoyancy) run the same
   FFT on the CPU at the time asked, once per moment (the last two are
-  kept), so what floats rides the waves that are drawn. A GPU test reads
+  kept), so what floats rides the waves that are drawn. Buoyancy and
+  `sample` also need the sway's speed, which costs about half a moment
+  more; when a moment worked out without it is asked again with it (a
+  WebGL2 upload, then buoyancy at the same time on the next fixed step),
+  the next moments are worked out with it from the start, so each is still
+  worked out once, until a moment so worked out goes unasked. A frame
+  of a WebGL2 sea with something floating at 128 cells costs 0.21 ms of
+  CPU field instead of 0.35 ms (0.93 instead of 1.55 ms at 256 cells;
+  `upload_and_buoyancy_frame_cost`, release, one thread, the medians of
+  seven runs alternating before and after on the busy machine below). A GPU test reads
   the drawn surface back and compares it with `height_at`: 9.9 mm worst
   with the GPU's FFT, 9.1 mm with the CPU's upload, on a 1.5 m sea; the
   GPU's field matches the CPU's to 6 mm (it runs in half floats).
@@ -217,12 +226,11 @@ frame on WebGL2. There is no update-rate setting: the field is worked out
 at the drawn frame's time, once per moment however many queries ask, and
 an older moment would leave floating bodies off the drawn waves.
 
-**WASM SIMD** is optional. Build with the `wasm-simd` feature and
-`simd128` for the whole module:
+**WASM SIMD** is optional. `web/build.sh --simd` turns it on: the
+`wasm-simd` feature and `simd128` for the whole module, always together:
 
 ```sh
-CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="-C target-feature=+simd128" \
-  web/build.sh --features 3d,wasm-simd my_game
+web/build.sh --simd --features 3d --bin my_game
 ```
 
 That makes a moment 1.4 to 1.6 times faster (0.08 ms saved at 128 cells,
@@ -232,7 +240,10 @@ no good, which is why the feature refuses to compile without the flag:
 `simd128` alone changed nothing (0.99 to 1.05 times), and rustfft's SIMD
 code alone made a moment three times slower (0.99 ms instead of 0.24 at
 128 cells), its SIMD functions called from code built without SIMD. The
-default build leaves both off, for older browsers.
+default build leaves both off, for older browsers. (By hand, the same
+build is `--features ponko/wasm-simd` with
+`CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="-C target-feature=+simd128"`,
+or the flag added to `RUSTFLAGS` if you set that.)
 
 ## Floating bodies
 
@@ -335,6 +346,16 @@ from `ponko::buoyancy_desc::box`, `sphere` or `from_points`:
 ```cpp
 {{#include ../../examples/cpp/guide.cpp:buoyancy_desc}}
 ```
+
+The ripples that wait for the water's next update (Rust
+`Water::waiting_contacts`) are `ponko_ctx_water_waiting_contacts` (C++
+`ctx.water_waiting_contacts(water)`). Each update takes three; a body whose
+ripple switch is off starts none, so a test sees the switch by its effect.
+The update drains the waiting ones every frame, so to ask only whether any
+started, read the running total (Rust `Water::contacts_started`,
+`ponko_ctx_water_started_contacts`, C++ `ctx.water_started_contacts(water)`)
+in a system that runs after physics, once with the switch on and once with it
+off: no maximum over the ticks needed.
 
 A sea from
 a spectrum is `PonkoWaterDesc` version 2: set `has_spectrum` and fill

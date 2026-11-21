@@ -208,6 +208,9 @@ impl Renderer3D {
                     .is_some_and(|a| a.half != (post.ao_half_resolution && ao_on))
                 || t.ao.as_ref().is_some_and(|a| a.temporal != (post.ao_temporal && ao_on))
                 || t.ssr.is_some() != self.screen.ssr_on
+                || t.ssr
+                    .as_ref()
+                    .is_some_and(|s| s.coarse_depth().is_some() != self.screen.ssr_thin)
                 || t.taa.is_some() != self.screen.taa_on
                 || t.velocity.is_some() != self.screen.velocity_on
                 || t.post.stale(&self.post, upscaled)
@@ -310,6 +313,7 @@ impl Renderer3D {
                 lit,
                 self.screen.ao_enabled,
                 self.no_spread.is_some(),
+                self.screen.ssr_thin,
             )
         });
         // With reflections, GTAO writes the first level of their image.

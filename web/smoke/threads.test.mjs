@@ -43,13 +43,16 @@ const isolatedRun = {
   batch_on_page: false,
   batch_threaded_runs: 160,
   hier_shared: true,
+  passes_shared: ["spatial/shared_rebuild", "flow/shared_directions", "three/shared_cull", "reflect/shared_save"],
+  frame3d: [5210, 9870, 64],
+  save_bytes: 437010,
   schedule_threads: true,
   wait_off_page: true,
   job_off_page: true,
   group: "ready",
   group_off_page: true,
   group_bytes: 966,
-  checksum: 83614676.95699096,
+  checksum: 88451852.95592952,
 };
 
 const plainRun = {
@@ -62,13 +65,16 @@ const plainRun = {
   batch_on_page: true,
   batch_threaded_runs: 0,
   hier_shared: false,
+  passes_shared: [],
+  frame3d: [5210, 9870, 64],
+  save_bytes: 437010,
   schedule_threads: false,
   wait_off_page: false,
   job_off_page: false,
   group: "ready",
   group_off_page: false,
   group_bytes: 966,
-  checksum: 83614676.95699096,
+  checksum: 88451852.95592952,
 };
 
 test("the isolation headers are the two that make a page cross-origin isolated", () => {
@@ -110,11 +116,27 @@ test("an isolated run passes only when workers ran the queries, batches and jobs
   assert.ok(problems.some((p) => p.includes("query items ran on the page's thread")));
   assert.ok(problems.some((p) => p.includes("no batch")));
   assert.ok(problems.some((p) => p.includes("hierarchy shared no level")));
+  assert.ok(problems.some((p) => p.includes("own passes that went through the frame pool's runner: none")));
   assert.ok(problems.some((p) => p.includes("a job ran on the page's thread")));
   assert.ok(problems.some((p) => p.includes("decoded on the page's thread")));
   // A group that couldn't read its file on a worker fails the check by name.
   const failed = checkIsolated({ ...isolatedRun, group: 'failed: "crab.png" not found in assets/' });
   assert.deepEqual(failed, [`the asset group from assets/ didn't load (failed: "crab.png" not found in assets/)`]);
+  // One of the engine's passes is not "at least two".
+  assert.deepEqual(checkIsolated({ ...isolatedRun, passes_shared: ["three/shared_cull"] }), [
+    "the engine's own passes that went through the frame pool's runner: three/shared_cull, not at least 2",
+    "the JSON world save didn't go through the frame pool's runner (reflect/shared_save)",
+  ]);
+  // The 3D culling and the save must each go there, by name.
+  const without = (name) => isolatedRun.passes_shared.filter((p) => p !== name);
+  assert.deepEqual(checkIsolated({ ...isolatedRun, passes_shared: without("three/shared_cull") }), [
+    "the 3D culling didn't go through the frame pool's runner (three/shared_cull)",
+  ]);
+  assert.deepEqual(checkIsolated({ ...isolatedRun, passes_shared: without("reflect/shared_save") }), [
+    "the JSON world save didn't go through the frame pool's runner (reflect/shared_save)",
+  ]);
+  // A build without the 3D features collects no 3D frame.
+  assert.deepEqual(checkIsolated({ ...isolatedRun, frame3d: null }), ["the 3D frame found no models to draw (frame3d: null)"]);
   // One worker is not "more than one".
   assert.equal(checkIsolated({ ...isolatedRun, par_threads: 1 }).length, 1);
 });
@@ -129,6 +151,8 @@ test("both runs must simulate the same world", () => {
   assert.deepEqual(checkSameResult(isolatedRun, plainRun), []);
   assert.equal(checkSameResult(isolatedRun, { ...plainRun, checksum: 1 }).length, 1);
   assert.equal(checkSameResult(isolatedRun, { ...plainRun, group_bytes: 0 }).length, 1);
+  assert.equal(checkSameResult(isolatedRun, { ...plainRun, frame3d: [5210, 9871, 64] }).length, 1);
+  assert.equal(checkSameResult(isolatedRun, { ...plainRun, save_bytes: 1 }).length, 1);
 });
 
 test("the summary compares medians and keeps a speed-up inside the noise from counting", () => {

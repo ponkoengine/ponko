@@ -36,6 +36,8 @@ pub(super) struct Inputs<'a> {
     pub stats: RenderStats,
     /// Smoothed GPU time per pass, in the order they run.
     pub passes: &'a [GpuPass],
+    /// The passes of the latest timed frame that ran but couldn't be timed.
+    pub passes_not_timed: &'a [&'static str],
     /// The active graphics quality settings, if the build has them.
     pub quality: Option<Value>,
     /// The render pipeline cache since the renderer started.
@@ -191,10 +193,11 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
                 "other": other,
             });
             let timed = detail.gpu_timestamps && detail.gpu_frames_timed > 0;
-            let (frame, passes) = if !detail.gpu_timestamps {
+            let (frame, passes, not_timed) = if !detail.gpu_timestamps {
                 gone("gpu_ms.frame", NO_TIMESTAMPS);
                 gone("gpu_ms.passes", NO_TIMESTAMPS);
-                (Value::Null, Value::Null)
+                gone("gpu_ms.not_timed", NO_TIMESTAMPS);
+                (Value::Null, Value::Null, Value::Null)
             } else if !timed {
                 let why = match inputs.gpu_timing {
                     crate::perf::GpuTiming::Off => TIMING_OFF,
@@ -202,7 +205,8 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
                 };
                 gone("gpu_ms.frame", why);
                 gone("gpu_ms.passes", why);
-                (Value::Null, Value::Null)
+                gone("gpu_ms.not_timed", why);
+                (Value::Null, Value::Null, Value::Null)
             } else {
                 let passes: Vec<Value> = inputs
                     .passes
@@ -216,7 +220,7 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
                         Value::Null
                     }
                 };
-                (frame, Value::Array(passes))
+                (frame, Value::Array(passes), json!(inputs.passes_not_timed))
             };
             let frustum_culled = match inputs.frustum_culled {
                 Ok(n) => json!(n),
@@ -248,7 +252,7 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
             (
                 timing,
                 cpu,
-                json!({ "frame": frame, "passes": passes }),
+                json!({ "frame": frame, "passes": passes, "not_timed": not_timed }),
                 counts,
                 uploads,
             )
@@ -369,6 +373,7 @@ pub(super) fn quality_json(s: &crate::render::SceneSettings) -> Value {
         "ao_slices": p.ambient_occlusion.slices,
         "ao_steps": p.ambient_occlusion.steps,
         "ssr": p.ssr,
+        "ssr_thin_objects": p.ssr_thin_objects,
         "gi": l.gi.enabled,
         "anti_aliasing": format!("{:?}", p.anti_aliasing).to_lowercase(),
     })
@@ -487,10 +492,20 @@ mod tests {
     }
 
     fn inspect_with(source: Source, gpu_ms: Option<f32>, gpu_timing: crate::perf::GpuTiming) -> Value {
+        inspect_not_timed(source, gpu_ms, gpu_timing, &[])
+    }
+
+    fn inspect_not_timed(
+        source: Source,
+        gpu_ms: Option<f32>,
+        gpu_timing: crate::perf::GpuTiming,
+        not_timed: &[&'static str],
+    ) -> Value {
         render_inspector(&Inputs {
             source,
             stats: stats(gpu_ms),
             passes: &PASSES,
+            passes_not_timed: not_timed,
             quality: Some(json!({ "level": "high" })),
             pipelines: PipelineStats {
                 misses: 2,
@@ -686,6 +701,7 @@ mod tests {
             source: drawn(true, 5),
             stats: stats(Some(2.0)),
             passes: &PASSES,
+            passes_not_timed: &[],
             quality: None,
             pipelines: PipelineStats::default(),
             memory: None,
@@ -707,6 +723,7 @@ mod tests {
             source: drawn(false, 0),
             stats: stats(None),
             passes: &[],
+            passes_not_timed: &[],
             quality: None,
             pipelines: PipelineStats::default(),
             memory: None,
@@ -756,6 +773,36 @@ mod tests {
             .collect();
         assert_eq!(names, [json!("shadows 0"), json!("opaque")]);
         assert!(v["unavailable"].get("gpu_ms.frame").is_none());
+    }
+
+    #[test]
+    fn passes_that_ran_but_could_not_be_timed_are_listed_not_shown_as_zero() {
+        let v = inspect_not_timed(
+            drawn(true, 5),
+            Some(2.0),
+            crate::perf::GpuTiming::Auto,
+            &["crowd cull", "gi bake"],
+        );
+        assert_eq!(v["gpu_ms"]["not_timed"], json!(["crowd cull", "gi bake"]));
+        let timed: Vec<_> = v["gpu_ms"]["passes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].clone())
+            .collect();
+        assert_eq!(
+            timed,
+            [json!("shadows 0"), json!("opaque")],
+            "not-timed passes stay out of `passes`"
+        );
+        // Every pass was timed: an empty list, not null.
+        let v = inspect(drawn(true, 5), Some(2.0));
+        assert_eq!(v["gpu_ms"]["not_timed"], json!([]));
+        // Nothing was timed at all: null with a reason, never a list.
+        let v = inspect_not_timed(drawn(false, 0), None, crate::perf::GpuTiming::Auto, &["crowd cull"]);
+        assert!(v["gpu_ms"]["not_timed"].is_null(), "{v}");
+        assert!(v["unavailable"]["gpu_ms.not_timed"].is_string(), "{v}");
+        assert_nulls_explained(&v);
     }
 
     #[test]
@@ -844,6 +891,7 @@ mod tests {
             source: Source::Headless,
             stats: RenderStats::default(),
             passes: &[],
+            passes_not_timed: &[],
             quality: None,
             pipelines: PipelineStats::default(),
             memory: None,
@@ -897,6 +945,7 @@ mod state_change_tests {
             }),
             stats: RenderStats::default(),
             passes: &[],
+            passes_not_timed: &[],
             quality: None,
             pipelines: PipelineStats::default(),
             memory: None,

@@ -283,3 +283,150 @@ fn bad_water_descriptors_are_refused() {
         ponko_world_free(world);
     }
 }
+
+/// What the ripple test saw: the lake, the box and how many contacts had
+/// started on the lake by the last step.
+#[derive(Default)]
+struct Splash {
+    state: State,
+    lake: u64,
+    ripples: bool,
+    started: u64,
+}
+
+unsafe extern "C" fn drop_box(ctx: *mut PonkoCtx, user: *mut c_void) {
+    unsafe {
+        let s = &mut *user.cast::<Splash>();
+        let w = ponko_ctx_world(ctx);
+        assert_eq!(ponko_transform3d_component(w, &mut s.state.transform), PONKO_OK);
+        assert_eq!(ponko_rigid_body3d_component(w, &mut s.state.body), PONKO_OK);
+        assert_eq!(ponko_collider3d_component(w, &mut s.state.collider), PONKO_OK);
+        let mut lake = blank();
+        assert_eq!(
+            ponko_water_desc_lake(&mut lake, v2(0.0, 0.0), v2(20.0, 20.0), 0.0),
+            PONKO_OK
+        );
+        assert_eq!(ponko_ctx_spawn_water(ctx, &lake, &mut s.lake), PONKO_OK);
+        let mut collider = ponko_collider3d_box(v3(0.8, 0.8, 0.8));
+        collider.density = 500.0;
+        let falling = body(ctx, &s.state, v3(1.0, 1.5, 0.0), collider);
+        // SAFETY: a plain C struct; zero is a valid bit pattern for every field.
+        let mut d: PonkoBuoyancyDesc = std::mem::zeroed();
+        (d.struct_size, d.version) = (size_of::<PonkoBuoyancyDesc>() as u32, PONKO_BUOYANCY_DESC_VERSION);
+        assert_eq!(ponko_buoyancy_desc_box(&mut d, v3(0.8, 0.8, 0.8)), PONKO_OK);
+        d.ripples = s.ripples;
+        assert_eq!(ponko_ctx_set_buoyancy(ctx, falling, &d), PONKO_OK);
+    }
+}
+
+unsafe extern "C" fn count_started(ctx: *mut PonkoCtx, user: *mut c_void) {
+    unsafe {
+        let s = &mut *user.cast::<Splash>();
+        let mut n = u64::MAX;
+        assert_eq!(ponko_ctx_water_started_contacts(ctx, s.lake, &mut n), PONKO_OK);
+        s.started = n;
+    }
+}
+
+/// Drops a box into a still lake with its ripple switch at `ripples`; returns
+/// how many ripples had started on the lake after the last step.
+fn splashed(ripples: bool) -> u64 {
+    let mut s = Splash {
+        ripples,
+        ..Splash::default()
+    };
+    let user = (&raw mut s).cast::<c_void>();
+    unsafe {
+        let g = ponko_game_new(c"splash".as_ptr(), 1, 1);
+        assert_eq!(ponko_game_physics3d(g, v3(0.0, -9.81, 0.0)), PONKO_OK);
+        assert_eq!(ponko_game_water(g), PONKO_OK);
+        assert_eq!(
+            ponko_game_sim_system(g, c"count".as_ptr(), 1, Some(count_started), user),
+            PONKO_OK
+        );
+        let mut world = null_mut();
+        // 2 s at the default 50 steps a second: the box falls in and settles.
+        assert_eq!(
+            ponko_game_run_headless(g, 100, Some(drop_box), user, &mut world),
+            PONKO_OK
+        );
+        ponko_world_free(world);
+    }
+    s.started
+}
+
+#[test]
+fn a_body_falling_in_queues_ripples_only_with_its_ripple_switch_on() {
+    assert!(splashed(true) > 0, "the splash queued contact ripples");
+    assert_eq!(splashed(false), 0, "a body with the switch off starts none");
+}
+
+#[test]
+fn waiting_contacts_count_what_touch_queued_and_refuse_what_is_no_water() {
+    let mut s = Splash::default();
+    let user = (&raw mut s).cast::<c_void>();
+    unsafe {
+        let g = ponko_game_new(c"touch".as_ptr(), 1, 1);
+        assert_eq!(ponko_game_water(g), PONKO_OK);
+        let mut world = null_mut();
+        assert_eq!(
+            ponko_game_run_headless(g, 0, Some(drop_box_free), user, &mut world),
+            PONKO_OK
+        );
+        ponko_world_free(world);
+    }
+    unsafe extern "C" fn drop_box_free(ctx: *mut PonkoCtx, user: *mut c_void) {
+        unsafe {
+            let s = &mut *user.cast::<Splash>();
+            let mut lake = blank();
+            assert_eq!(
+                ponko_water_desc_lake(&mut lake, v2(0.0, 0.0), v2(20.0, 20.0), 0.0),
+                PONKO_OK
+            );
+            assert_eq!(ponko_ctx_spawn_water(ctx, &lake, &mut s.lake), PONKO_OK);
+            let mut n = u32::MAX;
+            assert_eq!(ponko_ctx_water_waiting_contacts(ctx, s.lake, &mut n), PONKO_OK);
+            assert_eq!(n, 0);
+            for i in 0..3 {
+                assert_eq!(
+                    ponko_ctx_water_touch(ctx, s.lake, v2(i as f32, 0.0), 0.5, 0.1),
+                    PONKO_OK
+                );
+            }
+            assert_eq!(
+                ponko_ctx_water_touch(ctx, s.lake, v2(500.0, 0.0), 0.5, 0.1),
+                PONKO_OK,
+                "outside the ripple area: dropped"
+            );
+            assert_eq!(ponko_ctx_water_waiting_contacts(ctx, s.lake, &mut n), PONKO_OK);
+            assert_eq!(n, 3);
+            let mut started = u64::MAX;
+            assert_eq!(ponko_ctx_water_started_contacts(ctx, s.lake, &mut started), PONKO_OK);
+            assert_eq!(started, 3, "the dropped one isn't counted");
+            assert_eq!(
+                ponko_ctx_water_started_contacts(ctx, 0xdead_beef, &mut started),
+                PONKO_NOT_FOUND
+            );
+            assert_eq!(
+                ponko_ctx_water_started_contacts(ctx, s.lake, null_mut()),
+                PONKO_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                ponko_ctx_water_started_contacts(std::ptr::null_mut(), s.lake, &mut started),
+                PONKO_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                ponko_ctx_water_waiting_contacts(ctx, 0xdead_beef, &mut n),
+                PONKO_NOT_FOUND
+            );
+            assert_eq!(
+                ponko_ctx_water_waiting_contacts(ctx, s.lake, null_mut()),
+                PONKO_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                ponko_ctx_water_waiting_contacts(std::ptr::null_mut(), s.lake, &mut n),
+                PONKO_INVALID_ARGUMENT
+            );
+        }
+    }
+}

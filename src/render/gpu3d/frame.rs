@@ -112,7 +112,110 @@ pub(super) fn cluster_depth(frame: &Frame3D) -> [f32; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::split_elapsed;
+    use super::{FrameUniform, split_elapsed};
+
+    /// Every field of [`FrameUniform`], in order, with its offset: a field
+    /// added to the struct and not here fails
+    /// `every_frame_field_is_where_each_shader_reads_it`.
+    macro_rules! offsets {
+        ($($field:ident),* $(,)?) => {
+            [$((stringify!($field), std::mem::offset_of!(FrameUniform, $field))),*]
+        };
+    }
+
+    /// The `FrameUniform` fields as this file declares them, in order.
+    fn declared_fields() -> Vec<&'static str> {
+        let source = include_str!("frame.rs");
+        let body = source
+            .split_once("pub(super) struct FrameUniform {")
+            .and_then(|(_, rest)| rest.split_once("\n}"))
+            .expect("the struct is in this file")
+            .0;
+        body.lines()
+            .filter_map(|line| line.trim().strip_prefix("pub(super) "))
+            .filter_map(|line| line.split_once(':').map(|(name, _)| name))
+            .collect()
+    }
+
+    /// The members of WGSL struct `Frame` in `source`: names, offsets and
+    /// the struct's size, as naga lays them out (the GPU's layout).
+    fn shader_frame(source: &str) -> (Vec<(String, usize)>, usize) {
+        let module = wgpu::naga::front::wgsl::parse_str(source).unwrap_or_else(|e| panic!("{e}"));
+        let (_, ty) = module
+            .types
+            .iter()
+            .find(|(_, t)| t.name.as_deref() == Some("Frame"))
+            .expect("a Frame struct");
+        let wgpu::naga::TypeInner::Struct { members, span } = &ty.inner else {
+            panic!("Frame must be a struct");
+        };
+        let members = members
+            .iter()
+            .map(|m| (m.name.clone().unwrap_or_default(), m.offset as usize))
+            .collect();
+        (members, *span as usize)
+    }
+
+    /// The Rust uniform, the engine's `mesh.wgsl` (as composed) and the
+    /// cook's copy of the prelude (`ponko_cli`'s `mesh_prelude.wgsl`, which
+    /// checks a game's shaders before they ship) agree field by field: the
+    /// same names in the same order at the same offsets, and the same size.
+    /// The split clock (`time_seconds`, `time_fraction`) sits right after
+    /// `time` in all three, so a clock tick is one contiguous write.
+    #[test]
+    fn every_frame_field_is_where_each_shader_reads_it() {
+        let rust = offsets!(
+            view_proj,
+            sun_view_proj,
+            caster_view_proj,
+            camera,
+            sun_dir,
+            sun_color,
+            sky,
+            ground,
+            shadow,
+            cascade_texel,
+            time,
+            time_seconds,
+            time_fraction,
+            inv_view_proj,
+            screen,
+            atmosphere,
+            sky_light,
+            fog,
+            fog_color,
+            night,
+            fog_far,
+            cluster_depth,
+            cluster_view_proj,
+            light_view_proj,
+            light_rect,
+            light_shadow,
+            probes,
+            unjittered_view_proj,
+            previous_view_proj,
+            reprojection,
+            jitter,
+            gi,
+            sky_params,
+            sky_kit,
+        );
+        let names: Vec<&str> = rust.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, declared_fields(), "every field of FrameUniform is listed here");
+        let engine = super::super::compose_shader("");
+        let cook = include_str!("../../../crates/ponko_cli/src/cook/shaders/mesh_prelude.wgsl");
+        for (what, source) in [("mesh.wgsl", engine.as_str()), ("the cook's mesh_prelude.wgsl", cook)] {
+            let (members, span) = shader_frame(source);
+            let shader: Vec<(&str, usize)> = members.iter().map(|(n, o)| (n.as_str(), *o)).collect();
+            assert_eq!(shader, rust, "{what}: the Frame struct's fields and offsets");
+            assert_eq!(span, size_of::<FrameUniform>(), "{what}: the Frame struct's size");
+        }
+        // The two clocks next to each other: one 32-byte run.
+        let at = |field: &str| rust.iter().find(|(name, _)| *name == field).unwrap().1;
+        assert_eq!(at("time_seconds"), at("time") + 16);
+        assert_eq!(at("time_fraction"), at("time_seconds") + 8);
+        assert_eq!(at("inv_view_proj"), at("time") + 32);
+    }
 
     #[test]
     fn shader_time_preserves_submilliseconds_at_ten_hours_and_after_days() {

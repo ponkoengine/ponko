@@ -77,6 +77,8 @@ pub(crate) enum Dialog {
     Stop {
         keep: Vec<(crate::editor::play::PlayEdit, bool)>,
     },
+    /// The files saved in the browser (web builds): revert or delete them.
+    BrowserSaves,
 }
 
 /// The editor's state beyond the inspector's panels.
@@ -298,7 +300,8 @@ impl Panels {
         let now = web_time::Instant::now();
         match ctx.edit(|ed, ctx| ed.check_disk(ctx, now)) {
             Some(DiskChange::Reloaded) => {
-                self.status = Some(format!("{} changed on disk: opened again", ctx.editor.doc.name()));
+                self.error = None;
+                self.opened(ctx, format!("{} changed on disk: opened again", ctx.editor.doc.name()));
                 self.select(None, false);
             }
             Some(DiskChange::Conflict) | None => {}
@@ -369,6 +372,7 @@ impl Panels {
                 });
                 self.scene.forget_assets();
                 self.prefabs = None;
+                self.asset_changed(&path);
                 true
             }
             None => false,
@@ -496,6 +500,15 @@ impl Panels {
                     self.download(ctx);
                     ui.close();
                 }
+                if self.browser_storage()
+                    && ui
+                        .button("Saved in this browser…")
+                        .on_hover_text("The files saved here instead of the build's: revert or delete them")
+                        .clicked()
+                {
+                    self.set_dialog(Some(Dialog::BrowserSaves));
+                    ui.close();
+                }
                 let selected = self.selected.is_some();
                 if ui
                     .add_enabled(selected, Button::new("Save selection as prefab…"))
@@ -605,7 +618,7 @@ impl Panels {
     fn reload(&mut self, ctx: &mut Ctx) {
         let reloaded = ctx.edit(|ed, ctx| ed.reload(ctx)).map_err(String::from);
         if self.report(reloaded).is_some() {
-            self.status = Some(format!("opened {} again", ctx.editor.doc.name()));
+            self.opened(ctx, format!("opened {} again", ctx.editor.doc.name()));
             self.select(None, false);
         }
     }
@@ -650,6 +663,12 @@ impl Panels {
             if ctx.editor.playing() {
                 ui.colored_label(Color32::from_rgb(120, 200, 255), "playing: Stop puts the world back");
             }
+            if self.browser_storage()
+                && let Some(warning) = crate::editor::web::persistence().warning()
+            {
+                ui.colored_label(Color32::from_rgb(255, 190, 60), BROWSER_MAY_CLEAR)
+                    .on_hover_text(warning);
+            }
             ui.separator();
             if let Some(error) = &self.error {
                 ui.colored_label(Color32::LIGHT_RED, error);
@@ -687,6 +706,7 @@ impl Panels {
             .default_open(false)
             .show(ui, |ui| {
                 self.frame_graph(ui);
+                super::gpu_passes(ui, ctx);
                 super::systems(ui, ctx);
             });
     }
@@ -709,6 +729,7 @@ impl Panels {
             Dialog::New => "New scene",
             Dialog::Close => "Unsaved changes",
             Dialog::Stop { .. } => "Stop",
+            Dialog::BrowserSaves => "Saved in this browser",
         };
         egui::Window::new(title)
             .collapsible(false)
@@ -783,6 +804,7 @@ impl Panels {
                         } else if ui.button("Save").clicked() || (enter && !path.is_empty()) {
                             self.save_as(ctx, path, *kind);
                             if self.error.is_none() {
+                                self.asset_changed(path);
                                 if self.browser_storage() {
                                     self.status = Some(saved_in_browser(path));
                                 }
@@ -836,6 +858,9 @@ impl Panels {
                 Dialog::Stop { keep } => {
                     done = self.stop_dialog(ui, ctx, keep, enter);
                 }
+                Dialog::BrowserSaves => {
+                    done = self.browser_saves_dialog(ui, ctx);
+                }
                 Dialog::Close => {
                     ui.label(format!("Save the changes to {} before closing?", ctx.editor.doc.name()));
                     ui.horizontal(|ui| {
@@ -869,17 +894,96 @@ impl Panels {
         }
     }
 
+    /// File > Saved in this browser: each file saved there, its size, and
+    /// Revert (the build has the file) or Delete (it doesn't). Returns
+    /// whether it was closed.
+    fn browser_saves_dialog(&mut self, ui: &mut Ui, ctx: &mut Ctx) -> bool {
+        let saved = crate::editor::web::saved();
+        let mut revert = None;
+        if let Some(warning) = crate::editor::web::persistence().warning() {
+            ui.colored_label(Color32::from_rgb(255, 190, 60), warning);
+        }
+        if saved.is_empty() {
+            ui.label("Nothing is saved in this browser: the game reads the build's files.");
+        } else {
+            ui.label("Read instead of the build's files, on this page and after a reload:");
+            ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                egui::Grid::new("ponko-browser-saves").striped(true).show(ui, |ui| {
+                    for file in &saved {
+                        ui.label(RichText::new(&file.name).monospace());
+                        ui.label(RichText::new(byte_size(file.bytes)).weak());
+                        let (label, hover) = if file.shipped {
+                            ("Revert", "Drop the saved copy: the build's file is read again")
+                        } else {
+                            ("Delete", "Drop the saved file: the build has none")
+                        };
+                        if ui.button(label).on_hover_text(hover).clicked() {
+                            revert = Some(file.clone());
+                        }
+                        ui.end_row();
+                    }
+                });
+            });
+        }
+        if let Some(file) = revert {
+            self.revert_browser_save(ctx, &file);
+        }
+        ui.button("Close").clicked()
+    }
+
+    /// Reverts `file`, saved in the browser, to the build's file (or
+    /// deletes it); the document is opened again if it was that file and
+    /// had no unsaved changes.
+    fn revert_browser_save(&mut self, ctx: &mut Ctx, file: &crate::editor::web::Saved) {
+        let name = &file.name;
+        let reverted = ctx.assets.revert_browser_save(name).map_err(String::from);
+        if self.report(reverted).is_none() {
+            return;
+        }
+        self.scene.forget_assets();
+        self.prefabs = None;
+        self.asset_changed(name);
+        if !file.shipped {
+            self.status = Some(format!("deleted {name} from this browser"));
+            return;
+        }
+        let is_doc = ctx.editor.doc.path.as_deref() == Some(name.as_str());
+        if is_doc && !ctx.editor.dirty() {
+            self.open_file(ctx, name);
+            if self.error.is_none() {
+                self.status = Some(format!("reverted {name} to the build's file and opened it again"));
+            }
+            return;
+        }
+        self.status = Some(format!("reverted {name} to the build's file"));
+    }
+
     /// The asset browser's list (scenes, prefabs, meshes), read once.
     pub(super) fn asset_list(&mut self, ctx: &Ctx) -> crate::editor::AssetList {
         self.scene.asset_list(ctx)
     }
 }
 
+/// The status bar's note when the browser refused persistent storage (its
+/// hover text says the rest).
+const BROWSER_MAY_CLEAR: &str = "the browser may clear saves";
+
 /// A one-line path field that has the keyboard while its dialog is open.
 fn path_field(ui: &mut Ui, path: &mut String) {
     let field = ui.add(TextEdit::singleline(path).desired_width(280.0));
     if !field.has_focus() && !field.lost_focus() {
         field.request_focus();
+    }
+}
+
+/// `bytes` for people: "512 B", "3.4 KB".
+fn byte_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
 
@@ -1469,6 +1573,132 @@ mod tests {
     }
 
     #[test]
+    fn the_web_editor_s_asset_tiles_show_thumbnails_made_from_the_files_in_memory() {
+        // A web build's files, by name: no folder on disk has them.
+        let tile =
+            std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cook/source/tile.png"))
+                .unwrap();
+        let scene = br#"{"format":"ponko-world","entities":[
+            {"entity":0,"components":{"Transform2D":{"position":[0.0,0.0]}}}]}"#;
+        let prefab = br#"{"format":"ponko-prefab","version":1,
+            "components":{"Sprite":{"texture":"web-only/tile.png"}}}"#;
+        let files: std::collections::HashMap<String, Vec<u8>> = [
+            ("web-only/tile.png", tile),
+            ("web-only/one.json", scene.to_vec()),
+            ("web-only/crate.json", prefab.to_vec()),
+        ]
+        .into_iter()
+        .map(|(n, b)| (n.to_string(), b))
+        .collect();
+        for name in files.keys() {
+            assert!(crate::assets::resolve(name).is_err(), "{name} is not on disk");
+        }
+        let read = move |name: &str| files.get(name).cloned();
+        let names = ["web-only/tile.png", "web-only/one.json", "web-only/crate.json"];
+        let list = crate::editor::browse_names(names, &read);
+        assert_eq!(list.textures.len() + list.scenes.len() + list.prefabs.len(), 3);
+
+        let (egui, mut p, mut ctx) = web_editor();
+        p.scene.assets = Some(list);
+        let panel = &mut p.app.as_mut().unwrap().assets;
+        panel.root = Some(crate::editor::thumbs::Source::Memory(std::sync::Arc::new(read)));
+        panel.selected = Some("web-only/tile.png".into());
+        let textures = egui.tex_manager().read().num_allocated();
+        let shapes = with_thumbnails(&egui, &mut p, &mut ctx);
+        let made = egui.tex_manager().read().num_allocated() - textures;
+        assert!(made >= 3, "a thumbnail texture per tile: {made}");
+        assert!(
+            text_at(&shapes, |t| t.starts_with("texture, ") && t.contains('×')).is_some(),
+            "the details read the picture's size from memory: {:?}",
+            texts(&shapes)
+        );
+    }
+
+    #[test]
+    fn the_web_editor_lists_what_is_saved_in_the_browser_and_reverts_or_deletes_it() {
+        use crate::editor::web::test_browser;
+        let doc = TempAsset::new("browser-revert");
+        let (egui, mut p, mut ctx) = web_editor();
+        let e = the_entity(&mut ctx);
+        ctx.edit(|ed, ctx| ed.rename(ctx, e, "Shipped")).unwrap();
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::S)]);
+        answer_path_field(&egui, &mut p, &mut ctx, Some(&doc.name));
+        assert!(p.error.is_none(), "{:?}", p.error);
+        // The browser keeps a later save of the document over the build's
+        // file, and a file the build doesn't have.
+        let shipped = std::fs::read(&doc.file).unwrap();
+        test_browser::keep(&doc.name, r#"{"format":"ponko-world","entities":[]}"#, Some(&shipped));
+        test_browser::keep("levels/mine.json", "{}", None);
+
+        click_text(&egui, &mut p, &mut ctx, |t| t == "File");
+        click_text(&egui, &mut p, &mut ctx, |t| t == "Saved in this browser…");
+        assert_eq!(p.dialog(), Some(&Dialog::BrowserSaves));
+        // The new window lays itself out on its first frame.
+        frame(&egui, &mut p, &mut ctx, vec![]);
+        let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+        for listed in [doc.name.as_str(), "levels/mine.json", "Revert", "Delete", "2 B"] {
+            assert!(shown.iter().any(|t| t == listed), "{listed} is shown: {shown:?}");
+        }
+
+        click_text(&egui, &mut p, &mut ctx, |t| t == "Delete");
+        assert!(p.error.is_none(), "{:?}", p.error);
+        assert_eq!(p.status.as_deref(), Some("deleted levels/mine.json from this browser"));
+        assert_eq!(ctx.assets.browser_saves(), std::slice::from_ref(&doc.name));
+        // One row fewer: the window shrinks.
+        frame(&egui, &mut p, &mut ctx, vec![]);
+        click_text(&egui, &mut p, &mut ctx, |t| t == "Revert");
+        assert!(p.error.is_none(), "{:?}", p.error);
+        assert_eq!(
+            p.status.as_deref(),
+            Some(format!("reverted {} to the build's file and opened it again", doc.name).as_str())
+        );
+        assert!(ctx.assets.browser_saves().is_empty());
+        assert_eq!(ctx.editor.doc.path.as_deref(), Some(doc.name.as_str()));
+        assert!(
+            ctx.world
+                .query::<&crate::hierarchy::EntityName>()
+                .iter()
+                .any(|n| n.0 == "Shipped"),
+            "the build's file is the document again"
+        );
+        let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+        assert!(
+            shown.iter().any(|t| t.starts_with("Nothing is saved in this browser")),
+            "{shown:?}"
+        );
+        click_text(&egui, &mut p, &mut ctx, |t| t == "Close");
+        assert_eq!(p.dialog(), None);
+    }
+
+    #[test]
+    fn the_web_editor_says_when_the_browser_refused_to_keep_its_saves() {
+        use crate::editor::web::{Persistence, test_browser};
+        let may_clear = |shown: &[String]| shown.iter().any(|t| t == super::BROWSER_MAY_CLEAR);
+        let (egui, mut p, mut ctx) = web_editor();
+        // Not answered yet, then granted: nothing to warn about.
+        assert!(!may_clear(&texts(&drawn(&egui, &mut p, &mut ctx, vec![]))));
+        test_browser::answer(Persistence::Granted);
+        assert_eq!(ctx.assets.browser_saves_persistent(), Some(true));
+        assert!(!may_clear(&texts(&drawn(&egui, &mut p, &mut ctx, vec![]))));
+
+        // Refused: the status bar says so, and the saves window says why.
+        test_browser::answer(Persistence::Refused);
+        assert_eq!(ctx.assets.browser_saves_persistent(), Some(false));
+        let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+        assert!(may_clear(&shown), "the status bar warns: {shown:?}");
+        click_text(&egui, &mut p, &mut ctx, |t| t == "File");
+        click_text(&egui, &mut p, &mut ctx, |t| t == "Saved in this browser…");
+        frame(&egui, &mut p, &mut ctx, vec![]);
+        let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+        let warning = Persistence::Refused.warning().unwrap();
+        assert!(shown.iter().any(|t| t == warning), "the window explains: {shown:?}");
+
+        // The desktop editor saves to files: no browser to warn about.
+        let (egui, mut p, mut ctx) = editor(None);
+        assert!(!may_clear(&texts(&drawn(&egui, &mut p, &mut ctx, vec![]))));
+    }
+
+    #[test]
     fn the_web_editor_saves_in_the_browser_and_download_hands_over_the_file() {
         let file = TempAsset::new("web-download");
         let (egui, mut p, mut ctx) = web_editor();
@@ -1521,6 +1751,7 @@ mod tests {
             "the menu is open: {shown:?}"
         );
         assert!(!shown.iter().any(|t| t == "Download"), "{shown:?}");
+        assert!(!shown.iter().any(|t| t == "Saved in this browser…"), "{shown:?}");
     }
 
     #[test]
@@ -1911,6 +2142,56 @@ mod tests {
                 painted,
                 "opened again, still painted"
             );
+        }
+
+        #[test]
+        fn opening_a_scene_whose_gltf_scene_fails_to_load_names_the_file_in_the_error_line() {
+            let nodes = serde_json::json!([{ "name": "Box", "mesh": 0 }]);
+            let cube = crate::three::cube_gltf(&nodes);
+            let (good, broken) = (
+                gltf_asset("unloaded-good", &nodes),
+                gltf_asset("unloaded-broken", &nodes),
+            );
+            let scene = TempAsset::new("unloaded-scene");
+            let (egui, mut p, mut ctx, e) = editor3d();
+            ctx.set_headless(true);
+            ctx.world.despawn(e);
+            ctx.spawn_prefab(&good.name, T3::default()).unwrap();
+            ctx.spawn_prefab(&broken.name, T3::at(vec3(3.0, 0.0, 0.0))).unwrap();
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene))
+                .unwrap();
+            let roots = |ctx: &mut Ctx| ctx.world.query::<&crate::d3::GltfRoot>().iter().count();
+
+            // Both load: no error.
+            p.open_file(&mut ctx, &scene.name);
+            assert!(p.error.is_none(), "{:?}", p.error);
+            assert_eq!(roots(&mut ctx), 2);
+
+            // One file is broken now: the scene opens without it, and the
+            // error line says which file, not only the console.
+            std::fs::write(&broken.file, "not a glTF file").unwrap();
+            p.open_file(&mut ctx, &scene.name);
+            assert_eq!(roots(&mut ctx), 1, "the broken one is left out");
+            assert_eq!(ctx.editor.doc.path.as_deref(), Some(scene.name.as_str()), "opened");
+            let error = p.error.clone().unwrap_or_default();
+            assert!(
+                error.contains(&broken.name) && !error.contains(&good.name),
+                "names the file that failed: {error}"
+            );
+            assert!(
+                p.status.as_deref().unwrap_or("").contains(&scene.name),
+                "{:?}",
+                p.status
+            );
+            let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+            assert!(shown.iter().any(|t| t == &error), "the status bar shows it: {shown:?}");
+
+            // Fixed and opened again: the error line clears.
+            std::fs::write(&broken.file, &cube).unwrap();
+            p.open_file(&mut ctx, &scene.name);
+            assert!(p.error.is_none(), "{:?}", p.error);
+            assert_eq!(roots(&mut ctx), 2);
+            assert!(ctx.editor.doc.unloaded.is_empty());
         }
 
         #[test]
@@ -2310,9 +2591,10 @@ mod tests {
             let saved: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(&scene.file).unwrap()).unwrap();
             let records = &saved["resources"]["GltfSceneSaves"]["scenes"];
+            let link = &records[0]["overrides"]["Wall/Lamp"]["scene_parent"];
             assert_eq!(
-                records[0]["overrides"]["Wall/Lamp"]["parent"],
-                serde_json::json!({ "scene_node": { "scene": records[1]["id"], "node": "Post" } }),
+                (&link["scene"], &link["node"]),
+                (&records[1]["id"], &serde_json::json!("Post")),
                 "{records}"
             );
             p.open_file(&mut ctx, &scene.name);
@@ -2351,6 +2633,49 @@ mod tests {
             on_post_at(&mut ctx, &yard, &posts);
             let models = ctx.world.query::<&crate::render::Model>().iter().count();
             assert_eq!(models, 4, "the crate, the wall, the lamp and the post, once");
+        }
+
+        #[test]
+        fn a_node_whose_parent_scene_failed_to_load_shows_the_parent_missing_and_its_revert_undoes() {
+            let yard = gltf_asset("missing-yard", &yard_nodes(-3.0));
+            let posts = gltf_asset("missing-posts", &serde_json::json!([{ "name": "Post", "mesh": 0 }]));
+            let scene = TempAsset::new("missing-scene");
+            let (egui, mut p, mut ctx, _) = editor_with_level(&yard);
+            ctx.spawn_prefab(&posts.name, T3::at(vec3(4.0, 0.0, 0.0))).unwrap();
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            let (lamp, post) = (node_in(&mut ctx, &yard, "Wall/Lamp"), node_in(&mut ctx, &posts, "Post"));
+            ctx.edit(|ed, ctx| ed.set_parent(ctx, lamp, Some(post))).unwrap();
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene))
+                .unwrap();
+
+            // Opened again with the post's file broken.
+            std::fs::write(&posts.file, "not a glTF file").unwrap();
+            p.open_file(&mut ctx, &scene.name);
+            assert_eq!(
+                ctx.editor.doc.path.as_deref(),
+                Some(scene.name.as_str()),
+                "opens without it"
+            );
+            let error = p.error.clone().unwrap_or_default();
+            assert!(error.contains(&posts.name), "the error line names it: {error}");
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            let (lamp, wall) = (node_in(&mut ctx, &yard, "Wall/Lamp"), node_in(&mut ctx, &yard, "Wall"));
+            assert_eq!(parent_of(&ctx, lamp), Some(wall), "it waits on the file's parent");
+            click_row(&egui, &mut p, &mut ctx, "Lamp");
+            let missing = |t: &str| t.contains(&format!("node \"Post\" of {}", posts.name)) && t.contains("missing");
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            assert!(text_at(&shapes, missing).is_some(), "{:?}", texts(&shapes));
+            assert!(text_at(&shapes, |t| t == "Wall/Lamp › parent").is_some());
+
+            click_text(&egui, &mut p, &mut ctx, |t| t == "Revert");
+            assert!(p.error.is_none(), "{:?}", p.error);
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            assert!(text_at(&shapes, missing).is_none(), "{:?}", texts(&shapes));
+            assert!(text_at(&shapes, |t| t == "Same as the file").is_some());
+
+            frame(&egui, &mut p, &mut ctx, vec![command(Key::Z)]);
+            let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+            assert!(text_at(&shapes, missing).is_some(), "undo: {:?}", texts(&shapes));
         }
 
         /// The lamp of `yard` hangs off the post of `posts`.
