@@ -19,7 +19,8 @@
 //! - **CPU** (WebGL2 and other devices without compute culling, small
 //!   batches, and batches that exceed a device limit): the batch's cells are
 //!   culled on the CPU and the instances drawn straight from a vertex
-//!   buffer, one draw per run of neighbouring visible instances. Distances
+//!   buffer, one draw per run of neighbouring visible instances (instance
+//!   cells' runs of their shared buffer join across cells). Distances
 //!   are tested per instance where a cell straddles a band's edge, so both
 //!   paths draw the same instances but for those outside the view or hidden
 //!   behind others, which leave no pixels.
@@ -44,10 +45,10 @@ const CELL: u64 = 32;
 const VERTEX: u64 = size_of::<Instance3D>() as u64;
 /// Bytes of one indirect draw's arguments.
 const ARGS: u64 = 20;
-/// A job's flag (see `instances.wgsl`): the view is a cell group's, so its
-/// list holds indices into the whole records buffer and its parts' draw
-/// arguments are the flags' upper 24 bits (the group's columns) draws
-/// apart.
+/// A job's flag (see `instances.wgsl`): the view is an instance cell's in
+/// a cell pool, so its list holds indices into the whole records buffer,
+/// and its parts' draw arguments are the flags' upper 24 bits (its group's
+/// columns, or 1 for a cell drawn on its own) draws apart.
 const GROUPED: u32 = 16;
 /// Words of a job in a page's table, and floats of a view in the frame's.
 const JOB: usize = 12;
@@ -166,12 +167,36 @@ pub(crate) struct Batching {
     /// The instance vertices of every instance cell on the CPU path, one
     /// range each (made with the first such cell).
     cell_vertices: Option<CellVertices>,
+    /// This frame's draws of the CPU path's cells (see `join_cell_runs`):
+    /// per view slot, mesh and level, the visible runs of every cell there,
+    /// as instances of the shared vertex buffer, joined where one cell's
+    /// run ends where another's starts. Sorted by (slot, leader, level).
+    joined: Vec<JoinedCells>,
+    joined_runs: Vec<(u32, u32)>,
+    /// Scratch: the CPU path's cells' batch levels as (mesh, level, batch).
+    join_keys: Vec<(u32, u32, u32)>,
     /// Tests and benchmarks: each instance cell on its own, as before cells
     /// were drawn together (a vertex buffer of its own on the CPU path,
-    /// its own bind group and draws on the GPU-driven path), to compare.
-    /// Set before the first batch is made.
+    /// its own bind group and draws on the GPU-driven path, its block of
+    /// records in the batches' pools), to compare. Set before the first
+    /// batch is made.
     #[cfg(test)]
     pub separate_cells: bool,
+    /// Tests: GPU-driven cells in their own pools but each drawn on its
+    /// own, as on a device without `Features::INDIRECT_FIRST_INSTANCE`.
+    /// Set before the first batch is made.
+    #[cfg(test)]
+    pub ungrouped_cells: bool,
+}
+
+/// The CPU path's cells of one mesh and level in one view, drawn together
+/// by the first one's draw (the leader, the lowest batch row with
+/// instances in the view): `runs` of `Batching::joined_runs`.
+struct JoinedCells {
+    slot: u32,
+    leader: u32,
+    level: u32,
+    runs: (u32, u32),
 }
 
 /// One vertex buffer the CPU path's instance cells take ranges of: a cell
@@ -214,6 +239,84 @@ impl Batching {
         shared.cells += 1;
         shared.idle = 0;
         Some((at, bytes))
+    }
+
+    /// Joins the visible runs of the CPU path's cells (their ranges of the
+    /// shared vertex buffer) for every view slot, mesh and level: a run that
+    /// ends where another cell's starts makes one draw with it. Cells are
+    /// still culled one by one, into their own lists; this only joins what
+    /// is left. Called once a frame, after every list is built.
+    fn join_cell_runs(&mut self, batches: &[Option<StaticBatch>], slots: usize) {
+        self.joined.clear();
+        self.joined_runs.clear();
+        if self.cell_vertices.is_none() {
+            return;
+        }
+        let keys = &mut self.join_keys;
+        keys.clear();
+        for &(mesh, b, level) in &self.order {
+            if batches[b as usize]
+                .as_ref()
+                .is_some_and(|b| b.shared_vertices.is_some())
+            {
+                keys.push((mesh, level, b));
+            }
+        }
+        keys.sort_unstable();
+        let runs = &mut self.joined_runs;
+        for slot in 0..slots {
+            for same in keys.chunk_by(|a, b| (a.0, a.1) == (b.0, b.1)) {
+                let start = runs.len();
+                let mut leader = None;
+                for &(_, level, b) in same {
+                    let Some(batch) = batches[b as usize].as_ref() else {
+                        continue;
+                    };
+                    let Some((at, _)) = batch.shared_vertices else { continue };
+                    let base = (at / VERTEX) as u32;
+                    let Some(list) = batch.visible.get(slot * batch.levels.len() + level as usize) else {
+                        continue;
+                    };
+                    if !list.is_empty() {
+                        leader.get_or_insert(b);
+                        runs.extend(list.iter().map(|&(s, c)| (base + s, c)));
+                    }
+                }
+                let Some(leader) = leader else { continue };
+                // Ranges of different cells never overlap: sorted, a run
+                // either follows the one before it or leaves a gap.
+                runs[start..].sort_unstable_by_key(|r| r.0);
+                let mut last = start;
+                for i in start + 1..runs.len() {
+                    if runs[last].0 + runs[last].1 == runs[i].0 {
+                        runs[last].1 += runs[i].1;
+                    } else {
+                        last += 1;
+                        runs[last] = runs[i];
+                    }
+                }
+                runs.truncate(last + 1);
+                self.joined.push(JoinedCells {
+                    slot: slot as u32,
+                    leader,
+                    level: same[0].1,
+                    runs: (start as u32, runs.len() as u32),
+                });
+            }
+        }
+        self.joined.sort_unstable_by_key(|j| (j.slot, j.leader, j.level));
+    }
+
+    /// The joined runs batch row `b` (a cell on the CPU path) draws for
+    /// `level` in view `slot`; `None` when another cell's draw draws its.
+    fn joined_runs(&self, slot: usize, b: usize, level: usize) -> Option<&[(u32, u32)]> {
+        let key = (slot as u32, b as u32, level as u32);
+        let i = self
+            .joined
+            .binary_search_by_key(&key, |j| (j.slot, j.leader, j.level))
+            .ok()?;
+        let (start, end) = self.joined[i].runs;
+        Some(&self.joined_runs[start as usize..end as usize])
     }
 
     fn release_cell_vertices(&mut self, at: u64, bytes: u64) {
@@ -394,6 +497,10 @@ impl Arena {
 /// their views' lists are in.
 struct Pool {
     records: Arena,
+    /// A pool of instance cells: blocks start on a record, not on a
+    /// binding offset, and every view reads the whole records buffer (see
+    /// `Culling::pool_align`).
+    cells: bool,
     pages: Vec<Page>,
     /// Live batches in the pool.
     batches: u32,
@@ -530,7 +637,7 @@ impl Page {
 }
 
 impl Pool {
-    fn new(device: &wgpu::Device, align: u64, first: u64) -> Self {
+    fn new(device: &wgpu::Device, align: u64, first: u64, cells: bool) -> Self {
         Self {
             records: Arena::new(
                 device,
@@ -540,6 +647,7 @@ impl Pool {
                 0,
                 first,
             ),
+            cells,
             pages: Vec::new(),
             batches: 0,
             used: false,
@@ -581,8 +689,8 @@ pub(crate) struct BatchView {
 /// material, however many cells. Only on devices with
 /// `Features::INDIRECT_FIRST_INSTANCE`: each cell's draw arguments carry
 /// the start of its visible list as their first instance, and its culling
-/// job writes indices into the whole records buffer (its block starts on a
-/// record boundary, see `Culling::new`).
+/// job writes indices into the whole records buffer (its block, in a cell
+/// pool, starts on a record, see `Culling::pool_align`).
 ///
 /// Its draw arguments are part-major: for each mesh part, one draw per
 /// column (a cell's place in the group), so the parts of one material are
@@ -812,10 +920,10 @@ pub(super) struct Culling {
     groups: Vec<Option<CellGroup>>,
     /// What storage bindings start at multiples of.
     align: u64,
-    /// What a batch's block of records starts at multiples of: `align`, and
-    /// with `shared` a record too (cells drawn together index the whole
-    /// records buffer from 0, see [`CellGroup`]).
-    records_align: u64,
+    /// Tests and benchmarks: instance cells in pools of their own (as
+    /// always outside tests), or with the other batches, each block
+    /// starting on a binding offset (`Batching::separate_cells`).
+    cell_pools: bool,
     /// The most workgroups one dispatch dimension takes, and how many the
     /// culling dispatch lays out per row and layer.
     max_groups: u32,
@@ -825,7 +933,7 @@ pub(super) struct Culling {
 impl Culling {
     /// `shared`: draw the cells of one batch together where the device can
     /// (see [`CellGroup`]).
-    pub fn new(device: &wgpu::Device, shared: bool) -> Self {
+    pub fn new(device: &wgpu::Device, shared: bool, cell_pools: bool) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("static culling"),
             entries: &(0..4)
@@ -901,7 +1009,7 @@ impl Culling {
             groups: Vec::new(),
             // Records are vec4s: their ranges start on one, too.
             align,
-            records_align: if shared { lcm(align, RECORD) } else { align },
+            cell_pools,
             max_groups,
             side: max_groups.min(256),
         }
@@ -930,15 +1038,28 @@ impl Culling {
         }
     }
 
-    /// Room for `bytes` of records in a pool: (pool, start). Makes a pool
-    /// when the others are full; `None` when no pool could ever hold it.
-    fn place(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, bytes: u64) -> Option<(usize, u64)> {
-        for (i, pool) in self.pools.iter_mut().enumerate() {
+    /// What a block of records in a pool starts at multiples of. A batch's
+    /// views bind its block as a range, so it starts on a binding offset
+    /// (`align`, 256 bytes on many devices). An instance cell's views never
+    /// do: they bind the pool's whole records buffer and their lists hold
+    /// indices into it (job flag [`GROUPED`]), drawn with their batch's
+    /// other cells or on their own. So cells take pools of their own whose
+    /// blocks start on a record (96 bytes), where a block padded to a
+    /// binding offset and a record both took up to 768 bytes more.
+    fn pool_align(&self, cells: bool) -> u64 {
+        if cells { RECORD } else { self.align }
+    }
+
+    /// Room for `bytes` of records in a pool of batches or (`cells`) of
+    /// instance cells: (pool, start). Makes a pool when the others are
+    /// full; `None` when no pool could ever hold it.
+    fn place(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, bytes: u64, cells: bool) -> Option<(usize, u64)> {
+        for (i, pool) in self.pools.iter_mut().enumerate().filter(|(_, p)| p.cells == cells) {
             if let Some(at) = pool.records.alloc(device, queue, bytes) {
                 return Some((i, at));
             }
         }
-        let mut pool = Pool::new(device, self.records_align, bytes);
+        let mut pool = Pool::new(device, self.pool_align(cells), bytes, cells);
         let at = pool.records.alloc(device, queue, bytes)?;
         self.pools.push(pool);
         Some((self.pools.len() - 1, at))
@@ -1159,14 +1280,6 @@ impl Culling {
         }
         self.pools[pooled.pool].batches -= 1;
     }
-}
-
-fn lcm(a: u64, b: u64) -> u64 {
-    let (mut x, mut y) = (a, b);
-    while y != 0 {
-        (x, y) = (y, x % y);
-    }
-    a / x * b
 }
 
 /// `bytes` of `buffer` from `at`, as a binding.
@@ -1487,13 +1600,23 @@ impl Renderer3D {
             let separate = self.batching.separate_cells;
             #[cfg(not(test))]
             let separate = false;
-            let shared = !separate && device.features().contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
-            let culling = self.static_culling.get_or_insert_with(|| Culling::new(device, shared));
+            #[cfg(test)]
+            let ungrouped = self.batching.ungrouped_cells;
+            #[cfg(not(test))]
+            let ungrouped = false;
+            let shared = !separate && !ungrouped && device.features().contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
+            let culling = self
+                .static_culling
+                .get_or_insert_with(|| Culling::new(device, shared, !separate));
             let bytes = 16 + u64::from(count) * RECORD + batch.cells.len() as u64 * CELL;
-            let align = culling.records_align;
+            let cells = batch.parent.is_some() && culling.cell_pools;
+            let align = culling.pool_align(cells);
             let most = traffic::most_bytes(device, wgpu::BufferUsages::STORAGE) as u64 / align * align;
             let fits = bytes.div_ceil(align) * align;
-            match (fits <= most).then(|| culling.place(device, queue, bytes)).flatten() {
+            match (fits <= most)
+                .then(|| culling.place(device, queue, bytes, cells))
+                .flatten()
+            {
                 Some((pool, at)) => {
                     // The batch's block: a header, its records, its cells.
                     let mut source = Vec::with_capacity(1 + 6 * count as usize + 2 * batch.cells.len());
@@ -2089,6 +2212,7 @@ impl Renderer3D {
             }
         }
         batching.occlusion = occlusion && gpu_grid;
+        batching.join_cell_runs(&self.static_batches, slots);
         // Also runs on an entirely empty scene, which can return before
         // finish_static (there are then no passes to record).
         self.retire_static(device);
@@ -2200,13 +2324,20 @@ impl Renderer3D {
                 }
                 let generations = [pool.records.generation, page.visibility.generation];
                 if group.is_none() && view.read.as_ref().is_none_or(|(_, made)| *made != generations) {
+                    // A cell's block in a cell pool needn't start on a
+                    // binding offset: its list indexes the whole buffer.
+                    let records = if pool.cells {
+                        pool.records.buffer.as_entire_binding()
+                    } else {
+                        range(&pool.records.buffer, pooled.records)
+                    };
                     let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: None,
                         layout: storage_read,
                         entries: &[
                             wgpu::BindGroupEntry {
                                 binding: 0,
-                                resource: range(&pool.records.buffer, pooled.records),
+                                resource: records,
                             },
                             wgpu::BindGroupEntry {
                                 binding: 1,
@@ -2246,6 +2377,8 @@ impl Renderer3D {
                 if let Some((group, column)) = group {
                     flags |= GROUPED | (group.columns << 8);
                     args = group.column_args(column);
+                } else if pool.cells {
+                    flags |= GROUPED | (1 << 8);
                 }
                 page.table.extend([
                     block,
@@ -2349,13 +2482,15 @@ impl Renderer3D {
         // batches hold their indices) with buffers of the smallest size.
         // Here, not when a batch is freed: an updated batch has taken its
         // place again by now.
-        let (align, records_align) = (culling.align, culling.records_align);
+        let align = culling.align;
+        let cell_align = culling.pool_align(true);
         for pool in &mut culling.pools {
             if pool.batches == 0 {
                 if pool.used {
                     pool.idle += 1;
                     if pool.idle >= EMPTY_FRAMES {
-                        *pool = Pool::new(device, records_align, 0);
+                        let cells = pool.cells;
+                        *pool = Pool::new(device, if cells { cell_align } else { align }, 0, cells);
                     }
                 }
                 continue;
@@ -2467,6 +2602,17 @@ impl Renderer3D {
         if !batch.draws(slot, level) {
             return;
         }
+        // The CPU path's cells of one mesh and level are drawn together, by
+        // the first one's draw (see `join_cell_runs`); the transparent pass
+        // keeps each batch's own order.
+        let joined = if batch.shared_vertices.is_some() && sorted.is_none() && kind != Kind::Transparent {
+            match self.batching.joined_runs(slot, b, level) {
+                Some(runs) => Some(runs),
+                None => return,
+            }
+        } else {
+            None
+        };
         let n = &mut state.n;
         let pooled = batch
             .view(slot, level)
@@ -2608,7 +2754,12 @@ impl Renderer3D {
                     n.draws += 1;
                     continue;
                 }
-                for &(start, count) in &batch.visible[slot * batch.levels.len() + level] {
+                let (runs, base) = match joined {
+                    // Already instances of the shared buffer.
+                    Some(runs) => (runs, 0),
+                    None => (&batch.visible[slot * batch.levels.len() + level][..], base),
+                };
+                for &(start, count) in runs {
                     let start = base + start;
                     gpu!(pass.draw_indexed(range.clone(), 0, start..start + count));
                     n.draws += 1;
@@ -2760,6 +2911,21 @@ impl Renderer3D {
         )
     }
 
+    /// Bytes of the pools' records buffers handed out to batches and cells,
+    /// with the padding of each block to its pool's alignment, and the bytes
+    /// the pools' buffers (records, lists, draw arguments) take.
+    pub(crate) fn pool_records(&self) -> (u64, u64) {
+        let Some(culling) = &self.static_culling else {
+            return (0, 0);
+        };
+        let used = culling
+            .pools
+            .iter()
+            .map(|p| p.records.end - p.records.free.iter().map(|&(_, s)| s).sum::<u64>())
+            .sum();
+        (used, culling.pools.iter().map(Pool::bytes).sum())
+    }
+
     pub(crate) fn batch_generations(&self) -> Vec<u32> {
         self.static_culling
             .iter()
@@ -2778,8 +2944,12 @@ impl Renderer3D {
             let Some(pooled) = &batch.pooled else { continue };
             let culling = self.static_culling.as_ref().unwrap();
             let pool = &culling.pools[pooled.pool];
-            // A cell group's lists index the whole records buffer.
-            let first = (pooled.records.0 / RECORD) as u32;
+            // A cell pool's lists index the whole records buffer.
+            let first = if pool.cells {
+                (pooled.records.0 / RECORD) as u32
+            } else {
+                0
+            };
             for view in batch.views.iter().filter(|v| v.active) {
                 let page = &pool.pages[view.page];
                 let at = culling.view_args(view).0;
@@ -2799,7 +2969,7 @@ impl Renderer3D {
                     .as_chunks::<4>()
                     .0
                     .iter()
-                    .map(|b| u32::from_ne_bytes(*b) - if view.group.is_some() { first } else { 0 })
+                    .map(|b| u32::from_ne_bytes(*b) - first)
                     .collect();
                 assert!(
                     indices.windows(2).all(|p| p[0] < p[1]),
@@ -2895,6 +3065,30 @@ impl Renderer3D {
             .is_some_and(|b| b.shared_vertices.is_some())
     }
 
+    /// The draws the CPU path's cells make in view `slot` this frame, over
+    /// every mesh and level: their visible runs joined across cells.
+    pub(crate) fn joined_cell_draws(&self, slot: usize) -> usize {
+        self.batching
+            .joined
+            .iter()
+            .filter(|j| j.slot as usize == slot)
+            .map(|j| (j.runs.1 - j.runs.0) as usize)
+            .sum()
+    }
+
+    /// Where a GPU-driven batch's block of records starts in its pool, and
+    /// whether that is a pool of instance cells.
+    pub(crate) fn batch_record_start(&self, id: u32) -> Option<(u64, bool)> {
+        let batch = self.static_batches.get(id as usize)?.as_ref()?;
+        let pooled = batch.pooled.as_ref()?;
+        Some((pooled.records.0, self.static_culling.as_ref()?.pools[pooled.pool].cells))
+    }
+
+    /// What storage bindings start at multiples of on this device.
+    pub(crate) fn storage_alignment(&self) -> Option<u64> {
+        Some(self.static_culling.as_ref()?.align)
+    }
+
     /// Live cell groups (cells of one batch drawn together in one view and
     /// level), and the cell views in them.
     pub(crate) fn cell_groups(&self) -> (usize, u32) {
@@ -2928,18 +3122,6 @@ impl Renderer3D {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn grouped_blocks_start_on_a_record_and_a_binding_offset() {
-        for align in [16, 32, 64, 256] {
-            let records = lcm(align, RECORD);
-            assert_eq!(records % align, 0);
-            assert_eq!(records % RECORD, 0);
-            assert!(records <= align * RECORD);
-        }
-        assert_eq!(lcm(256, 96), 768);
-        assert_eq!(lcm(16, 96), 96);
-    }
 
     #[test]
     fn packed_distances_preserve_scalar_distance_and_boundary_selection() {

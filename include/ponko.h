@@ -127,10 +127,6 @@
 
 #define PONKO_HANDLE_NONE UINT32_MAX
 
-#define PONKO_HDR_OUTPUT_VERSION 1
-
-#define PONKO_HDR_STATUS_VERSION 1
-
 #define PONKO_MAX_GAMEPADS 8
 
 #define PONKO_LEVEL_SHAPE_RECT 0
@@ -158,6 +154,20 @@
 #define PONKO_GPU_TIMING_EVERY 1
 
 #define PONKO_GPU_TIMING_OFF 2
+
+#define PONKO_GPU_UNTIMED_NONE 0
+
+#define PONKO_GPU_UNTIMED_NO_GPU 1
+
+#define PONKO_GPU_UNTIMED_NO_TIMESTAMPS 2
+
+#define PONKO_GPU_UNTIMED_QUERY_SET_BUDGET 3
+
+#define PONKO_GPU_UNTIMED_OFF 4
+
+#define PONKO_GPU_UNTIMED_NOT_READY 5
+
+#define PONKO_GPU_UNTIMED_DEVICE_LOST 6
 
 #define PONKO_PRESS_THRESHOLD 0.5
 
@@ -237,7 +247,7 @@
 
 #define PONKO_LIGHTING_EX_VERSION 1
 
-#define PONKO_POST_EX_VERSION 2
+#define PONKO_POST_EX_VERSION 3
 
 #define PONKO_PARTICLE_SETTINGS3D_EX_VERSION 1
 
@@ -387,21 +397,6 @@ typedef enum PonkoQuantize {
   PONKO_QUANTIZE_BEAT = 1,
   PONKO_QUANTIZE_BAR = 2,
 } PonkoQuantize;
-
-typedef enum PonkoHdrEncoding {
-  PONKO_HDR_ENCODING_SDR = 0,
-  PONKO_HDR_ENCODING_SCRGB = 1,
-  PONKO_HDR_ENCODING_EXTENDED_SRGB = 2,
-  PONKO_HDR_ENCODING_PQ = 3,
-} PonkoHdrEncoding;
-
-typedef enum PonkoHdrOffReason {
-  PONKO_HDR_OFF_NONE = 0,
-  PONKO_HDR_OFF_HEADLESS = 1,
-  PONKO_HDR_OFF_NOT_REQUESTED = 2,
-  PONKO_HDR_OFF_OFF = 3,
-  PONKO_HDR_OFF_UNSUPPORTED = 4,
-} PonkoHdrOffReason;
 
 typedef enum PonkoLobbyEventKind {
   PONKO_LOBBY_CONNECTED = 0,
@@ -1483,6 +1478,11 @@ typedef enum PonkoCrashKind {
   PONKO_CRASH_NATIVE = 2,
 } PonkoCrashKind;
 
+typedef enum PonkoUpscaler {
+  PONKO_UPSCALER_BILINEAR = 0,
+  PONKO_UPSCALER_TEMPORAL = 1,
+} PonkoUpscaler;
+
 typedef struct PonkoAccess PonkoAccess;
 
 typedef struct PonkoActionMap PonkoActionMap;
@@ -1936,28 +1936,6 @@ typedef struct PonkoStreamedAsset {
   size_t name_offset;
   size_t name_len;
 } PonkoStreamedAsset;
-
-typedef struct PonkoHdrOutput {
-  uint32_t struct_size;
-  uint32_t version;
-  bool enabled;
-  float paper_white_nits;
-  float peak_nits;
-} PonkoHdrOutput;
-
-typedef struct PonkoHdrStatus {
-  uint32_t struct_size;
-  uint32_t version;
-  bool available;
-  bool active;
-  enum PonkoHdrEncoding encoding;
-  enum PonkoHdrOffReason reason;
-  float paper_white_nits;
-  float peak_nits;
-  float headroom;
-  float display_peak_nits;
-  float display_headroom;
-} PonkoHdrStatus;
 
 typedef struct PonkoLevelOptions {
   const char *const *prefab_classes;
@@ -3484,6 +3462,7 @@ typedef struct PonkoPostEx {
   float dof_blur;
   uint32_t msaa;
   bool ssr_thin_objects;
+  uint32_t upscaler;
 } PonkoPostEx;
 
 typedef struct PonkoPostVolume {
@@ -5753,16 +5732,6 @@ enum PonkoStatus ponko_ctx_streamed_assets(struct PonkoCtx *ctx,
                                            size_t *out_len,
                                            size_t *out_names_len);
 
-enum PonkoStatus ponko_hdr_output_defaults(struct PonkoHdrOutput *out_hdr);
-
-enum PonkoStatus ponko_game_hdr_output(struct PonkoGame *game, const struct PonkoHdrOutput *hdr);
-
-enum PonkoStatus ponko_ctx_hdr_output(struct PonkoCtx *ctx, struct PonkoHdrOutput *out_hdr);
-
-enum PonkoStatus ponko_ctx_set_hdr_output(struct PonkoCtx *ctx, const struct PonkoHdrOutput *hdr);
-
-enum PonkoStatus ponko_ctx_hdr_status(struct PonkoCtx *ctx, struct PonkoHdrStatus *out_status);
-
 enum PonkoStatus ponko_game_headless_frames(struct PonkoGame *game, bool on);
 
 enum PonkoStatus ponko_input_scenario_click(struct PonkoInputScenario *scenario,
@@ -6190,6 +6159,31 @@ enum PonkoStatus ponko_net_messages_steam_peer(struct PonkoNetMessages *endpoint
                                                uint64_t peer,
                                                uint64_t *output);
 
+enum PonkoStatus ponko_ctx_mount_mods(struct PonkoCtx *ctx, const char *const *paths, size_t count);
+
+enum PonkoStatus ponko_ctx_mod_count(struct PonkoCtx *ctx, size_t *out_count);
+
+enum PonkoStatus ponko_ctx_mod_id(struct PonkoCtx *ctx,
+                                  size_t index,
+                                  char *buffer,
+                                  size_t capacity,
+                                  size_t *out_len);
+
+enum PonkoStatus ponko_ctx_mod_provider(struct PonkoCtx *ctx,
+                                        const char *name,
+                                        char *buffer,
+                                        size_t capacity,
+                                        size_t *out_len);
+
+enum PonkoStatus ponko_ctx_mod_file_under(struct PonkoCtx *ctx,
+                                          const char *prefix,
+                                          size_t index,
+                                          char *buffer,
+                                          size_t capacity,
+                                          size_t *out_len);
+
+enum PonkoStatus ponko_ctx_mods_fingerprint(struct PonkoCtx *ctx, uint64_t *out_fingerprint);
+
 enum PonkoStatus ponko_mesh_data_add_morph_target(struct PonkoMeshData *data,
                                                   const char *name,
                                                   const struct PonkoVec3 *positions,
@@ -6389,6 +6383,8 @@ void ponko_note_deallocation(size_t bytes);
 
 int64_t ponko_net_alloc_bytes(void);
 
+int64_t ponko_thread_net_alloc_bytes(void);
+
 enum PonkoStatus ponko_ctx_set_profiling(struct PonkoCtx *ctx, bool on);
 
 enum PonkoStatus ponko_ctx_set_gpu_timing(struct PonkoCtx *ctx, uint32_t kind, uint32_t every);
@@ -6396,6 +6392,8 @@ enum PonkoStatus ponko_ctx_set_gpu_timing(struct PonkoCtx *ctx, uint32_t kind, u
 enum PonkoStatus ponko_ctx_gpu_timing(const struct PonkoCtx *ctx,
                                       uint32_t *out_kind,
                                       uint32_t *out_every);
+
+enum PonkoStatus ponko_ctx_gpu_untimed(const struct PonkoCtx *ctx, uint32_t *out_reason);
 
 enum PonkoStatus ponko_ctx_perf_report(const struct PonkoCtx *ctx,
                                        char *buffer,

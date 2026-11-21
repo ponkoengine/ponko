@@ -641,7 +641,9 @@ impl PostChain {
     /// Records the chain's own links: bloom, tone mapping, antialiasing and
     /// the scaling pass, ending in `view`. `in_hdr`: whether the frame is in
     /// the HDR image (or, after an odd number of screen effects, the scene
-    /// texture).
+    /// texture). `temporal`: the temporal upscaler, its histories and the
+    /// one it reads, when it scales the frame instead of the stretch.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn record<'t>(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -650,6 +652,7 @@ impl PostChain {
         view: &wgpu::TextureView,
         textures: &dyn TextureTable,
         time: &PassTimer<'_, 't>,
+        temporal: Option<(&crate::render::taa::Taa, &crate::render::taa::UpscaleTargets, usize)>,
     ) {
         let (post, bloom_prefilter) = if in_hdr {
             (&images.post, &images.bloom_prefilter)
@@ -765,7 +768,10 @@ impl PostChain {
                 pass.draw(0..3, 0..1);
             }
         }
-        if let Some(group) = &images.upscale_group {
+        if let (Some((taa, histories, read)), Some(_)) = (temporal, &images.upscale_group) {
+            passes::mark("temporal upscale");
+            taa.draw_upscale(encoder, histories, read, view, time("temporal upscale"));
+        } else if let Some(group) = &images.upscale_group {
             passes::mark("upscale");
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("3d upscale"),
@@ -839,7 +845,15 @@ impl Renderer3D {
         self.effects.record_targets(encoder, &ctx);
         let in_hdr = self.effects.record_screen(encoder, &ctx);
         let in_hdr = self.post.record_depth_of_field(encoder, targets, in_hdr, time);
-        self.post.record(encoder, &targets.post, in_hdr, view, textures, time);
+        let temporal = self
+            .screen
+            .taa
+            .as_ref()
+            .filter(|_| self.screen.upscale_on)
+            .zip(targets.upscaler.as_ref())
+            .map(|(taa, histories)| (taa, histories, self.history.taa_frame_read));
+        self.post
+            .record(encoder, &targets.post, in_hdr, view, textures, time, temporal);
     }
 }
 
@@ -909,6 +923,7 @@ mod tests {
         assert_eq!(POST_CHAIN.map(|link| link), RECORDED.map(|(link, ..)| link));
         // `record_post` walks the chain and ends in the chain's own links.
         let walk = &source[source.find("fn record_post(").unwrap()..];
+        let walk: String = walk.split_whitespace().collect();
         assert!(walk.contains("self.post.record("), "the chain's own links come last");
         let mut last = ("", 0);
         for (link, function, text) in RECORDED {

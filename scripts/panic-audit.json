@@ -2147,11 +2147,17 @@
     "reason": "Internal invariant: Some(old) => *old = slot,             None => {                 // Ids are handed out in order: only the next one is new.                 debug_assert_eq!(id as usize, self.storage_buffers.len());",
     "site": "src/render/gpu3d/resources.rs:67"
   },
-  "src/render/gpu3d/targets.rs:f592bcfb4b3f3a01": {
+  "src/render/gpu3d/targets.rs:8336dfede33ed81d": {
     "classification": "invariant",
     "construction": ".unwrap()",
-    "reason": "Internal invariant: .taa             .as_ref()             .filter(|_| self.screen.taa_on)             .map(|t| t.targets(device, size, velocity.as_ref().unwrap().velocity(), &depth_read));",
-    "site": "src/render/gpu3d/targets.rs:297"
+    "reason": "upscale_on needs taa_on, and velocity_on is set whenever taa_on is (prepare.rs), so the velocity targets were made above",
+    "site": "src/render/gpu3d/targets.rs:365"
+  },
+  "src/render/gpu3d/targets.rs:bf76115786e295f9": {
+    "classification": "invariant",
+    "construction": ".unwrap()",
+    "reason": "velocity_on is set whenever taa_on is (prepare.rs), so the velocity targets were made just above",
+    "site": "src/render/gpu3d/targets.rs:309"
   },
   "src/render/gpu3d/variants.rs:4de36fb95dfc3019": {
     "classification": "invariant",
@@ -2884,6 +2890,18 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: };             return;         }         let s = sample.unwrap();",
     "site": "src/three/autotune.rs:223"
+  },
+  "src/three/bake/mod.rs:29b73c37e0eb892f": {
+    "classification": "invariant",
+    "construction": ".expect(\"blocks of our own\")",
+    "reason": "compress decodes blocks encode_page made just above from the same page and side: always mode 11, always the right length",
+    "site": "src/three/bake/mod.rs:645"
+  },
+  "src/three/bake/mod.rs:65691f982511d403": {
+    "classification": "invariant",
+    "construction": ".expect(\"blocks of our own\")",
+    "reason": "compress decodes blocks encode_page made just above from the same page and side: always mode 11, always the right length",
+    "site": "src/three/bake/mod.rs:658"
   },
   "src/three/bake/mod.rs:7c9483706dd71301": {
     "classification": "forwarded-error",

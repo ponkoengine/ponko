@@ -123,6 +123,9 @@ pub(crate) struct GpuTimer {
     /// Reused by `read_frame` to sort a frame's passes.
     order: Vec<Charge>,
     cadence: Cadence,
+    /// A frame due to be timed found every readback slot in flight, and no
+    /// frame's timestamps have come back since.
+    starved: bool,
     /// The right to hold `queries` (see `query_sets.rs`). Declared last,
     /// so the queries are dropped before it is given back.
     _lease: super::query_sets::Lease,
@@ -181,8 +184,32 @@ impl GpuTimer {
             last_end: 0,
             order: Vec::with_capacity(MAX_PASSES as usize),
             cadence: Cadence::EVERY_FRAME,
+            starved: false,
             _lease: lease,
         })
+    }
+
+    /// Why [`new`](Self::new) gave no timer on `device`: it has no
+    /// timestamp queries, or the query-set budget refused one.
+    pub fn why_none(device: &wgpu::Device) -> crate::perf::GpuUntimed {
+        if device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            crate::perf::GpuUntimed::QuerySetBudget
+        } else {
+            crate::perf::GpuUntimed::NoTimestamps
+        }
+    }
+
+    /// Why the latest frame has no usable GPU time, if it has none: timing
+    /// is off, or no timed frame's timestamps have come back (none yet, or
+    /// the readbacks are all in flight).
+    pub fn untimed(&self) -> Option<crate::perf::GpuUntimed> {
+        if self.cadence.every == 0 {
+            Some(crate::perf::GpuUntimed::Off)
+        } else if self.frames_read == 0 || self.starved {
+            Some(crate::perf::GpuUntimed::NotReady)
+        } else {
+            None
+        }
     }
 
     /// Times every `n`th frame from now on (1, the default: every frame;
@@ -247,6 +274,7 @@ impl GpuTimer {
             }
             self.last_sample = slot.submitted.map(|(frame, at)| (ms, frame, at));
             self.frames_read += 1;
+            self.starved = false;
             let w = weight(slot.covers);
             self.smoothed_ms = Some(match self.smoothed_ms {
                 None => ms,
@@ -285,6 +313,9 @@ impl GpuTimer {
         self.names.get_mut().unwrap_or_else(PoisonError::into_inner).clear();
         let due = self.cadence.begin();
         self.current = (due && self.slots[i].state.load(Ordering::Acquire) == FREE).then_some(i);
+        if due && self.current.is_none() {
+            self.starved = true;
+        }
         if self.current.is_some() {
             self.next = (i + 1) % SLOTS;
         }
@@ -796,6 +827,39 @@ mod tests {
         };
         assert!(!device.features().contains(wgpu::Features::TIMESTAMP_QUERY));
         assert!(GpuTimer::new(&device, &queue).is_none());
+        assert_eq!(GpuTimer::why_none(&device), crate::perf::GpuUntimed::NoTimestamps);
+    }
+
+    /// A timer says why it has no usable time: not ready before the first
+    /// readback and while every readback slot is in flight, off when set
+    /// to time no frame. Offscreen, no window; skips without a GPU or
+    /// without timestamp queries.
+    #[cfg(feature = "3d")]
+    #[test]
+    fn a_timer_says_why_the_latest_frame_has_no_gpu_time() {
+        use crate::perf::GpuUntimed;
+        let Some((device, queue)) = device(wgpu::Features::TIMESTAMP_QUERY) else {
+            return;
+        };
+        let Some(mut timer) = GpuTimer::new(&device, &queue) else {
+            crate::render::render_test_support::skip("needs timestamp queries");
+            return;
+        };
+        assert_eq!(timer.untimed(), Some(GpuUntimed::NotReady), "nothing came back yet");
+        timer.frames_read = 1;
+        assert_eq!(timer.untimed(), None);
+        // Every slot in flight: the frame due to be timed can't be.
+        for slot in &timer.slots {
+            slot.state.store(RUNNING, Ordering::Release);
+        }
+        timer.begin_frame();
+        assert!(timer.current.is_none());
+        assert_eq!(timer.untimed(), Some(GpuUntimed::NotReady), "starved");
+        for slot in &timer.slots {
+            slot.state.store(FREE, Ordering::Release);
+        }
+        timer.set_every(0);
+        assert_eq!(timer.untimed(), Some(GpuUntimed::Off));
     }
 
     #[cfg(feature = "3d")]
@@ -1121,6 +1185,10 @@ mod tests {
                 devices.iter().any(|d| d.3.is_none()),
                 "some devices go without a frame timer"
             );
+            // And say why: the budget, not a lack of timestamps.
+            for d in devices.iter().filter(|d| d.3.is_none()) {
+                assert_eq!(GpuTimer::why_none(&d.0), crate::perf::GpuUntimed::QuerySetBudget);
+            }
         } else {
             assert_eq!(made, DEVICES * 2, "no limit is known on this backend");
         }

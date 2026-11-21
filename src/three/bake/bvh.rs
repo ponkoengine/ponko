@@ -191,6 +191,27 @@ impl Bvh {
         }
     }
 
+    /// The tree as the GPU baker reads it (`bake.wgsl`): per node, its box's
+    /// low corner and first index, its high corner and count (as bits);
+    /// then per triangle in leaf order, its corner and edges (the first
+    /// with the triangle's index as bits). Returns where the triangles
+    /// start, counted in vec4s from the start of `out`'s new part.
+    #[cfg_attr(not(all(feature = "window", not(target_arch = "wasm32"))), allow(dead_code))]
+    pub fn write_gpu(&self, out: &mut Vec<[f32; 4]>) -> u32 {
+        let start = out.len();
+        for n in &self.nodes {
+            out.push(n.bounds.min.extend(f32::from_bits(n.first)).to_array());
+            out.push(n.bounds.max.extend(f32::from_bits(n.count)).to_array());
+        }
+        let tris = (out.len() - start) as u32;
+        for (t, &id) in self.tris.iter().zip(&self.ids) {
+            out.push(t.v0.extend(f32::from_bits(id)).to_array());
+            out.push(t.e1.extend(0.0).to_array());
+            out.push(t.e2.extend(0.0).to_array());
+        }
+        tris
+    }
+
     /// The nearest triangle the ray hits closer than `t_max`.
     pub fn closest(&self, origin: Vec3, dir: Vec3, t_max: f32) -> Option<Hit> {
         self.walk(origin, dir, t_max, false)

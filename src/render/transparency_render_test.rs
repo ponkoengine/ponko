@@ -356,3 +356,203 @@ fn target_center(rig: &BatchRig, texture: &wgpu::Texture) -> [f32; 4] {
     let (w, h) = (texture.width(), texture.height());
     pixels[(h / 2 * w + w / 2) as usize]
 }
+
+/// A blue see-through pane across the whole view at z = -5, facing the
+/// camera, 0.6 opaque.
+fn blue_pane(rig: &mut BatchRig) -> Entity {
+    let desc = tinted(rig, 0.6);
+    let pane = rig.mesh(&MeshData::cube(1.0), desc);
+    rig.ctx.world.spawn((
+        Transform3D {
+            position: vec3(0.0, 0.0, -5.0),
+            scale: vec3(20.0, 20.0, 0.1),
+            ..Default::default()
+        },
+        Model {
+            color: Color::rgb(0.0, 0.0, 1.0),
+            ..Model::new(pane)
+        },
+    ))
+}
+
+/// The centre pixel with one big red particle of `blend` at depth `z`
+/// and the blue pane at 5, particles among the see-through models
+/// (`interleaved`) or after them all (the order before).
+fn red_with_pane(rig: &mut BatchRig, z: f32, blend: ParticleBlend3D, interleaved: bool) -> [u8; 4] {
+    clear_emitters(rig);
+    rig.renderer.particles_in_blend_order = interleaved;
+    let red = Color::rgba(1.0, 0.0, 0.0, 1.0);
+    rig.ctx.world.spawn(puff(vec3(0.0, 0.0, z), 4.0, red, blend, 0.0));
+    center(&rig.image())
+}
+
+/// A particle behind a see-through model is drawn before it, so the glass
+/// tints it; one in front is drawn over the glass. Additive particles
+/// add up the same in any order among themselves, but glass in front
+/// still dims them: they sort with the models too (a whole emitter at its
+/// centre), and in front of the glass they look as before.
+#[test]
+fn particles_behind_glass_take_its_tint_and_in_front_cover_it() {
+    let Some(mut rig) = rig() else { return };
+    blue_pane(&mut rig);
+    for blend in [ParticleBlend3D::Alpha, ParticleBlend3D::Additive] {
+        let behind = red_with_pane(&mut rig, -8.0, blend, true);
+        let behind_before = red_with_pane(&mut rig, -8.0, blend, false);
+        // Through 0.6 of blue glass: 0.4 of the red is left, under the blue.
+        assert!(
+            behind[2] > 150 && behind[0] < 200,
+            "{blend:?}: a red particle behind blue glass is seen through it: {behind:?}"
+        );
+        // Negative control: drawn after the glass (the order before), the
+        // particle covers it, so the comparison tells the two apart.
+        // (An alpha one covers the glass, an additive one adds its whole
+        // red over it.)
+        assert!(
+            behind_before[0] >= behind[0].saturating_add(30),
+            "{blend:?}: drawn after the glass, the particle is untinted: {behind_before:?} vs {behind:?}"
+        );
+        let front = red_with_pane(&mut rig, -3.0, blend, true);
+        let front_before = red_with_pane(&mut rig, -3.0, blend, false);
+        assert_eq!(
+            front, front_before,
+            "{blend:?}: in front of the glass, a particle is drawn as before"
+        );
+        assert!(
+            front[0] > 200,
+            "{blend:?}: in front of the glass, red covers it: {front:?}"
+        );
+    }
+    let additive = red_with_pane(&mut rig, -8.0, ParticleBlend3D::Additive, true);
+    let alpha = red_with_pane(&mut rig, -8.0, ParticleBlend3D::Alpha, true);
+    // An opaque alpha particle replaces the black behind it, an additive
+    // one adds to it: on black, the same red, tinted the same.
+    let d = (0..3).map(|c| additive[c].abs_diff(alpha[c])).max().unwrap();
+    assert!(d <= 3, "additive {additive:?} vs alpha {alpha:?} behind glass");
+}
+
+/// Panes at depths 4, 8, 12 and 16 across the view, with `count` small
+/// red particles spread from depth 2 to 18 (in front, between and behind
+/// them): what the cost tests draw.
+fn panes_and_particles(rig: &mut BatchRig, count: usize) {
+    let desc = tinted(rig, 0.4);
+    let pane = rig.mesh(&MeshData::cube(1.0), desc);
+    for z in [4.0, 8.0, 12.0, 16.0] {
+        rig.ctx.world.spawn((
+            Transform3D {
+                position: vec3(0.0, 0.0, -z),
+                scale: vec3(40.0, 40.0, 0.05),
+                ..Default::default()
+            },
+            Model {
+                color: Color::rgb(0.2, 0.6, 1.0),
+                ..Model::new(pane)
+            },
+        ));
+    }
+    let mut rng = crate::random::Rng::new(219);
+    let points: Vec<Vec3> = (0..count)
+        .map(|_| {
+            let z = rng.range(2.0, 18.0);
+            vec3(rng.range(-0.4, 0.4) * z, rng.range(-0.4, 0.4) * z, -z)
+        })
+        .collect();
+    rig.ctx.world.spawn((
+        Transform3D::default(),
+        emitter(
+            &points,
+            0.3,
+            Color::rgba(1.0, 0.4, 0.1, 0.7),
+            ParticleBlend3D::Alpha,
+            0.0,
+        ),
+    ));
+}
+
+/// Particles among see-through models cost a draw and two binds per
+/// stretch between two models, and a rebind of the frame for the models
+/// after it: interleaved by runs, not one draw per particle. Four panes
+/// split 300 particles into five stretches, and the panes, one instanced
+/// draw of one mesh before, into four draws.
+#[test]
+fn particles_among_glass_draw_in_one_stretch_per_gap() {
+    let Some(mut rig) = rig() else { return };
+    panes_and_particles(&mut rig, 300);
+    let mut counts = |interleaved: bool| {
+        rig.renderer.particles_in_blend_order = interleaved;
+        rig.frame();
+        rig.renderer.take_particle_changes();
+        let models = rig.frame().changes;
+        let particles = rig.renderer.take_particle_changes();
+        (models, particles)
+    };
+    let (models_before, particles_before) = counts(false);
+    let (models, particles) = counts(true);
+    support::record(
+        &support::output_dir(),
+        &format!(
+            "transparency: 4 panes, 300 particles: models {models_before:?} -> {models:?}; \
+             particles {particles_before:?} -> {particles:?}"
+        ),
+    );
+    assert_eq!(particles_before.draws, 1, "one run of particles, drawn after the panes");
+    assert_eq!(
+        particles.draws, 5,
+        "one stretch in front of, between and behind the four panes"
+    );
+    // Each stretch binds the particle camera and its image; each pane
+    // after a stretch rebinds the frame.
+    assert_eq!(particles.bind_groups, particles_before.bind_groups + 4 * 2 + 4);
+    assert_eq!(models_before.draws, 1, "the four panes of one mesh: one instanced draw");
+    assert_eq!(models.draws, 4, "with particles between them, a draw each");
+}
+
+/// GPU time of the pass that draws the see-through models and particles
+/// (the opaque pass, which holds them unless a soft particle or a
+/// scene-reading surface splits them off), particles among the models
+/// against after them, at 1920x1080: medians of 40 timed frames, three
+/// rounds. Ignored: run explicitly,
+/// `cargo test --lib --features 3d particles_among_glass_gpu_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "benchmark: run explicitly"]
+fn particles_among_glass_gpu_cost() {
+    let setup = RigSetup {
+        size: (1920, 1080),
+        timestamps: true,
+        ..Default::default()
+    };
+    let Some(mut rig) = BatchRig::new(setup) else { return };
+    if rig.timer.is_none() {
+        support::skip("needs timestamp queries");
+        return;
+    }
+    rig.ctx.scene3d.post.bloom = 0.0;
+    rig.ctx.scene3d.lighting.sun_intensity = 0.0;
+    rig.ctx.scene3d.camera.position = Vec3::ZERO;
+    rig.ctx.scene3d.camera.look_at(Vec3::NEG_Z);
+    panes_and_particles(&mut rig, 2000);
+    let mut median = |interleaved: bool| {
+        rig.renderer.particles_in_blend_order = interleaved;
+        let mut times = Vec::new();
+        let mut read = 0;
+        for frame in 0..60 {
+            rig.frame();
+            let timer = rig.timer.as_ref().expect("a timer");
+            if timer.frames_read != read && frame > 8 {
+                read = timer.frames_read;
+                let ms: f32 = timer
+                    .last_frame
+                    .iter()
+                    .filter(|p| p.name == "opaque" || p.name == "transparent")
+                    .map(|p| p.ms)
+                    .sum();
+                times.push(ms);
+            }
+        }
+        times.sort_by(f32::total_cmp);
+        times[times.len() / 2]
+    };
+    for round in 0..3 {
+        let (after, among) = (median(false), median(true));
+        eprintln!("transparency gpu round {round}: particles after the panes {after:.3} ms, among them {among:.3} ms");
+    }
+}

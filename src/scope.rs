@@ -31,6 +31,7 @@ pub(crate) fn active() -> bool {
 }
 
 pub(crate) fn enable() {
+    crate::alloc_count::install_thread_meter();
     ACTIVE.fetch_add(1, Relaxed);
 }
 

@@ -285,6 +285,81 @@ pub enum WarningKind {
     /// Some GPU passes ran but couldn't be timed: they are missing from
     /// [`RenderReport::gpu_passes`] rather than shown as 0 ms.
     PassesNotTimed,
+    /// The frame has no usable GPU time at all, for the reason the message
+    /// names ([`GpuUntimed`]).
+    GpuNotTimed,
+}
+
+/// Why the profiler has no usable GPU time for the latest frame
+/// ([`Perf::gpu_untimed`](crate::perf::Perf::gpu_untimed)): `gpu_ms` is
+/// `None`, or the GPU times shown are from an earlier frame.
+///
+/// More reasons may be added; match with a `_` arm.
+///
+/// ```
+/// use ponko::perf::GpuUntimed;
+/// assert_eq!(GpuUntimed::QuerySetBudget.name(), "query_set_budget");
+/// assert!(GpuUntimed::DeviceLost.message().contains("lost"));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum GpuUntimed {
+    /// No GPU: a headless run, or before the renderer opened one.
+    NoGpu,
+    /// The GPU or its backend can't write timestamps (WebGL2, some GPUs).
+    NoTimestamps,
+    /// The timer was refused a timestamp query set: the process already
+    /// holds as many as the engine takes on this backend (Metal allows 32
+    /// per process). Dropping another device's renderer frees one.
+    QuerySetBudget,
+    /// GPU timing is off ([`GpuTiming::Off`](crate::perf::GpuTiming::Off))
+    /// and nothing else reads GPU times.
+    Off,
+    /// No timed frame's timestamps have come back yet: the first ones are
+    /// a few frames away, or every readback is still in flight.
+    NotReady,
+    /// The GPU device was lost (a driver reset, the GPU removed): nothing
+    /// is timed from then on.
+    DeviceLost,
+}
+
+impl GpuUntimed {
+    /// Its name in JSON (`perf.get`, the render-pass inspector, reports):
+    /// `"no_gpu"`, `"no_timestamps"`, `"query_set_budget"`, `"off"`,
+    /// `"not_ready"` or `"device_lost"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::NoGpu => "no_gpu",
+            Self::NoTimestamps => "no_timestamps",
+            Self::QuerySetBudget => "query_set_budget",
+            Self::Off => "off",
+            Self::NotReady => "not_ready",
+            Self::DeviceLost => "device_lost",
+        }
+    }
+
+    /// Why, in a sentence, for people.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::NoGpu => "there is no GPU (a headless run, or the renderer hasn't opened one yet)",
+            Self::NoTimestamps => "the GPU adapter doesn't support timestamp queries, so GPU time can't be measured",
+            Self::QuerySetBudget => {
+                "the GPU timer was refused a timestamp query set: this process already holds as many as the engine takes on this backend (drop another device's renderer to free one)"
+            }
+            Self::Off => {
+                "the game turned GPU timing off (Perf::set_gpu_timing(GpuTiming::Off)), and nothing else is reading GPU times"
+            }
+            Self::NotReady => "no timed frame's GPU timestamps have come back yet",
+            Self::DeviceLost => "the GPU device was lost, so nothing is timed any more",
+        }
+    }
+}
+
+impl fmt::Display for GpuUntimed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.message())
+    }
 }
 
 /// A problem the report found, and what to do about it.
@@ -1243,6 +1318,19 @@ pub(crate) fn analyze(report: &mut PerfReport) {
     report.warnings = w;
 }
 
+/// Adds a [`WarningKind::GpuNotTimed`] warning saying why the frame has no
+/// usable GPU time, if it has none.
+pub(crate) fn warn_gpu_untimed(report: &mut PerfReport, why: Option<GpuUntimed>) {
+    let Some(why) = why else { return };
+    report.warnings.push(PerfWarning {
+        kind: WarningKind::GpuNotTimed,
+        message: format!("No usable GPU time ({}): {why}", why.name()),
+        hint: "GPU-bound or not can't be told from this report. The guide's \"Profiling a frame\" says what each \
+               reason means and what to do about it."
+            .into(),
+    });
+}
+
 /// Adds a [`WarningKind::PassesNotTimed`] warning naming `not_timed`, the
 /// passes of the latest timed frame whose times didn't come back.
 pub(crate) fn warn_not_timed(report: &mut PerfReport, not_timed: &[&'static str]) {
@@ -1569,6 +1657,35 @@ mod tests {
         let render = r.render.as_ref().unwrap();
         assert!(render.gpu_passes.iter().all(|p| p.name != "crowd cull"));
         assert!(r.to_string().contains("not timed"), "{r}");
+    }
+
+    /// A frame with no usable GPU time gets a warning naming why; a timed
+    /// one gets none.
+    #[test]
+    fn a_frame_without_gpu_time_is_warned_about_with_its_reason() {
+        let mut r = PerfReport::default();
+        warn_gpu_untimed(&mut r, None);
+        assert!(r.warnings.is_empty());
+        warn_gpu_untimed(&mut r, Some(GpuUntimed::QuerySetBudget));
+        let w = &r.warnings[0];
+        assert_eq!(w.kind, WarningKind::GpuNotTimed);
+        assert!(w.message.contains("query_set_budget"), "{}", w.message);
+        assert!(w.message.contains("timestamp query set"), "{}", w.message);
+        // Every reason has its own name and words.
+        let all = [
+            GpuUntimed::NoGpu,
+            GpuUntimed::NoTimestamps,
+            GpuUntimed::QuerySetBudget,
+            GpuUntimed::Off,
+            GpuUntimed::NotReady,
+            GpuUntimed::DeviceLost,
+        ];
+        let names: std::collections::BTreeSet<_> = all.iter().map(|w| w.name()).collect();
+        let messages: std::collections::BTreeSet<_> = all.iter().map(|w| w.message()).collect();
+        assert_eq!((names.len(), messages.len()), (all.len(), all.len()));
+        for why in all {
+            assert_eq!(serde_json::to_value(why).unwrap(), why.name());
+        }
     }
 
     #[test]

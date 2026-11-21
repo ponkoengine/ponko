@@ -224,6 +224,38 @@ fn the_gpu_timing_setting_alone_changes_which_frames_are_timed() {
     assert!(!ctx.perf.gpu_passes().is_empty());
 }
 
+/// A frame with no usable GPU time says why: not ready before the first
+/// timestamps come back, off while the game turned timing off, a lost
+/// device once the device is lost; `None` while frames are timed.
+#[test]
+fn a_frame_without_gpu_time_says_why() {
+    use crate::perf::GpuUntimed;
+    let Some(mut ctx) = timed_ctx() else {
+        return;
+    };
+    ctx.perf.set_gpu_timing(GpuTiming::Every(1));
+    frame(&mut ctx);
+    assert_eq!(
+        ctx.perf.gpu_untimed(),
+        Some(GpuUntimed::NotReady),
+        "the first frame's times aren't back"
+    );
+    let timed = timed_over(&mut ctx, 8);
+    assert!(timed > 0, "{timed} frames timed");
+    assert_eq!(ctx.perf.gpu_untimed(), None, "timed frames have no reason");
+    timed_with(&mut ctx, GpuTiming::Off, 4);
+    assert_eq!(ctx.perf.gpu_untimed(), Some(GpuUntimed::Off));
+    timed_with(&mut ctx, GpuTiming::Every(1), 8);
+    assert_eq!(ctx.perf.gpu_untimed(), None);
+    // As the device-lost callback does when the driver resets.
+    let renderer = ctx.gfx.renderer.as_ref().expect("an offscreen renderer");
+    renderer
+        .device_lost_flag()
+        .store(true, std::sync::atomic::Ordering::Release);
+    frame(&mut ctx);
+    assert_eq!(ctx.perf.gpu_untimed(), Some(GpuUntimed::DeviceLost));
+}
+
 /// The overlay, a trace and automatic quality read every frame, so they get
 /// every frame whatever the game chose, and the choice comes back after.
 #[test]

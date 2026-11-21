@@ -379,6 +379,8 @@ pub(crate) struct RenderDetail {
     /// `GpuTimer::latest_frame`). `None` without timestamps or before the
     /// first came back.
     pub gpu_latest: Option<(f32, u64)>,
+    /// Why the latest frame has no usable GPU time, if it has none.
+    pub gpu_untimed: Option<crate::perf::GpuUntimed>,
 }
 
 /// What happened when we tried to draw a frame.
@@ -557,6 +559,8 @@ mod upload_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod upload_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod upscale_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod variant_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod water_render_test;
@@ -607,6 +611,10 @@ mod ray_query_prototype_render_test;
 mod ray_tracing_probe_render_test;
 
 #[cfg(feature = "3d")]
+pub use crate::three::Upscaler;
+#[cfg(all(feature = "3d", feature = "window", not(target_arch = "wasm32")))]
+pub use crate::three::bake_lighting_gpu;
+#[cfg(feature = "3d")]
 pub use crate::three::{
     AmbientOcclusion, AntiAliasing, BatchCulling, Blend, Compute, ComputePass, Crowd, CrowdAnimation, CrowdClip,
     CrowdInstance, CrowdLevel, CrowdOptions, DepthOfField, Effect, GlobalIllumination, GpuBuffer, GraphicsQuality,
@@ -619,8 +627,8 @@ pub use crate::three::{
 };
 #[cfg(feature = "3d")]
 pub use crate::three::{
-    BakeModel, BakeStats, BakedLighting, LightBakeScene, LightBakeSettings, LightmapRect, Lightmapped,
-    MAX_LIGHTMAP_PAGES, bake_lighting,
+    BakeModel, BakeStats, BakeTexture, BakedLighting, GltfBake, LightBakeScene, LightBakeSettings, LightmapRect,
+    Lightmapped, MAX_LIGHTMAP_PAGES, Unbaked, WorldBake, bake_lighting,
 };
 #[cfg(feature = "3d")]
 pub use crate::three::{CloudQuality, Clouds, DayNight, Moon, SkyKit};

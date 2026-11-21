@@ -55,6 +55,10 @@ struct Measured {
     /// Milliseconds of every frame, the same.
     frames: Vec<f64>,
     cells: usize,
+    /// Per measured frame: draw calls over every pass, and on the CPU path
+    /// the cells with instances in the camera's view.
+    draws: Vec<f64>,
+    in_view: Vec<f64>,
 }
 
 fn run(path: BatchPath, as_cells: bool) -> Option<Measured> {
@@ -82,6 +86,8 @@ fn run(path: BatchPath, as_cells: bool) -> Option<Measured> {
         changed: Vec::new(),
         frames: Vec::new(),
         cells: 0,
+        draws: Vec::new(),
+        in_view: Vec::new(),
     };
     for k in 0..WARM_UP + FRAMES {
         let at = vec3(k as f32 * SPEED, 6.0, 0.0);
@@ -118,6 +124,17 @@ fn run(path: BatchPath, as_cells: bool) -> Option<Measured> {
         }
         let frame = streaming + cost.frame_ms;
         out.frames.push(frame);
+        out.draws.push(f64::from(cost.changes.draws));
+        if path == BatchPath::Cpu && as_cells {
+            let in_view = rig
+                .renderer
+                .static_batches
+                .iter()
+                .flatten()
+                .filter(|b| b.visible.first().is_some_and(|l| !l.is_empty()))
+                .count();
+            out.in_view.push(in_view as f64);
+        }
         if moved > 0 {
             out.changed.push(frame);
             out.per_cell.push(streaming / moved as f64);
@@ -149,6 +166,11 @@ struct Drawn {
     draws: u32,
     bind_groups: u32,
     vertex_buffers: u32,
+    /// GPU-driven path: bytes of the pools' records buffers handed out
+    /// (each block padded to its pool's alignment), and of the pools'
+    /// buffers.
+    records: u64,
+    pool_bytes: u64,
     frames: Vec<f64>,
 }
 
@@ -201,6 +223,8 @@ fn draw_run(path: BatchPath, cells: usize, columns: usize, separate: bool) -> Op
         draws: 0,
         bind_groups: 0,
         vertex_buffers: 0,
+        records: 0,
+        pool_bytes: 0,
         frames: Vec::new(),
     };
     for k in 0..DRAW_WARM_UP + DRAW_FRAMES {
@@ -215,6 +239,7 @@ fn draw_run(path: BatchPath, cells: usize, columns: usize, separate: bool) -> Op
             cost.changes.vertex_buffers,
         );
     }
+    (out.records, out.pool_bytes) = rig.renderer.pool_records();
     if path == BatchPath::Cpu {
         let in_view = rig
             .renderer
@@ -231,9 +256,9 @@ fn draw_run(path: BatchPath, cells: usize, columns: usize, separate: bool) -> Op
 /// its own and drawn together, on both paths.
 fn draw_table() {
     println!(
-        "| path | visible cells | cells drawn | draws per frame | bind groups set | vertex buffers set | frame ms (p50 / p95 / p99 / max) |"
+        "| path | visible cells | cells drawn | draws per frame | bind groups set | vertex buffers set | records KiB (pools KiB) | frame ms (p50 / p95 / p99 / max) |"
     );
-    println!("|---|---|---|---|---|---|---|");
+    println!("|---|---|---|---|---|---|---|---|");
     for path in [BatchPath::Gpu, BatchPath::Cpu] {
         for (cells, columns) in [(100, 10), (1000, 40)] {
             for separate in [true, false] {
@@ -241,7 +266,7 @@ fn draw_table() {
                     return;
                 };
                 println!(
-                    "| {path:?} | {} | {} | {} | {} | {} | {:.2} / {:.2} / {:.2} / {:.2} |",
+                    "| {path:?} | {} | {} | {} | {} | {} | {} | {:.2} / {:.2} / {:.2} / {:.2} |",
                     m.visible.map_or_else(|| cells.to_string(), |v| v.to_string()),
                     if separate {
                         "each on its own (before)"
@@ -251,6 +276,11 @@ fn draw_table() {
                     m.draws,
                     m.bind_groups,
                     m.vertex_buffers,
+                    if path == BatchPath::Gpu {
+                        format!("{:.1} ({})", m.records as f64 / 1024.0, m.pool_bytes / 1024)
+                    } else {
+                        "-".to_string()
+                    },
                     percentile(&m.frames, 0.5),
                     percentile(&m.frames, 0.95),
                     percentile(&m.frames, 0.99),
@@ -274,9 +304,9 @@ fn instance_cells_benchmark() {
         return;
     }
     println!(
-        "| path | streamed as | live cells | upload ms per cell (p50 / p95 / max) | frame ms (p50 / p95 / p99 / max) | frames that changed cells, ms (p50 / p99) |"
+        "| path | streamed as | live cells | upload ms per cell (p50 / p95 / max) | frame ms (p50 / p95 / p99 / max) | frames that changed cells, ms (p50 / p99) | draws per frame (p50 / max) | cells in the camera's view (p50) |"
     );
-    println!("|---|---|---|---|---|---|");
+    println!("|---|---|---|---|---|---|---|---|");
     for path in [BatchPath::Gpu, BatchPath::Cpu] {
         for as_cells in [true, false] {
             // `None` only without a GPU, which the rig reports.
@@ -284,7 +314,7 @@ fn instance_cells_benchmark() {
                 return;
             };
             println!(
-                "| {path:?} | {} | {} | {:.3} / {:.3} / {:.3} | {:.2} / {:.2} / {:.2} / {:.2} | {:.2} / {:.2} |",
+                "| {path:?} | {} | {} | {:.3} / {:.3} / {:.3} | {:.2} / {:.2} / {:.2} / {:.2} | {:.2} / {:.2} | {} / {} | {} |",
                 if as_cells { "cells" } else { "one batch, made again" },
                 m.cells,
                 percentile(&m.per_cell, 0.5),
@@ -296,6 +326,13 @@ fn instance_cells_benchmark() {
                 percentile(&m.frames, 1.0),
                 percentile(&m.changed, 0.5),
                 percentile(&m.changed, 0.99),
+                percentile(&m.draws, 0.5),
+                percentile(&m.draws, 1.0),
+                if m.in_view.is_empty() {
+                    "-".to_string()
+                } else {
+                    percentile(&m.in_view, 0.5).to_string()
+                },
             );
         }
     }

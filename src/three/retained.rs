@@ -722,7 +722,7 @@ impl<'a> Source<'a> {
 
 /// What a model's instance carries for its [`Lightmapped`](super::Lightmapped)
 /// component: its entry plus one (exact in a float up to 2^24), 0 without.
-fn lightmap_slot(lightmap: Option<&super::Lightmapped>) -> f32 {
+pub(crate) fn lightmap_slot(lightmap: Option<&super::Lightmapped>) -> f32 {
     lightmap.map_or(0.0, |l| (l.0.min((1 << 24) - 2) + 1) as f32)
 }
 

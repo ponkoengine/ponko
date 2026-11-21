@@ -124,6 +124,8 @@ use super::capabilities::GpuLimits;
 use crate::handle::{INDEX_MASK, write_slot};
 use crate::render::traffic::{self, Counted, MAX_WRITES, MIRRORED, Mirror, NewBuffer, Synced, Upload};
 pub(crate) use draw_order::StateChanges;
+#[cfg(test)]
+pub(super) use draw_order::place_particles;
 use effects::{EffectPass, Effects};
 use frame::*;
 use history::History;
@@ -382,8 +384,15 @@ pub(crate) struct Renderer3D {
     /// Whether order-independent passes draw their runs sorted by state
     /// (on; off draws them in mesh order, for comparing).
     pub(crate) group_draws: bool,
+    /// Whether the main view's particles are drawn among the see-through
+    /// models, far to near (on; off draws them after all of them, for
+    /// comparing).
+    pub(crate) particles_in_blend_order: bool,
     /// The model passes' state changes since the last `take_state_changes`.
     state_counters: draw_order::StateCounters,
+    /// The same for the particles, ribbons, lines and text of the main
+    /// view (see `take_particle_changes`).
+    particle_counters: draw_order::StateCounters,
 
     // ---- Kept from frame to frame ----
     /// What the temporal effects keep (see `history.rs`).
@@ -1128,6 +1137,8 @@ impl Renderer3D {
             #[cfg(test)]
             defer_checks: false,
             group_draws: true,
+            particles_in_blend_order: true,
+            particle_counters: Default::default(),
             state_counters: Default::default(),
             shadow_cache: ShadowCache::default(),
         }
@@ -1362,62 +1373,108 @@ impl Renderer3D {
         slot
     }
 
-    /// Uploads baked lighting (`BakedLighting::gpu_layers`: `side` square
-    /// RGBA half-float layers) and binds it in every material's empty third
-    /// array slot; `None` takes it away.
+    /// Uploads baked lighting (`BakedLighting::gpu_layers`) and binds it in
+    /// every material's empty array slots: the header (the table of
+    /// lightmaps and the probes) in the third, the pages in the second
+    /// (BC6H where the device samples it, else the shared-exponent format,
+    /// for a compressed bake); `None` takes it away.
     pub fn set_baked_lighting(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        layers: Option<(u32, &[Vec<u16>])>,
+        baked: Option<&crate::three::bake::GpuBaked>,
         textures: &dyn TextureTable,
     ) {
-        let view = layers.map(|(side, layers)| {
-            // Two layers at least: the GL backend takes a one-layer array
-            // for a 2D texture.
-            let count = layers.len().max(2) as u32;
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("3d baked lighting"),
+        use crate::three::bake::PageFormat;
+        let array = |label: &str, (width, height): (u32, u32), layers: u32, format: wgpu::TextureFormat| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
                 size: wgpu::Extent3d {
-                    width: side,
-                    height: side,
-                    depth_or_array_layers: count,
+                    width,
+                    height,
+                    depth_or_array_layers: layers,
                 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba16Float,
+                format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
-            });
-            for (i, layer) in layers.iter().enumerate() {
+            })
+        };
+        // One layer's data, `row` bytes a row of `rows` (texels, or blocks).
+        let write =
+            |texture: &wgpu::Texture, layer: u32, (width, height): (u32, u32), data: &[u8], row: u32, rows: u32| {
                 queue.uploading(Upload::Textures).write_texture(
                     wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
+                        texture,
                         mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: 0,
-                            y: 0,
-                            z: i as u32,
-                        },
+                        origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
                         aspect: wgpu::TextureAspect::All,
                     },
-                    bytemuck::cast_slice(layer),
+                    data,
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
-                        bytes_per_row: Some(side * 8),
-                        rows_per_image: Some(side),
+                        bytes_per_row: Some(row),
+                        rows_per_image: Some(rows),
                     },
                     wgpu::Extent3d {
-                        width: side,
-                        height: side,
+                        width,
+                        height,
                         depth_or_array_layers: 1,
                     },
                 );
-            }
-            array_view(&texture)
+            };
+        let views = baked.map(|baked| {
+            let (header_layers, page_layers) = baked.layers();
+            let size = (baked.header_side, baked.header_rows);
+            let header = array(
+                "3d baked lighting",
+                size,
+                header_layers,
+                wgpu::TextureFormat::Rgba16Float,
+            );
+            write(
+                &header,
+                0,
+                size,
+                bytemuck::cast_slice(&baked.header),
+                size.0 * 8,
+                size.1,
+            );
+            let side = baked.page_size;
+            let square = (side, side);
+            let bc = device.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+            let format = baked.format(bc);
+            let pages = (!baked.pages.is_empty()).then(|| {
+                let pages = match format {
+                    PageFormat::Half => {
+                        let t = array("3d lightmaps", square, page_layers, wgpu::TextureFormat::Rgba16Float);
+                        for (i, page) in baked.pages.iter().enumerate() {
+                            write(&t, i as u32, square, bytemuck::cast_slice(page), side * 8, side);
+                        }
+                        t
+                    }
+                    PageFormat::Bc6h => {
+                        let t = array("3d lightmaps", square, page_layers, wgpu::TextureFormat::Bc6hRgbUfloat);
+                        for (i, page) in baked.blocks.iter().flatten().enumerate() {
+                            write(&t, i as u32, square, page, side / 4 * 16, side / 4);
+                        }
+                        t
+                    }
+                    PageFormat::SharedExponent => {
+                        let t = array("3d lightmaps", square, page_layers, wgpu::TextureFormat::Rgb9e5Ufloat);
+                        for (i, page) in baked.shared_exponent_pages().iter().enumerate() {
+                            write(&t, i as u32, square, bytemuck::cast_slice(page), side * 4, side);
+                        }
+                        t
+                    }
+                };
+                array_view(&pages)
+            });
+            (array_view(&header), pages)
         });
-        self.resources.set_lightmap(device, view, textures);
+        self.resources.set_lightmap(device, views, textures);
     }
 
     /// Binds again the materials that read texture `texture` or texture
@@ -1963,6 +2020,17 @@ impl Renderer3D {
         self.targets.as_ref().is_some_and(|t| t.post.scales_output())
     }
 
+    /// Whether the temporal upscaler scales this frame, with its histories
+    /// (test hook).
+    #[cfg(test)]
+    pub(super) fn upscales_temporally(&self) -> bool {
+        self.screen.upscale_on
+            && self
+                .targets
+                .as_ref()
+                .is_some_and(|t| t.upscaler.is_some() && t.taa.is_none())
+    }
+
     /// Draw calls the frame's models take: two per mesh part (depth
     /// prepass and lit), one per mesh part in each shadow cascade, one per
     /// screen effect, and the post chain's own (see `PostChain::draw_calls`).
@@ -1996,7 +2064,7 @@ impl Renderer3D {
             + (parts + view_parts) * 2
             + held_parts
             + self.lists.views.len() * usize::from(self.atmosphere)
-            + self.particles.draw_count()
+            + self.particles.draw_count(self.lists.blend_steps.iter().map(|s| s.1))
             + self.debug_lines.as_ref().map_or(0, |l| l.draw_count())
             + self.effects.frame.len()
             + self.effects.target_frame.len()

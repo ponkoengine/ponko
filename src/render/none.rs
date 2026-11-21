@@ -35,6 +35,9 @@ impl Renderer {
     pub fn gpu_passes_not_timed(&self) -> &[&'static str] {
         match *self {}
     }
+    pub fn gpu_untimed(&self) -> Option<crate::perf::GpuUntimed> {
+        match *self {}
+    }
     pub(crate) fn set_gpu_timing_every(&mut self, _n: u32) {
         match *self {}
     }
@@ -155,7 +158,7 @@ impl Renderer {
         match *self {}
     }
     #[cfg(feature = "3d")]
-    pub fn set_baked_lighting(&mut self, _layers: Option<(u32, &[Vec<u16>])>) {
+    pub fn set_baked_lighting(&mut self, _layers: Option<&crate::three::bake::GpuBaked>) {
         match *self {}
     }
     #[cfg(feature = "3d")]

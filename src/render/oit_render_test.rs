@@ -1,14 +1,20 @@
 //! Order-independent transparency, measured against sorting.
 //!
-//! Three see-through scenes (intersecting glass panes, particles through a
-//! tilted pane, layered crossed foliage cards) drawn offscreen four ways:
+//! Four see-through scenes (intersecting glass panes, the same panes as
+//! one model, particles through a tilted pane, layered crossed foliage
+//! cards) drawn offscreen several ways:
 //!
 //! - **sorted**, as the engine draws see-through things: models far to near
 //!   by their centre's distance (a model's own triangles in index order),
-//!   then the particles far to near among themselves, premultiplied
-//!   "over" blending;
-//! - **sorted together**: the same, but particles and models in one list,
-//!   which shows how much of sorting's error is the separate particle list;
+//!   the particles far to near by view depth among them (placed by the
+//!   engine's own `place_particles`), premultiplied "over" blending;
+//! - **particles last**: the same, but the particles after every model
+//!   (how the engine drew them before #219), which shows how much of
+//!   sorting's error was the separate particle list;
+//! - **triangles sorted** and **split** (#219): sorted, and each model's
+//!   own triangles ordered too, by sorting them by centroid every frame,
+//!   or by splitting them where they cross once (a BSP tree, as a mesh
+//!   would be at load time) and walking the tree far to near every frame;
 //! - **weighted blended OIT** (McGuire and Bavoil 2013, weight function 7):
 //!   one accumulation pass into a 16-bit float colour target and a 16-bit
 //!   float weight target, then one full-screen resolve;
@@ -22,7 +28,9 @@
 //! The quality test is part of the suite. The cost is an ignored test, run
 //! explicitly, which times each method with the engine's GPU pass timer
 //! (`timer.rs`):
-//! `cargo test --lib --features 3d oit_gpu_cost_benchmark -- --ignored --nocapture`.
+//! `cargo test --lib --features 3d oit_gpu_cost_benchmark -- --ignored --nocapture`;
+//! the CPU cost of ordering a model's own triangles every frame is
+//! `triangle_order_cpu_cost_benchmark` (in release).
 //! `PONKO_OIT_RESULTS=<dir>` saves every image the quality test compares
 //! (and a difference image per method). The numbers and the decision are in
 //! the guide's rendering notes (`book/src/3d.md`, "Order-independent
@@ -207,6 +215,158 @@ struct Object {
     count: u32,
     center: Vec3,
     kind: Kind,
+    /// With [`Scene::split`]: the model's triangles as a BSP tree
+    /// (triangle numbers are vertex / 3), built once.
+    tree: Option<Bsp>,
+}
+
+/// How a see-through model's own triangles are ordered.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Within {
+    /// In index order, as built (what the engine draws).
+    AsBuilt,
+    /// Sorted far to near by their centroid's view depth, every frame.
+    Sorted,
+    /// Split at build time where they cross (a BSP tree), then walked far
+    /// to near from the eye every frame: exact within the model.
+    Tree,
+}
+
+/// The view depth of `p`: along the camera's forward (it looks down -Z).
+fn view_depth(p: Vec3) -> f32 {
+    EYE.z - p.z
+}
+
+/// One node of a [`Bsp`]: a plane, the triangles in it, and the subtrees
+/// in front of and behind it.
+struct Node {
+    normal: Vec3,
+    offset: f32,
+    triangles: Vec<u32>,
+    front: Option<usize>,
+    back: Option<usize>,
+}
+
+/// A model's triangles in a BSP tree, split where they cross a plane.
+struct Bsp {
+    nodes: Vec<Node>,
+    root: Option<usize>,
+}
+
+fn lerp_vertex(a: &Vertex, b: &Vertex, t: f32) -> Vertex {
+    let mix = |a: f32, b: f32| a + (b - a) * t;
+    Vertex {
+        pos: std::array::from_fn(|i| mix(a.pos[i], b.pos[i])),
+        uv: std::array::from_fn(|i| mix(a.uv[i], b.uv[i])),
+        color: std::array::from_fn(|i| mix(a.color[i], b.color[i])),
+        shape: a.shape,
+    }
+}
+
+impl Bsp {
+    /// Builds the tree of `triangles`, writing them (split where needed)
+    /// to `out`; triangle numbers count from `out`'s start.
+    fn build(triangles: Vec<[Vertex; 3]>, out: &mut Vec<Vertex>) -> Self {
+        let mut nodes = Vec::new();
+        let root = Self::node(triangles, out, &mut nodes);
+        Self { nodes, root }
+    }
+
+    fn node(triangles: Vec<[Vertex; 3]>, out: &mut Vec<Vertex>, nodes: &mut Vec<Node>) -> Option<usize> {
+        const EPS: f32 = 1e-5;
+        let pos = |v: &Vertex| Vec3::from_array(v.pos);
+        let first = triangles.first()?;
+        let normal = (pos(&first[1]) - pos(&first[0]))
+            .cross(pos(&first[2]) - pos(&first[0]))
+            .normalize();
+        let offset = normal.dot(pos(&first[0]));
+        let (mut front, mut back, mut here) = (Vec::new(), Vec::new(), Vec::new());
+        for t in triangles {
+            let side = t.each_ref().map(|v| normal.dot(pos(v)) - offset);
+            if side.iter().all(|s| s.abs() <= EPS) {
+                here.push((out.len() / 3) as u32);
+                out.extend(t);
+            } else if side.iter().all(|&s| s >= -EPS) {
+                front.push(t);
+            } else if side.iter().all(|&s| s <= EPS) {
+                back.push(t);
+            } else {
+                // Cut along the plane: each side's polygon, as a fan.
+                let (mut f, mut b) = (Vec::new(), Vec::new());
+                for i in 0..3 {
+                    let (j, si, sj) = ((i + 1) % 3, side[i], side[(i + 1) % 3]);
+                    if si >= -EPS {
+                        f.push(t[i]);
+                    }
+                    if si <= EPS {
+                        b.push(t[i]);
+                    }
+                    if (si > EPS && sj < -EPS) || (si < -EPS && sj > EPS) {
+                        let cut = lerp_vertex(&t[i], &t[j], si / (si - sj));
+                        f.push(cut);
+                        b.push(cut);
+                    }
+                }
+                for (polygon, to) in [(f, &mut front), (b, &mut back)] {
+                    for k in 1..polygon.len().saturating_sub(1) {
+                        to.push([polygon[0], polygon[k], polygon[k + 1]]);
+                    }
+                }
+            }
+        }
+        let front = Self::node(front, out, nodes);
+        let back = Self::node(back, out, nodes);
+        nodes.push(Node {
+            normal,
+            offset,
+            triangles: here,
+            front,
+            back,
+        });
+        Some(nodes.len() - 1)
+    }
+
+    /// The vertex indices of the triangles, far to near from `eye`, after
+    /// `base` (where the model's first vertex is).
+    fn order(&self, eye: Vec3, base: u32, out: &mut Vec<u32>) {
+        // An explicit stack: (node, whether its far side is done).
+        let mut stack: Vec<(usize, bool)> = self.root.map(|r| (r, false)).into_iter().collect();
+        while let Some((i, far_done)) = stack.pop() {
+            let n = &self.nodes[i];
+            let in_front = n.normal.dot(eye) - n.offset >= 0.0;
+            let (far, near) = if in_front { (n.back, n.front) } else { (n.front, n.back) };
+            if !far_done {
+                stack.push((i, true));
+                if let Some(f) = far {
+                    stack.push((f, false));
+                }
+                continue;
+            }
+            for &t in &n.triangles {
+                out.extend(base + t * 3..base + t * 3 + 3);
+            }
+            if let Some(near) = near {
+                stack.push((near, false));
+            }
+        }
+    }
+
+    fn triangles(&self) -> usize {
+        self.nodes.iter().map(|n| n.triangles.len()).sum()
+    }
+}
+
+/// A model's triangles (vertices `first..first + count`) far to near by
+/// their centroid's view depth, as vertex indices into `out`; `keys` is
+/// reused scratch space.
+fn sort_triangles(vertices: &[Vertex], first: u32, count: u32, keys: &mut Vec<(f32, u32)>, out: &mut Vec<u32>) {
+    keys.clear();
+    keys.extend((first..first + count).step_by(3).map(|v| {
+        let c: Vec3 = (0..3).map(|k| Vec3::from_array(vertices[(v + k) as usize].pos)).sum();
+        (view_depth(c / 3.0), v)
+    }));
+    keys.sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    out.extend(keys.iter().flat_map(|&(_, v)| v..v + 3));
 }
 
 pub(super) struct Scene {
@@ -262,27 +422,107 @@ impl Scene {
             count,
             center,
             kind,
+            tree: None,
         });
     }
 
-    /// Indices in the engine's order (far to near by centre; particles after
-    /// the models unless `together`), each object's triangles as built.
-    fn sorted_indices(&self, together: bool) -> Vec<u32> {
-        let mut order: Vec<usize> = (0..self.objects.len()).collect();
-        let rank = |o: &Object| u8::from(!together && o.kind == Kind::Particle);
-        order.sort_by(|&a, &b| {
-            let (a, b) = (&self.objects[a], &self.objects[b]);
-            rank(a)
-                .cmp(&rank(b))
-                .then((b.center - EYE).length().total_cmp(&(a.center - EYE).length()))
+    /// One model of quads placed around `center`: (quad centre, half
+    /// extents, colour) each.
+    fn push_placed(&mut self, center: Vec3, quads: &[(Vec3, (Vec3, Vec3), [f32; 4])], shape: Shape) {
+        let first = self.vertices.len() as u32;
+        for &(c, (right, up), color) in quads {
+            let corner = |a: f32, b: f32| Vertex {
+                pos: (c + right * (a * 2.0 - 1.0) + up * (b * 2.0 - 1.0)).to_array(),
+                uv: [a, b],
+                color,
+                shape: shape as u32,
+            };
+            self.vertices.extend([
+                corner(0., 0.),
+                corner(1., 0.),
+                corner(1., 1.),
+                corner(0., 0.),
+                corner(1., 1.),
+                corner(0., 1.),
+            ]);
+        }
+        self.objects.push(Object {
+            first,
+            count: self.vertices.len() as u32 - first,
+            center,
+            kind: Kind::Model,
+            tree: None,
         });
-        order
-            .into_iter()
-            .flat_map(|i| {
-                let o = &self.objects[i];
-                o.first..o.first + o.count
-            })
-            .collect()
+    }
+
+    /// Indices in the engine's order: see-through models far to near by
+    /// their centre's distance; the particles far to near by view depth,
+    /// placed among the models as the engine does
+    /// (`gpu3d::place_particles`), or after all of them with
+    /// `particles_last` (the engine's order before); each model's own
+    /// triangles ordered as `within` says.
+    fn sorted_indices(&self, particles_last: bool, within: Within) -> Vec<u32> {
+        let by = |key: &dyn Fn(&Object) -> f32, kind| {
+            let mut order: Vec<usize> = (0..self.objects.len())
+                .filter(|&i| self.objects[i].kind == kind)
+                .collect();
+            order.sort_by(|&a, &b| key(&self.objects[b]).total_cmp(&key(&self.objects[a])));
+            order
+        };
+        let models = by(&|o| (o.center - EYE).length(), Kind::Model);
+        let particles = by(&|o| view_depth(o.center), Kind::Particle);
+        let depths: Vec<f32> = particles.iter().map(|&i| view_depth(self.objects[i].center)).collect();
+        let mut order = Vec::with_capacity(self.objects.len());
+        let (mut placed, mut steps) = (0, Vec::new());
+        for &m in &models {
+            let before = placed;
+            if !particles_last {
+                super::gpu3d::place_particles(&depths, &mut placed, view_depth(self.objects[m].center), 0, &mut steps);
+            }
+            order.extend_from_slice(&particles[before..placed]);
+            order.push(m);
+        }
+        order.extend_from_slice(&particles[placed..]);
+        let (mut indices, mut keys) = (Vec::new(), Vec::new());
+        for i in order {
+            let o = &self.objects[i];
+            match (o.kind, within, &o.tree) {
+                (Kind::Model, Within::Sorted, _) => {
+                    sort_triangles(&self.vertices, o.first, o.count, &mut keys, &mut indices)
+                }
+                (Kind::Model, Within::Tree, Some(tree)) => tree.order(EYE, o.first, &mut indices),
+                _ => indices.extend(o.first..o.first + o.count),
+            }
+        }
+        indices
+    }
+
+    /// The scene with each see-through model's triangles split where they
+    /// cross each other, in a BSP tree (built once, as a mesh would be at
+    /// load time).
+    fn split(&self) -> Scene {
+        let mut out = Scene::new(self.name);
+        for o in &self.objects {
+            let first = out.vertices.len() as u32;
+            let source = &self.vertices[o.first as usize..(o.first + o.count) as usize];
+            let tree = if o.kind == Kind::Model {
+                let mut local = Vec::new();
+                let tree = Bsp::build(source.as_chunks::<3>().0.to_vec(), &mut local);
+                out.vertices.extend(local);
+                Some(tree)
+            } else {
+                out.vertices.extend_from_slice(source);
+                None
+            };
+            out.objects.push(Object {
+                first,
+                count: out.vertices.len() as u32 - first,
+                center: o.center,
+                kind: o.kind,
+                tree,
+            });
+        }
+        out
     }
 }
 
@@ -316,6 +556,36 @@ pub(super) fn intersecting_glass() -> Scene {
         vec3(0.0, 0.1, -0.05),
         &[pane(0.0, 0.8, 1.0)],
         [0.15, 0.3, 1.0, 0.45],
+        Shape::Pane,
+    );
+    s.push(
+        Kind::Model,
+        vec3(0.5, -0.4, 1.2),
+        &[pane(0.0, 0.0, 0.5)],
+        [0.9, 0.9, 0.95, 0.3],
+        Shape::Pane,
+    );
+    s
+}
+
+/// The three crossing panes of [`intersecting_glass`] as one model
+/// (multi-pane glass): sorting models can't order its panes, only its own
+/// triangles' order can.
+pub(super) fn crossing_glass_model() -> Scene {
+    let mut s = Scene::new("crossing_glass_model");
+    // The same panes, centres and colours as `intersecting_glass`.
+    let quads = [
+        (vec3(-0.1, 0.05, 0.0), pane(0.7, 0.0, 1.1), [0.9, 0.15, 0.1, 0.5]),
+        (vec3(0.1, -0.05, 0.05), pane(-0.7, 0.0, 1.1), [0.1, 0.8, 0.2, 0.5]),
+        (vec3(0.0, 0.1, -0.05), pane(0.0, 0.8, 1.0), [0.15, 0.3, 1.0, 0.45]),
+    ];
+    let center = quads.iter().map(|q| q.0).sum::<Vec3>() / 3.0;
+    s.push_placed(center, &quads, Shape::Pane);
+    s.push(
+        Kind::Model,
+        vec3(0.0, 0.0, -1.3),
+        &[pane(0.0, 0.0, 0.8)],
+        [1.0, 0.75, 0.1, 0.4],
         Shape::Pane,
     );
     s.push(
@@ -379,8 +649,16 @@ pub(super) fn layered_foliage(count: usize) -> Scene {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Method {
+    /// As the engine draws: models far to near, particles among them.
     Sorted,
-    SortedTogether,
+    /// As the engine drew before: the particles after every model.
+    ParticlesLast,
+    /// Sorted, and each model's own triangles sorted far to near by their
+    /// centroid every frame.
+    TrianglesSorted,
+    /// Sorted, each model's triangles split where they cross at build
+    /// time and walked far to near (a BSP tree) every frame.
+    Split,
     Weighted,
     Peeled(u32),
 }
@@ -389,7 +667,9 @@ impl Method {
     fn name(self) -> String {
         match self {
             Method::Sorted => "sorted".into(),
-            Method::SortedTogether => "sorted_together".into(),
+            Method::ParticlesLast => "particles_last".into(),
+            Method::TrianglesSorted => "triangles_sorted".into(),
+            Method::Split => "split".into(),
             Method::Weighted => "weighted".into(),
             Method::Peeled(n) => format!("peeled{n}"),
         }
@@ -400,7 +680,7 @@ impl Method {
     pub(super) fn bytes_per_pixel(self) -> u32 {
         let size = |f: wgpu::TextureFormat| f.block_copy_size(None).unwrap_or(4);
         match self {
-            Method::Sorted | Method::SortedTogether => 0,
+            Method::Sorted | Method::ParticlesLast | Method::TrianglesSorted | Method::Split => 0,
             Method::Weighted => size(HDR) + size(WEIGHT),
             // The layer, the layers composited so far, and two depths
             // (this layer's and the one nearer).
@@ -423,8 +703,14 @@ fn weighted_targets() -> [Option<wgpu::ColorTargetState>; 2] {
 struct Uploaded {
     vertices: wgpu::Buffer,
     vertex_count: u32,
+    /// Index buffers of the sorted methods.
     sorted: wgpu::Buffer,
-    together: wgpu::Buffer,
+    particles_last: wgpu::Buffer,
+    triangles_sorted: wgpu::Buffer,
+    /// The split scene's vertices and their order.
+    split_vertices: wgpu::Buffer,
+    split: wgpu::Buffer,
+    split_count: u32,
 }
 
 pub(super) struct Rig {
@@ -732,22 +1018,24 @@ impl Rig {
 
     fn upload(&self, scene: &Scene) -> Uploaded {
         let device = &self.gpu.device;
-        let indices = |together| {
+        let buffer = |contents: &[u8], usage| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("oit sorted"),
-                contents: bytemuck::cast_slice(&scene.sorted_indices(together)),
-                usage: wgpu::BufferUsages::INDEX,
+                label: Some("oit"),
+                contents,
+                usage,
             })
         };
+        let index = |indices: Vec<u32>| buffer(bytemuck::cast_slice(&indices), wgpu::BufferUsages::INDEX);
+        let split = scene.split();
         Uploaded {
-            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("oit vertices"),
-                contents: bytemuck::cast_slice(&scene.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            }),
+            vertices: buffer(bytemuck::cast_slice(&scene.vertices), wgpu::BufferUsages::VERTEX),
             vertex_count: scene.vertices.len() as u32,
-            sorted: indices(false),
-            together: indices(true),
+            sorted: index(scene.sorted_indices(false, Within::AsBuilt)),
+            particles_last: index(scene.sorted_indices(true, Within::AsBuilt)),
+            triangles_sorted: index(scene.sorted_indices(false, Within::Sorted)),
+            split_vertices: buffer(bytemuck::cast_slice(&split.vertices), wgpu::BufferUsages::VERTEX),
+            split: index(split.sorted_indices(false, Within::Tree)),
+            split_count: split.vertices.len() as u32,
         }
     }
 
@@ -833,7 +1121,7 @@ impl Rig {
         self.full(encoder, &self.hdr, CLEAR, &self.background, None, None);
         let hdr = view(&self.hdr);
         match method {
-            Method::Sorted | Method::SortedTogether => {
+            Method::Sorted | Method::ParticlesLast | Method::TrianglesSorted | Method::Split => {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("oit sorted"),
                     color_attachments: &[attach(&hdr, wgpu::LoadOp::Load)],
@@ -844,14 +1132,15 @@ impl Rig {
                 });
                 pass.set_pipeline(&self.sorted);
                 pass.set_bind_group(0, &self.frame, &[]);
-                pass.set_vertex_buffer(0, scene.vertices.slice(..));
-                let indices = if method == Method::Sorted {
-                    &scene.sorted
-                } else {
-                    &scene.together
+                let (vertices, indices, count) = match method {
+                    Method::ParticlesLast => (&scene.vertices, &scene.particles_last, scene.vertex_count),
+                    Method::TrianglesSorted => (&scene.vertices, &scene.triangles_sorted, scene.vertex_count),
+                    Method::Split => (&scene.split_vertices, &scene.split, scene.split_count),
+                    _ => (&scene.vertices, &scene.sorted, scene.vertex_count),
                 };
+                pass.set_vertex_buffer(0, vertices.slice(..));
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..scene.vertex_count, 0, 0..1);
+                pass.draw_indexed(0..count, 0, 0..1);
             }
             Method::Weighted => {
                 let (sum, weight) = (view(&self.sum), view(&self.weight));
@@ -1019,16 +1308,23 @@ fn save(scene: &str, method: &str, image: &Image, reference: Option<&Image>) {
 }
 
 const SIZE: (u32, u32) = (192, 192);
-const METHODS: [Method; 5] = [
+const METHODS: [Method; 7] = [
     Method::Sorted,
-    Method::SortedTogether,
+    Method::ParticlesLast,
+    Method::TrianglesSorted,
+    Method::Split,
     Method::Weighted,
     Method::Peeled(1),
     Method::Peeled(4),
 ];
 
-fn scenes() -> [Scene; 3] {
-    [intersecting_glass(), particles_through_glass(300), layered_foliage(30)]
+fn scenes() -> [Scene; 4] {
+    [
+        intersecting_glass(),
+        particles_through_glass(300),
+        layered_foliage(30),
+        crossing_glass_model(),
+    ]
 }
 
 /// Each scene's error per method in [`METHODS`], and its reference's layers.
@@ -1090,7 +1386,7 @@ fn weighted_oit_trades_sorting_errors_for_wider_tint_errors() {
     let Some(gpu) = support::gpu() else { return };
     let rig = Rig::new(gpu, SIZE);
     let results = measure(&rig);
-    for (scene, layers, errors) in &results {
+    for (scene, layers, errors) in results.iter().filter(|r| r.0 != "crossing_glass_model") {
         // The reference is exact: peeling stopped at an empty layer, and a
         // scene this deep needs more than one layer (the negative control:
         // one layer is visibly wrong).
@@ -1121,9 +1417,42 @@ fn weighted_oit_trades_sorting_errors_for_wider_tint_errors() {
         "near-opaque foliage: weighted blending is further off than sorting"
     );
     let particles = scene("particles_through_glass");
+    // The engine draws particles among the see-through models (#219):
+    // 4.8 levels off when they were drawn after them all, about 1.3 now.
+    let (among, last) = (of(particles, Method::Sorted), of(particles, Method::ParticlesLast));
     assert!(
-        of(particles, Method::SortedTogether).mean < of(particles, Method::Sorted).mean / 2.0,
-        "particles sorted with the models are far closer than particles drawn after them"
+        among.mean < 2.0 && among.mean < last.mean / 2.0,
+        "particles sorted with the models are far closer than particles drawn after them ({among:?} against {last:?})"
+    );
+    // A model's own triangles (#219): sorting them by centroid every
+    // frame helps, splitting where they cross and walking the tree is
+    // nearly exact within the model; neither helps models that cross
+    // each other (the separate panes of `intersecting_glass`).
+    for name in ["crossing_glass_model", "layered_foliage"] {
+        let errors = scene(name);
+        let (sorted, triangles, split) = (
+            of(errors, Method::Sorted),
+            of(errors, Method::TrianglesSorted),
+            of(errors, Method::Split),
+        );
+        assert!(
+            split.mean < sorted.mean / 4.0 && split.mean < triangles.mean / 2.0,
+            "{name}: split triangles are far closer than sorted ones ({split:?}, {triangles:?}, {sorted:?})"
+        );
+        assert!(
+            triangles.mean < sorted.mean * 0.8,
+            "{name}: sorting a model's triangles helps ({triangles:?} against {sorted:?})"
+        );
+    }
+    let crossing = scene("crossing_glass_model");
+    assert!(
+        of(crossing, Method::Split).bad < 0.005,
+        "multi-pane glass split at build time is exact"
+    );
+    assert_eq!(
+        of(glass, Method::Split).mean,
+        of(glass, Method::Sorted).mean,
+        "panes that are models of their own aren't helped by ordering a model's triangles"
     );
 }
 
@@ -1197,7 +1526,14 @@ fn oit_gpu_cost_benchmark() {
     let (device, queue) = (&rig.gpu.device, &rig.gpu.queue);
     let mut timer = super::timer::GpuTimer::new(device, queue).expect("a GPU timer");
     let pixels = f64::from(BIG.0 * BIG.1);
-    let methods = [Method::Sorted, Method::Weighted, Method::Peeled(4), Method::Peeled(8)];
+    let methods = [
+        Method::Sorted,
+        Method::TrianglesSorted,
+        Method::Split,
+        Method::Weighted,
+        Method::Peeled(4),
+        Method::Peeled(8),
+    ];
     for method in methods {
         let mb = |samples: u32| f64::from(method.bytes_per_pixel() * samples) * pixels / 1e6;
         eprintln!(
@@ -1210,6 +1546,7 @@ fn oit_gpu_cost_benchmark() {
     }
     for scene in [
         intersecting_glass(),
+        crossing_glass_model(),
         particles_through_glass(2000),
         layered_foliage(200),
     ] {
@@ -1247,4 +1584,107 @@ fn oit_gpu_cost_benchmark() {
             );
         }
     }
+}
+
+/// `models` card clusters around the view, each `pairs` pairs of leaf
+/// cards crossed at right angles (4 triangles a pair) in one model: what
+/// the CPU cost of ordering a model's own triangles is measured on.
+fn card_clusters(models: usize, pairs: usize) -> Scene {
+    let mut s = Scene::new("card_clusters");
+    let mut rng = Rng::new(219);
+    for _ in 0..models {
+        let center = vec3(rng.range(-6.0, 6.0), rng.range(-3.0, 3.0), rng.range(-12.0, -2.0));
+        let mut quads = Vec::with_capacity(pairs * 2);
+        for _ in 0..pairs {
+            let at = center + vec3(rng.range(-1.5, 1.5), rng.range(-1.5, 1.5), rng.range(-1.5, 1.5));
+            let (yaw, half) = (rng.angle(), rng.range(0.15, 0.3));
+            quads.push((at, pane(yaw, 0.0, half), [0.2, 0.7, 0.2, 0.9]));
+            quads.push((at, pane(yaw + FRAC_PI_2, 0.0, half), [0.1, 0.4, 0.1, 0.9]));
+        }
+        s.push_placed(center, &quads, Shape::Leaf);
+    }
+    s
+}
+
+/// The CPU cost of a frame's triangle order for see-through models whose
+/// own triangles are ordered: 50 models of 1,000 triangles (250 crossed
+/// card pairs each), 50,000 triangles. Thread CPU time (what this thread
+/// ran, whatever else the machine does), the median of 31 frames, for
+/// writing the index lists as built (the floor: a copy), sorting each
+/// model's triangles by centroid, and walking each model's BSP tree (and
+/// building the trees once, with how many triangles splitting made).
+/// Ignored: run explicitly, in release:
+/// `cargo test --release --lib --features 3d triangle_order_cpu_cost_benchmark -- --ignored --nocapture`.
+#[test]
+#[ignore = "benchmark: run explicitly in release"]
+fn triangle_order_cpu_cost_benchmark() {
+    #[cfg(unix)]
+    let cpu = || {
+        let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: `t` is a valid, writable timespec.
+        let ok = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
+        assert_eq!(ok, 0, "thread CPU clock");
+        t.tv_sec as f64 * 1e3 + t.tv_nsec as f64 / 1e6
+    };
+    #[cfg(not(unix))]
+    let cpu = {
+        let start = std::time::Instant::now();
+        move || start.elapsed().as_secs_f64() * 1e3
+    };
+    let scene = card_clusters(50, 250);
+    let triangles = scene.vertices.len() / 3;
+    let median = |frame: &mut dyn FnMut() -> usize| {
+        let mut times = Vec::new();
+        let mut written = 0;
+        for _ in 0..31 {
+            let start = cpu();
+            written = std::hint::black_box(frame());
+            times.push(cpu() - start);
+        }
+        times.sort_by(f64::total_cmp);
+        (times[times.len() / 2], written)
+    };
+    let (mut indices, mut keys) = (Vec::with_capacity(triangles * 6), Vec::new());
+    let (copy, n) = median(&mut || {
+        indices.clear();
+        for o in &scene.objects {
+            indices.extend(o.first..o.first + o.count);
+        }
+        indices.len()
+    });
+    eprintln!("triangle order cpu: as built (a copy)  {copy:7.3} ms for {} indices", n);
+    let (sorted, _) = median(&mut || {
+        indices.clear();
+        for o in &scene.objects {
+            sort_triangles(&scene.vertices, o.first, o.count, &mut keys, &mut indices);
+        }
+        indices.len()
+    });
+    eprintln!(
+        "triangle order cpu: sorted by centroid {sorted:7.3} ms for {triangles} triangles ({:.1} ns a triangle)",
+        sorted * 1e6 / triangles as f64
+    );
+    let start = cpu();
+    let split = scene.split();
+    let built = cpu() - start;
+    let pieces: usize = split
+        .objects
+        .iter()
+        .filter_map(|o| o.tree.as_ref())
+        .map(Bsp::triangles)
+        .sum();
+    let (walked, n) = median(&mut || {
+        indices.clear();
+        for o in &split.objects {
+            if let Some(tree) = &o.tree {
+                tree.order(EYE, o.first, &mut indices);
+            }
+        }
+        indices.len()
+    });
+    eprintln!(
+        "triangle order cpu: BSP walk           {walked:7.3} ms for {pieces} triangles after splitting ({:.2}x; built once in {built:.1} ms), {} indices",
+        pieces as f64 / triangles as f64,
+        n
+    );
 }

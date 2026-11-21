@@ -45,12 +45,14 @@ pub enum ParticleShape3D {
 pub enum ParticleBlend3D {
     /// Ordinary alpha compositing. The particles of every alpha emitter
     /// are sorted far to near together, so two emitters' particles mix
-    /// correctly where they overlap.
+    /// correctly where they overlap, and drawn among the see-through
+    /// models in that order, so glass in front of a particle tints it.
     #[default]
     Alpha,
     /// Emitted light adds to the scene, weighted by alpha. An additive
     /// emitter is drawn whole, where its centre falls among the alpha
-    /// particles (light adds up the same in any order).
+    /// particles and the see-through models (light adds up the same in
+    /// any order, but glass in front of it still dims it).
     Additive,
 }
 /// Settings copied into an emitter. Change settings by creating a new emitter.
@@ -448,6 +450,11 @@ struct Staged {
 pub(crate) struct ParticleFrame {
     /// Every particle, far to near: what is drawn.
     pub instances: Vec<ParticleInstance>,
+    /// Each of `instances`' view depth along the camera's forward, as it
+    /// was sorted (an additive emitter's particles: its centre's), so
+    /// never rising. The renderer places the particles among the
+    /// see-through models by it.
+    pub depths: Vec<f32>,
     /// Stretches of `instances` of one image and blend, far to near.
     pub runs: Vec<ParticleRun>,
     pub right: [f32; 4],
@@ -462,8 +469,9 @@ pub(crate) struct ParticleFrame {
     staged: Vec<ParticleInstance>,
     emitters: Vec<Staged>,
     /// What is sorted: an alpha particle (its emitter and index in
-    /// `staged`) or a whole additive emitter (index `u32::MAX`).
-    items: Vec<(u32, u32)>,
+    /// `staged`) or a whole additive emitter (index `u32::MAX`), and its
+    /// view depth.
+    items: Vec<(u32, u32, f32)>,
     /// One key per item: its view depth, far first, then the item.
     keys: Vec<u64>,
     /// The sort's second buffer (see `depth_sort`).
@@ -480,6 +488,7 @@ impl ParticleFrame {
     /// Nothing to draw (keeping the storage).
     pub fn clear(&mut self) {
         self.instances.clear();
+        self.depths.clear();
         self.runs.clear();
         self.soft = false;
         self.strips.vertices.clear();
@@ -492,6 +501,7 @@ impl ParticleFrame {
     /// image and blend that end up next to each other share a draw.
     pub fn collect(&mut self, world: &mut World, camera: &Camera3D) {
         self.instances.clear();
+        self.depths.clear();
         self.runs.clear();
         self.staged.clear();
         self.emitters.clear();
@@ -532,8 +542,9 @@ impl ParticleFrame {
                 };
                 center += position;
                 if alpha {
-                    keys.push(u64::from(far_first(depth(position))) << 32 | items.len() as u64);
-                    items.push((index, staged.len() as u32));
+                    let d = depth(position);
+                    keys.push(u64::from(far_first(d)) << 32 | items.len() as u64);
+                    items.push((index, staged.len() as u32, d));
                 }
                 let size = p.size * s.size_over_life.sample(age) * scale;
                 staged.push(ParticleInstance {
@@ -550,8 +561,9 @@ impl ParticleFrame {
             }
             if !alpha {
                 center /= e.particles.len() as f32;
-                keys.push(u64::from(far_first(depth(center))) << 32 | items.len() as u64);
-                items.push((index, u32::MAX));
+                let d = depth(center);
+                keys.push(u64::from(far_first(d)) << 32 | items.len() as u64);
+                items.push((index, u32::MAX, d));
             }
             emitters.push(Staged {
                 first: first as u32,
@@ -563,7 +575,7 @@ impl ParticleFrame {
         self.soft = soft;
         super::depth_sort::sort_keys(&mut self.keys, &mut self.scratch);
         for &key in &self.keys {
-            let (emitter, particle) = self.items[(key & u64::from(u32::MAX)) as usize];
+            let (emitter, particle, depth) = self.items[(key & u64::from(u32::MAX)) as usize];
             let e = self.emitters[emitter as usize];
             let range = if particle == u32::MAX {
                 e.first as usize..(e.first + e.count) as usize
@@ -573,6 +585,7 @@ impl ParticleFrame {
             let first = self.instances.len() as u32;
             let count = range.len() as u32;
             self.instances.extend_from_slice(&self.staged[range]);
+            self.depths.resize(self.instances.len(), depth);
             match self.runs.last_mut() {
                 Some(run) if run.texture == e.texture && run.blend == e.blend && run.first + run.count == first => {
                     run.count += count;
@@ -853,6 +866,9 @@ mod tests {
         frame.collect(&mut world, &camera);
         let zs: Vec<f32> = frame.instances.iter().map(|i| i.position_size[2]).collect();
         assert_eq!(zs, [-8.0, -1.0, -11.0, -4.0, -2.0]);
+        // Each particle's sort depth, never rising: the additive emitter's
+        // two at its centre's.
+        assert_eq!(frame.depths, [8.0, 6.0, 6.0, 4.0, 2.0]);
         let runs: Vec<(u32, u32, Option<u32>, ParticleBlend3D)> = frame
             .runs
             .iter()

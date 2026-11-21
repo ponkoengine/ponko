@@ -40,9 +40,11 @@ macro_rules! with_fields {
 mod animator;
 pub(crate) mod api;
 pub(crate) mod bake;
+#[cfg(all(feature = "window", not(target_arch = "wasm32")))]
+pub use bake::bake_lighting_gpu;
 pub use bake::{
-    BakeModel, BakeStats, BakedLighting, LightBakeScene, LightBakeSettings, LightmapRect, Lightmapped,
-    MAX_LIGHTMAP_PAGES, bake_lighting,
+    BakeModel, BakeStats, BakeTexture, BakedLighting, GltfBake, LightBakeScene, LightBakeSettings, LightmapRect,
+    Lightmapped, MAX_LIGHTMAP_PAGES, Unbaked, WorldBake, bake_lighting,
 };
 mod clip;
 mod collect;
@@ -152,6 +154,7 @@ pub(crate) use gltf_scene::cube_gltf;
 pub(crate) use gltf_scene::{GltfEntities, GltfOverride, GltfOverrideKind, WaitingLink};
 pub use gltf_scene::{GltfNode, GltfOptions, GltfRoot, GltfScene, GltfSceneNode, SpawnPoint};
 pub use mesh::{MeshData, MorphFrame, MorphTarget};
+pub use post::Upscaler;
 pub use post::{AmbientOcclusion, AntiAliasing, DepthOfField, Post, PostVolume, SplitToning, Tonemap};
 pub(crate) use post::{MAX_RENDER_SCALE, MIN_RENDER_SCALE};
 #[cfg(feature = "window")]
@@ -1387,6 +1390,9 @@ pub(crate) struct Assets3D {
     /// Baked lighting set with `Graphics::set_baked_lighting` that the
     /// renderer hasn't taken yet: `Some(None)` takes it away.
     pub(crate) baked_upload: Option<Option<bake::BakedLayers>>,
+    /// Meshes' and materials' data kept for world bakes
+    /// (`Graphics::keep_bake_sources`); `None` while off.
+    pub(crate) bake_sources: Option<bake::BakeSources>,
     /// Render targets made so far.
     pub render_targets: Vec<crate::texture::Texture>,
     /// GPU buffers' lengths, by slot; 0 for a freed one.

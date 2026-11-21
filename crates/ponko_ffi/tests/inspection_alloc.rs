@@ -1,7 +1,7 @@
 //! Isolate process-wide CountingAllocator measurements in a single-test binary.
 mod common;
 
-use ponko::perf::alloc_counts;
+use ponko::perf::{alloc_counts, thread_alloc_counts};
 use ponko_ffi::PonkoStatus::*;
 use ponko_ffi::*;
 use std::ffi::CString;
@@ -50,16 +50,13 @@ fn asset_handle_probes_and_fills_allocate_nothing_through_ffi() {
                 &raw mut sounds,
             ),
         ] {
-            let quietest = (0..8)
-                .map(|_| {
-                    let before = alloc_counts().count;
-                    let status = ponko_ctx_asset_handles(ctx, class, ptr, capacity, out_len);
-                    let count = alloc_counts().count - before;
-                    assert_eq!(status, PONKO_OK);
-                    count
-                })
-                .min();
-            assert_eq!(quietest, Some(0), "capacity {capacity}");
+            for _ in 0..8 {
+                let before = thread_alloc_counts().count;
+                let status = ponko_ctx_asset_handles(ctx, class, ptr, capacity, out_len);
+                let count = thread_alloc_counts().count - before;
+                assert_eq!(status, PONKO_OK);
+                assert_eq!(count, 0, "capacity {capacity}");
+            }
         }
         assert_eq!(ponko_ctx_set_profiling(ctx, false), PONKO_OK);
 

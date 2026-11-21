@@ -71,9 +71,18 @@ pub(super) const FRUSTUM_STALE: &str = "most models changed in recent frames, so
 /// The `gpu_timing` block: whether the adapter can time, how many frames
 /// were timed, and which cadence the game chose (`cadence`: `auto`, `every`
 /// with `every` frames, or `off`).
-fn gpu_timing_json(available: bool, frames_timed: u64, choice: crate::perf::GpuTiming) -> Value {
+fn gpu_timing_json(
+    available: bool,
+    frames_timed: u64,
+    choice: crate::perf::GpuTiming,
+    untimed: Option<crate::perf::GpuUntimed>,
+) -> Value {
     use crate::perf::GpuTiming;
     let mut block = json!({ "available": available, "frames_timed": frames_timed });
+    // Only when there is a reason: a null here would need one too.
+    if let Some(why) = untimed {
+        block["untimed"] = json!(why.name());
+    }
     match choice {
         GpuTiming::Auto => block["cadence"] = json!("auto"),
         GpuTiming::Every(n) => {
@@ -174,7 +183,8 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
             for path in ["cpu_ms", "gpu_ms", "counts", "upload_bytes"] {
                 gone(path, why);
             }
-            let timing = gpu_timing_json(false, 0, inputs.gpu_timing);
+            let untimed = Some(crate::perf::GpuUntimed::NoGpu);
+            let timing = gpu_timing_json(false, 0, inputs.gpu_timing, untimed);
             (timing, Value::Null, Value::Null, Value::Null, Value::Null)
         }
         Source::Drawn(detail) => {
@@ -193,16 +203,20 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
                 "other": other,
             });
             let timed = detail.gpu_timestamps && detail.gpu_frames_timed > 0;
+            // The renderer's own reason first (the query-set budget, a
+            // lost device); what the detail says without one.
+            let said = detail.gpu_untimed.map(crate::perf::GpuUntimed::message);
             let (frame, passes, not_timed) = if !detail.gpu_timestamps {
-                gone("gpu_ms.frame", NO_TIMESTAMPS);
-                gone("gpu_ms.passes", NO_TIMESTAMPS);
-                gone("gpu_ms.not_timed", NO_TIMESTAMPS);
+                let why = said.unwrap_or(NO_TIMESTAMPS);
+                gone("gpu_ms.frame", why);
+                gone("gpu_ms.passes", why);
+                gone("gpu_ms.not_timed", why);
                 (Value::Null, Value::Null, Value::Null)
             } else if !timed {
-                let why = match inputs.gpu_timing {
+                let why = said.unwrap_or(match inputs.gpu_timing {
                     crate::perf::GpuTiming::Off => TIMING_OFF,
                     _ => NOT_TIMED_YET,
-                };
+                });
                 gone("gpu_ms.frame", why);
                 gone("gpu_ms.passes", why);
                 gone("gpu_ms.not_timed", why);
@@ -247,7 +261,12 @@ pub(super) fn render_inspector(inputs: &Inputs<'_>) -> Value {
                 "pipelines_built": s.pipelines_built,
                 "instance_batches": instance_batches_json(&s.instance_batches),
             });
-            let timing = gpu_timing_json(detail.gpu_timestamps, detail.gpu_frames_timed, inputs.gpu_timing);
+            let timing = gpu_timing_json(
+                detail.gpu_timestamps,
+                detail.gpu_frames_timed,
+                inputs.gpu_timing,
+                detail.gpu_untimed,
+            );
             let uploads = json!(s.uploads.bytes());
             (
                 timing,
@@ -358,6 +377,7 @@ pub(super) fn quality_json(s: &crate::render::SceneSettings) -> Value {
         "level": level,
         "render_scale": p.render_scale,
         "sharpen": p.sharpen,
+        "upscaler": format!("{:?}", p.upscaler).to_lowercase(),
         "shadows": l.shadows,
         "shadow_distance": l.shadow_distance,
         "shadow_cascades": l.shadow_cascades,
@@ -423,6 +443,7 @@ mod tests {
             prepare_ms: 1.5,
             state_changes: Some([2, 7, 3, 2, 11]),
             gpu_latest: None,
+            gpu_untimed: None,
         })
     }
 
@@ -862,6 +883,39 @@ mod tests {
         assert_nulls_explained(&v);
     }
 
+    /// A timer the query-set budget refused, or a lost device, is named
+    /// as such, not called an adapter without timestamps or "not yet".
+    #[test]
+    fn gpu_timing_names_why_a_frame_has_no_gpu_time() {
+        use crate::perf::GpuUntimed;
+        let with = |stamps, frames, why| match drawn(stamps, frames) {
+            Source::Drawn(detail) => Source::Drawn(RenderDetail {
+                gpu_untimed: why,
+                ..detail
+            }),
+            other => other,
+        };
+        let refused = inspect(with(false, 0, Some(GpuUntimed::QuerySetBudget)), None);
+        assert_eq!(refused["gpu_timing"]["untimed"], "query_set_budget");
+        assert_eq!(
+            refused["unavailable"]["gpu_ms.frame"],
+            GpuUntimed::QuerySetBudget.message()
+        );
+        assert_nulls_explained(&refused);
+        // Lost after frames were timed: the last times stay, marked stale.
+        let lost = inspect(with(true, 5, Some(GpuUntimed::DeviceLost)), Some(2.0));
+        assert_eq!(lost["gpu_timing"]["untimed"], "device_lost");
+        assert_eq!(lost["gpu_ms"]["frame"], 2.0);
+        let waiting = inspect(with(true, 0, Some(GpuUntimed::NotReady)), None);
+        assert_eq!(waiting["gpu_timing"]["untimed"], "not_ready");
+        assert_eq!(waiting["unavailable"]["gpu_ms.frame"], GpuUntimed::NotReady.message());
+        // The control: a timed frame has no reason.
+        let timed = inspect(drawn(true, 5), Some(2.0));
+        assert!(timed["gpu_timing"].get("untimed").is_none(), "{timed}");
+        // Headless: no GPU.
+        assert_eq!(inspect(Source::Headless, None)["gpu_timing"]["untimed"], "no_gpu");
+    }
+
     #[test]
     fn gpu_times_wait_for_the_first_timed_frame() {
         let v = inspect(drawn(true, 0), None);
@@ -929,6 +983,7 @@ mod tests {
         let q = quality_json(&s);
         assert_eq!(q["render_scale"], crate::render::Post::MAX_RENDER_SCALE);
         assert_eq!(q["sharpen"], 0.0);
+        assert_eq!(q["upscaler"], "bilinear");
         assert_eq!(q["light_shadow_atlas"], 4096);
     }
 }

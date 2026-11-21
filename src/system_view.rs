@@ -658,7 +658,8 @@ impl ViewTask {
             self.finished = true;
             return;
         }
-        let allocs_before = shared.count_allocs.then(crate::perf::alloc_counts);
+        // The thread it runs on, as for a system run alone.
+        let allocs_before = shared.count_allocs.then(crate::perf::thread_alloc_counts);
         let start = Instant::now();
         self.finished = false;
         let events = Port::Batch {
@@ -675,7 +676,7 @@ impl ViewTask {
         self.finished = true;
         self.last_ms = start.elapsed().as_secs_f32() * 1000.0;
         self.allocs = allocs_before.map_or(0, |before| {
-            crate::perf::alloc_counts().count.saturating_sub(before.count)
+            crate::perf::thread_alloc_counts().count.saturating_sub(before.count)
         });
     }
 }

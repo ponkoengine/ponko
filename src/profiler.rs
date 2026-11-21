@@ -113,6 +113,8 @@ pub(crate) struct Profiler {
     trace: Option<Trace>,
     bench: Option<Bench>,
     pub(crate) frame_state_changes: Option<[u32; 5]>,
+    /// Why the latest frame has no usable GPU time (the HUD says it).
+    pub(crate) gpu_untimed: Option<crate::perf::GpuUntimed>,
     /// Frames since the game started.
     frame: u64,
     /// The GPU timer's frame count when last looked at.
@@ -138,6 +140,7 @@ impl Profiler {
             trace: None,
             bench: None,
             frame_state_changes: None,
+            gpu_untimed: None,
             frame: 0,
             gpu_frames_seen: 0,
         }
@@ -280,6 +283,7 @@ impl Profiler {
                 &self.stats,
                 systems,
                 (gpu_passes, not_timed),
+                self.gpu_untimed,
                 render,
             );
         }
@@ -333,6 +337,7 @@ fn hud_text(
     s: &FrameStats,
     systems: &[SystemTiming],
     (passes, not_timed): (&[GpuPass], &[&'static str]),
+    untimed: Option<crate::perf::GpuUntimed>,
     r: RenderStats,
 ) {
     out.clear();
@@ -346,11 +351,18 @@ fn hud_text(
         "cpu: systems {:.2}  render {:.2}  wait {:.2}",
         s.systems_ms, s.render_cpu_ms, s.display_wait_ms
     );
-    match s.gpu_ms {
-        Some(g) => {
+    match (s.gpu_ms, untimed) {
+        (Some(g), None) => {
             let _ = writeln!(out, "   gpu {g:.2}");
         }
-        None => out.push('\n'),
+        // Times from an earlier frame, or none: say why.
+        (Some(g), Some(why)) => {
+            let _ = writeln!(out, "   gpu {g:.2} (stale: {})", why.name());
+        }
+        (None, Some(why)) => {
+            let _ = writeln!(out, "   gpu not timed: {}", why.name());
+        }
+        (None, None) => out.push('\n'),
     }
     let _ = writeln!(out, "{} draw calls, {} sprites", r.draw_calls, r.sprites);
     if r.instances + r.shadow_instances > 0 {
@@ -745,6 +757,7 @@ mod tests {
             &FrameStats::default(),
             &[],
             (&passes, &[]),
+            None,
             RenderStats::default(),
         );
         let opaque = text.find("opaque").unwrap();
@@ -764,10 +777,43 @@ mod tests {
             &FrameStats::default(),
             &[],
             (&passes, &["crowd cull"]),
+            None,
             RenderStats::default(),
         );
         assert!(text.contains("crowd cull (not timed)"), "{text}");
         assert!(!text.contains("0.00  crowd cull"), "{text}");
+    }
+
+    /// A frame with no usable GPU time says why, instead of leaving the GPU
+    /// figure out.
+    #[test]
+    fn hud_says_why_the_gpu_is_not_timed() {
+        let mut text = String::new();
+        let untimed = crate::perf::GpuUntimed::QuerySetBudget;
+        hud_text(
+            &mut text,
+            &FrameStats::default(),
+            &[],
+            (&[], &[]),
+            Some(untimed),
+            RenderStats::default(),
+        );
+        assert!(text.contains("gpu not timed: query_set_budget"), "{text}");
+        let stats = FrameStats {
+            gpu_ms: Some(2.0),
+            ..FrameStats::default()
+        };
+        hud_text(
+            &mut text,
+            &stats,
+            &[],
+            (&[], &[]),
+            Some(crate::perf::GpuUntimed::DeviceLost),
+            RenderStats::default(),
+        );
+        assert!(text.contains("gpu 2.00 (stale: device_lost)"), "{text}");
+        hud_text(&mut text, &stats, &[], (&[], &[]), None, RenderStats::default());
+        assert!(text.contains("gpu 2.00\n"), "the control: {text}");
     }
 
     /// A trace shows timed passes as slices and the ones that couldn't be

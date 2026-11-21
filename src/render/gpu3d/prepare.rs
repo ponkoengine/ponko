@@ -22,6 +22,8 @@ struct FrameView {
     size: (u32, u32),
     /// Whether that differs from the window's (a scaling pass follows).
     upscaled: bool,
+    /// The window's size (what the scaling pass draws into).
+    window: (u32, u32),
     /// The camera as the game set it, and as the passes draw with it:
     /// jittered by a sub-pixel amount with temporal antialiasing.
     unjittered: Mat4,
@@ -276,7 +278,7 @@ impl Renderer3D {
     /// have run.
     fn prepare_targets(&mut self, device: &wgpu::Device, view: &FrameView, rebuild: bool) {
         if rebuild {
-            self.targets = Some(self.make_targets(device, view.size, view.upscaled));
+            self.targets = Some(self.make_targets(device, view.size, (view.upscaled, view.window)));
         }
     }
 
@@ -342,11 +344,25 @@ impl Renderer3D {
         if self.screen.taa_on && self.screen.taa.is_none() {
             self.screen.taa = Some(Taa::new(device));
         }
+        // The temporal upscaler stands in for the resolve when the scene is
+        // drawn smaller than the window.
+        self.screen.upscale_on = self.screen.taa_on
+            && post.upscaler == crate::render::Upscaler::Temporal
+            && (size.0 < window.0 || size.1 < window.1);
+        if self.screen.upscale_on
+            && let Some(taa) = &mut self.screen.taa
+        {
+            taa.prepare_upscale(device, self.post.output_format());
+        }
         // The camera the frame is drawn with: jittered by a sub-pixel amount
         // with TAA (depth, GTAO and particles all use it), and the one that
         // moves are measured with.
         let unjittered = frame.view_proj;
-        let jitter = if self.screen.taa_on {
+        let jitter = if self.screen.upscale_on {
+            // More positions, as each drawn pixel covers several of the window's.
+            let phases = taa::jitter_phases(size.0 as f32 / window.0.max(1) as f32);
+            taa::jitter_of(self.history.taa_frame, phases)
+        } else if self.screen.taa_on {
             taa::jitter(self.history.taa_frame)
         } else {
             [0.0; 2]
@@ -395,6 +411,7 @@ impl Renderer3D {
         FrameView {
             size,
             upscaled,
+            window,
             unjittered,
             view_proj,
             jitter,
@@ -437,13 +454,14 @@ impl Renderer3D {
         let FrameView {
             size,
             upscaled,
+            window,
             unjittered,
             ao_on,
             ..
         } = *view;
         // Temporal history: one decision for every effect that reuses the
         // last frame (see `HistoryReset`), made before any of them prepares.
-        let rebuild = self.targets_stale(size, post, ao_on, upscaled);
+        let rebuild = self.targets_stale(size, post, ao_on, (upscaled, window));
         let reset = self.history.decide(frame.motion.reset, rebuild, unjittered);
         if reset.any() {
             self.forget_history();
@@ -773,7 +791,7 @@ impl Renderer3D {
         // main frame, for every view).
         if extra {
             self.order_runs();
-            self.sort_blended(&frame.instances, camera, total as u32);
+            self.sort_blended(&frame.instances, camera, total as u32, &frame.particles);
             self.order_solid_parts(&frame.instances, camera);
             return total + self.lists.blended.len();
         }
@@ -817,7 +835,7 @@ impl Renderer3D {
         self.order_runs();
         // Blended models are drawn from sorted copies of their instances,
         // which follow all the others.
-        self.sort_blended(&frame.instances, camera, total as u32);
+        self.sort_blended(&frame.instances, camera, total as u32, &frame.particles);
         self.order_solid_parts(&frame.instances, camera);
         total + self.lists.blended.len()
     }
@@ -1303,8 +1321,10 @@ impl Renderer3D {
         let &Scene3D { camera, post, time, .. } = scene;
         let FrameView {
             size,
+            window,
             unjittered,
             view_proj,
+            jitter,
             ..
         } = *view;
         // Temporal antialiasing: this frame's resolve, and what the next reads.
@@ -1322,7 +1342,9 @@ impl Renderer3D {
                         current: unjittered,
                         previous: previous_view_proj,
                         input_size: size,
-                        output_size: size,
+                        // The temporal upscaler writes the window's size.
+                        output_size: if self.screen.upscale_on { window } else { size },
+                        jitter,
                         sharpness: post.taa_sharpness,
                         reset,
                     },

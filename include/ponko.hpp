@@ -399,6 +399,24 @@ inline gpu_timing gpu_timing_auto() noexcept { return {gpu_timing_kind::automati
 inline gpu_timing gpu_timing_every(std::uint32_t n) noexcept { return {gpu_timing_kind::every, n}; }
 /// Never time the GPU (Rust `GpuTiming::Off`).
 inline gpu_timing gpu_timing_off() noexcept { return {gpu_timing_kind::off, 0}; }
+/// Why the latest frame has no usable GPU time (Rust `GpuUntimed`), from ctx::gpu_untimed; `none` when it has
+/// one. More reasons may be added.
+enum class gpu_untimed : std::uint32_t {
+    /// The latest frame's GPU time is usable.
+    none = PONKO_GPU_UNTIMED_NONE,
+    /// No GPU: a headless run, or before the renderer opened one.
+    no_gpu = PONKO_GPU_UNTIMED_NO_GPU,
+    /// The GPU or its backend can't write timestamps.
+    no_timestamps = PONKO_GPU_UNTIMED_NO_TIMESTAMPS,
+    /// The timer was refused a timestamp query set: the process holds as many as the engine takes here.
+    query_set_budget = PONKO_GPU_UNTIMED_QUERY_SET_BUDGET,
+    /// GPU timing is off (gpu_timing_off()) and nothing else reads GPU times.
+    off = PONKO_GPU_UNTIMED_OFF,
+    /// No timed frame's timestamps have come back yet.
+    not_ready = PONKO_GPU_UNTIMED_NOT_READY,
+    /// The GPU device was lost.
+    device_lost = PONKO_GPU_UNTIMED_DEVICE_LOST,
+};
 /// A clip to bake for crowds (Rust `CrowdClip`), from crowd_clip_of.
 using crowd_clip = PonkoCrowdClip;
 /// A GPU array of four-float elements (Rust `GpuBuffer`) for compute passes, from ctx::create_gpu_buffer. A
@@ -1275,7 +1293,8 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// (split_toning_shadows, split_toning_highlights, split_toning_balance), depth of field (dof_enabled,
 /// dof_focus_distance, dof_focus_range, dof_blur), the sample count (msaa) and, from version 2, thin
 /// objects in screen-space reflections (ssr_thin_objects: whole without TAA, about a millisecond more at
-/// 1920x1080; the ultra preset turns it on).
+/// 1920x1080; the ultra preset turns it on) and, from version 3, the upscaler (a ponko::upscaler; set it
+/// with `static_cast<std::uint32_t>(...)`).
 using post_ex = PonkoPostEx;
 /// HDR display output settings that can grow (PonkoHdrOutput): enabled, paper_white_nits, peak_nits
 /// (0: the display's). Off by default; see hdr_output_defaults, game::hdr_output, ctx::set_hdr_output.
@@ -1283,6 +1302,14 @@ using hdr_output = PonkoHdrOutput;
 /// What the window does with the HDR settings (PonkoHdrStatus): available, active, encoding, reason,
 /// paper white, peak and headroom as used, and what the display reports (0 unknown).
 using hdr_status = PonkoHdrStatus;
+/// How a 3D frame drawn below the window's size (`render_scale` under 1) is brought up to it (the
+/// `upscaler` of post_ex, Rust `Upscaler`).
+enum class upscaler : std::uint32_t {
+    /// One pass stretches the finished frame, sharpened by `sharpen`.
+    bilinear = PONKO_UPSCALER_BILINEAR,
+    /// Temporal upscaling on TAA's history and motion vectors: needs anti_aliasing::taa.
+    temporal = PONKO_UPSCALER_TEMPORAL,
+};
 /// Whether a camera draws `ctx.debug`'s 3D lines and labels (the `debug_draw` of camera3d_ex and
 /// target_camera_ex, Rust `Camera::debug_draw`); set it with `static_cast<std::uint32_t>(...)`.
 enum class camera_debug_draw : std::uint32_t {
@@ -1781,6 +1808,11 @@ inline alloc_counts thread_alloc_counts() noexcept { return ponko_thread_alloc_c
 /// Read it twice with profiling on and subtract: what the code between still holds. A loop that gives
 /// back what it takes reads (close to) zero however long it runs; a leak grows with every pass.
 inline std::int64_t net_alloc_bytes() noexcept { return ponko_net_alloc_bytes(); }
+
+/// net_alloc_bytes for the calling thread (Rust `perf::thread_net_alloc_bytes`): bytes allocated minus bytes
+/// freed on it while profiling was on, with what its parallel queries' workers did for it. Two readings on one
+/// thread, subtracted, are what the code between them still holds, whatever other threads do meanwhile.
+inline std::int64_t thread_net_alloc_bytes() noexcept { return ponko_thread_net_alloc_bytes(); }
 
 /// Times the scope it lives in (see PONKO_PROFILE_SCOPE).
 class profile_scope_guard {
@@ -6908,6 +6940,12 @@ public:
         detail::check(ponko_ctx_gpu_timing(raw_, &kind, &every));
         return {static_cast<gpu_timing_kind>(kind), every};
     }
+    /// Why the latest frame has no usable GPU time (Rust `perf.gpu_untimed()`): gpu_untimed::none when it has one.
+    ponko::gpu_untimed gpu_untimed() const {
+        std::uint32_t why = 0;
+        detail::check(ponko_ctx_gpu_untimed(raw_, &why));
+        return static_cast<ponko::gpu_untimed>(why);
+    }
     /// Where time and allocations went over the last frames (needs set_profiling(true) for a while).
     ponko::perf_report perf_report() const {
         return ponko::perf_report(detail::read_text([&](char* b, std::size_t c, std::size_t* n) { return ponko_ctx_perf_report(raw_, b, c, n); }));
@@ -7802,6 +7840,53 @@ public:
     void add_background_asset_source(const memory_source& source) {
         detail::check(ponko_ctx_add_background_memory_source(raw_, source.raw()));
     }
+
+    // Mods: packs players add, mounted in a load order (Rust's ponko::mods).
+    /// Checks the mod packs at `paths`, then mounts them in that order moved
+    /// as their manifests' `requires` and `after` need: assets load from the
+    /// mods first, the last mod with a name winning. A bad mod is refused
+    /// whole and nothing is mounted; the ponko::error names the mod, the file
+    /// (its path()) and the reason. Mount in setup, after reflecting components.
+    void mount_mods(const std::vector<std::string>& paths) {
+        std::vector<const char*> raw;
+        raw.reserve(paths.size());
+        for (const auto& p : paths) raw.push_back(p.c_str());
+        detail::check(ponko_ctx_mount_mods(raw_, raw.data(), raw.size()));
+    }
+    /// The mounted mods' ids, in load order (empty before mount_mods).
+    std::vector<std::string> mod_ids() {
+        std::size_t n = 0;
+        detail::check(ponko_ctx_mod_count(raw_, &n));
+        std::vector<std::string> ids(n);
+        for (std::size_t i = 0; i < n; ++i)
+            ids[i] = detail::read_text([&](char* b, std::size_t c, std::size_t* len) { return ponko_ctx_mod_id(raw_, i, b, c, len); });
+        return ids;
+    }
+    /// The id of the mod asset `name` loads from, or nothing if it is the game's own.
+    std::optional<std::string> mod_provider(const char* name) {
+        std::size_t n = 0;
+        const PonkoStatus status = ponko_ctx_mod_provider(raw_, name, nullptr, 0, &n);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* len) { return ponko_ctx_mod_provider(raw_, name, b, c, len); });
+    }
+    /// The mods' files whose names start with `prefix`, sorted, each once:
+    /// what mods added under a folder ("enemies/").
+    std::vector<std::string> mod_files_under(const char* prefix) {
+        std::vector<std::string> files;
+        for (std::size_t i = 0;; ++i) {
+            std::size_t n = 0;
+            const PonkoStatus status = ponko_ctx_mod_file_under(raw_, prefix, i, nullptr, 0, &n);
+            if (status == PONKO_NOT_FOUND) return files;
+            detail::check(status);
+            files.push_back(detail::read_text([&](char* b, std::size_t c, std::size_t* len) {
+                return ponko_ctx_mod_file_under(raw_, prefix, i, b, c, len);
+            }));
+        }
+    }
+    /// A hash of the mounted mods, their order and data (0 without mods):
+    /// lockstep peers and replays compare it.
+    std::uint64_t mods_fingerprint() { std::uint64_t f = 0; detail::check(ponko_ctx_mods_fingerprint(raw_, &f)); return f; }
     /// Adds a source whose reads are `read(name)` (Rust's `AssetSource`):
     /// the bytes, or nothing if this source doesn't have `name` (the next
     /// source is asked). An exception from `read` is a read error. It runs

@@ -256,6 +256,11 @@ impl<L: ponko_ecs::QueryData> ponko_ecs::Lookup<'_, L>
 pub fn ponko_ecs::Lookup<'_, L>::contains(&self, ponko_ecs::Entity) -> bool
 pub fn ponko_ecs::Lookup<'_, L>::get(&self, ponko_ecs::Entity) -> core::option::Option<<L as ponko_ecs::QueryData>::Item> where L: ponko_ecs::ReadOnlyQueryData
 pub fn ponko_ecs::Lookup<'_, L>::get_mut(&mut self, ponko_ecs::Entity) -> core::option::Option<<L as ponko_ecs::QueryData>::Item>
+pub struct ponko_ecs::LoopTally
+impl ponko_ecs::LoopTally
+pub fn ponko_ecs::LoopTally::count<R>(&self, impl core::ops::function::FnOnce() -> R) -> R
+pub fn ponko_ecs::LoopTally::finish(self)
+pub fn ponko_ecs::LoopTally::start() -> Self
 pub struct ponko_ecs::Or<T>(_)
 impl<T: ponko_ecs::OrTerms> ponko_ecs::OrTerm for ponko_ecs::Or<T>
 impl<T: ponko_ecs::OrTerms> ponko_ecs::QueryFilter for ponko_ecs::Or<T>
@@ -374,6 +379,15 @@ impl<'a> core::marker::Copy for ponko_ecs::RawWorldRef<'a>
 pub struct ponko_ecs::Requires<'w>
 impl<'w> ponko_ecs::Requires<'w>
 pub fn ponko_ecs::Requires<'w>::add<R: ponko_ecs::Component>(&mut self, fn() -> R) -> &mut Self
+pub struct ponko_ecs::ThreadMeter
+pub ponko_ecs::ThreadMeter::credit: fn([u64; 3])
+pub ponko_ecs::ThreadMeter::on: fn() -> bool
+pub ponko_ecs::ThreadMeter::read: fn() -> [u64; 3]
+impl core::clone::Clone for ponko_ecs::ThreadMeter
+pub fn ponko_ecs::ThreadMeter::clone(&self) -> Self
+impl core::fmt::Debug for ponko_ecs::ThreadMeter
+pub fn ponko_ecs::ThreadMeter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ecs::ThreadMeter
 pub struct ponko_ecs::Tick(_)
 impl ponko_ecs::Tick
 pub fn ponko_ecs::Tick::from_bits(u64) -> Self
@@ -700,6 +714,7 @@ pub type (A, B)::Refs<'w> = (&'w mut A, &'w mut B)
 impl<A: core::marker::Send + core::marker::Sync + 'static> ponko_ecs::ResourceTuple for (A)
 pub type (A)::Refs<'w> = (&'w mut A)
 pub fn ponko_ecs::compile_tree<T: ponko_ecs::FilterTree>(&T, impl core::ops::function::Fn(u32) -> core::option::Option<ponko_ecs::ComponentId>) -> core::result::Result<ponko_ecs::CompiledFilter, ponko_ecs::FilterError>
+pub fn ponko_ecs::set_thread_meter(ponko_ecs::ThreadMeter) -> bool
 pub type ponko_ecs::DropFn = fn(*mut u8)
 pub type ponko_ecs::DynamicHook = alloc::rcs::arc::Arc<(dyn for<'w> core::ops::function::Fn(&mut ponko_ecs::HookWorld<'w>, ponko_ecs::Entity, ponko_ecs::ComponentId, *const u8) + core::marker::Send + core::marker::Sync)>
 pub type ponko_ecs::Hook = for<'w> fn(&mut ponko_ecs::HookWorld<'w>, ponko_ecs::Entity)

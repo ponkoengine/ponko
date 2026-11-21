@@ -386,7 +386,7 @@ to it. The full rule is in
 | `PonkoLightingEx` | `ponko_ctx_lighting_ex`, `ponko_ctx_set_lighting_ex` | `shadow_sun_size` (the sun's size for contact-hardening shadows) and `shadow_sun_step` |
 | `PonkoColliderEx` | `ponko_set_collider_ex`, `ponko_get_collider_ex` | a 2D collider's collision groups and polygon corners, in one call |
 | `PonkoQueryFilterEx` | the `ponko_ctx_*_ex` 2D and 3D queries | one filter for both, collision groups included |
-| `PonkoPostEx` | `ponko_ctx_post_ex`, `ponko_ctx_set_post_ex`, `ponko_post_ex_lerp`, `ponko_post_blend_volumes` | split toning, depth of field and the sample count (`msaa`); version 2: `ssr_thin_objects` (thin things whole in reflections); blending two looks, and post volumes (`PonkoPostVolume` boxes) |
+| `PonkoPostEx` | `ponko_ctx_post_ex`, `ponko_ctx_set_post_ex`, `ponko_post_ex_lerp`, `ponko_post_blend_volumes` | split toning, depth of field and the sample count (`msaa`); version 2: `ssr_thin_objects` (thin things whole in reflections); version 3: `upscaler` (a `PonkoUpscaler`: the stretch or temporal upscaling); blending two looks, and post volumes (`PonkoPostVolume` boxes) |
 | `PonkoParticleSettings3DEx` | `ponko_particle_settings3d_ex_defaults`, `ponko_ctx_set_particle_emitter3d_ex` | `softness`: soft particles |
 | `PonkoCamera3DEx` | `ponko_ctx_camera3d_ex`, `ponko_ctx_set_camera3d_ex`, `ponko_camera3d_ex_from` | `occlusion_culling` and `particles` (whether it draws particles, trails and lines) |
 | `PonkoTargetCameraEx` | `ponko_ctx_set_target_cameras_ex`, `ponko_ctx_target_camera_ex`, `ponko_target_camera_ex_from` | `particles`, per target camera |
@@ -479,6 +479,7 @@ binding arrives:
 |---|---|---|
 | `Assets::scene_asset_field` | [Asset sources](asset-sources.md) | C components have no text fields to name an asset in; load what a scene needs before `load_scene` |
 | `PackSource` | [Asset sources](asset-sources.md#packs) | C and C++ games read the default `assets.pack` like Rust games; a pack of their own can be read through `ponko_ctx_add_asset_source` |
+| `ModPack::from_files`, `ModPack::from_pack_bytes`, `ModSet::problems` | [Mods](mods.md#in-c-and-c) | Mod packs mount by path (`ponko_ctx_mount_mods`, `ctx.mount_mods`; `ponko pack` makes one from loose files), and a refused set reports its first problem |
 | `Query::with_lookup`, `World::get_many_mut` | [Entities, components, queries](ecs.md#borrowing-several-things-at-once) | Generic borrows; component pointers from `get` don't borrow |
 | `World::query_ref` | [Entities, components, queries](ecs.md#read-only-queries-on-a-shared-world) | C and C++ queries read through component pointers and need no exclusive borrow of the world |
 | `SystemView` | [Declared system access](system-access.md) | C and C++ systems take the whole `ctx`, so they run alone; declare their access by name |
@@ -499,6 +500,10 @@ binding arrives:
 | `GameRollback` | [Rollback](networking.md#rolling-back-a-whole-game) | Generic over the game's input type, which C and C++ can't name; C and C++ games use lockstep (`ponko_net_*`). A binding with fixed-size byte inputs is possible later |
 | `WorldSnapshot` | [Rollback](networking.md#rolling-back-a-whole-game) | Used through `GameRollback`; C and C++ components without a destructor are copied as bytes, so a binding can follow with it |
 | `Graphics::load_lights`, `Graphics::load_cameras` | [3D](3d.md#gltf-extensions-lights-and-cameras) | Models load with the same glTF extensions; a file's lights and cameras aren't returned yet, so place them yourself |
+| `LightBakeScene::add_world`, `LightBakeScene::add_gltf`, `Graphics::keep_bake_sources`, `Unbaked` | [Baked lighting](3d.md#baked-lighting) | C and C++ components can't be listed by mesh: add each model with `ponko_light_bake_scene_add` (`light_bake_scene::add`), and leave out the ones that shouldn't bake |
+| `BakeTexture` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: give a textured model its texture's average color as its albedo |
+| `bake_lighting_gpu` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: `ponko_bake_lighting` bakes the same light on the CPU |
+| `LightBakeSettings::compress` | [Baked lighting](3d.md#baked-lighting) | Not bound yet: C and C++ bakes are compressed, the default |
 | `Smoothing` | [Client prediction](networking.md#your-own-player-at-once-client-prediction) | Generic over what is drawn; prediction and the input queue are bound (`ponko::prediction`), so fade the correction offset (`reconciled::before`) yourself |
 | `Physics3D::move_character` | [3D physics](physics3d.md#a-walking-character) | Characters walk with the physics step only; one tick can't be replayed on its own |
 | `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ web games can't join over WebSocket |

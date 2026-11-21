@@ -11,7 +11,6 @@ use std::fmt;
 use std::sync::Arc;
 
 use ponko_ecs::{Component, ComponentId, Entity, World};
-#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
 use rayon::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -162,6 +161,17 @@ type SpawnAtFn = Arc<dyn Fn(&mut World, Entity, Value) -> Result<bool, String> +
 const SAVE_FORMAT: &str = "ponko-world";
 /// Version of the save layout; bumped when it changes incompatibly.
 const SAVE_VERSION: u64 = 1;
+
+/// Whether a save builds each entity's JSON on the frame pool. Natively it
+/// does. In a web build with threads it stays on the calling thread: the
+/// JSON is many small allocations, and the browser's threads share the
+/// standard allocator's one lock, so the frame pool's workers made it 17
+/// times slower than the page's thread alone (700 ms against 41 ms in the
+/// threads fixture, book/src/web-threads.md). With one heap per thread
+/// (`--cfg ponko_web_thread_heaps`) the workers are faster again (40 ms
+/// against 61 ms there), so such a build shares it out.
+const SAVE_SHARED: bool =
+    !cfg!(all(target_arch = "wasm32", target_feature = "atomics")) || cfg!(ponko_web_thread_heaps);
 /// Entity slots a save may use beyond its own entities, for the gaps that
 /// despawns leave: 2^22 slots, about 64 MiB of slot table and free list at worst.
 const LOAD_SPARE_SLOTS: usize = 1 << 22;
@@ -999,6 +1009,56 @@ fn find(world: &World, name: &str) -> Result<Reflected, ReflectError> {
         .ok_or_else(|| ReflectError::UnknownComponent(name.to_string()))
 }
 
+/// Whether `value` makes a whole component `name`, read without touching the
+/// world: the check [`WorldReflect::load`] runs first (mods check their
+/// files with it before anything is mounted).
+pub(crate) fn check_component(world: &World, name: &str, value: &Value) -> Result<(), ReflectError> {
+    (find(world, name)?.check)(value).map_err(bad_value(name))
+}
+
+/// Whether component `name` is reflected in `world`.
+pub(crate) fn is_reflected(world: &World, name: &str) -> Result<(), ReflectError> {
+    find(world, name).map(drop)
+}
+
+/// Checks a world save (a scene) like [`WorldReflect::load`] does before it
+/// changes anything, without loading it: its format, and each entity's
+/// components and each resource after the game's migrations.
+pub(crate) fn check_world_save(world: &World, save: &Value) -> Result<(), ReflectError> {
+    let bad = |message: String| ReflectError::BadValue {
+        component: "<world>".into(),
+        message,
+    };
+    if save["version"].as_u64() != Some(SAVE_VERSION) {
+        return Err(bad(format!(
+            "unsupported save version {} (this engine reads {SAVE_VERSION})",
+            save["version"]
+        )));
+    }
+    let save = migrate::migrate(world, save)?;
+    let list = save["entities"]
+        .as_array()
+        .ok_or_else(|| bad("missing \"entities\" list".into()))?;
+    for item in list {
+        if let Some(Value::Object(components)) = item.get("components") {
+            for (name, value) in components {
+                check_component(world, name, value)?;
+            }
+        }
+    }
+    if let Some(Value::Object(resources)) = save.get("resources") {
+        for (name, value) in resources {
+            (find_resource(world, name)?.check)(value).map_err(bad_value(name))?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether `value` is a world save (`"format": "ponko-world"`).
+pub(crate) fn is_world_save(value: &Value) -> bool {
+    value["format"] == SAVE_FORMAT
+}
+
 fn bad_value(component: &str) -> impl FnOnce(String) -> ReflectError + '_ {
     move |message| ReflectError::BadValue {
         component: component.to_string(),
@@ -1334,19 +1394,14 @@ impl WorldReflect for World {
             }
             _ => None,
         };
-        // Natively in parallel, on the frame pool, as parallel queries run.
-        #[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
-        let entities: Vec<Value> = crate::frame_pool::run(|| {
-            crate::profile_scope!("reflect/shared_save");
-            entities.par_iter().filter_map(one).collect()
-        });
-        // In a web build with threads, one after another on the calling
-        // thread: the JSON is many small allocations, and the browser's
-        // threads share one allocator lock, so the frame pool's workers
-        // made it about 10 times slower than the page's thread alone
-        // (measured in the threads fixture, book/src/web-threads.md).
-        #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
-        let entities: Vec<Value> = {
+        // On the frame pool, as parallel queries run, where the threads
+        // allocate without waiting for each other (see `SAVE_SHARED`).
+        let entities: Vec<Value> = if crate::frame_pool::share(|| SAVE_SHARED) {
+            crate::frame_pool::run(|| {
+                crate::profile_scope!("reflect/shared_save");
+                entities.par_iter().filter_map(one).collect()
+            })
+        } else {
             crate::profile_scope!("reflect/save");
             entities.iter().filter_map(one).collect()
         };
