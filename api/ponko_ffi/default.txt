@@ -4190,6 +4190,24 @@ impl core::fmt::Debug for ponko_ffi::PonkoReplicationPeerStats
 pub fn ponko_ffi::PonkoReplicationPeerStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoReplicationPeerStats
 impl core::marker::StructuralPartialEq for ponko_ffi::PonkoReplicationPeerStats
+#[repr(C)] pub struct ponko_ffi::PonkoReplicationResendStats
+pub ponko_ffi::PonkoReplicationResendStats::backoff: u32
+pub ponko_ffi::PonkoReplicationResendStats::early_resends: u64
+pub ponko_ffi::PonkoReplicationResendStats::late_acks: u64
+pub ponko_ffi::PonkoReplicationResendStats::reorder_ticks: u32
+pub ponko_ffi::PonkoReplicationResendStats::timeout_resends: u64
+pub ponko_ffi::PonkoReplicationResendStats::timeout_ticks: u32
+impl core::clone::Clone for ponko_ffi::PonkoReplicationResendStats
+pub fn ponko_ffi::PonkoReplicationResendStats::clone(&self) -> Self
+impl core::cmp::Eq for ponko_ffi::PonkoReplicationResendStats
+impl core::cmp::PartialEq for ponko_ffi::PonkoReplicationResendStats
+pub fn ponko_ffi::PonkoReplicationResendStats::eq(&self, &Self) -> bool
+impl core::default::Default for ponko_ffi::PonkoReplicationResendStats
+pub fn ponko_ffi::PonkoReplicationResendStats::default() -> Self
+impl core::fmt::Debug for ponko_ffi::PonkoReplicationResendStats
+pub fn ponko_ffi::PonkoReplicationResendStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko_ffi::PonkoReplicationResendStats
+impl core::marker::StructuralPartialEq for ponko_ffi::PonkoReplicationResendStats
 #[repr(C)] pub struct ponko_ffi::PonkoReplicationStatus
 pub ponko_ffi::PonkoReplicationStatus::has_me: bool
 pub ponko_ffi::PonkoReplicationStatus::joined: bool
@@ -6428,6 +6446,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_peer_stats(*mut ponko_ffi::PonkoCtx, u64, *mut ponko_ffi::PonkoReplicationPeerStats) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_position(*mut ponko_ffi::PonkoCtx, u32, usize, u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_predicted(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, ponko_ffi::PonkoPredictFn, *mut core::ffi::c_void, ponko_ffi::PonkoFreeUserFn) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_resend_stats(*mut ponko_ffi::PonkoCtx, u64, *mut ponko_ffi::PonkoReplicationResendStats) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_send(*mut ponko_ffi::PonkoCtx, u32, u64, u16, *const core::ffi::c_void, usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_set_viewer(*mut ponko_ffi::PonkoCtx, u64, *const ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_replication_status(*mut ponko_ffi::PonkoCtx, *mut ponko_ffi::PonkoReplicationStatus) -> ponko_ffi::PonkoStatus

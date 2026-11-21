@@ -12,7 +12,7 @@
 //! `PONKO_RENDER_FRAMES`, `PONKO_RENDER_WARMUP`, `PONKO_RENDER_SIZE`,
 //! `PONKO_RENDER_SAMPLES`, `PONKO_RENDER_QUALITY`, `PONKO_RENDER_SCALE`,
 //! `PONKO_RENDER_MATCHED`, `PONKO_RENDER_TAA`, `PONKO_RENDER_SHADOW_FILTER`,
-//! `PONKO_RENDER_VIEWS`,
+//! `PONKO_RENDER_VIEWS`, `PONKO_RENDER_GPU_EVERY`,
 //! and the outputs `PONKO_RENDER_CSV`, `PONKO_RENDER_FRAMES_CSV` and
 //! `PONKO_RENDER_PNG`. `PONKO_GPU_TIER` opens the device as a weaker GPU.
 //! `PONKO_ALLOC_SITES=n` draws `n` more frames and prints where their
@@ -83,6 +83,10 @@ fn settings() -> Result<Settings, String> {
         Some("1") => true,
         Some(other) => return Err(format!("PONKO_RENDER_MATCHED={other} is not 0 or 1")),
     };
+    setup.gpu_timing_every = match number("PONKO_RENDER_GPU_EVERY", 1)? {
+        0 => return Err("PONKO_RENDER_GPU_EVERY=0 is not a number of frames: 1 times every frame".to_owned()),
+        n => u32::try_from(n).map_err(|_| format!("PONKO_RENDER_GPU_EVERY={n} is too large"))?,
+    };
     let frames = number("PONKO_RENDER_FRAMES", 600)?;
     if frames == 0 {
         return Err("PONKO_RENDER_FRAMES=0 measures nothing".to_owned());
@@ -123,28 +127,6 @@ fn row(f: &SceneFrame) -> FrameRow {
         upload_bytes: f.uploads.bytes(),
         buffers_created: u64::from(f.uploads.buffers_created),
         pipelines_built: f.pipelines_built as u64,
-    }
-}
-
-/// The process's largest resident set so far, or why it can't be read.
-fn peak_rss() -> Result<u64, String> {
-    #[cfg(unix)]
-    {
-        // SAFETY: `getrusage` fills the zeroed struct it is given.
-        let usage = unsafe {
-            let mut usage: libc::rusage = std::mem::zeroed();
-            if libc::getrusage(libc::RUSAGE_SELF, &mut usage) != 0 {
-                return Err("getrusage failed".to_owned());
-            }
-            usage
-        };
-        // Bytes on macOS, kilobytes elsewhere.
-        let unit = if cfg!(target_os = "macos") { 1 } else { 1024 };
-        Ok(usage.ru_maxrss as u64 * unit)
-    }
-    #[cfg(not(unix))]
-    {
-        Err("the peak resident set is not read on this platform".to_owned())
     }
 }
 
@@ -346,6 +328,12 @@ pub fn run(b: &mut Bench) -> Option<String> {
                 settings.frames,
                 bench.adapter()
             );
+            if settings.setup.gpu_timing_every != 1 {
+                println!(
+                    "    GPU passes timed on every {}th frame (PONKO_RENDER_GPU_EVERY)",
+                    settings.setup.gpu_timing_every
+                );
+            }
             if let Some(reason) = &scene.gpu.unavailable {
                 println!("    GPU pass times unavailable: {reason}");
             }
@@ -410,7 +398,7 @@ pub fn run(b: &mut Bench) -> Option<String> {
     if report.scenes.is_empty() {
         return None;
     }
-    match peak_rss() {
+    match alloc::peak_rss() {
         Ok(bytes) => report.peak_rss_bytes = Some(bytes),
         Err(reason) => report.peak_rss_unavailable = Some(reason),
     }

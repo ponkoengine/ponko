@@ -89,6 +89,8 @@ pub(crate) struct Hud {
     pub menu: UiId,
     /// The 40 labels of the settings screen's list.
     pub actions: Vec<UiId>,
+    /// The scroll area they are in.
+    pub list: UiId,
 }
 
 /// A HUD along the top and a settings screen in the middle.
@@ -149,6 +151,7 @@ pub(crate) fn build_ui(ctx: &mut Ctx) -> Hud {
         slots,
         menu,
         actions,
+        list,
     }
 }
 

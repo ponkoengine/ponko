@@ -212,6 +212,12 @@ goes, in a running game:
   prepass, opaque, transparent, screen effects, bloom, post), measured
   with timestamp queries. On GPUs that draw in tiles, passes overlap, so
   each is counted from the end of the one before.
+  Timing a pass costs the graphics library a few heap allocations, so a
+  game times one frame in 16, and every frame while something reads every
+  frame: profiling, the overlay, a trace, a `PONKO_BENCH` run or automatic
+  quality. The smoothed times weigh each sample by the frames it stands
+  for, so they settle at the same values either way (see
+  [Cost](viewports.md#cost) for what it saves).
 - **`ctx.perf.render_stats()`**: draw calls; 3D models and triangles drawn for
   the camera and, separately, for the shadow maps; and the render CPU
   time split into culling (`collect_ms`), recording (`record_ms`, all
@@ -347,7 +353,7 @@ are per frame.
 
 | Field | What |
 |---|---|
-| `gpu_timing` | `available`: the GPU has timestamp queries; `frames_timed`: frames whose GPU times came back |
+| `gpu_timing` | `available`: the GPU has timestamp queries; `frames_timed`: frames whose GPU times came back (one in 16 outside profiling, see `ctx.perf.gpu_passes()` above; `perf.get` with `profiling: true` times every frame) |
 | `cpu_ms` | the renderer's CPU time: `total`, split into `extract` (culling, collecting models), `prepare` (uploading 3D data), `encode` (recording command buffers), `submit` and `other` (sprites, overlays) |
 | `gpu_ms` | `frame` and `passes` (`[{name, ms}]` in the order they run), smoothed |
 | `counts` | `draw_calls`, `sprites`, `models`, `triangles`, `shadow_models`, `shadow_triangles`, `occluded_models`, `frustum_culled_models` (see below), `frustum_culled_other_models` (always `null`, see below), `pipelines_built`, and `instance_batches`: how the [static instance batches](3d.md#which-path-a-batch-takes) were culled (`batches`, `instances`, `gpu_driven`, `gpu_instances`, `cpu_small`, `cpu_no_compute`, `cpu_over_limit`, `dropped`, `pools`, `pages`, `pool_bytes`, `cull_dispatches`, `cull_jobs`, `views_skipped`) |

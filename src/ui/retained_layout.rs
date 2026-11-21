@@ -38,6 +38,11 @@ pub(super) struct LayoutKey {
 pub(super) struct LayoutCache {
     pub key: Option<LayoutKey>,
     pub passes: u64,
+    /// Each node's unwrapped text as last measured, by slot: its width and
+    /// height in layout units. Kept while what it is measured from holds,
+    /// so a label Taffy asks again (its row resized around it) is not
+    /// measured again.
+    pub unwrapped: Vec<Option<Vec2>>,
 }
 
 impl Node {
@@ -104,9 +109,16 @@ impl Ui {
     /// shown root has something to lay out.
     pub(super) fn mark_layout_changes(&mut self, key: LayoutKey) -> bool {
         let all = self.layout_cache.key != Some(key);
-        for n in self.nodes.iter_mut().flatten() {
+        let unwrapped = &mut self.layout_cache.unwrapped;
+        unwrapped.resize(self.nodes.len(), None);
+        for (slot, n) in self.nodes.iter_mut().enumerate() {
+            let Some(n) = n else {
+                unwrapped[slot] = None;
+                continue;
+            };
             if n.measure_changed() | all {
                 let _ = self.tree.mark_dirty(n.layout);
+                unwrapped[slot] = None;
             }
         }
         self.layout_cache.key = Some(key);
