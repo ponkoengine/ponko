@@ -299,6 +299,11 @@ pub(crate) struct GltfSceneSaves {
 /// One scene of [`GltfSceneSaves`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SavedScene {
+    /// Its number among the records, kept by saves: how a node of another
+    /// scene attached to one of its nodes names it (see `overrides.rs`).
+    /// Records from before it existed read as 0 and are numbered on load.
+    #[serde(default)]
+    id: u64,
     /// The file.
     path: String,
     /// Where its root was spawned: of several scenes of one file, a spawn
@@ -927,7 +932,9 @@ impl Ctx {
             scene.at = at;
             return true;
         }
+        let id = saves.scenes.iter().map(|s| s.id).max().unwrap_or(0) + 1;
         saves.scenes.push(SavedScene {
+            id,
             path: path.to_string(),
             at,
             root: Some(root),
@@ -972,6 +979,12 @@ impl Ctx {
         if named {
             if let Some(saves) = self.world.get_resource_mut::<GltfSceneSaves>() {
                 saves.scenes.iter_mut().for_each(|s| s.root = None);
+                // Records from before scenes were numbered.
+                let mut next = saves.scenes.iter().map(|s| s.id).max().unwrap_or(0);
+                for s in saves.scenes.iter_mut().filter(|s| s.id == 0) {
+                    next += 1;
+                    s.id = next;
+                }
             }
         } else {
             self.world.remove_resource::<GltfSceneSaves>();

@@ -159,7 +159,10 @@ is the rule above. A monitor can show the debug drawing without the smoke
 top-down map can be the only place it shows, with the window's camera's
 `debug_draw` at `Some(false)`. From C and C++ it is the `debug_draw` field
 of `PonkoCamera3DEx` and `PonkoTargetCameraEx`, a `PonkoDebugDraw`
-(`ponko::camera_debug_draw`).
+(`ponko::camera_debug_draw`). The inspector's **Debug drawing** section
+lists every 3D camera (the window's, each extra view's, each target
+camera's) under **Cameras** with three buttons for its `debug_draw`:
+**Default**, **On** and **Off**.
 
 In a render target the 3D lines and
 depth-tested labels are drawn against that camera's own depth, and 3D
