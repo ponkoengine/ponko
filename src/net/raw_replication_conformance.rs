@@ -7,6 +7,7 @@
 //!
 //! | Guarantee | Test |
 //! |---|---|
+//! | Raw values cross a clean network in a few ticks (the test Miri runs) | `raw_values_cross_a_clean_network_in_a_few_ticks` |
 //! | Raw inputs move the entities their senders own; owners predict them exactly; the server reads each peer's last input | `raw_inputs_predict_exactly_under_loss_and_jitter` |
 //! | Raw events arrive once, in order, both ways, with their bytes, sender and kind | `raw_events_arrive_once_and_in_order_both_ways_under_loss` |
 //! | A raw interpolated component's floats move smoothly a delay behind the server; its other fields arrive at once | `a_raw_interpolated_component_moves_smoothly_and_sets_other_fields_at_once` |
@@ -101,6 +102,44 @@ fn read_raw(world: &World, e: Entity, id: ComponentId, size: usize) -> Vec<u8> {
     let p = world.raw_ref().get_dynamic(e, id).expect("has the component");
     // SAFETY: `p` points to the entity's value of `size` bytes.
     unsafe { std::slice::from_raw_parts(p, size) }.to_vec()
+}
+
+/// Small enough for Miri: one client's input moves the body it owns on the
+/// server and in its own prediction, and an interpolated component reaches
+/// it, over a clean network in a few ticks.
+#[test]
+fn raw_values_cross_a_clean_network_in_a_few_ticks() {
+    let mut s = Session::scripted(1, declarations, |_| {});
+    for side in &mut s.sides {
+        register(&mut side.world);
+    }
+    s.join(40);
+    let (body, pos) = ids();
+    let me = s.me(1);
+    let world = &mut s.sides[0].world;
+    let mine = spawn_raw(world, body, &bytes2(0.0, 0.0), Some(me));
+    spawn_raw(world, pos, &[0u8; 12], None);
+    s.run(16, |i, side: &mut Side| {
+        if i == 1 {
+            side.rep.set_raw_input(&bytes2(1.0, 0.0));
+        }
+    });
+    let moved = floats(&read_raw(&s.sides[0].world, mine, body, 8)).0;
+    assert!(moved > 2.0, "the client's input moved its body on the server: {moved}");
+    let client = &mut s.sides[1];
+    let shown = replicas(&mut client.world);
+    assert_eq!(shown.len(), 2, "the client has the body and the shown component");
+    let predicted = shown
+        .values()
+        .find_map(|&e| {
+            client
+                .world
+                .raw_ref()
+                .get_dynamic(e, body)
+                .map(|_| read_raw(&client.world, e, body, 8))
+        })
+        .expect("the body");
+    assert!(floats(&predicted).0 >= moved, "the client predicts ahead of the server");
 }
 
 #[test]
