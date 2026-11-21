@@ -94,7 +94,7 @@ thread_local! {
 
 /// Tests only: on this thread, a set is refused as soon as the budget is
 /// used up, as in a game, instead of waiting for another test's.
-#[cfg(test)]
+#[cfg(all(test, feature = "3d"))]
 pub(crate) fn refuse_when_full(on: bool) {
     REFUSE_WHEN_FULL.with(|r| r.set(on));
 }
