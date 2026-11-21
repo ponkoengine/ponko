@@ -11,7 +11,6 @@ use std::fmt;
 use std::sync::Arc;
 
 use ponko_ecs::{Component, ComponentId, Entity, World};
-#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
 use rayon::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;

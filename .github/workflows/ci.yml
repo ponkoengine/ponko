@@ -1425,12 +1425,17 @@ jobs:
       # behind `target_feature = "atomics"`, built with -D warnings). Built
       # with ponko-isolate.js and served WITHOUT the headers, the page must
       # reload once through the service worker and pass the isolated checks
-      # (`--case service-worker`).
+      # (`--case service-worker`). Each small parallel pass must stay on the
+      # page's thread below its web threshold, be shared out from it, and end
+      # on the page's thread's result (`--case thresholds`); the default
+      # threaded build must have the per-thread allocator and the build with
+      # `--cfg ponko_web_system_allocator` the standard one, each saving the
+      # same JSON on the workers as on the page's thread (`--case allocator`).
       - name: Nightly Rust for the threaded web build
         if: ${{ !cancelled() }}
         run: rustup toolchain install nightly --profile minimal --component rust-src --target wasm32-unknown-unknown
       - name: Chromium, threaded web build (workers, the fallback without headers)
-        timeout-minutes: 15
+        timeout-minutes: 25
         if: ${{ !cancelled() }}
         run: |
           node web/smoke/threads.mjs --build
@@ -1439,6 +1444,8 @@ jobs:
           node web/smoke/threads.mjs --build --case gamepads-plain
           node web/smoke/threads.mjs --build --case service-worker
           node web/smoke/threads.mjs --case warning
+          node web/smoke/threads.mjs --case thresholds
+          node web/smoke/threads.mjs --build --case allocator
       # Replication in the browser (web/smoke/replication.mjs): the Orb Arena
       # example, a native dedicated server (no window) and one tab that joins
       # it over WebSocket. The tab must hold the server's orbs and its own
