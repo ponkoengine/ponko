@@ -130,6 +130,50 @@ correctness, privacy or leak checks. The exact platform/feature matrix is in
 matrix run on `main` after the change
 lands (maintainers can add the `full-ci` label to run it on the PR first).
 
+### Adding or changing a cargo feature
+
+The list of checks is [ci.yml](.github/workflows/ci.yml): a change breaks
+nothing unseen only if some line there builds it. Every cargo feature of every
+crate in the workspace needs, in ci.yml,
+
+- a **clippy** line that turns it on (a `matrix.include` entry of the `clippy`
+  job: its `scope` is the package, `args` the features),
+- a **test** line that turns it on (a step of the `test-features` job, which
+  runs on Linux, macOS and Windows after the merge),
+- and, if docs.rs builds the crate with it (`[package.metadata.docs.rs]`), a
+  **doc** line (the "Docs with every public feature" step of the `docs` job).
+
+`python3 scripts/check-feature-coverage.py` reads Cargo.toml and ci.yml and
+fails for a feature without one; `--list` shows each feature's checks. A feature
+counts as on in a line when the line names it, when a feature that is on lists
+it (`image-formats` turns on `image-bmp`), when it is a default feature, or when
+a crate built together with it asks for it (cargo unifies features: building the
+workspace builds `ponko` with whatever `ponko_lobby` and `ponko_ffi` ask of it).
+The checks that go with a feature are in the same file:
+
+| What | Where in ci.yml |
+|---|---|
+| `editor`, `video`, `lobby`, `webrtc` and the others, linted and tested | `clippy` matrix; `test-features` steps "Tests, editor", "Tests, video", "Tests, lobby client and WebRTC endpoints" |
+| The C and C++ test programs against a library with `webrtc` | `native`: `--features control-env,webrtc` with `-DPONKO_WEBRTC=ON` |
+| The ECS hooks and required components under Miri (Tree Borrows) | `miri`, "par_for_each, tree borrows" |
+| The threaded web build and its fallback without the isolation headers | `web-smoke`: `web/smoke/threads.mjs` |
+| Browser multiplayer and replication | `web-smoke`: `web/smoke/multiplayer.mjs`, `web/smoke/replication.mjs` |
+
+Only if a feature has nothing a cargo test can check, put it in
+`scripts/feature-checks.txt` with a reason that names what checks it instead.
+The script also fails for an entry that is not needed any more, so the list
+only shrinks. The same file lists the browser runners (`web/smoke`,
+`web/gallery`) that CI doesn't run; a new runner without a step in ci.yml fails
+the check.
+
+Run it, with the selftest of its parsing, before a change to Cargo.toml's
+features or to ci.yml:
+
+```sh
+python3 scripts/check-feature-coverage.py
+python3 scripts/check-feature-coverage.py --selftest
+```
+
 ### Performance changes
 
 Claims need numbers: measure in release builds before and after, and put

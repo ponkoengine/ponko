@@ -145,7 +145,10 @@ pub mod error;
 pub mod events;
 pub mod flow;
 pub mod game;
-#[cfg(feature = "gamepad")]
+// Not in a web build with threads: the browser's gamepad objects can't be sent
+// between threads there (`GamepadBackend` is `Send`), so such a build has no
+// built-in controllers. A game can still bring its own backend.
+#[cfg(all(feature = "gamepad", not(all(target_arch = "wasm32", target_feature = "atomics"))))]
 mod gamepad;
 pub mod gfx;
 pub mod handle;

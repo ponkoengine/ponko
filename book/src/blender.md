@@ -253,6 +253,32 @@ save has no instance for. A save written before saves held the record
 after it leave their prefab nodes to the save, as `without_saved_objects`
 did, and print a note; the next save keeps it that way.
 
+## Repeated meshes and many spawns
+
+Nodes that use one mesh share it. In Blender, linked duplicates (Alt+D)
+share their mesh data and export as one glTF mesh: a fence of forty posts
+made that way holds one post mesh on the GPU, drawn where each node stands,
+each with its own transform, properties and components. A plain duplicate
+(Shift+D) copies the mesh data, so each copy exports, and is uploaded, as
+a mesh of its own. Nodes of one mesh with different morph weights get a
+mesh each.
+
+Every spawn of one file shares its meshes, materials and collision shapes.
+The hull or triangle mesh fitted for a `ponko:collider` is made once for
+the file, and used again by its other nodes of the same mesh at the same
+scale and by every later spawn; boxes, spheres and capsules are fitted
+once too. All of it goes when the last scene that uses it is despawned or
+replaced by a world load. Exporting the file again while the game runs
+makes one new set for all its scenes and frees the old set once no scene
+holds it.
+
+The engine's benchmark (`cargo run --release -p ponko_bench -- gltf/`)
+spawns a file of twelve nodes of one rock mesh (1,024 corners), eight of
+them with colliders. One spawn holds one mesh (66.5 KiB) instead of twelve
+(798 KiB). A hundred spawns hold two collision meshes instead of 600, keep
+1.4 MiB of heap instead of 115 MiB, and take about 9 ms instead of
+0.2–0.9 s.
+
 ## Navigation meshes
 
 `GltfScene::load(ctx, path)` reads the file and checks its properties
@@ -295,8 +321,8 @@ custom properties, mesh sizes and lights, and its spawn points. The schema
 
 ## What it doesn't do (yet)
 
-- Spawns of one file share its meshes, but each spawn makes its own
-  entities and collision shapes: for thousands of copies of one object,
+- Spawns of one file share its meshes and collision shapes, but each
+  spawn makes its own entities: for thousands of copies of one object,
   [GPU-driven instances](3d.md#gpu-driven-instances) draw them cheaper.
 - A Transform keeps one scale per axis: a non-uniformly scaled parent with
   a rotated child is placed approximately.

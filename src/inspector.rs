@@ -33,6 +33,9 @@ pub(crate) mod app;
 #[cfg(feature = "editor")]
 #[path = "inspector_assets.rs"]
 mod assets_panel;
+#[cfg(feature = "editor")]
+#[path = "inspector_file_picker.rs"]
+mod file_picker;
 #[path = "inspector_keys.rs"]
 pub(crate) mod keys;
 #[cfg(feature = "editor")]
@@ -1085,6 +1088,10 @@ impl Inspector {
                 pixels_per_point: output.pixels_per_point,
             });
         }
+        #[cfg(feature = "editor")]
+        panels.run_file_picker(ctx, |request, folder, name| {
+            file_picker::system_picker(window, request, folder, name)
+        });
     }
 }
 

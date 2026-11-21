@@ -174,12 +174,19 @@ game also stays on one thread, after at most 20 seconds, and says why.
   return value.
 - **A panic on a worker stops the game.** A build with threads can't unwind
   (above), so a panic in a parallel query or a job ends the game, with the
-  panic and `ponko: ...; the game stops` in the console. A job's panic
+  panic and `ponko: ...; the game stops` in the console, and on the page
+  as a `ThreadStopped` failure with the worker's panic message (see
+  [Failures while playing](web.md#failures-while-playing)). A job's panic
   isn't handed to `Job::take` as it is natively.
 - **Memory**: at most 1 GiB, which the build declares up front, because a
   shared memory must have a maximum.
 - **Thread-local values on workers are never dropped**: the workers live
   as long as the page.
+- **No built-in controllers.** The browser's gamepad objects can't be sent
+  between threads once the memory is shared, and the controller backend must
+  be `Send`, so a build with threads doesn't start the built-in one
+  (`ctx.input.gamepads()` stays empty unless the game brings its own
+  `GamepadBackend`). The ordinary web build has controllers as before.
 - **A nightly toolchain.** The ordinary web build stays on stable, without
   threads.
 

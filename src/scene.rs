@@ -283,7 +283,8 @@ impl Ctx {
     /// [`spawn_prefab`](Self::spawn_prefab) gave it, and returns how many
     /// entities that was. An entity without parts is despawned alone, so this
     /// also suits entities that didn't come from a prefab. The root of a glTF
-    /// scene goes with every node's entity and the meshes made for it.
+    /// scene goes with every node's entity, and with the meshes and collision
+    /// shapes made for it once no other scene of the file uses them.
     ///
     /// ```no_run
     /// # use ponko::prelude::*;

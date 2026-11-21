@@ -473,6 +473,8 @@ mod editor_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod gltf_extensions_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod gltf_sharing_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod instance_cells_bench;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod instance_cells_render_test;
@@ -555,6 +557,9 @@ mod residency_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod asset_lifetime_render_test;
+
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod asset_group_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod long_run_render_test;

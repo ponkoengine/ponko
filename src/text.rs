@@ -222,6 +222,10 @@ pub(crate) struct Text {
     /// Shaping state: font data, shaped strings, glyphs by index.
     #[cfg(feature = "text-shaping")]
     shaper: shape::Shaper,
+    /// Counts the changes that can change how text measures (fonts added,
+    /// replaced or freed, fallback chains, shaping): the UI lays out again
+    /// when it moves ([`Text::revision`]).
+    revision: u64,
 }
 
 /// The bytes of a font file as a font; not one this engine reads is
@@ -261,7 +265,14 @@ impl Text {
             shaping: TextShaping::Auto,
             #[cfg(feature = "text-shaping")]
             shaper: shape::Shaper::default(),
+            revision: 0,
         }
+    }
+
+    /// Moves on whenever text may measure differently than before: a font
+    /// added, replaced or freed, a fallback chain or the shaping changed.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub const ATLAS_SIZE: u32 = ATLAS;
@@ -316,6 +327,7 @@ impl Text {
             chain.clear();
         }
         self.live.insert(id);
+        self.revision += 1;
         #[cfg(feature = "text-shaping")]
         self.shaper.set_bytes(id, bytes, index);
         Ok(Font(id))
@@ -334,6 +346,7 @@ impl Text {
         }
         self.fallbacks[i].clear();
         self.fallbacks[i].extend(fallbacks.iter().copied().filter(|&f| f != font));
+        self.revision += 1;
         #[cfg(feature = "text-shaping")]
         self.shaper.forget_shapes();
     }
@@ -353,6 +366,9 @@ impl Text {
 
     /// Sets which strings are shaped.
     pub fn set_shaping(&mut self, shaping: TextShaping) {
+        if self.shaping != shaping {
+            self.revision += 1;
+        }
         self.shaping = shaping;
     }
 
@@ -405,6 +421,7 @@ impl Text {
             chain.clear();
         }
         self.ids.release(font.0);
+        self.revision += 1;
         self.glyphs.retain(|k, _| k.0 != font.0);
         self.sdf.glyphs.retain(|k, _| k.0 != font.0);
         #[cfg(feature = "text-shaping")]
@@ -429,6 +446,7 @@ impl Text {
             return Ok(());
         }
         self.fonts[(font.0 & crate::handle::INDEX_MASK) as usize] = Some(new);
+        self.revision += 1;
         self.glyphs.retain(|k, _| k.0 != font.0);
         self.sdf.glyphs.retain(|k, _| k.0 != font.0);
         #[cfg(feature = "text-shaping")]

@@ -22,6 +22,11 @@
 //! | Off, replication does nothing; on, its traffic never reaches the game's own message events | `replication_off_does_nothing`, `replication_traffic_never_reaches_the_games_message_events` |
 //! | A client that leaves is forgotten; a client whose server is gone loses its replicas | `a_client_that_leaves_is_forgotten_and_a_lost_server_takes_its_replicas` |
 //! | The same script gives the same traffic | `same_script_gives_the_same_replication_traffic` |
+//! | Only entities whose replicated components changed are read and compared (the world's change tracking); a borrow that writes nothing sends nothing | `only_entities_that_changed_are_read_and_compared` |
+//! | A component taken off an entity is taken off its replicas | `a_removed_component_is_removed_from_replicas` |
+//! | A write the world can't see still arrives, within a sweep | `writes_the_world_cannot_see_arrive_within_a_sweep` |
+//! | A world the game replaced is read in full | `a_replaced_world_is_read_in_full` |
+//! | A server without clients keeps nothing pending, and its first client gets everything | `a_server_without_clients_keeps_nothing_pending` |
 //!
 //! Over every transport the message protocol lists:
 //!
@@ -32,7 +37,9 @@
 //! | UDP, and WebSocket (what browsers use; a native client here) | `replicates_over_udp_and_websocket` |
 //! | Steam relay (fake Steam API, `--features steam`) | `replicates_over_the_steam_relay` in `net/steam_messages.rs` |
 //!
-//! A real browser and two machines are checks for a person (the guide's
+//! A browser joining a server is checked by `web/smoke/replication.mjs` (a
+//! headless tab of the web build and a native dedicated server). Playing in
+//! a real browser and two machines are checks for a person (the guide's
 //! "Replication" chapter lists them).
 
 use std::collections::BTreeMap;
@@ -923,4 +930,141 @@ fn replicates_over_udp_and_websocket() {
     let udp = NetMessages::join(host.local_addr().unwrap()).unwrap();
     let web = NetMessages::join_web(&format!("ws://{}", host.web_addr().unwrap())).unwrap();
     exercise(Session::over(vec![host, udp, web], declarations, true), 600, 120);
+}
+
+/// The net ids of `entities` in the server's world, sorted.
+fn net_ids(world: &World, entities: &[Entity]) -> Vec<u32> {
+    let mut ids: Vec<u32> = entities
+        .iter()
+        .filter_map(|&e| world.get::<Replicated>(e)?.net_id())
+        .map(|id| id.index())
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
+#[test]
+fn only_entities_that_changed_are_read_and_compared() {
+    let mut s = Session::scripted(1, declarations, |_| {});
+    spawn_crowd(&mut s.sides[0].world, 200);
+    s.join(200);
+    s.run(60, |_, _| {});
+    let crowd: Vec<Entity> = originals(&mut s.sides[0].world).into_values().collect();
+    let movers: Vec<Entity> = crowd.iter().copied().step_by(20).collect();
+    let mover_ids = net_ids(&s.sides[0].world, &movers);
+    assert_eq!(mover_ids.len(), 10);
+    for tick in 0..30 {
+        s.step(|i, side| {
+            if i == 0 {
+                for &e in &movers {
+                    side.world.get_mut::<Pos>(e).unwrap().at.x += 1.0 + tick as f32;
+                }
+            }
+        });
+        assert_eq!(s.sides[0].rep.server_changed(), mover_ids, "tick {tick}");
+    }
+    // Every entity borrowed mutably, none written: nothing to send.
+    s.run(10, |_, _| {});
+    let peer = s.me(1);
+    let before = s.sides[0].rep.peer_stats(peer).unwrap();
+    for _ in 0..20 {
+        s.step(|i, side| {
+            if i == 0 {
+                side.world.query::<&mut Pos>().for_each(|p| p.at.x += 0.0);
+            }
+        });
+        assert!(s.sides[0].rep.server_changed().is_empty());
+    }
+    let after = s.sides[0].rep.peer_stats(peer).unwrap();
+    assert_eq!(after.records_sent, before.records_sent);
+    assert_converged(&mut s, |_, _, _| true);
+}
+
+#[test]
+fn a_removed_component_is_removed_from_replicas() {
+    let mut s = Session::scripted(1, declarations, |n| n.loss_per_mille = 200);
+    spawn_crowd(&mut s.sides[0].world, 20);
+    s.join(200);
+    s.run(60, |_, _| {});
+    let target = *originals(&mut s.sides[0].world).values().nth(5).unwrap();
+    s.step(|i, side| {
+        if i == 0 {
+            side.world.remove::<Hp>(target);
+        }
+    });
+    s.run(60, |_, _| {});
+    assert_converged(&mut s, |_, _, _| true);
+    s.step(|i, side| {
+        if i == 0 {
+            side.world.insert(target, Hp(7));
+        }
+    });
+    s.run(60, |_, _| {});
+    assert_converged(&mut s, |_, _, _| true);
+}
+
+#[test]
+fn writes_the_world_cannot_see_arrive_within_a_sweep() {
+    let mut s = Session::scripted(1, declarations, |_| {});
+    spawn_crowd(&mut s.sides[0].world, 100);
+    s.join(200);
+    s.run(60, |_, _| {});
+    let target = *originals(&mut s.sides[0].world).values().nth(3).unwrap();
+    {
+        let world = &mut s.sides[0].world;
+        let id = world.component_id::<Pos>().unwrap();
+        let p = world.raw().get_dynamic_mut(target, id).unwrap();
+        // SAFETY: `p` points to `target`'s live `Pos`, and nothing else
+        // touches the world while it is written.
+        unsafe { p.cast::<Pos>().write(Pos { at: vec2(321.0, -12.5) }) };
+    }
+    // A sweep re-reads every entity within 64 ticks.
+    s.run(64 + 30, |_, _| {});
+    assert_converged(&mut s, |_, _, _| true);
+    let replica = replicas(&mut s.sides[1].world)[&net_ids(&s.sides[0].world, &[target])[0]];
+    assert!(close(
+        s.sides[1].world.get::<Pos>(replica).unwrap().at,
+        vec2(321.0, -12.5)
+    ));
+}
+
+#[test]
+fn a_replaced_world_is_read_in_full() {
+    let mut s = Session::scripted(1, declarations, |_| {});
+    spawn_crowd(&mut s.sides[0].world, 30);
+    s.join(200);
+    s.run(60, |_, _| {});
+    s.step(|i, side| {
+        if i == 0 {
+            // A loaded level: a new world whose change ticks start over.
+            side.world = World::new();
+            spawn_crowd(&mut side.world, 12);
+        }
+    });
+    s.run(60, |_, _| {});
+    assert_eq!(replicas(&mut s.sides[1].world).len(), 12);
+    assert_converged(&mut s, |_, _, _| true);
+}
+
+#[test]
+fn a_server_without_clients_keeps_nothing_pending() {
+    let mut s = Session::scripted(1, declarations, |_| {});
+    // The client's endpoint stays quiet: the server ticks alone, spawning.
+    for tick in 0..200u64 {
+        let server = &mut s.sides[0];
+        server.tick(|side| {
+            churn(&mut side.world, tick);
+            if tick.is_multiple_of(3) {
+                spawn_crowd(&mut side.world, 1);
+            }
+        });
+        assert!(
+            server.rep.server_changed().is_empty(),
+            "nothing is read while nobody listens"
+        );
+        assert_eq!(server.rep.server_pending(), 0, "tick {tick}: nothing piles up");
+    }
+    s.join(200);
+    s.run(60, |_, _| {});
+    assert_converged(&mut s, |_, _, _| true);
 }

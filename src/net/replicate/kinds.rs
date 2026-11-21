@@ -19,6 +19,9 @@ pub(crate) trait KindAccess: Send + Sync {
     fn write(&self, world: &mut World, e: Entity, words: &[u32]);
     /// Removes the component.
     fn remove(&self, world: &mut World, e: Entity);
+    /// Server: starts tracking the component's changes (it stays tracked)
+    /// and returns its id, so only changed entities are read each tick.
+    fn track(&self, world: &mut World) -> ComponentId;
     /// Client, interpolated kinds: keeps a received value (sent at server
     /// time `time`) to be shown later. False for kinds that aren't
     /// interpolated: write them at once.
@@ -80,6 +83,9 @@ impl<T: Replicate + Component> KindAccess for Typed<T> {
     fn remove(&self, world: &mut World, e: Entity) {
         world.remove::<T>(e);
     }
+    fn track(&self, world: &mut World) -> ComponentId {
+        world.track_changes::<T>()
+    }
 }
 
 /// Component on a client's copy of a remote entity: the received values of
@@ -114,6 +120,9 @@ impl<T: Replicate + Component + Interpolate> KindAccess for Interpolated<T> {
     fn remove(&self, world: &mut World, e: Entity) {
         world.remove::<T>(e);
         world.remove::<NetBuffer<T>>(e);
+    }
+    fn track(&self, world: &mut World) -> ComponentId {
+        world.track_changes::<T>()
     }
     fn buffer(&self, world: &mut World, e: Entity, time: f64, words: &[u32]) -> bool {
         let mut value = world.get::<T>(e).cloned().unwrap_or_default();
@@ -334,6 +343,10 @@ impl KindAccess for Raw {
     }
     fn remove(&self, world: &mut World, e: Entity) {
         world.raw().remove_dynamic(e, self.id);
+    }
+    fn track(&self, world: &mut World) -> ComponentId {
+        world.raw().track_changes_dynamic(self.id);
+        self.id
     }
 }
 
