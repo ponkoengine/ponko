@@ -131,7 +131,7 @@ reads. `ui.stop_animations(node)` stops a node's tweens where they are, and
 `ui.set_fade_as_group(node, true)` (or `.fade_as_group()` when building)
 fades the node and everything inside it as one picture: while its opacity
 is between 0 and 1, the group is drawn opaque into an offscreen layer the
-size of the window, and that layer is shown at the group's opacity. A card's
+size of what it draws, and that layer is shown at the group's opacity. A card's
 fill no longer shows through its buttons, and a child no longer shows
 through the sibling on top of it; what is behind the group shows through it
 evenly. The fade that drives it can be the node's own (a tween, a screen
@@ -149,11 +149,32 @@ ctx.ui.push_modal(card);
 It costs nothing until it is used: a group at rest, or a UI with no group
 marked, draws exactly what it drew before, with no layer. While a group
 fades, its nodes keep their drawings from frame to frame (only the layer's
-opacity changes), and the layer costs one window-sized texture (made the
-first time and kept), a pass drawing the group into it and one quad showing
-it. A group inside a fading group gets a layer of its own. Sprites with an
-additive or multiply blend inside a group blend with the group, not with
-what is behind it. World-space panels (`UiPanel3D`) fade each piece.
+opacity changes), and the layer costs one texture, a pass drawing the group
+into it and one quad showing it. A group inside a fading group gets a layer
+of its own. Groups in world-space panels (`UiPanel3D`) fade the same way,
+into layers in the panel's pixels.
+
+The layer covers what the group draws, not just its rectangle: children
+that reach out of it are in it. It is cut to the window (or the panel) and
+snapped outwards to whole pixels, and draws the same pixels a window-sized
+layer would. Its texture is kept from frame to frame and made in steps of
+64 pixels: it is made again only when the group no longer fits, or fits
+more than twice over, so a group that moves or changes size a little while
+it fades makes no texture after its first frame. A 400 x 300 group on a 4K
+screen takes a 448 x 320 texture (0.6 MB) where a window-sized one took
+33 MB.
+
+What it costs, for a menu of 480 x 400 points (twelve rows of a label on a
+fill) faded at half, measured offscreen:
+
+GPU_TABLE
+
+On the CPU, the `ui/draw-fade-group` benchmark row (the settings screen of
+about 150 nodes fading as one image) takes CPU_GROUP ms a frame where fading
+it piece by piece (`ui/draw-fade`) takes CPU_PIECES ms.
+
+Limits: sprites with an additive or multiply blend inside a group blend
+with the group, not with what is behind it.
 
 ## The UI clock
 
@@ -192,7 +213,10 @@ different frame rates. `src/render/ui_animation_render_test.rs` draws a
 faded, moved and scaled screen offscreen and checks where its pixels land.
 `src/render/ui_group_fade_render_test.rs` draws two overlapping squares in a
 group at half opacity through the renderer: faded piece by piece the lower
-square shows through the upper one, faded as a group it does not.
+square shows through the upper one, faded as a group it does not, on the
+screen and in a world-space panel's render target. It also checks that a
+layer sized to its group draws the same pixels as a window-sized one, and
+that a moving fading group makes no texture once its first frame made one.
 
 ## From C
 

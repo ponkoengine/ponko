@@ -316,10 +316,10 @@ impl Ctx {
             // Whole pixels, outwards: what the layer leaves out stays clear.
             let (mut origin, mut size) = ([0; 2], [0; 2]);
             if let Some(d) = drawn {
-                for k in 0..2 {
-                    let lo = (d.min[k] * scale).floor().clamp(0.0, target[k] as f32) as u32;
-                    let hi = (d.max[k] * scale).ceil().clamp(lo as f32, target[k] as f32) as u32;
-                    (origin[k], size[k]) = (lo, hi - lo);
+                for axis in 0..2 {
+                    let lo = (d.min[axis] * scale).floor().clamp(0.0, target[axis] as f32) as u32;
+                    let hi = (d.max[axis] * scale).ceil().clamp(lo as f32, target[axis] as f32) as u32;
+                    (origin[axis], size[axis]) = (lo, hi - lo);
                 }
             }
             #[cfg(test)]
@@ -439,8 +439,11 @@ mod tests {
         /// Each layer's texture, sprites and batches.
         layers: Vec<(u32, Vec<SpriteInstance>, Vec<Batch>)>,
         /// Each layer's origin, size and texture size, in pixels.
-        regions: Vec<([u32; 2], [u32; 2], [u32; 2])>,
+        regions: Vec<Region>,
     }
+
+    /// A layer's origin, size and texture size, in pixels.
+    type Region = ([u32; 2], [u32; 2], [u32; 2]);
 
     /// The UI's frame `dt` seconds on, then its drawing as a window draws it.
     fn frame(ctx: &mut Ctx, dt: f32) -> Drawn {
@@ -612,7 +615,7 @@ mod tests {
 
     /// The one layer's origin, size and texture size, and the quad that
     /// shows it.
-    fn one_layer(d: &Drawn) -> (([u32; 2], [u32; 2], [u32; 2]), SpriteInstance) {
+    fn one_layer(d: &Drawn) -> (Region, SpriteInstance) {
         assert_eq!(d.layers.len(), 1);
         let shown = shown_layers(d);
         assert_eq!(shown.len(), 1);

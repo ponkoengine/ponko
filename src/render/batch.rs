@@ -95,6 +95,10 @@ impl SpriteInstance {
 #[inline]
 /// The value of half-float `bits` (as [`f16_bits`] makes them).
 pub(crate) fn f16_value(bits: u16) -> f32 {
+    // The center pivot nearly every sprite uses.
+    if bits == 0x3800 {
+        return 0.5;
+    }
     let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
     let exp = i32::from((bits >> 10) & 0x1f);
     let man = f32::from(bits & 0x3ff);
@@ -491,7 +495,14 @@ impl DrawList {
                 continue;
             }
             let (mut lo, mut hi) = (s.pos, s.pos);
-            if !mesh {
+            if !mesh && s.rotation == 0.0 {
+                // Nearly every UI sprite: no turning, two corners.
+                let pivot = [f16_value(s.pivot[0]), f16_value(s.pivot[1])];
+                for k in 0..2 {
+                    let (a, b) = (-pivot[k] * s.size[k], (1.0 - pivot[k]) * s.size[k]);
+                    (lo[k], hi[k]) = (s.pos[k] + a.min(b), s.pos[k] + a.max(b));
+                }
+            } else if !mesh {
                 let pivot = [f16_value(s.pivot[0]), f16_value(s.pivot[1])];
                 let (sin, cos) = s.rotation.sin_cos();
                 for corner in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]] {
@@ -863,6 +874,66 @@ mod tests {
         assert_eq!(fast.pivot, [f16_bits(0.5); 2]);
         let slow = SpriteInstance::new([0.0; 2], [1.0; 2], [0.0, 1.0], 0.0, [0; 4]);
         assert_eq!(slow.pivot, [f16_bits(0.0), f16_bits(1.0)]);
+    }
+
+    #[test]
+    fn half_floats_read_back_what_was_written() {
+        for x in [0.0, 0.5, 1.0, -2.0, 0.25, 0.1, 65504.0, 2f32.powi(-24), 2f32.powi(-14)] {
+            let back = f16_value(f16_bits(x));
+            assert!((back - x).abs() <= x.abs() / 1024.0, "{x} came back {back}");
+        }
+        assert_eq!(f16_value(0x7c00), f32::INFINITY);
+    }
+
+    #[test]
+    fn drawn_bounds_cover_what_the_sprites_draw_cut_by_their_clips() {
+        let mut list = DrawList::default();
+        assert_eq!(list.drawn_bounds(), None, "nothing drawn");
+        // Centered 10 x 4 at (20, 10); a clear plain fill over everything
+        // draws nothing.
+        list.push(
+            1,
+            0.0,
+            SpriteInstance::new([20.0, 10.0], [10.0, 4.0], [0.5, 0.5], 0.0, [255; 4]),
+        );
+        list.push(
+            1,
+            0.0,
+            SpriteInstance::new([0.0, 0.0], [999.0, 999.0], [0.0, 0.0], 0.0, [9, 9, 9, 0]),
+        );
+        let r = list.drawn_bounds().unwrap();
+        assert_eq!((r.min, r.max), (glam::vec2(15.0, 8.0), glam::vec2(25.0, 12.0)));
+        // Turned a quarter: 4 wide, 10 high, about its pivot.
+        let mut turned = DrawList::default();
+        let quarter = std::f32::consts::FRAC_PI_2;
+        turned.push(
+            1,
+            0.0,
+            SpriteInstance::new([20.0, 10.0], [10.0, 4.0], [0.5, 0.5], quarter, [255; 4]),
+        );
+        let r = turned.drawn_bounds().unwrap();
+        assert!(r.min.abs_diff_eq(glam::vec2(18.0, 5.0), 1e-4) && r.max.abs_diff_eq(glam::vec2(22.0, 15.0), 1e-4));
+        // A flipped sprite (negative size) and a corner pivot.
+        let mut flipped = DrawList::default();
+        flipped.push(
+            1,
+            0.0,
+            SpriteInstance::new([5.0, 5.0], [-4.0, 2.0], [0.0, 0.0], 0.0, [255; 4]),
+        );
+        let r = flipped.drawn_bounds().unwrap();
+        assert_eq!((r.min, r.max), (glam::vec2(1.0, 5.0), glam::vec2(5.0, 7.0)));
+        // Clipped: only the part inside its clip; a mesh by its vertices.
+        list.set_clip(Some(crate::camera::Rect::new(0.0, 0.0, 30.0, 30.0)));
+        list.push(
+            1,
+            0.0,
+            SpriteInstance::new([25.0, 25.0], [20.0, 20.0], [0.5, 0.5], 0.0, [255; 4]),
+        );
+        list.set_clip(None);
+        let v = |x: f32, y: f32| SpriteInstance::vertex([x, y], [0.0, 0.0], [0.0, 0.0], [255; 4]);
+        list.push_mesh(2, 0, 0.0, &[v(-3.0, 1.0), v(0.0, 2.0), v(1.0, -1.0)]);
+        let r = list.drawn_bounds().unwrap();
+        assert_eq!((r.min, r.max), (glam::vec2(-3.0, -1.0), glam::vec2(30.0, 30.0)));
     }
 
     #[test]
