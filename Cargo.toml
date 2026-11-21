@@ -126,6 +126,11 @@ ponko_ecs = { path = "crates/ponko_ecs", version = "0.1.0", features = ["serde",
 # `#[derive(Replicate)]` (exported as `ponko::net::Replicate`).
 ponko_macros = { path = "crates/ponko_macros", version = "0.1.0" }
 half = { version = "2.7.1", optional = true }
+# The CPU's FFT for the water kit's waves from a spectrum (feature `3d`):
+# the most used Rust FFT, with NEON and SSE/AVX paths picked at run time;
+# with it the field costs a fifth of what the plain radix-2 FFT it
+# replaced did (book/src/water.md, "Waves from a spectrum").
+rustfft = { version = "6.4.1", optional = true }
 bytemuck = { version = "1.25.2", features = ["derive"] }
 glam = { version = "0.34.2", features = ["serde"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
@@ -415,7 +420,7 @@ webrtc = [
 # 3D: meshes, materials, glTF models, a perspective camera and sun light,
 # drawn under the 2D layer (`Transform3D`, `Model`, `ctx.scene3d`).
 # Off: no 3D pass, no glTF loader in the build.
-3d = ["dep:gltf", "dep:half", "image-jpeg", "image-hdr", "image-exr"]
+3d = ["dep:gltf", "dep:half", "dep:rustfft", "image-jpeg", "image-hdr", "image-exr"]
 
 # Text shaping with harfrust: ligatures and kerning from the font's
 # OpenType tables, complex scripts (Arabic joining, Devanagari), right-to-left

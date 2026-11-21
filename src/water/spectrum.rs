@@ -8,9 +8,11 @@
 //! to the moment's waves and transformed back to the square, either by
 //! compute passes on the GPU (`spectrum.wgsl`, `butterfly.wgsl`: one pass
 //! for the spectrum, then one per FFT stage along x and along z) or, on a
-//! GPU without compute shaders, by the same FFT on the CPU, uploaded. The
-//! CPU's height query runs the same FFT at the time asked, so what floats
-//! rides the waves that are drawn.
+//! GPU without compute shaders, by the same transform on the CPU
+//! (rustfft's, with the CPU's SIMD), uploaded. The CPU's height query
+//! works out the same field at the time asked, so what floats rides the
+//! waves that are drawn. The tests keep the GPU's algorithm on the CPU
+//! (`tests::reference`) and hold the fast field to it.
 //!
 //! The field packs two complex signals whose inverse transforms are real:
 //! `A = h̃ + i·D̃x` and `B = D̃z + i·∂h̃/∂t`, so one RGBA texel holds the
@@ -20,6 +22,8 @@ use std::f32::consts::TAU;
 use std::sync::{Arc, Mutex};
 
 use glam::{Vec2, Vec3};
+use rustfft::num_complex::Complex32;
+use rustfft::{Fft, FftPlanner};
 
 use super::waves::{WAVE_GRAVITY, WaveSample};
 
@@ -171,13 +175,19 @@ pub(crate) struct Field {
 }
 
 /// The spectrum made from a [`WaveSpectrum`]: its random start and each
-/// wave vector's speed, and the last moments the CPU worked out.
+/// wave vector's direction and speed, and the last moments the CPU worked out.
 #[derive(Debug)]
 pub(crate) struct SpectrumField {
     pub settings: WaveSpectrum,
     pub n: usize,
     /// Per texel of the spectrum: `h0(k)` and `conj(h0(-k))`.
     pub h0: Vec<[C; 2]>,
+    /// Per texel of the spectrum: its wave's direction and speed.
+    waves: Vec<Wave>,
+    /// The most turns any wave makes in a [`SPECTRUM_PERIOD`].
+    most_turns: usize,
+    /// The inverse FFT of `n` values.
+    fft: Plan,
     /// The highest the surface practically rises and sways (ten times the
     /// heights' and sways' spread).
     pub max_height: f32,
@@ -187,18 +197,45 @@ pub(crate) struct SpectrumField {
     cache: Mutex<Cache>,
 }
 
+/// One wave vector `k` of the spectrum: its direction (`k / |k|`, zero for
+/// the mean level) and its speed `ω`, a whole number of `turns` per
+/// [`SPECTRUM_PERIOD`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Wave {
+    ux: f32,
+    uz: f32,
+    omega: f32,
+    turns: u32,
+}
+
+/// A planned inverse FFT (rustfft's, which picks the CPU's SIMD).
+struct Plan(Arc<dyn Fft<f32>>);
+
+impl std::fmt::Debug for Plan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Plan").field("len", &self.0.len()).finish()
+    }
+}
+
 /// The CPU's moments and its work space: kept between frames, so a new
 /// moment allocates nothing once the first few are made.
 #[derive(Debug, Default)]
 struct Cache {
     fields: Vec<Arc<Field>>,
-    ab: Vec<[C; 2]>,
-    a: Vec<C>,
-    b: Vec<C>,
-    v: Vec<C>,
-    scratch: Vec<C>,
-    column: Vec<C>,
-    turns: Vec<C>,
+    /// Each wave's turn at the moment: `cis(ω·t)` for each whole number of turns.
+    spin: Vec<C>,
+    /// The two packed signals and the sway's speed, spectrum texel by texel,
+    /// transformed along x in place.
+    a: Vec<Complex32>,
+    b: Vec<Complex32>,
+    v: Vec<Complex32>,
+    /// The same turned on their side (columns as rows), then transformed
+    /// along z: the field, column by column.
+    a_t: Vec<Complex32>,
+    b_t: Vec<Complex32>,
+    v_t: Vec<Complex32>,
+    /// The FFT's work space.
+    scratch: Vec<Complex32>,
 }
 
 impl PartialEq for SpectrumField {
@@ -207,6 +244,9 @@ impl PartialEq for SpectrumField {
     }
 }
 
+/// The side of the blocks the grid is turned on its side in, to stay in
+/// the cache.
+const BLOCK: usize = 16;
 /// The wave number of spectrum index `i` of `n`, in cycles across the
 /// square: 0..n/2 up, then the negative ones (the FFT's order).
 fn wave_index(i: usize, n: usize) -> f32 {
@@ -235,10 +275,13 @@ fn gaussian(seed: u32, i: usize, j: usize) -> (f32, f32) {
 /// The wave speed `ω` of wave number `k` (rad/m) in deep water, rounded
 /// down to a whole number of turns per [`SPECTRUM_PERIOD`].
 pub(crate) fn omega(k: f32) -> f32 {
-    let base = TAU / SPECTRUM_PERIOD;
-    ((WAVE_GRAVITY * k).sqrt() / base).floor() * base
+    turns(k) as f32 * (TAU / SPECTRUM_PERIOD)
 }
 
+/// The whole turns per [`SPECTRUM_PERIOD`] of [`omega`]`(k)`.
+fn turns(k: f32) -> u32 {
+    ((WAVE_GRAVITY * k).sqrt() / (TAU / SPECTRUM_PERIOD)).floor() as u32
+}
 /// `t` folded into one period (the shader does the same).
 pub(crate) fn wrap_time(t: f32) -> f32 {
     let t = f64::from(t);
@@ -275,10 +318,20 @@ impl SpectrumField {
             C::new(a, b).scale((phillips(k_of(i, j)) * 0.5).sqrt())
         };
         let mut h0 = vec![[C::ZERO; 2]; n * n];
+        let mut waves = Vec::with_capacity(n * n);
         for j in 0..n {
             for i in 0..n {
                 let (mi, mj) = ((n - i) % n, (n - j) % n);
                 h0[j * n + i] = [start(i, j), start(mi, mj).conj()];
+                let k = k_of(i, j);
+                let kl = k.length();
+                let (ux, uz) = if kl > 0.0 { (k.x / kl, k.y / kl) } else { (0.0, 0.0) };
+                waves.push(Wave {
+                    ux,
+                    uz,
+                    omega: omega(kl),
+                    turns: turns(kl),
+                });
             }
         }
         // Scaled so four times the heights' spread is the asked height
@@ -299,10 +352,14 @@ impl SpectrumField {
         } else {
             0.0
         };
+        let most_turns = waves.iter().map(|w| w.turns as usize).max().unwrap_or(0);
         Self {
             settings,
             n,
             h0,
+            waves,
+            most_turns,
+            fft: Plan(FftPlanner::new().plan_fft_inverse(n)),
             max_height: 10.0 * sigma,
             max_sway: 10.0 * settings.choppiness.max(0.0) * sigma,
             cache: Mutex::new(Cache {
@@ -316,52 +373,6 @@ impl SpectrumField {
     /// `h0(k)` and `conj(h0(-k))`).
     pub fn start_texels(&self) -> Vec<[f32; 4]> {
         self.h0.iter().map(|[a, b]| [a.re, a.im, b.re, b.im]).collect()
-    }
-
-    /// The two packed signals at time `t`, spectrum texel by texel (what
-    /// `spectrum.wgsl` computes), and the sway's speed if `speed`.
-    fn at_time(&self, t: f32, ab: &mut Vec<[C; 2]>, v: Option<&mut Vec<C>>) {
-        let n = self.n;
-        let tile = self.settings.tile.max(1.0);
-        let chop = self.settings.choppiness.max(0.0);
-        let t = wrap_time(t);
-        ab.clear();
-        ab.resize(n * n, [C::ZERO; 2]);
-        let speed = v.is_some();
-        let mut no_v = Vec::new();
-        let v = match v {
-            Some(v) => {
-                v.clear();
-                v.resize(n * n, C::ZERO);
-                v
-            }
-            None => &mut no_v,
-        };
-        for j in 0..n {
-            for i in 0..n {
-                let k = Vec2::new(wave_index(i, n), wave_index(j, n)) * (TAU / tile);
-                let kl = k.length();
-                let [h0, h0m] = self.h0[j * n + i];
-                let w = omega(kl);
-                let e = C::cis(w * t);
-                let (up, down) = (h0.mul(e), h0m.mul(e.conj()));
-                let ht = up.add(down);
-                let (ux, uz) = if kl > 0.0 { (k.x / kl, k.y / kl) } else { (0.0, 0.0) };
-                // A = h̃ + i·D̃x with D̃x = -i·chop·k̂x·h̃: h̃·(1 + chop·k̂x).
-                let a = ht.scale(1.0 + chop * ux);
-                // B = D̃z + i·∂h̃/∂t = -i·chop·k̂z·h̃ - ω·(up - down).
-                let dz = ht.mul(C::new(0.0, -chop * uz));
-                let b = dz.sub(up.sub(down).scale(w));
-                ab[j * n + i] = [a, b];
-                if speed {
-                    // ∂D̃x/∂t + i·∂D̃z/∂t, with ∂h̃/∂t = i·ω·(up - down).
-                    let dht = up.sub(down).mul(C::new(0.0, w));
-                    let dx = dht.mul(C::new(0.0, -chop * ux));
-                    let dz = dht.mul(C::new(0.0, -chop * uz));
-                    v[j * n + i] = dx.add(dz.mul(C::new(0.0, 1.0)));
-                }
-            }
-        }
     }
 
     /// The field at time `t`, worked out on the CPU (with the sway's speed
@@ -387,25 +398,58 @@ impl SpectrumField {
         field
     }
 
+    /// Works out the moment `t` (what `spectrum.wgsl` and the FFT passes
+    /// compute): the spectrum turned to the moment, then the inverse FFT
+    /// along x, and along z on the grid turned on its side.
     fn compute(&self, t: f32, speed: bool, work: &mut Cache, old: Option<Field>) -> Field {
         let n = self.n;
+        let chop = self.settings.choppiness.max(0.0);
         let Cache {
-            ab,
+            spin,
             a,
             b,
             v,
+            a_t,
+            b_t,
+            v_t,
             scratch,
-            column,
-            turns,
             ..
         } = work;
-        self.at_time(t, ab, speed.then_some(&mut *v));
+        // `cis(ω·t)` once per speed: every ω is a whole number of turns.
+        let t = wrap_time(t);
+        let turn = TAU / SPECTRUM_PERIOD;
+        spin.clear();
+        spin.extend((0..=self.most_turns).map(|m| C::cis(m as f32 * turn * t)));
         a.clear();
-        a.extend(ab.iter().map(|p| p[0]));
         b.clear();
-        b.extend(ab.iter().map(|p| p[1]));
-        inverse_fft_2d(a, n, scratch, column, turns);
-        inverse_fft_2d(b, n, scratch, column, turns);
+        v.clear();
+        for ([h0, h0m], w) in self.h0.iter().zip(&self.waves) {
+            // The waves running with `k` (`up`) and against it (`down`).
+            let e = spin[w.turns as usize];
+            let (up, down) = (h0.mul(e), h0m.mul(e.conj()));
+            let ht = up.add(down);
+            // A = h̃ + i·D̃x with D̃x = -i·chop·k̂x·h̃: h̃·(1 + chop·k̂x).
+            let pa = ht.scale(1.0 + chop * w.ux);
+            // B = D̃z + i·∂h̃/∂t = -i·chop·k̂z·h̃ - ω·(up - down).
+            let dz = ht.mul(C::new(0.0, -chop * w.uz));
+            let pb = dz.sub(up.sub(down).scale(w.omega));
+            a.push(Complex32::new(pa.re, pa.im));
+            b.push(Complex32::new(pb.re, pb.im));
+            if speed {
+                // ∂D̃x/∂t + i·∂D̃z/∂t, with ∂h̃/∂t = i·ω·(up - down).
+                let dht = up.sub(down).mul(C::new(0.0, w.omega));
+                let dx = dht.mul(C::new(0.0, -chop * w.ux));
+                let dz = dht.mul(C::new(0.0, -chop * w.uz));
+                let s = dx.add(dz.mul(C::new(0.0, 1.0)));
+                v.push(Complex32::new(s.re, s.im));
+            }
+        }
+        let fft = &*self.fft.0;
+        inverse_fft_2d(fft, a, a_t, scratch);
+        inverse_fft_2d(fft, b, b_t, scratch);
+        if speed {
+            inverse_fft_2d(fft, v, v_t, scratch);
+        }
         let mut field = old.unwrap_or(Field {
             t,
             n,
@@ -414,82 +458,43 @@ impl SpectrumField {
         });
         field.t = t;
         field.n = n;
+        // The transforms are column by column: turned back as they're packed.
         field.texels.clear();
-        field
-            .texels
-            .extend(a.iter().zip(b.iter()).map(|(a, b)| [a.re, a.im, b.re, b.im]));
         field.sway_speed.clear();
-        if speed {
-            inverse_fft_2d(v, n, scratch, column, turns);
-            field.sway_speed.extend(v.iter().map(|c| [c.re, c.im]));
+        for z in 0..n {
+            field.texels.extend((0..n).map(|x| {
+                let (a, b) = (a_t[x * n + z], b_t[x * n + z]);
+                [a.re, a.im, b.re, b.im]
+            }));
+            if speed {
+                field
+                    .sway_speed
+                    .extend((0..n).map(|x| [v_t[x * n + z].re, v_t[x * n + z].im]));
+            }
         }
         field
     }
 }
 
-/// The turns an FFT of length `n` multiplies by: `cis(τ·m/n)` for `m` in
-/// `0..n/2` (what the GPU's butterfly pass works out for each output).
-fn twiddles(n: usize, out: &mut Vec<C>) {
-    if out.len() != n / 2 {
-        out.clear();
-        out.extend((0..n / 2).map(|m| C::cis(TAU * m as f32 / n as f32)));
-    }
-}
-
-/// One stage of the Stockham FFT, as the GPU's butterfly pass does it for
-/// output `o` of `n`: stage size `ns` (1, 2, 4, ... n/2), reading `x`,
-/// with `turns` from [`twiddles`]. The inverse transform (positive
-/// exponent), unnormalised.
-fn butterfly(x: &[C], o: usize, n: usize, ns: usize, turns: &[C]) -> C {
-    let r = (o % (2 * ns)) / ns;
-    let j = (o / (2 * ns)) * ns + o % ns;
-    // cis(τ·(j mod ns)/(2·ns)), from the table.
-    let w = turns[(j % ns) * (n / (2 * ns))];
-    let (a, b) = (x[j], x[j + n / 2].mul(w));
-    if r == 0 { a.add(b) } else { a.sub(b) }
-}
-
-/// The inverse FFT of `x` (length `n`, a power of two) in place, with
-/// `turns` from [`twiddles`] for `n`.
-fn inverse_fft(x: &mut [C], scratch: &mut [C], turns: &[C]) {
-    let n = x.len();
-    let mut ns = 1;
-    let mut in_x = true;
-    while ns < n {
-        if in_x {
-            for (o, out) in scratch[..n].iter_mut().enumerate() {
-                *out = butterfly(x, o, n, ns, turns);
-            }
-        } else {
-            for (o, out) in x.iter_mut().enumerate() {
-                *out = butterfly(scratch, o, n, ns, turns);
+/// The 2D inverse FFT of `x` (`n` x `n`, rows of x), unnormalised: along x
+/// in place, then along z into `x_t`, which ends up holding the result
+/// turned on its side (`x_t[x * n + z]`).
+fn inverse_fft_2d(fft: &dyn Fft<f32>, x: &mut [Complex32], x_t: &mut Vec<Complex32>, scratch: &mut Vec<Complex32>) {
+    let n = fft.len();
+    scratch.resize(fft.get_inplace_scratch_len(), Complex32::ZERO);
+    fft.process_with_scratch(x, scratch);
+    x_t.resize(n * n, Complex32::ZERO);
+    // Turned on its side a block at a time, to stay in the cache.
+    for i0 in (0..n).step_by(BLOCK) {
+        for j0 in (0..n).step_by(BLOCK) {
+            for i in i0..(i0 + BLOCK).min(n) {
+                for j in j0..(j0 + BLOCK).min(n) {
+                    x_t[i * n + j] = x[j * n + i];
+                }
             }
         }
-        in_x = !in_x;
-        ns *= 2;
     }
-    if !in_x {
-        x.copy_from_slice(&scratch[..n]);
-    }
-}
-
-/// The 2D inverse FFT of `x` (`n` x `n`, rows of x) in place: rows, then columns.
-fn inverse_fft_2d(x: &mut [C], n: usize, scratch: &mut Vec<C>, column: &mut Vec<C>, turns: &mut Vec<C>) {
-    scratch.resize(n, C::ZERO);
-    twiddles(n, turns);
-    for row in x.chunks_exact_mut(n) {
-        inverse_fft(row, scratch, turns);
-    }
-    column.resize(n, C::ZERO);
-    for i in 0..n {
-        for j in 0..n {
-            column[j] = x[j * n + i];
-        }
-        inverse_fft(column, scratch, turns);
-        for j in 0..n {
-            x[j * n + i] = column[j];
-        }
-    }
+    fft.process_with_scratch(x_t, scratch);
 }
 
 impl Field {
@@ -603,6 +608,134 @@ pub(crate) fn write_half_texels(texels: &[[f32; 4]], out: &mut Vec<u8>) {
 
 #[cfg(test)]
 mod tests {
+
+    /// The CPU's field as #124 first worked it out: the spectrum turned to
+    /// the moment texel by texel, then a radix-2 Stockham FFT, stage by
+    /// stage and output by output, as the GPU's passes (`spectrum.wgsl`,
+    /// `butterfly.wgsl`) do it. The reference the fast field is held to,
+    /// and the "before" of `cpu_field_cost`.
+    pub(super) mod reference {
+        use super::super::*;
+
+        /// The two packed signals at time `t`, spectrum texel by texel, and
+        /// the sway's speed if `speed`.
+        fn at_time(s: &SpectrumField, t: f32, ab: &mut Vec<[C; 2]>, v: &mut Vec<C>, speed: bool) {
+            let n = s.n;
+            let tile = s.settings.tile.max(1.0);
+            let chop = s.settings.choppiness.max(0.0);
+            let t = wrap_time(t);
+            ab.clear();
+            ab.resize(n * n, [C::ZERO; 2]);
+            v.clear();
+            v.resize(if speed { n * n } else { 0 }, C::ZERO);
+            for j in 0..n {
+                for i in 0..n {
+                    let k = Vec2::new(wave_index(i, n), wave_index(j, n)) * (TAU / tile);
+                    let kl = k.length();
+                    let [h0, h0m] = s.h0[j * n + i];
+                    let w = omega(kl);
+                    let e = C::cis(w * t);
+                    let (up, down) = (h0.mul(e), h0m.mul(e.conj()));
+                    let ht = up.add(down);
+                    let (ux, uz) = if kl > 0.0 { (k.x / kl, k.y / kl) } else { (0.0, 0.0) };
+                    let a = ht.scale(1.0 + chop * ux);
+                    let dz = ht.mul(C::new(0.0, -chop * uz));
+                    let b = dz.sub(up.sub(down).scale(w));
+                    ab[j * n + i] = [a, b];
+                    if speed {
+                        let dht = up.sub(down).mul(C::new(0.0, w));
+                        let dx = dht.mul(C::new(0.0, -chop * ux));
+                        let dz = dht.mul(C::new(0.0, -chop * uz));
+                        v[j * n + i] = dx.add(dz.mul(C::new(0.0, 1.0)));
+                    }
+                }
+            }
+        }
+
+        /// The field at `t`: texels, and the sway's speed if `speed`.
+        pub fn field(s: &SpectrumField, t: f32, speed: bool) -> (Vec<[f32; 4]>, Vec<[f32; 2]>) {
+            let n = s.n;
+            let (mut ab, mut v) = (Vec::new(), Vec::new());
+            at_time(s, t, &mut ab, &mut v, speed);
+            let mut a: Vec<C> = ab.iter().map(|p| p[0]).collect();
+            let mut b: Vec<C> = ab.iter().map(|p| p[1]).collect();
+            let (mut scratch, mut column, mut turns) = (Vec::new(), Vec::new(), Vec::new());
+            inverse_fft_2d(&mut a, n, &mut scratch, &mut column, &mut turns);
+            inverse_fft_2d(&mut b, n, &mut scratch, &mut column, &mut turns);
+            let texels = a.iter().zip(&b).map(|(a, b)| [a.re, a.im, b.re, b.im]).collect();
+            if speed {
+                inverse_fft_2d(&mut v, n, &mut scratch, &mut column, &mut turns);
+            }
+            (texels, v.iter().map(|c| [c.re, c.im]).collect())
+        }
+
+        /// The turns an FFT of length `n` multiplies by: `cis(τ·m/n)` for
+        /// `m` in `0..n/2` (what the GPU's butterfly pass works out for each
+        /// output).
+        pub fn twiddles(n: usize, out: &mut Vec<C>) {
+            if out.len() != n / 2 {
+                out.clear();
+                out.extend((0..n / 2).map(|m| C::cis(TAU * m as f32 / n as f32)));
+            }
+        }
+
+        /// One stage of the Stockham FFT, as the GPU's butterfly pass does
+        /// it for output `o` of `n`: stage size `ns` (1, 2, 4, ... n/2),
+        /// reading `x`, with `turns` from [`twiddles`]. The inverse
+        /// transform (positive exponent), unnormalised.
+        fn butterfly(x: &[C], o: usize, n: usize, ns: usize, turns: &[C]) -> C {
+            let r = (o % (2 * ns)) / ns;
+            let j = (o / (2 * ns)) * ns + o % ns;
+            // cis(τ·(j mod ns)/(2·ns)), from the table.
+            let w = turns[(j % ns) * (n / (2 * ns))];
+            let (a, b) = (x[j], x[j + n / 2].mul(w));
+            if r == 0 { a.add(b) } else { a.sub(b) }
+        }
+
+        /// The inverse FFT of `x` (length `n`, a power of two) in place,
+        /// with `turns` from [`twiddles`] for `n`.
+        pub fn inverse_fft(x: &mut [C], scratch: &mut [C], turns: &[C]) {
+            let n = x.len();
+            let mut ns = 1;
+            let mut in_x = true;
+            while ns < n {
+                if in_x {
+                    for (o, out) in scratch[..n].iter_mut().enumerate() {
+                        *out = butterfly(x, o, n, ns, turns);
+                    }
+                } else {
+                    for (o, out) in x.iter_mut().enumerate() {
+                        *out = butterfly(scratch, o, n, ns, turns);
+                    }
+                }
+                in_x = !in_x;
+                ns *= 2;
+            }
+            if !in_x {
+                x.copy_from_slice(&scratch[..n]);
+            }
+        }
+
+        /// The 2D inverse FFT of `x` (`n` x `n`, rows of x) in place: rows,
+        /// then columns.
+        fn inverse_fft_2d(x: &mut [C], n: usize, scratch: &mut Vec<C>, column: &mut Vec<C>, turns: &mut Vec<C>) {
+            scratch.resize(n, C::ZERO);
+            twiddles(n, turns);
+            for row in x.chunks_exact_mut(n) {
+                inverse_fft(row, scratch, turns);
+            }
+            column.resize(n, C::ZERO);
+            for i in 0..n {
+                for j in 0..n {
+                    column[j] = x[j * n + i];
+                }
+                inverse_fft(column, scratch, turns);
+                for j in 0..n {
+                    x[j * n + i] = column[j];
+                }
+            }
+        }
+    }
     use super::*;
 
     /// The inverse DFT the slow way.
@@ -626,10 +759,114 @@ mod tests {
             let want = slow(&x);
             let mut got = x.clone();
             let (mut scratch, mut turns) = (vec![C::ZERO; n], Vec::new());
-            twiddles(n, &mut turns);
-            inverse_fft(&mut got, &mut scratch, &turns);
+            reference::twiddles(n, &mut turns);
+            reference::inverse_fft(&mut got, &mut scratch, &turns);
             for (g, w) in got.iter().zip(&want) {
                 assert!(g.sub(*w).norm2().sqrt() < 1e-3 * n as f32, "n {n}: {g:?} vs {w:?}");
+            }
+        }
+    }
+
+    /// The worst difference between the fast field and the reference's at
+    /// `t`, against the sea's practical height.
+    fn off_from_reference(spectrum: &SpectrumField, t: f32) -> (f32, f32) {
+        let fast = spectrum.field(t, true);
+        let (texels, sway_speed) = reference::field(spectrum, t, true);
+        let texel_off = fast
+            .texels
+            .iter()
+            .zip(&texels)
+            .flat_map(|(f, r)| (0..4).map(move |c| (f[c] - r[c]).abs()))
+            .fold(0.0f32, f32::max);
+        let speed_off = fast
+            .sway_speed
+            .iter()
+            .zip(&sway_speed)
+            .flat_map(|(f, r)| (0..2).map(move |c| (f[c] - r[c]).abs()))
+            .fold(0.0f32, f32::max);
+        (texel_off, speed_off)
+    }
+
+    #[test]
+    fn the_fast_cpu_field_is_the_reference_field_at_every_size() {
+        for cells in [64, 128, 256] {
+            let settings = WaveSpectrum::new(Vec2::new(9.0, -4.0), 2.0).with_tile(256.0, cells);
+            let spectrum = SpectrumField::new(settings);
+            for t in [0.0, 3.7, 151.25] {
+                let (texel_off, speed_off) = off_from_reference(&spectrum, t);
+                // Both are f32 FFTs summing the same waves in another
+                // order: about a micrometre apart on a 2 m sea.
+                assert!(
+                    texel_off < 1e-5,
+                    "{cells} cells, t {t}: the field is off by {texel_off} m"
+                );
+                assert!(
+                    speed_off < 1e-5,
+                    "{cells} cells, t {t}: the sway's speed is off by {speed_off} m/s"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_new_moment_allocates_nothing_once_warm() {
+        let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 128));
+        for i in 0..3 {
+            drop(spectrum.field(i as f32, true));
+        }
+        let size = |c: &Cache| {
+            [&c.a, &c.b, &c.v, &c.a_t, &c.b_t, &c.v_t, &c.scratch]
+                .map(|v| (v.as_ptr(), v.capacity()))
+                .to_vec()
+        };
+        let before = size(&spectrum.cache.lock().unwrap());
+        for i in 3..6 {
+            drop(spectrum.field(i as f32, true));
+        }
+        assert_eq!(size(&spectrum.cache.lock().unwrap()), before, "the work space is kept");
+    }
+
+    /// The CPU field's cost per new moment, the reference (#124's FFT) and
+    /// the fast one, interleaved run after run. Run by hand in release:
+    /// `cargo test -p ponko --lib --features 3d --release cpu_field_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn cpu_field_cost() {
+        use std::time::Instant;
+        let runs: usize = std::env::var("PONKO_SPECTRUM_RUNS")
+            .ok()
+            .and_then(|r| r.parse().ok())
+            .unwrap_or(5);
+        let ms = |f: &mut dyn FnMut(f32)| {
+            // Median of 15 moments, each a new time.
+            let mut times: Vec<f32> = (0..15)
+                .map(|i| {
+                    let start = Instant::now();
+                    f(i as f32 * 0.1 + 0.013);
+                    start.elapsed().as_secs_f32() * 1000.0
+                })
+                .collect();
+            times.sort_by(f32::total_cmp);
+            times[times.len() / 2]
+        };
+        for run in 0..runs {
+            for cells in [64, 128, 256] {
+                let settings = WaveSpectrum::new(Vec2::new(8.0, -6.0), 1.5).with_tile(256.0, cells);
+                let spectrum = SpectrumField::new(settings);
+                let mut line = format!("run {run}, {cells} cells:");
+                for speed in [false, true] {
+                    let before = ms(&mut |t| {
+                        std::hint::black_box(reference::field(&spectrum, t, speed));
+                    });
+                    let after = ms(&mut |t| {
+                        std::hint::black_box(spectrum.field(t, speed));
+                    });
+                    line += &format!(
+                        " {} before {before:.3} ms, after {after:.3} ms;",
+                        if speed { "with velocities" } else { "field" }
+                    );
+                }
+                eprintln!("{line}");
             }
         }
     }
