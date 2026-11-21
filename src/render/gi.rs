@@ -335,7 +335,14 @@ impl Gi {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: ATLAS_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            // Tests read the probes' codes back (`probe_codes`).
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | if cfg!(test) {
+                    wgpu::TextureUsages::COPY_SRC
+                } else {
+                    wgpu::TextureUsages::empty()
+                },
             view_formats: &[],
         });
         let view = atlas.create_view(&Default::default());
@@ -584,6 +591,31 @@ impl Gi {
 
 #[cfg(test)]
 impl Gi {
+    /// Each slot's code: which probe it holds (`GiGrid::code`), negated
+    /// where the update found the probe buried in a wall (see
+    /// `gi_update.wgsl`), 0 where none yet. Waits for the GPU.
+    pub fn probe_codes(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<f32> {
+        let texels = crate::render::render_test_support::read_texture(device, queue, &self.atlas);
+        let width = (COLUMNS * DEPTH_TILE) as usize;
+        let half = |at: usize| {
+            let h = u16::from_le_bytes([texels[at], texels[at + 1]]);
+            let (sign, exp, frac) = (h >> 15, i32::from((h >> 10) & 31), f32::from(h & 1023));
+            let v = match exp {
+                0 => frac * 2f32.powi(-24),
+                31 => f32::INFINITY,
+                _ => (1.0 + frac / 1024.0) * 2f32.powi(exp - 15),
+            };
+            if sign == 1 { -v } else { v }
+        };
+        (0..self.slots)
+            .map(|slot| {
+                let (column, row) = (slot % COLUMNS as usize, slot / COLUMNS as usize);
+                let (x, y) = (column * LIGHT_TILE as usize + 1, row * LIGHT_TILE as usize + 1);
+                half(((y * width + x) * 4 + 3) * 2)
+            })
+            .collect()
+    }
+
     /// See `Renderer3D::check_mirrors`.
     pub fn check_mirrors(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.uniform_mirror

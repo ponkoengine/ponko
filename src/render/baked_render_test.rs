@@ -332,6 +332,44 @@ fn realtime_gi_settles_closer_to_the_path_traced_room_than_flat_ambient_light() 
         realtime_error < flat_error * 0.25,
         "realtime GI settles on the path-traced room: {realtime_error} vs flat {flat_error}"
     );
+    assert_quoted(flat_error, ROOM_FLAT_ERROR, "the room's flat ambient light");
+    assert_quoted(realtime_error, ROOM_SETTLED_ERROR, "the room's realtime GI");
+}
+
+/// The errors to the converged path-traced reference the guide quotes
+/// ("How close it comes" in `book/src/3d.md`, and the baked lighting
+/// section's comparison): the tests check the renderer still gets them
+/// (within [`QUOTED_WITHIN`]) and
+/// `the_guide_quotes_the_measured_errors_to_the_path_traced_reference`
+/// that the guide says them. A change that moves one past that updates
+/// it here and in the guide.
+const ROOM_SETTLED_ERROR: f32 = 0.05;
+const ROOM_FLAT_ERROR: f32 = 0.69;
+const OPEN_SETTLED_ERROR: f32 = 0.03;
+const OPEN_FLAT_ERROR: f32 = 0.08;
+const QUOTED_WITHIN: f32 = 0.015;
+
+fn assert_quoted(measured: f32, quoted: f32, what: &str) {
+    assert!(
+        (measured - quoted).abs() <= QUOTED_WITHIN,
+        "{what}: the error is {measured:.3}, the guide says {quoted:.2}: update the constant and the guide"
+    );
+}
+
+#[test]
+fn the_guide_quotes_the_measured_errors_to_the_path_traced_reference() {
+    let guide = include_str!("../../book/src/3d.md");
+    let guide = guide.split_whitespace().collect::<Vec<_>>().join(" ");
+    for phrase in [
+        format!(
+            "it settled at {ROOM_SETTLED_ERROR:.2} in the red-walled room lit through a roof opening \
+             (flat ambient light: {ROOM_FLAT_ERROR:.2}) and at {OPEN_SETTLED_ERROR:.2} in an open sunlit scene \
+             with a red wall and a canopy (flat: {OPEN_FLAT_ERROR:.2})"
+        ),
+        format!("({ROOM_SETTLED_ERROR:.2} against that after 1500 frames, flat ambient light {ROOM_FLAT_ERROR:.2}"),
+    ] {
+        assert!(guide.contains(&phrase), "book/src/3d.md says: {phrase}");
+    }
 }
 
 #[test]
@@ -346,6 +384,8 @@ fn realtime_gi_settles_closer_to_the_path_traced_open_scene_than_flat_ambient_li
         realtime_error < flat_error * 0.6,
         "realtime GI settles on the path-traced open scene: {realtime_error} vs flat {flat_error}"
     );
+    assert_quoted(flat_error, OPEN_FLAT_ERROR, "the open scene's flat ambient light");
+    assert_quoted(realtime_error, OPEN_SETTLED_ERROR, "the open scene's realtime GI");
 }
 
 #[test]

@@ -158,10 +158,18 @@ fn gi_blocked(cell: vec3<f32>, toward: vec3<f32>) -> bool {
     if abs(code - gi_code(cell, counts)) > 0.25 {
         return false;
     }
-    // The distance tile's texel for that way (its inside is 14 across).
-    let e = clamp(vec2<i32>(floor((gi_octahedral(toward) * 0.5 + 0.5) * 14.0)), vec2<i32>(0), vec2<i32>(13));
-    let at = vec2<i32>(tile.x * 16, i32(rows) * 8 + tile.y * 16) + 1 + e;
-    let seen = textureLoad(gi_old, at, 0);
+    // The distance tile's four texels around that way (its inside is 14
+    // across): an axis falls on their corner, so the cone they make up is
+    // centred on it, where any one of them leans to one side (and a probe
+    // just inside a wall's side edge, or just under a wall in open air,
+    // was taken for the other).
+    let corner = vec2<i32>(floor((gi_octahedral(toward) * 0.5 + 0.5) * 14.0 - 0.5));
+    let origin = vec2<i32>(tile.x * 16, i32(rows) * 8 + tile.y * 16) + 1;
+    var seen = vec4<f32>(0.0);
+    for (var k = 0; k < 4; k++) {
+        seen += textureLoad(gi_old, origin + gi_inside(corner + vec2<i32>(k & 1, k >> 1), 14), 0);
+    }
+    seen *= 0.25;
     let mean = seen.r;
     return (mean < spacing * (1.0 - GI_BURIED.x) && mean > spacing * (1.0 - GI_BURIED.y)) || seen.b >= GI_BURIED_SHARE;
 }
