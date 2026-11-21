@@ -61,6 +61,13 @@ pub(super) struct ViewModelPass {
     /// Pushes the world out of the depth sliver (see the module's notes):
     /// made for the scene depth's format and samples.
     push_back: Option<(wgpu::RenderPipeline, wgpu::TextureFormat, u32)>,
+    /// Negative controls for the tests: leave out the push back, the
+    /// held items' motion.
+    #[cfg(test)]
+    off: (bool, bool),
+    /// The view-model camera as drawn last (with the jitter), for tests.
+    #[cfg(test)]
+    jittered: Mat4,
     frame_buffer: wgpu::Buffer,
     /// What `frame_buffer` holds (see `sync_frame`).
     frame_mirror: Mirror,
@@ -93,6 +100,10 @@ impl Renderer3D {
                 motion: None,
                 previous: None,
                 push_back: None,
+                #[cfg(test)]
+                off: (false, false),
+                #[cfg(test)]
+                jittered: Mat4::IDENTITY,
                 frame_buffer,
                 frame_mirror: Mirror::default(),
                 frame_bind_group,
@@ -146,7 +157,13 @@ impl Renderer3D {
         !self.extra
             && self.screen.taa_on
             && self.screen.velocity_on
-            && self.view_model.as_ref().is_some_and(|p| !p.motion_runs.is_empty())
+            && self.view_model.as_ref().is_some_and(|p| {
+                #[cfg(test)]
+                if p.off.1 {
+                    return false;
+                }
+                !p.motion_runs.is_empty()
+            })
     }
 
     /// Mesh parts the held items' motion pass draws (for `draw_calls`).
@@ -234,6 +251,10 @@ impl Renderer3D {
         theirs.view_proj = view_proj.to_cols_array_2d();
         theirs.inv_view_proj = view_proj.inverse().to_cols_array_2d();
         theirs.unjittered_view_proj = unjittered.to_cols_array_2d();
+        #[cfg(test)]
+        {
+            pass.jittered = view_proj;
+        }
         let previous = pass.previous.filter(|_| past).unwrap_or(unjittered);
         pass.previous = Some(unjittered);
         theirs.previous_view_proj = previous.to_cols_array_2d();
@@ -268,7 +289,11 @@ impl Renderer3D {
         };
         // Part of the pass's "color" step: the same color and depth.
         pass.set_viewport(0.0, 0.0, size.0 as f32, size.1 as f32, 1.0 - VIEW_MODEL_DEPTH, 1.0);
-        if solid && let Some((push_back, _, _)) = &vm.push_back {
+        #[cfg(test)]
+        let solid_push = solid && !vm.off.0;
+        #[cfg(not(test))]
+        let solid_push = solid;
+        if solid_push && let Some((push_back, _, _)) = &vm.push_back {
             // The world out of the sliver first: nothing of it cuts in.
             pass.set_pipeline(push_back);
             pass.draw(0..3, 0..1);
@@ -303,6 +328,27 @@ impl Renderer3D {
     #[cfg(test)]
     pub(crate) fn has_view_model(&self) -> bool {
         self.view_model.is_some()
+    }
+
+    /// Negative controls: leaves out the push back of the world out of
+    /// the sliver and the held items' motion (once the pass exists).
+    #[cfg(test)]
+    pub(crate) fn view_model_without(&mut self, push_back: bool, motion: bool) {
+        if let Some(pass) = &mut self.view_model {
+            pass.off = (push_back, motion);
+        }
+    }
+
+    /// The view-model camera the last frame was drawn with, jitter and all.
+    #[cfg(test)]
+    pub(crate) fn view_model_jittered(&self) -> Option<Mat4> {
+        self.view_model.as_ref().map(|p| p.jittered)
+    }
+
+    /// Whether the last recorded frame drew the held items' motion.
+    #[cfg(test)]
+    pub(crate) fn draws_view_model_motion(&self) -> bool {
+        self.view_model_motion()
     }
 }
 
@@ -418,6 +464,11 @@ mod tests {
         // A camera that held still reprojects the sliver where it is.
         let still = sliver_reprojection(main, main, held);
         let p = Vec3::new(0.2, 1.4, -0.5);
-        assert!(still.project_point3(p).truncate().abs_diff_eq(held.project_point3(p).truncate(), 1e-5));
+        assert!(
+            still
+                .project_point3(p)
+                .truncate()
+                .abs_diff_eq(held.project_point3(p).truncate(), 1e-5)
+        );
     }
 }
