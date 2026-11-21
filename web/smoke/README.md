@@ -193,7 +193,7 @@ decisions.
 
 `threads.mjs` checks a web build with threads (the guide's "Threads on the
 web"): the fixture `examples/web_threads.rs`, built with
-`web/build.sh --threads --features 3d,bench-internals web_threads`
+`web/build.sh --threads --features 3d,physics3d,bench-internals web_threads`
 (`--build` builds it first). It serves
 the build twice and opens each in a new browser context:
 
@@ -207,15 +207,24 @@ the build twice and opens each in a new browser context:
   - at least two of the engine's own parallel passes must go through the
     frame pool's runner (`passes_shared`), among them the retained 3D
     culling of 20,000 models (`three/shared_cull`, which must also find
-    models to draw) and a JSON save of the game's world
-    (`reflect/shared_save`).
+    models to draw), the drawing of 256 2D skeletons
+    (`skeleton2d/shared_draw`), the moves of 32 3D characters
+    (`physics3d/shared_characters`) and a small light bake
+    (`three/shared_bake`); the JSON save of the game's world must not
+    (`reflect/shared_save`: in the browser it is faster on the page's
+    thread);
+  - every timed pass must have a time (`pass_ms`).
 - **Without** the headers: everything runs on the page's thread, and the
   console says why (`it runs on the page's thread alone`).
 
-Both runs must reach the same checksum at tick 120 (the 3D frame's counts
-and the JSON save's length and hash are in it, and compared on their own
-too) and read the same file.
-Two more modes:
+Both runs must reach the same checksum at tick 120 (the 3D frame's counts,
+the skeletons' vertices, the characters' places, the bake's hash and the
+JSON save's length and hash are in it; the frame and the save are compared
+on their own too) and read the same file. The run prints a table of the
+timed passes: whether each was shared out, and its median time with threads
+and on the page's thread alone (the guide's list of parallel loops comes
+from it).
+More modes:
 - `--case worker-panic` panics inside the parallel query on a worker. The
   console must say `the game stops`, the page must still answer, and the
   ticks must stop.
@@ -249,6 +258,12 @@ Two more modes:
   come from the same backend built without threads (it replaced gilrs on
   the web; the guide's web chapter says why). Both apply gilrs's dead zone
   (0.1, rescaled), and the expected axes take it out the same way.
+- `--case service-worker` builds the fixture with `ponko-isolate.js`
+  (`web/build.sh --threads --isolation-worker`, in
+  `target/web/web_threads_sw`) and serves it **without** the headers. The
+  page must reload once through the service worker (`ponko-isolate.js:
+  reloading once` in the console), be controlled by it, be cross-origin
+  isolated, and pass every check of the isolated run above.
 - `--case warning` needs no browser: it builds the example
   `examples/web_threads_warning.rs` with threads and `-D warnings`. The
   example's only code is an unused function that only a build with threads

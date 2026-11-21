@@ -143,7 +143,8 @@ if let Some(written) = saving.take() {
   file in the other format. `SaveFormat::encode` and `SaveFormat::decode`
   convert a save (`World::save`) yourself, for files of your own.
 - **`save_world_in_background`** takes the world's save on the game's thread
-  (built in parallel) and returns at once; a [job](streaming.md) encodes and
+  (built in parallel; in a web build with threads, on the page's thread,
+  where that is faster) and returns at once; a [job](streaming.md) encodes and
   writes it. The save holds the world as it was at the call. Storage acts as
   if it were written at the call: background saves are written in order, and
   a call that touches the slot (`read`, `list`, `load_world`, another save)
