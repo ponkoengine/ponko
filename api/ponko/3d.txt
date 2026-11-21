@@ -9447,6 +9447,9 @@ impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::cut_selection(&mut self)
 pub fn ponko::prelude::Ui::selected_text(&self) -> core::option::Option<&str>
 impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::fades_as_group(&self, ponko::prelude::UiId) -> bool
+pub fn ponko::prelude::Ui::set_fade_as_group(&mut self, ponko::prelude::UiId, bool)
+impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::is_rich(&self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::link(&self, ponko::prelude::UiId, u32) -> core::option::Option<&str>
 pub fn ponko::prelude::Ui::set_inline_font(&mut self, &str, ponko::text::Font)
@@ -14314,6 +14317,9 @@ impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::cut_selection(&mut self)
 pub fn ponko::prelude::Ui::selected_text(&self) -> core::option::Option<&str>
 impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::fades_as_group(&self, ponko::prelude::UiId) -> bool
+pub fn ponko::prelude::Ui::set_fade_as_group(&mut self, ponko::prelude::UiId, bool)
+impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::is_rich(&self, ponko::prelude::UiId) -> bool
 pub fn ponko::prelude::Ui::link(&self, ponko::prelude::UiId, u32) -> core::option::Option<&str>
 pub fn ponko::prelude::Ui::set_inline_font(&mut self, &str, ponko::text::Font)
@@ -14408,6 +14414,7 @@ pub fn ponko::ui::UiBuilder<'_>::border_width(self, f32) -> Self
 pub fn ponko::ui::UiBuilder<'_>::closes_screen(self) -> Self
 pub fn ponko::ui::UiBuilder<'_>::color(self, ponko::color::Color) -> Self
 pub fn ponko::ui::UiBuilder<'_>::enabled(self, bool) -> Self
+pub fn ponko::ui::UiBuilder<'_>::fade_as_group(self) -> Self
 pub fn ponko::ui::UiBuilder<'_>::focused(self) -> Self
 pub fn ponko::ui::UiBuilder<'_>::font(self, ponko::text::Font) -> Self
 pub fn ponko::ui::UiBuilder<'_>::id(self) -> ponko::prelude::UiId

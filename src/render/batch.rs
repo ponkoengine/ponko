@@ -187,6 +187,21 @@ pub(crate) struct DrawList {
     order: Vec<(u32, u32)>,
     sorted: Vec<SpriteInstance>,
     batches: Vec<Batch>,
+
+    /// Lists drawn into textures of the window's size before this one,
+    /// which shows them (a UI group fading as one image); the first
+    /// `offscreen_live` are this frame's. Empty unless a group fades.
+    offscreen: Vec<Offscreen>,
+    offscreen_live: usize,
+}
+
+/// A [`DrawList`] drawn into texture `texture` (cleared to transparent,
+/// the size of the window, with the screen's projection) before the list
+/// that holds it: its sprites end up premultiplied by their alpha there.
+#[derive(Debug, Default)]
+pub(crate) struct Offscreen {
+    pub texture: u32,
+    pub list: DrawList,
 }
 
 /// Room for `n` sprites at the end of a [`DrawList`], to be filled from
@@ -459,6 +474,43 @@ impl DrawList {
         self.layers = None;
         self.needs_sort = false;
         self.batches.clear();
+        // The lists keep their memory, emptied when used again.
+        self.offscreen_live = 0;
+    }
+
+    /// This frame's offscreen lists, `n` of them: the first `n` kept from
+    /// earlier frames (emptied by whoever fills them), more made as needed.
+    pub fn offscreen_slots(&mut self, n: usize) -> &mut [Offscreen] {
+        if self.offscreen.len() < n {
+            self.offscreen.resize_with(n, Offscreen::default);
+        }
+        self.offscreen_live = n;
+        &mut self.offscreen[..n]
+    }
+
+    /// This frame's offscreen lists.
+    pub fn offscreen(&self) -> &[Offscreen] {
+        &self.offscreen[..self.offscreen_live]
+    }
+
+    /// [`finish`](Self::finish), and the offscreen lists finished too: a
+    /// list's sprites and batches as [`Offscreen::finished`] gives them.
+    pub fn finish_with_offscreen(&mut self) -> (&[SpriteInstance], &[Batch], &[Offscreen]) {
+        for layer in &mut self.offscreen[..self.offscreen_live] {
+            layer.list.finish();
+        }
+        self.finish();
+        let (sprites, batches) = self.finished();
+        (sprites, batches, &self.offscreen[..self.offscreen_live])
+    }
+
+    /// What the last [`finish`](Self::finish) gave.
+    fn finished(&self) -> (&[SpriteInstance], &[Batch]) {
+        if self.needs_sort {
+            (&self.sorted, &self.batches)
+        } else {
+            (&self.instances, &self.batches)
+        }
     }
 
     /// Orders the frame's sprites and groups them into batches.
@@ -541,6 +593,13 @@ impl DrawList {
             });
             start += len;
         }
+    }
+}
+
+impl Offscreen {
+    /// Its list's sprites and batches, as its last finish gave them.
+    pub fn finished(&self) -> (&[SpriteInstance], &[Batch]) {
+        self.list.finished()
     }
 }
 

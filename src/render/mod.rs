@@ -535,6 +535,8 @@ mod transparency_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod ui_animation_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod ui_group_fade_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod ui_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod ui_widgets_render_test;

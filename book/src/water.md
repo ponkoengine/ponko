@@ -151,8 +151,8 @@ Where it is worked out:
   which uses the CPU's SIMD (NEON, SSE or AVX) where there is some, and
   WASM SIMD in a web build made for it (see [On the web](#on-the-web)).
 - **The CPU's queries** (`height_at`, `sample`, buoyancy) run the same
-  FFT on the CPU at the time asked, once per moment (the last two are
-  kept), so what floats rides the waves that are drawn. Buoyancy and
+  FFT on the CPU at the time asked, once per moment (the last three asked
+  are kept), so what floats rides the waves that are drawn. Buoyancy and
   `sample` also need the sway's speed, which costs about half a moment
   more; when a moment worked out without it is asked again with it (a
   WebGL2 upload, then buoyancy at the same time on the next fixed step),
@@ -161,10 +161,42 @@ Where it is worked out:
   of a WebGL2 sea with something floating at 128 cells costs 0.21 ms of
   CPU field instead of 0.35 ms (0.93 instead of 1.55 ms at 256 cells;
   `upload_and_buoyancy_frame_cost`, release, one thread, the medians of
-  seven runs alternating before and after on the busy machine below). A GPU test reads
-  the drawn surface back and compares it with `height_at`: 9.9 mm worst
+  seven runs alternating before and after on the busy machine below). A
+  GPU test reads the drawn surface back and compares it with `height_at`: 9.9 mm worst
   with the GPU's FFT, 9.1 mm with the CPU's upload, on a 1.5 m sea; the
   GPU's field matches the CPU's to 6 mm (it runs in half floats).
+- **Sharing the fixed steps' moments.** Floating bodies ask for the
+  waves at each fixed step's time, the WebGL2 upload at the frame's,
+  which falls between two steps; with a variable frame rate the two never
+  meet, so each frame worked out a moment of its own besides the steps'.
+  Now, while the frame's clock is on the steps' (no pause or simulation
+  speed change has moved them apart), the upload blends the moments of
+  the next two steps, which the floating bodies ask for anyway: a frame
+  works out at most the moment one step ahead, and none when it falls
+  between the same steps as the last. The blend is within a millimetre of
+  the moment it stands for (0.98 mm worst on the 1.5 m sea at 128 cells,
+  both in the half floats they are uploaded in;
+  `the_drawn_blend_of_two_steps_is_the_moment_between`). Without floating
+  bodies it blends only when that costs no more moments than drawing the
+  frame's own (two once, to start), so frames faster than the steps work
+  out one moment a step instead of one a frame. Once
+  paused or slowed, each frame works out its own moment, as before.
+  Measured with `variable_frame_rate_cost` (release, one thread's CPU
+  time, the medians of five runs alternating before and after, load
+  average about 100 to 170, so a run with the same moments either way
+  still moved by up to a fifth): with something floating, 50 steps a second
+  and frames varying by a quarter, the moments worked out a frame fall
+  from 1.35 to 0.35 at 144 frames a second, 1.83 to 0.83 at 60 and 2.67 to
+  1.67 at 30.
+
+  | Cells | 144 Hz | 60 Hz | 30 Hz |
+  |---|---|---|---|
+  | 128 | 0.35 → 0.21 ms | 0.41 → 0.31 ms | 0.68 → 0.60 ms |
+  | 256 | 1.59 → 1.14 ms | 2.06 → 1.50 ms | 3.14 → 2.61 ms |
+
+  Without floating bodies at 144 frames a second, 0.23 → 0.20 ms at 128
+  cells and 1.05 → 0.89 ms at 256; at 60 and 30 the difference was within
+  the noise, as was every case at 64 cells (under 0.2 ms either way).
 
 Cost, measured on an Apple M4 Max (Metal) while the machine was busy
 with other work (load average 70 to 116). The GPU column is from
@@ -215,16 +247,18 @@ The ordinary web build takes up to about twice the desktop's time above
 A WebGL2 frame pays one moment for the upload, and one with the sway's
 speed as well when something floats or asks `sample` at that time, so the
 default 128 cells cost about 0.6 ms of a 16.7 ms frame at worst, and 256
-cells about 2.8 ms.
+cells about 2.8 ms (less while the frame shares the fixed steps' moments,
+above).
 
 **128 cells is the web's default and the cheapest correct choice**: it is
 cheap enough on any build, and it is what the GPU path draws, so the same
 seed gives the same sea on every machine. Halving the grid (64 cells)
 saves under half a millisecond and drops the shortest waves; 256 cells is
 fine on a fast machine but costs about 2.8 ms (1.8 ms with WASM SIMD) a
-frame on WebGL2. There is no update-rate setting: the field is worked out
-at the drawn frame's time, once per moment however many queries ask, and
-an older moment would leave floating bodies off the drawn waves.
+frame on WebGL2. There is no update-rate setting: the field is drawn at
+the frame's time (from the two fixed steps around it, see above), once
+per moment however many queries ask, and an older moment would leave
+floating bodies off the drawn waves.
 
 **WASM SIMD** is optional. `web/build.sh --simd` turns it on: the
 `wasm-simd` feature and `simd128` for the whole module, always together:

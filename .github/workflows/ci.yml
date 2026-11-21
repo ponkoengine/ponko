@@ -1422,7 +1422,10 @@ jobs:
       # ordinary build, `--case gamepads-plain`), and a warning must fail the
       # threaded build
       # (`--case warning`: an example whose only code is an unused function
-      # behind `target_feature = "atomics"`, built with -D warnings).
+      # behind `target_feature = "atomics"`, built with -D warnings). Built
+      # with ponko-isolate.js and served WITHOUT the headers, the page must
+      # reload once through the service worker and pass the isolated checks
+      # (`--case service-worker`).
       - name: Nightly Rust for the threaded web build
         if: ${{ !cancelled() }}
         run: rustup toolchain install nightly --profile minimal --component rust-src --target wasm32-unknown-unknown
@@ -1434,6 +1437,7 @@ jobs:
           node web/smoke/threads.mjs --case worker-panic
           node web/smoke/threads.mjs --case gamepads
           node web/smoke/threads.mjs --build --case gamepads-plain
+          node web/smoke/threads.mjs --build --case service-worker
           node web/smoke/threads.mjs --case warning
       # Replication in the browser (web/smoke/replication.mjs): the Orb Arena
       # example, a native dedicated server (no window) and one tab that joins

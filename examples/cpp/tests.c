@@ -838,6 +838,70 @@ static void streamed_worlds(void) {
     CHECK(!ponko_collision_mesh_data_heightfield(flat, 3, 1));
 }
 
+/* A terrain tile saved, then loaded: the rebuild makes its ground again
+   from its saved corner. */
+typedef struct { uint32_t transform, focus; int calls; bool solid; } TileRebuild;
+static PonkoCollisionMeshData* tile_ground(const PonkoLoadedWorld* world, uint64_t tile, void* user) {
+    TileRebuild* r = user;
+    PonkoTransform3D at;
+    CHECK(ponko_loaded_world_get(world, tile, r->transform, &at, sizeof at) == PONKO_OK);
+    PonkoColliderFocus focus;
+    CHECK(ponko_loaded_world_get(world, tile, r->focus, &focus, sizeof focus) == PONKO_NOT_FOUND);
+    r->calls++;
+    if (at.position.x != -10) return NULL;
+    float heights[9] = {2, 2, 2, 2, 2, 2, 2, 2, 2};
+    return ponko_collision_mesh_data_heightfield(heights, 9, 20);
+}
+static void tile_save_load(PonkoCtx* ctx, void* user) {
+    TileRebuild* r = user;
+    PonkoWorld* w = ponko_ctx_world(ctx);
+    uint32_t terrain;
+    CHECK(ponko_transform3d_component(w, &r->transform) == PONKO_OK);
+    CHECK(ponko_collider_focus_component(w, &r->focus) == PONKO_OK);
+    CHECK(ponko_terrain_collider_component(w, &terrain) == PONKO_OK);
+    float heights[9] = {2, 2, 2, 2, 2, 2, 2, 2, 2};
+    PonkoCollisionMeshData* data = ponko_collision_mesh_data_heightfield(heights, 9, 20); CHECK(data);
+    PonkoCollisionMesh mesh;
+    CHECK(ponko_ctx_physics3d_add_mesh(ctx, data, &mesh) == PONKO_OK);
+    ponko_collision_mesh_data_free(data);
+    PonkoTransform3D at = ponko_transform3d_at((PonkoVec3){-10, 0, -10});
+    PonkoTerrainCollider solid = ponko_terrain_collider(mesh);
+    PonkoValue tile[2] = {{r->transform, &at, sizeof at}, {terrain, &solid, sizeof solid}};
+    uint64_t e;
+    CHECK(ponko_spawn(w, tile, 2, &e) == PONKO_OK);
+    CHECK(ponko_ctx_save_world(ctx, "tiles") == PONKO_OK);
+    CHECK(ponko_ctx_physics3d_set_terrain_rebuild(ctx, NULL, r) == PONKO_INVALID_ARGUMENT);
+    CHECK(ponko_ctx_physics3d_set_terrain_rebuild(ctx, tile_ground, r) == PONKO_OK);
+    CHECK(ponko_ctx_load_world(ctx, "tiles") == PONKO_OK);
+    CHECK(r->calls == 1);
+    CHECK(ponko_ctx_physics3d_clear_terrain_rebuild(ctx) == PONKO_OK);
+    CHECK(ponko_ctx_load_world(ctx, "tiles") == PONKO_OK);
+    CHECK(r->calls == 1);
+    CHECK(ponko_ctx_physics3d_set_terrain_rebuild(ctx, tile_ground, r) == PONKO_OK);
+    CHECK(ponko_ctx_load_world(ctx, "tiles") == PONKO_OK);
+    CHECK(r->calls == 2);
+    CHECK(ponko_ctx_delete_world(ctx, "tiles") == PONKO_OK);
+}
+static void tile_probe(PonkoCtx* ctx, void* user) {
+    TileRebuild* r = user;
+    if (ponko_ctx_sim_tick(ctx) != 1) return;
+    bool found = false; PonkoHit3D hit;
+    CHECK(ponko_ctx_cast_ray3d(ctx, (PonkoVec3){0, 10, 0}, (PonkoVec3){0, -1, 0}, 20, ponko_query_filter3d(), &found, &hit) == PONKO_OK);
+    r->solid = found && fabsf(hit.point.y - 2) < 0.01f;
+}
+
+static void terrain_rebuild(void) {
+    TileRebuild r = {0};
+    PonkoGame* g = ponko_game_new("tiles", 1, 1); CHECK(g);
+    CHECK(ponko_game_data_dir(g, "ponko-c-terrain") == PONKO_OK);
+    CHECK(ponko_game_physics3d(g, (PonkoVec3){0, 0, 0}) == PONKO_OK);
+    CHECK(ponko_game_sim_system(g, "probe", 1, tile_probe, &r) == PONKO_OK);
+    PonkoWorld* w = NULL;
+    CHECK(ponko_game_run_headless(g, 3, tile_save_load, &r, &w) == PONKO_OK);
+    CHECK(ponko_world_free(w) == PONKO_OK);
+    CHECK(r.calls == 2 && r.solid);
+}
+
 static void recolor(PonkoCtx* ctx, void* user) {
     (void)user;
     PonkoWorld* w = ponko_ctx_world(ctx);
@@ -4044,6 +4108,7 @@ int main(void) {
     ribbons_and_decals();
     lod_helpers();
     streamed_worlds();
+    terrain_rebuild();
     model_material_overrides();
     asset_streaming();
     profiling_c();

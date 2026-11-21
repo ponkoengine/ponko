@@ -193,6 +193,8 @@ crates/ponko_bench/src/sparse_set.rs | dense_sset_iter | crates/ponko_bench/src/
 # Called by the engine through a trait object or a drop, not by name.
 crates/ponko_ffi/src/asset_sources.rs | CSource::read | crates/ponko_ffi/tests/asset_sources.rs::a_callback_source_is_asked_first_and_freed_once | sanitizers
 crates/ponko_ffi/src/asset_sources.rs | CSource::contains | crates/ponko_ffi/tests/asset_sources.rs::a_contains_callback_locates_gltf_images_without_reading_them | sanitizers
+crates/ponko_ffi/src/physics3d_stream.rs | impl Send for Rebuild | crates/ponko_ffi/tests/physics3d_streaming.rs::a_c_terrain_rebuild_makes_loaded_tiles_solid_where_they_were | sanitizers
+crates/ponko_ffi/src/physics3d_stream.rs | impl Sync for Rebuild | crates/ponko_ffi/tests/physics3d_streaming.rs::a_c_terrain_rebuild_makes_loaded_tiles_solid_where_they_were | sanitizers
 crates/ponko_ffi/src/save_migrations.rs | Convert::drop | crates/ponko_ffi/tests/save_migrations.rs::c_conversions_change_components_resources_entities_and_the_whole_save | sanitizers
 crates/ponko_ffi/src/prediction.rs | Bytes::as_slice | crates/ponko_ffi/src/prediction.rs::buffers_are_sixteen_byte_aligned_and_compare_their_bytes_only | sanitizers
 crates/ponko_ffi/src/prediction.rs | Bytes::clone | crates/ponko_ffi/src/prediction.rs::buffers_are_sixteen_byte_aligned_and_compare_their_bytes_only | sanitizers

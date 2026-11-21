@@ -1721,12 +1721,6 @@
     "reason": "Internal invariant: /// [`SpriteInstance::vertex`]) are one triangle, drawn with `texture`     /// and `style` at `z`, after what was pushed before at the same `z`.     pub fn push_mesh(&mut self, texture: u32, style: u32, z: f32, vertices: &[SpriteInstance]) {         debug_assert!(vertices.len().is_multiple_of(3), \"a triangle list\");",
     "site": "src/render/batch.rs:268"
   },
-  "src/render/batch.rs:425b76146f336cfa": {
-    "classification": "invariant",
-    "construction": "debug_assert_eq!(sprites.len(), tinted.len(), \"one mark per sprite\")",
-    "reason": "The UI passes one tint mark per saved sprite; both lists are built together in retained_draw.",
-    "site": "src/render/batch.rs:445"
-  },
   "src/render/batch.rs:8a7c66e1c35edbe8": {
     "classification": "invariant",
     "construction": "debug_assert!(style < CLIPPED)",
@@ -1876,6 +1870,42 @@
     "construction": "panic!(\"invalid 3d frame: {error}\")",
     "reason": "Internal renderer/storage consistency check: let steps = passes::recorded(outer);             let features = part_features(part, self.features);             if let Err(error) = passes::check_recorded(&passes::FRAME_PASSES, part.pass(), features, steps) {                 panic!(\"invalid 3d frame: {error}\");",
     "site": "src/render/gpu3d/frame_checks.rs:48"
+  },
+  "src/render/gpu3d/instances.rs:0252f8fbf794d8fa": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: a view in a group keeps it alive until the view is released\")",
+    "reason": "leave_group: a grouped view's group stays Some until its last member view is released here",
+    "site": "src/render/gpu3d/instances.rs:1108"
+  },
+  "src/render/gpu3d/instances.rs:312c8b2e15b8e574": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: a view in a group keeps it alive until the view is released\")",
+    "reason": "finish_static job pass: a grouped view's group stays Some until the view is released",
+    "site": "src/render/gpu3d/instances.rs:2166"
+  },
+  "src/render/gpu3d/instances.rs:70ce4bdfea02e2ca": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: a view in a group keeps it alive until the view is released\")",
+    "reason": "finish_static leader pass: a grouped view's group stays Some until the view is released",
+    "site": "src/render/gpu3d/instances.rs:2150"
+  },
+  "src/render/gpu3d/instances.rs:8ab146952c4ef773": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: a view in a group keeps it alive until the view is released\")",
+    "reason": "draw_batch_level: a grouped view's group stays Some until the view is released",
+    "site": "src/render/gpu3d/instances.rs:2482"
+  },
+  "src/render/gpu3d/instances.rs:d9ee8081aad49693": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: the group has fewer members than columns (it grew just above)\")",
+    "reason": "place_cell_view: members < columns holds after the growth step just above, so a free column exists",
+    "site": "src/render/gpu3d/instances.rs:1083"
+  },
+  "src/render/gpu3d/instances.rs:f6f6bf5a0ec0926f": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: the group was found or made just above\")",
+    "reason": "place_cell_view: g indexes a group found or inserted a few lines above",
+    "site": "src/render/gpu3d/instances.rs:1050"
   },
   "src/render/gpu3d/instances/blend_order.rs:3caa789845da0128": {
     "classification": "invariant",
