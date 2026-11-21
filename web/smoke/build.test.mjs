@@ -89,3 +89,9 @@ test("clippy_is_only_for_threaded_builds", () => {
   assert.equal(run.status, 2);
   assert.match(run.stderr, /--clippy is for --threads/);
 });
+
+test("the_isolation_worker_is_only_for_threaded_builds", () => {
+  const run = spawnSync("bash", [BUILD, "--isolation-worker", "--print-env"], { encoding: "utf8" });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /--isolation-worker is for --threads/);
+});
