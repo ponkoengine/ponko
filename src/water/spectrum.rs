@@ -198,6 +198,7 @@ struct Cache {
     v: Vec<C>,
     scratch: Vec<C>,
     column: Vec<C>,
+    turns: Vec<C>,
 }
 
 impl PartialEq for SpectrumField {
@@ -395,6 +396,7 @@ impl SpectrumField {
             v,
             scratch,
             column,
+            turns,
             ..
         } = work;
         self.at_time(t, ab, speed.then_some(&mut *v));
@@ -402,8 +404,8 @@ impl SpectrumField {
         a.extend(ab.iter().map(|p| p[0]));
         b.clear();
         b.extend(ab.iter().map(|p| p[1]));
-        inverse_fft_2d(a, n, scratch, column);
-        inverse_fft_2d(b, n, scratch, column);
+        inverse_fft_2d(a, n, scratch, column, turns);
+        inverse_fft_2d(b, n, scratch, column, turns);
         let mut field = old.unwrap_or(Field {
             t,
             n,
@@ -418,37 +420,49 @@ impl SpectrumField {
             .extend(a.iter().zip(b.iter()).map(|(a, b)| [a.re, a.im, b.re, b.im]));
         field.sway_speed.clear();
         if speed {
-            inverse_fft_2d(v, n, scratch, column);
+            inverse_fft_2d(v, n, scratch, column, turns);
             field.sway_speed.extend(v.iter().map(|c| [c.re, c.im]));
         }
         field
     }
 }
 
+/// The turns an FFT of length `n` multiplies by: `cis(τ·m/n)` for `m` in
+/// `0..n/2` (what the GPU's butterfly pass works out for each output).
+fn twiddles(n: usize, out: &mut Vec<C>) {
+    if out.len() != n / 2 {
+        out.clear();
+        out.extend((0..n / 2).map(|m| C::cis(TAU * m as f32 / n as f32)));
+    }
+}
+
 /// One stage of the Stockham FFT, as the GPU's butterfly pass does it for
-/// output `o` of `n`: stage size `ns` (1, 2, 4, ... n/2), reading `x`.
-/// The inverse transform (positive exponent), unnormalised.
-pub(crate) fn butterfly(x: &[C], o: usize, n: usize, ns: usize) -> C {
+/// output `o` of `n`: stage size `ns` (1, 2, 4, ... n/2), reading `x`,
+/// with `turns` from [`twiddles`]. The inverse transform (positive
+/// exponent), unnormalised.
+fn butterfly(x: &[C], o: usize, n: usize, ns: usize, turns: &[C]) -> C {
     let r = (o % (2 * ns)) / ns;
     let j = (o / (2 * ns)) * ns + o % ns;
-    let w = C::cis(TAU * (j % ns) as f32 / (2 * ns) as f32);
+    // cis(τ·(j mod ns)/(2·ns)), from the table.
+    let w = turns[(j % ns) * (n / (2 * ns))];
     let (a, b) = (x[j], x[j + n / 2].mul(w));
     if r == 0 { a.add(b) } else { a.sub(b) }
 }
 
-/// The inverse FFT of `x` (length `n`, a power of two) in place.
-pub(crate) fn inverse_fft(x: &mut [C], scratch: &mut [C]) {
+/// The inverse FFT of `x` (length `n`, a power of two) in place, with
+/// `turns` from [`twiddles`] for `n`.
+fn inverse_fft(x: &mut [C], scratch: &mut [C], turns: &[C]) {
     let n = x.len();
     let mut ns = 1;
     let mut in_x = true;
     while ns < n {
         if in_x {
             for o in 0..n {
-                scratch[o] = butterfly(x, o, n, ns);
+                scratch[o] = butterfly(x, o, n, ns, turns);
             }
         } else {
             for o in 0..n {
-                x[o] = butterfly(scratch, o, n, ns);
+                x[o] = butterfly(scratch, o, n, ns, turns);
             }
         }
         in_x = !in_x;
@@ -460,17 +474,18 @@ pub(crate) fn inverse_fft(x: &mut [C], scratch: &mut [C]) {
 }
 
 /// The 2D inverse FFT of `x` (`n` x `n`, rows of x) in place: rows, then columns.
-fn inverse_fft_2d(x: &mut [C], n: usize, scratch: &mut Vec<C>, column: &mut Vec<C>) {
+fn inverse_fft_2d(x: &mut [C], n: usize, scratch: &mut Vec<C>, column: &mut Vec<C>, turns: &mut Vec<C>) {
     scratch.resize(n, C::ZERO);
+    twiddles(n, turns);
     for row in x.chunks_exact_mut(n) {
-        inverse_fft(row, scratch);
+        inverse_fft(row, scratch, turns);
     }
     column.resize(n, C::ZERO);
     for i in 0..n {
         for j in 0..n {
             column[j] = x[j * n + i];
         }
-        inverse_fft(column, scratch);
+        inverse_fft(column, scratch, turns);
         for j in 0..n {
             x[j * n + i] = column[j];
         }
@@ -610,8 +625,9 @@ mod tests {
                 .collect();
             let want = slow(&x);
             let mut got = x.clone();
-            let mut scratch = vec![C::ZERO; n];
-            inverse_fft(&mut got, &mut scratch);
+            let (mut scratch, mut turns) = (vec![C::ZERO; n], Vec::new());
+            twiddles(n, &mut turns);
+            inverse_fft(&mut got, &mut scratch, &turns);
             for (g, w) in got.iter().zip(&want) {
                 assert!(g.sub(*w).norm2().sqrt() < 1e-3 * n as f32, "n {n}: {g:?} vs {w:?}");
             }
