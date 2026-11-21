@@ -1080,12 +1080,40 @@ mod web_files {
             files.get_or_insert_with(HashMap::new).insert(name, bytes.into());
         }
     }
+
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
+    pub(super) fn remove(name: &str) {
+        #[cfg(not(target_feature = "atomics"))]
+        FILES.with(|files| files.borrow_mut().remove(name));
+        #[cfg(target_feature = "atomics")]
+        {
+            use std::sync::TryLockError;
+            // As in `insert`: spins instead of waiting.
+            let mut files = loop {
+                match FILES.try_write() {
+                    Ok(files) => break files,
+                    Err(TryLockError::Poisoned(files)) => break files.into_inner(),
+                    Err(TryLockError::WouldBlock) => std::hint::spin_loop(),
+                }
+            };
+            if let Some(files) = files.as_mut() {
+                files.remove(name);
+            }
+        }
+    }
 }
 
 /// Stores a fetched asset for later loads (web builds).
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn insert_web_file(name: String, bytes: Vec<u8>) {
     web_files::insert(name, bytes);
+}
+
+/// Drops a file the editor saved and then reverted, when the build has no
+/// file of that name (web builds; the page's asset pack is left alone).
+#[cfg(all(target_arch = "wasm32", feature = "editor"))]
+pub(crate) fn remove_web_file(name: &str) {
+    web_files::remove(name);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1638,6 +1666,53 @@ impl Assets {
             self.watcher.watch(path, file, Asset::Data(self.data_loaders.len() - 1));
         }
         Ok(())
+    }
+
+    /// The files the editor saved in this browser for this page, by asset
+    /// name, sorted: in web builds with the `editor` feature, where
+    /// [`save_scene`](Self::save_scene) and [`save_prefab`](Self::save_prefab)
+    /// keep files in the page's `localStorage`. Empty in other builds.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     // Desktop builds save to `assets/`, not to a browser.
+    ///     assert!(ctx.assets.browser_saves().is_empty());
+    /// });
+    /// ```
+    pub fn browser_saves(&self) -> Vec<String> {
+        #[cfg(feature = "editor")]
+        return crate::editor::web::saved().into_iter().map(|s| s.name).collect();
+        #[cfg(not(feature = "editor"))]
+        Vec::new()
+    }
+
+    /// Drops the copy of `path` saved in this browser (see
+    /// [`browser_saves`](Self::browser_saves)): from now on, and after the
+    /// page is loaded again, `path` is the build's own file, or no file if
+    /// the build has none. Returns whether a copy was saved; always `false`
+    /// outside web builds with the `editor` feature.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// Game::new("t", 1, 1).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.assets.revert_browser_save("levels/one.json"), Ok(false));
+    /// });
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::Io`](crate::error::ErrorKind::Io) if the browser's
+    /// storage can't be reached or refuses the removal.
+    pub fn revert_browser_save(&self, path: &str) -> Result<bool, crate::error::Error> {
+        #[cfg(feature = "editor")]
+        return crate::editor::web::forget(path)
+            .map_err(|e| crate::error::Error::new(crate::error::ErrorKind::Io, e).with_path(path));
+        #[cfg(not(feature = "editor"))]
+        {
+            let _ = path;
+            Ok(false)
+        }
     }
 
     /// Saves the world (its reflected components and resources) as a scene

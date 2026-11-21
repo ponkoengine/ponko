@@ -10,6 +10,14 @@
 //! megabytes per site this way; **Download** hands the person the file
 //! itself, to keep it or put it in the project's `assets/`.
 //!
+//! File > Saved in this browser lists the entries, and reverts one: its
+//! entry is removed, and the build's file (kept aside when the save
+//! replaced it) is read again at once; a file the build doesn't have is
+//! deleted. After a reload the shipped file is back, as nothing replaces
+//! it any more. [`Assets::browser_saves`](crate::assets::Assets::browser_saves)
+//! and [`Assets::revert_browser_save`](crate::assets::Assets::revert_browser_save)
+//! do the same from code.
+//!
 //! The parts that don't need a browser (the keys, what is kept and put
 //! back) are written against [`Store`], so tests run them on a map.
 
@@ -24,6 +32,7 @@ pub(crate) trait Store {
     fn get(&self, key: &str) -> Option<String>;
     /// Keeps `value` under `key`; an error is the browser's (out of space).
     fn set(&mut self, key: &str, value: &str) -> Result<(), String>;
+    fn remove(&mut self, key: &str) -> Result<(), String>;
     fn keys(&self) -> Vec<String>;
 }
 
@@ -36,9 +45,29 @@ impl Store for std::collections::BTreeMap<String, String> {
         self.insert(key.to_string(), value.to_string());
         Ok(())
     }
+    fn remove(&mut self, key: &str) -> Result<(), String> {
+        std::collections::BTreeMap::remove(self, key);
+        Ok(())
+    }
     fn keys(&self) -> Vec<String> {
         std::collections::BTreeMap::keys(self).cloned().collect()
     }
+}
+
+/// The build's own files that saves replaced, by asset name: what a revert
+/// puts back.
+pub(crate) type Shipped = std::collections::BTreeMap<String, Vec<u8>>;
+
+/// A file saved in the browser, as File > Saved in this browser lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Saved {
+    /// Its asset name.
+    pub name: String,
+    /// The bytes kept.
+    pub bytes: usize,
+    /// Whether the build has its own file (a revert puts it back), or the
+    /// file exists only in the browser (a revert deletes it).
+    pub shipped: bool,
 }
 
 /// The key asset `name` of the page at `page` (its path) is kept under.
@@ -80,6 +109,54 @@ pub(crate) fn kept_in(store: &impl Store, page: &str) -> Vec<(String, Vec<u8>)> 
     out
 }
 
+/// Notes the build's file `current` of asset `name` (what the page reads
+/// now) in `shipped` before a save replaces it, unless the page reads a
+/// file saved earlier (an entry in `store`) or it is noted already.
+pub(crate) fn remember_shipped(
+    shipped: &mut Shipped,
+    store: &impl Store,
+    page: &str,
+    name: &str,
+    current: impl FnOnce() -> Option<Vec<u8>>,
+) {
+    if shipped.contains_key(name) || store.get(&key(page, name)).is_some() {
+        return;
+    }
+    if let Some(bytes) = current() {
+        shipped.insert(name.to_string(), bytes);
+    }
+}
+
+/// The files `store` keeps for the page at `page`, sorted by name;
+/// `shipped` says which ones the build has too.
+pub(crate) fn saved_in(store: &impl Store, page: &str, shipped: &Shipped) -> Vec<Saved> {
+    kept_in(store, page)
+        .into_iter()
+        .map(|(name, bytes)| Saved {
+            shipped: shipped.contains_key(&name),
+            bytes: bytes.len(),
+            name,
+        })
+        .collect()
+}
+
+/// Removes the entry of asset `name` of the page at `page` from `store`.
+/// Returns whether there was one.
+///
+/// # Errors
+///
+/// When the browser refuses (it doesn't, for a removal, in practice).
+pub(crate) fn forget_in(store: &mut impl Store, page: &str, name: &str) -> Result<bool, String> {
+    let key = key(page, name);
+    if store.get(&key).is_none() {
+        return Ok(false);
+    }
+    store
+        .remove(&key)
+        .map(|()| true)
+        .map_err(|e| format!("can't revert \"{name}\": the browser's storage refused ({e})"))
+}
+
 /// The name a downloaded asset `name` gets: its file name, without folders.
 pub(crate) fn download_name(name: &str) -> &str {
     name.rsplit('/')
@@ -92,6 +169,11 @@ pub(crate) fn download_name(name: &str) -> &str {
 mod browser {
     use wasm_bindgen::{JsCast, JsValue};
 
+    thread_local! {
+        /// The build's files that saves replaced (see `remember_shipped`).
+        pub(super) static SHIPPED: std::cell::RefCell<super::Shipped> = Default::default();
+    }
+
     /// The page's `localStorage`.
     pub(super) struct Local(web_sys::Storage);
 
@@ -101,6 +183,9 @@ mod browser {
         }
         fn set(&mut self, key: &str, value: &str) -> Result<(), String> {
             self.0.set_item(key, value).map_err(describe)
+        }
+        fn remove(&mut self, key: &str) -> Result<(), String> {
+            self.0.remove_item(key).map_err(describe)
         }
         fn keys(&self) -> Vec<String> {
             let n = self.0.length().unwrap_or(0);
@@ -161,17 +246,95 @@ mod browser {
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn keep(name: &str, bytes: &[u8]) -> Result<(), String> {
     let (mut store, page) = browser::local().map_err(|e| format!("can't save \"{name}\": {e}"))?;
+    browser::SHIPPED.with(|shipped| {
+        let current = || crate::assets::read_web_asset(name);
+        remember_shipped(&mut shipped.borrow_mut(), &store, &page, name, current);
+    });
     keep_in(&mut store, &page, name, bytes)
 }
 
-/// Puts the assets saved on this page back, over the fetched ones. Runs
-/// before setup, after the assets were fetched.
+/// Puts the assets saved on this page back, over the fetched ones (kept
+/// aside, to revert to). Runs before setup, after the assets were fetched.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn restore() {
     let Ok((store, page)) = browser::local() else { return };
     for (name, bytes) in kept_in(&store, &page) {
+        if let Some(fetched) = crate::assets::read_web_asset(&name) {
+            browser::SHIPPED.with(|shipped| shipped.borrow_mut().entry(name.clone()).or_insert(fetched));
+        }
         crate::assets::insert_web_file(name, bytes);
     }
+}
+
+/// The files saved in this browser for this page, sorted by name.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn saved() -> Vec<Saved> {
+    let Ok((store, page)) = browser::local() else {
+        return Vec::new();
+    };
+    browser::SHIPPED.with(|shipped| saved_in(&store, &page, &shipped.borrow()))
+}
+
+/// Reverts asset `name` to the build's file: removes its entry, and puts
+/// the build's file back in memory (or drops the file, if the build has
+/// none). Returns whether it was saved in the browser.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn forget(name: &str) -> Result<bool, String> {
+    let (mut store, page) = browser::local().map_err(|e| format!("can't revert \"{name}\": {e}"))?;
+    if !forget_in(&mut store, &page, name)? {
+        return Ok(false);
+    }
+    match browser::SHIPPED.with(|shipped| shipped.borrow().get(name).cloned()) {
+        Some(bytes) => crate::assets::insert_web_file(name.to_string(), bytes),
+        None => crate::assets::remove_web_file(name),
+    }
+    Ok(true)
+}
+
+/// Native tests of the web editor: the browser's storage is a map on the
+/// test's thread (page `/`), and saving doesn't use it (files go to disk).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) mod test_browser {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+
+    thread_local! {
+        pub(crate) static STORE: RefCell<BTreeMap<String, String>> = RefCell::default();
+        pub(crate) static SHIPPED: RefCell<super::Shipped> = RefCell::default();
+    }
+
+    /// Keeps `text` as asset `name` in the browser; `shipped` is the
+    /// build's own file it replaced, if any.
+    pub(crate) fn keep(name: &str, text: &str, shipped: Option<&[u8]>) {
+        STORE.with(|s| super::keep_in(&mut *s.borrow_mut(), "/", name, text.as_bytes()).unwrap());
+        if let Some(bytes) = shipped {
+            SHIPPED.with(|s| s.borrow_mut().insert(name.to_string(), bytes.to_vec()));
+        }
+    }
+}
+
+/// The files saved in the browser: in native tests, `test_browser`'s.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn saved() -> Vec<Saved> {
+    test_browser::STORE.with(|s| test_browser::SHIPPED.with(|sh| saved_in(&*s.borrow(), "/", &sh.borrow())))
+}
+
+/// Reverts asset `name`: in native tests, in `test_browser`'s storage.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn forget(name: &str) -> Result<bool, String> {
+    test_browser::STORE.with(|s| forget_in(&mut *s.borrow_mut(), "/", name))
+}
+
+/// Desktop builds keep nothing in a browser.
+#[cfg(not(any(test, target_arch = "wasm32")))]
+pub(crate) fn saved() -> Vec<Saved> {
+    Vec::new()
+}
+
+/// Desktop builds keep nothing in a browser: nothing to revert.
+#[cfg(not(any(test, target_arch = "wasm32")))]
+pub(crate) fn forget(_name: &str) -> Result<bool, String> {
+    Ok(false)
 }
 
 /// Hands asset `name` (`bytes`) to the person as a download.
@@ -224,12 +387,53 @@ mod tests {
             fn set(&mut self, _: &str, _: &str) -> Result<(), String> {
                 Err("QuotaExceededError".into())
             }
+            fn remove(&mut self, _: &str) -> Result<(), String> {
+                Ok(())
+            }
             fn keys(&self) -> Vec<String> {
                 Vec::new()
             }
         }
         let err = keep_in(&mut Full, "/", "scenes/big.json", b"{}").unwrap_err();
         assert!(err.contains("QuotaExceededError") && err.contains("Download"), "{err}");
+    }
+
+    #[test]
+    fn a_revert_removes_the_entry_and_the_build_s_file_is_noted_once() {
+        let mut store = BTreeMap::new();
+        let mut shipped = Shipped::new();
+        let build = br#"{"format":"ponko-world","entities":[]}"#.to_vec();
+        // The first save over a file the build has notes the build's file.
+        remember_shipped(&mut shipped, &store, "/", "levels/one.json", || Some(build.clone()));
+        keep_in(&mut store, "/", "levels/one.json", b"{\"saved\":1}").unwrap();
+        // A second save: the page reads the first save now, not the build's.
+        remember_shipped(&mut shipped, &store, "/", "levels/one.json", || {
+            Some(b"{\"saved\":1}".to_vec())
+        });
+        keep_in(&mut store, "/", "levels/one.json", b"{\"saved\":2}").unwrap();
+        assert_eq!(
+            shipped.get("levels/one.json"),
+            Some(&build),
+            "the build's file, not a save"
+        );
+        // A file the build doesn't have.
+        remember_shipped(&mut shipped, &store, "/", "levels/new.json", || None);
+        keep_in(&mut store, "/", "levels/new.json", b"{}").unwrap();
+        keep_in(&mut store, "/other/", "levels/one.json", b"{}").unwrap();
+
+        let saved = saved_in(&store, "/", &shipped);
+        let listed: Vec<(&str, usize, bool)> = saved.iter().map(|s| (s.name.as_str(), s.bytes, s.shipped)).collect();
+        assert_eq!(listed, [("levels/new.json", 2, false), ("levels/one.json", 11, true)]);
+
+        assert_eq!(forget_in(&mut store, "/", "levels/one.json"), Ok(true));
+        assert_eq!(forget_in(&mut store, "/", "levels/one.json"), Ok(false), "gone already");
+        assert_eq!(kept_in(&store, "/").len(), 1, "the other entry stays");
+        assert_eq!(kept_in(&store, "/other/").len(), 1, "another page's stays");
+        assert_eq!(forget_in(&mut store, "/", "levels/new.json"), Ok(true));
+        assert!(
+            kept_in(&store, "/").is_empty(),
+            "nothing is put back over the build's files any more"
+        );
     }
 
     #[test]
