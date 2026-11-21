@@ -98,10 +98,16 @@ fn the_report_names_no_user_and_paths_are_relative_to_the_games_folders() {
         )),
         "{text}"
     );
-    assert!(!text.contains(&home), "the home folder stays out of the report:\n{text}");
+    assert!(
+        !text.contains(&home),
+        "the home folder stays out of the report:\n{text}"
+    );
     let user = Path::new(&home).file_name().unwrap().to_string_lossy().into_owned();
     if user.len() > 3 {
-        assert!(!text.contains(&user), "the user's name stays out of the report:\n{text}");
+        assert!(
+            !text.contains(&user),
+            "the user's name stays out of the report:\n{text}"
+        );
     }
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -172,20 +178,17 @@ fn the_hook_can_send_the_report_to_a_server_the_game_names() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = listener.local_addr().unwrap();
     let server = serve_one_post(listener);
+    let send = move |report: &CrashReport| {
+        let body = report.text();
+        let mut stream = std::net::TcpStream::connect(endpoint).unwrap();
+        let head = format!("POST /crash HTTP/1.1\r\nHost: {endpoint}\r\nContent-Type: text/plain\r\n");
+        write!(stream, "{head}Content-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+        let mut answer = String::new();
+        let _ = stream.read_to_string(&mut answer);
+    };
     let game = Game::new("t", 1, 1)
         .data_dir(&dir)
-        .crash_reports(CrashReports::on().on_crash(move |report| {
-            let body = report.text();
-            let mut stream = std::net::TcpStream::connect(endpoint).unwrap();
-            write!(
-                stream,
-                "POST /crash HTTP/1.1\r\nHost: {endpoint}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            )
-            .unwrap();
-            let mut answer = String::new();
-            let _ = stream.read_to_string(&mut answer);
-        }));
+        .crash_reports(CrashReports::on().on_crash(send));
     crash_with(game, "sent".into());
 
     let (request, body) = server.join().unwrap();
@@ -201,7 +204,10 @@ fn headless_runs_write_no_reports_unless_asked() {
     let dir = temp_dir("default");
     crash_with(Game::new("t", 1, 1).data_dir(&dir), "not reported".into());
     assert!(reports_in(&dir).is_empty());
-    crash_with(Game::new("t", 1, 1).data_dir(&dir).crash_reports(false), "not reported".into());
+    crash_with(
+        Game::new("t", 1, 1).data_dir(&dir).crash_reports(false),
+        "not reported".into(),
+    );
     assert!(reports_in(&dir).is_empty());
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -225,10 +231,13 @@ fn reports_end_with_the_run() {
 fn only_the_first_panic_of_a_run_gets_a_report() {
     let _turn = take_turn();
     let dir = temp_dir("first");
-    let game = Game::new("t", 1, 1).data_dir(&dir).crash_reports(true).sim_system(|_ctx: &mut Ctx| {
-        // A panic the game catches still gets a report...
-        let _ = catch_unwind(|| panic!("the first"));
-    });
+    let game = Game::new("t", 1, 1)
+        .data_dir(&dir)
+        .crash_reports(true)
+        .sim_system(|_ctx: &mut Ctx| {
+            // A panic the game catches still gets a report...
+            let _ = catch_unwind(|| panic!("the first"));
+        });
     // ...and the ones after it in the run don't.
     crash_with(game, "the second".into());
     let names = reports_in(&dir);
@@ -248,13 +257,13 @@ fn only_the_newest_reports_are_kept() {
             .unwrap();
     }
     storage.write("saves/slot1.json", b"{}").unwrap();
-    crash_with(
-        Game::new("t", 1, 1).data_dir(&dir).crash_reports(true),
-        "new".into(),
-    );
+    crash_with(Game::new("t", 1, 1).data_dir(&dir).crash_reports(true), "new".into());
     let names = reports_in(&dir);
     assert_eq!(names.len(), crash::KEPT);
-    assert!(read(&dir, &names[0]).contains("message: new"), "the new one is the newest");
+    assert!(
+        read(&dir, &names[0]).contains("message: new"),
+        "the new one is the newest"
+    );
     assert_eq!(
         names.last().unwrap(),
         &format!("crash-reports/2001-01-{:02}_00-00-00.txt", 5),
@@ -286,7 +295,12 @@ fn a_fatal_error_writes_a_report() {
     let failed = Game::new("t", 1, 1)
         .data_dir(&dir)
         .crash_reports(true)
-        .try_setup(|_ctx| Err(ponko::error::Error::new(ponko::error::ErrorKind::NotFound, "level1.json is missing")))
+        .try_setup(|_ctx| {
+            Err(ponko::error::Error::new(
+                ponko::error::ErrorKind::NotFound,
+                "level1.json is missing",
+            ))
+        })
         .try_run_headless(1);
     assert!(failed.is_err());
     let names = reports_in(&dir);
@@ -316,8 +330,14 @@ fn the_last_lines_the_game_printed_are_in_the_report() {
     }));
     assert!(result.is_err());
     let text = read(&dir, &reports_in(&dir)[0]);
-    let log = text.split("log lines:\n").nth(1).unwrap_or_else(|| panic!("a log:\n{text}"));
-    assert!(log.contains(&format!("loading level part {}", crash::LOG_LINES + 4)), "{text}");
+    let log = text
+        .split("log lines:\n")
+        .nth(1)
+        .unwrap_or_else(|| panic!("a log:\n{text}"));
+    assert!(
+        log.contains(&format!("loading level part {}", crash::LOG_LINES + 4)),
+        "{text}"
+    );
     assert!(!log.contains("loading level part 4\n"), "only the last lines:\n{text}");
     let _ = std::fs::remove_dir_all(dir);
 }

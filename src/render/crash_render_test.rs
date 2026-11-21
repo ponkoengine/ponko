@@ -16,7 +16,10 @@ fn a_report_names_the_gpu_and_the_graphics_settings_of_the_last_frame() {
     // neither the GPU nor a frame.
     let before = ctx.crash.as_ref().unwrap().preview("before");
     assert!(before.gpu().is_none());
-    assert_eq!(before.settings(), [("frames".to_string(), "none drawn yet".to_string())]);
+    assert_eq!(
+        before.settings(),
+        [("frames".to_string(), "none drawn yet".to_string())]
+    );
     // The window loop notes the GPU when the renderer starts, before setup.
     crate::crash::note_gpu(&mut ctx);
     let in_setup = ctx.crash.as_ref().unwrap().preview("in setup");
@@ -43,13 +46,23 @@ fn a_report_names_the_gpu_and_the_graphics_settings_of_the_last_frame() {
     assert_eq!(setting("antialiasing"), "Smaa");
     assert_eq!(setting("ambient occlusion"), "on");
     let text = report.text();
-    assert!(text.contains(&format!("gpu: {} ({}, {})", adapter.name, adapter.backend, adapter.device_type)), "{text}");
+    assert!(
+        text.contains(&format!(
+            "gpu: {} ({}, {})",
+            adapter.name, adapter.backend, adapter.device_type
+        )),
+        "{text}"
+    );
     assert!(text.contains("gpu driver: "), "{text}");
 
     // A changed setting shows in the next frame's report.
     ctx.scene3d.lighting.shadow_resolution = 1024;
     assert_eq!(ctx.render_frame(), FrameStatus::Offscreen);
     let report = ctx.crash.as_ref().unwrap().preview("changed");
-    assert!(report.settings().contains(&("quality preset".to_string(), "custom".to_string())));
+    assert!(
+        report
+            .settings()
+            .contains(&("quality preset".to_string(), "custom".to_string()))
+    );
     assert!(report.gpu().is_some(), "the GPU stays known");
 }

@@ -354,7 +354,11 @@ impl CrashReport {
                     .filter(|s| !s.is_empty())
                     .collect::<Vec<_>>()
                     .join(" ");
-                let _ = writeln!(t, "gpu driver: {}", if driver.is_empty() { "not reported" } else { &driver });
+                let _ = writeln!(
+                    t,
+                    "gpu driver: {}",
+                    if driver.is_empty() { "not reported" } else { &driver }
+                );
             }
             None => {
                 let _ = writeln!(t, "gpu: not opened");
@@ -567,8 +571,8 @@ impl Shared {
             }
         };
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        let log = crate::logs::last_lines(LOG_LINES)
-            .map(|lines| lines.iter().map(|line| self.paths.scrub(line)).collect());
+        let log =
+            crate::logs::last_lines(LOG_LINES).map(|lines| lines.iter().map(|line| self.paths.scrub(line)).collect());
         let mut report = CrashReport {
             kind,
             message: self.paths.scrub(message),
@@ -843,7 +847,10 @@ fn from_the_panic(backtrace: &str) -> String {
         line.split_once(':')
             .is_some_and(|(n, _)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
     };
-    let Some(unwind) = lines.iter().position(|l| is_frame(l) && l.contains("rust_begin_unwind")) else {
+    let Some(unwind) = lines
+        .iter()
+        .position(|l| is_frame(l) && l.contains("rust_begin_unwind"))
+    else {
         return backtrace.to_string();
     };
     match lines.iter().skip(unwind + 1).position(|l| is_frame(l)) {
@@ -899,7 +906,10 @@ impl PathScrubber {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) {
+            if let Some(dir) = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(Path::to_path_buf))
+            {
                 folders.push((dir, "<game>"));
             }
             if let Ok(dir) = std::env::current_dir() {
@@ -1110,7 +1120,12 @@ mod os {
                 let mut name: libc::utsname = unsafe { std::mem::zeroed() };
                 // SAFETY: as in `kernel`.
                 assert_eq!(unsafe { libc::uname(&raw mut name) }, 0);
-                let host: Vec<u8> = name.nodename.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect();
+                let host: Vec<u8> = name
+                    .nodename
+                    .iter()
+                    .take_while(|&&c| c != 0)
+                    .map(|&c| c as u8)
+                    .collect();
                 let host = String::from_utf8_lossy(&host);
                 if host.len() > 3 {
                     assert!(!text.contains(host.as_ref()), "the machine's name stays out: {text}");
