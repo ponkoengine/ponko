@@ -509,10 +509,11 @@ const MAX_WAITING_CONTACTS: usize = 64;
 /// [`Model`]).
 ///
 /// The surface's height at a point and time is
-/// [`level`](WaterDesc::level) plus the waves', on the CPU as on the GPU.
-/// The shader runs on the frame's clock (`ctx.time.elapsed()`), and
-/// `float_bodies` on the simulation's
-/// (`ctx.time.sim_time()`), which trails it by less than one tick.
+/// [`level`](WaterDesc::level) plus the waves', on the CPU as on the GPU,
+/// at the time [`drawn_time`](Water::drawn_time) gives. `float_bodies`
+/// runs on the simulation's clock (`ctx.time.sim_time()`), which waves
+/// from a spectrum are drawn on too (a pause freezes them); other waves are
+/// drawn on the frame's clock (`ctx.time.elapsed()`).
 #[derive(Debug, Component)]
 pub struct Water {
     desc: WaterDesc,
@@ -534,6 +535,10 @@ pub struct Water {
     /// The ripple material as last updated (the GPU tests hand it to
     /// their renderer).
     pub(crate) ripple_sent: Option<MaterialDesc>,
+    /// The steps the spectrum's field was last drawn between, and whether
+    /// the CPU's upload blended their moments: a paused game draws the
+    /// same field again, so nothing is worked out or sent.
+    field_drawn: Option<(spectrum::DrawnSteps, bool)>,
 }
 
 impl Water {
@@ -677,6 +682,7 @@ impl Water {
             contacts_sent: false,
             under: false,
             ripple_sent: None,
+            field_drawn: None,
         }
     }
 
@@ -718,9 +724,47 @@ impl Water {
         self.desc.contains(at)
     }
 
+    /// The time the surface is drawn at this frame (seconds), to pass to
+    /// [`height_at`](Self::height_at), [`sample`](Self::sample) and
+    /// [`is_under`](Self::is_under) for what the player sees.
+    ///
+    /// Waves from a [spectrum](Waves::spectrum) run on the simulation's
+    /// clock, as floating bodies do: [`sim_time`](crate::time::Time::sim_time)
+    /// plus [`fixed_alpha`](crate::time::Time::fixed_alpha) of a fixed step
+    /// (taken within [`SPECTRUM_PERIOD`], after which the sea repeats). They
+    /// stop while the game is paused and follow
+    /// [`set_speed`](crate::time::Time::set_speed). Until the game first
+    /// pauses or changes speed this is the frame's clock to a microsecond.
+    /// Other waves run on the frame's clock,
+    /// [`elapsed`](crate::time::Time::elapsed) (the shaders' `frame.time.x`).
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::water::{Water, WaterDesc, WaveSpectrum, Waves};
+    /// Game::new("sea", 320, 180).run_headless(0, |ctx| {
+    ///     let desc = WaterDesc::sea(0.0, vec2(8.0, 0.0), 1.0)
+    ///         .with_waves(Waves::spectrum(WaveSpectrum::new(vec2(8.0, 0.0), 1.0).with_tile(64.0, 64)));
+    ///     let sea = Water::spawn(ctx, desc);
+    ///     let water = ctx.world.get::<Water>(sea).unwrap();
+    ///     let t = water.drawn_time(&ctx.time);
+    ///     assert_eq!(t, ctx.time.sim_time() as f32);
+    ///     let seen = water.height_at(vec2(3.0, -2.0), t);
+    ///     assert!(seen.abs() < water.desc().waves.max_height());
+    /// });
+    /// ```
+    #[must_use]
+    pub fn drawn_time(&self, time: &crate::time::Time) -> f32 {
+        if self.desc.waves.spectrum_field().is_some() {
+            drawn_steps(time).at
+        } else {
+            time.elapsed() as f32
+        }
+    }
+
     /// The surface's height at ground point `at` (x, z) at time `t`
-    /// (seconds; `ctx.time.elapsed()` is what the shader shows), in
-    /// metres: the level plus the waves. Contact ripples are drawn only.
+    /// (seconds; [`drawn_time`](Self::drawn_time) is what the shader
+    /// shows), in metres: the level plus the waves. Contact ripples are
+    /// drawn only.
     #[must_use]
     pub fn height_at(&self, at: Vec2, t: f32) -> f32 {
         self.desc.level + self.desc.waves.height_at(at, t)
@@ -801,16 +845,18 @@ impl Water {
 
     /// One frame's upkeep: the mirror camera follows the camera, waiting
     /// contacts go to the ripple simulation, and the underwater effect is
-    /// on exactly while the camera may be under. `steps` and `floating`
-    /// let a CPU-uploaded spectrum draw from the fixed steps' moments (see
-    /// [`drawn_steps`]). Returns where the mesh goes now.
+    /// on exactly while the camera may be under. `t` is the frame's clock;
+    /// waves from a spectrum are drawn between the fixed `steps` instead
+    /// (see [`drawn_steps`]), from their moments if the CPU uploads the
+    /// field (`floating`: buoyancy asks for them too). Returns where the
+    /// mesh goes now.
     pub(crate) fn update(
         &mut self,
         gfx: &mut crate::gfx::Graphics,
         scene: &mut crate::render::SceneSettings,
         window: Vec2,
         t: f32,
-        steps: Option<spectrum::DrawnSteps>,
+        steps: spectrum::DrawnSteps,
         floating: bool,
     ) -> Vec3 {
         let camera = scene.camera;
@@ -855,13 +901,31 @@ impl Water {
                 self.contacts_sent = take > 0;
             }
         }
-        if let (Some(SpectrumParts { field, gpu: None }), Some(spectrum)) =
+        if let (Some(SpectrumParts { field, gpu }), Some(spectrum)) =
             (self.parts.spectrum, self.desc.waves.spectrum_field())
         {
-            // No compute shaders: the CPU works the field out and uploads it.
-            let blended = spectrum.write_drawn(t, steps, floating, &mut self.field_upload);
-            gfx.write_render_target(field, &self.field_upload);
-            drawn = steps.filter(|_| blended);
+            // The same steps (a paused game): the field drawn already.
+            let blended = match self.field_drawn {
+                Some((last, blended)) if last == steps => blended,
+                _ => {
+                    let blended = match gpu {
+                        // The GPU's passes turn the spectrum to the drawn time.
+                        Some(gpu) => {
+                            gfx.update_material(gpu.materials[0], spectrum_material(spectrum, gpu.start, steps.at));
+                            false
+                        }
+                        // No compute shaders: the CPU works the field out and uploads it.
+                        None => {
+                            let blended = spectrum.write_drawn(steps, floating, &mut self.field_upload);
+                            gfx.write_render_target(field, &self.field_upload);
+                            blended
+                        }
+                    };
+                    self.field_drawn = Some((steps, blended));
+                    blended
+                }
+            };
+            drawn = Some((steps, blended));
         }
         if let Some((effect, material)) = self.parts.underwater {
             let under = self.camera_may_be_under(&camera, t, drawn);
@@ -881,13 +945,14 @@ impl Water {
     }
 
     /// Whether any of the camera's near plane may be below the surface:
-    /// its centre is within reach of it (and over the area).
-    /// `drawn`: the steps the uploaded field was blended from, if it was.
+    /// its centre is within reach of it (and over the area). `t` is the
+    /// frame's clock; `drawn`, for waves from a spectrum, the steps the
+    /// field is drawn between and whether the upload blended their moments.
     fn camera_may_be_under(
         &self,
         camera: &crate::three::Camera3D,
         t: f32,
-        drawn: Option<spectrum::DrawnSteps>,
+        drawn: Option<(spectrum::DrawnSteps, bool)>,
     ) -> bool {
         let p = camera.position;
         let reach = camera.near * 2.0 + 0.05;
@@ -911,8 +976,9 @@ impl Water {
         }
         let at = Vec2::new(p.x, p.z);
         let height = match (drawn, self.desc.waves.spectrum_field()) {
-            (Some(steps), Some(spectrum)) => self.desc.level + spectrum.drawn_height(at, steps),
-            _ => self.height_at(at, t),
+            (Some((steps, true)), Some(spectrum)) => self.desc.level + spectrum.drawn_height(at, steps),
+            (Some((steps, _)), _) => self.height_at(at, steps.at),
+            (None, _) => self.height_at(at, t),
         };
         p.y - reach < height + 0.05
     }
@@ -1021,17 +1087,7 @@ fn spawn_spectrum(ctx: &mut Ctx, field: &spectrum::SpectrumField) -> Result<Spec
 /// the start), then each FFT stage along x and along z.
 pub(crate) fn spectrum_materials(field: &spectrum::SpectrumField, start: RenderTarget) -> Vec<MaterialDesc> {
     let n = field.n as f32;
-    let s = field.settings;
-    let mut out = vec![MaterialDesc {
-        custom: [
-            Vec4::new(n, s.tile.max(1.0), s.choppiness.max(0.0), SPECTRUM_PERIOD),
-            Vec4::ZERO,
-            Vec4::ZERO,
-            Vec4::ZERO,
-        ],
-        custom_textures: [Some(start.texture()), None],
-        ..Default::default()
-    }];
+    let mut out = vec![spectrum_material(field, start, 0.0)];
     for along in [0.0, 1.0] {
         let mut ns = 1;
         while ns < field.n {
@@ -1043,6 +1099,22 @@ pub(crate) fn spectrum_materials(field: &spectrum::SpectrumField, start: RenderT
         }
     }
     out
+}
+
+/// The spectrum pass's values with the waves at time `t` (seconds within
+/// the period, see [`drawn_steps`]).
+pub(crate) fn spectrum_material(field: &spectrum::SpectrumField, start: RenderTarget, t: f32) -> MaterialDesc {
+    let s = field.settings;
+    MaterialDesc {
+        custom: [
+            Vec4::new(field.n as f32, s.tile.max(1.0), s.choppiness.max(0.0), SPECTRUM_PERIOD),
+            Vec4::new(t, 0.0, 0.0, 0.0),
+            Vec4::ZERO,
+            Vec4::ZERO,
+        ],
+        custom_textures: [Some(start.texture()), None],
+        ..Default::default()
+    }
 }
 
 /// Despawns water body `entity` and frees what it made (see [`Water::free`]).
@@ -1091,23 +1163,26 @@ pub fn update_water(ctx: &mut Ctx) {
     }
 }
 
-/// The two fixed steps the frame's time ([`Time::elapsed`](crate::time::Time::elapsed)) sits
-/// between, when it does: the next step's time as `float_bodies` asks it
-/// then, the one after, and how far the frame is between them. `None` once
-/// the frame's clock has left the simulation's steps (a pause, or a
-/// simulation speed other than 1, moves them apart); the frame's field is
-/// then worked out at its own time.
-pub(crate) fn drawn_steps(time: &crate::time::Time) -> Option<spectrum::DrawnSteps> {
-    let (step, tick, between) = (time.sim_step(), time.sim_tick(), time.fixed_alpha());
+/// The two fixed steps the drawn frame sits between on the simulation's
+/// clock, which waves from a spectrum are drawn on: the next step's time as
+/// `float_bodies` asks it then, the one after, how far the frame is between
+/// them ([`Time::fixed_alpha`](crate::time::Time::fixed_alpha)), and the
+/// time that far between them, taken within [`SPECTRUM_PERIOD`] in full
+/// precision. It stands still while the game is paused and runs at the
+/// simulation's speed; until the first pause or speed change it is the
+/// frame's clock ([`Time::elapsed`](crate::time::Time::elapsed)).
+pub(crate) fn drawn_steps(time: &crate::time::Time) -> spectrum::DrawnSteps {
+    let (step, tick) = (time.sim_step(), time.sim_tick());
+    let between = time.fixed_alpha().clamp(0.0, 1.0);
     let t0 = tick as f64 * step;
-    // The clocks agree (to a microsecond) while the frame is `between` of
-    // the way from the next step to the one after.
-    let on_steps = (time.elapsed() - (t0 + f64::from(between) * step)).abs() < 1e-6;
-    on_steps.then(|| spectrum::DrawnSteps {
+    let at = t0 + f64::from(between) * step;
+    let period = f64::from(SPECTRUM_PERIOD);
+    spectrum::DrawnSteps {
         t0: t0 as f32,
         t1: ((tick + 1) as f64 * step) as f32,
-        between: between.clamp(0.0, 1.0),
-    })
+        between,
+        at: (at - (at / period).floor() * period) as f32,
+    }
 }
 
 /// The water entities of this frame (kept, so the update doesn't allocate).

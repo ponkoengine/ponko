@@ -237,13 +237,16 @@ impl std::fmt::Debug for Plan {
 const KEPT_MOMENTS: usize = 3;
 
 /// The two fixed steps a drawn frame sits between: the next step's time
-/// (as `float_bodies` asks it on that step), the one after, and how far the
-/// frame is from the first to the second (0 to 1).
+/// (as `float_bodies` asks it on that step), the one after, how far the
+/// frame is from the first to the second (0 to 1), and the time the waves
+/// are drawn at, that far between them (within the period: see
+/// `water::drawn_steps`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DrawnSteps {
     pub t0: f32,
     pub t1: f32,
     pub between: f32,
+    pub at: f32,
 }
 
 /// The CPU's moments and its work space: kept between frames, so a new
@@ -419,28 +422,25 @@ impl SpectrumField {
         }
     }
 
-    /// The field drawn at frame time `t`, as the half floats of the WebGL2
-    /// upload, into `out`. When the frame sits between two fixed steps
-    /// (`steps`, see `water::drawn_steps`) it is the blend of their two
-    /// moments, which floating bodies ask for on those steps (`floating`:
-    /// they are worked out with the sway's speed for them), so a frame works
-    /// out no moment of its own; within a few tenths of a millimetre of the
-    /// moment at `t` (`the_drawn_blend_of_two_steps_is_the_moment_between`).
-    /// Without floating bodies it blends when one of the two is kept
-    /// already, or when the last frame was between the same two steps
-    /// (frames come faster than steps: two moments once, then one a step
-    /// instead of one a frame); a frame otherwise never works out more than
-    /// one moment. Otherwise it is the moment at `t`. Returns whether it
-    /// blended.
-    pub(crate) fn write_drawn(&self, t: f32, steps: Option<DrawnSteps>, floating: bool, out: &mut Vec<u8>) -> bool {
-        if let Some(s) = steps
-            && self.shares(s, floating)
-        {
+    /// The field drawn between the two fixed steps `s` (see
+    /// `water::drawn_steps`), as the half floats of the WebGL2 upload, into
+    /// `out`: the blend of the two steps' moments, which floating bodies ask
+    /// for on those steps (`floating`: they are worked out with the sway's
+    /// speed for them), so a frame works out no moment of its own; within a
+    /// few tenths of a millimetre of the moment at `s.at`
+    /// (`the_drawn_blend_of_two_steps_is_the_moment_between`). Without
+    /// floating bodies it blends when one of the two is kept already, or
+    /// when the last frame was between the same two steps (frames come
+    /// faster than steps: two moments once, then one a step instead of one
+    /// a frame); a frame otherwise never works out more than one moment.
+    /// Otherwise it is the moment at `s.at`. Returns whether it blended.
+    pub(crate) fn write_drawn(&self, s: DrawnSteps, floating: bool, out: &mut Vec<u8>) -> bool {
+        if self.shares(s, floating) {
             let (a, b) = (self.field(s.t0, floating), self.field(s.t1, floating));
             write_half_texels_between(&a.texels, &b.texels, s.between, out);
             return true;
         }
-        write_half_texels(&self.field(t, false).texels, out);
+        write_half_texels(&self.field(s.at, false).texels, out);
         false
     }
 
@@ -1189,15 +1189,21 @@ mod tests {
     }
 
     /// A game's clocks driving a WebGL2 sea as the engine does: each frame
-    /// its fixed steps (50 a second; buoyancy asks each step's moment with
-    /// the sway's speed if `floating`, as `float_bodies`), then the upload
-    /// at the frame's time (as `update_water`).
+    /// the engine's clock at the game's speed (`ctx.time.pause`, `resume`,
+    /// `set_speed` and `step` on `time`, as `game::frame_timing` feeds
+    /// them), its fixed steps (50 a second; buoyancy asks each step's moment
+    /// with the sway's speed if `floating`, as `float_bodies`), then the
+    /// upload between the steps, unless it is the last frame's (as
+    /// `Water::update`).
     struct Frames {
         clock: crate::time::Clock,
         time: crate::time::Time,
         upload: Vec<u8>,
-        speed: f64,
-        /// A frame system asks the height at the frame's time (what is
+        /// The steps last drawn between, and whether the upload blended.
+        drawn: Option<(DrawnSteps, bool)>,
+        /// Uploads made.
+        uploads: usize,
+        /// A frame system asks the height at the drawn time (what is
         /// drawn) between the steps and the upload.
         query: bool,
     }
@@ -1208,15 +1214,17 @@ mod tests {
                 clock: crate::time::Clock::new(50),
                 time: crate::time::Time::new(1.0 / 50.0),
                 upload: Vec::new(),
-                speed: 1.0,
+                drawn: None,
+                uploads: 0,
                 query: false,
             }
         }
 
         /// One frame of `dt` seconds: its steps, then the upload. Whether
-        /// the upload blended two steps' moments.
+        /// the field drawn is the blend of two steps' moments.
         fn frame(&mut self, spectrum: &SpectrumField, dt: f64, floating: bool) -> bool {
-            let timing = self.clock.advance(dt, self.speed);
+            let mut timing = self.clock.advance(dt, self.time.effective_sim_speed());
+            timing.fixed_steps += self.time.take_pending_steps();
             self.time.begin_frame(timing);
             for _ in 0..timing.fixed_steps {
                 if floating {
@@ -1224,11 +1232,19 @@ mod tests {
                 }
                 self.time.advance_tick();
             }
-            if self.query {
-                drop(spectrum.field(self.time.elapsed() as f32, false));
-            }
             let steps = crate::water::drawn_steps(&self.time);
-            spectrum.write_drawn(self.time.elapsed() as f32, steps, floating, &mut self.upload)
+            if self.query {
+                drop(spectrum.field(steps.at, false));
+            }
+            match self.drawn {
+                Some((last, blended)) if last == steps => blended,
+                _ => {
+                    let blended = spectrum.write_drawn(steps, floating, &mut self.upload);
+                    self.drawn = Some((steps, blended));
+                    self.uploads += 1;
+                    blended
+                }
+            }
         }
     }
 
@@ -1297,21 +1313,81 @@ mod tests {
         }
     }
 
+    /// Runs `count` frames at `hz` (give or take a quarter) from frame
+    /// `first`, each drawn from the steps' moments; returns the moments
+    /// worked out and the steps run.
+    fn shared_frames(frames: &mut Frames, spectrum: &SpectrumField, hz: f64, first: u32, count: u32) -> (usize, usize) {
+        let (before, tick) = (computed(spectrum), frames.time.sim_tick());
+        for i in first..first + count {
+            assert!(
+                frames.frame(spectrum, frame_dt(hz, i), true),
+                "frame {i}: drawn from the steps"
+            );
+        }
+        (computed(spectrum) - before, (frames.time.sim_tick() - tick) as usize)
+    }
+
     #[test]
-    fn a_paused_or_slowed_game_draws_the_frames_own_moment() {
+    fn the_drawn_clock_is_the_frame_clock_until_a_pause_then_stops_with_the_simulation() {
         let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
         let mut frames = Frames::new();
-        assert!(frames.frame(&spectrum, 1.0 / 60.0, true));
-        frames.speed = 0.0;
-        // The frame's clock goes on, the steps' doesn't: no two steps around it.
-        for _ in 0..3 {
-            assert!(!frames.frame(&spectrum, 1.0 / 60.0, true));
+        for i in 0..40 {
+            frames.frame(&spectrum, frame_dt(60.0, i), true);
+            let at = crate::water::drawn_steps(&frames.time).at;
+            assert!((f64::from(at) - frames.time.elapsed()).abs() < 1e-5, "frame {i}: on the frame's clock");
         }
-        assert!(crate::water::drawn_steps(&frames.time).is_none());
-        let drawn = frames.upload.clone();
-        let mut exact = Vec::new();
-        write_half_texels(&spectrum.field(frames.time.elapsed() as f32, false).texels, &mut exact);
-        assert_eq!(drawn, exact, "the moment at the frame's time");
+        frames.time.pause();
+        frames.frame(&spectrum, 1.0 / 60.0, true);
+        let paused = crate::water::drawn_steps(&frames.time);
+        for _ in 0..30 {
+            frames.frame(&spectrum, 1.0 / 60.0, true);
+        }
+        assert_eq!(crate::water::drawn_steps(&frames.time), paused, "the waves stand still");
+        frames.time.resume();
+        frames.frame(&spectrum, 1.0 / 60.0, true);
+        let resumed = crate::water::drawn_steps(&frames.time).at;
+        let behind = frames.time.elapsed() - f64::from(resumed);
+        assert!(behind > 0.45, "half a second paused: the waves are {behind} s behind the frame's clock");
+        assert!(resumed > paused.at && resumed - paused.at < 0.02, "and go on where they stopped");
+    }
+
+    #[test]
+    fn pausing_resuming_and_changing_speed_keep_one_moment_a_step() {
+        // The engine's real clock: pause, a single step while paused,
+        // resume, double and half speed. Floating bodies and the upload
+        // share one moment a step all along; a paused game works out
+        // nothing and uploads nothing.
+        for hz in [144.0, 60.0, 30.0] {
+            let spectrum = SpectrumField::new(WaveSpectrum::new(Vec2::new(6.0, 6.0), 1.0).with_tile(100.0, 64));
+            let mut frames = Frames::new();
+            for i in 0..3 {
+                frames.frame(&spectrum, frame_dt(hz, i), true);
+            }
+            let (moments, steps) = shared_frames(&mut frames, &spectrum, hz, 3, 40);
+            assert_eq!(moments, steps, "{hz} Hz before the pause");
+            frames.time.pause();
+            frames.frame(&spectrum, frame_dt(hz, 43), true);
+            let (moments, uploads) = (computed(&spectrum), frames.uploads);
+            let (_, steps) = shared_frames(&mut frames, &spectrum, hz, 44, 40);
+            assert_eq!(steps, 0, "{hz} Hz: paused");
+            assert_eq!(computed(&spectrum), moments, "{hz} Hz: paused, nothing worked out");
+            assert_eq!(frames.uploads, uploads, "{hz} Hz: paused, the field drawn already");
+            frames.time.step();
+            let (moments, steps) = shared_frames(&mut frames, &spectrum, hz, 84, 5);
+            assert_eq!((moments, steps), (1, 1), "{hz} Hz: one step while paused, its moment");
+            frames.time.resume();
+            let (moments, steps) = shared_frames(&mut frames, &spectrum, hz, 89, 40);
+            assert!(moments <= steps + 1, "{hz} Hz after resuming: {moments} moments in {steps} steps");
+            for speed in [2.0, 0.5, 1.0] {
+                frames.time.set_speed(speed);
+                let (moments, steps) = shared_frames(&mut frames, &spectrum, hz, 129, 60);
+                assert!(steps > 0, "{hz} Hz at {speed}x: the simulation runs");
+                assert!(
+                    moments <= steps + 1,
+                    "{hz} Hz at {speed}x: {moments} moments in {steps} steps, at most one a step"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1363,9 +1439,10 @@ mod tests {
             t0,
             t1: t0 + step,
             between,
+            at: t0 + step * between,
         };
         let mut blended = Vec::new();
-        assert!(spectrum.write_drawn(t0 + step * between, Some(steps), true, &mut blended));
+        assert!(spectrum.write_drawn(steps, true, &mut blended));
         let exact = SpectrumField::new(settings).field(t0 + step * between, false);
         let mut exact_half = Vec::new();
         write_half_texels(&exact.texels, &mut exact_half);

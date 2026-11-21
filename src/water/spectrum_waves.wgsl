@@ -26,7 +26,7 @@ fn water_field(p: vec2<f32>) -> vec4<f32> {
 }
 
 // Where the water at rest point `p` is at time `t` (x, height, z). The
-// field is this frame's: `t` is the frame's clock.
+// field is this frame's (drawn on the simulation's clock): `t` is unused.
 fn water_displace(p: vec2<f32>, t: f32) -> vec3<f32> {
     let f = water_field(p);
     return vec3<f32>(p.x + f.y, f.x, p.y + f.z);
