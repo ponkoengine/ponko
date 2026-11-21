@@ -176,6 +176,7 @@ pub use ai_world::*;
 pub use animator::*;
 pub use component_hooks::*;
 pub use controllers::*;
+pub use crash::*;
 pub use crowd_clips::*;
 pub use debug::*;
 pub use ime::*;
@@ -186,10 +187,9 @@ pub use replication_raw::*;
 pub use scenario_touch::*;
 pub use skeleton2d::*;
 pub use sky_kit::*;
+pub use slice_loaders::*;
 pub use states::*;
 pub use video::*;
-pub use crash::*;
-pub use slice_loaders::*;
 /// Counts the library's heap allocations while profiling is on (one atomic
 /// load per allocation otherwise), so a C or C++ game's reports show how many
 /// the engine makes. A Rust program that links this crate as a library and

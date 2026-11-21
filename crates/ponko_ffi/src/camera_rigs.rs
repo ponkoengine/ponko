@@ -1375,7 +1375,10 @@ unsafe fn kept_rig<C: Versioned, R: Send + Sync + 'static>(
 /// # Safety
 /// `ctx` null or live; `rig` null or a readable descriptor with its header set.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_ctx_set_follow_camera2d_rig(ctx: *mut PonkoCtx, rig: *const PonkoFollowCamera2D) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_ctx_set_follow_camera2d_rig(
+    ctx: *mut PonkoCtx,
+    rig: *const PonkoFollowCamera2D,
+) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     unsafe { set_kept_rig::<PonkoFollowCamera2D, FollowCamera>(ctx, rig, follow_to_c, follow_from_c) }
 }
@@ -1390,7 +1393,11 @@ pub unsafe extern "C" fn ponko_ctx_set_follow_camera2d_rig(ctx: *mut PonkoCtx, r
 /// # Safety
 /// `ctx` null or live; `rig` writable with its header set; `out_kept` writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_ctx_follow_camera2d_rig(ctx: *mut PonkoCtx, rig: *mut PonkoFollowCamera2D, out_kept: *mut bool) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_ctx_follow_camera2d_rig(
+    ctx: *mut PonkoCtx,
+    rig: *mut PonkoFollowCamera2D,
+    out_kept: *mut bool,
+) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     unsafe { kept_rig::<PonkoFollowCamera2D, FollowCamera>(ctx, rig, out_kept, follow_to_c) }
 }
@@ -1406,7 +1413,10 @@ pub unsafe extern "C" fn ponko_ctx_follow_camera2d_rig(ctx: *mut PonkoCtx, rig: 
 /// # Safety
 /// `ctx` null or live; `rig` null or a readable descriptor with its header set.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_ctx_set_orbit_camera_rig(ctx: *mut PonkoCtx, rig: *const PonkoOrbitCamera) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_ctx_set_orbit_camera_rig(
+    ctx: *mut PonkoCtx,
+    rig: *const PonkoOrbitCamera,
+) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     unsafe { set_kept_rig::<PonkoOrbitCamera, OrbitCamera>(ctx, rig, orbit_to_c, orbit_from_c) }
 }
@@ -1421,7 +1431,11 @@ pub unsafe extern "C" fn ponko_ctx_set_orbit_camera_rig(ctx: *mut PonkoCtx, rig:
 /// # Safety
 /// `ctx` null or live; `rig` writable with its header set; `out_kept` writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_ctx_orbit_camera_rig(ctx: *mut PonkoCtx, rig: *mut PonkoOrbitCamera, out_kept: *mut bool) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_ctx_orbit_camera_rig(
+    ctx: *mut PonkoCtx,
+    rig: *mut PonkoOrbitCamera,
+    out_kept: *mut bool,
+) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     unsafe { kept_rig::<PonkoOrbitCamera, OrbitCamera>(ctx, rig, out_kept, orbit_to_c) }
 }
@@ -1437,7 +1451,10 @@ pub unsafe extern "C" fn ponko_ctx_orbit_camera_rig(ctx: *mut PonkoCtx, rig: *mu
 /// # Safety
 /// `ctx` null or live; `rig` null or a readable descriptor with its header set.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_ctx_set_first_person_camera_rig(ctx: *mut PonkoCtx, rig: *const PonkoFirstPersonCamera) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_ctx_set_first_person_camera_rig(
+    ctx: *mut PonkoCtx,
+    rig: *const PonkoFirstPersonCamera,
+) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     unsafe { set_kept_rig::<PonkoFirstPersonCamera, FirstPersonCamera>(ctx, rig, first_to_c, first_from_c) }
 }
@@ -1452,7 +1469,11 @@ pub unsafe extern "C" fn ponko_ctx_set_first_person_camera_rig(ctx: *mut PonkoCt
 /// # Safety
 /// `ctx` null or live; `rig` writable with its header set; `out_kept` writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_ctx_first_person_camera_rig(ctx: *mut PonkoCtx, rig: *mut PonkoFirstPersonCamera, out_kept: *mut bool) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_ctx_first_person_camera_rig(
+    ctx: *mut PonkoCtx,
+    rig: *mut PonkoFirstPersonCamera,
+    out_kept: *mut bool,
+) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     unsafe { kept_rig::<PonkoFirstPersonCamera, FirstPersonCamera>(ctx, rig, out_kept, first_to_c) }
 }
@@ -1468,7 +1489,10 @@ pub unsafe extern "C" fn ponko_ctx_first_person_camera_rig(ctx: *mut PonkoCtx, r
 /// # Safety
 /// `ctx` null or live; `rig` null or a readable descriptor with its header set.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_ctx_set_third_person_camera_rig(ctx: *mut PonkoCtx, rig: *const PonkoThirdPersonCamera) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_ctx_set_third_person_camera_rig(
+    ctx: *mut PonkoCtx,
+    rig: *const PonkoThirdPersonCamera,
+) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     unsafe { set_kept_rig::<PonkoThirdPersonCamera, ThirdPersonCamera>(ctx, rig, third_to_c, third_from_c) }
 }
@@ -1483,7 +1507,11 @@ pub unsafe extern "C" fn ponko_ctx_set_third_person_camera_rig(ctx: *mut PonkoCt
 /// # Safety
 /// `ctx` null or live; `rig` writable with its header set; `out_kept` writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_ctx_third_person_camera_rig(ctx: *mut PonkoCtx, rig: *mut PonkoThirdPersonCamera, out_kept: *mut bool) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_ctx_third_person_camera_rig(
+    ctx: *mut PonkoCtx,
+    rig: *mut PonkoThirdPersonCamera,
+    out_kept: *mut bool,
+) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     unsafe { kept_rig::<PonkoThirdPersonCamera, ThirdPersonCamera>(ctx, rig, out_kept, third_to_c) }
 }

@@ -148,7 +148,9 @@ fn spectrum_from_c(s: &PonkoWaveSpectrum) -> Result<WaveSpectrum, Failure> {
         "the wave spectrum's settings must be finite",
     )?;
     if s.height < 0.0 || s.choppiness < 0.0 {
-        return Err(invalid("the wave spectrum's height and choppiness must not be negative"));
+        return Err(invalid(
+            "the wave spectrum's height and choppiness must not be negative",
+        ));
     }
     if s.tile <= 0.0 {
         return Err(invalid("the wave spectrum's tile must be positive"));

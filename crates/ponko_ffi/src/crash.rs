@@ -246,7 +246,10 @@ fn call_hook(hook: &Hook, report: &CrashReport) {
 /// header set, its `game_version` null or NUL-terminated; `on_crash` safe to
 /// call with `user` from any thread while the game runs.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ponko_game_crash_reports(game: *mut PonkoGame, reports: *const PonkoCrashReports) -> PonkoStatus {
+pub unsafe extern "C" fn ponko_game_crash_reports(
+    game: *mut PonkoGame,
+    reports: *const PonkoCrashReports,
+) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     unsafe {
         build(game, |g| match settings_from_c(reports) {

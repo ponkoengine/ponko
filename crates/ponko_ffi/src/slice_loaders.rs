@@ -69,7 +69,8 @@ pub type PonkoSliceStartFn =
 /// let none: ponko_ffi::PonkoSliceStepFn = None;
 /// assert!(none.is_none());
 /// ```
-pub type PonkoSliceStepFn = Option<unsafe extern "C" fn(user: *mut c_void, state: *mut c_void, out_done: *mut bool) -> u32>;
+pub type PonkoSliceStepFn =
+    Option<unsafe extern "C" fn(user: *mut c_void, state: *mut c_void, out_done: *mut bool) -> u32>;
 
 /// Frees a sliced loader's state that nobody took.
 /// ```
@@ -159,7 +160,8 @@ unsafe impl Send for State {}
 
 impl Drop for State {
     fn drop(&mut self) {
-        self.callbacks.free(std::mem::replace(&mut self.ptr, std::ptr::null_mut()));
+        self.callbacks
+            .free(std::mem::replace(&mut self.ptr, std::ptr::null_mut()));
     }
 }
 

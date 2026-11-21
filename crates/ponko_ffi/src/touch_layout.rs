@@ -142,9 +142,8 @@ pub struct PonkoTouchControlsDesc {
     pub place_count: usize,
 }
 
-const _: () = assert!(
-    offset_of!(PonkoTouchControlsDesc, struct_size) == 0 && offset_of!(PonkoTouchControlsDesc, version) == 4
-);
+const _: () =
+    assert!(offset_of!(PonkoTouchControlsDesc, struct_size) == 0 && offset_of!(PonkoTouchControlsDesc, version) == 4);
 impl Versioned for PonkoTouchControlsDesc {
     const NAME: &'static str = "PonkoTouchControlsDesc";
     const VERSION: u32 = PONKO_TOUCH_CONTROLS_DESC_VERSION;
@@ -196,11 +195,16 @@ fn style_to_c(s: &TouchStyle) -> PonkoTouchStyle {
 
 fn style_from_c(s: &PonkoTouchStyle) -> Result<TouchStyle, Failure> {
     let colors = [s.base, s.knob, s.button, s.held, s.label];
-    if colors.iter().any(|c| ![c.r, c.g, c.b, c.a].iter().all(|v| v.is_finite())) {
+    if colors
+        .iter()
+        .any(|c| ![c.r, c.g, c.b, c.a].iter().all(|v| v.is_finite()))
+    {
         return Err(invalid("touch style colors must be finite"));
     }
     if !(s.size.is_finite() && s.size > 0.0 && s.label_size.is_finite() && s.label_size >= 0.0) {
-        return Err(invalid("a touch style's size must be positive and its label_size not negative"));
+        return Err(invalid(
+            "a touch style's size must be positive and its label_size not negative",
+        ));
     }
     Ok(TouchStyle {
         base: to_c(s.base),
@@ -573,13 +577,7 @@ pub unsafe extern "C" fn ponko_ctx_set_touch_layout_json(ctx: *mut PonkoCtx, jso
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ponko_ctx_save_touch_layout(ctx: *mut PonkoCtx) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
-    boundary(|| unsafe {
-        ctx_access(ctx, |c| {
-            c.input
-                .save_touch_layout(&mut c.storage)
-                .map_err(engine_error)
-        })
-    })
+    boundary(|| unsafe { ctx_access(ctx, |c| c.input.save_touch_layout(&mut c.storage).map_err(engine_error)) })
 }
 
 /// Reads back the layout `ponko_ctx_save_touch_layout` saved, at setup
