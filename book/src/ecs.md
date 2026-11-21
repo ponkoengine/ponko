@@ -222,7 +222,7 @@ What you can ask for (Rust):
 |---|---|
 | `&T` | read access to `T` (entity must have it) |
 | `&mut T` | write access to `T` |
-| `Option<&T>`, `Option<&mut T>` | the component if present; doesn't filter (in `for_each`, one or two of them cost nothing per entity: the loop is chosen per archetype) |
+| `Option<&T>`, `Option<&mut T>` | the component if present; doesn't filter (in `for_each` and the parallel loops, one or two of them cost nothing per entity: the loop is chosen per archetype) |
 | `Entity` | the entity's id |
 | a tuple of the above | all of them, up to 12 (nest tuples for more) |
 
@@ -782,11 +782,10 @@ unchanged, and a `Changed<T>` loop takes 0.02 ms when it finds nothing
 (0.5 ms when it read every stamp), 0.4 ms when 1% of the entities
 changed, spread out (most chunks then hold one), and 1.0 ms when all
 did. Despawning from an archetype with a tracked component logs its
-removal and costs about what a despawn did before the per-64 summary
-existed (the same with one tracked component, 3% more with two). Moving
-an entity into such an archetype (an insert or a remove) marks its new
-block as changed now, so the next `Changed` loop reads those 64 stamps
-once. `cargo run --release -p ponko_bench -- changes` prints the numbers
+removal and runs fewer instructions than a despawn did before the
+per-64 summary existed. Moving an entity into such an archetype (an
+insert or a remove) keeps its stamps, so a `Changed` loop afterwards
+still skips the blocks where nobody wrote. `cargo run --release -p ponko_bench -- changes` prints the numbers
 for your machine.
 
 ## Component hooks
