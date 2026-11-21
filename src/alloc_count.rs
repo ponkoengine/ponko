@@ -9,15 +9,21 @@
 //! It also counts the bytes freed, so [`net_alloc_bytes`] tells how much of
 //! what was allocated is still held: the number a leak check watches.
 //!
-//! Counts are for the whole process: allocations on rayon workers or other
-//! threads count too, and a system that allocates inside `par_for_each` is
-//! charged for it. Tests that assert on them should not run next to other
-//! tests that allocate (give them a test file of their own).
+//! [`alloc_counts`] and [`net_alloc_bytes`] are for the whole process:
+//! every thread's allocations count. Each thread also keeps a count of its
+//! own ([`thread_alloc_counts`], [`thread_net_alloc_bytes`]), and that is
+//! what a system's count and a profiling scope's are: the allocations made
+//! on the thread that runs it while it runs, plus those made by the
+//! workers of the ECS's parallel loops it starts (`par_for_each` and the
+//! like, carried back through [`ponko_ecs::ThreadMeter`]). What another
+//! thread does meanwhile (another test, an asset loader, a thread pool
+//! worker parking) is not in it. A loop written directly with rayon counts
+//! on the workers that run it, not on the system: put a
+//! [`profile_scope!`](crate::profile_scope) inside it to see its share.
 //!
-//! Each thread also keeps a count of its own ([`thread_alloc_counts`]), and
-//! a profiling scope counts the allocations made on its thread while it is
-//! open: what a piece of code allocates, without what a thread pool's
-//! workers allocate for themselves meanwhile.
+//! The per-thread counts cost nothing on the allocation path beyond the
+//! whole-process ones (a const thread-local, no lock), and a parallel loop
+//! reads them twice per piece while profiling is on.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -31,10 +37,14 @@ static FREED: AtomicU64 = AtomicU64::new(0);
 static SEEN: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
-    /// This thread's allocations while profiling was on. A `const` cell of
+    /// This thread's allocations while profiling was on, and what the
+    /// workers of its parallel loops allocated for it. A `const` cell of
     /// plain numbers: no destructor to register and no lazy set-up, so the
     /// allocator can touch it without allocating (or recursing into itself).
     static THREAD: Cell<AllocCounts> = const { Cell::new(AllocCounts { count: 0, bytes: 0 }) };
+    /// Bytes freed on this thread while profiling was on (and by its loops'
+    /// workers), for [`thread_net_alloc_bytes`].
+    static THREAD_FREED: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Heap allocations made while profiling was on, from [`alloc_counts`].
@@ -81,7 +91,37 @@ fn note(bytes: usize) {
 fn note_free(bytes: usize) {
     if ACTIVE.load(Relaxed) > 0 {
         FREED.fetch_add(bytes as u64, Relaxed);
+        let _ = THREAD_FREED.try_with(|t| t.set(t.get().wrapping_add(bytes as u64)));
     }
+}
+
+/// The calling thread's counters, for [`ponko_ecs::ThreadMeter`].
+fn meter_read() -> [u64; 3] {
+    let c = thread_alloc_counts();
+    [c.count, c.bytes, THREAD_FREED.try_with(Cell::get).unwrap_or(0)]
+}
+
+/// What a parallel loop's workers did for the calling thread.
+fn meter_credit([count, bytes, freed]: [u64; 3]) {
+    let _ = THREAD.try_with(|t| {
+        let c = t.get();
+        t.set(AllocCounts {
+            count: c.count.wrapping_add(count),
+            bytes: c.bytes.wrapping_add(bytes),
+        });
+    });
+    let _ = THREAD_FREED.try_with(|t| t.set(t.get().wrapping_add(freed)));
+}
+
+/// Lets the ECS's parallel loops carry their workers' counts back to the
+/// thread that started them. Called when profiling turns on; the first
+/// call registers, later ones are one atomic load.
+pub(crate) fn install_thread_meter() {
+    let _ = ponko_ecs::set_thread_meter(ponko_ecs::ThreadMeter {
+        on: crate::scope::active,
+        read: meter_read,
+        credit: meter_credit,
+    });
 }
 
 // SAFETY: every method forwards to `System` with the same arguments; the
@@ -155,10 +195,14 @@ pub fn alloc_counts() -> AllocCounts {
 /// on): [`alloc_counts`] for one thread. Take two readings on the same thread
 /// and subtract to count what the code between them allocated there, without
 /// what other threads did meanwhile (a rayon worker that parks for the first
-/// time, an asset loader, the audio thread). Work the code hands to other
-/// threads isn't in it either: put a [`profile_scope!`](crate::profile_scope)
-/// inside that work, and the scope counts its allocations on whichever
-/// thread runs it ([`ScopeReport::allocs_per_frame`](crate::perf::ScopeReport::allocs_per_frame)).
+/// time, an asset loader, the audio thread). The ECS's parallel loops
+/// (`par_for_each`, `par_collect_into`, a [`ViewGroup`](crate::ecs_core::ViewGroup)
+/// on threads) started on this thread are in it: what their workers
+/// allocated for the loop is added here when the loop ends. Work handed to
+/// other threads any other way (a rayon loop of your own, a job) isn't: put
+/// a [`profile_scope!`](crate::profile_scope) inside that work, and the
+/// scope counts its allocations on whichever thread runs it
+/// ([`ScopeReport::allocs_per_frame`](crate::perf::ScopeReport::allocs_per_frame)).
 ///
 /// All zero if [`CountingAllocator`] isn't installed and nothing calls
 /// [`note_allocation`]. It costs nothing while profiling is off.
@@ -172,6 +216,24 @@ pub fn thread_alloc_counts() -> AllocCounts {
     THREAD.try_with(Cell::get).unwrap_or_default()
 }
 
+/// [`net_alloc_bytes`] for the calling thread: bytes allocated minus bytes
+/// freed on it while profiling was on (with what the workers of its ECS
+/// parallel loops did for it, as in [`thread_alloc_counts`]). Two readings
+/// on one thread, subtracted, are what the code between them still holds,
+/// without memory other threads take or give back meanwhile. Memory freed
+/// on another thread than the one that allocated it counts on the freeing
+/// thread.
+///
+/// ```
+/// let before = ponko::perf::thread_net_alloc_bytes();
+/// let after = ponko::perf::thread_net_alloc_bytes();
+/// assert_eq!(after - before, 0, "nothing ran in between");
+/// ```
+pub fn thread_net_alloc_bytes() -> i64 {
+    let freed = THREAD_FREED.try_with(Cell::get).unwrap_or(0);
+    thread_alloc_counts().bytes as i64 - freed as i64
+}
+
 /// Bytes allocated minus bytes freed, both counted while profiling was on
 /// (a reallocation counts as a free of the old size and an allocation of
 /// the new one). Take two readings with profiling on and subtract: the
@@ -180,8 +242,9 @@ pub fn thread_alloc_counts() -> AllocCounts {
 /// runs, and a leak grows with every pass. Memory allocated before
 /// profiling was turned on and freed after counts as a negative.
 ///
-/// Like [`alloc_counts`] it covers the whole process, and it is zero
-/// unless [`CountingAllocator`] is installed.
+/// Like [`alloc_counts`] it covers the whole process
+/// ([`thread_net_alloc_bytes`] is one thread's), and it is zero unless
+/// [`CountingAllocator`] is installed.
 ///
 /// ```
 /// let before = ponko::perf::net_alloc_bytes();

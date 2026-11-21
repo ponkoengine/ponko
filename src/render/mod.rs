@@ -379,6 +379,8 @@ pub(crate) struct RenderDetail {
     /// `GpuTimer::latest_frame`). `None` without timestamps or before the
     /// first came back.
     pub gpu_latest: Option<(f32, u64)>,
+    /// Why the latest frame has no usable GPU time, if it has none.
+    pub gpu_untimed: Option<crate::perf::GpuUntimed>,
 }
 
 /// What happened when we tried to draw a frame.

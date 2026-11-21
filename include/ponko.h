@@ -159,6 +159,20 @@
 
 #define PONKO_GPU_TIMING_OFF 2
 
+#define PONKO_GPU_UNTIMED_NONE 0
+
+#define PONKO_GPU_UNTIMED_NO_GPU 1
+
+#define PONKO_GPU_UNTIMED_NO_TIMESTAMPS 2
+
+#define PONKO_GPU_UNTIMED_QUERY_SET_BUDGET 3
+
+#define PONKO_GPU_UNTIMED_OFF 4
+
+#define PONKO_GPU_UNTIMED_NOT_READY 5
+
+#define PONKO_GPU_UNTIMED_DEVICE_LOST 6
+
 #define PONKO_PRESS_THRESHOLD 0.5
 
 #define PONKO_QUERY_CACHE_AUTO 0
@@ -6414,6 +6428,8 @@ void ponko_note_deallocation(size_t bytes);
 
 int64_t ponko_net_alloc_bytes(void);
 
+int64_t ponko_thread_net_alloc_bytes(void);
+
 enum PonkoStatus ponko_ctx_set_profiling(struct PonkoCtx *ctx, bool on);
 
 enum PonkoStatus ponko_ctx_set_gpu_timing(struct PonkoCtx *ctx, uint32_t kind, uint32_t every);
@@ -6421,6 +6437,8 @@ enum PonkoStatus ponko_ctx_set_gpu_timing(struct PonkoCtx *ctx, uint32_t kind, u
 enum PonkoStatus ponko_ctx_gpu_timing(const struct PonkoCtx *ctx,
                                       uint32_t *out_kind,
                                       uint32_t *out_every);
+
+enum PonkoStatus ponko_ctx_gpu_untimed(const struct PonkoCtx *ctx, uint32_t *out_reason);
 
 enum PonkoStatus ponko_ctx_perf_report(const struct PonkoCtx *ctx,
                                        char *buffer,

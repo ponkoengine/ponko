@@ -3589,6 +3589,17 @@ static void alloc_count_setup(PonkoCtx* ctx, void* user) {
     ponko_note_deallocation(4096);
     int64_t released = ponko_net_alloc_bytes();
     CHECK(holding - held >= 4096 && holding - released >= 4096);
+    /* This thread's net bytes: exact, whatever other threads do meanwhile. */
+    held = ponko_thread_net_alloc_bytes();
+    ponko_note_allocation(4096);
+    holding = ponko_thread_net_alloc_bytes();
+    ponko_note_deallocation(4096);
+    released = ponko_thread_net_alloc_bytes();
+    CHECK(holding - held == 4096 && released == held);
+    /* A headless game has no GPU to time, and says so. */
+    uint32_t why = 99;
+    CHECK(ponko_ctx_gpu_untimed(ctx, &why) == PONKO_OK && why == PONKO_GPU_UNTIMED_NO_GPU);
+    CHECK(ponko_ctx_gpu_untimed(ctx, NULL) == PONKO_INVALID_ARGUMENT);
     CHECK(ponko_ctx_set_profiling(ctx, false) == PONKO_OK);
 }
 

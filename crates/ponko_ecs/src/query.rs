@@ -1595,13 +1595,15 @@ impl<'w, Q: QueryData> Query<'w, Q> {
         let parallel = plan.run_serial_part(|lo, hi| unsafe { work.visit_shared(lo, hi, &f) });
         if let Some((from, chunk)) = parallel {
             let chunks = (total - from).div_ceil(chunk);
+            let tally = crate::par::LoopTally::start();
             let one = |c: usize| {
                 let lo = from + c * chunk;
                 // SAFETY: as above; chunks are disjoint ranges of positions,
                 // and every position is one row of one archetype.
-                unsafe { work.visit_shared(lo, (lo + chunk).min(total), &f) };
+                tally.count(|| unsafe { work.visit_shared(lo, (lo + chunk).min(total), &f) });
             };
             crate::par::run(|| (0..chunks).into_par_iter().for_each(one));
+            tally.finish();
         }
         self.world.par_plan.give_back(plan.tasks);
     }
@@ -1731,7 +1733,11 @@ impl<'w, Q: QueryData> Query<'w, Q> {
                     slots: Slots(slots.at(from)),
                     len: 0,
                 };
-                let mut rest = crate::par::run(|| fill(rest, from, n - from, chunk, &leaf));
+                let tally = crate::par::LoopTally::start();
+                let counted =
+                    |lo: usize, hi: usize, initialized: &mut Initialized<R>| tally.count(|| leaf(lo, hi, initialized));
+                let mut rest = crate::par::run(|| fill(rest, from, n - from, chunk, &counted));
+                tally.finish();
                 initialized.len += rest.len;
                 rest.len = 0;
             }

@@ -1,10 +1,8 @@
 //! A repeated filtered query allocates nothing: the filter is compiled into
-//! inline storage each time. Its own test binary, with a single test, because
-//! the library's counting allocator (the one `ponko_ffi` installs, so this
-//! file can't install a per-thread one as `ponko_ecs/tests/parallel_alloc.rs`
-//! does) counts the whole process while profiling is on. The parallel part
-//! therefore compares the quietest of several rounds, which the thread
-//! pool's own occasional allocations can't change.
+//! inline storage each time. It counts this thread's allocations
+//! (`perf::thread_alloc_counts`), which include what a parallel query's
+//! workers allocate for it and nothing other threads do meanwhile, so one
+//! round of each is exact.
 //!
 //! The measuring runs inside a game's setup callback (profiling needs a
 //! ctx), so nothing is asserted there: a failed assertion would abort the
@@ -33,8 +31,14 @@ unsafe extern "C" fn slice_rows(chunk: *const PonkoChunk, user: *mut c_void) {
 }
 
 fn allocations() -> u64 {
-    ponko::perf::alloc_counts().count
+    ponko::perf::thread_alloc_counts().count
 }
+
+/// The only allocation of the thread pool's own on the thread that starts
+/// a parallel query: the queue it hands work to takes a new block every 63
+/// jobs. Twenty queries hand it twenty jobs (one per query: only the big
+/// archetype is cut up), so a round reaches at most one block's end.
+const INJECTOR_BLOCKS: u64 = 1;
 
 const MARKERS: [&std::ffi::CStr; 5] = [c"C0", c"C1", c"C2", c"C3", c"C4"];
 /// Entities with only marker 0, beside one of each combination of the four
@@ -53,8 +57,8 @@ struct Measured {
     serial_rows: Vec<usize>,
     serial_allocations: u64,
     check_allocations: u64,
-    /// Per filter: the fewest allocations in any round of parallel queries, and
-    /// the rows and slices of one more.
+    /// Per filter: the allocations of twenty parallel queries, and the rows
+    /// and slices of one more.
     parallel: Vec<(u64, usize, usize)>,
 }
 
@@ -150,8 +154,8 @@ unsafe extern "C" fn measure(ctx: *mut PonkoCtx, user: *mut c_void) {
             out.failures.push("ponko_filter_check failed".into());
         }
 
-        // Parallel: ten rounds of twenty queries per filter; the filter adds
-        // nothing to the quietest round of the unfiltered query.
+        // Parallel: twenty queries per filter, workers' allocations
+        // included; the filter adds nothing.
         let mut par = options;
         par.parallel = true;
         out.parallel.reserve(4);
@@ -175,24 +179,20 @@ unsafe extern "C" fn measure(ctx: *mut PonkoCtx, user: *mut c_void) {
             for _ in 0..5 {
                 let _ = call();
             }
-            let mut quietest = u64::MAX;
-            for _ in 0..10 {
-                ponko_ctx_set_profiling(ctx, true);
-                let before = allocations();
-                for _ in 0..20 {
-                    let _ = call();
-                }
-                let made = allocations() - before;
-                ponko_ctx_set_profiling(ctx, false);
-                quietest = quietest.min(made);
+            ponko_ctx_set_profiling(ctx, true);
+            let before = allocations();
+            for _ in 0..20 {
+                let _ = call();
             }
+            let made = allocations() - before;
+            ponko_ctx_set_profiling(ctx, false);
             slices.rows.store(0, Ordering::Relaxed);
             slices.calls.store(0, Ordering::Relaxed);
             if call().is_err() {
                 out.failures.push("parallel query failed".into());
             }
             out.parallel.push((
-                quietest,
+                made,
                 slices.rows.load(Ordering::Relaxed),
                 slices.calls.load(Ordering::Relaxed),
             ));
@@ -261,8 +261,10 @@ fn repeated_filtered_queries_allocate_nothing() {
         );
     }
     assert!(
-        with.0 <= plain.0 && any.0 <= plain.0 && wrapped.0 <= plain.0,
-        "quietest round of 20 parallel queries: plain {}, with {}, nested {}, wrapped {}",
+        [plain.0, with.0, any.0, wrapped.0]
+            .iter()
+            .all(|&n| n <= INJECTOR_BLOCKS),
+        "20 parallel queries each: plain {}, with {}, nested {}, wrapped {}",
         plain.0,
         with.0,
         any.0,

@@ -89,9 +89,9 @@ unsafe extern "C" fn measure(ctx: *mut PonkoCtx, user: *mut c_void) {
         // Warm up: the pool and the history fill.
         out.ok = (0..64).all(|t| tick(p, &mut history, t));
         ponko_ctx_set_profiling(ctx, true);
-        let before = ponko::perf::alloc_counts().count;
+        let before = ponko::perf::thread_alloc_counts().count;
         out.ok &= (64..1064).all(|t| tick(p, &mut history, t));
-        out.allocations = ponko::perf::alloc_counts().count - before;
+        out.allocations = ponko::perf::thread_alloc_counts().count - before;
         ponko_ctx_set_profiling(ctx, false);
         let mut stats = PonkoPredictionStats::default();
         ponko_prediction_stats(p, &mut stats);

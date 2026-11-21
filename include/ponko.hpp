@@ -399,6 +399,24 @@ inline gpu_timing gpu_timing_auto() noexcept { return {gpu_timing_kind::automati
 inline gpu_timing gpu_timing_every(std::uint32_t n) noexcept { return {gpu_timing_kind::every, n}; }
 /// Never time the GPU (Rust `GpuTiming::Off`).
 inline gpu_timing gpu_timing_off() noexcept { return {gpu_timing_kind::off, 0}; }
+/// Why the latest frame has no usable GPU time (Rust `GpuUntimed`), from ctx::gpu_untimed; `none` when it has
+/// one. More reasons may be added.
+enum class gpu_untimed : std::uint32_t {
+    /// The latest frame's GPU time is usable.
+    none = PONKO_GPU_UNTIMED_NONE,
+    /// No GPU: a headless run, or before the renderer opened one.
+    no_gpu = PONKO_GPU_UNTIMED_NO_GPU,
+    /// The GPU or its backend can't write timestamps.
+    no_timestamps = PONKO_GPU_UNTIMED_NO_TIMESTAMPS,
+    /// The timer was refused a timestamp query set: the process holds as many as the engine takes here.
+    query_set_budget = PONKO_GPU_UNTIMED_QUERY_SET_BUDGET,
+    /// GPU timing is off (gpu_timing_off()) and nothing else reads GPU times.
+    off = PONKO_GPU_UNTIMED_OFF,
+    /// No timed frame's timestamps have come back yet.
+    not_ready = PONKO_GPU_UNTIMED_NOT_READY,
+    /// The GPU device was lost.
+    device_lost = PONKO_GPU_UNTIMED_DEVICE_LOST,
+};
 /// A clip to bake for crowds (Rust `CrowdClip`), from crowd_clip_of.
 using crowd_clip = PonkoCrowdClip;
 /// A GPU array of four-float elements (Rust `GpuBuffer`) for compute passes, from ctx::create_gpu_buffer. A
@@ -1781,6 +1799,11 @@ inline alloc_counts thread_alloc_counts() noexcept { return ponko_thread_alloc_c
 /// Read it twice with profiling on and subtract: what the code between still holds. A loop that gives
 /// back what it takes reads (close to) zero however long it runs; a leak grows with every pass.
 inline std::int64_t net_alloc_bytes() noexcept { return ponko_net_alloc_bytes(); }
+
+/// net_alloc_bytes for the calling thread (Rust `perf::thread_net_alloc_bytes`): bytes allocated minus bytes
+/// freed on it while profiling was on, with what its parallel queries' workers did for it. Two readings on one
+/// thread, subtracted, are what the code between them still holds, whatever other threads do meanwhile.
+inline std::int64_t thread_net_alloc_bytes() noexcept { return ponko_thread_net_alloc_bytes(); }
 
 /// Times the scope it lives in (see PONKO_PROFILE_SCOPE).
 class profile_scope_guard {
@@ -6907,6 +6930,12 @@ public:
         std::uint32_t kind = 0, every = 0;
         detail::check(ponko_ctx_gpu_timing(raw_, &kind, &every));
         return {static_cast<gpu_timing_kind>(kind), every};
+    }
+    /// Why the latest frame has no usable GPU time (Rust `perf.gpu_untimed()`): gpu_untimed::none when it has one.
+    ponko::gpu_untimed gpu_untimed() const {
+        std::uint32_t why = 0;
+        detail::check(ponko_ctx_gpu_untimed(raw_, &why));
+        return static_cast<ponko::gpu_untimed>(why);
     }
     /// Where time and allocations went over the last frames (needs set_profiling(true) for a while).
     ponko::perf_report perf_report() const {
