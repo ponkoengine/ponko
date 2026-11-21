@@ -62,7 +62,20 @@ impl Rig {
     /// A rig drawing `size` pixels; `slots`: as [`sized`](Self::sized),
     /// `None` takes the device as it comes.
     fn opened(slots: Option<bool>, size: (u32, u32)) -> Option<Self> {
+        Self::opened_with(slots, size, None)
+    }
+
+    /// [`new`](Self::new) with global illumination's texture slots, on a
+    /// device that has only `storage` storage buffers a shader stage:
+    /// fewer than compute culling needs, so crowds and instance batches
+    /// take their CPU paths while global illumination still runs.
+    pub(super) fn with_storage_buffers(storage: u32) -> Option<Self> {
+        Self::opened_with(Some(true), (SIZE, SIZE), Some(storage))
+    }
+
+    fn opened_with(slots: Option<bool>, size: (u32, u32), storage: Option<u32>) -> Option<Self> {
         let gpu = crate::render::render_test_support::gpu_with(|adapter| {
+            let defaults = wgpu::Limits::default();
             // As the engine asks: more texture slots where the adapter has them.
             Ok(wgpu::DeviceDescriptor {
                 required_limits: wgpu::Limits {
@@ -71,7 +84,9 @@ impl Rig {
                     } else {
                         16
                     },
-                    ..wgpu::Limits::default()
+                    max_storage_buffers_per_shader_stage: storage
+                        .unwrap_or(defaults.max_storage_buffers_per_shader_stage),
+                    ..defaults
                 },
                 required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
                 ..Default::default()
