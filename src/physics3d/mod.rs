@@ -1864,6 +1864,65 @@ mod tests {
         interpolate_physics3d(ctx);
     }
 
+    /// The rapier shape of `e`'s collider.
+    fn rapier_shape(ctx: &Ctx, e: Entity) -> rp::SharedShape {
+        let link = ctx.physics3d.links.get(e).expect("a linked entity");
+        ctx.physics3d.world.colliders[link.collider].shared_shape().clone()
+    }
+
+    #[test]
+    fn colliders_of_one_mesh_at_one_scale_share_one_scaled_copy_while_they_use_it() {
+        let mut ctx = Ctx::new(0.02, Vec2::ZERO);
+        start(&mut ctx, Vec3::ZERO);
+        let corners = [Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z];
+        let rock = ctx.physics3d.convex_hull(&corners).expect("a hull");
+        let spawn = |ctx: &mut Ctx, x: f32, scale: Vec3| {
+            let at = Transform3D::at(vec3(x, 0.0, 0.0));
+            ctx.world
+                .spawn((at, RigidBody3D::fixed(), Collider3D::scaled_mesh(rock, scale)))
+        };
+        let doubled: Vec<Entity> = (0..3)
+            .map(|i| spawn(&mut ctx, i as f32 * 5.0, Vec3::splat(2.0)))
+            .collect();
+        let mirrored = spawn(&mut ctx, 20.0, vec3(-2.0, 2.0, 2.0));
+        let plain = spawn(&mut ctx, 25.0, Vec3::ONE);
+        tick(&mut ctx);
+        let first = rapier_shape(&ctx, doubled[0]);
+        for &e in &doubled[1..] {
+            assert!(
+                std::sync::Arc::ptr_eq(&rapier_shape(&ctx, e).0, &first.0),
+                "one copy at one scale"
+            );
+        }
+        assert!(!std::sync::Arc::ptr_eq(&rapier_shape(&ctx, mirrored).0, &first.0));
+        let base = ctx.physics3d.mesh(rock).and_then(|s| s.shape.clone()).expect("live");
+        assert!(
+            std::sync::Arc::ptr_eq(&rapier_shape(&ctx, plain).0, &base.0),
+            "scale one: the mesh itself"
+        );
+        let hull = first.as_convex_polyhedron().expect("a hull");
+        let top = hull.points().iter().map(|p| p.y).fold(f32::MIN, f32::max);
+        assert!((top - 2.0).abs() < 1e-5, "scaled by 2: {top}");
+        let mirrored_shape = rapier_shape(&ctx, mirrored);
+        let hull = mirrored_shape.as_convex_polyhedron().expect("a hull");
+        let left = hull.points().iter().map(|p| p.x).fold(f32::MAX, f32::min);
+        assert!((left + 2.0).abs() < 1e-5, "mirrored along X: {left}");
+        assert_eq!(ctx.physics3d.live_count(), 1, "still one collision mesh");
+
+        // Copies go with the last collider that uses them.
+        for e in doubled.into_iter().chain([mirrored]) {
+            ctx.world.despawn(e);
+        }
+        drop((first, mirrored_shape));
+        tick(&mut ctx);
+        assert!(
+            ctx.physics3d
+                .scaled_meshes
+                .values()
+                .all(|copy| copy.strong_count() == 0)
+        );
+    }
+
     #[test]
     fn frames_between_steps_draw_a_blend_and_steps_continue_from_the_physics_pose() {
         let mut ctx = Ctx::new(0.02, Vec2::ZERO);

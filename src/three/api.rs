@@ -1060,6 +1060,7 @@ impl Graphics {
             return Ok((std::sync::Arc::clone(read), meshes.to_vec(), on_disk));
         }
         let gpu = self.model_formats();
+        self.assets3d.gltf_scene_parses += 1;
         let loaded = gltf::load_nodes(
             path,
             &bytes,
