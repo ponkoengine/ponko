@@ -12,6 +12,6 @@
   "adapter": "Apple M4 Max",
   "backend": "Metal",
   "driver": "unknown",
-  "checksum": "96384bf3fab8b552",
-  "reason": "New reference: the image regression suite's first baselines (#135)."
+  "checksum": "0fdff2d302f0570f",
+  "reason": "Realtime GI no longer lets the sky's ambient light into its probe views (#112): the closed room's floor and walls keep only the light that comes in through the opening, as the path-traced reference does."
 }

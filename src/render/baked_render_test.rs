@@ -1,7 +1,9 @@
 //! Baked lighting against realtime global illumination and a path-traced
 //! reference, in the red-walled room of `gi_render_test`: the sun shines
 //! through an opening in the roof onto the red west wall, and the light it
-//! bounces is the only light most of the room gets.
+//! bounces is the only light most of the room gets. Realtime global
+//! illumination also in an open scene: a red wall and a white canopy on
+//! open ground, in the sun.
 use super::gi_render_test::{Rig, SIZE};
 use super::render_test_support::{Image, keep_image, skip};
 #[allow(unused_imports)]
@@ -30,6 +32,54 @@ fn room() -> Vec<(bool, Vec3, Vec3)> {
     ]
 }
 
+/// The open scene's boxes: the ground, a red wall standing in the sun
+/// (its east side lit) and a white canopy east of it, whose shade the sky
+/// and the wall light.
+fn open_ground() -> Vec<(bool, Vec3, Vec3)> {
+    vec![
+        (false, vec3(-30.0, -0.9, -30.0), vec3(30.0, -0.5, 30.0)), // ground
+        (true, vec3(-0.2, -0.5, -3.0), vec3(0.2, 2.5, 3.0)),       // red wall
+        (false, vec3(1.5, 1.2, -1.5), vec3(4.5, 1.5, 1.5)),        // canopy
+    ]
+}
+
+/// Which scene a test draws.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Place {
+    /// The room lit through an opening in its roof ([`room`]).
+    Room,
+    /// The open scene ([`open_ground`]).
+    Open,
+}
+
+impl Place {
+    fn boxes(self) -> Vec<(bool, Vec3, Vec3)> {
+        match self {
+            Place::Room => room(),
+            Place::Open => open_ground(),
+        }
+    }
+
+    /// The probe grid: one probe a unit around the room, the default grid
+    /// in the open. The most probes a frame either way.
+    fn gi(self, enabled: bool) -> GlobalIllumination {
+        let (extent, spacing) = match self {
+            Place::Room => (vec3(12.0, 4.0, 8.0), 1.0),
+            Place::Open => {
+                let d = GlobalIllumination::default();
+                (d.extent, d.spacing)
+            }
+        };
+        GlobalIllumination {
+            enabled,
+            extent,
+            spacing,
+            probes_per_frame: GlobalIllumination::MAX_PROBES_PER_FRAME,
+            intensity: 1.0,
+        }
+    }
+}
+
 fn material(red: bool) -> MaterialDesc {
     // Matte, so what differs between the images is the diffuse light.
     MaterialDesc::color(if red { Color::rgb(0.9, 0.04, 0.04) } else { Color::WHITE }).with_roughness(1.0)
@@ -54,6 +104,20 @@ enum Light {
     Baked,
 }
 
+/// The light, sky and camera of `place`.
+fn set_up_in(place: Place, ctx: &mut Ctx) {
+    set_up(ctx);
+    if place == Place::Open {
+        // Dimmer than in the room, so the sunlit ground isn't clipped.
+        ctx.scene3d.lighting.sun_direction = vec3(-1.0, -1.2, 0.4);
+        ctx.scene3d.lighting.sun_intensity = 2.0;
+        ctx.scene3d.lighting.shadow_distance = 40.0;
+        // Looking down, so no sky is in view (the reference has none).
+        ctx.scene3d.camera.position = vec3(8.0, 6.0, 5.0);
+        ctx.scene3d.camera.look_at(vec3(1.5, -0.5, 0.0));
+    }
+}
+
 /// The light, sky and camera of the room.
 fn set_up(ctx: &mut Ctx) {
     let lighting = &mut ctx.scene3d.lighting;
@@ -72,8 +136,13 @@ fn set_up(ctx: &mut Ctx) {
 
 /// What the bake of the room is made from.
 fn bake_scene(ctx: &Ctx, texels_per_unit: f32) -> LightBakeScene {
+    bake_scene_of(Place::Room, ctx, texels_per_unit)
+}
+
+/// What the bake (and the path-traced reference) of `place` is made from.
+fn bake_scene_of(place: Place, ctx: &Ctx, texels_per_unit: f32) -> LightBakeScene {
     let mut scene = LightBakeScene::new(&ctx.scene3d.lighting, &ctx.scene3d.sky);
-    for (red, lo, hi) in room() {
+    for (red, lo, hi) in place.boxes() {
         let data = box_mesh(lo, hi, texels_per_unit);
         scene.add(BakeModel::new(&data, Mat4::from_translation((lo + hi) * 0.5)).with_material(&material(red)));
     }
@@ -93,13 +162,26 @@ fn settings(texels_per_unit: f32) -> LightBakeSettings {
 /// (`Some(false)`) or as the device (or forced tier) comes (`None`).
 /// `None` without such a GPU.
 fn draw(light: Light, slots: Option<bool>, baked: Option<&BakedLighting>, tpu: f32) -> Option<(Rig, Vec<u8>)> {
+    // Enough frames for every probe to look around twice (two bounces).
+    draw_in(Place::Room, light, slots, baked, tpu, 80)
+}
+
+/// [`draw`] in `place`, `frames` frames with realtime global illumination.
+fn draw_in(
+    place: Place,
+    light: Light,
+    slots: Option<bool>,
+    baked: Option<&BakedLighting>,
+    tpu: f32,
+    frames: usize,
+) -> Option<(Rig, Vec<u8>)> {
     let mut rig = match slots {
         Some(slots) => Rig::new(slots)?,
         None => Rig::any()?,
     };
-    set_up(&mut rig.ctx);
+    set_up_in(place, &mut rig.ctx);
     let lightmaps = light == Light::Baked;
-    for (i, (red, lo, hi)) in room().into_iter().enumerate() {
+    for (i, (red, lo, hi)) in place.boxes().into_iter().enumerate() {
         let mesh = rig.mesh(&box_mesh(lo, hi, tpu), material(red));
         let entity = rig
             .ctx
@@ -109,13 +191,7 @@ fn draw(light: Light, slots: Option<bool>, baked: Option<&BakedLighting>, tpu: f
             rig.ctx.world.insert(entity, lightmap);
         }
     }
-    rig.ctx.scene3d.lighting.gi = GlobalIllumination {
-        enabled: light == Light::Realtime,
-        extent: vec3(12.0, 4.0, 8.0),
-        spacing: 1.0,
-        probes_per_frame: GlobalIllumination::MAX_PROBES_PER_FRAME,
-        intensity: 1.0,
-    };
+    rig.ctx.scene3d.lighting.gi = place.gi(light == Light::Realtime);
     if lightmaps {
         let baked = baked.expect("a bake to draw with");
         let layers = baked.gpu_layers().expect("fits");
@@ -126,8 +202,7 @@ fn draw(light: Light, slots: Option<bool>, baked: Option<&BakedLighting>, tpu: f
             &rig.textures,
         );
     }
-    // Enough frames for every probe to look around twice (two bounces).
-    let pixels = rig.draw(if light == Light::Realtime { 80 } else { 2 });
+    let pixels = rig.draw(if light == Light::Realtime { frames } else { 2 });
     keep_image(&Image {
         width: SIZE,
         height: SIZE,
@@ -202,6 +277,75 @@ fn reference(rig: &Rig, scene: &LightBakeScene, samples: u32) -> Vec<Vec3> {
             .collect(),
     });
     image
+}
+
+/// The path-traced reference of `scene` as `rig`'s camera sees it, with
+/// light bounced until it has all but run out (256 times): realtime global
+/// illumination bounces light with every probe update, for as long as it
+/// runs, so this is what it should settle on. (In the room, whose white
+/// walls send all the light on, the floor is twice as bright as after the
+/// bake's three bounces.)
+fn converged_reference(rig: &Rig, scene: &LightBakeScene, samples: u32) -> Vec<Vec3> {
+    let camera = &rig.ctx.scene3d.camera;
+    let image =
+        crate::three::bake::reference_image(scene, camera.position, camera.view_proj(), (SIZE, SIZE), samples, 256);
+    keep_image(&Image {
+        width: SIZE,
+        height: SIZE,
+        rgba: image
+            .iter()
+            .flat_map(|c| [srgb(c.x), srgb(c.y), srgb(c.z), 255])
+            .collect(),
+    });
+    image
+}
+
+/// Flat ambient light and realtime global illumination after `frames`
+/// frames in `place`, and their errors to the converged path-traced
+/// reference. `None` without a GPU that has global illumination.
+fn realtime_against_the_reference(place: Place, frames: usize) -> Option<(f32, f32)> {
+    let (rig, flat) = draw_in(place, Light::Flat, Some(true), None, 4.0, frames)?;
+    let (_, realtime) = draw_in(place, Light::Realtime, Some(true), None, 4.0, frames)?;
+    let scene = bake_scene_of(place, &rig.ctx, 4.0);
+    let truth = converged_reference(&rig, &scene, 64);
+    let (flat_error, realtime_error) = (error(&flat, &truth), error(&realtime, &truth));
+    eprintln!(
+        "{place:?}: error to the converged path-traced reference: flat ambient {flat_error:.3}, \
+         realtime GI {realtime_error:.3} after {frames} frames"
+    );
+    Some((flat_error, realtime_error))
+}
+
+#[test]
+fn realtime_gi_settles_closer_to_the_path_traced_room_than_flat_ambient_light() {
+    // Long enough for the room's light to settle: its white walls pass it
+    // on for a hundred bounces and more.
+    let Some((flat_error, realtime_error)) = realtime_against_the_reference(Place::Room, 1500) else {
+        return;
+    };
+    // The negative control: the flat ambient light is far off indoors.
+    assert!(flat_error > 0.4, "flat ambient light is wrong indoors: {flat_error}");
+    // Before, the probes' views took the sky's ambient light where the
+    // probes hadn't looked yet or faded out, and the room kept it: 0.33,
+    // twice the bound, most of it sky light the room doesn't get.
+    assert!(
+        realtime_error < flat_error * 0.25,
+        "realtime GI settles on the path-traced room: {realtime_error} vs flat {flat_error}"
+    );
+}
+
+#[test]
+fn realtime_gi_settles_closer_to_the_path_traced_open_scene_than_flat_ambient_light() {
+    let Some((flat_error, realtime_error)) = realtime_against_the_reference(Place::Open, 600) else {
+        return;
+    };
+    // The negative control: the flat ambient light misses the canopy's
+    // shade and the wall's red light.
+    assert!(flat_error > 0.05, "flat ambient light misses the shade: {flat_error}");
+    assert!(
+        realtime_error < flat_error * 0.6,
+        "realtime GI settles on the path-traced open scene: {realtime_error} vs flat {flat_error}"
+    );
 }
 
 #[test]
@@ -394,6 +538,18 @@ fn room_quality(tpu: f32) {
         s.probes,
         s.rays as f64 / 1e6,
         baked.gpu_bytes() / 1024
+    );
+    // Realtime GI bounces light for as long as it runs: against the
+    // reference it settles on, once it has.
+    let Some((_, settled)) = draw_in(Place::Room, Light::Realtime, Some(true), None, tpu, 1500) else {
+        return;
+    };
+    let converged = converged_reference(&rig, &scene, 256);
+    println!(
+        "room, {tpu} texels a unit: error to the converged path-traced reference (256 bounces): \
+         flat ambient {:.3}, realtime GI {:.3} after 1500 frames",
+        error(&flat, &converged),
+        error(&settled, &converged),
     );
 }
 
