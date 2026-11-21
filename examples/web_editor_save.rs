@@ -65,7 +65,7 @@ fn keep(ctx: &mut Ctx) -> (String, u32) {
         return (kept.into(), 0);
     }
     ctx.world
-        .spawn((Transform::at(vec2(400.0, 300.0)), EntityName(MARK.into())));
+        .spawn((ponko::d2::Transform::at(vec2(400.0, 300.0)), EntityName(MARK.into())));
     if let Err(e) = ctx.assets.save_scene(&ctx.world, KEPT) {
         return (format!("Error: {e}"), 0);
     }
