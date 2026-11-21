@@ -142,6 +142,13 @@ src/web_threads.rs | impl Sync for Mailbox | web/smoke/threads.mjs | wasm
 src/web_threads.rs | post | web/smoke/threads.mjs | wasm
 src/web_threads.rs | run_on_pool | web/smoke/threads.mjs | wasm
 src/web_threads.rs | impl Send for SendOp | web/smoke/threads.mjs | wasm
+# One heap per thread for threaded web builds with --cfg ponko_web_thread_heaps
+# (wasm only), run by the threaded build's allocator case.
+src/web_alloc.rs | impl GlobalAlloc for Heaps | web/smoke/threads.mjs | wasm
+src/web_alloc.rs | Heaps::alloc | web/smoke/threads.mjs | wasm
+src/web_alloc.rs | Heaps::alloc_zeroed | web/smoke/threads.mjs | wasm
+src/web_alloc.rs | Heaps::dealloc | web/smoke/threads.mjs | wasm
+src/web_alloc.rs | Heaps::realloc | web/smoke/threads.mjs | wasm
 src/web_threads.rs | SendOp::call | web/smoke/threads.mjs | wasm
 src/web_threads.rs | coordinate | web/smoke/threads.mjs | wasm
 src/web_threads.rs | worker_start | web/smoke/threads.mjs | wasm

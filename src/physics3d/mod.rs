@@ -23,6 +23,8 @@ use glam::{Quat, Vec3};
 use ponko_ecs::{Component, Entity, Without, World};
 
 mod character;
+#[cfg(feature = "bench-internals")]
+pub(crate) use character::PARALLEL_FROM as CHARACTERS_PARALLEL_FROM;
 mod contacts;
 pub use contacts::{ContactModifier3D, ContactPair3D};
 mod dominance;

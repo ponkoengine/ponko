@@ -29,7 +29,18 @@ const CORNERS: [Vec2; 6] = [
 
 /// Below this many skeletons they are drawn on the calling thread: the
 /// fork and the copy cost more than they save.
-const PARALLEL_MIN: usize = 64;
+#[cfg(not(all(target_arch = "wasm32", target_feature = "atomics")))]
+pub(crate) const PARALLEL_MIN: usize = 64;
+
+/// In a web build with threads, handing the drawing to the frame pool's
+/// workers and waiting for them costs about 0.1 ms. In headless Chromium
+/// with 13 threads, 256 skeletons of two sprites took 0.08 ms on the page's
+/// thread and 0.10 to 0.17 ms shared out, 512 took 0.16 ms and 0.10 to 0.13
+/// ms, 1,024 took 0.32 ms and 0.16 to 0.24 ms (two runs;
+/// `web/smoke/threads.mjs --case thresholds`; the guide's "Threads on the
+/// web").
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+pub(crate) const PARALLEL_MIN: usize = 512;
 
 /// The fewest skeletons a thread's run holds.
 const RUN_MIN: usize = 16;
@@ -189,7 +200,7 @@ pub(crate) fn draw_skeletons_with(ctx: &mut Ctx, spread: Spread) {
     };
     let threads = crate::frame_pool::threads();
     let per = match spread {
-        Spread::Auto => (n >= PARALLEL_MIN && threads > 1).then(|| run_length(n, threads)),
+        Spread::Auto => crate::frame_pool::share(|| n >= PARALLEL_MIN && threads > 1).then(|| run_length(n, threads)),
         #[cfg(test)]
         Spread::Serial => None,
         #[cfg(test)]

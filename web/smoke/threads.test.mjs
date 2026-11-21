@@ -38,6 +38,15 @@ import {
   TRIGGER_PADS,
   TRIGGER_RUMBLE,
   triggerRumbleDone,
+  addRustFlag,
+  allocatorTable,
+  checkAllocator,
+  checkSides,
+  SWEPT,
+  THREAD_HEAPS_CFG,
+  THREAD_HEAPS_DIR,
+  sweepDone,
+  sweepTable,
 } from "./threads-lib.mjs";
 
 const isolatedRun = {
@@ -448,4 +457,75 @@ test("the service worker case passes only after the reload, isolated, with the w
   ]);
   assert.deepEqual(checkServiceWorker(plainRun, reloaded), ["the page isn't cross-origin isolated after the reload (isolated: false)"]);
   assert.ok(checkServiceWorker({ ...isolatedRun, par_threads: 0 }, reloaded).length > 0, "the isolated run's checks apply");
+});
+
+/** A threshold sweep where every pass stays below and is shared from its threshold, on the same hash. */
+function sweptRun() {
+  const sides = SWEPT.flatMap((pass) => [
+    { pass, size: 15, side: "below", shared: false, hash: "1", serial_hash: "1" },
+    { pass, size: 16, side: "above", shared: true, hash: "2", serial_hash: "2" },
+  ]);
+  const sweep = SWEPT.map((pass) => ({ pass, size: 16, serial_ms: 0.3, shared_ms: 0.1 }));
+  return { isolated: true, threads: 13, done: true, sweep, sides };
+}
+
+test("the threshold cases parse, and the allocator's second build has its own folder and flag", () => {
+  assert.equal(parseArgs(["--case", "thresholds"]).case, "thresholds");
+  assert.equal(parseArgs(["--case", "allocator"]).dir, "target/web/web_threads", "the standard allocator's build is the default one");
+  assert.notEqual(THREAD_HEAPS_DIR, "target/web/web_threads");
+  assert.equal(addRustFlag({}, THREAD_HEAPS_CFG).RUSTFLAGS, "--cfg ponko_web_thread_heaps");
+  assert.equal(addRustFlag({ RUSTFLAGS: "-D warnings" }, THREAD_HEAPS_CFG).RUSTFLAGS, "-D warnings --cfg ponko_web_thread_heaps");
+  const encoded = addRustFlag({ CARGO_ENCODED_RUSTFLAGS: "-D\x1fwarnings" }, THREAD_HEAPS_CFG);
+  assert.equal(encoded.CARGO_ENCODED_RUSTFLAGS, "-D\x1fwarnings\x1f--cfg\x1fponko_web_thread_heaps");
+  assert.equal(sweepDone(null), false);
+  assert.equal(sweepDone({ done: false }), false);
+  assert.equal(sweepDone({ done: true }), true);
+});
+
+test("a threshold sweep passes only when each pass is shared from its threshold and ends on the page's hash", () => {
+  assert.deepEqual(checkSides(sweptRun()), []);
+  const sharedBelow = sweptRun();
+  sharedBelow.sides[0].shared = true;
+  assert.match(checkSides(sharedBelow).join(), /shared out below its threshold/);
+  const notShared = sweptRun();
+  notShared.sides[3].shared = false;
+  assert.match(checkSides(notShared).join(), /stayed on the page's thread at its threshold/);
+  const otherHash = sweptRun();
+  otherHash.sides[5].hash = "3";
+  assert.match(checkSides(otherHash).join(), /ended on 3, but 2 on the page's thread alone/);
+  const oneSide = sweptRun();
+  oneSide.sides = oneSide.sides.filter((r) => !(r.pass === SWEPT[1] && r.side === "below"));
+  assert.match(checkSides(oneSide).join(), /wasn't run on both sides/);
+  assert.match(checkSides({ ...sweptRun(), isolated: false }).join(), /needs an isolated page/);
+  assert.match(checkSides({ ...sweptRun(), sweep: [] }).join(), /wasn't timed/);
+});
+
+test("the sweep table says which side is faster, and calls differences inside the noise the same", () => {
+  const table = sweepTable([
+    { pass: "a", size: 1, serial_ms: 0.1, shared_ms: 0.3 },
+    { pass: "a", size: 2, serial_ms: 0.5, shared_ms: 0.49 },
+    { pass: "a", size: 3, serial_ms: 2, shared_ms: 0.5 },
+  ], 13);
+  assert.match(table, /13 threads/);
+  assert.match(table, /\| 1 \| 0\.100 \| 0\.300 \| page's thread \|/);
+  assert.match(table, /\| 2 \| .* \| same \|/);
+  assert.match(table, /\| 3 \| .* \| shared \|/);
+});
+
+test("the allocator case needs the standard allocator in the default build, heaps in the other, and the same saves", () => {
+  const run = (perThread) => ({
+    isolated: true,
+    threads: 13,
+    per_thread_allocator: perThread,
+    alloc: { same_save: true, save_page_ms: 20, save_workers_ms: perThread ? 5 : 200, parse_ms: 9, par_alloc_ms: 1 },
+  });
+  assert.deepEqual(checkAllocator(run(true), run(false)), []);
+  assert.match(checkAllocator(run(false), run(false)).join(), /ponko_web_thread_heaps doesn't have the per-thread allocator/);
+  assert.match(checkAllocator(run(true), run(true)).join(), /the default threaded build has the per-thread allocator/);
+  const differs = run(true);
+  differs.alloc.same_save = false;
+  assert.match(checkAllocator(differs, run(false)).join(), /per-thread: the save on the workers differs/);
+  const table = allocatorTable(run(true), run(false), { perThread: 2048, system: 1024 });
+  assert.match(table, /\| JSON save, workers \| 200\.00 \| 5\.00 \|/);
+  assert.match(table, /\| `game_bg.wasm` \| 1 KiB \| 2 KiB \|/);
 });

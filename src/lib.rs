@@ -146,6 +146,40 @@ pub mod error;
 pub mod events;
 pub mod flow;
 mod frame_pool;
+/// Forces the engine's passes with a size threshold to share their work out
+/// or not, for threshold sweeps. Unstable (`bench-internals`).
+#[doc(hidden)]
+#[cfg(feature = "bench-internals")]
+pub mod bench_sharing {
+    pub use crate::frame_pool::{Sharing, set_sharing, shared_runs};
+
+    /// The time a hierarchy level must project to on the calling thread to
+    /// be shared out, in nanoseconds.
+    pub fn hierarchy_budget_ns() -> u64 {
+        crate::hierarchy::SERIAL_BUDGET_NS as u64
+    }
+
+    /// The fewest 2D skeletons whose drawing is shared out.
+    pub fn skeletons_from() -> usize {
+        crate::skeleton2d::draw::PARALLEL_MIN
+    }
+
+    /// Whether this build allocates from one heap per thread (a web build
+    /// with threads and `--cfg ponko_web_thread_heaps`).
+    pub fn per_thread_allocator() -> bool {
+        cfg!(all(
+            target_arch = "wasm32",
+            target_feature = "atomics",
+            ponko_web_thread_heaps
+        ))
+    }
+
+    /// The fewest 3D characters whose moves are shared out.
+    #[cfg(feature = "physics3d")]
+    pub fn characters_from() -> usize {
+        crate::physics3d::CHARACTERS_PARALLEL_FROM
+    }
+}
 pub mod game;
 // The built-in controllers on the desktop: gilrs.
 #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
@@ -294,6 +328,10 @@ pub mod web;
 // "Threads on the web").
 #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
 mod web_threads;
+// One heap per thread for web builds with threads that ask for it with
+// `--cfg ponko_web_thread_heaps` (see the module).
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics", ponko_web_thread_heaps))]
+mod web_alloc;
 
 /// The whole ECS crate ([`ponko_ecs`]), for advanced use: component ids,
 /// read-only world views, the dynamic and C path ([`World::raw`](ponko_ecs::World::raw)), chunks
