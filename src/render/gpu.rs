@@ -90,6 +90,9 @@ pub(crate) struct Renderer {
     /// GPU-written textures stay conservative.
     #[cfg(feature = "3d")]
     texture_alpha: super::texture_alpha::TextureAlphas,
+    /// Converts video frames to RGBA, made when the first one comes.
+    #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+    video_yuv: Option<super::video_yuv::YuvToRgba>,
 
     instance_buffer: wgpu::Buffer,
     /// Capacity of `instance_buffer`, in sprites.
@@ -861,6 +864,8 @@ impl Renderer {
             textures: Default::default(),
             #[cfg(feature = "3d")]
             texture_alpha: Default::default(),
+            #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+            video_yuv: None,
             instance_buffer,
             instance_capacity: INITIAL_INSTANCE_CAPACITY,
             too_many_sprites: false,
@@ -1928,6 +1933,27 @@ impl Renderer {
         }
         #[cfg(not(feature = "3d"))]
         let _ = id;
+    }
+
+    /// Replaces every pixel of texture `id` (an RGBA8 texture of their
+    /// size) with a video frame's planes, converted to RGBA on the GPU.
+    /// Its alpha stays as it was: opaque, as videos are made.
+    #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+    pub fn update_texture_yuv(&mut self, id: u32, planes: &crate::video::yuv::Planes<'_>) {
+        let Some(tex) = self.textures.live(id) else {
+            return;
+        };
+        let size = tex.texture.size();
+        if tex.texture.format() != wgpu::TextureFormat::Rgba8UnormSrgb
+            || (size.width as usize, size.height as usize) != (planes.width, planes.height)
+        {
+            return;
+        }
+        let converter = self
+            .video_yuv
+            .get_or_insert_with(|| super::video_yuv::YuvToRgba::new(&self.device));
+        converter.convert(&self.device, &self.queue, planes, &tex.texture);
+        self.refresh_mips(id);
     }
 
     /// Replaces every pixel of texture `id` (same size as created).

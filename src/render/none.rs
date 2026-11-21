@@ -84,6 +84,10 @@ impl Renderer {
     pub fn write_render_target(&mut self, _id: u32, _width: u32, _height: u32, _texels: &[u8]) {
         match *self {}
     }
+    #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+    pub fn update_texture_yuv(&mut self, _id: u32, _planes: &crate::video::yuv::Planes<'_>) {
+        match *self {}
+    }
     pub fn update_texture(&mut self, _id: u32, _width: u32, _height: u32, _rgba: &[u8]) {
         match *self {}
     }

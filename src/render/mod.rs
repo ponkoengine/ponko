@@ -24,6 +24,8 @@ mod gpu;
 mod gpu3d;
 #[cfg(feature = "window")]
 mod gpu_textures;
+// A video frame's planes to RGBA on the GPU (the browser's decoder gives
+// RGBA itself).
 #[cfg(all(feature = "window", feature = "3d"))]
 mod lights;
 #[cfg(feature = "window")]
@@ -70,6 +72,8 @@ mod timer;
 pub(crate) mod traffic;
 #[cfg(feature = "window")]
 pub(crate) mod upload_timer;
+#[cfg(all(feature = "window", feature = "video", not(target_arch = "wasm32")))]
+mod video_yuv;
 #[cfg(feature = "window")]
 mod views;
 

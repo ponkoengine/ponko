@@ -24,20 +24,21 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod av1;
 mod demux;
+#[cfg(target_arch = "wasm32")]
+mod web;
 #[cfg(not(target_arch = "wasm32"))]
-mod yuv;
+pub(crate) mod yuv;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::audio::{Audio, AudioBus, Playing, Sound, SoundStarted};
 use crate::ctx::Ctx;
 use crate::error::{Error, ErrorKind};
 use crate::texture::Texture;
 
-/// The browser build has no decoder: the type exists so the code that
-/// holds one compiles, and none is ever made.
+/// In the browser, the browser's own decoder.
 #[cfg(target_arch = "wasm32")]
-enum Av1 {}
+use web::WebAv1 as Av1;
 
 #[cfg(not(target_arch = "wasm32"))]
 use av1::Av1;
@@ -96,14 +97,23 @@ pub struct Video {
     info: demux::Info,
     demuxer: demux::Demuxer,
     decoder: Av1,
-    /// The frame shown, as RGBA.
-    rgba: Vec<u8>,
+    /// The frame shown, as the decoder's planes (desktop): the GPU
+    /// converts them into the texture.
+    #[cfg(not(target_arch = "wasm32"))]
+    frame: yuv::Frame,
+    /// The frame shown, as RGBA: converted on the CPU when first asked
+    /// for (desktop), as the browser gave it (web).
+    rgba: OnceLock<Vec<u8>>,
     /// Seconds into the video.
     time: f64,
     /// Index of the frame shown, if one is.
     shown: Option<usize>,
     /// Index of the frame the demuxer reads next.
     next: usize,
+    /// The first frame the browser's decoder still has or will give
+    /// (web): going back before it starts decoding again.
+    #[cfg(target_arch = "wasm32")]
+    floor: usize,
     playing: bool,
     looping: bool,
     finished: bool,
@@ -166,9 +176,10 @@ impl Video {
                 ),
             ));
         }
-        let decoder = new_decoder()?;
+        let decoder = new_decoder(&info)?;
         let (width, height) = (info.width, info.height);
-        let rgba = vec![0u8; width as usize * height as usize * 4];
+        // Opaque black until the first frame.
+        let rgba = [0, 0, 0, 255].repeat(width as usize * height as usize);
         let sound = match info.audio_codec {
             Some(_) => Some(
                 ctx.audio
@@ -187,10 +198,14 @@ impl Video {
             info,
             demuxer,
             decoder,
-            rgba,
+            #[cfg(not(target_arch = "wasm32"))]
+            frame: yuv::Frame::default(),
+            rgba: OnceLock::from(rgba),
             time: 0.0,
             shown: None,
             next: 0,
+            #[cfg(target_arch = "wasm32")]
+            floor: 0,
             playing: false,
             looping: false,
             finished: false,
@@ -235,10 +250,32 @@ impl Video {
     }
 
     /// The frame shown, as RGBA pixels (4 bytes per pixel, row by row, top
-    /// row first): the same pixels as the texture, for tests and tools.
+    /// row first): the texture's pixels, for tests and tools.
+    ///
+    /// On the desktop the GPU converts the decoded frame into the texture,
+    /// and these pixels are converted on the CPU the first time they are
+    /// asked for after a new frame (the same math, within a step of
+    /// rounding); in the browser they are the browser's own.
     #[must_use]
     pub fn frame_rgba(&self) -> &[u8] {
-        &self.rgba
+        self.rgba.get_or_init(|| self.convert_frame())
+    }
+
+    /// The decoded frame converted to RGBA on the CPU (black before one).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn convert_frame(&self) -> Vec<u8> {
+        let (width, height) = (self.info.width as usize, self.info.height as usize);
+        let mut rgba = [0, 0, 0, 255].repeat(width * height);
+        if let Some(planes) = self.frame.planes().filter(|p| p.width == width && p.height == height) {
+            yuv::to_rgba(&planes, &mut rgba);
+        }
+        rgba
+    }
+
+    /// The browser's pixels are always kept.
+    #[cfg(target_arch = "wasm32")]
+    fn convert_frame(&self) -> Vec<u8> {
+        [0, 0, 0, 255].repeat(self.info.width as usize * self.info.height as usize)
     }
 
     /// The soundtrack, if the file has sound: a sound like any other, for
@@ -365,7 +402,12 @@ impl Video {
     pub fn update(&mut self, ctx: &mut Ctx) -> Result<(), Error> {
         let dt = ctx.time.frame_dt();
         self.advance(ctx, dt)?;
-        self.follow_sound(ctx)
+        self.follow_sound(ctx)?;
+        // The browser hands frames back later: show the one due once it
+        // has, also while paused after a seek.
+        #[cfg(target_arch = "wasm32")]
+        self.show(ctx, self.time)?;
+        Ok(())
     }
 
     /// [`update`](Self::update) by `seconds` instead of the frame's time:
@@ -457,6 +499,7 @@ impl Video {
     }
 
     /// The demuxer and decoder start over at keyframe `index`.
+    #[cfg(not(target_arch = "wasm32"))]
     fn restart_at(&mut self, index: usize) -> Result<(), Error> {
         // Forward: read on from where the demuxer is; back: from the start.
         let skip = if index >= self.next {
@@ -470,7 +513,7 @@ impl Video {
         // A flushed decoder has forgotten the sequence header, which only
         // the first frame carries.
         if index > 0 && !self.info.sequence_header.is_empty() {
-            decode(&mut self.decoder, &self.info.sequence_header, index, None)?;
+            decode(&mut self.decoder, &self.info.sequence_header, index, None, (0, 0))?;
         }
         self.next = index;
         self.shown = None;
@@ -478,6 +521,7 @@ impl Video {
     }
 
     /// Decodes up to the frame for `time` and puts it in the texture.
+    #[cfg(not(target_arch = "wasm32"))]
     fn show(&mut self, ctx: &mut Ctx, time: f64) -> Result<(), Error> {
         let target = self.frame_at(time);
         if self.shown == Some(target) {
@@ -497,15 +541,21 @@ impl Video {
             let Some((_, _, data)) = frame else {
                 break;
             };
-            // Only the target frame is converted to pixels.
+            // Only the target frame's planes are kept.
             let want = index == target;
-            if decode(&mut self.decoder, data, index, want.then_some(&mut self.rgba[..]))? {
+            let size = (self.info.width as usize, self.info.height as usize);
+            if decode(&mut self.decoder, data, index, want.then_some(&mut self.frame), size)? {
                 decoded = true;
             }
         }
         self.shown = Some(target);
         if decoded {
-            ctx.gfx.update_texture(self.texture, &self.rgba);
+            // Its RGBA is made again when asked for; the GPU converts the
+            // texture's.
+            self.rgba = OnceLock::new();
+            if let Some(planes) = self.frame.planes() {
+                ctx.gfx.update_texture_yuv(self.texture, &planes);
+            }
         }
         Ok(())
     }
@@ -529,18 +579,15 @@ impl Video {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn new_decoder() -> Result<Av1, Error> {
+fn new_decoder(_info: &demux::Info) -> Result<Av1, Error> {
     // A few threads: enough for 1080p, and leave the game its cores.
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(4));
     Av1::new(threads).map_err(|e| Error::new(ErrorKind::Decode, e))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn new_decoder() -> Result<Av1, Error> {
-    Err(Error::new(
-        ErrorKind::Unsupported,
-        "videos don't play in the web build (no AV1 decoder for wasm32): see the guide's \"Video\" chapter",
-    ))
+fn new_decoder(info: &demux::Info) -> Result<Av1, Error> {
+    Av1::new(info)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -548,19 +595,20 @@ fn flush(decoder: &mut Av1) {
     decoder.flush();
 }
 
-#[cfg(target_arch = "wasm32")]
-fn flush(decoder: &mut Av1) {
-    match *decoder {}
-}
-
-/// Decodes frame `index`; with `rgba`, writes the picture it shows there.
-/// Whether it wrote a picture.
+/// Decodes frame `index`; with `frame`, copies the picture it shows there,
+/// which must be `size` (width, height). Whether it copied a picture.
 #[cfg(not(target_arch = "wasm32"))]
-fn decode(decoder: &mut Av1, data: &[u8], index: usize, rgba: Option<&mut [u8]>) -> Result<bool, Error> {
+fn decode(
+    decoder: &mut Av1,
+    data: &[u8],
+    index: usize,
+    frame: Option<&mut yuv::Frame>,
+    size: (usize, usize),
+) -> Result<bool, Error> {
     let picture = decoder
         .decode(data, index as i64)
         .map_err(|e| Error::new(ErrorKind::Decode, format!("frame {index}: {e}")))?;
-    let (Some(rgba), Some(picture)) = (rgba, picture) else {
+    let (Some(frame), Some(picture)) = (frame, picture) else {
         return Ok(false);
     };
     let planes = picture.planes().ok_or_else(|| {
@@ -569,7 +617,7 @@ fn decode(decoder: &mut Av1, data: &[u8], index: usize, rgba: Option<&mut [u8]>)
             "its pictures are more than 8 bits deep; encode with ffmpeg -pix_fmt yuv420p",
         )
     })?;
-    if planes.width * planes.height * 4 != rgba.len() {
+    if (planes.width, planes.height) != size {
         return Err(Error::new(
             ErrorKind::Unsupported,
             format!(
@@ -578,13 +626,8 @@ fn decode(decoder: &mut Av1, data: &[u8], index: usize, rgba: Option<&mut [u8]>)
             ),
         ));
     }
-    yuv::to_rgba(&planes, rgba);
+    frame.copy_from(&planes);
     Ok(true)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn decode(decoder: &mut Av1, _data: &[u8], _index: usize, _rgba: Option<&mut [u8]>) -> Result<bool, Error> {
-    match *decoder {}
 }
 
 impl Audio {
