@@ -217,12 +217,11 @@ frame on WebGL2. There is no update-rate setting: the field is worked out
 at the drawn frame's time, once per moment however many queries ask, and
 an older moment would leave floating bodies off the drawn waves.
 
-**WASM SIMD** is optional. Build with the `wasm-simd` feature and
-`simd128` for the whole module:
+**WASM SIMD** is optional. `web/build.sh --simd` turns it on: the
+`wasm-simd` feature and `simd128` for the whole module, always together:
 
 ```sh
-CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="-C target-feature=+simd128" \
-  web/build.sh --features 3d,wasm-simd my_game
+web/build.sh --simd --features 3d --bin my_game
 ```
 
 That makes a moment 1.4 to 1.6 times faster (0.08 ms saved at 128 cells,
@@ -232,7 +231,10 @@ no good, which is why the feature refuses to compile without the flag:
 `simd128` alone changed nothing (0.99 to 1.05 times), and rustfft's SIMD
 code alone made a moment three times slower (0.99 ms instead of 0.24 at
 128 cells), its SIMD functions called from code built without SIMD. The
-default build leaves both off, for older browsers.
+default build leaves both off, for older browsers. (By hand, the same
+build is `--features ponko/wasm-simd` with
+`CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="-C target-feature=+simd128"`,
+or the flag added to `RUSTFLAGS` if you set that.)
 
 ## Floating bodies
 

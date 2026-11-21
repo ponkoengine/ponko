@@ -34,7 +34,8 @@ use super::waves::{WAVE_GRAVITY, WaveSample};
 // asks for both.
 #[cfg(all(feature = "wasm-simd", target_arch = "wasm32", not(target_feature = "simd128")))]
 compile_error!(
-    "the `wasm-simd` feature needs the whole build compiled with SIMD: set \
+    "the `wasm-simd` feature needs the whole build compiled with SIMD: build with \
+     `web/build.sh --simd`, which sets both, or set \
      CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS=\"-C target-feature=+simd128\" \
      (or add it to RUSTFLAGS), or leave the feature off"
 );
