@@ -309,8 +309,14 @@ fn link_from_c(c: &PonkoLoopbackLink) -> Result<LoopbackLink, Failure> {
     }
     Ok(LoopbackLink::new()
         .loss(c.loss)
-        .delay(seconds(c.delay, "PonkoLoopbackLink: delay must be finite seconds, 0 or more")?)
-        .jitter(seconds(c.jitter, "PonkoLoopbackLink: jitter must be finite seconds, 0 or more")?)
+        .delay(seconds(
+            c.delay,
+            "PonkoLoopbackLink: delay must be finite seconds, 0 or more",
+        )?)
+        .jitter(seconds(
+            c.jitter,
+            "PonkoLoopbackLink: jitter must be finite seconds, 0 or more",
+        )?)
         .seed(c.seed))
 }
 

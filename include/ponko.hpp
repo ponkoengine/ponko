@@ -1802,6 +1802,8 @@ struct cached {};
 /// instead of using the world's archetype index. Rust: `query.uncached()`.
 struct uncached {};
 
+namespace ai { class brain_row; class blackboard_row; }
+
 namespace detail {
 
 template<class T> struct is_filter : std::false_type {};
@@ -1843,10 +1845,17 @@ template<class F, class... Rest> struct presence<F, Rest...> {
     using type = typename joined<typename std::conditional<is_presence<F>::value, types<F>, types<>>::type,
                                  typename presence<Rest...>::type>::type;
 };
+/// ai::brain_row and ai::blackboard_row: each() parameters that are the
+/// world brain and blackboard columns, handed over as row objects.
+template<class T> struct is_ai_row : std::false_type {};
+template<> struct is_ai_row<ai::brain_row> : std::true_type {};
+template<> struct is_ai_row<ai::blackboard_row> : std::true_type {};
 /// The column type of an each() parameter: `T` for `T&` (written), `const T`
-/// for `const T&` and copies (only read).
+/// for `const T&` and copies (only read). Brain and blackboard rows are
+/// always written: their calls change them.
 template<class P> using column = typename std::conditional<
-    std::is_lvalue_reference<P>::value && !std::is_const<typename std::remove_reference<P>::type>::value,
+    is_ai_row<bare<P>>::value ||
+        (std::is_lvalue_reference<P>::value && !std::is_const<typename std::remove_reference<P>::type>::value),
     bare<P>, const bare<P>>::type;
 /// The component ids and options of one query.
 struct query_plan {
@@ -2081,6 +2090,8 @@ protected:
         else if constexpr (std::is_same<T, spot_light3d>::value) status = ponko_spot_light3d_component(world, &id);
         else if constexpr (std::is_same<T, model>::value) status = ponko_model_component(world, &id);
         else if constexpr (std::is_same<T, terrain_tile>::value) status = ponko_terrain_tile_component(world, &id);
+        else if constexpr (std::is_same<T, ai::brain_row>::value) status = ponko_ai_brain_component(world, &id);
+        else if constexpr (std::is_same<T, ai::blackboard_row>::value) status = ponko_ai_blackboard_component(world, &id);
         else status = ponko_component_register(world, name ? name : detail::type_name<T>().c_str(), sizeof(T), alignof(T), &id);
         if (status == PONKO_BUSY) return std::nullopt;
         detail::check(status);
@@ -2239,15 +2250,20 @@ protected:
                 rows_of(fn, raw, rows);
             }
         }
+        /// Row `i` of column `column`: the value, or a brain or blackboard row object.
+        template<class T> static decltype(auto) cell(const PonkoChunk* raw, std::size_t column, T* values, std::size_t i) {
+            if constexpr (detail::is_ai_row<std::remove_const_t<T>>::value) return std::remove_const_t<T>::at(raw, column, i);
+            else return (values[i]);
+        }
         template<class F, std::size_t... I> static void rows_of(F& fn, const PonkoChunk* raw, std::index_sequence<I...>) {
             const std::tuple<Ts*...> cols{static_cast<Ts*>(raw->columns[I])...};
             const std::size_t n = raw->count;
             if constexpr (WithEntity) {
                 const PonkoEntity* es = raw->entities;
                 for (std::size_t i = 0; i < n; ++i)
-                    fn(entity(es[i].generation) << 32 | es[i].index, std::get<I>(cols)[i]...);
+                    fn(entity(es[i].generation) << 32 | es[i].index, cell(raw, I, std::get<I>(cols), i)...);
             } else {
-                for (std::size_t i = 0; i < n; ++i) fn(std::get<I>(cols)[i]...);
+                for (std::size_t i = 0; i < n; ++i) fn(cell(raw, I, std::get<I>(cols), i)...);
             }
         }
         template<class F, class Filters> static void run(world_view& w, Filters filters, bool parallel, F& fn) {
@@ -2524,10 +2540,14 @@ public:
     /// columns: `query<Position, ponko::changed<Position>>` gets the runs of
     /// rows whose Position changed.
     template<class... Ts, class F> void query(F&& fn) {
+        static_assert(!std::disjunction<detail::is_ai_row<detail::bare<Ts>>...>::value,
+                      "ai::brain_row and ai::blackboard_row are each() parameters; chunk loops over brains use ai::query");
         run_query(typename detail::pick<false, Ts...>::type{}, typename detail::pick<true, Ts...>::type{}, false, fn);
     }
     /// query on all CPU cores at once (see each_par).
     template<class... Ts, class F> void query_par(F&& fn) {
+        static_assert(!std::disjunction<detail::is_ai_row<detail::bare<Ts>>...>::value,
+                      "ai::brain_row and ai::blackboard_row are each_par() parameters; chunk loops over brains use ai::query_par");
         run_query(typename detail::pick<false, Ts...>::type{}, typename detail::pick<true, Ts...>::type{}, true, fn);
     }
     /// How many entities have all of these components (and pass these
@@ -3343,6 +3363,19 @@ public:
     PonkoInputQueue* raw() const noexcept { return raw_; }
 };
 
+/// What an in-memory link does to datagrams (PonkoLoopbackLink, Rust `LoopbackLink`): `loss` (a share, 0
+/// to 1), `delay` and `jitter` (seconds) and `seed`. Start from loopback_link_defaults(), a perfect link; the
+/// same seed loses and delays the same datagrams on every run. For net_messages::loopback.
+using loopback_link = PonkoLoopbackLink;
+/// A perfect loopback_link (nothing lost or delayed), its header set: change the fields you need.
+inline loopback_link loopback_link_defaults() {
+    loopback_link l{};
+    l.struct_size = sizeof(loopback_link);
+    l.version = PONKO_LOOPBACK_LINK_VERSION;
+    detail::check(ponko_loopback_link_defaults(&l));
+    return l;
+}
+
 /// A message endpoint the game owns (Rust `NetMessages`): poll it every frame, send bytes on a reliable or
 /// unreliable lane, read events. The host is peer 0. Plain UDP is not authenticated or encrypted; see
 /// steam_host for Steam relays. Move-only; the destructor disconnects and frees it.
@@ -3373,6 +3406,20 @@ public:
     static std::vector<net_messages> loopback(std::size_t players) {
         std::vector<PonkoNetMessages*> raw(players);
         detail::check(ponko_net_messages_loopback(players, raw.data()));
+        std::vector<net_messages> out;
+        for (auto* m : raw) out.push_back(net_messages(m));
+        return out;
+    }
+    /// `players` endpoints joined in memory over a link that loses, delays and reorders datagrams as
+    /// `link` says, the same ones on every run: a game's netcode on a bad network, in a test. Step them
+    /// together with poll_elapsed (or game_clock) so the delays repeat exactly.
+    ///
+    ///     auto link = ponko::loopback_link_defaults();
+    ///     link.loss = 0.1; link.jitter = 0.05; link.seed = 3;
+    ///     auto nets = ponko::net_messages::loopback(2, link);
+    static std::vector<net_messages> loopback(std::size_t players, const loopback_link& link) {
+        std::vector<PonkoNetMessages*> raw(players);
+        detail::check(ponko_net_messages_loopback_link(players, &link, raw.data()));
         std::vector<net_messages> out;
         for (auto* m : raw) out.push_back(net_messages(m));
         return out;
@@ -3435,6 +3482,9 @@ public:
     void send_to_all(lane l, const std::string& text) { send_to_all(l, text.data(), text.size()); }
     /// Sends what's queued and receives what arrived; then read next_event until empty.
     void poll() { detail::check(ponko_net_messages_poll(raw_)); }
+    /// poll() on a clock of your own: protocol time moves on by `seconds`, not by the wall clock. For tests
+    /// that step loopback endpoints frame by frame, and replays; don't mix it with poll() on one endpoint.
+    void poll_elapsed(double seconds) { detail::check(ponko_net_messages_poll_elapsed(raw_, seconds)); }
     /// The oldest event, or std::nullopt.
     std::optional<message_event> next_event() {
         PonkoMessageEvent e{};
@@ -11671,10 +11721,18 @@ inline std::optional<vec3> get_vec3(ctx& c, entity e, std::uint64_t key) {
     return v;
 }
 
-// World brains inside loops: ai::query and ai::each visit each entity's
-// brain and blackboard with its other components, so a system reads and
-// writes them where it visits the entity (C `ponko_chunk_ai_brain`, Rust
-// `Query<(&mut Brain, &mut Blackboard, ...)>`).
+// World brains inside loops: world_view::each and each_par take ai::brain_row
+// and ai::blackboard_row parameters (by value) beside the components, so a
+// system reads and writes them where it visits the entity (C
+// `ponko_chunk_ai_brain`, Rust `Query<(&mut Brain, &mut Blackboard, ...)>`):
+//
+//     c.world().each([&](ponko::entity e, ai::brain_row brain, ai::blackboard_row board, const position& p) {
+//         board.set_vec2(at, p.value);
+//         if (brain.doing(chase)) ...
+//     });
+//
+// ai::query hands over whole chunks with their rows; ai::each is the older
+// spelling of the typed each.
 
 /// The world brain of one query row (C `PonkoAiBrain`): what to do. Valid
 /// during the query callback.
@@ -11683,6 +11741,12 @@ class brain_row {
 public:
     /// Wraps a C row; ai::query makes these for you.
     explicit brain_row(PonkoAiBrain* raw) noexcept : raw_(raw) {}
+    /// The brain in row `row` of a chunk's brain column `column`; throws std::out_of_range past the end.
+    static brain_row at(const PonkoChunk* chunk, std::size_t column, std::size_t row) {
+        PonkoAiBrain* b = ponko_chunk_ai_brain(chunk, column, row);
+        if (!b) throw std::out_of_range("brain row");
+        return brain_row(b);
+    }
     /// The key id of its `index`th action in tree order, 0 past the last.
     std::uint64_t action(std::size_t index = 0) const {
         std::uint64_t k = 0;
@@ -11719,6 +11783,13 @@ public:
     void finish(std::uint64_t action_key, status result) {
         detail::check(ponko_ai_brain_finish(raw_, action_key, static_cast<PonkoAiStatus>(result)));
     }
+    /// Thinks at the next ai::think, whatever its period: something it should react to happened (a
+    /// noise, a hit). Fine from ai::query_par and each_par, each row on its chunk's thread.
+    void wake() { detail::check(ponko_ai_brain_wake(raw_)); }
+    /// Hears signal `key` (an ai::key) now: a `wait_for` node waiting for it succeeds at its next think,
+    /// which comes at the next ai::think. Unlike ai::signal it reaches this brain at once, without an
+    /// event, so it works from the parallel loops too.
+    void signal(std::uint64_t key) { detail::check(ponko_ai_brain_signal(raw_, key)); }
     /// The C row.
     PonkoAiBrain* raw() const noexcept { return raw_; }
 };
@@ -11737,6 +11808,13 @@ class blackboard_row {
 public:
     /// Wraps a C row; ai::query makes these for you.
     explicit blackboard_row(PonkoAiBlackboard* raw) noexcept : raw_(raw) {}
+    /// The blackboard in row `row` of a chunk's blackboard column `column`; throws std::out_of_range past the
+    /// end.
+    static blackboard_row at(const PonkoChunk* chunk, std::size_t column, std::size_t row) {
+        PonkoAiBlackboard* b = ponko_chunk_ai_blackboard(chunk, column, row);
+        if (!b) throw std::out_of_range("blackboard row");
+        return blackboard_row(b);
+    }
     /// Sets an entry. A key id must come from ai::key.
     ///@{
     void set_num(std::uint64_t key, float v) { detail::check(ponko_ai_blackboard_set_num(raw_, key, v)); }
@@ -11765,17 +11843,9 @@ public:
     /// The chunk's rows, whose brain column is `column` (the blackboard's the next).
     rows(const PonkoChunk* raw, std::size_t column) noexcept : raw_(raw), column_(column) {}
     /// The brain of row `i`.
-    brain_row brain(std::size_t i) const {
-        PonkoAiBrain* b = ponko_chunk_ai_brain(raw_, column_, i);
-        if (!b) throw std::out_of_range("brain row");
-        return brain_row(b);
-    }
+    brain_row brain(std::size_t i) const { return brain_row::at(raw_, column_, i); }
     /// The blackboard of row `i`.
-    blackboard_row blackboard(std::size_t i) const {
-        PonkoAiBlackboard* b = ponko_chunk_ai_blackboard(raw_, column_ + 1, i);
-        if (!b) throw std::out_of_range("blackboard row");
-        return blackboard_row(b);
-    }
+    blackboard_row blackboard(std::size_t i) const { return blackboard_row::at(raw_, column_ + 1, i); }
 };
 
 } // namespace ai
@@ -11821,7 +11891,9 @@ template<class... Ts, class F> void query(ctx& c, F&& fn) { detail::brain_query<
 /// touch only its own chunk's rows.
 template<class... Ts, class F> void query_par(ctx& c, F&& fn) { detail::brain_query<Ts...>(c, true, fn); }
 /// Calls `fn(entity, ai::brain_row, ai::blackboard_row, Ts&...)` for every
-/// entity with a world brain and all of `Ts`.
+/// entity with a world brain and all of `Ts`. world_view::each does the same
+/// with the rows among its parameters, in any order, with filters and
+/// each_par: prefer it.
 template<class... Ts, class F> void each(ctx& c, F&& fn) {
     query<Ts...>(c, [&fn](chunk<Ts...> ch, rows r) {
         const auto cols = ch.columns();
