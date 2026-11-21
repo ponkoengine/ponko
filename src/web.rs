@@ -8,10 +8,10 @@
 mod failure;
 pub(crate) mod ime;
 
-pub use failure::{Failure, FailureKind, on_failure};
-pub(crate) use failure::{context_lost as context_lost_while_playing, report as report_failure};
 #[cfg(target_feature = "atomics")]
 pub(crate) use failure::thread_stopped;
+pub use failure::{Failure, FailureKind, on_failure};
+pub(crate) use failure::{context_lost as context_lost_while_playing, report as report_failure};
 
 use std::cell::RefCell;
 

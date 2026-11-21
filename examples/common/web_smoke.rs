@@ -75,7 +75,10 @@ impl Smoke {
             ctx.time.pause();
         }
         if (self.case == "runtime-panic" || self.case == "failure-text") && ticks >= STALL_AFTER {
-            panic!("{}: panicking while running, as ?smoke_case={} asked", self.fixture, self.case);
+            panic!(
+                "{}: panicking while running, as ?smoke_case={} asked",
+                self.fixture, self.case
+            );
         }
         if ctx.input.mouse_pressed(MouseButton::Left) {
             self.clicks += 1;
