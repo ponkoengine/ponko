@@ -285,7 +285,7 @@ impl Renderer3D {
 
     /// The same for the main view's particles, ribbons, lines and text,
     /// drawn with the see-through models.
-    #[cfg(any(test, all(not(target_arch = "wasm32"), feature = "bench-internals")))]
+    #[cfg(test)]
     pub(crate) fn take_particle_changes(&self) -> StateChanges {
         self.particle_counters.take()
     }
