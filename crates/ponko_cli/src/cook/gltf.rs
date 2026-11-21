@@ -17,8 +17,9 @@
 //! `extras` of every object are written back as they were read. An
 //! accessor that something else also uses (another primitive, an
 //! animation) keeps its vertex order. A file with compressed geometry
-//! (meshopt, Draco) retains its geometry and buffer layout while eligible
-//! embedded images are compressed. An unknown extension prevents rewriting
+//! (meshopt, Draco) retains its geometry byte for byte while eligible
+//! embedded images are compressed; the replaced images' bytes are dropped
+//! from the buffers the file holds itself. An unknown extension prevents rewriting
 //! the file, since its data may point to objects this module would change.
 
 #![deny(missing_docs)]
@@ -372,8 +373,11 @@ pub fn cook(
         if report.images == 0 {
             return Ok(Err(kept_reason(ext)));
         }
-        let out = kept::write(doc, count, binary, has_bin, &image_views).map_err(fail)?;
-        let note = format!("{ext} geometry kept, {} images compressed", report.images);
+        let (out, dropped) = kept::write(doc, count, binary, has_bin, &image_views).map_err(fail)?;
+        let mut note = format!("{ext} geometry kept, {} images compressed", report.images);
+        if dropped > 0 {
+            note.push_str(&format!(", {dropped} bytes of replaced images dropped"));
+        }
         return Ok(Ok((out, note, Some((report.before, report.after)))));
     }
 

@@ -803,4 +803,12 @@ fn the_kept_geometry_fixture_is_what_cook_makes_of_its_source() {
     assert_eq!(now_json["bufferViews"], then_json["bufferViews"]);
     assert_eq!(now_json["accessors"], gltf_json(&source[0].1).unwrap()["accessors"]);
     assert_eq!(now.len(), then.len());
+    // The replaced PNGs are dropped, not only zeroed: the cooked file is
+    // smaller on disk than its source (6,128 bytes against 7,116).
+    assert!(
+        now.len() < source[0].1.len(),
+        "{} -> {} bytes",
+        source[0].1.len(),
+        now.len()
+    );
 }
