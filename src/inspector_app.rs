@@ -1567,6 +1567,70 @@ mod tests {
         }
 
         #[test]
+        fn a_gltf_scene_keeps_a_node_moved_in_the_view_through_a_reexport_and_a_reopen() {
+            let yard = |hp: f32, wall_x: f32| {
+                crate::three::cube_gltf(&serde_json::json!([
+                    { "name": "Crate", "mesh": 0, "extras": { "ponko:Hp": hp } },
+                    { "name": "Wall", "mesh": 0, "translation": [wall_x, 0.0, -3.0] },
+                ]))
+            };
+            let name = format!("ponko-test-app-yard-{}.gltf", std::process::id());
+            let file = TempAsset {
+                file: std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join(&name),
+                name,
+            };
+            std::fs::write(&file.file, yard(3.0, -3.0)).unwrap();
+            let scene = TempAsset::new("yard-scene");
+            let (egui, mut p, mut ctx, e) = editor3d();
+            ctx.set_headless(true);
+            ctx.world.despawn(e);
+            // The game's setup spawns its level.
+            let root = ctx.spawn_prefab(&file.name, T3::default()).unwrap();
+            let node = |ctx: &Ctx, root: Entity, path: &str| {
+                ctx.world.get::<crate::d3::GltfRoot>(root).unwrap().entity(path).unwrap()
+            };
+            let at = |ctx: &Ctx, e: Entity| ctx.world.get::<T3>(e).unwrap().position;
+            let (crate_e, wall) = (node(&ctx, root, "Crate"), node(&ctx, root, "Wall"));
+            select_it(&egui, &mut p, &mut ctx, crate_e);
+            let grab = on_axis(&ctx, Mode::Translate, 0, 0.7);
+            let to = screen(&ctx, vec3(along_x(&ctx, grab) + 2.2, 0.0, 0.0));
+            mouse_drag(&egui, &mut p, &mut ctx, grab, to, 5);
+            assert!((at(&ctx, crate_e) - vec3(2.0, 0.0, 0.0)).length() < 1e-4, "moved by the gizmo");
+            ctx.edit(|ed, ctx| ed.set(ctx, crate_e, "Hp", serde_json::json!(8.0))).unwrap();
+
+            // Exported again: the crate keeps its place and Hp, the wall
+            // goes where the file puts it now.
+            std::fs::write(&file.file, yard(4.0, -5.0)).unwrap();
+            ctx.reload_gltf(&file.name).unwrap();
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            assert_eq!(node(&ctx, root, "Crate"), crate_e);
+            assert!((at(&ctx, crate_e) - vec3(2.0, 0.0, 0.0)).length() < 1e-4, "{}", at(&ctx, crate_e));
+            assert_eq!(ctx.world.get_json(crate_e, "Hp").unwrap(), serde_json::json!(8.0));
+            assert!((at(&ctx, wall) - vec3(-5.0, 0.0, -3.0)).length() < 1e-4, "{}", at(&ctx, wall));
+
+            // Saved and opened again: the scene is spawned again, with them.
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene)).unwrap();
+            p.open_file(&mut ctx, &scene.name);
+            assert!(p.error.is_none(), "{:?}", p.error);
+            frame(&egui, &mut p, &mut ctx, vec![]);
+            let roots: Vec<Entity> = ctx
+                .world
+                .query::<(Entity, &crate::d3::GltfRoot)>()
+                .iter()
+                .map(|(e, _)| e)
+                .collect();
+            assert_eq!(roots.len(), 1, "the scene once");
+            let crate_e = node(&ctx, roots[0], "Crate");
+            assert!((at(&ctx, crate_e) - vec3(2.0, 0.0, 0.0)).length() < 1e-4, "{}", at(&ctx, crate_e));
+            assert_eq!(ctx.world.get_json(crate_e, "Hp").unwrap(), serde_json::json!(8.0));
+            // And a click where it was moved to picks it.
+            let there = screen(&ctx, vec3(2.0, 0.0, 0.0));
+            frame(&egui, &mut p, &mut ctx, vec![moved(there), button(there, true)]);
+            frame(&egui, &mut p, &mut ctx, vec![button(there, false)]);
+            assert_eq!(p.selected, Some(crate_e));
+        }
+
+        #[test]
         fn a_3d_scene_saved_from_the_editor_opens_again_as_it_was_saved() {
             let file = TempAsset::new("scene-3d");
             let (egui, mut p, mut ctx, e) = editor3d();

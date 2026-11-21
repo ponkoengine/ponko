@@ -24,6 +24,10 @@ use crate::error::{Error, ErrorKind};
 use crate::hot_reload::Asset;
 use crate::reflect::{JsonMap, NotSaved, WorldReflect};
 
+mod overrides;
+#[cfg(test)]
+pub(crate) use overrides::cube_gltf;
+
 /// How [`GltfRoot::spawn`] spawns a file.
 ///
 /// ```
@@ -90,6 +94,10 @@ pub struct GltfRoot {
     /// the meshes are.
     #[cfg(feature = "physics3d")]
     shapes: Vec<crate::d3::CollisionMesh>,
+    /// Each node's reflected components as the file made them, by node
+    /// path, for its overrides (see `overrides.rs`): kept while editing,
+    /// or when the scene's record has overrides.
+    baseline: Option<std::sync::Arc<BTreeMap<String, JsonMap>>>,
 }
 
 impl GltfRoot {
@@ -282,6 +290,10 @@ struct SavedScene {
     /// Each prefab node's instance, by node path: the entity (dead once the
     /// game despawned it), or none when the node was left out.
     instances: BTreeMap<String, SavedInstance>,
+    /// How its nodes differ from the file, by node path: put back on
+    /// every spawn and reload of the file (see `overrides.rs`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    overrides: BTreeMap<String, overrides::NodeOverrides>,
 }
 
 /// A prefab node's instance in [`SavedScene`].
@@ -701,6 +713,7 @@ impl Ctx {
                 meshes: Vec::new(),
                 #[cfg(feature = "physics3d")]
                 shapes: Vec::new(),
+                baseline: None,
             },
             NotSaved,
         ));
@@ -748,6 +761,8 @@ impl Ctx {
     /// Exports of a spawned file again (hot reload): updates every scene
     /// spawned from `path`. On an error the old scenes stay.
     pub(crate) fn reload_gltf(&mut self, path: &str) -> Result<(), String> {
+        // What was changed in the scenes since they were spawned is kept.
+        self.record_gltf_overrides(Some(path));
         let roots: Vec<Entity> = self
             .world
             .query::<(Entity, &GltfRoot)>()
@@ -887,6 +902,7 @@ impl Ctx {
             at,
             root: Some(root),
             instances: BTreeMap::new(),
+            overrides: BTreeMap::new(),
         });
         if unlinked {
             eprintln!(
@@ -1215,6 +1231,7 @@ impl Ctx {
         // What the scene held before and no scene holds now (a reload's
         // old shapes; its old meshes go with the file's old share).
         self.release_gltf(path, Held::of(&old), None);
+        self.reapply_gltf_overrides(root);
         Ok(())
     }
 

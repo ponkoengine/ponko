@@ -144,6 +144,8 @@ pub use effect::{Effect, ScreenEffect, TargetEffect};
 pub use gltf_ext::{ModelCamera, ModelLight, ModelLightKind, ModelProjection};
 pub use gltf_props::{NodeBody, NodeCollider, NodeProperties, gltf_properties_schema};
 pub use gltf_scene::{GltfNode, GltfOptions, GltfRoot, GltfScene, GltfSceneNode, SpawnPoint};
+#[cfg(test)]
+pub(crate) use gltf_scene::cube_gltf;
 pub use mesh::{MeshData, MorphFrame, MorphTarget};
 pub use post::{AmbientOcclusion, AntiAliasing, DepthOfField, Post, PostVolume, SplitToning, Tonemap};
 pub(crate) use post::{MAX_RENDER_SCALE, MIN_RENDER_SCALE};

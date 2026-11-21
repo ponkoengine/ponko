@@ -132,6 +132,10 @@ impl Ctx {
     /// named the old world's entities.
     pub(crate) fn edit<R>(&mut self, f: impl FnOnce(&mut Editor, &mut Ctx) -> R) -> R {
         let mut editor = std::mem::take(&mut self.editor);
+        // glTF scenes keep what their files made from now on, so how they
+        // are edited is kept as their overrides.
+        #[cfg(feature = "3d")]
+        self.track_gltf_overrides();
         if editor.loads != self.scene_loads {
             // Something else loaded a scene: that file is the document now.
             editor.forget_history();
