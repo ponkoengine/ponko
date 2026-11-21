@@ -30,6 +30,7 @@
 mod access;
 mod actions;
 mod ai;
+mod ai_columns;
 mod ai_world;
 mod animator;
 mod asset_groups;
@@ -168,6 +169,7 @@ mod video;
 pub use access::*;
 pub use actions::*;
 pub use ai::*;
+pub use ai_columns::*;
 pub use ai_world::*;
 pub use animator::*;
 pub use component_hooks::*;
@@ -1324,12 +1326,20 @@ pub(crate) fn resolve(w: &World, input: &[u32]) -> Result<([ComponentId; 32], [u
         if input[..i].contains(&raw) {
             return Err(invalid("duplicate query component id"));
         }
-        let (id, kind) = component(w, raw)?;
-        if !kind.is_plain() {
-            return Err(invalid(
-                "sprites and physics bodies/colliders can't be query columns: use ponko_get/ponko_set",
-            ));
-        }
+        // Brains and blackboards are columns C reads only through the
+        // `ponko_ai_brain_*` and `ponko_ai_blackboard_*` calls.
+        let id = match w.component_at(raw as usize) {
+            Some(id) if ai_columns::is_ai_column(w, id) => id,
+            _ => {
+                let (id, kind) = component(w, raw)?;
+                if !kind.is_plain() {
+                    return Err(invalid(
+                        "sprites and physics bodies/colliders can't be query columns: use ponko_get/ponko_set",
+                    ));
+                }
+                id
+            }
+        };
         resolved[i] = id;
         sizes[i] = w.component_info(id).layout().size();
     }
