@@ -827,6 +827,39 @@ mod tests {
         };
         assert!(!device.features().contains(wgpu::Features::TIMESTAMP_QUERY));
         assert!(GpuTimer::new(&device, &queue).is_none());
+        assert_eq!(GpuTimer::why_none(&device), crate::perf::GpuUntimed::NoTimestamps);
+    }
+
+    /// A timer says why it has no usable time: not ready before the first
+    /// readback and while every readback slot is in flight, off when set
+    /// to time no frame. Offscreen, no window; skips without a GPU or
+    /// without timestamp queries.
+    #[cfg(feature = "3d")]
+    #[test]
+    fn a_timer_says_why_the_latest_frame_has_no_gpu_time() {
+        use crate::perf::GpuUntimed;
+        let Some((device, queue)) = device(wgpu::Features::TIMESTAMP_QUERY) else {
+            return;
+        };
+        let Some(mut timer) = GpuTimer::new(&device, &queue) else {
+            crate::render::render_test_support::skip("needs timestamp queries");
+            return;
+        };
+        assert_eq!(timer.untimed(), Some(GpuUntimed::NotReady), "nothing came back yet");
+        timer.frames_read = 1;
+        assert_eq!(timer.untimed(), None);
+        // Every slot in flight: the frame due to be timed can't be.
+        for slot in &timer.slots {
+            slot.state.store(RUNNING, Ordering::Release);
+        }
+        timer.begin_frame();
+        assert!(timer.current.is_none());
+        assert_eq!(timer.untimed(), Some(GpuUntimed::NotReady), "starved");
+        for slot in &timer.slots {
+            slot.state.store(FREE, Ordering::Release);
+        }
+        timer.set_every(0);
+        assert_eq!(timer.untimed(), Some(GpuUntimed::Off));
     }
 
     #[cfg(feature = "3d")]
@@ -1152,6 +1185,10 @@ mod tests {
                 devices.iter().any(|d| d.3.is_none()),
                 "some devices go without a frame timer"
             );
+            // And say why: the budget, not a lack of timestamps.
+            for d in devices.iter().filter(|d| d.3.is_none()) {
+                assert_eq!(GpuTimer::why_none(&d.0), crate::perf::GpuUntimed::QuerySetBudget);
+            }
         } else {
             assert_eq!(made, DEVICES * 2, "no limit is known on this backend");
         }

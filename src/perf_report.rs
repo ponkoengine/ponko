@@ -1659,6 +1659,35 @@ mod tests {
         assert!(r.to_string().contains("not timed"), "{r}");
     }
 
+    /// A frame with no usable GPU time gets a warning naming why; a timed
+    /// one gets none.
+    #[test]
+    fn a_frame_without_gpu_time_is_warned_about_with_its_reason() {
+        let mut r = PerfReport::default();
+        warn_gpu_untimed(&mut r, None);
+        assert!(r.warnings.is_empty());
+        warn_gpu_untimed(&mut r, Some(GpuUntimed::QuerySetBudget));
+        let w = &r.warnings[0];
+        assert_eq!(w.kind, WarningKind::GpuNotTimed);
+        assert!(w.message.contains("query_set_budget"), "{}", w.message);
+        assert!(w.message.contains("timestamp query set"), "{}", w.message);
+        // Every reason has its own name and words.
+        let all = [
+            GpuUntimed::NoGpu,
+            GpuUntimed::NoTimestamps,
+            GpuUntimed::QuerySetBudget,
+            GpuUntimed::Off,
+            GpuUntimed::NotReady,
+            GpuUntimed::DeviceLost,
+        ];
+        let names: std::collections::BTreeSet<_> = all.iter().map(|w| w.name()).collect();
+        let messages: std::collections::BTreeSet<_> = all.iter().map(|w| w.message()).collect();
+        assert_eq!((names.len(), messages.len()), (all.len(), all.len()));
+        for why in all {
+            assert_eq!(serde_json::to_value(why).unwrap(), why.name());
+        }
+    }
+
     #[test]
     fn quiet_games_get_no_warnings() {
         let mut r = collector_with(&[(2.0, 0.5, 0.5); 60]).report();
