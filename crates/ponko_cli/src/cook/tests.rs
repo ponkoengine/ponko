@@ -713,3 +713,94 @@ fn an_aseprite_file_is_cooked_into_its_export_replacing_an_old_one() {
     assert_eq!(names, ["art/hero.aseprite", "art/hero.json", "art/hero.png"]);
     assert_eq!(file(&kept, "art/hero.json"), b"{}");
 }
+
+#[cfg(feature = "aseprite")]
+#[test]
+fn aseprite_conversion_is_cached_by_source_content_and_split_mode() {
+    let cache = temp("aseprite-cache");
+    let settings = settings(Some(cache.clone()));
+    let mut hero = super::aseprite::tests::hero();
+    let run = |bytes: &[u8], config: &Config| {
+        cook_files(vec![("art/hero.aseprite".into(), bytes.to_vec())], config, &settings).unwrap()
+    };
+    let default = Config::default();
+    let first = run(&hero, &default);
+    let warm = run(&hero, &default);
+    assert_eq!(warm.counts(), (0, 1), "{}", warm.report());
+    assert_eq!(first.files, warm.files);
+    let split = Config::parse(r#"{"assets":{"art/hero.aseprite":{"layers":true}}}"#).unwrap();
+    let split_first = run(&hero, &split);
+    assert_ne!(split_first.files, first.files);
+    assert_eq!(run(&hero, &split).counts(), (0, 1));
+    hero[136..138].copy_from_slice(&42u16.to_le_bytes());
+    let edited = run(&hero, &default);
+    assert_eq!(edited.counts(), (1, 0));
+    assert_ne!(edited.files, first.files);
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[cfg(all(feature = "meshes", feature = "textures"))]
+#[test]
+fn image_only_cooking_keeps_external_geometry_buffers_through_cache_hits() {
+    let cache = temp("kept-model");
+    let settings = settings(Some(cache.clone()));
+    let (mut json, original) = gltf::tests::textured(2, 16);
+    let ext = "EXT_meshopt_compression";
+    json["extensionsUsed"] = serde_json::json!([ext]);
+    json["buffers"][0]["uri"] = serde_json::json!("geometry.bin");
+    let files = vec![
+        ("models/model.gltf".into(), serde_json::to_vec(&json).unwrap()),
+        ("models/geometry.bin".into(), original.clone()),
+    ];
+    for expected in [Outcome::Cooked, Outcome::Cached] {
+        let cooked = cook_files(files.clone(), &Config::default(), &settings).unwrap();
+        assert_eq!(outcome(&cooked, "models/model.gltf"), expected);
+        assert_eq!(outcome(&cooked, "models/geometry.bin"), Outcome::Kept(None));
+        let output = cooked
+            .files
+            .iter()
+            .find(|(name, _)| name == "models/model.gltf")
+            .unwrap();
+        let output = gltf_json(&output.1).unwrap();
+        assert_eq!(output["buffers"][0], json["buffers"][0]);
+        assert_eq!(output["accessors"], json["accessors"]);
+        assert!(output["buffers"][1]["uri"].as_str().unwrap().starts_with("data:"));
+        assert_eq!(output["images"][0]["mimeType"], "image/ktx2");
+        assert_eq!(cooked.files[0], ("models/geometry.bin".into(), original.clone()));
+    }
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+/// The kept-geometry fixture: `tests/fixtures/cook-kept/source/packed.glb`,
+/// a model with meshopt-compressed geometry and its own images, and what
+/// `ponko cook` makes of it in `cooked/`. The engine's offscreen GPU test
+/// (`src/render/model_textures_render_test.rs`) decompresses both and
+/// checks the cooked images stay GPU blocks. `PONKO_UPDATE_COOK_FIXTURE=1`
+/// writes them again.
+#[cfg(all(feature = "textures", feature = "meshes"))]
+#[test]
+fn the_kept_geometry_fixture_is_what_cook_makes_of_its_source() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/cook-kept");
+    if std::env::var_os("PONKO_UPDATE_COOK_FIXTURE").is_some() {
+        let (json, bin) = gltf::tests::meshopt_textured(32);
+        let source = vec![("packed.glb".to_string(), gltf::tests::glb(&json, &bin))];
+        let cooked = cook_files(source.clone(), &Config::default(), &settings(None)).unwrap();
+        for (folder, files) in [("source", &source), ("cooked", &cooked.files)] {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            for (name, bytes) in files {
+                std::fs::write(root.join(folder).join(name), bytes).unwrap();
+            }
+        }
+    }
+    let source = read_folder(&root.join("source"), None).unwrap();
+    let committed = read_folder(&root.join("cooked"), None).unwrap();
+    let cooked = cook_files(source.clone(), &Config::default(), &settings(None)).unwrap();
+    assert_eq!(outcome(&cooked, "packed.glb"), Outcome::Cooked, "{}", cooked.report());
+    let (now, then) = (&cooked.files[0].1, &committed[0].1);
+    let (now_json, then_json) = (gltf_json(now).unwrap(), gltf_json(then).unwrap());
+    // Texture encoders use floats, so another CPU may round a last bit
+    // differently: the same layout and geometry.
+    assert_eq!(now_json["bufferViews"], then_json["bufferViews"]);
+    assert_eq!(now_json["accessors"], gltf_json(&source[0].1).unwrap()["accessors"]);
+    assert_eq!(now.len(), then.len());
+}

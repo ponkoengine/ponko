@@ -470,10 +470,15 @@ fn blackboard_and_brain_read_and_write_as_json() {
         bb,
         serde_json::json!({"alert": false, "health": 0.5, "home": [1.0, 2.0], "target": {"entity": target.to_bits()}})
     );
+    let mut brain = world.get_json(e, "Brain").unwrap();
+    // Its memory, for saves: the running nodes, by index.
+    let memory = brain.as_object_mut().unwrap().remove("memory").unwrap();
     assert_eq!(
-        world.get_json(e, "Brain").unwrap(),
+        brain,
         serde_json::json!({"tree": "ai/guard.json", "period": 2, "action": "patrol", "status": "running"})
     );
+    assert_eq!(memory["running"], 4);
+    assert_eq!(memory["thinks"], 1);
     world
         .set_json(e, "Blackboard", serde_json::json!({"alert": true, "health": 0.25}))
         .unwrap();
@@ -545,4 +550,664 @@ fn a_missing_tree_file_is_an_error_and_adds_nothing() {
         assert_eq!(error.kind(), ErrorKind::NotFound);
         assert!(ctx.world.get_resource::<BehaviorTrees>().is_none());
     });
+}
+
+// ---- subtrees ---------------------------------------------------------------
+
+#[test]
+fn a_subtree_runs_another_tree_with_its_blackboard_defaults() {
+    let mut trees = BehaviorTrees::default();
+    trees.insert(
+        "patrol",
+        BehaviorTree::from_json(r#"{"blackboard": {"legs": 4, "alert": true}, "root": {"do": "walk"}}"#).unwrap(),
+    );
+    trees.insert(
+        "guard",
+        BehaviorTree::from_json(
+            r#"{"blackboard": {"alert": false}, "root": {"selector": [
+                {"sequence": [{"check": "alert"}, {"do": "chase"}]},
+                {"subtree": "patrol"}
+            ]}}"#,
+        )
+        .unwrap(),
+    );
+    let guard = trees.get("guard").unwrap().clone();
+    assert_eq!(guard.subtrees(), ["patrol"]);
+    let (mut brain, mut bb) = (Brain::new("guard"), Blackboard::new());
+    assert_eq!(think(&mut brain, &guard, &mut bb, 0), Some("walk"));
+    // The subtree's defaults fill in, the outer tree's win.
+    assert_eq!(bb.num(Key::new("legs")), 4.0);
+    assert!(!bb.flag(ALERT));
+    let labels: Vec<_> = brain.trace().iter().map(|l| (l.depth, l.label)).collect();
+    assert!(
+        labels.contains(&(1, "subtree patrol")) && labels.contains(&(2, "do walk")),
+        "{labels:?}"
+    );
+}
+
+#[test]
+fn a_subtree_added_or_replaced_later_reaches_every_tree_that_runs_it() {
+    let mut trees = BehaviorTrees::default();
+    let t = |json: &str| BehaviorTree::from_json(json).unwrap();
+    trees.insert(
+        "guard",
+        t(r#"{"root": {"selector": [{"subtree": "fight"}, {"do": "idle"}]}}"#),
+    );
+    trees.insert("boss", t(r#"{"root": {"subtree": "guard"}}"#));
+    let (mut brain, mut bb) = (Brain::new("boss"), Blackboard::new());
+    // Not loaded yet: the subtree node fails, and the selector goes on.
+    let boss = trees.get("boss").unwrap().clone();
+    assert_eq!(think(&mut brain, &boss, &mut bb, 0), Some("idle"));
+    assert!(brain.trace().iter().any(|l| l.label == "subtree fight (not loaded)"));
+    trees.insert("fight", t(r#"{"root": {"do": "punch"}}"#));
+    let boss = trees.get("boss").unwrap().clone();
+    assert_eq!(boss.subtrees(), ["guard", "fight"]);
+    assert_eq!(think(&mut brain, &boss, &mut bb, 1), Some("punch"));
+    trees.insert("fight", t(r#"{"root": {"do": "kick"}}"#));
+    let boss = trees.get("boss").unwrap().clone();
+    assert_eq!(think(&mut brain, &boss, &mut bb, 2), Some("kick"));
+}
+
+#[test]
+fn a_subtree_cycle_is_an_error_with_both_names() {
+    let mut trees = BehaviorTrees::default();
+    let t = |json: &str| BehaviorTree::from_json(json).unwrap();
+    trees.insert("ai/a.json", t(r#"{"root": {"subtree": "ai/b.json"}}"#));
+    let error = trees
+        .try_insert(
+            "ai/b.json",
+            t(r#"{"root": {"sequence": [{"do": "x"}, {"subtree": "ai/a.json"}]}}"#),
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Invalid);
+    let message = error.to_string();
+    assert!(
+        message.contains("ai/a.json") && message.contains("ai/b.json"),
+        "{message}"
+    );
+    assert!(
+        message.contains("subtree cycle: ai/b.json -> ai/a.json -> ai/b.json"),
+        "{message}"
+    );
+    // Nothing changed.
+    assert!(trees.get("ai/b.json").is_none());
+    let error = trees
+        .try_insert("ai/c.json", t(r#"{"root": {"subtree": "ai/c.json"}}"#))
+        .unwrap_err();
+    assert!(error.to_string().contains("ai/c.json -> ai/c.json"), "{error}");
+}
+
+#[test]
+#[should_panic(expected = "subtree cycle: me -> me")]
+fn inserting_a_tree_that_runs_itself_panics_with_its_name() {
+    let mut trees = BehaviorTrees::default();
+    trees.insert("me", BehaviorTree::from_json(r#"{"root": {"subtree": "me"}}"#).unwrap());
+}
+
+#[test]
+fn loading_a_tree_file_loads_the_files_of_its_subtrees() {
+    Game::new("t", 1, 1).run_headless(0, |ctx| {
+        ctx.assets.add_source(
+            MemorySource::new("m")
+                .with(
+                    "ai/guard.json",
+                    r#"{"root": {"selector": [{"subtree": "ai/fight.json"}, {"do": "idle"}]}}"#,
+                )
+                .with(
+                    "ai/fight.json",
+                    r#"{"root": {"sequence": [{"check": "alert"}, {"subtree": "ai/punch.json"}]}}"#,
+                )
+                .with("ai/punch.json", r#"{"root": {"do": "punch"}}"#),
+        );
+        ctx.assets.load_behavior_tree(&mut ctx.world, "ai/guard.json");
+        let trees = ctx.world.resource::<BehaviorTrees>();
+        assert_eq!(trees.names(), ["ai/fight.json", "ai/guard.json", "ai/punch.json"]);
+        let guard = trees.get("ai/guard.json").unwrap().clone();
+        let (mut brain, mut bb) = (Brain::new("ai/guard.json"), Blackboard::new().with(ALERT, true));
+        assert_eq!(think(&mut brain, &guard, &mut bb, 0), Some("punch"));
+    });
+}
+
+#[test]
+fn a_subtree_cycle_between_files_is_an_error_with_both_names_and_adds_nothing() {
+    Game::new("t", 1, 1).run_headless(0, |ctx| {
+        ctx.assets.add_source(
+            MemorySource::new("m")
+                .with("ai/a.json", r#"{"root": {"subtree": "ai/b.json"}}"#)
+                .with("ai/b.json", r#"{"root": {"subtree": "ai/a.json"}}"#)
+                .with("ai/lost.json", r#"{"root": {"subtree": "ai/none.json"}}"#),
+        );
+        let error = ctx
+            .assets
+            .try_load_behavior_tree(&mut ctx.world, "ai/a.json")
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("ai/a.json -> ai/b.json -> ai/a.json"), "{message}");
+        assert!(ctx.world.get_resource::<BehaviorTrees>().is_none());
+        // A subtree file that doesn't exist is an error too.
+        let error = ctx
+            .assets
+            .try_load_behavior_tree(&mut ctx.world, "ai/lost.json")
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::NotFound, "{error}");
+    });
+}
+
+#[test]
+fn editing_a_subtree_file_reaches_the_trees_that_run_it() {
+    let dir = std::env::temp_dir().join(format!("ponko-ai-subtree-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (guard, fight) = (dir.join("guard.json"), dir.join("fight.json"));
+    let fight_name = fight.to_str().unwrap().to_owned();
+    std::fs::write(&fight, r#"{"root": {"do": "punch"}}"#).unwrap();
+    std::fs::write(&guard, format!(r#"{{"root": {{"subtree": {fight_name:?}}}}}"#)).unwrap();
+    let name = guard.to_str().unwrap().to_owned();
+    let edit = fight.clone();
+    #[derive(Default)]
+    struct Seen(Vec<Option<&'static str>>);
+    let mut world = Game::new("hot", 1, 1)
+        .hot_reload(true)
+        .sim_system(ai::think)
+        .sim_system(move |ctx: &mut Ctx| {
+            let action = ctx
+                .world
+                .query::<&Brain>()
+                .iter()
+                .next()
+                .and_then(|b| b.action().map(Key::name));
+            ctx.world.resource_mut::<Seen>().0.push(action);
+            if ctx.time.sim_tick() == 1 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                std::fs::write(&edit, r#"{"root": {"do": "kick"}}"#).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(400));
+            }
+        })
+        .run_headless(4, move |ctx| {
+            ctx.world.insert_resource(Seen::default());
+            ctx.assets.load_behavior_tree(&mut ctx.world, &name);
+            ctx.world.spawn((Brain::new(&name), Blackboard::new()));
+        });
+    let seen = world.remove_resource::<Seen>().unwrap().0;
+    assert_eq!(seen[0], Some("punch"));
+    assert_eq!(seen.last().copied().flatten(), Some("kick"), "{seen:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- parallel ---------------------------------------------------------------
+
+#[test]
+fn a_parallel_runs_an_action_while_its_other_children_watch() {
+    let t = tree(
+        r#"{"root": {"sequence": [
+            {"parallel": [{"do": "walk"}, {"wait": 0.05}], "success": "any"},
+            {"do": "rest"}
+        ]}}"#,
+    );
+    let (mut brain, mut bb) = (Brain::new("w"), Blackboard::new());
+    // 0.05 s at 60 ticks a second: three ticks.
+    assert_eq!(think(&mut brain, &t, &mut bb, 0), Some("walk"));
+    assert_eq!(think(&mut brain, &t, &mut bb, 1), Some("walk"));
+    assert!(!brain.started(), "the walk carries on");
+    assert_eq!(think(&mut brain, &t, &mut bb, 2), Some("walk"));
+    // The wait succeeded: the walk is stopped, the sequence goes on.
+    assert_eq!(think(&mut brain, &t, &mut bb, 3), Some("rest"));
+    let lines: Vec<_> = brain.trace().iter().map(|l| (l.label, l.status)).collect();
+    assert!(
+        lines.contains(&("parallel (success any, failure any)", Some(Status::Success))),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_parallel_stops_its_running_action_when_its_policy_decides() {
+    let t = tree(r#"{"root": {"parallel": [{"do": "aim"}, {"check": "alert"}], "failure": "any"}}"#);
+    let (mut brain, mut bb) = (Brain::new("w"), Blackboard::new().with(ALERT, true));
+    assert_eq!(think(&mut brain, &t, &mut bb, 0), Some("aim"));
+    bb.set(ALERT, false);
+    // The check fails: the parallel fails, and nothing runs.
+    assert_eq!(think(&mut brain, &t, &mut bb, 1), None);
+    bb.set(ALERT, true);
+    // Started over, the action is new again.
+    assert_eq!(think(&mut brain, &t, &mut bb, 2), Some("aim"));
+    assert!(brain.started());
+}
+
+#[test]
+fn a_parallel_counts_successes_and_failures_by_its_policy() {
+    // Two of three must succeed; it fails once two have failed.
+    let json = |a: bool, b: bool, c: bool| {
+        format!(
+            r#"{{"root": {{"parallel": [{{"check": "a", "is": {a}}}, {{"check": "b", "is": {b}}}, {{"check": "c", "is": {c}}}],
+                "success": 2, "failure": 2}}}}"#
+        )
+    };
+    let bb = Blackboard::new()
+        .with(Key::new("a"), true)
+        .with(Key::new("b"), true)
+        .with(Key::new("c"), true);
+    let result = |a, b, c| {
+        let t = tree(&json(a, b, c));
+        let mut brain = Brain::new("p");
+        brain.think(&t, &mut bb.clone(), 0, DT);
+        brain.trace()[0].status
+    };
+    assert_eq!(result(true, true, false), Some(Status::Success));
+    assert_eq!(result(true, false, false), Some(Status::Failure));
+    assert_eq!(result(false, true, true), Some(Status::Success));
+    // Finished children keep their result while others run.
+    let t = tree(r#"{"root": {"parallel": [{"wait": 0.05}, {"set": "x", "to": 1}], "success": "all"}}"#);
+    let (mut brain, mut bb) = (Brain::new("p"), Blackboard::new());
+    brain.think(&t, &mut bb, 0, DT);
+    assert_eq!(brain.trace()[0].status, Some(Status::Running));
+    bb.remove(Key::new("x"));
+    brain.think(&t, &mut bb, 3, DT);
+    assert_eq!(brain.trace()[0].status, Some(Status::Success));
+    assert!(!bb.contains(Key::new("x")), "the finished set didn't run again");
+}
+
+#[test]
+fn bad_parallel_nodes_name_the_node_and_the_problem() {
+    let error = |json: &str| BehaviorTree::from_json(json).unwrap_err().to_string();
+    let e = error(r#"{"root": {"parallel": [{"do": "a"}, {"sequence": [{"do": "b"}]}]}}"#);
+    assert!(
+        e.contains("root/parallel: children [0] and [1] both have \"do\" nodes"),
+        "{e}"
+    );
+    let e = error(r#"{"root": {"parallel": [{"do": "a"}], "success": 2}}"#);
+    assert!(e.contains("\"success\" counts children: from 1 to 1"), "{e}");
+    let e = error(r#"{"root": {"parallel": [{"do": "a"}], "failure": "some"}}"#);
+    assert!(e.contains("\"failure\" is \"all\", \"any\" or a number"), "{e}");
+    let e = error(r#"{"root": {"chance": 2}}"#);
+    assert!(e.contains("root/chance: takes a probability"), "{e}");
+    // A `do` node may still have parameters named like the newer kinds.
+    let t = tree(r#"{"root": {"do": "attack", "chance": 0.5, "random": true}}"#);
+    let (mut brain, mut bb) = (Brain::new("x"), Blackboard::new());
+    brain.think(&t, &mut bb, 0, DT);
+    assert_eq!(brain.param_num(Key::new("chance")), Some(0.5));
+}
+
+// ---- random and chance ------------------------------------------------------
+
+/// What `n` brains, seeded 0..n, choose with a `random` node.
+fn random_choices(seed_base: u64, n: u64) -> Vec<&'static str> {
+    let t = tree(r#"{"root": {"random": [{"do": "a"}, {"do": "b"}, {"do": "c"}]}}"#);
+    (0..n)
+        .map(|i| {
+            let mut brain = Brain::new("r").with_seed(seed_base + i);
+            think(&mut brain, &t, &mut Blackboard::new(), 0).unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn random_and_chance_draw_from_the_seed() {
+    let first = random_choices(0, 60);
+    assert_eq!(first, random_choices(0, 60), "same seeds, same choices");
+    assert_ne!(first, random_choices(1000, 60), "other seeds, other choices");
+    for action in ["a", "b", "c"] {
+        assert!(first.contains(&action), "every child gets picked: {first:?}");
+    }
+    // A running child carries on; it isn't drawn again.
+    let t = tree(r#"{"root": {"random": [{"do": "a"}, {"do": "b"}, {"do": "c"}]}}"#);
+    let (mut brain, mut bb) = (Brain::new("r"), Blackboard::new());
+    let picked = think(&mut brain, &t, &mut bb, 0);
+    for tick in 1..20 {
+        assert_eq!(think(&mut brain, &t, &mut bb, tick), picked);
+    }
+    // A failed child: the others are tried in the same think.
+    let t = tree(r#"{"root": {"random": [{"check": "nope"}, {"check": "nope"}, {"do": "c"}]}}"#);
+    for seed in 0..10 {
+        let mut brain = Brain::new("r").with_seed(seed);
+        assert_eq!(think(&mut brain, &t, &mut Blackboard::new(), 0), Some("c"));
+    }
+    let t = tree(r#"{"root": {"selector": [{"sequence": [{"chance": 0.25}, {"do": "taunt"}]}, {"do": "wait"}]}}"#);
+    let taunts = (0..400)
+        .filter(|&seed| {
+            let mut brain = Brain::new("c").with_seed(seed);
+            think(&mut brain, &t, &mut Blackboard::new(), 0) == Some("taunt")
+        })
+        .count();
+    assert!((60..140).contains(&taunts), "about a quarter: {taunts} of 400");
+}
+
+// ---- signals ----------------------------------------------------------------
+
+#[test]
+fn wait_for_ends_when_the_brain_hears_its_signal() {
+    let t = tree(
+        r#"{"root": {"sequence": [
+            {"wait_for": "noise", "store": "heard_at"},
+            {"do": "look"}
+        ]}}"#,
+    );
+    assert_eq!(t.signals(), [Key::new("noise")]);
+    let (mut brain, mut bb) = (Brain::new("g"), Blackboard::new());
+    for tick in 0..5 {
+        assert_eq!(think(&mut brain, &t, &mut bb, tick), None);
+        assert_eq!(brain.trace()[1].status, Some(Status::Running));
+    }
+    // Another signal doesn't end it.
+    brain.signal(Key::new("other"));
+    assert_eq!(think(&mut brain, &t, &mut bb, 5), None);
+    brain.signal_with(Key::new("noise"), vec2(3.0, 4.0));
+    assert_eq!(think(&mut brain, &t, &mut bb, 6), Some("look"));
+    assert_eq!(bb.vec2(Key::new("heard_at")), Some(vec2(3.0, 4.0)));
+    // Heard once: forgotten after that think.
+    brain.succeed();
+    assert_eq!(think(&mut brain, &t, &mut bb, 7), None);
+}
+
+#[test]
+fn wait_for_with_a_timeout_fails_when_nothing_comes() {
+    let t = tree(
+        r#"{"root": {"selector": [
+            {"sequence": [{"wait_for": "call", "timeout": 0.05}, {"do": "answer"}]},
+            {"do": "give_up"}
+        ]}}"#,
+    );
+    let (mut brain, mut bb) = (Brain::new("g"), Blackboard::new());
+    assert_eq!(think(&mut brain, &t, &mut bb, 0), None);
+    assert_eq!(think(&mut brain, &t, &mut bb, 2), None);
+    assert_eq!(think(&mut brain, &t, &mut bb, 3), Some("give_up"));
+}
+
+/// Brains of period 1,000 waiting for `alarm`; returns each one's ticks of
+/// thought and whether it rang its bell.
+fn signal_run(send: fn(&mut Ctx, &[Entity])) -> Vec<(u32, bool)> {
+    #[derive(Default)]
+    struct Guards(Vec<Entity>);
+    let world = Game::new("t", 1, 1)
+        .sim_system(move |ctx: &mut Ctx| {
+            if ctx.time.sim_tick() == 5 {
+                let guards = ctx.world.resource::<Guards>().0.clone();
+                send(ctx, &guards);
+            }
+        })
+        .sim_system(ai::think)
+        .run_headless(10, |ctx| {
+            load(
+                ctx,
+                "ai/bell.json",
+                r#"{"root": {"selector": [
+                    {"sequence": [{"wait_for": "alarm"}, {"set": "rang", "to": true}]},
+                    {"do": "sleep"}
+                ]}}"#,
+            );
+            let guards = (0..3)
+                .map(|_| {
+                    ctx.world
+                        .spawn((Brain::new("ai/bell.json").with_period(1000), Blackboard::new()))
+                })
+                .collect();
+            ctx.world.insert_resource(Guards(guards));
+        });
+    let guards = world.resource::<Guards>().0.clone();
+    guards
+        .iter()
+        .map(|&e| {
+            let thinks = world.get::<Brain>(e).unwrap().thinks();
+            (thinks, world.get::<Blackboard>(e).unwrap().flag(Key::new("rang")))
+        })
+        .collect()
+}
+
+#[test]
+fn a_signal_wakes_its_brain_at_once_and_reaches_only_its_target() {
+    // Bound at tick 0, then asleep for 1,000 ticks: only the signal wakes it.
+    let to_one = signal_run(|ctx, guards| ctx.events.send(ai::Signal::to(guards[1], Key::new("alarm"))));
+    assert_eq!(to_one, [(1, false), (2, true), (1, false)]);
+    let to_all = signal_run(|ctx, _| ctx.events.send(ai::Signal::broadcast(Key::new("alarm"))));
+    assert_eq!(to_all, [(2, true), (2, true), (2, true)]);
+    // A signal no tree waits for wakes no one.
+    let other = signal_run(|ctx, _| ctx.events.send(ai::Signal::broadcast(Key::new("lunch"))));
+    assert_eq!(other, [(1, false), (1, false), (1, false)]);
+}
+
+#[test]
+fn forward_turns_engine_events_into_signals() {
+    struct Hit {
+        target: Entity,
+        by: Entity,
+    }
+    let mut world = Game::new("t", 1, 1)
+        .sim_system(|ctx: &mut Ctx| {
+            if ctx.time.sim_tick() == 2 {
+                let (target, by) = {
+                    let mut q = ctx.world.query::<Entity>().filter::<With<Brain>>();
+                    let target = q.iter().next().unwrap();
+                    (target, target)
+                };
+                ctx.events.send(Hit { target, by });
+            }
+        })
+        .sim_system(ai::forward(|hit: &Hit| {
+            Some(ai::Signal::to(hit.target, Key::new("hit")).with(hit.by))
+        }))
+        .sim_system(ai::think)
+        .run_headless(4, |ctx| {
+            load(
+                ctx,
+                "ai/hurt.json",
+                r#"{"root": {"sequence": [{"wait_for": "hit", "store": "attacker"}, {"do": "fight_back"}]}}"#,
+            );
+            ctx.world
+                .spawn((Brain::new("ai/hurt.json").with_period(100), Blackboard::new()));
+        });
+    let (e, brain) = world
+        .query::<(Entity, &Brain)>()
+        .single()
+        .map(|(e, b)| (e, b.clone()))
+        .unwrap();
+    assert!(brain.doing(Key::new("fight_back")));
+    assert_eq!(
+        world.get::<Blackboard>(e).unwrap().entity(Key::new("attacker")),
+        Some(e)
+    );
+}
+
+// ---- saves ------------------------------------------------------------------
+
+/// A tree with something to remember in every kind of node: a sequence
+/// part done, a wait part waited, a cooldown, a parallel with a finished
+/// child, a random choice, a wait for a signal.
+const MEMORY_TREE: &str = r#"{"root": {"selector": [
+    {"cooldown": 0.2, "child": {"sequence": [{"check": "rang"}, {"set": "rang", "to": false}, {"do": "celebrate"}]}},
+    {"sequence": [
+        {"do": "wake_up"},
+        {"wait": 0.1},
+        {"parallel": [
+            {"random": [{"do": "dig"}, {"do": "sweep"}, {"do": "sing"}]},
+            {"sequence": [{"wait_for": "bell"}, {"set": "rang", "to": true}]}
+        ], "success": "any"},
+        {"chance": 0.5},
+        {"do": "rest"}
+    ]}
+]}}"#;
+
+type Log = Vec<Vec<(Option<&'static str>, Status)>>;
+
+/// Runs `brains` brains (or the world in `save`) for `ticks` ticks; logs
+/// every brain's action each tick, and saves the world after tick `save_at`.
+fn memory_run(load_from: Option<&serde_json::Value>, ticks: u64, save_at: u64) -> (Log, Option<serde_json::Value>) {
+    #[derive(Default)]
+    struct Run(Log, Option<serde_json::Value>, u64);
+    let load_from = load_from.cloned();
+    let mut world = Game::new("t", 1, 1)
+        .seed(11)
+        .sim_system(|ctx: &mut Ctx| {
+            // The bell rings for every brain whose blackboard counts 25 ticks
+            // of work (state that is saved, unlike the sim tick).
+            let mut ring = Vec::new();
+            ctx.world.query::<(Entity, &mut Blackboard)>().for_each(|(e, bb)| {
+                let n = bb.num(Key::new("work")) + 1.0;
+                bb.set(Key::new("work"), n);
+                if (n as u32).is_multiple_of(25) {
+                    ring.push(e);
+                }
+            });
+            for e in ring {
+                ctx.events.send(ai::Signal::to(e, Key::new("bell")));
+            }
+        })
+        .sim_system(ai::think)
+        .sim_system(|ctx: &mut Ctx| {
+            // Actions take three ticks of their own counting.
+            ctx.world
+                .query::<(&mut Brain, &mut Blackboard)>()
+                .for_each(|(brain, bb)| {
+                    if brain.action().is_some() {
+                        let steps = bb.num(Key::new("steps")) + 1.0;
+                        bb.set(Key::new("steps"), steps);
+                        if (steps as u32).is_multiple_of(3) {
+                            brain.succeed();
+                        }
+                    }
+                });
+            let row = ctx
+                .world
+                .query::<&Brain>()
+                .iter()
+                .map(|b| (b.action().map(Key::name), b.status()))
+                .collect();
+            let save = (ctx.time.sim_tick() == ctx.world.resource::<Run>().2).then(|| ctx.world.save());
+            let run = ctx.world.resource_mut::<Run>();
+            run.0.push(row);
+            if save.is_some() {
+                run.1 = save;
+            }
+        })
+        .run_headless(ticks, move |ctx| {
+            ctx.world.insert_resource(Run(Vec::new(), None, save_at));
+            load(ctx, "ai/memory.json", MEMORY_TREE);
+            match &load_from {
+                Some(save) => ctx.world.load(save).unwrap(),
+                None => {
+                    for i in 0..12u32 {
+                        ctx.world.spawn((
+                            Brain::new("ai/memory.json").with_period(1 + i % 3),
+                            Blackboard::new().with(Key::new("work"), i as f32),
+                        ));
+                    }
+                }
+            }
+        });
+    let run = world.remove_resource::<Run>().unwrap();
+    (run.0, run.1)
+}
+
+#[test]
+fn a_saved_brain_carries_on_at_the_same_running_node() {
+    let (whole, save) = memory_run(None, 120, 59);
+    let save = save.unwrap();
+    // Some brains were in the middle of something when saved.
+    let saved_brains: Vec<_> = save["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["components"]["Brain"].get("memory"))
+        .collect();
+    assert_eq!(saved_brains.len(), 12);
+    assert!(
+        whole[59].iter().filter(|(a, _)| a.is_some()).count() >= 3,
+        "{:?}",
+        whole[59]
+    );
+    let (rest, _) = memory_run(Some(&save), 60, u64::MAX);
+    for (tick, row) in rest.iter().enumerate() {
+        assert_eq!(row, &whole[60 + tick], "tick {} after the save", tick);
+    }
+    let kinds: std::collections::HashSet<_> = whole.iter().flatten().filter_map(|(a, _)| *a).collect();
+    assert!(kinds.len() >= 5, "the run visits most of the tree: {kinds:?}");
+}
+
+#[test]
+fn a_saved_brain_starts_over_when_its_tree_changed() {
+    let t = tree(r#"{"root": {"sequence": [{"do": "a"}, {"do": "b"}]}}"#);
+    let (mut brain, mut bb) = (Brain::new("t"), Blackboard::new());
+    think(&mut brain, &t, &mut bb, 0);
+    brain.succeed();
+    think(&mut brain, &t, &mut bb, 1);
+    assert_eq!(brain.action(), Some(Key::new("b")));
+    let json = serde_json::to_value(&brain).unwrap();
+    assert_eq!(json["memory"]["running"], 2);
+    // Same tree: carries on with b, not started again.
+    let mut same: Brain = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(think(&mut same, &t, &mut bb, 0), Some("b"));
+    assert!(!same.started());
+    // Another tree: starts over.
+    let other = tree(r#"{"root": {"sequence": [{"do": "a"}, {"do": "c"}]}}"#);
+    let mut changed: Brain = serde_json::from_value(json).unwrap();
+    assert_eq!(think(&mut changed, &other, &mut bb, 0), Some("a"));
+    assert!(changed.started());
+}
+
+// ---- determinism ------------------------------------------------------------
+
+/// 3,000 brains with random, chance, parallel and wait_for nodes, senses
+/// from the entity and the tick and signals to some; each tick's choices.
+fn decisions(seed: u64) -> Vec<u64> {
+    const TREE: &str = r#"{"root": {"selector": [
+        {"sequence": [{"wait_for": "shout", "timeout": 0}, {"do": "turn"}]},
+        {"parallel": [
+            {"random": [{"do": "dig"}, {"sequence": [{"chance": 0.3}, {"do": "sing"}]}, {"do": "walk"}]},
+            {"check": "hunger", "below": 70}
+        ]},
+        {"utility": [
+            {"score": [{"key": "hunger", "from": 0, "to": 100}], "do": "eat"},
+            {"score": 0.3, "do": "nap"}
+        ]}
+    ]}}"#;
+    #[derive(Default)]
+    struct Hashes(Vec<u64>);
+    let mut world = Game::new("crowd", 1, 1)
+        .seed(seed)
+        .sim_system(|ctx: &mut Ctx| {
+            let tick = ctx.time.sim_tick();
+            let mut shout = Vec::new();
+            ctx.world.query::<(Entity, &mut Blackboard)>().for_each(|(e, bb)| {
+                let x = (e.index() as u64 * 2_654_435_761 + tick * 40_503) % 1000;
+                bb.set(HUNGER, (x % 100) as f32);
+                if x.is_multiple_of(97) {
+                    shout.push(e);
+                }
+            });
+            for e in shout {
+                ctx.events.send(ai::Signal::to(e, Key::new("shout")));
+            }
+        })
+        .sim_system(ai::think)
+        .sim_system(|ctx: &mut Ctx| {
+            let tick = ctx.time.sim_tick();
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            ctx.world.query::<(Entity, &mut Brain)>().for_each(|(e, b)| {
+                for byte in b.action().map_or("", Key::name).bytes() {
+                    h = (h ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+                }
+                h = (h ^ 0xff).wrapping_mul(0x0100_0000_01b3);
+                if (e.index() as u64 + tick).is_multiple_of(4) {
+                    b.succeed();
+                }
+            });
+            ctx.world.resource_mut::<Hashes>().0.push(h);
+        })
+        .run_headless(90, |ctx| {
+            ctx.world.insert_resource(Hashes::default());
+            ai::add_tree(&mut ctx.world, "crowd", BehaviorTree::from_json(TREE).unwrap());
+            for i in 0..3000u32 {
+                ctx.world
+                    .spawn((Brain::new("crowd").with_period(1 + i % 3), Blackboard::new()));
+            }
+        });
+    world.remove_resource::<Hashes>().unwrap().0
+}
+
+#[test]
+fn the_same_seed_and_inputs_give_the_same_decisions() {
+    let first = decisions(3);
+    assert_eq!(first.len(), 90);
+    for _ in 0..2 {
+        assert_eq!(decisions(3), first, "same seed and inputs, on all cores");
+    }
+    let other = decisions(4);
+    assert_ne!(other, first, "another seed draws other random choices");
 }

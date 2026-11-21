@@ -174,7 +174,9 @@ game also stays on one thread, after at most 20 seconds, and says why.
   return value.
 - **A panic on a worker stops the game.** A build with threads can't unwind
   (above), so a panic in a parallel query or a job ends the game, with the
-  panic and `ponko: ...; the game stops` in the console. A job's panic
+  panic and `ponko: ...; the game stops` in the console, and on the page
+  as a `ThreadStopped` failure with the worker's panic message (see
+  [Failures while playing](web.md#failures-while-playing)). A job's panic
   isn't handed to `Job::take` as it is natively.
 - **Memory**: at most 1 GiB, which the build declares up front, because a
   shared memory must have a maximum.

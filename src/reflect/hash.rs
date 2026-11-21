@@ -255,13 +255,119 @@ impl FieldLayout {
 /// made by the same build.
 #[must_use]
 pub fn world_hash(world: &World) -> u64 {
-    let Some(reg) = registry(world) else {
-        return mix(0);
-    };
     let mut total = 0u64;
+    each_part(world, |_, sum| total = total.wrapping_add(sum));
+    mix(total)
+}
+
+/// [`world_hash`], part by part: its [`total`](Self::total) and the hash
+/// of each reflected component and resource, so a check that finds two
+/// worlds differ can say what differs ([`differing`](Self::differing)).
+/// Lockstep sessions compare these to name the components in a
+/// [`Desync`](crate::net::Desync).
+///
+/// ```
+/// use ponko::prelude::*;
+/// use ponko::reflect::{WorldHashParts, world_hash};
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Component, Serialize, Deserialize)]
+/// struct Health(f32);
+/// #[derive(Component, Serialize, Deserialize)]
+/// struct Armor(u32);
+///
+/// let make = || {
+///     let mut world = World::new();
+///     world.reflect::<Health>();
+///     world.reflect::<Armor>();
+///     world.spawn((Health(10.0), Armor(2)));
+///     world
+/// };
+/// let (a, mut b) = (make(), make());
+/// b.query::<&mut Health>().for_each(|h| h.0 -= 1.0);
+/// let (pa, pb) = (WorldHashParts::of(&a), WorldHashParts::of(&b));
+/// assert_eq!(pa.total, world_hash(&a));
+/// assert_eq!(pa.differing(&pb), ["Health"]);
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorldHashParts {
+    /// The same number as [`world_hash`].
+    pub total: u64,
+    /// Each reflected component (by its reflected name, such as
+    /// `Transform2D`) and resource (`resource:Name`) that has a value, with
+    /// the hash of its values, sorted by name. Components no entity has and
+    /// absent resources are left out.
+    pub parts: Vec<(String, u64)>,
+}
+
+impl WorldHashParts {
+    /// Hashes `world` part by part (as fast as [`world_hash`]; the names
+    /// are the only allocations).
+    #[must_use]
+    pub fn of(world: &World) -> Self {
+        let mut total = 0u64;
+        let mut parts = Vec::new();
+        each_part(world, |name, sum| {
+            total = total.wrapping_add(sum);
+            if sum != 0 {
+                parts.push((name.to_string(), sum));
+            }
+        });
+        parts.sort_unstable();
+        WorldHashParts {
+            total: mix(total),
+            parts,
+        }
+    }
+
+    /// The names of the parts whose hashes differ between `self` and
+    /// `other`, or that only one of them has; empty when the totals match.
+    #[must_use]
+    pub fn differing(&self, other: &WorldHashParts) -> Vec<String> {
+        if self.total == other.total {
+            return Vec::new();
+        }
+        let find = |parts: &[(String, u64)], name: &str| parts.iter().find(|(n, _)| n == name).map(|&(_, h)| h);
+        let mut names: Vec<String> = self
+            .parts
+            .iter()
+            .filter(|(name, hash)| find(&other.parts, name) != Some(*hash))
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.extend(
+            other
+                .parts
+                .iter()
+                .filter(|(name, _)| find(&self.parts, name).is_none())
+                .map(|(name, _)| name.clone()),
+        );
+        names
+    }
+}
+
+/// A part of [`WorldHashParts`], named without allocating.
+#[derive(Clone, Copy)]
+enum PartName<'a> {
+    Component(&'a str),
+    Resource(&'a str),
+}
+
+impl std::fmt::Display for PartName<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Component(name) => f.write_str(name),
+            Self::Resource(name) => write!(f, "resource:{name}"),
+        }
+    }
+}
+
+/// Calls `f` with each part's name (components by name, resources as
+/// `resource:Name`) and the sum of its values' hashes.
+fn each_part(world: &World, mut f: impl FnMut(PartName<'_>, u64)) {
+    let Some(reg) = registry(world) else { return };
     for c in &reg.list {
         let seed = name_seed(&c.name);
-        total = total.wrapping_add(component_sum(world, reg, c, seed));
+        f(PartName::Component(&c.name), component_sum(world, reg, c, seed));
     }
     for r in &reg.resources {
         let seed = name_seed(&r.name) ^ 0x5245_534F_5552_4345;
@@ -276,9 +382,8 @@ pub fn world_hash(world: &World) -> u64 {
                 _ => 0,
             },
         };
-        total = total.wrapping_add(sum);
+        f(PartName::Resource(&r.name), sum);
     }
-    mix(total)
 }
 
 fn component_sum(world: &World, reg: &Registry, c: &Reflected, seed: u64) -> u64 {

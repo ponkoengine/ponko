@@ -24,7 +24,7 @@ mod particles;
 mod save_format;
 mod skeleton2d;
 pub(crate) use animation::reflect_animation;
-pub use hash::world_hash;
+pub use hash::{WorldHashParts, world_hash};
 pub(crate) use migrate::migrate as migrate_save;
 pub use migrate::{Migration, SaveMigrations};
 pub(crate) use particles::reflect_particle_emitter2d;

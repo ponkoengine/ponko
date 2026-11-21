@@ -55,7 +55,7 @@ allocation per tick. Think rates bring a crowd to about a third. So: plain
 systems for a handful of simple enemies; the kit when the behaviour is
 bigger than the code that carries it out. The parallel medians are noisy on
 a loaded machine; the one-thread numbers are the steady ones. A brain is
-72 bytes plus 24 a node, a blackboard 24 bytes plus 40 an entry.
+128 bytes plus 24 a node, a blackboard 24 bytes plus 40 an entry.
 
 ## Trees decide, systems act
 
@@ -113,6 +113,8 @@ headlessly.
 | `{"sequence": [..]}` | its children in order until one doesn't succeed |
 | `{"selector": [..]}` | its children in order until one doesn't fail |
 | `{"utility": [..], "stick": 0.1}` | its children best score first until one doesn't fail |
+| `{"parallel": [..], "success": "any"}` | its children at once, by a stated policy ([below](#parallel-nodes)) |
+| `{"random": [..]}` | its children in a random order until one doesn't fail |
 | `{"invert": node}` | success and failure swapped |
 | `{"succeed": node}` | success when the node finishes either way |
 | `{"check": "alert"}` | the entry is true, a number other than 0, a point or an entity |
@@ -121,6 +123,9 @@ headlessly.
 | `{"do": "chase", "speed": 4.5}` | an action, with parameters |
 | `{"wait": 1.5}` | runs that many seconds, then succeeds |
 | `{"cooldown": 3, "child": node}` | fails for 3 s after the child succeeded |
+| `{"chance": 0.25}` | succeeds one time in four |
+| `{"wait_for": "noise"}` | runs until the agent hears that signal ([below](#waiting-for-events)) |
+| `{"subtree": "ai/patrol.json"}` | runs another tree ([below](#subtrees)) |
 
 Any node may have a `"name"` for the debug view. Values are `true`, `0.5`,
 `[x, y]`, `[x, y, z]` or `{"entity": id}`.
@@ -134,6 +139,121 @@ finished steps don't run again) but asks its checks again first, so
 
 A file that doesn't compile is refused with the node and the problem:
 `behaviour tree: root/selector[1]/sequence[0]/check: unknown field "beneath"`.
+
+## Subtrees
+
+A tree can run another by name: `{"subtree": "ai/patrol.json"}` stands
+for that tree's root, with its `"blackboard"` defaults (the outer tree's
+win). Patrols, fights and flights written once serve every kind of agent:
+
+```json
+{"root": {"selector": [
+    {"sequence": [{"check": "health", "below": 0.3}, {"subtree": "ai/flee.json"}]},
+    {"sequence": [{"check": "alert"}, {"subtree": "ai/fight.json"}]},
+    {"subtree": "ai/patrol.json"}
+]}}
+```
+
+`load_behavior_tree` loads the files a tree names (and the files those
+name), and with hot reload on watches them all: saving `ai/patrol.json`
+reaches every tree that runs it. Trees made in code link the same way
+through `BehaviorTrees` (`ai::add_tree`, `BehaviorTrees::try_insert`), in
+any order: a subtree that isn't there yet is a node that fails until it is.
+A tree that runs itself, directly or through others, is refused with
+every name on the cycle:
+
+```rust
+use ponko::ai::{BehaviorTree, BehaviorTrees};
+
+let mut trees = BehaviorTrees::default();
+let tree = |json: &str| BehaviorTree::from_json(json).unwrap();
+trees.try_insert("ai/guard.json", tree(r#"{"root": {"subtree": "ai/fight.json"}}"#)).unwrap();
+let error = trees
+    .try_insert("ai/fight.json", tree(r#"{"root": {"subtree": "ai/guard.json"}}"#))
+    .unwrap_err();
+assert!(error.to_string().contains("subtree cycle: ai/fight.json -> ai/guard.json -> ai/fight.json"));
+```
+
+The debug view shows a subtree's nodes under a `subtree` line. A subtree is
+copied into each tree that runs it, so a brain's memory and trace cover the
+whole thing.
+
+## Parallel nodes
+
+A `parallel` runs all its children at each think, in order, with a stated
+policy: `"success"` is how many must succeed and `"failure"` how many must
+fail (`"all"`, `"any"` or a count). The defaults are all for success and
+any for failure. Children that finished keep their result until the
+parallel ends (checks are asked again each think, so a parallel can watch a
+condition); if all finish and neither count is reached, it fails. When it
+ends, children still running are stopped: an action they started is dropped.
+
+```json
+{"sequence": [
+    {"parallel": [{"do": "walk_to", "target": "door"}, {"wait": 5}], "success": "any"},
+    {"do": "knock"}
+]}
+```
+
+walks to the door for at most five seconds, then knocks; and
+`{"parallel": [{"do": "aim"}, {"check": "alert"}]}` aims while alert. A
+brain does one action at a time, so only one child of a parallel may hold
+`do` nodes; the others check, wait, count down or wait for signals (a tree
+that breaks this is refused).
+
+## Random choices
+
+`{"random": [..]}` tries its children in a random order until one doesn't
+fail; the one that runs keeps running at the next thinks instead of being
+drawn again. `{"chance": 0.25}` succeeds one time in four, drawn each time
+it is reached, so in front of an action in a sequence it weighs a choice:
+
+```json
+{"selector": [
+    {"sequence": [{"chance": 0.2}, {"do": "taunt"}]},
+    {"random": [{"do": "strafe_left"}, {"do": "strafe_right"}]}
+]}
+```
+
+The numbers come from the game's seed (`Game::seed`), the brain's tick and
+its entity, so a run is the same every time with the same seed and inputs,
+on any number of cores. A brain you run yourself (`Brain::think`) draws
+from `Brain::with_seed`: give each agent its own.
+
+## Waiting for events
+
+A `wait_for` node runs until the agent hears a *signal*, an event the
+game sends with `ctx.events.send(ai::Signal::to(guard, NOISE))` (or
+`Signal::broadcast(ALARM)` for every brain) from a system before
+`ai::think`. The brain doesn't poll a flag each think: the signal wakes it
+at once, whatever its period, so a crowd can think every 16th tick and
+still jump at a gunshot. `"store": "key"` writes the signal's value
+(`Signal::to(..).with(shooter)`) to the blackboard; `"timeout": 2` fails
+the node after two seconds without one, and `"timeout": 0` only asks
+whether the signal came at this think.
+
+```json
+{"sequence": [{"wait_for": "door_opened", "store": "door"}, {"do": "enter"}]}
+```
+
+`ai::forward` turns the engine's own events, or any of yours, into signals,
+with no system of your own:
+
+```rust
+use ponko::ai::{self, Key, Signal};
+use ponko::prelude::*;
+
+struct Shot { by: Entity, at: Entity }
+const SHOT_AT: Key = Key::new("shot_at");
+
+Game::new("guards", 640, 480)
+    .sim_system(ai::forward(|shot: &Shot| Some(Signal::to(shot.at, SHOT_AT).with(shot.by))))
+    .sim_system(ai::think)
+    .run_headless(1, |_| {});
+```
+
+A brain only hears signals its tree waits for (`BehaviorTree::signals`);
+`Brain::signal` hands one to a brain directly.
 
 ## Utility scoring
 
@@ -191,11 +311,23 @@ panicking), the name `Brain::new` takes. With
 running game; brains running it start it over. A broken file keeps the old
 tree and prints why. Trees made in code go in with `ai::add_tree`.
 
-Thinking reads only blackboards and counts time in sim ticks (`wait`,
-`cooldown`), and each brain thinks on its own, so the same blackboards give
-the same choices on any machine and any number of cores: safe for
-[lockstep](networking.md) and replays. A brain read back from a save
-starts its tree over; its blackboard comes back as it was.
+Thinking reads only blackboards and signals, counts time in ticks
+(`wait`, `cooldown`) and draws random numbers from the game's seed, and
+each brain thinks on its own, so the same seed and inputs give the same
+choices on any machine and any number of cores: safe for
+[lockstep](networking.md) and replays.
+
+## Saves
+
+A brain's JSON holds its memory: the running nodes, how far its waits and
+cooldowns are, the action and what the game reported for it. A world read
+back from a save ([saves](storage.md)) carries on at the same running
+node, as if the save never happened: the brain counts its ticks on from
+the one it was saved at, whatever the game's clock says now, so its waits,
+cooldowns, think periods and random numbers go on as they would have. A
+brain whose tree changed since (another
+`BehaviorTree::fingerprint`) starts the new tree over; its blackboard comes
+back as it was either way.
 
 ## From C and C++
 
@@ -238,6 +370,13 @@ for tick in 0..10 {
 </div>
 </div>
 
+Subtrees: `ponko_behavior_tree_new_linked` compiles a tree with the trees
+its `subtree` nodes name, by name (`ponko::ai::behavior_tree(json,
+{{"patrol", &patrol}})`). Signals: `ponko_brain_signal`. Random nodes:
+`ponko_brain_set_seed` per agent. Saves: `ponko_brain_save_json` writes a
+brain with its memory and blackboard, and `ponko_brain_load_json` reads it
+back to carry on where it was.
+
 Not in the C API: the world's `Brain` and `Blackboard` components, the
-`ai::think` system and hot reload through `assets/`; a native game reloads
-a tree by making a new one from the file's text.
+`ai::think` system, `Signal` events and hot reload through `assets/`; a
+native game reloads a tree by making a new one from the file's text.

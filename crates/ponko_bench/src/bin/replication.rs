@@ -13,7 +13,9 @@
 //!   client), median and 90th percentile over the ticks of a run, and the
 //!   spread of the median over the runs.
 //!
-//! Run with: cargo run --release -p ponko_bench --bin replication [-- runs]
+//! Run with `cargo run --release -p ponko_bench --bin replication -- <runs> <scenario>`;
+//! both are optional (3 runs, every scenario). `<scenario>` is part of a
+//! scenario's name, such as `"1 in 20"`.
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -55,7 +57,7 @@ struct Scenario {
     interest: bool,
 }
 
-const SCENARIOS: [Scenario; 4] = [
+const SCENARIOS: [Scenario; 5] = [
     Scenario {
         name: "all move, no budget",
         move_every: 1,
@@ -71,6 +73,12 @@ const SCENARIOS: [Scenario; 4] = [
     Scenario {
         name: "1 in 10 move, 64 KB/s",
         move_every: 10,
+        budget: ponko::net::DEFAULT_BUDGET,
+        interest: false,
+    },
+    Scenario {
+        name: "1 in 20 move, 64 KB/s",
+        move_every: 20,
         budget: ponko::net::DEFAULT_BUDGET,
         interest: false,
     },
@@ -161,6 +169,7 @@ struct Sent {
 }
 
 fn server(s: Scenario, net: NetMessages) -> Game {
+    let mut movers: Vec<Entity> = Vec::new();
     Game::new("server", 1, 1)
         .fixed_hz(HZ)
         .messages(net)
@@ -181,14 +190,21 @@ fn server(s: Scenario, net: NetMessages) -> Game {
                     ));
                 }
             }
-            // Walk in wide circles; with `move_every`, a few at a time.
+            // Walk in wide circles; with `move_every`, a few at a time. Only
+            // the movers are borrowed mutably, so only they count as changed.
             let every = u64::from(s.move_every);
-            ctx.world.query::<(&mut Mover, &Index)>().for_each(|(m, i)| {
+            movers.clear();
+            ctx.world.query::<(Entity, &Index)>().for_each(|(e, i)| {
                 if (tick + u64::from(i.0)).is_multiple_of(every) {
+                    movers.push(e);
+                }
+            });
+            for &e in &movers {
+                if let Some(m) = ctx.world.get_mut::<Mover>(e) {
                     m.heading = (m.heading + 0.02 * every as f32).rem_euclid(std::f32::consts::TAU);
                     m.at += Vec2::from_angle(m.heading) * 1.5 * every as f32;
                 }
-            });
+            }
             let clients = ctx.net.replication.clients();
             if s.interest {
                 for (k, &peer) in clients.iter().enumerate() {
@@ -311,6 +327,8 @@ fn percentile(sorted: &[Duration], p: f64) -> Duration {
 
 fn main() {
     let runs: usize = std::env::args().nth(1).and_then(|a| a.parse().ok()).unwrap_or(3);
+    // An optional second argument runs only the scenarios whose name has it.
+    let only = std::env::args().nth(2).unwrap_or_default();
     println!(
         "replication: {ENTITIES} entities, {CLIENTS} clients, {HZ} Hz, {MEASURED} ticks measured after {WARMUP}, {runs} runs"
     );
@@ -318,7 +336,7 @@ fn main() {
         "{:<26} {:>22} {:>22} {:>9} {:>34}",
         "scenario", "payload B/s/client", "wire B/s/client", "replicas", "server ms/tick: median p90 (runs)"
     );
-    for s in SCENARIOS {
+    for s in SCENARIOS.into_iter().filter(|s| s.name.contains(only.as_str())) {
         let mut medians = Vec::new();
         let mut p90s = Vec::new();
         let mut first: Option<Run> = None;

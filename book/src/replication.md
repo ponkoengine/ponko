@@ -318,7 +318,20 @@ let game = Game::new("Chat", 800, 600)
 | `to_clients(&e)` | every client that joined (not the host's own player) |
 
 Events are serde values, so they can carry anything; name entities in them
-by `NetId` (it serializes as a number). A client's `NetEvent::tick` is the
+by `NetId` (it serializes as a number). They travel in binary
+([MessagePack](https://msgpack.org), fields by position rather than by
+name), after a header of two varints (the event type and the tick):
+
+| Event | Bytes per event | As JSON before |
+|---|---|---|
+| `Hit { target: NetId, damage: f32, at: Vec2, critical: bool }` | 26 | 76 |
+| `Chat { text: "gg" }` | 9 | 24 |
+| `Pickup::Coin(25)` (an enum variant travels by name) | 12 | 22 |
+| `Pickup::Key { door: 7 }` | 12 | 29 |
+
+Because fields travel by position, an event type can't leave fields out
+(`#[serde(skip_serializing_if = ...)]`): the other side can't tell which
+field is which and drops the event. Send the `Option` as it is instead. A client's `NetEvent::tick` is the
 newest server tick it had seen when it sent the event: what it was looking
 at, for judging what it aimed at.
 
@@ -489,14 +502,59 @@ machine (2026-11-20, nothing else running); the medians of the runs varied by
 under 0.03 ms in every scenario (0.728 to 0.755 ms in the first). The byte
 counts are exact and don't change.
 
+### Only what changed
+
+The server doesn't read and compare every replicated entity every tick.
+Once a client has joined, it tracks the changes of the replicated
+components ([change detection](ecs.md#change-detection), on the server only) and each tick
+reads only:
+
+- entities whose replicated components changed, or lost one;
+- new entities, and ones handed to another owner;
+- a rolling sweep of 1/64 of the rest, so that a write the world can't see
+  (through a raw pointer, without `mark_changed`) still goes out, about a
+  second later at 60 Hz.
+
+For each client it then compares only those (and the ones whose baseline
+the client just acknowledged) with what that client has. A world the game
+replaces is read in full once.
+
+So change only what changes: a mutable borrow counts as a change, written
+or not. A query over `&mut Mover` marks every mover; one that reads with
+`&Mover` and calls `get_mut` on the ones that move marks only those.
+Values borrowed but left alone are still found equal and not sent, but
+they cost the read.
+
+The benchmark's `1 in 20 move, 64 KB/s` scenario moves 5% of the 1,000
+entities each tick and borrows only those. Server CPU per tick, three runs
+of each, the two builds alternating (2026-11-21, on the same M4 Max while
+other builds kept it busy, load average about 90, so the absolute times
+are higher than in the table above):
+
+| Server tick, 5% change | Medians of the three runs |
+|---|---|
+| Before: every entity read and compared | 0.763, 0.736, 0.747 ms |
+| After: only the changed ones | 0.578, 0.577, 0.585 ms |
+
+The traffic is identical, byte for byte. With every entity changing every
+tick (`all move, no budget`), the tracking's extra work didn't show beyond
+the noise of the busy machine (2.23 to 2.48 ms before, 2.31 to 2.32 ms
+after). The tracking costs 8 bytes per replicated component of each
+entity on the server, and nothing on clients.
+
 ## Checks for a person
 
-The tests above cover every transport in one process. Two things need a
+The tests above cover every transport in one process, and a browser
+smoke test (`web/smoke/replication.mjs`, see its
+[README](../../web/smoke/README.md#replication)) runs a dedicated server
+and a headless browser tab of the web build: the tab must join, hold its
+own player and see the replicated orbs move. Two things still need a
 person:
 
-- **A real browser.** Run `cargo run --example net_arena -- server`, build
-  the example for the web ([Web builds](web.md)) and open it: it joins
-  `ws://127.0.0.1:7778`. Join a native client too. Both should see each
+- **A real browser, played.** Run `cargo run --example net_arena -- server`,
+  build the example for the web ([Web builds](web.md)) and open it: it
+  joins `ws://<the page's host>:7778` (or the server its page names with
+  `?server=ws://host:port`). Join a native client too. Both should see each
   other move smoothly, scores should match, and a wave from either should
   show on both.
 - **Two machines.** Run `net_arena server` on one, and

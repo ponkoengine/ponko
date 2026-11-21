@@ -170,6 +170,75 @@ fn a_cancelled_c_group_stays_cancelled() {
     });
 }
 
+#[test]
+fn a_failed_c_group_restarts_and_loads_only_what_failed() {
+    run_ctx(|ctx| unsafe {
+        add_files(ctx, c"first", &[(c"a.bin", b"a"), (c"tiles.png", &PIXEL_PNG)]);
+        let group = ponko_asset_group_new(c"level".as_ptr());
+        for (kind, path) in [
+            (PonkoAssetGroupKind::PONKO_GROUP_BYTES, c"a.bin"),
+            (PonkoAssetGroupKind::PONKO_GROUP_TEXTURE, c"tiles.png"),
+            (PonkoAssetGroupKind::PONKO_GROUP_BYTES, c"late.bin"),
+        ] {
+            assert_eq!(ponko_asset_group_add(group, kind as u32, path.as_ptr()), PONKO_OK);
+        }
+        let mut id = 0;
+        assert_eq!(ponko_ctx_start_asset_group(ctx, group, &mut id), PONKO_OK);
+        assert_eq!(ponko_ctx_finish_uploads(ctx), PONKO_OK);
+        assert_eq!(state(ctx, id), PonkoAssetGroupState::PONKO_GROUP_FAILED as u32);
+        assert_eq!(last_path_of_group(ctx, id), "late.bin");
+        let mut progress = PonkoAssetGroupProgress::default();
+        assert_eq!(ponko_ctx_asset_group_progress(ctx, id, &mut progress), PONKO_OK);
+        assert_eq!(progress.loaded, 2);
+        assert_eq!(progress.bytes_uploaded, 4, "one 1 x 1 RGBA texture");
+
+        // The missing file arrives; the restart reads only it.
+        add_files(ctx, c"second", &[(c"late.bin", b"late")]);
+        assert_eq!(ponko_ctx_restart_asset_group(ctx, id), PONKO_OK);
+        assert_eq!(state(ctx, id), PonkoAssetGroupState::PONKO_GROUP_LOADING as u32);
+        assert_eq!(ponko_ctx_finish_uploads(ctx), PONKO_OK);
+        assert_eq!(state(ctx, id), PonkoAssetGroupState::PONKO_GROUP_READY as u32);
+        let mut bytes: Vec<u8> = Vec::new();
+        for path in [c"a.bin", c"late.bin"] {
+            assert_eq!(
+                ponko_ctx_take_asset_group_bytes(ctx, id, path.as_ptr(), Some(keep), (&raw mut bytes).cast()),
+                PONKO_OK
+            );
+        }
+        assert_eq!(bytes, b"alate");
+        let mut stats = PonkoAssetGroupStats::default();
+        assert_eq!(ponko_ctx_asset_group_stats(ctx, &mut stats), PONKO_OK);
+        assert_eq!(stats.total_upload_bytes, 4);
+        assert!(stats.total_upload_ms >= 0.0 && stats.max_upload_ms >= stats.upload_ms);
+        // Restarting a ready group does nothing; a bad id is refused.
+        assert_eq!(ponko_ctx_restart_asset_group(ctx, id), PONKO_OK);
+        assert_eq!(state(ctx, id), PonkoAssetGroupState::PONKO_GROUP_READY as u32);
+        assert_eq!(ponko_ctx_restart_asset_group(ctx, id + 1), PONKO_INVALID_ARGUMENT);
+        // Cancelling a failed group makes it cancelled.
+        let group = ponko_asset_group_new(c"broken".as_ptr());
+        assert_eq!(
+            ponko_asset_group_add(
+                group,
+                PonkoAssetGroupKind::PONKO_GROUP_BYTES as u32,
+                c"none.bin".as_ptr()
+            ),
+            PONKO_OK
+        );
+        let mut broken = 0;
+        assert_eq!(ponko_ctx_start_asset_group(ctx, group, &mut broken), PONKO_OK);
+        assert_eq!(ponko_ctx_finish_uploads(ctx), PONKO_OK);
+        assert_eq!(state(ctx, broken), PonkoAssetGroupState::PONKO_GROUP_FAILED as u32);
+        assert_eq!(ponko_ctx_cancel_asset_group(ctx, broken), PONKO_OK);
+        assert_eq!(state(ctx, broken), PonkoAssetGroupState::PONKO_GROUP_CANCELLED as u32);
+    });
+}
+
+/// The path group `id`'s error names.
+unsafe fn last_path_of_group(ctx: *mut PonkoCtx, id: u32) -> String {
+    assert_ne!(unsafe { ponko_ctx_asset_group_error(ctx, id) }, PONKO_OK);
+    last_path()
+}
+
 const LOADING: u32 = 1;
 const PLAYING: u32 = 2;
 

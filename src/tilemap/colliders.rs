@@ -40,7 +40,8 @@ impl TileMap {
     /// Rectangles covering every tile `solid` picks (by tile value), merged
     /// into as few as practical, relative to the map's top-left corner in
     /// world units. For your own collision, or for physics with
-    /// `colliders`.
+    #[cfg_attr(feature = "physics", doc = " [`colliders`](Self::colliders).")]
+    #[cfg_attr(not(feature = "physics"), doc = " `colliders`.")]
     ///
     /// ```
     /// # use ponko::prelude::*;
