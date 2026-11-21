@@ -13,6 +13,13 @@ In short:
   required from every contributor. Maintainers coordinate that coverage and
   own follow-ups. Preserve existing compatibility and describe behavior and tests.
 
+## Adding a cargo feature
+
+Every feature needs a clippy line, a test line and, when docs.rs builds the
+crate with it, a doc line in `.github/workflows/ci.yml` (the list of checks).
+`python3 scripts/check-feature-coverage.py` fails for one without; see
+`CONTRIBUTING.md`, "Adding or changing a cargo feature".
+
 ## Changing the renderer
 
 The renderer's offscreen GPU tests, their reference images and what a

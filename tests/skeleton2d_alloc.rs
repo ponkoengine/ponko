@@ -1,5 +1,6 @@
-//! 2D skeletons allocate nothing once warm: posing (clips, a mesh deform,
-//! IK and a transform constraint) and drawing (a skinned mesh, a sprite, a
+//! 2D skeletons allocate nothing once warm: posing (clips crossfading, a
+//! mesh deform, keyed IK, transform, path and physics constraints) and
+//! drawing (a skinned mesh, a sprite, a
 //! clipping mask), both for a few skeletons (drawn on one thread) and for
 //! many (drawn in chunks on all cores). Its own process, so nothing else
 //! allocates while it counts.
@@ -8,8 +9,9 @@ use std::sync::Arc;
 use ponko::perf::CountingAllocator;
 use ponko::prelude::*;
 use ponko::skeleton2d::{
-    BonePose, BoneTrack, Clip, ClippingMask, DeformTrack, IkConstraint, Key, MeshVertex, Skeleton, SkeletonData,
-    SkinnedMesh, SpritePart, TransformConstraint,
+    BonePose, BoneTrack, Clip, ClippingMask, DeformTrack, IkConstraint, IkTrack, Key, MeshVertex, PathConstraint,
+    PathRotate, PathShape, PathTrack, PhysicsConstraint, PhysicsTrack, Skeleton, SkeletonData, SkinnedMesh, SpritePart,
+    TransformConstraint, TransformTrack,
 };
 
 #[global_allocator]
@@ -22,6 +24,9 @@ fn rig(texture: Texture) -> Arc<SkeletonData> {
     let lower = data.add_bone("lower", Some(upper), BonePose::at(vec2(10.0, 0.0)), 10.0);
     let goal = data.add_bone("goal", Some(root), BonePose::at(vec2(12.0, 6.0)), 0.0);
     let follower = data.add_bone("follower", Some(root), BonePose::IDENTITY, 0.0);
+    let tail1 = data.add_bone("tail1", Some(root), BonePose::IDENTITY, 5.0);
+    let tail2 = data.add_bone("tail2", Some(tail1), BonePose::at(vec2(5.0, 0.0)), 5.0);
+    let hair = data.add_bone("hair", Some(lower), BonePose::at(vec2(10.0, 0.0)), 6.0);
     data.add_ik(IkConstraint::new("reach", &[upper, lower], goal));
     let mut follow = TransformConstraint::new("follow", &[follower], lower);
     follow.mix_rotate = 0.5;
@@ -29,6 +34,24 @@ fn rig(texture: Texture) -> Arc<SkeletonData> {
     let mask = data.add_slot("mask", root);
     let skin = data.add_slot("skin", upper);
     let part = data.add_slot("part", follower);
+    let track = data.add_slot("track", root);
+    let mut along = PathConstraint::new("along", &[tail1, tail2], track);
+    along.rotate_mode = PathRotate::Chain;
+    data.add_path_constraint(along);
+    let mut sway = PhysicsConstraint::new("sway", hair);
+    (sway.rotate, sway.x, sway.gravity) = (1.0, 1.0, 20.0);
+    data.add_physics_constraint(sway);
+    let point = |x, y| MeshVertex::new(vec2(x, y), Vec2::ZERO, &[(root, 1.0)]);
+    let curve = [
+        (0.0, 0.0),
+        (5.0, 0.0),
+        (10.0, 0.0),
+        (20.0, 10.0),
+        (25.0, 10.0),
+        (30.0, 10.0),
+    ];
+    let shape = PathShape::new(curve.iter().map(|&(x, y)| point(x, y)).collect());
+    data.add_attachment(track, "track", shape);
     let corner = |x, y| MeshVertex::new(vec2(x, y), Vec2::ZERO, &[(root, 1.0)]);
     let outline = vec![
         corner(-5.0, -5.0),
@@ -56,7 +79,30 @@ fn rig(texture: Texture) -> Arc<SkeletonData> {
         Key::new(0.5, moved.into()),
         Key::new(1.0, still),
     ];
-    data.add_clip(Clip::new("wave", 1.0).with_bone_track(swing).with_deform_track(bulge));
+    let mut reach = IkTrack::new(0);
+    reach.mix = vec![Key::new(0.0, 1.0), Key::new(1.0, 0.5)];
+    reach.bend_positive = vec![Key::new(0.5, false)];
+    let mut follows = TransformTrack::new(0);
+    follows.mix_translate = vec![Key::new(0.0, Vec2::ZERO), Key::new(1.0, Vec2::ONE)];
+    let mut slide = PathTrack::new(0);
+    slide.position = vec![Key::new(0.0, 0.0), Key::new(1.0, 0.5)];
+    let mut gust = PhysicsTrack::new(Some(0));
+    gust.wind = vec![Key::new(0.0, 0.0), Key::new(1.0, 30.0)];
+    gust.reset = vec![0.5];
+    data.add_clip(
+        Clip::new("wave", 1.0)
+            .with_bone_track(swing)
+            .with_deform_track(bulge)
+            .with_ik_track(reach)
+            .with_transform_track(follows)
+            .with_path_track(slide)
+            .with_physics_track(gust),
+    );
+    let mut rest = IkTrack::new(0);
+    rest.mix = vec![Key::new(0.0, 0.25)];
+    let mut back = PathTrack::new(0);
+    back.position = vec![Key::new(0.0, 1.0), Key::new(0.7, 0.2)];
+    data.add_clip(Clip::new("rest", 0.7).with_ik_track(rest).with_path_track(back));
     Arc::new(data)
 }
 
@@ -77,6 +123,8 @@ fn posing_and_drawing_skeletons_allocates_nothing_once_warm() {
                     let mut s = Skeleton::new(data.clone());
                     s.play("wave");
                     s.set_normalized_time(i as f32 / count as f32);
+                    // Long enough to blend for every frame counted.
+                    assert!(s.crossfade("rest", 1000.0));
                     ctx.world.spawn((ponko::d2::Transform::at(vec2(i as f32, 0.0)), s));
                 }
             });

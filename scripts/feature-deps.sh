@@ -41,8 +41,11 @@ OTHER_IMAGES="image-webp gif tiff qoi exr"
 # that may have the inspector forbid only the adapters (ACCESS); builds
 # without a window or an inspector forbid the data types too (ACCESS_ALL).
 # Compressed textures and compressed glTF geometry are opt-in
-# (`compressed-textures`, `basis-universal`, `gltf-meshopt`).
-TEXTURES="ktx2 ruzstd texture2ddecoder basis-universal meshopt"
+# (`compressed-textures`, `basis-universal`, `gltf-meshopt`), and so is
+# reading loose Aseprite sources (`aseprite-source`); every contract that
+# forbids the first forbids the decoder too.
+ASEPRITE="aseprite-loader"
+TEXTURES="ktx2 ruzstd texture2ddecoder basis-universal meshopt $ASEPRITE"
 ACCESS="accesskit_macos accesskit_windows accesskit_unix accesskit_consumer accesskit_atspi_common atspi zbus"
 ACCESS_ALL="$ACCESS accesskit"
 # Text shaping is opt-in (`text-shaping`); the inspector's egui brings the

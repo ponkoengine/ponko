@@ -885,23 +885,27 @@ pub(crate) fn read(path: &Path) -> std::io::Result<Vec<u8>> {
     std::fs::read(path)
 }
 
+/// Where [`write`] puts `name` given asset folders `roots`: over the first
+/// existing file, else into the first folder that exists (or the first one).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn write_path(roots: &[PathBuf], name: &str) -> Result<PathBuf, String> {
+    if let Some(existing) = roots.iter().map(|r| r.join(name)).find(|p| p.is_file()) {
+        return Ok(existing);
+    }
+    let root = roots
+        .iter()
+        .find(|r| r.is_dir())
+        .or(roots.first())
+        .ok_or("no assets/ folder")?;
+    Ok(root.join(name))
+}
+
 /// Writes `name` (relative to `assets/`): over the file where [`resolve`]
 /// finds it, else into the first `assets/` folder that exists (or the first
 /// one, created). Returns where it went.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn write(name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
-    let path = match resolve(name) {
-        Ok(existing) => existing,
-        Err(_) => {
-            let roots = asset_roots();
-            let root = roots
-                .iter()
-                .find(|r| r.is_dir())
-                .or(roots.first())
-                .ok_or("no assets/ folder")?;
-            root.join(name)
-        }
-    };
+    let path = write_path(&asset_roots(), name)?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     }

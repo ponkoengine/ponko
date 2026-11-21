@@ -20,6 +20,7 @@
 use egui::{Button, Color32, Key, RichText, ScrollArea, TextEdit, Ui};
 
 use super::Panels;
+use super::file_picker::{self, FilePicker};
 use super::keys::Action;
 use crate::ctx::Ctx;
 use crate::editor::{DiskChange, DocKind};
@@ -53,7 +54,9 @@ fn parse(setting: Option<&str>) -> Option<Option<String>> {
 /// A dialog over the editor.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Dialog {
-    /// Open a scene or prefab file.
+    /// Confirm dropping edits before choosing a file.
+    PickOpen,
+    /// Open a scene or prefab file with a path already known or entered in the editor.
     Open { path: String },
     /// Save the document as a file (and kind); `then_quit` closes the
     /// editor once saved.
@@ -81,6 +84,7 @@ pub(crate) struct App {
     /// What to open once setup has run (`None`: the world as setup made it).
     start: Option<Option<String>>,
     pub dialog: Option<Dialog>,
+    pub(super) file_picker: Option<FilePicker>,
     /// The window title set last, so it's only set when it changes.
     title: String,
     /// The game's own window title, read on the first frame (the window's
@@ -311,8 +315,14 @@ impl Panels {
     }
 
     fn ask_open(&mut self, ctx: &Ctx) {
-        let path = ctx.editor.doc.path.clone().unwrap_or_default();
-        self.set_dialog(Some(Dialog::Open { path }));
+        if !file_picker::ENABLED {
+            let path = ctx.editor.doc.path.clone().unwrap_or_default();
+            self.set_dialog(Some(Dialog::Open { path }));
+        } else if ctx.editor.dirty() {
+            self.set_dialog(Some(Dialog::PickOpen));
+        } else {
+            self.pick_file(FilePicker::Open);
+        }
     }
 
     fn ask_new(&mut self, ctx: &mut Ctx) {
@@ -570,7 +580,7 @@ impl Panels {
         let escape = ui.input(|i| i.key_pressed(Key::Escape));
         let dirty = ctx.editor.dirty();
         let title = match &dialog {
-            Dialog::Open { .. } => "Open",
+            Dialog::PickOpen | Dialog::Open { .. } => "Open",
             Dialog::SaveAs { .. } => "Save as",
             Dialog::SavePrefab { .. } => "Save selection as prefab",
             Dialog::New => "New scene",
@@ -582,6 +592,18 @@ impl Panels {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ui.ctx(), |ui| match &mut current {
+                Dialog::PickOpen => {
+                    ui.label("Unsaved changes will be lost when you open another file.");
+                    ui.horizontal(|ui| {
+                        if !escape && (ui.button("Choose file…").clicked() || enter) {
+                            self.pick_file(FilePicker::Open);
+                            done = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            done = true;
+                        }
+                    });
+                }
                 Dialog::Open { path } => {
                     ui.label("A scene or prefab in assets/:");
                     path_field(ui, path);
@@ -613,24 +635,33 @@ impl Panels {
                     });
                 }
                 Dialog::SaveAs { path, kind, then_quit } => {
-                    ui.label("File in assets/:");
-                    path_field(ui, path);
+                    if !file_picker::ENABLED {
+                        ui.label("File in assets/:");
+                        path_field(ui, path);
+                    }
                     ui.horizontal(|ui| {
                         ui.radio_value(kind, DocKind::Scene, "Scene")
                             .on_hover_text("The whole world");
                         ui.radio_value(kind, DocKind::Prefab, "Prefab")
                             .on_hover_text("The world's one root entity and what hangs off it");
                     });
-                    if exists(path) && ctx.editor.doc.path.as_deref() != Some(path.as_str()) {
+                    if !file_picker::ENABLED && exists(path) && ctx.editor.doc.path.as_deref() != Some(path.as_str()) {
                         ui.colored_label(Color32::from_rgb(255, 190, 60), "That file exists: saving replaces it.");
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("Save").clicked() || (enter && !path.is_empty()) {
-                            let (path, kind, quit) = (path.clone(), *kind, *then_quit);
-                            self.save_as(ctx, &path, kind);
+                        if file_picker::ENABLED {
+                            if !escape && (ui.button("Choose file…").clicked() || enter) {
+                                self.pick_file(FilePicker::SaveAs {
+                                    kind: *kind,
+                                    then_quit: *then_quit,
+                                });
+                                done = true;
+                            }
+                        } else if ui.button("Save").clicked() || (enter && !path.is_empty()) {
+                            self.save_as(ctx, path, *kind);
                             if self.error.is_none() {
                                 done = true;
-                                if quit {
+                                if *then_quit {
                                     ctx.quit();
                                 }
                             }
@@ -897,6 +928,18 @@ mod tests {
         egui::Event::PointerMoved(egui::pos2(at.x, at.y))
     }
 
+    // The real window drains queued requests after drawing. Tests supply a
+    // path or cancellation through the same entry point.
+    fn answer_picker(p: &mut Panels, ctx: &mut Ctx, expected: FilePicker, path: Option<&std::path::Path>) {
+        let mut called = false;
+        p.run_file_picker(ctx, |request, _, _| {
+            called = true;
+            assert_eq!(request, expected);
+            path.map(std::path::Path::to_path_buf)
+        });
+        assert!(called, "the editor queued a file picker");
+    }
+
     /// The window title the editor set last.
     fn shown(p: &Panels) -> String {
         p.app.as_ref().unwrap().title.clone()
@@ -947,18 +990,20 @@ mod tests {
         assert!(ctx.editor.dirty());
         assert!(shown(&p).starts_with("untitled scene*"), "{}", shown(&p));
 
-        // Untitled: Ctrl+S asks for a file; type it and press Enter.
+        // Untitled: Ctrl+S asks for the kind, then the picker supplies the filename.
         frame(&egui, &mut p, &mut ctx, vec![command(Key::S)]);
         assert!(matches!(p.dialog(), Some(Dialog::SaveAs { .. })), "{:?}", p.dialog());
-        frame(&egui, &mut p, &mut ctx, vec![]); // the field takes the keyboard
-        let select_all = command(Key::A);
-        frame(
-            &egui,
+        frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
+        answer_picker(
             &mut p,
             &mut ctx,
-            vec![select_all, egui::Event::Text(file.name.clone())],
+            FilePicker::SaveAs {
+                kind: DocKind::Scene,
+                then_quit: false,
+            },
+            Some(&file.file),
         );
-        frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
+        frame(&egui, &mut p, &mut ctx, vec![]);
         assert!(p.dialog().is_none(), "{:?} {:?}", p.dialog(), p.error);
         assert!(file.file.exists());
         assert!(!ctx.editor.dirty());
@@ -979,19 +1024,37 @@ mod tests {
     }
 
     #[test]
-    fn save_as_prefab_from_the_dialog_saves_the_one_root_and_the_document_becomes_that_prefab() {
+    fn save_as_prefab_uses_the_picked_file_and_open_reads_it_as_a_prefab() {
         let file = TempAsset::new("as-prefab");
         let (egui, mut p, mut ctx) = editor(None);
-        p.set_dialog(Some(Dialog::SaveAs {
-            path: file.name.clone(),
-            kind: DocKind::Prefab,
-            then_quit: false,
-        }));
-        frame(&egui, &mut p, &mut ctx, vec![]);
+        let shortcut = key(Key::S, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+        frame(&egui, &mut p, &mut ctx, vec![shortcut]);
+        let Some(Dialog::SaveAs { kind, .. }) = p.app.as_mut().unwrap().dialog.as_mut() else {
+            panic!("Save as asks for the document kind");
+        };
+        *kind = DocKind::Prefab;
         frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
+        answer_picker(
+            &mut p,
+            &mut ctx,
+            FilePicker::SaveAs {
+                kind: DocKind::Prefab,
+                then_quit: false,
+            },
+            Some(&file.file),
+        );
         assert!(p.error.is_none(), "{:?}", p.error);
         assert_eq!(ctx.editor.doc.kind, DocKind::Prefab);
         assert!(std::fs::read_to_string(&file.file).unwrap().contains("ponko-prefab"));
+
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::N)]);
+        assert_eq!(ctx.world.len(), 0);
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
+        answer_picker(&mut p, &mut ctx, FilePicker::Open, Some(&file.file));
+        assert!(p.error.is_none(), "{:?}", p.error);
+        assert_eq!(ctx.editor.doc.kind, DocKind::Prefab);
+        assert_eq!(ctx.editor.doc.path.as_deref(), Some(file.name.as_str()));
+        assert_eq!(ctx.world.len(), 1);
     }
 
     #[test]
@@ -1032,7 +1095,7 @@ mod tests {
     }
 
     #[test]
-    fn opening_with_unsaved_changes_says_they_will_be_lost_and_new_asks_first() {
+    fn new_asks_before_discarding_changes_and_open_picks_immediately_when_clean() {
         let (egui, mut p, mut ctx) = editor(None);
         frame(&egui, &mut p, &mut ctx, vec![command(Key::N)]);
         assert!(p.dialog().is_none(), "nothing unsaved: a new scene at once");
@@ -1044,7 +1107,100 @@ mod tests {
         frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
         assert_eq!(ctx.world.len(), 0);
         frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
-        assert!(matches!(p.dialog(), Some(Dialog::Open { .. })));
+        assert_eq!(p.dialog(), None);
+        answer_picker(&mut p, &mut ctx, FilePicker::Open, None);
+    }
+
+    #[test]
+    fn save_as_starts_in_the_documents_folder_and_a_name_without_extension_saves_json() {
+        let file = TempAsset::new("no-extension");
+        let (egui, mut p, mut ctx) = editor(None);
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::S)]);
+        frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
+        let typed = file.file.with_extension("");
+        p.run_file_picker(&mut ctx, |_, _, name| {
+            assert_eq!(name, Some("level.json"), "an untitled scene suggests the default name");
+            Some(typed.clone())
+        });
+        assert!(p.error.is_none(), "{:?}", p.error);
+        assert!(file.file.is_file(), "the typed name gets .json");
+        assert_eq!(ctx.editor.doc.path.as_deref(), Some(file.name.as_str()));
+
+        // Save as again: the picker opens where the document is, with its name.
+        let shortcut = key(Key::S, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+        frame(&egui, &mut p, &mut ctx, vec![shortcut]);
+        frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
+        p.run_file_picker(&mut ctx, |_, folder, name| {
+            assert_eq!(folder, file.file.parent().unwrap());
+            assert_eq!(name, Some(file.name.as_str()));
+            None
+        });
+        assert_eq!(ctx.editor.doc.path.as_deref(), Some(file.name.as_str()));
+    }
+
+    #[test]
+    fn canceling_the_open_picker_keeps_unsaved_changes_and_the_document() {
+        let (egui, mut p, mut ctx) = editor(None);
+        let e = the_entity(&mut ctx);
+        ctx.edit(|ed, ctx| ed.rename(ctx, e, "Unsaved")).unwrap();
+        let world = ctx.world.save();
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
+        assert_eq!(p.dialog(), Some(&Dialog::PickOpen));
+        p.run_file_picker(&mut ctx, |_, _, _| panic!("ask before opening the picker"));
+        frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
+        answer_picker(&mut p, &mut ctx, FilePicker::Open, None);
+        assert!(p.dialog().is_none() && ctx.editor.dirty() && ctx.editor.doc.path.is_none());
+        assert_eq!(ctx.world.save(), world);
+    }
+
+    #[test]
+    fn open_refuses_a_picked_file_shadowed_by_a_registered_asset_source() {
+        let file = TempAsset::new("shadowed-open");
+        let (egui, mut p, mut ctx) = editor(None);
+        ctx.assets.save_scene(&ctx.world, &file.name).unwrap();
+        ctx.assets
+            .add_source(crate::assets::MemorySource::new("embedded").with(&file.name, "other data"));
+
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
+        answer_picker(&mut p, &mut ctx, FilePicker::Open, Some(&file.file));
+        assert!(p.error.as_deref().unwrap().contains("embedded takes precedence"));
+        assert!(ctx.editor.doc.path.is_none());
+    }
+
+    #[test]
+    fn close_after_save_as_quits_only_after_the_chosen_file_is_saved() {
+        let file = TempAsset::new("save-on-close");
+        let (egui, mut p, mut ctx) = editor(None);
+        let e = the_entity(&mut ctx);
+        ctx.edit(|ed, ctx| ed.rename(ctx, e, "Unsaved")).unwrap();
+
+        let request = FilePicker::SaveAs {
+            kind: DocKind::Scene,
+            then_quit: true,
+        };
+        let ask = |p: &mut Panels, ctx: &mut Ctx| {
+            ctx.window.feed_event(&crate::window::WindowEvent::CloseRequested);
+            frame(&egui, p, ctx, vec![]);
+            assert_eq!(p.dialog(), Some(&Dialog::Close));
+            frame(&egui, p, ctx, vec![plain(Key::Enter)]);
+            assert!(matches!(p.dialog(), Some(Dialog::SaveAs { then_quit: true, .. })));
+            frame(&egui, p, ctx, vec![plain(Key::Enter)]);
+        };
+
+        ask(&mut p, &mut ctx);
+        answer_picker(&mut p, &mut ctx, request, None);
+        assert!(!ctx.quit_requested() && ctx.editor.dirty());
+        ask(&mut p, &mut ctx);
+        let invalid = TempAsset {
+            name: file.name.clone(),
+            file: std::env::temp_dir().join(&file.name),
+        };
+        answer_picker(&mut p, &mut ctx, request, Some(&invalid.file));
+        assert!(p.error.as_deref().unwrap().contains("inside assets/"));
+        assert!(!invalid.file.exists() && !ctx.quit_requested() && ctx.editor.dirty());
+        ask(&mut p, &mut ctx);
+        answer_picker(&mut p, &mut ctx, request, Some(&file.file));
+        assert!(file.file.exists() && ctx.quit_requested() && !ctx.editor.dirty());
     }
 
     #[test]
@@ -1301,16 +1457,18 @@ mod tests {
             mouse_drag(&egui, &mut p, &mut ctx, grab, to, 4);
             assert!((the_transform(&mut ctx).position - vec3(3.0, 0.0, 0.0)).length() < 1e-4);
 
-            // Ctrl+S on an untitled scene: name it and press Enter.
+            // Ctrl+S on an untitled scene uses the scene kind and the chosen file.
             frame(&egui, &mut p, &mut ctx, vec![command(Key::S)]);
-            frame(&egui, &mut p, &mut ctx, vec![]);
-            frame(
-                &egui,
+            frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
+            answer_picker(
                 &mut p,
                 &mut ctx,
-                vec![command(Key::A), egui::Event::Text(file.name.clone())],
+                FilePicker::SaveAs {
+                    kind: DocKind::Scene,
+                    then_quit: false,
+                },
+                Some(&file.file),
             );
-            frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
             assert!(p.dialog().is_none() && !ctx.editor.dirty(), "{:?}", p.error);
             assert!(std::fs::read_to_string(&file.file).unwrap().contains("Transform3D"));
 
@@ -1321,15 +1479,9 @@ mod tests {
             assert!(ctx.editor.dirty());
             assert!((the_transform(&mut ctx).position - vec3(5.0, 0.0, 0.0)).length() < 1e-4);
             frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
-            assert!(matches!(p.dialog(), Some(Dialog::Open { .. })), "{:?}", p.dialog());
-            frame(&egui, &mut p, &mut ctx, vec![]);
-            frame(
-                &egui,
-                &mut p,
-                &mut ctx,
-                vec![command(Key::A), egui::Event::Text(file.name.clone())],
-            );
+            assert_eq!(p.dialog(), Some(&Dialog::PickOpen));
             frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
+            answer_picker(&mut p, &mut ctx, FilePicker::Open, Some(&file.file));
             assert!(p.dialog().is_none(), "{:?} {:?}", p.dialog(), p.error);
             assert!(
                 (the_transform(&mut ctx).position - vec3(3.0, 0.0, 0.0)).length() < 1e-4,
@@ -1448,8 +1600,17 @@ mod tests {
                 kind: DocKind::Scene,
                 then_quit: false,
             }));
-            frame(&egui, &mut p, &mut ctx, vec![]);
             frame(&egui, &mut p, &mut ctx, vec![plain(Key::Enter)]);
+            answer_picker(
+                &mut p,
+                &mut ctx,
+                FilePicker::SaveAs {
+                    kind: DocKind::Scene,
+                    then_quit: false,
+                },
+                Some(&scene.file),
+            );
+            frame(&egui, &mut p, &mut ctx, vec![]);
             assert!(p.error.is_none(), "{:?}", p.error);
             assert_eq!(p.recent_files(), std::slice::from_ref(&scene.name));
             // Drag the hierarchy's edge 120 points to the right.
