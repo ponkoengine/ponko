@@ -258,6 +258,108 @@ pub unsafe extern "C" fn ponko_ctx_physics3d_is_collider_active(
     unsafe { imp::is_active(ctx, entity, out_active) }
 }
 
+/// The world just loaded, as a terrain rebuild sees it (see
+/// `ponko_ctx_physics3d_set_terrain_rebuild`): read-only, read it with
+/// `ponko_loaded_world_get`. Valid only while the rebuild runs.
+pub struct PonkoLoadedWorld {
+    /// The loaded `World`, lent for the call.
+    world: *const std::ffi::c_void,
+}
+
+/// A terrain rebuild (see `ponko_ctx_physics3d_set_terrain_rebuild`): the
+/// loaded world, the tile's entity and the `user` pointer given when it was
+/// set. It returns the tile's heightfield, new from
+/// `ponko_collision_mesh_data_heightfield` (the engine takes it and frees
+/// it, so return a new one each call), or NULL to leave the tile without
+/// ground. It must return normally (no C++ exceptions, no `longjmp`) and
+/// must not call `ponko_ctx_*` or `ponko_world_*` functions: it runs inside
+/// the load.
+/// ```
+/// let rebuild: ponko_ffi::PonkoTerrainRebuildFn = None;
+/// assert!(rebuild.is_none());
+/// ```
+pub type PonkoTerrainRebuildFn = Option<
+    unsafe extern "C" fn(
+        world: *const PonkoLoadedWorld,
+        tile: u64,
+        user: *mut std::ffi::c_void,
+    ) -> *mut PonkoCollisionMeshData,
+>;
+
+/// Makes terrain tiles solid again after a load (Rust
+/// `Physics3D::set_terrain_rebuild`). A saved world keeps each
+/// `PonkoTerrainCollider`'s surface (friction, restitution, groups) but not
+/// its heightfield, which was made in code: after `ponko_ctx_load_world` or
+/// `ponko_ctx_load_scene` (from C or Rust), `rebuild(world, tile, user)` is
+/// called for each tile whose collider has no mesh, and the heightfield it
+/// returns goes in the tile's collider, ready for the next physics step.
+/// The tile's saved components (read with `ponko_loaded_world_get`: its
+/// `PonkoTransform3D`, or a component of your own such as a tile
+/// coordinate) say which heights it had. Set it once, in setup; it stays
+/// through loads, and replaces an earlier rebuild. NULL `rebuild` is
+/// `PONKO_INVALID_ARGUMENT` (`ponko_ctx_physics3d_clear_terrain_rebuild`
+/// removes it).
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `rebuild`
+/// and never frees it. It must stay valid until the rebuild is replaced or
+/// cleared, or the game ends.
+///
+/// # Safety
+/// `ctx` null or live, outside query callbacks; `rebuild` and `user` valid
+/// as described.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_physics3d_set_terrain_rebuild(std::ptr::null_mut(), None, std::ptr::null_mut()) } as u32, 1);
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_physics3d_set_terrain_rebuild(
+    ctx: *mut PonkoCtx,
+    rebuild: PonkoTerrainRebuildFn,
+    user: *mut std::ffi::c_void,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { imp::set_rebuild(ctx, rebuild, user) }
+}
+
+/// Stops making terrain tiles solid again after a load (Rust
+/// `Physics3D::clear_terrain_rebuild`).
+/// # Safety
+/// `ctx` null or live.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_physics3d_clear_terrain_rebuild(std::ptr::null_mut()) } as u32, 1);
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_physics3d_clear_terrain_rebuild(ctx: *mut PonkoCtx) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { imp::clear_rebuild(ctx) }
+}
+
+/// Copies component `component` of `entity` into `out_data` (`size` bytes,
+/// its exact registered C size) from the world a terrain rebuild got: any
+/// entity, any component C can read (`ponko_get`'s rules).
+/// `PONKO_NOT_FOUND` if the entity lacks it. The component must have been
+/// registered (or its `ponko_*_component` id asked for) before the load.
+///
+/// Ownership: `world` is borrowed from the running rebuild; `out_data` is
+/// the caller's, written during the call only.
+/// ```
+/// use ponko_ffi::*;
+/// assert_eq!(unsafe { ponko_loaded_world_get(std::ptr::null(), 0, 0, std::ptr::null_mut(), 0) }, PonkoStatus::PONKO_INVALID_ARGUMENT);
+/// ```
+/// # Safety
+/// `world` null or the pointer a running rebuild got; `out_data` writable
+/// for `size` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_loaded_world_get(
+    world: *const PonkoLoadedWorld,
+    entity: u64,
+    component: u32,
+    out_data: *mut std::ffi::c_void,
+    size: usize,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { imp::loaded_get(world, entity, component, out_data, size) }
+}
+
 #[cfg(feature = "physics3d")]
 mod imp {
     use std::mem::offset_of;
@@ -273,7 +375,11 @@ mod imp {
     use crate::ctx::{ctx_access, out};
     use crate::physics3d::{mesh_from_c, mesh_to_c};
     use crate::types::to_c;
-    use crate::{CMirror, Failure, Kind, Mirror, boundary, builtin, invalid, mirror};
+    use std::ffi::c_void;
+
+    use ponko_ecs::World;
+
+    use crate::{CMirror, Failure, Kind, Mirror, boundary, builtin, error, invalid, mirror, value_layout};
 
     const _: () = {
         assert!(size_of::<PonkoColliderFocus>() == size_of::<ColliderFocus>());
@@ -439,6 +545,97 @@ mod imp {
             })
         })
     }
+
+    /// A C terrain rebuild and its user pointer, so the closure physics
+    /// keeps (which must be `Send + Sync`) can hold them.
+    struct Rebuild {
+        f: unsafe extern "C" fn(*const PonkoLoadedWorld, u64, *mut c_void) -> *mut PonkoCollisionMeshData,
+        user: *mut c_void,
+    }
+    // SAFETY: physics calls the rebuild only from inside a load of the
+    // `Ctx` that owns it (`Ctx::load_world`, `load_scene`), on the game's
+    // thread, which that `Ctx` never leaves. The caller of
+    // `ponko_ctx_physics3d_set_terrain_rebuild` promised `user` stays
+    // usable there, so the pointer is never used from two threads at once.
+    unsafe impl Send for Rebuild {}
+    // SAFETY: as for `Send`: calls never overlap.
+    unsafe impl Sync for Rebuild {}
+    impl Rebuild {
+        fn call(&self, world: &World, tile: Entity) -> Option<CollisionMeshData> {
+            let view = PonkoLoadedWorld {
+                world: std::ptr::from_ref(world).cast(),
+            };
+            // SAFETY: `view` outlives the call; the caller of
+            // ponko_ctx_physics3d_set_terrain_rebuild promised `f` and
+            // `user` stay valid.
+            let made = unsafe { (self.f)(&view, tile.to_bits(), self.user) };
+            if made.is_null() {
+                return None;
+            }
+            // SAFETY: the rebuild's contract: a new pointer from a
+            // `ponko_collision_mesh_data_*` call, handed to the engine.
+            Some(unsafe { Box::from_raw(made) }.data)
+        }
+    }
+
+    pub(super) unsafe fn set_rebuild(
+        ctx: *mut PonkoCtx,
+        rebuild: PonkoTerrainRebuildFn,
+        user: *mut c_void,
+    ) -> PonkoStatus {
+        boundary(|| {
+            let f = rebuild
+                .ok_or_else(|| invalid("rebuild is null (ponko_ctx_physics3d_clear_terrain_rebuild removes it)"))?;
+            // SAFETY: forwarded caller contract.
+            unsafe {
+                ctx_access(ctx, |c| {
+                    let rebuild = Rebuild { f, user };
+                    c.physics3d
+                        .set_terrain_rebuild(move |world, tile| rebuild.call(world, tile));
+                    Ok(())
+                })
+            }
+        })
+    }
+
+    pub(super) unsafe fn clear_rebuild(ctx: *mut PonkoCtx) -> PonkoStatus {
+        // SAFETY: forwarded caller contract.
+        boundary(|| unsafe {
+            ctx_access(ctx, |c| {
+                c.physics3d.clear_terrain_rebuild();
+                Ok(())
+            })
+        })
+    }
+
+    pub(super) unsafe fn loaded_get(
+        world: *const PonkoLoadedWorld,
+        entity: u64,
+        component: u32,
+        out_data: *mut c_void,
+        size: usize,
+    ) -> PonkoStatus {
+        boundary(|| {
+            // SAFETY: caller contract: null or the pointer a running rebuild got.
+            let view = unsafe { world.as_ref() }.ok_or_else(|| invalid("loaded world is null"))?;
+            // SAFETY: `Rebuild::call` made it from a `&World` that outlives the rebuild.
+            let world = unsafe { &*view.world.cast::<World>() };
+            let (id, kind) = value_layout(world, component, out_data, size)?;
+            let src = world
+                .raw_ref()
+                .get_dynamic(Entity::from_bits(entity), id)
+                .ok_or_else(|| error(PonkoStatus::PONKO_NOT_FOUND, "entity or component not found"))?;
+            // SAFETY: `value_layout` checked `out_data` is non-null and
+            // `size` is the component's C size; the caller made it writable.
+            unsafe {
+                match kind {
+                    Kind::Plain => std::ptr::copy_nonoverlapping(src, out_data.cast(), size),
+                    Kind::Mirror(m) => (m.to_c)(src, out_data),
+                }
+            }
+            Ok(())
+        })
+    }
 }
 
 #[cfg(not(feature = "physics3d"))]
@@ -485,6 +682,25 @@ mod imp {
         boundary(off)
     }
     pub(super) unsafe fn is_active(_: *mut PonkoCtx, _: u64, _: *mut bool) -> PonkoStatus {
+        boundary(off)
+    }
+    pub(super) unsafe fn set_rebuild(
+        _: *mut PonkoCtx,
+        _: PonkoTerrainRebuildFn,
+        _: *mut std::ffi::c_void,
+    ) -> PonkoStatus {
+        boundary(off)
+    }
+    pub(super) unsafe fn clear_rebuild(_: *mut PonkoCtx) -> PonkoStatus {
+        boundary(off)
+    }
+    pub(super) unsafe fn loaded_get(
+        _: *const PonkoLoadedWorld,
+        _: u64,
+        _: u32,
+        _: *mut std::ffi::c_void,
+        _: usize,
+    ) -> PonkoStatus {
         boundary(off)
     }
 }

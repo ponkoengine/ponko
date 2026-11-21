@@ -285,7 +285,9 @@ impl Ctx {
         // game, context and node tree simultaneously is required.
         let spare = self.ui_state.retained_spare.take().unwrap_or_default();
         let mut ui = std::mem::replace(&mut self.ui, spare);
+        self.ui_state.fade.screen = true;
         self.draw_ui_tree(&mut ui, self.window_size());
+        self.ui_state.fade.screen = false;
         std::mem::swap(&mut self.ui, &mut ui);
         self.ui_state.retained_spare = Some(ui);
     }
@@ -315,7 +317,12 @@ impl Ctx {
         }
         let (epoch, keep) = (cache.epoch, !cache.off);
         let mut text = std::mem::take(&mut ui.draw_cache.text);
+        // Groups fading as one image draw into layers of their own.
+        let layered = self.begin_fade_layers(ui, viewport);
         for order in 0..ui.visible.len() {
+            if layered {
+                self.enter_fade_layer(ui, order);
+            }
             let id = ui.visible[order];
             let Some(n) = ui.node(id) else { continue };
             let key = DrawKey::of(ui, n);
@@ -340,6 +347,9 @@ impl Ctx {
                 }
             }
             glyphs.fresh = false;
+        }
+        if layered {
+            self.end_fade_layers(ui);
         }
         ui.draw_cache.text = text;
         self.gfx.ui_list.set_clip(None);
@@ -862,7 +872,7 @@ const LISTENING: &str = "Press a key";
 
 /// The depth of the `order`th visible node: each one 4 above the last, room
 /// for its parts in between.
-fn node_z(order: usize) -> f32 {
+pub(super) fn node_z(order: usize) -> f32 {
     100.0 + order as f32 * 4.0
 }
 
