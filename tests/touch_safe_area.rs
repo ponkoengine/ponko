@@ -1,4 +1,4 @@
-//! The window's safe area (`Ctx::safe_area`): the part a phone's notch,
+//! The window's safe area (`WindowService::safe_area`): the part a phone's notch,
 //! home bar and rounded corners leave. Fed as a phone reports it, the
 //! on-screen controls and the ready-made arrange screen stay inside it, a
 //! dragged control stops at its edge, and UI roots made
@@ -72,7 +72,7 @@ fn shown(size: (u32, u32), scale: f32, insets: SafeInsets, arrange: bool) -> Sho
         .add(Phase::Frame, move |ctx: &mut Ctx| {
             let mut s = out.borrow_mut();
             *s = Shown {
-                safe: Some(ctx.safe_area()),
+                safe: Some(ctx.window.safe_area()),
                 ..Shown::default()
             };
             for action in ACTIONS {
@@ -86,7 +86,7 @@ fn shown(size: (u32, u32), scale: f32, insets: SafeInsets, arrange: bool) -> Sho
         })
         .run_headless(2, move |ctx| {
             ctx.ui.set_scale(scale);
-            ctx.feed_safe_insets(insets);
+            ctx.window.feed_safe_insets(insets);
             actions(ctx);
             ctx.input.set_touch_controls(controls());
             if arrange {
@@ -177,13 +177,13 @@ fn a_control_dragged_into_the_notch_stops_at_its_edge() {
                 3 => ctx.input.feed(InputEvent::touch_end(1, Vec2::new(-200.0, 450.0))),
                 5 => {
                     let node = ctx.ui.rect(ctx.ui.find("touch.jump").unwrap()).unwrap();
-                    *out.borrow_mut() = Some((jump, node, ctx.safe_area()));
+                    *out.borrow_mut() = Some((jump, node, ctx.window.safe_area()));
                 }
                 _ => {}
             }
         })
         .run_headless(6, move |ctx| {
-            ctx.feed_safe_insets(insets);
+            ctx.window.feed_safe_insets(insets);
             actions(ctx);
             ctx.input.set_touch_controls(controls());
             ctx.input.edit_touch_controls(true);
@@ -209,7 +209,7 @@ fn ui_roots_inside_the_safe_area_lay_out_in_it_and_follow_it_when_it_changes() {
         .add(Phase::Frame, move |ctx: &mut Ctx| {
             let rect = |name: &str| ctx.ui.rect(ctx.ui.find(name).unwrap()).unwrap();
             out.borrow_mut().push((
-                ctx.safe_area(),
+                ctx.window.safe_area(),
                 rect("backdrop"),
                 rect("hud"),
                 rect("hud.score"),
@@ -218,11 +218,11 @@ fn ui_roots_inside_the_safe_area_lay_out_in_it_and_follow_it_when_it_changes() {
             if ctx.time.frame() == 2 {
                 // The phone turns the other way: the notch moves right. The
                 // UI lays out before the next frame's systems.
-                ctx.feed_safe_insets(SafeInsets::new(0.0, 47.0, 21.0, 0.0));
+                ctx.window.feed_safe_insets(SafeInsets::new(0.0, 47.0, 21.0, 0.0));
             }
         })
         .run_headless(4, |ctx| {
-            ctx.feed_safe_insets(SafeInsets::new(0.0, 0.0, 21.0, 47.0));
+            ctx.window.feed_safe_insets(SafeInsets::new(0.0, 0.0, 21.0, 47.0));
             // A backdrop that fills the whole screen, under the notch too.
             let backdrop = ctx.ui.root().layout(UiLayout::fill()).name("backdrop").id();
             ctx.ui.show_hud(backdrop);

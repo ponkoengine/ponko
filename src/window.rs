@@ -406,6 +406,10 @@ pub struct WindowService {
     last_focus: Option<bool>,
     last_minimized: Option<bool>,
     pub(crate) paste_target: Option<crate::ui::UiId>,
+    /// The window's size in logical pixels (as `Ctx::window_size`), and
+    /// what the platform covers of it ([`safe_area`](Self::safe_area)).
+    logical_size: Vec2,
+    safe_insets: SafeInsets,
 }
 impl Default for WindowService {
     fn default() -> Self {
@@ -423,6 +427,8 @@ impl WindowService {
             last_focus: Some(state.focused),
             last_minimized: Some(state.minimized),
             paste_target: None,
+            logical_size: Vec2::ZERO,
+            safe_insets: SafeInsets::NONE,
         }
     }
     /// Replace the inert backend with an already-created window adapter.
@@ -495,6 +501,45 @@ impl WindowService {
             self.close = true;
         }
         true
+    }
+    /// The part of the window nothing covers, in logical pixels (as
+    /// [`Ctx::window_size`](crate::ctx::Ctx::window_size)): the window less
+    /// a phone's notch or camera cutout, its home bar and rounded corners,
+    /// where the platform reports them (see [`SafeInsets`]). The whole
+    /// window where nothing covers it. Touch controls, the arrange screen
+    /// and UI roots made with
+    /// [`inside_safe_area`](crate::ui::UiBuilder::inside_safe_area) stay in it.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::window::SafeInsets;
+    /// Game::new("notch", 800, 400).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.window.safe_area().size(), vec2(800.0, 400.0), "nothing covered");
+    ///     // As a phone held sideways reports it: the notch left, the home bar below.
+    ///     ctx.window.feed_safe_insets(SafeInsets::new(0.0, 0.0, 21.0, 47.0));
+    ///     assert_eq!(ctx.window.safe_area(), Rect::new(47.0, 0.0, 753.0, 379.0));
+    /// });
+    /// ```
+    pub fn safe_area(&self) -> crate::camera::Rect {
+        self.safe_insets.area(self.logical_size)
+    }
+    /// How far in from each window edge the platform covers it: what
+    /// [`safe_area`](Self::safe_area) leaves out.
+    pub fn safe_insets(&self) -> SafeInsets {
+        self.safe_insets
+    }
+    /// Feeds the window's safe area insets, as the platform reports them:
+    /// a test of a notched phone, a platform layer of the game's own. The
+    /// engine feeds them itself where it reads them (the browser, on a
+    /// page with `viewport-fit=cover`), again whenever the window changes
+    /// size. Negative or not finite insets count as 0. The UI lays out with
+    /// them from the next frame.
+    pub fn feed_safe_insets(&mut self, insets: SafeInsets) {
+        self.safe_insets = insets.sanitized();
+    }
+    /// The window's size in logical pixels, which the safe area is cut from.
+    pub(crate) fn set_logical_size(&mut self, size: Vec2) {
+        self.logical_size = size;
     }
     /// Veto the current close request. Explicit `ctx.quit()` remains unconditional.
     pub fn cancel_close(&mut self) {
@@ -782,8 +827,7 @@ pub(crate) fn validate_web(request: &WindowRequest) -> Result<(), Error> {
 
 /// How far in from each edge of the window the platform covers it (a
 /// phone's notch or camera cutout, its home bar, rounded corners), in
-/// logical pixels: what [`Ctx::safe_area`](crate::ctx::Ctx::safe_area)
-/// leaves out. All zero where nothing covers the window (desktops).
+/// logical pixels: what [`WindowService::safe_area`] leaves out. All zero where nothing covers the window (desktops).
 ///
 /// ```
 /// use ponko::window::SafeInsets;

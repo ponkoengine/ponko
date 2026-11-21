@@ -1,11 +1,11 @@
 ### Added
-- `ctx.safe_area()`: the part of the window a phone's notch or camera
+- `ctx.window.safe_area()`: the part of the window a phone's notch or camera
   hole, its home bar and its rounded corners leave, in logical pixels
-  (the whole window where nothing covers it), and `ctx.safe_insets()`,
+  (the whole window where nothing covers it), and `ctx.window.safe_insets()`,
   how far in from each edge they reach (`ponko::window::SafeInsets`). In
   the browser the engine reads the page's `env(safe-area-inset-*)` (a page
   with `viewport-fit=cover`) at start and whenever the window changes
-  size; `ctx.feed_safe_insets` feeds them as a phone reports them, for
+  size; `ctx.window.feed_safe_insets` feeds them as a phone reports them, for
   tests and platform layers. Not in C or C++ yet.
 - UI roots made with `.inside_safe_area()` (`Ui::set_inside_safe_area`)
   are laid out in the safe area: their sizes, fractions, anchors and

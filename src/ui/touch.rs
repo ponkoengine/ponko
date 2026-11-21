@@ -434,7 +434,7 @@ impl Ctx {
         };
         // The window, its safe area or the UI scale changed: place the
         // zones again.
-        let view = (self.safe_area(), self.ui.scale());
+        let view = (self.window.safe_area(), self.ui.scale());
         let touch = &mut self.input.touch;
         if touch.view != view {
             touch.view = view;

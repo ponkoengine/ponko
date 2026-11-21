@@ -354,7 +354,7 @@ impl Ctx {
         let touch = &self.input.touch;
         let scale = self.ui.scale().max(1e-3);
         // The panel stays in the safe area, clear of a notch and a home bar.
-        let safe = self.safe_area();
+        let safe = self.window.safe_area();
         let (origin, view) = (safe.min / scale, safe.size() / scale);
         let at = if touch.edited_zone().is_some() {
             None

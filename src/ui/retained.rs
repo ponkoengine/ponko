@@ -1346,7 +1346,7 @@ impl Ui {
     }
     /// Lays out root `id` (a screen or a HUD) inside the safe area, the
     /// part of the window a phone's notch, home bar and rounded corners
-    /// leave ([`Ctx::safe_area`](crate::ctx::Ctx::safe_area)), instead of
+    /// leave ([`ctx.window.safe_area`](crate::window::WindowService::safe_area)), instead of
     /// the whole window: its sizes, fractions, anchors and `auto` margins
     /// count from the safe area's edges. Off by default, so a background
     /// still fills the screen; put the buttons and the HUD in it. Only
@@ -1387,7 +1387,7 @@ impl Ui {
     /// The part of the viewport, in its pixels, that roots
     /// [inside the safe area](Self::set_inside_safe_area) are laid out in;
     /// `None` (the default) for the whole viewport. The engine sets it
-    /// from [`Ctx::safe_area`](crate::ctx::Ctx::safe_area) every frame; a
+    /// from [`ctx.window.safe_area`](crate::window::WindowService::safe_area) every frame; a
     /// `Ui` of the game's own (a world panel's) sets it itself.
     /// ```
     /// use ponko::prelude::*;

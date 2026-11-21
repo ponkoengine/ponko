@@ -501,7 +501,7 @@ binding arrives:
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
 | `AssetGroup::with_sliced`, `SliceLoader` | [Loading screens](loading.md#loaders-that-work-in-slices) | Not bound yet: add the file with `PONKO_GROUP_BYTES` and decode it once the group is ready |
 | `Game::restore_window_settings` | [Window service](window.md#remember-the-players-choice) | Call `ponko_ctx_window_restore_settings` in setup; the window can show at its default size for a moment first |
-| `Ctx::safe_area` | [Touch](touch.md#notches-home-bars-and-rounded-corners) | Not bound yet: the engine's touch controls and arrange screen keep to the safe area all the same; C and C++ can't read or feed it |
+| `WindowService::safe_area` | [Touch](touch.md#notches-home-bars-and-rounded-corners) | Not bound yet: the engine's touch controls and arrange screen keep to the safe area all the same; C and C++ can't read or feed it |
 | `Ui::set_inside_safe_area` | [Touch](touch.md#notches-home-bars-and-rounded-corners) | Not bound yet: UI roots made from C and C++ are laid out in the whole window |
 | `CrowdLevel::with_fade` | [Crowds](crowds.md#levels-of-detail) | Not bound yet: C and C++ crowd levels switch at once (a fade in `PonkoCrowdLevel` would change its layout) |
 

@@ -275,9 +275,9 @@ The test that drives it with scripted fingers, as a phone would:
 ## Notches, home bars and rounded corners
 
 A phone's notch or camera hole, its home bar and its rounded corners
-cover parts of the screen. `ctx.safe_area()` is the part nothing covers,
+cover parts of the screen. `ctx.window.safe_area()` is the part nothing covers,
 a `Rect` in the same logical pixels as `ctx.window_size()`, and
-`ctx.safe_insets()` says how far in from each edge the covered parts
+`ctx.window.safe_insets()` says how far in from each edge the covered parts
 reach. Where nothing covers the window (desktops), it is the whole
 window.
 
@@ -314,7 +314,7 @@ ctx.ui.show_hud(hud);
   notch, and the safe area is the whole canvas. Desktop windows have no
   insets (a full-screen window on a Mac with a notch is placed below it).
   Ponko has no iOS or Android builds yet.
-- **Testing.** `ctx.feed_safe_insets(SafeInsets::new(top, right, bottom, left))`
+- **Testing.** `ctx.window.feed_safe_insets(SafeInsets::new(top, right, bottom, left))`
   feeds the insets a phone would report, as a test does, and so can a
   platform layer of the game's own. The UI lays out with them from the
   next frame.
@@ -324,8 +324,8 @@ ctx.ui.show_hud(hud);
 use ponko::window::SafeInsets;
 Game::new("notch", 844, 390).run_headless(1, |ctx| {
     // A phone held sideways: the notch on the left, the home bar below.
-    ctx.feed_safe_insets(SafeInsets::new(0.0, 0.0, 21.0, 47.0));
-    assert_eq!(ctx.safe_area(), Rect::new(47.0, 0.0, 797.0, 369.0));
+    ctx.window.feed_safe_insets(SafeInsets::new(0.0, 0.0, 21.0, 47.0));
+    assert_eq!(ctx.window.safe_area(), Rect::new(47.0, 0.0, 797.0, 369.0));
 });
 ```
 
