@@ -34,6 +34,38 @@ const FIRST_RESEND_SECONDS: f64 = 0.2;
 const MAX_RESEND_SECONDS: f64 = 1.0;
 /// The shortest, in ticks: an acknowledgement takes at least one.
 const MIN_RESEND_TICKS: u32 = 2;
+/// While no acknowledgement comes back, each resend waits twice as long as
+/// the one before, up to this long: 4 s.
+const MAX_BACKOFF_SECONDS: f64 = 4.0;
+/// The most doublings, so the shift never overflows.
+const MAX_BACKOFF_STEPS: u32 = 16;
+/// The reordering tolerance shrinks by a tick after this many acknowledged
+/// packets without a needless early resend.
+const REORDER_DECAY: u32 = 128;
+
+/// When the server sends unacknowledged records again. All on in a game;
+/// tests turn one off to show what it does.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ResendRules {
+    /// A packet that acknowledgements of later packets skip is lost: what
+    /// it carried goes again at once, without waiting for the timeout.
+    pub(crate) early: bool,
+    /// Learn how far the link reorders packets and wait that long before
+    /// calling a skipped packet lost.
+    pub(crate) reorder: bool,
+    /// The timeout doubles with each resend while nothing is acknowledged.
+    pub(crate) backoff: bool,
+}
+
+impl Default for ResendRules {
+    fn default() -> Self {
+        Self {
+            early: true,
+            reorder: true,
+            backoff: true,
+        }
+    }
+}
 
 /// A replicated entity, by net id.
 #[derive(Clone)]
@@ -104,6 +136,9 @@ struct PacketRecord {
     tick: u64,
     live: bool,
     acked: bool,
+    /// Acknowledgements of later packets skipped it: what it carried went
+    /// again (an acknowledgement may still come, if it was only late).
+    lost: bool,
     entries: Vec<Entry>,
     words: Vec<u32>,
     destroys: Vec<(u32, u32)>,
@@ -123,6 +158,19 @@ pub(crate) struct Conn {
     /// Smoothed round trip in ticks, and its mean deviation (as TCP's
     /// RFC 6298), from the acknowledgements; `None` before the first.
     rtt: Option<(f32, f32)>,
+    /// The tick the newest acknowledged packet was sent: unacknowledged
+    /// packets sent before it (by more than `reorder`) are lost.
+    newest_acked: u64,
+    /// Ticks a packet may arrive behind ones sent after it before it counts
+    /// as lost: the most seen to arrive late after it was resent.
+    reorder: u32,
+    /// Packets acknowledged since `reorder` last grew.
+    reorder_quiet: u32,
+    /// The resend timeout doubled this many times since the last
+    /// acknowledgement.
+    backoff: u32,
+    /// The tick (low 32 bits) it last doubled.
+    backed_off_at: u32,
 }
 
 impl Conn {
@@ -138,6 +186,69 @@ impl Conn {
             stats: PeerStats::default(),
             viewer: None,
             rtt: None,
+            newest_acked: 0,
+            reorder: 0,
+            reorder_quiet: 0,
+            backoff: 0,
+            backed_off_at: 0,
+        }
+    }
+
+    /// The resend timeout now: [`resend_ticks`](Self::resend_ticks),
+    /// doubled for each resend since the last acknowledgement, at most
+    /// [`MAX_BACKOFF_SECONDS`] (or the timeout itself, if that is longer).
+    fn timeout_ticks(&self, hz: f64) -> u32 {
+        let base = self.resend_ticks(hz);
+        let most = ((MAX_BACKOFF_SECONDS * hz).ceil() as u32).max(base);
+        base.saturating_mul(1 << self.backoff).min(most)
+    }
+
+    /// A resend timeout fired at `tick` (`timeout` ticks long): the next
+    /// waits twice as long, unless it already doubled within this timeout.
+    fn back_off(&mut self, tick: u32, timeout: u32) {
+        if self.backoff == 0 || tick.wrapping_sub(self.backed_off_at) >= timeout {
+            self.backoff = (self.backoff + 1).min(MAX_BACKOFF_STEPS);
+            self.backed_off_at = tick;
+        }
+    }
+
+    /// Calls the packets that acknowledgements of later ones skipped lost
+    /// (unless `reorder` allows them to be that late): what they carried,
+    /// and wasn't sent again since, goes in the next packet.
+    fn detect_losses(&mut self, reorder: bool) {
+        let tolerance = if reorder { u64::from(self.reorder) } else { 0 };
+        let Self {
+            records,
+            views,
+            newest_acked,
+            ..
+        } = self;
+        for record in records.iter_mut() {
+            if !record.live || record.acked || record.lost || record.tick + tolerance >= *newest_acked {
+                continue;
+            }
+            record.lost = true;
+            for entry in &record.entries {
+                let Some(view) = views.get_mut(entry.slot as usize) else {
+                    continue;
+                };
+                // Only if this was its newest record, and not acknowledged.
+                let newest = view.generation == entry.generation && view.sent == entry.index;
+                let waiting = view.state == CREATING
+                    || (view.state == LIVE && entry.index.wrapping_sub(view.base_index) as i32 > 0);
+                if newest && waiting {
+                    view.unsent = true;
+                }
+            }
+            for &(id, generation) in &record.destroys {
+                if let Some(view) = views.get_mut(id as usize)
+                    && view.state == DESTROYING
+                    && view.generation == generation
+                    && view.sent_tick == record.tick as u32
+                {
+                    view.unsent = true;
+                }
+            }
         }
     }
 
@@ -159,6 +270,12 @@ impl Conn {
             None => (ticks, ticks / 2.0),
             Some((srtt, var)) => (srtt * 0.875 + ticks * 0.125, var * 0.75 + (srtt - ticks).abs() * 0.25),
         });
+    }
+
+    /// The resend timeout now (backed off), and the reordering tolerated.
+    #[cfg(test)]
+    pub(crate) fn resend_state(&self, hz: f64) -> (u32, u32) {
+        (self.timeout_ticks(hz), self.reorder)
     }
 
     /// The smoothed round trip, in ticks.
@@ -209,6 +326,7 @@ pub(crate) struct Server {
     sweep: usize,
     pub(crate) clients: BTreeMap<PeerId, Conn>,
     pub(crate) interest: Option<Interest>,
+    pub(crate) rules: ResendRules,
     sync_count: u64,
     // Scratch, reused every tick.
     found: Vec<Entity>,
@@ -569,6 +687,7 @@ impl Server {
             interest,
             candidates,
             writer,
+            rules,
             ..
         } = self;
         let Some(conn) = clients.get_mut(&peer) else { return };
@@ -584,9 +703,20 @@ impl Server {
             view.dirty = true;
             view.unsent = true;
         }
+        // Packets the acknowledgements skipped are lost: their records go
+        // again now.
+        if rules.early {
+            conn.detect_losses(rules.reorder);
+        }
         // A record not acknowledged within this many ticks goes again.
         let this_tick = settings.tick as u32;
-        let resend = conn.resend_ticks(settings.hz);
+        let resend = if rules.backoff {
+            conn.timeout_ticks(settings.hz)
+        } else {
+            conn.resend_ticks(settings.hz)
+        };
+        // Whether a record went again because its timeout passed.
+        let mut timed_out = false;
         let waited = |view: &ViewState| view.unsent || this_tick.wrapping_sub(view.sent_tick) >= resend;
 
         // Interest: which ring each entity is in for this client, this tick.
@@ -722,6 +852,7 @@ impl Server {
             record.tick = settings.tick;
             record.live = true;
             record.acked = false;
+            record.lost = false;
             record.entries.clear();
             record.words.clear();
             record.destroys.clear();
@@ -743,6 +874,7 @@ impl Server {
                     break;
                 }
                 if view.state == DESTROYING && waited(view) {
+                    timed_out |= !view.unsent;
                     writer.write_varint(id as u64);
                     record.destroys.push((id as u32, view.generation));
                     view.unsent = false;
@@ -790,6 +922,7 @@ impl Server {
                 }
                 view.sent = view.sent.wrapping_add(1);
                 view.acc = 0.0;
+                timed_out |= !c.forced && !view.unsent;
                 view.unsent = false;
                 view.sent_tick = this_tick;
                 record.entries.push(Entry {
@@ -826,6 +959,9 @@ impl Server {
             }
         }
         conn.stats.deferred += (candidates.len() - next) as u64;
+        if timed_out && rules.backoff {
+            conn.back_off(this_tick, resend);
+        }
     }
 }
 
@@ -859,8 +995,24 @@ fn acknowledge(conn: &mut Conn, slots: &mut [Slot], free: &mut Vec<u32>, seq: u1
     if !record.live || record.acked || record.seq != seq {
         return;
     }
-    let round_trip = tick.saturating_sub(record.tick) as f32;
-    conn.sample_rtt(round_trip);
+    let (sent, lost) = (record.tick, record.lost);
+    conn.sample_rtt(tick.saturating_sub(sent) as f32);
+    // The client is reachable: resends wait the plain timeout again.
+    conn.backoff = 0;
+    if lost {
+        // Called lost, resent, and it arrived after all: the link reorders
+        // packets this far. Wait that long before calling the next lost.
+        let late = conn.newest_acked.saturating_sub(sent).min(u64::from(u32::MAX)) as u32;
+        conn.reorder = conn.reorder.max((conn.reorder + 1).min(late));
+        conn.reorder_quiet = 0;
+    } else {
+        conn.reorder_quiet += 1;
+        if conn.reorder_quiet >= REORDER_DECAY {
+            conn.reorder = conn.reorder.saturating_sub(1);
+            conn.reorder_quiet = 0;
+        }
+    }
+    conn.newest_acked = conn.newest_acked.max(sent);
     let Conn {
         records,
         views,
