@@ -4945,6 +4945,20 @@ public:
     void set_inside_safe_area(id node, bool on = true) { detail::check(ponko_ctx_ui_set_inside_safe_area(raw_, target_, node, on)); }
     /// Whether root `node` is laid out inside the safe area.
     bool inside_safe_area(id node) const { bool on = false; detail::check(ponko_ctx_ui_inside_safe_area(raw_, target_, node, &on)); return on; }
+    /// Sets the part of the viewport, in its pixels, that roots made with set_inside_safe_area are laid out
+    /// in (Rust `Ui::set_safe_area`). The engine sets the screen's from ctx::window_safe_area every frame,
+    /// so this is for a UI of the game's own, a world panel's. A rectangle that isn't finite counts as none.
+    void set_safe_area(ponko::rect area) { detail::check(ponko_ctx_ui_set_safe_area(raw_, target_, &area)); }
+    /// Clears the safe area: roots inside it are laid out in the whole viewport again.
+    void clear_safe_area() { detail::check(ponko_ctx_ui_set_safe_area(raw_, target_, nullptr)); }
+    /// The safe area set with set_safe_area, or nothing: roots inside it use the whole viewport.
+    std::optional<ponko::rect> safe_area() const {
+        ponko::rect r{};
+        const auto status = ponko_ctx_ui_safe_area(raw_, target_, &r);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return r;
+    }
     /// Shows the tree under `root` as a HUD: drawn below every screen, never closed by Escape, never takes input.
     void show_hud(id root) { detail::check(ponko_ctx_ui_show_hud(raw_, target_, root)); }
     /// Takes a HUD off the screen; its nodes stay.
@@ -8443,6 +8457,14 @@ public:
     void water_touch(entity water, vec2 at, float radius, float strength) {
         detail::check(ponko_ctx_water_touch(raw_, water, at, radius, strength));
     }
+    /// How many contact ripples wait on `water` for its next update: the rings water_touch and floating
+    /// bodies crossing the surface started (each update takes three; a body whose ripple switch is off
+    /// starts none). Read it in a system after physics to see a body's ripples by their effect.
+    std::uint32_t water_waiting_contacts(entity water) {
+        std::uint32_t n = 0;
+        detail::check(ponko_ctx_water_waiting_contacts(raw_, water, &n));
+        return n;
+    }
     /// Makes 3D body `e` float as a box of `size` (needs physics3d and game::water()).
     void set_buoyancy_box(entity e, vec3 size, float drag = PONKO_BUOYANCY_DRAG) {
         detail::check(ponko_ctx_set_buoyancy_box(raw_, e, size, drag));
@@ -11921,6 +11943,14 @@ public:
     /// which comes at the next ai::think. Unlike ai::signal it reaches this brain at once, without an
     /// event, so it works from the parallel loops too.
     void signal(std::uint64_t key) { detail::check(ponko_ai_brain_signal(raw_, key)); }
+    /// signal() carrying a number, which a `wait_for` node with `"store": "key"` writes to the blackboard.
+    void signal_num(std::uint64_t key, float value) { detail::check(ponko_ai_brain_signal_num(raw_, key, value)); }
+    /// signal() carrying an entity (who shouted, who shot).
+    void signal_entity(std::uint64_t key, entity value) { detail::check(ponko_ai_brain_signal_entity(raw_, key, value)); }
+    /// signal() carrying a 2D point (where the noise was).
+    void signal_vec2(std::uint64_t key, vec2 value) { detail::check(ponko_ai_brain_signal_vec2(raw_, key, value)); }
+    /// signal() carrying a 3D point.
+    void signal_vec3(std::uint64_t key, vec3 value) { detail::check(ponko_ai_brain_signal_vec3(raw_, key, value)); }
     /// The C row.
     PonkoAiBrain* raw() const noexcept { return raw_; }
 };
@@ -12022,16 +12052,12 @@ template<class... Ts, class F> void query(ctx& c, F&& fn) { detail::brain_query<
 /// touch only its own chunk's rows.
 template<class... Ts, class F> void query_par(ctx& c, F&& fn) { detail::brain_query<Ts...>(c, true, fn); }
 /// Calls `fn(entity, ai::brain_row, ai::blackboard_row, Ts&...)` for every
-/// entity with a world brain and all of `Ts`. world_view::each does the same
-/// with the rows among its parameters, in any order, with filters and
-/// each_par: prefer it.
+/// entity with a world brain and all of `Ts`. It is world_view::each with the
+/// rows as parameters, the one typed loop over brains: write that directly
+/// (`c.world().each([&](entity e, ai::brain_row b, ai::blackboard_row bb, T& t) {...})`),
+/// which also takes the rows in any order, filters and each_par.
 template<class... Ts, class F> void each(ctx& c, F&& fn) {
-    query<Ts...>(c, [&fn](chunk<Ts...> ch, rows r) {
-        const auto cols = ch.columns();
-        for (std::size_t i = 0; i < ch.size(); ++i) {
-            std::apply([&](auto*... col) { fn(ch.entity(i), r.brain(i), r.blackboard(i), col[i]...); }, cols);
-        }
-    });
+    c.world().each([&fn](entity e, brain_row brain, blackboard_row board, Ts&... ts) { fn(e, brain, board, ts...); });
 }
 } // namespace ai
 } // namespace ponko

@@ -452,6 +452,16 @@ out inside it after `ponko_ctx_ui_set_inside_safe_area` (and
 `set_inside_safe_area(root)` and `inside_safe_area(root)`, and the scenario's
 `safe_insets(tick, insets)`, with `ponko::safe_insets` for the insets.
 
+The engine sets the screen's UI safe area from the window's every frame. A
+UI of the game's own, a world panel's (the panel's entity as the `target` of
+the `ponko_ctx_ui_*` calls), sets it itself, in its own pixels (Rust
+`Ui::set_safe_area` and `safe_area`): `ponko_ctx_ui_set_safe_area` (a
+`PonkoRect`, or `NULL` to clear it) and `ponko_ctx_ui_safe_area`, which
+answers `PONKO_NOT_FOUND` while there is none. Roots made inside the safe
+area are laid out in it, the others in the whole panel. In C++ it is the
+UI's `set_safe_area(rect)`, `clear_safe_area()` and `safe_area()`, a
+`std::optional<rect>`.
+
 Styles and placement are the versioned `PonkoTouchControlsDesc` of
 `ponko_ctx_set_touch_controls_ex`: the controls, a `PonkoTouchStyle` for all
 of them (`ponko_touch_style_default` is the engine's look), and lists of

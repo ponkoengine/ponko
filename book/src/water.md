@@ -347,6 +347,13 @@ from `ponko::buoyancy_desc::box`, `sphere` or `from_points`:
 {{#include ../../examples/cpp/guide.cpp:buoyancy_desc}}
 ```
 
+The ripples that wait for the water's next update (Rust
+`Water::waiting_contacts`) are `ponko_ctx_water_waiting_contacts` (C++
+`ctx.water_waiting_contacts(water)`). Each update takes three; a body whose
+ripple switch is off starts none, so a test sees the switch by its effect:
+read the count in a system that runs after physics, once with the switch on
+and once with it off.
+
 A sea from
 a spectrum is `PonkoWaterDesc` version 2: set `has_spectrum` and fill
 `spectrum`, a `PonkoWaveSpectrum` that `ponko_wave_spectrum(wind,

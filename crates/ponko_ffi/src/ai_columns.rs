@@ -299,6 +299,85 @@ pub unsafe extern "C" fn ponko_ai_brain_signal(brain: *mut PonkoAiBrain, key: u6
     })
 }
 
+/// Shared body of the valued signals of a brain row.
+unsafe fn brain_signal_with(brain: *mut PonkoAiBrain, key: u64, value: Value) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let brain = brain_mut(brain)?;
+        brain.signal_with(key_of(key)?, value);
+        Ok(())
+    })
+}
+
+/// `ponko_ai_brain_signal` carrying a number, which a `wait_for` node with
+/// `"store": "key"` writes to the blackboard (Rust `Brain::signal_with`).
+/// Safe inside loops and from `ponko_query_par`, each row from the thread
+/// of its chunk.
+///
+/// Ownership: `brain` is changed during the call only.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ai_brain_signal_num(std::ptr::null_mut(), 0, 1.0) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or a row from `ponko_chunk_ai_brain`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ai_brain_signal_num(brain: *mut PonkoAiBrain, key: u64, value: f32) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { brain_signal_with(brain, key, Value::Num(value)) }
+}
+
+/// `ponko_ai_brain_signal` carrying an entity (who shouted, who shot).
+///
+/// Ownership: `brain` is changed during the call only.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ai_brain_signal_entity(std::ptr::null_mut(), 0, 0) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or a row from `ponko_chunk_ai_brain`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ai_brain_signal_entity(brain: *mut PonkoAiBrain, key: u64, value: u64) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    unsafe { brain_signal_with(brain, key, Value::Entity(Entity::from_bits(value))) }
+}
+
+/// `ponko_ai_brain_signal` carrying a 2D point (where the noise was).
+///
+/// Ownership: `brain` is changed during the call only.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ai_brain_signal_vec2(std::ptr::null_mut(), 0, Default::default()) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or a row from `ponko_chunk_ai_brain`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ai_brain_signal_vec2(
+    brain: *mut PonkoAiBrain,
+    key: u64,
+    value: PonkoVec2,
+) -> PonkoStatus {
+    let v: Vec2 = to_c(value);
+    // SAFETY: forwarded caller contract.
+    unsafe { brain_signal_with(brain, key, Value::Vec2(v)) }
+}
+
+/// `ponko_ai_brain_signal` carrying a 3D point.
+///
+/// Ownership: `brain` is changed during the call only.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ai_brain_signal_vec3(std::ptr::null_mut(), 0, Default::default()) } as u32, 1);
+/// ```
+/// # Safety
+/// `brain` null or a row from `ponko_chunk_ai_brain`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ai_brain_signal_vec3(
+    brain: *mut PonkoAiBrain,
+    key: u64,
+    value: PonkoVec3,
+) -> PonkoStatus {
+    let v: Vec3 = to_c(value);
+    // SAFETY: forwarded caller contract.
+    unsafe { brain_signal_with(brain, key, Value::Vec3(v)) }
+}
+
 // ---- blackboard rows ---------------------------------------------------------------
 
 unsafe fn board_set(board: *mut PonkoAiBlackboard, key: u64, value: Value) -> PonkoStatus {
