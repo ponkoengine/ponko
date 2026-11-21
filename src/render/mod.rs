@@ -406,6 +406,8 @@ mod compressed_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod contact_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
+mod crash_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
 mod coverage_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod crowd_bench;

@@ -209,6 +209,8 @@ pub struct Ctx {
     pub(crate) system_index: usize,
     /// No window or GPU (`Game::run_headless`): textures are size-only handles.
     pub(crate) headless: bool,
+    /// Crash reports for this run, when they are on (`Game::crash_reports`).
+    pub(crate) crash: Option<crate::crash::Running>,
     /// Where the control endpoint listens, if it's on.
     pub(crate) control_addr: Option<std::net::SocketAddr>,
     /// The control methods the game and its plugins added, and the
@@ -476,6 +478,7 @@ impl Ctx {
             seed: crate::random::DEFAULT_SEED,
             system_index: 0,
             headless: false,
+            crash: None,
             control_addr: None,
             extensions: crate::control::GameExtensions::default(),
             in_setup: false,
@@ -507,6 +510,7 @@ impl Ctx {
 
     /// Engine side: draw everything queued this frame, then reset the queue.
     pub(crate) fn render_frame(&mut self) -> FrameStatus {
+        crate::crash::note_frame(self);
         self.draw_retained_ui();
         let capture = !self.gfx.screenshots.is_empty();
         #[cfg(feature = "3d")]

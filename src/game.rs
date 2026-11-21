@@ -433,6 +433,8 @@ pub struct Game {
     ext: plugin::Extensions,
     /// From `gamepad_backend`: where pads come from instead of the default.
     gamepad_backend: Option<Box<dyn crate::input::GamepadBackend>>,
+    /// From `crash_reports`.
+    crash: crate::crash::CrashReports,
 }
 
 type SetupFn = Box<dyn FnOnce(&mut Ctx) -> Result<(), crate::error::Error>>;
@@ -611,6 +613,12 @@ impl ConfiguredGame {
     /// See [`Game::debug_draw`].
     pub fn debug_draw(mut self, on: bool) -> Self {
         self.game = self.game.debug_draw(on);
+        self
+    }
+
+    /// See [`Game::crash_reports`].
+    pub fn crash_reports(mut self, reports: impl Into<crate::crash::CrashReports>) -> Self {
+        self.game = self.game.crash_reports(reports);
         self
     }
 
@@ -1276,6 +1284,7 @@ impl Game {
             states: Vec::new(),
             ext: plugin::Extensions::default(),
             gamepad_backend: None,
+            crash: crate::crash::CrashReports::default(),
         };
         #[cfg(feature = "3d")]
         game.insert_system(Phase::Animate, System::last(crate::systems::update_animators));
@@ -2732,6 +2741,7 @@ impl Game {
         }
         self.start_networking(&mut ctx);
         ctx.storage = crate::storage::Storage::for_game(self.app_id.as_deref(), self.data_dir.clone());
+        ctx.crash = crate::crash::start(&self.crash, headless, &ctx.storage, &self.title, self.vsync);
         self.ext.install(&mut ctx);
         if let Some(backend) = self.gamepad_backend.take() {
             ctx.gamepad_driver.install(&mut ctx.input, backend);
@@ -2808,6 +2818,26 @@ impl Game {
     /// ```
     pub fn data_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.data_dir = Some(dir.into());
+        self
+    }
+
+    /// Whether a panic or a fatal engine error writes a crash report into
+    /// the player's data folder ([`ctx.storage`](crate::ctx::Ctx::storage),
+    /// so the game needs an [`app_id`](Self::app_id)), and what runs with
+    /// each: `true`, `false` or a [`CrashReports`](crate::crash::CrashReports)
+    /// with the game's version and its own hook. By default reports are on
+    /// in release builds of a game with a window and off in development
+    /// builds and headless runs. See [`ponko::crash`](crate::crash) and the
+    /// guide's "Crash reports".
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let game = Game::new("Space Crab", 1280, 720)
+    ///     .app_id("space-crab")
+    ///     .crash_reports(ponko::crash::CrashReports::default().game_version(env!("CARGO_PKG_VERSION")));
+    /// ```
+    pub fn crash_reports(mut self, reports: impl Into<crate::crash::CrashReports>) -> Self {
+        self.crash = reports.into();
         self
     }
 
@@ -3279,7 +3309,7 @@ impl Game {
         let mut ctx = self.build_ctx(true);
         let control = self.start_control(&mut ctx, true);
         ctx.set_in_setup(true);
-        run_setups(std::mem::take(&mut self.setups), &mut ctx)?;
+        run_setups(std::mem::take(&mut self.setups), &mut ctx).inspect_err(crate::crash::report_error)?;
         let frame_fn = setup(&mut ctx).into_frame_fn();
         match frame_fn {
             Some(f) if self.headless_frames => self.add_setup_closure(f),

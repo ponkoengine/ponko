@@ -80,6 +80,7 @@ pub(crate) fn finish_startup(result: Result<(), Error>) {
     });
     if let Err(error) = &result {
         log_error(&error.to_string());
+        crate::crash::report_error(error);
     }
     for callback in callbacks {
         callback(result.clone());

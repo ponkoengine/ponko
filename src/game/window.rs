@@ -78,6 +78,10 @@ where
             format!("the event loop stopped with an error: {e}"),
         )
     })?;
+    // While the run's crash reports are still on (they end with `app`).
+    if let Some(error) = &app.error {
+        crate::crash::report_error(error);
+    }
     app.error.map_or(Ok(()), Err)
 }
 
