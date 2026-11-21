@@ -1274,8 +1274,8 @@ using query_filter_ex = PonkoQueryFilterEx;
 /// Post-processing that can grow (PonkoPostEx): `post` is ponko::post, plus split toning
 /// (split_toning_shadows, split_toning_highlights, split_toning_balance), depth of field (dof_enabled,
 /// dof_focus_distance, dof_focus_range, dof_blur), the sample count (msaa) and, from version 2, thin
-/// objects in screen-space reflections (ssr_thin_objects: whole without TAA, about a millisecond more at
-/// 1920x1080; the ultra preset turns it on).
+/// objects in screen-space reflections (ssr_thin_objects: whole without TAA, about 0.2 ms more at
+/// 2560x1440; the high and ultra presets turn it on).
 using post_ex = PonkoPostEx;
 /// Whether a camera draws `ctx.debug`'s 3D lines and labels (the `debug_draw` of camera3d_ex and
 /// target_camera_ex, Rust `Camera::debug_draw`); set it with `static_cast<std::uint32_t>(...)`.

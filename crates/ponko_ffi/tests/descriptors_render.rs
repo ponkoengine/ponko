@@ -194,7 +194,7 @@ fn a_quality_preset_from_c_sets_thin_objects_as_the_rust_preset_does() {
         let mut q: PonkoGraphicsQuality = std::mem::zeroed();
         let mut level = 9;
         let mut p: PonkoPostEx = header(PONKO_POST_EX_VERSION);
-        for (preset, thin) in [(3, true), (2, false), (0, false), (3, true)] {
+        for (preset, thin) in [(3, true), (2, true), (1, false), (0, false), (3, true)] {
             assert_eq!(ponko_graphics_quality_preset(preset, &mut q), PONKO_OK);
             assert_eq!(ponko_graphics_quality_level(&q, &mut level), PONKO_OK);
             assert_eq!(level, preset, "the struct is the preset");
