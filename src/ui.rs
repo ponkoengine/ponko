@@ -141,6 +141,8 @@ pub(crate) struct UiState {
     /// World-space panels' input and drawing.
     #[cfg(feature = "3d")]
     pub panels: panel3d::Panels,
+    /// Groups fading as one image: this frame's layers.
+    pub(crate) fade: group_fade::FadeLayers,
 }
 
 mod access;
@@ -150,6 +152,7 @@ mod access_kit;
 mod access_native;
 mod anim;
 mod build;
+mod group_fade;
 mod immediate;
 #[cfg(feature = "3d")]
 pub(crate) mod panel3d;

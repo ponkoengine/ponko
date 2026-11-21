@@ -1750,8 +1750,11 @@ fn floor_east_of(rig: &Rig, pixels: &[u8], x: f32, points: &[f32]) -> Vec<i32> {
 
 /// A 10 cm wall on a plane of probes 2 units apart keeps the bounced light
 /// in the lit room: the dark room's floor stays dark right up to the wall,
-/// a sixteenth as bright as the lit room's floor a unit from the wall or
-/// less.
+/// under a fiftieth as bright as the lit room's floor a unit from the wall
+/// (the sums of the image's 8-bit channels). The probes in the wall half a
+/// unit below its top are found buried too: before, rays over the top in
+/// their neighbours' views hid them, and they lit the dark room with the
+/// lit one's light (the floor at about a twentieth).
 #[test]
 fn a_thin_wall_on_a_plane_of_coarse_probes_keeps_the_dark_room_dark() {
     use crate::render::render_test_support::{Image, keep_image};
@@ -1782,7 +1785,7 @@ fn a_thin_wall_on_a_plane_of_coarse_probes_keeps_the_dark_room_dark() {
         "positive control: without the wall the light reaches there: {open:?} vs {lit}"
     );
     assert!(
-        dark.iter().all(|&d| d * 16 <= lit),
+        dark.iter().all(|&d| d * 50 <= lit),
         "the dark room stays dark: {dark:?} vs {lit}"
     );
     crate::render::render_test_support::check_reference(

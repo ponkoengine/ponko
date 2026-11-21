@@ -149,6 +149,9 @@ the tile's saved components (its transform, or a component of your own
 such as a tile coordinate) say which heights it had; `None` leaves that
 tile without ground:
 
+<div class="lang-pair">
+<div>
+
 ```rust
 # use ponko::d3::*;
 # use ponko::prelude::*;
@@ -161,10 +164,27 @@ ctx.physics3d.set_terrain_rebuild(|world, tile| {
 # }
 ```
 
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:physics3d_terrain_rebuild}}
+```
+
+</div>
+</div>
+
 Without one, the loaded tile has no ground until the game gives it a new
-`TerrainCollider` from its heights (as before). The rebuild
-(`set_terrain_rebuild`, `clear_terrain_rebuild`) is Rust-only: C and C++
-games give the loaded tile a new collider. Despawning the tile removes it; to
+`TerrainCollider` from its heights (as before); `clear_terrain_rebuild`
+removes it. The rebuild runs inside the load and only reads the loaded
+world: in C++ (`ctx.set_terrain_rebuild`, `ctx.clear_terrain_rebuild`) it
+gets a `ponko::loaded_world` whose `get<T>(tile)` reads a component of a
+type the game used on the world before the load, and returns a `collision_mesh_data` or `std::nullopt`; an exception it throws
+leaves that tile without ground and comes out of `run`. In C,
+`ponko_ctx_physics3d_set_terrain_rebuild(ctx, rebuild, user)` takes a
+callback that reads the tile with `ponko_loaded_world_get` and returns a
+new `ponko_collision_mesh_data_heightfield`, which the engine frees, or
+NULL. Despawning the tile removes it; to
 edit the ground (a crater), make a new heightfield, put it in the
 component's `mesh` and free the old one: the collider changes at the next
 step. Its `friction`, `restitution` and `groups` work as on a `d3::Collider`.
