@@ -78,6 +78,8 @@ pub use ik::{look_at_joint, two_bone_ik};
 pub use lod::{LodGroup, LodHysteresis, LodLevel, LodPick, LodRenderer, LodSettings, LodShadow};
 pub use retarget::{HumanBone, HumanoidMap, RetargetError, Retargeter};
 pub(crate) mod lights;
+#[cfg(feature = "editor")]
+mod material_edit;
 mod material_variant;
 mod stencil;
 pub use stencil::{Stencil, StencilCompare, StencilFace, StencilOp};
@@ -124,6 +126,7 @@ mod sky_kit;
 mod sky_shader;
 mod target;
 mod terrain;
+mod terrain_file;
 pub use far_terrain::FarTerrain;
 mod texture_array;
 pub(crate) mod view_model;
@@ -174,6 +177,11 @@ pub(crate) use sky_kit::CLOUD_SHADOW_TEXELS;
 pub use sky_kit::{CloudQuality, Clouds, DayNight, Moon, SkyKit};
 pub use target::{RenderTarget, TargetCamera};
 pub use terrain::{Heightfield, TERRAIN_LODS, TerrainMaterialDesc, TerrainTile, TerrainTileData};
+#[cfg_attr(not(feature = "editor"), allow(unused_imports))]
+pub(crate) use terrain_file::{
+    Built as TerrainBuilt, LayerJson as TerrainLayerJson, TERRAIN_FORMAT, TerrainData, TerrainJson, TerrainSource,
+    build as build_terrain, encode_grey16, encode_rgba, load_layers as load_terrain_layers,
+};
 pub use texture_array::{TextureArray, TextureKind};
 
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
@@ -903,7 +911,7 @@ impl Camera3D {
     }
 
     /// Its part of the window's top-left corner, in logical pixels.
-    fn origin(&self) -> Vec2 {
+    pub(crate) fn origin(&self) -> Vec2 {
         self.rect.pixels(self.window).min
     }
 
@@ -1362,6 +1370,10 @@ pub(crate) struct Assets3D {
     /// shorter than `bounds` when the last ones cast.
     pub shadowless: Vec<bool>,
     pub material_ids: crate::handle::SlotCounter,
+    /// What each material was last made or updated with, for the editor's
+    /// material windows.
+    #[cfg(feature = "editor")]
+    pub material_descs: std::collections::HashMap<u32, MaterialDesc>,
     pub shader_ids: crate::handle::SlotCounter,
     pub compute_ids: crate::handle::SlotCounter,
     pub effect_ids: crate::handle::SlotCounter,

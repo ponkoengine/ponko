@@ -447,6 +447,8 @@ impl Ctx {
         crate::reflect::WorldReflect::reflect::<crate::light2d::DirectionalLight2D>(&mut world);
         crate::reflect::WorldReflect::reflect::<crate::light2d::Occluder2D>(&mut world);
         crate::reflect::reflect_particle_emitter2d(&mut world);
+        #[cfg(feature = "3d")]
+        crate::reflect::reflect_particle_emitter3d(&mut world);
         crate::reflect::reflect_animation(&mut world);
         crate::reflect::reflect_skeleton2d(&mut world);
         // The file names behind sprites and models: the world saves by them,

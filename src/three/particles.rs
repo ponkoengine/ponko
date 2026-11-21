@@ -307,31 +307,8 @@ impl ParticleEmitter3D {
     /// assert_eq!(e.live_count(), 0);
     /// ```
     pub fn new(settings: ParticleSettings3D) -> Self {
+        Self::check(&settings).unwrap_or_else(|e| panic!("{e}"));
         let s = &settings;
-        validate(
-            [s.lifetime, s.speed, s.size, s.rotation],
-            s.rate,
-            s.duration,
-            s.drag,
-            s.gravity.is_finite(),
-            s.sheet,
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
-        match s.shape {
-            ParticleShape3D::Sphere { radius } => assert!(
-                radius.is_finite(),
-                "particle sphere: radius must be finite; replace NaN or infinity"
-            ),
-            ParticleShape3D::Cone { angle } => assert!(
-                angle.is_finite(),
-                "particle cone: angle must be finite; replace NaN or infinity"
-            ),
-            ParticleShape3D::Box { half_extents } => assert!(
-                half_extents.is_finite(),
-                "particle box: half_extents must be finite; replace NaN or infinity"
-            ),
-            _ => {}
-        }
         Self {
             particles: Vec::with_capacity(s.max_particles),
             rng: Rng::new(s.seed),
@@ -339,6 +316,41 @@ impl ParticleEmitter3D {
             settings,
         }
     }
+
+    /// What [`new`](Self::new) would panic about, if anything.
+    pub(crate) fn check(s: &ParticleSettings3D) -> Result<(), String> {
+        validate(
+            [s.lifetime, s.speed, s.size, s.rotation],
+            s.rate,
+            s.duration,
+            s.drag,
+            s.gravity.is_finite(),
+            s.sheet,
+        )?;
+        let (finite, what) = match s.shape {
+            ParticleShape3D::Sphere { radius } => (radius.is_finite(), "sphere: radius"),
+            ParticleShape3D::Cone { angle } => (angle.is_finite(), "cone: angle"),
+            ParticleShape3D::Box { half_extents } => (half_extents.is_finite(), "box: half_extents"),
+            _ => (true, ""),
+        };
+        if !finite {
+            return Err(format!("particle {what} must be finite; replace NaN or infinity"));
+        }
+        Ok(())
+    }
+
+    /// Keeps `old`'s living particles and where its emission was, so an
+    /// emitter remade with new settings (the editor's live preview) goes
+    /// on instead of starting over. Particles past the new pool size go.
+    #[cfg(feature = "editor")]
+    pub(crate) fn carry_on_from(&mut self, old: &mut Self) {
+        let max = self.settings.max_particles;
+        self.particles.clear();
+        self.particles.extend(old.particles.drain(..).take(max));
+        self.emission = old.emission.clone();
+        self.rng = old.rng.clone();
+    }
+
     /// Queues particles for the next frame, capped at the pool size; works after a one-shot ends.
     /// ```
     /// use ponko::prelude::*;

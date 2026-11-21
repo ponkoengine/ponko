@@ -502,7 +502,8 @@ fn the_shortcuts_window_and_the_play_bar_draw_over_the_editor() {
     );
     // The play bar says "playing" in blue; editing it doesn't.
     let blue = |p: [u8; 4]| near(p, [120, 200, 255, 255], 40);
-    let bar = (600..720, 2..22);
+    // After the File, Edit, Author, Window and Help menus and the play buttons.
+    let bar = (690..790, 2..22);
     assert!(image.fraction(bar.0.clone(), bar.1.clone(), blue) > 0.02, "playing");
     assert!(editing.fraction(bar.0, bar.1, blue) < 0.001, "editing");
 }

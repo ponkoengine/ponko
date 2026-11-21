@@ -661,6 +661,18 @@ impl ParticleEmitter2D {
         Ok(())
     }
 
+    /// Keeps `old`'s living particles and where its emission was, so an
+    /// emitter remade with new settings (the editor's live preview) goes
+    /// on instead of starting over. Particles past the new pool size go.
+    #[cfg(feature = "editor")]
+    pub(crate) fn carry_on_from(&mut self, old: &mut Self) {
+        let max = self.settings.max_particles;
+        self.particles.clear();
+        self.particles.extend(old.particles.drain(..).take(max));
+        self.emission = old.emission.clone();
+        self.rng = old.rng.clone();
+    }
+
     /// Queues particles for the next frame, capped at the pool size; works after a one-shot ends.
     /// ```
     /// let mut e = ponko::d2::ParticleEmitter::default();

@@ -56,6 +56,9 @@ impl Editor {
             Undo::Spawned(_) | Undo::Despawned(_) => {}
             #[cfg(all(feature = "editor", feature = "3d"))]
             Undo::GltfLink { .. } => {}
+            // Files, not the world: Stop leaves them as they are.
+            #[cfg(feature = "editor")]
+            Undo::Asset { .. } => {}
         }
     }
 

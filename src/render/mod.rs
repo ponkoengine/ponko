@@ -495,6 +495,8 @@ mod views2d_render_test;
 mod views_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d", feature = "editor"))]
+mod editor_author_render_test;
+#[cfg(all(test, feature = "window", feature = "3d", feature = "editor"))]
 mod editor_render_test;
 #[cfg(all(test, feature = "window", feature = "3d", feature = "editor"))]
 mod editor_thumbnail_render_test;
