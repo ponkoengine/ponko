@@ -964,6 +964,54 @@ mod tests {
     }
 
     #[test]
+    fn a_character_is_culled_by_the_box_of_the_clips_it_plays() {
+        let boxes = [
+            (Vec3::ZERO, vec3(1.0, 2.0, 1.0)),
+            (vec3(-1.0, 0.0, 0.0), vec3(1.0, 4.0, 1.0)),
+        ];
+        let record = |clip: u16, blend_clip: u16, blend: f32| {
+            CrowdRecord::new(
+                &CrowdInstance::new(Mat4::IDENTITY)
+                    .playing(clip, 0.0)
+                    .blending(blend_clip, 0.0, blend),
+            )
+            .anim
+        };
+        assert_eq!(character_bounds(&boxes, record(0, 1, 0.0)), boxes[0], "its clip alone");
+        assert_eq!(
+            character_bounds(&boxes, record(0, 1, 1.0)),
+            boxes[1],
+            "the blend clip alone"
+        );
+        assert_eq!(
+            character_bounds(&boxes, record(0, 1, 0.5)),
+            (vec3(-1.0, 0.0, 0.0), vec3(1.0, 4.0, 1.0)),
+            "both while blending"
+        );
+    }
+
+    #[test]
+    fn a_cull_box_follows_the_transform() {
+        // A box 2 x 4 x 2 turned a quarter turn about z, twice the size.
+        let m = Mat4::from_scale_rotation_translation(
+            Vec3::splat(2.0),
+            Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+            vec3(10.0, 0.0, 0.0),
+        );
+        let b = CullBox::new(&m, (vec3(-1.0, 0.0, -1.0), vec3(1.0, 4.0, 1.0)));
+        assert!(b.center.distance(vec3(6.0, 0.0, 0.0)) < 1e-4, "{}", b.center);
+        assert!(
+            b.extent().distance(vec3(4.0, 2.0, 2.0)) < 1e-4,
+            "lying down: {}",
+            b.extent()
+        );
+        assert!((b.radius() - vec3(4.0, 2.0, 2.0).length()).abs() < 1e-4);
+        // Planes facing +x: behind one at x 11, not at x 9.
+        assert!(b.behind(Vec4::new(1.0, 0.0, 0.0, -11.0)));
+        assert!(!b.behind(Vec4::new(1.0, 0.0, 0.0, -9.0)));
+    }
+
+    #[test]
     fn baking_samples_both_ends_of_every_clip() {
         let (skeleton, clip) = bend();
         let idle = AnimationClip::new("idle", &skeleton, vec![]);

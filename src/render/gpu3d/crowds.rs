@@ -2125,6 +2125,62 @@ impl Renderer3D {
 mod tests {
     use super::*;
 
+    fn band(min: f32, max: f32, fade_out: f32, fade_in: f32) -> Level {
+        Level {
+            mesh: 0,
+            min,
+            max,
+            camera: true,
+            shadows: true,
+            influences: 4,
+            section: 0,
+            slots: 0,
+            fade_out,
+            fade_in,
+        }
+    }
+
+    #[test]
+    fn neighbouring_levels_fade_with_complementary_shares() {
+        // Near to 10 m fading over its last 2, far from 10 m fading in.
+        let (near, far) = (band(0.0, 10.0, 2.0, 0.0), band(10.0, f32::INFINITY, 0.0, 2.0));
+        assert_eq!(level_fade(&near, 5.0), Some(0.0), "whole before the fade");
+        assert_eq!(level_fade(&far, 5.0), None, "not yet drawn");
+        assert_eq!(level_fade(&near, 8.0), Some(0.0), "the fade's start is still whole");
+        assert_eq!(level_fade(&far, 8.0), None, "and keeps none of the far level");
+        for d in [8.3, 9.0, 9.5, 9.9] {
+            let (a, b) = (level_fade(&near, d).unwrap(), level_fade(&far, d).unwrap());
+            // Fading out keeps the pixels the fading-in level leaves.
+            assert!(a < 0.0 && b > 0.0, "{d}: {a} {b}");
+            assert!(
+                (-a + b - 1.0).abs() < 1.5 / FADE_STEPS,
+                "{d}: {a} + {b} cover each pixel once"
+            );
+            assert!((b - (d - 8.0) / 2.0).abs() <= 0.5 / FADE_STEPS, "{d}: {b} of the way");
+        }
+        assert_eq!(level_fade(&near, 10.0), None, "past its band");
+        assert_eq!(level_fade(&far, 10.0), Some(0.0), "whole from its own band");
+        // Without a fade, a plain switch.
+        let plain = band(0.0, 10.0, 0.0, 0.0);
+        assert_eq!(level_fade(&plain, 9.99), Some(0.0));
+        assert_eq!(level_fade(&plain, 10.0), None);
+    }
+
+    #[test]
+    fn a_last_level_with_a_fade_fades_out_to_nothing() {
+        let last = band(0.0, 50.0, 10.0, 0.0);
+        let shares: Vec<f32> = [40.0, 42.5, 45.0, 47.5, 49.999]
+            .iter()
+            .map(|&d| level_fade(&last, d).unwrap_or(f32::NAN))
+            .collect();
+        assert_eq!(shares[0], 0.0, "whole at the fade's start");
+        assert!(
+            shares[1..4].windows(2).all(|w| w[1] > w[0]),
+            "{shares:?}: fewer pixels kept"
+        );
+        assert!(shares[4].is_nan(), "nothing kept at the end: {shares:?}");
+    }
+
     #[test]
     fn crowd_shaders_compose_on_the_mesh_shader() {
         // A game shader that reads `items` and moves vertices with time.
@@ -2142,6 +2198,14 @@ mod tests {
                     source.matches("fn static_instance").count(),
                     1,
                     "the batches' helper is replaced"
+                );
+                assert_eq!(
+                    (
+                        source.matches("out.fade = crowd_fade(in);").count(),
+                        source.matches("out.fade = in.m1.w;").count()
+                    ),
+                    (2, 0),
+                    "the main and shadow vertex entry points take the crowd's dither"
                 );
                 for samples in [1, 4] {
                     super::super::shaders::check_shader(
