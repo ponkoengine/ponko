@@ -262,8 +262,8 @@ pub unsafe extern "C" fn ponko_ai_brain_param_num(
 unsafe fn board_set(board: *mut PonkoAiBlackboard, key: u64, value: Value) -> PonkoStatus {
     // SAFETY: forwarded caller contract.
     boundary(|| unsafe {
-        let key = key_of(key)?;
-        board_mut(board)?.set(key, value);
+        let board = board_mut(board)?;
+        board.set(key_of(key)?, value);
         Ok(())
     })
 }

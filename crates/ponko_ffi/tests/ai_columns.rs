@@ -239,8 +239,8 @@ fn world_brains_are_read_and_written_inside_query_callbacks() {
         assert_eq!(row.iter().map(|r| r.0).collect::<Vec<_>>(), guards);
     }
     // Not alert before tick 2: idle.
-    for tick in 0..2 {
-        assert!(log.rows[tick].iter().all(|r| r.1 == idle), "tick {tick}");
+    for (tick, row) in log.rows[..2].iter().enumerate() {
+        assert!(row.iter().all(|r| r.1 == idle), "tick {tick}");
     }
     // Alert from tick 2 on: they chase at 4.5, started at tick 2 only.
     assert!(log.rows[2].iter().all(|r| *r == (r.0, chase, true, 4.5)));
