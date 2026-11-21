@@ -35,7 +35,7 @@
  *
  * Enums (PonkoKey, PonkoMouseButton, PonkoGamepadButton, PonkoGamepadAxis,
  * PonkoControllerFamily, PonkoDeviceKind, PonkoGlyphKind,
- * PonkoTextAlign3D, PonkoBodyKind, PonkoShapeKind, PonkoShape3DKind, PonkoNetState, PonkoPhase, PonkoService, PonkoHandleKind, PonkoAssetClass, PonkoAssetOwner, PonkoResidencyKind, PonkoAssetState, PonkoAssetGroupState, PonkoAssetGroupKind, PonkoGpuTier, PonkoGpuFeature, PonkoScenarioStatus, PonkoWaterQuality, PonkoWaterReflection, and the
+ * PonkoTextAlign3D, PonkoBodyKind, PonkoShapeKind, PonkoShape3DKind, PonkoNetState, PonkoPhase, PonkoService, PonkoHandleKind, PonkoAssetClass, PonkoAssetOwner, PonkoResidencyKind, PonkoAssetState, PonkoAssetGroupState, PonkoAssetGroupKind, PonkoGpuTier, PonkoGpuFeature, PonkoScenarioStatus, PonkoWaterQuality, PonkoWaterReflection, PonkoHookKind, PonkoCloudQuality, PonkoJointChannel, PonkoEventTarget, and the
  * PonkoUi* layout and paint enums) are passed as uint32_t.
  * Last-error text is thread-local, borrowed until the next failed call;
  * successful calls leave it unchanged.
@@ -223,9 +223,9 @@
 
 #define PONKO_PARTICLE_SETTINGS3D_EX_VERSION 1
 
-#define PONKO_CAMERA3D_EX_VERSION 1
+#define PONKO_CAMERA3D_EX_VERSION 2
 
-#define PONKO_TARGET_CAMERA_EX_VERSION 1
+#define PONKO_TARGET_CAMERA_EX_VERSION 2
 
 #define PONKO_PREDICTION_DEFAULT_CAPACITY 256
 
@@ -254,6 +254,20 @@
 #define PONKO_WATER_MAX_WAVES 8
 
 #define PONKO_BUOYANCY_DRAG 4.0
+
+#define PONKO_LIVE_COUNTS_EX_VERSION 1
+
+#define PONKO_LIGHT_BAKE_SETTINGS_VERSION 1
+
+#define PONKO_BAKE_MODEL_VERSION 1
+
+#define PONKO_BAKED_LIGHTING_INFO_VERSION 1
+
+#define PONKO_SKY_KIT_VERSION 1
+
+#define PONKO_DAY_NIGHT_VERSION 1
+
+#define PONKO_VIDEO_STATE_VERSION 1
 
 #define PONKO_WINDOW_NO_MONITOR UINT32_MAX
 
@@ -1381,6 +1395,37 @@ typedef enum PonkoUiRepeat {
   PONKO_UI_REPEAT_PING_PONG,
 } PonkoUiRepeat;
 
+typedef enum PonkoHookKind {
+  PONKO_HOOK_ADD = 0,
+  PONKO_HOOK_REPLACE = 1,
+  PONKO_HOOK_REMOVE = 2,
+} PonkoHookKind;
+
+typedef enum PonkoCloudQuality {
+  PONKO_CLOUDS_FLAT = 0,
+  PONKO_CLOUDS_LOW = 1,
+  PONKO_CLOUDS_MEDIUM = 2,
+  PONKO_CLOUDS_HIGH = 3,
+} PonkoCloudQuality;
+
+typedef enum PonkoJointChannel {
+  PONKO_JOINT_TRANSLATION = 0,
+  PONKO_JOINT_ROTATION = 1,
+  PONKO_JOINT_SCALE = 2,
+} PonkoJointChannel;
+
+typedef enum PonkoEventTarget {
+  PONKO_EVENT_TO_SERVER = 0,
+  PONKO_EVENT_TO_CLIENT = 1,
+  PONKO_EVENT_TO_CLIENTS = 2,
+} PonkoEventTarget;
+
+typedef enum PonkoDebugDraw {
+  PONKO_DEBUG_DRAW_DEFAULT,
+  PONKO_DEBUG_DRAW_ON,
+  PONKO_DEBUG_DRAW_OFF,
+} PonkoDebugDraw;
+
 typedef struct PonkoAccess PonkoAccess;
 
 typedef struct PonkoActionMap PonkoActionMap;
@@ -1390,6 +1435,8 @@ typedef struct PonkoAnimationGraph PonkoAnimationGraph;
 typedef struct PonkoAnimationGraphBuilder PonkoAnimationGraphBuilder;
 
 typedef struct PonkoAssetGroup PonkoAssetGroup;
+
+typedef struct PonkoBakedLighting PonkoBakedLighting;
 
 typedef struct PonkoBehaviorTree PonkoBehaviorTree;
 
@@ -1421,6 +1468,8 @@ typedef struct PonkoGrid PonkoGrid;
 
 typedef struct PonkoHeightfield PonkoHeightfield;
 
+typedef struct PonkoHookWorld PonkoHookWorld;
+
 typedef struct PonkoHumanoidMap PonkoHumanoidMap;
 
 typedef struct PonkoInputQueue PonkoInputQueue;
@@ -1431,6 +1480,8 @@ typedef struct PonkoInterest PonkoInterest;
 
 typedef struct PonkoLatestWins PonkoLatestWins;
 
+typedef struct PonkoLightBakeScene PonkoLightBakeScene;
+
 typedef struct PonkoLobby PonkoLobby;
 
 typedef struct PonkoMemorySource PonkoMemorySource;
@@ -1440,6 +1491,8 @@ typedef struct PonkoMeshData PonkoMeshData;
 typedef struct PonkoMotion PonkoMotion;
 
 typedef struct PonkoNavGrid PonkoNavGrid;
+
+typedef struct PonkoNavMesh PonkoNavMesh;
 
 typedef struct PonkoNavSources PonkoNavSources;
 
@@ -1458,6 +1511,8 @@ typedef struct PonkoSteamLobby PonkoSteamLobby;
 typedef struct PonkoTerrainTileData PonkoTerrainTileData;
 
 typedef struct PonkoUiAccess PonkoUiAccess;
+
+typedef struct PonkoVideo PonkoVideo;
 
 typedef struct PonkoWorld PonkoWorld;
 
@@ -2372,6 +2427,15 @@ typedef struct PonkoReplicationPeerStats {
   uint64_t destroys_sent;
   uint64_t deferred;
 } PonkoReplicationPeerStats;
+
+typedef struct PonkoReplicationResendStats {
+  uint64_t early_resends;
+  uint64_t timeout_resends;
+  uint64_t late_acks;
+  uint32_t timeout_ticks;
+  uint32_t backoff;
+  uint32_t reorder_ticks;
+} PonkoReplicationResendStats;
 
 typedef struct PonkoReplicationClientStats {
   uint64_t packets_received;
@@ -3306,6 +3370,7 @@ typedef struct PonkoCamera3DEx {
   struct PonkoCamera3D camera;
   bool occlusion_culling;
   bool particles;
+  uint32_t debug_draw;
 } PonkoCamera3DEx;
 
 typedef struct PonkoTargetCameraEx {
@@ -3313,6 +3378,7 @@ typedef struct PonkoTargetCameraEx {
   uint32_t version;
   struct PonkoTargetCamera target_camera;
   bool particles;
+  uint32_t debug_draw;
 } PonkoTargetCameraEx;
 
 typedef bool (*PonkoPredictStepFn)(void *user,
@@ -3539,6 +3605,175 @@ typedef struct PonkoWaterSample {
   float squeeze;
 } PonkoWaterSample;
 
+typedef struct PonkoHookEvent {
+  uint64_t entity;
+  uint32_t component;
+  uint32_t kind;
+  const void *value;
+  const void *new_value;
+  size_t size;
+} PonkoHookEvent;
+
+typedef void (*PonkoHookFn)(struct PonkoHookWorld*, const struct PonkoHookEvent*, void*);
+
+typedef void (*PonkoFreeUserFn)(void*);
+
+typedef struct PonkoJointTrack {
+  uint32_t joint;
+  uint32_t channel;
+  uint32_t interpolation;
+  const float *times;
+  const float *values;
+  size_t count;
+} PonkoJointTrack;
+
+typedef struct PonkoLiveCountsEx {
+  uint32_t struct_size;
+  uint32_t version;
+  struct PonkoLiveCounts counts;
+  size_t crowds;
+  size_t instance_cells;
+  size_t collision_meshes;
+  size_t sprite_shaders;
+  size_t sprite_materials;
+  size_t sky_shaders;
+} PonkoLiveCountsEx;
+
+typedef struct PonkoLightBakeSettings {
+  uint32_t struct_size;
+  uint32_t version;
+  float texels_per_unit;
+  uint32_t samples;
+  uint32_t bounces;
+  uint32_t page_size;
+  bool directional;
+  bool denoise;
+  float probe_spacing;
+  uint64_t seed;
+} PonkoLightBakeSettings;
+
+typedef struct PonkoBakeModel {
+  uint32_t struct_size;
+  uint32_t version;
+  const struct PonkoMeshData *mesh;
+  struct PonkoTransform3D transform;
+  struct PonkoColor albedo;
+  struct PonkoColor emissive;
+  bool double_sided;
+  bool lightmapped;
+} PonkoBakeModel;
+
+typedef struct PonkoPointLight3D {
+  struct PonkoColor color;
+  float intensity;
+  float range;
+  bool shadows;
+  uint32_t shadow_resolution;
+} PonkoPointLight3D;
+
+typedef struct PonkoSpotLight3D {
+  struct PonkoColor color;
+  float intensity;
+  float range;
+  float inner_angle;
+  float outer_angle;
+  bool shadows;
+  uint32_t shadow_resolution;
+} PonkoSpotLight3D;
+
+typedef struct PonkoBakedLightingInfo {
+  uint32_t struct_size;
+  uint32_t version;
+  uint32_t page_size;
+  uint32_t pages;
+  bool directional;
+  uint64_t gpu_bytes;
+  double seconds;
+  uint64_t texels;
+  uint64_t inside_texels;
+  uint64_t probes;
+  uint64_t rays;
+} PonkoBakedLightingInfo;
+
+typedef struct PonkoLightmapRect {
+  uint32_t page;
+  uint32_t x;
+  uint32_t y;
+  uint32_t width;
+  uint32_t height;
+} PonkoLightmapRect;
+
+typedef struct PonkoLightmapped {
+  uint32_t index;
+} PonkoLightmapped;
+
+typedef struct PonkoNavView {
+  const struct PonkoNavMesh *navmesh;
+} PonkoNavView;
+
+typedef void (*PonkoPredictFn)(void*, size_t, const void*, size_t, void*);
+
+typedef struct PonkoNetEvent {
+  uint64_t from;
+  uint64_t tick;
+  uint32_t kind;
+  const uint8_t *data;
+  size_t size;
+} PonkoNetEvent;
+
+typedef struct PonkoSkyKit {
+  uint32_t struct_size;
+  uint32_t version;
+  bool enabled;
+  uint32_t quality;
+  float coverage;
+  float kind;
+  struct PonkoVec2 wind;
+  struct PonkoVec2 offset;
+  float altitude;
+  float thickness;
+  float density;
+  float self_shadow;
+  float silver_lining;
+  float shadows;
+  bool moon_has_direction;
+  struct PonkoVec3 moon_direction;
+  float moon_phase;
+  float moon_size;
+  float moon_brightness;
+} PonkoSkyKit;
+
+typedef struct PonkoDayNight {
+  uint32_t struct_size;
+  uint32_t version;
+  float hour;
+  uint32_t day;
+  float hours_per_second;
+  float days_per_moon;
+  float first_phase;
+  struct PonkoColor sun_color;
+  float sun_intensity;
+  struct PonkoColor night_light;
+} PonkoDayNight;
+
+typedef struct PonkoVideoState {
+  uint32_t struct_size;
+  uint32_t version;
+  struct PonkoTexture texture;
+  uint32_t width;
+  uint32_t height;
+  float seconds;
+  float time;
+  float frame_time;
+  float volume;
+  bool playing;
+  bool finished;
+  bool looping;
+  bool has_sound;
+  struct PonkoSound sound;
+  struct PonkoAudioBus bus;
+} PonkoVideoState;
+
 typedef struct PonkoWindowVideoModeEx {
   uint32_t struct_size;
   uint32_t version;
@@ -3640,24 +3875,6 @@ typedef struct PonkoVelocity {
   struct PonkoVec2 linear;
   float angular;
 } PonkoVelocity;
-
-typedef struct PonkoPointLight3D {
-  struct PonkoColor color;
-  float intensity;
-  float range;
-  bool shadows;
-  uint32_t shadow_resolution;
-} PonkoPointLight3D;
-
-typedef struct PonkoSpotLight3D {
-  struct PonkoColor color;
-  float intensity;
-  float range;
-  float inner_angle;
-  float outer_angle;
-  bool shadows;
-  uint32_t shadow_resolution;
-} PonkoSpotLight3D;
 
 typedef struct PonkoReceivesDecals {
   uint32_t layers;
@@ -6472,6 +6689,10 @@ enum PonkoStatus ponko_ctx_replication_set_viewer(struct PonkoCtx *ctx,
 enum PonkoStatus ponko_ctx_replication_peer_stats(struct PonkoCtx *ctx,
                                                   uint64_t peer,
                                                   struct PonkoReplicationPeerStats *out_stats);
+
+enum PonkoStatus ponko_ctx_replication_resend_stats(struct PonkoCtx *ctx,
+                                                    uint64_t peer,
+                                                    struct PonkoReplicationResendStats *out_stats);
 
 enum PonkoStatus ponko_ctx_replication_client_stats(struct PonkoCtx *ctx,
                                                     struct PonkoReplicationClientStats *out_stats);
@@ -9717,6 +9938,278 @@ enum PonkoStatus ponko_ctx_remove_buoyancy(struct PonkoCtx *ctx, uint64_t entity
 enum PonkoStatus ponko_ctx_buoyancy_submerged(const struct PonkoCtx *ctx,
                                               uint64_t entity,
                                               float *out_share);
+
+enum PonkoStatus ponko_component_on_add(struct PonkoWorld *world,
+                                        uint32_t component,
+                                        PonkoHookFn hook,
+                                        void *user,
+                                        PonkoFreeUserFn free_user);
+
+enum PonkoStatus ponko_component_on_replace(struct PonkoWorld *world,
+                                            uint32_t component,
+                                            PonkoHookFn hook,
+                                            void *user,
+                                            PonkoFreeUserFn free_user);
+
+enum PonkoStatus ponko_component_on_remove(struct PonkoWorld *world,
+                                           uint32_t component,
+                                           PonkoHookFn hook,
+                                           void *user,
+                                           PonkoFreeUserFn free_user);
+
+enum PonkoStatus ponko_hook_get(struct PonkoHookWorld *hw,
+                                uint64_t entity,
+                                uint32_t component,
+                                void *out_data,
+                                size_t size);
+
+enum PonkoStatus ponko_hook_write(struct PonkoHookWorld *hw,
+                                  uint64_t entity,
+                                  uint32_t component,
+                                  const void *data,
+                                  size_t size);
+
+enum PonkoStatus ponko_hook_spawn_later(struct PonkoHookWorld *hw,
+                                        const struct PonkoValue *values,
+                                        size_t count,
+                                        uint64_t *out_entity);
+
+enum PonkoStatus ponko_hook_set_later(struct PonkoHookWorld *hw,
+                                      uint64_t entity,
+                                      const struct PonkoValue *value);
+
+enum PonkoStatus ponko_hook_remove_later(struct PonkoHookWorld *hw,
+                                         uint64_t entity,
+                                         uint32_t component);
+
+enum PonkoStatus ponko_hook_despawn_later(struct PonkoHookWorld *hw, uint64_t entity);
+
+enum PonkoStatus ponko_hook_is_alive(struct PonkoHookWorld *hw, uint64_t entity, bool *out_alive);
+
+enum PonkoStatus ponko_ctx_create_clip(struct PonkoCtx *ctx,
+                                       uint64_t skeleton_entity,
+                                       const char *name,
+                                       const struct PonkoJointTrack *tracks,
+                                       size_t track_count,
+                                       struct PonkoClip **out_clip);
+
+enum PonkoStatus ponko_ctx_live_counts_ex(struct PonkoCtx *ctx,
+                                          struct PonkoLiveCountsEx *out_counts);
+
+enum PonkoStatus ponko_mesh_data_generate_lightmap_uvs(struct PonkoMeshData *data,
+                                                       float texels_per_unit,
+                                                       uint32_t *out_side);
+
+enum PonkoStatus ponko_light_bake_settings_defaults(struct PonkoLightBakeSettings *settings);
+
+enum PonkoStatus ponko_bake_model_defaults(struct PonkoBakeModel *model);
+
+enum PonkoStatus ponko_ctx_light_bake_scene_new(struct PonkoCtx *ctx,
+                                                struct PonkoLightBakeScene **out_scene);
+
+void ponko_light_bake_scene_free(struct PonkoLightBakeScene *scene);
+
+enum PonkoStatus ponko_light_bake_scene_add(struct PonkoLightBakeScene *scene,
+                                            const struct PonkoBakeModel *model,
+                                            size_t *out_index);
+
+enum PonkoStatus ponko_light_bake_scene_add_point_light(struct PonkoLightBakeScene *scene,
+                                                        struct PonkoVec3 position,
+                                                        const struct PonkoPointLight3D *light);
+
+enum PonkoStatus ponko_light_bake_scene_add_spot_light(struct PonkoLightBakeScene *scene,
+                                                       struct PonkoVec3 position,
+                                                       struct PonkoVec3 forward,
+                                                       const struct PonkoSpotLight3D *light);
+
+enum PonkoStatus ponko_ctx_light_bake_scene_add_lights(struct PonkoCtx *ctx,
+                                                       struct PonkoLightBakeScene *scene);
+
+enum PonkoStatus ponko_bake_lighting(const struct PonkoLightBakeScene *scene,
+                                     const struct PonkoLightBakeSettings *settings,
+                                     struct PonkoBakedLighting **out_baked);
+
+void ponko_baked_lighting_free(struct PonkoBakedLighting *baked);
+
+enum PonkoStatus ponko_baked_lighting_to_bytes(const struct PonkoBakedLighting *baked,
+                                               uint8_t *buffer,
+                                               size_t capacity,
+                                               size_t *out_len);
+
+enum PonkoStatus ponko_baked_lighting_from_bytes(const void *data,
+                                                 size_t size,
+                                                 struct PonkoBakedLighting **out_baked);
+
+enum PonkoStatus ponko_ctx_load_baked_lighting(struct PonkoCtx *ctx,
+                                               const char *path,
+                                               struct PonkoBakedLighting **out_baked);
+
+enum PonkoStatus ponko_ctx_set_baked_lighting(struct PonkoCtx *ctx,
+                                              const struct PonkoBakedLighting *baked);
+
+enum PonkoStatus ponko_baked_lighting_info(const struct PonkoBakedLighting *baked,
+                                           struct PonkoBakedLightingInfo *out_info);
+
+enum PonkoStatus ponko_baked_lighting_lightmap(const struct PonkoBakedLighting *baked,
+                                               size_t index,
+                                               struct PonkoLightmapRect *out_rect,
+                                               struct PonkoLightmapped *out_lightmapped);
+
+enum PonkoStatus ponko_baked_lighting_texel(const struct PonkoBakedLighting *baked,
+                                            uint32_t page,
+                                            uint32_t x,
+                                            uint32_t y,
+                                            struct PonkoVec3 *out_light,
+                                            bool *out_baked);
+
+enum PonkoStatus ponko_baked_lighting_probe_light(const struct PonkoBakedLighting *baked,
+                                                  struct PonkoVec3 position,
+                                                  struct PonkoVec3 normal,
+                                                  struct PonkoVec3 *out_light);
+
+enum PonkoStatus ponko_lightmapped_component(struct PonkoWorld *world, uint32_t *out_id);
+
+enum PonkoStatus ponko_ctx_nav_view(struct PonkoCtx *ctx, struct PonkoNavView *out_view);
+
+enum PonkoStatus ponko_nav_view_sample_position(const struct PonkoNavView *view,
+                                                struct PonkoVec3 point,
+                                                float max_distance,
+                                                struct PonkoVec3 *out_point,
+                                                bool *out_found);
+
+enum PonkoStatus ponko_nav_view_sample_positions(const struct PonkoNavView *view,
+                                                 const struct PonkoVec3 *points,
+                                                 size_t count,
+                                                 float max_distance,
+                                                 struct PonkoVec3 *out_points,
+                                                 bool *out_found);
+
+enum PonkoStatus ponko_nav_view_find_path(const struct PonkoNavView *view,
+                                          struct PonkoVec3 from,
+                                          struct PonkoVec3 to,
+                                          struct PonkoVec3 *out_corners,
+                                          size_t capacity,
+                                          size_t *out_len);
+
+enum PonkoStatus ponko_ctx_replication_input(struct PonkoCtx *ctx,
+                                             const char *name,
+                                             size_t size,
+                                             const struct PonkoReplicatedField *fields,
+                                             size_t field_count);
+
+enum PonkoStatus ponko_ctx_replication_predicted(struct PonkoCtx *ctx,
+                                                 const char *component,
+                                                 PonkoPredictFn step,
+                                                 void *user,
+                                                 PonkoFreeUserFn free_user);
+
+enum PonkoStatus ponko_ctx_replication_interpolated(struct PonkoCtx *ctx,
+                                                    const char *component,
+                                                    const struct PonkoSnapshotConfig *config);
+
+enum PonkoStatus ponko_ctx_replication_event(struct PonkoCtx *ctx,
+                                             const char *name,
+                                             uint16_t *out_kind);
+
+enum PonkoStatus ponko_ctx_replication_position(struct PonkoCtx *ctx,
+                                                uint32_t component,
+                                                size_t offset,
+                                                uint32_t dims);
+
+enum PonkoStatus ponko_ctx_set_replication_input(struct PonkoCtx *ctx,
+                                                 const void *data,
+                                                 size_t size);
+
+enum PonkoStatus ponko_ctx_replication_input_of(struct PonkoCtx *ctx,
+                                                uint64_t peer,
+                                                void *out_data,
+                                                size_t size);
+
+enum PonkoStatus ponko_ctx_replication_send(struct PonkoCtx *ctx,
+                                            uint32_t target,
+                                            uint64_t peer,
+                                            uint16_t kind,
+                                            const void *data,
+                                            size_t size);
+
+enum PonkoStatus ponko_ctx_net_events(struct PonkoCtx *ctx,
+                                      const struct PonkoNetEvent **out_events,
+                                      size_t *out_count);
+
+enum PonkoStatus ponko_input_scenario_tap(struct PonkoInputScenario *scenario,
+                                          uint64_t tick,
+                                          struct PonkoVec2 at);
+
+enum PonkoStatus ponko_input_scenario_touch_hold(struct PonkoInputScenario *scenario,
+                                                 uint64_t from,
+                                                 uint64_t to,
+                                                 struct PonkoVec2 at);
+
+enum PonkoStatus ponko_input_scenario_touch_drag(struct PonkoInputScenario *scenario,
+                                                 uint64_t from,
+                                                 uint64_t to,
+                                                 struct PonkoVec2 start,
+                                                 struct PonkoVec2 end);
+
+enum PonkoStatus ponko_sky_kit_defaults(struct PonkoSkyKit *kit);
+
+enum PonkoStatus ponko_ctx_sky_kit(struct PonkoCtx *ctx, struct PonkoSkyKit *out_kit);
+
+enum PonkoStatus ponko_ctx_set_sky_kit(struct PonkoCtx *ctx, const struct PonkoSkyKit *kit);
+
+float ponko_moon_illumination(float phase);
+
+enum PonkoStatus ponko_day_night_new(float hour, struct PonkoDayNight *out_day);
+
+enum PonkoStatus ponko_day_night_advance(struct PonkoDayNight *day, float seconds);
+
+enum PonkoStatus ponko_day_night_moon_phase(const struct PonkoDayNight *day, float *out_phase);
+
+enum PonkoStatus ponko_ctx_apply_day_night(struct PonkoCtx *ctx, const struct PonkoDayNight *day);
+
+enum PonkoStatus ponko_ctx_update_day_night(struct PonkoCtx *ctx, struct PonkoDayNight *day);
+
+enum PonkoStatus ponko_ctx_load_video(struct PonkoCtx *ctx,
+                                      const char *path,
+                                      struct PonkoVideo **out_video);
+
+enum PonkoStatus ponko_ctx_video_from_bytes(struct PonkoCtx *ctx,
+                                            const void *data,
+                                            size_t size,
+                                            struct PonkoVideo **out_video);
+
+enum PonkoStatus ponko_ctx_free_video(struct PonkoCtx *ctx, struct PonkoVideo *video);
+
+enum PonkoStatus ponko_video_state(const struct PonkoVideo *video,
+                                   struct PonkoVideoState *out_state);
+
+enum PonkoStatus ponko_video_frame_rgba(const struct PonkoVideo *video,
+                                        const uint8_t **out_pixels,
+                                        size_t *out_size);
+
+enum PonkoStatus ponko_video_set_looping(struct PonkoVideo *video, bool looping);
+
+enum PonkoStatus ponko_ctx_video_play(struct PonkoCtx *ctx, struct PonkoVideo *video);
+
+enum PonkoStatus ponko_ctx_video_pause(struct PonkoCtx *ctx, struct PonkoVideo *video);
+
+enum PonkoStatus ponko_ctx_video_seek(struct PonkoCtx *ctx,
+                                      struct PonkoVideo *video,
+                                      float seconds);
+
+enum PonkoStatus ponko_ctx_video_update(struct PonkoCtx *ctx, struct PonkoVideo *video);
+
+enum PonkoStatus ponko_ctx_video_advance(struct PonkoCtx *ctx,
+                                         struct PonkoVideo *video,
+                                         float seconds);
+
+enum PonkoStatus ponko_ctx_video_set_volume(struct PonkoCtx *ctx,
+                                            struct PonkoVideo *video,
+                                            float volume);
+
+enum PonkoStatus ponko_ctx_video_set_bus(struct PonkoCtx *ctx,
+                                         struct PonkoVideo *video,
+                                         struct PonkoAudioBus bus);
 
 enum PonkoStatus ponko_window_video_mode_ex_defaults(struct PonkoWindowVideoModeEx *desc);
 

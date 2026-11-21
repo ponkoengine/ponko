@@ -72,3 +72,20 @@ test("the_web_toolchain_can_be_chosen", () => {
 test("a_build_without_threads_changes_no_flags", () => {
   assert.deepEqual(printEnv({ RUSTFLAGS: "-D warnings" }, []), { toolchain: "default" });
 });
+
+test("clippy_runs_nightly_with_the_threaded_flags_and_denies_warnings", () => {
+  const env = printEnv({ RUSTFLAGS: "--cfg x" }, ["--threads", "--clippy"]);
+  assert.deepEqual(Object.keys(env), ["toolchain", "RUSTFLAGS", "clippy"]);
+  assertThreadFlags(env.RUSTFLAGS.split(" "));
+  const words = env.clippy.split(" ");
+  assert.deepEqual(words.slice(0, 3), ["cargo", "+nightly", "clippy"]);
+  assert.ok(words.includes("-Zbuild-std=panic_abort,std"), "std rebuilt with atomics, as the build does");
+  assert.ok(words.includes("--lib") && words.includes("web_threads"), "the engine and the threads fixture");
+  assert.deepEqual(words.slice(-3), ["--", "-D", "warnings"]);
+});
+
+test("clippy_is_only_for_threaded_builds", () => {
+  const run = spawnSync("bash", [BUILD, "--clippy", "--print-env"], { encoding: "utf8" });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /--clippy is for --threads/);
+});

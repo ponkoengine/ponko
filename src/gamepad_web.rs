@@ -16,11 +16,14 @@
 //! Start, the stick buttons and the d-pad, axes 0-3 the two sticks (y down,
 //! as the engine has them). Triggers report their value as an axis and,
 //! when the browser says they are pressed, as a button. A pad's key is its
-//! browser index. Like gilrs on the web, no rumble and no motion.
+//! browser index. Rumble goes to the pad's `vibrationActuator` where the
+//! browser has one (see [`crate::web_rumble`]); there is no motion, as with
+//! gilrs on the web.
 
 use crate::input::{
     ControllerFamily, DeviceKey, GamepadAxis, GamepadBackend, GamepadButton, GamepadEvents, GamepadInfo, MotorLevels,
 };
+use crate::web_rumble::{Actuators, WebRumble};
 
 /// Buttons of the standard layout the engine reads (16 is the home button,
 /// which it has no name for).
@@ -77,12 +80,16 @@ pub(crate) struct PadReading {
     /// The browser's `id` text. Read only for a pad the backend doesn't know
     /// yet (a new string every poll would allocate), so `None` otherwise.
     pub(crate) id: Option<String>,
+    /// Whether the pad has a `vibrationActuator`. Read with `id`, so only
+    /// meaningful when that is `Some`.
+    pub(crate) rumble: bool,
     pub(crate) buttons: [ButtonReading; BUTTONS],
     pub(crate) axes: [f32; AXES],
 }
 
-/// Where the readings come from: the browser ([`BrowserPads`]), or a test.
-pub(crate) trait ReadPads: Send + 'static {
+/// Where the readings come from, and where rumble goes: the browser
+/// ([`BrowserPads`]), or a test.
+pub(crate) trait ReadPads: Actuators + Send + 'static {
     /// Replaces `into` with the gamepads connected now. `known(index)` says
     /// whether the backend already has that pad, whose `id` it then needn't read.
     fn read(&mut self, known: &dyn Fn(u32) -> bool, into: &mut Vec<PadReading>);
@@ -102,6 +109,8 @@ pub(crate) struct WebGamepads<R: ReadPads> {
     known: Vec<Known>,
     /// This poll's readings, kept so polling doesn't allocate.
     readings: Vec<PadReading>,
+    /// The rumble playing, replayed before the browser ends it.
+    rumble: WebRumble,
 }
 
 impl<R: ReadPads> WebGamepads<R> {
@@ -110,6 +119,7 @@ impl<R: ReadPads> WebGamepads<R> {
             reader,
             known: Vec::with_capacity(MAX_PADS),
             readings: Vec::with_capacity(MAX_PADS),
+            rumble: WebRumble::default(),
         }
     }
 }
@@ -143,13 +153,16 @@ pub(crate) fn info_from_id(id: &str) -> GamepadInfo {
 impl<R: ReadPads> GamepadBackend for WebGamepads<R> {
     fn poll(&mut self, events: &mut GamepadEvents<'_>) {
         let known = &self.known;
+        let rumble = &mut self.rumble;
         self.reader
             .read(&|index| known.iter().any(|k| k.index == index), &mut self.readings);
         // Gone since the last poll: disconnected.
         self.known.retain(|k| {
             let here = self.readings.iter().any(|r| r.index == k.index);
             if !here {
-                events.disconnected(DeviceKey(u64::from(k.index)));
+                let device = DeviceKey(u64::from(k.index));
+                rumble.forget(device);
+                events.disconnected(device);
             }
             here
         });
@@ -162,7 +175,8 @@ impl<R: ReadPads> GamepadBackend for WebGamepads<R> {
                     if self.known.len() == MAX_PADS {
                         continue;
                     }
-                    let info = info_from_id(reading.id.as_deref().unwrap_or(""));
+                    let mut info = info_from_id(reading.id.as_deref().unwrap_or(""));
+                    info.capabilities.rumble = reading.rumble;
                     events.connected(device, info);
                     self.known.push(Known {
                         index: reading.index,
@@ -191,16 +205,34 @@ impl<R: ReadPads> GamepadBackend for WebGamepads<R> {
                 }
             }
         }
+        self.rumble.refresh(&mut self.reader);
     }
 
-    /// The browser's rumble API is not used (as with gilrs on the web).
-    fn set_rumble(&mut self, _device: DeviceKey, _levels: MotorLevels) {}
+    /// Plays the body motors on the pad's `vibrationActuator`, where it has
+    /// one, again before the browser ends each effect (`web_rumble`).
+    fn set_rumble(&mut self, device: DeviceKey, levels: MotorLevels) {
+        let Some(known) = self.known.iter().find(|k| u64::from(k.index) == device.0) else {
+            return;
+        };
+        self.rumble.set(&mut self.reader, device, known.index, levels);
+    }
 }
 
 /// The browser's gamepads: `navigator.getGamepads()`, read on the calling
 /// thread. Where there is no such call (a worker), there are no pads.
 #[cfg(target_arch = "wasm32")]
 pub(crate) struct BrowserPads;
+
+#[cfg(target_arch = "wasm32")]
+impl Actuators for BrowserPads {
+    fn play(&mut self, index: u32, strong: f32, weak: f32, duration_ms: u32) {
+        crate::web_rumble::Browser.play(index, strong, weak, duration_ms);
+    }
+
+    fn stop(&mut self, index: u32) {
+        crate::web_rumble::Browser.stop(index);
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 impl ReadPads for BrowserPads {
@@ -227,6 +259,7 @@ impl ReadPads for BrowserPads {
             let mut reading = PadReading {
                 index,
                 id: (!known(index)).then(|| get(&pad, "id").and_then(|id| id.as_string()).unwrap_or_default()),
+                rumble: !known(index) && crate::web_rumble::Browser::has_actuator(&pad),
                 ..PadReading::default()
             };
             if let Some(buttons) = get(&pad, "buttons") {
@@ -257,19 +290,53 @@ impl ReadPads for BrowserPads {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use super::*;
     use crate::ctx::Ctx;
     use crate::game::Game;
-    use crate::input::Gamepad;
+    use crate::input::{Gamepad, Rumble};
 
     /// Readings a test sets between frames, as a page's
     /// `navigator.getGamepads()` would return them; `ids_read` counts the
     /// `id`s the backend asked for.
-    #[derive(Clone, Default)]
+    /// One call on a fake actuator: `(index, strong, weak, duration in ms)`.
+    type Effect = (u32, f32, f32, u32);
+
+    #[derive(Clone)]
     struct Fed {
         pads: Arc<Mutex<Vec<PadReading>>>,
         ids_read: Arc<Mutex<u32>>,
+        /// What the browser's actuators were asked: `(index, strong, weak,
+        /// duration in ms)` per `playEffect`, `(index, 0, 0, 0)` per `reset`.
+        effects: Arc<Mutex<Vec<Effect>>>,
+        /// How far the test has moved the clock.
+        elapsed: Arc<Mutex<Duration>>,
+        start: Arc<web_time::Instant>,
+    }
+
+    impl Default for Fed {
+        fn default() -> Self {
+            Self {
+                pads: Arc::default(),
+                ids_read: Arc::default(),
+                effects: Arc::default(),
+                elapsed: Arc::default(),
+                start: Arc::new(web_time::Instant::now()),
+            }
+        }
+    }
+
+    impl Actuators for Fed {
+        fn now(&self) -> web_time::Instant {
+            *self.start + *self.elapsed.lock().unwrap()
+        }
+        fn play(&mut self, index: u32, strong: f32, weak: f32, duration_ms: u32) {
+            self.effects.lock().unwrap().push((index, strong, weak, duration_ms));
+        }
+        fn stop(&mut self, index: u32) {
+            self.effects.lock().unwrap().push((index, 0.0, 0.0, 0));
+        }
     }
 
     impl Fed {
@@ -472,5 +539,105 @@ mod tests {
         assert_eq!((plain.vendor_id, plain.product_id), (None, None));
         assert_eq!(plain.family, ControllerFamily::Xbox, "from the name");
         assert_eq!(info_from_id("abcd-efgh").vendor_id, None);
+    }
+
+    /// A pad with a `vibrationActuator`, at `index`.
+    fn rumbling_pad(index: u32) -> PadReading {
+        PadReading {
+            rumble: true,
+            ..pad(index, XBOX)
+        }
+    }
+
+    #[test]
+    fn a_pad_with_a_vibration_actuator_says_it_can_rumble_and_one_without_says_it_cannot() {
+        let fed = Fed::default();
+        fed.set(|pads| {
+            pads.push(rumbling_pad(0));
+            pads.push(pad(1, XBOX));
+        });
+        let seen = Arc::new(Mutex::new(0));
+        let count = seen.clone();
+        run(&fed, 1, move |ctx, _| {
+            assert!(ctx.input.gamepad_info(slot(0)).unwrap().capabilities.rumble);
+            assert!(!ctx.input.gamepad_info(slot(1)).unwrap().capabilities.rumble);
+            assert!(
+                !ctx.input.gamepad_info(slot(0)).unwrap().capabilities.trigger_rumble,
+                "body motors only"
+            );
+            *count.lock().unwrap() += 1;
+        });
+        assert_eq!(*seen.lock().unwrap(), 1, "the checks ran");
+    }
+
+    #[test]
+    fn game_rumble_reaches_the_browsers_actuator_of_that_pad_and_stops_when_it_ends() {
+        let fed = Fed::default();
+        fed.set(|pads| {
+            pads.push(rumbling_pad(0));
+            pads.push(rumbling_pad(3));
+        });
+        run(&fed, 6, move |ctx, frame| match frame {
+            0 => ctx
+                .input
+                .rumble(slot(1), Rumble::new(0.75, 0.25).seconds(f32::INFINITY)),
+            3 => ctx.input.stop_rumble(slot(1)),
+            _ => {}
+        });
+        let effects = fed.effects.lock().unwrap().clone();
+        assert_eq!(
+            effects.first(),
+            Some(&(3, 0.75, 0.25, 2000)),
+            "the pad's browser index, not its slot: {effects:?}"
+        );
+        assert!(
+            effects.iter().all(|e| e.0 == 3),
+            "the other pad stays quiet: {effects:?}"
+        );
+        assert_eq!(
+            effects.last(),
+            Some(&(3, 0.0, 0.0, 0)),
+            "reset when the rumble ended: {effects:?}"
+        );
+    }
+
+    #[test]
+    fn long_rumble_is_replayed_every_second_so_the_browsers_cap_never_ends_it() {
+        let fed = Fed::default();
+        fed.set(|pads| pads.push(rumbling_pad(0)));
+        let clock = fed.elapsed.clone();
+        run(&fed, 40, move |ctx, frame| {
+            if frame == 0 {
+                ctx.input.rumble(slot(0), Rumble::new(1.0, 0.0).seconds(f32::INFINITY));
+            }
+            // A frame is a quarter of a second on the browser's clock: ten seconds in all.
+            *clock.lock().unwrap() = Duration::from_millis(frame * 250);
+        });
+        let plays = fed.effects.lock().unwrap().iter().filter(|e| e.3 > 0).count();
+        assert!(
+            (9..=11).contains(&plays),
+            "once, then about once a second for 10 s: {plays}"
+        );
+    }
+
+    #[test]
+    fn a_pad_unplugged_while_rumbling_is_forgotten_and_not_replayed() {
+        let fed = Fed::default();
+        fed.set(|pads| pads.push(rumbling_pad(0)));
+        let feed = fed.clone();
+        let clock = fed.elapsed.clone();
+        run(&fed, 8, move |ctx, frame| match frame {
+            0 => ctx.input.rumble(slot(0), Rumble::new(1.0, 1.0).seconds(f32::INFINITY)),
+            2 => feed.set(|pads| pads.clear()),
+            // The unplug is seen in frame 3's poll: the clock moves on after it.
+            4.. => *clock.lock().unwrap() = Duration::from_secs(frame * 2),
+            _ => {}
+        });
+        let effects = fed.effects.lock().unwrap().clone();
+        assert!(
+            effects.iter().all(|e| e.3 > 0),
+            "no call for a pad that is gone: {effects:?}"
+        );
+        assert_eq!(effects.len(), 1, "not replayed after it left: {effects:?}");
     }
 }

@@ -3,9 +3,16 @@
 //!
 //! A scope costs one relaxed atomic load while profiling is off (see
 //! [`Perf::set_profiling`](crate::perf::Perf::set_profiling)), and two clock reads
-//! and two atomic adds while it is on. Scopes may be used from any thread
+//! and three atomic adds while it is on. Scopes may be used from any thread
 //! (rayon workers included): their times add up, so a scope that runs on four
 //! threads at once reports four times the wall time.
+//!
+//! With the [`CountingAllocator`](crate::perf::CountingAllocator) installed, a
+//! scope entered with [`profile_scope!`](crate::profile_scope) or
+//! [`ProfileScope::enter`] also counts the allocations made on its own thread
+//! while it is open ([`thread_alloc_counts`](crate::perf::thread_alloc_counts)):
+//! a scope inside a parallel loop counts that loop's work on every thread
+//! that runs it, and nothing the thread pool allocates for itself.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -58,6 +65,8 @@ pub struct ProfileScope {
     name: &'static str,
     ns: AtomicU64,
     calls: AtomicU64,
+    /// Allocations made inside it on its own thread (guards only).
+    allocs: AtomicU64,
     registered: AtomicBool,
 }
 
@@ -68,6 +77,7 @@ impl ProfileScope {
             name,
             ns: AtomicU64::new(0),
             calls: AtomicU64::new(0),
+            allocs: AtomicU64::new(0),
             registered: AtomicBool::new(false),
         }
     }
@@ -77,8 +87,9 @@ impl ProfileScope {
         self.name
     }
 
-    /// Starts timing until the returned guard is dropped. Does nothing
-    /// (apart from one atomic load) while profiling is off.
+    /// Starts timing until the returned guard is dropped, and counting the
+    /// allocations made on this thread until then. Does nothing (apart from
+    /// one atomic load) while profiling is off.
     ///
     /// ```
     /// use ponko::perf::ProfileScope;
@@ -87,14 +98,22 @@ impl ProfileScope {
     /// ```
     #[inline]
     pub fn enter(&'static self) -> ScopeGuard {
+        let token = self.begin();
         ScopeGuard {
             scope: self,
-            token: self.begin(),
+            token,
+            allocs: if token == 0 {
+                0
+            } else {
+                crate::alloc_count::thread_alloc_counts().count
+            },
         }
     }
 
     /// Starts timing and returns a token for [`end`](Self::end); 0 when
     /// profiling is off. For code that can't hold a guard (the C API).
+    /// Scopes timed this way count no allocations: only a guard from
+    /// [`enter`](Self::enter) knows where its thread's count stood.
     #[inline]
     pub fn begin(&'static self) -> u64 {
         if ACTIVE.load(Relaxed) == 0 {
@@ -117,9 +136,21 @@ impl ProfileScope {
         self.calls.fetch_add(1, Relaxed);
     }
 
-    fn totals(&self) -> (u64, u64) {
-        (self.ns.load(Relaxed), self.calls.load(Relaxed))
+    fn totals(&self) -> Totals {
+        Totals {
+            ns: self.ns.load(Relaxed),
+            calls: self.calls.load(Relaxed),
+            allocs: self.allocs.load(Relaxed),
+        }
     }
+}
+
+/// A scope's running totals, since the process started.
+#[derive(Clone, Copy, Default)]
+struct Totals {
+    ns: u64,
+    calls: u64,
+    allocs: u64,
 }
 
 /// Times the code until it is dropped. From
@@ -128,19 +159,31 @@ impl ProfileScope {
 pub struct ScopeGuard {
     scope: &'static ProfileScope,
     token: u64,
+    /// This thread's allocation count when the scope was entered.
+    allocs: u64,
 }
 
 impl ScopeGuard {
     /// A guard that times nothing, for when profiling is off.
     pub(crate) fn off() -> Self {
         static OFF: ProfileScope = ProfileScope::new("off");
-        Self { scope: &OFF, token: 0 }
+        Self {
+            scope: &OFF,
+            token: 0,
+            allocs: 0,
+        }
     }
 }
 
 impl Drop for ScopeGuard {
     #[inline]
     fn drop(&mut self) {
+        if self.token != 0 {
+            let made = crate::alloc_count::thread_alloc_counts()
+                .count
+                .wrapping_sub(self.allocs);
+            self.scope.allocs.fetch_add(made, Relaxed);
+        }
         self.scope.end(self.token);
     }
 }
@@ -206,9 +249,12 @@ pub struct ScopeTiming {
 #[derive(Default)]
 pub(crate) struct ScopeState {
     /// Totals seen at the last frame, by registry index.
-    seen: Vec<(u64, u64)>,
+    seen: Vec<Totals>,
     /// One per distinct name; only ever grows, so indices stay valid.
     pub timings: Vec<ScopeTiming>,
+    /// Allocations made inside each of `timings` during the last frame, on
+    /// the threads it ran on.
+    pub allocs: Vec<u32>,
 }
 
 impl ScopeState {
@@ -225,14 +271,16 @@ impl ScopeState {
             t.last_ms = 0.0;
             t.calls = 0;
         }
-        let (seen, timings) = (&mut self.seen, &mut self.timings);
+        self.allocs.fill(0);
+        let (seen, timings, allocs) = (&mut self.seen, &mut self.timings, &mut self.allocs);
         read_all(|i, scope| {
             if seen.len() <= i {
-                seen.push((0, 0));
+                seen.push(Totals::default());
             }
-            let (ns, calls) = scope.totals();
-            let (was_ns, was_calls) = std::mem::replace(&mut seen[i], (ns, calls));
-            let (d_ns, d_calls) = (ns.saturating_sub(was_ns), calls.saturating_sub(was_calls));
+            let now = scope.totals();
+            let was = std::mem::replace(&mut seen[i], now);
+            let (d_ns, d_calls) = (now.ns.saturating_sub(was.ns), now.calls.saturating_sub(was.calls));
+            let d_allocs = now.allocs.saturating_sub(was.allocs);
             if d_calls == 0 {
                 return;
             }
@@ -245,11 +293,13 @@ impl ScopeState {
                         avg_ms: 0.0,
                         calls: 0,
                     });
+                    allocs.push(0);
                     timings.len() - 1
                 }
             };
             timings[slot].last_ms += d_ns as f32 / 1e6;
             timings[slot].calls += d_calls as u32;
+            allocs[slot] = allocs[slot].saturating_add(d_allocs.min(u64::from(u32::MAX)) as u32);
         });
         for t in timings {
             t.avg_ms += (t.last_ms - t.avg_ms) * 0.05;

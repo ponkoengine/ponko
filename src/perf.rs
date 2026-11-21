@@ -95,6 +95,11 @@ pub struct Perf {
     pub(crate) entities: usize,
 }
 
+/// Outside profiling, GPU passes are timed on one frame in this many: the
+/// timestamp writes cost the graphics library a few heap allocations for
+/// every timed pass. See [`Perf::gpu_passes`].
+pub(crate) const GPU_TIMING_EVERY: u32 = 16;
+
 /// How many drawn frames the render inspector's history keeps.
 pub(crate) const RENDER_HISTORY: usize = 120;
 
@@ -225,6 +230,15 @@ impl Perf {
     /// prepass, opaque, transparent, bloom, post, ...), smoothed, in the
     /// order they run. Empty in headless runs and on GPUs without timestamp
     /// queries.
+    ///
+    /// Timing passes costs the graphics library a few heap allocations per
+    /// pass, so the GPU is timed on every 16th frame only, except while
+    /// something reads every frame: profiling ([`set_profiling`](Self::set_profiling)),
+    /// the HUD ([`set_hud`](Self::set_hud)), a trace
+    /// ([`record_trace`](Self::record_trace)), a `PONKO_BENCH` run or
+    /// automatic quality. Each sample then weighs as much as the frames it
+    /// stands for, so the smoothed times settle where every-frame timing
+    /// would put them; they only follow a change a little later.
     ///
     /// ```
     /// # use ponko::prelude::*;
@@ -440,6 +454,13 @@ impl Perf {
         report
     }
 
+    /// Whether something reads every frame's GPU times: profiling, the HUD,
+    /// a trace or a benchmark run. Otherwise the GPU is timed every
+    /// [`GPU_TIMING_EVERY`]th frame.
+    pub(crate) fn reads_every_gpu_frame(&self) -> bool {
+        self.state.explicit || self.profiler.hud || self.profiler.benchmarking() || self.profiler.tracing()
+    }
+
     /// Starts or stops the deeper profiling to match what's wanted: the
     /// overlay, a benchmark run, or `set_profiling`.
     pub(crate) fn sync_profiling(&mut self) {
@@ -488,7 +509,9 @@ impl Perf {
 
 // Detailed reports live beside the frame service.
 #[doc(inline)]
-pub use crate::alloc_count::{AllocCounts, CountingAllocator, alloc_counts, net_alloc_bytes, note_allocation};
+pub use crate::alloc_count::{
+    AllocCounts, CountingAllocator, alloc_counts, net_alloc_bytes, note_allocation, thread_alloc_counts,
+};
 pub use crate::perf_report::*;
 pub use crate::profiler::{FrameStats, GpuPass};
 #[doc(inline)]

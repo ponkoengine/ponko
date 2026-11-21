@@ -222,7 +222,7 @@ What you can ask for (Rust):
 |---|---|
 | `&T` | read access to `T` (entity must have it) |
 | `&mut T` | write access to `T` |
-| `Option<&T>`, `Option<&mut T>` | the component if present; doesn't filter (in `for_each`, one or two of them cost nothing per entity: the loop is chosen per archetype) |
+| `Option<&T>`, `Option<&mut T>` | the component if present; doesn't filter (in `for_each` and the parallel loops, one or two of them cost nothing per entity: the loop is chosen per archetype) |
 | `Entity` | the entity's id |
 | a tuple of the above | all of them, up to 12 (nest tuples for more) |
 
@@ -782,11 +782,10 @@ unchanged, and a `Changed<T>` loop takes 0.02 ms when it finds nothing
 (0.5 ms when it read every stamp), 0.4 ms when 1% of the entities
 changed, spread out (most chunks then hold one), and 1.0 ms when all
 did. Despawning from an archetype with a tracked component logs its
-removal and costs about what a despawn did before the per-64 summary
-existed (the same with one tracked component, 3% more with two). Moving
-an entity into such an archetype (an insert or a remove) marks its new
-block as changed now, so the next `Changed` loop reads those 64 stamps
-once. `cargo run --release -p ponko_bench -- changes` prints the numbers
+removal and runs fewer instructions than a despawn did before the
+per-64 summary existed. Moving an entity into such an archetype (an
+insert or a remove) keeps its stamps, so a `Changed` loop afterwards
+still skips the blocks where nobody wrote. `cargo run --release -p ponko_bench -- changes` prints the numbers
 for your machine.
 
 ## Component hooks
@@ -802,6 +801,9 @@ operation itself, registered per component type:
 | `on_add::<T>` | after a `T` arrived on an entity that had none (every kind of spawn, `insert`) |
 | `on_replace::<T>` | before `insert` overwrites an entity's `T`; the old value is in the world, the new one is passed in |
 | `on_remove::<T>` | before a `T` leaves (`remove`, `despawn`, `clear`), while it is still there |
+
+<div class="lang-pair">
+<div>
 
 ```rust
 use std::collections::HashMap;
@@ -852,6 +854,16 @@ ctx.world.despawn(crab);
 assert!(ctx.world.resource::<Names>().0.is_empty());
 ```
 
+</div>
+<div>
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:component_hooks}}
+```
+
+</div>
+</div>
+
 - **A hook can't change the world's structure right away.** It gets a
   `HookWorld`: components, resources and queries, read and write, but
   spawns, despawns, inserts and removes go to `world.commands()`. They are
@@ -884,8 +896,18 @@ both: the transform hierarchy notes a despawned parent's children with an
 `on_remove` hook on `Children`, while physics drops the bodies of despawned
 entities once per step, in entity order, which keeps runs deterministic.
 
-Hooks are Rust only for now: C and C++ can't register them yet. Their
-spawns, inserts and removes do run the hooks registered from Rust.
+From C, `ponko_component_on_add`, `_on_replace` and `_on_remove` register
+a hook on a plain component (registered from C, or a built-in C sees as
+its own bytes): it gets a `PonkoHookWorld` and a `PonkoHookEvent` with
+the entity, the value and, for a replace, the new one. Inside it,
+`ponko_hook_get` and `ponko_hook_write` read and write components in
+place, and `ponko_hook_spawn_later`, `_set_later`, `_remove_later` and
+`_despawn_later` record structural changes, the same rules as
+`HookWorld`; the world's own calls return `PONKO_BUSY` there. C++ wraps
+them as `world.on_add<T>`, `on_replace<T>` and `on_remove<T>` with a
+`ponko::hook_world`; an exception a hook throws is rethrown when the
+system returns. Hooks registered from any language run for changes made
+from any language.
 
 ## Resources
 

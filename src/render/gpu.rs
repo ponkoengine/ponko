@@ -102,6 +102,11 @@ pub(crate) struct Renderer {
     sprite_mirror: traffic::Mirror,
 
     timer: Option<GpuTimer>,
+    /// Time every frame's passes, whatever the game asks for
+    /// ([`set_gpu_timing_every`](Self::set_gpu_timing_every)): the offscreen
+    /// renderer of the GPU tests, so a test that asks for timestamps gets
+    /// every frame's.
+    pub(super) gpu_timing_pinned: bool,
     /// Times the GPU's copies of the asset group and streaming steps'
     /// texture uploads; `None` without timestamp queries.
     upload_timer: Option<super::upload_timer::UploadTimer>,
@@ -405,6 +410,15 @@ impl Renderer {
             .expect("made above")
     }
 
+    /// Times the passes of every `n`th frame from the next frame on (1:
+    /// every frame). The game picks `n` before each frame
+    /// (`Ctx::gpu_timing_every`).
+    pub(crate) fn set_gpu_timing_every(&mut self, n: u32) {
+        if let Some(timer) = &mut self.timer {
+            timer.set_every(if self.gpu_timing_pinned { 1 } else { n });
+        }
+    }
+
     /// The GPU time of each pass, smoothed (empty without timestamp queries).
     pub fn gpu_passes(&self) -> &[crate::profiler::GpuPass] {
         self.timer.as_ref().map_or(&[], |t| &t.passes)
@@ -548,12 +562,14 @@ impl Renderer {
         )?;
         // In a browser, a WebGPU device lost while the game runs (the GPU
         // process crashed or was reset) stops it for good: the page hears
-        // of it through `onPonkoFailure`, kind `DeviceLost`. On WebGL2 the
+        // of it through `onPonkoFailure`, kind `DeviceLost`, with whether it
+        // was destroyed or lost for another reason. On WebGL2 the
         // canvas's lost context reports it instead (`ContextLost`).
         #[cfg(target_arch = "wasm32")]
         if adapter.get_info().backend == wgpu::Backend::BrowserWebGpu {
-            device.set_device_lost_callback(|_reason, message| {
-                crate::web::report_failure(crate::web::device_lost_while_playing(&message));
+            device.set_device_lost_callback(|reason, message| {
+                let reason = crate::web::DeviceLostReason::from_wgpu(reason);
+                crate::web::report_failure(crate::web::device_lost_while_playing(reason, &message));
             });
         }
 
@@ -672,6 +688,7 @@ impl Renderer {
             },
         );
         renderer.set_draw_hidden(true, true);
+        renderer.gpu_timing_pinned = true;
         renderer
     }
 
@@ -843,6 +860,7 @@ impl Renderer {
             too_many_sprites: false,
             sprite_mirror: traffic::Mirror::default(),
             timer,
+            gpu_timing_pinned: false,
             upload_timer,
             capabilities,
             draw_hidden: false,

@@ -53,14 +53,14 @@ these costs remain:
 | Feature | Cost where it is used |
 |---|---|
 | A [required component](ecs.md#required-components) the bundle doesn't give | Its constructor runs, on a path of its own: a one-by-one spawn costs about 1.2× one that names the component itself, about 40 instructions or 2 ns more. A batch costs the same as naming it, spawn-and-despawn churn about 1.03×. |
-| [Change detection](ecs.md#change-detection), despawning | A despawn from an archetype with tracked components also logs each one's removal and moves its stamps: with one tracked component it costs no more than a despawn did before change detection kept its per-block summary, with two about 3% more. |
-| Change detection, inserting and removing | The entity's block in its new archetype is marked as changed now: the next `Changed` loop reads the stamps of those 64 rows once. |
-| `Option<&T>` in a query | Nothing per entity in `for_each` with one or two of them: the loop is chosen per archetype. With three or more, and in the parallel loops, each entity tests whether its archetype has the component. |
-| Many archetypes | Matching a query costs about 40 instructions per archetype it tests, filters included: 2.2–2.4 ms for 1000 builds and counts of a query over 1024 archetypes. Worlds with 64 or more archetypes index repeated queries that leave archetypes out. |
+| [Change detection](ecs.md#change-detection), despawning | A despawn from an archetype with tracked components also logs each one's removal and moves its stamps: with one or two tracked components it runs fewer instructions than a despawn did before change detection kept its per-block summary (0.93× with two). |
+| Change detection, inserting and removing | The entity keeps its stamps, and its new block's summary takes the newer of its own and the entity's: a move costs about 1.5% more instructions, and a `Changed` loop afterwards reads only blocks where something changed. |
+| `Option<&T>` in a query | Nothing per entity in `for_each` and the parallel loops with one or two of them: the loop is chosen per archetype. With three or more, each entity tests whether its archetype has the component. |
+| Many archetypes | Matching a query costs about 40 instructions per archetype it tests, filters included: 2.2–2.4 ms for 1000 builds and counts of a query over 1024 archetypes. Worlds with 64 or more archetypes index repeated queries that leave archetypes out. An `Added`/`Changed` filter also reads each matching archetype's block summaries: a `Changed` loop that finds nothing costs about 2.4× the instructions of a plain loop per archetype (about 380 against 160) (`archetypes-1024-changed-none`). |
 
 Numbers are from an Apple M4 Max, release builds; `crates/ponko_bench/REQUIRED.md`
 and `crates/ponko_bench/ECS.md` have the runs. Measure your own with
-`cargo run --release -p ponko_bench -- 'ecs/spawn|ecs/optional|changes/ponko-despawn'`.
+`cargo run --release -p ponko_bench -- 'ecs/spawn|ecs/optional|changes/ponko-despawn|archetypes-1024'`.
 
 ## Headless simulation
 
@@ -212,6 +212,12 @@ goes, in a running game:
   prepass, opaque, transparent, screen effects, bloom, post), measured
   with timestamp queries. On GPUs that draw in tiles, passes overlap, so
   each is counted from the end of the one before.
+  Timing a pass costs the graphics library a few heap allocations, so a
+  game times one frame in 16, and every frame while something reads every
+  frame: profiling, the overlay, a trace, a `PONKO_BENCH` run or automatic
+  quality. The smoothed times weigh each sample by the frames it stands
+  for, so they settle at the same values either way (see
+  [Cost](viewports.md#cost) for what it saves).
 - **`ctx.perf.render_stats()`**: draw calls; 3D models and triangles drawn for
   the camera and, separately, for the shadow maps; and the render CPU
   time split into culling (`collect_ms`), recording (`record_ms`, all
@@ -347,7 +353,7 @@ are per frame.
 
 | Field | What |
 |---|---|
-| `gpu_timing` | `available`: the GPU has timestamp queries; `frames_timed`: frames whose GPU times came back |
+| `gpu_timing` | `available`: the GPU has timestamp queries; `frames_timed`: frames whose GPU times came back (one in 16 outside profiling, see `ctx.perf.gpu_passes()` above; `perf.get` with `profiling: true` times every frame) |
 | `cpu_ms` | the renderer's CPU time: `total`, split into `extract` (culling, collecting models), `prepare` (uploading 3D data), `encode` (recording command buffers), `submit` and `other` (sprites, overlays) |
 | `gpu_ms` | `frame` and `passes` (`[{name, ms}]` in the order they run), smoothed |
 | `counts` | `draw_calls`, `sprites`, `models`, `triangles`, `shadow_models`, `shadow_triangles`, `occluded_models`, `frustum_culled_models` (see below), `frustum_culled_other_models` (always `null`, see below), `pipelines_built`, and `instance_batches`: how the [static instance batches](3d.md#which-path-a-batch-takes) were culled (`batches`, `instances`, `gpu_driven`, `gpu_instances`, `cpu_small`, `cpu_no_compute`, `cpu_over_limit`, `dropped`, `pools`, `pages`, `pool_bytes`, `cull_dispatches`, `cull_jobs`, `views_skipped`) |

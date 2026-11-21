@@ -45,6 +45,12 @@ src/net/replicate/kinds.rs | Raw::schema | tests/net_replication.rs::more_than_6
 src/net/replicate/kinds.rs | Raw::visit | crates/ponko_ffi/tests/replication.rs::a_c_server_replicates_c_components_to_a_c_client | os
 src/net/replicate/kinds.rs | Raw::read | crates/ponko_ffi/tests/replication.rs::a_c_server_replicates_c_components_to_a_c_client | os
 src/net/replicate/kinds.rs | Raw::write | crates/ponko_ffi/tests/replication.rs::a_c_server_replicates_c_components_to_a_c_client | os
+src/net/replicate/kinds.rs | visit_raw | src/net/raw_replication_conformance.rs::raw_values_cross_a_clean_network_in_a_few_ticks | miri
+src/net/replicate/raw.rs | RawValue::fields | src/net/raw_replication_conformance.rs::raw_values_cross_a_clean_network_in_a_few_ticks | miri
+src/net/replicate/raw.rs | RawPredicted::value_of | src/net/raw_replication_conformance.rs::raw_values_cross_a_clean_network_in_a_few_ticks | miri
+src/net/replicate/raw.rs | RawPredicted::store | src/net/raw_replication_conformance.rs::raw_values_cross_a_clean_network_in_a_few_ticks | miri
+src/net/replicate/raw.rs | RawInterpolated::buffer | src/net/raw_replication_conformance.rs::raw_values_cross_a_clean_network_in_a_few_ticks | miri
+src/net/replicate/raw.rs | RawInterpolated::sample | src/net/raw_replication_conformance.rs::raw_values_cross_a_clean_network_in_a_few_ticks | miri
 
 # Hierarchies: components read and written by id.
 src/hierarchy.rs | read | tests/hierarchy.rs::a_body_with_an_arm_and_a_hand | miri
@@ -138,6 +144,12 @@ crates/ponko_ffi/src/lib.rs | impl Sync for Shared | crates/ponko_ffi/tests/game
 crates/ponko_ffi/src/contacts3d.rs | impl Send for Hook | crates/ponko_ffi/tests/contacts3d.rs::the_c_hook_sees_pairs_and_can_drop_them_or_their_points | sanitizers
 crates/ponko_ffi/src/contacts3d.rs | impl Sync for Hook | crates/ponko_ffi/tests/contacts3d.rs::the_c_hook_sees_pairs_and_can_drop_them_or_their_points | sanitizers
 crates/ponko_ffi/src/save_migrations.rs | impl Send for Convert | crates/ponko_ffi/tests/save_migrations.rs::c_conversions_change_components_resources_entities_and_the_whole_save | sanitizers
+crates/ponko_ffi/src/component_hooks.rs | impl Send for CHook | crates/ponko_ffi/tests/component_hooks.rs::hooks_from_c_run_for_spawns_made_by_a_game_system | sanitizers
+crates/ponko_ffi/src/component_hooks.rs | impl Sync for CHook | crates/ponko_ffi/tests/component_hooks.rs::hooks_from_c_run_for_spawns_made_by_a_game_system | sanitizers
+crates/ponko_ffi/src/component_hooks.rs | CHook::drop | crates/ponko_ffi/tests/component_hooks.rs::freeing_the_world_frees_each_hooks_user_data_once | sanitizers
+crates/ponko_ffi/src/replication_raw.rs | impl Send for CStep | crates/ponko_ffi/tests/replication_raw.rs::c_inputs_move_a_predicted_body_the_same_on_server_and_client | sanitizers
+crates/ponko_ffi/src/replication_raw.rs | impl Sync for CStep | crates/ponko_ffi/tests/replication_raw.rs::c_inputs_move_a_predicted_body_the_same_on_server_and_client | sanitizers
+crates/ponko_ffi/src/replication_raw.rs | CStep::drop | crates/ponko_ffi/tests/replication_raw.rs::a_predicted_steps_data_is_freed_once_with_its_declaration | sanitizers
 crates/ponko_ffi/src/save_migrations.rs | impl Sync for Convert | crates/ponko_ffi/tests/save_migrations.rs::c_conversions_change_components_resources_entities_and_the_whole_save | sanitizers
 # Layout promises between C and Rust types (checked at compile time too).
 crates/ponko_ffi/src/types.rs | trait SameLayout | crates/ponko_ffi/tests/sprite_materials.rs::sprite_materials_and_blend_modes_work_from_c | sanitizers
@@ -167,6 +179,17 @@ src/crash/native.rs | extern block in mod sys | tests/native_crash.rs::a_segment
 src/crash/native.rs | on_exception | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | windows
 src/crash/native.rs | write | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | windows
 src/crash/native.rs | on_abort | tests/native_crash.rs::an_abort_in_native_code_leaves_a_report_for_the_next_start | windows
+src/crash/native.rs | open_probe_now | src/crash/native.rs::reading_an_unmapped_address_through_the_pipe_fails_without_faulting | os
+src/crash/native.rs | read_pair | src/crash/native.rs::reading_an_unmapped_address_through_the_pipe_fails_without_faulting | os
+src/crash/native.rs | this_thread_stack | src/crash/native.rs::a_recorded_threads_stack_bounds_the_walk_on_that_thread | os
+src/crash/native.rs | registers | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | os
+src/crash/native.rs | module_signature | src/crash/native.rs::this_program_is_among_the_loaded_modules_with_a_stable_id_and_its_names | os
+src/crash/native.rs | modules | src/crash/native.rs::this_program_is_among_the_loaded_modules_with_a_stable_id_and_its_names | os
+src/crash/native.rs | first | src/crash/native.rs::this_program_is_among_the_loaded_modules_with_a_stable_id_and_its_names | os
+src/crash/native.rs | each | src/crash/native.rs::this_program_is_among_the_loaded_modules_with_a_stable_id_and_its_names | os
+src/crash/native.rs | pe_id | src/crash/native.rs::this_program_is_among_the_loaded_modules_with_a_stable_id_and_its_names | windows
+src/crash/native.rs | exported_name | src/crash/native.rs::a_library_without_debug_info_is_named_by_its_exported_symbols | os
+src/crash/native.rs | capture | tests/native_crash.rs::a_segmentation_fault_in_native_code_leaves_a_report_for_the_next_start | windows
 
 # Whether the desktop has a touch screen (Windows asks the system).
 src/input/touch_desktop.rs | windows_touch_points | src/input/touch_desktop.rs::windows_says_how_many_touches_its_screens_take | windows

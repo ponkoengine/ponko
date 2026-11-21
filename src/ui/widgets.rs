@@ -146,8 +146,24 @@ pub(crate) struct WidgetState {
     hover_time: f32,
     /// The tooltip shown: whose, and where (window pixels).
     pub tooltip: Option<(UiId, Rect)>,
+    /// The tooltip text last measured: it is measured again only when it
+    /// changes, not each frame it follows the pointer.
+    tip: TipSize,
     /// Reused for the nodes a pass over the widgets visits.
     scratch: Vec<UiId>,
+}
+
+/// A tooltip's text as measured, and what it was measured with.
+#[derive(Debug, Default)]
+struct TipSize {
+    text: String,
+    font: Font,
+    /// Physical pixels per line.
+    px: f32,
+    /// The fonts' revision ([`crate::text::Text::revision`]).
+    fonts: u64,
+    /// Its size in physical pixels; `None`: not measured yet.
+    size: Option<Vec2>,
 }
 
 impl WidgetState {
@@ -1983,10 +1999,22 @@ impl Ui {
         self.widgets.tooltip = shown.map(|(id, at)| {
             let font = if self.external_fonts { theme.font } else { Font::DEFAULT };
             let k = self.text_pixels();
-            let text = self.tooltip(id).unwrap_or_default().to_string();
+            let px = theme.text_size * k;
+            let fonts = self.measure.revision();
+            let mut tip = std::mem::take(&mut self.widgets.tip);
+            let text = self.tooltip(id).unwrap_or_default();
+            if tip.text != text || tip.font != font || tip.px != px || tip.fonts != fonts {
+                tip.text.clear();
+                tip.text.push_str(text);
+                tip.size = None;
+            }
+            let measured = *tip
+                .size
+                .get_or_insert_with(|| self.measure.layout(&tip.text, font, px, false));
+            (tip.font, tip.px, tip.fonts) = (font, px, fonts);
+            self.widgets.tip = tip;
             // The theme's spacing on each side, half of it above and below.
-            let size = self.measure.layout(&text, font, theme.text_size * k, false) / k * scale
-                + vec2(2.0 * theme.spacing, theme.spacing) * scale;
+            let size = measured / k * scale + vec2(2.0 * theme.spacing, theme.spacing) * scale;
             let at = at.min(self.viewport - size).max(Vec2::ZERO);
             (
                 id,

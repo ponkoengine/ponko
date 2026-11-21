@@ -341,7 +341,8 @@ An event type can also be declared by name, with plain bytes for events:
 for C and C++ games, or a Rust game that encodes its own. `raw_event`
 declares it, `to_server_raw`, `to_client_raw` and `to_clients_raw` send
 the bytes, and they arrive unchanged as `NetEvent<RawEvent>`, every raw
-type in one stream, told apart by `name()`:
+type in one stream, told apart by `name()` (or `kind()`, the type's index
+among the declared events, which is how C and C++ name them):
 
 ```rust
 use ponko::net::{NetEvent, RawEvent, Replication};
@@ -435,14 +436,41 @@ engine's `Interest` (with hysteresis, so things at the edge don't flicker
 in and out) does the deciding.
 
 `peer_stats(peer)` on the server and `client_stats()` on a client count
-packets, bytes, records, deltas, deferred entities and losses.
+packets, bytes, records, deltas, deferred entities and losses;
+`resend_stats(peer)` on the server says what went again and why, and how
+long it waits now ([Reading the resends](#reading-the-resends)).
 
 ## Test it
 
 Multiplayer bugs hide in timing, so tests play the network on purpose:
-`NetMessages::loopback(n)` connects `n` endpoints in memory, and
+`NetMessages::loopback(n)` connects `n` endpoints in memory,
 `NetMessages::loopback_lossy(n, k)` loses every `k`th datagram and delivers
-the rest newest first. To make a run the same every time:
+the rest newest first, and `NetMessages::loopback_link(n, link)` plays a
+link that loses a share of the datagrams and delays each one, some more
+than others, so they overtake each other:
+
+```rust
+use std::time::Duration;
+use ponko::net::{LoopbackLink, NetMessages};
+
+// 5% lost each way, a frame of delay plus up to 50 ms: packets overtake.
+let link = LoopbackLink::new()
+    .loss(0.05)
+    .delay(Duration::from_millis(17))
+    .jitter(Duration::from_millis(50))
+    .seed(1);
+let nets: Vec<NetMessages> = NetMessages::loopback_link(3, link)
+    .into_iter()
+    .map(NetMessages::game_clock)
+    .collect();
+# assert_eq!(nets.len(), 3);
+```
+
+The dice are a hash of the seed, the sender and the datagram's number, so
+the same seed loses and delays the same datagrams on every run (on game
+time, with the sides taking turns as below). `LoopbackLink` is Rust-only
+for now; C and C++ tests use the plain loopback. To make a run the same
+every time:
 
 1. **Count game time.** `NetMessages::game_clock()` makes an endpoint's
    resends and timeouts count the game's ticks instead of the wall clock.
@@ -550,9 +578,19 @@ cargo run --release -p ponko_bench --bin replication -- 3
 | 1 in 10 move, 64 KB/s | 62,006 | 65,636 | 1,000 | 0.26 ms, 0.28 ms |
 | 1 in 20 move, 64 KB/s | 31,266 | 34,891 | 1,000 | 0.14 ms, 0.39 ms (busy machine, see below) |
 | All move, interest rings (250 m every tick, 500 m every 4th) | 62,246 (58,559 to 63,923 by client) | 65,905 | 235 | 0.36 ms, 0.38 ms |
+| 1 in 10 move, 64 KB/s, 5% lost each way and reordered | 63,443 (63,055 to 63,831 by client) | 63,937 | 1,000 | 0.61 ms, 0.73 ms (busy machine, see below) |
 
 *Payload* is replication's packets; *on the wire* adds the transport's
-framing, acknowledgements and resends. Ten seconds were measured after a
+framing, acknowledgements and resends. The last scenario runs over
+`loopback_link` (above): 5% of the datagrams lost each way, a frame of
+delay plus up to 50 ms, so about one packet in three arrives after one
+sent later. Its *payload* is what the server sent, and *on the wire* what
+the clients received, so the lost datagrams count in the first and not
+the second. The server resent 125 records per second to each client, all
+of them early (acknowledgements skipped their packet) and none on the
+timeout; the lost bandwidth comes out of the budget, so the payload rises
+from 62,006 to the 64 KB/s cap. The link is seeded, so these bytes are
+exact too. Ten seconds were measured after a
 two-second warm-up (everyone joining and getting the spawn burst). Server
 CPU is its whole tick: receiving, the game's systems, finding what
 changed, encoding and sending to all 16 clients.
@@ -566,7 +604,13 @@ kept the same M4 Max busy (load average 100 to 180), so it is only good
 for comparing with the row below it; an idle-machine run of it is still
 to be done. The other rows' times were measured before changes were sent
 once (next section) and didn't move beyond that busy machine's noise
-since.
+since. The lossy row's time is from 2026-11-21 too, with the load average
+at 97 to 114: three invocations of three runs each, alternating with the
+lossless `1 in 10` row. Its medians were 0.608, 0.618 and 0.610 ms; the
+lossless row's in the same invocations 0.521, 0.362 and 0.499 ms (it
+measured 0.26 ms on the idle machine). On that machine the lossy link
+costs the server somewhat more (more records, at the budget), but take
+nothing finer than that from those numbers.
 
 ### Sent once, resent when lost
 
@@ -662,6 +706,60 @@ medians were 0.204 and 0.210 ms before (runs from 0.189 to 0.267 ms), and
 though the busy machine's spread overlaps. In `all move, 64 KB/s` the
 two builds didn't differ beyond the noise (0.92 to 0.95 ms both).
 
+### Reading the resends
+
+`resend_stats(peer)` on the server returns a `ResendStats` for that
+client (`None` if it isn't one):
+
+| Field | Counts |
+|---|---|
+| `early_resends` | records sent again at once because the client acknowledged later packets but not theirs |
+| `timeout_resends` | records sent again because the resend timeout passed |
+| `late_acks` | packets called lost (their records went again early) that were acknowledged after all: resends for nothing, each of which makes the server tolerate more reordering |
+| `timeout_ticks` | the resend timeout now, in ticks, backed off |
+| `backoff` | resend timeouts in a row with nothing acknowledged; each doubled the timeout |
+| `reorder_ticks` | how late, in ticks, a packet may arrive behind later ones before it is called lost |
+
+A resend is a record (a spawn, a state or a despawn) that goes again with
+nothing changed since it last went; an entity that changed sends its new
+state, which counts as new, not as a resend. A client's own entities go
+in every packet and never count.
+
+```rust
+use ponko::prelude::*;
+
+fn net_hud(ctx: &mut Ctx) {
+    for peer in ctx.net.replication.clients() {
+        let Some(r) = ctx.net.replication.resend_stats(peer) else { continue };
+        if r.backoff > 2 {
+            // Several timeouts in a row: this client hasn't answered for a while.
+            let waits = f64::from(r.timeout_ticks) / 60.0;
+            println!("{peer:?}: no answer, next resend in {waits:.1} s");
+        }
+    }
+}
+# let _ = net_hud;
+```
+
+Why a struct of its own and not more fields of `PeerStats`: `PeerStats`
+is not `#[non_exhaustive]`, so a new field would break code that builds
+one with a struct literal (a test's expected value, say), which the
+[stability promises](../../STABILITY.md) rule out, and its C mirror
+(`PonkoReplicationPeerStats`) would change layout. `ResendStats` is
+`#[non_exhaustive]`, so it can grow; C and C++ read it with
+`ponko_ctx_replication_resend_stats` and `ctx.replication_resend_stats(peer)`
+(a `PonkoReplicationResendStats` of its own).
+
+The engine's suite checks the counts on its scripted network: the five
+records of a lost packet count as five early resends (five timeout
+resends with the early rule off); on a link losing 10% and reordering up
+to three ticks, some packets are late rather than lost and the server
+learns a tolerance of a few ticks (with the tolerance off, more than twice
+as many late acknowledgements and no tolerance); over a 9 s outage each
+try sends the five records and the despawn again on the timeout,
+`backoff` counts the tries, `timeout_ticks` stops at 4 s (240 ticks at
+60 Hz), and the first acknowledgement brings both back.
+
 ### Only what changed
 
 The server doesn't read and compare every replicated entity every tick.
@@ -730,18 +828,42 @@ a type and a quantization for each), mark entities, read the role, net ids
 and replicas, and set viewers. That is `ponko_ctx_replication`,
 `ponko_ctx_replicate` and the calls above, or `ctx.replicated<T>()`,
 `ctx.replication()` and `ctx.replicate()` in C++. The budget and the
-interest rings are arguments of `ponko_ctx_replication`, and interest uses
-the entities' transforms. Inputs and prediction (`Replication::input`,
-`Replication::predicted`) are Rust-only for now: a native game sends its
-controls as [application messages](networking.md#application-messages-rust),
-and the server moves the players' entities. So are
-`Replication::interpolated` and `Replication::position` (generic over Rust
-types): a C component is set when its update arrives.
+interest rings are arguments of `ponko_ctx_replication`.
 
-Typed events (`Replication::event`) are generic over serde types, so
-events for C and C++ are [raw events](#raw-events-bytes-you-encode):
-bytes the game encodes itself. Their Rust side (`Replication::raw_event`,
-`to_server_raw`, `to_client_raw`, `to_clients_raw` and
-`NetEvent<RawEvent>`) is in place; the C and C++ calls that wrap it are
-not yet, so until then a native game sends its events as application
-messages too.
+Inputs, prediction, events and smooth motion work the same way, by name,
+after `ponko_ctx_replication` in setup and the same on every side:
+
+| C | C++ | Rust |
+|---|---|---|
+| `ponko_ctx_replication_input` | `ctx.replication_input<I>()` | `Replication::input` |
+| `ponko_ctx_replication_predicted` | `ctx.replication_predicted<S, I>()` | `Replication::predicted` |
+| `ponko_ctx_replication_interpolated` | `ctx.replication_interpolated()` | `Replication::interpolated_with` |
+| `ponko_ctx_replication_event` | `ctx.replication_event()` | `Replication::raw_event` |
+| `ponko_ctx_replication_position` | `ctx.replication_position<T>()` | `Replication::position` |
+| `ponko_ctx_set_replication_input`, `ponko_ctx_replication_input_of` | `ctx.set_replication_input()`, `ctx.replication_input_of<I>()` | `set_input`, `input_of` |
+| `ponko_ctx_replication_send` | `ctx.replication_send()` | `to_server_raw`, `to_client_raw`, `to_clients_raw` |
+| `ponko_ctx_net_events` | `ctx.net_events()` | `ctx.events.read::<NetEvent<RawEvent>>()` |
+
+```cpp
+{{#include ../../examples/cpp/guide.cpp:replication_inputs}}
+```
+
+- The input is one plain struct of which the declared fields travel,
+  every tick and redundantly, so a lost packet costs nothing.
+- The prediction step gets the component's bytes and one input's bytes.
+  It must give the same result for the same bytes on every machine, and
+  must not call into the ctx: it runs on the server for each input and on
+  the owning client to predict and to replay after a correction.
+- An interpolated component's float fields move between the values
+  received, `delay` in the past, angle fields (`PONKO_FIELD_ANGLE`) the
+  short way round; at most 32 float fields. Its other fields are set when
+  they arrive.
+- Events are [raw events](#raw-events-bytes-you-encode): bytes of a
+  kind, numbered from 0 in the order they were declared (Rust
+  `RawEvent::kind`, `Replication::raw_event_kind`). `ponko_ctx_net_events` hands every event that arrived since the
+  system last read them as one array, valid until the system returns.
+  It works inside `ponko_query` callbacks (not `ponko_query_par`), so read
+  it once per system: a second read gives only newer events.
+- `ponko_ctx_replication_position` makes interest use 2 or 3 floats of a
+  component instead of the entities' transforms; an entity without that
+  component reaches every client.

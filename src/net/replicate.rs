@@ -55,6 +55,7 @@ mod client;
 mod fields;
 mod inputs;
 mod kinds;
+mod raw;
 mod server;
 #[cfg(test)]
 pub(crate) use server::ResendRules;
@@ -67,6 +68,7 @@ pub use ponko_macros::Replicate;
 
 use inputs::{InputStream, Inputs, Predicted};
 use kinds::{Kind, Raw};
+use raw::{RawInterpolated, RawPredicted, RawValue};
 
 /// Bandwidth a server sends each client at most, by default: 64 KB/s.
 pub const DEFAULT_BUDGET: u32 = 64_000;
@@ -315,6 +317,7 @@ pub struct NetEvent<T> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawEvent {
     name: Arc<str>,
+    kind: u16,
     /// The bytes, exactly as sent.
     pub bytes: Vec<u8>,
 }
@@ -324,6 +327,13 @@ impl RawEvent {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The kind its type was declared as: its index among the declared
+    /// events ([`Replication::raw_event_kind`]).
+    #[must_use]
+    pub fn kind(&self) -> u16 {
+        self.kind
     }
 }
 
@@ -365,6 +375,49 @@ pub struct PeerStats {
     /// Changed entities left for a later tick by the budget, summed over
     /// ticks.
     pub deferred: u64,
+}
+
+/// How the server resends to one client ([`Replication::resend_stats`]):
+/// what it sent again, and why, and how long it waits now.
+///
+/// A resend is a record (a spawn, a state or a despawn) that goes again
+/// with nothing changed since it last went, because its acknowledgement
+/// didn't come. A changed entity's new state is not a resend: it is new.
+///
+/// [`PeerStats`] can't take these as new fields: it isn't
+/// `#[non_exhaustive]`, so code that builds one with a struct literal would
+/// stop compiling, and the C API copies it field by field. This struct is
+/// `#[non_exhaustive]`, so it can grow without breaking anything.
+///
+/// ```
+/// let s = ponko::net::ResendStats::default();
+/// assert_eq!(s.early_resends + s.timeout_resends, 0);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ResendStats {
+    /// Records sent again at once because the client acknowledged packets
+    /// sent after theirs but not theirs (the packet was lost).
+    pub early_resends: u64,
+    /// Records sent again because the resend timeout passed without an
+    /// acknowledgement.
+    pub timeout_resends: u64,
+    /// Packets called lost (their records went again early) that the
+    /// client acknowledged after all: they were only late, and their
+    /// resends were needless. Each makes the server tolerate more
+    /// reordering ([`reorder_ticks`](Self::reorder_ticks)).
+    pub late_acks: u64,
+    /// The resend timeout now, in ticks: the smoothed round trip plus four
+    /// deviations (at least two ticks, at most a second), doubled for each
+    /// [`backoff`](Self::backoff), up to 4 s. Divide by the tick rate for
+    /// seconds.
+    pub timeout_ticks: u32,
+    /// Resend timeouts in a row with nothing acknowledged since (0 while
+    /// the client acknowledges); each doubled the timeout.
+    pub backoff: u32,
+    /// Ticks a packet may arrive behind ones sent after it before the
+    /// server calls it lost: the reordering it learned this link has.
+    pub reorder_ticks: u32,
 }
 
 /// What a client received and predicted ([`Replication::client_stats`]).
@@ -601,6 +654,15 @@ impl Inner {
         }
     }
 
+    /// The input stream of inputs declared at run time.
+    fn raw_inputs(&mut self) -> Option<&mut Inputs<RawValue>> {
+        self.inputs.as_mut()?.as_any_mut().downcast_mut::<Inputs<RawValue>>()
+    }
+
+    fn raw_inputs_ref(&self) -> Option<&Inputs<RawValue>> {
+        self.inputs.as_ref()?.as_any().downcast_ref::<Inputs<RawValue>>()
+    }
+
     /// A hash of everything both sides must declare alike.
     fn schema_hash(&self) -> u64 {
         let mut h = Fnv::new();
@@ -660,6 +722,7 @@ impl Inner {
                     tick,
                     event: RawEvent {
                         name: name.clone(),
+                        kind: index,
                         bytes,
                     },
                 }),
@@ -1295,9 +1358,161 @@ impl Replication {
             specs,
             offset: 0,
             type_id: None,
-            access: Box::new(raw),
+            access: Box::new(raw.clone()),
+            raw: Some(Arc::new(raw)),
         });
         self
+    }
+
+    /// The game's input declared at run time (from C or C++), instead of a
+    /// Rust type ([`input`](Self::input)): plain bytes of `size` whose
+    /// `fields` travel. Set it with [`set_raw_input`](Self::set_raw_input),
+    /// read it with [`raw_input_of`](Self::raw_input_of); a tick without
+    /// one sends zeroed bytes.
+    ///
+    /// # Panics
+    /// If an input was declared already, or a field lies outside `size`.
+    ///
+    /// ```
+    /// use ponko::net::{Quantize, RawField, RawType, Replication};
+    /// let fields = vec![RawField::new("dx", 0, RawType::F32, Quantize::range(-1.0, 1.0, 0.01))];
+    /// let r = Replication::new().raw_input("Move", 4, fields);
+    /// # let _ = r;
+    /// ```
+    #[must_use]
+    pub fn raw_input(mut self, name: &str, size: usize, fields: Vec<RawField>) -> Self {
+        raw::check_fields("raw_input", name, size, &fields);
+        let inner = self.declare();
+        assert!(
+            inner.inputs.is_none(),
+            "Replication::raw_input: an input type is declared already; a game has one input type (put every control in it)"
+        );
+        let proto = RawValue::zeroed(fields.into(), size);
+        inner.inputs = Some(Box::new(Inputs::with_proto(name.to_string(), proto)));
+        self
+    }
+
+    /// Predicts the component declared at run time as `component`
+    /// ([`raw_component`](Self::raw_component)) on the client that owns
+    /// the entity, as [`predicted`](Self::predicted) does for Rust types:
+    /// `step` changes the component's bytes for one input's bytes
+    /// ([`raw_input`](Self::raw_input)).
+    ///
+    /// # Panics
+    /// If no component was declared under that name with `raw_component`,
+    /// or no input with `raw_input`.
+    #[must_use]
+    pub fn raw_predicted(mut self, component: &str, step: impl Fn(&mut [u8], &[u8]) + Send + Sync + 'static) -> Self {
+        let inner = self.declare();
+        let Some((kind, raw)) = inner
+            .kinds
+            .iter()
+            .enumerate()
+            .find_map(|(i, k)| (k.name == component).then(|| k.raw.clone().map(|r| (i, r)))?)
+        else {
+            panic!("Replication::raw_predicted: no component `{component}` was declared with raw_component");
+        };
+        let Some(inputs) = inner.raw_inputs() else {
+            panic!("Replication::raw_predicted: declare the input with raw_input first");
+        };
+        inputs
+            .steps
+            .push(Box::new(RawPredicted::new(kind, raw, Arc::new(step))));
+        self
+    }
+
+    /// Shows the component declared at run time as `component` between the
+    /// values received on clients, as [`interpolated_with`](Self::interpolated_with)
+    /// does for Rust types: its float fields (angles the short way round)
+    /// move smoothly, `config.delay` in the past; its other fields are set
+    /// when they arrive.
+    ///
+    /// # Panics
+    /// If no component was declared under that name with `raw_component`,
+    /// it has more than 32 float fields, or `config` isn't valid.
+    #[must_use]
+    pub fn raw_interpolated(mut self, component: &str, config: SnapshotConfig) -> Self {
+        if let Err(e) = config.validate() {
+            panic!("Replication::raw_interpolated: {e}");
+        }
+        let inner = self.declare();
+        let Some(kind) = inner.kinds.iter_mut().find(|k| k.name == component && k.raw.is_some()) else {
+            panic!("Replication::raw_interpolated: no component `{component}` was declared with raw_component");
+        };
+        let raw = kind
+            .raw
+            .as_deref()
+            .cloned()
+            .unwrap_or_else(|| unreachable!("found by its layout"));
+        kind.access = Box::new(RawInterpolated::new(raw, config, component));
+        self
+    }
+
+    /// The fields of the component declared as `name` with
+    /// [`raw_component`](Self::raw_component), or `None` if none was: what
+    /// bindings check before [`raw_predicted`](Self::raw_predicted) and
+    /// [`raw_interpolated`](Self::raw_interpolated), instead of panicking.
+    #[must_use]
+    pub fn raw_fields(&self, name: &str) -> Option<&[RawField]> {
+        let inner = self.inner.as_ref()?;
+        let kind = inner.kinds.iter().find(|k| k.name == name)?;
+        kind.raw.as_deref().map(|r| r.fields.as_slice())
+    }
+
+    /// The most float fields a component given to
+    /// [`raw_interpolated`](Self::raw_interpolated) may have.
+    pub const RAW_INTERPOLATED_FLOATS: usize = raw::MAX_INTERPOLATED_FLOATS;
+
+    /// Whether an input type was declared, by [`input`](Self::input) or
+    /// [`raw_input`](Self::raw_input).
+    #[must_use]
+    pub fn has_input(&self) -> bool {
+        self.inner.as_ref().is_some_and(|i| i.inputs.is_some())
+    }
+
+    /// Whether the input type was declared with [`raw_input`](Self::raw_input).
+    ///
+    /// ```
+    /// use ponko::net::{Quantize, RawField, RawType, Replication};
+    /// let r = Replication::new().raw_input("Move", 4, vec![RawField::new("dx", 0, RawType::F32, Quantize::Exact)]);
+    /// assert!(r.has_input() && r.has_raw_input() && r.raw_fields("Move").is_none());
+    /// ```
+    #[must_use]
+    pub fn has_raw_input(&self) -> bool {
+        self.inner.as_ref().is_some_and(|i| i.raw_inputs_ref().is_some())
+    }
+
+    /// The kind of the event declared as `name` with
+    /// [`raw_event`](Self::raw_event): its index among the declared events,
+    /// what [`RawEvent::kind`] gives. Bindings (C and C++) name events by
+    /// it.
+    ///
+    /// ```
+    /// let r = ponko::net::Replication::new().raw_event("Chat");
+    /// assert_eq!(r.raw_event_kind("Chat"), Some(0));
+    /// assert_eq!(r.raw_event_kind("Shout"), None);
+    /// ```
+    #[must_use]
+    pub fn raw_event_kind(&self, name: &str) -> Option<u16> {
+        let i = self.inner.as_ref()?.events.iter().position(|e| e.is_raw(name))?;
+        u16::try_from(i).ok()
+    }
+
+    /// The name of the event kind `kind` declared with
+    /// [`raw_event`](Self::raw_event), or `None` if `kind` is no such kind:
+    /// the reverse of [`raw_event_kind`](Self::raw_event_kind).
+    ///
+    /// ```
+    /// let r = ponko::net::Replication::new().raw_event("Chat");
+    /// assert_eq!(r.raw_event_name(0), Some("Chat"));
+    /// assert_eq!(r.raw_event_name(1), None);
+    /// ```
+    #[must_use]
+    pub fn raw_event_name(&self, kind: u16) -> Option<&str> {
+        match &self.inner.as_ref()?.events.get(usize::from(kind))?.delivery {
+            Delivery::Raw(name) => Some(name),
+            Delivery::Typed { .. } => None,
+        }
     }
 
     // The running session.
@@ -1391,6 +1606,36 @@ impl Replication {
                 std::any::type_name::<I>()
             ),
         }
+    }
+
+    /// This tick's input as bytes, for an input declared with
+    /// [`raw_input`](Self::raw_input), as [`set_input`](Self::set_input)
+    /// does for Rust types. Bytes past the declared size are ignored,
+    /// missing ones are zero.
+    ///
+    /// # Panics
+    /// If no input was declared with `raw_input`.
+    pub fn set_raw_input(&mut self, bytes: &[u8]) {
+        let Some(inner) = self.inner.as_mut() else {
+            panic!("Replication::set_raw_input: no input was declared; add `.raw_input(..)` to the Replication");
+        };
+        let role = inner.role;
+        let Some(inputs) = inner.raw_inputs() else {
+            panic!("Replication::set_raw_input: the input wasn't declared with raw_input");
+        };
+        let input = inputs.proto.with_bytes(bytes);
+        match role {
+            ReplicationRole::Client => inputs.pending = Some(input),
+            _ => inputs.local = Some(input),
+        }
+    }
+
+    /// Server: the bytes of the input of `peer` (or [`PeerId::HOST`])
+    /// applied last, for an input declared with [`raw_input`](Self::raw_input).
+    #[must_use]
+    pub fn raw_input_of(&self, peer: PeerId) -> Option<&[u8]> {
+        let raw = self.inner.as_ref()?.raw_inputs_ref()?;
+        raw.current.get(&peer).map(|v| v.bytes.as_slice())
     }
 
     /// The entity with net id `id` on this side, if there is one.
@@ -1506,6 +1751,19 @@ impl Replication {
     #[must_use]
     pub fn peer_stats(&self, peer: PeerId) -> Option<PeerStats> {
         Some(self.inner.as_ref()?.server.clients.get(&peer)?.stats)
+    }
+
+    /// Server: how it resends to `peer` (what went again, and why, and the
+    /// timeout now); `None` if no such client.
+    ///
+    /// ```
+    /// let replication = ponko::net::Replication::new();
+    /// assert!(replication.resend_stats(ponko::net::PeerId::HOST).is_none());
+    /// ```
+    #[must_use]
+    pub fn resend_stats(&self, peer: PeerId) -> Option<ResendStats> {
+        let inner = self.inner.as_ref()?;
+        inner.server.resend_stats(peer, inner.hz)
     }
 
     /// Client: what was received and predicted.

@@ -41,11 +41,11 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. } else {             (1 << ids.len()) - 1         };         assert!(",
     "site": "crates/ponko_ecs/src/change.rs:897"
   },
-  "crates/ponko_ecs/src/change.rs:5044b601dbb57b88": {
+  "crates/ponko_ecs/src/change.rs:52eba6f924769aa9": {
     "classification": "caller-contract",
     "construction": "panic!(\"removals of `{name}` aren't tracked; call `world.track_changes::<{name}>()` first\")",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. #[cold] #[track_caller] fn untracked(name: &str) -> ! {     panic!(\"removals of `{name}` aren't tracked; call `world.track_changes::<{name}>()` first\")",
-    "site": "crates/ponko_ecs/src/change.rs:1012"
+    "reason": "The message names the untracked component and the track_changes call that fixes it.",
+    "site": "crates/ponko_ecs/src/change.rs:1149"
   },
   "crates/ponko_ecs/src/change.rs:587b5e9b0c95bbec": {
     "classification": "invariant",
@@ -107,23 +107,47 @@
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. // `DEAD` and `RESERVED` are never indices. The counter is far from     // wrapping: that would take four billion more allocations after this     // panic.     assert!(",
     "site": "crates/ponko_ecs/src/entity.rs:364"
   },
+  "crates/ponko_ecs/src/hooks.rs:776a860656c6b2c2": {
+    "classification": "caller-contract",
+    "construction": "assert!( id.index() < world.components().len(), \"on_add_dynamic: component id {} isn't registered in this world\", id.index() )",
+    "reason": "A component id from another world: the message names the call and the id; register the component in this world first.",
+    "site": "crates/ponko_ecs/src/hooks.rs:829"
+  },
+  "crates/ponko_ecs/src/hooks.rs:982fb87197309b95": {
+    "classification": "caller-contract",
+    "construction": "assert!( id.index() < world.components().len(), \"on_replace_dynamic: component id {} isn't registered in this world\", id.index() )",
+    "reason": "A component id from another world: the message names the call and the id; register the component in this world first.",
+    "site": "crates/ponko_ecs/src/hooks.rs:863"
+  },
+  "crates/ponko_ecs/src/hooks.rs:f2955ce5be3b554e": {
+    "classification": "caller-contract",
+    "construction": "assert!( id.index() < world.components().len(), \"on_remove_dynamic: component id {} isn't registered in this world\", id.index() )",
+    "reason": "A component id from another world: the message names the call and the id; register the component in this world first.",
+    "site": "crates/ponko_ecs/src/hooks.rs:845"
+  },
+  "crates/ponko_ecs/src/query.rs:0827fac47ff6edca": {
+    "classification": "invariant",
+    "construction": ".expect(\"an `Added`/`Changed` filter's component is present and tracked\")",
+    "reason": "Matching archetypes have every With component, and track_changes made it tracked before the filter was built.",
+    "site": "crates/ponko_ecs/src/query.rs:562"
+  },
   "crates/ponko_ecs/src/query.rs:2d3927f9685069d0": {
     "classification": "invariant",
     "construction": "debug_assert_eq!(initialized.len, from)",
     "reason": "Internal invariant: let mut initialized = Initialized { slots, len: 0 };             let parallel = plan.run_serial_part(|lo, hi| leaf(lo, hi, &mut initialized));             if let Some((from, chunk)) = parallel {                 debug_assert_eq!(initialized.len, from);",
     "site": "crates/ponko_ecs/src/query.rs:1483"
   },
+  "crates/ponko_ecs/src/query.rs:3dc8ffeb85e7b906": {
+    "classification": "invariant",
+    "construction": "debug_assert!(i < n)",
+    "reason": "par_run passes only positions below the plan's total, which sized the reserved buffer.",
+    "site": "crates/ponko_ecs/src/query.rs:1570"
+  },
   "crates/ponko_ecs/src/query.rs:41cfc1083db75278": {
     "classification": "caller-contract",
     "construction": "panic!( \"query `{}` accesses `{}` twice, once mutably; remove the duplicate access or split it into sequential queries\", std::any::type_name::<Q>(), world.component_info(id).name() )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. Q::access(ids, &mut |id, mutable, _| {         for &(other, other_mut) in &seen[..n] {             if other == id && (mutable || other_mut) {                 panic!(",
     "site": "crates/ponko_ecs/src/query.rs:235"
-  },
-  "crates/ponko_ecs/src/query.rs:45ffbf7f1c27ff42": {
-    "classification": "invariant",
-    "construction": ".expect(\"an `Added`/`Changed` filter's component is present and tracked\")",
-    "reason": "Internal invariant: for (mask, added) in [(self.with_added, true), (self.with_changed, false)] {                 if mask >> i & 1 != 0 {                     let stamps = arch.read_stamps(self.with[i], added);                     rows.term(stamps.expect(\"an `Added`/`Changed` filter's component is present and tracked\"));",
-    "site": "crates/ponko_ecs/src/query.rs:417"
   },
   "crates/ponko_ecs/src/query.rs:49568201b381738f": {
     "classification": "caller-contract",
@@ -148,12 +172,6 @@
     "construction": "assert!( n < MAX_OR_TERMS, \"at most {MAX_OR_TERMS} components across a query's `Or` filters\" )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// closed clause.     pub(crate) fn add_or_term(&mut self, id: ComponentId, has: bool) {         let n = self.n_terms as usize;         assert!(",
     "site": "crates/ponko_ecs/src/query.rs:358"
-  },
-  "crates/ponko_ecs/src/query.rs:aed6c80b4b42c4a2": {
-    "classification": "invariant",
-    "construction": "debug_assert!(i < n)",
-    "reason": "Internal invariant: let slots = Slots(out.as_mut_ptr());         if !std::mem::needs_drop::<R>() {             self.par_run(plan, |i, item| {                 debug_assert!(i < n);",
-    "site": "crates/ponko_ecs/src/query.rs:1408"
   },
   "crates/ponko_ecs/src/query.rs:b38ef6ddd559ecef": {
     "classification": "invariant",
@@ -1097,29 +1115,29 @@
     "reason": "The host finds the peer ID in this same map immediately before removing it. Nothing changes the map between the two operations.",
     "site": "src/net/messages.rs:871"
   },
+  "src/net/messages.rs:196cba739fc4328e": {
+    "classification": "invariant",
+    "construction": ".expect(\"loopback inbox\")",
+    "reason": "Internal invariant: the loopback inbox lock is only held for a push or a pop, nothing panics while holding it, so it is never poisoned.",
+    "site": "src/net/messages.rs:472"
+  },
   "src/net/messages.rs:26af48c2452f30a6": {
     "classification": "caller-contract",
     "construction": "assert!(!timeout.is_zero(), \"timeout must be positive\")",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. ///     .timeout(std::time::Duration::from_secs(3));     /// ```     pub fn timeout(mut self, timeout: Duration) -> Self {         assert!(!timeout.is_zero(), \"timeout must be positive\");",
     "site": "src/net/messages.rs:549"
   },
+  "src/net/messages.rs:28e351f01ca7bcd5": {
+    "classification": "caller-contract",
+    "construction": "assert!((2..=1025).contains(&players), \"players must be 2..=1025\")",
+    "reason": "Caller constraint given in the message (documented under Panics of loopback_lossy and loopback_link): 2..=1025 players.",
+    "site": "src/net/messages.rs:696"
+  },
   "src/net/messages.rs:30a7d9cc767c741d": {
     "classification": "invariant",
     "construction": ".expect(\"sequence\")",
     "reason": "Internal invariant: };                             let bytes = if lane == Lane::Unreliable {                                 let Some(seq) = message.get(..8) else { continue };                                 let seq = u64::from_le_bytes(seq.try_into().expect(\"sequence\"));",
     "site": "src/net/messages.rs:789"
-  },
-  "src/net/messages.rs:37a4933813d5dc1d": {
-    "classification": "invariant",
-    "construction": ".expect(\"loopback inbox\")",
-    "reason": "Internal invariant: if *drop_one_in != 0 && sent.is_multiple_of(u64::from(*drop_one_in)) {                     return Ok(true);                 }                 let mut queues = inboxes.lock().expect(\"loopback inbox\");",
-    "site": "src/net/messages.rs:309"
-  },
-  "src/net/messages.rs:6448dbb4163b724c": {
-    "classification": "invariant",
-    "construction": ".expect(\"loopback inbox\")",
-    "reason": "Internal invariant: }             Self::Local { me, inboxes, .. } => {                 // Reverse arrival intentionally exercises packet reordering.                 Ok(inboxes.lock().expect(\"loopback inbox\")[*me]",
-    "site": "src/net/messages.rs:344"
   },
   "src/net/messages.rs:77624beeee3c4998": {
     "classification": "invariant",
@@ -1139,11 +1157,17 @@
     "reason": "Internal invariant: return Ok(());         }         let kind = data[4];         let cn = u64::from_le_bytes(data[5..13].try_into().expect(\"nonce\"));",
     "site": "src/net/messages.rs:845"
   },
-  "src/net/messages.rs:f999663cc29faf55": {
+  "src/net/messages.rs:cd5dbc75f40d9bee": {
+    "classification": "invariant",
+    "construction": ".expect(\"loopback inbox\")",
+    "reason": "Internal invariant: the loopback inbox lock is only held for a push or a pop, nothing panics while holding it, so it is never poisoned.",
+    "site": "src/net/messages.rs:436"
+  },
+  "src/net/messages.rs:f1db41b6067982c3": {
     "classification": "caller-contract",
-    "construction": "assert!((2..=1025).contains(&players), \"players must be 2..=1025\")",
-    "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// assert_eq!(nets.len(), 2);     /// ```     pub fn loopback_lossy(players: usize, drop_one_in: u32) -> Vec<Self> {         assert!((2..=1025).contains(&players), \"players must be 2..=1025\");",
-    "site": "src/net/messages.rs:516"
+    "construction": "assert!((0.0..=1.0).contains(&share), \"loss must be a share from 0.0 to 1.0\")",
+    "reason": "The message names the misuse: a loss share outside 0.0..=1.0 (documented under Panics).",
+    "site": "src/net/messages.rs:300"
   },
   "src/net/prediction.rs:233709b9d75182b7": {
     "classification": "caller-contract",
@@ -1181,6 +1205,18 @@
     "reason": "Declaration time (C bindings validate first): names the field, the component and its size; should_panic test",
     "site": "src/net/replicate.rs:1071"
   },
+  "src/net/replicate.rs:3655469e249b8115": {
+    "classification": "caller-contract",
+    "construction": "panic!(\"Replication::raw_predicted: no component `{component}` was declared with raw_component\")",
+    "reason": "The message names the misuse and the fix; documented under Panics.",
+    "site": "src/net/replicate.rs:1205"
+  },
+  "src/net/replicate.rs:38a2761494898fba": {
+    "classification": "caller-contract",
+    "construction": "panic!(\"Replication::set_raw_input: the input wasn't declared with raw_input\")",
+    "reason": "The message names the misuse and the fix; documented under Panics.",
+    "site": "src/net/replicate.rs:1448"
+  },
   "src/net/replicate.rs:3c3243e2a4d3fc78": {
     "classification": "forwarded-error",
     "construction": "panic!(\"Replication::interest: {e}\")",
@@ -1192,6 +1228,12 @@
     "construction": "panic!( \"Replication::input_of: the input type is `{}`, not `{}`; read it with the declared input type\", inputs.name(), std::any::type_name::<I>() )",
     "reason": "Names the declared input type and the one asked for, and says to use the declared one; should_panic test",
     "site": "src/net/replicate.rs:1174"
+  },
+  "src/net/replicate.rs:56e56ed0daaf8577": {
+    "classification": "caller-contract",
+    "construction": "panic!(\"Replication::set_raw_input: no input was declared; add `.raw_input(..)` to the Replication\")",
+    "reason": "The message names the misuse and the fix; documented under Panics.",
+    "site": "src/net/replicate.rs:1444"
   },
   "src/net/replicate.rs:5b913faba339490e": {
     "classification": "caller-contract",
@@ -1217,6 +1259,18 @@
     "reason": "Says no input type was declared and the declaration to add; should_panic test",
     "site": "src/net/replicate.rs:1152"
   },
+  "src/net/replicate.rs:9d2c6cc24103d16d": {
+    "classification": "caller-contract",
+    "construction": "panic!(\"Replication::raw_interpolated: no component `{component}` was declared with raw_component\")",
+    "reason": "The message names the misuse and the fix; documented under Panics.",
+    "site": "src/net/replicate.rs:1232"
+  },
+  "src/net/replicate.rs:a9f3042e9e685568": {
+    "classification": "caller-contract",
+    "construction": "panic!(\"Replication::raw_interpolated: {e}\")",
+    "reason": "Forwards the config's validation message, prefixed with the call; documented under Panics.",
+    "site": "src/net/replicate.rs:1228"
+  },
   "src/net/replicate.rs:b94507bf6f478855": {
     "classification": "forwarded-error",
     "construction": "panic!(\"Replication::interpolated_with: {e}\")",
@@ -1228,6 +1282,12 @@
     "construction": "panic!( \"Replication: the input type is `{found}`, not `{name}`; a game has one input type (put every control in it)\" )",
     "reason": "Names the declared input type and the one used, and that a game has one; should_panic test",
     "site": "src/net/replicate.rs:532"
+  },
+  "src/net/replicate.rs:be1eda5df740f3e3": {
+    "classification": "caller-contract",
+    "construction": "panic!(\"Replication::raw_predicted: declare the input with raw_input first\")",
+    "reason": "The message names the misuse and the fix; documented under Panics.",
+    "site": "src/net/replicate.rs:1208"
   },
   "src/net/replicate.rs:ca619d3efdf14c80": {
     "classification": "caller-contract",
@@ -1246,6 +1306,12 @@
     "construction": "assert!( self.events.len() < usize::from(u16::MAX), \"Replication: at most {} event types can be declared; put related events into one enum\", u16::MAX )",
     "reason": "Declaration time: names the 65535 event-type limit (event types travel as u16) and says to merge related events into one enum",
     "site": "src/net/replicate.rs:955"
+  },
+  "src/net/replicate.rs:ffe792e870c55794": {
+    "classification": "caller-contract",
+    "construction": "assert!( inner.inputs.is_none(), \"Replication::raw_input: an input type is declared already; a game has one input type (put every control in it)\" )",
+    "reason": "The message names the misuse and the fix; documented under Panics.",
+    "site": "src/net/replicate.rs:1178"
   },
   "src/net/replicate/bits.rs:0ed36afc7811b5a2": {
     "classification": "invariant",
@@ -1288,6 +1354,24 @@
     "construction": "debug_assert_eq!(got, seq, \"predictions follow the input stream's numbers\")",
     "reason": "A predicted entity's prediction is created with the input stream and advanced only here, once per input, so their numbers match",
     "site": "src/net/replicate/inputs.rs:158"
+  },
+  "src/net/replicate/raw.rs:173d3284dabcd129": {
+    "classification": "caller-contract",
+    "construction": "assert!( float_fields.len() <= MAX_INTERPOLATED_FLOATS, \"Replication: `{name}` has {} float fields; an interpolated component declared at run time takes at most {MAX_INTERPOLATED_FLOATS}\", float_fields.len() )",
+    "reason": "Too many float fields for an interpolated run-time component: the message names the component and the limit (Replication::RAW_INTERPOLATED_FLOATS lets bindings check first).",
+    "site": "src/net/replicate/raw.rs:348"
+  },
+  "src/net/replicate/raw.rs:6c08aae73e9df34e": {
+    "classification": "invariant",
+    "construction": "debug_assert_eq!(got, seq, \"predictions follow the input stream's numbers\")",
+    "reason": "Predictions are pushed with the sequence numbers the input stream hands out, in order.",
+    "site": "src/net/replicate/raw.rs:180"
+  },
+  "src/net/replicate/raw.rs:cbbc9783864a0c70": {
+    "classification": "caller-contract",
+    "construction": "assert!( f.offset.checked_add(f.ty.size()).is_some_and(|end| end <= size), \"Replication::{what}: field `{}` of `{name}` lies outside its {size} bytes\", f.name )",
+    "reason": "A field outside the declared size: the message names the field, the component and its size.",
+    "site": "src/net/replicate/raw.rs:76"
   },
   "src/net/rollback.rs:08e3ef4c00d1bbfd": {
     "classification": "invariant",
@@ -1739,11 +1823,11 @@
     "reason": "make_crowd creates the shared crowd state before it makes the first GPU-path crowd and never drops it, so a GPU-path crowd always has it.",
     "site": "src/render/gpu3d/crowds.rs:397"
   },
-  "src/render/gpu3d/crowds.rs:aaee982ef71cfcd6": {
+  "src/render/gpu3d/crowds.rs:fdadabb04b30d01f": {
     "classification": "invariant",
-    "construction": "debug_assert!(source.contains(FIELDS) && source.contains(BINDINGS) && source.contains(helper))",
-    "reason": "Debug check that the engine's own mesh shader still has the text the crowd shader splices into; crowd_shaders_compose_on_the_mesh_shader tests it, callers can't change it.",
-    "site": "src/render/gpu3d/crowds.rs:74"
+    "construction": "debug_assert!( source.contains(FIELDS) && source.contains(BINDINGS) && source.contains(helper) && source.matches(FADE).count() == 2 )",
+    "reason": "Debug-only check of the engine's own mesh shader text (fields, bindings, helper and the two vertex entry points' fade lines) that compose_crowd edits; crowd_shaders_compose_on_the_mesh_shader checks it in every build",
+    "site": "src/render/gpu3d/crowds.rs:144"
   },
   "src/render/gpu3d/custom_passes.rs:96c5b0d2fc4aefbb": {
     "classification": "invariant",

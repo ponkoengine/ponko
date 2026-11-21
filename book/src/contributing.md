@@ -154,8 +154,19 @@ fails under load is a broken test. When a test is about time or frames:
 - **Process-wide counters see other threads.** The global allocator counts
   every thread: a Rayon worker that starts or parks late allocates its sleep
   lock once, and the pool's job queue allocates a block every few dozen jobs.
-  An allocation test fixes the pool size and starts the workers before it
-  measures, then allows exactly that much, or counts only its own thread.
+  An allocation test counts per thread instead: `profile_scope!` around the
+  code it checks, and inside the parallel work, counts the allocations on
+  its own thread ([Allocations per thread](profiling.md#allocations-per-thread)).
+  What is left of the pool's own is on the calling thread, a fixed number
+  per job handed in, and the test says so.
+- **Count the engine's work.** The engine keeps counters for this: the crowd
+  of a navigation mesh counts its steps, the agents they moved and their
+  work units (`NavMesh::crowd_stats`), so "every agent moved every tick and
+  the work per agent did not grow with the crowd" needs no clock.
+- **A spin is a lower bound too.** A loop that spins until some time has
+  passed only runs longer on a paused thread. Use it to make work slow
+  enough for a parallel path, never to give other threads time to wake:
+  assert what holds whichever thread ran what.
 
 Which assets finished before a group failed, which worker took a job and how
 many frames a load took all depend on scheduling; assert them only where the

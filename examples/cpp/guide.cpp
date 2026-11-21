@@ -3780,6 +3780,162 @@ ponko::crowd plaza(ponko::ctx& ctx, ponko::entity skeleton, ponko::mesh near, po
 }
 // ANCHOR_END: crowd
 
+// ANCHOR: video_intro
+// An intro before the menu (the C library built with `--features video`).
+void add_intro(ponko::game& game) {
+    auto intro = std::make_shared<ponko::video>();
+    game.setup([intro](ponko::ctx& ctx) {
+        *intro = ponko::video::load(ctx, "intro.webm");  // paused on its first frame
+        intro->play(ctx);
+    });
+    game.system([intro](ponko::ctx& ctx) {
+        if (!*intro) return;
+        intro->update(ctx);
+        const ponko::video_state s = intro->state();
+        if (s.finished) { intro->free(ctx); return; }  // on to the menu
+        const ponko::draw_params at = ponko_draw_params_with_space(ponko::draw_defaults(), PONKO_DRAW_SPACE_SCREEN);
+        ctx.draw(s.texture, {float(s.width) / 2, float(s.height) / 2}, at);
+    });
+}
+// ANCHOR_END: video_intro
+
+// ANCHOR: baked
+static std::vector<std::uint8_t> bake_room(ponko::ctx& ctx) {
+    // Offline (a tool, a build step): the static models and the lights.
+    auto floor = ponko::mesh_data::plane(8);
+    auto block = ponko::mesh_data::cube(1);
+    floor.generate_lightmap_uvs(4);  // or a glTF file's second UV set
+    block.generate_lightmap_uvs(4);
+    ponko::light_bake_scene scene(ctx);  // the game's sun and sky as they are
+    scene.add(ponko::bake_model(floor, ponko::transform3d_at({0, 0, 0})));  // entry 0
+    ponko::bake_model red(block, ponko::transform3d_at({-2, 0.5f, 0}));
+    red.albedo = ponko::rgb(0.9f, 0.1f, 0.1f);
+    scene.add(red);                                                        // entry 1
+    scene.add_lights(ctx);
+    ponko::light_bake_settings settings;
+    settings.samples = 32;
+    return scene.bake(settings).to_bytes();  // save them with the level
+}
+// In the game: the same meshes, each with its entry's lightmap.
+static void light_room(ponko::ctx& ctx, const std::vector<std::uint8_t>& bytes) {
+    auto baked = ponko::baked_lighting::from_bytes(bytes);  // or baked_lighting::load(ctx, "room.lit")
+    auto floor = ponko::mesh_data::plane(8);
+    floor.generate_lightmap_uvs(4);
+    auto floor_mesh = ctx.create_mesh(floor, ctx.create_material(ponko::material_of(ponko::colors::white)));
+    ctx.world().spawn(ponko::transform3d_at({0, 0, 0}), ponko::model_of(floor_mesh), *baked.lightmap(0));
+    ctx.set_baked_lighting(baked.raw());  // nullptr turns it off
+}
+// ANCHOR_END: baked
+
+static void baked_runs() {
+    ponko::game game("Baked", 1, 1);
+    game.setup([](ponko::ctx& ctx) {
+        auto bytes = bake_room(ctx);
+        light_room(ctx, bytes);
+        if (bytes.size() < 64) std::abort();
+    });
+    game.run_headless(1);
+}
+
+// ANCHOR: component_hooks
+struct Badge { std::uint32_t number; };   // a plain component
+using badge_index = std::unordered_map<std::uint32_t, ponko::entity>;
+// Every badge, by number: always the same as the world.
+static void index_badges(ponko::world_view& world, std::shared_ptr<badge_index> index) {
+    world.on_add<Badge>([index](ponko::hook_world&, ponko::entity e, const Badge& b) {
+        (*index)[b.number] = e;
+    });
+    world.on_replace<Badge>([index](ponko::hook_world&, ponko::entity e, const Badge& old, const Badge& next) {
+        index->erase(old.number);
+        (*index)[next.number] = e;
+    });
+    world.on_remove<Badge>([index](ponko::hook_world&, ponko::entity, const Badge& b) {
+        index->erase(b.number);
+    });
+}
+// ANCHOR_END: component_hooks
+
+static void component_hooks_run() {
+    ponko::world world;
+    auto index = std::make_shared<badge_index>();
+    index_badges(world, index);
+    const ponko::entity e = world.spawn(Badge{7});
+    if (index->at(7) != e) std::abort();
+    world.set(e, Badge{8});
+    if (index->count(7) || index->at(8) != e) std::abort();
+    world.despawn(e);
+    if (!index->empty()) std::abort();
+}
+
+// ANCHOR: sky_kit_day
+// In setup: clouds, a moon and stars, and a clock that moves the sun.
+static ponko::day_night cloudy_day(ponko::ctx& ctx) {
+    ponko::sky_kit kit = ponko::sky_kit_defaults();
+    kit.coverage = 0.5f;            // 0 clear to 1 overcast
+    kit.wind = {12, 4};             // meters per second across the ground
+    kit.quality = PONKO_CLOUDS_MEDIUM;
+    ctx.set_sky_kit(kit);
+    ponko::day_night clock(7.5f);   // half past seven in the morning
+    clock.hours_per_second = 0.05f; // a day in eight minutes
+    ctx.apply_day_night(clock);
+    return clock;
+}
+// Once a frame: the clock moves on, the sun and the moon with it.
+static void tick_sky(ponko::ctx& ctx, ponko::day_night& clock) { ctx.update_day_night(clock); }
+// ANCHOR_END: sky_kit_day
+
+static void sky_kit_runs() {
+    auto clock = std::make_shared<ponko::day_night>();
+    ponko::game game("Sky", 1, 1);
+    game.setup([clock](ponko::ctx& ctx) { *clock = cloudy_day(ctx); });
+    game.system([clock](ponko::ctx& ctx) { tick_sky(ctx, *clock); });
+    game.run_headless(2);
+    if (!(clock->hour >= 7.5f)) std::abort();
+}
+
+// ANCHOR: crowd_clip_tracks
+// A wave made in code: joint 3 (the arm) turns up and back down in a second.
+ponko::clip wave_clip(ponko::ctx& ctx, ponko::entity skeleton) {
+    static const std::vector<float> times = {0.0f, 0.5f, 1.0f};
+    static const std::vector<float> turns = {   // quaternions x, y, z, w
+        0, 0, 0, 1,
+        0, 0, 0.7071f, 0.7071f,
+        0, 0, 0, 1,
+    };
+    return ctx.create_clip(skeleton, "wave", {ponko::joint_track_of(3, PONKO_JOINT_ROTATION, times, turns)});
+}
+// ANCHOR_END: crowd_clip_tracks
+
+// ANCHOR: touch_scenario
+// A test's fingers: a tap on a button, a long press, a swipe across.
+static ponko::input_scenario touch_test() {
+    ponko::input_scenario s;
+    s.tap(2, {120, 640})                          // tick 2
+     .touch_hold(5, 40, {300, 300})               // ticks 5 to 40
+     .touch_drag(50, 60, {100, 400}, {500, 400}); // a swipe right
+    return s;
+}
+// ANCHOR_END: touch_scenario
+
+static void touch_scenario_runs() {
+    ponko::game game("Fingers", 640, 800);
+    auto run = game.run_headless_scenario(touch_test());
+    if (run.report.status == PONKO_SCENARIO_FAILED) std::abort();
+}
+
+// ANCHOR: loop_reads
+// One read per system, then plain loops: no call per entity.
+struct Seeker { float x, y, z; };
+void seek(ponko::ctx& ctx) {
+    const ponko::nav_view nav = ctx.nav_view();  // throws if no navmesh is baked
+    auto hits = ctx.collisions_started();        // this tick's new 3D (or 2D) contacts
+    ctx.world().each([&](ponko::entity e, Seeker& s) {
+        if (auto p = nav.sample_position({s.x, s.y, s.z}, 2.0f)) { s.x = p->x; s.y = p->y; s.z = p->z; }
+        for (const auto& c : hits) if (ponko_entity_bits(c.a) == e || ponko_entity_bits(c.b) == e) s.y += 1;
+    });
+}
+// ANCHOR_END: loop_reads
+
 // ANCHOR: instance_cells
 void streamed_cell(ponko::ctx& ctx, ponko::mesh tree) {
     // An empty batch: the world's cells bring its instances.
@@ -4434,11 +4590,59 @@ static void replication_runs() {
     // ANCHOR_END: replication_server
     game.sim_system([marked, id](ponko::ctx& ctx) {
         if (ctx.replication_status().role != PONKO_REPLICATION_SERVER) std::abort();
+        // No client joined: no peer stats, no resend stats.
+        if (ctx.replication_peer_stats(1) || ctx.replication_resend_stats(1)) std::abort();
         *id = ctx.net_id(*marked);
     });
     game.run_headless(3);
     // The net id came at the end of the first tick; it names the entity.
     if (!*id) { std::fprintf(stderr, "replication guide: no net id\n"); std::abort(); }
+}
+
+// ANCHOR: replication_inputs
+struct Stick { float dx = 0, dy = 0; };   // the input: every control in one struct
+struct Pacer { float x = 0, y = 0; };    // a component the input moves
+// In setup on every side, after ctx.replication(...) declared `pacer`:
+static void declare_inputs(ponko::ctx& ctx, std::uint16_t& chat) {
+    static const std::vector<PonkoReplicatedField> stick = {
+        {"dx", offsetof(Stick, dx), PONKO_REPLICATED_F32, PONKO_FIELD_RANGE, -1, 1, 0.01f, 0},
+        {"dy", offsetof(Stick, dy), PONKO_REPLICATED_F32, PONKO_FIELD_RANGE, -1, 1, 0.01f, 0},
+    };
+    ctx.replication_input<Stick>("Stick", stick);
+    // The owner's client runs this at once, the server for each input it gets.
+    ctx.replication_predicted<Pacer, Stick>("pacer", [](Pacer& w, const Stick& s) {
+        w.x += s.dx * 0.1f;
+        w.y += s.dy * 0.1f;
+    });
+    ctx.replication_interpolated("pacer");   // others' pacers move smoothly
+    chat = ctx.replication_event("Chat");
+}
+// Every tick: this side's input, and the events that arrived.
+static void play_tick(ponko::ctx& ctx, std::uint16_t chat, int& heard) {
+    ctx.set_replication_input(Stick{1, 0});
+    for (const PonkoNetEvent& e : ctx.net_events())
+        if (e.kind == chat) heard += static_cast<int>(e.size);
+    if (ctx.sim_tick() == 1) ctx.replication_send(PONKO_EVENT_TO_SERVER, chat, "hi", 2);
+}
+// ANCHOR_END: replication_inputs
+
+static void replication_inputs_run() {
+    auto chat = std::make_shared<std::uint16_t>(0);
+    auto heard = std::make_shared<int>(0);
+    ponko::game game("Inputs", 1, 1);
+    game.setup([chat](ponko::ctx& ctx) {
+        static const std::vector<PonkoReplicatedField> fields = {
+            {"x", offsetof(Pacer, x), PONKO_REPLICATED_F32, PONKO_FIELD_EXACT, 0, 0, 0, 0},
+            {"y", offsetof(Pacer, y), PONKO_REPLICATED_F32, PONKO_FIELD_EXACT, 0, 0, 0, 0},
+        };
+        PonkoReplicatedComponent pacer = ctx.replicated<Pacer>("pacer", fields);
+        ctx.replication(&pacer, 1);
+        declare_inputs(ctx, *chat);
+    });
+    game.sim_system([chat, heard](ponko::ctx& ctx) { play_tick(ctx, *chat, *heard); });
+    game.run_headless(4);
+    // Without an endpoint this game is the server: its own event arrived.
+    if (*heard != 2) { std::fprintf(stderr, "replication inputs guide: %d\n", *heard); std::abort(); }
 }
 
 // The guide's native prediction (networking chapter): pure data, run below.
@@ -4630,6 +4834,11 @@ int main() {
     camera_rigs_guide();
     builder_setup_runs_headless();
     replication_runs();
+    replication_inputs_run();
+    baked_runs();
+    component_hooks_run();
+    sky_kit_runs();
+    touch_scenario_runs();
     states_guide();
     state_screen_guide();
     native_prediction_runs();

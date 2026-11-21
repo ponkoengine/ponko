@@ -256,7 +256,99 @@ impl Link {
         }
     }
 }
-type Inbox = VecDeque<(SocketAddr, Vec<u8>)>;
+/// Datagrams waiting for an in-memory endpoint: sender, bytes, and the
+/// time they may arrive (zero: at once).
+type Inbox = VecDeque<(SocketAddr, Vec<u8>, Duration)>;
+
+/// What an in-memory link does to datagrams
+/// ([`NetMessages::loopback_link`]): loses a share of them, and delays
+/// each by a fixed time plus a random part, so that some overtake others.
+/// The dice are a hash of the seed, the sender and the datagram's number:
+/// the same seed loses and delays the same datagrams on every run.
+///
+/// ```
+/// use std::time::Duration;
+/// let link = ponko::net::LoopbackLink::new()
+///     .loss(0.05)
+///     .delay(Duration::from_millis(30))
+///     .jitter(Duration::from_millis(50))
+///     .seed(7);
+/// assert_ne!(link, ponko::net::LoopbackLink::new());
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LoopbackLink {
+    loss: f64,
+    delay: Duration,
+    jitter: Duration,
+    seed: u64,
+}
+
+impl LoopbackLink {
+    /// A perfect link: nothing lost, nothing delayed.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Loses this share of the datagrams, `0.0..=1.0`.
+    ///
+    /// # Panics
+    ///
+    /// If `share` is outside `0.0..=1.0`.
+    #[must_use]
+    pub fn loss(mut self, share: f64) -> Self {
+        assert!((0.0..=1.0).contains(&share), "loss must be a share from 0.0 to 1.0");
+        self.loss = share;
+        self
+    }
+
+    /// Every datagram arrives this long after it was sent, at the
+    /// earliest.
+    #[must_use]
+    pub fn delay(mut self, delay: Duration) -> Self {
+        self.delay = delay;
+        self
+    }
+
+    /// And up to this much later, picked per datagram: a datagram delayed
+    /// more than the gap to the next one arrives after it.
+    #[must_use]
+    pub fn jitter(mut self, jitter: Duration) -> Self {
+        self.jitter = jitter;
+        self
+    }
+
+    /// Another seed picks other datagrams to lose and delay.
+    #[must_use]
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    /// When datagram number `n` from endpoint `me`, sent at `now`, arrives;
+    /// `None` if it is lost.
+    fn arrival(&self, me: usize, n: u64, now: Duration) -> Option<Duration> {
+        let roll = |salt: u64| {
+            let z = mix(self.seed ^ mix((me as u64) << 32 ^ n) ^ salt);
+            (z >> 11) as f64 / (1u64 << 53) as f64
+        };
+        if self.loss > 0.0 && roll(1) < self.loss {
+            return None;
+        }
+        if self.delay.is_zero() && self.jitter.is_zero() {
+            return Some(Duration::ZERO);
+        }
+        Some(now + self.delay + self.jitter.mul_f64(roll(2)))
+    }
+}
+
+/// A fixed scramble of `n` (splitmix64): the loopback link's dice.
+fn mix(n: u64) -> u64 {
+    let mut z = n.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
 /// Packet boundary below the renet protocol and session handshake.
 ///
 /// Implementations: the Steam relay (feature `steam`), WebRTC data channels
@@ -294,7 +386,10 @@ enum Wire {
         me: usize,
         inboxes: Arc<Mutex<Vec<Inbox>>>,
         drop_one_in: u32,
+        link: LoopbackLink,
         sent: u64,
+        /// The endpoint's protocol time at its last poll.
+        now: Duration,
     },
 }
 impl Wire {
@@ -327,17 +422,22 @@ impl Wire {
                 me,
                 inboxes,
                 drop_one_in,
+                link,
                 sent,
+                now,
             } => {
                 *sent += 1;
                 if *drop_one_in != 0 && sent.is_multiple_of(u64::from(*drop_one_in)) {
                     return Ok(true);
                 }
+                let Some(due) = link.arrival(*me, *sent, *now) else {
+                    return Ok(true);
+                };
                 let mut queues = inboxes.lock().expect("loopback inbox");
                 if let Some(queue) = queues.get_mut(usize::from(addr.port() - 1))
                     && queue.len() < 4096
                 {
-                    queue.push_back((local_addr(*me), bytes.to_vec()));
+                    queue.push_back((local_addr(*me), bytes.to_vec(), due));
                 }
                 Ok(true)
             }
@@ -366,11 +466,16 @@ impl Wire {
                 }
                 Ok(client.recv(buf).map(|n| (super::websocket::HOST, n)))
             }
-            Self::Local { me, inboxes, .. } => {
-                // Reverse arrival intentionally exercises packet reordering.
-                Ok(inboxes.lock().expect("loopback inbox")[*me]
-                    .pop_back()
-                    .map(|(addr, bytes)| {
+            Self::Local { me, inboxes, now, .. } => {
+                // Reverse arrival intentionally exercises packet reordering:
+                // the newest datagram that has arrived goes first.
+                let mut queues = inboxes.lock().expect("loopback inbox");
+                let queue = &mut queues[*me];
+                Ok(queue
+                    .iter()
+                    .rposition(|&(_, _, due)| due <= *now)
+                    .and_then(|i| queue.remove(i))
+                    .map(|(addr, bytes, _)| {
                         buf[..bytes.len()].copy_from_slice(&bytes);
                         (addr, bytes.len())
                     }))
@@ -565,6 +670,29 @@ impl NetMessages {
     /// assert_eq!(nets.len(), 2);
     /// ```
     pub fn loopback_lossy(players: usize, drop_one_in: u32) -> Vec<Self> {
+        Self::loopback_on(players, drop_one_in, LoopbackLink::new())
+    }
+    /// Like `loopback`, over a link that loses and delays datagrams as
+    /// `link` says, the same ones on every run. The delays count on the
+    /// endpoints' protocol clocks, from the sender's last poll to the
+    /// receiver's: poll them together, every frame, as games do, and on
+    /// game time ([`game_clock`](Self::game_clock)) for runs that repeat
+    /// exactly.
+    ///
+    /// # Panics
+    ///
+    /// Unless `players` is 2..=1025.
+    ///
+    /// ```
+    /// use ponko::net::{LoopbackLink, NetMessages};
+    /// let link = LoopbackLink::new().loss(0.05).jitter(std::time::Duration::from_millis(50));
+    /// let nets = NetMessages::loopback_link(3, link);
+    /// assert_eq!(nets.len(), 3);
+    /// ```
+    pub fn loopback_link(players: usize, link: LoopbackLink) -> Vec<Self> {
+        Self::loopback_on(players, 0, link)
+    }
+    fn loopback_on(players: usize, drop_one_in: u32, link: LoopbackLink) -> Vec<Self> {
         assert!((2..=1025).contains(&players), "players must be 2..=1025");
         let inboxes = Arc::new(Mutex::new((0..players).map(|_| VecDeque::new()).collect()));
         (0..players)
@@ -574,7 +702,9 @@ impl NetMessages {
                         me,
                         inboxes: inboxes.clone(),
                         drop_one_in,
+                        link,
                         sent: me as u64,
+                        now: Duration::ZERO,
                     },
                     me == 0,
                     players - 1,
@@ -862,6 +992,9 @@ impl NetMessages {
         #[cfg(any(test, feature = "steam", feature = "webrtc"))]
         if let Wire::Custom(t) = &mut self.wire {
             t.advance(self.now);
+        }
+        if let Wire::Local { now, .. } = &mut self.wire {
+            *now = self.now;
         }
         let mut buf = [0u8; 1500];
         for _ in 0..256 {
@@ -1193,6 +1326,62 @@ impl NetMessages {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Datagrams 0..1000 from endpoint 1 to endpoint 0 of a loopback over
+    /// `link`, one per 60 Hz frame; the numbers in the order they arrived.
+    fn through(link: LoopbackLink) -> Vec<u32> {
+        let mut nets = NetMessages::loopback_link(2, link);
+        let set_now = |net: &mut NetMessages, t: Duration| {
+            if let Wire::Local { now, .. } = &mut net.wire {
+                *now = t;
+            }
+        };
+        let frame = Duration::from_micros(16_667);
+        let mut got = Vec::new();
+        let mut buf = [0u8; 1500];
+        for i in 0..1100u32 {
+            let t = frame * i;
+            set_now(&mut nets[0], t);
+            set_now(&mut nets[1], t);
+            if i < 1000 {
+                nets[1].wire.send(local_addr(0), &i.to_le_bytes()).unwrap();
+            }
+            while let Some((_, n)) = nets[0].wire.recv(&mut buf).unwrap() {
+                got.push(u32::from_le_bytes(buf[..n].try_into().unwrap()));
+            }
+        }
+        got
+    }
+
+    #[test]
+    fn a_loopback_link_loses_and_reorders_the_same_datagrams_on_every_run() {
+        let link = LoopbackLink::new()
+            .loss(0.1)
+            .delay(Duration::from_millis(20))
+            .jitter(Duration::from_millis(50))
+            .seed(3);
+        let got = through(link);
+        assert_eq!(got, through(link), "the same seed, the same run");
+        assert_ne!(got, through(link.seed(4)), "another seed, another run");
+        // About a tenth lost, none twice.
+        assert!((850..=950).contains(&got.len()), "{} of 1000 arrived", got.len());
+        let mut sorted = got.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), got.len(), "each arrives once");
+        // Up to three frames of jitter: many overtake an earlier one.
+        let overtaken = got.windows(2).filter(|w| w[1] < w[0]).count();
+        assert!(overtaken > 100, "{overtaken} arrived after a later one");
+        // Negative control: a perfect link delivers all, in order (one a
+        // frame, so the newest-first order within a poll never shows).
+        assert_eq!(through(LoopbackLink::new()), (0..1000).collect::<Vec<_>>());
+    }
+
+    #[test]
+    #[should_panic(expected = "loss must be a share from 0.0 to 1.0")]
+    fn a_loss_above_one_is_refused() {
+        let _ = LoopbackLink::new().loss(1.5);
+    }
 
     #[test]
     fn first_wall_clock_poll_sends_hello_after_long_startup() {

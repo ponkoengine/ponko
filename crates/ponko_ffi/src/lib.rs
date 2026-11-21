@@ -155,17 +155,35 @@ mod viewports;
 mod touch;
 // The water kit: lakes, rivers, seas and buoyancy (gl#51).
 mod water;
+// Native API parity, round 4 (gl#122): hooks, sky kit, video, baking,
+// replication inputs and events, crowd clips, touch scenarios, nav views.
+mod component_hooks;
+mod crowd_clips;
+mod lightmap_bake;
+mod nav_view;
+mod replication_raw;
+mod scenario_touch;
+mod sky_kit;
+mod video;
 pub use access::*;
 pub use actions::*;
 pub use ai::*;
 pub use ai_world::*;
 pub use animator::*;
+pub use component_hooks::*;
 pub use controllers::*;
+pub use crowd_clips::*;
 pub use debug::*;
 pub use ime::*;
+pub use lightmap_bake::*;
 pub use locale::*;
+pub use nav_view::*;
+pub use replication_raw::*;
+pub use scenario_touch::*;
 pub use skeleton2d::*;
+pub use sky_kit::*;
 pub use states::*;
+pub use video::*;
 /// Counts the library's heap allocations while profiling is on (one atomic
 /// load per allocation otherwise), so a C or C++ game's reports show how many
 /// the engine makes. A Rust program that links this crate as a library and
@@ -740,6 +758,7 @@ pub(crate) fn component(world: &World, id: u32) -> Result<(ComponentId, Kind), F
             .or_else(|| crate::contacts3d::contact_kind(t))
             .or_else(|| crate::sprite_material::sprite_kind(t))
             .or_else(|| crate::lights2d::light_kind(t))
+            .or_else(|| crate::lightmap_bake::bake_kind(t))
         {
             Some(kind) => kind,
             None => {

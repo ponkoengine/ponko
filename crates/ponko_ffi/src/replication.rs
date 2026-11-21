@@ -4,8 +4,8 @@
 //! (`ponko_ctx_replication`, in setup), and marks entities
 //! (`ponko_ctx_replicate`). The engine keeps the clients' worlds in step
 //! with the server's: delta compression, interest, the bandwidth budget,
-//! spawns and despawns. Inputs, prediction and events are Rust-only for
-//! now (the guide's "Replication" chapter names the gap).
+//! spawns and despawns. Inputs, prediction, events and interpolation are
+//! in `replication_raw`.
 
 use std::ffi::c_char;
 
@@ -245,6 +245,28 @@ pub struct PonkoReplicationPeerStats {
     pub deferred: u64,
 }
 
+/// How the server resends to one client (Rust `ResendStats`, from
+/// `ponko_ctx_replication_resend_stats`): records sent again early (the
+/// acknowledgements skipped their packet) and on the timeout, packets
+/// called lost that were acknowledged after all, the resend timeout now in
+/// ticks, the timeouts in a row that doubled it, and the reordering
+/// tolerated in ticks. A struct of its own, so that
+/// `PonkoReplicationPeerStats` keeps its layout.
+/// ```
+/// assert_eq!(ponko_ffi::PonkoReplicationResendStats::default().early_resends, 0);
+/// ```
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub struct PonkoReplicationResendStats {
+    pub early_resends: u64,
+    pub timeout_resends: u64,
+    pub late_acks: u64,
+    pub timeout_ticks: u32,
+    pub backoff: u32,
+    pub reorder_ticks: u32,
+}
+
 /// What a client received and sent (Rust `ClientStats`).
 /// ```
 /// assert_eq!(ponko_ffi::PonkoReplicationClientStats::default().spawned, 0);
@@ -323,7 +345,7 @@ fn raw_type(t: PonkoReplicatedType) -> RawType {
 
 /// The field as Rust's, checked the way the declaration would check it
 /// (so a mistake is an error here, not a panic later).
-fn field(f: &PonkoReplicatedField, component: &str, size: usize) -> Result<RawField, Failure> {
+pub(crate) fn field(f: &PonkoReplicatedField, component: &str, size: usize) -> Result<RawField, Failure> {
     // SAFETY: the caller guarantees NUL-terminated field names.
     let name = unsafe { text(f.name) }?;
     if name.is_empty() {
@@ -456,7 +478,7 @@ pub unsafe extern "C" fn ponko_ctx_replication(
 
 /// # Safety
 /// `ptr` null or readable for `len` values.
-unsafe fn slice<'a, T>(ptr: *const T, len: usize, what: &str) -> Result<&'a [T], Failure> {
+pub(crate) unsafe fn slice<'a, T>(ptr: *const T, len: usize, what: &str) -> Result<&'a [T], Failure> {
     if len == 0 {
         Ok(&[])
     } else if ptr.is_null() {
@@ -467,7 +489,7 @@ unsafe fn slice<'a, T>(ptr: *const T, len: usize, what: &str) -> Result<&'a [T],
     }
 }
 
-fn not_found(what: &'static str) -> Failure {
+pub(crate) fn not_found(what: &'static str) -> Failure {
     error(PonkoStatus::PONKO_NOT_FOUND, what)
 }
 
@@ -733,6 +755,42 @@ pub unsafe extern "C" fn ponko_ctx_replication_peer_stats(
                     deltas_sent: s.deltas_sent,
                     destroys_sent: s.destroys_sent,
                     deferred: s.deferred,
+                },
+            )
+        }
+    })
+}
+
+/// Server: how it resends to `peer` (`PONKO_NOT_FOUND` if no such client).
+/// # Safety
+/// Live ctx; writable output.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_replication_resend_stats(std::ptr::null_mut(), 1, std::ptr::null_mut()) } as u32, 1);
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_replication_resend_stats(
+    ctx: *mut PonkoCtx,
+    peer: u64,
+    out_stats: *mut PonkoReplicationResendStats,
+) -> PonkoStatus {
+    boundary(|| {
+        // SAFETY: forwarded caller contract.
+        unsafe {
+            let s = ctx_access(ctx, |c| {
+                c.net
+                    .replication
+                    .resend_stats(PeerId::from_bits(peer))
+                    .ok_or_else(|| not_found("no such client"))
+            })?;
+            out(
+                out_stats,
+                PonkoReplicationResendStats {
+                    early_resends: s.early_resends,
+                    timeout_resends: s.timeout_resends,
+                    late_acks: s.late_acks,
+                    timeout_ticks: s.timeout_ticks,
+                    backoff: s.backoff,
+                    reorder_ticks: s.reorder_ticks,
                 },
             )
         }

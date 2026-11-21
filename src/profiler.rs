@@ -169,6 +169,11 @@ impl Profiler {
         p
     }
 
+    /// A trace is being recorded (it shows every frame's GPU passes).
+    pub(crate) fn tracing(&self) -> bool {
+        self.trace.is_some()
+    }
+
     /// A benchmark run is set up: the game runs with vsync off.
     pub fn benchmarking(&self) -> bool {
         self.bench.is_some()
@@ -303,7 +308,7 @@ fn summarize(samples: &[FrameSample], sorted: &mut Vec<f32>) -> FrameStats {
         systems_ms: avg(|s| s.systems_ms),
         render_cpu_ms: avg(|s| s.render_ms - s.wait_ms),
         display_wait_ms: avg(|s| s.wait_ms),
-        gpu_ms: (gpu_n > 0).then(|| gpu_sum / gpu_n as f32),
+        gpu_ms: (gpu_n > 0).then_some(gpu_sum / gpu_n as f32),
     }
 }
 
