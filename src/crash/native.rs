@@ -19,6 +19,16 @@
 //!   threads that copy standard output and error ([`keep_line`]).
 //! - The pending file, `crash-reports/.native-<pid>-<n>` in the game's data
 //!   folder, open and locked while the run lasts.
+//! - [`MODULES`]: each loaded module's address range, build id and path,
+//!   refreshed off the handler ([`refresh_modules`]), so the handler can
+//!   write each frame's module and offset.
+//!
+//! The handler also writes the crash's backtrace as raw addresses: on Unix
+//! a walk of the frame records from the crashed thread's registers, with
+//! every read bounds-checked and made through a pipe (an unmapped address
+//! fails the `write` with `EFAULT` instead of faulting again); on Windows
+//! the system's table-driven unwinder. The next start names the frames
+//! whose binary is still the same ([`describe_frames`]).
 
 // The handler's statics are shared by the Unix and Windows paths; a
 // platform with neither only keeps the parsing (the next start's half).
@@ -26,7 +36,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 
 /// The first line of a pending file.
 const MAGIC: &str = "ponko native crash";
@@ -47,6 +57,105 @@ const OUTPUT_LINE: usize = 1024;
 /// How long the handler lets the copy threads pass on what was printed just
 /// before the crash, when the game's output is kept (something was).
 const SETTLE_MS: u64 = 50;
+
+/// The most frames the handler writes.
+const MAX_FRAMES: usize = 64;
+
+/// The most modules [`MODULES`] holds.
+const MAX_MODULES: usize = 1024;
+
+/// The bytes of module text (`<id> <path>`) each half of [`MODULES`] holds.
+const MODULE_TEXT: usize = 64 * 1024;
+
+/// A loaded module (the program or a shared library): its address range,
+/// its build id (`-` when it has none) and its path.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Module {
+    pub start: usize,
+    pub end: usize,
+    pub id: String,
+    pub path: String,
+}
+
+/// One half of [`ModuleTable`]: the modules as atomic values.
+struct ModuleHalf {
+    count: AtomicUsize,
+    start: [AtomicUsize; MAX_MODULES],
+    end: [AtomicUsize; MAX_MODULES],
+    text_at: [AtomicU32; MAX_MODULES],
+    text_len: [AtomicU32; MAX_MODULES],
+    text: [AtomicU8; MODULE_TEXT],
+}
+
+impl ModuleHalf {
+    const fn new() -> Self {
+        Self {
+            count: AtomicUsize::new(0),
+            start: [const { AtomicUsize::new(0) }; MAX_MODULES],
+            end: [const { AtomicUsize::new(0) }; MAX_MODULES],
+            text_at: [const { AtomicU32::new(0) }; MAX_MODULES],
+            text_len: [const { AtomicU32::new(0) }; MAX_MODULES],
+            text: [const { AtomicU8::new(0) }; MODULE_TEXT],
+        }
+    }
+}
+
+/// The loaded modules, for the handler: two halves, filled off the handler
+/// into the idle one before switching, like [`PREPARED`].
+struct ModuleTable {
+    halves: [ModuleHalf; 2],
+    active: AtomicUsize,
+}
+
+impl ModuleTable {
+    const fn new() -> Self {
+        Self {
+            halves: [ModuleHalf::new(), ModuleHalf::new()],
+            active: AtomicUsize::new(0),
+        }
+    }
+
+    /// Makes `modules` the table the handler reads. One caller at a time.
+    fn publish(&self, modules: &[Module]) {
+        let idle = 1 - self.active.load(Ordering::Acquire);
+        let half = &self.halves[idle];
+        let mut at = 0usize;
+        let count = modules.len().min(MAX_MODULES);
+        for (i, module) in modules.iter().take(count).enumerate() {
+            half.start[i].store(module.start, Ordering::Relaxed);
+            half.end[i].store(module.end, Ordering::Relaxed);
+            let id = if module.id.is_empty() { "-" } else { &module.id };
+            let text = format!("{id} {}", module.path.replace(['\n', '\r'], " "));
+            // A table out of room keeps the range, without a name.
+            let len = if at + text.len() <= MODULE_TEXT { text.len() } else { 0 };
+            for (slot, &b) in half.text[at..at + len].iter().zip(text.as_bytes()) {
+                slot.store(b, Ordering::Relaxed);
+            }
+            half.text_at[i].store(at as u32, Ordering::Relaxed);
+            half.text_len[i].store(len as u32, Ordering::Relaxed);
+            at += len;
+        }
+        half.count.store(count, Ordering::Relaxed);
+        self.active.store(idle, Ordering::Release);
+    }
+}
+
+static MODULES: ModuleTable = ModuleTable::new();
+
+/// The loaded modules' signature (their count) at the last refresh.
+static MODULES_SEEN: Mutex<Option<u64>> = Mutex::new(None);
+
+/// Refreshes [`MODULES`] if a module was loaded or unloaded since the last
+/// time (or always, with `force`). Off the handler only.
+pub(crate) fn refresh_modules(force: bool) {
+    let mut seen = MODULES_SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let signature = sys::module_signature();
+    if !force && *seen == Some(signature) {
+        return;
+    }
+    *seen = Some(signature);
+    MODULES.publish(&sys::modules());
+}
 
 /// Text prepared for the handler: two halves of atomic bytes, the engine
 /// fills the idle one and then switches `active` to it.
@@ -128,6 +237,8 @@ struct Crash<'a> {
     /// For a memory fault, the address it touched.
     address: Option<usize>,
     time_ms: u64,
+    /// The crashing instruction, then the return addresses of its callers.
+    frames: &'a [usize],
 }
 
 #[derive(Clone, Copy)]
@@ -159,9 +270,10 @@ fn digits(buf: &mut [u8; 24], n: u64, base: u64) -> &[u8] {
     &buf[at..]
 }
 
-/// The handler's work: the prepared part, the crash, then the kept output.
-/// Async-signal-safe: atomic loads, a buffer on the stack, `sink.put`.
-fn write_crash(sink: &impl Sink, crash: &Crash<'_>) {
+/// The handler's work: the prepared part, the crash, its frames with their
+/// modules (from `modules`), then the kept output.
+/// Async-signal-safe: atomic loads, buffers on the stack, `sink.put`.
+fn write_crash(sink: &impl Sink, crash: &Crash<'_>, modules: &ModuleTable) {
     let mut chunk = [0u8; 256];
     let active = PREPARED.active.load(Ordering::Acquire);
     let len = PREPARED.lens[active].load(Ordering::Relaxed).min(HALF);
@@ -187,6 +299,7 @@ fn write_crash(sink: &impl Sink, crash: &Crash<'_>) {
     }
     sink.put(b"\ntime-ms: ");
     sink.put(digits(&mut num, crash.time_ms, 10));
+    write_frames(sink, crash.frames, modules);
 
     let end = OUTPUT_END.load(Ordering::Acquire);
     let kept = end.min(OUTPUT_BYTES);
@@ -199,6 +312,50 @@ fn write_crash(sink: &impl Sink, crash: &Crash<'_>) {
         &mut chunk,
         (from..end).map(|i| OUTPUT[i % OUTPUT_BYTES].load(Ordering::Relaxed)),
     );
+}
+
+/// Writes one `frame:` line per address (`frame: <address> <module>
+/// <offset>`, or the address alone outside every module), then one
+/// `module: <index> <start> <id> <path>` line per module they used.
+/// Async-signal-safe: atomic loads and buffers on the stack.
+fn write_frames(sink: &impl Sink, frames: &[usize], modules: &ModuleTable) {
+    let half = &modules.halves[modules.active.load(Ordering::Acquire)];
+    let count = half.count.load(Ordering::Relaxed).min(MAX_MODULES);
+    let mut used = [0u64; MAX_MODULES / 64];
+    let mut num = [0u8; 24];
+    for &address in frames.iter().take(MAX_FRAMES) {
+        sink.put(b"\nframe: ");
+        sink.put(digits(&mut num, address as u64, 16));
+        let module = (0..count).find(|&i| {
+            half.start[i].load(Ordering::Relaxed) <= address && address < half.end[i].load(Ordering::Relaxed)
+        });
+        if let Some(i) = module {
+            sink.put(b" ");
+            sink.put(digits(&mut num, i as u64, 10));
+            sink.put(b" ");
+            let start = half.start[i].load(Ordering::Relaxed);
+            sink.put(digits(&mut num, address.wrapping_sub(start) as u64, 16));
+            used[i / 64] |= 1 << (i % 64);
+        }
+    }
+    let mut chunk = [0u8; 256];
+    for i in (0..count).filter(|&i| used[i / 64] & (1 << (i % 64)) != 0) {
+        sink.put(b"\nmodule: ");
+        sink.put(digits(&mut num, i as u64, 10));
+        sink.put(b" ");
+        sink.put(digits(&mut num, half.start[i].load(Ordering::Relaxed) as u64, 16));
+        sink.put(b" ");
+        let at = (half.text_at[i].load(Ordering::Relaxed) as usize).min(MODULE_TEXT);
+        let len = (half.text_len[i].load(Ordering::Relaxed) as usize).min(MODULE_TEXT - at);
+        if len == 0 {
+            sink.put(b"-");
+        }
+        copy_out(
+            sink,
+            &mut chunk,
+            (at..at + len).map(|j| half.text[j].load(Ordering::Relaxed)),
+        );
+    }
 }
 
 /// Passes `bytes` to `sink` through `chunk`.
@@ -246,8 +403,10 @@ pub(crate) fn arm(data: &Path) -> Option<Armed> {
     let path = folder.join(format!("{PENDING_PREFIX}{}-{n}", std::process::id()));
     let file = sys::open_locked(&path).ok()?;
     WRITTEN.store(false, Ordering::Release);
-    sys::arm(&file);
     sys::install();
+    sys::register_this_thread();
+    refresh_modules(true);
+    sys::arm(&file);
     Some(Armed { path, file: Some(file) })
 }
 
@@ -304,6 +463,32 @@ pub(crate) struct Left {
     pub time_ms: Option<u64>,
     /// The kept output, whole lines only, oldest first.
     pub output: Vec<String>,
+    /// The frames the handler walked, the crashing instruction first.
+    pub frames: Vec<LeftFrame>,
+    /// The modules the frames fell into.
+    pub modules: Vec<LeftModule>,
+}
+
+/// A frame of a pending file: its address in the crashed run and, when it
+/// fell into a module, the module's index and its offset there.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub(crate) struct LeftFrame {
+    pub address: usize,
+    pub module: Option<(usize, usize)>,
+}
+
+/// A module of a pending file.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) struct LeftModule {
+    pub index: usize,
+    pub start: usize,
+    pub id: String,
+    pub path: String,
+}
+
+/// A number the handler wrote in hex (`0x1f`).
+fn hex(text: &str) -> Option<usize> {
+    usize::from_str_radix(text.strip_prefix("0x")?, 16).ok()
 }
 
 impl Left {
@@ -346,6 +531,30 @@ impl Left {
                 "description" => left.description = Some(value),
                 "address" => left.address = Some(value),
                 "time-ms" => left.time_ms = value.parse().ok(),
+                "frame" => {
+                    let mut parts = value.split(' ');
+                    if let Some(address) = parts.next().and_then(hex) {
+                        let index = parts.next().and_then(|i| i.parse().ok());
+                        let offset = parts.next().and_then(hex);
+                        left.frames.push(LeftFrame {
+                            address,
+                            module: index.zip(offset),
+                        });
+                    }
+                }
+                "module" => {
+                    let mut parts = value.splitn(4, ' ');
+                    let index = parts.next().and_then(|i| i.parse().ok());
+                    let start = parts.next().and_then(hex);
+                    if let (Some(index), Some(start)) = (index, start) {
+                        left.modules.push(LeftModule {
+                            index,
+                            start,
+                            id: parts.next().unwrap_or("-").to_string(),
+                            path: parts.next().unwrap_or("").to_string(),
+                        });
+                    }
+                }
                 "output-from" => output_from = value.parse().unwrap_or(0),
                 _ => {}
             }
@@ -392,6 +601,142 @@ impl Left {
     }
 }
 
+/// A name the next start found for an address: a function, and where it is
+/// when the binary has debug info. Inlined functions give several.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Symbol {
+    pub name: String,
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+/// The report's backtrace for a native crash, named in this process: the
+/// modules loaded now and the debug info they have.
+pub(crate) fn describe_frames(left: &Left) -> String {
+    if left.frames.is_empty() {
+        return frames_text(left, &[], &mut |_| Vec::new());
+    }
+    frames_text(left, &sys::modules(), &mut resolve_here)
+}
+
+/// Names the instruction at `address` (in this process) from the debug
+/// info, or from the exported symbols when there is none.
+#[cfg(any(unix, windows))]
+fn resolve_here(address: usize) -> Vec<Symbol> {
+    let mut found = Vec::new();
+    // `resolve` takes a return address and looks one byte back itself.
+    backtrace::resolve(address.wrapping_add(1) as *mut std::ffi::c_void, |symbol| {
+        let name = symbol.name().map(|n| format!("{n:#}")).unwrap_or_default();
+        let file = symbol.filename().map(|f| f.display().to_string());
+        if !name.is_empty() || file.is_some() {
+            found.push(Symbol {
+                name: if name.is_empty() { "?".to_string() } else { name },
+                file,
+                line: symbol.lineno(),
+                column: symbol.colno(),
+            });
+        }
+    });
+    if found.is_empty()
+        && let Some(name) = sys::exported_name(address)
+    {
+        found.push(Symbol {
+            name,
+            file: None,
+            line: None,
+            column: None,
+        });
+    }
+    found
+}
+
+#[cfg(not(any(unix, windows)))]
+fn resolve_here(_address: usize) -> Vec<Symbol> {
+    Vec::new()
+}
+
+/// The backtrace's text: a frame is named (`resolve` with its address in
+/// this process) only when its module is loaded in `current` under the same
+/// path with the same build id; otherwise it keeps its module and offset.
+fn frames_text(left: &Left, current: &[Module], resolve: &mut dyn FnMut(usize) -> Vec<Symbol>) -> String {
+    use std::fmt::Write as _;
+    if left.frames.is_empty() {
+        return "no frames: the crash handler could not read the crashed thread's registers on this system".to_string();
+    }
+    let mut t = String::new();
+    for (n, frame) in left.frames.iter().enumerate() {
+        let module = frame
+            .module
+            .and_then(|(index, offset)| Some((left.modules.iter().find(|m| m.index == index)?, offset)));
+        let Some((module, offset)) = module else {
+            let _ = writeln!(t, "{n:>4}: {:#x} (in no module the run knew)", frame.address);
+            continue;
+        };
+        let place = format!(
+            "{} +{offset:#x}",
+            if module.path.is_empty() { "?" } else { &module.path }
+        );
+        let here = current
+            .iter()
+            .find(|c| module.id != "-" && c.id == module.id && c.path == module.path);
+        let symbols = match here {
+            // A return address points after its call: look up the call.
+            Some(here) => resolve((here.start + offset).saturating_sub(usize::from(n > 0))),
+            None => Vec::new(),
+        };
+        if symbols.is_empty() {
+            let why = if here.is_some() {
+                "no symbols"
+            } else {
+                "not loaded now, or not the same file"
+            };
+            let _ = writeln!(t, "{n:>4}: {place} ({why})");
+            continue;
+        }
+        for (i, symbol) in symbols.iter().enumerate() {
+            if i == 0 {
+                let _ = writeln!(t, "{n:>4}: {}", symbol.name);
+            } else {
+                let _ = writeln!(t, "      {}", symbol.name);
+            }
+            if let Some(file) = &symbol.file {
+                let _ = match (symbol.line, symbol.column) {
+                    (Some(line), Some(column)) => writeln!(t, "             at {file}:{line}:{column}"),
+                    (Some(line), None) => writeln!(t, "             at {file}:{line}"),
+                    _ => writeln!(t, "             at {file}"),
+                };
+            }
+        }
+        let _ = writeln!(t, "             in {place}");
+    }
+    if left.frames.len() == 1 && !cfg!(windows) {
+        t.push_str("(only the crashing frame: this build keeps no frame pointers, see the guide's \"Backtraces of a native crash\")\n");
+    }
+    t.truncate(t.trim_end().len());
+    t
+}
+
+/// A build id as hex digits.
+fn hex_id(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// For a module without a build id: its file's size and modification time,
+/// or `-` (never the same) when the file can't be read.
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
+fn file_id(path: &str) -> String {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return "-".to_string();
+    };
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    format!("file-{:x}-{modified:x}", meta.len())
+}
+
 /// The time a handler writes: milliseconds since 1970.
 #[cfg(unix)]
 fn now_ms() -> u64 {
@@ -406,9 +751,432 @@ mod sys {
     use std::os::fd::{AsRawFd, RawFd};
     use std::path::Path;
     use std::sync::OnceLock;
-    use std::sync::atomic::{AtomicI32, Ordering};
+    use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
-    use super::{Crash, Number, Sink};
+    use super::{Crash, MAX_FRAMES, Module, Number, Sink};
+
+    /// The pipe the frame walk reads memory through: `[read end, write end]`.
+    static PROBE: [AtomicI32; 2] = [AtomicI32::new(-1), AtomicI32::new(-1)];
+
+    /// How many thread stacks are recorded ahead of time.
+    const STACK_SLOTS: usize = 8;
+
+    /// Thread stacks recorded ahead of time: `[low, high)` each.
+    static STACKS: [[AtomicUsize; 2]; STACK_SLOTS] = [const { [const { AtomicUsize::new(0) }; 2] }; STACK_SLOTS];
+    static STACK_NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    /// For a thread whose stack wasn't recorded, how far above the stack
+    /// pointer the walk may look.
+    const UNKNOWN_STACK: usize = 8 << 20;
+
+    /// Opens the pipe the walk reads through, once per process.
+    pub(super) fn open_probe() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(open_probe_now);
+    }
+
+    fn open_probe_now() {
+        let mut fds = [-1; 2];
+        // SAFETY: `fds` has room for the two descriptors pipe writes.
+        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+            return;
+        }
+        for fd in fds {
+            // SAFETY: fcntl on descriptors this function just opened.
+            unsafe {
+                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK);
+            }
+        }
+        PROBE[1].store(fds[1], Ordering::Release);
+        PROBE[0].store(fds[0], Ordering::Release);
+    }
+
+    /// Reads the two words at `address`, or `None` where nothing readable
+    /// is mapped: `write` from there into the pipe fails with `EFAULT`
+    /// instead of faulting. Async-signal-safe.
+    pub(super) fn read_pair(address: usize) -> Option<[usize; 2]> {
+        let (r, w) = (PROBE[0].load(Ordering::Acquire), PROBE[1].load(Ordering::Acquire));
+        if r < 0 || w < 0 {
+            return None;
+        }
+        let mut words = [0usize; 2];
+        let size = std::mem::size_of_val(&words);
+        // SAFETY: write only reads `address` in the kernel, which checks it.
+        let wrote = unsafe { libc::write(w, address as *const libc::c_void, size) };
+        if wrote <= 0 {
+            return None;
+        }
+        // SAFETY: `words` is writable for `size` bytes, at least `wrote`.
+        let read = unsafe { libc::read(r, words.as_mut_ptr().cast(), wrote as usize) };
+        (wrote as usize == size && read == wrote).then_some(words)
+    }
+
+    /// The address without a pointer authentication code in its high bits.
+    fn strip(address: usize) -> usize {
+        if cfg!(all(target_arch = "aarch64", target_vendor = "apple")) {
+            address & ((1 << 47) - 1)
+        } else if cfg!(target_arch = "aarch64") {
+            address & ((1 << 48) - 1)
+        } else {
+            address
+        }
+    }
+
+    /// Walks the frame records from `fp`: each holds the caller's frame
+    /// pointer, then the return address. A record must lie in
+    /// `[low, high)`, above the stack pointer and the record before, and be
+    /// aligned; reads go through [`read_pair`]. Returns how many frames
+    /// went into `frames`, the crashing instruction `pc` first.
+    /// Async-signal-safe.
+    pub(super) fn walk(
+        pc: usize,
+        fp: usize,
+        sp: usize,
+        (low, high): (usize, usize),
+        frames: &mut [usize; MAX_FRAMES],
+    ) -> usize {
+        const WORD: usize = std::mem::size_of::<usize>();
+        frames[0] = strip(pc);
+        let mut n = 1;
+        let mut floor = sp.max(low);
+        let mut fp = fp;
+        while n < MAX_FRAMES {
+            let inside = fp >= floor && fp % WORD == 0 && fp.checked_add(2 * WORD).is_some_and(|end| end <= high);
+            if !inside {
+                break;
+            }
+            let Some([next, ret]) = read_pair(fp) else {
+                break;
+            };
+            let ret = strip(ret);
+            if ret == 0 {
+                break;
+            }
+            frames[n] = ret;
+            n += 1;
+            floor = fp + 2 * WORD;
+            fp = next;
+        }
+        n
+    }
+
+    /// The stack the walk may read for a thread whose stack pointer is
+    /// `sp`: a recorded one that holds it, else the 8 MiB above it.
+    /// Async-signal-safe.
+    fn stack_of(sp: usize) -> (usize, usize) {
+        STACKS
+            .iter()
+            .map(|slot| (slot[0].load(Ordering::Acquire), slot[1].load(Ordering::Acquire)))
+            .find(|&(low, high)| low <= sp && sp < high)
+            .unwrap_or((sp, sp.saturating_add(UNKNOWN_STACK)))
+    }
+
+    /// Records the calling thread's stack for the walk. Off the handler.
+    pub(super) fn register_this_thread() {
+        let Some((low, high)) = this_thread_stack() else {
+            return;
+        };
+        let known = STACKS
+            .iter()
+            .any(|slot| slot[0].load(Ordering::Acquire) == low && slot[1].load(Ordering::Acquire) == high);
+        if !known {
+            let slot = &STACKS[STACK_NEXT.fetch_add(1, Ordering::Relaxed) % STACK_SLOTS];
+            slot[0].store(low, Ordering::Release);
+            slot[1].store(high, Ordering::Release);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn this_thread_stack() -> Option<(usize, usize)> {
+        // SAFETY: pthread_attr_t is plain data, filled by pthread_getattr_np
+        // and destroyed after use; the out-pointers are writable locals.
+        unsafe {
+            let mut attr: libc::pthread_attr_t = std::mem::zeroed();
+            if libc::pthread_getattr_np(libc::pthread_self(), &raw mut attr) != 0 {
+                return None;
+            }
+            let mut base = std::ptr::null_mut();
+            let mut size = 0;
+            let ok = libc::pthread_attr_getstack(&raw const attr, &raw mut base, &raw mut size) == 0;
+            libc::pthread_attr_destroy(&raw mut attr);
+            ok.then(|| (base as usize, base as usize + size))
+        }
+    }
+
+    #[cfg(target_vendor = "apple")]
+    fn this_thread_stack() -> Option<(usize, usize)> {
+        // SAFETY: both read the calling thread's own pthread record.
+        let (high, size) = unsafe {
+            let me = libc::pthread_self();
+            (
+                libc::pthread_get_stackaddr_np(me) as usize,
+                libc::pthread_get_stacksize_np(me),
+            )
+        };
+        (high > size).then(|| (high - size, high))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    fn this_thread_stack() -> Option<(usize, usize)> {
+        None
+    }
+
+    /// The crashed thread's instruction, frame and stack pointers, from
+    /// the context the system hands a `SA_SIGINFO` handler.
+    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+    fn registers(context: *mut libc::c_void) -> Option<[usize; 3]> {
+        // SAFETY: the kernel passes a valid ucontext_t to the handler.
+        let uc = unsafe { context.cast::<libc::ucontext_t>().as_ref()? };
+        let g = &uc.uc_mcontext.gregs;
+        Some([
+            g[libc::REG_RIP as usize] as usize,
+            g[libc::REG_RBP as usize] as usize,
+            g[libc::REG_RSP as usize] as usize,
+        ])
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "aarch64"))]
+    fn registers(context: *mut libc::c_void) -> Option<[usize; 3]> {
+        // SAFETY: the kernel passes a valid ucontext_t to the handler.
+        let uc = unsafe { context.cast::<libc::ucontext_t>().as_ref()? };
+        let m = &uc.uc_mcontext;
+        Some([m.pc as usize, m.regs[29] as usize, m.sp as usize])
+    }
+
+    #[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
+    fn registers(context: *mut libc::c_void) -> Option<[usize; 3]> {
+        // SAFETY: the kernel passes a valid ucontext_t whose machine
+        // context it filled.
+        let ss = unsafe { &context.cast::<libc::ucontext_t>().as_ref()?.uc_mcontext.as_ref()?.__ss };
+        Some([ss.__pc as usize, ss.__fp as usize, ss.__sp as usize])
+    }
+
+    #[cfg(all(target_vendor = "apple", target_arch = "x86_64"))]
+    fn registers(context: *mut libc::c_void) -> Option<[usize; 3]> {
+        // SAFETY: as above.
+        let ss = unsafe { &context.cast::<libc::ucontext_t>().as_ref()?.uc_mcontext.as_ref()?.__ss };
+        Some([ss.__rip as usize, ss.__rbp as usize, ss.__rsp as usize])
+    }
+
+    #[cfg(not(any(
+        all(
+            target_os = "linux",
+            target_env = "gnu",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ),
+        all(target_vendor = "apple", any(target_arch = "x86_64", target_arch = "aarch64")),
+    )))]
+    fn registers(_context: *mut libc::c_void) -> Option<[usize; 3]> {
+        None
+    }
+
+    // dyld's image list (libSystem); the libc crate's copies are deprecated.
+    #[cfg(target_vendor = "apple")]
+    unsafe extern "C" {
+        fn _dyld_image_count() -> u32;
+        fn _dyld_get_image_header(index: u32) -> *const u8;
+        fn _dyld_get_image_name(index: u32) -> *const libc::c_char;
+    }
+
+    /// The loaded modules' signature: it changes when one is loaded.
+    #[cfg(target_vendor = "apple")]
+    pub(super) fn module_signature() -> u64 {
+        // SAFETY: reads dyld's image count.
+        u64::from(unsafe { _dyld_image_count() })
+    }
+
+    /// The loaded modules: dyld's images, each from its Mach-O header in
+    /// memory (`__TEXT`'s size for its range, `LC_UUID` for its id).
+    #[cfg(target_vendor = "apple")]
+    pub(super) fn modules() -> Vec<Module> {
+        const MH_MAGIC_64: u32 = 0xfeed_facf;
+        const LC_SEGMENT_64: u32 = 0x19;
+        const LC_UUID: u32 = 0x1b;
+        let mut modules = Vec::new();
+        // SAFETY: reads dyld's image count.
+        let count = unsafe { _dyld_image_count() };
+        for i in 0..count {
+            // SAFETY: dyld returns the header and name of a loaded image (or
+            // null); a loaded image's header and load commands are mapped
+            // and readable, `sizeofcmds` long after the 32-byte header.
+            unsafe {
+                let header = _dyld_get_image_header(i);
+                let name = _dyld_get_image_name(i);
+                if header.is_null() || name.is_null() || header.cast::<u32>().read_unaligned() != MH_MAGIC_64 {
+                    continue;
+                }
+                let ncmds = header.add(16).cast::<u32>().read_unaligned();
+                let sizeofcmds = header.add(20).cast::<u32>().read_unaligned() as usize;
+                let (mut text_size, mut uuid) = (0usize, None);
+                let mut at = 32usize;
+                for _ in 0..ncmds {
+                    if at + 8 > 32 + sizeofcmds {
+                        break;
+                    }
+                    let cmd = header.add(at).cast::<u32>().read_unaligned();
+                    let size = header.add(at + 4).cast::<u32>().read_unaligned() as usize;
+                    if cmd == LC_UUID && size >= 24 {
+                        uuid = Some(std::slice::from_raw_parts(header.add(at + 8), 16).to_vec());
+                    } else if cmd == LC_SEGMENT_64 && size >= 48 {
+                        let segname = std::slice::from_raw_parts(header.add(at + 8), 16);
+                        if segname.starts_with(b"__TEXT\0") {
+                            text_size = header.add(at + 32).cast::<u64>().read_unaligned() as usize;
+                        }
+                    }
+                    if size < 8 {
+                        break;
+                    }
+                    at += size;
+                }
+                let path = std::ffi::CStr::from_ptr(name).to_string_lossy().into_owned();
+                let id = match uuid {
+                    Some(uuid) => super::hex_id(&uuid),
+                    None => super::file_id(&path),
+                };
+                modules.push(Module {
+                    start: header as usize,
+                    end: header as usize + text_size,
+                    id,
+                    path,
+                });
+            }
+        }
+        modules
+    }
+
+    /// The loaded modules' signature: how many were loaded and unloaded.
+    #[cfg(target_os = "linux")]
+    pub(super) fn module_signature() -> u64 {
+        unsafe extern "C" fn first(
+            info: *mut libc::dl_phdr_info,
+            _size: libc::size_t,
+            data: *mut libc::c_void,
+        ) -> libc::c_int {
+            // SAFETY: dl_iterate_phdr passes a valid info and our `data`.
+            unsafe {
+                let info = &*info;
+                *data.cast::<u64>() = (info.dlpi_adds << 32) ^ info.dlpi_subs;
+            }
+            1
+        }
+        let mut signature = 0u64;
+        // SAFETY: the callback only reads `info` and writes `signature`.
+        unsafe { libc::dl_iterate_phdr(Some(first), (&raw mut signature).cast()) };
+        signature
+    }
+
+    /// The loaded modules: `dl_iterate_phdr`'s objects, each from its
+    /// program headers (its `PT_LOAD` segments' range, its GNU build id).
+    #[cfg(target_os = "linux")]
+    pub(super) fn modules() -> Vec<Module> {
+        unsafe extern "C" fn each(
+            info: *mut libc::dl_phdr_info,
+            _size: libc::size_t,
+            data: *mut libc::c_void,
+        ) -> libc::c_int {
+            // SAFETY: dl_iterate_phdr passes a valid info (its headers and
+            // segments are mapped) and our `data`.
+            unsafe {
+                let info = &*info;
+                let found = &mut *data.cast::<Vec<(usize, usize, Option<Vec<u8>>, String)>>();
+                if info.dlpi_phdr.is_null() {
+                    return 0;
+                }
+                let base = info.dlpi_addr as usize;
+                let headers = std::slice::from_raw_parts(info.dlpi_phdr, usize::from(info.dlpi_phnum));
+                let (mut start, mut end, mut build_id) = (usize::MAX, 0usize, None);
+                for h in headers {
+                    let at = base.wrapping_add(h.p_vaddr as usize);
+                    if h.p_type == libc::PT_LOAD {
+                        start = start.min(at);
+                        end = end.max(at + h.p_memsz as usize);
+                    } else if h.p_type == libc::PT_NOTE && build_id.is_none() {
+                        build_id = gnu_build_id(std::slice::from_raw_parts(at as *const u8, h.p_memsz as usize));
+                    }
+                }
+                let name = if info.dlpi_name.is_null() {
+                    String::new()
+                } else {
+                    std::ffi::CStr::from_ptr(info.dlpi_name).to_string_lossy().into_owned()
+                };
+                if start < end {
+                    found.push((start, end, build_id, name));
+                }
+            }
+            0
+        }
+        let mut found: Vec<(usize, usize, Option<Vec<u8>>, String)> = Vec::new();
+        // SAFETY: the callback only reads `info` and pushes to `found`.
+        unsafe { libc::dl_iterate_phdr(Some(each), (&raw mut found).cast()) };
+        let program = std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        found
+            .into_iter()
+            .map(|(start, end, build_id, name)| {
+                // The program itself has no name in the list.
+                let path = if name.is_empty() { program.clone() } else { name };
+                let id = match build_id {
+                    Some(id) => super::hex_id(&id),
+                    None => super::file_id(&path),
+                };
+                Module { start, end, id, path }
+            })
+            .collect()
+    }
+
+    /// The GNU build id in an ELF note segment.
+    #[cfg(target_os = "linux")]
+    fn gnu_build_id(mut notes: &[u8]) -> Option<Vec<u8>> {
+        const NT_GNU_BUILD_ID: u32 = 3;
+        let word = |b: &[u8], at: usize| {
+            b.get(at..at + 4)
+                .map(|w| u32::from_ne_bytes([w[0], w[1], w[2], w[3]]) as usize)
+        };
+        let up4 = |n: usize| n.div_ceil(4) * 4;
+        while notes.len() >= 12 {
+            let (name_size, desc_size, kind) = (word(notes, 0)?, word(notes, 4)?, word(notes, 8)?);
+            let name = notes.get(12..12 + name_size)?;
+            let desc_at = 12 + up4(name_size);
+            let desc = notes.get(desc_at..desc_at + desc_size)?;
+            if kind as u32 == NT_GNU_BUILD_ID && name == b"GNU\0" {
+                return Some(desc.to_vec());
+            }
+            notes = notes.get(desc_at + up4(desc_size)..)?;
+        }
+        None
+    }
+
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    pub(super) fn module_signature() -> u64 {
+        0
+    }
+
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    pub(super) fn modules() -> Vec<Module> {
+        Vec::new()
+    }
+
+    /// The exported symbol at or before `address` and how far past it the
+    /// address is (`name+0x40`), for a library without debug info: the
+    /// nearest export, which a private function inside it is not.
+    pub(super) fn exported_name(address: usize) -> Option<String> {
+        // SAFETY: Dl_info is plain data; dladdr fills it for an address in
+        // a loaded module and leaves its strings owned by the loader.
+        unsafe {
+            let mut info: libc::Dl_info = std::mem::zeroed();
+            if libc::dladdr(address as *const libc::c_void, &raw mut info) == 0 || info.dli_sname.is_null() {
+                return None;
+            }
+            let name = std::ffi::CStr::from_ptr(info.dli_sname).to_bytes();
+            let name = format!("{:#}", backtrace::SymbolName::new(name));
+            match address.checked_sub(info.dli_saddr as usize) {
+                Some(0) | None => Some(name),
+                Some(past) => Some(format!("{name}+{past:#x}")),
+            }
+        }
+    }
 
     /// The pending file's descriptor while a run is armed, else -1.
     static FD: AtomicI32 = AtomicI32::new(-1);
@@ -478,6 +1246,7 @@ mod sys {
     pub(super) fn install() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
+            open_probe();
             // SAFETY: sigaction is plain data; all zero is a valid value
             // (SIG_DFL, no flags, an empty mask).
             let mut previous: [libc::sigaction; 5] = unsafe { std::mem::zeroed() };
@@ -530,14 +1299,20 @@ mod sys {
             let address = (!info.is_null() && sig != libc::SIGABRT && unsafe { (*info).si_code } > 0)
                 // SAFETY: as above; si_addr is set for these signals.
                 .then(|| unsafe { (*info).si_addr() } as usize);
+            let mut frames = [0usize; MAX_FRAMES];
+            let walked = match registers(context) {
+                Some([pc, fp, sp]) => walk(pc, fp, sp, stack_of(sp), &mut frames),
+                None => 0,
+            };
             let crash = Crash {
                 name,
                 number: Number::Dec(sig as u64),
                 description,
                 address,
                 time_ms: super::now_ms(),
+                frames: &frames[..walked],
             };
-            super::write_crash(&Fd(fd), &crash);
+            super::write_crash(&Fd(fd), &crash, &super::MODULES);
         }
         hand_on(sig, info, context);
     }
@@ -582,7 +1357,7 @@ mod sys {
     use std::path::Path;
     use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 
-    use super::{Crash, Number, Sink};
+    use super::{Crash, MAX_FRAMES, Module, Number, Sink};
 
     /// The pending file's handle while a run is armed, else 0.
     static HANDLE: AtomicIsize = AtomicIsize::new(0);
@@ -620,7 +1395,122 @@ mod sys {
         fn WriteFile(file: *mut c_void, buf: *const u8, len: u32, written: *mut u32, overlapped: *mut c_void) -> i32;
         fn GetSystemTimeAsFileTime(time: *mut u64);
         fn Sleep(milliseconds: u32);
+        fn RtlCaptureStackBackTrace(skip: u32, count: u32, frames: *mut *mut c_void, hash: *mut u32) -> u16;
+        fn GetCurrentProcess() -> *mut c_void;
+        fn K32EnumProcessModules(process: *mut c_void, modules: *mut *mut c_void, bytes: u32, needed: *mut u32) -> i32;
+        fn K32GetModuleInformation(process: *mut c_void, module: *mut c_void, info: *mut ModuleInfo, bytes: u32)
+        -> i32;
+        fn GetModuleFileNameW(module: *mut c_void, name: *mut u16, size: u32) -> u32;
     }
+
+    #[repr(C)]
+    struct ModuleInfo {
+        base: *mut c_void,
+        size: u32,
+        entry: *mut c_void,
+    }
+
+    /// The return addresses of the calling thread's frames, from the
+    /// system's table-driven unwinder (64-bit Windows code keeps no
+    /// frame-pointer chain); `from` drops the frames above that address
+    /// (the exception's dispatch), when it is among them.
+    fn capture(frames: &mut [usize; MAX_FRAMES], from: Option<usize>) -> usize {
+        let mut raw = [std::ptr::null_mut::<c_void>(); MAX_FRAMES];
+        // SAFETY: `raw` has room for MAX_FRAMES pointers; the unwinder
+        // reads unwind tables already in memory and allocates nothing.
+        let n = usize::from(unsafe {
+            RtlCaptureStackBackTrace(0, MAX_FRAMES as u32, raw.as_mut_ptr(), std::ptr::null_mut())
+        });
+        let raw = &raw[..n.min(MAX_FRAMES)];
+        let skip = from
+            .and_then(|at| raw.iter().position(|&f| f as usize == at))
+            .unwrap_or(0);
+        let mut count = 0;
+        for &f in &raw[skip..] {
+            frames[count] = f as usize;
+            count += 1;
+        }
+        count
+    }
+
+    /// The loaded modules' signature: how many there are.
+    pub(super) fn module_signature() -> u64 {
+        let mut needed = 0u32;
+        // SAFETY: asks only for the size the list needs.
+        unsafe { K32EnumProcessModules(GetCurrentProcess(), std::ptr::null_mut(), 0, &raw mut needed) };
+        u64::from(needed)
+    }
+
+    /// The process's modules, each with its range and the PE header's
+    /// time stamp and image size as its id.
+    pub(super) fn modules() -> Vec<Module> {
+        // SAFETY: the pseudo-handle of this process.
+        let process = unsafe { GetCurrentProcess() };
+        let mut handles = vec![std::ptr::null_mut::<c_void>(); super::MAX_MODULES];
+        let mut needed = 0u32;
+        let bytes = (handles.len() * std::mem::size_of::<*mut c_void>()) as u32;
+        // SAFETY: `handles` is writable for `bytes`.
+        if unsafe { K32EnumProcessModules(process, handles.as_mut_ptr(), bytes, &raw mut needed) } == 0 {
+            return Vec::new();
+        }
+        handles.truncate((needed as usize / std::mem::size_of::<*mut c_void>()).min(super::MAX_MODULES));
+        let mut modules = Vec::new();
+        for module in handles {
+            let mut info = ModuleInfo {
+                base: std::ptr::null_mut(),
+                size: 0,
+                entry: std::ptr::null_mut(),
+            };
+            // SAFETY: `info` is a writable MODULEINFO.
+            let ok = unsafe {
+                K32GetModuleInformation(process, module, &raw mut info, std::mem::size_of::<ModuleInfo>() as u32)
+            };
+            if ok == 0 || info.base.is_null() {
+                continue;
+            }
+            let mut name = [0u16; 1024];
+            // SAFETY: `name` is writable for its length in u16s.
+            let len = unsafe { GetModuleFileNameW(module, name.as_mut_ptr(), name.len() as u32) } as usize;
+            let path = String::from_utf16_lossy(&name[..len.min(name.len())]);
+            let start = info.base as usize;
+            let size = info.size as usize;
+            let id = pe_id(start, size).unwrap_or_else(|| super::file_id(&path));
+            modules.push(Module {
+                start,
+                end: start + size,
+                id,
+                path,
+            });
+        }
+        modules
+    }
+
+    /// A loaded image's id: its PE header's time stamp and image size, as
+    /// symbol servers name them.
+    fn pe_id(base: usize, size: usize) -> Option<String> {
+        if size < 0x40 {
+            return None;
+        }
+        // SAFETY: a loaded image's headers are mapped; every offset is
+        // checked against the image's size first.
+        unsafe {
+            let pe = (base as *const u8).add(0x3c).cast::<u32>().read_unaligned() as usize;
+            if pe + 24 + 60 > size || (base as *const u8).add(pe).cast::<u32>().read_unaligned() != 0x0000_4550 {
+                return None;
+            }
+            let stamp = (base as *const u8).add(pe + 8).cast::<u32>().read_unaligned();
+            let image = (base as *const u8).add(pe + 24 + 56).cast::<u32>().read_unaligned();
+            Some(format!("{stamp:08X}{image:x}"))
+        }
+    }
+
+    /// Debug info names a frame on Windows; there is nothing to fall back on.
+    pub(super) fn exported_name(_address: usize) -> Option<String> {
+        None
+    }
+
+    /// The walk needs no recorded stack on Windows.
+    pub(super) fn register_this_thread() {}
 
     struct Handle(*mut c_void);
 
@@ -715,16 +1605,24 @@ mod sys {
         }
     }
 
-    fn write(crash: &Crash<'_>) {
+    /// Writes the crash once, with the frames from `from` (the faulting
+    /// instruction) down, or every frame of this thread.
+    fn write(crash: Crash<'_>, from: Option<usize>) {
         let handle = HANDLE.load(Ordering::Acquire);
         if handle == 0 || super::WRITTEN.swap(true, Ordering::AcqRel) {
             return;
         }
+        let mut frames = [0usize; MAX_FRAMES];
+        let n = capture(&mut frames, from);
         if super::OUTPUT_END.load(Ordering::Relaxed) > 0 {
             // SAFETY: Sleep takes no lock of this process's.
             unsafe { Sleep(super::SETTLE_MS as u32) };
         }
-        super::write_crash(&Handle(handle as *mut c_void), crash);
+        let crash = Crash {
+            frames: &frames[..n],
+            ..crash
+        };
+        super::write_crash(&Handle(handle as *mut c_void), &crash, &super::MODULES);
     }
 
     /// The unhandled exception filter: writes the crash once, then asks the
@@ -738,13 +1636,17 @@ mod sys {
             let address = (matches!(record.code, EXCEPTION_ACCESS_VIOLATION | EXCEPTION_IN_PAGE_ERROR)
                 && record.parameters >= 2)
                 .then(|| record.information[1]);
-            write(&Crash {
-                name,
-                number: Number::Hex(u64::from(record.code)),
-                description,
-                address,
-                time_ms: now_ms(),
-            });
+            write(
+                Crash {
+                    name,
+                    number: Number::Hex(u64::from(record.code)),
+                    description,
+                    address,
+                    time_ms: now_ms(),
+                    frames: &[],
+                },
+                Some(record.address as usize),
+            );
         }
         match PREVIOUS_FILTER.load(Ordering::Acquire) {
             0 => EXCEPTION_CONTINUE_SEARCH,
@@ -760,13 +1662,17 @@ mod sys {
 
     /// The C runtime's `SIGABRT` handler (`abort()` in C code).
     extern "C" fn on_abort(sig: libc::c_int) {
-        write(&Crash {
-            name: b"SIGABRT",
-            number: Number::Dec(sig as u64),
-            description: b"abort (a library or the runtime gave up)",
-            address: None,
-            time_ms: now_ms(),
-        });
+        write(
+            Crash {
+                name: b"SIGABRT",
+                number: Number::Dec(sig as u64),
+                description: b"abort (a library or the runtime gave up)",
+                address: None,
+                time_ms: now_ms(),
+                frames: &[],
+            },
+            None,
+        );
         let previous = PREVIOUS_ABORT.load(Ordering::Acquire);
         // SAFETY: puts back the C runtime handler that was there before.
         unsafe { libc::signal(sig, previous) };
@@ -795,6 +1701,16 @@ mod sys {
     pub(super) fn disarm(_file: &std::fs::File) {}
 
     pub(super) fn install() {}
+
+    pub(super) fn register_this_thread() {}
+
+    pub(super) fn module_signature() -> u64 {
+        0
+    }
+
+    pub(super) fn modules() -> Vec<super::Module> {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -842,7 +1758,9 @@ mod tests {
                 description: b"segmentation fault (an invalid memory access)",
                 address: Some(0x10),
                 time_ms: 3500,
+                frames: &[],
             },
+            &ModuleTable::new(),
         );
         let left = Left::parse(&sink.0.borrow());
         assert_eq!(left.game, "Space Crab", "a value stays on its line");
@@ -874,6 +1792,231 @@ mod tests {
             windows.message(),
             "EXCEPTION_ACCESS_VIOLATION (0xc0000005): an invalid memory access"
         );
+    }
+
+    fn module(start: usize, end: usize, id: &str, path: &str) -> Module {
+        Module {
+            start,
+            end,
+            id: id.to_string(),
+            path: path.to_string(),
+        }
+    }
+
+    #[test]
+    fn the_handler_writes_each_frames_module_and_offset_and_the_next_start_reads_them() {
+        let table = Box::new(ModuleTable::new());
+        table.publish(&[
+            module(0x1000, 0x2000, "aa11", "/games/space crab/crab"),
+            module(0x3000, 0x4000, "bb22", "/usr/lib/libunused.so"),
+            module(0x5000, 0x6000, "", "/usr/lib/libfoo.so"),
+        ]);
+        let sink = Bytes(Default::default());
+        write_crash(
+            &sink,
+            &Crash {
+                name: b"SIGSEGV",
+                number: Number::Dec(11),
+                description: b"segmentation fault",
+                address: None,
+                time_ms: 1,
+                frames: &[0x1010, 0x5008, 0x9999, 0x1fff],
+            },
+            &table,
+        );
+        let left = Left::parse(&sink.0.borrow());
+        let frame = |address, module| LeftFrame { address, module };
+        assert_eq!(
+            left.frames,
+            [
+                frame(0x1010, Some((0, 0x10))),
+                frame(0x5008, Some((2, 0x8))),
+                frame(0x9999, None),
+                frame(0x1fff, Some((0, 0xfff))),
+            ]
+        );
+        let modules: Vec<_> = left
+            .modules
+            .iter()
+            .map(|m| (m.index, m.start, m.id.as_str(), m.path.as_str()))
+            .collect();
+        assert_eq!(
+            modules,
+            [
+                (0, 0x1000, "aa11", "/games/space crab/crab"),
+                (2, 0x5000, "-", "/usr/lib/libfoo.so"),
+            ],
+            "only the modules the frames used, a path with spaces whole, no id as -"
+        );
+        assert_eq!(left.signal.as_deref(), Some("SIGSEGV"), "the lines before still read");
+    }
+
+    #[test]
+    fn a_frame_is_named_only_where_the_same_binary_is_loaded_now() {
+        let mut left = Left::parse(
+            b"frame: 0x1010 0 0x10\nframe: 0x5008 1 0x8\nframe: 0x7000 2 0x0\nframe: 0x42\n\
+              module: 0 0x1000 aa11 /games/crab\nmodule: 1 0x5000 bb22 /usr/lib/libfoo.so\nmodule: 2 0x7000 - /usr/lib/libnoid.so\n",
+        );
+        // This run loaded the same game elsewhere, another libfoo, and the
+        // library without an id.
+        let now = [
+            module(0x9_0000, 0x9_1000, "aa11", "/games/crab"),
+            module(0xa_0000, 0xa_1000, "cc33", "/usr/lib/libfoo.so"),
+            module(0xb_0000, 0xb_1000, "-", "/usr/lib/libnoid.so"),
+        ];
+        let mut asked = Vec::new();
+        let text = frames_text(&left, &now, &mut |address| {
+            asked.push(address);
+            vec![Symbol {
+                name: "crab::walk".to_string(),
+                file: Some("src/walk.rs".to_string()),
+                line: Some(12),
+                column: Some(5),
+            }]
+        });
+        assert_eq!(
+            asked,
+            [0x9_0010],
+            "the crashing frame's address, moved to where the game is now"
+        );
+        assert!(
+            text.starts_with("   0: crab::walk\n             at src/walk.rs:12:5\n             in /games/crab +0x10\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("   1: /usr/lib/libfoo.so +0x8 (not loaded now, or not the same file)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("   2: /usr/lib/libnoid.so +0x0 (not loaded now"),
+            "no id is never the same: {text}"
+        );
+        assert!(text.contains("   3: 0x42 (in no module the run knew)"), "{text}");
+
+        // A return address is looked up one byte back, inside its call.
+        left.frames.swap(0, 1);
+        let mut asked = Vec::new();
+        let _ = frames_text(&left, &now, &mut |address| {
+            asked.push(address);
+            Vec::new()
+        });
+        assert_eq!(asked, [0x9_000f]);
+
+        let one = Left::parse(b"frame: 0x42\n");
+        if !cfg!(windows) {
+            assert!(frames_text(&one, &[], &mut |_| Vec::new()).contains("no frame pointers"));
+        }
+        assert!(frames_text(&Left::default(), &[], &mut |_| Vec::new()).starts_with("no frames"));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[inline(never)]
+    fn a_function_to_find() -> usize {
+        std::hint::black_box(7)
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn this_program_is_among_the_loaded_modules_with_a_stable_id_and_its_names() {
+        let here = a_function_to_find as *const () as usize;
+        let modules = sys::modules();
+        let program = modules
+            .iter()
+            .find(|m| m.start <= here && here < m.end)
+            .unwrap_or_else(|| panic!("no module holds {here:#x}: {modules:?}"));
+        assert_ne!(program.id, "-", "{program:?}");
+        assert!(!program.path.is_empty());
+        assert!(sys::module_signature() > 0);
+        let again = sys::modules();
+        assert!(again.contains(program), "the same id each time");
+        let names = resolve_here(here);
+        assert!(names.iter().any(|s| s.name.contains("a_function_to_find")), "{names:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_library_without_debug_info_is_named_by_its_exported_symbols() {
+        let getpid = libc::getpid as *const () as usize;
+        let name = sys::exported_name(getpid);
+        assert!(name.as_deref().is_some_and(|n| n.ends_with("getpid")), "{name:?}");
+        let name = sys::exported_name(getpid + 2);
+        assert!(name.as_deref().is_some_and(|n| n.ends_with("getpid+0x2")), "{name:?}");
+        assert_eq!(sys::exported_name(16), None, "no module there");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_walk_follows_frame_records_up_the_stack_and_stops_at_a_broken_one() {
+        sys::open_probe();
+        let mut stack = vec![0usize; 64];
+        let at = |i: usize, stack: &Vec<usize>| stack.as_ptr() as usize + i * std::mem::size_of::<usize>();
+        let (four, ten, twenty, two) = (at(4, &stack), at(10, &stack), at(20, &stack), at(2, &stack));
+        stack[4] = ten;
+        stack[5] = 0x1111;
+        stack[10] = twenty;
+        stack[11] = 0x2222;
+        // Back down the stack: a broken chain.
+        stack[20] = two;
+        stack[21] = 0x3333;
+        let bounds = (at(0, &stack), at(64, &stack));
+        let mut frames = [0usize; MAX_FRAMES];
+        let n = sys::walk(0xaaaa, four, at(0, &stack), bounds, &mut frames);
+        assert_eq!(frames[..n], [0xaaaa, 0x1111, 0x2222, 0x3333]);
+
+        // The stack's top: a record that doesn't fit below it isn't read.
+        let n = sys::walk(0xaaaa, four, at(0, &stack), (bounds.0, at(12, &stack)), &mut frames);
+        assert_eq!(frames[..n], [0xaaaa, 0x1111, 0x2222]);
+
+        // Below the stack pointer, misaligned, or a zero return address.
+        let n = sys::walk(0xaaaa, four, at(5, &stack), bounds, &mut frames);
+        assert_eq!(frames[..n], [0xaaaa]);
+        let n = sys::walk(0xaaaa, four + 1, at(0, &stack), bounds, &mut frames);
+        assert_eq!(frames[..n], [0xaaaa]);
+        stack[11] = 0;
+        let n = sys::walk(0xaaaa, four, at(0, &stack), bounds, &mut frames);
+        assert_eq!(frames[..n], [0xaaaa, 0x1111]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reading_an_unmapped_address_through_the_pipe_fails_without_faulting() {
+        sys::open_probe();
+        let words = [0x1234usize, 0x5678];
+        assert_eq!(sys::read_pair(words.as_ptr() as usize), Some(words));
+        // SAFETY: sysconf only reads a value.
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        // SAFETY: maps two pages, readable, then takes the second's access
+        // away; this test only touches the first.
+        let pages = unsafe {
+            let pages = libc::mmap(
+                std::ptr::null_mut(),
+                2 * page_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1,
+                0,
+            );
+            assert_ne!(pages, libc::MAP_FAILED);
+            assert_eq!(
+                libc::mprotect(pages.cast::<u8>().add(page_size).cast(), page_size, libc::PROT_NONE),
+                0
+            );
+            pages
+        };
+        let first = pages as usize;
+        let second = first + page_size;
+        assert_eq!(sys::read_pair(second), None, "no access");
+        assert_eq!(sys::read_pair(16), None, "nothing mapped");
+        // Half readable: the first word ends the readable page.
+        assert_eq!(sys::read_pair(second - std::mem::size_of::<usize>()), None);
+        assert_eq!(
+            sys::read_pair(words.as_ptr() as usize),
+            Some(words),
+            "the pipe was left empty"
+        );
+        assert_eq!(sys::read_pair(first), Some([0, 0]));
+        // SAFETY: unmaps the pages mapped above.
+        unsafe { libc::munmap(pages, 2 * page_size) };
     }
 
     #[test]
