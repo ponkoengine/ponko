@@ -26,5 +26,9 @@
 ### Changed
 - A `parallel` node with `do` nodes in more than one child, refused
   before, now compiles and runs the actions together.
+- A brain is 152 bytes instead of 128 (its running actions, two inline).
+  `ai/10k` measured again with the additions of the last two changes: the
+  tree costs ten times the hand-written `match`, as before (guide, "Game
+  AI").
 - C++ `ai::brain::doing` is true for any of the brain's actions, not only
   the first.

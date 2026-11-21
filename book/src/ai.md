@@ -38,24 +38,29 @@ systems start to hurt when:
 The kit costs more per decision than a hand-written `match`. Measured with
 `cargo run --release -p ponko_bench -- ai/10k` (10,000 agents, a 15-node
 tree: flee when hurt, chase while alert, otherwise a utility choice between
-eating, going home to rest and patrolling; Apple M4 Max, 14 cores, while
-other builds kept the load average between 100 and 200, three runs):
+eating, going home to rest and patrolling; Apple M4 Max, 14 cores; six runs (three for
+`ai/10k-plain`) with the per-brain tick counter, the signal scan and several actions at
+once in, while other builds kept the load average between 57 and 65):
 
 | Benchmark | Median per tick | Fastest tick |
 |---|---|---|
-| `ai/10k-plain-1t`: `match` on an enum, one thread | 0.08 ms | 0.073–0.076 ms |
-| `ai/10k-tree-1t`: the tree, one thread | 0.81 ms | 0.75–0.78 ms |
-| `ai/10k-plain`: `match`, all cores | 0.07–0.10 ms | 0.03–0.04 ms |
-| `ai/10k-tree`: `ai::think`, all cores | 0.86–1.33 ms | 0.20–0.23 ms |
-| `ai/10k-tree-lod`: 10% every tick, 30% every 4th, 60% every 16th | 0.30–0.51 ms | 0.08–0.09 ms |
+| `ai/10k-plain-1t`: `match` on an enum, one thread | 0.067–0.070 ms | 0.062–0.065 ms |
+| `ai/10k-tree-1t`: the tree, one thread | 0.67–0.68 ms | 0.62–0.64 ms |
+| `ai/10k-plain`: `match`, all cores | 0.07–0.10 ms | 0.026–0.033 ms |
+| `ai/10k-tree`: `ai::think`, all cores | 0.40–1.49 ms | 0.18–0.20 ms |
+| `ai/10k-tree-lod`: 10% every tick, 30% every 4th, 60% every 16th | 0.23–0.74 ms | 0.06–0.10 ms |
 
-About 80 ns an agent against 8 ns for the `match`: ten times the cost, and
-still under a millisecond of one core for 10,000 agents, with no heap
-allocation per tick. Think rates bring a crowd to about a third. So: plain
-systems for a handful of simple enemies; the kit when the behaviour is
-bigger than the code that carries it out. The parallel medians are noisy on
-a loaded machine; the one-thread numbers are the steady ones. A brain is
-128 bytes plus 24 a node, a blackboard 24 bytes plus 40 an entry.
+About 67 ns an agent against 7 ns for the `match`: ten times the cost, the
+same ratio as before those additions, and well under a millisecond of one
+core for 10,000 agents. The one-thread runs allocate nothing; the parallel
+ones about one allocation in 50 ticks, fewer than the parallel `match`
+(the thread pool, not the trees). Think rates bring a crowd to about a
+third. So: plain systems for a handful of simple enemies; the kit when the
+behaviour is bigger than the code that carries it out. The parallel medians
+are noisy on a loaded machine; the one-thread numbers are the steady ones.
+These were taken on a busy machine: a run on a quiet one is still owed.
+A brain is 152 bytes plus 24 a node, a blackboard 24 bytes plus 40 an
+entry.
 
 ## Trees decide, systems act
 
