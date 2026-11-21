@@ -389,6 +389,17 @@ pub(crate) struct TouchState {
     editing: bool,
     /// The control being moved, and by what.
     edit: Option<EditDrag>,
+    /// The control the player grabbed last while arranging them: the one
+    /// the arrange screen resizes.
+    picked: Option<u16>,
+    /// Where the arrange screen's panel is, in window pixels: a press there
+    /// is the panel's, not a control's under it.
+    pub(crate) shield: Option<crate::camera::Rect>,
+    /// The arrange screen is asked for or open ([`Input::arrange_touch_controls`]).
+    pub(crate) arranging: bool,
+    /// The arrange screen was asked for and is not built yet: the layout
+    /// its Cancel puts back.
+    pub(crate) arrange_before: Option<crate::ui::touch::TouchLayout>,
     /// How many times a control was moved (the UI lays them out again).
     pub(crate) moved: u64,
     /// The mouse's left button went down on a control being moved this
@@ -450,6 +461,10 @@ impl Default for TouchState {
             layout: Default::default(),
             editing: false,
             edit: None,
+            picked: None,
+            shield: None,
+            arranging: false,
+            arrange_before: None,
             moved: 0,
             mouse_took: false,
             last_lift: None,
@@ -487,10 +502,15 @@ impl TouchState {
         self.edit.map(|e| usize::from(e.zone))
     }
 
+    /// The control the player grabbed last while arranging them.
+    pub(crate) fn picked_zone(&self) -> Option<usize> {
+        self.picked.map(usize::from)
+    }
+
     /// In edit mode, `by` going down at `at`: the control under it is moved
     /// from now on. Returns it.
     fn start_edit(&mut self, by: Mover, at: Vec2) -> Option<u16> {
-        if !self.editing || self.edit.is_some() {
+        if !self.editing || self.edit.is_some() || self.shield.is_some_and(|r| r.contains(at)) {
             return None;
         }
         let zone = self
@@ -505,6 +525,7 @@ impl TouchState {
             by,
             grab: self.zones[usize::from(zone)].center - at,
         });
+        self.picked = Some(zone);
         Some(zone)
     }
 
@@ -586,6 +607,7 @@ impl TouchState {
             }
         }
         self.zones = zones;
+        self.picked = None;
     }
 
     /// Gives zones whose action the map has its state slot.
@@ -1329,8 +1351,62 @@ impl Input {
     pub fn edit_touch_controls(&mut self, on: bool) {
         if !on {
             self.touch.finish_edit();
+            self.touch.picked = None;
         }
         self.touch.editing = on;
+    }
+
+    /// Opens the ready-made screen where the player arranges the on-screen
+    /// controls ([`TouchControls`](crate::ui::touch::TouchControls)), a settings page's
+    /// "arrange controls" button. It shows the controls (also on a desktop,
+    /// also under the screen that opened it) and a small panel that keeps
+    /// clear of them. With a finger or the mouse, the player:
+    ///
+    /// - **moves** a control by dragging it (it stays where it is let go,
+    ///   anchored to the nearest corner);
+    /// - **resizes** one: tap or click it, then `-` and `+`; `Size` makes
+    ///   them all bigger or smaller and `Opacity` fainter;
+    /// - **resets** them to where the game puts them (`Reset`);
+    /// - **saves** with `Save`, which writes the arrangement to the player's
+    ///   storage ([`Input::save_touch_layout`](crate::input::Input::save_touch_layout))
+    ///   and closes the screen. `Cancel`, Escape, a gamepad's East button
+    ///   or the game closing the screen put back the arrangement it had
+    ///   when it opened.
+    ///
+    /// Edit mode starts at once; the engine builds the screen at the UI's
+    /// next pass, before the next system runs (or the next frame, called
+    /// from the last). Called again while it is open, nothing changes.
+    /// However it closes, edit mode ends and
+    /// [`UiEvent::ScreenPopped`](crate::ui::UiEvent::ScreenPopped) is queued
+    /// with the screen's root (`ctx.ui.find("touch.arrange")` while it is
+    /// open). Its nodes are named `touch.arrange.<part>` (`title`, `note`,
+    /// `size_label`, `opacity_label`, `reset`, `cancel`, `save`, ...): a
+    /// game gives them its own words with [`Ui::set_text`](crate::ui::Ui::set_text)
+    /// or [`Ui::set_text_key`](crate::ui::Ui::set_text_key) after opening it.
+    ///
+    /// ```
+    /// use ponko::prelude::*;
+    /// use ponko::ui::touch::TouchControls;
+    /// Game::new("touch", 960, 540)
+    ///     .headless_frames(true)
+    ///     .add(Phase::Frame, |ctx: &mut Ctx| {
+    ///         // Built for the frame after the call.
+    ///         assert!(ctx.ui.find("touch.arrange.save").is_some());
+    ///     })
+    ///     .run_headless(2, |ctx| {
+    ///         ctx.input.set_touch_controls(TouchControls::new().stick("move").button("jump", "A"));
+    ///         // The settings page's "Arrange controls" button:
+    ///         ctx.input.arrange_touch_controls();
+    ///         assert!(ctx.input.editing_touch_controls());
+    ///     });
+    /// ```
+    pub fn arrange_touch_controls(&mut self) {
+        if self.touch.arranging {
+            return;
+        }
+        self.touch.arranging = true;
+        self.touch.arrange_before = Some(self.touch.layout.clone());
+        self.edit_touch_controls(true);
     }
 
     /// Whether the player is arranging the on-screen controls

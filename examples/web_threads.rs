@@ -23,7 +23,9 @@
 //! gamepads` feeds the page fake browser gamepads): `[{"slot":0,"name":"...",
 //! "family":"Xbox","vendor":69,"product":2835,"down":["South"],"axes":{"lx":0.5,
 //! "ly":-1,"rx":0,"ry":0,"lt":0.25,"rt":0}}]`, and `pad_presses` counts the
-//! South presses seen.
+//! South presses seen. Pressing West makes the game rumble that pad for 2.5
+//! seconds (`Rumble::new(0.8, 0.3)`), which the runner sees as the calls
+//! on the page's fake `vibrationActuator`; `rumble` is the pad's capability.
 //!
 //! **Bench** (`?bench=<workload>&threads=<n>`, `threads=1` for one
 //! thread): times one workload of the native simulation benchmarks
@@ -50,7 +52,7 @@ use std::time::Duration;
 
 use ponko::access::SystemAccess;
 use ponko::assets::{AssetGroup, GroupId, GroupState};
-use ponko::input::Input;
+use ponko::input::{Input, Rumble};
 use ponko::prelude::*;
 use ponko::streaming::Job;
 use ponko::system_view::SystemView;
@@ -231,6 +233,7 @@ fn pads(input: &Input) -> serde_json::Value {
                 "family": info.map(|i| format!("{:?}", i.family)),
                 "vendor": info.and_then(|i| i.vendor_id),
                 "product": info.and_then(|i| i.product_id),
+                "rumble": info.map(|i| i.capabilities.rumble),
                 "down": down,
                 "axes": {
                     "lx": axis(GamepadAxis::LeftStickX),
@@ -345,6 +348,16 @@ fn check(game: Game) {
             .iter()
             .filter(|&&p| ctx.input.gamepad_pressed(p, GamepadButton::South))
             .count() as u64;
+        let west: Vec<_> = ctx
+            .input
+            .gamepads()
+            .iter()
+            .copied()
+            .filter(|&p| ctx.input.gamepad_pressed(p, GamepadButton::West))
+            .collect();
+        for pad in west {
+            ctx.input.rumble(pad, Rumble::new(0.8, 0.3).seconds(2.5));
+        }
         let extra = json!({
             "threads": engine_threads(),
             "isolated": isolated(),

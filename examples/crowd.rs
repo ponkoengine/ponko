@@ -183,8 +183,9 @@ fn setup(ctx: &mut Ctx) {
     let far = ctx.gfx.create_skinned_mesh(&person(1).1, cloth, &skeleton);
     let animation = bake(&skeleton);
     let levels = [
-        // Up to 40 m: 960 triangles a person.
-        CrowdLevel::new(near, 0.0, 40.0),
+        // Up to 40 m: 960 triangles a person, crossfading into the far
+        // mesh over its last 4 m.
+        CrowdLevel::new(near, 0.0, 40.0).with_fade(4.0),
         // Beyond: 60 triangles, and two joints a corner are plenty.
         CrowdLevel::new(far, 40.0, f32::INFINITY).with_influences(2),
     ];

@@ -195,6 +195,9 @@ pub(super) enum Kind {
     /// cut-out surfaces writing their own depth at the end of the opaque
     /// pass.
     ViewModel,
+    /// The view model's see-through held items: as `Transparent`, but
+    /// always writing the stencil, for they draw where it can be written.
+    ViewModelBlended,
 }
 
 impl Kind {
@@ -208,6 +211,7 @@ impl Kind {
             Kind::Velocity | Kind::VelocityStill => Pass::Velocity,
             Kind::Capture => Pass::Capture,
             Kind::ViewModel => Pass::Opaque,
+            Kind::ViewModelBlended => Pass::Transparent,
         }
     }
 }
@@ -269,14 +273,15 @@ impl Renderer3D {
                 None => shader.view_model_cutout(variant),
             });
         }
-        if matches!(kind, Kind::Opaque | Kind::Transparent | Kind::ViewModel)
-            && let Some(pipeline) = self.stencil.pipeline(
-                id,
-                variant.instancing,
-                role,
-                kind == Kind::Transparent && self.stencil_read_only,
-            )
-        {
+        if matches!(
+            kind,
+            Kind::Opaque | Kind::Transparent | Kind::ViewModel | Kind::ViewModelBlended
+        ) && let Some(pipeline) = self.stencil.pipeline(
+            id,
+            variant.instancing,
+            role,
+            kind == Kind::Transparent && self.stencil_read_only,
+        ) {
             return Some(pipeline);
         }
         shader.variant(variant).for_kind(kind, role)
@@ -885,6 +890,7 @@ impl Renderer3D {
             }
             Part::Transparent => {
                 if split {
+                    let held_own_pass = self.view_model_see_through_pass();
                     let lit = targets.lit_texture(self.screen.taa_on);
                     passes::mark("scene copy");
                     passes::mark("color");
@@ -909,7 +915,7 @@ impl Renderer3D {
                                     passes::TRANSPARENT,
                                     "color",
                                     frame_checks::Kept::Color,
-                                    if self.samples <= 1 {
+                                    if self.samples <= 1 || held_own_pass {
                                         wgpu::StoreOp::Store
                                     } else {
                                         wgpu::StoreOp::Discard
@@ -932,7 +938,13 @@ impl Renderer3D {
                     self.draw_models(&mut pass, &self.lists.blended_runs, Kind::Transparent, &self.instances);
                     self.particles.draw(&mut pass, textures, self.resources.white);
                     self.draw_debug_lines(&mut pass);
-                    self.draw_view_model(&mut pass, targets.size, false, true);
+                    // Held see-through items that use the stencil draw in a
+                    // pass of their own, which can write it.
+                    self.draw_view_model(&mut pass, targets.size, false, !held_own_pass);
+                    drop(pass);
+                    if held_own_pass {
+                        self.record_view_model_see_through(encoder, targets, time);
+                    }
                 }
             }
             Part::Post => self.record_post(encoder, frame),

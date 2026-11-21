@@ -1,6 +1,6 @@
 // Waves from a spectrum, the FFT (the water kit's compute passes over the
 // field): one stage of a Stockham inverse FFT of both packed signals,
-// along x or z (as `spectrum::butterfly` on the CPU).
+// along x or z (as `butterfly` in the reference FFT of `spectrum.rs`'s tests).
 // custom[0]: the field's texels across, the stage's size (1, 2, 4, ...
 // n/2), 0 along x or 1 along z.
 

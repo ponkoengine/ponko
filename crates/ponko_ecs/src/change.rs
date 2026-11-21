@@ -205,14 +205,53 @@ pub(crate) struct Changes {
     aged_at: u64,
     /// One log per tracked component, in the order they were tracked.
     removed: Vec<Removed>,
+    /// `log[id.index()]` is the place of component `id`'s log in
+    /// `removed`, or `u32::MAX` (untracked): logging a removal finds its
+    /// log without a search.
+    log: Vec<u32>,
 }
 
 /// Entities that lost a tracked component, oldest first.
+///
+/// The ticks come in runs: every removal of one tick shares one entry, so
+/// logging a removal is one push (and one compare), however many entities
+/// a tick removes.
 struct Removed {
-    id: ComponentId,
     entities: Vec<Entity>,
-    /// `ticks[i]` is when `entities[i]` lost it; ascending.
-    ticks: Vec<u64>,
+    /// `(tick, first)`: `entities[first..]` up to the next run's `first`
+    /// lost the component at `tick`. Ticks ascend, and no run is empty.
+    runs: Vec<(u64, usize)>,
+}
+
+impl Removed {
+    /// Logs that `e` lost the component at tick `now`.
+    #[inline]
+    fn push(&mut self, e: Entity, now: u64) {
+        if self.runs.last().is_none_or(|&(tick, _)| tick != now) {
+            self.runs.push((now, self.entities.len()));
+        }
+        self.entities.push(e);
+    }
+
+    /// The first entity logged after tick `since`.
+    fn first_after(&self, since: u64) -> usize {
+        let run = self.runs.partition_point(|&(tick, _)| tick <= since);
+        self.runs.get(run).map_or(self.entities.len(), |&(_, first)| first)
+    }
+
+    /// Forgets the removals at or before tick `tick`.
+    fn forget(&mut self, tick: u64) {
+        let run = self.runs.partition_point(|&(t, _)| t <= tick);
+        if run == 0 {
+            return;
+        }
+        let first = self.runs.get(run).map_or(self.entities.len(), |&(_, first)| first);
+        self.entities.drain(..first);
+        self.runs.drain(..run);
+        for r in &mut self.runs {
+            r.1 -= first;
+        }
+    }
 }
 
 impl Default for Changes {
@@ -222,6 +261,7 @@ impl Default for Changes {
             since: 0,
             aged_at: 1,
             removed: Vec::new(),
+            log: Vec::new(),
         }
     }
 }
@@ -234,11 +274,31 @@ impl Changes {
     }
 
     /// Logs that `e` lost tracked component `id`.
+    #[inline]
     pub(crate) fn log_removal(&mut self, id: ComponentId, e: Entity) {
-        if let Some(log) = self.removed.iter_mut().find(|log| log.id == id) {
-            log.entities.push(e);
-            log.ticks.push(self.now);
+        let now = self.now;
+        if let Some(&at) = self.log.get(id.index())
+            && let Some(log) = self.removed.get_mut(at as usize)
+        {
+            log.push(e, now);
         }
+    }
+
+    /// The removal log of tracked component `id`.
+    fn log_of(&self, id: ComponentId) -> Option<&Removed> {
+        self.removed.get(*self.log.get(id.index())? as usize)
+    }
+
+    /// Gives tracked component `id` a removal log.
+    fn add_log(&mut self, id: ComponentId) {
+        if self.log.len() <= id.index() {
+            self.log.resize(id.index() + 1, u32::MAX);
+        }
+        self.log[id.index()] = self.removed.len() as u32;
+        self.removed.push(Removed {
+            entities: Vec::new(),
+            runs: Vec::new(),
+        });
     }
 
     /// The change-detection half of despawning `e`, row `row` of tracked
@@ -315,6 +375,14 @@ impl RowFilter {
             n_clauses: 0,
             clock,
         }
+    }
+
+    /// Forgets the terms and clauses, keeping the clock: ready to be
+    /// filled for another archetype.
+    #[inline]
+    pub(crate) fn clear(&mut self) {
+        self.n_terms = 0;
+        self.n_clauses = 0;
     }
 
     /// Adds a term to the clause being built: the live stamps of one column.
@@ -407,25 +475,38 @@ impl RowFilter {
 
 /// The rows of one tracked archetype that pass a query's row filter, as
 /// runs of consecutive rows.
-pub(crate) struct Runs<'a> {
-    arch: &'a Archetype,
+///
+/// A loop over many archetypes makes one and refills it for each archetype
+/// ([`visit`]): the filter (a few hundred bytes) is written in place, not
+/// built and moved for every archetype.
+pub(crate) struct Runs {
     rows: RowFilter,
     next: usize,
 }
 
-impl Runs<'_> {
-    /// The next run `start..end` of passing rows, stamped as changed for
-    /// every tracked component `Q` may write.
+impl Runs {
+    /// An empty one, for readers at `clock`; [`visit`] fills it.
+    #[inline]
+    pub(crate) fn new(clock: Clock) -> Self {
+        Runs {
+            rows: RowFilter::new(clock),
+            next: 0,
+        }
+    }
+
+    /// The next run `start..end` of passing rows of `arch` (the archetype
+    /// it was filled for), stamped as changed for every tracked component
+    /// `Q` may write.
     #[inline(never)]
-    pub(crate) fn next<Q: QueryData>(&mut self, ids: &Q::Ids) -> Option<(usize, usize)> {
-        let (start, end) = self.next_run()?;
-        mark::<Q>(self.arch, ids, self.rows.clock.now, start, end);
+    pub(crate) fn next<Q: QueryData>(&mut self, arch: &Archetype, ids: &Q::Ids) -> Option<(usize, usize)> {
+        let (start, end) = self.next_run(arch)?;
+        mark::<Q>(arch, ids, self.rows.clock.now, start, end);
         Some((start, end))
     }
 
-    /// The next run `start..end` of passing rows.
-    fn next_run(&mut self) -> Option<(usize, usize)> {
-        let len = self.arch.len();
+    /// The next run `start..end` of passing rows of `arch`.
+    fn next_run(&mut self, arch: &Archetype) -> Option<(usize, usize)> {
+        let len = arch.len();
         let Some(start) = self.rows.first_passing(self.next, len) else {
             self.next = len;
             return None;
@@ -469,26 +550,22 @@ fn mark_rows(arch: &Archetype, id: ComponentId, stamp: u32, start: usize, end: u
 
 /// Prepares a query's pass over tracked archetype `arch`. Without a row
 /// filter here, stamps every row as changed for every tracked component `Q`
-/// may write, and returns `None`: the caller visits every row. Otherwise
-/// returns the runs of rows to visit.
+/// may write, and returns `false`: the caller visits every row. Otherwise
+/// fills `runs` for `arch` and returns `true`: the caller visits the runs
+/// of rows [`Runs::next`] gives.
 ///
 /// Cold and out of line, like the other entry points the query loops call
 /// for tracked archetypes: the compiler then keeps the loops of worlds that
 /// track nothing as they were, with their state in registers.
 #[cold]
 #[inline(never)]
-pub(crate) fn visit<'a, Q: QueryData>(
-    arch: &'a Archetype,
-    ids: &Q::Ids,
-    filters: &Filters,
-    clock: Clock,
-) -> Option<Runs<'a>> {
-    match filters.row_filter(arch, clock) {
-        Some(rows) => Some(Runs { arch, rows, next: 0 }),
-        None => {
-            mark::<Q>(arch, ids, clock.now, 0, arch.len());
-            None
-        }
+pub(crate) fn visit<Q: QueryData>(arch: &Archetype, ids: &Q::Ids, filters: &Filters, runs: &mut Runs) -> bool {
+    if filters.fill_row_filter(arch, &mut runs.rows) {
+        runs.next = 0;
+        true
+    } else {
+        mark::<Q>(arch, ids, runs.rows.clock.now, 0, arch.len());
+        false
     }
 }
 
@@ -499,7 +576,7 @@ pub(crate) fn visit<'a, Q: QueryData>(
 #[cold]
 #[inline(never)]
 pub(crate) fn enter<Q: QueryData>(arch: &Archetype, ids: Q::Ids, filters: Filters, clock: Clock) -> bool {
-    visit::<Q>(arch, &ids, &filters, clock).is_some()
+    visit::<Q>(arch, &ids, &filters, &mut Runs::new(clock))
 }
 
 /// The first run `start..end` of rows of `arch` at or after row `from` that
@@ -515,8 +592,12 @@ pub(crate) fn next_run<Q: QueryData>(
     clock: Clock,
     from: usize,
 ) -> Option<(usize, usize)> {
-    let rows = filters.row_filter(arch, clock)?;
-    Runs { arch, rows, next: from }.next::<Q>(&ids)
+    let mut runs = Runs::new(clock);
+    if !filters.fill_row_filter(arch, &mut runs.rows) {
+        return None;
+    }
+    runs.next = from;
+    runs.next::<Q>(arch, &ids)
 }
 
 /// [`visit`] for one row: `false` if the row filter rejects it; otherwise
@@ -528,28 +609,34 @@ pub(crate) fn visit_row<Q: QueryData>(
     clock: Clock,
     row: usize,
 ) -> bool {
-    if filters.row_filter(arch, clock).is_some_and(|rows| !rows.passes(row)) {
+    let mut rows = RowFilter::new(clock);
+    if filters.fill_row_filter(arch, &mut rows) && !rows.passes(row) {
         return false;
     }
     mark::<Q>(arch, ids, clock.now, row, row + 1);
     true
 }
 
-/// How many rows of tracked archetype `arch` pass the row filter.
+/// How many rows of tracked archetype `arch` pass the row filter, with
+/// `rows` (for readers at the query's clock) refilled for it: a count over
+/// many archetypes passes the same one to each.
 #[cold]
 #[inline(never)]
-pub(crate) fn count(arch: &Archetype, filters: &Filters, clock: Clock) -> usize {
-    match filters.row_filter(arch, clock) {
-        Some(rows) => rows.count(arch.len(), usize::MAX),
-        None => arch.len(),
+pub(crate) fn count(arch: &Archetype, filters: &Filters, rows: &mut RowFilter) -> usize {
+    if filters.fill_row_filter(arch, rows) {
+        rows.count(arch.len(), usize::MAX)
+    } else {
+        arch.len()
     }
 }
 
 /// [`count`], but it stops looking once it has found `max` rows.
 pub(crate) fn count_at_most(arch: &Archetype, filters: &Filters, clock: Clock, max: usize) -> usize {
-    match filters.row_filter(arch, clock) {
-        Some(rows) => rows.count(arch.len(), max),
-        None => arch.len().min(max),
+    let mut rows = RowFilter::new(clock);
+    if filters.fill_row_filter(arch, &mut rows) {
+        rows.count(arch.len(), max)
+    } else {
+        arch.len().min(max)
     }
 }
 
@@ -772,11 +859,7 @@ impl World {
                 arch.start_tracking(col, stamp);
             }
         }
-        self.changes.removed.push(Removed {
-            id,
-            entities: Vec::new(),
-            ticks: Vec::new(),
-        });
+        self.changes.add_log(id);
     }
 
     /// Whether any component is tracked: each has a removal log.
@@ -926,15 +1009,14 @@ impl World {
     #[track_caller]
     #[must_use]
     pub(crate) fn removed_dynamic_inner(&self, id: ComponentId, since: Tick) -> &[Entity] {
-        let Some(log) = self.changes.removed.iter().find(|log| log.id == id) else {
+        let Some(log) = self.changes.log_of(id) else {
             untracked(self.infos[id.index()].name())
         };
         if since.0 > self.changes.now {
             // Another world's tick: everything, as for the filters.
             return &log.entities;
         }
-        let first = log.ticks.partition_point(|&tick| tick <= since.0);
-        &log.entities[first..]
+        &log.entities[log.first_after(since.0)..]
     }
 
     /// Implementation of [`RawWorld::query_chunks`](crate::RawWorld::query_chunks).
@@ -978,6 +1060,7 @@ impl World {
         let stamp = self.changes.stamp();
         let mut cols = [0; MAX];
         let mut ptrs = [std::ptr::null_mut(); MAX];
+        let mut runs = Runs::new(clock);
         let archetypes = self
             .query_matches
             .chunk_archetypes(&self.archetypes, ids, filter, cache, self.slots.scan());
@@ -991,10 +1074,12 @@ impl World {
                     None => continue 'arch,
                 }
             }
-            // `None`: every row. A filtered column is tracked and present,
-            // so its archetype is tracked.
-            let mut runs = (filtered && arch.tracked()).then(|| {
-                let mut rows = RowFilter::new(clock);
+            // Unfiltered: every row. A filtered column is tracked and
+            // present, so its archetype is tracked.
+            let in_runs = filtered && arch.tracked();
+            if in_runs {
+                let rows = &mut runs.rows;
+                rows.clear();
                 for (i, &id) in ids.iter().enumerate() {
                     for (mask, added) in [(query.added, true), (query.changed, false)] {
                         if bit(mask, i) {
@@ -1008,12 +1093,12 @@ impl World {
                 if query.any {
                     rows.close();
                 }
-                Runs { arch, rows, next: 0 }
-            });
+                runs.next = 0;
+            }
             let (mut start, mut end) = (0, arch.len());
             loop {
-                if let Some(runs) = &mut runs {
-                    match runs.next_run() {
+                if in_runs {
+                    match runs.next_run(arch) {
                         Some(run) => (start, end) = run,
                         None => break,
                     }
@@ -1028,7 +1113,7 @@ impl World {
                     entities: &arch.entities[start..end],
                     columns: &ptrs[..ids.len()],
                 });
-                if runs.is_none() {
+                if !in_runs {
                     break;
                 }
             }
@@ -1053,11 +1138,7 @@ impl World {
     /// ```
     pub fn forget_removed(&mut self, tick: Tick) {
         for log in &mut self.changes.removed {
-            let n = log.ticks.partition_point(|&t| t <= tick.0);
-            if n > 0 {
-                log.ticks.drain(..n);
-                log.entities.drain(..n);
-            }
+            log.forget(tick.0);
         }
     }
 }
@@ -1232,6 +1313,43 @@ mod tests {
         world.despawn(es[4]);
         assert_eq!(block_summary(&world, es[0], 0), written);
         assert_eq!(changed(&mut world, before), [1000]);
+    }
+
+    #[derive(Component)]
+    struct Mark;
+
+    #[test]
+    fn a_move_between_archetypes_keeps_the_summary_of_a_still_block_exact() {
+        let mut world = World::new();
+        world.track_changes::<Pos>();
+        // Two blocks in each archetype, all stamped at `spawned`.
+        let plain: Vec<_> = (0..2 * CHANGE_BLOCK as u32).map(|i| world.spawn((Pos(i),))).collect();
+        let marked: Vec<_> = (0..2 * CHANGE_BLOCK as u32 - 1)
+            .map(|i| world.spawn((Pos(1000 + i), Mark)))
+            .collect();
+        let spawned = world.changes.stamp();
+        let seen = world.advance_change_tick();
+        world.advance_change_tick();
+        // A still entity moves into the last row of the marked archetype's
+        // block 1: that block, and the block it left, stay as old as their rows.
+        world.insert(plain[5], Mark);
+        assert_eq!(block_summary(&world, marked[0], 1), spawned, "the block it moved into");
+        assert_eq!(block_summary(&world, plain[0], 0), spawned, "the block it left");
+        assert_eq!(changed(&mut world, seen), []);
+        // And back, by a removal: a new block of the plain archetype.
+        world.remove::<Mark>(plain[5]);
+        assert_eq!(world.entities.get(plain[5]).unwrap().row as usize, 2 * CHANGE_BLOCK - 1);
+        assert_eq!(block_summary(&world, plain[0], 1), spawned);
+        assert_eq!(changed(&mut world, seen), []);
+        // A changed entity takes its stamp into the block it moves to.
+        let before = world.advance_change_tick();
+        world.get_mut::<Pos>(plain[7]).unwrap().0 = 7000;
+        let written = world.changes.stamp();
+        world.insert(plain[7], Mark);
+        let row = world.entities.get(plain[7]).unwrap().row as usize;
+        assert_eq!(block_summary(&world, plain[7], row / CHANGE_BLOCK), written);
+        assert_eq!(changed(&mut world, before), [7000]);
+        assert_eq!(changed(&mut world, seen), [7000]);
     }
 
     #[test]

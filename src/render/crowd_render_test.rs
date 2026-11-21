@@ -846,9 +846,15 @@ fn box_at(lo: Vec3, hi: Vec3) -> Mat4 {
 
 /// Global illumination's closed white room (`gi_render_test`'s red wall
 /// room) whose sunlit west wall is a red crowd character (a skinned cube
-/// stretched over the wall), or a red model with `crowd` false.
-fn red_crowd_room(crowd: bool) -> Option<super::gi_render_test::Rig> {
-    let mut rig = super::gi_render_test::Rig::new(true)?;
+/// stretched over the wall), or a red model with `crowd` false. `cpu`: on
+/// a device with global illumination but too few storage buffers a
+/// shader stage for compute culling, where crowds take the CPU path.
+fn red_crowd_room(crowd: bool, cpu: bool) -> Option<super::gi_render_test::Rig> {
+    let mut rig = if cpu {
+        super::gi_render_test::Rig::with_storage_buffers(3)?
+    } else {
+        super::gi_render_test::Rig::new(true)?
+    };
     let white = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
     let red = MaterialDesc::color(Color::rgb(0.9, 0.04, 0.04));
     let (inner, outer) = (3.5, 3.9);
@@ -893,6 +899,7 @@ fn red_crowd_room(crowd: bool) -> Option<super::gi_render_test::Rig> {
         );
         let data = rig.ctx.gfx.assets3d.crowds[c.id as usize].as_ref();
         rig.renderer.set_crowd(&rig.device, &rig.queue, c.id, data);
+        assert_eq!(rig.renderer.crowd_on_gpu(c.id), Some(!cpu), "the crowd's path");
     } else {
         let mesh = rig.mesh(&MeshData::cube(1.0), red);
         let (scale, _, position) = west.to_scale_rotation_translation();
@@ -929,29 +936,48 @@ fn red_crowd_room(crowd: bool) -> Option<super::gi_render_test::Rig> {
 fn global_illumination_probes_see_crowds_as_they_see_models() {
     // The sunlit red wall a crowd character: the probes see it, so the
     // floor beside it takes red bounce light, as beside a red model wall.
-    let Some(mut models) = red_crowd_room(false) else {
-        return;
-    };
-    let Some(mut crowds) = red_crowd_room(true) else {
-        return;
-    };
-    let (a, b) = (models.draw(80), crowds.draw(80));
-    let near_red = vec3(-3.0, -0.5, -0.8);
-    let far_side = vec3(-0.5, -0.5, -0.8);
-    let sunlit_wall = vec3(-3.5, 1.0, 0.0);
-    let (m, n) = (models.at(&a, near_red), crowds.at(&b, near_red));
-    let (mf, nf) = (models.at(&a, far_side), crowds.at(&b, far_side));
-    eprintln!("floor by the red wall: {m:?} model, {n:?} crowd; further away {mf:?}, {nf:?}");
-    assert!(
-        crowds.at(&b, sunlit_wall)[0] > 150,
-        "the crowd wall is drawn, in the sun"
-    );
-    assert!(n[0] > n[1] + 20, "red bounce light from a crowd wall: {n:?}");
-    for (x, y) in [(m, n), (mf, nf)] {
+    // On the GPU path, and on the CPU path of a device that runs global
+    // illumination without compute culling (a device without compute
+    // shaders has no probes at all).
+    for cpu in [false, true] {
+        let Some(mut models) = red_crowd_room(false, cpu) else {
+            return;
+        };
+        let Some(mut crowds) = red_crowd_room(true, cpu) else {
+            return;
+        };
+        let (a, b) = (models.draw(80), crowds.draw(80));
+        let near_red = vec3(-3.0, -0.5, -0.8);
+        let far_side = vec3(-0.5, -0.5, -0.8);
+        let sunlit_wall = vec3(-3.5, 1.0, 0.0);
+        let (m, n) = (models.at(&a, near_red), crowds.at(&b, near_red));
+        let (mf, nf) = (models.at(&a, far_side), crowds.at(&b, far_side));
+        eprintln!("cpu {cpu}: floor by the red wall: {m:?} model, {n:?} crowd; further away {mf:?}, {nf:?}");
         assert!(
-            (0..3).all(|k| (x[k] - y[k]).abs() <= 12),
-            "a crowd lights the floor as a model does: {x:?} vs {y:?}"
+            crowds.at(&b, sunlit_wall)[0] > 150,
+            "cpu {cpu}: the crowd wall is drawn, in the sun"
         );
+        assert!(n[0] > n[1] + 20, "cpu {cpu}: red bounce light from a crowd wall: {n:?}");
+        for (x, y) in [(m, n), (mf, nf)] {
+            assert!(
+                (0..3).all(|k| (x[k] - y[k]).abs() <= 12),
+                "cpu {cpu}: a crowd lights the floor as a model does: {x:?} vs {y:?}"
+            );
+        }
+        // The light comes from the crowd's character in the probes' own
+        // views (the room's only crowd, number 0), not from the camera's.
+        let _ = crowds.frame(None);
+        let faces = crowds.renderer.crowd_gi_faces();
+        assert!(!faces.is_empty(), "cpu {cpu}: the probes update");
+        let seen: u32 = faces
+            .map(|v| {
+                crowds
+                    .renderer
+                    .crowd_drawn(&crowds.device, &crowds.queue, 0, v)
+                    .unwrap_or(0)
+            })
+            .sum();
+        assert!(seen > 0, "cpu {cpu}: the probes' face views draw the crowd");
     }
 }
 
@@ -1025,5 +1051,425 @@ fn window_views_draw_crowds_for_their_own_camera() {
             "{tier:?}: player one still does"
         );
         stage.finish();
+    }
+}
+
+/// Joint 0 (the hips, so the whole figure) rising 1.5 m and back down
+/// within a second: a clip that reaches far higher than standing.
+fn jump(skeleton: &Skeleton) -> AnimationClip {
+    let mut hips = JointAnimation::new(0, "hips");
+    hips.translation = Some(AnimationTrack::new(
+        vec![0.0, 0.5, 1.0],
+        vec![Vec4::ZERO, Vec4::new(0.0, 1.5, 0.0, 0.0), Vec4::ZERO],
+        Interpolation::Linear,
+    ));
+    AnimationClip::new("jump", skeleton, vec![hips])
+}
+
+/// A bake of an idle clip (0, standing still) and [`jump`] (1).
+fn idle_and_jump(skeleton: &Skeleton) -> CrowdAnimation {
+    let idle = AnimationClip::new("idle", skeleton, vec![]);
+    CrowdAnimation::bake(skeleton, &[idle.into(), jump(skeleton).into()], 30.0)
+}
+
+/// The depth grid of a wall across the whole picture at `z` (the camera
+/// looks down -z, level), its top at height `top`: every cell wholly
+/// below the top's line holds the wall's depth, the rest the far plane.
+fn low_wall_grid(rig: &BatchRig, z: f32, top: f32, size: u32) -> crate::three::occlusion::OcclusionGrid {
+    let camera = &rig.ctx.scene3d.camera;
+    let p = camera.view_proj().project_point3(vec3(0.0, top, z));
+    let depths = (0..size * size)
+        .map(|i| {
+            let row = i / size;
+            let cell_top = 1.0 - 2.0 * row as f32 / size as f32;
+            if cell_top <= p.y { p.z } else { 0.0 }
+        })
+        .collect();
+    crate::three::occlusion::OcclusionGrid::new(camera.view_proj(), camera.position, size, size, depths)
+}
+
+/// Characters standing behind a wall a little lower than a jump: kept by
+/// occlusion culling only while their own clip's bounds rise above it.
+/// Returns the characters the camera's view keeps without and with the
+/// depth grid, or `None` without a GPU.
+fn kept_behind_a_low_wall(compute: bool) -> Option<(u32, u32)> {
+    let mut rig = BatchRig::new(RigSetup {
+        compute,
+        ..Default::default()
+    })?;
+    rig.ctx.scene3d.camera.position = vec3(0.0, 1.5, 8.0);
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 1.5, 0.0));
+    let (skeleton, data) = figure();
+    let mesh = skinned_mesh(&mut rig, &data, glow(Color::rgb(1.0, 0.0, 0.0)), &skeleton);
+    let animation = idle_and_jump(&skeleton);
+    // Two rows of 13 at z -20 and -21; four of them jump, the rest stand.
+    let mut people = Vec::new();
+    for row in 0..2 {
+        for x in -6..=6_i32 {
+            let at = Mat4::from_translation(vec3(x as f32, 0.0, -20.0 - row as f32));
+            let clip = u16::from(row == 0 && matches!(x, -5 | -2 | 1 | 4));
+            people.push(CrowdInstance::new(at).playing(clip, 0.0).with_speed(0.0));
+        }
+    }
+    let c = crowd(
+        &mut rig,
+        &animation,
+        &[CrowdLevel::new(mesh, 0.0, f32::INFINITY)],
+        &people,
+        CrowdOptions::default(),
+    );
+    let drawn = |rig: &BatchRig| {
+        rig.renderer
+            .crowd_drawn(&rig.gpu.device, &rig.gpu.queue, c.id, 0)
+            .expect("the crowd")
+    };
+    rig.frame();
+    let all = drawn(&rig);
+    rig.ctx.scene3d.camera.occlusion_culling = true;
+    rig.grid = Some(low_wall_grid(&rig, -19.0, 2.8, 64));
+    rig.frame();
+    Some((all, drawn(&rig)))
+}
+
+#[test]
+fn occlusion_culling_keeps_only_characters_whose_clip_rises_above_the_wall() {
+    for compute in [true, false] {
+        let Some((all, kept)) = kept_behind_a_low_wall(compute) else {
+            return;
+        };
+        eprintln!("compute {compute}: behind the low wall, {all} in view, {kept} kept by occlusion culling");
+        assert_eq!(all, 26, "compute {compute}: every character is in the camera's view");
+        assert_eq!(
+            kept, 4,
+            "compute {compute}: only the four jumping ones rise above the wall"
+        );
+    }
+}
+
+/// Small standing and jumping characters around global illumination's
+/// probes: per frame, how many its six face directions keep (summed over
+/// `frames` frames). `cpu`: on a device whose crowds take the CPU path
+/// (too few storage buffers for compute culling) and runs global
+/// illumination all the same. `all_jump`: every character jumps.
+fn kept_by_the_probe_cut(cpu: bool, frames: usize, all_jump: bool) -> Option<(u32, u32)> {
+    let mut rig = if cpu {
+        super::gi_render_test::Rig::with_storage_buffers(3)?
+    } else {
+        super::gi_render_test::Rig::new(true)?
+    };
+    let floor = rig.mesh(&MeshData::cube(1.0), MaterialDesc::color(Color::WHITE));
+    rig.ctx.world.spawn((
+        Transform3D {
+            position: vec3(0.0, -0.6, 0.0),
+            scale: vec3(30.0, 0.2, 30.0),
+            ..Default::default()
+        },
+        Model::new(floor),
+    ));
+    let (skeleton, data) = figure();
+    let red = MaterialDesc::color(Color::rgb(0.9, 0.04, 0.04));
+    let material = rig.ctx.gfx.create_material(red);
+    let mesh = rig.ctx.gfx.create_skinned_mesh(&data, material, &skeleton);
+    rig.renderer
+        .create_material(&rig.device, &GpuMaterialDesc::new(&red), &rig.textures);
+    let mut weighted = data.clone();
+    for w in &mut weighted.weights {
+        *w = crate::three::normalized_weights(*w);
+    }
+    rig.renderer.create_mesh(
+        &rig.device,
+        &weighted,
+        &[(0..data.indices.len() as u32, material)],
+        true,
+    );
+    let animation = idle_and_jump(&skeleton);
+    // A grid of figures a fifth of their size, every fifth one jumping.
+    let mut people = Vec::new();
+    for z in -6..=6_i32 {
+        for x in -6..=6_i32 {
+            let at =
+                Mat4::from_scale_rotation_translation(Vec3::splat(0.2), Quat::IDENTITY, vec3(x as f32, -0.5, z as f32));
+            let clip = u16::from(all_jump || (x + z * 13).rem_euclid(5) == 0);
+            people.push(CrowdInstance::new(at).playing(clip, 0.0).with_speed(0.0));
+        }
+    }
+    let c = rig.ctx.gfx.create_crowd(
+        &animation,
+        &[CrowdLevel::new(mesh, 0.0, f32::INFINITY)],
+        &people,
+        CrowdOptions::default(),
+    );
+    let data = rig.ctx.gfx.assets3d.crowds[c.id as usize].as_ref();
+    rig.renderer.set_crowd(&rig.device, &rig.queue, c.id, data);
+    assert_eq!(rig.renderer.crowd_on_gpu(c.id), Some(!cpu), "the crowd's path");
+    rig.ctx.scene3d.lighting.gi = crate::render::GlobalIllumination {
+        enabled: true,
+        extent: vec3(12.0, 4.0, 12.0),
+        spacing: 3.0,
+        probes_per_frame: 2,
+        intensity: 1.0,
+    };
+    rig.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 0.0, 0.0));
+    let (mut faces, mut camera) = (0, 0);
+    for _ in 0..frames {
+        let _ = rig.frame(None);
+        let range = rig.renderer.crowd_gi_faces();
+        for v in range {
+            faces += rig.renderer.crowd_drawn(&rig.device, &rig.queue, c.id, v).unwrap_or(0);
+        }
+        camera += rig.renderer.crowd_drawn(&rig.device, &rig.queue, c.id, 0).unwrap_or(0);
+    }
+    eprintln!(
+        "cpu {cpu}, all jump {all_jump}: probe faces kept {faces} characters over {frames} frames; the camera {camera}"
+    );
+    Some((faces, camera))
+}
+
+#[test]
+fn the_probe_size_cut_keeps_characters_by_their_own_clip() {
+    let mut kept = Vec::new();
+    for cpu in [false, true] {
+        let (Some((mixed, camera)), Some((jumping, _))) = (
+            kept_by_the_probe_cut(cpu, 8, false),
+            kept_by_the_probe_cut(cpu, 8, true),
+        ) else {
+            return;
+        };
+        assert!(camera > 0 && mixed > 0, "cpu {cpu}: {mixed} {camera}");
+        // Standing characters are smaller than jumping ones: the probes
+        // keep fewer of them (one box for every clip kept as many).
+        assert!(
+            mixed < jumping,
+            "cpu {cpu}: a field of mostly standing characters keeps fewer ({mixed}) than one all jumping ({jumping})"
+        );
+        kept.push((mixed, jumping));
+    }
+    if let [gpu, cpu] = kept[..] {
+        assert_eq!(gpu, cpu, "both paths cut the same characters");
+    }
+}
+
+/// A red near level to `split` m (crossfading over its last `fade` m) and
+/// a green far level past it, of the same figure: a level's color says
+/// which one drew a pixel.
+fn near_and_far(rig: &mut BatchRig, split: f32, fade: f32) -> (CrowdAnimation, [CrowdLevel; 2]) {
+    let (skeleton, data) = figure();
+    let near = skinned_mesh(rig, &data, glow(Color::rgb(1.0, 0.0, 0.0)), &skeleton);
+    let far = skinned_mesh(rig, &data, glow(Color::rgb(0.0, 1.0, 0.0)), &skeleton);
+    let animation = CrowdAnimation::bake(&skeleton, &[bend(&skeleton).into()], 30.0);
+    let levels = [
+        CrowdLevel::new(near, 0.0, split).with_fade(fade),
+        CrowdLevel::new(far, split, f32::INFINITY),
+    ];
+    (animation, levels)
+}
+
+/// A figure whose origin is `distance` from `eye`, `x` to the side, on the
+/// ground, held at 0.25 s of its clip.
+fn figure_at(eye: Vec3, x: f32, distance: f32) -> CrowdInstance {
+    let z = (distance * distance - x * x - eye.y * eye.y).sqrt();
+    CrowdInstance::new(Mat4::from_translation(vec3(eye.x + x, 0.0, eye.z - z)))
+        .playing(0, 0.25)
+        .with_speed(0.0)
+}
+
+fn red(p: [u8; 4]) -> bool {
+    p[0] > 100 && p[1] < 60
+}
+
+fn green(p: [u8; 4]) -> bool {
+    p[1] > 100 && p[0] < 60
+}
+
+/// The red and green pixels of one figure walking straight away from the
+/// camera, every 0.25 m from 7.5 m to 10.5 m, the levels splitting at 10 m
+/// and the near one fading over its last `fade` m. `None` without a GPU.
+fn levels_walking_away(compute: bool, fade: f32) -> Option<Vec<(f32, u32, u32)>> {
+    let mut rig = BatchRig::new(RigSetup {
+        compute,
+        size: (160, 160),
+        ..Default::default()
+    })?;
+    let eye = vec3(0.0, 1.1, 0.0);
+    rig.ctx.scene3d.camera.position = eye;
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 1.1, -1.0));
+    rig.ctx.scene3d.camera.fov_y = 0.3;
+    let (animation, levels) = near_and_far(&mut rig, 10.0, fade);
+    let c = crowd(
+        &mut rig,
+        &animation,
+        &levels,
+        &[figure_at(eye, 0.0, 7.5)],
+        CrowdOptions::default(),
+    );
+    let mut steps = Vec::new();
+    for k in 0..=12 {
+        let distance = 7.5 + 0.25 * k as f32;
+        assert!(rig.ctx.gfx.update_crowd(c, &[figure_at(eye, 0.0, distance)]));
+        upload(&mut rig, c);
+        let image = rig.image();
+        let count = |test: fn([u8; 4]) -> bool| (image.fraction(0..160, 0..160, test) * 160.0 * 160.0).round() as u32;
+        steps.push((distance, count(red), count(green)));
+    }
+    Some(steps)
+}
+
+#[test]
+fn changing_level_crossfades_instead_of_popping() {
+    for compute in [true, false] {
+        let (Some(faded), Some(popped)) = (levels_walking_away(compute, 2.0), levels_walking_away(compute, 0.0)) else {
+            return;
+        };
+        let share = |&(_, r, g): &(f32, u32, u32)| g as f32 / (r + g).max(1) as f32;
+        let jump = |steps: &[(f32, u32, u32)]| {
+            steps
+                .windows(2)
+                .map(|w| (share(&w[1]) - share(&w[0])).abs())
+                .fold(0.0, f32::max)
+        };
+        for (f, p) in faded.iter().zip(&popped) {
+            eprintln!(
+                "compute {compute}: {:.2} m: crossfade {} red {} green ({:.2} far); switch {} red {} green",
+                f.0,
+                f.1,
+                f.2,
+                share(f),
+                p.1,
+                p.2
+            );
+        }
+        // Negative control: without a fade the far level takes over at
+        // once, between two steps.
+        assert!(jump(&popped) > 0.99, "compute {compute}: without a fade it pops");
+        // With one, the far level's share grows step by step over the
+        // last 2 m (an even 1/8 a step), from none to all.
+        assert!(
+            jump(&faded) < 0.3,
+            "compute {compute}: the crossfade moves at most 0.3 of the figure a step ({})",
+            jump(&faded)
+        );
+        assert_eq!(share(&faded[0]), 0.0, "compute {compute}: before the fade, all near");
+        assert_eq!(share(&faded[12]), 1.0, "compute {compute}: past the split, all far");
+        let middle = share(&faded[6]);
+        assert!(
+            (0.35..0.65).contains(&middle),
+            "compute {compute}: half way through the fade, half of each ({middle})"
+        );
+        // The two levels' dithers fill each other's gaps: the figure
+        // covers as many pixels as when one level draws it whole.
+        for (f, p) in faded.iter().zip(&popped) {
+            let (a, b) = ((f.1 + f.2) as f32, (p.1 + p.2) as f32);
+            assert!(
+                (a - b).abs() <= 0.03 * b,
+                "compute {compute}: at {} m the crossfading figure covers {a} pixels, whole {b}",
+                f.0
+            );
+        }
+    }
+}
+
+/// Three figures 7.5 m, 9 m and 10.5 m from the camera, the levels
+/// splitting at 10 m, the near one fading over its last `fade` m.
+fn crossfade_image(compute: bool, fade: f32) -> Option<(Image, wgpu::AdapterInfo)> {
+    let mut rig = BatchRig::new(RigSetup {
+        compute,
+        size: (192, 128),
+        ..Default::default()
+    })?;
+    let eye = vec3(0.0, 1.1, 0.0);
+    rig.ctx.scene3d.camera.position = eye;
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 1.1, -1.0));
+    rig.ctx.scene3d.camera.fov_y = 0.3;
+    let (animation, levels) = near_and_far(&mut rig, 10.0, fade);
+    let people = [(-1.3, 7.5), (0.0, 9.0), (1.4, 10.5)].map(|(x, d)| figure_at(eye, x, d));
+    crowd(&mut rig, &animation, &levels, &people, CrowdOptions::default());
+    let image = rig.image();
+    support::keep_image(&image);
+    Some((image, rig.gpu.info.clone()))
+}
+
+const CROSSFADE_TOLERANCE: Tolerance = Tolerance {
+    channel: 24,
+    outliers: 0.005,
+    edge: 1,
+};
+
+#[test]
+fn a_crossfade_dithers_the_figure_between_its_two_levels() {
+    for compute in [true, false] {
+        let (Some((image, info)), Some((switched, _))) = (crossfade_image(compute, 2.0), crossfade_image(compute, 0.0))
+        else {
+            return;
+        };
+        let (w, h) = (image.width, image.height);
+        let third = w / 3;
+        // The middle figure, half way through the fade, is red and green.
+        let (r, g) = (
+            image.fraction(third..2 * third, 0..h, red),
+            image.fraction(third..2 * third, 0..h, green),
+        );
+        eprintln!("compute {compute}: middle figure {r} red, {g} green");
+        assert!(
+            r > 0.01 && g > 0.01,
+            "compute {compute}: both levels draw the middle figure"
+        );
+        assert_eq!(
+            image.fraction(0..third, 0..h, green),
+            0.0,
+            "compute {compute}: the near one is near"
+        );
+        assert_eq!(
+            image.fraction(2 * third..w, 0..h, red),
+            0.0,
+            "compute {compute}: the far one far"
+        );
+        // Both paths draw the same picture.
+        support::check_reference(
+            "crowd_crossfade",
+            &image,
+            CROSSFADE_TOLERANCE,
+            "three skinned crowd figures 7.5 m, 9 m and 10.5 m from the camera; a red near level to 10 m crossfading \
+             over its last 2 m into a green far level; 192x128",
+            &info,
+        );
+        support::reference_rejects(
+            "crowd_crossfade",
+            &switched,
+            CROSSFADE_TOLERANCE,
+            "the levels switching at once (the middle figure all red)",
+        );
+    }
+}
+
+#[test]
+fn a_level_fade_is_finite_and_within_its_band() {
+    let Some(mut rig) = BatchRig::new(RigSetup::default()) else {
+        return;
+    };
+    let (skeleton, data) = figure();
+    let mesh = skinned_mesh(&mut rig, &data, glow(Color::WHITE), &skeleton);
+    let animation = CrowdAnimation::bake(&skeleton, &[bend(&skeleton).into()], 30.0);
+    let people = [CrowdInstance::new(Mat4::IDENTITY)];
+    for fade in [-1.0, f32::NAN, 10.5] {
+        let levels = [CrowdLevel::new(mesh, 0.0, 10.0).with_fade(fade)];
+        let error = rig
+            .ctx
+            .gfx
+            .try_create_crowd(&animation, &levels, &people, CrowdOptions::default())
+            .unwrap_err();
+        assert!(error.to_string().contains("fade"), "{fade}: {error}");
+    }
+    // The whole band, and any fade on a band without end, are fine.
+    for level in [
+        CrowdLevel::new(mesh, 0.0, 10.0).with_fade(10.0),
+        CrowdLevel::new(mesh, 0.0, f32::INFINITY).with_fade(3.0),
+    ] {
+        assert!(
+            rig.ctx
+                .gfx
+                .try_create_crowd(&animation, &[level], &people, CrowdOptions::default())
+                .is_ok()
+        );
     }
 }

@@ -273,6 +273,11 @@ fn assert_reaches_workers(n: usize) {
 /// slow enough to run in parallel: at least 200 ns per entity, so the timed
 /// first chunk alone takes over 100 µs. Not needed under Miri, which always
 /// runs the parallel path.
+///
+/// The spin is a lower bound, so it holds on a paused machine: a thread
+/// that loses its core only spins longer, which keeps the query on the
+/// parallel path. The tests that use it assert the order and the rows
+/// visited, which are the same on either path, never a time.
 fn slow(slow: bool) {
     if slow && !cfg!(miri) {
         let start = std::time::Instant::now();
@@ -692,15 +697,170 @@ fn a_slow_query_over_tiny_archetypes_runs_on_more_than_one_thread() {
     let n = w.query::<&Id>().count();
     assert_reaches_workers(n);
     let threads = Mutex::new(HashSet::new());
-    // About 2 µs per entity, over 10 ms in all: far over the serial budget,
-    // and long enough for idle workers to pick up chunks.
+    let here = std::thread::current().id();
+    let rows_here = std::sync::atomic::AtomicUsize::new(0);
+    // At least 2 µs per entity (a lower bound: a paused thread only spins
+    // longer), so the timed first chunk projects the query far over the
+    // serial budget. That chunk runs here, on the test's own thread, which
+    // is not one of the pool's, and every later row goes to the pool: rows
+    // land on more than one thread however late the workers wake.
     w.query::<&Id>().par_for_each(|_| {
         let start = std::time::Instant::now();
         while start.elapsed() < std::time::Duration::from_micros(2) {
             std::hint::spin_loop();
         }
+        if std::thread::current().id() == here {
+            rows_here.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         threads.lock().unwrap().insert(std::thread::current().id());
     });
+    assert_eq!(
+        rows_here.into_inner(),
+        MIN_CHUNK,
+        "only the timed first chunk runs on the calling thread"
+    );
     let threads = threads.into_inner().unwrap().len();
     assert!(threads > 1, "{threads} thread ran {n} rows of slow work");
+}
+
+#[derive(Component, Clone, Copy)]
+struct Opt<const N: u8>(u32);
+
+/// Sixteen archetypes, entity `i` with `Opt<k>` for each bit `k` of its
+/// archetype's number, of sizes that make chunks start and end inside
+/// archetypes and hold several of them. Returns each entity's id and bits.
+fn option_world() -> (World, Vec<(u32, u32)>) {
+    let chunk = if cfg!(miri) { 64 } else { 8192 };
+    let mut w = World::new();
+    let mut model = Vec::new();
+    let mut id = 0;
+    for m in 0..16u32 {
+        let rows = match m % 4 {
+            0 => chunk + chunk / 3,
+            1 => chunk / 5,
+            2 => 2 * chunk + 7,
+            _ => 3,
+        };
+        for _ in 0..rows {
+            let e = w.spawn((Id(u64::from(id)),));
+            if m & 1 != 0 {
+                w.insert(e, Opt::<0>(id));
+            }
+            if m & 2 != 0 {
+                w.insert(e, Opt::<1>(id));
+            }
+            if m & 4 != 0 {
+                w.insert(e, Opt::<2>(id));
+            }
+            if m & 8 != 0 {
+                w.insert(e, Opt::<3>(id));
+            }
+            model.push((id, m));
+            id += 1;
+        }
+    }
+    (w, model)
+}
+
+#[test]
+fn parallel_option_fetches_see_exactly_the_components_each_archetype_has() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let (mut w, model) = option_world();
+    let packed = |opts: &[Option<u32>], id: u32| -> u32 {
+        // Each present option holds its entity's id.
+        assert!(opts.iter().flatten().all(|&v| v == id));
+        opts.iter().enumerate().map(|(j, o)| (o.is_some() as u32) << j).sum()
+    };
+    let expect = |id: u32, bits: &[u32]| {
+        let m = model[id as usize].1;
+        bits.iter().enumerate().map(|(j, &k)| ((m >> k) & 1) << j).sum::<u32>()
+    };
+
+    // One option (split loops), positions in sequential order.
+    let n = model.len();
+    let out: Vec<AtomicU32> = (0..n).map(|_| AtomicU32::new(u32::MAX)).collect();
+    let mut order = Vec::new();
+    w.query::<(&Id, Option<&Opt<2>>)>()
+        .for_each(|(id, _)| order.push(id.0 as u32));
+    w.query::<(&Id, Option<&Opt<2>>)>().par_for_each_indexed(|i, (id, a)| {
+        assert_eq!(packed(&[a.map(|o| o.0)], id.0 as u32), expect(id.0 as u32, &[2]));
+        assert_eq!(
+            out[i].swap(id.0 as u32, Ordering::Relaxed),
+            u32::MAX,
+            "position {i} twice"
+        );
+    });
+    let got: Vec<u32> = out.iter().map(|a| a.load(Ordering::Relaxed)).collect();
+    assert_eq!(got, order);
+
+    // Two options, also spread over nested tuples (split loops), and three
+    // (one loop that tests each row): collected in query order.
+    let mut two = Vec::new();
+    w.query::<(&Id, Option<&Opt<1>>, Option<&Opt<3>>)>()
+        .par_collect_into(&mut two, |(id, a, b)| {
+            ((id.0 as u32), packed(&[a.map(|o| o.0), b.map(|o| o.0)], id.0 as u32))
+        });
+    let mut nested = Vec::new();
+    w.query::<((&Id, Option<&Opt<3>>), Option<&Opt<0>>)>()
+        .par_collect_into(&mut nested, |((id, a), b)| {
+            ((id.0 as u32), packed(&[a.map(|o| o.0), b.map(|o| o.0)], id.0 as u32))
+        });
+    let mut three = Vec::new();
+    w.query::<(&Id, Option<&Opt<0>>, Option<&Opt<1>>, Option<&Opt<2>>)>()
+        .par_collect_into(&mut three, |(id, a, b, c)| {
+            (
+                (id.0 as u32),
+                packed(&[a.map(|o| o.0), b.map(|o| o.0), c.map(|o| o.0)], id.0 as u32),
+            )
+        });
+    for (got, bits) in [(&two, &[1, 3][..]), (&nested, &[3, 0]), (&three, &[0, 1, 2])] {
+        assert_eq!(got.len(), n);
+        let ids: Vec<u32> = got.iter().map(|x| x.0).collect();
+        assert_eq!(ids, order, "the sequential order");
+        for &(id, present) in got.iter() {
+            assert_eq!(present, expect(id, bits), "entity {id}, options {bits:?}");
+        }
+    }
+
+    // `Option<&mut T>` writes exactly the entities that have `T`, once each.
+    w.query::<(Option<&mut Opt<1>>, Option<&mut Opt<2>>)>()
+        .par_for_each(|(a, b)| {
+            if let Some(a) = a {
+                a.0 += 1_000_000;
+            }
+            if let Some(b) = b {
+                b.0 += 2_000_000;
+            }
+        });
+    let mut after = Vec::new();
+    w.query::<(&Id, Option<&Opt<1>>, Option<&Opt<2>>)>()
+        .for_each(|(id, a, b)| after.push(((id.0 as u32), a.map(|o| o.0), b.map(|o| o.0))));
+    for (id, a, b) in after {
+        let m = model[id as usize].1;
+        assert_eq!(a, (m & 2 != 0).then_some(id + 1_000_000), "entity {id}");
+        assert_eq!(b, (m & 4 != 0).then_some(id + 2_000_000), "entity {id}");
+    }
+}
+
+#[test]
+fn parallel_option_loops_mark_changes_only_where_the_component_is() {
+    let (mut w, model) = option_world();
+    w.track_changes::<Opt<1>>();
+    let since = w.advance_change_tick();
+    w.query::<(&Id, Option<&mut Opt<1>>, Option<&Opt<3>>)>()
+        .par_for_each(|(_, a, b)| {
+            if let (Some(a), Some(b)) = (a, b) {
+                a.0 = b.0;
+            }
+        });
+    let mut changed: Vec<u32> = w
+        .query::<&Id>()
+        .filter::<Changed<Opt<1>>>()
+        .since(since)
+        .iter()
+        .map(|id| id.0 as u32)
+        .collect();
+    changed.sort_unstable();
+    let with: Vec<u32> = model.iter().filter(|x| x.1 & 2 != 0).map(|x| x.0).collect();
+    assert_eq!(changed, with);
 }

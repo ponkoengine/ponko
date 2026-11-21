@@ -1983,8 +1983,7 @@ impl Ctx {
             view.size = size;
             view.camera = eye.position;
             view.particles = eye.particles;
-            // `ctx.debug` draws on the default layer.
-            view.debug = eye.particles && eye.layers.intersects(crate::camera::RenderLayers::DEFAULT);
+            view.debug = eye.draws_debug(true);
             view.eye = Some(eye);
             view.view_proj = match camera.clip_plane {
                 Some(plane) => super::target::oblique(eye.view_proj(), eye.view(), plane),
@@ -2237,13 +2236,9 @@ impl Ctx {
         } else {
             self.gfx.frame3d.window_views.clear();
         }
-        // `ctx.debug`'s lines are on the default layer (target cameras that
-        // show it still draw them).
-        self.gfx.frame3d.debug_lines.hidden = !self
-            .scene3d
-            .camera
-            .layers
-            .intersects(crate::camera::RenderLayers::DEFAULT);
+        // Hidden from the window's camera, the lines are still drawn by
+        // target cameras that show them.
+        self.gfx.frame3d.debug_lines.hidden = !self.scene3d.camera.draws_debug(false);
         self.gfx.frame3d.skins = skins;
         // Every camera's 3D text, facing it, now that the views are known.
         self.collect_text3d();
@@ -2346,10 +2341,9 @@ pub(crate) fn collect_window_views(
         frame.shadow_size = main.shadow_size;
         frame.probes = main.probes;
         frame.effects.clone_from(&main.effects);
-        // `ctx.debug`'s lines are on the default layer.
         let lines = &mut frame.debug_lines;
         lines.clear();
-        if view.camera.layers.intersects(crate::camera::RenderLayers::DEFAULT) {
+        if view.camera.draws_debug(false) {
             lines.extend_lines(&main.debug_lines);
         }
     }
