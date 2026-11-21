@@ -13,7 +13,7 @@ use std::{collections::BTreeSet, ops::Range};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
-use super::{Doc, encode_glb};
+use super::{Companions, Doc, encode_glb};
 
 /// Offsets move by multiples of this, which keeps every view's alignment
 /// (glTF asks for at most 4; meshopt decoders like 16).
@@ -39,7 +39,7 @@ pub(super) fn write(
     has_bin: bool,
     image_views: &[usize],
     owned: &[(usize, String)],
-) -> Result<(Vec<u8>, usize, Vec<(String, Vec<u8>)>), String> {
+) -> Result<(Vec<u8>, usize, Companions), String> {
     let appended = doc.buffers.split_off(original_buffers);
     // Drop the replaced images from the buffers this file holds: the BIN
     // chunk, and data-URI buffers, and from the external files only this

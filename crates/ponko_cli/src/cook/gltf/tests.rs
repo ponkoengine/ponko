@@ -1,7 +1,6 @@
 //! Tests of model cooking, on GLB files built here.
 
 use super::*;
-use std::collections::BTreeSet;
 
 /// A GLB of `json` with `bin` as its binary chunk.
 pub fn glb(json: &Value, bin: &[u8]) -> Vec<u8> {
@@ -1354,7 +1353,7 @@ fn an_owned_external_buffer_loses_the_replaced_images_and_keeps_its_streams_byte
     let (json, bin) = external_meshopt(32);
     let source = serde_json::to_vec(&json).unwrap();
     let deps = [("geometry.bin".to_string(), bin.clone())];
-    let owned = BTreeSet::from(["geometry.bin".to_string()]);
+    let owned = std::collections::BTreeSet::from(["geometry.bin".to_string()]);
     let ((out, note, _), companions) = cook_owning("model.gltf", &source, &deps, ALL, &owned).unwrap().unwrap();
     assert!(note.contains("bytes of replaced images dropped"), "{note}");
     let cooked: Value = serde_json::from_slice(&out).unwrap();
@@ -1380,9 +1379,10 @@ fn an_external_buffer_not_owned_is_not_shortened() {
     let source = serde_json::to_vec(&json).unwrap();
     let deps = [("geometry.bin".to_string(), bin.clone())];
     // Another model reads it, or a rule keeps it: not in the owned set.
-    let ((out, note, _), companions) = cook_owning("model.gltf", &source, &deps, ALL, &BTreeSet::new())
-        .unwrap()
-        .unwrap();
+    let ((out, note, _), companions) =
+        cook_owning("model.gltf", &source, &deps, ALL, &std::collections::BTreeSet::new())
+            .unwrap()
+            .unwrap();
     assert!(companions.is_empty());
     assert!(!note.contains("dropped"), "{note}");
     let cooked: Value = serde_json::from_slice(&out).unwrap();
@@ -1390,7 +1390,7 @@ fn an_external_buffer_not_owned_is_not_shortened() {
     assert_eq!(views(&cooked), views(&json));
     assert_eq!(cooked["buffers"][0], json["buffers"][0]);
     // Another file in the set is not this model's either.
-    let other = BTreeSet::from(["other.bin".to_string()]);
+    let other = std::collections::BTreeSet::from(["other.bin".to_string()]);
     let (_, companions) = cook_owning("model.gltf", &source, &deps, ALL, &other).unwrap().unwrap();
     assert!(companions.is_empty());
 }
@@ -1406,7 +1406,7 @@ fn a_file_two_buffer_entries_name_is_not_shortened() {
         .push(json!({"byteLength": bin.len(), "uri": "geometry.bin"}));
     let source = serde_json::to_vec(&json).unwrap();
     let deps = [("geometry.bin".to_string(), bin)];
-    let owned = BTreeSet::from(["geometry.bin".to_string()]);
+    let owned = std::collections::BTreeSet::from(["geometry.bin".to_string()]);
     let (_, companions) = cook_owning("model.gltf", &source, &deps, ALL, &owned).unwrap().unwrap();
     assert!(companions.is_empty());
 }

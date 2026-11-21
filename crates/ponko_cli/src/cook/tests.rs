@@ -873,7 +873,7 @@ fn image_only_cooking_keeps_external_geometry_buffers_through_cache_hits() {
 
 /// The files of a `.gltf` model with meshopt streams reading `geometry.bin`.
 #[cfg(all(feature = "meshes", feature = "textures"))]
-fn meshopt_in_a_bin() -> (serde_json::Value, Vec<u8>, Vec<(String, Vec<u8>)>) {
+fn meshopt_in_a_bin() -> (serde_json::Value, Vec<u8>, Companions) {
     let (json, bin) = gltf::tests::external_meshopt(32);
     let files = vec![
         ("models/model.gltf".to_string(), serde_json::to_vec(&json).unwrap()),
