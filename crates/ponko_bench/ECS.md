@@ -114,11 +114,12 @@ a read-only draw pass over `(Pos, Spr)` without `Tag`.
 - hecs has no parallel iteration, so its `par` row is serial only. bevy's
   pool size is fixed once per process, so it has no scaling curve.
 - Dispatch differs. ponko's `par_for_each` splits rows into chunks of
-  `total / (4 × threads)`, clamped to 512–8192 rows, and runs serially only
-  when everything fits one chunk; the "stay on the calling thread if the
-  loop would take under about 50 µs" check applies only when every matched
-  archetype has at most 512 rows. The `par` worlds are one archetype of `n`
-  rows, so even at 1k ponko splits them into two chunks. Every ponko row
+  `total / (4 × threads)`, clamped to 512–8192 rows, and runs serially
+  when everything fits one chunk. A loop of more than one chunk times its
+  first rows on the calling thread and stays there if the whole loop would
+  take under about 50 µs (since #181; before, only loops whose archetypes
+  all had at most 512 rows were timed, so the baselines below split even
+  the 1k `par` world, one archetype, into two chunks). Every ponko row
   hands the work to rayon from a thread outside the pool: with
   `ThreadPool::install` (`t<k>`) the whole loop is sent to a sleeping pool
   thread and the caller blocks; on the global pool (`par`) rayon injects the
@@ -405,3 +406,134 @@ the calling thread. Timed inside the update, 4 interleaved rounds
 The row's median fell from 389–651 ms to 222–374 ms (4/4 rounds). What
 remains is the other parallel passes waiting on a loaded machine; on a
 quiet one the row should return to about its recorded 13 ms.
+
+## Measured work, not entity counts (#181)
+
+Measured like #159, on a machine kept busier still by other builds (load
+average 100–200): only interleaved runs and instruction and cycle counts
+count, and wall-clock numbers are quoted only where the change is far
+larger than the swing between rounds. Two harnesses, built in release:
+one links `ponko_ecs` twice (`origin/dev` at `b2d319ba` and the branch)
+and runs the same loops alternately in one process; the other is a
+hierarchy driver built once against each tree, the two binaries run
+alternately (6 rounds, the order flipped every round). Counters are
+`proc_pid_rusage` for the whole process, so they include the pool's
+threads, waking and spinning included.
+
+**Parallel loops time their first rows, whatever the archetypes.** A
+`par_for_each`, `par_for_each_indexed` or `par_collect_into` of more than
+one chunk runs its first 64 rows on the calling thread, timed. If they
+already project the loop over 50 µs (and took at least 250 ns, a few ticks
+of the clock), the rest goes to the pool at once; otherwise it times up
+to 512 rows and, under 50 µs, finishes the loop where it is. Before, only
+loops over small archetypes (none over 512 rows) were timed, and a cheap
+loop over one big archetype always woke the pool. `par_for_each` over one
+archetype on the global pool, per entity, 7 rounds (15 for 1M):
+
+| Loop | Rows | instructions dev / branch | cycles dev / branch | rounds faster |
+|---|---:|---:|---:|---:|
+| light (`pos += vel * dt`) | 1k | 82.8 / 3.96 | 55.3 / 0.81 | 7/7 |
+| light | 4k | 28.1 / 2.59 | 20.4 / 0.50 | 7/7 |
+| light | 16k | 12.3 / 2.36 | 9.11 / 0.79 | 7/7 |
+| light | 100k | 3.76 / 2.18 | 2.16 / 0.69 | 7/7 |
+| light | 1M | 2.52 / 2.50 | 1.24 / 1.25 | 9/15 |
+| heavy (steering, about 20 cycles) | 1k | 242 / 118 | 109 / 19.4 | 7/7 |
+| heavy | 4k | 179 / 123 | 65.1 / 22.8 | 7/7 |
+| heavy | 16k | 139 / 143 | 41.0 / 40.3 | 5/7 |
+| heavy | 100k | 129 / 128 | 26.9 / 26.0 | 4/7 |
+| heavy | 1M | 125 / 125 | 25.6 / 25.1 | 11/15 |
+
+Loops that now stay on the calling thread cost a fraction of the cycles
+(the pool's waking and spinning are gone) and no longer wait for it; the
+loops that still go parallel are unchanged within the noise (16k rows and
+up of the heavy loop, 1M of the light one). On a quiet machine a loop
+just under the budget can take a few microseconds longer on one thread
+than on all cores; under load the wait for woken threads is the larger
+cost, by far.
+
+**The hierarchy update.** Its passes are the roots compared with where
+they were (`par_collect_into`), a level placed in one pass over every
+attached entity (`par_collect_into`), and a level placed by lookups. The
+first two now measure their work as above; the third times its first 256
+children and shares the rest out only when the level projects over 50 µs
+(it went parallel from 2048 children before). 2D transforms, an update
+per step, medians of the per-round medians (p50 in µs):
+
+| Update | instructions | cycles | rounds faster | p50 dev / branch |
+|---|---:|---:|---:|---:|
+| 2000 roots × 4 children, still | 0.593 | 0.201 | 6/6 | 12.6 / 4.2 |
+| 2000 roots × 4 children, moving | 0.749 | 0.271 | 6/6 | 2014 / 35.1 |
+| 500 roots × 4 children, moving | 1.005 | 0.970 | 5/6 | 27.1 / 26.2 |
+| 20,000 roots × 1 child, still | 0.778 | 0.508 | 6/6 | 749 / 41.7 |
+| 20,000 roots × 1 child, moving | 1.035 | 1.008 | 3/6 | noise |
+| 100,000 roots × 1 child, moving | 1.003 | 1.014 | 3/6 | noise |
+| 1 root × 100,000 children, moving | 0.976 | 1.081 | 2/6 | noise |
+| the same, transforms tracked (lookups) | 0.968 | 0.925 | 4/6 | noise |
+| 4000 roots × 4 children, tracked, moving | 0.984 | 1.035 | 2/6 | noise |
+
+A small steady update no longer waits for pool workers: its median fell
+from milliseconds (a woken worker the system didn't run) to the time of
+its work. The large updates are level with `origin/dev` in instructions
+(0.97–1.00); their cycles moved both ways by up to 8% between rounds, and
+their wall-clock medians swung by several times, so no change is claimed
+for them either way. The fastest single 20,000-root still update was
+37 µs on the branch and 29 µs on `origin/dev`: under the budget the pass
+stays on one thread even when the pool happened to be awake.
+
+**`par_collect_into` for results that need `Drop`.** Each chunk is filled
+in a function that borrows the closure shared, as the other parallel loops
+do (`ParWork::visit_collect`), so a value the closure captured is loaded
+once and the loop vectorizes. `(&Pos, &Vel)` into a `Vec` of a type with
+an (empty) `Drop`, closure capturing `dt`, 1M entities, one-thread pool,
+7 rounds: 11.0 to 4.0 instructions per entity (0.36×) and 0.48× the
+cycles, 7/7 rounds; the same loop into an `f32` (no `Drop`) is 3.9. With a
+`Drop` that does work, clearing the old results adds its own cost to both.
+Keeping the count in a local that a guard writes back measured the same
+(4.0), so the count stays a plain `&mut`.
+
+**Three and four `Option` fetches: split.** `for_each` and the parallel
+loops now pick one loop per combination of `Option` components for three
+and four of them too (8 and 16 loops), as for one and two; five or more
+still test each row (32 loops and more). `(&mut Pos, &Vel)` plus the
+`Option`s, 1M entities spread evenly over the 8 or 16 archetypes, closure
+capturing `dt`, 7 rounds, per entity:
+
+| Loop | instructions, per row / split | cycles, per row / split |
+|---|---:|---:|
+| 3 `Option`s, `for_each` | 23.8 / 16.4 (0.69×) | 3.26–3.35 / 2.08–2.22 (0.60–0.63×) |
+| 3 `Option`s, `par_for_each`, one thread | 23.8 / 17.7 (0.74×) | 0.81× |
+| 4 `Option`s, `for_each` | 28.3 / 19.7 (0.70×) | 3.89–4.09 / 2.49–2.52 (0.60–0.63×) |
+| 4 `Option`s, `par_for_each`, one thread | 27.3 / 20.5 (0.75×) | 0.74× |
+| 2 `Option`s (already split), same world | 13.0 | 1.8–1.9 |
+| no `Option`, same world | 2.0 | 0.7 |
+
+7/7 rounds faster in each. The cost is code: the parallel chunk function
+for this query grew from 872 to 1908 bytes with three `Option`s and from
+996 to 3104 with four; the `for_each` caller went from 9584 to 8940 bytes
+(three) and 9580 to 11144 (four). One to two KB per loop that uses them,
+for about 0.6× the cycles: done.
+
+**Owed to a quiet-machine run (#117).** These rows, touched by #159 and
+here, have no number from an idle machine yet; the numbers above are
+instruction counts and interleaved ratios. On an idle machine, from a
+clean, committed checkout:
+
+```sh
+PONKO_BENCH_JSON=crates/ponko_bench/baselines/ecs.json \
+  cargo run --release -p ponko_bench -- 'ecs/|archetypes-1024|query-build'
+cargo run --release -p ponko_bench -- 'changes/|despawn/|attach/|hierarchy/|par-arch'
+```
+
+- `ecs/par-*` (all of them: the 1k rows now stay on the calling thread,
+  so the parallel scaling table above changes at 1k) and
+  `ecs/optional-par-*` (new in #159);
+- `ecs/optional-*`, `archetypes-1024`, `archetypes-1024-tracked`,
+  `archetypes-1024-changed-none`, `archetypes-1024-changed-1in16`,
+  `query-build+count-changed-x1000` (#159's change filters);
+- `changes/ponko-despawn-tracked` and `despawn/ponko` (#159's removal
+  logs);
+- `attach/100k-spawn+0-ticks`, `attach/100k-spawn+10-ticks` and
+  `hierarchy/100k-{deep,wide}-{moving,still}` (the hierarchy passes; the
+  attachments row should return to about its recorded 13 ms);
+- `par-arch/*` ([PAR_ARCHETYPES.md](PAR_ARCHETYPES.md): single big
+  archetypes are now timed too).

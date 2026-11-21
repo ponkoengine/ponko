@@ -505,8 +505,8 @@ pub extern "C" fn ponko_collider3d_mesh(mesh: PonkoCollisionMesh) -> PonkoCollid
 
 /// A collider of a convex hull, triangle mesh or heightfield scaled by
 /// `scale` where it is used (Rust `Collider3D::scaled_mesh`), so one mesh
-/// serves colliders of every size: a negative component mirrors a hull or
-/// triangle mesh, a heightfield takes the size only. Colliders of one mesh
+/// serves colliders of every size: a negative component mirrors it (a
+/// heightfield along X and Z; its Y takes the size only). Colliders of one mesh
 /// at one scale share one scaled copy. The shape is
 /// `PONKO_SHAPE3D_SCALED_MESH`, with `size` as the scale.
 /// ```

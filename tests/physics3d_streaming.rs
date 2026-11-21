@@ -150,6 +150,280 @@ fn a_mirrored_and_stretched_terrain_mesh_piece_is_solid_where_it_is_drawn_and_fa
     );
 }
 
+/// Bumpy ground for the mirrored tiles: 9 × 9 heights over 16 m, no cell
+/// flat (so a cell split along the wrong diagonal shows), and a hole at
+/// grid point (2, 5).
+fn bumpy_heights() -> Vec<f32> {
+    let n = 9;
+    (0..n * n)
+        .map(|i| {
+            if i == 5 * n + 2 {
+                f32::NAN
+            } else {
+                (i * 37 % 11) as f32 * 0.4
+            }
+        })
+        .collect()
+}
+
+/// What a ray straight down at a point of a tile hit: the point of the
+/// tile (from its corner, before its scale) and the height and normal.
+type Probe = (Vec2, Option<(f32, Vec3)>);
+
+/// Rays straight down at 13 × 13 points of a 16 m tile at `corner` and
+/// `scale` (placed by the signed scale, off the cells' edges).
+fn probe_tile(ctx: &Ctx, corner: Vec3, scale: Vec3) -> Vec<Probe> {
+    let mut out = Vec::new();
+    for a in 0..13 {
+        for b in 0..13 {
+            let local = vec2((a as f32 + 0.31) / 13.0 * 16.0, (b as f32 + 0.57) / 13.0 * 16.0);
+            let at = corner + vec3(local.x * scale.x, 50.0, local.y * scale.z);
+            let hit = ctx.physics3d.cast_ray(at, Vec3::NEG_Y, 100.0, QueryFilter::default());
+            out.push((local, hit.map(|h| (h.point.y, h.normal))));
+        }
+    }
+    out
+}
+
+/// Each probe found the ground drawn there by the tile at `corner` and
+/// `scale` (its height and the way it faces), and nothing over the hole.
+fn assert_drawn(probes: &[Probe], corner: Vec3, scale: Vec3) {
+    let ground = Heightfield::new(&bumpy_heights(), 16.0);
+    let mut holes = 0;
+    for &(local, hit) in probes {
+        let drawn = ground.height_at(local.x, local.y).map(|h| {
+            let n = ground.normal_at(local.x, local.y).unwrap();
+            // A normal goes through a scale's inverse.
+            (corner.y + h * scale.y, (n / scale).normalize())
+        });
+        match (hit, drawn) {
+            (None, None) => holes += 1,
+            (Some((y, normal)), Some((want_y, want_normal))) => {
+                assert!(
+                    (y - want_y).abs() < 1e-3 && normal.distance(want_normal) < 1e-3,
+                    "at {local} of the tile at scale {scale}: hit ({y}, {normal}), drawn ({want_y}, {want_normal})"
+                );
+            }
+            _ => panic!("at {local} of the tile at scale {scale}: hit {hit:?}, drawn {drawn:?}"),
+        }
+    }
+    assert!(holes > 0, "some rays went through the hole");
+}
+
+#[test]
+fn a_mirrored_heightfield_tile_is_solid_where_it_is_drawn_with_its_slopes_and_holes() {
+    let corner = vec3(3.0, -2.0, 5.0);
+    for scale in [vec3(-1.5, 1.0, 1.0), vec3(1.0, 2.0, -0.75), vec3(-1.0, 0.5, -1.25)] {
+        let out = Rc::new(RefCell::new(None));
+        let probes = out.clone();
+        Game::new("t", 1, 1)
+            .physics3d(Vec3::ZERO)
+            .sim_system(move |ctx: &mut Ctx| {
+                if ctx.time.sim_tick() == 1 {
+                    // Where the tile is drawn, and where it would be unmirrored.
+                    let unmirrored = probe_tile(ctx, corner, scale.abs());
+                    *probes.borrow_mut() = Some((probe_tile(ctx, corner, scale), unmirrored));
+                }
+            })
+            .run_headless(2, |ctx| {
+                let mesh = ctx.physics3d.heightfield(&bumpy_heights(), 16.0);
+                let tile = Transform {
+                    position: corner,
+                    scale,
+                    ..Transform::default()
+                };
+                ctx.world.spawn((tile, TerrainCollider::new(mesh)));
+            });
+        let (drawn, unmirrored) = out.take().expect("probed");
+        assert_drawn(&drawn, corner, scale);
+        // Negative control: nothing is solid where the unmirrored tile
+        // would be (where it was before mirrors counted).
+        assert!(
+            unmirrored.iter().all(|(_, hit)| hit.is_none()),
+            "solid on the unmirrored side at scale {scale}"
+        );
+    }
+    // The probes see the diagonals: the heights mirrored with the cells
+    // split the unmirrored way are another ground.
+    let ground = Heightfield::new(&bumpy_heights(), 16.0);
+    let n = 9;
+    let flipped: Vec<f32> = (0..n * n)
+        .map(|i| bumpy_heights()[i / n * n + (n - 1 - i % n)])
+        .collect();
+    let split_wrong = Heightfield::new(&flipped, 16.0);
+    let worst = (0..169)
+        .filter_map(|k| {
+            let (x, z) = ((k / 13) as f32 + 0.31, (k % 13) as f32 + 0.57);
+            let (x, z) = (x / 13.0 * 16.0, z / 13.0 * 16.0);
+            Some((ground.height_at(x, z)? - split_wrong.height_at(16.0 - x, z)?).abs())
+        })
+        .fold(0.0, f32::max);
+    assert!(worst > 0.2, "a wrong diagonal would be off by {worst} at most");
+}
+
+#[test]
+fn balls_rest_on_mirrored_heightfield_ramps_at_the_drawn_height_and_fall_where_they_are_not_drawn() {
+    // Two ramps of 5 × 5 heights over 4 m rising 0.5 per meter, one along
+    // X mirrored along X, one along Z mirrored along Z, each twice as
+    // long: they rise 0.25 per meter towards -X and -Z, over 8 m.
+    let n = 5;
+    let along_x: Vec<f32> = (0..n * n).map(|i| (i % n) as f32 * 0.5).collect();
+    let along_z: Vec<f32> = (0..n * n).map(|i| (i / n) as f32 * 0.5).collect();
+    let x_corner = vec3(0.0, 0.0, 0.0);
+    let z_corner = vec3(50.0, 0.0, 0.0);
+    let radius = 0.3;
+    let grippy = RigidBody {
+        lock_rotation: true,
+        ..RigidBody::dynamic()
+    };
+    let mut balls = Vec::new();
+    let mut world = Game::new("t", 1, 1).physics3d(GRAVITY).run_headless(150, |ctx| {
+        for (heights, corner, scale) in [
+            (&along_x, x_corner, vec3(-2.0, 1.0, 1.0)),
+            (&along_z, z_corner, vec3(1.0, 1.0, -2.0)),
+        ] {
+            let mesh = ctx.physics3d.heightfield(heights, 4.0);
+            let tile = Transform {
+                position: corner,
+                scale,
+                ..Transform::default()
+            };
+            ctx.world.spawn((tile, TerrainCollider::new(mesh).friction(1.0)));
+        }
+        // On each ramp, 4 m up it, and where its unmirrored tile would be.
+        for start in [
+            x_corner + vec3(-4.0, 6.0, 2.0),
+            z_corner + vec3(2.0, 6.0, -4.0),
+            x_corner + vec3(4.0, 6.0, 2.0),
+            z_corner + vec3(2.0, 6.0, 4.0),
+        ] {
+            let ball = (Transform::at(start), grippy, Collider::sphere(radius).friction(1.0));
+            balls.push(ctx.world.spawn(ball));
+        }
+    });
+    // On a slope of 0.25, the center sits r / cos(slope) above the ground.
+    let want = 4.0 * 0.25 + radius * (1.0f32 + 0.25 * 0.25).sqrt();
+    for (k, &ball) in balls.iter().enumerate() {
+        let p = position(&mut world, ball);
+        if k < 2 {
+            assert!(
+                (p.y - want).abs() < 0.02,
+                "ball {k} rests at {p}, the drawn ramp puts it at y = {want}"
+            );
+        } else {
+            assert!(p.y < -5.0, "ball {k} fell where nothing is drawn, at {p}");
+        }
+    }
+}
+
+#[test]
+fn a_mirrored_heightfield_tile_that_loads_later_is_streamed_in_where_it_is_drawn() {
+    // Built on a worker; placed 20 ticks in, mirrored along X and Z, while
+    // the focus is far away; then the focus comes to the drawn tile, 25 m
+    // from where the unmirrored one would be.
+    let corner = vec3(200.0, 1.0, 0.0);
+    let scale = vec3(-2.0, 1.0, -1.0);
+    let out = Rc::new(RefCell::new(None));
+    let report = out.clone();
+    let mut job = Some(ponko::streaming::Job::spawn(|| {
+        CollisionMeshData::heightfield(&bumpy_heights(), 16.0)
+    }));
+    let tile = Rc::new(RefCell::new(None));
+    let focus = Rc::new(RefCell::new(None));
+    let focus_in = focus.clone();
+    Game::new("t", 1, 1)
+        .physics3d(Vec3::ZERO)
+        .sim_system(move |ctx: &mut Ctx| match ctx.time.sim_tick() {
+            20 => {
+                let data = job.take().unwrap().wait();
+                let mesh = ctx.physics3d.add_mesh(&data);
+                let at = Transform {
+                    position: corner,
+                    scale,
+                    ..Transform::default()
+                };
+                *tile.borrow_mut() = Some(ctx.world.spawn((at, TerrainCollider::new(mesh))));
+            }
+            22 => {
+                let e = tile.borrow().unwrap();
+                let far = (ctx.physics3d.is_collider_active(e), probe_tile(ctx, corner, scale));
+                *report.borrow_mut() = Some((far, None));
+                let f = focus_in.borrow().unwrap();
+                ctx.world.get_mut::<Transform>(f).unwrap().position = vec3(175.0, 0.0, -8.0);
+            }
+            25 => {
+                let e = tile.borrow().unwrap();
+                let near = (ctx.physics3d.is_collider_active(e), probe_tile(ctx, corner, scale));
+                report.borrow_mut().as_mut().unwrap().1 = Some(near);
+            }
+            _ => {}
+        })
+        .run_headless(26, |ctx| {
+            ctx.physics3d.stream_colliders(Some(4));
+            *focus.borrow_mut() = Some(ctx.world.spawn((Transform::default(), ColliderFocus::new(10.0, 12.0))));
+        });
+    let ((far_active, far_probes), near) = out.take().expect("ran");
+    assert!(!far_active, "streamed out while the focus is far");
+    assert!(
+        far_probes.iter().all(|(_, hit)| hit.is_none()),
+        "nothing to hit while out"
+    );
+    let (near_active, near_probes) = near.expect("ran to tick 25");
+    assert!(
+        near_active,
+        "streamed in by a focus over the drawn tile, out of reach of the unmirrored one"
+    );
+    assert_drawn(&near_probes, corner, scale);
+}
+
+#[test]
+fn a_mirrored_heightfield_tile_is_solid_where_it_is_drawn_after_a_save_and_load() {
+    // A saved world keeps the tile's transform, mirror included; the game
+    // makes its collider again from the heights after loading.
+    let dir = std::env::temp_dir().join(format!("ponko-test-mirrored-terrain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let corner = vec3(-4.0, 0.5, 2.0);
+    let scale = vec3(1.0, 1.5, -2.0);
+    Game::new("t", 1, 1)
+        .data_dir(&dir)
+        .physics3d(Vec3::ZERO)
+        .run_headless(1, move |ctx| {
+            let mesh = ctx.physics3d.heightfield(&bumpy_heights(), 16.0);
+            let tile = Transform {
+                position: corner,
+                scale,
+                ..Transform::default()
+            };
+            ctx.world.spawn((tile, TerrainCollider::new(mesh)));
+            ctx.storage.save_world(&ctx.world, "mirrored").unwrap();
+        });
+    let out = Rc::new(RefCell::new(None));
+    let probes = out.clone();
+    Game::new("t", 1, 1)
+        .data_dir(&dir)
+        .physics3d(Vec3::ZERO)
+        .sim_system(move |ctx: &mut Ctx| match ctx.time.sim_tick() {
+            0 => {
+                // The loaded tile: the one entity with a mirrored transform.
+                let tiles: Vec<Entity> = ctx
+                    .world
+                    .query::<(Entity, &Transform)>()
+                    .iter()
+                    .filter(|(_, t)| t.scale.z < 0.0)
+                    .map(|(e, _)| e)
+                    .collect();
+                assert_eq!(tiles.len(), 1, "the tile's transform was saved");
+                let mesh = ctx.physics3d.heightfield(&bumpy_heights(), 16.0);
+                ctx.world.insert(tiles[0], TerrainCollider::new(mesh));
+            }
+            2 => *probes.borrow_mut() = Some(probe_tile(ctx, corner, scale)),
+            _ => {}
+        })
+        .run_headless(3, |ctx| ctx.load_world("mirrored").unwrap());
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_drawn(&out.take().expect("probed"), corner, scale);
+}
+
 #[test]
 fn collision_meshes_build_on_a_worker_thread() {
     let ray_hits = Rc::new(RefCell::new(None));

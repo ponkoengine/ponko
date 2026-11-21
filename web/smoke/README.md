@@ -47,6 +47,7 @@ runner needs to know about each one, so `--fixture <name>` is all a run takes:
 | `web_smoke` | `examples/web_smoke.rs` | none | `crab.png` fetched and decoded 32x32; an image and streamed music loaded from an in-memory asset source; an asset group of the fetched image and a file from the source, ready (`group_ready` at least 1); the music, started at setup, heard after the first click; sprites drawn |
 | `web_smoke_3d` | `examples/web_smoke_3d.rs` | `3d` | `models/house.glb` fetched and parsed; a sun with shadows; at least 1 model and 100 triangles drawn |
 | `coin_dash` | `examples/coin_dash` | none | the complete game: its picture, keys and the screens they reach (see [A complete game, packaged](../../book/src/packaging.md#the-web-build)); after a reload, the settings it saved come back from the browser's storage |
+| `web_editor_save` | `examples/web_editor_save.rs` | `editor` | `crab.png` fetched and decoded 32x32; a scene saved with the editor in the build is read back at once from the browser's storage (`read_back` 1); after a reload it comes back over the fetched files (`kept` is `Loaded`) |
 | `lights2d` | `examples/lights2d.rs` | none | `crab.png` fetched and decoded 32x32; 2D lights with stencil shadows and normal maps drawing on the page's backend (WebGL2 in CI); at least 7 lights
 
 To add one: publish the state with the helper (or the same attributes by hand),
@@ -223,12 +224,20 @@ Two more modes:
   the browser's 5 s cap, as Chromium does); pressing West makes the fixture
   rumble the pad for 2.5 s, and the calls must be `dual-rumble` effects at
   the asked levels, played again before the cap with no gap, and a `reset`
-  at the end. Real rumble can't be felt in a headless browser: these calls
-  are the proof.
+  at the end. Then two pads, the first with an actuator whose `effects`
+  list `trigger-rumble`, the second with a `dual-rumble`-only one (which
+  refuses `trigger-rumble`): the fixture must report `trigger_rumble` true
+  and false, and North on both (a rumble of the weak motor and both
+  triggers for 1.5 s) must reach the first as `trigger-rumble` effects
+  with all four levels and the second as `dual-rumble` ones with the
+  trigger levels dropped, as on the desktop, each stopped at the end.
+  Real rumble can't be felt in a headless browser: these calls are the
+  proof.
 - `--case gamepads-plain` is the same case on the ordinary build of the
   fixture (`--build` makes it, in `target/web/web_threads_plain`), whose pads
-  come from gilrs instead of the threaded backend. gilrs applies a dead zone
-  and rescales sticks and triggers, so axes are compared within 0.1.
+  come from the same backend built without threads (it replaced gilrs on
+  the web; the guide's web chapter says why). Both apply gilrs's dead zone
+  (0.1, rescaled), and the expected axes take it out the same way.
 - `--case warning` needs no browser: it builds the example
   `examples/web_threads_warning.rs` with threads and `-D warnings`. The
   example's only code is an unused function that only a build with threads
@@ -259,6 +268,29 @@ Exit codes and `report.json` (in `--out`, default
 tests its checks and its summary without a browser. Checked so far in
 Chromium 156 (headless shell) on an Apple Silicon Mac; Firefox and WebKit
 are not tried yet.
+
+## Spectrum
+
+`spectrum.mjs` times the water kit's CPU wave spectrum in the browser (the
+water guide's "Waves from a spectrum"): the fixture
+`examples/web_spectrum.rs`, in three builds (`--build` makes them):
+`scalar` (`web/build.sh --features 3d web_spectrum`), `simd128`
+(`-C target-feature=+simd128` for the whole module, added to the rust
+flags cargo reads) and `simd` (that, and the `wasm-simd` feature:
+rustfft's SIMD FFT; the feature without the flag doesn't compile). Each page load times one new moment of the field
+(`Waves::height_at` at a new time, what a WebGL2 upload costs) and one with
+the sway's speed (`Waves::sample`, what buoyancy costs) at 64, 128 and 256
+cells, eight moments per reading because the browser's clock is coarse.
+The builds take turns, three loads each (`--repeat`). The check is that each
+build says it was built as asked and timed every size; the times are
+printed (median of the loads' medians, their range, each SIMD build's
+speed-up over `scalar` and whether it is beyond the noise) and kept in
+`report.json`, never passed or failed on.
+
+```sh
+node web/smoke/spectrum.mjs --build
+node web/smoke/spectrum.mjs --variants scalar,simd --repeat 5
+```
 
 ## Running it
 

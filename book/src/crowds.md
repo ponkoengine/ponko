@@ -187,20 +187,37 @@ from a long-running clock), not seconds since the game began. At a day's
 
 ## Culling bounds
 
-The bake keeps a box per clip: around every level's mesh in every frame
-baked of that clip. A character is culled by the box of the clip it
-plays, under its transform (the box of the clip it blends to instead
-once the blend is whole, and both joined while it blends): an oriented
-box against each view's planes, a box along the world's axes against the
-occlusion grid, and its half diagonal for the probes' size cut. So a
-crowd that mostly stands and sometimes jumps culls its standing
-characters by their standing box, not by the jump. In a test scene of 26
-characters behind a wall lower than a jump, occlusion culling kept all 26
-with the single sphere around every clip that crowds used before, and
-keeps only the 4 that jump now; in a field of 169 small characters around
-global illumination's probes, the probes' face views kept 3,128 over 8
-frames before and 1,047 now (the camera's view, by its frustum alone, 896
-and 792). Both paths keep the same characters.
+The bake keeps a box per frame range of each clip: every 4 frames of a
+clip (0.13 s at 30 frames a second) share a box around every level's mesh
+in those frames and the frame after them, which skinning blends with
+their last. A character is culled by the box of the range its clip shows
+at the frame's time, under its transform (the range its blend clip shows
+instead once the blend is whole, and both joined while it blends): an
+oriented box against each view's planes, a box along the world's axes
+against the occlusion grid, and its half diagonal for the probes' size
+cut. So a crowd that mostly stands and sometimes jumps culls its standing
+characters by their standing box, and a jumping one by where it is in
+the jump: only near the top does it reach as high as the jump does. On
+the CPU path a character is culled by the range of the baked frame it
+shows. A box costs 32 bytes; the cull pass reads one more vec4 per clip
+a character plays.
+
+In the tests' scenes, a box around the whole clip against a box per frame
+range:
+
+| Scene | Box per clip | Box per frame range |
+| --- | --- | --- |
+| 13 figures held at points across a jump, below the camera view's bottom edge (only the middle of the jump lifts a head into it) | 13 drawn | 10 drawn, the picture the same as the 13 drawn as skinned models |
+| 26 figures behind a wall lower than the jump, each at its own point of it: kept by occlusion culling (13 clear the wall's line) | 26 | 17 on the GPU path; 26 on the CPU path, whose grid test reads coarser cells for a box over many |
+| The same, jumping on for 10 frames | 260 | 190 on the GPU path |
+| 169 small figures around global illumination's probes, every fifth held at the top of a jump: kept by the probes' face views over 8 frames | 1,047 | 918 |
+| The same, every one held at the top of a jump | 1,677 | 1,040 |
+
+Before boxes per clip, crowds used a single sphere around every clip: in
+a test scene of 26 characters behind a low wall, 4 of them jumping,
+occlusion culling kept all 26 with it and keeps only the 4 jumping ones
+since. In the frustum and probe scenes both paths keep the same
+characters.
 
 ## How it is drawn: two paths
 
@@ -222,7 +239,9 @@ Every frame, on devices with compute culling and storage buffers
   (40 µs with two levels and sun shadows) on the machine measured below.
   Culling by each clip's box instead of one sphere left that unchanged
   within the noise (30 to 50 µs with two levels and sun shadows, before
-  and after, measured on 2026-11-21 on a busy machine). A crossfading
+  and after, measured on 2026-11-21 on a busy machine). Culling by frame
+  ranges' boxes was not timed again: the pass reads one more vec4 per
+  clip a character plays. A crossfading
   level adds its dithered draws: 30 draws instead of 18 for the
   benchmark's two levels with sun shadows (`crowd_benchmark`'s
   crossfading scene).

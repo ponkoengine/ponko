@@ -1,14 +1,12 @@
-//! The built-in gamepad backend: gilrs (the `gamepad` feature), installed
-//! by the window before setup.
+//! The built-in gamepad backend on the desktop: gilrs (the `gamepad`
+//! feature), installed by the window before setup. Web builds read the
+//! browser's gamepads themselves (`gamepad_web`).
 //!
 //! What gilrs 0.11 can do differs per platform (see the guide's table):
 //! rumble of the two body motors through its force-feedback API on Linux
-//! (evdev) and Windows; nothing on macOS. On the web its backend has no
-//! force feedback either, so there the engine plays rumble itself through
-//! the browser's `vibrationActuator` (`web_rumble`), finding each pad in
-//! `navigator.getGamepads()` by its name. It reads no gyro or
-//! accelerometer and drives no trigger motors anywhere, so those
-//! capabilities are reported `false`.
+//! (evdev) and Windows; nothing on macOS. It reads no gyro or
+//! accelerometer and drives no trigger motors, so those capabilities are
+//! reported `false`.
 
 use gilrs::ff::Effect;
 use gilrs::{Axis, Button, EventType, GamepadId, Gilrs};
@@ -25,17 +23,6 @@ pub(crate) struct GilrsBackend {
     effects: Vec<(GamepadId, Effect)>,
     /// The pads already there when it opened, reported on the first poll.
     initial: Vec<GamepadId>,
-    /// The browser's rumble, which gilrs has no force feedback for.
-    #[cfg(target_arch = "wasm32")]
-    web: WebRumbleState,
-}
-
-/// What a web build keeps to rumble pads that gilrs reads.
-#[cfg(target_arch = "wasm32")]
-#[derive(Default)]
-struct WebRumbleState {
-    rumble: crate::web_rumble::WebRumble,
-    browser: crate::web_rumble::Browser,
 }
 
 impl GilrsBackend {
@@ -55,8 +42,6 @@ impl GilrsBackend {
             gilrs,
             effects: Vec::new(),
             initial,
-            #[cfg(target_arch = "wasm32")]
-            web: WebRumbleState::default(),
         }
     }
 
@@ -64,33 +49,15 @@ impl GilrsBackend {
         DeviceKey(usize::from(id) as u64)
     }
 
-    /// The browser's pad that gilrs's `id` is (gilrs doesn't say where in
-    /// `navigator.getGamepads()` a pad is): the pad whose `id` text is the
-    /// name gilrs has, counting the pads of that name in connection order.
-    #[cfg(target_arch = "wasm32")]
-    fn browser_pad(gilrs: &Gilrs, id: GamepadId) -> Option<crate::web_rumble::BrowserPad> {
-        let name = gilrs.gamepad(id).os_name().to_string();
-        let nth = gilrs
-            .gamepads()
-            .filter(|(other, pad)| pad.is_connected() && pad.os_name() == name && usize::from(*other) < usize::from(id))
-            .count();
-        let pads = crate::web_rumble::Browser::pads();
-        crate::web_rumble::pick(&pads, &name, nth).cloned()
-    }
-
     fn info(gilrs: &Gilrs, id: GamepadId) -> GamepadInfo {
         let pad = gilrs.gamepad(id);
-        #[cfg(target_arch = "wasm32")]
-        let web_rumble = Self::browser_pad(gilrs, id).is_some_and(|p| p.rumble);
-        #[cfg(not(target_arch = "wasm32"))]
-        let web_rumble = false;
         GamepadInfo {
             name: pad.name().to_string(),
             family: ControllerFamily::detect(pad.vendor_id(), pad.product_id(), pad.name()),
             vendor_id: pad.vendor_id(),
             product_id: pad.product_id(),
             capabilities: GamepadCapabilities {
-                rumble: pad.is_ff_supported() || web_rumble,
+                rumble: pad.is_ff_supported(),
                 trigger_rumble: false,
                 motion: false,
             },
@@ -101,8 +68,6 @@ impl GilrsBackend {
 impl GamepadBackend for GilrsBackend {
     fn poll(&mut self, events: &mut GamepadEvents<'_>) {
         let Some(gilrs) = self.gilrs.as_mut() else { return };
-        #[cfg(target_arch = "wasm32")]
-        self.web.rumble.refresh(&mut self.web.browser);
         for id in std::mem::take(&mut self.initial) {
             events.connected(Self::key(id), Self::info(gilrs, id));
         }
@@ -114,8 +79,6 @@ impl GamepadBackend for GilrsBackend {
                 }
                 EventType::Disconnected => {
                     self.effects.retain(|(id, _)| *id != event.id);
-                    #[cfg(target_arch = "wasm32")]
-                    self.web.rumble.forget(device);
                     events.disconnected(device);
                 }
                 EventType::ButtonPressed(b, _) => {
@@ -143,22 +106,6 @@ impl GamepadBackend for GilrsBackend {
         }
     }
 
-    /// On the web: the browser's `vibrationActuator` (gilrs has no force
-    /// feedback there), replayed before the browser ends each effect.
-    #[cfg(target_arch = "wasm32")]
-    fn set_rumble(&mut self, device: DeviceKey, levels: MotorLevels) {
-        let Some(gilrs) = self.gilrs.as_ref() else { return };
-        let Some(id) = gilrs.gamepads().map(|(id, _)| id).find(|&id| Self::key(id) == device) else {
-            return;
-        };
-        match Self::browser_pad(gilrs, id) {
-            Some(pad) => self.web.rumble.set(&mut self.web.browser, device, pad.index, levels),
-            // Its browser pad is gone: nothing to play or to stop.
-            None => self.web.rumble.forget(device),
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     fn set_rumble(&mut self, device: DeviceKey, levels: MotorLevels) {
         use gilrs::ff::{BaseEffect, BaseEffectType, EffectBuilder, Replay, Ticks};
         let Some(gilrs) = self.gilrs.as_mut() else { return };

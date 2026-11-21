@@ -449,10 +449,11 @@ impl CrowdRecord {
     }
 }
 
-/// A character's culling box in the world: the box of the clips it plays
-/// (see [`CrowdData::clip_bounds`]) under its transform, a center and
-/// three half axes (orthogonal unless the transform shears). The GPU
-/// path's cull pass works out the same box (`crowd_cull.wgsl`).
+/// A character's culling box in the world: a model-space box (the frame
+/// range's it shows, see [`CrowdData::range_bounds`], or its whole clips'
+/// for the crowd's own bounds) under its transform, a center and three
+/// half axes (orthogonal unless the transform shears). The GPU path's cull
+/// pass works out the same box (`crowd_cull.wgsl`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct CullBox {
     pub center: Vec3,
@@ -508,6 +509,49 @@ pub(crate) fn character_bounds(clip_bounds: &[(Vec3, Vec3)], anim: [u32; 4]) -> 
     }
 }
 
+/// Frames of a clip that share a culling box: a character is culled by the
+/// box of the range its frame is in (see [`range_frames`]), not by one
+/// around its whole clip. The cull shader has the same number
+/// (`crowd_cull.wgsl`). At 30 frames a second a range is 0.13 s of the
+/// clip; its box costs 32 bytes.
+pub(crate) const RANGE_FRAMES: u32 = 4;
+
+/// The frame ranges of a clip of `frames` frames.
+pub(crate) fn ranges_of(frames: u32) -> u32 {
+    frames.saturating_sub(1) / RANGE_FRAMES + 1
+}
+
+/// The frames of a clip of `frames` frames that range `range`'s box holds:
+/// those a character whose first frame (of the two the vertex shader
+/// blends) is in the range can show: from `range * RANGE_FRAMES` to the
+/// next range's first frame, which skinning blends with the range's last.
+/// A time the cull pass rounds a hair differently from the vertex shader
+/// moves the pose by that hair's share of a frame's movement, far below a
+/// pixel (the slots' spheres around the corners give more room than that).
+pub(crate) fn range_frames(range: u32, frames: u32) -> std::ops::RangeInclusive<u32> {
+    let last = frames.saturating_sub(1);
+    let first = (range * RANGE_FRAMES).min(last);
+    first..=((range + 1) * RANGE_FRAMES).min(last)
+}
+
+/// The frame range of a character `t` seconds into a clip (its row of the
+/// clip table: first frame, frames, fps, looping): the range of the first
+/// of the two frames the vertex shader blends (`crowd_frames` in
+/// `crowd_vertex.wgsl`). The cull pass does the same (`crowd_cull.wgsl`);
+/// this mirror of it is for the tests.
+#[cfg(test)]
+pub(crate) fn range_at(clip: [f32; 4], t: f32) -> u32 {
+    let last = (clip[1] - 1.0).max(0.0);
+    let mut p = t * clip[2];
+    if clip[3] > 0.5 && last > 0.0 {
+        p -= (p / last).floor() * last;
+    } else {
+        p = p.clamp(0.0, last);
+    }
+    let first = p.floor().min(last).max(0.0) as u32;
+    (first / RANGE_FRAMES).min(last as u32 / RANGE_FRAMES)
+}
+
 /// Where one level's skin matrices start in the bake, and
 /// how many the mesh has a frame (one per joint it binds).
 #[derive(Clone, Copy, Debug)]
@@ -530,8 +574,15 @@ pub(crate) struct CrowdData {
     /// Per clip: a box (lowest and highest corner) around every level's
     /// mesh in every frame baked of it, in model space.
     pub clip_bounds: Vec<(Vec3, Vec3)>,
+    /// Per clip: where its frame ranges' boxes start in `range_bounds`.
+    pub range_first: Vec<u32>,
+    /// Per clip, per range of [`RANGE_FRAMES`] frames: a box around every
+    /// level's mesh in the frames a character in the range can show (see
+    /// [`range_frames`]). What culling tests a character with.
+    pub range_bounds: Vec<(Vec3, Vec3)>,
     pub records: Vec<CrowdRecord>,
-    /// Per character: its culling box in the world (see [`CullBox`]).
+    /// Per character: the box of its whole clips in the world (see
+    /// [`CullBox`]), whatever frame it shows: what `min` and `max` hold.
     pub boxes: Vec<CullBox>,
     /// A box around every character's culling box and origin.
     pub min: Vec3,
@@ -568,6 +619,63 @@ fn check_instances(instances: &[CrowdInstance], clips: u32) -> Result<(), Error>
 }
 
 impl CrowdData {
+    /// Clip `clip`'s row of the clip table (first frame, frames, fps,
+    /// looping), the last clip's past the end, as the shaders read it.
+    pub(crate) fn clip_row(&self, clip: u32) -> [f32; 4] {
+        self.texels[clip.min(self.clips.saturating_sub(1)) as usize]
+    }
+
+    /// The box of clip `clip`'s frame range `range` (clamped to its last).
+    #[cfg(test)]
+    pub(crate) fn range_box(&self, clip: u32, range: u32) -> (Vec3, Vec3) {
+        let clip = clip.min(self.clips.saturating_sub(1));
+        let first = self.range_first[clip as usize];
+        let next = self
+            .range_first
+            .get(clip as usize + 1)
+            .copied()
+            .unwrap_or(self.range_bounds.len() as u32);
+        self.range_bounds[(first + range).min(next - 1) as usize]
+    }
+
+    /// The model-space box of a character with animation words `anim`
+    /// (its record's), `elapsed` seconds after its times: the boxes of the
+    /// frame ranges its clip and its blend clip show then (one alone, or
+    /// both joined while it blends), as the cull pass picks them (a
+    /// mirror of `crowd_cull.wgsl` for the tests).
+    #[cfg(test)]
+    pub(crate) fn character_bounds_at(&self, anim: [u32; 4], elapsed: f32) -> (Vec3, Vec3) {
+        let speed = f32::from((anim[3] >> 16) as u16 as i16) / 256.0;
+        let of = |clip: u32, time: u32| {
+            let t = f32::from_bits(time) + speed * elapsed;
+            self.range_box(clip, range_at(self.clip_row(clip), t))
+        };
+        match anim[3] & 0xffff {
+            0 => of(anim[0] & 0xffff, anim[1]),
+            0xffff => of(anim[0] >> 16, anim[2]),
+            _ => {
+                let (a, b) = (of(anim[0] & 0xffff, anim[1]), of(anim[0] >> 16, anim[2]));
+                (a.0.min(b.0), a.1.max(b.1))
+            }
+        }
+    }
+
+    /// What the GPU cull pass reads of the bake, a vec4 each: per clip its
+    /// frames, fps, looping (1 or 0) and first range, then per frame range
+    /// its box's lowest and highest corner.
+    pub(crate) fn cull_table(&self) -> Vec<[f32; 4]> {
+        let mut table: Vec<[f32; 4]> = (0..self.clips)
+            .map(|c| {
+                let row = self.clip_row(c);
+                [row[1], row[2], row[3], self.range_first[c as usize] as f32]
+            })
+            .collect();
+        for (lo, hi) in &self.range_bounds {
+            table.extend([lo.extend(0.0).to_array(), hi.extend(0.0).to_array()]);
+        }
+        table
+    }
+
     /// Makes `instances` (checked) the crowd's characters.
     fn set_instances(&mut self, instances: &[CrowdInstance]) {
         self.records.clear();
@@ -748,19 +856,22 @@ impl Graphics {
             .collect();
         let joints = baked.joints.len();
         let mut sections = Vec::with_capacity(levels.len());
-        // Per clip, a box around every level's slots (each a sphere around
-        // the corners it moves) in every frame of the clip: skinning blends
-        // those frames' matrices, so every pose shown lies inside.
-        let mut clip_bounds = vec![(Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)); baked.clips.len()];
+        // Per baked frame, a box around every level's slots (each a sphere
+        // around the corners it moves): skinning blends two frames'
+        // matrices, so every pose shown between them lies inside both
+        // frames' boxes joined.
+        let empty = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+        let mut frame_bounds = vec![empty; frames];
         for skin in &skins {
             let slots = skin.slots.len();
             let start = texels.len() as u32;
             let joint_of: Vec<Option<usize>> = (0..slots).map(|s| joint_in(skin, &baked.joints, s)).collect();
             texels.reserve(frames * slots * 3);
             // The clips' frames follow each other: frame after frame, as `matrices`.
-            for (clip, (lo, hi)) in baked.clips.iter().zip(&mut clip_bounds) {
+            for clip in baked.clips.iter() {
                 for g in clip.first as usize..(clip.first + clip.frames) as usize {
                     let pose = &baked.matrices[g * joints..(g + 1) * joints];
+                    let (lo, hi) = &mut frame_bounds[g];
                     for s in 0..slots {
                         let m = joint_of[s].map_or(Mat4::IDENTITY, |j| pose[j] * skin.inverse_binds[s]);
                         texels.extend([m.row(0).to_array(), m.row(1).to_array(), m.row(2).to_array()]);
@@ -779,9 +890,25 @@ impl Graphics {
                 slots: slots as u32,
             });
         }
-        for b in &mut clip_bounds {
-            if !b.0.cmple(b.1).all() {
-                *b = (Vec3::ZERO, Vec3::ZERO);
+        let join = |frames: std::ops::RangeInclusive<u32>, first: u32| {
+            let (lo, hi) = frames.fold(empty, |(lo, hi), f| {
+                let (a, b) = frame_bounds[(first + f) as usize];
+                (lo.min(a), hi.max(b))
+            });
+            if lo.cmple(hi).all() {
+                (lo, hi)
+            } else {
+                (Vec3::ZERO, Vec3::ZERO)
+            }
+        };
+        let mut clip_bounds = Vec::with_capacity(baked.clips.len());
+        let mut range_first = Vec::with_capacity(baked.clips.len());
+        let mut range_bounds = Vec::new();
+        for clip in baked.clips.iter() {
+            clip_bounds.push(join(0..=clip.frames.saturating_sub(1), clip.first));
+            range_first.push(range_bounds.len() as u32);
+            for range in 0..ranges_of(clip.frames) {
+                range_bounds.push(join(range_frames(range, clip.frames), clip.first));
             }
         }
         let mut data = CrowdData {
@@ -791,6 +918,8 @@ impl Graphics {
             sections,
             clips,
             clip_bounds,
+            range_first,
+            range_bounds,
             records: Vec::new(),
             boxes: Vec::new(),
             min: Vec3::ZERO,
@@ -1089,6 +1218,94 @@ mod tests {
             let last = data.sections[0].start as usize + (4 * 2 + 1) * 3;
             let row0 = Vec4::from(data.texels[last]);
             assert!((row0 - Vec4::new(0.0, -1.0, 0.0, 1.0)).length() < 1e-4, "{row0}");
+        });
+    }
+
+    #[test]
+    fn both_frames_a_character_blends_are_in_the_box_of_its_frame_range() {
+        for frames in [1, 2, 3, 4, 5, 8, 9, 31, 64] {
+            for looping in [true, false] {
+                let row = [0.0, frames as f32, 30.0, if looping { 1.0 } else { 0.0 }];
+                let last = (frames - 1) as f32;
+                for step in -200..400 {
+                    let t = step as f32 * 0.0123;
+                    // As `crowd_frames` in `crowd_vertex.wgsl`.
+                    let mut p = t * 30.0;
+                    if looping && last > 0.0 {
+                        p -= (p / last).floor() * last;
+                    } else {
+                        p = p.clamp(0.0, last);
+                    }
+                    let f0 = p.floor().min(last) as u32;
+                    let f1 = (f0 + 1).min(last as u32);
+                    let range = range_at(row, t);
+                    assert!(range < ranges_of(frames), "{frames} frames: range {range}");
+                    let held = range_frames(range, frames);
+                    assert!(
+                        held.contains(&f0) && held.contains(&f1),
+                        "{frames} frames, looping {looping}, {t} s: frames {f0} and {f1} outside range {range} ({held:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_crowd_keeps_a_box_per_frame_range_that_holds_every_pose_shown_in_it() {
+        crate::game::Game::new("t", 1, 1).run_headless(0, |ctx| {
+            let (skeleton, clip) = bend();
+            let mut bar = MeshData::cube(1.0);
+            for p in &mut bar.positions {
+                *p = vec3(p.x * 0.2, (p.y + 0.5) * 2.0, p.z * 0.2);
+            }
+            bar.joints = bar.positions.iter().map(|p| [u16::from(p.y > 1.0), 0, 0, 0]).collect();
+            bar.weights = vec![[1.0, 0.0, 0.0, 0.0]; bar.positions.len()];
+            let material = ctx.gfx.default_material();
+            let mesh = ctx.gfx.create_skinned_mesh(&bar, material, &skeleton);
+            let idle = AnimationClip::new("idle", &skeleton, vec![]);
+            // 31 frames of the bend (8 ranges), then one of standing still.
+            let animation = CrowdAnimation::bake(&skeleton, &[CrowdClip::once(clip), idle.into()], 30.0);
+            let crowd = ctx.gfx.create_crowd(
+                &animation,
+                &[CrowdLevel::new(mesh, 0.0, f32::INFINITY)],
+                &[CrowdInstance::new(Mat4::IDENTITY)],
+                CrowdOptions::default(),
+            );
+            let data = ctx.gfx.assets3d.crowds[crowd.id as usize].as_ref().unwrap();
+            assert_eq!(data.range_first, [0, 8]);
+            assert_eq!(data.range_bounds.len(), 9);
+            let (clip_lo, clip_hi) = data.clip_bounds[0];
+            for &(lo, hi) in &data.range_bounds[..8] {
+                assert!(
+                    lo.cmpge(clip_lo).all() && hi.cmple(clip_hi).all(),
+                    "inside the clip's box"
+                );
+            }
+            assert_eq!(data.range_bounds[8], data.clip_bounds[1], "one frame: one range");
+            // The top's tip, (0, 2) at rest, turns about (0, 1) to (-1, 1).
+            let tip = |t: f32| {
+                let a = std::f32::consts::FRAC_PI_2 * t.clamp(0.0, 1.0);
+                vec3(-a.sin(), 1.0 + a.cos(), 0.0)
+            };
+            let inside = |p: Vec3, (lo, hi): (Vec3, Vec3)| p.cmpge(lo).all() && p.cmple(hi).all();
+            for step in 0..=100 {
+                let t = step as f32 / 100.0;
+                // Held at t, and played up to t from the start.
+                for (time, speed, elapsed) in [(t, 0.0, 0.0), (0.0, 1.0, t), (t / 2.0, 0.5, t)] {
+                    let record =
+                        CrowdRecord::new(&CrowdInstance::new(Mat4::IDENTITY).playing(0, time).with_speed(speed));
+                    let b = data.character_bounds_at(record.anim, elapsed);
+                    assert!(inside(tip(t), b), "the tip at {t} s outside {b:?}");
+                    assert!(inside(Vec3::ZERO, b), "the base at {t} s outside {b:?}");
+                }
+            }
+            // Tighter than the clip's box: the start's range leaves out the
+            // end's tip, the end's range the start's.
+            let start = data.character_bounds_at(CrowdRecord::new(&CrowdInstance::new(Mat4::IDENTITY)).anim, 0.0);
+            assert!(!inside(tip(1.0), start), "{start:?}");
+            let end = data.range_box(0, 7);
+            assert!(!inside(tip(0.0), end), "{end:?}");
+            assert!(inside(tip(1.0), data.clip_bounds[0]) && inside(tip(0.0), data.clip_bounds[0]));
         });
     }
 

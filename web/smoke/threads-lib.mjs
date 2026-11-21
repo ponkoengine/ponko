@@ -26,7 +26,7 @@ export const CHECK_TICKS = 150;
 /**
  * The `--case`s: the browser ones, and `warning`, a build with no browser.
  * `gamepads-plain` is `gamepads` on the ordinary web build (no threads),
- * which reads the pads through gilrs.
+ * whose pads come from the same backend, built without shared memory.
  */
 export const CASES = ["worker-panic", "gamepads", "gamepads-plain", "warning"];
 
@@ -267,13 +267,23 @@ export const FAKE_PAD_ID = "Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 0
  * buttons, 4 axes). `buttons` maps a button's index to its value; above
  * half is pressed, as browsers report triggers.
  */
-export function fakeGamepad({ index = 0, id = FAKE_PAD_ID, buttons = {}, axes = [0, 0, 0, 0], rumble = true } = {}) {
+export function fakeGamepad({
+  index = 0,
+  id = FAKE_PAD_ID,
+  buttons = {},
+  axes = [0, 0, 0, 0],
+  rumble = true,
+  triggerRumble = false,
+} = {}) {
   return {
     id,
     index,
-    // Not a property of the browser's Gamepad: installFakeGamepads turns it
-    // into a `vibrationActuator` (Chromium has one on every pad, Firefox none).
+    // Not properties of the browser's Gamepad: installFakeGamepads turns
+    // them into a `vibrationActuator` (Chromium has one on every pad, Firefox
+    // none) whose `effects` list `trigger-rumble` too with `triggerRumble`
+    // (Chromium, for pads whose driver has trigger motors).
     rumble,
+    triggerRumble,
     connected: true,
     mapping: "standard",
     timestamp: 0,
@@ -294,8 +304,11 @@ export const EFFECT_CAP_MS = 5000;
  * and the call returns four places, each pad at its `index`. A pad fed with
  * `rumble: true` has a fake `vibrationActuator` that records every call in
  * `scope.__ponkoRumbleCalls` (`{kind: "play", index, type, duration,
- * strong, weak, at}`, `{kind: "reset", index, at}`, or `kind: "rejected"`
- * for an effect over the browser's cap, which a real one refuses). Self-contained,
+ * strong, weak, at}`, with `left` and `right` for a `trigger-rumble`;
+ * `{kind: "reset", index, at}`; or `kind: "rejected"` for an effect over
+ * the browser's cap or one the actuator doesn't list in its `effects`, which
+ * a real one refuses). With `triggerRumble: true` its `effects` are
+ * `["dual-rumble", "trigger-rumble"]`, else `["dual-rumble"]`. Self-contained,
  * so the runner can pass it to the page as it is.
  */
 export function installFakeGamepads(scope = globalThis) {
@@ -303,10 +316,13 @@ export function installFakeGamepads(scope = globalThis) {
   const calls = (scope.__ponkoRumbleCalls = []);
   const now = () => (scope.performance ? scope.performance.now() : Date.now());
   const actuators = new Map();
-  const actuator = (index) => {
-    if (!actuators.has(index)) {
-      actuators.set(index, {
+  const actuator = (index, triggers) => {
+    const key = `${index}:${triggers}`;
+    if (!actuators.has(key)) {
+      const effects = triggers ? ["dual-rumble", "trigger-rumble"] : ["dual-rumble"];
+      actuators.set(key, {
         type: "dual-rumble",
+        effects,
         playEffect(type, params) {
           const call = {
             index,
@@ -314,12 +330,13 @@ export function installFakeGamepads(scope = globalThis) {
             duration: params.duration,
             strong: params.strongMagnitude,
             weak: params.weakMagnitude,
+            ...(type === "trigger-rumble" ? { left: params.leftTrigger, right: params.rightTrigger } : {}),
             delay: params.startDelay,
             at: now(),
           };
-          if (type !== "dual-rumble" || !(params.duration <= 5000)) {
+          if (!effects.includes(type) || !(params.duration <= 5000)) {
             calls.push({ ...call, kind: "rejected" });
-            return Promise.reject(new TypeError("effect over the cap, or not dual-rumble"));
+            return Promise.reject(new TypeError("effect over the cap, or not one of the actuator's effects"));
           }
           calls.push({ ...call, kind: "play" });
           return Promise.resolve("complete");
@@ -330,15 +347,15 @@ export function installFakeGamepads(scope = globalThis) {
         },
       });
     }
-    return actuators.get(index);
+    return actuators.get(key);
   };
   scope.__ponkoFeedGamepads = (next) => {
     pads = next;
   };
   const list = () => {
     const places = [null, null, null, null];
-    for (const { rumble, ...pad } of pads) {
-      places[pad.index] = rumble ? { ...pad, vibrationActuator: actuator(pad.index) } : pad;
+    for (const { rumble, triggerRumble, ...pad } of pads) {
+      places[pad.index] = rumble ? { ...pad, vibrationActuator: actuator(pad.index, triggerRumble === true) } : pad;
     }
     return places;
   };
@@ -358,9 +375,15 @@ export const GAMEPAD_STEPS = [
   },
   {
     name: "buttons, sticks and a trigger",
-    // South, d-pad right, the left trigger a quarter in; left stick right and up.
+    // South, d-pad right, the left trigger a quarter in; left stick right and
+    // up (past the edge: as fed), right stick three quarters down. The dead
+    // zone (0.1, as gilrs's) rescales the right stick and the trigger.
     pads: [fakeGamepad({ buttons: { 0: 1, 15: 1, 6: 0.25 }, axes: [0.5, -1, 0, 0.75] })],
-    expect: { down: ["South", "DPadRight"], axes: { lx: 0.5, ly: -1, rx: 0, ry: 0.75, lt: 0.25, rt: 0 }, presses: 1 },
+    expect: {
+      down: ["South", "DPadRight"],
+      axes: { lx: 0.5, ly: -1, rx: 0, ry: deadZone(0.75), lt: deadZone(0.25), rt: 0 },
+      presses: 1,
+    },
   },
   {
     name: "everything let go",
@@ -370,12 +393,19 @@ export const GAMEPAD_STEPS = [
   { name: "the pad unplugged", pads: [], expect: null },
 ];
 
-/** How far an axis may be from the fed value on the ordinary build: gilrs applies its own dead zone and scaling. */
-export const GILRS_AXIS_TOLERANCE = 0.1;
+/**
+ * A value along one axis (the other at rest) as the engine reads it: the
+ * dead zone of `src/gamepad_web.rs` (0.1, gilrs's) taken out and the rest
+ * rescaled so full still reads 1. Hoisted, so GAMEPAD_STEPS can use it.
+ */
+export function deadZone(value, zone = 0.1) {
+  const magnitude = Math.min(Math.abs(value), 1);
+  return magnitude <= zone ? 0 : (Math.sign(value) * (magnitude - zone)) / (1 - zone);
+}
 
 /**
  * The problems with the fixture's state after a gamepad step; axes must be
- * within `tolerance` of the fed values (exact for the threaded backend).
+ * within `tolerance` of the expected values (the backend's f32 against these doubles).
  */
 export function checkGamepadStep(step, state, tolerance = 1e-6) {
   const pads = state?.pads ?? [];
@@ -390,6 +420,7 @@ export function checkGamepadStep(step, state, tolerance = 1e-6) {
   expect(pad.vendor === 0x045e && pad.product === 0x0b13, `the pad's ids are ${pad.vendor}:${pad.product}, not 0x045e:0x0b13`);
   const down = [...pad.down].sort().join(",");
   expect(pad.rumble === true, `the pad's rumble capability is ${pad.rumble}, not true (it has a vibrationActuator)`);
+  expect(pad.trigger_rumble === false, `the pad's trigger rumble capability is ${pad.trigger_rumble}, not false (its actuator has no trigger-rumble)`);
   expect(down === [...step.expect.down].sort().join(","), `buttons down: [${pad.down}], not [${step.expect.down}]`);
   for (const [axis, want] of Object.entries(step.expect.axes)) {
     expect(Math.abs((pad.axes?.[axis] ?? NaN) - want) < tolerance, `axis ${axis} is ${pad.axes?.[axis]}, not ${want}`);
@@ -432,6 +463,71 @@ export function checkRumbleCalls(calls) {
   if (last?.kind === "reset" && plays.length) {
     const lasted = (last.at - plays[0].at) / 1000;
     expect(lasted >= RUMBLE_SECONDS - 0.3 && lasted < RUMBLE_SECONDS + 3, `it stopped after ${lasted.toFixed(2)} s, not about ${RUMBLE_SECONDS} s`);
+  }
+  return problems;
+}
+
+/**
+ * The trigger rumble scenario: two pads, the first with an actuator that
+ * plays `trigger-rumble`, the second with one that plays `dual-rumble`
+ * only. North pressed on both makes the fixture ask each for
+ * `Rumble::new(0.0, 0.2).triggers(0.4, 0.9).seconds(1.5)`. The first must
+ * get `trigger-rumble` effects with all four levels, the second
+ * `dual-rumble` ones with the body motors alone (the trigger levels
+ * dropped, as on the desktop), each stopped at the end.
+ */
+export const TRIGGER_PAD_ID = "Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 09cc)";
+export const TRIGGER_PADS = (buttons = {}) => [
+  fakeGamepad({ index: 0, triggerRumble: true, buttons }),
+  fakeGamepad({ index: 1, id: TRIGGER_PAD_ID, buttons }),
+];
+export const TRIGGER_PRESS = { 3: 1 };
+export const TRIGGER_RUMBLE = { strong: 0, weak: 0.2, left: 0.4, right: 0.9, seconds: 1.5 };
+
+/** The problems with the pads' trigger capabilities as the fixture reports them. */
+export function checkTriggerCapabilities(state) {
+  const pads = state?.pads ?? [];
+  if (pads.length !== 2) return [`expected two pads, the engine sees ${pads.length}: ${JSON.stringify(pads)}`];
+  const problems = [];
+  const [first, second] = [...pads].sort((a, b) => a.slot - b.slot);
+  if (first.trigger_rumble !== true) problems.push(`the pad whose actuator plays trigger-rumble reports trigger_rumble ${first.trigger_rumble}`);
+  if (second.trigger_rumble !== false) problems.push(`the pad whose actuator doesn't reports trigger_rumble ${second.trigger_rumble}`);
+  if (first.rumble !== true || second.rumble !== true) problems.push(`both pads have actuators, rumble is ${first.rumble} and ${second.rumble}`);
+  return problems;
+}
+
+/** Whether both pads' trigger rumble has been stopped (the scenario is over). */
+export function triggerRumbleDone(calls) {
+  return [0, 1].every((index) => calls.some((c) => c.index === index && c.kind === "reset"));
+}
+
+export function checkTriggerRumbleCalls(calls) {
+  const problems = [];
+  const expect = (ok, what) => ok || problems.push(what);
+  const near = (a, b) => Math.abs(a - b) < 1e-6;
+  const want = TRIGGER_RUMBLE;
+  expect(!calls.some((c) => c.kind === "rejected"), `an actuator refused an effect: ${JSON.stringify(calls.filter((c) => c.kind === "rejected"))}`);
+  for (const [index, type] of [
+    [0, "trigger-rumble"],
+    [1, "dual-rumble"],
+  ]) {
+    const mine = calls.filter((c) => c.index === index);
+    const plays = mine.filter((c) => c.kind === "play");
+    expect(plays.length >= 1, `pad ${index} was never played`);
+    for (const c of plays) {
+      expect(c.type === type, `pad ${index} got a ${c.type} effect, not ${type}`);
+      expect(near(c.strong, want.strong) && near(c.weak, want.weak), `pad ${index}: body levels ${c.strong}/${c.weak}, not ${want.strong}/${want.weak}`);
+      if (type === "trigger-rumble") {
+        expect(near(c.left, want.left) && near(c.right, want.right), `pad ${index}: trigger levels ${c.left}/${c.right}, not ${want.left}/${want.right}`);
+      }
+      expect(c.duration > 0 && c.duration <= EFFECT_CAP_MS, `pad ${index}: an effect of ${c.duration} ms`);
+    }
+    const last = mine[mine.length - 1];
+    expect(last?.kind === "reset", `pad ${index}'s last call was ${last?.kind ?? "none"}, not the stop`);
+    if (last?.kind === "reset" && plays.length) {
+      const lasted = (last.at - plays[0].at) / 1000;
+      expect(lasted >= want.seconds - 0.3 && lasted < want.seconds + 3, `pad ${index} stopped after ${lasted.toFixed(2)} s, not about ${want.seconds} s`);
+    }
   }
   return problems;
 }

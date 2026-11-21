@@ -89,6 +89,13 @@ pub(crate) struct App {
     /// Whether Open and Save as use the system's file dialog; else they
     /// ask for the path in a field (web builds, and tests of them).
     pub(super) system_picker: bool,
+    /// Whether saves go to the browser's storage (web builds, and tests of
+    /// them): File > Download then hands over the file (`editor::web`).
+    pub(super) browser_storage: bool,
+    /// What Download handed over, as (asset name, bytes): where the
+    /// browser's download goes in native tests of the web editor.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) downloaded: Vec<(String, Vec<u8>)>,
     /// The window title set last, so it's only set when it changes.
     title: String,
     /// The game's own window title, read on the first frame (the window's
@@ -132,6 +139,7 @@ impl App {
             start: Some(start),
             prefs: super::prefs::Prefs::load(settings, project),
             system_picker: file_picker::ENABLED,
+            browser_storage: cfg!(target_arch = "wasm32"),
             ..Self::default()
         }
     }
@@ -354,7 +362,11 @@ impl Panels {
         let saved = ctx.edit(|ed, ctx| ed.save(ctx)).map_err(String::from);
         match self.report(saved) {
             Some(path) => {
-                self.status = Some(format!("saved {path}"));
+                self.status = Some(if self.browser_storage() {
+                    saved_in_browser(&path)
+                } else {
+                    format!("saved {path}")
+                });
                 self.scene.forget_assets();
                 self.prefabs = None;
                 true
@@ -377,6 +389,39 @@ impl Panels {
     /// `App::system_picker`).
     fn system_picker(&self) -> bool {
         self.app.as_ref().is_some_and(|app| app.system_picker)
+    }
+
+    /// Whether saves go to the browser's storage (see `App::browser_storage`).
+    fn browser_storage(&self) -> bool {
+        self.app.as_ref().is_some_and(|app| app.browser_storage)
+    }
+
+    /// File > Download (web builds): saves the document, then hands its
+    /// file to the person as a browser download.
+    fn download(&mut self, ctx: &mut Ctx) {
+        if !self.save(ctx) {
+            return;
+        }
+        let Some(path) = ctx.editor.doc.path.clone() else {
+            return;
+        };
+        let bytes = crate::assets::resolve(&path)
+            .and_then(|file| crate::assets::read(&file).map_err(|e| format!("could not read {path}: {e}")));
+        let Some(bytes) = self.report(bytes) else { return };
+        #[cfg(target_arch = "wasm32")]
+        let delivered = crate::editor::web::download(&path, &bytes);
+        #[cfg(not(target_arch = "wasm32"))]
+        let delivered: Result<(), String> = match self.app.as_mut() {
+            Some(app) => {
+                app.downloaded.push((path.clone(), bytes));
+                Ok(())
+            }
+            None => Err("no editor".into()),
+        };
+        if self.report(delivered).is_some() {
+            let file = crate::editor::web::download_name(&path);
+            self.status = Some(format!("downloading {file}"));
+        }
     }
 
     fn ask_open(&mut self, ctx: &Ctx) {
@@ -439,6 +484,16 @@ impl Panels {
                 }
                 if ui.button(self.labelled("Save as…", Action::SaveAs)).clicked() {
                     self.ask_save_as(ctx, false);
+                    ui.close();
+                }
+                if self.browser_storage()
+                    && ui
+                        .add_enabled(ctx.editor.doc.path.is_some(), Button::new("Download"))
+                        .on_hover_text("Save, then download the file: saves stay in this browser otherwise")
+                        .on_disabled_hover_text("Save it first")
+                        .clicked()
+                {
+                    self.download(ctx);
                     ui.close();
                 }
                 let selected = self.selected.is_some();
@@ -728,6 +783,9 @@ impl Panels {
                         } else if ui.button("Save").clicked() || (enter && !path.is_empty()) {
                             self.save_as(ctx, path, *kind);
                             if self.error.is_none() {
+                                if self.browser_storage() {
+                                    self.status = Some(saved_in_browser(path));
+                                }
                                 done = true;
                                 if *then_quit {
                                     ctx.quit();
@@ -825,17 +883,14 @@ fn path_field(ui: &mut Ui, path: &mut String) {
     }
 }
 
-/// Whether asset file `path` exists.
+/// The status line after a save to the browser's storage.
+fn saved_in_browser(path: &str) -> String {
+    format!("saved {path} in this browser (File > Download for the file)")
+}
+
+/// Whether asset file `path` exists (on the web: was fetched or saved).
 fn exists(path: &str) -> bool {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        crate::assets::resolve(path).is_ok()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = path;
-        false
-    }
+    crate::assets::resolve(path).is_ok()
 }
 
 #[cfg(test)]
@@ -1030,10 +1085,13 @@ mod tests {
         assert!(!asked);
     }
 
-    /// The editor as the web build has it: no system file dialog.
+    /// The editor as the web build has it: no system file dialog, and
+    /// saves kept in the browser.
     fn web_editor() -> (egui::Context, Panels, Ctx) {
         let (egui, mut p, ctx) = editor(None);
-        p.app.as_mut().unwrap().system_picker = false;
+        let app = p.app.as_mut().unwrap();
+        app.system_picker = false;
+        app.browser_storage = true;
         (egui, p, ctx)
     }
 
@@ -1359,6 +1417,110 @@ mod tests {
         answer_path_field(&egui, &mut p, &mut ctx, Some("no-such-scene.json"));
         assert!(p.error.is_some(), "a missing file is reported");
         assert!(ctx.editor.doc.path.is_none());
+    }
+
+    #[test]
+    fn the_web_editor_lists_its_file_manifest_in_open_and_the_asset_panel() {
+        // What a web build fetched from the names in `assets/index.json`.
+        let index = r#"["index.json", "levels/one.json", "notes/todo.json", "prefabs/crate.json",
+            "sprites/hero.png", ".cache/x.png"]"#;
+        let files: std::collections::HashMap<&str, &[u8]> = [
+            ("levels/one.json", &br#"{"format":"ponko-world","entities":[]}"#[..]),
+            ("notes/todo.json", br#"{"todo":[]}"#),
+            ("prefabs/crate.json", br#"{"format":"ponko-prefab","components":{}}"#),
+            ("sprites/hero.png", b"png"),
+        ]
+        .into();
+        let names: Vec<String> = serde_json::from_str(index).unwrap();
+        let read = |name: &str| files.get(name).map(|b| b.to_vec());
+        let list = crate::editor::browse_names(names.iter().map(String::as_str), read);
+        assert_eq!(list.scenes, ["levels/one.json"]);
+        assert_eq!(list.prefabs, ["prefabs/crate.json"]);
+        assert_eq!(list.textures, ["sprites/hero.png"], "hidden files are left out");
+
+        let (egui, mut p, mut ctx) = web_editor();
+        p.scene.assets = Some(list);
+        let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+        assert!(
+            shown.iter().any(|t| t == "3 of 3"),
+            "the asset panel lists them: {shown:?}"
+        );
+        for shown_too in ["levels/", "one.json", "crate.json", "hero.png"] {
+            assert!(
+                shown.iter().any(|t| t == shown_too),
+                "{shown_too} is in the panel: {shown:?}"
+            );
+        }
+
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
+        let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+        for listed in ["levels/one.json", "prefabs/crate.json"] {
+            assert!(shown.iter().any(|t| t == listed), "Open lists {listed}: {shown:?}");
+        }
+        assert!(!shown.iter().any(|t| t == "notes/todo.json"), "not a scene or prefab");
+        click_text(&egui, &mut p, &mut ctx, |t| t == "levels/one.json");
+        assert_eq!(
+            p.dialog(),
+            Some(&Dialog::Open {
+                path: "levels/one.json".into()
+            }),
+            "a click puts it in the path field"
+        );
+    }
+
+    #[test]
+    fn the_web_editor_saves_in_the_browser_and_download_hands_over_the_file() {
+        let file = TempAsset::new("web-download");
+        let (egui, mut p, mut ctx) = web_editor();
+        let e = the_entity(&mut ctx);
+        ctx.edit(|ed, ctx| ed.rename(ctx, e, "Kept")).unwrap();
+
+        // Untitled: Download waits for a file name.
+        click_text(&egui, &mut p, &mut ctx, |t| t == "File");
+        let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+        assert!(shown.iter().any(|t| t == "Download"), "{shown:?}");
+        click_text(&egui, &mut p, &mut ctx, |t| t == "Download");
+        assert!(
+            p.app.as_ref().unwrap().downloaded.is_empty(),
+            "nothing saved to download yet"
+        );
+        frame(&egui, &mut p, &mut ctx, vec![plain(Key::Escape)]);
+
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::S)]);
+        answer_path_field(&egui, &mut p, &mut ctx, Some(&file.name));
+        assert!(p.error.is_none(), "{:?}", p.error);
+        let status = p.status.clone().unwrap_or_default();
+        assert!(
+            status.contains("in this browser"),
+            "the status says where it went: {status}"
+        );
+
+        // A change, then Download: it saves first, then hands over that file.
+        ctx.edit(|ed, ctx| ed.rename(ctx, e, "Downloaded")).unwrap();
+        click_text(&egui, &mut p, &mut ctx, |t| t == "File");
+        click_text(&egui, &mut p, &mut ctx, |t| t == "Download");
+        assert!(p.error.is_none(), "{:?}", p.error);
+        assert!(!ctx.editor.dirty(), "Download saved the change");
+        let downloaded = std::mem::take(&mut p.app.as_mut().unwrap().downloaded);
+        assert_eq!(downloaded.len(), 1);
+        let (name, bytes) = &downloaded[0];
+        assert_eq!(name, &file.name);
+        assert_eq!(bytes, &std::fs::read(&file.file).unwrap(), "the saved file's bytes");
+        let text = String::from_utf8_lossy(bytes);
+        assert!(text.contains("ponko-world") && text.contains("Downloaded"), "{text}");
+        assert_eq!(p.status.as_deref(), Some(format!("downloading {}", file.name).as_str()));
+    }
+
+    #[test]
+    fn the_desktop_editor_has_no_download() {
+        let (egui, mut p, mut ctx) = editor(None);
+        click_text(&egui, &mut p, &mut ctx, |t| t == "File");
+        let shown = texts(&drawn(&egui, &mut p, &mut ctx, vec![]));
+        assert!(
+            shown.iter().any(|t| t.starts_with("Save as")),
+            "the menu is open: {shown:?}"
+        );
+        assert!(!shown.iter().any(|t| t == "Download"), "{shown:?}");
     }
 
     #[test]

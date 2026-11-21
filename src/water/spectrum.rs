@@ -27,6 +27,18 @@ use rustfft::{Fft, FftPlanner};
 
 use super::waves::{WAVE_GRAVITY, WaveSample};
 
+// rustfft's WASM SIMD code alone made a new moment three times slower in
+// Chromium (its SIMD functions can't be inlined into callers built
+// without `simd128`); with `simd128` everywhere it is 1.4 to 1.6 times
+// faster (book/src/water.md, "Waves from a spectrum"). So the feature
+// asks for both.
+#[cfg(all(feature = "wasm-simd", target_arch = "wasm32", not(target_feature = "simd128")))]
+compile_error!(
+    "the `wasm-simd` feature needs the whole build compiled with SIMD: set \
+     CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS=\"-C target-feature=+simd128\" \
+     (or add it to RUSTFLAGS), or leave the feature off"
+);
+
 /// The longest the waves take to repeat, in seconds: every wave's speed is
 /// rounded to a whole number of turns in it, so the sea loops seamlessly
 /// and the shader's phases stay small however long the game runs.
