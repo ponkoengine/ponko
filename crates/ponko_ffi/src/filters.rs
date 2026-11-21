@@ -123,6 +123,10 @@ unsafe fn copy_parts(parts: *const *const PonkoFilter, count: usize) -> Result<V
 /// query uses the filter.
 ///
 /// Rust: `With<T>`.
+///
+/// Ownership: the returned filter is the caller's (null on failure); free it
+/// with ponko_filter_free.
+///
 /// ```
 /// unsafe { ponko_ffi::ponko_filter_free(ponko_ffi::ponko_filter_with(7)) };
 /// ```
@@ -135,6 +139,10 @@ pub extern "C" fn ponko_filter_with(component: u32) -> *mut PonkoFilter {
 /// Null on failure.
 ///
 /// Rust: `Without<T>`.
+///
+/// Ownership: the returned filter is the caller's (null on failure); free it
+/// with ponko_filter_free.
+///
 /// ```
 /// unsafe { ponko_ffi::ponko_filter_free(ponko_ffi::ponko_filter_without(7)) };
 /// ```
@@ -146,6 +154,10 @@ pub extern "C" fn ponko_filter_without(component: u32) -> *mut PonkoFilter {
 /// A filter that holds for every entity: no condition. Null on failure.
 ///
 /// Rust: `()`, the empty tuple.
+///
+/// Ownership: the returned filter is the caller's (null on failure); free it
+/// with ponko_filter_free.
+///
 /// ```
 /// unsafe { ponko_ffi::ponko_filter_free(ponko_ffi::ponko_filter_always()) };
 /// ```
@@ -157,6 +169,10 @@ pub extern "C" fn ponko_filter_always() -> *mut PonkoFilter {
 /// A filter that holds for no entity: an `any` of nothing. Null on failure.
 ///
 /// Rust: `Or<()>`.
+///
+/// Ownership: the returned filter is the caller's (null on failure); free it
+/// with ponko_filter_free.
+///
 /// ```
 /// unsafe { ponko_ffi::ponko_filter_free(ponko_ffi::ponko_filter_never()) };
 /// ```
@@ -174,6 +190,10 @@ pub extern "C" fn ponko_filter_never() -> *mut PonkoFilter {
 /// component match nothing, as for the Rust tuple.
 ///
 /// Rust: a tuple of filters, `(A, B)`.
+///
+/// Ownership: the returned filter is the caller's (null on failure); free it
+/// with ponko_filter_free. The parts stay the caller's (they are copied).
+///
 /// ```
 /// use ponko_ffi::*;
 /// unsafe {
@@ -209,6 +229,10 @@ pub unsafe extern "C" fn ponko_filter_all(parts: *const *const PonkoFilter, coun
 /// and `ponko_filter_check` report a filter over the limits.
 ///
 /// Rust: `Or<(A, B)>`.
+///
+/// Ownership: the returned filter is the caller's (null on failure); free it
+/// with ponko_filter_free. The parts stay the caller's (they are copied).
+///
 /// ```
 /// use ponko_ffi::*;
 /// unsafe {
@@ -279,6 +303,10 @@ pub unsafe extern "C" fn ponko_filter_check(world: *mut PonkoWorld, filter: *con
 /// over the limits (see `ponko_filter_any`).
 ///
 /// Rust: `world.query::<(..)>().filter::<F>()`.
+///
+/// Ownership: `user` stays the caller's and is only passed to `callback` during
+/// this call; the engine keeps no pointer to it after returning.
+///
 /// ```
 /// use ponko_ffi::*;
 /// unsafe extern "C" fn count(chunk: *const PonkoChunk, user: *mut std::ffi::c_void) {

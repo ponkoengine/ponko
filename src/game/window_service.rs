@@ -7,6 +7,7 @@ use glam::{IVec2, UVec2};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 use winit::{
     dpi::{LogicalSize, PhysicalPosition},
+    monitor::MonitorHandle,
     window::{CursorGrabMode, Fullscreen, Window, WindowLevel},
 };
 
@@ -36,25 +37,64 @@ impl Backend {
     }
     fn fullscreen(&self, mode: &WindowMode) -> Result<Option<Fullscreen>, Error> {
         let monitors: Vec<_> = self.window.available_monitors().collect();
-        Ok(match mode {
-            WindowMode::Windowed => None,
-            WindowMode::Borderless(None) => Some(Fullscreen::Borderless(None)),
-            WindowMode::Borderless(Some(i)) => Some(Fullscreen::Borderless(Some(
-                monitors.get(*i).ok_or_else(|| Error::new(ErrorKind::NotFound,"cannot switch fullscreen: monitor disconnected; refresh monitors and select a connected display"))?.clone(),
-            ))),
-            WindowMode::Exclusive(i, m) => {
-                if cfg!(target_arch = "wasm32") {
-                    return Err(unsupported("cannot switch exclusive fullscreen on web; choose borderless from a user gesture"));
-                }
-                let monitor = monitors.get(*i).ok_or_else(|| Error::new(ErrorKind::NotFound,"cannot switch fullscreen: monitor disconnected; refresh monitors and select a connected display"))?;
-                let found = monitor
-                    .video_modes()
-                    .find(|v| video(v) == *m)
-                    .ok_or_else(|| Error::new(ErrorKind::NotFound,"cannot switch exclusive mode: mode is gone; refresh the video mode list and select an advertised mode"))?;
-                Some(Fullscreen::Exclusive(found))
-            }
-        })
+        fullscreen_on(&monitors, mode)
     }
+}
+/// The winit fullscreen state for `mode` on these monitors.
+pub(super) fn fullscreen_on(monitors: &[MonitorHandle], mode: &WindowMode) -> Result<Option<Fullscreen>, Error> {
+    Ok(match mode {
+        WindowMode::Windowed => None,
+        WindowMode::Borderless(None) => Some(Fullscreen::Borderless(None)),
+        WindowMode::Borderless(Some(i)) => Some(Fullscreen::Borderless(Some(
+            monitors.get(*i).ok_or_else(|| Error::new(ErrorKind::NotFound,"cannot switch fullscreen: monitor disconnected; refresh monitors and select a connected display"))?.clone(),
+        ))),
+        WindowMode::Exclusive(i, m) => {
+            if cfg!(target_arch = "wasm32") {
+                return Err(unsupported("cannot switch exclusive fullscreen on web; choose borderless from a user gesture"));
+            }
+            let monitor = monitors.get(*i).ok_or_else(|| Error::new(ErrorKind::NotFound,"cannot switch fullscreen: monitor disconnected; refresh monitors and select a connected display"))?;
+            let found = monitor
+                .video_modes()
+                .find(|v| video(v) == *m)
+                .ok_or_else(|| Error::new(ErrorKind::NotFound,"cannot switch exclusive mode: mode is gone; refresh the video mode list and select an advertised mode"))?;
+            Some(Fullscreen::Exclusive(found))
+        }
+    })
+}
+/// A connected display as the window service reports it.
+pub(super) fn monitor_info(m: &MonitorHandle) -> Monitor {
+    Monitor {
+        name: m.name(),
+        position: IVec2::new(m.position().x, m.position().y),
+        size: UVec2::new(m.size().width, m.size().height),
+        scale_factor: m.scale_factor() as f32,
+        refresh_millihertz: m.refresh_rate_millihertz(),
+        modes: m.video_modes().map(|v| video(&v)).collect(),
+    }
+}
+/// The attributes the first window is created with, so it opens with
+/// `settings` (its title is set by the caller) instead of being changed after
+/// it is shown. `fullscreen` is `settings.mode` resolved on the monitors.
+/// Desktop only: the web's canvas is sized by the page.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn first_window_attributes(
+    attributes: winit::window::WindowAttributes,
+    settings: &WindowSettings,
+    fullscreen: Option<Fullscreen>,
+) -> winit::window::WindowAttributes {
+    let logical = |v: glam::Vec2| LogicalSize::new(v.x, v.y);
+    let mut attributes = attributes.with_inner_size(logical(settings.size));
+    attributes.min_inner_size = settings.min_size.map(|v| logical(v).into());
+    attributes.max_inner_size = settings.max_size.map(|v| logical(v).into());
+    attributes.position = settings.position.map(|p| PhysicalPosition::new(p.x, p.y).into());
+    attributes
+        .with_fullscreen(fullscreen)
+        .with_decorations(settings.decorations)
+        .with_window_level(if settings.always_on_top {
+            WindowLevel::AlwaysOnTop
+        } else {
+            WindowLevel::Normal
+        })
 }
 fn video(v: &winit::monitor::VideoModeHandle) -> VideoMode {
     VideoMode {
@@ -188,17 +228,7 @@ impl WindowBackend for Backend {
         }
     }
     fn monitors(&self) -> Vec<Monitor> {
-        self.window
-            .available_monitors()
-            .map(|m| Monitor {
-                name: m.name(),
-                position: IVec2::new(m.position().x, m.position().y),
-                size: UVec2::new(m.size().width, m.size().height),
-                scale_factor: m.scale_factor() as f32,
-                refresh_millihertz: m.refresh_rate_millihertz(),
-                modes: m.video_modes().map(|v| video(&v)).collect(),
-            })
-            .collect()
+        self.window.available_monitors().map(|m| monitor_info(&m)).collect()
     }
     fn clipboard_read(&mut self) -> Result<Option<String>, Error> {
         #[cfg(not(target_arch = "wasm32"))]
@@ -283,4 +313,47 @@ fn clipboard_error(e: arboard::Error) -> Error {
     unsupported(format!(
         "cannot access clipboard: {e}; ensure a desktop clipboard is available, allow access and retry"
     ))
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use winit::dpi::{Position, Size};
+
+    #[test]
+    fn first_window_is_created_with_the_restored_settings_and_shown_as_is() {
+        let s = WindowSettings {
+            size: glam::Vec2::new(1280.0, 720.0),
+            position: Some(IVec2::new(40, -60)),
+            min_size: Some(glam::Vec2::new(320.0, 240.0)),
+            max_size: Some(glam::Vec2::new(2000.0, 1500.0)),
+            always_on_top: true,
+            decorations: false,
+            ..Default::default()
+        };
+        let a = first_window_attributes(Window::default_attributes(), &s, Some(Fullscreen::Borderless(None)));
+        assert_eq!(a.inner_size, Some(Size::Logical(LogicalSize::new(1280.0, 720.0))));
+        assert_eq!(a.min_inner_size, Some(Size::Logical(LogicalSize::new(320.0, 240.0))));
+        assert_eq!(a.max_inner_size, Some(Size::Logical(LogicalSize::new(2000.0, 1500.0))));
+        assert_eq!(a.position, Some(Position::Physical(PhysicalPosition::new(40, -60))));
+        assert_eq!(a.fullscreen, Some(Fullscreen::Borderless(None)));
+        assert_eq!(a.window_level, WindowLevel::AlwaysOnTop);
+        assert!(!a.decorations);
+        // Nothing is changed after the window appears, so it isn't hidden either.
+        assert!(a.visible);
+    }
+
+    #[test]
+    fn first_window_without_saved_settings_matches_the_game_defaults() {
+        let s = WindowSettings::default();
+        let a = first_window_attributes(Window::default_attributes(), &s, None);
+        let plain = Window::default_attributes();
+        assert_eq!(a.inner_size, Some(Size::Logical(LogicalSize::new(800.0, 600.0))));
+        assert_eq!(a.position, plain.position);
+        assert_eq!(a.min_inner_size, plain.min_inner_size);
+        assert_eq!(a.max_inner_size, plain.max_inner_size);
+        assert_eq!(a.fullscreen, None);
+        assert_eq!(a.window_level, plain.window_level);
+        assert_eq!(a.decorations, plain.decorations);
+    }
 }

@@ -20,6 +20,16 @@ add_library(ponko_ffi INTERFACE)
 target_include_directories(ponko_ffi INTERFACE "${PONKO_INCLUDE_DIR}")
 target_link_libraries(ponko_ffi INTERFACE "${PONKO_LIBRARY}")
 set(CMAKE_BUILD_RPATH "${PONKO_LIBRARY_DIR}")
+# AddressSanitizer and UndefinedBehaviorSanitizer on the C and C++ programs
+# (Clang or GCC): -DPONKO_SANITIZE=ON. Every heap block the library hands out
+# comes from the C allocator, so ASan also checks the Rust side's frees and
+# double frees of what the programs own. The command list is in
+# CONTRIBUTING.md, "Unsafe code and sanitizers".
+option(PONKO_SANITIZE "Build the programs with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if(PONKO_SANITIZE AND NOT MSVC)
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+endif()
 function(ponko_native target source)
     add_executable(${target} ${source})
     target_link_libraries(${target} PRIVATE ponko_ffi)

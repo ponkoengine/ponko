@@ -459,6 +459,7 @@ binding arrives:
 | `SaveFormat`, `Storage::save_world_in_background` | [Saves and settings](storage.md#large-worlds) | Not bound yet: save slots are JSON, written on the game's thread by `ponko_ctx_save_world`; `ponko_ctx_load_world` reads binary slots too |
 | `UiAccessAdapter::for_ns_view` | [Retained game UI](ui.md#the-screen-reader-adapter) | It needs a Rust `Ui`; the engine's own window gets the adapter, and `ponko_ui_access_*` give a snapshot for one of your own |
 | `Buoyancy::points` | [Water](water.md#floating-bodies) | Custom sample points, water density and the ripple switch aren't bound: C floats boxes and spheres (`ponko_ctx_set_buoyancy_box`, `_sphere`) in fresh water |
+| `Waves::spectrum`, `WaveSpectrum` | [Water](water.md#waves-from-a-spectrum) | Seas from C use the Gerstner waves of `PonkoWaterDesc` |
 | `NavObstacleShape` | [3D navigation meshes](navigation3d.md#obstacle-shapes) | Obstacles are unturned boxes: `ponko_ctx_set_nav_obstacle` and `ponko_ctx_set_nav_carve_obstacle` |
 | `SkyShader` | [A sky of your own](3d.md#a-sky-of-your-own) | The built-in atmosphere or the flat sky (`PonkoSky`); sky shaders have no C binding yet |
 | `SkyKit` | [The sky kit](3d.md#the-sky-kit) | The built-in atmosphere (`PonkoSky`), without clouds or a moon; the kit has no C binding yet |
@@ -488,6 +489,7 @@ binding arrives:
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
 | `Video` | [Video](video.md#c-and-c) | Not bound yet: decode with a library of the game's own and show the frames with `ponko_ctx_update_texture` |
+| `Game::restore_window_settings` | [Window service](window.md#remember-the-players-choice) | Call `ponko_ctx_window_restore_settings` in setup; the window can show at its default size for a moment first |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in

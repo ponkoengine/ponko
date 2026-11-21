@@ -177,11 +177,21 @@ a version table, and an `AGENTS.md`. It depends on the engine with
 ## The companion plugins repository
 
 Plugins the project maintains outside the engine live in a companion
-repository of their own. Its crates are made with `ponko new --plugin`
-(`--git` pointing at the engine, or the released version), follow the
-naming and versioning rules above with the `ponko_` prefix, and keep the
-template's tests: headless runs, and the duplicate check. A new engine
-minor is a new minor of each of its crates.
+repository of their own,
+[ponko-plugins](https://gitlab.com/ponkoengine/ponko-plugins): a Cargo
+workspace with one crate per plugin in `crates/`. Its crates are made with
+`ponko new --plugin` (`--git` pointing at the engine, or the released
+version), follow the naming and versioning rules above with the `ponko_`
+prefix, and keep the template's tests: headless runs, and the duplicate
+check. A new engine minor is a new minor of each of its crates. Its first
+crate, `ponko_pulse`, is the template's own plugin, kept so every check
+builds the template against the engine.
+
+Until the engine is on crates.io, its crates build against an engine
+checkout beside it (`../ponko`, on `main`). Its README lists the steps to
+add a plugin; `scripts/check.sh` there checks each crate's layout (the
+name, the workspace's engine dependency, a README with a versions table,
+headless tests), then formatting, clippy and the tests.
 
 ## From C and C++
 

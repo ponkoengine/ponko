@@ -223,3 +223,62 @@ fn restart_with_a_missing_mode_falls_back_and_valid_settings_restore() {
     });
     std::fs::remove_dir_all(dir).unwrap();
 }
+#[test]
+fn restore_window_settings_starts_with_the_saved_choice_before_setup() {
+    let dir = std::env::temp_dir().join(format!("ponko-window-startup-{}", std::process::id()));
+    Game::new("settings", 800, 600).data_dir(&dir).run_headless(0, |ctx| {
+        ctx.window.set_size(Vec2::new(1024.0, 768.0)).unwrap();
+        ctx.window.set_position(IVec2::new(30, 40)).unwrap();
+        ctx.window.set_decorations(false).unwrap();
+        ctx.window.save_settings(&mut ctx.storage).unwrap();
+    });
+    Game::new("new title", 800, 600)
+        .data_dir(&dir)
+        .fullscreen(true)
+        .restore_window_settings(true)
+        .run_headless(0, |ctx| {
+            let s = ctx.window.settings();
+            assert_eq!(s.size, Vec2::new(1024.0, 768.0));
+            assert_eq!(s.position, Some(IVec2::new(30, 40)));
+            assert!(!s.decorations);
+            // The player's saved windowed choice wins over `fullscreen(true)`;
+            // the title stays the game's.
+            assert_eq!(s.mode, WindowMode::Windowed);
+            assert_eq!(s.title, "new title");
+            assert_eq!(ctx.window_size(), Vec2::new(1024.0, 768.0));
+        });
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
+fn restore_window_settings_is_off_by_default_and_harmless_without_a_file() {
+    let dir = std::env::temp_dir().join(format!("ponko-window-startup-off-{}", std::process::id()));
+    Game::new("settings", 800, 600).data_dir(&dir).run_headless(0, |ctx| {
+        ctx.window.set_size(Vec2::new(1024.0, 768.0)).unwrap();
+        ctx.window.save_settings(&mut ctx.storage).unwrap();
+    });
+    Game::new("settings", 800, 600).data_dir(&dir).run_headless(0, |ctx| {
+        assert_ne!(ctx.window.settings().size, Vec2::new(1024.0, 768.0));
+        assert_eq!(ctx.window_size(), Vec2::new(800.0, 600.0));
+    });
+    std::fs::remove_dir_all(&dir).unwrap();
+    // No file and no storage at all: the game's own size.
+    Game::new("settings", 640, 480)
+        .data_dir(&dir)
+        .restore_window_settings(true)
+        .run_headless(0, |ctx| assert_eq!(ctx.window.settings().size, Vec2::new(640.0, 480.0)));
+    Game::new("settings", 640, 480)
+        .restore_window_settings(true)
+        .run_headless(0, |ctx| assert_eq!(ctx.window.settings().size, Vec2::new(640.0, 480.0)));
+    let _ = std::fs::remove_dir_all(dir);
+}
+#[test]
+fn restore_window_settings_with_an_unusable_game_size_still_starts() {
+    let dir = std::env::temp_dir().join(format!("ponko-window-startup-zero-{}", std::process::id()));
+    let mut ran = false;
+    Game::new("zero", 0, 0)
+        .data_dir(&dir)
+        .restore_window_settings(true)
+        .run_headless(0, |_| ran = true);
+    assert!(ran);
+    let _ = std::fs::remove_dir_all(dir);
+}

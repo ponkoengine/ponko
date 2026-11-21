@@ -47,6 +47,10 @@ pub struct PonkoFlowView {
 /// Makes a `width` x `height` grid of normal ground with cells `cell_size`
 /// world units wide. Returns null (see `ponko_last_error`) if a side is 0,
 /// it has more than 2^28 cells, or `cell_size` isn't positive.
+///
+/// Ownership: the returned grid is the caller's (null on failure); free it with
+/// ponko_nav_free.
+///
 /// ```
 /// let nav = ponko_ffi::ponko_nav_new(16, 16, 8.0);
 /// assert!(!nav.is_null());
@@ -111,6 +115,10 @@ pub unsafe extern "C" fn ponko_nav_set_origin(nav: *mut PonkoNavGrid, origin: Po
 
 /// The grid's costs, row by row (`width * height` bytes), writable in place.
 /// Valid until the grid is freed.
+///
+/// Ownership: `out_costs` receives a view of bytes the grid owns (writable in
+/// place), valid until the grid is freed; never free it.
+///
 /// ```
 /// use ponko_ffi::*;
 /// let nav = ponko_nav_new(4, 2, 1.0);
@@ -145,6 +153,10 @@ pub unsafe extern "C" fn ponko_nav_costs(
 }
 
 /// An empty flow field (every direction zero until computed).
+///
+/// Ownership: the returned flow field is the caller's (null on failure); free
+/// it with ponko_flow_free.
+///
 /// ```
 /// let f = ponko_ffi::ponko_flow_new();
 /// unsafe { ponko_ffi::ponko_flow_free(f); }

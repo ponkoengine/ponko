@@ -156,6 +156,8 @@ The checks that go with a feature are in the same file:
 | `editor`, `video`, `lobby`, `webrtc` and the others, linted and tested | `clippy` matrix; `test-features` steps "Tests, editor", "Tests, video", "Tests, lobby client and WebRTC endpoints" |
 | The C and C++ test programs against a library with `webrtc` | `native`: `--features control-env,webrtc` with `-DPONKO_WEBRTC=ON` |
 | The ECS hooks and required components under Miri (Tree Borrows) | `miri`, "par_for_each, tree borrows" |
+| The engine's unsafe code under Miri (the `miri` tests of `scripts/unsafe-inventory.txt`) | `miri`, "engine unsafe code, tree borrows" |
+| The C and C++ test programs and the `ponko_ffi` tests under AddressSanitizer and UndefinedBehaviorSanitizer | `sanitizers` |
 | The threaded web build and its fallback without the isolation headers | `web-smoke`: `web/smoke/threads.mjs` |
 | Browser multiplayer and replication | `web-smoke`: `web/smoke/multiplayer.mjs`, `web/smoke/replication.mjs` |
 
@@ -172,6 +174,65 @@ features or to ci.yml:
 ```sh
 python3 scripts/check-feature-coverage.py
 python3 scripts/check-feature-coverage.py --selftest
+```
+
+### Unsafe code and sanitizers
+
+Every `unsafe` block needs a test that runs it. Outside the ECS (which has
+its own Miri jobs, in AGENTS.md) the list is
+[scripts/unsafe-inventory.txt](scripts/unsafe-inventory.txt): each item with
+unsafe code (`function`, `Type::method`, `impl Send for Type`), the test that
+runs it, and whether that test runs under Miri or why not (a GPU, a C
+library, signals or sockets, another platform). The C API crate's helpers need
+no line when a tested C function reaches them: the script finds that test.
+
+```sh
+python3 scripts/check-unsafe.py            # every unsafe item has a test
+python3 scripts/check-unsafe.py --list     # each item and its test
+python3 scripts/check-ffi-ownership.py     # every C pointer's owner is said
+```
+
+`check-unsafe.py` fails for unsafe code without a line, and prints the line to
+add; write the test first. If you touched unsafe code outside the ECS, run its
+Miri tests, one command per test target (`--miri` prints them from the list):
+
+```sh
+python3 scripts/check-unsafe.py --miri | while read -r line; do
+  MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-ignore-leaks" bash -c "$line" || break
+done
+rm -rf target/miri
+```
+
+Every C function says who owns each pointer it takes or returns. Most follow
+the rules at the top of `include/ponko.h` ("Pointers and who owns them"),
+decided by the parameter's type: a `Ponko*` object is borrowed for the call,
+a `const` pointer is read during the call only, any other pointer is the
+caller's memory the call writes. A returned pointer, a `T **out`, callback
+user data and an object the function takes over need an `Ownership:`
+paragraph in the function's doc comment; `check-ffi-ownership.py` fails for a
+function without one and says what to write.
+
+If you touched `crates/ponko_ffi`, `include/` or `examples/cpp`, run the C
+API under AddressSanitizer and UndefinedBehaviorSanitizer (checked on macOS
+on Apple silicon; on Linux use the `x86_64-unknown-linux-gnu` target). The
+C and C++ test programs, built with both sanitizers against a debug library:
+
+```sh
+cargo build -p ponko_ffi --features control-env,webrtc
+cmake -S examples/cpp -B target/native-asan -DCMAKE_BUILD_TYPE=Debug \
+  -DPONKO_SANITIZE=ON -DPONKO_WEBRTC=ON -DPONKO_LIBRARY_DIR="$PWD/target/debug"
+cmake --build target/native-asan
+ASAN_OPTIONS=detect_container_overflow=0 UBSAN_OPTIONS=print_stacktrace=1 \
+  ctest --test-dir target/native-asan --output-on-failure
+```
+
+and the `ponko_ffi` tests, the Rust side built with AddressSanitizer (Rust
+has no separate UB sanitizer; its UB checks are Miri's):
+
+```sh
+RUSTFLAGS="-Zsanitizer=address" RUSTDOCFLAGS="-Zsanitizer=address" \
+  cargo +nightly test -p ponko_ffi --target aarch64-apple-darwin --tests
+rm -rf target/native-asan target/aarch64-apple-darwin
 ```
 
 ### Performance changes

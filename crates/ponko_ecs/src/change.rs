@@ -44,7 +44,7 @@ use std::marker::PhantomData;
 use crate::bundle::Component;
 use crate::entity::Entity;
 use crate::query::{Filters, OrTerm, QueryCache, QueryData, QueryFilter};
-use crate::storage::{Archetype, CHANGE_BLOCK, ComponentId, ComponentInfo, Stamps};
+use crate::storage::{Archetype, CHANGE_BLOCK, ComponentId, Stamps};
 use crate::view::SharedFilters;
 use crate::world::{Chunk, World};
 
@@ -241,17 +241,14 @@ impl Changes {
         }
     }
 
-    /// Logs that `e`, row `row` of `arch`, is being despawned, and sets
-    /// the block summary of `row` to now in its tracked columns: the last
-    /// row's stamps move there next.
+    /// The change-detection half of despawning `e`, row `row` of tracked
+    /// archetype `arch`, before its values are swap-removed: logs the
+    /// removal of each tracked component and moves the last row's stamps
+    /// into `row` ([`Archetype::despawn_stamps`]), in one pass.
     #[cold]
-    pub(crate) fn log_despawn(&mut self, infos: &[ComponentInfo], arch: &Archetype, e: Entity, row: usize) {
-        for (col, &id) in arch.component_ids().iter().enumerate() {
-            if infos[id.index()].tracked {
-                self.log_removal(id, e);
-                arch.summarize(col, row, self.stamp());
-            }
-        }
+    pub(crate) fn log_despawn(&mut self, arch: &Archetype, e: Entity, row: usize) {
+        let now = self.stamp();
+        arch.despawn_stamps(row, now, |id| self.log_removal(id, e));
     }
 }
 
@@ -1197,6 +1194,44 @@ mod tests {
         assert_eq!(changed(&mut world, seen), [2000]);
         world.skip_change_ticks(AGE_EVERY);
         assert_eq!(changed(&mut world, seen), [2000]);
+    }
+
+    /// The block summary of `pos`'s column in the archetype of `e`, for
+    /// block `block`.
+    fn block_summary(world: &World, e: Entity, block: usize) -> u32 {
+        let pos = world.component_id::<Pos>().unwrap();
+        let loc = world.entities.get(e).unwrap();
+        let arch = &world.archetypes_inner()[loc.archetype as usize];
+        let stamps = arch.read_stamps(pos, false).unwrap();
+        assert!(block < crate::storage::blocks(arch.len()));
+        // SAFETY: a tracked column has a summary stamp for every block of
+        // its live rows.
+        unsafe { stamps.blocks.add(block).read() }
+    }
+
+    #[test]
+    fn a_despawn_leaves_the_summary_of_a_still_block_as_it_was() {
+        let mut world = World::new();
+        world.track_changes::<Pos>();
+        let es: Vec<_> = (0..3 * CHANGE_BLOCK as u32).map(|i| world.spawn((Pos(i),))).collect();
+        let spawned = world.changes.stamp();
+        let seen = world.advance_change_tick();
+        world.advance_change_tick();
+        // The last row, as still as row 3, moves into row 3 (block 0).
+        world.despawn(es[3]);
+        assert_eq!(
+            block_summary(&world, es[0], 0),
+            spawned,
+            "block 0 stays as new as its rows"
+        );
+        assert_eq!(changed(&mut world, seen), []);
+        // A row changed since moves in: the block covers its stamp.
+        let before = world.advance_change_tick();
+        world.get_mut::<Pos>(es[es.len() - 2]).unwrap().0 = 1000;
+        let written = world.changes.stamp();
+        world.despawn(es[4]);
+        assert_eq!(block_summary(&world, es[0], 0), written);
+        assert_eq!(changed(&mut world, before), [1000]);
     }
 
     #[test]

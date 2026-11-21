@@ -158,6 +158,11 @@ fn source_id<'a>(id: *const c_char) -> Result<&'a str, Failure> {
 /// null) when the source is dropped. On failure it never calls it. An id
 /// that a source of this game already has is `PONKO_INVALID_ARGUMENT` (Rust's
 /// `add_source` panics on it).
+///
+/// Ownership: on success the engine owns `user`: it calls `free_user(user)` (if
+/// not null) when the source is dropped. On failure it never calls it, and
+/// `user` stays the caller's.
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_add_asset_source(std::ptr::null_mut(), c"pak".as_ptr(), None, None, None, std::ptr::null_mut()) } as u32, 1);
 /// ```
@@ -212,6 +217,10 @@ impl PonkoMemorySource {
 
 /// An empty memory source called `id` (copied; non-empty). Null on bad
 /// arguments (see `ponko_last_error`).
+///
+/// Ownership: the returned source is the caller's (null on failure); free it
+/// with ponko_memory_source_free.
+///
 /// ```
 /// assert!(unsafe { ponko_ffi::ponko_memory_source_new(c"".as_ptr()) }.is_null());
 /// ```
@@ -311,6 +320,10 @@ pub unsafe extern "C" fn ponko_ctx_add_memory_source(
 /// `ponko_last_error_kind()` (`PONKO_ERROR_NOT_FOUND`, `_IO`, `_DECODE`) and
 /// `ponko_last_error_path()` (`name`) say more. `decode` runs after the read,
 /// outside the engine's borrow of the context, so it may call `ponko_ctx_*`.
+///
+/// Ownership: `user` stays the caller's and is only passed to `decode` during
+/// this call; the engine keeps no pointer to it after returning.
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_load_asset_with(std::ptr::null_mut(), c"a.bin".as_ptr(), None, std::ptr::null_mut()) } as u32, 1);
 /// ```

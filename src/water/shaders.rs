@@ -15,6 +15,16 @@ use super::{WaterDesc, WaterReflection};
 /// radius, strength), radius 0 for none.
 pub(crate) const RIPPLES: &str = include_str!("ripples.wgsl");
 
+/// Waves from a spectrum: the spectrum at the frame's time (a compute pass
+/// over the field; `spectrum.rs` has the layout).
+pub(crate) const SPECTRUM: &str = include_str!("spectrum.wgsl");
+
+/// Waves from a spectrum: one stage of the inverse FFT, along x or z.
+pub(crate) const BUTTERFLY: &str = include_str!("butterfly.wgsl");
+
+/// The wave functions over a spectrum's field (the material's base texture).
+const SPECTRUM_WAVES: &str = include_str!("spectrum_waves.wgsl");
+
 /// The surface's `vertex` hook: each vertex rides the waves, and keeps its
 /// rest point in `uv1` for the surface's normal.
 pub(crate) const VERTEX: &str = include_str!("vertex.wgsl");
@@ -26,6 +36,13 @@ const UNDERWATER: &str = include_str!("underwater.wgsl");
 /// each the CPU's [`Waves`] function of the same name, unrolled over the
 /// table.
 pub(crate) fn wave_library(waves: &Waves) -> String {
+    if let Some(s) = waves.spectrum_settings() {
+        return format!(
+            "// The waves (from a spectrum's field).\nconst WATER_TILE: f32 = {};\nconst WATER_CELLS: i32 = {};\n{SPECTRUM_WAVES}",
+            lit(s.tile.max(1.0)),
+            s.cells()
+        );
+    }
     // Every coefficient is worked out here and written as one literal
     // (in brackets when negative), so the shader does plain arithmetic.
     let l = |v: f32| if v < 0.0 { format!("({})", lit(v)) } else { lit(v) };

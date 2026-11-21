@@ -151,6 +151,11 @@ pub type PonkoContactHook3D = Option<unsafe extern "C" fn(pair: *mut PonkoContac
 /// step: it sees only the pair, so keep anything else it needs behind `user`.
 /// It must return normally and must not call `ponko_ctx_*` or
 /// `ponko_world_*` functions.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `hook` and
+/// never frees it. It must stay valid until the hook is replaced or cleared, or
+/// the game ends.
+///
 /// # Safety
 /// `ctx` null or live, outside query callbacks. `hook` and `user` must stay
 /// valid until the hook is replaced or cleared, or the game ends.

@@ -777,6 +777,8 @@ mod tests {
     #[test]
     fn many_skeletons_drawn_in_chunks_match_drawing_them_one_by_one() {
         use crate::sprite_material::BlendMode;
+        // Fewer under Miri, which runs it a thousand times slower.
+        let count = if cfg!(miri) { 24 } else { 300 };
         crate::game::Game::new("chunks", 64, 64).run_headless(0, |ctx| {
             let plain = rig();
             let clipped = masked(&[
@@ -786,7 +788,7 @@ mod tests {
                 vec2(4.0, 3.0),
                 vec2(0.0, 8.0),
             ]);
-            for i in 0..300 {
+            for i in 0..count {
                 let mut s = if i % 4 == 0 { clipped.clone() } else { plain.clone() };
                 s.z = (i % 3) as f32;
                 let bent = BonePose::at(vec2(10.0, 0.0)).with_rotation(i as f32 * 0.1);
@@ -805,8 +807,8 @@ mod tests {
             ctx.gfx.draw_list.clear();
             assert!(batches.len() > 3, "several textures, looks and z");
             // Runs as for 1, 2, 3 and 8 threads, and one skeleton per run.
-            let runs = [1, 2, 3, 8].map(|threads| run_length(300, threads));
-            for per in runs.into_iter().chain([1, 7, 300]) {
+            let runs = [1, 2, 3, 8].map(|threads| run_length(count, threads));
+            for per in runs.into_iter().chain([1, 7, count]) {
                 draw_skeletons_with(ctx, Spread::Runs(per));
                 let (v, b) = ctx.gfx.draw_list.finish();
                 assert!(

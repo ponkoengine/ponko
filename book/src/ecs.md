@@ -132,8 +132,9 @@ expression` at that value, made anew for each entity that needs it.
   world, from then on (entities that exist keep what they have).
 - **What it costs.** Nothing where it isn't used: a spawn whose bundle
   lacks nothing runs the same code as in a world without requirements.
-  Filling a gap costs a few nanoseconds per entity more than giving the
-  component in the bundle (4–18 % of a spawn in the benchmarks);
+  Filling a gap runs the constructor on a path of its own: a one-by-one
+  spawn costs about 20 % (2 ns) more than giving the component in the
+  bundle, a batch or a spawn-and-despawn loop about the same;
   `crates/ponko_bench/REQUIRED.md` has the numbers.
 
 From C, `ponko_component_require(world, component, required, &value)`
@@ -221,7 +222,7 @@ What you can ask for (Rust):
 |---|---|
 | `&T` | read access to `T` (entity must have it) |
 | `&mut T` | write access to `T` |
-| `Option<&T>`, `Option<&mut T>` | the component if present; doesn't filter |
+| `Option<&T>`, `Option<&mut T>` | the component if present; doesn't filter (in `for_each`, one or two of them cost nothing per entity: the loop is chosen per archetype) |
 | `Entity` | the entity's id |
 | a tuple of the above | all of them, up to 12 (nest tuples for more) |
 
@@ -780,7 +781,12 @@ a `&mut` loop takes 0.20 ms instead of 0.17 ms, a `&T` loop is
 unchanged, and a `Changed<T>` loop takes 0.02 ms when it finds nothing
 (0.5 ms when it read every stamp), 0.4 ms when 1% of the entities
 changed, spread out (most chunks then hold one), and 1.0 ms when all
-did. `cargo run --release -p ponko_bench -- changes` prints the numbers
+did. Despawning from an archetype with a tracked component logs its
+removal and costs about what a despawn did before the per-64 summary
+existed (the same with one tracked component, 3% more with two). Moving
+an entity into such an archetype (an insert or a remove) marks its new
+block as changed now, so the next `Changed` loop reads those 64 stamps
+once. `cargo run --release -p ponko_bench -- changes` prints the numbers
 for your machine.
 
 ## Component hooks

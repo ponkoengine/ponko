@@ -210,7 +210,7 @@ fn the_3d_examples_use_the_d3_module_without_suffixed_names() {
         ("3d.rs", include_str!("../examples/3d.rs")),
         ("physics3d.rs", include_str!("../examples/physics3d.rs")),
         ("vehicle.rs", include_str!("../examples/vehicle.rs")),
-        ("terrain.rs", include_str!("../examples/terrain.rs")),
+        ("terrain/scene.rs", include_str!("../examples/terrain/scene.rs")),
     ] {
         assert!(source.contains("use ponko::d3::*;"), "{name} imports ponko::d3");
         for (number, line) in source.lines().enumerate() {

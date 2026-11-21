@@ -1,6 +1,6 @@
 //! Failures that stop a browser game once it runs (or while setup runs):
-//! a panic, the WebGL2 context lost during play, a worker thread that
-//! stopped. The startup result has its own callback ([`super::on_startup`]);
+//! a panic, the WebGL2 context or the WebGPU device lost during play, a
+//! worker thread that stopped. The startup result has its own callback ([`super::on_startup`]);
 //! these come after it, at most once per page.
 //!
 //! The page learns about a failure through `game.js`'s `onPonkoFailure`
@@ -25,6 +25,11 @@ pub enum FailureKind {
     /// (the GPU process crashed or was reset). The game can't draw again
     /// without a reload.
     ContextLost,
+    /// The browser lost the WebGPU device while the game was running (the
+    /// GPU process crashed or was reset, or the device was destroyed). The
+    /// game can't draw again without a reload. The message carries the
+    /// browser's reason, when it gives one.
+    DeviceLost,
     /// A worker thread of a build with threads stopped (it panicked or its
     /// script failed), so the game stops too.
     ThreadStopped,
@@ -93,8 +98,8 @@ thread_local! {
 static WORKER_PANIC: Mutex<Option<String>> = Mutex::new(None);
 
 /// Registers a callback for a failure that stops the browser game: a
-/// panic (in setup or later), the WebGL2 context lost while playing, or a
-/// worker thread that stopped. Return the text the page should show
+/// panic (in setup or later), the WebGL2 context or the WebGPU device lost
+/// while playing, or a worker thread that stopped. Return the text the page should show
 /// instead of its own (`Some`), or `None` to keep the page's.
 ///
 /// It runs once, on the page's thread, right before the game stops: for
@@ -121,7 +126,7 @@ pub fn on_failure(callback: impl Fn(&Failure) -> Option<String> + 'static) {
 
 /// `game.js`'s `onPonkoFailure(callback)`. The callback runs at most once,
 /// with an `Error` whose `kind` is a [`FailureKind`] name (`"Panic"`,
-/// `"ContextLost"`, `"ThreadStopped"`), `message` the failure's message,
+/// `"ContextLost"`, `"DeviceLost"`, `"ThreadStopped"`), `message` the failure's message,
 /// `location` a panic's source position (else `null`) and `text` the
 /// game's own text from [`on_failure`] (else `null`). A callback registered
 /// after the failure runs immediately.
@@ -246,4 +251,22 @@ pub(crate) fn context_lost() -> Failure {
         FailureKind::ContextLost,
         "The WebGL2 context was lost while the game was running. Reload the page to try again.",
     )
+}
+
+/// The failure for the WebGPU device lost while the game runs.
+/// `browser_message` is the browser's reason (`GPUDeviceLostInfo.message`),
+/// which may be empty.
+pub(crate) fn device_lost(browser_message: &str) -> Failure {
+    Failure::new(FailureKind::DeviceLost, device_lost_message(browser_message))
+}
+
+/// What the page shows for a lost WebGPU device: the engine's sentence,
+/// with the browser's reason in it when there is one.
+fn device_lost_message(browser_message: &str) -> String {
+    let reason = browser_message.trim().trim_end_matches('.').trim_end();
+    if reason.is_empty() {
+        "The WebGPU device was lost while the game was running. Reload the page to try again.".to_string()
+    } else {
+        format!("The WebGPU device was lost while the game was running: {reason}. Reload the page to try again.")
+    }
 }

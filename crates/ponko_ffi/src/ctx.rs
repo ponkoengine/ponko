@@ -427,6 +427,10 @@ pub unsafe extern "C" fn ponko_ctx_window_size(ctx: *const PonkoCtx) -> PonkoVec
 }
 
 /// The world of this context. Valid until the callback returns; never free it.
+///
+/// Ownership: the returned world is borrowed from the context until the
+/// callback returns; never free it.
+///
 /// # Safety
 /// `ctx` must be null or live.
 /// ```
@@ -1458,6 +1462,10 @@ pub unsafe extern "C" fn ponko_ctx_send_event(
 /// The next call from the same system returns only newer ones. Each system
 /// that runs every tick sees each event once. The memory stays valid until
 /// the next send of this type or the end of the system.
+///
+/// Ownership: `out_data` receives a view of memory the engine owns, valid until
+/// the next send of this type or the end of the system; never free it.
+///
 /// # Safety
 /// Live ctx; writable outputs.
 /// ```

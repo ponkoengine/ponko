@@ -11,6 +11,10 @@ pub struct PonkoGrid(SpatialGrid<u32>);
 
 /// Makes a grid with square cells of `cell_size` (about the query radius).
 /// Returns null if `cell_size` isn't positive.
+///
+/// Ownership: the returned grid is the caller's (null on failure); free it with
+/// ponko_grid_free.
+///
 /// ```
 /// let g = ponko_ffi::ponko_grid_new(32.0);
 /// unsafe { ponko_ffi::ponko_grid_free(g); }

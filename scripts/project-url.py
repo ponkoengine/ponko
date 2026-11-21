@@ -24,6 +24,12 @@ PROJECT_URL. Moving the project is therefore one command:
 
 If the host's URL layout differs from GitLab's (`/-/blob/main/...`), change
 BLOB and TREE below.
+
+Companion repositories (COMPANIONS, such as the plugins repository) live
+beside the engine on the same host and group: `<group>/ponko-plugins` next
+to `<group>/ponko`. Docs link to them with the full URL; `check` fails on a
+link to one that isn't beside PROJECT_URL, and `set` moves those links along
+with the engine's.
 """
 
 import json
@@ -39,6 +45,9 @@ URL_FILE = ROOT / "PROJECT_URL"
 # Where a file or a folder of the default branch lives on the project's host.
 BLOB = "/-/blob/main/"
 TREE = "/-/tree/main/"
+
+# Repositories that live beside the engine's, in the same group.
+COMPANIONS = ("ponko-plugins",)
 
 # Strings of the hosts the project left; no doc may name them.
 DEAD = ("github.com/ponkoengine", "ponkoengine.github.io", "raw.githubusercontent.com/ponkoengine")
@@ -65,6 +74,25 @@ def doc_files():
             continue
         if name.endswith(DOC_SUFFIXES) or PurePosixPath(name).name == "NOTICE":
             yield name
+
+
+# ---- companion repositories ---------------------------------------------------
+
+
+def companion_url(url, name):
+    """The companion repository `name` beside the engine at `url`."""
+    return url.rsplit("/", 1)[0] + "/" + name
+
+
+def companion_links(text, name):
+    """Every https URL in `text` that names the companion repository `name`."""
+    pattern = r"https://[^\s/)>\]\"'`]+(?:/[^\s/)>\]\"'`]+)*/" + re.escape(name) + r"(?![\w-])"
+    return re.findall(pattern, text)
+
+
+def replace_url(text, old, new):
+    """`old` -> `new` where `old` is a whole URL (not the start of a longer name)."""
+    return re.sub(re.escape(old) + r"(?![\w-])", lambda _: new, text)
 
 
 # ---- links ------------------------------------------------------------------
@@ -168,6 +196,11 @@ def check():
             for n, line in enumerate(text.split("\n"), 1):
                 if dead in line:
                     problems.append(f"{name}:{n}: names {dead}; use a relative link, or PROJECT_URL ({url})")
+        for companion in COMPANIONS:
+            wanted = companion_url(url, companion)
+            for found in companion_links(text, companion):
+                if found != wanted:
+                    problems.append(f"{name}: {found} is not beside PROJECT_URL; link {wanted}")
         if name.endswith(".md"):
             base = (ROOT / name).parent
             seen = []
@@ -193,8 +226,12 @@ def set_url(new):
     for name in doc_files():
         path = ROOT / name
         text = path.read_text(encoding="utf-8")
-        if old in text:
-            path.write_text(text.replace(old, new), encoding="utf-8")
+        moved = text
+        for companion in COMPANIONS:
+            moved = replace_url(moved, companion_url(old, companion), companion_url(new, companion))
+        moved = replace_url(moved, old, new)
+        if moved != text:
+            path.write_text(moved, encoding="utf-8")
             changed += 1
     URL_FILE.write_text(new + "\n")
     print(f"PROJECT_URL is {new} now; {changed} files rewritten (review `git diff`)")
@@ -218,6 +255,16 @@ def selftest():
     book = {"items": [{"Chapter": {"path": "ecs.md", "content": "[s](../../STABILITY.md)", "sub_items": []}}]}
     transform(book, url)
     assert book["items"][0]["Chapter"]["content"] == f"[s]({url}{BLOB}STABILITY.md)"
+    assert companion_url("https://example.test/org/proj", "ponko-plugins") == "https://example.test/org/ponko-plugins"
+    links = companion_links("see [p](https://example.test/org/ponko-plugins) and <https://x.test/a/ponko-plugins>.", "ponko-plugins")
+    assert links == ["https://example.test/org/ponko-plugins", "https://x.test/a/ponko-plugins"], links
+    assert companion_links("https://example.test/org/ponko-plugins-old", "ponko-plugins") == []
+    old, new = "https://example.test/org/ponko", "https://example.test/org/ponko-engine"
+    text = f"[e]({old}) [p]({companion_url(old, 'ponko-plugins')})"
+    for companion in COMPANIONS:
+        text = replace_url(text, companion_url(old, companion), companion_url(new, companion))
+    text = replace_url(text, old, new)
+    assert text == f"[e]({new}) [p](https://example.test/org/ponko-plugins)", text
     print("project-url.py: self-test passed")
     return 0
 

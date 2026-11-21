@@ -6,10 +6,15 @@
 // 1. `fs_cloud_trace`: marches each pixel's ray through the cloud layer at
 //    half the frame's width and height, from a different offset each frame.
 //    Out: the light the clouds add (rgb) and how much of the sky behind
-//    them shows (a).
+//    them shows (a). Interleaved (the cheaper presets), the trace is a
+//    quarter of that: each frame marches one pixel of every 2 x 2 block of
+//    the cloud image, a different one each frame.
 // 2. `fs_cloud_resolve`: blends that with the last frame's result, looked
 //    up where the same direction was then (temporal reprojection), clamped
-//    to this frame's neighbourhood so the clouds don't smear.
+//    to this frame's neighbourhood so the clouds don't smear. Interleaved,
+//    the pixels marched this frame blend in their new value and the other
+//    three keep their reprojected history; where there is none (the first
+//    frame, a pixel that turned onto the screen) the trace is upsampled.
 // 3. `fs_cloud_composite`: over the sky's pixels of the lit frame, behind
 //    everything, through the height fog.
 
@@ -21,6 +26,10 @@ struct CloudPass {
     params: vec4<f32>,
     // The cloud image's width and height in pixels, then their inverses.
     size: vec4<f32>,
+    // x, y: which pixel of each 2 x 2 block of the cloud image this
+    // frame's trace marches; z: 1 when interleaved (the trace is a quarter
+    // of the cloud image), 0 when it marches every pixel.
+    step: vec4<f32>,
 };
 
 @group(3) @binding(0) var<uniform> cloud_pass: CloudPass;
@@ -96,11 +105,73 @@ fn cloud_march(origin: vec3<f32>, dir: vec3<f32>, pixel: vec2<f32>) -> vec4<f32>
 
 @fragment
 fn fs_cloud_trace(in: FullScreen) -> @location(0) vec4<f32> {
-    return cloud_march(frame.camera.xyz, far_dir(in.uv), floor(in.clip.xy));
+    if cloud_pass.step.z < 0.5 {
+        return cloud_march(frame.camera.xyz, far_dir(in.uv), floor(in.clip.xy));
+    }
+    // Interleaved: this trace pixel stands for one pixel of its 2 x 2
+    // block of the cloud image.
+    let pixel = floor(in.clip.xy) * 2.0 + cloud_pass.step.xy;
+    let uv = (pixel + 0.5) * cloud_pass.size.zw;
+    return cloud_march(frame.camera.xyz, far_dir(uv), pixel);
+}
+
+// Where last frame's clouds in direction `dir` are in the history (uv),
+// or a negative x where they weren't on screen.
+fn cloud_reproject(dir: vec3<f32>) -> vec2<f32> {
+    let clip = cloud_pass.previous * vec4<f32>(dir, 0.0);
+    if clip.w <= 1e-6 {
+        return vec2<f32>(-1.0);
+    }
+    let ndc = clip.xy / clip.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
+        return vec2<f32>(-1.0);
+    }
+    return uv;
+}
+
+// The interleaved resolve: the pixel's new value if this frame marched it,
+// otherwise its history, kept within what the trace shows around it.
+fn cloud_resolve_interleaved(in: FullScreen) -> vec4<f32> {
+    let pixel = vec2<i32>(in.clip.xy);
+    let tsize = vec2<i32>(textureDimensions(cloud_image));
+    let q = min(pixel / 2, tsize - 1);
+    let fresh = all(pixel % 2 == vec2<i32>(cloud_pass.step.xy));
+    let own = textureLoad(cloud_image, q, 0);
+    // The trace filtered to this pixel: trace texel q was marched at
+    // cloud pixel 2q + step.
+    let at = (vec2<f32>(pixel) - cloud_pass.step.xy) * 0.5 + 0.5;
+    let upsampled = textureSampleLevel(cloud_image, cloud_sampler, at / vec2<f32>(tsize), 0.0);
+    let current = select(upsampled, own, fresh);
+    if cloud_pass.params.w < 0.5 {
+        return current;
+    }
+    let uv = cloud_reproject(far_dir(in.uv));
+    if uv.x < 0.0 {
+        return current;
+    }
+    // The trace's texels around: what this pixel may hold now.
+    var lo = own;
+    var hi = own;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let s = textureLoad(cloud_image, clamp(q + vec2<i32>(x, y), vec2<i32>(0), tsize - 1), 0);
+            lo = min(lo, s);
+            hi = max(hi, s);
+        }
+    }
+    let history = clamp(textureSampleLevel(cloud_history, cloud_sampler, uv, 0.0), lo, hi);
+    // A marched pixel takes a quarter of its new value: it is marched
+    // every fourth frame, so it settles as fast as one marched every frame
+    // that takes a tenth.
+    return select(history, mix(history, own, 0.25), fresh);
 }
 
 @fragment
 fn fs_cloud_resolve(in: FullScreen) -> @location(0) vec4<f32> {
+    if cloud_pass.step.z > 0.5 {
+        return cloud_resolve_interleaved(in);
+    }
     let size = vec2<i32>(cloud_pass.size.xy);
     let pixel = vec2<i32>(in.clip.xy);
     let current = textureLoad(cloud_image, pixel, 0);
@@ -109,14 +180,8 @@ fn fs_cloud_resolve(in: FullScreen) -> @location(0) vec4<f32> {
     }
     // Where this direction was last frame: the clouds are far enough to
     // count as infinitely far, so only the camera's turn moves them.
-    let dir = far_dir(in.uv);
-    let clip = cloud_pass.previous * vec4<f32>(dir, 0.0);
-    if clip.w <= 1e-6 {
-        return current;
-    }
-    let ndc = clip.xy / clip.w;
-    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
+    let uv = cloud_reproject(far_dir(in.uv));
+    if uv.x < 0.0 {
         return current;
     }
     var lo = current;

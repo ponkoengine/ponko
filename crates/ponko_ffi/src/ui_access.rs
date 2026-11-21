@@ -565,6 +565,10 @@ pub unsafe extern "C" fn ponko_ctx_ui_access_text(
 
 /// An empty snapshot that has seen nothing: its first update reports every
 /// node. Free once with `ponko_ui_access_free`.
+///
+/// Ownership: the returned access tree is the caller's (null on failure); free
+/// it with ponko_ui_access_free.
+///
 /// ```
 /// let access = ponko_ffi::ponko_ui_access_new();
 /// assert!(!access.is_null());

@@ -454,6 +454,10 @@ pub struct PonkoClip(pub(crate) ponko::anim::AnimationClip);
 /// Loads the clip called `name` of a glTF file with skins (Rust
 /// `Graphics::load_clip`); free it with `ponko_clip_free`.
 /// `PONKO_NOT_FOUND` when the file has no clip of that name.
+///
+/// Ownership: on success `out_clip` receives an owned clip, the caller's; free
+/// it with ponko_clip_free.
+///
 /// # Safety
 /// `ctx` null or live; `path` and `name` C strings; output writable.
 /// ```

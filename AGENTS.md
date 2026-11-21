@@ -63,6 +63,8 @@ cargo test --workspace
 cargo clippy --workspace --all-targets
 python3 scripts/collect-panics.py --check   # every panic site has a reviewed decision
 python3 scripts/check-feature-coverage.py   # every cargo feature has clippy and test lines in ci.yml
+python3 scripts/check-unsafe.py             # every unsafe item outside the ECS has a test
+python3 scripts/check-ffi-ownership.py      # every C function says who owns its pointers
 ```
 
 If you add or change a cargo feature, or a web smoke runner, give it its lines
@@ -88,6 +90,20 @@ cargo +nightly miri test --tests --no-default-features --features derive
 # (not our code), and its global thread pool outlives main:
 MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-ignore-leaks" cargo +nightly miri test --test parallel --test changes --test view_groups --test query_cache --test query_cache_views --test hooks --test required
 ```
+
+If you touched unsafe code outside the ECS, run its Miri tests (the `miri`
+lines of `scripts/unsafe-inventory.txt`), then delete `target/miri`:
+
+```sh
+python3 scripts/check-unsafe.py --miri | while read -r line; do
+  MIRIFLAGS="-Zmiri-tree-borrows -Zmiri-ignore-leaks" bash -c "$line" || break
+done
+```
+
+If you touched `crates/ponko_ffi`, `include/` or `examples/cpp`, also run the C
+and C++ test programs and the `ponko_ffi` tests under AddressSanitizer and
+UndefinedBehaviorSanitizer: the commands are in CONTRIBUTING.md, "Unsafe code
+and sanitizers".
 
 ## Project rules
 

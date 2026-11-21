@@ -548,6 +548,10 @@ mod taa_render_test;
 mod environment_render_test;
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod sky_kit_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod terrain_example_render_test;
+#[cfg(all(test, feature = "window", feature = "3d"))]
+mod water_kit_render_test;
 
 #[cfg(all(test, feature = "window", feature = "3d"))]
 mod decal_render_test;
