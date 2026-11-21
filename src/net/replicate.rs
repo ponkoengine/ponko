@@ -46,6 +46,7 @@ use ponko_ecs::{Component, Entity, World};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use crate::error::{Error, ErrorKind};
 use crate::events::Events;
 use crate::net::{Interest, InterestConfig, Interpolate, NetMessages, PeerId, SnapshotConfig};
 
@@ -292,6 +293,43 @@ pub struct NetEvent<T> {
     pub event: T,
 }
 
+/// An event declared at run time with [`Replication::raw_event`] (from C or
+/// C++): plain bytes, as the sender gave them, read as
+/// `NetEvent<RawEvent>` from [`ctx.events`](crate::ctx::Ctx::events). Every
+/// raw event type arrives there; [`name`](Self::name) says which one it is.
+///
+/// ```
+/// use ponko::net::{NetEvent, RawEvent};
+/// use ponko::prelude::*;
+/// fn hits(ctx: &mut Ctx) -> Vec<Vec<u8>> {
+///     ctx.events
+///         .read::<NetEvent<RawEvent>>()
+///         .iter()
+///         .filter(|e| e.event.name() == "hit")
+///         .map(|e| e.event.bytes.clone())
+///         .collect()
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawEvent {
+    name: Arc<str>,
+    /// The bytes, exactly as sent.
+    pub bytes: Vec<u8>,
+}
+
+impl RawEvent {
+    /// The name its type was declared with.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// The longest raw event, in bytes: a reliable message
+/// ([`MAX_MESSAGE_BYTES`](crate::net::MAX_MESSAGE_BYTES)) less the event's
+/// header.
+pub const MAX_RAW_EVENT_BYTES: usize = crate::net::MAX_MESSAGE_BYTES - 16;
+
 /// What the server sent one client ([`Replication::peer_stats`]).
 ///
 /// ```
@@ -379,11 +417,32 @@ pub enum ReplicationRole {
 
 type PositionFn = Arc<dyn Fn(&World, Entity) -> Option<Vec3> + Send + Sync>;
 
-/// An event type declared with [`Replication::event`].
+/// An event type declared with [`Replication::event`] or
+/// [`Replication::raw_event`].
 struct EventType {
     name: String,
-    type_id: TypeId,
-    deliver: fn(&mut Events, PeerId, u64, &[u8]) -> bool,
+    delivery: Delivery,
+}
+
+/// How an event type's payloads become events.
+enum Delivery {
+    /// Decoded into a Rust type.
+    Typed {
+        type_id: TypeId,
+        deliver: fn(&mut Events, PeerId, u64, &[u8]) -> bool,
+    },
+    /// Delivered as they are, as [`RawEvent`]s named this.
+    Raw(Arc<str>),
+}
+
+impl EventType {
+    fn is_type(&self, id: TypeId) -> bool {
+        matches!(self.delivery, Delivery::Typed { type_id, .. } if type_id == id)
+    }
+
+    fn is_raw(&self, name: &str) -> bool {
+        matches!(&self.delivery, Delivery::Raw(n) if &**n == name)
+    }
 }
 
 /// Where an outgoing event goes.
@@ -560,6 +619,10 @@ impl Inner {
             h.u64(inputs.predicted());
         }
         for event in &self.events {
+            if matches!(event.delivery, Delivery::Raw(_)) {
+                // A raw event never matches a typed one of the same name.
+                h.str("raw event");
+            }
             h.str(&event.name);
         }
         h.0
@@ -583,8 +646,19 @@ impl Inner {
 
     fn deliver(&mut self, events: &mut Events) {
         for (index, from, tick, bytes) in self.inbox.drain(..) {
-            if let Some(t) = self.events.get(usize::from(index)) {
-                let _ = (t.deliver)(events, from, tick, &bytes);
+            match self.events.get(usize::from(index)).map(|t| &t.delivery) {
+                Some(Delivery::Typed { deliver, .. }) => {
+                    let _ = deliver(events, from, tick, &bytes);
+                }
+                Some(Delivery::Raw(name)) => events.send(NetEvent {
+                    from,
+                    tick,
+                    event: RawEvent {
+                        name: name.clone(),
+                        bytes,
+                    },
+                }),
+                None => {}
             }
         }
     }
@@ -811,7 +885,7 @@ impl Inner {
     }
 
     fn queue_event<T: Serialize + 'static>(&mut self, target: Target, event: &T) {
-        let Some(index) = self.events.iter().position(|e| e.type_id == TypeId::of::<T>()) else {
+        let Some(index) = self.events.iter().position(|e| e.is_type(TypeId::of::<T>())) else {
             panic!(
                 "Replication: `{0}` isn't a declared event; add `.event::<{0}>()` to the Replication",
                 crate::reflect::short_name(std::any::type_name::<T>())
@@ -820,17 +894,74 @@ impl Inner {
         if self.outbox.len() >= OUTBOX_LIMIT {
             return;
         }
-        let tick = match self.role {
-            ReplicationRole::Client => self.client.server_tick,
-            _ => self.tick,
-        };
         match encode_event(event) {
-            Ok(payload) => self.outbox.push((target, index as u16, tick, payload)),
+            Ok(payload) => self.queue_payload(target, index, payload),
             Err(e) => panic!(
                 "Replication: event `{}` doesn't serialize: {e}",
                 std::any::type_name::<T>()
             ),
         }
+    }
+
+    fn queue_raw(&mut self, target: Target, name: &str, bytes: &[u8]) -> Result<(), Error> {
+        let Some(index) = self.events.iter().position(|e| e.is_raw(name)) else {
+            return Err(undeclared_raw(name));
+        };
+        if bytes.len() > MAX_RAW_EVENT_BYTES {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                format!(
+                    "Replication: raw event `{name}` has {} bytes, more than {MAX_RAW_EVENT_BYTES}",
+                    bytes.len()
+                ),
+            ));
+        }
+        if self.outbox.len() >= OUTBOX_LIMIT {
+            return Err(Error::new(
+                ErrorKind::Limit,
+                format!("Replication: {OUTBOX_LIMIT} events wait to be sent already; raw event `{name}` was dropped"),
+            ));
+        }
+        self.queue_payload(target, index, bytes.to_vec());
+        Ok(())
+    }
+
+    /// Whether `name` is a declared raw event.
+    fn check_raw(&self, name: &str) -> Result<(), Error> {
+        match self.events.iter().any(|e| e.is_raw(name)) {
+            true => Ok(()),
+            false => Err(undeclared_raw(name)),
+        }
+    }
+
+    fn queue_payload(&mut self, target: Target, index: usize, payload: Vec<u8>) {
+        let tick = match self.role {
+            ReplicationRole::Client => self.client.server_tick,
+            _ => self.tick,
+        };
+        self.outbox.push((target, index as u16, tick, payload));
+    }
+}
+
+fn undeclared_raw(name: &str) -> Error {
+    Error::new(
+        ErrorKind::NotFound,
+        format!("Replication: `{name}` isn't a declared raw event; add `.raw_event(\"{name}\")` to the Replication"),
+    )
+}
+
+impl Inner {
+    fn declare_event(&mut self, name: String, delivery: Delivery) {
+        assert!(
+            !self.events.iter().any(|e| e.name == name),
+            "Replication: event `{name}` is declared twice; declare each event once"
+        );
+        assert!(
+            self.events.len() < usize::from(u16::MAX),
+            "Replication: at most {} event types can be declared",
+            u16::MAX
+        );
+        self.events.push(EventType { name, delivery });
     }
 }
 
@@ -1052,14 +1183,51 @@ impl Replication {
         let inner = self.declare();
         let name = crate::reflect::short_name(std::any::type_name::<T>()).to_string();
         assert!(
-            !inner.events.iter().any(|e| e.type_id == TypeId::of::<T>()),
+            !inner.events.iter().any(|e| e.is_type(TypeId::of::<T>())),
             "Replication: event `{name}` is declared twice; declare each event once"
         );
-        inner.events.push(EventType {
+        inner.declare_event(
             name,
-            type_id: TypeId::of::<T>(),
-            deliver: deliver_event::<T>,
-        });
+            Delivery::Typed {
+                type_id: TypeId::of::<T>(),
+                deliver: deliver_event::<T>,
+            },
+        );
+        self
+    }
+
+    /// Declares an event type by name, whose events are plain bytes (for
+    /// C and C++, or any game that encodes its own): sent with
+    /// [`to_server_raw`](Self::to_server_raw),
+    /// [`to_client_raw`](Self::to_client_raw) and
+    /// [`to_clients_raw`](Self::to_clients_raw), read as
+    /// `NetEvent<`[`RawEvent`]`>` from [`ctx.events`](crate::ctx::Ctx::events).
+    /// Reliable and ordered like [typed events](Self::event) (in one order
+    /// with them), delivered at the start of a tick, the bytes unchanged.
+    ///
+    /// Both sides declare it, in the same place among the events: a raw
+    /// event never matches a typed one, even of the same name.
+    ///
+    /// # Panics
+    /// If an event of this name was declared already.
+    ///
+    /// ```
+    /// use ponko::net::{NetEvent, RawEvent, Replication};
+    /// use ponko::prelude::*;
+    ///
+    /// let world = Game::new("server", 1, 1)
+    ///     .replication(Replication::new().raw_event("ping"))
+    ///     .run_headless(3, |ctx| {
+    ///         // Offline, the server is its own client: it hears itself.
+    ///         ctx.net.replication.to_server_raw("ping", &[1, 2, 3]).unwrap();
+    ///         assert!(ctx.net.replication.to_server_raw("pong", &[]).is_err());
+    ///     });
+    /// # let _ = world;
+    /// ```
+    #[must_use]
+    pub fn raw_event(mut self, name: &str) -> Self {
+        self.declare()
+            .declare_event(name.to_string(), Delivery::Raw(Arc::from(name)));
         self
     }
 
@@ -1262,6 +1430,49 @@ impl Replication {
         let inner = self.declare();
         if inner.role != ReplicationRole::Client {
             inner.queue_event(Target::Clients, event);
+        }
+    }
+
+    /// Sends a raw event's bytes to the server, as [`to_server`](Self::to_server)
+    /// does a typed one.
+    ///
+    /// # Errors
+    /// [`ErrorKind::NotFound`] if `name` isn't a declared raw event
+    /// ([`raw_event`](Self::raw_event)), [`ErrorKind::Limit`] past
+    /// [`MAX_RAW_EVENT_BYTES`] or when 4096 events wait to be sent already.
+    /// Nothing is sent then.
+    pub fn to_server_raw(&mut self, name: &str, bytes: &[u8]) -> Result<(), Error> {
+        match &mut self.inner {
+            Some(inner) => inner.queue_raw(Target::Server, name, bytes),
+            None => Err(undeclared_raw(name)),
+        }
+    }
+
+    /// Server: sends a raw event's bytes to one client, as
+    /// [`to_client`](Self::to_client) does a typed one. Does nothing on a
+    /// client.
+    ///
+    /// # Errors
+    /// As [`to_server_raw`](Self::to_server_raw).
+    pub fn to_client_raw(&mut self, peer: PeerId, name: &str, bytes: &[u8]) -> Result<(), Error> {
+        match &mut self.inner {
+            Some(inner) if inner.role == ReplicationRole::Client => inner.check_raw(name),
+            Some(inner) => inner.queue_raw(Target::Client(peer), name, bytes),
+            None => Err(undeclared_raw(name)),
+        }
+    }
+
+    /// Server: sends a raw event's bytes to every client that joined, as
+    /// [`to_clients`](Self::to_clients) does a typed one. Does nothing on
+    /// a client.
+    ///
+    /// # Errors
+    /// As [`to_server_raw`](Self::to_server_raw).
+    pub fn to_clients_raw(&mut self, name: &str, bytes: &[u8]) -> Result<(), Error> {
+        match &mut self.inner {
+            Some(inner) if inner.role == ReplicationRole::Client => inner.check_raw(name),
+            Some(inner) => inner.queue_raw(Target::Clients, name, bytes),
+            None => Err(undeclared_raw(name)),
         }
     }
 
