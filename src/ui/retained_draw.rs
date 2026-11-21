@@ -2137,6 +2137,9 @@ mod tests {
             let what = format!("scale factor {pixels}, UI scale {scale}");
             let still = UiInput::default();
             same_as_drawn_anew(&mut ctx, &still, &what);
+            // The range of widths that break a label's lines the same way is
+            // in physical pixels for plain text, window pixels for rich text.
+            let per_unit = |rich: bool| if rich { scale } else { scale * pixels };
             for &(label, rich, rtl) in &labels {
                 let lines = line_starts(&ctx, label).len();
                 assert!(lines >= 2, "{what}: the text wraps onto lines: {lines}");
@@ -2147,7 +2150,26 @@ mod tests {
                     );
                 }
             }
-            let at = |ctx: &Ctx| labels.iter().map(|&(l, ..)| ctx.ui.rect(l).unwrap()).collect::<Vec<_>>();
+            // A box is snapped to whole pixels, so moving it can make it a
+            // pixel wider or narrower, and Japanese advances are whole
+            // pixels: a box at the edge of its range would break its lines
+            // differently. Put each label in the middle of its range, so
+            // that moving it only moves the text.
+            for &(label, rich, _) in &labels {
+                let room = glyphs(&ctx, label).room;
+                assert!(room.hi.is_finite(), "{what}: a wider box breaks its lines elsewhere");
+                let lo = if room.lo.is_finite() { room.lo } else { room.width };
+                let width = (lo + room.hi) * 0.5 / per_unit(rich);
+                ctx.ui.set_layout(label, UiLayout::fixed(width, 76.0));
+            }
+            same_as_drawn_anew(&mut ctx, &still, &what);
+            let rooms: Vec<_> = labels.iter().map(|&(l, ..)| glyphs(&ctx, l).room).collect();
+            let at = |ctx: &Ctx| {
+                labels
+                    .iter()
+                    .map(|&(l, ..)| ctx.ui.rect(l).unwrap())
+                    .collect::<Vec<_>>()
+            };
             for width in [41.3, 55.7, 40.0, 63.15, 47.9] {
                 let before_rects = at(&ctx);
                 for &grow in &grows {
@@ -2157,23 +2179,20 @@ mod tests {
                 let (redrawn, ..) = frame(&mut ctx, &still);
                 assert!(redrawn >= 16, "{what}: the panels and the labels: {redrawn}");
                 assert_eq!(layouts(&ctx), before, "{what}: pushed by {width}: no text laid out");
-                for (was, now) in before_rects.iter().zip(at(&ctx)) {
+                for (i, (was, now)) in before_rects.iter().zip(at(&ctx)).enumerate() {
                     assert_ne!(was.min.x, now.min.x, "{what}: every label moved sideways");
+                    assert_eq!(glyphs(&ctx, labels[i].0).room, rooms[i], "{what}: its layout is kept");
                 }
                 same_as_drawn_anew(&mut ctx, &still, &what);
             }
-            // Each label keeps the range of widths that break its lines the
-            // same way: a little wider, inside it, it isn't laid out again;
-            // past it, it is. The range is in physical pixels for plain
-            // text, window pixels for rich text.
+            // A little wider, inside its range, a label isn't laid out
+            // again; past it, it is.
             let wider = |ctx: &mut Ctx, past: bool| {
-                for &(label, rich, _) in &labels {
-                    let room = glyphs(ctx, label).room;
-                    let per_unit = if rich { scale } else { scale * pixels };
-                    assert!(room.hi.is_finite(), "{what}: a wider box breaks its lines elsewhere");
-                    let slack = (room.hi - room.width) / per_unit;
-                    let more = if past { slack + 0.5 } else { slack * 0.5 };
-                    let width = ctx.ui.rect(label).unwrap().size().x / scale + more;
+                for (&(label, rich, _), room) in labels.iter().zip(&rooms) {
+                    let now = ctx.ui.rect(label).unwrap().size().x;
+                    let slack = (room.hi - now * if rich { 1.0 } else { pixels }) / per_unit(rich);
+                    let more = if past { slack + 1.5 } else { slack * 0.5 };
+                    let width = now / scale + more;
                     ctx.ui.set_layout(label, UiLayout::fixed(width, 76.0));
                 }
             };
