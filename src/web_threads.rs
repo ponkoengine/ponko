@@ -183,6 +183,29 @@ fn post(message: Message) {
     }
 }
 
+/// Runs `op`, which starts rayon work, on the frame pool and returns its
+/// result: through the coordinator from the page's thread (the runner the
+/// ECS's parallel queries use), here on a worker or without threads. The
+/// engine's own parallel passes go through it, as the queries do.
+pub(crate) fn on_frame_pool<R: Send>(op: impl FnOnce() -> R + Send) -> R {
+    if !sends_to_workers() {
+        return op();
+    }
+    let mut op = Some(op);
+    let mut out = None;
+    run_on_pool(&mut || {
+        if let Some(op) = op.take() {
+            out = Some(op());
+        }
+    });
+    match out {
+        Some(out) => out,
+        // invariant: `run_on_pool` returns only after the coordinator ran
+        // the loop, which calls `op`.
+        None => unreachable!("ponko: the frame pool returned without running the parallel pass"),
+    }
+}
+
 /// [`ponko_ecs::WebRunner::run`]: runs `op` on the frame pool through the
 /// coordinator, spinning until it has run.
 fn run_on_pool(op: &mut (dyn FnMut() + Send)) {

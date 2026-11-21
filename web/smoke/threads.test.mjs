@@ -42,13 +42,14 @@ const isolatedRun = {
   batch_threads: 4,
   batch_on_page: false,
   batch_threaded_runs: 160,
+  hier_shared: true,
   schedule_threads: true,
   wait_off_page: true,
   job_off_page: true,
   group: "ready",
   group_off_page: true,
   group_bytes: 966,
-  checksum: 81016914.26837707,
+  checksum: 83614676.95699096,
 };
 
 const plainRun = {
@@ -60,13 +61,14 @@ const plainRun = {
   batch_threads: 0,
   batch_on_page: true,
   batch_threaded_runs: 0,
+  hier_shared: false,
   schedule_threads: false,
   wait_off_page: false,
   job_off_page: false,
   group: "ready",
   group_off_page: false,
   group_bytes: 966,
-  checksum: 81016914.26837707,
+  checksum: 83614676.95699096,
 };
 
 test("the isolation headers are the two that make a page cross-origin isolated", () => {
@@ -107,6 +109,7 @@ test("an isolated run passes only when workers ran the queries, batches and jobs
   assert.ok(problems.some((p) => p.includes("0 worker threads")), problems.join("\n"));
   assert.ok(problems.some((p) => p.includes("query items ran on the page's thread")));
   assert.ok(problems.some((p) => p.includes("no batch")));
+  assert.ok(problems.some((p) => p.includes("hierarchy shared no level")));
   assert.ok(problems.some((p) => p.includes("a job ran on the page's thread")));
   assert.ok(problems.some((p) => p.includes("decoded on the page's thread")));
   // A group that couldn't read its file on a worker fails the check by name.
