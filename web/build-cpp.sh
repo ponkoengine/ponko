@@ -24,6 +24,25 @@
 # Emscripten backend.
 set -euo pipefail
 
+# Called as the linker (cargo rustc ... -C linker=build-cpp.sh, below): the
+# library exports its whole C API for C callers, which would keep all of it
+# in the module. The page calls only wasm-bindgen's exports, so leave those
+# out (and the WASI functions web_main defines) and the linker drops the
+# engine code the game doesn't use.
+if [ -n "${PONKO_WEB_CPP_LINKER:-}" ]; then
+  args=()
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "--export" ]; then
+      case "${2:-}" in
+        ponko_* | __imported_wasi_snapshot_preview1_*) shift 2; continue ;;
+      esac
+    fi
+    args+=("$1")
+    shift
+  done
+  exec "$PONKO_WEB_CPP_LINKER" "${args[@]}"
+fi
+
 out=
 features=
 while [ $# -gt 0 ]; do
@@ -83,14 +102,20 @@ for source in "${sources[@]}"; do
   i=$((i + 1))
 done
 builtins=$("$sdk/bin/clang" --target=wasm32-wasip1 -print-libgcc-file-name)
+# Warnings fail the link: a WASI function web_main defines with another
+# signature than the C library's would otherwise become a trap.
+link_args+=(-C link-arg=--fatal-warnings)
 link_args+=(-L "native=$libs/eh" -L "native=$libs" -L "native=$(dirname "$builtins")")
 link_args+=(-l static=c++ -l static=c++abi -l static=unwind -l static=c -l "static=$(basename "$builtins" .a | sed 's/^lib//')")
+
+link_args+=(-C "linker=$here/build-cpp.sh")
+lld="$(cd "$repo" && rustc --print sysroot)/lib/rustlib/$(cd "$repo" && rustc -vV | sed -n 's/^host: //p')/bin/rust-lld"
 
 feature_args=()
 if [ -n "$features" ]; then
   feature_args=(--features "$features")
 fi
-cargo rustc --manifest-path "$repo/Cargo.toml" -p ponko_ffi --example web_main --release \
+PONKO_WEB_CPP_LINKER=$lld cargo rustc --manifest-path "$repo/Cargo.toml" -p ponko_ffi --example web_main --release \
   --target wasm32-unknown-unknown ${feature_args[@]+"${feature_args[@]}"} -- "${link_args[@]}"
 wasm="$target/wasm32-unknown-unknown/release/examples/web_main.wasm"
 

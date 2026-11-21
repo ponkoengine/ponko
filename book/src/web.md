@@ -299,5 +299,50 @@ for running it, adding a fixture for another example, and what runs where.
 
 ## C and C++
 
-Not yet: web builds work for Rust games. C and C++ games would need to be
-compiled with Emscripten, which the engine doesn't support so far.
+C and C++ games build for the browser too. Once, besides the Rust setup
+above, install the [WASI SDK](https://github.com/WebAssembly/wasi-sdk),
+version 33 or newer (its C++ library has exceptions, which `ponko.hpp`
+uses), in `/opt/wasi-sdk`, or anywhere with `WASI_SDK_PATH` pointing at it.
+Then, from your game's folder, with
+[`web/build-cpp.sh`](../../web/build-cpp.sh) from a checkout of the engine:
+
+```sh
+../ponko/web/build-cpp.sh -o target/web/my_game main.cpp world.cpp
+python3 -m http.server -d target/web/my_game 8000
+```
+
+The script compiles your sources with the WASI SDK's clang for wasm32, links
+them with its C and C++ libraries into the engine's ordinary web build, and
+writes the same static site as `web/build.sh`: the page, `game.js`,
+`game_bg.wasm` and a copy of your `assets/`. `--features` picks
+`ponko_ffi`'s features, and flags after `--` go to the compiler
+(`-- -DNDEBUG -Isrc`). The guide's first game
+([Getting started](getting-started.md)), built this way, is
+WEB_CPP_SIZE of WebAssembly (WEB_CPP_GZIP compressed) and reaches its first frame
+WEB_CPP_START after the page is opened in headless Chromium on an Apple
+Silicon laptop (measured while other builds were running, so take it as an
+upper bound).
+
+What's different from the desktop, besides [the above](#whats-different-in-a-browser):
+
+- **`run()` doesn't return.** The browser runs the game's frames, so
+  `ponko_game_run` (`game.run(...)` in C++) leaves your `main` without
+  returning while the game plays: the code after it never runs, and nothing
+  in the functions that called it is destroyed. Locals your systems capture
+  by reference stay valid, as they do on the desktop, where `run()` blocks.
+  Save the game when the player asks, not after `run()`.
+- **The standard library has no files.** `printf` and `std::cout` go to
+  the browser's console, `std::cerr` to its errors. `fopen` finds no file:
+  load your data through the engine's assets (they are fetched before
+  setup), and keep saves with the engine's [storage](storage.md). `sleep` returns at once,
+  `std::thread` can't start a thread, and `exit()` stops the game with an
+  error. The build stops, naming them, if your code calls any other function
+  the browser doesn't have.
+- **C++ exceptions** work, with WebAssembly exception handling: the game
+  needs Chrome 137, Firefox 131 or Safari 18.4 or newer.
+
+Emscripten, the usual compiler for C and C++ on the web, can't build the
+engine: its window, input and graphics run on winit and wasm-bindgen, which
+have no Emscripten backend. `web/smoke/cpp.mjs` builds the guide's first
+game this way and checks in a headless browser that it starts, draws and
+moves its crab while the right arrow key is held.

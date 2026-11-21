@@ -102,6 +102,12 @@ serde_json = "1.0.154"
 wasm-bindgen = "0.2.130"
 js-sys = "0.3.107"
 
+# The browser entry point of C and C++ games (web/build-cpp.sh): a library,
+# so the game's `main` is the only one.
+[[example]]
+name = "web_main"
+crate-type = ["cdylib"]
+
 [dev-dependencies]
 cbindgen = { version = "0.29.2", default-features = false }
 # A lobby server for the lobby client's tests (tests/lobby.rs).

@@ -1,18 +1,23 @@
 //! The browser entry point of a C or C++ game: `web/build-cpp.sh` compiles
 //! the game with the WASI SDK's clang and links its objects into this
 //! program, built for `wasm32-unknown-unknown` (the guide's "C and C++ on the
-//! web"). `main` calls the game's `main`.
+//! web"). It is a library (`crate-type = ["cdylib"]`), so the only `main`
+//! is the game's; its start function calls that.
 //!
 //! The C and C++ standard libraries come from the WASI SDK and call a few
 //! WASI functions; the ones a game needs in a browser are defined below
-//! (console output, clocks, random bytes, no files), so the module imports
+//! (console output, clocks, random bytes; no files and no sleeping, which
+//! fail as they would with nothing to open), so the module imports
 //! nothing but the engine's own browser calls. `web/build-cpp.sh` stops with
 //! the names of any other WASI function the game's code calls.
 //!
-//! On the desktop this program only says what it is for.
+//! On the desktop it is an empty library.
 
+/// Runs the game's static constructors and its `main`, when the page loads
+/// the module.
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-fn main() {
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub fn start() {
     unsafe extern "C" {
         // The C program's `main`: clang names `int main(void)` so for
         // WebAssembly, and the C library's `__main_void` calls
@@ -28,10 +33,6 @@ fn main() {
     ponko_ffi::web::run_main(__main_void);
 }
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-fn main() {
-    eprintln!("web_main is the browser entry point of C and C++ games: build one with web/build-cpp.sh");
-}
 
 /// The WASI functions of the C library (`wasi_snapshot_preview1`), as the
 /// C library declares them: the linker uses these definitions instead of
@@ -46,6 +47,7 @@ mod wasi {
     /// No such file descriptor: there are no files, and no folders to open.
     const EBADF: i32 = 8;
     const EINVAL: i32 = 28;
+    const ENOTSUP: i32 = 58;
     const FILETYPE_CHARACTER_DEVICE: u8 = 2;
 
     #[wasm_bindgen]
@@ -148,6 +150,76 @@ mod wasi {
     #[unsafe(no_mangle)]
     extern "C" fn __imported_wasi_snapshot_preview1_fd_prestat_dir_name(_fd: i32, _path: *mut u8, _len: usize) -> i32 {
         EBADF
+    }
+
+    /// Files: there are none, so these are never reached with a real
+    /// descriptor (`fopen` and `stat` fail first, finding no folder); they
+    /// are defined so a game that mentions files still builds.
+    #[unsafe(no_mangle)]
+    #[allow(clippy::too_many_arguments)]
+    extern "C" fn __imported_wasi_snapshot_preview1_path_open(
+        _fd: i32,
+        _dirflags: i32,
+        _path: i32,
+        _path_len: i32,
+        _oflags: i32,
+        _rights: i64,
+        _inheriting: i64,
+        _fdflags: i32,
+        _opened: i32,
+    ) -> i32 {
+        EBADF
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn __imported_wasi_snapshot_preview1_path_filestat_get(_fd: i32, _flags: i32, _path: i32, _len: i32, _stat: i32) -> i32 {
+        EBADF
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn __imported_wasi_snapshot_preview1_fd_filestat_get(_fd: i32, _stat: i32) -> i32 {
+        EBADF
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn __imported_wasi_snapshot_preview1_fd_readdir(_fd: i32, _buf: i32, _len: i32, _cookie: i64, _used: i32) -> i32 {
+        EBADF
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn __imported_wasi_snapshot_preview1_fd_tell(_fd: i32, _offset: i32) -> i32 {
+        EBADF
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn __imported_wasi_snapshot_preview1_fd_sync(_fd: i32) -> i32 {
+        EBADF
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn __imported_wasi_snapshot_preview1_path_create_directory(_fd: i32, _path: i32, _len: i32) -> i32 {
+        EBADF
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn __imported_wasi_snapshot_preview1_path_unlink_file(_fd: i32, _path: i32, _len: i32) -> i32 {
+        EBADF
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn __imported_wasi_snapshot_preview1_path_remove_directory(_fd: i32, _path: i32, _len: i32) -> i32 {
+        EBADF
+    }
+
+    #[unsafe(no_mangle)]
+    extern "C" fn __imported_wasi_snapshot_preview1_path_rename(_fd: i32, _from: i32, _from_len: i32, _to_fd: i32, _to: i32, _to_len: i32) -> i32 {
+        EBADF
+    }
+
+    /// Sleeping: a page can't block, so `sleep` and `nanosleep` fail at once.
+    #[unsafe(no_mangle)]
+    extern "C" fn __imported_wasi_snapshot_preview1_poll_oneoff(_in: i32, _out: i32, _count: i32, _events: i32) -> i32 {
+        ENOTSUP
     }
 
     /// No arguments and no environment variables.

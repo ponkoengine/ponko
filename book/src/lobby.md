@@ -255,6 +255,6 @@ and the opaque payload), over the engine's message endpoint.
 `_leave_room`, `_queue`, `_cancel_queue`, `_set_meta`, `_relay`, `_state`,
 `_members`, `_room_meta`, `_disconnect` and `_free`, and `ponko::lobby` in
 C++, are the client. A native game joins over UDP only:
-`LobbyClient::join_web` is Rust-only, since C and C++ games don't build
-for the web yet. The server is Rust: a native game talks to `ponko-lobby`
+`LobbyClient::join_web` is Rust-only, so a C or C++ game built for the
+web has no lobby client. The server is Rust: a native game talks to `ponko-lobby`
 as it is.

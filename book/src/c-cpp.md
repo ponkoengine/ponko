@@ -63,6 +63,9 @@ In PowerShell, replace `$PWD` with the repository's absolute path, using
 forward slashes; Visual Studio builds use `--config Release` and put programs
 in `target/native/Release/`.
 
+For the browser, `web/build-cpp.sh` builds a C or C++ game with the WASI
+SDK: see [Web builds](web.md#c-and-c).
+
 For your own game, copy the recipe in `examples/cpp/CMakeLists.txt`: include
 the two headers, link `ponko_ffi`, ship its shared library next to your
 executable, and put your textures in an `assets/` folder next to it (the
@@ -496,12 +499,12 @@ binding arrives:
 | `Physics3D::move_character` | [3D physics](physics3d.md#a-walking-character) | Characters walk with the physics step only; one tick can't be replayed on its own |
 | `Physics3D::set_terrain_rebuild` | [3D physics](physics3d.md#bodies-colliders-and-terrain) | A loaded tile gets a new terrain collider from its heights |
 | `Physics3D::clear_terrain_rebuild` | [3D physics](physics3d.md#bodies-colliders-and-terrain) | Same |
-| `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ games don't build for the web yet |
-| `LobbyClient::join_web` | [Lobbies, matchmaking and relays](lobby.md#the-client) | C and C++ games don't build for the web yet; their lobby clients join over UDP |
+| `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ web games can't join over WebSocket |
+| `LobbyClient::join_web` | [Lobbies, matchmaking and relays](lobby.md#the-client) | C and C++ lobby clients join over UDP, so a C or C++ web game has none |
 | `Signaling` | [Peer to peer over WebRTC](webrtc.md#with-any-signaling-channel) | C and C++ WebRTC endpoints are signaled through a lobby client (`ponko_net_messages_rtc_host`, `_rtc_join`) |
-| `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ games don't build for the web yet |
-| `Assets::browser_saves`, `Assets::revert_browser_save` | [Saving in a browser](editor.md#saving-in-a-browser) | C and C++ games don't build for the web yet, so they keep no files in a browser |
-| `Assets::browser_saves`, `Assets::revert_browser_save`, `Assets::browser_saves_persistent` | [Saving in a browser](editor.md#saving-in-a-browser) | C and C++ games don't build for the web yet, so they keep no files in a browser |
+| `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ web games have no WebRTC endpoint |
+| `Assets::browser_saves`, `Assets::revert_browser_save` | [Saving in a browser](editor.md#saving-in-a-browser) | A C or C++ web game keeps no files in a browser yet |
+| `Assets::browser_saves`, `Assets::revert_browser_save`, `Assets::browser_saves_persistent` | [Saving in a browser](editor.md#saving-in-a-browser) | A C or C++ web game keeps no files in a browser yet |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |

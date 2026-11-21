@@ -219,8 +219,8 @@ Things to know:
   served over HTTPS may only open `wss://` URLs, so put a TLS proxy (Caddy,
   nginx) in front of the WebSocket port and join `wss://your.host/...`.
   Connections are unauthenticated, like UDP sessions.
-- **Rust only, for now.** C and C++ hosts take UDP players only (C and C++
-  games don't build for the web yet either).
+- **Rust only, for now.** C and C++ hosts take UDP players only, and a C
+  or C++ game built for the web can't join over WebSocket.
 - **Hidden tabs stop.** A browser gives a tab that isn't shown (behind
   another tab, or minimized) no animation frames, so its player stops
   sending inputs and the session waits for it. Players in one browser
