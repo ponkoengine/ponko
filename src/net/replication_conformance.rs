@@ -1324,7 +1324,7 @@ fn raw_events_that_cannot_go_are_refused() {
 }
 
 #[test]
-#[should_panic(expected = "event `blob` is declared twice")]
+#[should_panic(expected = "raw event `blob` is declared twice; declare each event once")]
 fn a_raw_event_declared_twice_is_refused() {
     let _ = Replication::new().raw_event("blob").raw_event("blob");
 }

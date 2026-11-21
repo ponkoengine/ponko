@@ -1169,6 +1169,12 @@
     "reason": "Internal invariant: if seq_diff(p.seq, ack) > 0 {                 break;             }             let p = self.pending.pop_front().expect(\"front exists\");",
     "site": "src/net/prediction.rs:246"
   },
+  "src/net/replicate.rs:170c1031b85ac9af": {
+    "classification": "caller-contract",
+    "construction": "assert!( !inner.events.iter().any(|e| e.is_raw(name)), \"Replication: raw event `{name}` is declared twice; declare each event once\" )",
+    "reason": "Declaration time: names the raw event declared twice and says to declare it once; should_panic test a_raw_event_declared_twice_is_refused",
+    "site": "src/net/replicate.rs:1226"
+  },
   "src/net/replicate.rs:1d7b1a78c6a37edd": {
     "classification": "caller-contract",
     "construction": "assert!( f.offset + f.ty.size() <= size, \"Replication::raw_component: field `{}` of `{name}` lies outside its {size} bytes\", f.name )",
@@ -1187,35 +1193,29 @@
     "reason": "Names the declared input type and the one asked for, and says to use the declared one; should_panic test",
     "site": "src/net/replicate.rs:1174"
   },
+  "src/net/replicate.rs:5b913faba339490e": {
+    "classification": "caller-contract",
+    "construction": "assert!( !inner.events.iter().any(|e| e.is_type(TypeId::of::<T>())), \"Replication: event `{name}` is declared twice; declare each event once\" )",
+    "reason": "Declaration time: names the event declared twice and says to declare it once; should_panic test in tests/net_replication.rs",
+    "site": "src/net/replicate.rs:1181"
+  },
   "src/net/replicate.rs:5fafb3951332d561": {
     "classification": "caller-contract",
     "construction": "assert!( !self.kinds.iter().any(|k| k.type_id == Some(type_id)), \"Replication: `{}` is declared twice; declare each component once\", kind.name )",
     "reason": "Declaration time: names the component declared twice and says to declare it once; should_panic test",
     "site": "src/net/replicate.rs:505"
   },
-  "src/net/replicate.rs:698408b41d22e899": {
-    "classification": "forwarded-error",
-    "construction": "panic!( \"Replication: event `{}` doesn't serialize: {e}\", std::any::type_name::<T>() )",
-    "reason": "Re-raises serde_json's error for an event value that can't serialize; should_panic test",
-    "site": "src/net/replicate.rs:821"
+  "src/net/replicate.rs:75f83e56a6c96cdf": {
+    "classification": "caller-contract",
+    "construction": "panic!( \"Replication: `{0}` isn't a declared event; add `.event::<{0}>()` to the Replication\", crate::reflect::short_name(std::any::type_name::<T>()) )",
+    "reason": "Names the event type that wasn't declared and the .event::<T>() call that declares it; should_panic test in tests/net_replication.rs",
+    "site": "src/net/replicate.rs:889"
   },
   "src/net/replicate.rs:792102dfe1e6c387": {
     "classification": "caller-contract",
     "construction": "panic!( \"Replication::set_input: no input type was declared; add `.input::<{}>()` to the Replication\", crate::reflect::short_name(std::any::type_name::<I>()) )",
     "reason": "Says no input type was declared and the declaration to add; should_panic test",
     "site": "src/net/replicate.rs:1152"
-  },
-  "src/net/replicate.rs:810e61fcac5c46f5": {
-    "classification": "caller-contract",
-    "construction": "panic!( \"Replication: `{0}` isn't a declared event; add `.event::<{0}>()` to the Replication\", crate::reflect::short_name(std::any::type_name::<T>()) )",
-    "reason": "Names the undeclared event type and the declaration to add; should_panic test",
-    "site": "src/net/replicate.rs:807"
-  },
-  "src/net/replicate.rs:a2c48464ca7c71fb": {
-    "classification": "caller-contract",
-    "construction": "assert!( !inner.events.iter().any(|e| e.type_id == TypeId::of::<T>()), \"Replication: event `{name}` is declared twice; declare each event once\" )",
-    "reason": "Declaration time: names the event declared twice and says to declare it once; should_panic test",
-    "site": "src/net/replicate.rs:1013"
   },
   "src/net/replicate.rs:b94507bf6f478855": {
     "classification": "forwarded-error",
@@ -1229,11 +1229,23 @@
     "reason": "Names the declared input type and the one used, and that a game has one; should_panic test",
     "site": "src/net/replicate.rs:532"
   },
+  "src/net/replicate.rs:ca619d3efdf14c80": {
+    "classification": "caller-contract",
+    "construction": "panic!( \"Replication: event `{}` doesn't serialize: {e}\", std::any::type_name::<T>() )",
+    "reason": "Names the event type and serde's error (the value can't be written as MessagePack); should_panic test in tests/net_replication.rs",
+    "site": "src/net/replicate.rs:899"
+  },
   "src/net/replicate.rs:db6757892f2516a4": {
     "classification": "caller-contract",
     "construction": "assert!( self.kinds.len() < wire::MAX_KINDS, \"Replication: at most {} component types can be replicated; put fields that change together into one component\", wire::MAX_KINDS )",
     "reason": "Declaration time: names the 64-type limit and says to merge fields into fewer components; should_panic test",
     "site": "src/net/replicate.rs:511"
+  },
+  "src/net/replicate.rs:e4040dbb1c665070": {
+    "classification": "caller-contract",
+    "construction": "assert!( self.events.len() < usize::from(u16::MAX), \"Replication: at most {} event types can be declared; put related events into one enum\", u16::MAX )",
+    "reason": "Declaration time: names the 65535 event-type limit (event types travel as u16) and says to merge related events into one enum",
+    "site": "src/net/replicate.rs:955"
   },
   "src/net/replicate/bits.rs:0ed36afc7811b5a2": {
     "classification": "invariant",
@@ -3550,18 +3562,6 @@
     "construction": ".unwrap()",
     "reason": "Internal invariant: a Toggle widget always has a value.",
     "site": "src/ui/retained.rs:1896"
-  },
-  "src/ui/retained_draw.rs:29736f7f9ee016b3": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "draw: every visible node was laid out this frame and has a Taffy node",
-    "site": "src/ui/retained_draw.rs:302"
-  },
-  "src/ui/retained_draw.rs:314c05a3248d3d28": {
-    "classification": "invariant",
-    "construction": ".unwrap()",
-    "reason": "Internal invariant: ui.layout_with_text(viewport, &mut self.gfx.text);         let scale = ui.scale();         for (order, &id) in ui.visible.iter().enumerate() {             let n = ui.node(id).unwrap();",
-    "site": "src/ui/retained_draw.rs:212"
   },
   "src/ui/retained_ime.rs:505778b347d4bf2e": {
     "classification": "invariant",

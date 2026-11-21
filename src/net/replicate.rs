@@ -953,12 +953,8 @@ fn undeclared_raw(name: &str) -> Error {
 impl Inner {
     fn declare_event(&mut self, name: String, delivery: Delivery) {
         assert!(
-            !self.events.iter().any(|e| e.name == name),
-            "Replication: event `{name}` is declared twice; declare each event once"
-        );
-        assert!(
             self.events.len() < usize::from(u16::MAX),
-            "Replication: at most {} event types can be declared",
+            "Replication: at most {} event types can be declared; put related events into one enum",
             u16::MAX
         );
         self.events.push(EventType { name, delivery });
@@ -1209,7 +1205,7 @@ impl Replication {
     /// event never matches a typed one, even of the same name.
     ///
     /// # Panics
-    /// If an event of this name was declared already.
+    /// If a raw event of this name was declared already.
     ///
     /// ```
     /// use ponko::net::{NetEvent, RawEvent, Replication};
@@ -1226,8 +1222,12 @@ impl Replication {
     /// ```
     #[must_use]
     pub fn raw_event(mut self, name: &str) -> Self {
-        self.declare()
-            .declare_event(name.to_string(), Delivery::Raw(Arc::from(name)));
+        let inner = self.declare();
+        assert!(
+            !inner.events.iter().any(|e| e.is_raw(name)),
+            "Replication: raw event `{name}` is declared twice; declare each event once"
+        );
+        inner.declare_event(name.to_string(), Delivery::Raw(Arc::from(name)));
         self
     }
 
