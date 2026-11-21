@@ -779,3 +779,62 @@ fn every_output_format_shows_the_same_picture() {
         );
     }
 }
+
+/// `Stage::render_timed` times each frame once, as a game's frame does: it
+/// begins the timer's frame itself and submits the timestamps with the
+/// frame, so after waiting for the GPU the next frame reads the one before
+/// it back (one frame old), and each frame brings one sample. A caller that
+/// also began the frame would make every sample two frames old.
+#[test]
+fn render_timed_times_each_frame_once_and_reads_it_back_the_next() {
+    let Some(mut stage) = Stage::with(Setup {
+        timestamps: true,
+        ..Setup::default()
+    }) else {
+        return;
+    };
+    let Some(mut timer) = super::timer::GpuTimer::new(&stage.device, &stage.queue) else {
+        skip("timestamp queries unavailable");
+        return;
+    };
+    let _ = opaque(&mut stage);
+    let mut sampled = 0;
+    for frame in 0..12 {
+        let read = timer.frames_read;
+        stage.render_timed(Some(&mut timer));
+        stage.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        timer.collect(&stage.device);
+        if frame < 2 {
+            continue;
+        }
+        assert!(
+            timer.frames_read <= read + 1,
+            "frame {frame}: more than one frame came back"
+        );
+        if timer.frames_read == read + 1 {
+            // The frame before this one came back, and only it.
+            let (ms, age) = timer.latest_frame().expect("a frame came back");
+            assert_eq!(age, 1, "frame {frame}: the sample is {age} frames old, not one");
+            assert!(ms.is_finite() && ms >= 0.0, "frame {frame}: {ms} ms");
+            sampled += 1;
+        }
+    }
+    // A pass whose timestamps a busy GPU didn't write usably is not a
+    // sample; nearly every frame is.
+    assert!(sampled >= 8, "{sampled} of 10 frames brought a sample");
+    // Negative control: beginning the frame again before `render_timed`
+    // (what the debug-lines timing test did after the merge) makes the
+    // samples two frames old.
+    timer.begin_frame();
+    stage.render_timed(Some(&mut timer));
+    stage.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    timer.begin_frame();
+    stage.render_timed(Some(&mut timer));
+    stage.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let read = timer.frames_read;
+    timer.collect(&stage.device);
+    if timer.frames_read > read {
+        let (_, age) = timer.latest_frame().expect("a frame came back");
+        assert_eq!(age, 2, "a frame begun twice counts twice");
+    }
+}

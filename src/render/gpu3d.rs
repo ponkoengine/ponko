@@ -1442,7 +1442,8 @@ impl Renderer3D {
         self.resources.texture_replaced(device, textures, texture);
     }
 
-    #[cfg(any(test, feature = "bench-internals"))]
+    // For tests and the native benches (unused in a web build).
+    #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "bench-internals")))]
     pub fn create_material(
         &mut self,
         device: &wgpu::Device,
@@ -1590,7 +1591,8 @@ impl Renderer3D {
     }
 
     /// Compiles a material shader from the game's WGSL; returns its index.
-    #[cfg(any(test, feature = "bench-internals"))]
+    // For tests and the native benches (unused in a web build).
+    #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "bench-internals")))]
     pub fn create_shader(
         &mut self,
         device: &wgpu::Device,

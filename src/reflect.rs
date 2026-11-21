@@ -1324,17 +1324,22 @@ impl WorldReflect for World {
             }
             entities.extend_from_slice(a.entities());
         }
-        // Each entity's JSON on its own: in parallel, in id order.
+        // Each entity's JSON on its own: in parallel, in id order, on the
+        // frame pool (on the web, its workers, not the page's thread), as
+        // parallel queries run. The text is the same on any number of threads.
         entities.sort_unstable_by_key(|e| e.to_bits());
-        let entities: Vec<Value> = entities
-            .par_iter()
-            .filter_map(|&e| match self.entity_json(e) {
-                Ok(Value::Object(components)) if !components.is_empty() => {
-                    Some(serde_json::json!({ "entity": e.to_bits(), "components": components }))
-                }
-                _ => None,
-            })
-            .collect();
+        let entities: Vec<Value> = crate::frame_pool::run(|| {
+            crate::profile_scope!("reflect/shared_save");
+            entities
+                .par_iter()
+                .filter_map(|&e| match self.entity_json(e) {
+                    Ok(Value::Object(components)) if !components.is_empty() => {
+                        Some(serde_json::json!({ "entity": e.to_bits(), "components": components }))
+                    }
+                    _ => None,
+                })
+                .collect()
+        });
         let mut resources = serde_json::Map::new();
         for r in registry(self).map_or(&[][..], |r| &r.resources) {
             if let Some(Ok(v)) = (r.get)(self) {

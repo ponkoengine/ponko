@@ -381,6 +381,13 @@ impl Resource {
 
 /// What a frame does, as a set of flags: each decides whether some steps
 /// are recorded. `Renderer3D::frame_features` reads them off the renderer.
+///
+/// The bit numbers live only in this process: nothing is written to disk
+/// or sent anywhere by number (no cooked asset, pipeline cache, save or
+/// report holds them; diagnostics print the flags' names), so a flag may be
+/// renumbered when another is added, as the sky kit's were when the
+/// reflection spread slot took bit 40. Keep it that way: anything that
+/// stores a frame's features stores the names.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct Features(u64);
 
