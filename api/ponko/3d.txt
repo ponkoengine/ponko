@@ -3549,6 +3549,8 @@ impl core::cmp::PartialEq for ponko::error::Error
 pub fn ponko::error::Error::eq(&self, &Self) -> bool
 impl core::convert::From<ponko::error::Error> for alloc::string::String
 pub fn alloc::string::String::from(ponko::error::Error) -> Self
+impl core::convert::From<ponko::mods::ModError> for ponko::error::Error
+pub fn ponko::error::Error::from(ponko::mods::ModError) -> Self
 impl core::convert::From<ponko::reflect::ReflectError> for ponko::error::Error
 pub fn ponko::error::Error::from(ponko::reflect::ReflectError) -> Self
 impl core::convert::From<ponko::skeleton2d::SkeletonError> for ponko::error::Error
@@ -3990,6 +3992,8 @@ pub fn ponko::gfx::Graphics::set_hdr_output(&mut self, ponko::render::HdrOutput)
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::is_resident(&self, ponko::streaming::ResidencyKind, &str) -> bool
 pub fn ponko::gfx::Graphics::residency(&self, ponko::streaming::ResidencyKind) -> ponko::streaming::ResidencyStats
+impl ponko::gfx::Graphics
+pub fn ponko::gfx::Graphics::keep_bake_sources(&mut self, bool)
 impl ponko::gfx::Graphics
 pub fn ponko::gfx::Graphics::load_aseprite(&mut self, &str, bool) -> ponko::aseprite::Aseprite
 pub fn ponko::gfx::Graphics::try_load_aseprite(&mut self, &str, bool) -> core::result::Result<ponko::aseprite::Aseprite, ponko::error::Error>
@@ -5295,6 +5299,136 @@ pub use ponko::math::uvec2
 pub use ponko::math::vec2
 pub use ponko::math::vec3
 pub use ponko::math::vec4
+pub mod ponko::mods
+#[non_exhaustive] pub enum ponko::mods::ModProblem
+pub ponko::mods::ModProblem::AlreadyMounted
+pub ponko::mods::ModProblem::BadJson(alloc::string::String)
+pub ponko::mods::ModProblem::BadName(alloc::string::String)
+pub ponko::mods::ModProblem::BadValue
+pub ponko::mods::ModProblem::BadValue::component: alloc::string::String
+pub ponko::mods::ModProblem::BadValue::message: alloc::string::String
+pub ponko::mods::ModProblem::Cycle(alloc::vec::Vec<alloc::string::String>)
+pub ponko::mods::ModProblem::DuplicateId(alloc::string::String)
+pub ponko::mods::ModProblem::Manifest(alloc::string::String)
+pub ponko::mods::ModProblem::MissingDependency(alloc::string::String)
+pub ponko::mods::ModProblem::TooLarge
+pub ponko::mods::ModProblem::TooLarge::limit: u64
+pub ponko::mods::ModProblem::TooLarge::size: u64
+pub ponko::mods::ModProblem::TooManyFiles
+pub ponko::mods::ModProblem::TooManyFiles::count: usize
+pub ponko::mods::ModProblem::TooManyFiles::limit: usize
+pub ponko::mods::ModProblem::UnknownComponent(alloc::string::String)
+pub ponko::mods::ModProblem::UnknownResource(alloc::string::String)
+pub ponko::mods::ModProblem::Unreadable(alloc::string::String)
+impl core::clone::Clone for ponko::mods::ModProblem
+pub fn ponko::mods::ModProblem::clone(&self) -> Self
+impl core::cmp::Eq for ponko::mods::ModProblem
+impl core::cmp::PartialEq for ponko::mods::ModProblem
+pub fn ponko::mods::ModProblem::eq(&self, &Self) -> bool
+impl core::convert::From<ponko::reflect::ReflectError> for ponko::mods::ModProblem
+pub fn ponko::mods::ModProblem::from(ponko::reflect::ReflectError) -> Self
+impl core::fmt::Debug for ponko::mods::ModProblem
+pub fn ponko::mods::ModProblem::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::mods::ModProblem
+pub fn ponko::mods::ModProblem::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::mods::ModProblem
+pub struct ponko::mods::ModError
+impl ponko::mods::ModError
+pub fn ponko::mods::ModError::file(&self) -> core::option::Option<&str>
+pub fn ponko::mods::ModError::mod_id(&self) -> &str
+pub fn ponko::mods::ModError::problem(&self) -> &ponko::mods::ModProblem
+impl core::clone::Clone for ponko::mods::ModError
+pub fn ponko::mods::ModError::clone(&self) -> Self
+impl core::cmp::Eq for ponko::mods::ModError
+impl core::cmp::PartialEq for ponko::mods::ModError
+pub fn ponko::mods::ModError::eq(&self, &Self) -> bool
+impl core::convert::From<ponko::mods::ModError> for ponko::error::Error
+pub fn ponko::error::Error::from(ponko::mods::ModError) -> Self
+impl core::error::Error for ponko::mods::ModError
+impl core::fmt::Debug for ponko::mods::ModError
+pub fn ponko::mods::ModError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::mods::ModError
+pub fn ponko::mods::ModError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::mods::ModError
+#[non_exhaustive] pub struct ponko::mods::ModInfo
+pub ponko::mods::ModInfo::files: usize
+pub ponko::mods::ModInfo::id: alloc::string::String
+pub ponko::mods::ModInfo::mod_version: alloc::string::String
+pub ponko::mods::ModInfo::name: alloc::string::String
+pub ponko::mods::ModInfo::origin: alloc::string::String
+impl core::clone::Clone for ponko::mods::ModInfo
+pub fn ponko::mods::ModInfo::clone(&self) -> Self
+impl core::cmp::Eq for ponko::mods::ModInfo
+impl core::cmp::PartialEq for ponko::mods::ModInfo
+pub fn ponko::mods::ModInfo::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::mods::ModInfo
+pub fn ponko::mods::ModInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::mods::ModInfo
+pub struct ponko::mods::ModLimits
+pub ponko::mods::ModLimits::max_file_bytes: u64
+pub ponko::mods::ModLimits::max_files: usize
+pub ponko::mods::ModLimits::max_total_bytes: u64
+impl core::clone::Clone for ponko::mods::ModLimits
+pub fn ponko::mods::ModLimits::clone(&self) -> Self
+impl core::cmp::Eq for ponko::mods::ModLimits
+impl core::cmp::PartialEq for ponko::mods::ModLimits
+pub fn ponko::mods::ModLimits::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::mods::ModLimits
+pub fn ponko::mods::ModLimits::default() -> Self
+impl core::fmt::Debug for ponko::mods::ModLimits
+pub fn ponko::mods::ModLimits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::mods::ModLimits
+impl core::marker::StructuralPartialEq for ponko::mods::ModLimits
+#[non_exhaustive] pub struct ponko::mods::ModManifest
+pub ponko::mods::ModManifest::after: alloc::vec::Vec<alloc::string::String>
+pub ponko::mods::ModManifest::id: alloc::string::String
+pub ponko::mods::ModManifest::mod_version: alloc::string::String
+pub ponko::mods::ModManifest::name: alloc::string::String
+pub ponko::mods::ModManifest::requires: alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for ponko::mods::ModManifest
+pub fn ponko::mods::ModManifest::clone(&self) -> Self
+impl core::cmp::Eq for ponko::mods::ModManifest
+impl core::cmp::PartialEq for ponko::mods::ModManifest
+pub fn ponko::mods::ModManifest::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::mods::ModManifest
+pub fn ponko::mods::ModManifest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::mods::ModManifest
+impl<'de> serde_core::de::Deserialize<'de> for ponko::mods::ModManifest
+pub fn ponko::mods::ModManifest::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct ponko::mods::ModPack
+impl ponko::mods::ModPack
+pub fn ponko::mods::ModPack::from_files<N: core::convert::Into<alloc::string::String>, B: core::convert::Into<alloc::vec::Vec<u8>>>(impl core::convert::Into<alloc::string::String>, impl core::iter::traits::collect::IntoIterator<Item = (N, B)>) -> core::result::Result<ponko::mods::ModPack, ponko::mods::ModError>
+pub fn ponko::mods::ModPack::from_pack_bytes(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::rcs::arc::Arc<[u8]>>) -> core::result::Result<ponko::mods::ModPack, ponko::mods::ModError>
+pub fn ponko::mods::ModPack::id(&self) -> &str
+pub fn ponko::mods::ModPack::manifest(&self) -> &ponko::mods::ModManifest
+pub fn ponko::mods::ModPack::open(impl core::convert::AsRef<std::path::Path>) -> core::result::Result<ponko::mods::ModPack, ponko::mods::ModError>
+impl core::fmt::Debug for ponko::mods::ModPack
+pub fn ponko::mods::ModPack::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct ponko::mods::ModSet
+impl ponko::mods::ModSet
+pub fn ponko::mods::ModSet::add(&mut self, ponko::mods::ModPack) -> &mut Self
+pub fn ponko::mods::ModSet::limits(self, ponko::mods::ModLimits) -> Self
+pub fn ponko::mods::ModSet::mount(self, &mut ponko::prelude::Ctx) -> core::result::Result<(), ponko::mods::ModError>
+pub fn ponko::mods::ModSet::new() -> Self
+pub fn ponko::mods::ModSet::order(&self) -> core::result::Result<alloc::vec::Vec<&str>, ponko::mods::ModError>
+pub fn ponko::mods::ModSet::problems(&self, &ponko_ecs::world::World) -> alloc::vec::Vec<ponko::mods::ModError>
+pub fn ponko::mods::ModSet::with(self, ponko::mods::ModPack) -> Self
+impl core::default::Default for ponko::mods::ModSet
+pub fn ponko::mods::ModSet::default() -> Self
+impl core::fmt::Debug for ponko::mods::ModSet
+pub fn ponko::mods::ModSet::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct ponko::mods::Mods
+impl ponko::mods::Mods
+pub fn ponko::mods::Mods::files_under<'a>(&'a self, &'a str) -> impl core::iter::traits::iterator::Iterator<Item = &'a str> + 'a
+pub fn ponko::mods::Mods::fingerprint(&self) -> u64
+pub fn ponko::mods::Mods::list(&self) -> &[ponko::mods::ModInfo]
+pub fn ponko::mods::Mods::provider(&self, &str) -> core::option::Option<&str>
+impl core::clone::Clone for ponko::mods::Mods
+pub fn ponko::mods::Mods::clone(&self) -> Self
+impl core::fmt::Debug for ponko::mods::Mods
+pub fn ponko::mods::Mods::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const ponko::mods::MANIFEST: &str
+pub const ponko::mods::SOURCE_ID: &str
 pub mod ponko::nav
 pub mod ponko::net
 pub use ponko::net::Replicate
@@ -6473,10 +6607,38 @@ impl core::fmt::Debug for ponko::perf::GpuTiming
 pub fn ponko::perf::GpuTiming::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::perf::GpuTiming
 impl core::marker::StructuralPartialEq for ponko::perf::GpuTiming
+#[non_exhaustive] pub enum ponko::perf::GpuUntimed
+pub ponko::perf::GpuUntimed::DeviceLost
+pub ponko::perf::GpuUntimed::NoGpu
+pub ponko::perf::GpuUntimed::NoTimestamps
+pub ponko::perf::GpuUntimed::NotReady
+pub ponko::perf::GpuUntimed::Off
+pub ponko::perf::GpuUntimed::QuerySetBudget
+impl ponko::perf::GpuUntimed
+pub fn ponko::perf::GpuUntimed::message(self) -> &'static str
+pub fn ponko::perf::GpuUntimed::name(self) -> &'static str
+impl core::clone::Clone for ponko::perf::GpuUntimed
+pub fn ponko::perf::GpuUntimed::clone(&self) -> Self
+impl core::cmp::Eq for ponko::perf::GpuUntimed
+impl core::cmp::PartialEq for ponko::perf::GpuUntimed
+pub fn ponko::perf::GpuUntimed::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::perf::GpuUntimed
+pub fn ponko::perf::GpuUntimed::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for ponko::perf::GpuUntimed
+pub fn ponko::perf::GpuUntimed::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for ponko::perf::GpuUntimed
+pub fn ponko::perf::GpuUntimed::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for ponko::perf::GpuUntimed
+impl core::marker::StructuralPartialEq for ponko::perf::GpuUntimed
+impl serde_core::ser::Serialize for ponko::perf::GpuUntimed
+pub fn ponko::perf::GpuUntimed::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for ponko::perf::GpuUntimed
+pub fn ponko::perf::GpuUntimed::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 #[non_exhaustive] pub enum ponko::perf::WarningKind
 pub ponko::perf::WarningKind::AllocatesEveryFrame
 pub ponko::perf::WarningKind::CpuBound
 pub ponko::perf::WarningKind::GpuBound
+pub ponko::perf::WarningKind::GpuNotTimed
 pub ponko::perf::WarningKind::HeavyShadows
 pub ponko::perf::WarningKind::Hotspot
 pub ponko::perf::WarningKind::ManyDrawCalls
@@ -6701,6 +6863,7 @@ pub fn ponko::perf::Perf::frame_stats(&self) -> ponko::perf::FrameStats
 pub fn ponko::perf::Perf::gpu_passes(&self) -> &[ponko::perf::GpuPass]
 pub fn ponko::perf::Perf::gpu_passes_not_timed(&self) -> &[&'static str]
 pub fn ponko::perf::Perf::gpu_timing(&self) -> ponko::perf::GpuTiming
+pub fn ponko::perf::Perf::gpu_untimed(&self) -> core::option::Option<ponko::perf::GpuUntimed>
 pub fn ponko::perf::Perf::hud(&self) -> bool
 pub fn ponko::perf::Perf::profiling(&self) -> bool
 pub fn ponko::perf::Perf::record_trace(&mut self, impl core::convert::Into<std::path::PathBuf>, usize)
@@ -6902,6 +7065,7 @@ pub fn ponko::perf::note_allocation(usize)
 pub fn ponko::perf::note_deallocation(usize)
 pub fn ponko::perf::scope_named(&str) -> &'static ponko::perf::ProfileScope
 pub fn ponko::perf::thread_alloc_counts() -> ponko::perf::AllocCounts
+pub fn ponko::perf::thread_net_alloc_bytes() -> i64
 pub mod ponko::prelude
 pub use ponko::prelude::Added
 pub use ponko::prelude::Changed
@@ -8960,6 +9124,8 @@ impl core::cmp::PartialEq for ponko::error::Error
 pub fn ponko::error::Error::eq(&self, &Self) -> bool
 impl core::convert::From<ponko::error::Error> for alloc::string::String
 pub fn alloc::string::String::from(ponko::error::Error) -> Self
+impl core::convert::From<ponko::mods::ModError> for ponko::error::Error
+pub fn ponko::error::Error::from(ponko::mods::ModError) -> Self
 impl core::convert::From<ponko::reflect::ReflectError> for ponko::error::Error
 pub fn ponko::error::Error::from(ponko::reflect::ReflectError) -> Self
 impl core::convert::From<ponko::skeleton2d::SkeletonError> for ponko::error::Error
@@ -9808,6 +9974,8 @@ impl core::cmp::PartialEq for ponko::reflect::ReflectError
 pub fn ponko::reflect::ReflectError::eq(&self, &Self) -> bool
 impl core::convert::From<ponko::reflect::ReflectError> for ponko::error::Error
 pub fn ponko::error::Error::from(ponko::reflect::ReflectError) -> Self
+impl core::convert::From<ponko::reflect::ReflectError> for ponko::mods::ModProblem
+pub fn ponko::mods::ModProblem::from(ponko::reflect::ReflectError) -> Self
 impl core::error::Error for ponko::reflect::ReflectError
 impl core::fmt::Debug for ponko::reflect::ReflectError
 pub fn ponko::reflect::ReflectError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -10400,6 +10568,20 @@ impl core::fmt::Debug for ponko::render::Tonemap
 pub fn ponko::render::Tonemap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::Tonemap
 impl core::marker::StructuralPartialEq for ponko::render::Tonemap
+#[non_exhaustive] #[repr(u32)] pub enum ponko::render::Upscaler
+pub ponko::render::Upscaler::Bilinear = 0
+pub ponko::render::Upscaler::Temporal = 1
+impl core::clone::Clone for ponko::render::Upscaler
+pub fn ponko::render::Upscaler::clone(&self) -> Self
+impl core::cmp::Eq for ponko::render::Upscaler
+impl core::cmp::PartialEq for ponko::render::Upscaler
+pub fn ponko::render::Upscaler::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::Upscaler
+pub fn ponko::render::Upscaler::default() -> Self
+impl core::fmt::Debug for ponko::render::Upscaler
+pub fn ponko::render::Upscaler::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::Upscaler
+impl core::marker::StructuralPartialEq for ponko::render::Upscaler
 pub struct ponko::render::AmbientOcclusion
 pub ponko::render::AmbientOcclusion::enabled: bool
 pub ponko::render::AmbientOcclusion::intensity: f32
@@ -10424,6 +10606,7 @@ pub ponko::render::BakeModel::lightmapped: bool
 impl ponko::render::BakeModel
 pub fn ponko::render::BakeModel::new(&ponko::render::MeshData, glam::f32::sse2::mat4::Mat4) -> Self
 pub fn ponko::render::BakeModel::with_albedo(self, ponko::color::Color) -> Self
+pub fn ponko::render::BakeModel::with_albedo_map(self, ponko::render::BakeTexture) -> Self
 pub fn ponko::render::BakeModel::with_double_sided(self, bool) -> Self
 pub fn ponko::render::BakeModel::with_emissive(self, ponko::color::Color) -> Self
 pub fn ponko::render::BakeModel::with_lightmapped(self, bool) -> Self
@@ -10448,11 +10631,23 @@ impl core::fmt::Debug for ponko::render::BakeStats
 pub fn ponko::render::BakeStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::BakeStats
 impl core::marker::StructuralPartialEq for ponko::render::BakeStats
+pub struct ponko::render::BakeTexture
+impl ponko::render::BakeTexture
+pub fn ponko::render::BakeTexture::from_rgba(u32, u32, &[u8]) -> core::result::Result<Self, ponko::error::Error>
+pub fn ponko::render::BakeTexture::size(&self) -> (u32, u32)
+impl core::clone::Clone for ponko::render::BakeTexture
+pub fn ponko::render::BakeTexture::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::BakeTexture
+pub fn ponko::render::BakeTexture::eq(&self, &Self) -> bool
+impl core::fmt::Debug for ponko::render::BakeTexture
+pub fn ponko::render::BakeTexture::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::render::BakeTexture
 pub struct ponko::render::BakedLighting
 impl ponko::render::BakedLighting
 pub fn ponko::render::BakedLighting::directional(&self) -> bool
 pub fn ponko::render::BakedLighting::from_bytes(&[u8]) -> core::result::Result<Self, ponko::error::Error>
 pub fn ponko::render::BakedLighting::gpu_bytes(&self) -> u64
+pub fn ponko::render::BakedLighting::is_compressed(&self) -> bool
 pub fn ponko::render::BakedLighting::lightmap(&self, usize) -> core::option::Option<ponko::render::Lightmapped>
 pub fn ponko::render::BakedLighting::page_size(&self) -> u32
 pub fn ponko::render::BakedLighting::pages(&self) -> u32
@@ -10697,6 +10892,19 @@ impl core::fmt::Debug for ponko::render::GlobalIllumination
 pub fn ponko::render::GlobalIllumination::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::GlobalIllumination
 impl core::marker::StructuralPartialEq for ponko::render::GlobalIllumination
+pub struct ponko::render::GltfBake
+impl ponko::render::GltfBake
+pub fn ponko::render::GltfBake::insert_lightmaps(&self, &ponko::render::BakedLighting, &mut ponko_ecs::world::World, ponko_ecs::entity::Entity) -> usize
+pub fn ponko::render::GltfBake::nodes(&self) -> &[(alloc::string::String, usize)]
+impl core::clone::Clone for ponko::render::GltfBake
+pub fn ponko::render::GltfBake::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::GltfBake
+pub fn ponko::render::GltfBake::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::GltfBake
+pub fn ponko::render::GltfBake::default() -> Self
+impl core::fmt::Debug for ponko::render::GltfBake
+pub fn ponko::render::GltfBake::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::render::GltfBake
 pub struct ponko::render::GpuAdapter
 pub ponko::render::GpuAdapter::backend: alloc::string::String
 pub ponko::render::GpuAdapter::device_type: alloc::string::String
@@ -10983,12 +11191,16 @@ pub fn ponko::render::LightBakeScene::add_spot_light(&mut self, glam::f32::vec3:
 pub fn ponko::render::LightBakeScene::is_empty(&self) -> bool
 pub fn ponko::render::LightBakeScene::len(&self) -> usize
 pub fn ponko::render::LightBakeScene::new(&ponko::render::Lighting, &ponko::render::Sky) -> Self
+impl ponko::render::LightBakeScene
+pub fn ponko::render::LightBakeScene::add_gltf(&mut self, &ponko::prelude::Ctx, &str, glam::f32::sse2::mat4::Mat4) -> core::result::Result<ponko::render::GltfBake, ponko::error::Error>
+pub fn ponko::render::LightBakeScene::add_world(&mut self, &mut ponko_ecs::world::World, &ponko::gfx::Graphics) -> core::result::Result<ponko::render::WorldBake, ponko::error::Error>
 impl core::clone::Clone for ponko::render::LightBakeScene
 pub fn ponko::render::LightBakeScene::clone(&self) -> Self
 impl core::fmt::Debug for ponko::render::LightBakeScene
 pub fn ponko::render::LightBakeScene::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct ponko::render::LightBakeSettings
 pub ponko::render::LightBakeSettings::bounces: u32
+pub ponko::render::LightBakeSettings::compress: bool
 pub ponko::render::LightBakeSettings::denoise: bool
 pub ponko::render::LightBakeSettings::directional: bool
 pub ponko::render::LightBakeSettings::page_size: u32
@@ -10998,6 +11210,7 @@ pub ponko::render::LightBakeSettings::seed: u64
 pub ponko::render::LightBakeSettings::texels_per_unit: f32
 impl ponko::render::LightBakeSettings
 pub fn ponko::render::LightBakeSettings::with_bounces(self, u32) -> Self
+pub fn ponko::render::LightBakeSettings::with_compress(self, bool) -> Self
 pub fn ponko::render::LightBakeSettings::with_denoise(self, bool) -> Self
 pub fn ponko::render::LightBakeSettings::with_directional(self, bool) -> Self
 pub fn ponko::render::LightBakeSettings::with_page_size(self, u32) -> Self
@@ -11418,6 +11631,7 @@ pub ponko::render::Post::taa_sharpness: f32
 pub ponko::render::Post::temperature: f32
 pub ponko::render::Post::tint: f32
 pub ponko::render::Post::tonemap: ponko::render::Tonemap
+pub ponko::render::Post::upscaler: ponko::render::Upscaler
 pub ponko::render::Post::vignette: f32
 impl ponko::render::Post
 pub const ponko::render::Post::MAX_RENDER_SCALE: f32
@@ -11937,10 +12151,38 @@ impl core::fmt::Debug for ponko::render::TargetEffect
 pub fn ponko::render::TargetEffect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::render::TargetEffect
 impl core::marker::StructuralPartialEq for ponko::render::TargetEffect
+pub struct ponko::render::Unbaked
+impl core::clone::Clone for ponko::render::Unbaked
+pub fn ponko::render::Unbaked::clone(&self) -> Self
+impl core::cmp::Eq for ponko::render::Unbaked
+impl core::cmp::PartialEq for ponko::render::Unbaked
+pub fn ponko::render::Unbaked::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::Unbaked
+pub fn ponko::render::Unbaked::default() -> Self
+impl core::fmt::Debug for ponko::render::Unbaked
+pub fn ponko::render::Unbaked::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for ponko::render::Unbaked
+impl core::marker::StructuralPartialEq for ponko::render::Unbaked
+impl ponko_ecs::bundle::Component for ponko::render::Unbaked
+pub struct ponko::render::WorldBake
+impl ponko::render::WorldBake
+pub fn ponko::render::WorldBake::entries(&self) -> &[(ponko_ecs::entity::Entity, usize)]
+pub fn ponko::render::WorldBake::insert_lightmaps(&self, &ponko::render::BakedLighting, &mut ponko_ecs::world::World) -> usize
+pub fn ponko::render::WorldBake::skipped(&self) -> &[ponko_ecs::entity::Entity]
+impl core::clone::Clone for ponko::render::WorldBake
+pub fn ponko::render::WorldBake::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::render::WorldBake
+pub fn ponko::render::WorldBake::eq(&self, &Self) -> bool
+impl core::default::Default for ponko::render::WorldBake
+pub fn ponko::render::WorldBake::default() -> Self
+impl core::fmt::Debug for ponko::render::WorldBake
+pub fn ponko::render::WorldBake::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for ponko::render::WorldBake
 pub const ponko::render::MAX_CROWD_INSTANCES: usize
 pub const ponko::render::MAX_CROWD_LEVELS: usize
 pub const ponko::render::MAX_LIGHTMAP_PAGES: u32
 pub fn ponko::render::bake_lighting(&ponko::render::LightBakeScene, &ponko::render::LightBakeSettings) -> core::result::Result<ponko::render::BakedLighting, ponko::error::Error>
+pub fn ponko::render::bake_lighting_gpu(&ponko::render::LightBakeScene, &ponko::render::LightBakeSettings) -> core::result::Result<ponko::render::BakedLighting, ponko::error::Error>
 pub mod ponko::scenario
 #[non_exhaustive] pub enum ponko::scenario::ScenarioCheck
 pub ponko::scenario::ScenarioCheck::Action
