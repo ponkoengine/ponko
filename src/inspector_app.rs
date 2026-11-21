@@ -687,6 +687,7 @@ impl Panels {
             .default_open(false)
             .show(ui, |ui| {
                 self.frame_graph(ui);
+                super::gpu_passes(ui, ctx);
                 super::systems(ui, ctx);
             });
     }
