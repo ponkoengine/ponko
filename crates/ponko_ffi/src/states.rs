@@ -85,6 +85,11 @@ unsafe fn transition(
 /// Runs `system_fn` each time the game enters `state`, between ticks,
 /// after the work registered before it (Rust's `Game::on_enter`).
 /// Without `ponko_game_state` first: `PONKO_INVALID_ARGUMENT`.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `system_fn`
+/// and never frees it. It must stay valid until the game is freed (or its run
+/// returns).
+///
 /// # Safety
 /// Live game; `system_fn` and `user` must stay valid while the game runs.
 /// ```
@@ -104,6 +109,11 @@ pub unsafe extern "C" fn ponko_game_on_enter(
 /// Runs `system_fn` each time the game leaves `state`, before it changes
 /// (`ponko_ctx_state` is still `state` inside it); Rust's `Game::on_exit`.
 /// Without `ponko_game_state` first: `PONKO_INVALID_ARGUMENT`.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `system_fn`
+/// and never frees it. It must stay valid until the game is freed (or its run
+/// returns).
+///
 /// # Safety
 /// Live game; `system_fn` and `user` must stay valid while the game runs.
 /// ```
@@ -143,6 +153,11 @@ pub type PonkoUiBuildFn = Option<unsafe extern "C" fn(ctx: *mut PonkoCtx, user: 
 /// one already up) shows an empty screen instead. Without
 /// `ponko_game_state` first, a null `build` or an unknown `mode`:
 /// `PONKO_INVALID_ARGUMENT`.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `build_fn`
+/// each time the state is entered and never frees it. It must stay valid until
+/// the game is freed (or its run returns).
+///
 /// # Safety
 /// Live game; `build` and `user` must stay valid while the game runs.
 /// ```
@@ -249,6 +264,11 @@ unsafe fn add_if(
 /// state is `state` (Rust's `.run_if(in_state(state))`): not while another
 /// state is pushed over it. Without `ponko_game_state` first:
 /// `PONKO_INVALID_ARGUMENT`.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `system_fn`
+/// and never frees it. It must stay valid until the game is freed (or its run
+/// returns).
+///
 /// # Safety
 /// Live game; `system_fn` and `user` must stay valid while the game runs.
 /// ```
@@ -271,6 +291,11 @@ pub unsafe extern "C" fn ponko_game_add_system_in_state(
 /// `ponko_game_add_system_in_state`, also running while other states are
 /// pushed over `state` (Rust's `.run_if(in_stack(state))`): drawing the
 /// level under a pause menu.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `system_fn`
+/// and never frees it. It must stay valid until the game is freed (or its run
+/// returns).
+///
 /// # Safety
 /// Live game; `system_fn` and `user` must stay valid while the game runs.
 /// ```
@@ -297,6 +322,11 @@ pub unsafe extern "C" fn ponko_game_add_system_in_stack(
 /// everything since it last ran. Like every C system it runs alone; the
 /// condition should only read. A null `condition` is
 /// `PONKO_INVALID_ARGUMENT`.
+///
+/// Ownership: `condition_user` and `user` stay the caller's; the engine passes
+/// them to `condition` and `system_fn` and never frees them. They must stay
+/// valid until the game is freed (or its run returns).
+///
 /// # Safety
 /// Live game; `condition`, `condition_user`, `system_fn` and `user` must
 /// stay valid while the game runs.

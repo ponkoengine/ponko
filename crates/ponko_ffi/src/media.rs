@@ -634,6 +634,10 @@ pub unsafe extern "C" fn ponko_ctx_save_screenshot(ctx: *mut PonkoCtx, path: *co
 /// (hot reload, see `ponko_game_hot_reload`): `*out_textures` points at
 /// `*out_count` of them, valid until the system returns. They keep their
 /// handles; use this to redo anything computed from an image.
+///
+/// Ownership: `out_textures` receives a view of an array the engine owns, valid
+/// until the system returns; never free it.
+///
 /// ```
 /// let (mut p, mut n) = (std::ptr::null(), 0);
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_reloaded_textures(std::ptr::null(), &mut p, &mut n) } as u32, 1);

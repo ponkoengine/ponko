@@ -701,6 +701,10 @@ pub unsafe extern "C" fn ponko_glyph_label(
 
 /// Draws every glyph at `cell` pixels square (clamped to 16..=256): free
 /// with `ponko_glyph_atlas_free`. Make it once.
+///
+/// Ownership: the returned atlas is the caller's (null on failure); free it
+/// with ponko_glyph_atlas_free.
+///
 /// ```
 /// let atlas = ponko_ffi::ponko_glyph_atlas_new(32);
 /// assert!(!atlas.is_null());
@@ -735,6 +739,10 @@ unsafe fn atlas_mut<'a>(atlas: *mut PonkoGlyphAtlas) -> Result<&'a mut GlyphAtla
 
 /// The atlas image: `*out_pixels` points at `width * height * 4` RGBA8
 /// bytes owned by the atlas (valid until it is freed).
+///
+/// Ownership: `out_pixels` receives a view of bytes the atlas owns, valid until
+/// the atlas is freed; never free it.
+///
 /// ```
 /// let atlas = ponko_ffi::ponko_glyph_atlas_new(16);
 /// let (mut p, mut w, mut h) = (std::ptr::null(), 0, 0);

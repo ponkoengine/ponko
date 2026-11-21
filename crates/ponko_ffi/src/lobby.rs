@@ -281,6 +281,10 @@ unsafe fn payload<'a>(bytes: *const u8, len: usize) -> Result<&'a [u8], Failure>
 /// Starts connecting to a lobby server at `addr` (e.g. "lobby.example.com:7700")
 /// over UDP. Poll it until a `PONKO_LOBBY_CONNECTED` (or
 /// `PONKO_LOBBY_DISCONNECTED`) event.
+///
+/// Ownership: on success `out_lobby` receives an owned lobby client, the
+/// caller's; free it with ponko_lobby_free.
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_lobby_join(c"127.0.0.1:7700".as_ptr(), std::ptr::null_mut()) } as u32, 1);
 /// ```

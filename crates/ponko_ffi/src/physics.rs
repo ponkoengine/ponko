@@ -442,6 +442,10 @@ pub unsafe extern "C" fn ponko_ctx_body_mass(
 /// pairs that started touching, false for pairs that stopped. `*out_count`
 /// values at `*out_data`, valid until the system returns. Each system that
 /// runs every tick sees each collision once.
+///
+/// Ownership: `out_data` receives a view of an array the engine owns, valid
+/// until the system returns; never free it.
+///
 /// # Safety
 /// Live ctx; writable outputs.
 /// ```

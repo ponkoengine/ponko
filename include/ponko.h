@@ -59,6 +59,20 @@
  * still theirs. ponko_ctx_handle_free is not a destructor of an owned object:
  * it frees an engine handle by id inside a context and returns a status like
  * the other ponko_ctx_* calls.
+ *
+ * Pointers and who owns them. A parameter's type says, unless the function's
+ * documentation (its doc comment in crates/ponko_ffi, the ponko_ffi API docs)
+ * has an "Ownership:" paragraph; scripts/check-ffi-ownership.py holds every
+ * function to this:
+ *   - a Ponko* object (PonkoCtx*, PonkoWorld*, a builder): borrowed for the
+ *     call, the caller keeps it; a ponko_*_free takes its first one and frees it;
+ *   - any const pointer (strings, arrays, descriptors, bytes, an array of
+ *     strings or handles): read during the call only; what is kept is copied;
+ *   - any other pointer (numbers, char buffers, value structs, void *out_*):
+ *     the caller's memory, written (and maybe read) during the call only.
+ * Returned pointers, pointers to pointers (T **out), callback user data
+ * (void *user) and objects a function takes over always have an "Ownership:"
+ * paragraph: who owns them, what frees them, how long they stay valid.
  */
 
 

@@ -120,6 +120,17 @@ jobs:
       # Every C export needs a test, or a reasoned entry in the allowlist.
       - name: C ABI test coverage
         run: python3 scripts/check-ffi-coverage.py
+      # Every C function says who owns each pointer it takes or returns: by
+      # the rules at the top of ponko.h, or an "Ownership:" paragraph.
+      - name: C ABI pointer ownership
+        run: |
+          python3 scripts/check-ffi-ownership.py
+          python3 scripts/check-ffi-ownership.py --selftest
+      # Every unsafe item outside the ECS has a test (scripts/unsafe-inventory.txt).
+      - name: Unsafe code inventory
+        run: |
+          python3 scripts/check-unsafe.py
+          python3 scripts/check-unsafe.py --selftest
       # Every C function has a C++ wrapper (or a reason on scripts/cpp-c-only.txt),
       # every public C++ declaration a doc comment, and every C/C++ block of the
       # book is an include of a file the native build compiles.
@@ -970,6 +981,14 @@ jobs:
           - name: par_for_each, tree borrows
             args: --test parallel --test changes --test view_groups --test query_cache --test query_cache_views --test hooks --test required
             flags: -Zmiri-tree-borrows -Zmiri-ignore-leaks
+          # The engine's unsafe code outside the ECS: the tests marked `miri`
+          # in scripts/unsafe-inventory.txt (no GPU, window, audio device or
+          # C library), as `check-unsafe.py --miri` lists them. Tree Borrows
+          # for the same reason as the parallel path: rayon runs the threaded
+          # draw-list fills and the hierarchy.
+          - name: engine unsafe code, tree borrows
+            engine: true
+            flags: -Zmiri-tree-borrows -Zmiri-ignore-leaks
     env:
       MIRIFLAGS: ${{ matrix.flags }}
       RUSTFLAGS: ""
@@ -986,7 +1005,15 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
           ARGS: ${{ matrix.args }}
+          ENGINE: ${{ matrix.engine }}
         run: |
+          if [ "$ENGINE" = true ]; then
+            python3 scripts/check-unsafe.py --miri | while IFS= read -r line; do
+              echo "$line"
+              bash -c "$line" || exit 1
+            done
+            exit 0
+          fi
           part1="archetype_alloc borrows_alloc differential views_alloc"
           part2="queries changes query_cache_differential commands_alloc"
           targets=()

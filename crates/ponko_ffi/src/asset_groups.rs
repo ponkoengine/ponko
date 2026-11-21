@@ -135,6 +135,11 @@ fn group_id(c: &ponko::prelude::Ctx, id: u32) -> Result<GroupId, crate::Failure>
 
 /// An empty asset group called `name` (copied). Null on bad arguments
 /// (see `ponko_last_error`).
+///
+/// Ownership: the returned group is the caller's (null on failure); free it
+/// with ponko_asset_group_free. ponko_ctx_start_asset_group takes it over
+/// instead.
+///
 /// ```
 /// assert!(unsafe { ponko_ffi::ponko_asset_group_new(std::ptr::null()) }.is_null());
 /// ```
@@ -230,6 +235,10 @@ pub unsafe extern "C" fn ponko_asset_group_add(
 /// `Assets::start_group`) and writes its id (numbered from 1) to `*out_id`.
 /// The engine takes the group: don't free or use it afterwards (also when
 /// this fails).
+///
+/// Ownership: `group` is taken over (also on failure): the engine frees it;
+/// don't use or free it after.
+///
 /// ```
 /// let mut id = 0;
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_start_asset_group(std::ptr::null_mut(), std::ptr::null_mut(), &mut id) } as u32, 1);
@@ -366,6 +375,10 @@ pub unsafe extern "C" fn ponko_ctx_cancel_asset_group(ctx: *mut PonkoCtx, id: u3
 /// that returns anything but `PONKO_OK` makes this `PONKO_INVALID_ARGUMENT`
 /// (`PONKO_ERROR_DECODE`). `decode` runs outside the engine's borrow of the
 /// context, so it may call `ponko_ctx_*`.
+///
+/// Ownership: `user` stays the caller's and is only passed to `decode` during
+/// this call; the engine keeps no pointer to it after returning.
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_ctx_take_asset_group_bytes(std::ptr::null_mut(), 1, c"a.bin".as_ptr(), None, std::ptr::null_mut()) } as u32, 1);
 /// ```
@@ -498,6 +511,11 @@ pub type PonkoAssetGroupBuildFn =
 /// in `loading`. Find the group with `ponko_ctx_find_asset_group(name)`
 /// to draw its progress. Without `ponko_game_state` first:
 /// `PONKO_INVALID_ARGUMENT`.
+///
+/// Ownership: `user` stays the caller's; the engine passes it to `build_fn`
+/// each time the state is entered and never frees it. It must stay valid until
+/// the game is freed (or its run returns).
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_game_loading_state(std::ptr::null_mut(), 1, c"level".as_ptr(), None, std::ptr::null_mut(), 2) } as u32, 1);
 /// ```

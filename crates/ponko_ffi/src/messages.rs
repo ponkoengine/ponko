@@ -144,6 +144,11 @@ unsafe fn payload<'a>(bytes: *const u8, len: usize) -> Result<&'a [u8], Failure>
 
 /// Hosts at `addr` (e.g. "0.0.0.0:7777"; port 0 picks a free one) for up to
 /// `max_clients` clients. Plain UDP: not authenticated or encrypted.
+///
+/// Ownership: on success `out_endpoint` receives an owned endpoint, the
+/// caller's; free it with ponko_net_messages_free. (or give it to
+/// ponko_game_messages, which takes it over).
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_net_messages_host(c"127.0.0.1:0".as_ptr(), 4, std::ptr::null_mut()) } as u32, 1);
 /// ```
@@ -167,6 +172,11 @@ pub unsafe extern "C" fn ponko_net_messages_host(
 
 /// Joins a host at `addr` (e.g. "192.168.1.5:7777"). `PONKO_MESSAGE_CONNECTED`
 /// for peer 0 (the host) arrives once it answers.
+///
+/// Ownership: on success `out_endpoint` receives an owned endpoint, the
+/// caller's; free it with ponko_net_messages_free. (or give it to
+/// ponko_game_messages, which takes it over).
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_net_messages_join(c"127.0.0.1:7777".as_ptr(), std::ptr::null_mut()) } as u32, 1);
 /// ```
@@ -190,6 +200,11 @@ pub unsafe extern "C" fn ponko_net_messages_join(
 /// `players` endpoints joined in memory (the first hosts), for tests: they
 /// talk without sockets. Writes `players` pointers to `out_endpoints`; free
 /// each one.
+///
+/// Ownership: on success `out_endpoints` receives two owned endpoints, the
+/// caller's; free each with ponko_net_messages_free (or give it to
+/// ponko_game_messages, which takes it over).
+///
 /// ```
 /// let mut e = [std::ptr::null_mut(); 2];
 /// assert_eq!(unsafe { ponko_ffi::ponko_net_messages_loopback(2, e.as_mut_ptr()) } as u32, 0);
@@ -423,6 +438,11 @@ pub unsafe extern "C" fn ponko_net_messages_stats(
 }
 
 /// Host a message endpoint over Steam; requires the `steam` feature.
+///
+/// Ownership: on success `out_endpoint` receives an owned endpoint, the
+/// caller's; free it with ponko_net_messages_free. (or give it to
+/// ponko_game_messages, which takes it over).
+///
 /// # Safety
 /// `out_endpoint` writable. On failure it is set to null.
 /// ```
@@ -461,6 +481,11 @@ pub unsafe extern "C" fn ponko_net_messages_steam_host(
 }
 
 /// Join a message endpoint over Steam; requires the `steam` feature.
+///
+/// Ownership: on success `out_endpoint` receives an owned endpoint, the
+/// caller's; free it with ponko_net_messages_free. (or give it to
+/// ponko_game_messages, which takes it over).
+///
 /// # Safety
 /// `out_endpoint` writable. On failure it is set to null.
 /// ```

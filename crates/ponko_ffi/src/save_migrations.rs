@@ -414,6 +414,11 @@ pub unsafe extern "C" fn ponko_save_migration_remove_resource(
 /// `convert` turns each saved value into the new one. The world keeps
 /// `user` and calls `free(user)` once when it drops the migration (`free`
 /// may be null); if this call fails, `free` runs before it returns.
+///
+/// Ownership: on success the world owns `user`: it calls `free(user)` once (if
+/// `free` is not null) when it drops the migration; if this call fails,
+/// `free(user)` has run before it returns.
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_save_migration_convert_field(std::ptr::null_mut(), 0, c"Health".as_ptr(), c"max".as_ptr(), None, std::ptr::null_mut(), None) } as u32, 1);
 /// ```
@@ -442,6 +447,11 @@ pub unsafe extern "C" fn ponko_save_migration_convert_field(
 /// Replaces each value of component `component` with what `convert` makes
 /// of it (for a value that isn't an object, or several fields at once).
 /// `user` and `free` as for `ponko_save_migration_convert_field`.
+///
+/// Ownership: on success the world owns `user`: it calls `free(user)` once (if
+/// `free` is not null) when it drops the migration; if this call fails,
+/// `free(user)` has run before it returns.
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_save_migration_convert_component(std::ptr::null_mut(), 0, c"Team".as_ptr(), None, std::ptr::null_mut(), None) } as u32, 1);
 /// ```
@@ -468,6 +478,11 @@ pub unsafe extern "C" fn ponko_save_migration_convert_component(
 /// Replaces the saved value of resource `resource` with what `convert`
 /// makes of it. `user` and `free` as for
 /// `ponko_save_migration_convert_field`.
+///
+/// Ownership: on success the world owns `user`: it calls `free(user)` once (if
+/// `free` is not null) when it drops the migration; if this call fails,
+/// `free(user)` has run before it returns.
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_save_migration_convert_resource(std::ptr::null_mut(), 0, c"Purse".as_ptr(), None, std::ptr::null_mut(), None) } as u32, 1);
 /// ```
@@ -495,6 +510,11 @@ pub unsafe extern "C" fn ponko_save_migration_convert_resource(
 /// component name) and returns them changed, also an object: for what the
 /// other changes don't cover. An entity left with no components is dropped.
 /// `user` and `free` as for `ponko_save_migration_convert_field`.
+///
+/// Ownership: on success the world owns `user`: it calls `free(user)` once (if
+/// `free` is not null) when it drops the migration; if this call fails,
+/// `free(user)` has run before it returns.
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_save_migration_change_entities(std::ptr::null_mut(), 0, None, std::ptr::null_mut(), None) } as u32, 1);
 /// ```
@@ -528,6 +548,11 @@ pub unsafe extern "C" fn ponko_save_migration_change_entities(
 /// `convert` gets the whole save (the JSON of `ponko_world_save`) and
 /// returns it changed: the last resort, for example to add an entity older
 /// saves lack. `user` and `free` as for `ponko_save_migration_convert_field`.
+///
+/// Ownership: on success the world owns `user`: it calls `free(user)` once (if
+/// `free` is not null) when it drops the migration; if this call fails,
+/// `free(user)` has run before it returns.
+///
 /// ```
 /// assert_eq!(unsafe { ponko_ffi::ponko_save_migration_change_save(std::ptr::null_mut(), 0, None, std::ptr::null_mut(), None) } as u32, 1);
 /// ```

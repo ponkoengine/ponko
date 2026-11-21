@@ -253,6 +253,10 @@ fn capacity_of(capacity: usize) -> Result<usize, Failure> {
 /// States are compared byte for byte (`memcmp`): give the state no padding
 /// (or zero it), and make the step produce the same bytes on the client and
 /// the server (round floats, or use fixed point, if they can differ).
+///
+/// Ownership: on success `out_prediction` receives an owned prediction, the
+/// caller's; free it with ponko_prediction_free.
+///
 /// # Safety
 /// `state` readable for `state_size` bytes; `out_prediction` null or writable.
 /// ```
@@ -315,6 +319,10 @@ pub unsafe extern "C" fn ponko_prediction_free(prediction: *mut PonkoPrediction)
 /// inputs. When `step` returns false the input is still kept and numbered,
 /// the call fails with `PONKO_INVALID_ARGUMENT`, and the state is what the
 /// step left: reset it.
+///
+/// Ownership: `user` stays the caller's and is only passed to `step` during
+/// this call; the engine keeps no pointer to it after returning.
+///
 /// # Safety
 /// `prediction` null or live; `input` readable for `input_size` bytes;
 /// `step` valid with `user`; `out_seq` null or writable.
@@ -381,6 +389,10 @@ pub struct PonkoReconciled {
 /// bytes), for smoothing. When `step` returns false the replay stops, the
 /// call fails with `PONKO_INVALID_ARGUMENT` and the state is half-replayed:
 /// reset it.
+///
+/// Ownership: `user` stays the caller's and is only passed to `step` during
+/// this call; the engine keeps no pointer to it after returning.
+///
 /// # Safety
 /// `prediction` null or live; `state` readable for `state_size` bytes;
 /// `step` valid with `user`; `out_result` null or writable; `out_before`
@@ -639,6 +651,10 @@ pub enum PonkoInputPush {
 /// An empty queue of `input_size`-byte inputs (1 byte to 1 MiB), holding up
 /// to `capacity` (0: 256; at most 32768). Free it with
 /// `ponko_input_queue_free`.
+///
+/// Ownership: on success `out_queue` receives an owned queue, the caller's;
+/// free it with ponko_input_queue_free.
+///
 /// # Safety
 /// `out_queue` null or writable.
 /// ```
@@ -786,5 +802,7 @@ mod tests {
         b.clone_from(&unsafe { Bytes::copy_of([9u8].as_ptr(), 1) });
         assert_eq!(b.as_slice(), [9]);
         assert!(a != b);
+        let c = a.clone();
+        assert!(c == a && c.as_ptr() != a.as_ptr(), "a clone owns a copy of the bytes");
     }
 }
