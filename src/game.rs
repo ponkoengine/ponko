@@ -379,6 +379,8 @@ pub struct Game {
     seed: u64,
     vsync: bool,
     fullscreen: bool,
+    /// From `restore_window_settings`: open the first window with `window.json`.
+    restore_window: bool,
     sim_systems: Vec<System>,
     systems: Vec<System>,
     late_systems: Vec<System>,
@@ -639,6 +641,12 @@ impl ConfiguredGame {
     /// See [`Game::fullscreen`].
     pub fn fullscreen(mut self, on: bool) -> Self {
         self.game = self.game.fullscreen(on);
+        self
+    }
+
+    /// See [`Game::restore_window_settings`].
+    pub fn restore_window_settings(mut self, on: bool) -> Self {
+        self.game = self.game.restore_window_settings(on);
         self
     }
 
@@ -1247,6 +1255,7 @@ impl Game {
             seed: crate::random::DEFAULT_SEED,
             vsync: true,
             fullscreen: false,
+            restore_window: false,
             sim_systems: Vec::new(),
             systems: Vec::new(),
             late_systems: Vec::new(),
@@ -2896,6 +2905,69 @@ impl Game {
         self
     }
 
+    /// Opens the first window with the settings the player saved last time
+    /// ([`WindowService::save_settings`](crate::window::WindowService::save_settings),
+    /// `window.json` in [`ctx.storage`](crate::ctx::Ctx::storage)), off by
+    /// default. The window is created with the saved size, position, mode,
+    /// limits and flags, so the player never sees it at the default size
+    /// first, as they would with
+    /// [`restore_settings`](crate::window::WindowService::restore_settings)
+    /// in setup.
+    ///
+    /// The saved choice wins over [`fullscreen`](Self::fullscreen) and the
+    /// size given to [`Game::new`]; the title stays the game's. With no saved
+    /// file, no [`app_id`](Self::app_id), or a file that can't be used, the
+    /// window opens with the defaults (the reason is printed for a broken
+    /// file). A saved monitor or exclusive mode that is gone opens windowed at
+    /// the saved size. A headless run applies the same settings to
+    /// `ctx.window` and the window size before setup. Web builds restore once
+    /// the browser storage is read, before setup.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// # let dir = std::env::temp_dir().join(format!("ponko-doc-restore-window-{}", std::process::id()));
+    /// // A first run saves the player's choice...
+    /// Game::new("Crabs", 800, 600).data_dir(&dir).run_headless(0, |ctx| {
+    ///     ctx.window.set_size(vec2(1024.0, 768.0)).unwrap();
+    ///     ctx.window.save_settings(&mut ctx.storage).unwrap();
+    /// });
+    /// // ...and the next one starts with it.
+    /// Game::new("Crabs", 800, 600).data_dir(&dir).restore_window_settings(true).run_headless(0, |ctx| {
+    ///     assert_eq!(ctx.window.settings().size, vec2(1024.0, 768.0));
+    /// });
+    /// # let _ = std::fs::remove_dir_all(dir);
+    /// ```
+    pub fn restore_window_settings(mut self, on: bool) -> Self {
+        self.restore_window = on;
+        self
+    }
+
+    /// The game's own window settings: its title, size and fullscreen choice.
+    pub(crate) fn default_window_settings(&self) -> crate::window::WindowSettings {
+        let mut defaults = crate::window::WindowSettings::default();
+        defaults.title = self.title.clone();
+        defaults.size = Vec2::new(self.width as f32, self.height as f32);
+        if self.fullscreen {
+            defaults.mode = crate::window::WindowMode::Borderless(None);
+        }
+        defaults
+    }
+
+    /// The settings the first window opens with: the defaults, or the saved
+    /// ones with `restore_window_settings`. `monitors` are the connected
+    /// displays (none headless).
+    pub(crate) fn first_window_settings(
+        &self,
+        storage: &crate::storage::Storage,
+        monitors: &[crate::window::Monitor],
+    ) -> crate::window::WindowSettings {
+        let defaults = self.default_window_settings();
+        if !self.restore_window {
+            return defaults;
+        }
+        crate::window::startup_settings(defaults, storage.read_json(crate::window::SETTINGS_FILE), monitors)
+    }
+
     /// One frame of game logic: simulation systems `fixed_steps` times, then
     /// frame, late and draw systems. The retained UI updates first
     /// (`Ctx::frame_begin_services`); every other engine step of a frame is
@@ -3288,6 +3360,11 @@ impl Game {
         connect_hotpatch();
         let fixed_dt = Clock::new(self.fixed_hz).fixed_dt();
         let mut ctx = self.build_ctx(true);
+        if self.restore_window {
+            let settings = self.first_window_settings(&ctx.storage, &ctx.window.monitors());
+            ctx.set_window_size(settings.size);
+            ctx.window.request(crate::window::WindowRequest::Settings(settings))?;
+        }
         let control = self.start_control(&mut ctx, true);
         ctx.set_in_setup(true);
         run_setups(std::mem::take(&mut self.setups), &mut ctx)?;

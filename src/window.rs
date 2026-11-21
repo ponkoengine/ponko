@@ -599,38 +599,28 @@ impl WindowService {
     }
     /// Save requested preferences as window.json in the game's player storage.
     pub fn save_settings(&self, storage: &mut Storage) -> Result<(), Error> {
-        storage.write_json("window.json", &self.settings)
+        storage.write_json(SETTINGS_FILE, &self.settings)
     }
     /// Restore window.json at setup. A disconnected display or unavailable mode falls
     /// back to windowed and logs the reason. A missing file leaves defaults intact.
+    ///
+    /// This applies the settings to a window that is already open, so the player
+    /// may see it at its default size first; [`Game::restore_window_settings`]
+    /// opens the first window with them instead.
+    ///
+    /// [`Game::restore_window_settings`]: crate::prelude::Game::restore_window_settings
     pub fn restore_settings(&mut self, storage: &Storage) -> Result<(), Error> {
-        let mut s: WindowSettings = match storage.read_json("window.json") {
+        let mut s: WindowSettings = match storage.read_json(SETTINGS_FILE) {
             Ok(s) => s,
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e),
         };
-        let reason = match &s.mode {
-            WindowMode::Exclusive(i, m) => match self.exclusive_modes(*i) {
-                Ok(modes) if modes.contains(m) => None,
-                Ok(_) => Some("stored exclusive mode is gone; choose a newly advertised mode".to_string()),
-                Err(e) => Some(e.message().to_string()),
-            },
-            WindowMode::Borderless(Some(i)) if self.monitors().get(*i).is_none() => {
-                Some("stored monitor disconnected; select a connected display".into())
-            }
-            _ => None,
-        };
-        if let Some(reason) = reason {
+        if let Some(reason) = unavailable_mode(&s.mode, &self.monitors()) {
             eprintln!("ponko: restoring window settings in windowed mode: {reason}");
             s.mode = WindowMode::Windowed;
         }
-        #[cfg(target_arch = "wasm32")]
-        {
-            s.position = None;
-            s.min_size = None;
-            s.max_size = None;
-            s.always_on_top = false;
-            s.decorations = true;
+        if cfg!(target_arch = "wasm32") {
+            drop_desktop_only(&mut s);
         }
         if let Err(e) = self.request(WindowRequest::Settings(s.clone())) {
             if !matches!(s.mode, WindowMode::Windowed)
@@ -646,6 +636,69 @@ impl WindowService {
             Ok(())
         }
     }
+}
+/// The file `save_settings` writes in the game's player storage.
+pub(crate) const SETTINGS_FILE: &str = "window.json";
+/// Why a stored mode can't be used with these monitors, if it can't.
+fn unavailable_mode(mode: &WindowMode, monitors: &[Monitor]) -> Option<String> {
+    match mode {
+        WindowMode::Exclusive(i, m) => match monitors.get(*i) {
+            Some(monitor) if monitor.modes.contains(m) => None,
+            Some(_) => Some("stored exclusive mode is gone; choose a newly advertised mode".to_string()),
+            None => {
+                Some("cannot list modes: monitor disconnected; refresh monitors and choose a connected display".into())
+            }
+        },
+        WindowMode::Borderless(Some(i)) if monitors.get(*i).is_none() => {
+            Some("stored monitor disconnected; select a connected display".into())
+        }
+        _ => None,
+    }
+}
+/// A browser canvas has no desktop position, limits, level or decorations.
+fn drop_desktop_only(s: &mut WindowSettings) {
+    s.position = None;
+    s.min_size = None;
+    s.max_size = None;
+    s.always_on_top = false;
+    s.decorations = true;
+}
+/// The settings the game's first window opens with, decided before it exists:
+/// `defaults` (the game's title, size and fullscreen choice) unless `saved`
+/// (`window.json`, read from the player's storage) holds usable ones.
+///
+/// - No saved file, or a game that keeps no files: the defaults, silently.
+/// - A file that can't be read or holds invalid sizes: the defaults, and the
+///   reason is printed. A broken file never stops the game from starting.
+/// - A saved exclusive mode or monitor that `monitors` no longer has: the saved
+///   size and position, windowed, and the reason is printed.
+/// - The title always stays the game's: it is set by the game, not the player.
+///
+/// Desktop only: a web build reads its storage after the canvas exists and
+/// uses `restore_settings` (a canvas has no default size to flash).
+pub(crate) fn startup_settings(
+    defaults: WindowSettings,
+    saved: Result<WindowSettings, Error>,
+    monitors: &[Monitor],
+) -> WindowSettings {
+    let mut s = match saved {
+        Ok(s) => s,
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::Unsupported) => return defaults,
+        Err(e) => {
+            eprintln!("ponko: opening the window with its default settings: {e}");
+            return defaults;
+        }
+    };
+    if let Err(e) = validate_request(&WindowRequest::Settings(s.clone())) {
+        eprintln!("ponko: opening the window with its default settings: {SETTINGS_FILE}: {e}");
+        return defaults;
+    }
+    s.title = defaults.title;
+    if let Some(reason) = unavailable_mode(&s.mode, monitors) {
+        eprintln!("ponko: restoring window settings in windowed mode: {reason}");
+        s.mode = WindowMode::Windowed;
+    }
+    s
 }
 fn valid_size(v: Vec2) -> bool {
     v.is_finite() && v.min_element() > 0.0
@@ -757,5 +810,99 @@ mod web_tests {
         ] {
             assert!(validate_web(&r).is_ok());
         }
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+    fn defaults() -> WindowSettings {
+        let mut s = WindowSettings::default();
+        s.title = "Game".into();
+        s.size = Vec2::new(800.0, 600.0);
+        s
+    }
+    fn saved() -> WindowSettings {
+        let mut s = WindowSettings::default();
+        s.title = "Old title".into();
+        s.size = Vec2::new(1280.0, 720.0);
+        s.position = Some(IVec2::new(40, 60));
+        s.min_size = Some(Vec2::new(320.0, 240.0));
+        s.always_on_top = true;
+        s.decorations = false;
+        s
+    }
+    fn display(mode: VideoMode) -> Monitor {
+        let mut m = Monitor::default();
+        m.size = UVec2::new(2560, 1440);
+        m.modes = vec![mode];
+        m
+    }
+    fn mode() -> VideoMode {
+        VideoMode::new(1920, 1080, 60_000, 32)
+    }
+
+    #[test]
+    fn first_window_opens_with_the_saved_size_position_mode_and_flags() {
+        let mut s = saved();
+        s.mode = WindowMode::Exclusive(0, mode());
+        let first = startup_settings(defaults(), Ok(s.clone()), &[display(mode())]);
+        assert_eq!(first.size, s.size);
+        assert_eq!(first.position, s.position);
+        assert_eq!(first.min_size, s.min_size);
+        assert_eq!(first.mode, s.mode);
+        assert!(first.always_on_top);
+        assert!(!first.decorations);
+    }
+
+    #[test]
+    fn first_window_keeps_the_game_title() {
+        let first = startup_settings(defaults(), Ok(saved()), &[]);
+        assert_eq!(first.title, "Game");
+    }
+
+    #[test]
+    fn first_window_without_a_saved_file_uses_the_game_defaults() {
+        let missing = Err(Error::new(ErrorKind::NotFound, "no stored file"));
+        assert_eq!(startup_settings(defaults(), missing, &[]), defaults());
+        let no_storage = Err(Error::new(ErrorKind::Unsupported, "this game keeps no files"));
+        assert_eq!(startup_settings(defaults(), no_storage, &[]), defaults());
+    }
+
+    #[test]
+    fn first_window_ignores_an_unreadable_or_invalid_settings_file() {
+        let broken = Err(Error::new(ErrorKind::Json, "expected value at line 1"));
+        assert_eq!(startup_settings(defaults(), broken, &[]), defaults());
+        let mut s = saved();
+        s.size = Vec2::new(0.0, f32::NAN);
+        assert_eq!(startup_settings(defaults(), Ok(s), &[]), defaults());
+        let mut s = saved();
+        s.max_size = Some(Vec2::new(100.0, 100.0)); // smaller than min_size
+        assert_eq!(startup_settings(defaults(), Ok(s), &[]), defaults());
+    }
+
+    #[test]
+    fn first_window_opens_windowed_at_the_saved_size_when_the_saved_monitor_is_gone() {
+        let mut s = saved();
+        s.mode = WindowMode::Borderless(Some(1));
+        let first = startup_settings(defaults(), Ok(s.clone()), &[display(mode())]);
+        assert_eq!(first.mode, WindowMode::Windowed);
+        assert_eq!(first.size, s.size);
+        assert_eq!(first.position, s.position);
+    }
+
+    #[test]
+    fn first_window_opens_windowed_when_the_saved_exclusive_mode_is_gone() {
+        let mut s = saved();
+        s.mode = WindowMode::Exclusive(0, VideoMode::new(800, 600, 75_000, 32));
+        let first = startup_settings(defaults(), Ok(s.clone()), &[display(mode())]);
+        assert_eq!(first.mode, WindowMode::Windowed);
+        assert_eq!(first.size, s.size);
+        // Headless (no monitors) keeps borderless on the current display.
+        s.mode = WindowMode::Borderless(None);
+        assert_eq!(
+            startup_settings(defaults(), Ok(s), &[]).mode,
+            WindowMode::Borderless(None)
+        );
     }
 }

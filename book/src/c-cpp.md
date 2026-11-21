@@ -485,6 +485,7 @@ binding arrives:
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |
 | `Game::control_method` | [Plugins for other crates](plugins.md#control-methods) | The control endpoint's built-in methods only; a native game's tools read its reflected resources |
 | `Video` | [Video](video.md#c-and-c) | Not bound yet: decode with a library of the game's own and show the frames with `ponko_ctx_update_texture` |
+| `Game::restore_window_settings` | [Window service](window.md#remember-the-players-choice) | Call `ponko_ctx_window_restore_settings` in setup; the window can show at its default size for a moment first |
 
 System phases, system ids, setup callbacks and plugins are not on this
 list. They have C and C++ calls, described in
