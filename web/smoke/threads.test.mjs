@@ -50,7 +50,7 @@ const isolatedRun = {
   group: "ready",
   group_off_page: true,
   group_bytes: 966,
-  checksum: 83614676.95699096,
+  checksum: 86576768.95592952,
 };
 
 const plainRun = {
@@ -70,7 +70,7 @@ const plainRun = {
   group: "ready",
   group_off_page: false,
   group_bytes: 966,
-  checksum: 83614676.95699096,
+  checksum: 86576768.95592952,
 };
 
 test("the isolation headers are the two that make a page cross-origin isolated", () => {
