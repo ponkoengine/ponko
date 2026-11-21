@@ -116,10 +116,11 @@ The **first failure** stops the group: its state is `Failed` and
 (`error.path()`) and its kind: `NotFound` for a missing file, `Decode` for a
 broken one, or what your `with` loader returned. The assets the group
 already finished stay loaded, and no more are started. The ones already
-being read when it failed finish on their workers and wait, so a restart
-doesn't read them again. Which assets had finished by the time the failure
-came back depends on the workers, so a failed group's `loaded` can differ
-from run to run; a test should check it after the restart, not before.
+being read when it failed go on: the following frames take them as they
+finish, and `loaded` counts them, so a restart doesn't read them again.
+Which of them had finished in the frame the failure came back depends on
+the workers, but `ctx.finish_uploads()` waits for all of them, so a test
+sees the same `loaded` after it every run.
 
 `ctx.assets.cancel_group(id)` stops a group: the files not yet started are
 never read, the ones on workers are dropped when they finish, and streams
@@ -133,7 +134,7 @@ group. It is `Loading` again at once, and from the next frame it reads
 **only the assets that had not loaded**: the one that failed and the ones
 never started. What loaded keeps its handle and isn't read again, values
 you haven't taken yet stay, and the files that were being read when it
-failed are taken as they are. Restarting a group that is loading or ready
+failed are taken as they finish. Restarting a group that is loading or ready
 does nothing. It's for a loading screen's "try again" after a dropped
 connection, or after fixing a broken file:
 

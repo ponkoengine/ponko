@@ -188,19 +188,13 @@ fn a_failed_c_group_restarts_and_loads_only_what_failed() {
         assert_eq!(state(ctx, id), PonkoAssetGroupState::PONKO_GROUP_FAILED as u32);
         assert_eq!(last_path_of_group(ctx, id), "late.bin");
         // All three start on workers at once, and the group fails as soon
-        // as the missing file's read comes back: whether `a.bin` and the
-        // texture's decode had come back by then depends on the workers, so
-        // either may still be in flight. What is in flight finishes on the
-        // restart without being read again.
+        // as the missing file's read comes back. `finish_uploads` also waits
+        // for what was still in flight then and counts it, so `a.bin` and
+        // the texture are loaded whatever the workers' timing.
         let mut progress = PonkoAssetGroupProgress::default();
         assert_eq!(ponko_ctx_asset_group_progress(ctx, id, &mut progress), PONKO_OK);
-        assert_eq!(progress.total, 3);
-        assert!(progress.loaded <= 2, "late.bin never loaded: {}", progress.loaded);
-        assert!(
-            progress.bytes_uploaded == 0 || progress.bytes_uploaded == 4,
-            "the texture uploads whole or not yet: {}",
-            progress.bytes_uploaded
-        );
+        assert_eq!((progress.loaded, progress.total), (2, 3));
+        assert_eq!(progress.bytes_uploaded, 4, "the texture uploaded");
 
         // The missing file arrives; the restart reads only it.
         add_files(ctx, c"second", &[(c"late.bin", b"late")]);
