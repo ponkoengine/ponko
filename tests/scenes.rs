@@ -520,6 +520,59 @@ fn included_prefabs_spawn_with_their_roots_changed_for_this_use() {
 }
 
 #[test]
+fn an_including_prefab_changes_the_parts_of_the_prefab_it_includes_and_removes_components() {
+    let axle = TempAsset::with_contents(
+        "test-prefab-parts-axle.json",
+        &serde_json::json!({
+            "format": "ponko-prefab", "version": 2,
+            "entities": [
+                { "entity": 0, "components": { "Transform2D": {}, "Palm": { "height": 10.0 }, "Count": 1 } },
+                { "entity": 1, "components": { "Transform2D": { "position": [8.0, 0.0] }, "Palm": { "height": 1.0 }, "Count": 2 } }
+            ]
+        })
+        .to_string(),
+    );
+    let cart = TempAsset::with_contents(
+        "test-prefab-parts-cart.json",
+        &serde_json::json!({
+            "format": "ponko-prefab", "version": 2,
+            "entities": [
+                { "entity": 0, "components": { "Transform2D": {}, "Palm": { "height": 100.0 } } },
+                { "entity": 1, "prefab": axle.name(), "components": {}, "remove": ["Count"],
+                  "parts": [{ "part": 0, "components": { "Palm": { "height": 5.0 } }, "remove": ["Count"] }] }
+            ]
+        })
+        .to_string(),
+    );
+    let wrong = TempAsset::with_contents(
+        "test-prefab-parts-wrong.json",
+        &serde_json::json!({
+            "format": "ponko-prefab", "version": 2,
+            "entities": [
+                { "entity": 0, "components": { "Count": 1 } },
+                { "entity": 1, "prefab": axle.name(), "parts": [{ "part": 3, "components": { "Count": 9 } }] }
+            ]
+        })
+        .to_string(),
+    );
+    game().run_headless(0, |ctx| {
+        reflect_tree_types(ctx);
+        let root = ctx.spawn_prefab(cart.name(), Vec2::ZERO).unwrap();
+        let parts = ctx.world.get::<PrefabParts>(root).unwrap().0.clone();
+        let (axle_root, wheel) = (parts[0], parts[1]);
+        assert_eq!(ctx.world.get::<Palm>(axle_root).unwrap().height, 10.0);
+        assert_eq!(ctx.world.get::<Count>(axle_root), None, "removed from the included root");
+        assert_eq!(ctx.world.get::<Palm>(wheel).unwrap().height, 5.0, "its part changed");
+        assert_eq!(ctx.world.get::<Count>(wheel), None, "and lost a component");
+
+        let err = ctx.spawn_prefab(wrong.name(), Vec2::ZERO).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Json);
+        assert!(err.to_string().contains("no part 3"), "{err}");
+        assert_eq!(ctx.world.len(), 3, "a bad change spawns nothing");
+    });
+}
+
+#[test]
 fn prefabs_that_include_each_other_are_refused_and_spawn_nothing() {
     let a = TempAsset::new("test-prefab-loop-a.json");
     let b = TempAsset::new("test-prefab-loop-b.json");

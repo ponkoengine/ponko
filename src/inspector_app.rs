@@ -99,6 +99,12 @@ pub(crate) struct App {
     /// An open prefab document's file as opened (or last applied), for
     /// Apply to scenes.
     pub prefab_base: Option<(String, serde_json::Value)>,
+    /// The part of the window the panels leave free, and what the 2D and
+    /// 3D cameras were given of it last (see `centre_cameras`).
+    pub view: Option<crate::camera::Viewport>,
+    view2d: Option<crate::camera::Viewport>,
+    #[cfg_attr(not(feature = "3d"), allow(dead_code))]
+    view3d: Option<crate::camera::Viewport>,
 }
 
 impl App {
@@ -189,6 +195,8 @@ impl Panels {
             .rect
             .width();
         self.set_layout(layout);
+        let free = ui.available_rect_before_wrap();
+        self.centre_cameras(ctx, free, ui.ctx().content_rect());
         self.dialogs(ui, ctx);
         self.shortcuts_window(ui);
         self.world_and_keys(ui, ctx);
@@ -202,6 +210,45 @@ impl Panels {
             // Headless (tests) there's no window: the title is kept anyway.
             let _ = ctx.window.set_title(title.clone());
             app.title = title;
+        }
+    }
+
+    /// Gives the 2D and 3D cameras the part of the window the panels leave
+    /// free (`free`, of the window `screen`), so they centre on it: what
+    /// was in the middle of the 2D view stays in the middle of the free
+    /// part, the 3D camera's middle is the free part's middle, and their
+    /// conversions, picking and the 3D aspect ratio follow it. A camera the
+    /// game gave a part of the window itself (split screen) is left alone.
+    fn centre_cameras(&mut self, ctx: &mut Ctx, free: egui::Rect, screen: egui::Rect) {
+        use crate::camera::Viewport;
+        let Some(app) = &mut self.app else { return };
+        if free.width() < 1.0 || free.height() < 1.0 || screen.width() < 1.0 || screen.height() < 1.0 {
+            return;
+        }
+        let view = Viewport::new(
+            (free.min.x - screen.min.x) / screen.width(),
+            (free.min.y - screen.min.y) / screen.height(),
+            free.width() / screen.width(),
+            free.height() / screen.height(),
+        );
+        app.view = Some(view);
+        let ours = |rect: Viewport, set: Option<Viewport>| rect.is_full() || set == Some(rect);
+        let camera = &mut ctx.camera;
+        if ours(camera.rect, app.view2d) {
+            if camera.rect != view {
+                let middle = camera.center();
+                camera.rect = view;
+                camera.look_at(middle);
+            }
+            app.view2d = Some(view);
+        }
+        #[cfg(feature = "3d")]
+        {
+            let camera = &mut ctx.scene3d.camera;
+            if ours(camera.rect, app.view3d) {
+                camera.rect = view;
+                app.view3d = Some(view);
+            }
         }
     }
 

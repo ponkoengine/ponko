@@ -1015,8 +1015,12 @@ impl Ctx {
             crate::reflect::lod_mesh_names(json, &mut names);
             names.sort_unstable();
             names.dedup();
-            for name in names {
+            for name in names.drain(..) {
                 self.gfx.try_load_mesh(&name)?;
+            }
+            crate::reflect::asset_names(json, "ModelMaterial", "texture", &mut names);
+            for name in names {
+                self.gfx.texture_material(&name)?;
             }
         }
         #[cfg(feature = "physics3d")]

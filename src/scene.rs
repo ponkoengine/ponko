@@ -349,6 +349,9 @@ impl Ctx {
         let file = PrefabFile::parse(&json).map_err(|e| crate::error::Error::new(crate::error::ErrorKind::Json, e))?;
         for entry in &file.entries {
             self.load_scene_assets(&Value::Object(entry.components.clone()))?;
+            for part in &entry.parts {
+                self.load_scene_assets(&Value::Object(part.components.clone()))?;
+            }
         }
         let file = std::rc::Rc::new(file);
         self.assets.prefabs.insert(path.to_string(), file.clone());
@@ -407,6 +410,9 @@ impl Ctx {
                     self.world.set_json(e, name, value.clone())?;
                 }
                 self.world.remove::<Spawning>(e);
+                if entry.prefab.is_some() {
+                    self.change_included(e, entry)?;
+                }
             }
             Ok::<_, crate::error::Error>(())
         })?;
@@ -419,6 +425,43 @@ impl Ctx {
             self.world.insert(root, PrefabParts(parts));
         }
         Ok(root)
+    }
+}
+
+impl Ctx {
+    /// What an including prefab's `entry` changes on the prefab it spawned
+    /// with root `root`, past its root's components: the root's `remove`,
+    /// then each part's components and `remove`.
+    fn change_included(&mut self, root: Entity, entry: &PrefabEntry) -> Result<(), crate::error::Error> {
+        let bad = |message: String| crate::error::Error::new(crate::error::ErrorKind::Json, message);
+        let prefab = entry.prefab.as_deref().unwrap_or_default();
+        for name in &entry.remove {
+            self.world.remove_json(root, name)?;
+        }
+        if entry.parts.is_empty() {
+            return Ok(());
+        }
+        let parts = self
+            .world
+            .get::<PrefabParts>(root)
+            .map(|p| p.0.clone())
+            .unwrap_or_default();
+        for change in &entry.parts {
+            let Some(&part) = parts.get(change.part) else {
+                return Err(bad(format!(
+                    "{prefab} has {} part(s): it has no part {}",
+                    parts.len(),
+                    change.part
+                )));
+            };
+            for (name, value) in &change.components {
+                self.world.set_json(part, name, value.clone())?;
+            }
+            for name in &change.remove {
+                self.world.remove_json(part, name)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -457,18 +500,77 @@ pub struct PrefabParts(pub Vec<Entity>);
 /// A prefab file, checked: its entities, root first.
 #[derive(Debug, Clone)]
 pub(crate) struct PrefabFile {
-    entries: Vec<PrefabEntry>,
+    pub(crate) entries: Vec<PrefabEntry>,
 }
 
 /// One entity of a prefab file.
 #[derive(Debug, Clone)]
-struct PrefabEntry {
+pub(crate) struct PrefabEntry {
     /// Its id in the file, which components of the prefab use to name it.
     /// Files of one entity have none.
-    id: Option<Entity>,
+    pub(crate) id: Option<Entity>,
     /// An included prefab, spawned here; `components` then change its root.
-    prefab: Option<String>,
-    components: serde_json::Map<String, Value>,
+    pub(crate) prefab: Option<String>,
+    pub(crate) components: serde_json::Map<String, Value>,
+    /// Of an included prefab: components its root doesn't keep here.
+    pub(crate) remove: Vec<String>,
+    /// Of an included prefab: changes to its other entities, by their
+    /// place in its root's [`PrefabParts`].
+    pub(crate) parts: Vec<PartChange>,
+}
+
+/// A change an including prefab makes to one part of the prefab it
+/// includes (`"parts": [{ "part": 0, "components": {..}, "remove": [..] }]`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct PartChange {
+    /// Its place in the included prefab's [`PrefabParts`], from 0.
+    pub(crate) part: usize,
+    pub(crate) components: serde_json::Map<String, Value>,
+    pub(crate) remove: Vec<String>,
+}
+
+/// A list of component names (`"remove"`), or an error naming `what`.
+fn names(value: &Value, what: &str) -> Result<Vec<String>, String> {
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::Array(list) => list
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("{what}: \"remove\" lists component names, not {v}"))
+            })
+            .collect(),
+        other => Err(format!("{what}: \"remove\" is a list of component names, not {other}")),
+    }
+}
+
+/// An included prefab's `"parts"`, or an error naming entity `id`.
+fn part_changes(value: &Value, id: u64) -> Result<Vec<PartChange>, String> {
+    let list = match value {
+        Value::Null => return Ok(Vec::new()),
+        Value::Array(list) => list,
+        other => return Err(format!("entity {id}: \"parts\" is a list, not {other}")),
+    };
+    list.iter()
+        .map(|item| {
+            let part = item["part"]
+                .as_u64()
+                .and_then(|p| usize::try_from(p).ok())
+                .ok_or_else(|| format!("entity {id}: a part change needs \"part\", its place from 0"))?;
+            let components = match &item["components"] {
+                Value::Object(c) => c.clone(),
+                Value::Null => serde_json::Map::new(),
+                other => return Err(format!("entity {id}, part {part}: \"components\" is an object, not {other}")),
+            };
+            let remove = names(&item["remove"], &format!("entity {id}, part {part}"))?;
+            Ok(PartChange {
+                part,
+                components,
+                remove,
+            })
+        })
+        .collect()
 }
 
 impl PrefabFile {
@@ -484,6 +586,8 @@ impl PrefabFile {
                         id: None,
                         prefab: None,
                         components: c.clone(),
+                        remove: Vec::new(),
+                        parts: Vec::new(),
                     }],
                 }),
                 _ => Err("a prefab needs a non-empty \"components\" object".into()),
@@ -513,10 +617,18 @@ impl PrefabFile {
                             Value::Null if prefab.is_some() => serde_json::Map::new(),
                             _ => return Err(format!("entity {id} needs a non-empty \"components\" object")),
                         };
+                        let (remove, parts) = (&item["remove"], &item["parts"]);
+                        if prefab.is_none() && !(remove.is_null() && parts.is_null()) {
+                            return Err(format!(
+                                "entity {id}: \"remove\" and \"parts\" change an included prefab, and it has no \"prefab\""
+                            ));
+                        }
                         Ok(PrefabEntry {
                             id: Some(Entity::from_bits(id)),
                             prefab,
                             components,
+                            remove: names(remove, &format!("entity {id}"))?,
+                            parts: part_changes(parts, id)?,
                         })
                     })
                     .collect::<Result<_, String>>()?;
@@ -536,6 +648,8 @@ impl PrefabFile {
                 id: None,
                 prefab: None,
                 components,
+                remove: Vec::new(),
+                parts: Vec::new(),
             }],
         }
     }

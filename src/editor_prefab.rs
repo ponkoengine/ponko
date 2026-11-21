@@ -12,10 +12,19 @@
 //! their place in `PrefabParts`. Then the copy is despawned. Where the
 //! instance stands (its root's transform) is its own, never an override.
 //!
+//! A prefab that includes other prefabs is laid out by its file: each of
+//! its entries is one entity of the instance, or an included prefab's
+//! entities in the order spawning makes them. Apply writes an included
+//! prefab back as the link it is, with how this instance changes it (its
+//! root's components, `remove`, and `parts`), and Apply to an included
+//! prefab writes that part of the instance into the included prefab's own
+//! file instead. Either way every instance that uses the file follows.
+//!
 //! glTF scenes placed as prefabs aren't instances in this sense: their root
 //! is a `GltfRoot` and their file isn't written by the editor.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ops::Range;
 use std::rc::Rc;
 
 use ponko_ecs::Entity;
@@ -160,11 +169,130 @@ pub(crate) fn instance_root(world: &ponko_ecs::World, e: Entity) -> Option<Entit
 }
 
 /// The roots of the instances of prefab `path`, in id order.
+#[cfg(test)]
 pub(crate) fn instances(world: &ponko_ecs::World, path: &str) -> Vec<Entity> {
     everyone(world)
         .into_iter()
         .filter(|&e| world.get::<PrefabInstance>(e).is_some_and(|p| p.path == path))
         .collect()
+}
+
+/// One entry of a prefab file, as the entities spawning it makes.
+#[derive(Debug, Clone, PartialEq)]
+enum Slot {
+    /// One entity of the file itself.
+    Own,
+    /// An included prefab: `size` entities, its root first.
+    Included { path: String, size: usize },
+}
+
+/// Prefab file `path`, checked: the copy spawning read, or the file read
+/// now (without loading its assets: only its outline is looked at).
+fn outline(ctx: &Ctx, path: &str) -> Result<Rc<PrefabFile>, Error> {
+    if let Some(file) = ctx.assets.prefabs.get(path) {
+        return Ok(file.clone());
+    }
+    let (_, text) = ctx.assets.read_text(path)?;
+    let json: Value = serde_json::from_str(&text).map_err(|e| Error::from(e).with_path(path))?;
+    let file = PrefabFile::parse(&json).map_err(|e| Error::new(ErrorKind::Json, e).with_path(path))?;
+    Ok(Rc::new(file))
+}
+
+/// Prefab `path`'s entries, as the entities spawning it makes (see
+/// [`Slot`]).
+fn slots(ctx: &Ctx, path: &str) -> Result<Vec<Slot>, Error> {
+    let file = outline(ctx, path)?;
+    let mut out = Vec::with_capacity(file.entries.len());
+    for entry in &file.entries {
+        out.push(match &entry.prefab {
+            None => Slot::Own,
+            Some(inner) => Slot::Included {
+                path: inner.clone(),
+                size: spawned(ctx, inner, 1)?,
+            },
+        });
+    }
+    Ok(out)
+}
+
+/// How many entities spawning prefab `path` makes; `depth` counts the
+/// prefabs being looked into (spawning refuses loops the same way).
+fn spawned(ctx: &Ctx, path: &str, depth: usize) -> Result<usize, Error> {
+    if depth > 16 {
+        return Err(Error::new(
+            ErrorKind::Json,
+            format!("prefabs include each other in a loop or too deep at {path}"),
+        ));
+    }
+    let file = outline(ctx, path)?;
+    let mut n = 0;
+    for entry in &file.entries {
+        n += match &entry.prefab {
+            None => 1,
+            Some(inner) => spawned(ctx, inner, depth + 1)?,
+        };
+    }
+    Ok(n)
+}
+
+/// Whether prefab `outer` includes prefab `inner`, directly or through
+/// others. A file that can't be read includes nothing.
+fn includes(ctx: &Ctx, outer: &str, inner: &str, depth: usize) -> bool {
+    let Ok(file) = outline(ctx, outer) else {
+        return false;
+    };
+    depth <= 16
+        && file.entries.iter().filter_map(|e| e.prefab.as_deref()).any(|p| {
+            p == inner || includes(ctx, p, inner, depth + 1)
+        })
+}
+
+/// The roots of the instances, in id order, whose prefab is `path` or
+/// includes it: those that change when its file does.
+pub(crate) fn instances_using(ctx: &mut Ctx, path: &str) -> Vec<Entity> {
+    let all: Vec<(Entity, String)> = everyone(&ctx.world)
+        .into_iter()
+        .filter_map(|e| Some((e, ctx.world.get::<PrefabInstance>(e)?.path.clone())))
+        .collect();
+    all.into_iter()
+        .filter(|(_, p)| p == path || includes(ctx, p, path, 0))
+        .map(|(e, _)| e)
+        .collect()
+}
+
+/// The prefabs included in instance `root`'s prefab that its entity `e`
+/// belongs to, outermost first: each file and the range of the instance's
+/// entities (see [`members`]) it spawned. Empty when `e` is one of the
+/// prefab's own entities (or not of the instance).
+pub(crate) fn included_at(ctx: &mut Ctx, root: Entity, e: Entity) -> Result<Vec<(String, Range<usize>)>, Error> {
+    let path = instance_path(&ctx.world, root).ok_or_else(|| not_an_instance(root))?;
+    let Some(index) = members(&ctx.world, root).iter().position(|&m| m == Some(e)) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    let (mut file, mut start) = (path, 0);
+    'down: loop {
+        let mut at = start;
+        for slot in slots(ctx, &file)? {
+            match slot {
+                Slot::Own => at += 1,
+                Slot::Included { path, size } => {
+                    let range = at..at + size;
+                    if range.contains(&index) {
+                        out.push((path.clone(), range));
+                        (file, start) = (path, at);
+                        continue 'down;
+                    }
+                    at += size;
+                }
+            }
+            if at > index {
+                break 'down;
+            }
+        }
+        break;
+    }
+    Ok(out)
 }
 
 /// The root and its parts, in order; a part that was deleted is `None`.
@@ -253,6 +381,23 @@ pub(crate) fn compare(ctx: &mut Ctx, root: Entity) -> Result<Comparison, Error> 
     // Captured before the copy's links are pointed at the instance.
     let fresh: Vec<Entity> = members(&ctx.world, fresh_root).into_iter().flatten().collect();
     let out = compare_copy(ctx, &path, &inst, &fresh, attached);
+    for e in fresh {
+        ctx.world.despawn(e);
+    }
+    out
+}
+
+/// Compares `slice` (an included prefab's entities in an instance, its
+/// root first) with prefab `path` spawned alone where its root stands.
+fn compare_slice(ctx: &mut Ctx, path: &str, slice: &[Option<Entity>]) -> Result<Comparison, Error> {
+    let root = slice
+        .first()
+        .copied()
+        .flatten()
+        .ok_or_else(|| Error::new(ErrorKind::Invalid, format!("the root of included prefab {path} was deleted")))?;
+    let fresh_root = ctx.spawn_prefab(path, position(&ctx.world, root))?;
+    let fresh: Vec<Entity> = members(&ctx.world, fresh_root).into_iter().flatten().collect();
+    let out = compare_copy(ctx, path, slice, &fresh, Vec::new());
     for e in fresh {
         ctx.world.despawn(e);
     }
@@ -447,30 +592,26 @@ impl Editor {
 
     /// Writes instance `root` into its prefab file (its overrides, and what
     /// is attached to it, become the prefab), then brings every other
-    /// instance in the world up to date, keeping their own overrides. The
-    /// instances' changes are one undo step; the file isn't undone (like a
-    /// save). Returns how many other instances there were.
+    /// instance in the world up to date, keeping their own overrides: of
+    /// this prefab, and of prefabs that include it. The instances' changes
+    /// are one undo step; the file isn't undone (like a save). Returns how
+    /// many other instances there were.
+    ///
+    /// A prefab it includes stays a link in the file, with this instance's
+    /// changes to it: its root's components (and its place), the
+    /// components it lost, and its parts' changes (see the guide's
+    /// "Prefabs that include prefabs").
     ///
     /// # Errors
     ///
-    /// `Invalid` for an entity that isn't an instance, `Unsupported` for a
-    /// prefab that includes other prefabs (open it and change it there),
-    /// and the file's errors.
+    /// `Invalid` for an entity that isn't an instance, `Unsupported` when
+    /// entities of an included prefab were deleted from it (revert them,
+    /// or apply to that prefab with
+    /// [`apply_to_included`](Self::apply_to_included)), and the file's
+    /// errors.
     pub fn apply_to_prefab(&mut self, ctx: &mut Ctx, root: Entity) -> Result<usize, Error> {
         let path = instance_path(&ctx.world, root).ok_or_else(|| not_an_instance(root))?;
-        let (_, text) = ctx.assets.read_text(&path)?;
-        let old: Value = serde_json::from_str(&text).map_err(|e| Error::from(e).with_path(&path))?;
-        let nested = old["entities"]
-            .as_array()
-            .is_some_and(|list| list.iter().any(|e| e.get("prefab").is_some()));
-        if nested {
-            return Err(Error::new(
-                ErrorKind::Unsupported,
-                format!("{path} includes other prefabs: open it and change it there"),
-            )
-            .with_path(&path));
-        }
-        let others: Vec<Entity> = instances(&ctx.world, &path)
+        let others: Vec<Entity> = instances_using(ctx, &path)
             .into_iter()
             .filter(|&e| e != root)
             .collect();
@@ -480,17 +621,16 @@ impl Editor {
         }
 
         let mine = compare(ctx, root)?;
-        let mut written: Vec<Entity> = members(&ctx.world, root).into_iter().flatten().collect();
+        let inst = members(&ctx.world, root);
+        let file = tree_json(ctx, &path, &inst, &mine.added)?;
+        write_prefab(ctx, &path, &file)?;
+
+        let mut written: Vec<Entity> = inst.into_iter().flatten().collect();
         for &e in &mine.added {
             if !written.contains(&e) {
                 written.push(e);
             }
         }
-        let file = prefab_json(&ctx.world, root, &written)?;
-        let bytes = serde_json::to_string_pretty(&file).map_err(Error::from)?;
-        crate::assets::write_asset(&path, bytes.as_bytes())?;
-        ctx.assets.prefabs.remove(&path);
-
         let mark = self.undo.len();
         // Its parts are the file's entities now, in the file's order.
         let parts: Vec<u64> = written[1..].iter().map(|e| e.to_bits()).collect();
@@ -502,6 +642,58 @@ impl Editor {
         }
         self.group_since(mark);
         Ok(others.len())
+    }
+
+    /// Writes the entities `range` of instance `root` (see
+    /// [`included_at`]: a prefab its prefab includes, `path`) into that
+    /// prefab's own file, then brings every instance in the world that
+    /// uses it up to date, keeping their own overrides: this one, the
+    /// other instances of its prefab, and instances of `path` itself. One
+    /// undo step for the instances; the file isn't undone. Returns how
+    /// many instances were brought up to date.
+    ///
+    /// What the including prefab changes on it stays in the including
+    /// prefab's file, so a value both change keeps the including one's.
+    ///
+    /// # Errors
+    ///
+    /// `Invalid` for an entity that isn't an instance or a range that
+    /// isn't an included prefab's, `Unsupported` when entities of a
+    /// prefab it includes in turn were deleted, and the file's errors.
+    pub fn apply_to_included(
+        &mut self,
+        ctx: &mut Ctx,
+        root: Entity,
+        path: &str,
+        range: Range<usize>,
+    ) -> Result<usize, Error> {
+        let inst = members(&ctx.world, root);
+        let Some(e) = inst.get(range.start).copied().flatten() else {
+            return Err(Error::new(
+                ErrorKind::Invalid,
+                format!("the instance has no included prefab {path} at entity {}", range.start),
+            ));
+        };
+        if !included_at(ctx, root, e)?.iter().any(|(p, r)| p == path && *r == range) {
+            return Err(Error::new(
+                ErrorKind::Invalid,
+                format!("entities {range:?} of the instance aren't included prefab {path}"),
+            ));
+        }
+        let slice = inst[range].to_vec();
+        let users = instances_using(ctx, path);
+        let mut befores = Vec::with_capacity(users.len());
+        for &u in &users {
+            befores.push(compare(ctx, u)?);
+        }
+        let file = tree_json(ctx, path, &slice, &[])?;
+        write_prefab(ctx, path, &file)?;
+        let mark = self.undo.len();
+        for (u, before) in users.iter().zip(&befores) {
+            self.sync_instance(ctx, *u, before)?;
+        }
+        self.group_since(mark);
+        Ok(users.len())
     }
 
     /// Prefab `path` was changed and saved; `old` is what its file held
@@ -520,7 +712,16 @@ impl Editor {
         let old = parse_prefab(ctx, path, old)?;
         let doc = self.doc.path.clone().unwrap_or_default();
         let mut written = Vec::new();
-        let scenes = super::browse(ctx).scenes;
+        let listed = super::browse(ctx);
+        let scenes = listed.scenes;
+        // The prefabs whose instances change with it: itself and those that
+        // include it.
+        let mut using = vec![path.to_string()];
+        for p in listed.prefabs {
+            if p != path && includes(ctx, &p, path, 0) {
+                using.push(p);
+            }
+        }
         let result = (|| {
             let gone = |e: &Error| e.kind() == ErrorKind::NotFound;
             for scene in scenes {
@@ -530,7 +731,7 @@ impl Editor {
                     Err(e) if gone(&e) => continue,
                     Err(e) => return Err(e),
                 };
-                if !text.contains("PrefabInstance") || !text.contains(path) {
+                if !text.contains("PrefabInstance") || !using.iter().any(|p| text.contains(p.as_str())) {
                     continue;
                 }
                 match self.open(ctx, &scene) {
@@ -538,7 +739,7 @@ impl Editor {
                     Err(e) if gone(&e) => continue,
                     Err(e) => return Err(e),
                 }
-                let roots = instances(&ctx.world, path);
+                let roots = instances_using(ctx, path);
                 let befores = with_prefab(ctx, path, Some(old.clone()), |ctx| {
                     roots.iter().map(|&r| compare(ctx, r)).collect::<Result<Vec<_>, _>>()
                 })?;
@@ -557,34 +758,139 @@ impl Editor {
     }
 }
 
-/// `written` (the root first) as a prefab file, the parts relative to the
-/// root, the root at the origin.
-fn prefab_json(world: &ponko_ecs::World, root: Entity, written: &[Entity]) -> Result<Value, Error> {
-    let mut entities = Vec::with_capacity(written.len());
-    for &m in written {
-        let mut c = world.entity_json(m)?;
-        if m == root {
-            if c.get("Transform2D").is_some() {
-                c["Transform2D"]["position"] = json!([0.0, 0.0]);
+/// Writes prefab file `path` and forgets the copy read before.
+fn write_prefab(ctx: &mut Ctx, path: &str, file: &Value) -> Result<(), Error> {
+    // What the next spawn reads must parse: checked before writing.
+    PrefabFile::parse(file).map_err(|e| Error::new(ErrorKind::Json, e).with_path(path))?;
+    let bytes = serde_json::to_string_pretty(file).map_err(Error::from)?;
+    crate::assets::write_asset(path, bytes.as_bytes())?;
+    ctx.assets.prefabs.remove(path);
+    Ok(())
+}
+
+/// The prefab file `path` written from `inst` (an instance's entities as
+/// [`members`] lists them, laid out by the file's entries: see [`Slot`])
+/// and `added` (entities that become the prefab's own). Its own entities
+/// are written whole, the parts relative to the root, the root at the
+/// origin; an included prefab is written as its link with how `inst`
+/// changes it.
+fn tree_json(ctx: &mut Ctx, path: &str, inst: &[Option<Entity>], added: &[Entity]) -> Result<Value, Error> {
+    let root = inst
+        .first()
+        .copied()
+        .flatten()
+        .ok_or_else(|| Error::new(ErrorKind::Invalid, format!("the root of {path} was deleted")))?;
+    let mut entities = Vec::with_capacity(inst.len() + added.len());
+    let mut at = 0;
+    for slot in slots(ctx, path)? {
+        match slot {
+            Slot::Own => {
+                if let Some(Some(e)) = inst.get(at) {
+                    entities.push(own_json(&ctx.world, *e, root)?);
+                }
+                at += 1;
             }
-            if c.get("Transform3D").is_some() {
-                c["Transform3D"]["position"] = json!([0.0, 0.0, 0.0]);
+            Slot::Included { path: inner, size } => {
+                let slice: Vec<Option<Entity>> = (at..at + size).map(|i| inst.get(i).copied().flatten()).collect();
+                at += size;
+                if slice.iter().all(Option::is_none) {
+                    continue;
+                }
+                entities.push(included_json(ctx, &inner, &slice, root)?);
             }
-        } else {
-            crate::scene::relative_to(world, m, root, &mut c);
         }
-        if let Value::Object(map) = &mut c {
-            for link in NOT_WRITTEN {
-                map.remove(link);
-            }
-        }
-        entities.push(json!({ "entity": m.to_bits(), "components": c }));
     }
-    Ok(if let [one] = &entities[..] {
-        json!({ "format": crate::scene::PREFAB_FORMAT, "version": crate::scene::PREFAB_VERSION, "components": one["components"] })
-    } else {
-        json!({ "format": crate::scene::PREFAB_FORMAT, "version": crate::scene::PREFAB_TREE_VERSION, "entities": entities })
+    for &e in added {
+        entities.push(own_json(&ctx.world, e, root)?);
+    }
+    Ok(match &entities[..] {
+        [one] if one.get("prefab").is_none() => {
+            json!({ "format": crate::scene::PREFAB_FORMAT, "version": crate::scene::PREFAB_VERSION, "components": one["components"] })
+        }
+        _ => json!({ "format": crate::scene::PREFAB_FORMAT, "version": crate::scene::PREFAB_TREE_VERSION, "entities": entities }),
     })
+}
+
+/// Entity `e` of a prefab with root `root` as a file entry: its components,
+/// placed relative to the root (the root at the origin).
+fn own_json(world: &ponko_ecs::World, e: Entity, root: Entity) -> Result<Value, Error> {
+    let mut c = placed_json(world, e, root)?;
+    if let Value::Object(map) = &mut c {
+        for link in NOT_WRITTEN {
+            map.remove(link);
+        }
+    }
+    Ok(json!({ "entity": e.to_bits(), "components": c }))
+}
+
+/// `e`'s components with its transform as the prefab with root `root`
+/// keeps it: relative to the root, or the root's at the origin.
+fn placed_json(world: &ponko_ecs::World, e: Entity, root: Entity) -> Result<Value, Error> {
+    let mut c = world.entity_json(e)?;
+    if e == root {
+        if c.get("Transform2D").is_some() {
+            c["Transform2D"]["position"] = json!([0.0, 0.0]);
+        }
+        if c.get("Transform3D").is_some() {
+            c["Transform3D"]["position"] = json!([0.0, 0.0, 0.0]);
+        }
+    } else {
+        crate::scene::relative_to(world, e, root, &mut c);
+    }
+    Ok(c)
+}
+
+/// The entry of included prefab `inner` whose entities in the instance are
+/// `slice`: the link, its root's place and changed components, the
+/// components it lost (`remove`) and its parts' changes (`parts`).
+fn included_json(ctx: &mut Ctx, inner: &str, slice: &[Option<Entity>], root: Entity) -> Result<Value, Error> {
+    let cmp = compare_slice(ctx, inner, slice)?;
+    if cmp.missing > 0 {
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            format!(
+                "{} of included prefab {inner}'s entities were deleted from the instance: a prefab can't leave out parts of one it includes (revert them, or apply to {inner})",
+                cmp.missing
+            ),
+        ));
+    }
+    let top = slice[0].ok_or_else(|| Error::new(ErrorKind::Invalid, format!("the root of {inner} was deleted")))?;
+    let mut components = serde_json::Map::new();
+    let mut remove = Vec::new();
+    let mut parts: BTreeMap<usize, (serde_json::Map<String, Value>, Vec<String>)> = BTreeMap::new();
+    for o in cmp.overrides {
+        match (o.member, o.instance) {
+            (0, Some(v)) => drop(components.insert(o.component, v)),
+            (0, None) => remove.push(o.component),
+            (m, Some(v)) => drop(parts.entry(m - 1).or_default().0.insert(o.component, v)),
+            (m, None) => parts.entry(m - 1).or_default().1.push(o.component),
+        }
+    }
+    // Its place in the including prefab, always written.
+    let placed = placed_json(&ctx.world, top, root)?;
+    for name in PLACEMENT {
+        if let Some(t) = placed.get(name) {
+            components.insert(name.to_string(), t.clone());
+        }
+    }
+    let mut entry = json!({ "entity": top.to_bits(), "prefab": inner, "components": components });
+    if !remove.is_empty() {
+        entry["remove"] = json!(remove);
+    }
+    if !parts.is_empty() {
+        let list: Vec<Value> = parts
+            .into_iter()
+            .map(|(part, (components, remove))| {
+                let mut p = json!({ "part": part, "components": components });
+                if !remove.is_empty() {
+                    p["remove"] = json!(remove);
+                }
+                p
+            })
+            .collect();
+        entry["parts"] = json!(list);
+    }
+    Ok(entry)
 }
 
 #[cfg(test)]
@@ -898,25 +1204,127 @@ mod tests {
         let _ = a;
     }
 
+    /// A prefab whose root has Hp 1/1 and that includes `inner` (the
+    /// cart: its root, then its wheel) 50 to the root's right.
+    fn train(inner: &str) -> Value {
+        json!({ "format": "ponko-prefab", "version": 2, "entities": [
+            { "entity": 1, "components": {
+                "Transform2D": { "position": [0.0, 0.0], "rotation": 0.0, "scale": [1.0, 1.0] },
+                "Hp": { "now": 1.0, "max": 1.0 } } },
+            { "entity": 2, "prefab": inner, "components": {
+                "Transform2D": { "position": [50.0, 0.0], "rotation": 0.0, "scale": [1.0, 1.0] } } }
+        ]})
+    }
+
     #[test]
-    fn apply_refuses_a_prefab_that_includes_another() {
+    fn apply_keeps_an_included_prefab_as_its_link_with_this_instances_changes() {
         let mut files = TempAssets(Vec::new());
-        let inner = TempAssets::name("inner");
-        let outer = TempAssets::name("outer");
+        let inner = TempAssets::name("apply-inner");
+        let outer = TempAssets::name("apply-outer");
         files.write(&inner, &cart());
-        files.write(
-            &outer,
-            &json!({ "format": "ponko-prefab", "version": 2, "entities": [
-                { "entity": 1, "components": { "Hp": { "now": 1.0, "max": 1.0 } } },
-                { "entity": 2, "prefab": inner, "components": {} }
-            ]}),
-        );
+        files.write(&outer, &train(&inner));
         let mut ctx = game();
-        let root = place(&mut ctx, &outer, vec2(0.0, 0.0));
-        let cmp = compare(&mut ctx, root).unwrap();
-        assert!(cmp.is_clean(), "nested prefabs compare: {cmp:#?}");
-        let err = ctx.edit(|ed, ctx| ed.apply_to_prefab(ctx, root)).unwrap_err();
-        assert!(err.to_string().contains("includes other prefabs"), "{err}");
+        let a = place(&mut ctx, &outer, vec2(0.0, 0.0));
+        let b = place(&mut ctx, &outer, vec2(300.0, 0.0));
+        assert!(compare(&mut ctx, a).unwrap().is_clean(), "nested prefabs compare");
+        // a's included cart: its root (part 0) and its wheel (part 1).
+        let parts = |ctx: &Ctx, r| ctx.world.get::<PrefabParts>(r).unwrap().0.clone();
+        let (cart_a, wheel_a) = (parts(&ctx, a)[0], parts(&ctx, a)[1]);
+        ctx.edit(|ed, ctx| ed.set(ctx, cart_a, "Hp", json!({ "now": 7.0, "max": 10.0 })))
+            .unwrap();
+        ctx.edit(|ed, ctx| ed.set(ctx, wheel_a, "Glow", json!(4.0))).unwrap();
+        ctx.edit(|ed, ctx| ed.remove(ctx, cart_a, "Hp")).unwrap();
+        ctx.edit(|ed, ctx| ed.set(ctx, cart_a, "Glow", json!(2.0))).unwrap();
+
+        let others = ctx.edit(|ed, ctx| ed.apply_to_prefab(ctx, a)).unwrap();
+        assert_eq!(others, 1);
+        let file: Value = serde_json::from_str(&ctx.assets.read_text(&outer).unwrap().1).unwrap();
+        let link = &file["entities"][1];
+        assert_eq!(link["prefab"], json!(inner), "still a link: {file:#}");
+        assert_eq!(link["components"]["Glow"], json!(2.0));
+        assert_eq!(link["remove"], json!(["Hp"]));
+        assert_eq!(link["parts"], json!([{ "part": 0, "components": { "Glow": 4.0 } }]));
+        assert_eq!(link["components"]["Transform2D"]["position"], json!([50.0, 0.0]));
+        assert_eq!(file["entities"].as_array().unwrap().len(), 2, "the wheel isn't copied in");
+        let inner_file: Value = serde_json::from_str(&ctx.assets.read_text(&inner).unwrap().1).unwrap();
+        assert_eq!(inner_file, cart(), "the included prefab's file is left alone");
+
+        assert!(compare(&mut ctx, a).unwrap().is_clean(), "a is the prefab now");
+        let cmp = compare(&mut ctx, b).unwrap();
+        assert!(cmp.is_clean(), "b follows: {cmp:#?}");
+        let (cart_b, wheel_b) = (parts(&ctx, b)[0], parts(&ctx, b)[1]);
+        assert_eq!(ctx.world.get::<Glow>(wheel_b), Some(&Glow(4.0)));
+        assert_eq!(ctx.world.get::<Hp>(cart_b), None);
+        let at = ctx.world.get::<T2>(cart_b).unwrap().position;
+        assert!((at - vec2(350.0, 0.0)).length() < 1e-3, "{at}");
+    }
+
+    #[test]
+    fn apply_to_an_included_prefab_writes_its_file_and_every_instance_using_it_follows() {
+        let mut files = TempAssets(Vec::new());
+        let inner = TempAssets::name("included-inner");
+        let outer = TempAssets::name("included-outer");
+        files.write(&inner, &cart());
+        files.write(&outer, &train(&inner));
+        let mut ctx = game();
+        let a = place(&mut ctx, &outer, vec2(0.0, 0.0));
+        let b = place(&mut ctx, &outer, vec2(300.0, 0.0));
+        let c = place(&mut ctx, &inner, vec2(0.0, 300.0));
+        let parts = |ctx: &Ctx, r| ctx.world.get::<PrefabParts>(r).unwrap().0.clone();
+        let wheel_a = parts(&ctx, a)[1];
+        assert_eq!(
+            included_at(&mut ctx, a, wheel_a).unwrap(),
+            [(inner.clone(), 1..3)],
+            "the wheel belongs to the included cart, entities 1 and 2 of a"
+        );
+        assert!(included_at(&mut ctx, a, a).unwrap().is_empty(), "the root is the train's own");
+        ctx.edit(|ed, ctx| ed.set(ctx, wheel_a, "Glow", json!(6.0))).unwrap();
+
+        let n = ctx
+            .edit(|ed, ctx| ed.apply_to_included(ctx, a, &inner, 1..3))
+            .unwrap();
+        assert_eq!(n, 3, "a, b and c use the cart");
+        let inner_file: Value = serde_json::from_str(&ctx.assets.read_text(&inner).unwrap().1).unwrap();
+        assert_eq!(inner_file["entities"][1]["components"]["Glow"], json!(6.0));
+        assert_eq!(
+            inner_file["entities"][0]["components"]["Transform2D"]["position"],
+            json!([0.0, 0.0]),
+            "its root at the origin"
+        );
+        for r in [a, b] {
+            assert!(compare(&mut ctx, r).unwrap().is_clean(), "{r:?} is its prefab");
+            assert_eq!(ctx.world.get::<Glow>(parts(&ctx, r)[1]), Some(&Glow(6.0)));
+        }
+        assert_eq!(ctx.world.get::<Glow>(wheel(&ctx, c)), Some(&Glow(6.0)), "the cart itself too");
+
+        ctx.edit(|ed, ctx| ed.undo(ctx)).unwrap();
+        assert_eq!(
+            ctx.world.get::<Glow>(wheel(&ctx, c)),
+            Some(&Glow(1.0)),
+            "the instances' update is one undo step"
+        );
+        let err = ctx
+            .edit(|ed, ctx| ed.apply_to_included(ctx, a, &inner, 0..2))
+            .unwrap_err();
+        assert!(err.to_string().contains("aren't included prefab"), "{err}");
+    }
+
+    #[test]
+    fn apply_refuses_an_instance_missing_parts_of_an_included_prefab() {
+        let mut files = TempAssets(Vec::new());
+        let inner = TempAssets::name("missing-inner");
+        let outer = TempAssets::name("missing-outer");
+        files.write(&inner, &cart());
+        files.write(&outer, &train(&inner));
+        let mut ctx = game();
+        let a = place(&mut ctx, &outer, vec2(0.0, 0.0));
+        let wheel_a = ctx.world.get::<PrefabParts>(a).unwrap().0[1];
+        ctx.world.despawn(wheel_a);
+        let before = ctx.assets.read_text(&outer).unwrap().1;
+        let err = ctx.edit(|ed, ctx| ed.apply_to_prefab(ctx, a)).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Unsupported);
+        assert!(err.to_string().contains("can't leave out parts"), "{err}");
+        assert_eq!(ctx.assets.read_text(&outer).unwrap().1, before, "nothing written");
     }
 
     #[test]

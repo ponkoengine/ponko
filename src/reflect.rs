@@ -1740,6 +1740,10 @@ struct MaterialTable {
     /// Each file's materials, in the file's order, with their names
     /// (empty: unnamed).
     by_file: HashMap<String, Vec<(crate::render::Material, String)>>,
+    /// Materials made of one image (`{ "texture": "bricks.png" }`), by
+    /// the image's name, and the name of each.
+    by_texture: HashMap<String, crate::render::Material>,
+    texture_of: HashMap<u32, String>,
 }
 
 #[cfg(feature = "3d")]
@@ -1795,42 +1799,84 @@ impl MaterialNames {
         for list in table.by_file.values_mut() {
             list.retain(|(m, _)| m.id != id);
         }
+        if let Some(texture) = table.texture_of.remove(&id) {
+            table.by_texture.remove(&texture);
+        }
+    }
+
+    /// Records `material`, made of image `texture` alone, so a
+    /// [`ModelMaterial`](crate::render::ModelMaterial) of it is saved as
+    /// `{ "texture": .. }`.
+    pub(crate) fn add_texture(&self, texture: &str, material: crate::render::Material) {
+        let mut table = self.table();
+        table.by_texture.insert(texture.to_string(), material);
+        table.texture_of.insert(material.id, texture.to_string());
+    }
+
+    /// The material made of image `texture` alone, if one was made.
+    pub(crate) fn textured(&self, texture: &str) -> Option<crate::render::Material> {
+        self.table().by_texture.get(texture).copied()
     }
 
     /// How `material` is written in a scene file, if it came from a file:
-    /// by its name when the file has that name once, else by its number.
+    /// by its name when the file has that name once, else by its number;
+    /// a material of one image by the image.
     fn named(&self, material: crate::render::Material) -> Option<MaterialJson> {
         let table = self.table();
+        if let Some(texture) = table.texture_of.get(&material.id) {
+            return Some(MaterialJson::texture(texture.clone()));
+        }
         let (file, _) = table.by_id.get(&material.id)?;
         let list = table.by_file.get(file)?;
         let at = list.iter().position(|(m, _)| *m == material)?;
         let name = &list[at].1;
         let unique = !name.is_empty() && list.iter().filter(|(_, n)| n == name).count() == 1;
         Some(MaterialJson {
-            mesh: file.clone(),
-            material: if unique {
+            mesh: Some(file.clone()),
+            material: Some(if unique {
                 MaterialRef::Name(name.clone())
             } else {
                 MaterialRef::Index(at)
-            },
+            }),
+            texture: None,
         })
     }
 
     /// The material a scene file names, or an error saying what's missing.
     fn find(&self, json: &MaterialJson) -> Result<crate::render::Material, String> {
-        let file = &json.mesh;
         let table = self.table();
+        let (file, material) = match json {
+            MaterialJson {
+                texture: Some(texture),
+                mesh: None,
+                material: None,
+            } => {
+                return table.by_texture.get(texture).copied().ok_or_else(|| {
+                    format!("no material of image \"{texture}\" was made: load the scene or prefab naming it, which makes it")
+                });
+            }
+            MaterialJson {
+                mesh: Some(file),
+                material: Some(material),
+                texture: None,
+            } => (file, material),
+            _ => {
+                return Err(
+                    "a material is a mesh file's (\"mesh\" and \"material\") or an image's (\"texture\" alone)".into(),
+                );
+            }
+        };
         let list = table
             .by_file
             .get(file)
             .ok_or_else(|| format!("mesh \"{file}\" isn't loaded: ctx.gfx.load_mesh(\"{file}\") first"))?;
-        let found = match &json.material {
+        let found = match material {
             MaterialRef::Name(name) => list.iter().find(|(_, n)| n == name),
             MaterialRef::Index(i) => list.get(*i),
         };
         found.map(|(m, _)| *m).ok_or_else(|| {
             let names: Vec<_> = list.iter().map(|(_, n)| format!("\"{n}\"")).collect();
-            let wanted = match &json.material {
+            let wanted = match material {
                 MaterialRef::Name(name) => format!("\"{name}\""),
                 MaterialRef::Index(i) => i.to_string(),
             };
@@ -1844,13 +1890,29 @@ impl MaterialNames {
 }
 
 /// A material of a loaded mesh file: `{ "mesh": "rocks.glb", "material":
-/// "Wet" }`, or its number in the file instead of the name.
+/// "Wet" }`, or its number in the file instead of the name; or a material
+/// of one image: `{ "texture": "bricks.png" }`.
 #[cfg(feature = "3d")]
 #[derive(Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MaterialJson {
-    mesh: String,
-    material: MaterialRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mesh: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    material: Option<MaterialRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    texture: Option<String>,
+}
+
+#[cfg(feature = "3d")]
+impl MaterialJson {
+    fn texture(texture: String) -> Self {
+        Self {
+            mesh: None,
+            material: None,
+            texture: Some(texture),
+        }
+    }
 }
 
 #[cfg(feature = "3d")]
@@ -1903,7 +1965,15 @@ fn model_materials_json(world: &World, m: &crate::render::ModelMaterials) -> Opt
     let parts = m
         .parts()
         .map(|(part, material)| {
-            let MaterialJson { mesh, material } = names.named(material)?;
+            // A material of one image isn't saved in a part list.
+            let MaterialJson {
+                mesh: Some(mesh),
+                material: Some(material),
+                ..
+            } = names.named(material)?
+            else {
+                return None;
+            };
             Some(PartMaterialJson { part, mesh, material })
         })
         .collect::<Option<Vec<_>>>()?;
@@ -1920,8 +1990,9 @@ fn model_materials_from_json(world: &World, value: Value) -> Result<crate::rende
         .into_iter()
         .map(|p| {
             let named = MaterialJson {
-                mesh: p.mesh,
-                material: p.material,
+                mesh: Some(p.mesh),
+                material: Some(p.material),
+                texture: None,
             };
             Ok((p.part, names.find(&named)?))
         })
