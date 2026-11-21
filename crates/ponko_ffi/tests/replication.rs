@@ -57,6 +57,7 @@ struct Side {
     status: PonkoReplicationStatus,
     client: PonkoReplicationClientStats,
     peer: PonkoReplicationPeerStats,
+    resend: PonkoReplicationResendStats,
     clients: Vec<u64>,
     mine: Option<PonkoReplica>,
     late_declaration: Option<PonkoStatus>,
@@ -207,6 +208,12 @@ unsafe extern "C" fn frame(ctx: *mut PonkoCtx, user: *mut c_void) {
                 );
                 let mut none = PonkoReplicationPeerStats::default();
                 assert_eq!(ponko_ctx_replication_peer_stats(ctx, 99, &mut none), PONKO_NOT_FOUND);
+                assert_eq!(
+                    ponko_ctx_replication_resend_stats(ctx, peers[0], &mut side.resend),
+                    PONKO_OK
+                );
+                let mut none = PonkoReplicationResendStats::default();
+                assert_eq!(ponko_ctx_replication_resend_stats(ctx, 99, &mut none), PONKO_NOT_FOUND);
             } else {
                 assert_eq!(ponko_ctx_replication_client_stats(ctx, &mut side.client), PONKO_OK);
             }
@@ -245,6 +252,7 @@ fn side(turns: &Arc<Turns>, me: usize) -> Side {
         status: PonkoReplicationStatus::default(),
         client: PonkoReplicationClientStats::default(),
         peer: PonkoReplicationPeerStats::default(),
+        resend: PonkoReplicationResendStats::default(),
         clients: Vec::new(),
         mine: None,
         late_declaration: None,
@@ -276,6 +284,11 @@ fn a_c_server_replicates_c_components_to_a_c_client() {
     assert!(server.status.joined && server.status.has_me && server.status.me == 0);
     assert_eq!(server.clients, vec![1]);
     assert!(server.peer.creates_sent >= u64::from(UNITS) && server.peer.bytes_sent > 0);
+    // The loopback loses nothing: no resends, no backoff, and a timeout of
+    // a measured round trip (at least two ticks).
+    let r = server.resend;
+    assert_eq!((r.early_resends, r.late_acks, r.backoff), (0, 0, 0), "{r:?}");
+    assert!(r.timeout_ticks >= 2, "{r:?}");
 
     assert_eq!(client.status.role, PonkoReplicationRole::PONKO_REPLICATION_CLIENT);
     assert!(client.status.joined && !client.status.refused);

@@ -494,6 +494,7 @@ binding arrives:
 | `LobbyClient::join_web` | [Lobbies, matchmaking and relays](lobby.md#the-client) | C and C++ games don't build for the web yet; their lobby clients join over UDP |
 | `Signaling` | [Peer to peer over WebRTC](webrtc.md#with-any-signaling-channel) | C and C++ WebRTC endpoints are signaled through a lobby client (`ponko_net_messages_rtc_host`, `_rtc_join`) |
 | `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ games don't build for the web yet |
+| `LoopbackLink` | [Test it](replication.md#test-it) | Not bound yet: C and C++ tests use the plain loopback (`ponko_net_messages_loopback`); a link that loses and reorders datagrams is for Rust tests and benchmarks |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |
 | `perf::net_alloc_bytes` | [Profiling](profiling.md) | C and C++ count the frees of their own memory nowhere; `ponko_ctx_live_counts` and the asset inventory are the leak checks |
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |

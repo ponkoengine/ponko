@@ -627,19 +627,27 @@ keep their sprites and only move in depth. A node that moves redraws itself and 
 else.
 
 Text keeps its glyphs separately from the rest of its node. While a node's
-text, font, size, wrapping, alignment and place stay the same, drawing it
-again pushes the glyphs it laid out before, in its color now: a node whose
-opacity, scale, offset, background or text color animates, or whose fill
-fades on hover, is drawn each frame without its text being shaped or laid
-out again. Only a focused text field measures its caret and selection each
-time it is drawn.
+text, font, size, wrapping, alignment and width stay the same, drawing it
+again places the glyphs it laid out before where the node is now, in its
+color now. Only that placing is redone: each line's origin snaps to the
+physical pixel grid again, so the text looks the same wherever it lands. A
+node that moves (a scroll area or list scrolled by a fraction of a pixel, a
+row whose sibling resized), and a node whose opacity, scale, offset,
+background or text color animates, or whose fill fades on hover, is drawn
+each frame without its text being shaped, measured or wrapped again. A
+virtual list scrolled past a row lays out only the item that came into
+view. The tooltip and an item dragged with the pointer lay their text out
+once, not on each frame they follow the pointer. Only a focused text field
+measures its caret and selection each time it is drawn.
 
 The `ui/draw-...` benchmarks of `ponko_bench` time the UI's frame and draw
 list for the same HUD and settings screen, with every glyph pushed as with
 a GPU. A frame of the settings screen fading went from about 0.20 ms to
 0.030 ms with this, one where 40 labels pulse in color from 0.047 ms to
 0.027 ms, and one where a HUD slot is added or removed from 0.21 ms to
-0.027 ms; a still frame costs about 0.024 ms.
+0.027 ms; a still frame costs about 0.024 ms. A frame with the settings
+screen's list scrolling a fraction of a pixel went from about 0.074 ms to
+0.028 ms once moved text kept its glyphs.
 
 The `frame2d/...` benchmarks of `ponko_bench` time a whole 2D frame without a
 window (2,000 sprites under a HUD and a settings screen of about 150 nodes):

@@ -1707,6 +1707,7 @@ impl Ui {
         let nodes = &self.nodes;
         let text = &mut self.measure;
         let scratch = &mut self.rich_layout;
+        let unwrapped = &mut self.layout_cache.unwrapped;
         let external_fonts = self.external_fonts;
         // Physical pixels per layout unit: text is measured at the size
         // it is drawn.
@@ -1726,7 +1727,7 @@ impl Ui {
                     height: AvailableSpace::Definite(viewport.y / self.scale),
                 },
                 |inputs, _, context, style| {
-                    let Some(n) = context.and_then(|index| nodes[*index].as_ref()) else {
+                    let Some((slot, n)) = context.and_then(|index| Some((*index, nodes[*index].as_ref()?))) else {
                         return taffy::tree::LayoutOutput::HIDDEN;
                     };
                     taffy::compute_leaf_layout(
@@ -1736,6 +1737,15 @@ impl Ui {
                         |known, available| {
                             if let Some(rich) = n.rich() {
                                 return rich_size(rich, n, (external_fonts, k), known, available, text, scratch);
+                            }
+                            // Unwrapped text measures the same whatever
+                            // room it is offered: measured once.
+                            let kept = unwrapped.get_mut(slot).filter(|_| !n.paint.wrap);
+                            if let Some(Some(size)) = kept.as_deref() {
+                                return Size {
+                                    width: known.width.unwrap_or(size.x),
+                                    height: known.height.unwrap_or(size.y),
+                                };
                             }
                             let size = text.layout(
                                 &n.text,
@@ -1769,6 +1779,9 @@ impl Ui {
                             }
                             if n.text.is_empty() && !super::widgets::keeps_line(n.widget) {
                                 height = 0.0;
+                            }
+                            if let Some(kept) = kept {
+                                *kept = Some(Vec2::new(size.x, height));
                             }
                             Size {
                                 width,
