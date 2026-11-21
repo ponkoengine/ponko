@@ -116,10 +116,11 @@ The **first failure** stops the group: its state is `Failed` and
 (`error.path()`) and its kind: `NotFound` for a missing file, `Decode` for a
 broken one, or what your `with` loader returned. The assets the group
 already finished stay loaded, and no more are started. The ones already
-being read when it failed finish on their workers and wait, so a restart
-doesn't read them again. Which assets had finished by the time the failure
-came back depends on the workers, so a failed group's `loaded` can differ
-from run to run; a test should check it after the restart, not before.
+being read when it failed go on: the following frames take them as they
+finish, and `loaded` counts them, so a restart doesn't read them again.
+Which of them had finished in the frame the failure came back depends on
+the workers, but `ctx.finish_uploads()` waits for all of them, so a test
+sees the same `loaded` after it every run.
 
 `ctx.assets.cancel_group(id)` stops a group: the files not yet started are
 never read, the ones on workers are dropped when they finish, and streams
@@ -133,7 +134,7 @@ group. It is `Loading` again at once, and from the next frame it reads
 **only the assets that had not loaded**: the one that failed and the ones
 never started. What loaded keeps its handle and isn't read again, values
 you haven't taken yet stay, and the files that were being read when it
-failed are taken as they are. Restarting a group that is loading or ready
+failed are taken as they finish. Restarting a group that is loading or ready
 does nothing. It's for a loading screen's "try again" after a dropped
 connection, or after fixing a broken file:
 
@@ -185,7 +186,7 @@ time. Where the GPU has **timestamp queries** (most desktop GPUs; browsers
 only with WebGPU's `timestamp-query`), the group measures that too:
 
 - `group_stats()`: `gpu_upload_ms`, the GPU's own time copying the textures
-  of the latest step it timed, and `total_gpu_upload_ms` since the game
+  and mesh buffers of the latest step it timed, and `total_gpu_upload_ms` since the game
   started. They arrive a frame or a few after the step, as the GPU's
   results are read back without waiting.
 - `gpu_upload_timing` says whether this GPU times uploads. Where it doesn't
@@ -193,14 +194,21 @@ only with WebGPU's `timestamp-query`), the group measures that too:
   it is `false` and `gpu_upload_ms` stays `None`: only the game thread's
   time is measured.
 
-To time a copy, the step makes each texture write itself, as the GPU
-driver layer otherwise does (through a staging buffer), with the copy
-between two timestamps, and submits it at once. The time is the sum of
-those copies: the GPU's work alone, without the time it sat idle between
-them. Textures of other uploads (made by systems with `create_texture`, or
-glTF files' buffers) aren't timed. Streamed textures and meshes upload in
-the streaming step and count in `ctx.gfx.upload_stats()` instead, which has
-the same `gpu_upload_ms` and `gpu_upload_timing` for that step's textures.
+To time a copy, the step makes each texture and mesh buffer write itself,
+as the GPU driver layer otherwise does (through a staging buffer), with the
+copy between two timestamps, and submits it at once. A mesh buffer made
+with its contents is made empty and its contents copied in that way, and
+meshes made in the step are copied into the shared mesh buffers before it
+ends rather than at the next draw, so their copies are the step's. The time
+is the sum of those copies: the GPU's work alone, without the time it sat
+idle between them. Streamed textures and meshes upload in the streaming
+step and count in `ctx.gfx.upload_stats()` instead, which has the same
+`gpu_upload_ms` and `gpu_upload_timing` for that step's uploads. Textures
+made outside the steps (by systems, with `create_texture`) are timed
+together, a frame's worth at a time: `upload_stats().gpu_created_ms` is
+the GPU's time for those of the latest frame it timed. At most 64 copies
+are timed per step (or frame of made textures); later ones still upload,
+untimed.
 Some drivers now and then leave a timestamp unwritten (on an Apple GPU
 about one copy in three, in our tests): such a copy is left out of the sum,
 and a step whose copies all lost one keeps the previous step's time.
@@ -315,9 +323,11 @@ samples are exactly those of the one-piece decode. Uploading it waits for a
 frame with budget left. A group's streamed textures and meshes are decoded
 in slices by the streaming step, after the group step and within what it
 left of the same budget ([Streaming](streaming.md#browsers-and-asset-sources)).
-What can't be split still runs in one piece: other image formats (JPEG and
-the rest), interlaced PNGs, your own `with` loaders and `bytes`, and the
-geometry of a glTF file (its PNG images are sliced).
+KTX2 textures and the images, JSON, buffers and geometry of a glTF file
+are sliced too ([Streaming](streaming.md#browsers-and-asset-sources) says
+how). What can't be split still runs in one piece: other image formats
+(JPEG and the rest), interlaced PNGs, and your own `with` loaders and
+`bytes`.
 
 The tests run this path natively, decoding on the game thread as a browser
 does, and check the slicing by counting rather than timing: each piece of
