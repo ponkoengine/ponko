@@ -1411,6 +1411,16 @@ jobs:
         timeout-minutes: 30
         if: ${{ !cancelled() }}
         run: node web/smoke/spectrum.mjs --build --repeat 1
+      # Video in the browser (web/smoke/video.mjs, the video guide's "In a
+      # browser"): examples/web_video plays the test clip through
+      # ponko::video::Video, decoded by the browser's own AV1 decoder
+      # (WebCodecs); every frame shown must be the one its time names, at
+      # most two frames behind, and two seeks while paused must show their
+      # frames. A browser without WebCodecs AV1 exits 2 (unsupported).
+      - name: Chromium, video through the browser's AV1 decoder
+        timeout-minutes: 20
+        if: ${{ !cancelled() }}
+        run: node web/smoke/video.mjs --build
       # Threads on the web (web/smoke/threads.mjs, the guide's "Threads on the
       # web"): examples/web_threads built with `web/build.sh --threads`
       # (nightly Rust rebuilding std with atomics, hence rust-src). Served with

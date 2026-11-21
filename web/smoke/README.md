@@ -292,6 +292,31 @@ node web/smoke/spectrum.mjs --build
 node web/smoke/spectrum.mjs --variants scalar,simd --repeat 5
 ```
 
+## Video
+
+`video.mjs` checks that videos play in the browser build
+(`examples/web_video.rs`, the video guide's "In a browser"). The fixture
+plays the engine's test clip (`tests/fixtures/video/clip.webm`, whose
+frames carry their number in a gray quarter) through `ponko::video::Video`,
+which in the browser takes its frames from the browser's own AV1 decoder
+(WebCodecs), and reports what it saw; the runner checks
+(`video-lib.mjs`, `checkVideo`):
+
+- every frame shown is the one `frame_time` names (read from its pixels),
+  with the red, green and blue quarters in place;
+- the frames come in order, at least 12 of the 20, ending on the last;
+- the picture is at most two frames behind the video's clock (the browser
+  hands decoded frames back later);
+- paused, seeking to 1.3 s and back to 0.4 s shows frames 13 and 4 within
+  60 updates each.
+
+```sh
+node web/smoke/video.mjs --build      # web/build.sh --features video web_video, then run
+```
+
+It runs on WebGL2, like the other Chromium runs. A browser without
+WebCodecs AV1 (`VideoDecoder.isConfigSupported`) exits 2, unsupported.
+
 ## Running it
 
 ```sh
