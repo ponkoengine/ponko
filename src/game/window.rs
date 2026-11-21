@@ -396,7 +396,16 @@ where
         }
 
         // The built-in controllers, unless the game brought its own backend
-        // (setup can still replace them with `set_gamepad_backend`).
+        // (setup can still replace them with `set_gamepad_backend`): SDL's
+        // with `gamepad-sdl` (gyro, trigger rumble, rumble on macOS), else
+        // gilrs's; gilrs's too when SDL can't start and `gamepad` is on.
+        #[cfg(all(feature = "gamepad-sdl", not(target_arch = "wasm32")))]
+        if !self.ctx.has_gamepad_backend() {
+            match crate::gamepad_sdl::sdl::Sdl::start() {
+                Ok(sdl) => self.ctx.set_gamepad_backend(crate::gamepad_sdl::SdlGamepads::new(sdl)),
+                Err(e) => eprintln!("ponko: SDL's gamepads unavailable ({e})"),
+            }
+        }
         #[cfg(all(feature = "gamepad", not(target_arch = "wasm32")))]
         if !self.ctx.has_gamepad_backend() {
             self.ctx.set_gamepad_backend(crate::gamepad::GilrsBackend::new());
