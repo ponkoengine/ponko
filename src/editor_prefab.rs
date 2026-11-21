@@ -242,9 +242,11 @@ fn includes(ctx: &Ctx, outer: &str, inner: &str, depth: usize) -> bool {
         return false;
     };
     depth <= 16
-        && file.entries.iter().filter_map(|e| e.prefab.as_deref()).any(|p| {
-            p == inner || includes(ctx, p, inner, depth + 1)
-        })
+        && file
+            .entries
+            .iter()
+            .filter_map(|e| e.prefab.as_deref())
+            .any(|p| p == inner || includes(ctx, p, inner, depth + 1))
 }
 
 /// The roots of the instances, in id order, whose prefab is `path` or
@@ -390,11 +392,12 @@ pub(crate) fn compare(ctx: &mut Ctx, root: Entity) -> Result<Comparison, Error> 
 /// Compares `slice` (an included prefab's entities in an instance, its
 /// root first) with prefab `path` spawned alone where its root stands.
 fn compare_slice(ctx: &mut Ctx, path: &str, slice: &[Option<Entity>]) -> Result<Comparison, Error> {
-    let root = slice
-        .first()
-        .copied()
-        .flatten()
-        .ok_or_else(|| Error::new(ErrorKind::Invalid, format!("the root of included prefab {path} was deleted")))?;
+    let root = slice.first().copied().flatten().ok_or_else(|| {
+        Error::new(
+            ErrorKind::Invalid,
+            format!("the root of included prefab {path} was deleted"),
+        )
+    })?;
     let fresh_root = ctx.spawn_prefab(path, position(&ctx.world, root))?;
     let fresh: Vec<Entity> = members(&ctx.world, fresh_root).into_iter().flatten().collect();
     let out = compare_copy(ctx, path, slice, &fresh, Vec::new());
@@ -611,10 +614,7 @@ impl Editor {
     /// errors.
     pub fn apply_to_prefab(&mut self, ctx: &mut Ctx, root: Entity) -> Result<usize, Error> {
         let path = instance_path(&ctx.world, root).ok_or_else(|| not_an_instance(root))?;
-        let others: Vec<Entity> = instances_using(ctx, &path)
-            .into_iter()
-            .filter(|&e| e != root)
-            .collect();
+        let others: Vec<Entity> = instances_using(ctx, &path).into_iter().filter(|&e| e != root).collect();
         let mut befores = Vec::with_capacity(others.len());
         for &o in &others {
             befores.push(compare(ctx, o)?);
@@ -807,7 +807,9 @@ fn tree_json(ctx: &mut Ctx, path: &str, inst: &[Option<Entity>], added: &[Entity
         [one] if one.get("prefab").is_none() => {
             json!({ "format": crate::scene::PREFAB_FORMAT, "version": crate::scene::PREFAB_VERSION, "components": one["components"] })
         }
-        _ => json!({ "format": crate::scene::PREFAB_FORMAT, "version": crate::scene::PREFAB_TREE_VERSION, "entities": entities }),
+        _ => {
+            json!({ "format": crate::scene::PREFAB_FORMAT, "version": crate::scene::PREFAB_TREE_VERSION, "entities": entities })
+        }
     })
 }
 
@@ -1245,7 +1247,11 @@ mod tests {
         assert_eq!(link["remove"], json!(["Hp"]));
         assert_eq!(link["parts"], json!([{ "part": 0, "components": { "Glow": 4.0 } }]));
         assert_eq!(link["components"]["Transform2D"]["position"], json!([50.0, 0.0]));
-        assert_eq!(file["entities"].as_array().unwrap().len(), 2, "the wheel isn't copied in");
+        assert_eq!(
+            file["entities"].as_array().unwrap().len(),
+            2,
+            "the wheel isn't copied in"
+        );
         let inner_file: Value = serde_json::from_str(&ctx.assets.read_text(&inner).unwrap().1).unwrap();
         assert_eq!(inner_file, cart(), "the included prefab's file is left alone");
 
@@ -1277,12 +1283,13 @@ mod tests {
             [(inner.clone(), 1..3)],
             "the wheel belongs to the included cart, entities 1 and 2 of a"
         );
-        assert!(included_at(&mut ctx, a, a).unwrap().is_empty(), "the root is the train's own");
+        assert!(
+            included_at(&mut ctx, a, a).unwrap().is_empty(),
+            "the root is the train's own"
+        );
         ctx.edit(|ed, ctx| ed.set(ctx, wheel_a, "Glow", json!(6.0))).unwrap();
 
-        let n = ctx
-            .edit(|ed, ctx| ed.apply_to_included(ctx, a, &inner, 1..3))
-            .unwrap();
+        let n = ctx.edit(|ed, ctx| ed.apply_to_included(ctx, a, &inner, 1..3)).unwrap();
         assert_eq!(n, 3, "a, b and c use the cart");
         let inner_file: Value = serde_json::from_str(&ctx.assets.read_text(&inner).unwrap().1).unwrap();
         assert_eq!(inner_file["entities"][1]["components"]["Glow"], json!(6.0));
@@ -1295,7 +1302,11 @@ mod tests {
             assert!(compare(&mut ctx, r).unwrap().is_clean(), "{r:?} is its prefab");
             assert_eq!(ctx.world.get::<Glow>(parts(&ctx, r)[1]), Some(&Glow(6.0)));
         }
-        assert_eq!(ctx.world.get::<Glow>(wheel(&ctx, c)), Some(&Glow(6.0)), "the cart itself too");
+        assert_eq!(
+            ctx.world.get::<Glow>(wheel(&ctx, c)),
+            Some(&Glow(6.0)),
+            "the cart itself too"
+        );
 
         ctx.edit(|ed, ctx| ed.undo(ctx)).unwrap();
         assert_eq!(

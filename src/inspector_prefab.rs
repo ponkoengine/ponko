@@ -168,7 +168,13 @@ impl Panels {
         }
     }
 
-    pub(crate) fn apply_to_included(&mut self, ctx: &mut Ctx, root: Entity, inner: &str, range: std::ops::Range<usize>) {
+    pub(crate) fn apply_to_included(
+        &mut self,
+        ctx: &mut Ctx,
+        root: Entity,
+        inner: &str,
+        range: std::ops::Range<usize>,
+    ) {
         let done = ctx
             .edit(|ed, ctx| ed.apply_to_included(ctx, root, inner, range))
             .map_err(String::from);

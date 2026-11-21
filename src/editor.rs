@@ -27,6 +27,9 @@ pub(crate) mod play;
 #[cfg(feature = "editor")]
 #[path = "editor_prefab.rs"]
 pub(crate) mod prefab;
+#[cfg(all(feature = "editor", feature = "3d"))]
+#[path = "editor_thumb_studio.rs"]
+pub(crate) mod thumb_studio;
 #[cfg(feature = "editor")]
 #[path = "editor_thumbs.rs"]
 pub(crate) mod thumbs;

@@ -85,7 +85,11 @@ impl Ctx {
             if !self.world.is_alive(node.entity) {
                 continue;
             }
-            let wanted: &[&str] = if node.prefab.is_some() { &["Transform3D"] } else { &names };
+            let wanted: &[&str] = if node.prefab.is_some() {
+                &["Transform3D"]
+            } else {
+                &names
+            };
             let mut map = JsonMap::new();
             for &name in wanted {
                 if NOT_COMPARED.contains(&name) {
@@ -287,7 +291,11 @@ pub(crate) fn cube_gltf(nodes: &Value) -> String {
         let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
         let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
         for i in 0..4 {
-            data.push(if i <= chunk.len() { TABLE[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+            data.push(if i <= chunk.len() {
+                TABLE[(n >> (18 - 6 * i) & 63) as usize] as char
+            } else {
+                '='
+            });
         }
     }
     let list = nodes.as_array().map_or(&[][..], Vec::as_slice);
@@ -341,7 +349,9 @@ mod tests {
     impl Temp {
         fn new(what: &str, text: &str) -> Self {
             let name = format!("ponko-test-gltf-overrides-{what}-{}.gltf", std::process::id());
-            let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join(&name);
+            let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets")
+                .join(&name);
             std::fs::write(&file, text).unwrap();
             Self { name, file }
         }
@@ -397,13 +407,20 @@ mod tests {
         std::fs::write(&file.file, yard(4.0, 2.0)).unwrap();
         ctx.reload_gltf(&file.name).unwrap();
         assert_eq!(node(&ctx, root, "Crate"), crate_e, "the same entities");
-        assert_eq!(ctx.world.get::<Hp>(crate_e), Some(&Hp(8.0)), "the changed component stays changed");
+        assert_eq!(
+            ctx.world.get::<Hp>(crate_e),
+            Some(&Hp(8.0)),
+            "the changed component stays changed"
+        );
         let wall_at = ctx.world.get::<T3>(wall).unwrap().position;
         assert!(
             (wall_at - vec3(1.0, 2.0, -4.0)).length() < 1e-4,
             "where it was put in its parent, which the file still places: {wall_at}"
         );
-        assert!(ctx.world.get::<Shiny>(wall).is_none(), "the removed component stays removed");
+        assert!(
+            ctx.world.get::<Shiny>(wall).is_none(),
+            "the removed component stays removed"
+        );
 
         // A node edited back to the file has no override left.
         ctx.world.set_json(crate_e, "Hp", json!(4.0)).unwrap();
@@ -421,7 +438,10 @@ mod tests {
         edit(&mut ctx, root);
         ctx.record_gltf_overrides(None);
         let save = ctx.world.save();
-        assert_eq!(save["resources"]["GltfSceneSaves"]["scenes"][0]["overrides"]["Crate"]["components"]["Hp"], json!(8.0));
+        assert_eq!(
+            save["resources"]["GltfSceneSaves"]["scenes"][0]["overrides"]["Crate"]["components"]["Hp"],
+            json!(8.0)
+        );
 
         // A game without the editor: loads the save, spawns the level.
         let mut game = self::ctx();
@@ -473,6 +493,9 @@ mod tests {
             "the parent link, the derived world transform and float noise aren't overrides"
         );
         assert_eq!(o.remove, ["Door"]);
-        assert!(node_overrides(&file, &file).is_empty(), "a node as the file made it has none");
+        assert!(
+            node_overrides(&file, &file).is_empty(),
+            "a node as the file made it has none"
+        );
     }
 }

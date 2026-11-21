@@ -1509,9 +1509,16 @@ mod tests {
                 .unwrap()
                 .pixels(Vec2::new(SCREEN.x, SCREEN.y));
             assert!(view.min.x >= SIDE_PANEL - 1.0 && view.min.y > 10.0, "{view:?}");
-            assert_eq!(ctx.scene3d.camera.screen_rect(), view, "the camera draws into the free part");
+            assert_eq!(
+                ctx.scene3d.camera.screen_rect(),
+                view,
+                "the camera draws into the free part"
+            );
             let aspect = ctx.scene3d.camera.viewport().x / ctx.scene3d.camera.viewport().y;
-            assert!((aspect - view.size().x / view.size().y).abs() < 1e-4, "its aspect is the view's");
+            assert!(
+                (aspect - view.size().x / view.size().y).abs() < 1e-4,
+                "its aspect is the view's"
+            );
             let looked_at = screen(&ctx, Vec3::ZERO);
             assert!(
                 (looked_at - view.center()).length() < 0.5,
@@ -1557,13 +1564,18 @@ mod tests {
             mouse_drag(&egui, &mut p, &mut ctx, from, beside, 6);
             assert!(p.error.as_deref().unwrap_or("").contains("on a model"), "{:?}", p.error);
 
-            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene)).unwrap();
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene))
+                .unwrap();
             let saved = std::fs::read_to_string(&scene.file).unwrap();
             assert!(saved.contains(&format!("\"texture\": \"{}\"", tile.name)), "{saved}");
             p.open_file(&mut ctx, &scene.name);
             frame(&egui, &mut p, &mut ctx, vec![]);
             let e = the_entity(&mut ctx);
-            assert_eq!(ctx.world.get_json(e, "ModelMaterial").unwrap(), painted, "opened again, still painted");
+            assert_eq!(
+                ctx.world.get_json(e, "ModelMaterial").unwrap(),
+                painted,
+                "opened again, still painted"
+            );
         }
 
         #[test]
@@ -1576,7 +1588,9 @@ mod tests {
             };
             let name = format!("ponko-test-app-yard-{}.gltf", std::process::id());
             let file = TempAsset {
-                file: std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets").join(&name),
+                file: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets")
+                    .join(&name),
                 name,
             };
             std::fs::write(&file.file, yard(3.0, -3.0)).unwrap();
@@ -1587,7 +1601,11 @@ mod tests {
             // The game's setup spawns its level.
             let root = ctx.spawn_prefab(&file.name, T3::default()).unwrap();
             let node = |ctx: &Ctx, root: Entity, path: &str| {
-                ctx.world.get::<crate::d3::GltfRoot>(root).unwrap().entity(path).unwrap()
+                ctx.world
+                    .get::<crate::d3::GltfRoot>(root)
+                    .unwrap()
+                    .entity(path)
+                    .unwrap()
             };
             let at = |ctx: &Ctx, e: Entity| ctx.world.get::<T3>(e).unwrap().position;
             let (crate_e, wall) = (node(&ctx, root, "Crate"), node(&ctx, root, "Wall"));
@@ -1595,8 +1613,12 @@ mod tests {
             let grab = on_axis(&ctx, Mode::Translate, 0, 0.7);
             let to = screen(&ctx, vec3(along_x(&ctx, grab) + 2.2, 0.0, 0.0));
             mouse_drag(&egui, &mut p, &mut ctx, grab, to, 5);
-            assert!((at(&ctx, crate_e) - vec3(2.0, 0.0, 0.0)).length() < 1e-4, "moved by the gizmo");
-            ctx.edit(|ed, ctx| ed.set(ctx, crate_e, "Hp", serde_json::json!(8.0))).unwrap();
+            assert!(
+                (at(&ctx, crate_e) - vec3(2.0, 0.0, 0.0)).length() < 1e-4,
+                "moved by the gizmo"
+            );
+            ctx.edit(|ed, ctx| ed.set(ctx, crate_e, "Hp", serde_json::json!(8.0)))
+                .unwrap();
 
             // Exported again: the crate keeps its place and Hp, the wall
             // goes where the file puts it now.
@@ -1604,12 +1626,21 @@ mod tests {
             ctx.reload_gltf(&file.name).unwrap();
             frame(&egui, &mut p, &mut ctx, vec![]);
             assert_eq!(node(&ctx, root, "Crate"), crate_e);
-            assert!((at(&ctx, crate_e) - vec3(2.0, 0.0, 0.0)).length() < 1e-4, "{}", at(&ctx, crate_e));
+            assert!(
+                (at(&ctx, crate_e) - vec3(2.0, 0.0, 0.0)).length() < 1e-4,
+                "{}",
+                at(&ctx, crate_e)
+            );
             assert_eq!(ctx.world.get_json(crate_e, "Hp").unwrap(), serde_json::json!(8.0));
-            assert!((at(&ctx, wall) - vec3(-5.0, 0.0, -3.0)).length() < 1e-4, "{}", at(&ctx, wall));
+            assert!(
+                (at(&ctx, wall) - vec3(-5.0, 0.0, -3.0)).length() < 1e-4,
+                "{}",
+                at(&ctx, wall)
+            );
 
             // Saved and opened again: the scene is spawned again, with them.
-            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene)).unwrap();
+            ctx.edit(|ed, ctx| ed.save_as(ctx, &scene.name, DocKind::Scene))
+                .unwrap();
             p.open_file(&mut ctx, &scene.name);
             assert!(p.error.is_none(), "{:?}", p.error);
             frame(&egui, &mut p, &mut ctx, vec![]);
@@ -1621,7 +1652,11 @@ mod tests {
                 .collect();
             assert_eq!(roots.len(), 1, "the scene once");
             let crate_e = node(&ctx, roots[0], "Crate");
-            assert!((at(&ctx, crate_e) - vec3(2.0, 0.0, 0.0)).length() < 1e-4, "{}", at(&ctx, crate_e));
+            assert!(
+                (at(&ctx, crate_e) - vec3(2.0, 0.0, 0.0)).length() < 1e-4,
+                "{}",
+                at(&ctx, crate_e)
+            );
             assert_eq!(ctx.world.get_json(crate_e, "Hp").unwrap(), serde_json::json!(8.0));
             // And a click where it was moved to picks it.
             let there = screen(&ctx, vec3(2.0, 0.0, 0.0));
@@ -2039,7 +2074,11 @@ mod tests {
         assert!(p.error.is_none(), "{:?}", p.error);
         let cart_now: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&inner.file).unwrap()).unwrap();
         assert_eq!(cart_now["entities"][1]["components"]["Hp"], 8.0, "{cart_now:#}");
-        assert_eq!(ctx.world.get::<Hp>(parts(&ctx, b)[1]), Some(&Hp(8.0)), "b's cart follows");
+        assert_eq!(
+            ctx.world.get::<Hp>(parts(&ctx, b)[1]),
+            Some(&Hp(8.0)),
+            "b's cart follows"
+        );
 
         // Then the included cart's root, applied to the train: a link with
         // the change.
@@ -2049,10 +2088,15 @@ mod tests {
             .unwrap();
         click_text(&egui, &mut p, &mut ctx, |t| t == "Apply to prefab");
         assert!(p.error.is_none(), "{:?}", p.error);
-        let train_now: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&outer.file).unwrap()).unwrap();
+        let train_now: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&outer.file).unwrap()).unwrap();
         assert_eq!(train_now["entities"][1]["prefab"], inner.name.as_str(), "{train_now:#}");
         assert_eq!(train_now["entities"][1]["components"]["Hp"], 5.0);
-        assert_eq!(ctx.world.get::<Hp>(parts(&ctx, b)[0]), Some(&Hp(5.0)), "b follows the train");
+        assert_eq!(
+            ctx.world.get::<Hp>(parts(&ctx, b)[0]),
+            Some(&Hp(5.0)),
+            "b follows the train"
+        );
     }
 
     #[test]
@@ -2070,7 +2114,10 @@ mod tests {
             before.min.x >= SIDE_PANEL - 1.0 && before.max.x <= SCREEN.x - SIDE_PANEL + 1.0,
             "between the side panels: {before:?}"
         );
-        assert!(before.min.y > 10.0 && before.max.y < SCREEN.y - 10.0, "below the menu, above the assets: {before:?}");
+        assert!(
+            before.min.y > 10.0 && before.max.y < SCREEN.y - 10.0,
+            "below the menu, above the assets: {before:?}"
+        );
         assert_eq!(ctx.camera.screen_rect(), before, "the camera draws into the free part");
         assert!(
             (at(&ctx) - before.center()).length() < 0.5,
@@ -2087,7 +2134,10 @@ mod tests {
         let edge = Vec2::new(before.min.x, before.center().y);
         mouse_drag(&egui, &mut p, &mut ctx, edge, edge + Vec2::new(100.0, 0.0), 5);
         let after = view(&p);
-        assert!((after.min.x - before.min.x - 100.0).abs() < 2.0, "{before:?} -> {after:?}");
+        assert!(
+            (after.min.x - before.min.x - 100.0).abs() < 2.0,
+            "{before:?} -> {after:?}"
+        );
         assert!(
             (at(&ctx) - after.center()).length() < 0.5,
             "still in the middle of the narrower view: {} vs {}",
@@ -2181,12 +2231,59 @@ mod tests {
         let sprite = ctx.world.get_json(e, "Sprite").unwrap();
         assert_eq!(sprite["texture"], tile.name.as_str());
         let at = ctx.world.get::<T2>(e).unwrap().position;
-        assert!(
-            (at - dropped_at).length() < 1.0,
-            "placed where it was dropped: {at}"
-        );
+        assert!((at - dropped_at).length() < 1.0, "placed where it was dropped: {at}");
         frame(&egui, &mut p, &mut ctx, vec![command(Key::Z)]);
         assert_eq!(ctx.world.len(), before, "one undo step takes it away");
+    }
+
+    /// A model thumbnail kept on disk under the model's content (as the
+    /// renderer left it in an earlier run) is the tile's picture at once.
+    #[cfg(feature = "3d")]
+    #[test]
+    fn a_model_tile_shows_the_thumbnail_kept_on_disk_for_its_content() {
+        let grid = TempAsset::copy_of("cached-grid", "grid.glb");
+        let cache = std::env::temp_dir().join(format!("ponko-app-thumb-cache-{}", std::process::id()));
+        let bytes = std::fs::read(&grid.file).unwrap();
+        let key = crate::editor::thumbs::content_key(&grid.file, &bytes);
+        std::fs::create_dir_all(&cache).unwrap();
+        let size = crate::editor::thumbs::SIZE as u32;
+        image::RgbaImage::from_pixel(size, size, image::Rgba([255, 0, 255, 255]))
+            .save(cache.join(format!("{key}.png")))
+            .unwrap();
+        let (egui, mut p, mut ctx) = editor(None);
+        p.app.as_mut().unwrap().assets.use_thumbnail_cache(cache.clone());
+        search(&mut p, "ponko-test-app-cached-grid");
+        let shapes = with_thumbnails(&egui, &mut p, &mut ctx);
+        let short = super::super::assets_panel::short_name(&grid.name);
+        assert!(text_at(&shapes, |t| t == short).is_some(), "the tile");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        let thumb = p
+            .app
+            .as_mut()
+            .unwrap()
+            .assets
+            .thumbnails()
+            .get(&root, &grid.name, crate::editor::cook::AssetKind::Model)
+            .cloned();
+        let _ = std::fs::remove_dir_all(&cache);
+        let thumb = thumb.expect("made").unwrap();
+        assert_eq!(
+            &thumb.rgba[..4],
+            [255, 0, 255, 255],
+            "the kept picture, not drawn again"
+        );
+        // Clicked, its details give what the file holds.
+        let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+        let at = text_at(&shapes, |t| t == short).expect("the tile");
+        frame(&egui, &mut p, &mut ctx, vec![moved(at)]);
+        frame(&egui, &mut p, &mut ctx, vec![button(at, true)]);
+        frame(&egui, &mut p, &mut ctx, vec![button(at, false)]);
+        let shapes = drawn(&egui, &mut p, &mut ctx, vec![]);
+        assert!(
+            text_at(&shapes, |t| t.starts_with("model, ") && t.ends_with(" triangles")).is_some(),
+            "its triangle count: {:?}",
+            texts(&shapes)
+        );
     }
 
     /// The sound plays through the offline mixer only: nothing is heard.

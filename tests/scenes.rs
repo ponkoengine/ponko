@@ -561,7 +561,11 @@ fn an_including_prefab_changes_the_parts_of_the_prefab_it_includes_and_removes_c
         let parts = ctx.world.get::<PrefabParts>(root).unwrap().0.clone();
         let (axle_root, wheel) = (parts[0], parts[1]);
         assert_eq!(ctx.world.get::<Palm>(axle_root).unwrap().height, 10.0);
-        assert_eq!(ctx.world.get::<Count>(axle_root), None, "removed from the included root");
+        assert_eq!(
+            ctx.world.get::<Count>(axle_root),
+            None,
+            "removed from the included root"
+        );
         assert_eq!(ctx.world.get::<Palm>(wheel).unwrap().height, 5.0, "its part changed");
         assert_eq!(ctx.world.get::<Count>(wheel), None, "and lost a component");
 

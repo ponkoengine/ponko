@@ -25,7 +25,7 @@ use crate::hot_reload::Asset;
 use crate::reflect::{JsonMap, NotSaved, WorldReflect};
 
 mod overrides;
-#[cfg(test)]
+#[cfg(all(test, feature = "editor"))]
 pub(crate) use overrides::cube_gltf;
 
 /// How [`GltfRoot::spawn`] spawns a file.

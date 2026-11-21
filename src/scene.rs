@@ -561,7 +561,11 @@ fn part_changes(value: &Value, id: u64) -> Result<Vec<PartChange>, String> {
             let components = match &item["components"] {
                 Value::Object(c) => c.clone(),
                 Value::Null => serde_json::Map::new(),
-                other => return Err(format!("entity {id}, part {part}: \"components\" is an object, not {other}")),
+                other => {
+                    return Err(format!(
+                        "entity {id}, part {part}: \"components\" is an object, not {other}"
+                    ));
+                }
             };
             let remove = names(&item["remove"], &format!("entity {id}, part {part}"))?;
             Ok(PartChange {
