@@ -184,7 +184,7 @@ pub struct World {
     /// Reused work-plan storage of parallel queries.
     #[cfg(feature = "parallel")]
     pub(crate) par_plan: crate::query::ParPlan,
-    archetype_by_ids: HashMap<Box<[ComponentId]>, usize>,
+    pub(crate) archetype_by_ids: HashMap<Box<[ComponentId]>, usize>,
     pub(crate) entities: Entities,
     bundles: TypeMap<BundleInfo>,
     resources: TypeMap<Box<dyn Any + Send + Sync>>,
@@ -204,6 +204,15 @@ pub struct World {
     /// Unique per world, so a [`ViewState`](crate::ViewState) prepared on
     /// one world is never used to view another.
     pub(crate) uid: u64,
+    /// Names the layout of the archetype slots (which component set is in
+    /// which slot): changes whenever an archetype is made or reclaimed, to
+    /// a number this world never had before. A snapshot restore with the
+    /// same number skips laying the slots out again.
+    pub(crate) layout: u64,
+    /// The last number `layout` took; only grows.
+    layouts: u64,
+    /// Resources snapshots include ([`World::snapshot_resource`]).
+    pub(crate) snapshot_resources: Vec<crate::snapshot::SnapshotResource>,
 }
 
 // Own the existing box so scoped access needs neither unsafe code nor a new
@@ -319,6 +328,9 @@ impl World {
             hooked: false,
             hooks: Default::default(),
             uid: crate::view::next_world_uid(),
+            layout: 0,
+            layouts: 0,
+            snapshot_resources: Vec::new(),
         };
         let empty = w.archetype_for(&[]); // archetype 0: entities with no components
         w.slots.pin(empty);
@@ -1546,6 +1558,7 @@ impl World {
             drop,
             type_id: Some(TypeId::of::<T>()),
             tracked: false,
+            clone: T::__snapshot_clone(),
         });
         self.by_type.insert(TypeId::of::<T>(), id);
         T::requires(&mut crate::required::Requires::new(self, id));
@@ -1576,6 +1589,7 @@ impl World {
             drop,
             type_id: None,
             tracked: false,
+            clone: None,
         })
     }
 
@@ -2122,7 +2136,21 @@ impl World {
             self.hooks.archetype_created(a, &self.archetypes[a].ids);
         }
         self.archetype_by_ids.insert(key, a);
+        self.new_layout();
         a
+    }
+
+    /// Forgets where each bundle type spawns: the archetype slots were laid
+    /// out again. Each is placed again at its next spawn.
+    pub(crate) fn forget_bundles(&mut self) {
+        self.bundles.clear();
+    }
+
+    /// The archetype slots were laid out anew: see [`World::layout`].
+    #[inline]
+    fn new_layout(&mut self) {
+        self.layouts += 1;
+        self.layout = self.layouts;
     }
 
     /// Records that adding component `id` to archetype `src` leads to `dst`,
@@ -2183,6 +2211,7 @@ impl World {
         let mut shell = self.archetypes[a].retire(&mut self.slots.buffers);
         shell.key = key.map(|k| k.0);
         self.slots.reclaimed(a, shell);
+        self.new_layout();
     }
 
     fn bundle_archetype<B: Bundle>(&mut self) -> usize {

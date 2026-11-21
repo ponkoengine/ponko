@@ -303,6 +303,72 @@ impl Slots {
     }
 }
 
+/// The bookkeeping of [`Slots`] that decides what happens next (which
+/// archetypes count as empty, which the sweep reclaims, which slot a new
+/// archetype takes), without the storage kept for reuse: what a world
+/// snapshot saves so a restored world goes on exactly as the saved one.
+#[derive(Default)]
+pub(crate) struct SlotsState {
+    len: usize,
+    occupied: Vec<u64>,
+    recent: Vec<u64>,
+    pinned: Vec<u64>,
+    dead: Vec<u64>,
+    generations: Vec<u32>,
+    live: usize,
+    pinned_count: usize,
+    dead_count: usize,
+    hand: usize,
+    free: Vec<u32>,
+}
+
+impl SlotsState {
+    /// Bytes this copy holds on the heap.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        (self.occupied.capacity() + self.recent.capacity() + self.pinned.capacity() + self.dead.capacity()) * 8
+            + (self.generations.capacity() + self.free.capacity()) * 4
+    }
+}
+
+impl Slots {
+    /// Copies the bookkeeping into `into`, reusing its memory.
+    pub(crate) fn save_state(&self, into: &mut SlotsState) {
+        into.len = self.len;
+        into.occupied.clone_from(&self.occupied);
+        into.recent.clone_from(&self.recent);
+        into.pinned.clone_from(&self.pinned);
+        into.dead.clone_from(&self.dead);
+        into.generations.clone_from(&self.generations);
+        into.live = self.live;
+        into.pinned_count = self.pinned_count;
+        into.dead_count = self.dead_count;
+        into.hand = self.hand;
+        into.free.clone_from(&self.free);
+    }
+
+    /// Makes the bookkeeping what [`save_state`](Self::save_state) saved.
+    /// The world's archetypes must be laid out as they were then.
+    pub(crate) fn restore_state(&mut self, from: &SlotsState) {
+        self.len = from.len;
+        self.occupied.clone_from(&from.occupied);
+        self.recent.clone_from(&from.recent);
+        self.pinned.clone_from(&from.pinned);
+        self.dead.clone_from(&from.dead);
+        self.generations.clone_from(&from.generations);
+        self.live = from.live;
+        self.pinned_count = from.pinned_count;
+        self.dead_count = from.dead_count;
+        self.hand = from.hand;
+        self.free.clone_from(&from.free);
+        self.listed = false;
+    }
+
+    /// Whether slot `a` was reclaimed (holds no archetype).
+    pub(crate) fn is_dead(&self, a: usize) -> bool {
+        is_set(&self.dead, a)
+    }
+}
+
 fn is_set(bits: &[u64], a: usize) -> bool {
     bits[a / 64] >> (a % 64) & 1 != 0
 }

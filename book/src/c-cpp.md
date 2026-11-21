@@ -491,6 +491,8 @@ binding arrives:
 | `Graphics::instance_cell_state` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: a cell added from C is on the GPU at once |
 | `Ui::set_rich`, `Ui::set_inline_image`, `Ui::set_inline_font`, `Ui::link`, `UiEvent::LinkClicked` | [Retained game UI](ui.md#rich-text) | Not bound yet: several labels side by side, each with its own paint; a button for each link |
 | `GltfScene::nav_source` | [From Blender to the game](blender.md#navigation-meshes) | Read the nodes and their places with `ponko_gltf_scene_load`, and bake from mesh data of your own (`ponko_nav_sources_add_mesh`, `ponko_ctx_bake_navmesh`) |
+| `GameRollback` | [Rollback](networking.md#rolling-back-a-whole-game) | Generic over the game's input type, which C and C++ can't name; C and C++ games use lockstep (`ponko_net_*`). A binding with fixed-size byte inputs is possible later |
+| `WorldSnapshot` | [Rollback](networking.md#rolling-back-a-whole-game) | Used through `GameRollback`; C and C++ components without a destructor are copied as bytes, so a binding can follow with it |
 | `Graphics::load_lights`, `Graphics::load_cameras` | [3D](3d.md#gltf-extensions-lights-and-cameras) | Models load with the same glTF extensions; a file's lights and cameras aren't returned yet, so place them yourself |
 | `Smoothing` | [Client prediction](networking.md#your-own-player-at-once-client-prediction) | Generic over what is drawn; prediction and the input queue are bound (`ponko::prediction`), so fade the correction offset (`reconciled::before`) yourself |
 | `Physics3D::move_character` | [3D physics](physics3d.md#a-walking-character) | Characters walk with the physics step only; one tick can't be replayed on its own |

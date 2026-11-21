@@ -971,6 +971,75 @@ impl ChangesSeen {
     }
 }
 
+/// The game loop as the game of a rollback session
+/// ([`GameRollback`](crate::net::GameRollback)): saves and loads what a
+/// tick changes, and runs the simulation systems.
+struct RollbackRunner<'a> {
+    exec: &'a mut batch::Exec,
+    systems: &'a mut Vec<System>,
+    ctx: &'a mut Ctx,
+    /// The tick this frame runs: earlier ones run again.
+    present: u64,
+}
+
+impl crate::net::Runner for RollbackRunner<'_> {
+    fn tick(&self) -> u64 {
+        self.ctx.time.sim_tick()
+    }
+
+    fn save(&mut self, into: &mut crate::net::GameState) {
+        let ctx = &mut *self.ctx;
+        into.tick = ctx.time.sim_tick();
+        if let Err(e) = ctx.world.save_snapshot(&mut into.world) {
+            panic!("rollback: {e}");
+        }
+        ctx.events.save_state(&mut into.events);
+        #[cfg(feature = "physics")]
+        ctx.physics.save_state(&mut into.physics);
+        #[cfg(feature = "physics3d")]
+        ctx.physics3d.save_state(&mut into.physics3d);
+    }
+
+    fn load(&mut self, from: &crate::net::GameState) {
+        let ctx = &mut *self.ctx;
+        if let Err(e) = ctx.world.restore_snapshot(&from.world) {
+            panic!("rollback: {e}; keep the same `ctx.world` while a rollback session runs");
+        }
+        let systems = &*self.systems;
+        ctx.events
+            .restore_state(&from.events, |reader| systems.iter().any(|s| s.id == reader));
+        #[cfg(feature = "physics")]
+        ctx.physics.load_state(&from.physics);
+        #[cfg(feature = "physics3d")]
+        ctx.physics3d.load_state(&from.physics3d);
+        ctx.time.set_sim_tick(from.tick);
+        ctx.events.set_tick(from.tick);
+        ctx.gfx.sim_tick = from.tick;
+    }
+
+    fn hash(&self) -> u64 {
+        crate::reflect::world_hash(&self.ctx.world)
+    }
+
+    fn inputs(&mut self) -> &mut (dyn std::any::Any + Send + Sync) {
+        self.ctx.net.rollback_inputs_mut()
+    }
+
+    fn run_tick(&mut self) {
+        let ctx = &mut *self.ctx;
+        let tick = ctx.time.sim_tick();
+        let again = tick < self.present;
+        ctx.net.resimulating = again;
+        ctx.audio.replaying = again;
+        self.exec.run_list(self.systems, 0, ctx, 0, Some(tick));
+        ctx.set_sim_steps(1);
+        ctx.world.return_idle_ids();
+        ctx.net.resimulating = false;
+        ctx.audio.replaying = false;
+        ctx.advance_tick();
+    }
+}
+
 /// Ids for [`System::id`]; 0 means "outside any system".
 fn next_system_id() -> u32 {
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -1029,8 +1098,12 @@ fn end_timings(ctx: &mut Ctx) {
 /// removal logs of tracked components grow with every removal.
 fn forget_seen_removals<'a>(ctx: &mut Ctx, systems: impl Iterator<Item = &'a System>) {
     // Also once per frame or tick: slots set aside for deferred spawns
-    // that no buffer took go back to the world.
-    ctx.world.return_idle_ids();
+    // that no buffer took go back to the world. A rollback session does it
+    // after every tick it runs instead, so the ids commands get don't
+    // depend on how many ticks a frame ran.
+    if ctx.net.rollback.is_none() {
+        ctx.world.return_idle_ids();
+    }
     let systems = systems.map(|s| s.changes_seen.in_world(&ctx.world)).min();
     // Replication's server reads removals too, once a tick.
     let replication = ctx.net.replication.changes_seen(&ctx.world);
@@ -3051,12 +3124,38 @@ impl Game {
         let hz = f64::from(self.fixed_hz);
         ctx.net
             .replication_begin_tick(&mut ctx.world, &mut ctx.events, tick, hz);
-        self.exec.run_list(&mut self.sim_systems, 0, ctx, 0, Some(tick));
-        ctx.set_sim_steps(1);
+        let ticked = self.run_sim_list(ctx, tick);
         ctx.scenario_end_tick(tick);
         ctx.net.replication_end_tick(&mut ctx.world);
         ctx.net.lockstep.end_tick(&ctx.world, tick);
-        ctx.advance_tick();
+        if !ticked {
+            ctx.advance_tick();
+        }
+    }
+
+    /// The simulation systems for tick `tick`, or, with a rollback session,
+    /// the session's tick: a rollback first if one is due, then the tick
+    /// unless the session stalls. True if the clock already moved on (the
+    /// session ticks it).
+    fn run_sim_list(&mut self, ctx: &mut Ctx, tick: u64) -> bool {
+        let Some(mut session) = ctx.net.rollback.take() else {
+            ctx.events.hold_ticks = 0;
+            self.exec.run_list(&mut self.sim_systems, 0, ctx, 0, Some(tick));
+            ctx.set_sim_steps(1);
+            return false;
+        };
+        ctx.events.hold_ticks = session.hold_ticks();
+        ctx.net.advancing = true;
+        let mut runner = RollbackRunner {
+            exec: &mut self.exec,
+            systems: &mut self.sim_systems,
+            ctx,
+            present: tick,
+        };
+        let _ = session.advance(&mut runner);
+        ctx.net.advancing = false;
+        ctx.net.rollback = Some(session);
+        true
     }
 
     /// The scenario from [`input_scenario`](Self::input_scenario), started
@@ -3088,11 +3187,12 @@ impl Game {
         let hz = f64::from(self.fixed_hz);
         ctx.net
             .replication_begin_tick(&mut ctx.world, &mut ctx.events, tick, hz);
-        self.exec.run_list(&mut self.sim_systems, 0, ctx, 0, Some(tick));
-        ctx.set_sim_steps(1);
+        let ticked = self.run_sim_list(ctx, tick);
         ctx.net.replication_end_tick(&mut ctx.world);
         ctx.net.lockstep.end_tick(&ctx.world, tick);
-        ctx.advance_tick();
+        if !ticked {
+            ctx.advance_tick();
+        }
         ctx.set_in_sim(false);
         let n_sim = self.sim_systems.len();
         let n_frame = self.systems.len();

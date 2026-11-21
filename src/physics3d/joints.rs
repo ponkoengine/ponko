@@ -271,6 +271,7 @@ impl Joint3D {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct Link {
     entity: Entity,
     config: Joint3D,
