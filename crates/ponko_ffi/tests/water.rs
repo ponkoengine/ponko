@@ -284,14 +284,14 @@ fn bad_water_descriptors_are_refused() {
     }
 }
 
-/// What the ripple test saw: the lake, the box and the most contacts that
-/// waited on the lake at any step.
+/// What the ripple test saw: the lake, the box and how many contacts had
+/// started on the lake by the last step.
 #[derive(Default)]
 struct Splash {
     state: State,
     lake: u64,
     ripples: bool,
-    most_waiting: u32,
+    started: u64,
 }
 
 unsafe extern "C" fn drop_box(ctx: *mut PonkoCtx, user: *mut c_void) {
@@ -319,18 +319,18 @@ unsafe extern "C" fn drop_box(ctx: *mut PonkoCtx, user: *mut c_void) {
     }
 }
 
-unsafe extern "C" fn count_waiting(ctx: *mut PonkoCtx, user: *mut c_void) {
+unsafe extern "C" fn count_started(ctx: *mut PonkoCtx, user: *mut c_void) {
     unsafe {
         let s = &mut *user.cast::<Splash>();
-        let mut n = u32::MAX;
-        assert_eq!(ponko_ctx_water_waiting_contacts(ctx, s.lake, &mut n), PONKO_OK);
-        s.most_waiting = s.most_waiting.max(n);
+        let mut n = u64::MAX;
+        assert_eq!(ponko_ctx_water_started_contacts(ctx, s.lake, &mut n), PONKO_OK);
+        s.started = n;
     }
 }
 
 /// Drops a box into a still lake with its ripple switch at `ripples`; returns
-/// the most ripples that waited on the lake after any step.
-fn splashed(ripples: bool) -> u32 {
+/// how many ripples had started on the lake after the last step.
+fn splashed(ripples: bool) -> u64 {
     let mut s = Splash {
         ripples,
         ..Splash::default()
@@ -341,7 +341,7 @@ fn splashed(ripples: bool) -> u32 {
         assert_eq!(ponko_game_physics3d(g, v3(0.0, -9.81, 0.0)), PONKO_OK);
         assert_eq!(ponko_game_water(g), PONKO_OK);
         assert_eq!(
-            ponko_game_sim_system(g, c"count".as_ptr(), 1, Some(count_waiting), user),
+            ponko_game_sim_system(g, c"count".as_ptr(), 1, Some(count_started), user),
             PONKO_OK
         );
         let mut world = null_mut();
@@ -352,7 +352,7 @@ fn splashed(ripples: bool) -> u32 {
         );
         ponko_world_free(world);
     }
-    s.most_waiting
+    s.started
 }
 
 #[test]
@@ -400,6 +400,21 @@ fn waiting_contacts_count_what_touch_queued_and_refuse_what_is_no_water() {
             );
             assert_eq!(ponko_ctx_water_waiting_contacts(ctx, s.lake, &mut n), PONKO_OK);
             assert_eq!(n, 3);
+            let mut started = u64::MAX;
+            assert_eq!(ponko_ctx_water_started_contacts(ctx, s.lake, &mut started), PONKO_OK);
+            assert_eq!(started, 3, "the dropped one isn't counted");
+            assert_eq!(
+                ponko_ctx_water_started_contacts(ctx, 0xdead_beef, &mut started),
+                PONKO_NOT_FOUND
+            );
+            assert_eq!(
+                ponko_ctx_water_started_contacts(ctx, s.lake, null_mut()),
+                PONKO_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                ponko_ctx_water_started_contacts(std::ptr::null_mut(), s.lake, &mut started),
+                PONKO_INVALID_ARGUMENT
+            );
             assert_eq!(
                 ponko_ctx_water_waiting_contacts(ctx, 0xdead_beef, &mut n),
                 PONKO_NOT_FOUND

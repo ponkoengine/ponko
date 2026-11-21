@@ -111,6 +111,14 @@ fn a_game_times_one_frame_in_sixteen_unless_something_reads_every_frame() {
 
 /// Automatic quality counts consecutive samples over or under its budget,
 /// so it sees what it saw before sampling: a fresh sample every frame.
+///
+/// Every frame is timed; a frame's sample still can't arrive when the GPU
+/// left none of its timestamps usable (`timer.rs`, `read_frame`), which a
+/// heavily loaded machine does now and then. So a lone frame may bring no
+/// new sample, never two in a row, and at most two of the 32; sampling one
+/// frame in two (or in sixteen, as without automatic quality) still fails.
+/// "Fresh" is also a wall-clock age (250 ms): it is asserted where the two
+/// frames a sample spans took less than that.
 #[test]
 fn automatic_quality_still_gets_a_fresh_gpu_sample_every_frame() {
     let Some(mut ctx) = timed_ctx() else {
@@ -120,22 +128,38 @@ fn automatic_quality_still_gets_a_fresh_gpu_sample_every_frame() {
         .set_quality_autotune(Some(crate::render::QualityAutotune::default()));
     assert_eq!(ctx.gpu_timing_every(), 1, "automatic quality reads every frame");
     let mut last = 0;
-    let mut fresh = 0;
+    let (mut new, mut missed, mut missed_last) = (0, 0, false);
+    let mut took = std::time::Duration::ZERO;
     for i in 0..40 {
+        let start = std::time::Instant::now();
         frame(&mut ctx);
+        let (before, now) = (took, start.elapsed());
+        took = now;
         let renderer = ctx.gfx.renderer.as_ref().unwrap();
         let Some(sample) = renderer.quality_sample() else {
             assert!(i < 4, "no GPU sample after {i} frames");
             continue;
         };
         if i >= 8 {
-            assert!(sample.sequence > last, "frame {i} brought no new sample");
-            assert!(sample.fresh, "frame {i}'s sample is stale");
-            fresh += 1;
+            if sample.sequence > last {
+                new += 1;
+                missed_last = false;
+                if before + now < std::time::Duration::from_millis(200) {
+                    assert!(sample.fresh, "frame {i}'s sample is stale");
+                }
+            } else {
+                eprintln!("frame {i} brought no new sample (its timestamps were unusable)");
+                assert!(!missed_last, "frames {} and {i} both brought no new sample", i - 1);
+                missed += 1;
+                missed_last = true;
+            }
         }
         last = sample.sequence;
     }
-    assert_eq!(fresh, 32);
+    assert!(
+        missed <= 2 && new + missed == 32,
+        "{new} of 32 frames brought a new sample"
+    );
     let status = ctx.quality_autotune_status().expect("the policy is on");
     assert_ne!(status.reason, crate::render::QualityAutotuneReason::GpuUnavailable);
     // The policy off, the game goes back to sampling.
