@@ -124,7 +124,17 @@ var<workgroup> gi_buried: bool;
 // spacing by between GI_BURIED.x and GI_BURIED.y of it), the probe sits in
 // a wall between them. Such a probe is marked (its code negated) and gives
 // no light.
+//
+// What a neighbour sees that way is told by its distance tile's texel for
+// it, which sums a cone of directions some 12 degrees wide: near the top
+// of a wall, part of that cone passes over the wall and sees the far room,
+// which lifts the mean distance past the band though most of the cone
+// stops at the wall. So each distance texel also keeps (in b) how much of
+// its cone sees a surface within the band, and the probe counts as seen
+// that way when at least GI_BURIED_SHARE of the cone does, or the mean is
+// in the band.
 const GI_BURIED: vec2<f32> = vec2<f32>(-0.03, 0.25);
+const GI_BURIED_SHARE: f32 = 0.5;
 
 // What tells which probe a slot holds (GiGrid::code).
 fn gi_code(cell: vec3<f32>, counts: vec3<f32>) -> f32 {
@@ -151,8 +161,9 @@ fn gi_blocked(cell: vec3<f32>, toward: vec3<f32>) -> bool {
     // The distance tile's texel for that way (its inside is 14 across).
     let e = clamp(vec2<i32>(floor((gi_octahedral(toward) * 0.5 + 0.5) * 14.0)), vec2<i32>(0), vec2<i32>(13));
     let at = vec2<i32>(tile.x * 16, i32(rows) * 8 + tile.y * 16) + 1 + e;
-    let mean = textureLoad(gi_old, at, 0).r;
-    return mean < spacing * (1.0 - GI_BURIED.x) && mean > spacing * (1.0 - GI_BURIED.y);
+    let seen = textureLoad(gi_old, at, 0);
+    let mean = seen.r;
+    return (mean < spacing * (1.0 - GI_BURIED.x) && mean > spacing * (1.0 - GI_BURIED.y)) || seen.b >= GI_BURIED_SHARE;
 }
 
 // The octahedral map of unit direction `d` (as gi.wgsl's).
@@ -285,6 +296,8 @@ fn cs_update(
     let e = (vec2<f32>(gi_inside(texel - 1, inside)) + 0.5) / f32(inside) * 2.0 - 1.0;
     let dir = gi_unoctahedral(e);
     var sum = vec4<f32>(0.0);
+    // The distances that tell a neighbour sits in a wall (see GI_BURIED).
+    let band = gi_updates.grid.w * (1.0 - GI_BURIED);
     let part = local.z;
     let rows_each = GI_VIEW / GI_PARTS;
     for (var face = 0u; face < 6u; face++) {
@@ -314,7 +327,8 @@ fn cs_update(
                     let w = pow(c, 50.0) * solid;
                     if w > 1e-7 {
                         let distance = unpack2x16float(seen.y).y;
-                        sum += vec4<f32>(distance * w, distance * distance * w, 0.0, w);
+                        let in_band = distance < band.x && distance > band.y;
+                        sum += vec4<f32>(distance * w, distance * distance * w, select(0.0, w, in_band), w);
                     }
                 }
             }
@@ -343,7 +357,7 @@ fn cs_update(
             old_at = vec2<i32>(i32(column) * 8, i32(row) * 8) + texel;
         } else {
             let moments = sum.xy / max(sum.w, 1e-12);
-            result = vec4<f32>(moments, 0.0, 1.0);
+            result = vec4<f32>(moments, sum.z / max(sum.w, 1e-12), 1.0);
             old_at = vec2<i32>(i32(column) * 16, i32(rows) * 8 + i32(row) * 16) + texel;
             out_at.x += 8;
         }
