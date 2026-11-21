@@ -126,10 +126,15 @@ async function look(page) {
     const status = document.getElementById("status");
     const { onPonkoFailure } = await import(new URL("./game.js", location.href));
     let failure = null;
-    // After the failure, a late subscriber gets it at once.
-    onPonkoFailure((error) => {
-      failure = { kind: error.kind, message: error.message, location: error.location, text: error.text };
-    });
+    // After the failure, a late subscriber gets it at once. Before the
+    // module is initialized there is nothing to subscribe to yet.
+    try {
+      onPonkoFailure((error) => {
+        failure = { kind: error.kind, message: error.message, location: error.location, text: error.text };
+      });
+    } catch {
+      // Still loading.
+    }
     return {
       ticks: raw ? JSON.parse(raw).ticks : 0,
       status: status && status.className === "error" ? status.textContent : null,
