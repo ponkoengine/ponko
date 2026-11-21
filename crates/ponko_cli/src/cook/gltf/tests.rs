@@ -1,6 +1,7 @@
 //! Tests of model cooking, on GLB files built here.
 
 use super::*;
+use std::collections::BTreeSet;
 
 /// A GLB of `json` with `bin` as its binary chunk.
 pub fn glb(json: &Value, bin: &[u8]) -> Vec<u8> {
@@ -1057,7 +1058,7 @@ fn images_are_compressed_without_relocating_meshopt_or_draco_geometry() {
 
 /// The bytes of buffer `b` a view (or a compressed stream) addresses.
 #[cfg(feature = "textures")]
-fn bytes_of<'a>(place: &Value, bin: &'a [u8]) -> &'a [u8] {
+pub fn bytes_of<'a>(place: &Value, bin: &'a [u8]) -> &'a [u8] {
     let at = place["byteOffset"].as_u64().unwrap_or(0) as usize;
     &bin[at..at + place["byteLength"].as_u64().unwrap() as usize]
 }
@@ -1065,7 +1066,7 @@ fn bytes_of<'a>(place: &Value, bin: &'a [u8]) -> &'a [u8] {
 /// Moves a model's images to the front of its GLB chunk, so the geometry
 /// and every other view lie after them, and fixes the offsets.
 #[cfg(feature = "textures")]
-fn images_first(json: &mut Value, bin: &[u8]) -> Vec<u8> {
+pub fn images_first(json: &mut Value, bin: &[u8]) -> Vec<u8> {
     let images: std::collections::BTreeSet<usize> = json["images"]
         .as_array()
         .unwrap()
@@ -1314,4 +1315,98 @@ fn a_kept_models_image_that_something_else_still_reads_is_not_zeroed() {
     let at = view["byteOffset"].as_u64().unwrap() as usize;
     let range = at..at + view["byteLength"].as_u64().unwrap() as usize;
     assert_eq!(blob.unwrap()[range.clone()], bin[range]);
+}
+
+/// [`meshopt_textured`] with its images first and its chunk in an external
+/// `geometry.bin`, as a `.gltf` file.
+#[cfg(all(feature = "meshes", feature = "textures"))]
+pub fn external_meshopt(size: u32) -> (Value, Vec<u8>) {
+    let (mut json, bin) = meshopt_textured(size);
+    let bin = images_first(&mut json, &bin);
+    json["buffers"][0]["uri"] = json!("geometry.bin");
+    (json, bin)
+}
+
+/// Every compressed stream and the animation's data (views 0 to 5 of
+/// [`meshopt_textured`]) are the same bytes in the cooked model and its
+/// buffer as in the source's.
+#[cfg(all(feature = "meshes", feature = "textures"))]
+pub fn assert_streams_byte_for_byte(source: (&Value, &[u8]), cooked: (&Value, &[u8])) {
+    let ext = "EXT_meshopt_compression";
+    for i in 0..6 {
+        let (then, now) = (&source.0["bufferViews"][i], &cooked.0["bufferViews"][i]);
+        let stream = |view: &Value| {
+            view["extensions"][ext]
+                .as_object()
+                .map_or(view.clone(), |_| view["extensions"][ext].clone())
+        };
+        assert_eq!(
+            bytes_of(&stream(now), cooked.1),
+            bytes_of(&stream(then), source.1),
+            "view {i}"
+        );
+    }
+}
+
+#[cfg(all(feature = "meshes", feature = "textures"))]
+#[test]
+fn an_owned_external_buffer_loses_the_replaced_images_and_keeps_its_streams_byte_for_byte() {
+    let (json, bin) = external_meshopt(32);
+    let source = serde_json::to_vec(&json).unwrap();
+    let deps = [("geometry.bin".to_string(), bin.clone())];
+    let owned = BTreeSet::from(["geometry.bin".to_string()]);
+    let ((out, note, _), companions) = cook_owning("model.gltf", &source, &deps, ALL, &owned).unwrap().unwrap();
+    assert!(note.contains("bytes of replaced images dropped"), "{note}");
+    let cooked: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(companions.len(), 1);
+    let (path, now) = &companions[0];
+    assert_eq!(path, "geometry.bin");
+    assert!(now.len() + 1000 < bin.len(), "{} -> {}", bin.len(), now.len());
+    assert_eq!(cooked["buffers"][0]["byteLength"], now.len());
+    assert_eq!(cooked["buffers"][0]["uri"], "geometry.bin");
+    assert_eq!(cooked["accessors"], json["accessors"]);
+    assert_streams_byte_for_byte((&json, &bin), (&cooked, now));
+    // The KTX2 images went to a data-URI buffer of their own.
+    let images = cooked["images"].as_array().unwrap();
+    assert!(images.iter().all(|i| i["mimeType"] == "image/ktx2"), "{images:?}");
+    assert!(cooked["buffers"][2]["uri"].as_str().unwrap().starts_with("data:"));
+    assert!(now.len().is_multiple_of(4));
+}
+
+#[cfg(all(feature = "meshes", feature = "textures"))]
+#[test]
+fn an_external_buffer_not_owned_is_not_shortened() {
+    let (json, bin) = external_meshopt(32);
+    let source = serde_json::to_vec(&json).unwrap();
+    let deps = [("geometry.bin".to_string(), bin.clone())];
+    // Another model reads it, or a rule keeps it: not in the owned set.
+    let ((out, note, _), companions) = cook_owning("model.gltf", &source, &deps, ALL, &BTreeSet::new())
+        .unwrap()
+        .unwrap();
+    assert!(companions.is_empty());
+    assert!(!note.contains("dropped"), "{note}");
+    let cooked: Value = serde_json::from_slice(&out).unwrap();
+    let views = |json: &Value| json["bufferViews"].as_array().unwrap()[..6].to_vec();
+    assert_eq!(views(&cooked), views(&json));
+    assert_eq!(cooked["buffers"][0], json["buffers"][0]);
+    // Another file in the set is not this model's either.
+    let other = BTreeSet::from(["other.bin".to_string()]);
+    let (_, companions) = cook_owning("model.gltf", &source, &deps, ALL, &other).unwrap().unwrap();
+    assert!(companions.is_empty());
+}
+
+#[cfg(all(feature = "meshes", feature = "textures"))]
+#[test]
+fn a_file_two_buffer_entries_name_is_not_shortened() {
+    let (mut json, bin) = external_meshopt(32);
+    // A second entry for the same file: each would be changed on its own.
+    json["buffers"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"byteLength": bin.len(), "uri": "geometry.bin"}));
+    let source = serde_json::to_vec(&json).unwrap();
+    let deps = [("geometry.bin".to_string(), bin)];
+    let owned = BTreeSet::from(["geometry.bin".to_string()]);
+    let (_, companions) = cook_owning("model.gltf", &source, &deps, ALL, &owned).unwrap().unwrap();
+    assert!(companions.is_empty());
 }

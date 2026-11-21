@@ -224,10 +224,19 @@ stream after them moves down by a multiple of 16 bytes, which keeps its
 alignment, and its bytes stay the same: the geometry is byte for byte the
 source's. Each run of dropped image bytes keeps 1 to 16 zeroed bytes, so
 the views nothing reads any more stay valid. An image in an external
-`.bin` stays as it is, since other models may read that file. The
+`.bin` is shortened the same way when the cook knows one model reads that
+file (no other model names it, and no rule keeps or skips it): the cook
+writes the shorter file in the model's place and rewrites the model's
+offsets, and the cook's line for the `.bin` says which model's images it
+lost. A buffer two models read stays as it is, since each model alone
+can't tell what in it is unused; so does one a `keep` rule covers. The
 meshopt fixture of `tests/fixtures/cook-kept` (three 32 x 32 PNGs and
 their occlusion, 4,067 bytes, replaced by 2,844 bytes of KTX2) went from
-7,116 bytes to 10,188 with the images zeroed, and is 6,128 bytes now. The engine then uploads the KTX2 images as GPU blocks and still
+7,116 bytes to 10,188 with the images zeroed, and is 6,128 bytes now. The
+same model with its chunk in an external `.bin` (`geometry.bin`, 4,364
+bytes, and a `.gltf` file of 6,831 bytes, together 11,195) is a `.gltf` file
+of 6,809 bytes and a `.bin` of 316: 7,125 bytes, where its source was 7,112.
+The engine then uploads the KTX2 images as GPU blocks and still
 decompresses the geometry at load (feature `gltf-meshopt`). Set a model's
 `texture` rule to `keep` to keep its embedded textures, or use the `keep`
 rule to copy the whole model verbatim.

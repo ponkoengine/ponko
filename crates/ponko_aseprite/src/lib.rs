@@ -78,6 +78,19 @@ pub fn linked_files(path: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
     render::linked_files(path, &file)
 }
 
+/// Whether `bytes` is an Aseprite file of only tilesets: it holds at least
+/// one tileset and no layer, so nothing in it can be drawn. Other files
+/// link to such a file for its tiles (see [`decode_linked`]).
+///
+/// # Errors
+///
+/// Returns a message for invalid data.
+pub fn is_tileset_only(bytes: &[u8]) -> Result<bool, String> {
+    let file = parse_raw_file(bytes).map_err(|e| format!("not a readable Aseprite file: {e}"))?;
+    let chunks = || file.frames.iter().flat_map(|frame| &frame.chunks);
+    Ok(chunks().any(|c| matches!(c, Chunk::Tileset(_))) && !chunks().any(|c| matches!(c, Chunk::Layer(_))))
+}
+
 fn decode_file(
     linked: Option<(&str, &mut Load<'_>)>,
     bytes: &[u8],
