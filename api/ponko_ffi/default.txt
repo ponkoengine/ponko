@@ -1755,6 +1755,8 @@ impl core::fmt::Debug for ponko_ffi::PonkoActionBinding
 pub fn ponko_ffi::PonkoActionBinding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko_ffi::PonkoActionBinding
 pub struct ponko_ffi::PonkoActionMap(_)
+pub struct ponko_ffi::PonkoAiBlackboard
+pub struct ponko_ffi::PonkoAiBrain
 #[repr(C)] pub struct ponko_ffi::PonkoAnimation
 pub ponko_ffi::PonkoAnimation::first: u32
 pub ponko_ffi::PonkoAnimation::fps: f32
@@ -5846,6 +5848,22 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_action_map_remove(*mut ponko_ffi::PonkoActionMap, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_action_map_save(*mut ponko_ffi::PonkoActionMap, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_action_map_set(*mut ponko_ffi::PonkoActionMap, *const core::ffi::primitives::c_char, u32, *const ponko_ffi::PonkoActionBinding, usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_blackboard_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_blackboard_entity(*const ponko_ffi::PonkoAiBlackboard, u64, *mut u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_blackboard_flag(*const ponko_ffi::PonkoAiBlackboard, u64, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_blackboard_num(*const ponko_ffi::PonkoAiBlackboard, u64, *mut f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_blackboard_set_entity(*mut ponko_ffi::PonkoAiBlackboard, u64, u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_blackboard_set_flag(*mut ponko_ffi::PonkoAiBlackboard, u64, bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_blackboard_set_num(*mut ponko_ffi::PonkoAiBlackboard, u64, f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_blackboard_set_vec2(*mut ponko_ffi::PonkoAiBlackboard, u64, ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_blackboard_set_vec3(*mut ponko_ffi::PonkoAiBlackboard, u64, ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_blackboard_vec2(*const ponko_ffi::PonkoAiBlackboard, u64, *mut ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_blackboard_vec3(*const ponko_ffi::PonkoAiBlackboard, u64, *mut ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_action(*const ponko_ffi::PonkoAiBrain, usize, *mut u64) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_finish(*mut ponko_ffi::PonkoAiBrain, u64, ponko_ffi::PonkoAiStatus) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_param_num(*const ponko_ffi::PonkoAiBrain, u64, u64, *mut f32) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_brain_started(*const ponko_ffi::PonkoAiBrain, u64, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_combine(*const f32, usize) -> f32
 #[no_mangle] pub c fn ponko_ffi::ponko_ai_curve(ponko_ffi::PonkoAiCurve, f32, f32) -> f32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ai_key(*const core::ffi::primitives::c_char, *mut u64) -> ponko_ffi::PonkoStatus
@@ -5894,6 +5912,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_action_started(*const ponko_ffi::PonkoBrain, u64, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_blackboard_json(*const ponko_ffi::PonkoBrain, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_due(*const ponko_ffi::PonkoBrain, u32, u64, *mut bool) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_entity(*const ponko_ffi::PonkoBrain, u64, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_finish(*mut ponko_ffi::PonkoBrain, ponko_ffi::PonkoAiStatus) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_finish_action(*mut ponko_ffi::PonkoBrain, u64, ponko_ffi::PonkoAiStatus) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_flag(*const ponko_ffi::PonkoBrain, u64, *mut bool) -> ponko_ffi::PonkoStatus
@@ -5915,6 +5934,8 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_status(*const ponko_ffi::PonkoBrain, *mut ponko_ffi::PonkoAiStatus) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_think(*mut ponko_ffi::PonkoBrain, *const ponko_ffi::PonkoBehaviorTree, u64, f32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_trace(*const ponko_ffi::PonkoBrain, *mut core::ffi::primitives::c_char, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_vec2(*const ponko_ffi::PonkoBrain, u64, *mut ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_vec3(*const ponko_ffi::PonkoBrain, u64, *mut ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_brain_wake(*mut ponko_ffi::PonkoBrain) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_builtin_access(u32, *mut *mut ponko_ffi::PonkoAccess) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub c fn ponko_ffi::ponko_bus_effect_default(ponko_ffi::PonkoBusEffectKind) -> ponko_ffi::PonkoBusEffect
@@ -5934,6 +5955,8 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub c fn ponko_ffi::ponko_character3d(f32, f32) -> ponko_ffi::PonkoCharacter3D
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_character3d_component(*mut ponko_ffi::PonkoWorld, *mut u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_children(*mut ponko_ffi::PonkoWorld, u64, *mut u64, usize, *mut usize) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_chunk_ai_blackboard(*const ponko_ffi::PonkoChunk, usize, usize) -> *mut ponko_ffi::PonkoAiBlackboard
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_chunk_ai_brain(*const ponko_ffi::PonkoChunk, usize, usize) -> *mut ponko_ffi::PonkoAiBrain
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_clip_duration(*const ponko_ffi::PonkoClip) -> f32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_clip_free(*mut ponko_ffi::PonkoClip)
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_clip_new(*const core::ffi::primitives::c_char, *mut *mut ponko_ffi::PonkoClip) -> ponko_ffi::PonkoStatus
@@ -6006,6 +6029,7 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ai_action(*mut ponko_ffi::PonkoCtx, u64, usize, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ai_add_brain(*mut ponko_ffi::PonkoCtx, u64, *const core::ffi::primitives::c_char, u32) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ai_add_tree(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char, *const ponko_ffi::PonkoBehaviorTree) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ai_entity(*mut ponko_ffi::PonkoCtx, u64, u64, *mut u64) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ai_finish(*mut ponko_ffi::PonkoCtx, u64, u64, ponko_ffi::PonkoAiStatus) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ai_flag(*mut ponko_ffi::PonkoCtx, u64, u64, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ai_load_tree(*mut ponko_ffi::PonkoCtx, *const core::ffi::primitives::c_char) -> ponko_ffi::PonkoStatus
@@ -6023,6 +6047,8 @@ pub const ponko_ffi::PONKO_WINDOW_VIDEO_MODE_EX_VERSION: u32
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ai_signal_vec3(*mut ponko_ffi::PonkoCtx, u64, u64, ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ai_started(*mut ponko_ffi::PonkoCtx, u64, u64, *mut bool) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ai_think(*mut ponko_ffi::PonkoCtx) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ai_vec2(*mut ponko_ffi::PonkoCtx, u64, u64, *mut ponko_ffi::PonkoVec2) -> ponko_ffi::PonkoStatus
+#[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ai_vec3(*mut ponko_ffi::PonkoCtx, u64, u64, *mut ponko_ffi::PonkoVec3) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_ambient_light2d(*mut ponko_ffi::PonkoCtx, *mut bool, *mut ponko_ffi::PonkoColor) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_animator_add_layer(*mut ponko_ffi::PonkoCtx, u64, *const ponko_ffi::PonkoAnimationGraph, u32, *const core::ffi::primitives::c_char, *mut usize) -> ponko_ffi::PonkoStatus
 #[no_mangle] pub unsafe c fn ponko_ffi::ponko_ctx_animator_crossfade(*mut ponko_ffi::PonkoCtx, u64, usize, f32, f32) -> ponko_ffi::PonkoStatus

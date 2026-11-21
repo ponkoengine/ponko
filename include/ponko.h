@@ -1452,6 +1452,10 @@ typedef struct PonkoAccess PonkoAccess;
 
 typedef struct PonkoActionMap PonkoActionMap;
 
+typedef struct PonkoAiBlackboard PonkoAiBlackboard;
+
+typedef struct PonkoAiBrain PonkoAiBrain;
+
 typedef struct PonkoAnimationGraph PonkoAnimationGraph;
 
 typedef struct PonkoAnimationGraphBuilder PonkoAnimationGraphBuilder;
@@ -4288,6 +4292,18 @@ enum PonkoStatus ponko_brain_num(const struct PonkoBrain *brain, uint64_t key, f
 
 enum PonkoStatus ponko_brain_flag(const struct PonkoBrain *brain, uint64_t key, bool *out_value);
 
+enum PonkoStatus ponko_brain_entity(const struct PonkoBrain *brain,
+                                    uint64_t key,
+                                    uint64_t *out_value);
+
+enum PonkoStatus ponko_brain_vec2(const struct PonkoBrain *brain,
+                                  uint64_t key,
+                                  struct PonkoVec2 *out_value);
+
+enum PonkoStatus ponko_brain_vec3(const struct PonkoBrain *brain,
+                                  uint64_t key,
+                                  struct PonkoVec3 *out_value);
+
 enum PonkoStatus ponko_brain_blackboard_json(const struct PonkoBrain *brain,
                                              char *buffer,
                                              size_t capacity,
@@ -4318,6 +4334,75 @@ enum PonkoStatus ponko_brain_action_param_num(const struct PonkoBrain *brain,
                                               uint64_t action,
                                               uint64_t key,
                                               float *out_value);
+
+enum PonkoStatus ponko_ai_brain_component(struct PonkoWorld *world, uint32_t *out_id);
+
+enum PonkoStatus ponko_ai_blackboard_component(struct PonkoWorld *world, uint32_t *out_id);
+
+struct PonkoAiBrain *ponko_chunk_ai_brain(const struct PonkoChunk *chunk,
+                                          size_t column,
+                                          size_t row);
+
+struct PonkoAiBlackboard *ponko_chunk_ai_blackboard(const struct PonkoChunk *chunk,
+                                                    size_t column,
+                                                    size_t row);
+
+enum PonkoStatus ponko_ai_brain_action(const struct PonkoAiBrain *brain,
+                                       size_t index,
+                                       uint64_t *out_key);
+
+enum PonkoStatus ponko_ai_brain_started(const struct PonkoAiBrain *brain,
+                                        uint64_t action,
+                                        bool *out_started);
+
+enum PonkoStatus ponko_ai_brain_finish(struct PonkoAiBrain *brain,
+                                       uint64_t action,
+                                       enum PonkoAiStatus status);
+
+enum PonkoStatus ponko_ai_brain_param_num(const struct PonkoAiBrain *brain,
+                                          uint64_t action,
+                                          uint64_t key,
+                                          float *out_value);
+
+enum PonkoStatus ponko_ai_blackboard_set_num(struct PonkoAiBlackboard *board,
+                                             uint64_t key,
+                                             float value);
+
+enum PonkoStatus ponko_ai_blackboard_set_flag(struct PonkoAiBlackboard *board,
+                                              uint64_t key,
+                                              bool value);
+
+enum PonkoStatus ponko_ai_blackboard_set_vec2(struct PonkoAiBlackboard *board,
+                                              uint64_t key,
+                                              struct PonkoVec2 value);
+
+enum PonkoStatus ponko_ai_blackboard_set_vec3(struct PonkoAiBlackboard *board,
+                                              uint64_t key,
+                                              struct PonkoVec3 value);
+
+enum PonkoStatus ponko_ai_blackboard_set_entity(struct PonkoAiBlackboard *board,
+                                                uint64_t key,
+                                                uint64_t value);
+
+enum PonkoStatus ponko_ai_blackboard_num(const struct PonkoAiBlackboard *board,
+                                         uint64_t key,
+                                         float *out_value);
+
+enum PonkoStatus ponko_ai_blackboard_flag(const struct PonkoAiBlackboard *board,
+                                          uint64_t key,
+                                          bool *out_value);
+
+enum PonkoStatus ponko_ai_blackboard_entity(const struct PonkoAiBlackboard *board,
+                                            uint64_t key,
+                                            uint64_t *out_value);
+
+enum PonkoStatus ponko_ai_blackboard_vec2(const struct PonkoAiBlackboard *board,
+                                          uint64_t key,
+                                          struct PonkoVec2 *out_value);
+
+enum PonkoStatus ponko_ai_blackboard_vec3(const struct PonkoAiBlackboard *board,
+                                          uint64_t key,
+                                          struct PonkoVec3 *out_value);
 
 enum PonkoStatus ponko_ctx_ai_load_tree(struct PonkoCtx *ctx, const char *path);
 
@@ -4409,6 +4494,21 @@ enum PonkoStatus ponko_ctx_ai_flag(struct PonkoCtx *ctx,
                                    uint64_t entity,
                                    uint64_t key,
                                    bool *out_value);
+
+enum PonkoStatus ponko_ctx_ai_entity(struct PonkoCtx *ctx,
+                                     uint64_t entity,
+                                     uint64_t key,
+                                     uint64_t *out_value);
+
+enum PonkoStatus ponko_ctx_ai_vec2(struct PonkoCtx *ctx,
+                                   uint64_t entity,
+                                   uint64_t key,
+                                   struct PonkoVec2 *out_value);
+
+enum PonkoStatus ponko_ctx_ai_vec3(struct PonkoCtx *ctx,
+                                   uint64_t entity,
+                                   uint64_t key,
+                                   struct PonkoVec3 *out_value);
 
 enum PonkoStatus ponko_motion_clip(const struct PonkoClip *clip, struct PonkoMotion **out_motion);
 

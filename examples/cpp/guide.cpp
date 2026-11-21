@@ -1393,34 +1393,54 @@ static void sentries_alarm(ponko::ctx& ctx) {         // signals, before think
     if (ctx.sim_tick() == 30) ponko::ai::signal_vec2(ctx, ponko::ai::every_brain, alarm, {320, 240});
 }
 
-static int sentries_act(ponko::ctx& ctx, const std::vector<ponko::entity>& sentries) {   // act
+static int sentries_act(ponko::ctx& ctx) {            // act
     static const std::uint64_t run = ponko::ai::key("run"), shout = ponko::ai::key("shout");
     int shouts = 0;
-    for (ponko::entity e : sentries) {
-        if (ponko::ai::started(ctx, e, shout)) {           // two actions at once
+    // Every entity with a brain, its brain and blackboard as the loop visits it.
+    ponko::ai::each(ctx, [&](ponko::entity, ponko::ai::brain_row brain, ponko::ai::blackboard_row) {
+        if (brain.started(shout)) {                          // two actions at once
             ++shouts;                                        // play the sound once
-            ponko::ai::finish(ctx, e, shout, ponko::ai::status::success);
+            brain.finish(shout, ponko::ai::status::success);
         }
-        if (ponko::ai::doing(ctx, e, run)) { /* move toward the noise; finish when there */ }
-    }
+        if (brain.doing(run)) { /* move toward the noise; finish when there */ }
+    });
     return shouts;
 }
 // game.sim_system(sentries_alarm).sim_system(ponko::ai::think).sim_system(act)
 // ANCHOR_END: ai_world
 
+// ANCHOR: ai_loop
+struct Eyes { float range; };                        // a component of your own
+
+// Senses on all cores: each sentry's blackboard learns how far it sees.
+static void sentries_senses(ponko::ctx& ctx) {
+    static const std::uint64_t range = ponko::ai::key("range");
+    ponko::ai::query_par<const Eyes>(ctx, [&](ponko::chunk<const Eyes> chunk, ponko::ai::rows brains) {
+        auto [eyes] = chunk.columns();
+        for (std::size_t i = 0; i < chunk.size(); ++i) brains.blackboard(i).set_num(range, eyes[i].range);
+    });
+}
+// ANCHOR_END: ai_loop
+
 static void ai_world_guide_runs() {
     std::vector<ponko::entity> sentries;
     int shouts = 0;
     bool running = false;
+    float range = 0;
     ponko::game("sentries", 1, 1)
         .sim_system(sentries_alarm, "alarm")
+        .sim_system(sentries_senses, "senses")
         .sim_system(ponko::ai::think, "think")
         .sim_system([&](ponko::ctx& ctx) {
-            shouts += sentries_act(ctx, sentries);
+            shouts += sentries_act(ctx);
             running = ponko::ai::doing(ctx, sentries[0], ponko::ai::key("run"));
+            range = ponko::ai::num(ctx, sentries[0], ponko::ai::key("range")).value_or(0);
         }, "act")
-        .run_headless(40, [&](ponko::ctx& ctx) { sentries_setup(ctx, sentries); });
-    if (shouts != 3 || !running) {
+        .run_headless(40, [&](ponko::ctx& ctx) {
+            sentries_setup(ctx, sentries);
+            for (ponko::entity e : sentries) ctx.world().set(e, Eyes{12});
+        });
+    if (shouts != 3 || !running || range != 12) {
         std::fprintf(stderr, "ai world guide: %d shouts, running %d\n", shouts, running);
         std::abort();
     }
