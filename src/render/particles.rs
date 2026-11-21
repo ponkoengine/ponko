@@ -4,6 +4,7 @@
 //! that stood still, ribbons and lines that kept their shape and text that
 //! stayed the same cost nothing.
 use super::gpu_textures::TextureTable;
+use super::gpu3d::StateChanges;
 use crate::d3::ParticleBlend as ParticleBlend3D;
 use crate::render::traffic::{MAX_WRITES, Synced, Upload};
 use crate::three::particles::{ParticleFrame, ParticleInstance, ParticleRun};
@@ -329,15 +330,59 @@ impl Particles {
         self.main.soft
     }
 
-    /// How many draw calls `draw` makes in the main view.
-    pub fn draw_count(&self) -> usize {
-        self.main.draw_count()
+    /// How many draw calls `draw` makes in the main view, with its
+    /// particles cut before each instance in `cuts` (drawn in stretches
+    /// among the see-through models): a run a cut falls inside is drawn
+    /// in two.
+    pub fn draw_count(&self, cuts: impl Iterator<Item = u32> + Clone) -> usize {
+        let split = self
+            .main
+            .runs
+            .iter()
+            .map(|r| cuts.clone().filter(|&c| r.first < c && c < r.first + r.count).count())
+            .sum::<usize>();
+        self.main.draw_count() + split
     }
 
     /// Draws the main view's ribbons and lines, then its particles, then
-    /// its text (each set farthest first).
+    /// its text (each set farthest first), in a test's own pass (the
+    /// renderer draws them among the see-through models instead).
+    #[cfg(test)]
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, textures: &dyn TextureTable, white: u32) {
         self.draw_view(&self.main, pass, textures, white);
+    }
+
+    /// The main view's particles from instance `particles.start` to
+    /// `particles.end` (far to near), and how many state changes and
+    /// draws that recorded: a stretch of them drawn among the see-through
+    /// models (see `Renderer3D::draw_see_through`).
+    pub fn draw_particles(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        textures: &dyn TextureTable,
+        white: u32,
+        particles: std::ops::Range<u32>,
+    ) -> StateChanges {
+        let mut n = StateChanges::default();
+        if self.main.has_draws() {
+            pass.set_bind_group(0, &self.main.group, &[]);
+            n.bind_groups += 1;
+            self.draw_particle_runs(&self.main, pass, textures, white, particles, &mut n);
+        }
+        n
+    }
+
+    /// The main view's ribbons and lines, its particles from instance
+    /// `from` on and its text: what is drawn after every see-through
+    /// model. From 0, everything the main view draws.
+    pub fn draw_rest(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        textures: &dyn TextureTable,
+        white: u32,
+        from: u32,
+    ) -> StateChanges {
+        self.draw_counted(&self.main, pass, textures, white, from..u32::MAX)
     }
 
     /// [`draw`](Self::draw) for `view`.
@@ -348,8 +393,22 @@ impl Particles {
         textures: &dyn TextureTable,
         white: u32,
     ) {
+        self.draw_counted(view, pass, textures, white, 0..u32::MAX);
+    }
+
+    /// `view`'s ribbons and lines, its particles in `particles` and its
+    /// text, counted.
+    fn draw_counted(
+        &self,
+        view: &ParticleView,
+        pass: &mut wgpu::RenderPass<'_>,
+        textures: &dyn TextureTable,
+        white: u32,
+        particles: std::ops::Range<u32>,
+    ) -> StateChanges {
+        let mut n = StateChanges::default();
         if !view.has_draws() {
-            return;
+            return n;
         }
         let texture = |id: Option<u32>| {
             textures
@@ -357,8 +416,10 @@ impl Particles {
                 .or_else(|| textures.texture(white))
         };
         pass.set_bind_group(0, &view.group, &[]);
+        n.bind_groups += 1;
         if !view.strip_runs.is_empty() {
             pass.set_vertex_buffer(0, view.strip_vertices.buffer().slice(..));
+            n.vertex_buffers += 1;
             for run in &view.strip_runs {
                 let Some(texture) = texture(run.texture) else {
                     continue;
@@ -370,23 +431,12 @@ impl Particles {
                 });
                 pass.set_bind_group(1, &texture.bind_group, &[]);
                 pass.draw(run.first..run.first + run.count, 0..1);
+                n.pipelines += 1;
+                n.bind_groups += 1;
+                n.draws += 1;
             }
         }
-        if !view.runs.is_empty() {
-            pass.set_vertex_buffer(0, view.instances.buffer().slice(..));
-            for run in &view.runs {
-                let Some(texture) = texture(run.texture) else {
-                    continue;
-                };
-                pass.set_pipeline(if run.blend == ParticleBlend3D::Alpha {
-                    &self.alpha
-                } else {
-                    &self.additive
-                });
-                pass.set_bind_group(1, &texture.bind_group, &[]);
-                pass.draw(0..6, run.first..run.first + run.count);
-            }
-        }
+        self.draw_particle_runs(view, pass, textures, white, particles, &mut n);
         let tested = view.text_count - view.text_on_top;
         if tested > 0
             && let Some(atlas) = view.text_atlas.and_then(|id| textures.texture(id))
@@ -395,6 +445,53 @@ impl Particles {
             pass.set_bind_group(1, &atlas.bind_group, &[]);
             pass.set_vertex_buffer(0, view.text_vertices.buffer().slice(..));
             pass.draw(0..tested, 0..1);
+            n.pipelines += 1;
+            n.bind_groups += 1;
+            n.vertex_buffers += 1;
+            n.draws += 1;
+        }
+        n
+    }
+
+    /// `view`'s particles in `particles` (its camera bound): each run's
+    /// part in that range, one draw each.
+    fn draw_particle_runs(
+        &self,
+        view: &ParticleView,
+        pass: &mut wgpu::RenderPass<'_>,
+        textures: &dyn TextureTable,
+        white: u32,
+        particles: std::ops::Range<u32>,
+        n: &mut StateChanges,
+    ) {
+        let runs = view.runs.iter().filter_map(|run| {
+            let first = run.first.max(particles.start);
+            let end = (run.first + run.count).min(particles.end);
+            (first < end).then_some((run, first..end))
+        });
+        let mut bound = false;
+        for (run, instances) in runs {
+            let Some(texture) = textures
+                .texture(run.texture.unwrap_or(white))
+                .or_else(|| textures.texture(white))
+            else {
+                continue;
+            };
+            if !bound {
+                pass.set_vertex_buffer(0, view.instances.buffer().slice(..));
+                n.vertex_buffers += 1;
+                bound = true;
+            }
+            pass.set_pipeline(if run.blend == ParticleBlend3D::Alpha {
+                &self.alpha
+            } else {
+                &self.additive
+            });
+            pass.set_bind_group(1, &texture.bind_group, &[]);
+            pass.draw(0..6, instances);
+            n.pipelines += 1;
+            n.bind_groups += 1;
+            n.draws += 1;
         }
     }
 

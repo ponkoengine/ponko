@@ -40,6 +40,11 @@ pub(super) struct FrameLists {
     pub(super) blended_runs: Vec<Run>,
     pub(super) blended: Vec<Instance3D>,
     pub(super) blend_keys: Vec<(f32, u32, u32)>,
+    /// Where the main view's particles are drawn among `blended_runs`:
+    /// `(r, p)` draws the particles up to instance `p` after the runs up
+    /// to `r` (see `draw_order::place_particles`). The particles after
+    /// the last step follow every see-through model.
+    pub(super) blend_steps: Vec<(u32, u32)>,
     pub(super) solid_parts: Vec<super::draw_order::PartRun>,
     pub(super) shadow_parts: [Vec<super::draw_order::PartRun>; MAX_SHADOW_VIEWS],
     pub(super) view_parts: Vec<Vec<super::draw_order::PartRun>>,
@@ -92,6 +97,7 @@ impl Default for FrameLists {
             blended_runs: Vec::new(),
             blended: Vec::new(),
             blend_keys: Vec::new(),
+            blend_steps: Vec::new(),
             solid_parts: Vec::new(),
             shadow_parts: Default::default(),
             view_parts: Vec::new(),

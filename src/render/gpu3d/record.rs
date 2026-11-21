@@ -872,8 +872,7 @@ impl Renderer3D {
                         pass.set_bind_group(2, opaque_scene, &[]);
                     }
                     if !split {
-                        self.draw_models(&mut pass, &self.lists.blended_runs, Kind::Transparent, &self.instances);
-                        self.particles.draw(&mut pass, textures, self.resources.white);
+                        self.draw_see_through(&mut pass, textures);
                         self.draw_debug_lines(&mut pass);
                     }
                     // Last: the held items, over everything (see `view_model.rs`).
@@ -935,8 +934,7 @@ impl Renderer3D {
                     });
                     pass.set_bind_group(0, &self.frame_bind_group, &[]);
                     pass.set_bind_group(2, &targets.scene, &[]);
-                    self.draw_models(&mut pass, &self.lists.blended_runs, Kind::Transparent, &self.instances);
-                    self.particles.draw(&mut pass, textures, self.resources.white);
+                    self.draw_see_through(&mut pass, textures);
                     self.draw_debug_lines(&mut pass);
                     // Held see-through items that use the stencil draw in a
                     // pass of their own, which can write it.
@@ -1552,6 +1550,44 @@ impl Renderer3D {
 }
 
 impl Renderer3D {
+    /// The main view's see-through models and particles, far to near
+    /// together (with the frame bound at group 0 and the scene at group
+    /// 2): the sorted model runs with the stretches of particles between
+    /// them (`blend_steps`), then the see-through batches and crowds, then
+    /// the ribbons, lines and particles nearer than every see-through
+    /// model, then the 3D text. Without see-through models, or with every
+    /// particle nearer than them, that is the order of before: the models,
+    /// then everything the particles draw.
+    fn draw_see_through(&self, pass: &mut wgpu::RenderPass<'_>, textures: &dyn TextureTable) {
+        let (runs, white) = (&self.lists.blended_runs, self.resources.white);
+        let mut n = StateChanges::default();
+        let (mut drawn_runs, mut drawn_particles) = (0, 0);
+        for &(run, particles) in &self.lists.blend_steps {
+            let (run, particles) = (run as usize, particles);
+            if run > drawn_runs {
+                if drawn_particles > 0 {
+                    // The particles bound their camera at group 0.
+                    pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                    n.bind_groups += 1;
+                }
+                self.draw_model_runs(pass, &runs[drawn_runs..run], Kind::Transparent, &self.instances);
+            }
+            n += self
+                .particles
+                .draw_particles(pass, textures, white, drawn_particles..particles);
+            (drawn_runs, drawn_particles) = (run, particles);
+        }
+        if drawn_particles > 0 {
+            pass.set_bind_group(0, &self.frame_bind_group, &[]);
+            n.bind_groups += 1;
+        }
+        self.draw_model_runs(pass, &runs[drawn_runs..], Kind::Transparent, &self.instances);
+        self.draw_static(pass, Kind::Transparent, 0);
+        self.draw_crowds(pass, Kind::Transparent, 0);
+        n += self.particles.draw_rest(pass, textures, white, drawn_particles);
+        self.particle_counters.add(&n);
+    }
+
     /// `ctx.debug`'s 3D lines, last in the pass that draws the particles.
     fn draw_debug_lines(&self, pass: &mut wgpu::RenderPass<'_>) {
         if let Some(lines) = &self.debug_lines {
