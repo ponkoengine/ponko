@@ -269,6 +269,35 @@ fn files_that_are_not_levels_are_refused_with_the_reason() {
     });
 }
 
+#[test]
+fn levels_whose_sizes_would_allocate_without_bound_are_refused() {
+    // Each a few hundred bytes of text that would take gigabytes once spawned.
+    let huge_layer_ldtk = r#"{"jsonVersion": "1.5.3", "defs": {"layers": [], "tilesets": []}, "levels": [{"identifier": "L", "iid": "l",
+        "layerInstances": [{"__identifier": "Big", "__type": "IntGrid", "__cWid": 100000, "__cHei": 100000, "__gridSize": 16}]}]}"#;
+    let huge_tileset_ldtk = r#"{"jsonVersion": "1.5.3", "defs": {"layers": [], "tilesets": [{"identifier": "T", "uid": 1, "relPath": "t.png",
+        "tileGridSize": 16, "__cWid": 4294967295, "__cHei": 4294967295}]}, "levels": [{"identifier": "L", "iid": "l", "layerInstances": []}]}"#;
+    let huge_layer_tmj = r#"{"type": "map", "width": 100000, "height": 100000, "tilewidth": 16, "tileheight": 16,
+        "tilesets": [], "layers": [{"type": "tilelayer", "name": "Big", "infinite": true,
+        "chunks": [{"x": 0, "y": 0, "width": 1, "data": [0]}, {"x": 4000000, "y": 4000000, "width": 1, "data": [0]}]}]}"#;
+    let spaced_tileset_tmj = r#"{"type": "map", "width": 1, "height": 1, "tilewidth": 16, "tileheight": 16, "layers": [],
+        "tilesets": [{"firstgid": 1, "name": "T", "image": "t.png", "tilewidth": 16000, "tileheight": 16000,
+        "spacing": 1, "columns": 8, "tilecount": 64, "imagewidth": 1, "imageheight": 1}]}"#;
+    Game::new("levels", 1, 1).run_headless(0, |ctx| {
+        ctx.assets.add_source(
+            MemorySource::new("huge")
+                .with("layer.ldtk", huge_layer_ldtk)
+                .with("tileset.ldtk", huge_tileset_ldtk)
+                .with("layer.tmj", huge_layer_tmj)
+                .with("spaced.tmj", spaced_tileset_tmj),
+        );
+        for name in ["layer.ldtk", "tileset.ldtk", "layer.tmj", "spaced.tmj"] {
+            let err = ctx.assets.load_level(name, &LevelOptions::default()).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::Limit, "{name}: {err}");
+            assert!(ctx.spawn_level(name, Vec2::ZERO).is_err(), "{name}");
+        }
+    });
+}
+
 // ---- spawning ------------------------------------------------------------------
 
 fn spawned(name: &str, options: LevelOptions, at: Vec2) -> World {

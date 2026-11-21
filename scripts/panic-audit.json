@@ -209,6 +209,36 @@
     "reason": "The message names the misuse (bytes of a component with a destructor) and the fix (World::require with a constructor).",
     "site": "crates/ponko_ecs/src/required.rs:176"
   },
+  "crates/ponko_ecs/src/snapshot.rs:5705539cd4226837": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: an alignment is never zero\")",
+    "reason": "A Layout's alignment is never zero, so the dangling pointer is non-null.",
+    "site": "crates/ponko_ecs/src/snapshot.rs:203"
+  },
+  "crates/ponko_ecs/src/snapshot.rs:655867d7a002da5c": {
+    "classification": "invariant",
+    "construction": "debug_assert_eq!(c.size(), saved.item.size())",
+    "reason": "Debug check: a snapshot restores only its own world, with the saved layout, so columns match.",
+    "site": "crates/ponko_ecs/src/snapshot.rs:666"
+  },
+  "crates/ponko_ecs/src/snapshot.rs:7be31b74d42d823a": {
+    "classification": "invariant",
+    "construction": ".expect(\"too much component data for one snapshot column\")",
+    "reason": "The world's own column already holds this many values of this layout, so the array layout fits.",
+    "site": "crates/ponko_ecs/src/snapshot.rs:164"
+  },
+  "crates/ponko_ecs/src/snapshot.rs:defcba9a1922749f": {
+    "classification": "invariant",
+    "construction": ".expect(\"invariant: an alignment is never zero\")",
+    "reason": "A Layout's alignment is never zero, so the dangling pointer is non-null.",
+    "site": "crates/ponko_ecs/src/snapshot.rs:154"
+  },
+  "crates/ponko_ecs/src/snapshot.rs:f8b8fe8c5d67f9c8": {
+    "classification": "invariant",
+    "construction": "debug_assert_eq!(self.len, 0)",
+    "reason": "Debug check: shape_like is only called right after clear(), which sets len to 0.",
+    "site": "crates/ponko_ecs/src/snapshot.rs:259"
+  },
   "crates/ponko_ecs/src/storage.rs:020d1a4ff6d27862": {
     "classification": "invariant",
     "construction": ".expect(\"just pushed\")",
@@ -737,11 +767,35 @@
     "reason": "Preserves setup/runtime policy; displays the checked operation error. /// # }     /// ```     pub fn load_mixer(&mut self, path: &str) {         self.try_load_mixer(path).unwrap_or_else(|e| panic!(\"{e}\"));",
     "site": "src/audio/mixer_file.rs:87"
   },
+  "src/control.rs:0508bdecda6d776f": {
+    "classification": "invariant",
+    "construction": ".expect(\"a temporary folder\")",
+    "reason": "Fuzz-only code (cfg(any(test, fuzzing))), never in a game build: the fuzz target can't run without its own temporary folder.",
+    "site": "src/control.rs:2196"
+  },
   "src/control.rs:09c1ee8c26e0d287": {
     "classification": "invariant",
     "construction": ".expect(\"a claimed file is open until it is kept or dropped\")",
     "reason": "Internal invariant: pub(crate) fn file(&mut self) -> &mut std::fs::File {         self.file             .as_mut()             .expect(\"a claimed file is open until it is kept or dropped\")",
     "site": "src/control.rs:1052"
+  },
+  "src/control.rs:4989bdcc11d95941": {
+    "classification": "invariant",
+    "construction": ".expect(\"a temporary folder\")",
+    "reason": "Fuzz-only code (cfg(any(test, fuzzing))), never in a game build: the fuzz target can't run without its own temporary folder.",
+    "site": "src/control.rs:2199"
+  },
+  "src/control.rs:51287e0bfcad91fb": {
+    "classification": "invariant",
+    "construction": ".expect(\"a working folder\")",
+    "reason": "Fuzz-only code (cfg(any(test, fuzzing))), never in a game build: the fuzz target can't run without knowing the folder it started in.",
+    "site": "src/control.rs:2197"
+  },
+  "src/control.rs:53d8ac625a773f7a": {
+    "classification": "invariant",
+    "construction": "assert!(!trusted, \"a request without the token was trusted\")",
+    "reason": "Fuzz-only code (cfg(any(test, fuzzing))), never in a game build: the fuzz target's oracle, a line without the token must never be trusted.",
+    "site": "src/control.rs:2209"
   },
   "src/events.rs:472cc3c8006f3318": {
     "classification": "invariant",
@@ -760,6 +814,12 @@
     "construction": ".expect(\"channel type\")",
     "reason": "Internal invariant: let typed = self.channels[i]             .as_any()             .downcast_ref::<Typed<T>>()             .expect(\"channel type\");",
     "site": "src/events.rs:198"
+  },
+  "src/events.rs:739e77bcc1a7d6fb": {
+    "classification": "invariant",
+    "construction": "debug_assert!( saved.is_none_or(|s| s.cursors.iter().all(|c| !rolls_back(c.0) || c.1 >= log.base)), \"rollback: events a simulation system hadn't read were dropped before the load\" )",
+    "reason": "Debug check: hold_ticks (max_prediction + 3) keeps every event a simulation system hadn't read at a save until a load can reach it.",
+    "site": "src/events.rs:488"
   },
   "src/events.rs:c25bf5f3887a731b": {
     "classification": "caller-contract",
@@ -838,6 +898,18 @@
     "construction": ".expect(\"a batch gives its systems back\")",
     "reason": "Internal invariant: }     match &mut s.run {         Run::Ctx(f) => f(ctx),         Run::View(runner) => runner.as_mut().expect(\"a batch gives its systems back\").run_alone(ctx),",
     "site": "src/game.rs:889"
+  },
+  "src/game.rs:8bb769f9f2ab983f": {
+    "classification": "caller-contract",
+    "construction": "panic!(\"rollback: {e}; keep the same `ctx.world` while a rollback session runs\")",
+    "reason": "The game replaced ctx.world during a rollback session; the message names the fix.",
+    "site": "src/game.rs:1006"
+  },
+  "src/game.rs:97bdd455a0208cec": {
+    "classification": "forwarded-error",
+    "construction": "panic!(\"rollback: {e}\")",
+    "reason": "Displays SnapshotError, which names the component and the fix (derive Clone or World::register_clone).",
+    "site": "src/game.rs:994"
   },
   "src/game.rs:a461c8f275ee9ca4": {
     "classification": "forwarded-error",
@@ -953,11 +1025,11 @@
     "reason": "The generational table is exhausted after every slot is live or retired. This is the existing SlotIds limit, checked before a GPU build reserves a slot.",
     "site": "src/handle.rs:632"
   },
-  "src/input/glyphs.rs:d5a08427d402462f": {
+  "src/input/glyphs.rs:298d456ee48fd2c8": {
     "classification": "invariant",
     "construction": ".expect(\"invariant: the built-in font is valid\")",
-    "reason": "Parses the font bundled at compile time (epaint's Hack); its bytes are fixed and the UI loads the same font, so no caller can reach it",
-    "site": "src/input/glyphs.rs:568"
+    "reason": "The engine's built-in font (epaint's Hack) is compiled in and always parses; moved into paint_cells, which also repaints caps for a keyboard layout.",
+    "site": "src/input/glyphs.rs:591"
   },
   "src/jobs.rs:16b9dc620cca7123": {
     "classification": "caller-contract",
@@ -1102,6 +1174,12 @@
     "construction": "assert!(INPUTS_HEADER + BLOCK_HEADER + MAX_INPUT_BYTES <= PACKET)",
     "reason": "Internal invariant: compile-time packet constants must fit the transport packet.",
     "site": "src/net.rs:137"
+  },
+  "src/net/game_rollback.rs:99a80dce085bc613": {
+    "classification": "invariant",
+    "construction": ".expect(\"rollback inputs type\")",
+    "reason": "start_rollback sets the inputs to the session's own Vec<I>, and can't run while a tick runs through the session (not_advancing).",
+    "site": "src/net/game_rollback.rs:301"
   },
   "src/net/interest.rs:517c6d9849c8b54c": {
     "classification": "forwarded-error",
@@ -1438,6 +1516,18 @@
     "construction": "assert!( (2..=crate::net::MAX_PLAYERS).contains(&players), \"Rollback: expected 2 to 8 players; pass a player count in that range\" )",
     "reason": "Caller constraint or remedy is given in the message; keep the documented panic boundary. /// Unless `players` is 2 to 8 and `player` below it.     #[must_use]     pub fn new(players: usize, player: usize) -> Self {         assert!(",
     "site": "src/net/rollback.rs:296"
+  },
+  "src/net/service.rs:887f6791caaee9e6": {
+    "classification": "caller-contract",
+    "construction": "assert!( !self.advancing, \"ctx.net.{call} in a simulation system that a rollback session runs; \\ start and stop sessions in setup or frame systems\" )",
+    "reason": "start/stop_rollback inside a tick the session runs; the message says to do it in setup or frame systems.",
+    "site": "src/net/service.rs:218"
+  },
+  "src/net/service.rs:891df2f9b5ff3fe3": {
+    "classification": "invariant",
+    "construction": ".expect(\"a rollback session has inputs\")",
+    "reason": "Only called while a session advances, and start/stop_rollback (the only writers) can't run then.",
+    "site": "src/net/service.rs:227"
   },
   "src/net/snapshots.rs:1effd9b7ae76b480": {
     "classification": "forwarded-error",

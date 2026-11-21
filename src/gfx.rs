@@ -174,6 +174,8 @@ pub struct Graphics {
     /// empty while the main camera alone draws the whole window.
     pub(crate) cameras2d: Vec<crate::camera::views::Camera2DFrame>,
     pub(crate) clear_color: Color,
+    /// HDR output settings (`render/hdr.rs`).
+    pub(crate) hdr_output: crate::render::HdrOutput,
     pub(crate) text: Text,
     /// Reused for a text field's selection spans.
     pub(crate) selection_scratch: Vec<[f32; 2]>,
@@ -235,6 +237,7 @@ impl Graphics {
             ui_list: DrawList::default(),
             cameras2d: Vec::new(),
             clear_color: Color::PONKO_DARK,
+            hdr_output: crate::render::HdrOutput::default(),
             text: Text::new(),
             selection_scratch: Vec::new(),
             glyph_scratch: Vec::new(),
@@ -1042,6 +1045,17 @@ impl Graphics {
         }
         self.write_texture_pixels(texture, rgba);
         Ok(())
+    }
+
+    /// Puts a video frame's planes into `texture` (a live RGBA texture of
+    /// their size, made by `create_texture` and never streamed or
+    /// compressed), converted to RGBA on the GPU. Nothing to do headless.
+    #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+    pub(crate) fn update_texture_yuv(&mut self, texture: Texture, planes: &crate::video::yuv::Planes<'_>) {
+        if self.headless || !self.textures_live.contains(texture.id) {
+            return;
+        }
+        self.renderer().update_texture_yuv(texture.id, planes);
     }
 
     /// Writes checked pixels into `texture` (see [`update_texture`](Self::update_texture)).

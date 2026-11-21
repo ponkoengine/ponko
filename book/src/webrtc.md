@@ -246,7 +246,8 @@ make an endpoint signaled through a lobby client (`lobby::rtc_host` and
 `ponko_net_messages_rtc_peer` (`net_messages::rtc_peer`) gives a peer's
 member id. Build `ponko_ffi` with `--features webrtc`; without it the calls
 fail with an error that says so. `Signaling` on its own channel and TURN
-are Rust-only, and C and C++ games don't build for the web.
+are Rust-only, and a C or C++ game built for the web has no WebRTC
+endpoint.
 
 ## Testing
 

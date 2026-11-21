@@ -63,6 +63,9 @@ In PowerShell, replace `$PWD` with the repository's absolute path, using
 forward slashes; Visual Studio builds use `--config Release` and put programs
 in `target/native/Release/`.
 
+For the browser, `web/build-cpp.sh` builds a C or C++ game with the WASI
+SDK: see [Web builds](web.md#c-and-c).
+
 For your own game, copy the recipe in `examples/cpp/CMakeLists.txt`: include
 the two headers, link `ponko_ffi`, ship its shared library next to your
 executable, and put your textures in an `assets/` folder next to it (the
@@ -488,18 +491,22 @@ binding arrives:
 | `InstanceCellData` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: matrices and colours go straight to `ponko_ctx_add_instance_cell` |
 | `GamepadBackend` | [Backends and tests](controllers.md#backends-and-tests) | Native games use the built-in gamepad backend |
 | `FakeGamepads` | [Backends and tests](controllers.md#backends-and-tests) | Native tests feed `ponko_ctx_feed_input` (kind 8 connects a pad) and `ponko_ctx_feed_gamepad_motion` |
+| `KeyLabels` | [Key labels follow the keyboard layout](controllers.md#key-labels-follow-the-keyboard-layout) | `ponko_glyph_atlas_draw_prompt` and `ponko_glyph_atlas_texture` label the key caps for the player's layout themselves; `ponko_glyph_label` gives the US labels |
+| `InputScenario::connect_gamepad` | [Backends and tests](controllers.md#backends-and-tests) | Scenarios are JSON in C and C++: a `gamepad_connected` step takes the same `info` object |
 | `Graphics::instance_cell_state` | [Streaming instance cells](3d.md#streaming-instance-cells) | The same: a cell added from C is on the GPU at once |
 | `Ui::set_rich`, `Ui::set_inline_image`, `Ui::set_inline_font`, `Ui::link`, `UiEvent::LinkClicked` | [Retained game UI](ui.md#rich-text) | Not bound yet: several labels side by side, each with its own paint; a button for each link |
 | `GltfScene::nav_source` | [From Blender to the game](blender.md#navigation-meshes) | Read the nodes and their places with `ponko_gltf_scene_load`, and bake from mesh data of your own (`ponko_nav_sources_add_mesh`, `ponko_ctx_bake_navmesh`) |
+| `GameRollback` | [Rollback](networking.md#rolling-back-a-whole-game) | Generic over the game's input type, which C and C++ can't name; C and C++ games use lockstep (`ponko_net_*`). A binding with fixed-size byte inputs is possible later |
+| `WorldSnapshot` | [Rollback](networking.md#rolling-back-a-whole-game) | Used through `GameRollback`; C and C++ components without a destructor are copied as bytes, so a binding can follow with it |
 | `Graphics::load_lights`, `Graphics::load_cameras` | [3D](3d.md#gltf-extensions-lights-and-cameras) | Models load with the same glTF extensions; a file's lights and cameras aren't returned yet, so place them yourself |
 | `Smoothing` | [Client prediction](networking.md#your-own-player-at-once-client-prediction) | Generic over what is drawn; prediction and the input queue are bound (`ponko::prediction`), so fade the correction offset (`reconciled::before`) yourself |
 | `Physics3D::move_character` | [3D physics](physics3d.md#a-walking-character) | Characters walk with the physics step only; one tick can't be replayed on its own |
-| `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ games don't build for the web yet |
-| `LobbyClient::join_web` | [Lobbies, matchmaking and relays](lobby.md#the-client) | C and C++ games don't build for the web yet; their lobby clients join over UDP |
+| `Net::accept_web`, `Net::join_web`, `Net::web_addr`, `NetMessages::accept_web`, `NetMessages::join_web`, `NetMessages::web_addr` | [Multiplayer in the browser](networking.md#in-the-browser) | Not bound yet: C and C++ hosts take UDP players only, and C and C++ web games can't join over WebSocket |
+| `LobbyClient::join_web` | [Lobbies, matchmaking and relays](lobby.md#the-client) | C and C++ lobby clients join over UDP, so a C or C++ web game has none |
 | `Signaling` | [Peer to peer over WebRTC](webrtc.md#with-any-signaling-channel) | C and C++ WebRTC endpoints are signaled through a lobby client (`ponko_net_messages_rtc_host`, `_rtc_join`) |
-| `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ games don't build for the web yet |
-| `Assets::browser_saves`, `Assets::revert_browser_save` | [Saving in a browser](editor.md#saving-in-a-browser) | C and C++ games don't build for the web yet, so they keep no files in a browser |
-| `Assets::browser_saves`, `Assets::revert_browser_save`, `Assets::browser_saves_persistent` | [Saving in a browser](editor.md#saving-in-a-browser) | C and C++ games don't build for the web yet, so they keep no files in a browser |
+| `RtcConfig::turn` | [Peer to peer over WebRTC](webrtc.md#stun-turn-and-nats) | TURN works in browsers only, and C and C++ web games have no WebRTC endpoint |
+| `Assets::browser_saves`, `Assets::revert_browser_save` | [Saving in a browser](editor.md#saving-in-a-browser) | A C or C++ web game keeps no files in a browser yet |
+| `Assets::browser_saves`, `Assets::revert_browser_save`, `Assets::browser_saves_persistent` | [Saving in a browser](editor.md#saving-in-a-browser) | A C or C++ web game keeps no files in a browser yet |
 | `SkeletonData::add_bone`, `SpineAtlas` | [2D skeletons](skeleton2d.md#from-c-and-c) | Skeletons come from files (Ponko's format or a Spine export and its atlas) through the assets; a memory source holds files kept in memory |
 | `Plugin::dependencies` | [Plugins for other crates](plugins.md#from-c-and-c) | C plugins (`ponko_game_plugin`) have no names or dependencies and are never duplicates |
 | `Game::debug_toggle` | [Plugins for other crates](plugins.md#debug-toggles) | Draw behind a flag of the game's own; `debug.draw` turns the engine's views on and off |

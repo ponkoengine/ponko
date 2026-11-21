@@ -81,6 +81,7 @@ mod replication_conformance;
 mod scripted;
 pub use messages::{Lane, LoopbackLink, MAX_MESSAGE_BYTES, MessageEvent, MessageStats, NetMessages, PeerId};
 
+mod game_rollback;
 mod interest;
 #[cfg(feature = "lobby")]
 pub mod lobby;
@@ -103,6 +104,8 @@ pub mod stun;
 mod websocket;
 #[cfg(target_arch = "wasm32")]
 mod websocket_browser;
+pub use game_rollback::GameRollback;
+pub(crate) use game_rollback::{GameState, Runner, Session as RollbackSession};
 pub use interest::{
     Interest, InterestChange, InterestChangeKind, InterestConfig, InterestEntity, InterestEntry, InterestTier,
     InterestViewer, MAX_INTEREST_TIERS,

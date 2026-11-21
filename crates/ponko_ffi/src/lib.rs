@@ -51,6 +51,8 @@ mod game;
 mod gltf_scenes;
 mod grid;
 mod handles;
+mod hdr_output;
+pub use hdr_output::*;
 mod headless_ui;
 mod hierarchy;
 mod keys;
@@ -1657,3 +1659,10 @@ mod tests {
 
 mod window;
 pub use window::*;
+
+// C and C++ games in a browser (web/build-cpp.sh). Its JavaScript imports
+// aren't part of the C API.
+/// cbindgen:ignore
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[doc(hidden)]
+pub mod web;

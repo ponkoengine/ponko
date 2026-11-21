@@ -1,7 +1,12 @@
 //! Decoded video planes (Y'CbCr, 8 bits) to RGBA pixels on the CPU.
 //!
 //! Integer math in 16.16 fixed point, one row at a time; tall frames are
-//! split over rayon's threads. Pure Rust, no `unsafe`.
+//! split over rayon's threads. Pure Rust, no `unsafe`. With a GPU, the
+//! renderer does the same math in a shader (`render/video_yuv.rs`, with
+//! [`coefficients_f32`]); this converter makes [`Video::frame_rgba`]'s
+//! pixels, and the texture's in a run without a GPU.
+//!
+//! [`Video::frame_rgba`]: crate::video::Video::frame_rgba
 
 use rayon::prelude::*;
 
@@ -39,6 +44,75 @@ pub(crate) struct Planes<'a> {
     pub matrix: Matrix,
     /// 0-255 for every channel; otherwise "TV" range (16-235 luma).
     pub full_range: bool,
+}
+
+/// One decoded frame's planes, copied out of the decoder, rows packed
+/// (each plane's stride is its width).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Frame {
+    pub width: usize,
+    pub height: usize,
+    pub subsampling: Option<Subsampling>,
+    pub y: Vec<u8>,
+    pub u: Vec<u8>,
+    pub v: Vec<u8>,
+    pub chroma_width: usize,
+    pub matrix: Option<Matrix>,
+    pub full_range: bool,
+}
+
+impl Frame {
+    /// Copies `planes` in, reusing this frame's memory.
+    pub fn copy_from(&mut self, planes: &Planes<'_>) {
+        let (chroma_width, chroma_height) = match planes.subsampling {
+            Subsampling::Both => (planes.width.div_ceil(2), planes.height.div_ceil(2)),
+            Subsampling::Horizontal => (planes.width.div_ceil(2), planes.height),
+            Subsampling::None => (planes.width, planes.height),
+            Subsampling::Gray => (0, 0),
+        };
+        let pack = |out: &mut Vec<u8>, plane: &[u8], stride: usize, width: usize, rows: usize| {
+            out.clear();
+            for row in 0..rows {
+                out.extend_from_slice(&plane[row * stride..][..width]);
+            }
+        };
+        pack(&mut self.y, planes.y, planes.luma_stride, planes.width, planes.height);
+        pack(&mut self.u, planes.u, planes.chroma_stride, chroma_width, chroma_height);
+        pack(&mut self.v, planes.v, planes.chroma_stride, chroma_width, chroma_height);
+        self.width = planes.width;
+        self.height = planes.height;
+        self.subsampling = Some(planes.subsampling);
+        self.chroma_width = chroma_width;
+        self.matrix = Some(planes.matrix);
+        self.full_range = planes.full_range;
+    }
+
+    /// Its planes, or `None` before a frame was copied in.
+    pub fn planes(&self) -> Option<Planes<'_>> {
+        Some(Planes {
+            width: self.width,
+            height: self.height,
+            subsampling: self.subsampling?,
+            y: &self.y,
+            u: &self.u,
+            v: &self.v,
+            luma_stride: self.width,
+            chroma_stride: self.chroma_width,
+            matrix: self.matrix?,
+            full_range: self.full_range,
+        })
+    }
+}
+
+/// The conversion's coefficients for the GPU: `[y_scale, y_offset, rv,
+/// gu, gv, bu]`, with `l = (y - y_offset) * y_scale`, `r = l + rv*v`,
+/// `g = l - gu*u - gv*v`, `b = l + bu*u` (0-255 code values, chroma
+/// centered on 0). The CPU's fixed-point coefficients, as floats.
+#[cfg_attr(not(feature = "window"), allow(dead_code))]
+pub(crate) fn coefficients_f32(matrix: Matrix, full_range: bool) -> [f32; 6] {
+    let c = coefficients(matrix, full_range);
+    let f = |x: i32| x as f32 / 65536.0;
+    [f(c.y_scale), c.y_offset as f32, f(c.rv), f(c.gu), f(c.gv), f(c.bu)]
 }
 
 /// Fixed-point coefficients: `r = y + rv*v`, `g = y - gu*u - gv*v`,

@@ -21,7 +21,9 @@ use glam::Vec2;
 use ponko_ecs::{Component, Entity, With, World};
 
 mod query;
+mod state;
 pub use query::{Penetration, PointHit, QueryFilter, RayHit};
+pub use state::PhysicsState;
 
 /// Makes an entity a physics body. It also needs a [`Collider`]. It
 /// requires a [`d2::Transform`](crate::d2::Transform) and a [`Velocity`]:

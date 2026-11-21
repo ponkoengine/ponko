@@ -153,6 +153,10 @@ mod native {
     const MAX_CONNECTIONS: usize = 1100;
     /// A connection that hasn't finished its handshake by then is dropped.
     const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+    /// An open connection that sends no packet for this long is dropped:
+    /// the sessions send several a second (their heartbeats), so only a
+    /// client that opened a socket to hold a slot goes this quiet.
+    pub(in crate::net) const SILENCE_TIMEOUT: Duration = Duration::from_secs(30);
     /// A desktop client retries connecting this long, then reports the failure.
     const CONNECT_PATIENCE: Duration = Duration::from_secs(300);
     const CONNECT_RETRY: Duration = Duration::from_millis(100);
@@ -206,6 +210,10 @@ mod native {
         listener: TcpListener,
         handshakes: Vec<(Instant, Handshake)>,
         conns: BTreeMap<u64, WebSocket<TcpStream>>,
+        /// When each connection last sent a packet (or opened).
+        heard: BTreeMap<u64, Instant>,
+        /// Connections silent past this are dropped ([`SILENCE_TIMEOUT`]).
+        silence: Duration,
         next_id: u64,
         /// The connection read first on the next poll, so one busy browser
         /// can't starve the others.
@@ -220,6 +228,8 @@ mod native {
                 listener,
                 handshakes: Vec::new(),
                 conns: BTreeMap::new(),
+                heard: BTreeMap::new(),
+                silence: SILENCE_TIMEOUT,
                 next_id: 1,
                 cursor: 0,
             })
@@ -270,6 +280,7 @@ mod native {
                 match read(ws, buf) {
                     Ok(Some(n)) => {
                         self.cursor = next;
+                        self.heard.insert(id, Instant::now());
                         return Some((conn_addr(id), n));
                     }
                     Ok(None) => {}
@@ -301,6 +312,27 @@ mod native {
                 let result = mid.handshake();
                 self.handshake(started, result);
             }
+            // Gone connections (closed elsewhere) and silent ones.
+            let (conns, silence) = (&mut self.conns, self.silence);
+            self.heard.retain(|id, heard| {
+                let keep = conns.contains_key(id) && now - *heard <= silence;
+                if !keep {
+                    conns.remove(id);
+                }
+                keep
+            });
+        }
+
+        /// Drops connections silent for `silence` instead of [`SILENCE_TIMEOUT`] (tests).
+        #[cfg(test)]
+        pub(in crate::net) fn set_silence_timeout(&mut self, silence: Duration) {
+            self.silence = silence;
+        }
+
+        /// Open connections (tests).
+        #[cfg(test)]
+        pub(in crate::net) fn connections(&self) -> usize {
+            self.conns.len()
         }
 
         fn handshake(
@@ -311,6 +343,7 @@ mod native {
             match result {
                 Ok(ws) => {
                     self.conns.insert(self.next_id, ws);
+                    self.heard.insert(self.next_id, Instant::now());
                     self.next_id += 1;
                 }
                 Err(HandshakeError::Interrupted(mid)) => self.handshakes.push((started, mid)),
@@ -462,6 +495,45 @@ mod tests {
         assert_eq!(conn_id(HOST), None, "the client's host is no connection");
         assert_eq!(conn_id("127.0.0.1:7777".parse().unwrap()), None);
         assert_eq!(conn_id("[::1]:7777".parse().unwrap()), None);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn an_open_connection_that_sends_nothing_is_dropped() {
+        use std::io::{Read, Write};
+        use std::time::Duration;
+        let mut listener = WebListener::bind("127.0.0.1:0").unwrap();
+        listener.set_silence_timeout(Duration::from_millis(200));
+        let mut socket = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        socket
+            .write_all(
+                b"GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+                  Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+            )
+            .unwrap();
+        let mut buf = [0u8; 2048];
+        let poll = |listener: &mut WebListener, buf: &mut [u8]| while listener.recv(buf).is_some() {};
+        let start = std::time::Instant::now();
+        while listener.connections() == 0 {
+            assert!(start.elapsed() < Duration::from_secs(5), "the handshake finished");
+            poll(&mut listener, &mut buf);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Open, then silent: dropped once the timeout passes, not before.
+        poll(&mut listener, &mut buf);
+        assert_eq!(listener.connections(), 1);
+        std::thread::sleep(Duration::from_millis(300));
+        poll(&mut listener, &mut buf);
+        assert_eq!(listener.connections(), 0, "a silent connection kept its slot");
+        // The client sees the socket closed: the 101 reply, then the end.
+        socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut reply = Vec::new();
+        let _ = socket.read_to_end(&mut reply);
+        assert!(
+            reply.starts_with(b"HTTP/1.1 101"),
+            "{}",
+            String::from_utf8_lossy(&reply)
+        );
     }
 
     #[test]

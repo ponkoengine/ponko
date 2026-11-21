@@ -44,6 +44,23 @@ pub(crate) struct LinkTable<T> {
     slots: HashMap<u32, u32, BuildHasherDefault<IndexHasher>>,
 }
 
+impl<T: Clone> Clone for LinkTable<T> {
+    fn clone(&self) -> Self {
+        Self {
+            items: self.items.clone(),
+            entities: self.entities.clone(),
+            slots: self.slots.clone(),
+        }
+    }
+
+    /// Reuses this table's memory (a physics state saved again and again).
+    fn clone_from(&mut self, source: &Self) {
+        self.items.clone_from(&source.items);
+        self.entities.clone_from(&source.entities);
+        self.slots.clone_from(&source.slots);
+    }
+}
+
 impl<T> Default for LinkTable<T> {
     fn default() -> Self {
         Self {

@@ -346,6 +346,11 @@ jobs:
           - name: aseprite-source feature
             scope: -p ponko
             args: --features aseprite-source
+          # Gamepads through SDL 3 instead of gilrs (gyro, trigger rumble).
+          # Linting needs no SDL library: nothing is linked.
+          - name: gamepad-sdl feature
+            scope: -p ponko
+            args: --features gamepad-sdl
           # WebM playback (AV1 pictures, Vorbis sound), desktop only.
           - name: video feature
             scope: -p ponko
@@ -743,6 +748,14 @@ jobs:
       - name: Tests, aseprite-source
         if: ${{ !cancelled() }}
         run: cargo test -p ponko --no-fail-fast --features aseprite-source --test aseprite
+      # The SDL 3 gamepad backend: its tests drive SDL's own virtual
+      # gamepads (no device, no window) and a scripted device layer. It
+      # links SDL 3, which Homebrew has (Ubuntu's LTS release doesn't yet).
+      - name: Tests, SDL gamepad backend
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        run: |
+          brew install sdl3
+          cargo test -p ponko --no-fail-fast --features gamepad-sdl --lib gamepad_sdl
       # WebM files with AV1 pictures and Vorbis sound (desktop only: on the
       # web loading a video reports `Unsupported`).
       - name: Tests, video
@@ -1402,6 +1415,18 @@ jobs:
         run: >-
           node web/smoke/runtime-failures.mjs --case device-lost --chromium-mode new
           --browser-arg --use-webgpu-adapter=swiftshader --allow-unsupported --out target/web-smoke/runtime-failures-webgpu
+      # WebGPU first, WebGL2 as the fallback (web/smoke/webgpu-fallback.mjs,
+      # the guide's "WebGPU first"): no navigator.gpu, no adapter, a device
+      # that won't open and one lost as it opens must each end on WebGL2,
+      # drawing, with one console line saying why. The 3D fixture built
+      # above. The WebGPU run and the two cases faked on a real adapter are
+      # unsupported where the runner has no WebGPU adapter.
+      - name: Chromium, WebGPU first and each way back to WebGL2 (new headless mode)
+        timeout-minutes: 8
+        if: ${{ !cancelled() }}
+        run: >-
+          node web/smoke/webgpu-fallback.mjs --dir target/web/web_smoke_3d --chromium-mode new
+          --browser-arg --use-webgpu-adapter=swiftshader --repeat 1
       # The water kit's CPU wave spectrum in the browser (web/smoke/spectrum.mjs,
       # the water guide's "On the web"): examples/web_spectrum.rs built plain,
       # with simd128 and with simd128 and wasm-simd, each timing every grid
@@ -1411,6 +1436,30 @@ jobs:
         timeout-minutes: 30
         if: ${{ !cancelled() }}
         run: node web/smoke/spectrum.mjs --build --repeat 1
+      # Video in the browser (web/smoke/video.mjs, the video guide's "In a
+      # browser"): examples/web_video plays the test clip through
+      # ponko::video::Video, decoded by the browser's own AV1 decoder
+      # (WebCodecs); every frame shown must be the one its time names, at
+      # most two frames behind, and two seeks while paused must show their
+      # frames. A browser without WebCodecs AV1 exits 2 (unsupported).
+      - name: Chromium, video through the browser's AV1 decoder
+        timeout-minutes: 20
+        if: ${{ !cancelled() }}
+        run: node web/smoke/video.mjs --build
+      # C and C++ games in the browser (web/smoke/cpp.mjs, the web guide's
+      # "C and C++"): the guide's first C++ game built with web/build-cpp.sh
+      # and the WASI SDK, which must start, fetch its texture, draw on WebGL2,
+      # and move its crab while ArrowRight is held. The report has the module's size
+      # and the startup time.
+      - name: The WASI SDK (C and C++ for the web)
+        if: ${{ !cancelled() }}
+        run: |
+          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz | tar xz -C "$RUNNER_TEMP"
+          echo "WASI_SDK_PATH=$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux" >> "$GITHUB_ENV"
+      - name: Chromium, the guide's C++ game (web/build-cpp.sh)
+        timeout-minutes: 30
+        if: ${{ !cancelled() }}
+        run: node web/smoke/cpp.mjs --build
       # Threads on the web (web/smoke/threads.mjs, the guide's "Threads on the
       # web"): examples/web_threads built with `web/build.sh --threads`
       # (nightly Rust rebuilding std with atomics, hence rust-src). Served with

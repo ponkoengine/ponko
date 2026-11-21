@@ -314,7 +314,10 @@ fn fs_main_cutout(in: VertexOut, @builtin(front_facing) front: bool) -> @locatio
 fn fs_main_cutout_fade(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let dp_x = dpdx(in.world);
     let dp_y = dpdy(in.world);
-    if !fade_keeps(in.fade, in.clip.xy) || surface_at(in, front).alpha < 0.5 {
+    // Sampled before the branch: `a || f()` only calls f where a is false,
+    // non-uniform control flow, where WebGPU's WGSL forbids textureSample.
+    let alpha = surface_at(in, front).alpha;
+    if !fade_keeps(in.fade, in.clip.xy) || alpha < 0.5 {
         discard;
     }
     return opaque_color(in, front, dp_x, dp_y);

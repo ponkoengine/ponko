@@ -30,12 +30,14 @@ pub(crate) mod backend;
 pub(crate) mod controller;
 pub(crate) mod glyphs;
 pub(crate) mod ime;
+pub(crate) mod key_labels;
 pub use backend::{DeviceKey, FakeGamepads, GamepadBackend, GamepadEvents};
 pub use controller::{
     ControllerFamily, GamepadCapabilities, GamepadInfo, GamepadMotion, InputDevice, MAX_PLAYERS, MotorLevels, Rumble,
 };
 pub use glyphs::{Glyph, GlyphAtlas, Glyphs};
 pub use ime::ImeEvent;
+pub use key_labels::KeyLabels;
 pub(crate) mod touch;
 mod touch_desktop;
 mod ui_seen;
@@ -519,6 +521,8 @@ pub struct Input {
     pub(crate) touch: touch::TouchState,
     /// What the retained UI took of this frame's input.
     ui_seen: ui_seen::UiSeen,
+    /// What each key is labelled on the player's layout.
+    key_labels: key_labels::KeyLabelState,
 }
 
 impl Input {
@@ -541,6 +545,7 @@ impl Input {
             controllers: Default::default(),
             touch: Default::default(),
             ui_seen: Default::default(),
+            key_labels: Default::default(),
         }
     }
 
@@ -734,6 +739,7 @@ impl Input {
         self.typed_text.clear();
         self.ime.end_frame();
         self.controllers.end_frame();
+        self.key_labels.end_frame();
         self.mouse_wheel = Vec2::ZERO;
         self.mouse_motion = Vec2::ZERO;
         self.mouse_pos_at_frame_start = self.mouse_pos;

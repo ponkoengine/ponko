@@ -1104,6 +1104,11 @@ mod backend {
             self.next += 1;
             self.next
         }
+        /// Nothing is heard without the `audio` feature.
+        #[cfg(feature = "video")]
+        pub fn soundtrack_position(&self, _id: u64) -> Option<f64> {
+            None
+        }
         pub fn sync_buses(&mut self) {}
         pub fn effects(&mut self, _id: u64, _effects: AudioEffects) {}
         #[cfg(feature = "3d")]
@@ -1227,6 +1232,9 @@ pub struct Audio {
     pub(crate) silent: u64,
     /// The sounds started since the last tick ended or frame began ([`Audio::started`]).
     pub(crate) started: Vec<SoundStarted>,
+    /// A rollback simulates a tick again: sounds started now were heard
+    /// the first time, so they are dropped.
+    pub(crate) replaying: bool,
     /// When each live sound was made and which file it came from.
     pub(crate) ledger: crate::inventory::Ledger,
     /// The music as the game side follows it.
@@ -1454,9 +1462,10 @@ impl Audio {
         self.backend.unlocked()
     }
 
-    /// Whether nothing is mixed: a headless run without an offline output.
+    /// Whether nothing is mixed: a headless run without an offline output,
+    /// or a tick a rollback simulates again.
     pub(crate) fn silent_output(&self) -> bool {
-        self.headless && !self.offline
+        (self.headless && !self.offline) || self.replaying
     }
 
     /// Frees sound `id` (see [`Ctx::free`]).
