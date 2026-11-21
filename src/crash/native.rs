@@ -374,10 +374,10 @@ impl Left {
             return "the game stopped on a crash that is not a panic (the report was cut short)".to_string();
         };
         let mut message = signal.clone();
-        if signal.starts_with("EXCEPTION") || signal.starts_with("STATUS") {
-            if let Some(code) = &self.signal_number {
-                message.push_str(&format!(" ({code})"));
-            }
+        if (signal.starts_with("EXCEPTION") || signal.starts_with("STATUS"))
+            && let Some(code) = &self.signal_number
+        {
+            message.push_str(&format!(" ({code})"));
         }
         if let Some(description) = &self.description {
             message.push_str(": ");

@@ -97,8 +97,7 @@ fn next_start(dir: &Path) -> Vec<CrashReport> {
         .data_dir(dir)
         .crash_reports(CrashReports::on().on_crash(move |report| into.lock().unwrap().push(report.clone())))
         .run_headless(0, |_ctx| {});
-    let seen = seen.lock().unwrap().clone();
-    seen
+    seen.lock().unwrap().clone()
 }
 
 fn pending_files(dir: &Path) -> Vec<String> {
