@@ -116,6 +116,35 @@ boxes, so while a text input (or your own widget, through
 window, and reads the composition, the committed text and the keys from it.
 See [Typing with an input method](ui.md#typing-with-an-input-method-ime).
 
+**Gamepads are read by the engine itself.** A web build reads
+`navigator.getGamepads()` once a frame on the page's thread, in the
+browser's standard layout and with gilrs's dead zone, so pads read as on
+the desktop; rumble goes to the pad's `vibrationActuator` (trigger rumble
+where it lists `trigger-rumble`; see
+[Controllers](controllers.md#what-each-platform-supports)). The ordinary
+build used gilrs's web backend until the engine's own (written for builds
+with threads, whose memory can't hold the browser's gamepad objects)
+replaced it, measured on the threads fixture's ordinary build in headless
+Chromium 156:
+
+- **Code size**: the module is 85 KB smaller (15.01 MB instead of 15.09;
+  16 KB smaller compressed with Brotli or gzip) and its JavaScript glue
+  2.5 KB smaller.
+- **Latency**: the same. Every fed button press reached the game on the
+  next frame (60 presses with the engine's backend, 120 with gilrs), a
+  median 14.2 to 14.9 ms after the press against 14.2 to 14.7 with gilrs:
+  the wait for that frame.
+- **What gilrs needed worked around**: it has no rumble on the web and
+  doesn't say where in the browser's list a pad is, so rumble found the pad
+  again by its name and its place among pads of that name, a guess two
+  identical pads could get wrong; and builds with threads read pads
+  differently from the ordinary build (no dead zone there). One backend
+  now does both builds, keeps the pad's browser index and plays rumble on
+  it directly, and the headless checks (`web/smoke/threads.mjs --case
+  gamepads` and `gamepads-plain`) compare exact values for both.
+
+gilrs stays the desktop's backend.
+
 **Multiplayer over WebSocket.** A browser can't open UDP sockets, so a web
 build joins with `Net::join_web` or `NetMessages::join_web`, and the host
 takes browser players with `accept_web` next to its desktop players (see

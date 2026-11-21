@@ -6,7 +6,7 @@
 //   node web/smoke/threads.mjs --build                  # the checks
 //   node web/smoke/threads.mjs --case worker-panic      # a worker's panic stops the game
 //   node web/smoke/threads.mjs --case gamepads          # fed browser gamepads reach the game, and rumble the pad
-//   node web/smoke/threads.mjs --build --case gamepads-plain   # the same on the ordinary build (gilrs)
+//   node web/smoke/threads.mjs --build --case gamepads-plain   # the same on the ordinary build
 //   node web/smoke/threads.mjs --case warning           # a warning fails the threaded build
 //   node web/smoke/threads.mjs --bench --repeat 3       # 1 vs N threads
 //
@@ -23,9 +23,12 @@
 // the engine sees them connect, press, move and leave; the pads have a fake
 // `vibrationActuator` that records its calls, and the game's rumble must
 // reach it (played again before the browser's 5 s cap, stopped at its end).
+// Then two pads, one whose actuator lists `trigger-rumble`: a rumble with
+// trigger levels must reach it as `trigger-rumble` and the other pad as
+// `dual-rumble` with the trigger levels dropped, as on the desktop.
 // Real rumble can't be felt in a headless browser: the recorded calls are
 // the proof. `--case gamepads-plain` runs it on the ordinary web build of
-// the same fixture, whose pads come from gilrs, not the threaded backend.
+// the same fixture: the same backend, built without threads.
 // The bench runs the fixture's workloads on the isolated page with one
 // thread (`?threads=1`) and with the engine's default, and prints the
 // medians, their spread, and the speed-up with whether it is beyond the
@@ -43,7 +46,6 @@ import { LAUNCHERS, serve } from "./smoke.mjs";
 import {
   FALLBACK_WARNING,
   GAMEPAD_STEPS,
-  GILRS_AXIS_TOLERANCE,
   ISOLATION_HEADERS,
   RUMBLE_PRESS,
   RUMBLE_SECONDS,
@@ -55,6 +57,11 @@ import {
   checkGamepadStep,
   checkRumbleCalls,
   checkSameResult,
+  checkTriggerCapabilities,
+  checkTriggerRumbleCalls,
+  TRIGGER_PADS,
+  TRIGGER_PRESS,
+  triggerRumbleDone,
   checkWarningBuild,
   denyWarnings,
   fakeGamepad,
@@ -178,7 +185,7 @@ async function gamepads(browser, servers, args, report, plain = false) {
     let left = ["not checked"];
     while (Date.now() < deadline) {
       last = await state(page);
-      left = checkGamepadStep(step, last, plain ? GILRS_AXIS_TOLERANCE : undefined);
+      left = checkGamepadStep(step, last);
       if (left.length === 0) break;
       await sleep(100);
     }
@@ -206,9 +213,33 @@ async function gamepads(browser, servers, args, report, plain = false) {
       `${seen.filter((c) => c.kind === "reset").length} stop(s)${rumbleProblems.length ? `: ${rumbleProblems.join("; ")}` : ", as the game asked"}`,
   );
   problems.push(...rumbleProblems.map((p) => `rumble: ${p}`));
+  // Trigger rumble: North on two pads, one with trigger motors.
+  await feed([]);
+  await until(page, lines, (s) => (s?.pads ?? []).length === 0, 10, "the pads leaving");
+  await feed(TRIGGER_PADS());
+  const twoPads = await until(page, lines, (s) => (s?.pads ?? []).length === 2, 10, "two pads connecting");
+  const capabilityProblems = checkTriggerCapabilities(twoPads);
+  await withDeadline(page.evaluate(() => (window.__ponkoRumbleCalls.length = 0)), CALL_TIMEOUT_MS, "clearing the rumble calls");
+  await feed(TRIGGER_PADS(TRIGGER_PRESS));
+  const triggerEnd = Date.now() + 12_000;
+  let triggerCalls = [];
+  while (Date.now() < triggerEnd) {
+    triggerCalls = await calls();
+    if (triggerRumbleDone(triggerCalls)) break;
+    await sleep(100);
+  }
+  const triggerProblems = [...capabilityProblems, ...checkTriggerRumbleCalls(triggerCalls)];
+  const kinds = (index) => [...new Set(triggerCalls.filter((c) => c.index === index && c.kind === "play").map((c) => c.type))].join(",") || "nothing";
+  console.log(
+    `gamepads, trigger rumble: the pad with trigger motors got ${kinds(0)}, the other ${kinds(1)}` +
+      (triggerProblems.length ? `: ${triggerProblems.join("; ")}` : ", as on the desktop"),
+  );
+  problems.push(...triggerProblems.map((p) => `trigger rumble: ${p}`));
   await feed([]);
   const final = await state(page);
-  report.runs = { gamepads: { steps, rumble_calls: seen, threads: final?.threads, console: lines } };
+  report.runs = {
+    gamepads: { steps, rumble_calls: seen, trigger_rumble_calls: triggerCalls, threads: final?.threads, console: lines },
+  };
   const threads = final?.threads;
   if (plain) {
     if (threads !== 0) problems.push(`the ordinary build ran ${threads} worker threads, not 0`);
