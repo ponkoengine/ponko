@@ -1057,9 +1057,7 @@ impl Culling {
                 return None;
             }
             let bytes = group.bytes(columns);
-            let Some(at) = page.args.alloc(device, queue, bytes) else {
-                return None;
-            };
+            let at = page.args.alloc(device, queue, bytes)?;
             page.args.release(group.args, group.bytes(group.columns));
             (group.args, group.columns) = (at, columns);
             group.firsts.resize(columns as usize, u32::MAX);
