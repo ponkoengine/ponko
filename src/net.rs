@@ -77,7 +77,7 @@ mod messages;
 mod replication_conformance;
 #[cfg(test)]
 mod scripted;
-pub use messages::{Lane, MAX_MESSAGE_BYTES, MessageEvent, MessageStats, NetMessages, PeerId};
+pub use messages::{Lane, LoopbackLink, MAX_MESSAGE_BYTES, MessageEvent, MessageStats, NetMessages, PeerId};
 
 mod interest;
 #[cfg(feature = "lobby")]
@@ -108,7 +108,8 @@ pub use interest::{
 pub use prediction::{InputPush, InputQueue, InputStats, Prediction, PredictionStats, Reconciled, Smooth, Smoothing};
 pub use replicate::{
     ClientStats, DEFAULT_BUDGET, Fields, MAX_RAW_EVENT_BYTES, NetEvent, NetId, PeerStats, Quantize, RawEvent, RawField,
-    RawType, Replica, Replicate, ReplicateField, Replicated, Replication, ReplicationRole, replicated_bits,
+    RawType, Replica, Replicate, ReplicateField, Replicated, Replication, ReplicationRole, ResendStats,
+    replicated_bits,
 };
 pub use rollback::{Advance, Rollback, RollbackDesync, RollbackGame, RollbackStats};
 pub use sequence::{Authority, AuthorityCheck, LatestWins, UpdateStamp, seq_diff, seq_newer};

@@ -367,6 +367,49 @@ pub struct PeerStats {
     pub deferred: u64,
 }
 
+/// How the server resends to one client ([`Replication::resend_stats`]):
+/// what it sent again, and why, and how long it waits now.
+///
+/// A resend is a record (a spawn, a state or a despawn) that goes again
+/// with nothing changed since it last went, because its acknowledgement
+/// didn't come. A changed entity's new state is not a resend: it is new.
+///
+/// [`PeerStats`] can't take these as new fields: it isn't
+/// `#[non_exhaustive]`, so code that builds one with a struct literal would
+/// stop compiling, and the C API copies it field by field. This struct is
+/// `#[non_exhaustive]`, so it can grow without breaking anything.
+///
+/// ```
+/// let s = ponko::net::ResendStats::default();
+/// assert_eq!(s.early_resends + s.timeout_resends, 0);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ResendStats {
+    /// Records sent again at once because the client acknowledged packets
+    /// sent after theirs but not theirs (the packet was lost).
+    pub early_resends: u64,
+    /// Records sent again because the resend timeout passed without an
+    /// acknowledgement.
+    pub timeout_resends: u64,
+    /// Packets called lost (their records went again early) that the
+    /// client acknowledged after all: they were only late, and their
+    /// resends were needless. Each makes the server tolerate more
+    /// reordering ([`reorder_ticks`](Self::reorder_ticks)).
+    pub late_acks: u64,
+    /// The resend timeout now, in ticks: the smoothed round trip plus four
+    /// deviations (at least two ticks, at most a second), doubled for each
+    /// [`backoff`](Self::backoff), up to 4 s. Divide by the tick rate for
+    /// seconds.
+    pub timeout_ticks: u32,
+    /// Resend timeouts in a row with nothing acknowledged since (0 while
+    /// the client acknowledges); each doubled the timeout.
+    pub backoff: u32,
+    /// Ticks a packet may arrive behind ones sent after it before the
+    /// server calls it lost: the reordering it learned this link has.
+    pub reorder_ticks: u32,
+}
+
 /// What a client received and predicted ([`Replication::client_stats`]).
 ///
 /// ```
@@ -1506,6 +1549,19 @@ impl Replication {
     #[must_use]
     pub fn peer_stats(&self, peer: PeerId) -> Option<PeerStats> {
         Some(self.inner.as_ref()?.server.clients.get(&peer)?.stats)
+    }
+
+    /// Server: how it resends to `peer` (what went again, and why, and the
+    /// timeout now); `None` if no such client.
+    ///
+    /// ```
+    /// let replication = ponko::net::Replication::new();
+    /// assert!(replication.resend_stats(ponko::net::PeerId::HOST).is_none());
+    /// ```
+    #[must_use]
+    pub fn resend_stats(&self, peer: PeerId) -> Option<ResendStats> {
+        let inner = self.inner.as_ref()?;
+        inner.server.resend_stats(peer, inner.hz)
     }
 
     /// Client: what was received and predicted.
