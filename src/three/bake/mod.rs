@@ -931,7 +931,7 @@ pub fn bake_lighting(scene: &LightBakeScene, settings: &LightBakeSettings) -> Re
 }
 
 fn bake(scene: &LightBakeScene, settings: &LightBakeSettings) -> Result<BakedLighting, Error> {
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
     let invalid = |m: String| Error::new(ErrorKind::Invalid, format!("bake_lighting: {m}"));
     let tpu = settings.texels_per_unit;
     if !(tpu.is_finite() && tpu > 0.0) {
