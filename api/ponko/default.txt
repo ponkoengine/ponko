@@ -7116,6 +7116,8 @@ pub fn ponko::prelude::Ui::set_inline_font(&mut self, &str, ponko::text::Font)
 pub fn ponko::prelude::Ui::set_inline_image(&mut self, &str, ponko::texture::Texture)
 pub fn ponko::prelude::Ui::set_rich(&mut self, ponko::prelude::UiId, bool)
 impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::layout_passes(&self) -> u64
+impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::localize(&mut self, &ponko::locale::Strings)
 pub fn ponko::prelude::Ui::set_text_key(&mut self, ponko::prelude::UiId, &str, &[(&str, ponko::locale::Arg)])
 pub fn ponko::prelude::Ui::text_key(&self, ponko::prelude::UiId) -> core::option::Option<&str>
@@ -10046,6 +10048,8 @@ pub fn ponko::prelude::Ui::link(&self, ponko::prelude::UiId, u32) -> core::optio
 pub fn ponko::prelude::Ui::set_inline_font(&mut self, &str, ponko::text::Font)
 pub fn ponko::prelude::Ui::set_inline_image(&mut self, &str, ponko::texture::Texture)
 pub fn ponko::prelude::Ui::set_rich(&mut self, ponko::prelude::UiId, bool)
+impl ponko::prelude::Ui
+pub fn ponko::prelude::Ui::layout_passes(&self) -> u64
 impl ponko::prelude::Ui
 pub fn ponko::prelude::Ui::localize(&mut self, &ponko::locale::Strings)
 pub fn ponko::prelude::Ui::set_text_key(&mut self, ponko::prelude::UiId, &str, &[(&str, ponko::locale::Arg)])

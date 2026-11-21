@@ -149,6 +149,7 @@ mod pixel_snap_tests;
 mod retained;
 mod retained_draw;
 mod retained_ime;
+mod retained_layout;
 mod retained_locale;
 mod rich;
 pub mod touch;
