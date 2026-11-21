@@ -107,8 +107,8 @@ unsafe fn row_of<T>(chunk: *const PonkoChunk, column: usize, row: usize) -> *mut
 /// `column` or `row` is out of range. Valid until the callback returns;
 /// in `ponko_query_par`, use only the rows of the callback's own chunk.
 ///
-/// Ownership: the brain stays the world's; the pointer borrows it for the
-/// callback.
+/// Ownership: the returned brain is borrowed from the world until the
+/// callback returns; never free it.
 /// ```
 /// assert!(unsafe { ponko_ffi::ponko_chunk_ai_brain(std::ptr::null(), 0, 0) }.is_null());
 /// ```
@@ -128,8 +128,8 @@ pub unsafe extern "C" fn ponko_chunk_ai_brain(
 /// The blackboard in row `row` of a query's blackboard column `column`.
 /// Null when out of range; valid until the callback returns.
 ///
-/// Ownership: the blackboard stays the world's; the pointer borrows it for
-/// the callback.
+/// Ownership: the returned blackboard is borrowed from the world until the
+/// callback returns; never free it.
 /// ```
 /// assert!(unsafe { ponko_ffi::ponko_chunk_ai_blackboard(std::ptr::null(), 0, 0) }.is_null());
 /// ```

@@ -2488,6 +2488,9 @@ public:
     template<class... Ts> std::size_t count() {
         return count_rows(typename detail::pick<false, Ts...>::type{}, typename detail::pick<true, Ts...>::type{});
     }
+    /// The C component id of `T` in this world, registering it on first
+    /// use: for C calls that take ids, such as ai::query's columns.
+    template<class T> std::uint32_t component_id() const { valid(); return id<T>(); }
 
     // ---- the archetype index ----
     /// Sets when this world indexes the archetypes of repeated queries, and
@@ -11159,6 +11162,30 @@ public:
         detail::check(st);
         return v;
     }
+    /// A blackboard entity, if it holds one.
+    std::optional<entity> get_entity(std::uint64_t key) const {
+        entity v = 0;
+        const auto st = ponko_brain_entity(raw_, key, &v);
+        if (st == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(st);
+        return v;
+    }
+    /// A blackboard 2D point, if it holds one.
+    std::optional<vec2> get_vec2(std::uint64_t key) const {
+        vec2 v{};
+        const auto st = ponko_brain_vec2(raw_, key, &v);
+        if (st == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(st);
+        return v;
+    }
+    /// A blackboard 3D point, if it holds one.
+    std::optional<vec3> get_vec3(std::uint64_t key) const {
+        vec3 v{};
+        const auto st = ponko_brain_vec3(raw_, key, &v);
+        if (st == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(st);
+        return v;
+    }
     /// The blackboard as JSON.
     std::string blackboard_json() const {
         return detail::read_text([&](char* b, std::size_t c, std::size_t* l) { return ponko_brain_blackboard_json(raw_, b, c, l); });
@@ -11284,6 +11311,190 @@ inline std::optional<bool> flag(ctx& c, entity e, std::uint64_t key) {
     if (st == PONKO_NOT_FOUND) return std::nullopt;
     detail::check(st);
     return v;
+}
+/// An entity on the blackboard of `e`, if it holds one.
+inline std::optional<entity> get_entity(ctx& c, entity e, std::uint64_t key) {
+    entity v = 0;
+    const auto st = ponko_ctx_ai_entity(c.raw(), e, key, &v);
+    if (st == PONKO_NOT_FOUND) return std::nullopt;
+    detail::check(st);
+    return v;
+}
+/// A 2D point on the blackboard of `e`, if it holds one.
+inline std::optional<vec2> get_vec2(ctx& c, entity e, std::uint64_t key) {
+    vec2 v{};
+    const auto st = ponko_ctx_ai_vec2(c.raw(), e, key, &v);
+    if (st == PONKO_NOT_FOUND) return std::nullopt;
+    detail::check(st);
+    return v;
+}
+/// A 3D point on the blackboard of `e`, if it holds one.
+inline std::optional<vec3> get_vec3(ctx& c, entity e, std::uint64_t key) {
+    vec3 v{};
+    const auto st = ponko_ctx_ai_vec3(c.raw(), e, key, &v);
+    if (st == PONKO_NOT_FOUND) return std::nullopt;
+    detail::check(st);
+    return v;
+}
+
+// World brains inside loops: ai::query and ai::each visit each entity's
+// brain and blackboard with its other components, so a system reads and
+// writes them where it visits the entity (C `ponko_chunk_ai_brain`, Rust
+// `Query<(&mut Brain, &mut Blackboard, ...)>`).
+
+/// The world brain of one query row (C `PonkoAiBrain`): what to do. Valid
+/// during the query callback.
+class brain_row {
+    PonkoAiBrain* raw_;
+public:
+    /// Wraps a C row; ai::query makes these for you.
+    explicit brain_row(PonkoAiBrain* raw) noexcept : raw_(raw) {}
+    /// The key id of its `index`th action in tree order, 0 past the last.
+    std::uint64_t action(std::size_t index = 0) const {
+        std::uint64_t k = 0;
+        detail::check(ponko_ai_brain_action(raw_, index, &k));
+        return k;
+    }
+    /// Whether it is doing `action_key`.
+    bool doing(std::uint64_t action_key) const {
+        for (std::size_t i = 0;; ++i) {
+            const std::uint64_t k = action(i);
+            if (k == 0) return false;
+            if (k == action_key) return true;
+        }
+    }
+    /// Whether action `action_key` (0: the first) started at this tick's
+    /// think; false if it isn't doing it.
+    bool started(std::uint64_t action_key = 0) const {
+        bool s = false;
+        const auto st = ponko_ai_brain_started(raw_, action_key, &s);
+        if (st == PONKO_NOT_FOUND) return false;
+        detail::check(st);
+        return s;
+    }
+    /// The number parameter `key` of action `action_key` (0: the first), if it has one.
+    std::optional<float> param(std::uint64_t action_key, std::uint64_t key) const {
+        float v = 0;
+        const auto st = ponko_ai_brain_param_num(raw_, action_key, key, &v);
+        if (st == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(st);
+        return v;
+    }
+    /// Reports action `action_key` (0: the first) done (success or
+    /// failure); its other actions carry on. Throws if it isn't doing it.
+    void finish(std::uint64_t action_key, status result) {
+        detail::check(ponko_ai_brain_finish(raw_, action_key, static_cast<PonkoAiStatus>(result)));
+    }
+    /// The C row.
+    PonkoAiBrain* raw() const noexcept { return raw_; }
+};
+
+/// The blackboard of one query row (C `PonkoAiBlackboard`): what the brain
+/// knows. Valid during the query callback.
+class blackboard_row {
+    PonkoAiBlackboard* raw_;
+    template<class T, class Get> std::optional<T> read(std::uint64_t key, Get get) const {
+        T v{};
+        const auto st = get(raw_, key, &v);
+        if (st == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(st);
+        return v;
+    }
+public:
+    /// Wraps a C row; ai::query makes these for you.
+    explicit blackboard_row(PonkoAiBlackboard* raw) noexcept : raw_(raw) {}
+    /// Sets an entry. A key id must come from ai::key.
+    ///@{
+    void set_num(std::uint64_t key, float v) { detail::check(ponko_ai_blackboard_set_num(raw_, key, v)); }
+    void set_flag(std::uint64_t key, bool v) { detail::check(ponko_ai_blackboard_set_flag(raw_, key, v)); }
+    void set_vec2(std::uint64_t key, vec2 v) { detail::check(ponko_ai_blackboard_set_vec2(raw_, key, v)); }
+    void set_vec3(std::uint64_t key, vec3 v) { detail::check(ponko_ai_blackboard_set_vec3(raw_, key, v)); }
+    void set_entity(std::uint64_t key, entity v) { detail::check(ponko_ai_blackboard_set_entity(raw_, key, v)); }
+    ///@}
+    /// An entry, if it holds a value of that kind.
+    ///@{
+    std::optional<float> num(std::uint64_t key) const { return read<float>(key, ponko_ai_blackboard_num); }
+    std::optional<bool> flag(std::uint64_t key) const { return read<bool>(key, ponko_ai_blackboard_flag); }
+    std::optional<entity> get_entity(std::uint64_t key) const { return read<entity>(key, ponko_ai_blackboard_entity); }
+    std::optional<vec2> get_vec2(std::uint64_t key) const { return read<vec2>(key, ponko_ai_blackboard_vec2); }
+    std::optional<vec3> get_vec3(std::uint64_t key) const { return read<vec3>(key, ponko_ai_blackboard_vec3); }
+    ///@}
+    /// The C row.
+    PonkoAiBlackboard* raw() const noexcept { return raw_; }
+};
+
+/// The brains and blackboards of one ai::query chunk, row by row.
+class rows {
+    const PonkoChunk* raw_;
+    std::size_t column_;
+public:
+    /// The chunk's rows, whose brain column is `column` (the blackboard's the next).
+    rows(const PonkoChunk* raw, std::size_t column) noexcept : raw_(raw), column_(column) {}
+    /// The brain of row `i`.
+    brain_row brain(std::size_t i) const {
+        PonkoAiBrain* b = ponko_chunk_ai_brain(raw_, column_, i);
+        if (!b) throw std::out_of_range("brain row");
+        return brain_row(b);
+    }
+    /// The blackboard of row `i`.
+    blackboard_row blackboard(std::size_t i) const {
+        PonkoAiBlackboard* b = ponko_chunk_ai_blackboard(raw_, column_ + 1, i);
+        if (!b) throw std::out_of_range("blackboard row");
+        return blackboard_row(b);
+    }
+};
+
+} // namespace ai
+namespace detail {
+/// ai::query and ai::query_par: a query of `Ts` with the brain and blackboard columns last.
+template<class... Ts, class F> void brain_query(ctx& c, bool parallel, F& fn) {
+    static_assert(sizeof...(Ts) <= 30, "ai::query takes at most 30 components besides the brain and blackboard");
+    world_view w = c.world();
+    PonkoWorld* world = ponko_ctx_world(c.raw());
+    std::array<std::uint32_t, sizeof...(Ts) + 2> ids{{w.component_id<bare<Ts>>()..., 0, 0}};
+    check(ponko_ai_brain_component(world, &ids[sizeof...(Ts)]));
+    check(ponko_ai_blackboard_component(world, &ids[sizeof...(Ts) + 1]));
+    PonkoQueryOptions options = ponko_query_options_default();
+    options.writes = 0;
+    options.parallel = parallel;
+    std::size_t i = 0;
+    ((options.writes |= std::uint32_t(!std::is_const<Ts>::value) << i++), ...);
+    options.writes |= std::uint32_t(3) << sizeof...(Ts);
+    struct context { F* fn; first_error error; } cx{&fn, {}};
+    auto trampoline = [](const PonkoChunk* raw, void* user) noexcept {
+        auto& cx = *static_cast<context*>(user);
+        if (cx.error.set.load()) return;
+        try { (*cx.fn)(chunk<Ts...>(raw), ai::rows(raw, sizeof...(Ts))); } catch (...) { cx.error.capture(); }
+    };
+    const PonkoStatus status = ponko_query_with(world, ids.data(), ids.size(), &options, trampoline, &cx);
+    cx.error.rethrow();
+    check(status);
+}
+}  // namespace detail
+namespace ai {
+
+/// Calls `fn(chunk<Ts...>, ai::rows)` for every archetype of entities with
+/// a world brain and all of `Ts`: the columns of `Ts` as in
+/// world_view::query, and each row's brain and blackboard.
+///
+///     ai::query<const position>(c, [&](auto chunk, ai::rows brains) {
+///         auto [pos] = chunk.columns();
+///         for (std::size_t i = 0; i < chunk.size(); ++i)
+///             brains.blackboard(i).set_vec2(at, pos[i].value);
+///     });
+template<class... Ts, class F> void query(ctx& c, F&& fn) { detail::brain_query<Ts...>(c, false, fn); }
+/// ai::query on all CPU cores at once: `fn` must be thread-safe, and
+/// touch only its own chunk's rows.
+template<class... Ts, class F> void query_par(ctx& c, F&& fn) { detail::brain_query<Ts...>(c, true, fn); }
+/// Calls `fn(entity, ai::brain_row, ai::blackboard_row, Ts&...)` for every
+/// entity with a world brain and all of `Ts`.
+template<class... Ts, class F> void each(ctx& c, F&& fn) {
+    query<Ts...>(c, [&fn](chunk<Ts...> ch, rows r) {
+        const auto cols = ch.columns();
+        for (std::size_t i = 0; i < ch.size(); ++i) {
+            std::apply([&](auto*... col) { fn(ch.entity(i), r.brain(i), r.blackboard(i), col[i]...); }, cols);
+        }
+    });
 }
 } // namespace ai
 } // namespace ponko

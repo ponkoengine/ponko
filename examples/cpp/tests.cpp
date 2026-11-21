@@ -4616,6 +4616,68 @@ static void world_brains() {
     CHECK(seen[5].second == 0 && seen[6].second == move);
 }
 
+// World brains inside loops: ai::each and ai::query visit each brain and blackboard with the entity's components.
+static void world_brains_in_loops() {
+    namespace ai = ponko::ai;
+    struct Spot { float x, y; };
+    const auto alert = ai::key("alert"), chase = ai::key("chase"), speed = ai::key("speed");
+    const auto at = ai::key("at"), buddy = ai::key("buddy"), p3 = ai::key("p3");
+    int chases = 0, started = 0, rows_seen = 0;
+    float seen_speed = 0;
+    std::vector<ponko::entity> guards;
+    ponko::game("brain loops", 1, 1)
+        .sim_system([&](ponko::ctx& ctx) {            // senses, on all cores
+            ai::query_par<const Spot>(ctx, [&](ponko::chunk<const Spot> chunk, ai::rows brains) {
+                auto [spot] = chunk.columns();
+                for (std::size_t i = 0; i < chunk.size(); ++i) {
+                    brains.blackboard(i).set_flag(alert, true);
+                    brains.blackboard(i).set_vec2(at, {spot[i].x, spot[i].y});
+                }
+            });
+        }, "senses")
+        .sim_system(ai::think, "think")
+        .sim_system([&](ponko::ctx& ctx) {            // act, row by row
+            ai::each<Spot>(ctx, [&](ponko::entity e, ai::brain_row brain, ai::blackboard_row board, Spot& spot) {
+                ++rows_seen;
+                CHECK(board.flag(alert).value_or(false) && board.get_vec2(at).value_or(ponko::vec2{}).x == spot.x);
+                CHECK(board.get_entity(buddy).value_or(0) == (e == guards[0] ? guards[1] : 0));
+                CHECK(!board.get_vec3(at) && !board.num(at));
+                if (!brain.doing(chase)) return;
+                ++chases;
+                if (brain.started()) ++started;
+                seen_speed = brain.param(0, speed).value_or(0);
+                spot.x += 1;
+                brain.finish(chase, ai::status::success);
+                throws([&] { brain.finish(ai::key("dance"), ai::status::success); });   // not doing it
+            });
+            CHECK(!ai::get_vec2(ctx, guards[0], p3) && ai::get_vec3(ctx, guards[0], p3).value_or(ponko::vec3{}).z == 3);
+        }, "act")
+        .run_headless(4, [&](ponko::ctx& ctx) {
+            ai::add_tree(ctx, "guard", ai::behavior_tree(R"({"root": {"sequence": [
+                {"check": "alert"}, {"do": "chase", "speed": 2.5}
+            ]}})"));
+            for (int i = 0; i < 3; ++i) {
+                const ponko::entity e = ctx.world().spawn(Spot{float(i), 0});
+                ai::add_brain(ctx, e, "guard");
+                guards.push_back(e);
+            }
+            ctx.world().spawn(Spot{9, 9});   // no brain: never visited
+            ai::set_entity(ctx, guards[0], buddy, guards[1]);
+            ai::set_vec3(ctx, guards[0], p3, {1, 2, 3});
+            CHECK(ai::get_entity(ctx, guards[0], buddy).value_or(0) == guards[1]);
+            CHECK(!ai::get_entity(ctx, guards[1], buddy));
+        });
+    // Chase at ticks 0 and 2 (reported done each time; the tree starts over a think later).
+    CHECK(rows_seen == 12 && chases == 6 && started == 6 && seen_speed == 2.5f);
+
+    ai::brain b;
+    b.set_entity(buddy, 7);
+    b.set_vec2(at, {1, 2});
+    b.set_vec3(p3, {1, 2, 3});
+    CHECK(b.get_entity(buddy).value_or(0) == 7 && b.get_vec2(at).value_or(ponko::vec2{}).y == 2);
+    CHECK(b.get_vec3(p3).value_or(ponko::vec3{}).z == 3 && !b.get_vec3(at) && !b.get_entity(p3));
+}
+
 // The pointer, the wheel, the sounds started, quitting and zoom_at, headless; a button that closes its screen.
 static void headless_play() {
     ponko::game("headless play", 800, 600).run_headless(0, [](ponko::ctx& ctx) {
@@ -4803,5 +4865,6 @@ int main() {
     headless_play();
     behavior_trees();
     world_brains();
+    world_brains_in_loops();
     std::cout << "C++ wrapper tests passed\n";
 }
