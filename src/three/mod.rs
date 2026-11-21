@@ -124,6 +124,7 @@ mod sky_kit;
 mod sky_shader;
 mod target;
 mod terrain;
+mod terrain_file;
 pub use far_terrain::FarTerrain;
 mod texture_array;
 pub(crate) mod view_model;
@@ -173,6 +174,11 @@ pub(crate) use sky_kit::CLOUD_SHADOW_TEXELS;
 pub use sky_kit::{CloudQuality, Clouds, DayNight, Moon, SkyKit};
 pub use target::{RenderTarget, TargetCamera};
 pub use terrain::{Heightfield, TERRAIN_LODS, TerrainMaterialDesc, TerrainTile, TerrainTileData};
+#[cfg_attr(not(feature = "editor"), allow(unused_imports))]
+pub(crate) use terrain_file::{
+    Built as TerrainBuilt, LayerJson as TerrainLayerJson, TERRAIN_FORMAT, TerrainData, TerrainJson, TerrainSource,
+    build as build_terrain, encode_grey16, encode_rgba, load_layers as load_terrain_layers,
+};
 pub use texture_array::{TextureArray, TextureKind};
 
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3, Vec4};
@@ -902,7 +908,7 @@ impl Camera3D {
     }
 
     /// Its part of the window's top-left corner, in logical pixels.
-    fn origin(&self) -> Vec2 {
+    pub(crate) fn origin(&self) -> Vec2 {
         self.rect.pixels(self.window).min
     }
 

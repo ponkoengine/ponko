@@ -22,7 +22,7 @@ use glam::Vec4;
 use serde_json::{Value, json};
 
 use super::Panels;
-use super::author::{read_text, write_json};
+use super::author::{near_first, read_text, relative, write_json};
 use crate::ctx::Ctx;
 use crate::render::{Material, ShaderDiagnostic};
 
@@ -107,21 +107,6 @@ fn remove(v: &mut Value, path: &[&str]) {
     }
 }
 
-/// `to` (an asset name) relative to the folder of asset `from`, as a glTF
-/// image's `uri` names it.
-fn relative(from: &str, to: &str) -> String {
-    let dir: Vec<&str> = from
-        .split('/')
-        .collect::<Vec<_>>()
-        .split_last()
-        .map_or(vec![], |(_, d)| d.to_vec());
-    let target: Vec<&str> = to.split('/').collect();
-    let common = dir.iter().zip(&target).take_while(|(a, b)| a == b).count();
-    let mut parts: Vec<&str> = vec![".."; dir.len() - common];
-    parts.extend(&target[common..]);
-    parts.join("/")
-}
-
 /// What the file's images and texture slots are, to tell an edit of values
 /// from one that needs the images read again.
 fn images_signature(gltf: &Value) -> String {
@@ -146,14 +131,6 @@ fn texture_name(gltf: &Value, i: usize) -> String {
                 .or_else(|| im["uri"].as_str().filter(|u| !u.starts_with("data:")))
         })
         .map_or_else(|| format!("texture {i}"), str::to_string)
-}
-
-/// The PNGs in `assets/`, those in the folder of asset `path` (and below
-/// it) first.
-fn pngs_near(mut pngs: Vec<String>, path: &str) -> Vec<String> {
-    let dir = path.rsplit_once('/').map_or("", |(d, _)| d);
-    pngs.sort_by_key(|p| (!(dir.is_empty() || p.starts_with(&format!("{dir}/"))), p.clone()));
-    pngs
 }
 
 /// Writes the shader document's code to its file.
@@ -249,7 +226,7 @@ impl Panels {
             }
         }
         let unsaved = ctx.editor.docs.unsaved(&path);
-        let pngs = pngs_near(self.asset_files("png"), &path);
+        let pngs = near_first(self.asset_files("png"), &path);
         let mut open = true;
         let mut save = false;
         let mut edited = None;
@@ -359,7 +336,7 @@ impl Panels {
         }
         let users = shader.map_or(0, |s| ctx.gfx.materials_with_shader(s).len());
         let unsaved = ctx.editor.docs.unsaved(&path);
-        let pngs = pngs_near(self.asset_files("png"), &path);
+        let pngs = near_first(self.asset_files("png"), &path);
         let mut open = true;
         let mut save = false;
         let mut edited = None;
@@ -934,6 +911,7 @@ mod tests {
 
     #[test]
     fn relative_paths_climb_out_of_the_files_folder() {
+        use super::super::author::relative;
         assert_eq!(relative("models/a.gltf", "models/t/x.png"), "t/x.png");
         assert_eq!(relative("models/a.gltf", "textures/x.png"), "../textures/x.png");
         assert_eq!(relative("a.gltf", "x.png"), "x.png");

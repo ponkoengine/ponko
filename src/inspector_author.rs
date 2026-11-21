@@ -67,7 +67,9 @@ impl Tool {
             #[cfg(feature = "3d")]
             Tool::Shader => "a custom WGSL shader (.wgsl), with its errors in place",
             #[cfg(feature = "3d")]
-            Tool::Terrain => "a heightmap (16-bit greyscale .png) and its weight map",
+            Tool::Terrain => {
+                "a terrain file (.json, with its heights and weights as PNGs); a new name makes a flat tile"
+            }
         }
     }
 
@@ -81,7 +83,7 @@ impl Tool {
             #[cfg(feature = "3d")]
             Tool::Shader => "wgsl",
             #[cfg(feature = "3d")]
-            Tool::Terrain => "png",
+            Tool::Terrain => "json",
         }
     }
 
@@ -90,7 +92,7 @@ impl Tool {
         match self {
             Tool::Graph => super::graph_panel::is_skeleton_file(path),
             #[cfg(feature = "3d")]
-            Tool::Terrain => super::terrain_panel::is_heightmap_file(path),
+            Tool::Terrain => super::terrain_panel::is_terrain_file(path),
             _ => true,
         }
     }
@@ -348,4 +350,27 @@ pub(crate) fn write_json(path: &str, value: &serde_json::Value) -> Result<(), cr
 /// `name` relative to the folder of the file at `path` (an asset name).
 pub(crate) fn beside(path: &str, name: &str) -> String {
     crate::tilemap::resolve_relative_asset(path, name)
+}
+
+/// `to` (an asset name) relative to the folder of asset `from`, as a file
+/// names another beside it.
+pub(crate) fn relative(from: &str, to: &str) -> String {
+    let dir: Vec<&str> = from
+        .split('/')
+        .collect::<Vec<_>>()
+        .split_last()
+        .map_or(vec![], |(_, d)| d.to_vec());
+    let target: Vec<&str> = to.split('/').collect();
+    let common = dir.iter().zip(&target).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<&str> = vec![".."; dir.len() - common];
+    parts.extend(&target[common..]);
+    parts.join("/")
+}
+
+/// `files` (asset names), those in the folder of asset `path` (and below
+/// it) first.
+pub(crate) fn near_first(mut files: Vec<String>, path: &str) -> Vec<String> {
+    let dir = path.rsplit_once('/').map_or("", |(d, _)| d);
+    files.sort_by_key(|p| (!(dir.is_empty() || p.starts_with(&format!("{dir}/"))), p.clone()));
+    files
 }

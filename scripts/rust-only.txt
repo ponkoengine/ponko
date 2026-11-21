@@ -59,3 +59,4 @@ FakeGamepads                     controllers.md    # native tests feed ponko_ctx
 Assets::browser_saves            editor.md         # C and C++ games don't build for the web yet, so they keep no files in a browser
 Assets::revert_browser_save      editor.md         # same
 Assets::browser_saves_persistent editor.md         # same
+Ctx::spawn_terrain               editor.md         # not bound yet: native games make the tile from heights they read (ponko_ctx_create_terrain_tile)
