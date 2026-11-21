@@ -29,7 +29,7 @@ use crate::three::{LodGroup, MaterialDesc, MeshData, Model, ModelMaterial, Model
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ponko_ecs::Component)]
 pub struct Unbaked;
 
-/// The mesh data and materials a world bake reads, kept while
+/// The mesh data, materials and textures a world bake reads, kept while
 /// [`Graphics::keep_bake_sources`] is on.
 #[derive(Default)]
 pub(crate) struct BakeSources {
@@ -37,6 +37,8 @@ pub(crate) struct BakeSources {
     meshes: HashMap<u32, (Arc<MeshData>, Vec<(Range<u32>, Material)>)>,
     /// Each material's description, by id.
     materials: HashMap<u32, MaterialDesc>,
+    /// Each texture made from pixels, shrunk for the bake, by id.
+    textures: HashMap<u32, Arc<super::BakeTexture>>,
 }
 
 impl BakeSources {
@@ -46,6 +48,12 @@ impl BakeSources {
 
     pub(crate) fn mesh_freed(&mut self, id: u32) {
         self.meshes.remove(&id);
+    }
+
+    pub(crate) fn texture_made(&mut self, id: u32, width: u32, height: u32, rgba: &[u8]) {
+        if let Ok(map) = super::BakeTexture::from_rgba(width, height, rgba) {
+            self.textures.insert(id, Arc::new(map));
+        }
     }
 
     pub(crate) fn material_set(&mut self, id: u32, desc: &MaterialDesc) {
@@ -70,7 +78,9 @@ impl BakeSources {
             let listed = parts.and_then(|p| p.get(k));
             let material = listed.or(own).unwrap_or(*material);
             let desc = self.materials.get(&material.id).copied().unwrap_or_default();
-            model = model.with_part(range.clone(), PartMaterial::of(&desc, tint));
+            let mut part = PartMaterial::of(&desc, tint);
+            part.map = desc.texture.and_then(|t| self.textures.get(&t.id)).cloned();
+            model = model.with_part(range.clone(), part);
         }
         Some(model)
     }
@@ -83,8 +93,10 @@ fn has_lightmap_uvs(mesh: &MeshData) -> bool {
 }
 
 impl Graphics {
-    /// Keeps (`true`) or drops (`false`) a copy of every mesh's triangles
-    /// and every material's description made from now on, for
+    /// Keeps (`true`) or drops (`false`) a copy of every mesh's triangles,
+    /// every material's description and every texture made from pixels
+    /// (shrunk to 128 on a side; block-compressed KTX2 and DDS textures
+    /// aren't kept) from now on, for
     /// [`LightBakeScene::add_world`] to bake a world's models from. Off by
     /// default: it costs as much CPU memory as the meshes. Turn it on
     /// before making or loading the level's meshes (files and glTF scenes
@@ -383,7 +395,14 @@ impl LightBakeScene {
                     double_sided: m.double_sided,
                     ..Default::default()
                 };
-                model = model.with_part(range.clone(), PartMaterial::of(&desc, Color::WHITE));
+                let mut part = PartMaterial::of(&desc, Color::WHITE);
+                part.map = m
+                    .image
+                    .and_then(|i| loaded.images.get(i))
+                    .filter(|image| !image.2.is_empty())
+                    .and_then(|(w, h, rgba)| super::BakeTexture::from_rgba(*w, *h, rgba).ok())
+                    .map(Arc::new);
+                model = model.with_part(range.clone(), part);
             }
             let lightmapped = model.lightmapped;
             let index = this.add(model);

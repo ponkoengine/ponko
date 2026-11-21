@@ -903,6 +903,10 @@ impl Graphics {
     pub fn create_texture(&mut self, width: u32, height: u32, rgba: &[u8]) -> Texture {
         let texture = self.make_texture(width, height, rgba);
         self.textures_live.insert(texture.id);
+        #[cfg(feature = "3d")]
+        if let Some(sources) = self.assets3d.bake_sources.as_mut() {
+            sources.texture_made(texture.id, width, height, rgba);
+        }
         texture
     }
 

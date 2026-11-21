@@ -681,3 +681,102 @@ fn a_gltf_bake_takes_the_level_geometry_with_its_materials_and_lightmaps_the_spa
         assert_eq!(ctx.world.get::<Lightmapped>(floor), Some(&Lightmapped(0)));
     });
 }
+
+#[test]
+fn an_albedo_map_of_one_color_bakes_as_a_flat_material_of_that_color() {
+    let red = [200u8, 40, 30];
+    let with = |textured: bool| {
+        let mut scene = gray_sky(0.2, 6.0);
+        let ids = room(true, &mut scene, 2.0);
+        let wall = &mut scene.models[ids[1]];
+        if textured {
+            wall.albedo = Color::WHITE;
+            wall.albedo_map = Some(std::sync::Arc::new(
+                BakeTexture::from_rgba(1, 1, &[red[0], red[1], red[2], 255]).unwrap(),
+            ));
+            // Coordinates for the map (the cube's own).
+            wall.uvs = vec![Vec2::new(0.3, 0.6); wall.positions.len()];
+        } else {
+            wall.albedo = Color::rgb(
+                f32::from(red[0]) / 255.0,
+                f32::from(red[1]) / 255.0,
+                f32::from(red[2]) / 255.0,
+            );
+        }
+        bake_lighting(&scene, &settings()).unwrap().to_bytes()
+    };
+    assert!(with(true) == with(false), "a one-color map bounces as its color");
+}
+
+/// The floor's red minus blue light 0.4 units in front of a wall lit by
+/// the sun, at z -1 and z +1: the wall's albedo map is red on its z < 0
+/// half and blue on the other (or white with `white`).
+fn floor_tints_by_a_textured_wall(white: bool) -> (f32, f32) {
+    let lighting = Lighting {
+        sun_intensity: 6.0,
+        sun_color: Color::WHITE,
+        sun_direction: Vec3::new(-1.0, -1.0, 0.0),
+        ambient_intensity: 1.0,
+        ..Default::default()
+    };
+    let gray = Color::rgb(0.1, 0.1, 0.1);
+    let sky = Sky {
+        sky_color: gray,
+        ground_color: gray,
+        equator_color: None,
+        ..Default::default()
+    };
+    let mut scene = LightBakeScene::new(&lighting, &sky);
+    let mut floor = MeshData::plane(6.0);
+    floor.generate_lightmap_uvs(4.0);
+    let f = scene.add(BakeModel::new(&floor, Mat4::IDENTITY));
+    // A 4 x 4 wall facing +x at x = -1: its texture's v runs along z.
+    let wall = Mat4::from_translation(Vec3::new(-1.0, 2.0, 0.0)) * Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_2);
+    let pixels: Vec<u8> = if white {
+        vec![255; 8]
+    } else {
+        vec![230, 20, 20, 255, 20, 20, 230, 255]
+    };
+    let map = BakeTexture::from_rgba(1, 2, &pixels).unwrap();
+    scene.add(
+        BakeModel::new(&MeshData::plane(4.0), wall)
+            .with_albedo_map(map)
+            .with_lightmapped(false),
+    );
+    let baked = bake_lighting(&scene, &settings().with_texels_per_unit(4.0).with_samples(64)).unwrap();
+    let tint = |z: f32| {
+        let l = light_near(&baked, &scene, f, Vec3::new(-0.6, 0.0, z));
+        l.x - l.z
+    };
+    (tint(-1.0), tint(1.0))
+}
+
+#[test]
+fn each_half_of_a_textured_wall_bounces_its_own_color() {
+    let (red_side, blue_side) = floor_tints_by_a_textured_wall(false);
+    let (white_a, white_b) = floor_tints_by_a_textured_wall(true);
+    eprintln!(
+        "red minus blue on the floor: {red_side} by the red half, {blue_side} by the blue half; white wall {white_a}, {white_b}"
+    );
+    // The negative control: a white map tints neither side.
+    assert!(white_a.abs() < 0.01 && white_b.abs() < 0.01, "{white_a} {white_b}");
+    assert!(red_side > 0.03, "red by the red half: {red_side}");
+    assert!(blue_side < -0.03, "blue by the blue half: {blue_side}");
+}
+
+#[test]
+fn a_world_bake_reads_its_materials_textures() {
+    crate::game::Game::new("world bake", 1, 1).run_headless(0, |ctx| {
+        ctx.gfx.keep_bake_sources(true);
+        let texture = ctx.gfx.create_texture(1, 1, &[10, 200, 10, 255]);
+        let green = ctx.gfx.create_material(MaterialDesc::default().with_texture(texture));
+        let mesh = ctx.gfx.create_mesh(&MeshData::cube(1.0), green);
+        ctx.world
+            .spawn((Transform3D::default(), crate::render::Model::new(mesh)));
+        let mut scene = LightBakeScene::new(&ctx.scene3d.lighting, &ctx.scene3d.sky);
+        scene.add_world(&mut ctx.world, &ctx.gfx).unwrap();
+        let map = scene.models[0].parts[0].1.map.as_ref().expect("the material's texture");
+        let c = map.sample(Vec2::splat(0.5));
+        assert!(c.y > 0.5 && c.x < 0.01, "{c}");
+    });
+}

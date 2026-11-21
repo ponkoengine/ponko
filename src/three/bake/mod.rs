@@ -10,12 +10,14 @@
 //! directly every frame, with their real-time shadows, so moving models
 //! still cast shadows on baked ones.
 
+mod albedo;
 mod bvh;
 mod pack;
 mod sources;
 mod trace;
 mod uv;
 
+pub use albedo::BakeTexture;
 pub(crate) use sources::BakeSources;
 pub use sources::{GltfBake, Unbaked, WorldBake};
 
@@ -125,14 +127,18 @@ pub struct BakeModel {
     positions: Vec<Vec3>,
     normals: Vec<Vec3>,
     uvs1: Vec<Vec2>,
+    /// The mesh's texture coordinates, which albedo maps are read with.
+    uvs: Vec<Vec2>,
+    /// The texture its color is multiplied with (see `with_albedo_map`).
+    albedo_map: Option<std::sync::Arc<BakeTexture>>,
     indices: Vec<u32>,
     /// Index ranges (of `indices`) drawn with materials of their own: a
     /// mesh of several parts, from a world or a glTF scene. Triangles in
     /// none take the model's own.
     parts: Vec<(std::ops::Range<u32>, PartMaterial)>,
     /// Its color (sRGB, as [`MaterialDesc::color`]): how much light it
-    /// bounces. Textures aren't read: for a textured surface, set it to
-    /// the texture's average color times the material's. Default white.
+    /// bounces, times its [albedo map](Self::with_albedo_map) where it has
+    /// one. Default white.
     pub albedo: Color,
     /// Light it gives off itself (as [`MaterialDesc::emissive`]), which
     /// lights what's around it in the bake. Default black.
@@ -164,6 +170,8 @@ impl BakeModel {
                 .map(|&n| (normal_matrix * n).normalize_or_zero())
                 .collect(),
             uvs1: mesh.uvs1.clone(),
+            uvs: mesh.uvs.clone(),
+            albedo_map: None,
             indices: mesh.indices.clone(),
             parts: Vec::new(),
             albedo: Color::WHITE,
@@ -173,7 +181,25 @@ impl BakeModel {
         }
     }
 
-    /// Takes the albedo, emissive color and sides from a material.
+    /// Multiplies its color with `map` where rays hit it, read through the
+    /// mesh's first texture coordinates ([`MeshData::uvs`]), as the
+    /// renderer draws a material's [`texture`](MaterialDesc::texture): the
+    /// light it bounces takes the texture's colors.
+    ///
+    /// ```
+    /// # use ponko::prelude::*;
+    /// let bricks = ponko::render::BakeTexture::from_rgba(1, 1, &[180, 60, 40, 255]).unwrap();
+    /// let wall = ponko::render::BakeModel::new(&ponko::render::MeshData::cube(1.0), Mat4::IDENTITY).with_albedo_map(bricks);
+    /// # let _ = wall;
+    /// ```
+    #[must_use]
+    pub fn with_albedo_map(mut self, map: BakeTexture) -> Self {
+        self.albedo_map = Some(std::sync::Arc::new(map));
+        self
+    }
+
+    /// Takes the albedo, emissive color and sides from a material (not its
+    /// texture: give that with [`with_albedo_map`](Self::with_albedo_map)).
     #[must_use]
     pub fn with_material(mut self, material: &MaterialDesc) -> Self {
         self.albedo = material.color;
@@ -243,6 +269,7 @@ pub(crate) struct PartMaterial {
     pub albedo: Vec3,
     pub emissive: Vec3,
     pub double_sided: bool,
+    pub map: Option<std::sync::Arc<BakeTexture>>,
 }
 
 impl PartMaterial {
@@ -256,6 +283,7 @@ impl PartMaterial {
             albedo: rgb(material.color) * rgb(tint),
             emissive: rgb(material.emissive),
             double_sided: material.double_sided,
+            map: None,
         }
     }
 }
@@ -1147,18 +1175,33 @@ fn trace_scene(scene: &LightBakeScene, bounces: u32) -> (TraceScene, Vec<Tri>, V
     let mut corner_normals = Vec::new();
     let mut surfaces = Vec::with_capacity(scene.models.len());
     let mut first_tri = Vec::with_capacity(scene.models.len());
+    let mut maps: Vec<std::sync::Arc<BakeTexture>> = Vec::new();
+    let mut tri_uvs = Vec::new();
+    let mut map_index = |map: &Option<std::sync::Arc<BakeTexture>>| {
+        map.as_ref()
+            .map(|map| match maps.iter().position(|m| std::sync::Arc::ptr_eq(m, map)) {
+                Some(i) => i as u32,
+                None => {
+                    maps.push(std::sync::Arc::clone(map));
+                    maps.len() as u32 - 1
+                }
+            })
+    };
     for model in &scene.models {
         let base = surfaces.len() as u32;
+        let textured = model.uvs.len() == model.positions.len();
         surfaces.push(Surface {
             albedo: rgb(model.albedo).clamp(Vec3::ZERO, Vec3::ONE),
             emissive: rgb(model.emissive).max(Vec3::ZERO),
             double_sided: model.double_sided,
+            map: if textured { map_index(&model.albedo_map) } else { None },
         });
         for (_, part) in &model.parts {
             surfaces.push(Surface {
                 albedo: part.albedo.clamp(Vec3::ZERO, Vec3::ONE),
                 emissive: part.emissive.max(Vec3::ZERO),
                 double_sided: part.double_sided,
+                map: if textured { map_index(&part.map) } else { None },
             });
         }
         first_tri.push(tris.len());
@@ -1174,6 +1217,11 @@ fn trace_scene(scene: &LightBakeScene, bounces: u32) -> (TraceScene, Vec<Tri>, V
                 [n[a], n[b], n[c]]
             });
             tris.push(tri);
+            tri_uvs.push(if textured {
+                [model.uvs[a], model.uvs[b], model.uvs[c]]
+            } else {
+                [Vec2::ZERO; 3]
+            });
             tri_surface.push(base + model.part_of(k).map_or(0, |p| p as u32 + 1));
         }
     }
@@ -1182,6 +1230,7 @@ fn trace_scene(scene: &LightBakeScene, bounces: u32) -> (TraceScene, Vec<Tri>, V
         tri_surface,
         corner_normals,
         surfaces,
+        (maps, tri_uvs),
         scene.sun,
         scene.lamps.clone(),
         scene.sky,

@@ -603,8 +603,8 @@ pub use crate::three::{
 };
 #[cfg(feature = "3d")]
 pub use crate::three::{
-    BakeModel, BakeStats, BakedLighting, GltfBake, LightBakeScene, LightBakeSettings, LightmapRect, Lightmapped,
-    MAX_LIGHTMAP_PAGES, Unbaked, WorldBake, bake_lighting,
+    BakeModel, BakeStats, BakeTexture, BakedLighting, GltfBake, LightBakeScene, LightBakeSettings, LightmapRect,
+    Lightmapped, MAX_LIGHTMAP_PAGES, Unbaked, WorldBake, bake_lighting,
 };
 #[cfg(feature = "3d")]
 pub use crate::three::{CloudQuality, Clouds, DayNight, Moon, SkyKit};

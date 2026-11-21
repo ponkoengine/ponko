@@ -41,8 +41,8 @@ mod animator;
 pub(crate) mod api;
 pub(crate) mod bake;
 pub use bake::{
-    BakeModel, BakeStats, BakedLighting, GltfBake, LightBakeScene, LightBakeSettings, LightmapRect, Lightmapped,
-    MAX_LIGHTMAP_PAGES, Unbaked, WorldBake, bake_lighting,
+    BakeModel, BakeStats, BakeTexture, BakedLighting, GltfBake, LightBakeScene, LightBakeSettings, LightmapRect,
+    Lightmapped, MAX_LIGHTMAP_PAGES, Unbaked, WorldBake, bake_lighting,
 };
 mod clip;
 mod collect;
