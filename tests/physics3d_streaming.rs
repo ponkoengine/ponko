@@ -88,6 +88,69 @@ fn a_ball_rests_on_a_turned_and_scaled_terrain_tile_at_the_drawn_height_and_fall
 }
 
 #[test]
+fn a_mirrored_and_stretched_terrain_mesh_piece_is_solid_where_it_is_drawn_and_faces_up() {
+    // A ramp of two triangles rising 0.5 per meter along +X, from (0, 0) to
+    // (4, 4) on the ground, wound to face up. Mirrored along X and twice
+    // as long, it rises 0.25 per meter along -X, over x from -8 to 0.
+    let corners = [
+        vec3(0.0, 0.0, 0.0),
+        vec3(4.0, 2.0, 0.0),
+        vec3(4.0, 2.0, 4.0),
+        vec3(0.0, 0.0, 4.0),
+    ];
+    let triangles = [[0, 3, 2], [0, 2, 1]];
+    let mirrored = Transform {
+        scale: vec3(-2.0, 1.0, 1.0),
+        ..Transform::default()
+    };
+    let hit = Rc::new(RefCell::new(None));
+    let out = hit.clone();
+    let radius = 0.3;
+    let mut ball = None;
+    let mut world = Game::new("t", 1, 1)
+        .physics3d(GRAVITY)
+        .sim_system(move |ctx: &mut Ctx| {
+            if ctx.time.sim_tick() == 1 {
+                let down = ctx
+                    .physics3d
+                    .cast_ray(vec3(-4.0, 10.0, 1.0), Vec3::NEG_Y, 20.0, QueryFilter::default());
+                *out.borrow_mut() = down.map(|h| (h.point, h.normal));
+            }
+        })
+        .run_headless(150, |ctx| {
+            let mesh = ctx.physics3d.trimesh(&corners, &triangles).expect("a ramp");
+            ctx.world.spawn((mirrored, TerrainCollider::new(mesh).friction(1.0)));
+            let grippy = RigidBody {
+                lock_rotation: true,
+                ..RigidBody::dynamic()
+            };
+            let start = vec3(-4.0, 6.0, 3.0);
+            ball = Some(
+                ctx.world
+                    .spawn((Transform::at(start), grippy, Collider::sphere(radius).friction(1.0))),
+            );
+        });
+    let (point, normal) = hit.take().expect("the ray hit the mirrored ramp, over x from -8 to 0");
+    assert!(
+        (point.y - 1.0).abs() < 1e-3,
+        "drawn at height 1 at x = -4, hit at {point}"
+    );
+    let up_the_slope = vec3(0.25, 1.0, 0.0).normalize();
+    assert!(
+        normal.distance(up_the_slope) < 1e-3,
+        "the stretched slope's normal is {up_the_slope}, not {normal}"
+    );
+    // The triangles still face up: a ball lands on the ramp and stays,
+    // its center r / cos(slope) above the drawn surface.
+    let p = position(&mut world, ball.unwrap());
+    let want = -p.x * 0.25 + radius * (1.0f32 + 0.25 * 0.25).sqrt();
+    assert!(
+        (p.y - want).abs() < 0.02 && (-8.0..0.0).contains(&p.x),
+        "rests at {p}, the drawn ramp puts it at y = {want}"
+    );
+}
+
+#[test]
 fn collision_meshes_build_on_a_worker_thread() {
     let ray_hits = Rc::new(RefCell::new(None));
     let out = ray_hits.clone();

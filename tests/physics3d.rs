@@ -902,6 +902,104 @@ fn scenes_make_mesh_colliders_from_mesh_files_and_save_them_by_file() {
 }
 
 #[test]
+fn world_saves_and_scenes_keep_scaled_mesh_colliders_by_mesh_file_and_scale() {
+    let scene_file = TempAsset::new("test-scaled-mesh-collider-scene.json");
+    let scene_name = scene_file.name().to_string();
+    let dir = std::env::temp_dir().join(format!("ponko-test-scaled-mesh-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let tall = vec3(1.0, 3.0, 1.0);
+    let mirrored = vec3(-1.0, 1.0, 1.0);
+    // One mesh of the file, made in code and used at two scales; the
+    // world is saved to a slot and as a scene.
+    let name = scene_name.clone();
+    Game::new("t", 1, 1)
+        .data_dir(&dir)
+        .physics3d(Vec3::ZERO)
+        .run_headless(1, move |ctx| {
+            let house = ctx.load_collision_mesh("models/house.glb");
+            for (x, scale) in [(0.0, tall), (10.0, mirrored)] {
+                ctx.world.spawn((
+                    Transform3D::at(vec3(x, 0.0, 0.0)),
+                    RigidBody3D::fixed(),
+                    Collider3D::scaled_mesh(house, scale),
+                ));
+            }
+            // A mesh made in code has no file to name: left out, as before.
+            let made = ctx
+                .physics3d
+                .convex_hull(&[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z])
+                .unwrap();
+            ctx.world.spawn((
+                Transform3D::at(vec3(40.0, 0.0, 0.0)),
+                RigidBody3D::fixed(),
+                Collider3D::scaled_mesh(made, Vec3::splat(2.0)),
+            ));
+            ctx.storage.save_world(&ctx.world, "scaled").unwrap();
+            ctx.assets.save_scene(&ctx.world, &name).unwrap();
+        });
+    let json: serde_json::Value = serde_json::from_str(&scene_file.read()).unwrap();
+    let mut shapes: Vec<_> = json["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["components"].get("Collider3D").map(|c| c["shape"].clone()))
+        .collect();
+    shapes.sort_by_key(ToString::to_string);
+    assert_eq!(
+        shapes,
+        [
+            serde_json::json!({ "ScaledMesh": { "mesh": { "file": "models/house.glb" }, "scale": [-1.0, 1.0, 1.0] } }),
+            serde_json::json!({ "ScaledMesh": { "mesh": { "file": "models/house.glb" }, "scale": [1.0, 3.0, 1.0] } }),
+        ],
+        "saved by the mesh file and the collider's own scale; the code-made mesh is left out"
+    );
+    // A fresh game loads the slot, another the scene: the same colliders,
+    // standing where they were saved.
+    let loaded = |load: Box<dyn FnOnce(&mut Ctx)>| {
+        let out = Rc::new(std::cell::RefCell::new(None));
+        let slot = out.clone();
+        Game::new("t", 1, 1)
+            .data_dir(&dir)
+            .physics3d(Vec3::ZERO)
+            .sim_system(move |ctx: &mut Ctx| {
+                if ctx.time.sim_tick() == 1 {
+                    let top = |x: f32| {
+                        ctx.physics3d
+                            .cast_ray(vec3(x, 50.0, 0.0), -Vec3::Y, 100.0, QueryFilter3D::default())
+                            .map(|hit| hit.point.y)
+                    };
+                    let tops = [top(0.0), top(10.0), top(40.0)];
+                    let mut scales: Vec<_> = ctx
+                        .world
+                        .query::<&Collider3D>()
+                        .iter()
+                        .map(|c| match c.shape {
+                            ponko::d3::Shape::ScaledMesh { scale, .. } => scale.to_array(),
+                            other => panic!("not a scaled mesh: {other:?}"),
+                        })
+                        .collect();
+                    scales.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    *slot.borrow_mut() = Some((tops, scales));
+                }
+            })
+            .run_headless(2, load);
+        out.take().expect("ran the query")
+    };
+    let from_slot = loaded(Box::new(|ctx| ctx.load_world("scaled").unwrap()));
+    let from_scene = loaded(Box::new(move |ctx| ctx.load_scene(&scene_name).unwrap()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for (tops, scales) in [from_slot, from_scene] {
+        assert_eq!(scales, [mirrored.to_array(), tall.to_array()]);
+        // The house's walls are 1.6 m and its roof 2.7 m high.
+        let tall_top = tops[0].expect("the ray hits the tall house");
+        assert!((4.7..=8.2).contains(&tall_top), "made 3 times taller: {tops:?}");
+        let mirrored_top = tops[1].expect("the ray hits the mirrored house");
+        assert!((1.5..=2.8).contains(&mirrored_top), "{tops:?}");
+        assert_eq!(tops[2], None, "the code-made mesh wasn't saved");
+    }
+}
+
+#[test]
 fn load_collision_mesh_makes_a_gltf_file_solid_in_one_call() {
     use ponko::d3::CollisionMeshOptions;
     let saved = TempAsset::new("test-load-collision-mesh-saved.json");
