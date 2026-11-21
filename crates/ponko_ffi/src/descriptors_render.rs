@@ -837,7 +837,11 @@ mod tests {
             PonkoTargetCameraEx::len_of(2),
             Some(offset_of!(PonkoTargetCameraEx, debug_draw) + 4)
         );
-        assert_eq!(PonkoPostEx::len_of(2), None);
+        assert_eq!(
+            PonkoPostEx::len_of(2),
+            Some(offset_of!(PonkoPostEx, ssr_thin_objects) + 1)
+        );
+        assert_eq!(PonkoPostEx::len_of(3), None);
     }
 
     /// A descriptor with its header set for version 1.
