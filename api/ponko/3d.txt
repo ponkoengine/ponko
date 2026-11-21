@@ -14276,11 +14276,14 @@ pub ponko::ui::UiPaint::texture: core::option::Option<ponko::texture::Texture>
 pub ponko::ui::UiPaint::wrap: bool
 impl core::clone::Clone for ponko::ui::UiPaint
 pub fn ponko::ui::UiPaint::clone(&self) -> Self
+impl core::cmp::PartialEq for ponko::ui::UiPaint
+pub fn ponko::ui::UiPaint::eq(&self, &Self) -> bool
 impl core::default::Default for ponko::ui::UiPaint
 pub fn ponko::ui::UiPaint::default() -> Self
 impl core::fmt::Debug for ponko::ui::UiPaint
 pub fn ponko::ui::UiPaint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for ponko::ui::UiPaint
+impl core::marker::StructuralPartialEq for ponko::ui::UiPaint
 pub struct ponko::ui::UiScreenTransition
 pub ponko::ui::UiScreenTransition::offset: glam::f32::vec2::Vec2
 pub ponko::ui::UiScreenTransition::opacity: f32

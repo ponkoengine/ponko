@@ -200,7 +200,7 @@ pub enum UiTextAlign {
 /// let paint = ponko::ui::UiPaint { background: Color::BLUE, font_size: 20.0, ..Default::default() };
 /// assert_eq!(paint.font_size, 20.0);
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UiPaint {
     /// Normal background.
     /// ```
@@ -657,6 +657,8 @@ pub(super) struct Node {
     pub motion: super::anim::NodeMotion,
     /// What its text was measured from in the last layout.
     pub measured: super::retained_layout::Measured,
+    /// What it drew last, kept until what it is drawn from changes.
+    pub drawn: super::retained_draw::Drawn,
 }
 /// How a screen pushed on the [`Ui`]'s stack treats the screens below it
 /// ([`Ui::push_screen_with_mode`]). Either way only the top screen takes
@@ -772,6 +774,9 @@ pub struct Ui {
     pub(super) rich_layout: super::rich::RichLayout,
     /// What the last layout was computed for, and how many ran.
     pub(super) layout_cache: super::retained_layout::LayoutCache,
+    /// What the nodes' kept drawing was drawn for, and how many were drawn
+    /// again ([`Ui::node_redraws`]).
+    pub(super) draw_cache: super::retained_draw::DrawCache,
     /// The named nodes ([`Ui::find`]).
     pub(super) names: std::collections::HashMap<String, UiId>,
     /// The immediate widgets (a panel, a label, a button drawn the frame
@@ -822,6 +827,7 @@ impl Default for Ui {
             rich_assets: Default::default(),
             rich_layout: Default::default(),
             layout_cache: Default::default(),
+            draw_cache: Default::default(),
             names: std::collections::HashMap::new(),
             immediate: super::UiImmediate::default(),
             overlay_has_pointer: false,
@@ -897,6 +903,7 @@ impl Ui {
             extra: None,
             motion: Default::default(),
             measured: Default::default(),
+            drawn: Default::default(),
         });
         id
     }
