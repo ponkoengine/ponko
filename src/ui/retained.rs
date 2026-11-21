@@ -711,7 +711,8 @@ pub(super) enum Drag {
 /// - **When to call it:** build the tree in setup, then change text, values
 ///   and screens from any system. The engine lays it out and feeds it input
 ///   before the frame's systems, so [`events`](Self::events) queued this
-///   frame are read in a frame or simulation system. Immediate widgets are
+///   frame are read in a frame or simulation system. Input a system feeds
+///   (`ctx.input.feed`) reaches it before the next system runs. Immediate widgets are
 ///   drawn the frame they are called.
 /// - **What it needs:** nothing to build and query (tests drive it with
 ///   [`frame`](Self::frame)); drawing needs a window. It borrows apart from
