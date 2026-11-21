@@ -1177,6 +1177,13 @@ fn contact_reflections_stay_sharper(ao: bool) {
          {kept:.2?}, contact x{wider:.2} wider"
     );
     assert!(kept[1] < 0.25, "the distant reflection blurs: x{:.2}", kept[1]);
+    // These bounds were 0.5, 3 and 1.6 while the mirror's contact
+    // reflection was 1.32 pixels RMS. With the mirror as thin as a true
+    // mirror's (0.87), the same rough reflection is a smaller share of a
+    // sharper peak: it keeps 0.43 of it, 4.3 times the distant one's, and
+    // is 1.96 times as wide (Apple M4 Max, the same with and without
+    // ambient occlusion). The bounds still fail a contact reflection blurred
+    // by roughness alone (0.19 of the peak, 3.2 times as wide).
     assert!(kept[0] > 0.35, "the contact reflection stays sharp: x{:.2}", kept[0]);
     assert!(kept[0] > kept[1] * 2.0, "far more than the distant one: {kept:.2?}");
     assert!(wider < 2.4, "and not much wider than the mirror's: x{wider:.2}");
@@ -1567,7 +1574,7 @@ fn far_thin_things_stay_thin_in_reflections_without_taa() {
 /// sample (a copy of one would change what it draws), and soft particles
 /// read the depth once a fragment.
 #[test]
-#[ignore]
+#[ignore = "a measurement: run by hand in release; it asserts nothing about the times"]
 fn screen_pass_gpu_cost_at_1080p() {
     use crate::three::particles::{ParticleEmitter3D, ParticleSettings3D};
     let Some(mut rig) = Rig::with_limits(1920, 1080, true) else {

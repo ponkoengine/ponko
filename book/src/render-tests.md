@@ -113,6 +113,28 @@ are tested on one character-like bar; a real imported character is not.
   No asset files: the repository is public and the tests must run from a
   bare checkout.
 
+### On a busy machine
+
+The suites run beside a whole workspace's tests, often on a machine many
+times busier than it has cores. A test holds there when it asserts counts
+and what the GPU drew, not how long things took:
+
+- **Time bounds only catch hangs.** A wait's upper limit is generous (tens
+  of seconds) and says it is a hang detector; what the test claims is a
+  count ("one crowd step per tick", "the request was refused, nothing is
+  owed").
+- **A figure the driver settles late is read once it has settled.** Memory
+  a driver frees after a frame completes (Metal's `currentAllocatedSize`)
+  can lag behind the poll that waited for that frame: read it a few times
+  and compare the smallest reading, which a resource that was never freed
+  is still in.
+- **GPU timestamps can come back unusable** for a frame now and then (a
+  pass the GPU skipped or wrote no time for). A test of sampling allows a
+  lone miss and still fails a cadence that is wrong (one frame in two).
+- **Time a frame the way the game does:** `Stage::render_timed` collects,
+  begins the timer's frame and submits the timestamps with the frame; a
+  caller doesn't begin the frame again.
+
 ## Reference images
 
 A reference image is a whole-frame baseline: a small PNG in

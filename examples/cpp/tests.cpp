@@ -5158,12 +5158,19 @@ static void native_parity_round5() {
         }
         CHECK(after.count - before.count == 1 && after.bytes - before.bytes == sizeof(int));
         // Net bytes: PONKO_COUNT_CPP_ALLOCATIONS counts the frees too, so what is given back leaves them.
-        const std::int64_t held = ponko::net_alloc_bytes();
-        auto* block = new char[4096];
-        const std::int64_t holding = ponko::net_alloc_bytes();
-        delete[] block;
-        const std::int64_t released = ponko::net_alloc_bytes();
-        CHECK(holding - held >= 4096 && holding - released >= 4096);
+        // The figure is the whole process's: another thread (the engine's workers, still freeing
+        // what an earlier game left) may give memory back in between on a busy machine, so a few
+        // tries are allowed. A block that isn't counted, or a free that isn't, fails every one.
+        bool counted = false;
+        for (int attempt = 0; attempt < 5 && !counted; ++attempt) {
+            const std::int64_t held = ponko::net_alloc_bytes();
+            auto* block = new char[4096];
+            const std::int64_t holding = ponko::net_alloc_bytes();
+            delete[] block;
+            const std::int64_t released = ponko::net_alloc_bytes();
+            counted = holding - held >= 4096 && holding - released >= 4096;
+        }
+        CHECK(counted);
         ctx.set_profiling(false);
     });
 

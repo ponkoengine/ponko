@@ -329,8 +329,7 @@ fn time_lines(samples: u32) {
             stage.ctx.hand_over_debug_draw();
             let mut read = timer.frames_read;
             for n in 0..25 {
-                timer.collect(&stage.device);
-                timer.begin_frame();
+                // `render_timed` collects and begins the timer's frame itself.
                 stage.render_timed(Some(&mut timer));
                 stage.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
                 timer.collect(&stage.device);
