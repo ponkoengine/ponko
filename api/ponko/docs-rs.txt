@@ -11372,6 +11372,8 @@ pub fn ponko::prelude::Ctx::state<S: ponko::state::States>(&self) -> &S
 impl ponko::prelude::Ctx
 pub fn ponko::prelude::Ctx::quality_autotune_status(&self) -> core::option::Option<ponko::render::QualityAutotuneStatus>
 impl ponko::prelude::Ctx
+pub fn ponko::prelude::Ctx::spawn_terrain(&mut self, &str, glam::f32::vec3::Vec3) -> core::result::Result<ponko_ecs::entity::Entity, ponko::error::Error>
+impl ponko::prelude::Ctx
 pub fn ponko::prelude::Ctx::start_ragdoll(&mut self, ponko_ecs::entity::Entity, &[ponko::d3::RagdollBone]) -> core::result::Result<(), ponko::error::Error>
 pub fn ponko::prelude::Ctx::stop_ragdoll(&mut self, ponko_ecs::entity::Entity, f32)
 impl<F: core::ops::function::FnMut(&mut ponko::prelude::Ctx) + 'static> ponko::prelude::IntoSystem<ponko::prelude::Ctx> for F
@@ -17531,6 +17533,7 @@ impl ponko::water::Water
 pub fn ponko::water::Water::contacts_started(&self) -> u64
 pub fn ponko::water::Water::contains(&self, glam::f32::vec2::Vec2) -> bool
 pub fn ponko::water::Water::desc(&self) -> &ponko::water::WaterDesc
+pub fn ponko::water::Water::drawn_time(&self, &ponko::prelude::Time) -> f32
 pub fn ponko::water::Water::free(&mut self, &mut ponko::prelude::Ctx)
 pub fn ponko::water::Water::height_at(&self, glam::f32::vec2::Vec2, f32) -> f32
 pub fn ponko::water::Water::is_under(&self, glam::f32::vec3::Vec3, f32) -> bool
