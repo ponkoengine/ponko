@@ -7802,6 +7802,53 @@ public:
     void add_background_asset_source(const memory_source& source) {
         detail::check(ponko_ctx_add_background_memory_source(raw_, source.raw()));
     }
+
+    // Mods: packs players add, mounted in a load order (Rust's ponko::mods).
+    /// Checks the mod packs at `paths`, then mounts them in that order moved
+    /// as their manifests' `requires` and `after` need: assets load from the
+    /// mods first, the last mod with a name winning. A bad mod is refused
+    /// whole and nothing is mounted; the ponko::error names the mod, the file
+    /// (its path()) and the reason. Mount in setup, after reflecting components.
+    void mount_mods(const std::vector<std::string>& paths) {
+        std::vector<const char*> raw;
+        raw.reserve(paths.size());
+        for (const auto& p : paths) raw.push_back(p.c_str());
+        detail::check(ponko_ctx_mount_mods(raw_, raw.data(), raw.size()));
+    }
+    /// The mounted mods' ids, in load order (empty before mount_mods).
+    std::vector<std::string> mod_ids() {
+        std::size_t n = 0;
+        detail::check(ponko_ctx_mod_count(raw_, &n));
+        std::vector<std::string> ids(n);
+        for (std::size_t i = 0; i < n; ++i)
+            ids[i] = detail::read_text([&](char* b, std::size_t c, std::size_t* len) { return ponko_ctx_mod_id(raw_, i, b, c, len); });
+        return ids;
+    }
+    /// The id of the mod asset `name` loads from, or nothing if it is the game's own.
+    std::optional<std::string> mod_provider(const char* name) {
+        std::size_t n = 0;
+        const PonkoStatus status = ponko_ctx_mod_provider(raw_, name, nullptr, 0, &n);
+        if (status == PONKO_NOT_FOUND) return std::nullopt;
+        detail::check(status);
+        return detail::read_text([&](char* b, std::size_t c, std::size_t* len) { return ponko_ctx_mod_provider(raw_, name, b, c, len); });
+    }
+    /// The mods' files whose names start with `prefix`, sorted, each once:
+    /// what mods added under a folder ("enemies/").
+    std::vector<std::string> mod_files_under(const char* prefix) {
+        std::vector<std::string> files;
+        for (std::size_t i = 0;; ++i) {
+            std::size_t n = 0;
+            const PonkoStatus status = ponko_ctx_mod_file_under(raw_, prefix, i, nullptr, 0, &n);
+            if (status == PONKO_NOT_FOUND) return files;
+            detail::check(status);
+            files.push_back(detail::read_text([&](char* b, std::size_t c, std::size_t* len) {
+                return ponko_ctx_mod_file_under(raw_, prefix, i, b, c, len);
+            }));
+        }
+    }
+    /// A hash of the mounted mods, their order and data (0 without mods):
+    /// lockstep peers and replays compare it.
+    std::uint64_t mods_fingerprint() { std::uint64_t f = 0; detail::check(ponko_ctx_mods_fingerprint(raw_, &f)); return f; }
     /// Adds a source whose reads are `read(name)` (Rust's `AssetSource`):
     /// the bytes, or nothing if this source doesn't have `name` (the next
     /// source is asked). An exception from `read` is a read error. It runs

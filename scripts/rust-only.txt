@@ -16,6 +16,9 @@
 
 Assets::scene_asset_field        asset-sources.md  # C components have no text fields to name an asset in; load it before load_scene
 PackSource                       asset-sources.md  # C and C++ games read the default assets.pack; a pack of their own goes through ponko_ctx_add_asset_source
+ModPack::from_files              mods.md           # C and C++ mount mod packs by path (ponko_ctx_mount_mods); ponko pack makes one from loose files
+ModPack::from_pack_bytes         mods.md           # same
+ModSet::problems                 mods.md           # ponko_ctx_mount_mods reports the first problem and mounts nothing
 Query::with_lookup               ecs.md            # generic borrows; component pointers from get don't borrow
 World::get_many_mut              ecs.md            # same
 World::query_ref                 ecs.md            # C and C++ queries read through component pointers and need no exclusive borrow

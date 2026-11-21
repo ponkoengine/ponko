@@ -999,6 +999,56 @@ fn find(world: &World, name: &str) -> Result<Reflected, ReflectError> {
         .ok_or_else(|| ReflectError::UnknownComponent(name.to_string()))
 }
 
+/// Whether `value` makes a whole component `name`, read without touching the
+/// world: the check [`WorldReflect::load`] runs first (mods check their
+/// files with it before anything is mounted).
+pub(crate) fn check_component(world: &World, name: &str, value: &Value) -> Result<(), ReflectError> {
+    (find(world, name)?.check)(value).map_err(bad_value(name))
+}
+
+/// Whether component `name` is reflected in `world`.
+pub(crate) fn is_reflected(world: &World, name: &str) -> Result<(), ReflectError> {
+    find(world, name).map(drop)
+}
+
+/// Checks a world save (a scene) like [`WorldReflect::load`] does before it
+/// changes anything, without loading it: its format, and each entity's
+/// components and each resource after the game's migrations.
+pub(crate) fn check_world_save(world: &World, save: &Value) -> Result<(), ReflectError> {
+    let bad = |message: String| ReflectError::BadValue {
+        component: "<world>".into(),
+        message,
+    };
+    if save["version"].as_u64() != Some(SAVE_VERSION) {
+        return Err(bad(format!(
+            "unsupported save version {} (this engine reads {SAVE_VERSION})",
+            save["version"]
+        )));
+    }
+    let save = migrate::migrate(world, save)?;
+    let list = save["entities"]
+        .as_array()
+        .ok_or_else(|| bad("missing \"entities\" list".into()))?;
+    for item in list {
+        if let Some(Value::Object(components)) = item.get("components") {
+            for (name, value) in components {
+                check_component(world, name, value)?;
+            }
+        }
+    }
+    if let Some(Value::Object(resources)) = save.get("resources") {
+        for (name, value) in resources {
+            (find_resource(world, name)?.check)(value).map_err(bad_value(name))?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether `value` is a world save (`"format": "ponko-world"`).
+pub(crate) fn is_world_save(value: &Value) -> bool {
+    value["format"] == SAVE_FORMAT
+}
+
 fn bad_value(component: &str) -> impl FnOnce(String) -> ReflectError + '_ {
     move |message| ReflectError::BadValue {
         component: component.to_string(),

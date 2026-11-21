@@ -6190,6 +6190,31 @@ enum PonkoStatus ponko_net_messages_steam_peer(struct PonkoNetMessages *endpoint
                                                uint64_t peer,
                                                uint64_t *output);
 
+enum PonkoStatus ponko_ctx_mount_mods(struct PonkoCtx *ctx, const char *const *paths, size_t count);
+
+enum PonkoStatus ponko_ctx_mod_count(struct PonkoCtx *ctx, size_t *out_count);
+
+enum PonkoStatus ponko_ctx_mod_id(struct PonkoCtx *ctx,
+                                  size_t index,
+                                  char *buffer,
+                                  size_t capacity,
+                                  size_t *out_len);
+
+enum PonkoStatus ponko_ctx_mod_provider(struct PonkoCtx *ctx,
+                                        const char *name,
+                                        char *buffer,
+                                        size_t capacity,
+                                        size_t *out_len);
+
+enum PonkoStatus ponko_ctx_mod_file_under(struct PonkoCtx *ctx,
+                                          const char *prefix,
+                                          size_t index,
+                                          char *buffer,
+                                          size_t capacity,
+                                          size_t *out_len);
+
+enum PonkoStatus ponko_ctx_mods_fingerprint(struct PonkoCtx *ctx, uint64_t *out_fingerprint);
+
 enum PonkoStatus ponko_mesh_data_add_morph_target(struct PonkoMeshData *data,
                                                   const char *name,
                                                   const struct PonkoVec3 *positions,

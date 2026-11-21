@@ -216,6 +216,7 @@ pub mod input;
 pub mod inventory;
 pub mod locale;
 pub mod math;
+pub mod mods;
 
 #[cfg(feature = "inspector")]
 mod inspector;
