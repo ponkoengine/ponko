@@ -3845,7 +3845,7 @@ static void voice_setup(PonkoCtx* ctx, void* user) {
     }
 }
 
-typedef struct { Cars cars; uint64_t lake; bool ripples; uint32_t most_waiting; } Splash;
+typedef struct { Cars cars; uint64_t lake; bool ripples; uint64_t started; } Splash;
 static void splash_setup(PonkoCtx* ctx, void* user) {
     Splash* s = user;
     PonkoWorld* w = ponko_ctx_world(ctx);
@@ -3865,14 +3865,16 @@ static void splash_setup(PonkoCtx* ctx, void* user) {
     CHECK(ponko_buoyancy_desc_box(&d, (PonkoVec3){0.8f, 0.8f, 0.8f}) == PONKO_OK);
     d.ripples = s->ripples;
     CHECK(ponko_ctx_set_buoyancy(ctx, e, &d) == PONKO_OK);
+    uint32_t waiting = UINT32_MAX;
+    CHECK(ponko_ctx_water_waiting_contacts(ctx, s->lake, &waiting) == PONKO_OK && waiting == 0);
 }
 static void splash_watch(PonkoCtx* ctx, void* user) {
     Splash* s = user;
-    uint32_t n = UINT32_MAX;
-    CHECK(ponko_ctx_water_waiting_contacts(ctx, s->lake, &n) == PONKO_OK);
-    if (n > s->most_waiting) s->most_waiting = n;
+    uint64_t n = UINT64_MAX;
+    CHECK(ponko_ctx_water_started_contacts(ctx, s->lake, &n) == PONKO_OK);
+    s->started = n;
 }
-static uint32_t splashed(bool ripples) {
+static uint64_t splashed(bool ripples) {
     Splash s = {0};
     s.ripples = ripples;
     PonkoGame* game = ponko_game_new("splash", 1, 1);
@@ -3881,7 +3883,7 @@ static uint32_t splashed(bool ripples) {
     PonkoWorld* w = NULL;
     CHECK(ponko_game_run_headless(game, 100, splash_setup, &s, &w) == PONKO_OK);
     CHECK(ponko_world_free(w) == PONKO_OK);
-    return s.most_waiting;
+    return s.started;
 }
 
 static void panel_area_setup(PonkoCtx* ctx, void* user) {
@@ -3933,6 +3935,8 @@ static void brain_values_ripples_and_ui_area(void) {
     /* A body falling in starts ripples with its switch on, none with it off. */
     CHECK(splashed(true) > 0);
     CHECK(splashed(false) == 0);
+    uint64_t none = 7;
+    CHECK(ponko_ctx_water_started_contacts(NULL, 0, &none) == PONKO_INVALID_ARGUMENT);
 
     game = ponko_game_new("panel area", 1, 1);
     CHECK(ponko_game_run_headless(game, 0, panel_area_setup, NULL, &w) == PONKO_OK);

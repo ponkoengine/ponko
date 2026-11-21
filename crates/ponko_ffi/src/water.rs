@@ -730,6 +730,33 @@ pub unsafe extern "C" fn ponko_ctx_water_waiting_contacts(
     })
 }
 
+/// Writes how many contact ripples have started on water body `entity` since
+/// it was made (Rust `Water::contacts_started`): what `ponko_ctx_water_touch`
+/// and floating bodies crossing the surface started, the dropped ones not
+/// counted. Unlike `ponko_ctx_water_waiting_contacts` it isn't drained by the
+/// water's update, so a test reads it once after the physics step instead of
+/// keeping the most of a waiting count over every tick. `PONKO_NOT_FOUND`
+/// for an entity that isn't a water body.
+///
+/// Ownership: `out_count` is written during the call only.
+/// ```
+/// assert_eq!(unsafe { ponko_ffi::ponko_ctx_water_started_contacts(std::ptr::null_mut(), 0, std::ptr::null_mut()) } as u32, 1);
+/// ```
+/// # Safety
+/// `ctx` null or live; `out_count` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ponko_ctx_water_started_contacts(
+    ctx: *mut PonkoCtx,
+    entity: u64,
+    out_count: *mut u64,
+) -> PonkoStatus {
+    // SAFETY: forwarded caller contract.
+    boundary(|| unsafe {
+        let n = ctx_access(ctx, |c| Ok(water_of(c, entity)?.contacts_started()))?;
+        out(out_count, n)
+    })
+}
+
 /// Makes 3D body `entity` float: a box of `size` (full width, height and
 /// depth) sampling the water at its eight corners' layers. `drag` is how
 /// strongly the water pulls it along (`PONKO_BUOYANCY_DRAG` normally).

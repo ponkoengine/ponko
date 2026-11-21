@@ -226,7 +226,8 @@ decisions.
 
 `threads.mjs` checks a web build with threads (the guide's "Threads on the
 web"): the fixture `examples/web_threads.rs`, built with
-`web/build.sh --threads web_threads` (`--build` builds it first). It serves
+`web/build.sh --threads --features 3d,bench-internals web_threads`
+(`--build` builds it first). It serves
 the build twice and opens each in a new browser context:
 
 - **With** the cross-origin isolation headers
@@ -235,11 +236,18 @@ the build twice and opens each in a new browser context:
   - the engine must start two or more workers;
   - a parallel query, a batch of four view systems (threshold zero), two
     jobs and an asset group (a texture and a `with` file from `assets/`)
-    must each run on two or more of them, and never on the page's thread.
+    must each run on two or more of them, and never on the page's thread;
+  - at least two of the engine's own parallel passes must go through the
+    frame pool's runner (`passes_shared`), among them the retained 3D
+    culling of 20,000 models (`three/shared_cull`, which must also find
+    models to draw) and a JSON save of the game's world
+    (`reflect/shared_save`).
 - **Without** the headers: everything runs on the page's thread, and the
   console says why (`it runs on the page's thread alone`).
 
-Both runs must reach the same checksum at tick 120 and read the same file.
+Both runs must reach the same checksum at tick 120 (the 3D frame's counts
+and the JSON save's length and hash are in it, and compared on their own
+too) and read the same file.
 Two more modes:
 - `--case worker-panic` panics inside the parallel query on a worker. The
   console must say `the game stops`, the page must still answer, and the

@@ -1684,3 +1684,99 @@ fn a_level_fade_is_finite_and_within_its_band() {
         );
     }
 }
+
+/// A mirror floor under a red glowing box, the floor drawn by a crowd (a
+/// skinned cube stretched flat) or, with `as_crowd` false, by a model; screen
+/// space reflections at `ssr`. On the rig's default limits: compute shaders
+/// and 16 sampled textures a stage, the baseline tier's, which leaves no
+/// slot for the reflections' spread image (the crowd's shader is composed
+/// without that binding). Returns the image and the pixel where the floor
+/// mirrors the box, or `None` (logged) where screen-space reflections don't
+/// run.
+fn mirror_floor(as_crowd: bool, ssr: f32) -> Option<(Image, (u32, u32))> {
+    let mut rig = BatchRig::new(RigSetup::default())?;
+    if !support::needs(&rig.gpu.device, crate::render::GpuFeature::ScreenSpaceReflections) {
+        return None;
+    }
+    assert!(
+        !super::capabilities::GpuLimits::of(&rig.gpu.device).reflection_spread(),
+        "the weakest tier with reflections has no slot for the spread image"
+    );
+    let mirror = MaterialDesc {
+        color: Color::WHITE,
+        roughness: 0.0,
+        metallic: 1.0,
+        ..Default::default()
+    };
+    let floor = box_at(vec3(-10.0, -1.0, -10.0), vec3(10.0, 0.0, 10.0));
+    if as_crowd {
+        let (skeleton, cube) = skinned_cube();
+        let mesh = skinned_mesh(&mut rig, &cube, mirror, &skeleton);
+        let idle = AnimationClip::new("idle", &skeleton, vec![]);
+        let animation = CrowdAnimation::bake(&skeleton, &[idle.into()], 30.0);
+        let level = CrowdLevel::new(mesh, 0.0, f32::INFINITY);
+        let people = [CrowdInstance::new(floor)];
+        crowd(&mut rig, &animation, &[level], &people, CrowdOptions::default());
+    } else {
+        let mesh = rig.mesh(&MeshData::cube(1.0), mirror);
+        let (scale, _, position) = floor.to_scale_rotation_translation();
+        rig.ctx.world.spawn((
+            Transform3D {
+                position,
+                scale,
+                ..Default::default()
+            },
+            Model::new(mesh),
+        ));
+    }
+    let red = rig.mesh(&MeshData::cube(1.0), glow(Color::rgb(4.0, 0.0, 0.0)));
+    rig.ctx.world.spawn((
+        Transform3D {
+            position: vec3(0.0, 1.0, 0.0),
+            ..Default::default()
+        },
+        Model::new(red),
+    ));
+    rig.ctx.scene3d.lighting.sun_intensity = 0.0;
+    // A black sky: what the floor shows is what it reflects.
+    rig.ctx.scene3d.sky.sky_color = Color::BLACK;
+    rig.ctx.scene3d.sky.ground_color = Color::BLACK;
+    rig.ctx.scene3d.post.bloom = 0.0;
+    rig.ctx.scene3d.post.ssr = ssr;
+    rig.ctx.scene3d.camera.position = vec3(0.0, 2.0, 6.0);
+    rig.ctx.scene3d.camera.look_at(vec3(0.0, 0.5, 0.0));
+    // The box's center mirrored is (0, -1, 0): seen through the floor at (0, 0, 2).
+    let at = pixel(&rig, vec3(0.0, 0.0, 2.0));
+    // The first frames have no image of the last one to reflect.
+    for _ in 0..3 {
+        rig.frame();
+    }
+    Some((rig.image(), at))
+}
+
+#[test]
+fn a_crowd_mirror_reflects_like_a_model_on_the_weakest_tier_with_reflections() {
+    let Some((model, at)) = mirror_floor(false, 1.0) else {
+        return;
+    };
+    let Some((crowd, _)) = mirror_floor(true, 1.0) else {
+        return;
+    };
+    let red = |i: &Image| i.pixel(at.0, at.1);
+    let (m, c) = (red(&model), red(&crowd));
+    eprintln!("the box mirrored at {at:?}: model floor {m:?}, crowd floor {c:?}");
+    assert!(m[0] > 120 && m[1] < 60, "the model floor mirrors the box: {m:?}");
+    assert!(c[0] > 120 && c[1] < 60, "the crowd floor mirrors the box: {c:?}");
+    let d = support::diff_within(&crowd, &model, SAME_POSE);
+    support::keep_image(&crowd);
+    assert!(d.within(SAME_POSE), "a crowd floor reflects as a model floor does: {d}");
+    // Negative control: without the reflections the crowd floor shows no red.
+    let Some((plain, _)) = mirror_floor(true, 0.0) else {
+        return;
+    };
+    let p = red(&plain);
+    assert!(
+        p[0] < 40 && p[0] + 80 < c[0],
+        "no reflections, no red on the crowd floor: {p:?}"
+    );
+}
