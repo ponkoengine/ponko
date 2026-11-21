@@ -10,12 +10,19 @@ Web Workers that share the game's memory, as it does on threads natively:
 - the engine's own parallel passes: [spatial grid](spatial.md) rebuilds
   (from 200,000 entries), [flow field](pathfinding.md) directions, 2D
   skeleton drawing and its copy into the frame's draw list (from 64
-  skeletons), and 3D character moves (from 16 characters).
+  skeletons), 3D character moves (from 16 characters), the 3D renderer's
+  culling (each model compared with its last frame and culled again for
+  the camera and the shadow views) and the entities' JSON of a world save
+  (`World::save`, and so `save_world` and `save_world_in_background`).
 
 They all go through one runner: a pass started on the page's thread is
 handed to the frame's workers and the page's thread spins until it is done,
-as for a parallel query. Each pass gives the same result on any number of
-threads (the native tests run each on one thread and on all of them).
+as for a parallel query. A pass that cuts its work into pieces cuts it for
+the frame pool's threads, not for the page's own (one): the 3D culling, for
+one, takes its single-pass path only when the game really has one thread.
+Each pass gives the same result on any number of threads (the native tests
+run each on one thread and on all of them; a JSON save's text is the same
+byte for byte).
 
 [Jobs](streaming.md) run on workers of their own. The asset reads and
 decodes of [asset groups](loading.md) and streaming are jobs, so they run
@@ -158,13 +165,13 @@ ponko: this build can use threads, but the page isn't cross-origin isolated (...
 - **Jobs** have half as many workers of their own (at least one), so busy
   jobs never hold up a frame, as natively. [Asset groups](loading.md) and
   streamed textures and meshes read and decode on them. Saves in the
-  background (`save_world_in_background`) stay on the page's thread,
-  because the browser's storage belongs to it.
+  background (`save_world_in_background`) build the world's JSON on the
+  frame's workers, as `World::save` does, then encode and write it on the
+  page's thread, because the browser's storage belongs to it.
 - **Everything else** stays on the page's thread: your systems, drawing
   (the GPU's command recording too: WebGPU objects can't be sent to a
   worker), sound, input, and the engine's other internal parallel loops
-  (saving a world as JSON, baking, video frames), which there run one
-  piece after another.
+  (baking, video frames), which there run one piece after another.
 - **Controllers** work as in the ordinary web build (`ctx.input.gamepads()`
   and the rest of [Input](input.md)), read the same way: the browser's
   gamepad objects can't be sent between threads once the memory is shared,
@@ -260,12 +267,15 @@ fixture with threads and opens it in headless Chromium twice. Served with
 the headers, the parallel query, the batch systems, the jobs and the asset
 group must run on two or more workers, and never on the page's thread; the
 hierarchy must share a level out, and at least two of the engine's own
-passes (the fixture rebuilds a spatial grid of 200,000 entries and computes
-a flow field) must go through the frame pool's runner (`passes_shared`,
-from the scope each opens there).
+passes (the fixture rebuilds a spatial grid of 200,000 entries, computes
+a flow field, collects the 3D frame of 20,000 models and saves its world as
+JSON) must go through the frame pool's runner (`passes_shared`, from the
+scope each opens there), the 3D culling and the save among them. The
+runner builds the fixture with the `3d` and `bench-internals` features,
+for the 3D collection without a GPU.
 Served without them, everything must run on the page's thread, and the
-console must say why. Both runs must end with the same world, and must
-read the same file. With `--case gamepads` it feeds the isolated page fake
+console must say why. Both runs must end with the same world (the same 3D
+frame and the same JSON save too), and must read the same file. With `--case gamepads` it feeds the isolated page fake
 browser gamepads and checks that the engine sees each one connect, press,
 move and leave.
 
