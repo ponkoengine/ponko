@@ -2145,19 +2145,12 @@ mod tests {
 
         #[test]
         fn opening_a_scene_whose_gltf_scene_fails_to_load_names_the_file_in_the_error_line() {
-            let gltf = |name: &str| {
-                let name = format!("ponko-test-app-{name}-{}.gltf", std::process::id());
-                TempAsset {
-                    file: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("assets")
-                        .join(&name),
-                    name,
-                }
-            };
-            let cube = crate::three::cube_gltf(&serde_json::json!([{ "name": "Box", "mesh": 0 }]));
-            let (good, broken) = (gltf("unloaded-good"), gltf("unloaded-broken"));
-            std::fs::write(&good.file, &cube).unwrap();
-            std::fs::write(&broken.file, &cube).unwrap();
+            let nodes = serde_json::json!([{ "name": "Box", "mesh": 0 }]);
+            let cube = crate::three::cube_gltf(&nodes);
+            let (good, broken) = (
+                gltf_asset("unloaded-good", &nodes),
+                gltf_asset("unloaded-broken", &nodes),
+            );
             let scene = TempAsset::new("unloaded-scene");
             let (egui, mut p, mut ctx, e) = editor3d();
             ctx.set_headless(true);
@@ -2657,7 +2650,13 @@ mod tests {
             // Opened again with the post's file broken.
             std::fs::write(&posts.file, "not a glTF file").unwrap();
             p.open_file(&mut ctx, &scene.name);
-            assert!(p.error.is_none(), "the scene opens without it: {:?}", p.error);
+            assert_eq!(
+                ctx.editor.doc.path.as_deref(),
+                Some(scene.name.as_str()),
+                "opens without it"
+            );
+            let error = p.error.clone().unwrap_or_default();
+            assert!(error.contains(&posts.name), "the error line names it: {error}");
             frame(&egui, &mut p, &mut ctx, vec![]);
             let (lamp, wall) = (node_in(&mut ctx, &yard, "Wall/Lamp"), node_in(&mut ctx, &yard, "Wall"));
             assert_eq!(parent_of(&ctx, lamp), Some(wall), "it waits on the file's parent");
