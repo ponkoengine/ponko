@@ -404,6 +404,34 @@ fn saves_with_heavy_despawn_churn_load_back() {
 }
 
 #[test]
+fn a_save_on_all_cores_is_byte_identical_to_a_one_thread_save() {
+    // Big enough that the entities' JSON is shared out between threads,
+    // with gaps, several archetypes and entities that save nothing.
+    let mut w = world();
+    w.reflect::<Follows>();
+    let mut last = None;
+    for i in 0..20_000u32 {
+        let e = match i % 4 {
+            0 => w.spawn((Transform2D::at(vec2(i as f32 * 0.37, -(i as f32))),)),
+            1 => w.spawn((Team((i % 7) as u8), Health { current: i as f32, max: 1e6 })),
+            2 => w.spawn((Secret,)),
+            _ => w.spawn((Team(1), Follows(last.unwrap_or(Entity::from_bits(1))))),
+        };
+        if i % 9 == 0 {
+            w.despawn(e);
+        } else {
+            last = Some(e);
+        }
+    }
+    let text = || serde_json::to_string(&w.save()).unwrap();
+    let one = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+    let alone = one.install(text);
+    let shared = text();
+    assert!(alone.len() > 500_000, "a big save: {} bytes", alone.len());
+    assert!(alone == shared, "the save differs between one thread and all cores");
+}
+
+#[test]
 fn a_world_always_loads_its_own_save_back() {
     // A world that once used more slots than a fresh one would accept for
     // this save: its own slot table vouches for the ids.
