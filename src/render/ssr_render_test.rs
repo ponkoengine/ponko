@@ -1006,23 +1006,45 @@ impl Busy {
 /// time (the sum of its passes' spans) with reflections off and on, in
 /// alternating blocks of 20 frames, and the reflection passes' spans. The
 /// last setup again with the default 16 texture slots, where a full-size
-/// pass copies the reflections' spread for the opaque pass.
+/// pass copies the reflections' spread for the opaque pass. High and High
+/// without ambient occlusion again with thin objects on
+/// (`Post::ssr_thin_objects`, which Ultra turns on). `PONKO_REFLECTION_COST`
+/// keeps only the setups whose name contains it.
 #[test]
 #[ignore]
 fn reflection_gpu_cost_at_1080p() {
     use crate::render::GraphicsQuality;
-    for (name, quality, ao, game) in [
-        ("High", GraphicsQuality::High, true, true),
-        ("Ultra", GraphicsQuality::Ultra, true, true),
-        ("High without ambient occlusion", GraphicsQuality::High, false, true),
+    let only = std::env::var("PONKO_REFLECTION_COST").unwrap_or_default();
+    for (name, quality, ao, game, thin) in [
+        ("High", GraphicsQuality::High, true, true, false),
+        ("High, thin objects", GraphicsQuality::High, true, true, true),
+        ("Ultra", GraphicsQuality::Ultra, true, true, true),
+        (
+            "High without ambient occlusion",
+            GraphicsQuality::High,
+            false,
+            true,
+            false,
+        ),
+        (
+            "High without ambient occlusion, thin objects",
+            GraphicsQuality::High,
+            false,
+            true,
+            true,
+        ),
         (
             "High without ambient occlusion, 16 texture slots",
             GraphicsQuality::High,
             false,
             false,
+            false,
         ),
     ] {
-        if !reflection_gpu_cost(name, quality, ao, game) {
+        if !name.contains(only.as_str()) {
+            continue;
+        }
+        if !reflection_gpu_cost(name, quality, ao, game, thin) {
             return;
         }
     }
@@ -1030,7 +1052,7 @@ fn reflection_gpu_cost_at_1080p() {
 
 /// One setup of `reflection_gpu_cost_at_1080p`; false without a GPU or
 /// timestamps.
-fn reflection_gpu_cost(name: &str, quality: crate::render::GraphicsQuality, ao: bool, game: bool) -> bool {
+fn reflection_gpu_cost(name: &str, quality: crate::render::GraphicsQuality, ao: bool, game: bool, thin: bool) -> bool {
     let Some(mut rig) = Rig::with_limits(1920, 1080, game) else {
         return false;
     };
@@ -1082,6 +1104,7 @@ fn reflection_gpu_cost(name: &str, quality: crate::render::GraphicsQuality, ao: 
         post.ambient_occlusion.enabled = false;
         post.contact_shadows = 0.0;
     }
+    post.ssr_thin_objects = thin;
     assert!(post.ssr > 0.0, "the preset has reflections");
     let strength = post.ssr;
     // [off, on]
@@ -1911,7 +1934,12 @@ fn near_thin_things_are_reflected_whole_without_taa_with_thin_objects() {
          the nearest rail and its whole reflection, 4x multisampling, no tonemapping.",
         &stage.info,
     );
-    reference_rejects("regression_ssr_far_rails_thin", &off, EFFECT_REFERENCE, "reflections off");
+    reference_rejects(
+        "regression_ssr_far_rails_thin",
+        &off,
+        EFFECT_REFERENCE,
+        "reflections off",
+    );
     stage.finish();
 }
 
@@ -1970,8 +1998,8 @@ fn thin_bars_are_reflected_whole_at_full_hd_with_thin_objects() {
 
 /// Thin objects switch on and off while the game runs: on, the nearest
 /// rail's reflection gets back the light the long steps jumped over; off
-/// again, it is what it was before (the trace without the setting, whose
-/// own reference `regression_ssr_far_rails` stays as it was).
+/// again, the frame is the one the trace without the setting drew before,
+/// pixel for pixel (64 frames later, when the steps' jitter repeats).
 #[test]
 fn thin_objects_switch_on_and_off_while_the_game_runs() {
     let Some(mut stage) = Stage::with(super::regression_stage::Setup {
@@ -1985,19 +2013,30 @@ fn thin_objects_switch_on_and_off_while_the_game_runs() {
     }
     let nearest = rails_over_a_mirror(&mut stage)[0].1;
     stage.ctx.scene3d.post.ssr = 1.0;
-    let energy = |stage: &mut Stage, thin: bool| {
-        stage.ctx.scene3d.post.ssr_thin_objects = thin;
-        let image = stage.settled(4);
-        band(stage, &image, None, nearest, 30).0
-    };
-    let before = energy(&mut stage, false);
-    let with = energy(&mut stage, true);
-    let after = energy(&mut stage, false);
+    let before = stage.settled(4);
+    stage.ctx.scene3d.post.ssr_thin_objects = true;
+    let on = stage.settled(4);
+    stage.ctx.scene3d.post.ssr_thin_objects = false;
+    // The jitter's period is 64 frames.
+    let again = stage.settled(60);
+    let energy = |image: &Image| band(&stage, image, None, nearest, 30).0;
+    let (off, with) = (energy(&before), energy(&on));
     stage.finish();
-    eprintln!("nearest rail's reflection, energy: off {before:.1}, thin objects {with:.1}, off again {after:.1}");
-    assert!(with > before * 1.3, "on, the reflection is fuller: {with:.1} from {before:.1}");
+    let differing = before
+        .rgba
+        .chunks(4)
+        .zip(again.rgba.chunks(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    eprintln!(
+        "nearest rail's reflection, energy: off {off:.1}, thin objects {with:.1}; {differing} pixels differ off again"
+    );
     assert!(
-        (after - before).abs() < before * 0.1,
-        "off again, it is as it was: {after:.1} to {before:.1}"
+        with > off * 1.3,
+        "on, the reflection is fuller: {with:.1} from {off:.1}"
+    );
+    assert_eq!(
+        differing, 0,
+        "off again, the frame is the one drawn before the setting was on"
     );
 }

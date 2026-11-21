@@ -228,9 +228,8 @@ impl Renderer3D {
             Features::SSR.only_if(self.screen.ssr.is_some() && targets.ssr.is_some()),
             Features::SSR_SPREAD
                 .only_if(self.screen.ssr.is_some() && targets.ssr.is_some() && self.no_spread.is_some()),
-            Features::SSR_THIN.only_if(
-                self.screen.ssr.is_some() && targets.ssr.as_ref().is_some_and(|s| s.coarse_depth().is_some()),
-            ),
+            Features::SSR_THIN
+                .only_if(self.screen.ssr.is_some() && targets.ssr.as_ref().is_some_and(|s| s.coarse_depth().is_some())),
             Features::SPLIT.only_if(has(|p| matches!(p, Part::Transparent))),
             Features::VIEW_MODEL_SEE_THROUGH.only_if(self.view_model_see_through_pass()),
             Features::DEPTH_COPY.only_if(targets.depth_copy.is_some()),

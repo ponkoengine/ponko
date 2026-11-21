@@ -814,10 +814,15 @@ impl Ssr {
                     resource: wgpu::BindingResource::Sampler(&passes.nearest_sampler),
                 },
             ];
-            entries.extend(coarse_levels.iter().zip(14..).map(|(view, binding)| wgpu::BindGroupEntry {
-                binding,
-                resource: wgpu::BindingResource::TextureView(view),
-            }));
+            entries.extend(
+                coarse_levels
+                    .iter()
+                    .zip(14..)
+                    .map(|(view, binding)| wgpu::BindGroupEntry {
+                        binding,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    }),
+            );
             let coarse_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("screen reflection coarse depth"),
                 layout: &passes.coarse_layout,
