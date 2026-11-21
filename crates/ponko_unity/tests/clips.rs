@@ -757,6 +757,8 @@ fn packed_vectors_without_bits_cant_claim_huge_counts() {
     let text = "--- !u!74 &1\nAnimationClip:\n  m_Name: C\n  m_SampleRate: 30\n  m_CompressedRotationCurves:\n  - m_Path: A\n    m_Times: {m_NumItems: 1000000000000, m_BitSize: 0, m_Data: []}\n    m_Values: {m_NumItems: 0, m_Data: []}\n    m_Slopes: {m_NumItems: 1000000000000, m_BitSize: 0, m_Range: 0, m_Start: 0, m_Data: []}\n";
     let started = std::time::Instant::now();
     let err = AnimationClip::parse(text).unwrap_err();
+    // Walking the claimed 10^12 items would take hours; refusing them is
+    // microseconds, which no busy machine stretches to 5 s.
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
     assert!(err.message().contains("differ in count"), "{err}");
 }

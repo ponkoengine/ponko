@@ -28,7 +28,8 @@ use crate::reflect::WorldReflect;
 
 /// Environment variable that starts the game in edit mode: `1` edits the
 /// world the game's setup made; anything else is a scene or prefab file in
-/// `assets/` to open.
+/// `assets/` to open. Web builds read the page's `?editor` instead.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const ENV_EDITOR: &str = "PONKO_EDITOR";
 
 /// Whether the game was asked to start in edit mode: `None` if not;
@@ -85,6 +86,9 @@ pub(crate) struct App {
     start: Option<Option<String>>,
     pub dialog: Option<Dialog>,
     pub(super) file_picker: Option<FilePicker>,
+    /// Whether Open and Save as use the system's file dialog; else they
+    /// ask for the path in a field (web builds, and tests of them).
+    pub(super) system_picker: bool,
     /// The window title set last, so it's only set when it changes.
     title: String,
     /// The game's own window title, read on the first frame (the window's
@@ -124,6 +128,7 @@ impl App {
         Self {
             start: Some(start),
             prefs: super::prefs::Prefs::load(settings, project),
+            system_picker: file_picker::ENABLED,
             ..Self::default()
         }
     }
@@ -365,8 +370,14 @@ impl Panels {
         }));
     }
 
+    /// Whether Open and Save as use the system's file dialog (see
+    /// `App::system_picker`).
+    fn system_picker(&self) -> bool {
+        self.app.as_ref().is_some_and(|app| app.system_picker)
+    }
+
     fn ask_open(&mut self, ctx: &Ctx) {
-        if !file_picker::ENABLED {
+        if !self.system_picker() {
             let path = ctx.editor.doc.path.clone().unwrap_or_default();
             self.set_dialog(Some(Dialog::Open { path }));
         } else if ctx.editor.dirty() {
@@ -630,6 +641,7 @@ impl Panels {
         let enter = ui.input(|i| i.key_pressed(Key::Enter));
         let escape = ui.input(|i| i.key_pressed(Key::Escape));
         let dirty = ctx.editor.dirty();
+        let system_picker = self.system_picker();
         let title = match &dialog {
             Dialog::PickOpen | Dialog::Open { .. } => "Open",
             Dialog::SaveAs { .. } => "Save as",
@@ -686,7 +698,7 @@ impl Panels {
                     });
                 }
                 Dialog::SaveAs { path, kind, then_quit } => {
-                    if !file_picker::ENABLED {
+                    if !system_picker {
                         ui.label("File in assets/:");
                         path_field(ui, path);
                     }
@@ -696,11 +708,11 @@ impl Panels {
                         ui.radio_value(kind, DocKind::Prefab, "Prefab")
                             .on_hover_text("The world's one root entity and what hangs off it");
                     });
-                    if !file_picker::ENABLED && exists(path) && ctx.editor.doc.path.as_deref() != Some(path.as_str()) {
+                    if !system_picker && exists(path) && ctx.editor.doc.path.as_deref() != Some(path.as_str()) {
                         ui.colored_label(Color32::from_rgb(255, 190, 60), "That file exists: saving replaces it.");
                     }
                     ui.horizontal(|ui| {
-                        if file_picker::ENABLED {
+                        if system_picker {
                             if !escape && (ui.button("Choose file…").clicked() || enter) {
                                 self.pick_file(FilePicker::SaveAs {
                                     kind: *kind,
@@ -915,7 +927,7 @@ mod tests {
             events,
             ..Default::default()
         };
-        let mut out = egui.run_ui(input, |ui| p.show(ui, ctx));
+        let mut out = p.run(egui, input, ctx);
         out.textures_delta.clear();
         out.shapes
     }
@@ -989,6 +1001,52 @@ mod tests {
             path.map(std::path::Path::to_path_buf)
         });
         assert!(called, "the editor queued a file picker");
+    }
+
+    /// The web build's answer to Open or Save as: types `path` into the
+    /// dialog's path field and presses Enter, or cancels with Esc (`None`),
+    /// as [`answer_picker`] answers for the system dialog.
+    fn answer_path_field(egui: &egui::Context, p: &mut Panels, ctx: &mut Ctx, path: Option<&str>) {
+        assert!(
+            matches!(p.dialog(), Some(Dialog::Open { .. } | Dialog::SaveAs { .. })),
+            "{:?}",
+            p.dialog()
+        );
+        match path {
+            Some(path) => {
+                frame(egui, p, ctx, vec![]); // the field takes the keyboard
+                let typed = vec![command(Key::A), egui::Event::Text(path.into())];
+                frame(egui, p, ctx, typed);
+                frame(egui, p, ctx, vec![plain(Key::Enter)]);
+            }
+            None => frame(egui, p, ctx, vec![plain(Key::Escape)]),
+        }
+        let asked = p.run_file_picker(ctx, |_, _, _| panic!("the path field, not a system dialog"));
+        assert!(!asked);
+    }
+
+    /// The editor as the web build has it: no system file dialog.
+    fn web_editor() -> (egui::Context, Panels, Ctx) {
+        let (egui, mut p, ctx) = editor(None);
+        p.app.as_mut().unwrap().system_picker = false;
+        (egui, p, ctx)
+    }
+
+    /// One frame with exactly these events: unlike [`frame`], held
+    /// modifiers change only with a `ModifiersChanged` event, as a window
+    /// reports them.
+    fn raw_frame(egui: &egui::Context, p: &mut Panels, ctx: &mut Ctx, events: Vec<egui::Event>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+            events,
+            ..Default::default()
+        };
+        p.run(egui, input, ctx).textures_delta.clear();
+    }
+
+    /// Whether egui holds any modifier, or Enter, down.
+    fn held(egui: &egui::Context) -> bool {
+        egui.input(|i| i.modifiers.any() || i.key_down(Key::Enter))
     }
 
     /// The window title the editor set last.
@@ -1255,6 +1313,115 @@ mod tests {
     }
 
     #[test]
+    fn the_web_editor_saves_as_and_opens_through_the_path_field() {
+        let file = TempAsset::new("web-path-field");
+        let (egui, mut p, mut ctx) = web_editor();
+        let e = the_entity(&mut ctx);
+        ctx.edit(|ed, ctx| ed.rename(ctx, e, "Typed")).unwrap();
+
+        // Untitled: Ctrl+S asks for the kind and the file in one dialog.
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::S)]);
+        let Some(Dialog::SaveAs { path, .. }) = p.dialog() else {
+            panic!("Save as asks for the path: {:?}", p.dialog());
+        };
+        assert_eq!(path, super::super::DEFAULT_SCENE, "the field suggests the default name");
+        answer_path_field(&egui, &mut p, &mut ctx, Some(&file.name));
+        assert!(p.error.is_none(), "{:?}", p.error);
+        assert!(p.dialog().is_none() && file.file.is_file() && !ctx.editor.dirty());
+        assert_eq!(ctx.editor.doc.path.as_deref(), Some(file.name.as_str()));
+
+        // Open: the field starts at the document's file; Esc keeps it.
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::N)]);
+        assert_eq!(ctx.world.len(), 0);
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
+        assert_eq!(p.dialog(), Some(&Dialog::Open { path: String::new() }));
+        answer_path_field(&egui, &mut p, &mut ctx, None);
+        assert!(p.dialog().is_none() && ctx.editor.doc.path.is_none() && ctx.world.is_empty());
+
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
+        answer_path_field(&egui, &mut p, &mut ctx, Some(&file.name));
+        assert!(p.error.is_none(), "{:?}", p.error);
+        assert_eq!(ctx.editor.doc.path.as_deref(), Some(file.name.as_str()));
+        let e = the_entity(&mut ctx);
+        let name = ctx.world.get::<crate::hierarchy::EntityName>(e).map(|n| n.0.clone());
+        assert_eq!(name.as_deref(), Some("Typed"), "the saved world came back");
+    }
+
+    #[test]
+    fn the_web_editor_reports_a_path_field_error_and_keeps_the_dialog() {
+        let (egui, mut p, mut ctx) = web_editor();
+        frame(&egui, &mut p, &mut ctx, vec![command(Key::O)]);
+        answer_path_field(&egui, &mut p, &mut ctx, Some("no-such-scene.json"));
+        assert!(p.error.is_some(), "a missing file is reported");
+        assert!(ctx.editor.doc.path.is_none());
+    }
+
+    #[test]
+    fn keys_held_when_the_focus_left_are_released_when_it_returns() {
+        let (egui, mut p, mut ctx) = editor(None);
+        // Ctrl (⌘) and Enter go down; their key-up events go to another window.
+        let down = vec![
+            egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
+            key(Key::Enter, egui::Modifiers::COMMAND),
+        ];
+        raw_frame(&egui, &mut p, &mut ctx, down);
+        raw_frame(&egui, &mut p, &mut ctx, vec![]);
+        assert!(held(&egui), "nothing let them go yet");
+
+        // The window loses focus and gets it back. On macOS egui-winit
+        // reports both as focused (it asks the window late), so egui itself
+        // keeps the keys: the panels forget them.
+        p.focus_changed(false);
+        p.focus_changed(true);
+        let reported = vec![egui::Event::WindowFocused(true), egui::Event::WindowFocused(true)];
+        raw_frame(&egui, &mut p, &mut ctx, reported);
+        assert!(!held(&egui));
+
+        // A key pressed once focus is back counts as usual.
+        let again = vec![
+            egui::Event::ModifiersChanged(egui::Modifiers::SHIFT),
+            key(Key::Enter, egui::Modifiers::SHIFT),
+        ];
+        raw_frame(&egui, &mut p, &mut ctx, again);
+        assert!(egui.input(|i| i.modifiers.shift && i.key_down(Key::Enter)));
+    }
+
+    #[test]
+    fn the_system_dialog_leaves_no_modifier_or_enter_held() {
+        let file = TempAsset::new("dialog-keys");
+        let (egui, mut p, mut ctx) = editor(None);
+        // Ctrl+S, then Enter on "Choose file…": neither key-up reaches the
+        // editor while the dialog is up.
+        let save = vec![
+            egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
+            key(Key::S, egui::Modifiers::COMMAND),
+        ];
+        raw_frame(&egui, &mut p, &mut ctx, save);
+        assert!(matches!(p.dialog(), Some(Dialog::SaveAs { .. })));
+        raw_frame(&egui, &mut p, &mut ctx, vec![key(Key::Enter, egui::Modifiers::COMMAND)]);
+        assert!(held(&egui));
+        answer_picker(
+            &mut p,
+            &mut ctx,
+            FilePicker::SaveAs {
+                kind: DocKind::Scene,
+                then_quit: false,
+            },
+            Some(&file.file),
+        );
+        // No focus event at all: the dialog's return is enough.
+        raw_frame(&egui, &mut p, &mut ctx, vec![]);
+        assert!(!held(&egui), "Ctrl and Enter are let go");
+        assert!(file.file.is_file() && p.dialog().is_none());
+
+        // A plain S is not Ctrl+S: the document isn't saved again.
+        let e = the_entity(&mut ctx);
+        ctx.edit(|ed, ctx| ed.rename(ctx, e, "After")).unwrap();
+        raw_frame(&egui, &mut p, &mut ctx, vec![key(Key::S, egui::Modifiers::NONE)]);
+        assert!(ctx.editor.dirty());
+    }
+
+    #[test]
     fn a_snapped_2d_gizmo_drag_in_the_viewport_is_one_undo_step() {
         let (egui, mut p, mut ctx) = editor(None);
         let e = the_entity(&mut ctx);
@@ -1301,8 +1468,9 @@ mod tests {
         let mut other = ctx.world.save();
         other["entities"][0]["components"]["Hp"] = serde_json::json!(6.0);
         std::fs::write(&file.file, serde_json::to_string(&other).unwrap() + "\n\n\n").unwrap();
-        // The check runs every half second: wait it out in frames.
-        let until = web_time::Instant::now() + crate::editor::document_check_every() * 3;
+        // The check runs every half second: wait it out in frames (60 checks'
+        // worth: a hang detector, not a number of checks a busy machine makes).
+        let until = web_time::Instant::now() + crate::editor::document_check_every() * 60;
         while ctx.world.query::<&Hp>().iter().next().map(|h| h.0) != Some(6.0) {
             assert!(web_time::Instant::now() < until, "not reloaded");
             frame(&egui, &mut p, &mut ctx, vec![]);

@@ -832,6 +832,9 @@ impl Renderer3D {
             && frame.particles.strips.runs.is_empty()
             && frame.debug_lines.is_empty()
             && !self.crowds.has_draws()
+            // A target camera clears its render target even with nothing
+            // in sight, instead of leaving its last picture there.
+            && frame.views.is_empty()
         {
             self.too_many = false;
             return false;

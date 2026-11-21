@@ -131,6 +131,8 @@ fn the_server_template_accepts_its_client_and_stops_on_sigterm() {
         }
     });
     let mut seen = Vec::new();
+    // The server is another process: each wait ends at its log line, and its
+    // limit is only a hang detector.
     let mut wait_for = |event: &str, within: Duration| {
         let deadline = Instant::now() + within;
         while Instant::now() < deadline {
@@ -166,9 +168,9 @@ fn the_server_template_accepts_its_client_and_stops_on_sigterm() {
         String::from_utf8_lossy(&client.stderr)
     );
     assert!(out.contains("joined"), "{out}");
-    let joined = wait_for("player_joined", Duration::from_secs(5));
+    let joined = wait_for("player_joined", Duration::from_secs(30));
     assert_eq!(joined["name"], "bot");
-    wait_for("client_left", Duration::from_secs(10));
+    wait_for("client_left", Duration::from_secs(30));
 
     #[cfg(unix)]
     {
@@ -178,9 +180,9 @@ fn the_server_template_accepts_its_client_and_stops_on_sigterm() {
             .status()
             .unwrap();
         assert!(killed.success());
-        let stopping = wait_for("server_stopping", Duration::from_secs(5));
+        let stopping = wait_for("server_stopping", Duration::from_secs(30));
         assert_eq!(stopping["reason"], "terminate");
-        let stopped = wait_for("server_stopped", Duration::from_secs(10));
+        let stopped = wait_for("server_stopped", Duration::from_secs(30));
         assert_eq!(stopped["reason"], "terminate");
         let status = server.0.wait().unwrap();
         assert!(status.success(), "a clean exit after SIGTERM: {status}");

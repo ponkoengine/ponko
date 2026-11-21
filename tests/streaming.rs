@@ -133,20 +133,31 @@ fn deterministic_uploads_change_states_in_the_same_frames_every_run() {
 #[test]
 fn stream_texture_returns_at_once_and_decodes_elsewhere() {
     Game::new("t", 1, 1).run_headless(0, |ctx| {
-        ctx.assets
-            .add_source(MemorySource::new("big").with("big.png", png(2048, 2048, 7)));
-        let start = std::time::Instant::now();
+        ctx.assets.add_source(
+            MemorySource::new("big")
+                .with("big.png", png(2048, 2048, 7))
+                .with("broken.png", "not an image"),
+        );
         assert_eq!(ctx.gfx.stream_texture("big.png"), None);
-        let asked = start.elapsed();
         assert_eq!(
             ctx.gfx.asset_state(ResidencyKind::Texture, "big.png"),
+            AssetState::Loading
+        );
+        // Asking only reads the bytes: a file that can't be decoded is still
+        // loading once asked for (the decode that fails runs elsewhere),
+        // which no timing of the call could show on a busy machine.
+        assert_eq!(ctx.gfx.stream_texture("broken.png"), None);
+        assert_eq!(
+            ctx.gfx.asset_state(ResidencyKind::Texture, "broken.png"),
             AssetState::Loading
         );
         ctx.finish_uploads();
         let big = ctx.gfx.stream_texture("big.png").unwrap();
         assert_eq!(big.width(), 2048);
-        // Coarse: asking only reads the bytes, it never decodes 16 MiB.
-        assert!(asked < std::time::Duration::from_secs(1), "{asked:?}");
+        assert_eq!(
+            ctx.gfx.asset_state(ResidencyKind::Texture, "broken.png"),
+            AssetState::Failed
+        );
     });
 }
 
@@ -419,8 +430,11 @@ fn an_evicted_texture_asked_for_every_frame_streams_back_while_decodes_take_long
     // again must not restart the decode, or it would never finish.
     let log = Rc::new(RefCell::new((None, None, 0u64)));
     let out = log.clone();
+    // Frames run until it is back: a decode takes as long as the workers
+    // get the CPU, so a hang detector rather than a number of frames.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     run_frames(
-        4000,
+        u64::MAX,
         std::time::Duration::from_micros(50),
         |ctx| {
             ctx.assets.add_source(images(4));
@@ -441,11 +455,16 @@ fn an_evicted_texture_asked_for_every_frame_streams_back_while_decodes_take_long
                     AssetState::Evicted
                 ),
                 _ if log.1.is_none() => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "never streamed back by tick {tick}"
+                    );
                     let t = ctx.gfx.stream_texture("t0.png");
                     assert_eq!(t, log.0, "the same handle throughout");
                     if ctx.gfx.asset_state(ResidencyKind::Texture, "t0.png") == AssetState::Resident {
                         log.1 = Some(tick);
                         log.2 = ctx.gfx.upload_stats().decode_waits;
+                        ctx.quit();
                     }
                 }
                 _ => {}

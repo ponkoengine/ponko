@@ -2083,6 +2083,7 @@ pub fn ponko::color::Color::deserialize<__D>(__D) -> core::result::Result<Self, 
 pub mod ponko::crash
 #[non_exhaustive] pub enum ponko::crash::CrashKind
 pub ponko::crash::CrashKind::Error
+pub ponko::crash::CrashKind::Native
 pub ponko::crash::CrashKind::Panic
 impl core::clone::Clone for ponko::crash::CrashKind
 pub fn ponko::crash::CrashKind::clone(&self) -> Self
@@ -2110,6 +2111,7 @@ pub fn ponko::crash::CrashReport::message(&self) -> &str
 pub fn ponko::crash::CrashReport::os(&self) -> &str
 pub fn ponko::crash::CrashReport::path(&self) -> core::option::Option<&std::path::Path>
 pub fn ponko::crash::CrashReport::settings(&self) -> &[(alloc::string::String, alloc::string::String)]
+pub fn ponko::crash::CrashReport::signal(&self) -> core::option::Option<&str>
 pub fn ponko::crash::CrashReport::text(&self) -> alloc::string::String
 pub fn ponko::crash::CrashReport::thread(&self) -> core::option::Option<&str>
 pub fn ponko::crash::CrashReport::time(&self) -> &str

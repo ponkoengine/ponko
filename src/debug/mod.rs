@@ -37,7 +37,9 @@
 //! with one draw call for the depth-tested lines and one for those on top,
 //! inside the lit 3D frame (so exposure and tone mapping apply, as to an
 //! unlit surface of that color); 2D lines become one run of sprites, which
-//! the sprite pass draws as one batch. Labels are drawn as screen text.
+//! the sprite pass draws as one batch. Labels are drawn as screen text
+//! (in a target camera's render target, as 3D text facing it: see
+//! [`DebugDraw::text`]).
 //!
 //! Turned off ([`set_enabled`](DebugDraw::set_enabled)), every call is one
 //! branch and draws nothing. It is on by default in debug builds and off in
@@ -812,7 +814,11 @@ impl DebugDraw {
     /// Text with its top-left corner at `at` (a 3D point is projected to
     /// the screen; one behind the camera isn't drawn). Labels are drawn over
     /// everything, unless a 3D one is [`depth_tested`](DebugShape::depth_tested),
-    /// 14 pixels high unless [`size`](DebugShape::size) says otherwise.
+    /// 14 pixels high unless [`size`](DebugShape::size) says otherwise. A
+    /// 3D label also shows in the render target of every target camera
+    /// that draws particles and shows the default layer, over everything
+    /// it draws there as on screen, laid out facing that camera (as linear
+    /// light: exposure and tone mapping are the target's reader's).
     ///
     /// ```
     /// # use ponko::prelude::*;
