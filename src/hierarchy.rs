@@ -1068,7 +1068,7 @@ const PROBE: usize = 256;
 /// there: waking other threads costs more than it saves, and on a busy
 /// machine a woken thread may not run for milliseconds. The same budget as
 /// the ECS's parallel loops, which the other passes use.
-const SERIAL_BUDGET_NS: u128 = 50_000;
+pub(crate) const SERIAL_BUDGET_NS: u128 = 50_000;
 
 /// The components placement reads and writes, looked up once per update.
 #[derive(Clone, Copy)]
@@ -1511,7 +1511,7 @@ fn place_level(world: &mut World, s: &mut State, ids: &Ids) -> Option<usize> {
         } else {
             let start = web_time::Instant::now();
             s.placed.extend(first.iter().map(one));
-            if worth_sharing(start.elapsed().as_nanos(), first.len(), s.pairs.len()) {
+            if crate::frame_pool::share(|| worth_sharing(start.elapsed().as_nanos(), first.len(), s.pairs.len())) {
                 use rayon::prelude::*;
                 let placed = &mut s.placed;
                 crate::frame_pool::run(|| {

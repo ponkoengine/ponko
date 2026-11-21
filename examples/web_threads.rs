@@ -292,9 +292,10 @@ fn main() {
     if let Some(threads) = param("threads").and_then(|t| t.parse().ok()) {
         game = game.web_threads(threads);
     }
-    match param("bench") {
-        Some(workload) => bench(game, workload),
-        None => check(game),
+    match (param("bench"), param("sweep")) {
+        (Some(workload), _) => bench(game, workload),
+        (None, Some(kind)) => sweep(game, kind),
+        (None, None) => check(game),
     }
 }
 
@@ -1081,4 +1082,435 @@ fn bench(game: Game, workload: String) {
         _ => spawn_vals::<8>(ctx, entities),
     })
     .run();
+}
+
+/// Each mode's timed runs at one size of a sweep, after one untimed run.
+const SWEEP_REPS: usize = 15;
+
+/// The sizes the threshold sweep times each pass at: attached children,
+/// 2D skeletons and 3D characters.
+const SWEEP_CHILDREN: [usize; 8] = [512, 1_024, 2_048, 4_096, 8_192, 16_384, 32_768, 65_536];
+const SWEEP_SKELETONS: [usize; 9] = [16, 32, 64, 128, 256, 512, 1_024, 2_048, 4_096];
+const SWEEP_CHARACTERS: [usize; 8] = [4, 8, 16, 32, 64, 128, 256, 512];
+
+/// The hierarchy's sides are sizes, not its threshold (a time): far below
+/// and far past any budget a browser needs.
+const SIDE_CHILDREN: [usize; 2] = [512, 65_536];
+
+/// Entities saved as JSON by the allocator sweep, and agents its allocating
+/// parallel query runs over.
+const ALLOC_SAVED: usize = 24_000;
+const ALLOC_AGENTS: usize = 20_000;
+
+/// One pass the threshold sweep times.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SweepPass {
+    Hierarchy,
+    Skeletons,
+    Characters,
+}
+
+impl SweepPass {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Hierarchy => "hierarchy/shared_level",
+            Self::Skeletons => "skeleton2d/shared_draw",
+            Self::Characters => "physics3d/shared_characters",
+        }
+    }
+}
+
+/// One step of a sweep, one per tick.
+#[derive(Clone, Copy, Debug)]
+enum SweepStep {
+    /// Time the pass at this size, on the calling thread and shared out.
+    Time(SweepPass, usize),
+    /// Run the pass at this size as its threshold decides and on the
+    /// calling thread: whether it was shared out, and both results' hashes.
+    Side(SweepPass, usize),
+    /// Despawn the pass's entities.
+    Clear(SweepPass),
+    /// The allocator sweep's passes.
+    Alloc,
+}
+
+/// A sweep's state across ticks.
+#[derive(Default)]
+struct Sweep {
+    steps: Vec<SweepStep>,
+    next: usize,
+    /// Ticks spent waiting for the workers or for physics.
+    waited: u32,
+    root: Option<Entity>,
+    children: Vec<Entity>,
+    skeletons: Vec<Entity>,
+    characters: Vec<Entity>,
+    /// Moves the hierarchy's root to a new place every update.
+    moves: u32,
+    rows: Vec<serde_json::Value>,
+    sides: Vec<serde_json::Value>,
+    alloc: Option<serde_json::Value>,
+}
+
+/// FNV-1a over `bytes`, continuing `hash`.
+fn fnv(hash: u64, bytes: &[u8]) -> u64 {
+    bytes
+        .iter()
+        .fold(hash, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+}
+
+const FNV_START: u64 = 0xcbf2_9ce4_8422_2325;
+
+fn median_ms(mut times: Vec<f64>) -> f64 {
+    times.sort_by(f64::total_cmp);
+    (times[times.len() / 2] * 1000.0).round() / 1000.0
+}
+
+/// **Sweeps** (`?sweep=thresholds`, `?sweep=allocator`; built with
+/// `bench-internals`, and `physics3d` for the characters). `thresholds`
+/// times the hierarchy's update, the 2D skeleton drawing and the 3D
+/// characters' moves at several sizes, each on the page's thread and shared
+/// out to the workers (`ponko::bench_sharing`), then runs each on both
+/// sides of its threshold as the engine decides and on the page's thread,
+/// and publishes `sweep` (`[{"pass","size","serial_ms","shared_ms"}]`),
+/// `sides` (`[{"pass","size","side","shared","hash","serial_hash"}]`) and
+/// `done`. `allocator` times a JSON world save on the page's thread and on
+/// the workers, parsing that JSON, and a parallel query that allocates on
+/// every item, and publishes `alloc` and `done`.
+#[cfg(feature = "bench-internals")]
+fn sweep(game: Game, kind: String) {
+    let mut sweep = Sweep::default();
+    match kind.as_str() {
+        "thresholds" => {
+            let sides = |pass, from: usize| [SweepStep::Side(pass, from.saturating_sub(1).max(1)), SweepStep::Side(pass, from)];
+            sweep.steps.extend(SWEEP_CHILDREN.map(|n| SweepStep::Time(SweepPass::Hierarchy, n)));
+            sweep.steps.extend(SIDE_CHILDREN.map(|n| SweepStep::Side(SweepPass::Hierarchy, n)));
+            sweep.steps.push(SweepStep::Clear(SweepPass::Hierarchy));
+            sweep.steps.extend(SWEEP_SKELETONS.map(|n| SweepStep::Time(SweepPass::Skeletons, n)));
+            sweep.steps.extend(sides(SweepPass::Skeletons, ponko::bench_sharing::skeletons_from()));
+            sweep.steps.push(SweepStep::Clear(SweepPass::Skeletons));
+            #[cfg(feature = "physics3d")]
+            {
+                sweep.steps.extend(SWEEP_CHARACTERS.map(|n| SweepStep::Time(SweepPass::Characters, n)));
+                sweep.steps.extend(sides(SweepPass::Characters, ponko::bench_sharing::characters_from()));
+                sweep.steps.push(SweepStep::Clear(SweepPass::Characters));
+            }
+        }
+        "allocator" => sweep.steps.push(SweepStep::Alloc),
+        other => panic!("web_threads: unknown sweep `{other}` (thresholds or allocator)"),
+    }
+    let mut game = game;
+    #[cfg(feature = "physics3d")]
+    {
+        game = game.physics3d(vec3(0.0, -9.81, 0.0));
+    }
+    let mut smoke = None;
+    let mut ticks = 0u64;
+    let allocator = kind == "allocator";
+    game.sim_system(move |ctx| {
+        ticks += 1;
+        // The workers start a moment after the page; a sweep needs them
+        // (at most 20 s: a page that isn't isolated sweeps without).
+        let ready = engine_threads() >= 2 || sweep.waited > 1_200;
+        if !ready {
+            sweep.waited += 1;
+        } else if let Some(&step) = sweep.steps.get(sweep.next)
+            && sweep_step(ctx, &mut sweep, step)
+        {
+            sweep.next += 1;
+        }
+        let done = sweep.next >= sweep.steps.len();
+        let extra = json!({
+            "threads": engine_threads(),
+            "isolated": isolated(),
+            "done": done,
+            "sweep": sweep.rows,
+            "sides": sweep.sides,
+            "alloc": sweep.alloc,
+            "per_thread_allocator": ponko::bench_sharing::per_thread_allocator(),
+        });
+        if let Some(smoke) = &mut smoke {
+            smoke::Smoke::frame(smoke, ctx, ticks, extra);
+        } else {
+            smoke = Some(smoke::Smoke::new("web_threads"));
+        }
+        ctx.gfx.clear(Color::rgb(0.08, 0.09, 0.11));
+    })
+    .setup(move |ctx| {
+        ctx.world.track_changes::<d2::Transform>();
+        ctx.world.reflect::<d2::Transform>();
+        if allocator {
+            for i in 0..ALLOC_SAVED {
+                let f = i as f32;
+                ctx.world.spawn((d2::Transform::at(vec2((f * 0.37) % 200.0, (f * 0.11) % 120.0)),));
+            }
+            spawn_agents(ctx, ALLOC_AGENTS);
+        }
+        #[cfg(feature = "physics3d")]
+        ctx.world.spawn((
+            ponko::d3::Transform::at(vec3(0.0, -0.5, 0.0)),
+            ponko::d3::RigidBody::fixed(),
+            ponko::d3::Collider::cuboid(vec3(400.0, 1.0, 400.0)),
+        ));
+    })
+    .run();
+}
+
+#[cfg(not(feature = "bench-internals"))]
+fn sweep(_game: Game, _kind: String) {
+    panic!("web_threads: ?sweep needs the bench-internals feature (web/build.sh --threads --features 3d,physics3d,bench-internals web_threads)");
+}
+
+/// Runs one step; `false` if it must wait for the next tick (characters
+/// whose bodies the physics step hasn't made yet).
+#[cfg(feature = "bench-internals")]
+fn sweep_step(ctx: &mut Ctx, s: &mut Sweep, step: SweepStep) -> bool {
+    use ponko::bench_sharing::{Sharing, set_sharing, shared_runs};
+    match step {
+        SweepStep::Time(pass, n) => {
+            if !populate(ctx, s, pass, n) {
+                return false;
+            }
+            let mut times = [Vec::new(), Vec::new()];
+            for rep in 0..=SWEEP_REPS {
+                for (mode, sharing) in [Sharing::Never, Sharing::Always].into_iter().enumerate() {
+                    set_sharing(sharing);
+                    let ms = run_pass(ctx, s, pass);
+                    if rep > 0 {
+                        times[mode].push(ms);
+                    }
+                }
+            }
+            set_sharing(Sharing::Auto);
+            let [serial, shared] = times;
+            s.rows.push(json!({"pass": pass.name(), "size": n, "serial_ms": median_ms(serial), "shared_ms": median_ms(shared)}));
+        }
+        SweepStep::Side(pass, n) => {
+            if !populate(ctx, s, pass, n) {
+                return false;
+            }
+            let mut result = |sharing| {
+                set_sharing(sharing);
+                // The hierarchy places its children from where the root
+                // was moved to: the same two places for both.
+                s.moves = 1_000;
+                if pass == SweepPass::Hierarchy {
+                    run_pass(ctx, s, pass);
+                }
+                let before = shared_runs();
+                run_pass(ctx, s, pass);
+                let shared = shared_runs() > before;
+                (shared, pass_hash(ctx, s, pass))
+            };
+            let (shared, hash) = result(Sharing::Auto);
+            let (_, serial_hash) = result(Sharing::Never);
+            set_sharing(Sharing::Auto);
+            let side = if s.sides.iter().any(|v| v["pass"] == pass.name()) { "above" } else { "below" };
+            s.sides.push(json!({
+                "pass": pass.name(), "size": n, "side": side, "shared": shared,
+                "hash": hash.to_string(), "serial_hash": serial_hash.to_string(),
+            }));
+        }
+        SweepStep::Clear(pass) => {
+            if !populate(ctx, s, pass, 0) {
+                return false;
+            }
+        }
+        SweepStep::Alloc => s.alloc = Some(alloc_sweep(ctx)),
+    }
+    true
+}
+
+/// Spawns or despawns the pass's entities until there are `n`; `false`
+/// while the characters' bodies don't match them yet.
+#[cfg(feature = "bench-internals")]
+fn populate(ctx: &mut Ctx, s: &mut Sweep, pass: SweepPass, n: usize) -> bool {
+    let list = match pass {
+        SweepPass::Hierarchy => &mut s.children,
+        SweepPass::Skeletons => &mut s.skeletons,
+        SweepPass::Characters => &mut s.characters,
+    };
+    while list.len() > n {
+        if let Some(e) = list.pop() {
+            ctx.world.despawn(e);
+        }
+    }
+    let first = list.len();
+    match pass {
+        SweepPass::Hierarchy => {
+            let root = *s
+                .root
+                .get_or_insert_with(|| ctx.world.spawn((d2::Transform::at(vec2(320.0, 180.0)),)));
+            for i in first..n {
+                let f = i as f32;
+                list.push(ctx.world.spawn((
+                    d2::Transform::default(),
+                    Attached::to(root).offset(vec2((f * 0.37) % 200.0, (f * 0.11) % 120.0)),
+                )));
+            }
+        }
+        SweepPass::Skeletons => {
+            use ponko::skeleton2d::{BonePose, Skeleton, SkeletonData, SpritePart};
+            if first < n {
+                let pixel = ctx.gfx.create_texture(1, 1, &[255; 4]);
+                let mut data = SkeletonData::new();
+                let root = data.add_bone("root", None, BonePose::IDENTITY, 0.0);
+                let arm = data.add_bone("arm", Some(root), BonePose::at(vec2(4.0, 0.0)), 8.0);
+                for (i, bone) in [root, arm].into_iter().enumerate() {
+                    let slot = data.add_slot(&format!("slot{i}"), bone);
+                    data.add_attachment(slot, "part", SpritePart::new(pixel).with_size(vec2(4.0, 4.0)));
+                }
+                let data = std::sync::Arc::new(data);
+                for i in first..n {
+                    let f = i as f32;
+                    list.push(ctx.world.spawn((
+                        d2::Transform::at(vec2((f * 13.7) % 640.0, (f * 7.9) % 360.0)),
+                        Skeleton::new(data.clone()),
+                    )));
+                }
+            }
+        }
+        SweepPass::Characters => {
+            #[cfg(feature = "physics3d")]
+            {
+                for i in first..n {
+                    let (x, z) = ((i % 32) as f32 * 4.0 - 64.0, (i / 32) as f32 * 4.0 - 32.0);
+                    let mut c = ponko::d3::Character::new(1.8, 0.3 + (i % 7) as f32 * 0.001);
+                    c.push_mass = 0.0;
+                    list.push(ctx.world.spawn((ponko::d3::Transform::at(vec3(x, 1.0, z)), c)));
+                }
+                // The floor's body and one per character, made (or
+                // removed) by the next physics step.
+                return first == n && ctx.physics3d.body_count() == n + 1;
+            }
+        }
+    }
+    true
+}
+
+/// Runs the pass once as `set_sharing` says; its time in milliseconds.
+#[cfg(feature = "bench-internals")]
+fn run_pass(ctx: &mut Ctx, s: &mut Sweep, pass: SweepPass) -> f64 {
+    match pass {
+        SweepPass::Hierarchy => {
+            s.moves += 1;
+            let k = s.moves;
+            if let Some(root) = s.root
+                && let Some(t) = ctx.world.get_mut::<d2::Transform>(root)
+            {
+                t.position = vec2(320.0 + (k % 64) as f32, 180.0);
+                t.rotation = k as f32 * 0.01;
+            }
+            timed_call(|| ponko::systems::follow_attachments(ctx)).1
+        }
+        SweepPass::Skeletons => {
+            let ms = timed_call(|| ctx.bench_skeleton2d_draw()).1;
+            ctx.bench_skeleton2d_finish();
+            ms
+        }
+        SweepPass::Characters => {
+            #[cfg(feature = "physics3d")]
+            {
+                reset_characters(ctx);
+                return timed_call(|| ctx.bench_characters3d_move(DT)).1;
+            }
+            #[cfg(not(feature = "physics3d"))]
+            0.0
+        }
+    }
+}
+
+/// Every character walks the same way from where it stands, so a move's
+/// result depends only on where they are.
+#[cfg(all(feature = "bench-internals", feature = "physics3d"))]
+fn reset_characters(ctx: &mut Ctx) {
+    ctx.world.query::<&mut ponko::d3::Character>().for_each(|c| {
+        let a = c.radius * 100.0;
+        c.velocity = vec3(3.0 * a.cos(), 0.0, 3.0 * a.sin());
+        c.grounded = false;
+    });
+}
+
+/// A hash of the pass's last result: the children's places, the skeletons'
+/// vertices (the pass drawn again, as `set_sharing` says) or the characters'
+/// moves.
+#[cfg(feature = "bench-internals")]
+fn pass_hash(ctx: &mut Ctx, s: &mut Sweep, pass: SweepPass) -> u64 {
+    match pass {
+        SweepPass::Hierarchy => s.children.iter().fold(FNV_START, |h, &e| {
+            ctx.world.get::<d2::Transform>(e).map_or(h, |t| {
+                let h = fnv(h, &t.position.x.to_bits().to_le_bytes());
+                fnv(h, &t.position.y.to_bits().to_le_bytes())
+            })
+        }),
+        SweepPass::Skeletons => {
+            ctx.bench_skeleton2d_draw();
+            ctx.bench_skeleton2d_hash()
+        }
+        SweepPass::Characters => {
+            #[cfg(feature = "physics3d")]
+            return s.characters.iter().fold(FNV_START, |h, &e| {
+                ctx.world.get::<ponko::d3::Character>(e).map_or(h, |c| {
+                    let h = fnv(h, &c.velocity.x.to_bits().to_le_bytes());
+                    let h = fnv(h, &c.velocity.y.to_bits().to_le_bytes());
+                    let h = fnv(h, &c.velocity.z.to_bits().to_le_bytes());
+                    fnv(h, &[u8::from(c.grounded)])
+                })
+            });
+            #[cfg(not(feature = "physics3d"))]
+            0
+        }
+    }
+}
+
+/// The allocator sweep: the world's JSON save on the page's thread and on
+/// the workers (the same text from both), parsing it on the page's thread,
+/// and a parallel query that allocates on every item.
+#[cfg(feature = "bench-internals")]
+fn alloc_sweep(ctx: &mut Ctx) -> serde_json::Value {
+    use ponko::bench_sharing::{Sharing, set_sharing};
+    let mut save = [Vec::new(), Vec::new()];
+    let mut hashes = [0u64; 2];
+    let mut text = String::new();
+    for rep in 0..=SWEEP_REPS {
+        for (mode, sharing) in [Sharing::Never, Sharing::Always].into_iter().enumerate() {
+            set_sharing(sharing);
+            let (json, ms) = timed_call(|| serde_json::to_string(&ctx.world.save()).unwrap_or_default());
+            if rep > 0 {
+                save[mode].push(ms);
+            }
+            hashes[mode] = fnv(FNV_START, json.as_bytes());
+            text = json;
+        }
+    }
+    set_sharing(Sharing::Auto);
+    let parse: Vec<f64> = (0..=SWEEP_REPS)
+        .map(|_| timed_call(|| black_box(serde_json::from_str::<serde_json::Value>(&text).is_ok())).1)
+        .skip(1)
+        .collect();
+    let par: Vec<f64> = (0..=SWEEP_REPS)
+        .map(|_| {
+            timed_call(|| {
+                ctx.world.query::<(&mut Pos, &mut Vel)>().par_for_each(|(p, v)| {
+                    // A path's worth of points and a label: small
+                    // allocations made and freed on whichever thread runs
+                    // the item.
+                    let path: Vec<Vec2> = (0..12).map(|i| vec2(p.x + i as f32, p.y)).collect();
+                    let label = format!("agent at {:.1}", path[11].x);
+                    v.x = black_box(label.len() as f32) * 0.0 + 1.0;
+                });
+            })
+            .1
+        })
+        .skip(1)
+        .collect();
+    let [page, workers] = save;
+    json!({
+        "save_bytes": text.len(),
+        "same_save": hashes[0] == hashes[1],
+        "save_page_ms": median_ms(page),
+        "save_workers_ms": median_ms(workers),
+        "parse_ms": median_ms(parse),
+        "par_alloc_ms": median_ms(par),
+    })
 }

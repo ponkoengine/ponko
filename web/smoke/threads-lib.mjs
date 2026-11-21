@@ -28,7 +28,7 @@ export const CHECK_TICKS = 150;
  * `gamepads-plain` is `gamepads` on the ordinary web build (no threads),
  * whose pads come from the same backend, built without shared memory.
  */
-export const CASES = ["worker-panic", "gamepads", "gamepads-plain", "service-worker", "warning"];
+export const CASES = ["worker-panic", "gamepads", "gamepads-plain", "service-worker", "warning", "thresholds", "allocator"];
 
 /**
  * The fixture's threaded build has these features: its 3D culling and
@@ -45,6 +45,17 @@ export const PLAIN_DIR = "target/web/web_threads_plain";
  * service-worker` (`web/build.sh --threads --isolation-worker`).
  */
 export const SW_DIR = "target/web/web_threads_sw";
+
+/**
+ * Where `--case allocator` builds the fixture a second time with the
+ * standard allocator (`SYSTEM_ALLOCATOR_CFG` added to its flags), to compare
+ * with the per-thread one of `target/web/web_threads`.
+ */
+export const SYSTEM_ALLOCATOR_DIR = "target/web/web_threads_system_alloc";
+export const SYSTEM_ALLOCATOR_CFG = "--cfg ponko_web_system_allocator";
+
+/** The passes `--case thresholds` sweeps (the fixture's `?sweep=thresholds`). */
+export const SWEPT = ["hierarchy/shared_level", "skeleton2d/shared_draw", "physics3d/shared_characters"];
 
 /** What `ponko-isolate.js` logs when it reloads the page through its worker. */
 export const SW_RELOAD_MESSAGE = "ponko-isolate.js: reloading once";
@@ -66,7 +77,7 @@ export const PASSES = [
 
 export const USAGE =
   "usage: threads.mjs [--dir <site>] [--build] [--browser chromium|firefox|webkit]\n" +
-  "                   [--check] [--case worker-panic|gamepads|gamepads-plain|service-worker|warning]\n" +
+  "                   [--check] [--case worker-panic|gamepads|gamepads-plain|service-worker|warning|thresholds|allocator]\n" +
   "                   [--bench [--workloads par,sweep,interleaved,jobs] [--threads 1,<n>] [--repeat <r>]]\n" +
   "                   [--out <dir>] [--timeout <s>]";
 
@@ -645,4 +656,104 @@ export function checkTriggerRumbleCalls(calls) {
     }
   }
   return problems;
+}
+
+/**
+ * `env` with `flag` added to the variable cargo reads (as `denyWarnings`):
+ * the build of `--case allocator` with the standard allocator.
+ */
+export function addRustFlag(env, flag) {
+  const out = { ...env };
+  const set = (name) => (out[name] ?? "") !== "";
+  const target = "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS";
+  if (set("CARGO_ENCODED_RUSTFLAGS")) {
+    out.CARGO_ENCODED_RUSTFLAGS = [...out.CARGO_ENCODED_RUSTFLAGS.split("\x1f"), ...flag.split(" ")].join("\x1f");
+  } else {
+    const name = !set("RUSTFLAGS") && set(target) ? target : "RUSTFLAGS";
+    out[name] = `${out[name] ?? ""} ${flag}`.trim();
+  }
+  return out;
+}
+
+/** Whether a sweep page (`?sweep=...`) has published everything. */
+export function sweepDone(state) {
+  return state != null && state.done === true;
+}
+
+/**
+ * The problems with a `?sweep=thresholds` run: every swept pass timed at
+ * each size, and run on both sides of its threshold, where it must stay on
+ * the page's thread below and be shared out from it, ending on the same
+ * hash as the page's thread alone on both sides.
+ */
+export function checkSides(state) {
+  const problems = [];
+  if (state.isolated !== true || !(state.threads >= 2)) {
+    problems.push(`the sweep needs an isolated page with workers (isolated: ${state.isolated}, threads: ${state.threads})`);
+  }
+  for (const pass of SWEPT) {
+    const rows = (state.sweep ?? []).filter((r) => r.pass === pass);
+    if (rows.length === 0) problems.push(`${pass} wasn't timed`);
+    const sides = (state.sides ?? []).filter((r) => r.pass === pass);
+    const below = sides.find((r) => r.side === "below");
+    const above = sides.find((r) => r.side === "above");
+    if (!below || !above) {
+      problems.push(`${pass} wasn't run on both sides of its threshold`);
+      continue;
+    }
+    if (below.shared !== false) problems.push(`${pass} was shared out below its threshold (${below.size})`);
+    if (above.shared !== true) problems.push(`${pass} stayed on the page's thread at its threshold (${above.size})`);
+    for (const r of [below, above]) {
+      if (r.hash !== r.serial_hash) {
+        problems.push(`${pass} at ${r.size} (${r.side}) ended on ${r.hash}, but ${r.serial_hash} on the page's thread alone`);
+      }
+    }
+  }
+  return problems;
+}
+
+/**
+ * The sweep's rows as a Markdown table: each size's median on the page's
+ * thread and shared out, and which is faster (`same` within `noiseMs`).
+ */
+export function sweepTable(rows, threads, noiseMs = 0.05) {
+  const lines = [`| Pass | Size | Page's thread (ms) | ${threads} threads (ms) | Faster |`, "|---|---|---|---|---|"];
+  for (const r of rows) {
+    const d = r.serial_ms - r.shared_ms;
+    const faster = Math.abs(d) < noiseMs ? "same" : d > 0 ? "shared" : "page's thread";
+    lines.push(`| \`${r.pass}\` | ${r.size} | ${r.serial_ms.toFixed(3)} | ${r.shared_ms.toFixed(3)} | ${faster} |`);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * The problems with `--case allocator`'s two runs: the default build must
+ * have the per-thread allocator and the other one the standard one, and
+ * each must have saved the same JSON on the page's thread and the workers.
+ */
+export function checkAllocator(perThread, system) {
+  const problems = [];
+  if (perThread.per_thread_allocator !== true) problems.push("the default threaded build doesn't have the per-thread allocator");
+  if (system.per_thread_allocator !== false) problems.push(`the build with ${SYSTEM_ALLOCATOR_CFG} still has the per-thread allocator`);
+  for (const [name, s] of [["per-thread", perThread], ["standard", system]]) {
+    if (s.isolated !== true || !(s.threads >= 2)) problems.push(`${name}: the page isn't isolated with workers (threads: ${s.threads})`);
+    if (s.alloc?.same_save !== true) problems.push(`${name}: the save on the workers differs from the page's thread's`);
+  }
+  return problems;
+}
+
+/** `--case allocator`'s numbers as a Markdown table, with each build's wasm size. */
+export function allocatorTable(perThread, system, sizes) {
+  const ms = (v) => (Number.isFinite(v) ? v.toFixed(2) : "n/a");
+  const rows = [
+    ["JSON save, page's thread", "save_page_ms"],
+    ["JSON save, workers", "save_workers_ms"],
+    ["Parsing that JSON, page's thread", "parse_ms"],
+    ["Parallel query allocating per item", "par_alloc_ms"],
+  ];
+  const lines = ["| Pass | Standard allocator (ms) | Per-thread allocator (ms) |", "|---|---|---|"];
+  for (const [label, key] of rows) lines.push(`| ${label} | ${ms(system.alloc?.[key])} | ${ms(perThread.alloc?.[key])} |`);
+  const kb = (b) => (b == null ? "n/a" : `${Math.round(b / 1024)} KiB`);
+  lines.push(`| \`game_bg.wasm\` | ${kb(sizes.system)} | ${kb(sizes.perThread)} |`);
+  return lines.join("\n");
 }

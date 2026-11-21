@@ -10,6 +10,8 @@
 //   node web/smoke/threads.mjs --build --case service-worker   # isolated by ponko-isolate.js, no headers
 //   node web/smoke/threads.mjs --case warning           # a warning fails the threaded build
 //   node web/smoke/threads.mjs --bench --repeat 3       # 1 vs N threads
+//   node web/smoke/threads.mjs --build --case thresholds  # where sharing out pays, both sides of each threshold
+//   node web/smoke/threads.mjs --build --case allocator   # per-thread vs standard allocator
 //
 // The checks open the same build twice: served with the cross-origin
 // isolation headers, the game must start workers and run parallel query
@@ -36,6 +38,18 @@
 // Real rumble can't be felt in a headless browser: the recorded calls are
 // the proof. `--case gamepads-plain` runs it on the ordinary web build of
 // the same fixture: the same backend, built without threads.
+// `--case thresholds` opens the isolated page with `?sweep=thresholds`: the
+// fixture times the hierarchy's update, the 2D skeleton drawing and the 3D
+// characters at several sizes, on the page's thread and shared out, and
+// runs each on both sides of its web threshold. It prints the timings, and
+// each pass must stay on the page's thread below its threshold, be shared
+// out from it, and end on the same hash as the page's thread alone.
+// `--case allocator` builds the fixture a second time with the standard
+// allocator (`--cfg ponko_web_system_allocator`) and opens both builds with
+// `?sweep=allocator`: the JSON save on the page's thread and on the
+// workers, parsing it, and a parallel query that allocates. It prints both
+// builds' times and wasm sizes; the default build must have the per-thread
+// allocator, and each save must be the same from the workers.
 // The bench runs the fixture's workloads on the isolated page with one
 // thread (`?threads=1`) and with the engine's default, and prints the
 // medians, their spread, and the speed-up with whether it is beyond the
@@ -56,6 +70,14 @@ import {
   GAMEPAD_STEPS,
   ISOLATION_HEADERS,
   RUMBLE_PRESS,
+  SYSTEM_ALLOCATOR_CFG,
+  SYSTEM_ALLOCATOR_DIR,
+  addRustFlag,
+  allocatorTable,
+  checkAllocator,
+  checkSides,
+  sweepDone,
+  sweepTable,
   RUMBLE_SECONDS,
   STOP_MESSAGE,
   USAGE,
@@ -293,6 +315,41 @@ async function gamepads(browser, servers, args, report, plain = false) {
   return problems;
 }
 
+/** The threshold sweep, on the isolated page: see the file's comment. */
+async function thresholds(browser, servers, args, report) {
+  const context = await browser.newContext();
+  const { page, lines } = await open(context, `http://127.0.0.1:${servers.isolated.address().port}/?sweep=thresholds`);
+  const result = await until(page, lines, sweepDone, args.timeout, "the threshold sweep");
+  await context.close();
+  report.runs = { thresholds: { state: result, console: lines } };
+  console.log(`\n${sweepTable(result.sweep ?? [], result.threads)}\n`);
+  for (const r of result.sides ?? []) {
+    console.log(`${r.pass} at ${r.size} (${r.side} its threshold): ${r.shared ? "shared out" : "on the page's thread"}, hash ${r.hash === r.serial_hash ? "as" : "NOT as"} on the page's thread alone`);
+  }
+  return checkSides(result);
+}
+
+/** The allocator sweep on both builds: see the file's comment. */
+async function allocator(browser, servers, args, report) {
+  const system = await serve(resolve(SYSTEM_ALLOCATOR_DIR), ISOLATION_HEADERS);
+  const runs = {};
+  try {
+    for (const [name, server] of [["perThread", servers.isolated], ["system", system]]) {
+      const context = await browser.newContext();
+      const { page, lines } = await open(context, `http://127.0.0.1:${server.address().port}/?sweep=allocator`);
+      runs[name] = await until(page, lines, sweepDone, args.timeout, `the allocator sweep (${name})`);
+      await context.close();
+    }
+  } finally {
+    system.close();
+  }
+  const size = async (dir) => (await stat(join(dir, "game_bg.wasm")).catch(() => null))?.size ?? null;
+  const sizes = { perThread: await size(resolve(args.dir)), system: await size(resolve(SYSTEM_ALLOCATOR_DIR)) };
+  report.runs = { allocator: { ...runs, wasm_bytes: sizes } };
+  console.log(`\n${allocatorTable(runs.perThread, runs.system, sizes)}\n`);
+  return checkAllocator(runs.perThread, runs.system);
+}
+
 /** A warning in the threaded build must fail it (no browser): see the file's comment. */
 function warningBuild(report) {
   const env = denyWarnings(process.env);
@@ -360,6 +417,13 @@ async function main() {
       : args.case === "service-worker"
         ? ["web/build.sh", "--threads", "--isolation-worker", "--features", FIXTURE_FEATURES, "web_threads", args.dir]
         : ["web/build.sh", "--threads", "--features", FIXTURE_FEATURES, "web_threads"];
+  // The standard allocator's build first, so the default one is cargo's last.
+  if (args.build && args.case === "allocator") {
+    const systemArgs = ["web/build.sh", "--threads", "--features", FIXTURE_FEATURES, "web_threads", SYSTEM_ALLOCATOR_DIR];
+    if (spawnSync("bash", systemArgs, { stdio: "inherit", env: addRustFlag(buildEnv, SYSTEM_ALLOCATOR_CFG) }).status !== 0) {
+      process.exit(EXIT.usage);
+    }
+  }
   if (args.build && spawnSync("bash", buildArgs, { stdio: "inherit", env: buildEnv }).status !== 0) {
     process.exit(EXIT.usage);
   }
@@ -418,6 +482,10 @@ async function main() {
             ? (...a) => gamepads(...a, true)
             : args.case === "service-worker"
               ? serviceWorker
+            : args.case === "thresholds"
+              ? thresholds
+            : args.case === "allocator"
+              ? allocator
             : args.mode === "bench"
               ? bench
               : check;

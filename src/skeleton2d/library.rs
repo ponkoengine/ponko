@@ -243,6 +243,24 @@ impl Ctx {
         counts
     }
 
+    /// Orders and batches the draw list as
+    /// [`bench_skeleton2d_finish`](Self::bench_skeleton2d_finish) does, and
+    /// returns an FNV-1a hash of its vertices' bytes and batches: the same
+    /// whether the skeletons were drawn on one thread or shared out.
+    /// Unstable (`bench-internals`).
+    #[doc(hidden)]
+    #[cfg(feature = "bench-internals")]
+    pub fn bench_skeleton2d_hash(&mut self) -> u64 {
+        let (vertices, batches) = self.gfx.draw_list.finish();
+        let fnv = |h: u64, b: u8| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        let mut hash = bytemuck::cast_slice::<_, u8>(vertices)
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325u64, |h, &b| fnv(h, b));
+        hash = (batches.len() as u64).to_le_bytes().into_iter().fold(hash, fnv);
+        self.gfx.draw_list.clear();
+        hash
+    }
+
     /// One frame of 2D skeletons without a GPU, for `ponko_bench`: advances
     /// every skeleton by `dt` (on all cores), draws them as the sprite pass
     /// does, orders and batches the draw list as the renderer does, and

@@ -161,7 +161,7 @@ pub(super) struct Plan {
 /// (walking on a flat floor, Apple M4 Pro, 12 cores): one thread is faster
 /// at 8 (0.036 vs 0.044 ms a tick), the two tie at 12, and the pool wins
 /// from 16 (0.053 vs 0.044 ms; 0.107 vs 0.059 ms at 32).
-const PARALLEL_FROM: usize = 16;
+pub(crate) const PARALLEL_FROM: usize = 16;
 
 /// Works out `c`'s move. Fills `hits` (emptied first) with the dynamic
 /// bodies it walked into, if it pushes.
@@ -349,7 +349,7 @@ pub(super) fn move_characters(physics: &mut Physics3D, world: &mut World, dt: f3
             hits,
         } = &mut scratch;
         let hits = &mut hits[..characters.len()];
-        if characters.len() >= PARALLEL_FROM {
+        if crate::frame_pool::share(|| characters.len() >= PARALLEL_FROM) {
             use rayon::prelude::*;
             // On the frame pool (on the web, its workers, not the page's
             // thread), as parallel queries run.
@@ -410,4 +410,17 @@ pub(super) fn move_characters(physics: &mut Physics3D, world: &mut World, dt: f3
         }
     }
     physics.character = scratch;
+}
+
+#[cfg(feature = "bench-internals")]
+impl crate::ctx::Ctx {
+    /// Plans and applies every character's move for a step of `dt`, as the
+    /// physics step does before it steps the bodies (which this doesn't),
+    /// for the web threads fixture's threshold sweep. The characters'
+    /// bodies must exist: the game has stepped once since they were
+    /// spawned. Unstable (`bench-internals`).
+    #[doc(hidden)]
+    pub fn bench_characters3d_move(&mut self, dt: f32) {
+        move_characters(&mut self.physics3d, &mut self.world, dt);
+    }
 }

@@ -294,6 +294,12 @@ js-sys = "0.3.107"
 cpal = { version = "0.18.2", features = ["wasm-bindgen"], optional = true }
 web-sys = { version = "0.3.107", features = ["Navigator", "Clipboard", "Window", "Document", "Element", "HtmlCanvasElement", "Location", "Request", "RequestInit", "Headers", "Response", "console", "Event", "HtmlElement", "HtmlTextAreaElement", "CssStyleDeclaration", "CompositionEvent", "InputEvent", "KeyboardEvent", "EventTarget", "Node", "DomRect", "IdbFactory", "IdbDatabase", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "Worker", "WorkerOptions", "WorkerType", "ErrorEvent", "Url", "CustomEvent", "CustomEventInit", "Storage", "Blob", "BlobPropertyBag", "HtmlAnchorElement"] }
 
+# Web builds with threads: one heap per thread (src/web_alloc.rs), instead
+# of the standard allocator's one lock. Not in the ordinary web build or
+# natively (cargo sees `atomics` only in a build with threads).
+[target.'cfg(all(target_arch = "wasm32", target_feature = "atomics"))'.dependencies]
+orx-parallel-wasm-allocator = "0.2.1"
+
 # The validation bundle example drives a launched game through the MCP
 # server's tools, in-process. Path only (no version): the MCP crate's tests
 # depend on the engine, and a published cycle between the two can't resolve.
@@ -329,6 +335,11 @@ async-io = "2.6.0"
 # the page; the engine already depends on web-sys there.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 web-sys = { version = "0.3.107", features = ["Window", "Document", "Element", "Location"] }
+
+# `--cfg ponko_web_system_allocator` leaves the per-thread allocator of web
+# builds with threads out (src/web_alloc.rs), for a game with its own.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ponko_web_system_allocator)"] }
 
 [features]
 # Load loose Aseprite source files during development. Cooked exports need no decoder.

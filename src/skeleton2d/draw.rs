@@ -29,7 +29,7 @@ const CORNERS: [Vec2; 6] = [
 
 /// Below this many skeletons they are drawn on the calling thread: the
 /// fork and the copy cost more than they save.
-const PARALLEL_MIN: usize = 64;
+pub(crate) const PARALLEL_MIN: usize = 64;
 
 /// The fewest skeletons a thread's run holds.
 const RUN_MIN: usize = 16;
@@ -189,7 +189,7 @@ pub(crate) fn draw_skeletons_with(ctx: &mut Ctx, spread: Spread) {
     };
     let threads = crate::frame_pool::threads();
     let per = match spread {
-        Spread::Auto => (n >= PARALLEL_MIN && threads > 1).then(|| run_length(n, threads)),
+        Spread::Auto => crate::frame_pool::share(|| n >= PARALLEL_MIN && threads > 1).then(|| run_length(n, threads)),
         #[cfg(test)]
         Spread::Serial => None,
         #[cfg(test)]
